@@ -1,0 +1,31 @@
+<Window x:Class="ChillHub.UpdateWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Chill Hub — обновление" WindowStartupLocation="CenterScreen"
+        SizeToContent="Height" Width="600" ResizeMode="NoResize" WindowStyle="SingleBorderWindow"
+        Loaded="Window_Loaded">
+  <Grid Margin="16">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <TextBlock Text="Проверка обновления лаунчера" FontSize="18" Margin="0,0,0,8"/>
+
+    <StackPanel Grid.Row="1">
+      <TextBlock x:Name="StatusText" Text="Инициализация..." TextWrapping="Wrap" Margin="0,0,0,8"/>
+      <ProgressBar x:Name="Progress" Height="8" Minimum="0" Maximum="100" Value="0" Margin="0,0,0,8"/>
+      <Border Background="{DynamicResource Brush.Surface}" Padding="8" CornerRadius="6" Margin="0,0,0,8" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+        <TextBlock Text="Для разработки можно пропустить проверку. Отметьте флаг ниже и нажмите 'Продолжить'."
+                   Foreground="{DynamicResource Brush.TextSecondary}"/>
+      </Border>
+      <CheckBox x:Name="DevSkipCheck" Content="Пропустить проверку (DEV)" Foreground="{DynamicResource Brush.Text}"/>
+    </StackPanel>
+
+    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+      <Button x:Name="PrimaryBtn" Content="Обновить и перезапустить" MinWidth="200" Height="36" FontSize="13" FontWeight="SemiBold" Padding="12,6" Click="PrimaryBtn_Click" Margin="0,0,8,0" HorizontalAlignment="Right"/>
+      <Button Content="Выход" Width="100" Height="36" FontSize="13" FontWeight="SemiBold" Padding="12,6" Click="ExitBtn_Click"/>
+    </StackPanel>
+  </Grid>
+</Window>

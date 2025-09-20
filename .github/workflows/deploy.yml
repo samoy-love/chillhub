@@ -1,0 +1,112 @@
+name: Deploy to VPS
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are we deploying?"
+        required: false
+        default: "manual trigger"
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+
+      - name: Build Go servers (linux/amd64)
+        run: |
+          set -eux
+          mkdir -p build/bin
+          cd server
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ../build/bin/api ./cmd/api
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ../build/bin/admin ./cmd/admin
+          cd ..
+
+      - name: Prepare deploy bundle
+        run: |
+          set -eux
+          mkdir -p build/site build/launcher build/systemd build/deploy
+          # Landing (site at root)
+          rsync -a --delete landing/ build/site/
+          # Content buckets
+          rsync -a --delete content/content/ build/launcher/content/
+          rsync -a --delete content/manifests/ build/launcher/manifests/
+          rsync -a --delete content/news/ build/launcher/news/
+          # Admin UI static (served by nginx under /admin/ui/)
+          rsync -a --delete server/admin_ui/ build/launcher/admin_ui/
+          # Systemd unit files
+          rsync -a deploy/systemd/ build/systemd/ || true
+          # Nginx site config
+          rsync -a deploy/launcher.conf build/deploy/launcher.conf
+
+      - name: Upload bundle to server (SCP)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: |
+            build/site/*
+            build/launcher/**
+            build/bin/*
+            build/systemd/*
+            build/deploy/launcher.conf
+          target: /home/${{ secrets.SSH_USER }}/deploy
+          strip_components: 1
+
+      - name: Deploy on server (SSH)
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -eux
+            # Paths
+            DEPLOY_DIR="$HOME/deploy"
+            SITE_DIR="/var/www/site"
+            LAUNCHER_DIR="/var/www/launcher"
+            OPT_DIR="/opt/chillhub"
+            NGINX_SITE_AVAILABLE="/etc/nginx/sites-available/launcher.conf"
+            NGINX_SITE_ENABLED="/etc/nginx/sites-enabled/launcher.conf"
+
+            sudo mkdir -p "$SITE_DIR" "$LAUNCHER_DIR/content" "$LAUNCHER_DIR/manifests" "$LAUNCHER_DIR/news" "$OPT_DIR"
+
+            # Sync landing site
+            sudo rsync -a --delete "$DEPLOY_DIR/site/" "$SITE_DIR/"
+
+            # Sync content buckets
+            sudo rsync -a --delete "$DEPLOY_DIR/launcher/content/" "$LAUNCHER_DIR/content/"
+            sudo rsync -a --delete "$DEPLOY_DIR/launcher/manifests/" "$LAUNCHER_DIR/manifests/"
+            sudo rsync -a --delete "$DEPLOY_DIR/launcher/news/" "$LAUNCHER_DIR/news/"
+            # Sync Admin UI static
+            sudo rsync -a --delete "$DEPLOY_DIR/launcher/admin_ui/" "$LAUNCHER_DIR/admin_ui/"
+
+            # Install binaries
+            sudo install -d -m 0755 "$OPT_DIR"
+            sudo install -m 0755 "$DEPLOY_DIR/bin/api" "$OPT_DIR/api"
+            sudo install -m 0755 "$DEPLOY_DIR/bin/admin" "$OPT_DIR/admin"
+
+            # Systemd services (optional if already installed)
+            if [ -d "$DEPLOY_DIR/systemd" ]; then
+              sudo install -m 0644 "$DEPLOY_DIR/systemd/chillhub-api.service" /etc/systemd/system/chillhub-api.service || true
+              sudo install -m 0644 "$DEPLOY_DIR/systemd/chillhub-admin.service" /etc/systemd/system/chillhub-admin.service || true
+              sudo systemctl daemon-reload || true
+              sudo systemctl enable chillhub-api.service || true
+              sudo systemctl enable chillhub-admin.service || true
+              sudo systemctl restart chillhub-api.service || true
+              sudo systemctl restart chillhub-admin.service || true
+            fi
+
+            # Nginx site config
+            sudo install -m 0644 "$DEPLOY_DIR/deploy/launcher.conf" "$NGINX_SITE_AVAILABLE"
+            sudo ln -sf "$NGINX_SITE_AVAILABLE" "$NGINX_SITE_ENABLED"
+            sudo nginx -t
+            sudo systemctl reload nginx

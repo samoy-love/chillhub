@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="ChillHub — игровой лаунчер с модами: Lethal Company, R.E.P.O., Risk of Rain 2 и другие" />
+  <title>ChillHub — моддинг. игры. сообщество.</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <!-- Animated Waves Background -->
+  <div class="waves-bg" aria-hidden="true">
+    <canvas id="waves-canvas"></canvas>
+  </div>
+
+  <!-- Parallax Layers -->
+  <div class="parallax">
+    <div class="layer" data-speed="0.15"></div>
+    <div class="layer" data-speed="0.3"></div>
+    <div class="layer" data-speed="0.6"></div>
+  </div>
+
+  <header class="site-header">
+    <div class="container">
+      <div class="brand">
+        <img src="./assets/icons/logo.svg" alt="ChillHub" onerror="this.style.display='none'" />
+        <span>ChillHub</span>
+      </div>
+      <nav class="nav">
+        <a href="#games">Игры</a>
+        <a href="#features">Фичи</a>
+        <a href="#download" class="btn btn--sm">Скачать</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <!-- HERO -->
+    <section class="hero" id="top" data-animate>
+      <div class="container">
+        <h1 class="sun-title"><span class="accent">Лаунчер</span><br>для кооператива и моддинга</h1>
+        <div class="brand-badge" aria-label="ChillHub">
+          <img src="./assets/icons/logo.svg" alt="ChillHub" />
+          <span class="name">ChillHub</span>
+          <span class="pill">для Windows 10–11</span>
+        </div>
+        <p>Играй в лучшие модифицированные сборки и обновляйся мгновенно. Без возни с файлами и конфликтами.</p>
+        <div class="cta">
+          <a id="download" href="#download" class="btn btn--primary btn--lg">Скачать лаунчер</a>
+          <a href="#games" class="btn btn--ghost btn--lg">Смотреть игры</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- SCREENSHOTS / GALLERY -->
+    <section class="section section--shots" id="screens" data-animate>
+      <div class="container">
+        <h2>Скриншоты лаунчера</h2>
+        <div class="shots">
+          <img src="./assets/images/launcher-1.svg" alt="Скрин 1" onerror="this.src='https://placehold.co/960x540/0f0f1f/FFFFFF?text=Launcher+1'" />
+          <img src="./assets/images/launcher-2.svg" alt="Скрин 2" onerror="this.src='https://placehold.co/960x540/0f0f1f/FFFFFF?text=Launcher+2'" />
+          <img src="./assets/images/launcher-3.svg" alt="Скрин 3" onerror="this.src='https://placehold.co/960x540/0f0f1f/FFFFFF?text=Launcher+3'" />
+          <img src="./assets/images/launcher-4.svg" alt="Скрин 4" onerror="this.src='https://placehold.co/960x540/0f0f1f/FFFFFF?text=Launcher+4'" />
+        </div>
+      </div>
+    </section>
+
+    <!-- GAMES -->
+    <section class="section section--alt" id="games" data-animate>
+      <div class="container">
+        <h2>Игры и моды</h2>
+        <div class="games-grid">
+          <!-- Lethal Company -->
+          <article class="game-card" data-tilt>
+            <div class="game-thumb">
+              <img src="./assets/images/lethal company.webp" alt="Lethal Company" onerror="this.src='https://picsum.photos/seed/lethal/640/360'" />
+            </div>
+            <div class="game-body">
+              <h3>Lethal Company</h3>
+              <p>Кооперативный хоррор с модами: карты, сущности, QoL-изменения и прогресс.</p>
+              <div class="tags">
+                <span class="tag tag--mode">Сетевой кооператив</span>
+                <span class="tag tag--genre">Хоррор</span>
+                <span class="tag tag--persp">От первого лица</span>
+                <span class="tag tag--tone">Смешная</span>
+              </div>
+            </div>
+          </article>
+
+          <!-- R.E.P.O. -->
+          <article class="game-card" data-tilt>
+            <div class="game-thumb">
+              <img src="./assets/images/repo.png" alt="R.E.P.O." onerror="this.src='https://picsum.photos/seed/repo/640/360'" />
+            </div>
+            <div class="game-body">
+              <h3>R.E.P.O.</h3>
+              <p>Тактические миссии, совместные рейды и настраиваемые сборки с автоматическими обновлениями.</p>
+              <div class="tags">
+                <span class="tag tag--mode">Сетевой кооператив</span>
+                <span class="tag tag--genre">Хоррор</span>
+                <span class="tag tag--persp">От первого лица</span>
+                <span class="tag tag--tone">Смешная</span>
+              </div>
+            </div>
+          </article>
+
+          <!-- Risk of Rain 2 -->
+          <article class="game-card" data-tilt>
+            <div class="game-thumb">
+              <img src="./assets/images/ror2.png" alt="Risk of Rain 2" onerror="this.src='https://picsum.photos/seed/ror2/640/360'" />
+            </div>
+            <div class="game-body">
+              <h3>Risk of Rain 2</h3>
+              <p>Рогулайт-шутер с модами: новые артефакты, персонажи, баланс и визуальные эффекты.</p>
+              <div class="tags">
+                <span class="tag tag--mode">Кооператив</span>
+                <span class="tag tag--genre">Экшен-рогалик</span>
+                <span class="tag tag--persp">Шутер от третьего лица</span>
+                <span class="tag tag--mech">Лут</span>
+              </div>
+            </div>
+          </article>
+
+          <!-- More coming -->
+          <article class="game-card coming full" aria-label="Скоро больше игр">
+            <div class="game-coming">
+              <div class="reels">
+                <!-- Reel A -->
+                <div class="reel track-a">
+                  <div class="reel-track">
+                    <div class="slot">Coop</div>
+                    <div class="slot alt">Solo</div>
+                    <div class="slot">Online</div>
+                    <div class="slot alt">Local</div>
+                    <div class="slot">PvE</div>
+                    <div class="slot alt">PvP</div>
+                    <div class="slot dim">Arena</div>
+                    <div class="slot">Raids</div>
+                    <div class="slot alt">Ranked</div>
+                    <div class="slot dim">Casual</div>
+                  </div>
+                </div>
+                <!-- Reel B -->
+                <div class="reel track-b">
+                  <div class="reel-track">
+                    <div class="slot alt">Action</div>
+                    <div class="slot">Horror</div>
+                    <div class="slot alt">Rogue</div>
+                    <div class="slot">Shooter</div>
+                    <div class="slot alt">Puzzle</div>
+                    <div class="slot">RPG</div>
+                    <div class="slot alt">Sim</div>
+                    <div class="slot dim">Arcade</div>
+                    <div class="slot alt">Strategy</div>
+                    <div class="slot">Sandbox</div>
+                  </div>
+                </div>
+                <!-- Reel C -->
+                <div class="reel track-c">
+                  <div class="reel-track">
+                    <div class="slot">FPP</div>
+                    <div class="slot alt">TPP</div>
+                    <div class="slot">TopDown</div>
+                    <div class="slot alt">Isomet</div>
+                    <div class="slot">Side</div>
+                    <div class="slot alt">VR</div>
+                    <div class="slot dim">2D</div>
+                    <div class="slot alt">3D</div>
+                    <div class="slot">Fixed</div>
+                    <div class="slot alt">FreeCam</div>
+                  </div>
+                </div>
+                <!-- Reel D -->
+                <div class="reel track-d">
+                  <div class="reel-track">
+                    <div class="slot">Loot</div>
+                    <div class="slot alt">Craft</div>
+                    <div class="slot">Build</div>
+                    <div class="slot alt">Parkour</div>
+                    <div class="slot">Stealth</div>
+                    <div class="slot alt">Tactic</div>
+                    <div class="slot dim">Combo</div>
+                    <div class="slot alt">Skill</div>
+                    <div class="slot">Cards</div>
+                    <div class="slot alt">Trade</div>
+                  </div>
+                </div>
+                <!-- Reel E -->
+                <div class="reel track-e">
+                  <div class="reel-track">
+                    <div class="slot">Dark</div>
+                    <div class="slot alt">Grim</div>
+                    <div class="slot">Funny</div>
+                    <div class="slot alt">Chill</div>
+                    <div class="slot">Cozy</div>
+                    <div class="slot alt">Epic</div>
+                    <div class="slot dim">Retro</div>
+                    <div class="slot alt">Mythic</div>
+                    <div class="slot">Moody</div>
+                    <div class="slot alt">Noir</div>
+                  </div>
+                </div>
+              </div>
+              <div class="caption"><span class="spark"></span><span>Скоро ещё больше</span><span class="spark"></span></div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- FEATURES -->
+    <section class="section" id="features" data-animate>
+      <div class="container">
+        <h2>Почему ChillHub</h2>
+        <div class="features">
+          <div class="feature">
+            <div class="ico"></div>
+            <h3>Автообновления</h3>
+            <p>Скачиваются только изменения. Точная синхронизация папок игр с сервером.</p>
+          </div>
+          <div class="feature">
+            <div class="ico"></div>
+            <h3>Безопасность</h3>
+            <p>Подписи, прозрачные обновления и отсутствие ложных срабатываний антивирусов.</p>
+          </div>
+          <div class="feature">
+            <div class="ico"></div>
+            <h3>Комфорт</h3>
+            <p>Игры и моды всегда совместимы. Играй вместо ручной настройки.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA DOWNLOAD -->
+    <section class="section section--cta" id="download" data-animate>
+      <div class="container">
+        <h2>Готов начать?</h2>
+        <p>Скачай лаунчер и подключайся к друзьям за минуты.</p>
+        <a class="btn btn--primary btn--xl" href="#">Скачать для Windows</a>
+        <p class="muted">Поддержка Windows 10–11</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>© <span id="year"></span> ChillHub. Все права защищены.</p>
+      <nav>
+        <a href="#top">Наверх</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="./scripts/main.js"></script>
+</body>
+</html>

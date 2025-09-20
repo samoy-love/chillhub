@@ -1,0 +1,29 @@
+<Page x:Class="ChillHub.Pages.SettingsPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      Title="Настройки"
+      Background="{DynamicResource Brush.Background}">
+  <StackPanel Margin="16" Width="720">
+    <Grid Margin="0,0,0,12">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+      </Grid.ColumnDefinitions>
+      <TextBlock Text="Настройки" FontSize="18" VerticalAlignment="Center"/>
+      <Button Name="BackBtn" Grid.Column="1" Content="Назад" Width="100" HorizontalAlignment="Right" Click="BackBtn_Click"/>
+    </Grid>
+    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+      <TextBlock Text="Папка игр:" Width="120" VerticalAlignment="Center"/>
+      <TextBox Name="GamesPathBox" Width="400"/>
+      <Button Name="ChooseBtn" Content="Выбрать" Margin="8,0,0,0" Click="ChooseBtn_Click"/>
+    </StackPanel>
+    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+      <TextBlock Text="Потоки загрузки:" Width="120" VerticalAlignment="Center"/>
+      <Slider Name="ThreadsSlider" Minimum="2" Maximum="16" Width="200" TickFrequency="1" IsSnapToTickEnabled="true" ValueChanged="ThreadsSlider_ValueChanged"/>
+      <TextBlock Name="ThreadsValueText" Text="8" Margin="8,0,0,0" VerticalAlignment="Center"/>
+    </StackPanel>
+    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+      <Button Name="SaveBtn" Content="Сохранить" Width="140" Click="SaveBtn_Click"/>
+    </StackPanel>
+  </StackPanel>
+</Page>

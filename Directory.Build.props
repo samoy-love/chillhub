@@ -1,0 +1,14 @@
+<Project>
+  <!-- Applies to all projects in this repo unless overridden -->
+  <PropertyGroup>
+    <!-- Enable Roslyn analyzers and latest analysis level by default -->
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+  <!-- In CI only: fail build on warnings (including analyzer warnings) -->
+  <PropertyGroup Condition="'$(CI)' == 'true'">
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,17 @@
+[Unit]
+Description=ChillHub Admin API & UI backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+Environment=CONTENT_ROOT=/var/www/launcher
+ExecStart=/opt/chillhub/admin
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

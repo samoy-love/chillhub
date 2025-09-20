@@ -1,0 +1,10 @@
+# Ignore vendor/assets and generated content
+landing/assets/
+server/admin_ui/vendor/
+
+# Ignore bundled/minified assets
+**/*.min.css
+**/*.min.scss
+
+# Ignore content artifacts
+content/

@@ -1,0 +1,11 @@
+# Ignore dependencies and vendors
+node_modules/
+landing/assets/
+server/admin_ui/vendor/
+
+# Ignore bundled/minified assets
+**/*.min.js
+**/*.min.css
+
+# Ignore generated or binary content
+content/

@@ -1,0 +1,70 @@
+name: Lint
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  web-lint:
+    name: Web (landing + admin_ui)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install linters
+        run: |
+          npm i -g htmlhint stylelint stylelint-config-standard eslint
+      - name: HTMLHint (landing)
+        run: |
+          npx htmlhint "landing/**/*.html" || (echo "HTMLHint found issues" && exit 1)
+      - name: HTMLHint (admin_ui)
+        run: |
+          npx htmlhint "server/admin_ui/**/*.html" || (echo "HTMLHint found issues" && exit 1)
+      - name: Stylelint (landing)
+        run: |
+          npx stylelint "landing/**/*.css"
+      - name: Stylelint (admin_ui)
+        run: |
+          npx stylelint "server/admin_ui/**/*.css"
+      - name: ESLint (landing)
+        run: |
+          npx eslint "landing/**/*.js" || (echo "ESLint found issues" && exit 1)
+      - name: ESLint (admin_ui)
+        run: |
+          npx eslint "server/admin_ui/**/*.js" || (echo "ESLint found issues" && exit 1)
+
+  go-lint:
+    name: Go (api + admin)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+          working-directory: server
+
+  dotnet-lint:
+    name: C# (launcher)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore
+        working-directory: launcher/ChillHub
+        run: dotnet restore
+      - name: Build (warnings as errors off for lint stage)
+        working-directory: launcher/ChillHub
+        run: dotnet build --no-restore -c Debug
+      - name: Code style check (dotnet format)
+        working-directory: launcher/ChillHub
+        run: dotnet tool update -g dotnet-format && dotnet format --verify-no-changes || (echo "dotnet format found issues" && exit 1)

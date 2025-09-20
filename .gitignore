@@ -1,0 +1,102 @@
+# Global OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE/editor settings
+.vscode/*
+!.vscode/*.json
+!.vscode/*.code-snippets
+
+# Visual Studio / .NET build outputs
+**/bin/
+**/obj/
+**/.vs/
+**/Debug/
+**/Release/
+**/x64/
+**/x86/
+**/ARM/
+**/ARM64/
+**/publish/
+
+# User-specific files
+*.user
+*.rsuser
+*.suo
+*.userosscache
+*.sln.docstates
+
+# NuGet
+*.nupkg
+*.snupkg
+# Packages folder can be very large; usually restore on build
+packages/
+
+# Logs and diagnostics
+*.log
+*.stackdump
+TestResult*/
+TestResults/
+*.coverage
+*.coveragexml
+
+# Rider/Resharper
+.idea/
+_ReSharper*/
+*.DotSettings.user
+
+# Go build artifacts (server)
+server/bin/
+server/build/
+**/*.test
+
+# Node-related (if added later)
+node_modules/
+# Frontend build artifacts (if any are introduced)
+dist/
+build/
+
+# Temporary files
+*.tmp
+*.temp
+~$*
+$RECYCLE.BIN/
+
+# Installer/build caches
+*.msi
+*.msix
+*.appx
+*.appxbundle
+*.msixbundle
+*.msm
+*.msp
+*.cab
+*.iso
+
+# Project-specific build artifacts (keep content/content tracked)
+# Server compiled binary
+server/admin
+server/admin.exe
+
+# Installer outputs and redistributables in scripts/
+scripts/ChillHub-Setup.exe
+scripts/Redist/*
+
+# Ignore local content cache/temp folders if created
+content/tmp/
+content/**/.cache/
+content/content/*
+content/manifests/*
+content/news/*
+
+
+# Images/design tool caches
+*.psd
+*.ai
+*.sketch
+*.xcf
+
+# Keep readme and config files in otherwise ignored folders
+!.keep
+!.gitkeep
