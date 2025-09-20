@@ -13,10 +13,21 @@
     <PackageReference Include="Markdig" Version="0.31.0" />
     <PackageReference Include="Blake3" Version="2.0.0" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2420.47" />
-    <!-- Roslyn analyzers -->
-    <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="8.0.0" PrivateAssets="all" />
+    <!-- Roslyn analyzers (will trigger the SDK/newer analyzers warning as requested) -->
+    <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="10.0.0" PrivateAssets="all" />
     <PackageReference Include="StyleCop.Analyzers" Version="1.2.0-beta.507" PrivateAssets="all" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\updater\YourLauncher.Updater.csproj" />
+  </ItemGroup>
+  <Target Name="CopyUpdater" AfterTargets="Build">
+    <PropertyGroup>
+      <UpdaterExeSrc>$(MSBuildProjectDirectory)\..\..\updater\bin\$(Configuration)\net8.0\YourLauncher.Updater.exe</UpdaterExeSrc>
+      <UpdaterExeDst>$(OutDir)YourLauncher.Updater.exe</UpdaterExeDst>
+    </PropertyGroup>
+    <Message Text="Copying YourLauncher.Updater.exe from '$(UpdaterExeSrc)' to '$(UpdaterExeDst)'" Importance="low" />
+    <Copy SourceFiles="$(UpdaterExeSrc)" DestinationFiles="$(UpdaterExeDst)" SkipUnchangedFiles="true" Condition="Exists('$(UpdaterExeSrc)')" />
+  </Target>
   <ItemGroup>
     <!-- Ensure WPF can load the icon via pack URI (Icon=\"Assets/app.ico\") -->
     <Resource Include="Assets\app.ico" />
