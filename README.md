@@ -1,10 +1,22 @@
-# ChillHub — README (Draft)
+# ChillHub — README
 
-Этот файл — черновик обновленного README. Он объединяет продуктовый обзор, пошаговые инструкции для локальной разработки на Windows 11 и подробное руководство по развертыванию на сервере (How-To). После ревью можно заменить им основной `README.md`.
+## Оглавление
+- [Обзор](#обзор)
+- [Локальная разработка (Windows 11)](#локальная-разработка-windows-11)
+  - [Зависимости](#зависимости)
+  - [Клонирование](#клонирование)
+  - [Контент (минимум)](#контент-минимум)
+  - [Запуск (3 окна)](#запуск-3-окна)
+  - [Admin UI: контент](#admin-ui-контент)
+- [Деплой на сервер (Ubuntu + nginx)](#деплой-на-сервер-ubuntu--nginx)
+  - [Подготовка (1 раз)](#подготовка-1-раз)
+  - [Раскладка артефактов](#раскладка-артефактов)
+  - [systemd (1 раз)](#systemd-1-раз)
+  - [Обновления](#обновления)
+- [Полезные ссылки и файлы](#полезные-ссылки-и-файлы)
+- [Примечания по безопасности и качеству](#примечания-по-безопасности-и-качеству)
 
----
-
-## Обзор продукта
+## Обзор
 - ChillHub — лаунчер для Windows 10–11 для кооператива и моддинга.
 - Обновления устанавливаются как дифф: скачиваются только изменившиеся файлы, конечная папка игры у пользователя становится точной копией серверной версии.
 - Новости лаунчера и игр — Markdown + изображения/ассеты. Показываются в клиенте.
@@ -34,30 +46,30 @@ Dev‑порты (локально): Public API `:55700`, Admin API `:55777`.
 
 ---
 
-## Локальная среда (Windows 11) — разработка, дебаг, наполнение контента
+## Локальная разработка (Windows 11)
 
-### 1) Установите зависимости
+### Зависимости
 - Go 1.22+ (добавьте в PATH)
 - .NET 8 SDK
 - Git
 - Visual Studio 2022 (для WPF) или Visual Studio Code
 - (Опционально) PowerShell 7 — подойдёт и Windows PowerShell
 
-### 2) Клонируйте проект
+### Клонирование
 ```powershell
 mkdir C:\Work; Set-Location C:\Work
 git clone <repo_url> "Launcher Project"
 Set-Location "Launcher Project"
 ```
 
-### 3) Минимальный контент
+### Контент (минимум)
 - Примеры уже есть в `content/`.
 - Для своей игры:
   - Манифесты: `content/manifests/<gameId>/{version}.json` и `latest.json`.
   - Файлы версии: `content/content/<gameId>/<version>/files/...`.
   - Новости: `content/news/` и `content/news/games/<gameId>/`.
 
-### 4) Запуск всех компонентов одной командой (3 окна с логами)
+### Запуск (3 окна)
 Скрипт поднимет API, Admin и клиент (WPF) в отдельных окнах и пропишет клиенту нужный `ApiBaseUrl`.
 ```powershell
 # локальная среда + запись клиентского ApiBaseUrl
@@ -71,7 +83,7 @@ Set-Location "Launcher Project"
 - В управляющей консоли `run-dev.ps1` нажмите `r` (или русскую `к`) → рестарт всех процессов.
 - Нажмите `q` → корректное завершение и освобождение портов.
 
-### 5) Наполнение данными через Admin UI
+### Admin UI: контент
 - Откройте `http://localhost:55777/admin`.
 - Загрузите ZIP сборки игры/лаунчера (вкладка «Игры»/«Лаунчер»), при необходимости активируйте `latest`.
 - Отредактируйте реестр игр (вкладка «Игры (редактирование)»).
@@ -79,11 +91,11 @@ Set-Location "Launcher Project"
 
 ---
 
-## Развертывание на сервер (Ubuntu + nginx) — How To
+## Деплой на сервер (Ubuntu + nginx)
 
 Предполагаем VPS с Ubuntu, пользователь `ubuntu`, домен `launcher.samoy.love` указывает A‑записью на IP сервера.
 
-### 1) Базовая подготовка (один раз)
+### Подготовка (1 раз)
 ```bash
 sudo apt update && sudo apt install -y nginx rsync
 sudo apt install -y certbot python3-certbot-nginx
@@ -92,8 +104,12 @@ sudo mkdir -p /var/www/site
 sudo mkdir -p /var/www/launcher/{content,manifests,news,admin_ui}
 sudo mkdir -p /opt/chillhub
 
-# Скопируйте deploy/launcher.conf в /etc/nginx/sites-available/launcher.conf
-sudo ln -s /etc/nginx/sites-available/launcher.conf /etc/nginx/sites-enabled/launcher.conf || true
+# Клонируйте репозиторий (в домашнюю директорию пользователя)
+git clone https://github.com/tr0llex/Launcher-Project.git ~/Launcher-Project || true
+
+# Установите nginx-конфиг из репозитория
+sudo install -m 0644 ~/Launcher-Project/deploy/launcher.conf /etc/nginx/sites-available/launcher.conf
+sudo ln -sf /etc/nginx/sites-available/launcher.conf /etc/nginx/sites-enabled/launcher.conf
 sudo nginx -t && sudo systemctl reload nginx
 
 # Сертификаты (после настройки DNS A-записей)
@@ -105,7 +121,7 @@ sudo ufw deny 55700/tcp && sudo ufw deny 55777/tcp
 sudo ufw enable
 ```
 
-### 2) Загрузка и раскладка артефактов (ручной вариант)
+### Раскладка артефактов
 ```bash
 # 1) Лендинг
 scp -r landing/* ubuntu@<VPS>:/home/ubuntu/site/
@@ -128,11 +144,11 @@ scp api admin ubuntu@<VPS>:/home/ubuntu/
 ssh ubuntu@<VPS> "sudo install -m 0755 ~/api /opt/chillhub/api && sudo install -m 0755 ~/admin /opt/chillhub/admin"
 ```
 
-### 3) systemd сервисы (один раз)
+### systemd (1 раз)
 ```bash
-# (предварительно загрузите deploy/systemd/*.service в ~/deploy/systemd)
-sudo install -m 0644 ~/deploy/systemd/chillhub-api.service   /etc/systemd/system/chillhub-api.service
-sudo install -m 0644 ~/deploy/systemd/chillhub-admin.service /etc/systemd/system/chillhub-admin.service
+# Установите unit-файлы из репозитория
+sudo install -m 0644 ~/Launcher-Project/deploy/systemd/chillhub-api.service   /etc/systemd/system/chillhub-api.service
+sudo install -m 0644 ~/Launcher-Project/deploy/systemd/chillhub-admin.service /etc/systemd/system/chillhub-admin.service
 sudo systemctl daemon-reload
 sudo systemctl enable chillhub-api.service chillhub-admin.service
 sudo systemctl restart chillhub-api.service chillhub-admin.service
