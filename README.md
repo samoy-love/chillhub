@@ -107,13 +107,13 @@ sudo mkdir -p /opt/chillhub
 # Клонируйте репозиторий (в домашнюю директорию пользователя)
 git clone https://github.com/tr0llex/Launcher-Project.git ~/Launcher-Project || true
 
+# Сертификаты (после настройки DNS A-записей)
+sudo certbot --nginx -d launcher.samoy.love
+
 # Установите nginx-конфиг из репозитория
 sudo install -m 0644 ~/Launcher-Project/deploy/launcher.conf /etc/nginx/sites-available/launcher.conf
 sudo ln -sf /etc/nginx/sites-available/launcher.conf /etc/nginx/sites-enabled/launcher.conf
 sudo nginx -t && sudo systemctl reload nginx
-
-# Сертификаты (после настройки DNS A-записей)
-sudo certbot --nginx -d launcher.samoy.love -d samoy.love
 
 # Firewall
 sudo ufw allow OpenSSH && sudo ufw allow 80/tcp && sudo ufw allow 443/tcp
