@@ -343,7 +343,7 @@ async function mgmReload(){
   let res; try{ res = await fetch('/admin/games'); }catch(e){ notify('Ошибка запроса: '+e); return; }
   if(!res.ok){ notify('HTTP '+res.status+' '+res.statusText); return; }
   let j; try{ j = await res.json(); }catch(e){ notify('Ошибка парсинга'); return; }
-  const tb = document.querySelector('#mgm_table tbody'); if(!tb) return;
+  const tb = document.querySelector('#mgm-table tbody'); if(!tb) return;
   tb.innerHTML = '';
   (j.items||[]).forEach(it=> mgmAppendRow(tb, it));
   // restore selection according to current gid input
@@ -394,7 +394,7 @@ function mgmAppendRow(tb, it){
     const gmSel = document.getElementById('gm_select'); if(gmSel){ gmSel.value = id; }
     const lab = document.getElementById('gm_current_id'); if(lab){ lab.textContent = id || '—'; }
     // toggle visual selection
-    document.querySelectorAll('#mgm_table tbody tr.mgm-selected').forEach(el=> el.classList.remove('mgm-selected'));
+    document.querySelectorAll('#mgm-table tbody tr.mgm-selected').forEach(el=> el.classList.remove('mgm-selected'));
     tr.classList.add('mgm-selected');
     // refresh preview for this game
     gmPrevEnsureVersionsAndRender(id);
@@ -476,12 +476,12 @@ function mgmAppendRow(tb, it){
 }
 
 function mgmAddRow(){
-  const tb = document.querySelector('#mgm_table tbody'); if(!tb) return;
+  const tb = document.querySelector('#mgm-table tbody'); if(!tb) return;
   mgmAppendRow(tb, {gameId:'', title:'', exeRelativePath:'', iconUrl:''});
 }
 
 async function mgmSave(){
-  const rows = Array.from(document.querySelectorAll('#mgm_table tbody tr'));
+  const rows = Array.from(document.querySelectorAll('#mgm-table tbody tr'));
   const items = rows.map(tr=>{
     const tds = tr.querySelectorAll('td');
     return {
@@ -505,7 +505,7 @@ async function mgmScanMissing(){
   let res; try{ res = await fetch('/admin/games/scan'); }catch(e){ notify('Ошибка запроса: '+e); return; }
   if(!res.ok){ notify('HTTP '+res.status+' '+res.statusText); return; }
   const j = await res.json();
-  const tb = document.querySelector('#mgm_table tbody'); if(!tb){ notify('Таблица игр не найдена'); return; }
+  const tb = document.querySelector('#mgm-table tbody'); if(!tb){ notify('Таблица игр не найдена'); return; }
   const before = Array.from(tb.querySelectorAll('tr')).length;
   const existing = new Set(Array.from(tb.querySelectorAll('tr')).map(tr=> tr.querySelectorAll('td')[0].querySelector('input').value.trim()));
   (j.items||[]).forEach(it=>{ if(existing.has(it.gameId)) return; mgmAppendRow(tb, it); });
@@ -646,13 +646,14 @@ document.addEventListener('DOMContentLoaded', function(){
     const gidEl = document.getElementById('gid'); if(gidEl) gidEl.value = chosen;
     const lab = document.getElementById('gm_current_id'); if(lab) lab.textContent = chosen || '—';
     if(chosen){ manifestsReload(); gmPrevEnsureVersionsAndRender(chosen); }
-    // highlight corresponding row in mgm_table
-    const rows = Array.from(document.querySelectorAll('#mgm_table tbody tr'));
+    const rows = Array.from(document.querySelectorAll('#mgm-table tbody tr'));
     rows.forEach(r=> r.classList.remove('mgm-selected'));
     for(const r of rows){
       const idCell = r.querySelectorAll('td')[0];
-      const idVal = idCell?.querySelector('input')?.value?.trim() || '';
-      if(idVal && idVal.toLowerCase() === chosen.toLowerCase()){ r.classList.add('mgm-selected'); r.scrollIntoView({block:'nearest'}); break; }
+      if(!idCell) continue;
+      const idInput = idCell.querySelector('input');
+      const id = (idInput?.value||'').trim().toLowerCase();
+      if(id===chosen.toLowerCase()){ r.classList.add('mgm-selected'); r.scrollIntoView({block:'nearest'}); break; }
     }
   }); }
 });
@@ -1095,8 +1096,8 @@ function updateCoverPreview(){
   try{
     const small = document.getElementById('ns_preview_small');
     if(small){
-      const title = titleFromMarkdown(stripCoverComment(md)) || 'Без заголовка';
-      const excerpt = excerptFromMarkdown(stripCoverComment(md));
+      const title = titleFromMarkdown(md) || 'Без заголовка';
+      const excerpt = excerptFromMarkdown(md);
       small.innerHTML = '<div class="small"><div class="fw-semibold text-truncate">'+escapeHtml(title)+'</div><div class="text-body-secondary text-truncate">'+escapeHtml(excerpt)+'</div></div>';
     }
   }catch(e){ /* no-op */ }
@@ -1441,13 +1442,13 @@ async function newsList(){
   const scope=document.getElementById('ns_scope').value; let gidEl=document.getElementById('ns_gid'); let gid= gidEl? gidEl.value: '';
   if(scope==='game'){
     // ensure game is selected; if not, load and pick first
-    if(!gidEl){ document.getElementById('ns_list').textContent='Элемент выбора игры не найден'; return; }
+    if(!gidEl){ document.getElementById('ns-list').textContent='Элемент выбора игры не найден'; return; }
     if(!gid){ await loadGamesInto(gidEl); gid = gidEl.value; }
-    if(!gid){ document.getElementById('ns_list').textContent='Выберите игру'; return; }
+    if(!gid){ document.getElementById('ns-list').textContent='Выберите игру'; return; }
   }
   let url='/admin/news/list?scope='+encodeURIComponent(scope);
   if(scope==='game') url += '&gameId='+encodeURIComponent(gid);
-  let res; try{ res=await fetch(url); }catch(e){ document.getElementById('ns_list').textContent='Ошибка запроса: '+e; return; }
+  let res; try{ res=await fetch(url); }catch(e){ document.getElementById('ns-list').textContent='Ошибка запроса: '+e; return; }
   if(!res.ok){
     // попытка авто-пересборки индекса при 404
     if(res.status===404){
@@ -1456,10 +1457,10 @@ async function newsList(){
         res = await fetch(url);
       }
     }
-    if(!res.ok){ document.getElementById('ns_list').textContent='HTTP '+res.status+' '+res.statusText; return; }
+    if(!res.ok){ document.getElementById('ns-list').textContent='HTTP '+res.status+' '+res.statusText; return; }
   }
   const j = await res.json();
-  const root = document.getElementById('ns_list'); root.innerHTML='';
+  const root = document.getElementById('ns-list'); root.innerHTML='';
   if(!j.items || j.items.length===0){ const p=document.createElement('div'); p.className='text-body-secondary'; p.textContent='Нет записей'; root.appendChild(p); return; }
   const items = (j.items||[]);
   (items).forEach(it=>{

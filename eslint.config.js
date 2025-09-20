@@ -46,11 +46,21 @@ export default [
         Event: 'readonly',
         CustomEvent: 'readonly',
         HTMLElement: 'readonly',
+        // Additional browser globals used in this project
+        requestAnimationFrame: 'readonly',
+        cancelAnimationFrame: 'readonly',
+        performance: 'readonly',
+        IntersectionObserver: 'readonly',
+        alert: 'readonly',
+        confirm: 'readonly',
+        prompt: 'readonly',
+        FormData: 'readonly',
+        XMLHttpRequest: 'readonly',
       }
     },
     rules: {
       // Migrated rules from .eslintrc.json
-      'no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
       'no-undef': 'error',
       eqeqeq: ['warn', 'always'],
       'no-console': 'off'

@@ -1,42 +1,66 @@
 /* Admin UI styles */
-.hidden{display:none}
-textarea{width:100%;height:260px}
-.card-news{width:100%}
-.news-grid{display:flex;flex-direction:column;gap:12px}
-.news-wrap{max-width:90%; margin:0 auto}
+.hidden {
+  display: none;
+}
+textarea {
+  width: 100%;
+  height: 260px;
+}
+.card-news {
+  width: 100%;
+}
+.news-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.news-wrap {
+  max-width: 90%;
+  margin: 0 auto;
+}
 
 /* News list: make cover images shorter with spacing around */
-#ns_list .card-img-top{
-  height:150px;                 /* slightly higher limit */
-  width:calc(100% - 16px);      /* account for horizontal margins */
-  object-fit:contain;           /* fit image inside without cropping */
-  object-position:center center;/* center the image within the box */
-  display:block;                /* avoid inline gaps */
-  margin:8px;                   /* space around the image */
-  border-radius:6px;            /* soften corners a bit */
+#ns-list .card-img-top {
+  height: 150px;                /* slightly higher limit */
+  width: calc(100% - 16px);     /* account for horizontal margins */
+  object-fit: contain;          /* fit image inside without cropping */
+  object-position: center center;/* center the image within the box */
+  display: block;               /* avoid inline gaps */
+  margin: 8px;                  /* space around the image */
+  border-radius: 6px;           /* soften corners a bit */
 }
 
 /* Header brand logo */
-.brand-logo{
-  width:24px;
-  height:24px;
+.brand-logo {
+  width: 24px;
+  height: 24px;
 }
 
 /* Collapsible tree in manifests preview */
-.tree-dir{ margin: 2px 0; }
-.tree-dir > summary{ list-style: none; cursor: pointer; padding: 2px 0; }
-.tree-dir > summary::-webkit-details-marker{ display: none; }
+.tree-dir { margin: 2px 0; }
+.tree-dir > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 2px 0;
+}
+.tree-dir > summary::-webkit-details-marker { display: none; }
+
 /* Use inline SVG twisty (rotates when open) */
-.tree-dir > summary .twisty{ color:#adb5bd; transition: transform .12s ease-in-out; transform: rotate(0deg); }
-.tree-dir[open] > summary .twisty{ transform: rotate(90deg); }
+.tree-dir > summary .twisty {
+  color: #adb5bd;
+  transition: transform .12s ease-in-out;
+  transform: rotate(0deg);
+}
+.tree-dir[open] > summary .twisty { transform: rotate(90deg); }
 
 /* Selected game row highlight (Games tab) */
-#mgm_table tbody tr.mgm-selected{
+#mgm-table tbody tr.mgm-selected {
   outline: 2px solid #0d6efd;           /* Bootstrap primary */
   outline-offset: -2px;                  /* keep within row bounds */
   background-color: #0b2239 !important;  /* subtle dark-blue highlight */
 }
-#mgm_table tbody tr.mgm-selected input{
+
+#mgm-table tbody tr.mgm-selected input {
   background-color: #0e2a47;
   color: #fff;
 }

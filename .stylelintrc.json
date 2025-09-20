@@ -3,8 +3,6 @@
   "rules": {
     "block-no-empty": true,
     "color-hex-length": "short",
-    "color-function-notation": "modern",
-    "color-function-alias-notation": "modern",
     "alpha-value-notation": "percentage",
     "selector-class-pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:--[a-z0-9]+)?$",
     "property-no-vendor-prefix": true,

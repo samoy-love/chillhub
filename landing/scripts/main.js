@@ -118,7 +118,7 @@
     if(!sc) return;
     const imgs = Array.from(sc.querySelectorAll('img'));
     if(imgs.length < 2) return;
-    let i = 0; let hover = false;
+    // autoplay disabled; no need to track index/hover state
 
     let animRAF = 0;
     function stopAnim(){ if(animRAF){ cancelAnimationFrame(animRAF); animRAF = 0; sc.dataset.anim = '0'; } }
@@ -133,20 +133,10 @@
       }
       animRAF = requestAnimationFrame(step);
     }
-    function scrollToIndex(idx){
-      const target = imgs[idx % imgs.length];
-      if(!target) return;
-      const x = target.offsetLeft - sc.offsetLeft - 8; // small padding
-      animateScrollTo(x, 2000);
-    }
+    // scrollToIndex helper removed (unused)
     // Autoplay disabled by request: no timer, only user drag and page scroll sync
 
-    sc.addEventListener('mouseenter', ()=>{ hover = true; });
-    sc.addEventListener('mouseleave', ()=>{ hover = false; });
-    sc.addEventListener('mousedown', ()=>{ hover = true; });
-    sc.addEventListener('mouseup',   ()=>{ hover = false; });
-    sc.addEventListener('touchstart',()=>{ hover = true; }, {passive:true});
-    sc.addEventListener('touchend',  ()=>{ hover = false; }, {passive:true});
+    // hover-related handlers removed (no autoplay)
     // No visibility change handler needed since autoplay is disabled
 
     // No automatic movement on load
@@ -166,7 +156,7 @@
       isDown = true;
       sc.classList.add('dragging');
       sc.dataset.pause = '1';
-      stopAnim();
+      // autoplay is disabled; nothing to stop
       startX = (e.touches? e.touches[0].clientX : e.clientX);
       startLeft = sc.scrollLeft;
       lastX = startX; lastT = performance.now(); vx = 0;
@@ -304,7 +294,7 @@
         for(const k in catMap){ if(catMap[k].includes(txt)) return k; }
         return null;
       }
-      slots.forEach((s, idx)=>{
+      slots.forEach((s, _idx)=>{
         // remove previous slot--* classes
         s.classList.forEach(c=>{ if(/^slot--/.test(c)) s.classList.remove(c); });
         const name = (s.textContent || '').trim();
