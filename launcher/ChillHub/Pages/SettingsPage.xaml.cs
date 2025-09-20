@@ -1,47 +1,72 @@
-using System;
-using System.IO;
-using System.Windows;
-using System.Windows.Controls;
-using ChillHub.Core;
+// <copyright file="SettingsPage.xaml.cs" company="PlaceholderCompany">
+// Copyright (c) 2025 ChillHub
+// Licensed under the MIT License.
+// </copyright>
 
 namespace ChillHub.Pages
 {
+    using System;
+    using System.IO;
+    using System.Windows;
+    using System.Windows.Controls;
+
+    using ChillHub.Core;
+
     public partial class SettingsPage : Page
     {
         public SettingsPage()
         {
-            InitializeComponent();
+            this.InitializeComponent();
+
             // Defer UI population until the page is fully loaded to avoid template/resource init races (seen in dark theme)
-            this.Loaded += SettingsPage_Loaded;
+            this.Loaded += this.SettingsPage_Loaded;
         }
 
         private void SettingsPage_Loaded(object sender, RoutedEventArgs e)
         {
             // Ensure templates/resources are fully applied (especially in dark theme)
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                try { LoadConfigToUi(); }
-                catch { /* prevent crash; user can reopen */ }
+            this.Dispatcher.BeginInvoke(
+                new Action(() =>
+                {
+                try
+                {
+                    this.LoadConfigToUi();
+                }
+                catch
+                { /* prevent crash; user can reopen */
+                }
             }), System.Windows.Threading.DispatcherPriority.Loaded);
         }
 
         private void LoadConfigToUi()
         {
             var cfg = ConfigService.Current ?? new AppConfig();
-            if (GamesPathBox != null) GamesPathBox.Text = cfg.GamesPath;
-            if (ThreadsSlider != null) ThreadsSlider.Value = cfg.DownloadThreads;
-            if (ThreadsValueText != null) ThreadsValueText.Text = cfg.DownloadThreads.ToString();
+            if (this.GamesPathBox != null)
+            {
+                this.GamesPathBox.Text = cfg.GamesPath;
+            }
+
+            if (this.ThreadsSlider != null)
+            {
+                this.ThreadsSlider.Value = cfg.DownloadThreads;
+            }
+
+            if (this.ThreadsValueText != null)
+            {
+                this.ThreadsValueText.Text = cfg.DownloadThreads.ToString();
+            }
 
             // Single dark theme now; no theme selection UI
         }
 
         private void BackBtn_Click(object sender, RoutedEventArgs e)
         {
-            if (NavigationService != null && NavigationService.CanGoBack)
+            if (this.NavigationService != null && this.NavigationService.CanGoBack)
             {
-                NavigationService.GoBack();
+                this.NavigationService.GoBack();
                 return;
             }
+
             var win = Window.GetWindow(this) as ChillHub.MainWindow;
             win?.ContentFrame.Navigate(new HomePage());
         }
@@ -54,23 +79,27 @@ namespace ChillHub.Pages
                 {
                     dlg.Description = "Выберите папку для игр";
                     dlg.ShowNewFolderButton = true;
-                    dlg.SelectedPath = string.IsNullOrWhiteSpace(GamesPathBox.Text)
+                    dlg.SelectedPath = string.IsNullOrWhiteSpace(this.GamesPathBox.Text)
                         ? AppConfig.DefaultGamesPath()
-                        : GamesPathBox.Text;
+                        : this.GamesPathBox.Text;
                     var res = dlg.ShowDialog();
                     if (res == System.Windows.Forms.DialogResult.OK)
                     {
-                        GamesPathBox.Text = dlg.SelectedPath;
+                        this.GamesPathBox.Text = dlg.SelectedPath;
                     }
                 }
             }
-            catch { }
+            catch
+            {
+            }
         }
 
         private void ThreadsSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
-            if (ThreadsValueText != null)
-                ThreadsValueText.Text = ((int)ThreadsSlider.Value).ToString();
+            if (this.ThreadsValueText != null)
+            {
+                this.ThreadsValueText.Text = ((int)this.ThreadsSlider.Value).ToString();
+            }
         }
 
         private void SaveBtn_Click(object sender, RoutedEventArgs e)
@@ -78,14 +107,22 @@ namespace ChillHub.Pages
             try
             {
                 var cfg = ConfigService.Current;
-                var newPath = GamesPathBox.Text?.Trim();
+                var newPath = this.GamesPathBox.Text?.Trim();
                 if (string.IsNullOrWhiteSpace(newPath))
+                {
                     newPath = AppConfig.DefaultGamesPath();
+                }
 
-                try { Directory.CreateDirectory(newPath); } catch { }
+                try
+                {
+                    Directory.CreateDirectory(newPath);
+                }
+                catch
+                {
+                }
 
                 cfg.GamesPath = newPath;
-                cfg.DownloadThreads = (int)ThreadsSlider.Value;
+                cfg.DownloadThreads = (int)this.ThreadsSlider.Value;
 
                 ConfigService.Save(cfg); // также применяет тему
                 try
@@ -98,7 +135,9 @@ namespace ChillHub.Pages
                         ChillHub.Core.UI.AcrylicHelper.ApplyTitleBarTheme(win, isDark);
                     }
                 }
-                catch { }
+                catch
+                {
+                }
             }
             catch (Exception ex)
             {

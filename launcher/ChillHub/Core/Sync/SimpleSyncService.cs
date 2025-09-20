@@ -1,34 +1,44 @@
-using System;
-using System.IO;
-using System.Linq;
-using System.Net.Http;
-using System.Net.Http.Json;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Collections.Generic;
-using System.Security.Cryptography;
-using ChillHub.Core;
-using Blake3;
-using System.Net;
-using ChillHub.Core.Net;
+// <copyright file="SimpleSyncService.cs" company="PlaceholderCompany">
+// Copyright (c) 2025 ChillHub
+// Licensed under the MIT License.
+// </copyright>
 
 namespace ChillHub.Core.Sync
 {
+    using System;
+    using System.Collections.Generic;
+    using System.IO;
+    using System.Linq;
+    using System.Net;
+    using System.Net.Http;
+    using System.Net.Http.Json;
+    using System.Security.Cryptography;
+    using System.Threading;
+    using System.Threading.Tasks;
+
+    using Blake3;
+
+    using ChillHub.Core;
+    using ChillHub.Core.Net;
+
     public class SimpleSyncService : ISyncService
     {
-        private readonly HttpClient _http;
+        private readonly HttpClient http;
+
         public SimpleSyncService(HttpClient? http = null)
         {
-            _http = http ?? HttpClientProvider.Shared;
+            this.http = http ?? HttpClientProvider.Shared;
         }
 
+        /// <inheritdoc/>
         public async Task<Manifest> GetManifestAsync(string manifestUrl, CancellationToken ct)
         {
-            var manifest = await _http.GetFromJsonAsync<Manifest>(manifestUrl, ct) 
+            var manifest = await this.http.GetFromJsonAsync<Manifest>(manifestUrl, ct)
                            ?? throw new InvalidDataException("manifest is null");
             return manifest;
         }
 
+        /// <inheritdoc/>
         public Task<DiffPlan> PlanAsync(Manifest manifest, string localRoot, string contentBaseUrl, CancellationToken ct)
         {
             var plan = new DiffPlan
@@ -42,7 +52,7 @@ namespace ChillHub.Core.Sync
             var manifestFiles = new Dictionary<string, ManifestFile>(StringComparer.OrdinalIgnoreCase);
             foreach (var mf in manifest.Files)
             {
-                var relNorm = mf.Path.Replace('\\','/');
+                var relNorm = mf.Path.Replace('\\', '/');
                 if (IsIgnoredRelFile(relNorm))
                 {
                     // Исключаем спецфайл FreeTP/.hash из проверки и обновления для каждой игры.
@@ -50,6 +60,7 @@ namespace ChillHub.Core.Sync
                     // не открывался этот сайт каждый раз (файл ".hash" в папке FreeTP трогать не нужно).
                     continue;
                 }
+
                 manifestFiles[relNorm] = mf;
             }
 
@@ -70,6 +81,7 @@ namespace ChillHub.Core.Sync
                     try
                     {
                         var info = new FileInfo(localPath);
+
                         // Если есть sha256/blake3 в манифесте — считаем локальный хеш и сравним
                         if (!string.IsNullOrWhiteSpace(mf.Sha256) || !string.IsNullOrWhiteSpace(mf.Blake3))
                         {
@@ -83,6 +95,7 @@ namespace ChillHub.Core.Sync
                                 sha.TransformBlock(buf, 0, r, null, 0);
                                 b3.Update(new ReadOnlySpan<byte>(buf, 0, r));
                             }
+
                             sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
                             var shaHex = Convert.ToHexString(sha.Hash!).ToLowerInvariant();
                             var b3out = new byte[32];
@@ -105,13 +118,20 @@ namespace ChillHub.Core.Sync
                         {
                             // Фоллбэк: сравнение по размеру
                             if (info.Length == mf.Size)
+                            {
                                 needDownload = false;
+                            }
                             else
+                            {
                                 reason = $"size_mismatch local={info.Length} manifest={mf.Size}";
+                            }
                         }
                     }
-                    catch { }
+                    catch
+                    {
+                    }
                 }
+
                 if (needDownload)
                 {
                     plan.Downloads.Add(new FileTask
@@ -124,9 +144,16 @@ namespace ChillHub.Core.Sync
                         Executable = mf.Executable,
                     });
                     plan.TotalDownloadBytes += mf.Size;
-                    try { ChillHub.Core.Logging.Logger.Info($"Plan include gid={manifest.GameId} file='{rel}' size={mf.Size} reason={reason}"); } catch { }
+                    try
+                    {
+                        ChillHub.Core.Logging.Logger.Info($"Plan include gid={manifest.GameId} file='{rel}' size={mf.Size} reason={reason}");
+                    }
+                    catch
+                    {
+                    }
                 }
             }
+
             plan.TotalFilesToDownload = plan.Downloads.Count;
 
             // Пустые директории для создания
@@ -138,11 +165,12 @@ namespace ChillHub.Core.Sync
             // Файлы к удалению (есть локально, нет в манифесте)
             foreach (var relLocal in localExisting)
             {
-                var norm = relLocal.Replace('\\','/');
+                var norm = relLocal.Replace('\\', '/');
                 if (IsIgnoredRelFile(norm))
                 {
                     continue; // не удаляем FreeTP/.hash
                 }
+
                 if (!manifestFiles.ContainsKey(norm))
                 {
                     plan.ToDelete.Add(norm);
@@ -152,6 +180,7 @@ namespace ChillHub.Core.Sync
             return Task.FromResult(plan);
         }
 
+        /// <inheritdoc/>
         public async Task ExecuteAsync(DiffPlan plan, IProgress<SyncProgress> progress, CancellationToken ct)
         {
             long downloaded = 0;
@@ -189,8 +218,9 @@ namespace ChillHub.Core.Sync
                 foreach (var t in plan.Downloads)
                 {
                     await sem.WaitAsync(ct);
-                    tasks.Add(Task.Run(async () =>
-                    {
+                    tasks.Add(Task.Run(
+                        async () =>
+                        {
                         try
                         {
                             ct.ThrowIfCancellationRequested();
@@ -202,56 +232,83 @@ namespace ChillHub.Core.Sync
                             // Скачивание в .part
                             var partPath = stagingFile + ".part";
                             {
-                            long existing = 0;
-                            if (File.Exists(partPath))
-                            {
-                                try { existing = new FileInfo(partPath).Length; } catch {}
+                                long existing = 0;
+                                if (File.Exists(partPath))
+                                {
+                                    try
+                                    {
+                                        existing = new FileInfo(partPath).Length;
+                                    }
+                                    catch
+                                    {
+                                    }
+                                }
+
+                                var attempt = 0;
+                                var maxAttempts = 3;
+                                var buffer = new byte[256 * 1024];
+                                while (true)
+                                {
+                                    ct.ThrowIfCancellationRequested();
+                                    try
+                                    {
+                                        using var req = new HttpRequestMessage(HttpMethod.Get, t.Url);
+                                        if (existing > 0 && existing < t.Size)
+                                        {
+                                            req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(existing, null);
+                                        }
+
+                                        using var resp = await this.http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+                                        resp.EnsureSuccessStatusCode();
+
+                                        // Если сервер вернул 200 OK, несмотря на Range — перезаписываем файл заново
+                                        if (existing > 0 && resp.StatusCode == HttpStatusCode.OK)
+                                        {
+                                            existing = 0;
+                                            try
+                                            {
+                                                File.Delete(partPath);
+                                            }
+                                            catch
+                                            {
+                                            }
+                                        }
+
+                                        using var src = await resp.Content.ReadAsStreamAsync(ct);
+                                        using var dst = new FileStream(partPath, FileMode.Append, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true);
+                                        int read;
+                                        while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), ct)) > 0)
+                                        {
+                                            await dst.WriteAsync(buffer.AsMemory(0, read), ct);
+                                            Interlocked.Add(ref downloaded, read);
+                                            progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+                                        }
+
+                                        break; // success
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        attempt++;
+                                        if (attempt >= maxAttempts)
+                                        {
+                                            throw new IOException($"Ошибка загрузки {t.RelativePath}: {ex.Message}", ex);
+                                        }
+
+                                        var delayMs = (int)Math.Min(5000, 500 * Math.Pow(2, attempt - 1));
+                                        await Task.Delay(delayMs, ct);
+
+                                        // обновить existing на случай частичного дозаписи
+                                        try
+                                        {
+                                            existing = new FileInfo(partPath).Length;
+                                        }
+                                        catch
+                                        {
+                                        }
+                                    }
+                                }
                             }
 
-                            var attempt = 0;
-                            var maxAttempts = 3;
-                            var buffer = new byte[256 * 1024];
-                            while (true)
-                            {
-                                ct.ThrowIfCancellationRequested();
-                                try
-                                {
-                                    using var req = new HttpRequestMessage(HttpMethod.Get, t.Url);
-                                    if (existing > 0 && existing < t.Size)
-                                    {
-                                        req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(existing, null);
-                                    }
-                                    using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
-                                    resp.EnsureSuccessStatusCode();
-                                    // Если сервер вернул 200 OK, несмотря на Range — перезаписываем файл заново
-                                    if (existing > 0 && resp.StatusCode == HttpStatusCode.OK)
-                                    {
-                                        existing = 0;
-                                        try { File.Delete(partPath); } catch { }
-                                    }
-                                    using var src = await resp.Content.ReadAsStreamAsync(ct);
-                                    using var dst = new FileStream(partPath, FileMode.Append, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true);
-                                    int read;
-                                    while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), ct)) > 0)
-                                    {
-                                        await dst.WriteAsync(buffer.AsMemory(0, read), ct);
-                                        Interlocked.Add(ref downloaded, read);
-                                        progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
-                                    }
-                                    break; // success
-                                }
-                                catch (Exception ex)
-                                {
-                                    attempt++;
-                                    if (attempt >= maxAttempts)
-                                        throw new IOException($"Ошибка загрузки {t.RelativePath}: {ex.Message}", ex);
-                                    var delayMs = (int)Math.Min(5000, 500 * Math.Pow(2, attempt - 1));
-                                    await Task.Delay(delayMs, ct);
-                                    // обновить existing на случай частичного дозаписи
-                                    try { existing = new FileInfo(partPath).Length; } catch {}
-                                }
-                            }
-                            }
                             // Верификация хешей (SHA-256 и Blake3), если доступны — за один проход
                             if (!string.IsNullOrWhiteSpace(t.Sha256) || !string.IsNullOrWhiteSpace(t.Blake3))
                             {
@@ -260,12 +317,14 @@ namespace ChillHub.Core.Sync
                                 var b3 = Blake3.Hasher.New();
                                 var buf = new byte[256 * 1024];
                                 int r;
+
                                 // NOTE: Use synchronous reads to avoid awaiting while a ref-struct (Hasher) is alive (C# 12 limitation)
                                 while ((r = f.Read(buf, 0, buf.Length)) > 0)
                                 {
                                     sha.TransformBlock(buf, 0, r, null, 0);
                                     b3.Update(new ReadOnlySpan<byte>(buf, 0, r));
                                 }
+
                                 sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
                                 var shaHex = Convert.ToHexString(sha.Hash!).ToLowerInvariant();
                                 var b3out = new byte[32];
@@ -277,14 +336,20 @@ namespace ChillHub.Core.Sync
                                     File.Delete(partPath);
                                     throw new InvalidDataException($"Хеш SHA-256 не совпадает: {t.RelativePath}");
                                 }
+
                                 if (!string.IsNullOrWhiteSpace(t.Blake3) && !string.Equals(b3Hex, t.Blake3, StringComparison.OrdinalIgnoreCase))
                                 {
                                     File.Delete(partPath);
                                     throw new InvalidDataException($"Хеш Blake3 не совпадает: {t.RelativePath}");
                                 }
                             }
+
                             // Переименовать .part -> готовый stagingFile
-                            if (File.Exists(stagingFile)) File.Delete(stagingFile);
+                            if (File.Exists(stagingFile))
+                            {
+                                File.Delete(stagingFile);
+                            }
+
                             File.Move(partPath, stagingFile);
                         }
                         finally
@@ -295,6 +360,7 @@ namespace ChillHub.Core.Sync
                         }
                     }, ct));
                 }
+
                 await Task.WhenAll(tasks);
             }
 
@@ -310,27 +376,52 @@ namespace ChillHub.Core.Sync
                 var dstPath = Path.Combine(plan.LocalRoot, rel);
                 var srcPath = Path.Combine(stagingRoot, rel);
                 Directory.CreateDirectory(Path.GetDirectoryName(dstPath)!);
-                if (File.Exists(dstPath)) File.Delete(dstPath);
+                if (File.Exists(dstPath))
+                {
+                    File.Delete(dstPath);
+                }
+
                 File.Move(srcPath, dstPath);
                 if (t.Executable)
                 {
                     // Для Windows можно оставить как есть; при необходимости добавить атрибуты
                 }
+
                 try
                 {
                     long len = 0;
                     bool exists = File.Exists(dstPath);
-                    if (exists) { try { len = new FileInfo(dstPath).Length; } catch { } }
+                    if (exists)
+                    {
+                        try
+{
+    len = new FileInfo(dstPath).Length;
+}
+                        catch
+{
+}
+                    }
                     ChillHub.Core.Logging.Logger.Info($"Activated file='{t.RelativePath}' exists={exists} len={len} expected={t.Size}");
                 }
-                catch { }
+                catch
+                {
+                }
             }
 
             // Удаление лишних файлов
             foreach (var rel in plan.ToDelete)
             {
                 var path = Path.Combine(plan.LocalRoot, rel.Replace('/', Path.DirectorySeparatorChar));
-                try { if (File.Exists(path)) File.Delete(path); } catch { }
+                try
+                {
+                    if (File.Exists(path))
+{
+    File.Delete(path);
+}
+                }
+                catch
+                {
+                }
             }
 
             // Очистка пустых папок, которых нет в манифесте
@@ -346,7 +437,16 @@ namespace ChillHub.Core.Sync
             }
 
             // Удаляем staging
-            try { if (Directory.Exists(stagingRoot)) Directory.Delete(stagingRoot, true); } catch { }
+            try
+            {
+                if (Directory.Exists(stagingRoot))
+{
+    Directory.Delete(stagingRoot, true);
+}
+            }
+            catch
+            {
+            }
 
             // Финальный сигнал о завершении
             progress.Report(new SyncProgress { Stage = "Completed", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
@@ -362,20 +462,33 @@ namespace ChillHub.Core.Sync
         private static List<string> ListLocalFiles(string root)
         {
             var list = new List<string>();
-            if (!Directory.Exists(root)) return list;
+            if (!Directory.Exists(root))
+            {
+                return list;
+            }
+
             foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
             {
-                var rel = Path.GetRelativePath(root, path).Replace('\\','/');
-                if (rel.StartsWith(".staging/", StringComparison.OrdinalIgnoreCase)) continue;
-                if (IsIgnoredRelFile(rel)) continue; // не учитываем FreeTP/.hash
+                var rel = Path.GetRelativePath(root, path).Replace('\\', '/');
+                if (rel.StartsWith(".staging/", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (IsIgnoredRelFile(rel))
+                {
+                    continue; // не учитываем FreeTP/.hash
+                }
+
                 list.Add(rel);
             }
+
             return list;
         }
 
         private static string NormalizeRelPath(string rel)
         {
-            var r = rel.Replace('\\','/');
+            var r = rel.Replace('\\', '/');
             return r.TrimStart('/');
         }
 
@@ -385,8 +498,12 @@ namespace ChillHub.Core.Sync
         // скачивать или удалять этот файл.
         private static bool IsIgnoredRelFile(string rel)
         {
-            if (string.IsNullOrWhiteSpace(rel)) return false;
-            var r = rel.Replace('\\','/').TrimStart('/');
+            if (string.IsNullOrWhiteSpace(rel))
+            {
+                return false;
+            }
+
+            var r = rel.Replace('\\', '/').TrimStart('/');
             return r.Equals("freetp/.hash", StringComparison.OrdinalIgnoreCase);
         }
 
@@ -395,19 +512,28 @@ namespace ChillHub.Core.Sync
         // а её удаление может спровоцировать нежелательное поведение (например, открытие сайта).
         private static bool IsIgnoredRelDir(string relDir)
         {
-            if (string.IsNullOrWhiteSpace(relDir)) return false;
-            var r = relDir.Replace('\\','/').Trim('/');
+            if (string.IsNullOrWhiteSpace(relDir))
+            {
+                return false;
+            }
+
+            var r = relDir.Replace('\\', '/').Trim('/');
+
             // Совпадение папки "FreeTP" в корне игры
             return r.Equals("freetp", StringComparison.OrdinalIgnoreCase);
         }
 
         private static void CleanupEmptyDirs(string root, HashSet<string> keep)
         {
-            if (!Directory.Exists(root)) return;
+            if (!Directory.Exists(root))
+            {
+                return;
+            }
+
             // Проходим снизу вверх
             foreach (var dir in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories)
                                          .OrderByDescending(d => d.Length))
-            {
+                                        {
                 try
                 {
                     // Нормализуем относительный путь для сравнения с keep
@@ -419,10 +545,15 @@ namespace ChillHub.Core.Sync
                         // не провоцировать открытие сайта. Папку FreeTP сохраняем.
                         continue;
                     }
+
                     if (!Directory.EnumerateFileSystemEntries(dir).Any() && !keep.Contains(rel))
+                    {
                         Directory.Delete(dir, false);
+                    }
                 }
-                catch { }
+                catch
+                {
+                }
             }
         }
     }

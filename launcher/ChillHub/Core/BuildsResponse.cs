@@ -1,4 +1,4 @@
-// <copyright file="GamesResponse.cs" company="PlaceholderCompany">
+// <copyright file="BuildsResponse.cs" company="PlaceholderCompany">
 // Copyright (c) 2025 ChillHub
 // Licensed under the MIT License.
 // </copyright>
@@ -7,8 +7,8 @@ namespace ChillHub.Core
 {
     using System.Collections.Generic;
 
-    public class GamesResponse
+    public class BuildsResponse
     {
-        public List<GameInfo> Items { get; set; } = new();
+        public List<string> Items { get; set; } = new();
     }
 }

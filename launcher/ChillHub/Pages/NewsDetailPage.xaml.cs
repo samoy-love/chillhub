@@ -1,35 +1,45 @@
-using System;
-using System.Net.Http;
-using System.Threading.Tasks;
-using System.Windows;
-using System.Windows.Controls;
-using Markdig;
-// single-theme: no need to read app theme here
-using Microsoft.Web.WebView2.Core;
-using System.Drawing;
-using System.Windows.Media;
+// <copyright file="NewsDetailPage.xaml.cs" company="PlaceholderCompany">
+// Copyright (c) 2025 ChillHub
+// Licensed under the MIT License.
+// </copyright>
 
 namespace ChillHub.Pages
 {
+    using System;
+    using System.Drawing;
+    using System.Net.Http;
+    using System.Threading.Tasks;
+    using System.Windows;
+    using System.Windows.Controls;
+    using System.Windows.Media;
+
+    using Markdig;
+
+    // single-theme: no need to read app theme here
+    using Microsoft.Web.WebView2.Core;
+
     public partial class NewsDetailPage : Page
     {
-        private readonly string _markdownUrl;
-        private readonly HttpClient _http = new HttpClient();
+        private readonly string markdownUrl;
+        private readonly HttpClient http = new HttpClient();
 
         public NewsDetailPage(string title, string markdownUrl)
         {
-            InitializeComponent();
-            TitleText.Text = title;
-            _markdownUrl = markdownUrl;
+            this.InitializeComponent();
+            this.TitleText.Text = title;
+            this.markdownUrl = markdownUrl;
+
             // Prevent white flash: set WebView2 background to app dark color before init
             try
             {
                 var bg = GetMediaColor("Brush.Background");
-                Browser.DefaultBackgroundColor = ToDrawingColor(bg);
+                this.Browser.DefaultBackgroundColor = ToDrawingColor(bg);
             }
-            catch { /* safe guard in case property isn't available at runtime */ }
+            catch
+            { /* safe guard in case property isn't available at runtime */
+            }
 
-            _ = LoadAsync();
+            _ = this.LoadAsync();
         }
 
         private async Task LoadAsync()
@@ -37,13 +47,14 @@ namespace ChillHub.Pages
             try
             {
                 // Loader removed: directly fetch and render content
-
-                var md = await _http.GetStringAsync(_markdownUrl);
+                var md = await this.http.GetStringAsync(this.markdownUrl);
                 var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
                 var html = Markdown.ToHtml(md, pipeline);
+
                 // Ensure absolute URLs like "/assets/..." resolve correctly in WebView2 when using NavigateToString
                 // We inject a <base> tag with the origin derived from the markdown URL.
-                var origin = new Uri(_markdownUrl).GetLeftPart(UriPartial.Authority);
+                var origin = new Uri(this.markdownUrl).GetLeftPart(UriPartial.Authority);
+
                 // Pull colors from Theme.Dark.xaml brushes
                 string bg = BrushToCss("Brush.Background", "#0F1116");
                 string text = BrushToCss("Brush.Text", "#E5E5E5");
@@ -80,27 +91,30 @@ namespace ChillHub.Pages
   }});
 </script>
 </body></html>";
-                await Browser.EnsureCoreWebView2Async();
+                await this.Browser.EnsureCoreWebView2Async();
 
                 // Ensure runtime background and wire events
                 try
                 {
                     var bgCol = GetMediaColor("Brush.Background");
-                    Browser.DefaultBackgroundColor = ToDrawingColor(bgCol);
+                    this.Browser.DefaultBackgroundColor = ToDrawingColor(bgCol);
                 }
-                catch {}
+                catch
+                {
+                }
                 try
                 {
                     // Loader removed: no need to toggle overlay on events
-                    Browser.CoreWebView2.DOMContentLoaded += (_, __) => { };
-                    Browser.CoreWebView2.NavigationCompleted += (_, __) => { };
-                    Browser.CoreWebView2.WebMessageReceived += (_, e) =>
+                    this.Browser.CoreWebView2.DOMContentLoaded += (_, __) => { };
+                    this.Browser.CoreWebView2.NavigationCompleted += (_, __) => { };
+                    this.Browser.CoreWebView2.WebMessageReceived += (_, e) =>
                     {
                         // Loader removed: ignore 'loaded' message; read once to avoid warnings
                         e.TryGetWebMessageAsString();
                     };
+
                     // Открывать внешние ссылки во внешнем браузере
-                    Browser.CoreWebView2.NewWindowRequested += (s, ev) =>
+                    this.Browser.CoreWebView2.NewWindowRequested += (s, ev) =>
                     {
                         try
                         {
@@ -111,35 +125,42 @@ namespace ChillHub.Pages
                                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                                 {
                                     FileName = uri,
-                                    UseShellExecute = true
+                                    UseShellExecute = true,
                                 });
                             }
                         }
-                        catch { }
+                        catch
+                        {
+                        }
                     };
                 }
-                catch { }
+                catch
+                {
+                }
 
-                Browser.NavigateToString(page);
+                this.Browser.NavigateToString(page);
             }
             catch (Exception ex)
             {
                 try
                 {
-                    Browser.NavigateToString($"<html><body><p>Не удалось загрузить новость: {System.Net.WebUtility.HtmlEncode(ex.Message)}</p></body></html>");
+                    this.Browser.NavigateToString($"<html><body><p>Не удалось загрузить новость: {System.Net.WebUtility.HtmlEncode(ex.Message)}</p></body></html>");
                 }
-                finally { }
+                finally
+                {
+                }
             }
         }
 
         private void BackBtn_Click(object sender, RoutedEventArgs e)
         {
             // Возвращаемся по стеку навигации, чтобы сохранить состояние HomePage (включая выбранную игру)
-            if (NavigationService?.CanGoBack == true)
+            if (this.NavigationService?.CanGoBack == true)
             {
-                NavigationService.GoBack();
+                this.NavigationService.GoBack();
                 return;
             }
+
             // Fallback: если по какой-то причине стека нет, открываем новый HomePage
             var win = Window.GetWindow(this) as ChillHub.MainWindow;
             win?.ContentFrame.Navigate(new HomePage());
@@ -156,7 +177,9 @@ namespace ChillHub.Pages
                     return $"#{c.R:X2}{c.G:X2}{c.B:X2}";
                 }
             }
-            catch { }
+            catch
+            {
+            }
             return fallback;
         }
 
@@ -167,6 +190,7 @@ namespace ChillHub.Pages
             {
                 return brush.Color;
             }
+
             // Fallback to a safe dark bg if not found
             return System.Windows.Media.Color.FromRgb(0x0F, 0x11, 0x16);
         }

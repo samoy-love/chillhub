@@ -1,11 +1,17 @@
-using System;
-using System.Runtime.InteropServices;
-using System.Windows;
-using System.Windows.Interop;
-using Microsoft.Win32;
+// <copyright file="AcrylicHelper.cs" company="PlaceholderCompany">
+// Copyright (c) 2025 ChillHub
+// Licensed under the MIT License.
+// </copyright>
 
 namespace ChillHub.Core.UI
 {
+    using System;
+    using System.Runtime.InteropServices;
+    using System.Windows;
+    using System.Windows.Interop;
+
+    using Microsoft.Win32;
+
     public static class AcrylicHelper
     {
         // Apply title bar theme (dark/light) without enabling any blur/acrylic.
@@ -14,8 +20,13 @@ namespace ChillHub.Core.UI
             try
             {
                 var hwnd = new WindowInteropHelper(window).Handle;
-                if (hwnd == IntPtr.Zero) return;
+                if (hwnd == IntPtr.Zero)
+                {
+                    return;
+                }
+
                 int useDark = isDark ? 1 : 0;
+
                 // Try modern attribute id (Win11/Win10 1903+)
                 int hr = DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE.DWMWA_USE_IMMERSIVE_DARK_MODE, ref useDark, sizeof(int));
                 if (hr != 0)
@@ -25,7 +36,9 @@ namespace ChillHub.Core.UI
                     _ = DwmSetWindowAttribute(hwnd, (DWMWINDOWATTRIBUTE)DWMWA_USE_IMMERSIVE_DARK_MODE_OLD, ref useDark, sizeof(int));
                 }
             }
-            catch { }
+            catch
+            {
+            }
         }
 
         public static bool IsSystemAppsDark()
@@ -42,7 +55,9 @@ namespace ChillHub.Core.UI
                     }
                 }
             }
-            catch { }
+            catch
+            {
+            }
             return false; // default to dark=false (light) if unknown
         }
 

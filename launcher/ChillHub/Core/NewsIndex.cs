@@ -1,5 +1,7 @@
+// <copyright file="NewsIndex.cs" company="PlaceholderCompany">
 // Copyright (c) 2025 ChillHub
 // Licensed under the MIT License.
+// </copyright>
 
 namespace ChillHub.Core
 {
