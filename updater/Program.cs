@@ -94,7 +94,10 @@ internal static class Program
                             {
                                 var candidate = firstSegs[0];
                                 var allHave = lines.All(l => l.StartsWith(candidate + "/", StringComparison.OrdinalIgnoreCase));
-                                if (allHave && Directory.Exists(Path.Combine(src, candidate))) detected = candidate;
+                                if (allHave && Directory.Exists(Path.Combine(src, candidate)))
+                                {
+                                    detected = candidate;
+                                }
                             }
                         }
                         // Fallback: top-level of SRC has exactly one directory and no files
@@ -107,7 +110,10 @@ internal static class Program
                                 detected = Path.GetFileName(topDirs[0]);
                             }
                         }
-                        if (!string.IsNullOrWhiteSpace(detected)) strip = detected!;
+                        if (!string.IsNullOrWhiteSpace(detected))
+                        {
+                            strip = detected!;
+                        }
                     }
                     catch { }
                 }
@@ -369,7 +375,10 @@ internal static class Program
                         foreach (var s in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
                         {
                             var rel = Path.GetRelativePath(src, s).Replace('\\','/');
-                            if (!IgnoreForHash(rel)) map.Add(rel);
+                            if (!IgnoreForHash(rel))
+                            {
+                                map.Add(rel);
+                            }
                         }
                     }
                     if (Directory.Exists(dst))
@@ -381,7 +390,10 @@ internal static class Program
                             {
                                 rel = strip + "/" + rel;
                             }
-                            if (!IgnoreForHash(rel)) map.Add(rel);
+                            if (!IgnoreForHash(rel))
+                            {
+                                map.Add(rel);
+                            }
                         }
                     }
                     int ok = 0, mm = 0, missS = 0, missD = 0, total = 0;
@@ -441,7 +453,10 @@ internal static class Program
             using var sha = SHA256.Create();
             var buf = new byte[262144];
             int r;
-            while ((r = fs.Read(buf, 0, buf.Length)) > 0) sha.TransformBlock(buf, 0, r, null, 0);
+            while ((r = fs.Read(buf, 0, buf.Length)) > 0)
+            {
+                sha.TransformBlock(buf, 0, r, null, 0);
+            }
             sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
             return Convert.ToHexString(sha.Hash!).ToLowerInvariant();
         }
