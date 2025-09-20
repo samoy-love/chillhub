@@ -6,8 +6,8 @@ on:
   pull_request:
 
 jobs:
-  htmlhint-landing:
-    name: HTMLHint (landing)
+  htmlhint-web:
+    name: HTMLHint (web)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,33 +23,12 @@ jobs:
             npm-cache-linters-${{ runner.os }}-node20-
       - name: Install HTMLHint
         run: npm i -g htmlhint
-      - name: Run HTMLHint (landing)
+      - name: Run HTMLHint (landing + admin_ui)
         run: |
-          npx htmlhint "landing/**/*.html" || (echo "HTMLHint found issues" && exit 1)
+          npx htmlhint "landing/**/*.html" "server/admin_ui/**/*.html" || (echo "HTMLHint found issues" && exit 1)
 
-  htmlhint-admin-ui:
-    name: HTMLHint (admin_ui)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Cache npm
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: npm-cache-linters-${{ runner.os }}-node20-v1
-          restore-keys: |
-            npm-cache-linters-${{ runner.os }}-node20-
-      - name: Install HTMLHint
-        run: npm i -g htmlhint
-      - name: Run HTMLHint (admin_ui)
-        run: |
-          npx htmlhint "server/admin_ui/**/*.html" || (echo "HTMLHint found issues" && exit 1)
-
-  stylelint-landing:
-    name: Stylelint (landing)
+  stylelint-web:
+    name: Stylelint (web)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -65,33 +44,13 @@ jobs:
             npm-cache-linters-${{ runner.os }}-node20-
       - name: Install Stylelint
         run: npm i -g stylelint stylelint-config-standard
-      - name: Run Stylelint (landing)
+      - name: Run Stylelint (landing + admin_ui)
         run: |
-          npx stylelint "landing/**/*.css"
+          npx stylelint "landing/**/*.css" "server/admin_ui/**/*.css"
 
-  stylelint-admin-ui:
-    name: Stylelint (admin_ui)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Cache npm
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: npm-cache-linters-${{ runner.os }}-node20-v1
-          restore-keys: |
-            npm-cache-linters-${{ runner.os }}-node20-
-      - name: Install Stylelint
-        run: npm i -g stylelint stylelint-config-standard
-      - name: Run Stylelint (admin_ui)
-        run: |
-          npx stylelint "server/admin_ui/**/*.css"
 
-  eslint-landing:
-    name: ESLint (landing)
+  eslint-web:
+    name: ESLint (web)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -107,30 +66,9 @@ jobs:
             npm-cache-linters-${{ runner.os }}-node20-
       - name: Install ESLint
         run: npm i -g eslint
-      - name: Run ESLint (landing)
+      - name: Run ESLint (landing + admin_ui)
         run: |
-          npx eslint "landing/**/*.js" || (echo "ESLint found issues" && exit 1)
-
-  eslint-admin-ui:
-    name: ESLint (admin_ui)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Cache npm
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: npm-cache-linters-${{ runner.os }}-node20-v1
-          restore-keys: |
-            npm-cache-linters-${{ runner.os }}-node20-
-      - name: Install ESLint
-        run: npm i -g eslint
-      - name: Run ESLint (admin_ui)
-        run: |
-          npx eslint "server/admin_ui/**/*.js" || (echo "ESLint found issues" && exit 1)
+          npx eslint "landing/**/*.js" "server/admin_ui/**/*.js" || (echo "ESLint found issues" && exit 1)
 
   go-lint:
     name: Go (api + admin)

@@ -18,7 +18,10 @@ internal static class Program
             for (int i = 0; i < a.Length; i++)
             {
                 var tok = a[i];
-                if (!tok.StartsWith("--")) continue;
+                if (!tok.StartsWith("--"))
+                {
+                    continue;
+                }
                 var key = tok;
                 string? val = null;
                 if (i + 1 < a.Length && !a[i + 1].StartsWith("--")) { val = a[++i]; }
@@ -30,7 +33,10 @@ internal static class Program
         var argsMap = ParseArgs(args);
         string Req(string key)
         {
-            if (!argsMap.TryGetValue(key, out var v) || string.IsNullOrWhiteSpace(v)) throw new ArgumentException($"Missing required option {key}");
+            if (!argsMap.TryGetValue(key, out var v) || string.IsNullOrWhiteSpace(v))
+            {
+                throw new ArgumentException($"Missing required option {key}");
+            }
             return v!;
         }
         string Opt(string key, string def = "") => (argsMap.TryGetValue(key, out var v) && !string.IsNullOrWhiteSpace(v)) ? v! : def;
@@ -176,9 +182,15 @@ internal static class Program
                         {
                             var lines = File.ReadAllLines(files, Encoding.UTF8);
                             Log($"FILES list: path='{files}', count={lines.Length}");
-                            foreach (var l in lines) Log($"  FILE: {l}");
+                            foreach (var l in lines)
+                            {
+                                Log($"  FILE: {l}");
+                            }
                         }
-                        else Log($"FILES list missing: '{files}'");
+                        else
+                        {
+                            Log($"FILES list missing: '{files}'");
+                        }
                     }
                     if (!string.IsNullOrWhiteSpace(dirs))
                     {
@@ -186,9 +198,15 @@ internal static class Program
                         {
                             var lines = File.ReadAllLines(dirs, Encoding.UTF8);
                             Log($"DIRS list: path='{dirs}', count={lines.Length}");
-                            foreach (var l in lines) Log($"  DIR: {l}");
+                            foreach (var l in lines)
+                            {
+                                Log($"  DIR: {l}");
+                            }
                         }
-                        else Log($"DIRS list missing: '{dirs}'");
+                        else
+                        {
+                            Log($"DIRS list missing: '{dirs}'");
+                        }
                     }
                     if (!string.IsNullOrWhiteSpace(del))
                     {
@@ -196,9 +214,15 @@ internal static class Program
                         {
                             var lines = File.ReadAllLines(del, Encoding.UTF8);
                             Log($"DEL list: path='{del}', count={lines.Length}");
-                            foreach (var l in lines) Log($"  DEL: {l}");
+                            foreach (var l in lines)
+                            {
+                                Log($"  DEL: {l}");
+                            }
                         }
-                        else Log($"DEL list missing: '{del}'");
+                        else
+                        {
+                            Log($"DEL list missing: '{del}'");
+                        }
                     }
                 }
                 catch (Exception ex) { Log($"lists log error: {ex.Message}"); }
@@ -239,13 +263,20 @@ internal static class Program
                     foreach (var rel in File.ReadAllLines(files, Encoding.UTF8))
                     {
                         var clean = (rel ?? string.Empty).Replace('\\','/').Trim('/');
-                        if (string.IsNullOrWhiteSpace(clean)) continue;
+                        if (string.IsNullOrWhiteSpace(clean))
+                        {
+                            continue;
+                        }
                         if (ShouldPreserve(clean)) { Log($"skip copy preserve {clean}"); continue; }
                         var srcRel = clean;
                         var dstRel = string.IsNullOrWhiteSpace(strip) ? clean : clean.StartsWith(strip + "/", StringComparison.OrdinalIgnoreCase) ? clean.Substring(strip.Length + 1) : clean;
                         var s = Path.Combine(src, srcRel.Replace('/', Path.DirectorySeparatorChar));
                         var d = Path.Combine(dst, dstRel.Replace('/', Path.DirectorySeparatorChar));
-                        if (!File.Exists(s)) { Log($"diff src missing {srcRel}"); continue; }
+                        if (!File.Exists(s))
+                        {
+                            Log($"diff src missing {srcRel}");
+                            continue;
+                        }
                         await CopyFileAsync(s, d);
                     }
                 }
@@ -265,7 +296,10 @@ internal static class Program
                             if (File.Exists(d))
                             {
                                 var s1 = new FileInfo(s).Length; var s2 = new FileInfo(d).Length;
-                                if (s1 == s2) continue;
+                                if (s1 == s2)
+                                {
+                                    continue;
+                                }
                             }
                         }
                         catch { }
@@ -279,7 +313,10 @@ internal static class Program
                     foreach (var rel in File.ReadAllLines(del, Encoding.UTF8))
                     {
                         var clean = (rel ?? string.Empty).Replace('\\','/').Trim('/');
-                        if (string.IsNullOrWhiteSpace(clean)) continue;
+                        if (string.IsNullOrWhiteSpace(clean))
+                        {
+                            continue;
+                        }
                         if (ShouldPreserve(clean)) { Log($"skip delete preserve {clean}"); continue; }
                         var delPath = Path.Combine(dst, clean.Replace('/', Path.DirectorySeparatorChar));
                         try { if (File.Exists(delPath)) { var fi = new FileInfo(delPath); fi.IsReadOnly = false; File.Delete(delPath); Log($"deleted {clean}"); } } catch (Exception ex) { Log($"delete failed {clean}: {ex.Message}"); }
@@ -292,7 +329,10 @@ internal static class Program
                     foreach (var rel in File.ReadAllLines(dirs, Encoding.UTF8))
                     {
                         var clean = (rel ?? string.Empty).Replace('\\','/').Trim('/');
-                        if (string.IsNullOrWhiteSpace(clean)) continue;
+                        if (string.IsNullOrWhiteSpace(clean))
+                        {
+                            continue;
+                        }
                         var p = Path.Combine(dst, clean.Replace('/', Path.DirectorySeparatorChar));
                         try { Directory.CreateDirectory(p); } catch { }
                     }
@@ -306,13 +346,22 @@ internal static class Program
                     bool IgnoreForHash(string rel)
                     {
                         var r = (rel ?? string.Empty).Replace('\\','/').Trim('/');
-                        if (string.IsNullOrEmpty(r)) return true;
+                        if (string.IsNullOrEmpty(r))
+                        {
+                            return true;
+                        }
                         // ignore updater artifacts and logs/lists
-                        if (string.Equals(Path.GetFileName(r), logFileName, StringComparison.OrdinalIgnoreCase)) return true;
+                        if (string.Equals(Path.GetFileName(r), logFileName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return true;
+                        }
                         var leaf = Path.GetFileName(r);
                         if (leaf.Equals("filelist.txt", StringComparison.OrdinalIgnoreCase) ||
                             leaf.Equals("emptydirs.txt", StringComparison.OrdinalIgnoreCase) ||
-                            leaf.Equals("deletelist.txt", StringComparison.OrdinalIgnoreCase)) return true;
+                            leaf.Equals("deletelist.txt", StringComparison.OrdinalIgnoreCase))
+                        {
+                            return true;
+                        }
                         return false;
                     }
                     if (Directory.Exists(src))
@@ -329,7 +378,9 @@ internal static class Program
                         {
                             var rel = Path.GetRelativePath(dst, d).Replace('\\','/');
                             if (!string.IsNullOrWhiteSpace(strip) && !rel.StartsWith(strip + "/", StringComparison.OrdinalIgnoreCase))
+                            {
                                 rel = strip + "/" + rel;
+                            }
                             if (!IgnoreForHash(rel)) map.Add(rel);
                         }
                     }
