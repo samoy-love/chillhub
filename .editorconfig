@@ -56,3 +56,17 @@ dotnet_diagnostic.SA1107.severity = suggestion  # Multiple statements on one lin
 dotnet_diagnostic.SA1117.severity = suggestion  # Parameter wrapping
 dotnet_diagnostic.SA1413.severity = suggestion  # Trailing comma in multi-line initializers
 dotnet_diagnostic.SA0001.severity = none        # XML comment analysis disabled notice
+
+# Additional suppressions per request
+dotnet_diagnostic.SA1500.severity = none    # Braces for multi-line statements should not share line
+dotnet_diagnostic.SA1600.severity = none    # Elements should be documented
+dotnet_diagnostic.SA1601.severity = none    # Partial elements should be documented
+dotnet_diagnostic.SA1602.severity = none    # Enumeration items should be documented
+dotnet_diagnostic.SA1604.severity = none    # Element documentation header should have summary
+dotnet_diagnostic.SA1609.severity = none    # Property documentation must have value
+dotnet_diagnostic.SA1611.severity = none    # Element parameters should be documented
+dotnet_diagnostic.SA1615.severity = none    # Element return value should be documented
+dotnet_diagnostic.SA1618.severity = none    # Generic type parameters should be documented
+dotnet_diagnostic.SA1623.severity = none    # Property documentation should match accessors
+dotnet_diagnostic.SA1629.severity = none    # Documentation text should end with a period
+dotnet_diagnostic.SA1633.severity = none    # File must have header

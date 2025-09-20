@@ -1,6 +1,13 @@
 version: "2"
 linters:
   default: all
+  disable:
+    - depguard
+    - gocognit
+    - funlen
+    - goconst
+    - wsl
+    - wsl_v5
   exclusions:
     paths:
       - ".*_generated\\.go"
