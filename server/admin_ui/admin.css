@@ -2,18 +2,22 @@
 .hidden {
   display: none;
 }
+
 textarea {
   width: 100%;
   height: 260px;
 }
+
 .card-news {
   width: 100%;
 }
+
 .news-grid {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
+
 .news-wrap {
   max-width: 90%;
   margin: 0 auto;
@@ -38,6 +42,7 @@ textarea {
 
 /* Collapsible tree in manifests preview */
 .tree-dir { margin: 2px 0; }
+
 .tree-dir > summary {
   list-style: none;
   cursor: pointer;

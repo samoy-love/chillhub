@@ -123,7 +123,7 @@
     let animRAF = 0;
     function stopAnim(){ if(animRAF){ cancelAnimationFrame(animRAF); animRAF = 0; sc.dataset.anim = '0'; } }
     function easeInOutCubic(t){ return t<0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2; }
-    function animateScrollTo(xTarget, duration=1800){
+    function _animateScrollTo(xTarget, duration=1800){
       stopAnim(); sc.dataset.anim = '1';
       const start = sc.scrollLeft; const delta = xTarget - start; const t0 = performance.now();
       function step(now){

@@ -1840,7 +1840,7 @@ function renderGalleryGrid(items){
 function insertImageFromGallery(url){
   const ta = document.getElementById('ns_md'); if(!ta) return;
   insertAtCursor(ta, '![image](' + url + ')');
-  autosizeTextArea(ta); updateCoverPreview(); newsPreview(); editorDirty = true; saveDraftDebounced(); ta.dispatchEvent(new Event('input'));
+  autosizeTextArea(ta); updateCoverPreview(); newsPreview(); editorDirty = true; ta.dispatchEvent(new Event('input'));
   // close modal
   const el = document.getElementById('ns_gallery');
   if(window.bootstrap && el){ const modal = window.bootstrap.Modal.getInstance(el) || new window.bootstrap.Modal(el); modal.hide(); }

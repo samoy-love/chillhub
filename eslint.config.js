@@ -60,7 +60,7 @@ export default [
     },
     rules: {
       // Migrated rules from .eslintrc.json
-      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrors: 'all', caughtErrorsIgnorePattern: '^_' }],
       'no-undef': 'error',
       eqeqeq: ['warn', 'always'],
       'no-console': 'off'
@@ -71,5 +71,13 @@ export default [
   {
     files: ['landing/**/*.js', 'server/admin_ui/**/*.js'],
     // Additional UI-specific settings or rules can go here
+  },
+
+  // Admin UI contains many handler stubs and catch params that may be unused by design
+  {
+    files: ['server/admin_ui/**/*.js'],
+    rules: {
+      'no-unused-vars': 'off'
+    }
   }
 ];
