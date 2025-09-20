@@ -11,7 +11,7 @@
       <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
 
-    <TextBlock Text="Проверка DDD обновления лаунчера" FontSize="18" Margin="0,0,0,8"/>
+    <TextBlock Text="Проверка обновления лаунчера" FontSize="18" Margin="0,0,0,8"/>
 
     <StackPanel Grid.Row="1">
       <TextBlock x:Name="StatusText" Text="Инициализация..." TextWrapping="Wrap" Margin="0,0,0,8"/>

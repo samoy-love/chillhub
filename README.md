@@ -8,6 +8,7 @@
   - [Контент (минимум)](#контент-минимум)
   - [Запуск (3 окна)](#запуск-3-окна)
   - [Admin UI: контент](#admin-ui-контент)
+- [Скрипты: dev и инсталлятор](#скрипты-dev-и-инсталлятор)
 - [Деплой на сервер (Ubuntu + nginx)](#деплой-на-сервер-ubuntu--nginx)
   - [Подготовка (1 раз)](#подготовка-1-раз)
   - [Раскладка артефактов](#раскладка-артефактов)
@@ -88,6 +89,69 @@ Set-Location "Launcher Project"
 - Загрузите ZIP сборки игры/лаунчера (вкладка «Игры»/«Лаунчер»), при необходимости активируйте `latest`.
 - Отредактируйте реестр игр (вкладка «Игры (редактирование)»).
 - Создайте/отредактируйте новости, загрузите/сожмите изображения (вкладка «Новости», «Ассеты»).
+
+---
+
+## Скрипты: dev и инсталлятор
+
+### scripts/run-dev.ps1 — локальная разработка (3 окна)
+Скрипт запускает три процесса в отдельных окнах: Public API (`server/cmd/api`), Admin (`server/cmd/admin`) и клиент WPF (`launcher/ChillHub`). Умеет обновлять клиентскую конфигурацию (`%LOCALAPPDATA%/ChillHub/config.json`).
+
+- Параметры:
+  - `-ContentRoot <path>` — путь к директории `content/` (для dev-статик и API).
+  - `-GamesPath <path>` — локальная папка установки игр (пробрасывается клиенту как `ChillHub_GAMES_PATH`).
+  - `-Env local|prod` — выбирает `ApiBaseUrl` для клиента (`local` по умолчанию: `http://localhost:55700`; `prod`: `https://launcher.samoy.love`).
+  - `-SetClientConfig` — записать/обновить `%LOCALAPPDATA%\ChillHub\config.json` (GamesPath, ApiBaseUrl, др.).
+  - `-BuildServers` — перед запуском собрать dev-бинарии Go-серверов под Windows.
+
+- Примеры запуска:
+
+```powershell
+# Стандартный запуск в локальной среде, с записью конфигурации клиента
+./scripts/run-dev.ps1 -Env local -SetClientConfig -ContentRoot (Resolve-Path ./content)
+
+# Указать путь к папке игр вручную
+./scripts/run-dev.ps1 -ContentRoot (Resolve-Path ./content) -GamesPath 'D:\Games\ChillHub' -SetClientConfig
+
+# Предварительно собрать Go-серверы (быстрее стартует), затем запустить
+./scripts/run-dev.ps1 -BuildServers -ContentRoot (Resolve-Path ./content) -SetClientConfig
+```
+
+- Управление во время работы:
+  - Нажмите `r` или русскую `к` + Enter — перезапуск всех трёх процессов.
+  - Нажмите `q` + Enter — корректное завершение (освобождает порты, закрывает клиент).
+
+- Требования: установлен Go 1.22+, .NET 8 SDK. Скрипт рассчитан на Windows (PowerShell).
+
+---
+
+### scripts/build-installer.ps1 — сборка инсталлятора (NSIS)
+Скрипт выполняет restore и build/publish C# проекта лаунчера, затем компилирует NSIS-установщик (`ChillHub-Setup.exe`) по скрипту `scripts/installer.nsi`.
+
+- Параметры (с разумными значениями по умолчанию):
+  - `-Publish` — вместо `dotnet build` выполнит `dotnet publish` (self-contained по умолчанию).
+  - `-Configuration <Debug|Release>` — конфигурация сборки (`Release` по умолчанию).
+  - `-Csproj <path>` — путь к csproj лаунчера (`launcher/ChillHub/ChillHub.csproj`).
+  - `-Installer <path>` — путь к NSIS-скрипту (`scripts/installer.nsi`).
+  - `-MakensisPath <path>` — путь к `makensis.exe` (если не в PATH; можно указать директорию установки NSIS).
+  - `-Runtime <RID>` — таргет-рантайм для publish (по умолчанию `win-x64`).
+  - `-SelfContained` — собирать self-contained publish (включает runtime) — включено по умолчанию; снимите для framework-dependent.
+  - `-NoCompress` — собрать инсталлятор без сжатия (быстро для dev).
+
+- Примеры запуска:
+
+```powershell
+# Быстрый dev-инсталлятор без сжатия (предварительно просто build)
+./scripts/build-installer.ps1 -Configuration Debug -NoCompress
+
+# Полная публикация self-contained и сборка инсталлятора (Release)
+./scripts/build-installer.ps1 -Publish -Configuration Release -Runtime win-x64
+
+# Указать явный путь к makensis.exe, если не добавлен в PATH
+./scripts/build-installer.ps1 -MakensisPath 'C:\Program Files (x86)\NSIS\makensis.exe'
+```
+
+- Требования: установлен .NET 8 SDK и NSIS 3.x. Если `makensis` не найден в PATH, укажите `-MakensisPath` или директорию установки NSIS.
 
 ---
 
