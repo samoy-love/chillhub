@@ -3,8 +3,7 @@
 // Licensed under the MIT License.
 // </copyright>
 
-namespace ChillHub.Pages
-{
+namespace ChillHub.Pages {
     using System;
     using System.IO;
     using System.Windows;
@@ -12,57 +11,45 @@ namespace ChillHub.Pages
 
     using ChillHub.Core;
 
-    public partial class SettingsPage : Page
-    {
-        public SettingsPage()
-        {
+    public partial class SettingsPage : Page {
+        public SettingsPage() {
             this.InitializeComponent();
 
             // Defer UI population until the page is fully loaded to avoid template/resource init races (seen in dark theme)
             this.Loaded += this.SettingsPage_Loaded;
         }
 
-        private void SettingsPage_Loaded(object sender, RoutedEventArgs e)
-        {
+        private void SettingsPage_Loaded(object sender, RoutedEventArgs e) {
             // Ensure templates/resources are fully applied (especially in dark theme)
             this.Dispatcher.BeginInvoke(
-                new Action(() =>
-                {
-                try
-                {
-                    this.LoadConfigToUi();
-                }
-                catch
-                { /* prevent crash; user can reopen */
-                }
-            }), System.Windows.Threading.DispatcherPriority.Loaded);
+                new Action(() => {
+                    try {
+                        this.LoadConfigToUi();
+                    }
+                    catch { /* prevent crash; user can reopen */
+                    }
+                }), System.Windows.Threading.DispatcherPriority.Loaded);
         }
 
-        private void LoadConfigToUi()
-        {
+        private void LoadConfigToUi() {
             var cfg = ConfigService.Current ?? new AppConfig();
-            if (this.GamesPathBox != null)
-            {
+            if (this.GamesPathBox != null) {
                 this.GamesPathBox.Text = cfg.GamesPath;
             }
 
-            if (this.ThreadsSlider != null)
-            {
+            if (this.ThreadsSlider != null) {
                 this.ThreadsSlider.Value = cfg.DownloadThreads;
             }
 
-            if (this.ThreadsValueText != null)
-            {
+            if (this.ThreadsValueText != null) {
                 this.ThreadsValueText.Text = cfg.DownloadThreads.ToString();
             }
 
             // Single dark theme now; no theme selection UI
         }
 
-        private void BackBtn_Click(object sender, RoutedEventArgs e)
-        {
-            if (this.NavigationService != null && this.NavigationService.CanGoBack)
-            {
+        private void BackBtn_Click(object sender, RoutedEventArgs e) {
+            if (this.NavigationService != null && this.NavigationService.CanGoBack) {
                 this.NavigationService.GoBack();
                 return;
             }
@@ -71,76 +58,60 @@ namespace ChillHub.Pages
             win?.ContentFrame.Navigate(new HomePage());
         }
 
-        private void ChooseBtn_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                using (var dlg = new System.Windows.Forms.FolderBrowserDialog())
-                {
+        private void ChooseBtn_Click(object sender, RoutedEventArgs e) {
+            try {
+                using (var dlg = new System.Windows.Forms.FolderBrowserDialog()) {
                     dlg.Description = "Выберите папку для игр";
                     dlg.ShowNewFolderButton = true;
                     dlg.SelectedPath = string.IsNullOrWhiteSpace(this.GamesPathBox.Text)
                         ? AppConfig.DefaultGamesPath()
                         : this.GamesPathBox.Text;
                     var res = dlg.ShowDialog();
-                    if (res == System.Windows.Forms.DialogResult.OK)
-                    {
+                    if (res == System.Windows.Forms.DialogResult.OK) {
                         this.GamesPathBox.Text = dlg.SelectedPath;
                     }
                 }
             }
-            catch
-            {
+            catch {
             }
         }
 
-        private void ThreadsSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-        {
-            if (this.ThreadsValueText != null)
-            {
+        private void ThreadsSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) {
+            if (this.ThreadsValueText != null) {
                 this.ThreadsValueText.Text = ((int)this.ThreadsSlider.Value).ToString();
             }
         }
 
-        private void SaveBtn_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
+        private void SaveBtn_Click(object sender, RoutedEventArgs e) {
+            try {
                 var cfg = ConfigService.Current;
                 var newPath = this.GamesPathBox.Text?.Trim();
-                if (string.IsNullOrWhiteSpace(newPath))
-                {
+                if (string.IsNullOrWhiteSpace(newPath)) {
                     newPath = AppConfig.DefaultGamesPath();
                 }
 
-                try
-                {
+                try {
                     Directory.CreateDirectory(newPath);
                 }
-                catch
-                {
+                catch {
                 }
 
                 cfg.GamesPath = newPath;
                 cfg.DownloadThreads = (int)this.ThreadsSlider.Value;
 
                 ConfigService.Save(cfg); // также применяет тему
-                try
-                {
+                try {
                     // Мгновенно обновим цвет заголовка окна согласно новой теме
                     var win = Window.GetWindow(this) as ChillHub.MainWindow;
-                    if (win != null)
-                    {
+                    if (win != null) {
                         bool isDark = true; // single dark theme
                         ChillHub.Core.UI.AcrylicHelper.ApplyTitleBarTheme(win, isDark);
                     }
                 }
-                catch
-                {
+                catch {
                 }
             }
-            catch (Exception ex)
-            {
+            catch (Exception ex) {
                 MessageBox.Show($"Не удалось сохранить настройки: {ex.Message}", "Ошибка",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }

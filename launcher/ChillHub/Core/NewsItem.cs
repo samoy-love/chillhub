@@ -3,10 +3,8 @@
 // Licensed under the MIT License.
 // </copyright>
 
-namespace ChillHub.Core
-{
-    public class NewsItem
-    {
+namespace ChillHub.Core {
+    public class NewsItem {
         public string Id { get; set; } = string.Empty;
 
         public string Title { get; set; } = string.Empty;

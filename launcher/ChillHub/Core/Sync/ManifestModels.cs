@@ -3,14 +3,12 @@
 // Licensed under the MIT License.
 // </copyright>
 
-namespace ChillHub.Core.Sync
-{
+namespace ChillHub.Core.Sync {
     using System;
     using System.Collections.Generic;
     using System.Text.Json.Serialization;
 
-    public class Manifest
-    {
+    public class Manifest {
         [JsonPropertyName("version")]
         public string Version { get; set; } = string.Empty;
 
@@ -33,8 +31,7 @@ namespace ChillHub.Core.Sync
         public string Signature { get; set; } = string.Empty;
     }
 
-    public class ManifestFile
-    {
+    public class ManifestFile {
         [JsonPropertyName("path")]
         public string Path { get; set; } = string.Empty;
 

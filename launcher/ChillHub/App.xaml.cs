@@ -3,8 +3,7 @@
 // Licensed under the MIT License.
 // </copyright>
 
-namespace ChillHub
-{
+namespace ChillHub {
     using System;
     using System.IO;
     using System.Runtime.InteropServices;
@@ -13,98 +12,73 @@ namespace ChillHub
     using ChillHub.Core;
     using ChillHub.Core.Logging;
 
-    public partial class App : Application
-    {
+    public partial class App : Application {
         /// <inheritdoc/>
-        protected override void OnStartup(StartupEventArgs e)
-        {
+        protected override void OnStartup(StartupEventArgs e) {
             // Раннее применение темы
             _ = ConfigService.Current;
 
             // Глобальные обработчики исключений и лог
-            try
-            {
+            try {
                 // Подключаемся к консоли родителя, чтобы видеть вывод Console.WriteLine
-                try
-                {
+                try {
                     AttachToParentConsole();
                 }
-                catch
-                {
+                catch {
                 }
-                AppDomain.CurrentDomain.UnhandledException += (s, ex) =>
-                {
-                    try
-                    {
+                AppDomain.CurrentDomain.UnhandledException += (s, ex) => {
+                    try {
                         File.AppendAllText(GetBootLogPath(), $"[" + DateTime.Now.ToString("o") + $"] UnhandledException: {ex.ExceptionObject}\r\n");
                     }
-                    catch
-                    {
+                    catch {
                     }
-                    try
-                    {
+                    try {
                         Console.Error.WriteLine($"[FATAL] UnhandledException: {ex.ExceptionObject}");
                     }
-                    catch
-                    {
+                    catch {
                     }
-                    try
-                    {
+                    try {
                         Logger.Error("UnhandledException: " + ex.ExceptionObject);
                     }
-                    catch
-                    {
+                    catch {
                     }
                     MessageBox.Show($"Необработанное исключение: {ex.ExceptionObject}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
                 };
-                this.DispatcherUnhandledException += (s, ex) =>
-                {
-                    try
-                    {
+                this.DispatcherUnhandledException += (s, ex) => {
+                    try {
                         File.AppendAllText(GetBootLogPath(), $"[" + DateTime.Now.ToString("o") + $"] DispatcherUnhandledException: {ex.Exception.Message}\r\n{ex.Exception}\r\n");
                     }
-                    catch
-                    {
+                    catch {
                     }
-                    try
-                    {
+                    try {
                         Console.Error.WriteLine($"[ERROR] {ex.Exception}");
                     }
-                    catch
-                    {
+                    catch {
                     }
-                    try
-                    {
+                    try {
                         Logger.Error(ex.Exception, "DispatcherUnhandledException");
                     }
-                    catch
-                    {
+                    catch {
                     }
                     MessageBox.Show($"Ошибка: {ex.Exception.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
                     ex.Handled = true;
                 };
             }
-            catch
-            {
+            catch {
             }
             base.OnStartup(e);
         }
 
-        private void Application_Startup(object sender, StartupEventArgs e)
-        {
-            try
-            {
+        private void Application_Startup(object sender, StartupEventArgs e) {
+            try {
                 File.AppendAllText(GetBootLogPath(), "[" + DateTime.Now.ToString("o") + "] Starting Application_Startup\r\n");
             }
-            catch
-            {
+            catch {
             }
-            try
-            {
+            try {
                 Console.WriteLine("[BOOT] Starting Application_Startup");
             }
-            catch
-            {
+            catch {
             }
 
             // Шаг 1. Окно проверки/обновления лаунчера
@@ -112,62 +86,46 @@ namespace ChillHub
             this.ShutdownMode = ShutdownMode.OnExplicitShutdown; // не завершаем приложение при закрытии диалога
 
             var upd = new UpdateWindow();
-            upd.SourceInitialized += (_, __) =>
-            {
-                try
-                {
+            upd.SourceInitialized += (_, __) => {
+                try {
                     Core.UI.AcrylicHelper.ApplyTitleBarTheme(upd, true);
                     TryApplyIcon(upd);
                 }
-                catch
-                {
+                catch {
                 }
             };
-            try
-            {
+            try {
                 File.AppendAllText(GetBootLogPath(), "[" + DateTime.Now.ToString("o") + "] Showing UpdateWindow\r\n");
             }
-            catch
-            {
+            catch {
             }
-            try
-            {
+            try {
                 Console.WriteLine("[BOOT] Showing UpdateWindow");
             }
-            catch
-            {
+            catch {
             }
             var ok = upd.ShowDialog() == true || upd.Proceed;
-            try
-            {
+            try {
                 File.AppendAllText(GetBootLogPath(), "[" + DateTime.Now.ToString("o") + $"] UpdateWindow result ok={ok}\r\n");
             }
-            catch
-            {
+            catch {
             }
-            try
-            {
+            try {
                 Console.WriteLine($"[BOOT] UpdateWindow result ok={ok}");
             }
-            catch
-            {
+            catch {
             }
-            if (!ok)
-            {
+            if (!ok) {
                 // Пользователь закрыл окно или обновление обязательно
-                try
-                {
+                try {
                     File.AppendAllText(GetBootLogPath(), "[" + DateTime.Now.ToString("o") + "] Shutting down after update dialog\r\n");
                 }
-                catch
-                {
+                catch {
                 }
-                try
-                {
+                try {
                     Console.WriteLine("[BOOT] Shutting down after update dialog");
                 }
-                catch
-                {
+                catch {
                 }
                 this.Shutdown();
                 return;
@@ -175,63 +133,49 @@ namespace ChillHub
 
             // Шаг 2. Основное окно
             var mw = new MainWindow();
-            mw.SourceInitialized += (_, __) =>
-            {
-                try
-                {
+            mw.SourceInitialized += (_, __) => {
+                try {
                     Core.UI.AcrylicHelper.ApplyTitleBarTheme(mw, true);
                     TryApplyIcon(mw);
                 }
-                catch
-                {
+                catch {
                 }
             };
             this.MainWindow = mw;
             this.ShutdownMode = ShutdownMode.OnMainWindowClose; // возвращаем обычный режим
-            try
-            {
+            try {
                 File.AppendAllText(GetBootLogPath(), "[" + DateTime.Now.ToString("o") + "] Showing MainWindow\r\n");
             }
-            catch
-            {
+            catch {
             }
-            try
-            {
+            try {
                 Console.WriteLine("[BOOT] Showing MainWindow");
             }
-            catch
-            {
+            catch {
             }
             mw.Show();
         }
 
-        private static string GetBootLogPath()
-        {
-            try
-            {
+        private static string GetBootLogPath() {
+            try {
                 var dir = Path.Combine(Path.GetTempPath(), "ChillHub");
                 Directory.CreateDirectory(dir);
                 return Path.Combine(dir, "boot.log");
             }
-            catch
-            {
+            catch {
                 return Path.Combine(Environment.CurrentDirectory, "boot.log");
             }
         }
 
-        private static void TryApplyIcon(Window w)
-        {
-            try
-            {
+        private static void TryApplyIcon(Window w) {
+            try {
                 string[] candidates = new[]
                 {
                     Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico"),
                     Path.Combine(Environment.CurrentDirectory, "Assets", "app.ico"),
                 };
-                foreach (var p in candidates)
-                {
-                    if (File.Exists(p))
-                    {
+                foreach (var p in candidates) {
+                    if (File.Exists(p)) {
                         var uri = new Uri(p, UriKind.Absolute);
                         var icon = new System.Windows.Media.Imaging.BitmapImage(uri);
                         w.Icon = icon;
@@ -239,8 +183,7 @@ namespace ChillHub
                     }
                 }
             }
-            catch
-            {
+            catch {
             }
         }
 
@@ -250,25 +193,19 @@ namespace ChillHub
 
         private const int ATTACHPARENTPROCESS = -1;
 
-        private static void AttachToParentConsole()
-        {
-            try
-            {
+        private static void AttachToParentConsole() {
+            try {
                 // Подключаемся к консоли родителя, если есть
-                if (AttachConsole(ATTACHPARENTPROCESS))
-                {
-                    try
-                    {
+                if (AttachConsole(ATTACHPARENTPROCESS)) {
+                    try {
                         Console.OutputEncoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
                         Console.InputEncoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
                     }
-                    catch
-                    {
+                    catch {
                     }
                 }
             }
-            catch
-            {
+            catch {
             }
         }
     }

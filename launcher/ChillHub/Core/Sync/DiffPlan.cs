@@ -3,12 +3,10 @@
 // Licensed under the MIT License.
 // </copyright>
 
-namespace ChillHub.Core.Sync
-{
+namespace ChillHub.Core.Sync {
     using System.Collections.Generic;
 
-    public class DiffPlan
-    {
+    public class DiffPlan {
         public string GameId { get; set; } = string.Empty;
 
         public string Version { get; set; } = string.Empty;

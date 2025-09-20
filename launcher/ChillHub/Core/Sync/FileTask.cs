@@ -3,10 +3,8 @@
 // Licensed under the MIT License.
 // </copyright>
 
-namespace ChillHub.Core.Sync
-{
-    public class FileTask
-    {
+namespace ChillHub.Core.Sync {
+    public class FileTask {
         public string RelativePath { get; set; } = string.Empty;
 
         public long Size { get; set; }

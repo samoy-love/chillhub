@@ -3,31 +3,25 @@
 // Licensed under the MIT License.
 // </copyright>
 
-namespace ChillHub.Core.Logging
-{
+namespace ChillHub.Core.Logging {
     using System;
     using System.IO;
     using System.Text;
 
-    public static class Logger
-    {
+    public static class Logger {
         private static readonly object @lock = new object();
 
         // MVP requirement: no client logs persisted. Allow opt-in via env var only.
         private static readonly bool enabled = string.Equals(Environment.GetEnvironmentVariable("CHILLHUB_CLIENT_LOG"), "1", StringComparison.Ordinal);
 
-        private static string LogFilePath
-        {
-            get
-            {
-                try
-                {
+        private static string LogFilePath {
+            get {
+                try {
                     var dir = Path.Combine(Path.GetTempPath(), "ChillHub");
                     Directory.CreateDirectory(dir);
                     return Path.Combine(dir, "client.log");
                 }
-                catch
-                {
+                catch {
                     return Path.Combine(Environment.CurrentDirectory, "client.log");
                 }
             }
@@ -41,24 +35,19 @@ namespace ChillHub.Core.Logging
 
         public static void Error(Exception ex, string? message = null) => Write("ERROR", (message == null ? string.Empty : message + ": ") + ex.ToString());
 
-        private static void Write(string level, string message)
-        {
-            try
-            {
-                if (!enabled)
-                {
+        private static void Write(string level, string message) {
+            try {
+                if (!enabled) {
                     // No-op in MVP unless explicitly enabled via env var
                     return;
                 }
 
                 var line = "[" + DateTime.Now.ToString("o") + "] " + level + " " + message + "\r\n";
-                lock (@lock)
-                {
+                lock (@lock) {
                     File.AppendAllText(LogFilePath, line, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
                 }
             }
-            catch
-            {
+            catch {
             }
         }
     }

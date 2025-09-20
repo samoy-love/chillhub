@@ -3,8 +3,7 @@
 // Licensed under the MIT License.
 // </copyright>
 
-namespace ChillHub.Core
-{
+namespace ChillHub.Core {
     // Intentionally left empty. Types were split into separate files:
     // - GamesResponse (GamesResponse.cs)
     // - GameInfo (GameInfo.cs)

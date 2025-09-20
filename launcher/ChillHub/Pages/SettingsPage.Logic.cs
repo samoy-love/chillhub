@@ -3,12 +3,10 @@
 // Licensed under the MIT License.
 // </copyright>
 
-namespace ChillHub.Pages
-{
+namespace ChillHub.Pages {
     using System.Windows.Controls;
 
     // Empty partial to avoid duplicate members; implementation is in SettingsPage.xaml.cs
-    public partial class SettingsPage : Page
-    {
+    public partial class SettingsPage : Page {
     }
 }

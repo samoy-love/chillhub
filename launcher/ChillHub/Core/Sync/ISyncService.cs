@@ -3,14 +3,12 @@
 // Licensed under the MIT License.
 // </copyright>
 
-namespace ChillHub.Core.Sync
-{
+namespace ChillHub.Core.Sync {
     using System;
     using System.Threading;
     using System.Threading.Tasks;
 
-    public interface ISyncService
-    {
+    public interface ISyncService {
         Task<Manifest> GetManifestAsync(string manifestUrl, CancellationToken ct);
 
         Task<DiffPlan> PlanAsync(Manifest manifest, string localRoot, string contentBaseUrl, CancellationToken ct);

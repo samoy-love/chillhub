@@ -3,12 +3,10 @@
 // Licensed under the MIT License.
 // </copyright>
 
-namespace ChillHub.Core
-{
+namespace ChillHub.Core {
     using System.Collections.Generic;
 
-    public class GamesResponse
-    {
+    public class GamesResponse {
         public List<GameInfo> Items { get; set; } = new();
     }
 }

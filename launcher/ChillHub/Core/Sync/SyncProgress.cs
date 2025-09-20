@@ -3,10 +3,8 @@
 // Licensed under the MIT License.
 // </copyright>
 
-namespace ChillHub.Core.Sync
-{
-    public class SyncProgress
-    {
+namespace ChillHub.Core.Sync {
+    public class SyncProgress {
         public int FilesDownloaded { get; set; }
 
         public int TotalFiles { get; set; }

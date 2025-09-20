@@ -3,8 +3,7 @@
 // Licensed under the MIT License.
 // </copyright>
 
-namespace ChillHub.Pages
-{
+namespace ChillHub.Pages {
     using System;
     using System.Drawing;
     using System.Net.Http;
@@ -18,34 +17,28 @@ namespace ChillHub.Pages
     // single-theme: no need to read app theme here
     using Microsoft.Web.WebView2.Core;
 
-    public partial class NewsDetailPage : Page
-    {
+    public partial class NewsDetailPage : Page {
         private readonly string markdownUrl;
         private readonly HttpClient http = new HttpClient();
 
-        public NewsDetailPage(string title, string markdownUrl)
-        {
+        public NewsDetailPage(string title, string markdownUrl) {
             this.InitializeComponent();
             this.TitleText.Text = title;
             this.markdownUrl = markdownUrl;
 
             // Prevent white flash: set WebView2 background to app dark color before init
-            try
-            {
+            try {
                 var bg = GetMediaColor("Brush.Background");
                 this.Browser.DefaultBackgroundColor = ToDrawingColor(bg);
             }
-            catch
-            { /* safe guard in case property isn't available at runtime */
+            catch { /* safe guard in case property isn't available at runtime */
             }
 
             _ = this.LoadAsync();
         }
 
-        private async Task LoadAsync()
-        {
-            try
-            {
+        private async Task LoadAsync() {
+            try {
                 // Loader removed: directly fetch and render content
                 var md = await this.http.GetStringAsync(this.markdownUrl);
                 var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
@@ -94,69 +87,54 @@ namespace ChillHub.Pages
                 await this.Browser.EnsureCoreWebView2Async();
 
                 // Ensure runtime background and wire events
-                try
-                {
+                try {
                     var bgCol = GetMediaColor("Brush.Background");
                     this.Browser.DefaultBackgroundColor = ToDrawingColor(bgCol);
                 }
-                catch
-                {
+                catch {
                 }
-                try
-                {
+                try {
                     // Loader removed: no need to toggle overlay on events
                     this.Browser.CoreWebView2.DOMContentLoaded += (_, __) => { };
                     this.Browser.CoreWebView2.NavigationCompleted += (_, __) => { };
-                    this.Browser.CoreWebView2.WebMessageReceived += (_, e) =>
-                    {
+                    this.Browser.CoreWebView2.WebMessageReceived += (_, e) => {
                         // Loader removed: ignore 'loaded' message; read once to avoid warnings
                         e.TryGetWebMessageAsString();
                     };
 
                     // Открывать внешние ссылки во внешнем браузере
-                    this.Browser.CoreWebView2.NewWindowRequested += (s, ev) =>
-                    {
-                        try
-                        {
+                    this.Browser.CoreWebView2.NewWindowRequested += (s, ev) => {
+                        try {
                             ev.Handled = true;
                             var uri = ev.Uri;
-                            if (!string.IsNullOrWhiteSpace(uri))
-                            {
-                                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                                {
+                            if (!string.IsNullOrWhiteSpace(uri)) {
+                                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
                                     FileName = uri,
                                     UseShellExecute = true,
                                 });
                             }
                         }
-                        catch
-                        {
+                        catch {
                         }
                     };
                 }
-                catch
-                {
+                catch {
                 }
 
                 this.Browser.NavigateToString(page);
             }
-            catch (Exception ex)
-            {
-                try
-                {
+            catch (Exception ex) {
+                try {
                     this.Browser.NavigateToString($"<html><body><p>Не удалось загрузить новость: {System.Net.WebUtility.HtmlEncode(ex.Message)}</p></body></html>");
                 }
-                finally
-                {
+                finally {
                 }
             }
         }
 
-        private void BackBtn_Click(object sender, RoutedEventArgs e)
-        {
+        private void BackBtn_Click(object sender, RoutedEventArgs e) {
             // Возвращаемся по стеку навигации, чтобы сохранить состояние HomePage (включая выбранную игру)
-            if (this.NavigationService?.CanGoBack == true)
-            {
+            if (this.NavigationService?.CanGoBack == true) {
                 this.NavigationService.GoBack();
                 return;
             }
@@ -166,28 +144,22 @@ namespace ChillHub.Pages
             win?.ContentFrame.Navigate(new HomePage());
         }
 
-        private static string BrushToCss(string key, string fallback)
-        {
-            try
-            {
+        private static string BrushToCss(string key, string fallback) {
+            try {
                 var brush = Application.Current?.Resources[key] as SolidColorBrush;
-                if (brush != null)
-                {
+                if (brush != null) {
                     var c = brush.Color;
                     return $"#{c.R:X2}{c.G:X2}{c.B:X2}";
                 }
             }
-            catch
-            {
+            catch {
             }
             return fallback;
         }
 
-        private static System.Windows.Media.Color GetMediaColor(string key)
-        {
+        private static System.Windows.Media.Color GetMediaColor(string key) {
             var brush = Application.Current?.Resources[key] as SolidColorBrush;
-            if (brush != null)
-            {
+            if (brush != null) {
                 return brush.Color;
             }
 
@@ -195,8 +167,7 @@ namespace ChillHub.Pages
             return System.Windows.Media.Color.FromRgb(0x0F, 0x11, 0x16);
         }
 
-        private static System.Drawing.Color ToDrawingColor(System.Windows.Media.Color c)
-        {
+        private static System.Drawing.Color ToDrawingColor(System.Windows.Media.Color c) {
             return System.Drawing.Color.FromArgb(c.A, c.R, c.G, c.B);
         }
     }

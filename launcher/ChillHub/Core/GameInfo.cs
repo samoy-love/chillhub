@@ -3,10 +3,8 @@
 // Licensed under the MIT License.
 // </copyright>
 
-namespace ChillHub.Core
-{
-    public class GameInfo
-    {
+namespace ChillHub.Core {
+    public class GameInfo {
         public string GameId { get; set; } = string.Empty;
 
         public string Title { get; set; } = string.Empty;
