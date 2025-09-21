@@ -42,7 +42,7 @@
   - `/admin/api/*` → Admin API (`127.0.0.1:55777/admin/*`).
   - `/admin/`, `/admin/ui/*` — админ‑UI статика.
   - `/content/*`, `/manifests/*`, `/news/*` — статика контента.
-  - `/assets/*` — try_files: сперва ассеты лендинга, затем fallback на новости.
+  - `/assets/*` — ассеты лендинга (без fallback). 
 
 Dev‑порты (локально): Public API `:55700`, Admin API `:55777`.
 
@@ -202,9 +202,11 @@ sudo rsync -a --delete ./content/content/   /var/www/launcher/content/
 sudo rsync -a --delete ./content/news/      /var/www/launcher/news/
 sudo rsync -a --delete ./server/admin_ui/   /var/www/launcher/admin_ui/
 
-# 3) Бинарии (сборка на сервере и установка; копирование, не перемещение)
-go build -o ./api   ./server/cmd/api
-go build -o ./admin ./server/cmd/admin
+# 3) Бинарии (сборка на сервере внутри модуля `server/` и установка)
+cd ./server
+go build -o ../api   ./cmd/api
+go build -o ../admin ./cmd/admin
+cd -
 sudo install -m 0755 ./api   /opt/chillhub/api
 sudo install -m 0755 ./admin /opt/chillhub/admin
 ```
@@ -226,6 +228,22 @@ sudo systemctl restart chillhub-api.service chillhub-admin.service
 # После обновления лендинга/конфигов nginx
 sudo nginx -t && sudo systemctl reload nginx
 ```
+
+#### Частые ошибки (troubleshooting)
+
+- **/admin отдаёт 404**
+  - Убедитесь, что установлен актуальный конфиг nginx `deploy/launcher.conf` и перезагружен nginx.
+  - В конфиге присутствует точное правило `location = /admin/ { alias /var/www/launcher/admin_ui/admin.html; }`, которое отдаёт файл UI. Все прочие `/admin/*` проксируются в Admin API.
+
+- **Лаунчер при старте пишет 404 на GET https://launcher.samoy.love/manifests/launcher/latest.json**
+  - Клиент берёт `latest.json` по пути `manifests/launcher/latest.json` (см. `launcher/ChillHub/UpdateWindow.xaml.cs`). Если файла нет — будет 404.
+  - Создайте его одним из способов:
+    - Через Admin UI: вкладка «Лаунчер» → загрузите ZIP новой версии и оставьте флаг «Обновить latest». Это создаст `content/manifests/launcher/<version>.json` и `content/manifests/launcher/latest.json` и положит файлы в `content/content/launcher/<version>/files/`.
+    - Вручную (для первичной инициализации):
+      1) Скопируйте манифест версии в `/var/www/launcher/manifests/launcher/<version>.json`.
+      2) Создайте `/var/www/launcher/manifests/launcher/latest.json` со структурой `{ "version": "<version>" }`.
+      3) Убедитесь, что файлы самой версии лежат в `/var/www/launcher/content/launcher/<version>/files/`.
+  - После выкладки манифестов перезагрузка nginx не требуется; проверьте по URL в браузере, что `latest.json` открывается без 404.
 
 ---
 
