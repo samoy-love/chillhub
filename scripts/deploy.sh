@@ -14,6 +14,7 @@ set -euo pipefail
 
 BRANCH="main"
 NO_BUILD=0
+SYNC_MANIFESTS=0
 EXPLICIT_REPO_DIR=""
 
 # Parse args
@@ -23,6 +24,8 @@ while [[ $# -gt 0 ]]; do
       BRANCH="${2:-main}"; shift 2;;
     --no-build)
       NO_BUILD=1; shift 1;;
+    --sync-manifests)
+      SYNC_MANIFESTS=1; shift 1;;
     --repo-dir)
       EXPLICIT_REPO_DIR="${2:-}"; shift 2;;
     *)
@@ -58,6 +61,18 @@ run(){ echo "> $*"; eval "$*"; }
 log "Ensuring target directories exist"
 sudo mkdir -p "$SITE_ROOT" "$LAUNCHER_ROOT" "$LAUNCHER_ROOT/content" "$LAUNCHER_ROOT/manifests" "$LAUNCHER_ROOT/news" "$LAUNCHER_ROOT/admin_ui" /opt/chillhub
 
+# Safety: backup manifests before touching anything
+TS=$(date +%Y%m%d-%H%M%S)
+if [[ -d "$LAUNCHER_ROOT/manifests" ]]; then
+  # Create lightweight tar.gz backup if directory not empty
+  if [[ -n $(find "$LAUNCHER_ROOT/manifests" -mindepth 1 -print -quit 2>/dev/null) ]]; then
+    BACKUP_DIR="/var/backups"; sudo mkdir -p "$BACKUP_DIR"
+    BK_FILE="$BACKUP_DIR/chillhub-manifests-$TS.tar.gz"
+    echo "[deploy] Backing up manifests to $BK_FILE"
+    sudo tar -C "$LAUNCHER_ROOT" -czf "$BK_FILE" manifests || true
+  fi
+fi
+
 log "Updating repository: $REPO_DIR (branch: $BRANCH)"
 if [[ ! -d "$REPO_DIR/.git" ]]; then
   run "git clone git@github.com:tr0llex/Launcher-Project.git \"$REPO_DIR\""
@@ -81,9 +96,15 @@ run "sudo rsync -a --delete \"$REPO_DIR/landing/\" \"$SITE_ROOT/\""
 log "Sync content and Admin UI to $LAUNCHER_ROOT"
 # IMPORTANT: Preserve server-generated artifacts (uploaded content, news assets, latest.json)
 # Non-destructive sync:
-#  - manifests, content: copy only if newer (won't overwrite newer server files)
-#  - news: never overwrite existing files (seed-only)
-run "sudo rsync -a --ignore-existing \"$REPO_DIR/content/manifests/\" \"$LAUNCHER_ROOT/manifests/\""
+#  - manifests: SKIPPED by default (use --sync-manifests to seed only)
+#  - content:   seed-only (never overwrite existing server files)
+#  - news:      seed-only (никогда не затираем существующие)
+if [[ $SYNC_MANIFESTS -eq 1 ]]; then
+  echo "[deploy] Seeding manifests from repo (non-destructive)"
+  run "sudo rsync -a --ignore-existing \"$REPO_DIR/content/manifests/\" \"$LAUNCHER_ROOT/manifests/\""
+else
+  echo "[deploy] Skipping manifests sync (use --sync-manifests to seed)"
+fi
 run "sudo rsync -a --ignore-existing \"$REPO_DIR/content/content/\"   \"$LAUNCHER_ROOT/content/\""
 run "sudo rsync -a --ignore-existing \"$REPO_DIR/content/news/\"      \"$LAUNCHER_ROOT/news/\""
 # Admin UI can be fully replaced
@@ -100,6 +121,18 @@ for s in "${SERVICES[@]}"; do
   run "sudo systemctl restart \"$s\""
   run "sudo systemctl status \"$s\" --no-pager -n 3 || true"
 done
+
+# Optionally seed latest.json if it is missing but version manifests exist
+MANI_DIR="$LAUNCHER_ROOT/manifests/launcher"
+if [[ -d "$MANI_DIR" && ! -f "$MANI_DIR/latest.json" ]]; then
+  # collect version files except latest.json, strip .json
+  mapfile -t _vers < <(find "$MANI_DIR" -maxdepth 1 -type f -name '*.json' ! -name 'latest.json' -printf '%f\n' 2>/dev/null | sed 's/\.json$//' | sort -V)
+  if [[ ${#_vers[@]} -gt 0 ]]; then
+    BEST_VER="${_vers[-1]}"
+    echo "[deploy] Seeding latest.json -> $BEST_VER"
+    echo "{ \"version\": \"$BEST_VER\" }" | sudo tee "$MANI_DIR/latest.json" >/dev/null || true
+  fi
+fi
 
 log "Smoke checks"
 run "curl -I https://launcher.samoy.love/admin/ || true"
