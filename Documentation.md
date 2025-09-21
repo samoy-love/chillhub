@@ -1,3 +1,4 @@
+- `scripts/deploy.sh` (prod): деплой одной командой (см. `Makefile`). Скрипт не трогает `manifests/content/news`; запускает автотесты (Admin UI/API, лендинг, статика, новости/ассеты) и при сбоях выводит подробную диагностику (nginx/systemd/FS с листингами).
 # Техническое задание (ТЗ) — ChillHub (MVP)
 
 Версия документа: 1.1
@@ -39,8 +40,8 @@
 - `launcher.samoy.love` — боевой домен лаунчера:
   - `/` — лендинг из `landing/`.
   - `/api/*` — прокси на Public API (`127.0.0.1:55700`).
-  - `/admin/api/*` — прокси на Admin API (`127.0.0.1:55777`), с маппингом на бэкенде `/admin/*`.
-  - `/admin/` и `/admin/ui/*` — статика админки из `/var/www/launcher/admin_ui/`.
+  - `/admin/api/*` — прокси на Admin API (`127.0.0.1:55777`) 1:1 (без переписывания пути).
+  - `/admin/` и `/admin/ui/*` — статика админки из `/var/www/launcher/admin_ui/` (точный матч для `/admin/` отдает `admin.html`).
   - `/content/*`, `/manifests/*`, `/news/*` — статика контента (`/var/www/launcher/...`).
   - `/assets/*` — «комбинированные ассеты»: сперва лендинг (`/var/www/site/assets`), затем fallback на новости (`/var/www/launcher/news/assets`).
 - `samoy.love` — плейсхолдер/заглушка (простая страница) — включается при необходимости.
@@ -142,6 +143,7 @@ Public API использует этот список (если существу
   - `/assets/*` → `content/news/assets/*`
 
 Примечание: Public API формирует список игр из реестра `content/manifests/_registry/games.json` (если есть), иначе сканирует папку `content/manifests/` за исключением `_registry`. См. `loadGamesFromRegistry()` и `loadGamesByScanning()` в `server/cmd/api/main.go`.
+В продакшене каталоги `/var/www/launcher/{manifests,content,news}` наполняются через Admin UI либо вручную; деплой-скрипт их не изменяет.
 
 Примечание: Базовый URL строится с учетом `X-Forwarded-Proto` (http/https). См. `baseURL()`.
 
@@ -184,7 +186,7 @@ Public API использует этот список (если существу
   - Загрузка файла: `POST /admin/news/assets/upload` (конвертация изображений, ресайз до 1080 минимальной стороны; GIF/WEBP → WEBP при наличии ffmpeg).
   - Загрузка по URL: `POST /admin/news/assets/uploadByUrl` (та же обработка, имя подбирается безопасно).
 
-- Здоровье сервиса: `GET /admin/health` → `ok`.
+- Здоровье сервиса: `GET /admin/health` → `ok`. В продакшене публичные вызовы UI обращаются к `/admin/api/*` (та же логика, зеркальные хендлеры зарегистрированы в бэкенде).
 
 UI админки: `server/admin_ui/admin.html` + `admin.js` (Bootstrap 5, темная тема). Кнопки «Собрать» и «Предложить следующую версию» удалены; используется загрузка ZIP и просмотр списков версий.
 
@@ -240,17 +242,17 @@ UI админки: `server/admin_ui/admin.html` + `admin.js` (Bootstrap 5, те�
 - HTTP→HTTPS редирект для обоих доменов.
 - Маршрутизация:
   - `/api/*` → `http://127.0.0.1:55700` (передаются `X-Forwarded-*`).
-  - `/admin/api/*` → `http://127.0.0.1:55777/admin/*` (проксирование с дописыванием сегмента `/admin/`).
-  - `/admin/` и `/admin/ui/*` — статика из `/var/www/launcher/admin_ui/`. Прочие `/admin/*` (legacy вызовы UI) проксируются на `:55777`.
+  - `/admin/api/*` → `http://127.0.0.1:55777` (1:1, без переписывания пути).
+  - `/admin/` и `/admin/ui/*` — статика из `/var/www/launcher/admin_ui/` (точный матч на `/admin/` отдает `admin.html`).
   - `/content/*`, `/manifests/*`, `/news/*` — статика из `/var/www/launcher/...`.
-  - `/assets/*` — `try_files` с приоритетом ассетов лендинга и fallback на новости.
+  - `/assets/*` — `try_files` с приоритетом ассетов лендинга и fallback на новости; fallback реализован через внутренний location без `alias` в named location, чтобы избежать ограничений Nginx.
 - Добавление `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Forwarded-Port` — для корректного `baseURL()` в Public API.
 - Для стриминга загрузок ZIP в админке отключены буферизации (`proxy_buffering off`, `proxy_request_buffering off`) и увеличены таймауты.
 - На dev API/UI (`server/cmd/api`, `server/cmd/admin`) сами отдают статику для удобства локального запуска; в prod статику отдает nginx.
 
 Производственные директории:
 - Лендинг: `/var/www/site` (копия `landing/`).
-- Контент: `/var/www/launcher/{content,manifests,news,admin_ui}` (копия из `content/` и `server/admin_ui/`).
+- Контент: `/var/www/launcher/{content,manifests,news,admin_ui}` (админ‑UI синхронизируется; каталоги `content,manifests,news` наполняются через Admin UI или вручную, деплой их не модифицирует).
 - Бинарники: `/opt/chillhub/{api,admin}`.
 
 Сертификаты: Let’s Encrypt (рекомендуется `certbot --nginx -d launcher.samoy.love -d samoy.love`).
@@ -351,21 +353,21 @@ Secrets для CI/CD: `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`.
 Let’s Encrypt выписывает сертификаты на оба домена.
 
 ## 20. CI/CD (GitHub Actions)
-Workflow `.github/workflows/deploy.yml`:
-- Триггер: только вручную (workflow_dispatch) через кнопку «Run workflow» в GitHub Actions.
-- Шаги: checkout → setup-go → сборка бэкендов для linux/amd64 → упаковка артефактов (landing, content, admin_ui, nginx.conf, systemd) → SCP на сервер → SSH-скрипт раскладки (rsync в `/var/www/site`, `/var/www/launcher/...`, установка бинарей в `/opt/chillhub`, установка systemd и nginx-конфига, `nginx -t`, reload).
+Workflow `.github/workflows/deploy.yml` (при наличии):
+- Триггер: вручную (workflow_dispatch).
+- Шаги: checkout → setup-go → сборка бэкендов для linux/amd64 → копирование артефактов (landing, admin_ui, nginx.conf, systemd) → SCP на сервер → SSH-скрипт раскладки. ВАЖНО: каталоги `manifests/content/news` НЕ синхронизировать в прод, чтобы не потерять данные.
 - Secrets: `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`.
 
 ## 21. Деплой на сервер (ручной)
 1) Подготовка сервера: `nginx`, `rsync`, `ufw`, `certbot`.
 2) Создать каталоги: `/var/www/site`, `/var/www/launcher/{content,manifests,news,admin_ui}`, `/opt/chillhub`.
 3) Разместить `deploy/launcher.conf` в `/etc/nginx/sites-available/launcher.conf`, включить symlink в `sites-enabled`, проверить `nginx -t`, `systemctl reload nginx`.
-4) Скопировать контент (rsync/scp) и админ-UI статику в `var/www`.
+4) Скопировать только админ-UI статику в `var/www/launcher/admin_ui`. Каталоги `manifests/content/news` не трогать — наполняются через Admin UI.
 5) Собрать/скопировать бинарники в `/opt/chillhub`.
 6) Установить systemd сервисы, `daemon-reload`, `enable`, `restart`.
 7) Выписать сертификаты LE.
 
-## 22. Локальная разработка
+## 22. Локальная разработка и автотесты деплоя
 - Скрипт `scripts/dev.ps1`:
   - `-Env local|prod` — проставляет клиенту `ApiBaseUrl` (`%LOCALAPPDATA%/ChillHub/config.json`).
   - `-RunServers` — запускает `api` и `admin` (go run) с `CONTENT_ROOT` указывающим на `content/` из репозитория.

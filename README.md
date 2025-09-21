@@ -1,35 +1,11 @@
-### Автодеплой скриптом (рекомендуется)
-
-Скрипт `scripts/deploy.sh` обновит репозиторий, соберёт Go‑сервисы, установит бинарии, раскидает статику и перезагрузит nginx/сервисы.
-
-```bash
-# Разово сделать исполняемым
-chmod +x ./scripts/deploy.sh
-
-# Деплой ветки main (сборка по умолчанию)
-sudo ./scripts/deploy.sh --branch main
-
-# Деплой без пересборки бинариев (только статика/конфиги)
-sudo ./scripts/deploy.sh --branch main --no-build
-```
-
-Что делает скрипт:
-- Клонирует репозиторий (если нужно) и делает `git fetch/checkout/pull`.
-- Собирает `server/cmd/api` и `server/cmd/admin` (если не указан `--no-build`).
-- Копирует лендинг в `/var/www/site/`.
-- Копирует контент (`content/`, `manifests/`, `news/`) и `server/admin_ui/` в `/var/www/launcher/...`.
-- Ставит конфиг nginx из `deploy/launcher.conf`, делает `nginx -t` и `reload`.
-- Перезапускает сервисы `chillhub-api.service`, `chillhub-admin.service`.
-
-После этого:
-- `/admin/` отдаётся как файл `admin.html` (nginx),
-- `/admin/api/*` проксируется в Go‑сервер (порт `:55777`),
-- `/assets/*` сначала ищется в `/var/www/site/assets`, затем в `/var/www/launcher/news/assets`.
-
 # ChillHub — README
+
+Кроссплатформенный проект лаунчера и серверной части для распределения игр, автообновлений и новостей.
 
 ## Оглавление
 - [Обзор](#обзор)
+- [Структура проекта](#структура-проекта)
+- [Доменная схема (prod)](#доменная-схема-prod)
 - [Локальная разработка (Windows 11)](#локальная-разработка-windows-11)
   - [Зависимости](#зависимости)
   - [Клонирование](#клонирование)
@@ -39,12 +15,16 @@ sudo ./scripts/deploy.sh --branch main --no-build
 - [Скрипты: dev и инсталлятор](#скрипты-dev-и-инсталлятор)
 - [Деплой на сервер (Ubuntu + nginx)](#деплой-на-сервер-ubuntu--nginx)
   - [Подготовка (1 раз)](#подготовка-1-раз)
-  - [Раскладка артефактов](#раскладка-артефактов)
+  - [Автодеплой (Makefile)](#автодеплой-makefile)
+  - [Раскладка артефактов (ручная)](#раскладка-артефактов-ручная)
   - [systemd (1 раз)](#systemd-1-раз)
   - [Обновления](#обновления)
+  - [Частые ошибки (troubleshooting)](#частые-ошибки-troubleshooting)
   - [Просмотр логов (systemd)](#просмотр-логов-systemd)
 - [Полезные ссылки и файлы](#полезные-ссылки-и-файлы)
 - [Примечания по безопасности и качеству](#примечания-по-безопасности-и-качеству)
+
+ 
 
 ## Обзор
 - ChillHub — лаунчер для Windows 10–11 для кооператива и моддинга.
@@ -67,7 +47,7 @@ sudo ./scripts/deploy.sh --branch main --no-build
 - `https://launcher.samoy.love`
   - `/` — лендинг из `landing/`.
   - `/api/*` → Public API (`127.0.0.1:55700`).
-  - `/admin/api/*` → Admin API (`127.0.0.1:55777/admin/*`).
+  - `/admin/api/*` → Admin API (`127.0.0.1:55777`) 1:1 (без переписывания пути).
   - `/admin/`, `/admin/ui/*` — админ‑UI статика.
   - `/content/*`, `/manifests/*`, `/news/*` — статика контента.
   - `/assets/*` — единая точка ассетов: сперва ищется в `site/assets`, затем фоллбэк в `launcher/news/assets`. 
@@ -214,7 +194,27 @@ sudo ufw deny 55700/tcp && sudo ufw deny 55777/tcp
 sudo ufw enable
 ```
 
-### Раскладка артефактов
+### Автодеплой (Makefile)
+```bash
+# Полный деплой ветки main (pull, build, статика, nginx reload, рестарт сервисов, автотесты)
+make deploy BRANCH=main
+
+# Деплой без пересборки Go‑бинариев (только статика/конфиги + автотесты)
+make deploy-nobuild BRANCH=main
+```
+
+Что делает автодеплой:
+- Обновляет репозиторий (fetch/checkout/pull) для указанной ветки.
+- Собирает `server/cmd/api` и `server/cmd/admin` (кроме `deploy-nobuild`).
+- Устанавливает `deploy/launcher.conf`, валидирует `nginx -t`, делает reload.
+- Раскладывает ТОЛЬКО статику:
+  - `landing/` → `/var/www/site/` (с `--delete`).
+  - `server/admin_ui/` → `/var/www/launcher/admin_ui/` (с `--delete`).
+- НЕ трогает `/var/www/launcher/{manifests,content,news}` — они управляются через Admin UI или вручную.
+- Перезапускает `chillhub-api.service`, `chillhub-admin.service`.
+- Запускает автотесты (Admin UI, Admin API, Landing, статика, новости/ассеты); при сбоях печатает подробную диагностику (nginx/systemd/FS) и завершает с ошибкой.
+
+### Раскладка артефактов (ручная)
 ```bash
 # Выполняйте на сервере (SSH), из домашней директории пользователя,
 # где уже клонирован репозиторий в ~/Launcher-Project
@@ -224,11 +224,11 @@ cd ~/Launcher-Project
 # 1) Лендинг → /var/www/site (копирование/синхронизация, без перемещения)
 sudo rsync -a --delete ./landing/ /var/www/site/
 
-# 2) Контент и Admin UI → /var/www/launcher/* (копирование/синхронизация)
-sudo rsync -a --delete ./content/manifests/ /var/www/launcher/manifests/
-sudo rsync -a --delete ./content/content/   /var/www/launcher/content/
-sudo rsync -a --delete ./content/news/      /var/www/launcher/news/
+# 2) Admin UI → /var/www/launcher/admin_ui (чистая статика)
 sudo rsync -a --delete ./server/admin_ui/   /var/www/launcher/admin_ui/
+
+# ВАЖНО: прод‑деплой НЕ трогает /var/www/launcher/{manifests,content,news}.
+# Эти каталоги наполняются через Admin UI (загрузка ZIP/версий, новости и ассеты) или вручную при первичной инициализации.
 
 # 3) Бинарии (сборка на сервере внутри модуля `server/` и установка)
 cd ./server
@@ -272,6 +272,7 @@ sudo nginx -t && sudo systemctl reload nginx
       2) Создайте `/var/www/launcher/manifests/launcher/latest.json` со структурой `{ "version": "<version>" }`.
       3) Убедитесь, что файлы самой версии лежат в `/var/www/launcher/content/launcher/<version>/files/`.
   - После выкладки манифестов перезагрузка nginx не требуется; проверьте по URL в браузере, что `latest.json` открывается без 404.
+  - В прод‑скрипте деплоя `manifests/` не синхронизируется и не модифицируется — это сделано намеренно, чтобы не потерять данные.
 
 - **/admin/api/* → 404**
   - Обновите/пересоберите `server/cmd/admin` и перезапустите `chillhub-admin.service`. В код добавлены зеркальные роуты под префиксом `/admin/api/*` (см. `server/cmd/admin/main.go`).
