@@ -66,8 +66,8 @@ log "Sync content and Admin UI to $LAUNCHER_ROOT"
 # Non-destructive sync:
 #  - manifests, content: copy only if newer (won't overwrite newer server files)
 #  - news: never overwrite existing files (seed-only)
-run "sudo rsync -a --update \"$REPO_DIR/content/manifests/\" \"$LAUNCHER_ROOT/manifests/\""
-run "sudo rsync -a --update \"$REPO_DIR/content/content/\"   \"$LAUNCHER_ROOT/content/\""
+run "sudo rsync -a --ignore-existing \"$REPO_DIR/content/manifests/\" \"$LAUNCHER_ROOT/manifests/\""
+run "sudo rsync -a --ignore-existing \"$REPO_DIR/content/content/\"   \"$LAUNCHER_ROOT/content/\""
 run "sudo rsync -a --ignore-existing \"$REPO_DIR/content/news/\"      \"$LAUNCHER_ROOT/news/\""
 # Admin UI can be fully replaced
 run "sudo rsync -a --delete \"$REPO_DIR/server/admin_ui/\"   \"$LAUNCHER_ROOT/admin_ui/\""

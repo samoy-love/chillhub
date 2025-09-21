@@ -401,7 +401,9 @@ img {
   cursor: grab;
   /* Better touch behavior on mobile: horizontal pan without blocking vertical scroll elsewhere */
   -webkit-overflow-scrolling: touch;
-  touch-action: pan-x pinch-zoom;
+  /* Allow natural vertical scrolling; keep touch inertia */
+  touch-action: auto;
+  overscroll-behavior-x: contain;
 }
 
 .shots.dragging {

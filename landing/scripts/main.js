@@ -170,6 +170,7 @@
   (function setupShotsDrag(){
     const sc = document.querySelector('.shots');
     if(!sc) return;
+    const touchCapable = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
     let isDown = false, startX = 0, startLeft = 0;
     let lastX = 0, lastT = 0, vx = 0; // px/sec
     let momentumRAF = 0;
@@ -188,7 +189,8 @@
     }
     function onMove(e){
       if(!isDown) return;
-      e.preventDefault();
+      // Do not prevent default on touch devices to allow vertical scroll
+      if(!(e.touches)) e.preventDefault();
       const x = (e.touches? e.touches[0].clientX : e.clientX);
       const dx = x - startX;
       sc.scrollLeft = startLeft - dx;
@@ -202,7 +204,7 @@
     function onUp(){
       if(!isDown) return;
       isDown = false; sc.classList.remove('dragging');
-      // inertial scrolling with friction
+      // inertial scrolling with friction (only for mouse-driven drag)
       const friction = 0.94; // per frame decay at 60fps
       let prev = performance.now();
       function step(){
@@ -218,14 +220,15 @@
       if(Math.abs(vx) > 50){ momentumRAF = requestAnimationFrame(step); } else { sc.dataset.pause = '0'; }
     }
 
+    // Desktop: mouse drag with synthetic inertia
     sc.addEventListener('mousedown', onDown);
     sc.addEventListener('mousemove', onMove);
     sc.addEventListener('mouseup', onUp);
     sc.addEventListener('mouseleave', onUp);
-    sc.addEventListener('touchstart', onDown, {passive:true});
-    sc.addEventListener('touchmove', onMove, {passive:false});
-    sc.addEventListener('touchend', onUp, {passive:true});
-    sc.addEventListener('touchcancel', onUp, {passive:true});
+    // Mobile: rely on native touch scrolling for best responsiveness
+    if(!touchCapable){
+      // No-op: touch handlers intentionally not attached on phones
+    }
   })();
 
   // Scroll-synced horizontal gallery: vertical scroll moves the gallery horizontally
