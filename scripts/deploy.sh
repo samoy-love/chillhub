@@ -65,15 +65,18 @@ if [[ ! -d "$REPO_DIR/.git" ]]; then
 fi
 run "git -C \"$REPO_DIR\" fetch --all --prune"
 run "git -C \"$REPO_DIR\" checkout $BRANCH"
+run "git -C \"$REPO_DIR\" config core.filemode false || true"
 run "git -C \"$REPO_DIR\" pull --ff-only"
 
 if [[ $NO_BUILD -eq 0 ]]; then
   log "Building Go servers"
-  run "cd \"$REPO_DIR/server\" && go build -o ../api   ./cmd/api"
-  run "cd \"$REPO_DIR/server\" && go build -o ../admin ./cmd/admin"
+  BUILD_DIR=$(mktemp -d -t chillhub-build-XXXXXXXX)
+  run "cd \"$REPO_DIR/server\" && go build -o \"$BUILD_DIR/api\"   ./cmd/api"
+  run "cd \"$REPO_DIR/server\" && go build -o \"$BUILD_DIR/admin\" ./cmd/admin"
   log "Installing binaries"
-  run "sudo install -m 0755 \"$REPO_DIR/api\"   \"$API_BIN\""
-  run "sudo install -m 0755 \"$REPO_DIR/admin\" \"$ADMIN_BIN\""
+  run "sudo install -m 0755 \"$BUILD_DIR/api\"   \"$API_BIN\""
+  run "sudo install -m 0755 \"$BUILD_DIR/admin\" \"$ADMIN_BIN\""
+  run "rm -rf \"$BUILD_DIR\" || true"
 fi
 
 log "Sync landing to $SITE_ROOT"
