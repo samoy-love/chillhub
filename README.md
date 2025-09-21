@@ -14,6 +14,7 @@
   - [Раскладка артефактов](#раскладка-артефактов)
   - [systemd (1 раз)](#systemd-1-раз)
   - [Обновления](#обновления)
+  - [Просмотр логов (systemd)](#просмотр-логов-systemd)
 - [Полезные ссылки и файлы](#полезные-ссылки-и-файлы)
 - [Примечания по безопасности и качеству](#примечания-по-безопасности-и-качеству)
 
@@ -225,6 +226,39 @@ sudo systemctl restart chillhub-api.service chillhub-admin.service
 # После обновления лендинга/конфигов nginx
 sudo nginx -t && sudo systemctl reload nginx
 ```
+
+---
+
+### Просмотр логов (systemd)
+
+Сервисы устанавливаются как `chillhub-api.service` и `chillhub-admin.service` (см. `deploy/systemd/`). Для просмотра логов используйте `journalctl`:
+
+```bash
+# Текущий хвост логов API и следить в реальном времени
+sudo journalctl -u chillhub-api.service -e -f
+
+# Аналогично для Admin
+sudo journalctl -u chillhub-admin.service -e -f
+
+# Логи за последний час
+sudo journalctl -u chillhub-api.service --since "1 hour ago"
+
+# Логи за сегодня с уровнями
+sudo journalctl -u chillhub-admin.service --since today -o short-iso
+
+# Проверить статус и последние строки
+systemctl status chillhub-api.service
+systemctl status chillhub-admin.service
+
+# Если нужно перезапустить
+sudo systemctl restart chillhub-api.service
+sudo systemctl restart chillhub-admin.service
+```
+
+Подсказки:
+- Если логов нет, убедитесь, что сервисы активированы и запущены: `sudo systemctl enable --now chillhub-api.service chillhub-admin.service`.
+- Для фильтрации по тексту: `journalctl -u chillhub-api.service | grep ERROR`.
+- Конфигурации unit-файлов лежат в `deploy/systemd/`; при изменении не забудьте `sudo systemctl daemon-reload`.
 
 ---
 

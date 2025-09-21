@@ -257,7 +257,7 @@ UI админки: `server/admin_ui/admin.html` + `admin.js` (Bootstrap 5, те�
 
 Firewall (пример UFW): открыть 80/443, закрыть 55700/55777 наружу.
 
-VPS: `158.179.204.241 (Ubuntu, user: ubuntu)`.
+VPS: `207.127.93.34 (Ubuntu, user: ubuntu)`.
 
 Порты приложений: `:55700` (Public API), `:55777` (Admin API) — слушают loopback.
 
@@ -340,13 +340,13 @@ Secrets для CI/CD: `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`.
 - Local dev: `scripts/dev.ps1`
 
 ## 19. Домены и DNS
-- `launcher.samoy.love` → A: `158.179.204.241` (Oracle VPS)
-- `samoy.love` → может оставаться на текущих A; при переводе на VPS — также A: `158.179.204.241`.
+- `launcher.samoy.love` → A: `207.127.93.34` (Oracle VPS)
+- `samoy.love` → может оставаться на текущих A; при переводе на VPS — также A: `207.127.93.34`.
 - Почта: оставить текущие MX записи (Mail.ru), SPF/TXT/NS/CAA без изменений.
 
 Рекомендуемые записи:
-- A `launcher.samoy.love` = `158.179.204.241`, TTL 3600.
-- (Опционально) A `samoy.love` = `158.179.204.241`, если нужен плейсхолдер с этого же сервера.
+- A `launcher.samoy.love` = `207.127.93.34`, TTL 3600.
+- (Опционально) A `samoy.love` = `207.127.93.34`, если нужен плейсхолдер с этого же сервера.
 
 Let’s Encrypt выписывает сертификаты на оба домена.
 
