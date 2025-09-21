@@ -63,10 +63,12 @@ run "sudo rsync -a --delete \"$REPO_DIR/landing/\" \"$SITE_ROOT/\""
 
 log "Sync content and Admin UI to $LAUNCHER_ROOT"
 # IMPORTANT: Preserve server-generated artifacts (uploaded content, news assets, latest.json)
-# Do NOT use --delete for these folders
-run "sudo rsync -a \"$REPO_DIR/content/manifests/\" \"$LAUNCHER_ROOT/manifests/\""
-run "sudo rsync -a \"$REPO_DIR/content/content/\"   \"$LAUNCHER_ROOT/content/\""
-run "sudo rsync -a \"$REPO_DIR/content/news/\"      \"$LAUNCHER_ROOT/news/\""
+# Non-destructive sync:
+#  - manifests, content: copy only if newer (won't overwrite newer server files)
+#  - news: never overwrite existing files (seed-only)
+run "sudo rsync -a --update \"$REPO_DIR/content/manifests/\" \"$LAUNCHER_ROOT/manifests/\""
+run "sudo rsync -a --update \"$REPO_DIR/content/content/\"   \"$LAUNCHER_ROOT/content/\""
+run "sudo rsync -a --ignore-existing \"$REPO_DIR/content/news/\"      \"$LAUNCHER_ROOT/news/\""
 # Admin UI can be fully replaced
 run "sudo rsync -a --delete \"$REPO_DIR/server/admin_ui/\"   \"$LAUNCHER_ROOT/admin_ui/\""
 
@@ -93,3 +95,4 @@ fi
 run "curl -fsSL https://launcher.samoy.love/assets/ping.txt || true"
 
 log "Done"
+    
