@@ -1,3 +1,31 @@
+### Автодеплой скриптом (рекомендуется)
+
+Скрипт `scripts/deploy.sh` обновит репозиторий, соберёт Go‑сервисы, установит бинарии, раскидает статику и перезагрузит nginx/сервисы.
+
+```bash
+# Разово сделать исполняемым
+chmod +x ./scripts/deploy.sh
+
+# Деплой ветки main (сборка по умолчанию)
+sudo ./scripts/deploy.sh --branch main
+
+# Деплой без пересборки бинариев (только статика/конфиги)
+sudo ./scripts/deploy.sh --branch main --no-build
+```
+
+Что делает скрипт:
+- Клонирует репозиторий (если нужно) и делает `git fetch/checkout/pull`.
+- Собирает `server/cmd/api` и `server/cmd/admin` (если не указан `--no-build`).
+- Копирует лендинг в `/var/www/site/`.
+- Копирует контент (`content/`, `manifests/`, `news/`) и `server/admin_ui/` в `/var/www/launcher/...`.
+- Ставит конфиг nginx из `deploy/launcher.conf`, делает `nginx -t` и `reload`.
+- Перезапускает сервисы `chillhub-api.service`, `chillhub-admin.service`.
+
+После этого:
+- `/admin/` отдаётся как файл `admin.html` (nginx),
+- `/admin/api/*` проксируется в Go‑сервер (порт `:55777`),
+- `/assets/*` сначала ищется в `/var/www/site/assets`, затем в `/var/www/launcher/news/assets`.
+
 # ChillHub — README
 
 ## Оглавление
@@ -42,7 +70,7 @@
   - `/admin/api/*` → Admin API (`127.0.0.1:55777/admin/*`).
   - `/admin/`, `/admin/ui/*` — админ‑UI статика.
   - `/content/*`, `/manifests/*`, `/news/*` — статика контента.
-  - `/assets/*` — ассеты лендинга (без fallback). 
+  - `/assets/*` — единая точка ассетов: сперва ищется в `site/assets`, затем фоллбэк в `launcher/news/assets`. 
 
 Dev‑порты (локально): Public API `:55700`, Admin API `:55777`.
 
@@ -233,7 +261,7 @@ sudo nginx -t && sudo systemctl reload nginx
 
 - **/admin отдаёт 404**
   - Убедитесь, что установлен актуальный конфиг nginx `deploy/launcher.conf` и перезагружен nginx.
-  - В конфиге присутствует точное правило `location = /admin/ { alias /var/www/launcher/admin_ui/admin.html; }`, которое отдаёт файл UI. Все прочие `/admin/*` проксируются в Admin API.
+  - В конфиге присутствует точное правило `location = /admin/ { root /var/www/launcher/admin_ui; try_files /admin.html =404; }`, которое отдаёт файл UI. Проксируется только `/admin/api/*`.
 
 - **Лаунчер при старте пишет 404 на GET https://launcher.samoy.love/manifests/launcher/latest.json**
   - Клиент берёт `latest.json` по пути `manifests/launcher/latest.json` (см. `launcher/ChillHub/UpdateWindow.xaml.cs`). Если файла нет — будет 404.
@@ -244,6 +272,10 @@ sudo nginx -t && sudo systemctl reload nginx
       2) Создайте `/var/www/launcher/manifests/launcher/latest.json` со структурой `{ "version": "<version>" }`.
       3) Убедитесь, что файлы самой версии лежат в `/var/www/launcher/content/launcher/<version>/files/`.
   - После выкладки манифестов перезагрузка nginx не требуется; проверьте по URL в браузере, что `latest.json` открывается без 404.
+
+- **/admin/api/* → 404**
+  - Обновите/пересоберите `server/cmd/admin` и перезапустите `chillhub-admin.service`. В код добавлены зеркальные роуты под префиксом `/admin/api/*` (см. `server/cmd/admin/main.go`).
+
 
 ---
 

@@ -1781,6 +1781,13 @@ func main() {
     http.HandleFunc("/admin/api/news/assets/uploadByUrl", handleNewsAssetsUploadByURL)
     http.HandleFunc("/admin/api/news/assets/delete", handleNewsAssetsDelete)
     http.HandleFunc("/admin/api/news/assets/rename", handleNewsAssetsRename)
+    // Games registry under /admin/api
+    http.HandleFunc("/admin/api/games", handleGamesGet)
+    http.HandleFunc("/admin/api/games/save", handleGamesSave)
+    http.HandleFunc("/admin/api/games/icon/upload", handleGameIconUpload)
+    http.HandleFunc("/admin/api/games/scan", func(w http.ResponseWriter, r *http.Request) {
+        writeJSON(w, struct { Items []gameEntry `json:"items"` }{ Items: generateGamesFromManifests() })
+    })
 	// Assets gallery
 	http.HandleFunc("/admin/news/assets", handleNewsAssetsList)
 	http.HandleFunc("/admin/news/assets/mkdir", handleNewsAssetsMkdir)
