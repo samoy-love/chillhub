@@ -35,7 +35,7 @@ Var PrereqsRan
 
 ; Output installer
 Name "${APP_NAME}"
-OutFile "ChillHub-Setup.exe"
+OutFile "generated_downloads\ChillHub-Setup.exe"
 
 ; Per-user installation (no admin)
 RequestExecutionLevel user

@@ -1219,7 +1219,8 @@ namespace ChillHub.Pages {
                     this.UpdateProgress.IsIndeterminate = true;
                     this.SetActionMode(ActionMode.Checking);
                 }
-                catch { }
+                catch {
+                }
                 return;
             }
             if (this.isUpdating) {
@@ -1541,6 +1542,7 @@ namespace ChillHub.Pages {
                 this.GameList.IsEnabled = true;
                 this.UpdateProgress.IsIndeterminate = false;
                 this.UpdateProgress.Value = 0;
+
                 // Не очищаем нижний статус при успешном завершении, чтобы показать "Последняя версия игры уже установлена"
                 if (this.hasUpdateError) {
                     this.FilesSizeText.Text = string.Empty;
@@ -1572,33 +1574,57 @@ namespace ChillHub.Pages {
                     case ActionMode.Cancel:
                         this.ActionBtn.Content = "Отмена";
                         this.ActionBtn.IsEnabled = true;
-                        try { this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Cancel"); } catch { }
+                        try {
+                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Cancel");
+                        }
+                        catch {
+                        }
                         break;
                     case ActionMode.Checking:
                         this.ActionBtn.Content = "Проверка…";
                         this.ActionBtn.IsEnabled = false;
-                        try { this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Checking"); } catch { }
+                        try {
+                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Checking");
+                        }
+                        catch {
+                        }
                         break;
                     case ActionMode.Play:
                         this.ActionBtn.Content = "Играть";
                         this.ActionBtn.IsEnabled = true;
-                        try { this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Play"); } catch { }
+                        try {
+                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Play");
+                        }
+                        catch {
+                        }
                         break;
                     case ActionMode.Retry:
                         this.ActionBtn.Content = "Повторить";
                         this.ActionBtn.IsEnabled = true;
-                        try { this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Retry"); } catch { }
+                        try {
+                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Retry");
+                        }
+                        catch {
+                        }
                         break;
                     case ActionMode.Install:
                         this.ActionBtn.Content = "Установить";
                         this.ActionBtn.IsEnabled = true;
-                        try { this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Install"); } catch { }
+                        try {
+                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Install");
+                        }
+                        catch {
+                        }
                         break;
                     case ActionMode.Update:
                     default:
                         this.ActionBtn.Content = "Обновить";
                         this.ActionBtn.IsEnabled = true;
-                        try { this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Update"); } catch { }
+                        try {
+                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Update");
+                        }
+                        catch {
+                        }
                         break;
                 }
             }

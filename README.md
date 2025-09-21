@@ -250,11 +250,49 @@ make deploy BRANCH=main EXTRA_ARGS="--admin-user admin --admin-pass 'S0meStrongP
 make deploy BRANCH=main EXTRA_ARGS="--jwt-secret 'base64...' --admin-user admin --admin-pass-bcrypt '$2a$12$...' --downloads-dir /home/ubuntu/installers"
 ```
 
+### Деплой с Windows (локально, через PowerShell)
+
+Если вы на Windows и хотите обновить сервер без GitHub Actions, используйте скрипт `scripts/deploy-win.ps1` или цель Makefile `deploy-win`.
+
+Требования на Windows: установлен Go (для сборки linux/amd64), OpenSSH клиент (`ssh`, `scp`). На сервере — `rsync`, `nginx`, `systemd`, `sudo`.
+
+Примеры (PowerShell):
+
+```powershell
+# Минимально: билд, загрузка артефактов, выкладка и смоук‑тесты
+./scripts/deploy-win.ps1 `
+  -Host your.vps.host `
+  -User ubuntu `
+  -KeyPath "C:\Users\you\.ssh\id_rsa"
+
+# С передачей секретов и логином админа (bcrypt предпочтительно)
+./scripts/deploy-win.ps1 -Host your.vps.host -User ubuntu -KeyPath "C:\Users\you\.ssh\id_rsa" `
+  -JwtSecret "base64-48bytes" -AdminUser admin -AdminPasswordBcrypt "$2y$12$..." `
+  -CookieDomain "launcher.samoy.love" -CookieSecure "true"
+
+# Если нужен plain‑пароль (bcrypt будет получен на сервере)
+./scripts/deploy-win.ps1 -Host your.vps.host -User ubuntu -KeyPath "C:\Users\you\.ssh\id_rsa" `
+  -AdminUser admin -AdminPasswordPlain "YourStrongPassword"
+```
+
+Примеры (через Make на Windows):
+
+```bash
+# Базовый вызов
+make deploy-win HOST=your.vps.host USER=ubuntu KEY="C:/Users/you/.ssh/id_rsa"
+
+# Со всеми параметрами
+make deploy-win HOST=your.vps.host USER=ubuntu KEY="C:/Users/you/.ssh/id_rsa" \
+  BRANCH=main JWT="base64-48bytes" ADMIN_USER=admin ADMIN_BCRYPT="$2y$12$..." \
+  COOKIE_DOMAIN=launcher.samoy.love COOKIE_SECURE=true DOWNLOADS_DIR="C:/data/downloads"
+```
+
+Подробности по параметрам см. `scripts/README.md` (раздел `deploy-win.ps1`).
+
 ### Раскладка артефактов (ручная)
 ```bash
 # Выполняйте на сервере (SSH), из домашней директории пользователя,
 # где уже клонирован репозиторий в ~/Launcher-Project
-
 cd ~/Launcher-Project
 
 # 1) Лендинг → /var/www/site (копирование/синхронизация, без перемещения)

@@ -33,6 +33,7 @@
 - [19. Домены и DNS](#19-домены-и-dns)
 - [20. CI/CD (GitHub Actions)](#20-cicd-github-actions)
   - [20.1. Требование паритета с scripts/deploy.sh](#201-требование-паритета-с-scriptsdeploysh)
+  - [20.2. Паритет и различия: GitHub Actions vs scripts/deploy.sh](#202-паритет-и-различия-github-actions-vs-scriptsdeploysh)
 - [21. Деплой на сервер (ручной)](#21-деплой-на-сервер-ручной)
 - [22. Локальная разработка и автотесты деплоя](#22-локальная-разработка-и-автотесты-деплоя)
 - [23. Безопасность секретов](#23-безопасность-секретов)
@@ -346,7 +347,7 @@ UI админки: `server/admin_ui/admin.html` + `admin.js` (Bootstrap 5, те�
     - Для выбранной игры подгружает список версий: `GET {ApiBase}/api/games/{gid}/builds` и новости: `GET {ApiBase}/news/games/{gid}/index.json`.
     - Кнопка «Обновить» всегда ставит latest (если известен), иначе первую доступную версию.
     - План обновления формируется через `SimpleSyncService.PlanAsync(manifest, localRoot, contentBaseUrl)` где `contentBaseUrl = {ApiBase}/content/{gid}/{version}/files`.
-    - Выполнение диффа: многопоточная загрузка (по умолчанию 8 потоков; ограничение 2–16), поддержка HTTP Range и возобновления `.part`, проверка хешей, перенос в целевой корень, удаление лишних файлов, очистка пустых директорий, создание пустых директорий из манифеста.
+    - Выполнение диффа: многопоточная загрузка (по умолчанию 8 потоков; ограничение 2–16), поддержка HTTP Range и возобновление `.part`, проверка хешей, перенос в целевой корень, удаление лишних файлов, очистка пустых директорий, создание пустых директорий из манифеста.
     - Проверка свободного места: только по итоговому объему диффа (`DriveInfo.AvailableFreeSpace >= TotalDownloadBytes`).
     - Создание ярлыка на рабочем столе после успешной установки (если указан `exeRelativePath`).
   - Запуск игры: по настройке `exeRelativePath` из реестра игр, путь строится как `{GamesPath}/{gameId}/{exeRelativePath}`.
@@ -495,9 +496,9 @@ Workflow `.github/workflows/deploy.yml` (при наличии):
 - Шаги: checkout → setup-go → сборка бэкендов для linux/amd64 → копирование артефактов (landing, admin_ui, nginx.conf, systemd) → SCP на сервер → SSH-скрипт раскладки. ВАЖНО: каталоги `manifests/content/news` НЕ синхронизируются в прод (управляются через Admin UI) — см. `.github/workflows/deploy.yml`.
 - Secrets: `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`.
 
-### 20.1. Требование паритета с `scripts/deploy.sh`
+### 20.1. Требование паритета с scripts/deploy.sh
 `deploy.yml` обязан обеспечивать ту же функциональность, что и `scripts/deploy.sh`:
-- Сборка Go-бинариев для linux/amd64 и раскладка в `/opt/chillhub`.
+- Сборка Go‑бинариев для linux/amd64 и раскладка в `/opt/chillhub`.
 - Синхронизация статик: `landing/` → `/var/www/site`, `server/admin_ui/` → `/var/www/launcher/admin_ui/`.
 - Установка `deploy/launcher.conf` и перезагрузка nginx с валидацией `nginx -t`.
 - Перезапуск `chillhub-api.service`, `chillhub-admin.service` и `daemon-reload`.
@@ -506,6 +507,37 @@ Workflow `.github/workflows/deploy.yml` (при наличии):
 - Послеукладочные смоук‑тесты (Admin UI, Admin API health, лендинг, статика), с диагностикой при сбоях (nginx/systemd/journalctl).
 
 Этот паритет реализован в `.github/workflows/deploy.yml` (см. шаг «Deploy on server (SSH)»).
+
+### 20.2. Паритет и различия: GitHub Actions vs scripts/deploy.sh
+
+Файл рабочего процесса: `.github/workflows/deploy.yml`.
+
+- Что совпадает с `scripts/deploy.sh` (паритет):
+  - Сборка Go‑бинариев (`api`, `admin`) под Linux/amd64 (`CGO_ENABLED=0`).
+  - Выкладка «только статики»:
+    - `landing/` → `/var/www/site/` (с `--delete`).
+    - `server/admin_ui/` → `/var/www/launcher/admin_ui/` (с `--delete`).
+  - Каталоги контента `/var/www/launcher/{manifests,content,news}` не трогаются. Управляются через Admin UI или вручную — это критично для сохранности данных.
+  - Установка nginx‑конфига `deploy/launcher.conf`, проверка `nginx -t`, `systemctl reload nginx`.
+  - Перезапуск `chillhub-api.service`, `chillhub-admin.service`.
+  - Смоук‑тесты (Admin UI, Admin API, лендинг, статика, soft‑checks `latest.json` и `assets/ping.txt`) с диагностикой при сбоях.
+
+- Различия:
+  - CI доставляет артефакты через SCP в один временный каталог на сервере (`$HOME/deploy`), затем выполняет SSH‑скрипт для раскладки.
+  - Обработка секретов:
+    - В `deploy.sh` используется `EnvironmentFile=/etc/chillhub/admin.env` (персистентно). В CI‑скрипте переменные подставляются прямо в drop‑in (`Environment=...`), то есть не создаётся/не переписывается `admin.env`.
+    - CI может принять секреты: `JWT_SECRET`, `ADMIN_USER`, `ADMIN_PASSWORD_BCRYPT` или `ADMIN_PASSWORD_PLAIN` (если задан только plain, workflow сам вычислит bcrypt через небольшой Go‑сниппет). Также поддерживаются `COOKIE_DOMAIN`, `COOKIE_SECURE`.
+  - В CI добавлен опциональный шаг синхронизации внешней директории установщиков (`DOWNLOADS_DIR`) в `/var/www/site/downloads/`, если переменная задана и каталог существует на сервере.
+
+- Известные мелочи/примечания:
+  - В конце сценария CI есть двойной вызов `daemon-reload`/`restart` сервисов (перед nginx и после) — не критично, но можно убрать дублирование без изменения функционала.
+
+Требования к секретам для CI:
+
+- Обязательные: `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`.
+- Опциональные: `JWT_SECRET`, `ADMIN_USER`, `ADMIN_PASSWORD_BCRYPT` или `ADMIN_PASSWORD_PLAIN`, `COOKIE_DOMAIN`, `COOKIE_SECURE`, `DOWNLOADS_DIR`.
+
+Поведение по умолчанию: контент (`manifests`, `content`, `news`) не синхронизируется ни в CI, ни в `deploy.sh`. Их наполнение осуществляется через Admin UI или вручную.
 
 ## 21. Деплой на сервер (ручной)
 См. также сводную таблицу шагов в `README.md` → раздел «[Карта шагов: автодеплой vs вручную](README.md#карта-шагов-автодеплой-vs-вручную)».

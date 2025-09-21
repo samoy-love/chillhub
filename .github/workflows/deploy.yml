@@ -145,9 +145,6 @@ jobs:
               rm -f "$TMPD" || true
             fi
 
-            sudo systemctl restart chillhub-api.service || true
-            sudo systemctl restart chillhub-admin.service || true
-
             # Nginx site config
             sudo install -m 0644 "$DEPLOY_DIR/deploy/launcher.conf" "$NGINX_SITE_AVAILABLE"
             sudo ln -sf "$NGINX_SITE_AVAILABLE" "$NGINX_SITE_ENABLED"

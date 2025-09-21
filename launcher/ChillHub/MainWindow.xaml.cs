@@ -5,6 +5,7 @@
 
 namespace ChillHub {
     using System;
+    using System.Globalization;
     using System.Linq;
     using System.Threading.Tasks;
     using System.Windows;
@@ -12,11 +13,8 @@ namespace ChillHub {
     using System.Windows.Media;
     using System.Windows.Media.Animation;
     using System.Windows.Threading;
-    using System.Globalization;
 
     public partial class MainWindow : Window {
-        
-
         // Karaoke C4: two-line typewriter + crossfade
         private readonly DispatcherTimer karaokeTimer = new DispatcherTimer();
         private string[] karaokeLines = Array.Empty<string>();
@@ -28,12 +26,16 @@ namespace ChillHub {
         // --- Настройки караоке (собраны вместе) ---
         // Интервал таймера набора символов (мс): чем меньше, тем быстрее печатает
         private int karaokeCharIntervalMs = 55;
+
         // Пауза после завершения строки перед началом перехода (мс)
         private int karaokePauseAfterLineMs = 300;
+
         // Длительность плавного исчезновения текущей строки (мс) — меньше = быстрее переход
         private int karaokeFadeOutMs = 50;
+
         // Длительность плавного появления следующей строки (мс) — меньше = быстрее переход
         private int karaokeFadeInMs = 70;
+
         // Короткая задержка после анимации перед фактической сменой строки (мс) — 0, чтобы убрать "затуп"
         private int karaokeAfterTransitionDelayMs = 0;
 
@@ -52,8 +54,6 @@ namespace ChillHub {
             this.Activated += (s, e) => this.ResumeKaraoke();
             this.Deactivated += (s, e) => this.PauseKaraoke();
         }
-
-        
 
         private void CatalogBtn_Click(object sender, RoutedEventArgs e) {
             this.ContentFrame.Navigate(new Pages.HomePage());
@@ -83,7 +83,8 @@ namespace ChillHub {
                 this.ResetKaraokeToStart();
                 this.StartKaraoke();
             }
-            catch { }
+            catch {
+            }
         }
 
         private void MainWindow_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e) {
@@ -207,13 +208,15 @@ namespace ChillHub {
                 .Select(l => (l ?? string.Empty).TrimEnd())
                 .ToArray();
             if (this.karaokeLines.Length == 0) {
-                this.karaokeLines = new[] { "" };
+                this.karaokeLines = new[] { string.Empty };
             }
         }
 
         private void UpdateKaraokeHostWidth() {
             try {
-                if (this.KaraokeHost == null || this.karaokeLines == null || this.karaokeLines.Length == 0) return;
+                if (this.KaraokeHost == null || this.karaokeLines == null || this.karaokeLines.Length == 0) {
+                    return;
+                }
 
                 // Use the same font as current line for measuring (bolder and larger)
                 var fontFamily = this.KaraokeCurrentText?.FontFamily ?? new FontFamily("Segoe UI");
@@ -225,7 +228,9 @@ namespace ChillHub {
                 double pixelsPerDip = 1.0;
                 try {
                     pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
-                } catch { }
+                }
+                catch {
+                }
 
                 double max = 0.0;
                 var typeface = new Typeface(fontFamily, fontStyle, fontWeight, fontStretch);
@@ -238,8 +243,7 @@ namespace ChillHub {
                         typeface,
                         fontSize,
                         Brushes.Transparent,
-                        pixelsPerDip
-                    );
+                        pixelsPerDip);
                     if (ft.WidthIncludingTrailingWhitespace > max) {
                         max = ft.WidthIncludingTrailingWhitespace;
                     }
@@ -247,13 +251,20 @@ namespace ChillHub {
 
                 // Add internal padding (actual Border.Padding left+right) and a small safety margin
                 double pad = 0.0;
-                try { pad = this.KaraokeHost.Padding.Left + this.KaraokeHost.Padding.Right; } catch { pad = 16.0; }
+                try {
+                    pad = this.KaraokeHost.Padding.Left + this.KaraokeHost.Padding.Right;
+                }
+                catch {
+                    pad = 16.0;
+                }
                 double width = Math.Ceiling(max) + pad + 12; // padding + safety
+
                 // Set a minimum and maximum to avoid extremes
                 width = Math.Max(260, Math.Min(width, 800));
                 this.KaraokeHost.Width = width;
             }
-            catch { }
+            catch {
+            }
         }
 
         private void ResetKaraokeToStart() {
@@ -263,12 +274,18 @@ namespace ChillHub {
         }
 
         private string GetCurrentKaraokeLine() {
-            if (this.karaokeLines.Length == 0) return string.Empty;
+            if (this.karaokeLines.Length == 0) {
+                return string.Empty;
+            }
+
             return this.karaokeLines[Math.Clamp(this.karaokeLineIndex, 0, this.karaokeLines.Length - 1)] ?? string.Empty;
         }
 
         private string GetNextKaraokeLine() {
-            if (this.karaokeLines.Length == 0) return string.Empty;
+            if (this.karaokeLines.Length == 0) {
+                return string.Empty;
+            }
+
             var idx = (this.karaokeLineIndex + 1) % this.karaokeLines.Length;
             return this.karaokeLines[idx] ?? string.Empty;
         }
@@ -278,7 +295,8 @@ namespace ChillHub {
                 this.KaraokeCurrentText.Text = current;
                 this.KaraokeNextText.Text = next;
             }
-            catch { }
+            catch {
+            }
         }
 
         private void StartKaraoke() {
@@ -289,13 +307,19 @@ namespace ChillHub {
                 this.KaraokeNextText.BeginAnimation(UIElement.OpacityProperty, null);
                 this.KaraokeCurrentText.Opacity = 1.0;
                 this.KaraokeNextText.Opacity = 0.8;
-            } catch { }
-            if (!this.karaokeTimer.IsEnabled) this.karaokeTimer.Start();
+            }
+            catch {
+            }
+            if (!this.karaokeTimer.IsEnabled) {
+                this.karaokeTimer.Start();
+            }
         }
 
         private void PauseKaraoke() {
             this.karaokePaused = true;
-            if (this.karaokeTimer.IsEnabled) this.karaokeTimer.Stop();
+            if (this.karaokeTimer.IsEnabled) {
+                this.karaokeTimer.Stop();
+            }
         }
 
         private void ResumeKaraoke() {
@@ -306,20 +330,31 @@ namespace ChillHub {
                 this.KaraokeNextText.BeginAnimation(UIElement.OpacityProperty, null);
                 this.KaraokeCurrentText.Opacity = 1.0;
                 this.KaraokeNextText.Opacity = 0.8;
-            } catch { }
-            if (!this.karaokeTimer.IsEnabled) this.karaokeTimer.Start();
+            }
+            catch {
+            }
+            if (!this.karaokeTimer.IsEnabled) {
+                this.karaokeTimer.Start();
+            }
         }
 
         private void KaraokeTimer_Tick(object? sender, EventArgs e) {
-            if (this.karaokePaused || this.karaokeTransitionRunning) return;
+            if (this.karaokePaused || this.karaokeTransitionRunning) {
+                return;
+            }
+
             var line = this.GetCurrentKaraokeLine();
 
             if (this.karaokeCharIndex < line.Length) {
                 // While typing, ensure current line is visible
                 try {
                     this.KaraokeCurrentText.BeginAnimation(UIElement.OpacityProperty, null);
-                    if (this.KaraokeCurrentText.Opacity < 1.0) this.KaraokeCurrentText.Opacity = 1.0;
-                } catch { }
+                    if (this.KaraokeCurrentText.Opacity < 1.0) {
+                        this.KaraokeCurrentText.Opacity = 1.0;
+                    }
+                }
+                catch {
+                }
                 this.karaokeCharIndex++;
                 var current = line.Substring(0, this.karaokeCharIndex);
                 this.SetKaraokeTexts(current, this.GetNextKaraokeLine());
@@ -331,7 +366,10 @@ namespace ChillHub {
         }
 
         private async Task TransitionToNextLineAsync() {
-            if (this.karaokeTransitionRunning) return;
+            if (this.karaokeTransitionRunning) {
+                return;
+            }
+
             this.karaokeTransitionRunning = true;
             try {
                 // Пауза на строке перед переходом
@@ -344,7 +382,8 @@ namespace ChillHub {
                     var fadeIn = new DoubleAnimation { From = 0.0, To = 1.0, Duration = TimeSpan.FromMilliseconds(this.karaokeFadeInMs) };
                     this.KaraokeNextText.BeginAnimation(UIElement.OpacityProperty, fadeIn);
                 }
-                catch { }
+                catch {
+                }
 
                 await Task.Delay(this.karaokeAfterTransitionDelayMs);
 
@@ -360,7 +399,8 @@ namespace ChillHub {
                 this.KaraokeNextText.Opacity = 0.8; // вернуть стандартную
                 this.SetKaraokeTexts(string.Empty, this.GetNextKaraokeLine());
             }
-            catch { }
+            catch {
+            }
             finally {
                 this.karaokeTransitionRunning = false;
             }

@@ -40,12 +40,10 @@ namespace ChillHub {
             // In DEBUG builds, pre-check the DEV skip checkbox by default
             // so developers can easily bypass self-update if they choose.
 #if DEBUG
-            try
-            {
+            try {
                 this.DevSkipCheck.IsChecked = true;
             }
-            catch
-            {
+            catch {
             }
 #endif
 
@@ -114,20 +112,16 @@ namespace ChillHub {
                         this.SetUpdateAvailableStatus(local, remote);
                         this.PrimaryBtn.Content = "Обновить и перезапустить";
 #if DEBUG
-                        try
-                        {
-                            if (this.DevPanel.Visibility == Visibility.Visible)
-                            {
+                        try {
+                            if (this.DevPanel.Visibility == Visibility.Visible) {
                                 this.DevSkipCheck.Checked += (s, _) => { this.PrimaryBtn.Content = "Продолжить без обновления (DEV)"; };
                                 this.DevSkipCheck.Unchecked += (s, _) => { this.PrimaryBtn.Content = "Обновить и перезапустить"; };
-                                if (this.DevSkipCheck.IsChecked == true)
-                                {
+                                if (this.DevSkipCheck.IsChecked == true) {
                                     this.PrimaryBtn.Content = "Продолжить без обновления (DEV)";
                                 }
                             }
                         }
-                        catch
-                        {
+                        catch {
                         }
 #endif
                     }
@@ -199,20 +193,16 @@ namespace ChillHub {
                     this.SetUpdateAvailableStatus(local, remote);
                     this.PrimaryBtn.Content = "Обновить и перезапустить";
 #if DEBUG
-                    try
-                    {
-                        if (this.DevPanel.Visibility == Visibility.Visible)
-                        {
+                    try {
+                        if (this.DevPanel.Visibility == Visibility.Visible) {
                             this.DevSkipCheck.Checked += (s, _) => { this.PrimaryBtn.Content = "Продолжить без обновления (DEV)"; };
                             this.DevSkipCheck.Unchecked += (s, _) => { this.PrimaryBtn.Content = "Обновить и перезапустить"; };
-                            if (this.DevSkipCheck.IsChecked == true)
-                            {
+                            if (this.DevSkipCheck.IsChecked == true) {
                                 this.PrimaryBtn.Content = "Продолжить без обновления (DEV)";
                             }
                         }
                     }
-                    catch
-                    {
+                    catch {
                     }
 #endif
                 }

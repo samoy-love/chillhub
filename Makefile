@@ -39,45 +39,63 @@ smoke:
 
 # Aggregate lint that runs all available checks (like CI)
 lint: lint-web lint-go lint-dotnet
-	@echo "\n✅ All lint stages finished (see logs above for any issues)."
+	@echo.
+	@echo ✅ All lint stages finished (see logs above for any issues).
 
 # Web: HTMLHint, Stylelint, ESLint (landing + admin_ui)
 lint-web:
-	@echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@echo "🌐 Web lint (HTMLHint, Stylelint, ESLint)"
-	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@echo "[lint:web] HTMLHint (landing + server/admin_ui)"
-	- npx -y htmlhint "landing/**/*.html" "server/admin_ui/**/*.html"
-	@echo "[lint:web] Stylelint (landing + server/admin_ui)"
-	- npx -y stylelint "landing/**/*.css" "server/admin_ui/**/*.css"
-	@echo "[lint:web] ESLint (landing + server/admin_ui)"
-	- npx -y eslint "landing/**/*.js" "server/admin_ui/**/*.js"
+	@echo.
+	@echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	@echo 🌐 Web lint (HTMLHint, Stylelint, ESLint)
+	@echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	@echo [lint:web] HTMLHint (landing + server/admin_ui)
+	@- npx -y htmlhint "landing/**/*.html" "server/admin_ui/**/*.html"
+	@echo [lint:web] Stylelint (landing + server/admin_ui)
+	@- npx -y stylelint "landing/**/*.css" "server/admin_ui/**/*.css"
+	@echo [lint:web] ESLint (landing + server/admin_ui)
+	@- npx -y eslint "landing/**/*.js" "server/admin_ui/**/*.js"
 
 # Go: Prefer golangci-lint like CI; fallback to vet/fmt if unavailable
 lint-go:
-	@echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@echo "💼 Go lint (server)"
-	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@if command -v golangci-lint >/dev/null 2>&1; then \
-		echo "[lint:go] golangci-lint (server)"; \
-		( cd server && golangci-lint run ); \
-	else \
-		echo "[lint:go] golangci-lint not found — falling back to 'go vet' and 'gofmt -l'"; \
-		go -C server vet ./... || true; \
-		echo "[lint:go] Files needing gofmt (if any):"; \
-		go -C server fmt -l ./... || true; \
-	fi
+	@echo.
+	@echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	@echo 💼 Go lint (server)
+	@echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	@echo [lint:go] golangci-lint (if installed)
+	@- cmd /C "where golangci-lint >NUL 2>&1 && ( cd server && golangci-lint run ) || echo [lint:go] golangci-lint not found - skipping"
+	@echo [lint:go] Running go vet
+	@- ( cd server && go vet ./... )
+	@echo [lint:go] Files needing gofmt (if any)
+	@- ( cd server && gofmt -l . )
 
 # .NET: Build and code style check (non-blocking style check like CI)
 lint-dotnet:
-	@echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@echo "🧩 .NET lint (launcher)"
-	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@if command -v dotnet >/dev/null 2>&1; then \
-		echo "[lint:dotnet] Restore & Build"; \
-		( cd launcher/ChillHub && dotnet restore && dotnet build --no-restore -c Debug ); \
-		echo "[lint:dotnet] Code style check (dotnet format) — non-blocking"; \
-		( cd launcher/ChillHub && dotnet format --verbosity minimal ) || true; \
-	else \
-		echo "[lint:dotnet] Skipped (.NET SDK not found)"; \
-	fi
+	@echo.
+	@echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	@echo 🧩 .NET lint (launcher)
+	@echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	@echo [lint:dotnet] Restore ^& Build (if dotnet is installed)
+	@- ( cd launcher/ChillHub && dotnet restore && dotnet build --no-restore -c Debug /p:UseAppHost=false )
+	@echo [lint:dotnet] Code style check (dotnet format) — non-blocking
+	@- ( cd launcher/ChillHub && dotnet format --verbosity minimal )
+
+# ============
+# Windows remote deploy helper
+# ============
+.PHONY: deploy-win
+# Usage:
+# make deploy-win HOST=your.vps.host USER=ubuntu KEY="C:/Users/you/.ssh/id_rsa" [BRANCH=main] [JWT=...] [ADMIN_USER=admin] [ADMIN_BCRYPT=...] [ADMIN_PLAIN=...] [COOKIE_DOMAIN=launcher.samoy.love] [COOKIE_SECURE=true] [DOWNLOADS_DIR=C:/path/downloads]
+deploy-win:
+	@echo Deploying to $(HOST) as $(USER) using PowerShell script
+	powershell -NoProfile -ExecutionPolicy Bypass -File "scripts/deploy-win.ps1" \
+	 -Host "$(HOST)" \
+	 -User "$(USER)" \
+	 -KeyPath "$(KEY)" \
+	 -Branch "$(BRANCH)" \
+	 -JwtSecret "$(JWT)" \
+	 -AdminUser "$(ADMIN_USER)" \
+	 -AdminPasswordBcrypt "$(ADMIN_BCRYPT)" \
+	 -AdminPasswordPlain "$(ADMIN_PLAIN)" \
+	 -CookieDomain "$(COOKIE_DOMAIN)" \
+	 -CookieSecure "$(COOKIE_SECURE)" \
+	 -DownloadsDir "$(DOWNLOADS_DIR)"
