@@ -7,7 +7,7 @@
 # - Test and reload nginx
 #
 # Usage:
-#   sudo bash ./scripts/deploy.sh [--branch <name>] [--no-build]
+#   bash ./scripts/deploy.sh [--branch <name>] [--no-build]
 #
 # Requirements: git, rsync, go, systemd, nginx
 set -euo pipefail
@@ -23,7 +23,12 @@ if [[ "${1:-}" == "--no-build" ]]; then
   shift 1
 fi
 
-REPO_DIR="$HOME/Launcher-Project"
+# If script is started via sudo, $HOME becomes /root. Prefer original user's home when available.
+if [[ -n "${SUDO_USER:-}" && -d "/home/${SUDO_USER}" ]]; then
+  REPO_DIR="/home/${SUDO_USER}/Launcher-Project"
+else
+  REPO_DIR="$HOME/Launcher-Project"
+fi
 SITE_ROOT="/var/www/site"
 LAUNCHER_ROOT="/var/www/launcher"
 API_BIN="/opt/chillhub/api"
@@ -57,9 +62,12 @@ log "Sync landing to $SITE_ROOT"
 run "sudo rsync -a --delete \"$REPO_DIR/landing/\" \"$SITE_ROOT/\""
 
 log "Sync content and Admin UI to $LAUNCHER_ROOT"
-run "sudo rsync -a --delete \"$REPO_DIR/content/manifests/\" \"$LAUNCHER_ROOT/manifests/\""
-run "sudo rsync -a --delete \"$REPO_DIR/content/content/\"   \"$LAUNCHER_ROOT/content/\""
-run "sudo rsync -a --delete \"$REPO_DIR/content/news/\"      \"$LAUNCHER_ROOT/news/\""
+# IMPORTANT: Preserve server-generated artifacts (uploaded content, news assets, latest.json)
+# Do NOT use --delete for these folders
+run "sudo rsync -a \"$REPO_DIR/content/manifests/\" \"$LAUNCHER_ROOT/manifests/\""
+run "sudo rsync -a \"$REPO_DIR/content/content/\"   \"$LAUNCHER_ROOT/content/\""
+run "sudo rsync -a \"$REPO_DIR/content/news/\"      \"$LAUNCHER_ROOT/news/\""
+# Admin UI can be fully replaced
 run "sudo rsync -a --delete \"$REPO_DIR/server/admin_ui/\"   \"$LAUNCHER_ROOT/admin_ui/\""
 
 log "Install nginx site config and reload"
@@ -78,6 +86,10 @@ log "Smoke checks"
 run "curl -I https://launcher.samoy.love/admin/ || true"
 run "curl -I https://launcher.samoy.love/admin/ui/admin.js || true"
 run "curl -I https://launcher.samoy.love/admin/api/health || true"
-run "curl -fsSL https://launcher.samoy.love/manifests/launcher/latest.json || true"
+run "curl -I https://launcher.samoy.love/admin/api/games || true"
+if ! curl -fsSL https://launcher.samoy.love/manifests/launcher/latest.json >/dev/null; then
+  echo "[deploy][warn] latest.json is 404. If this is a fresh server or you previously deleted manifests, create it via Admin UI (upload launcher build) or place it manually under $LAUNCHER_ROOT/manifests/launcher/latest.json."
+fi
+run "curl -fsSL https://launcher.samoy.love/assets/ping.txt || true"
 
 log "Done"
