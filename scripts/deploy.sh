@@ -14,7 +14,6 @@ set -euo pipefail
 
 BRANCH="main"
 NO_BUILD=0
-SYNC_MANIFESTS=0
 EXPLICIT_REPO_DIR=""
 
 # Parse args
@@ -24,8 +23,6 @@ while [[ $# -gt 0 ]]; do
       BRANCH="${2:-main}"; shift 2;;
     --no-build)
       NO_BUILD=1; shift 1;;
-    --sync-manifests)
-      SYNC_MANIFESTS=1; shift 1;;
     --repo-dir)
       EXPLICIT_REPO_DIR="${2:-}"; shift 2;;
     *)
@@ -61,17 +58,6 @@ run(){ echo "> $*"; eval "$*"; }
 log "Ensuring target directories exist"
 sudo mkdir -p "$SITE_ROOT" "$LAUNCHER_ROOT" "$LAUNCHER_ROOT/content" "$LAUNCHER_ROOT/manifests" "$LAUNCHER_ROOT/news" "$LAUNCHER_ROOT/admin_ui" /opt/chillhub
 
-# Safety: backup manifests before touching anything
-TS=$(date +%Y%m%d-%H%M%S)
-if [[ -d "$LAUNCHER_ROOT/manifests" ]]; then
-  # Create lightweight tar.gz backup if directory not empty
-  if [[ -n $(find "$LAUNCHER_ROOT/manifests" -mindepth 1 -print -quit 2>/dev/null) ]]; then
-    BACKUP_DIR="/var/backups"; sudo mkdir -p "$BACKUP_DIR"
-    BK_FILE="$BACKUP_DIR/chillhub-manifests-$TS.tar.gz"
-    echo "[deploy] Backing up manifests to $BK_FILE"
-    sudo tar -C "$LAUNCHER_ROOT" -czf "$BK_FILE" manifests || true
-  fi
-fi
 
 log "Updating repository: $REPO_DIR (branch: $BRANCH)"
 if [[ ! -d "$REPO_DIR/.git" ]]; then
@@ -93,20 +79,8 @@ fi
 log "Sync landing to $SITE_ROOT"
 run "sudo rsync -a --delete \"$REPO_DIR/landing/\" \"$SITE_ROOT/\""
 
-log "Sync content and Admin UI to $LAUNCHER_ROOT"
-# IMPORTANT: Preserve server-generated artifacts (uploaded content, news assets, latest.json)
-# Non-destructive sync:
-#  - manifests: SKIPPED by default (use --sync-manifests to seed only)
-#  - content:   seed-only (never overwrite existing server files)
-#  - news:      seed-only (никогда не затираем существующие)
-if [[ $SYNC_MANIFESTS -eq 1 ]]; then
-  echo "[deploy] Seeding manifests from repo (non-destructive)"
-  run "sudo rsync -a --ignore-existing \"$REPO_DIR/content/manifests/\" \"$LAUNCHER_ROOT/manifests/\""
-else
-  echo "[deploy] Skipping manifests sync (use --sync-manifests to seed)"
-fi
-run "sudo rsync -a --ignore-existing \"$REPO_DIR/content/content/\"   \"$LAUNCHER_ROOT/content/\""
-run "sudo rsync -a --ignore-existing \"$REPO_DIR/content/news/\"      \"$LAUNCHER_ROOT/news/\""
+log "Sync static only (landing, admin_ui). Do not touch server content dirs."
+# DO NOT SYNC manifests/, content/ and news/ at all per policy — content is managed by backend/Admin UI
 # Admin UI can be fully replaced
 run "sudo rsync -a --delete \"$REPO_DIR/server/admin_ui/\"   \"$LAUNCHER_ROOT/admin_ui/\""
 
@@ -122,27 +96,77 @@ for s in "${SERVICES[@]}"; do
   run "sudo systemctl status \"$s\" --no-pager -n 3 || true"
 done
 
-# Optionally seed latest.json if it is missing but version manifests exist
-MANI_DIR="$LAUNCHER_ROOT/manifests/launcher"
-if [[ -d "$MANI_DIR" && ! -f "$MANI_DIR/latest.json" ]]; then
-  # collect version files except latest.json, strip .json
-  mapfile -t _vers < <(find "$MANI_DIR" -maxdepth 1 -type f -name '*.json' ! -name 'latest.json' -printf '%f\n' 2>/dev/null | sed 's/\.json$//' | sort -V)
-  if [[ ${#_vers[@]} -gt 0 ]]; then
-    BEST_VER="${_vers[-1]}"
-    echo "[deploy] Seeding latest.json -> $BEST_VER"
-    echo "{ \"version\": \"$BEST_VER\" }" | sudo tee "$MANI_DIR/latest.json" >/dev/null || true
-  fi
+# Create news/assets/ping.txt for diagnostics if missing (does not overwrite user files)
+PING_PATH="/var/www/launcher/news/assets/ping.txt"
+if [[ ! -f "$PING_PATH" ]]; then
+  echo "ok" | sudo tee "$PING_PATH" >/dev/null || true
 fi
 
-log "Smoke checks"
-run "curl -I https://launcher.samoy.love/admin/ || true"
-run "curl -I https://launcher.samoy.love/admin/ui/admin.js || true"
-run "curl -I https://launcher.samoy.love/admin/api/health || true"
-run "curl -I https://launcher.samoy.love/admin/api/games || true"
-if ! curl -fsSL https://launcher.samoy.love/manifests/launcher/latest.json >/dev/null; then
-  echo "[deploy][warn] latest.json is 404. If this is a fresh server or you previously deleted manifests, create it via Admin UI (upload launcher build) or place it manually under $LAUNCHER_ROOT/manifests/launcher/latest.json."
+log "Autotests"
+
+FAIL=0
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; NC='\033[0m'
+
+http_code(){ curl -ks -o /dev/null -w "%{http_code}" "$1"; }
+must_200(){ local url="$1"; local name="$2"; local code; code=$(http_code "$url");
+  if [[ "$code" == "200" ]]; then
+    echo -e "[test] ${GREEN}PASS${NC} $name ($url)"
+  else
+    echo -e "[test] ${RED}FAIL${NC} $name ($url) -> $code"; FAIL=1
+  fi
+}
+soft_200_if_exists(){ local path="$1"; local url="$2"; local name="$3";
+  if [[ -f "$path" ]]; then
+    must_200 "$url" "$name"
+  else
+    echo -e "[test] ${YELLOW}SKIP${NC} $name: $path not found"
+  fi
+}
+
+# 1) Admin UI
+must_200 "https://launcher.samoy.love/admin/" "Admin UI /admin/"
+must_200 "https://launcher.samoy.love/admin/ui/admin.js" "Admin UI static /admin/ui/admin.js"
+
+# 2) Admin API
+must_200 "https://launcher.samoy.love/admin/api/health" "Admin API /admin/api/health"
+must_200 "https://launcher.samoy.love/admin/api/games" "Admin API /admin/api/games"
+
+# 3) Landing site
+must_200 "https://launcher.samoy.love/" "Landing /"
+must_200 "https://launcher.samoy.love/styles.css" "Landing static /styles.css"
+
+# 4) Manifests
+MANI_DIR="$LAUNCHER_ROOT/manifests/launcher"
+if [[ -f "$MANI_DIR/latest.json" ]]; then
+  must_200 "https://launcher.samoy.love/manifests/launcher/latest.json" "Manifest latest.json"
+else
+  echo -e "[test] ${YELLOW}SKIP${NC} Manifest latest.json: not present on disk"
 fi
-run "curl -fsSL https://launcher.samoy.love/assets/ping.txt || true"
+
+# 5) News assets
+soft_200_if_exists "/var/www/launcher/news/assets/ping.txt" "https://launcher.samoy.love/assets/ping.txt" "News asset ping.txt"
+
+if [[ $FAIL -ne 0 ]]; then
+  echo -e "[deploy] ${RED}One or more tests FAILED. Collecting diagnostics...${NC}"
+  echo "---- NGINX TEST ----"; sudo nginx -t || true
+  echo "---- NGINX ERROR LOG (last 150 lines) ----"; sudo tail -n 150 /var/log/nginx/error.log || true
+  echo "---- NGINX SERVER BLOCK (launcher.samoy.love) ----"; sudo nginx -T 2>/dev/null | sed -n '/server_name launcher.samoy.love/,/}/p' || true
+  echo "---- SYSTEMD STATUS (api) ----"; sudo systemctl status chillhub-api.service --no-pager -n 50 || true
+  echo "---- SYSTEMD STATUS (admin) ----"; sudo systemctl status chillhub-admin.service --no-pager -n 50 || true
+  echo "---- JOURNALCTL (api last 150) ----"; sudo journalctl -u chillhub-api.service -e -n 150 || true
+  echo "---- JOURNALCTL (admin last 150) ----"; sudo journalctl -u chillhub-admin.service -e -n 150 || true
+  echo "---- FS LISTINGS ----"
+  echo "[ls] /var/www/site"; sudo ls -la /var/www/site || true
+  echo "[ls] /var/www/launcher/admin_ui"; sudo ls -la /var/www/launcher/admin_ui || true
+  echo "[ls] /var/www/launcher/news (top)"; sudo ls -la /var/www/launcher/news || true
+  echo "[find] /var/www/launcher/news/assets (up to depth 2)"; sudo find /var/www/launcher/news/assets -maxdepth 2 -type f -printf '%p\n' 2>/dev/null | head -n 200 || true
+  echo "[ls] $MANI_DIR (manifests)"; sudo ls -la "$MANI_DIR" || true
+  echo "[cat] latest.json"; [[ -f "$MANI_DIR/latest.json" ]] && sudo cat "$MANI_DIR/latest.json" || echo "(no latest.json)"
+  echo -e "[deploy] ${RED}Diagnostics complete. Please review the logs above.${NC}"
+  exit 1
+else
+  echo -e "[deploy] ${GREEN}All tests PASSED.${NC}"
+fi
 
 log "Done"
     
