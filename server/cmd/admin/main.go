@@ -1736,19 +1736,23 @@ func main() {
 	http.HandleFunc("/admin/health", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
-	http.HandleFunc("/admin/api/health", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "ok")
+	// Admin UI entry points
+	http.HandleFunc("/admin/", handleAdminUI)
+	http.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
+		// Normalize to trailing slash for relative asset links
+		http.Redirect(w, r, "/admin/", http.StatusFound)
 	})
 	http.HandleFunc("/admin/api/auth/login", handleAuthLogin)
 	http.HandleFunc("/admin/api/auth/logout", handleAuthLogout)
 	http.HandleFunc("/admin/api/auth/refresh", handleAuthRefresh)
 	http.HandleFunc("/admin/api/auth/me", handleAuthMe)
 	http.HandleFunc("/admin/api/auth/verify", handleAuthVerify)
-	http.HandleFunc("/admin", handleAdminUI)
-	// Legacy compose endpoints removed
-	// http.HandleFunc("/admin/compose", handleCompose)
-	// http.HandleFunc("/admin/composeStream", handleComposeStream)
-	// http.HandleFunc("/admin/nextVersion", handleNextVersion)
+	http.HandleFunc("/admin/api", handleAdminUI)
+	http.HandleFunc("/admin/api/list", handleListVersions)
+	http.HandleFunc("/admin/api/activate", handleActivate)
+	http.HandleFunc("/admin/api/deleteVersion", handleDeleteVersion)
+	http.HandleFunc("/admin/api/upload", handleUpload)
+	http.HandleFunc("/admin/api/uploadStream", handleUploadStream)
 	http.HandleFunc("/admin/list", handleListVersions)
 	http.HandleFunc("/admin/activate", handleActivate)
 	http.HandleFunc("/admin/deleteVersion", handleDeleteVersion)
@@ -1768,12 +1772,13 @@ func main() {
 
     // === Mirror routes under /admin/api/* for nginx proxy ===
     http.HandleFunc("/admin/api/health", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
-    http.HandleFunc("/admin/api", handleAdminUI)
-    http.HandleFunc("/admin/api/list", handleListVersions)
-    http.HandleFunc("/admin/api/activate", handleActivate)
-    http.HandleFunc("/admin/api/deleteVersion", handleDeleteVersion)
-    http.HandleFunc("/admin/api/upload", handleUpload)
-    http.HandleFunc("/admin/api/uploadStream", handleUploadStream)
+    // Core endpoints already registered above; avoid duplicate registrations that panic on net/http ServeMux
+    // http.HandleFunc("/admin/api", handleAdminUI)
+    // http.HandleFunc("/admin/api/list", handleListVersions)
+    // http.HandleFunc("/admin/api/activate", handleActivate)
+    // http.HandleFunc("/admin/api/deleteVersion", handleDeleteVersion)
+    // http.HandleFunc("/admin/api/upload", handleUpload)
+    // http.HandleFunc("/admin/api/uploadStream", handleUploadStream)
     // News management
     http.HandleFunc("/admin/api/news/list", handleNewsList)
     http.HandleFunc("/admin/api/news/get", handleNewsGet)
@@ -1847,7 +1852,14 @@ func main() {
 func handleAdminUI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	http.ServeFile(w, r, filepath.Join(detectAdminUIDir(), "admin.html"))
+	// If not authenticated, serve login page; otherwise serve admin dashboard
+	_, user := currentUser(r)
+	uiDir := detectAdminUIDir()
+	if user == "" {
+		http.ServeFile(w, r, filepath.Join(uiDir, "login.html"))
+		return
+	}
+	http.ServeFile(w, r, filepath.Join(uiDir, "admin.html"))
 }
 
 func detectAdminUIDir() string {

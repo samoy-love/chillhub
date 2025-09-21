@@ -34,7 +34,9 @@ namespace ChillHub.Pages {
         private void LoadConfigToUi() {
             var cfg = ConfigService.Current ?? new AppConfig();
             if (this.GamesPathBox != null) {
-                this.GamesPathBox.Text = cfg.GamesPath;
+                // Отображаем путь с одинарными обратными слешами для читаемости
+                var p = cfg.GamesPath ?? string.Empty;
+                this.GamesPathBox.Text = p.Replace("\\\\", "\\");
             }
 
             if (this.ThreadsSlider != null) {
@@ -68,7 +70,9 @@ namespace ChillHub.Pages {
                         : this.GamesPathBox.Text;
                     var res = dlg.ShowDialog();
                     if (res == System.Windows.Forms.DialogResult.OK) {
-                        this.GamesPathBox.Text = dlg.SelectedPath;
+                        // Нормализуем отображение: одинарные обратные слеши
+                        var sp = dlg.SelectedPath ?? string.Empty;
+                        this.GamesPathBox.Text = sp.Replace("\\\\", "\\");
                     }
                 }
             }
@@ -91,6 +95,8 @@ namespace ChillHub.Pages {
                 }
 
                 try {
+                    // Для файловой системы и конфигурации используем нормальную форму с одинарными слешами
+                    newPath = newPath.Replace("\\\\", "\\");
                     Directory.CreateDirectory(newPath);
                 }
                 catch {

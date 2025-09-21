@@ -1,3 +1,9 @@
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-to-vps
+  cancel-in-progress: true
 name: Deploy to VPS
 
 on:
@@ -25,6 +31,7 @@ jobs:
           set -eux
           mkdir -p build/bin
           cd server
+          go mod tidy
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ../build/bin/api ./cmd/api
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ../build/bin/admin ./cmd/admin
           cd ..

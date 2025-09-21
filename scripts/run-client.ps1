@@ -2,8 +2,14 @@ param(
   [string]$GamesPath
 )
 
+# Ensure Unicode I/O
+try {
+  [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($true)
+  [Console]::InputEncoding  = [System.Text.UTF8Encoding]::new($true)
+} catch {}
+
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot = Split-Path -Parent $scriptDir
+$repoRoot  = Split-Path -Parent $scriptDir
 
 if (-not $GamesPath -or $GamesPath -eq '') {
   $defaultD = "D:\\Games\\ChillHub"
@@ -14,11 +20,11 @@ if (-not $GamesPath -or $GamesPath -eq '') {
 Write-Host "GamesPath = $GamesPath" -ForegroundColor Cyan
 
 Push-Location (Join-Path $repoRoot 'launcher\ChillHub')
-# Persist games path into settings if app supports it; otherwise pass via env
-$env:ChillHub_GAMES_PATH = $GamesPath
-
-Write-Host "Starting WPF client..." -ForegroundColor Green
-# Build & run
-# dotnet build
- dotnet run --project .\ChillHub.csproj
-Pop-Location
+try {
+  # Pass GamesPath via environment for app to consume
+  $env:ChillHub_GAMES_PATH = $GamesPath
+  Write-Host "Starting WPF client..." -ForegroundColor Green
+  dotnet run --project .\ChillHub.csproj
+} finally {
+  Pop-Location
+}

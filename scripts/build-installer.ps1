@@ -5,11 +5,28 @@ param(
     [string]$Installer = "scripts/installer.nsi",
     [string]$MakensisPath,
     [string]$Runtime = "win-x64",
-    [switch]$SelfContained = $true,
+    [switch]$SelfContained,
     [switch]$NoCompress
 )
 
 $ErrorActionPreference = "Stop"
+
+# Ensure Unicode I/O
+try {
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($true)
+    [Console]::InputEncoding  = [System.Text.UTF8Encoding]::new($true)
+} catch {}
+
+# Preflight: dotnet SDK and csproj path
+try {
+    $dc = Get-Command dotnet -ErrorAction Stop
+    $dv = (& dotnet --version)
+    if ($dv) { Write-Host "dotnet: $dv ($($dc.Path))" -ForegroundColor DarkCyan }
+} catch { throw "dotnet SDK not found. Please install .NET 8 SDK and ensure 'dotnet' is in PATH." }
+
+if (-not (Test-Path -LiteralPath $Csproj)) {
+    throw "CSProj not found at '$Csproj'. Adjust -Csproj argument."
+}
 
 function Find-Makensis {
     param([string]$ExplicitPath)

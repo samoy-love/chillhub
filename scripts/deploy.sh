@@ -27,6 +27,10 @@ COOKIE_SECURE="true"
 # External installers directory (defaults to sibling of REPO_DIR)
 DOWNLOADS_DIR=""
 
+# Preflight: ensure required commands exist
+need_cmd(){ command -v "$1" >/dev/null 2>&1 || { echo "[deploy][error] Missing required command: $1" >&2; exit 1; }; }
+for c in git rsync sudo nginx systemctl curl; do need_cmd "$c"; done
+
 # Parse args
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -77,10 +81,66 @@ API_BIN="/opt/chillhub/api"
 ADMIN_BIN="/opt/chillhub/admin"
 SERVICES=(chillhub-api.service chillhub-admin.service)
 
+# Secrets persistence (outside repo)
+SECRET_DIR="/etc/chillhub"
+SECRET_FILE="$SECRET_DIR/admin.env"
+
 # If downloads dir not provided, default to sibling of REPO_DIR
 if [[ -z "$DOWNLOADS_DIR" ]]; then
   PARENT_DIR="$(dirname \"$REPO_DIR\")"
   DOWNLOADS_DIR="$PARENT_DIR/downloads"
+fi
+
+# Load persisted bcrypt if present
+if [[ -z "$ADMIN_PASS_BCRYPT" && -f "$SECRET_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$SECRET_FILE" || true
+fi
+
+# If neither plain nor bcrypt provided and no persisted secret, prompt user to set password (no echo)
+if [[ -z "$ADMIN_PASS" && -z "$ADMIN_PASS_BCRYPT" ]]; then
+  echo "[deploy] Admin credentials are not set. You'll be prompted to set a password (username=admin)." >&2
+  read -r -s -p "Enter admin password: " PW1; echo >&2
+  read -r -s -p "Confirm admin password: " PW2; echo >&2
+  if [[ -z "$PW1" || "$PW1" != "$PW2" ]]; then
+    echo "[deploy][error] Passwords do not match or empty. Aborting." >&2
+    exit 1
+  fi
+  if command -v go >/dev/null 2>&1; then
+    TMPGO=$(mktemp -t bcrypt-XXXXXX.go)
+    cat >"$TMPGO" <<'EOF'
+package main
+import (
+  "fmt"
+  "golang.org/x/crypto/bcrypt"
+  "os"
+)
+func main(){
+  p := os.Getenv("PW")
+  if p == "" { fmt.Println(""); return }
+  h, err := bcrypt.GenerateFromPassword([]byte(p), 12)
+  if err != nil { fmt.Println(""); return }
+  fmt.Print(string(h))
+}
+EOF
+    ADMIN_PASS_BCRYPT=$(PW="$PW1" go run "$TMPGO" 2>/dev/null || true)
+    rm -f "$TMPGO" || true
+    if [[ -z "$ADMIN_PASS_BCRYPT" ]]; then
+      echo "[deploy][error] Failed to derive bcrypt hash." >&2
+      exit 1
+    fi
+    # Persist to /etc/chillhub/admin.env
+    sudo mkdir -p "$SECRET_DIR"
+    {
+      echo "ADMIN_USERNAME=admin"
+      echo "ADMIN_PASSWORD_BCRYPT=$ADMIN_PASS_BCRYPT"
+    } | sudo tee "$SECRET_FILE" >/dev/null
+    sudo chmod 0600 "$SECRET_FILE" || true
+    echo "[deploy] Admin credentials stored in $SECRET_FILE (bcrypt only)."
+  else
+    echo "[deploy][error] Go is required to derive bcrypt on the server. Install Go or provide --admin-pass-bcrypt." >&2
+    exit 1
+  fi
 fi
 
 log(){ echo "[deploy] $*"; }
@@ -114,6 +174,15 @@ if [[ -z "$JWT_SECRET" ]]; then
     echo "[deploy] Auto-generated JWT_SECRET (48 bytes base64)"
   fi
 fi
+
+# Ensure admin username defaults to 'admin' if not provided
+if [[ -z "$ADMIN_USER" ]]; then
+  ADMIN_USER="admin"
+fi
+
+# Secrets persistence (outside repo)
+SECRET_DIR="/etc/chillhub"
+SECRET_FILE="$SECRET_DIR/admin.env"
 
 # If plain password provided but bcrypt not, derive bcrypt via a short Go snippet (cost=12)
 if [[ -n "$ADMIN_PASS" && -z "$ADMIN_PASS_BCRYPT" ]]; then
@@ -182,23 +251,21 @@ if [[ -f "$REPO_DIR/deploy/systemd/chillhub-admin.service" ]]; then
   run "sudo install -m 0644 \"$REPO_DIR/deploy/systemd/chillhub-admin.service\" /etc/systemd/system/chillhub-admin.service"
 fi
 
-# Configure auth env via systemd drop-in if values provided
+# Configure auth env via systemd drop-in using EnvironmentFile to avoid overwrites
 ADMIN_DROPIN_DIR="/etc/systemd/system/chillhub-admin.service.d"
-if [[ -n "$JWT_SECRET$ADMIN_USER$ADMIN_PASS_BCRYPT$COOKIE_DOMAIN$COOKIE_SECURE" ]]; then
-  log "Writing systemd drop-in for admin auth env"
-  run "sudo mkdir -p \"$ADMIN_DROPIN_DIR\""
-  TMPD=$(mktemp)
-  {
-    echo "[Service]"
-    [[ -n "$COOKIE_DOMAIN" ]] && echo "Environment=COOKIE_DOMAIN=$COOKIE_DOMAIN"
-    [[ -n "$COOKIE_SECURE" ]] && echo "Environment=COOKIE_SECURE=$COOKIE_SECURE"
-    [[ -n "$JWT_SECRET" ]] && echo "Environment=JWT_SECRET=$JWT_SECRET"
-    [[ -n "$ADMIN_USER" ]] && echo "Environment=ADMIN_USERNAME=$ADMIN_USER"
-    [[ -n "$ADMIN_PASS_BCRYPT" ]] && echo "Environment=ADMIN_PASSWORD_BCRYPT=$ADMIN_PASS_BCRYPT"
-  } > "$TMPD"
-  run "sudo install -m 0644 \"$TMPD\" \"$ADMIN_DROPIN_DIR/override.conf\""
-  rm -f "$TMPD" || true
-fi
+log "Writing/refreshing systemd drop-in for admin auth env"
+run "sudo mkdir -p \"$ADMIN_DROPIN_DIR\""
+TMPD=$(mktemp)
+{
+  echo "[Service]"
+  echo "EnvironmentFile=$SECRET_FILE"
+  [[ -n "$COOKIE_DOMAIN" ]] && echo "Environment=COOKIE_DOMAIN=$COOKIE_DOMAIN"
+  [[ -n "$COOKIE_SECURE" ]] && echo "Environment=COOKIE_SECURE=$COOKIE_SECURE"
+  [[ -n "$JWT_SECRET" ]] && echo "Environment=JWT_SECRET=$JWT_SECRET"
+  # ADMIN_USERNAME/PASSWORD_BCRYPT come from $SECRET_FILE; explicit CLI values can override by rewriting the file
+} > "$TMPD"
+run "sudo install -m 0644 \"$TMPD\" \"$ADMIN_DROPIN_DIR/override.conf\""
+rm -f "$TMPD" || true
 
 log "Install nginx site config and reload"
 run "sudo install -m 0644 \"$REPO_DIR/deploy/launcher.conf\" /etc/nginx/sites-available/launcher.conf"

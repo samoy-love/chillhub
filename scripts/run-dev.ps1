@@ -4,7 +4,8 @@ param(
   [ValidateSet('local','prod')]
   [string]$Env = 'local',
   [switch]$SetClientConfig,
-  [switch]$BuildServers
+  [switch]$BuildServers,
+  [switch]$ResetAdminAuth
 )
 
 # Ensure Unicode I/O (fix mojibake like 'Рє')
@@ -12,6 +13,34 @@ try {
   [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($true)
   [Console]::InputEncoding  = [System.Text.UTF8Encoding]::new($true)
 } catch {}
+
+# Helper: secure random bytes -> Base64Url (no padding)
+function New-Base64Url {
+  param([int]$Size = 32)
+  $bytes = New-Object byte[] $Size
+  try {
+    # PowerShell 7+ / .NET 6+: has RandomNumberGenerator.Fill
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+  } catch {
+    # Windows PowerShell (.NET Framework): use RNGCryptoServiceProvider via Create()
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+  }
+  $b64 = [Convert]::ToBase64String($bytes)
+  $b64 = $b64.TrimEnd('=') -replace '\+','-' -replace '/','_'
+  return $b64
+}
+
+# Helper: generate decent random password (base64url, 16 chars)
+function New-RandomPassword {
+  param([int]$Len = 16)
+  $pw = New-Base64Url -Size 18  # ~24 chars base64url
+  if ($pw.Length -gt $Len) { return $pw.Substring(0, $Len) }
+  return $pw
+}
+
+# Helper (stub): bcrypt generation disabled in dev script; server will hash plain
+function New-BcryptFromPlain { param([string]$Plain) return "" }
 
 # Helper: Update client config in %LOCALAPPDATA%\ChillHub
 function Set-ChillHubClientConfig {
@@ -39,7 +68,7 @@ function Set-ChillHubClientConfig {
 #   .\scripts\run-dev.ps1 -ContentRoot "C:\\path\\to\\content" -GamesPath "D:\\Games\\ChillHub"
 # Controls:
 #   r/к + Enter  -> Restart all
-#   q + Enter  -> Quit
+#   q/й + Enter  -> Quit
 
 $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -60,11 +89,29 @@ function Set-AuthEnv {
     try { Remove-Item Env:COOKIE_DOMAIN -ErrorAction SilentlyContinue } catch {}
     $env:COOKIE_SECURE = 'false'
     if (-not $env:JWT_SECRET -or $env:JWT_SECRET.Trim() -eq '') { $env:JWT_SECRET = 'dev-secret-please-change-32bytes-min' }
-    if (-not $env:ADMIN_USERNAME -or $env:ADMIN_USERNAME.Trim() -eq '') { $env:ADMIN_USERNAME = 'admin' }
-    # ADMIN_PASSWORD_BCRYPT should be provided by developer; warn if missing
-    if (-not $env:ADMIN_PASSWORD_BCRYPT -or $env:ADMIN_PASSWORD_BCRYPT.Trim() -eq '') {
-      Write-Host "[WARN] ADMIN_PASSWORD_BCRYPT is not set. Login will fail until set." -ForegroundColor Yellow
-      Write-Host "       Generate with: htpasswd -nbBC 12 admin 'YourPassword' | cut -d: -f2" -ForegroundColor DarkYellow
+    # Always force admin username as requested
+    $env:ADMIN_USERNAME = 'admin'
+    # If plain is set, ensure bcrypt is unset so server picks dev fallback
+    if ($env:ADMIN_PASSWORD_PLAIN -and $env:ADMIN_PASSWORD_PLAIN.Trim() -ne '') {
+      try { Remove-Item Env:ADMIN_PASSWORD_BCRYPT -ErrorAction SilentlyContinue } catch {}
+    }
+    # Prompt for admin password if neither bcrypt nor plain provided
+    if ((-not $env:ADMIN_PASSWORD_BCRYPT -or $env:ADMIN_PASSWORD_BCRYPT.Trim() -eq '') -and (-not $env:ADMIN_PASSWORD_PLAIN -or $env:ADMIN_PASSWORD_PLAIN.Trim() -eq '')) {
+      try {
+        Write-Host "Set admin password for local Admin UI (username=admin)." -ForegroundColor Cyan
+        $p1 = Read-Host -AsSecureString "Enter password"
+        $p2 = Read-Host -AsSecureString "Confirm password"
+        $plain1 = [Runtime.InteropServices.Marshal]::PtrToStringUni([Runtime.InteropServices.Marshal]::SecureStringToBSTR($p1))
+        $plain2 = [Runtime.InteropServices.Marshal]::PtrToStringUni([Runtime.InteropServices.Marshal]::SecureStringToBSTR($p2))
+        if ($plain1 -ne $plain2 -or [string]::IsNullOrWhiteSpace($plain1)) { throw "Passwords do not match or empty" }
+        $env:ADMIN_PASSWORD_PLAIN = $plain1
+        try { Remove-Item Env:ADMIN_PASSWORD_BCRYPT -ErrorAction SilentlyContinue } catch {}
+      } catch {
+        # Fallback: generate temporary password
+        $env:ADMIN_PASSWORD_PLAIN = ([Guid]::NewGuid().ToString('N')).Substring(0,16)
+        try { Remove-Item Env:ADMIN_PASSWORD_BCRYPT -ErrorAction SilentlyContinue } catch {}
+        Write-Host "[WARN] Using temporary generated admin password (username=admin): $($env:ADMIN_PASSWORD_PLAIN)" -ForegroundColor Yellow
+      }
     }
     # Optional: shorter access TTL to test refresh easily
     if (-not $env:JWT_ACCESS_TTL -or $env:JWT_ACCESS_TTL.Trim() -eq '') { $env:JWT_ACCESS_TTL = '24h' }
@@ -78,15 +125,85 @@ function Set-AuthEnv {
     if (-not $env:JWT_SECRET -or $env:JWT_SECRET.Trim() -eq '') {
       Write-Host "[WARN] JWT_SECRET is not set. Set a strong secret to mirror production." -ForegroundColor Yellow
     }
-    if (-not $env:ADMIN_USERNAME -or $env:ADMIN_USERNAME.Trim() -eq '') {
-      Write-Host "[WARN] ADMIN_USERNAME is not set." -ForegroundColor Yellow
+    # Always force admin username as requested
+    $env:ADMIN_USERNAME = 'admin'
+    # For prod-like mode we also reuse local persisted bcrypt if present; otherwise prompt
+    $secretDir = Join-Path $env:LOCALAPPDATA 'ChillHub'
+    $secretPath = Join-Path $secretDir 'admin.secret.json'
+    if (-not $env:ADMIN_PASSWORD_BCRYPT -or $env:ADMIN_PASSWORD_BCRYPT.Trim() -eq '') {
+      if (Test-Path $secretPath) {
+        try { $sec = Get-Content -Path $secretPath -Raw | ConvertFrom-Json; if ($sec -and $sec.adminBcrypt) { $env:ADMIN_PASSWORD_BCRYPT = [string]$sec.adminBcrypt } } catch {}
+      }
     }
     if (-not $env:ADMIN_PASSWORD_BCRYPT -or $env:ADMIN_PASSWORD_BCRYPT.Trim() -eq '') {
-      Write-Host "[WARN] ADMIN_PASSWORD_BCRYPT is not set." -ForegroundColor Yellow
+      try {
+        Write-Host "Set admin password for Admin UI (username=admin)." -ForegroundColor Cyan
+        $p1 = Read-Host -AsSecureString "Enter password"
+        $p2 = Read-Host -AsSecureString "Confirm password"
+        $plain1 = [Runtime.InteropServices.Marshal]::PtrToStringUni([Runtime.InteropServices.Marshal]::SecureStringToBSTR($p1))
+        $plain2 = [Runtime.InteropServices.Marshal]::PtrToStringUni([Runtime.InteropServices.Marshal]::SecureStringToBSTR($p2))
+        if ($plain1 -ne $plain2 -or [string]::IsNullOrWhiteSpace($plain1)) { throw "Passwords do not match or empty" }
+        $hash = New-BcryptFromPlain -Plain $plain1
+        if ($hash -and $hash.Trim() -ne '') {
+          $env:ADMIN_PASSWORD_BCRYPT = $hash
+          try {
+            if (!(Test-Path $secretDir)) { New-Item -ItemType Directory -Path $secretDir | Out-Null }
+            @{ adminBcrypt = $hash } | ConvertTo-Json | Set-Content -Path $secretPath -Encoding UTF8
+            Write-Host "[OK]   Stored admin bcrypt in $secretPath" -ForegroundColor Green
+          } catch { Write-Host "[WARN] Could not persist admin bcrypt: $($_.Exception.Message)" -ForegroundColor Yellow }
+        } else { throw "bcrypt generation failed" }
+      } catch {
+        Write-Host "[WARN] ADMIN_PASSWORD_BCRYPT is not set. Please rerun and complete the password prompt." -ForegroundColor Yellow
+        if ($script:LastBcryptLog) {
+          Write-Host "[DIAG] bcrypt helper details:" -ForegroundColor Yellow
+          if ($script:LastBcryptLog.goVersion) { Write-Host ("        goVersion = {0}" -f $script:LastBcryptLog.goVersion) -ForegroundColor DarkYellow }
+          if ($null -ne $script:LastBcryptLog.exitCode) { Write-Host ("        exitCode = {0}" -f $script:LastBcryptLog.exitCode) -ForegroundColor DarkYellow }
+          if ($script:LastBcryptLog.out) { Write-Host "        go run output:" -ForegroundColor DarkYellow; ($script:LastBcryptLog.out | Out-String).Trim().Split("`n") | ForEach-Object { Write-Host ("          " + $_) -ForegroundColor DarkGray } }
+        }
+      }
     }
   }
-  Write-Host ("[INFO] Auth env: COOKIE_DOMAIN={0} COOKIE_SECURE={1} ACCESS_TTL={2} REFRESH_TTL={3}" -f \
+  Write-Host ("[INFO] Auth env: COOKIE_DOMAIN={0} COOKIE_SECURE={1} ACCESS_TTL={2} REFRESH_TTL={3}" -f `
     ($env:COOKIE_DOMAIN), ($env:COOKIE_SECURE), ($env:JWT_ACCESS_TTL), ($env:JWT_REFRESH_TTL)) -ForegroundColor Cyan
+}
+
+# Reset admin auth locally: new random password, bcrypt, new JWT secret, print and persist
+function Reset-AdminAuth {
+  param([ValidateSet('local','prod')][string]$Mode = 'local')
+  try {
+    # Username fixed
+    $env:ADMIN_USERNAME = 'admin'
+    # Local-friendly cookies by default when Mode=local
+    if ($Mode -eq 'local') {
+      try { Remove-Item Env:COOKIE_DOMAIN -ErrorAction SilentlyContinue } catch {}
+      $env:COOKIE_SECURE = 'false'
+      if (-not $env:JWT_ACCESS_TTL -or $env:JWT_ACCESS_TTL.Trim() -eq '') { $env:JWT_ACCESS_TTL = '24h' }
+      if (-not $env:JWT_REFRESH_TTL -or $env:JWT_REFRESH_TTL.Trim() -eq '') { $env:JWT_REFRESH_TTL = '720h' }
+    }
+    # Generate random password and bcrypt
+    $plain = New-RandomPassword -Len 18
+    # Dev: let server hash plain on startup
+    $env:ADMIN_PASSWORD_PLAIN = $plain
+    try { Remove-Item Env:ADMIN_PASSWORD_BCRYPT -ErrorAction SilentlyContinue } catch {}
+    # Generate new JWT secret (32 bytes base64url)
+    $env:JWT_SECRET = New-Base64Url -Size 32
+
+    Write-Host "[INFO] Using ADMIN_PASSWORD_PLAIN (server will bcrypt on startup)." -ForegroundColor Yellow
+
+    # Print new env for admin
+    Write-Host "[ADMIN ENV] Use the following values (already exported in this session):" -ForegroundColor Cyan
+    Write-Host ("  ADMIN_USERNAME={0}" -f $env:ADMIN_USERNAME)
+    if ($env:ADMIN_PASSWORD_PLAIN) { Write-Host ("  ADMIN_PASSWORD_PLAIN=(set) [dev]" ) } elseif ($env:ADMIN_PASSWORD_BCRYPT) { Write-Host ("  ADMIN_PASSWORD_BCRYPT={0}" -f $env:ADMIN_PASSWORD_BCRYPT) }
+    Write-Host ("  JWT_SECRET={0}" -f $env:JWT_SECRET)
+    Write-Host ("  COOKIE_DOMAIN={0}" -f ($env:COOKIE_DOMAIN))
+    Write-Host ("  COOKIE_SECURE={0}" -f ($env:COOKIE_SECURE))
+    Write-Host ("  JWT_ACCESS_TTL={0}" -f ($env:JWT_ACCESS_TTL))
+    Write-Host ("  JWT_REFRESH_TTL={0}" -f ($env:JWT_REFRESH_TTL))
+    Write-Host "[INFO] Temporary plaintext admin password (for login):" -ForegroundColor Yellow
+    Write-Host ("  username=admin  password={0}" -f $plain) -ForegroundColor Yellow
+
+    return $true
+  } catch { Write-Host ("[ERROR] Reset-AdminAuth failed: {0}" -f $_.Exception.Message) -ForegroundColor Red; return $false }
 }
 
 function Get-ProcIdsByPort {
@@ -144,9 +261,22 @@ function Start-All {
 
   # Apply env for Go servers
   & "$scriptDir\env.ps1" -ContentRoot $contentRoot | Out-Host
-
-  # Configure auth env for selected mode
-  Set-AuthEnv -Mode $Env
+  # Enforce auth env exclusivity: if plain set, clear bcrypt
+  if ($env:ADMIN_PASSWORD_PLAIN -and $env:ADMIN_PASSWORD_PLAIN.Trim() -ne '') {
+    try { Remove-Item Env:ADMIN_PASSWORD_BCRYPT -ErrorAction SilentlyContinue } catch {}
+  }
+  try {
+    $gc = Get-Command go -ErrorAction SilentlyContinue
+    if ($gc -and $gc.Path) { $script:GoExe = $gc.Path }
+    if (-not $script:GoExe) {
+      try { $wp = (& where.exe go 2>$null); if ($wp) { $script:GoExe = ($wp -split "`r?`n")[0] } } catch {}
+    }
+    $gv = (& go version)
+    if ($gv) {
+      if ($script:GoExe) { Write-Host ("[INFO] `"go version`": $gv (path: $script:GoExe)") -ForegroundColor Cyan }
+      else { Write-Host ("[INFO] `"go version`": $gv") -ForegroundColor Cyan }
+    }
+  } catch {}
 
   # Ensure ports are free (kill anything bound to 55700/55777)
   Stop-ByPort -Port 55700
@@ -156,11 +286,19 @@ function Start-All {
   Stop-Client
 
   if ($Env -eq 'local') {
+    # Ensure Go module deps are present before go run
+    Push-Location (Join-Path $repoRoot 'server')
+    try { go mod tidy } finally { Pop-Location }
+
+    # Configure auth env (may need bcrypt helper that relies on Go toolchain)
+    Set-AuthEnv -Mode $Env
     # Start API server
     $global:apiProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit","-Command","`"Push-Location '$repoRoot\server'; Write-Host '[API] http://localhost:55700' -ForegroundColor Yellow; go run ./cmd/api`"" -PassThru
     # Start Admin server
     $global:adminProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit","-Command","`"Push-Location '$repoRoot\server'; Write-Host '[ADMIN] http://localhost:55777/admin' -ForegroundColor Yellow; go run ./cmd/admin`"" -PassThru
   } else {
+    # Configure auth env for prod-like testing
+    Set-AuthEnv -Mode $Env
     Write-Host "[INFO] Env=prod: skipping local API/Admin servers (use remote nginx/backend)." -ForegroundColor Yellow
     $global:apiProc = $null
     $global:adminProc = $null
@@ -168,7 +306,7 @@ function Start-All {
 
   # Start Client (WPF)
   $gp = $gamesPath
-  if (-not $gp -or $gp -eq '') {
+  if ([string]::IsNullOrWhiteSpace($gp)) {
     $defaultD = "D:\\Games\\ChillHub"; $defaultC = "C:\\Games\\ChillHub"
     if (Test-Path 'D:\\') { $gp = $defaultD } else { $gp = $defaultC }
   }
@@ -177,7 +315,8 @@ function Start-All {
   }
   $env:ChillHub_GAMES_PATH = $gp
   Write-Host "[CLIENT] WPF starting (GamesPath=$gp)" -ForegroundColor Yellow
-  $clientCmd = "Push-Location '" + (Join-Path $repoRoot 'launcher\ChillHub') + "'; dotnet run --project .\ChillHub.csproj"
+  # Important: escape $ in child command so parent PowerShell doesn't expand it here (would turn into '=1')
+  $clientCmd = "Push-Location '" + (Join-Path $repoRoot 'launcher\ChillHub') + "'; `$env:YL_DEV_SKIP_SELF_UPDATE=1; dotnet run --project .\ChillHub.csproj"
   $global:clientProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit","-Command",$clientCmd -PassThru
 
   $apiPid   = if ($apiProc) { $apiProc.Id } else { '-' }
@@ -210,10 +349,16 @@ if ($BuildServers) {
   Write-Host "[INFO] Building Go servers (windows/amd64)..." -ForegroundColor Cyan
   Push-Location (Join-Path $repoRoot 'server')
   $env:GOOS='windows'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
+  go mod tidy
   go build -o (Join-Path $repoRoot 'build\dev\api.exe') ./cmd/api
   go build -o (Join-Path $repoRoot 'build\dev\admin.exe') ./cmd/admin
   Pop-Location
   Write-Host "[OK]   Go servers built" -ForegroundColor Green
+}
+# Optional: reset admin auth before starting processes
+if ($ResetAdminAuth) {
+  Write-Host "[INFO] Pre-run: resetting admin password and JWT secret..." -ForegroundColor Cyan
+  $null = Reset-AdminAuth -Mode $Env
 }
 Start-All -contentRoot $ContentRoot -gamesPath $GamesPath
 
@@ -222,7 +367,9 @@ $running = $true
 $isRestarting = $false
 while ($running) {
   $kCyr  = [string][char]0x043A  # 'к'
-  $prompt = "Enter command ([r/{0}] restart, [q] quit)" -f $kCyr
+  $yCyr  = [string][char]0x0439  # 'й'
+  $zCyr  = [string][char]0x0437  # 'з'
+  $prompt = "Enter command ([r/{0}] restart, [p/{1}] reset-pass, [q/{2}] quit)" -f $kCyr, $zCyr, $yCyr
   $cmd = (Read-Host $prompt).Trim()
   $cmdL = $cmd.ToLower()
   switch ($cmdL) {
@@ -244,10 +391,38 @@ while ($running) {
         Start-All -contentRoot $ContentRoot -gamesPath $GamesPath
       } finally { $isRestarting = $false }
     }
+    'p' {
+      if ($isRestarting) { continue }
+      $isRestarting = $true
+      try {
+        Write-Host "Resetting admin password and JWT secret..." -ForegroundColor Cyan
+        $ok = Reset-AdminAuth -Mode $Env
+        if ($ok) {
+          # Restart to apply env to child processes
+          Stop-All
+          Start-Sleep -Milliseconds 400
+          Start-All -contentRoot $ContentRoot -gamesPath $GamesPath
+        }
+      } finally { $isRestarting = $false }
+    }
+    $zCyr {
+      if ($isRestarting) { continue }
+      $isRestarting = $true
+      try {
+        Write-Host "Resetting admin password and JWT secret..." -ForegroundColor Cyan
+        $ok = Reset-AdminAuth -Mode $Env
+        if ($ok) {
+          Stop-All
+          Start-Sleep -Milliseconds 400
+          Start-All -contentRoot $ContentRoot -gamesPath $GamesPath
+        }
+      } finally { $isRestarting = $false }
+    }
     'q' { $running = $false }
+    $yCyr { $running = $false }
     'quit' { $running = $false }
     'exit' { $running = $false }
-    default { Write-Host ("Unknown command. Use r/{0} or q." -f $kCyr) -ForegroundColor Red }
+    default { Write-Host ("Unknown command. Use r/{0} or q/{1}." -f $kCyr, $yCyr) -ForegroundColor Red }
   }
 }
 

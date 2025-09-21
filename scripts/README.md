@@ -9,6 +9,7 @@
 - `-Env local|prod` — выбирает `ApiBaseUrl` для клиента (`local` по умолчанию: `http://localhost:55700`; `prod`: `https://launcher.samoy.love`).
 - `-SetClientConfig` — записать/обновить `%LOCALAPPDATA%\ChillHub\config.json` (GamesPath, ApiBaseUrl, др.).
 - `-BuildServers` — перед запуском собрать dev‑бинарии Go‑серверов под Windows.
+- `-ResetAdminAuth` — перед запуском сгенерировать новый пароль администратора (случайный), посчитать `ADMIN_PASSWORD_BCRYPT`, сгенерировать `JWT_SECRET`, вывести их значения в консоль и перезапустить процессы с новыми переменными в текущей сессии.
 
 ### Примеры запуска
 ```powershell
@@ -20,11 +21,15 @@
 
 # Предварительно собрать Go‑серверы (быстрее стартует), затем запустить
 ./scripts/run-dev.ps1 -BuildServers -ContentRoot (Resolve-Path ./content) -SetClientConfig
+
+# Сбросить локальные учётные данные админа перед стартом (новый пароль и JWT секрет)
+./scripts/run-dev.ps1 -Env local -SetClientConfig -ContentRoot (Resolve-Path ./content) -ResetAdminAuth
 ```
 
 ### Управление во время работы
 - Нажмите `r` или русскую `к` + Enter — перезапуск всех трёх процессов.
-- Нажмите `q` + Enter — корректное завершение (освобождает порты, закрывает клиент).
+- Нажмите `p` или русскую `з` + Enter — сбросить пароль администратора и `JWT_SECRET`, затем перезапустить процессы.
+- Нажмите `q` или русскую `й` + Enter — корректное завершение (освобождает порты, закрывает клиент).
 
 ### Примечания
 - Для запуска клиента против прод‑сервера задайте `-Env prod` (пропишет `ApiBaseUrl` в `%LOCALAPPDATA%/ChillHub/config.json`).

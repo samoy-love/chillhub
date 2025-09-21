@@ -5,6 +5,7 @@ import (
     "encoding/base64"
     "encoding/json"
     "errors"
+    "log"
     "net/http"
     "os"
     "strconv"
@@ -38,6 +39,15 @@ func init() {
         CookieSecure: true,
         AccessTTL:    24 * time.Hour, // per user request: 1 day
         RefreshTTL:   30 * 24 * time.Hour,
+    }
+    // Dev-friendly precedence: if ADMIN_PASSWORD_PLAIN is provided, hash it and override any bcrypt.
+    if plain := strings.TrimSpace(os.Getenv("ADMIN_PASSWORD_PLAIN")); plain != "" {
+        if hb, err := bcrypt.GenerateFromPassword([]byte(plain), 12); err == nil {
+            cfg.AdminPassBC = string(hb)
+            log.Printf("[ADMIN AUTH] ADMIN_PASSWORD_PLAIN provided; using its bcrypt for user %q", cfg.AdminUser)
+        } else {
+            log.Printf("[ADMIN AUTH] Failed to hash ADMIN_PASSWORD_PLAIN: %v", err)
+        }
     }
     if v := strings.TrimSpace(os.Getenv("COOKIE_SECURE")); v != "" {
         if b, err := strconv.ParseBool(v); err == nil {
@@ -294,7 +304,8 @@ func adminAuthMiddleware(next http.Handler) http.Handler {
         // Allowlist: static UI and auth endpoints and health
         if strings.HasPrefix(p, "/admin/ui/") ||
            strings.HasPrefix(p, "/admin/api/auth/") ||
-           p == "/admin/api/health" {
+           p == "/admin/api/health" ||
+           p == "/admin" || p == "/admin/" {
             next.ServeHTTP(w, r)
             return
         }

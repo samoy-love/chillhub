@@ -10,6 +10,35 @@
             "request": "launch",
             "script": "${file}",
             "args": []
+        },
+        {
+            "name": "Dev: run-dev.ps1 (local)",
+            "type": "PowerShell",
+            "request": "launch",
+            "script": "${workspaceFolder}/scripts/run-dev.ps1",
+            "args": [
+                "-Env", "local",
+                "-SetClientConfig",
+                "-ContentRoot", "${workspaceFolder}/content"
+            ]
+        },
+        {
+            "name": "Dev: run-admin.ps1",
+            "type": "PowerShell",
+            "request": "launch",
+            "script": "${workspaceFolder}/scripts/run-admin.ps1",
+            "args": [
+                "-ContentRoot", "${workspaceFolder}/content"
+            ]
+        },
+        {
+            "name": "Dev: run-client.ps1",
+            "type": "PowerShell",
+            "request": "launch",
+            "script": "${workspaceFolder}/scripts/run-client.ps1",
+            "args": [
+                "-GamesPath", "D:/Games/ChillHub"
+            ]
         }
     ]
 }
