@@ -100,12 +100,21 @@ img {
   justify-content: center;
   gap: .6rem;
   border-radius: 14px;
-  border: 1px solid rgb(255 255 255 / 12%);
+  /* Replace border with inset stroke to avoid gradient seams on corners */
+  border: none;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 12%);
   padding: .7rem 1.1rem;
   color: var(--text);
   text-decoration: none;
   transition: transform .2s ease, background .2s ease, box-shadow .2s ease;
   backdrop-filter: saturate(1.2);
+  /* Prevent background from painting under the stroke and leaking at edges */
+  background-clip: padding-box;
+  -webkit-background-clip: padding-box;
+  /* Avoid corner artifacts on WebKit and with backdrop-filter */
+  overflow: hidden;
+  position: relative;
+  isolation: isolate;
 }
 
 .btn--sm {
