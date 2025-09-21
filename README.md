@@ -188,25 +188,25 @@ sudo ufw enable
 
 ### Раскладка артефактов
 ```bash
-# 1) Лендинг
-scp -r landing/* ubuntu@<VPS>:/home/ubuntu/site/
-ssh ubuntu@<VPS> "sudo rsync -a --delete /home/ubuntu/site/ /var/www/site/"
+# Выполняйте на сервере (SSH), из домашней директории пользователя,
+# где уже клонирован репозиторий в ~/Launcher-Project
 
-# 2) Контент и Admin UI
-scp -r content/manifests ubuntu@<VPS>:/home/ubuntu/launcher_manifests/
-scp -r content/content   ubuntu@<VPS>:/home/ubuntu/launcher_content/
-scp -r content/news      ubuntu@<VPS>:/home/ubuntu/launcher_news/
-scp -r server/admin_ui   ubuntu@<VPS>:/home/ubuntu/admin_ui/
-ssh ubuntu@<VPS> "sudo rsync -a --delete ~/launcher_manifests/ /var/www/launcher/manifests/ && \
-                  sudo rsync -a --delete ~/launcher_content/   /var/www/launcher/content/   && \
-                  sudo rsync -a --delete ~/launcher_news/      /var/www/launcher/news/      && \
-                  sudo rsync -a --delete ~/admin_ui/           /var/www/launcher/admin_ui/"
+cd ~/Launcher-Project
 
-# 3) Бинарии (если собираете локально)
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o api ./server/cmd/api
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o admin ./server/cmd/admin
-scp api admin ubuntu@<VPS>:/home/ubuntu/
-ssh ubuntu@<VPS> "sudo install -m 0755 ~/api /opt/chillhub/api && sudo install -m 0755 ~/admin /opt/chillhub/admin"
+# 1) Лендинг → /var/www/site (копирование/синхронизация, без перемещения)
+sudo rsync -a --delete ./landing/ /var/www/site/
+
+# 2) Контент и Admin UI → /var/www/launcher/* (копирование/синхронизация)
+sudo rsync -a --delete ./content/manifests/ /var/www/launcher/manifests/
+sudo rsync -a --delete ./content/content/   /var/www/launcher/content/
+sudo rsync -a --delete ./content/news/      /var/www/launcher/news/
+sudo rsync -a --delete ./server/admin_ui/   /var/www/launcher/admin_ui/
+
+# 3) Бинарии (сборка на сервере и установка; копирование, не перемещение)
+go build -o ./api   ./server/cmd/api
+go build -o ./admin ./server/cmd/admin
+sudo install -m 0755 ./api   /opt/chillhub/api
+sudo install -m 0755 ./admin /opt/chillhub/admin
 ```
 
 ### systemd (1 раз)
