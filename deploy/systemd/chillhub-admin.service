@@ -8,6 +8,13 @@ Type=simple
 User=www-data
 Group=www-data
 Environment=CONTENT_ROOT=/var/www/launcher
+# Auth configuration (set real secrets in environment)
+# Example: generate bcrypt hash with: htpasswd -nbBC 12 admin 'YourPassword' | cut -d: -f2
+Environment=COOKIE_DOMAIN=launcher.samoy.love
+#Environment=COOKIE_SECURE=true
+#Environment=JWT_SECRET=change_me_to_long_random
+#Environment=ADMIN_USERNAME=admin
+#Environment=ADMIN_PASSWORD_BCRYPT=$2y$12$examplehash...
 ExecStart=/opt/chillhub/admin
 Restart=on-failure
 RestartSec=3

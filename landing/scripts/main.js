@@ -4,12 +4,62 @@
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const isMobile = () => mqMobile.matches;
 
+  // Keep body offset in sync with actual header height so the fixed header never overlaps content
+  (function syncHeaderOffset(){
+    const header = document.querySelector('.site-header');
+    if(!header) return;
+    function apply(){
+      const h = Math.round(header.offsetHeight);
+      document.documentElement.style.setProperty('--header-h', h + 'px');
+    }
+    if(document.readyState === 'loading'){
+      document.addEventListener('DOMContentLoaded', apply, { once: true });
+    } else {
+      apply();
+    }
+    window.addEventListener('resize', apply, { passive: true });
+  })();
+
   const canvas = document.getElementById('waves-canvas');
   const ctx = canvas.getContext('2d');
   // Lower DPR on mobile to reduce GPU load
   let dpr = (()=>{
     const base = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
     return isMobile() ? 1 : Math.min(1.5, base);
+  })();
+
+  // Smooth scroll for header nav links (#games, #features, #download) without affecting general scroll
+  (function smoothScrollHeaderNav(){
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const nav = document.querySelector('.site-header .nav');
+    if(!nav) return;
+    nav.querySelectorAll('a[href^="#"]').forEach(a=>{
+      a.addEventListener('click', (e)=>{
+        const id = a.getAttribute('href').slice(1);
+        const target = document.getElementById(id);
+        if(!target) return;
+        e.preventDefault();
+        target.scrollIntoView({ behavior: prefersReducedMotion.matches ? 'auto' : 'smooth', block: 'start' });
+      });
+    });
+  })();
+
+  // Smooth scroll only for the "Смотреть игры" button in hero CTA
+  (function smoothScrollGames(){
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const btn = document.querySelector('.cta a[href="#games"]');
+    if(!btn) return;
+    btn.addEventListener('click', (e)=>{
+      const target = document.getElementById('games');
+      if(!target) return;
+      e.preventDefault();
+      if(prefersReducedMotion.matches){
+        // Respect user OS setting: jump without animation
+        target.scrollIntoView({ behavior: 'auto', block: 'start' });
+      } else {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
   })();
   let W, H, time = 0;
 

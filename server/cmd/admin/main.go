@@ -1736,6 +1736,14 @@ func main() {
 	http.HandleFunc("/admin/health", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
+	http.HandleFunc("/admin/api/health", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "ok")
+	})
+	http.HandleFunc("/admin/api/auth/login", handleAuthLogin)
+	http.HandleFunc("/admin/api/auth/logout", handleAuthLogout)
+	http.HandleFunc("/admin/api/auth/refresh", handleAuthRefresh)
+	http.HandleFunc("/admin/api/auth/me", handleAuthMe)
+	http.HandleFunc("/admin/api/auth/verify", handleAuthVerify)
 	http.HandleFunc("/admin", handleAdminUI)
 	// Legacy compose endpoints removed
 	// http.HandleFunc("/admin/compose", handleCompose)
@@ -1827,10 +1835,11 @@ func main() {
 	// Реализация будет добавлена на следующем шаге.
 	    addr := ":55777"
     log.Printf("admin API listening on %s (CONTENT_ROOT=%s)", addr, contentRoot)
-    // Middlewares: RequestID -> CORS -> Logging
+    // Middlewares: RequestID -> CORS -> Auth -> Logging
     var h http.Handler = http.DefaultServeMux
     h = httpx.RequestID()(h)
     h = httpx.CORS("*")(h)
+    h = adminAuthMiddleware(h)
     h = httpx.Logging("ADMIN")(h)
     log.Fatal(http.ListenAndServe(addr, h))
 }

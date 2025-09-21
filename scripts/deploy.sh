@@ -7,7 +7,9 @@
 # - Test and reload nginx
 #
 # Usage:
-#   bash ./scripts/deploy.sh [--branch <name>] [--no-build] [--repo-dir <path>]
+#   bash ./scripts/deploy.sh [--branch <name>] [--no-build] [--repo-dir <path>] \
+#                           [--jwt-secret <val>] [--admin-user <val>] \
+#                           [--admin-pass-bcrypt <val>] [--cookie-domain <val>] [--cookie-secure <true|false>]
 #
 # Requirements: git, rsync, go, systemd, nginx
 set -euo pipefail
@@ -15,6 +17,15 @@ set -euo pipefail
 BRANCH="main"
 NO_BUILD=0
 EXPLICIT_REPO_DIR=""
+# Auth/systemd settings (optional; if set will be written as a systemd drop-in for chillhub-admin)
+JWT_SECRET=""
+ADMIN_USER=""
+ADMIN_PASS_BCRYPT=""
+ADMIN_PASS=""
+COOKIE_DOMAIN="launcher.samoy.love"
+COOKIE_SECURE="true"
+# External installers directory (defaults to sibling of REPO_DIR)
+DOWNLOADS_DIR=""
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -25,6 +36,20 @@ while [[ $# -gt 0 ]]; do
       NO_BUILD=1; shift 1;;
     --repo-dir)
       EXPLICIT_REPO_DIR="${2:-}"; shift 2;;
+    --jwt-secret)
+      JWT_SECRET="${2:-}"; shift 2;;
+    --admin-user)
+      ADMIN_USER="${2:-}"; shift 2;;
+    --admin-pass-bcrypt)
+      ADMIN_PASS_BCRYPT="${2:-}"; shift 2;;
+    --admin-pass)
+      ADMIN_PASS="${2:-}"; shift 2;;
+    --cookie-domain)
+      COOKIE_DOMAIN="${2:-}"; shift 2;;
+    --cookie-secure)
+      COOKIE_SECURE="${2:-true}"; shift 2;;
+    --downloads-dir)
+      DOWNLOADS_DIR="${2:-}"; shift 2;;
     *)
       echo "[deploy][warn] Unknown arg: $1"; shift 1;;
   esac
@@ -52,11 +77,18 @@ API_BIN="/opt/chillhub/api"
 ADMIN_BIN="/opt/chillhub/admin"
 SERVICES=(chillhub-api.service chillhub-admin.service)
 
+# If downloads dir not provided, default to sibling of REPO_DIR
+if [[ -z "$DOWNLOADS_DIR" ]]; then
+  PARENT_DIR="$(dirname \"$REPO_DIR\")"
+  DOWNLOADS_DIR="$PARENT_DIR/downloads"
+fi
+
 log(){ echo "[deploy] $*"; }
 run(){ echo "> $*"; eval "$*"; }
 
 log "Ensuring target directories exist"
 sudo mkdir -p "$SITE_ROOT" "$LAUNCHER_ROOT" "$LAUNCHER_ROOT/content" "$LAUNCHER_ROOT/manifests" "$LAUNCHER_ROOT/news" "$LAUNCHER_ROOT/admin_ui" /opt/chillhub
+sudo mkdir -p "$SITE_ROOT/downloads"
 
 
 log "Updating repository: $REPO_DIR (branch: $BRANCH)"
@@ -68,11 +100,57 @@ run "git -C \"$REPO_DIR\" checkout $BRANCH"
 run "git -C \"$REPO_DIR\" config core.filemode false || true"
 run "git -C \"$REPO_DIR\" pull --ff-only"
 
+# Generate secrets if not provided
+if [[ -z "$JWT_SECRET" ]]; then
+  if command -v openssl >/dev/null 2>&1; then
+    JWT_SECRET=$(openssl rand -base64 48 | tr -d '\n' || true)
+  fi
+  if [[ -z "$JWT_SECRET" ]]; then
+    JWT_SECRET=$(head -c 48 /dev/urandom | base64 | tr -d '\n' || true)
+  fi
+  if [[ -z "$JWT_SECRET" ]]; then
+    echo "[deploy][warn] Could not auto-generate JWT_SECRET; please provide --jwt-secret"
+  else
+    echo "[deploy] Auto-generated JWT_SECRET (48 bytes base64)"
+  fi
+fi
+
+# If plain password provided but bcrypt not, derive bcrypt via a short Go snippet (cost=12)
+if [[ -n "$ADMIN_PASS" && -z "$ADMIN_PASS_BCRYPT" ]]; then
+  if command -v go >/dev/null 2>&1; then
+    TMPGO=$(mktemp -t bcrypt-XXXXXX.go)
+    cat >"$TMPGO" <<'EOF'
+package main
+import (
+  "fmt"
+  "golang.org/x/crypto/bcrypt"
+  "os"
+)
+func main(){
+  p := os.Getenv("PW")
+  if p == "" { fmt.Println(""); return }
+  h, err := bcrypt.GenerateFromPassword([]byte(p), 12)
+  if err != nil { fmt.Println(""); return }
+  fmt.Print(string(h))
+}
+EOF
+    ADMIN_PASS_BCRYPT=$(PW="$ADMIN_PASS" go run "$TMPGO" 2>/dev/null || true)
+    rm -f "$TMPGO" || true
+    if [[ -n "$ADMIN_PASS_BCRYPT" ]]; then
+      echo "[deploy] Derived ADMIN_PASSWORD_BCRYPT via Go"
+    else
+      echo "[deploy][warn] Failed to derive bcrypt hash; please provide --admin-pass-bcrypt"
+    fi
+  else
+    echo "[deploy][warn] Go is not available to derive bcrypt; provide --admin-pass-bcrypt"
+  fi
+fi
+
 if [[ $NO_BUILD -eq 0 ]]; then
   log "Building Go servers"
   BUILD_DIR=$(mktemp -d -t chillhub-build-XXXXXXXX)
-  run "cd \"$REPO_DIR/server\" && go build -o \"$BUILD_DIR/api\"   ./cmd/api"
-  run "cd \"$REPO_DIR/server\" && go build -o \"$BUILD_DIR/admin\" ./cmd/admin"
+  run "cd \"$REPO_DIR/server\" && go mod tidy && go build -o \"$BUILD_DIR/api\"   ./cmd/api"
+  run "cd \"$REPO_DIR/server\" && go mod tidy && go build -o \"$BUILD_DIR/admin\" ./cmd/admin"
   log "Installing binaries"
   run "sudo install -m 0755 \"$BUILD_DIR/api\"   \"$API_BIN\""
   run "sudo install -m 0755 \"$BUILD_DIR/admin\" \"$ADMIN_BIN\""
@@ -80,12 +158,47 @@ if [[ $NO_BUILD -eq 0 ]]; then
 fi
 
 log "Sync landing to $SITE_ROOT"
-run "sudo rsync -a --delete \"$REPO_DIR/landing/\" \"$SITE_ROOT/\""
+# Keep /downloads separate from repo; sync landing excluding downloads
+run "sudo rsync -a --delete --exclude 'downloads/' \"$REPO_DIR/landing/\" \"$SITE_ROOT/\""
+
+# Sync external downloads (next to REPO_DIR) into site downloads
+if [[ -d "$DOWNLOADS_DIR" ]]; then
+  log "Sync external downloads from $DOWNLOADS_DIR to $SITE_ROOT/downloads"
+  run "sudo rsync -a \"$DOWNLOADS_DIR/\" \"$SITE_ROOT/downloads/\""
+else
+  log "External downloads directory not found: $DOWNLOADS_DIR (skip)"
+fi
 
 log "Sync static only (landing, admin_ui). Do not touch server content dirs."
 # DO NOT SYNC manifests/, content/ and news/ at all per policy — content is managed by backend/Admin UI
 # Admin UI can be fully replaced
 run "sudo rsync -a --delete \"$REPO_DIR/server/admin_ui/\"   \"$LAUNCHER_ROOT/admin_ui/\""
+
+log "Install systemd unit files (if present)"
+if [[ -f "$REPO_DIR/deploy/systemd/chillhub-api.service" ]]; then
+  run "sudo install -m 0644 \"$REPO_DIR/deploy/systemd/chillhub-api.service\" /etc/systemd/system/chillhub-api.service"
+fi
+if [[ -f "$REPO_DIR/deploy/systemd/chillhub-admin.service" ]]; then
+  run "sudo install -m 0644 \"$REPO_DIR/deploy/systemd/chillhub-admin.service\" /etc/systemd/system/chillhub-admin.service"
+fi
+
+# Configure auth env via systemd drop-in if values provided
+ADMIN_DROPIN_DIR="/etc/systemd/system/chillhub-admin.service.d"
+if [[ -n "$JWT_SECRET$ADMIN_USER$ADMIN_PASS_BCRYPT$COOKIE_DOMAIN$COOKIE_SECURE" ]]; then
+  log "Writing systemd drop-in for admin auth env"
+  run "sudo mkdir -p \"$ADMIN_DROPIN_DIR\""
+  TMPD=$(mktemp)
+  {
+    echo "[Service]"
+    [[ -n "$COOKIE_DOMAIN" ]] && echo "Environment=COOKIE_DOMAIN=$COOKIE_DOMAIN"
+    [[ -n "$COOKIE_SECURE" ]] && echo "Environment=COOKIE_SECURE=$COOKIE_SECURE"
+    [[ -n "$JWT_SECRET" ]] && echo "Environment=JWT_SECRET=$JWT_SECRET"
+    [[ -n "$ADMIN_USER" ]] && echo "Environment=ADMIN_USERNAME=$ADMIN_USER"
+    [[ -n "$ADMIN_PASS_BCRYPT" ]] && echo "Environment=ADMIN_PASSWORD_BCRYPT=$ADMIN_PASS_BCRYPT"
+  } > "$TMPD"
+  run "sudo install -m 0644 \"$TMPD\" \"$ADMIN_DROPIN_DIR/override.conf\""
+  rm -f "$TMPD" || true
+fi
 
 log "Install nginx site config and reload"
 run "sudo install -m 0644 \"$REPO_DIR/deploy/launcher.conf\" /etc/nginx/sites-available/launcher.conf"
@@ -93,7 +206,8 @@ run "sudo ln -sf /etc/nginx/sites-available/launcher.conf /etc/nginx/sites-enabl
 run "sudo nginx -t"
 run "sudo systemctl reload nginx"
 
-log "Restart services"
+log "Reload systemd and restart services"
+run "sudo systemctl daemon-reload"
 for s in "${SERVICES[@]}"; do
   run "sudo systemctl restart \"$s\""
   run "sudo systemctl status \"$s\" --no-pager -n 3 || true"
@@ -126,13 +240,20 @@ soft_200_if_exists(){ local path="$1"; local url="$2"; local name="$3";
   fi
 }
 
-# 1) Admin UI
-must_200 "https://launcher.samoy.love/admin/" "Admin UI /admin/"
+# 1) Admin UI (login is public; /admin/ is protected and should be 401 without cookies)
+must_200 "https://launcher.samoy.love/admin/ui/login.html" "Admin UI login"
+code=$(http_code "https://launcher.samoy.love/admin/")
+if [[ "$code" == "200" ]]; then
+  echo -e "[test] ${YELLOW}WARN${NC} /admin/ returned 200 (maybe already authorized)"
+elif [[ "$code" == "401" ]]; then
+  echo -e "[test] ${GREEN}PASS${NC} /admin/ protected (401 without cookies)"
+else
+  echo -e "[test] ${RED}FAIL${NC} /admin/ unexpected code -> $code"; FAIL=1
+fi
 must_200 "https://launcher.samoy.love/admin/ui/admin.js" "Admin UI static /admin/ui/admin.js"
 
-# 2) Admin API
+# 2) Admin API (health is public; protected endpoints are not tested without auth)
 must_200 "https://launcher.samoy.love/admin/api/health" "Admin API /admin/api/health"
-must_200 "https://launcher.samoy.love/admin/api/games" "Admin API /admin/api/games"
 
 # 3) Landing site
 must_200 "https://launcher.samoy.love/" "Landing /"

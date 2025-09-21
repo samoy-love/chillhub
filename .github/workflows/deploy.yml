@@ -32,15 +32,11 @@ jobs:
       - name: Prepare deploy bundle
         run: |
           set -eux
-          mkdir -p build/site build/launcher build/systemd build/deploy
+          mkdir -p build/site build/launcher build/launcher_admin_ui build/systemd build/deploy
           # Landing (site at root)
           rsync -a --delete landing/ build/site/
-          # Content buckets
-          rsync -a --delete content/content/ build/launcher/content/
-          rsync -a --delete content/manifests/ build/launcher/manifests/
-          rsync -a --delete content/news/ build/launcher/news/
           # Admin UI static (served by nginx under /admin/ui/)
-          rsync -a --delete server/admin_ui/ build/launcher/admin_ui/
+          rsync -a --delete server/admin_ui/ build/launcher_admin_ui/
           # Systemd unit files
           rsync -a deploy/systemd/ build/systemd/ || true
           # Nginx site config
@@ -54,7 +50,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           source: |
             build/site/*
-            build/launcher/**
+            build/launcher_admin_ui/**
             build/bin/*
             build/systemd/*
             build/deploy/launcher.conf
@@ -77,17 +73,13 @@ jobs:
             NGINX_SITE_AVAILABLE="/etc/nginx/sites-available/launcher.conf"
             NGINX_SITE_ENABLED="/etc/nginx/sites-enabled/launcher.conf"
 
-            sudo mkdir -p "$SITE_DIR" "$LAUNCHER_DIR/content" "$LAUNCHER_DIR/manifests" "$LAUNCHER_DIR/news" "$OPT_DIR"
+            sudo mkdir -p "$SITE_DIR" "$LAUNCHER_DIR/admin_ui" "$OPT_DIR"
 
             # Sync landing site
             sudo rsync -a --delete "$DEPLOY_DIR/site/" "$SITE_DIR/"
 
-            # Sync content buckets
-            sudo rsync -a --delete "$DEPLOY_DIR/launcher/content/" "$LAUNCHER_DIR/content/"
-            sudo rsync -a --delete "$DEPLOY_DIR/launcher/manifests/" "$LAUNCHER_DIR/manifests/"
-            sudo rsync -a --delete "$DEPLOY_DIR/launcher/news/" "$LAUNCHER_DIR/news/"
-            # Sync Admin UI static
-            sudo rsync -a --delete "$DEPLOY_DIR/launcher/admin_ui/" "$LAUNCHER_DIR/admin_ui/"
+            # Sync Admin UI static only (content/manifests/news are managed by Admin UI and must not be overwritten)
+            sudo rsync -a --delete "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/"
 
             # Install binaries
             sudo install -d -m 0755 "$OPT_DIR"
@@ -101,12 +93,106 @@ jobs:
               sudo systemctl daemon-reload || true
               sudo systemctl enable chillhub-api.service || true
               sudo systemctl enable chillhub-admin.service || true
-              sudo systemctl restart chillhub-api.service || true
-              sudo systemctl restart chillhub-admin.service || true
             fi
+
+            # Optional: write systemd drop-in for admin auth env from secrets (if provided)
+            ADMIN_DROPIN_DIR="/etc/systemd/system/chillhub-admin.service.d"
+            JWT_SECRET="${{ secrets.JWT_SECRET }}"
+            ADMIN_USER="${{ secrets.ADMIN_USER }}"
+            ADMIN_PASS_BCRYPT="${{ secrets.ADMIN_PASSWORD_BCRYPT }}"
+            ADMIN_PASS_PLAIN="${{ secrets.ADMIN_PASSWORD_PLAIN }}"
+            COOKIE_DOMAIN="${{ secrets.COOKIE_DOMAIN }}"
+            COOKIE_SECURE="${{ secrets.COOKIE_SECURE }}"
+            if [ -n "${ADMIN_PASS_PLAIN}" ] && [ -z "${ADMIN_PASS_BCRYPT}" ]; then
+              # Derive bcrypt from plain via a small Go snippet (cost=12) using printf to avoid heredoc/YAML issues
+              TMPGO=$(mktemp -t bcrypt-XXXXXX.go)
+              printf '%s\n' \
+                'package main' \
+                'import (' \
+                '  "fmt"' \
+                '  "golang.org/x/crypto/bcrypt"' \
+                '  "os"' \
+                ')' \
+                'func main(){' \
+                '  p := os.Getenv("PW")' \
+                '  if p == "" { fmt.Println(""); return }' \
+                '  h, err := bcrypt.GenerateFromPassword([]byte(p), 12)' \
+                '  if err != nil { fmt.Println(""); return }' \
+                '  fmt.Print(string(h))' \
+                '}' > "$TMPGO"
+              ADMIN_PASS_BCRYPT=$(PW="$ADMIN_PASS_PLAIN" go run "$TMPGO" 2>/dev/null || true)
+              rm -f "$TMPGO" || true
+            fi
+            if [ -n "${JWT_SECRET}${ADMIN_USER}${ADMIN_PASS_BCRYPT}${COOKIE_DOMAIN}${COOKIE_SECURE}" ]; then
+              sudo mkdir -p "$ADMIN_DROPIN_DIR"
+              TMPD=$(mktemp)
+              {
+                echo "[Service]"
+                [ -n "$COOKIE_DOMAIN" ] && echo "Environment=COOKIE_DOMAIN=$COOKIE_DOMAIN"
+                [ -n "$COOKIE_SECURE" ] && echo "Environment=COOKIE_SECURE=$COOKIE_SECURE"
+                [ -n "$JWT_SECRET" ] && echo "Environment=JWT_SECRET=$JWT_SECRET"
+                [ -n "$ADMIN_USER" ] && echo "Environment=ADMIN_USERNAME=$ADMIN_USER"
+                [ -n "$ADMIN_PASS_BCRYPT" ] && echo "Environment=ADMIN_PASSWORD_BCRYPT=$ADMIN_PASS_BCRYPT"
+              } > "$TMPD"
+              sudo install -m 0644 "$TMPD" "$ADMIN_DROPIN_DIR/override.conf"
+              rm -f "$TMPD" || true
+            fi
+
+            sudo systemctl restart chillhub-api.service || true
+            sudo systemctl restart chillhub-admin.service || true
 
             # Nginx site config
             sudo install -m 0644 "$DEPLOY_DIR/deploy/launcher.conf" "$NGINX_SITE_AVAILABLE"
             sudo ln -sf "$NGINX_SITE_AVAILABLE" "$NGINX_SITE_ENABLED"
             sudo nginx -t
             sudo systemctl reload nginx
+
+            # Reload systemd and restart services
+            sudo systemctl daemon-reload || true
+            sudo systemctl restart chillhub-api.service || true
+            sudo systemctl restart chillhub-admin.service || true
+
+            # Optional: sync external downloads directory into site if provided and exists on server
+            DOWNLOADS_DIR="${{ secrets.DOWNLOADS_DIR }}"
+            if [ -n "$DOWNLOADS_DIR" ] && [ -d "$DOWNLOADS_DIR" ]; then
+              sudo mkdir -p "$SITE_DIR/downloads"
+              sudo rsync -a "$DOWNLOADS_DIR/" "$SITE_DIR/downloads/"
+            fi
+
+            # Smoke tests (fail with diagnostics on errors)
+            FAIL=0
+            http_code() { curl -ks -o /dev/null -w "%{http_code}" "$1"; }
+            must_200() { local url="$1"; local name="$2"; local code; code=$(http_code "$url"); if [ "$code" = "200" ]; then echo "[test] PASS $name ($url)"; else echo "[test] FAIL $name ($url) -> $code"; FAIL=1; fi; }
+
+            must_200 "https://launcher.samoy.love/admin/ui/login.html" "Admin UI login"
+            code=$(http_code "https://launcher.samoy.love/admin/")
+            if [ "$code" = "200" ]; then echo "[test] WARN /admin/ returned 200 (maybe authorized)"; elif [ "$code" = "401" ]; then echo "[test] PASS /admin/ protected (401)"; else echo "[test] FAIL /admin/ -> $code"; FAIL=1; fi
+            must_200 "https://launcher.samoy.love/admin/ui/admin.js" "Admin UI static admin.js"
+            must_200 "https://launcher.samoy.love/admin/api/health" "Admin API health"
+            must_200 "https://launcher.samoy.love/" "Landing root"
+            must_200 "https://launcher.samoy.love/styles.css" "Landing styles"
+
+            # manifests latest.json (soft check: ignore if absent)
+            if curl -ksf "https://launcher.samoy.love/manifests/launcher/latest.json" >/dev/null; then
+              echo "[test] PASS manifests/launcher/latest.json"
+            else
+              echo "[test] WARN manifests/launcher/latest.json not present"
+            fi
+
+            # news assets ping.txt (soft check)
+            if curl -ksf "https://launcher.samoy.love/assets/ping.txt" >/dev/null; then
+              echo "[test] PASS assets/ping.txt"
+            else
+              echo "[test] WARN assets/ping.txt not present"
+            fi
+
+            if [ $FAIL -ne 0 ]; then
+              echo "[deploy] One or more tests FAILED. Collecting diagnostics..."
+              echo "---- NGINX TEST ----"; sudo nginx -t || true
+              echo "---- NGINX ERROR LOG (last 150) ----"; sudo tail -n 150 /var/log/nginx/error.log || true
+              echo "---- SYSTEMD STATUS (api) ----"; sudo systemctl status chillhub-api.service --no-pager -n 30 || true
+              echo "---- SYSTEMD STATUS (admin) ----"; sudo systemctl status chillhub-admin.service --no-pager -n 30 || true
+              echo "---- JOURNALCTL (api last 150) ----"; sudo journalctl -u chillhub-api.service -e -n 150 || true
+              echo "---- JOURNALCTL (admin last 150) ----"; sudo journalctl -u chillhub-admin.service -e -n 150 || true
+              exit 1
+            fi

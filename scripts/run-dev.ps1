@@ -52,6 +52,43 @@ $ApiBase = if ($Env -eq 'prod') { $ApiBaseProd } else { $ApiBaseLocal }
 Write-Host "[INFO] Environment: $Env" -ForegroundColor Cyan
 Write-Host "[INFO] ApiBaseUrl:  $ApiBase" -ForegroundColor Cyan
 
+# Configure auth-related environment variables for admin server
+function Set-AuthEnv {
+  param([ValidateSet('local','prod')][string]$Mode)
+  if ($Mode -eq 'local') {
+    # Local testing: do NOT set COOKIE_DOMAIN (host-only cookies work on localhost), disable Secure cookies
+    try { Remove-Item Env:COOKIE_DOMAIN -ErrorAction SilentlyContinue } catch {}
+    $env:COOKIE_SECURE = 'false'
+    if (-not $env:JWT_SECRET -or $env:JWT_SECRET.Trim() -eq '') { $env:JWT_SECRET = 'dev-secret-please-change-32bytes-min' }
+    if (-not $env:ADMIN_USERNAME -or $env:ADMIN_USERNAME.Trim() -eq '') { $env:ADMIN_USERNAME = 'admin' }
+    # ADMIN_PASSWORD_BCRYPT should be provided by developer; warn if missing
+    if (-not $env:ADMIN_PASSWORD_BCRYPT -or $env:ADMIN_PASSWORD_BCRYPT.Trim() -eq '') {
+      Write-Host "[WARN] ADMIN_PASSWORD_BCRYPT is not set. Login will fail until set." -ForegroundColor Yellow
+      Write-Host "       Generate with: htpasswd -nbBC 12 admin 'YourPassword' | cut -d: -f2" -ForegroundColor DarkYellow
+    }
+    # Optional: shorter access TTL to test refresh easily
+    if (-not $env:JWT_ACCESS_TTL -or $env:JWT_ACCESS_TTL.Trim() -eq '') { $env:JWT_ACCESS_TTL = '24h' }
+    if (-not $env:JWT_REFRESH_TTL -or $env:JWT_REFRESH_TTL.Trim() -eq '') { $env:JWT_REFRESH_TTL = '720h' } # 30d
+  } else {
+    # Prod-like testing: use real domain and Secure cookies
+    $env:COOKIE_DOMAIN = 'launcher.samoy.love'
+    $env:COOKIE_SECURE = 'true'
+    if (-not $env:JWT_ACCESS_TTL -or $env:JWT_ACCESS_TTL.Trim() -eq '') { $env:JWT_ACCESS_TTL = '24h' }
+    if (-not $env:JWT_REFRESH_TTL -or $env:JWT_REFRESH_TTL.Trim() -eq '') { $env:JWT_REFRESH_TTL = '720h' }
+    if (-not $env:JWT_SECRET -or $env:JWT_SECRET.Trim() -eq '') {
+      Write-Host "[WARN] JWT_SECRET is not set. Set a strong secret to mirror production." -ForegroundColor Yellow
+    }
+    if (-not $env:ADMIN_USERNAME -or $env:ADMIN_USERNAME.Trim() -eq '') {
+      Write-Host "[WARN] ADMIN_USERNAME is not set." -ForegroundColor Yellow
+    }
+    if (-not $env:ADMIN_PASSWORD_BCRYPT -or $env:ADMIN_PASSWORD_BCRYPT.Trim() -eq '') {
+      Write-Host "[WARN] ADMIN_PASSWORD_BCRYPT is not set." -ForegroundColor Yellow
+    }
+  }
+  Write-Host ("[INFO] Auth env: COOKIE_DOMAIN={0} COOKIE_SECURE={1} ACCESS_TTL={2} REFRESH_TTL={3}" -f \
+    ($env:COOKIE_DOMAIN), ($env:COOKIE_SECURE), ($env:JWT_ACCESS_TTL), ($env:JWT_REFRESH_TTL)) -ForegroundColor Cyan
+}
+
 function Get-ProcIdsByPort {
   param([int]$Port)
   $lines = netstat -ano -p TCP | Select-String ":$Port " | ForEach-Object { $_.ToString() }
@@ -108,6 +145,9 @@ function Start-All {
   # Apply env for Go servers
   & "$scriptDir\env.ps1" -ContentRoot $contentRoot | Out-Host
 
+  # Configure auth env for selected mode
+  Set-AuthEnv -Mode $Env
+
   # Ensure ports are free (kill anything bound to 55700/55777)
   Stop-ByPort -Port 55700
   Stop-ByPort -Port 55777
@@ -115,11 +155,16 @@ function Start-All {
   # Ensure previous client instance is not running
   Stop-Client
 
-  # Start API server
-  $global:apiProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit","-Command","`"Push-Location '$repoRoot\\server'; Write-Host '[API] http://localhost:55700' -ForegroundColor Yellow; go run ./cmd/api`"" -PassThru
-
-  # Start Admin server
-  $global:adminProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit","-Command","`"Push-Location '$repoRoot\\server'; Write-Host '[ADMIN] http://localhost:55777/admin' -ForegroundColor Yellow; go run ./cmd/admin`"" -PassThru
+  if ($Env -eq 'local') {
+    # Start API server
+    $global:apiProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit","-Command","`"Push-Location '$repoRoot\server'; Write-Host '[API] http://localhost:55700' -ForegroundColor Yellow; go run ./cmd/api`"" -PassThru
+    # Start Admin server
+    $global:adminProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit","-Command","`"Push-Location '$repoRoot\server'; Write-Host '[ADMIN] http://localhost:55777/admin' -ForegroundColor Yellow; go run ./cmd/admin`"" -PassThru
+  } else {
+    Write-Host "[INFO] Env=prod: skipping local API/Admin servers (use remote nginx/backend)." -ForegroundColor Yellow
+    $global:apiProc = $null
+    $global:adminProc = $null
+  }
 
   # Start Client (WPF)
   $gp = $gamesPath
@@ -135,7 +180,9 @@ function Start-All {
   $clientCmd = "Push-Location '" + (Join-Path $repoRoot 'launcher\ChillHub') + "'; dotnet run --project .\ChillHub.csproj"
   $global:clientProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit","-Command",$clientCmd -PassThru
 
-  Write-Host "API PID=$($apiProc.Id), Admin PID=$($adminProc.Id), Client PID=$($clientProc.Id)" -ForegroundColor Cyan
+  $apiPid   = if ($apiProc) { $apiProc.Id } else { '-' }
+  $adminPid = if ($adminProc) { $adminProc.Id } else { '-' }
+  Write-Host "API PID=$apiPid, Admin PID=$adminPid, Client PID=$($clientProc.Id)" -ForegroundColor Cyan
 }
 
 function Stop-All {
