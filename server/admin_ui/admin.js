@@ -1,3 +1,52 @@
+// --- Admin API path compatibility shim ---
+// Normalize all client-side requests so that any URL starting with '/admin/'
+// (except '/admin/ui/' which is static assets) is automatically rewritten to
+// '/admin/api/...'. This prevents conflicts with the static '/admin/' route
+// in nginx and keeps a single API prefix in production.
+(() => {
+  const ADMIN_PREFIX = '/admin/';
+  const ADMIN_API_PREFIX = '/admin/api/';
+  function rewrite(u) {
+    try {
+      if (typeof u === 'string') {
+        if (u.startsWith(ADMIN_PREFIX) && !u.startsWith('/admin/ui/')) {
+          return ADMIN_API_PREFIX + u.slice(ADMIN_PREFIX.length);
+        }
+        return u;
+      }
+      if (u && typeof u.url === 'string') {
+        const nu = rewrite(u.url);
+        if (nu !== u.url) {
+          // Rebuild Request preserving init
+          return new Request(nu, u);
+        }
+        return u;
+      }
+    } catch { /* no-op */ }
+    return u;
+  }
+  // Patch fetch
+  try {
+    const origFetch = window.fetch;
+    window.fetch = function(input, init) {
+      const r = rewrite(input);
+      return origFetch.call(this, r, init);
+    };
+  } catch { /* ignore */ }
+  // Patch XHR.open
+  try {
+    const origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+      try {
+        if (typeof url === 'string' && url.startsWith(ADMIN_PREFIX) && !url.startsWith('/admin/ui/')) {
+          url = ADMIN_API_PREFIX + url.slice(ADMIN_PREFIX.length);
+        }
+      } catch { /* ignore */ }
+      return origOpen.call(this, method, url, ...rest);
+    };
+  } catch { /* ignore */ }
+})();
+
 // Drag-n-drop wiring for ZIP upload (Launcher tab)
 (function(){
   const dz = document.getElementById('up_drop'); if(!dz) return;

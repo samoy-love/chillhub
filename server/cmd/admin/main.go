@@ -1757,6 +1757,30 @@ func main() {
     http.HandleFunc("/admin/upload", handleUpload)
     // Streaming variant: upload ZIP and stream status as NDJSON
     http.HandleFunc("/admin/uploadStream", handleUploadStream)
+
+    // === Mirror routes under /admin/api/* for nginx proxy ===
+    http.HandleFunc("/admin/api/health", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
+    http.HandleFunc("/admin/api", handleAdminUI)
+    http.HandleFunc("/admin/api/list", handleListVersions)
+    http.HandleFunc("/admin/api/activate", handleActivate)
+    http.HandleFunc("/admin/api/deleteVersion", handleDeleteVersion)
+    http.HandleFunc("/admin/api/upload", handleUpload)
+    http.HandleFunc("/admin/api/uploadStream", handleUploadStream)
+    // News management
+    http.HandleFunc("/admin/api/news/list", handleNewsList)
+    http.HandleFunc("/admin/api/news/get", handleNewsGet)
+    http.HandleFunc("/admin/api/news/save", handleNewsSave)
+    http.HandleFunc("/admin/api/news/delete", handleNewsDelete)
+    http.HandleFunc("/admin/api/news/rebuild", handleNewsRebuild)
+    http.HandleFunc("/admin/api/news/publish", handleNewsPublish)
+    http.HandleFunc("/admin/api/news/preview", handleNewsPreview)
+    http.HandleFunc("/admin/api/news/uploadCover", handleNewsUploadCover)
+    http.HandleFunc("/admin/api/news/assets", handleNewsAssetsList)
+    http.HandleFunc("/admin/api/news/assets/mkdir", handleNewsAssetsMkdir)
+    http.HandleFunc("/admin/api/news/assets/upload", handleNewsAssetsUpload)
+    http.HandleFunc("/admin/api/news/assets/uploadByUrl", handleNewsAssetsUploadByURL)
+    http.HandleFunc("/admin/api/news/assets/delete", handleNewsAssetsDelete)
+    http.HandleFunc("/admin/api/news/assets/rename", handleNewsAssetsRename)
 	// Assets gallery
 	http.HandleFunc("/admin/news/assets", handleNewsAssetsList)
 	http.HandleFunc("/admin/news/assets/mkdir", handleNewsAssetsMkdir)
@@ -1779,7 +1803,7 @@ func main() {
 		http.Handle("/manifests/", httpx.NoStore(http.StripPrefix("/manifests/", http.FileServer(http.Dir(manifestsDir)))))
 	}
 	// Serve static Admin UI assets from server/admin_ui
-	uiDir := detectAdminUIDir()
+	    uiDir := detectAdminUIDir()
 	if st, err := os.Stat(uiDir); err == nil && st.IsDir() {
 		http.Handle("/admin/ui/", httpx.NoStore(http.StripPrefix("/admin/ui/", http.FileServer(http.Dir(uiDir)))))
 	}

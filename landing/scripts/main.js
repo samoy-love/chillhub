@@ -1,8 +1,16 @@
 /* Waves background on Canvas + Parallax + Reveal + Tilt */
 (function(){
+  const mqMobile = window.matchMedia('(max-width: 640px)');
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const isMobile = () => mqMobile.matches;
+
   const canvas = document.getElementById('waves-canvas');
   const ctx = canvas.getContext('2d');
-  let dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  // Lower DPR on mobile to reduce GPU load
+  let dpr = (()=>{
+    const base = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    return isMobile() ? 1 : Math.min(1.5, base);
+  })();
   let W, H, time = 0;
 
   function resize(){
@@ -21,6 +29,8 @@
     { amp: 52, len: 780, spd: 0.32, phase: Math.random()*Math.PI*2, hue: 190 },
   ];
 
+  let rafId = 0;
+  let running = true;
   function step(){
     time += 0.016;
     ctx.clearRect(0,0,W,H);
@@ -70,19 +80,30 @@
     ctx.fillStyle = glow;
     ctx.fillRect(0,0,W,H);
 
-    requestAnimationFrame(step);
+    if(running) rafId = requestAnimationFrame(step);
   }
   step();
 
+  // Pause canvas animation when tab is hidden to save battery/CPU
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.hidden){ running = false; if(rafId) cancelAnimationFrame(rafId); }
+    else { running = true; rafId = requestAnimationFrame(step); }
+  });
+
   // Parallax scroll
   const layers = document.querySelectorAll('.layer');
-  window.addEventListener('scroll', ()=>{
-    const y = window.scrollY || window.pageYOffset;
-    layers.forEach(l => {
-      const sp = parseFloat(l.dataset.speed || '0.2');
-      l.style.transform = `translateY(${y*sp}px)`;
-    });
-  }, {passive:true});
+  const enableParallax = !isMobile() && !prefersReducedMotion.matches;
+  if(enableParallax){
+    window.addEventListener('scroll', ()=>{
+      const y = window.scrollY || window.pageYOffset;
+      layers.forEach(l => {
+        const sp = parseFloat(l.dataset.speed || '0.2');
+        l.style.transform = `translateY(${y*sp}px)`;
+      });
+    }, {passive:true});
+  } else {
+    layers.forEach(l=>{ l.style.transform = ''; });
+  }
 
   // Reveal on scroll
   const revealEls = document.querySelectorAll('[data-animate]');
@@ -91,23 +112,26 @@
   },{threshold:0.15});
   revealEls.forEach(el=>io.observe(el));
 
-  // Tilt on hover for game cards
+  // Tilt on hover for game cards (disabled on touch devices and when reduced motion)
   const tiltEls = document.querySelectorAll('[data-tilt]');
-  tiltEls.forEach(card =>{
-    let rAF=0;
-    function onMove(ev){
-      const rect = card.getBoundingClientRect();
-      const cx = rect.left + rect.width/2; const cy = rect.top + rect.height/2;
-      const dx = (ev.clientX - cx)/rect.width; const dy = (ev.clientY - cy)/rect.height;
-      cancelAnimationFrame(rAF);
-      rAF = requestAnimationFrame(()=>{
-        card.style.transform = `rotateX(${(-dy*6).toFixed(2)}deg) rotateY(${(dx*8).toFixed(2)}deg) translateY(-4px)`;
-      });
-    }
-    function reset(){ card.style.transform = ''; }
-    card.addEventListener('mousemove', onMove);
-    card.addEventListener('mouseleave', reset);
-  });
+  const touchCapable = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  if(!touchCapable && !prefersReducedMotion.matches){
+    tiltEls.forEach(card =>{
+      let rAF=0;
+      function onMove(ev){
+        const rect = card.getBoundingClientRect();
+        const cx = rect.left + rect.width/2; const cy = rect.top + rect.height/2;
+        const dx = (ev.clientX - cx)/rect.width; const dy = (ev.clientY - cy)/rect.height;
+        cancelAnimationFrame(rAF);
+        rAF = requestAnimationFrame(()=>{
+          card.style.transform = `rotateX(${(-dy*6).toFixed(2)}deg) rotateY(${(dx*8).toFixed(2)}deg) translateY(-4px)`;
+        });
+      }
+      function reset(){ card.style.transform = ''; }
+      card.addEventListener('mousemove', onMove);
+      card.addEventListener('mouseleave', reset);
+    });
+  }
 
   // Year in footer
   const y = document.getElementById('year'); if(y) y.textContent = new Date().getFullYear();
@@ -209,6 +233,7 @@
     const sc = document.querySelector('.shots');
     const sec = document.querySelector('.section--shots');
     if(!sc || !sec) return;
+    if(isMobile() || prefersReducedMotion.matches) return; // disable on mobile / reduced motion
     let ticking = false;
     let raf = 0; let targetX = 0; let currX = 0;
     function step(){

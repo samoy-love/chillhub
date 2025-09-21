@@ -399,6 +399,9 @@ img {
   padding-bottom: 4px;
   scroll-snap-type: x proximity;
   cursor: grab;
+  /* Better touch behavior on mobile: horizontal pan without blocking vertical scroll elsewhere */
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x pinch-zoom;
 }
 
 .shots.dragging {
@@ -726,7 +729,8 @@ img {
 
 @media (width <= 640px) {
   .game-card.coming.full {
-    width: 100vw;
+    /* Use container width to avoid horizontal overflow */
+    width: 100%;
     border-radius: 18px;
   }
 
@@ -743,6 +747,19 @@ img {
 @media (width <= 980px) { .game-card { grid-column: span 6; } }
 
 @media (width <= 640px) { .game-card { grid-column: span 12; } }
+
+/* Mobile layout refinements */
+@media (width <= 640px) {
+  /* Ensure cards are centered and do not overflow the grid */
+  .games-grid { justify-items: stretch; }
+  .game-card { width: 100%; }
+  /* Disable heavy parallax layers on small screens */
+  .parallax { display: none; }
+  /* Reduce header blur for performance */
+  .site-header { backdrop-filter: none; }
+  /* Limit hero title pseudo-elements to avoid mobile overflow */
+  .hero .sun-title { overflow: clip; contain: paint; }
+}
 
 /* Features */
 .features {
@@ -789,6 +806,12 @@ img {
 }
 
 @media (width <= 840px) { .features { grid-template-columns: 1fr; } }
+
+/* Respect reduced motion preferences: tone down animations and transitions */
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+  .reel-track { animation: none !important; }
+}
 
 /* Footer */
 .site-footer {
