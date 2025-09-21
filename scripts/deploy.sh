@@ -7,27 +7,44 @@
 # - Test and reload nginx
 #
 # Usage:
-#   bash ./scripts/deploy.sh [--branch <name>] [--no-build]
+#   bash ./scripts/deploy.sh [--branch <name>] [--no-build] [--repo-dir <path>]
 #
 # Requirements: git, rsync, go, systemd, nginx
 set -euo pipefail
 
-BRANCH="${2:-main}"
-if [[ "${1:-}" == "--branch" ]]; then
-  BRANCH="${2:-main}"
-  shift 2
-fi
+BRANCH="main"
 NO_BUILD=0
-if [[ "${1:-}" == "--no-build" ]]; then
-  NO_BUILD=1
-  shift 1
-fi
+EXPLICIT_REPO_DIR=""
 
-# If script is started via sudo, $HOME becomes /root. Prefer original user's home when available.
-if [[ -n "${SUDO_USER:-}" && -d "/home/${SUDO_USER}" ]]; then
-  REPO_DIR="/home/${SUDO_USER}/Launcher-Project"
+# Parse args
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --branch)
+      BRANCH="${2:-main}"; shift 2;;
+    --no-build)
+      NO_BUILD=1; shift 1;;
+    --repo-dir)
+      EXPLICIT_REPO_DIR="${2:-}"; shift 2;;
+    *)
+      echo "[deploy][warn] Unknown arg: $1"; shift 1;;
+  esac
+done
+
+# Determine repository directory
+if [[ -n "$EXPLICIT_REPO_DIR" ]]; then
+  REPO_DIR="$EXPLICIT_REPO_DIR"
 else
-  REPO_DIR="$HOME/Launcher-Project"
+  # Try current git root
+  if GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null); then
+    REPO_DIR="$GIT_ROOT"
+  else
+    # If script is started via sudo, $HOME becomes /root. Prefer original user's home when available.
+    if [[ -n "${SUDO_USER:-}" && -d "/home/${SUDO_USER}" ]]; then
+      REPO_DIR="/home/${SUDO_USER}/Launcher-Project"
+    else
+      REPO_DIR="$HOME/Launcher-Project"
+    fi
+  fi
 fi
 SITE_ROOT="/var/www/site"
 LAUNCHER_ROOT="/var/www/launcher"
