@@ -38,7 +38,7 @@ sudo mkdir -p "$SITE_ROOT" "$LAUNCHER_ROOT" "$LAUNCHER_ROOT/content" "$LAUNCHER_
 
 log "Updating repository: $REPO_DIR (branch: $BRANCH)"
 if [[ ! -d "$REPO_DIR/.git" ]]; then
-  run "git clone https://github.com/tr0llex/Launcher-Project.git \"$REPO_DIR\""
+  run "git clone git@github.com:tr0llex/Launcher-Project.git \"$REPO_DIR\""
 fi
 run "git -C \"$REPO_DIR\" fetch --all --prune"
 run "git -C \"$REPO_DIR\" checkout $BRANCH"
