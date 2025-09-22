@@ -41,6 +41,22 @@
     var idle = true; // gentle infinite scroll until user clicks
     var demoAllowed = true; // gated by visibility
     var raf = 0;
+    // Detect active page scrolling and temporarily freeze idle reel movement
+    let isScrolling = false; let scrollTO = 0;
+    const markScrolling = ()=>{
+      isScrolling = true;
+      clearTimeout(scrollTO);
+      // slightly longer debounce to cover momentum scrolling
+      scrollTO = setTimeout(()=>{ isScrolling = false; }, 240);
+    };
+    window.addEventListener('scroll', markScrolling, { passive: true });
+    window.addEventListener('wheel', markScrolling, { passive: true });
+    window.addEventListener('touchmove', markScrolling, { passive: true });
+    window.addEventListener('keydown', (e)=>{
+      // Keys that typically cause scroll
+      if(['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(e.key)) markScrolling();
+    }, { passive: true });
+
     if(statusEl){ statusEl.style.display = 'none'; }
 
     // Activate JS mode: disable CSS keyframes
@@ -141,8 +157,8 @@
       return { reel, track, baseSlots };
     });
 
-    // Use fewer repeats on desktop to reduce DOM size; mobile still okay due to viewport size
-    const REPEAT_BLOCKS = isLowEndDevice ? 12 : (isMobile() ? 16 : 18);
+    // Base fallback; will be overridden per column in computeMetrics() adaptively
+    const REPEAT_BLOCKS = 2;
     const data = tracks.map(() => ({
       // metrics
       step: 0,
@@ -165,6 +181,21 @@
       lastYMod: 0,
     }));
 
+    // Toggle heavy rendering hints only while animating to keep FPS high when static
+    let animActive = false;
+    function setAnimating(on){
+      if(on === animActive) return;
+      animActive = on;
+      tracks.forEach((t)=>{
+        // Always keep minimal, cheap hints to help scrolling performance on desktop
+        t.track.style.backfaceVisibility = 'hidden';
+        t.track.style.transformStyle = 'preserve-3d';
+        t.track.style.contain = 'paint';
+        // Toggle only the costly will-change during active animation
+        t.track.style.willChange = on ? 'transform' : '';
+      });
+    }
+
     function computeMetrics(){
       const wrapH = reelsWrap.clientHeight;
       tracks.forEach((t, i)=>{
@@ -172,38 +203,74 @@
         // Build repeated content fresh to avoid drift
         const base = t.baseSlots;
         d.baseCount = base.length;
-        // Measure slot height using first base slot appended temporarily if needed
-        // Clear and rebuild track
+        // Measure step using a single probe slot to compute minimal repeat count needed
+        t.track.innerHTML = '';
+        let probe = base[0] ? base[0].cloneNode(true) : null;
+        if(probe){ t.track.appendChild(probe); }
+        // After DOM is ready, measure — normalize all slot heights to the max to ensure perfect alignment later
+        const s0 = t.track.querySelector('.slot');
+        let maxH = 0;
+        if(s0){ maxH = Math.round(s0.getBoundingClientRect().height) || 56; }
+        if(maxH <= 0) maxH = 56;
+        // Approx margins using computed style of the probe
+        let mTop = 0, mBottom = 0, gapApprox = 0;
+        if(s0){
+          const csSlot = window.getComputedStyle(s0);
+          mTop = Math.round(parseFloat(csSlot.marginTop||'0')||0);
+          mBottom = Math.round(parseFloat(csSlot.marginBottom||'0')||0);
+        }
+        const stepApprox = Math.max(1, Math.round(maxH + gapApprox + mTop + mBottom));
+        // Decide repeat so that total height >= ~4x viewport to avoid visible edge refills
+        const periodApprox = Math.max(1, d.baseCount * stepApprox);
+        let needRepeat = Math.max(REPEAT_BLOCKS, Math.ceil((wrapH * 4) / periodApprox));
+        needRepeat = Math.max(3, Math.min(10, needRepeat));
+        d.repeat = needRepeat;
+        // Clear probe and rebuild track with chosen repeat count
         t.track.innerHTML = '';
         const frag = document.createDocumentFragment();
         for(let r=0; r<d.repeat; r++){
           base.forEach(s=> frag.appendChild(s.cloneNode(true)));
         }
         t.track.appendChild(frag);
-        // After DOM is ready, measure
-        const s0 = t.track.querySelector('.slot');
-        d.slotH = s0 ? s0.getBoundingClientRect().height : 56;
+        // Normalize zebra pattern across the entire repeated list to avoid visual glitches
+        const allSlots = t.track.querySelectorAll('.slot');
+        allSlots.forEach((el, idx)=>{
+          if(idx % 2 === 1) el.classList.add('alt'); else el.classList.remove('alt');
+        });
+        // After DOM is ready, measure — normalize all slot heights to the max to ensure perfect alignment
+        const allForH = t.track.querySelectorAll('.slot');
+        allForH.forEach(el=>{ maxH = Math.max(maxH, Math.round(el.getBoundingClientRect().height)); });
+        if(maxH <= 0 && s0){ maxH = Math.round(s0.getBoundingClientRect().height) || 56; }
+        if(maxH <= 0) maxH = 56;
+        allForH.forEach(el=>{ el.style.height = `${maxH}px`; });
+        // Quantize to integers to prevent subpixel drift between measurements and transforms
+        d.slotH = maxH;
         const csTrack = window.getComputedStyle(t.track);
-        d.gap = parseFloat(csTrack.rowGap||csTrack.gap||'0') || 0;
-        // include vertical margins from slot into step
-        let mTop = 0, mBottom = 0;
-        if(s0){
-          const csSlot = window.getComputedStyle(s0);
-          mTop = parseFloat(csSlot.marginTop||'0')||0;
-          mBottom = parseFloat(csSlot.marginBottom||'0')||0;
-        }
-        d.step = d.slotH + d.gap + mTop + mBottom;
-        d.total = d.baseCount * d.step * d.repeat;
-        d.cy = wrapH/2 - d.step/2;
+        d.gap = Math.round(parseFloat(csTrack.rowGap||csTrack.gap||'0') || 0);
+        // include vertical margins from slot into step (use a fresh slot from rebuilt track)
+        mTop = 0; mBottom = 0;
+        const s1 = t.track.querySelector('.slot');
+        if(s1){ const csSlot2 = window.getComputedStyle(s1); mTop = Math.round(parseFloat(csSlot2.marginTop||'0')||0); mBottom = Math.round(parseFloat(csSlot2.marginBottom||'0')||0); }
+        d.step = Math.max(1, Math.round(d.slotH + d.gap + mTop + mBottom));
+        d.total = Math.max(1, Math.round(d.baseCount * d.step * d.repeat));
+        // Precompute period and central safety window so we never approach edges
+        d.period = d.baseCount * d.step;
+        d.center = Math.floor(d.total / 2);
+        // Safety window size: large enough (>= wrap height, >= 8 steps, >= 1.5 periods), but < half total
+        const maxSafe = Math.max(1, Math.floor(d.total / 2) - d.step);
+        d.safety = Math.min(maxSafe, Math.max(Math.floor(wrapH * 1.0), d.step * 8, Math.floor(d.period * 1.5)));
+        d.cy = Math.round(wrapH/2 - d.step/2);
         // Reset transform to a safe normalized value (middle block start)
         d.y = ((d.baseCount * Math.floor(d.repeat/2)) * d.step) - d.cy;
         // Use integer pixel translation to avoid hairline gaps/flicker
-        const initY = d.y % d.total; const initYPx = -Math.round(initY);
+        const initY = ((d.y % d.total) + d.total) % d.total;
+        const initYPx = -Math.floor(initY);
         t.track.style.transform = `translate3d(0, ${initYPx}px, 0)`;
+        // Base hints are applied via setAnimating (kept minimal when idle)
       });
     }
 
-    computeMetrics();
+    // computeMetrics will be called after we augment base slots from combos
 
     function renderAll(){
       tracks.forEach((t, i)=>{
@@ -218,7 +285,7 @@
 
     // Curated combos: [жанр, поджанр, особенность]
     const combos = [
-      ['Выживание','Хоррор-выживание','Кооператив на 4 игрока'],
+      ['Выживание','Хоррор-выживание','Кооператив'],
       ['Рогалик','Экшен-рогалик','Случайная генерация уровней'],
       ['Шутер','Тактический шутер','Разрушаемое окружение'],
       ['Песочница','Крафтовая песочница','Мастерская Steam'],
@@ -228,7 +295,51 @@
       ['Симулятор','Космосим','Система экипажа'],
       ['Приключение','Метроидвания','Нелинейное прохождение'],
       ['Хоррор','Кооперативный хоррор','Случайные события'],
+      // User additions
+      ['Рогалик','Карточный рогалик','Открытие карт'],
+      ['Шутер','Пулевой ад','Экраны врагов'],
+      ['Песочница','Физическая песочница','Смешные баги'],
+      ['Стратегия','Градостроение','Управление жителями'],
+      ['Симулятор','Ферма-сим','Смена сезонов'],
+      ['Экшен','Слэшер','Комбо-система'],
+      ['Приключение','Квест','Головоломки'],
+      ['Выживание','Автоматизация','Фабрики и цепи'],
+      ['Пати-игра','Мини-игры','Локальный мультиплеер'],
+      ['Рогалик','Платформер-рогалик','Рост персонажа'],
+      ['Хоррор','Психологический хоррор','Четвёртая стена'],
+      ['Шутер','Арена-шутер','Физика оружия'],
+      ['Приключение','Визуальная новелла','Множественные концовки'],
+      ['Стратегия','Пошаговая тактика','Классы юнитов'],
+      ['Симулятор','Жизнь в деревне','Отношения с NPC'],
+      ['Экшен','Ритм-экшен','Игра в такт'],
+      ['Песочница','Воксельная песочница','Разрушаемый мир'],
     ];
+
+    // Ensure all texts from combos exist in the base slots per column (0: жанр, 1: поджанр, 2: особенность)
+    (function augmentBaseSlotsFromCombos(){
+      // Build column-wise sets of existing texts
+      const colSets = [new Set(), new Set(), new Set()];
+      tracks.forEach((t, colIdx)=>{
+        t.baseSlots.forEach(s=> colSets[colIdx].add((s.textContent||'').trim()));
+      });
+      // For each combo, if a text is missing in a column, create and append a slot to that column's base list
+      combos.forEach(row=>{
+        row.forEach((txt, colIdx)=>{
+          const norm = String(txt||'').trim();
+          if(!norm) return;
+          if(!colSets[colIdx].has(norm)){
+            const el = document.createElement('div');
+            el.className = 'slot';
+            el.textContent = norm;
+            tracks[colIdx].baseSlots.push(el);
+            colSets[colIdx].add(norm);
+          }
+        });
+      });
+    })();
+
+    // Now that base slots include everything from combos, build repeated tracks and measure
+    computeMetrics();
   
     function findIndexByText(track, text){
       const items = Array.from(track.querySelectorAll('.slot'));
@@ -236,8 +347,12 @@
       return idx >= 0 ? idx : Math.floor(Math.random()*items.length);
     }
 
-    function computeTargets(preset){
+    function computeTargets(preset, opts){
       const now = performance.now();
+      const strong = !!(opts && opts.strong);
+      // durations staggered so columns stop one-by-one (left -> right) — same on all devices
+      const baseDur = 4200; // longer base duration like casino reels
+      const durStep = 800;  // softer staggering between reels
       tracks.forEach((t, i)=>{
         const d = data[i];
         // Determine chosen index within base slots only
@@ -253,34 +368,75 @@
         let target = snap;
         // Ensure forward motion and add extra loops for feel
         while(target <= d.y + d.step){ target += d.baseCount * d.step; }
-        // Fewer extra loops on desktop to increase perceived speed
-        const baseLoops = isMobile() ? 3 : 1;
-        const maxExtra = Math.max(baseLoops, baseLoops + i);
-        target += Math.min(maxExtra, REPEAT_BLOCKS - 2) * d.baseCount * d.step;
+        // Strong user spin: more extra loops for momentum (feel like casino)
+        const baseLoops = strong ? 5 : 4; // results in ~5/6/7 loops for columns 0/1/2
+        const extra = Math.min(baseLoops + i, Math.max(0, data[i].repeat - 2));
+        target += extra * d.baseCount * d.step;
         d.yStart = d.y;
         d.target = target;
         d.snap = snap;
         d.chosenIdx = chosenIdx;
         d.done = false;
-        d.startT = now + i* (isMobile() ? 220 : 120);
-        const durMul = isMobile() ? 2.6 : 1.8;
-        d.dur = (1600 + i*320) * durMul;
+        // Start all reels together for a unified blast
+        d.startT = now;
+        // Stagger stop by increasing durations per reel
+        d.dur = baseDur + i * durStep;
       });
     }
 
-    // Idle gentle scroll state
-    // Make idle scroll faster on desktop for better perceived smoothness
-    const idleSpeedBase = isMobile() ? 28 : 60; // px/sec base speed
-    const idleVariance = [0.95, 1.0, 1.08];
+    // Central-window stabilization: keep render within a safe band around the center
+    function stabilizeY(d){
+      if(!d || !d.total || !d.step || !d.baseCount) return;
+      const period = d.period || (d.baseCount * d.step);
+      const center = d.center || Math.floor(d.total/2);
+      const safety = d.safety || Math.max(d.step * 8, Math.floor(period * 1.5));
+      let rY = d.y % d.total; if(rY < 0) rY += d.total;
+      // Bring close to the nearest period around center
+      const dp = Math.round((rY - center) / period);
+      if(dp){ d.y -= dp * period; rY = d.y % d.total; if(rY < 0) rY += d.total; }
+      const low = Math.max(0, center - safety);
+      const high = Math.min(d.total, center + safety);
+      if(rY < low){ d.y += period; }
+      else if(rY > high){ d.y -= period; }
+    }
+
+    // Idle gentle scroll: continuous, infinite, dt-based velocity (like user scroll)
+    // Run continuously (do not pause on scroll), but remain efficient.
+    const idleSpeedBase = isMobile() ? 36 : 120; // px/sec (faster as requested)
+    const idleVariance = [0.98, 1.06, 1.12];
+    // Fixed-step accumulator to keep constant idle speed during scroll
+    let idleLastWall = 0; // wall-clock in ms
+    let idleAcc = 0;      // seconds accumulated
     function idleStep(){
       raf = 0;
-      if(!idle || !demoAllowed){ return; }
+      if(!idle || document.hidden){ return; }
+      // Keep guideline and heavy hints OFF during idle to lower GPU/paint overhead
       const now = performance.now();
-      // move each reel by small delta dependent on column
+      if(!idleLastWall) idleLastWall = now;
+      let elapsed = (now - idleLastWall) / 1000; // seconds
+      // Clamp big gaps (e.g. tab switched) to avoid jumps
+      if(elapsed > 0.25) elapsed = 0.25;
+      // During scroll we still advance with fixed steps; no freeze to keep motion continuous
+      idleLastWall = now;
+      idleAcc += elapsed;
+      const FIXED_DT = 1/60;
+      const MAX_STEPS = 3;
+      const steps = Math.min(MAX_STEPS, Math.floor(idleAcc / FIXED_DT));
+      if(steps > 0){
+        idleAcc -= steps * FIXED_DT;
+        // Apply fixed steps, then render once
+        for(let s = 0; s < steps; s++){
+          tracks.forEach((t,i)=>{
+            const d = data[i];
+            const v = idleSpeedBase * idleVariance[i % idleVariance.length];
+            d.y += v * FIXED_DT;
+            stabilizeY(d);
+            if(d.y > 1e7 || d.y < -1e7){ d.y = ((d.y % d.total) + d.total) % d.total; }
+          });
+        }
+      }
       tracks.forEach((t,i)=>{
         const d = data[i];
-        const v = idleSpeedBase * idleVariance[i % idleVariance.length];
-        d.y += v / 60; // approximate per-frame at ~60fps
         let renderY = d.y % d.total; if(renderY < 0) renderY += d.total;
         const yPx = -Math.round(renderY);
         t.track.style.transform = `translate3d(0, ${yPx}px, 0)`;
@@ -304,54 +460,69 @@
             // Snap to exact center to avoid any subpixel drift and blank gaps
             d.y = d.snap; d.done = true;
           } else {
-            // Three-phase easing profile: slow down -> speed up -> settle
+            // Natural accelerate then decelerate to target (easeInOutCubic)
             const p = Math.min(1, tt / d.dur);
-            let e;
-            if(p < 0.25){
-              // Phase A: decelerate (easeOutQuad)
-              const pp = p / 0.25; e = 1 - (1-pp)*(1-pp);
-              d.y = d.yStart + (d.yStart + (d.target - d.yStart)*0.08 - d.yStart) * e;
-            } else if(p < 0.75){
-              // Phase B: accelerate (easeInQuad)
-              const pp = (p - 0.25) / 0.50; e = pp*pp;
-              const midStart = d.yStart + (d.target - d.yStart)*0.08;
-              const midEnd = d.yStart + (d.target - d.yStart)*0.88;
-              d.y = midStart + (midEnd - midStart) * e;
-            } else {
-              // Phase C: settle to snap (easeOutCubic)
-              const pp = (p - 0.75) / 0.25; e = 1 - Math.pow(1-pp,3);
-              const mid = d.yStart + (d.target - d.yStart)*0.88;
-              d.y = mid + (d.snap - mid) * e;
-            }
+            const e = (p < 0.5)
+              ? 4 * p * p * p
+              : 1 - Math.pow(-2 * p + 2, 3) / 2;
+            d.y = d.yStart + (d.target - d.yStart) * e;
           }
+          // Tick sound on row crossing
           const yMod = (d.y % d.step + d.step) % d.step;
           const crossed = yMod < 6 && d.lastYMod >= 6;
           if(crossed && (now - d.lastTickT) > 200 && !isMuted && audioCtx){ d.lastTickT = now; playTick(); }
           d.lastYMod = yMod;
-          // Normalize and render
+
+          // Keep window centered without breaking easing: shift y,yStart,target together by full periods
+          if(d.total && d.step){
+            const period = d.period || (d.baseCount * d.step);
+            const center = d.center || Math.floor(d.total/2);
+            const safety = d.safety || Math.max(d.step * 8, Math.floor(period * 1.5));
+            let rY = d.y % d.total; if(rY < 0) rY += d.total;
+            let delta = 0;
+            const dp = Math.round((rY - center) / period);
+            if(dp) delta -= dp * period;
+            rY = (d.y + delta) % d.total; if(rY < 0) rY += d.total;
+            const low = Math.max(0, center - safety);
+            const high = Math.min(d.total, center + safety);
+            if(rY < low) delta += period; else if(rY > high) delta -= period;
+            if(delta){ d.y += delta; d.yStart += delta; d.target += delta; }
+          }
+
+          // Normalize extremely large values
+          if(d.y > 1e7 || d.y < -1e7){ d.y = ((d.y % d.total) + d.total) % d.total; }
           let renderY = d.y % d.total; if(renderY < 0) renderY += d.total;
           const yPx = -Math.round(renderY);
           t.track.style.transform = `translate3d(0, ${yPx}px, 0)`;
         }
       });
       if(allDone){
-        spinning = false;
-        reelsWrap.classList.remove('spinning');
-        // Add vibrant row highlight on finish
-        reelsWrap.classList.add('row-lit');
-        clearTimeout(rowLitTO);
-        rowLitTO = setTimeout(()=>{ reelsWrap.classList.remove('row-lit'); }, 2200);
-        // Highlight centered slot in each column
-        tracks.forEach((t,i)=>{
-          const d = data[i];
-          const activeIdx = Math.floor(d.repeat/2)*d.baseCount + d.chosenIdx;
-          // Remove previous highlights
-          t.track.querySelectorAll('.slot--active').forEach(el=>el.classList.remove('slot--active'));
-          const slots = t.track.querySelectorAll('.slot');
-          const el = slots[activeIdx] || null;
-          if(el) el.classList.add('slot--active');
+        // Batch highlight in a single frame to avoid transient wrong selections
+        requestAnimationFrame(()=>{
+          spinning = false;
+          reelsWrap.classList.remove('spinning');
+          // Hide center guideline when final combo is displayed
+          reelsWrap.classList.remove('guideline');
+          // Disable costly will-change in static state; minimal hints stay applied
+          setAnimating(false);
+          // Highlight centered slot in each column simultaneously
+          tracks.forEach((t,i)=>{
+            const d = data[i];
+            const activeIdx = Math.floor(d.repeat/2)*d.baseCount + d.chosenIdx;
+            t.track.querySelectorAll('.slot--active').forEach(el=>el.classList.remove('slot--active'));
+            const slots = t.track.querySelectorAll('.slot');
+            const el = slots[activeIdx] || null;
+            if(el) el.classList.add('slot--active');
+          });
+          // Add vibrant row highlight on finish
+          reelsWrap.classList.add('row-lit');
+          clearTimeout(rowLitTO);
+          rowLitTO = setTimeout(()=>{ reelsWrap.classList.remove('row-lit'); }, 2200);
+          // Desktop lamps strong blink for 5 seconds; CSS hides lamps on mobile
+          reelsWrap.classList.add('lamps-blink');
+          setTimeout(()=>{ reelsWrap.classList.remove('lamps-blink'); }, 5000);
+          playChime();
         });
-        playChime();
         // Never auto-spin again after a manual spin; remain stopped
         return;
       }
@@ -365,21 +536,31 @@
       // If idle loop holds a pending RAF, cancel it to avoid blocking spin RAF
       if(raf){ cancelAnimationFrame(raf); raf = 0; }
       const pick = preset || combos[Math.floor(Math.random()*combos.length)];
+      // Clear any previous highlights immediately so no wrong slots flash at the end
+      tracks.forEach(t=> t.track.querySelectorAll('.slot--active').forEach(el=>el.classList.remove('slot--active')));
       const force = !!(opts && opts.force);
       if(prefersReducedMotion.matches && !forceAnimate && !force){
         // Low-motion path: instantly snap to targets and render once
-        computeTargets(pick);
+        computeTargets(pick, { strong: false });
         data.forEach(d=>{ d.y = d.snap; d.done = true; });
         renderAll();
         ensureAudio(); playChime();
         reelsWrap.classList.remove('spinning');
+        // Hide guideline when final combo is shown instantly
+        reelsWrap.classList.remove('guideline');
+        // Disable costly will-change in static state; minimal hints stay applied
+        setAnimating(false);
         spinning = false;
         return;
       }
       ensureAudio();
       spinning = true;
+      // Show center guideline while spinning
       reelsWrap.classList.add('spinning');
-      computeTargets(pick);
+      reelsWrap.classList.add('guideline');
+      setAnimating(true);
+      // On user click: strong spin
+      computeTargets(pick, { strong: true });
       if(!raf) raf = requestAnimationFrame(step);
     }
 
@@ -392,24 +573,24 @@
     }
     // No mute button currently rendered; keep sound on user gesture via ensureAudio in spin
 
-    // Start idle gentle scroll (all devices) until user clicks
-    setTimeout(()=>{ if(idle && demoAllowed) { if(!raf) raf = requestAnimationFrame(idleStep); } }, 300);
+    // Start idle gentle scroll (all devices) until user clicks — no initial delay
+    if(idle && demoAllowed){ idleLastT = performance.now(); if(!raf) raf = requestAnimationFrame(idleStep); }
 
     // Pause/resume idle based on visibility in viewport
     try {
-      const reelsSection = coming.closest('.section') || coming;
+      // Observe the actual reels viewport, not the whole section, and compensate for fixed header
+      const header = document.querySelector('.site-header');
+      const headerH = header ? Math.round(header.getBoundingClientRect().height) : 0;
       const ioReels = new IntersectionObserver((entries)=>{
         entries.forEach(e=>{
-          demoAllowed = e.isIntersecting;
-          if(!e.isIntersecting){
-            // pause animation when offscreen
-            if(raf){ cancelAnimationFrame(raf); raf = 0; }
-          } else {
-            if(idle && !raf){ raf = requestAnimationFrame(idleStep); }
-          }
+          // Do not stop idle off-screen anymore to keep demo running at all times
+          // Still avoid heavy hints when off-screen
+          if(!spinning) setAnimating(false);
+          // If we were off-screen and come back, ensure idle is ticking
+          if(idle && !spinning && !raf){ idleLastT = performance.now(); raf = requestAnimationFrame(idleStep); }
         });
-      }, { threshold: 0.25 });
-      ioReels.observe(reelsSection);
+      }, { threshold: 0.0, rootMargin: `${headerH}px 0px ${Math.max(0, Math.floor(headerH/2))}px 0px` });
+      ioReels.observe(reelsWrap);
     } catch {}
 
     // Recompute metrics on resize/orientation change to keep center alignment stable
@@ -422,10 +603,10 @@
     window.addEventListener('orientationchange', onResize, { passive: true });
   })();
 
-  // Back-to-top arrow visibility after the screenshots section (robust for mobile/desktop)
+  // Back-to-top arrow visibility after the single screenshot (robust for mobile/desktop)
   (function setupToTop(){
     const btn = document.getElementById('to-top');
-    const sec = document.querySelector('.section--shots');
+    const sec = document.querySelector('.screenshot-win');
     if(!btn || !sec) return;
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     let ticking = false;
@@ -452,7 +633,7 @@
     window.addEventListener('orientationchange', onResize, { passive: true });
     window.addEventListener('load', onResize, { passive: true });
 
-    // Recompute when screenshots images load (they affect section height)
+    // Recompute when the screenshot image loads (affects element height)
     sec.querySelectorAll('img').forEach(img=>{
       if(img.complete){ return; }
       img.addEventListener('load', onResize, { once: true, passive: true });
@@ -500,6 +681,94 @@
       } else {
         target.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
+    });
+  })();
+
+  // Lucky scroll: single, minimal handler for a[href="#casino"] – smooth scroll from current pos and center below header
+  function setupLuckyCenterScroll(){
+    const anchorSel = 'a[href="#casino"]';
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const luckyDirect = document.querySelector(anchorSel);
+    function headerHeight(){ const h = document.querySelector('.site-header'); return h ? Math.round(h.getBoundingClientRect().height) : 0; }
+    function computeCenteredTop(el){
+      const rect = el.getBoundingClientRect();
+      const scrollY = window.scrollY || window.pageYOffset || 0;
+      const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+      const hH = headerHeight();
+      const elH = rect.height;
+      const visH = Math.max(1, vh - hH);
+      if(elH >= visH){ return Math.max(0, Math.round(scrollY + rect.top - hH - 8)); }
+      const centerY = hH + visH/2;
+      return Math.max(0, Math.round(scrollY + rect.top + elH/2 - centerY));
+    }
+    function onLuckyClick(e){
+      const target = document.getElementById('casino');
+      if(!target) return;
+      e.preventDefault();
+      const header = document.querySelector('.site-header');
+      const headerH = header ? Math.round(header.getBoundingClientRect().height) : 0;
+      const titleEl = document.querySelector('.reels-title');
+      const titleH = titleEl ? Math.round(titleEl.offsetHeight || 0) : 0;
+      const artH = Math.round(target.offsetHeight || 0);
+      const currY = window.scrollY || window.pageYOffset || 0;
+      const rect = target.getBoundingClientRect();
+      const docTop = currY + rect.top;
+      // Distance to target's top (aligned under header)
+      const baseTarget = Math.max(0, Math.round(docTop - headerH - 8));
+      const dist = baseTarget - currY; // positive means scroll down
+      // Scroll less by (title + article) but keep reasonable bounds
+      const reduce = titleH + artH;
+      const move = dist > 0
+        ? Math.max(24, Math.min(dist, dist - reduce))
+        : Math.min(-24, Math.max(dist, dist + reduce));
+      const finalTop = Math.max(0, Math.round(currY + move));
+      const behavior = prefersReducedMotion.matches ? 'auto' : 'smooth';
+      const before = window.scrollY || 0;
+      window.scrollTo({ top: finalTop, behavior });
+      // Fallback: if the browser blocked smooth scroll or nothing changed, use scrollIntoView
+      setTimeout(()=>{
+        const after = window.scrollY || 0;
+        if(Math.abs(after - before) < 2){
+          // Ensure visible movement
+          target.scrollIntoView({ behavior, block: 'center' });
+          // Nudge to account for fixed header on next frame
+          requestAnimationFrame(()=>{
+            const nowY = window.scrollY || 0;
+            const adjustTop = Math.max(0, nowY - Math.round(headerH/2));
+            if(Math.abs(adjustTop - nowY) > 1){
+              window.scrollTo({ top: adjustTop, behavior });
+            }
+          });
+        }
+      }, 250);
+      // Update URL without native jump
+      if(history.pushState){ history.pushState(null, '', '#casino'); }
+    }
+    if(luckyDirect){ luckyDirect.addEventListener('click', onLuckyClick, { passive: false }); }
+    document.addEventListener('click', (e)=>{
+      const a = e.target.closest(anchorSel);
+      if(!a) return;
+      onLuckyClick(e);
+    }, { passive: false });
+  }
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', setupLuckyCenterScroll, { once: true });
+  } else {
+    setupLuckyCenterScroll();
+  }
+
+  // Smooth scroll for ALL links to #download ("Готов начать?") across the page
+  (function smoothScrollDownload(){
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const links = Array.from(document.querySelectorAll('a[href="#download"]'));
+    if(links.length === 0) return;
+    const target = document.getElementById('download');
+    if(!target) return;
+    links.forEach(a=>{
+      a.addEventListener('click', (e)=>{
+        e.preventDefault();
+        target.scrollIntoView({ behavior: prefersReducedMotion.matches ? 'auto' : 'smooth', block: 'start' });
+      });
     });
   })();
   let W, H, time = 0;
@@ -578,7 +847,24 @@
 
     if(running) rafId = requestAnimationFrame(step);
   }
-  step();
+  // Respect reduced motion preference: don't start waves animation
+  if(prefersReducedMotion.matches){
+    running = false;
+  } else {
+    step();
+  }
+
+  // React to changes in reduced motion setting at runtime
+  try {
+    prefersReducedMotion.addEventListener('change', (e)=>{
+      if(e.matches){
+        running = false;
+        if(rafId) cancelAnimationFrame(rafId);
+      } else {
+        if(!running){ running = true; rafId = requestAnimationFrame(step); }
+      }
+    }, { passive: true });
+  } catch {}
 
   // Pause canvas animation when tab is hidden or when waves are offscreen to save CPU
   document.addEventListener('visibilitychange', ()=>{
@@ -600,8 +886,9 @@
   } catch {}
 
   // Parallax scroll
+  // Parallax removed: avoid attaching scroll listener if no layers exist
   const layers = document.querySelectorAll('.layer');
-  const enableParallax = !isMobile() && !prefersReducedMotion.matches && !isLowEndDevice;
+  const enableParallax = (!isMobile() && !prefersReducedMotion.matches && !isLowEndDevice && layers.length > 0);
   if(enableParallax){
     window.addEventListener('scroll', ()=>{
       const y = window.scrollY || window.pageYOffset;
@@ -610,8 +897,6 @@
         l.style.transform = `translateY(${y*sp}px)`;
       });
     }, {passive:true});
-  } else {
-    layers.forEach(l=>{ l.style.transform = ''; });
   }
 
   // Reveal on scroll
@@ -645,11 +930,19 @@
   // Year in footer
   const y = document.getElementById('year'); if(y) y.textContent = new Date().getFullYear();
 
-  // Screenshots autoplay disabled; add lightbox on click (for all galleries)
-  (function setupShotsCarousel(){
-    const galleries = Array.from(document.querySelectorAll('.shots'));
-    if(galleries.length === 0) return;
-    // Build shared lightbox once
+  // Remove skeleton shimmer on image load
+  (function clearSkeletonOnLoad(){
+    const imgs = Array.from(document.querySelectorAll('img.skeleton'));
+    function done(img){ img.classList.remove('skeleton'); }
+    imgs.forEach(img=>{
+      if(img.complete){ done(img); return; }
+      img.addEventListener('load', ()=> done(img), { once:true, passive:true });
+      img.addEventListener('error', ()=> done(img), { once:true, passive:true });
+    });
+  })();
+
+  // Screenshot: lightbox on click for the single launcher image
+  (function setupLightbox(){
     const lb = document.createElement('div'); lb.className = 'lightbox';
     const lbImg = document.createElement('img'); lbImg.className = 'lightbox__img'; lbImg.alt = '';
     const btn = document.createElement('button'); btn.className = 'lightbox__close'; btn.setAttribute('aria-label','Закрыть'); btn.innerHTML = '✕';
@@ -661,133 +954,15 @@
     btn.addEventListener('click', close);
     window.addEventListener('keydown', (e)=>{ if(e.key === 'Escape' && lb.classList.contains('show')) close(); });
 
-    galleries.forEach(sc=>{
-      const imgs = Array.from(sc.querySelectorAll('img'));
-      imgs.forEach(img=>{ img.addEventListener('click', ()=> open(img.src)); });
-
-      // below: kept utility anim functions for any local scroll animations if needed later
-      let animRAF = 0;
-      function stopAnim(){ if(animRAF){ cancelAnimationFrame(animRAF); animRAF = 0; sc.dataset.anim = '0'; } }
-      function easeInOutCubic(t){ return t<0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2; }
-      function _animateScrollTo(xTarget, duration=1800){
-        stopAnim(); sc.dataset.anim = '1';
-        const start = sc.scrollLeft; const delta = xTarget - start; const t0 = performance.now();
-        function step(now){
-          const t = Math.min(1, (now - t0)/duration);
-          sc.scrollLeft = start + delta * easeInOutCubic(t);
-          if(t < 1 && sc.dataset.anim==='1') animRAF = requestAnimationFrame(step); else { sc.dataset.anim='0'; animRAF=0; }
-        }
-        animRAF = requestAnimationFrame(step);
-      }
-    });
-  })();
-
-  // Drag-to-scroll for screenshots (mouse & touch)
-  (function setupShotsDrag(){
-    const sc = document.querySelector('.shots');
-    if(!sc) return;
-    const touchCapable = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    let isDown = false, startX = 0, startLeft = 0;
-    let lastX = 0, lastT = 0, vx = 0; // px/sec
-    let momentumRAF = 0;
-
-    function stopMomentum(){ if(momentumRAF){ cancelAnimationFrame(momentumRAF); momentumRAF = 0; } }
-
-    function onDown(e){
-      isDown = true;
-      sc.classList.add('dragging');
-      sc.dataset.pause = '1';
-      // autoplay is disabled; nothing to stop
-      startX = (e.touches? e.touches[0].clientX : e.clientX);
-      startLeft = sc.scrollLeft;
-      lastX = startX; lastT = performance.now(); vx = 0;
-      stopMomentum();
-    }
-    function onMove(e){
-      if(!isDown) return;
-      // Do not prevent default on touch devices to allow vertical scroll
-      if(!(e.touches)) e.preventDefault();
-      const x = (e.touches? e.touches[0].clientX : e.clientX);
-      const dx = x - startX;
-      sc.scrollLeft = startLeft - dx;
-      // velocity calc
-      const now = performance.now();
-      const dt = Math.max(1, now - lastT);
-      const instV = (x - lastX) / dt * 1000; // px/sec
-      vx = vx * 0.8 + instV * 0.2;
-      lastX = x; lastT = now;
-    }
-    function onUp(){
-      if(!isDown) return;
-      isDown = false; sc.classList.remove('dragging');
-      // inertial scrolling with friction (only for mouse-driven drag)
-      const friction = 0.94; // per frame decay at 60fps
-      let prev = performance.now();
-      function step(){
-        const now = performance.now();
-        const dt = (now - prev) / 1000; // seconds
-        prev = now;
-        sc.scrollLeft -= vx * dt;
-        // decay velocity approximately per 60fps frame
-        vx *= Math.pow(friction, dt*60);
-        if(Math.abs(vx) < 15) { sc.dataset.pause = '0'; momentumRAF = 0; return; }
-        momentumRAF = requestAnimationFrame(step);
-      }
-      if(Math.abs(vx) > 50){ momentumRAF = requestAnimationFrame(step); } else { sc.dataset.pause = '0'; }
-    }
-
-    // Desktop: mouse drag with synthetic inertia
-    sc.addEventListener('mousedown', onDown);
-    sc.addEventListener('mousemove', onMove);
-    sc.addEventListener('mouseup', onUp);
-    sc.addEventListener('mouseleave', onUp);
-    // Mobile: rely on native touch scrolling for best responsiveness
-    if(!touchCapable){
-      // No-op: touch handlers intentionally not attached on phones
+    // Bind for the single screenshot window
+    const single = document.querySelector('.screenshot-win .win-body img');
+    const triggerBtn = document.querySelector('.screenshot-win .win-body');
+    if(single && triggerBtn){
+      triggerBtn.addEventListener('click', ()=> open(single.currentSrc || single.src));
     }
   })();
 
-  // Scroll-synced horizontal gallery: vertical scroll moves the gallery horizontally
-  (function setupShotsScrollSync(){
-    const sc = document.querySelector('.shots');
-    const sec = document.querySelector('.section--shots');
-    if(!sc || !sec) return;
-    if(isMobile() || prefersReducedMotion.matches) return; // disable on mobile / reduced motion
-    let ticking = false;
-    let raf = 0; let targetX = 0; let currX = 0;
-    function step(){
-      raf = 0;
-      if(sc.classList.contains('dragging') || sc.dataset.pause==='1' || sc.dataset.anim==='1') return;
-      // smooth approach
-      const alpha = 0.06; // smoothing factor (even slower)
-      currX += (targetX - currX) * alpha;
-      // stop when close enough
-      if(Math.abs(targetX - currX) < 0.5){ currX = targetX; }
-      sc.scrollLeft = currX;
-      if(currX !== targetX) raf = requestAnimationFrame(step);
-    }
-    function onScroll(){
-      if(ticking) return; ticking = true;
-      requestAnimationFrame(()=>{
-        ticking = false;
-        const rect = sec.getBoundingClientRect();
-        const vh = window.innerHeight || document.documentElement.clientHeight;
-        const visible = Math.max(0, Math.min(rect.bottom, vh) - Math.max(rect.top, 0));
-        if(visible <= 0) return; // not visible
-        // progress of section within viewport height (0..1)
-        const span = rect.height + vh; // distance from before entering to after leaving
-        const centerProgress = (vh - rect.top) / span; // 0..1
-        const p = Math.max(0, Math.min(1, centerProgress));
-        const max = sc.scrollWidth - sc.clientWidth;
-        targetX = max * p;
-        if(!raf) raf = requestAnimationFrame(step);
-      });
-    }
-    window.addEventListener('scroll', onScroll, {passive:true});
-    window.addEventListener('resize', onScroll, {passive:true});
-    // initial position after layout
-    setTimeout(()=>{ currX = sc.scrollLeft; onScroll(); }, 400);
-  })();
+  // (removed) Gallery-specific behaviors
 
   // Removed randomization: curated reels stay fixed per column
 })();
