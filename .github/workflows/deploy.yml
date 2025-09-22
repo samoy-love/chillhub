@@ -109,6 +109,13 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             set -eux
+            # ANSI colors for nicer logs over SSH/GitHub Actions
+            NC='\033[0m'; RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; GRAY='\033[0;90m'
+            if [ -n "${NO_COLOR:-}" ] || [ ! -t 1 ]; then NC=''; RED=''; GREEN=''; YELLOW=''; CYAN=''; GRAY=''; fi
+            ok(){ echo -e "${GREEN}$*${NC}"; }
+            warn(){ echo -e "${YELLOW}$*${NC}"; }
+            err(){ echo -e "${RED}$*${NC}"; }
+            info(){ echo -e "${CYAN}$*${NC}"; }
             DEPLOY_DIR="$HOME/deploy"
             SITE_DIR="/var/www/site"
             LAUNCHER_DIR="/var/www/launcher"
@@ -130,7 +137,8 @@ jobs:
 
             sudo install -d -m 0755 "$OPT_DIR"
             SERVER_ARCH=$(uname -m | tr '[:upper:]' '[:lower:]')
-            API_SRC="$DEPLOY_DIR/bin/api"; ADMIN_SRC="$DEPLOY_DIR/bin/admin"
+            API_SRC="$DEPLOY_DIR/bin/api"
+            ADMIN_SRC="$DEPLOY_DIR/bin/admin"
             if [ ! -f "$API_SRC" ] || [ ! -f "$ADMIN_SRC" ]; then
               case "$SERVER_ARCH" in
                 aarch64|arm64)
@@ -148,11 +156,11 @@ jobs:
             if command -v file >/dev/null 2>&1; then
               case "$SERVER_ARCH" in
                 aarch64|arm64)
-                  file "$OPT_DIR/api"   | grep -qiE 'aarch64|arm64' || (echo "[error] api arch mismatch" && exit 1)
+                  file "$OPT_DIR/api" | grep -qiE 'aarch64|arm64' || (echo "[error] api arch mismatch" && exit 1)
                   file "$OPT_DIR/admin" | grep -qiE 'aarch64|arm64' || (echo "[error] admin arch mismatch" && exit 1)
                   ;;
                 x86_64|amd64)
-                  file "$OPT_DIR/api"   | grep -qiE 'x86-64|amd64' || (echo "[error] api arch mismatch" && exit 1)
+                  file "$OPT_DIR/api" | grep -qiE 'x86-64|amd64' || (echo "[error] api arch mismatch" && exit 1)
                   file "$OPT_DIR/admin" | grep -qiE 'x86-64|amd64' || (echo "[error] admin arch mismatch" && exit 1)
                   ;;
               esac
@@ -167,16 +175,21 @@ jobs:
             fi
 
             ADMIN_DROPIN_DIR="/etc/systemd/system/chillhub-admin.service.d"
-            JWT_SECRET="${{ secrets.JWT_SECRET }}"; ADMIN_USER="${{ secrets.ADMIN_USER }}"
-            ADMIN_PASS_BCRYPT="${{ secrets.ADMIN_PASSWORD_BCRYPT }}"; ADMIN_PASS_PLAIN="${{ secrets.ADMIN_PASSWORD_PLAIN }}"
-            COOKIE_DOMAIN="${{ secrets.COOKIE_DOMAIN }}"; COOKIE_SECURE="${{ secrets.COOKIE_SECURE }}"
+            JWT_SECRET="${{ secrets.JWT_SECRET }}"
+            ADMIN_USER="${{ secrets.ADMIN_USER }}"
+            ADMIN_PASS_BCRYPT="${{ secrets.ADMIN_PASSWORD_BCRYPT }}"
+            ADMIN_PASS_PLAIN="${{ secrets.ADMIN_PASSWORD_PLAIN }}"
+            COOKIE_DOMAIN="${{ secrets.COOKIE_DOMAIN }}"
+            COOKIE_SECURE="${{ secrets.COOKIE_SECURE }}"
             if [ -n "${ADMIN_PASS_PLAIN}" ] && [ -z "${ADMIN_PASS_BCRYPT}" ]; then
               TMPGO=$(mktemp -t bcrypt-XXXXXX.go)
               printf '%s\n' 'package main' 'import ("fmt" "golang.org/x/crypto/bcrypt" "os")' 'func main(){ p:=os.Getenv("PW"); if p=="" {fmt.Println(""); return}; h,_:=bcrypt.GenerateFromPassword([]byte(p),12); fmt.Print(string(h))}' > "$TMPGO"
-              ADMIN_PASS_BCRYPT=$(PW="$ADMIN_PASS_PLAIN" go run "$TMPGO" 2>/dev/null || true); rm -f "$TMPGO" || true
+              ADMIN_PASS_BCRYPT=$(PW="$ADMIN_PASS_PLAIN" go run "$TMPGO" 2>/dev/null || true)
+              rm -f "$TMPGO" || true
             fi
             if [ -n "${JWT_SECRET}${ADMIN_USER}${ADMIN_PASS_BCRYPT}${COOKIE_DOMAIN}${COOKIE_SECURE}" ]; then
-              sudo mkdir -p "$ADMIN_DROPIN_DIR"; TMPD=$(mktemp)
+              sudo mkdir -p "$ADMIN_DROPIN_DIR"
+              TMPD=$(mktemp)
               {
                 echo "[Service]"
                 [ -n "$COOKIE_DOMAIN" ] && echo "Environment=\"COOKIE_DOMAIN=$COOKIE_DOMAIN\""
@@ -185,58 +198,224 @@ jobs:
                 [ -n "$ADMIN_USER" ] && echo "Environment=\"ADMIN_USERNAME=$ADMIN_USER\""
                 [ -n "$ADMIN_PASS_BCRYPT" ] && echo "Environment=\"ADMIN_PASSWORD_BCRYPT=$ADMIN_PASS_BCRYPT\""
               } > "$TMPD"
-              sudo install -m 0644 "$TMPD" "$ADMIN_DROPIN_DIR/override.conf"; rm -f "$TMPD" || true
+              sudo install -m 0644 "$TMPD" "$ADMIN_DROPIN_DIR/override.conf"
+              rm -f "$TMPD" || true
             fi
 
             sudo install -m 0644 "$DEPLOY_DIR/deploy/launcher.conf" "$NGINX_SITE_AVAILABLE"
             sudo ln -sf "$NGINX_SITE_AVAILABLE" "$NGINX_SITE_ENABLED"
-            sudo nginx -t; sudo systemctl reload nginx
-            if sudo grep -n "error_page 401 =302 /admin/ui/login.html" "$NGINX_SITE_AVAILABLE" >/dev/null 2>&1; then REDIR_OK=1; else REDID_OK=0; fi
+            sudo nginx -t; echo
+            sudo systemctl reload nginx
+            if sudo grep -n "error_page 401 =302 /admin/ui/login.html" "$NGINX_SITE_AVAILABLE" >/dev/null 2>&1; then
+              info "[nginx] redirect rule present"
+              REDIR_OK=1
+            else
+              warn "[nginx] redirect rule NOT present"
+              REDIR_OK=0
+            fi
 
             sudo systemctl daemon-reload || true
             sudo systemctl restart chillhub-api.service || true
             sudo systemctl restart chillhub-admin.service || true
             API_STATE=$(systemctl is-active chillhub-api.service || true)
             ADM_STATE=$(systemctl is-active chillhub-admin.service || true)
-            echo "[systemd] api=$API_STATE admin=$ADM_STATE"; [ "$API_STATE" = active ] && [ "$ADM_STATE" = active ] || { echo "[deploy] services not active"; exit 1; }
+            info "[systemd] api=$API_STATE admin=$ADM_STATE"
+            [ "$API_STATE" = active ] && [ "$ADM_STATE" = active ] || { err "[deploy] services NOT active"; exit 1; }
 
-            DOWNLOADS_DIR="${{ secrets.DOWNLOADS_DIR }}"; if [ -n "$DOWNLOADS_DIR" ] && [ -d "$DOWNLOADS_DIR" ]; then sudo mkdir -p "$SITE_DIR/downloads"; sudo rsync -a "$DOWNLOADS_DIR/" "$SITE_DIR/downloads/"; fi
+            DOWNLOADS_DIR="${{ secrets.DOWNLOADS_DIR }}"
+            if [ -n "$DOWNLOADS_DIR" ] && [ -d "$DOWNLOADS_DIR" ]; then
+              sudo mkdir -p "$SITE_DIR/downloads"
+              sudo rsync -a "$DOWNLOADS_DIR/" "$SITE_DIR/downloads/"
+            fi
 
-            echo "::group::Manifest verification"; MISM_TOTAL=0
-            cmp_manifest() { label="$1"; man="$2"; base="$3"; mism=0; if [ -f "$man" ]; then while IFS=$'\t' read -r rel sha; do [ -z "$rel" ] && continue; f="$base/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f"|awk '{print $1}'); [ "$rsha" = "$sha" ] && echo "[manifest] OK  $label $rel" || { echo "[manifest] FAIL $label $rel expected=$sha got=$rsha"; mism=$((mism+1)); }; else echo "[manifest] MISS $label $rel"; mism=$((mism+1)); fi; done < "$man"; [ "$mism" -ne 0 ] && echo "[manifest] $label mismatches: $mism"; MISM_TOTAL=$((MISM_TOTAL+mism)); fi }
+            echo "::group::Manifest verification"
+            MISM_TOTAL=0
+            cmp_manifest() {
+              label="$1"
+              man="$2"
+              base="$3"
+              mism=0
+              if [ -f "$man" ]; then
+                while IFS=$'\t' read -r rel sha; do
+                  [ -z "$rel" ] && continue
+                  f="$base/$rel"
+                  if [ -f "$f" ]; then
+                    rsha=$(sha256sum "$f" | awk '{print $1}')
+                    [ "$rsha" = "$sha" ] && ok "[manifest] OK  $label $rel" || { err "[manifest] FAIL $label $rel expected=$sha got=$rsha"; mism=$((mism + 1)); }
+                  else
+                    warn "[manifest] MISS $label $rel"
+                    mism=$((mism + 1))
+                  fi
+                done < "$man"
+                [ "$mism" -ne 0 ] && warn "[manifest] $label mismatches: $mism" || ok "[manifest] $label: all files match"
+                MISM_TOTAL=$((MISM_TOTAL + mism))
+              fi
+            }
             cmp_manifest site "$DEPLOY_DIR/site.manifest" "$SITE_DIR"
             cmp_manifest admin "$DEPLOY_DIR/admin.manifest" "$LAUNCHER_DIR/admin_ui"
-            if [ -f "$DEPLOY_DIR/bin.manifest" ]; then mism=0; while IFS=$'\t' read -r rel sha; do case "$rel" in api|admin) f="$OPT_DIR/$rel";; *) f="$DEPLOY_DIR/bin/$rel";; esac; if [ -f "$f" ]; then rsha=$(sha256sum "$f"|awk '{print $1}'); [ "$rsha" = "$sha" ] && echo "[manifest] OK  bin $rel" || { echo "[manifest] FAIL bin $rel expected=$sha got=$rsha"; mism=$((mism+1)); }; else echo "[manifest] MISS bin $rel"; mism=$((mism+1)); fi; done < "$DEPLOY_DIR/bin.manifest"; [ "$mism" -ne 0 ] && echo "[manifest] bin mismatches: $mism"; MISM_TOTAL=$((MISM_TOTAL+mism)); fi
-            cmp_manifest systemd "$DEPLOY_DIR/systemd.manifest" "/etc/systemd/system"; echo "[manifest] total mismatches: $MISM_TOTAL"; echo "::endgroup::"
-            [ "${FAIL_ON_MISMATCH}" = "true" ] && [ "$MISM_TOTAL" -ne 0 ] && { echo "[deploy] mismatch found"; exit 1; }
+            if [ -f "$DEPLOY_DIR/bin.manifest" ]; then
+              mism=0
+              while IFS=$'\t' read -r rel sha; do
+                case "$rel" in
+                  api|admin)
+                    f="$OPT_DIR/$rel"
+                    ;;
+                  *)
+                    f="$DEPLOY_DIR/bin/$rel"
+                    ;;
+                esac
+                if [ -f "$f" ]; then
+                  rsha=$(sha256sum "$f" | awk '{print $1}')
+                  [ "$rsha" = "$sha" ] && ok "[manifest] OK  bin $rel" || { err "[manifest] FAIL bin $rel expected=$sha got=$rsha"; mism=$((mism + 1)); }
+                else
+                  warn "[manifest] MISS bin $rel"
+                  mism=$((mism + 1))
+                fi
+              done < "$DEPLOY_DIR/bin.manifest"
+              [ "$mism" -ne 0 ] && warn "[manifest] bin mismatches: $mism" || ok "[manifest] bin: all files match"
+              MISM_TOTAL=$((MISM_TOTAL + mism))
+            fi
+            cmp_manifest systemd "$DEPLOY_DIR/systemd.manifest" "/etc/systemd/system"
+            info "[manifest] total mismatches: $MISM_TOTAL"; echo
+            echo "::endgroup::"
+            [ "${FAIL_ON_MISMATCH}" = "true" ] && [ "$MISM_TOTAL" -ne 0 ] && { err "[deploy] mismatch found"; exit 1; }
 
-            FAIL=0; http_code(){ curl -ks -o /dev/null -w "%{http_code}" "$1"; }; must_200(){ url="$1"; name="$2"; code=$(http_code "$url"); [ "$code" = 200 ] && echo "[test] PASS $name ($url)" || { echo "[test] FAIL $name ($url) -> $code"; FAIL=1; }; }
-            must_200 "${SITE_BASE}/admin/ui/login.html" "Admin UI login"; code=$(http_code "${SITE_BASE}/admin/"); if [ "$code" = 200 ]; then echo "[test] WARN /admin/ returned 200"; elif [ "$code" = 401 ] || [ "$code" = 302 ]; then echo "[test] PASS /admin/ protected ($code)"; else echo "[test] FAIL /admin/ -> $code"; FAIL=1; fi
-            must_200 "${SITE_BASE}/admin/ui/admin.js" "Admin UI static"; must_200 "${SITE_BASE}/admin/api/health" "Admin API health"; must_200 "${SITE_BASE}/" "Landing /"; must_200 "${SITE_BASE}/styles.css" "Landing styles"
-            curl -ksf "${SITE_BASE}/manifests/launcher/latest.json" >/dev/null && echo "[test] PASS manifest latest.json" || echo "[test] WARN manifest latest.json not present"
-            curl -ksf "${SITE_BASE}/assets/ping.txt" >/dev/null && echo "[test] PASS assets/ping.txt" || echo "[test] WARN assets/ping.txt not present"
+            FAIL=0
+            http_code() { curl -ks -o /dev/null -w "%{http_code}" "$1"; }
+            must_200() {
+              url="$1"; name="$2"; code=$(http_code "$url")
+              if [ "$code" = 200 ]; then ok "[test] PASS $name ($url)"; else err "[test] FAIL $name ($url) -> $code"; FAIL=1; fi
+            }
+            must_200 "${SITE_BASE}/admin/ui/login.html" "Admin UI login"
+            code=$(http_code "${SITE_BASE}/admin/")
+            if [ "$code" = 200 ]; then
+              warn "[test] /admin/ returned 200 (maybe already authorized)"
+            elif [ "$code" = 401 ] || [ "$code" = 302 ]; then
+              ok "[test] PASS /admin/ protected ($code)"
+            else
+              err "[test] FAIL /admin/ -> $code"; FAIL=1
+            fi
+            must_200 "${SITE_BASE}/admin/ui/admin.js" "Admin UI static"
+            must_200 "${SITE_BASE}/admin/api/health" "Admin API health"
+            must_200 "${SITE_BASE}/" "Landing /"
+            must_200 "${SITE_BASE}/styles.css" "Landing styles"
+            curl -ksf "${SITE_BASE}/manifests/launcher/latest.json" >/dev/null && ok "[test] PASS manifest latest.json" || warn "[test] WARN manifest latest.json not present"
+            curl -ksf "${SITE_BASE}/assets/ping.txt" >/dev/null && ok "[test] PASS assets/ping.txt" || warn "[test] WARN assets/ping.txt not present"
 
-            REPORT_DIR="$HOME/deploy/report"; mkdir -p "$REPORT_DIR"; TS=$(date -u +%Y%m%d-%H%M%S)
-            REPORT_ROWS_MAN="$REPORT_DIR/manifest_rows.html"; : > "$REPORT_ROWS_MAN"; REPORT_ROWS_HTTP="$REPORT_DIR/http_rows.html"; : > "$REPORT_ROWS_HTTP"
-            tab_row(){ printf '<tr><td>%s</td><td><code>%s</code></td><td>%s</td><td><code>%s</code></td><td><code>%s</code></td></tr>\n' "$1" "$2" "$3" "$4" "$5" >> "$REPORT_ROWS_MAN"; }
-            scan_manifest_table(){ label="$1"; man="$2"; base="$3"; [ -f "$man" ] || return 0; while IFS=$'\t' read -r rel sha; do [ -z "$rel" ] && continue; f="$base/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f"|awk '{print $1}'); [ "$rsha" != "$sha" ] && tab_row "$label" "$rel" FAIL "$sha" "$rsha"; else tab_row "$label" "$rel" MISS "$sha" "-"; fi; done < "$man"; }
-            scan_manifest_table site "$DEPLOY_DIR/site.manifest" "$SITE_DIR"; scan_manifest_table admin "$DEPLOY_DIR/admin.manifest" "$LAUNCHER_DIR/admin_ui"; if [ -f "$DEPLOY_DIR/bin.manifest" ]; then while IFS=$'\t' read -r rel sha; do case "$rel" in api|admin) f="$OPT_DIR/$rel";; *) f="$DEPLOY_DIR/bin/$rel";; esac; if [ -f "$f" ]; then rsha=$(sha256sum "$f"|awk '{print $1}'); [ "$rsha" != "$sha" ] && tab_row bin "$rel" FAIL "$sha" "$rsha"; else tab_row bin "$rel" MISS "$sha" "-"; fi; done < "$DEPLOY_DIR/bin.manifest"; fi; scan_manifest_table systemd "$DEPLOY_DIR/systemd.manifest" "/etc/systemd/system"
-            http_row(){ url="$1"; name="$2"; read -r code time < <(curl -ks -o /dev/null -w "%{http_code} %{time_total}" "$url"); status=FAIL; if [ "$name" = "/admin/ gate" ]; then { [ "$code" = 401 ] || [ "$code" = 302 ]; } && status=OK; else [ "$code" = 200 ] && status=OK; fi; printf '<tr><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s s</td><td>%s</td></tr>\n' "$url" "$name" "$code" "$time" "$status" >> "$REPORT_ROWS_HTTP"; }
-            http_row "${SITE_BASE}/admin/ui/login.html" "Admin UI login"; http_row "${SITE_BASE}/admin/" "/admin/ gate"; http_row "${SITE_BASE}/admin/ui/admin.js" "Admin UI static"; http_row "${SITE_BASE}/admin/api/health" "Admin API health"; http_row "${SITE_BASE}/" "Landing /"; http_row "${SITE_BASE}/styles.css" "Landing styles"; http_row "${SITE_BASE}/manifests/launcher/latest.json" "Manifest latest.json (soft)"; http_row "${SITE_BASE}/assets/ping.txt" "News asset ping.txt (soft)"
-            STATUS=success; [ $FAIL -ne 0 ] && STATUS=fail; [ "$MISM_TOTAL" -ne 0 ] && STATUS=fail; [ "$API_STATE" != active ] && STATUS=fail; [ "$ADM_STATE" != active ] && STATUS=fail; [ "${REDIR_OK:-1}" -eq 0 ] && STATUS=fail
-            REPORT_HTML="$REPORT_DIR/report-$TS.html"; {
+            REPORT_DIR="$HOME/deploy/report"
+            mkdir -p "$REPORT_DIR"
+            TS=$(date -u +%Y%m%d-%H%M%S)
+            REPORT_ROWS_MAN="$REPORT_DIR/manifest_rows.html"; : > "$REPORT_ROWS_MAN"
+            REPORT_ROWS_HTTP="$REPORT_DIR/http_rows.html"; : > "$REPORT_ROWS_HTTP"
+
+            # Per-section counters
+            SITE_OK=0; SITE_FAIL=0; SITE_MISS=0; SITE_TOTAL=0
+            ADMIN_OK=0; ADMIN_FAIL=0; ADMIN_MISS=0; ADMIN_TOTAL=0
+            BIN_OK=0; BIN_FAIL=0; BIN_MISS=0; BIN_TOTAL=0
+            SYS_OK=0; SYS_FAIL=0; SYS_MISS=0; SYS_TOTAL=0
+
+            tab_row() { printf '<tr><td>%s</td><td><code>%s</code></td><td>%s</td><td><code>%s</code></td><td><code>%s</code></td></tr>\n' "$1" "$2" "$3" "$4" "$5" >> "$REPORT_ROWS_MAN"; }
+
+            scan_site() {
+              local man="$DEPLOY_DIR/site.manifest" base="$SITE_DIR"; [ -f "$man" ] || return 0
+              while IFS=$'\t' read -r rel sha; do
+                [ -z "$rel" ] && continue; SITE_TOTAL=$((SITE_TOTAL+1))
+                local f="$base/$rel"
+                if [ -f "$f" ]; then
+                  local rsha; rsha=$(sha256sum "$f" | awk '{print $1}')
+                  if [ "$rsha" = "$sha" ]; then SITE_OK=$((SITE_OK+1)); else SITE_FAIL=$((SITE_FAIL+1)); tab_row site "$rel" FAIL "$sha" "$rsha"; fi
+                else
+                  SITE_MISS=$((SITE_MISS+1)); tab_row site "$rel" MISS "$sha" "-"
+                fi
+              done < "$man"
+            }
+            scan_admin() {
+              local man="$DEPLOY_DIR/admin.manifest" base="$LAUNCHER_DIR/admin_ui"; [ -f "$man" ] || return 0
+              while IFS=$'\t' read -r rel sha; do
+                [ -z "$rel" ] && continue; ADMIN_TOTAL=$((ADMIN_TOTAL+1))
+                local f="$base/$rel"
+                if [ -f "$f" ]; then
+                  local rsha; rsha=$(sha256sum "$f" | awk '{print $1}')
+                  if [ "$rsha" = "$sha" ]; then ADMIN_OK=$((ADMIN_OK+1)); else ADMIN_FAIL=$((ADMIN_FAIL+1)); tab_row admin "$rel" FAIL "$sha" "$rsha"; fi
+                else
+                  ADMIN_MISS=$((ADMIN_MISS+1)); tab_row admin "$rel" MISS "$sha" "-"
+                fi
+              done < "$man"
+            }
+            scan_bin() {
+              local man="$DEPLOY_DIR/bin.manifest"; [ -f "$man" ] || return 0
+              while IFS=$'\t' read -r rel sha; do
+                [ -z "$rel" ] && continue; BIN_TOTAL=$((BIN_TOTAL+1))
+                local f
+                case "$rel" in api|admin) f="$OPT_DIR/$rel";; *) f="$DEPLOY_DIR/bin/$rel";; esac
+                if [ -f "$f" ]; then
+                  local rsha; rsha=$(sha256sum "$f" | awk '{print $1}')
+                  if [ "$rsha" = "$sha" ]; then BIN_OK=$((BIN_OK+1)); else BIN_FAIL=$((BIN_FAIL+1)); tab_row bin "$rel" FAIL "$sha" "$rsha"; fi
+                else
+                  BIN_MISS=$((BIN_MISS+1)); tab_row bin "$rel" MISS "$sha" "-"
+                fi
+              done < "$man"
+            }
+            scan_systemd() {
+              local man="$DEPLOY_DIR/systemd.manifest" base="/etc/systemd/system"; [ -f "$man" ] || return 0
+              while IFS=$'\t' read -r rel sha; do
+                [ -z "$rel" ] && continue; SYS_TOTAL=$((SYS_TOTAL+1))
+                local f="$base/$rel"
+                if [ -f "$f" ]; then
+                  local rsha; rsha=$(sha256sum "$f" | awk '{print $1}')
+                  if [ "$rsha" = "$sha" ]; then SYS_OK=$((SYS_OK+1)); else SYS_FAIL=$((SYS_FAIL+1)); tab_row systemd "$rel" FAIL "$sha" "$rsha"; fi
+                else
+                  SYS_MISS=$((SYS_MISS+1)); tab_row systemd "$rel" MISS "$sha" "-"
+                fi
+              done < "$man"
+            }
+
+            # Run manifest scans (collect rows for FAIL/MISS only + counters)
+            scan_site; scan_admin; scan_bin; scan_systemd
+            http_row() {
+              url="$1"
+              name="$2"
+              read -r code time < <(curl -ks -o /dev/null -w "%{http_code} %{time_total}" "$url")
+              status=FAIL
+              if [ "$name" = "/admin/ gate" ]; then
+                { [ "$code" = 401 ] || [ "$code" = 302 ]; } && status=OK
+              else
+                [ "$code" = 200 ] && status=OK
+              fi
+              printf '<tr><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s s</td><td>%s</td></tr>\n' "$url" "$name" "$code" "$time" "$status" >> "$REPORT_ROWS_HTTP"
+            }
+            http_row "${SITE_BASE}/admin/ui/login.html" "Admin UI login"
+            http_row "${SITE_BASE}/admin/" "/admin/ gate"
+            http_row "${SITE_BASE}/admin/ui/admin.js" "Admin UI static"
+            http_row "${SITE_BASE}/admin/api/health" "Admin API health"
+            http_row "${SITE_BASE}/" "Landing /"
+            http_row "${SITE_BASE}/styles.css" "Landing styles"
+            http_row "${SITE_BASE}/manifests/launcher/latest.json" "Manifest latest.json (soft)"
+            http_row "${SITE_BASE}/assets/ping.txt" "News asset ping.txt (soft)"
+            STATUS=success
+            [ $FAIL -ne 0 ] && STATUS=fail
+            [ "$MISM_TOTAL" -ne 0 ] && STATUS=fail
+            [ "$API_STATE" != active ] && STATUS=fail
+            [ "$ADM_STATE" != active ] && STATUS=fail
+            [ "${REDIR_OK:-1}" -eq 0 ] && STATUS=fail
+            REPORT_HTML="$REPORT_DIR/report-$TS.html"
+            {
               echo "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>ChillHub Deploy Report $TS</title><style>body{font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Arial,sans-serif;padding:24px;background:#0b1020;color:#e8ecff} .ok{color:#35d07f} .fail{color:#ff6b6b} .warn{color:#ffcf5a} pre{background:#0e1530;border-radius:8px;padding:12px;overflow:auto} h1,h2{margin:0 0 8px} .kv{display:grid;grid-template-columns:220px 1fr;gap:6px 12px;margin:12px 0} .kv b{color:#9fb4ff} a{color:#8fc7ff} .pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#0e1a3f;color:#c8d2ff;border:1px solid #2a3f77} table{border-collapse:collapse;width:100%;margin:8px 0} td,th{border:1px solid #2a3f77;padding:6px 8px} th{background:#0d1a3a;color:#c8d2ff;text-align:left}</style></head><body>"
-              echo "<h1>Deploy report <span class=\"pill\">$TS UTC</span></h1><div class=\"kv\"><b>Status</b><div class=\"$STATUS\">$STATUS</div><b>Site</b><div>${SITE_BASE}</div><b>Systemd</b><div>api: $API_STATE; admin: $ADM_STATE</div><b>Manifests</b><div>total mismatches: $MISM_TOTAL</div><b>Nginx redirect</b><div>$( [ \"${REDIR_OK:-1}\" -eq 1 ] && echo OK || echo MISSING )</div></div>"
-              echo "<h2>Manifest FAIL/MISS</h2><table><thead><tr><th>Section</th><th>Path</th><th>Status</th><th>Expected</th><th>Got</th></tr></thead><tbody>"; cat "$REPORT_ROWS_MAN"; echo "</tbody></table>"
-              echo "<h2>HTTP checks</h2><table><thead><tr><th>URL</th><th>Name</th><th>Code</th><th>Time</th><th>Status</th></tr></thead><tbody>"; cat "$REPORT_ROWS_HTTP"; echo "</tbody></table>"
-              echo "<h2>What to do</h2><ul><li>Manifest FAIL/MISS: повторно синхронизируйте соответствующую секцию и проверьте исходные хеши.</li><li>Service not active: проверьте journalctl, исправьте конфиг/секреты и перезапустите сервисы.</li><li>Nginx redirect missing: добавьте ‘error_page 401 =302 /admin/ui/login.html’, затем nginx -t && reload.</li><li>HTTP FAIL: откройте URL, проверьте роутинг/права/конфиги, логи nginx и сервисов.</li></ul>"
-              echo "</body></html>"
-            } > "$REPORT_HTML"; ln -sf "$REPORT_HTML" "$REPORT_DIR/report-latest.html"
-
-            REPORT_DIR="$HOME/deploy/report"; mkdir -p "$REPORT_DIR"; TS=$(date -u +%Y%m%d-%H%M%S)
-            REPORT_HTML="$REPORT_DIR/report-$TS.html"; {
-              echo "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>ChillHub Deploy Report $TS</title><style>body{font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Arial,sans-serif;padding:24px;background:#0b1020;color:#e8ecff} .ok{color:#35d07f} .fail{color:#ff6b6b} .warn{color:#ffcf5a} pre{background:#0e1530;border-radius:8px;padding:12px;overflow:auto} h1,h2{margin:0 0 8px} .kv{display:grid;grid-template-columns:220px 1fr;gap:6px 12px;margin:12px 0} .kv b{color:#9fb4ff} a{color:#8fc7ff} .pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#0e1a3f;color:#c8d2ff;border:1px solid #2a3f77} table{border-collapse:collapse;width:100%;margin:8px 0} td,th{border:1px solid #2a3f77;padding:6px 8px} th{background:#0d1a3a;color:#c8d2ff;text-align:left}</style></head><body>"
-              echo "<h1>Deploy report <span class=\"pill\">$TS UTC</span></h1><div class=\"kv\"><b>Status</b><div class=\"$STATUS\">$STATUS</div><b>Site</b><div>${SITE_BASE}</div><b>Systemd</b><div>api: $API_STATE; admin: $ADM_STATE</div><b>Manifests</b><div>total mismatches: $MISM_TOTAL</div><b>Nginx redirect</b><div>$( [ \"${REDIR_OK:-1}\" -eq 1 ] && echo OK || echo MISSING )</div></div>"
+              echo "<h1>Deploy report <span class=\"pill\">$TS UTC</span></h1>"
+              echo "<div class=\"kv\">"
+              echo "<b>Status</b><div class=\"$STATUS\">$STATUS</div>"
+              echo "<b>Site</b><div>${SITE_BASE}</div>"
+              echo "<b>Systemd</b><div>api: $API_STATE; admin: $ADM_STATE</div>"
+              echo "<b>Manifests</b><div>total mismatches: $MISM_TOTAL</div>"
+              echo "<b>Nginx redirect</b><div>$( [ \"${REDIR_OK:-1}\" -eq 1 ] && echo OK || echo MISSING )</div>"
+              echo "</div>"
+              echo "<h2>Manifest summary</h2>"
+              echo "<table><thead><tr><th>Section</th><th>OK</th><th>FAIL</th><th>MISS</th><th>Total</th></tr></thead><tbody>"
+              printf '<tr><td>site</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>\n' "$SITE_OK" "$SITE_FAIL" "$SITE_MISS" "$SITE_TOTAL"
+              printf '<tr><td>admin_ui</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>\n' "$ADMIN_OK" "$ADMIN_FAIL" "$ADMIN_MISS" "$ADMIN_TOTAL"
+              printf '<tr><td>bin</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>\n' "$BIN_OK" "$BIN_FAIL" "$BIN_MISS" "$BIN_TOTAL"
+              printf '<tr><td>systemd</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>\n' "$SYS_OK" "$SYS_FAIL" "$SYS_MISS" "$SYS_TOTAL"
+              echo "</tbody></table>"
               echo "<h2>Manifest FAIL/MISS</h2><table><thead><tr><th>Section</th><th>Path</th><th>Status</th><th>Expected</th><th>Got</th></tr></thead><tbody>"; cat "$REPORT_ROWS_MAN"; echo "</tbody></table>"
               echo "<h2>HTTP checks</h2><table><thead><tr><th>URL</th><th>Name</th><th>Code</th><th>Time</th><th>Status</th></tr></thead><tbody>"; cat "$REPORT_ROWS_HTTP"; echo "</tbody></table>"
               echo "<h2>What to do</h2><ul><li>Manifest FAIL/MISS: повторно синхронизируйте соответствующую секцию и проверьте исходные хеши.</li><li>Service not active: проверьте journalctl, исправьте конфиг/секреты и перезапустите сервисы.</li><li>Nginx redirect missing: добавьте ‘error_page 401 =302 /admin/ui/login.html’, затем nginx -t && reload.</li><li>HTTP FAIL: откройте URL, проверьте роутинг/права/конфиги, логи nginx и сервисов.</li></ul>"

@@ -103,11 +103,14 @@ try {
   $isGit = (git -C $RepoRoot rev-parse --is-inside-work-tree 2>$null) -eq "true"
   if ($isGit) {
     Write-Info "Checking out branch $Branch"
-    git -C $RepoRoot fetch --all --prune | Out-Null
-    git -C $RepoRoot checkout $Branch | Out-Null
-    git -C $RepoRoot pull --ff-only | Out-Null
+    # Fetch only the target branch from origin to avoid ambiguous upstreams
+    git -C $RepoRoot fetch origin $Branch --prune | Out-Null
+    # Create/reset local branch to exactly match origin/<branch> (avoids 'Cannot fast-forward to multiple branches')
+    git -C $RepoRoot checkout -B $Branch "origin/$Branch" | Out-Null
   }
-} catch {}
+} catch {
+  Write-Warn ("Git sync step failed or skipped: {0}" -f $_.Exception.Message)
+}
 
 if ($StartAtRemote) {
   Write-Section "StartAtRemote"

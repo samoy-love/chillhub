@@ -19,6 +19,17 @@
 # Requirements: git, rsync, go (optional for bcrypt), systemd, nginx, sha256sum, file
 set -euo pipefail
 
+## Colors and printers (placed early so all logs are colorized)
+NC='\033[0m'; RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; MAGENTA='\033[0;35m'; GRAY='\033[0;90m'
+if [[ -n "${NO_COLOR:-}" || ! -t 1 ]]; then NC=''; RED=''; GREEN=''; YELLOW=''; CYAN=''; MAGENTA=''; GRAY=''; fi
+log(){ echo -e "${CYAN}[deploy]${NC} $*"; }
+ok(){ echo -e "${GREEN}[ok]${NC} $*"; }
+warn(){ echo -e "${YELLOW}[warn]${NC} $*"; }
+err(){ echo -e "${RED}[error]${NC} $*"; }
+diag(){ echo -e "${GRAY}[diag]${NC} $*"; }
+section(){ local msg="${1:-}"; local line="------------------------------------------------------------"; echo -e "${GRAY}$line${NC}"; echo -e "${MAGENTA}  $msg${NC}"; echo -e "${GRAY}$line${NC}"; }
+run(){ echo -e "${GRAY}> $*${NC}"; eval "$*"; }
+
 BRANCH="main"
 NO_BUILD=0
 EXPLICIT_REPO_DIR=""
@@ -40,7 +51,7 @@ NO_NGINX_RELOAD=0
 ARCH="auto"   # auto|amd64|arm64
 
 # Preflight: ensure required commands exist
-need_cmd(){ command -v "$1" >/dev/null 2>&1 || { echo "[deploy][error] Missing required command: $1" >&2; exit 1; }; }
+need_cmd(){ command -v "$1" >/dev/null 2>&1 || { err "Missing required command: $1"; exit 1; }; }
 for c in git rsync sudo nginx systemctl curl sha256sum; do need_cmd "$c"; done
 
 # Parse args
@@ -121,11 +132,11 @@ fi
 
 # If neither plain nor bcrypt provided and no persisted secret, prompt user to set password (no echo)
 if [[ -z "$ADMIN_PASS" && -z "$ADMIN_PASS_BCRYPT" ]]; then
-  echo "[deploy] Admin credentials are not set. You'll be prompted to set a password (username=admin)." >&2
+  warn "Admin credentials are not set. You'll be prompted to set a password (username=admin)."
   read -r -s -p "Enter admin password: " PW1; echo >&2
   read -r -s -p "Confirm admin password: " PW2; echo >&2
   if [[ -z "$PW1" || "$PW1" != "$PW2" ]]; then
-    echo "[deploy][error] Passwords do not match or empty. Aborting." >&2
+    err "Passwords do not match or empty. Aborting."
     exit 1
   fi
   if command -v go >/dev/null 2>&1; then
@@ -148,7 +159,7 @@ EOF
     ADMIN_PASS_BCRYPT=$(PW="$PW1" go run "$TMPGO" 2>/dev/null || true)
     rm -f "$TMPGO" || true
     if [[ -z "$ADMIN_PASS_BCRYPT" ]]; then
-      echo "[deploy][error] Failed to derive bcrypt hash." >&2
+      err "Failed to derive bcrypt hash."
       exit 1
     fi
     # Persist to /etc/chillhub/admin.env
@@ -158,23 +169,14 @@ EOF
       echo "ADMIN_PASSWORD_BCRYPT=$ADMIN_PASS_BCRYPT"
     } | sudo tee "$SECRET_FILE" >/dev/null
     sudo chmod 0600 "$SECRET_FILE" || true
-    echo "[deploy] Admin credentials stored in $SECRET_FILE (bcrypt only)."
+    ok "Admin credentials stored in $SECRET_FILE (bcrypt only)."
   else
-    echo "[deploy][error] Go is required to derive bcrypt on the server. Install Go or provide --admin-pass-bcrypt." >&2
+    err "Go is required to derive bcrypt on the server. Install Go or provide --admin-pass-bcrypt."
     exit 1
   fi
 fi
 
-## Colors and printers
-NC='\033[0m'; RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; MAGENTA='\033[0;35m'; GRAY='\033[0;90m'
-if [[ -n "${NO_COLOR:-}" || ! -t 1 ]]; then NC=''; RED=''; GREEN=''; YELLOW=''; CYAN=''; MAGENTA=''; GRAY=''; fi
-log(){ echo -e "${CYAN}[deploy]${NC} $*"; }
-ok(){ echo -e "${GREEN}[ ok   ]${NC} $*"; }
-warn(){ echo -e "${YELLOW}[ warn ]${NC} $*"; }
-err(){ echo -e "${RED}[error ]${NC} $*"; }
-diag(){ echo -e "${GRAY}[ diag ]${NC} $*"; }
-section(){ local msg="${1:-}"; local line="------------------------------------------------------------"; echo -e "${GRAY}$line${NC}"; echo -e "${MAGENTA}  $msg${NC}"; echo -e "${GRAY}$line${NC}"; }
-run(){ echo -e "${GRAY}> $*${NC}"; eval "$*"; }
+## Colors were moved earlier
 
 section "Preflight: директории и доступ"
 log "Ensuring target directories exist"
@@ -204,9 +206,9 @@ if [[ -z "$JWT_SECRET" ]]; then
     JWT_SECRET=$(head -c 48 /dev/urandom | base64 | tr -d '\n' || true)
   fi
   if [[ -z "$JWT_SECRET" ]]; then
-    echo "[deploy][warn] Could not auto-generate JWT_SECRET; please provide --jwt-secret"
+    warn "Could not auto-generate JWT_SECRET; please provide --jwt-secret"
   else
-    echo "[deploy] Auto-generated JWT_SECRET (48 bytes base64)"
+    ok "Auto-generated JWT_SECRET (48 bytes base64)"
   fi
 fi
 
@@ -241,12 +243,12 @@ EOF
     ADMIN_PASS_BCRYPT=$(PW="$ADMIN_PASS" go run "$TMPGO" 2>/dev/null || true)
     rm -f "$TMPGO" || true
     if [[ -n "$ADMIN_PASS_BCRYPT" ]]; then
-      echo "[deploy] Derived ADMIN_PASSWORD_BCRYPT via Go"
+      ok "Derived ADMIN_PASSWORD_BCRYPT via Go"
     else
-      echo "[deploy][warn] Failed to derive bcrypt hash; please provide --admin-pass-bcrypt"
+      warn "Failed to derive bcrypt hash; please provide --admin-pass-bcrypt"
     fi
   else
-    echo "[deploy][warn] Go is not available to derive bcrypt; provide --admin-pass-bcrypt"
+    warn "Go is not available to derive bcrypt; provide --admin-pass-bcrypt"
   fi
 fi
 
@@ -457,20 +459,33 @@ soft_200_if_exists "/var/www/launcher/news/assets/ping.txt" "$SITE_BASE_URL/asse
 if [[ $FAIL -ne 0 ]]; then
   section "Diagnostics: сбор логов"
   echo -e "[deploy] ${RED}One or more tests FAILED. Collecting diagnostics...${NC}"
-  echo "---- NGINX TEST ----"; sudo nginx -t || true
-  echo "---- NGINX ERROR LOG (last 150 lines) ----"; sudo tail -n 150 /var/log/nginx/error.log || true
-  echo "---- NGINX SERVER BLOCK (launcher.samoy.love) ----"; sudo nginx -T 2>/dev/null | sed -n '/server_name launcher.samoy.love/,/}/p' || true
-  echo "---- SYSTEMD STATUS (api) ----"; sudo systemctl status chillhub-api.service --no-pager -n 50 || true
-  echo "---- SYSTEMD STATUS (admin) ----"; sudo systemctl status chillhub-admin.service --no-pager -n 50 || true
-  echo "---- JOURNALCTL (api last 150) ----"; sudo journalctl -u chillhub-api.service -e -n 150 || true
-  echo "---- JOURNALCTL (admin last 150) ----"; sudo journalctl -u chillhub-admin.service -e -n 150 || true
+  echo "---- NGINX TEST ----"; sudo nginx -t || true; echo
+
+  echo "---- NGINX ERROR LOG (last 150 lines) ----"; sudo tail -n 150 /var/log/nginx/error.log || true; echo
+
+  echo "---- NGINX SERVER BLOCK (launcher.samoy.love) ----"; sudo nginx -T 2>/dev/null | sed -n '/server_name launcher.samoy.love/,/}/p' || true; echo
+
+  echo "---- SYSTEMD STATUS (api) ----"; sudo systemctl status chillhub-api.service --no-pager -n 50 || true; echo
+
+  echo "---- SYSTEMD STATUS (admin) ----"; sudo systemctl status chillhub-admin.service --no-pager -n 50 || true; echo
+
+  echo "---- JOURNALCTL (api last 150) ----"; sudo journalctl -u chillhub-api.service -e -n 150 || true; echo
+
+  echo "---- JOURNALCTL (admin last 150) ----"; sudo journalctl -u chillhub-admin.service -e -n 150 || true; echo
+
   echo "---- FS LISTINGS ----"
-  echo "[ls] /var/www/site"; sudo ls -la /var/www/site || true
-  echo "[ls] /var/www/launcher/admin_ui"; sudo ls -la /var/www/launcher/admin_ui || true
-  echo "[ls] /var/www/launcher/news (top)"; sudo ls -la /var/www/launcher/news || true
-  echo "[find] /var/www/launcher/news/assets (up to depth 2)"; sudo find /var/www/launcher/news/assets -maxdepth 2 -type f -printf '%p\n' 2>/dev/null | head -n 200 || true
-  echo "[ls] $MANI_DIR (manifests)"; sudo ls -la "$MANI_DIR" || true
-  echo "[cat] latest.json"; [[ -f "$MANI_DIR/latest.json" ]] && sudo cat "$MANI_DIR/latest.json" || echo "(no latest.json)"
+  echo "[ls] /var/www/site"; sudo ls -la /var/www/site || true; echo
+
+  echo "[ls] /var/www/launcher/admin_ui"; sudo ls -la /var/www/launcher/admin_ui || true; echo
+
+  echo "[ls] /var/www/launcher/news (top)"; sudo ls -la /var/www/launcher/news || true; echo
+
+  echo "[find] /var/www/launcher/news/assets (up to depth 2)"; sudo find /var/www/launcher/news/assets -maxdepth 2 -type f -printf '%p\n' 2>/dev/null | head -n 200 || true; echo
+
+  echo "[ls] $MANI_DIR (manifests)"; sudo ls -la "$MANI_DIR" || true; echo
+
+  echo "[cat] latest.json"; [[ -f "$MANI_DIR/latest.json" ]] && sudo cat "$MANI_DIR/latest.json" || echo "(no latest.json)"; echo
+
   echo -e "[deploy] ${RED}Diagnostics complete. Please review the logs above.${NC}"
   exit 1
 else
