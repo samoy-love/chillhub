@@ -316,7 +316,12 @@ function Start-All {
   $env:ChillHub_GAMES_PATH = $gp
   Write-Host "[CLIENT] WPF starting (GamesPath=$gp)" -ForegroundColor Yellow
   # Important: escape $ in child command so parent PowerShell doesn't expand it here (would turn into '=1')
-  $clientCmd = "Push-Location '" + (Join-Path $repoRoot 'launcher\ChillHub') + "'; `$env:YL_DEV_SKIP_SELF_UPDATE=1; dotnet run --project .\ChillHub.csproj"
+  $msbuildAnalyzerProps = ""
+  if ($Env -eq 'local') {
+    # Suppress analyzer-driven warnings (e.g., StyleCop SA1515) during local runs only
+    $msbuildAnalyzerProps = "-p:RunAnalyzersDuringBuild=false -p:RunAnalyzersDuringLiveAnalysis=false -p:TreatWarningsAsErrors=false"
+  }
+  $clientCmd = "Push-Location '" + (Join-Path $repoRoot 'launcher\ChillHub') + "'; `$env:YL_DEV_SKIP_SELF_UPDATE=1; dotnet run --project .\ChillHub.csproj $msbuildAnalyzerProps"
   $global:clientProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit","-Command",$clientCmd -PassThru
 
   $apiPid   = if ($apiProc) { $apiProc.Id } else { '-' }

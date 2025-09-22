@@ -2,9 +2,13 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+  <meta name="theme-color" content="#0b0b1a" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="description" content="ChillHub — игровой лаунчер с модами: Lethal Company, R.E.P.O., Risk of Rain 2 и другие" />
-  <title>ChillHub - Лаунчер</title>
+  <title>ChillHub — Лаунчер</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
@@ -56,17 +60,6 @@
       </div>
     </section>
 
-    <!-- SCREENSHOTS / GALLERY -->
-    <section class="section section--shots" id="screens" data-animate>
-      <div class="container">
-        <h2>Скриншоты лаунчера</h2>
-        <div class="shots">
-          <img src="./assets/images/launcher2.jpg" alt="Админ-панель новостей" decoding="async" loading="lazy" onerror="this.src='https://placehold.co/960x540/0f0f1f/FFFFFF?text=Launcher+2'" />
-          <img src="./assets/images/launcher1.jpg" alt="Лаунчер ChillHub" decoding="async" loading="lazy" onerror="this.src='https://placehold.co/960x540/0f0f1f/FFFFFF?text=Launcher+1'" />
-          <img src="./assets/images/launcher3.jpg" alt="Админ-панель лаунчера и игр" decoding="async" loading="lazy" onerror="this.src='https://placehold.co/960x540/0f0f1f/FFFFFF?text=Launcher+3'" />
-        </div>
-      </div>
-    </section>
 
     <!-- GAMES -->
     <section class="section section--alt" id="games" data-animate>
@@ -194,6 +187,12 @@
           <span class="benefit"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Автоочистка «хвостов»</span>
           <span class="benefit"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Один клик — и в игре</span>
         </div>
+        <!-- Gallery moved below the benefits-strip -->
+        <div class="shots">
+          <img src="./assets/images/admin-launcher.jpg" alt="Админ-панель лаунчера и игр" decoding="async" loading="lazy" onerror="this.src='https://placehold.co/960x540/0f0f1f/FFFFFF?text=Admin+Launcher'" />
+          <img src="./assets/images/launcher-main.jpg" alt="Лаунчер ChillHub" decoding="async" loading="lazy" onerror="this.src='https://placehold.co/960x540/0f0f1f/FFFFFF?text=Launcher'" />
+          <img src="./assets/images/admin-news.jpg" alt="Админ-панель новостей" decoding="async" loading="lazy" onerror="this.src='https://placehold.co/960x540/0f0f1f/FFFFFF?text=Admin+News'" />
+        </div>
         <div class="features">
           <div class="feature">
             <div class="ico" aria-hidden="true">
@@ -230,8 +229,8 @@
                 <rect x="14" y="14" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="2"/>
               </svg>
             </div>
-            <h3>Больше игр — чаще</h3>
-            <p>Каталог пополняется. Чем больше вы играете — тем быстрее добавляем новые сборки и режимы.</p>
+            <h3>Ещё больше кооперативных игр</h3>
+            <p>Мы регулярно пополняем каталог достойными, весёлыми кооперативными играми и готовыми сборками модов.</p>
           </div>
           <div class="feature">
             <div class="ico" aria-hidden="true">

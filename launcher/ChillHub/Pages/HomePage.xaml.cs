@@ -45,11 +45,6 @@ namespace ChillHub.Pages {
         // Разрешение на тяжёлые проверки файлов (Plan/Execute). На старте запрещено, включаем после первичного рендеринга
         private volatile bool allowFileChecks = false;
 
-        // Событие завершения первичной проверки файлов и флаг состояния
-        public event Action? InitialVerificationCompleted;
-        private volatile bool initialVerifyCompleted = false;
-        public bool IsInitialVerificationCompleted => this.initialVerifyCompleted;
-
         // Единая кнопка действия: режим и флаги
         private enum ActionMode {
             Checking,
@@ -302,20 +297,6 @@ namespace ChillHub.Pages {
                     }
                     catch {
                     }
-
-                    // Помечаем завершение первичной проверки и уведомляем подписчиков
-                    this.initialVerifyCompleted = true;
-                    try {
-                        await this.DispatcherInvokeAsync(() => {
-                            try {
-                                this.InitialVerificationCompleted?.Invoke();
-                            }
-                            catch {
-                            }
-                        });
-                    }
-                    catch {
-                    }
                 });
             }
             catch (Exception ex) {
@@ -455,21 +436,6 @@ namespace ChillHub.Pages {
                     catch {
                     }
                 });
-                // Дополнительная защита: если событие не было поднято ранее, поднимем его здесь
-                if (!this.initialVerifyCompleted) {
-                    this.initialVerifyCompleted = true;
-                    try {
-                        await this.DispatcherInvokeAsync(() => {
-                            try {
-                                this.InitialVerificationCompleted?.Invoke();
-                            }
-                            catch {
-                            }
-                        });
-                    }
-                    catch {
-                    }
-                }
             }
         }
 
@@ -978,9 +944,8 @@ namespace ChillHub.Pages {
 
                     return;
                 }
-
                 // Определим версию: используем latest из списка игр или первый элемент из _builds
-                var game = this.games.FirstOrDefault(g => g.GameId == gid);
+                var game = this.games?.FirstOrDefault(g => g.GameId == gid);
                 var version = game?.LatestVersion;
                 if (string.IsNullOrWhiteSpace(version)) {
                     if (this.builds != null && this.builds.Count > 0) {

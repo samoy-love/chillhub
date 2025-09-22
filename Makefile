@@ -125,4 +125,5 @@ deploy-win:
 	 -CookieSecure "$(COOKIE_SECURE)" \
 	 -DownloadsDir "$(DOWNLOADS_DIR)" \
 	 -Parallel "$(or $(PARALLEL),8)" \
-	 $(if $(START_AT_REMOTE),-StartAtRemote)
+	 $(if $(START_AT_REMOTE),-StartAtRemote) \
+	 $(if $(FAIL_ON_MISMATCH),-FailOnManifestMismatch)
