@@ -27,7 +27,7 @@
   <header class="site-header">
     <div class="container">
       <div class="brand">
-        <img src="./assets/icons/logo.svg" alt="ChillHub" onerror="this.style.display='none'" />
+        <img src="./assets/icons/logo.svg" alt="ChillHub" onerror="this.style.display='none'" decoding="async" />
         <span>ChillHub</span>
       </div>
       <nav class="nav">
@@ -50,7 +50,7 @@
         </div>
         <p>Играй в лучшие модифицированные сборки и обновляйся мгновенно. Без возни с файлами и конфликтами.</p>
         <div class="cta">
-          <a id="download-btn" href="#download" class="btn btn--primary btn--lg">Скачать лаунчер</a>
+          <a id="download-btn" href="/downloads/ChillHub-Setup.exe" download="ChillHub-Setup.exe" class="btn btn--primary btn--lg">Скачать лаунчер</a>
           <a href="#games" class="btn btn--ghost btn--lg">Смотреть игры</a>
         </div>
       </div>
@@ -61,10 +61,9 @@
       <div class="container">
         <h2>Скриншоты лаунчера</h2>
         <div class="shots">
-          <img src="./assets/images/launcher-1.svg" alt="Скрин 1" onerror="this.src='https://placehold.co/960x540/0f0f1f/FFFFFF?text=Launcher+1'" />
-          <img src="./assets/images/launcher-2.svg" alt="Скрин 2" onerror="this.src='https://placehold.co/960x540/0f0f1f/FFFFFF?text=Launcher+2'" />
-          <img src="./assets/images/launcher-3.svg" alt="Скрин 3" onerror="this.src='https://placehold.co/960x540/0f0f1f/FFFFFF?text=Launcher+3'" />
-          <img src="./assets/images/launcher-4.svg" alt="Скрин 4" onerror="this.src='https://placehold.co/960x540/0f0f1f/FFFFFF?text=Launcher+4'" />
+          <img src="./assets/images/launcher2.jpg" alt="Админ-панель новостей" decoding="async" loading="lazy" onerror="this.src='https://placehold.co/960x540/0f0f1f/FFFFFF?text=Launcher+2'" />
+          <img src="./assets/images/launcher1.jpg" alt="Лаунчер ChillHub" decoding="async" loading="lazy" onerror="this.src='https://placehold.co/960x540/0f0f1f/FFFFFF?text=Launcher+1'" />
+          <img src="./assets/images/launcher3.jpg" alt="Админ-панель лаунчера и игр" decoding="async" loading="lazy" onerror="this.src='https://placehold.co/960x540/0f0f1f/FFFFFF?text=Launcher+3'" />
         </div>
       </div>
     </section>
@@ -77,7 +76,7 @@
           <!-- Lethal Company -->
           <article class="game-card" data-tilt>
             <div class="game-thumb">
-              <img src="./assets/images/lethal company.webp" alt="Lethal Company" onerror="this.src='https://picsum.photos/seed/lethal/640/360'" />
+              <img src="./assets/images/lethal.jpg" alt="Lethal Company" decoding="async" loading="lazy" onerror="this.src='https://placehold.co/640x360/0f0f1f/FFFFFF?text=Lethal+Company'" />
             </div>
             <div class="game-body">
               <h3>Lethal Company</h3>
@@ -94,7 +93,7 @@
           <!-- R.E.P.O. -->
           <article class="game-card" data-tilt>
             <div class="game-thumb">
-              <img src="./assets/images/repo.png" alt="R.E.P.O." onerror="this.src='https://picsum.photos/seed/repo/640/360'" />
+              <img src="./assets/images/repo.jpg" alt="R.E.P.O." decoding="async" loading="lazy" onerror="this.src='https://placehold.co/640x360/0f0f1f/FFFFFF?text=R.E.P.O.'" />
             </div>
             <div class="game-body">
               <h3>R.E.P.O.</h3>
@@ -111,7 +110,7 @@
           <!-- Risk of Rain 2 -->
           <article class="game-card" data-tilt>
             <div class="game-thumb">
-              <img src="./assets/images/ror2.png" alt="Risk of Rain 2" onerror="this.src='https://picsum.photos/seed/ror2/640/360'" />
+              <img src="./assets/images/ror2.jpg" alt="Risk of Rain 2" decoding="async" loading="lazy" onerror="this.src='https://placehold.co/640x360/0f0f1f/FFFFFF?text=Risk+of+Rain+2'" />
             </div>
             <div class="game-body">
               <h3>Risk of Rain 2</h3>
@@ -126,86 +125,59 @@
           </article>
 
           <!-- More coming -->
+          <h3 class="reels-title">Какую ещё игру добавить?</h3>
           <article class="game-card coming full" aria-label="Скоро больше игр">
             <div class="game-coming">
               <div class="reels">
-                <!-- Reel A -->
-                <div class="reel track-a">
+                <!-- Reel 1: Жанры -->
+                <div class="reel r1">
                   <div class="reel-track">
-                    <div class="slot">Coop</div>
-                    <div class="slot alt">Solo</div>
-                    <div class="slot">Online</div>
-                    <div class="slot alt">Local</div>
-                    <div class="slot">PvE</div>
-                    <div class="slot alt">PvP</div>
-                    <div class="slot dim">Arena</div>
-                    <div class="slot">Raids</div>
-                    <div class="slot alt">Ranked</div>
-                    <div class="slot dim">Casual</div>
+                    <div class="slot">Выживание</div>
+                    <div class="slot alt">Рогалик</div>
+                    <div class="slot">Шутер</div>
+                    <div class="slot alt">Песочница</div>
+                    <div class="slot">Пати-игра</div>
+                    <div class="slot alt">Экшен</div>
+                    <div class="slot">Стратегия</div>
+                    <div class="slot alt">Симулятор</div>
+                    <div class="slot">Приключение</div>
+                    <div class="slot alt">Хоррор</div>
                   </div>
                 </div>
-                <!-- Reel B -->
-                <div class="reel track-b">
+                <!-- Reel 2: Поджанры -->
+                <div class="reel r2">
                   <div class="reel-track">
-                    <div class="slot alt">Action</div>
-                    <div class="slot">Horror</div>
-                    <div class="slot alt">Rogue</div>
-                    <div class="slot">Shooter</div>
-                    <div class="slot alt">Puzzle</div>
-                    <div class="slot">RPG</div>
-                    <div class="slot alt">Sim</div>
-                    <div class="slot dim">Arcade</div>
-                    <div class="slot alt">Strategy</div>
-                    <div class="slot">Sandbox</div>
+                    <div class="slot">Хоррор-выживание</div>
+                    <div class="slot alt">Экшен-рогалик</div>
+                    <div class="slot">Тактический шутер</div>
+                    <div class="slot alt">Крафтовая песочница</div>
+                    <div class="slot">Социальная дедукция</div>
+                    <div class="slot alt">Souls-like</div>
+                    <div class="slot">Тактика в реальном времени</div>
+                    <div class="slot alt">Космосим</div>
+                    <div class="slot">Метроидвания</div>
+                    <div class="slot alt">Кооперативный хоррор</div>
                   </div>
                 </div>
-                <!-- Reel C -->
-                <div class="reel track-c">
+                <!-- Reel 3: Особенности -->
+                <div class="reel r3">
                   <div class="reel-track">
-                    <div class="slot">FPP</div>
-                    <div class="slot alt">TPP</div>
-                    <div class="slot">TopDown</div>
-                    <div class="slot alt">Isomet</div>
-                    <div class="slot">Side</div>
-                    <div class="slot alt">VR</div>
-                    <div class="slot dim">2D</div>
-                    <div class="slot alt">3D</div>
-                    <div class="slot">Fixed</div>
-                    <div class="slot alt">FreeCam</div>
-                  </div>
-                </div>
-                <!-- Reel D -->
-                <div class="reel track-d">
-                  <div class="reel-track">
-                    <div class="slot">Loot</div>
-                    <div class="slot alt">Craft</div>
-                    <div class="slot">Build</div>
-                    <div class="slot alt">Parkour</div>
-                    <div class="slot">Stealth</div>
-                    <div class="slot alt">Tactic</div>
-                    <div class="slot dim">Combo</div>
-                    <div class="slot alt">Skill</div>
-                    <div class="slot">Cards</div>
-                    <div class="slot alt">Trade</div>
-                  </div>
-                </div>
-                <!-- Reel E -->
-                <div class="reel track-e">
-                  <div class="reel-track">
-                    <div class="slot">Dark</div>
-                    <div class="slot alt">Grim</div>
-                    <div class="slot">Funny</div>
-                    <div class="slot alt">Chill</div>
-                    <div class="slot">Cozy</div>
-                    <div class="slot alt">Epic</div>
-                    <div class="slot dim">Retro</div>
-                    <div class="slot alt">Mythic</div>
-                    <div class="slot">Moody</div>
-                    <div class="slot alt">Noir</div>
+                    <div class="slot">Кооператив на 4 игрока</div>
+                    <div class="slot alt">Случайная генерация уровней</div>
+                    <div class="slot">Разрушаемое окружение</div>
+                    <div class="slot alt">Мастерская Steam</div>
+                    <div class="slot">Кроссплей</div>
+                    <div class="slot alt">Хардкорная боёвка</div>
+                    <div class="slot">Совместимость модов</div>
+                    <div class="slot alt">Система экипажа</div>
+                    <div class="slot">Нелинейное прохождение</div>
+                    <div class="slot alt">Случайные события</div>
                   </div>
                 </div>
               </div>
-              <div class="caption"><span class="spark"></span><span>Скоро ещё больше</span><span class="spark"></span></div>
+              <div class="reels-controls" role="group" aria-label="Управление слотами">
+                <button class="btn btn--reels btn--lg reels-spin" type="button" aria-label="Крутить"><span class="emoji" aria-hidden="true">🎰</span>Крутить</button>
+              </div>
             </div>
           </article>
         </div>
@@ -216,21 +188,68 @@
     <section class="section" id="features" data-animate>
       <div class="container">
         <h2>Почему ChillHub</h2>
+        <div class="benefits-strip" aria-label="Преимущества">
+          <span class="benefit"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Без архивов и распаковок</span>
+          <span class="benefit"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Докачка и возобновление</span>
+          <span class="benefit"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Автоочистка «хвостов»</span>
+          <span class="benefit"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Один клик — и в игре</span>
+        </div>
         <div class="features">
           <div class="feature">
-            <div class="ico"></div>
-            <h3>Автообновления</h3>
-            <p>Скачиваются только изменения. Точная синхронизация папок игр с сервером.</p>
+            <div class="ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3v10m0 0l4-4m-4 4l-4-4M5 21h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </div>
+            <h3>Дифф‑обновления</h3>
+            <p>Скачиваются только изменившиеся файлы — без «перекачек» гигабайтов. Папка игры у тебя всегда как на сервере.</p>
           </div>
           <div class="feature">
-            <div class="ico"></div>
-            <h3>Безопасность</h3>
-            <p>Подписи, прозрачные обновления и отсутствие ложных срабатываний антивирусов.</p>
+            <div class="ico" aria-hidden="true">
+              <!-- Shield Check -->
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 3l7 3v5c0 5-3.5 8.7-7 10-3.5-1.3-7-5-7-10V6l7-3z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                <path d="M8.5 12.5l2.2 2.2 4.8-4.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <h3>Гарантированная консистентность</h3>
+            <p>Лишние файлы удаляются, пустые каталоги создаются по манифесту, контроль хешей (Blake3/SHA‑256).</p>
           </div>
           <div class="feature">
-            <div class="ico"></div>
-            <h3>Комфорт</h3>
-            <p>Игры и моды всегда совместимы. Играй вместо ручной настройки.</p>
+            <div class="ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 5h8M5 10h14M10 15h4M12 20v-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </div>
+            <h3>Обновить → Играть</h3>
+            <p>Больше никаких архивов и ручной распаковки. Один клик — и ты в игре. Новости и заметки по патчам — прямо в лаунчере.</p>
+          </div>
+          <div class="feature">
+            <div class="ico" aria-hidden="true">
+              <!-- Apps Grid -->
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="4" y="4" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="2"/>
+                <rect x="14" y="4" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="2"/>
+                <rect x="4" y="14" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="2"/>
+                <rect x="14" y="14" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="2"/>
+              </svg>
+            </div>
+            <h3>Больше игр — чаще</h3>
+            <p>Каталог пополняется. Чем больше вы играете — тем быстрее добавляем новые сборки и режимы.</p>
+          </div>
+          <div class="feature">
+            <div class="ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.25l-7.19-.61L12 2 9.19 8.64 2 9.25l5.46 4.72L5.82 21 12 17.27z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+            </div>
+            <h3>Уникальные сборки — бесплатно</h3>
+            <p>Сборки и модпаки, которых нет в открытом доступе. Обновляются автоматически и не ломают прогресс.</p>
+          </div>
+          <div class="feature">
+            <div class="ico" aria-hidden="true">
+              <!-- Chat bubble: friendly icon for news & guides -->
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M4 7.5A3.5 3.5 0 017.5 4h9A3.5 3.5 0 0120 7.5v6A3.5 3.5 0 0116.5 17H11l-4 3v-3H7.5A3.5 3.5 0 014 13.5v-6z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                <path d="M8 9.5h8M8 12h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <h3>Новости и гайды внутри</h3>
+            <p>Патчноуты, советы и инструкции — прямо в лаунчере. Запустил — и сразу видишь, что изменилось.</p>
           </div>
         </div>
       </div>
@@ -241,7 +260,7 @@
       <div class="container">
         <h2>Готов начать?</h2>
         <p>Скачай лаунчер и подключайся к друзьям за минуты.</p>
-        <a class="btn btn--primary btn--xl" href="#">Скачать для Windows</a>
+        <a class="btn btn--primary btn--xl" href="/downloads/ChillHub-Setup.exe" download="ChillHub-Setup.exe">Скачать для Windows</a>
         <p class="muted">Поддержка Windows 10–11</p>
       </div>
     </section>
@@ -250,11 +269,16 @@
   <footer class="site-footer">
     <div class="container">
       <p>© <span id="year"></span> ChillHub. Все права защищены.</p>
-      <nav>
-        <a href="#top">Наверх</a>
-      </nav>
+      <nav></nav>
     </div>
   </footer>
+
+  <!-- Back-to-top arrow button -->
+  <button id="to-top" class="to-top" aria-label="Наверх" title="Наверх">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M12 5l7 7M12 5L5 12M12 5v14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
 
   <script src="./scripts/main.js"></script>
 </body>

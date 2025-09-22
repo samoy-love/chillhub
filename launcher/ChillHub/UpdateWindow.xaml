@@ -5,6 +5,78 @@
         SizeToContent="Height" Width="600" ResizeMode="NoResize" WindowStyle="SingleBorderWindow"
         Loaded="Window_Loaded">
   <Grid Margin="16">
+    <Grid.Resources>
+      <!-- Override accent within this window to secondary (purple) so CheckBox checked state is purple like 'Играть' -->
+      <SolidColorBrush x:Key="Brush.Accent" Color="{DynamicResource Color.SecondaryAccent}"/>
+      <!-- Make hover state pink (use the pink stop of the current gradient) -->
+      <SolidColorBrush x:Key="Brush.AccentHover" Color="#8A2A4A"/>
+      <!-- Darker primary gradient for 'Обновить и перезапустить' -->
+      <LinearGradientBrush x:Key="Brush.AccentGradientPrimary" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Offset="0" Color="#3A2966"/>
+        <GradientStop Offset="1" Color="#8A2A4A"/>
+      </LinearGradientBrush>
+      <!-- Local Primary style to ensure hover uses our local AccentHover (avoids StaticResource capture in theme) -->
+      <Style x:Key="Style.Button.PrimaryLocal" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Background" Value="{DynamicResource Brush.AccentGradientPrimary}"/>
+        <Setter Property="Foreground" Value="#0A0A0A"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="Button">
+              <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}" Background="{TemplateBinding Background}"
+                      BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              </Border>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                  <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.AccentHover}"/>
+                  <Setter Property="Foreground" Value="#FFFFFF"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                  <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Accent}"/>
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                  <Setter Property="Opacity" Value="0.6"/>
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
+      <!-- Neutral ghost button style (outline) -->
+      <Style x:Key="Style.Button.GhostNeutral" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="12,6"/>
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="Button">
+              <Border x:Name="bd" CornerRadius="6" Background="{TemplateBinding Background}"
+                      BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              </Border>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                  <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
+                  <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+                  <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                  <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Pressed}"/>
+                  <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderPressed}"/>
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                  <Setter Property="Opacity" Value="0.6"/>
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
+    </Grid.Resources>
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="Auto"/>
@@ -16,16 +88,19 @@
     <StackPanel Grid.Row="1">
       <TextBlock x:Name="StatusText" Text="Инициализация..." TextWrapping="Wrap" Margin="0,0,0,8"/>
       <ProgressBar x:Name="Progress" Height="8" Minimum="0" Maximum="100" Value="0" Margin="0,0,0,8"/>
-      <Border Background="{DynamicResource Brush.Surface}" Padding="8" CornerRadius="6" Margin="0,0,0,8" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
-        <TextBlock Text="Для разработки можно пропустить проверку. Отметьте флаг ниже и нажмите 'Продолжить'."
-                   Foreground="{DynamicResource Brush.TextSecondary}"/>
-      </Border>
-      <CheckBox x:Name="DevSkipCheck" Content="Пропустить проверку (DEV)" Foreground="{DynamicResource Brush.Text}"/>
+      <StackPanel x:Name="DevPanel">
+        <Border Background="{DynamicResource Brush.Surface}" Padding="8" CornerRadius="6" Margin="0,0,0,8" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+          <TextBlock Text="Для разработки можно пропустить проверку. Отметьте флаг ниже и нажмите 'Продолжить'."
+                     Foreground="{DynamicResource Brush.TextSecondary}"/>
+        </Border>
+        <CheckBox x:Name="DevSkipCheck" Content="Пропустить проверку (DEV)" Foreground="{DynamicResource Brush.Text}"/>
+      </StackPanel>
     </StackPanel>
 
     <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-      <Button x:Name="PrimaryBtn" Content="Обновить и перезапустить" MinWidth="200" Height="36" FontSize="13" FontWeight="SemiBold" Padding="12,6" Click="PrimaryBtn_Click" Margin="0,0,8,0" HorizontalAlignment="Right"/>
-      <Button Content="Выход" Width="100" Height="36" FontSize="13" FontWeight="SemiBold" Padding="12,6" Click="ExitBtn_Click"/>
+      <Button x:Name="PrimaryBtn" Content="Обновить и перезапустить" MinWidth="200" Height="36" FontSize="13" FontWeight="SemiBold" Padding="12,6" Click="PrimaryBtn_Click" Margin="0,0,8,0" HorizontalAlignment="Right" Style="{DynamicResource Style.Button.PrimaryLocal}"/>
+      <Button Content="Выход" Width="120" Height="36" FontSize="13" FontWeight="SemiBold" Padding="12,6" Click="ExitBtn_Click" Style="{DynamicResource Style.Button.GhostNeutral}"/>
     </StackPanel>
   </Grid>
 </Window>
+

@@ -6,6 +6,18 @@
 (() => {
   const ADMIN_PREFIX = '/admin/';
   const ADMIN_API_PREFIX = '/admin/api/';
+  const CSRF_COOKIE = 'csrf_token=';
+
+  function getCsrf() {
+    try {
+      const parts = document.cookie.split(';');
+      for (const p of parts) {
+        const s = p.trim();
+        if (s.startsWith(CSRF_COOKIE)) return decodeURIComponent(s.slice(CSRF_COOKIE.length));
+      }
+    } catch { /* no-op */ }
+    return '';
+  }
   function rewrite(u) {
     try {
       if (typeof u === 'string') {
@@ -25,12 +37,29 @@
     } catch { /* no-op */ }
     return u;
   }
-  // Patch fetch
+  // Low-level fetch wrapper: rewrite URL, attach CSRF for unsafe, auto-refresh on 401 once
   try {
     const origFetch = window.fetch;
-    window.fetch = function(input, init) {
+    async function doFetchOnce(input, init){
       const r = rewrite(input);
-      return origFetch.call(this, r, init);
+      const opts = init ? { ...init } : {};
+      const method = (opts.method||'GET').toUpperCase();
+      if (method !== 'GET' && method !== 'HEAD') {
+        opts.headers = new Headers(opts.headers||{});
+        if (!opts.headers.has('X-CSRF-Token')) {
+          const csrf = getCsrf(); if (csrf) opts.headers.set('X-CSRF-Token', csrf);
+        }
+      }
+      return origFetch.call(this, r, opts);
+    }
+    window.fetch = async function(input, init){
+      const res = await doFetchOnce(input, init);
+      if (res && res.status === 401) {
+        // try refresh once, then retry original
+        try { await origFetch.call(this, '/admin/api/auth/refresh', { method: 'POST' }); } catch {}
+        return doFetchOnce(input, init);
+      }
+      return res;
     };
   } catch { /* ignore */ }
   // Patch XHR.open
@@ -42,7 +71,21 @@
           url = ADMIN_API_PREFIX + url.slice(ADMIN_PREFIX.length);
         }
       } catch { /* ignore */ }
+      try { this._method = method; } catch {}
       return origOpen.call(this, method, url, ...rest);
+    };
+    // also patch send to attach CSRF for unsafe methods
+    const origSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function(body){
+      try{
+        const method = (this._method||this.method||'GET').toUpperCase();
+      }catch{}
+      try{
+        // Best-effort: if method is not GET/HEAD, attach CSRF
+        const csrf = getCsrf();
+        if (csrf) this.setRequestHeader('X-CSRF-Token', csrf);
+      }catch{}
+      return origSend.call(this, body);
     };
   } catch { /* ignore */ }
 })();
@@ -636,6 +679,17 @@ async function gmPrevRender(gameId, version){
 
 // Bind refresh and change for preview widgets
 document.addEventListener('DOMContentLoaded', function(){
+  // Ensure we are authenticated before showing heavy UI; if not, try refresh then redirect to login
+  (async ()=>{
+    try {
+      const me = await fetch('/admin/api/auth/me');
+      if (me.status === 401) {
+        try { await fetch('/admin/api/auth/refresh', { method: 'POST' }); } catch {}
+        const me2 = await fetch('/admin/api/auth/me');
+        if (me2.status === 401) { location.href = '/admin/ui/login.html'; return; }
+      }
+    } catch { /* ignore */ }
+  })();
   // Initial load for Launcher tab: populate latest badge and manifest tree
   try{ lnRefresh(); }catch(_){}
   // Initial load for launcher versions selector and list

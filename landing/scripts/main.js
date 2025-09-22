@@ -3,13 +3,456 @@
   const mqMobile = window.matchMedia('(max-width: 640px)');
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const isMobile = () => mqMobile.matches;
+  const isLowEndDevice = (() => {
+    const hc = navigator.hardwareConcurrency || 2;
+    // deviceMemory is not on iOS Safari; assume low if missing and mobile
+    const mem = navigator.deviceMemory || (isMobile() ? 1 : 4);
+    const ua = navigator.userAgent || '';
+    const oldIOS = /OS\s(1[0-3]|[0-9]_)/.test(ua) || /iPhone OS [0-9_]{1,3}/.test(ua);
+    const oldAndroid = /Android\s(4|5|6|7|8)\./.test(ua);
+    return hc <= 2 || mem <= 2 || oldIOS || oldAndroid;
+  })();
+
+  // Note: Header uses a fixed CSS variable height; no JS syncing required.
 
   const canvas = document.getElementById('waves-canvas');
   const ctx = canvas.getContext('2d');
-  // Lower DPR on mobile to reduce GPU load
+  // Lower DPR on mobile and low-end to reduce GPU load
   let dpr = (()=>{
     const base = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    if (isLowEndDevice) return 1; // force 1x
     return isMobile() ? 1 : Math.min(1.5, base);
+  })();
+
+  // Reels engine with sounds (spin button)
+  (function reelsEngine(){
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const forceAnimate = !isLowEndDevice; // on low-end respect reduced motion path
+    const coming = document.querySelector('.game-card.coming');
+    const reelsWrap = coming?.querySelector('.reels');
+    if(!coming || !reelsWrap) return;
+
+    // Controls
+    const btnSpin = coming.querySelector('.reels-spin');
+    const statusEl = coming.querySelector('.reels-status');
+    // Use var to ensure definition before any handler runs (avoid TDZ issues)
+    var spinning = false;
+    var demoMode = true; // auto-spin until user interacts
+    var demoAllowed = true; // gated by visibility
+    var raf = 0;
+    if(statusEl){ statusEl.style.display = 'none'; }
+
+    // Activate JS mode: disable CSS keyframes
+    reelsWrap.classList.add('js-active');
+
+    // Audio (lightweight mixer with compressor, debounced ticks, ducking during chime)
+    const DISABLE_REEL_SOUNDS = true; // global flag to completely disable sounds on landing
+    let audioCtx = null;
+    let isMuted = true;
+    let masterGain = null, comp = null;
+    let tickOsc = null, tickGain = null; // reused oscillator for smooth gating
+    let chimeGain = null;
+    let chimeActiveUntil = 0; // suppress ticks while chime is active
+
+    function ensureAudio(){
+      if(DISABLE_REEL_SOUNDS) return; // do not initialize audio at all
+      if(audioCtx) return;
+      try{
+        audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+        comp = audioCtx.createDynamicsCompressor();
+        comp.threshold.setValueAtTime(-24, audioCtx.currentTime);
+        comp.knee.setValueAtTime(20, audioCtx.currentTime);
+        comp.ratio.setValueAtTime(8, audioCtx.currentTime);
+        comp.attack.setValueAtTime(0.003, audioCtx.currentTime);
+        comp.release.setValueAtTime(0.05, audioCtx.currentTime);
+
+        masterGain = audioCtx.createGain();
+        masterGain.gain.setValueAtTime(0.8, audioCtx.currentTime);
+        masterGain.connect(comp).connect(audioCtx.destination);
+
+        tickGain = audioCtx.createGain();
+        tickGain.gain.value = 0.0001;
+        tickGain.connect(masterGain);
+
+        chimeGain = audioCtx.createGain();
+        chimeGain.gain.value = 0.9;
+        chimeGain.connect(masterGain);
+
+        // Create and start a single tick oscillator, gate via gain for each tick
+        tickOsc = audioCtx.createOscillator();
+        tickOsc.type = 'square';
+        tickOsc.frequency.value = 900;
+        tickOsc.connect(tickGain);
+        tickOsc.start();
+      }catch{}
+    }
+
+    let lastTickWall = 0;
+    function playTick(){
+      if(isMuted || !audioCtx) return;
+      const wallNow = performance.now();
+      // Debounce ticks more aggressively and duck during chime
+      if(wallNow - lastTickWall < 220) return;
+      const t = audioCtx.currentTime;
+      if(t < chimeActiveUntil) return; // suppress during chime
+
+      lastTickWall = wallNow;
+      // Smoothly gate the gain and glide the frequency a bit for a non-clicky tick
+      tickGain.gain.cancelScheduledValues(t);
+      tickGain.gain.setValueAtTime(0.0001, t);
+      tickGain.gain.linearRampToValueAtTime(0.035, t + 0.012);
+      tickGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.10);
+      // Small frequency glide for a pleasant feel
+      tickOsc.frequency.cancelScheduledValues(t);
+      tickOsc.frequency.setValueAtTime(820, t);
+      tickOsc.frequency.linearRampToValueAtTime(980, t + 0.08);
+    }
+
+    function playChime(){
+      if(isMuted || !audioCtx) return;
+      const t0 = audioCtx.currentTime;
+      chimeActiveUntil = t0 + 0.7; // duck ticks while chime plays
+      const seq = [ {f:880, d:0.12}, {f:1175, d:0.14}, {f:1567, d:0.16} ];
+      let t = t0;
+      seq.forEach(({f,d}, _idx)=>{
+        const o = audioCtx.createOscillator();
+        o.type = 'sine';
+        o.frequency.setValueAtTime(f, t);
+        const g = audioCtx.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.linearRampToValueAtTime(0.08, t + 0.03);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+        o.connect(g).connect(chimeGain);
+        o.start(t);
+        o.stop(t + d + 0.02);
+        t += d * 0.7;
+      });
+    }
+
+    // Engine
+    const reelEls = Array.from(reelsWrap.querySelectorAll('.reel'));
+    if(reelEls.length === 0) return;
+
+    // Prepare track data per column
+    const tracks = reelEls.map(reel => {
+      const track = reel.querySelector('.reel-track');
+      const baseSlots = Array.from(track.querySelectorAll('.slot'));
+      return { reel, track, baseSlots };
+    });
+
+    const REPEAT_BLOCKS = isLowEndDevice ? 12 : 24; // fewer DOM nodes on low-end
+    const data = tracks.map(() => ({
+      // metrics
+      step: 0,
+      slotH: 0,
+      gap: 0,
+      baseCount: 0,
+      repeat: REPEAT_BLOCKS,
+      total: 0,
+      cy: 0,
+      // animation state
+      y: 0,
+      yStart: 0,
+      target: 0,
+      snap: 0,
+      chosenIdx: 0,
+      startT: 0,
+      dur: 0,
+      done: false,
+      lastTickT: 0,
+      lastYMod: 0,
+    }));
+
+    function computeMetrics(){
+      const wrapH = reelsWrap.clientHeight;
+      tracks.forEach((t, i)=>{
+        const d = data[i];
+        // Build repeated content fresh to avoid drift
+        const base = t.baseSlots;
+        d.baseCount = base.length;
+        // Measure slot height using first base slot appended temporarily if needed
+        // Clear and rebuild track
+        t.track.innerHTML = '';
+        const frag = document.createDocumentFragment();
+        for(let r=0; r<d.repeat; r++){
+          base.forEach(s=> frag.appendChild(s.cloneNode(true)));
+        }
+        t.track.appendChild(frag);
+        // After DOM is ready, measure
+        const s0 = t.track.querySelector('.slot');
+        d.slotH = s0 ? s0.getBoundingClientRect().height : 56;
+        const csTrack = window.getComputedStyle(t.track);
+        d.gap = parseFloat(csTrack.rowGap||csTrack.gap||'0') || 0;
+        // include vertical margins from slot into step
+        let mTop = 0, mBottom = 0;
+        if(s0){
+          const csSlot = window.getComputedStyle(s0);
+          mTop = parseFloat(csSlot.marginTop||'0')||0;
+          mBottom = parseFloat(csSlot.marginBottom||'0')||0;
+        }
+        d.step = d.slotH + d.gap + mTop + mBottom;
+        d.total = d.baseCount * d.step * d.repeat;
+        d.cy = wrapH/2 - d.step/2;
+        // Reset transform to a safe normalized value (middle block start)
+        d.y = ((d.baseCount * Math.floor(d.repeat/2)) * d.step) - d.cy;
+        // Use integer pixel translation to avoid hairline gaps/flicker
+        const initY = d.y % d.total; const initYPx = -Math.round(initY);
+        t.track.style.transform = `translate3d(0, ${initYPx}px, 0)`;
+      });
+    }
+
+    computeMetrics();
+
+    function renderAll(){
+      tracks.forEach((t, i)=>{
+        const d = data[i];
+        let renderY = d.y % d.total; if(renderY < 0) renderY += d.total;
+        const yPx = -Math.round(renderY);
+        t.track.style.transform = `translate3d(0, ${yPx}px, 0)`;
+      });
+    }
+
+    // easing helper not used; removed to satisfy ESLint no-unused-vars
+
+    // Curated combos: [жанр, поджанр, особенность]
+    const combos = [
+      ['Выживание','Хоррор-выживание','Кооператив на 4 игрока'],
+      ['Рогалик','Экшен-рогалик','Случайная генерация уровней'],
+      ['Шутер','Тактический шутер','Разрушаемое окружение'],
+      ['Песочница','Крафтовая песочница','Мастерская Steam'],
+      ['Пати-игра','Социальная дедукция','Кроссплей'],
+      ['Экшен','Souls-like','Хардкорная боёвка'],
+      ['Стратегия','Тактика в реальном времени','Совместимость модов'],
+      ['Симулятор','Космосим','Система экипажа'],
+      ['Приключение','Метроидвания','Нелинейное прохождение'],
+      ['Хоррор','Кооперативный хоррор','Случайные события'],
+    ];
+  
+    function findIndexByText(track, text){
+      const items = Array.from(track.querySelectorAll('.slot'));
+      const idx = items.findIndex(s => (s.textContent||'').trim().toLowerCase() === text.toLowerCase());
+      return idx >= 0 ? idx : Math.floor(Math.random()*items.length);
+    }
+
+    function computeTargets(preset){
+      const now = performance.now();
+      tracks.forEach((t, i)=>{
+        const d = data[i];
+        // Determine chosen index within base slots only
+        let chosenIdx = (preset && preset[i]) ? findIndexByText(t.track, preset[i]) : Math.floor(Math.random()*d.baseCount);
+        // Normalize in case findIndexByText returned an index from repeated content
+        chosenIdx = ((chosenIdx % d.baseCount) + d.baseCount) % d.baseCount;
+        // Compute current centered base index to avoid no-op in reduced motion
+        const currBaseIdx = ((Math.round((d.y + d.cy) / d.step) % d.baseCount) + d.baseCount) % d.baseCount;
+        if(chosenIdx === currBaseIdx){ chosenIdx = (chosenIdx + 1) % d.baseCount; }
+        const blockCenter = Math.floor(d.repeat/2);
+        const baseTop = (blockCenter * d.baseCount + chosenIdx) * d.step;
+        const snap = baseTop - d.cy; // exact snapped position at finish
+        let target = snap;
+        // Ensure forward motion and add extra loops for feel
+        while(target <= d.y + d.step){ target += d.baseCount * d.step; }
+        const maxExtra = Math.max(3, 3 + i); // aim 3+ loops
+        target += Math.min(maxExtra, REPEAT_BLOCKS - 2) * d.baseCount * d.step;
+        d.yStart = d.y;
+        d.target = target;
+        d.snap = snap;
+        d.chosenIdx = chosenIdx;
+        d.done = false;
+        d.startT = now + i*180;
+        d.dur = (1600 + i*300) * 3;
+      });
+    }
+
+    let rowLitTO = 0;
+    function step(){
+      raf = 0;
+      const now = performance.now();
+      let allDone = true;
+      tracks.forEach((t, i)=>{
+        const d = data[i];
+        if(!d.done){
+          allDone = false;
+          const tt = now - d.startT;
+          if(tt <= 0){
+            // wait for start
+          } else if(tt >= d.dur){
+            // Snap to exact center to avoid any subpixel drift and blank gaps
+            d.y = d.snap; d.done = true;
+          } else {
+            const p = Math.min(1, tt / d.dur);
+            const e = 1 - Math.pow(1-p, 3);
+            d.y = d.yStart + (d.target - d.yStart) * e;
+          }
+          const yMod = (d.y % d.step + d.step) % d.step;
+          const crossed = yMod < 6 && d.lastYMod >= 6;
+          if(crossed && (now - d.lastTickT) > 200 && !isMuted && audioCtx){ d.lastTickT = now; playTick(); }
+          d.lastYMod = yMod;
+          // Normalize and render
+          let renderY = d.y % d.total; if(renderY < 0) renderY += d.total;
+          const yPx = -Math.round(renderY);
+          t.track.style.transform = `translate3d(0, ${yPx}px, 0)`;
+        }
+      });
+      if(allDone){
+        spinning = false;
+        reelsWrap.classList.remove('spinning');
+        // Add vibrant row highlight on finish
+        reelsWrap.classList.add('row-lit');
+        clearTimeout(rowLitTO);
+        rowLitTO = setTimeout(()=>{ reelsWrap.classList.remove('row-lit'); }, 2200);
+        // Highlight centered slot in each column
+        tracks.forEach((t,i)=>{
+          const d = data[i];
+          const activeIdx = Math.floor(d.repeat/2)*d.baseCount + d.chosenIdx;
+          // Remove previous highlights
+          t.track.querySelectorAll('.slot--active').forEach(el=>el.classList.remove('slot--active'));
+          const slots = t.track.querySelectorAll('.slot');
+          const el = slots[activeIdx] || null;
+          if(el) el.classList.add('slot--active');
+        });
+        playChime();
+        // If demo mode is active and allowed, spin again after a short pause
+        if(demoMode && demoAllowed){
+          setTimeout(()=>{ if(!spinning) spin(null); }, 800);
+        }
+        return;
+      }
+      raf = requestAnimationFrame(step);
+    }
+
+    function spin(preset){
+      if(spinning) return;
+      const pick = preset || (Math.random()<0.6 ? combos[Math.floor(Math.random()*combos.length)] : null);
+      if(prefersReducedMotion.matches && !forceAnimate){
+        // Low-motion path: instantly snap to targets and render once
+        computeTargets(pick);
+        data.forEach(d=>{ d.y = d.snap; d.done = true; });
+        renderAll();
+        ensureAudio(); playChime();
+        reelsWrap.classList.remove('spinning');
+        spinning = false;
+        return;
+      }
+      ensureAudio();
+      spinning = true;
+      reelsWrap.classList.add('spinning');
+      computeTargets(pick);
+      if(!raf) raf = requestAnimationFrame(step);
+    }
+
+    // Controls bindings
+    if(btnSpin){
+      btnSpin.addEventListener('click', ()=>{
+        // disable demo mode on first explicit user spin
+        demoMode = false;
+        spin(null);
+      });
+    }
+    // No mute button currently rendered; keep sound on user gesture via ensureAudio in spin
+
+    // Start demo mode automatically (auto-spin until user clicks Spin)
+    setTimeout(()=>{ if(!spinning && demoMode && demoAllowed) spin(null); }, 400);
+
+    // Pause/resume demo mode based on visibility in viewport
+    try {
+      const reelsSection = coming.closest('.section') || coming;
+      const ioReels = new IntersectionObserver((entries)=>{
+        entries.forEach(e=>{
+          demoAllowed = e.isIntersecting;
+        });
+      }, { threshold: 0.25 });
+      ioReels.observe(reelsSection);
+    } catch {}
+
+    // Recompute metrics on resize/orientation change to keep center alignment stable
+    let resizeTO = 0;
+    function onResize(){
+      clearTimeout(resizeTO);
+      resizeTO = setTimeout(()=>{ computeMetrics(); renderAll(); }, 120);
+    }
+    window.addEventListener('resize', onResize, { passive: true });
+    window.addEventListener('orientationchange', onResize, { passive: true });
+  })();
+
+  // Back-to-top arrow visibility after the screenshots section (robust for mobile/desktop)
+  (function setupToTop(){
+    const btn = document.getElementById('to-top');
+    const sec = document.querySelector('.section--shots');
+    if(!btn || !sec) return;
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    let ticking = false;
+
+    let threshold = 0; // Y-pos in px where button should appear
+    function computeThreshold(){
+      const rect = sec.getBoundingClientRect();
+      const scrollY = window.scrollY || window.pageYOffset || 0;
+      // Appear once user scrolled past bottom of screenshots by 64px
+      threshold = scrollY + rect.top + rect.height - 64;
+    }
+
+    function update(){
+      ticking = false;
+      const y = window.scrollY || window.pageYOffset || 0;
+      const show = y > threshold;
+      btn.classList.toggle('show', show);
+    }
+
+    function onScroll(){ if(!ticking){ ticking = true; requestAnimationFrame(update); } }
+    function onResize(){ computeThreshold(); onScroll(); }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onResize, { passive: true });
+    window.addEventListener('orientationchange', onResize, { passive: true });
+    window.addEventListener('load', onResize, { passive: true });
+
+    // Recompute when screenshots images load (they affect section height)
+    sec.querySelectorAll('img').forEach(img=>{
+      if(img.complete){ return; }
+      img.addEventListener('load', onResize, { once: true, passive: true });
+      img.addEventListener('error', onResize, { once: true, passive: true });
+    });
+
+    // initial
+    computeThreshold();
+    update();
+
+    btn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      window.scrollTo({ top: 0, behavior: prefersReducedMotion.matches ? 'auto' : 'smooth' });
+    });
+  })();
+
+  // Smooth scroll for header nav links (#games, #features, #download) without affecting general scroll
+  (function smoothScrollHeaderNav(){
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const nav = document.querySelector('.site-header .nav');
+    if(!nav) return;
+    nav.querySelectorAll('a[href^="#"]').forEach(a=>{
+      a.addEventListener('click', (e)=>{
+        const id = a.getAttribute('href').slice(1);
+        const target = document.getElementById(id);
+        if(!target) return;
+        e.preventDefault();
+        target.scrollIntoView({ behavior: prefersReducedMotion.matches ? 'auto' : 'smooth', block: 'start' });
+      });
+    });
+  })();
+
+  // Smooth scroll only for the "Смотреть игры" button in hero CTA
+  (function smoothScrollGames(){
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const btn = document.querySelector('.cta a[href="#games"]');
+    if(!btn) return;
+    btn.addEventListener('click', (e)=>{
+      const target = document.getElementById('games');
+      if(!target) return;
+      e.preventDefault();
+      if(prefersReducedMotion.matches){
+        // Respect user OS setting: jump without animation
+        target.scrollIntoView({ behavior: 'auto', block: 'start' });
+      } else {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
   })();
   let W, H, time = 0;
 
@@ -31,8 +474,12 @@
 
   let rafId = 0;
   let running = true;
+  let frameSkip = isLowEndDevice ? 1 : 0; // skip every other frame on low-end
   function step(){
     time += 0.016;
+    // simple frame skipping
+    if(frameSkip){ frameSkip = 0; return rafId = requestAnimationFrame(step); }
+    frameSkip = isLowEndDevice ? 1 : 0;
     ctx.clearRect(0,0,W,H);
 
     // background gradient (deep night to indigo)
@@ -84,15 +531,28 @@
   }
   step();
 
-  // Pause canvas animation when tab is hidden to save battery/CPU
+  // Pause canvas animation when tab is hidden or when waves are offscreen to save CPU
   document.addEventListener('visibilitychange', ()=>{
     if(document.hidden){ running = false; if(rafId) cancelAnimationFrame(rafId); }
     else { running = true; rafId = requestAnimationFrame(step); }
   });
 
+  try {
+    const wavesWrap = document.querySelector('.waves-bg');
+    if(wavesWrap){
+      const ioWaves = new IntersectionObserver((entries)=>{
+        const e = entries[0];
+        if(!e) return;
+        if(e.isIntersecting){ if(!running){ running = true; rafId = requestAnimationFrame(step); } }
+        else { running = false; if(rafId) cancelAnimationFrame(rafId); }
+      }, { threshold: 0.05 });
+      ioWaves.observe(wavesWrap);
+    }
+  } catch {}
+
   // Parallax scroll
   const layers = document.querySelectorAll('.layer');
-  const enableParallax = !isMobile() && !prefersReducedMotion.matches;
+  const enableParallax = !isMobile() && !prefersReducedMotion.matches && !isLowEndDevice;
   if(enableParallax){
     window.addEventListener('scroll', ()=>{
       const y = window.scrollY || window.pageYOffset;
@@ -273,70 +733,5 @@
     setTimeout(()=>{ currX = sc.scrollLeft; onScroll(); }, 400);
   })();
 
-  // Randomize reels columns order so categories appear in random columns each load
-  (function shuffleReels(){
-    function run(){
-      const reels = document.querySelector('.reels');
-      if(!reels) return;
-      const cols = Array.from(reels.querySelectorAll('.reel'));
-      if(cols.length < 2) return;
-      // Fisher-Yates shuffle
-      for(let i=cols.length-1; i>0; i--){
-        const j = Math.floor(Math.random()*(i+1));
-        [cols[i], cols[j]] = [cols[j], cols[i]];
-      }
-      // Assign explicit grid columns and track classes for animation variance
-      const tracks = ['track-a','track-b','track-c','track-d','track-e'];
-      cols.forEach((el, idx)=>{
-        // remove existing track-* classes
-        el.classList.forEach(c=>{ if(/^track-/.test(c)) el.classList.remove(c); });
-        el.classList.add(tracks[idx % tracks.length]);
-        el.style.gridColumn = String(idx + 1);
-      });
-      // Re-append in shuffled order to ensure visual order in grid auto-flow
-      cols.forEach(el=>reels.appendChild(el));
-
-      // Now randomize individual slot items across columns (columns are neutral)
-      const catMap = {
-        mode: ['Coop','Solo','Online','Local','PvE','PvP','Arena','Raids','Ranked','Casual'],
-        genre: ['Action','Horror','Rogue','Shooter','Puzzle','RPG','Sim','Arcade','Strategy','Sandbox'],
-        persp: ['FPP','TPP','TopDown','Isomet','Side','VR','2D','3D','Fixed','FreeCam'],
-        mech: ['Loot','Craft','Build','Parkour','Stealth','Tactic','Combo','Skill','Cards','Trade'],
-        tone: ['Dark','Grim','Funny','Chill','Cozy','Epic','Retro','Mythic','Moody','Noir']
-      };
-      const tracksEls = cols.map(col=>col.querySelector('.reel-track')).filter(Boolean);
-      if(tracksEls.length === 0) return;
-      // Collect all slots from all tracks
-      const slots = [];
-      tracksEls.forEach(t=>{
-        Array.from(t.querySelectorAll('.slot')).forEach(s=>{
-          slots.push(s);
-        });
-      });
-      // Clear all tracks
-      tracksEls.forEach(t=>{ t.innerHTML = ''; });
-      // Shuffle slots
-      for(let i=slots.length-1; i>0; i--){ const j = Math.floor(Math.random()*(i+1)); [slots[i], slots[j]] = [slots[j], slots[i]]; }
-      // Assign category color class per slot by its textContent
-      function getCat(txt){
-        for(const k in catMap){ if(catMap[k].includes(txt)) return k; }
-        return null;
-      }
-      slots.forEach((s, _idx)=>{
-        // remove previous slot--* classes
-        s.classList.forEach(c=>{ if(/^slot--/.test(c)) s.classList.remove(c); });
-        const name = (s.textContent || '').trim();
-        const cat = getCat(name);
-        if(cat){ s.classList.add('slot--'+cat); }
-        // place to a random track for more randomness
-        const target = tracksEls[Math.floor(Math.random()*tracksEls.length)];
-        target.appendChild(s);
-      });
-    }
-    if(document.readyState === 'loading'){
-      document.addEventListener('DOMContentLoaded', run, { once: true });
-    } else {
-      run();
-    }
-  })();
+  // Removed randomization: curated reels stay fixed per column
 })();

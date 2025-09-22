@@ -3,27 +3,89 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       Title="Настройки"
       Background="{DynamicResource Brush.Background}">
-  <StackPanel Margin="16" Width="720">
-    <Grid Margin="0,0,0,12">
+  <Grid Margin="16">
+    <Grid.Resources>
+      <!-- Make page-local accent purple (same as Play secondary accent) so Slider uses it -->
+      <SolidColorBrush x:Key="Brush.Accent" Color="{DynamicResource Color.SecondaryAccent}"/>
+    </Grid.Resources>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <!-- Header -->
+    <Grid Grid.Row="0" Margin="0,0,0,20">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="*"/>
         <ColumnDefinition Width="Auto"/>
       </Grid.ColumnDefinitions>
-      <TextBlock Text="Настройки" FontSize="18" VerticalAlignment="Center"/>
-      <Button Name="BackBtn" Grid.Column="1" Content="Назад" Width="100" HorizontalAlignment="Right" Click="BackBtn_Click"/>
+      <TextBlock Text="Настройки" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Title}" VerticalAlignment="Center"/>
+      <Button Grid.Column="1" Name="BackBtn" Click="BackBtn_Click" Width="120" HorizontalAlignment="Right" Padding="12,8" MinHeight="36" Margin="12,0,0,0">
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+          <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72B;" Margin="0,0,6,0"/>
+          <TextBlock Text="Назад"/>
+        </StackPanel>
+      </Button>
     </Grid>
-    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-      <TextBlock Text="Папка игр:" Width="120" VerticalAlignment="Center"/>
-      <TextBox Name="GamesPathBox" Width="400"/>
-      <Button Name="ChooseBtn" Content="Выбрать" Margin="8,0,0,0" Click="ChooseBtn_Click"/>
+
+    <!-- Content -->
+    <StackPanel Grid.Row="1" Orientation="Vertical" VerticalAlignment="Top">
+      <!-- Thin divider under header -->
+      <Border Height="1" Background="{DynamicResource Brush.Border}" Margin="0,0,0,14"/>
+      <!-- Storage section -->
+      <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,0,0,14">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <TextBlock Text="Папка для установки игр" FontWeight="SemiBold"/>
+          <Grid Grid.Row="1" Margin="0,8,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="160"/>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="Путь" Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center"/>
+            <TextBox Grid.Column="1" Name="GamesPathBox" Margin="12,0,12,0" MinHeight="32"/>
+            <Button Grid.Column="2" Name="ChooseBtn" Content="Выбрать" Click="ChooseBtn_Click" Padding="12,8" MinHeight="36" MinWidth="110"/>
+          </Grid>
+        </Grid>
+      </Border>
+
+      <!-- Download section -->
+      <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,0,0,6">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <TextBlock Text="Скачивание" FontWeight="SemiBold"/>
+          <Grid Grid.Row="1" Margin="0,8,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="160"/>
+              <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="Потоки" Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center"/>
+            <Slider Grid.Column="1" Name="ThreadsSlider" Minimum="2" Maximum="16" Width="260" Margin="12,0,10,0"
+                    TickFrequency="1" IsSnapToTickEnabled="true" ValueChanged="ThreadsSlider_ValueChanged"/>
+            <TextBlock Grid.Column="2" Name="ThreadsValueText" Text="8" VerticalAlignment="Center" Margin="8,0,0,0"/>
+          </Grid>
+        </Grid>
+      </Border>
     </StackPanel>
-    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-      <TextBlock Text="Потоки загрузки:" Width="120" VerticalAlignment="Center"/>
-      <Slider Name="ThreadsSlider" Minimum="2" Maximum="16" Width="200" TickFrequency="1" IsSnapToTickEnabled="true" ValueChanged="ThreadsSlider_ValueChanged"/>
-      <TextBlock Name="ThreadsValueText" Text="8" Margin="8,0,0,0" VerticalAlignment="Center"/>
-    </StackPanel>
-    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-      <Button Name="SaveBtn" Content="Сохранить" Width="140" Click="SaveBtn_Click"/>
-    </StackPanel>
-  </StackPanel>
+
+    <!-- Footer actions -->
+    <Grid Grid.Row="2" Margin="0,16,0,0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+      </Grid.ColumnDefinitions>
+      <StackPanel Orientation="Horizontal" Grid.Column="1">
+        <Button Name="SaveBtn" Content="Сохранить" Style="{DynamicResource Style.Button.Primary}" Click="SaveBtn_Click"/>
+      </StackPanel>
+    </Grid>
+  </Grid>
 </Page>

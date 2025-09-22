@@ -9,6 +9,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Ensure Unicode I/O
+try {
+  [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($true)
+  [Console]::InputEncoding  = [System.Text.UTF8Encoding]::new($true)
+} catch {}
+
 function New-EnsuredDirectory($path){ if(!(Test-Path $path)){ New-Item -ItemType Directory -Force -Path $path | Out-Null } }
 
 # Tools detection (PATH or local tools folder)
@@ -75,6 +81,11 @@ $pngs  = Get-ChildItem -Path $ImagesDir -File -Include *.png -Recurse
 $webps = Get-ChildItem -Path $ImagesDir -File -Include *.webp -Recurse
 
 Write-Host "Found $($pngs.Count) PNG and $($webps.Count) WebP files in $ImagesDir" -ForegroundColor Yellow
+
+if (($pngs.Count + $webps.Count) -eq 0) {
+  Write-Host "Nothing to process. Exiting." -ForegroundColor DarkYellow
+  exit 0
+}
 
 # Compress PNGs
 foreach($f in $pngs){
