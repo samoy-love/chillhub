@@ -21,7 +21,7 @@
   function rewrite(u) {
     try {
       if (typeof u === 'string') {
-        if (u.startsWith(ADMIN_PREFIX) && !u.startsWith('/admin/ui/')) {
+        if (u.startsWith(ADMIN_PREFIX) && !u.startsWith('/admin/ui/') && !u.startsWith(ADMIN_API_PREFIX)) {
           return ADMIN_API_PREFIX + u.slice(ADMIN_PREFIX.length);
         }
         return u;
@@ -67,7 +67,7 @@
     const origOpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function(method, url, ...rest) {
       try {
-        if (typeof url === 'string' && url.startsWith(ADMIN_PREFIX) && !url.startsWith('/admin/ui/')) {
+        if (typeof url === 'string' && url.startsWith(ADMIN_PREFIX) && !url.startsWith('/admin/ui/') && !url.startsWith(ADMIN_API_PREFIX)) {
           url = ADMIN_API_PREFIX + url.slice(ADMIN_PREFIX.length);
         }
       } catch { /* ignore */ }
