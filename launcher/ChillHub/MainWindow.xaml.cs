@@ -22,6 +22,7 @@ namespace ChillHub {
         private int karaokeCharIndex = 0;
         private bool karaokePaused = false;
         private bool karaokeTransitionRunning = false;
+        private bool karaokeStarted = false;
 
         // --- Настройки караоке (собраны вместе) ---
         // Интервал таймера набора символов (мс): чем меньше, тем быстрее печатает
@@ -38,6 +39,9 @@ namespace ChillHub {
 
         // Короткая задержка после анимации перед фактической сменой строки (мс) — 0, чтобы убрать "затуп"
         private int karaokeAfterTransitionDelayMs = 0;
+
+        // Начальная задержка перед запуском караоке после первичной проверки файлов (мс)
+        private int karaokeInitialDelayMs = 1200;
 
         public MainWindow() {
             this.InitializeComponent();
@@ -81,7 +85,9 @@ namespace ChillHub {
                 this.InitKaraokeLyrics();
                 this.UpdateKaraokeHostWidth();
                 this.ResetKaraokeToStart();
-                this.StartKaraoke();
+
+                // Запуск караоке откладываем до завершения первичной проверки файлов на главной странице
+                this.TryHookHomepageForKaraokeStart();
             }
             catch {
             }
@@ -313,6 +319,44 @@ namespace ChillHub {
             if (!this.karaokeTimer.IsEnabled) {
                 this.karaokeTimer.Start();
             }
+            this.karaokeStarted = true;
+        }
+
+        private async void StartKaraokeWithInitialDelayAsync() {
+            if (this.karaokeStarted) {
+                return;
+            }
+            try {
+                await Task.Delay(this.karaokeInitialDelayMs);
+            }
+            catch {
+            }
+            this.StartKaraoke();
+        }
+
+        private void TryHookHomepageForKaraokeStart() {
+            try {
+                if (this.ContentFrame?.Content is Pages.HomePage hp) {
+                    // Если первичная проверка уже завершена — стартуем сразу с задержкой
+                    if (hp.IsInitialVerificationCompleted) {
+                        this.StartKaraokeWithInitialDelayAsync();
+                        return;
+                    }
+
+                    // Иначе подпишемся на событие и запустим один раз
+                    void Handler() {
+                        try {
+                            hp.InitialVerificationCompleted -= Handler; // отписка
+                        }
+                        catch {
+                        }
+                        this.StartKaraokeWithInitialDelayAsync();
+                    }
+                    hp.InitialVerificationCompleted += Handler;
+                }
+            }
+            catch {
+            }
         }
 
         private void PauseKaraoke() {
@@ -333,7 +377,8 @@ namespace ChillHub {
             }
             catch {
             }
-            if (!this.karaokeTimer.IsEnabled) {
+            // Не запускаем таймер до явного старта караоке после первичной проверки
+            if (this.karaokeStarted && !this.karaokeTimer.IsEnabled) {
                 this.karaokeTimer.Start();
             }
         }

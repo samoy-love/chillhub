@@ -142,16 +142,36 @@ if ($StartAtRemote) {
     Write-Warn "Failed to pre-upload launcher.conf in StartAtRemote mode: $($_.Exception.Message)"
   }
 } else {
-  # Build Go servers for linux/amd64
-  Write-Section "Build (linux/amd64)"
-  Write-Info "Building Go servers (linux/amd64)"
+  # Auto-detect remote architecture to build correct binaries (avoids Exec format errors)
+  $sshCommonDetect = if ($StrictHostKey) {
+    @("-i", $KeyPath, "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4")
+  } else {
+    @("-i", $KeyPath, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4")
+  }
+  $remoteDetect = "${SshUser}@${SshHost}"
+  $unameM = ""
+  try {
+    $unameM = (& $SSH @sshCommonDetect $remoteDetect "/bin/sh -c 'uname -m'" 2>$null | Select-Object -First 1).ToString().Trim().ToLower()
+  } catch {}
+  $goArch = "amd64"
+  switch -regex ($unameM) {
+    '^(aarch64|arm64)$' { $goArch = 'arm64'; break }
+    '^(x86_64|amd64)$'  { $goArch = 'amd64'; break }
+  }
+  Write-Section ("Build (linux/amd64 + linux/arm64)")
+  Write-Info ("Building Go servers for both linux/amd64 and linux/arm64 (server will pick correct arch)")
   $prevGOOS = $env:GOOS; $prevGOARCH = $env:GOARCH; $prevCGO = $env:CGO_ENABLED
-  $env:GOOS = "linux"; $env:GOARCH = "amd64"; $env:CGO_ENABLED = "0"
   Push-Location (Join-Path $RepoRoot "server")
   try {
     go mod tidy
-    go build -o (Join-Path $BinDir "api")   ./cmd/api
-    go build -o (Join-Path $BinDir "admin") ./cmd/admin
+    # Build amd64
+    $env:GOOS = "linux"; $env:GOARCH = "amd64"; $env:CGO_ENABLED = "0"
+    go build -o (Join-Path $BinDir "api.amd64")   ./cmd/api
+    go build -o (Join-Path $BinDir "admin.amd64") ./cmd/admin
+    # Build arm64
+    $env:GOOS = "linux"; $env:GOARCH = "arm64"; $env:CGO_ENABLED = "0"
+    go build -o (Join-Path $BinDir "api.arm64")   ./cmd/api
+    go build -o (Join-Path $BinDir "admin.arm64") ./cmd/admin
   } finally {
     Pop-Location
     # Restore env
@@ -194,6 +214,16 @@ if ($StartAtRemote) {
     )
   }
   $Remote = "${SshUser}@${SshHost}"
+  # Quick SSH preflight to catch key-permissions issues early
+  try {
+    & $SSH @sshCommon $Remote "true" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "ssh exited with rc=$LASTEXITCODE" }
+  } catch {
+    Write-Err "SSH preflight failed. If you see 'UNPROTECTED PRIVATE KEY FILE' or 'Permission denied (publickey)', fix key ACLs on Windows:"
+    Write-Err "  icacls \"$KeyPath\" /inheritance:r"
+    Write-Err "  icacls \"$KeyPath\" /grant:r \"$env:USERNAME:R\""
+    throw
+  }
   & $SSH @sshCommon $Remote "mkdir -p deploy/site deploy/launcher_admin_ui deploy/bin deploy/systemd deploy/deploy" | Out-Null
   # Clean previous contents to avoid stale or malformed entries (e.g., accidental Windows-path directories)
   & $SSH @sshCommon $Remote "rm -rf deploy/site/* deploy/launcher_admin_ui/* deploy/bin/* deploy/systemd/*" | Out-Null
@@ -323,6 +353,7 @@ NGINX_SITE_AVAILABLE="/etc/nginx/sites-available/launcher.conf"
 NGINX_SITE_ENABLED="/etc/nginx/sites-enabled/launcher.conf"
 SITE_BASE="%%SITE_BASE_URL%%"
 FAIL_ON_MISMATCH="%%FAIL_ON_MISMATCH%%"
+MISM_TOTAL=0
 
 # Pre-checks
 shopt -s expand_aliases
@@ -343,10 +374,56 @@ sudo rsync -a --delete "$DEPLOY_DIR/site/" "$SITE_DIR/"
 # Sync Admin UI static only
 sudo rsync -a --delete "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/"
 
-# Install binaries
+# Install binaries (select arch-specific files if generic names not present)
 sudo install -d -m 0755 "$OPT_DIR"
-sudo install -m 0755 "$DEPLOY_DIR/bin/api" "$OPT_DIR/api"
-sudo install -m 0755 "$DEPLOY_DIR/bin/admin" "$OPT_DIR/admin"
+SERVER_ARCH=$(uname -m | tr '[:upper:]' '[:lower:]')
+API_SRC="$DEPLOY_DIR/bin/api"
+ADMIN_SRC="$DEPLOY_DIR/bin/admin"
+if [ ! -f "$API_SRC" ] || [ ! -f "$ADMIN_SRC" ]; then
+  case "$SERVER_ARCH" in
+    aarch64|arm64)
+      [ -f "$DEPLOY_DIR/bin/api.arm64" ] && API_SRC="$DEPLOY_DIR/bin/api.arm64"
+      [ -f "$DEPLOY_DIR/bin/admin.arm64" ] && ADMIN_SRC="$DEPLOY_DIR/bin/admin.arm64"
+      ;;
+    x86_64|amd64)
+      [ -f "$DEPLOY_DIR/bin/api.amd64" ] && API_SRC="$DEPLOY_DIR/bin/api.amd64"
+      [ -f "$DEPLOY_DIR/bin/admin.amd64" ] && ADMIN_SRC="$DEPLOY_DIR/bin/admin.amd64"
+      ;;
+  esac
+fi
+if [ ! -f "$API_SRC" ] || [ ! -f "$ADMIN_SRC" ]; then
+  echo "[error] Could not locate binaries to install for $SERVER_ARCH"
+  ls -lah "$DEPLOY_DIR/bin" || true
+  exit 1
+fi
+sudo install -m 0755 "$API_SRC" "$OPT_DIR/api"
+sudo install -m 0755 "$ADMIN_SRC" "$OPT_DIR/admin"
+
+# Validate binary architecture matches server architecture
+SERVER_ARCH=$(uname -m | tr '[:upper:]' '[:lower:]')
+BIN_SUMMARY() { f="$1"; if command -v file >/dev/null 2>&1; then file "$f"; else echo "$f (no 'file' utility available)"; fi }
+echo "[check] Server arch: $SERVER_ARCH"
+echo "[check] api binary: $(BIN_SUMMARY "$OPT_DIR/api")"
+echo "[check] admin binary: $(BIN_SUMMARY "$OPT_DIR/admin")"
+mismatch=0
+case "$SERVER_ARCH" in
+  aarch64|arm64)
+    if command -v file >/dev/null 2>&1; then
+      file "$OPT_DIR/api"   | grep -qiE 'aarch64|arm64' || mismatch=1
+      file "$OPT_DIR/admin" | grep -qiE 'aarch64|arm64' || mismatch=1
+    fi
+    ;;
+  x86_64|amd64)
+    if command -v file >/dev/null 2>&1; then
+      file "$OPT_DIR/api"   | grep -qiE 'x86-64|amd64' || mismatch=1
+      file "$OPT_DIR/admin" | grep -qiE 'x86-64|amd64' || mismatch=1
+    fi
+    ;;
+esac
+if [ "$mismatch" -ne 0 ]; then
+  echo "[error] Installed binaries do not match server architecture ($SERVER_ARCH). Aborting."
+  exit 1
+fi
 
 # Systemd units (optional)
 if [ -d "$DEPLOY_DIR/systemd" ]; then
@@ -618,5 +695,91 @@ Remove-Item -Force $wrapperLocal -ErrorAction SilentlyContinue
 if ($LASTEXITCODE -ne 0) {
   throw "Remote deploy failed (rc=$LASTEXITCODE)"
 }
+
+# Post-deploy external smoke tests (from this machine)
+Write-Section "Post-deploy smoke (external)"
+function Get-HttpCode {
+  param([Parameter(Mandatory=$true)][string]$Url)
+  try {
+    $resp = Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing -TimeoutSec 7
+    return [int]$resp.StatusCode
+  } catch {
+    if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+      return [int]$_.Exception.Response.StatusCode
+    }
+    return 0
+  }
+}
+
+$base = $SiteBaseUrl.TrimEnd('/')
+$checks = @(
+  @{ url = "$base/";               name = "Landing root";           expect = 200 },
+  @{ url = "$base/styles.css";      name = "Landing styles";         expect = 200 },
+  @{ url = "$base/assets/ping.txt"; name = "Assets ping";            expect = 200 },
+  @{ url = "$base/admin/ui/login.html"; name = "Admin UI login";     expect = 200 },
+  # Admin API health is protected by nginx (auth_request); expect 401 externally
+  @{ url = "$base/admin/api/health";    name = "Admin API health (ext)";   expect = 401 },
+  # Public server API health should be 200
+  @{ url = "$base/api/health";          name = "Server API health";   expect = 200 },
+  @{ url = "$base/admin/";              name = "Admin gate (401)";   expect = 401 }
+)
+
+$fail = 0
+foreach ($c in $checks) {
+  $code = Get-HttpCode $c.url
+  if ($code -eq $c.expect) {
+    Write-Ok ("{0} -> {1}" -f $c.name, $code)
+  } else {
+    Write-Warn ("{0} -> {1} (expected {2})" -f $c.name, $code, $c.expect)
+    $fail = 1
+  }
+}
+
+if ($fail -eq 0) {
+  Write-Ok ("Deploy verified at {0}" -f $base)
+} else {
+  Write-Warn ("Deploy finished with warnings at {0}. See checks above." -f $base)
+}
+
+# Final remote summary (explicit)
+Write-Section "Final summary (remote)"
+try {
+  $summaryLocal = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'summary-remote.sh')
+  $summaryContent = @'
+#!/bin/bash
+set -euo pipefail
+printf "%s %s\n" "[sum] Server arch:" "$(uname -m)"
+printf "%s\n" "[sum] Binaries:"
+if command -v file >/dev/null 2>&1; then
+  file /opt/chillhub/api /opt/chillhub/admin 2>/dev/null || true
+else
+  ls -l /opt/chillhub/api /opt/chillhub/admin 2>/dev/null || true
+fi
+printf "%s %s\n" "[sum] Admin service:" "$(systemctl is-active chillhub-admin.service 2>/dev/null || true)"
+printf "%s %s\n" "[sum] Admin health code:" "$(curl -ks -o /dev/null -w '%{http_code}' https://launcher.samoy.love/admin/api/health || true)"
+printf "%s %s\n" "[sum] Admin gate code:" "$(curl -ks -o /dev/null -w '%{http_code}' https://launcher.samoy.love/admin/ || true)"
+printf "%s %s\n" "[sum] Site root:" "$(curl -ks -o /dev/null -w '%{http_code}' https://launcher.samoy.love/ || true)"
+printf "%s " "[sum] Downloads dir (server):"; sudo bash -lc 'test -d /var/www/site/downloads && (ls -1 /var/www/site/downloads | wc -l || true) || echo "missing"' || true
+printf "%s %s\n" "[sum] Admin health (localhost):" "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:55777/admin/api/health || true)"
+printf "%s %s\n" "[sum] Public API health (localhost):" "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:55700/health || true)"
+printf "%s %s\n" "[sum] Nginx config test:" "$(sudo nginx -t 2>&1 | tail -n1 | sed 's/.*: //')"
+printf "%s\n" "[sum] Ports (55700/55777):"; (ss -ltnp 2>/dev/null | grep -E '(:55700|:55777)' || true)
+printf "%s\n" "[sum] Admin drop-in env (override.conf):"; (sudo bash -lc 'test -f /etc/systemd/system/chillhub-admin.service.d/override.conf && sed -n "1,20p" /etc/systemd/system/chillhub-admin.service.d/override.conf || echo missing' || true)
+printf "%s %s\n" "[sum] Cert expiry:" "$(sudo bash -lc 'test -f /etc/letsencrypt/live/launcher.samoy.love/fullchain.pem && openssl x509 -enddate -noout -in /etc/letsencrypt/live/launcher.samoy.love/fullchain.pem | cut -d= -f2 || echo unknown' 2>/dev/null)"
+printf "%s %s\n" "[sum] Disk free (/var/www):" "$(df -h /var/www 2>/dev/null | awk 'NR==2{print $4" free of "$2}')"
+printf "%s %s\n" "[sum] Uptime:" "$(uptime -p 2>/dev/null || true)"
+printf "%s\n" "[sum] Systemd logs (last 10 lines):"; (sudo journalctl -u chillhub-admin.service -n10 2>/dev/null || true)
+'@
+  $summaryNormalized = ($summaryContent -replace "`r`n","`n") -replace "`r",""
+  [System.IO.File]::WriteAllText($summaryLocal, $summaryNormalized, $utf8NoBom)
+  & $SCP @sshCommon $summaryLocal "${Remote}:/tmp/summary-remote.sh"
+  Remove-Item -Force $summaryLocal -ErrorAction SilentlyContinue
+  & $SSH @sshCommon $Remote '/bin/bash' '/tmp/summary-remote.sh'
+  & $SSH @sshCommon $Remote 'rm -f /tmp/summary-remote.sh' | Out-Null
+} catch {
+  Write-Warn ("Could not fetch final remote summary: {0}" -f $_.Exception.Message)
+}
+
+Write-Ok "Done"
 
 Write-Ok "Done"
