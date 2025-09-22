@@ -80,7 +80,6 @@ $SCP = Resolve-Executable @(
 if (-not $SSH -or -not $SCP) {
   throw "OpenSSH client not found (ssh/scp). Install 'OpenSSH Client' Windows Feature or ensure Git for Windows' ssh/scp are in PATH."
 }
-
 # Validate key path
 if (-not (Test-Path -LiteralPath $KeyPath)) {
   throw "SSH key not found: $KeyPath"
@@ -192,6 +191,42 @@ if ($StartAtRemote) {
     Copy-Item -Path (Join-Path $systemdSrc '*') -Destination $SystemdDir -Recurse -Force
   }
   Copy-Item -Path (Join-Path (Join-Path $RepoRoot 'deploy') 'launcher.conf') -Destination (Join-Path $DeployDir 'launcher.conf') -Force
+
+  # Local diagnostics: list source trees (first 200 files each) and counts
+  Write-Info "Listing source files (landing)"
+  $siteFiles = Get-ChildItem -LiteralPath $landingDir -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+  $siteFiles | Select-Object -First 200 | ForEach-Object { Write-Host "[src:site] $_" }
+  Write-Host ("[src:site] total files: {0}" -f $siteFiles.Count)
+  Write-Info "Listing source files (admin_ui)"
+  $adminFiles = Get-ChildItem -LiteralPath $adminUIDirS -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+  $adminFiles | Select-Object -First 200 | ForEach-Object { Write-Host "[src:admin_ui] $_" }
+  Write-Host ("[src:admin_ui] total files: {0}" -f $adminFiles.Count)
+  Write-Info "Listing source files (bin)"
+  $binFiles = Get-ChildItem -LiteralPath $BinDir -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+  $binFiles | Select-Object -First 200 | ForEach-Object { Write-Host "[src:bin] $_" }
+  Write-Host ("[src:bin] total files: {0}" -f $binFiles.Count)
+  if (Test-Path $SystemdDir) {
+    Write-Info "Listing source files (systemd)"
+    $sysFiles = Get-ChildItem -LiteralPath $SystemdDir -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+    $sysFiles | Select-Object -First 200 | ForEach-Object { Write-Host "[src:systemd] $_" }
+    Write-Host ("[src:systemd] total files: {0}" -f $sysFiles.Count)
+  }
+
+  # Optional assets to reduce 404 noise: favicon and robots.txt
+  $siteIcons = Join-Path $SiteDir 'assets/icons'
+  New-Item -ItemType Directory -Force -Path $siteIcons | Out-Null
+  $repoFavicon = Join-Path $RepoRoot 'scripts/app.ico'
+  $siteAppIco  = Join-Path $siteIcons 'app.ico'
+  if (Test-Path -LiteralPath $repoFavicon) {
+    Copy-Item -LiteralPath $repoFavicon -Destination $siteAppIco -Force
+  }
+  $siteRobots = Join-Path $SiteDir 'robots.txt'
+  if (-not (Test-Path -LiteralPath $siteRobots)) {
+    @(
+      'User-agent: *',
+      'Allow: /'
+    ) | Set-Content -Encoding ASCII -Path $siteRobots
+  }
 
   # Upload bundle via scp (ensure remote dirs exist, avoid wildcard expansion issues)
   Write-Section "Upload bundle"
@@ -309,6 +344,21 @@ if ($systemdTgz) {
   & tar -czf $systemdTgz -C $SystemdDir .
 }
 
+# Local diagnostics: list tar contents (first 200 entries) and totals
+function Show-TarListing($tarPath, $label) {
+  try {
+    $entries = & tar -tzf $tarPath 2>$null
+    if ($entries) {
+      $entries | Select-Object -First 200 | ForEach-Object { Write-Host ("[$label] $_") }
+      Write-Host ("[$label] total entries: {0}" -f $entries.Count)
+    }
+  } catch {}
+}
+Show-TarListing $siteTgz   'tar:site'
+Show-TarListing $adminTgz  'tar:admin_ui'
+Show-TarListing $binTgz    'tar:bin'
+if ($systemdTgz) { Show-TarListing $systemdTgz 'tar:systemd' }
+
 # Upload archives
 Copy-FileRemote $siteTgz  'deploy/site.tgz'
 Copy-FileRemote $adminTgz 'deploy/admin_ui.tgz'
@@ -317,6 +367,13 @@ if ($systemdTgz) { Copy-FileRemote $systemdTgz 'deploy/systemd.tgz' }
 
 # Extract on remote and clean archives
 & $SSH @sshCommon $Remote "/bin/bash -lc 'mkdir -p deploy/site deploy/launcher_admin_ui deploy/bin deploy/systemd; rm -rf deploy/site/* deploy/launcher_admin_ui/* deploy/bin/* deploy/systemd/*; tar -xzf deploy/site.tgz -C deploy/site; tar -xzf deploy/admin_ui.tgz -C deploy/launcher_admin_ui; tar -xzf deploy/bin.tgz -C deploy/bin; if [ -f deploy/systemd.tgz ]; then tar -xzf deploy/systemd.tgz -C deploy/systemd; fi; rm -f deploy/site.tgz deploy/admin_ui.tgz deploy/bin.tgz deploy/systemd.tgz'" | Out-Null
+
+# Remote diagnostics before in-band script: list extracted deploy trees (first 200 files and totals)
+Write-Info "Remote: listing extracted deploy directories (pre-sync)"
+$preListCmd = @'
+/bin/bash -lc 'set -ef; for d in site launcher_admin_ui bin systemd; do base=$HOME/deploy/$d; echo "remote_pre_list dir=$base"; if [ -d "$base" ]; then cnt=$(find "$base" -type f | wc -l); find "$base" -type f | sed -n "1,200p" | sed -e "s|^|remote_pre_file |"; echo "remote_pre_list total_files=$cnt"; du -sh "$base" 2>/dev/null || true; else echo "remote_pre_list missing=$base"; fi; done'
+'@
+& $SSH @sshCommon $Remote $preListCmd
 
 # Remove local temp archives
 foreach ($f in @($siteTgz, $adminTgz, $binTgz, $systemdTgz)) { if ($f) { Remove-Item -Force $f -ErrorAction SilentlyContinue } }
@@ -369,21 +426,37 @@ fi
 
 sudo mkdir -p "$SITE_DIR" "$LAUNCHER_DIR/admin_ui" "$OPT_DIR"
 
-# Sync landing site
-sudo rsync -a --delete "$DEPLOY_DIR/site/" "$SITE_DIR/"
+# Pre-sync listing of extracted deploy trees (first 200 files and totals)
+for d in site launcher_admin_ui bin systemd; do base="$DEPLOY_DIR/$d"; echo "[remote:pre-list] dir=$base"; if [ -d "$base" ]; then cnt=$(find "$base" -type f | wc -l); find "$base" -type f | sed -n '1,200p' | sed -e 's|^|[remote:pre-file] |'; echo "[remote:pre-list] total files: $cnt"; du -sh "$base" 2>/dev/null || true; else echo "[remote:pre-list] missing $base"; fi; done
+
+# Sync landing site, but preserve server-managed downloads directory
+echo "[rsync] syncing site -> $SITE_DIR"
+sudo rsync -av --delete --itemize-changes --exclude 'downloads' "$DEPLOY_DIR/site/" "$SITE_DIR/" | sed -e 's|^|[rsync:site] |'
+# Ensure a root favicon.ico exists for generic clients/bots
+if [ ! -f "$SITE_DIR/favicon.ico" ] && [ -f "$SITE_DIR/assets/icons/app.ico" ]; then
+  sudo ln -sf "$SITE_DIR/assets/icons/app.ico" "$SITE_DIR/favicon.ico"
+fi
+# Ensure robots.txt exists (minimal, non-restrictive)
+if [ ! -f "$SITE_DIR/robots.txt" ]; then
+  printf "User-agent: *\nAllow: /\n" | sudo tee "$SITE_DIR/robots.txt" >/dev/null
+fi
 # Sync Admin UI static only
-sudo rsync -a --delete "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/"
+echo "[rsync] syncing admin_ui -> $LAUNCHER_DIR/admin_ui"
+sudo rsync -av --delete --itemize-changes "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/" | sed -e 's|^|[rsync:admin_ui] |'
 
 # Diagnostics: compare source vs destination for key files
 if [ -f "$DEPLOY_DIR/site/index.html" ] && [ -f "$SITE_DIR/index.html" ]; then
-  echo "[diag] site/index.html src=$(sha256sum \"$DEPLOY_DIR/site/index.html\" | awk '{print $1}') dst=$(sha256sum \"$SITE_DIR/index.html\" | awk '{print $1}')"
+  echo "[diag] site/index.html src=$(sha256sum "$DEPLOY_DIR/site/index.html" | awk '{print $1}') dst=$(sha256sum "$SITE_DIR/index.html" | awk '{print $1}')"
 fi
 if [ -f "$DEPLOY_DIR/launcher_admin_ui/admin.js" ] && [ -f "$LAUNCHER_DIR/admin_ui/admin.js" ]; then
-  echo "[diag] admin_ui/admin.js src=$(sha256sum \"$DEPLOY_DIR/launcher_admin_ui/admin.js\" | awk '{print $1}') dst=$(sha256sum \"$LAUNCHER_DIR/admin_ui/admin.js\" | awk '{print $1}')"
+  echo "[diag] admin_ui/admin.js src=$(sha256sum "$DEPLOY_DIR/launcher_admin_ui/admin.js" | awk '{print $1}') dst=$(sha256sum "$LAUNCHER_DIR/admin_ui/admin.js" | awk '{print $1}')"
 fi
 # List images presence in source and destination (first level)
 echo "[diag] images (src)"; ls -1 "$DEPLOY_DIR/site/assets/images" 2>/dev/null | sed -n '1,50p' || true
 echo "[diag] images (dst)"; ls -1 "$SITE_DIR/assets/images" 2>/dev/null | sed -n '1,50p' || true
+
+# Post-sync listings of destination trees (first 200 files and totals)
+for d in "$SITE_DIR" "$LAUNCHER_DIR/admin_ui"; do echo "[remote:post-list] dir=$d"; if [ -d "$d" ]; then cnt=$(find "$d" -type f | wc -l); find "$d" -type f | sed -n '1,200p' | sed -e 's|^|[remote:post-file] |'; echo "[remote:post-list] total files: $cnt"; du -sh "$d" 2>/dev/null || true; else echo "[remote:post-list] missing $d"; fi; done
 
 # Install binaries (select arch-specific files if generic names not present)
 sudo install -d -m 0755 "$OPT_DIR"
@@ -463,16 +536,7 @@ if [ -d "$DEPLOY_DIR/systemd" ]; then
   sudo systemctl enable chillhub-admin.service || true
 fi
 
-# Reload services
-sudo systemctl daemon-reload || true
-sudo systemctl restart chillhub-api.service || true
-sudo systemctl restart chillhub-admin.service || true
-API_STATE=$(systemctl is-active chillhub-api.service 2>/dev/null || true)
-ADM_STATE=$(systemctl is-active chillhub-admin.service 2>/dev/null || true)
-echo "[systemd] api=$API_STATE admin=$ADM_STATE"
-if [ -n "$FAIL_ON_MISMATCH" ]; then
-  if [ "$API_STATE" != "active" ] || [ "$ADM_STATE" != "active" ]; then echo "[deploy] One or more services not active after restart"; exit 1; fi
-fi
+# (service restarts moved below, after admin drop-in is written)
 
 # Optional: write admin auth env drop-in (from parameters)
 ADMIN_DROPIN_DIR="/etc/systemd/system/chillhub-admin.service.d"
@@ -500,7 +564,18 @@ if [ -n "$ADMIN_USER$ADMIN_PASS_BCRYPT$ADMIN_PASS_PLAIN$JWT_SECRET$COOKIE_DOMAIN
   } > "$TMPD"
   sudo install -m 0644 "$TMPD" "$ADMIN_DROPIN_DIR/override.conf"
   rm -f "$TMPD" || true
-  echo "[debug] wrote override.conf (JWT:$([ -n \"$JWT_SECRET\" ] && echo 1 || echo 0) PLAIN:$([ -n \"$ADMIN_PASS_PLAIN\" ] && echo 1 || echo 0) BCRYPT:$([ -n \"$ADMIN_PASS_BCRYPT\" ] && echo 1 || echo 0))"
+  echo "[debug] wrote override.conf (JWT:$([ -n "$JWT_SECRET" ] && echo 1 || echo 0) PLAIN:$([ -n "$ADMIN_PASS_PLAIN" ] && echo 1 || echo 0) BCRYPT:$([ -n "$ADMIN_PASS_BCRYPT" ] && echo 1 || echo 0))"
+fi
+
+# Reload services AFTER writing admin drop-in so env vars are applied
+sudo systemctl daemon-reload || true
+sudo systemctl restart chillhub-api.service || true
+sudo systemctl restart chillhub-admin.service || true
+API_STATE=$(systemctl is-active chillhub-api.service 2>/dev/null || true)
+ADM_STATE=$(systemctl is-active chillhub-admin.service 2>/dev/null || true)
+echo "[systemd] api=$API_STATE admin=$ADM_STATE"
+if [ -n "$FAIL_ON_MISMATCH" ]; then
+  if [ "$API_STATE" != "active" ] || [ "$ADM_STATE" != "active" ]; then echo "[deploy] One or more services not active after restart"; exit 1; fi
 fi
 
 # Nginx site config
@@ -525,9 +600,16 @@ must_200 "$SITE_BASE/admin/ui/login.html" "Admin UI login"
 code=$(http_code "$SITE_BASE/admin/")
 if [ "$code" = "200" ]; then echo "[test] WARN /admin/ returned 200 (maybe authorized)"; elif [ "$code" = "401" ]; then echo "[test] PASS /admin/ protected (401 Unauthorized)"; elif [ "$code" = "302" ]; then echo "[test] PASS /admin/ protected (302 Found)"; else echo "[test] FAIL /admin/ -> $code"; FAIL=1; fi
 must_200 "$SITE_BASE/admin/ui/admin.js" "Admin UI static admin.js"
+# Admin API health should be public (no auth) and return 200
 must_200 "$SITE_BASE/admin/api/health" "Admin API health"
 must_200 "$SITE_BASE/" "Landing root"
 must_200 "$SITE_BASE/styles.css" "Landing styles"
+
+# Extra curl diagnostics (headers)
+echo "[curl] HEADers"
+curl -ksSI --max-time 5 "$SITE_BASE/admin/ui/login.html" || true
+curl -ksSI --max-time 5 "$SITE_BASE/admin/ui/admin.js" || true
+curl -ksSI --max-time 5 "$SITE_BASE/admin/api/health" || true
 
 if curl -ksf --max-time 5 "$SITE_BASE/manifests/launcher/latest.json" >/dev/null; then
   echo "[test] PASS manifests/launcher/latest.json"
@@ -540,15 +622,16 @@ else
   echo "[test] WARN assets/ping.txt not present"
 fi
 
-if [ "\$FAIL" -ne 0 ]; then
+# Always print service status for debugging, then conditionally fail
+echo "---- SYSTEMD STATUS (api) ----"; sudo systemctl status chillhub-api.service --no-pager -n 50 || true
+echo "---- SYSTEMD STATUS (admin) ----"; sudo systemctl status chillhub-admin.service --no-pager -n 50 || true
+echo "---- JOURNALCTL (api last 150) ----"; sudo journalctl -u chillhub-api.service -e -n 150 || true
+echo "---- JOURNALCTL (admin last 150) ----"; sudo journalctl -u chillhub-admin.service -e -n 150 || true
+if [ "$FAIL" -ne 0 ]; then
   echo "[deploy] One or more tests FAILED. Collecting diagnostics..."
   echo "---- NGINX TEST ----"; sudo nginx -t || true
   echo "---- NGINX ERROR LOG (last 300) ----"; sudo tail -n 300 /var/log/nginx/error.log || true
   echo "---- NGINX ACCESS LOG (last 300) ----"; sudo tail -n 300 /var/log/nginx/access.log || true
-  echo "---- SYSTEMD STATUS (api) ----"; sudo systemctl status chillhub-api.service --no-pager -n 50 || true
-  echo "---- SYSTEMD STATUS (admin) ----"; sudo systemctl status chillhub-admin.service --no-pager -n 50 || true
-  echo "---- JOURNALCTL (api last 300) ----"; sudo journalctl -u chillhub-api.service -e -n 300 || true
-  echo "---- JOURNALCTL (admin last 300) ----"; sudo journalctl -u chillhub-admin.service -e -n 300 || true
   echo "---- ADMIN DROP-IN (masked) ----"; if [ -f "/etc/systemd/system/chillhub-admin.service.d/override.conf" ]; then sudo sed -E 's/(Environment=\"?JWT_SECRET=)[^\"]+/\1<redacted>/' /etc/systemd/system/chillhub-admin.service.d/override.conf | sed -E 's/(Environment=\"?ADMIN_PASSWORD_(PLAIN|BCRYPT)=)[^\"]+/\1<redacted>/' || true; else echo missing; fi
   exit 1
 fi
@@ -561,10 +644,10 @@ sudo nginx -T 2>/dev/null | awk '
   inserver && $1=="root" { sub(/;$/, "", $2); print $2; exit }
 ' || true
 echo "sha256 of key files:"
-if [ -f "\$SITE_DIR/index.html" ]; then sha256sum "\$SITE_DIR/index.html" || true; else echo "missing \$SITE_DIR/index.html"; fi
-if [ -f "\$SITE_DIR/styles.css" ]; then sha256sum "\$SITE_DIR/styles.css" || true; else echo "missing \$SITE_DIR/styles.css"; fi
+if [ -f "$SITE_DIR/index.html" ]; then sha256sum "$SITE_DIR/index.html" || true; else echo "missing $SITE_DIR/index.html"; fi
+if [ -f "$SITE_DIR/styles.css" ]; then sha256sum "$SITE_DIR/styles.css" || true; else echo "missing $SITE_DIR/styles.css"; fi
 echo "downloads listing (first 50):"
-if [ -d "\$SITE_DIR/downloads" ]; then ls -lah "\$SITE_DIR/downloads" | sed -n '1,50p'; else echo "downloads dir missing"; fi
+if [ -d "$SITE_DIR/downloads" ]; then ls -lah "$SITE_DIR/downloads" | sed -n '1,50p'; else echo "downloads dir missing"; fi
 
 # Per-section mismatch counters
 SITE_MISM=0
@@ -863,10 +946,10 @@ $checks = @(
   @{ url = "$base/assets/ping.txt"; name = "Assets ping";            expect = 200 },
   @{ url = "$base/admin/ui/login.html"; name = "Admin UI login";     expect = 200 },
   # Admin API health is protected by nginx (auth_request); expect 401 externally
-  @{ url = "$base/admin/api/health";    name = "Admin API health (ext)";   expect = 401 },
+  @{ url = "$base/admin/api/health";    name = "Admin API health (ext)";   expect = 200 },
   # Public server API check: use GET for JSON endpoints (some servers return 405 to HEAD)
   @{ url = "$base/api/games";           name = "Server API games (GET)";   expect = 200 },
-  @{ url = "$base/admin/";              name = "Admin gate (401)";   expect = 401 }
+  @{ url = "$base/admin/";              name = "Admin gate (401/302)";   expect = 401 }
 )
 
 $fail = 0
@@ -878,7 +961,11 @@ foreach ($c in $checks) {
     $code = Get-HttpCode $c.url
   }
 
-  if ($code -eq $c.expect) {
+  $ok = $false
+  if ($code -eq $c.expect) { $ok = $true }
+  # Accept 302 as OK for admin gate because nginx redirects 401 -> /admin/ui/login.html
+  if (-not $ok -and $c.name -like "Admin gate*" -and ($code -eq 302 -or $code -eq 401)) { $ok = $true }
+  if ($ok) {
     Write-Ok ("{0} -> {1}" -f $c.name, $code)
   } else {
     Write-Warn ("{0} -> {1} (expected {2})" -f $c.name, $code, $c.expect)
@@ -962,11 +1049,11 @@ report_cmp(){
   echo "[manifest] $name: total=$total ok=$ok mism=$mism miss=$miss"
   rm -f "$mf" || true
 }
-report_cmp site    "$SITE_MAN_B64"   "/var/www/site"                ""
-report_cmp admin   "$ADMIN_MAN_B64"  "/var/www/launcher/admin_ui"   ""
-report_cmp downloads "$DL_MAN_B64"   "/var/www/site/downloads"      ""
-report_cmp bin     "$BIN_MAN_B64"    "$HOME/deploy/bin"             "bin"
-report_cmp systemd "$SYS_MAN_B64"    "/etc/systemd/system"          "sys"
+  report_cmp site    "$SITE_MAN_B64"   "/var/www/site"                ""
+  report_cmp admin   "$ADMIN_MAN_B64"  "/var/www/launcher/admin_ui"   ""
+  report_cmp downloads "$DL_MAN_B64"   "/var/www/site/downloads"      ""
+  report_cmp bin     "$BIN_MAN_B64"    "$HOME/deploy/bin"             "bin"
+  report_cmp systemd "$SYS_MAN_B64"    "/etc/systemd/system"          "sys"
 # Enforce failure on manifest report too
 FAIL_FLAG="%%FAIL_ON_MISMATCH%%"
 if [ -n "$FAIL_FLAG" ]; then
