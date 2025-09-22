@@ -94,22 +94,26 @@ $AdminUIDir= Join-Path $BuildRoot "launcher_admin_ui"
 $SystemdDir= Join-Path $BuildRoot "systemd"
 $DeployDir = Join-Path $BuildRoot "deploy"
 
+# Default path to nginx site config in repo (may be overridden later after copying to $DeployDir)
+$NginxConf = Join-Path (Join-Path $RepoRoot 'deploy') 'launcher.conf'
+
 # Clean and re-create build tree
 if (Test-Path $BuildRoot) { Remove-Item -Recurse -Force $BuildRoot }
 New-Item -ItemType Directory -Force -Path $BinDir, $SiteDir, $AdminUIDir, $SystemdDir, $DeployDir | Out-Null
 
-# Optional: git checkout a branch locally (only if repo is git)
+# Optional: git fetch only (do NOT change local branch)
 try {
   $isGit = (git -C $RepoRoot rev-parse --is-inside-work-tree 2>$null) -eq "true"
   if ($isGit) {
-    Write-Info "Checking out branch $Branch"
-    # Fetch only the target branch from origin to avoid ambiguous upstreams
-    git -C $RepoRoot fetch origin $Branch --prune | Out-Null
-    # Create/reset local branch to exactly match origin/<branch> (avoids 'Cannot fast-forward to multiple branches')
-    git -C $RepoRoot checkout -B $Branch "origin/$Branch" | Out-Null
+    $curBranch = (git -C $RepoRoot rev-parse --abbrev-ref HEAD 2>$null).Trim()
+    Write-Info ("Git fetch (keeping current branch '{0}'; requested '{1}')" -f $curBranch, $Branch)
+    git -C $RepoRoot fetch origin --prune | Out-Null
+    if ($curBranch -ne $Branch) {
+      Write-Warn ("Current branch is '{0}', requested is '{1}'. Proceeding without switching per policy." -f $curBranch, $Branch)
+    }
   }
 } catch {
-  Write-Warn ("Git sync step failed or skipped: {0}" -f $_.Exception.Message)
+  Write-Warn ("Git fetch step failed or skipped: {0}" -f $_.Exception.Message)
 }
 
 if ($StartAtRemote) {
@@ -194,6 +198,8 @@ if ($StartAtRemote) {
     Copy-Item -Path (Join-Path $systemdSrc '*') -Destination $SystemdDir -Recurse -Force
   }
   Copy-Item -Path (Join-Path (Join-Path $RepoRoot 'deploy') 'launcher.conf') -Destination (Join-Path $DeployDir 'launcher.conf') -Force
+  # Path to the local nginx launcher.conf we will upload; used to compute expected sha for remote validation
+  $NginxConf = Join-Path $DeployDir 'launcher.conf'
 
   # Local diagnostics: list source trees (first 200 files each) and counts
   Write-Info "Listing source files (landing)"
@@ -373,10 +379,29 @@ if ($systemdTgz) { Copy-FileRemote $systemdTgz 'deploy/systemd.tgz' }
 
 # Remote diagnostics before in-band script: list extracted deploy trees (first 200 files and totals)
 Write-Info "Remote: listing extracted deploy directories (pre-sync)"
-$preListCmd = @'
-/bin/bash -lc 'set -ef; for d in site launcher_admin_ui bin systemd; do base=$HOME/deploy/$d; echo "remote_pre_list dir=$base"; if [ -d "$base" ]; then cnt=$(find "$base" -type f | wc -l); find "$base" -type f | sed -n "1,200p" | sed -e "s|^|remote_pre_file |"; echo "remote_pre_list total_files=$cnt"; du -sh "$base" 2>/dev/null || true; else echo "remote_pre_list missing=$base"; fi; done'
+# Write a small bash script locally to avoid complex SSH quoting, then upload and run it
+$preListLocal = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'prelist.sh')
+$preListContent = @'
+#!/bin/bash
+set -euo pipefail
+for d in site launcher_admin_ui bin systemd; do
+  base="$HOME/deploy/$d"
+  echo "[remote:pre-list] dir=$base"
+  if [ -d "$base" ]; then
+    cnt=$(find "$base" -type f | wc -l)
+    find "$base" -type f | sed -n '1,200p' | sed -e 's|^|[remote:pre-file] |'
+    echo "[remote:pre-list] total files: $cnt"
+    du -sh "$base" 2>/dev/null || true
+  else
+    echo "[remote:pre-list] missing=$base"
+  fi
+done
 '@
-& $SSH @sshCommon $Remote $preListCmd
+[System.IO.File]::WriteAllText($preListLocal, ($preListContent -replace "`r`n","`n"), (New-Object System.Text.UTF8Encoding($false)))
+& $SCP @sshCommon $preListLocal "${Remote}:/tmp/prelist.sh"
+Remove-Item -Force $preListLocal -ErrorAction SilentlyContinue
+& $SSH @sshCommon $Remote '/bin/bash' '/tmp/prelist.sh'
+& $SSH @sshCommon $Remote 'rm -f /tmp/prelist.sh' | Out-Null
 
 # Remove local temp archives
 foreach ($f in @($siteTgz, $adminTgz, $binTgz, $systemdTgz)) { if ($f) { Remove-Item -Force $f -ErrorAction SilentlyContinue } }
@@ -588,6 +613,11 @@ sudo nginx -t
 sudo systemctl reload nginx
 echo "[check] Nginx site file sha and redirect rule"
 sudo sha256sum "$NGINX_SITE_AVAILABLE" || true
+NGX_EXPECT="%%NGINX_CONF_SHA%%"
+if [ -n "$NGX_EXPECT" ] && command -v sha256sum >/dev/null 2>&1; then
+  NGX_ACT=$(sha256sum "$NGINX_SITE_AVAILABLE" | awk '{print $1}')
+  if [ "$NGX_ACT" = "$NGX_EXPECT" ]; then echo "[check] nginx launcher.conf OK"; else echo "[check] nginx launcher.conf MISMATCH expected=$NGX_EXPECT got=$NGX_ACT"; fi
+fi
 if sudo grep -n "error_page 401 =302 /admin/ui/login.html" "$NGINX_SITE_AVAILABLE" >/dev/null 2>&1; then
   echo "[check] redirect rule present in nginx config"
 else
@@ -718,18 +748,6 @@ fi
 # Per-section mismatch summary
 echo "[summary] mismatches: site=$SITE_MISM admin=$ADMIN_MISM downloads=$DL_MISM bin=$BIN_MISM systemd=$SYS_MISM total=$MISM_TOTAL"
 
-# Cleanup temp manifests (do at the very end so listings work)
-rm -f /tmp/site.manifest /tmp/admin.manifest /tmp/bin.manifest /tmp/systemd.manifest /tmp/downloads.manifest || true
-
-# Enforce failure on mismatches if requested (after printing)
-if [ -n "$FAIL_ON_MISMATCH" ] && [ "$MISM_TOTAL" -ne 0 ]; then
-  echo "[deploy] Manifest mismatches detected (total blocks: $MISM_TOTAL)"
-  exit 1
-fi
-if [ -s /tmp/systemd.manifest ]; then
-  echo "sha listing (systemd)"; while IFS=$'\t' read -r rel sha; do f="/etc/systemd/system/$rel"; if [ -f "$f" ]; then sha256sum "$f"; else echo "MISS systemd $rel"; fi; done < /tmp/systemd.manifest
-fi
-
 # FINAL manifest compare (re-check at end so results appear last)
 echo "==== FINAL manifest compare (site) ===="
 if [ -s /tmp/site.manifest ]; then
@@ -754,10 +772,8 @@ if [ -s /tmp/systemd.manifest ]; then
 # Final summary of manifest mismatches
 echo "[summary] Manifest mismatch blocks total: $MISM_TOTAL"
 
-# Cleanup temp manifests (do this at the very end so listings above can use them)
+# Cleanup temp manifests (now truly at the end) and enforce failure if requested
 rm -f /tmp/site.manifest /tmp/admin.manifest /tmp/bin.manifest /tmp/systemd.manifest /tmp/downloads.manifest || true
-
-# Enforce failure on mismatches if requested (after printing final summary)
 if [ -n "$FAIL_ON_MISMATCH" ] && [ "$MISM_TOTAL" -ne 0 ]; then
   echo "[deploy] Manifest mismatches detected (total blocks with mismatches: $MISM_TOTAL)"
   exit 1
@@ -837,6 +853,23 @@ $binManifestB64     = & $makeManifestB64 $BinDir
 $systemdManifestB64 = if (Test-Path $SystemdDir) { & $makeManifestB64 $SystemdDir } else { "" }
 $downloadsManifestB64 = if ($DownloadsDir -and (Test-Path -LiteralPath $DownloadsDir)) { & $makeManifestB64 $DownloadsDir } else { "" }
 
+# Augment bin manifest with synthetic entries for installed names (/opt/chillhub/api and /opt/chillhub/admin)
+try {
+  $apiPath = if ($goArch -eq 'arm64') { Join-Path $BinDir 'api.arm64' } else { Join-Path $BinDir 'api.amd64' }
+  $admPath = if ($goArch -eq 'arm64') { Join-Path $BinDir 'admin.arm64' } else { Join-Path $BinDir 'admin.amd64' }
+  if ((Test-Path -LiteralPath $apiPath) -and (Test-Path -LiteralPath $admPath)) {
+    $apiHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $apiPath).Hash.ToLower()
+    $admHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $admPath).Hash.ToLower()
+    $binTxt = ""
+    if (-not [string]::IsNullOrWhiteSpace($binManifestB64)) {
+      $binTxt = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($binManifestB64))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($binTxt)) { $binTxt += "`n" }
+    $binTxt += ("api`t{0}`nadmin`t{1}" -f $apiHash, $admHash)
+    $binManifestB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($binTxt))
+  }
+} catch {}
+
 # Diagnostics: show local manifest Base64 lengths so we know they are non-empty
 $siteLen      = if ([string]::IsNullOrEmpty($siteManifestB64)) { 0 } else { $siteManifestB64.Length }
 $adminLen     = if ([string]::IsNullOrEmpty($adminManifestB64)) { 0 } else { $adminManifestB64.Length }
@@ -863,6 +896,13 @@ $injected = $injected.Replace('%%ADMIN_MANIFEST%%', (Convert-ToBashDqEscaped $ad
 $injected = $injected.Replace('%%BIN_MANIFEST%%', (Convert-ToBashDqEscaped $binManifestB64))
 $injected = $injected.Replace('%%SYSTEMD_MANIFEST%%', (Convert-ToBashDqEscaped $systemdManifestB64))
 $injected = $injected.Replace('%%DOWNLOADS_MANIFEST%%', (Convert-ToBashDqEscaped $downloadsManifestB64))
+${ngxSha} = ""
+try {
+  if ($NginxConf -and (Test-Path -LiteralPath $NginxConf)) {
+    ${ngxSha} = (Get-FileHash -Algorithm SHA256 -LiteralPath $NginxConf).Hash.ToLower()
+  }
+} catch {}
+$injected = $injected.Replace('%%NGINX_CONF_SHA%%', (Convert-ToBashDqEscaped ${ngxSha}))
 # Normalize newlines to LF to avoid CR issues on remote bash
 $normalized = ($injected -replace "`r`n","`n") -replace "`r",""
 # Write to a local temp file as UTF-8 (no BOM)
@@ -1049,7 +1089,18 @@ report_cmp(){
       echo "MISS $name $rel"; miss=$((miss+1))
     fi
   done < "$mf"
-  echo "[manifest] $name: total=$total ok=$ok mism=$mism miss=$miss"
+  local rootCount=0
+  case "$special" in
+    bin)
+      # For bin, we only consider files listed in manifest (api/admin or deploy/bin). Extras check is not applicable
+      rootCount=$total ;;
+    sys)
+      rootCount=$(find "/etc/systemd/system" -maxdepth 1 -type f -name 'chillhub-*.service' 2>/dev/null | wc -l) ;;
+    *)
+      rootCount=$(find "$root" -type f 2>/dev/null | wc -l) ;;
+  esac
+  local extras=$(( rootCount - total ))
+  echo "[manifest] $name: total=$total ok=$ok mism=$mism miss=$miss root_files=$rootCount extras=$( [ $extras -gt 0 ] && echo $extras || echo 0 )"
   rm -f "$mf" || true
 }
   report_cmp site    "$SITE_MAN_B64"   "/var/www/site"                ""
