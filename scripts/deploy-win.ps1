@@ -374,6 +374,17 @@ sudo rsync -a --delete "$DEPLOY_DIR/site/" "$SITE_DIR/"
 # Sync Admin UI static only
 sudo rsync -a --delete "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/"
 
+# Diagnostics: compare source vs destination for key files
+if [ -f "$DEPLOY_DIR/site/index.html" ] && [ -f "$SITE_DIR/index.html" ]; then
+  echo "[diag] site/index.html src=$(sha256sum \"$DEPLOY_DIR/site/index.html\" | awk '{print $1}') dst=$(sha256sum \"$SITE_DIR/index.html\" | awk '{print $1}')"
+fi
+if [ -f "$DEPLOY_DIR/launcher_admin_ui/admin.js" ] && [ -f "$LAUNCHER_DIR/admin_ui/admin.js" ]; then
+  echo "[diag] admin_ui/admin.js src=$(sha256sum \"$DEPLOY_DIR/launcher_admin_ui/admin.js\" | awk '{print $1}') dst=$(sha256sum \"$LAUNCHER_DIR/admin_ui/admin.js\" | awk '{print $1}')"
+fi
+# List images presence in source and destination (first level)
+echo "[diag] images (src)"; ls -1 "$DEPLOY_DIR/site/assets/images" 2>/dev/null | sed -n '1,50p' || true
+echo "[diag] images (dst)"; ls -1 "$SITE_DIR/assets/images" 2>/dev/null | sed -n '1,50p' || true
+
 # Install binaries (select arch-specific files if generic names not present)
 sudo install -d -m 0755 "$OPT_DIR"
 SERVER_ARCH=$(uname -m | tr '[:upper:]' '[:lower:]')
@@ -427,11 +438,40 @@ fi
 
 # Systemd units (optional)
 if [ -d "$DEPLOY_DIR/systemd" ]; then
+  # Overwrite units unconditionally
   sudo install -m 0644 "$DEPLOY_DIR/systemd/chillhub-api.service" /etc/systemd/system/chillhub-api.service || true
   sudo install -m 0644 "$DEPLOY_DIR/systemd/chillhub-admin.service" /etc/systemd/system/chillhub-admin.service || true
+  # Verify sha256 src/dst and optionally abort if mismatch
+  if [ -f "$DEPLOY_DIR/systemd/chillhub-api.service" ]; then
+    SRC_API_SHA=$(sha256sum "$DEPLOY_DIR/systemd/chillhub-api.service" | awk '{print $1}')
+    DST_API_SHA=$(sha256sum "/etc/systemd/system/chillhub-api.service" | awk '{print $1}')
+    echo "[systemd] chillhub-api.service src=$SRC_API_SHA dst=$DST_API_SHA"
+  fi
+  if [ -f "$DEPLOY_DIR/systemd/chillhub-admin.service" ]; then
+    SRC_ADM_SHA=$(sha256sum "$DEPLOY_DIR/systemd/chillhub-admin.service" | awk '{print $1}')
+    DST_ADM_SHA=$(sha256sum "/etc/systemd/system/chillhub-admin.service" | awk '{print $1}')
+    echo "[systemd] chillhub-admin.service src=$SRC_ADM_SHA dst=$DST_ADM_SHA"
+  fi
+  if [ -n "$FAIL_ON_MISMATCH" ]; then
+    EXIT_MISM=0
+    [ -n "$SRC_API_SHA$DST_API_SHA" ] && [ "$SRC_API_SHA" != "$DST_API_SHA" ] && EXIT_MISM=1 && echo "[error] systemd api unit sha mismatch"
+    [ -n "$SRC_ADM_SHA$DST_ADM_SHA" ] && [ "$SRC_ADM_SHA" != "$DST_ADM_SHA" ] && EXIT_MISM=1 && echo "[error] systemd admin unit sha mismatch"
+    if [ "$EXIT_MISM" -eq 1 ]; then echo "[deploy] Aborting due to systemd unit mismatches"; exit 1; fi
+  fi
   sudo systemctl daemon-reload || true
   sudo systemctl enable chillhub-api.service || true
   sudo systemctl enable chillhub-admin.service || true
+fi
+
+# Reload services
+sudo systemctl daemon-reload || true
+sudo systemctl restart chillhub-api.service || true
+sudo systemctl restart chillhub-admin.service || true
+API_STATE=$(systemctl is-active chillhub-api.service 2>/dev/null || true)
+ADM_STATE=$(systemctl is-active chillhub-admin.service 2>/dev/null || true)
+echo "[systemd] api=$API_STATE admin=$ADM_STATE"
+if [ -n "$FAIL_ON_MISMATCH" ]; then
+  if [ "$API_STATE" != "active" ] || [ "$ADM_STATE" != "active" ]; then echo "[deploy] One or more services not active after restart"; exit 1; fi
 fi
 
 # Optional: write admin auth env drop-in (from parameters)
@@ -442,44 +482,25 @@ ADMIN_PASS_BCRYPT="%%ADMIN_PASS_BCRYPT%%"
 ADMIN_PASS_PLAIN="%%ADMIN_PASS_PLAIN%%"
 COOKIE_DOMAIN="%%COOKIE_DOMAIN%%"
 COOKIE_SECURE="%%COOKIE_SECURE%%"
-if [ -n "$ADMIN_PASS_PLAIN" ] && [ -z "$ADMIN_PASS_BCRYPT" ]; then
-  if command -v go >/dev/null 2>&1; then
-    TMPGO=$(mktemp -t bcrypt-XXXXXX.go)
-    printf '%s\n' \
-      'package main' \
-      'import (' \
-      '  "fmt"' \
-      '  "golang.org/x/crypto/bcrypt"' \
-      '  "os"' \
-      ')' \
-      'func main(){' \
-      '  p := os.Getenv("PW")' \
-      '  if p == "" { fmt.Println(""); return }' \
-      '  h, err := bcrypt.GenerateFromPassword([]byte(p), 12)' \
-      '  if err != nil { fmt.Println(""); return }' \
-      '  fmt.Print(string(h))' \
-      '}' > "$TMPGO"
-    # Limit go run to 20s to avoid long module download hangs
-    ADMIN_PASS_BCRYPT=$(PW="$ADMIN_PASS_PLAIN" timeout 20s go run "$TMPGO" 2>/dev/null || true)
-    rm -f "$TMPGO" || true
-  else
-    echo "[warn] go not installed on server; skipping bcrypt derivation from plain password"
-  fi
-fi
-
-if [ -n "$ADMIN_USER$ADMIN_PASS_BCRYPT$JWT_SECRET$COOKIE_DOMAIN$COOKIE_SECURE" ]; then
+# Debug presence (lengths only, без вывода значений)
+echo "[debug] admin env presence: JWT=${#JWT_SECRET} USER=${#ADMIN_USER} BCRYPT=${#ADMIN_PASS_BCRYPT} PLAIN=${#ADMIN_PASS_PLAIN} C_DOM=${#COOKIE_DOMAIN} C_SEC=${#COOKIE_SECURE}"
+if [ -n "$ADMIN_USER$ADMIN_PASS_BCRYPT$ADMIN_PASS_PLAIN$JWT_SECRET$COOKIE_DOMAIN$COOKIE_SECURE" ]; then
   sudo mkdir -p "$ADMIN_DROPIN_DIR"
   TMPD=$(mktemp)
   {
     echo "[Service]"
-    [ -n "$COOKIE_DOMAIN" ] && echo "Environment=COOKIE_DOMAIN=$COOKIE_DOMAIN"
-    [ -n "$COOKIE_SECURE" ] && echo "Environment=COOKIE_SECURE=$COOKIE_SECURE"
-    [ -n "$JWT_SECRET" ] && echo "Environment=JWT_SECRET=$JWT_SECRET"
-    [ -n "$ADMIN_USER" ] && echo "Environment=ADMIN_USERNAME=$ADMIN_USER"
-    [ -n "$ADMIN_PASS_BCRYPT" ] && echo "Environment=ADMIN_PASSWORD_BCRYPT=$ADMIN_PASS_BCRYPT"
+    # Quote values to preserve special characters (e.g., $ in bcrypt hashes)
+    [ -n "$COOKIE_DOMAIN" ] && echo "Environment=\"COOKIE_DOMAIN=$COOKIE_DOMAIN\""
+    [ -n "$COOKIE_SECURE" ] && echo "Environment=\"COOKIE_SECURE=$COOKIE_SECURE\""
+    [ -n "$JWT_SECRET" ] && echo "Environment=\"JWT_SECRET=$JWT_SECRET\""
+    [ -n "$ADMIN_USER" ] && echo "Environment=\"ADMIN_USERNAME=$ADMIN_USER\""
+    # Write whichever password representations are provided
+    [ -n "$ADMIN_PASS_PLAIN" ] && echo "Environment=\"ADMIN_PASSWORD_PLAIN=$ADMIN_PASS_PLAIN\""
+    [ -n "$ADMIN_PASS_BCRYPT" ] && echo "Environment=\"ADMIN_PASSWORD_BCRYPT=$ADMIN_PASS_BCRYPT\""
   } > "$TMPD"
   sudo install -m 0644 "$TMPD" "$ADMIN_DROPIN_DIR/override.conf"
   rm -f "$TMPD" || true
+  echo "[debug] wrote override.conf (JWT:$([ -n \"$JWT_SECRET\" ] && echo 1 || echo 0) PLAIN:$([ -n \"$ADMIN_PASS_PLAIN\" ] && echo 1 || echo 0) BCRYPT:$([ -n \"$ADMIN_PASS_BCRYPT\" ] && echo 1 || echo 0))"
 fi
 
 # Nginx site config
@@ -487,17 +508,12 @@ sudo install -m 0644 "$DEPLOY_DIR/deploy/launcher.conf" "$NGINX_SITE_AVAILABLE"
 sudo ln -sf "$NGINX_SITE_AVAILABLE" "$NGINX_SITE_ENABLED"
 sudo nginx -t
 sudo systemctl reload nginx
-
-# Reload services
-sudo systemctl daemon-reload || true
-sudo systemctl restart chillhub-api.service || true
-sudo systemctl restart chillhub-admin.service || true
-
-# Optional: sync external downloads directory
-DOWNLOADS_DIR="%%DOWNLOADS_DIR%%"
-if [ -n "$DOWNLOADS_DIR" ] && [ -d "$DOWNLOADS_DIR" ]; then
-  sudo mkdir -p "$SITE_DIR/downloads"
-  sudo rsync -a "$DOWNLOADS_DIR/" "$SITE_DIR/downloads/"
+echo "[check] Nginx site file sha and redirect rule"
+sudo sha256sum "$NGINX_SITE_AVAILABLE" || true
+if sudo grep -n "error_page 401 =302 /admin/ui/login.html" "$NGINX_SITE_AVAILABLE" >/dev/null 2>&1; then
+  echo "[check] redirect rule present in nginx config"
+else
+  echo "[check] redirect rule NOT present in nginx config"
 fi
 
 # Smoke tests
@@ -507,7 +523,7 @@ must_200() { url="$1"; name="$2"; code=$(http_code "$url"); if [ "$code" = "200"
 
 must_200 "$SITE_BASE/admin/ui/login.html" "Admin UI login"
 code=$(http_code "$SITE_BASE/admin/")
-if [ "$code" = "200" ]; then echo "[test] WARN /admin/ returned 200 (maybe authorized)"; elif [ "$code" = "401" ]; then echo "[test] PASS /admin/ protected (401)"; else echo "[test] FAIL /admin/ -> $code"; FAIL=1; fi
+if [ "$code" = "200" ]; then echo "[test] WARN /admin/ returned 200 (maybe authorized)"; elif [ "$code" = "401" ]; then echo "[test] PASS /admin/ protected (401 Unauthorized)"; elif [ "$code" = "302" ]; then echo "[test] PASS /admin/ protected (302 Found)"; else echo "[test] FAIL /admin/ -> $code"; FAIL=1; fi
 must_200 "$SITE_BASE/admin/ui/admin.js" "Admin UI static admin.js"
 must_200 "$SITE_BASE/admin/api/health" "Admin API health"
 must_200 "$SITE_BASE/" "Landing root"
@@ -527,11 +543,13 @@ fi
 if [ "\$FAIL" -ne 0 ]; then
   echo "[deploy] One or more tests FAILED. Collecting diagnostics..."
   echo "---- NGINX TEST ----"; sudo nginx -t || true
-  echo "---- NGINX ERROR LOG (last 150) ----"; sudo tail -n 150 /var/log/nginx/error.log || true
-  echo "---- SYSTEMD STATUS (api) ----"; sudo systemctl status chillhub-api.service --no-pager -n 30 || true
-  echo "---- SYSTEMD STATUS (admin) ----"; sudo systemctl status chillhub-admin.service --no-pager -n 30 || true
-  echo "---- JOURNALCTL (api last 150) ----"; sudo journalctl -u chillhub-api.service -e -n 150 || true
-  echo "---- JOURNALCTL (admin last 150) ----"; sudo journalctl -u chillhub-admin.service -e -n 150 || true
+  echo "---- NGINX ERROR LOG (last 300) ----"; sudo tail -n 300 /var/log/nginx/error.log || true
+  echo "---- NGINX ACCESS LOG (last 300) ----"; sudo tail -n 300 /var/log/nginx/access.log || true
+  echo "---- SYSTEMD STATUS (api) ----"; sudo systemctl status chillhub-api.service --no-pager -n 50 || true
+  echo "---- SYSTEMD STATUS (admin) ----"; sudo systemctl status chillhub-admin.service --no-pager -n 50 || true
+  echo "---- JOURNALCTL (api last 300) ----"; sudo journalctl -u chillhub-api.service -e -n 300 || true
+  echo "---- JOURNALCTL (admin last 300) ----"; sudo journalctl -u chillhub-admin.service -e -n 300 || true
+  echo "---- ADMIN DROP-IN (masked) ----"; if [ -f "/etc/systemd/system/chillhub-admin.service.d/override.conf" ]; then sudo sed -E 's/(Environment=\"?JWT_SECRET=)[^\"]+/\1<redacted>/' /etc/systemd/system/chillhub-admin.service.d/override.conf | sed -E 's/(Environment=\"?ADMIN_PASSWORD_(PLAIN|BCRYPT)=)[^\"]+/\1<redacted>/' || true; else echo missing; fi
   exit 1
 fi
 
@@ -548,71 +566,115 @@ if [ -f "\$SITE_DIR/styles.css" ]; then sha256sum "\$SITE_DIR/styles.css" || tru
 echo "downloads listing (first 50):"
 if [ -d "\$SITE_DIR/downloads" ]; then ls -lah "\$SITE_DIR/downloads" | sed -n '1,50p'; else echo "downloads dir missing"; fi
 
+# Per-section mismatch counters
+SITE_MISM=0
+ADMIN_MISM=0
+DL_MISM=0
+BIN_MISM=0
+SYS_MISM=0
+
 echo "manifest compare (site)"
 SITE_MAN_B64="%%SITE_MANIFEST%%"
-if [ -n "\$SITE_MAN_B64" ]; then
-  printf "%s" "\$SITE_MAN_B64" | base64 -d > /tmp/site.manifest || true
-  mism=0; while IFS=$'\t' read -r rel sha; do f="\$SITE_DIR/\$rel"; if [ -f "\$f" ]; then rsha=$(sha256sum "\$f" | awk '{print $1}'); if [ "\$rsha" = "\$sha" ]; then echo "OK  site \$rel"; else echo "FAIL site \$rel"; mism=$((mism+1)); fi; else echo "MISS site \$rel"; mism=$((mism+1)); fi; done < /tmp/site.manifest; if [ "\$mism" -ne 0 ]; then echo "site manifest mismatches: \$mism"; fi; MISM_TOTAL=$((MISM_TOTAL+ mism))
+if [ -n "$SITE_MAN_B64" ]; then
+  printf "%s" "$SITE_MAN_B64" | base64 -d > /tmp/site.manifest || true
+  mism=0; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  site $rel"; else echo "FAIL site $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS site $rel"; mism=$((mism+1)); fi; done < /tmp/site.manifest; if [ "$mism" -ne 0 ]; then echo "site manifest mismatches: $mism"; fi; SITE_MISM=$mism; MISM_TOTAL=$((MISM_TOTAL+ mism))
 fi
 
 echo "manifest compare (admin_ui)"
 ADMIN_MAN_B64="%%ADMIN_MANIFEST%%"
-if [ -n "\$ADMIN_MAN_B64" ]; then
-  printf "%s" "\$ADMIN_MAN_B64" | base64 -d > /tmp/admin.manifest || true
-  mism=0; while IFS=$'\t' read -r rel sha; do f="\$LAUNCHER_DIR/admin_ui/\$rel"; if [ -f "\$f" ]; then rsha=$(sha256sum "\$f" | awk '{print $1}'); if [ "\$rsha" = "\$sha" ]; then echo "OK  admin \$rel"; else echo "FAIL admin \$rel"; mism=$((mism+1)); fi; else echo "MISS admin \$rel"; mism=$((mism+1)); fi; done < /tmp/admin.manifest; if [ "\$mism" -ne 0 ]; then echo "admin manifest mismatches: \$mism"; fi; MISM_TOTAL=$((MISM_TOTAL+ mism))
+if [ -n "$ADMIN_MAN_B64" ]; then
+  printf "%s" "$ADMIN_MAN_B64" | base64 -d > /tmp/admin.manifest || true
+  mism=0; while IFS=$'\t' read -r rel sha; do f="$LAUNCHER_DIR/admin_ui/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  admin $rel"; else echo "FAIL admin $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS admin $rel"; mism=$((mism+1)); fi; done < /tmp/admin.manifest; if [ "$mism" -ne 0 ]; then echo "admin manifest mismatches: $mism"; fi; ADMIN_MISM=$mism; MISM_TOTAL=$((MISM_TOTAL+ mism))
 fi
 
 echo "manifest compare (downloads)"
 DL_MAN_B64="%%DOWNLOADS_MANIFEST%%"
-if [ -n "\$DL_MAN_B64" ]; then
-  printf "%s" "\$DL_MAN_B64" | base64 -d > /tmp/downloads.manifest || true
-  mism=0; while IFS=$'\t' read -r rel sha; do f="\$SITE_DIR/downloads/\$rel"; if [ -f "\$f" ]; then rsha=$(sha256sum "\$f" | awk '{print $1}'); if [ "\$rsha" = "\$sha" ]; then echo "OK  downloads \$rel"; else echo "FAIL downloads \$rel"; mism=$((mism+1)); fi; else echo "MISS downloads \$rel"; mism=$((mism+1)); fi; done < /tmp/downloads.manifest; if [ "\$mism" -ne 0 ]; then echo "downloads manifest mismatches: \$mism"; fi; MISM_TOTAL=$((MISM_TOTAL+ mism))
+if [ -n "$DL_MAN_B64" ]; then
+  printf "%s" "$DL_MAN_B64" | base64 -d > /tmp/downloads.manifest || true
+  mism=0; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/downloads/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  downloads $rel"; else echo "FAIL downloads $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS downloads $rel"; mism=$((mism+1)); fi; done < /tmp/downloads.manifest; if [ "$mism" -ne 0 ]; then echo "downloads manifest mismatches: $mism"; fi; DL_MISM=$mism; MISM_TOTAL=$((MISM_TOTAL+ mism))
 fi
 
 echo "manifest compare (bin)"
 BIN_MAN_B64="%%BIN_MANIFEST%%"
-if [ -n "\$BIN_MAN_B64" ]; then
-  printf "%s" "\$BIN_MAN_B64" | base64 -d > /tmp/bin.manifest || true
-  mism=0; while IFS=$'\t' read -r rel sha; do case "\$rel" in api|admin) f="/opt/chillhub/\$rel";; *) f="\$DEPLOY_DIR/bin/\$rel";; esac; if [ -f "\$f" ]; then rsha=$(sha256sum "\$f" | awk '{print $1}'); if [ "\$rsha" = "\$sha" ]; then echo "OK  bin \$rel"; else echo "FAIL bin \$rel"; mism=$((mism+1)); fi; else echo "MISS bin \$rel"; mism=$((mism+1)); fi; done < /tmp/bin.manifest; if [ "\$mism" -ne 0 ]; then echo "bin manifest mismatches: \$mism"; fi; MISM_TOTAL=$((MISM_TOTAL+ mism))
+if [ -n "$BIN_MAN_B64" ]; then
+  printf "%s" "$BIN_MAN_B64" | base64 -d > /tmp/bin.manifest || true
+  mism=0; while IFS=$'\t' read -r rel sha; do case "$rel" in api|admin) f="/opt/chillhub/$rel";; *) f="$DEPLOY_DIR/bin/$rel";; esac; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  bin $rel"; else echo "FAIL bin $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS bin $rel"; mism=$((mism+1)); fi; done < /tmp/bin.manifest; if [ "$mism" -ne 0 ]; then echo "bin manifest mismatches: $mism"; fi; BIN_MISM=$mism; MISM_TOTAL=$((MISM_TOTAL+ mism))
 fi
 
 echo "manifest compare (systemd)"
 SYS_MAN_B64="%%SYSTEMD_MANIFEST%%"
-if [ -n "\$SYS_MAN_B64" ]; then
-  printf "%s" "\$SYS_MAN_B64" | base64 -d > /tmp/systemd.manifest || true
-  mism=0; while IFS=$'\t' read -r rel sha; do f="/etc/systemd/system/\$rel"; if [ -f "\$f" ]; then rsha=$(sha256sum "\$f" | awk '{print $1}'); if [ "\$rsha" = "\$sha" ]; then echo "OK  systemd \$rel"; else echo "FAIL systemd \$rel"; mism=$((mism+1)); fi; else echo "MISS systemd \$rel"; mism=$((mism+1)); fi; done < /tmp/systemd.manifest; if [ "\$mism" -ne 0 ]; then echo "systemd manifest mismatches: \$mism"; fi; MISM_TOTAL=$((MISM_TOTAL+ mism))
-fi
-
-# Cleanup temp manifests
-rm -f /tmp/site.manifest /tmp/admin.manifest /tmp/bin.manifest /tmp/systemd.manifest /tmp/downloads.manifest || true
-
-# Enforce failure on mismatches if requested
-if [ -n "\$FAIL_ON_MISMATCH" ] && [ "\$MISM_TOTAL" -ne 0 ]; then
-  echo "[deploy] Manifest mismatches detected (total blocks: \$MISM_TOTAL)"
-  exit 1
+if [ -n "$SYS_MAN_B64" ]; then
+  printf "%s" "$SYS_MAN_B64" | base64 -d > /tmp/systemd.manifest || true
+  mism=0; while IFS=$'\t' read -r rel sha; do f="/etc/systemd/system/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  systemd $rel"; else echo "FAIL systemd $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS systemd $rel"; mism=$((mism+1)); fi; done < /tmp/systemd.manifest; if [ "$mism" -ne 0 ]; then echo "systemd manifest mismatches: $mism"; fi; SYS_MISM=$mism; MISM_TOTAL=$((MISM_TOTAL+ mism))
 fi
 
 # Explicit SHA listings for all copied files (from manifests)
+echo "==== MANIFEST CHECKS (END) ===="
 echo "sha listing (bin installed)"
-for f in /opt/chillhub/api /opt/chillhub/admin; do if [ -f "\$f" ]; then sha256sum "\$f"; else echo "MISS \$f"; fi; done
+for f in /opt/chillhub/api /opt/chillhub/admin; do if [ -f "$f" ]; then sha256sum "$f"; else echo "MISS $f"; fi; done
 
 echo "sha listing (admin_ui key file)"
-if [ -f "\$LAUNCHER_DIR/admin_ui/admin.js" ]; then sha256sum "\$LAUNCHER_DIR/admin_ui/admin.js"; else echo "MISS \$LAUNCHER_DIR/admin_ui/admin.js"; fi
+if [ -f "$LAUNCHER_DIR/admin_ui/admin.js" ]; then sha256sum "$LAUNCHER_DIR/admin_ui/admin.js"; else echo "MISS $LAUNCHER_DIR/admin_ui/admin.js"; fi
 
 if [ -s /tmp/site.manifest ]; then
-  echo "sha listing (site)"; while IFS=$'\t' read -r rel sha; do f="\$SITE_DIR/\$rel"; if [ -f "\$f" ]; then sha256sum "\$f"; else echo "MISS site \$rel"; fi; done < /tmp/site.manifest
+  echo "sha listing (site)"; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/$rel"; if [ -f "$f" ]; then sha256sum "$f"; else echo "MISS site $rel"; fi; done < /tmp/site.manifest
 fi
 if [ -s /tmp/admin.manifest ]; then
-  echo "sha listing (admin_ui)"; while IFS=$'\t' read -r rel sha; do f="\$LAUNCHER_DIR/admin_ui/\$rel"; if [ -f "\$f" ]; then sha256sum "\$f"; else echo "MISS admin \$rel"; fi; done < /tmp/admin.manifest
+  echo "sha listing (admin_ui)"; while IFS=$'\t' read -r rel sha; do f="$LAUNCHER_DIR/admin_ui/$rel"; if [ -f "$f" ]; then sha256sum "$f"; else echo "MISS admin $rel"; fi; done < /tmp/admin.manifest
 fi
 if [ -s /tmp/downloads.manifest ]; then
-  echo "sha listing (downloads)"; while IFS=$'\t' read -r rel sha; do f="\$SITE_DIR/downloads/\$rel"; if [ -f "\$f" ]; then sha256sum "\$f"; else echo "MISS downloads \$rel"; fi; done < /tmp/downloads.manifest
+  echo "sha listing (downloads)"; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/downloads/$rel"; if [ -f "$f" ]; then sha256sum "$f"; else echo "MISS downloads $rel"; fi; done < /tmp/downloads.manifest
 fi
 if [ -s /tmp/bin.manifest ]; then
-  echo "sha listing (bin)"; while IFS=$'\t' read -r rel sha; do case "\$rel" in api|admin) f="/opt/chillhub/\$rel";; *) f="\$DEPLOY_DIR/bin/\$rel";; esac; if [ -f "\$f" ]; then sha256sum "\$f"; else echo "MISS bin \$rel"; fi; done < /tmp/bin.manifest
+  echo "sha listing (bin)"; while IFS=$'\t' read -r rel sha; do case "$rel" in api|admin) f="/opt/chillhub/$rel";; *) f="$DEPLOY_DIR/bin/$rel";; esac; if [ -f "$f" ]; then sha256sum "$f"; else echo "MISS bin $rel"; fi; done < /tmp/bin.manifest
+fi
+
+# Per-section mismatch summary
+echo "[summary] mismatches: site=$SITE_MISM admin=$ADMIN_MISM downloads=$DL_MISM bin=$BIN_MISM systemd=$SYS_MISM total=$MISM_TOTAL"
+
+# Cleanup temp manifests (do at the very end so listings work)
+rm -f /tmp/site.manifest /tmp/admin.manifest /tmp/bin.manifest /tmp/systemd.manifest /tmp/downloads.manifest || true
+
+# Enforce failure on mismatches if requested (after printing)
+if [ -n "$FAIL_ON_MISMATCH" ] && [ "$MISM_TOTAL" -ne 0 ]; then
+  echo "[deploy] Manifest mismatches detected (total blocks: $MISM_TOTAL)"
+  exit 1
 fi
 if [ -s /tmp/systemd.manifest ]; then
-  echo "sha listing (systemd)"; while IFS=$'\t' read -r rel sha; do f="/etc/systemd/system/\$rel"; if [ -f "\$f" ]; then sha256sum "\$f"; else echo "MISS systemd \$rel"; fi; done < /tmp/systemd.manifest
+  echo "sha listing (systemd)"; while IFS=$'\t' read -r rel sha; do f="/etc/systemd/system/$rel"; if [ -f "$f" ]; then sha256sum "$f"; else echo "MISS systemd $rel"; fi; done < /tmp/systemd.manifest
+fi
+
+# FINAL manifest compare (re-check at end so results appear last)
+echo "==== FINAL manifest compare (site) ===="
+if [ -s /tmp/site.manifest ]; then
+  mism=0; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  site $rel"; else echo "FAIL site $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS site $rel"; mism=$((mism+1)); fi; done < /tmp/site.manifest; if [ "$mism" -ne 0 ]; then echo "site manifest mismatches: $mism"; fi; fi
+
+echo "==== FINAL manifest compare (admin_ui) ===="
+if [ -s /tmp/admin.manifest ]; then
+  mism=0; while IFS=$'\t' read -r rel sha; do f="$LAUNCHER_DIR/admin_ui/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  admin $rel"; else echo "FAIL admin $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS admin $rel"; mism=$((mism+1)); fi; done < /tmp/admin.manifest; if [ "$mism" -ne 0 ]; then echo "admin manifest mismatches: $mism"; fi; fi
+
+echo "==== FINAL manifest compare (downloads) ===="
+if [ -s /tmp/downloads.manifest ]; then
+  mism=0; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/downloads/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  downloads $rel"; else echo "FAIL downloads $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS downloads $rel"; mism=$((mism+1)); fi; done < /tmp/downloads.manifest; if [ "$mism" -ne 0 ]; then echo "downloads manifest mismatches: $mism"; fi; fi
+
+echo "==== FINAL manifest compare (bin) ===="
+if [ -s /tmp/bin.manifest ]; then
+  mism=0; while IFS=$'\t' read -r rel sha; do case "$rel" in api|admin) f="/opt/chillhub/$rel";; *) f="$DEPLOY_DIR/bin/$rel";; esac; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  bin $rel"; else echo "FAIL bin $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS bin $rel"; mism=$((mism+1)); fi; done < /tmp/bin.manifest; if [ "$mism" -ne 0 ]; then echo "bin manifest mismatches: $mism"; fi; fi
+
+echo "==== FINAL manifest compare (systemd) ===="
+if [ -s /tmp/systemd.manifest ]; then
+  mism=0; while IFS=$'\t' read -r rel sha; do f="/etc/systemd/system/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  systemd $rel"; else echo "FAIL systemd $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS systemd $rel"; mism=$((mism+1)); fi; done < /tmp/systemd.manifest; if [ "$mism" -ne 0 ]; then echo "systemd manifest mismatches: $mism"; fi; fi
+
+# Final summary of manifest mismatches
+echo "[summary] Manifest mismatch blocks total: $MISM_TOTAL"
+
+# Cleanup temp manifests (do this at the very end so listings above can use them)
+rm -f /tmp/site.manifest /tmp/admin.manifest /tmp/bin.manifest /tmp/systemd.manifest /tmp/downloads.manifest || true
+
+# Enforce failure on mismatches if requested (after printing final summary)
+if [ -n "$FAIL_ON_MISMATCH" ] && [ "$MISM_TOTAL" -ne 0 ]; then
+  echo "[deploy] Manifest mismatches detected (total blocks with mismatches: $MISM_TOTAL)"
+  exit 1
 fi
 '@
 
@@ -622,13 +684,57 @@ Write-Info "Running remote deploy script via SSH"
 # Inject sanitized parameter values into the remote script
 function Convert-ToBashDqEscaped([string]$s){ if ($null -eq $s) { return "" } return ($s -replace '"','\\"') }
 $injected = $remoteScript
+  # If only plain admin password is provided, derive bcrypt locally (so server doesn't need Go)
+  if ([string]::IsNullOrWhiteSpace($AdminPasswordBcrypt) -and -not [string]::IsNullOrWhiteSpace($AdminPasswordPlain)) {
+    # Attempt local bcrypt derivation only if Go is present AND a module context exists; otherwise skip to avoid noisy warnings
+    $canGo = $false
+    try { $canGo = $null -ne (Get-Command go -ErrorAction SilentlyContinue) } catch {}
+    $gomod = ""; if ($canGo) { try { $gomod = (& go env GOMOD 2>$null); } catch {} }
+    if ($canGo -and -not [string]::IsNullOrWhiteSpace($gomod)) {
+      try {
+        Write-Info "Deriving bcrypt for admin password locally"
+        $tmpGo = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "bcrypt-" + [Guid]::NewGuid().ToString("N") + ".go")
+        $goSrc = @'
+package main
+import (
+  "fmt"
+  "golang.org/x/crypto/bcrypt"
+  "os"
+)
+func main(){
+  p := os.Getenv("PW")
+  if p == "" { fmt.Print(""); return }
+  h, err := bcrypt.GenerateFromPassword([]byte(p), 12)
+  if err != nil { fmt.Print(""); return }
+  fmt.Print(string(h))
+}
+'@
+        [System.IO.File]::WriteAllText($tmpGo, $goSrc)
+        $env:PW = $AdminPasswordPlain
+        $hash = & go run $tmpGo 2>$null
+        Remove-Item -Force $tmpGo -ErrorAction SilentlyContinue
+        $env:PW = $null
+        if (-not [string]::IsNullOrWhiteSpace($hash)) {
+          $AdminPasswordBcrypt = $hash
+          Write-Ok "bcrypt hash derived locally"
+        } else {
+          Write-Info "Local bcrypt derivation produced empty result; will rely on server"
+        }
+      } catch {
+        Write-Info "Local bcrypt derivation unavailable; will rely on server"
+      }
+    } else {
+      Write-Info "Skipping local bcrypt derivation (Go/module context not available); will rely on server"
+    }
+  }
 $makeManifestB64 = {
   param([string]$Root)
   if (-not $Root -or -not (Test-Path -LiteralPath $Root)) { return "" }
   $lines = New-Object System.Collections.Generic.List[string]
   Get-ChildItem -LiteralPath $Root -Recurse -File | ForEach-Object {
     $full = $_.FullName
-    $rel = $full.Substring($Root.Length).TrimStart('\','/')
+    # Remove any leading directory separators in a cross-platform safe way
+    $rel = $full.Substring($Root.Length).TrimStart([char]'\',[char]'/')
     $rel = $rel -replace '\\','/'
     $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $full).Hash.ToLower()
     $lines.Add("$rel`t$h")
@@ -644,6 +750,18 @@ $adminManifestB64   = & $makeManifestB64 $adminUIDirS
 $binManifestB64     = & $makeManifestB64 $BinDir
 $systemdManifestB64 = if (Test-Path $SystemdDir) { & $makeManifestB64 $SystemdDir } else { "" }
 $downloadsManifestB64 = if ($DownloadsDir -and (Test-Path -LiteralPath $DownloadsDir)) { & $makeManifestB64 $DownloadsDir } else { "" }
+
+# Diagnostics: show local manifest Base64 lengths so we know they are non-empty
+$siteLen      = if ([string]::IsNullOrEmpty($siteManifestB64)) { 0 } else { $siteManifestB64.Length }
+$adminLen     = if ([string]::IsNullOrEmpty($adminManifestB64)) { 0 } else { $adminManifestB64.Length }
+$binLen       = if ([string]::IsNullOrEmpty($binManifestB64)) { 0 } else { $binManifestB64.Length }
+$systemdLen   = if ([string]::IsNullOrEmpty($systemdManifestB64)) { 0 } else { $systemdManifestB64.Length }
+$downloadsLen = if ([string]::IsNullOrEmpty($downloadsManifestB64)) { 0 } else { $downloadsManifestB64.Length }
+Write-Info ("[debug] site manifest b64 length:      {0}" -f $siteLen)
+Write-Info ("[debug] admin manifest b64 length:     {0}" -f $adminLen)
+Write-Info ("[debug] bin manifest b64 length:       {0}" -f $binLen)
+Write-Info ("[debug] systemd manifest b64 length:   {0}" -f $systemdLen)
+Write-Info ("[debug] downloads manifest b64 length: {0}" -f $downloadsLen)
 $injected = $injected.Replace('%%DOWNLOADS_DIR%%', (Convert-ToBashDqEscaped $serverDownloads))
 $injected = $injected.Replace('%%JWT_SECRET%%', (Convert-ToBashDqEscaped $JwtSecret))
 $injected = $injected.Replace('%%ADMIN_USER%%', (Convert-ToBashDqEscaped $AdminUser))
@@ -672,21 +790,23 @@ Remove-Item -Force $tmpLocal -ErrorAction SilentlyContinue
 
 # Build a small remote wrapper to avoid complex quoting via SSH
 $wrapperLocal = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'run-remote.sh')
-$wrapperContent = @"
+$wrapperContent = @'
 #!/bin/bash
-set -o pipefail
+set -euo pipefail
 rc=0
 run_cmd="/bin/bash /tmp/chillhub-deploy.sh"
-# Prefer line-buffered output for better streaming to Windows consoles
-if command -v stdbuf >/dev/null 2>&1; then
-  run_cmd="stdbuf -oL -eL $run_cmd"
-fi
-# Execute without timeout to avoid BusyBox/GNU differences
-$run_cmd 2>&1 | sed -u 's/^/remote: /'
-rc=${PIPESTATUS[0]}
-rm -f /tmp/chillhub-deploy.sh "$0"
+# Pre-run: quick grep to ensure vars are injected in the script
+echo "[precheck] injected vars in /tmp/chillhub-deploy.sh (grep)" || true
+grep -nE '^(JWT_SECRET|ADMIN_USER|ADMIN_PASS_BCRYPT|ADMIN_PASS_PLAIN|COOKIE_DOMAIN|COOKIE_SECURE)=' /tmp/chillhub-deploy.sh || true
+# Execute and capture reliably to a file, then print it unconditionally
+{ eval "$run_cmd"; } > /tmp/chillhub-deploy.log 2>&1 || rc=$?
+echo "--- REMOTE LOG DUMP BEGIN ---"
+cat /tmp/chillhub-deploy.log 2>/dev/null || true
+echo "--- REMOTE LOG DUMP END ---"
+# keep /tmp/chillhub-deploy.log for later retrieval; clean the deploy script and wrapper
+rm -f /tmp/chillhub-deploy.sh "$0" 2>/dev/null || true
 exit $rc
-"@
+'@
 $wrapperNormalized = ($wrapperContent -replace "`r`n","`n") -replace "`r",""
 [System.IO.File]::WriteAllText($wrapperLocal, $wrapperNormalized, $utf8NoBom)
 & $SCP @sshCommon $wrapperLocal "${Remote}:/tmp/run-remote.sh"
@@ -696,12 +816,37 @@ if ($LASTEXITCODE -ne 0) {
   throw "Remote deploy failed (rc=$LASTEXITCODE)"
 }
 
+# Try to fetch remote log (if present) so that all remote output including manifest comparison is visible locally
+try {
+  $remoteLogLocal = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'chillhub-deploy.remote.log')
+  & $SCP @sshCommon "${Remote}:/tmp/chillhub-deploy.log" $remoteLogLocal | Out-Null
+  if (Test-Path -LiteralPath $remoteLogLocal) {
+    Write-Section "Remote script log"
+    Get-Content -Raw -LiteralPath $remoteLogLocal | Write-Host
+    Remove-Item -Force $remoteLogLocal -ErrorAction SilentlyContinue
+  }
+} catch {
+  Write-Warn ("Could not fetch remote log: {0}" -f $_.Exception.Message)
+}
+
 # Post-deploy external smoke tests (from this machine)
 Write-Section "Post-deploy smoke (external)"
 function Get-HttpCode {
   param([Parameter(Mandatory=$true)][string]$Url)
   try {
     $resp = Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing -TimeoutSec 7
+    return [int]$resp.StatusCode
+  } catch {
+    if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+      return [int]$_.Exception.Response.StatusCode
+    }
+    return 0
+  }
+}
+function Get-HttpCodeGet {
+  param([Parameter(Mandatory=$true)][string]$Url)
+  try {
+    $resp = Invoke-WebRequest -Uri $Url -Method Get -UseBasicParsing -TimeoutSec 7
     return [int]$resp.StatusCode
   } catch {
     if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
@@ -719,14 +864,20 @@ $checks = @(
   @{ url = "$base/admin/ui/login.html"; name = "Admin UI login";     expect = 200 },
   # Admin API health is protected by nginx (auth_request); expect 401 externally
   @{ url = "$base/admin/api/health";    name = "Admin API health (ext)";   expect = 401 },
-  # Public server API health should be 200
-  @{ url = "$base/api/health";          name = "Server API health";   expect = 200 },
+  # Public server API check: use GET for JSON endpoints (some servers return 405 to HEAD)
+  @{ url = "$base/api/games";           name = "Server API games (GET)";   expect = 200 },
   @{ url = "$base/admin/";              name = "Admin gate (401)";   expect = 401 }
 )
 
 $fail = 0
 foreach ($c in $checks) {
-  $code = Get-HttpCode $c.url
+  # Use GET for JSON endpoints where HEAD might return 405
+  if ($c.name -like "*GET*") {
+    $code = Get-HttpCodeGet $c.url
+  } else {
+    $code = Get-HttpCode $c.url
+  }
+
   if ($code -eq $c.expect) {
     Write-Ok ("{0} -> {1}" -f $c.name, $code)
   } else {
@@ -756,22 +907,88 @@ else
   ls -l /opt/chillhub/api /opt/chillhub/admin 2>/dev/null || true
 fi
 printf "%s %s\n" "[sum] Admin service:" "$(systemctl is-active chillhub-admin.service 2>/dev/null || true)"
-printf "%s %s\n" "[sum] Admin health code:" "$(curl -ks -o /dev/null -w '%{http_code}' https://launcher.samoy.love/admin/api/health || true)"
+printf "%s %s\n" "[sum] Admin health code (external):" "$(curl -ks -o /dev/null -w '%{http_code}' https://launcher.samoy.love/admin/api/health || true)"
 printf "%s %s\n" "[sum] Admin gate code:" "$(curl -ks -o /dev/null -w '%{http_code}' https://launcher.samoy.love/admin/ || true)"
 printf "%s %s\n" "[sum] Site root:" "$(curl -ks -o /dev/null -w '%{http_code}' https://launcher.samoy.love/ || true)"
 printf "%s " "[sum] Downloads dir (server):"; sudo bash -lc 'test -d /var/www/site/downloads && (ls -1 /var/www/site/downloads | wc -l || true) || echo "missing"' || true
 printf "%s %s\n" "[sum] Admin health (localhost):" "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:55777/admin/api/health || true)"
-printf "%s %s\n" "[sum] Public API health (localhost):" "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:55700/health || true)"
+printf "%s %s\n" "[sum] Public API games (localhost GET):" "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:55700/api/games || true)"
 printf "%s %s\n" "[sum] Nginx config test:" "$(sudo nginx -t 2>&1 | tail -n1 | sed 's/.*: //')"
 printf "%s\n" "[sum] Ports (55700/55777):"; (ss -ltnp 2>/dev/null | grep -E '(:55700|:55777)' || true)
-printf "%s\n" "[sum] Admin drop-in env (override.conf):"; (sudo bash -lc 'test -f /etc/systemd/system/chillhub-admin.service.d/override.conf && sed -n "1,20p" /etc/systemd/system/chillhub-admin.service.d/override.conf || echo missing' || true)
+printf "%s\n" "[sum] Site root (localhost via nginx):"; (curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1/ || true)
+printf "%s\n" "[sum] Admin drop-in env (override.conf, masked):"; (sudo bash -lc 'if test -f /etc/systemd/system/chillhub-admin.service.d/override.conf; then sed -E "s/(Environment=\\\"?JWT_SECRET=)[^\\\"]+/\\1<redacted>/; s/(Environment=\\\"?ADMIN_PASSWORD_(PLAIN|BCRYPT)=)[^\\\"]+/\\1<redacted>/" /etc/systemd/system/chillhub-admin.service.d/override.conf; else echo missing; fi' || true)
+# Presence checks (no secret values printed)
+if sudo grep -q 'Environment=.*JWT_SECRET=' /etc/systemd/system/chillhub-admin.service.d/override.conf 2>/dev/null; then echo "[sum] override.conf: JWT_SECRET present"; else echo "[sum] override.conf: JWT_SECRET MISSING"; fi
+if sudo grep -q 'Environment=.*ADMIN_PASSWORD_BCRYPT=' /etc/systemd/system/chillhub-admin.service.d/override.conf 2>/dev/null; then echo "[sum] override.conf: ADMIN_PASSWORD_BCRYPT present"; else echo "[sum] override.conf: ADMIN_PASSWORD_BCRYPT missing"; fi
+if sudo grep -q 'Environment=.*ADMIN_PASSWORD_PLAIN=' /etc/systemd/system/chillhub-admin.service.d/override.conf 2>/dev/null; then echo "[sum] override.conf: ADMIN_PASSWORD_PLAIN present"; else echo "[sum] override.conf: ADMIN_PASSWORD_PLAIN missing"; fi
 printf "%s %s\n" "[sum] Cert expiry:" "$(sudo bash -lc 'test -f /etc/letsencrypt/live/launcher.samoy.love/fullchain.pem && openssl x509 -enddate -noout -in /etc/letsencrypt/live/launcher.samoy.love/fullchain.pem | cut -d= -f2 || echo unknown' 2>/dev/null)"
 printf "%s %s\n" "[sum] Disk free (/var/www):" "$(df -h /var/www 2>/dev/null | awk 'NR==2{print $4" free of "$2}')"
 printf "%s %s\n" "[sum] Uptime:" "$(uptime -p 2>/dev/null || true)"
 printf "%s\n" "[sum] Systemd logs (last 10 lines):"; (sudo journalctl -u chillhub-admin.service -n10 2>/dev/null || true)
+printf "%s\n" "[sum] End of summary"
+echo "---- MANIFEST REPORT ----"
+SITE_MAN_B64="%%SITE_MANIFEST%%"
+ADMIN_MAN_B64="%%ADMIN_MANIFEST%%"
+BIN_MAN_B64="%%BIN_MANIFEST%%"
+SYS_MAN_B64="%%SYSTEMD_MANIFEST%%"
+DL_MAN_B64="%%DOWNLOADS_MANIFEST%%"
+report_cmp(){
+  local name="$1" base64="$2" root="$3" special="$4"
+  if [ -z "$base64" ]; then echo "[manifest] $name: no manifest provided"; return; fi
+  local mf
+  mf=$(mktemp)
+  printf "%s" "$base64" | base64 -d > "$mf" || true
+  local total=0 ok=0 mism=0 miss=0
+  while IFS=$'\t' read -r rel sha; do
+    [ -z "$rel" ] && continue
+    total=$((total+1))
+    local f
+    case "$special" in
+      bin)
+        case "$rel" in api|admin) f="/opt/chillhub/$rel";; *) f="$root/$rel";; esac ;;
+      sys)
+        f="/etc/systemd/system/$rel" ;;
+      *)
+        f="$root/$rel" ;;
+    esac
+    if [ -f "$f" ]; then
+      rsha=$(sha256sum "$f" | awk '{print $1}')
+      echo "PAIR $name $rel exp=$sha dst=$rsha"
+      if [ "$rsha" = "$sha" ]; then echo "OK  $name $rel"; ok=$((ok+1)); else echo "FAIL $name $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi
+    else
+      echo "MISS $name $rel"; miss=$((miss+1))
+    fi
+  done < "$mf"
+  echo "[manifest] $name: total=$total ok=$ok mism=$mism miss=$miss"
+  rm -f "$mf" || true
+}
+report_cmp site    "$SITE_MAN_B64"   "/var/www/site"                ""
+report_cmp admin   "$ADMIN_MAN_B64"  "/var/www/launcher/admin_ui"   ""
+report_cmp downloads "$DL_MAN_B64"   "/var/www/site/downloads"      ""
+report_cmp bin     "$BIN_MAN_B64"    "$HOME/deploy/bin"             "bin"
+report_cmp systemd "$SYS_MAN_B64"    "/etc/systemd/system"          "sys"
+# Enforce failure on manifest report too
+FAIL_FLAG="%%FAIL_ON_MISMATCH%%"
+if [ -n "$FAIL_FLAG" ]; then
+  if grep -qE '^(FAIL|MISS) ' /tmp/chillhub-deploy.log 2>/dev/null; then
+    echo "---- DIAGNOSTICS (summary) ----"
+    echo "---- NGINX ERROR LOG (last 200) ----"; sudo tail -n 200 /var/log/nginx/error.log || true
+    echo "---- NGINX ACCESS LOG (last 200) ----"; sudo tail -n 200 /var/log/nginx/access.log || true
+    echo "[sum] Manifest report indicates mismatches; exiting with 1 due to FAIL_ON_MISMATCH"
+    exit 1
+  fi
+fi
 '@
-  $summaryNormalized = ($summaryContent -replace "`r`n","`n") -replace "`r",""
-  [System.IO.File]::WriteAllText($summaryLocal, $summaryNormalized, $utf8NoBom)
+  # Inject manifests into the summary script so it can re-run comparisons explicitly
+  $summaryInjected = $summaryContent
+  $summaryInjected = $summaryInjected.Replace('%%SITE_MANIFEST%%', (Convert-ToBashDqEscaped $siteManifestB64))
+  $summaryInjected = $summaryInjected.Replace('%%ADMIN_MANIFEST%%', (Convert-ToBashDqEscaped $adminManifestB64))
+  $summaryInjected = $summaryInjected.Replace('%%BIN_MANIFEST%%', (Convert-ToBashDqEscaped $binManifestB64))
+  $summaryInjected = $summaryInjected.Replace('%%SYSTEMD_MANIFEST%%', (Convert-ToBashDqEscaped $systemdManifestB64))
+  $summaryInjected = $summaryInjected.Replace('%%DOWNLOADS_MANIFEST%%', (Convert-ToBashDqEscaped $downloadsManifestB64))
+  # Also inject fail flag
+  $summaryInjected = $summaryInjected.Replace('%%FAIL_ON_MISMATCH%%', (Convert-ToBashDqEscaped $failFlag))
+  [System.IO.File]::WriteAllText($summaryLocal, $summaryInjected, $utf8NoBom)
   & $SCP @sshCommon $summaryLocal "${Remote}:/tmp/summary-remote.sh"
   Remove-Item -Force $summaryLocal -ErrorAction SilentlyContinue
   & $SSH @sshCommon $Remote '/bin/bash' '/tmp/summary-remote.sh'

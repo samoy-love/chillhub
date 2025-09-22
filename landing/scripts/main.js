@@ -21,10 +21,11 @@
   let dpr = (()=>{
     const base = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
     if (isLowEndDevice) return 1; // force 1x
-    return isMobile() ? 1 : Math.min(1.5, base);
+    // Cap desktop DPR more aggressively to keep FPS high
+    return isMobile() ? 1 : Math.min(1.2, base);
   })();
 
-  // Reels engine with sounds (spin button)
+  // Reels engine with sounds (spin button) + idle gentle scroll
   (function reelsEngine(){
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     const forceAnimate = !isLowEndDevice; // on low-end respect reduced motion path
@@ -37,7 +38,7 @@
     const statusEl = coming.querySelector('.reels-status');
     // Use var to ensure definition before any handler runs (avoid TDZ issues)
     var spinning = false;
-    var demoMode = true; // auto-spin until user interacts
+    var idle = true; // gentle infinite scroll until user clicks
     var demoAllowed = true; // gated by visibility
     var raf = 0;
     if(statusEl){ statusEl.style.display = 'none'; }
@@ -140,7 +141,8 @@
       return { reel, track, baseSlots };
     });
 
-    const REPEAT_BLOCKS = isLowEndDevice ? 12 : 24; // fewer DOM nodes on low-end
+    // Use fewer repeats on desktop to reduce DOM size; mobile still okay due to viewport size
+    const REPEAT_BLOCKS = isLowEndDevice ? 12 : (isMobile() ? 16 : 18);
     const data = tracks.map(() => ({
       // metrics
       step: 0,
@@ -251,16 +253,39 @@
         let target = snap;
         // Ensure forward motion and add extra loops for feel
         while(target <= d.y + d.step){ target += d.baseCount * d.step; }
-        const maxExtra = Math.max(3, 3 + i); // aim 3+ loops
+        // Fewer extra loops on desktop to increase perceived speed
+        const baseLoops = isMobile() ? 3 : 1;
+        const maxExtra = Math.max(baseLoops, baseLoops + i);
         target += Math.min(maxExtra, REPEAT_BLOCKS - 2) * d.baseCount * d.step;
         d.yStart = d.y;
         d.target = target;
         d.snap = snap;
         d.chosenIdx = chosenIdx;
         d.done = false;
-        d.startT = now + i*180;
-        d.dur = (1600 + i*300) * 3;
+        d.startT = now + i* (isMobile() ? 220 : 120);
+        const durMul = isMobile() ? 2.6 : 1.8;
+        d.dur = (1600 + i*320) * durMul;
       });
+    }
+
+    // Idle gentle scroll state
+    // Make idle scroll faster on desktop for better perceived smoothness
+    const idleSpeedBase = isMobile() ? 28 : 60; // px/sec base speed
+    const idleVariance = [0.95, 1.0, 1.08];
+    function idleStep(){
+      raf = 0;
+      if(!idle || !demoAllowed){ return; }
+      const now = performance.now();
+      // move each reel by small delta dependent on column
+      tracks.forEach((t,i)=>{
+        const d = data[i];
+        const v = idleSpeedBase * idleVariance[i % idleVariance.length];
+        d.y += v / 60; // approximate per-frame at ~60fps
+        let renderY = d.y % d.total; if(renderY < 0) renderY += d.total;
+        const yPx = -Math.round(renderY);
+        t.track.style.transform = `translate3d(0, ${yPx}px, 0)`;
+      });
+      raf = requestAnimationFrame(idleStep);
     }
 
     let rowLitTO = 0;
@@ -279,9 +304,25 @@
             // Snap to exact center to avoid any subpixel drift and blank gaps
             d.y = d.snap; d.done = true;
           } else {
+            // Three-phase easing profile: slow down -> speed up -> settle
             const p = Math.min(1, tt / d.dur);
-            const e = 1 - Math.pow(1-p, 3);
-            d.y = d.yStart + (d.target - d.yStart) * e;
+            let e;
+            if(p < 0.25){
+              // Phase A: decelerate (easeOutQuad)
+              const pp = p / 0.25; e = 1 - (1-pp)*(1-pp);
+              d.y = d.yStart + (d.yStart + (d.target - d.yStart)*0.08 - d.yStart) * e;
+            } else if(p < 0.75){
+              // Phase B: accelerate (easeInQuad)
+              const pp = (p - 0.25) / 0.50; e = pp*pp;
+              const midStart = d.yStart + (d.target - d.yStart)*0.08;
+              const midEnd = d.yStart + (d.target - d.yStart)*0.88;
+              d.y = midStart + (midEnd - midStart) * e;
+            } else {
+              // Phase C: settle to snap (easeOutCubic)
+              const pp = (p - 0.75) / 0.25; e = 1 - Math.pow(1-pp,3);
+              const mid = d.yStart + (d.target - d.yStart)*0.88;
+              d.y = mid + (d.snap - mid) * e;
+            }
           }
           const yMod = (d.y % d.step + d.step) % d.step;
           const crossed = yMod < 6 && d.lastYMod >= 6;
@@ -311,19 +352,21 @@
           if(el) el.classList.add('slot--active');
         });
         playChime();
-        // If demo mode is active and allowed, spin again after a short pause
-        if(demoMode && demoAllowed){
-          setTimeout(()=>{ if(!spinning) spin(null); }, 800);
-        }
+        // Never auto-spin again after a manual spin; remain stopped
         return;
       }
       raf = requestAnimationFrame(step);
     }
 
-    function spin(preset){
+    function spin(preset, opts){
       if(spinning) return;
-      const pick = preset || (Math.random()<0.6 ? combos[Math.floor(Math.random()*combos.length)] : null);
-      if(prefersReducedMotion.matches && !forceAnimate){
+      // Disable idle mode
+      idle = false;
+      // If idle loop holds a pending RAF, cancel it to avoid blocking spin RAF
+      if(raf){ cancelAnimationFrame(raf); raf = 0; }
+      const pick = preset || combos[Math.floor(Math.random()*combos.length)];
+      const force = !!(opts && opts.force);
+      if(prefersReducedMotion.matches && !forceAnimate && !force){
         // Low-motion path: instantly snap to targets and render once
         computeTargets(pick);
         data.forEach(d=>{ d.y = d.snap; d.done = true; });
@@ -343,22 +386,27 @@
     // Controls bindings
     if(btnSpin){
       btnSpin.addEventListener('click', ()=>{
-        // disable demo mode on first explicit user spin
-        demoMode = false;
-        spin(null);
+        // Force animation even if user has reduced motion, since it's an explicit gesture
+        spin(null, { force: true });
       });
     }
     // No mute button currently rendered; keep sound on user gesture via ensureAudio in spin
 
-    // Start demo mode automatically (auto-spin until user clicks Spin)
-    setTimeout(()=>{ if(!spinning && demoMode && demoAllowed) spin(null); }, 400);
+    // Start idle gentle scroll (all devices) until user clicks
+    setTimeout(()=>{ if(idle && demoAllowed) { if(!raf) raf = requestAnimationFrame(idleStep); } }, 300);
 
-    // Pause/resume demo mode based on visibility in viewport
+    // Pause/resume idle based on visibility in viewport
     try {
       const reelsSection = coming.closest('.section') || coming;
       const ioReels = new IntersectionObserver((entries)=>{
         entries.forEach(e=>{
           demoAllowed = e.isIntersecting;
+          if(!e.isIntersecting){
+            // pause animation when offscreen
+            if(raf){ cancelAnimationFrame(raf); raf = 0; }
+          } else {
+            if(idle && !raf){ raf = requestAnimationFrame(idleStep); }
+          }
         });
       }, { threshold: 0.25 });
       ioReels.observe(reelsSection);
@@ -507,7 +555,8 @@
       const baseY = H*0.35 + (waves.indexOf(w)*28);
       ctx.moveTo(0, H);
       ctx.lineTo(0, baseY);
-      const stepX = 3; // pixel step for smooth curve
+      // Slightly coarser sampling on very wide screens to keep FPS high
+      const stepX = (W > 1400 ? 5 : (W > 1000 ? 4 : 3));
       for(let x=0; x<=W; x+=stepX){
         const y = baseY + Math.sin((x + w.phase*w.len) / w.len) * w.amp
                     + Math.sin((x*0.5 + time*120) / (w.len*0.6)) * (w.amp*0.25);
@@ -596,34 +645,41 @@
   // Year in footer
   const y = document.getElementById('year'); if(y) y.textContent = new Date().getFullYear();
 
-  // Screenshots autoplay with hover pause
+  // Screenshots autoplay disabled; add lightbox on click (for all galleries)
   (function setupShotsCarousel(){
-    const sc = document.querySelector('.shots');
-    if(!sc) return;
-    const imgs = Array.from(sc.querySelectorAll('img'));
-    if(imgs.length < 2) return;
-    // autoplay disabled; no need to track index/hover state
+    const galleries = Array.from(document.querySelectorAll('.shots'));
+    if(galleries.length === 0) return;
+    // Build shared lightbox once
+    const lb = document.createElement('div'); lb.className = 'lightbox';
+    const lbImg = document.createElement('img'); lbImg.className = 'lightbox__img'; lbImg.alt = '';
+    const btn = document.createElement('button'); btn.className = 'lightbox__close'; btn.setAttribute('aria-label','Закрыть'); btn.innerHTML = '✕';
+    lb.appendChild(lbImg); lb.appendChild(btn);
+    document.body.appendChild(lb);
+    function open(src){ lbImg.src = src; lb.classList.add('show'); document.body.classList.add('modal-open'); }
+    function close(){ lb.classList.remove('show'); document.body.classList.remove('modal-open'); lbImg.src=''; }
+    lb.addEventListener('click', (e)=>{ if(e.target === lb) close(); });
+    btn.addEventListener('click', close);
+    window.addEventListener('keydown', (e)=>{ if(e.key === 'Escape' && lb.classList.contains('show')) close(); });
 
-    let animRAF = 0;
-    function stopAnim(){ if(animRAF){ cancelAnimationFrame(animRAF); animRAF = 0; sc.dataset.anim = '0'; } }
-    function easeInOutCubic(t){ return t<0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2; }
-    function _animateScrollTo(xTarget, duration=1800){
-      stopAnim(); sc.dataset.anim = '1';
-      const start = sc.scrollLeft; const delta = xTarget - start; const t0 = performance.now();
-      function step(now){
-        const t = Math.min(1, (now - t0)/duration);
-        sc.scrollLeft = start + delta * easeInOutCubic(t);
-        if(t < 1 && sc.dataset.anim==='1') animRAF = requestAnimationFrame(step); else { sc.dataset.anim='0'; animRAF=0; }
+    galleries.forEach(sc=>{
+      const imgs = Array.from(sc.querySelectorAll('img'));
+      imgs.forEach(img=>{ img.addEventListener('click', ()=> open(img.src)); });
+
+      // below: kept utility anim functions for any local scroll animations if needed later
+      let animRAF = 0;
+      function stopAnim(){ if(animRAF){ cancelAnimationFrame(animRAF); animRAF = 0; sc.dataset.anim = '0'; } }
+      function easeInOutCubic(t){ return t<0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2; }
+      function _animateScrollTo(xTarget, duration=1800){
+        stopAnim(); sc.dataset.anim = '1';
+        const start = sc.scrollLeft; const delta = xTarget - start; const t0 = performance.now();
+        function step(now){
+          const t = Math.min(1, (now - t0)/duration);
+          sc.scrollLeft = start + delta * easeInOutCubic(t);
+          if(t < 1 && sc.dataset.anim==='1') animRAF = requestAnimationFrame(step); else { sc.dataset.anim='0'; animRAF=0; }
+        }
+        animRAF = requestAnimationFrame(step);
       }
-      animRAF = requestAnimationFrame(step);
-    }
-    // scrollToIndex helper removed (unused)
-    // Autoplay disabled by request: no timer, only user drag and page scroll sync
-
-    // hover-related handlers removed (no autoplay)
-    // No visibility change handler needed since autoplay is disabled
-
-    // No automatic movement on load
+    });
   })();
 
   // Drag-to-scroll for screenshots (mouse & touch)

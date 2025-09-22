@@ -55,7 +55,7 @@ body {
 }
 
 /* Prevent any horizontal scrolling on all browsers */
-html { overflow-x: hidden; }
+html { overflow-x: hidden; -webkit-text-size-adjust: 100%; touch-action: manipulation; }
 
 body {
   margin: 0;
@@ -66,7 +66,8 @@ body {
   overflow-x: hidden;
   user-select: none;
   /* Space for fixed header */
-  padding-top: var(--header-h);
+  padding-top: calc(var(--header-h) + env(safe-area-inset-top, 0px));
+  min-height: 100dvh;
 }
 
 img {
@@ -108,6 +109,7 @@ img {
   transform: none;
   contain: layout paint;
   height: var(--header-h);
+  padding-top: env(safe-area-inset-top, 0px);
 }
 
 .site-header .container {
@@ -478,6 +480,8 @@ img {
   touch-action: auto;
   overscroll-behavior-x: contain;
 }
+/* Add breathing space below screenshots, especially inside features */
+#features .shots { margin: 8px 0 18px; }
 
 .shots.dragging {
   cursor: grabbing;
@@ -502,6 +506,7 @@ img {
   transform: translateY(-3px);
   box-shadow: 0 18px 36px rgb(0 0 0 / 48%);
 }
+.shots img { cursor: zoom-in; }
 .shots::-webkit-scrollbar { height: var(--sb-size); }
 
 .shots::-webkit-scrollbar-thumb { background-color: var(--sb-thumb); border-radius: 999px; }
@@ -701,6 +706,8 @@ img {
   gap: 0; /* avoid compounding with .slot margins; prevents visible holes when rounding */
   padding: 0; /* remove padding to make loop seamless */
   will-change: auto;
+  backface-visibility: hidden;
+  contain: layout paint;
 }
 .reels.spinning .reel-track{ will-change: transform; }
 
@@ -743,10 +750,10 @@ img {
   position: relative; /* anchor the ring */
   /* Subtle base glow */
   box-shadow:
-    0 0 0 3px rgba(124,58,237,.38),
-    0 0 22px rgba(124,58,237,.45),
-    0 0 30px rgba(244,114,182,.42),
-    0 10px 26px rgb(0 0 0 / 32%);
+    0 0 0 4px rgba(124,58,237,.55),
+    0 0 26px rgba(124,58,237,.75),
+    0 0 42px rgba(244,114,182,.70),
+    0 14px 32px rgb(0 0 0 / 40%);
 }
 
 /* One implementation for all browsers: ::after gradient ring with masks */
@@ -755,9 +762,9 @@ img {
   position: absolute;
   inset: 0; /* align to border box */
   border-radius: inherit; /* exact same rounding as slot */
-  padding: 3px; /* thicker ring for stronger highlight */
-  background: linear-gradient(135deg, #7c3aed, #f472b6, #a78bfa, #ec4899);
-  background-size: 260% 260%;
+  padding: 4px; /* thicker ring for stronger highlight */
+  background: linear-gradient(135deg, #8b5cf6, #f472b6, #a78bfa, #ec4899, #22d3ee);
+  background-size: 320% 320%;
   background-position: 0% 50%;
   /* Mask out the center so only the ring is visible */
   -webkit-mask:
@@ -768,7 +775,7 @@ img {
     linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  animation: borderFlow 2.2s ease-in-out infinite, borderGlow 1.4s ease-in-out infinite;
+  animation: borderFlow 1.8s ease-in-out infinite, borderGlow 1.2s ease-in-out infinite;
   pointer-events: none;
   z-index: 1; /* above slot background and lamps (lamps are z-index:-1) */
 }
@@ -780,8 +787,8 @@ img {
 }
 
 @keyframes borderGlow {
-  0%,100% { filter: drop-shadow(0 0 18px rgba(124,58,237,.70)) drop-shadow(0 0 28px rgba(244,114,182,.55)); }
-  50%     { filter: drop-shadow(0 0 28px rgba(124,58,237,.90)) drop-shadow(0 0 40px rgba(244,114,182,.78)); }
+  0%,100% { filter: drop-shadow(0 0 26px rgba(124,58,237,.95)) drop-shadow(0 0 46px rgba(244,114,182,.85)); }
+  50%     { filter: drop-shadow(0 0 36px rgba(124,58,237,1)) drop-shadow(0 0 60px rgba(244,114,182,.95)); }
 }
 
 /* Removed border-image workaround to avoid Safari inconsistencies */
@@ -858,10 +865,49 @@ img {
   transform: translateY(-1px);
   background: linear-gradient(90deg, rgb(34 211 238 / 0%), rgb(255 255 255 / 40%), rgb(124 58 237 / 55%), rgb(244 114 182 / 40%), rgb(34 211 238 / 0%));
   box-shadow: 0 0 12px rgb(124 58 237 / 30%), 0 0 22px rgb(34 211 238 / 18%);
-  opacity: .7;
+  opacity: .9;
   z-index: 2;
   pointer-events: none;
 }
+
+/* Brighter row flash on finish */
+.reels.row-lit::after {
+  box-shadow: 0 0 22px rgb(124 58 237 / 60%), 0 0 36px rgb(34 211 238 / 45%);
+  background: linear-gradient(90deg, rgb(34 211 238 / 0%), rgb(255 255 255 / 75%), rgb(124 58 237 / 85%), rgb(244 114 182 / 65%), rgb(34 211 238 / 0%));
+}
+
+/* Lightbox overlay */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.85);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+.lightbox.show { display: flex; }
+.lightbox__img {
+  max-width: 92vw;
+  max-height: 88vh;
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 60%);
+}
+.lightbox__close {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  display: grid; place-items: center;
+  background: rgb(255 255 255 / 12%);
+  border: 1px solid rgb(255 255 255 / 20%);
+  color: #fff;
+  cursor: pointer;
+}
+body.modal-open { overflow: hidden; }
 
 /* Light sweep over reels when spinning */
 .reels.spinning .reel::after {
@@ -1022,7 +1068,17 @@ img {
     contain: layout paint;
   }
   /* Reduce top spacing above the hero title on mobile */
-  .hero { padding-top: 84px; }
+  .hero { padding-top: 78px; }
+  .hero h1 { font-size: clamp(28px, 7.2vw, 42px); }
+  .hero p { font-size: clamp(14px, 3.6vw, 16px); }
+  .btn { padding: .6rem .9rem; border-radius: 12px; }
+  .btn--lg { padding: .85rem 1rem; }
+  .btn--xl { padding: .95rem 1.2rem; font-size: 1rem; }
+  .game-card h3 { font-size: 18px; }
+  .tag { font-size: 11px; padding: .24rem .45rem; }
+  /* Smaller feature titles and texts */
+  .features .feature h3 { font-size: 18px; }
+  .features .feature p { font-size: 14px; }
   /* Add breathing room and spacing between brand and nav */
   .site-header .container {
     padding: 0 8px;
