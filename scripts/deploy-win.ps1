@@ -471,6 +471,9 @@ fi
 # Sync Admin UI static only
 echo "[rsync] syncing admin_ui -> $LAUNCHER_DIR/admin_ui"
 sudo rsync -av --delete --itemize-changes "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/" | sed -e 's|^|[rsync:admin_ui] |'
+# Ensure admin content root subdirs exist and are writable by service user
+sudo mkdir -p "$LAUNCHER_DIR/content" "$LAUNCHER_DIR/manifests" "$LAUNCHER_DIR/news" "$LAUNCHER_DIR/tmp"
+sudo chown -R www-data:www-data "$LAUNCHER_DIR"
 
 # Diagnostics: compare source vs destination for key files
 if [ -f "$DEPLOY_DIR/site/index.html" ] && [ -f "$SITE_DIR/index.html" ]; then
