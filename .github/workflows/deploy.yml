@@ -71,7 +71,7 @@ jobs:
           rsync -a deploy/launcher.conf build/deploy/launcher.conf
           echo "::endgroup::"
           echo "::group::Manifests"
-          manifest() { local root="$1"; local out="$2"; rm -f "$out"; if [ -d "$root" ]; then ( cd "$root" && find . -type f -print0 | xargs -0 sha256sum | awk '{print $2"\t"$1}' | sed 's#^\./##' > "$out" ); fi }
+          manifest() { local root="$1"; local out="$2"; rm -f "$out"; if [ -d "$root" ]; then ( cd "$root" && find . -type f -print0 | xargs -0 sha256sum | awk '{print $2"\t"$1}' | sed 's#^\./##' ) > "$out"; fi }
           manifest build/site build/site.manifest || true
           manifest build/launcher_admin_ui build/admin.manifest || true
           if ls build/bin/* >/dev/null 2>&1; then ( cd build/bin && for f in *; do sha256sum "$f" | awk '{print $2"\t"$1}' >> ../bin.manifest; done ); fi
@@ -91,13 +91,7 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: |
-            build/site/*
-            build/launcher_admin_ui/**
-            build/bin/*
-            build/systemd/*
-            build/deploy/launcher.conf
-            build/*.manifest
+          source: build/**
           target: /home/${{ secrets.SSH_USER }}/deploy
           strip_components: 1
 
@@ -134,6 +128,10 @@ jobs:
             echo "::group::Rsync admin_ui"
             sudo rsync -a --delete --itemize-changes "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/" | sed -e 's#^#[rsync:admin] #' || true
             echo "::endgroup::"
+
+            # Ensure admin content root subdirs exist and are writable by service user
+            sudo mkdir -p "$LAUNCHER_DIR/content" "$LAUNCHER_DIR/manifests" "$LAUNCHER_DIR/news" "$LAUNCHER_DIR/tmp"
+            sudo chown -R www-data:www-data "$LAUNCHER_DIR"
 
             sudo install -d -m 0755 "$OPT_DIR"
             SERVER_ARCH=$(uname -m | tr '[:upper:]' '[:lower:]')

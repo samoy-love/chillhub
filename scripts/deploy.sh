@@ -309,6 +309,10 @@ log "Sync static only (landing, admin_ui). Do not touch server content dirs."
 # Admin UI can be fully replaced
 run "sudo rsync -a --delete \"$REPO_DIR/server/admin_ui/\"   \"$LAUNCHER_ROOT/admin_ui/\""
 
+# Ensure admin content root is writable by the admin service user (www-data)
+log "Ensure ownership for admin content root ($LAUNCHER_ROOT)"
+run "sudo chown -R www-data:www-data \"$LAUNCHER_ROOT\""
+
 section "Systemd: юниты и drop-in"
 log "Install systemd unit files (if present)"
 if [[ -f "$REPO_DIR/deploy/systemd/chillhub-api.service" ]]; then
