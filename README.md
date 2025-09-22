@@ -240,6 +240,11 @@ make deploy-nobuild BRANCH=main
 - `--cookie-domain <host>` — домен cookie (по умолчанию `launcher.samoy.love`).
 - `--cookie-secure <true|false>` — флаг Secure для cookie (по умолчанию `true`).
 - `--downloads-dir <path>` — внешняя директория установщиков (по умолчанию соседняя с `REPO_DIR`, т.е. `$(dirname REPO_DIR)/downloads`).
+– Новые флаги проверки и UX:
+  - `--site-base-url <url>` — базовый URL для HTTP‑тестов (по умолчанию `https://launcher.samoy.love`).
+  - `--fail-on-mismatch` — прерывать деплой, если сравнение манифестов (`site/admin_ui/systemd/bin`) выявило несовпадения.
+  - `--strict` — трактовать некоторые предупреждения как ошибки (напр., если `/admin/` вернул 200, а не 401/302).
+  - `NO_COLOR=1` — отключить цветной вывод (по умолчанию цвета включены, если вывод в TTY).
 
 Примеры:
 ```bash
@@ -248,6 +253,9 @@ make deploy BRANCH=main EXTRA_ARGS="--admin-user admin --admin-pass 'S0meStrongP
 
 # Явные секреты и внешняя папка установщиков
 make deploy BRANCH=main EXTRA_ARGS="--jwt-secret 'base64...' --admin-user admin --admin-pass-bcrypt '$2a$12$...' --downloads-dir /home/ubuntu/installers"
+
+# Строгая проверка целостности и URL для тестов
+make deploy BRANCH=main EXTRA_ARGS="--site-base-url https://launcher.samoy.love --fail-on-mismatch --strict"
 ```
 
 ### Деплой с Windows (локально, через PowerShell)
@@ -404,6 +412,23 @@ sudo systemctl restart chillhub-admin.service
 - Systemd юниты: `deploy/systemd/`
 - Документация скриптов: `scripts/README.md`
 - CI/CD (ручной запуск из GitHub Actions): `.github/workflows/deploy.yml`
+
+### CI/CD: ручной запуск в GitHub Actions
+
+Workflow `.github/workflows/deploy.yml` можно запустить вручную (Run workflow) с параметрами:
+
+- `environment` — окружение (`prod` по умолчанию; можно указать `stage`).
+- `site_base_url` — базовый URL для HTTP‑проверок (по умолчанию `https://launcher.samoy.love`).
+- `fail_on_mismatch` — падать при любых несовпадениях манифестов (рекомендуется `true`).
+- `strict` — делать часть предупреждений фатальными (например, 200 на `/admin/`).
+- `reason` — причина деплоя (опционально).
+
+Особенности:
+
+- Сборка бинарей выполняется сразу для `linux/amd64` и `linux/arm64`; на сервере выбирается корректная архитектура по `uname -m` и проверяется через `file`.
+- Перед загрузкой на сервер генерируются манифесты `build/*.manifest` (для `site`, `admin_ui`, `bin`, `systemd`). Они также загружаются в job‑артефакты `deploy-manifests` для диагностики.
+- На сервере выполняется сравнение манифестов с развёрнутыми файлами; при `fail_on_mismatch=true` job завершается ошибкой.
+- Логи сгруппированы с помощью `::group::…` (Build/Bundle/Manifests/Rsync/Verification/Tests), чтобы ускорить навигацию.
 
 
 ## Примечания по безопасности и качеству

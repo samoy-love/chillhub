@@ -2,13 +2,31 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-to-vps
+  group: deploy-to-vps-${{ inputs.environment }}
   cancel-in-progress: true
 name: Deploy to VPS
 
 on:
   workflow_dispatch:
     inputs:
+      environment:
+        description: "Target environment (prod|stage)"
+        required: false
+        default: "prod"
+      site_base_url:
+        description: "Base URL for tests (e.g. https://launcher.samoy.love)"
+        required: false
+        default: "https://launcher.samoy.love"
+      fail_on_mismatch:
+        description: "Fail on any manifest mismatches"
+        type: boolean
+        required: false
+        default: true
+      strict:
+        description: "Treat some warnings as failures in tests"
+        type: boolean
+        required: false
+        default: false
       reason:
         description: "Why are we deploying?"
         required: false
@@ -26,28 +44,46 @@ jobs:
         with:
           go-version: '1.22.x'
 
-      - name: Build Go servers (linux/amd64)
+      - name: Build Go servers (linux/amd64 + linux/arm64)
         run: |
           set -eux
+          echo "::group::Build amd64"
           mkdir -p build/bin
           cd server
           go mod tidy
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ../build/bin/api ./cmd/api
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ../build/bin/admin ./cmd/admin
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ../build/bin/api.amd64 ./cmd/api
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ../build/bin/admin.amd64 ./cmd/admin
+          echo "::endgroup::"
+          echo "::group::Build arm64"
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ../build/bin/api.arm64 ./cmd/api
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ../build/bin/admin.arm64 ./cmd/admin
+          echo "::endgroup::"
           cd ..
 
       - name: Prepare deploy bundle
         run: |
           set -eux
+          echo "::group::Bundle"
           mkdir -p build/site build/launcher build/launcher_admin_ui build/systemd build/deploy
-          # Landing (site at root)
           rsync -a --delete landing/ build/site/
-          # Admin UI static (served by nginx under /admin/ui/)
           rsync -a --delete server/admin_ui/ build/launcher_admin_ui/
-          # Systemd unit files
           rsync -a deploy/systemd/ build/systemd/ || true
-          # Nginx site config
           rsync -a deploy/launcher.conf build/deploy/launcher.conf
+          echo "::endgroup::"
+          echo "::group::Manifests"
+          manifest() { local root="$1"; local out="$2"; rm -f "$out"; if [ -d "$root" ]; then ( cd "$root" && find . -type f -print0 | xargs -0 sha256sum | awk '{print $2"\t"$1}' | sed 's#^\./##' > "$out" ); fi }
+          manifest build/site build/site.manifest || true
+          manifest build/launcher_admin_ui build/admin.manifest || true
+          if ls build/bin/* >/dev/null 2>&1; then ( cd build/bin && for f in *; do sha256sum "$f" | awk '{print $2"\t"$1}' >> ../bin.manifest; done ); fi
+          manifest build/systemd build/systemd.manifest || true
+          echo "::endgroup::"
+
+      - name: Upload manifests artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-manifests
+          path: build/*.manifest
+          if-no-files-found: ignore
 
       - name: Upload bundle to server (SCP)
         uses: appleboy/scp-action@v0.1.7
@@ -61,6 +97,7 @@ jobs:
             build/bin/*
             build/systemd/*
             build/deploy/launcher.conf
+            build/*.manifest
           target: /home/${{ secrets.SSH_USER }}/deploy
           strip_components: 1
 
@@ -72,28 +109,55 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             set -eux
-            # Paths
             DEPLOY_DIR="$HOME/deploy"
             SITE_DIR="/var/www/site"
             LAUNCHER_DIR="/var/www/launcher"
             OPT_DIR="/opt/chillhub"
             NGINX_SITE_AVAILABLE="/etc/nginx/sites-available/launcher.conf"
             NGINX_SITE_ENABLED="/etc/nginx/sites-enabled/launcher.conf"
+            SITE_BASE="${{ inputs.site_base_url }}"
+            FAIL_ON_MISMATCH="${{ inputs.fail_on_mismatch }}"
 
             sudo mkdir -p "$SITE_DIR" "$LAUNCHER_DIR/admin_ui" "$OPT_DIR"
 
-            # Sync landing site
-            sudo rsync -a --delete "$DEPLOY_DIR/site/" "$SITE_DIR/"
+            echo "::group::Rsync site"
+            sudo rsync -a --delete --itemize-changes --exclude 'downloads' "$DEPLOY_DIR/site/" "$SITE_DIR/" | sed -e 's#^#[rsync:site] #' || true
+            echo "::endgroup::"
 
-            # Sync Admin UI static only (content/manifests/news are managed by Admin UI and must not be overwritten)
-            sudo rsync -a --delete "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/"
+            echo "::group::Rsync admin_ui"
+            sudo rsync -a --delete --itemize-changes "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/" | sed -e 's#^#[rsync:admin] #' || true
+            echo "::endgroup::"
 
-            # Install binaries
             sudo install -d -m 0755 "$OPT_DIR"
-            sudo install -m 0755 "$DEPLOY_DIR/bin/api" "$OPT_DIR/api"
-            sudo install -m 0755 "$DEPLOY_DIR/bin/admin" "$OPT_DIR/admin"
+            SERVER_ARCH=$(uname -m | tr '[:upper:]' '[:lower:]')
+            API_SRC="$DEPLOY_DIR/bin/api"; ADMIN_SRC="$DEPLOY_DIR/bin/admin"
+            if [ ! -f "$API_SRC" ] || [ ! -f "$ADMIN_SRC" ]; then
+              case "$SERVER_ARCH" in
+                aarch64|arm64)
+                  [ -f "$DEPLOY_DIR/bin/api.arm64" ] && API_SRC="$DEPLOY_DIR/bin/api.arm64"
+                  [ -f "$DEPLOY_DIR/bin/admin.arm64" ] && ADMIN_SRC="$DEPLOY_DIR/bin/admin.arm64"
+                  ;;
+                x86_64|amd64)
+                  [ -f "$DEPLOY_DIR/bin/api.amd64" ] && API_SRC="$DEPLOY_DIR/bin/api.amd64"
+                  [ -f "$DEPLOY_DIR/bin/admin.amd64" ] && ADMIN_SRC="$DEPLOY_DIR/bin/admin.amd64"
+                  ;;
+              esac
+            fi
+            sudo install -m 0755 "$API_SRC" "$OPT_DIR/api"
+            sudo install -m 0755 "$ADMIN_SRC" "$OPT_DIR/admin"
+            if command -v file >/dev/null 2>&1; then
+              case "$SERVER_ARCH" in
+                aarch64|arm64)
+                  file "$OPT_DIR/api"   | grep -qiE 'aarch64|arm64' || (echo "[error] api arch mismatch" && exit 1)
+                  file "$OPT_DIR/admin" | grep -qiE 'aarch64|arm64' || (echo "[error] admin arch mismatch" && exit 1)
+                  ;;
+                x86_64|amd64)
+                  file "$OPT_DIR/api"   | grep -qiE 'x86-64|amd64' || (echo "[error] api arch mismatch" && exit 1)
+                  file "$OPT_DIR/admin" | grep -qiE 'x86-64|amd64' || (echo "[error] admin arch mismatch" && exit 1)
+                  ;;
+              esac
+            fi
 
-            # Systemd services (optional if already installed)
             if [ -d "$DEPLOY_DIR/systemd" ]; then
               sudo install -m 0644 "$DEPLOY_DIR/systemd/chillhub-api.service" /etc/systemd/system/chillhub-api.service || true
               sudo install -m 0644 "$DEPLOY_DIR/systemd/chillhub-admin.service" /etc/systemd/system/chillhub-admin.service || true
@@ -102,101 +166,96 @@ jobs:
               sudo systemctl enable chillhub-admin.service || true
             fi
 
-            # Optional: write systemd drop-in for admin auth env from secrets (if provided)
             ADMIN_DROPIN_DIR="/etc/systemd/system/chillhub-admin.service.d"
-            JWT_SECRET="${{ secrets.JWT_SECRET }}"
-            ADMIN_USER="${{ secrets.ADMIN_USER }}"
-            ADMIN_PASS_BCRYPT="${{ secrets.ADMIN_PASSWORD_BCRYPT }}"
-            ADMIN_PASS_PLAIN="${{ secrets.ADMIN_PASSWORD_PLAIN }}"
-            COOKIE_DOMAIN="${{ secrets.COOKIE_DOMAIN }}"
-            COOKIE_SECURE="${{ secrets.COOKIE_SECURE }}"
+            JWT_SECRET="${{ secrets.JWT_SECRET }}"; ADMIN_USER="${{ secrets.ADMIN_USER }}"
+            ADMIN_PASS_BCRYPT="${{ secrets.ADMIN_PASSWORD_BCRYPT }}"; ADMIN_PASS_PLAIN="${{ secrets.ADMIN_PASSWORD_PLAIN }}"
+            COOKIE_DOMAIN="${{ secrets.COOKIE_DOMAIN }}"; COOKIE_SECURE="${{ secrets.COOKIE_SECURE }}"
             if [ -n "${ADMIN_PASS_PLAIN}" ] && [ -z "${ADMIN_PASS_BCRYPT}" ]; then
-              # Derive bcrypt from plain via a small Go snippet (cost=12) using printf to avoid heredoc/YAML issues
               TMPGO=$(mktemp -t bcrypt-XXXXXX.go)
-              printf '%s\n' \
-                'package main' \
-                'import (' \
-                '  "fmt"' \
-                '  "golang.org/x/crypto/bcrypt"' \
-                '  "os"' \
-                ')' \
-                'func main(){' \
-                '  p := os.Getenv("PW")' \
-                '  if p == "" { fmt.Println(""); return }' \
-                '  h, err := bcrypt.GenerateFromPassword([]byte(p), 12)' \
-                '  if err != nil { fmt.Println(""); return }' \
-                '  fmt.Print(string(h))' \
-                '}' > "$TMPGO"
-              ADMIN_PASS_BCRYPT=$(PW="$ADMIN_PASS_PLAIN" go run "$TMPGO" 2>/dev/null || true)
-              rm -f "$TMPGO" || true
+              printf '%s\n' 'package main' 'import ("fmt" "golang.org/x/crypto/bcrypt" "os")' 'func main(){ p:=os.Getenv("PW"); if p=="" {fmt.Println(""); return}; h,_:=bcrypt.GenerateFromPassword([]byte(p),12); fmt.Print(string(h))}' > "$TMPGO"
+              ADMIN_PASS_BCRYPT=$(PW="$ADMIN_PASS_PLAIN" go run "$TMPGO" 2>/dev/null || true); rm -f "$TMPGO" || true
             fi
             if [ -n "${JWT_SECRET}${ADMIN_USER}${ADMIN_PASS_BCRYPT}${COOKIE_DOMAIN}${COOKIE_SECURE}" ]; then
-              sudo mkdir -p "$ADMIN_DROPIN_DIR"
-              TMPD=$(mktemp)
+              sudo mkdir -p "$ADMIN_DROPIN_DIR"; TMPD=$(mktemp)
               {
                 echo "[Service]"
-                [ -n "$COOKIE_DOMAIN" ] && echo "Environment=COOKIE_DOMAIN=$COOKIE_DOMAIN"
-                [ -n "$COOKIE_SECURE" ] && echo "Environment=COOKIE_SECURE=$COOKIE_SECURE"
-                [ -n "$JWT_SECRET" ] && echo "Environment=JWT_SECRET=$JWT_SECRET"
-                [ -n "$ADMIN_USER" ] && echo "Environment=ADMIN_USERNAME=$ADMIN_USER"
-                [ -n "$ADMIN_PASS_BCRYPT" ] && echo "Environment=ADMIN_PASSWORD_BCRYPT=$ADMIN_PASS_BCRYPT"
+                [ -n "$COOKIE_DOMAIN" ] && echo "Environment=\"COOKIE_DOMAIN=$COOKIE_DOMAIN\""
+                [ -n "$COOKIE_SECURE" ] && echo "Environment=\"COOKIE_SECURE=$COOKIE_SECURE\""
+                [ -n "$JWT_SECRET" ] && echo "Environment=\"JWT_SECRET=$JWT_SECRET\""
+                [ -n "$ADMIN_USER" ] && echo "Environment=\"ADMIN_USERNAME=$ADMIN_USER\""
+                [ -n "$ADMIN_PASS_BCRYPT" ] && echo "Environment=\"ADMIN_PASSWORD_BCRYPT=$ADMIN_PASS_BCRYPT\""
               } > "$TMPD"
-              sudo install -m 0644 "$TMPD" "$ADMIN_DROPIN_DIR/override.conf"
-              rm -f "$TMPD" || true
+              sudo install -m 0644 "$TMPD" "$ADMIN_DROPIN_DIR/override.conf"; rm -f "$TMPD" || true
             fi
 
-            # Nginx site config
             sudo install -m 0644 "$DEPLOY_DIR/deploy/launcher.conf" "$NGINX_SITE_AVAILABLE"
             sudo ln -sf "$NGINX_SITE_AVAILABLE" "$NGINX_SITE_ENABLED"
-            sudo nginx -t
-            sudo systemctl reload nginx
+            sudo nginx -t; sudo systemctl reload nginx
+            if sudo grep -n "error_page 401 =302 /admin/ui/login.html" "$NGINX_SITE_AVAILABLE" >/dev/null 2>&1; then REDIR_OK=1; else REDID_OK=0; fi
 
-            # Reload systemd and restart services
             sudo systemctl daemon-reload || true
             sudo systemctl restart chillhub-api.service || true
             sudo systemctl restart chillhub-admin.service || true
+            API_STATE=$(systemctl is-active chillhub-api.service || true)
+            ADM_STATE=$(systemctl is-active chillhub-admin.service || true)
+            echo "[systemd] api=$API_STATE admin=$ADM_STATE"; [ "$API_STATE" = active ] && [ "$ADM_STATE" = active ] || { echo "[deploy] services not active"; exit 1; }
 
-            # Optional: sync external downloads directory into site if provided and exists on server
-            DOWNLOADS_DIR="${{ secrets.DOWNLOADS_DIR }}"
-            if [ -n "$DOWNLOADS_DIR" ] && [ -d "$DOWNLOADS_DIR" ]; then
-              sudo mkdir -p "$SITE_DIR/downloads"
-              sudo rsync -a "$DOWNLOADS_DIR/" "$SITE_DIR/downloads/"
-            fi
+            DOWNLOADS_DIR="${{ secrets.DOWNLOADS_DIR }}"; if [ -n "$DOWNLOADS_DIR" ] && [ -d "$DOWNLOADS_DIR" ]; then sudo mkdir -p "$SITE_DIR/downloads"; sudo rsync -a "$DOWNLOADS_DIR/" "$SITE_DIR/downloads/"; fi
 
-            # Smoke tests (fail with diagnostics on errors)
-            FAIL=0
-            http_code() { curl -ks -o /dev/null -w "%{http_code}" "$1"; }
-            must_200() { local url="$1"; local name="$2"; local code; code=$(http_code "$url"); if [ "$code" = "200" ]; then echo "[test] PASS $name ($url)"; else echo "[test] FAIL $name ($url) -> $code"; FAIL=1; fi; }
+            echo "::group::Manifest verification"; MISM_TOTAL=0
+            cmp_manifest() { label="$1"; man="$2"; base="$3"; mism=0; if [ -f "$man" ]; then while IFS=$'\t' read -r rel sha; do [ -z "$rel" ] && continue; f="$base/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f"|awk '{print $1}'); [ "$rsha" = "$sha" ] && echo "[manifest] OK  $label $rel" || { echo "[manifest] FAIL $label $rel expected=$sha got=$rsha"; mism=$((mism+1)); }; else echo "[manifest] MISS $label $rel"; mism=$((mism+1)); fi; done < "$man"; [ "$mism" -ne 0 ] && echo "[manifest] $label mismatches: $mism"; MISM_TOTAL=$((MISM_TOTAL+mism)); fi }
+            cmp_manifest site "$DEPLOY_DIR/site.manifest" "$SITE_DIR"
+            cmp_manifest admin "$DEPLOY_DIR/admin.manifest" "$LAUNCHER_DIR/admin_ui"
+            if [ -f "$DEPLOY_DIR/bin.manifest" ]; then mism=0; while IFS=$'\t' read -r rel sha; do case "$rel" in api|admin) f="$OPT_DIR/$rel";; *) f="$DEPLOY_DIR/bin/$rel";; esac; if [ -f "$f" ]; then rsha=$(sha256sum "$f"|awk '{print $1}'); [ "$rsha" = "$sha" ] && echo "[manifest] OK  bin $rel" || { echo "[manifest] FAIL bin $rel expected=$sha got=$rsha"; mism=$((mism+1)); }; else echo "[manifest] MISS bin $rel"; mism=$((mism+1)); fi; done < "$DEPLOY_DIR/bin.manifest"; [ "$mism" -ne 0 ] && echo "[manifest] bin mismatches: $mism"; MISM_TOTAL=$((MISM_TOTAL+mism)); fi
+            cmp_manifest systemd "$DEPLOY_DIR/systemd.manifest" "/etc/systemd/system"; echo "[manifest] total mismatches: $MISM_TOTAL"; echo "::endgroup::"
+            [ "${FAIL_ON_MISMATCH}" = "true" ] && [ "$MISM_TOTAL" -ne 0 ] && { echo "[deploy] mismatch found"; exit 1; }
 
-            must_200 "https://launcher.samoy.love/admin/ui/login.html" "Admin UI login"
-            code=$(http_code "https://launcher.samoy.love/admin/")
-            if [ "$code" = "200" ]; then echo "[test] WARN /admin/ returned 200 (maybe authorized)"; elif [ "$code" = "401" ]; then echo "[test] PASS /admin/ protected (401)"; else echo "[test] FAIL /admin/ -> $code"; FAIL=1; fi
-            must_200 "https://launcher.samoy.love/admin/ui/admin.js" "Admin UI static admin.js"
-            must_200 "https://launcher.samoy.love/admin/api/health" "Admin API health"
-            must_200 "https://launcher.samoy.love/" "Landing root"
-            must_200 "https://launcher.samoy.love/styles.css" "Landing styles"
+            FAIL=0; http_code(){ curl -ks -o /dev/null -w "%{http_code}" "$1"; }; must_200(){ url="$1"; name="$2"; code=$(http_code "$url"); [ "$code" = 200 ] && echo "[test] PASS $name ($url)" || { echo "[test] FAIL $name ($url) -> $code"; FAIL=1; }; }
+            must_200 "${SITE_BASE}/admin/ui/login.html" "Admin UI login"; code=$(http_code "${SITE_BASE}/admin/"); if [ "$code" = 200 ]; then echo "[test] WARN /admin/ returned 200"; elif [ "$code" = 401 ] || [ "$code" = 302 ]; then echo "[test] PASS /admin/ protected ($code)"; else echo "[test] FAIL /admin/ -> $code"; FAIL=1; fi
+            must_200 "${SITE_BASE}/admin/ui/admin.js" "Admin UI static"; must_200 "${SITE_BASE}/admin/api/health" "Admin API health"; must_200 "${SITE_BASE}/" "Landing /"; must_200 "${SITE_BASE}/styles.css" "Landing styles"
+            curl -ksf "${SITE_BASE}/manifests/launcher/latest.json" >/dev/null && echo "[test] PASS manifest latest.json" || echo "[test] WARN manifest latest.json not present"
+            curl -ksf "${SITE_BASE}/assets/ping.txt" >/dev/null && echo "[test] PASS assets/ping.txt" || echo "[test] WARN assets/ping.txt not present"
 
-            # manifests latest.json (soft check: ignore if absent)
-            if curl -ksf "https://launcher.samoy.love/manifests/launcher/latest.json" >/dev/null; then
-              echo "[test] PASS manifests/launcher/latest.json"
-            else
-              echo "[test] WARN manifests/launcher/latest.json not present"
-            fi
+            REPORT_DIR="$HOME/deploy/report"; mkdir -p "$REPORT_DIR"; TS=$(date -u +%Y%m%d-%H%M%S)
+            REPORT_ROWS_MAN="$REPORT_DIR/manifest_rows.html"; : > "$REPORT_ROWS_MAN"; REPORT_ROWS_HTTP="$REPORT_DIR/http_rows.html"; : > "$REPORT_ROWS_HTTP"
+            tab_row(){ printf '<tr><td>%s</td><td><code>%s</code></td><td>%s</td><td><code>%s</code></td><td><code>%s</code></td></tr>\n' "$1" "$2" "$3" "$4" "$5" >> "$REPORT_ROWS_MAN"; }
+            scan_manifest_table(){ label="$1"; man="$2"; base="$3"; [ -f "$man" ] || return 0; while IFS=$'\t' read -r rel sha; do [ -z "$rel" ] && continue; f="$base/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f"|awk '{print $1}'); [ "$rsha" != "$sha" ] && tab_row "$label" "$rel" FAIL "$sha" "$rsha"; else tab_row "$label" "$rel" MISS "$sha" "-"; fi; done < "$man"; }
+            scan_manifest_table site "$DEPLOY_DIR/site.manifest" "$SITE_DIR"; scan_manifest_table admin "$DEPLOY_DIR/admin.manifest" "$LAUNCHER_DIR/admin_ui"; if [ -f "$DEPLOY_DIR/bin.manifest" ]; then while IFS=$'\t' read -r rel sha; do case "$rel" in api|admin) f="$OPT_DIR/$rel";; *) f="$DEPLOY_DIR/bin/$rel";; esac; if [ -f "$f" ]; then rsha=$(sha256sum "$f"|awk '{print $1}'); [ "$rsha" != "$sha" ] && tab_row bin "$rel" FAIL "$sha" "$rsha"; else tab_row bin "$rel" MISS "$sha" "-"; fi; done < "$DEPLOY_DIR/bin.manifest"; fi; scan_manifest_table systemd "$DEPLOY_DIR/systemd.manifest" "/etc/systemd/system"
+            http_row(){ url="$1"; name="$2"; read -r code time < <(curl -ks -o /dev/null -w "%{http_code} %{time_total}" "$url"); status=FAIL; if [ "$name" = "/admin/ gate" ]; then { [ "$code" = 401 ] || [ "$code" = 302 ]; } && status=OK; else [ "$code" = 200 ] && status=OK; fi; printf '<tr><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s s</td><td>%s</td></tr>\n' "$url" "$name" "$code" "$time" "$status" >> "$REPORT_ROWS_HTTP"; }
+            http_row "${SITE_BASE}/admin/ui/login.html" "Admin UI login"; http_row "${SITE_BASE}/admin/" "/admin/ gate"; http_row "${SITE_BASE}/admin/ui/admin.js" "Admin UI static"; http_row "${SITE_BASE}/admin/api/health" "Admin API health"; http_row "${SITE_BASE}/" "Landing /"; http_row "${SITE_BASE}/styles.css" "Landing styles"; http_row "${SITE_BASE}/manifests/launcher/latest.json" "Manifest latest.json (soft)"; http_row "${SITE_BASE}/assets/ping.txt" "News asset ping.txt (soft)"
+            STATUS=success; [ $FAIL -ne 0 ] && STATUS=fail; [ "$MISM_TOTAL" -ne 0 ] && STATUS=fail; [ "$API_STATE" != active ] && STATUS=fail; [ "$ADM_STATE" != active ] && STATUS=fail; [ "${REDIR_OK:-1}" -eq 0 ] && STATUS=fail
+            REPORT_HTML="$REPORT_DIR/report-$TS.html"; {
+              echo "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>ChillHub Deploy Report $TS</title><style>body{font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Arial,sans-serif;padding:24px;background:#0b1020;color:#e8ecff} .ok{color:#35d07f} .fail{color:#ff6b6b} .warn{color:#ffcf5a} pre{background:#0e1530;border-radius:8px;padding:12px;overflow:auto} h1,h2{margin:0 0 8px} .kv{display:grid;grid-template-columns:220px 1fr;gap:6px 12px;margin:12px 0} .kv b{color:#9fb4ff} a{color:#8fc7ff} .pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#0e1a3f;color:#c8d2ff;border:1px solid #2a3f77} table{border-collapse:collapse;width:100%;margin:8px 0} td,th{border:1px solid #2a3f77;padding:6px 8px} th{background:#0d1a3a;color:#c8d2ff;text-align:left}</style></head><body>"
+              echo "<h1>Deploy report <span class=\"pill\">$TS UTC</span></h1><div class=\"kv\"><b>Status</b><div class=\"$STATUS\">$STATUS</div><b>Site</b><div>${SITE_BASE}</div><b>Systemd</b><div>api: $API_STATE; admin: $ADM_STATE</div><b>Manifests</b><div>total mismatches: $MISM_TOTAL</div><b>Nginx redirect</b><div>$( [ \"${REDIR_OK:-1}\" -eq 1 ] && echo OK || echo MISSING )</div></div>"
+              echo "<h2>Manifest FAIL/MISS</h2><table><thead><tr><th>Section</th><th>Path</th><th>Status</th><th>Expected</th><th>Got</th></tr></thead><tbody>"; cat "$REPORT_ROWS_MAN"; echo "</tbody></table>"
+              echo "<h2>HTTP checks</h2><table><thead><tr><th>URL</th><th>Name</th><th>Code</th><th>Time</th><th>Status</th></tr></thead><tbody>"; cat "$REPORT_ROWS_HTTP"; echo "</tbody></table>"
+              echo "<h2>What to do</h2><ul><li>Manifest FAIL/MISS: повторно синхронизируйте соответствующую секцию и проверьте исходные хеши.</li><li>Service not active: проверьте journalctl, исправьте конфиг/секреты и перезапустите сервисы.</li><li>Nginx redirect missing: добавьте ‘error_page 401 =302 /admin/ui/login.html’, затем nginx -t && reload.</li><li>HTTP FAIL: откройте URL, проверьте роутинг/права/конфиги, логи nginx и сервисов.</li></ul>"
+              echo "</body></html>"
+            } > "$REPORT_HTML"; ln -sf "$REPORT_HTML" "$REPORT_DIR/report-latest.html"
 
-            # news assets ping.txt (soft check)
-            if curl -ksf "https://launcher.samoy.love/assets/ping.txt" >/dev/null; then
-              echo "[test] PASS assets/ping.txt"
-            else
-              echo "[test] WARN assets/ping.txt not present"
-            fi
+            REPORT_DIR="$HOME/deploy/report"; mkdir -p "$REPORT_DIR"; TS=$(date -u +%Y%m%d-%H%M%S)
+            REPORT_HTML="$REPORT_DIR/report-$TS.html"; {
+              echo "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>ChillHub Deploy Report $TS</title><style>body{font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Arial,sans-serif;padding:24px;background:#0b1020;color:#e8ecff} .ok{color:#35d07f} .fail{color:#ff6b6b} .warn{color:#ffcf5a} pre{background:#0e1530;border-radius:8px;padding:12px;overflow:auto} h1,h2{margin:0 0 8px} .kv{display:grid;grid-template-columns:220px 1fr;gap:6px 12px;margin:12px 0} .kv b{color:#9fb4ff} a{color:#8fc7ff} .pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#0e1a3f;color:#c8d2ff;border:1px solid #2a3f77} table{border-collapse:collapse;width:100%;margin:8px 0} td,th{border:1px solid #2a3f77;padding:6px 8px} th{background:#0d1a3a;color:#c8d2ff;text-align:left}</style></head><body>"
+              echo "<h1>Deploy report <span class=\"pill\">$TS UTC</span></h1><div class=\"kv\"><b>Status</b><div class=\"$STATUS\">$STATUS</div><b>Site</b><div>${SITE_BASE}</div><b>Systemd</b><div>api: $API_STATE; admin: $ADM_STATE</div><b>Manifests</b><div>total mismatches: $MISM_TOTAL</div><b>Nginx redirect</b><div>$( [ \"${REDIR_OK:-1}\" -eq 1 ] && echo OK || echo MISSING )</div></div>"
+              echo "<h2>Manifest FAIL/MISS</h2><table><thead><tr><th>Section</th><th>Path</th><th>Status</th><th>Expected</th><th>Got</th></tr></thead><tbody>"; cat "$REPORT_ROWS_MAN"; echo "</tbody></table>"
+              echo "<h2>HTTP checks</h2><table><thead><tr><th>URL</th><th>Name</th><th>Code</th><th>Time</th><th>Status</th></tr></thead><tbody>"; cat "$REPORT_ROWS_HTTP"; echo "</tbody></table>"
+              echo "<h2>What to do</h2><ul><li>Manifest FAIL/MISS: повторно синхронизируйте соответствующую секцию и проверьте исходные хеши.</li><li>Service not active: проверьте journalctl, исправьте конфиг/секреты и перезапустите сервисы.</li><li>Nginx redirect missing: добавьте ‘error_page 401 =302 /admin/ui/login.html’, затем nginx -t && reload.</li><li>HTTP FAIL: откройте URL, проверьте роутинг/права/конфиги, логи nginx и сервисов.</li></ul>"
+              echo "</body></html>"
+            } > "$REPORT_HTML"; ln -sf "$REPORT_HTML" "$REPORT_DIR/report-latest.html"
 
-            if [ $FAIL -ne 0 ]; then
-              echo "[deploy] One or more tests FAILED. Collecting diagnostics..."
-              echo "---- NGINX TEST ----"; sudo nginx -t || true
-              echo "---- NGINX ERROR LOG (last 150) ----"; sudo tail -n 150 /var/log/nginx/error.log || true
-              echo "---- SYSTEMD STATUS (api) ----"; sudo systemctl status chillhub-api.service --no-pager -n 30 || true
-              echo "---- SYSTEMD STATUS (admin) ----"; sudo systemctl status chillhub-admin.service --no-pager -n 30 || true
-              echo "---- JOURNALCTL (api last 150) ----"; sudo journalctl -u chillhub-api.service -e -n 150 || true
-              echo "---- JOURNALCTL (admin last 150) ----"; sudo journalctl -u chillhub-admin.service -e -n 150 || true
-              exit 1
-            fi
+      - name: Download deploy report from server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: /home/${{ secrets.SSH_USER }}/deploy/report/*.html
+          target: ./deploy-report
+          overwrite: true
+
+      - name: Upload deploy report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ./deploy-report/*.html
+          if-no-files-found: error

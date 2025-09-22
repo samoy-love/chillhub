@@ -713,7 +713,7 @@ img {
 .slot {
   display: grid;
   place-items: center;
-  height: 56px;
+  min-height: 56px;
   border-radius: 14px;
   color: rgb(238 241 255 / 82%);
   font-weight: 700;
@@ -734,6 +734,7 @@ img {
   position: relative;
   z-index: 1; /* keep content above sparkles */
 }
+
 .slot.alt { background: linear-gradient(135deg, rgb(34 211 238 / 20%), rgb(167 139 250 / 20%)); }
 
 .slot.dim {
@@ -826,8 +827,11 @@ img {
 /* During spinning we tone down idle twinkle a bit */
 .reels.spinning .slot::before{ animation: none; opacity: 1; }
 
-/* Disable lamp blinking when glow disabled */
-.reels.lamps-blink .slot::before { animation: none; }
+/* During the winning moment, blink only the active (centered) row lamps brightly for 5s (controlled by JS) */
+.reels.lamps-blink .slot--active::before {
+  animation: blink-strong .6s ease-in-out infinite;
+  filter: brightness(1.8) saturate(1.4);
+}
 @keyframes lampBlink{ 0%{opacity:1} 100%{opacity:1} }
 
 @keyframes blink-strong {
@@ -1166,9 +1170,36 @@ img:not(.skeleton)::after { display: none; }
   .reels.spinning  .slot:not(.slot--active)::after  { right: 4px; width: 4px; height: 4px; }
 }
 
-@media (width <= 980px) { .game-card { grid-column: span 6; } }
+@media (width <= 980px) { .game-card { grid-column: span 4; } }
 
 @media (width <= 640px) { .game-card { grid-column: span 12; } }
+
+/* Tablet overrides: behave like desktop on tablets (641px–980px) */
+@media (width > 640px) and (width <= 980px) {
+  /* 1) Games grid: keep 3 per row like desktop */
+  .game-card { grid-column: span 4; }
+
+  /* 2) Benefits strip: single row like desktop */
+  .benefits-strip {
+    display: flex;
+    flex-wrap: nowrap;
+    justify-content: center;
+    gap: var(--space-s) 10px;
+  }
+  .benefit {
+    width: auto;
+    justify-content: center;
+    font-size: clamp(15px, 1.15vw, 18px);
+    padding: .42rem .7rem;
+  }
+
+  /* 3) Features: keep 3 columns like desktop */
+  .features { grid-template-columns: repeat(3, 1fr); }
+
+  /* 4) Casino reels: header columns and button like desktop */
+  .reels-head { grid-template-columns: repeat(5, 1fr); }
+  .btn.btn--reels { font-size: 1.1rem; gap: 6px; }
+}
 
 /* Mobile layout refinements */
 @media (width <= 640px) {
@@ -1406,6 +1437,14 @@ img:not(.skeleton)::after { display: none; }
 }
 
 @media (width <= 840px) { .features { grid-template-columns: 1fr; } }
+
+/* Re-assert desktop-like layout on tablets (641–840px) after phone/tablet generic rules */
+@media (width > 640px) and (width <= 840px) {
+  /* Keep benefits in a single row like desktop */
+  .benefits-strip { display: flex; flex-wrap: nowrap; justify-content: center; }
+  /* Keep 3 features per row like desktop */
+  .features { grid-template-columns: repeat(3, 1fr); }
+}
 
 /* Respect reduced motion preferences: tone down animations and transitions */
 @media (prefers-reduced-motion: reduce) {
