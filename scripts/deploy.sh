@@ -2,16 +2,21 @@
 # ChillHub deploy script for Ubuntu + nginx
 # - Pull latest repo
 # - Build Go servers
-# - Sync static artifacts (landing, admin_ui, content)
+# - Sync static artifacts (landing, admin_ui)
 # - Install binaries and restart services
 # - Test and reload nginx
+# - (New) Manifest-based integrity verification (site/admin_ui/bin/systemd)
 #
 # Usage:
-#   bash ./scripts/deploy.sh [--branch <name>] [--no-build] [--repo-dir <path>] \
-#                           [--jwt-secret <val>] [--admin-user <val>] \
-#                           [--admin-pass-bcrypt <val>] [--cookie-domain <val>] [--cookie-secure <true|false>]
+#   bash ./scripts/deploy.sh \
+#     [--branch <name>] [--no-build] [--repo-dir <path>] \
+#     [--jwt-secret <val>] [--admin-user <val>] \
+#     [--admin-pass-bcrypt <val>] [--admin-pass <val>] \
+#     [--cookie-domain <val>] [--cookie-secure <true|false>] \
+#     [--downloads-dir <path>] \
+#     [--site-base-url <https://host>] [--fail-on-mismatch] [--strict]
 #
-# Requirements: git, rsync, go, systemd, nginx
+# Requirements: git, rsync, go (optional for bcrypt), systemd, nginx, sha256sum, file
 set -euo pipefail
 
 BRANCH="main"
@@ -26,10 +31,17 @@ COOKIE_DOMAIN="launcher.samoy.love"
 COOKIE_SECURE="true"
 # External installers directory (defaults to sibling of REPO_DIR)
 DOWNLOADS_DIR=""
+# New: test URL base and integrity controls
+SITE_BASE_URL="https://launcher.samoy.love"
+FAIL_ON_MISMATCH=0
+STRICT_MODE=0
+# Optional controls
+NO_NGINX_RELOAD=0
+ARCH="auto"   # auto|amd64|arm64
 
 # Preflight: ensure required commands exist
 need_cmd(){ command -v "$1" >/dev/null 2>&1 || { echo "[deploy][error] Missing required command: $1" >&2; exit 1; }; }
-for c in git rsync sudo nginx systemctl curl; do need_cmd "$c"; done
+for c in git rsync sudo nginx systemctl curl sha256sum; do need_cmd "$c"; done
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -54,6 +66,16 @@ while [[ $# -gt 0 ]]; do
       COOKIE_SECURE="${2:-true}"; shift 2;;
     --downloads-dir)
       DOWNLOADS_DIR="${2:-}"; shift 2;;
+    --site-base-url)
+      SITE_BASE_URL="${2:-https://launcher.samoy.love}"; shift 2;;
+    --fail-on-mismatch)
+      FAIL_ON_MISMATCH=1; shift 1;;
+    --strict)
+      STRICT_MODE=1; shift 1;;
+    --no-nginx-reload)
+      NO_NGINX_RELOAD=1; shift 1;;
+    --arch)
+      ARCH="${2:-auto}"; shift 2;;
     *)
       echo "[deploy][warn] Unknown arg: $1"; shift 1;;
   esac
@@ -143,15 +165,28 @@ EOF
   fi
 fi
 
-log(){ echo "[deploy] $*"; }
-run(){ echo "> $*"; eval "$*"; }
+## Colors and printers
+NC='\033[0m'; RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; MAGENTA='\033[0;35m'; GRAY='\033[0;90m'
+if [[ -n "${NO_COLOR:-}" || ! -t 1 ]]; then NC=''; RED=''; GREEN=''; YELLOW=''; CYAN=''; MAGENTA=''; GRAY=''; fi
+log(){ echo -e "${CYAN}[deploy]${NC} $*"; }
+ok(){ echo -e "${GREEN}[ ok   ]${NC} $*"; }
+warn(){ echo -e "${YELLOW}[ warn ]${NC} $*"; }
+err(){ echo -e "${RED}[error ]${NC} $*"; }
+diag(){ echo -e "${GRAY}[ diag ]${NC} $*"; }
+section(){ local msg="${1:-}"; local line="------------------------------------------------------------"; echo -e "${GRAY}$line${NC}"; echo -e "${MAGENTA}  $msg${NC}"; echo -e "${GRAY}$line${NC}"; }
+run(){ echo -e "${GRAY}> $*${NC}"; eval "$*"; }
 
+section "Preflight: директории и доступ"
 log "Ensuring target directories exist"
+if ! sudo -n true 2>/dev/null; then
+  err "sudo требует пароль; настройте NOPASSWD для текущего пользователя или запускайте с подходящими привилегиями"
+  exit 1
+fi
 sudo mkdir -p "$SITE_ROOT" "$LAUNCHER_ROOT" "$LAUNCHER_ROOT/content" "$LAUNCHER_ROOT/manifests" "$LAUNCHER_ROOT/news" "$LAUNCHER_ROOT/admin_ui" /opt/chillhub
 sudo mkdir -p "$SITE_ROOT/downloads"
 
 
-log "Updating repository: $REPO_DIR (branch: $BRANCH)"
+section "Git: обновление репозитория ($BRANCH)"
 if [[ ! -d "$REPO_DIR/.git" ]]; then
   run "git clone git@github.com:tr0llex/Launcher-Project.git \"$REPO_DIR\""
 fi
@@ -216,16 +251,45 @@ EOF
 fi
 
 if [[ $NO_BUILD -eq 0 ]]; then
-  log "Building Go servers"
+  section "Build: Go servers"
   BUILD_DIR=$(mktemp -d -t chillhub-build-XXXXXXXX)
-  run "cd \"$REPO_DIR/server\" && go mod tidy && go build -o \"$BUILD_DIR/api\"   ./cmd/api"
-  run "cd \"$REPO_DIR/server\" && go mod tidy && go build -o \"$BUILD_DIR/admin\" ./cmd/admin"
+  if [[ "$ARCH" == "amd64" ]]; then
+    run "cd \"$REPO_DIR/server\" && go mod tidy && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o \"$BUILD_DIR/api\"   ./cmd/api"
+    run "cd \"$REPO_DIR/server\" && go mod tidy && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o \"$BUILD_DIR/admin\" ./cmd/admin"
+  elif [[ "$ARCH" == "arm64" ]]; then
+    run "cd \"$REPO_DIR/server\" && go mod tidy && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o \"$BUILD_DIR/api\"   ./cmd/api"
+    run "cd \"$REPO_DIR/server\" && go mod tidy && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o \"$BUILD_DIR/admin\" ./cmd/admin"
+  else
+    run "cd \"$REPO_DIR/server\" && go mod tidy && go build -o \"$BUILD_DIR/api\"   ./cmd/api"
+    run "cd \"$REPO_DIR/server\" && go mod tidy && go build -o \"$BUILD_DIR/admin\" ./cmd/admin"
+  fi
+  # Compute shas BEFORE install for later comparison
+  BIN_SHA_API=$(sha256sum "$BUILD_DIR/api" | awk '{print $1}')
+  BIN_SHA_ADMIN=$(sha256sum "$BUILD_DIR/admin" | awk '{print $1}')
   log "Installing binaries"
   run "sudo install -m 0755 \"$BUILD_DIR/api\"   \"$API_BIN\""
   run "sudo install -m 0755 \"$BUILD_DIR/admin\" \"$ADMIN_BIN\""
+  # After install, compare installed shas to built
+  if [[ -f "$API_BIN" ]]; then INS_SHA_API=$(sha256sum "$API_BIN" | awk '{print $1}'); else INS_SHA_API=""; fi
+  if [[ -f "$ADMIN_BIN" ]]; then INS_SHA_ADMIN=$(sha256sum "$ADMIN_BIN" | awk '{print $1}'); else INS_SHA_ADMIN=""; fi
+  if [[ -n "$INS_SHA_API" ]]; then
+    if [[ "$INS_SHA_API" == "$BIN_SHA_API" ]]; then ok "[manifest] bin api OK ($INS_SHA_API)"; else err "[manifest] bin api FAIL expected=$BIN_SHA_API got=$INS_SHA_API"; fi
+  else
+    warn "[manifest] bin api MISS $API_BIN"
+  fi
+  if [[ -n "$INS_SHA_ADMIN" ]]; then
+    if [[ "$INS_SHA_ADMIN" == "$BIN_SHA_ADMIN" ]]; then ok "[manifest] bin admin OK ($INS_SHA_ADMIN)"; else err "[manifest] bin admin FAIL expected=$BIN_SHA_ADMIN got=$INS_SHA_ADMIN"; fi
+  else
+    warn "[manifest] bin admin MISS $ADMIN_BIN"
+  fi
   run "rm -rf \"$BUILD_DIR\" || true"
+  ok "Binaries installed"
+else
+  section "Build: пропущен (--no-build)"
+  :
 fi
 
+section "Sync: статика"
 log "Sync landing to $SITE_ROOT"
 # Keep /downloads separate from repo; sync landing excluding downloads
 run "sudo rsync -a --delete --exclude 'downloads/' \"$REPO_DIR/landing/\" \"$SITE_ROOT/\""
@@ -243,6 +307,7 @@ log "Sync static only (landing, admin_ui). Do not touch server content dirs."
 # Admin UI can be fully replaced
 run "sudo rsync -a --delete \"$REPO_DIR/server/admin_ui/\"   \"$LAUNCHER_ROOT/admin_ui/\""
 
+section "Systemd: юниты и drop-in"
 log "Install systemd unit files (if present)"
 if [[ -f "$REPO_DIR/deploy/systemd/chillhub-api.service" ]]; then
   run "sudo install -m 0644 \"$REPO_DIR/deploy/systemd/chillhub-api.service\" /etc/systemd/system/chillhub-api.service"
@@ -259,20 +324,32 @@ TMPD=$(mktemp)
 {
   echo "[Service]"
   echo "EnvironmentFile=$SECRET_FILE"
-  [[ -n "$COOKIE_DOMAIN" ]] && echo "Environment=COOKIE_DOMAIN=$COOKIE_DOMAIN"
-  [[ -n "$COOKIE_SECURE" ]] && echo "Environment=COOKIE_SECURE=$COOKIE_SECURE"
-  [[ -n "$JWT_SECRET" ]] && echo "Environment=JWT_SECRET=$JWT_SECRET"
+  [[ -n "$COOKIE_DOMAIN" ]] && echo "Environment=\"COOKIE_DOMAIN=$COOKIE_DOMAIN\""
+  [[ -n "$COOKIE_SECURE" ]] && echo "Environment=\"COOKIE_SECURE=$COOKIE_SECURE\""
+  [[ -n "$JWT_SECRET" ]] && echo "Environment=\"JWT_SECRET=$JWT_SECRET\""
   # ADMIN_USERNAME/PASSWORD_BCRYPT come from $SECRET_FILE; explicit CLI values can override by rewriting the file
 } > "$TMPD"
 run "sudo install -m 0644 \"$TMPD\" \"$ADMIN_DROPIN_DIR/override.conf\""
 rm -f "$TMPD" || true
 
+section "Nginx: конфиг и перезапуск"
 log "Install nginx site config and reload"
 run "sudo install -m 0644 \"$REPO_DIR/deploy/launcher.conf\" /etc/nginx/sites-available/launcher.conf"
 run "sudo ln -sf /etc/nginx/sites-available/launcher.conf /etc/nginx/sites-enabled/launcher.conf"
 run "sudo nginx -t"
-run "sudo systemctl reload nginx"
+if [[ $NO_NGINX_RELOAD -eq 0 ]]; then
+  run "sudo systemctl reload nginx"
+  # Check redirect rule presence
+  if sudo grep -n "error_page 401 =302 /admin/ui/login.html" /etc/nginx/sites-available/launcher.conf >/dev/null 2>&1; then
+    ok "[nginx] redirect rule present"
+  else
+    warn "[nginx] redirect rule NOT present"
+  fi
+else
+  warn "nginx reload skipped (--no-nginx-reload)"
+fi
 
+section "Systemd: перезапуск сервисов"
 log "Reload systemd and restart services"
 run "sudo systemctl daemon-reload"
 for s in "${SERVICES[@]}"; do
@@ -280,18 +357,58 @@ for s in "${SERVICES[@]}"; do
   run "sudo systemctl status \"$s\" --no-pager -n 3 || true"
 done
 
+# Verify services active (hard fail)
+for s in "${SERVICES[@]}"; do
+  if ! systemctl is-active "$s" >/dev/null 2>&1; then err "Service $s is not active"; exit 1; fi
+done
+ok "Services are active"
+
+# Integrity verification (manifests)
+section "Integrity: манифесты и сравнение"
+MISM_TOTAL=0
+compare_trees(){
+  local label="$1" src="$2" dst="$3"; local mism=0; local n=0;
+  if [[ ! -d "$src" ]]; then warn "[manifest] $label: source dir not found: $src"; return 0; fi
+  find "$src" -type f -print0 | while IFS= read -r -d '' f; do
+    rel="${f#"$src/"}"; sha_src=$(sha256sum "$f" | awk '{print $1}')
+    if [[ -f "$dst/$rel" ]]; then
+      sha_dst=$(sha256sum "$dst/$rel" | awk '{print $1}')
+      if [[ "$sha_src" == "$sha_dst" ]]; then echo -e "${GREEN}[manifest] OK  ${NC}$label $rel"; else echo -e "${RED}[manifest] FAIL${NC} $label $rel expected=$sha_src got=$sha_dst"; mism=$((mism+1)); fi
+    else
+      echo -e "${YELLOW}[manifest] MISS${NC} $label $rel"; mism=$((mism+1))
+    fi
+    n=$((n+1))
+  done
+  if [[ $mism -ne 0 ]]; then warn "[manifest] $label mismatches: $mism"; else ok "[manifest] $label: all $n files match"; fi
+  MISM_TOTAL=$((MISM_TOTAL + mism))
+}
+
+# site
+compare_trees "site" "$REPO_DIR/landing" "$SITE_ROOT"
+# admin_ui
+compare_trees "admin" "$REPO_DIR/server/admin_ui" "$LAUNCHER_ROOT/admin_ui"
+# bin (only if built now) — детальная проверка уже выполнена сразу после установки выше.
+# systemd
+if [[ -d "$REPO_DIR/deploy/systemd" ]]; then
+  compare_trees "systemd" "$REPO_DIR/deploy/systemd" "/etc/systemd/system"
+fi
+
+if [[ $FAIL_ON_MISMATCH -ne 0 && $MISM_TOTAL -ne 0 ]]; then
+  err "Manifest mismatches detected (total sections with mism: $MISM_TOTAL)"; exit 1
+fi
+
 # Create news/assets/ping.txt for diagnostics if missing (does not overwrite user files)
 PING_PATH="/var/www/launcher/news/assets/ping.txt"
 if [[ ! -f "$PING_PATH" ]]; then
   echo "ok" | sudo tee "$PING_PATH" >/dev/null || true
 fi
 
-log "Autotests"
+section "HTTP: автотесты ($SITE_BASE_URL)"
 
 FAIL=0
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; NC='\033[0m'
 
-http_code(){ curl -ks -o /dev/null -w "%{http_code}" "$1"; }
+http_code(){ curl -ks --max-time 5 -o /dev/null -w "%{http_code}" "$1"; }
 must_200(){ local url="$1"; local name="$2"; local code; code=$(http_code "$url");
   if [[ "$code" == "200" ]]; then
     echo -e "[test] ${GREEN}PASS${NC} $name ($url)"
@@ -308,36 +425,37 @@ soft_200_if_exists(){ local path="$1"; local url="$2"; local name="$3";
 }
 
 # 1) Admin UI (login is public; /admin/ is protected and should be 401 without cookies)
-must_200 "https://launcher.samoy.love/admin/ui/login.html" "Admin UI login"
-code=$(http_code "https://launcher.samoy.love/admin/")
+must_200 "$SITE_BASE_URL/admin/ui/login.html" "Admin UI login"
+code=$(http_code "$SITE_BASE_URL/admin/")
 if [[ "$code" == "200" ]]; then
-  echo -e "[test] ${YELLOW}WARN${NC} /admin/ returned 200 (maybe already authorized)"
+  if [[ $STRICT_MODE -eq 1 ]]; then echo -e "[test] ${RED}FAIL${NC} /admin/ returned 200 (expected 401/302)"; FAIL=1; else echo -e "[test] ${YELLOW}WARN${NC} /admin/ returned 200 (maybe already authorized)"; fi
 elif [[ "$code" == "401" ]]; then
   echo -e "[test] ${GREEN}PASS${NC} /admin/ protected (401 without cookies)"
 else
   echo -e "[test] ${RED}FAIL${NC} /admin/ unexpected code -> $code"; FAIL=1
 fi
-must_200 "https://launcher.samoy.love/admin/ui/admin.js" "Admin UI static /admin/ui/admin.js"
+must_200 "$SITE_BASE_URL/admin/ui/admin.js" "Admin UI static /admin/ui/admin.js"
 
 # 2) Admin API (health is public; protected endpoints are not tested without auth)
-must_200 "https://launcher.samoy.love/admin/api/health" "Admin API /admin/api/health"
+must_200 "$SITE_BASE_URL/admin/api/health" "Admin API /admin/api/health"
 
 # 3) Landing site
-must_200 "https://launcher.samoy.love/" "Landing /"
-must_200 "https://launcher.samoy.love/styles.css" "Landing static /styles.css"
+must_200 "$SITE_BASE_URL/" "Landing /"
+must_200 "$SITE_BASE_URL/styles.css" "Landing static /styles.css"
 
 # 4) Manifests
 MANI_DIR="$LAUNCHER_ROOT/manifests/launcher"
 if [[ -f "$MANI_DIR/latest.json" ]]; then
-  must_200 "https://launcher.samoy.love/manifests/launcher/latest.json" "Manifest latest.json"
+  must_200 "$SITE_BASE_URL/manifests/launcher/latest.json" "Manifest latest.json"
 else
   echo -e "[test] ${YELLOW}SKIP${NC} Manifest latest.json: not present on disk"
 fi
 
 # 5) News assets
-soft_200_if_exists "/var/www/launcher/news/assets/ping.txt" "https://launcher.samoy.love/assets/ping.txt" "News asset ping.txt"
+soft_200_if_exists "/var/www/launcher/news/assets/ping.txt" "$SITE_BASE_URL/assets/ping.txt" "News asset ping.txt"
 
 if [[ $FAIL -ne 0 ]]; then
+  section "Diagnostics: сбор логов"
   echo -e "[deploy] ${RED}One or more tests FAILED. Collecting diagnostics...${NC}"
   echo "---- NGINX TEST ----"; sudo nginx -t || true
   echo "---- NGINX ERROR LOG (last 150 lines) ----"; sudo tail -n 150 /var/log/nginx/error.log || true
@@ -356,8 +474,9 @@ if [[ $FAIL -ne 0 ]]; then
   echo -e "[deploy] ${RED}Diagnostics complete. Please review the logs above.${NC}"
   exit 1
 else
-  echo -e "[deploy] ${GREEN}All tests PASSED.${NC}"
+  ok "All tests PASSED."
 fi
 
-log "Done"
+section "Done"
+ok "Deployment completed"
     

@@ -18,17 +18,17 @@ namespace ChillHub.Core {
 
         public string Theme { get; set; } = "dark"; // light | dark (default: dark)
 
-        public string ApiBaseUrl { get; set; } = "http://localhost:55700"; // base URL for server API/content
+        public string ApiBaseUrl { get; set; } = "https://launcher.samoy.love"; // base URL for server API/content
 
         public string LastGameId { get; set; } = string.Empty; // last launched game id
 
         public static string DefaultGamesPath() {
             var dDrive = Path.GetPathRoot(@"D:\")?.TrimEnd(Path.DirectorySeparatorChar);
             if (Directory.Exists(@"D:\")) {
-                return @"D:\\Games\\ChillHub";
+                return @"D:\Games\ChillHub";
             }
 
-            return @"C:\\Games\\ChillHub";
+            return @"C:\Games\ChillHub";
         }
     }
 
@@ -96,7 +96,7 @@ namespace ChillHub.Core {
 
             cfg.Theme = cfg.Theme.Equals("dark", StringComparison.OrdinalIgnoreCase) ? "dark" : "light";
             if (string.IsNullOrWhiteSpace(cfg.ApiBaseUrl)) {
-                cfg.ApiBaseUrl = "http://localhost:55700";
+                cfg.ApiBaseUrl = "https://launcher.samoy.love";
             }
         }
 
