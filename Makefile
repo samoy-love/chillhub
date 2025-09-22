@@ -8,6 +8,14 @@ DEPLOY_SCRIPT := $(REPO_DIR)/scripts/deploy.sh
 # Defaults for Windows deploy helper
 COOKIE_DOMAIN ?= launcher.samoy.love
 COOKIE_SECURE ?= true
+# Default remote connection and auth for deploy-win (can be overridden)
+HOST ?= 207.127.93.34
+USER ?= ubuntu
+KEY ?= C:\Users\Alexey Samoylov\Desktop\server access\oracle 2025-09-21.key
+JWT ?= a-very-long-random-secret
+ADMIN_USER ?= admin
+ADMIN_PLAIN ?= kek2
+DOWNLOADS_DIR ?= C:\Users\Alexey Samoylov\Desktop\Launcher Project\scripts\generated_downloads
 
 # One command to deploy everything
 deploy:
@@ -82,6 +90,19 @@ lint-dotnet:
 	@- ( cd launcher/ChillHub && dotnet restore && dotnet build --no-restore -c Debug /p:UseAppHost=false )
 	@echo [lint:dotnet] Code style check (dotnet format) — non-blocking
 	@- ( cd launcher/ChillHub && dotnet format --verbosity minimal )
+
+# ============
+# Local run helpers
+# ============
+.PHONY: run-prod run-local
+# Equivalent to:
+#  ./scripts/run-dev.ps1 -Env prod  -SetClientConfig -ContentRoot (Resolve-Path ./content)
+#  ./scripts/run-dev.ps1 -Env local -SetClientConfig -ContentRoot (Resolve-Path ./content)
+run-prod:
+	powershell -NoProfile -ExecutionPolicy Bypass -Command "& { ./scripts/run-dev.ps1 -Env prod -SetClientConfig -ContentRoot (Resolve-Path ./content) }"
+
+run-local:
+	powershell -NoProfile -ExecutionPolicy Bypass -Command "& { ./scripts/run-dev.ps1 -Env local -SetClientConfig -ContentRoot (Resolve-Path ./content) }"
 
 # ============
 # Windows remote deploy helper
