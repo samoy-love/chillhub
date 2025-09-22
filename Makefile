@@ -5,6 +5,10 @@ BRANCH ?= main
 REPO_DIR ?= $(CURDIR)
 DEPLOY_SCRIPT := $(REPO_DIR)/scripts/deploy.sh
 
+# Defaults for Windows deploy helper
+COOKIE_DOMAIN ?= launcher.samoy.love
+COOKIE_SECURE ?= true
+
 # One command to deploy everything
 deploy:
 	@chmod +x "$(DEPLOY_SCRIPT)"
@@ -88,8 +92,8 @@ lint-dotnet:
 deploy-win:
 	@echo Deploying to $(HOST) as $(USER) using PowerShell script
 	powershell -NoProfile -ExecutionPolicy Bypass -File "scripts/deploy-win.ps1" \
-	 -Host "$(HOST)" \
-	 -User "$(USER)" \
+	 -SshHost "$(HOST)" \
+	 -SshUser "$(USER)" \
 	 -KeyPath "$(KEY)" \
 	 -Branch "$(BRANCH)" \
 	 -JwtSecret "$(JWT)" \
@@ -98,4 +102,6 @@ deploy-win:
 	 -AdminPasswordPlain "$(ADMIN_PLAIN)" \
 	 -CookieDomain "$(COOKIE_DOMAIN)" \
 	 -CookieSecure "$(COOKIE_SECURE)" \
-	 -DownloadsDir "$(DOWNLOADS_DIR)"
+	 -DownloadsDir "$(DOWNLOADS_DIR)" \
+	 -Parallel "$(or $(PARALLEL),8)" \
+	 $(if $(START_AT_REMOTE),-StartAtRemote)
