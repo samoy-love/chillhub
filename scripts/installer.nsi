@@ -20,6 +20,10 @@ Unicode true
 Icon "app.ico"
 UninstallIcon "app.ico"
 
+; Prerequisite installer filenames (centralized)
+!define PREREQ_WEBVIEW2 "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+!define PREREQ_DOTNET   "windowsdesktop-runtime-8.0.20-win-x64.exe"
+
 Var GAMES_DIR
 Var GamesDir_Edit
 Var GamesDir_Browse
@@ -31,7 +35,7 @@ Var PrereqsRan
 
 ; Output installer
 Name "${APP_NAME}"
-OutFile "ChillHub-Setup.exe"
+OutFile "generated_downloads\ChillHub-Setup.exe"
 
 ; Per-user installation (no admin)
 RequestExecutionLevel user
@@ -132,8 +136,8 @@ Section "Install"
   ExecWait '"powershell" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\write-config.ps1" -GamesDir "$GAMES_DIR"'
   ; Prepare prerequisite installers in $PLUGINSDIR for optional install on Finish
   SetOutPath "$PLUGINSDIR\Redist"
-  File "Redist\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
-  File "Redist\windowsdesktop-runtime-8.0.20-win-x64.exe"
+  File "Redist\${PREREQ_WEBVIEW2}"
+  File "Redist\${PREREQ_DOTNET}"
 
 SectionEnd
 
@@ -246,8 +250,8 @@ Function InstallPrereqs
   ; Offer to run .NET Desktop Runtime 8 and WebView2 installers (interactive UI)
   ; Run sequentially and only after both finish optionally launch the app if requested
   StrCpy $PrereqsRan 1
-  StrCpy $0 "$PLUGINSDIR\Redist\windowsdesktop-runtime-8.0.20-win-x64.exe"
-  StrCpy $1 "$PLUGINSDIR\Redist\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+  StrCpy $0 "$PLUGINSDIR\Redist\${PREREQ_DOTNET}"
+  StrCpy $1 "$PLUGINSDIR\Redist\${PREREQ_WEBVIEW2}"
   ; .NET Runtime
   IfFileExists "$0" 0 +2
     ExecWait '"$0"'

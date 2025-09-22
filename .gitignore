@@ -80,7 +80,9 @@ server/admin
 server/admin.exe
 
 # Installer outputs and redistributables in scripts/
-scripts/ChillHub-Setup.exe
+scripts/generated_downloads
+scripts/prereqs
+scripts/generated_downloads/*
 scripts/Redist/*
 
 # Ignore local content cache/temp folders if created

@@ -10,10 +10,10 @@
   - [Зависимости](#зависимости)
   - [Клонирование](#клонирование)
   - [Контент (минимум)](#контент-минимум)
-  - [Запуск (3 окна)](#запуск-3-окна)
+  - [Запуск](#запуск)
   - [Admin UI: контент](#admin-ui-контент)
-- [Скрипты: dev и инсталлятор](#скрипты-dev-и-инсталлятор)
 - [Деплой на сервер (Ubuntu + nginx)](#деплой-на-сервер-ubuntu--nginx)
+  - [Карта шагов: автодеплой vs вручную](#карта-шагов-автодеплой-vs-вручную)
   - [Подготовка (1 раз)](#подготовка-1-раз)
   - [Автодеплой (Makefile)](#автодеплой-makefile)
   - [Раскладка артефактов (ручная)](#раскладка-артефактов-ручная)
@@ -21,8 +21,6 @@
   - [Обновления](#обновления)
   - [Частые ошибки (troubleshooting)](#частые-ошибки-troubleshooting)
   - [Просмотр логов (systemd)](#просмотр-логов-systemd)
-- [Полезные ссылки и файлы](#полезные-ссылки-и-файлы)
-- [Примечания по безопасности и качеству](#примечания-по-безопасности-и-качеству)
 
  
 
@@ -35,7 +33,45 @@
   - Admin API — приём ZIP‑сборок, активация `latest`, редактирование реестра игр, управление новостями и ассетами.
 - Админ‑панель (web) даёт UI для всех административных операций (загрузка версий, правка реестра, новости/ассеты).
 
-Основные директории:
+## Почему ChillHub
+
+ChillHub решает все «боли» ручной установки игр из архивов и при каждом обновлении модпаков экономит время.
+
+- **Автообновления по диффу** — скачиваются только изменения. Без «перекачек» гигабайтов при каждом патче.
+- **Гарантированная консистентность** — локальная папка игры становится точной копией серверной сборки. Никаких «мусорных» файлов и конфликтов модов.
+- **Один клик — и в игру** — «Обновить» и «Играть» без поиска ссылок, распаковок и ручного копирования.
+- **Надёжные докачки** — поддержка HTTP Range, возобновление `.part`, контроль хешей (Blake3/SHA‑256), удаление лишнего, создание пустых папок из манифеста.
+- **Быстрые релизы модпаков** — админка принимает ZIP и моментально публикует версию и `latest`.
+- **Новости и ассеты** — всё в одном месте: заметки по патчам, обложки, гайды.
+- **Без «магии»** — простая архитектура: Golang + nginx, прозрачные манифесты, понятные пути.
+
+### В сравнении с ручной установкой
+
+| Задача | Ручные архивы | ChillHub |
+|---|---|---|
+| Обновить до новой версии | ✖ Снова скачать весь архив, распаковать, заменить файлы, молиться, чтобы ничего не сломалось | ✔ Скачиваются только изменения. Конечная папка = эталонная версия |
+| Конфликты модов/мусор | ✖ Часто остаются старые файлы и «хвосты» | ✔ Лишние файлы удаляются, пустые каталоги создаются по манифесту |
+| Скорость | ✖ Медленно, ручная рутина | ✔ Быстро: многопоточная загрузка, возобновление, Range |
+| Контроль целостности | ✖ Нет | ✔ Хеш‑проверки (Blake3/SHA‑256) |
+| Коммуникация | ✖ Дискорд посты, гугл‑доки | ✔ Новости в клиенте с обложками и Markdown |
+| UX | ✖ «Разархивируй сюда», «удали там» | ✔ «Обновить → Играть» |
+
+> Цель ChillHub — чтобы вы играли, а не админили файлы.
+
+## Структура проекта
+- Подробнее: спецификации API и Admin описаны в `Documentation.md` — разделы §7 (Public API) и §8 (Admin UI/API).
+
+Быстрые ссылки на спецификации:
+- Public API (§7): [`Documentation.md#7-public-api-servercmdapi`](Documentation.md#7-public-api-servercmdapi)
+  - Эндпоинты:
+    - [`GET /api/games`](Documentation.md#api-get-games)
+    - [`GET /api/games/{gameId}`](Documentation.md#api-get-game-by-id)
+    - [`GET /api/games/{gameId}/versions/latest`](Documentation.md#api-get-latest)
+    - [`GET /api/games/{gameId}/builds`](Documentation.md#api-get-builds)
+    - [`GET /news/index.json`](Documentation.md#api-news-index)
+    - [`GET /news/games/{gameId}/index.json`](Documentation.md#api-news-game-index)
+- Admin UI/API (§8): [`Игры`](Documentation.md#81-игры), [`Лаунчер`](Documentation.md#82-лаунчер), [`Новости`](Documentation.md#83-новости)
+
 - `server/` — Go: `cmd/api` (public) и `cmd/admin` (admin), плюс статика для dev.
 - `launcher/` — C# WPF лаунчер.
 - `landing/` — статический лендинг (отдаётся на корне домена в проде).
@@ -43,7 +79,7 @@
 - `deploy/` — конфиги nginx (`deploy/launcher.conf`), systemd юниты.
 - `scripts/` — вспомогательные скрипты (локальный запуск, сборка инсталлятора, утилиты).
 
-Доменная схема (prod):
+## Доменная схема (prod)
 - `https://launcher.samoy.love`
   - `/` — лендинг из `landing/`.
   - `/api/*` → Public API (`127.0.0.1:55700`).
@@ -79,19 +115,12 @@ Set-Location "Launcher Project"
   - Файлы версии: `content/content/<gameId>/<version>/files/...`.
   - Новости: `content/news/` и `content/news/games/<gameId>/`.
 
-### Запуск (3 окна)
-Скрипт поднимет API, Admin и клиент (WPF) в отдельных окнах и пропишет клиенту нужный `ApiBaseUrl`.
-```powershell
-# локальная среда + запись клиентского ApiBaseUrl
-.\scripts\run-dev.ps1 -Env local -SetClientConfig -ContentRoot (Resolve-Path .\content)
-```
+### Запуск
+См. раздел «Скрипты: dev» ниже для актуальных флагов и примеров запуска `scripts/run-dev.ps1`.
+
 Проверка:
 - API: http://localhost:55700/api/games
 - Admin UI: http://localhost:55777/admin
-
-Подсказки управления:
-- В управляющей консоли `run-dev.ps1` нажмите `r` (или русскую `к`) → рестарт всех процессов.
-- Нажмите `q` → корректное завершение и освобождение портов.
 
 ### Admin UI: контент
 - Откройте `http://localhost:55777/admin`.
@@ -99,74 +128,59 @@ Set-Location "Launcher Project"
 - Отредактируйте реестр игр (вкладка «Игры (редактирование)»).
 - Создайте/отредактируйте новости, загрузите/сожмите изображения (вкладка «Новости», «Ассеты»).
 
----
-
-## Скрипты: dev и инсталлятор
-
-### scripts/run-dev.ps1 — локальная разработка (3 окна)
-Скрипт запускает три процесса в отдельных окнах: Public API (`server/cmd/api`), Admin (`server/cmd/admin`) и клиент WPF (`launcher/ChillHub`). Умеет обновлять клиентскую конфигурацию (`%LOCALAPPDATA%/ChillHub/config.json`).
-
-- Параметры:
-  - `-ContentRoot <path>` — путь к директории `content/` (для dev-статик и API).
-  - `-GamesPath <path>` — локальная папка установки игр (пробрасывается клиенту как `ChillHub_GAMES_PATH`).
-  - `-Env local|prod` — выбирает `ApiBaseUrl` для клиента (`local` по умолчанию: `http://localhost:55700`; `prod`: `https://launcher.samoy.love`).
-  - `-SetClientConfig` — записать/обновить `%LOCALAPPDATA%\ChillHub\config.json` (GamesPath, ApiBaseUrl, др.).
-  - `-BuildServers` — перед запуском собрать dev-бинарии Go-серверов под Windows.
-
-- Примеры запуска:
-
-```powershell
-# Стандартный запуск в локальной среде, с записью конфигурации клиента
-./scripts/run-dev.ps1 -Env local -SetClientConfig -ContentRoot (Resolve-Path ./content)
-
-# Указать путь к папке игр вручную
-./scripts/run-dev.ps1 -ContentRoot (Resolve-Path ./content) -GamesPath 'D:\Games\ChillHub' -SetClientConfig
-
-# Предварительно собрать Go-серверы (быстрее стартует), затем запустить
-./scripts/run-dev.ps1 -BuildServers -ContentRoot (Resolve-Path ./content) -SetClientConfig
-```
-
-- Управление во время работы:
-  - Нажмите `r` или русскую `к` + Enter — перезапуск всех трёх процессов.
-  - Нажмите `q` + Enter — корректное завершение (освобождает порты, закрывает клиент).
-
-- Требования: установлен Go 1.22+, .NET 8 SDK. Скрипт рассчитан на Windows (PowerShell).
+### Admin login
+- Первый запуск (локально): при старте `./scripts/run-dev.ps1` скрипт запросит пароль для пользователя `admin` и сохранит bcrypt‑хэш вне репозитория — в `%LOCALAPPDATA%\ChillHub\admin.secret.json`. На следующих запусках используется сохранённый хэш.
+- Хранение: `%LOCALAPPDATA%/ChillHub/admin.secret.json` (только bcrypt‑хэш, без открытого пароля).
+- Ротация: удалите `admin.secret.json` и перезапустите скрипт (будет повторный запрос), либо заранее задайте переменную среды `ADMIN_PASSWORD_BCRYPT`.
+- Override: можно задать `ADMIN_PASSWORD_BCRYPT` и/или `ADMIN_USERNAME` в окружении перед запуском (по умолчанию логин всегда `admin`).
+- Сервер: при деплое `scripts/deploy.sh` запросит пароль (если не задан через флаги/секреты), сохранит bcrypt в `/etc/chillhub/admin.env` и подключит через systemd `EnvironmentFile`. Ротация — изменить `/etc/chillhub/admin.env` и выполнить `systemctl daemon-reload && systemctl restart chillhub-admin`.
+ - Быстрый сброс (локально):
+   - Одноразово перед запуском: `./scripts/run-dev.ps1 -ResetAdminAuth ...` — сгенерирует новый случайный пароль (покажет в консоли), пересчитает `ADMIN_PASSWORD_BCRYPT`, создаст новый `JWT_SECRET` и запустит процессы с этими значениями.
+   - Во время работы: в интерактивном окне нажмите `p` или русскую `з`, чтобы сбросить пароль/`JWT_SECRET` и автоматически перезапустить процессы.
 
 ---
 
-### scripts/build-installer.ps1 — сборка инсталлятора (NSIS)
-Скрипт выполняет restore и build/publish C# проекта лаунчера, затем компилирует NSIS-установщик (`ChillHub-Setup.exe`) по скрипту `scripts/installer.nsi`.
+## Скрипты: dev
 
-- Параметры (с разумными значениями по умолчанию):
-  - `-Publish` — вместо `dotnet build` выполнит `dotnet publish` (self-contained по умолчанию).
-  - `-Configuration <Debug|Release>` — конфигурация сборки (`Release` по умолчанию).
-  - `-Csproj <path>` — путь к csproj лаунчера (`launcher/ChillHub/ChillHub.csproj`).
-  - `-Installer <path>` — путь к NSIS-скрипту (`scripts/installer.nsi`).
-  - `-MakensisPath <path>` — путь к `makensis.exe` (если не в PATH; можно указать директорию установки NSIS).
-  - `-Runtime <RID>` — таргет-рантайм для publish (по умолчанию `win-x64`).
-  - `-SelfContained` — собирать self-contained publish (включает runtime) — включено по умолчанию; снимите для framework-dependent.
-  - `-NoCompress` — собрать инсталлятор без сжатия (быстро для dev).
+Подробная документация по скриптам вынесена в `scripts/README.md`.
 
-- Примеры запуска:
-
-```powershell
-# Быстрый dev-инсталлятор без сжатия (предварительно просто build)
-./scripts/build-installer.ps1 -Configuration Debug -NoCompress
-
-# Полная публикация self-contained и сборка инсталлятора (Release)
-./scripts/build-installer.ps1 -Publish -Configuration Release -Runtime win-x64
-
-# Указать явный путь к makensis.exe, если не добавлен в PATH
-./scripts/build-installer.ps1 -MakensisPath 'C:\Program Files (x86)\NSIS\makensis.exe'
-```
-
-- Требования: установлен .NET 8 SDK и NSIS 3.x. Если `makensis` не найден в PATH, укажите `-MakensisPath` или директорию установки NSIS.
-
----
+- Кратко: используйте `scripts/run-dev.ps1` для локального запуска API, Admin и WPF‑клиента. Примеры, флаги и подсказки см. в `scripts/README.md`.
+- Управление во время работы: `r/к` — перезапуск всех процессов; `p/з` — сброс пароля админа и `JWT_SECRET` с автоперезапуском; `q/й` — завершение.
 
 ## Деплой на сервер (Ubuntu + nginx)
 
 Предполагаем VPS с Ubuntu, пользователь `ubuntu`, домен `launcher.samoy.love` указывает A‑записью на IP сервера.
+
+### Карта шагов: автодеплой vs вручную
+
+Краткий обзор шагов деплоя. Детали API/Admin — см. `Documentation.md` §7/§8.
+
+| Шаг | Makefile (`make deploy`) | Makefile (`make deploy-nobuild`) | Вручную (основные команды/ссылки) |
+|---|---|---|---|
+| 1. Обновить репозиторий | Да | Да | `git fetch && git checkout BRANCH && git pull` (в `~/Launcher-Project`) — см. [Подготовка](#подготовка-1-раз) |
+| 2. Собрать Go‑бинарии (`api`, `admin`) | Да | Нет | `cd server && go build -o ../api ./cmd/api && go build -o ../admin ./cmd/admin` — см. [Раскладка артефактов (ручная)](#раскладка-артефактов-ручная) |
+| 3. Установить nginx‑конфиг и перезагрузить | Да | Да | Скопировать `deploy/launcher.conf` в `/etc/nginx/sites-available`, линк в `sites-enabled`, затем `nginx -t && systemctl reload nginx` — см. [Подготовка](#подготовка-1-раз) |
+| 4. Синхронизировать лендинг (`landing/`) | Да | Да | `rsync -a --delete ./landing/ /var/www/site/` — см. [Раскладка артефактов (ручная)](#раскладка-артефактов-ручная) |
+| 5. Синхронизировать Admin UI (`server/admin_ui/`) | Да | Да | `rsync -a --delete ./server/admin_ui/ /var/www/launcher/admin_ui/` — см. [Раскладка артефактов (ручная)](#раскладка-артефактов-ручная) |
+| 6. Контент: `manifests/`, `content/`, `news/` | Не трогает | Не трогает | Управляются через Admin UI или вручную — см. [Раскладка артефактов (ручная)](#раскладка-артефактов-ручная) |
+| 7. Разложить бинарии в `/opt/chillhub` | Да | Да | `install -m 0755 ./api /opt/chillhub/api && install -m 0755 ./admin /opt/chillhub/admin` — см. [Раскладка артефактов (ручная)](#раскладка-артефактов-ручная) |
+| 8. Перезапустить сервисы | Да | Да | `systemctl restart chillhub-api.service chillhub-admin.service` — см. [Обновления](#обновления) и [systemd](#systemd-1-раз) |
+| 9. Смоук‑тесты (API/UI/статик) | Да | Да | Проверить вручную: см. список ниже |
+
+#### Смоук‑чеки
+- API (см. подробности в `Documentation.md` §7):
+  - [`GET /api/games`](Documentation.md#api-get-games)
+  - [`GET /api/games/{gameId}`](Documentation.md#api-get-game-by-id)
+  - [`GET /api/games/{gameId}/versions/latest`](Documentation.md#api-get-latest)
+  - [`GET /api/games/{gameId}/builds`](Documentation.md#api-get-builds)
+  - [`GET /news/index.json`](Documentation.md#api-news-index)
+  - [`GET /news/games/{gameId}/index.json`](Documentation.md#api-news-game-index)
+- Admin UI: открыть `https://launcher.samoy.love/admin` (должен отдать UI), доступ к API — `https://launcher.samoy.love/admin/api/...` (авторизация настроена).
+- Статика: корень `https://launcher.samoy.love/` (лендинг), ассеты `/assets/...` (есть фоллбэк на новости), папки `/manifests/`, `/content/`, `/news/` доступны (кроме приватного в проде).
+
+Примечания:
+- Параметры секретов и админ‑учётки для автодеплоя задаются через `EXTRA_ARGS` (см. ниже «Автодеплой (Makefile)»).
+- Вручную «Раскладка артефактов» детализирована ниже; автодеплой делает то же самое для статических каталогов, не затрагивая пользовательский контент.
 
 ### Подготовка (1 раз)
 ```bash
@@ -194,6 +208,8 @@ sudo ufw deny 55700/tcp && sudo ufw deny 55777/tcp
 sudo ufw enable
 ```
 
+[↑ к матрице](#карта-шагов-автодеплой-vs-вручную)
+
 ### Автодеплой (Makefile)
 ```bash
 # Полный деплой ветки main (pull, build, статика, nginx reload, рестарт сервисов, автотесты)
@@ -202,6 +218,8 @@ make deploy BRANCH=main
 # Деплой без пересборки Go‑бинариев (только статика/конфиги + автотесты)
 make deploy-nobuild BRANCH=main
 ```
+
+[↑ к матрице](#карта-шагов-автодеплой-vs-вручную)
 
 Что делает автодеплой:
 - Обновляет репозиторий (fetch/checkout/pull) для указанной ветки.
@@ -214,11 +232,67 @@ make deploy-nobuild BRANCH=main
 - Перезапускает `chillhub-api.service`, `chillhub-admin.service`.
 - Запускает автотесты (Admin UI, Admin API, Landing, статика, новости/ассеты); при сбоях печатает подробную диагностику (nginx/systemd/FS) и завершает с ошибкой.
 
+Параметры деплоя (прокидываются в `scripts/deploy.sh`):
+- `--admin-user <name>` — логин администратора.
+- `--admin-pass <plain>` — пароль администратора в открытом виде; скрипт сгенерирует `ADMIN_PASSWORD_BCRYPT` через Go (bcrypt cost=12).
+- `--admin-pass-bcrypt <hash>` — можно передать готовый bcrypt‑хэш вместо `--admin-pass`.
+- `--jwt-secret <val>` — секрет для JWT. Если не указан — скрипт сгенерирует случайный base64 (48 байт) через `openssl`/`/dev/urandom`.
+- `--cookie-domain <host>` — домен cookie (по умолчанию `launcher.samoy.love`).
+- `--cookie-secure <true|false>` — флаг Secure для cookie (по умолчанию `true`).
+- `--downloads-dir <path>` — внешняя директория установщиков (по умолчанию соседняя с `REPO_DIR`, т.е. `$(dirname REPO_DIR)/downloads`).
+
+Примеры:
+```bash
+# Минимальный прод‑деплой с авто‑секретом и генерацией bcrypt из пароля
+make deploy BRANCH=main EXTRA_ARGS="--admin-user admin --admin-pass 'S0meStrongPass'"
+
+# Явные секреты и внешняя папка установщиков
+make deploy BRANCH=main EXTRA_ARGS="--jwt-secret 'base64...' --admin-user admin --admin-pass-bcrypt '$2a$12$...' --downloads-dir /home/ubuntu/installers"
+```
+
+### Деплой с Windows (локально, через PowerShell)
+
+Если вы на Windows и хотите обновить сервер без GitHub Actions, используйте скрипт `scripts/deploy-win.ps1` или цель Makefile `deploy-win`.
+
+Требования на Windows: установлен Go (для сборки linux/amd64), OpenSSH клиент (`ssh`, `scp`). На сервере — `rsync`, `nginx`, `systemd`, `sudo`.
+
+Примеры (PowerShell):
+
+```powershell
+# Минимально: билд, загрузка артефактов, выкладка и смоук‑тесты
+./scripts/deploy-win.ps1 `
+  -Host your.vps.host `
+  -User ubuntu `
+  -KeyPath "C:\Users\you\.ssh\id_rsa"
+
+# С передачей секретов и логином админа (bcrypt предпочтительно)
+./scripts/deploy-win.ps1 -Host your.vps.host -User ubuntu -KeyPath "C:\Users\you\.ssh\id_rsa" `
+  -JwtSecret "base64-48bytes" -AdminUser admin -AdminPasswordBcrypt "$2y$12$..." `
+  -CookieDomain "launcher.samoy.love" -CookieSecure "true"
+
+# Если нужен plain‑пароль (bcrypt будет получен на сервере)
+./scripts/deploy-win.ps1 -Host your.vps.host -User ubuntu -KeyPath "C:\Users\you\.ssh\id_rsa" `
+  -AdminUser admin -AdminPasswordPlain "YourStrongPassword"
+```
+
+Примеры (через Make на Windows):
+
+```bash
+# Базовый вызов
+make deploy-win HOST=your.vps.host USER=ubuntu KEY="C:/Users/you/.ssh/id_rsa"
+
+# Со всеми параметрами
+make deploy-win HOST=your.vps.host USER=ubuntu KEY="C:/Users/you/.ssh/id_rsa" \
+  BRANCH=main JWT="base64-48bytes" ADMIN_USER=admin ADMIN_BCRYPT="$2y$12$..." \
+  COOKIE_DOMAIN=launcher.samoy.love COOKIE_SECURE=true DOWNLOADS_DIR="C:/data/downloads"
+```
+
+Подробности по параметрам см. `scripts/README.md` (раздел `deploy-win.ps1`).
+
 ### Раскладка артефактов (ручная)
 ```bash
 # Выполняйте на сервере (SSH), из домашней директории пользователя,
 # где уже клонирован репозиторий в ~/Launcher-Project
-
 cd ~/Launcher-Project
 
 # 1) Лендинг → /var/www/site (копирование/синхронизация, без перемещения)
@@ -230,14 +304,22 @@ sudo rsync -a --delete ./server/admin_ui/   /var/www/launcher/admin_ui/
 # ВАЖНО: прод‑деплой НЕ трогает /var/www/launcher/{manifests,content,news}.
 # Эти каталоги наполняются через Admin UI (загрузка ZIP/версий, новости и ассеты) или вручную при первичной инициализации.
 
+# 2.1) Установщики: внешняя директория (рядом с репозиторием) → /var/www/site/downloads
+# По умолчанию скрипт ожидает каталон downloads рядом с REPO_DIR; можно указать явный флагом --downloads-dir
+sudo mkdir -p /var/www/site/downloads
+sudo rsync -a ~/downloads/ /var/www/site/downloads/
+
 # 3) Бинарии (сборка на сервере внутри модуля `server/` и установка)
 cd ./server
+go mod tidy
 go build -o ../api   ./cmd/api
 go build -o ../admin ./cmd/admin
 cd -
 sudo install -m 0755 ./api   /opt/chillhub/api
 sudo install -m 0755 ./admin /opt/chillhub/admin
 ```
+
+[↑ к матрице](#карта-шагов-автодеплой-vs-вручную)
 
 ### systemd (1 раз)
 ```bash
@@ -256,6 +338,8 @@ sudo systemctl restart chillhub-api.service chillhub-admin.service
 # После обновления лендинга/конфигов nginx
 sudo nginx -t && sudo systemctl reload nginx
 ```
+
+[↑ к матрице](#карта-шагов-автодеплой-vs-вручную)
 
 #### Частые ошибки (troubleshooting)
 
@@ -306,6 +390,8 @@ sudo systemctl restart chillhub-api.service
 sudo systemctl restart chillhub-admin.service
 ```
 
+[↑ к матрице](#карта-шагов-автодеплой-vs-вручную)
+
 Подсказки:
 - Если логов нет, убедитесь, что сервисы активированы и запущены: `sudo systemctl enable --now chillhub-api.service chillhub-admin.service`.
 - Для фильтрации по тексту: `journalctl -u chillhub-api.service | grep ERROR`.
@@ -316,8 +402,9 @@ sudo systemctl restart chillhub-admin.service
 ## Полезные ссылки и файлы
 - Конфиг nginx (prod): `deploy/launcher.conf`
 - Systemd юниты: `deploy/systemd/`
-- Локальный запуск: `scripts/run-dev.ps1`
+- Документация скриптов: `scripts/README.md`
 - CI/CD (ручной запуск из GitHub Actions): `.github/workflows/deploy.yml`
+
 
 ## Примечания по безопасности и качеству
 - Серверные порты приложений 55700/55777 закрыты внешнему миру, доступны только через nginx.

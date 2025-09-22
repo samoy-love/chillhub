@@ -903,6 +903,13 @@ namespace ChillHub.Pages {
                     return; // не вмешиваемся в активный процесс
                 }
 
+                // Если игра установлена и не требует обновления — показываем соответствующее сообщение и выходим
+                var g = this.games?.FirstOrDefault(x => string.Equals(x.GameId, gid, StringComparison.OrdinalIgnoreCase));
+                if (g != null && g.IsInstalled && !g.NeedsUpdate) {
+                    this.FilesSizeText.Text = "Последняя версия игры уже установлена";
+                    return;
+                }
+
                 if (string.IsNullOrWhiteSpace(gid)) {
                     return;
                 }
@@ -997,6 +1004,13 @@ namespace ChillHub.Pages {
         private void UpdateSpaceHintFromCache(string gid) {
             try {
                 if (this.isUpdating) {
+                    return;
+                }
+
+                // Если игра установлена и не требует обновления — показываем соответствующее сообщение и выходим
+                var g = this.games?.FirstOrDefault(x => string.Equals(x.GameId, gid, StringComparison.OrdinalIgnoreCase));
+                if (g != null && g.IsInstalled && !g.NeedsUpdate) {
+                    this.FilesSizeText.Text = "Последняя версия игры уже установлена";
                     return;
                 }
 
@@ -1198,6 +1212,17 @@ namespace ChillHub.Pages {
 
         // Theme toggle and icon are now managed in MainWindow header
         private void ActionBtn_Click(object sender, RoutedEventArgs e) {
+            // Во время фоновой проверки статусов игр блокируем любые действия (установка/обновление/запуск)
+            if (this.initialVerifyRunning) {
+                try {
+                    this.StatusText.Text = "Идёт проверка игр…";
+                    this.UpdateProgress.IsIndeterminate = true;
+                    this.SetActionMode(ActionMode.Checking);
+                }
+                catch {
+                }
+                return;
+            }
             if (this.isUpdating) {
                 // В режиме обновления кнопка всегда работает как Отмена
                 this.cts?.Cancel();
@@ -1393,9 +1418,9 @@ namespace ChillHub.Pages {
                             // Финальное уведомление от службы синхронизации
                             this.UpdateProgress.IsIndeterminate = false;
                             this.UpdateProgress.Value = 100;
-                            this.StatusText.Text = "Готово.";
+                            this.StatusText.Text = "Готово";
                             this.SpeedEtaText.Text = string.Empty;
-                            this.FilesSizeText.Text = string.Empty;
+                            this.FilesSizeText.Text = "Последняя версия игры уже установлена";
                             break;
                         default:
                             this.StatusText.Text = p.Stage;
@@ -1410,9 +1435,9 @@ namespace ChillHub.Pages {
                 catch {
                 }
 
-                this.StatusText.Text = "Готово. Установлена последняя версия.";
+                this.StatusText.Text = "Готово";
                 this.SpeedEtaText.Text = string.Empty;
-                this.FilesSizeText.Text = string.Empty; // скрываем сообщение о месте при успешной установке
+                this.FilesSizeText.Text = "Последняя версия игры уже установлена"; // показываем итоговый статус
 
                 // Сохраним версию в локальный маркер и отметим игру установленной
                 this.WriteLocalVersion(gid, version);
@@ -1517,7 +1542,11 @@ namespace ChillHub.Pages {
                 this.GameList.IsEnabled = true;
                 this.UpdateProgress.IsIndeterminate = false;
                 this.UpdateProgress.Value = 0;
-                this.FilesSizeText.Text = string.Empty; // оставим пустым после завершения
+
+                // Не очищаем нижний статус при успешном завершении, чтобы показать "Последняя версия игры уже установлена"
+                if (this.hasUpdateError) {
+                    this.FilesSizeText.Text = string.Empty;
+                }
                 try {
                     this.UpdateActionButtonState();
                 }
@@ -1545,27 +1574,57 @@ namespace ChillHub.Pages {
                     case ActionMode.Cancel:
                         this.ActionBtn.Content = "Отмена";
                         this.ActionBtn.IsEnabled = true;
+                        try {
+                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Cancel");
+                        }
+                        catch {
+                        }
                         break;
                     case ActionMode.Checking:
                         this.ActionBtn.Content = "Проверка…";
                         this.ActionBtn.IsEnabled = false;
+                        try {
+                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Checking");
+                        }
+                        catch {
+                        }
                         break;
                     case ActionMode.Play:
                         this.ActionBtn.Content = "Играть";
                         this.ActionBtn.IsEnabled = true;
+                        try {
+                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Play");
+                        }
+                        catch {
+                        }
                         break;
                     case ActionMode.Retry:
                         this.ActionBtn.Content = "Повторить";
                         this.ActionBtn.IsEnabled = true;
+                        try {
+                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Retry");
+                        }
+                        catch {
+                        }
                         break;
                     case ActionMode.Install:
                         this.ActionBtn.Content = "Установить";
                         this.ActionBtn.IsEnabled = true;
+                        try {
+                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Install");
+                        }
+                        catch {
+                        }
                         break;
                     case ActionMode.Update:
                     default:
                         this.ActionBtn.Content = "Обновить";
                         this.ActionBtn.IsEnabled = true;
+                        try {
+                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Update");
+                        }
+                        catch {
+                        }
                         break;
                 }
             }

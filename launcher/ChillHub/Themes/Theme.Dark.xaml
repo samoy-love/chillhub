@@ -2,36 +2,38 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:sys="clr-namespace:System;assembly=mscorlib">
   <!-- Palette -->
-  <!-- Core palette per spec -->
-  <Color x:Key="Color.Background">#0A0A0A</Color>
-  <Color x:Key="Color.Surface">#121212</Color>
-  <Color x:Key="Color.Border">#282828</Color>
-  <Color x:Key="Color.Text">#E5E5E5</Color>
-  <Color x:Key="Color.TextSecondary">#9CA3AF</Color>
-  <!-- Accents -->
-  <Color x:Key="Color.Accent">#EF4444</Color>
-  <Color x:Key="Color.AccentHover">#DC2626</Color>
-  <Color x:Key="Color.SecondaryAccent">#F97316</Color>
+  <!-- Core palette aligned with landing (landing/styles.css :root) -->
+  <Color x:Key="Color.Background">#060606</Color>        <!-- neutral near-black -->
+  <Color x:Key="Color.Surface">#0B0B0B</Color>           <!-- neutral dark surface -->
+  <Color x:Key="Color.Border">#1E1E38</Color>            <!-- stroke (darker) -->
+  <Color x:Key="Color.Text">#E8E8FB</Color>              <!-- text -->
+  <Color x:Key="Color.TextSecondary">#B0B3C8</Color>      <!-- muted (slightly brighter for readability) -->
+  <!-- Accents from landing logo gradient: bright = pink, duller = purple -->
+  <Color x:Key="Color.Accent">#FF3A75</Color>           <!-- bright pink for checkmarks and primary accent -->
+  <Color x:Key="Color.AccentHover">#8A2A4A</Color>       <!-- darker wine hover to match UpdateWindow -->
+  <Color x:Key="Color.SecondaryAccent">#A78BFA</Color>   <!-- brighter/lighter purple for secondary accent -->
   <!-- Semantic colors (grayscale variants) -->
   <Color x:Key="Color.Success">#4CAF50</Color>
   <Color x:Key="Color.Danger">#FF6B6B</Color>
   <Color x:Key="Color.Selection">#262626</Color>
-  <!-- Extended palette for states and components -->
-  <Color x:Key="Color.HeaderStart">#0E0E0E</Color>
-  <Color x:Key="Color.HeaderEnd">#290016</Color>
-  <Color x:Key="Color.Hover">#2A2A2A</Color>
-  <Color x:Key="Color.Pressed">#1F1F1F</Color>
-  <Color x:Key="Color.BorderHover">#505050</Color>
-  <Color x:Key="Color.BorderPressed">#505050</Color>
-  <Color x:Key="Color.ListHover">#212427</Color>
-  <Color x:Key="Color.ListHoverAlt">#2C2C2C</Color>
-  <Color x:Key="Color.Skeleton">#262626</Color>
+  <!-- Extended palette for states and components (derived from landing card tones) -->
+  <Color x:Key="Color.HeaderStart">#0B0812</Color>       <!-- deeper top -->
+  <Color x:Key="Color.HeaderMid">#07060E</Color>         <!-- deeper mid -->
+  <Color x:Key="Color.HeaderEnd">#020205</Color>         <!-- matches darkest background -->
+  <Color x:Key="Color.Hover">#1D1D36</Color>             <!-- card-2 -->
+  <Color x:Key="Color.Pressed">#141428</Color>
+  <Color x:Key="Color.BorderHover">#2A2A50</Color>
+  <Color x:Key="Color.BorderPressed">#2A2A50</Color>
+  <Color x:Key="Color.ListHover">#1B1B34</Color>
+  <Color x:Key="Color.ListHoverAlt">#141428</Color>
+  <Color x:Key="Color.Skeleton">#1A1A3A</Color>
   <!-- Slider / controls palette per spec -->
-  <Color x:Key="Color.Track">#1C1C1C</Color>
-  <Color x:Key="Color.TrackFill">#EF4444</Color>
-  <Color x:Key="Color.Thumb">#E5E5E5</Color>
-  <Color x:Key="Color.ThumbHover">#FFFFFF</Color>
-  <Color x:Key="Color.ThumbActive">#EF4444</Color>
+  <Color x:Key="Color.Track">#1B1B34</Color>
+  <Color x:Key="Color.TrackFill">#3A2966</Color>
+  <!-- Slider thumb colors tuned to be distinct from TrackFill but still dark -->
+  <Color x:Key="Color.Thumb">#4A3A7A</Color>
+  <Color x:Key="Color.ThumbHover">#8A2A4A</Color>
+  <Color x:Key="Color.ThumbActive">#A78BFA</Color>
   <CornerRadius x:Key="Radius.L">10</CornerRadius>
   <CornerRadius x:Key="Radius.M">8</CornerRadius>
   <Thickness x:Key="Spacing.S">8</Thickness>
@@ -46,6 +48,12 @@
   <SolidColorBrush x:Key="Brush.Title" Color="#FFFFFF"/>
   <SolidColorBrush x:Key="Brush.Accent" Color="{StaticResource Color.Accent}"/>
   <SolidColorBrush x:Key="Brush.AccentHover" Color="{StaticResource Color.AccentHover}"/>
+  <SolidColorBrush x:Key="Brush.SecondaryAccent" Color="{StaticResource Color.SecondaryAccent}"/>
+  <!-- Gradient accent brush for primary buttons (grad-a -> grad-b) -->
+  <LinearGradientBrush x:Key="Brush.AccentGradientPrimary" StartPoint="0,0" EndPoint="1,1">
+    <GradientStop Offset="0" Color="#3A2966"/>
+    <GradientStop Offset="1" Color="#8A2A4A"/>
+  </LinearGradientBrush>
   <!-- State brushes -->
   <SolidColorBrush x:Key="Brush.Hover" Color="{StaticResource Color.Hover}"/>
   <SolidColorBrush x:Key="Brush.Pressed" Color="{StaticResource Color.Pressed}"/>
@@ -67,10 +75,11 @@
   <!-- Header background (solid per spec) -->
   <SolidColorBrush x:Key="Brush.HeaderBackground" Color="{StaticResource Color.HeaderStart}"/>
 
-  <!-- Header gradient using project colors -->
+  <!-- Header gradient using project colors (3-stop, tuned for darker base) -->
   <LinearGradientBrush x:Key="Brush.HeaderGradient" StartPoint="0,0" EndPoint="0,1">
-    <GradientStop Offset="0" Color="{StaticResource Color.HeaderStart}"/>
-    <GradientStop Offset="1" Color="{StaticResource Color.HeaderEnd}"/>
+    <GradientStop Offset="0.0" Color="{StaticResource Color.HeaderStart}"/>
+    <GradientStop Offset="0.42" Color="{StaticResource Color.HeaderMid}"/>
+    <GradientStop Offset="1.0" Color="{StaticResource Color.HeaderEnd}"/>
   </LinearGradientBrush>
 
   <!-- TextBlock default -->
@@ -200,8 +209,8 @@
   <!-- Button modern -->
   <Style TargetType="Button">
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
-    <Setter Property="Background" Value="#1A1A1A"/>
-    <Setter Property="BorderBrush" Value="#404040"/>
+    <Setter Property="Background" Value="{StaticResource Brush.Surface}"/>
+    <Setter Property="BorderBrush" Value="{StaticResource Brush.Border}"/>
     <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Padding" Value="10,6"/>
     <Setter Property="Margin" Value="0,0,8,0"/>
@@ -216,13 +225,13 @@
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="bd" Property="Background" Value="#2A2A2A"/>
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource Brush.Hover}"/>
               <Setter Property="Foreground" Value="#FFFFFF"/>
-              <Setter TargetName="bd" Property="BorderBrush" Value="#505050"/>
+              <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.BorderHover}"/>
             </Trigger>
             <Trigger Property="IsPressed" Value="True">
-              <Setter TargetName="bd" Property="Background" Value="#1F1F1F"/>
-              <Setter TargetName="bd" Property="BorderBrush" Value="#505050"/>
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource Brush.Pressed}"/>
+              <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.BorderPressed}"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Opacity" Value="0.6"/>
@@ -235,24 +244,29 @@
 
   <!-- Primary button (e.g., Play) -->
   <Style x:Key="Style.Button.Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-    <Setter Property="Background" Value="{DynamicResource Brush.Accent}"/>
+    <Setter Property="Background" Value="{DynamicResource Brush.AccentGradientPrimary}"/>
     <Setter Property="Foreground" Value="#0A0A0A"/>
     <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="BorderBrush" Value="Transparent"/>
+    <Setter Property="Padding" Value="12,6"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="FontSize" Value="13"/>
+    <Setter Property="Height" Value="36"/>
+    <Setter Property="MinWidth" Value="200"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Button">
           <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}" Background="{TemplateBinding Background}"
                   BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
-            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="bd" Property="Background" Value="{StaticResource Brush.AccentHover}"/>
-              <Setter Property="Foreground" Value="#0A0A0A"/>
+              <Setter Property="Foreground" Value="#FFFFFF"/>
             </Trigger>
             <Trigger Property="IsPressed" Value="True">
-              <Setter TargetName="bd" Property="Background" Value="{StaticResource Brush.Accent}"/>
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource Brush.SecondaryAccent}"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Opacity" Value="0.6"/>
@@ -274,13 +288,13 @@
   </Style>
   <Style TargetType="ComboBox">
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
-    <Setter Property="Background" Value="#1A1A1A"/>
-    <Setter Property="BorderBrush" Value="#404040"/>
+    <Setter Property="Background" Value="{StaticResource Brush.Surface}"/>
+    <Setter Property="BorderBrush" Value="{StaticResource Brush.Border}"/>
     <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Padding" Value="6,4"/>
     <Setter Property="Margin" Value="0,0,8,0"/>
     <Setter Property="HorizontalContentAlignment" Value="Left"/>
-    <Setter Property="ScrollViewer.Background" Value="#121212"/>
+    <Setter Property="ScrollViewer.Background" Value="{StaticResource Brush.Surface}"/>
     <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
     <Setter Property="Template">
       <Setter.Value>
@@ -307,10 +321,10 @@
                         </Border>
                         <ControlTemplate.Triggers>
                           <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="tb" Property="BorderBrush" Value="#505050"/>
+                            <Setter TargetName="tb" Property="BorderBrush" Value="{StaticResource Brush.BorderHover}"/>
                           </Trigger>
                           <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="tb" Property="BorderBrush" Value="#505050"/>
+                            <Setter TargetName="tb" Property="BorderBrush" Value="{StaticResource Brush.BorderPressed}"/>
                           </Trigger>
                         </ControlTemplate.Triggers>
                       </ControlTemplate>
@@ -319,7 +333,7 @@
                   <Style.Triggers>
                     <Trigger Property="IsMouseOver" Value="True">
                       <Setter Property="Background" Value="Transparent"/>
-                      <Setter Property="BorderBrush" Value="#505050"/>
+                      <Setter Property="BorderBrush" Value="{StaticResource Brush.BorderHover}"/>
                     </Trigger>
                   </Style.Triggers>
                 </Style>
@@ -341,8 +355,8 @@
             <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True" Focusable="False"
                    IsOpen="{TemplateBinding IsDropDownOpen}" PopupAnimation="Slide">
               <Grid MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}" MaxHeight="320">
-                <Border Background="#121212" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" CornerRadius="4">
-                  <ScrollViewer CanContentScroll="True" Background="#121212">
+                <Border Background="{StaticResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" CornerRadius="4">
+                  <ScrollViewer CanContentScroll="True" Background="{StaticResource Brush.Surface}">
                     <ItemsPresenter/>
                   </ScrollViewer>
                 </Border>
@@ -354,8 +368,8 @@
               <Setter Property="Opacity" Value="0.6"/>
             </Trigger>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="Bd" Property="BorderBrush" Value="#505050"/>
-              <Setter TargetName="Bd" Property="Background" Value="#2A2A2A"/>
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Brush.BorderHover}"/>
+              <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Hover}"/>
               <Setter Property="Foreground" Value="#FFFFFF"/>
             </Trigger>
           </ControlTemplate.Triggers>
@@ -367,7 +381,7 @@
   <Style TargetType="ComboBoxItem">
     <Setter Property="OverridesDefaultStyle" Value="True"/>
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
-    <Setter Property="Background" Value="#121212"/>
+    <Setter Property="Background" Value="{StaticResource Brush.Surface}"/>
     <Setter Property="Padding" Value="8,6"/>
     <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
     <Setter Property="Template">
@@ -479,58 +493,57 @@
   </Style>
   <Style TargetType="ProgressBar">
     <Setter Property="Height" Value="18"/>
-    <Setter Property="Foreground" Value="{StaticResource Brush.TextSecondary}"/>
+    <Setter Property="Foreground" Value="{StaticResource Brush.AccentGradientPrimary}"/>
     <Setter Property="Background" Value="{StaticResource Brush.Track}"/>
   </Style>
 
   <!-- Slider neutral style (avoid system template quirks on dark theme) -->
   <Style TargetType="Slider">
     <Setter Property="Foreground" Value="{StaticResource Brush.TextSecondary}"/>
-    <Setter Property="Background" Value="#1C1C1C"/>
+    <Setter Property="Background" Value="{StaticResource Brush.Track}"/>
     <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Slider">
-          <Grid Margin="4,8">
-            <Grid.RowDefinitions>
-              <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-            <Border CornerRadius="2" Height="4" VerticalAlignment="Center" Background="#1C1C1C"/>
-            <Track x:Name="PART_Track" Grid.Row="0"
-                   Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}"
+          <Grid Margin="6,10">
+            <!-- Rounded track base: thinner -->
+            <Border CornerRadius="2" Height="4" VerticalAlignment="Center" Background="{StaticResource Brush.Track}"/>
+            <!-- Use Track with repeat buttons filling left/right portions -->
+            <Track x:Name="PART_Track"
+                   Minimum="{TemplateBinding Minimum}"
+                   Maximum="{TemplateBinding Maximum}"
                    Value="{TemplateBinding Value}"
                    IsDirectionReversed="False">
               <Track.DecreaseRepeatButton>
-                <RepeatButton Background="{StaticResource Brush.Accent}" BorderBrush="{x:Null}">
+                <!-- Extend selected zone under half of the thumb (thumb is 16px, so -8 margin) -->
+                <RepeatButton Background="{StaticResource Brush.TrackFill}" BorderBrush="{x:Null}" Margin="0,0,-8,0">
                   <RepeatButton.Template>
                     <ControlTemplate TargetType="RepeatButton">
-                      <Border Background="{TemplateBinding Background}"/>
+                      <Border CornerRadius="2" Background="{TemplateBinding Background}"/>
                     </ControlTemplate>
                   </RepeatButton.Template>
                 </RepeatButton>
               </Track.DecreaseRepeatButton>
               <Track.IncreaseRepeatButton>
-                <RepeatButton Background="#1C1C1C" BorderBrush="{x:Null}">
+                <RepeatButton Background="{StaticResource Brush.Track}" BorderBrush="{x:Null}">
                   <RepeatButton.Template>
                     <ControlTemplate TargetType="RepeatButton">
-                      <Border Background="{TemplateBinding Background}"/>
+                      <Border CornerRadius="2" Background="{TemplateBinding Background}"/>
                     </ControlTemplate>
                   </RepeatButton.Template>
                 </RepeatButton>
               </Track.IncreaseRepeatButton>
               <Track.Thumb>
-                <Thumb Width="14" Height="14" FocusVisualStyle="{x:Null}">
+                <Thumb Width="16" Height="16" FocusVisualStyle="{x:Null}">
                   <Thumb.Template>
                     <ControlTemplate TargetType="Thumb">
-                      <Ellipse x:Name="th" Fill="{StaticResource Brush.Thumb}" StrokeThickness="1" Stroke="Transparent"/>
+                      <Ellipse x:Name="th" Fill="{StaticResource Brush.Thumb}" StrokeThickness="0"/>
                       <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                           <Setter TargetName="th" Property="Fill" Value="{StaticResource Brush.ThumbHover}"/>
-                          <Setter TargetName="th" Property="Stroke" Value="{StaticResource Brush.Accent}"/>
                         </Trigger>
                         <Trigger Property="IsDragging" Value="True">
                           <Setter TargetName="th" Property="Fill" Value="{StaticResource Brush.ThumbActive}"/>
-                          <Setter TargetName="th" Property="Stroke" Value="{StaticResource Brush.Accent}"/>
                         </Trigger>
                       </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -555,12 +568,12 @@
           <StackPanel Orientation="Horizontal">
             <Grid Width="18" Height="18" Margin="0,0,8,0">
               <Border x:Name="Box" CornerRadius="3"
-                      Background="#1C1C1C"
-                      BorderBrush="#404040"
+                      Background="{StaticResource Brush.Surface}"
+                      BorderBrush="{StaticResource Brush.Border}"
                       BorderThickness="1"/>
               <Path x:Name="CheckMark" Data="M 3 9 L 7 13 L 15 5"
-                    StrokeThickness="2" Stroke="#0A0A0A" Visibility="Collapsed"
-                    StrokeEndLineCap="Square" StrokeLineJoin="Round"/>
+                      StrokeThickness="2" Stroke="#0A0A0A" Visibility="Collapsed"
+                      StrokeEndLineCap="Square" StrokeLineJoin="Round"/>
             </Grid>
             <ContentPresenter VerticalAlignment="Center"/>
           </StackPanel>
@@ -571,8 +584,8 @@
               <Setter TargetName="CheckMark" Property="Visibility" Value="Visible"/>
             </Trigger>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="Box" Property="Background" Value="#2A2A2A"/>
-              <Setter TargetName="Box" Property="BorderBrush" Value="#505050"/>
+              <Setter TargetName="Box" Property="Background" Value="{StaticResource Brush.Hover}"/>
+              <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource Brush.BorderHover}"/>
             </Trigger>
             <MultiTrigger>
               <MultiTrigger.Conditions>
@@ -592,8 +605,9 @@
   </Style>
 
   <!-- Scrollbar theming -->
-  <SolidColorBrush x:Key="Brush.ScrollbarThumb" Color="#2E2E2E"/>
-  <SolidColorBrush x:Key="Brush.ScrollbarThumbHover" Color="#474747"/>
+  <!-- Scrollbar colors aligned with landing vars (sb-thumb, sb-thumb-hover) -->
+  <SolidColorBrush x:Key="Brush.ScrollbarThumb" Color="#2FFFFFFF"/>
+  <SolidColorBrush x:Key="Brush.ScrollbarThumbHover" Color="#47FFFFFF"/>
   <Style TargetType="ScrollBar">
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="Width" Value="8"/>

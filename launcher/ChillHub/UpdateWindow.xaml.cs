@@ -36,6 +36,28 @@ namespace ChillHub {
         public UpdateWindow() {
             this.InitializeComponent();
             TryCleanupTempUpdaterDirs();
+
+            // In DEBUG builds, pre-check the DEV skip checkbox by default
+            // so developers can easily bypass self-update if they choose.
+#if DEBUG
+            try {
+                this.DevSkipCheck.IsChecked = true;
+            }
+            catch {
+            }
+#endif
+
+            // In Release builds, hide the development-only controls to prevent skipping updates.
+            // Window uses SizeToContent=Height so it will shrink automatically.
+#if !DEBUG
+            try
+            {
+                this.DevPanel.Visibility = Visibility.Collapsed;
+            }
+            catch
+            {
+            }
+#endif
         }
 
         private void SetUpdateAvailableStatus(string local, string remote) {
@@ -54,16 +76,6 @@ namespace ChillHub {
         }
 
         private async void Window_Loaded(object sender, RoutedEventArgs e) {
-            // DEV-флаг окружения: позволяет пропустить проверку
-            var dev = Environment.GetEnvironmentVariable("YL_DEV_SKIP_SELF_UPDATE");
-            if (string.Equals(dev, "1", StringComparison.Ordinal)) {
-                this.StatusText.Text = "DEV: проверка пропущена";
-                this.Progress.Value = 100;
-                this.PrimaryBtn.Content = "Продолжить";
-                this.updateRequired = false;
-                return; // ждём нажатия
-            }
-
             try {
                 this.StatusText.Text = "Проверка обновлений лаунчера...";
                 this.Progress.IsIndeterminate = true;
@@ -99,8 +111,19 @@ namespace ChillHub {
                         this.Progress.Value = 0;
                         this.SetUpdateAvailableStatus(local, remote);
                         this.PrimaryBtn.Content = "Обновить и перезапустить";
-                        this.DevSkipCheck.Checked += (s, _) => { this.PrimaryBtn.Content = "Продолжить без обновления (DEV)"; };
-                        this.DevSkipCheck.Unchecked += (s, _) => { this.PrimaryBtn.Content = "Обновить и перезапустить"; };
+#if DEBUG
+                        try {
+                            if (this.DevPanel.Visibility == Visibility.Visible) {
+                                this.DevSkipCheck.Checked += (s, _) => { this.PrimaryBtn.Content = "Продолжить без обновления (DEV)"; };
+                                this.DevSkipCheck.Unchecked += (s, _) => { this.PrimaryBtn.Content = "Обновить и перезапустить"; };
+                                if (this.DevSkipCheck.IsChecked == true) {
+                                    this.PrimaryBtn.Content = "Продолжить без обновления (DEV)";
+                                }
+                            }
+                        }
+                        catch {
+                        }
+#endif
                     }
                     else {
                         this.StatusText.Text = "Установлена актуальная версия лаунчера.";
@@ -169,8 +192,19 @@ namespace ChillHub {
                     this.Progress.Value = 0;
                     this.SetUpdateAvailableStatus(local, remote);
                     this.PrimaryBtn.Content = "Обновить и перезапустить";
-                    this.DevSkipCheck.Checked += (s, _) => { this.PrimaryBtn.Content = "Продолжить без обновления (DEV)"; };
-                    this.DevSkipCheck.Unchecked += (s, _) => { this.PrimaryBtn.Content = "Обновить и перезапустить"; };
+#if DEBUG
+                    try {
+                        if (this.DevPanel.Visibility == Visibility.Visible) {
+                            this.DevSkipCheck.Checked += (s, _) => { this.PrimaryBtn.Content = "Продолжить без обновления (DEV)"; };
+                            this.DevSkipCheck.Unchecked += (s, _) => { this.PrimaryBtn.Content = "Обновить и перезапустить"; };
+                            if (this.DevSkipCheck.IsChecked == true) {
+                                this.PrimaryBtn.Content = "Продолжить без обновления (DEV)";
+                            }
+                        }
+                    }
+                    catch {
+                    }
+#endif
                 }
                 else {
                     this.StatusText.Text = "Установлена актуальная версия лаунчера.";
@@ -229,8 +263,17 @@ namespace ChillHub {
         }
 
         private async void PrimaryBtn_Click(object sender, RoutedEventArgs e) {
-            // DEV-скип: просто закрываем окно и продолжаем запуск
-            if (!this.updateRequired || this.DevSkipCheck.IsChecked == true) {
+            // DEV-скип: только в Debug и только если панель видима; в Release невозможно
+#if DEBUG
+            var devSkip = this.DevPanel.Visibility == Visibility.Visible && this.DevSkipCheck.IsChecked == true;
+#endif
+
+#if DEBUG
+            if (!this.updateRequired || devSkip)
+#else
+            if (!this.updateRequired)
+#endif
+            {
                 this.Proceed = true;
                 try {
                     this.DialogResult = true;

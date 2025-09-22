@@ -1,9 +1,13 @@
-.PHONY: deploy deploy-nobuild nginx-reload services-restart smoke
+.PHONY: deploy deploy-nobuild nginx-reload services-restart smoke lint
 
 # Defaults can be overridden: make deploy BRANCH=main
 BRANCH ?= main
-REPO_DIR ?= $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
+REPO_DIR ?= $(CURDIR)
 DEPLOY_SCRIPT := $(REPO_DIR)/scripts/deploy.sh
+
+# Defaults for Windows deploy helper
+COOKIE_DOMAIN ?= launcher.samoy.love
+COOKIE_SECURE ?= true
 
 # One command to deploy everything
 deploy:
@@ -31,3 +35,73 @@ smoke:
 	curl -I https://launcher.samoy.love/admin/api/games || true
 	curl -fsSL https://launcher.samoy.love/manifests/launcher/latest.json || true
 	curl -fsSL https://launcher.samoy.love/assets/ping.txt || true
+
+# ============
+# Linting
+# ============
+.PHONY: lint lint-web lint-go lint-dotnet
+
+# Aggregate lint that runs all available checks (like CI)
+lint: lint-web lint-go lint-dotnet
+	@echo.
+	@echo ✅ All lint stages finished (see logs above for any issues).
+
+# Web: HTMLHint, Stylelint, ESLint (landing + admin_ui)
+lint-web:
+	@echo.
+	@echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	@echo 🌐 Web lint (HTMLHint, Stylelint, ESLint)
+	@echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	@echo [lint:web] HTMLHint (landing + server/admin_ui)
+	@- npx -y htmlhint "landing/**/*.html" "server/admin_ui/**/*.html"
+	@echo [lint:web] Stylelint (landing + server/admin_ui)
+	@- npx -y stylelint "landing/**/*.css" "server/admin_ui/**/*.css"
+	@echo [lint:web] ESLint (landing + server/admin_ui)
+	@- npx -y eslint "landing/**/*.js" "server/admin_ui/**/*.js"
+
+# Go: Prefer golangci-lint like CI; fallback to vet/fmt if unavailable
+lint-go:
+	@echo.
+	@echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	@echo 💼 Go lint (server)
+	@echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	@echo [lint:go] golangci-lint (if installed)
+	@- cmd /C "where golangci-lint >NUL 2>&1 && ( cd server && golangci-lint run ) || echo [lint:go] golangci-lint not found - skipping"
+	@echo [lint:go] Running go vet
+	@- ( cd server && go vet ./... )
+	@echo [lint:go] Files needing gofmt (if any)
+	@- ( cd server && gofmt -l . )
+
+# .NET: Build and code style check (non-blocking style check like CI)
+lint-dotnet:
+	@echo.
+	@echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	@echo 🧩 .NET lint (launcher)
+	@echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	@echo [lint:dotnet] Restore ^& Build (if dotnet is installed)
+	@- ( cd launcher/ChillHub && dotnet restore && dotnet build --no-restore -c Debug /p:UseAppHost=false )
+	@echo [lint:dotnet] Code style check (dotnet format) — non-blocking
+	@- ( cd launcher/ChillHub && dotnet format --verbosity minimal )
+
+# ============
+# Windows remote deploy helper
+# ============
+.PHONY: deploy-win
+# Usage:
+# make deploy-win HOST=your.vps.host USER=ubuntu KEY="C:/Users/you/.ssh/id_rsa" [BRANCH=main] [JWT=...] [ADMIN_USER=admin] [ADMIN_BCRYPT=...] [ADMIN_PLAIN=...] [COOKIE_DOMAIN=launcher.samoy.love] [COOKIE_SECURE=true] [DOWNLOADS_DIR=C:/path/downloads]
+deploy-win:
+	@echo Deploying to $(HOST) as $(USER) using PowerShell script
+	powershell -NoProfile -ExecutionPolicy Bypass -File "scripts/deploy-win.ps1" \
+	 -SshHost "$(HOST)" \
+	 -SshUser "$(USER)" \
+	 -KeyPath "$(KEY)" \
+	 -Branch "$(BRANCH)" \
+	 -JwtSecret "$(JWT)" \
+	 -AdminUser "$(ADMIN_USER)" \
+	 -AdminPasswordBcrypt "$(ADMIN_BCRYPT)" \
+	 -AdminPasswordPlain "$(ADMIN_PLAIN)" \
+	 -CookieDomain "$(COOKIE_DOMAIN)" \
+	 -CookieSecure "$(COOKIE_SECURE)" \
+	 -DownloadsDir "$(DOWNLOADS_DIR)" \
+	 -Parallel "$(or $(PARALLEL),8)" \
+	 $(if $(START_AT_REMOTE),-StartAtRemote)
