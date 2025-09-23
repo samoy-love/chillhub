@@ -1214,7 +1214,6 @@ fi
       exit 1
     fi
   fi
-fi
 '@
   # Inject manifests into the summary script so it can re-run comparisons explicitly
   $summaryInjected = $summaryContent
