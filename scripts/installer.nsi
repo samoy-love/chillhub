@@ -12,6 +12,7 @@ Unicode true
 !define APP_EXE "ChillHub.exe"
 !define INSTALL_DIR "$LOCALAPPDATA\ChillHub"
 !define UNINST_KEY "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ChillHub"
+!define APP_VERSION "1.1.7"
 !define APP_REG "Software\\ChillHub\\Install"
 
 ; Branding icons (paths relative to this .nsi file in scripts/)
@@ -135,6 +136,12 @@ Section "Install"
   FileWrite $3 "[IO.File]::WriteAllText($${cfg}, $${json}, [Text.UTF8Encoding]::new($${false}))$\r$\n"
   FileClose $3
   ExecWait '"powershell" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\write-config.ps1" -GamesDir "$GAMES_DIR"'
+
+  ; Write launcher.version with exact content (no newline)
+  FileOpen $4 "${INSTALL_DIR}\launcher.version" w
+  FileWrite $4 "${APP_VERSION}"
+  FileClose $4
+
   ; Prepare prerequisite installers in $PLUGINSDIR for optional install on Finish
   SetOutPath "$PLUGINSDIR\Redist"
   ; Use non-fatal includes so build continues if prereqs are not present
