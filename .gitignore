@@ -102,3 +102,4 @@ content/news/*
 # Keep readme and config files in otherwise ignored folders
 !.keep
 !.gitkeep
+content/feedback/inbox.json

@@ -10,6 +10,8 @@ param(
     [string]$AdminPasswordPlain = "",
     [string]$CookieDomain = "launcher.samoy.love",
     [string]$CookieSecure = "true",
+    [ValidateSet('error','warn','info','debug')]
+    [string]$LogLevel = 'info',
     [int]$Parallel = 8,
     [string]$SiteBaseUrl = "https://launcher.samoy.love",
     [switch]$StrictHostKey,
@@ -21,11 +23,19 @@ param(
 $ErrorActionPreference = "Stop"
 $UseColor = -not $NoColor
 
+# Log level helper (error<warn<info<debug)
+function Test-Level {
+  param([string]$lvl)
+  $order = @{ error = 0; warn = 1; info = 2; debug = 3 }
+  return $order[$lvl] -le $order[$LogLevel]
+}
+
 # Console printers (color-aware)
-function Write-Info($msg)  { if ($UseColor) { Write-Host "[deploy] $msg" -ForegroundColor Cyan } else { Write-Host "[deploy] $msg" } }
-function Write-Warn($msg)  { if ($UseColor) { Write-Host "[warn ] $msg" -ForegroundColor Yellow } else { Write-Host "[warn ] $msg" } }
-function Write-Err($msg)   { if ($UseColor) { Write-Host "[error] $msg" -ForegroundColor Red } else { Write-Host "[error] $msg" } }
-function Write-Ok($msg)    { if ($UseColor) { Write-Host "[ ok  ] $msg" -ForegroundColor Green } else { Write-Host "[ ok  ] $msg" } }
+function Write-Info($msg)  { if (Test-Level 'info')  { if ($UseColor) { Write-Host "[DEPLOY] $msg" -ForegroundColor Cyan } else { Write-Host "[deploy] $msg" } } }
+function Write-Warn($msg)  { if (Test-Level 'warn')  { if ($UseColor) { Write-Host "[WARN] $msg" -ForegroundColor Yellow } else { Write-Host "[warn ] $msg" } } }
+function Write-Err($msg)   { if (Test-Level 'error') { if ($UseColor) { Write-Host "[ERROR] $msg" -ForegroundColor Red } else { Write-Host "[error] $msg" } } }
+function Write-Ok($msg)    { if (Test-Level 'info')  { if ($UseColor) { Write-Host "[OK] $msg" -ForegroundColor Green } else { Write-Host "[ ok  ] $msg" } } }
+function Write-Debug($msg) { if (Test-Level 'debug') { if ($UseColor) { Write-Host "[DEBUG] $msg" -ForegroundColor DarkGray } else { Write-Host "[debug] $msg" } } }
 function Write-Section($msg) {
   $line = '------------------------------------------------------------'
   if ($UseColor) {
@@ -204,20 +214,20 @@ if ($StartAtRemote) {
   # Local diagnostics: list source trees (first 200 files each) and counts
   Write-Info "Listing source files (landing)"
   $siteFiles = Get-ChildItem -LiteralPath $landingDir -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
-  $siteFiles | Select-Object -First 200 | ForEach-Object { Write-Host "[src:site] $_" }
+  if (Test-Level 'debug') { $siteFiles | Select-Object -First 200 | ForEach-Object { Write-Host "[src:site] $_" } }
   Write-Host ("[src:site] total files: {0}" -f $siteFiles.Count)
   Write-Info "Listing source files (admin_ui)"
   $adminFiles = Get-ChildItem -LiteralPath $adminUIDirS -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
-  $adminFiles | Select-Object -First 200 | ForEach-Object { Write-Host "[src:admin_ui] $_" }
+  if (Test-Level 'debug') { $adminFiles | Select-Object -First 200 | ForEach-Object { Write-Host "[src:admin_ui] $_" } }
   Write-Host ("[src:admin_ui] total files: {0}" -f $adminFiles.Count)
   Write-Info "Listing source files (bin)"
   $binFiles = Get-ChildItem -LiteralPath $BinDir -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
-  $binFiles | Select-Object -First 200 | ForEach-Object { Write-Host "[src:bin] $_" }
+  if (Test-Level 'debug') { $binFiles | Select-Object -First 200 | ForEach-Object { Write-Host "[src:bin] $_" } }
   Write-Host ("[src:bin] total files: {0}" -f $binFiles.Count)
   if (Test-Path $SystemdDir) {
     Write-Info "Listing source files (systemd)"
     $sysFiles = Get-ChildItem -LiteralPath $SystemdDir -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
-    $sysFiles | Select-Object -First 200 | ForEach-Object { Write-Host "[src:systemd] $_" }
+    if (Test-Level 'debug') { $sysFiles | Select-Object -First 200 | ForEach-Object { Write-Host "[src:systemd] $_" } }
     Write-Host ("[src:systemd] total files: {0}" -f $sysFiles.Count)
   }
 
@@ -358,7 +368,7 @@ function Show-TarListing($tarPath, $label) {
   try {
     $entries = & tar -tzf $tarPath 2>$null
     if ($entries) {
-      $entries | Select-Object -First 200 | ForEach-Object { Write-Host ("[$label] $_") }
+      if (Test-Level 'debug') { $entries | Select-Object -First 200 | ForEach-Object { Write-Host ("[$label] $_") } }
       Write-Host ("[$label] total entries: {0}" -f $entries.Count)
     }
   } catch {}
@@ -429,7 +439,7 @@ Copy-FileRemote (Join-Path $DeployDir 'launcher.conf') 'deploy/deploy/launcher.c
 
 # Remote deploy script (executed on server)
 $remoteScript = @'
-set -eux
+set -euo pipefail
 DEPLOY_DIR="$HOME/deploy"
 SITE_DIR="/var/www/site"
 LAUNCHER_DIR="/var/www/launcher"
@@ -439,6 +449,9 @@ NGINX_SITE_ENABLED="/etc/nginx/sites-enabled/launcher.conf"
 SITE_BASE="%%SITE_BASE_URL%%"
 FAIL_ON_MISMATCH="%%FAIL_ON_MISMATCH%%"
 MISM_TOTAL=0
+VERBOSE="%%VERBOSE%%"
+#[[verbose-trace]] enable xtrace only when VERBOSE is set by host
+if [ -n "$VERBOSE" ]; then set -x; fi
 
 # Pre-checks
 shopt -s expand_aliases
@@ -454,8 +467,21 @@ fi
 
 sudo mkdir -p "$SITE_DIR" "$LAUNCHER_DIR/admin_ui" "$OPT_DIR"
 
-# Pre-sync listing of extracted deploy trees (first 200 files and totals)
-for d in site launcher_admin_ui bin systemd; do base="$DEPLOY_DIR/$d"; echo "[remote:pre-list] dir=$base"; if [ -d "$base" ]; then cnt=$(find "$base" -type f | wc -l); find "$base" -type f | sed -n '1,200p' | sed -e 's|^|[remote:pre-file] |'; echo "[remote:pre-list] total files: $cnt"; du -sh "$base" 2>/dev/null || true; else echo "[remote:pre-list] missing $base"; fi; done
+# Pre-sync listing of extracted deploy trees (totals shown always; details only with VERBOSE)
+for d in site launcher_admin_ui bin systemd; do
+  base="$DEPLOY_DIR/$d"
+  echo "[remote:pre-list] dir=$base"
+  if [ -d "$base" ]; then
+    cnt=$(find "$base" -type f | wc -l)
+    if [ -n "$VERBOSE" ]; then
+      find "$base" -type f | sed -n '1,200p' | sed -e 's|^|[remote:pre-file] |'
+    fi
+    echo "[remote:pre-list] total files: $cnt"
+    du -sh "$base" 2>/dev/null || true
+  else
+    echo "[remote:pre-list] missing $base"
+  fi
+done
 
 # Guard snapshot (PRE): capture sample hashes and counts for server-managed dirs to detect unintended changes
 TMP_PRE_DIR="/tmp/chillhub-pre"; TMP_POST_DIR="/tmp/chillhub-post"; mkdir -p "$TMP_PRE_DIR" "$TMP_POST_DIR"
@@ -464,7 +490,13 @@ for d in content manifests news; do dir="$LAUNCHER_DIR/$d"; if [ -d "$dir" ]; th
 
 # Sync landing site, but preserve server-managed downloads directory
 echo "[rsync] syncing site -> $SITE_DIR"
-sudo rsync -av --delete --itemize-changes --exclude 'downloads' "$DEPLOY_DIR/site/" "$SITE_DIR/" | sed -e 's|^|[rsync:site] |'
+RSYNC_FLAGS="-a --delete --exclude 'downloads' --stats"
+if [ -n "$VERBOSE" ]; then RSYNC_FLAGS="-av --delete --itemize-changes --exclude 'downloads'"; fi
+if [ -n "$VERBOSE" ]; then
+  sudo rsync $RSYNC_FLAGS "$DEPLOY_DIR/site/" "$SITE_DIR/" | sed -e 's|^|[rsync:site] |'
+else
+  sudo rsync $RSYNC_FLAGS "$DEPLOY_DIR/site/" "$SITE_DIR/" | tail -n 1 | sed -e 's|^|[rsync:site] |'
+fi
 # Ensure a root favicon.ico exists for generic clients/bots
 if [ ! -f "$SITE_DIR/favicon.ico" ] && [ -f "$SITE_DIR/assets/icons/app.ico" ]; then
   sudo ln -sf "$SITE_DIR/assets/icons/app.ico" "$SITE_DIR/favicon.ico"
@@ -475,7 +507,13 @@ if [ ! -f "$SITE_DIR/robots.txt" ]; then
 fi
 # Sync Admin UI static only
 echo "[rsync] syncing admin_ui -> $LAUNCHER_DIR/admin_ui"
-sudo rsync -av --delete --itemize-changes "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/" | sed -e 's|^|[rsync:admin_ui] |'
+RSYNC_FLAGS_AUI="-a --delete --stats"
+if [ -n "$VERBOSE" ]; then RSYNC_FLAGS_AUI="-av --delete --itemize-changes"; fi
+if [ -n "$VERBOSE" ]; then
+  sudo rsync $RSYNC_FLAGS_AUI "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/" | sed -e 's|^|[rsync:admin_ui] |'
+else
+  sudo rsync $RSYNC_FLAGS_AUI "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/" | tail -n 1 | sed -e 's|^|[rsync:admin_ui] |'
+fi
 # Ensure admin content root subdirs exist; do NOT modify content/manifests/news
 sudo mkdir -p "$LAUNCHER_DIR/content" "$LAUNCHER_DIR/manifests" "$LAUNCHER_DIR/news" "$LAUNCHER_DIR/tmp"
 # Restrict ownership adjustments to admin_ui and tmp only to avoid touching managed content
@@ -488,12 +526,24 @@ fi
 if [ -f "$DEPLOY_DIR/launcher_admin_ui/admin.js" ] && [ -f "$LAUNCHER_DIR/admin_ui/admin.js" ]; then
   echo "[diag] admin_ui/admin.js src=$(sha256sum "$DEPLOY_DIR/launcher_admin_ui/admin.js" | awk '{print $1}') dst=$(sha256sum "$LAUNCHER_DIR/admin_ui/admin.js" | awk '{print $1}')"
 fi
-# List images presence in source and destination (first level)
-echo "[diag] images (src)"; ls -1 "$DEPLOY_DIR/site/assets/images" 2>/dev/null | sed -n '1,50p' || true
-echo "[diag] images (dst)"; ls -1 "$SITE_DIR/assets/images" 2>/dev/null | sed -n '1,50p' || true
+# List images presence (details only with VERBOSE)
+if [ -n "$VERBOSE" ]; then
+  echo "[diag] images (src)"; ls -1 "$DEPLOY_DIR/site/assets/images" 2>/dev/null | sed -n '1,50p' || true
+  echo "[diag] images (dst)"; ls -1 "$SITE_DIR/assets/images" 2>/dev/null | sed -n '1,50p' || true
+fi
 
-# Post-sync listings of destination trees (first 200 files and totals)
-for d in "$SITE_DIR" "$LAUNCHER_DIR/admin_ui"; do echo "[remote:post-list] dir=$d"; if [ -d "$d" ]; then cnt=$(find "$d" -type f | wc -l); find "$d" -type f | sed -n '1,200p' | sed -e 's|^|[remote:post-file] |'; echo "[remote:post-list] total files: $cnt"; du -sh "$d" 2>/dev/null || true; else echo "[remote:post-list] missing $d"; fi; done
+# Post-sync listings (totals shown always; details only with VERBOSE)
+for d in "$SITE_DIR" "$LAUNCHER_DIR/admin_ui"; do
+  echo "[remote:post-list] dir=$d"
+  if [ -d "$d" ]; then
+    cnt=$(find "$d" -type f | wc -l)
+    if [ -n "$VERBOSE" ]; then find "$d" -type f | sed -n '1,200p' | sed -e 's|^|[remote:post-file] |'; fi
+    echo "[remote:post-list] total files: $cnt"
+    du -sh "$d" 2>/dev/null || true
+  else
+    echo "[remote:post-list] missing $d"
+  fi
+done
 
 # Install binaries (select arch-specific files if generic names not present)
 sudo install -d -m 0755 "$OPT_DIR"
@@ -632,24 +682,31 @@ sudo install -m 0644 "$DEPLOY_DIR/deploy/launcher.conf" "$NGINX_SITE_AVAILABLE"
 sudo ln -sf "$NGINX_SITE_AVAILABLE" "$NGINX_SITE_ENABLED"
 
 # --- Nginx tuning (global) ---
-# 1) HTTP-level tuning via conf.d (assumes conf.d/*.conf is included under http {})
+# 1) HTTP-level tuning via conf.d (conditionally add directives if not already present)
 sudo mkdir -p /etc/nginx/conf.d
-cat > /tmp/tuning.conf <<'EOF'
-# Auto-generated by deploy (safe to re-create)
-# HTTP-level tuning
-sendfile on;
-tcp_nopush on;
-tcp_nodelay on;
-keepalive_requests 10000;
-keepalive_timeout 75s;
-EOF
-sudo install -m 0644 /tmp/tuning.conf /etc/nginx/conf.d/tuning.conf
-rm -f /tmp/tuning.conf || true
+TMP_TUNE=$(mktemp)
+echo "# Auto-generated by deploy (conditionally populated)" > "$TMP_TUNE"
+NGX_DUMP=$(sudo nginx -T 2>/dev/null || true)
+add_line(){ key="$1"; line="$2"; if ! echo "$NGX_DUMP" | grep -qE "^[[:space:]]*$key[[:space:]]"; then echo "$line" >> "$TMP_TUNE"; fi }
+add_line 'sendfile' 'sendfile on;'
+add_line 'tcp_nopush' 'tcp_nopush on;'
+add_line 'tcp_nodelay' 'tcp_nodelay on;'
+add_line 'keepalive_requests' 'keepalive_requests 10000;'
+add_line 'keepalive_timeout' 'keepalive_timeout 75s;'
+# If there are effective lines beyond header, replace tuning.conf; otherwise remove it
+LINES=$(wc -l < "$TMP_TUNE" | awk '{print $1}')
+if [ "$LINES" -gt 1 ]; then
+  sudo install -m 0644 "$TMP_TUNE" /etc/nginx/conf.d/tuning.conf
+else
+  sudo rm -f /etc/nginx/conf.d/tuning.conf || true
+fi
+rm -f "$TMP_TUNE" || true
 
 # 2) Ensure worker_processes auto; and reasonable worker_connections in main nginx.conf
 NGX_MAIN="/etc/nginx/nginx.conf"
 if sudo test -f "$NGX_MAIN"; then
-  sudo cp -n "$NGX_MAIN" "$NGX_MAIN.bak" || true
+  # Create a backup once, avoiding non-portable -n warnings
+  if [ ! -f "$NGX_MAIN.bak" ]; then sudo cp "$NGX_MAIN" "$NGX_MAIN.bak" || true; fi
   # worker_processes auto;
   if sudo grep -qE '^[[:space:]]*worker_processes[[:space:]]+auto;' "$NGX_MAIN"; then
     true
@@ -750,10 +807,12 @@ must_200 "$SITE_BASE/" "Landing root"
 must_200 "$SITE_BASE/styles.css" "Landing styles"
 
 # Extra curl diagnostics (headers)
-  echo "[curl] HEADers"
-  curl -ksSI --max-time 8 "$SITE_BASE/admin/ui/login.html" || true
-  curl -ksSI --max-time 8 "$SITE_BASE/admin/ui/admin.js" || true
-  curl -ksSI --max-time 8 "$SITE_BASE/admin/api/health" || true
+  if [ -n "$VERBOSE" ]; then
+    echo "[curl] HEADers"
+    curl -ksSI --max-time 8 "$SITE_BASE/admin/ui/login.html" || true
+    curl -ksSI --max-time 8 "$SITE_BASE/admin/ui/admin.js" || true
+    curl -ksSI --max-time 8 "$SITE_BASE/admin/api/health" || true
+  fi
 
 if curl -ksf --max-time 5 "$SITE_BASE/manifests/launcher/latest.json" >/dev/null; then
   echo "[test] PASS manifests/launcher/latest.json"
@@ -766,17 +825,22 @@ else
   echo "[test] WARN assets/ping.txt not present"
 fi
 
-# Always print service status for debugging, then conditionally fail
-echo "---- SYSTEMD STATUS (api) ----"; sudo systemctl status chillhub-api.service --no-pager -n 50 || true
-echo "---- SYSTEMD STATUS (admin) ----"; sudo systemctl status chillhub-admin.service --no-pager -n 50 || true
-echo "---- JOURNALCTL (api last 150) ----"; sudo journalctl -u chillhub-api.service -e -n 150 || true
-echo "---- JOURNALCTL (admin last 150) ----"; sudo journalctl -u chillhub-admin.service -e -n 150 || true
+if [ -n "$VERBOSE" ]; then
+  echo "---- SYSTEMD STATUS (api) ----"; sudo systemctl status chillhub-api.service --no-pager -n 50 || true
+  echo "---- SYSTEMD STATUS (admin) ----"; sudo systemctl status chillhub-admin.service --no-pager -n 50 || true
+  echo "---- JOURNALCTL (api last 150) ----"; sudo journalctl -u chillhub-api.service -e -n 150 || true
+  echo "---- JOURNALCTL (admin last 150) ----"; sudo journalctl -u chillhub-admin.service -e -n 150 || true
+fi
 if [ "$FAIL" -ne 0 ]; then
   echo "[deploy] One or more tests FAILED. Collecting diagnostics..."
   echo "---- NGINX TEST ----"; sudo nginx -t || true
-  echo "---- NGINX ERROR LOG (last 300) ----"; sudo tail -n 300 /var/log/nginx/error.log || true
-  echo "---- NGINX ACCESS LOG (last 300) ----"; sudo tail -n 300 /var/log/nginx/access.log || true
+  echo "---- NGINX ERROR LOG (last 150) ----"; sudo tail -n 150 /var/log/nginx/error.log || true
   echo "---- ADMIN DROP-IN (masked) ----"; if [ -f "/etc/systemd/system/chillhub-admin.service.d/override.conf" ]; then sudo sed -E 's/(Environment=\"?JWT_SECRET=)[^\"]+/\1<redacted>/' /etc/systemd/system/chillhub-admin.service.d/override.conf | sed -E 's/(Environment=\"?ADMIN_PASSWORD_(PLAIN|BCRYPT)=)[^\"]+/\1<redacted>/' || true; else echo missing; fi
+  # Print systemd and journal only now on failure
+  echo "---- SYSTEMD STATUS (api) ----"; sudo systemctl status chillhub-api.service --no-pager -n 30 || true
+  echo "---- SYSTEMD STATUS (admin) ----"; sudo systemctl status chillhub-admin.service --no-pager -n 30 || true
+  echo "---- JOURNALCTL (api last 150) ----"; sudo journalctl -u chillhub-api.service -e -n 150 || true
+  echo "---- JOURNALCTL (admin last 150) ----"; sudo journalctl -u chillhub-admin.service -e -n 150 || true
   exit 1
 fi
 
@@ -987,11 +1051,11 @@ $adminLen     = if ([string]::IsNullOrEmpty($adminManifestB64)) { 0 } else { $ad
 $binLen       = if ([string]::IsNullOrEmpty($binManifestB64)) { 0 } else { $binManifestB64.Length }
 $systemdLen   = if ([string]::IsNullOrEmpty($systemdManifestB64)) { 0 } else { $systemdManifestB64.Length }
 $downloadsLen = if ([string]::IsNullOrEmpty($downloadsManifestB64)) { 0 } else { $downloadsManifestB64.Length }
-Write-Info ("[debug] site manifest b64 length:      {0}" -f $siteLen)
-Write-Info ("[debug] admin manifest b64 length:     {0}" -f $adminLen)
-Write-Info ("[debug] bin manifest b64 length:       {0}" -f $binLen)
-Write-Info ("[debug] systemd manifest b64 length:   {0}" -f $systemdLen)
-Write-Info ("[debug] downloads manifest b64 length: {0}" -f $downloadsLen)
+Write-Debug ("site manifest b64 length:      {0}" -f $siteLen)
+Write-Debug ("admin manifest b64 length:     {0}" -f $adminLen)
+Write-Debug ("bin manifest b64 length:       {0}" -f $binLen)
+Write-Debug ("systemd manifest b64 length:   {0}" -f $systemdLen)
+Write-Debug ("downloads manifest b64 length: {0}" -f $downloadsLen)
 $injected = $injected.Replace('%%DOWNLOADS_DIR%%', (Convert-ToBashDqEscaped $serverDownloads))
 $injected = $injected.Replace('%%JWT_SECRET%%', (Convert-ToBashDqEscaped $JwtSecret))
 $injected = $injected.Replace('%%ADMIN_USER%%', (Convert-ToBashDqEscaped $AdminUser))
@@ -1007,6 +1071,9 @@ $injected = $injected.Replace('%%ADMIN_MANIFEST%%', (Convert-ToBashDqEscaped $ad
 $injected = $injected.Replace('%%BIN_MANIFEST%%', (Convert-ToBashDqEscaped $binManifestB64))
 $injected = $injected.Replace('%%SYSTEMD_MANIFEST%%', (Convert-ToBashDqEscaped $systemdManifestB64))
 $injected = $injected.Replace('%%DOWNLOADS_MANIFEST%%', (Convert-ToBashDqEscaped $downloadsManifestB64))
+  # Verbosity flag for remote script (only 'debug' enables verbose)
+  $verboseFlag = if ($LogLevel -eq 'debug') { "1" } else { "" }
+  $injected = $injected.Replace('%%VERBOSE%%', (Convert-ToBashDqEscaped $verboseFlag))
 ${ngxSha} = ""
 try {
   if ($NginxConf -and (Test-Path -LiteralPath $NginxConf)) {
@@ -1180,6 +1247,9 @@ report_cmp(){
   mf=$(mktemp)
   printf "%s" "$base64" | base64 -d > "$mf" || true
   local total=0 ok=0 mism=0 miss=0
+  local list
+  list=$(mktemp)
+  awk -F '\t' 'NF>=2 {print $1}' "$mf" > "$list"
   while IFS=$'\t' read -r rel sha; do
     [ -z "$rel" ] && continue
     total=$((total+1))
@@ -1194,25 +1264,45 @@ report_cmp(){
     esac
     if [ -f "$f" ]; then
       rsha=$(sha256sum "$f" | awk '{print $1}')
-      echo "PAIR $name $rel exp=$sha dst=$rsha"
-      if [ "$rsha" = "$sha" ]; then echo "OK  $name $rel"; ok=$((ok+1)); else echo "FAIL $name $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi
+      if [ -n "$VERBOSE" ]; then echo "PAIR $name $rel exp=$sha dst=$rsha"; fi
+      if [ "$rsha" = "$sha" ]; then
+        if [ -n "$VERBOSE" ]; then echo "OK  $name $rel"; fi
+        ok=$((ok+1))
+      else
+        echo "FAIL $name $rel expected=$sha got=$rsha"; mism=$((mism+1))
+      fi
     else
       echo "MISS $name $rel"; miss=$((miss+1))
     fi
   done < "$mf"
-  local rootCount=0
+  # Detect extras: files present in root but not in manifest list
+  local rootCount=0 extras=0
   case "$special" in
     bin)
-      # For bin, we only consider files listed in manifest (api/admin or deploy/bin). Extras check is not applicable
+      # For bin, extras check is not applicable (we compare only manifest-listed entries)
       rootCount=$total ;;
     sys)
-      rootCount=$(find "/etc/systemd/system" -maxdepth 1 -type f -name 'chillhub-*.service' 2>/dev/null | wc -l) ;;
+      # Only consider chillhub-*.service for systemd comparison
+      while IFS= read -r full; do
+        rootCount=$((rootCount+1))
+        rel=$(basename "$full")
+        if ! grep -Fxq -- "$rel" "$list"; then echo "EXTRA systemd $rel"; extras=$((extras+1)); fi
+      done < <(find "/etc/systemd/system" -maxdepth 1 -type f -name 'chillhub-*.service' 2>/dev/null)
+      ;;
     *)
-      rootCount=$(find "$root" -type f 2>/dev/null | wc -l) ;;
+      while IFS= read -r full; do
+        rootCount=$((rootCount+1))
+        rel=${full#"$root/"}
+        # Normalize leading slash if any
+        rel=${rel#/}
+        if ! grep -Fxq -- "$rel" "$list"; then echo "EXTRA $name $rel"; extras=$((extras+1)); fi
+      done < <(find "$root" -type f 2>/dev/null)
+      ;;
   esac
-  local extras=$(( rootCount - total ))
-  echo "[manifest] $name: total=$total ok=$ok mism=$mism miss=$miss root_files=$rootCount extras=$( [ $extras -gt 0 ] && echo $extras || echo 0 )"
-  rm -f "$mf" || true
+  # Count extras as mismatches for strictness
+  mism=$((mism + extras))
+  echo "[manifest] $name: total=$total ok=$ok mism=$mism miss=$miss root_files=$rootCount extras=$extras"
+  rm -f "$mf" "$list" || true
 }
   report_cmp site    "$SITE_MAN_B64"   "/var/www/site"                ""
   report_cmp admin   "$ADMIN_MAN_B64"  "/var/www/launcher/admin_ui"   ""
@@ -1284,7 +1374,5 @@ fi
 } catch {
   Write-Warn ("Could not fetch final remote summary: {0}" -f $_.Exception.Message)
 }
-
-Write-Ok "Done"
 
 Write-Ok "Done"

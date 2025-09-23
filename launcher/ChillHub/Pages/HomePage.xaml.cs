@@ -1771,7 +1771,7 @@ namespace ChillHub.Pages {
                                 this.emaSpeedMBs = (this.emaSpeedMBs <= 0) ? instantSpeed : ((EmaAlpha * instantSpeed) + ((1 - EmaAlpha) * this.emaSpeedMBs));
                                 var remainBytes = p.TotalBytes - p.BytesDownloaded;
                                 var etaSec = this.emaSpeedMBs > 0 ? (remainBytes / 1024.0 / 1024.0) / this.emaSpeedMBs : 0;
-                                this.SpeedEtaText.Text = $"Скорость: {this.emaSpeedMBs:0.0} МБ/с • Осталось: {etaSec:0}s";
+                                this.SpeedEtaText.Text = $"Скорость: {this.emaSpeedMBs:0.0} МБ/с • Осталось: {FormatEta(etaSec)}";
                                 this.FilesSizeText.Text = $"{p.FilesDownloaded}/{p.TotalFiles} • {FormatSize(p.BytesDownloaded)}/{FormatSize(p.TotalBytes)}";
                             }
 
@@ -2120,7 +2120,7 @@ namespace ChillHub.Pages {
                     var speedMBs = elapsed > 0 ? (downloadedBytes / 1024.0 / 1024.0) / elapsed : 0; // МБ/с
                     var remainBytes = totalBytes - downloadedBytes;
                     var etaSec = speedMBs > 0 ? (remainBytes / 1024.0 / 1024.0) / speedMBs : 0;
-                    this.SpeedEtaText.Text = $"Скорость: {speedMBs:0.0} МБ/с • Осталось: {etaSec:0}s";
+                    this.SpeedEtaText.Text = $"Скорость: {speedMBs:0.0} МБ/с • Осталось: {FormatEta(etaSec)}";
 
                     var downloadedFiles = (int)Math.Round(totalFiles * (i / 100.0));
                     this.FilesSizeText.Text = $"{downloadedFiles}/{totalFiles} • {FormatSize(downloadedBytes)}/{FormatSize(totalBytes)}";
@@ -2223,6 +2223,44 @@ namespace ChillHub.Pages {
             }
 
             return $"{bytes} Б";
+        }
+
+        // Формат оставшегося времени: "[N дней][00:]00:00"
+        private static string FormatEta(double seconds)
+        {
+            try {
+                if (double.IsNaN(seconds) || double.IsInfinity(seconds)) return "—";
+                var total = Math.Max(0, (long)Math.Ceiling(seconds));
+                var ts = TimeSpan.FromSeconds(total);
+
+                // С префиксом дней, если >= 1 суток
+                if (ts.TotalDays >= 1)
+                {
+                    int days = ts.Days;
+                    string dayWord = PluralizeDayRu(days);
+                    return $"{days} {dayWord} {ts.Hours:00}:{ts.Minutes:00}:{ts.Seconds:00}";
+                }
+
+                // Если часов 1+ — HH:MM:SS, иначе MM:SS
+                if (ts.TotalHours >= 1)
+                {
+                    // Важно: суммарные часы, если потенциально > 24 (но TotalDays < 1 уже исключили)
+                    return $"{(int)ts.TotalHours:00}:{ts.Minutes:00}:{ts.Seconds:00}";
+                }
+
+                return $"{ts.Minutes:00}:{ts.Seconds:00}";
+            } catch { return "—"; }
+        }
+
+        private static string PluralizeDayRu(int n)
+        {
+            try {
+                int n10 = n % 10;
+                int n100 = n % 100;
+                if (n10 == 1 && n100 != 11) return "день";
+                if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return "дня";
+                return "дней";
+            } catch { return "дней"; }
         }
 
         // Diagnostic: log detailed info about files that are planned to download, files to delete, and empty dirs to create
