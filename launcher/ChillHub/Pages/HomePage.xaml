@@ -492,49 +492,7 @@
       </Setter>
     </Style>
 
-    <!-- Dark purple scrollbar theme (applies within this Page) -->
-    <SolidColorBrush x:Key="Brush.Scrollbar.Track" Color="#00000000"/>
-    <SolidColorBrush x:Key="Brush.Scrollbar.Thumb" Color="#3A2477"/>
-    <SolidColorBrush x:Key="Brush.Scrollbar.ThumbHover" Color="#5B3BBF"/>
-    <SolidColorBrush x:Key="Brush.Scrollbar.ThumbPressed" Color="#7A5CFF"/>
-
-    <Style TargetType="ScrollBar">
-      <Setter Property="Width" Value="10"/>
-      <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="ScrollBar">
-            <Grid Background="{TemplateBinding Background}">
-              <Track x:Name="PART_Track" IsDirectionReversed="true">
-                <Track.Thumb>
-                  <Thumb x:Name="PART_Thumb" Background="{StaticResource Brush.Scrollbar.Thumb}">
-                    <Thumb.Template>
-                      <ControlTemplate TargetType="Thumb">
-                        <Border Background="{TemplateBinding Background}" CornerRadius="5"/>
-                      </ControlTemplate>
-                    </Thumb.Template>
-                  </Thumb>
-                </Track.Thumb>
-              </Track>
-            </Grid>
-            <ControlTemplate.Triggers>
-              <!-- Horizontal orientation -->
-              <Trigger Property="Orientation" Value="Horizontal">
-                <Setter Property="Width" Value="Auto"/>
-                <Setter Property="Height" Value="10"/>
-              </Trigger>
-              <!-- Hover/Pressed for thumb -->
-              <Trigger SourceName="PART_Thumb" Property="IsMouseOver" Value="True">
-                <Setter TargetName="PART_Thumb" Property="Background" Value="{StaticResource Brush.Scrollbar.ThumbHover}"/>
-              </Trigger>
-              <Trigger SourceName="PART_Thumb" Property="IsDragging" Value="True">
-                <Setter TargetName="PART_Thumb" Property="Background" Value="{StaticResource Brush.Scrollbar.ThumbPressed}"/>
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
+    <!-- Removed global ScrollBar styling to avoid StaticExtension resolution issues on some environments -->
   </Page.Resources>
   <Grid Margin="8,8,8,8" Background="{DynamicResource Brush.Background}">
     <Grid.RowDefinitions>
@@ -643,8 +601,11 @@
                       <Grid Grid.Column="0" Width="36" Height="36" VerticalAlignment="Center">
                         <!-- Default icon (visible under image or when no image) -->
                         <TextBlock x:Name="DefaultGameIcon" FontFamily="Segoe MDL2 Assets" Text="&#xE7C3;" FontSize="18"
-                                   Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center" HorizontalAlignment="Center"/>
-                        <Image x:Name="IconImg" Source="{Binding IconUrl}" Tag="{Binding IconUrl}" Stretch="UniformToFill" Visibility="Visible"/>
+                                   Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center" HorizontalAlignment="Center"
+                                   Visibility="Collapsed"/>
+                        <Image x:Name="IconImg" Source="{Binding IconUrl}" Tag="{Binding IconUrl}"
+                               Stretch="UniformToFill" Visibility="Visible"
+                               Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
                       </Grid>
                       <!-- Название -->
                       <StackPanel Grid.Column="1" Margin="10,0,8,0" VerticalAlignment="Center">
@@ -820,7 +781,7 @@
                         </Style.Triggers>
                       </Style>
                     </Grid.Style>
-                    <Border x:Name="ImgSkeleton" Style="{DynamicResource Style.Skeleton}" Height="88"/>
+                    <!-- Removed skeleton placeholder for cover images per request -->
                     <Image x:Name="CoverImg" Source="{Binding CoverUrl}" Tag="{Binding CoverUrl}" Stretch="Uniform" Height="88" HorizontalAlignment="Stretch"
                            Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
                   </Grid>
@@ -1030,9 +991,7 @@
                       <DataTrigger Binding="{Binding Text.Length, ElementName=FbName}" Value="0">
                         <Setter Property="Visibility" Value="Visible"/>
                       </DataTrigger>
-                      <DataTrigger Binding="{Binding Text.Length, ElementName=FbName}" Value="{x:Static sys:Int32.MinValue}">
-                        <Setter Property="Visibility" Value="Visible"/>
-                      </DataTrigger>
+                      <!-- Removed problematic x:Static comparison which could break StaticExtension resolution on some targets -->
                     </Style.Triggers>
                   </Style>
                 </TextBlock.Style>
