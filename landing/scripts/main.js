@@ -3,6 +3,11 @@
   const mqMobile = window.matchMedia('(max-width: 640px)');
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const isMobile = () => mqMobile.matches;
+  // Basic UA detection: target iOS Safari (including iPadOS desktop-mode Safari)
+  const ua = navigator.userAgent || navigator.vendor || window.opera || '';
+  const isIOS = /iP(hone|od|ad)/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isWebKit = /WebKit\//.test(ua) && !/Edge\//.test(ua);
+  const isSafari = isWebKit && /Safari\//.test(ua) && !/Chrome\//.test(ua) && !/CriOS\//.test(ua);
   const isLowEndDevice = (() => {
     const hc = navigator.hardwareConcurrency || 2;
     // deviceMemory is not on iOS Safari; assume low if missing and mobile
@@ -13,7 +18,62 @@
     return hc <= 2 || mem <= 2 || oldIOS || oldAndroid;
   })();
 
+  // Brand click: reload page, clear hash, and scroll to top
+  (function setupBrandReload(){
+    const brand = document.querySelector('.site-header .brand');
+    if(!brand) return;
+    brand.addEventListener('click', (e)=>{
+      // Always handle ourselves to ensure hash reset and scroll-to-top
+      e.preventDefault();
+      try {
+        // Clear hash without a jump
+        if(location.hash){
+          history.replaceState(null, '', location.pathname + location.search);
+        }
+      } catch {}
+      // Ensure we are at the top before reload to avoid preserved scroll
+      try { window.scrollTo({ top: 0, behavior: 'auto' }); } catch {}
+      // Reload the current page
+      try { location.reload(); } catch { location.href = './'; }
+    });
+  })();
+
   // Note: Header uses a fixed CSS variable height; no JS syncing required.
+
+  // iOS Safari URL bar collapse assistance
+  (function iosSafariUrlbarFix(){
+    if(!(isIOS && isSafari)) return;
+    // Append a tiny bottom spacer to ensure the document can always scroll by at least 1px
+    function ensureSpacer(){
+      try {
+        if(document.querySelector('.ios-urlbar-poke')) return;
+        const spacer = document.createElement('div');
+        spacer.className = 'ios-urlbar-poke';
+        document.body.appendChild(spacer);
+      } catch {}
+    }
+    // Nudge scroll to encourage URL bar to collapse; keep it minimal and safe
+    function nudgeScroll(){
+      try {
+        // Only nudge if near the very top to avoid disrupting user position
+        const y = window.scrollY || window.pageYOffset || 0;
+        if(y <= 0) {
+          // Two-step to bypass some throttling cases
+          window.scrollTo(0, 1);
+          setTimeout(()=>{ try{ window.scrollTo(0, 1); }catch{} }, 50);
+        }
+      } catch {}
+    }
+    // Run on DOM ready and after full load
+    if(document.readyState !== 'loading') { ensureSpacer(); nudgeScroll(); }
+    else document.addEventListener('DOMContentLoaded', ()=>{ ensureSpacer(); nudgeScroll(); }, { once: true });
+    window.addEventListener('load', ()=>{ ensureSpacer(); nudgeScroll(); }, { once: true });
+    // Also nudge on first user interaction and on orientation changes
+    const once = (el, ev, fn)=>{ const h = ()=>{ el.removeEventListener(ev, h, { passive:true }); fn(); }; el.addEventListener(ev, h, { passive:true }); };
+    once(window, 'touchstart', ()=>{ ensureSpacer(); nudgeScroll(); });
+    once(window, 'scroll', ()=>{ ensureSpacer(); });
+    window.addEventListener('orientationchange', ()=>{ setTimeout(()=>{ ensureSpacer(); nudgeScroll(); }, 120); }, { passive: true });
+  })();
 
   const canvas = document.getElementById('waves-canvas');
   const ctx = canvas.getContext('2d');
@@ -603,52 +663,6 @@
     window.addEventListener('orientationchange', onResize, { passive: true });
   })();
 
-  // Back-to-top arrow visibility after the single screenshot (robust for mobile/desktop)
-  (function setupToTop(){
-    const btn = document.getElementById('to-top');
-    const sec = document.querySelector('.screenshot-win');
-    if(!btn || !sec) return;
-    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-    let ticking = false;
-
-    let threshold = 0; // Y-pos in px where button should appear
-    function computeThreshold(){
-      const rect = sec.getBoundingClientRect();
-      const scrollY = window.scrollY || window.pageYOffset || 0;
-      // Appear once user scrolled past bottom of screenshots by 64px
-      threshold = scrollY + rect.top + rect.height - 64;
-    }
-
-    function update(){
-      ticking = false;
-      const y = window.scrollY || window.pageYOffset || 0;
-      const show = y > threshold;
-      btn.classList.toggle('show', show);
-    }
-
-    function onScroll(){ if(!ticking){ ticking = true; requestAnimationFrame(update); } }
-    function onResize(){ computeThreshold(); onScroll(); }
-    window.addEventListener('scroll', onScroll, { passive: true });
-    window.addEventListener('resize', onResize, { passive: true });
-    window.addEventListener('orientationchange', onResize, { passive: true });
-    window.addEventListener('load', onResize, { passive: true });
-
-    // Recompute when the screenshot image loads (affects element height)
-    sec.querySelectorAll('img').forEach(img=>{
-      if(img.complete){ return; }
-      img.addEventListener('load', onResize, { once: true, passive: true });
-      img.addEventListener('error', onResize, { once: true, passive: true });
-    });
-
-    // initial
-    computeThreshold();
-    update();
-
-    btn.addEventListener('click', (e)=>{
-      e.preventDefault();
-      window.scrollTo({ top: 0, behavior: prefersReducedMotion.matches ? 'auto' : 'smooth' });
-    });
-  })();
 
   // Smooth scroll for header nav links (#games, #features, #download) without affecting general scroll
   (function smoothScrollHeaderNav(){

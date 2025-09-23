@@ -15,6 +15,14 @@
         <GradientStop Offset="0" Color="#3A2966"/>
         <GradientStop Offset="1" Color="#8A2A4A"/>
       </LinearGradientBrush>
+      <!-- Progress visuals shared brushes (copied from HomePage) -->
+      <SolidColorBrush x:Key="Brush.ProgressBorder" Color="#2B1F4A"/>
+      <SolidColorBrush x:Key="Brush.ProgressTrack" Color="#1A122B"/>
+      <!-- Verify indicator gradient (copied from HomePage) -->
+      <LinearGradientBrush x:Key="Brush.VerifyGradient" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Offset="0" Color="#6F3AFF"/>
+        <GradientStop Offset="1" Color="#A78BFA"/>
+      </LinearGradientBrush>
       <!-- Local Primary style to ensure hover uses our local AccentHover (avoids StaticResource capture in theme) -->
       <Style x:Key="Style.Button.PrimaryLocal" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
         <Setter Property="Background" Value="{DynamicResource Brush.AccentGradientPrimary}"/>
@@ -76,6 +84,53 @@
           </Setter.Value>
         </Setter>
       </Style>
+
+      <!-- ProgressBar styles copied from HomePage (sizes removed) -->
+      <Style x:Key="Style.ProgressBar.Verify" TargetType="ProgressBar">
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="ProgressBar">
+              <Grid ClipToBounds="True">
+                <Border CornerRadius="3" Background="{DynamicResource Brush.Border}"/>
+                <!-- Animated indicator for indeterminate state -->
+                <Border x:Name="IndBar" CornerRadius="3" Width="160" HorizontalAlignment="Left" Background="{StaticResource Brush.VerifyGradient}">
+                  <Border.RenderTransform>
+                    <TranslateTransform x:Name="tt" X="-180"/>
+                  </Border.RenderTransform>
+                </Border>
+              </Grid>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsIndeterminate" Value="True">
+                  <Trigger.EnterActions>
+                    <BeginStoryboard>
+                      <Storyboard RepeatBehavior="Forever">
+                        <DoubleAnimation Storyboard.TargetName="tt" Storyboard.TargetProperty="X" From="-180" To="300" Duration="0:0:1.8"/>
+                      </Storyboard>
+                    </BeginStoryboard>
+                  </Trigger.EnterActions>
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
+
+      <Style x:Key="Style.ProgressBar.Rounded" TargetType="ProgressBar">
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="ProgressBar">
+              <Grid ClipToBounds="True">
+                <!-- Track with thick dark border and dark background; named PART_Track so WPF wires it -->
+                <Border x:Name="PART_Track" CornerRadius="6" BorderThickness="2.5"
+                        Background="{DynamicResource Brush.ProgressTrack}" BorderBrush="{DynamicResource Brush.ProgressBorder}"/>
+                <!-- Indicator; named PART_Indicator so WPF sets width automatically for determinate mode -->
+                <Border x:Name="PART_Indicator" CornerRadius="6" Background="{DynamicResource Brush.AccentGradientPrimary}"
+                        HorizontalAlignment="Left"/>
+              </Grid>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
     </Grid.Resources>
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
@@ -87,7 +142,7 @@
 
     <StackPanel Grid.Row="1">
       <TextBlock x:Name="StatusText" Text="Инициализация..." TextWrapping="Wrap" Margin="0,0,0,8"/>
-      <ProgressBar x:Name="Progress" Height="8" Minimum="0" Maximum="100" Value="0" Margin="0,0,0,8"/>
+      <ProgressBar x:Name="Progress" Height="14" Minimum="0" Maximum="100" Value="0" Margin="0,0,0,8" Style="{DynamicResource Style.ProgressBar.Rounded}"/>
       <StackPanel x:Name="DevPanel">
         <Border Background="{DynamicResource Brush.Surface}" Padding="8" CornerRadius="6" Margin="0,0,0,8" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
           <TextBlock Text="Для разработки можно пропустить проверку. Отметьте флаг ниже и нажмите 'Продолжить'."

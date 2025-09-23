@@ -55,13 +55,14 @@ namespace ChillHub.Pages {
                 string link = BrushToCss("Brush.Accent", "#EF4444");
                 string linkHover = BrushToCss("Brush.AccentHover", "#DC2626");
                 string hr = BrushToCss("Brush.Border", "#262626");
+                string surface = BrushToCss("Brush.Surface", "#0B0B0B");
                 string scrollThumb = BrushToCss("Brush.ScrollbarThumb", BrushToCss("Brush.ListHover", "#2E2E2E"));
                 string scrollThumbHover = BrushToCss("Brush.ScrollbarThumbHover", BrushToCss("Brush.ListHoverAlt", "#474747"));
                 var page = $@"<html><head><meta charset='utf-8'><base href='{origin}/'>
 <style>
   html,body{{height:100%; overflow-x:hidden;}}
   body{{font-family:Segoe UI,Segoe UI Emoji,Arial; margin:0; color:{text}; background:{bg}; overflow-x:hidden;}}
-  .wrap{{width:min(100vw - 24px, 860px); margin:16px auto 28px auto; padding:0 12px; font-size:17px; line-height:1.7;}}
+  .wrap{{width:min(100vw - 24px, 860px); margin:16px auto 28px auto; padding:16px; font-size:17px; line-height:1.7; background:{surface}; border-radius:8px;}}
   img{{max-width:100%; height:auto; max-height:360px; display:inline-block; margin:16px 0; border-radius:8px;}}
   pre,code{{background:{codeBg}; border-radius:6px;}}
   pre{{padding:12px; overflow:auto;}}

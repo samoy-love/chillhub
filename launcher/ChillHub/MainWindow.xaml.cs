@@ -16,28 +16,40 @@ namespace ChillHub {
 
     public partial class MainWindow : Window {
         // Karaoke C4: two-line typewriter + crossfade
-        private readonly DispatcherTimer karaokeTimer = new DispatcherTimer();
+        // Use Render-priority DispatcherTimer and time-based character progression to keep constant speed under UI load
+        private readonly DispatcherTimer karaokeTimer = new DispatcherTimer(DispatcherPriority.Render);
         private string[] karaokeLines = Array.Empty<string>();
         private int karaokeLineIndex = 0;
         private int karaokeCharIndex = 0;
         private bool karaokePaused = false;
         private bool karaokeTransitionRunning = false;
+        // time-base for current line typing
+        private DateTime karaokeLineStartAtUtc;
+        private TimeSpan karaokePausedAccum = TimeSpan.Zero;
+        private DateTime? karaokePauseStartedUtc = null;
+        private DateTime karaokeLastProgressAtUtc;
 
-        // --- Настройки караоке (собраны вместе) ---
-        // Интервал таймера набора символов (мс): чем меньше, тем быстрее печатает
-        private int karaokeCharIntervalMs = 55;
+        // --- Настройки караоке (одно место) ---
+        // Все параметры поведения караоке сосредоточены в одном объекте ниже (см. KaraokeConfig)
+        private readonly KaraokeConfig K = new KaraokeConfig();
 
-        // Пауза после завершения строки перед началом перехода (мс)
-        private int karaokePauseAfterLineMs = 300;
-
-        // Длительность плавного исчезновения текущей строки (мс) — меньше = быстрее переход
-        private int karaokeFadeOutMs = 50;
-
-        // Длительность плавного появления следующей строки (мс) — меньше = быстрее переход
-        private int karaokeFadeInMs = 70;
-
-        // Короткая задержка после анимации перед фактической сменой строки (мс) — 0, чтобы убрать "затуп"
-        private int karaokeAfterTransitionDelayMs = 0;
+        // Централизованная конфигурация караоке
+        private sealed class KaraokeConfig {
+            // Интервал печати одного символа (мс): меньше -> быстрее
+            public int CharIntervalMs { get; init; } = 60;
+            // Пауза после завершения строки перед переходом (мс)
+            public int PauseAfterLineMs { get; init; } = 380;
+            // Длительность затухания текущей строки (мс)
+            public int FadeOutMs { get; init; } = 50;
+            // Длительность появления следующей строки (мс)
+            public int FadeInMs { get; init; } = 70;
+            // Доп. задержка после анимации (мс)
+            public int AfterTransitionDelayMs { get; init; } = 0;
+            // Ограничение на макс. число символов, добавляемых за один тик (чтобы не "перескакивало" строку)
+            public int MaxAdvanceCharsPerTick { get; init; } = 1;
+            // Интервал тиков таймера (мс) — немного чаще печати, чтобы не пропускать символы
+            public int TimerTickMs => Math.Max(10, this.CharIntervalMs / 2);
+        }
 
         public MainWindow() {
             this.InitializeComponent();
@@ -46,7 +58,7 @@ namespace ChillHub {
 
             // Karaoke setup
             // Используем собранные настройки выше
-            this.karaokeTimer.Interval = TimeSpan.FromMilliseconds(this.karaokeCharIntervalMs);
+            this.karaokeTimer.Interval = TimeSpan.FromMilliseconds(this.K.TimerTickMs);
             this.karaokeTimer.Tick += this.KaraokeTimer_Tick;
             this.Loaded += this.MainWindow_Loaded;
             this.IsVisibleChanged += this.MainWindow_IsVisibleChanged;
@@ -271,6 +283,11 @@ namespace ChillHub {
             this.karaokeLineIndex = 0;
             this.karaokeCharIndex = 0;
             this.SetKaraokeTexts(current: string.Empty, next: this.GetNextKaraokeLine());
+            // reset time-base
+            this.karaokeLineStartAtUtc = DateTime.UtcNow;
+            this.karaokePausedAccum = TimeSpan.Zero;
+            this.karaokePauseStartedUtc = null;
+            this.karaokeLastProgressAtUtc = this.karaokeLineStartAtUtc;
         }
 
         private string GetCurrentKaraokeLine() {
@@ -310,15 +327,23 @@ namespace ChillHub {
             }
             catch {
             }
+            // Backdate last progress to emit at least one character on first tick
+            try { this.karaokeLastProgressAtUtc = DateTime.UtcNow.AddMilliseconds(-this.K.CharIntervalMs); } catch { }
             if (!this.karaokeTimer.IsEnabled) {
                 this.karaokeTimer.Start();
             }
+            // Emit first character ASAP to show clear typing start
+            try { this.KaraokeTimer_Tick(this, EventArgs.Empty); } catch { }
         }
 
         private void PauseKaraoke() {
             this.karaokePaused = true;
             if (this.karaokeTimer.IsEnabled) {
                 this.karaokeTimer.Stop();
+            }
+            // start pause accounting
+            if (this.karaokePauseStartedUtc == null) {
+                this.karaokePauseStartedUtc = DateTime.UtcNow;
             }
         }
 
@@ -333,6 +358,14 @@ namespace ChillHub {
             }
             catch {
             }
+            // accumulate paused time
+            if (this.karaokePauseStartedUtc != null) {
+                var pausedDur = (DateTime.UtcNow - this.karaokePauseStartedUtc.Value);
+                this.karaokePausedAccum += pausedDur;
+                // сдвигаем маркер последнего прогресса вперёд на время паузы, чтобы при возобновлении не "догоняло" сразу всю строку
+                try { this.karaokeLastProgressAtUtc = this.karaokeLastProgressAtUtc + pausedDur; } catch { }
+                this.karaokePauseStartedUtc = null;
+            }
             if (!this.karaokeTimer.IsEnabled) {
                 this.karaokeTimer.Start();
             }
@@ -345,22 +378,36 @@ namespace ChillHub {
 
             var line = this.GetCurrentKaraokeLine();
 
+            // Time-based incremental progression with per-tick cap to preserve typing feel
+            try {
+                var now = DateTime.UtcNow;
+                var deltaMs = (now - this.karaokeLastProgressAtUtc).TotalMilliseconds;
+                int add = (int)Math.Floor(deltaMs / Math.Max(1.0, this.K.CharIntervalMs));
+                if (add > 0) {
+                    if (add > this.K.MaxAdvanceCharsPerTick) add = this.K.MaxAdvanceCharsPerTick;
+                    // ensure current line visible while typing
+                    try {
+                        this.KaraokeCurrentText.BeginAnimation(UIElement.OpacityProperty, null);
+                        if (this.KaraokeCurrentText.Opacity < 1.0) this.KaraokeCurrentText.Opacity = 1.0;
+                    } catch { }
+
+                    var newIndex = Math.Min(line.Length, this.karaokeCharIndex + add);
+                    this.karaokeCharIndex = newIndex;
+                    var current = line.Substring(0, this.karaokeCharIndex);
+                    this.SetKaraokeTexts(current, this.GetNextKaraokeLine());
+
+                    // advance lastProgress by the actual time "spent" on produced chars
+                    var spentMs = add * this.K.CharIntervalMs;
+                    try { this.karaokeLastProgressAtUtc = this.karaokeLastProgressAtUtc.AddMilliseconds(spentMs); } catch { this.karaokeLastProgressAtUtc = now; }
+
+                    if (this.karaokeCharIndex < line.Length) return; // keep typing
+                }
+            }
+            catch { }
+            // Если строка ещё не дописана (добавлять нечего в этот тик) — просто ждём следующий тик
             if (this.karaokeCharIndex < line.Length) {
-                // While typing, ensure current line is visible
-                try {
-                    this.KaraokeCurrentText.BeginAnimation(UIElement.OpacityProperty, null);
-                    if (this.KaraokeCurrentText.Opacity < 1.0) {
-                        this.KaraokeCurrentText.Opacity = 1.0;
-                    }
-                }
-                catch {
-                }
-                this.karaokeCharIndex++;
-                var current = line.Substring(0, this.karaokeCharIndex);
-                this.SetKaraokeTexts(current, this.GetNextKaraokeLine());
                 return;
             }
-
             // Линия завершена — небольшая пауза, затем плавный переход к следующей
             _ = this.TransitionToNextLineAsync();
         }
@@ -373,19 +420,19 @@ namespace ChillHub {
             this.karaokeTransitionRunning = true;
             try {
                 // Пауза на строке перед переходом
-                await Task.Delay(this.karaokePauseAfterLineMs);
+                await Task.Delay(this.K.PauseAfterLineMs);
 
                 // Кроссфейд (длительности берём из настроек)
                 try {
-                    var fadeOut = new DoubleAnimation { From = 1.0, To = 0.0, Duration = TimeSpan.FromMilliseconds(this.karaokeFadeOutMs) };
+                    var fadeOut = new DoubleAnimation { From = 1.0, To = 0.0, Duration = TimeSpan.FromMilliseconds(this.K.FadeOutMs) };
                     this.KaraokeCurrentText.BeginAnimation(UIElement.OpacityProperty, fadeOut);
-                    var fadeIn = new DoubleAnimation { From = 0.0, To = 1.0, Duration = TimeSpan.FromMilliseconds(this.karaokeFadeInMs) };
+                    var fadeIn = new DoubleAnimation { From = 0.0, To = 1.0, Duration = TimeSpan.FromMilliseconds(this.K.FadeInMs) };
                     this.KaraokeNextText.BeginAnimation(UIElement.OpacityProperty, fadeIn);
                 }
                 catch {
                 }
 
-                await Task.Delay(this.karaokeAfterTransitionDelayMs);
+                await Task.Delay(this.K.AfterTransitionDelayMs);
 
                 // Смена индексов
                 this.karaokeLineIndex = (this.karaokeLineIndex + 1) % this.karaokeLines.Length;
@@ -398,6 +445,11 @@ namespace ChillHub {
                 this.KaraokeCurrentText.Opacity = 1.0;
                 this.KaraokeNextText.Opacity = 0.8; // вернуть стандартную
                 this.SetKaraokeTexts(string.Empty, this.GetNextKaraokeLine());
+                // reset time-base for new line
+                this.karaokeLineStartAtUtc = DateTime.UtcNow;
+                this.karaokePausedAccum = TimeSpan.Zero;
+                this.karaokePauseStartedUtc = null;
+                this.karaokeLastProgressAtUtc = this.karaokeLineStartAtUtc;
             }
             catch {
             }

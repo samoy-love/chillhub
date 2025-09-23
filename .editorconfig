@@ -70,3 +70,40 @@ dotnet_diagnostic.SA1618.severity = none    # Generic type parameters should be 
 dotnet_diagnostic.SA1623.severity = none    # Property documentation should match accessors
 dotnet_diagnostic.SA1629.severity = none    # Documentation text should end with a period
 dotnet_diagnostic.SA1633.severity = none    # File must have header
+
+# Highly noisy spacing/formatting and layout rules (suppress during active dev)
+dotnet_diagnostic.SA1515.severity = none    # Single-line comment should be preceded by blank line
+dotnet_diagnostic.SA1516.severity = none    # Elements should be separated by blank line
+dotnet_diagnostic.SA1507.severity = none    # Multiple blank lines in a row
+dotnet_diagnostic.SA1512.severity = none    # Single-line comments should not be followed by blank line
+dotnet_diagnostic.SA1501.severity = none    # Statement should not be on a single line
+dotnet_diagnostic.SA1502.severity = none    # Element should not be on a single line
+dotnet_diagnostic.SA1508.severity = none    # Closing brace should not be preceded by a blank line
+dotnet_diagnostic.SA1137.severity = none    # Elements should have the same indentation
+
+# Using directives/order rules (suppress to avoid churn; formatter usually handles this)
+dotnet_diagnostic.SA1210.severity = none    # Using directives should be ordered alphabetically
+
+# Naming/field prefix rules (project uses pragmatic naming in places)
+dotnet_diagnostic.SA1308.severity = none    # Field should not begin with 's_'
+dotnet_diagnostic.SA1300.severity = none    # Element should begin with an uppercase letter
+dotnet_diagnostic.SA1310.severity = none    # Field names should not contain underscore
+
+# Spacing around tokens and punctuation (downgrade noise)
+dotnet_diagnostic.SA1001.severity = none    # Commas should be followed by whitespace
+dotnet_diagnostic.SA1003.severity = none    # Operator spacing
+dotnet_diagnostic.SA1009.severity = none    # Closing parenthesis should be followed by a space
+dotnet_diagnostic.SA1011.severity = none    # Closing square bracket should be followed by a space
+dotnet_diagnostic.SA1012.severity = none    # Opening brace spacing
+dotnet_diagnostic.SA1013.severity = none    # Closing brace spacing
+dotnet_diagnostic.SA1024.severity = none    # Colon spacing
+
+# Braces/flow layout preferences
+dotnet_diagnostic.SA1503.severity = none    # Braces should not be omitted
+
+# Misc style preferences often conflicting with pragmatic code
+dotnet_diagnostic.SA1116.severity = none    # Parameter list wrapping placement
+dotnet_diagnostic.SA1119.severity = none    # Unnecessary parenthesis
+dotnet_diagnostic.SA1122.severity = none    # Use string.Empty for empty strings
+dotnet_diagnostic.SA1101.severity = none    # Prefix local calls with this
+dotnet_diagnostic.SA1407.severity = none    # Arithmetic expressions should declare precedence

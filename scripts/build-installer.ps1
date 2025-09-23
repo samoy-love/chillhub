@@ -112,6 +112,11 @@ Write-Host "[3/3] Compiling NSIS installer with: `$makensis=`"$makensis`"; insta
 $prereqsDir = Join-Path (Split-Path $Installer -Parent) "prereqs"
 if (!(Test-Path $prereqsDir)) { New-Item -ItemType Directory -Path $prereqsDir | Out-Null }
 
+# Ensure NSIS OutFile directory exists (installer.nsi uses OutFile "generated_downloads\\ChillHub-Setup.exe")
+$installerDir = Split-Path -Parent $installerPath
+$outDir = Join-Path $installerDir "generated_downloads"
+if (!(Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
+
 # Build NSIS args (default verbosity)
 $nsisArgs = @('/INPUTCHARSET', 'UTF8')
 if ($NoCompress) {

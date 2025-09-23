@@ -6,6 +6,20 @@
   flex: 0 0 auto;
 }
 
+/* Lightbox overlay: avoid covering the native scrollbar zone on desktop */
+@media (pointer: fine) and (hover: hover) {
+  .lightbox { right: var(--sb-size); }
+}
+@media (pointer: fine) and (hover: hover) {
+  /* Header leaves room for the native scrollbar area so nothing can overlap it visually */
+  .site-header { right: 0; padding-right: var(--sb-size); }
+}
+
+/* Waves background remains fixed behind content; on desktop clip the right edge so it doesn't cover the scrollbar zone */
+@media (pointer: fine) and (hover: hover) {
+  .waves-bg { right: 0; clip-path: inset(0 var(--sb-size) 0 0); -webkit-clip-path: inset(0 var(--sb-size) 0 0); }
+}
+
 /* Desktop/Tablet refinements: increase spacing */
 @media (width > 640px) {
   :root { --header-h: 68px; }
@@ -31,11 +45,11 @@
   --shadow: 0 10px 30px rgb(0 0 0 / 35%);
   /* Fixed header heights */
   --header-h: 64px;
-  /* Scrollbar theme */
-  --sb-size: 8px;
-  --sb-thumb: rgba(255,255,255,0.18);
-  --sb-thumb-hover: rgba(255,255,255,0.28);
-  --sb-track: rgba(255,255,255,0.06);
+  /* Scrollbar theme (dark translucent glass) */
+  --sb-size: 16px;
+  --sb-thumb: rgba(70, 70, 90, 0.92);           /* dark gray, highly visible */
+  --sb-thumb-hover: rgba(90, 90, 120, 0.98);    /* slightly brighter on hover */
+  --sb-track: rgba(12, 12, 20, 0.30);           /* dark track for contrast */
   /* Unified vertical spacing between sections */
   --space-section: 36px;
   /* Amount of the next section to peek under the hero */
@@ -60,8 +74,10 @@ body {
   height: 100%;
 }
 
-/* Prevent any horizontal scrolling on all browsers */
+/* Prevent any horizontal scrolling on all browsers; allow the ROOT to scroll vertically */
 html { overflow-x: hidden; -webkit-text-size-adjust: 100%; touch-action: manipulation; }
+/* Let the UA manage vertical scrolling on the root so iOS Safari can hide URL bar */
+html, body { overflow-y: auto; scrollbar-gutter: auto; }
 
 body {
   margin: 0;
@@ -76,23 +92,39 @@ body {
   min-height: 100dvh;
 }
 
+/* Tiny bottom spacer to help iOS Safari collapse the URL bar on scroll */
+.ios-urlbar-poke {
+  height: calc(env(safe-area-inset-bottom, 0px) + 1px);
+  width: 100%;
+  pointer-events: none;
+}
+
+/* Ensure sections never create their own vertical scrollbars */
+main, .hero, .section, .site-footer { overflow-y: visible; }
+
+/* Ensure all content sits above the fixed waves background without altering waves' z-index */
+main, .hero, .section, .site-footer {
+  position: relative;
+  z-index: 1;
+}
+
 img {
   max-width: 100%;
   display: block;
 }
 
-/* Thin, translucent scrollbars (Chrome/WebKit). Mobile Safari shows overlay scrollbars but will use this when visible */
-*::-webkit-scrollbar { width: var(--sb-size); height: var(--sb-size); }
-*::-webkit-scrollbar-track { background: transparent; }
-*::-webkit-scrollbar-thumb {
+/* Scrollbars (Chrome/WebKit) — style both html and body to cover all engines */
+html::-webkit-scrollbar, body::-webkit-scrollbar { width: var(--sb-size); height: var(--sb-size); }
+html::-webkit-scrollbar-track, body::-webkit-scrollbar-track { background: var(--sb-track); }
+html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   background-color: var(--sb-thumb);
   border-radius: 999px;
-  border: 2px solid transparent; /* creates a thin pill */
-  background-clip: padding-box;
+  border: 0; /* keep thumb as thick as possible for visibility */
 }
-*::-webkit-scrollbar-thumb:hover { background-color: var(--sb-thumb-hover); }
-/* Firefox (not required by you, harmless elsewhere) */
-* { scrollbar-width: thin; scrollbar-color: var(--sb-thumb) transparent; }
+html::-webkit-scrollbar-thumb:hover, body::-webkit-scrollbar-thumb:hover { background-color: var(--sb-thumb-hover); }
+html::-webkit-scrollbar-corner, body::-webkit-scrollbar-corner { background: var(--sb-track); }
+/* Firefox */
+html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
 
 .container {
   width: min(1120px, 92%);
@@ -145,6 +177,9 @@ img {
   font-weight: 800;
   letter-spacing: .4px;
   flex: 0 0 auto;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
 }
 
 .nav a {
@@ -477,9 +512,6 @@ img {
   padding: var(--space-section) 0;
   /* Unified background like .site-footer */
   background: rgb(0 0 0 / 15%);
-  /* Defer rendering for offscreen sections to improve performance */
-  content-visibility: auto;
-  contain-intrinsic-size: 1px 800px; /* rough fallback size for layout */
 }
 
 /* Prevent anchor overlap under fixed header */
@@ -488,10 +520,6 @@ img {
 /* Ensure the download CTA section is fully rendered even when offscreen so
    anchor navigation to #download shows content immediately without waiting
    for rendering or image lazy-load side effects. */
-#download.section {
-  content-visibility: visible;
-  contain-intrinsic-size: auto;
-}
 
 .section--alt {
   /* Use unified background */
@@ -503,7 +531,10 @@ img {
 .section--cta {
   text-align: center;
   /* Use unified background; keep the subtle border */
-  background: rgb(0 0 0 / 15%);
+  background: rgb(0 0 0 / 28%);
+  /* Subtle separation from animated waves without touching their z-index */
+  backdrop-filter: blur(4px) saturate(1.05);
+  -webkit-backdrop-filter: blur(4px) saturate(1.05);
   border-block: 1px solid rgb(124 58 237 / 15%);
 }
 
@@ -512,6 +543,17 @@ img {
 .section h2 {
   font-size: clamp(26px, 3.4vw, 40px);
   margin: 0 0 var(--space-l);
+}
+
+/* Improve readability of the download CTA texts over dynamic backgrounds */
+#download.section h2 { 
+  text-shadow: 0 2px 10px rgb(0 0 0 / 55%);
+}
+#download.section p { 
+  text-shadow: 0 1px 8px rgb(0 0 0 / 45%);
+}
+#download.section .muted {
+  color: rgb(220 224 255 / 86%);
 }
 
 .muted {
@@ -1110,14 +1152,6 @@ img:not(.skeleton)::after { display: none; }
 /* Override reel theming for ACTIVE slot: ensure the ring shows above themed backgrounds */
 .reel .slot.slot--active { border-color: transparent; }
 
-/* Bigger tap target for back-to-top button */
-.to-top {
-  width: 48px;
-  height: 48px;
-  display: grid;
-  place-items: center;
-}
-
 /* Respect reduced motion: disable heavy animations */
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition: none !important; }
@@ -1475,33 +1509,6 @@ img:not(.skeleton)::after { display: none; }
   gap: 14px;
   flex-wrap: wrap;
 }
-
-/* Back-to-top arrow */
-.to-top {
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border-radius: 999px;
-  color: #e8e8fb;
-  background: rgb(255 255 255 / 12%);
-  border: 1px solid rgb(255 255 255 / 18%);
-  box-shadow: 0 10px 24px rgb(0 0 0 / 35%);
-  backdrop-filter: blur(8px) saturate(1.1);
-  -webkit-backdrop-filter: blur(8px) saturate(1.1);
-  cursor: pointer;
-  opacity: 0;
-  transform: translateY(8px);
-  transition: opacity .25s ease, transform .25s ease, background .2s ease;
-  z-index: 1100;
-  pointer-events: none;
-}
-
-.to-top.show { opacity: 1; transform: none; pointer-events: auto; }
-.to-top:hover { background: rgb(255 255 255 / 16%); }
 
 /* Parallax layers (subtle stars/noise) */
 .parallax {
