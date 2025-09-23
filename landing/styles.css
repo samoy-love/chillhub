@@ -1540,9 +1540,40 @@ img:not(.skeleton)::after { display: none; }
 .waves-bg {
   position: fixed;
   inset: 0;
-  z-index: -2;
-  overflow: hidden;
+  z-index: 0; /* above body background, below header/content */
+  pointer-events: none;
 }
+
+/* Canvas is hidden until the first frame is rendered to avoid visual flash */
+.waves-bg canvas {
+  opacity: 0;
+  transition: opacity .35s ease;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.waves-bg.ready canvas { opacity: 1; }
+
+/* Loader overlay covering the canvas area */
+.waves-loader {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(180deg, rgb(11 11 26), rgb(17 17 42));
+}
+.waves-bg.ready .waves-loader { display: none; }
+
+/* Minimal spinner */
+.waves-loader .spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid rgba(255,255,255,.18);
+  border-top-color: rgba(255,255,255,.65);
+  animation: spin .9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 
 #waves-canvas {
   width: 100%;

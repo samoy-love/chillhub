@@ -2306,21 +2306,111 @@ namespace ChillHub.Pages {
             return null;
         }
 
+        // HttpClient tuned for many small image fetches in parallel
+        private static readonly System.Net.Http.HttpClient s_httpClient =
+            new System.Net.Http.HttpClient(new System.Net.Http.HttpClientHandler {
+                AllowAutoRedirect = true,
+                AutomaticDecompression = System.Net.DecompressionMethods.All,
+                UseCookies = true,
+#if NET462 || NET48 || NET5_0_OR_GREATER
+                MaxConnectionsPerServer = 16,
+#endif
+            });
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> s_imgInflight = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, BitmapImage> s_imgCache = new System.Collections.Concurrent.ConcurrentDictionary<string, BitmapImage>(StringComparer.OrdinalIgnoreCase);
+
+        private static void DebugLog(string msg)
+        {
+            try { ChillHub.Core.Logging.Logger.Info(msg); } catch { }
+            try { System.Diagnostics.Debug.WriteLine(msg); } catch { }
+            try { Console.WriteLine(msg); } catch { }
+        }
+
+        private async Task LoadImageAsync(Image img, string url) {
+            try {
+                // Cache hit: apply immediately
+                if (s_imgCache.TryGetValue(url, out var cached)) {
+                    DebugLog($"[ImgLoad] cache hit url='{url}'");
+                    await img.Dispatcher.InvokeAsync(() => {
+                        try { img.Source = cached; img.Visibility = Visibility.Visible; } catch { img.Visibility = Visibility.Visible; }
+                    });
+                    return;
+                }
+
+                // Deduplicate in-flight loads for the same URL
+                if (!s_imgInflight.TryAdd(url, 1)) {
+                    DebugLog($"[ImgLoad] skip duplicate inflight url='{url}'");
+                    return;
+                }
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                DebugLog($"[ImgLoad] HTTP GET start url='{url}'");
+                using var resp = await s_httpClient.GetAsync(url, System.Net.Http.HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+                if (!resp.IsSuccessStatusCode) {
+                    var ct = resp.Content?.Headers?.ContentType?.ToString() ?? "";
+                    DebugLog($"[ImgLoad] HTTP non-200 status={(int)resp.StatusCode} contentType='{ct}' url='{url}'");
+                    throw new Exception("HTTP " + (int)resp.StatusCode + " " + resp.StatusCode);
+                }
+                await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
+                // Copy to memory to fully detach from HTTP stream before moving to UI thread
+                using var ms = new System.IO.MemoryStream();
+                await stream.CopyToAsync(ms).ConfigureAwait(false);
+                ms.Position = 0;
+                sw.Stop();
+                DebugLog($"[ImgLoad] HTTP ok bytes={ms.Length} elapsedMs={sw.ElapsedMilliseconds} url='{url}'");
+                await img.Dispatcher.InvokeAsync(() => {
+                    try {
+                        var bi = new BitmapImage();
+                        bi.BeginInit();
+                        bi.CacheOption = BitmapCacheOption.OnLoad;
+                        bi.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
+                        // Decode to roughly the visual size to speed up load and reduce memory
+                        try {
+                            int targetH = 0;
+                            if (img.Height > 0 && !double.IsNaN(img.Height)) targetH = (int)Math.Round(img.Height);
+                            // Fallback to desired size if Height is not set
+                            if (targetH <= 0 && img.DesiredSize.Height > 0) targetH = (int)Math.Round(img.DesiredSize.Height);
+                            if (targetH <= 0) targetH = 88; // common icon height in UI
+                            bi.DecodePixelHeight = targetH;
+                        } catch { }
+                        bi.StreamSource = ms;
+                        bi.EndInit();
+                        bi.Freeze();
+                        // Put into cache (frozen, safe to reuse across threads)
+                        try { s_imgCache[url] = bi; } catch { }
+                        img.Source = bi;
+                        img.Visibility = Visibility.Visible;
+                        DebugLog($"[ImgLoad] image applied url='{url}'");
+                    } catch (Exception ex) { img.Visibility = Visibility.Collapsed; DebugLog($"[ImgLoad] apply error url='{url}' err='{ex.Message}'"); }
+                });
+            }
+            catch (Exception ex) {
+                DebugLog($"[ImgLoad] error url='{url}' err='{ex.Message}'");
+                await img.Dispatcher.InvokeAsync(() => { img.Visibility = Visibility.Collapsed; });
+            }
+            finally {
+                s_imgInflight.TryRemove(url, out _);
+            }
+        }
+
         private void CoverImg_Loaded(object sender, RoutedEventArgs e) {
             if (sender is not Image img) {
                 return;
             }
 
-            // 1) Получаем сырой URL из Tag, иначе из DataContext (IconUrl), иначе из текущего Source.Uri
+            // 1) Получаем сырой URL из Tag, иначе из DataContext (IconUrl для GameInfo / CoverUrl для NewsItem), иначе из текущего Source.Uri
             string raw = (img.Tag as string) ?? string.Empty;
             if (string.IsNullOrWhiteSpace(raw)) {
                 try {
                     if (img.DataContext is ChillHub.Core.GameInfo gi) {
+                        // GameInfo имеет только IconUrl
                         raw = gi.IconUrl ?? string.Empty;
                     }
+                    else if (img.DataContext is ChillHub.Core.NewsItem ni) {
+                        // NewsItem использует CoverUrl
+                        raw = ni.CoverUrl;
+                    }
                 }
-                catch {
-                }
+                catch { }
             }
 
             if (string.IsNullOrWhiteSpace(raw)) {
@@ -2329,8 +2419,7 @@ namespace ChillHub.Pages {
                         raw = bi.UriSource.OriginalString;
                     }
                 }
-                catch {
-                }
+                catch { }
             }
 
             if (string.IsNullOrWhiteSpace(raw)) {
@@ -2346,27 +2435,33 @@ namespace ChillHub.Pages {
                 return;
             }
             try {
-                // Преобразуем в абсолютный URL при необходимости на базе BaseApi
+                // Нормализуем URL и жёстко привязываем к origin из BaseApi (scheme+host[:port])
+                var apiUri = new Uri(this.BaseApi.TrimEnd('/') + "/", UriKind.Absolute);
                 string url;
+                DebugLog($"[ImgLoad] raw='{raw}' baseApi='{this.BaseApi}' origin='{apiUri.Scheme}://{apiUri.Authority}'");
 
                 // Поддержка протокол-относительных URL (//host/path)
                 if (raw.StartsWith("//")) {
-                    var baseUri = new Uri(this.BaseApi.TrimEnd('/') + "/", UriKind.Absolute);
-                    url = new Uri(baseUri.Scheme + ":" + raw, UriKind.Absolute).ToString();
+                    url = new Uri(apiUri.Scheme + ":" + raw, UriKind.Absolute).ToString();
+                    DebugLog($"[ImgLoad] case='protocol-relative' url='{url}'");
                 }
-                else if (!Uri.TryCreate(raw, UriKind.Absolute, out var abs)) {
-                    var baseUri = new Uri(this.BaseApi.TrimEnd('/') + "/", UriKind.Absolute);
-                    url = new Uri(baseUri, raw).ToString();
+                // Абсолютные URL (http/https)
+                else if (Uri.TryCreate(raw, UriKind.Absolute, out var abs)) {
+                    url = abs.ToString();
+                    DebugLog($"[ImgLoad] case='absolute' url='{url}'");
                 }
                 else {
-                    url = abs.ToString();
+                    // Относительные URL: принудительно делаем корневыми к origin
+                    // Пример: "manifests/game/icon.png" -> "/manifests/game/icon.png"
+                    var rel = raw.StartsWith("/") ? raw : ("/" + raw);
+                    url = new Uri(apiUri, rel).ToString();
+                    DebugLog($"[ImgLoad] case='relative' rel='{rel}' url='{url}'");
                 }
 
-                try {
-                    ChillHub.Core.Logging.Logger.Info($"[ImgLoad] resolved url='{url}'");
-                }
-                catch {
-                }
+                // Не добавляем динамический cache-busting параметр — это вызывало мигание при переключении игр.
+                // Полагайтесь на кеширование и проверку равенства URL ниже, чтобы не перезагружать изображение без надобности.
+
+                DebugLog($"[ImgLoad] resolved url='{url}'");
 
                 // Если уже есть валидный источник с тем же URL — просто показать и скрыть скелетон
                 try {
@@ -2385,9 +2480,8 @@ namespace ChillHub.Pages {
                 catch {
                 }
 
-                // Неблокирующая загрузка: пусть WPF подтянет изображение асинхронно
-                img.Source = new BitmapImage(new Uri(url, UriKind.Absolute));
-                img.Visibility = Visibility.Visible;
+                // Загрузка через HttpClient -> Stream, чтобы избежать проблем с относительными путями/кэшем
+                _ = LoadImageAsync(img, url);
 
                 // Скрыть скелетон сразу
                 try {

@@ -1167,15 +1167,52 @@ report_cmp(){
   report_cmp downloads "$DL_MAN_B64"   "/var/www/site/downloads"      ""
   report_cmp bin     "$BIN_MAN_B64"    "$HOME/deploy/bin"             "bin"
   report_cmp systemd "$SYS_MAN_B64"    "/etc/systemd/system"          "sys"
+echo "---- AUTO SCAN REPORT ----"
+# Auto scan helper (lists files and prints sha for first 500 entries)
+auto_scan(){
+  local name="$1" root="$2"
+  if [ -d "$root" ]; then
+    local cnt
+    cnt=$(find "$root" -type f 2>/dev/null | wc -l | awk '{print $1}')
+    echo "[auto] $name root=$root files=$cnt"
+    LC_ALL=C find "$root" -type f -printf '%P\t%p\n' 2>/dev/null | sed -n '1,500p' | while IFS=$'\t' read -r rel full; do
+      sha=$(sha256sum "$full" | awk '{print $1}')
+      echo "AUTO $name $rel $sha"
+    done
+  else
+    echo "[auto] $name root missing: $root"
+  fi
+}
+# Site and downloads
+auto_scan site "/var/www/site"
+auto_scan downloads "/var/www/site/downloads"
+# Admin UI
+auto_scan admin_ui "/var/www/launcher/admin_ui"
+# Launcher content trees (server-managed)
+auto_scan launcher_content "/var/www/launcher/content"
+auto_scan launcher_manifests "/var/www/launcher/manifests"
+auto_scan launcher_news "/var/www/launcher/news"
+# Binaries (second service included)
+for f in /opt/chillhub/api /opt/chillhub/admin; do
+  if [ -f "$f" ]; then echo "AUTO bin $(basename "$f") $(sha256sum "$f" | awk '{print $1}')"; else echo "[auto] bin missing $(basename "$f")"; fi
+done
+# Systemd services (hash any chillhub-*.service present)
+if [ -d "/etc/systemd/system" ]; then
+  ls -1 /etc/systemd/system/chillhub-*.service 2>/dev/null | sed -n '1,200p' | while read -r svc; do
+    if [ -f "$svc" ]; then echo "AUTO systemd $(basename "$svc") $(sha256sum "$svc" | awk '{print $1}')"; fi
+  done
+fi
+
 # Enforce failure on manifest report too
-FAIL_FLAG="%%FAIL_ON_MISMATCH%%"
-if [ -n "$FAIL_FLAG" ]; then
-  if grep -qE '^(FAIL|MISS) ' /tmp/chillhub-deploy.log 2>/dev/null; then
-    echo "---- DIAGNOSTICS (summary) ----"
-    echo "---- NGINX ERROR LOG (last 200) ----"; sudo tail -n 200 /var/log/nginx/error.log || true
-    echo "---- NGINX ACCESS LOG (last 200) ----"; sudo tail -n 200 /var/log/nginx/access.log || true
-    echo "[sum] Manifest report indicates mismatches; exiting with 1 due to FAIL_ON_MISMATCH"
-    exit 1
+  FAIL_FLAG="%%FAIL_ON_MISMATCH%%"
+  if [ -n "$FAIL_FLAG" ]; then
+    if grep -qE '^(FAIL|MISS) ' /tmp/chillhub-deploy.log 2>/dev/null; then
+      echo "---- DIAGNOSTICS (summary) ----"
+      echo "---- NGINX ERROR LOG (last 200) ----"; sudo tail -n 200 /var/log/nginx/error.log || true
+      echo "---- NGINX ACCESS LOG (last 200) ----"; sudo tail -n 200 /var/log/nginx/access.log || true
+      echo "[sum] Manifest report indicates mismatches; exiting with 1 due to FAIL_ON_MISMATCH"
+      exit 1
+    fi
   fi
 fi
 '@

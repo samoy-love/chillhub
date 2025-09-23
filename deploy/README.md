@@ -99,3 +99,88 @@ server {
 </details>
 
 См. также рабочий конфиг: `deploy/launcher.conf`.
+
+---
+
+## Сжатие (Gzip/Brotli) — настройка сервера «в первый раз»
+
+В боевом конфиге `deploy/launcher.conf` уже включён безопасный Gzip (внутри `server { ... }`). Этого достаточно для большинства клиентов. Brotli даёт +5–15% к экономии на текстовых файлах, но требует отдельного модуля. Ниже — как включить и проверить.
+
+### 1) Gzip — уже включён
+
+- Ничего ставить не нужно: модуль gzip встроен в nginx.
+- В конфиг добавлены:
+  - `gzip on; gzip_comp_level 5; gzip_min_length 1024; gzip_vary on; gzip_proxied any;`
+  - `gzip_types text/css application/javascript application/json image/svg+xml font/* ...`
+  - `gzip_static on;` — если рядом с файлом лежит precompress-версия `.gz`, nginx будет отдавать её.
+
+Опционально можно сделать предсжатие тяжёлых ассетов в пайплайне/на сервере:
+
+```bash
+# Предсжать статические ассеты в /var/www/site
+sudo bash -lc '
+  find /var/www/site -type f \
+    \( -name "*.css" -o -name "*.js" -o -name "*.svg" -o -name "*.json" -o -name "*.html" \) \
+    -exec gzip -k -f -9 {} \;'
+```
+
+### 2) Brotli — опционально (если модуль доступен в вашей сборке nginx)
+
+В репозиториях Debian/Ubuntu модуль может отсутствовать в стандартной сборке. Варианты:
+
+- Установка модульного пакета (если доступно в вашей ОС):
+
+```bash
+sudo apt update
+# В некоторых дистрибутивах пакет называется nginx-module-brotli или входит в nginx-extras
+sudo apt install -y nginx-extras brotli
+```
+
+- Либо использовать сторонний репозиторий с модулями nginx (например, PPA от Ondřej Surý). Оцените риски и политику обновлений перед использованием.
+
+После установки модуля подключите его (обычно через файл в `/etc/nginx/modules-enabled/`):
+
+```bash
+# Пример (пути зависят от пакета в вашей ОС)
+echo 'load_module modules/ngx_http_brotli_filter_module.so;' | sudo tee /etc/nginx/modules-enabled/60-brotli-filter.conf
+echo 'load_module modules/ngx_http_brotli_static_module.so;' | sudo tee /etc/nginx/modules-enabled/60-brotli-static.conf
+
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Далее можно включить директивы Brotli в `server { ... }` (или `http { ... }`). Мы не включили их в `deploy/launcher.conf` по умолчанию, чтобы не ломать `nginx -t`, если модуль отсутствует. Если модуль точно есть, добавьте в ваш рабочий конфиг:
+
+```nginx
+# Brotli (включайте только если модуль загружается корректно)
+brotli on;
+brotli_comp_level 5;          # 4–6 — хороший баланс
+brotli_static on;             # отдавать заранее сжатые .br при наличии
+brotli_types
+  text/plain text/css text/javascript application/javascript application/json 
+  application/manifest+json application/xml image/svg+xml font/ttf font/otf font/collection;
+```
+
+Предсжатие статических файлов Brotli:
+
+```bash
+sudo bash -lc '
+  find /var/www/site -type f \
+    \( -name "*.css" -o -name "*.js" -o -name "*.svg" -o -name "*.json" -o -name "*.html" \) \
+    -exec brotli -f -q 11 {} \;'
+```
+
+### 3) Проверка, что сжатие работает
+
+```bash
+# Gzip: смотрим, что сервер отдаёт gzip при запросе с Accept-Encoding
+curl -sI -H 'Accept-Encoding: gzip' https://launcher.samoy.love/styles.css | grep -iE 'content-encoding|cache-control'
+
+# Brotli (если включён):
+curl -sI -H 'Accept-Encoding: br' https://launcher.samoy.love/styles.css | grep -iE 'content-encoding|cache-control'
+
+# Проверка фактической экономии
+curl -so /dev/null -H 'Accept-Encoding: gzip' -w '%{size_download}\n' https://launcher.samoy.love/styles.css
+curl -so /dev/null -H 'Accept-Encoding: identity' -w '%{size_download}\n' https://launcher.samoy.love/styles.css
+```
+
+Если `Content-Encoding: gzip`/`br` присутствует — всё ок. Для HTML в нашем конфиге включено `no-store`, но сжатие для HTML nginx всё равно применяет (если не запрещать отдельно).

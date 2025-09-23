@@ -782,6 +782,12 @@
   window.addEventListener('resize', resize, {passive:true});
   resize();
 
+  // Mark waves background as ready so the loader hides and canvas fades in
+  try {
+    const wavesBgEl = document.querySelector('.waves-bg');
+    if (wavesBgEl) { wavesBgEl.classList.add('ready'); }
+  } catch {}
+
   // Define wave layers
   const waves = [
     { amp: 28, len: 420, spd: 0.6, phase: Math.random()*Math.PI*2, hue: 265 },
