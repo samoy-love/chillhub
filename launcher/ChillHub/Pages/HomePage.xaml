@@ -808,12 +808,19 @@
     <!-- Feedback modal overlay -->
     <Grid x:Name="FeedbackOverlay" Visibility="Collapsed" Background="#C0000000"
           HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Grid.RowSpan="4">
+      <!-- Shadow layer (no effects on content to keep text crisp) -->
+      <Border Width="720" HorizontalAlignment="Center" VerticalAlignment="Center"
+              CornerRadius="12" Background="#000000" Opacity="0.22" Margin="0,6,0,0"
+              SnapsToDevicePixels="True" UseLayoutRounding="True"/>
+      <!-- Content card (sharp text) -->
       <Border Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderHover}" BorderThickness="1.5" CornerRadius="10"
-              Padding="20" Width="720" HorizontalAlignment="Center" VerticalAlignment="Center">
-        <Border.Effect>
-          <DropShadowEffect BlurRadius="20" ShadowDepth="0" Opacity="0.5" Color="#000000"/>
-        </Border.Effect>
-        <Grid>
+              Padding="20" Width="720" HorizontalAlignment="Center" VerticalAlignment="Center"
+              SnapsToDevicePixels="True" UseLayoutRounding="True"
+              TextOptions.TextRenderingMode="ClearType" TextOptions.TextFormattingMode="Display"
+              TextOptions.TextHintingMode="Fixed"
+              RenderOptions.ClearTypeHint="Enabled">
+        <Grid SnapsToDevicePixels="True" UseLayoutRounding="True"
+              TextOptions.TextRenderingMode="ClearType" TextOptions.TextFormattingMode="Display" TextOptions.TextHintingMode="Fixed">
           <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
