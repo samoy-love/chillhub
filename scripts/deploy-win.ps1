@@ -665,17 +665,21 @@ if sudo test -f "$NGX_MAIN"; then
     fi
   fi
   # events { worker_connections 4096; }
+  # Make tuning changes non-fatal to avoid portability issues; nginx -t will still validate
+  set +e
   if sudo grep -qE '^[[:space:]]*events[[:space:]]*\{' "$NGX_MAIN"; then
-    # ensure/replace worker_connections inside events block
-    if sudo awk '/^[[:space:]]*events[[:space:]]*\{/{in=1} in && /^[[:space:]]*\}/{in=0} in && /worker_connections/{found=1} END{exit(found?0:1)}' "$NGX_MAIN"; then
-      sudo sed -ri '/^[[:space:]]*events[[:space:]]*\{/,/^[[:space:]]*\}/{s/^[[:space:]]*worker_connections[[:space:]]+[^;]+;/    worker_connections 4096;/}' "$NGX_MAIN"
+    # Replace existing worker_connections inside events block if present
+    if sudo awk '/^[[:space:]]*events[[:space:]]*\{/{blk=1} blk && /^[[:space:]]*\}/{blk=0} blk && /worker_connections/{found=1} END{exit(found?0:1)}' "$NGX_MAIN"; then
+      sudo sed -ri '/^[[:space:]]*events[[:space:]]*\{/,/^[[:space:]]*\}/{s/^[[:space:]]*worker_connections[[:space:]]+[^;]+;/    worker_connections 4096;/}' "$NGX_MAIN" || true
     else
-      sudo sed -ri '/^[[:space:]]*events[[:space:]]*\{/{:a;n;/^[[:space:]]*\}/!ba;i\    worker_connections 4096;}' "$NGX_MAIN"
+      # Insert a worker_connections line immediately after the opening of events block
+      sudo awk 'BEGIN{inserted=0} /^[[:space:]]*events[[:space:]]*\{[[:space:]]*$/{print; if(!inserted){print "    worker_connections 4096;"; inserted=1; next}} {print}' "$NGX_MAIN" | sudo tee "$NGX_MAIN.tmp" >/dev/null && sudo mv "$NGX_MAIN.tmp" "$NGX_MAIN" || true
     fi
   else
-    # append minimal events block at end
-    printf "%s\n%s\n%s\n" "events {" "    worker_connections 4096;" "}" | sudo tee -a "$NGX_MAIN" >/dev/null
+    # Append minimal events block at end if missing
+    printf "%s\n%s\n%s\n" "events {" "    worker_connections 4096;" "}" | sudo tee -a "$NGX_MAIN" >/dev/null || true
   fi
+  set -e
 fi
 
 sudo nginx -t
