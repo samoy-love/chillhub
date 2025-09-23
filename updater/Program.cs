@@ -51,7 +51,8 @@ internal static class Program
         var dirs = Opt("--dirs", string.Empty);
         var del = Opt("--del", string.Empty);
         var strip = Opt("--strip-prefix", string.Empty);
-        var preserve = Opt("--preserve", "config.json");
+        var preserve = Opt("--preserve", "config.json,launcher.version");
+        var newVersion = Opt("--version", string.Empty);
 
         Directory.CreateDirectory(Path.GetDirectoryName(log) ?? Path.GetTempPath());
         void Log(string msg)
@@ -420,6 +421,19 @@ internal static class Program
                     Log($"hash union summary: total={total} ok={ok} mismatch={mm} src_missing={missS} dst_missing={missD}");
                 }
                 catch (Exception ex) { Log($"hash union compare error: {ex.Message}"); }
+
+                // Write version marker (if provided)
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(newVersion))
+                    {
+                        var marker = Path.Combine(dst, "launcher.version");
+                        try { Directory.CreateDirectory(Path.GetDirectoryName(marker)!); } catch { }
+                        File.WriteAllText(marker, newVersion + Environment.NewLine, Encoding.UTF8);
+                        Log($"wrote version marker: {marker} = '{newVersion}'");
+                    }
+                }
+                catch (Exception ex) { Log($"version marker write error: {ex.Message}"); }
 
                 // Start
                 try

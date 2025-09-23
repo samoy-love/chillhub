@@ -189,11 +189,14 @@
     <Setter Property="SnapsToDevicePixels" Value="True"/>
     <Style.Triggers>
       <EventTrigger RoutedEvent="Loaded">
-        <BeginStoryboard>
+        <BeginStoryboard x:Name="SkeletonPulse">
           <Storyboard RepeatBehavior="Forever" AutoReverse="True">
             <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.35" To="0.7" Duration="0:0:1.1"/>
           </Storyboard>
         </BeginStoryboard>
+      </EventTrigger>
+      <EventTrigger RoutedEvent="Unloaded">
+        <StopStoryboard BeginStoryboardName="SkeletonPulse"/>
       </EventTrigger>
     </Style.Triggers>
   </Style>
@@ -604,12 +607,13 @@
     </Setter>
   </Style>
 
-  <!-- Scrollbar theming -->
-  <!-- Scrollbar colors aligned with landing vars (sb-thumb, sb-thumb-hover) -->
-  <SolidColorBrush x:Key="Brush.ScrollbarThumb" Color="#2FFFFFFF"/>
-  <SolidColorBrush x:Key="Brush.ScrollbarThumbHover" Color="#47FFFFFF"/>
+  <!-- Scrollbar theming per request: track = Background, thumb = #1A122B, hover = slightly lighter, border = #2B1F4A -->
+  <SolidColorBrush x:Key="Brush.ScrollbarTrack" Color="{StaticResource Color.Surface}"/>
+  <SolidColorBrush x:Key="Brush.ScrollbarThumb" Color="#2A2A50"/>
+  <SolidColorBrush x:Key="Brush.ScrollbarThumbHover" Color="#3A3A66"/>
+  <SolidColorBrush x:Key="Brush.ScrollbarThumbBorder" Color="#2B1F4A"/>
   <Style TargetType="ScrollBar">
-    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="Background" Value="{StaticResource Brush.ScrollbarTrack}"/>
     <Setter Property="Width" Value="8"/>
     <Setter Property="Template">
       <Setter.Value>
@@ -627,13 +631,18 @@
                 <RepeatButton Visibility="Collapsed"/>
               </Track.DecreaseRepeatButton>
               <Track.Thumb>
-                <Thumb x:Name="PART_Thumb" Background="{StaticResource Brush.ScrollbarThumb}" BorderThickness="0" Opacity="0.7">
+                <Thumb x:Name="PART_Thumb"
+                       Background="{StaticResource Brush.ScrollbarThumb}"
+                       BorderBrush="{StaticResource Brush.ScrollbarThumbBorder}"
+                       BorderThickness="0"
+                       Opacity="0.75">
                   <Thumb.Template>
                     <ControlTemplate TargetType="Thumb">
-                      <Border x:Name="Th"
+                      <Border x:Name="ThBase"
                               Background="{TemplateBinding Background}"
-                              CornerRadius="4"
-                              BorderThickness="0"/>
+                              BorderBrush="{TemplateBinding BorderBrush}"
+                              BorderThickness="{TemplateBinding BorderThickness}"
+                              CornerRadius="4"/>
                     </ControlTemplate>
                   </Thumb.Template>
                 </Thumb>
@@ -646,7 +655,9 @@
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="PART_Thumb" Property="Background" Value="{StaticResource Brush.ScrollbarThumbHover}"/>
-              <Setter TargetName="PART_Thumb" Property="Opacity" Value="0.85"/>
+              <Setter TargetName="PART_Thumb" Property="Opacity" Value="0.9"/>
+              <Setter TargetName="PART_Thumb" Property="BorderThickness" Value="1"/>
+              <Setter TargetName="PART_Thumb" Property="BorderBrush" Value="{StaticResource Brush.ScrollbarThumbBorder}"/>
             </Trigger>
             <Trigger Property="Orientation" Value="Horizontal">
               <Setter Property="Height" Value="8"/>

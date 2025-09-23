@@ -6,8 +6,16 @@
       Title="Главная"
       Background="{DynamicResource Brush.Background}">
   <Page.Resources>
+    <!-- Progress visuals shared brushes -->
+    <SolidColorBrush x:Key="Brush.ProgressBorder" Color="#2B1F4A"/>
+    <SolidColorBrush x:Key="Brush.ProgressTrack" Color="#1A122B"/>
     <!-- Base dim colors -->
     <!-- Play state uses logo's purple (secondary accent family) -->
+    <sys:Double x:Key="SkeletonOffset">4</sys:Double>
+    <sys:Double x:Key="SkeletonSizeSmall">20</sys:Double>
+    <sys:Double x:Key="SkeletonSizeMedium">40</sys:Double>
+    <sys:Double x:Key="SkeletonSizeLarge">60</sys:Double>
+    <!-- ... rest of the code remains the same ... -->
     <SolidColorBrush x:Key="Btn.Play.Bg" Color="#6F3AFF"/>
     <SolidColorBrush x:Key="Btn.Play.Bg.Hover" Color="#7C3AED"/>
     <SolidColorBrush x:Key="Btn.Play.Bg.Disabled" Color="#3E2A77"/>
@@ -57,6 +65,9 @@
       <GradientStop Offset="1" Color="#FF3A75"/>
     </LinearGradientBrush>
 
+    <!-- New: Hover border color for cards (purple, much darker) -->
+    <SolidColorBrush x:Key="Brush.CardHoverBorder" Color="#3E2CC4"/>
+
     <!-- Verify indicator: rounded, purple shades -->
     <LinearGradientBrush x:Key="Brush.VerifyGradient" StartPoint="0,0" EndPoint="1,0">
       <GradientStop Offset="0" Color="#6F3AFF"/>
@@ -101,7 +112,7 @@
             <Grid ClipToBounds="True">
               <!-- Track with thick dark border and dark background; named PART_Track so WPF wires it -->
               <Border x:Name="PART_Track" CornerRadius="6" BorderThickness="2.5"
-                      Background="#1A122B" BorderBrush="#2B1F4A"/>
+                      Background="{DynamicResource Brush.ProgressTrack}" BorderBrush="{DynamicResource Brush.ProgressBorder}"/>
               <!-- Indicator; named PART_Indicator so WPF sets width automatically for determinate mode -->
               <Border x:Name="PART_Indicator" CornerRadius="6" Background="{DynamicResource Brush.AccentGradientPrimary}"
                       HorizontalAlignment="Left"/>
@@ -122,7 +133,7 @@
             <Border x:Name="bd" CornerRadius="10" BorderThickness="1"
                     Background="{DynamicResource Brush.Surface}"
                     BorderBrush="{DynamicResource Brush.Border}">
-              <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+              <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
             </Border>
             <ControlTemplate.Triggers>
               <!-- Hover (not selected) brighter -->
@@ -131,8 +142,8 @@
                   <Condition Property="IsMouseOver" Value="True"/>
                   <Condition Property="IsSelected" Value="False"/>
                 </MultiTrigger.Conditions>
-                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
-                <Setter TargetName="bd" Property="BorderThickness" Value="2"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.CardHoverBorder}"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="1.2"/>
               </MultiTrigger>
               <!-- Selected without focus -->
               <MultiTrigger>
@@ -159,7 +170,7 @@
                   <Condition Property="IsMouseOver" Value="True"/>
                 </MultiTrigger.Conditions>
                 <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
-                <Setter TargetName="bd" Property="BorderThickness" Value="2.2"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="1.6"/>
               </MultiTrigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter TargetName="bd" Property="Opacity" Value="0.6"/>
@@ -170,13 +181,13 @@
       </Setter>
     </Style>
 
-    <!-- News-specific selectable style: purple accent on hover; keep selected states as base -->
+    <!-- News-specific selectable style: hover uses progress border; keep selected states as base -->
     <Style x:Key="Style.ListBoxItem.SelectableCard.News" TargetType="ListBoxItem" BasedOn="{StaticResource Style.ListBoxItem.SelectableCard}">
       <Style.Triggers>
         <!-- Hover (any selection state): use brighter accent -->
         <Trigger Property="IsMouseOver" Value="True">
-          <Setter Property="BorderBrush" Value="{DynamicResource Brush.AccentHover}"/>
-          <Setter Property="BorderThickness" Value="1.8"/>
+          <Setter Property="BorderBrush" Value="{DynamicResource Brush.CardHoverBorder}"/>
+          <Setter Property="BorderThickness" Value="1.2"/>
         </Trigger>
         <!-- If selected + hover, keep selection thickness from base/style triggers -->
       </Style.Triggers>
@@ -461,8 +472,8 @@
             <ControlTemplate.Triggers>
               <!-- Hover (brighter) -->
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.AccentHover}"/>
-                <Setter TargetName="bd" Property="BorderThickness" Value="1.5"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.CardHoverBorder}"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="1.2"/>
               </Trigger>
               <!-- Selected without focus: bright but a bit thinner -->
               <MultiTrigger>
@@ -493,6 +504,89 @@
     </Style>
 
     <!-- Removed global ScrollBar styling to avoid StaticExtension resolution issues on some environments -->
+    
+    <!-- Shimmer skeletons (dark, subtle) -->
+    <Style x:Key="Style.Skeleton.NewsCard" TargetType="ContentControl">
+      <Setter Property="SnapsToDevicePixels" Value="True"/>
+      <Setter Property="Focusable" Value="False"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ContentControl">
+            <Grid ClipToBounds="True">
+              <Border CornerRadius="10" Background="{DynamicResource Brush.Surface}" Opacity="0.35"/>
+              <Rectangle>
+                <Rectangle.Fill>
+                  <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                    <GradientStop Color="#00FFFFFF" Offset="0"/>
+                    <GradientStop Color="#22FFFFFF" Offset="0.35"/>
+                    <GradientStop Color="#00FFFFFF" Offset="0.7"/>
+                  </LinearGradientBrush>
+                </Rectangle.Fill>
+                <Rectangle.RenderTransform>
+                  <TranslateTransform x:Name="SkTT" X="-300"/>
+                </Rectangle.RenderTransform>
+              </Rectangle>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                <BeginStoryboard x:Name="NewsCardShimmer">
+                  <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                    <DoubleAnimation Storyboard.TargetName="SkTT" Storyboard.TargetProperty="X" From="-300" To="300" Duration="0:0:1.6"/>
+                  </Storyboard>
+                </BeginStoryboard>
+              </EventTrigger>
+              <EventTrigger RoutedEvent="FrameworkElement.Unloaded">
+                <StopStoryboard BeginStoryboardName="NewsCardShimmer"/>
+              </EventTrigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="Style.Skeleton.GameRow" TargetType="ContentControl">
+      <Setter Property="SnapsToDevicePixels" Value="True"/>
+      <Setter Property="Focusable" Value="False"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ContentControl">
+            <Grid ClipToBounds="True">
+              <Border CornerRadius="6" Background="{DynamicResource Brush.Surface}" Opacity="0.35"/>
+              <Rectangle x:Name="SkRect2">
+                <Rectangle.Fill>
+                  <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                    <GradientStop Color="#00FFFFFF" Offset="0"/>
+                    <GradientStop Color="#22FFFFFF" Offset="0.35"/>
+                    <GradientStop Color="#00FFFFFF" Offset="0.7"/>
+                  </LinearGradientBrush>
+                </Rectangle.Fill>
+                <Rectangle.RenderTransform>
+                  <TranslateTransform X="-300"/>
+                </Rectangle.RenderTransform>
+                <Rectangle.Triggers>
+                  <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                    <BeginStoryboard x:Name="GameRowShimmer">
+                      <Storyboard RepeatBehavior="Forever">
+                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)" From="-300" To="300" Duration="0:0:1.6"/>
+                      </Storyboard>
+                    </BeginStoryboard>
+                  </EventTrigger>
+                  <EventTrigger RoutedEvent="FrameworkElement.Unloaded">
+                    <StopStoryboard BeginStoryboardName="GameRowShimmer"/>
+                  </EventTrigger>
+                </Rectangle.Triggers>
+              </Rectangle>
+            </Grid>
+            <ControlTemplate.Triggers>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <!-- Shared skeleton sizing resources -->
+    <sys:Double x:Key="Skeleton.GameRowHeight">60</sys:Double>
+    <sys:Double x:Key="Skeleton.NewsPreloadHeight">120</sys:Double>
+    <Thickness x:Key="Skeleton.GameTopOffsetThickness">0,4,0,0</Thickness>
+    <Thickness x:Key="Skeleton.NewsTopOffsetThickness">0,6,0,0</Thickness>
   </Page.Resources>
   <Grid Margin="8,8,8,8" Background="{DynamicResource Brush.Background}">
     <Grid.RowDefinitions>
@@ -550,11 +644,11 @@
           <!-- Контейнер строки списка/скелетона с тёмным фоном -->
           <Grid Grid.Row="3" Background="{DynamicResource Brush.Surface}">
             <!-- Skeleton loader для списка игр -->
-            <StackPanel Name="GamesSkeleton">
-              <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="40"/>
-              <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="40"/>
-              <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="40"/>
-              <Border Style="{DynamicResource Style.Skeleton}" Height="40"/>
+            <StackPanel Name="GamesSkeleton" Margin="{StaticResource Skeleton.GameTopOffsetThickness}">
+              <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.GameRowHeight}"/>
+              <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.GameRowHeight}"/>
+              <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.GameRowHeight}"/>
+              <Border Style="{DynamicResource Style.Skeleton}" Height="{StaticResource Skeleton.GameRowHeight}"/>
             </StackPanel>
             <!-- Листаемый список игр как боковое меню (карточки) -->
             <ListBox Name="GameList" SelectionChanged="GameCombo_SelectionChanged" Visibility="Collapsed" Background="{DynamicResource Brush.Surface}"
@@ -577,12 +671,31 @@
                 </ControlTemplate>
               </ListBox.Template>
               <ListBox.ItemContainerStyle>
-                <Style TargetType="ListBoxItem" BasedOn="{StaticResource Style.ListBoxItem.SelectableCard}"/>
+                <Style TargetType="ListBoxItem" BasedOn="{StaticResource Style.ListBoxItem.SelectableCard.Game}">
+                  <!-- Default row height (when content is fully loaded) -->
+                  <Setter Property="MinHeight" Value="40"/>
+                  <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+                  <Style.Triggers>
+                    <!-- While there is no icon URL (loading/skeleton state), make the row taller -->
+                    <DataTrigger Binding="{Binding IconUrl}" Value="">
+                      <Setter Property="MinHeight" Value="{StaticResource Skeleton.GameRowHeight}"/>
+                      <!-- Add top padding for visible offset while skeleton is shown -->
+                      <Setter Property="Padding" Value="{StaticResource Skeleton.GameTopOffsetThickness}"/>
+                      <!-- Also increase outer margin top so the whole item shifts down -->
+                      <Setter Property="Margin" Value="0,10,0,6"/>
+                    </DataTrigger>
+                    <DataTrigger Binding="{Binding IconUrl}" Value="{x:Null}">
+                      <Setter Property="MinHeight" Value="{StaticResource Skeleton.GameRowHeight}"/>
+                      <Setter Property="Padding" Value="{StaticResource Skeleton.GameTopOffsetThickness}"/>
+                      <Setter Property="Margin" Value="0,10,0,6"/>
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
               </ListBox.ItemContainerStyle>
               <ListBox.ItemTemplate>
                 <DataTemplate>
                   <!-- Neutralize inner card border to avoid double border; content still keeps padding -->
-                  <Border Style="{DynamicResource Style.Card}" Padding="10" Margin="0" HorizontalAlignment="Stretch"
+                  <Border Padding="10" Margin="0" HorizontalAlignment="Stretch"
                           BorderThickness="0" BorderBrush="Transparent"
                           ContextMenuOpening="GameItem_ContextMenuOpening">
                     <Border.ContextMenu>
@@ -591,12 +704,49 @@
                         <MenuItem Header="Удалить локальные файлы" Click="DeleteGame_Click" CommandParameter="{Binding}"/>
                       </ContextMenu>
                     </Border.ContextMenu>
+                    <!-- Grow row height while skeleton is visible -->
+                    <Border.Style>
+                      <Style TargetType="Border" BasedOn="{StaticResource Style.Card}">
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding ElementName=GameRowSkeleton, Path=Visibility}" Value="Visible">
+                            <Setter Property="MinHeight" Value="80"/>
+                            <!-- Add extra top padding so the skeleton/card is not stuck to the top -->
+                            <Setter Property="Padding" Value="10,12,10,10"/>
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Border.Style>
                     <Grid>
                       <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="36"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                       </Grid.ColumnDefinitions>
+                      <!-- Per-row shimmer overlay -->
+                      <!-- Spacer to enforce taller layout when skeleton is shown -->
+                      <Border x:Name="GameRowSkeletonSpacer" Grid.ColumnSpan="3"
+                              Height="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=ActualHeight}"
+                              Margin="{StaticResource Skeleton.GameTopOffsetThickness}" Background="Transparent"
+                              Visibility="{Binding ElementName=GameRowSkeleton, Path=Visibility}"/>
+                      <ContentControl x:Name="GameRowSkeleton" Grid.ColumnSpan="3" Panel.ZIndex="1"
+                                      HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="{StaticResource Skeleton.GameTopOffsetThickness}"
+                                      IsHitTestVisible="False"
+                                      Height="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=ActualHeight}">
+                        <ContentControl.Style>
+                          <Style TargetType="ContentControl" BasedOn="{StaticResource Style.Skeleton.GameRow}">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                              <!-- Show skeleton while there's no icon URL -->
+                              <DataTrigger Binding="{Binding IconUrl}" Value="">
+                                <Setter Property="Visibility" Value="Visible"/>
+                              </DataTrigger>
+                              <DataTrigger Binding="{Binding IconUrl}" Value="{x:Null}">
+                                <Setter Property="Visibility" Value="Visible"/>
+                              </DataTrigger>
+                            </Style.Triggers>
+                          </Style>
+                        </ContentControl.Style>
+                      </ContentControl>
                       <!-- Иконка игры -->
                       <Grid Grid.Column="0" Width="36" Height="36" VerticalAlignment="Center">
                         <!-- Default icon (visible under image or when no image) -->
@@ -745,12 +895,12 @@
         </Grid>
         <Grid Grid.Row="1">
           <!-- Skeleton loader -->
-          <StackPanel Name="GameNewsSkeleton">
-            <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8"/>
-            <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8"/>
-            <Border Style="{DynamicResource Style.Skeleton}"/>
+          <StackPanel Name="GameNewsSkeleton" Margin="{StaticResource Skeleton.NewsTopOffsetThickness}">
+            <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
+            <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
+            <Border Style="{DynamicResource Style.Skeleton}" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
           </StackPanel>
-          <ListBox Name="GameNewsList" SelectionChanged="GameNewsList_SelectionChanged" Visibility="Collapsed"
+          <ListBox Name="GameNewsList" SelectionChanged="GameNewsList_SelectionChanged" Visibility="Collapsed" Padding="0,0,6,0"
                  ScrollViewer.VerticalScrollBarVisibility="Visible"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                  ScrollViewer.CanContentScroll="False"
@@ -767,6 +917,7 @@
                     <ColumnDefinition Width="18"/>
                     <ColumnDefinition Width="*"/>
                   </Grid.ColumnDefinitions>
+                  <!-- Restrict shimmer overlay to image area only (fixed height 88) -->
                   <!-- Левая колонка: обложка -->
                   <Grid Grid.Column="0">
                     <Grid.Style>
@@ -781,6 +932,24 @@
                         </Style.Triggers>
                       </Style>
                     </Grid.Style>
+                    <ContentControl x:Name="GameNewsImgSkeleton"
+                                    HorizontalAlignment="Stretch" VerticalAlignment="Top" Panel.ZIndex="1"
+                                    IsHitTestVisible="False" Margin="{StaticResource Skeleton.NewsTopOffsetThickness}"
+                                    Height="{Binding ElementName=CoverImg, Path=ActualHeight}">
+                      <ContentControl.LayoutTransform>
+                        <ScaleTransform ScaleY="0.7"/>
+                      </ContentControl.LayoutTransform>
+                      <ContentControl.Style>
+                        <Style TargetType="ContentControl" BasedOn="{StaticResource Style.Skeleton.NewsCard}">
+                          <Setter Property="Visibility" Value="Collapsed"/>
+                          <Style.Triggers>
+                            <DataTrigger Binding="{Binding Source, ElementName=CoverImg}" Value="{x:Null}">
+                              <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                          </Style.Triggers>
+                        </Style>
+                      </ContentControl.Style>
+                    </ContentControl>
                     <!-- Removed skeleton placeholder for cover images per request -->
                     <Image x:Name="CoverImg" Source="{Binding CoverUrl}" Tag="{Binding CoverUrl}" Stretch="Uniform" Height="88" HorizontalAlignment="Stretch"
                            Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
@@ -819,12 +988,12 @@
         </Grid>
         <Grid Grid.Row="1">
           <!-- Skeleton loader -->
-          <StackPanel Name="LauncherNewsSkeleton" Margin="0,0,0,0">
-            <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8"/>
-            <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8"/>
-            <Border Style="{DynamicResource Style.Skeleton}"/>
+          <StackPanel Name="LauncherNewsSkeleton" Margin="{StaticResource Skeleton.NewsTopOffsetThickness}">
+            <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
+            <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
+            <Border Style="{DynamicResource Style.Skeleton}" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
           </StackPanel>
-          <ListBox Grid.Row="0" Name="LauncherNewsList" SelectionChanged="LauncherNewsList_SelectionChanged" Visibility="Collapsed"
+          <ListBox Grid.Row="0" Name="LauncherNewsList" SelectionChanged="LauncherNewsList_SelectionChanged" Visibility="Collapsed" Padding="0,0,6,0"
                  ScrollViewer.VerticalScrollBarVisibility="Visible"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                  ScrollViewer.CanContentScroll="False"
@@ -855,6 +1024,25 @@
                         </Style.Triggers>
                       </Style>
                     </Grid.Style>
+                    <!-- Image-only shimmer overlay bound to cover height -->
+                    <ContentControl x:Name="LauncherNewsImgSkeleton"
+                                    HorizontalAlignment="Stretch" VerticalAlignment="Top" Panel.ZIndex="1"
+                                    IsHitTestVisible="False" Margin="{StaticResource Skeleton.NewsTopOffsetThickness}"
+                                    Height="{Binding ElementName=CoverImg, Path=ActualHeight}">
+                      <ContentControl.LayoutTransform>
+                        <ScaleTransform ScaleY="0.7"/>
+                      </ContentControl.LayoutTransform>
+                      <ContentControl.Style>
+                        <Style TargetType="ContentControl" BasedOn="{StaticResource Style.Skeleton.NewsCard}">
+                          <Setter Property="Visibility" Value="Collapsed"/>
+                          <Style.Triggers>
+                            <DataTrigger Binding="{Binding Source, ElementName=CoverImg}" Value="{x:Null}">
+                              <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                          </Style.Triggers>
+                        </Style>
+                      </ContentControl.Style>
+                    </ContentControl>
                     <Border x:Name="ImgSkeleton" Style="{DynamicResource Style.Skeleton}" Height="88"/>
                     <Image x:Name="CoverImg" Source="{Binding CoverUrl}" Tag="{Binding CoverUrl}" Stretch="Uniform" Height="88" HorizontalAlignment="Stretch"
                            Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>

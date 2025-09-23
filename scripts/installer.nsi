@@ -30,6 +30,7 @@ Var GamesDir_Browse
 Var GamesDir_Label
 Var DeleteGames_Check
 Var Un_GamesDir
+Var DeleteGames_State
 Var LaunchAfterFlag
 Var PrereqsRan
 
@@ -136,16 +137,25 @@ Section "Install"
   ExecWait '"powershell" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\write-config.ps1" -GamesDir "$GAMES_DIR"'
   ; Prepare prerequisite installers in $PLUGINSDIR for optional install on Finish
   SetOutPath "$PLUGINSDIR\Redist"
-  File "Redist\${PREREQ_WEBVIEW2}"
-  File "Redist\${PREREQ_DOTNET}"
+  ; Use non-fatal includes so build continues if prereqs are not present
+  ; NSIS will emit a warning if the file is missing and continue
+  File /nonfatal "Redist\${PREREQ_WEBVIEW2}"
+  File /nonfatal "Redist\${PREREQ_DOTNET}"
 
 SectionEnd
 
 ; Macro to optionally delete games folder on uninstall
 !macro _DELETE_GAMES_IF_CHECKED
-  ${NSD_GetState} $DeleteGames_Check $2
-  ${If} $2 == ${BST_CHECKED}
-    RMDir /r "$Un_GamesDir"
+  ; Use cached state from un.SelectDeleteGames_Leave, because the page controls are destroyed before this section runs
+  ${If} $DeleteGames_State == 1
+    ${If} $Un_GamesDir == ""
+      MessageBox MB_ICONSTOP "Путь к папке с играми пуст. Удаление отменено."
+    ${Else}
+      IfFileExists "$Un_GamesDir\*.*" 0 +3
+        RMDir /r "$Un_GamesDir"
+        Goto +2
+      MessageBox MB_ICONINFORMATION "Папка с играми не найдена: $Un_GamesDir"
+    ${EndIf}
   ${Else}
     MessageBox MB_ICONINFORMATION "Папка с играми не была удалена. Вы можете удалить её вручную: $Un_GamesDir"
   ${EndIf}
@@ -290,13 +300,19 @@ Function un.SelectDeleteGames_Create
   ${If} $0 == error
     Abort
   ${EndIf}
-  ${NSD_CreateLabel} 0 0 100% 28 "Удалить папку с играми?\r\nПапка: $Un_GamesDir"
+  ${NSD_CreateLabel} 0 0 100% 40 "Удалить папку с играми?\r\nПапка: $Un_GamesDir"
   Pop $1
-  ${NSD_CreateCheckbox} 0 34 100% 12 "Удалить папку с играми (безвозвратно)"
+  ${NSD_CreateCheckbox} 0 46 100% 18 "Удалить папку с играми (безвозвратно)"
   Pop $DeleteGames_Check
   nsDialogs::Show
 FunctionEnd
 
 Function un.SelectDeleteGames_Leave
-  ; nothing to validate
+  ; Cache checkbox state because UI controls will be destroyed before uninstall section runs
+  ${NSD_GetState} $DeleteGames_Check $2
+  ${If} $2 == ${BST_CHECKED}
+    StrCpy $DeleteGames_State 1
+  ${Else}
+    StrCpy $DeleteGames_State 0
+  ${EndIf}
 FunctionEnd

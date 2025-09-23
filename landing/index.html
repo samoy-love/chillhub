@@ -31,7 +31,7 @@
     .waves-bg.ready .waves-loader{display:none}
   </style>
   <!-- Use standard stylesheet to eliminate FOUC from preload+swap pattern -->
-  <link rel="stylesheet" href="./styles.css?v=20250923-1">
+  <link rel="stylesheet" href="./styles.css?v=20250923-8">
   <!-- Preload the download screenshot to ensure instant visibility when navigating to #download -->
   <link rel="preload" as="image" href="./assets/images/launcher-main.jpg?v=20250923-1" imagesizes="(max-width: 980px) 92vw, 1120px">
   <link rel="icon" href="./assets/icons/app.ico" type="image/x-icon">
@@ -49,10 +49,10 @@
 
   <header class="site-header">
     <div class="container">
-      <div class="brand">
+      <a class="brand" href="./" title="Обновить страницу и перейти к началу">
         <img src="./assets/icons/logo.svg" alt="Chill Hub" onerror="this.style.display='none'" decoding="async" fetchpriority="high" width="28" height="28" />
         <span>Chill Hub</span>
-      </div>
+      </a>
       <nav class="nav">
         <a href="#games">Игры</a>
         <a href="#features">Фичи</a>
@@ -211,25 +211,19 @@
         <div class="features">
           <div class="feature">
             <div class="ico" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3v10m0 0l4-4m-4 4l-4-4M5 21h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true">
+                <path d="M16.08,59.26A8,8,0,0,1,0,59.26a59,59,0,0,1,97.13-45V8a8,8,0,1,1,16.08,0V33.35a8,8,0,0,1-8,8L80.82,43.62a8,8,0,1,1-1.44-15.95l8-.73A43,43,0,0,0,16.08,59.26Zm22.77,19.6a8,8,0,0,1,1.44,16l-10.08.91A42.95,42.95,0,0,0,102,63.86a8,8,0,0,1,16.08,0A59,59,0,0,1,22.3,110v4.18a8,8,0,0,1-16.08,0V89.14h0a8,8,0,0,1,7.29-8l25.31-2.3Z" transform="translate(60 60) scale(0.78) translate(-60 -60)"/>
+              </svg>
             </div>
             <h3>Умные обновления</h3>
             <p>Качаем не весь клиент, а только разницу. Экономим время и интернет, чтобы ты быстрее возвращался в игру.</p>
           </div>
           <div class="feature">
             <div class="ico" aria-hidden="true">
-              <!-- Shield Check -->
               <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M12 3l7 3v5c0 5-3.5 8.7-7 10-3.5-1.3-7-5-7-10V6l7-3z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-                <path d="M8.5 12.5l2.2 2.2 4.8-4.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <!-- Lightning bolt (zap) -->
+                <path d="M13 2L3 14h7l-1 8L21 8h-7l-1-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
-            </div>
-            <h3>Стабильность</h3>
-            <p>Держим папку игры в идеальном порядке: лишнее удаляем, нужное создаём, хеши проверяем. Без конфликтов и «мусора» — всё работает стабильно.</p>
-          </div>
-          <div class="feature">
-            <div class="ico" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 5h8M5 10h14M10 15h4M12 20v-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </div>
             <h3>Обновить → Играть</h3>
             <p>Никаких архивов и ручной распаковки. Нажал — и уже в игре. Обновления ставятся быстро, без лишней возни и шагов.</p>
@@ -249,10 +243,14 @@
           </div>
           <div class="feature">
             <div class="ico" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.25l-7.19-.61L12 2 9.19 8.64 2 9.25l5.46 4.72L5.82 21 12 17.27z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+              <!-- Shield Check -->
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 3l7 3v5c0 5-3.5 8.7-7 10-3.5-1.3-7-5-7-10V6l7-3z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                <path d="M8.5 12.5l2.2 2.2 4.8-4.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
             </div>
-            <h3>Уникальные сборки — бесплатно</h3>
-            <p>Уникальные сборки с автообновлениями. То, чего нет в открытом доступе.</p>
+            <h3>Стабильность</h3>
+            <p>Держим папку игры в идеальном порядке: лишнее удаляем, нужное создаём, хеши проверяем. Без конфликтов и «мусора» — всё работает стабильно.</p>
           </div>
           <div class="feature">
             <div class="ico" aria-hidden="true">
@@ -264,6 +262,13 @@
             </div>
             <h3>Новости и гайды внутри</h3>
             <p>Обновления и гайды — прямо в лаунчере.</p>
+          </div>
+          <div class="feature">
+            <div class="ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.25l-7.19-.61L12 2 9.19 8.64 2 9.25l5.46 4.72L5.82 21 12 17.27z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+            </div>
+            <h3>Уникальные сборки — бесплатно</h3>
+            <p>Уникальные сборки с автообновлениями. То, чего нет в открытом доступе.</p>
           </div>
         </div>
       </div>
@@ -292,13 +297,6 @@
     </div>
   </footer>
 
-  <!-- Back-to-top arrow button -->
-  <button id="to-top" class="to-top" aria-label="Наверх" title="Наверх">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <path d="M12 5l7 7M12 5L5 12M12 5v14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
-  </button>
-
-  <script src="./scripts/main.js?v=20250923-2" defer></script>
+  <script src="./scripts/main.js?v=20250923-6" defer></script>
 </body>
 </html>

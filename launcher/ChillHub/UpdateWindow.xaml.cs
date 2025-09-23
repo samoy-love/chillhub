@@ -79,11 +79,31 @@ namespace ChillHub {
             try {
                 this.StatusText.Text = "Проверка обновлений лаунчера...";
                 this.Progress.IsIndeterminate = true;
+                this.PrimaryBtn.IsEnabled = false;
                 var latest = await this.http.GetFromJsonAsync<LatestMeta>($"{this.BaseApi}/manifests/launcher/latest.json");
                 var remote = latest?.Version?.Trim();
-                var asm = Assembly.GetExecutingAssembly();
-                var v = asm?.GetName()?.Version;
-                var local = v != null ? $"{v.Major}.{v.Minor}.{v.Build}" : string.Empty;
+                // Prefer a version marker written by updater; fallback to assembly version
+                string local;
+                try
+                {
+                    var markerPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launcher.version");
+                    if (System.IO.File.Exists(markerPath))
+                    {
+                        local = (System.IO.File.ReadAllText(markerPath) ?? string.Empty).Trim();
+                    }
+                    else
+                    {
+                        var asm = Assembly.GetExecutingAssembly();
+                        var v = asm?.GetName()?.Version;
+                        local = v != null ? $"{v.Major}.{v.Minor}.{v.Build}" : string.Empty;
+                    }
+                }
+                catch
+                {
+                    var asm = Assembly.GetExecutingAssembly();
+                    var v = asm?.GetName()?.Version;
+                    local = v != null ? $"{v.Major}.{v.Minor}.{v.Build}" : string.Empty;
+                }
 
                 if (string.IsNullOrWhiteSpace(remote) || string.IsNullOrWhiteSpace(local)) {
                     // Ничего не знаем — даём пользователю решить
@@ -92,6 +112,7 @@ namespace ChillHub {
                     this.Progress.Value = 0;
                     this.PrimaryBtn.Content = "Продолжить";
                     this.updateRequired = false;
+                    this.PrimaryBtn.IsEnabled = true;
                     return;
                 }
 
@@ -132,7 +153,7 @@ namespace ChillHub {
                         this.PrimaryBtn.Content = "Продолжить";
                         this.updateRequired = false;
                     }
-
+                    this.PrimaryBtn.IsEnabled = true;
                     return;
                 }
 
@@ -213,6 +234,8 @@ namespace ChillHub {
                     this.PrimaryBtn.Content = "Продолжить";
                     this.updateRequired = false;
                 }
+                // Разблокируем кнопку после завершения проверки
+                this.PrimaryBtn.IsEnabled = true;
             }
             catch (Exception ex) {
                 // Нет сети/latest — даём пользователю решить
@@ -221,6 +244,7 @@ namespace ChillHub {
                 this.Progress.Value = 0;
                 this.PrimaryBtn.Content = "Продолжить";
                 this.updateRequired = false;
+                this.PrimaryBtn.IsEnabled = true;
                 try {
                     Core.Logging.Logger.Error(ex, "UpdateWindow.Window_Loaded");
                 }
@@ -481,9 +505,13 @@ namespace ChillHub {
                 A("--files " + Q(System.IO.Path.Combine(selfUpdateDir, "filelist.txt")));
                 A("--dirs " + Q(System.IO.Path.Combine(selfUpdateDir, "emptydirs.txt")));
                 A("--del " + Q(System.IO.Path.Combine(selfUpdateDir, "deletelist.txt")));
+                if (!string.IsNullOrWhiteSpace(this.remoteVersion))
+                {
+                    A("--version " + Q(this.remoteVersion!));
+                }
 
-                // Preserve rules: only config.json
-                A("--preserve " + Q("config.json"));  // e.g.: "config.json,/logs,/cache"
+                // Preserve rules: protect user config and current version marker
+                A("--preserve " + Q("config.json,launcher.version"));  // e.g.: "config.json,launcher.version,/logs,/cache"
 
                 var psi = new System.Diagnostics.ProcessStartInfo {
                     FileName = updaterPath,
