@@ -1,0 +1,18 @@
+# robots.txt for https://launcher.samoy.love/
+# Эти правила управляют индексацией всего домена
+
+User-agent: *
+# Блок для административной части (на этом же домене)
+Disallow: /admin/
+Disallow: /admin/ui/
+
+# Техпапки со статикой и манифестами обычно не индексируем
+Disallow: /assets/
+Disallow: /manifests/
+Disallow: /downloads/
+
+# Разрешаем лендинг
+Allow: /
+Allow: /scripts/
+
+Sitemap: https://launcher.samoy.love/sitemap.xml
