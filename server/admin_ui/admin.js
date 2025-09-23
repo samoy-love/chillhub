@@ -98,7 +98,6 @@
   dz.addEventListener('drop', (e)=>{
     const files = e.dataTransfer && e.dataTransfer.files ? e.dataTransfer.files : null;
     if(!files || files.length===0){ return; }
-
     const f = files[0];
     if(!/\.zip$/i.test(f.name)){ notify('Ожидается ZIP-файл'); return; }
     window.__upDroppedFile = f;
@@ -108,6 +107,32 @@
     if(txt){ txt.textContent = 'Выбран файл: '+f.name+' ('+f.size+' байт)'; }
   });
 })();
+
+// ==== Tabs switching (Launcher / Games / News / Inbox) ====
+document.addEventListener('DOMContentLoaded', ()=>{
+  const tabs = [
+    { btn: 'tabLauncher', sec: 'secLauncher' },
+    { btn: 'tabManifests', sec: 'secManifests' },
+    { btn: 'tabNews', sec: 'secNews' },
+    { btn: 'tabInbox', sec: 'secInbox' },
+  ];
+  const activate = (id)=>{
+    for(const t of tabs){
+      const b = document.getElementById(t.btn);
+      const s = document.getElementById(t.sec);
+      if(!b||!s) continue;
+      const on = (t.btn===id);
+      b.classList.toggle('active', on);
+      s.classList.toggle('hidden', !on);
+    }
+    if(id==='tabInbox') { try{ fbReload(true); }catch{} }
+  };
+  for(const t of tabs){
+    const b = document.getElementById(t.btn);
+    if(!b) continue;
+    b.addEventListener('click', (e)=>{ e.preventDefault(); activate(t.btn); });
+  }
+});
 
 // ==== Launcher preview: ensure versions list and render selected ====
 let __lnPrevSeq = 0;
@@ -216,6 +241,51 @@ function formatBytes(n){
   const str = (i === 0) ? String(Math.round(val)) : (val >= 100 ? Math.round(val).toString() : val.toFixed(1));
   return str + ' ' + units[i];
 }
+
+// ==== System free space indicator ====
+let __sysFreeTimer = null; // reserved; not used after change
+let __sysFreeReq = 0;
+async function sysFreeRefresh(){
+  const badge = document.getElementById('sys_free');
+  if(!badge) return;
+  const myReq = ++__sysFreeReq;
+  try{
+    // Use /admin/system/free which is auto-rewritten to /admin/api/system/free by the fetch shim
+    const r = await fetch('/admin/system/free');
+    if(!r.ok){ throw new Error('HTTP '+r.status); }
+    const j = await r.json();
+    if(myReq !== __sysFreeReq) return; // stale
+    const bytes = Number(j && j.bytes);
+    const total = Number(j && j.total);
+    const freeStr = Number.isFinite(bytes) ? formatBytes(bytes) : '—';
+    const totalStr = Number.isFinite(total) && total > 0 ? formatBytes(total) : '';
+    badge.textContent = totalStr ? (freeStr + ' / ' + totalStr) : freeStr;
+    // Helpful tooltip with exact values and percent
+    let title = '';
+    if(Number.isFinite(bytes)){
+      const pct = (Number.isFinite(total) && total>0) ? Math.round(bytes*100/total) : null;
+      title = 'Свободно: '+bytes+' байт' + (pct!==null ? ' ('+pct+'%)' : '');
+      if(Number.isFinite(total) && total>0){ title += '\nВсего: '+total+' байт'; }
+    }
+    if(title) badge.title = title; else badge.removeAttribute('title');
+    badge.classList.remove('text-bg-secondary','text-bg-success','badge-critical');
+    if(Number.isFinite(bytes) && bytes < 10*1024*1024*1024){
+      // < 10 GB -> critical: bright red and blinking
+      badge.classList.add('badge-critical');
+    } else if (Number.isFinite(bytes)) {
+      // ok -> green
+      badge.classList.add('text-bg-success');
+    } else {
+      badge.classList.add('text-bg-secondary');
+    }
+  }catch(e){
+    if(myReq !== __sysFreeReq) return;
+    badge.textContent = '—';
+    badge.classList.remove('text-bg-success','badge-critical');
+    badge.classList.add('text-bg-secondary');
+  }
+}
+// No debounce-based auto-refresh anymore; refresh only by clicking the button
 async function lnRefresh(){
   const treeEl = document.getElementById('ln_tree'); if(!treeEl) return;
   treeEl.innerHTML = '<span class="text-body-secondary">Загрузка latest.json...</span>';
@@ -297,6 +367,336 @@ function lnRenderTree(rootEl, manifest){
   };
   rootEl.innerHTML = '<div class="small text-body-secondary mb-1">Всего файлов: '+files.length+'</div>' + renderNode(null, root, 0);
 }
+
+// ==== Launcher upload via uploadStream (NDJSON status) ====
+async function lnUpload(){
+  const ver = (document.getElementById('up_ver')?.value||'').trim();
+  if(!ver){ notify('Укажите версию'); return; }
+  const file = (window.__upDroppedFile)||document.getElementById('up_zip')?.files?.[0];
+  if(!file){ notify('Выберите ZIP-файл'); return; }
+  const latest = (document.getElementById('up_latest')?.checked) ? '1':'0';
+  const fd = new FormData();
+  fd.append('kind','launcher');
+  fd.append('version', ver);
+  fd.append('zip', file);
+  fd.append('updateLatest', latest);
+  const wrap=document.getElementById('up_prog_wrap');
+  const bar=document.getElementById('up_pb');
+  const txt=document.getElementById('up_prog_text');
+  if(wrap) wrap.style.display='block';
+  if(bar) bar.style.width='0%';
+  if(txt) txt.textContent='Подготовка к загрузке...';
+
+  await new Promise((resolve)=>{
+    const xhr = new XMLHttpRequest(); xhr.open('POST','/admin/uploadStream');
+    xhr.setRequestHeader('Accept','application/x-ndjson');
+    // Upload progress
+    xhr.upload.onprogress = (e)=>{
+      if(e.lengthComputable){
+        const pct = Math.floor(e.loaded*100/e.total);
+        if(bar) bar.style.width=pct+'%';
+        if(txt) txt.textContent='Загружено '+pct+'% ('+e.loaded+' / '+e.total+' байт)';
+      }
+    };
+    // Streaming NDJSON parsing
+    let lastLen = 0;
+    xhr.onprogress = ()=>{
+      const resp = xhr.responseText || '';
+      const chunk = resp.substring(lastLen);
+      lastLen = resp.length;
+      const lines = chunk.split(/\r?\n/).filter(Boolean);
+      for(const line of lines){
+        try{
+          const ev = JSON.parse(line);
+          if(ev.type === 'start'){
+            if(txt) txt.textContent = 'Старт обработки: launcher '+(ev.version||ver);
+          } else if(ev.type === 'zipSaved'){
+            if(txt) txt.textContent = 'Загрузка завершена, обработка ZIP ('+formatBytes(ev.bytes||0)+')...';
+            if(bar) bar.style.width='100%';
+          } else if(ev.type === 'unzip'){
+            if(txt) txt.textContent = 'Распаковка: '+ev.path;
+          } else if(ev.type === 'composeStart'){
+            if(txt) txt.textContent = 'Подготовка манифеста: 0/'+(ev.totalFiles||0)+' файлов';
+          } else if(ev.type === 'file'){
+            if(txt) txt.textContent = 'Манифест: '+(ev.idx||0)+' файлов, '+formatBytes(ev.bytesDone||0);
+          } else if(ev.type === 'done'){
+            if(txt) txt.textContent = 'Готово. Манифест записан';
+            try{ lnManifestsReload(); }catch(_){ }
+            try{ lnPrevEnsureVersionsAndRender(); }catch(_){ }
+          } else if(ev.type === 'error'){
+            notify('Ошибка: '+(ev.message||'unknown'));
+          }
+        }catch(_){ /* ignore partial lines */ }
+      }
+    };
+    xhr.onreadystatechange = ()=>{
+      if(xhr.readyState===4){
+        if(xhr.status>=200 && xhr.status<300){
+          try{ lnRefresh(); }catch(_){ }
+          try{ lnManifestsReload(); }catch(_){ }
+          try{ lnPrevEnsureVersionsAndRender(); }catch(_){ }
+        } else {
+          notify('HTTP '+xhr.status+' '+xhr.statusText+' '+(xhr.responseText||''));
+        }
+        window.__upDroppedFile=null; resolve();
+      }
+    };
+    xhr.onerror = ()=>{ notify('Ошибка загрузки'); window.__upDroppedFile=null; resolve(); };
+    xhr.send(fd);
+  });
+}
+
+// Also reflect file selection in launcher upload area
+document.addEventListener('DOMContentLoaded', ()=>{
+  const upZip = document.getElementById('up_zip');
+  if(upZip){
+    upZip.addEventListener('change', (ev)=>{
+      const file = ev.currentTarget.files && ev.currentTarget.files[0];
+      if(file){
+        window.__upDroppedFile = file;
+        const txt=document.getElementById('up_prog_text'); const wrap=document.getElementById('up_prog_wrap'); const bar=document.getElementById('up_pb');
+        if(wrap) wrap.style.display='block';
+        if(bar) bar.style.width='0%';
+        if(txt) txt.textContent = 'Выбран файл: '+file.name+' ('+file.size+' байт)';
+      }
+    });
+  }
+});
+
+// Init system free space UI (only manual refresh by button)
+document.addEventListener('DOMContentLoaded', ()=>{
+  const btn = document.getElementById('sys_free_refresh');
+  if(btn){ btn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); sysFreeRefresh(); }); }
+  // Refresh immediately on admin UI load
+  try{ sysFreeRefresh(); }catch{}
+});
+
+// ==== Feedback Inbox ====
+let __fbItems = [];
+let __fbSel = '';
+let __fbPollTimer = null;
+
+function fbQueryParams(){
+  const type = document.getElementById('fb_type')?.value||'';
+  const status = document.getElementById('fb_status')?.value||'';
+  const important = document.getElementById('fb_important')?.value||'';
+  const q = document.getElementById('fb_q')?.value||'';
+  const fromRaw = document.getElementById('fb_from')?.value||'';
+  const toRaw = document.getElementById('fb_to')?.value||'';
+  // Normalize human-friendly dates to RFC3339 Z
+  const from = normalizeHumanDate(fromRaw, /*endOfDay*/false);
+  const to = normalizeHumanDate(toRaw, /*endOfDay*/true);
+  const p = new URLSearchParams();
+  if(type) p.set('type', type);
+  if(status) p.set('status', status);
+  if(important) p.set('important', important);
+  if(q) p.set('q', q);
+  if(from) p.set('from', from);
+  if(to) p.set('to', to);
+  return p.toString();
+}
+
+// Convert human-friendly date strings to RFC3339 (UTC, Z)
+// Accepts:
+//  - YYYY-MM-DD
+//  - DD.MM.YYYY
+//  - YYYY-MM-DD HH:MM[:SS]
+//  - DD.MM.YYYY HH:MM[:SS]
+// Also passes through valid ISO-like strings if Date parses them.
+function normalizeHumanDate(str, endOfDay){
+  const s = String(str||'').trim();
+  if(!s) return '';
+  // If looks like ISO already and parses, use it (ensure Z)
+  if(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)){
+    const d = new Date(s);
+    if(!isNaN(d.getTime())) return toRfc3339(d);
+  }
+  // Patterns
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/;
+  const dmy = /^(\d{2})\.(\d{2})\.(\d{4})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/;
+  let m;
+  if((m = ymd.exec(s))){
+    const Y = +m[1], M = +m[2], D = +m[3];
+    const hh = m[4]!==undefined ? +m[4] : (endOfDay?23:0);
+    const mm = m[5]!==undefined ? +m[5] : (endOfDay?59:0);
+    const ss = m[6]!==undefined ? +m[6] : (endOfDay?59:0);
+    const dt = new Date(Y, M-1, D, hh, mm, ss, endOfDay?999:0);
+    if(!isNaN(dt.getTime())) return toRfc3339(dt);
+  }
+  if((m = dmy.exec(s))){
+    const D = +m[1], M = +m[2], Y = +m[3];
+    const hh = m[4]!==undefined ? +m[4] : (endOfDay?23:0);
+    const mm = m[5]!==undefined ? +m[5] : (endOfDay?59:0);
+    const ss = m[6]!==undefined ? +m[6] : (endOfDay?59:0);
+    const dt = new Date(Y, M-1, D, hh, mm, ss, endOfDay?999:0);
+    if(!isNaN(dt.getTime())) return toRfc3339(dt);
+  }
+  // Fallback: try native Date.parse on s
+  const d = new Date(s);
+  if(!isNaN(d.getTime())) return toRfc3339(d);
+  return '';
+}
+
+function toRfc3339(date){
+  const pad = (n)=> (n<10?'0':'')+n;
+  const Y = date.getUTCFullYear();
+  const M = pad(date.getUTCMonth()+1);
+  const D = pad(date.getUTCDate());
+  const h = pad(date.getUTCHours());
+  const m = pad(date.getUTCMinutes());
+  const s = pad(date.getUTCSeconds());
+  return `${Y}-${M}-${D}T${h}:${m}:${s}Z`;
+}
+
+function fbRenderList(){
+  const root = document.getElementById('fb_list'); if(!root) return;
+  const cnt = document.getElementById('fb_count'); if(cnt) cnt.textContent = String(__fbItems.length||0);
+  if(__fbItems.length===0){ root.innerHTML = '<div class="text-body-secondary">Пусто</div>'; return; }
+  const html = __fbItems.map(it=>{
+    const imp = it.important ? '<span class="badge text-bg-warning ms-2">важное</span>' : '';
+    const st = (it.status==='read') ? '<span class="badge text-bg-secondary ms-2">проч.</span>' : '';
+    const type = it.type ? '<span class="badge text-bg-info ms-2">'+escapeHtml(it.type)+'</span>' : '';
+    const name = escapeHtml(it.name||'—');
+    const contact = escapeHtml(it.contact||'');
+    const cmt = escapeHtml((it.comment||'').slice(0,160));
+    const dt = escapeHtml((it.createdAt||'').replace('T',' ').replace('Z',''));
+    const active = (it.id===__fbSel) ? ' active' : '';
+    return '<a href="#" class="list-group-item list-group-item-action'+active+'" data-id="'+it.id+'">'
+         +   '<div class="d-flex w-100 justify-content-between"><strong>'+name+'</strong><small class="text-body-secondary">'+dt+type+imp+st+'</small></div>'
+         +   '<div class="small text-body-secondary">'+contact+'</div>'
+         +   '<div class="mt-1">'+cmt+'</div>'
+         + '</a>';
+  }).join('');
+  root.innerHTML = html;
+  root.querySelectorAll('a.list-group-item').forEach(a=>{
+    a.addEventListener('click', (ev)=>{ ev.preventDefault(); const id = a.getAttribute('data-id'); fbSelect(id); });
+  });
+}
+
+async function fbReload(immediate){
+  const qs = fbQueryParams();
+  let res; try{ res = await fetch('/admin/feedback/list'+(qs?'?'+qs:'')); }catch(e){ return; }
+  if(!res.ok) return;
+  let j; try{ j = await res.json(); }catch{ return; }
+  __fbItems = Array.isArray(j.items)? j.items : [];
+  fbRenderList();
+  if(__fbSel){
+    const exists = __fbItems.some(x=> x.id===__fbSel);
+    if(!exists){ __fbSel = ''; document.getElementById('fb_view')?.replaceChildren(); }
+  }
+  if(immediate===true) return;
+}
+
+async function fbSelect(id){
+  __fbSel = id||'';
+  const view = document.getElementById('fb_view'); if(!view) return;
+  if(!id){ view.textContent=''; return; }
+  let res; try{ res = await fetch('/admin/feedback/get?id='+encodeURIComponent(id)); }catch(e){ return; }
+  if(!res.ok){ return; }
+  let it; try{ it = await res.json(); }catch{ return; }
+  const sys = it.system||{};
+  const hasSys = Object.keys(sys).length > 0;
+  const sysBlock = hasSys ? '<pre class="bg-body-tertiary p-2 border rounded" style="max-height:240px;overflow:auto">'+escapeHtml(JSON.stringify(sys,null,2))+'</pre>' : '';
+  const hasLogs = !!(it.attachLogs && it.logs);
+  const logsBlock = hasLogs ? '<pre class="bg-body-tertiary p-2 border rounded" style="max-height:240px;overflow:auto">'+escapeHtml(String(it.logs))+'</pre>' : '';
+  const debugBlock = (hasLogs || hasSys)
+    ? '<details class="mt-3"><summary>Дебаг-информация</summary>' + logsBlock + sysBlock + '</details>'
+    : '';
+  view.innerHTML = ''+
+    '<div class="d-flex align-items-center justify-content-between">'
+    +  '<div><strong>'+escapeHtml(it.name||'—')+'</strong> <span class="text-body-secondary">'+escapeHtml(it.contact||'')+'</span></div>'
+    +  '<div class="small text-body-secondary">'+escapeHtml((it.createdAt||'').replace('T',' ').replace('Z',''))+'</div>'
+    +'</div>'
+    +'<div class="mt-2"><span class="badge text-bg-info">'+escapeHtml(it.type||'')+'</span>'+(it.important?'<span class="badge text-bg-warning ms-2">важное</span>':'')+(it.status==='read'?'<span class="badge text-bg-secondary ms-2">проч.</span>':'')+'</div>'
+    +'<div class="mt-3 preserve-ws">'+escapeHtml(it.comment||'')+'</div>'
+    + debugBlock;
+  fbRenderList();
+  // Auto-mark as read on open
+  try{ await fetch('/admin/feedback/markRead?id='+encodeURIComponent(id), {method:'POST'}); }catch{}
+  try{ await fbUnreadUpdateBadge(); }catch{}
+  try{ await fbReload(true); }catch{}
+}
+
+async function fbAction(url){
+  const id = __fbSel; if(!id) return;
+  let res; try{ res = await fetch(url+'?id='+encodeURIComponent(id), { method:'POST' }); }catch(e){ return; }
+  if(!res.ok) return;
+  await fbReload(true);
+  if(url.includes('delete')){
+    // move to next item
+    const idx = __fbItems.findIndex(x=> x.id===id);
+    const next = (idx>=0 && idx+1<__fbItems.length) ? __fbItems[idx+1].id : '';
+    fbSelect(next);
+  } else {
+    fbSelect(id);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', ()=>{
+  const bind = (id, fn)=>{ const el=document.getElementById(id); if(el) el.addEventListener('click', (e)=>{ e.preventDefault(); fn(); }); };
+  bind('fb_refresh', ()=> fbReload(true));
+  bind('fb_clear', async ()=>{ if(!confirm('Очистить все обращения?')) return; let r; try{ r=await fetch('/admin/feedback/clear',{method:'POST'});}catch{}; fbReload(true); __fbSel=''; document.getElementById('fb_view')?.replaceChildren(); });
+  bind('fb_mark_read', ()=> fbAction('/admin/feedback/markRead'));
+  bind('fb_mark_unread', ()=> fbAction('/admin/feedback/markUnread'));
+  bind('fb_toggle_imp', ()=> fbAction('/admin/feedback/toggleImportant'));
+  bind('fb_delete', ()=>{ if(!__fbSel) return; if(!confirm('Удалить обращение?')) return; fbAction('/admin/feedback/delete'); });
+  // Close view button clears selection
+  const closeBtn = document.getElementById('fb_close_view');
+  if(closeBtn){ closeBtn.addEventListener('click', (e)=>{ e.preventDefault(); __fbSel=''; document.getElementById('fb_view')?.replaceChildren(); fbRenderList(); }); }
+  // Filters live change
+  ['fb_type','fb_status','fb_important','fb_q','fb_from','fb_to'].forEach(id=>{
+    const el = document.getElementById(id); if(!el) return;
+    el.addEventListener('change', ()=> fbReload(true));
+    if(id==='fb_q') el.addEventListener('input', ()=> fbReload(true));
+  });
+  // Delete hotkey
+  document.addEventListener('keydown', (e)=>{
+    const sec = document.getElementById('secInbox');
+    const visible = sec && !sec.classList.contains('hidden');
+    if(!visible) return;
+    if(e.key==='Delete'){
+      e.preventDefault();
+      const id = __fbSel; if(!id) return;
+      fbAction('/admin/feedback/delete');
+    }
+  });
+  // Polling every 12s when Inbox is active
+  const poll = async ()=>{
+    const sec = document.getElementById('secInbox');
+    const visible = sec && !sec.classList.contains('hidden');
+    if(visible){ await fbReload(); }
+    __fbPollTimer = setTimeout(poll, 12000);
+  };
+  poll();
+
+  // Global 1-min polling when page visible: unread count and free space
+  async function fbUnreadUpdateBadge(){
+    try{
+      let res = await fetch('/admin/feedback/list?status=new');
+      if(!res.ok) return;
+      let j = await res.json();
+      const n = Array.isArray(j.items) ? j.items.length : 0;
+      const b = document.getElementById('fb_unread_badge');
+      if(!b) return;
+      if(n>0){ b.style.display='inline-block'; b.textContent = String(n); }
+      else { b.style.display='none'; b.textContent = '0'; }
+    }catch{}
+  }
+  window.fbUnreadUpdateBadge = fbUnreadUpdateBadge;
+
+  async function periodicVisibleTick(){
+    if(document.visibilityState === 'visible'){
+      try{ await fbUnreadUpdateBadge(); }catch{}
+      try{ await sysFreeRefresh(); }catch{}
+    }
+  }
+  setInterval(periodicVisibleTick, 60000);
+  document.addEventListener('visibilitychange', periodicVisibleTick);
+  window.addEventListener('focus', periodicVisibleTick);
+  // initial badge and free space on load
+  periodicVisibleTick();
+});
+
 
 // ==== Manifests page: upload/list/activate ====
 async function manifestsReload(){
@@ -679,6 +1079,7 @@ async function gmPrevRender(gameId, version){
 
 // Bind refresh and change for preview widgets
 document.addEventListener('DOMContentLoaded', function(){
+
   // Ensure we are authenticated before showing heavy UI; if not, try refresh then redirect to login
   (async ()=>{
     try {
@@ -696,6 +1097,16 @@ document.addEventListener('DOMContentLoaded', function(){
   try{ lnPrevEnsureVersionsAndRender(); }catch(_){}
   try{ ensureLauncherVersionsCard(); }catch(_){}
   try{ lnManifestsReload(); }catch(_){}
+  // Launcher tab controls
+  const upBtn = document.getElementById('btnUpload');
+  if(upBtn){ upBtn.addEventListener('click', lnUpload); }
+  const lnRefBtn = document.getElementById('ln_refresh');
+  if(lnRefBtn){ lnRefBtn.addEventListener('click', ()=> lnRefresh()); }
+  const lnPrevBtn = document.getElementById('ln_prev_refresh');
+  if(lnPrevBtn){ lnPrevBtn.addEventListener('click', ()=> lnPrevEnsureVersionsAndRender()); }
+  const lnPrevSel = document.getElementById('ln_prev_ver');
+  if(lnPrevSel){ lnPrevSel.addEventListener('change', ()=> lnPrevRender(lnPrevSel.value||'')); }
+
   const btn = document.getElementById('gm_prev_refresh');
   if(btn){ btn.addEventListener('click', ()=>{ const gid=(document.getElementById('gid')?.value||'').trim(); if(!gid){ notify('Укажите игру'); return; } gmPrevEnsureVersionsAndRender(gid); }); }
   const sel = document.getElementById('gm_prev_ver');

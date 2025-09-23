@@ -29,3 +29,25 @@ func getFreeSpaceBytesImpl(path string) (uint64, error) {
 	}
 	return freeAvail, nil
 }
+
+// getDiskSpaceImpl returns available free bytes and total bytes on the filesystem
+// containing the given path (WinAPI GetDiskFreeSpaceExW)
+func getDiskSpaceImpl(path string) (uint64, uint64, error) {
+	k32 := syscall.NewLazyDLL("kernel32.dll")
+	proc := k32.NewProc("GetDiskFreeSpaceExW")
+	var freeAvail, totalBytes, freeBytes uint64
+	p, _ := syscall.UTF16PtrFromString(path)
+	r1, _, e1 := proc.Call(
+		uintptr(unsafe.Pointer(p)),
+		uintptr(unsafe.Pointer(&freeAvail)),
+		uintptr(unsafe.Pointer(&totalBytes)),
+		uintptr(unsafe.Pointer(&freeBytes)),
+	)
+	if r1 == 0 { // failure
+		if e1 != nil {
+			return 0, 0, e1
+		}
+		return 0, 0, fmt.Errorf("GetDiskFreeSpaceExW failed")
+	}
+	return freeAvail, totalBytes, nil
+}

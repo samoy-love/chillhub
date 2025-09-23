@@ -11,11 +11,16 @@ namespace ChillHub.Pages {
     using System.Linq;
     using System.Net.Http;
     using System.Net.Http.Json;
+    using System.Text;
+    using System.Security.Cryptography;
+    using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
     using System.Windows;
     using System.Windows.Controls;
     using System.Windows.Media;
+    using System.Windows.Input;
+
     using System.Windows.Media.Imaging;
     using System.Windows.Threading;
 
@@ -55,8 +60,252 @@ namespace ChillHub.Pages {
             Retry
         }
 
+        // ===== Feedback model and queue =====
+        private record FeedbackDraft(string Name, string Contact, string Type, string Comment, bool AttachLogs, Dictionary<string, string>? System);
+        private List<FeedbackDraft> feedbackQueue = new();
+        private DispatcherTimer? feedbackRetryTimer;
+        private string FeedbackQueuePath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ChillHub", "feedback_queue.json");
+
+        private void FeedbackBtn_Click(object sender, RoutedEventArgs e) {
+            try {
+                this.FbName.Text = string.Empty;
+                this.FbContact.Text = string.Empty;
+                this.FbComment.Text = string.Empty;
+                this.FbStatus.Text = string.Empty;
+                try { this.FbType.SelectedIndex = 0; } catch { }
+                this.FeedbackOverlay.Visibility = Visibility.Visible;
+                // No pre-validation on open; user will see validation only on Send
+            } catch { }
+        }
+
+        private void FbCancel_Click(object sender, RoutedEventArgs e) {
+            try { this.FeedbackOverlay.Visibility = Visibility.Collapsed; } catch { }
+        }
+
+        private async void FbSend_Click(object sender, RoutedEventArgs e) {
+            try {
+                var name = this.FbName.Text?.Trim() ?? string.Empty;
+                var contact = this.FbContact.Text?.Trim() ?? string.Empty;
+                var comment = this.FbComment.Text?.Trim() ?? string.Empty;
+                var attach = true; // always attach logs per UX change
+                var type = GetFeedbackTypeString();
+                if (string.IsNullOrWhiteSpace(comment) || comment.Length < 5) { this.FbStatus.Text = "Опишите проблему (мин. 5 символов)"; return; }
+                var system = attach ? this.CollectSystemInfo() : null;
+                var draft = new FeedbackDraft(name, contact, type, comment, attach, system);
+                this.FbStatus.Text = "Отправка...";
+                var ok = await this.TrySendFeedbackAsync(draft, silent: false).ConfigureAwait(true);
+                if (ok) {
+                    this.FbStatus.Text = "Отправлено";
+                    this.ShowToast("Спасибо! Сообщение отправлено");
+                    this.FeedbackOverlay.Visibility = Visibility.Collapsed;
+                } else {
+                    EnqueueFeedback(draft);
+                    this.FbStatus.Text = "В ожидании отправки (оффлайн)";
+                    this.ShowToast("Сообщение поставлено в очередь");
+                    this.FeedbackOverlay.Visibility = Visibility.Collapsed;
+                }
+            } catch (Exception ex) {
+                try { Core.Logging.Logger.Error(ex, "Feedback.Send"); } catch { }
+                this.ShowToast("Ошибка отправки");
+            }
+        }
+
+        // Disable live validation: do nothing on each input change
+        private void FbField_Changed(object? sender, TextChangedEventArgs e) { /* no-op */ }
+
+        private void UpdateFeedbackValidation()
+        {
+            try {
+                var comment = this.FbComment?.Text ?? string.Empty;
+                var isOk = !string.IsNullOrWhiteSpace(comment) && comment.Trim().Length >= 5;
+
+                // pick brushes
+                var okBrush = (this.TryFindResource("Brush.Border") as Brush) ?? new SolidColorBrush(Color.FromRgb(64,64,64));
+                var errBrush = new SolidColorBrush(Color.FromRgb(255,107,107)); // matches danger accents
+                if (this.FbComment != null) this.FbComment.BorderBrush = isOk ? okBrush : errBrush;
+                if (this.FbSendBtn != null) this.FbSendBtn.IsEnabled = isOk;
+                if (this.FbStatus != null) this.FbStatus.Text = isOk ? string.Empty : "Опишите проблему (мин. 5 символов)";
+            } catch { }
+        }
+
+        private string GetFeedbackTypeString() {
+            try {
+                var item = this.FbType.SelectedItem as ComboBoxItem;
+                var txt = item?.Content?.ToString()?.Trim()?.ToLowerInvariant() ?? "";
+                return txt switch { "баг" => "bug", "идея" => "idea", "вопрос" => "question", _ => "other" };
+            } catch { return "other"; }
+        }
+
+        private Dictionary<string, string> CollectSystemInfo() {
+            var dict = new Dictionary<string, string>();
+            try {
+                dict["os"] = Environment.OSVersion.VersionString;
+                dict["arch"] = Environment.Is64BitOperatingSystem ? "x64" : "x86";
+                dict["dotnet"] = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription;
+                dict["machineName"] = Environment.MachineName;
+                dict["appVersion"] = typeof(HomePage).Assembly.GetName().Version?.ToString() ?? "";
+            } catch { }
+            return dict;
+        }
+
+        private async Task<bool> TrySendFeedbackAsync(FeedbackDraft d, bool silent = true) {
+            try {
+                var baseApi = this.BaseApi.TrimEnd('/');
+                var url = baseApi + "/feedback/submit";
+                // Build rich diagnostics bundle if requested
+                string logsPayload = string.Empty;
+                Dictionary<string, string>? extraSystem = d.System;
+                if (d.AttachLogs) {
+                    try {
+                        var bundle = await Task.Run(() => BuildDiagnosticsBundle()).ConfigureAwait(true);
+                        logsPayload = bundle.LogsMarkdown;
+                        // augment system with computed hints
+                        extraSystem = extraSystem ?? new Dictionary<string, string>();
+                        foreach (var kv in bundle.SystemHints) { extraSystem[kv.Key] = kv.Value; }
+                    } catch { /* non-fatal */ }
+                }
+                using var req = new HttpRequestMessage(HttpMethod.Post, url) {
+                    Content = new StringContent(JsonSerializer.Serialize(new {
+                        name = d.Name,
+                        contact = d.Contact,
+                        type = d.Type,
+                        comment = d.Comment,
+                        attachLogs = d.AttachLogs,
+                        logs = logsPayload,
+                        system = extraSystem,
+                    }), Encoding.UTF8, "application/json")
+                };
+                HttpResponseMessage res;
+                try {
+                    res = await this.http.SendAsync(req).ConfigureAwait(false);
+                } catch (Exception exSend) {
+                    try { Core.Logging.Logger.Error(exSend, "Feedback.Send.HttpError"); } catch { }
+                    if (!silent) { this.ShowToast("Не удалось отправить (сеть/сервер недоступны)"); }
+                    // Local-dev fallback: if BaseApi is localhost and network failed, try admin port 55777
+                    if (TryBuildLocalAdminUrl(baseApi, out var adminUrl)) {
+                        try {
+                            using var req2 = new HttpRequestMessage(HttpMethod.Post, adminUrl) { Content = req.Content };
+                            var res2 = await this.http.SendAsync(req2).ConfigureAwait(false);
+                            if (res2.IsSuccessStatusCode) return true;
+                        } catch (Exception exSend2) { try { Core.Logging.Logger.Error(exSend2, "Feedback.Send.HttpError.Fallback"); } catch { } }
+                    }
+                    return false;
+                }
+                if (res.IsSuccessStatusCode) {
+                    return true;
+                }
+                // capture body snippet for diagnostics
+                string body = string.Empty;
+                try { body = await res.Content.ReadAsStringAsync().ConfigureAwait(false); } catch { }
+                try { Core.Logging.Logger.Warn($"Feedback.Send failed: {(int)res.StatusCode} {res.ReasonPhrase}; body='{body}'"); } catch { }
+                // Local-dev fallback for wrong port (e.g., 404 on API port): retry against admin port 55777
+                if (TryBuildLocalAdminUrl(baseApi, out var adminUrl2)) {
+                    try {
+                        using var req3 = new HttpRequestMessage(HttpMethod.Post, adminUrl2) { Content = req.Content };
+                        var res3 = await this.http.SendAsync(req3).ConfigureAwait(false);
+                        if (res3.IsSuccessStatusCode) return true;
+                        try {
+                            var b3 = await res3.Content.ReadAsStringAsync().ConfigureAwait(false);
+                            Core.Logging.Logger.Warn($"Feedback.Send fallback failed: {(int)res3.StatusCode} {res3.ReasonPhrase}; body='{b3}'");
+                        } catch { }
+                    } catch (Exception exSend3) { try { Core.Logging.Logger.Error(exSend3, "Feedback.Send.FallbackUnexpected"); } catch { } }
+                }
+                if (!silent) { this.ShowToast($"Сервер отклонил отправку: {(int)res.StatusCode}"); }
+                return false;
+            } catch (Exception ex) {
+                try { Core.Logging.Logger.Error(ex, "Feedback.Send.Unexpected"); } catch { }
+                if (!silent) { this.ShowToast("Ошибка отправки"); }
+                return false;
+            }
+        }
+
+        private static bool TryBuildLocalAdminUrl(string baseApi, out string adminUrl)
+        {
+            adminUrl = string.Empty;
+            try {
+                if (!Uri.TryCreate(baseApi, UriKind.Absolute, out var u)) return false;
+                var host = (u.Host ?? "").ToLowerInvariant();
+                if (host == "localhost" || host == "127.0.0.1") {
+                    var ub = new UriBuilder(u);
+                    ub.Port = 55777; // admin in local dev
+                    adminUrl = new Uri(ub.Uri, "/feedback/submit").ToString();
+                    return true;
+                }
+            } catch { }
+            return false;
+        }
+
+        private void EnqueueFeedback(FeedbackDraft d) {
+            try {
+                this.feedbackQueue.Add(d);
+                this.SaveFeedbackQueue();
+                _ = this.FlushFeedbackQueueNowAsync();
+            } catch { }
+        }
+
+        private void LoadFeedbackQueue() {
+            try {
+                var p = this.FeedbackQueuePath;
+                var dir = System.IO.Path.GetDirectoryName(p);
+                if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
+                if (!File.Exists(p)) { this.feedbackQueue = new List<FeedbackDraft>(); return; }
+                var json = File.ReadAllText(p, Encoding.UTF8);
+                var items = JsonSerializer.Deserialize<List<FeedbackDraft>>(json) ?? new List<FeedbackDraft>();
+                this.feedbackQueue = items;
+            } catch { this.feedbackQueue = new List<FeedbackDraft>(); }
+        }
+
+        private void SaveFeedbackQueue() {
+            try {
+                var p = this.FeedbackQueuePath;
+                var dir = System.IO.Path.GetDirectoryName(p);
+                if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
+                var json = JsonSerializer.Serialize(this.feedbackQueue, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(p, json, Encoding.UTF8);
+            } catch { }
+        }
+
+        private async Task FlushFeedbackQueueNowAsync() {
+            try {
+                if (this.feedbackQueue.Count == 0) return;
+                int i = 0; int sent = 0;
+                while (i < this.feedbackQueue.Count && sent < 5) {
+                    var d = this.feedbackQueue[i];
+                    // quick immediate retry for robustness
+                    var ok = await this.TrySendFeedbackAsync(d, silent: true).ConfigureAwait(true);
+                    if (!ok) {
+                        // do a short backoff retry once
+                        try { await Task.Delay(800).ConfigureAwait(true); } catch { }
+                        ok = await this.TrySendFeedbackAsync(d, silent: true).ConfigureAwait(true);
+                    }
+                    if (ok) { this.feedbackQueue.RemoveAt(i); sent++; }
+                    else { i++; }
+                }
+                if (sent > 0) {
+                    this.SaveFeedbackQueue();
+                    try {
+                        var msg = sent == 1 ? "Одно отложенное сообщение отправлено" : $"Отправлены отложенные сообщения: {sent}";
+                        this.ShowToast(msg);
+                    } catch { }
+                }
+            } catch { }
+        }
+
+        private void StartFeedbackRetryLoop() {
+            try {
+                this.feedbackRetryTimer?.Stop();
+                this.feedbackRetryTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(10) };
+                this.feedbackRetryTimer.Tick += async (s, e) => {
+                    await this.FlushFeedbackQueueNowAsync();
+                };
+                this.feedbackRetryTimer.Start();
+            } catch { }
+        }
         private ActionMode actionMode = ActionMode.Checking;
         private bool hasUpdateError = false;
+
+        // Feedback retry loop timer reference (declared later near queue as well)
+        // kept here only if needed; actual implementation declared below
 
         public HomePage() {
             this.InitializeComponent();
@@ -70,36 +319,144 @@ namespace ChillHub.Pages {
             }
             catch {
             }
+
+            // Init feedback retry loop and load queued items
+            try { this.LoadFeedbackQueue(); this.StartFeedbackRetryLoop(); } catch { }
+            // Do not disable Send by default; validation is performed on click
+            try { if (this.FbSendBtn != null) this.FbSendBtn.IsEnabled = true; } catch { }
+
+            // Handle ESC to close feedback overlay with confirmation
+            try { this.PreviewKeyDown += HomePage_PreviewKeyDown; } catch { }
         }
 
-        // Toast helper: show non-intrusive notification in bottom-right corner
-        private DispatcherTimer? toastTimer;
+        private void HomePage_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            try {
+                if (e.Key == Key.Escape && this.FeedbackOverlay != null && this.FeedbackOverlay.Visibility == Visibility.Visible) {
+                    e.Handled = true;
+                    var res = MessageBox.Show("Закрыть форму обратной связи? Введённый текст будет сохранён только если вы отправите его.",
+                        "Подтверждение", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                    if (res == MessageBoxResult.Yes) {
+                        this.FeedbackOverlay.Visibility = Visibility.Collapsed;
+                    }
+                }
+            } catch { }
+        }
+
+        // Toast helper: show non-intrusive notification in bottom-right corner with smooth animations
+        private System.Threading.CancellationTokenSource? toastCts;
+        private bool toastInit;
+
+        private void EnsureToastTransform() {
+            try {
+                if (!toastInit) {
+                    if (this.Toast.RenderTransform is not System.Windows.Media.TranslateTransform) {
+                        this.Toast.RenderTransform = new System.Windows.Media.TranslateTransform(0, 20);
+                    }
+                    this.Toast.Opacity = 0;
+                    this.Toast.Visibility = Visibility.Collapsed;
+                    toastInit = true;
+                }
+            } catch { }
+        }
 
         private void ShowToast(string message, TimeSpan? duration = null) {
-            try {
-                var dur = duration ?? TimeSpan.FromSeconds(3);
-                this.ToastText.Text = message;
-                this.Toast.Visibility = Visibility.Visible;
-                this.toastTimer?.Stop();
-                this.toastTimer = new DispatcherTimer(DispatcherPriority.Background) {
-                    Interval = dur,
-                };
-                this.toastTimer.Tick += (s, e) => {
-                    try {
+            EnsureToastTransform();
+            var dur = duration ?? TimeSpan.FromSeconds(3);
+
+            // cancel previous animation if any (overwrite support)
+            try { toastCts?.Cancel(); } catch { }
+            toastCts = new System.Threading.CancellationTokenSource();
+            var ct = toastCts.Token;
+
+            async void Run()
+            {
+                try {
+                    // If currently visible, animate out quickly before showing new text (overwrite behavior)
+                    if (this.Toast.Visibility == Visibility.Visible && this.Toast.Opacity > 0.1) {
+                        await AnimateToastAsync(fadeIn: false, TimeSpan.FromMilliseconds(140), ct);
+                    }
+
+                    this.ToastText.Text = message;
+                    this.Toast.Visibility = Visibility.Visible;
+                    // animate in
+                    await AnimateToastAsync(fadeIn: true, TimeSpan.FromMilliseconds(200), ct);
+
+                    // stay visible for duration
+                    try { await Task.Delay(dur, ct).ConfigureAwait(true); } catch { }
+                    if (ct.IsCancellationRequested) return;
+
+                    // animate out
+                    await AnimateToastAsync(fadeIn: false, TimeSpan.FromMilliseconds(220), ct);
+                    if (!ct.IsCancellationRequested) {
                         this.Toast.Visibility = Visibility.Collapsed;
                     }
-                    catch {
-                    }
-                    try {
-                        (s as DispatcherTimer)?.Stop();
-                    }
-                    catch {
-                    }
+                } catch { }
+            }
+
+            Run();
+        }
+
+        private Task AnimateToastAsync(bool fadeIn, TimeSpan duration, System.Threading.CancellationToken ct)
+        {
+            var tcs = new TaskCompletionSource<bool>();
+            try {
+                var translate = this.Toast.RenderTransform as System.Windows.Media.TranslateTransform;
+                if (translate == null) {
+                    translate = new System.Windows.Media.TranslateTransform(0, 0);
+                    this.Toast.RenderTransform = translate;
+                }
+
+                // prepare animations
+                var animOpacity = new System.Windows.Media.Animation.DoubleAnimation {
+                    From = fadeIn ? (double?)0.0 : this.Toast.Opacity,
+                    To = fadeIn ? 1.0 : 0.0,
+                    Duration = new Duration(duration),
+                    EasingFunction = new System.Windows.Media.Animation.QuadraticEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut },
+                    FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop,
                 };
-                this.toastTimer.Start();
+                var fromY = translate.Y;
+                var animY = new System.Windows.Media.Animation.DoubleAnimation {
+                    From = fadeIn ? (double?)20.0 : fromY,
+                    To = fadeIn ? 0.0 : 10.0,
+                    Duration = new Duration(duration),
+                    EasingFunction = new System.Windows.Media.Animation.QuadraticEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut },
+                    FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop,
+                };
+
+                int completed = 0;
+                void checkDone() { if (++completed >= 2) { tcs.TrySetResult(true); } }
+
+                animOpacity.Completed += (s, e) => {
+                    try { this.Toast.Opacity = fadeIn ? 1.0 : 0.0; } catch { }
+                    if (ct.IsCancellationRequested) tcs.TrySetCanceled(ct); else checkDone();
+                };
+                animY.Completed += (s, e) => {
+                    try { translate.Y = fadeIn ? 0.0 : 10.0; } catch { }
+                    if (ct.IsCancellationRequested) tcs.TrySetCanceled(ct); else checkDone();
+                };
+
+                this.Toast.BeginAnimation(System.Windows.UIElement.OpacityProperty, animOpacity);
+                translate.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, animY);
+
+                if (ct.CanBeCanceled) {
+                    ct.Register(() => {
+                        try {
+                            this.Toast.BeginAnimation(System.Windows.UIElement.OpacityProperty, null);
+                            translate.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, null);
+                        } catch { }
+                        tcs.TrySetCanceled();
+                    });
+                }
+            } catch (Exception ex) {
+                // fallback: no animation
+                try {
+                    this.Toast.Opacity = fadeIn ? 1.0 : 0.0;
+                    if (!fadeIn) this.Toast.Visibility = Visibility.Collapsed;
+                } catch { }
+                tcs.TrySetException(ex);
             }
-            catch {
-            }
+            return tcs.Task;
         }
 
         // Удалено: ручной выбор сборки больше не поддерживается в UI
@@ -2430,5 +2787,154 @@ namespace ChillHub.Pages {
                 }
             }
         }
+
+        // ===== Diagnostics bundle (hash listings + config + logs) =====
+        private sealed record DiagnosticsBundle(string LogsMarkdown, Dictionary<string,string> SystemHints);
+
+        private DiagnosticsBundle BuildDiagnosticsBundle()
+        {
+            var sb = new StringBuilder(32*1024);
+            var hints = new Dictionary<string, string>();
+            try {
+                sb.AppendLine("# ChillHub Diagnostics Bundle");
+                sb.AppendLine($"Generated: {DateTime.UtcNow:O} (UTC)");
+                sb.AppendLine();
+
+                // Config dump
+                sb.AppendLine("## Config");
+                try {
+                    var cfgPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChillHub", "config.json");
+                    hints["configPath"] = cfgPath;
+                    if (File.Exists(cfgPath)) {
+                        var json = File.ReadAllText(cfgPath, Encoding.UTF8);
+                        sb.AppendLine("```json");
+                        sb.AppendLine(json);
+                        sb.AppendLine("```");
+                    } else {
+                        sb.AppendLine("(config.json not found)");
+                    }
+                } catch (Exception ex) { sb.AppendLine($"(config read error: {ex.Message})"); }
+                sb.AppendLine();
+
+                // Launcher installation folder hashes (limited)
+                sb.AppendLine("## Launcher Files (SHA-256)");
+                try {
+                    var asmLoc = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                    var appRoot = string.IsNullOrWhiteSpace(asmLoc) ? AppDomain.CurrentDomain.BaseDirectory : System.IO.Path.GetDirectoryName(asmLoc)!;
+                    hints["appRoot"] = appRoot;
+                    AppendDirHashes(sb, appRoot, maxFiles: 500, maxBytesPerFile: 10*1024*1024);
+                } catch (Exception ex) { sb.AppendLine($"(hash listing error: {ex.Message})"); }
+                sb.AppendLine();
+
+                // Games root quick listing
+                sb.AppendLine("## Games Root Listing (top-level)");
+                try {
+                    var gamesRoot = ChillHub.Core.ConfigService.Current.GamesPath;
+                    hints["gamesRoot"] = gamesRoot;
+                    AppendTopLevelListing(sb, gamesRoot);
+                } catch (Exception ex) { sb.AppendLine($"(games listing error: {ex.Message})"); }
+                sb.AppendLine();
+
+                // Logs (launcher/updater)
+                sb.AppendLine("## Logs");
+                try {
+                    var logsDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChillHub", "logs");
+                    hints["logsDir"] = logsDir;
+                    AppendLogs(sb, logsDir, new[]{"launcher*.log","updater*.log"}, maxFiles: 6, maxTailBytes: 200*1024);
+                } catch (Exception ex) { sb.AppendLine($"(logs error: {ex.Message})"); }
+                sb.AppendLine();
+
+                // Feedback queue (optional)
+                try {
+                    var qPath = this.FeedbackQueuePath;
+                    if (File.Exists(qPath)) {
+                        sb.AppendLine("## Feedback Queue");
+                        var txt = File.ReadAllText(qPath, Encoding.UTF8);
+                        sb.AppendLine("```json");
+                        sb.AppendLine(txt);
+                        sb.AppendLine("```");
+                        hints["feedbackQueuePath"] = qPath;
+                    }
+                } catch {}
+            } catch {}
+            return new DiagnosticsBundle(sb.ToString(), hints);
+        }
+
+        private static void AppendTopLevelListing(StringBuilder sb, string root)
+        {
+            try {
+                if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) { sb.AppendLine("(games root not found)"); return; }
+                var dirs = Directory.GetDirectories(root);
+                var files = Directory.GetFiles(root);
+                sb.AppendLine($"Root: {root}");
+                sb.AppendLine($"Folders: {dirs.Length}, Files: {files.Length}");
+                foreach (var d in dirs) sb.AppendLine("- "+d);
+                foreach (var f in files) sb.AppendLine("- "+f);
+            } catch (Exception ex) { sb.AppendLine($"(listing error: {ex.Message})"); }
+        }
+
+        private static void AppendDirHashes(StringBuilder sb, string root, int maxFiles, int maxBytesPerFile)
+        {
+            try {
+                if (!Directory.Exists(root)) { sb.AppendLine($"(not found: {root})"); return; }
+                sb.AppendLine($"Root: {root}");
+                int count = 0;
+                foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+                {
+                    if (count >= maxFiles) { sb.AppendLine($"(limit reached: {maxFiles} files)"); break; }
+                    try {
+                        var fi = new FileInfo(path);
+                        if (fi.Length > maxBytesPerFile) { sb.AppendLine($"- {path} [size={fi.Length} bytes, skipped hashing]"); continue; }
+                        var sha = ComputeSha256(path);
+                        sb.AppendLine($"- {path}  {sha}");
+                        count++;
+                    } catch (Exception ex) { sb.AppendLine($"- {path} (error: {ex.Message})"); }
+                }
+            } catch (Exception ex) { sb.AppendLine($"(hash error: {ex.Message})"); }
+        }
+
+        private static string ComputeSha256(string file)
+        {
+            try {
+                using var fs = File.OpenRead(file);
+                using var sha = SHA256.Create();
+                var hash = sha.ComputeHash(fs);
+                return BitConverter.ToString(hash).Replace("-","" ).ToLowerInvariant();
+            } catch { return string.Empty; }
+        }
+
+        private static void AppendLogs(StringBuilder sb, string logsDir, string[] patterns, int maxFiles, int maxTailBytes)
+        {
+            try {
+                if (!Directory.Exists(logsDir)) { sb.AppendLine($"(logs dir not found: {logsDir})"); return; }
+                var files = new List<string>();
+                foreach (var pat in patterns) {
+                    try { files.AddRange(Directory.GetFiles(logsDir, pat, SearchOption.TopDirectoryOnly)); } catch {}
+                }
+                files.Sort(StringComparer.OrdinalIgnoreCase);
+                if (files.Count == 0) { sb.AppendLine("(no log files matched)"); return; }
+                int used = 0;
+                foreach (var f in files) {
+                    if (used >= maxFiles) { sb.AppendLine($"(limit reached: {maxFiles} files)"); break; }
+                    sb.AppendLine($"### {f}");
+                    try {
+                        var bytes = File.ReadAllBytes(f);
+                        if (bytes.Length > maxTailBytes) {
+                            var tail = new byte[maxTailBytes];
+                            Buffer.BlockCopy(bytes, bytes.Length - maxTailBytes, tail, 0, maxTailBytes);
+                            sb.AppendLine("```log");
+                            sb.AppendLine(Encoding.UTF8.GetString(tail));
+                            sb.AppendLine("```\n(tail only)");
+                        } else {
+                            sb.AppendLine("```log");
+                            sb.AppendLine(Encoding.UTF8.GetString(bytes));
+                            sb.AppendLine("```");
+                        }
+                    } catch (Exception ex) { sb.AppendLine($"(read error: {ex.Message})"); }
+                    used++;
+                }
+            } catch (Exception ex) { sb.AppendLine($"(logs listing error: {ex.Message})"); }
+        }
+
     }
 }

@@ -485,6 +485,14 @@ img {
 /* Prevent anchor overlap under fixed header */
 .section, .hero { scroll-margin-top: calc(var(--header-h) + 6px); }
 
+/* Ensure the download CTA section is fully rendered even when offscreen so
+   anchor navigation to #download shows content immediately without waiting
+   for rendering or image lazy-load side effects. */
+#download.section {
+  content-visibility: visible;
+  contain-intrinsic-size: auto;
+}
+
 .section--alt {
   /* Use unified background */
   background: rgb(0 0 0 / 15%);

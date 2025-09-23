@@ -43,6 +43,17 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.22.x'
+          cache: true
+          cache-dependency-path: server/go.sum
+
+      - name: Cache Go build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-build-${{ hashFiles('server/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-build-
 
       - name: Build Go servers (linux/amd64 + linux/arm64)
         run: |
@@ -74,8 +85,22 @@ jobs:
           manifest() { local root="$1"; local out="$2"; rm -f "$out"; if [ -d "$root" ]; then ( cd "$root" && find . -type f -print0 | xargs -0 sha256sum | awk '{print $2"\t"$1}' | sed 's#^\./##' ) > "$out"; fi }
           manifest build/site build/site.manifest || true
           manifest build/launcher_admin_ui build/admin.manifest || true
-          if ls build/bin/* >/dev/null 2>&1; then ( cd build/bin && for f in *; do sha256sum "$f" | awk '{print $2"\t"$1}' >> ../bin.manifest; done ); fi
-          manifest build/systemd build/systemd.manifest || true
+          # Whitelist only api/admin binaries for bin.manifest
+          rm -f build/bin.manifest || true
+          (
+            cd build/bin 2>/dev/null || exit 0
+            for f in api api.amd64 api.arm64 admin admin.amd64 admin.arm64; do
+              [ -f "$f" ] && sha256sum "$f" | awk '{print $2"\t"$1}' >> ../bin.manifest
+            done
+          )
+          # Whitelist only the two systemd unit files
+          rm -f build/systemd.manifest || true
+          (
+            cd build/systemd 2>/dev/null || exit 0
+            for f in chillhub-api.service chillhub-admin.service; do
+              [ -f "$f" ] && sha256sum "$f" | awk '{print $2"\t"$1}' >> ../systemd.manifest
+            done
+          )
           echo "::endgroup::"
 
       - name: Upload manifests artifact

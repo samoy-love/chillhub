@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+	"sync"
 
 	"image"
 	"image/jpeg"
@@ -51,6 +52,257 @@ func detectContentRoot() string {
 		return "content"
 	}
 	return "."
+}
+
+// simple per-IP rate limiter (window-based) for feedback
+var (
+	fbMu sync.Mutex
+	fbRL = make(map[string]struct{ Count int; WindowStart time.Time })
+)
+
+func clientIP(r *http.Request) string {
+	// prioritize X-Forwarded-For then X-Real-IP
+	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+		if i := strings.IndexByte(xff, ','); i >= 0 { return strings.TrimSpace(xff[:i]) }
+		return xff
+	}
+	if rip := strings.TrimSpace(r.Header.Get("X-Real-IP")); rip != "" { return rip }
+	host := strings.TrimSpace(r.RemoteAddr)
+	if i := strings.LastIndexByte(host, ':'); i > 0 { host = host[:i] }
+	return host
+}
+
+// optional wrapper if we want to separate limiter from handler registration
+func rateLimitFeedbackSubmit(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions { h(w,r); return }
+		if r.Method != http.MethodPost { h(w,r); return }
+		ip := clientIP(r)
+		now := time.Now()
+		const limit = 5
+		const window = time.Minute
+		fbMu.Lock()
+		st := fbRL[ip]
+		if st.WindowStart.IsZero() || now.Sub(st.WindowStart) > window {
+			st = struct{ Count int; WindowStart time.Time }{Count: 0, WindowStart: now}
+		}
+		if st.Count >= limit {
+			fbMu.Unlock()
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			return
+		}
+		st.Count++
+		fbRL[ip] = st
+		fbMu.Unlock()
+		h(w,r)
+	}
+}
+
+// ===== Feedback storage and handlers =====
+type FeedbackItem struct {
+	ID         string            `json:"id"`
+	CreatedAt  string            `json:"createdAt"`
+	Type       string            `json:"type"` // bug | idea | question | other
+	Name       string            `json:"name"`
+	Contact    string            `json:"contact"`
+	Comment    string            `json:"comment"`
+	Important  bool              `json:"important"`
+	Status     string            `json:"status"` // new | read | deleted
+	AttachLogs bool              `json:"attachLogs"`
+	Logs       string            `json:"logs,omitempty"`
+	System     map[string]string `json:"system,omitempty"`
+}
+
+func feedbackDir() string { return filepath.Join(contentRoot, "feedback") }
+func feedbackPath() string { return filepath.Join(feedbackDir(), "inbox.json") }
+
+func readFeedbackAll() ([]FeedbackItem, error) {
+    p := feedbackPath()
+    b, err := os.ReadFile(p)
+    if err != nil {
+        if os.IsNotExist(err) {
+            return []FeedbackItem{}, nil
+        }
+        return nil, err
+    }
+    var items []FeedbackItem
+    if err := json.Unmarshal(b, &items); err != nil {
+        return []FeedbackItem{}, nil
+    }
+    return items, nil
+}
+
+func writeFeedbackAll(items []FeedbackItem) error {
+    if err := os.MkdirAll(feedbackDir(), 0o755); err != nil { return err }
+    b2, _ := json.MarshalIndent(items, "", "  ")
+    return os.WriteFile(feedbackPath(), b2, 0o644)
+}
+
+func genID() string {
+    var b [12]byte
+    if _, err := rand.Read(b[:]); err != nil { return fmt.Sprintf("id-%d", time.Now().UnixNano()) }
+    return hex.EncodeToString(b[:])
+}
+
+// Public submit: accepts JSON or form; fields: name, contact, comment, type, attachLogs, logs, system
+func handleFeedbackSubmit(w http.ResponseWriter, r *http.Request) {
+    // CORS for public endpoint
+    if r.Method == http.MethodOptions { w.WriteHeader(http.StatusNoContent); return }
+    if r.Method != http.MethodPost { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
+    // Accept JSON body
+    var in struct{
+        Name string `json:"name"`
+        Contact string `json:"contact"`
+        Comment string `json:"comment"`
+        Type string `json:"type"`
+        AttachLogs bool `json:"attachLogs"`
+        Logs string `json:"logs"`
+        System map[string]string `json:"system"`
+    }
+    dec := json.NewDecoder(r.Body)
+    _ = dec.Decode(&in)
+    // sanitize inputs and limit lengths to prevent abuse; PRESERVE whitespace/newlines for Comment
+    max := func(s string, n int) string { if len(s) <= n { return s }; return s[:n] }
+    sName := strings.TrimSpace(max(in.Name, 200))
+    sContact := strings.TrimSpace(max(in.Contact, 200))
+    rawComment := max(in.Comment, 5000) // keep as-is to preserve newlines and spaces
+    // Allow large diagnostics bundles (up to ~2 MB) and preserve whitespace
+    sLogs := max(in.Logs, 2*1024*1024)
+    t := strings.ToLower(strings.TrimSpace(in.Type))
+    switch t { case "bug","idea","question": default: t = "other" }
+    item := FeedbackItem{
+        ID: genID(),
+        CreatedAt: time.Now().UTC().Format(time.RFC3339),
+        Type: t,
+        Name: sName,
+        Contact: sContact,
+        Comment: rawComment,
+        Important: false,
+        Status: "new",
+        AttachLogs: in.AttachLogs,
+        Logs: sLogs,
+        System: in.System,
+    }
+    items, _ := readFeedbackAll()
+    items = append([]FeedbackItem{item}, items...) // prepend newest
+    if err := writeFeedbackAll(items); err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+    writeJSON(w, map[string]any{"status":"ok","id":item.ID})
+}
+
+// Admin: list with filters: type, important(1/0), q (search in comment/contact/name), status, from, to
+func handleFeedbackList(w http.ResponseWriter, r *http.Request) {
+    items, _ := readFeedbackAll()
+    // Filters
+    fType := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
+    fImp := strings.TrimSpace(r.URL.Query().Get("important"))
+    fQ := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+    fStatus := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
+    fFrom := strings.TrimSpace(r.URL.Query().Get("from"))
+    fTo := strings.TrimSpace(r.URL.Query().Get("to"))
+    var fromT, toT time.Time
+    if fFrom != "" { if t, err := time.Parse(time.RFC3339, fFrom); err==nil { fromT = t } }
+    if fTo != "" { if t, err := time.Parse(time.RFC3339, fTo); err==nil { toT = t } }
+    out := make([]FeedbackItem, 0, len(items))
+    for _, it := range items {
+        if fType != "" && strings.ToLower(it.Type) != fType { continue }
+        if fStatus != "" && strings.ToLower(it.Status) != fStatus { continue }
+        if fImp != "" {
+            want := fImp == "1" || strings.EqualFold(fImp, "true")
+            if it.Important != want { continue }
+        }
+        if !fromT.IsZero() || !toT.IsZero() {
+            if t, err := time.Parse(time.RFC3339, it.CreatedAt); err==nil {
+                if !fromT.IsZero() && t.Before(fromT) { continue }
+                if !toT.IsZero() && t.After(toT) { continue }
+            }
+        }
+        if fQ != "" {
+            hay := strings.ToLower(it.Name + "\n" + it.Contact + "\n" + it.Comment)
+            if !strings.Contains(hay, fQ) { continue }
+        }
+        if it.Status == "deleted" { continue }
+        out = append(out, it)
+    }
+    // Sort by CreatedAt desc
+    sort.Slice(out, func(i,j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
+    writeJSON(w, struct{ Items []FeedbackItem `json:"items"` }{ Items: out })
+}
+
+func handleFeedbackGet(w http.ResponseWriter, r *http.Request) {
+    id := strings.TrimSpace(r.URL.Query().Get("id"))
+    if id == "" { http.Error(w, "missing id", http.StatusBadRequest); return }
+    items, _ := readFeedbackAll()
+    for _, it := range items { if it.ID == id { writeJSON(w, it); return } }
+    http.Error(w, "not found", http.StatusNotFound)
+}
+
+func handleFeedbackDelete(w http.ResponseWriter, r *http.Request) {
+    id := strings.TrimSpace(r.URL.Query().Get("id"))
+    if id == "" { http.Error(w, "missing id", http.StatusBadRequest); return }
+    items, _ := readFeedbackAll()
+    out := make([]FeedbackItem, 0, len(items))
+    for _, it := range items {
+        if it.ID == id { continue } // hard delete
+        out = append(out, it)
+    }
+    if err := writeFeedbackAll(out); err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+    _, user := currentUser(r)
+    log.Printf("[audit] feedback delete id=%s by=%s", id, user)
+    writeJSON(w, map[string]string{"status":"ok"})
+}
+
+func handleFeedbackToggleImportant(w http.ResponseWriter, r *http.Request) {
+    id := strings.TrimSpace(r.URL.Query().Get("id"))
+    if id == "" { http.Error(w, "missing id", http.StatusBadRequest); return }
+    items, _ := readFeedbackAll()
+    changed := false
+    newVal := false
+    for i := range items {
+        if items[i].ID == id { items[i].Important = !items[i].Important; newVal = items[i].Important; changed = true; break }
+    }
+    if !changed { http.Error(w, "not found", http.StatusNotFound); return }
+    if err := writeFeedbackAll(items); err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+    _, user := currentUser(r)
+    log.Printf("[audit] feedback important-toggle id=%s now=%v by=%s", id, newVal, user)
+    writeJSON(w, map[string]string{"status":"ok"})
+}
+
+func handleFeedbackMarkRead(w http.ResponseWriter, r *http.Request) {
+    id := strings.TrimSpace(r.URL.Query().Get("id"))
+    if id == "" { http.Error(w, "missing id", http.StatusBadRequest); return }
+    items, _ := readFeedbackAll()
+    changed := false
+    for i := range items {
+        if items[i].ID == id { items[i].Status = "read"; changed = true; break }
+    }
+    if !changed { http.Error(w, "not found", http.StatusNotFound); return }
+    if err := writeFeedbackAll(items); err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+    _, user := currentUser(r)
+    log.Printf("[audit] feedback mark-read id=%s by=%s", id, user)
+    writeJSON(w, map[string]string{"status":"ok"})
+}
+
+// allow reverting item back to unread (status=new)
+func handleFeedbackMarkUnread(w http.ResponseWriter, r *http.Request) {
+    id := strings.TrimSpace(r.URL.Query().Get("id"))
+    if id == "" { http.Error(w, "missing id", http.StatusBadRequest); return }
+    items, _ := readFeedbackAll()
+    changed := false
+    for i := range items {
+        if items[i].ID == id { items[i].Status = "new"; changed = true; break }
+    }
+    if !changed { http.Error(w, "not found", http.StatusNotFound); return }
+    if err := writeFeedbackAll(items); err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+    _, user := currentUser(r)
+    log.Printf("[audit] feedback mark-unread id=%s by=%s", id, user)
+    writeJSON(w, map[string]string{"status":"ok"})
+}
+
+func handleFeedbackClear(w http.ResponseWriter, r *http.Request) {
+    if err := writeFeedbackAll([]FeedbackItem{}); err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+    _, user := currentUser(r)
+    log.Printf("[audit] feedback clear by=%s", user)
+    writeJSON(w, map[string]string{"status":"ok"})
 }
 
 // estimateZipUncompressedSize sums UncompressedSize64 of all regular files in the ZIP.
@@ -364,15 +616,15 @@ func handleUploadStream(w http.ResponseWriter, r *http.Request) {
 		Signature:   "dev-mock-signature",
 	}
 
-    outDir := filepath.Join(contentRoot, "manifests", gid)
-    if err := os.MkdirAll(outDir, 0o755); err != nil { fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", err.Error()); fl.Flush(); return }
-    outPath := filepath.Join(outDir, ver+".json")
-    b, _ := json.MarshalIndent(m, "", "  ")
-    if err := os.WriteFile(outPath, b, 0o644); err != nil { fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", err.Error()); fl.Flush(); return }
-    if upd { bl, _ := json.MarshalIndent(map[string]string{"version": ver}, "", "  "); _ = os.WriteFile(filepath.Join(outDir, "latest.json"), bl, 0o644) }
+	outDir := filepath.Join(contentRoot, "manifests", gid)
+	if err := os.MkdirAll(outDir, 0o755); err != nil { fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", err.Error()); fl.Flush(); return }
+	outPath := filepath.Join(outDir, ver+".json")
+	b, _ := json.MarshalIndent(m, "", "  ")
+	if err := os.WriteFile(outPath, b, 0o644); err != nil { fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", err.Error()); fl.Flush(); return }
+	if upd { bl, _ := json.MarshalIndent(map[string]string{"version": ver}, "", "  "); _ = os.WriteFile(filepath.Join(outDir, "latest.json"), bl, 0o644) }
 
-    fmt.Fprintf(w, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
-    fl.Flush()
+	fmt.Fprintf(w, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
+	fl.Flush()
 }
 
 // delete a specific version: removes manifests/{gid}/{ver}.json and content/{gid}/{ver}
@@ -435,7 +687,6 @@ func handleDeleteVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
-// ===== Games: icon upload =====
 // handleGameIconUpload saves uploaded image as manifests/{gameId}/icon.png and returns its URL
 func handleGameIconUpload(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(16 << 20); err != nil { // 16MB
@@ -593,10 +844,11 @@ func processAndSaveAsset(base, rel, desired string, data []byte, extHint, conten
 			}
 			tmpIn.Close()
 			scaleExpr := "scale='if(gte(min(iw,ih),1080), if(lte(iw,ih), -2, 1080), iw)':'if(gte(min(iw,ih),1080), if(lte(iw,ih), 1080, -2), ih)'"
-			args := []string{"-y", "-i", tmpIn.Name(), "-vf", scaleExpr, "-qscale", "10", "-loop", "0", outPath}
-			if strings.HasSuffix(outPath, ".webp") {
-				args = []string{"-y", "-i", tmpIn.Name(), "-vf", scaleExpr, "-lossless", "0", "-q:v", "10", "-loop", "0", outPath}
-			}
+			// Use quality 95 for lossy output and encode with libwebp preserving animation
+			// Add pixel format with alpha, preset and compression level for ffmpeg 6 compatibility
+			args := []string{"-y", "-i", tmpIn.Name(), "-vf", scaleExpr,
+				"-c:v", "libwebp", "-lossless", "0", "-q:v", "95", "-compression_level", "4",
+				"-preset", "picture", "-pix_fmt", "yuva420p", "-vsync", "0", "-loop", "0", outPath}
 			if err := runFFmpegTranscode(args); err != nil {
 				os.Remove(tmpIn.Name())
 				return "", nil, fmt.Errorf("ffmpeg failed: %w", err)
@@ -658,7 +910,7 @@ func processAndSaveAsset(base, rel, desired string, data []byte, extHint, conten
 		return "", nil, err
 	}
 	defer out.Close()
-	if err := jpeg.Encode(out, outImg, &jpeg.Options{Quality: 90}); err != nil {
+	if err := jpeg.Encode(out, outImg, &jpeg.Options{Quality: 95}); err != nil {
 		return "", nil, err
 	}
 	return outName, meta, nil
@@ -1420,11 +1672,11 @@ func handleNewsPublish(w http.ResponseWriter, r *http.Request) {
 	gid := r.FormValue("gameId")
 	slug := r.FormValue("slug")
 	pubStr := strings.TrimSpace(strings.ToLower(r.FormValue("published")))
+	pub := pubStr == "true" || pubStr == "1" || pubStr == "yes"
 	if strings.TrimSpace(slug) == "" {
 		http.Error(w, "missing slug", http.StatusBadRequest)
 		return
 	}
-	published := pubStr == "true" || pubStr == "1" || pubStr == "yes"
 	base, err := newsBase(scope, gid)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1432,7 +1684,7 @@ func handleNewsPublish(w http.ResponseWriter, r *http.Request) {
 	}
 	m := readNewsMeta(base)
 	cur := m[slug]
-	cur.Published = published
+	cur.Published = pub
 	m[slug] = cur
 	if err := writeNewsMeta(base, m); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1442,7 +1694,7 @@ func handleNewsPublish(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "updated but index rebuild failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"status": "ok", "slug": slug, "published": published})
+	writeJSON(w, map[string]any{"status": "ok", "slug": slug, "published": pub})
 }
 
 func handleNewsPreview(w http.ResponseWriter, r *http.Request) {
@@ -1732,6 +1984,29 @@ func inlineMD(s string) string {
 	return s
 }
 
+func handleSystemFreeSpace(w http.ResponseWriter, r *http.Request) {
+	base := contentRoot
+	if strings.TrimSpace(base) == "" {
+		base = "."
+	}
+	// Prefer getting both free and total where supported
+	var free, total uint64
+	if f, t, err := getDiskSpaceImpl(base); err == nil {
+		free, total = f, t
+	} else if f2, err2 := getFreeSpaceBytes(base); err2 == nil {
+		free = f2
+		total = 0
+	} else {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"path":  base,
+		"bytes": free,
+		"total": total,
+	})
+}
+
 func main() {
 	http.HandleFunc("/admin/health", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
@@ -1756,7 +2031,26 @@ func main() {
 	http.HandleFunc("/admin/list", handleListVersions)
 	http.HandleFunc("/admin/activate", handleActivate)
 	http.HandleFunc("/admin/deleteVersion", handleDeleteVersion)
-	// News management
+    // Public feedback submit (no auth)
+    http.HandleFunc("/feedback/submit", rateLimitFeedbackSubmit(handleFeedbackSubmit))
+
+    // Feedback admin endpoints (mirrored under /admin and /admin/api)
+    http.HandleFunc("/admin/feedback/list", handleFeedbackList)
+    http.HandleFunc("/admin/feedback/get", handleFeedbackGet)
+    http.HandleFunc("/admin/feedback/delete", handleFeedbackDelete)
+    http.HandleFunc("/admin/feedback/toggleImportant", handleFeedbackToggleImportant)
+    http.HandleFunc("/admin/feedback/markRead", handleFeedbackMarkRead)
+    http.HandleFunc("/admin/feedback/clear", handleFeedbackClear)
+    http.HandleFunc("/admin/api/feedback/list", handleFeedbackList)
+    http.HandleFunc("/admin/api/feedback/get", handleFeedbackGet)
+    http.HandleFunc("/admin/feedback/markUnread", handleFeedbackMarkUnread)
+    http.HandleFunc("/admin/api/feedback/markUnread", handleFeedbackMarkUnread)
+    http.HandleFunc("/admin/api/feedback/delete", handleFeedbackDelete)
+    http.HandleFunc("/admin/api/feedback/toggleImportant", handleFeedbackToggleImportant)
+    http.HandleFunc("/admin/api/feedback/markRead", handleFeedbackMarkRead)
+    http.HandleFunc("/admin/api/feedback/clear", handleFeedbackClear)
+
+    // News management
 	http.HandleFunc("/admin/news/list", handleNewsList)
 	http.HandleFunc("/admin/news/get", handleNewsGet)
 	http.HandleFunc("/admin/news/save", handleNewsSave)
@@ -1765,50 +2059,55 @@ func main() {
 	http.HandleFunc("/admin/news/publish", handleNewsPublish)
 	http.HandleFunc("/admin/news/preview", handleNewsPreview)
 	http.HandleFunc("/admin/news/uploadCover", handleNewsUploadCover)
-	    // Upload builds (ZIP) for launcher/game
-    http.HandleFunc("/admin/upload", handleUpload)
-    // Streaming variant: upload ZIP and stream status as NDJSON
-    http.HandleFunc("/admin/uploadStream", handleUploadStream)
+	// Upload builds (ZIP) for launcher/game
+	http.HandleFunc("/admin/upload", handleUpload)
+	// Streaming variant: upload ZIP and stream status as NDJSON
+	http.HandleFunc("/admin/uploadStream", handleUploadStream)
 
-    // === Mirror routes under /admin/api/* for nginx proxy ===
-    http.HandleFunc("/admin/api/health", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
-    // Core endpoints already registered above; avoid duplicate registrations that panic on net/http ServeMux
-    // http.HandleFunc("/admin/api", handleAdminUI)
-    // http.HandleFunc("/admin/api/list", handleListVersions)
-    // http.HandleFunc("/admin/api/activate", handleActivate)
-    // http.HandleFunc("/admin/api/deleteVersion", handleDeleteVersion)
-    // http.HandleFunc("/admin/api/upload", handleUpload)
-    // http.HandleFunc("/admin/api/uploadStream", handleUploadStream)
-    // News management
-    http.HandleFunc("/admin/api/news/list", handleNewsList)
-    http.HandleFunc("/admin/api/news/get", handleNewsGet)
-    http.HandleFunc("/admin/api/news/save", handleNewsSave)
-    http.HandleFunc("/admin/api/news/delete", handleNewsDelete)
-    http.HandleFunc("/admin/api/news/rebuild", handleNewsRebuild)
-    http.HandleFunc("/admin/api/news/publish", handleNewsPublish)
-    http.HandleFunc("/admin/api/news/preview", handleNewsPreview)
-    http.HandleFunc("/admin/api/news/uploadCover", handleNewsUploadCover)
-    http.HandleFunc("/admin/api/news/assets", handleNewsAssetsList)
-    http.HandleFunc("/admin/api/news/assets/mkdir", handleNewsAssetsMkdir)
-    http.HandleFunc("/admin/api/news/assets/upload", handleNewsAssetsUpload)
-    http.HandleFunc("/admin/api/news/assets/uploadByUrl", handleNewsAssetsUploadByURL)
-    http.HandleFunc("/admin/api/news/assets/delete", handleNewsAssetsDelete)
-    http.HandleFunc("/admin/api/news/assets/rename", handleNewsAssetsRename)
-    // Games registry under /admin/api
-    http.HandleFunc("/admin/api/games", handleGamesGet)
-    http.HandleFunc("/admin/api/games/save", handleGamesSave)
-    http.HandleFunc("/admin/api/games/icon/upload", handleGameIconUpload)
-    http.HandleFunc("/admin/api/games/scan", func(w http.ResponseWriter, r *http.Request) {
-        writeJSON(w, struct { Items []gameEntry `json:"items"` }{ Items: generateGamesFromManifests() })
-    })
+	// === Mirror routes under /admin/api/* for nginx proxy ===
+	http.HandleFunc("/admin/api/health", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
+	// Core endpoints already registered above; avoid duplicate registrations that panic on net/http ServeMux
+	// http.HandleFunc("/admin/api", handleAdminUI)
+	// http.HandleFunc("/admin/api/list", handleListVersions)
+	// http.HandleFunc("/admin/api/activate", handleActivate)
+	// http.HandleFunc("/admin/api/deleteVersion", handleDeleteVersion)
+	// http.HandleFunc("/admin/api/upload", handleUpload)
+	// http.HandleFunc("/admin/api/uploadStream", handleUploadStream)
+	// News management
+	http.HandleFunc("/admin/api/news/list", handleNewsList)
+	http.HandleFunc("/admin/api/news/get", handleNewsGet)
+	http.HandleFunc("/admin/api/news/save", handleNewsSave)
+	http.HandleFunc("/admin/api/news/delete", handleNewsDelete)
+	http.HandleFunc("/admin/api/news/rebuild", handleNewsRebuild)
+	http.HandleFunc("/admin/api/news/publish", handleNewsPublish)
+	http.HandleFunc("/admin/api/news/preview", handleNewsPreview)
+	// System info
+	http.HandleFunc("/admin/api/system/free", handleSystemFreeSpace)
+	http.HandleFunc("/admin/api/news/uploadCover", handleNewsUploadCover)
+	http.HandleFunc("/admin/api/news/assets", handleNewsAssetsList)
+	http.HandleFunc("/admin/api/news/assets/mkdir", handleNewsAssetsMkdir)
+	http.HandleFunc("/admin/api/news/assets/upload", handleNewsAssetsUpload)
+	http.HandleFunc("/admin/api/news/assets/uploadByUrl", handleNewsAssetsUploadByURL)
+	http.HandleFunc("/admin/api/news/assets/delete", handleNewsAssetsDelete)
+	http.HandleFunc("/admin/api/news/assets/rename", handleNewsAssetsRename)
+	// Games registry under /admin/api
+	http.HandleFunc("/admin/api/games", handleGamesGet)
+	http.HandleFunc("/admin/api/games/save", handleGamesSave)
+	http.HandleFunc("/admin/api/games/icon/upload", handleGameIconUpload)
+	http.HandleFunc("/admin/api/games/scan", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, struct { Items []gameEntry `json:"items"` }{ Items: generateGamesFromManifests() })
+	})
 	// Assets gallery
 	http.HandleFunc("/admin/news/assets", handleNewsAssetsList)
 	http.HandleFunc("/admin/news/assets/mkdir", handleNewsAssetsMkdir)
 	http.HandleFunc("/admin/news/assets/upload", handleNewsAssetsUpload)
 	http.HandleFunc("/admin/news/assets/uploadByUrl", handleNewsAssetsUploadByURL)
 	http.HandleFunc("/admin/news/assets/delete", handleNewsAssetsDelete)
-	    http.HandleFunc("/admin/news/assets/rename", handleNewsAssetsRename)
-    // Serve static news and assets so that admin UI can display images without external nginx
+	http.HandleFunc("/admin/news/assets/rename", handleNewsAssetsRename)
+	// Mirror non-API system endpoint for environments without nginx rewrite
+	http.HandleFunc("/admin/system/free", handleSystemFreeSpace)
+
+	// Serve static news and assets so that admin UI can display images without external nginx
 	newsDir := filepath.Join(contentRoot, "news")
 	if st, err := os.Stat(newsDir); err == nil && st.IsDir() {
 		http.Handle("/news/", httpx.NoStore(http.StripPrefix("/news/", http.FileServer(http.Dir(newsDir)))))
@@ -1823,7 +2122,7 @@ func main() {
 		http.Handle("/manifests/", httpx.NoStore(http.StripPrefix("/manifests/", http.FileServer(http.Dir(manifestsDir)))))
 	}
 	// Serve static Admin UI assets from server/admin_ui
-	    uiDir := detectAdminUIDir()
+	uiDir := detectAdminUIDir()
 	if st, err := os.Stat(uiDir); err == nil && st.IsDir() {
 		http.Handle("/admin/ui/", httpx.NoStore(http.StripPrefix("/admin/ui/", http.FileServer(http.Dir(uiDir)))))
 	}
@@ -1838,15 +2137,15 @@ func main() {
 	})
 	// Заглушки эндпоинтов: upload/activate/rollback/list, news/save
 	// Реализация будет добавлена на следующем шаге.
-	    addr := ":55777"
-    log.Printf("admin API listening on %s (CONTENT_ROOT=%s)", addr, contentRoot)
-    // Middlewares: RequestID -> CORS -> Auth -> Logging
-    var h http.Handler = http.DefaultServeMux
-    h = httpx.RequestID()(h)
-    h = httpx.CORS("*")(h)
-    h = adminAuthMiddleware(h)
-    h = httpx.Logging("ADMIN")(h)
-    log.Fatal(http.ListenAndServe(addr, h))
+	addr := ":55777"
+	log.Printf("admin API listening on %s (CONTENT_ROOT=%s)", addr, contentRoot)
+	// Middlewares: RequestID -> CORS -> Auth -> Logging
+	var h http.Handler = http.DefaultServeMux
+	h = httpx.RequestID()(h)
+	h = httpx.CORS("*")(h)
+	h = adminAuthMiddleware(h)
+	h = httpx.Logging("ADMIN")(h)
+	log.Fatal(http.ListenAndServe(addr, h))
 }
 
 func handleAdminUI(w http.ResponseWriter, r *http.Request) {

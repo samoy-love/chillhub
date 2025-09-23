@@ -186,6 +186,7 @@ Set-Location "Launcher Project"
 ```bash
 sudo apt update && sudo apt install -y nginx rsync
 sudo apt install -y certbot python3-certbot-nginx
+sudo apt install -y ffmpeg
 
 sudo mkdir -p /var/www/site
 sudo mkdir -p /var/www/launcher/{content,manifests,news,admin_ui}
@@ -207,6 +208,11 @@ sudo ufw allow OpenSSH && sudo ufw allow 80/tcp && sudo ufw allow 443/tcp
 sudo ufw deny 55700/tcp && sudo ufw deny 55777/tcp
 sudo ufw enable
 ```
+
+Примечание по обработке изображений:
+
+- Для конвертации и сжатия анимированных изображений (GIF/WEBP → WEBP, ресайз до min‑side 1080) Admin‑сервер использует системную утилиту `ffmpeg` по пути из `PATH` или из переменной окружения `FFMPEG_PATH`.
+- Если `ffmpeg` отсутствует, сервер сохранит исходный файл без конвертации (с сохранением оригинального расширения) и добавит отметку в логах. Статичные изображения (PNG/JPEG) обрабатываются встроенными средствами Go и не требуют внешних утилит.
 
 [↑ к матрице](#карта-шагов-автодеплой-vs-вручную)
 
