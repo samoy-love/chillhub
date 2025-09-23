@@ -305,7 +305,8 @@ func adminAuthMiddleware(next http.Handler) http.Handler {
         if strings.HasPrefix(p, "/admin/ui/") ||
            strings.HasPrefix(p, "/admin/api/auth/") ||
            p == "/admin/api/health" ||
-           p == "/admin" || p == "/admin/" {
+           p == "/admin" || p == "/admin/" ||
+           p == "/feedback/submit" {
             next.ServeHTTP(w, r)
             return
         }

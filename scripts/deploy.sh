@@ -309,9 +309,16 @@ log "Sync static only (landing, admin_ui). Do not touch server content dirs."
 # Admin UI can be fully replaced
 run "sudo rsync -a --delete \"$REPO_DIR/server/admin_ui/\"   \"$LAUNCHER_ROOT/admin_ui/\""
 
-# Ensure admin content root is writable by the admin service user (www-data)
-log "Ensure ownership for admin content root ($LAUNCHER_ROOT)"
-run "sudo chown -R www-data:www-data \"$LAUNCHER_ROOT\""
+# Guard snapshot (PRE): capture sample hashes and counts for server-managed dirs to detect unintended changes
+TMP_PRE_DIR="/tmp/chillhub-pre"; TMP_POST_DIR="/tmp/chillhub-post"; run "sudo mkdir -p \"$TMP_PRE_DIR\" \"$TMP_POST_DIR\""
+sample_hash(){ local d="$1"; if [[ ! -d "$d" ]]; then echo "missing"; return; fi; local list; list=$(LC_ALL=C find "$d" -type f -printf '%P\n' | sort | head -n 50); if [[ -z "$list" ]]; then echo "empty"; else while IFS= read -r f; do sha256sum "$d/$f" | awk '{print $1"  "$2}'; done <<< "$list" | sha256sum | awk '{print $1}'; fi; }
+for d in content manifests news; do dir="$LAUNCHER_ROOT/$d"; if [[ -d "$dir" ]]; then find "$dir" -type f 2>/dev/null | wc -l | awk '{print $1}' | sudo tee "$TMP_PRE_DIR/${d}.count" >/dev/null; sample_hash "$dir" | sudo tee "$TMP_PRE_DIR/${d}.hash" >/dev/null; else echo "-1" | sudo tee "$TMP_PRE_DIR/${d}.count" >/dev/null; echo "missing" | sudo tee "$TMP_PRE_DIR/${d}.hash" >/dev/null; fi; done
+
+# Ensure admin content root subdirs exist (do not touch content/manifests/news ownership)
+run "sudo mkdir -p \"$LAUNCHER_ROOT/tmp\" \"$LAUNCHER_ROOT/content\" \"$LAUNCHER_ROOT/manifests\" \"$LAUNCHER_ROOT/news\""
+# Restrict ownership changes to admin_ui and tmp only
+log "Ensure ownership for admin_ui and tmp only (preserving content/manifests/news)"
+run "sudo chown -R www-data:www-data \"$LAUNCHER_ROOT/admin_ui\" \"$LAUNCHER_ROOT/tmp\""
 
 section "Systemd: юниты и drop-in"
 log "Install systemd unit files (if present)"
@@ -410,6 +417,44 @@ if [[ ! -f "$PING_PATH" ]]; then
 fi
 
 section "HTTP: автотесты ($SITE_BASE_URL)"
+
+echo "[guard] Проверка, что серверные директории не изменены: $LAUNCHER_ROOT/content, /manifests, /news"
+FAIL_GUARD=0
+# POST snapshot and recent changes
+sample_hash(){ local d="$1"; if [[ ! -d "$d" ]]; then echo "missing"; return; fi; local list; list=$(LC_ALL=C find "$d" -type f -printf '%P\n' | sort | head -n 50); if [[ -z "$list" ]]; then echo "empty"; else while IFS= read -r f; do sha256sum "$d/$f" | awk '{print $1"  "$2}'; done <<< "$list" | sha256sum | awk '{print $1}'; fi; }
+for d in content manifests news; do
+  dir="$LAUNCHER_ROOT/$d"
+  if [[ -d "$dir" ]]; then
+    cnt=$(find "$dir" -type f 2>/dev/null | wc -l | awk '{print $1}')
+    echo "[guard] $dir files=$cnt"
+    printf "%s" "$cnt" | sudo tee "$TMP_POST_DIR/${d}.count" >/dev/null
+    sample_hash "$dir" | sudo tee "$TMP_POST_DIR/${d}.hash" >/dev/null
+    echo "[guard] recent (<=5min) changes in $dir:"
+    recent=$(sudo find "$dir" -type f -mmin -5 -printf '%TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null | head -n 50 || true)
+    if [[ -n "$recent" ]]; then echo "$recent"; echo "[guard][FAIL] Recent changes detected in $dir"; FAIL_GUARD=1; else echo "(none)"; fi
+  else
+    echo "[guard] $dir (missing)"
+    echo "-1" | sudo tee "$TMP_POST_DIR/${d}.count" >/dev/null; echo "missing" | sudo tee "$TMP_POST_DIR/${d}.hash" >/dev/null
+  fi
+done
+# Compare PRE vs POST
+for d in content manifests news; do
+  PRE_C=$(sudo cat "$TMP_PRE_DIR/${d}.count" 2>/dev/null || true)
+  PRE_H=$(sudo cat "$TMP_PRE_DIR/${d}.hash" 2>/dev/null || true)
+  POST_C=$(sudo cat "$TMP_POST_DIR/${d}.count" 2>/dev/null || true)
+  POST_H=$(sudo cat "$TMP_POST_DIR/${d}.hash" 2>/dev/null || true)
+  if [[ "$PRE_C" != "$POST_C" || "$PRE_H" != "$POST_H" ]]; then
+    echo "[guard][FAIL] Snapshot diff for $d (count $PRE_C->$POST_C, hash $PRE_H->$POST_H)"
+    FAIL_GUARD=1
+  else
+    echo "[guard] Snapshot OK for $d"
+  fi
+done
+if [[ $FAIL_GUARD -ne 0 ]]; then
+  section "Guard: обнаружены изменения в управляемых сервером директориях"
+  err "Guard failed: content/manifests/news changed during deploy. Aborting."
+  exit 1
+fi
 
 FAIL=0
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; NC='\033[0m'

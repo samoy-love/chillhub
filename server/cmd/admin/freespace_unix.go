@@ -19,3 +19,16 @@ func getFreeSpaceBytesImpl(path string) (uint64, error) {
 	free := uint64(st.Bavail) * blockSize
 	return free, nil
 }
+
+// getDiskSpaceImpl returns available free bytes and total bytes on the filesystem (Unix)
+func getDiskSpaceImpl(path string) (uint64, uint64, error) {
+    var st unix.Statfs_t
+    if err := unix.Statfs(path, &st); err != nil {
+        return 0, 0, err
+    }
+    blockSize := uint64(st.Bsize)
+    if blockSize == 0 { blockSize = 4096 }
+    free := uint64(st.Bavail) * blockSize
+    total := uint64(st.Blocks) * blockSize
+    return free, total, nil
+}

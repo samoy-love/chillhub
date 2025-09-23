@@ -20,6 +20,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800;900&display=swap" rel="stylesheet">
   <link rel="preload" href="./styles.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
   <noscript><link rel="stylesheet" href="./styles.css"></noscript>
+  <!-- Preload the download screenshot to ensure instant visibility when navigating to #download -->
+  <link rel="preload" as="image" href="./assets/images/launcher-main.jpg" imagesizes="(max-width: 980px) 92vw, 1120px">
   <link rel="icon" href="./assets/icons/app.ico" type="image/x-icon">
 </head>
 <body>
@@ -257,7 +259,7 @@
       <div class="container">
         <figure class="screenshot-win">
           <button class="win-body" type="button" aria-label="Открыть скриншот на весь экран">
-            <img class="skeleton" src="./assets/images/launcher-main.jpg" alt="Скриншот лаунчера Chill Hub" decoding="async" loading="lazy" fetchpriority="low" onerror="this.src='https://placehold.co/1280x720/0f0f1f/FFFFFF?text=Launcher'" width="1280" height="720" />
+            <img src="./assets/images/launcher-main.jpg" alt="Скриншот лаунчера Chill Hub" decoding="async" loading="eager" fetchpriority="high" onerror="this.src='https://placehold.co/1280x720/0f0f1f/FFFFFF?text=Launcher'" width="1280" height="720" />
           </button>
         </figure>
         <h2>Готов начать?</h2>

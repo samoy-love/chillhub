@@ -457,6 +457,11 @@ sudo mkdir -p "$SITE_DIR" "$LAUNCHER_DIR/admin_ui" "$OPT_DIR"
 # Pre-sync listing of extracted deploy trees (first 200 files and totals)
 for d in site launcher_admin_ui bin systemd; do base="$DEPLOY_DIR/$d"; echo "[remote:pre-list] dir=$base"; if [ -d "$base" ]; then cnt=$(find "$base" -type f | wc -l); find "$base" -type f | sed -n '1,200p' | sed -e 's|^|[remote:pre-file] |'; echo "[remote:pre-list] total files: $cnt"; du -sh "$base" 2>/dev/null || true; else echo "[remote:pre-list] missing $base"; fi; done
 
+# Guard snapshot (PRE): capture sample hashes and counts for server-managed dirs to detect unintended changes
+TMP_PRE_DIR="/tmp/chillhub-pre"; TMP_POST_DIR="/tmp/chillhub-post"; mkdir -p "$TMP_PRE_DIR" "$TMP_POST_DIR"
+sample_hash(){ d="$1"; if [ ! -d "$d" ]; then echo "missing"; return; fi; list=$(LC_ALL=C find "$d" -type f -printf '%P\n' | sort | head -n 50); if [ -z "$list" ]; then echo "empty"; else while IFS= read -r f; do sha256sum "$d/$f" | awk '{print $1"  "$2}'; done <<< "$list" | sha256sum | awk '{print $1}'; fi; }
+for d in content manifests news; do dir="$LAUNCHER_DIR/$d"; if [ -d "$dir" ]; then find "$dir" -type f 2>/dev/null | wc -l | awk '{print $1}' > "$TMP_PRE_DIR/${d}.count"; sample_hash "$dir" > "$TMP_PRE_DIR/${d}.hash"; else echo "-1" > "$TMP_PRE_DIR/${d}.count"; echo "missing" > "$TMP_PRE_DIR/${d}.hash"; fi; done
+
 # Sync landing site, but preserve server-managed downloads directory
 echo "[rsync] syncing site -> $SITE_DIR"
 sudo rsync -av --delete --itemize-changes --exclude 'downloads' "$DEPLOY_DIR/site/" "$SITE_DIR/" | sed -e 's|^|[rsync:site] |'
@@ -471,9 +476,10 @@ fi
 # Sync Admin UI static only
 echo "[rsync] syncing admin_ui -> $LAUNCHER_DIR/admin_ui"
 sudo rsync -av --delete --itemize-changes "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/" | sed -e 's|^|[rsync:admin_ui] |'
-# Ensure admin content root subdirs exist and are writable by service user
+# Ensure admin content root subdirs exist; do NOT modify content/manifests/news
 sudo mkdir -p "$LAUNCHER_DIR/content" "$LAUNCHER_DIR/manifests" "$LAUNCHER_DIR/news" "$LAUNCHER_DIR/tmp"
-sudo chown -R www-data:www-data "$LAUNCHER_DIR"
+# Restrict ownership adjustments to admin_ui and tmp only to avoid touching managed content
+sudo chown -R www-data:www-data "$LAUNCHER_DIR/admin_ui" "$LAUNCHER_DIR/tmp"
 
 # Diagnostics: compare source vs destination for key files
 if [ -f "$DEPLOY_DIR/site/index.html" ] && [ -f "$SITE_DIR/index.html" ]; then
@@ -598,16 +604,28 @@ if [ -n "$ADMIN_USER$ADMIN_PASS_BCRYPT$ADMIN_PASS_PLAIN$JWT_SECRET$COOKIE_DOMAIN
   echo "[debug] wrote override.conf (JWT:$([ -n "$JWT_SECRET" ] && echo 1 || echo 0) PLAIN:$([ -n "$ADMIN_PASS_PLAIN" ] && echo 1 || echo 0) BCRYPT:$([ -n "$ADMIN_PASS_BCRYPT" ] && echo 1 || echo 0))"
 fi
 
-# Reload services AFTER writing admin drop-in so env vars are applied
-sudo systemctl daemon-reload || true
-sudo systemctl restart chillhub-api.service || true
-sudo systemctl restart chillhub-admin.service || true
-API_STATE=$(systemctl is-active chillhub-api.service 2>/dev/null || true)
-ADM_STATE=$(systemctl is-active chillhub-admin.service 2>/dev/null || true)
-echo "[systemd] api=$API_STATE admin=$ADM_STATE"
-if [ -n "$FAIL_ON_MISMATCH" ]; then
-  if [ "$API_STATE" != "active" ] || [ "$ADM_STATE" != "active" ]; then echo "[deploy] One or more services not active after restart"; exit 1; fi
-fi
+  # Reload services AFTER writing admin drop-in so env vars are applied
+  sudo systemctl daemon-reload || true
+  sudo systemctl restart chillhub-api.service || true
+  sudo systemctl restart chillhub-admin.service || true
+  API_STATE=$(systemctl is-active chillhub-api.service 2>/dev/null || true)
+  ADM_STATE=$(systemctl is-active chillhub-admin.service 2>/dev/null || true)
+  echo "[systemd] api=$API_STATE admin=$ADM_STATE"
+  if [ -n "$FAIL_ON_MISMATCH" ]; then
+    if [ "$API_STATE" != "active" ] || [ "$ADM_STATE" != "active" ]; then echo "[deploy] One or more services not active after restart"; exit 1; fi
+  fi
+
+  # Wait for admin backend readiness to avoid transient 502/500 during smoke tests
+  echo "[wait] Waiting for admin backend health at http://127.0.0.1:55777/admin/api/health"
+  READY=0
+  for i in {1..30}; do
+    code=$(curl -ks --max-time 2 -o /dev/null -w "%{http_code}" "http://127.0.0.1:55777/admin/api/health" || true)
+    if [ "$code" = "200" ]; then echo "[wait] admin backend READY (health=200)"; READY=1; break; fi
+    sleep 1
+  done
+  if [ "$READY" -ne 1 ]; then
+    echo "[wait] admin backend did not become ready within timeout; proceeding but tests may fail"
+  fi
 
 # Nginx site config
 sudo install -m 0644 "$DEPLOY_DIR/deploy/launcher.conf" "$NGINX_SITE_AVAILABLE"
@@ -627,10 +645,48 @@ else
   echo "[check] redirect rule NOT present in nginx config"
 fi
 
-# Smoke tests
-FAIL=0
-http_code() { curl -ks --max-time 5 -o /dev/null -w "%{http_code}" "$1"; }
-must_200() { url="$1"; name="$2"; code=$(http_code "$url"); if [ "$code" = "200" ]; then echo "[test] PASS $name ($url)"; else echo "[test] FAIL $name ($url) -> $code"; FAIL=1; fi; }
+  # Safeguard: verify server-managed directories were not modified by this deploy
+  echo "[guard] Checking that server-managed dirs were not modified: $LAUNCHER_DIR/content, /manifests, /news"
+  FAIL_GUARD=0
+  # POST snapshot
+  sample_hash(){ d="$1"; if [ ! -d "$d" ]; then echo "missing"; return; fi; list=$(LC_ALL=C find "$d" -type f -printf '%P\n' | sort | head -n 50); if [ -z "$list" ]; then echo "empty"; else while IFS= read -r f; do sha256sum "$d/$f" | awk '{print $1"  "$2}'; done <<< "$list" | sha256sum | awk '{print $1}'; fi; }
+  for d in content manifests news; do
+    dir="$LAUNCHER_DIR/$d"
+    if [ -d "$dir" ]; then
+      cnt=$(find "$dir" -type f 2>/dev/null | wc -l | awk '{print $1}')
+      echo "[guard] $dir files=$cnt"
+      echo "$cnt" > "$TMP_POST_DIR/${d}.count"
+      sample_hash "$dir" > "$TMP_POST_DIR/${d}.hash"
+      echo "[guard] recent (<=5min) changes in $dir:"
+      recent=$(sudo find "$dir" -type f -mmin -5 -printf '%TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null | head -n 50 || true)
+      if [ -n "$recent" ]; then echo "$recent"; echo "[guard][FAIL] Recent changes detected in $dir"; FAIL_GUARD=1; else echo "(none)"; fi
+    else
+      echo "[guard] $dir (missing)"
+      echo "-1" > "$TMP_POST_DIR/${d}.count"; echo "missing" > "$TMP_POST_DIR/${d}.hash"
+    fi
+  done
+  # Compare PRE vs POST counts and sample hashes
+  for d in content manifests news; do
+    PRE_C=$(cat "$TMP_PRE_DIR/${d}.count" 2>/dev/null || echo "")
+    PRE_H=$(cat "$TMP_PRE_DIR/${d}.hash" 2>/dev/null || echo "")
+    POST_C=$(cat "$TMP_POST_DIR/${d}.count" 2>/dev/null || echo "")
+    POST_H=$(cat "$TMP_POST_DIR/${d}.hash" 2>/dev/null || echo "")
+    if [ "$PRE_C" != "$POST_C" ] || [ "$PRE_H" != "$POST_H" ]; then
+      echo "[guard][FAIL] Snapshot diff for $d (count $PRE_C->$POST_C, hash $PRE_H->$POST_H)"
+      FAIL_GUARD=1
+    else
+      echo "[guard] Snapshot OK for $d"
+    fi
+  done
+  if [ "$FAIL_GUARD" -ne 0 ]; then
+    echo "[deploy] Guard failed: server-managed directories changed. Aborting before smoke tests."
+    exit 1
+  fi
+
+  # Smoke tests
+  FAIL=0
+  http_code() { curl -ks --max-time 8 -o /dev/null -w "%{http_code}" "$1"; }
+  must_200() { url="$1"; name="$2"; code=$(http_code "$url"); if [ "$code" = "200" ]; then echo "[test] PASS $name ($url)"; else echo "[test] FAIL $name ($url) -> $code"; FAIL=1; fi; }
 
 must_200 "$SITE_BASE/admin/ui/login.html" "Admin UI login"
 code=$(http_code "$SITE_BASE/admin/")
@@ -642,10 +698,10 @@ must_200 "$SITE_BASE/" "Landing root"
 must_200 "$SITE_BASE/styles.css" "Landing styles"
 
 # Extra curl diagnostics (headers)
-echo "[curl] HEADers"
-curl -ksSI --max-time 5 "$SITE_BASE/admin/ui/login.html" || true
-curl -ksSI --max-time 5 "$SITE_BASE/admin/ui/admin.js" || true
-curl -ksSI --max-time 5 "$SITE_BASE/admin/api/health" || true
+  echo "[curl] HEADers"
+  curl -ksSI --max-time 8 "$SITE_BASE/admin/ui/login.html" || true
+  curl -ksSI --max-time 8 "$SITE_BASE/admin/ui/admin.js" || true
+  curl -ksSI --max-time 8 "$SITE_BASE/admin/api/health" || true
 
 if curl -ksf --max-time 5 "$SITE_BASE/manifests/launcher/latest.json" >/dev/null; then
   echo "[test] PASS manifests/launcher/latest.json"
