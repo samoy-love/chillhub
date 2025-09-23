@@ -242,6 +242,24 @@ function formatBytes(n){
   return str + ' ' + units[i];
 }
 
+// Humanize bytes per second to "+/с"
+function formatSpeed(bytesPerSec){
+  const v = Number(bytesPerSec||0);
+  if(!Number.isFinite(v) || v <= 0) return '';
+  return formatBytes(v) + '/с';
+}
+
+// Format ETA seconds to H:MM:SS or M:SS
+function formatEta(sec){
+  const s = Math.max(0, Math.floor(Number(sec||0)));
+  const pad = (n)=> (n<10?'0':'')+n;
+  const h = Math.floor(s/3600);
+  const m = Math.floor((s%3600)/60);
+  const ss = s%60;
+  if(h>0) return h+':'+pad(m)+':'+pad(ss);
+  return m+':'+pad(ss);
+}
+
 // ==== System free space indicator ====
 let __sysFreeTimer = null; // reserved; not used after change
 let __sysFreeReq = 0;
@@ -366,84 +384,6 @@ function lnRenderTree(rootEl, manifest){
     return html;
   };
   rootEl.innerHTML = '<div class="small text-body-secondary mb-1">Всего файлов: '+files.length+'</div>' + renderNode(null, root, 0);
-}
-
-// ==== Launcher upload via uploadStream (NDJSON status) ====
-async function lnUpload(){
-  const ver = (document.getElementById('up_ver')?.value||'').trim();
-  if(!ver){ notify('Укажите версию'); return; }
-  const file = (window.__upDroppedFile)||document.getElementById('up_zip')?.files?.[0];
-  if(!file){ notify('Выберите ZIP-файл'); return; }
-  const latest = (document.getElementById('up_latest')?.checked) ? '1':'0';
-  const fd = new FormData();
-  fd.append('kind','launcher');
-  fd.append('version', ver);
-  fd.append('zip', file);
-  fd.append('updateLatest', latest);
-  const wrap=document.getElementById('up_prog_wrap');
-  const bar=document.getElementById('up_pb');
-  const txt=document.getElementById('up_prog_text');
-  if(wrap) wrap.style.display='block';
-  if(bar) bar.style.width='0%';
-  if(txt) txt.textContent='Подготовка к загрузке...';
-
-  await new Promise((resolve)=>{
-    const xhr = new XMLHttpRequest(); xhr.open('POST','/admin/uploadStream');
-    xhr.setRequestHeader('Accept','application/x-ndjson');
-    // Upload progress
-    xhr.upload.onprogress = (e)=>{
-      if(e.lengthComputable){
-        const pct = Math.floor(e.loaded*100/e.total);
-        if(bar) bar.style.width=pct+'%';
-        if(txt) txt.textContent='Загружено '+pct+'% ('+e.loaded+' / '+e.total+' байт)';
-      }
-    };
-    // Streaming NDJSON parsing
-    let lastLen = 0;
-    xhr.onprogress = ()=>{
-      const resp = xhr.responseText || '';
-      const chunk = resp.substring(lastLen);
-      lastLen = resp.length;
-      const lines = chunk.split(/\r?\n/).filter(Boolean);
-      for(const line of lines){
-        try{
-          const ev = JSON.parse(line);
-          if(ev.type === 'start'){
-            if(txt) txt.textContent = 'Старт обработки: launcher '+(ev.version||ver);
-          } else if(ev.type === 'zipSaved'){
-            if(txt) txt.textContent = 'Загрузка завершена, обработка ZIP ('+formatBytes(ev.bytes||0)+')...';
-            if(bar) bar.style.width='100%';
-          } else if(ev.type === 'unzip'){
-            if(txt) txt.textContent = 'Распаковка: '+ev.path;
-          } else if(ev.type === 'composeStart'){
-            if(txt) txt.textContent = 'Подготовка манифеста: 0/'+(ev.totalFiles||0)+' файлов';
-          } else if(ev.type === 'file'){
-            if(txt) txt.textContent = 'Манифест: '+(ev.idx||0)+' файлов, '+formatBytes(ev.bytesDone||0);
-          } else if(ev.type === 'done'){
-            if(txt) txt.textContent = 'Готово. Манифест записан';
-            try{ lnManifestsReload(); }catch(_){ }
-            try{ lnPrevEnsureVersionsAndRender(); }catch(_){ }
-          } else if(ev.type === 'error'){
-            notify('Ошибка: '+(ev.message||'unknown'));
-          }
-        }catch(_){ /* ignore partial lines */ }
-      }
-    };
-    xhr.onreadystatechange = ()=>{
-      if(xhr.readyState===4){
-        if(xhr.status>=200 && xhr.status<300){
-          try{ lnRefresh(); }catch(_){ }
-          try{ lnManifestsReload(); }catch(_){ }
-          try{ lnPrevEnsureVersionsAndRender(); }catch(_){ }
-        } else {
-          notify('HTTP '+xhr.status+' '+xhr.statusText+' '+(xhr.responseText||''));
-        }
-        window.__upDroppedFile=null; resolve();
-      }
-    };
-    xhr.onerror = ()=>{ notify('Ошибка загрузки'); window.__upDroppedFile=null; resolve(); };
-    xhr.send(fd);
-  });
 }
 
 // Also reflect file selection in launcher upload area
@@ -759,7 +699,7 @@ async function manifestsUpload(){
   const ver = (document.getElementById('ver')?.value||'').trim();
   if(!gid){ notify('Укажите идентификатор игры'); return; }
   if(!ver){ notify('Укажите версию'); return; }
-  const file = (window.__manDroppedFile)||document.getElementById('man_zip')?.files?.[0];
+  const file = (window.__manDroppedFile) || document.getElementById('man_zip')?.files?.[0];
   if(!file){ notify('Выберите ZIP-файл'); return; }
   const latest = (document.getElementById('man_latest')?.checked) ? '1':'0';
   const fd = new FormData();
@@ -767,18 +707,70 @@ async function manifestsUpload(){
   const wrap=document.getElementById('man_prog_wrap'); const bar=document.getElementById('man_pb'); const txt=document.getElementById('man_prog_text');
   if(wrap) wrap.style.display='block'; if(bar) bar.style.width='0%'; if(txt) txt.textContent='Подготовка к загрузке...';
 
+  // Pre-check: free disk space before starting upload (server-side temp)
+  try{
+    const r = await fetch('/admin/system/free');
+    if(r && r.ok){
+      const j = await r.json();
+      const free = Number(j && j.bytes);
+      const need = Number(file.size||0);
+      if(Number.isFinite(free) && Number.isFinite(need)){
+        const ok = free >= need;
+        const msg = 'Проверка места: свободно '+formatBytes(free)+', нужно '+formatBytes(need)+' — '+(ok?'достаточно':'НЕ хватает');
+        if(txt) txt.textContent = msg;
+        if(!ok){
+          const proceed = confirm(msg+'\nПродолжить загрузку несмотря на нехватку места?');
+          if(!proceed){ return; }
+        }
+      }
+    }
+  }catch(_){ /* ignore pre-check errors */ }
+
   await new Promise((resolve)=>{
+    const t0 = Date.now();
+    let lastT = t0;
+    let lastLoaded = 0;
+    let avgSpeed = 0; // EMA for stability
+    const alpha = 0.2;
+    // Sliding windows for smoothing
+    const samples = []; // {t, loaded}
+    const etaSamples = []; // {t, eta}
     const xhr = new XMLHttpRequest(); xhr.open('POST','/admin/uploadStream');
     xhr.setRequestHeader('Accept','application/x-ndjson');
     // Upload progress
     xhr.upload.onprogress = (e)=>{
       if(e.lengthComputable){
+        const now = Date.now();
+        const dt = (now - lastT)/1000;
+        let inst = 0;
+        if(dt > 0){ inst = (e.loaded - lastLoaded)/dt; }
+        if(inst > 0){ avgSpeed = avgSpeed ? (alpha*inst + (1-alpha)*avgSpeed) : inst; }
+        lastT = now; lastLoaded = e.loaded;
+        // push sample and prune >10s
+        samples.push({t: now, loaded: e.loaded});
+        for(let i=0;i<samples.length;i++){ if((now - samples[i].t) <= 10000){ if(i>0) samples.splice(0,i); break; } }
+        // 2s window speed
+        let speed2s = 0;
+        for(let i=samples.length-1;i>=0;i--){ const age = (now - samples[i].t)/1000; if(age >= 2 || i===0){ const dtw = (now - samples[i].t)/1000; const dbytes = e.loaded - samples[i].loaded; if(dtw>0 && dbytes>0) speed2s = dbytes/dtw; break; } }
         const pct = Math.floor(e.loaded*100/e.total);
         if(bar) bar.style.width=pct+'%';
-        if(txt) txt.textContent='Загружено '+pct+'% ('+e.loaded+' / '+e.total+' байт)';
+        const remain = Math.max(0, e.total - e.loaded);
+        const useSpeed = speed2s || avgSpeed || inst;
+        let etaStr = '';
+        if(useSpeed > 0){
+          const etaNow = remain / useSpeed;
+          // collect eta samples (10s window)
+          etaSamples.push({t: now, eta: etaNow});
+          for(let i=0;i<etaSamples.length;i++){ if((now - etaSamples[i].t) <= 10000){ if(i>0) etaSamples.splice(0,i); break; } }
+          // average ETA over window
+          const avgEta = etaSamples.reduce((s,x)=> s+x.eta, 0) / etaSamples.length;
+          etaStr = ' \u2022 ETA '+formatEta(avgEta);
+        }
+        const speedStr = useSpeed>0 ? (' \u2022 '+formatSpeed(useSpeed)) : '';
+        if(txt) txt.textContent='Загружено '+pct+'% ('+formatBytes(e.loaded)+' / '+formatBytes(e.total)+')'+speedStr+etaStr;
       }
     };
-    // Streaming NDJSON parsing from response
+    // Streaming NDJSON parsing
     let lastLen = 0;
     xhr.onprogress = ()=>{
       const resp = xhr.responseText || '';
@@ -801,13 +793,12 @@ async function manifestsUpload(){
             if(txt) txt.textContent = 'Манифест: '+(ev.idx||0)+' файлов, '+formatBytes(ev.bytesDone||0);
           } else if(ev.type === 'done'){
             if(txt) txt.textContent = 'Готово. Манифест записан';
-            // refresh versions list and preview immediately
-            try{ manifestsReload(); }catch(_){}
-            try{ gmPrevEnsureVersionsAndRender(gid); }catch(_){}
+            try{ manifestsReload(); }catch(_){ }
+            try{ gmPrevEnsureVersionsAndRender(gid); }catch(_){ }
           } else if(ev.type === 'error'){
             notify('Ошибка: '+(ev.message||'unknown'));
           }
-        }catch(_){ /* ignore JSON parse errors for partial lines */ }
+        }catch(_){ /* ignore partial lines */ }
       }
     };
     xhr.onreadystatechange = ()=>{
@@ -1108,15 +1099,7 @@ document.addEventListener('DOMContentLoaded', function(){
   try{ lnPrevEnsureVersionsAndRender(); }catch(_){}
   try{ ensureLauncherVersionsCard(); }catch(_){}
   try{ lnManifestsReload(); }catch(_){}
-  // Launcher tab controls
-  const upBtn = document.getElementById('btnUpload');
-  if(upBtn){ upBtn.addEventListener('click', lnUpload); }
-  const lnRefBtn = document.getElementById('ln_refresh');
-  if(lnRefBtn){ lnRefBtn.addEventListener('click', ()=> lnRefresh()); }
-  const lnPrevBtn = document.getElementById('ln_prev_refresh');
-  if(lnPrevBtn){ lnPrevBtn.addEventListener('click', ()=> lnPrevEnsureVersionsAndRender()); }
-  const lnPrevSel = document.getElementById('ln_prev_ver');
-  if(lnPrevSel){ lnPrevSel.addEventListener('change', ()=> lnPrevRender(lnPrevSel.value||'')); }
+  // Launcher tab controls are bound later in guarded wiring section
 
   const btn = document.getElementById('gm_prev_refresh');
   if(btn){ btn.addEventListener('click', ()=>{ const gid=(document.getElementById('gid')?.value||'').trim(); if(!gid){ notify('Укажите игру'); return; } gmPrevEnsureVersionsAndRender(gid); }); }
