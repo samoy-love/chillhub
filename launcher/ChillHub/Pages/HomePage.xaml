@@ -92,6 +92,96 @@
       </Setter>
     </Style>
 
+    <!-- Rounded dark progress bar style -->
+    <Style x:Key="Style.ProgressBar.Rounded" TargetType="ProgressBar">
+      <Setter Property="Height" Value="20"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ProgressBar">
+            <Grid ClipToBounds="True">
+              <!-- Track with thick dark border and dark background; named PART_Track so WPF wires it -->
+              <Border x:Name="PART_Track" CornerRadius="6" BorderThickness="2.5"
+                      Background="#1A122B" BorderBrush="#2B1F4A"/>
+              <!-- Indicator; named PART_Indicator so WPF sets width automatically for determinate mode -->
+              <Border x:Name="PART_Indicator" CornerRadius="6" Background="{DynamicResource Brush.AccentGradientPrimary}"
+                      HorizontalAlignment="Left"/>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Game-specific selectable style: brighter hover, special selected+hover -->
+    <Style x:Key="Style.ListBoxItem.SelectableCard.Game" TargetType="ListBoxItem">
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="Margin" Value="0,4,0,4"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBoxItem">
+            <Border x:Name="bd" CornerRadius="10" BorderThickness="1"
+                    Background="{DynamicResource Brush.Surface}"
+                    BorderBrush="{DynamicResource Brush.Border}">
+              <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <!-- Hover (not selected) brighter -->
+              <MultiTrigger>
+                <MultiTrigger.Conditions>
+                  <Condition Property="IsMouseOver" Value="True"/>
+                  <Condition Property="IsSelected" Value="False"/>
+                </MultiTrigger.Conditions>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="2"/>
+              </MultiTrigger>
+              <!-- Selected without focus -->
+              <MultiTrigger>
+                <MultiTrigger.Conditions>
+                  <Condition Property="IsSelected" Value="True"/>
+                  <Condition Property="IsKeyboardFocusWithin" Value="False"/>
+                </MultiTrigger.Conditions>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="1.5"/>
+              </MultiTrigger>
+              <!-- Selected with focus -->
+              <MultiTrigger>
+                <MultiTrigger.Conditions>
+                  <Condition Property="IsSelected" Value="True"/>
+                  <Condition Property="IsKeyboardFocusWithin" Value="True"/>
+                </MultiTrigger.Conditions>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="2"/>
+              </MultiTrigger>
+              <!-- Selected + Hover: emphasize slightly more -->
+              <MultiTrigger>
+                <MultiTrigger.Conditions>
+                  <Condition Property="IsSelected" Value="True"/>
+                  <Condition Property="IsMouseOver" Value="True"/>
+                </MultiTrigger.Conditions>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="2.2"/>
+              </MultiTrigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="bd" Property="Opacity" Value="0.6"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- News-specific selectable style: purple accent on hover; keep selected states as base -->
+    <Style x:Key="Style.ListBoxItem.SelectableCard.News" TargetType="ListBoxItem" BasedOn="{StaticResource Style.ListBoxItem.SelectableCard}">
+      <Style.Triggers>
+        <!-- Hover (any selection state): use brighter accent -->
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter Property="BorderBrush" Value="{DynamicResource Brush.AccentHover}"/>
+          <Setter Property="BorderThickness" Value="1.8"/>
+        </Trigger>
+        <!-- If selected + hover, keep selection thickness from base/style triggers -->
+      </Style.Triggers>
+    </Style>
+
     <!-- Generic dim button template -->
     <Style x:Key="Style.Button.Dim.Base" TargetType="Button">
       <Setter Property="Foreground" Value="{DynamicResource Btn.Update.Fg}"/>
@@ -354,6 +444,97 @@
         </Setter.Value>
       </Setter>
     </Style>
+
+    <!-- Rounded bright selectable item style (used for games and news) -->
+    <Style x:Key="Style.ListBoxItem.SelectableCard" TargetType="ListBoxItem">
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="Margin" Value="0,4,0,4"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBoxItem">
+            <Border x:Name="bd" CornerRadius="10" BorderThickness="1"
+                    Background="{DynamicResource Brush.Surface}"
+                    BorderBrush="{DynamicResource Brush.Border}">
+              <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <!-- Hover (brighter) -->
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.AccentHover}"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="1.5"/>
+              </Trigger>
+              <!-- Selected without focus: bright but a bit thinner -->
+              <MultiTrigger>
+                <MultiTrigger.Conditions>
+                  <Condition Property="IsSelected" Value="True"/>
+                  <Condition Property="IsKeyboardFocusWithin" Value="False"/>
+                </MultiTrigger.Conditions>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="1.5"/>
+              </MultiTrigger>
+              <!-- Selected with focus: brightest and thicker -->
+              <MultiTrigger>
+                <MultiTrigger.Conditions>
+                  <Condition Property="IsSelected" Value="True"/>
+                  <Condition Property="IsKeyboardFocusWithin" Value="True"/>
+                </MultiTrigger.Conditions>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="2"/>
+              </MultiTrigger>
+              <!-- Disabled dim -->
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="bd" Property="Opacity" Value="0.6"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Dark purple scrollbar theme (applies within this Page) -->
+    <SolidColorBrush x:Key="Brush.Scrollbar.Track" Color="#00000000"/>
+    <SolidColorBrush x:Key="Brush.Scrollbar.Thumb" Color="#3A2477"/>
+    <SolidColorBrush x:Key="Brush.Scrollbar.ThumbHover" Color="#5B3BBF"/>
+    <SolidColorBrush x:Key="Brush.Scrollbar.ThumbPressed" Color="#7A5CFF"/>
+
+    <Style TargetType="ScrollBar">
+      <Setter Property="Width" Value="10"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ScrollBar">
+            <Grid Background="{TemplateBinding Background}">
+              <Track x:Name="PART_Track" IsDirectionReversed="true">
+                <Track.Thumb>
+                  <Thumb x:Name="PART_Thumb" Background="{StaticResource Brush.Scrollbar.Thumb}">
+                    <Thumb.Template>
+                      <ControlTemplate TargetType="Thumb">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="5"/>
+                      </ControlTemplate>
+                    </Thumb.Template>
+                  </Thumb>
+                </Track.Thumb>
+              </Track>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <!-- Horizontal orientation -->
+              <Trigger Property="Orientation" Value="Horizontal">
+                <Setter Property="Width" Value="Auto"/>
+                <Setter Property="Height" Value="10"/>
+              </Trigger>
+              <!-- Hover/Pressed for thumb -->
+              <Trigger SourceName="PART_Thumb" Property="IsMouseOver" Value="True">
+                <Setter TargetName="PART_Thumb" Property="Background" Value="{StaticResource Brush.Scrollbar.ThumbHover}"/>
+              </Trigger>
+              <Trigger SourceName="PART_Thumb" Property="IsDragging" Value="True">
+                <Setter TargetName="PART_Thumb" Property="Background" Value="{StaticResource Brush.Scrollbar.ThumbPressed}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
   </Page.Resources>
   <Grid Margin="8,8,8,8" Background="{DynamicResource Brush.Background}">
     <Grid.RowDefinitions>
@@ -438,16 +619,13 @@
                 </ControlTemplate>
               </ListBox.Template>
               <ListBox.ItemContainerStyle>
-                <Style TargetType="ListBoxItem">
-                  <Setter Property="Padding" Value="0"/>
-                  <Setter Property="Margin" Value="0,6,0,6"/>
-                  <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                  <Setter Property="Background" Value="Transparent"/>
-                </Style>
+                <Style TargetType="ListBoxItem" BasedOn="{StaticResource Style.ListBoxItem.SelectableCard}"/>
               </ListBox.ItemContainerStyle>
               <ListBox.ItemTemplate>
                 <DataTemplate>
+                  <!-- Neutralize inner card border to avoid double border; content still keeps padding -->
                   <Border Style="{DynamicResource Style.Card}" Padding="10" Margin="0" HorizontalAlignment="Stretch"
+                          BorderThickness="0" BorderBrush="Transparent"
                           ContextMenuOpening="GameItem_ContextMenuOpening">
                     <Border.ContextMenu>
                       <ContextMenu>
@@ -463,7 +641,9 @@
                       </Grid.ColumnDefinitions>
                       <!-- Иконка игры -->
                       <Grid Grid.Column="0" Width="36" Height="36" VerticalAlignment="Center">
-                        <Border x:Name="ImgSkeleton" Style="{DynamicResource Style.Skeleton}"/>
+                        <!-- Default icon (visible under image or when no image) -->
+                        <TextBlock x:Name="DefaultGameIcon" FontFamily="Segoe MDL2 Assets" Text="&#xE7C3;" FontSize="18"
+                                   Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center" HorizontalAlignment="Center"/>
                         <Image x:Name="IconImg" Source="{Binding IconUrl}" Tag="{Binding IconUrl}" Stretch="UniformToFill" Visibility="Visible"/>
                       </Grid>
                       <!-- Название -->
@@ -615,15 +795,11 @@
                  ScrollViewer.CanContentScroll="False"
                  HorizontalContentAlignment="Stretch" VerticalAlignment="Stretch">
           <ListBox.ItemContainerStyle>
-            <Style TargetType="ListBoxItem">
-              <Setter Property="Padding" Value="0"/>
-              <Setter Property="Margin" Value="0,1,0,1"/>
-              <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-            </Style>
+            <Style TargetType="ListBoxItem" BasedOn="{StaticResource Style.ListBoxItem.SelectableCard}"/>
           </ListBox.ItemContainerStyle>
           <ListBox.ItemTemplate>
             <DataTemplate>
-              <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,1,0,1" HorizontalAlignment="Stretch">
+              <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,1,0,1" HorizontalAlignment="Stretch" BorderThickness="0" BorderBrush="Transparent">
                 <Grid>
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="120"/>
@@ -693,15 +869,11 @@
                  ScrollViewer.CanContentScroll="False"
                  HorizontalContentAlignment="Stretch" VerticalAlignment="Stretch">
           <ListBox.ItemContainerStyle>
-            <Style TargetType="ListBoxItem">
-              <Setter Property="Padding" Value="0"/>
-              <Setter Property="Margin" Value="0,1,0,1"/>
-              <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-            </Style>
+            <Style TargetType="ListBoxItem" BasedOn="{StaticResource Style.ListBoxItem.SelectableCard}"/>
           </ListBox.ItemContainerStyle>
           <ListBox.ItemTemplate>
             <DataTemplate>
-              <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,1,0,1" HorizontalAlignment="Stretch">
+              <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,1,0,1" HorizontalAlignment="Stretch" BorderThickness="0" BorderBrush="Transparent">
                 <Grid>
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="120"/>
@@ -763,7 +935,7 @@
           <TextBlock Grid.Row="0" Name="StatusText" Text="Готов" FontWeight="SemiBold" FontSize="16" VerticalAlignment="Center"/>
           <!-- Прогрессбар -->
           <ProgressBar Grid.Row="1" Name="UpdateProgress" Height="20" Minimum="0" Maximum="100" Value="0" Margin="0,4,0,0"
-                       Foreground="{DynamicResource Brush.AccentGradientPrimary}" Background="{DynamicResource Brush.Track}" VerticalAlignment="Center"/>
+                       Style="{StaticResource Style.ProgressBar.Rounded}" VerticalAlignment="Center"/>
           <!-- Скорость/ETA -->
           <TextBlock Grid.Row="2" Name="SpeedEtaText" Text="" Foreground="{DynamicResource Brush.TextSecondary}" FontSize="12" VerticalAlignment="Center"/>
           <!-- Размеры/оценка места -->

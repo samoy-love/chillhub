@@ -33,7 +33,10 @@ namespace ChillHub.Core.Logging {
 
         public static void Error(string message) => Write("ERROR", message);
 
-        public static void Error(Exception ex, string? message = null) => Write("ERROR", (message == null ? string.Empty : message + ": ") + ex.ToString());
+        public static void Error(Exception ex, string? message = null) {
+            Write("ERROR", (message == null ? string.Empty : message + ": ") + ex.ToString());
+            try { ChillHub.Core.ErrorReporter.Report(ex, message ?? "exception"); } catch { }
+        }
 
         private static void Write(string level, string message) {
             try {

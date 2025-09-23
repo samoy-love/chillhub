@@ -8,6 +8,7 @@ namespace ChillHub {
     using System.IO;
     using System.Runtime.InteropServices;
     using System.Windows;
+    using System.Threading.Tasks;
 
     using ChillHub.Core;
     using ChillHub.Core.Logging;
@@ -26,9 +27,11 @@ namespace ChillHub {
                 }
                 catch {
                 }
+                // Централизованный репортинг ошибок
+                try { ChillHub.Core.ErrorReporter.InitGlobalHandlers(); } catch { }
                 AppDomain.CurrentDomain.UnhandledException += (s, ex) => {
                     try {
-                        File.AppendAllText(GetBootLogPath(), $"[" + DateTime.Now.ToString("o") + $"] UnhandledException: {ex.ExceptionObject}\r\n");
+                        File.AppendAllText(GetBootLogPath(), "[" + DateTime.Now.ToString("o") + $"] UnhandledException: {ex.ExceptionObject}\r\n");
                     }
                     catch {
                     }
@@ -39,6 +42,9 @@ namespace ChillHub {
                     }
                     try {
                         Logger.Error("UnhandledException: " + ex.ExceptionObject);
+                        if (ex.ExceptionObject is Exception real) {
+                            ChillHub.Core.ErrorReporter.Report(real, "AppDomain.UnhandledException");
+                        }
                     }
                     catch {
                     }
@@ -46,7 +52,7 @@ namespace ChillHub {
                 };
                 this.DispatcherUnhandledException += (s, ex) => {
                     try {
-                        File.AppendAllText(GetBootLogPath(), $"[" + DateTime.Now.ToString("o") + $"] DispatcherUnhandledException: {ex.Exception.Message}\r\n{ex.Exception}\r\n");
+                        File.AppendAllText(GetBootLogPath(), "[" + DateTime.Now.ToString("o") + $"] DispatcherUnhandledException: {ex.Exception.Message}\r\n{ex.Exception}\r\n");
                     }
                     catch {
                     }
@@ -57,12 +63,20 @@ namespace ChillHub {
                     }
                     try {
                         Logger.Error(ex.Exception, "DispatcherUnhandledException");
+                        ChillHub.Core.ErrorReporter.Report(ex.Exception, "DispatcherUnhandledException");
                     }
                     catch {
                     }
                     MessageBox.Show($"Ошибка: {ex.Exception.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
                     ex.Handled = true;
                 };
+                // Подписка на необработанные исключения задач
+                try {
+                    TaskScheduler.UnobservedTaskException += (s, ex) => {
+                        try { Logger.Error(ex.Exception, "TaskScheduler.UnobservedTaskException"); } catch { }
+                        try { ChillHub.Core.ErrorReporter.Report(ex.Exception, "TaskScheduler.UnobservedTaskException"); } catch { }
+                    };
+                } catch { }
             }
             catch {
             }
