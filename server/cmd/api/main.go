@@ -11,6 +11,7 @@ import (
 	"ChillHub/server/internal/httpx"
 
 	"github.com/gorilla/mux"
+	_ "go.uber.org/automaxprocs"
 )
 
 type GameInfo struct {

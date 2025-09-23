@@ -30,6 +30,7 @@ import (
 
 	"github.com/zeebo/blake3"
 	"golang.org/x/text/encoding/charmap"
+	_ "go.uber.org/automaxprocs"
 )
 
 var contentRoot = detectContentRoot()
@@ -351,113 +352,112 @@ func getFreeSpaceBytes(path string) (uint64, error) {
 
 // handleUploadStream uploads a ZIP and streams progress (NDJSON): start, unzip entries, compose files, done
 func handleUploadStream(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(1 << 30); err != nil {
-		http.Error(w, "multipart parse error: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	kind := r.FormValue("kind")
-	gid := r.FormValue("gameId")
-	ver := r.FormValue("version")
-	upd := r.FormValue("updateLatest") == "1"
-	if kind == "" {
-		http.Error(w, "missing kind (launcher|game)", http.StatusBadRequest)
-		return
-	}
-	if ver == "" {
-		http.Error(w, "missing version", http.StatusBadRequest)
-		return
-	}
-	if kind == "game" && gid == "" {
-		http.Error(w, "missing gameId for kind=game", http.StatusBadRequest)
-		return
-	}
-	if kind == "launcher" {
-		gid = "launcher"
-	}
-	if !isSafeGameID(gid) || !isSafeVersion(ver) {
-		http.Error(w, "invalid gameId or version", http.StatusBadRequest)
-		return
-	}
+    // Streaming setup (tolerate environments without http.Flusher)
+    w.Header().Set("Content-Type", "application/x-ndjson")
+    type flusher interface{ Flush() }
+    var fl flusher
+    if f, ok := w.(http.Flusher); ok { fl = f } else { fl = flusher(noopFlusher{}) }
 
-	// Streaming setup (tolerate environments without http.Flusher)
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	type flusher interface {
-		Flush()
-	}
-	var fl flusher
-	if f, ok := w.(http.Flusher); ok {
-		fl = f
-	} else {
-		// fallback: no-op flusher; response may be buffered by server/proxy
-		fl = flusher(noopFlusher{})
-	}
-	fmt.Fprintf(w, "{\"type\":\"start\",\"kind\":%q,\"gameId\":%q,\"version\":%q}\n", kind, gid, ver)
-	fl.Flush()
+    // Prefer true streaming to avoid extra disk copies and huge memory use
+    mr, err := r.MultipartReader()
+    if err != nil {
+        http.Error(w, "multipart reader error: "+err.Error(), http.StatusBadRequest)
+        return
+    }
 
-	f, hdr, err := r.FormFile("zip")
-	if err != nil {
-		fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", "missing zip: "+err.Error())
-		fl.Flush()
-		return
-	}
-	defer f.Close()
+    // Collect fields and stream the file part directly to temp ZIP on disk
+    var (
+        kind string
+        gid string
+        ver string
+        upd bool
+        origFilename string
+        tmpName string
+        saved int64
+    )
 
-	// Save zip to temp on the SAME filesystem as filesRoot to avoid cross-device free-space mismatch
-	filesRoot := filepath.Join(contentRoot, "content", gid, ver, "files")
-	if err := os.MkdirAll(filesRoot, 0o755); err != nil {
-		fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", err.Error())
-		fl.Flush()
-		return
-	}
-	tmpDir := filepath.Join(contentRoot, "tmp")
-	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-		fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", err.Error())
-		fl.Flush()
-		return
-	}
-	// Optional: precheck free space for temp if size is known
-	if hdr != nil && hdr.Size > 0 {
-		if free, ferr := getFreeSpaceBytes(tmpDir); ferr == nil && free > 0 && uint64(hdr.Size) > free {
-			http.Error(w, fmt.Sprintf("insufficient temp space: need %d bytes, have %d bytes", hdr.Size, free), 507)
-			return
-		}
-	}
-	tmpZip, err := os.CreateTemp(tmpDir, "upload-*.zip")
-	if err != nil {
-		fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", err.Error())
-		fl.Flush()
-		return
-	}
-	tmpName := tmpZip.Name()
-	var saved int64
-	buf := make([]byte, 256*1024)
-	for {
-		n, er := f.Read(buf)
-		if n > 0 {
-			wn, we := tmpZip.Write(buf[:n])
-			_ = wn
-			if we != nil {
-				tmpZip.Close()
-				os.Remove(tmpName)
-				fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", we.Error())
-				fl.Flush()
-				return
-			}
-			saved += int64(n)
-		}
-		if er == io.EOF {
-			break
-		}
-		if er != nil {
-			tmpZip.Close()
-			fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", er.Error())
-			fl.Flush()
-			return
-		}
-	}
-	tmpZip.Close()
-	fmt.Fprintf(w, "{\"type\":\"zipSaved\",\"filename\":%q,\"bytes\":%d}\n", hdr.Filename, saved)
-	fl.Flush()
+    // Optional precheck: ensure enough temp space based on Content-Length if known
+    if r.ContentLength > 0 {
+        tmpDir := filepath.Join(contentRoot, "tmp")
+        if err := os.MkdirAll(tmpDir, 0o755); err == nil {
+            if free, ferr := getFreeSpaceBytes(tmpDir); ferr == nil && free > 0 && uint64(r.ContentLength) > free {
+                http.Error(w, fmt.Sprintf("insufficient temp space: need %d bytes, have %d bytes", r.ContentLength, free), 507)
+                return
+            }
+        }
+    }
+
+    // Iterate parts
+    for {
+        part, perr := mr.NextPart()
+        if perr == io.EOF { break }
+        if perr != nil { http.Error(w, perr.Error(), http.StatusBadRequest); return }
+        name := strings.TrimSpace(part.FormName())
+        if name == "" {
+            // skip unnamed parts
+            io.Copy(io.Discard, part)
+            _ = part.Close()
+            continue
+        }
+        switch name {
+        case "kind":
+            b, _ := io.ReadAll(io.LimitReader(part, 1<<20))
+            kind = strings.ToLower(strings.TrimSpace(string(b)))
+        case "gameId":
+            b, _ := io.ReadAll(io.LimitReader(part, 1<<20))
+            gid = strings.TrimSpace(string(b))
+        case "version":
+            b, _ := io.ReadAll(io.LimitReader(part, 1<<20))
+            ver = strings.TrimSpace(string(b))
+        case "updateLatest":
+            b, _ := io.ReadAll(io.LimitReader(part, 1<<20))
+            upd = strings.TrimSpace(string(b)) == "1"
+        case "zip":
+            // Create temp dir and file once we hit the file part; stream directly
+            tmpDir := filepath.Join(contentRoot, "tmp")
+            if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+                fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", err.Error()); fl.Flush(); part.Close(); return
+            }
+            tmpZip, err := os.CreateTemp(tmpDir, "upload-*.zip")
+            if err != nil {
+                fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", err.Error()); fl.Flush(); part.Close(); return
+            }
+            tmpName = tmpZip.Name()
+            origFilename = part.FileName()
+            // Copy with a larger buffer for better throughput on big uploads
+            buf := make([]byte, 4<<20) // 4 MiB
+            n, cerr := io.CopyBuffer(tmpZip, part, buf)
+            // Close resources
+            _ = tmpZip.Close()
+            _ = part.Close()
+            if cerr != nil {
+                os.Remove(tmpName)
+                fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", cerr.Error()); fl.Flush(); return
+            }
+            saved = n
+            fmt.Fprintf(w, "{\"type\":\"zipSaved\",\"filename\":%q,\"bytes\":%d}\n", origFilename, saved)
+            fl.Flush()
+        default:
+            // Consume but ignore other fields
+            io.Copy(io.Discard, part)
+        }
+        _ = part.Close()
+    }
+
+    if kind == "launcher" { gid = "launcher" }
+    if kind == "" { http.Error(w, "missing kind (launcher|game)", http.StatusBadRequest); return }
+    if ver == "" { http.Error(w, "missing version", http.StatusBadRequest); return }
+    if kind == "game" && strings.TrimSpace(gid) == "" { http.Error(w, "missing gameId for kind=game", http.StatusBadRequest); return }
+    if !isSafeGameID(gid) || !isSafeVersion(ver) { http.Error(w, "invalid gameId or version", http.StatusBadRequest); return }
+    if tmpName == "" { fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", "missing zip part"); fl.Flush(); return }
+
+    // Send start event after we know parameters
+    fmt.Fprintf(w, "{\"type\":\"start\",\"kind\":%q,\"gameId\":%q,\"version\":%q}\n", kind, gid, ver)
+    fl.Flush()
+
+    // Save zip to temp was already done (tmpName). Ensure filesRoot for extraction exists on same FS
+    filesRoot := filepath.Join(contentRoot, "content", gid, ver, "files")
+    if err := os.MkdirAll(filesRoot, 0o755); err != nil { fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", err.Error()); fl.Flush(); return }
 
 	// Prepare extraction dir (already ensured above)
 
