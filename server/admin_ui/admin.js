@@ -487,7 +487,14 @@ function fbQueryParams(){
   const from = normalizeHumanDate(fromRaw, /*endOfDay*/false);
   const to = normalizeHumanDate(toRaw, /*endOfDay*/true);
   const p = new URLSearchParams();
-  if(type) p.set('type', type);
+  if(type){
+    if(type === 'bug_auto'){
+      p.set('type','bug');
+      p.set('auto','1');
+    } else {
+      p.set('type', type);
+    }
+  }
   if(status) p.set('status', status);
   if(important) p.set('important', important);
   if(q) p.set('q', q);
@@ -555,7 +562,9 @@ function fbRenderList(){
   const html = __fbItems.map(it=>{
     const imp = it.important ? '<span class="badge text-bg-warning ms-2">важное</span>' : '';
     const st = (it.status==='read') ? '<span class="badge text-bg-secondary ms-2">проч.</span>' : '';
-    const type = it.type ? '<span class="badge text-bg-info ms-2">'+escapeHtml(it.type)+'</span>' : '';
+    const isAuto = !!(it && it.system && (it.system.auto==='1' || String(it.system.auto).toLowerCase()==='true'));
+    const tlabel = (it && it.type==='bug' && isAuto) ? 'Баг (авто)' : (it?.type||'');
+    const type = tlabel ? '<span class="badge text-bg-info ms-2">'+escapeHtml(tlabel)+'</span>' : '';
     const name = escapeHtml(it.name||'—');
     const contact = escapeHtml(it.contact||'');
     const cmt = escapeHtml((it.comment||'').slice(0,160));
@@ -602,12 +611,14 @@ async function fbSelect(id){
   const debugBlock = (hasLogs || hasSys)
     ? '<details class="mt-3"><summary>Дебаг-информация</summary>' + logsBlock + sysBlock + '</details>'
     : '';
+  const isAuto = !!(sys && (sys.auto==='1' || String(sys.auto).toLowerCase()==='true'));
+  const tlabel = (it && it.type==='bug' && isAuto) ? 'Баг (авто)' : (it?.type||'');
   view.innerHTML = ''+
     '<div class="d-flex align-items-center justify-content-between">'
     +  '<div><strong>'+escapeHtml(it.name||'—')+'</strong> <span class="text-body-secondary">'+escapeHtml(it.contact||'')+'</span></div>'
     +  '<div class="small text-body-secondary">'+escapeHtml((it.createdAt||'').replace('T',' ').replace('Z',''))+'</div>'
     +'</div>'
-    +'<div class="mt-2"><span class="badge text-bg-info">'+escapeHtml(it.type||'')+'</span>'+(it.important?'<span class="badge text-bg-warning ms-2">важное</span>':'')+(it.status==='read'?'<span class="badge text-bg-secondary ms-2">проч.</span>':'')+'</div>'
+    +'<div class="mt-2"><span class="badge text-bg-info">'+escapeHtml(tlabel)+'</span>'+(it.important?'<span class="badge text-bg-warning ms-2">важное</span>':'')+(it.status==='read'?'<span class="badge text-bg-secondary ms-2">проч.</span>':'')+'</div>'
     +'<div class="mt-3 preserve-ws">'+escapeHtml(it.comment||'')+'</div>'
     + debugBlock;
   fbRenderList();

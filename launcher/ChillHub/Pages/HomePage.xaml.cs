@@ -152,12 +152,23 @@ namespace ChillHub.Pages {
             try {
                 var baseApi = this.BaseApi.TrimEnd('/');
                 var url = baseApi + "/feedback/submit";
+                // Global persistent quota (shared with ErrorReporter): limit total reports per window
+                try {
+                    if (!ChillHub.Core.ErrorReporter.TryConsumeManual(out var retryAfter)) {
+                        if (!silent) {
+                            var mins = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalMinutes));
+                            this.FbStatus.Text = $"Лимит ручных отправок исчерпан. Повторите через ~{mins} мин.";
+                            this.ShowToast($"Лимит ручных отправок исчерпан. Повторите через ~{mins} мин.");
+                        }
+                        return false;
+                    }
+                } catch { }
                 // Build rich diagnostics bundle if requested
                 string logsPayload = string.Empty;
                 Dictionary<string, string>? extraSystem = d.System;
                 if (d.AttachLogs) {
                     try {
-                        var bundle = await Task.Run(() => BuildDiagnosticsBundle()).ConfigureAwait(true);
+                        var bundle = await Task.Run(() => ChillHub.Core.Diagnostics.Build()).ConfigureAwait(true);
                         logsPayload = bundle.LogsMarkdown;
                         // augment system with computed hints
                         extraSystem = extraSystem ?? new Dictionary<string, string>();
@@ -327,6 +338,19 @@ namespace ChillHub.Pages {
 
             // Handle ESC to close feedback overlay with confirmation
             try { this.PreviewKeyDown += HomePage_PreviewKeyDown; } catch { }
+
+            // Subscribe to auto error reports to show a toast banner
+            try {
+                ChillHub.Core.ErrorReporter.AutoReported += (ctx) => {
+                    try { _ = this.DispatcherInvokeAsync(() => this.ShowToast("Произошла ошибка. Отчёт автоматически отправлен")); } catch { }
+                };
+                ChillHub.Core.ErrorReporter.AutoReportSuppressed += (ts) => {
+                    try {
+                        var mins = Math.Max(1, (int)Math.Ceiling(ts.TotalMinutes));
+                        _ = this.DispatcherInvokeAsync(() => this.ShowToast($"Лимит авто-репортов исчерпан. Доступно через ~{mins} мин."));
+                    } catch { }
+                };
+            } catch { }
         }
 
         private void HomePage_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -684,7 +708,8 @@ namespace ChillHub.Pages {
                 // Лёгкий прогресс: processed/total в StatusText, чтобы пользователь видел процесс
                 int total = this.games.Count;
                 int processed = 0;
-                var sem = new SemaphoreSlim(2); // ещё мягче по нагрузке на диск/проц
+                var sem = new SemaphoreSlim(3); // параллельность проверки = 3
+
                 var lastUi = System.Diagnostics.Stopwatch.StartNew();
 
                 // Явно покажем старт проверки
@@ -2471,7 +2496,15 @@ namespace ChillHub.Pages {
                     BorderBrush = this.TryFindResource("Brush.Border") as Brush,
                     BorderThickness = new Thickness(1.5),
                     Padding = new Thickness(16),
+                    Foreground = this.TryFindResource("Brush.Text") as Brush ?? Brushes.White,
                 };
+
+                try {
+                    // Apply themed title bar like main windows
+                    wnd.SourceInitialized += (_, __) => {
+                        try { Core.UI.AcrylicHelper.ApplyTitleBarTheme(wnd, true); } catch { }
+                    };
+                } catch { }
 
                 var grid = new Grid();
                 grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -2498,11 +2531,8 @@ namespace ChillHub.Pages {
                 var panel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
                 var cancelBtn = new Button { Content = "Отмена", MinWidth = 100, Margin = new Thickness(0, 0, 8, 0) };
                 var deleteBtn = new Button { Content = "Удалить", MinWidth = 120 };
-                try {
-                    deleteBtn.Style = (Style)this.FindResource("Style.Button.Primary");
-                }
-                catch {
-                }
+                try { deleteBtn.Style = (Style)this.FindResource("Style.Button.Primary"); } catch { }
+                try { cancelBtn.Style = (Style)this.FindResource("Style.Button.GhostNeutral"); } catch { }
                 panel.Children.Add(cancelBtn);
                 panel.Children.Add(deleteBtn);
                 Grid.SetRow(panel, 2);
@@ -2767,7 +2797,7 @@ namespace ChillHub.Pages {
                     await this.VerifyAllGamesStatusesAsync();
 
                     // Покажем ненавязчивый Toast вместо изменения строки статуса
-                    this.ShowToast("Локальные файлы удалены. Можно установить заново.");
+                    this.ShowToast($"Локальные файлы {title} удалены");
                 }
                 catch (Exception exDel) {
                     this.StatusText.Text = $"Не удалось удалить локальные файлы: {exDel.Message}";
@@ -2788,153 +2818,6 @@ namespace ChillHub.Pages {
             }
         }
 
-        // ===== Diagnostics bundle (hash listings + config + logs) =====
-        private sealed record DiagnosticsBundle(string LogsMarkdown, Dictionary<string,string> SystemHints);
-
-        private DiagnosticsBundle BuildDiagnosticsBundle()
-        {
-            var sb = new StringBuilder(32*1024);
-            var hints = new Dictionary<string, string>();
-            try {
-                sb.AppendLine("# ChillHub Diagnostics Bundle");
-                sb.AppendLine($"Generated: {DateTime.UtcNow:O} (UTC)");
-                sb.AppendLine();
-
-                // Config dump
-                sb.AppendLine("## Config");
-                try {
-                    var cfgPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChillHub", "config.json");
-                    hints["configPath"] = cfgPath;
-                    if (File.Exists(cfgPath)) {
-                        var json = File.ReadAllText(cfgPath, Encoding.UTF8);
-                        sb.AppendLine("```json");
-                        sb.AppendLine(json);
-                        sb.AppendLine("```");
-                    } else {
-                        sb.AppendLine("(config.json not found)");
-                    }
-                } catch (Exception ex) { sb.AppendLine($"(config read error: {ex.Message})"); }
-                sb.AppendLine();
-
-                // Launcher installation folder hashes (limited)
-                sb.AppendLine("## Launcher Files (SHA-256)");
-                try {
-                    var asmLoc = System.Reflection.Assembly.GetExecutingAssembly().Location;
-                    var appRoot = string.IsNullOrWhiteSpace(asmLoc) ? AppDomain.CurrentDomain.BaseDirectory : System.IO.Path.GetDirectoryName(asmLoc)!;
-                    hints["appRoot"] = appRoot;
-                    AppendDirHashes(sb, appRoot, maxFiles: 500, maxBytesPerFile: 10*1024*1024);
-                } catch (Exception ex) { sb.AppendLine($"(hash listing error: {ex.Message})"); }
-                sb.AppendLine();
-
-                // Games root quick listing
-                sb.AppendLine("## Games Root Listing (top-level)");
-                try {
-                    var gamesRoot = ChillHub.Core.ConfigService.Current.GamesPath;
-                    hints["gamesRoot"] = gamesRoot;
-                    AppendTopLevelListing(sb, gamesRoot);
-                } catch (Exception ex) { sb.AppendLine($"(games listing error: {ex.Message})"); }
-                sb.AppendLine();
-
-                // Logs (launcher/updater)
-                sb.AppendLine("## Logs");
-                try {
-                    var logsDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChillHub", "logs");
-                    hints["logsDir"] = logsDir;
-                    AppendLogs(sb, logsDir, new[]{"launcher*.log","updater*.log"}, maxFiles: 6, maxTailBytes: 200*1024);
-                } catch (Exception ex) { sb.AppendLine($"(logs error: {ex.Message})"); }
-                sb.AppendLine();
-
-                // Feedback queue (optional)
-                try {
-                    var qPath = this.FeedbackQueuePath;
-                    if (File.Exists(qPath)) {
-                        sb.AppendLine("## Feedback Queue");
-                        var txt = File.ReadAllText(qPath, Encoding.UTF8);
-                        sb.AppendLine("```json");
-                        sb.AppendLine(txt);
-                        sb.AppendLine("```");
-                        hints["feedbackQueuePath"] = qPath;
-                    }
-                } catch {}
-            } catch {}
-            return new DiagnosticsBundle(sb.ToString(), hints);
-        }
-
-        private static void AppendTopLevelListing(StringBuilder sb, string root)
-        {
-            try {
-                if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) { sb.AppendLine("(games root not found)"); return; }
-                var dirs = Directory.GetDirectories(root);
-                var files = Directory.GetFiles(root);
-                sb.AppendLine($"Root: {root}");
-                sb.AppendLine($"Folders: {dirs.Length}, Files: {files.Length}");
-                foreach (var d in dirs) sb.AppendLine("- "+d);
-                foreach (var f in files) sb.AppendLine("- "+f);
-            } catch (Exception ex) { sb.AppendLine($"(listing error: {ex.Message})"); }
-        }
-
-        private static void AppendDirHashes(StringBuilder sb, string root, int maxFiles, int maxBytesPerFile)
-        {
-            try {
-                if (!Directory.Exists(root)) { sb.AppendLine($"(not found: {root})"); return; }
-                sb.AppendLine($"Root: {root}");
-                int count = 0;
-                foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
-                {
-                    if (count >= maxFiles) { sb.AppendLine($"(limit reached: {maxFiles} files)"); break; }
-                    try {
-                        var fi = new FileInfo(path);
-                        if (fi.Length > maxBytesPerFile) { sb.AppendLine($"- {path} [size={fi.Length} bytes, skipped hashing]"); continue; }
-                        var sha = ComputeSha256(path);
-                        sb.AppendLine($"- {path}  {sha}");
-                        count++;
-                    } catch (Exception ex) { sb.AppendLine($"- {path} (error: {ex.Message})"); }
-                }
-            } catch (Exception ex) { sb.AppendLine($"(hash error: {ex.Message})"); }
-        }
-
-        private static string ComputeSha256(string file)
-        {
-            try {
-                using var fs = File.OpenRead(file);
-                using var sha = SHA256.Create();
-                var hash = sha.ComputeHash(fs);
-                return BitConverter.ToString(hash).Replace("-","" ).ToLowerInvariant();
-            } catch { return string.Empty; }
-        }
-
-        private static void AppendLogs(StringBuilder sb, string logsDir, string[] patterns, int maxFiles, int maxTailBytes)
-        {
-            try {
-                if (!Directory.Exists(logsDir)) { sb.AppendLine($"(logs dir not found: {logsDir})"); return; }
-                var files = new List<string>();
-                foreach (var pat in patterns) {
-                    try { files.AddRange(Directory.GetFiles(logsDir, pat, SearchOption.TopDirectoryOnly)); } catch {}
-                }
-                files.Sort(StringComparer.OrdinalIgnoreCase);
-                if (files.Count == 0) { sb.AppendLine("(no log files matched)"); return; }
-                int used = 0;
-                foreach (var f in files) {
-                    if (used >= maxFiles) { sb.AppendLine($"(limit reached: {maxFiles} files)"); break; }
-                    sb.AppendLine($"### {f}");
-                    try {
-                        var bytes = File.ReadAllBytes(f);
-                        if (bytes.Length > maxTailBytes) {
-                            var tail = new byte[maxTailBytes];
-                            Buffer.BlockCopy(bytes, bytes.Length - maxTailBytes, tail, 0, maxTailBytes);
-                            sb.AppendLine("```log");
-                            sb.AppendLine(Encoding.UTF8.GetString(tail));
-                            sb.AppendLine("```\n(tail only)");
-                        } else {
-                            sb.AppendLine("```log");
-                            sb.AppendLine(Encoding.UTF8.GetString(bytes));
-                            sb.AppendLine("```");
-                        }
-                    } catch (Exception ex) { sb.AppendLine($"(read error: {ex.Message})"); }
-                    used++;
-                }
-            } catch (Exception ex) { sb.AppendLine($"(logs listing error: {ex.Message})"); }
-        }
 
     }
 }

@@ -11,6 +11,7 @@ namespace ChillHub.Core.Sync {
     using System.Net;
     using System.Net.Http;
     using System.Net.Http.Json;
+    using System.Runtime.InteropServices;
     using System.Security.Cryptography;
     using System.Threading;
     using System.Threading.Tasks;
@@ -322,10 +323,29 @@ namespace ChillHub.Core.Sync {
                 var srcPath = Path.Combine(stagingRoot, rel);
                 Directory.CreateDirectory(Path.GetDirectoryName(dstPath)!);
                 if (File.Exists(dstPath)) {
-                    File.Delete(dstPath);
+                    SafeDeleteFile(dstPath);
                 }
 
-                File.Move(srcPath, dstPath);
+                if (File.Exists(dstPath)) {
+                    // Still cannot remove: try rename old away and put new file in place
+                    var pid = Environment.ProcessId;
+                    var backup = dstPath + $".old.{pid}";
+                    try {
+                        File.Move(dstPath, backup, overwrite: true);
+                    } catch { }
+
+                    if (File.Exists(dstPath)) {
+                        // As a last resort: place new file as .new and schedule replacement on reboot
+                        var pending = dstPath + ".new";
+                        try { if (File.Exists(pending)) SafeDeleteFile(pending); } catch { }
+                        File.Move(srcPath, pending);
+                        try { NativeMethods.MoveFileEx(pending, dstPath, NativeMethods.MOVEFILE_DELAY_UNTIL_REBOOT /*| NativeMethods.MOVEFILE_REPLACE_EXISTING*/); } catch { }
+                    } else {
+                        File.Move(srcPath, dstPath);
+                    }
+                } else {
+                    File.Move(srcPath, dstPath);
+                }
                 if (t.Executable) {
                     // Для Windows можно оставить как есть; при необходимости добавить атрибуты
                 }
@@ -346,12 +366,12 @@ namespace ChillHub.Core.Sync {
                 }
             }
 
-            // Удаление лишних файлов
+            // Удаление лишних файлов (с устойчивостью к блокировкам сторонними процессами)
             foreach (var rel in plan.ToDelete) {
                 var path = Path.Combine(plan.LocalRoot, rel.Replace('/', Path.DirectorySeparatorChar));
                 try {
                     if (File.Exists(path)) {
-                        File.Delete(path);
+                        SafeDeleteFile(path);
                     }
                 }
                 catch {
@@ -369,10 +389,10 @@ namespace ChillHub.Core.Sync {
                 Directory.CreateDirectory(dirPath);
             }
 
-            // Удаляем staging
+            // Удаляем staging (с короткой повторной попыткой)
             try {
                 if (Directory.Exists(stagingRoot)) {
-                    Directory.Delete(stagingRoot, true);
+                    TryDeleteDirectoryWithRetry(stagingRoot, recursive: true, attempts: 3, delayMs: 150);
                 }
             }
             catch {
@@ -468,5 +488,62 @@ namespace ChillHub.Core.Sync {
                 }
             }
         }
+
+        private static class NativeMethods {
+            [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+            internal static extern bool MoveFileEx(string lpExistingFileName, string? lpNewFileName, int dwFlags);
+            internal const int MOVEFILE_DELAY_UNTIL_REBOOT = 0x00000004;
+            internal const int MOVEFILE_REPLACE_EXISTING = 0x00000001;
+        }
+
+        private static void SafeDeleteFile(string path) {
+            try {
+                if (!File.Exists(path)) return;
+
+                // Remove read-only/system attributes if present
+                try {
+                    var attrs = File.GetAttributes(path);
+                    if ((attrs & (FileAttributes.ReadOnly | FileAttributes.System)) != 0) {
+                        File.SetAttributes(path, attrs & ~(FileAttributes.ReadOnly | FileAttributes.System));
+                    }
+                } catch { }
+
+            int attempts = 5;
+            for (int i = 0; i < attempts; i++) {
+                try {
+                    File.Delete(path);
+                    if (!File.Exists(path)) return;
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+
+                // Give GC a chance to finalize any lingering FileStreams and retry
+                try { GC.Collect(); GC.WaitForPendingFinalizers(); } catch { }
+                Thread.Sleep(120 * (i + 1));
+            }
+
+            // Fallback: schedule delete on reboot
+            try {
+                NativeMethods.MoveFileEx(path, null, NativeMethods.MOVEFILE_DELAY_UNTIL_REBOOT);
+            } catch { }
+        }
+        catch { }
+    }
+
+    private static void TryDeleteDirectoryWithRetry(string dir, bool recursive, int attempts, int delayMs) {
+        for (int i = 0; i < attempts; i++) {
+            try {
+                if (!Directory.Exists(dir)) return;
+                Directory.Delete(dir, recursive);
+                if (!Directory.Exists(dir)) return;
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+
+            try { GC.Collect(); GC.WaitForPendingFinalizers(); } catch { }
+            Thread.Sleep(delayMs * (i + 1));
+        }
+        // best-effort: leave as is; directory should be empty besides locked files which will remain until release
+    }
     }
 }

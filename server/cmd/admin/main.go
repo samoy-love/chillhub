@@ -199,6 +199,7 @@ func handleFeedbackList(w http.ResponseWriter, r *http.Request) {
     fStatus := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
     fFrom := strings.TrimSpace(r.URL.Query().Get("from"))
     fTo := strings.TrimSpace(r.URL.Query().Get("to"))
+    fAuto := strings.TrimSpace(r.URL.Query().Get("auto"))
     var fromT, toT time.Time
     if fFrom != "" { if t, err := time.Parse(time.RFC3339, fFrom); err==nil { fromT = t } }
     if fTo != "" { if t, err := time.Parse(time.RFC3339, fTo); err==nil { toT = t } }
@@ -209,6 +210,16 @@ func handleFeedbackList(w http.ResponseWriter, r *http.Request) {
         if fImp != "" {
             want := fImp == "1" || strings.EqualFold(fImp, "true")
             if it.Important != want { continue }
+        }
+        if fAuto != "" {
+            want := fAuto == "1" || strings.EqualFold(fAuto, "true")
+            got := false
+            if it.System != nil {
+                if v, ok := it.System["auto"]; ok {
+                    got = (v == "1" || strings.EqualFold(v, "true"))
+                }
+            }
+            if want != got { continue }
         }
         if !fromT.IsZero() || !toT.IsZero() {
             if t, err := time.Parse(time.RFC3339, it.CreatedAt); err==nil {
