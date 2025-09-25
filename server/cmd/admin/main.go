@@ -36,16 +36,16 @@ import (
 var contentRoot = detectContentRoot()
 
 func init() {
-    // Configure GOMAXPROCS automatically. On Windows (no cgroup quotas) suppress noisy info message.
-    _, err := maxprocs.Set(maxprocs.Logger(func(format string, a ...any) {
-        if runtime.GOOS == "windows" {
-            return
-        }
-        log.Printf("[maxprocs] "+format, a...)
-    }))
-    if err != nil {
-        log.Printf("[maxprocs] set failed: %v", err)
-    }
+	// Configure GOMAXPROCS automatically. On Windows (no cgroup quotas) suppress noisy info message.
+	_, err := maxprocs.Set(maxprocs.Logger(func(format string, a ...any) {
+		if runtime.GOOS == "windows" {
+			return
+		}
+		log.Printf("[maxprocs] "+format, a...)
+	}))
+	if err != nil {
+		log.Printf("[maxprocs] set failed: %v", err)
+	}
 }
 
 func detectContentRoot() string {
@@ -528,7 +528,7 @@ func handleUploadStream(w http.ResponseWriter, r *http.Request) {
 		tmpDir := filepath.Join(contentRoot, "tmp")
 		if err := os.MkdirAll(tmpDir, 0o755); err == nil {
 			if free, ferr := getFreeSpaceBytes(tmpDir); ferr == nil && free > 0 && uint64(r.ContentLength) > free {
-				http.Error(w, fmt.Sprintf("insufficient temp space: need %d bytes, have %d bytes", r.ContentLength, free), 507)
+				http.Error(w, fmt.Sprintf("insufficient temp space: need %d bytes, have %d bytes", r.ContentLength, free), http.StatusInsufficientStorage)
 				return
 			}
 		}
@@ -646,7 +646,7 @@ func handleUploadStream(w http.ResponseWriter, r *http.Request) {
 	// Check free space before unzip (estimate total uncompressed size of ZIP)
 	if needBytes, err := estimateZipUncompressedSize(tmpName); err == nil {
 		if freeBytes, ferr := getFreeSpaceBytes(filesRoot); ferr == nil && freeBytes > 0 && needBytes > freeBytes {
-			http.Error(w, fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes), 507)
+			http.Error(w, fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes), http.StatusInsufficientStorage)
 			return
 		}
 	}
@@ -1462,49 +1462,10 @@ func runFFmpegTranscode(args []string) error {
 	return nil
 }
 
-// loggingResponseWriter captures status codes for logging
-type loggingResponseWriter struct {
-	http.ResponseWriter
-	status int
-}
-
-func (lrw *loggingResponseWriter) WriteHeader(statusCode int) {
-	lrw.status = statusCode
-	lrw.ResponseWriter.WriteHeader(statusCode)
-}
-
-// Flush forwards Flush to the underlying ResponseWriter if it implements http.Flusher.
-func (lrw *loggingResponseWriter) Flush() {
-	if f, ok := lrw.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
-
 // noopFlusher is used as a fallback when the writer doesn't implement http.Flusher.
 type noopFlusher struct{}
 
 func (noopFlusher) Flush() {}
-
-// adminLoggingMiddleware logs method, URL, status and duration for each request
-func adminLoggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		lrw := &loggingResponseWriter{ResponseWriter: w, status: 200}
-		next.ServeHTTP(lrw, r)
-		dur := time.Since(start)
-		log.Printf("ADMIN %s %s %d %s", r.Method, r.URL.String(), lrw.status, dur)
-	})
-}
-
-// noStore wraps a handler to add no-cache headers (avoid stale admin UI and API)
-func noStore(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Pragma", "no-cache")
-		w.Header().Set("Expires", "0")
-		h.ServeHTTP(w, r)
-	})
-}
 
 // NOTE: handleNextVersion and bumpPatch were removed as legacy (UI no longer uses next-version helper).
 
