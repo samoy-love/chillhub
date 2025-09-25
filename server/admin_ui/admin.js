@@ -714,62 +714,82 @@ async function manifestsUpload(){
   const wrap=document.getElementById('man_prog_wrap'); const bar=document.getElementById('man_pb');
   const pctEl=document.getElementById('man_prog_pct'); const bytesEl=document.getElementById('man_prog_bytes');
   const speedEl=document.getElementById('man_prog_speed'); const medianEl=document.getElementById('man_prog_median'); const peakEl=document.getElementById('man_prog_peak'); const etaEl=document.getElementById('man_prog_eta');
-  if(wrap) wrap.style.display='block'; if(bar) bar.style.width='0%'; if(pctEl) pctEl.textContent='Подготовка к загрузке...';
+  const txt = document.getElementById('man_prog_text');
+  if(wrap) wrap.style.display='block';
+  if(bar) bar.style.width='0%';
+  if(pctEl) pctEl.textContent='Подготовка к загрузке...';
+  if(txt) txt.textContent = '';
 
   // UI controls: chunk size and concurrency
   const chunkSel = document.getElementById('man_chunk_size');
   let desiredChunk = Number(chunkSel?.value||0)|0; if(desiredChunk<=0) desiredChunk = 8*1024*1024;
   const concSlider = document.getElementById('man_conc');
   const concVal = document.getElementById('man_conc_val');
+  const activeNowEl = document.getElementById('man_active_now');
+  const activeCapEl = document.getElementById('man_active_cap');
   let userPar = Number(concSlider?.value||6)|0; if(userPar<1) userPar=1; if(userPar>100) userPar=100;
   if(concVal) concVal.textContent = String(userPar);
+  if(activeCapEl) activeCapEl.textContent = String(userPar);
+  if(activeNowEl) activeNowEl.textContent = '0';
   const speedWrap = document.getElementById('man_speed_wrap'); const speedCanvas = document.getElementById('man_speed');
   if(speedWrap) speedWrap.style.display='block';
   let speedPoints = []; // [{t, bps}]
   let peakBps = 0;
-  function drawSpeed(){ try{
-    if(!speedCanvas) return; const ctx = speedCanvas.getContext('2d'); if(!ctx) return;
-    const W = speedCanvas.width = speedCanvas.clientWidth|0; const H = speedCanvas.height|0;
-    ctx.clearRect(0,0,W,H); if(speedPoints.length<2) return;
-    const now = performance.now(); const horizon = 8000; // 8s window
-    const pts = speedPoints.filter(p=> now-p.t <= horizon); if(pts.length<2) return;
-    // Smooth series with EMA
-    const ema = []; const a = 0.3; let last = pts[0].bps; for(const p of pts){ last = a*p.bps + (1-a)*last; ema.push({ t:p.t, bps:last }); }
-    // Median over window (for graph line)
-    const arr = pts.map(p=> p.bps).sort((x,y)=>x-y); const m = Math.floor(arr.length/2); const medianBps = arr.length%2 ? arr[m] : ((arr[m-1]+arr[m])/2);
-    const max = Math.max(1, Math.max(...ema.map(p=> p.bps), medianBps)); const min = 0;
-    // Grid and labels (4 ticks)
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,0.1)'; ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.font = '10px system-ui, -apple-system, Segoe UI, Roboto, sans-serif'; ctx.textBaseline = 'top';
-    const ticks = 4;
-    for(let t=0;t<=ticks;t++){
-      const frac = t/ticks; const y = H - (H * frac);
-      ctx.beginPath(); ctx.moveTo(0,y+0.5); ctx.lineTo(W,y+0.5); ctx.stroke();
-      const val = max * frac; const label = formatSpeed(val);
-      ctx.fillText(label, 4, Math.max(0, y-10));
+  const HORIZON_MS = 120000; // 2 minutes window
+  // Initialize uPlot chart if available
+  let speedPlot = null; let speedPlotData = [[], []]; // [timeSec[], bps[]]
+  try{
+    if (speedWrap && window.uPlot) {
+      // Hide old canvas if present
+      try{ if(speedCanvas) speedCanvas.style.display = 'none'; }catch{}
+      // Remove previous plot if exists (repeat upload)
+      try{ const prevPlot = document.getElementById('man_speed_plot'); if(prevPlot) prevPlot.remove(); }catch{}
+      const plotHost = document.createElement('div');
+      plotHost.id = 'man_speed_plot';
+      plotHost.style.width = '100%';
+      plotHost.style.height = '180px';
+      plotHost.style.background = '#e7eef8';
+      plotHost.style.borderRadius = '6px';
+      plotHost.style.padding = '4px';
+      speedWrap.appendChild(plotHost);
+      const fmtBps = (v)=> formatSpeed(v) || '0';
+      const wrapW = speedWrap.clientWidth || plotHost.clientWidth || 600;
+      const HEIGHT = 180;
+      const opts = {
+        width: wrapW,
+        height: HEIGHT,
+        cursor: { drag: { x: false, y: false } },
+        scales: { 
+          x: { time: false }, 
+          y: { auto: false, range: (u, min, max) => [0, Math.max(1, peakBps)] }
+        },
+        legend: { show: false },
+        padding: [8, 8, 8, 12],
+        axes: [
+          { 
+            grid: { show: true, stroke: '#e5e7eb', width: 1 },
+            ticks: { stroke: '#9aa1a9', width: 1 },
+            stroke: '#000000',
+            values: (u, vals)=> vals.map(v=> (v>=0? (Math.round((speedPlotData[0].length>0? (speedPlotData[0][speedPlotData[0].length-1] - v):0))+'s') : ''))
+          },
+          { 
+            grid: { show: true, stroke: '#e5e7eb', width: 1 },
+            ticks: { stroke: '#9aa1a9', width: 1 },
+            stroke: '#000000',
+            values: (u, vals)=> vals.map(fmtBps),
+            size: 96 
+          }
+        ],
+        series: [ {}, { label: 'Скорость', stroke: '#0d6efd', width: 2.25 } ],
+      };
+      speedPlot = new uPlot(opts, speedPlotData, plotHost);
+      // Resize on wrapper changes
+      const ro = new ResizeObserver(()=>{
+        try{ speedPlot.setSize({ width: speedWrap.clientWidth || plotHost.clientWidth || 600, height: HEIGHT }); }catch{}
+      });
+      ro.observe(speedWrap);
     }
-    ctx.restore();
-    // Draw smoothed line
-    ctx.strokeStyle = 'rgba(13,110,253,0.9)'; ctx.lineWidth = 2; ctx.beginPath();
-    for(let i=0;i<ema.length;i++){
-      const x = W - (W * (now - ema[i].t) / horizon);
-      const y = H - (H * (ema[i].bps - min) / Math.max(1, (max-min)));
-      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-    }
-    ctx.stroke();
-    // Optional faint raw line
-    ctx.strokeStyle = 'rgba(13,110,253,0.25)'; ctx.lineWidth = 1; ctx.beginPath();
-    for(let i=0;i<pts.length;i++){
-      const x = W - (W * (now - pts[i].t) / horizon);
-      const y = H - (H * (pts[i].bps - min) / Math.max(1, (max-min)));
-      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-    }
-    ctx.stroke();
-    // Median horizontal line
-    const yMed = H - (H * (medianBps - min) / Math.max(1, (max-min)));
-    ctx.setLineDash([4,4]); ctx.strokeStyle = 'rgba(25,135,84,0.9)'; ctx.lineWidth = 1.5; // Bootstrap green-ish
-    ctx.beginPath(); ctx.moveTo(0, yMed+0.5); ctx.lineTo(W, yMed+0.5); ctx.stroke(); ctx.setLineDash([]);
-  }catch{}}
+  }catch{}
 
   // INIT
   let initRes; try{
@@ -791,14 +811,15 @@ async function manifestsUpload(){
     if(st.ok){ const j = await st.json(); (j.received||[]).forEach(i=> received.add(Number(i)|0)); }
   }catch{}
 
-  // PARALLEL UPLOAD (adaptive)
+  // PARALLEL UPLOAD (fixed, user-controlled)
   const allIdx = [];
   for(let i=0;i<totalChunks;i++){ if(!received.has(i)) allIdx.push(i); }
   const totalBytes = file.size; let uploadedBytes = received.size * chunkSize; if(uploadedBytes>totalBytes) uploadedBytes = totalBytes;
   let ptr = 0; let failed = false; let errors = 0; const failedChunks = [];
-  const maxCap = Math.max(1, Math.min(100, init.maxParallel||100));
-  let curPar = Math.max(1, Math.min(maxCap, userPar));
-  console.log('[resume] already have', received.size, 'chunks; scheduling', allIdx.length, 'chunks; chunkSize=', chunkSize, 'maxCap=', maxCap, 'startPar=', curPar);
+  // Concurrency is strictly user-controlled (1:1 with slider), clamped to [1..100]
+  const maxCap = 100;
+  let curPar = Math.max(1, Math.min(100, userPar));
+  console.log('[resume] already have', received.size, 'chunks; scheduling', allIdx.length, 'chunks; chunkSize=', chunkSize, 'startPar=', curPar);
 
   const t0 = performance.now(); let lastT = t0; let lastLoaded = uploadedBytes; let avgSpeed = 0; const alpha = 0.2; const UI_INTERVAL=500; let lastUiTs=0, uiScheduled=false;
   function updateUI(now){
@@ -808,7 +829,7 @@ async function manifestsUpload(){
     const remain = Math.max(0, totalBytes - uploadedBytes); const eta = (avgSpeed>0)? (remain/avgSpeed):0;
     // Update peak and median (window 8s)
     if(inst>0){ peakBps = Math.max(peakBps, inst); }
-    const horizon = 8000; const windowPts = speedPoints.filter(p=> now-p.t <= horizon);
+    const horizon = HORIZON_MS; const windowPts = speedPoints.filter(p=> now-p.t <= horizon);
     let medianBps = 0; if(windowPts.length>0){ const arr = windowPts.map(p=> p.bps).sort((a,b)=>a-b); const mid = Math.floor(arr.length/2); medianBps = arr.length%2 ? arr[mid] : ((arr[mid-1]+arr[mid])/2); }
     if(pctEl) pctEl.textContent = 'Загружено '+pct+'%';
     if(bytesEl) bytesEl.textContent = '('+formatBytes(uploadedBytes)+' / '+formatBytes(totalBytes)+')';
@@ -816,7 +837,35 @@ async function manifestsUpload(){
     if(medianEl) medianEl.textContent = medianBps>0 ? ('мед '+formatSpeed(medianBps)) : '';
     if(peakEl) peakEl.textContent = peakBps>0 ? ('пик '+formatSpeed(peakBps)) : '';
     if(etaEl) etaEl.textContent = eta>0 ? ('ETA '+formatEta(eta)) : '';
-    if(inst>0){ speedPoints.push({t: now, bps: inst}); if(speedPoints.length>400) speedPoints.shift(); drawSpeed(); }
+    if(inst>0){
+      // Keep raw points for median calc
+      speedPoints.push({t: now, bps: inst});
+      const horizon = HORIZON_MS; // 120s window
+      while(speedPoints.length>0 && (now - speedPoints[0].t) > horizon){ speedPoints.shift(); }
+      // Update uPlot if available
+      if (typeof uPlot !== 'undefined' && speedPlot) {
+        const nowSec = now/1000;
+        // append point
+        speedPlotData[0].push(nowSec);
+        speedPlotData[1].push(inst);
+        // trim by time horizon
+        const cutoffSec = nowSec - (horizon/1000);
+        let startIdx = 0;
+        while(startIdx < speedPlotData[0].length && speedPlotData[0][startIdx] < cutoffSec){ startIdx++; }
+        if(startIdx>0){
+          speedPlotData[0] = speedPlotData[0].slice(startIdx);
+          speedPlotData[1] = speedPlotData[1].slice(startIdx);
+        }
+        // Limit max points to avoid memory bloat
+        const MAX_PTS = 500;
+        if(speedPlotData[0].length > MAX_PTS){
+          const extra = speedPlotData[0].length - MAX_PTS;
+          speedPlotData[0].splice(0, extra);
+          speedPlotData[1].splice(0, extra);
+        }
+        try{ speedPlot.setData(speedPlotData); }catch{}
+      }
+    }
   }
   function scheduleUI(){ const now=performance.now(); if(now-lastUiTs<UI_INTERVAL) return; lastUiTs=now; if(uiScheduled) return; uiScheduled=true; requestAnimationFrame(()=>{ uiScheduled=false; updateUI(performance.now()); }); }
 
@@ -828,6 +877,7 @@ async function manifestsUpload(){
     if (ptr >= allIdx.length) return;
     const i = allIdx[ptr++];
     active++;
+    if(activeNowEl) activeNowEl.textContent = String(active);
     const start = i*chunkSize; const end = Math.min(start+chunkSize, file.size);
     const blob = file.slice(start, end);
     let ok=false, attempts=0; const MAX_ATTEMPTS=5; while(!ok && attempts<MAX_ATTEMPTS){ attempts++;
@@ -847,43 +897,27 @@ async function manifestsUpload(){
     }
     if(!ok){ failedChunks.push(i); }
     active--;
+    if(activeNowEl) activeNowEl.textContent = String(active);
     // Keep pipeline full up to curPar
     while(active < curPar && ptr < allIdx.length){ runNext(); }
   }
 
   // Handle live concurrency changes
-  if(concSlider){ concSlider.addEventListener('input', ()=>{ userPar = Number(concSlider.value|0); if(userPar<1) userPar=1; if(userPar>100) userPar=100; if(concVal) concVal.textContent=String(userPar);
-    const prev = curPar; curPar = Math.max(1, Math.min(maxCap, userPar)); if(curPar!==prev){ while(active < curPar && ptr < allIdx.length){ runNext(); } }
+  if(concSlider){ concSlider.addEventListener('input', ()=>{ userPar = Number(concSlider.value|0); if(userPar<1) userPar=1; if(userPar>100) userPar=100; if(concVal) concVal.textContent=String(userPar); if(activeCapEl) activeCapEl.textContent = String(userPar);
+    const prev = curPar; curPar = Math.max(1, Math.min(100, userPar)); if(curPar!==prev){ while(active < curPar && ptr < allIdx.length){ runNext(); } }
   }); }
 
   // Start initial workers
   console.log('[upload] start', { curPar, maxCap, totalChunks, pending: allIdx.length });
   for(let j=0; j<Math.min(curPar, allIdx.length); j++){ runNext(); }
-
-  // Adaptation timer (AIMD-like)
-  const adapt = setInterval(()=>{
-    if (failed) return;
-    const avgMs = (win.length>0) ? (win.reduce((a,b)=>a+b,0)/win.length) : 0;
-    // Simple logic: if avgMs is small and no recent errors — try +1; if errors happened or avgMs grows a lot — -1
-    const prevPar = curPar;
-    if (errors === 0 && avgMs > 0 && avgMs < 300) { // fast disk
-      curPar = Math.min(curPar+1, maxCap);
-    } else if (errors > 0 || (avgMs > 800 && curPar > 1)) { // signs of stress
-      curPar = Math.max(1, curPar-1);
-      errors = 0; // reset after backoff
-    }
-    if (curPar !== prevPar) {
-      console.log('[adapt]', { avgWriteMs: Math.round(avgMs), from: prevPar, to: curPar, active, queued: allIdx.length - ptr });
-      while(active < curPar && ptr < allIdx.length){ runNext(); }
-    }
-  }, 2000);
+  // No adaptive timer: concurrency is fixed by user settings
 
   // Wait until all scheduled chunks are processed
   while(ptr < allIdx.length || active > 0){
     await new Promise(res=> setTimeout(res, 200));
     if(failed) break;
   }
-  clearInterval(adapt);
+  
   // Retry pass for failed chunks (if any)
   if(!failed && failedChunks.length>0){
     console.group('[retry pass] re-upload failed chunks');
@@ -892,7 +926,7 @@ async function manifestsUpload(){
     async function runFailed(){
       if(missPtr >= failedChunks.length) return;
       const idx = failedChunks[missPtr++];
-      missActive++;
+      missActive++; if(activeNowEl) activeNowEl.textContent = String(missActive);
       const s = idx*chunkSize; const e = Math.min(s+chunkSize, file.size);
       const bl = file.slice(s, e);
       let ok=false, attempts=0; const MAX=5; while(!ok && attempts<MAX){ attempts++;
@@ -904,7 +938,7 @@ async function manifestsUpload(){
         }catch(err){ console.warn('[retry fetch]', { index:idx, error:String(err), attempt:attempts }); await new Promise(res=> setTimeout(res, 500*attempts)); }
       }
       if(!ok){ missFailed = true; }
-      missActive--;
+      missActive--; if(activeNowEl) activeNowEl.textContent = String(missActive);
       while(missActive < curPar && missPtr < failedChunks.length){ runFailed(); }
     }
     for(let j=0;j<Math.min(curPar, failedChunks.length); j++){ runFailed(); }
@@ -938,7 +972,7 @@ async function manifestsUpload(){
       async function runMissing(){
         if(missPtr >= missing.length) return;
         const i = missing[missPtr++];
-        missActive++;
+        missActive++; if(activeNowEl) activeNowEl.textContent = String(missActive);
         const start = i*chunkSize; const end = Math.min(start+chunkSize, file.size);
         const blob = file.slice(start, end);
         let ok=false, attempts=0; while(!ok && attempts<3){ attempts++;
@@ -950,7 +984,7 @@ async function manifestsUpload(){
           }catch{ await new Promise(res=> setTimeout(res, 300*attempts)); }
         }
         if(!ok){ missFailed = true; }
-        missActive--;
+        missActive--; if(activeNowEl) activeNowEl.textContent = String(missActive);
         while(missActive < curPar && missPtr < missing.length){ runMissing(); }
       }
       for(let j=0;j<Math.min(curPar, missing.length); j++){ runMissing(); }
@@ -968,21 +1002,39 @@ async function manifestsUpload(){
   // PROCESS (NDJSON)
   try{
     console.log('[process] start');
-    const res = await fetch('/admin/api/upload/process?uploadId='+encodeURIComponent(uploadId));
+    const url = '/admin/api/upload/process?uploadId='+encodeURIComponent(uploadId);
+    const res = await fetch(url, { headers: { 'Accept':'application/x-ndjson', 'Cache-Control':'no-store' } });
     if(!res.ok){ notify('HTTP '+res.status+' process'); return; }
-    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf='';
-    while(true){
-      const {done, value} = await reader.read(); if(done) break; buf += dec.decode(value, {stream:true});
-      const parts = buf.split(/\r?\n/); buf = parts.pop()||'';
-      for(const line of parts){ if(!line) continue; try{ const ev = JSON.parse(line);
-        if(ev.type==='start'){ console.log('[process]', ev); if(txt) txt.textContent = 'Старт обработки: '+gid+' '+ver; }
-        else if(ev.type==='unzip'){ console.log('[unzip]', ev.path); if(txt) txt.textContent = 'Распаковка: '+ev.path; }
-        else if(ev.type==='composeStart'){ console.log('[composeStart]', ev); if(txt) txt.textContent = 'Подготовка манифеста: '+(ev.totalFiles||0)+' файлов'; }
-        else if(ev.type==='file'){ if((ev.idx||0)%100===0) console.log('[file]', ev.idx, ev.path); if(txt) txt.textContent = 'Манифест: '+(ev.idx||0)+' файлов, '+formatBytes(ev.bytesDone||0); }
-        else if(ev.type==='done'){ console.log('[done]', ev.outPath); if(txt) txt.textContent = 'Готово. Манифест записан'; }
-        else if(ev.type==='error'){ console.warn('[process error]', ev.message); notify('Ошибка: '+(ev.message||'unknown')); }
+    const dec = new TextDecoder();
+    let gotAny = false;
+    if(res.body && typeof res.body.getReader === 'function'){
+      const reader = res.body.getReader(); let buf='';
+      while(true){
+        const {done, value} = await reader.read(); if(done) break; buf += dec.decode(value, {stream:true});
+        const parts = buf.split(/\r?\n/); buf = parts.pop()||'';
+        for(const line of parts){ if(!line) continue; gotAny=true; try{ const ev = JSON.parse(line);
+          if(ev.type==='start'){ console.log('[process]', ev); if(txt) txt.textContent = 'Старт обработки: '+gid+' '+ver; }
+          else if(ev.type==='unzip'){ if(ev.path){ console.log('[unzip]', ev.path); if(txt) txt.textContent = 'Распаковка: '+ev.path; } }
+          else if(ev.type==='composeStart'){ console.log('[composeStart]', ev); if(txt) txt.textContent = 'Подготовка манифеста: '+(ev.totalFiles||0)+' файлов'; }
+          else if(ev.type==='file'){ if((ev.idx||0)%100===0) console.log('[file]', ev.idx, ev.path); if(txt) txt.textContent = 'Манифест: '+(ev.idx||0)+' файлов, '+formatBytes(ev.bytesDone||0); }
+          else if(ev.type==='done'){ console.log('[done]', ev.outPath); if(txt) txt.textContent = 'Готово. Манифест записан'; }
+          else if(ev.type==='error'){ console.warn('[process error]', ev.message); notify('Ошибка: '+(ev.message||'unknown')); }
+        }catch{} }
+      }
+    } else {
+      // Fallback: non-streaming response (proxy buffering)
+      const text = await res.text();
+      const lines = text.split(/\r?\n/);
+      for(const line of lines){ if(!line) continue; gotAny=true; try{ const ev = JSON.parse(line);
+        if(ev.type==='start'){ if(txt) txt.textContent = 'Старт обработки: '+gid+' '+ver; }
+        else if(ev.type==='unzip'){ if(ev.path && txt) txt.textContent = 'Распаковка: '+ev.path; }
+        else if(ev.type==='composeStart'){ if(txt) txt.textContent = 'Подготовка манифеста: '+(ev.totalFiles||0)+' файлов'; }
+        else if(ev.type==='file'){ if(txt) txt.textContent = 'Манифест: '+(ev.idx||0)+' файлов, '+formatBytes(ev.bytesDone||0); }
+        else if(ev.type==='done'){ if(txt) txt.textContent = 'Готово. Манифест записан'; }
+        else if(ev.type==='error'){ notify('Ошибка: '+(ev.message||'unknown')); }
       }catch{} }
     }
+    if(!gotAny){ console.warn('[process] no NDJSON received (maybe buffering)'); }
   }catch(e){ notify('Ошибка process: '+e); }
 
   try{ manifestsReload(); }catch(_){ }

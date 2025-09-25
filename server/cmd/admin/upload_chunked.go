@@ -32,42 +32,10 @@ import (
 
 const (
 	uploadChunkSizeDefault = 8 << 20 // 8 MiB
-	uploadMaxParallel      = 100
 	uploadExpire           = 12 * time.Hour
 )
 
 var uploadMu sync.Mutex
-
-// Run the janitor once immediately (same logic as periodic, without sleep loop)
-func runUploadJanitorOnce() int {
-	d := uploadBaseDir()
-	entries, err := os.ReadDir(d)
-	if err != nil {
-		return 0
-	}
-	cut := time.Now().Add(-uploadExpire).Unix()
-	removed := 0
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		id := e.Name()
-		m, err := readUploadMeta(id)
-		if err != nil { // no meta -> stale dir
-			_ = os.RemoveAll(uploadDir(id))
-			removed++
-			continue
-		}
-		if m.Status == "done" || m.Status == "processed" {
-			continue
-		}
-		if m.UpdatedAt == 0 || m.UpdatedAt < cut {
-			_ = os.RemoveAll(uploadDir(id))
-			removed++
-		}
-	}
-	return removed
-}
 
 // POST /admin/api/upload/cleanup — trigger immediate cleanup of stale/broken tmp uploads
 func handleUploadCleanup(w http.ResponseWriter, r *http.Request) {
@@ -79,8 +47,24 @@ func handleUploadCleanup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	n := runUploadJanitorOnce()
-	writeJSON(w, map[string]any{"status": "ok", "removed": n})
+	// Force-remove all entries under contentRoot/tmp
+	tmpRoot := filepath.Join(contentRoot, "tmp")
+	entries, err := os.ReadDir(tmpRoot)
+	if err != nil {
+		// If tmp root doesn't exist, nothing to remove
+		writeJSON(w, map[string]any{"status": "ok", "removed": 0})
+		return
+	}
+	removed := 0
+	for _, e := range entries {
+		p := filepath.Join(tmpRoot, e.Name())
+		if err := os.RemoveAll(p); err != nil {
+			log.Printf("[upload:cleanup] failed to remove %s: %v", p, err)
+		} else {
+			removed++
+		}
+	}
+	writeJSON(w, map[string]any{"status": "ok", "removed": removed})
 }
 
 // logging helpers with levels and request-id (uploadId)
@@ -89,18 +73,6 @@ func linfo(id string, format string, a ...any) {
 		id = "-"
 	}
 	log.Printf("[INFO] uploadId=%s "+format, append([]any{id}, a...)...)
-}
-func lwarn(id string, format string, a ...any) {
-	if id == "" {
-		id = "-"
-	}
-	log.Printf("[WARN] uploadId=%s "+format, append([]any{id}, a...)...)
-}
-func lerr(id string, format string, a ...any) {
-	if id == "" {
-		id = "-"
-	}
-	log.Printf("[ERROR] uploadId=%s "+format, append([]any{id}, a...)...)
 }
 
 type uploadMeta struct {
@@ -145,7 +117,28 @@ func writeUploadMeta(m *uploadMeta) error {
 	}
 	m.UpdatedAt = time.Now().Unix()
 	b, _ := json.MarshalIndent(m, "", "  ")
-	return os.WriteFile(uploadMetaPath(m.UploadID), b, 0o644)
+	// Atomic write: write to a temp file and rename over meta.json
+	dir := uploadDir(m.UploadID)
+	tmp, err := os.CreateTemp(dir, "meta-*.json.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, uploadMetaPath(m.UploadID))
 }
 
 func handleUploadInit(w http.ResponseWriter, r *http.Request) {
@@ -195,8 +188,8 @@ func handleUploadInit(w http.ResponseWriter, r *http.Request) {
 		}
 		return def
 	}
-	minChunk := envInt("UPLOAD_CHUNK_MIN", 64<<10)   // 64 KiB
-	maxChunk := envInt("UPLOAD_CHUNK_MAX", 512<<20)  // 512 MiB
+	minChunk := envInt("UPLOAD_CHUNK_MIN", 64<<10)  // 64 KiB
+	maxChunk := envInt("UPLOAD_CHUNK_MAX", 512<<20) // 512 MiB
 	maxParLimit := envInt("UPLOAD_MAX_PARALLEL", 100)
 	if minChunk < (64 << 10) {
 		minChunk = 64 << 10
@@ -243,7 +236,7 @@ func handleUploadInit(w http.ResponseWriter, r *http.Request) {
 	}
 	if free, err := getFreeSpaceBytes(tmpRoot); err == nil && free > 0 && uint64(in.TotalSize) > free {
 		log.Printf("[upload:init] insufficient temp space: need=%d have=%d path=%s", in.TotalSize, free, tmpRoot)
-		http.Error(w, fmt.Sprintf("insufficient temp space: need %d have %d", in.TotalSize, free), 507)
+		http.Error(w, fmt.Sprintf("insufficient temp space: need %d have %d", in.TotalSize, free), http.StatusInsufficientStorage)
 		return
 	}
 	// allocate uploadId
@@ -322,7 +315,13 @@ func handleUploadChunk(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad index", http.StatusBadRequest)
 		return
 	}
-	m, err := readUploadMeta(id)
+	var m *uploadMeta
+	for attempt := 0; attempt < 5; attempt++ {
+		if m, err = readUploadMeta(id); err == nil {
+			break
+		}
+		time.Sleep(time.Duration(5*(attempt+1)) * time.Millisecond) // 5,10,15,20,25ms
+	}
 	if err != nil {
 		log.Printf("[upload:chunk] meta not found uploadId=%s index=%s remote=%s error=%v", id, idxStr, r.RemoteAddr, err)
 		http.Error(w, "not found", http.StatusNotFound)
@@ -518,7 +517,7 @@ func handleUploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	// estimate and free-space precheck (optional)
 	if needBytes, err := estimateZipUncompressedSize(zipPath); err == nil {
 		if freeBytes, ferr := getFreeSpaceBytes(filesRoot); ferr == nil && freeBytes > 0 && needBytes > freeBytes {
-			http.Error(w, fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes), 507)
+			http.Error(w, fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes), http.StatusInsufficientStorage)
 			return
 		}
 	}
