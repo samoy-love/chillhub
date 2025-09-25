@@ -7,11 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+    "runtime"
 
 	"ChillHub/server/internal/httpx"
 
 	"github.com/gorilla/mux"
-	_ "go.uber.org/automaxprocs"
+	"go.uber.org/automaxprocs/maxprocs"
 )
 
 type GameInfo struct {
@@ -31,6 +32,15 @@ type GamesResponse struct {
 }
 
 func main() {
+    _, err := maxprocs.Set(maxprocs.Logger(func(format string, a ...any) {
+        if runtime.GOOS == "windows" {
+            return
+        }
+        log.Printf("[maxprocs] "+format, a...)
+    }))
+    if err != nil {
+        log.Printf("[maxprocs] set failed: %v", err)
+    }
 	// Determine content root
 	contentRoot = os.Getenv("CONTENT_ROOT")
 	if contentRoot == "" {
