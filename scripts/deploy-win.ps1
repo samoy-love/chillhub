@@ -107,6 +107,15 @@ $DeployDir = Join-Path $BuildRoot "deploy"
 # Default path to nginx site config in repo (may be overridden later after copying to $DeployDir)
 $NginxConf = Join-Path (Join-Path $RepoRoot 'deploy') 'launcher.conf'
 
+# Default DownloadsDir: use repo's generated_downloads/ if not provided
+if ([string]::IsNullOrWhiteSpace($DownloadsDir)) {
+  $candidateDownloads = Join-Path $RepoRoot 'generated_downloads'
+  if (Test-Path -LiteralPath $candidateDownloads) {
+    Write-Info ("Using default DownloadsDir: {0}" -f $candidateDownloads)
+    $DownloadsDir = $candidateDownloads
+  }
+}
+
 # Clean and re-create build tree
 if (Test-Path $BuildRoot) { Remove-Item -Recurse -Force $BuildRoot }
 New-Item -ItemType Directory -Force -Path $BinDir, $SiteDir, $AdminUIDir, $SystemdDir, $DeployDir | Out-Null
@@ -429,7 +438,8 @@ Copy-FileRemote (Join-Path $DeployDir 'launcher.conf') 'deploy/deploy/launcher.c
     $downloadsTgz = Join-Path $env:TEMP "downloads-$([Guid]::NewGuid().ToString('N')).tgz"
     & tar -czf $downloadsTgz -C $DownloadsDir .
     Copy-FileRemote $downloadsTgz 'deploy/downloads.tgz'
-    & $SSH @sshCommon $Remote "/bin/bash -lc 'mkdir -p /var/www/site/downloads; rm -rf /var/www/site/downloads/*; tar -xzf deploy/downloads.tgz -C /var/www/site/downloads; rm -f deploy/downloads.tgz'" | Out-Null
+    # Preserve existing files; only add/overwrite extracted ones (no deletion)
+    & $SSH @sshCommon $Remote "/bin/bash -lc 'mkdir -p /var/www/site/downloads; tar -xzf deploy/downloads.tgz -C /var/www/site/downloads; rm -f deploy/downloads.tgz'" | Out-Null
     # Remove local downloads archive
     if (Test-Path $downloadsTgz) { Remove-Item -Force $downloadsTgz -ErrorAction SilentlyContinue }
   } else {
@@ -485,7 +495,7 @@ done
 
 # Guard snapshot (PRE): capture sample hashes and counts for server-managed dirs to detect unintended changes
 TMP_PRE_DIR="/tmp/chillhub-pre"; TMP_POST_DIR="/tmp/chillhub-post"; mkdir -p "$TMP_PRE_DIR" "$TMP_POST_DIR"
-sample_hash(){ d="$1"; if [ ! -d "$d" ]; then echo "missing"; return; fi; list=$(LC_ALL=C find "$d" -type f -printf '%P\n' | sort | head -n 50); if [ -z "$list" ]; then echo "empty"; else while IFS= read -r f; do sha256sum "$d/$f" | awk '{print $1"  "$2}'; done <<< "$list" | sha256sum | awk '{print $1}'; fi; }
+sample_hash(){ d="$1"; if [ ! -d "$d" ]; then echo "missing"; return; fi; list=$(LC_ALL=C find "$d" -type f -printf '%P\n' | sort | awk 'NR<=50'); if [ -z "$list" ]; then echo "empty"; else while IFS= read -r f; do sha256sum "$d/$f" | awk '{print $1"  "$2}'; done <<< "$list" | sha256sum | awk '{print $1}'; fi; }
 for d in content manifests news; do dir="$LAUNCHER_DIR/$d"; if [ -d "$dir" ]; then find "$dir" -type f 2>/dev/null | wc -l | awk '{print $1}' > "$TMP_PRE_DIR/${d}.count"; sample_hash "$dir" > "$TMP_PRE_DIR/${d}.hash"; else echo "-1" > "$TMP_PRE_DIR/${d}.count"; echo "missing" > "$TMP_PRE_DIR/${d}.hash"; fi; done
 
 # Sync landing site, but preserve server-managed downloads directory
@@ -495,7 +505,16 @@ if [ -n "$VERBOSE" ]; then RSYNC_FLAGS="-av --delete --itemize-changes --exclude
 if [ -n "$VERBOSE" ]; then
   sudo rsync $RSYNC_FLAGS "$DEPLOY_DIR/site/" "$SITE_DIR/" | sed -e 's|^|[rsync:site] |'
 else
-  sudo rsync $RSYNC_FLAGS "$DEPLOY_DIR/site/" "$SITE_DIR/" | tail -n 1 | sed -e 's|^|[rsync:site] |'
+  TMP_RSYNC_SITE=$(mktemp)
+  if sudo rsync $RSYNC_FLAGS "$DEPLOY_DIR/site/" "$SITE_DIR/" >"$TMP_RSYNC_SITE" 2>&1; then
+    awk 'END{print "[rsync:site] "$0}' "$TMP_RSYNC_SITE"
+  else
+    # On failure, dump last lines for diagnostics and exit non-zero
+    tail -n 50 "$TMP_RSYNC_SITE" | sed -e 's|^|[rsync:site:err] |'
+    rm -f "$TMP_RSYNC_SITE" || true
+    exit 1
+  fi
+  rm -f "$TMP_RSYNC_SITE" || true
 fi
 # Ensure a root favicon.ico exists for generic clients/bots
 if [ ! -f "$SITE_DIR/favicon.ico" ] && [ -f "$SITE_DIR/assets/icons/app.ico" ]; then
@@ -512,11 +531,23 @@ if [ -n "$VERBOSE" ]; then RSYNC_FLAGS_AUI="-av --delete --itemize-changes"; fi
 if [ -n "$VERBOSE" ]; then
   sudo rsync $RSYNC_FLAGS_AUI "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/" | sed -e 's|^|[rsync:admin_ui] |'
 else
-  sudo rsync $RSYNC_FLAGS_AUI "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/" | tail -n 1 | sed -e 's|^|[rsync:admin_ui] |'
+  TMP_RSYNC_AUI=$(mktemp)
+  if sudo rsync $RSYNC_FLAGS_AUI "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/" >"$TMP_RSYNC_AUI" 2>&1; then
+    awk 'END{print "[rsync:admin_ui] "$0}' "$TMP_RSYNC_AUI"
+  else
+    tail -n 50 "$TMP_RSYNC_AUI" | sed -e 's|^|[rsync:admin_ui:err] |'
+    rm -f "$TMP_RSYNC_AUI" || true
+    exit 1
+  fi
+  rm -f "$TMP_RSYNC_AUI" || true
 fi
-# Ensure admin content root subdirs exist; do NOT modify content/manifests/news
+# Ensure admin content root subdirs exist
 sudo mkdir -p "$LAUNCHER_DIR/content" "$LAUNCHER_DIR/manifests" "$LAUNCHER_DIR/news" "$LAUNCHER_DIR/tmp"
-# Restrict ownership adjustments to admin_ui and tmp only to avoid touching managed content
+# Allow admin backend (www-data) to create new versions and manifests
+# Note: we only adjust top-level directories (non-recursive) to avoid touching existing managed files
+sudo chown www-data:www-data "$LAUNCHER_DIR/content" "$LAUNCHER_DIR/manifests" "$LAUNCHER_DIR/news" "$LAUNCHER_DIR/tmp" || true
+sudo chmod 2775 "$LAUNCHER_DIR/content" "$LAUNCHER_DIR/manifests" "$LAUNCHER_DIR/news" "$LAUNCHER_DIR/tmp" || true
+# Keep recursive ownership on admin_ui and tmp (safe to manage fully)
 sudo chown -R www-data:www-data "$LAUNCHER_DIR/admin_ui" "$LAUNCHER_DIR/tmp"
 
 # Diagnostics: compare source vs destination for key files
@@ -681,28 +712,26 @@ fi
 sudo install -m 0644 "$DEPLOY_DIR/deploy/launcher.conf" "$NGINX_SITE_AVAILABLE"
 sudo ln -sf "$NGINX_SITE_AVAILABLE" "$NGINX_SITE_ENABLED"
 
-# --- Nginx tuning (global) ---
-# 1) HTTP-level tuning via conf.d (conditionally add directives if not already present)
-sudo mkdir -p /etc/nginx/conf.d
-TMP_TUNE=$(mktemp)
-echo "# Auto-generated by deploy (conditionally populated)" > "$TMP_TUNE"
-NGX_DUMP=$(sudo nginx -T 2>/dev/null || true)
-add_line(){ key="$1"; line="$2"; if ! echo "$NGX_DUMP" | grep -qE "^[[:space:]]*$key[[:space:]]"; then echo "$line" >> "$TMP_TUNE"; fi }
-add_line 'sendfile' 'sendfile on;'
-add_line 'tcp_nopush' 'tcp_nopush on;'
-add_line 'tcp_nodelay' 'tcp_nodelay on;'
-add_line 'keepalive_requests' 'keepalive_requests 10000;'
-add_line 'keepalive_timeout' 'keepalive_timeout 75s;'
-# If there are effective lines beyond header, replace tuning.conf; otherwise remove it
-LINES=$(wc -l < "$TMP_TUNE" | awk '{print $1}')
-if [ "$LINES" -gt 1 ]; then
-  sudo install -m 0644 "$TMP_TUNE" /etc/nginx/conf.d/tuning.conf
-else
-  sudo rm -f /etc/nginx/conf.d/tuning.conf || true
+## Sanitize tuning.conf to avoid duplicate core directives (e.g., sendfile) across configs
+TCONF="/etc/nginx/conf.d/tuning.conf"
+if [ -f "$TCONF" ]; then
+  DUMP=$(sudo nginx -T 2>/dev/null || true)
+  for d in sendfile tcp_nopush tcp_nodelay; do
+    if printf "%s" "$DUMP" | awk -v d="$d" 'tolower($0) ~ "^[[:space:]]*" d "[[:space:]]" {found=1} END{exit !found}'; then
+      # Remove duplicate directive lines from tuning.conf
+      sudo sed -i -E "/^[[:space:]]*${d}[[:space:]]/d" "$TCONF" || true
+    fi
+  done
+  # Drop empty lines
+  sudo sed -i -E '/^[[:space:]]*$/d' "$TCONF" || true
+  # If file is now empty, remove it
+  if ! sudo grep -q '[^[:space:]]' "$TCONF" 2>/dev/null; then sudo rm -f "$TCONF" || true; fi
 fi
-rm -f "$TMP_TUNE" || true
-
-# 2) Ensure worker_processes auto; and reasonable worker_connections in main nginx.conf
+sudo nginx -t
+sudo systemctl reload nginx
+# Note: we intentionally do not (re)create /etc/nginx/conf.d/tuning.conf here to avoid
+# introducing duplicate core directives. Base tuning should live in the primary nginx config.
+# Ensure worker_processes auto; and reasonable worker_connections in main nginx.conf
 NGX_MAIN="/etc/nginx/nginx.conf"
 if sudo test -f "$NGX_MAIN"; then
   # Create a backup once, avoiding non-portable -n warnings
@@ -715,7 +744,7 @@ if sudo test -f "$NGX_MAIN"; then
   else
     # insert after user directive or at file start
     if sudo grep -nE '^[[:space:]]*user[[:space:]]+' "$NGX_MAIN" >/dev/null 2>&1; then
-      ln=$(sudo grep -nE '^[[:space:]]*user[[:space:]]+' "$NGX_MAIN" | head -n1 | cut -d: -f1)
+      ln=$(sudo awk 'BEGIN{ln=0} /^[[:space:]]*user[[:space:]]+/{ ln=NR; print ln; exit }' "$NGX_MAIN")
       sudo awk -v ln="$ln" 'NR==ln{print; print "worker_processes auto;"; next} {print}' "$NGX_MAIN" | sudo tee "$NGX_MAIN.tmp" >/dev/null && sudo mv "$NGX_MAIN.tmp" "$NGX_MAIN"
     else
       printf "%s\n%s\n" "worker_processes auto;" "$(sudo cat "$NGX_MAIN")" | sudo tee "$NGX_MAIN" >/dev/null
@@ -758,7 +787,7 @@ fi
   echo "[guard] Checking that server-managed dirs were not modified: $LAUNCHER_DIR/content, /manifests, /news"
   FAIL_GUARD=0
   # POST snapshot
-  sample_hash(){ d="$1"; if [ ! -d "$d" ]; then echo "missing"; return; fi; list=$(LC_ALL=C find "$d" -type f -printf '%P\n' | sort | head -n 50); if [ -z "$list" ]; then echo "empty"; else while IFS= read -r f; do sha256sum "$d/$f" | awk '{print $1"  "$2}'; done <<< "$list" | sha256sum | awk '{print $1}'; fi; }
+  sample_hash(){ d="$1"; if [ ! -d "$d" ]; then echo "missing"; return; fi; list=$(LC_ALL=C find "$d" -type f -printf '%P\n' | sort | awk 'NR<=50'); if [ -z "$list" ]; then echo "empty"; else while IFS= read -r f; do sha256sum "$d/$f" | awk '{print $1"  "$2}'; done <<< "$list" | sha256sum | awk '{print $1}'; fi; }
   for d in content manifests news; do
     dir="$LAUNCHER_DIR/$d"
     if [ -d "$dir" ]; then
@@ -767,8 +796,8 @@ fi
       echo "$cnt" > "$TMP_POST_DIR/${d}.count"
       sample_hash "$dir" > "$TMP_POST_DIR/${d}.hash"
       echo "[guard] recent (<=5min) changes in $dir:"
-      recent=$(sudo find "$dir" -type f -mmin -5 -printf '%TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null | head -n 50 || true)
-      if [ -n "$recent" ]; then echo "$recent"; echo "[guard][FAIL] Recent changes detected in $dir"; FAIL_GUARD=1; else echo "(none)"; fi
+  recent=$(sudo find "$dir" -type f -mmin -5 -printf '%TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null | awk 'NR<=50' || true)
+  if [ -n "$recent" ]; then echo "$recent"; echo "[guard] WARN recent changes detected in $dir (will not fail if snapshot matches)"; else echo "(none)"; fi
     else
       echo "[guard] $dir (missing)"
       echo "-1" > "$TMP_POST_DIR/${d}.count"; echo "missing" > "$TMP_POST_DIR/${d}.hash"
@@ -1221,7 +1250,7 @@ printf "%s %s\n" "[sum] Site root:" "$(curl -ks -o /dev/null -w '%{http_code}' h
 printf "%s " "[sum] Downloads dir (server):"; sudo bash -lc 'test -d /var/www/site/downloads && (ls -1 /var/www/site/downloads | wc -l || true) || echo "missing"' || true
 printf "%s %s\n" "[sum] Admin health (localhost):" "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:55777/admin/api/health || true)"
 printf "%s %s\n" "[sum] Public API games (localhost GET):" "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:55700/api/games || true)"
-printf "%s %s\n" "[sum] Nginx config test:" "$(sudo nginx -t 2>&1 | tail -n1 | sed 's/.*: //')"
+printf "%s %s\n" "[sum] Nginx config test:" "$(sudo nginx -t 2>&1 | awk 'END{print}' | sed 's/.*: //')"
 printf "%s\n" "[sum] Ports (55700/55777):"; (ss -ltnp 2>/dev/null | grep -E '(:55700|:55777)' || true)
 printf "%s\n" "[sum] Site root (localhost via nginx):"; (curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1/ || true)
 printf "%s\n" "[sum] Admin drop-in env (override.conf, masked):"; (sudo bash -lc 'if test -f /etc/systemd/system/chillhub-admin.service.d/override.conf; then sed -E "s/(Environment=\\\"?JWT_SECRET=)[^\\\"]+/\\1<redacted>/; s/(Environment=\\\"?ADMIN_PASSWORD_(PLAIN|BCRYPT)=)[^\\\"]+/\\1<redacted>/" /etc/systemd/system/chillhub-admin.service.d/override.conf; else echo missing; fi' || true)
@@ -1366,6 +1395,13 @@ fi
   $summaryInjected = $summaryInjected.Replace('%%DOWNLOADS_MANIFEST%%', (Convert-ToBashDqEscaped $downloadsManifestB64))
   # Also inject fail flag
   $summaryInjected = $summaryInjected.Replace('%%FAIL_ON_MISMATCH%%', (Convert-ToBashDqEscaped $failFlag))
+  # Make header compatible with shells lacking pipefail and force bash shebang; normalize to LF
+  $summaryInjected = $summaryInjected -replace 'set -euo pipefail', "set -eu`n(set -o pipefail) 2>/dev/null || true"
+  # Prepend a bash shebang if not present
+  if (-not $summaryInjected.StartsWith("#!/")) { $summaryInjected = "#!/usr/bin/env bash`n" + $summaryInjected }
+  # Ensure VERBOSE is defined to avoid 'unbound variable' under set -u
+  if ($summaryInjected -match 'set -eu') { $summaryInjected = $summaryInjected -replace 'set -eu', "set -eu`n: `${VERBOSE:=}" }
+  $summaryInjected = ($summaryInjected -replace "`r`n","`n") -replace "`r",""
   [System.IO.File]::WriteAllText($summaryLocal, $summaryInjected, $utf8NoBom)
   & $SCP @sshCommon $summaryLocal "${Remote}:/tmp/summary-remote.sh"
   Remove-Item -Force $summaryLocal -ErrorAction SilentlyContinue

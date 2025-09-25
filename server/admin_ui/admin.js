@@ -90,6 +90,16 @@
   } catch { /* ignore */ }
 })();
 
+// Suppress a noisy Chrome extension promise error in console (does not affect functionality)
+try{
+  window.addEventListener('unhandledrejection', (e)=>{
+    const msg = String((e && e.reason) || '');
+    if(/A listener indicated an asynchronous response/.test(msg)){
+      e.preventDefault();
+    }
+  });
+}catch{}
+
 // Drag-n-drop wiring for ZIP upload (Launcher tab)
 (function(){
   const dz = document.getElementById('up_drop'); if(!dz) return;
@@ -701,121 +711,293 @@ async function manifestsUpload(){
   if(!ver){ notify('Укажите версию'); return; }
   const file = (window.__manDroppedFile) || document.getElementById('man_zip')?.files?.[0];
   if(!file){ notify('Выберите ZIP-файл'); return; }
-  const latest = (document.getElementById('man_latest')?.checked) ? '1':'0';
-  const fd = new FormData();
-  fd.append('kind','game'); fd.append('gameId', gid); fd.append('version', ver); fd.append('zip', file); fd.append('updateLatest', latest);
-  const wrap=document.getElementById('man_prog_wrap'); const bar=document.getElementById('man_pb'); const txt=document.getElementById('man_prog_text');
-  if(wrap) wrap.style.display='block'; if(bar) bar.style.width='0%'; if(txt) txt.textContent='Подготовка к загрузке...';
+  const wrap=document.getElementById('man_prog_wrap'); const bar=document.getElementById('man_pb');
+  const pctEl=document.getElementById('man_prog_pct'); const bytesEl=document.getElementById('man_prog_bytes');
+  const speedEl=document.getElementById('man_prog_speed'); const medianEl=document.getElementById('man_prog_median'); const peakEl=document.getElementById('man_prog_peak'); const etaEl=document.getElementById('man_prog_eta');
+  if(wrap) wrap.style.display='block'; if(bar) bar.style.width='0%'; if(pctEl) pctEl.textContent='Подготовка к загрузке...';
 
-  // Pre-check: free disk space before starting upload (server-side temp)
-  try{
-    const r = await fetch('/admin/system/free');
-    if(r && r.ok){
-      const j = await r.json();
-      const free = Number(j && j.bytes);
-      const need = Number(file.size||0);
-      if(Number.isFinite(free) && Number.isFinite(need)){
-        const ok = free >= need;
-        const msg = 'Проверка места: свободно '+formatBytes(free)+', нужно '+formatBytes(need)+' — '+(ok?'достаточно':'НЕ хватает');
-        if(txt) txt.textContent = msg;
-        if(!ok){
-          const proceed = confirm(msg+'\nПродолжить загрузку несмотря на нехватку места?');
-          if(!proceed){ return; }
-        }
-      }
+  // UI controls: chunk size and concurrency
+  const chunkSel = document.getElementById('man_chunk_size');
+  let desiredChunk = Number(chunkSel?.value||0)|0; if(desiredChunk<=0) desiredChunk = 8*1024*1024;
+  const concSlider = document.getElementById('man_conc');
+  const concVal = document.getElementById('man_conc_val');
+  let userPar = Number(concSlider?.value||6)|0; if(userPar<1) userPar=1; if(userPar>100) userPar=100;
+  if(concVal) concVal.textContent = String(userPar);
+  const speedWrap = document.getElementById('man_speed_wrap'); const speedCanvas = document.getElementById('man_speed');
+  if(speedWrap) speedWrap.style.display='block';
+  let speedPoints = []; // [{t, bps}]
+  let peakBps = 0;
+  function drawSpeed(){ try{
+    if(!speedCanvas) return; const ctx = speedCanvas.getContext('2d'); if(!ctx) return;
+    const W = speedCanvas.width = speedCanvas.clientWidth|0; const H = speedCanvas.height|0;
+    ctx.clearRect(0,0,W,H); if(speedPoints.length<2) return;
+    const now = performance.now(); const horizon = 8000; // 8s window
+    const pts = speedPoints.filter(p=> now-p.t <= horizon); if(pts.length<2) return;
+    // Smooth series with EMA
+    const ema = []; const a = 0.3; let last = pts[0].bps; for(const p of pts){ last = a*p.bps + (1-a)*last; ema.push({ t:p.t, bps:last }); }
+    // Median over window (for graph line)
+    const arr = pts.map(p=> p.bps).sort((x,y)=>x-y); const m = Math.floor(arr.length/2); const medianBps = arr.length%2 ? arr[m] : ((arr[m-1]+arr[m])/2);
+    const max = Math.max(1, Math.max(...ema.map(p=> p.bps), medianBps)); const min = 0;
+    // Grid and labels (4 ticks)
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.1)'; ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.font = '10px system-ui, -apple-system, Segoe UI, Roboto, sans-serif'; ctx.textBaseline = 'top';
+    const ticks = 4;
+    for(let t=0;t<=ticks;t++){
+      const frac = t/ticks; const y = H - (H * frac);
+      ctx.beginPath(); ctx.moveTo(0,y+0.5); ctx.lineTo(W,y+0.5); ctx.stroke();
+      const val = max * frac; const label = formatSpeed(val);
+      ctx.fillText(label, 4, Math.max(0, y-10));
     }
-  }catch(_){ /* ignore pre-check errors */ }
+    ctx.restore();
+    // Draw smoothed line
+    ctx.strokeStyle = 'rgba(13,110,253,0.9)'; ctx.lineWidth = 2; ctx.beginPath();
+    for(let i=0;i<ema.length;i++){
+      const x = W - (W * (now - ema[i].t) / horizon);
+      const y = H - (H * (ema[i].bps - min) / Math.max(1, (max-min)));
+      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+    // Optional faint raw line
+    ctx.strokeStyle = 'rgba(13,110,253,0.25)'; ctx.lineWidth = 1; ctx.beginPath();
+    for(let i=0;i<pts.length;i++){
+      const x = W - (W * (now - pts[i].t) / horizon);
+      const y = H - (H * (pts[i].bps - min) / Math.max(1, (max-min)));
+      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+    // Median horizontal line
+    const yMed = H - (H * (medianBps - min) / Math.max(1, (max-min)));
+    ctx.setLineDash([4,4]); ctx.strokeStyle = 'rgba(25,135,84,0.9)'; ctx.lineWidth = 1.5; // Bootstrap green-ish
+    ctx.beginPath(); ctx.moveTo(0, yMed+0.5); ctx.lineTo(W, yMed+0.5); ctx.stroke(); ctx.setLineDash([]);
+  }catch{}}
 
-  await new Promise((resolve)=>{
-    const t0 = Date.now();
-    let lastT = t0;
-    let lastLoaded = 0;
-    let avgSpeed = 0; // EMA for stability
-    const alpha = 0.2;
-    // Sliding windows for smoothing
-    const samples = []; // {t, loaded}
-    const etaSamples = []; // {t, eta}
-    const xhr = new XMLHttpRequest(); xhr.open('POST','/admin/uploadStream');
-    xhr.setRequestHeader('Accept','application/x-ndjson');
-    // Upload progress
-    xhr.upload.onprogress = (e)=>{
-      if(e.lengthComputable){
-        const now = Date.now();
-        const dt = (now - lastT)/1000;
-        let inst = 0;
-        if(dt > 0){ inst = (e.loaded - lastLoaded)/dt; }
-        if(inst > 0){ avgSpeed = avgSpeed ? (alpha*inst + (1-alpha)*avgSpeed) : inst; }
-        lastT = now; lastLoaded = e.loaded;
-        // push sample and prune >10s
-        samples.push({t: now, loaded: e.loaded});
-        for(let i=0;i<samples.length;i++){ if((now - samples[i].t) <= 10000){ if(i>0) samples.splice(0,i); break; } }
-        // 2s window speed
-        let speed2s = 0;
-        for(let i=samples.length-1;i>=0;i--){ const age = (now - samples[i].t)/1000; if(age >= 2 || i===0){ const dtw = (now - samples[i].t)/1000; const dbytes = e.loaded - samples[i].loaded; if(dtw>0 && dbytes>0) speed2s = dbytes/dtw; break; } }
-        const pct = Math.floor(e.loaded*100/e.total);
-        if(bar) bar.style.width=pct+'%';
-        const remain = Math.max(0, e.total - e.loaded);
-        const useSpeed = speed2s || avgSpeed || inst;
-        let etaStr = '';
-        if(useSpeed > 0){
-          const etaNow = remain / useSpeed;
-          // collect eta samples (10s window)
-          etaSamples.push({t: now, eta: etaNow});
-          for(let i=0;i<etaSamples.length;i++){ if((now - etaSamples[i].t) <= 10000){ if(i>0) etaSamples.splice(0,i); break; } }
-          // average ETA over window
-          const avgEta = etaSamples.reduce((s,x)=> s+x.eta, 0) / etaSamples.length;
-          etaStr = ' \u2022 ETA '+formatEta(avgEta);
+  // INIT
+  let initRes; try{
+    console.group('Upload ZIP');
+    console.time('upload_total');
+    console.log('[init] request', { gid, ver, file: { name: file.name, size: file.size }, chunkSize: desiredChunk, userPar });
+    initRes = await fetch('/admin/api/upload/init', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({
+      kind:'game', gameId: gid, version: ver, zipName: file.name, totalSize: file.size, chunkSize: desiredChunk
+    }) });
+  }catch(e){ notify('Ошибка init: '+e); return; }
+  if(!initRes.ok){ notify('HTTP '+initRes.status+' init'); return; }
+  const init = await initRes.json();
+  console.log('[init] response', init);
+  const uploadId = init.uploadId; const chunkSize = init.chunkSize || desiredChunk || (8*1024*1024); const totalChunks = init.totalChunks||Math.ceil(file.size/chunkSize);
+  // RESUME: запросить уже полученные чанки
+  let received = new Set();
+  try{
+    const st = await fetch('/admin/api/upload/status?uploadId='+encodeURIComponent(uploadId));
+    if(st.ok){ const j = await st.json(); (j.received||[]).forEach(i=> received.add(Number(i)|0)); }
+  }catch{}
+
+  // PARALLEL UPLOAD (adaptive)
+  const allIdx = [];
+  for(let i=0;i<totalChunks;i++){ if(!received.has(i)) allIdx.push(i); }
+  const totalBytes = file.size; let uploadedBytes = received.size * chunkSize; if(uploadedBytes>totalBytes) uploadedBytes = totalBytes;
+  let ptr = 0; let failed = false; let errors = 0; const failedChunks = [];
+  const maxCap = Math.max(1, Math.min(100, init.maxParallel||100));
+  let curPar = Math.max(1, Math.min(maxCap, userPar));
+  console.log('[resume] already have', received.size, 'chunks; scheduling', allIdx.length, 'chunks; chunkSize=', chunkSize, 'maxCap=', maxCap, 'startPar=', curPar);
+
+  const t0 = performance.now(); let lastT = t0; let lastLoaded = uploadedBytes; let avgSpeed = 0; const alpha = 0.2; const UI_INTERVAL=500; let lastUiTs=0, uiScheduled=false;
+  function updateUI(now){
+    const pct = Math.floor((uploadedBytes*100)/totalBytes);
+    if(bar) bar.style.width = pct+'%';
+    const dt = (now - lastT)/1000; let inst=0; if(dt>0) inst = (uploadedBytes - lastLoaded)/dt; if(inst>0) avgSpeed = avgSpeed? (alpha*inst+(1-alpha)*avgSpeed):inst; lastT=now; lastLoaded=uploadedBytes;
+    const remain = Math.max(0, totalBytes - uploadedBytes); const eta = (avgSpeed>0)? (remain/avgSpeed):0;
+    // Update peak and median (window 8s)
+    if(inst>0){ peakBps = Math.max(peakBps, inst); }
+    const horizon = 8000; const windowPts = speedPoints.filter(p=> now-p.t <= horizon);
+    let medianBps = 0; if(windowPts.length>0){ const arr = windowPts.map(p=> p.bps).sort((a,b)=>a-b); const mid = Math.floor(arr.length/2); medianBps = arr.length%2 ? arr[mid] : ((arr[mid-1]+arr[mid])/2); }
+    if(pctEl) pctEl.textContent = 'Загружено '+pct+'%';
+    if(bytesEl) bytesEl.textContent = '('+formatBytes(uploadedBytes)+' / '+formatBytes(totalBytes)+')';
+    if(speedEl) speedEl.textContent = avgSpeed>0 ? formatSpeed(avgSpeed) : '';
+    if(medianEl) medianEl.textContent = medianBps>0 ? ('мед '+formatSpeed(medianBps)) : '';
+    if(peakEl) peakEl.textContent = peakBps>0 ? ('пик '+formatSpeed(peakBps)) : '';
+    if(etaEl) etaEl.textContent = eta>0 ? ('ETA '+formatEta(eta)) : '';
+    if(inst>0){ speedPoints.push({t: now, bps: inst}); if(speedPoints.length>400) speedPoints.shift(); drawSpeed(); }
+  }
+  function scheduleUI(){ const now=performance.now(); if(now-lastUiTs<UI_INTERVAL) return; lastUiTs=now; if(uiScheduled) return; uiScheduled=true; requestAnimationFrame(()=>{ uiScheduled=false; updateUI(performance.now()); }); }
+
+  let active = 0;
+  const win = []; // recent writeMs per chunk
+  const WIN_MAX = 50;
+
+  async function runNext(){
+    if (ptr >= allIdx.length) return;
+    const i = allIdx[ptr++];
+    active++;
+    const start = i*chunkSize; const end = Math.min(start+chunkSize, file.size);
+    const blob = file.slice(start, end);
+    let ok=false, attempts=0; const MAX_ATTEMPTS=5; while(!ok && attempts<MAX_ATTEMPTS){ attempts++;
+      try{
+        const r = await fetch('/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+i, { method:'PUT', body: blob });
+        if(r.ok){
+          let j = null; try{ j = await r.json(); }catch(_){}
+          const wms = Number(j && j.writeMs || 0)|0; const b = (end-start);
+          if(wms>0){ win.push(wms); if(win.length>WIN_MAX) win.shift(); }
+          if(attempts>1){ console.log('[chunk ok after retry]', { index:i, attempts, bytes:b, writeMs:wms }); } else { console.log('[chunk ok]', { index:i, bytes:b, writeMs:wms, par:curPar, active, left: allIdx.length - ptr }); }
+          ok = true; uploadedBytes += b; scheduleUI();
+        } else if(r.status===409){ ok=true; console.log('[chunk skip:exists]', { index:i }); }
+        else {
+          errors++; console.warn('[chunk http]', { index:i, status:r.status, attempt:attempts }); await new Promise(res=> setTimeout(res, 400*attempts));
         }
-        const speedStr = useSpeed>0 ? (' \u2022 '+formatSpeed(useSpeed)) : '';
-        if(txt) txt.textContent='Загружено '+pct+'% ('+formatBytes(e.loaded)+' / '+formatBytes(e.total)+')'+speedStr+etaStr;
-      }
-    };
-    // Streaming NDJSON parsing
-    let lastLen = 0;
-    xhr.onprogress = ()=>{
-      const resp = xhr.responseText || '';
-      const chunk = resp.substring(lastLen);
-      lastLen = resp.length;
-      const lines = chunk.split(/\r?\n/).filter(Boolean);
-      for(const line of lines){
+      }catch(e){ errors++; console.warn('[chunk fetch]', { index:i, error:String(e), attempt:attempts }); await new Promise(res=> setTimeout(res, 400*attempts)); }
+    }
+    if(!ok){ failedChunks.push(i); }
+    active--;
+    // Keep pipeline full up to curPar
+    while(active < curPar && ptr < allIdx.length){ runNext(); }
+  }
+
+  // Handle live concurrency changes
+  if(concSlider){ concSlider.addEventListener('input', ()=>{ userPar = Number(concSlider.value|0); if(userPar<1) userPar=1; if(userPar>100) userPar=100; if(concVal) concVal.textContent=String(userPar);
+    const prev = curPar; curPar = Math.max(1, Math.min(maxCap, userPar)); if(curPar!==prev){ while(active < curPar && ptr < allIdx.length){ runNext(); } }
+  }); }
+
+  // Start initial workers
+  console.log('[upload] start', { curPar, maxCap, totalChunks, pending: allIdx.length });
+  for(let j=0; j<Math.min(curPar, allIdx.length); j++){ runNext(); }
+
+  // Adaptation timer (AIMD-like)
+  const adapt = setInterval(()=>{
+    if (failed) return;
+    const avgMs = (win.length>0) ? (win.reduce((a,b)=>a+b,0)/win.length) : 0;
+    // Simple logic: if avgMs is small and no recent errors — try +1; if errors happened or avgMs grows a lot — -1
+    const prevPar = curPar;
+    if (errors === 0 && avgMs > 0 && avgMs < 300) { // fast disk
+      curPar = Math.min(curPar+1, maxCap);
+    } else if (errors > 0 || (avgMs > 800 && curPar > 1)) { // signs of stress
+      curPar = Math.max(1, curPar-1);
+      errors = 0; // reset after backoff
+    }
+    if (curPar !== prevPar) {
+      console.log('[adapt]', { avgWriteMs: Math.round(avgMs), from: prevPar, to: curPar, active, queued: allIdx.length - ptr });
+      while(active < curPar && ptr < allIdx.length){ runNext(); }
+    }
+  }, 2000);
+
+  // Wait until all scheduled chunks are processed
+  while(ptr < allIdx.length || active > 0){
+    await new Promise(res=> setTimeout(res, 200));
+    if(failed) break;
+  }
+  clearInterval(adapt);
+  // Retry pass for failed chunks (if any)
+  if(!failed && failedChunks.length>0){
+    console.group('[retry pass] re-upload failed chunks');
+    console.log('failedChunks count', failedChunks.length);
+    let missPtr = 0; let missActive = 0; let missFailed = false;
+    async function runFailed(){
+      if(missPtr >= failedChunks.length) return;
+      const idx = failedChunks[missPtr++];
+      missActive++;
+      const s = idx*chunkSize; const e = Math.min(s+chunkSize, file.size);
+      const bl = file.slice(s, e);
+      let ok=false, attempts=0; const MAX=5; while(!ok && attempts<MAX){ attempts++;
         try{
-          const ev = JSON.parse(line);
-          if(ev.type === 'start'){
-            if(txt) txt.textContent = 'Старт обработки: '+(ev.gameId||gid)+' '+(ev.version||ver);
-          } else if(ev.type === 'zipSaved'){
-            if(txt) txt.textContent = 'Загрузка завершена, обработка ZIP ('+formatBytes(ev.bytes||0)+')...';
-            if(bar) bar.style.width='100%';
-          } else if(ev.type === 'unzip'){
-            if(txt) txt.textContent = 'Распаковка: '+ev.path;
-          } else if(ev.type === 'composeStart'){
-            if(txt) txt.textContent = 'Подготовка манифеста: 0/'+(ev.totalFiles||0)+' файлов';
-          } else if(ev.type === 'file'){
-            if(txt) txt.textContent = 'Манифест: '+(ev.idx||0)+' файлов, '+formatBytes(ev.bytesDone||0);
-          } else if(ev.type === 'done'){
-            if(txt) txt.textContent = 'Готово. Манифест записан';
-            try{ manifestsReload(); }catch(_){ }
-            try{ gmPrevEnsureVersionsAndRender(gid); }catch(_){ }
-          } else if(ev.type === 'error'){
-            notify('Ошибка: '+(ev.message||'unknown'));
-          }
-        }catch(_){ /* ignore partial lines */ }
+          const r = await fetch('/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+idx, { method:'PUT', body: bl });
+          if(r.ok){ ok=true; uploadedBytes += (e-s); scheduleUI(); if(attempts>1){ console.log('[retry ok]', { index:idx, attempts }); } }
+          else if(r.status===409){ ok=true; }
+          else { console.warn('[retry http]', { index:idx, status:r.status, attempt:attempts }); await new Promise(res=> setTimeout(res, 500*attempts)); }
+        }catch(err){ console.warn('[retry fetch]', { index:idx, error:String(err), attempt:attempts }); await new Promise(res=> setTimeout(res, 500*attempts)); }
       }
-    };
-    xhr.onreadystatechange = ()=>{
-      if(xhr.readyState===4){
-        if(xhr.status>=200 && xhr.status<300){
-          try{ lnRefresh(); }catch(_){ }
-          try{ manifestsReload(); }catch(_){ }
-          try{ gmPrevEnsureVersionsAndRender(gid); }catch(_){ }
-        } else {
-          notify('HTTP '+xhr.status+' '+xhr.statusText+' '+(xhr.responseText||''));
+      if(!ok){ missFailed = true; }
+      missActive--;
+      while(missActive < curPar && missPtr < failedChunks.length){ runFailed(); }
+    }
+    for(let j=0;j<Math.min(curPar, failedChunks.length); j++){ runFailed(); }
+    while(missPtr < failedChunks.length || missActive > 0){ await new Promise(res=> setTimeout(res, 150)); if(missFailed) break; }
+    console.groupEnd();
+    if(missFailed){ console.timeEnd('upload_total'); console.groupEnd(); notify('Повторная загрузка неудачных чанков завершилась с ошибкой'); return; }
+  }
+  if(failed){ console.timeEnd('upload_total'); console.groupEnd(); notify('Загрузка чанков завершилась с ошибкой'); return; }
+
+  // COMPLETE
+  async function uploadMissingAndRetryComplete(maxRounds=3){
+    for(let round=1; round<=maxRounds; round++){
+      let comp; try{ comp = await fetch('/admin/api/upload/complete?uploadId='+encodeURIComponent(uploadId), { method:'POST' }); }catch(e){ notify('Ошибка complete: '+e); return false; }
+      if(comp.ok){ return true; }
+      const code = comp.status|0; console.warn('[complete] http', code, 'round', round);
+      // Try to discover missing chunks via status
+      let st; try{ st = await fetch('/admin/api/upload/status?uploadId='+encodeURIComponent(uploadId)); }catch{}
+      if(!st || !st.ok){ if(code===400||code===409){ console.warn('[complete] retry without status'); } else { return false; } }
+      let sjson=null; try{ sjson = st? await st.json(): null; }catch{}
+      if(!sjson || !Array.isArray(sjson.received)){ if(code!==400 && code!==409) return false; continue; }
+      const have = new Set(sjson.received.map(x=> Number(x)|0));
+      const missing = [];
+      for(let i=0;i<totalChunks;i++){ if(!have.has(i)) missing.push(i); }
+      if(missing.length===0){ // nothing missing but complete failed: stop
+        console.warn('[complete] no missing chunks reported, aborting');
+        return false;
+      }
+      console.log('[complete] will re-upload missing', missing.length);
+      // Re-upload missing with current concurrency
+      let missPtr = 0; let missActive = 0; let missFailed = false;
+      async function runMissing(){
+        if(missPtr >= missing.length) return;
+        const i = missing[missPtr++];
+        missActive++;
+        const start = i*chunkSize; const end = Math.min(start+chunkSize, file.size);
+        const blob = file.slice(start, end);
+        let ok=false, attempts=0; while(!ok && attempts<3){ attempts++;
+          try{
+            const r = await fetch('/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+i, { method:'PUT', body: blob });
+            if(r.ok){ ok=true; uploadedBytes += (end-start); scheduleUI(); }
+            else if(r.status===409){ ok=true; }
+            else { await new Promise(res=> setTimeout(res, 300*attempts)); }
+          }catch{ await new Promise(res=> setTimeout(res, 300*attempts)); }
         }
-        window.__manDroppedFile=null; resolve();
+        if(!ok){ missFailed = true; }
+        missActive--;
+        while(missActive < curPar && missPtr < missing.length){ runMissing(); }
       }
-    };
-    xhr.onerror = ()=>{ notify('Ошибка загрузки'); window.__manDroppedFile=null; resolve(); };
-    xhr.send(fd);
-  });
+      for(let j=0;j<Math.min(curPar, missing.length); j++){ runMissing(); }
+      while(missPtr < missing.length || missActive > 0){ await new Promise(res=> setTimeout(res, 150)); if(missFailed) break; }
+      if(missFailed){ notify('Повторная загрузка пропущенных чанков завершилась с ошибкой'); return false; }
+      // try complete next round
+    }
+    return false;
+  }
+
+  const okComplete = await uploadMissingAndRetryComplete(3);
+  if(!okComplete){ console.timeEnd('upload_total'); console.groupEnd(); notify('Ошибка завершения загрузки (complete)'); return; }
+  if(txt) txt.textContent = 'Сервера проверяет sha256 и готовит распаковку...';
+
+  // PROCESS (NDJSON)
+  try{
+    console.log('[process] start');
+    const res = await fetch('/admin/api/upload/process?uploadId='+encodeURIComponent(uploadId));
+    if(!res.ok){ notify('HTTP '+res.status+' process'); return; }
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf='';
+    while(true){
+      const {done, value} = await reader.read(); if(done) break; buf += dec.decode(value, {stream:true});
+      const parts = buf.split(/\r?\n/); buf = parts.pop()||'';
+      for(const line of parts){ if(!line) continue; try{ const ev = JSON.parse(line);
+        if(ev.type==='start'){ console.log('[process]', ev); if(txt) txt.textContent = 'Старт обработки: '+gid+' '+ver; }
+        else if(ev.type==='unzip'){ console.log('[unzip]', ev.path); if(txt) txt.textContent = 'Распаковка: '+ev.path; }
+        else if(ev.type==='composeStart'){ console.log('[composeStart]', ev); if(txt) txt.textContent = 'Подготовка манифеста: '+(ev.totalFiles||0)+' файлов'; }
+        else if(ev.type==='file'){ if((ev.idx||0)%100===0) console.log('[file]', ev.idx, ev.path); if(txt) txt.textContent = 'Манифест: '+(ev.idx||0)+' файлов, '+formatBytes(ev.bytesDone||0); }
+        else if(ev.type==='done'){ console.log('[done]', ev.outPath); if(txt) txt.textContent = 'Готово. Манифест записан'; }
+        else if(ev.type==='error'){ console.warn('[process error]', ev.message); notify('Ошибка: '+(ev.message||'unknown')); }
+      }catch{} }
+    }
+  }catch(e){ notify('Ошибка process: '+e); }
+
+  try{ manifestsReload(); }catch(_){ }
+  try{ gmPrevEnsureVersionsAndRender(gid); }catch(_){ }
+  // Optionally set this version as latest
+  try{
+    const latestFlag = document.getElementById('man_latest')?.checked;
+    if(latestFlag){
+      const act = await fetch('/admin/activate?gameId='+encodeURIComponent(gid)+'&version='+encodeURIComponent(ver), { method:'POST' });
+      if(!act.ok){ notify('HTTP '+act.status+' activate'); }
+    }
+  }catch(e){ notify('Ошибка activate: '+e); }
+  console.timeEnd('upload_total');
+  console.groupEnd();
+  window.__manDroppedFile = null;
 }
 
 // Drag-n-drop for manifests ZIP
@@ -1708,22 +1890,63 @@ async function upload(){
   await new Promise((resolve)=>{
     const xhr = new XMLHttpRequest(); xhr.open('POST','/admin/uploadStream');
     xhr.setRequestHeader('Accept','application/x-ndjson');
-    // Upload progress
-    xhr.upload.onprogress = (e)=>{
-      if(e.lengthComputable){
-        const pct = Math.floor(e.loaded*100/e.total);
-        if(bar) bar.style.width=pct+'%';
-        if(txt) txt.textContent='Загружено '+pct+'% ('+e.loaded+' / '+e.total+' байт)';
+    // Upload progress (throttled, with lightweight smoothing)
+    const t0 = performance.now();
+    let lastT = t0;
+    let lastLoaded = 0;
+    let avgSpeed = 0; // EMA
+    const alpha = 0.2;
+    const UI_INTERVAL = 250; // ms
+    let lastUiTs = 0;
+    let uiScheduled = false;
+    const uiState = { pct:0, loaded:0, total: file.size, speed:0, eta:0 };
+    function applyUI(){
+      if (bar) bar.style.width = uiState.pct + '%';
+      if (txt) {
+        const speedStr = uiState.speed > 0 ? (' \u2022 ' + formatSpeed(uiState.speed)) : '';
+        const etaStr = uiState.eta > 0 ? (' \u2022 ETA ' + formatEta(uiState.eta)) : '';
+        txt.textContent = 'Загружено ' + uiState.pct + '% (' + formatBytes(uiState.loaded) + ' / ' + formatBytes(uiState.total) + ')' + speedStr + etaStr;
       }
+    }
+    function scheduleUI(nowMs){
+      if (uiScheduled) return;
+      if (nowMs - lastUiTs < UI_INTERVAL) return;
+      uiScheduled = true;
+      lastUiTs = nowMs;
+      requestAnimationFrame(()=>{ uiScheduled = false; applyUI(); });
+    }
+    xhr.upload.onprogress = (e)=>{
+      if(!e.lengthComputable) return;
+      const now = performance.now();
+      const dt = (now - lastT)/1000;
+      let inst = 0;
+      if (dt > 0) inst = (e.loaded - lastLoaded)/dt;
+      if (inst > 0) avgSpeed = avgSpeed ? (alpha*inst + (1-alpha)*avgSpeed) : inst;
+      lastT = now; lastLoaded = e.loaded;
+      const remain = Math.max(0, e.total - e.loaded);
+      const eta = (avgSpeed > 0) ? (remain/avgSpeed) : 0;
+      uiState.pct = Math.floor(e.loaded*100/e.total);
+      uiState.loaded = e.loaded;
+      uiState.speed = avgSpeed;
+      uiState.eta = eta;
+      scheduleUI(now);
     };
-    // Streaming NDJSON parsing from response
+
+    // Streaming NDJSON parsing from response (throttled & capped)
     let lastLen = 0;
+    let lastRespTs = 0;
+    const RESP_INTERVAL = 250; // ms
+    const MAX_RESP_LINES_PER_TICK = 200;
     xhr.onprogress = ()=>{
+      const now = performance.now();
+      if (now - lastRespTs < RESP_INTERVAL) return;
+      lastRespTs = now;
       const resp = xhr.responseText || '';
       const chunk = resp.substring(lastLen);
       lastLen = resp.length;
       const lines = chunk.split(/\r?\n/).filter(Boolean);
-      for(const line of lines){
+      const toProcess = lines.length > MAX_RESP_LINES_PER_TICK ? lines.slice(lines.length - MAX_RESP_LINES_PER_TICK) : lines;
+      for(const line of toProcess){
         try{
           const ev = JSON.parse(line);
           if(ev.type === 'start'){
@@ -1767,6 +1990,13 @@ async function upload(){
 if (document.getElementById('btnUpload')) document.getElementById('btnUpload').addEventListener('click', upload);
 // Manifests wiring
 if (document.getElementById('man_upload')) document.getElementById('man_upload').addEventListener('click', manifestsUpload);
+// Show live value for concurrency slider
+(()=>{ const s = document.getElementById('man_conc'); const v = document.getElementById('man_conc_val'); if(s&&v){ v.textContent = String(s.value||'6'); s.addEventListener('input', ()=>{ v.textContent = String(s.value||'6'); }); }})();
+// Cleanup button
+(()=>{ const btn = document.getElementById('man_cleanup'); if(!btn) return; btn.addEventListener('click', async ()=>{
+  if(!confirm('Очистить старые/битые временные загрузки?')) return;
+  try{ const r = await fetch('/admin/api/upload/cleanup', { method:'POST' }); if(!r.ok){ notify('HTTP '+r.status+' cleanup'); return; } const j = await r.json(); notify('Удалено: '+(j.removed||0)); }catch(e){ notify('Ошибка cleanup: '+e); }
+}); })();
 if (document.getElementById('btnList')) document.getElementById('btnList').addEventListener('click', manifestsReload);
 // Launcher versions list refresh
 if (document.getElementById('ln_list_btn')) document.getElementById('ln_list_btn').addEventListener('click', lnManifestsReload);

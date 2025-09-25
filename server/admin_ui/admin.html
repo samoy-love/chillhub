@@ -198,12 +198,50 @@
                   <label class="me-2"><input type="checkbox" id="man_latest" checked> Обновить latest</label>
                   <button type="button" id="man_upload" class="btn btn-sm btn-primary">Загрузить</button>
                 </div>
+                <div class="d-flex flex-wrap align-items-end gap-3 small">
+                  <div>
+                    <label class="form-label mb-1">Размер чанка</label>
+                    <select id="man_chunk_size" class="form-select form-select-sm" style="min-width:200px">
+                      <option value="65536">64 КБ</option>
+                      <option value="131072">128 КБ</option>
+                      <option value="262144">256 КБ</option>
+                      <option value="524288">512 КБ</option>
+                      <option value="1048576">1 МБ</option>
+                      <option value="2097152">2 МБ</option>
+                      <option value="4194304">4 МБ</option>
+                      <option value="8388608" selected>8 МБ</option>
+                      <option value="16777216">16 МБ</option>
+                      <option value="33554432">32 МБ</option>
+                      <option value="67108864">64 МБ</option>
+                      <option value="134217728">128 МБ</option>
+                      <option value="268435456">256 МБ</option>
+                      <option value="536870912">512 МБ</option>
+                    </select>
+                  </div>
+                  <div class="flex-grow-1" style="min-width:240px; max-width:520px">
+                    <label for="man_conc" class="form-label mb-1 d-flex justify-content-between"><span>Параллельность</span><span><code id="man_conc_val">6</code> поток(ов)</span></label>
+                    <input id="man_conc" type="range" class="form-range" min="1" max="100" value="6">
+                  </div>
+                  <div class="ms-auto d-flex align-items-end">
+                    <button id="man_cleanup" type="button" class="btn btn-sm btn-outline-warning">Очистить старые/битые</button>
+                  </div>
+                </div>
                 <div id="man_drop" class="border rounded d-flex align-items-center justify-content-center text-body-secondary" style="height:100px; border-style:dashed !important;">
                   Перетащите ZIP сюда
                 </div>
                 <div class="mt-1" id="man_prog_wrap" style="max-width:520px; display:none;">
                   <div class="progress" style="height:12px"><div id="man_pb" class="progress-bar" role="progressbar" style="width:0%"></div></div>
-                  <div class="small text-body-secondary mt-1" id="man_prog_text"></div>
+                  <div class="small text-body-secondary mt-1" id="man_prog_stats" style="display:flex; gap:.75rem; flex-wrap:wrap; align-items:baseline">
+                    <span id="man_prog_pct"></span>
+                    <span id="man_prog_bytes" class="text-body-secondary"></span>
+                    <span id="man_prog_speed"></span>
+                    <span id="man_prog_median" class="text-body-secondary"></span>
+                    <span id="man_prog_peak" class="text-body-secondary"></span>
+                    <span id="man_prog_eta" class="text-body-secondary"></span>
+                  </div>
+                </div>
+                <div id="man_speed_wrap" class="mt-1" style="display:none; max-width:520px;">
+                  <canvas id="man_speed" height="60" style="width:100%; background:rgba(255,255,255,0.04); border-radius:4px"></canvas>
                 </div>
                 <div class="small text-body-secondary">Загружает в <code>content/content/&lt;gameId&gt;/&lt;version&gt;/files/</code> и создаёт манифест в <code>content/manifests/&lt;gameId&gt;/</code>.</div>
               </div>
