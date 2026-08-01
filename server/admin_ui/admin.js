@@ -1092,10 +1092,13 @@ async function mgmReload(){
 
 function mgmAppendRow(tb, it){
   const tr = document.createElement('tr');
-  const gidVal = (it.gameId||'');
-  const titleVal = (it.title||'');
-  const exeVal = (it.exeRelativePath||'');
-  const iconVal = (it.iconUrl||'');
+  // Значения приходят с сервера (/admin/games и /admin/games/scan — по сути
+  // имена каталогов на диске), поэтому в атрибут их можно класть только
+  // экранированными.
+  const gidVal = escapeHtml(it.gameId||'');
+  const titleVal = escapeHtml(it.title||'');
+  const exeVal = escapeHtml(it.exeRelativePath||'');
+  const iconVal = escapeHtml(it.iconUrl||'');
   tr.innerHTML = ''+
     '<td><input class="form-control form-control-sm" value="'+gidVal+'"/></td>'+
     '<td><input class="form-control form-control-sm" value="'+titleVal+'"/></td>'+
@@ -2197,9 +2200,10 @@ async function gamesReload(){
 
 function gamesAppendRow(tb, it){
   const tr = document.createElement('tr');
-  tr.innerHTML = '<td><input class="form-control form-control-sm" value="'+(it.gameId||'')+'"/></td>'+
-                 '<td><input class="form-control form-control-sm" value="'+(it.title||'')+'"/></td>'+
-                 '<td><input class="form-control form-control-sm" value="'+(it.exeRelativePath||'')+'"/></td>'+
+  // Те же серверные данные, что и в mgmAppendRow: экранируем перед вставкой в value.
+  tr.innerHTML = '<td><input class="form-control form-control-sm" value="'+escapeHtml(it.gameId||'')+'"/></td>'+
+                 '<td><input class="form-control form-control-sm" value="'+escapeHtml(it.title||'')+'"/></td>'+
+                 '<td><input class="form-control form-control-sm" value="'+escapeHtml(it.exeRelativePath||'')+'"/></td>'+
                  '<td><button class="btn btn-sm btn-outline-danger">Del</button></td>';
   tr.querySelector('button').addEventListener('click', ()=> tr.remove());
   tb.appendChild(tr);
