@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"image"
@@ -370,6 +371,7 @@ func handleFeedbackSubmit(w http.ResponseWriter, r *http.Request) {
 	feedbackStoreMu.Lock()
 	items, _ := readFeedbackAll()
 	items = append([]FeedbackItem{item}, items...) // prepend newest
+	items = pruneFeedbackItems(items)              // rotate out the oldest reports
 	err := writeFeedbackAll(items)
 	feedbackStoreMu.Unlock()
 	if err != nil {
@@ -661,6 +663,38 @@ func getFreeSpaceBytes(path string) (uint64, error) {
 	return getFreeSpaceBytesImpl(base)
 }
 
+// stageVersionDir creates a staging directory for a build next to its final
+// location, so that the finished tree can be moved into place with a rename on
+// the same volume. Returns the staging dir and the files root inside it.
+func stageVersionDir(gid, ver string) (stageDir, filesRoot string, err error) {
+	parent := filepath.Join(contentRoot, "content", gid)
+	if err = os.MkdirAll(parent, 0o755); err != nil {
+		return "", "", err
+	}
+	stageDir = filepath.Join(parent, ver+".tmp-"+genID())
+	filesRoot = filepath.Join(stageDir, "files")
+	if err = os.MkdirAll(filesRoot, 0o755); err != nil {
+		return "", "", err
+	}
+	return stageDir, filesRoot, nil
+}
+
+// promoteVersionDir atomically replaces the published version directory with a
+// fully extracted staging directory. os.Rename cannot overwrite an existing
+// directory (on any OS, and notably on Windows), so the old one is removed
+// first, the same way writeFeedbackAll does for its temp file.
+func promoteVersionDir(stageDir, finalDir string) error {
+	if err := os.MkdirAll(filepath.Dir(finalDir), 0o755); err != nil {
+		return err
+	}
+	if _, err := os.Stat(finalDir); err == nil {
+		if err := os.RemoveAll(finalDir); err != nil {
+			return err
+		}
+	}
+	return os.Rename(stageDir, finalDir)
+}
+
 // handleUploadStream uploads a ZIP and streams progress (NDJSON): start, unzip entries, compose files, done
 func handleUploadStream(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
@@ -809,15 +843,22 @@ func handleUploadStream(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "{\"type\":\"start\",\"kind\":%q,\"gameId\":%q,\"version\":%q}\n", kind, gid, ver)
 	fl.Flush()
 
-	// Save zip to temp was already done (tmpName). Ensure filesRoot for extraction exists on same FS
-	filesRoot := filepath.Join(contentRoot, "content", gid, ver, "files")
-	if err := os.MkdirAll(filesRoot, 0o755); err != nil {
+	// Save zip to temp was already done (tmpName). Extract into a staging dir on
+	// the same volume; the published directory is only replaced once the whole
+	// build is on disk, so an aborted upload can never leave a half version live.
+	finalVerDir := filepath.Join(contentRoot, "content", gid, ver)
+	stageDir, filesRoot, err := stageVersionDir(gid, ver)
+	if err != nil {
 		fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", err.Error())
 		fl.Flush()
 		return
 	}
-
-	// Prepare extraction dir (already ensured above)
+	promoted := false
+	defer func() {
+		if !promoted {
+			_ = os.RemoveAll(stageDir)
+		}
+	}()
 
 	// Check free space before unzip (estimate total uncompressed size of ZIP)
 	if needBytes, err := estimateZipUncompressedSize(tmpName); err == nil {
@@ -984,6 +1025,14 @@ func handleUploadStream(w http.ResponseWriter, r *http.Request) {
 		EmptyDirs: emptyDirs,
 		Signature: "dev-mock-signature",
 	}
+
+	// Everything is extracted and hashed: publish the build in one rename.
+	if err := promoteVersionDir(stageDir, finalVerDir); err != nil {
+		fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", "activate failed: "+err.Error())
+		fl.Flush()
+		return
+	}
+	promoted = true
 
 	outDir := filepath.Join(contentRoot, "manifests", gid)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
@@ -1897,6 +1946,10 @@ func handleNewsUploadCover(w http.ResponseWriter, r *http.Request) {
 	gid := r.FormValue("gameId")
 	slug := r.FormValue("slug")
 	if strings.TrimSpace(slug) != "" {
+		if !isSafeNewsSlug(slug) {
+			http.Error(w, "invalid slug", http.StatusBadRequest)
+			return
+		}
 		if baseDir, err := newsBase(scope, gid); err == nil {
 			m := readNewsMeta(baseDir)
 			cur := m[slug]
@@ -1911,18 +1964,45 @@ func handleNewsUploadCover(w http.ResponseWriter, r *http.Request) {
 
 // ===== News management =====
 
-// resolve news base directory by scope and optional gameId
+// newsRoot is the directory every news path must stay inside.
+func newsRoot() string { return filepath.Join(contentRoot, "news") }
+
+// resolve news base directory by scope and optional gameId.
+// gid comes straight from the request, so it is validated and the resulting
+// path is re-checked against the news root to rule out traversal.
 func newsBase(scope, gid string) (string, error) {
+	root := newsRoot()
 	if scope == "launcher" {
-		return filepath.Join(contentRoot, "news"), nil
+		return root, nil
 	}
 	if scope == "game" {
-		if gid == "" {
+		if strings.TrimSpace(gid) == "" {
 			return "", fmt.Errorf("gameId required for scope=game")
 		}
-		return filepath.Join(contentRoot, "news", "games", gid), nil
+		if !isSafeGameID(gid) {
+			return "", fmt.Errorf("invalid gameId")
+		}
+		p := filepath.Join(root, "games", gid)
+		if !ensureWithin(root, p) {
+			return "", fmt.Errorf("invalid gameId")
+		}
+		return p, nil
 	}
 	return "", fmt.Errorf("invalid scope: %s", scope)
+}
+
+// newsSlugPath resolves the markdown file of a slug inside base.
+// The slug is attacker-controlled, so it is validated and the joined path is
+// verified to stay inside base.
+func newsSlugPath(base, slug string) (string, error) {
+	if !isSafeNewsSlug(slug) {
+		return "", fmt.Errorf("invalid slug")
+	}
+	p := filepath.Join(base, slug+".md")
+	if !ensureWithin(base, p) {
+		return "", fmt.Errorf("invalid slug")
+	}
+	return p, nil
 }
 
 // handleNewsList returns index.json for scope
@@ -1958,7 +2038,11 @@ func handleNewsGet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	p := filepath.Join(base, slug+".md")
+	p, err := newsSlugPath(base, slug)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	b, err := os.ReadFile(p)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -1994,11 +2078,15 @@ func handleNewsSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	p, err := newsSlugPath(base, slug)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	p := filepath.Join(base, slug+".md")
 	if err := os.WriteFile(p, []byte(md), 0o644); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -2039,7 +2127,11 @@ func handleNewsDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	p := filepath.Join(base, slug+".md")
+	p, err := newsSlugPath(base, slug)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := os.Remove(p); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -2071,6 +2163,10 @@ func handleNewsPublish(w http.ResponseWriter, r *http.Request) {
 	pub := pubStr == "true" || pubStr == "1" || pubStr == "yes"
 	if strings.TrimSpace(slug) == "" {
 		http.Error(w, "missing slug", http.StatusBadRequest)
+		return
+	}
+	if !isSafeNewsSlug(slug) {
+		http.Error(w, "invalid slug", http.StatusBadRequest)
 		return
 	}
 	base, err := newsBase(scope, gid)
@@ -2406,6 +2502,19 @@ func handleSystemFreeSpace(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// adminCORSOrigin returns the CORS origin spec for the admin API.
+//
+// The admin API authenticates with cookies, so a wildcard origin must not be
+// the default. The admin UI is served from this very process (same origin), so
+// cross-origin access is off unless ADMIN_CORS_ORIGIN names explicit origins
+// (comma-separated), e.g. "https://admin.example.com".
+func adminCORSOrigin() string {
+	if v := strings.TrimSpace(os.Getenv("ADMIN_CORS_ORIGIN")); v != "" {
+		return v
+	}
+	return httpx.CORSDisabled
+}
+
 func main() {
 	http.HandleFunc("/admin/health", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
@@ -2543,16 +2652,21 @@ func main() {
 	// Middlewares: RequestID -> CORS -> Auth -> Logging
 	var h http.Handler = http.DefaultServeMux
 	h = httpx.RequestID()(h)
-	h = httpx.CORS("*")(h)
+	h = httpx.CORS(adminCORSOrigin())(h)
 	h = adminAuthMiddleware(h)
 	h = httpx.Logging("ADMIN")(h)
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		// ReadTimeout/WriteTimeout ДОЛЖНЫ оставаться нулевыми (без ограничения).
+		// Админ принимает многогигабайтные ZIP-сборки (nginx: client_max_body_size 30g,
+		// таймауты 6h) и отдаёт NDJSON-прогресс распаковки, идущий минутами.
+		// Любое конечное значение здесь обрывает загрузку и стриминг на середине —
+		// 30s убивали загрузку почти сразу. От slowloris защищает ReadHeaderTimeout.
+		ReadTimeout:  0,
+		WriteTimeout: 0,
+		IdleTimeout:  120 * time.Second,
 	}
 	log.Fatal(srv.ListenAndServe())
 }
@@ -2682,6 +2796,29 @@ func isSafeVersion(s string) bool {
 	}
 	for _, r := range s {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// isSafeNewsSlug reports whether s can be used as a news file name.
+// Slugs are produced by the admin UI from the article title and may contain
+// Cyrillic, so unicode letters and digits are allowed alongside [-._]; anything
+// that could escape the news directory (separators, "..", dot-files) is not.
+func isSafeNewsSlug(s string) bool {
+	if s == "" || len(s) > 128 {
+		return false
+	}
+	if strings.Contains(s, "..") || strings.HasPrefix(s, ".") || strings.HasPrefix(s, "-") {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			continue
+		}
+		if r == '-' || r == '_' || r == '.' {
 			continue
 		}
 		return false

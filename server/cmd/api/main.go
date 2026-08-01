@@ -99,8 +99,11 @@ func main() {
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		// WriteTimeout нулевой: в dev этот процесс сам раздаёт /content/ — файлы игр
+		// на гигабайты, скачивание которых заведомо длиннее любого разумного лимита.
+		// Запросы короткие (GET), поэтому ReadTimeout ограничиваем, а отдачу — нет.
+		WriteTimeout: 0,
+		IdleTimeout:  120 * time.Second,
 	}
 	log.Fatal(srv.ListenAndServe())
 }
