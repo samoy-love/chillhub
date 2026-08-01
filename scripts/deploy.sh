@@ -131,10 +131,25 @@ fi
 # `source`, и подстановка молча не срабатывала: скрипт считал, что учётных данных
 # нет, и уходил в интерактивный запрос пароля — то есть неинтерактивный деплой
 # по SSH обрывался на сервере, где всё уже настроено.
-if [[ -z "$ADMIN_PASS_BCRYPT" && -f "$SECRET_FILE" ]]; then
-  # shellcheck disable=SC1090
-  source "$SECRET_FILE" || true
-  [[ -z "$ADMIN_PASS_BCRYPT" && -n "${ADMIN_PASSWORD_BCRYPT:-}" ]] && ADMIN_PASS_BCRYPT="$ADMIN_PASSWORD_BCRYPT"
+#
+# Файл НЕ подключается через `source`. Bcrypt-хэш выглядит как $2y$12$... —
+# при подстановке bash раскрывает $2 и $12 как позиционные параметры, а под
+# `set -u` это просто обрывает скрипт с «unbound variable». systemd читает тот
+# же файл буквально, поэтому расхождение всплывало только в деплое.
+# Заодно `source` исполнял бы содержимое файла с секретами как код.
+read_secret(){
+  local key="$1" line
+  [[ -f "$SECRET_FILE" ]] || return 0
+  line=$(sudo grep -m1 "^${key}=" "$SECRET_FILE" 2>/dev/null) || return 0
+  line="${line#*=}"
+  # Снимаем окружающие кавычки, если они есть (systemd их тоже снимает).
+  [[ "$line" == \"*\" ]] && line="${line:1:${#line}-2}"
+  [[ "$line" == \'*\' ]] && line="${line:1:${#line}-2}"
+  printf '%s' "$line"
+}
+
+if [[ -z "$ADMIN_PASS_BCRYPT" ]]; then
+  ADMIN_PASS_BCRYPT="$(read_secret ADMIN_PASSWORD_BCRYPT)"
 fi
 
 # If neither plain nor bcrypt provided and no persisted secret, prompt user to set password (no echo)
