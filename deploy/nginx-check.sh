@@ -115,6 +115,19 @@ mkdir -p "$live"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
     -subj "/CN=launcher.samoy.love" \
     -keyout "$live/privkey.pem" -out "$live/fullchain.pem" >/dev/null 2>&1
+# chain.pem нужен для ssl_trusted_certificate (OCSP stapling, см. И4 в
+# launcher.conf). nginx открывает этот файл ещё на этапе `nginx -t`, так что
+# без него проверка падала бы на несуществующем пути, а не на конфиге.
+# На проде chain.pem кладёт certbot; здесь достаточно того же самоподписанного
+# сертификата — проверяется синтаксис и доступность файла, а не доверие.
+#
+# ОЖИДАЕМОЕ ПРЕДУПРЕЖДЕНИЕ, НЕ ОШИБКА:
+#   [warn] "ssl_stapling" ignored, no OCSP responder URL in the certificate
+# У самоподписанного сертификата нет URL OCSP-респондера, поэтому nginx
+# отключает сшивку. У настоящего сертификата Let's Encrypt такой URL есть, и
+# stapling работает. Гнаться за «чистым» выводом здесь нельзя: единственный
+# способ убрать warn — выпилить ssl_stapling из боевого конфига.
+cp "$live/fullchain.pem" "$live/chain.pem"
 mkdir -p /var/www/site /var/www/launcher/content /var/www/launcher/manifests \
          /var/www/launcher/news/assets /var/www/launcher/admin_ui /var/log/nginx
 nginx -v
