@@ -35,6 +35,12 @@
             <span id="fb_unread_badge" class="badge text-bg-secondary ms-2" style="display:none">0</span>
           </a>
         </li>
+        <li class="nav-item">
+          <a class="nav-link" id="tabMaint" href="#">Технические работы
+            <span id="mt_state_badge" class="badge text-bg-secondary ms-2">—</span>
+          </a>
+        </li>
+        <li class="nav-item"><a class="nav-link" id="tabMetrics" href="#">Метрики</a></li>
       </ul>
 
       <section id="secLauncher">
@@ -152,6 +158,241 @@
       </section>
 
       
+
+      <section id="secMaint" class="hidden">
+        <h2>Технические работы</h2>
+        <div class="row g-3">
+          <div class="col-lg-6">
+            <div class="card">
+              <div class="card-header d-flex align-items-center justify-content-between">
+                <span>Текущее состояние</span>
+                <button id="mt_refresh" type="button" class="btn btn-sm btn-outline-secondary">Обновить</button>
+              </div>
+              <div class="card-body">
+                <div id="mt_status">
+                  <div class="text-body-secondary">Загрузка…</div>
+                </div>
+                <div class="small text-body-secondary mt-3">
+                  Файл состояния: <code id="mt_path">—</code>
+                </div>
+              </div>
+            </div>
+            <div class="card mt-3">
+              <div class="card-header">Что увидит пользователь</div>
+              <div class="card-body">
+                <div id="mt_preview"></div>
+                <div class="small text-body-secondary mt-2">
+                  Предпросмотр строится по полю <code>effective</code>: сервер сам гасит режим
+                  вне окна, поэтому запланированное окно до его начала клиенты не увидят.
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-6">
+            <div class="card">
+              <div class="card-header d-flex align-items-center justify-content-between">
+                <span>Настройка режима</span>
+                <span id="mt_dirty" class="badge text-bg-warning" style="display:none">не сохранено</span>
+              </div>
+              <div class="card-body d-flex flex-column gap-3">
+                <div class="form-check form-switch">
+                  <input class="form-check-input" type="checkbox" id="mt_enabled">
+                  <label class="form-check-label" for="mt_enabled">Режим технических работ включён</label>
+                </div>
+                <div>
+                  <label class="form-label mb-1" for="mt_reason">Причина (показывается пользователю)</label>
+                  <textarea id="mt_reason" class="form-control" style="height:90px" placeholder="Например: обновляем серверы раздачи, установка и обновление временно недоступны"></textarea>
+                  <div class="small text-body-secondary mt-1">Осталось байт: <code id="mt_reason_left">500</code> из 500</div>
+                </div>
+                <div class="row g-2">
+                  <div class="col-sm-6">
+                    <label class="form-label mb-1" for="mt_starts">Начало (местное время)</label>
+                    <input id="mt_starts" type="datetime-local" class="form-control form-control-sm">
+                    <div class="small text-body-secondary mt-1">Пусто — «с этого момента»</div>
+                  </div>
+                  <div class="col-sm-6">
+                    <label class="form-label mb-1" for="mt_ends">Окончание (местное время)</label>
+                    <input id="mt_ends" type="datetime-local" class="form-control form-control-sm">
+                    <div class="small text-body-secondary mt-1">Пусто — «пока не выключат»</div>
+                  </div>
+                  <div class="col-12">
+                    <div class="small text-body-secondary">
+                      В UTC уйдёт: <code id="mt_utc_hint">—</code>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <div class="form-label mb-1">Что заблокировать</div>
+                  <div class="d-flex gap-3 flex-wrap">
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" id="mt_block_install">
+                      <label class="form-check-label" for="mt_block_install">Установку</label>
+                    </div>
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" id="mt_block_update">
+                      <label class="form-check-label" for="mt_block_update">Обновление</label>
+                    </div>
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" id="mt_block_launch">
+                      <label class="form-check-label" for="mt_block_launch">Запуск игр</label>
+                    </div>
+                  </div>
+                  <div class="small text-body-secondary mt-1">
+                    Ни одной галочки — информационный баннер без блокировок.
+                  </div>
+                </div>
+                <div class="d-flex gap-2 flex-wrap">
+                  <button id="mt_save" type="button" class="btn btn-sm btn-primary">Сохранить</button>
+                  <button id="mt_reset_form" type="button" class="btn btn-sm btn-outline-secondary">Вернуть сохранённое</button>
+                  <button id="mt_clear" type="button" class="btn btn-sm btn-outline-danger ms-auto">Выключить и удалить состояние</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="secMetrics" class="hidden">
+        <h2>Метрики</h2>
+        <div class="card mb-3">
+          <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <span>Период и фильтр</span>
+            <span id="mx_range_label" class="small text-body-secondary">—</span>
+          </div>
+          <div class="card-body d-flex flex-column gap-2">
+            <div class="d-flex align-items-end gap-2 flex-wrap">
+              <div>
+                <label class="form-label mb-1 small" for="mx_from">С (местное время)</label>
+                <input id="mx_from" type="datetime-local" class="form-control form-control-sm">
+              </div>
+              <div>
+                <label class="form-label mb-1 small" for="mx_to">По (местное время)</label>
+                <input id="mx_to" type="datetime-local" class="form-control form-control-sm">
+              </div>
+              <div>
+                <label class="form-label mb-1 small" for="mx_game">Игра</label>
+                <select id="mx_game" class="form-select form-select-sm" style="width:240px">
+                  <option value="">Все игры</option>
+                </select>
+              </div>
+              <button id="mx_refresh" type="button" class="btn btn-sm btn-primary">Показать</button>
+              <div class="btn-group btn-group-sm" role="group" aria-label="Быстрый период">
+                <button id="mx_last7" type="button" class="btn btn-outline-secondary">7 дней</button>
+                <button id="mx_last30" type="button" class="btn btn-outline-secondary">30 дней</button>
+                <button id="mx_last90" type="button" class="btn btn-outline-secondary">90 дней</button>
+              </div>
+              <button id="mx_clear" type="button" class="btn btn-sm btn-outline-danger ms-auto">Удалить все метрики</button>
+            </div>
+            <div class="small text-body-secondary">
+              Пустые поля — период по умолчанию (последние 30 дней). Даты уходят на сервер в UTC (RFC3339);
+              сутки в разбивке по дням тоже считаются по UTC.
+            </div>
+          </div>
+        </div>
+
+        <div id="mx_empty" class="alert alert-secondary" style="display:none">
+          За выбранный период событий нет. Метрики появляются, когда лаунчер отправляет их на
+          <code>/api/metrics/report</code>; пустая сводка — это не ошибка.
+        </div>
+
+        <div class="card mb-3">
+          <div class="card-header">Сводка</div>
+          <div class="card-body">
+            <div id="mx_totals" class="row g-2"></div>
+          </div>
+        </div>
+
+        <div class="card mb-3">
+          <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <span>Динамика по дням</span>
+            <span id="mx_chart_note" class="small text-body-secondary"></span>
+          </div>
+          <div class="card-body">
+            <div id="mx_chart_host" style="width:100%"></div>
+            <details id="mx_days_details" class="mt-2">
+              <summary class="small text-body-secondary">Те же числа таблицей</summary>
+              <div class="table-responsive mt-2">
+                <table class="table table-sm table-dark table-striped align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th>Дата (UTC)</th>
+                      <th class="text-end">Запуски лаунчера</th>
+                      <th class="text-end">Установки</th>
+                      <th class="text-end">Обновления</th>
+                      <th class="text-end">Запуски игр</th>
+                      <th class="text-end">Ошибки</th>
+                    </tr>
+                  </thead>
+                  <tbody id="mx_days_body"></tbody>
+                </table>
+              </div>
+            </details>
+          </div>
+        </div>
+
+        <div class="row g-3">
+          <div class="col-lg-6">
+            <div class="card">
+              <div class="card-header">По играм</div>
+              <div class="card-body">
+                <div class="table-responsive">
+                  <table class="table table-sm table-dark table-striped align-middle mb-0">
+                    <thead>
+                      <tr>
+                        <th>Игра</th>
+                        <th class="text-end">Установки</th>
+                        <th class="text-end">Обновления</th>
+                        <th class="text-end">Ошибки</th>
+                        <th class="text-end">Скачано</th>
+                      </tr>
+                    </thead>
+                    <tbody id="mx_games_body"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-6">
+            <div class="card">
+              <div class="card-header">Топ ошибок</div>
+              <div class="card-body">
+                <div class="table-responsive">
+                  <table class="table table-sm table-dark table-striped align-middle mb-0">
+                    <thead><tr><th>Код ошибки</th><th class="text-end">Событий</th></tr></thead>
+                    <tbody id="mx_errors_body"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-6">
+            <div class="card">
+              <div class="card-header">Версии приложения</div>
+              <div class="card-body">
+                <div class="table-responsive">
+                  <table class="table table-sm table-dark table-striped align-middle mb-0">
+                    <thead><tr><th>Версия</th><th class="text-end">Событий</th><th class="text-end">Доля</th></tr></thead>
+                    <tbody id="mx_versions_body"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-6">
+            <div class="card">
+              <div class="card-header">Операционные системы</div>
+              <div class="card-body">
+                <div class="table-responsive">
+                  <table class="table table-sm table-dark table-striped align-middle mb-0">
+                    <thead><tr><th>ОС</th><th class="text-end">Событий</th><th class="text-end">Доля</th></tr></thead>
+                    <tbody id="mx_os_body"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section id="secManifests" class="hidden">
         <h2>Игры</h2>
