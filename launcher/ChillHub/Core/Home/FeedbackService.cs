@@ -7,9 +7,11 @@ namespace ChillHub.Core.Home {
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
     using System.Net.Http;
     using System.Text;
     using System.Text.Json;
+    using System.Threading;
     using System.Threading.Tasks;
     using System.Windows.Threading;
 
@@ -35,6 +37,9 @@ namespace ChillHub.Core.Home {
 
         private List<FeedbackDraft> queue = new();
         private DispatcherTimer? retryTimer;
+
+        /// <summary>1, пока идёт разбор очереди: защита от наложения проходов.</summary>
+        private int flushing;
 
         internal FeedbackService(HttpClient http, Func<string> baseApiProvider, Action<string> showToast, Action<string> setStatus) {
             this.http = http;
@@ -149,7 +154,7 @@ namespace ChillHub.Core.Home {
                     res = await this.http.SendAsync(req).ConfigureAwait(false);
                 }
                 catch (Exception exSend) {
-                    Logging.Logger.Error(exSend, "Feedback.Send.HttpError");
+                    Logging.Logger.ErrorNoReport(exSend, "Feedback.Send.HttpError");
                     if (!silent) {
                         this.showToast("Не удалось отправить (сеть/сервер недоступны)");
                     }
@@ -187,17 +192,32 @@ namespace ChillHub.Core.Home {
             }
         }
 
-        /// <summary>Разбирает оффлайн-очередь: до пяти сообщений за проход, с одной короткой повторной попыткой.</summary>
+        /// <summary>
+        /// Разбирает оффлайн-очередь: до пяти сообщений за проход, с одной короткой повторной попыткой.
+        /// Защищён от повторного входа: таймер тикает раз в 10 секунд, а таймаут HTTP —
+        /// 100 секунд, поэтому при недоступном сервере проходы накладывались друг на друга.
+        /// Они отправляли одни и те же сообщения по второму разу и вперемешку двигали
+        /// индексы в очереди при RemoveAt.
+        /// </summary>
         internal async Task FlushNowAsync() {
+            if (Interlocked.CompareExchange(ref this.flushing, 1, 0) != 0) {
+                return; // предыдущий проход ещё не закончился
+            }
+
             try {
                 if (this.queue.Count == 0) {
                     return;
                 }
 
-                int i = 0;
-                int sent = 0;
-                while (i < this.queue.Count && sent < MaxSentPerFlush) {
-                    var d = this.queue[i];
+                // Работаем по снимку, а удаляем по значению: очередь могли пополнить
+                // из формы обратной связи прямо во время отправки.
+                var pending = this.queue.ToList();
+                var delivered = new List<FeedbackDraft>();
+                foreach (var d in pending) {
+                    if (delivered.Count >= MaxSentPerFlush) {
+                        break;
+                    }
+
                     var ok = await this.TrySendAsync(d, silent: true).ConfigureAwait(true);
                     if (!ok) {
                         // короткий бэкофф и одна повторная попытка
@@ -206,24 +226,27 @@ namespace ChillHub.Core.Home {
                     }
 
                     if (ok) {
-                        this.queue.RemoveAt(i);
-                        sent++;
-                    }
-                    else {
-                        i++;
+                        delivered.Add(d);
                     }
                 }
 
-                if (sent > 0) {
+                if (delivered.Count > 0) {
+                    foreach (var d in delivered) {
+                        this.queue.Remove(d);
+                    }
+
                     this.SaveQueue();
-                    this.showToast(sent == 1
+                    this.showToast(delivered.Count == 1
                         ? "Одно отложенное сообщение отправлено"
-                        : $"Отправлены отложенные сообщения: {sent}");
+                        : $"Отправлены отложенные сообщения: {delivered.Count}");
                 }
             }
             catch (Exception ex) {
                 // Фоновая операция: молчим для пользователя, но фиксируем — очередь останется на диске.
                 Logging.Logger.Error(ex, "Feedback.FlushQueue");
+            }
+            finally {
+                Interlocked.Exchange(ref this.flushing, 0);
             }
         }
 

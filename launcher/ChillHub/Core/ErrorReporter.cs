@@ -207,7 +207,9 @@ namespace ChillHub.Core {
                     name = "auto",
                     contact = string.Empty,
                     type = "bug",
-                    comment = $"[AUTO] Context: {context}\n\n" + ex.ToString(),
+                    // Через Redact: в тексте исключения регулярно лежат пути вида
+                    // C:\Users\<имя>\..., а логи в этом же отчёте уже редактируются.
+                    comment = Diagnostics.Redact($"[AUTO] Context: {context}\n\n" + ex.ToString()),
                     attachLogs = includeDiagnostics,
                     logs = logs,
                     system = system,

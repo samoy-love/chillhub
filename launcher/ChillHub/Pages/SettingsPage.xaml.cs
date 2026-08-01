@@ -442,7 +442,17 @@ namespace ChillHub.Pages {
                     }
                 }
 
-                ConfigService.Save(cfg); // также применяет тему
+                // Запись может не удаться (нет прав на %APPDATA%, диск заполнен, файл занят).
+                // Молчать нельзя: пользователь уйдёт со страницы уверенный, что настройки сохранены.
+                if (!ConfigService.TrySave(cfg, out var saveError)) {
+                    MessageBox.Show(
+                        "Не удалось сохранить настройки: " + saveError,
+                        "Ошибка",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                    return;
+                }
+
                 try {
                     // Мгновенно обновим цвет заголовка окна согласно новой теме
                     var win = Window.GetWindow(this) as ChillHub.MainWindow;
