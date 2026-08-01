@@ -495,6 +495,13 @@ namespace ChillHub.Pages {
                 this.SpeedEtaText.Text = string.Empty;
                 Core.Logging.Logger.Info($"GamePage.StartSync cancelled gid={gid} version={version}");
             }
+            catch (ManifestSignatureException ex) {
+                // Манифест подписан неверно: раздачу могли подменить. Файлы игры не тронуты —
+                // говорим об этом прямо, а не общей фразой «попробуйте ещё раз».
+                this.StatusText.Text = ManifestSignature.UserMessage;
+                this.StatusText.ToolTip = "Подробнее: " + ex.Message;
+                Core.Logging.Logger.Error(ex, $"GamePage.StartSyncAsync.ManifestSignature(gid={gid}, version={version})");
+            }
             catch (Exception ex) {
                 var message = ex is IOException
                     ? "Не удалось записать файлы игры. Проверьте свободное место и права доступа."
