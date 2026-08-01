@@ -76,6 +76,55 @@
         </Grid>
       </Border>
 
+      <!-- Integrity section -->
+      <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,14,0,0">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <TextBlock Text="Целостность игры" FontWeight="SemiBold"/>
+          <TextBlock Grid.Row="1" Margin="0,6,0,0" TextWrapping="Wrap"
+                     Foreground="{DynamicResource Brush.TextSecondary}"
+                     Text="Сверяет установленные файлы с последней опубликованной версией. Все файлы читаются заново, поэтому проверка может занять несколько минут."/>
+          <Grid Grid.Row="2" Margin="0,10,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="160"/>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="Игра" Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center"/>
+            <ComboBox Grid.Column="1" Name="IntegrityGameBox" Margin="12,0,12,0" MinHeight="32"
+                      DisplayMemberPath="Title"/>
+            <Button Grid.Column="2" Name="IntegrityCheckBtn" Content="Проверить" Click="IntegrityCheckBtn_Click"
+                    Padding="12,8" MinHeight="36" MinWidth="110"/>
+          </Grid>
+          <Grid Grid.Row="3" Name="IntegrityProgressPanel" Visibility="Collapsed" Margin="0,10,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <ProgressBar Name="IntegrityProgress" Height="8" Minimum="0" Maximum="100" VerticalAlignment="Center"/>
+            <Button Grid.Column="1" Name="IntegrityCancelBtn" Content="Отмена" Click="IntegrityCancelBtn_Click"
+                    Margin="12,0,0,0" Padding="12,6" MinHeight="32" MinWidth="90"/>
+          </Grid>
+          <Grid Grid.Row="4" Margin="0,10,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Name="IntegrityStatusText" TextWrapping="Wrap" VerticalAlignment="Center"
+                       Foreground="{DynamicResource Brush.TextSecondary}"/>
+            <Button Grid.Column="1" Name="IntegrityRepairBtn" Content="Восстановить" Click="IntegrityRepairBtn_Click"
+                    Visibility="Collapsed" Margin="12,0,0,0" Padding="12,8" MinHeight="36" MinWidth="140"
+                    Style="{DynamicResource Style.Button.Primary}"/>
+          </Grid>
+        </Grid>
+      </Border>
+
       <!-- Privacy section -->
       <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,14,0,14">
         <Grid>

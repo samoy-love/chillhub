@@ -79,6 +79,12 @@ namespace ChillHub.Core.Sync {
 
         /// <inheritdoc/>
         public Task<DiffPlan> PlanAsync(Manifest manifest, string localRoot, string contentBaseUrl, CancellationToken ct) {
+            return this.PlanAsync(manifest, localRoot, contentBaseUrl, PlanOptions.Default, ct);
+        }
+
+        /// <inheritdoc/>
+        public Task<DiffPlan> PlanAsync(Manifest manifest, string localRoot, string contentBaseUrl, PlanOptions options, CancellationToken ct) {
+            options ??= PlanOptions.Default;
             var plan = new DiffPlan {
                 GameId = manifest.GameId,
                 Version = manifest.Version,
@@ -110,6 +116,25 @@ namespace ChillHub.Core.Sync {
             // Кеш хешей: при неизменных размере и времени модификации файл не перечитывается
             var hashCache = FileHashCache.Load(manifest.GameId);
 
+            // Счётчики для отчёта о прогрессе: считаем «проверенные» файлы манифеста и их байты
+            var checkedFiles = 0;
+            long checkedBytes = 0;
+            var totalToCheck = manifestFiles.Count;
+            long totalBytesToCheck = 0;
+            if (options.Progress != null) {
+                foreach (var kv in manifestFiles) {
+                    totalBytesToCheck += kv.Value.Size;
+                }
+
+                options.Progress.Report(new SyncProgress {
+                    Stage = "Checking",
+                    FilesDownloaded = 0,
+                    TotalFiles = totalToCheck,
+                    BytesDownloaded = 0,
+                    TotalBytes = totalBytesToCheck,
+                });
+            }
+
             // Определим новые/изменённые: при наличии хеша сравниваем по хешу, иначе по размеру
             foreach (var kv in manifestFiles) {
                 ct.ThrowIfCancellationRequested();
@@ -131,8 +156,13 @@ namespace ChillHub.Core.Sync {
                             }
                             else {
                                 var mtimeTicks = info.LastWriteTimeUtc.Ticks;
-                                if (!hashCache.TryGet(rel, info.Length, mtimeTicks, out var shaHex, out var b3Hex)) {
-                                    ComputeHashes(localPath, out shaHex, out b3Hex);
+                                string shaHex;
+                                string b3Hex;
+
+                                // В режиме проверки целостности кеш не спрашиваем: он подтвердил бы
+                                // повреждённый файл по совпадению размера и времени модификации.
+                                if (options.ForceRehash || !hashCache.TryGet(rel, info.Length, mtimeTicks, out shaHex, out b3Hex)) {
+                                    ComputeHashes(localPath, out shaHex, out b3Hex, ct);
                                     hashCache.Set(rel, info.Length, mtimeTicks, shaHex, b3Hex);
                                 }
 
@@ -157,6 +187,10 @@ namespace ChillHub.Core.Sync {
                             }
                         }
                     }
+                    catch (OperationCanceledException) {
+                        // Отмену не глушим: иначе отменённая проверка «нашла бы» повреждённый файл
+                        throw;
+                    }
                     catch {
                     }
                 }
@@ -176,6 +210,18 @@ namespace ChillHub.Core.Sync {
                     }
                     catch {
                     }
+                }
+
+                if (options.Progress != null) {
+                    checkedFiles++;
+                    checkedBytes += mf.Size;
+                    options.Progress.Report(new SyncProgress {
+                        Stage = "Checking",
+                        FilesDownloaded = checkedFiles,
+                        TotalFiles = totalToCheck,
+                        BytesDownloaded = checkedBytes,
+                        TotalBytes = totalBytesToCheck,
+                    });
                 }
             }
 
@@ -569,13 +615,15 @@ namespace ChillHub.Core.Sync {
         }
 
         // Считает SHA-256 и Blake3 за один проход по файлу.
-        private static void ComputeHashes(string path, out string sha256Hex, out string blake3Hex) {
+        // Отмену проверяем на каждом блоке: у больших файлов один проход — это минуты.
+        private static void ComputeHashes(string path, out string sha256Hex, out string blake3Hex, CancellationToken ct = default) {
             using var f = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, useAsync: false);
             using var sha = SHA256.Create();
             var b3 = Blake3.Hasher.New();
             var buf = new byte[256 * 1024];
             int r;
             while ((r = f.Read(buf, 0, buf.Length)) > 0) {
+                ct.ThrowIfCancellationRequested();
                 sha.TransformBlock(buf, 0, r, null, 0);
                 b3.Update(new ReadOnlySpan<byte>(buf, 0, r));
             }

@@ -13,6 +13,18 @@ namespace ChillHub.Core.Sync {
 
         Task<DiffPlan> PlanAsync(Manifest manifest, string localRoot, string contentBaseUrl, CancellationToken ct);
 
+        /// <summary>
+        /// Строит план различий с дополнительными настройками
+        /// (принудительный пересчёт хешей, отчёт о прогрессе).
+        /// </summary>
+        /// <param name="manifest">Манифест эталонной версии.</param>
+        /// <param name="localRoot">Корень локальной папки игры.</param>
+        /// <param name="contentBaseUrl">База URL для скачивания файлов.</param>
+        /// <param name="options">Настройки построения плана.</param>
+        /// <param name="ct">Токен отмены.</param>
+        /// <returns>План различий.</returns>
+        Task<DiffPlan> PlanAsync(Manifest manifest, string localRoot, string contentBaseUrl, PlanOptions options, CancellationToken ct);
+
         Task ExecuteAsync(DiffPlan plan, IProgress<SyncProgress> progress, CancellationToken ct);
     }
 }
