@@ -185,7 +185,11 @@ function New-LauncherPayload {
     $staging = Join-Path ([IO.Path]::GetTempPath()) ("chillhub-payload-" + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $staging -Force | Out-Null
     try {
-        $srcFull = (Resolve-Path -LiteralPath $SourceDir).Path.TrimEnd('\')
+        # Get-Item, а не Resolve-Path: последний сохраняет 8.3-форму пути
+        # (C:\Users\ALEXEY~1\...), тогда как FullName у Get-ChildItem всегда
+        # длинный. Длины префиксов тогда расходятся, и Substring ниже режет
+        # не там — в ZIP приезжает лишний каталог вроде 'e18e480/ChillHub.exe'.
+        $srcFull = (Get-Item -LiteralPath $SourceDir).FullName.TrimEnd('\')
         $skipped = 0
         $copied = 0
         Get-ChildItem -LiteralPath $srcFull -Recurse -File | ForEach-Object {
