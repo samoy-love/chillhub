@@ -406,6 +406,88 @@ jobs:
             echo "::endgroup::"
             [ "${FAIL_ON_MISMATCH}" = "true" ] && [ "$MISM_TOTAL" -ne 0 ] && { err "[deploy] mismatch found"; exit 1; }
 
+            echo "::group::Launcher manifest preserve-path audit"
+            # A11 — регрессия «бесконечный цикл самообновления».
+            #
+            # Если путь попадает ОДНОВРЕМЕННО в манифест лаунчера и под
+            # preserve-правила апдейтера (config.json, launcher.version), то
+            # апдейтер такой файл не перезаписывает — это пользовательское
+            # состояние, — а лаунчер сверяет его хеш с манифестом. Расхождение
+            # неустранимо, и обновление предлагается снова и снова.
+            #
+            # Проверка ПРЕДУПРЕЖДАЮЩАЯ, а не блокирующая: битые манифесты уже
+            # лежат на проде (как минимум 1.0.2, 1.0.3, 1.1.7), и блокировка
+            # остановила бы вообще все выкатки, включая ту, которая это чинит.
+            # Задача проверки — назвать конкретные файлы, которые надо
+            # перевыпустить. Сборочный предохранитель, который НЕ пускает новые
+            # такие манифесты в репозиторий, живёт отдельно, в CI
+            # (updater/tests/ManifestPreserveCheck).
+            LM_DIR="$LAUNCHER_DIR/manifests/launcher"
+            PRESERVE_OUT="$DEPLOY_DIR/preserve_audit.txt"
+            : > "$PRESERVE_OUT"
+            PRESERVE_BAD=0
+            PRESERVE_STATUS="skipped"
+            if [ ! -d "$LM_DIR" ]; then
+              warn "[preserve] $LM_DIR не найден — пропускаю проверку"
+            elif command -v python3 >/dev/null 2>&1; then
+              PRESERVE_STATUS="python3"
+              # ВАЖНО: строки python-скрипта ниже намеренно начинаются с той же
+              # базовой отступной позиции, что и остальной скрипт (12 пробелов).
+              # YAML срезает ровно этот общий отступ, поэтому python получает
+              # код с нулевой колонки. Если сдвинуть их к краю файла — сломается
+              # блочный скаляр YAML; если добавить лишние пробелы — упадёт сам
+              # python с IndentationError.
+              python3 -c '
+            import glob, json, os, sys
+            preserve = {"config.json", "launcher.version"}
+            root = sys.argv[1]
+            for p in sorted(glob.glob(os.path.join(root, "**", "*.json"), recursive=True)):
+                try:
+                    with open(p, encoding="utf-8") as fh:
+                        doc = json.load(fh)
+                except Exception as exc:
+                    print("PARSE-ERROR\t%s\t%s" % (p, exc))
+                    continue
+                if not isinstance(doc, dict):
+                    continue
+                files = doc.get("files") or []
+                paths = set()
+                for item in files:
+                    if isinstance(item, dict):
+                        raw = str(item.get("path", "")).replace("\\", "/")
+                        while raw.startswith("./"):
+                            raw = raw[2:]
+                        paths.add(raw)
+                hits = sorted(paths & preserve)
+                if hits:
+                    print("VIOLATION\t%s\t%s" % (p, ", ".join(hits)))
+            ' "$LM_DIR" > "$PRESERVE_OUT" 2>&1 || { warn "[preserve] python3-проверка завершилась с ошибкой"; PRESERVE_STATUS="python3-error"; }
+            else
+              # Запасной вариант без python3: манифесты — это JSON, поэтому
+              # ищем ровно значение ключа "path" (пробелы вокруг ':'
+              # необязательны, минифицированный JSON тоже ловится).
+              PRESERVE_STATUS="grep"
+              grep -rlE '"path"[[:space:]]*:[[:space:]]*"(\./)?(config\.json|launcher\.version)"' "$LM_DIR" --include='*.json' 2>/dev/null \
+                | sed -e 's#^#VIOLATION\t#' -e 's#$#\tconfig.json/launcher.version#' > "$PRESERVE_OUT" || true
+            fi
+            PRESERVE_BAD=$(grep -c '^VIOLATION' "$PRESERVE_OUT" 2>/dev/null || true)
+            PRESERVE_BAD=${PRESERVE_BAD:-0}
+            if [ "$PRESERVE_BAD" -eq 0 ]; then
+              ok "[preserve] чисто: ни один манифест лаунчера в $LM_DIR не содержит config.json / launcher.version (детектор: $PRESERVE_STATUS)"
+            else
+              warn "[preserve] ВНИМАНИЕ: $PRESERVE_BAD манифест(ов) лаунчера содержат preserve-пути и вызывают бесконечный цикл самообновления."
+              warn "[preserve] Эти манифесты надо ПЕРЕВЫПУСТИТЬ без указанных путей:"
+              while IFS=$'\t' read -r kind file hits; do
+                [ "$kind" = "VIOLATION" ] || continue
+                warn "[preserve]   $file  ->  $hits"
+              done < "$PRESERVE_OUT"
+              warn "[preserve] Деплой НЕ остановлен: проверка предупреждающая (см. комментарий в deploy.yml)."
+            fi
+            grep '^PARSE-ERROR' "$PRESERVE_OUT" 2>/dev/null | while IFS=$'\t' read -r _ file msg; do
+              warn "[preserve] не удалось разобрать JSON: $file ($msg)"
+            done
+            echo "::endgroup::"
+
             FAIL=0
             http_code() { curl -ks -o /dev/null -w "%{http_code}" "$1"; }
             must_200() {
@@ -533,6 +615,7 @@ jobs:
               echo "<b>Site</b><div>${SITE_BASE}</div>"
               echo "<b>Systemd</b><div>api: $API_STATE; admin: $ADM_STATE</div>"
               echo "<b>Manifests</b><div>total mismatches: $MISM_TOTAL</div>"
+              echo "<b>Preserve audit</b><div class=\"$( [ \"${PRESERVE_BAD:-0}\" -eq 0 ] && echo ok || echo warn )\">launcher manifests with preserve paths: ${PRESERVE_BAD:-0}</div>"
               echo "<b>Nginx redirect</b><div>$( [ \"${REDIR_OK:-1}\" -eq 1 ] && echo OK || echo MISSING )</div>"
               echo "</div>"
               echo "<h2>Manifest summary</h2>"
@@ -544,6 +627,17 @@ jobs:
               echo "</tbody></table>"
               echo "<h2>Manifest FAIL/MISS</h2><table><thead><tr><th>Section</th><th>Path</th><th>Status</th><th>Expected</th><th>Got</th></tr></thead><tbody>"; cat "$REPORT_ROWS_MAN"; echo "</tbody></table>"
               echo "<h2>HTTP checks</h2><table><thead><tr><th>URL</th><th>Name</th><th>Code</th><th>Time</th><th>Status</th></tr></thead><tbody>"; cat "$REPORT_ROWS_HTTP"; echo "</tbody></table>"
+              echo "<h2>Launcher manifests vs preserve list</h2>"
+              if [ "${PRESERVE_BAD:-0}" -eq 0 ]; then
+                echo "<p class=\"ok\">Чисто: ни один манифест лаунчера не содержит <code>config.json</code> или <code>launcher.version</code>.</p>"
+              else
+                echo "<p class=\"warn\">Эти манифесты содержат preserve-пути и вызывают бесконечный цикл самообновления. Их надо перевыпустить (проверка предупреждающая, деплой не блокируется):</p>"
+                echo "<table><thead><tr><th>Манифест</th><th>Пути</th></tr></thead><tbody>"
+                grep '^VIOLATION' "$PRESERVE_OUT" 2>/dev/null | while IFS=$'\t' read -r _ file hits; do
+                  printf '<tr><td><code>%s</code></td><td><code>%s</code></td></tr>\n' "$file" "$hits"
+                done
+                echo "</tbody></table>"
+              fi
               echo "<h2>What to do</h2><ul><li>Manifest FAIL/MISS: повторно синхронизируйте соответствующую секцию и проверьте исходные хеши.</li><li>Service not active: проверьте journalctl, исправьте конфиг/секреты и перезапустите сервисы.</li><li>Nginx redirect missing: добавьте ‘error_page 401 =302 /admin/ui/login.html’, затем nginx -t && reload.</li><li>HTTP FAIL: откройте URL, проверьте роутинг/права/конфиги, логи nginx и сервисов.</li></ul>"
               echo "</body></html>"
             } > "$REPORT_HTML"; ln -sf "$REPORT_HTML" "$REPORT_DIR/report-latest.html"
