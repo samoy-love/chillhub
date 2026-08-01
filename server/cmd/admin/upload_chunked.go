@@ -507,13 +507,27 @@ func handleUploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "{\"type\":\"start\",\"kind\":%q,\"gameId\":%q,\"version\":%q}\n", m.Kind, m.GameID, m.Version)
 	fl.Flush()
 	zipPath := uploadZipPath(id)
-	// files root
-	filesRoot := filepath.Join(contentRoot, "content", m.GameID, m.Version, "files")
-	if err := os.MkdirAll(filesRoot, 0o755); err != nil {
+	// The gameId/version pair was validated at upload init, but re-check before
+	// it is turned into a filesystem path again.
+	if !isSafeGameID(m.GameID) || !isSafeVersion(m.Version) {
+		http.Error(w, "invalid gameId or version", http.StatusBadRequest)
+		return
+	}
+	// Extract into a staging dir on the same volume and publish with a single
+	// rename, so an interrupted run never leaves a partial version in place.
+	finalVerDir := filepath.Join(contentRoot, "content", m.GameID, m.Version)
+	stageDir, filesRoot, err := stageVersionDir(m.GameID, m.Version)
+	if err != nil {
 		fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", err.Error())
 		fl.Flush()
 		return
 	}
+	promoted := false
+	defer func() {
+		if !promoted {
+			_ = os.RemoveAll(stageDir)
+		}
+	}()
 	// estimate and free-space precheck (optional)
 	if needBytes, err := estimateZipUncompressedSize(zipPath); err == nil {
 		if freeBytes, ferr := getFreeSpaceBytes(filesRoot); ferr == nil && freeBytes > 0 && needBytes > freeBytes {
@@ -642,6 +656,13 @@ func handleUploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(emptyDirs)
 	mOut := manifest{Version: m.Version, BuildID: newBuildID(), GameID: m.GameID, CreatedAt: time.Now().UTC().Format(time.RFC3339), Files: files, EmptyDirs: emptyDirs, Signature: "dev-mock-signature"}
+	// Everything is extracted and hashed: publish the build in one rename.
+	if err := promoteVersionDir(stageDir, finalVerDir); err != nil {
+		fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", "activate failed: "+err.Error())
+		fl.Flush()
+		return
+	}
+	promoted = true
 	outDir := filepath.Join(contentRoot, "manifests", m.GameID)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", err.Error())

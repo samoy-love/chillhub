@@ -86,20 +86,59 @@ func RequestID() func(http.Handler) http.Handler {
 	}
 }
 
-// CORS adds permissive CORS headers. Pass origin "*" to allow any origin.
+// CORSDisabled is the origin spec that turns cross-origin access off entirely.
+// Preflight requests are still answered (so they never reach the handlers),
+// but no Access-Control-* headers are emitted, which keeps the API same-origin.
+const CORSDisabled = "none"
+
+// CORS adds CORS headers according to the given origin spec, which may be:
+//   - "*"                 allow any origin (cookies are not usable cross-site)
+//   - "none" / "off"      emit no CORS headers at all (same-origin only)
+//   - "a.example,b.example" comma-separated allow-list of exact origins; a
+//     matching request Origin is echoed back and credentials are allowed
+//
+// An empty spec keeps the historical "*" behaviour.
 func CORS(origin string) func(http.Handler) http.Handler {
-	allowOrigin := strings.TrimSpace(origin)
-	if allowOrigin == "" {
-		allowOrigin = "*"
+	spec := strings.TrimSpace(origin)
+	if spec == "" {
+		spec = "*"
+	}
+	disabled := strings.EqualFold(spec, CORSDisabled) || strings.EqualFold(spec, "off")
+	wildcard := spec == "*"
+	var allowList []string
+	if !disabled && !wildcard {
+		for _, o := range strings.Split(spec, ",") {
+			if o = strings.TrimSpace(o); o != "" {
+				allowList = append(allowList, o)
+			}
+		}
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Basic permissive headers; can be made stricter via env later
-			w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
-			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "*, Authorization, Content-Type, X-Requested-With, X-Request-Id")
-			w.Header().Set("Access-Control-Expose-Headers", "X-Request-Id, Content-Length")
+			switch {
+			case disabled:
+				// no CORS headers; still short-circuit preflight below
+			case wildcard:
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+				w.Header().Set("Vary", "Origin")
+			default:
+				reqOrigin := strings.TrimSpace(r.Header.Get("Origin"))
+				w.Header().Set("Vary", "Origin")
+				for _, o := range allowList {
+					if strings.EqualFold(o, reqOrigin) {
+						w.Header().Set("Access-Control-Allow-Origin", reqOrigin)
+						// exact origin echo makes cookie-authenticated calls possible
+						w.Header().Set("Access-Control-Allow-Credentials", "true")
+						break
+					}
+				}
+			}
+			if !disabled {
+				w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "*, Authorization, Content-Type, X-Requested-With, X-Request-Id")
+				w.Header().Set("Access-Control-Expose-Headers", "X-Request-Id, Content-Length")
+			}
+			// Preflight is answered here so that OPTIONS never reaches a mutating handler.
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
 				return
