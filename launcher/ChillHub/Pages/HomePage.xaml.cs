@@ -679,6 +679,12 @@ namespace ChillHub.Pages {
 
                 // Отложим Refresh до завершения всех проверок
             }
+            catch (ManifestSignatureException ex) {
+                // Фоновая проверка статуса: молча статус не меняем, но в логе фиксируем именно
+                // проблему подписи, а не «какую-то ошибку сети». Пользователь увидит явный текст,
+                // когда нажмёт «Установить»/«Обновить» — см. StartUpdateAsync.
+                Core.Logging.Logger.Error(ex, $"VerifyGameStatusAsync({game?.GameId}): манифест не прошёл проверку подписи");
+            }
             catch (Exception ex) {
                 // В случае ошибки проверки — не меняем текущий статус, только логируем
                 Core.Logging.Logger.Error(ex, $"VerifyGameStatusAsync({game?.GameId})");
@@ -1451,6 +1457,12 @@ namespace ChillHub.Pages {
                 this.SpeedEtaText.Text = string.Empty;
                 this.UpdateProgress.IsIndeterminate = false;
                 this.UpdateProgress.Value = 0;
+            }
+            catch (ManifestSignatureException ex) {
+                // Подпись манифеста не сошлась — это не сетевой сбой, а признак подмены раздачи.
+                // Ни одного файла игры мы ещё не тронули, и не тронем: показываем отдельный текст.
+                this.hasUpdateError = true;
+                this.ShowUserError(ManifestSignature.UserMessage, ex, "HomePage.StartUpdateAsync.ManifestSignature");
             }
             catch (Exception ex) {
                 this.hasUpdateError = true;
