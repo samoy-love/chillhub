@@ -1015,21 +1015,77 @@
   // Screenshot: lightbox on click for the single launcher image
   (function setupLightbox(){
     const lb = document.createElement('div'); lb.className = 'lightbox';
-    const lbImg = document.createElement('img'); lbImg.className = 'lightbox__img'; lbImg.alt = '';
-    const btn = document.createElement('button'); btn.className = 'lightbox__close'; btn.setAttribute('aria-label','Закрыть'); btn.innerHTML = '✕';
+    // Это модальное окно, а не просто div: без role/aria-modal скринридер
+    // продолжает читать страницу под ним и не сообщает, что открыт диалог.
+    lb.setAttribute('role', 'dialog');
+    lb.setAttribute('aria-modal', 'true');
+    lb.setAttribute('aria-label', 'Скриншот лаунчера');
+    lb.setAttribute('aria-hidden', 'true');
+    const lbImg = document.createElement('img'); lbImg.className = 'lightbox__img'; lbImg.alt = 'Скриншот лаунчера';
+    const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'lightbox__close'; btn.setAttribute('aria-label','Закрыть'); btn.innerHTML = '✕';
     lb.appendChild(lbImg); lb.appendChild(btn);
     document.body.appendChild(lb);
-    function open(src){ lbImg.src = src; lb.classList.add('show'); document.body.classList.add('modal-open'); }
-    function close(){ lb.classList.remove('show'); document.body.classList.remove('modal-open'); lbImg.src=''; }
+
+    // Куда вернуть фокус после закрытия. Без этого фокус после Esc оказывался
+    // в начале документа, и пользователь клавиатуры терял место на странице.
+    let lastFocused = null;
+    const FOCUSABLE = 'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+    function open(src){
+      lastFocused = document.activeElement;
+      lbImg.src = src;
+      lb.classList.add('show');
+      lb.removeAttribute('aria-hidden');
+      document.body.classList.add('modal-open');
+      btn.focus();
+    }
+    function close(){
+      lb.classList.remove('show');
+      document.body.classList.remove('modal-open');
+      lbImg.src = '';
+      // aria-hidden ставим только после того, как фокус ушёл наружу:
+      // фокус внутри скрытого от AT поддерева — это ошибка доступности.
+      if(lastFocused && typeof lastFocused.focus === 'function') lastFocused.focus();
+      lastFocused = null;
+      lb.setAttribute('aria-hidden', 'true');
+    }
+    const isOpen = ()=> lb.classList.contains('show');
+
     lb.addEventListener('click', (e)=>{ if(e.target === lb) close(); });
     btn.addEventListener('click', close);
-    window.addEventListener('keydown', (e)=>{ if(e.key === 'Escape' && lb.classList.contains('show')) close(); });
+    window.addEventListener('keydown', (e)=>{
+      if(!isOpen()) return;
+      if(e.key === 'Escape'){ close(); return; }
+      if(e.key !== 'Tab') return;
+      // Ловушка фокуса: Tab не должен уводить в страницу под диалогом.
+      const items = Array.from(lb.querySelectorAll(FOCUSABLE));
+      if(items.length === 0){ e.preventDefault(); return; }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if(e.shiftKey && (document.activeElement === first || !lb.contains(document.activeElement))){
+        e.preventDefault(); last.focus();
+      } else if(!e.shiftKey && (document.activeElement === last || !lb.contains(document.activeElement))){
+        e.preventDefault(); first.focus();
+      }
+    });
 
     // Bind for the single screenshot window
     const single = document.querySelector('.screenshot-win .win-body img');
     const triggerBtn = document.querySelector('.screenshot-win .win-body');
     if(single && triggerBtn){
-      triggerBtn.addEventListener('click', ()=> open(single.currentSrc || single.src));
+      // .win-body — обычный div: без роли и tabindex открыть лайтбокс с
+      // клавиатуры было нельзя вовсе.
+      if(!triggerBtn.hasAttribute('role')) triggerBtn.setAttribute('role', 'button');
+      if(!triggerBtn.hasAttribute('tabindex')) triggerBtn.setAttribute('tabindex', '0');
+      if(!triggerBtn.hasAttribute('aria-label')) triggerBtn.setAttribute('aria-label', 'Открыть скриншот лаунчера');
+      const openSingle = ()=> open(single.currentSrc || single.src);
+      triggerBtn.addEventListener('click', openSingle);
+      triggerBtn.addEventListener('keydown', (e)=>{
+        if(e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar'){
+          e.preventDefault();
+          openSingle();
+        }
+      });
     }
   })();
 
