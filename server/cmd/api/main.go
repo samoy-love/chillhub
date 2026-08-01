@@ -112,14 +112,21 @@ func main() {
 	r := mux.NewRouter()
 	r.Use(httpx.RequestID())
 	r.Use(httpx.CORS("*"))
-	r.Use(limiter.Middleware)
 	r.Use(httpx.Logging("PUBLIC"))
-	r.HandleFunc("/api/games", handleGames).Methods("GET")
-	r.HandleFunc("/api/games/{gameId}", handleGame).Methods("GET")
-	r.HandleFunc("/api/games/{gameId}/versions/latest", handleLatest).Methods("GET")
-	r.HandleFunc("/api/games/{gameId}/builds", handleBuilds).Methods("GET")
-	r.HandleFunc("/news/index.json", handleNewsIndex).Methods("GET")
-	r.HandleFunc("/news/games/{gameId}/index.json", handleGameNewsIndex).Methods("GET")
+
+	// The limiter is attached per JSON endpoint, NOT router-wide. In dev this
+	// process also serves /content/ and /manifests/, and installing a game is
+	// thousands of file requests fanned out over up to 16 download threads —
+	// a router-wide budget would trip mid-install and fail the download. In
+	// production nginx serves those paths directly, so limiting them here buys
+	// nothing anyway. What we do want capped is the cheap-to-request,
+	// expensive-to-serve JSON that a scraper or a retry storm would hammer.
+	r.HandleFunc("/api/games", limiter.Wrap(handleGames)).Methods("GET")
+	r.HandleFunc("/api/games/{gameId}", limiter.Wrap(handleGame)).Methods("GET")
+	r.HandleFunc("/api/games/{gameId}/versions/latest", limiter.Wrap(handleLatest)).Methods("GET")
+	r.HandleFunc("/api/games/{gameId}/builds", limiter.Wrap(handleBuilds)).Methods("GET")
+	r.HandleFunc("/news/index.json", limiter.Wrap(handleNewsIndex)).Methods("GET")
+	r.HandleFunc("/news/games/{gameId}/index.json", limiter.Wrap(handleGameNewsIndex)).Methods("GET")
 
 	// Serve manifests, content and news statically for local dev (no indirection)
 	r.PathPrefix("/manifests/").Handler(httpx.NoStore(http.StripPrefix("/manifests/", http.FileServer(http.Dir(filepath.Join(contentRoot, "manifests"))))))
