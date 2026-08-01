@@ -1,0 +1,51 @@
+[Unit]
+# И3: резервное копирование серверного контента (/var/www/launcher/{content,
+# manifests,news}). До появления этого юнита резервировался только конфиг
+# nginx, а весь опубликованный контент существовал ровно в одном экземпляре.
+Description=ChillHub content backup (rsync hardlink snapshot)
+Documentation=file:/usr/local/sbin/chillhub-backup-content.sh
+# Смысла запускаться без файловой системы нет; сеть не нужна — копия локальная.
+After=local-fs.target
+
+[Service]
+Type=oneshot
+# root, а не www-data: скрипт читает дерево, принадлежащее www-data, и пишет
+# в /var/backups, куда www-data писать не должен (иначе скомпрометированная
+# админка сможет затереть и сами бэкапы).
+User=root
+Group=root
+ExecStart=/usr/local/sbin/chillhub-backup-content.sh
+# Бэкап не должен мешать раздаче: он читает те же диски, что и nginx с
+# сервисами, а на хосте живут ещё три сайта.
+Nice=10
+IOSchedulingClass=idle
+# Снимок больших деревьев может идти долго, но зависший прогон должен
+# завершиться сам, а не висеть до следующего срабатывания таймера.
+TimeoutStartSec=6h
+
+# --- Изоляция ---
+# Юниту нужно читать контент и писать ровно в один каталог. Всё остальное —
+# только для чтения.
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ReadWritePaths=/var/backups/chillhub
+ReadOnlyPaths=/var/www/launcher
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

@@ -20,6 +20,15 @@ name: Lint
 #   Go toolchain             taken from server/go.mod (single source of truth)
 # ---------------------------------------------------------------------------
 
+# И16: минимальные права для GITHUB_TOKEN.
+#
+# Блока permissions не было вовсе, поэтому действовали настройки репозитория —
+# по умолчанию это read/write на contents, а значит токен, доступный каждому
+# шагу (включая `npm i -g` и golangci-lint-action), мог писать в репозиторий.
+# Линтеру нужно ровно одно: прочитать код. В deploy.yml такой блок уже есть.
+permissions:
+  contents: read
+
 on:
   push:
     branches: [ main ]
@@ -30,7 +39,7 @@ jobs:
     name: HTMLHint (web)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -51,7 +60,7 @@ jobs:
     name: Stylelint (web)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -73,7 +82,7 @@ jobs:
     name: ESLint (web)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -121,7 +130,7 @@ jobs:
     name: nginx config (real nginx -t)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # Прогоняем НАСТОЯЩИЙ nginx -t в контейнере. Парсер конфигов принимает то,
       # что nginx отвергает, и наоборот: директивы из отсутствующих модулей,
       # `http2 on;` на nginx < 1.25, особенности регулярок.
@@ -138,7 +147,7 @@ jobs:
     name: C# (launcher)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
@@ -199,7 +208,7 @@ jobs:
     name: Installer (NSIS)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
@@ -210,6 +219,19 @@ jobs:
             **/packages.lock.json
       - name: Ensure NSIS is available
         shell: pwsh
+        env:
+          # И31: версия NSIS закреплена явно.
+          #
+          # Было `choco install nsis` без версии — то есть «что окажется
+          # свежим в момент запуска». Установщик собирается компилятором,
+          # который может смениться между двумя прогонами одного и того же
+          # коммита; это ровно та невоспроизводимость, ради борьбы с которой
+          # в шапке этого файла закреплены все остальные линтеры.
+          #
+          # Если Chocolatey отвергнет эту версию, шаг упадёт с внятной
+          # ошибкой — это нормальное, ревьюируемое однострочное обновление.
+          # Посмотреть доступные версии: choco list nsis --all-versions
+          NSIS_VERSION: '3.11'
         # The windows-latest image normally ships NSIS, but do not rely on it:
         # install via Chocolatey only when makensis is missing.
         run: |
@@ -219,16 +241,31 @@ jobs:
             Write-Host "makensis found in the default install directory"
             Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files (x86)\NSIS'
           } else {
-            Write-Host "makensis not found, installing NSIS via Chocolatey"
-            choco install nsis --no-progress -y
+            Write-Host "makensis not found, installing NSIS $env:NSIS_VERSION via Chocolatey"
+            choco install nsis --version=$env:NSIS_VERSION --no-progress -y
+            if ($LASTEXITCODE -ne 0) {
+              throw "choco install nsis --version=$env:NSIS_VERSION failed. Если версия больше не публикуется, обновите NSIS_VERSION в этом шаге (choco list nsis --all-versions)."
+            }
             Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files (x86)\NSIS'
           }
+      - name: Report NSIS version
+        shell: pwsh
+        # Какой именно компилятор собрал артефакт — это должно быть видно в
+        # логе, а не выясняться постфактум.
+        run: makensis /VERSION; Write-Host ""
       - name: Build installer
         shell: pwsh
         # No secrets required: scripts/installer.nsi does not sign the output and
         # pulls the optional .NET/WebView2 redistributables with `File /nonfatal`,
         # so a runner without scripts/Redist/ still produces a working setup.exe.
-        run: ./scripts/build-installer.ps1 -Configuration Release
+        #
+        # -AppVersion обязателен (Б8): installer.nsi больше не имеет молчаливого
+        # дефолта версии. Здесь ЗАВЕДОМО нерелизное значение 0.0.0-ci — этот
+        # артефакт собирается только чтобы поймать поломку .nsi/сборки, он не
+        # подписывается и не публикуется. Если такой билд всё же кто-то поставит,
+        # версия 0.0.0-ci не совпадёт ни с одним манифестом и будет видна сразу,
+        # вместо того чтобы притвориться настоящим релизом.
+        run: ./scripts/build-installer.ps1 -Configuration Release -AppVersion 0.0.0-ci
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:

@@ -8,9 +8,14 @@
 # - (New) Manifest-based integrity verification (site/admin_ui/bin/systemd)
 #
 # Usage:
+#   # Секреты — через окружение (И14): аргументы командной строки видны в `ps`
+#   # любому пользователю хоста, а на этом хосте живут ещё три проекта.
+#   CHILLHUB_JWT_SECRET='...' \
+#   CHILLHUB_ADMIN_PASSWORD_BCRYPT='$2y$12$...' \
 #   bash ./scripts/deploy.sh \
 #     [--branch <name>] [--no-build] [--repo-dir <path>] \
-#     [--jwt-secret <val>] [--admin-user <val>] \
+#     [--admin-user <val>] \
+#     [--jwt-secret <val>] \
 #     [--admin-pass-bcrypt <val>] [--admin-pass <val>] \
 #     [--cookie-domain <val>] [--cookie-secure <true|false>] \
 #     [--downloads-dir <path>] \
@@ -54,6 +59,36 @@ ARCH="auto"   # auto|amd64|arm64
 need_cmd(){ command -v "$1" >/dev/null 2>&1 || { err "Missing required command: $1"; exit 1; }; }
 for c in git rsync sudo nginx systemctl curl sha256sum; do need_cmd "$c"; done
 
+# И14: СЕКРЕТЫ БЕРУТСЯ ИЗ ОКРУЖЕНИЯ, А НЕ ИЗ АРГУМЕНТОВ.
+#
+# Аргументы командной строки видны в /proc/<pid>/cmdline и, следовательно, в
+# выводе `ps` ЛЮБОМУ пользователю системы — на хосте, где живут ещё три
+# проекта. Утекали при этом самые чувствительные значения: JWT_SECRET (им
+# подписываются админские сессии) и пароль администратора открытым текстом.
+# Секрет виден в ps всё время работы деплоя, то есть минуты.
+#
+# Окружение процесса (/proc/<pid>/environ) читает только владелец процесса и
+# root, поэтому переменные окружения здесь — не идеал, но на порядок лучше.
+#
+# Флаги --jwt-secret / --admin-pass / --admin-pass-bcrypt оставлены рабочими
+# ради совместимости, но теперь предупреждают о том, что значение утекает.
+JWT_SECRET="${CHILLHUB_JWT_SECRET:-}"
+ADMIN_PASS_BCRYPT="${CHILLHUB_ADMIN_PASSWORD_BCRYPT:-}"
+ADMIN_PASS="${CHILLHUB_ADMIN_PASSWORD:-}"
+# if/fi, а не `[[ ... ]] && ...`: под `set -e` ложное условие в конце такой
+# строки само по себе обрывает скрипт.
+if [[ -n "$JWT_SECRET" ]];        then ok "JWT_SECRET получен из окружения (CHILLHUB_JWT_SECRET)"; fi
+if [[ -n "$ADMIN_PASS_BCRYPT" ]]; then ok "ADMIN_PASSWORD_BCRYPT получен из окружения (CHILLHUB_ADMIN_PASSWORD_BCRYPT)"; fi
+if [[ -n "$ADMIN_PASS" ]];        then ok "ADMIN_PASSWORD получен из окружения (CHILLHUB_ADMIN_PASSWORD)"; fi
+# Дальше по скрипту значения не нужны в окружении: чтобы они не наследовались
+# каждым дочерним процессом (включая go build и rsync), убираем их отсюда.
+unset CHILLHUB_JWT_SECRET CHILLHUB_ADMIN_PASSWORD_BCRYPT CHILLHUB_ADMIN_PASSWORD
+
+warn_secret_on_cmdline(){
+  warn "Флаг $1 передаёт секрет аргументом командной строки — он виден в \`ps\` любому пользователю хоста."
+  warn "Используйте переменную окружения $2 (см. комментарий И14 в этом скрипте)."
+}
+
 # Parse args
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -64,12 +99,15 @@ while [[ $# -gt 0 ]]; do
     --repo-dir)
       EXPLICIT_REPO_DIR="${2:-}"; shift 2;;
     --jwt-secret)
+      warn_secret_on_cmdline "--jwt-secret" "CHILLHUB_JWT_SECRET"
       JWT_SECRET="${2:-}"; shift 2;;
     --admin-user)
       ADMIN_USER="${2:-}"; shift 2;;
     --admin-pass-bcrypt)
+      warn_secret_on_cmdline "--admin-pass-bcrypt" "CHILLHUB_ADMIN_PASSWORD_BCRYPT"
       ADMIN_PASS_BCRYPT="${2:-}"; shift 2;;
     --admin-pass)
+      warn_secret_on_cmdline "--admin-pass" "CHILLHUB_ADMIN_PASSWORD"
       ADMIN_PASS="${2:-}"; shift 2;;
     --cookie-domain)
       COOKIE_DOMAIN="${2:-}"; shift 2;;
@@ -118,10 +156,23 @@ SERVICES=(chillhub-api.service chillhub-admin.service)
 SECRET_DIR="/etc/chillhub"
 SECRET_FILE="$SECRET_DIR/admin.env"
 
-# If downloads dir not provided, default to sibling of REPO_DIR
+# If downloads dir not provided, default to sibling of REPO_DIR.
+#
+# Здесь было: PARENT_DIR="$(dirname \"$REPO_DIR\")".
+# Внутри $( ) НЕ нужно экранировать кавычки — обратный слэш не съедается, и
+# dirname получал аргумент вида "/home/user/Launcher-Project" ВМЕСТЕ с кавычками.
+# Результат — путь с ведущей кавычкой, DOWNLOADS_DIR вида '"/home/user/downloads',
+# и проверка [[ -d "$DOWNLOADS_DIR" ]] ниже была ложной ВСЕГДА.
+#
+# Последствие тянулось молча: внешний каталог downloads/ не синхронизировался
+# ни разу, установщик на лендинге не обновлялся, а в лог печаталось бодрое
+# "not found (skip)" — то есть отказ выглядел как штатная ветка.
 if [[ -z "$DOWNLOADS_DIR" ]]; then
-  PARENT_DIR="$(dirname \"$REPO_DIR\")"
+  PARENT_DIR="$(dirname "$REPO_DIR")"
   DOWNLOADS_DIR="$PARENT_DIR/downloads"
+  DOWNLOADS_DIR_IS_DEFAULT=1
+else
+  DOWNLOADS_DIR_IS_DEFAULT=0
 fi
 
 # Load persisted bcrypt if present.
@@ -146,6 +197,22 @@ read_secret(){
   [[ "$line" == \"*\" ]] && line="${line:1:${#line}-2}"
   [[ "$line" == \'*\' ]] && line="${line:1:${#line}-2}"
   printf '%s' "$line"
+}
+
+# И15: обновляет ОДНУ переменную в $SECRET_FILE, не трогая остальные.
+#
+# Прежний код писал файл целиком через `tee`, то есть каждая запись затирала
+# соседние ключи: сохранение bcrypt-хеша уносило с собой JWT_SECRET, и наоборот.
+write_secret(){
+  local key="$1" val="$2" tmp
+  sudo mkdir -p "$SECRET_DIR"
+  tmp=$(mktemp)             # mktemp создаёт файл с правами 0600
+  if sudo test -f "$SECRET_FILE"; then
+    sudo grep -v "^${key}=" "$SECRET_FILE" > "$tmp" 2>/dev/null || true
+  fi
+  printf '%s=%s\n' "$key" "$val" >> "$tmp"
+  sudo install -m 0600 -o root -g root "$tmp" "$SECRET_FILE"
+  rm -f "$tmp"
 }
 
 if [[ -z "$ADMIN_PASS_BCRYPT" ]]; then
@@ -184,13 +251,10 @@ EOF
       err "Failed to derive bcrypt hash."
       exit 1
     fi
-    # Persist to /etc/chillhub/admin.env
-    sudo mkdir -p "$SECRET_DIR"
-    {
-      echo "ADMIN_USERNAME=admin"
-      echo "ADMIN_PASSWORD_BCRYPT=$ADMIN_PASS_BCRYPT"
-    } | sudo tee "$SECRET_FILE" >/dev/null
-    sudo chmod 0600 "$SECRET_FILE" || true
+    # И15: через write_secret, а не `tee` файла целиком — иначе эта запись
+    # затирала бы уже сохранённый JWT_SECRET.
+    write_secret ADMIN_USERNAME "admin"
+    write_secret ADMIN_PASSWORD_BCRYPT "$ADMIN_PASS_BCRYPT"
     ok "Admin credentials stored in $SECRET_FILE (bcrypt only)."
   else
     err "Go is required to derive bcrypt on the server. Install Go or provide --admin-pass-bcrypt."
@@ -233,18 +297,44 @@ git_as_owner "checkout $BRANCH"
 git_as_owner "config core.filemode false || true"
 git_as_owner "pull --ff-only"
 
-# Generate secrets if not provided
-if [[ -z "$JWT_SECRET" ]]; then
-  if command -v openssl >/dev/null 2>&1; then
-    JWT_SECRET=$(openssl rand -base64 48 | tr -d '\n' || true)
-  fi
-  if [[ -z "$JWT_SECRET" ]]; then
-    JWT_SECRET=$(head -c 48 /dev/urandom | base64 | tr -d '\n' || true)
-  fi
-  if [[ -z "$JWT_SECRET" ]]; then
-    warn "Could not auto-generate JWT_SECRET; please provide --jwt-secret"
+# И15: СГЕНЕРИРОВАННЫЙ JWT_SECRET ОБЯЗАН БЫТЬ СОХРАНЁН.
+#
+# Здесь секрет генерировался, печаталось бодрое «Auto-generated JWT_SECRET» —
+# и на этом всё. В systemd-drop-in он не попадает НАМЕРЕННО (там только
+# EnvironmentFile, секретов в drop-in нет), а в $SECRET_FILE его никто не
+# записывал. То есть значение жило до конца работы скрипта и исчезало.
+#
+# Оператор при этом видел строку об успехе и считал, что подпись сессий
+# настроена. Фактически chillhub-admin стартовал вовсе без JWT_SECRET.
+#
+# Порядок источников теперь явный:
+#   1) окружение/флаг — записываем в $SECRET_FILE (оператор задал новое);
+#   2) уже сохранённое в $SECRET_FILE — используем как есть. Это важно:
+#      перегенерация на каждом деплое инвалидировала бы все активные админские
+#      сессии, то есть выкатка выкидывала бы оператора из панели;
+#   3) ничего нет — генерируем и СОХРАНЯЕМ.
+
+if [[ -n "$JWT_SECRET" ]]; then
+  write_secret JWT_SECRET "$JWT_SECRET"
+  ok "JWT_SECRET сохранён в $SECRET_FILE (задан оператором)"
+else
+  JWT_SECRET="$(read_secret JWT_SECRET)"
+  if [[ -n "$JWT_SECRET" ]]; then
+    ok "JWT_SECRET взят из $SECRET_FILE (существующие сессии остаются валидными)"
   else
-    ok "Auto-generated JWT_SECRET (48 bytes base64)"
+    if command -v openssl >/dev/null 2>&1; then
+      JWT_SECRET=$(openssl rand -base64 48 | tr -d '\n' || true)
+    fi
+    if [[ -z "$JWT_SECRET" ]]; then
+      JWT_SECRET=$(head -c 48 /dev/urandom | base64 | tr -d '\n' || true)
+    fi
+    if [[ -z "$JWT_SECRET" ]]; then
+      err "Не удалось сгенерировать JWT_SECRET (нет ни openssl, ни /dev/urandom)."
+      err "Без него подпись админских сессий не настроена. Задайте CHILLHUB_JWT_SECRET и повторите."
+      exit 1
+    fi
+    write_secret JWT_SECRET "$JWT_SECRET"
+    ok "JWT_SECRET сгенерирован (48 байт base64) и СОХРАНЁН в $SECRET_FILE"
   fi
 fi
 
@@ -304,6 +394,29 @@ if [[ $NO_BUILD -eq 0 ]]; then
   # Compute shas BEFORE install for later comparison
   BIN_SHA_API=$(sha256sum "$BUILD_DIR/api" | awk '{print $1}')
   BIN_SHA_ADMIN=$(sha256sum "$BUILD_DIR/admin" | awk '{print $1}')
+  # И13: СОХРАНЯЕМ ТЕКУЩИЕ БИНАРИ ПЕРЕД ПЕРЕЗАПИСЬЮ.
+  #
+  # Отката не было нигде, кроме конфига nginx: бинари ставились `install`
+  # поверх старых, и предыдущая версия исчезала безвозвратно. Вернуться к
+  # работающей сборке можно было только новой выкаткой из git — то есть в
+  # момент, когда прод лежит, надо было дождаться сборки, а если ломающий
+  # коммит уже в main, сначала ещё и сделать revert.
+  #
+  # Сохранение стоит одну копию файла. Восстановление — deploy/rollback-binaries.sh
+  # (ставится ниже как /usr/local/sbin/chillhub-rollback-binaries.sh).
+  ROLLBACK_DIR="/opt/chillhub/rollback"
+  run "sudo install -d -m 0700 -o root -g root \"$ROLLBACK_DIR\""
+  BIN_STAMP="$(date -u +%Y-%m-%d-%H%M%S)"
+  for b in api admin; do
+    if [[ -f "/opt/chillhub/$b" ]]; then
+      run "sudo cp -a \"/opt/chillhub/$b\" \"$ROLLBACK_DIR/$b.previous\""
+      run "sudo cp -a \"/opt/chillhub/$b\" \"$ROLLBACK_DIR/$b.$BIN_STAMP\""
+      ok "[rollback] сохранён предыдущий $b"
+    else
+      log "[rollback] /opt/chillhub/$b ещё нет — сохранять нечего (первая установка)"
+    fi
+  done
+
   log "Installing binaries"
   run "sudo install -m 0755 \"$BUILD_DIR/api\"   \"$API_BIN\""
   run "sudo install -m 0755 \"$BUILD_DIR/admin\" \"$ADMIN_BIN\""
@@ -332,12 +445,25 @@ log "Sync landing to $SITE_ROOT"
 # Keep /downloads separate from repo; sync landing excluding downloads
 run "sudo rsync -a --delete --exclude 'downloads/' \"$REPO_DIR/landing/\" \"$SITE_ROOT/\""
 
-# Sync external downloads (next to REPO_DIR) into site downloads
+# Sync external downloads (next to REPO_DIR) into site downloads.
+#
+# Пропуск синхронизации ОБЯЗАН быть заметен. Раньше это была строка log-уровня
+# "not found (skip)" в общем потоке — и когда каталог не находился из-за бага с
+# кавычками (см. DOWNLOADS_DIR выше), деплой годами выглядел успешным, а
+# /downloads/ChillHub-Setup.exe на лендинге оставался старым или отсутствовал.
 if [[ -d "$DOWNLOADS_DIR" ]]; then
   log "Sync external downloads from $DOWNLOADS_DIR to $SITE_ROOT/downloads"
   run "sudo rsync -a \"$DOWNLOADS_DIR/\" \"$SITE_ROOT/downloads/\""
+  ok "External downloads synced: $(find "$DOWNLOADS_DIR" -type f 2>/dev/null | wc -l | tr -d ' ') file(s) from $DOWNLOADS_DIR"
 else
-  log "External downloads directory not found: $DOWNLOADS_DIR (skip)"
+  section "ВНИМАНИЕ: внешний каталог downloads НЕ синхронизирован"
+  warn "Каталог не найден: $DOWNLOADS_DIR"
+  if [[ "$DOWNLOADS_DIR_IS_DEFAULT" == "1" ]]; then
+    warn "Путь выбран по умолчанию как сосед репозитория ($REPO_DIR). Если каталог лежит в другом месте — укажите --downloads-dir <path>."
+  else
+    warn "Путь задан явно через --downloads-dir. Проверьте, что он существует на ЭТОМ хосте."
+  fi
+  warn "Пока каталог не найден, $SITE_ROOT/downloads/ не обновляется: кнопка скачивания на лендинге отдаёт старый файл или 404."
 fi
 
 log "Sync static only (landing, admin_ui). Do not touch server content dirs."
@@ -345,8 +471,32 @@ log "Sync static only (landing, admin_ui). Do not touch server content dirs."
 # Admin UI can be fully replaced
 run "sudo rsync -a --delete \"$REPO_DIR/server/admin_ui/\"   \"$LAUNCHER_ROOT/admin_ui/\""
 
+# И9: ДИАГНОСТИЧЕСКИЙ ping.txt СОЗДАЁТСЯ ДО СНИМКА PRE, А НЕ ПОСЛЕ.
+#
+# Раньше он создавался ниже, между снимками PRE и POST, и тут же попадал под
+# guard, который ищет изменения в news/ и валит деплой. То есть ПЕРВЫЙ деплой
+# на чистый хост падал ВСЕГДА — уже после перезапуска сервисов, то есть в
+# состоянии «наполовину выкачено»: сервисы новые, а шаг помечен как провал.
+#
+# Теперь файл создаётся до снятия PRE, поэтому попадает в оба снимка одинаково
+# и guard его не видит как изменение. Сам файл нужен смоук-тесту
+# (/assets/ping.txt) как признак того, что раздача новостных ассетов жива.
+PING_PATH="$LAUNCHER_ROOT/news/assets/ping.txt"
+if [[ ! -f "$PING_PATH" ]]; then
+  log "Creating diagnostic $PING_PATH (first deploy on this host)"
+  run "sudo mkdir -p \"$(dirname "$PING_PATH")\""
+  echo "ok" | sudo tee "$PING_PATH" >/dev/null || true
+fi
+
 # Guard snapshot (PRE): capture sample hashes and counts for server-managed dirs to detect unintended changes
-TMP_PRE_DIR="/tmp/chillhub-pre"; TMP_POST_DIR="/tmp/chillhub-post"; run "sudo mkdir -p \"$TMP_PRE_DIR\" \"$TMP_POST_DIR\""
+# И29: снимки кладём в приватный временный каталог, а не в предсказуемые
+# /tmp/chillhub-pre и /tmp/chillhub-post. Подробности — в комментарии к
+# STAGE_DIR ниже; здесь та же причина: /tmp общий, на хосте четыре проекта.
+TMP_PRE_DIR="$(sudo mktemp -d -p /tmp chillhub-pre-XXXXXXXX)"
+TMP_POST_DIR="$(sudo mktemp -d -p /tmp chillhub-post-XXXXXXXX)"
+run "sudo chmod 0700 \"$TMP_PRE_DIR\" \"$TMP_POST_DIR\""
+cleanup_tmp_dirs(){ sudo rm -rf "$TMP_PRE_DIR" "$TMP_POST_DIR" "${STAGE_DIR:-}" 2>/dev/null || true; }
+trap cleanup_tmp_dirs EXIT
 sample_hash(){ local d="$1"; if [[ ! -d "$d" ]]; then echo "missing"; return; fi; local list; list=$(LC_ALL=C find "$d" -type f -printf '%P\n' | sort | awk 'NR<=50'); if [[ -z "$list" ]]; then echo "empty"; else while IFS= read -r f; do sha256sum "$d/$f" | awk '{print $1"  "$2}'; done <<< "$list" | sha256sum | awk '{print $1}'; fi; }
 for d in content manifests news; do dir="$LAUNCHER_ROOT/$d"; if [[ -d "$dir" ]]; then find "$dir" -type f 2>/dev/null | wc -l | awk '{print $1}' | sudo tee "$TMP_PRE_DIR/${d}.count" >/dev/null; sample_hash "$dir" | sudo tee "$TMP_PRE_DIR/${d}.hash" >/dev/null; else echo "-1" | sudo tee "$TMP_PRE_DIR/${d}.count" >/dev/null; echo "missing" | sudo tee "$TMP_PRE_DIR/${d}.hash" >/dev/null; fi; done
 
@@ -363,6 +513,30 @@ if [[ -f "$REPO_DIR/deploy/systemd/chillhub-api.service" ]]; then
 fi
 if [[ -f "$REPO_DIR/deploy/systemd/chillhub-admin.service" ]]; then
   run "sudo install -m 0644 \"$REPO_DIR/deploy/systemd/chillhub-admin.service\" /etc/systemd/system/chillhub-admin.service"
+fi
+
+# И3: резервное копирование контента (скрипт + таймер).
+#
+# /var/www/launcher/{content,manifests,news} не лежат в репозитории
+# (content/** в .gitignore) и до сих пор не резервировались никуда — копия
+# всего опубликованного контента существовала ровно одна. Процедура
+# восстановления описана в шапке самого скрипта.
+if [[ -f "$REPO_DIR/deploy/backup-content.sh" ]]; then
+  log "Install content backup script and timer"
+  run "sudo install -m 0755 -o root -g root \"$REPO_DIR/deploy/backup-content.sh\" /usr/local/sbin/chillhub-backup-content.sh"
+  run "sudo install -d -m 0700 -o root -g root /var/backups/chillhub"
+  # И13: скрипт отката бинарей кладём рядом — он нужен ровно тогда, когда
+  # некогда искать, где он лежит в репозитории.
+  if [[ -f "$REPO_DIR/deploy/rollback-binaries.sh" ]]; then
+    run "sudo install -m 0755 -o root -g root \"$REPO_DIR/deploy/rollback-binaries.sh\" /usr/local/sbin/chillhub-rollback-binaries.sh"
+  fi
+  if [[ -f "$REPO_DIR/deploy/systemd/chillhub-backup.service" ]]; then
+    run "sudo install -m 0644 \"$REPO_DIR/deploy/systemd/chillhub-backup.service\" /etc/systemd/system/chillhub-backup.service"
+  fi
+  if [[ -f "$REPO_DIR/deploy/systemd/chillhub-backup.timer" ]]; then
+    run "sudo install -m 0644 \"$REPO_DIR/deploy/systemd/chillhub-backup.timer\" /etc/systemd/system/chillhub-backup.timer"
+    BACKUP_TIMER_INSTALLED=1
+  fi
 fi
 
 # Configure auth env via systemd drop-in using EnvironmentFile to avoid overwrites
@@ -394,10 +568,26 @@ log "Install nginx site config and reload"
 # с тем же server_name (conflicting server name, выигрывает случайный).
 # Логика установки с бэкапом, nginx -t и откатом вынесена в scripts/deploy-nginx.sh,
 # чтобы все пути деплоя вели себя одинаково.
-run "sudo install -m 0755 \"$REPO_DIR/scripts/deploy-nginx.sh\" /tmp/chillhub-deploy-nginx.sh"
-run "sudo install -m 0644 \"$REPO_DIR/deploy/launcher.conf\" /tmp/chillhub-launcher.conf"
+# И29: ПРОМЕЖУТОЧНЫЕ ФАЙЛЫ — В ПРИВАТНЫЙ КАТАЛОГ С ПРЕДСКАЗУЕМЫМ ВЛАДЕЛЬЦЕМ,
+# А НЕ ПОД ФИКСИРОВАННЫМИ ИМЕНАМИ В ОБЩЕМ /tmp.
+#
+# Здесь было `sudo install ... /tmp/chillhub-deploy-nginx.sh`, а следом
+# `sudo /tmp/chillhub-deploy-nginx.sh`. Имя фиксированное и известно всем, а
+# /tmp — общий каталог на хосте с четырьмя проектами. Любой локальный
+# пользователь мог заранее создать по этому пути символическую ссылку: install
+# пишет СКВОЗЬ неё, то есть содержимое уезжает в подставленный файл, а затем
+# root исполняет то, что лежит по известному злоумышленнику пути. Это
+# классическая гонка в /tmp, и цена ей здесь — выполнение кода от root.
+#
+# mktemp -d создаёт каталог с уникальным именем и правами 0700, принадлежащий
+# root (мы вызываем его через sudo). Подменить путь внутри такого каталога
+# нельзя: он не существует до создания и недоступен другим пользователям.
+STAGE_DIR="$(sudo mktemp -d -p /tmp chillhub-deploy-XXXXXXXX)"
+run "sudo chmod 0700 \"$STAGE_DIR\""
+run "sudo install -m 0700 -o root -g root \"$REPO_DIR/scripts/deploy-nginx.sh\" \"$STAGE_DIR/deploy-nginx.sh\""
+run "sudo install -m 0600 -o root -g root \"$REPO_DIR/deploy/launcher.conf\" \"$STAGE_DIR/launcher.conf\""
 if [[ $NO_NGINX_RELOAD -eq 0 ]]; then
-  run "sudo /tmp/chillhub-deploy-nginx.sh /tmp/chillhub-launcher.conf"
+  run "sudo \"$STAGE_DIR/deploy-nginx.sh\" \"$STAGE_DIR/launcher.conf\""
   # Check redirect rule presence
   if sudo grep -n "error_page 401 =302 /admin/ui/login.html" /etc/nginx/sites-available/chillhub-launcher.conf >/dev/null 2>&1; then
     ok "[nginx] redirect rule present"
@@ -411,24 +601,91 @@ fi
 section "Systemd: перезапуск сервисов"
 log "Reload systemd and restart services"
 run "sudo systemctl daemon-reload"
+
+# И3: таймер бэкапа включаем ЯВНО. Установленный, но не включённый таймер —
+# это ровно то же отсутствие бэкапов, только с ложным ощущением, что они есть.
+if [[ "${BACKUP_TIMER_INSTALLED:-0}" == "1" ]]; then
+  run "sudo systemctl enable --now chillhub-backup.timer"
+  if systemctl is-enabled chillhub-backup.timer >/dev/null 2>&1; then
+    ok "[backup] таймер включён: $(systemctl list-timers chillhub-backup.timer --no-pager --no-legend 2>/dev/null | head -n1 || echo 'следующий запуск см. systemctl list-timers')"
+  else
+    warn "[backup] таймер НЕ включён — бэкапов контента не будет. Проверьте: systemctl status chillhub-backup.timer"
+  fi
+fi
 for s in "${SERVICES[@]}"; do
   run "sudo systemctl restart \"$s\""
   run "sudo systemctl status \"$s\" --no-pager -n 3 || true"
 done
 
-# Verify services active (hard fail)
-for s in "${SERVICES[@]}"; do
-  if ! systemctl is-active "$s" >/dev/null 2>&1; then err "Service $s is not active"; exit 1; fi
-done
-ok "Services are active"
+# И12: ПРОВЕРЯЕМ, ЧТО СЕРВИС ОТВЕЧАЕТ, А НЕ ЧТО SYSTEMD ЕГО ЗАПУСТИЛ.
+#
+# Здесь стоял `systemctl is-active` сразу после restart. У обоих юнитов
+# Type=simple, а это значит, что systemd считает сервис активным В МОМЕНТ
+# ЗАПУСКА ПРОЦЕССА — не дожидаясь, пока тот прочитает конфиг, откроет порт или
+# вообще останется жив. Процесс, падающий через 200 мс на кривом JWT_SECRET
+# или занятом порте, успевал отрапортовать «active», и деплой шёл дальше как
+# ни в чём не бывало. Проверка отвечала на вопрос «systemd попытался?», а не
+# «сервис работает?».
+#
+# Опрашиваем сервисы по HTTP на loopback, с ретраями:
+#   * admin — /admin/api/health (специально заведён для проб);
+#   * api   — /api/maintenance (у публичного API health-эндпоинта нет, а этот
+#             GET отвечает всегда и не требует авторизации).
+# 127.0.0.1, а не публичный URL: на этом шаге проверяется сам сервис, а не
+# nginx с сертификатом — их отказы надо различать. Публичные проверки идут
+# ниже, в блоке смоук-тестов.
+wait_healthy(){
+  local name="$1" url="$2" tries="${3:-30}" i code=""
+  for ((i=1; i<=tries; i++)); do
+    code=$(curl -s --max-time 3 -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || true)
+    if [[ "$code" == "200" ]]; then
+      ok "[health] $name отвечает 200 на $url (попытка $i из $tries)"
+      return 0
+    fi
+    sleep 1
+  done
+  err "[health] $name НЕ ответил 200 на $url за ${tries} с (последний код: ${code:-нет ответа})"
+  return 1
+}
+
+HEALTH_FAIL=0
+wait_healthy "chillhub-admin" "http://127.0.0.1:55777/admin/api/health" 30 || HEALTH_FAIL=1
+wait_healthy "chillhub-api"   "http://127.0.0.1:55700/api/maintenance"  30 || HEALTH_FAIL=1
+
+if [[ $HEALTH_FAIL -ne 0 ]]; then
+  err "Сервисы не поднялись. Диагностика:"
+  for s in "${SERVICES[@]}"; do
+    echo "---- systemctl status $s ----"; sudo systemctl status "$s" --no-pager -n 20 || true
+    echo "---- journalctl -u $s (последние 50) ----"; sudo journalctl -u "$s" -n 50 --no-pager || true
+  done
+  exit 1
+fi
+ok "Services are up and answering"
 
 # Integrity verification (manifests)
 section "Integrity: манифесты и сравнение"
 MISM_TOTAL=0
+# И6: КОНВЕЙЕР ЗАМЕНЁН НА ПОДСТАНОВКУ ПРОЦЕССА — ЭТО НЕ КОСМЕТИКА.
+#
+# Здесь было `find ... | while read ...; do ... mism=$((mism+1)) ... done`.
+# Правая часть конвейера в bash выполняется в ПОДОБОЛОЧКЕ, поэтому все
+# инкременты mism и n жили в дочернем процессе и умирали вместе с ним. После
+# цикла обе переменные снова были равны нулю.
+#
+# Следствия, обе молчаливые:
+#   * всегда печаталось «all 0 files match» — даже когда файлы реально
+#     расходились, и даже когда сверять было нечего;
+#   * MISM_TOTAL всегда оставался нулём, поэтому --fail-on-mismatch НЕ
+#     срабатывал НИ РАЗУ. Защита существовала только на бумаге, а деплой с
+#     битой выкаткой считался успешным.
+#
+# `done < <(find ...)` оставляет цикл в текущей оболочке: перенаправление ввода
+# подоболочку не создаёт.
 compare_trees(){
   local label="$1" src="$2" dst="$3"; local mism=0; local n=0;
+  local f rel sha_src sha_dst
   if [[ ! -d "$src" ]]; then warn "[manifest] $label: source dir not found: $src"; return 0; fi
-  find "$src" -type f -print0 | while IFS= read -r -d '' f; do
+  while IFS= read -r -d '' f; do
     rel="${f#"$src/"}"; sha_src=$(sha256sum "$f" | awk '{print $1}')
     if [[ -f "$dst/$rel" ]]; then
       sha_dst=$(sha256sum "$dst/$rel" | awk '{print $1}')
@@ -437,8 +694,16 @@ compare_trees(){
       echo -e "${YELLOW}[manifest] MISS${NC} $label $rel"; mism=$((mism+1))
     fi
     n=$((n+1))
-  done
-  if [[ $mism -ne 0 ]]; then warn "[manifest] $label mismatches: $mism"; else ok "[manifest] $label: all $n files match"; fi
+  done < <(find "$src" -type f -print0)
+  if [[ $mism -ne 0 ]]; then
+    warn "[manifest] $label mismatches: $mism (проверено файлов: $n)"
+  elif [[ $n -eq 0 ]]; then
+    # «0 файлов совпало» — это не успех, а пустое дерево: раньше такой случай
+    # был неотличим от нормального прогона.
+    warn "[manifest] $label: в $src нет ни одного файла — сверять нечего"
+  else
+    ok "[manifest] $label: all $n files match"
+  fi
   MISM_TOTAL=$((MISM_TOTAL + mism))
 }
 
@@ -456,11 +721,8 @@ if [[ $FAIL_ON_MISMATCH -ne 0 && $MISM_TOTAL -ne 0 ]]; then
   err "Manifest mismatches detected (total sections with mism: $MISM_TOTAL)"; exit 1
 fi
 
-# Create news/assets/ping.txt for diagnostics if missing (does not overwrite user files)
-PING_PATH="/var/www/launcher/news/assets/ping.txt"
-if [[ ! -f "$PING_PATH" ]]; then
-  echo "ok" | sudo tee "$PING_PATH" >/dev/null || true
-fi
+# И9: ping.txt теперь создаётся ВЫШЕ, до снимка PRE. Здесь его создавать было
+# нельзя: он попадал между PRE и POST и сам же валил guard.
 
 section "HTTP: автотесты ($SITE_BASE_URL)"
 
@@ -476,7 +738,11 @@ for d in content manifests news; do
     printf "%s" "$cnt" | sudo tee "$TMP_POST_DIR/${d}.count" >/dev/null
     sample_hash "$dir" | sudo tee "$TMP_POST_DIR/${d}.hash" >/dev/null
     echo "[guard] recent (<=5min) changes in $dir:"
-    recent=$(sudo find "$dir" -type f -mmin -5 -printf '%TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null | head -n 50 || true)
+    # И9: диагностический ping.txt исключён. Его создаёт сам деплой (выше, до
+    # снимка PRE), поэтому на первом деплое он по определению «изменён за
+    # последние 5 минут» — и guard ловил бы собственный след деплоя, а не
+    # чужую запись. Настоящую защиту даёт сравнение PRE/POST ниже.
+    recent=$(sudo find "$dir" -type f -mmin -5 ! -path "$PING_PATH" -printf '%TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null | head -n 50 || true)
     if [[ -n "$recent" ]]; then echo "$recent"; echo "[guard][FAIL] Recent changes detected in $dir"; FAIL_GUARD=1; else echo "(none)"; fi
   else
     echo "[guard] $dir (missing)"
@@ -558,6 +824,26 @@ must_200 "$SITE_BASE_URL/admin/api/health" "Admin API /admin/api/health"
 # 3) Landing site
 must_200 "$SITE_BASE_URL/" "Landing /"
 must_200 "$SITE_BASE_URL/styles.css" "Landing static /styles.css"
+
+# Л2: ГЛАВНАЯ КНОПКА ЛЕНДИНГА.
+#
+# /downloads/ChillHub-Setup.exe не был покрыт ничем. Между тем это единственный
+# способ для нового пользователя получить лаунчер, а файл кладётся отдельным
+# шагом синхронизации внешнего каталога downloads/ — тем самым, который из-за
+# Б9 не отрабатывал НИКОГДА. Сочетание давало ровно то, что и должно было:
+# кнопка «Скачать» молча отдавала 404, все остальные проверки при этом были
+# зелёными.
+#
+# Проверяем HEAD-запросом: тянуть многомегабайтный установщик на каждом деплое
+# незачем, а 200 на HEAD означает, что файл на месте и раздаётся.
+dl_code=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" -I "$SITE_BASE_URL/downloads/ChillHub-Setup.exe" || true)
+if [[ "$dl_code" == "200" ]]; then
+  echo -e "[test] ${GREEN}PASS${NC} Installer download (/downloads/ChillHub-Setup.exe)"
+else
+  echo -e "[test] ${RED}FAIL${NC} Installer download (/downloads/ChillHub-Setup.exe) -> $dl_code"
+  echo -e "[test]      Кнопка скачивания на лендинге не работает. Проверьте синхронизацию каталога downloads (--downloads-dir)."
+  FAIL=1
+fi
 
 # 4) Manifests
 MANI_DIR="$LAUNCHER_ROOT/manifests/launcher"

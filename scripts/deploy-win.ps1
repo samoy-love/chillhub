@@ -14,6 +14,24 @@ param(
     [string]$LogLevel = 'info',
     [int]$Parallel = 8,
     [string]$SiteBaseUrl = "https://launcher.samoy.love",
+    # И2: политика проверки ключа хоста. ПО УМОЛЧАНИЮ СТРОГАЯ.
+    #
+    # Раньше поведением по умолчанию было StrictHostKeyChecking=no, а строгая
+    # проверка включалась опциональным -StrictHostKey, которого нет ни в
+    # Makefile, ни в примерах. То есть на практике деплой всегда соглашался с
+    # любым ключом: при подмене маршрута (DNS, ARP, перехваченный IP) ssh молча
+    # подключался к чужому хосту, и туда уезжали JWT_SECRET, bcrypt-хеш админа,
+    # а при -AdminPasswordPlain — и пароль открытым текстом.
+    #
+    #   yes         — (по умолчанию) хост обязан быть в known_hosts;
+    #   accept-new  — принять НОВЫЙ хост, но отвергнуть ИЗМЕНИВШИЙСЯ ключ;
+    #   no          — не проверять. Осознанный опасный режим, печатает
+    #                 предупреждение. Существует только для одноразовой
+    #                 отладки, не для регулярного деплоя.
+    [ValidateSet('yes','accept-new','no')]
+    [string]$HostKeyChecking = 'yes',
+    # Устаревший ключ: строгая проверка теперь и так по умолчанию.
+    # Оставлен, чтобы старые команды не падали на неизвестном параметре.
     [switch]$StrictHostKey,
     [switch]$FailOnManifestMismatch,
     [switch]$StartAtRemote,
@@ -22,6 +40,36 @@ param(
 
 $ErrorActionPreference = "Stop"
 $UseColor = -not $NoColor
+
+# И14: СЕКРЕТЫ ПРЕДПОЧТИТЕЛЬНО БЕРУТСЯ ИЗ ОКРУЖЕНИЯ, А НЕ ИЗ АРГУМЕНТОВ.
+#
+# Аргументы командной строки видны в списке процессов: на Windows их показывает
+# и Диспетчер задач, и `Get-CimInstance Win32_Process | select CommandLine`, без
+# каких-либо прав администратора. Утекали самые чувствительные значения —
+# JWT_SECRET (им подписываются админские сессии) и пароль администратора
+# открытым текстом, причём на всё время работы деплоя.
+#
+# Makefile теперь передаёт их через окружение (цель deploy-win). Параметры
+# -JwtSecret / -AdminPasswordBcrypt / -AdminPasswordPlain оставлены рабочими
+# ради совместимости, но предупреждают.
+function Resolve-SecretParam {
+    param(
+        [AllowNull()][string]$Value,
+        [Parameter(Mandatory = $true)][string]$EnvName,
+        [Parameter(Mandatory = $true)][string]$ParamName
+    )
+    if (-not [string]::IsNullOrEmpty($Value)) {
+        Write-Warn "$ParamName передан аргументом командной строки — значение видно в списке процессов."
+        Write-Warn "Предпочтительно задать переменную окружения $EnvName (см. комментарий И14)."
+        return $Value
+    }
+    $fromEnv = [Environment]::GetEnvironmentVariable($EnvName)
+    if (-not [string]::IsNullOrEmpty($fromEnv)) {
+        Write-Info "$ParamName получен из окружения ($EnvName)."
+        return $fromEnv
+    }
+    return ""
+}
 
 # Log level helper (error<warn<info<debug)
 function Test-Level {
@@ -95,6 +143,41 @@ if (-not (Test-Path -LiteralPath $KeyPath)) {
   throw "SSH key not found: $KeyPath"
 }
 
+# И14: разрешаем секреты (окружение приоритетнее — см. Resolve-SecretParam).
+# Вызовы стоят здесь, а не рядом с определением функции, потому что она
+# печатает через Write-Info/Write-Warn, а те объявлены выше по файлу.
+$JwtSecret           = Resolve-SecretParam -Value $JwtSecret           -EnvName 'CHILLHUB_JWT_SECRET'              -ParamName '-JwtSecret'
+$AdminPasswordBcrypt = Resolve-SecretParam -Value $AdminPasswordBcrypt -EnvName 'CHILLHUB_ADMIN_PASSWORD_BCRYPT'   -ParamName '-AdminPasswordBcrypt'
+$AdminPasswordPlain  = Resolve-SecretParam -Value $AdminPasswordPlain  -EnvName 'CHILLHUB_ADMIN_PASSWORD'          -ParamName '-AdminPasswordPlain'
+# Из окружения ЭТОГО процесса значения убираем: иначе они наследуются каждым
+# запускаемым дочерним процессом (ssh, scp, go, tar), а их командные строки и
+# окружение видны шире, чем нужно.
+foreach ($n in 'CHILLHUB_JWT_SECRET','CHILLHUB_ADMIN_PASSWORD_BCRYPT','CHILLHUB_ADMIN_PASSWORD') {
+    [Environment]::SetEnvironmentVariable($n, $null)
+}
+
+# И2: ОДИН набор ssh/scp-опций на весь скрипт.
+#
+# Раньше этот набор собирался в трёх местах (StartAtRemote, автоопределение
+# архитектуры, загрузка бандла) отдельными if/else, и во всех трёх ветка «по
+# умолчанию» ставила StrictHostKeyChecking=no. Три копии — три шанса разойтись,
+# поэтому теперь значение вычисляется один раз здесь.
+if ($StrictHostKey -and $HostKeyChecking -eq 'yes') {
+  Write-Info "-StrictHostKey устарел: строгая проверка ключа хоста теперь и так по умолчанию."
+}
+if ($HostKeyChecking -eq 'no') {
+  Write-Warn "ОПАСНО: -HostKeyChecking no. Подлинность сервера НЕ проверяется."
+  Write-Warn "При подмене маршрута секреты (JWT_SECRET, хеш/пароль админа) уедут чужому хосту."
+  Write-Warn "Используйте этот режим только для одноразовой отладки."
+}
+$sshCommon = @(
+  "-i", $KeyPath,
+  "-o", "StrictHostKeyChecking=$HostKeyChecking",
+  "-o", "ConnectTimeout=10",
+  "-o", "ServerAliveInterval=15",
+  "-o", "ServerAliveCountMax=4"
+)
+
 # Paths
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $BuildRoot = Join-Path $RepoRoot "build"
@@ -138,23 +221,7 @@ try {
 if ($StartAtRemote) {
   Write-Section "StartAtRemote"
   Write-Warn "Skipping local build and upload; proceeding directly to remote deploy"
-  $sshCommon = if ($StrictHostKey) {
-    @(
-      "-i", $KeyPath,
-      "-o", "StrictHostKeyChecking=accept-new",
-      "-o", "ConnectTimeout=10",
-      "-o", "ServerAliveInterval=15",
-      "-o", "ServerAliveCountMax=4"
-    )
-  } else {
-    @(
-      "-i", $KeyPath,
-      "-o", "StrictHostKeyChecking=no",
-      "-o", "ConnectTimeout=10",
-      "-o", "ServerAliveInterval=15",
-      "-o", "ServerAliveCountMax=4"
-    )
-  }
+  # $sshCommon задан один раз выше (см. И2).
   $Remote = "${SshUser}@${SshHost}"
   # Ensure remote deploy dir exists and upload the latest nginx site config even in StartAtRemote mode
   try {
@@ -168,11 +235,7 @@ if ($StartAtRemote) {
   }
 } else {
   # Auto-detect remote architecture to build correct binaries (avoids Exec format errors)
-  $sshCommonDetect = if ($StrictHostKey) {
-    @("-i", $KeyPath, "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4")
-  } else {
-    @("-i", $KeyPath, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4")
-  }
+  $sshCommonDetect = $sshCommon   # см. И2: единый набор опций
   $remoteDetect = "${SshUser}@${SshHost}"
   $unameM = ""
   try {
@@ -259,23 +322,7 @@ if ($StartAtRemote) {
   # Upload bundle via scp (ensure remote dirs exist, avoid wildcard expansion issues)
   Write-Section "Upload bundle"
   Write-Info "Preparing remote directory structure"
-  $sshCommon = if ($StrictHostKey) {
-    @(
-      "-i", $KeyPath,
-      "-o", "StrictHostKeyChecking=accept-new",
-      "-o", "ConnectTimeout=10",
-      "-o", "ServerAliveInterval=15",
-      "-o", "ServerAliveCountMax=4"
-    )
-  } else {
-    @(
-      "-i", $KeyPath,
-      "-o", "StrictHostKeyChecking=no",
-      "-o", "ConnectTimeout=10",
-      "-o", "ServerAliveInterval=15",
-      "-o", "ServerAliveCountMax=4"
-    )
-  }
+  # $sshCommon задан один раз выше (см. И2).
   $Remote = "${SshUser}@${SshHost}"
   # Quick SSH preflight to catch key-permissions issues early
   try {
@@ -285,6 +332,14 @@ if ($StartAtRemote) {
     Write-Err "SSH preflight failed. If you see 'UNPROTECTED PRIVATE KEY FILE' or 'Permission denied (publickey)', fix key ACLs on Windows:"
     Write-Err "  icacls \"$KeyPath\" /inheritance:r"
     Write-Err "  icacls \"$KeyPath\" /grant:r \"$env:USERNAME:R\""
+    # И2: со строгой проверкой ключа первый в жизни коннект к хосту падает
+    # намеренно — иначе проверять было бы нечего.
+    Write-Err "Если ошибка про ключ хоста ('Host key verification failed' / 'No RSA host key is known'):"
+    Write-Err "  хост ещё не в known_hosts. Добавьте его ОДИН раз, СВЕРИВ отпечаток по независимому каналу"
+    Write-Err "  (панель хостера / прошлый доверенный коннект), а не просто скопировав вывод:"
+    Write-Err "    ssh-keyscan -H $SshHost | Out-File -Append -Encoding ascii `$env:USERPROFILE\.ssh\known_hosts"
+    Write-Err "  Либо для первого подключения: -HostKeyChecking accept-new (принимает новый хост,"
+    Write-Err "  но по-прежнему отвергает ПОДМЕНЁННЫЙ ключ)."
     throw
   }
   & $SSH @sshCommon $Remote "mkdir -p deploy/site deploy/launcher_admin_ui deploy/bin deploy/systemd deploy/deploy" | Out-Null
@@ -458,7 +513,21 @@ OPT_DIR="/opt/chillhub"
 # и запись поверх сносила чужой сайт. См. scripts/deploy-nginx.sh.
 NGINX_SITE_AVAILABLE="/etc/nginx/sites-available/chillhub-launcher.conf"
 NGINX_SITE_ENABLED="/etc/nginx/sites-enabled/chillhub-launcher.conf"
-SITE_BASE="%%SITE_BASE_URL%%"
+# И1: ВСЁ, ЧТО ПРИШЛО ОТ ОПЕРАТОРА ИЛИ ИЗ СЕКРЕТОВ, ПРИЕЗЖАЕТ В BASE64.
+#
+# Раньше значения подставлялись в этот скрипт текстом (JWT_SECRET="<значение>"),
+# а «экранирование» сводилось к замене " на \". Этого недостаточно: скрипт
+# исполняется на проде под sudo, и внутри двойных кавычек bash по-прежнему
+# раскрывает $, `...` и $(...). Bcrypt-хеш вида $2y$12$... искажался молча
+# ($2y и $12 — позиционные параметры), а значение с обратной кавычкой или
+# $(...) ИСПОЛНЯЛОСЬ как код.
+#
+# Base64 состоит только из [A-Za-z0-9+/=], поэтому переживает подстановку без
+# единого спецсимвола и декодируется ровно один раз — здесь, в переменную.
+# Тот же приём уже применён в .github/workflows/deploy.yml (шаг «Encode deploy
+# inputs for the SSH script»).
+b64d() { printf '%s' "${1:-}" | base64 -d 2>/dev/null || true; }
+SITE_BASE="$(b64d "%%SITE_BASE_URL_B64%%")"
 FAIL_ON_MISMATCH="%%FAIL_ON_MISMATCH%%"
 MISM_TOTAL=0
 VERBOSE="%%VERBOSE%%"
@@ -496,7 +565,11 @@ for d in site launcher_admin_ui bin systemd; do
 done
 
 # Guard snapshot (PRE): capture sample hashes and counts for server-managed dirs to detect unintended changes
-TMP_PRE_DIR="/tmp/chillhub-pre"; TMP_POST_DIR="/tmp/chillhub-post"; mkdir -p "$TMP_PRE_DIR" "$TMP_POST_DIR"
+# И29: приватные каталоги под снимки вместо предсказуемых /tmp/chillhub-pre и
+# /tmp/chillhub-post — /tmp общий, на хосте четыре проекта.
+TMP_PRE_DIR="$(mktemp -d -t chillhub-pre-XXXXXXXX)"; TMP_POST_DIR="$(mktemp -d -t chillhub-post-XXXXXXXX)"
+chmod 700 "$TMP_PRE_DIR" "$TMP_POST_DIR"
+trap 'rm -rf "$TMP_PRE_DIR" "$TMP_POST_DIR" 2>/dev/null || true' EXIT
 sample_hash(){ d="$1"; if [ ! -d "$d" ]; then echo "missing"; return; fi; list=$(LC_ALL=C find "$d" -type f -printf '%P\n' | sort | awk 'NR<=50'); if [ -z "$list" ]; then echo "empty"; else while IFS= read -r f; do sha256sum "$d/$f" | awk '{print $1"  "$2}'; done <<< "$list" | sha256sum | awk '{print $1}'; fi; }
 for d in content manifests news; do dir="$LAUNCHER_DIR/$d"; if [ -d "$dir" ]; then find "$dir" -type f 2>/dev/null | wc -l | awk '{print $1}' > "$TMP_PRE_DIR/${d}.count"; sample_hash "$dir" > "$TMP_PRE_DIR/${d}.hash"; else echo "-1" > "$TMP_PRE_DIR/${d}.count"; echo "missing" > "$TMP_PRE_DIR/${d}.hash"; fi; done
 
@@ -600,6 +673,25 @@ if [ ! -f "$API_SRC" ] || [ ! -f "$ADMIN_SRC" ]; then
   ls -lah "$DEPLOY_DIR/bin" || true
   exit 1
 fi
+# И13: сохраняем текущие бинари перед перезаписью.
+#
+# Отката не было нигде, кроме конфига nginx: `install` затирал предыдущую
+# версию безвозвратно, и вернуться к работающей сборке можно было только новой
+# выкаткой. Сохранение стоит одну копию файла; восстановление —
+# /usr/local/sbin/chillhub-rollback-binaries.sh (deploy/rollback-binaries.sh).
+ROLLBACK_DIR="$OPT_DIR/rollback"
+sudo install -d -m 0700 -o root -g root "$ROLLBACK_DIR"
+BIN_STAMP="$(date -u +%Y-%m-%d-%H%M%S)"
+for _b in api admin; do
+  if [ -f "$OPT_DIR/$_b" ]; then
+    sudo cp -a "$OPT_DIR/$_b" "$ROLLBACK_DIR/$_b.previous"
+    sudo cp -a "$OPT_DIR/$_b" "$ROLLBACK_DIR/$_b.$BIN_STAMP"
+    echo "[rollback] сохранён предыдущий $_b"
+  else
+    echo "[rollback] $OPT_DIR/$_b ещё нет — первая установка"
+  fi
+done
+
 sudo install -m 0755 "$API_SRC" "$OPT_DIR/api"
 sudo install -m 0755 "$ADMIN_SRC" "$OPT_DIR/admin"
 
@@ -660,57 +752,105 @@ fi
 
 # Optional: write admin auth env drop-in (from parameters)
 ADMIN_DROPIN_DIR="/etc/systemd/system/chillhub-admin.service.d"
-JWT_SECRET="%%JWT_SECRET%%"
-ADMIN_USER="%%ADMIN_USER%%"
-ADMIN_PASS_BCRYPT="%%ADMIN_PASS_BCRYPT%%"
-ADMIN_PASS_PLAIN="%%ADMIN_PASS_PLAIN%%"
-COOKIE_DOMAIN="%%COOKIE_DOMAIN%%"
-COOKIE_SECURE="%%COOKIE_SECURE%%"
+# И1: секреты приезжают в base64 (см. комментарий к b64d в начале скрипта).
+# Именно здесь ломался bcrypt-хеш $2y$12$... и здесь же исполнялось бы
+# значение с $(...) — файл идёт в systemd-drop-in на проде под sudo.
+# xtrace на время декодирования выключаем: иначе `set -x` из VERBOSE напечатал
+# бы значения в лог, который потом ещё и скачивается на машину оператора.
+_XTRACE_WAS_ON=""; case "$-" in *x*) _XTRACE_WAS_ON=1;; esac
+set +x
+JWT_SECRET="$(b64d "%%JWT_SECRET_B64%%")"
+ADMIN_USER="$(b64d "%%ADMIN_USER_B64%%")"
+ADMIN_PASS_BCRYPT="$(b64d "%%ADMIN_PASS_BCRYPT_B64%%")"
+ADMIN_PASS_PLAIN="$(b64d "%%ADMIN_PASS_PLAIN_B64%%")"
+COOKIE_DOMAIN="$(b64d "%%COOKIE_DOMAIN_B64%%")"
+COOKIE_SECURE="$(b64d "%%COOKIE_SECURE_B64%%")"
+if [ -n "$_XTRACE_WAS_ON" ]; then set -x; fi
 # Debug presence (lengths only, без вывода значений)
 echo "[debug] admin env presence: JWT=${#JWT_SECRET} USER=${#ADMIN_USER} BCRYPT=${#ADMIN_PASS_BCRYPT} PLAIN=${#ADMIN_PASS_PLAIN} C_DOM=${#COOKIE_DOMAIN} C_SEC=${#COOKIE_SECURE}"
 if [ -n "$ADMIN_USER$ADMIN_PASS_BCRYPT$ADMIN_PASS_PLAIN$JWT_SECRET$COOKIE_DOMAIN$COOKIE_SECURE" ]; then
   sudo mkdir -p "$ADMIN_DROPIN_DIR"
   TMPD=$(mktemp)
+  # systemd-строка Environment="NAME=VALUE" — сама по себе строка в кавычках,
+  # поэтому значение с обратным слэшем или кавычкой делает юнит неразбираемым,
+  # и admin-сервис просто не стартует. Тот же класс дефекта, что и подстановка
+  # в shell выше, слоем ниже. Экранирование скопировано из deploy.yml (sd_esc).
+  sd_esc() { printf '%s' "${1:-}" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+  set +x  # тело drop-in содержит JWT_SECRET и bcrypt-хеш
   {
     echo "[Service]"
-    # Quote values to preserve special characters (e.g., $ in bcrypt hashes)
-    [ -n "$COOKIE_DOMAIN" ] && echo "Environment=\"COOKIE_DOMAIN=$COOKIE_DOMAIN\""
-    [ -n "$COOKIE_SECURE" ] && echo "Environment=\"COOKIE_SECURE=$COOKIE_SECURE\""
-    [ -n "$JWT_SECRET" ] && echo "Environment=\"JWT_SECRET=$JWT_SECRET\""
-    [ -n "$ADMIN_USER" ] && echo "Environment=\"ADMIN_USERNAME=$ADMIN_USER\""
+    if [ -n "$COOKIE_DOMAIN" ]; then echo "Environment=\"COOKIE_DOMAIN=$(sd_esc "$COOKIE_DOMAIN")\""; fi
+    if [ -n "$COOKIE_SECURE" ]; then echo "Environment=\"COOKIE_SECURE=$(sd_esc "$COOKIE_SECURE")\""; fi
+    if [ -n "$JWT_SECRET" ]; then echo "Environment=\"JWT_SECRET=$(sd_esc "$JWT_SECRET")\""; fi
+    if [ -n "$ADMIN_USER" ]; then echo "Environment=\"ADMIN_USERNAME=$(sd_esc "$ADMIN_USER")\""; fi
     # Write whichever password representations are provided
-    [ -n "$ADMIN_PASS_PLAIN" ] && echo "Environment=\"ADMIN_PASSWORD_PLAIN=$ADMIN_PASS_PLAIN\""
-    [ -n "$ADMIN_PASS_BCRYPT" ] && echo "Environment=\"ADMIN_PASSWORD_BCRYPT=$ADMIN_PASS_BCRYPT\""
+    if [ -n "$ADMIN_PASS_PLAIN" ]; then echo "Environment=\"ADMIN_PASSWORD_PLAIN=$(sd_esc "$ADMIN_PASS_PLAIN")\""; fi
+    if [ -n "$ADMIN_PASS_BCRYPT" ]; then echo "Environment=\"ADMIN_PASSWORD_BCRYPT=$(sd_esc "$ADMIN_PASS_BCRYPT")\""; fi
   } > "$TMPD"
-  sudo install -m 0644 "$TMPD" "$ADMIN_DROPIN_DIR/override.conf"
+  if [ -n "$VERBOSE" ]; then set -x; fi
+  # 0600, а не 0644: внутри JWT_SECRET и bcrypt-хеш (или вовсе пароль
+  # открытым текстом). При 0644 их читал любой локальный пользователь хоста,
+  # на котором живут ещё три проекта. В deploy.yml это место уже 0600.
+  sudo install -m 0600 -o root -g root "$TMPD" "$ADMIN_DROPIN_DIR/override.conf"
   rm -f "$TMPD" || true
   echo "[debug] wrote override.conf (JWT:$([ -n "$JWT_SECRET" ] && echo 1 || echo 0) PLAIN:$([ -n "$ADMIN_PASS_PLAIN" ] && echo 1 || echo 0) BCRYPT:$([ -n "$ADMIN_PASS_BCRYPT" ] && echo 1 || echo 0))"
 fi
 
-  # Reload services AFTER writing admin drop-in so env vars are applied
-  sudo systemctl daemon-reload || true
-  sudo systemctl restart chillhub-api.service || true
-  sudo systemctl restart chillhub-admin.service || true
+  # И12: ПРОВЕРЯЕМ, ЧТО СЕРВИС ОТВЕЧАЕТ, А НЕ ЧТО SYSTEMD ЕГО ЗАПУСТИЛ.
+  #
+  # Было: `systemctl restart ... || true`, сразу за ним `is-active`, и лишь
+  # потом — необязательное ожидание health, которое при неуспехе печатало
+  # «proceeding but tests may fail» и шло дальше. Проблемы:
+  #
+  #   1) `|| true` глушил провал самого restart;
+  #   2) у обоих юнитов Type=simple, поэтому systemd считает сервис активным
+  #      В МОМЕНТ ЗАПУСКА ПРОЦЕССА — не дожидаясь, пока тот прочитает конфиг,
+  #      откроет порт или просто останется жив. Процесс, падающий через 200 мс
+  #      на кривом JWT_SECRET, успевал отрапортовать «active»;
+  #   3) настоящая проверка (health) была неблокирующей и вдобавок
+  #      срабатывала только для admin; api не проверялся никак;
+  #   4) жёсткость проверки зависела от --fail-on-mismatch, то есть от флага
+  #      про СВЕРКУ МАНИФЕСТОВ — к живости сервисов он отношения не имеет.
+  #
+  # Теперь опрос health обязателен для обоих сервисов и валит деплой.
+  sudo systemctl daemon-reload
+  sudo systemctl restart chillhub-api.service
+  sudo systemctl restart chillhub-admin.service
+
+  # No -k anywhere here: это plain http:// на loopback, TLS отсутствует как
+  # явление. 127.0.0.1, а не публичный URL, — чтобы отличать отказ сервиса от
+  # отказа nginx/сертификата; публичные проверки идут ниже.
+  wait_healthy() {
+    _name="$1"; _url="$2"; _tries="${3:-30}"; _i=1; _code=""
+    while [ "$_i" -le "$_tries" ]; do
+      _code=$(curl -s --max-time 3 -o /dev/null -w "%{http_code}" "$_url" 2>/dev/null || true)
+      if [ "$_code" = "200" ]; then
+        echo "[health] $_name отвечает 200 на $_url (попытка $_i из $_tries)"
+        return 0
+      fi
+      _i=$((_i + 1))
+      sleep 1
+    done
+    echo "[health] $_name НЕ ответил 200 на $_url за ${_tries} с (последний код: ${_code:-нет ответа})"
+    return 1
+  }
+
+  HEALTH_FAIL=0
+  wait_healthy "chillhub-admin" "http://127.0.0.1:55777/admin/api/health" 30 || HEALTH_FAIL=1
+  wait_healthy "chillhub-api"   "http://127.0.0.1:55700/api/maintenance"  30 || HEALTH_FAIL=1
+
   API_STATE=$(systemctl is-active chillhub-api.service 2>/dev/null || true)
   ADM_STATE=$(systemctl is-active chillhub-admin.service 2>/dev/null || true)
   echo "[systemd] api=$API_STATE admin=$ADM_STATE"
-  if [ -n "$FAIL_ON_MISMATCH" ]; then
-    if [ "$API_STATE" != "active" ] || [ "$ADM_STATE" != "active" ]; then echo "[deploy] One or more services not active after restart"; exit 1; fi
+  if [ "$HEALTH_FAIL" -ne 0 ]; then
+    echo "[deploy] сервисы не отвечают на health — собираю диагностику"
+    for _s in chillhub-api.service chillhub-admin.service; do
+      echo "---- systemctl status $_s ----"; sudo systemctl status "$_s" --no-pager -n 20 || true
+      echo "---- journalctl -u $_s ----"; sudo journalctl -u "$_s" -n 50 --no-pager || true
+    done
+    exit 1
   fi
 
-  # Wait for admin backend readiness to avoid transient 502/500 during smoke tests
-  echo "[wait] Waiting for admin backend health at http://127.0.0.1:55777/admin/api/health"
-  READY=0
-  for i in {1..30}; do
-    # No -k: this is plain http:// to loopback, there is no TLS to skip.
-    code=$(curl -s --max-time 2 -o /dev/null -w "%{http_code}" "http://127.0.0.1:55777/admin/api/health" || true)
-    if [ "$code" = "200" ]; then echo "[wait] admin backend READY (health=200)"; READY=1; break; fi
-    sleep 1
-  done
-  if [ "$READY" -ne 1 ]; then
-    echo "[wait] admin backend did not become ready within timeout; proceeding but tests may fail"
-  fi
-  
 # ---------------------------------------------------------------------------
 # Nginx site config: бэкап -> установка -> nginx -t -> reload, С ОТКАТОМ.
 #
@@ -1012,6 +1152,21 @@ Write-Info "Running remote deploy script via SSH"
 # Pipe the here-string content to remote bash
 # Inject sanitized parameter values into the remote script
 function Convert-ToBashDqEscaped([string]$s){ if ($null -eq $s) { return "" } return ($s -replace '"','\\"') }
+# И1: единственный безопасный способ довезти произвольное значение до bash.
+#
+# Convert-ToBashDqEscaped экранирует ТОЛЬКО двойную кавычку. Внутри двойных
+# кавычек bash всё равно раскрывает $, `...` и $(...), поэтому:
+#   * bcrypt-хеш $2y$12$... приезжал искажённым ($2y/$12 — позиционные
+#     параметры, обычно пустые) — вход в админку молча переставал работать;
+#   * значение с обратной кавычкой или $(...) ИСПОЛНЯЛОСЬ на проде под sudo.
+#
+# Base64 — это [A-Za-z0-9+/=], в нём нет ни одного символа, который bash
+# трактует специально. Декодируется ровно один раз, на той стороне (b64d).
+# Ровно так же сделано в .github/workflows/deploy.yml.
+function Convert-ToB64([string]$s){
+  if ([string]::IsNullOrEmpty($s)) { return "" }
+  return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s))
+}
 $injected = $remoteScript
   # If only plain admin password is provided, derive bcrypt locally (so server doesn't need Go)
   if ([string]::IsNullOrWhiteSpace($AdminPasswordBcrypt) -and -not [string]::IsNullOrWhiteSpace($AdminPasswordPlain)) {
@@ -1108,14 +1263,17 @@ Write-Debug ("admin manifest b64 length:     {0}" -f $adminLen)
 Write-Debug ("bin manifest b64 length:       {0}" -f $binLen)
 Write-Debug ("systemd manifest b64 length:   {0}" -f $systemdLen)
 Write-Debug ("downloads manifest b64 length: {0}" -f $downloadsLen)
-$injected = $injected.Replace('%%DOWNLOADS_DIR%%', (Convert-ToBashDqEscaped $serverDownloads))
-$injected = $injected.Replace('%%JWT_SECRET%%', (Convert-ToBashDqEscaped $JwtSecret))
-$injected = $injected.Replace('%%ADMIN_USER%%', (Convert-ToBashDqEscaped $AdminUser))
-$injected = $injected.Replace('%%ADMIN_PASS_BCRYPT%%', (Convert-ToBashDqEscaped $AdminPasswordBcrypt))
-$injected = $injected.Replace('%%ADMIN_PASS_PLAIN%%', (Convert-ToBashDqEscaped $AdminPasswordPlain))
-$injected = $injected.Replace('%%COOKIE_DOMAIN%%', (Convert-ToBashDqEscaped $CookieDomain))
-$injected = $injected.Replace('%%COOKIE_SECURE%%', (Convert-ToBashDqEscaped $CookieSecure))
-$injected = $injected.Replace('%%SITE_BASE_URL%%', (Convert-ToBashDqEscaped $SiteBaseUrl))
+# И1: свободные и секретные значения — только через base64 (Convert-ToB64).
+# Имена плейсхолдеров получили суффикс _B64, чтобы забытая подстановка
+# бросалась в глаза в самом скрипте, а не молчала.
+$injected = $injected.Replace('%%DOWNLOADS_DIR_B64%%', (Convert-ToB64 $serverDownloads))
+$injected = $injected.Replace('%%JWT_SECRET_B64%%', (Convert-ToB64 $JwtSecret))
+$injected = $injected.Replace('%%ADMIN_USER_B64%%', (Convert-ToB64 $AdminUser))
+$injected = $injected.Replace('%%ADMIN_PASS_BCRYPT_B64%%', (Convert-ToB64 $AdminPasswordBcrypt))
+$injected = $injected.Replace('%%ADMIN_PASS_PLAIN_B64%%', (Convert-ToB64 $AdminPasswordPlain))
+$injected = $injected.Replace('%%COOKIE_DOMAIN_B64%%', (Convert-ToB64 $CookieDomain))
+$injected = $injected.Replace('%%COOKIE_SECURE_B64%%', (Convert-ToB64 $CookieSecure))
+$injected = $injected.Replace('%%SITE_BASE_URL_B64%%', (Convert-ToB64 $SiteBaseUrl))
 $failFlag = if ($FailOnManifestMismatch.IsPresent) { "1" } else { "" }
 $injected = $injected.Replace('%%FAIL_ON_MISMATCH%%', (Convert-ToBashDqEscaped $failFlag))
 $injected = $injected.Replace('%%SITE_MANIFEST%%', (Convert-ToBashDqEscaped $siteManifestB64))
@@ -1135,47 +1293,97 @@ try {
 $injected = $injected.Replace('%%NGINX_CONF_SHA%%', (Convert-ToBashDqEscaped ${ngxSha}))
 # Normalize newlines to LF to avoid CR issues on remote bash
 $normalized = ($injected -replace "`r`n","`n") -replace "`r",""
-# Write to a local temp file as UTF-8 (no BOM)
-$tmpLocal = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'chillhub-deploy.ps1.tmp')
+# И29: НИКАКИХ ФИКСИРОВАННЫХ ИМЁН В ОБЩЕМ /tmp НА ПРОДЕ.
+#
+# Скрипт деплоя уезжал в /tmp/chillhub-deploy.sh, обёртка — в
+# /tmp/run-remote.sh, лог — в /tmp/chillhub-deploy.log. Имена фиксированные и
+# известны, а /tmp общий на хосте с четырьмя проектами. Отсюда две вещи:
+#
+#   * содержимое скрипта деплоя — это, в том числе, подставленные секреты
+#     (JWT_SECRET, bcrypt-хеш админа), и они лежали по известному пути;
+#   * любой локальный пользователь мог заранее создать эти пути (в том числе
+#     символической ссылкой) и вмешаться в то, что будет записано и затем
+#     исполнено.
+#
+# Теперь на каждый прогон генерируется случайный каталог с правами 0700 внутри
+# домашнего каталога пользователя деплоя — не в общем /tmp вовсе. Каталог
+# удаляется по завершении.
+$remoteRunId = [Guid]::NewGuid().ToString('N').Substring(0, 12)
+# Пути ОТНОСИТЕЛЬНЫЕ (от домашнего каталога), а не через $HOME: scp в режиме
+# SFTP — а он по умолчанию в современных OpenSSH — передаёт путь буквально и
+# переменную оболочки НЕ раскрывает, поэтому "$HOME/..." создал бы каталог с
+# именем «$HOME». Относительный путь sftp разрешает от домашнего каталога, а
+# ssh-команды всё равно стартуют с cwd=$HOME. Так работают и остальные scp в
+# этом скрипте (deploy/site и прочие).
+$remoteRunRel      = ".chillhub-deploy-run-$remoteRunId"
+$remoteScriptRel   = "$remoteRunRel/deploy.sh"
+$remoteWrapperRel  = "$remoteRunRel/run-remote.sh"
+$remoteLogRel      = "$remoteRunRel/deploy.log"
+# Внутри bash-обёртки нужен абсолютный путь — там $HOME раскроется штатно.
+$remoteScriptPath  = "`$HOME/$remoteScriptRel"
+$remoteLogPath     = "`$HOME/$remoteLogRel"
+# Каталог создаём заранее и сразу закрываем правами, ДО того как в него
+# попадёт скрипт с секретами.
+& $SSH @sshCommon $Remote "umask 077; mkdir -p '$remoteRunRel'; chmod 700 '$remoteRunRel'" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Не удалось создать приватный каталог прогона на сервере ($remoteRunRel)" }
+
+# Write to a local temp file as UTF-8 (no BOM). Локальное имя тоже уникально:
+# на машине оператора /tmp (или %TEMP%) точно так же общий.
+$tmpLocal = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "chillhub-deploy-$remoteRunId.tmp")
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($tmpLocal, $normalized, $utf8NoBom)
-# Upload to remote fixed path
-& $SCP @sshCommon $tmpLocal "${Remote}:/tmp/chillhub-deploy.sh"
+& $SCP @sshCommon $tmpLocal "${Remote}:$remoteScriptRel"
 # cleanup local temp file
 Remove-Item -Force $tmpLocal -ErrorAction SilentlyContinue
 
 # Build a small remote wrapper to avoid complex quoting via SSH
-$wrapperLocal = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'run-remote.sh')
+$wrapperLocal = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "chillhub-run-remote-$remoteRunId.sh")
 $wrapperContent = @'
 #!/bin/bash
 set -euo pipefail
+# Файлы прогона лежат в приватном каталоге 0700, созданном под этот запуск
+# (см. И29 в scripts/deploy-win.ps1). Маску держим строгой и здесь: лог
+# содержит вывод деплоя и не должен быть доступен другим пользователям хоста.
+umask 077
 rc=0
-run_cmd="/bin/bash /tmp/chillhub-deploy.sh"
-# Pre-run: quick grep to ensure vars are injected in the script
-echo "[precheck] injected vars in /tmp/chillhub-deploy.sh (grep)" || true
-grep -nE '^(JWT_SECRET|ADMIN_USER|ADMIN_PASS_BCRYPT|ADMIN_PASS_PLAIN|COOKIE_DOMAIN|COOKIE_SECURE)=' /tmp/chillhub-deploy.sh || true
+DEPLOY_SCRIPT="%%RUN_SCRIPT%%"
+DEPLOY_LOG="%%RUN_LOG%%"
+# Pre-run: убедиться, что подстановка вообще произошла.
+#
+# Раньше здесь был `grep -nE '^(JWT_SECRET|...)='`, который печатал строки
+# ЦЕЛИКОМ — то есть выкладывал секреты в лог, а лог потом ещё и скачивается
+# на машину оператора. Печатаем только имя переменной и факт наличия:
+# для «подставилось или нет» этого достаточно, а секрет не утекает.
+echo "[precheck] injected vars (names only)"
+grep -nE '^(JWT_SECRET|ADMIN_USER|ADMIN_PASS_BCRYPT|ADMIN_PASS_PLAIN|COOKIE_DOMAIN|COOKIE_SECURE)=' "$DEPLOY_SCRIPT" \
+  | sed -E 's/^([0-9]+):([A-Z_]+)=.*/[precheck] line \1: \2 present/' || true
 # Execute and capture reliably to a file, then print it unconditionally
-{ eval "$run_cmd"; } > /tmp/chillhub-deploy.log 2>&1 || rc=$?
+{ /bin/bash "$DEPLOY_SCRIPT"; } > "$DEPLOY_LOG" 2>&1 || rc=$?
 echo "--- REMOTE LOG DUMP BEGIN ---"
-cat /tmp/chillhub-deploy.log 2>/dev/null || true
+cat "$DEPLOY_LOG" 2>/dev/null || true
 echo "--- REMOTE LOG DUMP END ---"
-# keep /tmp/chillhub-deploy.log for later retrieval; clean the deploy script and wrapper
-rm -f /tmp/chillhub-deploy.sh "$0" 2>/dev/null || true
+# Скрипт деплоя удаляем немедленно: в нём подставленные секреты. Лог остаётся
+# до скачивания, каталог целиком убирает вызывающая сторона.
+rm -f "$DEPLOY_SCRIPT" "$0" 2>/dev/null || true
 exit $rc
 '@
+$wrapperContent = $wrapperContent.Replace('%%RUN_SCRIPT%%', $remoteScriptPath).Replace('%%RUN_LOG%%', $remoteLogPath)
 $wrapperNormalized = ($wrapperContent -replace "`r`n","`n") -replace "`r",""
 [System.IO.File]::WriteAllText($wrapperLocal, $wrapperNormalized, $utf8NoBom)
-& $SCP @sshCommon $wrapperLocal "${Remote}:/tmp/run-remote.sh"
+& $SCP @sshCommon $wrapperLocal "${Remote}:$remoteWrapperRel"
 Remove-Item -Force $wrapperLocal -ErrorAction SilentlyContinue
-& $SSH @sshCommon $Remote '/bin/bash' '/tmp/run-remote.sh'
-if ($LASTEXITCODE -ne 0) {
-  throw "Remote deploy failed (rc=$LASTEXITCODE)"
-}
+& $SSH @sshCommon $Remote '/bin/bash' "$remoteWrapperRel"
+$remoteRc = $LASTEXITCODE
 
-# Try to fetch remote log (if present) so that all remote output including manifest comparison is visible locally
+# Лог забираем и каталог прогона убираем ДО возможного throw.
+#
+# Раньше `throw` стоял сразу после запуска, а скачивание лога — после него:
+# при неуспешном деплое (единственный случай, когда лог реально нужен) до
+# скачивания дело не доходило. Заодно приватный каталог прогона оставался на
+# сервере навсегда, накапливаясь с каждым неудачным запуском.
 try {
-  $remoteLogLocal = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'chillhub-deploy.remote.log')
-  & $SCP @sshCommon "${Remote}:/tmp/chillhub-deploy.log" $remoteLogLocal | Out-Null
+  $remoteLogLocal = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "chillhub-deploy-$remoteRunId.remote.log")
+  & $SCP @sshCommon "${Remote}:$remoteLogRel" $remoteLogLocal | Out-Null
   if (Test-Path -LiteralPath $remoteLogLocal) {
     Write-Section "Remote script log"
     Get-Content -Raw -LiteralPath $remoteLogLocal | Write-Host
@@ -1183,6 +1391,25 @@ try {
   }
 } catch {
   Write-Warn ("Could not fetch remote log: {0}" -f $_.Exception.Message)
+}
+
+# И29: уборка приватного каталога прогона.
+#
+# Скрипт деплоя (с секретами) обёртка удаляет сразу после исполнения; здесь
+# остаётся только лог. Его ещё читает сводный скрипт ниже, поэтому полная
+# уборка сделана в самом конце (Remove-RemoteRunDir), а тут — только на пути
+# аварийного выхода, где до конца скрипта дело не дойдёт.
+function Remove-RemoteRunDir {
+  try {
+    & $SSH @sshCommon $Remote "rm -rf '$remoteRunRel'" | Out-Null
+  } catch {
+    Write-Warn ("Не удалось удалить каталог прогона на сервере ({0}): {1}" -f $remoteRunRel, $_.Exception.Message)
+  }
+}
+
+if ($remoteRc -ne 0) {
+  Remove-RemoteRunDir
+  throw "Remote deploy failed (rc=$remoteRc)"
 }
 
 # Post-deploy external smoke tests (from this machine)
@@ -1400,7 +1627,7 @@ fi
 # Enforce failure on manifest report too
   FAIL_FLAG="%%FAIL_ON_MISMATCH%%"
   if [ -n "$FAIL_FLAG" ]; then
-    if grep -qE '^(FAIL|MISS) ' /tmp/chillhub-deploy.log 2>/dev/null; then
+    if grep -qE '^(FAIL|MISS) ' "%%RUN_LOG%%" 2>/dev/null; then
       echo "---- DIAGNOSTICS (summary) ----"
       echo "---- NGINX ERROR LOG (last 200) ----"; sudo tail -n 200 /var/log/nginx/error.log || true
       echo "---- NGINX ACCESS LOG (last 200) ----"; sudo tail -n 200 /var/log/nginx/access.log || true
@@ -1418,6 +1645,9 @@ fi
   $summaryInjected = $summaryInjected.Replace('%%DOWNLOADS_MANIFEST%%', (Convert-ToBashDqEscaped $downloadsManifestB64))
   # Also inject fail flag
   $summaryInjected = $summaryInjected.Replace('%%FAIL_ON_MISMATCH%%', (Convert-ToBashDqEscaped $failFlag))
+  # И29: путь к логу прогона — он лежит в приватном каталоге этого запуска,
+  # а не под фиксированным именем в общем /tmp.
+  $summaryInjected = $summaryInjected.Replace('%%RUN_LOG%%', $remoteLogPath)
   # Make header compatible with shells lacking pipefail and force bash shebang; normalize to LF
   $summaryInjected = $summaryInjected -replace 'set -euo pipefail', "set -eu`n(set -o pipefail) 2>/dev/null || true"
   # Prepend a bash shebang if not present
@@ -1426,12 +1656,18 @@ fi
   if ($summaryInjected -match 'set -eu') { $summaryInjected = $summaryInjected -replace 'set -eu', "set -eu`n: `${VERBOSE:=}" }
   $summaryInjected = ($summaryInjected -replace "`r`n","`n") -replace "`r",""
   [System.IO.File]::WriteAllText($summaryLocal, $summaryInjected, $utf8NoBom)
-  & $SCP @sshCommon $summaryLocal "${Remote}:/tmp/summary-remote.sh"
+  # И29: сводный скрипт тоже кладём в приватный каталог прогона, а не под
+  # фиксированным /tmp/summary-remote.sh — он исполняется на сервере, где
+  # живут ещё три проекта.
+  & $SCP @sshCommon $summaryLocal "${Remote}:$remoteRunRel/summary-remote.sh"
   Remove-Item -Force $summaryLocal -ErrorAction SilentlyContinue
-  & $SSH @sshCommon $Remote '/bin/bash' '/tmp/summary-remote.sh'
-  & $SSH @sshCommon $Remote 'rm -f /tmp/summary-remote.sh' | Out-Null
+  & $SSH @sshCommon $Remote '/bin/bash' "$remoteRunRel/summary-remote.sh"
 } catch {
   Write-Warn ("Could not fetch final remote summary: {0}" -f $_.Exception.Message)
 }
+
+# И29: каталог прогона убираем в самом конце — до этого момента его лог читал
+# сводный скрипт выше.
+Remove-RemoteRunDir
 
 Write-Ok "Done"
