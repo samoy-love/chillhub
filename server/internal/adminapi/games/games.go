@@ -83,7 +83,7 @@ func (h *Handlers) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	b, err := os.ReadFile(p)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to read the registry", "games", err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -99,19 +99,19 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 		Items []Entry `json:"items"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "invalid json body", http.StatusBadRequest)
 		return
 	}
 	outDir := filepath.Dir(h.registryPath())
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to store the registry", "games", err)
 		return
 	}
 	b, _ := json.MarshalIndent(payload, "", "  ")
 	// The launcher reads this registry through the public API; a truncated write
 	// would be served as-is.
 	if err := adminutil.WriteFileAtomic(h.registryPath(), b, 0o644); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to store the registry", "games", err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -154,7 +154,7 @@ func (h *Handlers) IconUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	file, _, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, "missing file: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "missing file", http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
@@ -196,7 +196,7 @@ func (h *Handlers) IconUpload(w http.ResponseWriter, r *http.Request) {
 	// Ensure directory and save as PNG with fixed name icon.png
 	dir := filepath.Join(h.root, "manifests", gid)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to save icon", "games:icon", err)
 		return
 	}
 	outPath := filepath.Join(dir, "icon.png")
