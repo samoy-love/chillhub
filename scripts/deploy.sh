@@ -118,10 +118,23 @@ SERVICES=(chillhub-api.service chillhub-admin.service)
 SECRET_DIR="/etc/chillhub"
 SECRET_FILE="$SECRET_DIR/admin.env"
 
-# If downloads dir not provided, default to sibling of REPO_DIR
+# If downloads dir not provided, default to sibling of REPO_DIR.
+#
+# Здесь было: PARENT_DIR="$(dirname \"$REPO_DIR\")".
+# Внутри $( ) НЕ нужно экранировать кавычки — обратный слэш не съедается, и
+# dirname получал аргумент вида "/home/user/Launcher-Project" ВМЕСТЕ с кавычками.
+# Результат — путь с ведущей кавычкой, DOWNLOADS_DIR вида '"/home/user/downloads',
+# и проверка [[ -d "$DOWNLOADS_DIR" ]] ниже была ложной ВСЕГДА.
+#
+# Последствие тянулось молча: внешний каталог downloads/ не синхронизировался
+# ни разу, установщик на лендинге не обновлялся, а в лог печаталось бодрое
+# "not found (skip)" — то есть отказ выглядел как штатная ветка.
 if [[ -z "$DOWNLOADS_DIR" ]]; then
-  PARENT_DIR="$(dirname \"$REPO_DIR\")"
+  PARENT_DIR="$(dirname "$REPO_DIR")"
   DOWNLOADS_DIR="$PARENT_DIR/downloads"
+  DOWNLOADS_DIR_IS_DEFAULT=1
+else
+  DOWNLOADS_DIR_IS_DEFAULT=0
 fi
 
 # Load persisted bcrypt if present.
@@ -332,12 +345,25 @@ log "Sync landing to $SITE_ROOT"
 # Keep /downloads separate from repo; sync landing excluding downloads
 run "sudo rsync -a --delete --exclude 'downloads/' \"$REPO_DIR/landing/\" \"$SITE_ROOT/\""
 
-# Sync external downloads (next to REPO_DIR) into site downloads
+# Sync external downloads (next to REPO_DIR) into site downloads.
+#
+# Пропуск синхронизации ОБЯЗАН быть заметен. Раньше это была строка log-уровня
+# "not found (skip)" в общем потоке — и когда каталог не находился из-за бага с
+# кавычками (см. DOWNLOADS_DIR выше), деплой годами выглядел успешным, а
+# /downloads/ChillHub-Setup.exe на лендинге оставался старым или отсутствовал.
 if [[ -d "$DOWNLOADS_DIR" ]]; then
   log "Sync external downloads from $DOWNLOADS_DIR to $SITE_ROOT/downloads"
   run "sudo rsync -a \"$DOWNLOADS_DIR/\" \"$SITE_ROOT/downloads/\""
+  ok "External downloads synced: $(find "$DOWNLOADS_DIR" -type f 2>/dev/null | wc -l | tr -d ' ') file(s) from $DOWNLOADS_DIR"
 else
-  log "External downloads directory not found: $DOWNLOADS_DIR (skip)"
+  section "ВНИМАНИЕ: внешний каталог downloads НЕ синхронизирован"
+  warn "Каталог не найден: $DOWNLOADS_DIR"
+  if [[ "$DOWNLOADS_DIR_IS_DEFAULT" == "1" ]]; then
+    warn "Путь выбран по умолчанию как сосед репозитория ($REPO_DIR). Если каталог лежит в другом месте — укажите --downloads-dir <path>."
+  else
+    warn "Путь задан явно через --downloads-dir. Проверьте, что он существует на ЭТОМ хосте."
+  fi
+  warn "Пока каталог не найден, $SITE_ROOT/downloads/ не обновляется: кнопка скачивания на лендинге отдаёт старый файл или 404."
 fi
 
 log "Sync static only (landing, admin_ui). Do not touch server content dirs."
