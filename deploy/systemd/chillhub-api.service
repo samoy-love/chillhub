@@ -14,5 +14,39 @@ RestartSec=3
 # Increase file limits for many concurrent downloads
 LimitNOFILE=65536
 
+# --- Изоляция ---
+# Сервис смотрит в интернет и раздаёт файлы, поэтому ограничиваем заранее: если
+# в нём когда-нибудь найдут дыру, она должна упереться в песочницу, а не в весь
+# хост, где живут ещё три проекта.
+#
+# ProtectSystem=strict делает всю файловую систему доступной только для чтения,
+# кроме явно перечисленного в ReadWritePaths.
+#
+# Каталог контента открыт на запись намеренно, хотя обработчики API только
+# читают: пакет maintenance, который линкуют оба сервиса, умеет сохранять
+# состояние. Запрет дал бы не отказ при старте, а тихий сбой где-то в рантайме —
+# худший из возможных вариантов. Всё остальное (/etc, /usr, /home, параметры
+# ядра) остаётся недоступным.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ReadWritePaths=/var/www/launcher
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+# Go не генерирует код на лету, поэтому запрет W+X-страниц безопасен.
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
 [Install]
 WantedBy=multi-user.target
