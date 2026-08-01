@@ -908,7 +908,13 @@ namespace ChillHub.Pages {
                 // Сборки
                 var buildsUrl = $"{this.BaseApi}/api/games/{gameId}/builds";
                 var buildsResp = await this.http.GetFromJsonAsync<BuildsResponse>(buildsUrl);
-                this.builds = buildsResp?.Items ?? new List<string>();
+
+                // Сервер отдаёт сборки в произвольном порядке, а код ниже берёт из списка
+                // «последнюю версию». Сортируем сами: на проде первым элементом приходила
+                // 1.0.2 при доступной 1.1.10.
+                this.builds = (buildsResp?.Items ?? new List<string>())
+                    .OrderByDescending(v => v, Comparer<string>.Create(VersionOrder.Compare))
+                    .ToList();
 
                 // Обновим локальные поля, но не трогаем NeedsUpdate здесь — его ставит проверка по манифесту
                 var game = this.games.FirstOrDefault(g => g.GameId == gameId);
@@ -1090,11 +1096,11 @@ namespace ChillHub.Pages {
                     return;
                 }
 
-                // Версия: latest из списка игр, иначе первая из списка сборок
+                // Версия: latest из списка игр, иначе максимальная из списка сборок
                 var game = this.games?.FirstOrDefault(g => g.GameId == gid);
                 var version = game?.LatestVersion;
-                if (string.IsNullOrWhiteSpace(version) && this.builds != null && this.builds.Count > 0) {
-                    version = this.builds[0];
+                if (string.IsNullOrWhiteSpace(version)) {
+                    version = VersionOrder.SelectLatest(this.builds);
                 }
 
                 if (string.IsNullOrWhiteSpace(version)) {
@@ -1367,8 +1373,8 @@ namespace ChillHub.Pages {
                 var game = this.games.FirstOrDefault(g => g.GameId == gid);
                 var version = game?.LatestVersion;
                 if (string.IsNullOrWhiteSpace(version)) {
-                    // Фолбэк: возьмём первый элемент из списка, если latest неизвестен
-                    version = (this.builds != null && this.builds.Count > 0) ? this.builds[0] : null;
+                    // Фолбэк: максимальная версия из списка сборок, если latest неизвестен
+                    version = VersionOrder.SelectLatest(this.builds);
                 }
 
                 if (string.IsNullOrWhiteSpace(version)) {
