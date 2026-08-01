@@ -76,11 +76,20 @@ namespace ChillHub.Pages {
             Retry
         }
 
-        // ===== Feedback model and queue =====
-        private record FeedbackDraft(string Name, string Contact, string Type, string Comment, bool AttachLogs, Dictionary<string, string>? System);
-        private List<FeedbackDraft> feedbackQueue = new();
-        private DispatcherTimer? feedbackRetryTimer;
-        private string FeedbackQueuePath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ChillHub", "feedback_queue.json");
+        // ===== Обратная связь =====
+        // Отправка, оффлайн-очередь и ретраи живут в Core/Home/FeedbackService.
+        // Здесь остаются только обработчики, на имена которых ссылается XAML.
+        private FeedbackService? feedback;
+
+        private FeedbackService Feedback => this.feedback ??= new FeedbackService(
+            this.http,
+            () => this.BaseApi,
+            msg => this.ShowToast(msg),
+            text => {
+                if (this.FbStatus != null) {
+                    this.FbStatus.Text = text;
+                }
+            });
 
         private void FeedbackBtn_Click(object sender, RoutedEventArgs e) {
             try {
@@ -88,251 +97,74 @@ namespace ChillHub.Pages {
                 this.FbContact.Text = string.Empty;
                 this.FbComment.Text = string.Empty;
                 this.FbStatus.Text = string.Empty;
-                try { this.FbType.SelectedIndex = 0; } catch { }
+                this.FbType.SelectedIndex = 0;
                 this.FeedbackOverlay.Visibility = Visibility.Visible;
-                // No pre-validation on open; user will see validation only on Send
-            } catch { }
+
+                // Валидация только по нажатию «Отправить»: на открытии ничего не подсвечиваем
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "Feedback.OpenForm");
+                this.ShowToast("Не удалось открыть форму обратной связи");
+            }
         }
 
         private void FbCancel_Click(object sender, RoutedEventArgs e) {
-            try { this.FeedbackOverlay.Visibility = Visibility.Collapsed; } catch { }
+            this.FeedbackOverlay.Visibility = Visibility.Collapsed;
         }
 
         private async void FbSend_Click(object sender, RoutedEventArgs e) {
             try {
-                var name = this.FbName.Text?.Trim() ?? string.Empty;
-                var contact = this.FbContact.Text?.Trim() ?? string.Empty;
                 var comment = this.FbComment.Text?.Trim() ?? string.Empty;
-                var attach = true; // always attach logs per UX change
-                var type = GetFeedbackTypeString();
-                if (string.IsNullOrWhiteSpace(comment) || comment.Length < 5) { this.FbStatus.Text = "Опишите проблему (мин. 5 символов)"; return; }
-                var system = attach ? this.CollectSystemInfo() : null;
-                var draft = new FeedbackDraft(name, contact, type, comment, attach, system);
+                if (comment.Length < 5) {
+                    this.FbStatus.Text = "Опишите проблему (мин. 5 символов)";
+                    return;
+                }
+
+                var draft = new FeedbackService.FeedbackDraft(
+                    this.FbName.Text?.Trim() ?? string.Empty,
+                    this.FbContact.Text?.Trim() ?? string.Empty,
+                    this.GetFeedbackTypeString(),
+                    comment,
+                    true, // логи прикрепляем всегда — так решили в UX
+                    FeedbackService.CollectSystemInfo());
+
                 this.FbStatus.Text = "Отправка...";
-                var ok = await this.TrySendFeedbackAsync(draft, silent: false).ConfigureAwait(true);
+                var ok = await this.Feedback.TrySendAsync(draft, silent: false).ConfigureAwait(true);
                 if (ok) {
                     this.FbStatus.Text = "Отправлено";
                     this.ShowToast("Спасибо! Сообщение отправлено");
-                    this.FeedbackOverlay.Visibility = Visibility.Collapsed;
-                } else {
-                    EnqueueFeedback(draft);
+                }
+                else {
+                    this.Feedback.Enqueue(draft);
                     this.FbStatus.Text = "В ожидании отправки (оффлайн)";
                     this.ShowToast("Сообщение поставлено в очередь");
-                    this.FeedbackOverlay.Visibility = Visibility.Collapsed;
                 }
-            } catch (Exception ex) {
-                try { Core.Logging.Logger.Error(ex, "Feedback.Send"); } catch { }
+
+                this.FeedbackOverlay.Visibility = Visibility.Collapsed;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "Feedback.Send");
                 this.ShowToast("Ошибка отправки");
             }
         }
 
-        // Disable live validation: do nothing on each input change
+        // Живая валидация отключена: проверяем только по нажатию «Отправить»
         private void FbField_Changed(object? sender, TextChangedEventArgs e) { /* no-op */ }
-
-        private void UpdateFeedbackValidation()
-        {
-            try {
-                var comment = this.FbComment?.Text ?? string.Empty;
-                var isOk = !string.IsNullOrWhiteSpace(comment) && comment.Trim().Length >= 5;
-
-                // pick brushes
-                var okBrush = (this.TryFindResource("Brush.Border") as Brush) ?? new SolidColorBrush(Color.FromRgb(64,64,64));
-                var errBrush = new SolidColorBrush(Color.FromRgb(255,107,107)); // matches danger accents
-                if (this.FbComment != null) this.FbComment.BorderBrush = isOk ? okBrush : errBrush;
-                if (this.FbSendBtn != null) this.FbSendBtn.IsEnabled = isOk;
-                if (this.FbStatus != null) this.FbStatus.Text = isOk ? string.Empty : "Опишите проблему (мин. 5 символов)";
-            } catch { }
-        }
 
         private string GetFeedbackTypeString() {
             try {
                 var item = this.FbType.SelectedItem as ComboBoxItem;
-                var txt = item?.Content?.ToString()?.Trim()?.ToLowerInvariant() ?? "";
+                var txt = item?.Content?.ToString()?.Trim()?.ToLowerInvariant() ?? string.Empty;
                 return txt switch { "баг" => "bug", "идея" => "idea", "вопрос" => "question", _ => "other" };
-            } catch { return "other"; }
-        }
-
-        private Dictionary<string, string> CollectSystemInfo() {
-            var dict = new Dictionary<string, string>();
-            try {
-                dict["os"] = Environment.OSVersion.VersionString;
-                dict["arch"] = Environment.Is64BitOperatingSystem ? "x64" : "x86";
-                dict["dotnet"] = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription;
-                dict["machineName"] = Environment.MachineName;
-                dict["appVersion"] = typeof(HomePage).Assembly.GetName().Version?.ToString() ?? "";
-            } catch { }
-            return dict;
-        }
-
-        private async Task<bool> TrySendFeedbackAsync(FeedbackDraft d, bool silent = true) {
-            try {
-                var baseApi = this.BaseApi.TrimEnd('/');
-                var url = baseApi + "/feedback/submit";
-                // Global persistent quota (shared with ErrorReporter): limit total reports per window
-                try {
-                    if (!ChillHub.Core.ErrorReporter.TryConsumeManual(out var retryAfter)) {
-                        if (!silent) {
-                            var mins = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalMinutes));
-                            this.FbStatus.Text = $"Лимит ручных отправок исчерпан. Повторите через ~{mins} мин.";
-                            this.ShowToast($"Лимит ручных отправок исчерпан. Повторите через ~{mins} мин.");
-                        }
-                        return false;
-                    }
-                } catch { }
-                // Build rich diagnostics bundle if requested
-                string logsPayload = string.Empty;
-                Dictionary<string, string>? extraSystem = d.System;
-                if (d.AttachLogs) {
-                    try {
-                        var bundle = await Task.Run(() => ChillHub.Core.Diagnostics.Build()).ConfigureAwait(true);
-                        logsPayload = bundle.LogsMarkdown;
-                        // augment system with computed hints
-                        extraSystem = extraSystem ?? new Dictionary<string, string>();
-                        foreach (var kv in bundle.SystemHints) { extraSystem[kv.Key] = kv.Value; }
-                    } catch { /* non-fatal */ }
-                }
-                using var req = new HttpRequestMessage(HttpMethod.Post, url) {
-                    Content = new StringContent(JsonSerializer.Serialize(new {
-                        name = d.Name,
-                        contact = d.Contact,
-                        type = d.Type,
-                        comment = d.Comment,
-                        attachLogs = d.AttachLogs,
-                        logs = logsPayload,
-                        system = extraSystem,
-                    }), Encoding.UTF8, "application/json")
-                };
-                HttpResponseMessage res;
-                try {
-                    res = await this.http.SendAsync(req).ConfigureAwait(false);
-                } catch (Exception exSend) {
-                    try { Core.Logging.Logger.Error(exSend, "Feedback.Send.HttpError"); } catch { }
-                    if (!silent) { this.ShowToast("Не удалось отправить (сеть/сервер недоступны)"); }
-                    // Local-dev fallback: if BaseApi is localhost and network failed, try admin port 55777
-                    if (TryBuildLocalAdminUrl(baseApi, out var adminUrl)) {
-                        try {
-                            using var req2 = new HttpRequestMessage(HttpMethod.Post, adminUrl) { Content = req.Content };
-                            var res2 = await this.http.SendAsync(req2).ConfigureAwait(false);
-                            if (res2.IsSuccessStatusCode) return true;
-                        } catch (Exception exSend2) { try { Core.Logging.Logger.Error(exSend2, "Feedback.Send.HttpError.Fallback"); } catch { } }
-                    }
-                    return false;
-                }
-                if (res.IsSuccessStatusCode) {
-                    return true;
-                }
-                // capture body snippet for diagnostics
-                string body = string.Empty;
-                try { body = await res.Content.ReadAsStringAsync().ConfigureAwait(false); } catch { }
-                try { Core.Logging.Logger.Warn($"Feedback.Send failed: {(int)res.StatusCode} {res.ReasonPhrase}; body='{body}'"); } catch { }
-                // Local-dev fallback for wrong port (e.g., 404 on API port): retry against admin port 55777
-                if (TryBuildLocalAdminUrl(baseApi, out var adminUrl2)) {
-                    try {
-                        using var req3 = new HttpRequestMessage(HttpMethod.Post, adminUrl2) { Content = req.Content };
-                        var res3 = await this.http.SendAsync(req3).ConfigureAwait(false);
-                        if (res3.IsSuccessStatusCode) return true;
-                        try {
-                            var b3 = await res3.Content.ReadAsStringAsync().ConfigureAwait(false);
-                            Core.Logging.Logger.Warn($"Feedback.Send fallback failed: {(int)res3.StatusCode} {res3.ReasonPhrase}; body='{b3}'");
-                        } catch { }
-                    } catch (Exception exSend3) { try { Core.Logging.Logger.Error(exSend3, "Feedback.Send.FallbackUnexpected"); } catch { } }
-                }
-                if (!silent) { this.ShowToast($"Сервер отклонил отправку: {(int)res.StatusCode}"); }
-                return false;
-            } catch (Exception ex) {
-                try { Core.Logging.Logger.Error(ex, "Feedback.Send.Unexpected"); } catch { }
-                if (!silent) { this.ShowToast("Ошибка отправки"); }
-                return false;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"Feedback.GetType: {ex.Message}; используем 'other'");
+                return "other";
             }
         }
 
-        private static bool TryBuildLocalAdminUrl(string baseApi, out string adminUrl)
-        {
-            adminUrl = string.Empty;
-            try {
-                if (!Uri.TryCreate(baseApi, UriKind.Absolute, out var u)) return false;
-                var host = (u.Host ?? "").ToLowerInvariant();
-                if (host == "localhost" || host == "127.0.0.1") {
-                    var ub = new UriBuilder(u);
-                    ub.Port = 55777; // admin in local dev
-                    adminUrl = new Uri(ub.Uri, "/feedback/submit").ToString();
-                    return true;
-                }
-            } catch { }
-            return false;
-        }
-
-        private void EnqueueFeedback(FeedbackDraft d) {
-            try {
-                this.feedbackQueue.Add(d);
-                this.SaveFeedbackQueue();
-                _ = this.FlushFeedbackQueueNowAsync();
-            } catch { }
-        }
-
-        private void LoadFeedbackQueue() {
-            try {
-                var p = this.FeedbackQueuePath;
-                var dir = System.IO.Path.GetDirectoryName(p);
-                if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
-                if (!File.Exists(p)) { this.feedbackQueue = new List<FeedbackDraft>(); return; }
-                var json = File.ReadAllText(p, Encoding.UTF8);
-                var items = JsonSerializer.Deserialize<List<FeedbackDraft>>(json) ?? new List<FeedbackDraft>();
-                this.feedbackQueue = items;
-            } catch { this.feedbackQueue = new List<FeedbackDraft>(); }
-        }
-
-        private void SaveFeedbackQueue() {
-            try {
-                var p = this.FeedbackQueuePath;
-                var dir = System.IO.Path.GetDirectoryName(p);
-                if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
-                var json = JsonSerializer.Serialize(this.feedbackQueue, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(p, json, Encoding.UTF8);
-            } catch { }
-        }
-
-        private async Task FlushFeedbackQueueNowAsync() {
-            try {
-                if (this.feedbackQueue.Count == 0) return;
-                int i = 0; int sent = 0;
-                while (i < this.feedbackQueue.Count && sent < 5) {
-                    var d = this.feedbackQueue[i];
-                    // quick immediate retry for robustness
-                    var ok = await this.TrySendFeedbackAsync(d, silent: true).ConfigureAwait(true);
-                    if (!ok) {
-                        // do a short backoff retry once
-                        try { await Task.Delay(800).ConfigureAwait(true); } catch { }
-                        ok = await this.TrySendFeedbackAsync(d, silent: true).ConfigureAwait(true);
-                    }
-                    if (ok) { this.feedbackQueue.RemoveAt(i); sent++; }
-                    else { i++; }
-                }
-                if (sent > 0) {
-                    this.SaveFeedbackQueue();
-                    try {
-                        var msg = sent == 1 ? "Одно отложенное сообщение отправлено" : $"Отправлены отложенные сообщения: {sent}";
-                        this.ShowToast(msg);
-                    } catch { }
-                }
-            } catch { }
-        }
-
-        private void StartFeedbackRetryLoop() {
-            try {
-                this.feedbackRetryTimer?.Stop();
-                this.feedbackRetryTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(10) };
-                this.feedbackRetryTimer.Tick += async (s, e) => {
-                    await this.FlushFeedbackQueueNowAsync();
-                };
-                this.feedbackRetryTimer.Start();
-            } catch { }
-        }
         private ActionMode actionMode = ActionMode.Checking;
         private bool hasUpdateError = false;
-
-        // Feedback retry loop timer reference (declared later near queue as well)
-        // kept here only if needed; actual implementation declared below
 
         public HomePage() {
             this.InitializeComponent();
@@ -340,33 +172,34 @@ namespace ChillHub.Pages {
             // Самообновление обрабатывается отдельным окном UpdateWindow до показа MainWindow
             _ = this.StartupAsync();
 
-            // Инициализация состояния единой кнопки действий
+            // Ни одна из инициализаций ниже не должна ронять конструктор страницы:
+            // при сбое любой из них лаунчер обязан открыться, пусть и без части удобств.
             try {
+                // Начальное состояние единой кнопки действий
                 this.UpdateActionButtonState();
-            }
-            catch {
-            }
 
-            // Init feedback retry loop and load queued items
-            try { this.LoadFeedbackQueue(); this.StartFeedbackRetryLoop(); } catch { }
-            // Do not disable Send by default; validation is performed on click
-            try { if (this.FbSendBtn != null) this.FbSendBtn.IsEnabled = true; } catch { }
+                // Оффлайн-очередь обратной связи: поднимаем с диска и запускаем ретраи
+                this.Feedback.Start();
 
-            // Handle ESC to close feedback overlay with confirmation
-            try { this.PreviewKeyDown += HomePage_PreviewKeyDown; } catch { }
+                // Кнопку «Отправить» не блокируем: валидация выполняется по клику
+                if (this.FbSendBtn != null) {
+                    this.FbSendBtn.IsEnabled = true;
+                }
 
-            // Subscribe to auto error reports to show a toast banner
-            try {
-                ChillHub.Core.ErrorReporter.AutoReported += (ctx) => {
-                    try { _ = this.DispatcherInvokeAsync(() => this.ShowToast("Произошла ошибка. Отчёт автоматически отправлен")); } catch { }
-                };
+                // ESC закрывает форму обратной связи (с подтверждением)
+                this.PreviewKeyDown += this.HomePage_PreviewKeyDown;
+
+                // Баннер о том, что отчёт об ошибке ушёл автоматически
+                ChillHub.Core.ErrorReporter.AutoReported += (ctx) =>
+                    _ = this.DispatcherInvokeAsync(() => this.ShowToast("Произошла ошибка. Отчёт автоматически отправлен"));
                 ChillHub.Core.ErrorReporter.AutoReportSuppressed += (ts) => {
-                    try {
-                        var mins = Math.Max(1, (int)Math.Ceiling(ts.TotalMinutes));
-                        _ = this.DispatcherInvokeAsync(() => this.ShowToast($"Лимит авто-репортов исчерпан. Доступно через ~{mins} мин."));
-                    } catch { }
+                    var mins = Math.Max(1, (int)Math.Ceiling(ts.TotalMinutes));
+                    _ = this.DispatcherInvokeAsync(() => this.ShowToast($"Лимит авто-репортов исчерпан. Доступно через ~{mins} мин."));
                 };
-            } catch { }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "HomePage.ctor");
+            }
         }
 
         private void HomePage_PreviewKeyDown(object sender, KeyEventArgs e)
