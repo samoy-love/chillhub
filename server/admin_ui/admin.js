@@ -2109,10 +2109,38 @@ async function upload(){
 }
 
 
+// Кнопки длительных операций (заливка ZIP, сохранение реестра, сохранение
+// новости) должны блокироваться на время работы: без этого повторный клик
+// запускал вторую заливку в тот же слот версии, и две операции писали
+// одновременно. Состояние возвращаем в finally, чтобы кнопка не осталась
+// заблокированной после ошибки.
+function bindBusyClick(id, fn, busyText){
+  const btn = document.getElementById(id);
+  if(!btn) return;
+  let running = false;
+  btn.addEventListener('click', async (e)=>{
+    e.preventDefault();
+    if(running) return;
+    running = true;
+    const prevDisabled = btn.disabled;
+    const prevText = btn.textContent;
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    if(busyText) btn.textContent = busyText;
+    try{ await fn(); }
+    finally{
+      running = false;
+      btn.disabled = prevDisabled;
+      btn.removeAttribute('aria-busy');
+      if(busyText) btn.textContent = prevText;
+    }
+  });
+}
+
 // Wire buttons (guarded)
-if (document.getElementById('btnUpload')) document.getElementById('btnUpload').addEventListener('click', upload);
+bindBusyClick('btnUpload', upload, 'Загрузка...');
 // Manifests wiring
-if (document.getElementById('man_upload')) document.getElementById('man_upload').addEventListener('click', manifestsUpload);
+bindBusyClick('man_upload', manifestsUpload, 'Загрузка...');
 // Show live value for concurrency slider
 (()=>{ const s = document.getElementById('man_conc'); const v = document.getElementById('man_conc_val'); if(s&&v){ v.textContent = String(s.value||'6'); s.addEventListener('input', ()=>{ v.textContent = String(s.value||'6'); }); }})();
 // Cleanup button
@@ -2150,15 +2178,15 @@ function ensureLauncherVersionsCard(){
 }
 // Manifests page: Games editor buttons
 if (document.getElementById('mgm_add')) document.getElementById('mgm_add').addEventListener('click', mgmAddRow);
-if (document.getElementById('mgm_save')) document.getElementById('mgm_save').addEventListener('click', mgmSave);
-if (document.getElementById('mgm_resync')) document.getElementById('mgm_resync').addEventListener('click', mgmResync);
+bindBusyClick('mgm_save', mgmSave, 'Сохранение...');
+bindBusyClick('mgm_resync', mgmResync, 'Обновление...');
 // Launcher page buttons
 if (document.getElementById('ln_refresh')) document.getElementById('ln_refresh').addEventListener('click', lnRefresh);
 
 // News wiring (guarded)
 if (document.getElementById('ns_btnList')) document.getElementById('ns_btnList').addEventListener('click', newsList);
 if (document.getElementById('ns_btnNew')) document.getElementById('ns_btnNew').addEventListener('click', ()=>{ if(document.getElementById('ns_slug')) document.getElementById('ns_slug').value=''; if(document.getElementById('ns_md')){ const ta=document.getElementById('ns_md'); ta.value=''; autosizeTextArea(ta);} if(document.getElementById('ns_preview')) document.getElementById('ns_preview').innerHTML=''; });
-if (document.getElementById('ns_btnSave')) document.getElementById('ns_btnSave').addEventListener('click', newsSave);
+bindBusyClick('ns_btnSave', newsSave, 'Сохранение...');
 if (document.getElementById('ns_btnDelete')) document.getElementById('ns_btnDelete').addEventListener('click', newsDelete);
 if (document.getElementById('ns_btnPreview')) document.getElementById('ns_btnPreview').addEventListener('click', newsPreview);
 if (document.getElementById('ns_btnCover')) document.getElementById('ns_btnCover').addEventListener('click', ()=>openPickUploadDialog('cover'));
