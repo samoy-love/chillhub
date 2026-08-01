@@ -23,7 +23,7 @@ namespace ChillHub.Core {
 
         /// <summary>Общий бюджет на все секции логов: чтобы один болтливый файл не съел весь бандл.</summary>
         private sealed class LogBudget {
-            public int Remaining = LogsTotalBudgetBytes;
+            public int Remaining { get; set; } = LogsTotalBudgetBytes;
         }
 
         public sealed record DiagnosticsBundle(string LogsMarkdown, Dictionary<string, string> SystemHints);
@@ -255,10 +255,12 @@ namespace ChillHub.Core {
         private static void AppendSpecificLogs(StringBuilder sb, IEnumerable<string> filesIn, int maxFiles, int maxTailBytes, LogBudget budget) {
             try {
                 var files = new List<string>();
-                foreach (var f in filesIn) { if (!string.IsNullOrWhiteSpace(f) && File.Exists(f)) {
+                foreach (var f in filesIn) {
+                    if (!string.IsNullOrWhiteSpace(f) && File.Exists(f)) {
                         files.Add(f);
                     }
                 }
+
                 if (files.Count == 0) { sb.AppendLine("(no log files found)"); return; }
                 int used = 0;
                 foreach (var f in files) {

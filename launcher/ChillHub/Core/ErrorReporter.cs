@@ -143,34 +143,6 @@ namespace ChillHub.Core {
             catch { }
         }
 
-        private static void CurrentDomain_UnhandledException(object? sender, UnhandledExceptionEventArgs e) {
-            try {
-                var ex = e.ExceptionObject as Exception;
-                if (ex != null) {
-                    ReportAsync(ex, "AppDomain.UnhandledException", includeDiagnostics: true);
-                }
-            }
-            catch { }
-        }
-
-        private static void Current_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e) {
-            try {
-                if (e?.Exception != null) {
-                    ReportAsync(e.Exception, "DispatcherUnhandledException", includeDiagnostics: true);
-                }
-            }
-            catch { }
-        }
-
-        private static void TaskScheduler_UnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e) {
-            try {
-                if (e?.Exception != null) {
-                    ReportAsync(e.Exception, "TaskScheduler.UnobservedTaskException", includeDiagnostics: true);
-                }
-            }
-            catch { }
-        }
-
         /// <summary>
         /// Fire-and-forget error report.
         /// </summary>
@@ -261,6 +233,34 @@ namespace ChillHub.Core {
                     }
                 }
                 else { OnAutoReported(context); }
+            }
+            catch { }
+        }
+
+        private static void CurrentDomain_UnhandledException(object? sender, UnhandledExceptionEventArgs e) {
+            try {
+                var ex = e.ExceptionObject as Exception;
+                if (ex != null) {
+                    ReportAsync(ex, "AppDomain.UnhandledException", includeDiagnostics: true);
+                }
+            }
+            catch { }
+        }
+
+        private static void Current_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e) {
+            try {
+                if (e?.Exception != null) {
+                    ReportAsync(e.Exception, "DispatcherUnhandledException", includeDiagnostics: true);
+                }
+            }
+            catch { }
+        }
+
+        private static void TaskScheduler_UnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e) {
+            try {
+                if (e?.Exception != null) {
+                    ReportAsync(e.Exception, "TaskScheduler.UnobservedTaskException", includeDiagnostics: true);
+                }
             }
             catch { }
         }

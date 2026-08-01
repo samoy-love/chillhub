@@ -92,6 +92,47 @@ namespace ChillHub.Core {
             }
         }
 
+        public static void EnsureDir(string path) {
+            try {
+                Directory.CreateDirectory(path);
+            }
+            catch {
+            }
+        }
+
+        public static AppConfig Current => cache ?? Load();
+
+        /// <summary>
+        /// Применяет единственную тёмную тему. Выбор темы из конфига убран — тема одна.
+        /// </summary>
+        public static void ApplyTheme() {
+            try {
+                var app = Application.Current;
+                if (app == null) {
+                    return;
+                }
+
+                // remove previous theme dictionaries
+                for (int i = app.Resources.MergedDictionaries.Count - 1; i >= 0; i--) {
+                    var md = app.Resources.MergedDictionaries[i];
+                    var src = md.Source?.OriginalString ?? string.Empty;
+                    if (src.IndexOf("Themes/", StringComparison.OrdinalIgnoreCase) >= 0) {
+                        app.Resources.MergedDictionaries.RemoveAt(i);
+                    }
+                }
+
+                // Always use dark theme
+                var uri = new Uri("/ChillHub;component/Themes/Theme.Dark.xaml", UriKind.Relative);
+                app.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = uri });
+                if (app.MainWindow != null) {
+                    app.MainWindow.SetResourceReference(Window.BackgroundProperty, "Brush.Background");
+                }
+            }
+            catch (Exception ex) {
+                Debug.WriteLine($"[Theme] ApplyTheme error: {ex.Message}");
+            }
+        }
+
         /// <summary>
         /// Одноразовый перенос config.json из %LOCALAPPDATA%\ChillHub в %APPDATA%\ChillHub.
         /// Идемпотентно: если новый файл уже есть — ничего не делает.
@@ -129,14 +170,6 @@ namespace ChillHub.Core {
             }
         }
 
-        public static void EnsureDir(string path) {
-            try {
-                Directory.CreateDirectory(path);
-            }
-            catch {
-            }
-        }
-
         private static void Clamp(AppConfig cfg) {
             if (cfg.DownloadThreads < 2) {
                 cfg.DownloadThreads = 2;
@@ -152,39 +185,6 @@ namespace ChillHub.Core {
 
             if (string.IsNullOrWhiteSpace(cfg.ApiBaseUrl)) {
                 cfg.ApiBaseUrl = "https://launcher.samoy.love";
-            }
-        }
-
-        public static AppConfig Current => cache ?? Load();
-
-        /// <summary>
-        /// Применяет единственную тёмную тему. Выбор темы из конфига убран — тема одна.
-        /// </summary>
-        public static void ApplyTheme() {
-            try {
-                var app = Application.Current;
-                if (app == null) {
-                    return;
-                }
-
-                // remove previous theme dictionaries
-                for (int i = app.Resources.MergedDictionaries.Count - 1; i >= 0; i--) {
-                    var md = app.Resources.MergedDictionaries[i];
-                    var src = md.Source?.OriginalString ?? string.Empty;
-                    if (src.IndexOf("Themes/", StringComparison.OrdinalIgnoreCase) >= 0) {
-                        app.Resources.MergedDictionaries.RemoveAt(i);
-                    }
-                }
-
-                // Always use dark theme
-                var uri = new Uri("/ChillHub;component/Themes/Theme.Dark.xaml", UriKind.Relative);
-                app.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = uri });
-                if (app.MainWindow != null) {
-                    app.MainWindow.SetResourceReference(Window.BackgroundProperty, "Brush.Background");
-                }
-            }
-            catch (Exception ex) {
-                Debug.WriteLine($"[Theme] ApplyTheme error: {ex.Message}");
             }
         }
     }
