@@ -231,6 +231,11 @@ namespace ChillHub.Core.Sync {
         /// <param name="source">Что проверяем (URL или описание) — попадает в лог и в текст ошибки.</param>
         /// <exception cref="ManifestSignatureException">Подпись неверна либо строгий режим не удовлетворён.</exception>
         public static void Enforce(Manifest manifest, string source) {
+            // Структурная проверка идёт первой и НЕ зависит от режима совместимости.
+            // Подпись отвечает на вопрос «манифест наш?», а не «манифест осмысленный?»:
+            // путь с ".." или дубликат пути опасны независимо от того, кто их подписал.
+            ManifestValidator.Validate(manifest, source);
+
             var status = Check(manifest, PublicKeyBase64);
             switch (status) {
                 case ManifestSignatureStatus.Valid:
@@ -264,17 +269,14 @@ namespace ChillHub.Core.Sync {
         }
 
         /// <summary>
-        /// Приводит путь манифеста к каноническому виду: слеши вперёд, без
-        /// повторов и без ведущих/замыкающих слешей.
+        /// Приводит путь манифеста к каноническому виду.
+        /// <para>
+        /// Одна реализация на весь проект (<see cref="ChillHub.Update.ManifestPath.Canonicalize"/>):
+        /// разойдись канонизация подписи и канонизация записи на диск — и подпись
+        /// снова начнёт покрывать не тот путь, который создаётся.
+        /// </para>
         /// </summary>
-        private static string CanonPath(string? p) {
-            var s = (p ?? string.Empty).Trim().Replace('\\', '/');
-            while (s.Contains("//", StringComparison.Ordinal)) {
-                s = s.Replace("//", "/", StringComparison.Ordinal);
-            }
-
-            return s.Trim('/');
-        }
+        private static string CanonPath(string? p) => ChillHub.Update.ManifestPath.Canonicalize(p);
     }
 
     /// <summary>
