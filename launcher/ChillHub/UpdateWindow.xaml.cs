@@ -60,6 +60,7 @@ namespace ChillHub {
 
         private readonly HttpClient http = HttpClientProvider.Shared;
         private bool updateRequired = false; // есть ли новая версия
+        private bool loopBlocked = false;    // A4: автообновление остановлено защитой от петли
         private bool downloaded = false;     // скачан ли пакет
         private string? remoteVersion;
         private string stripPrefix = string.Empty; // корневая папка внутри пакета (обычно пусто)
@@ -362,7 +363,16 @@ namespace ChillHub {
             var attempts = GetUpdateAttempts(remote);
             if (attempts >= MaxSameVersionAttempts) {
                 // Обновление на одну и ту же версию применяется по кругу — дальше не пускаем.
+                //
+                // A4. Но и тупик здесь недопустим. К этому моменту установка уже в
+                // смешанном состоянии, а счётчик сбрасывался ТОЛЬКО при remote == local,
+                // то есть ровно в том случае, до которого зацикленный лаунчер и не
+                // доходит: обновление запрещалось навсегда, и единственным выходом
+                // оставалась переустановка вслепую. Даём конкретное действие —
+                // проверку целостности: если файлы на самом деле в порядке, счётчик
+                // сбрасывается и лаунчер продолжает работу.
                 this.updateRequired = false;
+                this.loopBlocked = true;
                 this.remoteVersion = remote;
                 this.Progress.IsIndeterminate = false;
                 this.Progress.Value = 0;
@@ -372,8 +382,10 @@ namespace ChillHub {
                     "Чтобы не зацикливаться, автообновление остановлено.\n" +
                     $"Журнал: {System.IO.Path.Combine(logDir, "apply-update.log")}\n" +
                     $"Счётчик попыток: {AttemptsFilePath}\n" +
-                    "Переустановите лаунчер вручную или обратитесь в поддержку.";
-                this.PrimaryBtn.Content = "Продолжить";
+                    "Нажмите «Проверить целостность»: файлы будут сверены с манифестом версии " +
+                    $"{remote}. Если расхождений нет, счётчик сбросится и лаунчер продолжит работу; " +
+                    "если есть — вы увидите список файлов, и лаунчер всё равно можно будет запустить.";
+                this.PrimaryBtn.Content = "Проверить целостность";
                 try {
                     Core.Logging.Logger.Error(new InvalidOperationException($"Self-update loop detected: {local} -> {remote}, attempts={attempts}"), "UpdateWindow.LoopGuard");
                 }
@@ -838,7 +850,121 @@ namespace ChillHub {
             }
         }
 
+        /// <summary>
+        /// A4. Выход из состояния «автообновление остановлено защитой от петли».
+        /// <para>
+        /// Сверяет установку с манифестом целевой версии. Совпало всё — установка
+        /// исправна, значит петля была ложной (например, обновление уже применилось,
+        /// а маркер не записался): пишем маркер и сбрасываем счётчик. Не совпало —
+        /// счётчик НЕ трогаем (защита обязана остаться), но показываем конкретные
+        /// файлы и разблокируем кнопку «Продолжить», чтобы пользователь не оставался
+        /// заперт в диалоге обновления.
+        /// </para>
+        /// </summary>
+        private async Task VerifyIntegrityAndUnblockAsync() {
+            var remote = this.remoteVersion;
+            if (string.IsNullOrWhiteSpace(remote) || !IsValidVersion(remote)) {
+                this.loopBlocked = false;
+                this.updateRequired = false;
+                this.PrimaryBtn.Content = "Продолжить";
+                this.PrimaryBtn.IsEnabled = true;
+                return;
+            }
+
+            this.PrimaryBtn.IsEnabled = false;
+            this.Progress.IsIndeterminate = true;
+            this.StatusText.Text = $"Проверка целостности установки по манифесту {remote}...";
+            try {
+                var manifest = await this.sync.GetManifestAsync(
+                    $"{this.BaseApi}/manifests/launcher/{remote}.json", System.Threading.CancellationToken.None);
+                this.stripPrefix = ComputeStripPrefix(manifest);
+
+                var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                var bad = new System.Collections.Generic.List<string>();
+                foreach (var f in manifest.Files) {
+                    var rel = (f.Path ?? string.Empty).Replace('\\', '/').Trim('/');
+                    if (rel.Length == 0 || Preserve.ShouldPreserve(rel) || PreserveMatcher.IsUpdaterArtifact(rel)) {
+                        continue;
+                    }
+
+                    if (!this.LocalFileMatches(baseDir, f, out var reason)) {
+                        bad.Add($"{rel} — {reason}");
+                    }
+                }
+
+                this.Progress.IsIndeterminate = false;
+                if (bad.Count == 0) {
+                    if (!TryWriteVersionMarker(remote!, out var markerError)) {
+                        this.StatusText.Text =
+                            "Файлы установки соответствуют новой версии, но записать отметку о версии не удалось:\n" +
+                            $"{markerError}\n" +
+                            "Счётчик попыток не сброшен. Проверьте права на папку установки.";
+                        this.PrimaryBtn.Content = "Продолжить";
+                        this.loopBlocked = false;
+                        this.updateRequired = false;
+                        this.PrimaryBtn.IsEnabled = true;
+                        return;
+                    }
+
+                    ResetUpdateAttempts();
+                    this.loopBlocked = false;
+                    this.SetUpToDate();
+                    this.PrimaryBtn.IsEnabled = true;
+                    try {
+                        Core.Logging.Logger.Info($"Loop guard released: integrity ok for {remote}, attempts reset");
+                    }
+                    catch {
+                    }
+
+                    return;
+                }
+
+                // Расхождения есть — счётчик оставляем как есть, но выпускаем пользователя.
+                this.Progress.Value = 0;
+                this.StatusText.Text =
+                    $"Проверка целостности не пройдена: расхождений {bad.Count}.\n" +
+                    string.Join("\n", bad.Take(5)) +
+                    (bad.Count > 5 ? $"\n... и ещё {bad.Count - 5}" : string.Empty) + "\n" +
+                    "Счётчик попыток не сброшен — автообновление остаётся остановленным.\n" +
+                    "Переустановите лаунчер вручную или обратитесь в поддержку. Запустить лаунчер можно кнопкой ниже.";
+                this.loopBlocked = false;
+                this.updateRequired = false;
+                this.PrimaryBtn.Content = "Продолжить";
+                this.PrimaryBtn.IsEnabled = true;
+                try {
+                    Core.Logging.Logger.Error(
+                        new InvalidOperationException($"Loop guard integrity check failed for {remote}: {string.Join("; ", bad.Take(20))}"),
+                        "UpdateWindow.LoopGuardIntegrity");
+                }
+                catch {
+                }
+            }
+            catch (Exception ex) {
+                this.Progress.IsIndeterminate = false;
+                this.StatusText.Text =
+                    $"Не удалось проверить целостность: {ex.Message}\n" +
+                    "Счётчик попыток не сброшен. Попробуйте позже или переустановите лаунчер вручную.";
+                this.PrimaryBtn.Content = "Продолжить";
+                this.loopBlocked = false;
+                this.updateRequired = false;
+                this.PrimaryBtn.IsEnabled = true;
+                try {
+                    Core.Logging.Logger.Error(ex, "UpdateWindow.LoopGuardIntegrity");
+                }
+                catch {
+                }
+            }
+        }
+
         private async void PrimaryBtn_Click(object sender, RoutedEventArgs e) {
+            // A4. В состоянии «остановлено защитой от петли» кнопка означает
+            // «проверить целостность», а не «обновить»: это единственный выход,
+            // не требующий переустановки вслепую.
+            if (this.loopBlocked) {
+                await this.VerifyIntegrityAndUnblockAsync();
+                return;
+            }
+
             // DEV-скип: только в Debug и только если панель видима; в Release невозможно
 #if DEBUG
             var devSkip = this.DevPanel.Visibility == Visibility.Visible && this.DevSkipCheck.IsChecked == true;
