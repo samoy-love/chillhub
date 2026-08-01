@@ -80,12 +80,7 @@ func normalize(u string) string {
 // mdToHTML is a very small markdown to HTML converter for the editor preview
 // (H1/H2, paragraphs, code blocks, links, bold/italic).
 func mdToHTML(md string) string {
-	esc := func(s string) string {
-		s = strings.ReplaceAll(s, "&", "&amp;")
-		s = strings.ReplaceAll(s, "<", "&lt;")
-		s = strings.ReplaceAll(s, ">", "&gt;")
-		return s
-	}
+	esc := escapeHTML
 	// code blocks ```
 	out := ""
 	lines := strings.Split(md, "\n")
@@ -139,7 +134,38 @@ func mdToHTML(md string) string {
 	return out
 }
 
+// escapeHTML makes text safe both between tags and inside a double- or
+// single-quoted attribute value.
+//
+// The quotes matter: everything mdToHTML produces ends up in src="…", href="…"
+// or alt="…", and without escaping them a body such as
+//
+//	![a](/x" onerror="alert(1))
+//
+// closes the attribute early and injects an event handler that the admin
+// preview AND the launcher's news view then execute.
+func escapeHTML(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, `"`, "&#34;")
+	s = strings.ReplaceAll(s, "'", "&#39;")
+	return s
+}
+
+// escapeQuotes escapes only the quote characters. inlineMD applies it to the
+// substrings it cuts out of already-escaped text (URLs, alt texts, link
+// labels): running the full escaper again would turn &amp; into &amp;amp;,
+// while quotes cannot appear in escaped output at all, so this stays correct
+// even if inlineMD is ever handed raw text.
+func escapeQuotes(s string) string {
+	s = strings.ReplaceAll(s, `"`, "&#34;")
+	s = strings.ReplaceAll(s, "'", "&#39;")
+	return s
+}
+
 // inlineMD handles a very small subset (**bold**, *italic*, [text](url)).
+// It expects text that has already been through escapeHTML.
 func inlineMD(s string) string {
 	// images ![alt](url)
 	for {
@@ -157,8 +183,8 @@ func inlineMD(s string) string {
 			break
 		}
 		k = j + 2 + k
-		alt := s[i+2 : j]
-		url := normalize(s[j+2 : k])
+		alt := escapeQuotes(s[i+2 : j])
+		url := escapeQuotes(normalize(s[j+2 : k]))
 		rep := "<img src=\"" + url + "\" alt=\"" + alt + "\" style=\"max-width:100%\">"
 		s = s[:i] + rep + s[k+1:]
 	}
@@ -192,9 +218,9 @@ func inlineMD(s string) string {
 			break
 		}
 		k = j + 2 + k
-		text := s[i+1 : j]
-		url := normalize(s[j+2 : k])
-		rep := "<a href=\"" + url + "\" target=\"_blank\">" + text + "</a>"
+		text := escapeQuotes(s[i+1 : j])
+		url := escapeQuotes(normalize(s[j+2 : k]))
+		rep := "<a href=\"" + url + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + text + "</a>"
 		s = s[:i] + rep + s[k+1:]
 	}
 	return s
