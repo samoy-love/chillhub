@@ -458,7 +458,21 @@ OPT_DIR="/opt/chillhub"
 # и запись поверх сносила чужой сайт. См. scripts/deploy-nginx.sh.
 NGINX_SITE_AVAILABLE="/etc/nginx/sites-available/chillhub-launcher.conf"
 NGINX_SITE_ENABLED="/etc/nginx/sites-enabled/chillhub-launcher.conf"
-SITE_BASE="%%SITE_BASE_URL%%"
+# И1: ВСЁ, ЧТО ПРИШЛО ОТ ОПЕРАТОРА ИЛИ ИЗ СЕКРЕТОВ, ПРИЕЗЖАЕТ В BASE64.
+#
+# Раньше значения подставлялись в этот скрипт текстом (JWT_SECRET="<значение>"),
+# а «экранирование» сводилось к замене " на \". Этого недостаточно: скрипт
+# исполняется на проде под sudo, и внутри двойных кавычек bash по-прежнему
+# раскрывает $, `...` и $(...). Bcrypt-хеш вида $2y$12$... искажался молча
+# ($2y и $12 — позиционные параметры), а значение с обратной кавычкой или
+# $(...) ИСПОЛНЯЛОСЬ как код.
+#
+# Base64 состоит только из [A-Za-z0-9+/=], поэтому переживает подстановку без
+# единого спецсимвола и декодируется ровно один раз — здесь, в переменную.
+# Тот же приём уже применён в .github/workflows/deploy.yml (шаг «Encode deploy
+# inputs for the SSH script»).
+b64d() { printf '%s' "${1:-}" | base64 -d 2>/dev/null || true; }
+SITE_BASE="$(b64d "%%SITE_BASE_URL_B64%%")"
 FAIL_ON_MISMATCH="%%FAIL_ON_MISMATCH%%"
 MISM_TOTAL=0
 VERBOSE="%%VERBOSE%%"
@@ -660,29 +674,46 @@ fi
 
 # Optional: write admin auth env drop-in (from parameters)
 ADMIN_DROPIN_DIR="/etc/systemd/system/chillhub-admin.service.d"
-JWT_SECRET="%%JWT_SECRET%%"
-ADMIN_USER="%%ADMIN_USER%%"
-ADMIN_PASS_BCRYPT="%%ADMIN_PASS_BCRYPT%%"
-ADMIN_PASS_PLAIN="%%ADMIN_PASS_PLAIN%%"
-COOKIE_DOMAIN="%%COOKIE_DOMAIN%%"
-COOKIE_SECURE="%%COOKIE_SECURE%%"
+# И1: секреты приезжают в base64 (см. комментарий к b64d в начале скрипта).
+# Именно здесь ломался bcrypt-хеш $2y$12$... и здесь же исполнялось бы
+# значение с $(...) — файл идёт в systemd-drop-in на проде под sudo.
+# xtrace на время декодирования выключаем: иначе `set -x` из VERBOSE напечатал
+# бы значения в лог, который потом ещё и скачивается на машину оператора.
+_XTRACE_WAS_ON=""; case "$-" in *x*) _XTRACE_WAS_ON=1;; esac
+set +x
+JWT_SECRET="$(b64d "%%JWT_SECRET_B64%%")"
+ADMIN_USER="$(b64d "%%ADMIN_USER_B64%%")"
+ADMIN_PASS_BCRYPT="$(b64d "%%ADMIN_PASS_BCRYPT_B64%%")"
+ADMIN_PASS_PLAIN="$(b64d "%%ADMIN_PASS_PLAIN_B64%%")"
+COOKIE_DOMAIN="$(b64d "%%COOKIE_DOMAIN_B64%%")"
+COOKIE_SECURE="$(b64d "%%COOKIE_SECURE_B64%%")"
+if [ -n "$_XTRACE_WAS_ON" ]; then set -x; fi
 # Debug presence (lengths only, без вывода значений)
 echo "[debug] admin env presence: JWT=${#JWT_SECRET} USER=${#ADMIN_USER} BCRYPT=${#ADMIN_PASS_BCRYPT} PLAIN=${#ADMIN_PASS_PLAIN} C_DOM=${#COOKIE_DOMAIN} C_SEC=${#COOKIE_SECURE}"
 if [ -n "$ADMIN_USER$ADMIN_PASS_BCRYPT$ADMIN_PASS_PLAIN$JWT_SECRET$COOKIE_DOMAIN$COOKIE_SECURE" ]; then
   sudo mkdir -p "$ADMIN_DROPIN_DIR"
   TMPD=$(mktemp)
+  # systemd-строка Environment="NAME=VALUE" — сама по себе строка в кавычках,
+  # поэтому значение с обратным слэшем или кавычкой делает юнит неразбираемым,
+  # и admin-сервис просто не стартует. Тот же класс дефекта, что и подстановка
+  # в shell выше, слоем ниже. Экранирование скопировано из deploy.yml (sd_esc).
+  sd_esc() { printf '%s' "${1:-}" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+  set +x  # тело drop-in содержит JWT_SECRET и bcrypt-хеш
   {
     echo "[Service]"
-    # Quote values to preserve special characters (e.g., $ in bcrypt hashes)
-    [ -n "$COOKIE_DOMAIN" ] && echo "Environment=\"COOKIE_DOMAIN=$COOKIE_DOMAIN\""
-    [ -n "$COOKIE_SECURE" ] && echo "Environment=\"COOKIE_SECURE=$COOKIE_SECURE\""
-    [ -n "$JWT_SECRET" ] && echo "Environment=\"JWT_SECRET=$JWT_SECRET\""
-    [ -n "$ADMIN_USER" ] && echo "Environment=\"ADMIN_USERNAME=$ADMIN_USER\""
+    if [ -n "$COOKIE_DOMAIN" ]; then echo "Environment=\"COOKIE_DOMAIN=$(sd_esc "$COOKIE_DOMAIN")\""; fi
+    if [ -n "$COOKIE_SECURE" ]; then echo "Environment=\"COOKIE_SECURE=$(sd_esc "$COOKIE_SECURE")\""; fi
+    if [ -n "$JWT_SECRET" ]; then echo "Environment=\"JWT_SECRET=$(sd_esc "$JWT_SECRET")\""; fi
+    if [ -n "$ADMIN_USER" ]; then echo "Environment=\"ADMIN_USERNAME=$(sd_esc "$ADMIN_USER")\""; fi
     # Write whichever password representations are provided
-    [ -n "$ADMIN_PASS_PLAIN" ] && echo "Environment=\"ADMIN_PASSWORD_PLAIN=$ADMIN_PASS_PLAIN\""
-    [ -n "$ADMIN_PASS_BCRYPT" ] && echo "Environment=\"ADMIN_PASSWORD_BCRYPT=$ADMIN_PASS_BCRYPT\""
+    if [ -n "$ADMIN_PASS_PLAIN" ]; then echo "Environment=\"ADMIN_PASSWORD_PLAIN=$(sd_esc "$ADMIN_PASS_PLAIN")\""; fi
+    if [ -n "$ADMIN_PASS_BCRYPT" ]; then echo "Environment=\"ADMIN_PASSWORD_BCRYPT=$(sd_esc "$ADMIN_PASS_BCRYPT")\""; fi
   } > "$TMPD"
-  sudo install -m 0644 "$TMPD" "$ADMIN_DROPIN_DIR/override.conf"
+  if [ -n "$VERBOSE" ]; then set -x; fi
+  # 0600, а не 0644: внутри JWT_SECRET и bcrypt-хеш (или вовсе пароль
+  # открытым текстом). При 0644 их читал любой локальный пользователь хоста,
+  # на котором живут ещё три проекта. В deploy.yml это место уже 0600.
+  sudo install -m 0600 -o root -g root "$TMPD" "$ADMIN_DROPIN_DIR/override.conf"
   rm -f "$TMPD" || true
   echo "[debug] wrote override.conf (JWT:$([ -n "$JWT_SECRET" ] && echo 1 || echo 0) PLAIN:$([ -n "$ADMIN_PASS_PLAIN" ] && echo 1 || echo 0) BCRYPT:$([ -n "$ADMIN_PASS_BCRYPT" ] && echo 1 || echo 0))"
 fi
@@ -1012,6 +1043,21 @@ Write-Info "Running remote deploy script via SSH"
 # Pipe the here-string content to remote bash
 # Inject sanitized parameter values into the remote script
 function Convert-ToBashDqEscaped([string]$s){ if ($null -eq $s) { return "" } return ($s -replace '"','\\"') }
+# И1: единственный безопасный способ довезти произвольное значение до bash.
+#
+# Convert-ToBashDqEscaped экранирует ТОЛЬКО двойную кавычку. Внутри двойных
+# кавычек bash всё равно раскрывает $, `...` и $(...), поэтому:
+#   * bcrypt-хеш $2y$12$... приезжал искажённым ($2y/$12 — позиционные
+#     параметры, обычно пустые) — вход в админку молча переставал работать;
+#   * значение с обратной кавычкой или $(...) ИСПОЛНЯЛОСЬ на проде под sudo.
+#
+# Base64 — это [A-Za-z0-9+/=], в нём нет ни одного символа, который bash
+# трактует специально. Декодируется ровно один раз, на той стороне (b64d).
+# Ровно так же сделано в .github/workflows/deploy.yml.
+function Convert-ToB64([string]$s){
+  if ([string]::IsNullOrEmpty($s)) { return "" }
+  return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s))
+}
 $injected = $remoteScript
   # If only plain admin password is provided, derive bcrypt locally (so server doesn't need Go)
   if ([string]::IsNullOrWhiteSpace($AdminPasswordBcrypt) -and -not [string]::IsNullOrWhiteSpace($AdminPasswordPlain)) {
@@ -1108,14 +1154,17 @@ Write-Debug ("admin manifest b64 length:     {0}" -f $adminLen)
 Write-Debug ("bin manifest b64 length:       {0}" -f $binLen)
 Write-Debug ("systemd manifest b64 length:   {0}" -f $systemdLen)
 Write-Debug ("downloads manifest b64 length: {0}" -f $downloadsLen)
-$injected = $injected.Replace('%%DOWNLOADS_DIR%%', (Convert-ToBashDqEscaped $serverDownloads))
-$injected = $injected.Replace('%%JWT_SECRET%%', (Convert-ToBashDqEscaped $JwtSecret))
-$injected = $injected.Replace('%%ADMIN_USER%%', (Convert-ToBashDqEscaped $AdminUser))
-$injected = $injected.Replace('%%ADMIN_PASS_BCRYPT%%', (Convert-ToBashDqEscaped $AdminPasswordBcrypt))
-$injected = $injected.Replace('%%ADMIN_PASS_PLAIN%%', (Convert-ToBashDqEscaped $AdminPasswordPlain))
-$injected = $injected.Replace('%%COOKIE_DOMAIN%%', (Convert-ToBashDqEscaped $CookieDomain))
-$injected = $injected.Replace('%%COOKIE_SECURE%%', (Convert-ToBashDqEscaped $CookieSecure))
-$injected = $injected.Replace('%%SITE_BASE_URL%%', (Convert-ToBashDqEscaped $SiteBaseUrl))
+# И1: свободные и секретные значения — только через base64 (Convert-ToB64).
+# Имена плейсхолдеров получили суффикс _B64, чтобы забытая подстановка
+# бросалась в глаза в самом скрипте, а не молчала.
+$injected = $injected.Replace('%%DOWNLOADS_DIR_B64%%', (Convert-ToB64 $serverDownloads))
+$injected = $injected.Replace('%%JWT_SECRET_B64%%', (Convert-ToB64 $JwtSecret))
+$injected = $injected.Replace('%%ADMIN_USER_B64%%', (Convert-ToB64 $AdminUser))
+$injected = $injected.Replace('%%ADMIN_PASS_BCRYPT_B64%%', (Convert-ToB64 $AdminPasswordBcrypt))
+$injected = $injected.Replace('%%ADMIN_PASS_PLAIN_B64%%', (Convert-ToB64 $AdminPasswordPlain))
+$injected = $injected.Replace('%%COOKIE_DOMAIN_B64%%', (Convert-ToB64 $CookieDomain))
+$injected = $injected.Replace('%%COOKIE_SECURE_B64%%', (Convert-ToB64 $CookieSecure))
+$injected = $injected.Replace('%%SITE_BASE_URL_B64%%', (Convert-ToB64 $SiteBaseUrl))
 $failFlag = if ($FailOnManifestMismatch.IsPresent) { "1" } else { "" }
 $injected = $injected.Replace('%%FAIL_ON_MISMATCH%%', (Convert-ToBashDqEscaped $failFlag))
 $injected = $injected.Replace('%%SITE_MANIFEST%%', (Convert-ToBashDqEscaped $siteManifestB64))
@@ -1151,9 +1200,15 @@ $wrapperContent = @'
 set -euo pipefail
 rc=0
 run_cmd="/bin/bash /tmp/chillhub-deploy.sh"
-# Pre-run: quick grep to ensure vars are injected in the script
-echo "[precheck] injected vars in /tmp/chillhub-deploy.sh (grep)" || true
-grep -nE '^(JWT_SECRET|ADMIN_USER|ADMIN_PASS_BCRYPT|ADMIN_PASS_PLAIN|COOKIE_DOMAIN|COOKIE_SECURE)=' /tmp/chillhub-deploy.sh || true
+# Pre-run: убедиться, что подстановка вообще произошла.
+#
+# Раньше здесь был `grep -nE '^(JWT_SECRET|...)='`, который печатал строки
+# ЦЕЛИКОМ — то есть выкладывал секреты в лог, а лог потом ещё и скачивается
+# на машину оператора. Печатаем только имя переменной и длину значения:
+# для «подставилось или нет» этого достаточно, а секрет не утекает.
+echo "[precheck] injected vars in /tmp/chillhub-deploy.sh (names and lengths only)"
+grep -nE '^(JWT_SECRET|ADMIN_USER|ADMIN_PASS_BCRYPT|ADMIN_PASS_PLAIN|COOKIE_DOMAIN|COOKIE_SECURE)=' /tmp/chillhub-deploy.sh \
+  | sed -E 's/^([0-9]+):([A-Z_]+)=.*/[precheck] line \1: \2 present/' || true
 # Execute and capture reliably to a file, then print it unconditionally
 { eval "$run_cmd"; } > /tmp/chillhub-deploy.log 2>&1 || rc=$?
 echo "--- REMOTE LOG DUMP BEGIN ---"
