@@ -102,5 +102,12 @@ content/news/*
 # Keep readme and config files in otherwise ignored folders
 !.keep
 !.gitkeep
+
+# Local agent/tooling state (Claude Code worktrees, session data, local settings)
+.claude/
+
+# User feedback inbox: contains personal data (contacts, machine names, attached logs).
+# MUST NOT be tracked. Removed from the index via `git rm --cached`; history was
+# intentionally left untouched by the repository owner.
 content/feedback/inbox.json
 scripts/bench-upload-results.csv
