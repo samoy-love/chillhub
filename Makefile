@@ -8,14 +8,19 @@ DEPLOY_SCRIPT := $(REPO_DIR)/scripts/deploy.sh
 # Defaults for Windows deploy helper
 COOKIE_DOMAIN ?= launcher.samoy.love
 COOKIE_SECURE ?= true
-# Default remote connection and auth for deploy-win (can be overridden)
-HOST ?= 207.127.93.34
-USER ?= ubuntu
-KEY ?= C:\Users\Alexey Samoylov\Desktop\server access\oracle 2025-09-21.key
-JWT ?= a-very-long-random-secret
+
+# Host, key path and secrets are deliberately NOT set here: this file is tracked
+# by git, and everything written in it ends up in the repository history for
+# good. Put your own values in deploy.local.mk (gitignored, see
+# deploy.local.mk.example) or pass them on the command line.
+#
+# This used to hold the production IP, the path to the private SSH key, the
+# admin password and a JWT secret of "a-very-long-random-secret". The latter was
+# not merely a placeholder — the production admin service was actually running
+# on it, so anyone who could read the repo could mint valid admin sessions.
+-include deploy.local.mk
+
 ADMIN_USER ?= admin
-ADMIN_PLAIN ?= kek2
-DOWNLOADS_DIR ?= C:\Users\Alexey Samoylov\Desktop\Launcher Project\scripts\generated_downloads
 
 # One command to deploy everything
 deploy:
@@ -111,6 +116,15 @@ run-local:
 # Usage:
 # make deploy-win HOST=your.vps.host USER=ubuntu KEY="C:/Users/you/.ssh/id_rsa" [BRANCH=main] [JWT=...] [ADMIN_USER=admin] [ADMIN_BCRYPT=...] [ADMIN_PLAIN=...] [COOKIE_DOMAIN=launcher.samoy.love] [COOKIE_SECURE=true] [DOWNLOADS_DIR=C:/path/downloads]
 deploy-win:
+ifeq ($(strip $(HOST)),)
+	$(error HOST is not set. Put it in deploy.local.mk or pass HOST=... on the command line)
+endif
+ifeq ($(strip $(USER)),)
+	$(error USER is not set. Put it in deploy.local.mk or pass USER=... on the command line)
+endif
+ifeq ($(strip $(KEY)),)
+	$(error KEY is not set. Put it in deploy.local.mk or pass KEY=... on the command line)
+endif
 	@echo Deploying to $(HOST) as $(USER) using PowerShell script
 	powershell -NoProfile -ExecutionPolicy Bypass -File "scripts/deploy-win.ps1" \
 	 -SshHost "$(HOST)" \

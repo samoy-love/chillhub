@@ -111,3 +111,6 @@ content/news/*
 # intentionally left untouched by the repository owner.
 content/feedback/inbox.json
 scripts/bench-upload-results.csv
+
+# Локальные настройки деплоя: путь к приватному ключу и секреты
+deploy.local.mk
