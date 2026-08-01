@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"ChillHub/server/internal/httpx"
+	"ChillHub/server/internal/maintenance"
 	"ChillHub/server/internal/ratelimit"
 
 	"github.com/gorilla/mux"
@@ -125,6 +126,11 @@ func main() {
 	r.HandleFunc("/api/games/{gameId}", limiter.Wrap(handleGame)).Methods("GET")
 	r.HandleFunc("/api/games/{gameId}/versions/latest", limiter.Wrap(handleLatest)).Methods("GET")
 	r.HandleFunc("/api/games/{gameId}/builds", limiter.Wrap(handleBuilds)).Methods("GET")
+	// Maintenance mode flag. Polled by every launcher at startup and on a timer,
+	// so it is served from an mtime-checked in-memory cache (see the package
+	// doc) and shares the same generous JSON budget as the rest.
+	maint := maintenance.New(contentRoot)
+	r.HandleFunc("/api/maintenance", limiter.Wrap(maint.PublicHandler)).Methods("GET", "HEAD")
 	r.HandleFunc("/news/index.json", limiter.Wrap(handleNewsIndex)).Methods("GET")
 	r.HandleFunc("/news/games/{gameId}/index.json", limiter.Wrap(handleGameNewsIndex)).Methods("GET")
 
