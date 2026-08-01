@@ -521,14 +521,17 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
-	fl := adminutil.FlusherFor(w)
-	fmt.Fprintf(w, "{\"type\":\"start\",\"kind\":%q,\"gameId\":%q,\"version\":%q}\n", m.Kind, m.GameID, m.Version)
+	nw := newNDJSONWriter(w)
+	fl := adminutil.Flusher(nw)
+	fmt.Fprintf(nw, "{\"type\":\"start\",\"kind\":%q,\"gameId\":%q,\"version\":%q}\n", m.Kind, m.GameID, m.Version)
 	fl.Flush()
 	zipPath := h.uploadZipPath(id)
 	// The gameId/version pair was validated at upload init, but re-check before
-	// it is turned into a filesystem path again.
+	// it is turned into a filesystem path again. The start event is already out,
+	// so the failure has to travel as an error event: an http.Error here would be
+	// dropped by the client, which would then treat the build as published.
 	if !adminutil.IsSafeGameID(m.GameID) || !adminutil.IsSafeVersion(m.Version) {
-		http.Error(w, "invalid gameId or version", http.StatusBadRequest)
+		nw.fail(http.StatusBadRequest, "invalid gameId or version")
 		return
 	}
 	// Extract into a staging dir on the same volume and publish with a single
@@ -536,7 +539,7 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	finalVerDir := filepath.Join(h.root, "content", m.GameID, m.Version)
 	stageDir, filesRoot, err := h.stageVersionDir(m.GameID, m.Version)
 	if err != nil {
-		streamError(w, fl, err.Error())
+		nw.fail(http.StatusInternalServerError, err.Error())
 		return
 	}
 	promoted := false
@@ -548,15 +551,15 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	// estimate and free-space precheck (optional)
 	if needBytes, err := estimateZipUncompressedSize(zipPath); err == nil {
 		if freeBytes, ferr := freeSpaceBytes(filesRoot); ferr == nil && freeBytes > 0 && needBytes > freeBytes {
-			http.Error(w, fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes), http.StatusInsufficientStorage)
+			nw.fail(http.StatusInsufficientStorage, fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes))
 			return
 		}
 	}
-	if !streamUnzip(w, fl, zipPath, filesRoot) {
+	if !streamUnzip(nw, fl, zipPath, filesRoot) {
 		return
 	}
-	files, emptyDirs, ok := streamCompose(w, fl, filesRoot)
-	if !ok {
+	files, emptyDirs, ok2 := streamCompose(nw, fl, filesRoot)
+	if !ok2 {
 		return
 	}
 	mOut := manifest{
@@ -569,17 +572,17 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	}
 	// Everything is extracted and hashed: publish the build in one rename.
 	if err := promoteVersionDir(stageDir, finalVerDir); err != nil {
-		streamError(w, fl, "activate failed: "+err.Error())
+		streamError(nw, fl, "activate failed: "+err.Error())
 		return
 	}
 	promoted = true
 	// update latest.json is opted-in by client via existing API; here keep minimal
 	outPath, _, err := h.writeManifest(mOut, false)
 	if err != nil {
-		streamError(w, fl, err.Error())
+		streamError(nw, fl, err.Error())
 		return
 	}
-	fmt.Fprintf(w, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
+	fmt.Fprintf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
 	fl.Flush()
 }
 
