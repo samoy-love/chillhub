@@ -38,6 +38,7 @@ internal static class Program
         { "path": "ChillHub.exe", "size": 100, "sha256": "aa" },
         { "path": "config.json", "size": 45, "sha256": "cc" },
         { "path": "launcher.version", "size": 8, "sha256": "5d37ad10" },
+        { "path": "Uninstall.exe", "size": 120000, "sha256": "ee" },
         { "path": "filelist.txt", "size": 12, "sha256": "ff" }
       ],
       "emptyDirs": []
@@ -52,9 +53,15 @@ internal static class Program
     /// </summary>
     private static readonly (string Path, bool Preserved)[] RuleCases =
     {
-        // Пользовательское состояние — в preserve.
+        // Артефакты времени установки и пользовательское состояние — в preserve.
         ("config.json", true),
         ("launcher.version", true),
+        ("launcher.update-status", true),
+
+        // B6. Uninstall.exe создаёт NSIS в момент установки: у свежеустановленного
+        // пользователя байты не совпадут ни с одним фиксированным хешем, поэтому
+        // обновление предлагалось бы вечно. Это артефакт установки, а не файл пакета.
+        ("Uninstall.exe", true),
 
         // Мусор апдейтера в корне установки.
         ("filelist.txt", true),
@@ -65,6 +72,7 @@ internal static class Program
         ("data/config.json", false),
         ("data/launcher.version", false),
         ("data/filelist.txt", false),
+        ("data/Uninstall.exe", false),
         ("ChillHub.exe", false),
     };
 

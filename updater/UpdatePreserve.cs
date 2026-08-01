@@ -16,8 +16,27 @@ namespace ChillHub.Update;
 /// </summary>
 public sealed class PreserveMatcher
 {
-    /// <summary>Default rules. Keep in sync with nothing else — this IS the definition.</summary>
-    public static readonly string[] DefaultRules = { "config.json", "launcher.version" };
+    /// <summary>
+    /// Default rules. Keep in sync with nothing else — this IS the definition.
+    ///
+    /// B6. Uninstall.exe создаёт NSIS в момент установки, у каждого пользователя он свой.
+    /// Пока он числился в манифесте с фиксированным хешем, у свежеустановленного
+    /// пользователя байты не совпадали никогда: проверка целостности всегда видела
+    /// расхождение и предлагала обновление вечно — та самая петля самообновления.
+    /// Это артефакт времени установки, а не файл пакета, поэтому он в preserve
+    /// (те же правила вносят сервер и установщик).
+    ///
+    /// launcher.update-status — исход последнего обновления, который пишет апдейтер
+    /// (A12). Такое же машинное состояние, как launcher.version: в пакет не входит,
+    /// перезаписывать и удалять его по манифесту нельзя.
+    /// </summary>
+    public static readonly string[] DefaultRules =
+    {
+        "config.json",
+        "launcher.version",
+        "launcher.update-status",
+        "Uninstall.exe",
+    };
 
     /// <summary>Value to pass to the updater's --preserve option.</summary>
     public static string DefaultRulesArg => string.Join(",", DefaultRules);
