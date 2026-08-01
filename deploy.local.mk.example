@@ -1,0 +1,28 @@
+# Local deploy settings for `make deploy-win`.
+#
+# Copy to deploy.local.mk and fill in. deploy.local.mk is gitignored and must
+# stay that way: it holds a private key path and production secrets.
+#
+#   cp deploy.local.mk.example deploy.local.mk
+#
+# Prefer ADMIN_BCRYPT over ADMIN_PLAIN — a plain password passed on the command
+# line lands in the shell history and is visible in the process list to every
+# other user on the machine.
+
+# Remote host and SSH user
+HOST ?= your.vps.host
+USER ?= ubuntu
+
+# Path to the private SSH key (never the key itself)
+KEY ?= C:/Users/you/.ssh/id_rsa
+
+# Admin session signing secret. Generate a fresh one, do not invent a phrase:
+#   openssl rand -base64 48
+JWT ?=
+
+# Admin credentials. ADMIN_BCRYPT is the bcrypt hash (cost 12).
+ADMIN_USER ?= admin
+ADMIN_BCRYPT ?=
+
+# Optional: directory with prebuilt installers to publish alongside the deploy
+DOWNLOADS_DIR ?=
