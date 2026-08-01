@@ -199,6 +199,22 @@ read_secret(){
   printf '%s' "$line"
 }
 
+# И15: обновляет ОДНУ переменную в $SECRET_FILE, не трогая остальные.
+#
+# Прежний код писал файл целиком через `tee`, то есть каждая запись затирала
+# соседние ключи: сохранение bcrypt-хеша уносило с собой JWT_SECRET, и наоборот.
+write_secret(){
+  local key="$1" val="$2" tmp
+  sudo mkdir -p "$SECRET_DIR"
+  tmp=$(mktemp)             # mktemp создаёт файл с правами 0600
+  if sudo test -f "$SECRET_FILE"; then
+    sudo grep -v "^${key}=" "$SECRET_FILE" > "$tmp" 2>/dev/null || true
+  fi
+  printf '%s=%s\n' "$key" "$val" >> "$tmp"
+  sudo install -m 0600 -o root -g root "$tmp" "$SECRET_FILE"
+  rm -f "$tmp"
+}
+
 if [[ -z "$ADMIN_PASS_BCRYPT" ]]; then
   ADMIN_PASS_BCRYPT="$(read_secret ADMIN_PASSWORD_BCRYPT)"
 fi
@@ -235,13 +251,10 @@ EOF
       err "Failed to derive bcrypt hash."
       exit 1
     fi
-    # Persist to /etc/chillhub/admin.env
-    sudo mkdir -p "$SECRET_DIR"
-    {
-      echo "ADMIN_USERNAME=admin"
-      echo "ADMIN_PASSWORD_BCRYPT=$ADMIN_PASS_BCRYPT"
-    } | sudo tee "$SECRET_FILE" >/dev/null
-    sudo chmod 0600 "$SECRET_FILE" || true
+    # И15: через write_secret, а не `tee` файла целиком — иначе эта запись
+    # затирала бы уже сохранённый JWT_SECRET.
+    write_secret ADMIN_USERNAME "admin"
+    write_secret ADMIN_PASSWORD_BCRYPT "$ADMIN_PASS_BCRYPT"
     ok "Admin credentials stored in $SECRET_FILE (bcrypt only)."
   else
     err "Go is required to derive bcrypt on the server. Install Go or provide --admin-pass-bcrypt."
@@ -284,18 +297,44 @@ git_as_owner "checkout $BRANCH"
 git_as_owner "config core.filemode false || true"
 git_as_owner "pull --ff-only"
 
-# Generate secrets if not provided
-if [[ -z "$JWT_SECRET" ]]; then
-  if command -v openssl >/dev/null 2>&1; then
-    JWT_SECRET=$(openssl rand -base64 48 | tr -d '\n' || true)
-  fi
-  if [[ -z "$JWT_SECRET" ]]; then
-    JWT_SECRET=$(head -c 48 /dev/urandom | base64 | tr -d '\n' || true)
-  fi
-  if [[ -z "$JWT_SECRET" ]]; then
-    warn "Could not auto-generate JWT_SECRET; please provide --jwt-secret"
+# И15: СГЕНЕРИРОВАННЫЙ JWT_SECRET ОБЯЗАН БЫТЬ СОХРАНЁН.
+#
+# Здесь секрет генерировался, печаталось бодрое «Auto-generated JWT_SECRET» —
+# и на этом всё. В systemd-drop-in он не попадает НАМЕРЕННО (там только
+# EnvironmentFile, секретов в drop-in нет), а в $SECRET_FILE его никто не
+# записывал. То есть значение жило до конца работы скрипта и исчезало.
+#
+# Оператор при этом видел строку об успехе и считал, что подпись сессий
+# настроена. Фактически chillhub-admin стартовал вовсе без JWT_SECRET.
+#
+# Порядок источников теперь явный:
+#   1) окружение/флаг — записываем в $SECRET_FILE (оператор задал новое);
+#   2) уже сохранённое в $SECRET_FILE — используем как есть. Это важно:
+#      перегенерация на каждом деплое инвалидировала бы все активные админские
+#      сессии, то есть выкатка выкидывала бы оператора из панели;
+#   3) ничего нет — генерируем и СОХРАНЯЕМ.
+
+if [[ -n "$JWT_SECRET" ]]; then
+  write_secret JWT_SECRET "$JWT_SECRET"
+  ok "JWT_SECRET сохранён в $SECRET_FILE (задан оператором)"
+else
+  JWT_SECRET="$(read_secret JWT_SECRET)"
+  if [[ -n "$JWT_SECRET" ]]; then
+    ok "JWT_SECRET взят из $SECRET_FILE (существующие сессии остаются валидными)"
   else
-    ok "Auto-generated JWT_SECRET (48 bytes base64)"
+    if command -v openssl >/dev/null 2>&1; then
+      JWT_SECRET=$(openssl rand -base64 48 | tr -d '\n' || true)
+    fi
+    if [[ -z "$JWT_SECRET" ]]; then
+      JWT_SECRET=$(head -c 48 /dev/urandom | base64 | tr -d '\n' || true)
+    fi
+    if [[ -z "$JWT_SECRET" ]]; then
+      err "Не удалось сгенерировать JWT_SECRET (нет ни openssl, ни /dev/urandom)."
+      err "Без него подпись админских сессий не настроена. Задайте CHILLHUB_JWT_SECRET и повторите."
+      exit 1
+    fi
+    write_secret JWT_SECRET "$JWT_SECRET"
+    ok "JWT_SECRET сгенерирован (48 байт base64) и СОХРАНЁН в $SECRET_FILE"
   fi
 fi
 
