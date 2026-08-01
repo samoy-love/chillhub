@@ -481,10 +481,27 @@ ok "Services are active"
 # Integrity verification (manifests)
 section "Integrity: манифесты и сравнение"
 MISM_TOTAL=0
+# И6: КОНВЕЙЕР ЗАМЕНЁН НА ПОДСТАНОВКУ ПРОЦЕССА — ЭТО НЕ КОСМЕТИКА.
+#
+# Здесь было `find ... | while read ...; do ... mism=$((mism+1)) ... done`.
+# Правая часть конвейера в bash выполняется в ПОДОБОЛОЧКЕ, поэтому все
+# инкременты mism и n жили в дочернем процессе и умирали вместе с ним. После
+# цикла обе переменные снова были равны нулю.
+#
+# Следствия, обе молчаливые:
+#   * всегда печаталось «all 0 files match» — даже когда файлы реально
+#     расходились, и даже когда сверять было нечего;
+#   * MISM_TOTAL всегда оставался нулём, поэтому --fail-on-mismatch НЕ
+#     срабатывал НИ РАЗУ. Защита существовала только на бумаге, а деплой с
+#     битой выкаткой считался успешным.
+#
+# `done < <(find ...)` оставляет цикл в текущей оболочке: перенаправление ввода
+# подоболочку не создаёт.
 compare_trees(){
   local label="$1" src="$2" dst="$3"; local mism=0; local n=0;
+  local f rel sha_src sha_dst
   if [[ ! -d "$src" ]]; then warn "[manifest] $label: source dir not found: $src"; return 0; fi
-  find "$src" -type f -print0 | while IFS= read -r -d '' f; do
+  while IFS= read -r -d '' f; do
     rel="${f#"$src/"}"; sha_src=$(sha256sum "$f" | awk '{print $1}')
     if [[ -f "$dst/$rel" ]]; then
       sha_dst=$(sha256sum "$dst/$rel" | awk '{print $1}')
@@ -493,8 +510,16 @@ compare_trees(){
       echo -e "${YELLOW}[manifest] MISS${NC} $label $rel"; mism=$((mism+1))
     fi
     n=$((n+1))
-  done
-  if [[ $mism -ne 0 ]]; then warn "[manifest] $label mismatches: $mism"; else ok "[manifest] $label: all $n files match"; fi
+  done < <(find "$src" -type f -print0)
+  if [[ $mism -ne 0 ]]; then
+    warn "[manifest] $label mismatches: $mism (проверено файлов: $n)"
+  elif [[ $n -eq 0 ]]; then
+    # «0 файлов совпало» — это не успех, а пустое дерево: раньше такой случай
+    # был неотличим от нормального прогона.
+    warn "[manifest] $label: в $src нет ни одного файла — сверять нечего"
+  else
+    ok "[manifest] $label: all $n files match"
+  fi
   MISM_TOTAL=$((MISM_TOTAL + mism))
 }
 
