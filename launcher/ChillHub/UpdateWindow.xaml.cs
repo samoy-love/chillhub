@@ -6,6 +6,7 @@
 namespace ChillHub {
     using System;
     using System.IO;
+    using System.Linq;
     using System.Net.Http;
     using System.Net.Http.Json;
     using System.Reflection;
@@ -1030,27 +1031,61 @@ namespace ChillHub {
                 }
                 catch {
                 }
+
+                // A10. Проверяется ВЕСЬ комплект апдейтера, а не только .exe.
+                // Апдейтер — обычное framework-dependent приложение: без .dll и
+                // .runtimeconfig.json его apphost падает мгновенно. Раньше проверялось
+                // наличие одного YourLauncher.Updater.exe — если остальное не скопировалось
+                // (антивирус, нет места, залоченный файл), лаунчер всё равно делал Shutdown,
+                // апдейтер тут же умирал, и пользователь оставался вообще без приложения.
+                var updaterPath = System.IO.Path.Combine(tempUpdaterDir, "YourLauncher.Updater.exe");
+                var missing = new System.Collections.Generic.List<string>();
                 try {
-                    foreach (var f in System.IO.Directory.EnumerateFiles(targetDir, "YourLauncher.Updater*", System.IO.SearchOption.TopDirectoryOnly)) {
+                    var sources = System.IO.Directory.EnumerateFiles(targetDir, "YourLauncher.Updater*", System.IO.SearchOption.TopDirectoryOnly).ToList();
+                    if (sources.Count == 0) {
+                        missing.Add("YourLauncher.Updater.* (в папке установки нет ни одного файла модуля обновления)");
+                    }
+
+                    foreach (var f in sources) {
+                        var name = System.IO.Path.GetFileName(f);
+                        var dstF = System.IO.Path.Combine(tempUpdaterDir, name);
                         try {
-                            var dstF = System.IO.Path.Combine(tempUpdaterDir, System.IO.Path.GetFileName(f));
                             System.IO.File.Copy(f, dstF, true);
+
+                            // Копия обязана совпадать по размеру: усечённая копия — это
+                            // тот же мгновенный крах, только без внятного сообщения.
+                            var srcLen = new System.IO.FileInfo(f).Length;
+                            var dstLen = new System.IO.FileInfo(dstF).Length;
+                            if (srcLen != dstLen) {
+                                missing.Add($"{name} (скопировано {dstLen} из {srcLen} байт)");
+                            }
                         }
-                        catch {
+                        catch (Exception ex) {
+                            missing.Add($"{name} ({ex.Message})");
                         }
                     }
                 }
-                catch {
+                catch (Exception ex) {
+                    missing.Add($"перечисление файлов модуля обновления: {ex.Message}");
                 }
 
-                // Invoke native updater executable from TEMP (not locked in DST)
-                var updaterPath = System.IO.Path.Combine(tempUpdaterDir, "YourLauncher.Updater.exe");
                 if (!System.IO.File.Exists(updaterPath)) {
-                    // A8. Без апдейтера гасить приложение нельзя — пользователь просто потеряет лаунчер.
-                    this.StatusText.Text = $"Не найден модуль обновления: {updaterPath}\nОбновление не применено. Переустановите лаунчер вручную.";
+                    missing.Add("YourLauncher.Updater.exe");
+                }
+
+                if (missing.Count > 0) {
+                    // A8. Без полного комплекта апдейтера гасить приложение нельзя —
+                    // пользователь просто потеряет лаунчер.
+                    this.StatusText.Text =
+                        "Модуль обновления подготовлен не полностью, обновление не применено:\n" +
+                        string.Join("\n", missing.Take(5)) + "\n" +
+                        $"Каталог: {tempUpdaterDir}\n" +
+                        "Попробуйте ещё раз или переустановите лаунчер вручную.";
                     this.PrimaryBtn.IsEnabled = true;
                     try {
-                        Core.Logging.Logger.Error(new FileNotFoundException("Updater not found", updaterPath), "UpdateWindow.ApplyUpdate");
+                        Core.Logging.Logger.Error(
+                            new FileNotFoundException("Updater payload incomplete: " + string.Join("; ", missing), updaterPath),
+                            "UpdateWindow.ApplyUpdate");
                     }
                     catch {
                     }
