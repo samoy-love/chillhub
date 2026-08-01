@@ -1027,7 +1027,11 @@ async function manifestsUpload(){
   try{
     console.log('[process] start');
     const url = '/admin/api/upload/process?uploadId='+encodeURIComponent(uploadId);
-    const res = await fetch(url, { headers: { 'Accept':'application/x-ndjson', 'Cache-Control':'no-store' } });
+    // Метод обязателен: обработчик распаковывает архив, публикует версию и удаляет
+    // ZIP, то есть меняет состояние. CSRF-проверка на сервере действует только для
+    // POST/PUT/PATCH/DELETE, поэтому GET оставлял бы эту операцию без защиты.
+    // Заголовок X-CSRF-Token подставит обёртка fetch в начале файла.
+    const res = await fetch(url, { method:'POST', headers: { 'Accept':'application/x-ndjson', 'Cache-Control':'no-store' } });
     if(!res.ok){ notify('HTTP '+res.status+' process'); return; }
     const dec = new window.TextDecoder();
     let gotAny = false;
