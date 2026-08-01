@@ -35,6 +35,16 @@ namespace ChillHub {
         /// </summary>
         private const int KeepTempSessionDirs = 2;
 
+        /// <summary>
+        /// A14. Возраст, после которого каталог сессии удаляется независимо от того,
+        /// входит ли он в число самых свежих: иначе у пользователя, который давно не
+        /// обновлялся, пара каталогов-ветеранов лежала бы в %TEMP% вечно.
+        /// </summary>
+        private const int StaleSessionDays = 7;
+
+        /// <summary>Суффикс имени каталога, отложенного до следующей уборки (A14).</summary>
+        private const string TrashSuffix = ".trash-";
+
         /// <summary>UTF-8 без BOM: BOM ломает сверку размеров/хешей служебных списков.</summary>
         private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
 
@@ -61,6 +71,7 @@ namespace ChillHub {
         private readonly HttpClient http = HttpClientProvider.Shared;
         private bool updateRequired = false; // есть ли новая версия
         private bool loopBlocked = false;    // A4: автообновление остановлено защитой от петли
+        private bool updaterStarted = false; // A14: апдейтер запущен, его временный каталог трогать нельзя
         private bool downloaded = false;     // скачан ли пакет
         private string? remoteVersion;
         private string stripPrefix = string.Empty; // корневая папка внутри пакета (обычно пусто)
@@ -76,6 +87,16 @@ namespace ChillHub {
             this.InitializeComponent();
             TryCleanupTempSelfUpdateDirs();
             TryCleanupInstalledUpdaterArtifacts();
+
+            // A14. Второй заход при закрытии окна: к этому моменту каталоги, которые
+            // в конструкторе были заняты (лог апдейтера, дочитывавшийся при старте),
+            // обычно уже свободны. Пропускаем только случай «мы сами запустили
+            // апдейтер» — там временный каталог нужен работающему процессу.
+            this.Closed += (_, _) => {
+                if (!this.updaterStarted) {
+                    TryCleanupTempSelfUpdateDirs();
+                }
+            };
 
             // In DEBUG builds, pre-check the DEV skip checkbox by default
             // so developers can easily bypass self-update if they choose.
@@ -735,6 +756,13 @@ namespace ChillHub {
                 var dirs = new System.Collections.Generic.List<System.IO.DirectoryInfo>();
                 foreach (var p in System.IO.Directory.EnumerateDirectories(root)) {
                     try {
+                        // A14. Хвосты прошлых уборок: каталог, который не удалялся из-за
+                        // залоченного файла, отправлялся в *.trash-* и добивается здесь.
+                        if (System.IO.Path.GetFileName(p).Contains(TrashSuffix, StringComparison.OrdinalIgnoreCase)) {
+                            TryDeleteDirectoryBestEffort(p);
+                            continue;
+                        }
+
                         dirs.Add(new System.IO.DirectoryInfo(p));
                     }
                     catch {
@@ -746,7 +774,11 @@ namespace ChillHub {
 
                 for (var i = 0; i < dirs.Count; i++) {
                     var dir = dirs[i].FullName;
-                    if (i < KeepTempSessionDirs) {
+
+                    // A14. «Свежесть» по позиции в списке недостаточна: если обновлений
+                    // давно не было, два каталога-ветерана хранились бы вечно.
+                    var stale = DirStamp(dirs[i]) < DateTime.UtcNow.AddDays(-StaleSessionDays);
+                    if (i < KeepTempSessionDirs && !stale) {
                         // Свежие сессии целиком не сносим, но копию апдейтера из них выносим:
                         // старая раскладка (updater прямо в папке версии) и новая (work\updater).
                         TryDeleteDirectoryBestEffort(System.IO.Path.Combine(dir, PreserveMatcher.UpdaterArtifactDir));
@@ -792,6 +824,7 @@ namespace ChillHub {
 
                 // Не вышло с первого раза: снимаем read-only и выносим файлы поштучно,
                 // чтобы освободить место даже если один файл кем-то занят.
+                var locked = new System.Collections.Generic.List<string>();
                 try {
                     foreach (var f in System.IO.Directory.EnumerateFiles(path, "*", System.IO.SearchOption.AllDirectories)) {
                         try {
@@ -803,6 +836,7 @@ namespace ChillHub {
                             System.IO.File.Delete(f);
                         }
                         catch {
+                            locked.Add(f);
                         }
                     }
                 }
@@ -811,12 +845,57 @@ namespace ChillHub {
 
                 try {
                     System.IO.Directory.Delete(path, true);
+                    return;
+                }
+                catch {
+                }
+
+                // A14. Каталог всё ещё занят. Раньше на этом уборка заканчивалась, и
+                // залоченный каталог оставался в %TEMP% НАВСЕГДА: имя занято, при
+                // следующем обновлении той же версии сессия создавалась поверх чужих
+                // остатков. Уводим его в сторону (переименование работает даже с
+                // открытыми внутри файлами) — имя освобождается сразу, а добьём при
+                // следующем запуске, когда владелец отпустит файлы.
+                try {
+                    var trash = path + TrashSuffix + Guid.NewGuid().ToString("N").Substring(0, 8);
+                    System.IO.Directory.Move(path, trash);
+                    path = trash;
+                    try {
+                        System.IO.Directory.Delete(path, true);
+                        return;
+                    }
+                    catch {
+                    }
+                }
+                catch {
+                }
+
+                // Последний рубеж: просим систему удалить остатки при перезагрузке.
+                // Работает не всегда (нужны права на HKLM), поэтому именно последний.
+                foreach (var f in locked) {
+                    try {
+                        NativeMethods.MoveFileEx(f, null, NativeMethods.MOVEFILE_DELAY_UNTIL_REBOOT);
+                    }
+                    catch {
+                    }
+                }
+
+                try {
+                    Core.Logging.Logger.Warn($"SelfUpdate temp cleanup: каталог занят и оставлен до следующего запуска: {path}");
                 }
                 catch {
                 }
             }
             catch {
             }
+        }
+
+        private static class NativeMethods {
+            internal const int MOVEFILE_DELAY_UNTIL_REBOOT = 0x00000004;
+
+            [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+            [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+            internal static extern bool MoveFileEx(string lpExistingFileName, string? lpNewFileName, int dwFlags);
         }
 
         /// <summary>
@@ -1389,6 +1468,7 @@ namespace ChillHub {
                 }
 
                 // Фиксируем попытку только когда апдейтер реально запущен (A1: защита от петли).
+                this.updaterStarted = true;
                 RegisterUpdateAttempt(this.remoteVersion ?? string.Empty);
 
                 // Завершаем приложение: освобождаем файлы и даём скрипту применить обновление
