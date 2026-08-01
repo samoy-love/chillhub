@@ -98,6 +98,7 @@ namespace ChillHub.Pages {
                 this.FbComment.Text = string.Empty;
                 this.FbStatus.Text = string.Empty;
                 this.FbType.SelectedIndex = 0;
+                this.UpdateFeedbackDiagnosticsInfo();
                 this.FeedbackOverlay.Visibility = Visibility.Visible;
 
                 // Валидация только по нажатию «Отправить»: на открытии ничего не подсвечиваем
@@ -112,6 +113,33 @@ namespace ChillHub.Pages {
             this.FeedbackOverlay.Visibility = Visibility.Collapsed;
         }
 
+        // Пользователь передумал прикладывать диагностику (или наоборот) — обновим пояснение
+        private void FbAttachDiagnostics_Click(object sender, RoutedEventArgs e) => this.UpdateFeedbackDiagnosticsInfo();
+
+        /// <summary>
+        /// Показывает, что именно уйдёт вместе с сообщением. Раньше конфиг, пути установки
+        /// и дерево папки игр прикладывались молча и без возможности отказаться.
+        /// </summary>
+        private void UpdateFeedbackDiagnosticsInfo() {
+            try {
+                if (this.FbDiagnosticsInfo == null) {
+                    return;
+                }
+
+                if (this.FbAttachDiagnostics?.IsChecked != true) {
+                    this.FbDiagnosticsInfo.Text = "Будут отправлены только ваше сообщение и указанные контакты.";
+                    return;
+                }
+
+                this.FbDiagnosticsInfo.Text = "Вместе с сообщением уйдёт: "
+                    + string.Join("; ", Core.Diagnostics.BundleContents)
+                    + ". Имя пользователя Windows в путях заменяется на %USER%.";
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"Feedback.UpdateDiagnosticsInfo: {ex.Message}");
+            }
+        }
+
         private async void FbSend_Click(object sender, RoutedEventArgs e) {
             try {
                 var comment = this.FbComment.Text?.Trim() ?? string.Empty;
@@ -120,13 +148,16 @@ namespace ChillHub.Pages {
                     return;
                 }
 
+                // Диагностику прикладываем только с явного согласия: галочка стоит по умолчанию,
+                // но её видно и её можно снять (см. форму под кнопками).
+                var attachDiagnostics = this.FbAttachDiagnostics?.IsChecked == true;
                 var draft = new FeedbackService.FeedbackDraft(
                     this.FbName.Text?.Trim() ?? string.Empty,
                     this.FbContact.Text?.Trim() ?? string.Empty,
                     this.GetFeedbackTypeString(),
                     comment,
-                    true, // логи прикрепляем всегда — так решили в UX
-                    FeedbackService.CollectSystemInfo());
+                    attachDiagnostics,
+                    attachDiagnostics ? FeedbackService.CollectSystemInfo() : null);
 
                 this.FbStatus.Text = "Отправка...";
                 var ok = await this.Feedback.TrySendAsync(draft, silent: false).ConfigureAwait(true);

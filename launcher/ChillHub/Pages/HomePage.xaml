@@ -1305,7 +1305,14 @@
             <Button x:Name="FbSendBtn" Content="Отправить" MinWidth="200" Height="36" FontSize="13" FontWeight="SemiBold" Padding="12,6" Click="FbSend_Click" Margin="0,0,8,0" Style="{DynamicResource Style.Button.PrimaryLocal}"/>
             <Button Content="Отмена" Width="120" Height="36" FontSize="13" FontWeight="SemiBold" Padding="12,6" Click="FbCancel_Click" Style="{DynamicResource Style.Button.GhostNeutral}"/>
           </StackPanel>
-          <!-- Removed info caption under buttons per request -->
+          <!-- Что уходит вместе с сообщением: показываем честно и даём выключить -->
+          <StackPanel Grid.Row="4" Grid.ColumnSpan="2" Margin="0,12,0,0">
+            <CheckBox x:Name="FbAttachDiagnostics" IsChecked="True" Click="FbAttachDiagnostics_Click"
+                      Content="Приложить техническую информацию (помогает найти причину)"
+                      Foreground="{DynamicResource Brush.Text}" FontSize="13"/>
+            <TextBlock x:Name="FbDiagnosticsInfo" Margin="24,6,0,0" TextWrapping="Wrap" FontSize="12"
+                       Foreground="{DynamicResource Brush.TextSecondary}"/>
+          </StackPanel>
         </Grid>
       </Border>
     </Grid>
