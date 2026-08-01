@@ -120,10 +120,21 @@ func validateManifest(m manifest) error {
 
 	dirSeen := make(map[string]int, len(m.EmptyDirs))
 	for i, d := range m.EmptyDirs {
-		if why := pathProblem(d); why != "" {
+		// A trailing slash on a DIRECTORY is the ordinary, unambiguous way to write
+		// one: "a/b/" and "a/b" name the same directory, and the client normalises
+		// both to the same value before creating it — so what is validated is what
+		// is used. Files get no such latitude: there the exact string decides which
+		// file lands on disk.
+		//
+		// Without this the client rejected manifests that are already published:
+		// lethal-company and drive-beyond-horizons both list an empty directory
+		// with a trailing slash, and BOTH games stopped installing entirely.
+		dir := strings.TrimRight(d, "/\\")
+
+		if why := pathProblem(dir); why != "" {
 			return errors.New("emptyDir #" + strconv.Itoa(i) + " " + strconv.Quote(d) + ": " + why)
 		}
-		key := strings.ToLower(d)
+		key := strings.ToLower(dir)
 		if prev, dup := dirSeen[key]; dup {
 			return errors.New("duplicate emptyDir " + strconv.Quote(d) + " (entries #" +
 				strconv.Itoa(prev) + " and #" + strconv.Itoa(i) + ")")

@@ -176,6 +176,54 @@ namespace ChillHub.Tests {
                 () => PlanTestData.PlanAsync(manifest, dir.Root));
         }
 
+        /// <summary>
+        /// Завершающий слеш у пустого каталога — законная запись: «a/b/» и «a/b»
+        /// описывают ОДИН каталог, и планировщик приводит их к одному виду.
+        /// <para>
+        /// Это не умозрительный случай: обе опубликованные игры несут такую запись
+        /// (lethal-company — «BepInEx/plugins/Bertogim-LoadingScreen/»,
+        /// drive-beyond-horizons — «…/win64/FreeTP/»), и строгая проверка сломала
+        /// установку обеих полностью.
+        /// </para>
+        /// </summary>
+        [Theory]
+        [InlineData("BepInEx/plugins/Bertogim-LoadingScreen/")]
+        [InlineData("DriveBeyondHorizons/Plugins/SteamCorePro/Source/ThirdParty/SteamLibrary/redistributable_bin/win64/FreeTP/")]
+        public async Task ЗавершающийСлешУПустогоКаталогаДопустим(string dir) {
+            using var tmp = new TempDir();
+            var manifest = PlanTestData.Manifest(PlanTestData.File("game.exe", 1, "aa"));
+            manifest.EmptyDirs = new List<string> { dir };
+
+            var plan = await PlanTestData.PlanAsync(manifest, tmp.Root);
+            Assert.NotNull(plan);
+        }
+
+        /// <summary>Послабление ровно на один слеш: «logs/» и «logs» — по-прежнему дубликат.</summary>
+        [Fact]
+        public async Task КаталогиРазличающиесяТолькоСлешемСчитаютсяДубликатом() {
+            using var tmp = new TempDir();
+            var manifest = PlanTestData.Manifest(PlanTestData.File("game.exe", 1, "aa"));
+            manifest.EmptyDirs = new List<string> { "logs/", "logs" };
+
+            await Assert.ThrowsAsync<ManifestValidationException>(
+                () => PlanTestData.PlanAsync(manifest, tmp.Root));
+        }
+
+        /// <summary>Всё остальное остаётся строгим — послабление касается только хвостового слеша.</summary>
+        [Theory]
+        [InlineData("../escape/")]
+        [InlineData("/absolute/")]
+        [InlineData("a//b/")]
+        [InlineData(" spaced/")]
+        public async Task ОстальныеНеканоническиеКаталогиПрежнемуОтвергаются(string dir) {
+            using var tmp = new TempDir();
+            var manifest = PlanTestData.Manifest(PlanTestData.File("game.exe", 1, "aa"));
+            manifest.EmptyDirs = new List<string> { dir };
+
+            await Assert.ThrowsAsync<ManifestValidationException>(
+                () => PlanTestData.PlanAsync(manifest, tmp.Root));
+        }
+
         [Fact]
         public async Task ДубликатПустогоКаталогаОтвергаетМанифест() {
             using var dir = new TempDir();
