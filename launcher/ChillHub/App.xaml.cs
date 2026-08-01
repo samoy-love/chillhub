@@ -37,7 +37,14 @@ namespace ChillHub {
                         ChillHub.Core.ErrorReporter.Report(real, "AppDomain.UnhandledException");
                     }
 
-                    MessageBox.Show($"Необработанное исключение: {ex.ExceptionObject}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                    // Пользователю — суть и куда смотреть. Стектрейс уже в логе и в
+                    // авто-отчёте: в окне он нечитаем и содержит пути с именем пользователя.
+                    MessageBox.Show(
+                        "Произошла непредвиденная ошибка, лаунчер будет закрыт.\n\n"
+                        + "Подробности записаны в журнал (кнопка «Открыть логи» на странице игры).",
+                        "Ошибка",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
                 };
                 this.DispatcherUnhandledException += (s, ex) => {
                     AppendBootLog($"DispatcherUnhandledException: {ex.Exception.Message}\r\n{ex.Exception}");
@@ -45,7 +52,12 @@ namespace ChillHub {
 
                     // Logger.Error(Exception, ...) сам отправляет отчёт — второй вызов не нужен
                     Logger.Error(ex.Exception, "DispatcherUnhandledException");
-                    MessageBox.Show($"Ошибка: {ex.Exception.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                    MessageBox.Show(
+                        "Произошла ошибка, но лаунчер продолжит работу.\n\n"
+                        + "Подробности записаны в журнал.",
+                        "Ошибка",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
                     ex.Handled = true;
                 };
 

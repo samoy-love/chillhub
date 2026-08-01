@@ -187,7 +187,10 @@ namespace ChillHub.Core.Sync {
 
             var localRoot = GameLocalRoot(gamesPath, gameId);
             if (!HasAnyLocalGameFiles(localRoot)) {
-                throw new IntegrityCheckException($"Игра не установлена: в папке «{localRoot}» нет файлов. Сначала установите игру.");
+                // Путь — в лог: в сообщении пользователю он ничего не объясняет,
+                // зато утекает в скриншоты и в отчёты вместе с именем пользователя Windows.
+                ChillHub.Core.Logging.Logger.Warn($"IntegrityCheck gid={gameId}: в папке '{localRoot}' нет файлов игры");
+                throw new IntegrityCheckException("Игра не установлена: в папке игры нет файлов. Сначала установите игру.");
             }
 
             Manifest manifest;
