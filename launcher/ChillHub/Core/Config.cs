@@ -116,15 +116,39 @@ namespace ChillHub.Core {
             }
         }
 
-        public static void Save(AppConfig cfg) {
+        /// <summary>
+        /// Сохраняет конфигурацию. Ошибку не глушит: возвращает false, чтобы вызывающий
+        /// мог сказать пользователю правду. Раньше страница настроек рапортовала об успехе
+        /// даже когда запись не удалась, и настройки молча терялись при перезапуске.
+        /// </summary>
+        /// <param name="cfg">Сохраняемая конфигурация.</param>
+        /// <returns>true, если файл записан.</returns>
+        public static bool Save(AppConfig cfg) => TrySave(cfg, out _);
+
+        /// <summary>
+        /// То же, что <see cref="Save"/>, но с текстом ошибки для показа пользователю.
+        /// </summary>
+        /// <param name="cfg">Сохраняемая конфигурация.</param>
+        /// <param name="error">Описание сбоя; пустая строка при успехе.</param>
+        /// <returns>true, если файл записан.</returns>
+        public static bool TrySave(AppConfig cfg, out string error) {
+            error = string.Empty;
             try {
                 Clamp(cfg);
                 Directory.CreateDirectory(AppDir);
                 var json = JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(ConfigPath, json);
+
+                // Кеш обновляем только после удачной записи: иначе в памяти живут настройки,
+                // которых на диске нет, и после перезапуска они «откатываются» сами.
+                cache = cfg;
                 ApplyTheme();
+                return true;
             }
-            catch {
+            catch (Exception ex) {
+                error = ex.Message;
+                Logging.Logger.Warn($"Config.Save: настройки не сохранены: {ex.Message}");
+                return false;
             }
         }
 
