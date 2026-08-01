@@ -19,6 +19,20 @@
     <Grid Grid.Row="1">
       <!-- Main content (browser) -->
       <wv2:WebView2 Name="Browser"/>
+      <!-- Запасное сообщение: показывается, если WebView2 вообще не удалось поднять
+           (тогда NavigateToString недоступен и окно осталось бы пустым) -->
+      <Border Name="ErrorPanel" Visibility="Collapsed"
+              Background="{DynamicResource Brush.Surface}"
+              BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+              CornerRadius="8" Padding="20" MaxWidth="620"
+              HorizontalAlignment="Center" VerticalAlignment="Center">
+        <StackPanel Orientation="Vertical">
+          <TextBlock Text="Не удалось открыть новость" FontSize="16" FontWeight="SemiBold"
+                     Foreground="{DynamicResource Brush.Title}" TextWrapping="Wrap"/>
+          <TextBlock Name="ErrorText" Margin="0,8,0,0" TextWrapping="Wrap"
+                     Foreground="{DynamicResource Brush.TextSecondary}"/>
+        </StackPanel>
+      </Border>
     </Grid>
   </Grid>
 </Page>

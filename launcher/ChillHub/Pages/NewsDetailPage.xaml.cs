@@ -6,7 +6,9 @@
 namespace ChillHub.Pages {
     using System;
     using System.Drawing;
+    using System.IO;
     using System.Net.Http;
+    using System.Threading;
     using System.Threading.Tasks;
     using System.Windows;
     using System.Windows.Controls;
@@ -18,6 +20,12 @@ namespace ChillHub.Pages {
     using Microsoft.Web.WebView2.Core;
 
     public partial class NewsDetailPage : Page {
+        // Окружение WebView2 создаётся один раз на процесс: два окружения с разными
+        // папками данных в одном процессе создать нельзя.
+        private static readonly SemaphoreSlim EnvGate = new SemaphoreSlim(1, 1);
+        private static CoreWebView2Environment? sharedEnvironment;
+        private static bool legacyFolderCleaned;
+
         private readonly string markdownUrl;
         private readonly HttpClient http = new HttpClient();
 
@@ -37,7 +45,96 @@ namespace ChillHub.Pages {
             _ = this.LoadAsync();
         }
 
+        /// <summary>
+        /// Каталог данных WebView2 (кеш, куки, localStorage).
+        /// Обязательно вне папки установки: по умолчанию WebView2 кладёт
+        /// "ChillHub.exe.WebView2" рядом с exe, а самообновление сносит всё,
+        /// чего нет в манифесте, — вместе с этим каталогом.
+        /// </summary>
+        /// <returns>Полный путь к каталогу данных WebView2.</returns>
+        private static string GetUserDataFolder() {
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            return Path.Combine(appData, "ChillHub", "WebView2");
+        }
+
+        /// <summary>
+        /// Разовая уборка каталога данных WebView2, оставшегося в папке установки
+        /// от версий лаунчера без явного UserDataFolder.
+        /// </summary>
+        private static void CleanupLegacyUserDataFolder() {
+            if (legacyFolderCleaned) {
+                return;
+            }
+
+            legacyFolderCleaned = true;
+            try {
+                var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                var exeName = Path.GetFileName(Environment.ProcessPath) ?? "ChillHub.exe";
+                foreach (var candidate in new[] { exeName + ".WebView2", "ChillHub.exe.WebView2" }) {
+                    var legacy = Path.Combine(baseDir, candidate);
+                    if (!Directory.Exists(legacy)) {
+                        continue;
+                    }
+
+                    try {
+                        Directory.Delete(legacy, recursive: true);
+                        ChillHub.Core.Logging.Logger.Info($"WebView2: удалён старый каталог данных '{legacy}'");
+                    }
+                    catch (Exception ex) {
+                        // Каталог мог остаться залоченным — не критично, попробуем в следующий раз
+                        ChillHub.Core.Logging.Logger.Warn($"WebView2: не удалось удалить '{legacy}': {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex) {
+                ChillHub.Core.Logging.Logger.Error(ex, "NewsDetailPage.CleanupLegacyUserDataFolder");
+            }
+        }
+
+        private static async Task<CoreWebView2Environment> GetEnvironmentAsync() {
+            var existing = sharedEnvironment;
+            if (existing != null) {
+                return existing;
+            }
+
+            await EnvGate.WaitAsync();
+            try {
+                if (sharedEnvironment != null) {
+                    return sharedEnvironment;
+                }
+
+                CleanupLegacyUserDataFolder();
+                var folder = GetUserDataFolder();
+                Directory.CreateDirectory(folder);
+                sharedEnvironment = await CoreWebView2Environment.CreateAsync(null, folder, null);
+                return sharedEnvironment;
+            }
+            finally {
+                EnvGate.Release();
+            }
+        }
+
         private async Task LoadAsync() {
+            // Окружение поднимаем до навигации: после инициализации WebView2
+            // сменить UserDataFolder уже нельзя.
+            try {
+                var env = await GetEnvironmentAsync();
+                await this.Browser.EnsureCoreWebView2Async(env);
+            }
+            catch (Exception ex) {
+                try {
+                    ChillHub.Core.Logging.Logger.Error(ex, "NewsDetailPage: инициализация WebView2");
+                }
+                catch {
+                }
+
+                // Без CoreWebView2 недоступен и NavigateToString — показываем сообщение средствами WPF
+                this.ShowFallbackError(
+                    "Компонент просмотра (WebView2) не запустился. Возможно, не установлен Microsoft Edge WebView2 Runtime.\n\n"
+                    + ex.Message);
+                return;
+            }
+
             try {
                 // Loader removed: directly fetch and render content
                 var md = await this.http.GetStringAsync(this.markdownUrl);
@@ -85,8 +182,6 @@ namespace ChillHub.Pages {
   }});
 </script>
 </body></html>";
-                await this.Browser.EnsureCoreWebView2Async();
-
                 // Ensure runtime background and wire events
                 try {
                     var bgCol = GetMediaColor("Brush.Background");
@@ -126,10 +221,31 @@ namespace ChillHub.Pages {
             }
             catch (Exception ex) {
                 try {
-                    this.Browser.NavigateToString($"<html><body><p>Не удалось загрузить новость: {System.Net.WebUtility.HtmlEncode(ex.Message)}</p></body></html>");
+                    this.Browser.NavigateToString($"<html><body style='background:{BrushToCss("Brush.Background", "#0F1116")};color:{BrushToCss("Brush.Text", "#E5E5E5")};font-family:Segoe UI,Arial'><p>Не удалось загрузить новость: {System.Net.WebUtility.HtmlEncode(ex.Message)}</p></body></html>");
                 }
-                finally {
+                catch {
+                    // Даже отрисовать ошибку не вышло — уходим в запасную панель WPF
+                    this.ShowFallbackError("Не удалось загрузить новость.\n\n" + ex.Message);
                 }
+            }
+        }
+
+        // Показывает сообщение об ошибке средствами WPF, когда WebView2 недоступен.
+        private void ShowFallbackError(string message) {
+            try {
+                if (this.ErrorText != null) {
+                    this.ErrorText.Text = message;
+                }
+
+                if (this.ErrorPanel != null) {
+                    this.ErrorPanel.Visibility = Visibility.Visible;
+                }
+
+                if (this.Browser != null) {
+                    this.Browser.Visibility = Visibility.Collapsed;
+                }
+            }
+            catch {
             }
         }
 
