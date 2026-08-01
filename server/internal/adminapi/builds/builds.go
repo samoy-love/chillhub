@@ -90,20 +90,56 @@ func (h *Handlers) stageVersionDir(gid, ver string) (stageDir, filesRoot string,
 	return stageDir, filesRoot, nil
 }
 
-// promoteVersionDir atomically replaces the published version directory with a
-// fully extracted staging directory. os.Rename cannot overwrite an existing
-// directory (on any OS, and notably on Windows), so the old one is removed
-// first.
+// promoteVersionDir replaces the published version directory with a fully
+// extracted staging directory.
+//
+// os.Rename cannot overwrite an existing directory (on any OS, and notably on
+// Windows), so the old version has to be moved out of the way first. It is
+// RENAMED ASIDE rather than deleted:
+//
+//   - deleting it left the version absent for as long as the delete took —
+//     minutes for a multi-gigabyte build — and every client asking for it in
+//     that window got a 404; two renames close that gap to microseconds;
+//   - if the second rename then failed, the published version was gone for
+//     good with nothing to restore. Now it is put back.
+//
+// The old tree is deleted only once the new one is live.
 func promoteVersionDir(stageDir, finalDir string) error {
 	if err := os.MkdirAll(filepath.Dir(finalDir), 0o755); err != nil {
 		return err
 	}
+	// Sweep backups a previous crash may have left next to this version.
+	if leftovers, err := filepath.Glob(finalDir + ".old-*"); err == nil {
+		for _, p := range leftovers {
+			_ = os.RemoveAll(p)
+		}
+	}
+
+	backup := ""
 	if _, err := os.Stat(finalDir); err == nil {
-		if err := os.RemoveAll(finalDir); err != nil {
+		backup = finalDir + ".old-" + adminutil.GenID()
+		if err := os.Rename(finalDir, backup); err != nil {
 			return err
 		}
 	}
-	return os.Rename(stageDir, finalDir)
+	if err := os.Rename(stageDir, finalDir); err != nil {
+		if backup != "" {
+			if rerr := os.Rename(backup, finalDir); rerr != nil {
+				// Both the promote and the rollback failed: the published version
+				// now only exists under the backup name. Say so loudly — it is
+				// recoverable by hand, and silence would hide that.
+				log.Printf("[builds] CRITICAL: promote of %s failed (%v) and rollback failed too (%v); "+
+					"the previous version is still on disk as %s", finalDir, err, rerr, backup)
+			}
+		}
+		return err
+	}
+	if backup != "" {
+		if err := os.RemoveAll(backup); err != nil {
+			log.Printf("[builds] cannot remove the replaced version %s: %v", backup, err)
+		}
+	}
+	return nil
 }
 
 // LauncherGameID is the game id the launcher publishes itself under.
