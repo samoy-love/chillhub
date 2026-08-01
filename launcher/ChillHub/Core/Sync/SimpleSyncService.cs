@@ -465,7 +465,30 @@ namespace ChillHub.Core.Sync {
                         var pending = dstPath + ".new";
                         try { if (File.Exists(pending)) { SafeDeleteFile(pending); } } catch { }
                         File.Move(srcPath, pending);
-                        try { NativeMethods.MoveFileEx(pending, dstPath, NativeMethods.MOVEFILE_DELAY_UNTIL_REBOOT /*| NativeMethods.MOVEFILE_REPLACE_EXISTING*/); } catch { }
+                        // REPLACE_EXISTING обязателен: сюда мы попадаем ровно тогда, когда
+                        // dstPath СУЩЕСТВУЕТ и не удаляется (файл держит игра или античит).
+                        // Без флага MoveFileEx на существующем целевом файле возвращает
+                        // ошибку — то есть резервный путь, ради которого всё это написано,
+                        // не срабатывал никогда: .new оставался мусором, старый файл на
+                        // месте, хеш не сходился, и «требуется обновление» повторялось
+                        // бесконечно, накапливая по .new за попытку.
+                        try {
+                            var moved = NativeMethods.MoveFileEx(
+                                pending,
+                                dstPath,
+                                NativeMethods.MOVEFILE_DELAY_UNTIL_REBOOT | NativeMethods.MOVEFILE_REPLACE_EXISTING);
+                            if (moved) {
+                                ChillHub.Core.Logging.Logger.Info(
+                                    $"Файл '{t.RelativePath}' занят другим процессом: замена запланирована на перезагрузку.");
+                            }
+                            else {
+                                ChillHub.Core.Logging.Logger.Warn(
+                                    $"Не удалось запланировать замену '{t.RelativePath}' на перезагрузку (код {Marshal.GetLastWin32Error()}).");
+                            }
+                        }
+                        catch (Exception ex) {
+                            ChillHub.Core.Logging.Logger.Warn($"MoveFileEx('{t.RelativePath}'): {ex.Message}");
+                        }
                     }
                     else {
                         File.Move(srcPath, dstPath);
