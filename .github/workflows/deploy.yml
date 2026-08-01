@@ -328,7 +328,7 @@ jobs:
                 [ -n "$ADMIN_USER" ] && echo "Environment=\"ADMIN_USERNAME=$ADMIN_USER\""
                 [ -n "$ADMIN_PASS_BCRYPT" ] && echo "Environment=\"ADMIN_PASSWORD_BCRYPT=$ADMIN_PASS_BCRYPT\""
               } > "$TMPD"
-              sudo install -m 0644 "$TMPD" "$ADMIN_DROPIN_DIR/override.conf"
+              sudo install -m 0600 -o root -g root "$TMPD" "$ADMIN_DROPIN_DIR/override.conf"  # 0600: внутри JWT_SECRET и bcrypt-хеш
               rm -f "$TMPD" || true
             fi
 

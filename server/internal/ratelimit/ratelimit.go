@@ -17,14 +17,22 @@ import (
 // it proxies the request. X-Forwarded-For may carry a chain; the first entry is
 // the original client.
 func ClientIP(r *http.Request) string {
-	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
-		}
-		return xff
-	}
+	// X-Real-IP первым: nginx выставляет его жёстко из $remote_addr, подделать
+	// его клиент не может.
+	//
+	// X-Forwarded-For НЕЛЬЗЯ читать слева: nginx использует
+	// $proxy_add_x_forwarded_for, который ДОПИСЫВАЕТ реальный адрес к тому,
+	// что прислал клиент. То есть первый элемент полностью подконтролен
+	// клиенту, и лимит обходится случайным заголовком на каждый запрос.
+	// Доверять можно только последнему элементу — его добавил наш прокси.
 	if rip := strings.TrimSpace(r.Header.Get("X-Real-IP")); rip != "" {
 		return rip
+	}
+	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+		if i := strings.LastIndexByte(xff, ','); i >= 0 {
+			return strings.TrimSpace(xff[i+1:])
+		}
+		return xff
 	}
 	host := strings.TrimSpace(r.RemoteAddr)
 	if i := strings.LastIndexByte(host, ':'); i > 0 {
