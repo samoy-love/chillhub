@@ -904,7 +904,20 @@ namespace ChillHub.Pages {
         /// </summary>
         private async Task DispatcherInvokeAsync(Func<Task> action) {
             Task? started = null;
-            await this.DispatcherInvokeAsync(() => started = action()).ConfigureAwait(false);
+
+            // ФИГУРНЫЕ СКОБКИ ЗДЕСЬ ОБЯЗАТЕЛЬНЫ — без них метод вызывает сам себя.
+            //
+            // Было: DispatcherInvokeAsync(() => started = action())
+            // Выражение `started = action()` имеет ТИП Task, поэтому лямбда подходит и
+            // под Action (значение отбрасывается), и под Func<Task>. При разрешении
+            // перегрузок C# предпочитает делегат, возвращаемый тип которого совпадает
+            // с выведенным типом лямбды, то есть Func<Task> — эту же перегрузку.
+            // Получалась бесконечная рекурсия и мгновенное переполнение стека: процесс
+            // умирал, не успев ни записать лог, ни отправить отчёт об ошибке.
+            //
+            // Блочная лямбда значения не возвращает и приводится ТОЛЬКО к Action.
+            await this.DispatcherInvokeAsync(() => { started = action(); }).ConfigureAwait(false);
+
             if (started != null) {
                 await started.ConfigureAwait(false);
             }
