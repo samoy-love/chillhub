@@ -5,6 +5,7 @@
 
 namespace ChillHub {
     using System;
+    using System.Collections.Generic;
     using System.Globalization;
     using System.Linq;
     using System.Threading.Tasks;
@@ -156,6 +157,25 @@ namespace ChillHub {
 
         // Theme toggle removed: single dark theme is used
 
+        /// <summary>
+        /// Контексты, по которым сбой караоке уже записан. Строка печатается ~30 раз в секунду,
+        /// поэтому одну и ту же ошибку логируем один раз за сессию, иначе лог станет непригоден.
+        /// </summary>
+        private static readonly HashSet<string> KaraokeLoggedContexts = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Караоке — украшение шапки: любая его ошибка не должна ни ронять окно, ни заливать лог.
+        /// </summary>
+        private static void LogKaraokeFailure(string context, Exception ex) {
+            lock (KaraokeLoggedContexts) {
+                if (!KaraokeLoggedContexts.Add(context)) {
+                    return;
+                }
+            }
+
+            Core.Logging.Logger.Warn($"Караоке в шапке, {context}: {ex.Message} (повторы не логируются)");
+        }
+
         // --- Karaoke implementation ---
         private void MainWindow_Loaded(object? sender, RoutedEventArgs e) {
             try {
@@ -164,7 +184,8 @@ namespace ChillHub {
                 this.ResetKaraokeToStart();
                 this.StartKaraoke();
             }
-            catch {
+            catch (Exception ex) {
+                LogKaraokeFailure("MainWindow_Loaded", ex);
             }
         }
 
@@ -310,7 +331,8 @@ namespace ChillHub {
                 try {
                     pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
                 }
-                catch {
+                catch (Exception ex) {
+                    LogKaraokeFailure("определение DPI, берём 1.0", ex);
                 }
 
                 double max = 0.0;
@@ -335,7 +357,8 @@ namespace ChillHub {
                 try {
                     pad = this.KaraokeHost.Padding.Left + this.KaraokeHost.Padding.Right;
                 }
-                catch {
+                catch (Exception ex) {
+                    LogKaraokeFailure("чтение отступов контейнера, берём 16", ex);
                     pad = 16.0;
                 }
                 double width = Math.Ceiling(max) + pad + 12; // padding + safety
@@ -344,7 +367,8 @@ namespace ChillHub {
                 width = Math.Max(260, Math.Min(width, 800));
                 this.KaraokeHost.Width = width;
             }
-            catch {
+            catch (Exception ex) {
+                LogKaraokeFailure("подбор ширины контейнера", ex);
             }
         }
 
@@ -381,7 +405,8 @@ namespace ChillHub {
                 this.KaraokeCurrentText.Text = current;
                 this.KaraokeNextText.Text = next;
             }
-            catch {
+            catch (Exception ex) {
+                LogKaraokeFailure("вывод текста строки", ex);
             }
         }
 
@@ -394,15 +419,29 @@ namespace ChillHub {
                 this.KaraokeCurrentText.Opacity = 1.0;
                 this.KaraokeNextText.Opacity = 0.8;
             }
-            catch {
+            catch (Exception ex) {
+                LogKaraokeFailure("сброс анимаций при старте", ex);
             }
+
             // Backdate last progress to emit at least one character on first tick
-            try { this.karaokeLastProgressAtUtc = DateTime.UtcNow.AddMilliseconds(-this.k.CharIntervalMs); } catch { }
+            try {
+                this.karaokeLastProgressAtUtc = DateTime.UtcNow.AddMilliseconds(-this.k.CharIntervalMs);
+            }
+            catch (Exception ex) {
+                LogKaraokeFailure("сдвиг отметки прогресса при старте", ex);
+            }
+
             if (!this.karaokeTimer.IsEnabled) {
                 this.karaokeTimer.Start();
             }
+
             // Emit first character ASAP to show clear typing start
-            try { this.KaraokeTimer_Tick(this, EventArgs.Empty); } catch { }
+            try {
+                this.KaraokeTimer_Tick(this, EventArgs.Empty);
+            }
+            catch (Exception ex) {
+                LogKaraokeFailure("первый тик", ex);
+            }
         }
 
         private void PauseKaraoke() {
@@ -425,14 +464,22 @@ namespace ChillHub {
                 this.KaraokeCurrentText.Opacity = 1.0;
                 this.KaraokeNextText.Opacity = 0.8;
             }
-            catch {
+            catch (Exception ex) {
+                LogKaraokeFailure("сброс анимаций при возобновлении", ex);
             }
+
             // accumulate paused time
             if (this.karaokePauseStartedUtc != null) {
                 var pausedDur = (DateTime.UtcNow - this.karaokePauseStartedUtc.Value);
                 this.karaokePausedAccum += pausedDur;
                 // сдвигаем маркер последнего прогресса вперёд на время паузы, чтобы при возобновлении не "догоняло" сразу всю строку
-                try { this.karaokeLastProgressAtUtc = this.karaokeLastProgressAtUtc + pausedDur; } catch { }
+                try {
+                    this.karaokeLastProgressAtUtc += pausedDur;
+                }
+                catch (Exception ex) {
+                    LogKaraokeFailure("учёт длительности паузы", ex);
+                }
+
                 this.karaokePauseStartedUtc = null;
             }
             if (!this.karaokeTimer.IsEnabled) {
@@ -463,7 +510,9 @@ namespace ChillHub {
                             this.KaraokeCurrentText.Opacity = 1.0;
                         }
                     }
-                    catch { }
+                    catch (Exception ex) {
+                        LogKaraokeFailure("подсветка текущей строки при печати", ex);
+                    }
 
                     var newIndex = Math.Min(line.Length, this.karaokeCharIndex + add);
                     this.karaokeCharIndex = newIndex;
@@ -472,14 +521,23 @@ namespace ChillHub {
 
                     // advance lastProgress by the actual time "spent" on produced chars
                     var spentMs = add * this.k.CharIntervalMs;
-                    try { this.karaokeLastProgressAtUtc = this.karaokeLastProgressAtUtc.AddMilliseconds(spentMs); } catch { this.karaokeLastProgressAtUtc = now; }
+                    try {
+                        this.karaokeLastProgressAtUtc = this.karaokeLastProgressAtUtc.AddMilliseconds(spentMs);
+                    }
+                    catch (Exception ex) {
+                        LogKaraokeFailure("сдвиг отметки прогресса", ex);
+                        this.karaokeLastProgressAtUtc = now;
+                    }
 
                     if (this.karaokeCharIndex < line.Length) {
                         return; // keep typing
                     }
                 }
             }
-            catch { }
+            catch (Exception ex) {
+                LogKaraokeFailure("тик печати", ex);
+            }
+
             // Если строка ещё не дописана (добавлять нечего в этот тик) — просто ждём следующий тик
             if (this.karaokeCharIndex < line.Length) {
                 return;
@@ -505,7 +563,8 @@ namespace ChillHub {
                     var fadeIn = new DoubleAnimation { From = 0.0, To = 1.0, Duration = TimeSpan.FromMilliseconds(this.k.FadeInMs) };
                     this.KaraokeNextText.BeginAnimation(UIElement.OpacityProperty, fadeIn);
                 }
-                catch {
+                catch (Exception ex) {
+                    LogKaraokeFailure("кроссфейд между строками", ex);
                 }
 
                 await Task.Delay(this.k.AfterTransitionDelayMs);
@@ -527,7 +586,8 @@ namespace ChillHub {
                 this.karaokePauseStartedUtc = null;
                 this.karaokeLastProgressAtUtc = this.karaokeLineStartAtUtc;
             }
-            catch {
+            catch (Exception ex) {
+                LogKaraokeFailure("переход к следующей строке", ex);
             }
             finally {
                 this.karaokeTransitionRunning = false;
