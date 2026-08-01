@@ -1947,7 +1947,11 @@ async function upload(){
 
   // use XHR streaming (NDJSON) to mirror game upload UX
   await new Promise((resolve)=>{
-    const xhr = new XMLHttpRequest(); xhr.open('POST','/admin/uploadStream');
+    // Путь пишем сразу канонический, с /api/: в nginx описан только
+    // `location = /admin/api/uploadStream`, а `location /` отсутствует, поэтому
+    // «/admin/uploadStream» уходит в статику и отдаёт 404. Полагаться на shim
+    // XMLHttpRequest.open в начале файла нельзя — это подстраховка, а не контракт.
+    const xhr = new XMLHttpRequest(); xhr.open('POST','/admin/api/uploadStream');
     xhr.setRequestHeader('Accept','application/x-ndjson');
     // Upload progress (throttled, with lightweight smoothing)
     const t0 = performance.now();
