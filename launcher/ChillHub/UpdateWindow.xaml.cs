@@ -10,6 +10,7 @@ namespace ChillHub {
     using System.Net.Http.Json;
     using System.Reflection;
     using System.Text;
+    using System.Text.RegularExpressions;
     using System.Threading.Tasks;
     using System.Windows;
     using System.Windows.Documents;
@@ -38,6 +39,21 @@ namespace ChillHub {
 
         /// <summary>Единый список preserve-правил, общий с апдейтером.</summary>
         private static readonly PreserveMatcher Preserve = new PreserveMatcher();
+
+        /// <summary>
+        /// A6. Допустимая форма версии: 1.2.3, 1.2.3.4, 1.2.3-beta.1.
+        /// <para>
+        /// Строка приходит из latest.json, то есть С СЕТИ, и дальше подставляется в
+        /// Path.Combine (%TEMP%\ChillHub\SelfUpdate\&lt;версия&gt;), в URL манифеста и в
+        /// аргументы внешнего процесса. Значение вроде "..\..\Startup" уводит каталог
+        /// обновления куда угодно, а любой сюрприз в кавычках/бэкслешах меняет разбор
+        /// командной строки апдейтера. Проверяем ДО первого использования: версия —
+        /// это данные, а не команда.
+        /// </para>
+        /// </summary>
+        private static readonly Regex VersionPattern = new Regex(
+            @"^[0-9]{1,6}(\.[0-9]{1,6}){1,3}(-[0-9A-Za-z][0-9A-Za-z.]{0,31})?$",
+            RegexOptions.CultureInvariant);
 
         private string BaseApi => ConfigService.Current.ApiBaseUrl;
 
@@ -153,6 +169,27 @@ namespace ChillHub {
                     var asm = Assembly.GetExecutingAssembly();
                     var v = asm?.GetName()?.Version;
                     local = v != null ? $"{v.Major}.{v.Minor}.{v.Build}" : string.Empty;
+                }
+
+                // A6. Версия с сервера — недоверенные данные: она станет частью пути,
+                // URL и аргументов внешнего процесса. Всё, что не похоже на версию,
+                // отбрасываем целиком, а не «чистим».
+                if (!string.IsNullOrWhiteSpace(remote) && !IsValidVersion(remote)) {
+                    this.StatusText.Text =
+                        "Сервер сообщил недопустимый номер версии — обновление заблокировано.\n" +
+                        "Обратитесь в поддержку.";
+                    this.Progress.IsIndeterminate = false;
+                    this.Progress.Value = 0;
+                    this.PrimaryBtn.Content = "Продолжить";
+                    this.updateRequired = false;
+                    this.PrimaryBtn.IsEnabled = true;
+                    try {
+                        Core.Logging.Logger.Error(new InvalidOperationException($"Rejected remote version from latest.json: '{remote}'"), "UpdateWindow.VersionValidation");
+                    }
+                    catch {
+                    }
+
+                    return;
                 }
 
                 if (string.IsNullOrWhiteSpace(remote) || string.IsNullOrWhiteSpace(local)) {
@@ -318,6 +355,14 @@ namespace ChillHub {
             }
 
             return candidate ?? string.Empty;
+        }
+
+        /// <summary>A6. Проверяет, что строка версии безопасна для пути, URL и аргументов.</summary>
+        /// <param name="version">Версия из latest.json.</param>
+        /// <returns>true, если версия допустима.</returns>
+        private static bool IsValidVersion(string? version) {
+            var v = (version ?? string.Empty).Trim();
+            return v.Length > 0 && v.Length <= 64 && VersionPattern.IsMatch(v);
         }
 
         /// <summary>Переводит путь из манифеста в путь относительно папки установки.</summary>
@@ -762,6 +807,15 @@ namespace ChillHub {
                     return;
                 }
 
+                // A6. Повторная проверка перед использованием: версия попадает в путь
+                // временного каталога и в URL, а между проверкой в Window_Loaded и этим
+                // местом поле могло быть переприсвоено.
+                if (!IsValidVersion(this.remoteVersion)) {
+                    this.StatusText.Text = "Недопустимый номер версии — обновление отменено.";
+                    this.PrimaryBtn.IsEnabled = false;
+                    return;
+                }
+
                 string manifestUrl = string.Empty;
                 string contentBase = string.Empty;
                 try {
@@ -1004,44 +1058,75 @@ namespace ChillHub {
                     return;
                 }
 
-                var args = new System.Text.StringBuilder();
-                void A(string s) {
-                    if (args.Length > 0) {
-                        args.Append(' ');
+                // A9. Исходные аргументы командной строки лаунчера — в файл (по строке
+                // на аргумент). Раньше они просто терялись: апдейтер поднимал лаунчер
+                // «голым», и запуск с параметром (например, автозапуск игры) молча
+                // превращался в обычный старт. Файл вместо строки — чтобы ничего не
+                // экранировать и не разбирать заново.
+                var exeArgsPath = System.IO.Path.Combine(selfUpdateDir, "exeargs.txt");
+                try {
+                    var original = Environment.GetCommandLineArgs();
+                    var carry = new System.Collections.Generic.List<string>();
+                    for (var i = 1; i < original.Length; i++) {
+                        var a = original[i] ?? string.Empty;
+
+                        // Перевод строки в аргументе разрушил бы построчный формат.
+                        if (a.Contains('\n') || a.Contains('\r')) {
+                            continue;
+                        }
+
+                        carry.Add(a);
                     }
-                    args.Append(s);
-                }
-                string Q(string p) => "\"" + p.Replace("\"", "\\\"") + "\"";
-                A("--src " + Q(this.pendingTempRoot!));
-                A("--dst " + Q(targetDir));
-                A("--exe " + Q(currentExe));
-                A("--parent " + pid.ToString());
-                A("--log " + Q(logPath));
-                A("--files " + Q(System.IO.Path.Combine(selfUpdateDir, "filelist.txt")));
-                A("--dirs " + Q(System.IO.Path.Combine(selfUpdateDir, "emptydirs.txt")));
-                A("--del " + Q(System.IO.Path.Combine(selfUpdateDir, "deletelist.txt")));
-                if (!string.IsNullOrWhiteSpace(this.remoteVersion)) {
-                    A("--version " + Q(this.remoteVersion!));
-                }
 
-                // A10. Strip-prefix считаем на стороне лаунчера (по манифесту) и запрещаем автодетект,
-                // чтобы обе стороны одинаково понимали пути.
-                A("--auto-strip false");
-                if (this.stripPrefix.Length > 0) {
-                    A("--strip-prefix " + Q(this.stripPrefix));
+                    System.IO.File.WriteAllLines(exeArgsPath, carry, Utf8NoBom);
                 }
-
-                // A2. Preserve-правила берём из общего PreserveMatcher, а не из строкового литерала.
-                A("--preserve " + Q(PreserveMatcher.DefaultRulesArg));
+                catch {
+                    exeArgsPath = string.Empty;
+                }
 
                 var psi = new System.Diagnostics.ProcessStartInfo {
                     FileName = updaterPath,
-                    Arguments = args.ToString(),
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     WorkingDirectory = tempUpdaterDir,
                     WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
                 };
+
+                // A6. ArgumentList вместо ручной сборки строки. Прежний Q() экранировал
+                // только кавычку и не удваивал бэкслеши, поэтому путь, заканчивающийся
+                // на '\' (а каталог установки — ровно такой случай), съедал закрывающую
+                // кавычку и склеивал соседние аргументы. ArgumentList делает это по
+                // правилам Windows и не требует от нас ничего угадывать.
+                void A(string key, string value) {
+                    psi.ArgumentList.Add(key);
+                    psi.ArgumentList.Add(value);
+                }
+
+                A("--src", this.pendingTempRoot!);
+                A("--dst", targetDir);
+                A("--exe", currentExe);
+                A("--parent", pid.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                A("--log", logPath);
+                A("--files", System.IO.Path.Combine(selfUpdateDir, "filelist.txt"));
+                A("--dirs", System.IO.Path.Combine(selfUpdateDir, "emptydirs.txt"));
+                A("--del", System.IO.Path.Combine(selfUpdateDir, "deletelist.txt"));
+                if (!string.IsNullOrWhiteSpace(exeArgsPath)) {
+                    A("--exe-args-file", exeArgsPath);
+                }
+
+                if (!string.IsNullOrWhiteSpace(this.remoteVersion)) {
+                    A("--version", this.remoteVersion!);
+                }
+
+                // A10. Strip-prefix считаем на стороне лаунчера (по манифесту) и запрещаем автодетект,
+                // чтобы обе стороны одинаково понимали пути.
+                A("--auto-strip", "false");
+                if (this.stripPrefix.Length > 0) {
+                    A("--strip-prefix", this.stripPrefix);
+                }
+
+                // A2. Preserve-правила берём из общего PreserveMatcher, а не из строкового литерала.
+                A("--preserve", PreserveMatcher.DefaultRulesArg);
 
                 System.Diagnostics.Process? started = null;
                 Exception? startError = null;
