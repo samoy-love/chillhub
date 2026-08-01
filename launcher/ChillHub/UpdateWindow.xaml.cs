@@ -477,18 +477,34 @@ namespace ChillHub {
         /// </summary>
         /// <param name="manifest">Манифест целевой версии (пустой манифест маркер не обновляет).</param>
         private void MarkAlreadyUpToDate(Manifest manifest) {
-            if (manifest.Files.Count > 0 && !string.IsNullOrWhiteSpace(this.remoteVersion)) {
-                TryWriteVersionMarker(this.remoteVersion!, out _);
-            }
-
-            ResetUpdateAttempts();
             this.updateRequired = false;
             this.downloaded = false;
             this.Progress.IsIndeterminate = false;
             this.Progress.Value = 100;
-            this.StatusText.Text = "Файлы лаунчера уже соответствуют новой версии — обновление не требуется.";
             this.PrimaryBtn.Content = "Продолжить";
             this.PrimaryBtn.IsEnabled = true;
+
+            // A8. Раньше ошибка записи маркера просто проглатывалась, а ResetUpdateAttempts()
+            // вызывался всё равно. Итог: маркер по-прежнему показывает старую версию, диалог
+            // обновления всплывает при КАЖДОМ запуске, а счётчик попыток обнулён — то есть
+            // защита от петли, которая обязана была её остановить, обезврежена этим же кодом.
+            // Теперь неудача — это неудача: счётчик не сбрасываем, попытку засчитываем
+            // (после MaxSameVersionAttempts сработает loop guard и предложит выход),
+            // и пользователь видит причину, а не молчаливо зацикленный диалог.
+            if (manifest.Files.Count > 0 && !string.IsNullOrWhiteSpace(this.remoteVersion)) {
+                if (!TryWriteVersionMarker(this.remoteVersion!, out var error)) {
+                    RegisterUpdateAttempt(this.remoteVersion!);
+                    this.StatusText.Text =
+                        "Файлы лаунчера уже соответствуют новой версии, но записать отметку о версии не удалось:\n" +
+                        $"{error}\n" +
+                        $"Файл: {System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launcher.version")}\n" +
+                        "Пока это не исправлено, окно обновления будет появляться при каждом запуске.";
+                    return;
+                }
+            }
+
+            ResetUpdateAttempts();
+            this.StatusText.Text = "Файлы лаунчера уже соответствуют новой версии — обновление не требуется.";
         }
 
         /// <summary>
