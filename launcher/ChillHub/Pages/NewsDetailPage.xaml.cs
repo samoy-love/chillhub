@@ -27,12 +27,22 @@ namespace ChillHub.Pages {
         private static bool legacyFolderCleaned;
 
         private readonly string markdownUrl;
-        private readonly HttpClient http = new HttpClient();
+
+        // Общий клиент вместо своего на каждую страницу: свой не диспозился и держал сокеты
+        private readonly HttpClient http = ChillHub.Core.Net.HttpClientProvider.Shared;
+
+        /// <summary>Страница уже освободила WebView2 — повторно им пользоваться нельзя.</summary>
+        private bool browserReleased;
 
         public NewsDetailPage(string title, string markdownUrl) {
             this.InitializeComponent();
             this.TitleText.Text = title;
             this.markdownUrl = markdownUrl;
+
+            // WebView2 держит собственный процесс msedgewebview2.exe. Без освобождения
+            // десяток прочитанных новостей оставляет десяток процессов до выхода из лаунчера.
+            this.Unloaded += this.NewsDetailPage_Unloaded;
+            this.Loaded += this.NewsDetailPage_Loaded;
 
             // Prevent white flash: set WebView2 background to app dark color before init
             try {
@@ -114,11 +124,40 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Освобождает WebView2 вместе с его процессом. Вызывается при уходе со страницы:
+        /// новость — лист навигации, назад к ней не возвращаются.
+        /// </summary>
+        private void NewsDetailPage_Unloaded(object sender, RoutedEventArgs e) {
+            if (this.browserReleased) {
+                return;
+            }
+
+            this.browserReleased = true;
+            try {
+                this.Browser?.Dispose();
+            }
+            catch (Exception ex) {
+                ChillHub.Core.Logging.Logger.Warn($"NewsDetailPage: освободить WebView2 не удалось: {ex.Message}");
+            }
+        }
+
+        // Страховка на случай возврата вперёд по журналу к уже освобождённой странице
+        private void NewsDetailPage_Loaded(object sender, RoutedEventArgs e) {
+            if (this.browserReleased) {
+                this.ShowFallbackError("Просмотр новости был закрыт. Откройте новость заново из списка.");
+            }
+        }
+
         private async Task LoadAsync() {
             // Окружение поднимаем до навигации: после инициализации WebView2
             // сменить UserDataFolder уже нельзя.
             try {
                 var env = await GetEnvironmentAsync();
+                if (this.browserReleased) {
+                    return; // пользователь ушёл со страницы, пока поднималось окружение
+                }
+
                 await this.Browser.EnsureCoreWebView2Async(env);
             }
             catch (Exception ex) {
@@ -138,6 +177,10 @@ namespace ChillHub.Pages {
             try {
                 // Loader removed: directly fetch and render content
                 var md = await this.http.GetStringAsync(this.markdownUrl);
+                if (this.browserReleased) {
+                    return; // страница закрыта, пока грузился markdown
+                }
+
                 var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
                 var html = Markdown.ToHtml(md, pipeline);
 
