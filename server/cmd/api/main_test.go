@@ -109,6 +109,39 @@ func TestNewsIndexFiltersUnpublished(t *testing.T) {
 	}
 }
 
+func TestBuildsAreSortedSemanticallyNewestFirst(t *testing.T) {
+	root := withContentRoot(t)
+	dir := filepath.Join(root, "manifests", "demo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"1.0.2", "1.1.3", "1.1.7", "1.1.8", "1.1.9", "1.1.10"} {
+		if err := os.WriteFile(filepath.Join(dir, v+".json"), []byte(`{}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "latest.json"), []byte(`{"version":"1.1.10"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	testRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/games/demo/builds", nil))
+	var got struct {
+		Items []string `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"1.1.10", "1.1.9", "1.1.8", "1.1.7", "1.1.3", "1.0.2"}
+	if len(got.Items) != len(want) {
+		t.Fatalf("items = %v, want %v", got.Items, want)
+	}
+	for i := range want {
+		if got.Items[i] != want[i] {
+			t.Fatalf("items = %v, want %v", got.Items, want)
+		}
+	}
+}
+
 func TestHeadIsAllowedWhereverGetIs(t *testing.T) {
 	root := withContentRoot(t)
 	if err := os.MkdirAll(filepath.Join(root, "manifests", "demo"), 0o755); err != nil {

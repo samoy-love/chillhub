@@ -417,6 +417,10 @@ func handleBuilds(w http.ResponseWriter, r *http.Request) {
 			versions = append(versions, v)
 		}
 	}
+	// os.ReadDir returns names in lexicographic order, which is not version
+	// order: "1.1.10" would come before "1.1.9". Clients take the list as
+	// newest-first, so sort it semantically.
+	adminutil.SortVersionsDesc(versions)
 	writeJSON(w, map[string]any{"gameId": gid, "items": versions})
 }
 
