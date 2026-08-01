@@ -208,6 +208,12 @@ namespace ChillHub.Pages {
         // Первый раз пропускаем: там уже отрабатывает полная загрузка.
         private bool loadedOnce = false;
 
+        /// <summary>
+        /// Папка для игр, к которой относятся текущие статусы. Её могли сменить в настройках,
+        /// и тогда всё показанное состояние относится к другому каталогу.
+        /// </summary>
+        private string knownGamesPath = ChillHub.Core.ConfigService.Current.GamesPath ?? string.Empty;
+
         public HomePage() {
             this.InitializeComponent();
 
@@ -2000,14 +2006,26 @@ namespace ChillHub.Pages {
             }
         }
 
-        // Возврат со страницы игры: перечитываем локальные маркеры версий без сетевых запросов
+        // Возврат со страницы игры или из настроек: перечитываем локальные маркеры версий
         private async void HomePage_Loaded(object sender, RoutedEventArgs e) {
             if (!this.loadedOnce) {
                 this.loadedOnce = true;
                 return;
             }
 
-            if (!GamePage.ConsumeLocalStateChanged()) {
+            // Папку для игр могли сменить в настройках: тогда все статусы, оценки объёма
+            // и кеш «проверено» относятся к прежнему каталогу и врут до перезапуска.
+            var gamesPath = ChillHub.Core.ConfigService.Current.GamesPath ?? string.Empty;
+            var gamesPathChanged = !string.Equals(this.knownGamesPath, gamesPath, StringComparison.OrdinalIgnoreCase);
+            if (gamesPathChanged) {
+                this.knownGamesPath = gamesPath;
+                this.spaceHint.Clear();
+                this.ResetVerifiedStatuses();
+                this.FilesSizeText.Text = string.Empty;
+                Core.Logging.Logger.Info($"HomePage: папка игр изменилась на '{gamesPath}', статусы пересчитываются");
+            }
+
+            if (!gamesPathChanged && !GamePage.ConsumeLocalStateChanged()) {
                 return;
             }
 
@@ -2016,6 +2034,12 @@ namespace ChillHub.Pages {
                 await Task.Run(() => this.NormalizeGameIconsAndLocalState(snapshot));
                 this.GameList.Items.Refresh();
                 this.UpdateActionButtonState();
+
+                if (gamesPathChanged && this.allowFileChecks) {
+                    // Полная перепроверка по манифестам — в фоне, чтобы не морозить возврат из настроек
+                    string? gid = this.GetSelectedGameId();
+                    _ = Task.Run(() => this.VerifyAllGamesStatusesAsync(gid));
+                }
             }
             catch (Exception ex) {
                 // Список останется прежним до следующего обновления вручную — не критично
