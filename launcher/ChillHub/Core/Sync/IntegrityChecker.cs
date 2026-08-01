@@ -113,7 +113,7 @@ namespace ChillHub.Core.Sync {
         /// <param name="gamesPath">Общая папка игр.</param>
         /// <param name="gameId">Идентификатор игры.</param>
         /// <returns>Полный путь к корню игры.</returns>
-        public static string GameLocalRoot(string gamesPath, string gameId)
+        public static string GameLocalRoot(string? gamesPath, string? gameId)
             => Path.Combine(gamesPath ?? string.Empty, gameId ?? string.Empty);
 
         /// <summary>
