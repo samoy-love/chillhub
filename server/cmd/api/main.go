@@ -109,38 +109,7 @@ func main() {
 
 	limit, window := apiRateLimit()
 	limiter := ratelimit.New(limit, window)
-
-	r := mux.NewRouter()
-	r.Use(httpx.RequestID())
-	r.Use(httpx.CORS("*"))
-	r.Use(httpx.Logging("PUBLIC"))
-
-	// The limiter is attached per JSON endpoint, NOT router-wide. In dev this
-	// process also serves /content/ and /manifests/, and installing a game is
-	// thousands of file requests fanned out over up to 16 download threads —
-	// a router-wide budget would trip mid-install and fail the download. In
-	// production nginx serves those paths directly, so limiting them here buys
-	// nothing anyway. What we do want capped is the cheap-to-request,
-	// expensive-to-serve JSON that a scraper or a retry storm would hammer.
-	r.HandleFunc("/api/games", limiter.Wrap(handleGames)).Methods("GET")
-	r.HandleFunc("/api/games/{gameId}", limiter.Wrap(handleGame)).Methods("GET")
-	r.HandleFunc("/api/games/{gameId}/versions/latest", limiter.Wrap(handleLatest)).Methods("GET")
-	r.HandleFunc("/api/games/{gameId}/builds", limiter.Wrap(handleBuilds)).Methods("GET")
-	// Maintenance mode flag. Polled by every launcher at startup and on a timer,
-	// so it is served from an mtime-checked in-memory cache (see the package
-	// doc) and shares the same generous JSON budget as the rest.
-	maint := maintenance.New(contentRoot)
-	r.HandleFunc("/api/maintenance", limiter.Wrap(maint.PublicHandler)).Methods("GET", "HEAD")
-	r.HandleFunc("/news/index.json", limiter.Wrap(handleNewsIndex)).Methods("GET")
-	r.HandleFunc("/news/games/{gameId}/index.json", limiter.Wrap(handleGameNewsIndex)).Methods("GET")
-
-	// Serve manifests, content and news statically for local dev (no indirection)
-	r.PathPrefix("/manifests/").Handler(httpx.NoStore(http.StripPrefix("/manifests/", http.FileServer(http.Dir(filepath.Join(contentRoot, "manifests"))))))
-	r.PathPrefix("/content/").Handler(httpx.NoStore(http.StripPrefix("/content/", http.FileServer(http.Dir(filepath.Join(contentRoot, "content"))))))
-	// /news/ already covers /news/games/... — a second, later PathPrefix for it
-	// would never be reached, so there is none.
-	r.PathPrefix("/news/").Handler(httpx.NoStore(http.StripPrefix("/news/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news"))))))
-	r.PathPrefix("/assets/").Handler(httpx.NoStore(http.StripPrefix("/assets/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news", "assets"))))))
+	r := newRouter(limiter)
 
 	// Loopback by default: in production nginx proxies to 127.0.0.1. For a dev
 	// box that has to be reachable from another machine set API_LISTEN_ADDR.
@@ -163,6 +132,48 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 	log.Fatal(srv.ListenAndServe())
+}
+
+// newRouter wires the public routes. It is separate from main so that tests can
+// drive the real routing table (method matching included) without a listener.
+func newRouter(limiter *ratelimit.Limiter) *mux.Router {
+	r := mux.NewRouter()
+	r.Use(httpx.RequestID())
+	r.Use(httpx.CORS("*"))
+	r.Use(httpx.Logging("PUBLIC"))
+
+	// The limiter is attached per JSON endpoint, NOT router-wide. In dev this
+	// process also serves /content/ and /manifests/, and installing a game is
+	// thousands of file requests fanned out over up to 16 download threads —
+	// a router-wide budget would trip mid-install and fail the download. In
+	// production nginx serves those paths directly, so limiting them here buys
+	// nothing anyway. What we do want capped is the cheap-to-request,
+	// expensive-to-serve JSON that a scraper or a retry storm would hammer.
+	//
+	// Every GET route also answers HEAD: RFC 9110 requires HEAD wherever GET is
+	// supported, and net/http already produces a headers-only response from the
+	// GET handler, so listing the method is all that is needed.
+	r.HandleFunc("/api/games", limiter.Wrap(handleGames)).Methods("GET", "HEAD")
+	r.HandleFunc("/api/games/{gameId}", limiter.Wrap(handleGame)).Methods("GET", "HEAD")
+	r.HandleFunc("/api/games/{gameId}/versions/latest", limiter.Wrap(handleLatest)).Methods("GET", "HEAD")
+	r.HandleFunc("/api/games/{gameId}/builds", limiter.Wrap(handleBuilds)).Methods("GET", "HEAD")
+	// Maintenance mode flag. Polled by every launcher at startup and on a timer,
+	// so it is served from an mtime-checked in-memory cache (see the package
+	// doc) and shares the same generous JSON budget as the rest.
+	maint := maintenance.New(contentRoot)
+	r.HandleFunc("/api/maintenance", limiter.Wrap(maint.PublicHandler)).Methods("GET", "HEAD")
+	r.HandleFunc("/news/index.json", limiter.Wrap(handleNewsIndex)).Methods("GET", "HEAD")
+	r.HandleFunc("/news/games/{gameId}/index.json", limiter.Wrap(handleGameNewsIndex)).Methods("GET", "HEAD")
+
+	// Serve manifests, content and news statically for local dev (no indirection)
+	r.PathPrefix("/manifests/").Handler(httpx.NoStore(http.StripPrefix("/manifests/", http.FileServer(http.Dir(filepath.Join(contentRoot, "manifests"))))))
+	r.PathPrefix("/content/").Handler(httpx.NoStore(http.StripPrefix("/content/", http.FileServer(http.Dir(filepath.Join(contentRoot, "content"))))))
+	// /news/ already covers /news/games/... — a second, later PathPrefix for it
+	// would never be reached, so there is none.
+	r.PathPrefix("/news/").Handler(httpx.NoStore(http.StripPrefix("/news/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news"))))))
+	r.PathPrefix("/assets/").Handler(httpx.NoStore(http.StripPrefix("/assets/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news", "assets"))))))
+
+	return r
 }
 
 var contentRoot string
