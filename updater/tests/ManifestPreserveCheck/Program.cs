@@ -43,6 +43,14 @@ internal static class Program
 
     public static int Main(string[] args)
     {
+        // Без этого русские сообщения превращаются в мусор в консоли Windows и в логах CI.
+        try {
+            Console.OutputEncoding = new System.Text.UTF8Encoding(false);
+        }
+        catch {
+            // Кодировку выставить не всегда возможно (перенаправленный вывод) — это не повод падать.
+        }
+
         var failures = 0;
 
         // 1) Самопроверка детектора: «плохой» манифест обязан падать, «хороший» — проходить.
@@ -104,7 +112,12 @@ internal static class Program
 
         if (checkedFiles == 0)
         {
-            Console.WriteLine("note: манифесты лаунчера не найдены локально — проверен только самотест.");
+            // Важно не выдавать это за успешную проверку: реальные манифесты не смотрели вообще.
+            Console.WriteLine("ВНИМАНИЕ: реальные манифесты НЕ проверены — найден только самотест детектора.");
+            Console.WriteLine("  Каталог content/manifests/launcher не найден от текущего каталога и от каталога сборки.");
+            Console.WriteLine("  Под `dotnet run` рабочий каталог отличается: запускайте собранный бинарь из корня репозитория");
+            Console.WriteLine("  (updater/tests/ManifestPreserveCheck/bin/<cfg>/net8.0/ManifestPreserveCheck.exe)");
+            Console.WriteLine("  либо передайте путь к манифестам аргументом.");
         }
 
         Console.WriteLine(failures == 0
@@ -169,16 +182,27 @@ internal static class Program
     /// <summary>Ищет content/manifests/launcher вверх по дереву от текущего каталога.</summary>
     private static string[] DefaultTargets()
     {
-        var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
-        while (dir != null)
+        // Ищем и от текущего каталога, и от каталога сборки: под `dotnet run` рабочий каталог
+        // не совпадает с корнем репозитория, и поиск только по CWD молча ничего не находит —
+        // тест тогда «проходит», не проверив ни одного реального манифеста.
+        foreach (var start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
         {
-            var candidate = Path.Combine(dir.FullName, "content", "manifests", "launcher");
-            if (Directory.Exists(candidate))
+            if (string.IsNullOrWhiteSpace(start))
             {
-                return new[] { candidate };
+                continue;
             }
 
-            dir = dir.Parent;
+            var dir = new DirectoryInfo(start);
+            while (dir != null)
+            {
+                var candidate = Path.Combine(dir.FullName, "content", "manifests", "launcher");
+                if (Directory.Exists(candidate))
+                {
+                    return new[] { candidate };
+                }
+
+                dir = dir.Parent;
+            }
         }
 
         return Array.Empty<string>();
