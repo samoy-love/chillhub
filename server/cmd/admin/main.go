@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,6 +35,19 @@ import (
 )
 
 var contentRoot = detectContentRoot()
+
+var feedbackStoreMu sync.Mutex
+
+func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
+	if r.Method == http.MethodOptions {
+		return true
+	}
+	if r.Method != method {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	return true
+}
 
 func init() {
 	// Configure GOMAXPROCS automatically. On Windows (no cgroup quotas) suppress noisy info message.
@@ -69,13 +83,35 @@ func detectContentRoot() string {
 }
 
 // simple per-IP rate limiter (window-based) for feedback
-var (
-	fbMu sync.Mutex
-	fbRL = make(map[string]struct {
-		Count       int
-		WindowStart time.Time
-	})
+type fbRateEntry struct {
+	Count       int
+	WindowStart time.Time
+}
+
+const (
+	fbRateLimit  = 5
+	fbRateWindow = time.Minute
+	// how often (in requests) stale rate-limiter entries are swept
+	fbGCEvery = 128
+	// hard cap on tracked IPs; a sweep is forced once exceeded
+	fbGCMaxEntries = 10000
 )
+
+var (
+	fbMu       sync.Mutex
+	fbRL       = make(map[string]fbRateEntry)
+	fbReqCount int
+)
+
+// fbSweepLocked drops rate-limiter entries whose window is long expired.
+// Must be called with fbMu held.
+func fbSweepLocked(now time.Time) {
+	for ip, st := range fbRL {
+		if st.WindowStart.IsZero() || now.Sub(st.WindowStart) > 10*fbRateWindow {
+			delete(fbRL, ip)
+		}
+	}
+}
 
 func clientIP(r *http.Request) string {
 	// prioritize X-Forwarded-For then X-Real-IP
@@ -108,17 +144,17 @@ func rateLimitFeedbackSubmit(h http.HandlerFunc) http.HandlerFunc {
 		}
 		ip := clientIP(r)
 		now := time.Now()
-		const limit = 5
-		const window = time.Minute
 		fbMu.Lock()
-		st := fbRL[ip]
-		if st.WindowStart.IsZero() || now.Sub(st.WindowStart) > window {
-			st = struct {
-				Count       int
-				WindowStart time.Time
-			}{Count: 0, WindowStart: now}
+		// periodic GC so the map cannot grow without bound
+		fbReqCount++
+		if fbReqCount%fbGCEvery == 0 || len(fbRL) > fbGCMaxEntries {
+			fbSweepLocked(now)
 		}
-		if st.Count >= limit {
+		st := fbRL[ip]
+		if st.WindowStart.IsZero() || now.Sub(st.WindowStart) > fbRateWindow {
+			st = fbRateEntry{Count: 0, WindowStart: now}
+		}
+		if st.Count >= fbRateLimit {
 			fbMu.Unlock()
 			http.Error(w, "too many requests", http.StatusTooManyRequests)
 			return
@@ -169,7 +205,104 @@ func writeFeedbackAll(items []FeedbackItem) error {
 		return err
 	}
 	b2, _ := json.MarshalIndent(items, "", "  ")
-	return os.WriteFile(feedbackPath(), b2, 0o644)
+	dst := feedbackPath()
+	dir := filepath.Dir(dst)
+	tmp, err := os.CreateTemp(dir, "inbox-*.json")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	_, werr := tmp.Write(b2)
+	cerr := tmp.Close()
+	if werr != nil {
+		_ = os.Remove(tmpName)
+		return werr
+	}
+	if cerr != nil {
+		_ = os.Remove(tmpName)
+		return cerr
+	}
+	if runtime.GOOS == "windows" {
+		_ = os.Remove(dst)
+	}
+	if err := os.Rename(tmpName, dst); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
+}
+
+// Feedback storage limits. The inbox is a single JSON file that is fully read
+// and rewritten on every submit, so both the per-item and the total size must
+// stay bounded, otherwise the public submit endpoint degrades to O(n^2).
+const (
+	// max size of the diagnostics bundle accepted with a single report
+	feedbackMaxLogBytes = 256 << 10 // 256 KiB
+	// max number of reports kept in the inbox
+	feedbackMaxItems = 2000
+	// soft budget for the whole inbox file
+	feedbackMaxTotalBytes = 64 << 20 // 64 MiB
+)
+
+// feedbackItemSize is a cheap estimate of the JSON footprint of one item.
+func feedbackItemSize(it FeedbackItem) int {
+	n := len(it.ID) + len(it.CreatedAt) + len(it.Type) + len(it.Name) +
+		len(it.Contact) + len(it.Comment) + len(it.Logs) + 128
+	for k, v := range it.System {
+		n += len(k) + len(v) + 8
+	}
+	return n
+}
+
+// pruneFeedbackItems enforces the count and total-size limits.
+// items must be ordered newest-first (as stored). Oldest non-important reports
+// are discarded first; if the size budget is still exceeded, log bundles of the
+// oldest reports are dropped, and only then whole reports.
+func pruneFeedbackItems(items []FeedbackItem) []FeedbackItem {
+	if len(items) > feedbackMaxItems {
+		removed := make([]bool, len(items))
+		drop := len(items) - feedbackMaxItems
+		// pass 1: oldest non-important
+		for i := len(items) - 1; i >= 0 && drop > 0; i-- {
+			if !items[i].Important {
+				removed[i] = true
+				drop--
+			}
+		}
+		// pass 2: everything else, oldest first
+		for i := len(items) - 1; i >= 0 && drop > 0; i-- {
+			if !removed[i] {
+				removed[i] = true
+				drop--
+			}
+		}
+		kept := make([]FeedbackItem, 0, feedbackMaxItems)
+		for i, it := range items {
+			if !removed[i] {
+				kept = append(kept, it)
+			}
+		}
+		items = kept
+	}
+
+	total := 0
+	for _, it := range items {
+		total += feedbackItemSize(it)
+	}
+	// strip log bundles of the oldest reports first (metadata is preserved)
+	for i := len(items) - 1; i >= 0 && total > feedbackMaxTotalBytes; i-- {
+		if len(items[i].Logs) > 0 {
+			total -= len(items[i].Logs)
+			items[i].Logs = ""
+			items[i].AttachLogs = false
+		}
+	}
+	// last resort: drop the oldest reports entirely
+	for len(items) > 1 && total > feedbackMaxTotalBytes {
+		total -= feedbackItemSize(items[len(items)-1])
+		items = items[:len(items)-1]
+	}
+	return items
 }
 
 func genID() string {
@@ -213,8 +346,8 @@ func handleFeedbackSubmit(w http.ResponseWriter, r *http.Request) {
 	sName := strings.TrimSpace(max(in.Name, 200))
 	sContact := strings.TrimSpace(max(in.Contact, 200))
 	rawComment := max(in.Comment, 5000) // keep as-is to preserve newlines and spaces
-	// Allow large diagnostics bundles (up to ~2 MB) and preserve whitespace
-	sLogs := max(in.Logs, 2*1024*1024)
+	// Diagnostics bundles are capped: the whole inbox is rewritten on each submit
+	sLogs := max(in.Logs, feedbackMaxLogBytes)
 	t := strings.ToLower(strings.TrimSpace(in.Type))
 	switch t {
 	case "bug", "idea", "question":
@@ -234,9 +367,12 @@ func handleFeedbackSubmit(w http.ResponseWriter, r *http.Request) {
 		Logs:       sLogs,
 		System:     in.System,
 	}
+	feedbackStoreMu.Lock()
 	items, _ := readFeedbackAll()
 	items = append([]FeedbackItem{item}, items...) // prepend newest
-	if err := writeFeedbackAll(items); err != nil {
+	err := writeFeedbackAll(items)
+	feedbackStoreMu.Unlock()
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -245,7 +381,9 @@ func handleFeedbackSubmit(w http.ResponseWriter, r *http.Request) {
 
 // Admin: list with filters: type, important(1/0), q (search in comment/contact/name), status, from, to
 func handleFeedbackList(w http.ResponseWriter, r *http.Request) {
+	feedbackStoreMu.Lock()
 	items, _ := readFeedbackAll()
+	feedbackStoreMu.Unlock()
 	// Filters
 	fType := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
 	fImp := strings.TrimSpace(r.URL.Query().Get("important"))
@@ -325,7 +463,9 @@ func handleFeedbackGet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing id", http.StatusBadRequest)
 		return
 	}
+	feedbackStoreMu.Lock()
 	items, _ := readFeedbackAll()
+	feedbackStoreMu.Unlock()
 	for _, it := range items {
 		if it.ID == id {
 			writeJSON(w, it)
@@ -336,11 +476,15 @@ func handleFeedbackGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleFeedbackDelete(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	id := strings.TrimSpace(r.URL.Query().Get("id"))
 	if id == "" {
 		http.Error(w, "missing id", http.StatusBadRequest)
 		return
 	}
+	feedbackStoreMu.Lock()
 	items, _ := readFeedbackAll()
 	out := make([]FeedbackItem, 0, len(items))
 	for _, it := range items {
@@ -349,7 +493,9 @@ func handleFeedbackDelete(w http.ResponseWriter, r *http.Request) {
 		} // hard delete
 		out = append(out, it)
 	}
-	if err := writeFeedbackAll(out); err != nil {
+	err := writeFeedbackAll(out)
+	feedbackStoreMu.Unlock()
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -359,11 +505,15 @@ func handleFeedbackDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleFeedbackToggleImportant(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	id := strings.TrimSpace(r.URL.Query().Get("id"))
 	if id == "" {
 		http.Error(w, "missing id", http.StatusBadRequest)
 		return
 	}
+	feedbackStoreMu.Lock()
 	items, _ := readFeedbackAll()
 	changed := false
 	newVal := false
@@ -376,10 +526,13 @@ func handleFeedbackToggleImportant(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !changed {
+		feedbackStoreMu.Unlock()
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	if err := writeFeedbackAll(items); err != nil {
+	err := writeFeedbackAll(items)
+	feedbackStoreMu.Unlock()
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -389,11 +542,15 @@ func handleFeedbackToggleImportant(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleFeedbackMarkRead(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	id := strings.TrimSpace(r.URL.Query().Get("id"))
 	if id == "" {
 		http.Error(w, "missing id", http.StatusBadRequest)
 		return
 	}
+	feedbackStoreMu.Lock()
 	items, _ := readFeedbackAll()
 	changed := false
 	for i := range items {
@@ -404,10 +561,13 @@ func handleFeedbackMarkRead(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !changed {
+		feedbackStoreMu.Unlock()
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	if err := writeFeedbackAll(items); err != nil {
+	err := writeFeedbackAll(items)
+	feedbackStoreMu.Unlock()
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -418,11 +578,15 @@ func handleFeedbackMarkRead(w http.ResponseWriter, r *http.Request) {
 
 // allow reverting item back to unread (status=new)
 func handleFeedbackMarkUnread(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	id := strings.TrimSpace(r.URL.Query().Get("id"))
 	if id == "" {
 		http.Error(w, "missing id", http.StatusBadRequest)
 		return
 	}
+	feedbackStoreMu.Lock()
 	items, _ := readFeedbackAll()
 	changed := false
 	for i := range items {
@@ -433,10 +597,13 @@ func handleFeedbackMarkUnread(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !changed {
+		feedbackStoreMu.Unlock()
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	if err := writeFeedbackAll(items); err != nil {
+	err := writeFeedbackAll(items)
+	feedbackStoreMu.Unlock()
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -446,7 +613,13 @@ func handleFeedbackMarkUnread(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleFeedbackClear(w http.ResponseWriter, r *http.Request) {
-	if err := writeFeedbackAll([]FeedbackItem{}); err != nil {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	feedbackStoreMu.Lock()
+	err := writeFeedbackAll([]FeedbackItem{})
+	feedbackStoreMu.Unlock()
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -490,6 +663,9 @@ func getFreeSpaceBytes(path string) (uint64, error) {
 
 // handleUploadStream uploads a ZIP and streams progress (NDJSON): start, unzip entries, compose files, done
 func handleUploadStream(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	// Enforce auth here (since nginx bypasses auth_request for this endpoint)
 	if _, user := currentUser(r); user == "" {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -833,6 +1009,9 @@ func handleUploadStream(w http.ResponseWriter, r *http.Request) {
 
 // delete a specific version: removes manifests/{gid}/{ver}.json and content/{gid}/{ver}
 func handleDeleteVersion(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	gid := r.URL.Query().Get("gameId")
 	ver := r.URL.Query().Get("version")
 	if gid == "" || ver == "" {
@@ -893,6 +1072,9 @@ func handleDeleteVersion(w http.ResponseWriter, r *http.Request) {
 
 // handleGameIconUpload saves uploaded image as manifests/{gameId}/icon.png and returns its URL
 func handleGameIconUpload(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	if err := r.ParseMultipartForm(16 << 20); err != nil { // 16MB
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1131,9 +1313,17 @@ func ensureWithin(base, p string) bool {
 }
 
 func downloadURL(u string) ([]byte, string, error) {
-	req, _ := http.NewRequest("GET", u, nil)
+	pu, err := url.Parse(strings.TrimSpace(u))
+	if err != nil {
+		return nil, "", err
+	}
+	if pu.Scheme != "http" && pu.Scheme != "https" {
+		return nil, "", fmt.Errorf("unsupported scheme")
+	}
+	req, _ := http.NewRequest("GET", pu.String(), nil)
 	req.Header.Set("User-Agent", "ChillHub-Admin/1.0")
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", err
 	}
@@ -1143,15 +1333,22 @@ func downloadURL(u string) ([]byte, string, error) {
 	}
 	// limit 50MB
 	const max = 50 << 20
-	var buf bytes.Buffer
-	if _, err := io.CopyN(&buf, resp.Body, max); err != nil && err != io.EOF {
+	r := io.LimitReader(resp.Body, max+1)
+	b, err := io.ReadAll(r)
+	if err != nil {
 		return nil, resp.Header.Get("Content-Type"), err
 	}
-	return buf.Bytes(), resp.Header.Get("Content-Type"), nil
+	if int64(len(b)) > max {
+		return nil, resp.Header.Get("Content-Type"), fmt.Errorf("file too large")
+	}
+	return b, resp.Header.Get("Content-Type"), nil
 }
 
 // handleNewsAssetsDelete deletes a file or directory in assets
 func handleNewsAssetsDelete(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1177,6 +1374,9 @@ func handleNewsAssetsDelete(w http.ResponseWriter, r *http.Request) {
 
 // handleNewsRebuild triggers index.json generation
 func handleNewsRebuild(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	scope := r.URL.Query().Get("scope")
 	gid := r.URL.Query().Get("gameId")
 	base, err := newsBase(scope, gid)
@@ -1193,6 +1393,9 @@ func handleNewsRebuild(w http.ResponseWriter, r *http.Request) {
 
 // rename file or directory
 func handleNewsAssetsRename(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1220,6 +1423,9 @@ func handleNewsAssetsRename(w http.ResponseWriter, r *http.Request) {
 
 // upload by URL with processing similar to file upload
 func handleNewsAssetsUploadByURL(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1329,6 +1535,9 @@ func handleNewsAssetsList(w http.ResponseWriter, r *http.Request) {
 
 // mkdir for assets: POST path, name
 func handleNewsAssetsMkdir(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1353,6 +1562,9 @@ func handleNewsAssetsMkdir(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleNewsAssetsUpload(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1516,6 +1728,9 @@ func handleListVersions(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleActivate(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	gid := r.URL.Query().Get("gameId")
 	ver := r.URL.Query().Get("version")
 	if gid == "" || ver == "" {
@@ -1602,6 +1817,9 @@ func handleGamesGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleGamesSave(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	var payload struct {
 		Items []gameEntry `json:"items"`
 	}
@@ -1641,6 +1859,9 @@ func sanitizeFilename(name string) string {
 
 // handleNewsUploadCover saves uploaded image into content/news/assets and returns coverUrl
 func handleNewsUploadCover(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1750,6 +1971,9 @@ func handleNewsGet(w http.ResponseWriter, r *http.Request) {
 
 // handleNewsSave saves markdown for slug and optionally rebuilds index
 func handleNewsSave(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	if err := r.ParseMultipartForm(16 << 20); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1800,6 +2024,9 @@ func handleNewsSave(w http.ResponseWriter, r *http.Request) {
 
 // handleNewsDelete deletes markdown and removes meta entry, then rebuilds index
 func handleNewsDelete(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	scope := r.URL.Query().Get("scope")
 	gid := r.URL.Query().Get("gameId")
 	slug := r.URL.Query().Get("slug")
@@ -1830,6 +2057,9 @@ func handleNewsDelete(w http.ResponseWriter, r *http.Request) {
 
 // handleNewsPublish toggles published flag in meta and rebuilds index
 func handleNewsPublish(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1864,6 +2094,9 @@ func handleNewsPublish(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleNewsPreview(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	if err := r.ParseMultipartForm(4 << 20); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -2313,7 +2546,15 @@ func main() {
 	h = httpx.CORS("*")(h)
 	h = adminAuthMiddleware(h)
 	h = httpx.Logging("ADMIN")(h)
-	log.Fatal(http.ListenAndServe(addr, h))
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	log.Fatal(srv.ListenAndServe())
 }
 
 func handleAdminUI(w http.ResponseWriter, r *http.Request) {
@@ -2450,6 +2691,9 @@ func isSafeVersion(s string) bool {
 
 // Handle ZIP upload and publish a release (launcher or game)
 func handleUpload(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
 	if err := r.ParseMultipartForm(1 << 30); err != nil { // up to 1GB form parsing window
 		http.Error(w, "multipart parse error: "+err.Error(), http.StatusBadRequest)
 		return

@@ -65,7 +65,7 @@ internal static class Program
         // --auto-strip false отключает автоопределение корневой папки архива:
         // лаунчер считает strip-prefix сам по манифесту и передаёт его явно (см. A10).
         var autoStrip = !string.Equals(Opt("--auto-strip", "true"), "false", StringComparison.OrdinalIgnoreCase);
-        var preserve = Opt("--preserve", PreserveMatcher.DefaultRulesCsv);
+        var preserve = Opt("--preserve", PreserveMatcher.DefaultRulesArg);
         var newVersion = Opt("--version", string.Empty);
 
         Directory.CreateDirectory(Path.GetDirectoryName(log) ?? Path.GetTempPath());
@@ -138,18 +138,11 @@ internal static class Program
                 Log($"effective strip-prefix='{strip}'");
 
                 // Preserve rules: единый матчер, общий с лаунчером (ChillHub.Update.PreserveMatcher)
-                var matcher = PreserveMatcher.Parse(preserve);
+                var matcher = new PreserveMatcher(preserve);
                 try { Log($"preserve rules: [{string.Join(", ", matcher.Rules)}]"); } catch { }
 
                 bool ShouldPreserve(string rel, string reason)
-                {
-                    if (matcher.ShouldPreserve(rel, out var rule))
-                    {
-                        Log($"preserve ({reason}): {rel} by '{rule}'");
-                        return true;
-                    }
-                    return false;
-                }
+                    => matcher.ShouldPreserve(rel, m => Log($"skip {reason}: {m}"));
 
                 // Log lists content if provided
                 try

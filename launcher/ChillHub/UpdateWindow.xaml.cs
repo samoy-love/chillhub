@@ -31,7 +31,7 @@ namespace ChillHub {
         private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
 
         /// <summary>Единый список preserve-правил, общий с апдейтером.</summary>
-        private static readonly PreserveMatcher Preserve = PreserveMatcher.Default;
+        private static readonly PreserveMatcher Preserve = new PreserveMatcher();
 
         private string BaseApi => ConfigService.Current.ApiBaseUrl;
 
@@ -733,7 +733,7 @@ namespace ChillHub {
                 }
 
                 // A2. Preserve-правила берём из общего PreserveMatcher, а не из строкового литерала.
-                A("--preserve " + Q(Preserve.ToCsv()));
+                A("--preserve " + Q(PreserveMatcher.DefaultRulesArg));
 
                 var psi = new System.Diagnostics.ProcessStartInfo {
                     FileName = updaterPath,

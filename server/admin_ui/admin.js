@@ -2242,13 +2242,13 @@ async function newsList(){
   if(!res.ok){
     // попытка авто-пересборки индекса при 404
     if(res.status===404){
-      let rb; try{ rb = await fetch('/admin/news/rebuild?scope='+encodeURIComponent(scope)+(scope==='game'?'&gameId='+encodeURIComponent(gid):'')); }catch(e){}
+      let rb; try{ rb = await fetch('/admin/news/rebuild?scope='+encodeURIComponent(scope)+(scope==='game'?'&gameId='+encodeURIComponent(gid):''), {method:'POST'}); }catch(e){}
       if(rb && rb.ok){
         res = await fetch(url);
       }
     }
-    if(!res.ok){ document.getElementById('ns-list').textContent='HTTP '+res.status+' '+res.statusText; return; }
   }
+  if(!res.ok){ document.getElementById('ns-list').textContent='HTTP '+res.status+' '+res.statusText; return; }
   const j = await res.json();
   const root = document.getElementById('ns-list'); root.innerHTML='';
   if(!j.items || j.items.length===0){ const p=document.createElement('div'); p.className='text-body-secondary'; p.textContent='Нет записей'; root.appendChild(p); return; }
@@ -2465,7 +2465,7 @@ async function newsDelete(){
 async function newsRebuildAndList(){
   const scope=document.getElementById('ns_scope').value; const gid=document.getElementById('ns_gid').value;
   notify('Пересобираем индекс...');
-  let rb; try{ rb = await fetch('/admin/news/rebuild?scope='+encodeURIComponent(scope)+(scope==='game'?'&gameId='+encodeURIComponent(gid):'')); }catch(e){ notify('Ошибка: '+e); return; }
+  let rb; try{ rb = await fetch('/admin/news/rebuild?scope='+encodeURIComponent(scope)+(scope==='game'?'&gameId='+encodeURIComponent(gid):''), {method:'POST'}); }catch(e){ notify('Ошибка: '+e); return; }
   if(!rb.ok){ notify('HTTP '+rb.status+' '+rb.statusText); return; }
   notify('Индекс пересобран');
   newsList();
