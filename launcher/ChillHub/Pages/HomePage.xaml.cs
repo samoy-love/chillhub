@@ -1065,14 +1065,6 @@ namespace ChillHub.Pages {
             }
         }
 
-        private void LauncherNewsReadMore_Click(object sender, RoutedEventArgs e) {
-            if ((sender as FrameworkElement)?.DataContext is NewsItem it) {
-                var url = $"{this.BaseApi}/news/{it.Slug}.md";
-                var win = Window.GetWindow(this) as ChillHub.MainWindow;
-                win?.ContentFrame.Navigate(new NewsDetailPage(it.Title, url));
-            }
-        }
-
         // Обновление списка игр по кнопке в заголовке секции
         private async void RefreshGames_Click(object sender, RoutedEventArgs e) {
             // Сохраним текущее выделение, чтобы не потерять контекст страницы игры
@@ -1166,28 +1158,6 @@ namespace ChillHub.Pages {
                 // Список уже обновлён; подсказка о размере — необязательная доводка
                 Core.Logging.Logger.Error(ex, "RefreshGames_Click.PostVerify");
             }
-        }
-
-        private void GameNewsReadMore_Click(object sender, RoutedEventArgs e) {
-            if ((sender as FrameworkElement)?.DataContext is NewsItem it && this.GetSelectedGameId() is string gid && !string.IsNullOrWhiteSpace(gid)) {
-                var url = $"{this.BaseApi}/news/games/{gid}/{it.Slug}.md";
-                var win = Window.GetWindow(this) as ChillHub.MainWindow;
-                win?.ContentFrame.Navigate(new NewsDetailPage(it.Title, url));
-            }
-        }
-
-        private async void RefreshStatuses_Click(object sender, RoutedEventArgs e) {
-            this.GamesVerifyIndicator.Visibility = Visibility.Visible;
-
-            var selectedId = this.GetSelectedGameId();
-            this.ResetVerifiedStatuses();
-            await this.VerifyAllGamesStatusesAsync(selectedId);
-        }
-
-        private void SettingsBtn_Click(object sender, RoutedEventArgs e) {
-            // Открываем страницу настроек в главной рамке окна
-            var win = Window.GetWindow(this) as ChillHub.MainWindow;
-            win?.ContentFrame.Navigate(new SettingsPage());
         }
 
         // Theme toggle and icon are now managed in MainWindow header
