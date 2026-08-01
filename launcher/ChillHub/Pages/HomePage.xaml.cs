@@ -48,6 +48,10 @@ namespace ChillHub.Pages {
         // 1, пока идёт проход VerifyAllGamesStatusesAsync. Взводится через Interlocked:
         // метод зовут и из UI-потока, и из фоновых задач.
         private int verifyRunning;
+
+        // Загрузка данных выбранной игры: сериализуется воротами, предыдущая отменяется токеном.
+        private readonly SemaphoreSlim selectionGate = new(1, 1);
+        private CancellationTokenSource? selectionCts;
         private readonly ISyncService sync = new SimpleSyncService();
         private double emaSpeedMBs = 0.0; // сглаженная скорость
         private const double EmaAlpha = 0.2; // чувствительность EMA
@@ -918,7 +922,7 @@ namespace ChillHub.Pages {
             }
         }
 
-        private async Task LoadBuildsAndGameNewsAsync(string gameId) {
+        private async Task LoadBuildsAndGameNewsAsync(string gameId, CancellationToken token = default) {
             try {
                 // Очистим новости игры сразу, чтобы не мигали новости другой игры
                 this.GameNewsList.ItemsSource = Array.Empty<NewsItem>();
@@ -927,7 +931,10 @@ namespace ChillHub.Pages {
 
                 // Сборки
                 var buildsUrl = $"{this.BaseApi}/api/games/{gameId}/builds";
-                var buildsResp = await this.http.GetFromJsonAsync<BuildsResponse>(buildsUrl);
+                var buildsResp = await this.http.GetFromJsonAsync<BuildsResponse>(buildsUrl, token);
+
+                // Выбор уже сменили: писать this.builds нельзя — они относились бы к другой игре
+                token.ThrowIfCancellationRequested();
 
                 // Сервер отдаёт сборки в произвольном порядке, а код ниже берёт из списка
                 // «последнюю версию». Сортируем сами: на проде первым элементом приходила
@@ -940,7 +947,8 @@ namespace ChillHub.Pages {
                 var game = this.games.FirstOrDefault(g => g.GameId == gameId);
 
                 // Чтение версии с диска выполняем в фоновом потоке
-                var localVer = await Task.Run(() => ReadLocalVersion(gameId));
+                var localVer = await Task.Run(() => ReadLocalVersion(gameId), token);
+                token.ThrowIfCancellationRequested();
                 var localTrimmed = string.IsNullOrWhiteSpace(localVer) ? string.Empty : localVer.Trim();
                 Core.Logging.Logger.Info($"LoadBuildsAndGameNewsAsync gid={gameId} local='{localTrimmed}'");
                 if (game != null) {
@@ -952,7 +960,8 @@ namespace ChillHub.Pages {
 
                 // Новости игры
                 var gameNewsUrl = $"{this.BaseApi}/news/games/{gameId}/index.json";
-                var gameNews = await this.http.GetFromJsonAsync<NewsIndex>(gameNewsUrl);
+                var gameNews = await this.http.GetFromJsonAsync<NewsIndex>(gameNewsUrl, token);
+                token.ThrowIfCancellationRequested();
                 var items = gameNews?.Items ?? new List<NewsItem>();
                 this.NormalizeCoverUrls(items);
                 this.GameNewsList.ItemsSource = items;
@@ -961,6 +970,11 @@ namespace ChillHub.Pages {
 
                 // После загрузки — обновим заголовок (на случай, если он ещё не обновлён)
                 this.UpdateGameNewsHeader();
+            }
+            catch (OperationCanceledException) {
+                // Пользователь выбрал другую игру: результат этой загрузки больше не нужен,
+                // и показывать по нему ошибку тем более нельзя.
+                throw;
             }
             catch (Exception ex) {
                 this.StatusText.Text = $"Ошибка загрузки сборок/новостей игры (GET {this.BaseApi}/api/games/{gameId}/builds, /news/games/{gameId}/index.json): {ex.Message}";
@@ -1049,8 +1063,51 @@ namespace ChillHub.Pages {
             this.ClearErrorDetails();
         }
 
+        /// <summary>
+        /// Смена выбранной игры. Обработчик async void, и пользователь легко запускает
+        /// его несколько раз подряд (стрелками по списку). Без сериализации две загрузки
+        /// шли параллельно и вперемешку писали this.builds: список сборок оставался от
+        /// той игры, чей ответ пришёл последним, — то есть от произвольной.
+        /// Предыдущая загрузка отменяется, новая ждёт её завершения.
+        /// </summary>
         private async void GameCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) {
-            if (this.GetSelectedGameId() is string gid && !string.IsNullOrWhiteSpace(gid)) {
+            var gid = this.GetSelectedGameId();
+            var cts = new CancellationTokenSource();
+            var previous = Interlocked.Exchange(ref this.selectionCts, cts);
+            try {
+                previous?.Cancel();
+            }
+            catch (Exception ex) {
+                // Предыдущий источник уже освобождён своим владельцем — это нормально
+                Core.Logging.Logger.Warn($"GameCombo_SelectionChanged: отмена предыдущей загрузки: {ex.Message}");
+            }
+
+            try {
+                await this.selectionGate.WaitAsync(cts.Token);
+            }
+            catch (OperationCanceledException) {
+                cts.Dispose();
+                return;
+            }
+
+            try {
+                await this.HandleGameSelectionAsync(gid, cts.Token);
+            }
+            catch (OperationCanceledException) {
+                // Выбор сменился, пока грузились данные — молча уступаем место новой загрузке
+            }
+            catch (Exception ex) {
+                this.ShowUserError("Не удалось загрузить данные выбранной игры.", ex, "HomePage.GameCombo_SelectionChanged");
+            }
+            finally {
+                this.selectionGate.Release();
+                Interlocked.CompareExchange(ref this.selectionCts, null, cts);
+                cts.Dispose();
+            }
+        }
+
+        private async Task HandleGameSelectionAsync(string? gidRaw, CancellationToken token) {
+            if (gidRaw is string gid && !string.IsNullOrWhiteSpace(gid)) {
                 this.ResetUpdateErrorIfGameChanged(gid);
 
                 // Если сейчас не выполняется обновление, сбросим состояние прогресса и статусы
@@ -1064,7 +1121,8 @@ namespace ChillHub.Pages {
 
                 // Обновим локальный статус выбранной игры для списка
                 var g = this.games.FirstOrDefault(x => x.GameId == gid);
-                var localVer = await Task.Run(() => ReadLocalVersion(gid));
+                var localVer = await Task.Run(() => ReadLocalVersion(gid), token);
+                token.ThrowIfCancellationRequested();
                 var localTrimmed = string.IsNullOrWhiteSpace(localVer) ? string.Empty : localVer.Trim();
                 if (g != null) {
                     g.IsInstalled = !string.IsNullOrWhiteSpace(localTrimmed);
@@ -1078,12 +1136,12 @@ namespace ChillHub.Pages {
 
                 // Показать имеющийся кэш сразу (мгновенно), затем уточнить расчётом
                 this.UpdateSpaceHintFromCache(gid);
-                await this.LoadBuildsAndGameNewsAsync(gid);
+                await this.LoadBuildsAndGameNewsAsync(gid, token);
 
                 // На старте запрещаем тяжёлые проверки. Разрешаем только после первичного рендеринга (когда _allowFileChecks = true).
                 // Если статус игры ещё проверяется — не дублируем тяжёлый Plan, оценка появится по завершении проверки.
                 if (this.allowFileChecks && this.IsGameStatusKnown(gid)) {
-                    _ = this.UpdateSpaceHintAsync(gid);
+                    await this.UpdateSpaceHintAsync(gid, token);
                 }
 
                 // Всегда обновляем состояние кнопки при смене выбора
@@ -1103,8 +1161,15 @@ namespace ChillHub.Pages {
             }
         }
 
-        // Показывает строку вида: "Нужно: <size> (<available> доступно)", если для установки/обновления требуется загрузка
-        private async Task UpdateSpaceHintAsync(string gid) {
+        /// <summary>
+        /// Показывает строку вида «Нужно: N (M доступно)».
+        /// Считает манифест и план по сети, поэтому к моменту записи результата выбор мог
+        /// смениться: раньше метод запускался без токена и без проверки актуальности, и
+        /// подсказка от предыдущей игры перетирала подсказку текущей.
+        /// </summary>
+        /// <param name="gid">Игра, для которой считаем объём.</param>
+        /// <param name="token">Токен отмены выбора.</param>
+        private async Task UpdateSpaceHintAsync(string gid, CancellationToken token) {
             try {
                 if (!this.TryShowTrivialSpaceHint(gid)) {
                     return;
@@ -1132,11 +1197,22 @@ namespace ChillHub.Pages {
                 var contentBase = IntegrityChecker.ContentBaseUrl(this.BaseApi, gid, version);
                 var localRoot = GameLocalRoot(gid);
 
-                var manifest = await this.sync.GetManifestAsync(manifestUrl, CancellationToken.None);
-                var plan = await this.PlanOffUiThreadAsync(manifest, localRoot, contentBase, CancellationToken.None);
+                var manifest = await this.sync.GetManifestAsync(manifestUrl, token);
+                var plan = await this.PlanOffUiThreadAsync(manifest, localRoot, contentBase, token);
 
+                // Кэш заполняем в любом случае — он привязан к игре, а не к выбору
                 this.spaceHint.Remember(gid, plan.TotalDownloadBytes);
+
+                // А вот в строку пишем, только если пользователь всё ещё смотрит на эту игру
+                token.ThrowIfCancellationRequested();
+                if (!string.Equals(this.GetSelectedGameId(), gid, StringComparison.OrdinalIgnoreCase)) {
+                    return;
+                }
+
                 this.FilesSizeText.Text = SpaceHint.BuildText(plan.TotalDownloadBytes, GetAvailableFreeSpaceFor(gid));
+            }
+            catch (OperationCanceledException) {
+                // Выбор сменился — результат уже неактуален, строку не трогаем
             }
             catch (Exception ex) {
                 // Подсказка о размере не критична: сервер мог не отдать манифест — просто прячем строку.
@@ -1298,8 +1374,9 @@ namespace ChillHub.Pages {
                 }
 
                 if (!string.IsNullOrWhiteSpace(gid)) {
-                    // Выполним полный пересчёт требуемого места, чтобы сразу увидеть оценку
-                    await this.UpdateSpaceHintAsync(gid);
+                    // Выполним полный пересчёт требуемого места, чтобы сразу увидеть оценку.
+                    // Отменять здесь нечего, но актуальность выбора метод всё равно проверит.
+                    await this.UpdateSpaceHintAsync(gid, CancellationToken.None);
                     this.UpdateActionButtonState();
                 }
             }
