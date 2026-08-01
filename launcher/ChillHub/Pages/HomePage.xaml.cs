@@ -233,51 +233,32 @@ namespace ChillHub.Pages {
 
         private async Task StartupAsync() {
             try {
-                // Give UI a chance to render before heavy async work
+                // Дадим UI отрисоваться до тяжёлой асинхронной работы
                 await Task.Yield();
 
                 // Самообновление проверяется в UpdateWindow. Здесь не блокируем UI: запускаем загрузку в фоне
                 _ = this.LoadInitialAsync();
             }
             catch (Exception ex) {
-                try {
-                    Core.Logging.Logger.Error(ex, "HomePage.StartupAsync");
-                }
-                catch {
-                }
+                // Страница уже показана — падать нельзя, пользователь увидит пустой список и кнопку «Повторить»
+                Core.Logging.Logger.Error(ex, "HomePage.StartupAsync");
             }
         }
 
         private void DisableMainUi() {
-            try {
-                this.ActionBtn.IsEnabled = false;
-                this.GameList.IsEnabled = false;
-            }
-            catch {
-            }
+            this.ActionBtn.IsEnabled = false;
+            this.GameList.IsEnabled = false;
         }
 
         // Удалена legacy-проверка самообновления: ею занимается UpdateWindow
         private async Task LoadInitialAsync() {
             try {
                 // Показ скелетонов по секциям: Игры видимые, список скрыт до загрузки
-                try {
-                    this.GamesSkeleton.Visibility = System.Windows.Visibility.Visible;
-                }
-                catch {
-                }
-                try {
-                    this.GameList.Visibility = System.Windows.Visibility.Collapsed;
-                }
-                catch {
-                }
+                this.GamesSkeleton.Visibility = System.Windows.Visibility.Visible;
+                this.GameList.Visibility = System.Windows.Visibility.Collapsed;
 
                 // Проверка доступа к папке для игр и предложение выбрать другую при отсутствии прав
-                try {
-                    HomeDialogs.EnsureGamesPathAccessibleOrPrompt();
-                }
-                catch {
-                }
+                HomeDialogs.EnsureGamesPathAccessibleOrPrompt();
 
                 // Быстрая параллельная загрузка игр и новостей лаунчера
                 var gamesUrl = $"{this.BaseApi}/api/games";
@@ -290,22 +271,17 @@ namespace ChillHub.Pages {
                     gamesResp = await this.http.GetFromJsonAsync<GamesResponse>(gamesUrl).ConfigureAwait(false);
                 }
                 catch (Exception ex) {
+                    // Ошибку показываем ниже как empty-state «сервер недоступен», а не как исключение
                     gamesError = ex;
-                    try {
-                        Core.Logging.Logger.Error(ex, $"LoadInitialAsync: GET {gamesUrl}");
-                    }
-                    catch {
-                    }
+                    Core.Logging.Logger.Error(ex, $"LoadInitialAsync: GET {gamesUrl}");
                 }
+
                 try {
                     newsResp = await this.http.GetFromJsonAsync<NewsIndex>(newsUrl).ConfigureAwait(false);
                 }
                 catch (Exception ex) {
-                    try {
-                        Core.Logging.Logger.Error(ex, $"LoadInitialAsync: GET {newsUrl}");
-                    }
-                    catch {
-                    }
+                    // Новости второстепенны: без них лаунчер полностью работоспособен
+                    Core.Logging.Logger.Error(ex, $"LoadInitialAsync: GET {newsUrl}");
                 }
 
                 var games = gamesResp?.Items ?? new List<GameInfo>();
@@ -321,11 +297,7 @@ namespace ChillHub.Pages {
                 await this.DispatcherInvokeAsync(() => this.HideServerUnavailableState());
 
                 // Нормализация URL и локального состояния до биндинга в UI
-                try {
-                    this.NormalizeGameIconsAndLocalState(games);
-                }
-                catch {
-                }
+                this.NormalizeGameIconsAndLocalState(games);
 
                 // Сортировка: установленные сначала, затем порядок из полученного списка
                 var orderMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -366,23 +338,13 @@ namespace ChillHub.Pages {
                         }
 
                         // Скелетоны -> список
-                        try {
-                            this.GamesSkeleton.Visibility = System.Windows.Visibility.Collapsed;
-                        }
-                        catch {
-                        }
-                        try {
-                            this.GameList.Visibility = System.Windows.Visibility.Visible;
-                        }
-                        catch {
-                        }
-                        try {
-                            this.UpdateActionButtonState();
-                        }
-                        catch {
-                        }
+                        this.GamesSkeleton.Visibility = System.Windows.Visibility.Collapsed;
+                        this.GameList.Visibility = System.Windows.Visibility.Visible;
+                        this.UpdateActionButtonState();
                     }
-                    catch {
+                    catch (Exception ex) {
+                        // Список получили, но привязать не смогли: сообщаем и оставляем страницу живой
+                        this.ShowUserError("Не удалось отобразить список игр.", ex, "LoadInitialAsync.BindGames");
                     }
                 });
 
@@ -395,7 +357,9 @@ namespace ChillHub.Pages {
                         this.LauncherNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
                         this.LauncherNewsList.Visibility = System.Windows.Visibility.Visible;
                     }
-                    catch {
+                    catch (Exception ex) {
+                        // Новости — необязательная секция, из-за неё не мешаем работать с играми
+                        Core.Logging.Logger.Error(ex, "LoadInitialAsync.BindLauncherNews");
                     }
                 });
 
@@ -410,17 +374,8 @@ namespace ChillHub.Pages {
                 this.ResetVerifiedStatuses();
 
                 // Сразу обновим состояние кнопки: показать "Проверка…" на время первичной проверки
-                try {
-                    await this.DispatcherInvokeAsync(() => {
-                        try {
-                            this.UpdateActionButtonState();
-                        }
-                        catch {
-                        }
-                    });
-                }
-                catch {
-                }
+                await this.DispatcherInvokeAsync(() => this.UpdateActionButtonState());
+
                 string? priorityGid = null;
                 await this.DispatcherInvokeAsync(() => priorityGid = this.GetSelectedGameId());
                 _ = Task.Run(async () => {
@@ -431,16 +386,12 @@ namespace ChillHub.Pages {
                         await this.DispatcherInvokeAsync(() => gid = this.GetSelectedGameId());
                         if (!string.IsNullOrWhiteSpace(gid)) {
                             await this.DispatcherInvokeAsync(() => this.UpdateSpaceHintFromCache(gid));
-                            await this.DispatcherInvokeAsync(() => {
-                                try {
-                                    this.UpdateActionButtonState();
-                                }
-                                catch {
-                                }
-                            });
+                            await this.DispatcherInvokeAsync(() => this.UpdateActionButtonState());
                         }
                     }
-                    catch {
+                    catch (Exception ex) {
+                        // Фоновая доводка UI после проверки статусов: сбой не должен ронять фоновую задачу
+                        Core.Logging.Logger.Error(ex, "LoadInitialAsync.PostVerifyUi");
                     }
                 });
             }
@@ -464,11 +415,8 @@ namespace ChillHub.Pages {
                 this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
             }
             catch (Exception uiEx) {
-                try {
-                    Core.Logging.Logger.Error(uiEx, "HomePage.ShowServerUnavailableState");
-                }
-                catch {
-                }
+                // Даже если не удалось перерисовать секции, сообщение об ошибке ниже показать обязаны
+                Core.Logging.Logger.Error(uiEx, "HomePage.ShowServerUnavailableState");
             }
 
             this.ShowUserError("Не удалось связаться с сервером.", ex, "HomePage.LoadInitialAsync");
@@ -476,17 +424,13 @@ namespace ChillHub.Pages {
                 this.SetActionMode(ActionMode.Retry);
                 this.ActionBtn.IsEnabled = false; // действия недоступны: список игр пуст
             }
-            catch {
+            catch (Exception btnEx) {
+                Core.Logging.Logger.Error(btnEx, "HomePage.ShowServerUnavailableState.ActionButton");
             }
         }
 
         private void HideServerUnavailableState() {
-            try {
-                this.GamesEmptyState.Visibility = System.Windows.Visibility.Collapsed;
-            }
-            catch {
-            }
-
+            this.GamesEmptyState.Visibility = System.Windows.Visibility.Collapsed;
             this.ClearErrorDetails();
         }
 
@@ -513,13 +457,7 @@ namespace ChillHub.Pages {
                     return;
                 }
 
-                await this.DispatcherInvokeAsync(() => {
-                    try {
-                        this.GamesVerifyIndicator.Visibility = Visibility.Visible;
-                    }
-                    catch {
-                    }
-                });
+                await this.DispatcherInvokeAsync(() => this.GamesVerifyIndicator.Visibility = Visibility.Visible);
 
                 // Лёгкий прогресс: processed/total в StatusText, чтобы пользователь видел процесс
                 int total = this.games.Count;
@@ -529,17 +467,7 @@ namespace ChillHub.Pages {
                 var lastUi = System.Diagnostics.Stopwatch.StartNew();
 
                 // Явно покажем старт проверки
-                try {
-                    await this.DispatcherInvokeAsync(() => {
-                        try {
-                            this.StatusText.Text = $"Проверка игр: {processed}/{total}";
-                        }
-                        catch {
-                        }
-                    });
-                }
-                catch {
-                }
+                await this.DispatcherInvokeAsync(() => this.StatusText.Text = $"Проверка игр: {processed}/{total}");
 
                 // Сначала — выбранная игра, чтобы кнопка действия стала доступной как можно раньше
                 var pending = new List<GameInfo>(this.games);
@@ -551,22 +479,15 @@ namespace ChillHub.Pages {
                             await this.VerifyGameStatusAsync(first);
                         }
                         catch (Exception ex) {
-                            try {
-                                Core.Logging.Logger.Error(ex, $"VerifyGameStatusAsync(priority {first.GameId})");
-                            }
-                            catch {
-                            }
+                            // Одна игра не проверилась — остальные проверяем дальше, статус этой останется прежним
+                            Core.Logging.Logger.Error(ex, $"VerifyGameStatusAsync(priority {first.GameId})");
                         }
 
                         Interlocked.Increment(ref processed);
                         await this.DispatcherInvokeAsync(() => {
-                            try {
-                                this.GameList.Items.Refresh();
-                                this.UpdateActionButtonState();
-                                this.StatusText.Text = $"Проверка игр: {processed}/{total}";
-                            }
-                            catch {
-                            }
+                            this.GameList.Items.Refresh();
+                            this.UpdateActionButtonState();
+                            this.StatusText.Text = $"Проверка игр: {processed}/{total}";
                         });
                     }
                 }
@@ -579,43 +500,32 @@ namespace ChillHub.Pages {
                             await this.VerifyGameStatusAsync(g);
                         }
                         catch (Exception ex) {
-                            try {
-                                Core.Logging.Logger.Error(ex, $"VerifyGameStatusAsync({g.GameId})");
-                            }
-                            catch {
-                            }
+                            Core.Logging.Logger.Error(ex, $"VerifyGameStatusAsync({g.GameId})");
                         }
                         finally {
                             Interlocked.Increment(ref processed);
                             try {
                                 // Бейдж проверенной игры обновляем сразу, чтобы статусы появлялись по мере готовности
                                 await this.DispatcherInvokeAsync(() => {
-                                    try {
-                                        this.GameList.Items.Refresh();
+                                    this.GameList.Items.Refresh();
 
-                                        // Если это выбранная игра — кнопка действия должна разблокироваться немедленно
-                                        if (string.Equals(this.GetSelectedGameId(), g.GameId, StringComparison.OrdinalIgnoreCase)) {
-                                            this.UpdateActionButtonState();
-                                        }
-                                    }
-                                    catch {
+                                    // Если это выбранная игра — кнопка действия должна разблокироваться немедленно
+                                    if (string.Equals(this.GetSelectedGameId(), g.GameId, StringComparison.OrdinalIgnoreCase)) {
+                                        this.UpdateActionButtonState();
                                     }
                                 });
 
                                 // Обновляем текст прогресса не слишком часто (не чаще ~5 раз/сек)
                                 if (lastUi.ElapsedMilliseconds >= 200) {
                                     lastUi.Restart();
-                                    await this.DispatcherInvokeAsync(() => {
-                                        try {
-                                            this.StatusText.Text = $"Проверка игр: {processed}/{total}";
-                                        }
-                                        catch {
-                                        }
-                                    });
+                                    await this.DispatcherInvokeAsync(() => this.StatusText.Text = $"Проверка игр: {processed}/{total}");
                                 }
                             }
-                            catch {
+                            catch (Exception exUi) {
+                                // Обновление индикаторов не должно ронять фоновую проверку остальных игр
+                                Core.Logging.Logger.Error(exUi, "VerifyAllGamesStatusesAsync.ProgressUi");
                             }
+
                             sem.Release();
                         }
                     });
@@ -629,7 +539,7 @@ namespace ChillHub.Pages {
                 try {
                     var selectedId = this.GetSelectedGameId();
 
-                    // Preserve registry order for non-installed, keep installed first
+                    // Порядок из реестра сохраняем для неустановленных, установленные держим сверху
                     var order2 = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
                     for (int i = 0; i < this.games.Count; i++) {
                         var id = this.games[i]?.GameId ?? string.Empty;
@@ -643,7 +553,8 @@ namespace ChillHub.Pages {
                         .ThenBy(x => order2.TryGetValue(x.GameId ?? string.Empty, out var idx) ? idx : int.MaxValue)
                         .ToList();
                     await this.DispatcherInvokeAsync(() => {
-                        this.GameList.ItemsSource = this.games; this.GameList.Items.Refresh();
+                        this.GameList.ItemsSource = this.games;
+                        this.GameList.Items.Refresh();
                         if (!string.IsNullOrWhiteSpace(selectedId)) {
                             var idx = this.games.FindIndex(x => x.GameId == selectedId);
                             if (idx >= 0) {
@@ -652,10 +563,14 @@ namespace ChillHub.Pages {
                         }
                     });
                 }
-                catch {
+                catch (Exception ex) {
+                    // Пересортировка — косметика: статусы уже проверены и показаны
+                    Core.Logging.Logger.Error(ex, "VerifyAllGamesStatusesAsync.Reorder");
                 }
             }
-            catch {
+            catch (Exception ex) {
+                // Проверка статусов фоновая: не показываем модальных ошибок, но фиксируем в логе
+                Core.Logging.Logger.Error(ex, "VerifyAllGamesStatusesAsync");
             }
             finally {
                 // Подстраховка: после завершения прохода статус любой игры считается известным,
@@ -666,34 +581,19 @@ namespace ChillHub.Pages {
                     }
                 }
                 catch (Exception ex) {
-                    try {
-                        Core.Logging.Logger.Error(ex, "VerifyAllGamesStatusesAsync.finally");
-                    }
-                    catch {
-                    }
+                    Core.Logging.Logger.Error(ex, "VerifyAllGamesStatusesAsync.finally");
                 }
 
                 await this.DispatcherInvokeAsync(() => {
-                    try {
-                        this.GamesVerifyIndicator.Visibility = Visibility.Collapsed;
-                    }
-                    catch {
-                    }
+                    this.GamesVerifyIndicator.Visibility = Visibility.Collapsed;
 
                     // После завершения всегда выставляем финальный статус, чтобы не зависало "Проверка игр X/Y".
                     // Сообщение об ошибке при этом не затираем — оно важнее.
-                    try {
-                        if (string.IsNullOrWhiteSpace(this.lastErrorDetails)) {
-                            this.StatusText.Text = "Готов";
-                        }
+                    if (string.IsNullOrWhiteSpace(this.lastErrorDetails)) {
+                        this.StatusText.Text = "Готов";
                     }
-                    catch {
-                    }
-                    try {
-                        this.UpdateActionButtonState();
-                    }
-                    catch {
-                    }
+
+                    this.UpdateActionButtonState();
                 });
             }
         }
@@ -720,11 +620,7 @@ namespace ChillHub.Pages {
                     // Игру нельзя считать готовой — предлагаем докатить обновление.
                     game.IsInstalled = hasLocalFiles;
                     game.NeedsUpdate = true;
-                    try {
-                        Core.Logging.Logger.Warn($"VerifyGameStatusAsync gid={gid} найден маркер незавершённого обновления: {ChillHub.Core.Sync.SimpleSyncService.ReadUpdateMarker(localRoot)}");
-                    }
-                    catch {
-                    }
+                    Core.Logging.Logger.Warn($"VerifyGameStatusAsync gid={gid} найден маркер незавершённого обновления: {ChillHub.Core.Sync.SimpleSyncService.ReadUpdateMarker(localRoot)}");
 
                     return;
                 }
@@ -733,11 +629,7 @@ namespace ChillHub.Pages {
                     // Нет эталона для сравнения — считаем не установленной, если нет локальных файлов; иначе установленной без статуса обновления
                     game.IsInstalled = hasLocalFiles;
                     game.NeedsUpdate = false; // нет способа сравнить
-                    try {
-                        Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} latest=<none> hasLocalFiles={hasLocalFiles} -> IsInstalled={game.IsInstalled} NeedsUpdate={game.NeedsUpdate}");
-                    }
-                    catch {
-                    }
+                    Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} latest=<none> hasLocalFiles={hasLocalFiles} -> IsInstalled={game.IsInstalled} NeedsUpdate={game.NeedsUpdate}");
 
                     // Отложим Refresh до завершения всех проверок, чтобы не трясти UI на каждую игру
                     return;
@@ -745,19 +637,11 @@ namespace ChillHub.Pages {
 
                 // Получаем манифест latest и план сравнения
                 var manifestUrl = $"{this.BaseApi}/manifests/{gid}/{latest}.json";
-                try {
-                    Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} fetching manifest {manifestUrl}");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} fetching manifest {manifestUrl}");
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, CancellationToken.None);
                 var contentBase = $"{this.BaseApi}/content/{gid}/{latest}/files";
                 var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, CancellationToken.None);
-                try {
-                    Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
                 try {
                     LogPlanDownloads(gid, "verify", plan, localRoot);
                 }
@@ -784,21 +668,13 @@ namespace ChillHub.Pages {
                     game.NeedsUpdate = true;
                 }
 
-                try {
-                    Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} result: IsInstalled={game.IsInstalled} NeedsUpdate={game.NeedsUpdate}");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} result: IsInstalled={game.IsInstalled} NeedsUpdate={game.NeedsUpdate}");
 
                 // Отложим Refresh до завершения всех проверок
             }
             catch (Exception ex) {
                 // В случае ошибки проверки — не меняем текущий статус, только логируем
-                try {
-                    Core.Logging.Logger.Error(ex, $"VerifyGameStatusAsync({game?.GameId})");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Error(ex, $"VerifyGameStatusAsync({game?.GameId})");
             }
             finally {
                 // Статус игры считается известным даже при ошибке проверки:
@@ -855,11 +731,7 @@ namespace ChillHub.Pages {
                     : "Подробнее: " + this.lastErrorDetails;
             }
             catch (Exception uiEx) {
-                try {
-                    Core.Logging.Logger.Error(uiEx, "HomePage.ShowUserError");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Error(uiEx, "HomePage.ShowUserError");
             }
         }
 
@@ -939,11 +811,7 @@ namespace ChillHub.Pages {
                 // Чтение версии с диска выполняем в фоновом потоке
                 var localVer = await Task.Run(() => ReadLocalVersion(gameId));
                 var localTrimmed = string.IsNullOrWhiteSpace(localVer) ? string.Empty : localVer.Trim();
-                try {
-                    Core.Logging.Logger.Info($"LoadBuildsAndGameNewsAsync gid={gameId} local='{localTrimmed}'");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Info($"LoadBuildsAndGameNewsAsync gid={gameId} local='{localTrimmed}'");
                 if (game != null) {
                     game.IsInstalled = !string.IsNullOrWhiteSpace(localTrimmed);
                     game.InstalledVersion = localTrimmed ?? string.Empty;
@@ -969,11 +837,7 @@ namespace ChillHub.Pages {
             }
             catch (Exception ex) {
                 this.StatusText.Text = $"Ошибка загрузки сборок/новостей игры (GET {this.BaseApi}/api/games/{gameId}/builds, /news/games/{gameId}/index.json): {ex.Message}";
-                try {
-                    Core.Logging.Logger.Error(ex, "HomePage.LoadBuildsAndGameNewsAsync");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Error(ex, "HomePage.LoadBuildsAndGameNewsAsync");
 
                 // В случае ошибки не оставляем старые новости от предыдущей игры
                 this.GameNewsList.ItemsSource = Array.Empty<NewsItem>();
@@ -1006,11 +870,7 @@ namespace ChillHub.Pages {
             }
             catch (Exception ex) {
                 this.StatusText.Text = $"Не удалось обновить новости лаунчера: {ex.Message}";
-                try {
-                    Core.Logging.Logger.Error(ex, "HomePage.ReloadLauncherNewsAsync");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Error(ex, "HomePage.ReloadLauncherNewsAsync");
             }
             finally {
                 this.LauncherNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
@@ -1040,11 +900,7 @@ namespace ChillHub.Pages {
             }
             catch (Exception ex) {
                 this.StatusText.Text = $"Не удалось обновить новости игры: {ex.Message}";
-                try {
-                    Core.Logging.Logger.Error(ex, "HomePage.ReloadGameNewsAsync");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Error(ex, "HomePage.ReloadGameNewsAsync");
             }
             finally {
                 this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
@@ -1435,11 +1291,7 @@ namespace ChillHub.Pages {
                     this.StatusText.Text = "Нет доступных сборок для установки";
                     return;
                 }
-                try {
-                    Core.Logging.Logger.Info($"StartUpdateAsync gid={gid} version={version}");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Info($"StartUpdateAsync gid={gid} version={version}");
 
                 this.isUpdating = true;
                 this.hasUpdateError = false;
@@ -1458,21 +1310,13 @@ namespace ChillHub.Pages {
                 this.UpdateProgress.Value = 0;
                 this.SpeedEtaText.Text = string.Empty;
                 this.FilesSizeText.Text = string.Empty;
-                try {
-                    Core.Logging.Logger.Info($"StartUpdateAsync fetching manifest {manifestUrl}");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Info($"StartUpdateAsync fetching manifest {manifestUrl}");
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, token);
                 this.StatusText.Text = "Проверка...";
                 this.UpdateProgress.IsIndeterminate = true;
                 var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
                 var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, token);
-                try {
-                    Core.Logging.Logger.Info($"StartUpdateAsync plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Info($"StartUpdateAsync plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
                 try {
                     LogPlanDownloads(gid, "update", plan, localRoot);
                 }
@@ -1602,11 +1446,7 @@ namespace ChillHub.Pages {
                 });
 
                 await this.sync.ExecuteAsync(plan, prog, token);
-                try {
-                    Core.Logging.Logger.Info($"StartUpdateAsync execute done gid={gid} version={version}");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Info($"StartUpdateAsync execute done gid={gid} version={version}");
 
                 this.StatusText.Text = "Готово";
                 this.SpeedEtaText.Text = string.Empty;
@@ -1992,11 +1832,7 @@ namespace ChillHub.Pages {
                     if (HasUnfinishedUpdate(g.GameId)) {
                         g.NeedsUpdate = true;
                     }
-                    try {
-                        ChillHub.Core.Logging.Logger.Info($"NormalizeState gid={g.GameId} latest='{g.LatestVersion}' local='{g.InstalledVersion}' isInstalled={g.IsInstalled} needsUpdate={g.NeedsUpdate}");
-                    }
-                    catch {
-                    }
+                    ChillHub.Core.Logging.Logger.Info($"NormalizeState gid={g.GameId} latest='{g.LatestVersion}' local='{g.InstalledVersion}' isInstalled={g.IsInstalled} needsUpdate={g.NeedsUpdate}");
                 }
                 catch {
                 }
@@ -2076,11 +1912,7 @@ namespace ChillHub.Pages {
             }
             catch (Exception ex) {
                 this.StatusText.Text = $"Не удалось открыть папку игры: {ex.Message}";
-                try {
-                    Core.Logging.Logger.Error(ex, "HomePage.OpenGameFolder_Click");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Error(ex, "HomePage.OpenGameFolder_Click");
             }
         }
 
@@ -2153,20 +1985,12 @@ namespace ChillHub.Pages {
                 }
                 catch (Exception exDel) {
                     this.StatusText.Text = $"Не удалось удалить локальные файлы: {exDel.Message}";
-                    try {
-                        Core.Logging.Logger.Error(exDel, "HomePage.DeleteGame_Click");
-                    }
-                    catch {
-                    }
+                    Core.Logging.Logger.Error(exDel, "HomePage.DeleteGame_Click");
                 }
             }
             catch (Exception ex) {
                 this.StatusText.Text = $"Ошибка удаления: {ex.Message}";
-                try {
-                    Core.Logging.Logger.Error(ex, "HomePage.DeleteGame_Click");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Error(ex, "HomePage.DeleteGame_Click");
             }
         }
 
