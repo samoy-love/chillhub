@@ -254,7 +254,11 @@ func (h *Handlers) ListVersions(w http.ResponseWriter, r *http.Request) {
 			out.Items = append(out.Items, item{Version: strings.TrimSuffix(name, ".json")})
 		}
 	}
-	sort.Slice(out.Items, func(i, j int) bool { return out.Items[i].Version < out.Items[j].Version })
+	// Ascending, as the admin UI expects, but compared by numeric components:
+	// a plain string sort puts 1.1.10 before 1.1.9.
+	sort.SliceStable(out.Items, func(i, j int) bool {
+		return adminutil.CompareVersions(out.Items[i].Version, out.Items[j].Version) < 0
+	})
 	// read latest.json if present
 	lb, err := os.ReadFile(filepath.Join(dir, "latest.json"))
 	if err == nil {
@@ -354,12 +358,13 @@ func (h *Handlers) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 				vers = append(vers, strings.TrimSuffix(name, ".json"))
 			}
 		}
-		sort.Slice(vers, func(i, j int) bool { return vers[i] < vers[j] })
 		if len(vers) == 0 {
 			// no versions remain: remove latest.json
 			_ = os.Remove(latestPath)
 		} else {
-			newLatest := vers[len(vers)-1]
+			// Same trap as in ListVersions: the highest version is not the last
+			// one in string order (1.1.9 > 1.1.10 lexicographically).
+			newLatest := adminutil.MaxVersion(vers)
 			b, _ := json.MarshalIndent(map[string]string{"version": newLatest}, "", "  ")
 			_ = adminutil.WriteFileAtomic(latestPath, b, 0o644)
 		}
