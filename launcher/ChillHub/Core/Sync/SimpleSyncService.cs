@@ -380,13 +380,20 @@ namespace ChillHub.Core.Sync {
                                                     }
                                                 }
 
-                                                using var src = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-                                                using var dst = new FileStream(partPath, FileMode.Append, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true);
-                                                int read;
-                                                while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false)) > 0) {
-                                                    await dst.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
-                                                    Interlocked.Add(ref downloaded, read);
-                                                    ReportDownloadProgress();
+                                                // Блок обязателен: поток записи должен быть ЗАКРЫТ до проверки.
+                                                // `using var` живёт до конца try, а файл открыт с FileShare.None —
+                                                // то есть любой другой доступ к нему запрещён. Проверка,
+                                                // вызванная при живом дескрипторе, падала с «файл занят другим
+                                                // процессом», хотя процесс был наш собственный. Три повтора
+                                                // упирались в то же самое, и обновление обрывалось.
+                                                using (var src = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false))
+                                                using (var dst = new FileStream(partPath, FileMode.Append, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true)) {
+                                                    int read;
+                                                    while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false)) > 0) {
+                                                        await dst.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+                                                        Interlocked.Add(ref downloaded, read);
+                                                        ReportDownloadProgress();
+                                                    }
                                                 }
 
                                                 // Проверка хешей — ВНУТРИ цикла ретраев. Раньше она стояла
