@@ -460,8 +460,8 @@ namespace ChillHub.Pages {
                 this.StatusText.Text = "Загрузка манифеста…";
                 this.SyncProgressBar.IsIndeterminate = true;
 
-                var manifestUrl = $"{this.BaseApi}/manifests/{gid}/{version}.json";
-                var contentBase = $"{this.BaseApi}/content/{gid}/{version}/files";
+                var manifestUrl = IntegrityChecker.ManifestUrl(this.BaseApi, gid, version);
+                var contentBase = IntegrityChecker.ContentBaseUrl(this.BaseApi, gid, version);
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, token).ConfigureAwait(true);
 
                 this.StatusText.Text = "Сравнение файлов…";

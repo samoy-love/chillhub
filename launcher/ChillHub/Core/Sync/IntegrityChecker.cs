@@ -82,6 +82,12 @@ namespace ChillHub.Core.Sync {
     /// </summary>
     public static class IntegrityChecker {
         /// <summary>
+        /// Имя файла-маркера с установленной версией игры. Единственное объявление на весь клиент:
+        /// <c>Core.Home.GameLocalState</c> ссылается сюда, чтобы имя не разъезжалось.
+        /// </summary>
+        public const string VersionMarkerFileName = ".version";
+
+        /// <summary>
         /// URL манифеста конкретной версии игры.
         /// </summary>
         /// <param name="apiBaseUrl">База API.</param>
@@ -128,7 +134,7 @@ namespace ChillHub.Core.Sync {
                         continue;
                     }
 
-                    if (string.Equals(rel, ".version", StringComparison.OrdinalIgnoreCase)) {
+                    if (string.Equals(rel, VersionMarkerFileName, StringComparison.OrdinalIgnoreCase)) {
                         continue;
                     }
 
