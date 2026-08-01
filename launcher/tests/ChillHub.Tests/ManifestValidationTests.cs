@@ -90,6 +90,42 @@ namespace ChillHub.Tests {
             Assert.Equal(new[] { "saves", "logs/crash" }, plan.EmptyDirsToCreate);
         }
 
+        /// <summary>
+        /// Пункт 2: канонизация подписи не совпадала с путём, который реально пишется.
+        /// Все пять мутаций ниже нормализуются обратно в "game/app.exe", то есть
+        /// подписываемые байты не меняются и подпись остаётся валидной — а на диск
+        /// уходил сырой путь. Единственное лекарство: требовать, чтобы путь УЖЕ был
+        /// каноническим, тогда подписанное и используемое — одни и те же байты.
+        /// </summary>
+        [Theory]
+        [InlineData("/game/app.exe")]
+        [InlineData(@"game\app.exe")]
+        [InlineData(" game/app.exe")]
+        [InlineData("game/app.exe/")]
+        [InlineData("game//app.exe")]
+        public async Task НеканоническийПутьОтвергается(string mutated) {
+            // Контроль: канонизация действительно схлопывает мутацию в исходный путь,
+            // то есть подпись бы не сломалась и тест бьёт именно в эту дыру.
+            Assert.Equal("game/app.exe", ManifestPath.Canonicalize(mutated));
+
+            using var dir = new TempDir();
+            var manifest = PlanTestData.Manifest(PlanTestData.File(mutated, 10, "aa"));
+
+            await Assert.ThrowsAsync<ManifestValidationException>(
+                () => PlanTestData.PlanAsync(manifest, dir.Root));
+        }
+
+        [Fact]
+        public void EnforceОтвергаетНеканоническийПутьДажеБезПодписи() {
+            // Режим совместимости распространяется на ОТСУТСТВИЕ подписи, но не на
+            // опасное содержимое: неподписанный манифест с таким путём тоже вне закона.
+            var manifest = PlanTestData.Manifest(PlanTestData.File("/game/app.exe", 10, "aa"));
+            manifest.Signature = "dev-mock-signature";
+
+            Assert.Throws<ManifestValidationException>(
+                () => ManifestSignature.Enforce(manifest, "test://legacy"));
+        }
+
         [Theory]
         [InlineData("game.exe")]
         [InlineData("data/pack.bin")]
