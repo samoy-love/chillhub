@@ -83,9 +83,41 @@ internal static class Program
                 string ExistsStat(string? p) => string.IsNullOrWhiteSpace(p) ? "<null>" : ($"'{p}' exists={(File.Exists(p) ? "file" : Directory.Exists(p) ? "dir" : "no")} ");
                 Log($"Updater start\n  --src={ExistsStat(src)}\n  --dst={ExistsStat(dst)}\n  --exe={ExistsStat(exe)}\n  --parent={parent}\n  --log='{log}'\n  --files={ExistsStat(files)}\n  --dirs={ExistsStat(dirs)}\n  --del={ExistsStat(del)}\n  --strip-prefix='{strip}'\n  --auto-strip={autoStrip}\n  --preserve='{preserve}'");
                 // Wait parent
+                //
+                // Ждать нужно обязательно: пока лаунчер жив, его exe и dll заблокированы,
+                // и копирование поверх них провалится. Но ждать БЕЗ ограничения нельзя —
+                // подвисший лаунчер оставлял апдейтер висеть вечно, без окна и без
+                // единой строки в логе, а пользователь видел просто «обновление не
+                // заканчивается».
+                //
+                // По таймауту всё равно идём дальше: копирование само упадёт на
+                // заблокированных файлах, а маркер версии при ошибках копирования
+                // не пишется — значит следующий запуск честно повторит обновление.
                 if (parent > 0)
                 {
-                    try { var proc = Process.GetProcessById(parent); proc.WaitForExit(); Log($"Parent {parent} exited"); } catch { }
+                    const int ParentWaitMs = 120_000;
+                    try
+                    {
+                        var proc = Process.GetProcessById(parent);
+                        if (proc.WaitForExit(ParentWaitMs))
+                        {
+                            Log($"Parent {parent} exited");
+                        }
+                        else
+                        {
+                            Log($"WARNING: parent {parent} is still running after {ParentWaitMs / 1000}s; " +
+                                "proceeding anyway — locked files will fail to copy and the update will be retried on next launch");
+                        }
+                    }
+                    catch (ArgumentException)
+                    {
+                        // Процесса с таким id уже нет — ровно то, чего мы и ждали.
+                        Log($"Parent {parent} already gone");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"WARNING: cannot wait for parent {parent}: {ex.GetType().Name}: {ex.Message}");
+                    }
                 }
                 // Ensure dst
                 try { Directory.CreateDirectory(dst); } catch { }

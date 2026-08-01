@@ -188,3 +188,37 @@ func TestDangerousManifestIsNeitherSignedNorVerified(t *testing.T) {
 		}
 	}
 }
+
+// TestManifestWithoutHashIsNotSigned pins the rule that a manifest entry must
+// carry at least one hash.
+//
+// The launcher wraps its entire verification block in "if either hash is set",
+// so an entry with both empty is not "integrity unknown" — it is integrity
+// checking turned off for precisely the file chosen by whoever serves the
+// manifest. Signing that would attest the absence was intended.
+func TestManifestWithoutHashIsNotSigned(t *testing.T) {
+	m := manifest{
+		Version: "1.0.0",
+		GameID:  "chill",
+		Files: []manifestFile{
+			{Path: "game.exe", Size: 1, Blake3: "aaaa"},
+			{Path: "payload.exe", Size: 2},
+		},
+	}
+	if err := validateManifest(m); err == nil {
+		t.Fatal("a manifest with a hashless entry must be rejected")
+	}
+
+	// Signing must leave the field empty rather than emit a signature.
+	t.Setenv(SigningKeyEnv, "")
+	signManifest(&m)
+	if m.Signature != "" {
+		t.Fatalf("hashless manifest must stay unsigned, got %q", m.Signature)
+	}
+
+	// One hash is enough.
+	m.Files[1].Sha256 = "bbbb"
+	if err := validateManifest(m); err != nil {
+		t.Fatalf("one hash must suffice: %v", err)
+	}
+}

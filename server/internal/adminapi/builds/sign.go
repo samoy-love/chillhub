@@ -193,6 +193,14 @@ func validateManifest(m manifest) error {
 		if why := pathProblem(f.Path); why != "" {
 			return errors.New("file #" + strconv.Itoa(i) + " " + strconv.Quote(f.Path) + ": " + why)
 		}
+		// A record with no hash at all is not "unknown integrity", it is
+		// integrity checking switched off for exactly that file: the client
+		// wraps its whole verification block in "if either hash is set".
+		// Signing such a manifest would attest that the absence is intended.
+		if strings.TrimSpace(f.Blake3) == "" && strings.TrimSpace(f.Sha256) == "" {
+			return errors.New("file #" + strconv.Itoa(i) + " " + strconv.Quote(f.Path) + ": no hash to verify against")
+		}
+
 		// Case-insensitive: the client stores files on a case-insensitive
 		// filesystem and keys its map the same way, so "A.dll" and "a.dll"
 		// are one destination but two manifest entries - and whichever comes
