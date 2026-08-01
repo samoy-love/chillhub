@@ -419,6 +419,8 @@ document.addEventListener('DOMContentLoaded', ()=>{
 let __fbItems = [];
 let __fbSel = '';
 let __fbPollTimer = null;
+let __fbSeq = 0;        // порядковый номер запроса списка обращений
+let __fbListHtml = '';  // последняя отрисованная разметка списка
 
 function fbQueryParams(){
   const type = document.getElementById('fb_type')?.value||'';
@@ -502,7 +504,11 @@ function toRfc3339(date){
 function fbRenderList(){
   const root = document.getElementById('fb_list'); if(!root) return;
   const cnt = document.getElementById('fb_count'); if(cnt) cnt.textContent = String(__fbItems.length||0);
-  if(__fbItems.length===0){ root.innerHTML = '<div class="text-body-secondary">Пусто</div>'; return; }
+  if(__fbItems.length===0){
+    const empty = '<div class="text-body-secondary">Пусто</div>';
+    if(empty !== __fbListHtml){ __fbListHtml = empty; root.innerHTML = empty; }
+    return;
+  }
   const html = __fbItems.map(it=>{
     const imp = it.important ? '<span class="badge text-bg-warning ms-2">важное</span>' : '';
     const st = (it.status==='read') ? '<span class="badge text-bg-secondary ms-2">проч.</span>' : '';
@@ -520,7 +526,14 @@ function fbRenderList(){
          +   '<div class="mt-1">'+cmt+'</div>'
          + '</a>';
   }).join('');
+  // Поллинг раз в 12 с полностью переписывал innerHTML, из-за чего терялась
+  // позиция скролла и выделение. Если разметка не изменилась — не трогаем DOM
+  // вообще, а если изменилась — восстанавливаем прокрутку списка.
+  if(html === __fbListHtml) return;
+  __fbListHtml = html;
+  const scrollTop = root.scrollTop;
   root.innerHTML = html;
+  root.scrollTop = scrollTop;
   root.querySelectorAll('a.list-group-item').forEach(a=>{
     a.addEventListener('click', (ev)=>{ ev.preventDefault(); const id = a.getAttribute('data-id'); fbSelect(id); });
   });
@@ -528,9 +541,14 @@ function fbRenderList(){
 
 async function fbReload(immediate){
   const qs = fbQueryParams();
+  // Ответы приходят не в порядке отправки: без счётчика поиск «мигал» старыми
+  // результатами, а фоновый поллинг мог затереть свежую выдачу фильтра.
+  const seq = ++__fbSeq;
   let res; try{ res = await fetch('/admin/feedback/list'+(qs?'?'+qs:'')); }catch(e){ return; }
+  if(seq !== __fbSeq) return;
   if(!res.ok) return;
   let j; try{ j = await res.json(); }catch{ return; }
+  if(seq !== __fbSeq) return;
   __fbItems = Array.isArray(j.items)? j.items : [];
   fbRenderList();
   if(__fbSel){
@@ -599,10 +617,13 @@ document.addEventListener('DOMContentLoaded', ()=>{
   const closeBtn = document.getElementById('fb_close_view');
   if(closeBtn){ closeBtn.addEventListener('click', (e)=>{ e.preventDefault(); __fbSel=''; document.getElementById('fb_view')?.replaceChildren(); fbRenderList(); }); }
   // Filters live change
+  // Поиск раньше слал запрос на каждое нажатие клавиши, хотя debounce в файле
+  // уже был. Порядок ответов гарантирует счётчик внутри fbReload.
+  const fbSearchReload = debounce(()=> fbReload(true), 300);
   ['fb_type','fb_status','fb_important','fb_q','fb_from','fb_to'].forEach(id=>{
     const el = document.getElementById(id); if(!el) return;
     el.addEventListener('change', ()=> fbReload(true));
-    if(id==='fb_q') el.addEventListener('input', ()=> fbReload(true));
+    if(id==='fb_q') el.addEventListener('input', fbSearchReload);
   });
   // Delete hotkey
   document.addEventListener('keydown', (e)=>{
