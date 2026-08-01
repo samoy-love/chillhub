@@ -16,8 +16,27 @@ namespace ChillHub.Update;
 /// </summary>
 public sealed class PreserveMatcher
 {
-    /// <summary>Default rules. Keep in sync with nothing else — this IS the definition.</summary>
-    public static readonly string[] DefaultRules = { "config.json", "launcher.version" };
+    /// <summary>
+    /// Default rules. Keep in sync with nothing else — this IS the definition.
+    ///
+    /// B6. Uninstall.exe создаёт NSIS в момент установки, у каждого пользователя он свой.
+    /// Пока он числился в манифесте с фиксированным хешем, у свежеустановленного
+    /// пользователя байты не совпадали никогда: проверка целостности всегда видела
+    /// расхождение и предлагала обновление вечно — та самая петля самообновления.
+    /// Это артефакт времени установки, а не файл пакета, поэтому он в preserve
+    /// (те же правила вносят сервер и установщик).
+    ///
+    /// launcher.update-status — исход последнего обновления, который пишет апдейтер
+    /// (A12). Такое же машинное состояние, как launcher.version: в пакет не входит,
+    /// перезаписывать и удалять его по манифесту нельзя.
+    /// </summary>
+    public static readonly string[] DefaultRules =
+    {
+        "config.json",
+        "launcher.version",
+        "launcher.update-status",
+        "Uninstall.exe",
+    };
 
     /// <summary>Value to pass to the updater's --preserve option.</summary>
     public static string DefaultRulesArg => string.Join(",", DefaultRules);
@@ -56,7 +75,14 @@ public sealed class PreserveMatcher
     /// <summary>
     /// Returns true when the relative path must not be written/deleted by the updater and must not
     /// be considered a mismatch by the launcher's integrity check.
-    /// Supports directory rules ("logs/"), exact relative paths, filename-only rules and '*'/'?' wildcards.
+    /// Supports directory rules ("logs/"), exact relative paths and '*'/'?' wildcards.
+    ///
+    /// A11. Сравнивается ТОЧНЫЙ путь относительно корня установки — правило "config.json"
+    /// защищает только "config.json" в корне и НЕ трогает "data/config.json".
+    /// Раньше клиент дополнительно сравнивал имя файла в любом подкаталоге, а сервер —
+    /// только точное совпадение верхнего уровня. Из-за расхождения "data/config.json"
+    /// сервер публиковал, а клиент молча пропускал: файл никогда не обновлялся, и
+    /// проверка целостности расходилась вечно. Правило должно быть ОДНО на обе стороны.
     /// </summary>
     public bool ShouldPreserve(string? relativePath, Action<string>? log = null)
     {
@@ -66,7 +92,6 @@ public sealed class PreserveMatcher
             return false;
         }
 
-        var leaf = norm.Contains('/') ? norm[(norm.LastIndexOf('/') + 1)..] : norm;
         foreach (var rule in this.rules)
         {
             if (rule.EndsWith('/'))
@@ -89,7 +114,7 @@ public sealed class PreserveMatcher
 
             if (rule.Contains('*') || rule.Contains('?'))
             {
-                if (WildcardIsMatch(norm, rule) || WildcardIsMatch(leaf, rule))
+                if (WildcardIsMatch(norm, rule))
                 {
                     log?.Invoke($"preserve (wildcard): {norm} by '{rule}'");
                     return true;
@@ -98,7 +123,7 @@ public sealed class PreserveMatcher
                 continue;
             }
 
-            if (norm.Equals(rule, StringComparison.OrdinalIgnoreCase) || leaf.Equals(rule, StringComparison.OrdinalIgnoreCase))
+            if (norm.Equals(rule, StringComparison.OrdinalIgnoreCase))
             {
                 log?.Invoke($"preserve (exact): {norm} by '{rule}'");
                 return true;
@@ -126,10 +151,12 @@ public sealed class PreserveMatcher
             return true;
         }
 
-        var leaf = norm.Contains('/') ? norm[(norm.LastIndexOf('/') + 1)..] : norm;
+        // A11. Только верхний уровень, как и в preserve: имя файла в произвольном
+        // подкаталоге (например "data/filelist.txt") — это обычный файл пакета,
+        // и клиент не имеет права молча его пропускать, раз сервер его публикует.
         foreach (var name in UpdaterArtifactFiles)
         {
-            if (leaf.Equals(name, StringComparison.OrdinalIgnoreCase))
+            if (norm.Equals(name, StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }

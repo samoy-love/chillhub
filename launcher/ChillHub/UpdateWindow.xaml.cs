@@ -6,10 +6,12 @@
 namespace ChillHub {
     using System;
     using System.IO;
+    using System.Linq;
     using System.Net.Http;
     using System.Net.Http.Json;
     using System.Reflection;
     using System.Text;
+    using System.Text.RegularExpressions;
     using System.Threading.Tasks;
     using System.Windows;
     using System.Windows.Documents;
@@ -33,16 +35,43 @@ namespace ChillHub {
         /// </summary>
         private const int KeepTempSessionDirs = 2;
 
+        /// <summary>
+        /// A14. Возраст, после которого каталог сессии удаляется независимо от того,
+        /// входит ли он в число самых свежих: иначе у пользователя, который давно не
+        /// обновлялся, пара каталогов-ветеранов лежала бы в %TEMP% вечно.
+        /// </summary>
+        private const int StaleSessionDays = 7;
+
+        /// <summary>Суффикс имени каталога, отложенного до следующей уборки (A14).</summary>
+        private const string TrashSuffix = ".trash-";
+
         /// <summary>UTF-8 без BOM: BOM ломает сверку размеров/хешей служебных списков.</summary>
         private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
 
         /// <summary>Единый список preserve-правил, общий с апдейтером.</summary>
         private static readonly PreserveMatcher Preserve = new PreserveMatcher();
 
+        /// <summary>
+        /// A6. Допустимая форма версии: 1.2.3, 1.2.3.4, 1.2.3-beta.1.
+        /// <para>
+        /// Строка приходит из latest.json, то есть С СЕТИ, и дальше подставляется в
+        /// Path.Combine (%TEMP%\ChillHub\SelfUpdate\&lt;версия&gt;), в URL манифеста и в
+        /// аргументы внешнего процесса. Значение вроде "..\..\Startup" уводит каталог
+        /// обновления куда угодно, а любой сюрприз в кавычках/бэкслешах меняет разбор
+        /// командной строки апдейтера. Проверяем ДО первого использования: версия —
+        /// это данные, а не команда.
+        /// </para>
+        /// </summary>
+        private static readonly Regex VersionPattern = new Regex(
+            @"^[0-9]{1,6}(\.[0-9]{1,6}){1,3}(-[0-9A-Za-z][0-9A-Za-z.]{0,31})?$",
+            RegexOptions.CultureInvariant);
+
         private string BaseApi => ConfigService.Current.ApiBaseUrl;
 
         private readonly HttpClient http = HttpClientProvider.Shared;
         private bool updateRequired = false; // есть ли новая версия
+        private bool loopBlocked = false;    // A4: автообновление остановлено защитой от петли
+        private bool updaterStarted = false; // A14: апдейтер запущен, его временный каталог трогать нельзя
         private bool downloaded = false;     // скачан ли пакет
         private string? remoteVersion;
         private string stripPrefix = string.Empty; // корневая папка внутри пакета (обычно пусто)
@@ -58,6 +87,16 @@ namespace ChillHub {
             this.InitializeComponent();
             TryCleanupTempSelfUpdateDirs();
             TryCleanupInstalledUpdaterArtifacts();
+
+            // A14. Второй заход при закрытии окна: к этому моменту каталоги, которые
+            // в конструкторе были заняты (лог апдейтера, дочитывавшийся при старте),
+            // обычно уже свободны. Пропускаем только случай «мы сами запустили
+            // апдейтер» — там временный каталог нужен работающему процессу.
+            this.Closed += (_, _) => {
+                if (!this.updaterStarted) {
+                    TryCleanupTempSelfUpdateDirs();
+                }
+            };
 
             // In DEBUG builds, pre-check the DEV skip checkbox by default
             // so developers can easily bypass self-update if they choose.
@@ -153,6 +192,27 @@ namespace ChillHub {
                     var asm = Assembly.GetExecutingAssembly();
                     var v = asm?.GetName()?.Version;
                     local = v != null ? $"{v.Major}.{v.Minor}.{v.Build}" : string.Empty;
+                }
+
+                // A6. Версия с сервера — недоверенные данные: она станет частью пути,
+                // URL и аргументов внешнего процесса. Всё, что не похоже на версию,
+                // отбрасываем целиком, а не «чистим».
+                if (!string.IsNullOrWhiteSpace(remote) && !IsValidVersion(remote)) {
+                    this.StatusText.Text =
+                        "Сервер сообщил недопустимый номер версии — обновление заблокировано.\n" +
+                        "Обратитесь в поддержку.";
+                    this.Progress.IsIndeterminate = false;
+                    this.Progress.Value = 0;
+                    this.PrimaryBtn.Content = "Продолжить";
+                    this.updateRequired = false;
+                    this.PrimaryBtn.IsEnabled = true;
+                    try {
+                        Core.Logging.Logger.Error(new InvalidOperationException($"Rejected remote version from latest.json: '{remote}'"), "UpdateWindow.VersionValidation");
+                    }
+                    catch {
+                    }
+
+                    return;
                 }
 
                 if (string.IsNullOrWhiteSpace(remote) || string.IsNullOrWhiteSpace(local)) {
@@ -251,6 +311,64 @@ namespace ChillHub {
                 catch {
                 }
             }
+            finally {
+                this.ShowPreviousUpdateOutcome();
+            }
+        }
+
+        /// <summary>
+        /// A12. Показывает исход ПРОШЛОГО запуска апдейтера.
+        /// <para>
+        /// Апдейтер возвращает 2 («скопировалось не всё») и 3 («фатально»), но читать
+        /// эти коды некому: лаунчер к тому моменту уже завершился, а сам апдейтер
+        /// умирает последним. Поэтому исход он пишет в файл состояния рядом с маркером
+        /// версии, а лаунчер при следующем старте показывает его один раз — иначе
+        /// неудавшееся обновление выглядит как «ничего не произошло», и пользователь
+        /// снова жмёт «Обновить», не понимая, почему предыдущий раз не сработал.
+        /// </para>
+        /// </summary>
+        private void ShowPreviousUpdateOutcome() {
+            try {
+                var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                var status = UpdateStatus.TryRead(baseDir);
+                if (status == null) {
+                    return;
+                }
+
+                // Показываем один раз: файл перезапишет следующий запуск апдейтера.
+                UpdateStatus.Clear(baseDir);
+
+                if (status.IsSuccess) {
+                    try {
+                        Core.Logging.Logger.Info($"Previous self-update: ok, version={status.Version}");
+                    }
+                    catch {
+                    }
+
+                    return;
+                }
+
+                try {
+                    Core.Logging.Logger.Error(
+                        new InvalidOperationException($"Previous self-update failed: outcome={status.Outcome} exit={status.ExitCode} message={status.Message} log={status.LogPath}"),
+                        "UpdateWindow.PreviousUpdateOutcome");
+                }
+                catch {
+                }
+
+                var danger = (Brush)(this.TryFindResource("Brush.Danger") ?? new SolidColorBrush(Color.FromRgb(0xD3, 0x2F, 0x2F)));
+                var text = "Предыдущее обновление не было применено: " +
+                    (string.IsNullOrWhiteSpace(status.Message) ? status.Outcome : status.Message);
+                if (!string.IsNullOrWhiteSpace(status.LogPath)) {
+                    text += $"\nЖурнал: {status.LogPath}";
+                }
+
+                this.StatusText.Inlines.Add(new LineBreak());
+                this.StatusText.Inlines.Add(new Run(text) { Foreground = danger });
+            }
+            catch {
+                // Диагностика не должна мешать запуску.
+            }
         }
 
         /// <summary>
@@ -266,7 +384,16 @@ namespace ChillHub {
             var attempts = GetUpdateAttempts(remote);
             if (attempts >= MaxSameVersionAttempts) {
                 // Обновление на одну и ту же версию применяется по кругу — дальше не пускаем.
+                //
+                // A4. Но и тупик здесь недопустим. К этому моменту установка уже в
+                // смешанном состоянии, а счётчик сбрасывался ТОЛЬКО при remote == local,
+                // то есть ровно в том случае, до которого зацикленный лаунчер и не
+                // доходит: обновление запрещалось навсегда, и единственным выходом
+                // оставалась переустановка вслепую. Даём конкретное действие —
+                // проверку целостности: если файлы на самом деле в порядке, счётчик
+                // сбрасывается и лаунчер продолжает работу.
                 this.updateRequired = false;
+                this.loopBlocked = true;
                 this.remoteVersion = remote;
                 this.Progress.IsIndeterminate = false;
                 this.Progress.Value = 0;
@@ -276,8 +403,10 @@ namespace ChillHub {
                     "Чтобы не зацикливаться, автообновление остановлено.\n" +
                     $"Журнал: {System.IO.Path.Combine(logDir, "apply-update.log")}\n" +
                     $"Счётчик попыток: {AttemptsFilePath}\n" +
-                    "Переустановите лаунчер вручную или обратитесь в поддержку.";
-                this.PrimaryBtn.Content = "Продолжить";
+                    "Нажмите «Проверить целостность»: файлы будут сверены с манифестом версии " +
+                    $"{remote}. Если расхождений нет, счётчик сбросится и лаунчер продолжит работу; " +
+                    "если есть — вы увидите список файлов, и лаунчер всё равно можно будет запустить.";
+                this.PrimaryBtn.Content = "Проверить целостность";
                 try {
                     Core.Logging.Logger.Error(new InvalidOperationException($"Self-update loop detected: {local} -> {remote}, attempts={attempts}"), "UpdateWindow.LoopGuard");
                 }
@@ -318,6 +447,14 @@ namespace ChillHub {
             }
 
             return candidate ?? string.Empty;
+        }
+
+        /// <summary>A6. Проверяет, что строка версии безопасна для пути, URL и аргументов.</summary>
+        /// <param name="version">Версия из latest.json.</param>
+        /// <returns>true, если версия допустима.</returns>
+        private static bool IsValidVersion(string? version) {
+            var v = (version ?? string.Empty).Trim();
+            return v.Length > 0 && v.Length <= 64 && VersionPattern.IsMatch(v);
         }
 
         /// <summary>Переводит путь из манифеста в путь относительно папки установки.</summary>
@@ -477,23 +614,66 @@ namespace ChillHub {
         /// </summary>
         /// <param name="manifest">Манифест целевой версии (пустой манифест маркер не обновляет).</param>
         private void MarkAlreadyUpToDate(Manifest manifest) {
-            if (manifest.Files.Count > 0 && !string.IsNullOrWhiteSpace(this.remoteVersion)) {
-                try {
-                    var marker = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launcher.version");
-                    System.IO.File.WriteAllText(marker, this.remoteVersion!.Trim(), Utf8NoBom);
-                }
-                catch {
-                }
-            }
-
-            ResetUpdateAttempts();
             this.updateRequired = false;
             this.downloaded = false;
             this.Progress.IsIndeterminate = false;
             this.Progress.Value = 100;
-            this.StatusText.Text = "Файлы лаунчера уже соответствуют новой версии — обновление не требуется.";
             this.PrimaryBtn.Content = "Продолжить";
             this.PrimaryBtn.IsEnabled = true;
+
+            // A8. Раньше ошибка записи маркера просто проглатывалась, а ResetUpdateAttempts()
+            // вызывался всё равно. Итог: маркер по-прежнему показывает старую версию, диалог
+            // обновления всплывает при КАЖДОМ запуске, а счётчик попыток обнулён — то есть
+            // защита от петли, которая обязана была её остановить, обезврежена этим же кодом.
+            // Теперь неудача — это неудача: счётчик не сбрасываем, попытку засчитываем
+            // (после MaxSameVersionAttempts сработает loop guard и предложит выход),
+            // и пользователь видит причину, а не молчаливо зацикленный диалог.
+            if (manifest.Files.Count > 0 && !string.IsNullOrWhiteSpace(this.remoteVersion)) {
+                if (!TryWriteVersionMarker(this.remoteVersion!, out var error)) {
+                    RegisterUpdateAttempt(this.remoteVersion!);
+                    this.StatusText.Text =
+                        "Файлы лаунчера уже соответствуют новой версии, но записать отметку о версии не удалось:\n" +
+                        $"{error}\n" +
+                        $"Файл: {System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launcher.version")}\n" +
+                        "Пока это не исправлено, окно обновления будет появляться при каждом запуске.";
+                    return;
+                }
+            }
+
+            ResetUpdateAttempts();
+            this.StatusText.Text = "Файлы лаунчера уже соответствуют новой версии — обновление не требуется.";
+        }
+
+        /// <summary>
+        /// A7. Пишет маркер версии АТОМАРНО.
+        /// <para>
+        /// File.WriteAllText — это truncate + write: между ними файл существует и он
+        /// пустой. Обрыв ровно в этот момент оставляет пустой launcher.version, а
+        /// пустой маркер лаунчер читает как «версия неизвестна» — и обновление после
+        /// этого не предлагается уже НИКОГДА. Поэтому содержимое сначала целиком
+        /// ложится во временный файл рядом и лишь потом подменяет маркер.
+        /// </para>
+        /// </summary>
+        /// <param name="version">Версия для записи.</param>
+        /// <param name="error">Текст ошибки, если запись не удалась.</param>
+        /// <returns>true, если маркер записан.</returns>
+        private static bool TryWriteVersionMarker(string version, out string error) {
+            error = string.Empty;
+            try {
+                var marker = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launcher.version");
+                AtomicFile.WriteAllText(marker, (version ?? string.Empty).Trim(), Utf8NoBom);
+                return true;
+            }
+            catch (Exception ex) {
+                error = ex.Message;
+                try {
+                    Core.Logging.Logger.Error(ex, "UpdateWindow.WriteVersionMarker");
+                }
+                catch {
+                }
+
+                return false;
+            }
         }
 
         private void ExitBtn_Click(object sender, RoutedEventArgs e) {
@@ -576,6 +756,13 @@ namespace ChillHub {
                 var dirs = new System.Collections.Generic.List<System.IO.DirectoryInfo>();
                 foreach (var p in System.IO.Directory.EnumerateDirectories(root)) {
                     try {
+                        // A14. Хвосты прошлых уборок: каталог, который не удалялся из-за
+                        // залоченного файла, отправлялся в *.trash-* и добивается здесь.
+                        if (System.IO.Path.GetFileName(p).Contains(TrashSuffix, StringComparison.OrdinalIgnoreCase)) {
+                            TryDeleteDirectoryBestEffort(p);
+                            continue;
+                        }
+
                         dirs.Add(new System.IO.DirectoryInfo(p));
                     }
                     catch {
@@ -587,7 +774,11 @@ namespace ChillHub {
 
                 for (var i = 0; i < dirs.Count; i++) {
                     var dir = dirs[i].FullName;
-                    if (i < KeepTempSessionDirs) {
+
+                    // A14. «Свежесть» по позиции в списке недостаточна: если обновлений
+                    // давно не было, два каталога-ветерана хранились бы вечно.
+                    var stale = DirStamp(dirs[i]) < DateTime.UtcNow.AddDays(-StaleSessionDays);
+                    if (i < KeepTempSessionDirs && !stale) {
                         // Свежие сессии целиком не сносим, но копию апдейтера из них выносим:
                         // старая раскладка (updater прямо в папке версии) и новая (work\updater).
                         TryDeleteDirectoryBestEffort(System.IO.Path.Combine(dir, PreserveMatcher.UpdaterArtifactDir));
@@ -633,6 +824,7 @@ namespace ChillHub {
 
                 // Не вышло с первого раза: снимаем read-only и выносим файлы поштучно,
                 // чтобы освободить место даже если один файл кем-то занят.
+                var locked = new System.Collections.Generic.List<string>();
                 try {
                     foreach (var f in System.IO.Directory.EnumerateFiles(path, "*", System.IO.SearchOption.AllDirectories)) {
                         try {
@@ -644,6 +836,7 @@ namespace ChillHub {
                             System.IO.File.Delete(f);
                         }
                         catch {
+                            locked.Add(f);
                         }
                     }
                 }
@@ -652,12 +845,57 @@ namespace ChillHub {
 
                 try {
                     System.IO.Directory.Delete(path, true);
+                    return;
+                }
+                catch {
+                }
+
+                // A14. Каталог всё ещё занят. Раньше на этом уборка заканчивалась, и
+                // залоченный каталог оставался в %TEMP% НАВСЕГДА: имя занято, при
+                // следующем обновлении той же версии сессия создавалась поверх чужих
+                // остатков. Уводим его в сторону (переименование работает даже с
+                // открытыми внутри файлами) — имя освобождается сразу, а добьём при
+                // следующем запуске, когда владелец отпустит файлы.
+                try {
+                    var trash = path + TrashSuffix + Guid.NewGuid().ToString("N").Substring(0, 8);
+                    System.IO.Directory.Move(path, trash);
+                    path = trash;
+                    try {
+                        System.IO.Directory.Delete(path, true);
+                        return;
+                    }
+                    catch {
+                    }
+                }
+                catch {
+                }
+
+                // Последний рубеж: просим систему удалить остатки при перезагрузке.
+                // Работает не всегда (нужны права на HKLM), поэтому именно последний.
+                foreach (var f in locked) {
+                    try {
+                        NativeMethods.MoveFileEx(f, null, NativeMethods.MOVEFILE_DELAY_UNTIL_REBOOT);
+                    }
+                    catch {
+                    }
+                }
+
+                try {
+                    Core.Logging.Logger.Warn($"SelfUpdate temp cleanup: каталог занят и оставлен до следующего запуска: {path}");
                 }
                 catch {
                 }
             }
             catch {
             }
+        }
+
+        private static class NativeMethods {
+            internal const int MOVEFILE_DELAY_UNTIL_REBOOT = 0x00000004;
+
+            [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+            [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+            internal static extern bool MoveFileEx(string lpExistingFileName, string? lpNewFileName, int dwFlags);
         }
 
         /// <summary>
@@ -691,7 +929,121 @@ namespace ChillHub {
             }
         }
 
+        /// <summary>
+        /// A4. Выход из состояния «автообновление остановлено защитой от петли».
+        /// <para>
+        /// Сверяет установку с манифестом целевой версии. Совпало всё — установка
+        /// исправна, значит петля была ложной (например, обновление уже применилось,
+        /// а маркер не записался): пишем маркер и сбрасываем счётчик. Не совпало —
+        /// счётчик НЕ трогаем (защита обязана остаться), но показываем конкретные
+        /// файлы и разблокируем кнопку «Продолжить», чтобы пользователь не оставался
+        /// заперт в диалоге обновления.
+        /// </para>
+        /// </summary>
+        private async Task VerifyIntegrityAndUnblockAsync() {
+            var remote = this.remoteVersion;
+            if (string.IsNullOrWhiteSpace(remote) || !IsValidVersion(remote)) {
+                this.loopBlocked = false;
+                this.updateRequired = false;
+                this.PrimaryBtn.Content = "Продолжить";
+                this.PrimaryBtn.IsEnabled = true;
+                return;
+            }
+
+            this.PrimaryBtn.IsEnabled = false;
+            this.Progress.IsIndeterminate = true;
+            this.StatusText.Text = $"Проверка целостности установки по манифесту {remote}...";
+            try {
+                var manifest = await this.sync.GetManifestAsync(
+                    $"{this.BaseApi}/manifests/launcher/{remote}.json", System.Threading.CancellationToken.None);
+                this.stripPrefix = ComputeStripPrefix(manifest);
+
+                var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                var bad = new System.Collections.Generic.List<string>();
+                foreach (var f in manifest.Files) {
+                    var rel = (f.Path ?? string.Empty).Replace('\\', '/').Trim('/');
+                    if (rel.Length == 0 || Preserve.ShouldPreserve(rel) || PreserveMatcher.IsUpdaterArtifact(rel)) {
+                        continue;
+                    }
+
+                    if (!this.LocalFileMatches(baseDir, f, out var reason)) {
+                        bad.Add($"{rel} — {reason}");
+                    }
+                }
+
+                this.Progress.IsIndeterminate = false;
+                if (bad.Count == 0) {
+                    if (!TryWriteVersionMarker(remote!, out var markerError)) {
+                        this.StatusText.Text =
+                            "Файлы установки соответствуют новой версии, но записать отметку о версии не удалось:\n" +
+                            $"{markerError}\n" +
+                            "Счётчик попыток не сброшен. Проверьте права на папку установки.";
+                        this.PrimaryBtn.Content = "Продолжить";
+                        this.loopBlocked = false;
+                        this.updateRequired = false;
+                        this.PrimaryBtn.IsEnabled = true;
+                        return;
+                    }
+
+                    ResetUpdateAttempts();
+                    this.loopBlocked = false;
+                    this.SetUpToDate();
+                    this.PrimaryBtn.IsEnabled = true;
+                    try {
+                        Core.Logging.Logger.Info($"Loop guard released: integrity ok for {remote}, attempts reset");
+                    }
+                    catch {
+                    }
+
+                    return;
+                }
+
+                // Расхождения есть — счётчик оставляем как есть, но выпускаем пользователя.
+                this.Progress.Value = 0;
+                this.StatusText.Text =
+                    $"Проверка целостности не пройдена: расхождений {bad.Count}.\n" +
+                    string.Join("\n", bad.Take(5)) +
+                    (bad.Count > 5 ? $"\n... и ещё {bad.Count - 5}" : string.Empty) + "\n" +
+                    "Счётчик попыток не сброшен — автообновление остаётся остановленным.\n" +
+                    "Переустановите лаунчер вручную или обратитесь в поддержку. Запустить лаунчер можно кнопкой ниже.";
+                this.loopBlocked = false;
+                this.updateRequired = false;
+                this.PrimaryBtn.Content = "Продолжить";
+                this.PrimaryBtn.IsEnabled = true;
+                try {
+                    Core.Logging.Logger.Error(
+                        new InvalidOperationException($"Loop guard integrity check failed for {remote}: {string.Join("; ", bad.Take(20))}"),
+                        "UpdateWindow.LoopGuardIntegrity");
+                }
+                catch {
+                }
+            }
+            catch (Exception ex) {
+                this.Progress.IsIndeterminate = false;
+                this.StatusText.Text =
+                    $"Не удалось проверить целостность: {ex.Message}\n" +
+                    "Счётчик попыток не сброшен. Попробуйте позже или переустановите лаунчер вручную.";
+                this.PrimaryBtn.Content = "Продолжить";
+                this.loopBlocked = false;
+                this.updateRequired = false;
+                this.PrimaryBtn.IsEnabled = true;
+                try {
+                    Core.Logging.Logger.Error(ex, "UpdateWindow.LoopGuardIntegrity");
+                }
+                catch {
+                }
+            }
+        }
+
         private async void PrimaryBtn_Click(object sender, RoutedEventArgs e) {
+            // A4. В состоянии «остановлено защитой от петли» кнопка означает
+            // «проверить целостность», а не «обновить»: это единственный выход,
+            // не требующий переустановки вслепую.
+            if (this.loopBlocked) {
+                await this.VerifyIntegrityAndUnblockAsync();
+                return;
+            }
+
             // DEV-скип: только в Debug и только если панель видима; в Release невозможно
 #if DEBUG
             var devSkip = this.DevPanel.Visibility == Visibility.Visible && this.DevSkipCheck.IsChecked == true;
@@ -716,6 +1068,15 @@ namespace ChillHub {
             // Если пакет не скачан — качаем
             if (!this.downloaded) {
                 if (string.IsNullOrWhiteSpace(this.remoteVersion)) {
+                    return;
+                }
+
+                // A6. Повторная проверка перед использованием: версия попадает в путь
+                // временного каталога и в URL, а между проверкой в Window_Loaded и этим
+                // местом поле могло быть переприсвоено.
+                if (!IsValidVersion(this.remoteVersion)) {
+                    this.StatusText.Text = "Недопустимый номер версии — обновление отменено.";
+                    this.PrimaryBtn.IsEnabled = false;
                     return;
                 }
 
@@ -933,27 +1294,61 @@ namespace ChillHub {
                 }
                 catch {
                 }
+
+                // A10. Проверяется ВЕСЬ комплект апдейтера, а не только .exe.
+                // Апдейтер — обычное framework-dependent приложение: без .dll и
+                // .runtimeconfig.json его apphost падает мгновенно. Раньше проверялось
+                // наличие одного YourLauncher.Updater.exe — если остальное не скопировалось
+                // (антивирус, нет места, залоченный файл), лаунчер всё равно делал Shutdown,
+                // апдейтер тут же умирал, и пользователь оставался вообще без приложения.
+                var updaterPath = System.IO.Path.Combine(tempUpdaterDir, "YourLauncher.Updater.exe");
+                var missing = new System.Collections.Generic.List<string>();
                 try {
-                    foreach (var f in System.IO.Directory.EnumerateFiles(targetDir, "YourLauncher.Updater*", System.IO.SearchOption.TopDirectoryOnly)) {
+                    var sources = System.IO.Directory.EnumerateFiles(targetDir, "YourLauncher.Updater*", System.IO.SearchOption.TopDirectoryOnly).ToList();
+                    if (sources.Count == 0) {
+                        missing.Add("YourLauncher.Updater.* (в папке установки нет ни одного файла модуля обновления)");
+                    }
+
+                    foreach (var f in sources) {
+                        var name = System.IO.Path.GetFileName(f);
+                        var dstF = System.IO.Path.Combine(tempUpdaterDir, name);
                         try {
-                            var dstF = System.IO.Path.Combine(tempUpdaterDir, System.IO.Path.GetFileName(f));
                             System.IO.File.Copy(f, dstF, true);
+
+                            // Копия обязана совпадать по размеру: усечённая копия — это
+                            // тот же мгновенный крах, только без внятного сообщения.
+                            var srcLen = new System.IO.FileInfo(f).Length;
+                            var dstLen = new System.IO.FileInfo(dstF).Length;
+                            if (srcLen != dstLen) {
+                                missing.Add($"{name} (скопировано {dstLen} из {srcLen} байт)");
+                            }
                         }
-                        catch {
+                        catch (Exception ex) {
+                            missing.Add($"{name} ({ex.Message})");
                         }
                     }
                 }
-                catch {
+                catch (Exception ex) {
+                    missing.Add($"перечисление файлов модуля обновления: {ex.Message}");
                 }
 
-                // Invoke native updater executable from TEMP (not locked in DST)
-                var updaterPath = System.IO.Path.Combine(tempUpdaterDir, "YourLauncher.Updater.exe");
                 if (!System.IO.File.Exists(updaterPath)) {
-                    // A8. Без апдейтера гасить приложение нельзя — пользователь просто потеряет лаунчер.
-                    this.StatusText.Text = $"Не найден модуль обновления: {updaterPath}\nОбновление не применено. Переустановите лаунчер вручную.";
+                    missing.Add("YourLauncher.Updater.exe");
+                }
+
+                if (missing.Count > 0) {
+                    // A8. Без полного комплекта апдейтера гасить приложение нельзя —
+                    // пользователь просто потеряет лаунчер.
+                    this.StatusText.Text =
+                        "Модуль обновления подготовлен не полностью, обновление не применено:\n" +
+                        string.Join("\n", missing.Take(5)) + "\n" +
+                        $"Каталог: {tempUpdaterDir}\n" +
+                        "Попробуйте ещё раз или переустановите лаунчер вручную.";
                     this.PrimaryBtn.IsEnabled = true;
                     try {
-                        Core.Logging.Logger.Error(new FileNotFoundException("Updater not found", updaterPath), "UpdateWindow.ApplyUpdate");
+                        Core.Logging.Logger.Error(
+                            new FileNotFoundException("Updater payload incomplete: " + string.Join("; ", missing), updaterPath),
+                            "UpdateWindow.ApplyUpdate");
                     }
                     catch {
                     }
@@ -961,44 +1356,94 @@ namespace ChillHub {
                     return;
                 }
 
-                var args = new System.Text.StringBuilder();
-                void A(string s) {
-                    if (args.Length > 0) {
-                        args.Append(' ');
+                // A9. Исходные аргументы командной строки лаунчера — в файл (по строке
+                // на аргумент). Раньше они просто терялись: апдейтер поднимал лаунчер
+                // «голым», и запуск с параметром (например, автозапуск игры) молча
+                // превращался в обычный старт. Файл вместо строки — чтобы ничего не
+                // экранировать и не разбирать заново.
+                var exeArgsPath = System.IO.Path.Combine(selfUpdateDir, "exeargs.txt");
+                try {
+                    var original = Environment.GetCommandLineArgs();
+                    var carry = new System.Collections.Generic.List<string>();
+                    for (var i = 1; i < original.Length; i++) {
+                        var a = original[i] ?? string.Empty;
+
+                        // Перевод строки в аргументе разрушил бы построчный формат.
+                        if (a.Contains('\n') || a.Contains('\r')) {
+                            continue;
+                        }
+
+                        carry.Add(a);
                     }
-                    args.Append(s);
-                }
-                string Q(string p) => "\"" + p.Replace("\"", "\\\"") + "\"";
-                A("--src " + Q(this.pendingTempRoot!));
-                A("--dst " + Q(targetDir));
-                A("--exe " + Q(currentExe));
-                A("--parent " + pid.ToString());
-                A("--log " + Q(logPath));
-                A("--files " + Q(System.IO.Path.Combine(selfUpdateDir, "filelist.txt")));
-                A("--dirs " + Q(System.IO.Path.Combine(selfUpdateDir, "emptydirs.txt")));
-                A("--del " + Q(System.IO.Path.Combine(selfUpdateDir, "deletelist.txt")));
-                if (!string.IsNullOrWhiteSpace(this.remoteVersion)) {
-                    A("--version " + Q(this.remoteVersion!));
-                }
 
-                // A10. Strip-prefix считаем на стороне лаунчера (по манифесту) и запрещаем автодетект,
-                // чтобы обе стороны одинаково понимали пути.
-                A("--auto-strip false");
-                if (this.stripPrefix.Length > 0) {
-                    A("--strip-prefix " + Q(this.stripPrefix));
+                    System.IO.File.WriteAllLines(exeArgsPath, carry, Utf8NoBom);
                 }
-
-                // A2. Preserve-правила берём из общего PreserveMatcher, а не из строкового литерала.
-                A("--preserve " + Q(PreserveMatcher.DefaultRulesArg));
+                catch {
+                    exeArgsPath = string.Empty;
+                }
 
                 var psi = new System.Diagnostics.ProcessStartInfo {
                     FileName = updaterPath,
-                    Arguments = args.ToString(),
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     WorkingDirectory = tempUpdaterDir,
                     WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
                 };
+
+                // A6. ArgumentList вместо ручной сборки строки. Прежний Q() экранировал
+                // только кавычку и не удваивал бэкслеши, поэтому путь, заканчивающийся
+                // на '\' (а каталог установки — ровно такой случай), съедал закрывающую
+                // кавычку и склеивал соседние аргументы. ArgumentList делает это по
+                // правилам Windows и не требует от нас ничего угадывать.
+                void A(string key, string value) {
+                    psi.ArgumentList.Add(key);
+                    psi.ArgumentList.Add(value);
+                }
+
+                A("--src", this.pendingTempRoot!);
+                A("--dst", targetDir);
+                A("--exe", currentExe);
+                A("--parent", pid.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                A("--log", logPath);
+                A("--files", System.IO.Path.Combine(selfUpdateDir, "filelist.txt"));
+                A("--dirs", System.IO.Path.Combine(selfUpdateDir, "emptydirs.txt"));
+                A("--del", System.IO.Path.Combine(selfUpdateDir, "deletelist.txt"));
+                if (!string.IsNullOrWhiteSpace(exeArgsPath)) {
+                    A("--exe-args-file", exeArgsPath);
+                }
+
+                if (!string.IsNullOrWhiteSpace(this.remoteVersion)) {
+                    A("--version", this.remoteVersion!);
+                }
+
+                // A10. Strip-prefix считаем на стороне лаунчера (по манифесту) и запрещаем автодетект,
+                // чтобы обе стороны одинаково понимали пути.
+                A("--auto-strip", "false");
+                if (this.stripPrefix.Length > 0) {
+                    A("--strip-prefix", this.stripPrefix);
+                }
+
+                // A2. Preserve-правила берём из общего PreserveMatcher, а не из строкового литерала.
+                A("--preserve", PreserveMatcher.DefaultRulesArg);
+
+                // A3. Замок на каталог установки держит работающий апдейтер. Если он
+                // занят — обновление уже применяется (второй экземпляр лаунчера, двойной
+                // клик, зависший прошлый прогон). Запускать второй апдейтер в ту же
+                // папку нельзя: два процесса перемешают файлы и бэкапы, и откат любого
+                // из них оставит смесь версий.
+                if (UpdateLock.IsBusy(targetDir)) {
+                    this.StatusText.Text =
+                        "Обновление уже применяется другим процессом.\n" +
+                        "Дождитесь его завершения и запустите лаунчер снова.";
+                    this.PrimaryBtn.IsEnabled = true;
+                    try {
+                        Core.Logging.Logger.Warn($"Self-update skipped: install lock is busy ({targetDir})");
+                    }
+                    catch {
+                    }
+
+                    return;
+                }
 
                 System.Diagnostics.Process? started = null;
                 Exception? startError = null;
@@ -1023,6 +1468,7 @@ namespace ChillHub {
                 }
 
                 // Фиксируем попытку только когда апдейтер реально запущен (A1: защита от петли).
+                this.updaterStarted = true;
                 RegisterUpdateAttempt(this.remoteVersion ?? string.Empty);
 
                 // Завершаем приложение: освобождаем файлы и даём скрипту применить обновление
