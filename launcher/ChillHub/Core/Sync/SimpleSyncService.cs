@@ -269,12 +269,18 @@ namespace ChillHub.Core.Sync {
             Directory.CreateDirectory(stagingRoot);
             Directory.CreateDirectory(plan.LocalRoot);
 
-            // Проверка свободного места на диске под рассчитанный дифф (без запаса)
+            // Проверка свободного места (без запаса) на КАЖДОМ задействованном диске.
+            // Скачиваем в LocalRoot, а применяем в ApplyRoot — при самообновлении это
+            // разные тома (%TEMP% и каталог установки), и проверка только по одному
+            // пропускала случай «в TEMP место есть, а на системном диске нет».
             if (total > 0) {
-                var root = Path.GetPathRoot(Path.GetFullPath(plan.LocalRoot)) ?? plan.LocalRoot;
-                var drive = new DriveInfo(root);
-                if (drive.AvailableFreeSpace < total) {
-                    throw new IOException($"Недостаточно свободного места на диске. Требуется {total} байт, доступно {drive.AvailableFreeSpace} байт.");
+                foreach (var checkedRoot in EnumerateDistinctDrives(plan.LocalRoot, plan.ApplyRoot)) {
+                    var drive = new DriveInfo(checkedRoot);
+                    if (drive.AvailableFreeSpace < total) {
+                        throw new IOException(
+                            $"Недостаточно свободного места на диске {checkedRoot}. " +
+                            $"Требуется {total} байт, доступно {drive.AvailableFreeSpace} байт.");
+                    }
                 }
             }
 
@@ -512,6 +518,35 @@ namespace ChillHub.Core.Sync {
 
             // Финальный сигнал о завершении
             progress.Report(new SyncProgress { Stage = "Completed", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+        }
+
+        /// <summary>
+        /// Корни томов для переданных путей, без повторов и без пустых значений.
+        /// Если оба пути лежат на одном диске (обычный случай для игр), вернётся один корень.
+        /// </summary>
+        /// <param name="paths">Проверяемые каталоги.</param>
+        /// <returns>Уникальные корни дисков.</returns>
+        private static IEnumerable<string> EnumerateDistinctDrives(params string[] paths) {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in paths) {
+                if (string.IsNullOrWhiteSpace(p)) {
+                    continue;
+                }
+
+                string? root;
+                try {
+                    root = Path.GetPathRoot(Path.GetFullPath(p));
+                }
+                catch (Exception ex) {
+                    // Кривой путь не должен ронять обновление: пропустим эту проверку
+                    ChillHub.Core.Logging.Logger.Warn($"EnumerateDistinctDrives('{p}'): {ex.Message}");
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(root) && seen.Add(root)) {
+                    yield return root;
+                }
+            }
         }
 
         private static string CombineUrl(string baseUrl, string relativePath) {

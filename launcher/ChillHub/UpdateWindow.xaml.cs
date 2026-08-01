@@ -423,6 +423,10 @@ namespace ChillHub {
                 GameId = manifest.GameId,
                 Version = manifest.Version,
                 LocalRoot = tempRoot,
+
+                // Качаем в %TEMP%, а применяем в каталог установки — это может быть
+                // другой диск. Без ApplyRoot проверка места смотрела бы только на TEMP.
+                ApplyRoot = baseDir,
             };
 
             foreach (var f in manifest.Files) {
