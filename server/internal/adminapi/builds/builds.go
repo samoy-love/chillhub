@@ -105,9 +105,14 @@ func promoteVersionDir(stageDir, finalDir string) error {
 	return os.Rename(stageDir, finalDir)
 }
 
-// writeManifest stores the manifest for a version and optionally points
-// latest.json at it. Returns the manifest path and the exact bytes written.
+// writeManifest signs the manifest, stores it for a version and optionally
+// points latest.json at it. Returns the manifest path and the exact bytes
+// written.
+//
+// Signing happens here rather than at the call sites so that no publication
+// path can accidentally emit an unsigned manifest.
 func (h *Handlers) writeManifest(m manifest, updateLatest bool) (string, []byte, error) {
+	signManifest(&m)
 	outDir := h.manifestsDir(m.GameID)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", nil, err

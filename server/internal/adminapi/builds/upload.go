@@ -102,7 +102,6 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		Files:     files,
 		EmptyDirs: emptyDirs,
-		Signature: "dev-mock-signature",
 	}
 	_, b, err := h.writeManifest(m, upd)
 	if err != nil {
@@ -300,7 +299,6 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		Files:     files,
 		EmptyDirs: emptyDirs,
-		Signature: "dev-mock-signature",
 	}
 
 	// Everything is extracted and hashed: publish the build in one rename.
