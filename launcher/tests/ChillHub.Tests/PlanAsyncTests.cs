@@ -151,24 +151,23 @@ namespace ChillHub.Tests {
         }
 
         [Fact]
-        public async Task ОбратныеСлешиВМанифестеПриводятсяКПрямым() {
+        public async Task ОбратныеСлешиВМанифестеБольшеНеПринимаются() {
+            // Раньше путь молча нормализовался. Это и было дырой: подписывалась
+            // каноническая форма, а на диск шла исходная — см. ManifestValidationTests.
             using var dir = new TempDir();
-            var path = dir.WriteFile("data/pack.bin", "содержимое");
+            dir.WriteFile("data/pack.bin", "содержимое");
 
-            var mf = PlanTestData.File(@"data\pack.bin", new FileInfo(path).Length, TestHash.Sha256OfFile(path));
-            var plan = await PlanTestData.PlanAsync(PlanTestData.Manifest(mf), dir.Root);
+            var mf = PlanTestData.File(@"data\pack.bin", 10, "aa");
 
-            // Локальный файл найден по нормализованному пути, значит качать нечего,
-            // и он же не считается «лишним».
-            Assert.Empty(plan.Downloads);
-            Assert.Empty(plan.ToDelete);
+            await Assert.ThrowsAsync<ManifestValidationException>(
+                () => PlanTestData.PlanAsync(PlanTestData.Manifest(mf), dir.Root));
         }
 
         [Fact]
         public async Task ПустыеДиректорииИзМанифестаПопадаютВПлан() {
             using var dir = new TempDir();
             var manifest = PlanTestData.Manifest();
-            manifest.EmptyDirs = new List<string> { "/saves", @"logs\crash" };
+            manifest.EmptyDirs = new List<string> { "saves", "logs/crash" };
 
             var plan = await PlanTestData.PlanAsync(manifest, dir.Root);
 

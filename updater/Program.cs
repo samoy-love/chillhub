@@ -137,6 +137,17 @@ internal static class Program
                 }
                 Log($"effective strip-prefix='{strip}'");
 
+                // Пути из списков — данные, а не команды. Апдейтер пишет в папку УСТАНОВКИ
+                // и работает с правами пользователя (а после UAC — и выше), поэтому запись
+                // по пути с ".." или "C:\..." уводит файл куда угодно: в автозагрузку,
+                // в System32, в чужой профиль. Проверяем ВСЕ списки до первой операции
+                // и отказываемся целиком: частично применённое обновление хуже неприменённого.
+                if (!ValidateLists(new[] { files, dirs, del }, strip, Log))
+                {
+                    Log("FATAL: списки содержат небезопасные пути, обновление не применялось");
+                    return ExitFatal;
+                }
+
                 // Preserve rules: единый матчер, общий с лаунчером (ChillHub.Update.PreserveMatcher)
                 var matcher = new PreserveMatcher(preserve);
                 try { Log($"preserve rules: [{string.Join(", ", matcher.Rules)}]"); } catch { }
@@ -257,8 +268,8 @@ internal static class Program
                         if (PreserveMatcher.IsUpdaterArtifact(clean)) { Log($"skip copy updater artifact {clean}"); continue; }
                         var srcRel = clean;
                         var dstRel = string.IsNullOrWhiteSpace(strip) ? clean : clean.StartsWith(strip + "/", StringComparison.OrdinalIgnoreCase) ? clean.Substring(strip.Length + 1) : clean;
-                        var s = Path.Combine(src, srcRel.Replace('/', Path.DirectorySeparatorChar));
-                        var d = Path.Combine(dst, dstRel.Replace('/', Path.DirectorySeparatorChar));
+                        var s = ManifestPath.Combine(src, srcRel);
+                        var d = ManifestPath.Combine(dst, dstRel);
                         if (!File.Exists(s))
                         {
                             Log($"diff src missing {srcRel}");
@@ -329,7 +340,7 @@ internal static class Program
                             continue;
                         }
                         if (ShouldPreserve(clean, "delete")) { continue; }
-                        var delPath = Path.Combine(dst, clean.Replace('/', Path.DirectorySeparatorChar));
+                        var delPath = ManifestPath.Combine(dst, clean);
                         try { if (File.Exists(delPath)) { var fi = new FileInfo(delPath); fi.IsReadOnly = false; File.Delete(delPath); Log($"deleted {clean}"); } } catch (Exception ex) { Log($"delete failed {clean}: {ex.Message}"); }
                     }
                 }
@@ -344,7 +355,7 @@ internal static class Program
                         {
                             continue;
                         }
-                        var p = Path.Combine(dst, clean.Replace('/', Path.DirectorySeparatorChar));
+                        var p = ManifestPath.Combine(dst, clean);
                         try { Directory.CreateDirectory(p); } catch { }
                     }
                 }
@@ -429,8 +440,8 @@ internal static class Program
                         total++;
                         var relSrc = key;
                         var relDst = string.IsNullOrWhiteSpace(strip) ? key : key.StartsWith(strip + "/", StringComparison.OrdinalIgnoreCase) ? key.Substring(strip.Length + 1) : key;
-                        var sp = Path.Combine(src, relSrc.Replace('/', Path.DirectorySeparatorChar));
-                        var dp = Path.Combine(dst, relDst.Replace('/', Path.DirectorySeparatorChar));
+                        var sp = ManifestPath.Combine(src, relSrc);
+                        var dp = ManifestPath.Combine(dst, relDst);
                         var se = File.Exists(sp);
                         var de = File.Exists(dp);
                         if (!se) { missS++; Log($"hash: SRC missing {relSrc}"); continue; }
@@ -494,6 +505,70 @@ internal static class Program
         }
 
         return copyErrors > 0 ? ExitCopyErrors : ExitOk;
+    }
+
+    /// <summary>
+    /// Проверяет, что все пути в переданных списках безопасны.
+    /// <para>
+    /// Проверяется ровно та форма пути, которая потом уходит в Path.Combine
+    /// (после замены слешей и обрезки краевых) — иначе проверка и использование
+    /// смотрели бы на разные строки.
+    /// </para>
+    /// </summary>
+    /// <param name="listPaths">Пути к файлам списков (filelist/emptydirs/deletelist).</param>
+    /// <param name="strip">Префикс корневой папки архива — он тоже подставляется в пути.</param>
+    /// <param name="log">Логгер.</param>
+    /// <returns>true, если всё безопасно.</returns>
+    private static bool ValidateLists(IEnumerable<string?> listPaths, string strip, Action<string> log)
+    {
+        var ok = true;
+
+        if (!string.IsNullOrWhiteSpace(strip))
+        {
+            var reason = ManifestPath.Describe(strip.Replace('\\', '/').Trim('/'));
+            if (reason != null)
+            {
+                log($"REJECT strip-prefix '{strip}': {reason}");
+                ok = false;
+            }
+        }
+
+        foreach (var listPath in listPaths)
+        {
+            if (string.IsNullOrWhiteSpace(listPath) || !File.Exists(listPath))
+            {
+                continue;
+            }
+
+            string[] lines;
+            try
+            {
+                lines = File.ReadAllLines(listPath, Encoding.UTF8);
+            }
+            catch (Exception ex)
+            {
+                log($"REJECT list '{listPath}': не читается ({ex.Message})");
+                return false;
+            }
+
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var clean = (lines[i] ?? string.Empty).Replace('\\', '/').Trim('/');
+                if (string.IsNullOrWhiteSpace(clean))
+                {
+                    continue;
+                }
+
+                var reason = ManifestPath.Describe(clean);
+                if (reason != null)
+                {
+                    log($"REJECT '{listPath}' строка {i + 1}: '{clean}' — {reason}");
+                    ok = false;
+                }
+            }
+        }
+
+        return ok;
     }
 
     /// <summary>
