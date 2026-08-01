@@ -80,6 +80,60 @@ namespace ChillHub.Tests {
             Assert.Equal(ManifestSignatureStatus.Valid, ManifestSignature.Check(Load(), TestPublicKey));
         }
 
+        /// <summary>
+        /// Пути вне BMP сортируются в том же порядке, что и в Go.
+        /// <para>
+        /// Go сравнивает строки побайтово в UTF-8, C# — по кодовым единицам
+        /// UTF-16. На паре U+E000 и U+1F600 эти порядки противоположны: старший
+        /// суррогат эмодзи (0xD83D) меньше 0xE000, а его UTF-8 (0xF0…) больше,
+        /// чем 0xEE…. Пока клиент сортировал через CompareOrdinal, он собирал
+        /// канонические байты в другом порядке и отвергал верную подпись как
+        /// подделку. Вектор ниже выпущен серверным кодом
+        /// (<c>go test ./internal/adminapi/builds -run TestGenerateNonBMPVector</c>).
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void NonBmpPaths_SortLikeGo() {
+            const string json = """
+            {
+              "version": "1.0.0",
+              "buildId": "b-order",
+              "gameId": "chill",
+              "createdAt": "2026-01-01T00:00:00Z",
+              "files": [
+                { "path": "😀.txt", "size": 2, "blake3": "bbbb", "executable": false },
+                { "path": ".txt", "size": 1, "blake3": "aaaa", "executable": false }
+              ],
+              "emptyDirs": [ "😀dir", "dir" ],
+              "signature": "ed25519:lyDZmJHTiPGSD6jdgLrlY4uUPyFXfnX6sTcjugbQquyc5KBGiJ+p/zTg4okDmPUuKkMIMEV+yzhA7MLWz6d2BA=="
+            }
+            """;
+
+            var m = JsonSerializer.Deserialize<Manifest>(json)
+                ?? throw new InvalidOperationException("не удалось разобрать вектор");
+
+            // Расхождение, ради которого всё это: UTF-16 ставит эмодзи первым.
+            // Если этот Assert однажды упадёт, значит .NET изменил семантику
+            // CompareOrdinal — и тогда собственный компаратор можно убирать.
+            Assert.True(
+                string.CompareOrdinal("\U0001F600.txt", ".txt") < 0,
+                "ожидается, что CompareOrdinal (UTF-16) ставит эмодзи ПЕРЕД U+E000");
+
+            // Порядок в канонических байтах: U+E000 раньше эмодзи (как в UTF-8).
+            var canon = Encoding.UTF8.GetString(ManifestSignature.Canonicalize(m));
+            Assert.True(
+                canon.IndexOf("file:.txt", StringComparison.Ordinal)
+                < canon.IndexOf("file:\U0001F600.txt", StringComparison.Ordinal),
+                "файлы должны сортироваться по UTF-8, а не по UTF-16");
+            Assert.True(
+                canon.IndexOf("dir:dir", StringComparison.Ordinal)
+                < canon.IndexOf("dir:\U0001F600dir", StringComparison.Ordinal),
+                "каталоги должны сортироваться по UTF-8, а не по UTF-16");
+
+            // И, главное, подпись сервера сходится.
+            Assert.Equal(ManifestSignatureStatus.Valid, ManifestSignature.Check(m, TestPublicKey));
+        }
+
         [Theory]
         [InlineData("size")]
         [InlineData("hash")]

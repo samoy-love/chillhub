@@ -130,7 +130,7 @@ namespace ChillHub.Core.Sync {
             sb.Append("buildId:").Append(manifest.BuildId ?? string.Empty).Append('\n');
 
             var files = new List<ManifestFile>(manifest.Files ?? new List<ManifestFile>());
-            var rows = new List<(string Path, string Blake3, string Line)>(files.Count);
+            var rows = new List<(byte[] Path, byte[] Blake3, string Line)>(files.Count);
             foreach (var f in files) {
                 if (f is null) {
                     continue;
@@ -150,13 +150,20 @@ namespace ChillHub.Core.Sync {
                     sha256,
                     "\t",
                     f.Executable ? "1" : "0");
-                rows.Add((path, blake3, line));
+                rows.Add((Encoding.UTF8.GetBytes(path), Encoding.UTF8.GetBytes(blake3), line));
             }
 
-            // Ordinal-сортировка обязана совпадать с сортировкой байтовых строк в Go.
+            // Сортировка обязана совпадать с сортировкой в Go, а там строки
+            // сравниваются побайтово в UTF-8. Сравнивать здесь через
+            // string.CompareOrdinal нельзя: оно идёт по кодовым единицам UTF-16,
+            // и на символах вне BMP порядок расходится. Старший суррогат эмодзи
+            // (0xD83D) меньше, чем 0xE000, поэтому в UTF-16 "😀.txt" встаёт перед
+            // ".txt", а в UTF-8 (0xF0… против 0xEE…) — после. Манифест с
+            // таким путём сервер подписал бы в одном порядке, а клиент собрал бы
+            // в другом и отверг бы верную подпись как подделку.
             rows.Sort((a, b) => {
-                int c = string.CompareOrdinal(a.Path, b.Path);
-                return c != 0 ? c : string.CompareOrdinal(a.Blake3, b.Blake3);
+                int c = CompareUtf8(a.Path, b.Path);
+                return c != 0 ? c : CompareUtf8(a.Blake3, b.Blake3);
             });
             sb.Append("files:").Append(rows.Count.ToString(CultureInfo.InvariantCulture)).Append('\n');
             foreach (var r in rows) {
@@ -168,7 +175,8 @@ namespace ChillHub.Core.Sync {
                 dirs.Add(CanonPath(d));
             }
 
-            dirs.Sort(string.CompareOrdinal);
+            // Тот же порядок, что и у файлов: побайтово в UTF-8, как в Go.
+            dirs.Sort((a, b) => CompareUtf8(Encoding.UTF8.GetBytes(a), Encoding.UTF8.GetBytes(b)));
             sb.Append("dirs:").Append(dirs.Count.ToString(CultureInfo.InvariantCulture)).Append('\n');
             foreach (var d in dirs) {
                 sb.Append("dir:").Append(d).Append('\n');
@@ -285,6 +293,24 @@ namespace ChillHub.Core.Sync {
         }
 
         private static string CanonPath(string? p) => ChillHub.Update.ManifestPath.Canonicalize(p);
+
+        /// <summary>
+        /// Лексикографическое сравнение UTF-8 байтов — ровно то, что делает
+        /// оператор <c>&lt;</c> для строк в Go, где и формируется подпись.
+        /// </summary>
+        /// <param name="a">Левая последовательность байтов.</param>
+        /// <param name="b">Правая последовательность байтов.</param>
+        /// <returns>Отрицательное, ноль или положительное число.</returns>
+        private static int CompareUtf8(byte[] a, byte[] b) {
+            int n = Math.Min(a.Length, b.Length);
+            for (int i = 0; i < n; i++) {
+                if (a[i] != b[i]) {
+                    return a[i] < b[i] ? -1 : 1;
+                }
+            }
+
+            return a.Length.CompareTo(b.Length);
+        }
     }
 
     /// <summary>
