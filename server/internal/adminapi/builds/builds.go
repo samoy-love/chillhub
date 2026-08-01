@@ -215,7 +215,7 @@ const LauncherGameID = "launcher"
 //
 // Keep in sync with PreserveMatcher.DefaultRules in updater/UpdatePreserve.cs;
 // the guard test updater/tests/ManifestPreserveCheck enforces the invariant.
-var LauncherStateFiles = []string{"config.json", "launcher.version", "Uninstall.exe"}
+var LauncherStateFiles = []string{"config.json", "launcher.version", "launcher.update-status", "Uninstall.exe"}
 
 // stripLauncherStateFiles drops user-state entries from a launcher manifest.
 // For regular games the names are ordinary content and are left alone.
