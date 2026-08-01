@@ -899,29 +899,44 @@
 
     if(running) rafId = requestAnimationFrame(step);
   }
-  // Respect reduced motion preference: don't start waves animation
-  if(prefersReducedMotion.matches){
-    running = false;
-  } else {
-    step();
+  // Запуск и остановка цикла анимации — только через эту пару функций.
+  // Раньше visibilitychange и IntersectionObserver независимо выполняли
+  // `running = true; requestAnimationFrame(step)`, не проверяя, что цикл уже
+  // идёт: после нескольких переключений вкладки в фоне крутилось несколько
+  // параллельных rAF-циклов на один и тот же canvas — время шло кратно
+  // быстрее, а нагрузка на CPU росла с каждым переключением.
+  // Кроме того, visibilitychange запускал анимацию даже при
+  // prefers-reduced-motion: reduce, хотя на старте она осознанно выключена, —
+  // достаточно было один раз свернуть и развернуть вкладку.
+  let wavesOnScreen = true; // до первого срабатывания IntersectionObserver
+  function wavesShouldRun(){
+    return !prefersReducedMotion.matches && !document.hidden && wavesOnScreen;
   }
+  function startWaves(){
+    if(running) return;             // цикл уже идёт — второй не нужен
+    if(!wavesShouldRun()) return;   // сейчас анимация не должна работать
+    running = true;
+    rafId = requestAnimationFrame(step);
+  }
+  function stopWaves(){
+    running = false;
+    if(rafId){ cancelAnimationFrame(rafId); rafId = 0; }
+  }
+
+  // Respect reduced motion preference: don't start waves animation
+  running = false;
+  startWaves();
 
   // React to changes in reduced motion setting at runtime
   try {
     prefersReducedMotion.addEventListener('change', (e)=>{
-      if(e.matches){
-        running = false;
-        if(rafId) cancelAnimationFrame(rafId);
-      } else {
-        if(!running){ running = true; rafId = requestAnimationFrame(step); }
-      }
+      if(e.matches) stopWaves(); else startWaves();
     }, { passive: true });
   } catch {}
 
   // Pause canvas animation when tab is hidden or when waves are offscreen to save CPU
   document.addEventListener('visibilitychange', ()=>{
-    if(document.hidden){ running = false; if(rafId) cancelAnimationFrame(rafId); }
-    else { running = true; rafId = requestAnimationFrame(step); }
+    if(document.hidden) stopWaves(); else startWaves();
   });
 
   try {
@@ -930,8 +945,8 @@
       const ioWaves = new IntersectionObserver((entries)=>{
         const e = entries[0];
         if(!e) return;
-        if(e.isIntersecting){ if(!running){ running = true; rafId = requestAnimationFrame(step); } }
-        else { running = false; if(rafId) cancelAnimationFrame(rafId); }
+        wavesOnScreen = e.isIntersecting;
+        if(wavesOnScreen) startWaves(); else stopWaves();
       }, { threshold: 0.05 });
       ioWaves.observe(wavesWrap);
     }
