@@ -74,6 +74,13 @@ namespace ChillHub.Core.Sync {
         public async Task<Manifest> GetManifestAsync(string manifestUrl, CancellationToken ct) {
             var manifest = await this.http.GetFromJsonAsync<Manifest>(manifestUrl, ct)
                            ?? throw new InvalidDataException("manifest is null");
+
+            // Подпись проверяем ДО того, как что-либо качать и применять: манифест
+            // задаёт список файлов и их хеши, значит именно он определяет, какие
+            // исполняемые файлы окажутся на диске. Проверка здесь, в единственной
+            // точке загрузки манифеста, закрывает и синхронизацию игр, и
+            // самообновление лаунчера.
+            ManifestSignature.Enforce(manifest, manifestUrl);
             return manifest;
         }
 
