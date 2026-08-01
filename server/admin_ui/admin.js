@@ -1430,6 +1430,30 @@ document.addEventListener('DOMContentLoaded', function(){
   }); }
 });
 
+// Показывает динамически собранный модальный диалог.
+// Раньше каждый такой диалог делал `document.body.appendChild(el)` и сразу
+// `window.bootstrap ? new Modal(el) : null`. Если bootstrap не загрузился
+// (CDN недоступен, блокировщик, обрыв сети), элемент оставался висеть в body
+// навсегда — утечка DOM, растущая с каждым вызовом, — а пользователь просто
+// не видел диалога и не понимал, почему кнопка «не работает».
+// Возвращает экземпляр Modal либо null, если показать диалог нельзя.
+function openDynamicModal(el, onDispose){
+  const dispose = ()=>{
+    try{ el.remove(); }catch{ /* уже удалён */ }
+    try{ if(onDispose) onDispose(); }catch{ /* no-op */ }
+  };
+  if(!window.bootstrap || !window.bootstrap.Modal){
+    dispose();
+    alert('Диалог не открылся: не загрузилась библиотека Bootstrap (CDN недоступен?). Обновите страницу.');
+    return null;
+  }
+  document.body.appendChild(el);
+  el.addEventListener('hidden.bs.modal', dispose, { once: true });
+  const modal = new window.bootstrap.Modal(el);
+  modal.show();
+  return modal;
+}
+
 async function openExePicker(gameId, targetInput){
   try{
     let res = await fetch('/admin/list?gameId='+encodeURIComponent(gameId)); if(!res.ok){ notify('HTTP '+res.status); return; }
@@ -1443,10 +1467,9 @@ async function openExePicker(gameId, targetInput){
     const el = document.createElement('div'); el.className='modal fade'; el.tabIndex=-1;
     const list = exeFiles.map(p=> '<li class="list-group-item list-group-item-action" data-p="'+escapeHtml(p)+'"><code>'+escapeHtml(p)+'</code></li>').join('') || '<li class="list-group-item">.exe не найдены</li>';
     el.innerHTML = '\n<div class="modal-dialog"><div class="modal-content">\n  <div class="modal-header"><h5 class="modal-title">Выбор исполняемого файла для '+escapeHtml(gameId)+'</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>\n  <div class="modal-body"><ul class="list-group">'+list+'</ul></div>\n  <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Закрыть</button></div>\n</div></div>';
-    document.body.appendChild(el);
-    const modal = window.bootstrap ? new window.bootstrap.Modal(el) : null; if(modal) modal.show();
-    el.querySelectorAll('li[data-p]').forEach(li=> li.addEventListener('click', ()=>{ const p = li.getAttribute('data-p'); if(p && targetInput){ targetInput.value = p; } if(modal) modal.hide(); }));
-    el.addEventListener('hidden.bs.modal', ()=>{ el.remove(); });
+    const modal = openDynamicModal(el);
+    if(!modal) return;
+    el.querySelectorAll('li[data-p]').forEach(li=> li.addEventListener('click', ()=>{ const p = li.getAttribute('data-p'); if(p && targetInput){ targetInput.value = p; } modal.hide(); }));
   }catch(e){ notify('Ошибка: '+e); }
 }
 
@@ -1497,8 +1520,8 @@ function openUrlUploadDialog(mode){
   const el = document.createElement('div');
   el.className = 'modal fade'; el.tabIndex = -1;
   el.innerHTML = '\n<div class="modal-dialog modal-lg"><div class="modal-content">\n  <div class="modal-header flex-column align-items-stretch">\n    <div class="d-flex w-100 align-items-center justify-content-between">\n      <h5 class="modal-title mb-1">Загрузка по URL</h5>\n      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>\n    </div>\n    <div class="d-flex w-100 align-items-center gap-2">\n      <label class="small text-nowrap">Куда</label>\n      <select id="url_target" class="form-select form-select-sm" style="max-width:200px">\n        <option value="inline">В текст</option>\n        <option value="cover">Обложка</option>\n      </select>\n      <div class="input-group input-group-sm ms-auto" style="max-width:520px">\n        <span class="input-group-text">URL</span>\n        <input id="url_input" class="form-control" placeholder="https://..."/>\n      </div>\n    </div>\n    <div class="d-flex align-items-center gap-2 mt-2">\n      <label class="small text-nowrap">Если имя занято:</label>\n      <select id="url_overwrite" class="form-select form-select-sm" style="max-width:200px">\n        <option value="rename">Переименовать</option>\n        <option value="overwrite">Перезаписать</option>\n      </select>\n    </div>\n  </div>\n  <div class="modal-body">\n    <div class="row g-2">\n      <div class="col-12 col-md-7">\n        <div class="input-group input-group-sm mb-2">\n          <span class="input-group-text">Папка</span><input type="text" class="form-control" id="url_path" placeholder="относительно assets" value="'+escapeHtml(galleryPath||'')+'"/>\n        </div>\n        <div class="input-group input-group-sm">\n          <span class="input-group-text">Имя</span><input type="text" class="form-control" id="url_name" value="image"/>\n        </div>\n      </div>\n    </div>\n  </div>\n  <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button> <button id="url_ok" type="button" class="btn btn-primary">Сохранить</button></div>\n</div></div>';
-  document.body.appendChild(el);
-  const modal = window.bootstrap ? new window.bootstrap.Modal(el) : null; if(modal) modal.show();
+  const modal = openDynamicModal(el);
+  if(!modal) return;
   const sel = el.querySelector('#url_target'); if(sel){ sel.value = (mode==='cover') ? 'cover' : 'inline'; }
   el.querySelector('#url_ok').addEventListener('click', async ()=>{
     const url = (el.querySelector('#url_input').value||'').trim(); if(!url){ alert('Укажите URL'); return; }
@@ -1517,9 +1540,8 @@ function openUrlUploadDialog(mode){
     } else {
       setCoverInMarkdown(j.url); const ta=document.getElementById('ns_md'); autosizeTextArea(ta); updateCoverPreview(); newsPreview(); editorDirty=true; if(ta) ta.dispatchEvent(new Event('input'));
     }
-    if(modal) modal.hide(); setTimeout(()=>{ el.remove(); }, 300);
+    modal.hide(); // узел удалит обработчик hidden.bs.modal в openDynamicModal
   });
-  el.addEventListener('hidden.bs.modal', ()=>{ el.remove(); });
 }
 
 // ===== File-pick dialog (like paste, but lets you choose a local file) =====
@@ -1527,9 +1549,8 @@ function openPickUploadDialog(mode){
   const el = document.createElement('div');
   el.className = 'modal fade'; el.tabIndex = -1;
   el.innerHTML = '\n<div class="modal-dialog modal-xl"><div class="modal-content">\n  <div class="modal-header flex-column align-items-stretch">\n    <div class="d-flex w-100 align-items-center justify-content-between">\n      <h5 class="modal-title mb-1">Загрузка изображения</h5>\n      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>\n    </div>\n    <div class="d-flex w-100 align-items-center gap-2">\n      <label class="small text-nowrap">Куда</label>\n      <select id="pick_target" class="form-select form-select-sm" style="max-width:200px">\n        <option value="inline">В текст</option>\n        <option value="cover">Обложка</option>\n      </select>\n      <div class="ms-auto small">Файл: <input id="pick_file" type="file" accept="image/*" /></div>\n    </div>\n    <div class="d-flex align-items-center gap-2">\n      <label class="small text-nowrap">Если имя занято:</label>\n      <select id="pick_overwrite" class="form-select form-select-sm" style="max-width:200px">\n        <option value="rename">Переименовать</option>\n        <option value="overwrite">Перезаписать</option>\n      </select>\n    </div>\n  </div>\n  <div class="modal-body">\n    <div class="row g-3">\n      <div class="col-lg-6">\n        <div style="position:sticky; top:8px">\n          <div id="pick_prev_wrap" class="border rounded d-flex align-items-center justify-content-center" style="min-height:240px;">\n            <div class="text-body-secondary">Выберите файл</div>\n          </div>\n        </div>\n      </div>\n      <div class="col-lg-6">\n        <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">\n          <nav id="pick_breadcrumbs" class="small text-body-secondary"></nav>\n          <div class="btn-group btn-group-sm">\n            <button id="pick_mkdir" type="button" class="btn btn-outline-success">Новая папка</button>\n          </div>\n        </div>\n        <div class="input-group input-group-sm mb-2">\n          <span class="input-group-text">Папка</span><input type="text" class="form-control" id="pick_path" placeholder="относительно /news/assets" value="'+escapeHtml(galleryPath||'')+'"/>\n        </div>\n        <div class="input-group input-group-sm mb-2">\n          <span class="input-group-text">Имя</span><input type="text" class="form-control" id="pick_name" value="image"/>\n        </div>\n        <div id="pick_grid" class="row g-2"></div>\n      </div>\n    </div>\n  </div>\n  <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button><button type="button" class="btn btn-primary" id="pick_ok" disabled>Загрузить</button></div>\n</div></div>';
-  document.body.appendChild(el);
-  const modal = window.bootstrap ? new window.bootstrap.Modal(el) : null;
-  if(modal) modal.show();
+  const modal = openDynamicModal(el);
+  if(!modal) return;
   // defaults
   const sel = el.querySelector('#pick_target'); if(sel){ sel.value = (mode==='cover') ? 'cover' : 'inline'; }
   const fileInput = el.querySelector('#pick_file');
@@ -1647,9 +1668,8 @@ function openPickUploadDialog(mode){
         setCoverInMarkdown(j.url); const ta = document.getElementById('ns_md'); autosizeTextArea(ta); updateCoverPreview(); newsPreview(); editorDirty=true; if(ta) ta.dispatchEvent(new Event('input'));
       }
     }
-    if(modal) modal.hide(); setTimeout(()=>{ el.remove(); }, 300);
+    modal.hide(); // узел удалит обработчик hidden.bs.modal в openDynamicModal
   });
-  el.addEventListener('hidden.bs.modal', ()=>{ el.remove(); });
 }
 
 // ===== Insert cover image from file (new flow via assets upload) =====
@@ -1687,9 +1707,9 @@ function openPasteUploadDialog(file, mode){
   const el = document.createElement('div');
   el.className = 'modal fade'; el.tabIndex = -1;
   el.innerHTML = '\n<div class="modal-dialog modal-xl"><div class="modal-content">\n  <div class="modal-header flex-column align-items-stretch">\n    <div class="d-flex w-100 align-items-center justify-content-between">\n      <h5 class="modal-title mb-1">Вставка изображения</h5>\n      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>\n    </div>\n    <div class="d-flex w-100 align-items-center gap-2">\n      <label class="small text-nowrap">Куда</label>\n      <select id="paste_target" class="form-select form-select-sm" style="max-width:200px">\n        <option value="inline">В текст</option>\n        <option value="cover">Обложка</option>\n      </select>\n    </div>\n    <div class="d-flex align-items-center gap-2">\n      <label class="small text-nowrap">Если имя занято:</label>\n      <select id="paste_overwrite" class="form-select form-select-sm" style="max-width:200px">\n        <option value="rename">Переименовать</option>\n        <option value="overwrite">Перезаписать</option>\n      </select>\n    </div>\n  </div>\n  <div class="modal-body">\n    <div class="row g-3">\n      <div class="col-lg-6">\n        <div style="position:sticky; top:8px">\n          <img src="'+escapeHtml(url)+'" alt="preview" class="img-fluid border rounded"/>\n        </div>\n      </div>\n      <div class="col-lg-6">\n        <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">\n          <nav id="paste_breadcrumbs" class="small text-body-secondary"></nav>\n          <div class="btn-group btn-group-sm">\n            <button id="paste_mkdir" type="button" class="btn btn-outline-success">Новая папка</button>\n          </div>\n        </div>\n        <div class="input-group input-group-sm mb-2">\n          <span class="input-group-text">Папка</span><input type="text" class="form-control" id="paste_path" placeholder="относительно /news/assets" value="'+escapeHtml(galleryPath||'')+'"/>\n        </div>\n        <div class="input-group input-group-sm mb-2">\n          <span class="input-group-text">Имя</span><input type="text" class="form-control" id="paste_name" value="'+escapeHtml((file.name||'image').replace(/\.[^.]+$/, ''))+'"/>\n        </div>\n        <div id="paste_grid" class="row g-2"></div>\n      </div>\n    </div>\n  </div>\n  <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button><button type="button" class="btn btn-primary" id="paste_ok">Загрузить</button></div>\n</div></div>';
-  document.body.appendChild(el);
-  const modal = window.bootstrap ? new window.bootstrap.Modal(el) : null;
-  if(modal) modal.show();
+  // Blob-ссылку предпросмотра освобождаем в том же месте, где удаляется узел.
+  const modal = openDynamicModal(el, ()=> URL.revokeObjectURL(url));
+  if(!modal){ URL.revokeObjectURL(url); return; }
   // default dropdown based on detected mode
   const sel = el.querySelector('#paste_target'); if(sel){ sel.value = (mode==='cover') ? 'cover' : 'inline'; }
   // mini-gallery state & functions
@@ -1791,9 +1811,8 @@ function openPasteUploadDialog(file, mode){
         setCoverInMarkdown(j.url); const ta = document.getElementById('ns_md'); autosizeTextArea(ta); updateCoverPreview(); newsPreview(); editorDirty=true; if(ta) ta.dispatchEvent(new Event('input'));
       }
     }
-    if(modal) modal.hide(); setTimeout(()=>{ el.remove(); URL.revokeObjectURL(url); }, 300);
+    modal.hide(); // узел удалит и blob освободит обработчик из openDynamicModal
   });
-  el.addEventListener('hidden.bs.modal', ()=>{ el.remove(); URL.revokeObjectURL(url); });
 }
 
 // Общая обёртка для операций над ассетами (переименование/удаление/mkdir).
@@ -2729,8 +2748,13 @@ function openGalleryModal(){
   try{ gallerySetPath(''); galleryFetchAndRender(); }catch(e){}
   const el = document.getElementById('ns_gallery');
   if(!el) return;
-  const modal = window.bootstrap ? new window.bootstrap.Modal(el) : null;
-  if(modal) modal.show();
+  // Галерея живёт в разметке, утечки тут нет, но без bootstrap диалог просто
+  // не открывался бы молча — сообщаем причину.
+  if(!window.bootstrap || !window.bootstrap.Modal){
+    notify('Галерея не открылась: не загрузилась библиотека Bootstrap (CDN недоступен?). Обновите страницу.');
+    return;
+  }
+  new window.bootstrap.Modal(el).show();
 }
 
 let galleryPath = '';
