@@ -85,6 +85,23 @@ func IsSafeVersion(s string) bool {
 	return true
 }
 
+// IsHexID reports whether s is a plain lower/upper-case hex identifier of a
+// plausible length. Both GenID and NewBuildID emit exactly that, so every
+// server-generated id (upload ids, build ids) that comes back from a client and
+// is turned into a path must pass this check before it reaches filepath.Join.
+func IsHexID(s string) bool {
+	if len(s) < 8 || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // IsSafeNewsSlug reports whether s can be used as a news file name.
 // Slugs are produced by the admin UI from the article title and may contain
 // Cyrillic, so unicode letters and digits are allowed alongside [-._]; anything

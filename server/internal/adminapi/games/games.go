@@ -137,6 +137,13 @@ func (h *Handlers) IconUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing gameId", http.StatusBadRequest)
 		return
 	}
+	// Validate BEFORE the id is turned into a path: the EnsureWithin check below
+	// used to run only after os.MkdirAll had already created (or traversed into)
+	// whatever directory the client asked for.
+	if !adminutil.IsSafeGameID(gid) {
+		http.Error(w, "invalid gameId", http.StatusBadRequest)
+		return
+	}
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "missing file: "+err.Error(), http.StatusBadRequest)

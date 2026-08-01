@@ -179,6 +179,10 @@ func (h *Handlers) ListVersions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing gameId", http.StatusBadRequest)
 		return
 	}
+	if !adminutil.IsSafeGameID(gid) {
+		http.Error(w, "invalid gameId", http.StatusBadRequest)
+		return
+	}
 	dir := h.manifestsDir(gid)
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		dir = filepath.Join(h.root, "content", "manifests", gid)
@@ -227,6 +231,10 @@ func (h *Handlers) Activate(w http.ResponseWriter, r *http.Request) {
 	ver := r.URL.Query().Get("version")
 	if gid == "" || ver == "" {
 		http.Error(w, "missing gameId or version", http.StatusBadRequest)
+		return
+	}
+	if !adminutil.IsSafeGameID(gid) || !adminutil.IsSafeVersion(ver) {
+		http.Error(w, "invalid gameId or version", http.StatusBadRequest)
 		return
 	}
 	dir := h.manifestsDir(gid)
