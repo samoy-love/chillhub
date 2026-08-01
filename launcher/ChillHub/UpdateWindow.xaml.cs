@@ -1163,6 +1163,25 @@ namespace ChillHub {
                 // A2. Preserve-правила берём из общего PreserveMatcher, а не из строкового литерала.
                 A("--preserve", PreserveMatcher.DefaultRulesArg);
 
+                // A3. Замок на каталог установки держит работающий апдейтер. Если он
+                // занят — обновление уже применяется (второй экземпляр лаунчера, двойной
+                // клик, зависший прошлый прогон). Запускать второй апдейтер в ту же
+                // папку нельзя: два процесса перемешают файлы и бэкапы, и откат любого
+                // из них оставит смесь версий.
+                if (UpdateLock.IsBusy(targetDir)) {
+                    this.StatusText.Text =
+                        "Обновление уже применяется другим процессом.\n" +
+                        "Дождитесь его завершения и запустите лаунчер снова.";
+                    this.PrimaryBtn.IsEnabled = true;
+                    try {
+                        Core.Logging.Logger.Warn($"Self-update skipped: install lock is busy ({targetDir})");
+                    }
+                    catch {
+                    }
+
+                    return;
+                }
+
                 System.Diagnostics.Process? started = null;
                 Exception? startError = null;
                 try {
