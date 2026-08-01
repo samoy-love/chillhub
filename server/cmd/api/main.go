@@ -7,14 +7,46 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
 	"ChillHub/server/internal/httpx"
+	"ChillHub/server/internal/ratelimit"
 
 	"github.com/gorilla/mux"
 	"go.uber.org/automaxprocs/maxprocs"
 )
+
+// Rate limiting for the public API. The launcher fans out to several endpoints
+// at startup (games, per-game latest, news) and then downloads content from
+// /content/ and /manifests/, so the budget is deliberately generous: it exists
+// to blunt scraping and accidental retry storms, not to pace a normal client.
+//
+// Behind nginx the caller's address arrives in X-Forwarded-For / X-Real-IP,
+// which ratelimit.ClientIP already honours.
+const (
+	apiRateLimitDefault  = 600
+	apiRateWindowDefault = time.Minute
+)
+
+// apiRateLimit reads the budget from API_RATE_LIMIT / API_RATE_WINDOW.
+// A limit of 0 (or a negative value) disables limiting entirely.
+func apiRateLimit() (int, time.Duration) {
+	limit := apiRateLimitDefault
+	if v := strings.TrimSpace(os.Getenv("API_RATE_LIMIT")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	window := apiRateWindowDefault
+	if v := strings.TrimSpace(os.Getenv("API_RATE_WINDOW")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			window = d
+		}
+	}
+	return limit, window
+}
 
 type GameInfo struct {
 	GameID          string `json:"gameId"`
@@ -74,9 +106,13 @@ func main() {
 		}
 	}
 
+	limit, window := apiRateLimit()
+	limiter := ratelimit.New(limit, window)
+
 	r := mux.NewRouter()
 	r.Use(httpx.RequestID())
 	r.Use(httpx.CORS("*"))
+	r.Use(limiter.Middleware)
 	r.Use(httpx.Logging("PUBLIC"))
 	r.HandleFunc("/api/games", handleGames).Methods("GET")
 	r.HandleFunc("/api/games/{gameId}", handleGame).Methods("GET")
@@ -93,6 +129,11 @@ func main() {
 	r.PathPrefix("/assets/").Handler(httpx.NoStore(http.StripPrefix("/assets/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news", "assets"))))))
 
 	addr := ":55700"
+	if limit > 0 {
+		log.Printf("public API rate limit: %d requests per %s per client IP", limit, window)
+	} else {
+		log.Printf("public API rate limit: disabled")
+	}
 	log.Printf("public API listening on %s (contentRoot=%s)", addr, contentRoot)
 	srv := &http.Server{
 		Addr:              addr,

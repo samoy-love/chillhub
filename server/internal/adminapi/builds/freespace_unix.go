@@ -1,12 +1,12 @@
 //go:build !windows
 
-package main
+package builds
 
 import "golang.org/x/sys/unix"
 
 // getFreeSpaceBytesImpl returns available free bytes on the filesystem
 // that contains the given path using Statfs on Unix-like systems.
-func getFreeSpaceBytesImpl(path string) (uint64, error) {
+func freeSpaceBytesImpl(path string) (uint64, error) {
 	var st unix.Statfs_t
 	if err := unix.Statfs(path, &st); err != nil {
 		return 0, nil
@@ -21,7 +21,7 @@ func getFreeSpaceBytesImpl(path string) (uint64, error) {
 }
 
 // getDiskSpaceImpl returns available free bytes and total bytes on the filesystem (Unix)
-func getDiskSpaceImpl(path string) (uint64, uint64, error) {
+func diskSpaceImpl(path string) (uint64, uint64, error) {
 	var st unix.Statfs_t
 	if err := unix.Statfs(path, &st); err != nil {
 		return 0, 0, err
