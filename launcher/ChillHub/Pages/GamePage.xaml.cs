@@ -65,8 +65,11 @@ namespace ChillHub.Pages {
 
             this.Unloaded += this.GamePage_Unloaded;
 
-            // Режим технических работ может включиться и выключиться, пока страница открыта (задача 25)
-            Core.Maintenance.MaintenanceService.Changed += this.OnMaintenanceChanged;
+            // Режим технических работ может включиться и выключиться, пока страница открыта (задача 25).
+            // Подписка нужна на КАЖДЫЙ показ: после возврата из changelog страница снова Loaded,
+            // а отписка уже произошла в Unloaded — иначе режим работ до неё больше не доходит.
+            this.SubscribeMaintenance();
+            this.Loaded += (s, e) => this.SubscribeMaintenance();
 
             _ = this.InitAsync();
         }
@@ -265,8 +268,9 @@ namespace ChillHub.Pages {
                     return;
                 }
 
+                // Переиспользуем единственный HomePage, иначе получим вторую копию страницы
                 var win = Window.GetWindow(this) as ChillHub.MainWindow;
-                win?.ContentFrame.Navigate(new HomePage());
+                win?.NavigateToHome();
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Error(ex, "GamePage.BackBtn_Click");
@@ -406,8 +410,34 @@ namespace ChillHub.Pages {
             }
 
             // Статическое событие переживёт страницу — отписываемся, иначе утечёт ссылка
+            this.UnsubscribeMaintenance();
+        }
+
+        // Подписка на статическое событие живёт ровно столько, сколько страница показана.
+        private bool maintenanceSubscribed;
+
+        private void SubscribeMaintenance() {
+            if (this.maintenanceSubscribed) {
+                return;
+            }
+
+            try {
+                Core.Maintenance.MaintenanceService.Changed += this.OnMaintenanceChanged;
+                this.maintenanceSubscribed = true;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"GamePage: подписка на режим работ не выполнилась: {ex.Message}");
+            }
+        }
+
+        private void UnsubscribeMaintenance() {
+            if (!this.maintenanceSubscribed) {
+                return;
+            }
+
             try {
                 Core.Maintenance.MaintenanceService.Changed -= this.OnMaintenanceChanged;
+                this.maintenanceSubscribed = false;
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Warn($"GamePage.Unloaded: отписка от режима работ: {ex.Message}");
@@ -542,7 +572,11 @@ namespace ChillHub.Pages {
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, token).ConfigureAwait(true);
 
                 this.StatusText.Text = "Сравнение файлов…";
-                var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, token).ConfigureAwait(true);
+
+                // PlanAsync только выглядит асинхронным: внутри полный обход папки игры с пересчётом
+                // хешей, а Task возвращается уже завершённым. С UI-потока это подвешивает окно
+                // на всё время обхода — уводим в пул потоков (как в IntegrityChecker).
+                var plan = await Task.Run(() => this.sync.PlanAsync(manifest, localRoot, contentBase, token), token).ConfigureAwait(true);
                 Core.Logging.Logger.Info($"GamePage plan gid={gid} downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count}");
 
                 // Свободного места может не хватить — предупреждаем до начала закачки

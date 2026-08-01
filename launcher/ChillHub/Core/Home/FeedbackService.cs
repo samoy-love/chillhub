@@ -57,7 +57,9 @@ namespace ChillHub.Core.Home {
                 dict["os"] = Environment.OSVersion.VersionString;
                 dict["arch"] = Environment.Is64BitOperatingSystem ? "x64" : "x86";
                 dict["dotnet"] = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription;
-                dict["machineName"] = Environment.MachineName;
+
+                // machineName убран намеренно: имя компьютера часто содержит имя владельца,
+                // а для разбора обращения оно не нужно.
                 dict["appVersion"] = typeof(FeedbackService).Assembly.GetName().Version?.ToString() ?? string.Empty;
             }
             catch (Exception ex) {
@@ -72,6 +74,28 @@ namespace ChillHub.Core.Home {
         internal void Start() {
             this.LoadQueue();
             this.StartRetryLoop();
+        }
+
+        /// <summary>
+        /// Останавливает фоновый ретрай. Обязательно вызывать, когда владелец сервиса уходит
+        /// с экрана: DispatcherTimer держит ссылку на колбэк и продолжает переписывать
+        /// feedback_queue.json своей (устаревшей) копией очереди.
+        /// </summary>
+        internal void Stop() {
+            try {
+                this.retryTimer?.Stop();
+                this.retryTimer = null;
+            }
+            catch (Exception ex) {
+                Logging.Logger.Warn($"Feedback.Stop: {ex.Message}");
+            }
+        }
+
+        /// <summary>Возобновляет фоновый ретрай, не перечитывая очередь с диска.</summary>
+        internal void Resume() {
+            if (this.retryTimer == null) {
+                this.StartRetryLoop();
+            }
         }
 
         /// <summary>Кладёт сообщение в очередь и сразу пробует её разобрать.</summary>
@@ -89,14 +113,16 @@ namespace ChillHub.Core.Home {
                 var baseApi = this.baseApiProvider().TrimEnd('/');
                 var url = baseApi + "/feedback/submit";
 
-                // Общий персистентный лимит (делится с ErrorReporter): не заваливаем сервер отчётами
-                if (!ErrorReporter.TryConsumeManual(out var retryAfter)) {
-                    if (!silent) {
-                        var mins = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalMinutes));
-                        var text = $"Лимит ручных отправок исчерпан. Повторите через ~{mins} мин.";
-                        this.setStatus(text);
-                        this.showToast(text);
-                    }
+                // Лимит ручных отправок тратит ТОЛЬКО ручная отправка (silent: false).
+                // Раньше его списывал и фоновый ретрай: при лежащем сервере очередь за полминуты
+                // выжигала все 5 попыток, и живой человек получал отказ ровно тогда, когда
+                // обратная связь нужнее всего. Частоту фоновых попыток ограничивают
+                // MaxSentPerFlush и интервал таймера, а не пользовательская квота.
+                if (!silent && !ErrorReporter.TryConsumeManual(out var retryAfter)) {
+                    var mins = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalMinutes));
+                    var text = $"Лимит ручных отправок исчерпан. Повторите через ~{mins} мин.";
+                    this.setStatus(text);
+                    this.showToast(text);
 
                     return false;
                 }

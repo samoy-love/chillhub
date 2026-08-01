@@ -21,6 +21,28 @@ namespace ChillHub.Core {
         /// <summary>Потолок хвоста одного файла лога.</summary>
         private const int LogTailBytes = 48 * 1024;
 
+        /// <summary>
+        /// Глубина обхода папки игр. Для разбора достаточно увидеть, какие игры установлены
+        /// и есть ли у них подпапки: глубина 10 выкладывала наружу всё дерево пользователя
+        /// целиком, а пользы не добавляла.
+        /// </summary>
+        private const int GamesTreeMaxDepth = 2;
+
+        /// <summary>Сколько строк дерева папки игр максимум попадает в бандл.</summary>
+        private const int GamesTreeMaxEntries = 200;
+
+        /// <summary>
+        /// Человекочитаемый перечень того, что уходит в бандл. Показывается пользователю
+        /// в форме обратной связи: молча прикладывать конфиг и пути — нечестно.
+        /// </summary>
+        public static string[] BundleContents => new[] {
+            "настройки лаунчера (config.json): адрес сервера, папка для игр, параметры загрузки",
+            "версия лаунчера, версия Windows и .NET",
+            "список установленных игр (имена папок, без содержимого файлов)",
+            "последние записи журналов лаунчера и обновления",
+            "контрольные суммы файлов самого лаунчера",
+        };
+
         /// <summary>Общий бюджет на все секции логов: чтобы один болтливый файл не съел весь бандл.</summary>
         private sealed class LogBudget {
             public int Remaining { get; set; } = LogsTotalBudgetBytes;
@@ -67,12 +89,12 @@ namespace ChillHub.Core {
                 catch (Exception ex) { sb.AppendLine($"(hash listing error: {ex.Message})"); }
                 sb.AppendLine();
 
-                // Games root folder tree (depth up to 10)
-                sb.AppendLine("## Games Root Listing (folders, depth=10)");
+                // Games root folder tree: короткое дерево, без выкладывания всего диска наружу
+                sb.AppendLine($"## Games Root Listing (folders, depth={GamesTreeMaxDepth})");
                 try {
                     var gamesRoot = ChillHub.Core.ConfigService.Current.GamesPath;
                     hints["gamesRoot"] = gamesRoot;
-                    AppendFolderTree(sb, gamesRoot, maxDepth: 10);
+                    AppendFolderTree(sb, gamesRoot, maxDepth: GamesTreeMaxDepth);
                 }
                 catch (Exception ex) { sb.AppendLine($"(games listing error: {ex.Message})"); }
                 sb.AppendLine();
@@ -139,33 +161,70 @@ namespace ChillHub.Core {
                 catch { }
             }
             catch { }
-            return new DiagnosticsBundle(sb.ToString(), hints);
+
+            // Абсолютные пути тянут за собой имя пользователя Windows. Для разбора отчёта оно
+            // не нужно — заменяем на плейсхолдеры и в тексте бандла, и в подсказках.
+            var redactedHints = new Dictionary<string, string>();
+            foreach (var kv in hints) {
+                redactedHints[kv.Key] = Redact(kv.Value);
+            }
+
+            return new DiagnosticsBundle(Redact(sb.ToString()), redactedHints);
+        }
+
+        /// <summary>
+        /// Убирает из текста имя пользователя Windows: сначала полный путь к профилю,
+        /// затем само имя (оно встречается и в путях вида C:\Users\ivan\...).
+        /// </summary>
+        private static string Redact(string text) {
+            if (string.IsNullOrEmpty(text)) {
+                return text ?? string.Empty;
+            }
+
+            try {
+                var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                if (!string.IsNullOrWhiteSpace(profile)) {
+                    text = text.Replace(profile, "%USERPROFILE%", StringComparison.OrdinalIgnoreCase);
+
+                    // В json конфиг путь попадает с экранированными слешами
+                    text = text.Replace(profile.Replace(@"\", @"\\"), "%USERPROFILE%", StringComparison.OrdinalIgnoreCase);
+                }
+
+                var user = Environment.UserName;
+                if (!string.IsNullOrWhiteSpace(user) && user.Length >= 3) {
+                    text = text.Replace(user, "%USER%", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch (Exception ex) {
+                // Лучше отдать неотредактированный текст, чем не отдать ничего:
+                // без бандла разбор жалобы невозможен.
+                System.Diagnostics.Debug.WriteLine("Diagnostics.Redact: " + ex.Message);
+            }
+
+            return text;
         }
 
         private static void AppendFolderTree(StringBuilder sb, string root, int maxDepth) {
             try {
                 if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) { sb.AppendLine("(games root not found)"); return; }
                 sb.AppendLine($"Root: {root}");
+                int emitted = 0;
                 void Walk(string dir, int depth) {
-                    if (depth > maxDepth) {
+                    if (depth > maxDepth || emitted >= GamesTreeMaxEntries) {
                         return;
                     }
 
-                    string indent = new string(' ', Math.Max(0, (depth - 1))) + (depth > 0 ? "" : "");
-                    if (depth == 0) {
-                        // top-level: list immediate folders
-                        foreach (var d in SafeGetDirs(dir)) {
-                            sb.AppendLine("- " + d);
-                            Walk(d, depth + 1);
+                    foreach (var d in SafeGetDirs(dir)) {
+                        if (emitted >= GamesTreeMaxEntries) {
+                            sb.AppendLine($"(limit reached: {GamesTreeMaxEntries} folders)");
+                            return;
                         }
-                    }
-                    else {
-                        foreach (var d in SafeGetDirs(dir)) {
-                            // show relative path from root for readability
-                            string rel = MakeRelative(root, d);
-                            sb.AppendLine("  " + new string(' ', Math.Max(0, (depth - 1) * 2)) + "- " + rel);
-                            Walk(d, depth + 1);
-                        }
+
+                        // Показываем путь относительно корня: абсолютный всё равно есть в Root
+                        string rel = depth == 0 ? Path.GetFileName(d.TrimEnd(Path.DirectorySeparatorChar)) : MakeRelative(root, d);
+                        sb.AppendLine("  " + new string(' ', Math.Max(0, depth * 2)) + "- " + rel);
+                        emitted++;
+                        Walk(d, depth + 1);
                     }
                 }
                 Walk(root, 0);

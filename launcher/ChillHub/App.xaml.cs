@@ -19,67 +19,45 @@ namespace ChillHub {
             // Раннее применение темы
             _ = ConfigService.Current;
 
-            // Глобальные обработчики исключений и лог
+            // Глобальные обработчики исключений и лог.
+            // AppendBootLog, Logger и ErrorReporter гасят собственные ошибки, поэтому
+            // оборачивать каждый их вызов в try не нужно — раньше это давало десяток пустых catch.
             try {
                 // Подключаемся к консоли родителя, чтобы видеть вывод Console.WriteLine
-                try {
-                    AttachToParentConsole();
-                }
-                catch {
-                }
+                AttachToParentConsole();
+
                 // Централизованный репортинг ошибок
-                try { ChillHub.Core.ErrorReporter.InitGlobalHandlers(); } catch { }
+                ChillHub.Core.ErrorReporter.InitGlobalHandlers();
+
                 AppDomain.CurrentDomain.UnhandledException += (s, ex) => {
-                    try {
-                        AppendBootLog($"UnhandledException: {ex.ExceptionObject}");
+                    AppendBootLog($"UnhandledException: {ex.ExceptionObject}");
+                    ConsoleErrorLine($"[FATAL] UnhandledException: {ex.ExceptionObject}");
+                    Logger.Error("UnhandledException: " + ex.ExceptionObject);
+                    if (ex.ExceptionObject is Exception real) {
+                        ChillHub.Core.ErrorReporter.Report(real, "AppDomain.UnhandledException");
                     }
-                    catch {
-                    }
-                    try {
-                        Console.Error.WriteLine($"[FATAL] UnhandledException: {ex.ExceptionObject}");
-                    }
-                    catch {
-                    }
-                    try {
-                        Logger.Error("UnhandledException: " + ex.ExceptionObject);
-                        if (ex.ExceptionObject is Exception real) {
-                            ChillHub.Core.ErrorReporter.Report(real, "AppDomain.UnhandledException");
-                        }
-                    }
-                    catch {
-                    }
+
                     MessageBox.Show($"Необработанное исключение: {ex.ExceptionObject}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
                 };
                 this.DispatcherUnhandledException += (s, ex) => {
-                    try {
-                        AppendBootLog($"DispatcherUnhandledException: {ex.Exception.Message}\r\n{ex.Exception}");
-                    }
-                    catch {
-                    }
-                    try {
-                        Console.Error.WriteLine($"[ERROR] {ex.Exception}");
-                    }
-                    catch {
-                    }
-                    try {
-                        Logger.Error(ex.Exception, "DispatcherUnhandledException");
-                        ChillHub.Core.ErrorReporter.Report(ex.Exception, "DispatcherUnhandledException");
-                    }
-                    catch {
-                    }
+                    AppendBootLog($"DispatcherUnhandledException: {ex.Exception.Message}\r\n{ex.Exception}");
+                    ConsoleErrorLine($"[ERROR] {ex.Exception}");
+
+                    // Logger.Error(Exception, ...) сам отправляет отчёт — второй вызов не нужен
+                    Logger.Error(ex.Exception, "DispatcherUnhandledException");
                     MessageBox.Show($"Ошибка: {ex.Exception.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
                     ex.Handled = true;
                 };
+
                 // Подписка на необработанные исключения задач
-                try {
-                    TaskScheduler.UnobservedTaskException += (s, ex) => {
-                        try { Logger.Error(ex.Exception, "TaskScheduler.UnobservedTaskException"); } catch { }
-                        try { ChillHub.Core.ErrorReporter.Report(ex.Exception, "TaskScheduler.UnobservedTaskException"); } catch { }
-                    };
-                }
-                catch { }
+                TaskScheduler.UnobservedTaskException += (s, ex) =>
+                    Logger.Error(ex.Exception, "TaskScheduler.UnobservedTaskException");
             }
-            catch {
+            catch (Exception ex) {
+                // Без обработчиков лаунчер работоспособен, просто ошибки не попадут в отчёты.
+                // Пишем в boot.log: обычный лог на этом этапе может быть ещё недоступен.
+                AppendBootLog("Не удалось установить глобальные обработчики ошибок: " + ex);
+                Logger.Warn("Не удалось установить глобальные обработчики ошибок: " + ex.Message);
             }
 
             // Разовая уборка каталога данных WebView2, оставшегося в папке установки
@@ -89,97 +67,73 @@ namespace ChillHub {
                 ChillHub.Pages.NewsDetailPage.CleanupLegacyUserDataFolder();
             }
             catch (Exception ex) {
-                try { Logger.Warn("Cleanup legacy WebView2 folder failed: " + ex.Message); } catch { }
+                Logger.Warn("Cleanup legacy WebView2 folder failed: " + ex.Message);
             }
 
             base.OnStartup(e);
         }
 
         private void Application_Startup(object sender, StartupEventArgs e) {
-            try {
-                AppendBootLog("Starting Application_Startup");
-            }
-            catch {
-            }
-            try {
-                Console.WriteLine("[BOOT] Starting Application_Startup");
-            }
-            catch {
-            }
+            BootTrace("Starting Application_Startup");
 
             // Шаг 1. Окно проверки/обновления лаунчера
-            var prevMode = this.ShutdownMode;
             this.ShutdownMode = ShutdownMode.OnExplicitShutdown; // не завершаем приложение при закрытии диалога
 
             var upd = new UpdateWindow();
-            upd.SourceInitialized += (_, __) => {
-                try {
-                    Core.UI.AcrylicHelper.ApplyTitleBarTheme(upd, true);
-                    TryApplyIcon(upd);
-                }
-                catch {
-                }
-            };
-            try {
-                AppendBootLog("Showing UpdateWindow");
-            }
-            catch {
-            }
-            try {
-                Console.WriteLine("[BOOT] Showing UpdateWindow");
-            }
-            catch {
-            }
+            upd.SourceInitialized += (_, __) => ApplyWindowChrome(upd);
+            BootTrace("Showing UpdateWindow");
             var ok = upd.ShowDialog() == true || upd.Proceed;
-            try {
-                AppendBootLog($"UpdateWindow result ok={ok}");
-            }
-            catch {
-            }
-            try {
-                Console.WriteLine($"[BOOT] UpdateWindow result ok={ok}");
-            }
-            catch {
-            }
+            BootTrace($"UpdateWindow result ok={ok}");
             if (!ok) {
                 // Пользователь закрыл окно или обновление обязательно
-                try {
-                    AppendBootLog("Shutting down after update dialog");
-                }
-                catch {
-                }
-                try {
-                    Console.WriteLine("[BOOT] Shutting down after update dialog");
-                }
-                catch {
-                }
+                BootTrace("Shutting down after update dialog");
                 this.Shutdown();
                 return;
             }
 
             // Шаг 2. Основное окно
             var mw = new MainWindow();
-            mw.SourceInitialized += (_, __) => {
-                try {
-                    Core.UI.AcrylicHelper.ApplyTitleBarTheme(mw, true);
-                    TryApplyIcon(mw);
-                }
-                catch {
-                }
-            };
+            mw.SourceInitialized += (_, __) => ApplyWindowChrome(mw);
             this.MainWindow = mw;
             this.ShutdownMode = ShutdownMode.OnMainWindowClose; // возвращаем обычный режим
-            try {
-                AppendBootLog("Showing MainWindow");
-            }
-            catch {
-            }
-            try {
-                Console.WriteLine("[BOOT] Showing MainWindow");
-            }
-            catch {
-            }
+            BootTrace("Showing MainWindow");
             mw.Show();
+        }
+
+        /// <summary>Оформление заголовка окна и иконка — украшение, окно должно открыться и без них.</summary>
+        private static void ApplyWindowChrome(Window window) {
+            try {
+                Core.UI.AcrylicHelper.ApplyTitleBarTheme(window, true);
+                TryApplyIcon(window);
+            }
+            catch (Exception ex) {
+                Logger.Warn($"Оформление окна '{window?.GetType().Name}' не применено: {ex.Message}");
+            }
+        }
+
+        /// <summary>Одна запись о ходе запуска: и в boot.log, и в консоль родителя, если она есть.</summary>
+        private static void BootTrace(string message) {
+            AppendBootLog(message);
+            ConsoleLine("[BOOT] " + message);
+        }
+
+        private static void ConsoleLine(string message) {
+            try {
+                Console.WriteLine(message);
+            }
+            catch (Exception ex) {
+                // Консоли может не быть вовсе — это нормальный режим запуска из проводника
+                AppendBootLog("Console.WriteLine недоступен: " + ex.Message);
+            }
+        }
+
+        private static void ConsoleErrorLine(string message) {
+            try {
+                Console.Error.WriteLine(message);
+            }
+            catch (Exception ex) {
+                AppendBootLog("Console.Error недоступен: " + ex.Message);
+            }
         }
 
         /// <summary>Потолок boot.log: при превышении оставляем только последнюю часть файла.</summary>
@@ -202,7 +156,8 @@ namespace ChillHub {
                 ChillHub.Core.DiscordRichPresence.Shutdown();
             }
             catch (Exception ex) {
-                try { Logger.Warn("Discord shutdown failed: " + ex.Message); } catch { }
+                // Logger.Write гасит собственные ошибки, дополнительная защита не нужна
+                Logger.Warn("Discord shutdown failed: " + ex.Message);
             }
 
             // Останавливаем опрос режима технических работ (задача 25)
@@ -223,7 +178,10 @@ namespace ChillHub {
                 Directory.CreateDirectory(dir);
                 return Path.Combine(dir, "boot.log");
             }
-            catch {
+            catch (Exception ex) {
+                // Каталог логов недоступен — пишем рядом с процессом.
+                // Logger здесь звать нельзя: он сам мог не подняться по той же причине.
+                System.Diagnostics.Debug.WriteLine("GetBootLogPath: " + ex.Message);
                 return Path.Combine(Environment.CurrentDirectory, "boot.log");
             }
         }
@@ -242,7 +200,10 @@ namespace ChillHub {
                     File.AppendAllText(path, line, utf8);
                 }
             }
-            catch {
+            catch (Exception ex) {
+                // Это сам журнал запуска: обращаться отсюда к Logger нельзя — получим рекурсию,
+                // если недоступен тот же каталог. Остаётся отладочный вывод.
+                System.Diagnostics.Debug.WriteLine("AppendBootLog: " + ex.Message);
             }
         }
 
@@ -272,7 +233,9 @@ namespace ChillHub {
 
                 File.WriteAllText(path, "[" + DateTime.Now.ToString("o") + "] INFO boot.log truncated\r\n" + text, utf8);
             }
-            catch {
+            catch (Exception ex) {
+                // Не обрезали — файл просто продолжит расти; ронять запуск из-за этого нельзя
+                System.Diagnostics.Debug.WriteLine("TrimBootLog: " + ex.Message);
             }
         }
 
@@ -292,7 +255,9 @@ namespace ChillHub {
                     }
                 }
             }
-            catch {
+            catch (Exception ex) {
+                // Без иконки окно откроется с системной — не повод падать
+                Logger.Warn("Не удалось применить иконку окна: " + ex.Message);
             }
         }
 
@@ -305,16 +270,21 @@ namespace ChillHub {
         private static void AttachToParentConsole() {
             try {
                 // Подключаемся к консоли родителя, если есть
-                if (AttachConsole(ATTACHPARENTPROCESS)) {
-                    try {
-                        Console.OutputEncoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-                        Console.InputEncoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-                    }
-                    catch {
-                    }
+                if (!AttachConsole(ATTACHPARENTPROCESS)) {
+                    return; // запуск не из консоли — обычный сценарий, не ошибка
+                }
+
+                try {
+                    Console.OutputEncoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+                    Console.InputEncoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+                }
+                catch (Exception ex) {
+                    // Кодировку переставить не вышло: вывод будет в кодировке консоли
+                    AppendBootLog("Кодировка консоли не изменена: " + ex.Message);
                 }
             }
-            catch {
+            catch (Exception ex) {
+                AppendBootLog("Подключение к консоли родителя не выполнено: " + ex.Message);
             }
         }
     }

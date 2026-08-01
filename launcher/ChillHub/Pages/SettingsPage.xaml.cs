@@ -16,6 +16,7 @@ namespace ChillHub.Pages {
     using System.Windows.Controls;
 
     using ChillHub.Core;
+    using ChillHub.Core.Home;
     using ChillHub.Core.Sync;
 
     public partial class SettingsPage : Page {
@@ -44,7 +45,10 @@ namespace ChillHub.Pages {
                     try {
                         this.LoadConfigToUi();
                     }
-                    catch { /* prevent crash; user can reopen */
+                    catch (Exception ex) {
+                        // Страница остаётся открытой с пустыми полями: пользователь может
+                        // зайти в настройки повторно, а причина будет видна в логе.
+                        ChillHub.Core.Logging.Logger.Error(ex, "SettingsPage.LoadConfigToUi");
                     }
 
                     _ = this.LoadGamesForIntegrityAsync();
@@ -60,16 +64,19 @@ namespace ChillHub.Pages {
                     this.integrityCts?.Cancel();
                 }
             }
-            catch {
+            catch (Exception ex) {
+                // Проверка могла уже завершиться и освободить источник отмены
+                ChillHub.Core.Logging.Logger.Warn($"SettingsPage.Unloaded: отмена проверки целостности: {ex.Message}");
             }
         }
 
         private void LoadConfigToUi() {
             var cfg = ConfigService.Current ?? new AppConfig();
             if (this.GamesPathBox != null) {
-                // Отображаем путь с одинарными обратными слешами для читаемости
+                // Отображаем путь с одинарными обратными слешами для читаемости.
+                // Ведущий \\ сетевого пути при этом обязан уцелеть — см. NormalizeWindowsPath.
                 var p = cfg.GamesPath ?? string.Empty;
-                this.GamesPathBox.Text = p.Replace("\\\\", "\\");
+                this.GamesPathBox.Text = HomeFormat.NormalizeWindowsPath(p);
             }
 
             if (this.ThreadsSlider != null) {
@@ -120,7 +127,9 @@ namespace ChillHub.Pages {
                     }
                 }
             }
-            catch {
+            catch (Exception ex) {
+                // Маркера может не быть или он недоступен — ниже возьмём версию сборки
+                ChillHub.Core.Logging.Logger.Warn($"SettingsPage.GetLauncherVersion: маркер launcher.version не прочитан: {ex.Message}");
             }
 
             try {
@@ -129,7 +138,8 @@ namespace ChillHub.Pages {
                     return $"{v.Major}.{v.Minor}.{v.Build}";
                 }
             }
-            catch {
+            catch (Exception ex) {
+                ChillHub.Core.Logging.Logger.Warn($"SettingsPage.GetLauncherVersion: версия сборки недоступна: {ex.Message}");
             }
 
             return "неизвестно";
@@ -182,12 +192,8 @@ namespace ChillHub.Pages {
                 this.IntegrityGameBox.SelectedItem = preselect;
             }
             catch (Exception ex) {
-                try {
-                    ChillHub.Core.Logging.Logger.Error(ex, "SettingsPage.LoadGamesForIntegrityAsync");
-                }
-                catch {
-                }
-
+                // Logger сам гасит свои ошибки — дополнительная обёртка не нужна
+                ChillHub.Core.Logging.Logger.Error(ex, "SettingsPage.LoadGamesForIntegrityAsync");
                 this.SetIntegrityStatus("Не удалось получить список игр — проверьте подключение к серверу.");
             }
         }
@@ -233,12 +239,7 @@ namespace ChillHub.Pages {
                 this.SetIntegrityStatus(ex.Message);
             }
             catch (Exception ex) {
-                try {
-                    ChillHub.Core.Logging.Logger.Error(ex, "SettingsPage.IntegrityCheck");
-                }
-                catch {
-                }
-
+                ChillHub.Core.Logging.Logger.Error(ex, "SettingsPage.IntegrityCheck");
                 this.SetIntegrityStatus($"Не удалось проверить целостность: {ex.Message}");
             }
             finally {
@@ -286,12 +287,7 @@ namespace ChillHub.Pages {
                 this.SetIntegrityStatus("Восстановление отменено. Игра может остаться в незавершённом состоянии — повторите восстановление.");
             }
             catch (Exception ex) {
-                try {
-                    ChillHub.Core.Logging.Logger.Error(ex, "SettingsPage.IntegrityRepair");
-                }
-                catch {
-                }
-
+                ChillHub.Core.Logging.Logger.Error(ex, "SettingsPage.IntegrityRepair");
                 this.SetIntegrityStatus($"Не удалось восстановить файлы: {ex.Message}");
             }
             finally {
@@ -306,7 +302,8 @@ namespace ChillHub.Pages {
                 this.integrityCts?.Cancel();
                 this.SetIntegrityStatus("Отмена…");
             }
-            catch {
+            catch (Exception ex) {
+                ChillHub.Core.Logging.Logger.Warn($"SettingsPage.IntegrityCancel: {ex.Message}");
             }
         }
 
@@ -361,8 +358,10 @@ namespace ChillHub.Pages {
                 return;
             }
 
+            // Переиспользуем единственный HomePage, иначе получим вторую копию страницы
+            // со своим FeedbackService и своей очередью сообщений
             var win = Window.GetWindow(this) as ChillHub.MainWindow;
-            win?.ContentFrame.Navigate(new HomePage());
+            win?.NavigateToHome();
         }
 
         private void ChooseBtn_Click(object sender, RoutedEventArgs e) {
@@ -375,13 +374,16 @@ namespace ChillHub.Pages {
                         : this.GamesPathBox.Text;
                     var res = dlg.ShowDialog();
                     if (res == System.Windows.Forms.DialogResult.OK) {
-                        // Нормализуем отображение: одинарные обратные слеши
+                        // Нормализуем отображение: одинарные обратные слеши (кроме префикса UNC)
                         var sp = dlg.SelectedPath ?? string.Empty;
-                        this.GamesPathBox.Text = sp.Replace("\\\\", "\\");
+                        this.GamesPathBox.Text = HomeFormat.NormalizeWindowsPath(sp);
                     }
                 }
             }
-            catch {
+            catch (Exception ex) {
+                // Диалог выбора папки может не открыться (нет прав, сбой оболочки) —
+                // путь всегда можно ввести руками, поэтому не мешаем пользователю
+                ChillHub.Core.Logging.Logger.Error(ex, "SettingsPage.ChooseBtn_Click");
             }
         }
 
@@ -399,12 +401,16 @@ namespace ChillHub.Pages {
                     newPath = AppConfig.DefaultGamesPath();
                 }
 
+                // Для файловой системы и конфигурации используем нормальную форму с одинарными
+                // слешами. Сетевой путь вида \\nas\games при этом не превращаем в \nas\games.
+                newPath = HomeFormat.NormalizeWindowsPath(newPath);
                 try {
-                    // Для файловой системы и конфигурации используем нормальную форму с одинарными слешами
-                    newPath = newPath.Replace("\\\\", "\\");
                     Directory.CreateDirectory(newPath);
                 }
-                catch {
+                catch (Exception ex) {
+                    // Каталог мог быть недоступен (сетевая шара оффлайн, нет прав) — настройку
+                    // всё равно сохраняем: путь может стать доступным позже.
+                    ChillHub.Core.Logging.Logger.Warn($"SettingsPage.SaveBtn: не удалось создать папку игр '{newPath}': {ex.Message}");
                 }
 
                 cfg.GamesPath = newPath;
@@ -437,7 +443,9 @@ namespace ChillHub.Pages {
                         ChillHub.Core.UI.AcrylicHelper.ApplyTitleBarTheme(win, isDark);
                     }
                 }
-                catch {
+                catch (Exception ex) {
+                    // Цвет заголовка окна — косметика; настройки уже сохранены
+                    ChillHub.Core.Logging.Logger.Warn($"SettingsPage.SaveBtn: тема заголовка не применена: {ex.Message}");
                 }
             }
             catch (Exception ex) {

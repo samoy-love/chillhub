@@ -27,6 +27,16 @@ namespace ChillHub.Core.Home {
             }
         }
 
+        /// <summary>
+        /// Забывает все оценки. Нужен, когда сменилась папка для игр: прежние цифры
+        /// относятся к другому диску и другому содержимому.
+        /// </summary>
+        internal void Clear() {
+            lock (this.cacheLock) {
+                this.neededBytes.Clear();
+            }
+        }
+
         /// <summary>Достаёт закешированную оценку. false — оценки ещё нет.</summary>
         internal bool TryGet(string? gameId, out long need) {
             need = 0;

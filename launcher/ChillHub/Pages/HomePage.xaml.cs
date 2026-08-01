@@ -98,6 +98,7 @@ namespace ChillHub.Pages {
                 this.FbComment.Text = string.Empty;
                 this.FbStatus.Text = string.Empty;
                 this.FbType.SelectedIndex = 0;
+                this.UpdateFeedbackDiagnosticsInfo();
                 this.FeedbackOverlay.Visibility = Visibility.Visible;
 
                 // Валидация только по нажатию «Отправить»: на открытии ничего не подсвечиваем
@@ -112,6 +113,33 @@ namespace ChillHub.Pages {
             this.FeedbackOverlay.Visibility = Visibility.Collapsed;
         }
 
+        // Пользователь передумал прикладывать диагностику (или наоборот) — обновим пояснение
+        private void FbAttachDiagnostics_Click(object sender, RoutedEventArgs e) => this.UpdateFeedbackDiagnosticsInfo();
+
+        /// <summary>
+        /// Показывает, что именно уйдёт вместе с сообщением. Раньше конфиг, пути установки
+        /// и дерево папки игр прикладывались молча и без возможности отказаться.
+        /// </summary>
+        private void UpdateFeedbackDiagnosticsInfo() {
+            try {
+                if (this.FbDiagnosticsInfo == null) {
+                    return;
+                }
+
+                if (this.FbAttachDiagnostics?.IsChecked != true) {
+                    this.FbDiagnosticsInfo.Text = "Будут отправлены только ваше сообщение и указанные контакты.";
+                    return;
+                }
+
+                this.FbDiagnosticsInfo.Text = "Вместе с сообщением уйдёт: "
+                    + string.Join("; ", Core.Diagnostics.BundleContents)
+                    + ". Имя пользователя Windows в путях заменяется на %USER%.";
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"Feedback.UpdateDiagnosticsInfo: {ex.Message}");
+            }
+        }
+
         private async void FbSend_Click(object sender, RoutedEventArgs e) {
             try {
                 var comment = this.FbComment.Text?.Trim() ?? string.Empty;
@@ -120,13 +148,16 @@ namespace ChillHub.Pages {
                     return;
                 }
 
+                // Диагностику прикладываем только с явного согласия: галочка стоит по умолчанию,
+                // но её видно и её можно снять (см. форму под кнопками).
+                var attachDiagnostics = this.FbAttachDiagnostics?.IsChecked == true;
                 var draft = new FeedbackService.FeedbackDraft(
                     this.FbName.Text?.Trim() ?? string.Empty,
                     this.FbContact.Text?.Trim() ?? string.Empty,
                     this.GetFeedbackTypeString(),
                     comment,
-                    true, // логи прикрепляем всегда — так решили в UX
-                    FeedbackService.CollectSystemInfo());
+                    attachDiagnostics,
+                    attachDiagnostics ? FeedbackService.CollectSystemInfo() : null);
 
                 this.FbStatus.Text = "Отправка...";
                 var ok = await this.Feedback.TrySendAsync(draft, silent: false).ConfigureAwait(true);
@@ -166,9 +197,22 @@ namespace ChillHub.Pages {
         private ActionMode actionMode = ActionMode.Checking;
         private bool hasUpdateError = false;
 
+        /// <summary>
+        /// Игра, на которой сорвалось обновление. «Повторить» относится только к ней:
+        /// раньше флаг сбрасывался лишь в начале StartUpdateAsync, поэтому после неудачи
+        /// на игре A выбор игры B тоже показывал «Повторить» вместо «Играть».
+        /// </summary>
+        private string? updateErrorGameId;
+
         // Loaded срабатывает и при первом показе, и при возврате со страницы игры/новости.
         // Первый раз пропускаем: там уже отрабатывает полная загрузка.
         private bool loadedOnce = false;
+
+        /// <summary>
+        /// Папка для игр, к которой относятся текущие статусы. Её могли сменить в настройках,
+        /// и тогда всё показанное состояние относится к другому каталогу.
+        /// </summary>
+        private string knownGamesPath = ChillHub.Core.ConfigService.Current.GamesPath ?? string.Empty;
 
         public HomePage() {
             this.InitializeComponent();
@@ -201,13 +245,18 @@ namespace ChillHub.Pages {
                 this.Loaded += (s, e) => this.SubscribeMaintenance();
                 this.Unloaded += (s, e) => this.UnsubscribeMaintenance();
 
-                // Баннер о том, что отчёт об ошибке ушёл автоматически
-                ChillHub.Core.ErrorReporter.AutoReported += (ctx) =>
-                    _ = this.DispatcherInvokeAsync(() => this.ShowToast("Произошла ошибка. Отчёт автоматически отправлен"));
-                ChillHub.Core.ErrorReporter.AutoReportSuppressed += (ts) => {
-                    var mins = Math.Max(1, (int)Math.Ceiling(ts.TotalMinutes));
-                    _ = this.DispatcherInvokeAsync(() => this.ShowToast($"Лимит авто-репортов исчерпан. Доступно через ~{mins} мин."));
-                };
+                // Фоновый ретрай очереди обратной связи держим только пока страница на экране:
+                // таймер, переживший страницу, перезаписывает feedback_queue.json своей копией
+                // очереди и способен затереть только что добавленное сообщение.
+                this.Loaded += (s, e) => this.feedback?.Resume();
+                this.Unloaded += (s, e) => this.feedback?.Stop();
+
+                // Баннер о том, что отчёт об ошибке ушёл автоматически.
+                // ErrorReporter — статический класс, его события переживают страницу: подписка
+                // лямбдой без отписки удерживала бы HomePage в памяти навсегда (как и MaintenanceService).
+                this.SubscribeErrorReporter();
+                this.Loaded += (s, e) => this.SubscribeErrorReporter();
+                this.Unloaded += (s, e) => this.UnsubscribeErrorReporter();
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Error(ex, "HomePage.ctor");
@@ -379,10 +428,14 @@ namespace ChillHub.Pages {
                     }
                 });
 
-                // Загрузка сборок и новостей выбранной игры (легковесно для UI)
-                var gid0 = this.GetSelectedGameId();
+                // Загрузка сборок и новостей выбранной игры (легковесно для UI).
+                // Мы здесь уже в пуле потоков (после ConfigureAwait(false) на HTTP-запросах),
+                // а и выделение, и сам LoadBuildsAndGameNewsAsync работают с контролами —
+                // поэтому и чтение выбора, и вызов выполняем на UI-потоке.
+                string? gid0 = null;
+                await this.DispatcherInvokeAsync(() => gid0 = this.GetSelectedGameId());
                 if (!string.IsNullOrWhiteSpace(gid0)) {
-                    await this.LoadBuildsAndGameNewsAsync(gid0);
+                    await this.DispatcherInvokeAsync(() => this.LoadBuildsAndGameNewsAsync(gid0));
                 }
 
                 // После первичного рендеринга — разрешаем тяжёлые проверки и запускаем в фоне
@@ -553,7 +606,11 @@ namespace ChillHub.Pages {
 
                 // После завершения всех — освежим список с приоритетом установленных
                 try {
-                    var selectedId = this.GetSelectedGameId();
+                    // Выделение живёт в GameList и читается только с UI-потока: сюда мы приходим
+                    // из Task.Run, и прямое обращение бросало бы исключение. Раньше оно гасилось,
+                    // GetSelectedGameId возвращал null — и выделение терялось после смены ItemsSource.
+                    string? selectedId = null;
+                    await this.DispatcherInvokeAsync(() => selectedId = this.GetSelectedGameId());
 
                     // Порядок из реестра сохраняем для неустановленных, установленные держим сверху
                     var order2 = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -606,7 +663,7 @@ namespace ChillHub.Pages {
                     // После завершения всегда выставляем финальный статус, чтобы не зависало "Проверка игр X/Y".
                     // Сообщение об ошибке при этом не затираем — оно важнее.
                     if (string.IsNullOrWhiteSpace(this.lastErrorDetails)) {
-                        this.StatusText.Text = "Готов";
+                        this.StatusText.Text = "Готово";
                     }
 
                     this.UpdateActionButtonState();
@@ -656,7 +713,7 @@ namespace ChillHub.Pages {
                 Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} fetching manifest {manifestUrl}");
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, CancellationToken.None);
                 var contentBase = IntegrityChecker.ContentBaseUrl(this.BaseApi, gid, latest);
-                var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, CancellationToken.None);
+                var plan = await this.PlanOffUiThreadAsync(manifest, localRoot, contentBase, CancellationToken.None);
                 Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
                 LogPlanDownloads(gid, "verify", plan, localRoot);
 
@@ -761,6 +818,17 @@ namespace ChillHub.Pages {
             this.StatusText.ToolTip = null;
         }
 
+        /// <summary>
+        /// Строит план различий, гарантированно не занимая UI-поток.
+        /// <see cref="ISyncService.PlanAsync(Manifest, string, string, CancellationToken)"/> только выглядит
+        /// асинхронным: внутри полный обход папки игры с пересчётом хешей, а результат возвращается
+        /// через уже завершённый Task. При вызове с UI-потока окно замирает на всё время обхода
+        /// (гигабайты SHA-256/BLAKE3), Windows рисует «Не отвечает», и даже «Отмена» не нажимается.
+        /// Тот же приём применён в <see cref="IntegrityChecker"/>.
+        /// </summary>
+        private Task<DiffPlan> PlanOffUiThreadAsync(Manifest manifest, string localRoot, string contentBaseUrl, CancellationToken token) =>
+            Task.Run(() => this.sync.PlanAsync(manifest, localRoot, contentBaseUrl, token), token);
+
         private Task DispatcherInvokeAsync(Action action) {
             Dispatcher? dispatcher;
             try {
@@ -779,7 +847,11 @@ namespace ChillHub.Pages {
                 return Task.CompletedTask;
             }
 
-            var tcs = new TaskCompletionSource<object?>();
+            // RunContinuationsAsynchronously обязателен: TrySetResult вызывается ИЗНУТРИ BeginInvoke,
+            // то есть на UI-потоке. Без этого флага продолжение await'а тоже выполнялось бы инлайн
+            // на UI-потоке — и фоновая проверка статусов (VerifyAllGamesStatusesAsync в Task.Run)
+            // после первого же await «переезжала» на UI вместе со всем хешированием файлов.
+            var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
             dispatcher.BeginInvoke(new Action(() => {
                 try {
                     action();
@@ -790,6 +862,19 @@ namespace ChillHub.Pages {
                 }
             }));
             return tcs.Task;
+        }
+
+        /// <summary>
+        /// То же, что и <see cref="DispatcherInvokeAsync(Action)"/>, но для асинхронной работы:
+        /// операция ЗАПУСКАЕТСЯ на UI-потоке (и продолжается на нём, так как захватывает его контекст),
+        /// а вызывающий ждёт её завершения, не занимая UI.
+        /// </summary>
+        private async Task DispatcherInvokeAsync(Func<Task> action) {
+            Task? started = null;
+            await this.DispatcherInvokeAsync(() => started = action()).ConfigureAwait(false);
+            if (started != null) {
+                await started.ConfigureAwait(false);
+            }
         }
 
         // Обновляет заголовок секции новостей игры: "Новости (название игры)"
@@ -920,11 +1005,31 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Сбрасывает «залипший» режим «Повторить» при переходе к другой игре.
+        /// Ошибка обновления относится к конкретной игре, а не ко всей странице.
+        /// </summary>
+        private void ResetUpdateErrorIfGameChanged(string? gid) {
+            if (!this.hasUpdateError || this.isUpdating) {
+                return;
+            }
+
+            if (string.Equals(this.updateErrorGameId, gid, StringComparison.OrdinalIgnoreCase)) {
+                return; // та же игра — «Повторить» по-прежнему уместно
+            }
+
+            this.hasUpdateError = false;
+            this.updateErrorGameId = null;
+            this.ClearErrorDetails();
+        }
+
         private async void GameCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) {
             if (this.GetSelectedGameId() is string gid && !string.IsNullOrWhiteSpace(gid)) {
+                this.ResetUpdateErrorIfGameChanged(gid);
+
                 // Если сейчас не выполняется обновление, сбросим состояние прогресса и статусы
                 if (!this.isUpdating) {
-                    this.StatusText.Text = "Готов";
+                    this.StatusText.Text = "Готово";
                     this.UpdateProgress.IsIndeterminate = false;
                     this.UpdateProgress.Value = 0;
                     this.SpeedEtaText.Text = string.Empty;
@@ -960,7 +1065,7 @@ namespace ChillHub.Pages {
             }
             else {
                 if (!this.isUpdating) {
-                    this.StatusText.Text = "Готов";
+                    this.StatusText.Text = "Готово";
                     this.UpdateProgress.IsIndeterminate = false;
                     this.UpdateProgress.Value = 0;
                     this.SpeedEtaText.Text = string.Empty;
@@ -1002,7 +1107,7 @@ namespace ChillHub.Pages {
                 var localRoot = GameLocalRoot(gid);
 
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, CancellationToken.None);
-                var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, CancellationToken.None);
+                var plan = await this.PlanOffUiThreadAsync(manifest, localRoot, contentBase, CancellationToken.None);
 
                 this.spaceHint.Remember(gid, plan.TotalDownloadBytes);
                 this.FilesSizeText.Text = SpaceHint.BuildText(plan.TotalDownloadBytes, GetAvailableFreeSpaceFor(gid));
@@ -1215,11 +1320,15 @@ namespace ChillHub.Pages {
         }
 
         private async Task StartUpdateAsync(CancellationToken token) {
+            // Нужен и в catch: по нему запоминаем, к какой игре относится «Повторить»
+            string? currentGid = null;
             try {
                 if (this.GetSelectedGameId() is not string gid || string.IsNullOrWhiteSpace(gid)) {
                     this.StatusText.Text = "Не выбрана игра";
                     return;
                 }
+
+                currentGid = gid;
 
                 // Всегда используем latest; список версий доступен только для просмотра
                 var game = this.games.FirstOrDefault(g => g.GameId == gid);
@@ -1247,6 +1356,7 @@ namespace ChillHub.Pages {
 
                 this.isUpdating = true;
                 this.hasUpdateError = false;
+                this.updateErrorGameId = null;
                 this.SetActionMode(ActionMode.Cancel);
                 this.GameList.IsEnabled = false;
                 this.UpdateProgress.Value = 0;
@@ -1267,7 +1377,7 @@ namespace ChillHub.Pages {
                 this.StatusText.Text = "Проверка...";
                 this.UpdateProgress.IsIndeterminate = true;
                 var localRoot = GameLocalRoot(gid);
-                var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, token);
+                var plan = await this.PlanOffUiThreadAsync(manifest, localRoot, contentBase, token);
                 Core.Logging.Logger.Info($"StartUpdateAsync plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
                 LogPlanDownloads(gid, "update", plan, localRoot);
 
@@ -1477,10 +1587,12 @@ namespace ChillHub.Pages {
                 // Подпись манифеста не сошлась — это не сетевой сбой, а признак подмены раздачи.
                 // Ни одного файла игры мы ещё не тронули, и не тронем: показываем отдельный текст.
                 this.hasUpdateError = true;
+                this.updateErrorGameId = currentGid;
                 this.ShowUserError(ManifestSignature.UserMessage, ex, "HomePage.StartUpdateAsync.ManifestSignature");
             }
             catch (Exception ex) {
                 this.hasUpdateError = true;
+                this.updateErrorGameId = currentGid;
                 var userMessage = ex is IOException
                     ? "Не удалось записать файлы игры. Проверьте свободное место и права доступа."
                     : "Не удалось завершить обновление. Попробуйте ещё раз.";
@@ -1644,6 +1756,38 @@ namespace ChillHub.Pages {
         // Подписываемся на время видимости страницы, чтобы не держать ссылку на неё в статическом событии.
         private bool maintenanceSubscribed;
 
+        // Авто-отчёты об ошибках: как и режим техработ, события статические,
+        // поэтому подписка живёт ровно столько, сколько страница показана.
+        private bool errorReporterSubscribed;
+
+        private void SubscribeErrorReporter() {
+            if (this.errorReporterSubscribed) {
+                return;
+            }
+
+            Core.ErrorReporter.AutoReported += this.OnAutoReported;
+            Core.ErrorReporter.AutoReportSuppressed += this.OnAutoReportSuppressed;
+            this.errorReporterSubscribed = true;
+        }
+
+        private void UnsubscribeErrorReporter() {
+            if (!this.errorReporterSubscribed) {
+                return;
+            }
+
+            Core.ErrorReporter.AutoReported -= this.OnAutoReported;
+            Core.ErrorReporter.AutoReportSuppressed -= this.OnAutoReportSuppressed;
+            this.errorReporterSubscribed = false;
+        }
+
+        private void OnAutoReported(string context) =>
+            _ = this.DispatcherInvokeAsync(() => this.ShowToast("Произошла ошибка. Отчёт автоматически отправлен"));
+
+        private void OnAutoReportSuppressed(TimeSpan retryAfter) {
+            var mins = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalMinutes));
+            _ = this.DispatcherInvokeAsync(() => this.ShowToast($"Лимит авто-репортов исчерпан. Доступно через ~{mins} мин."));
+        }
+
         private void SubscribeMaintenance() {
             if (this.maintenanceSubscribed) {
                 return;
@@ -1668,7 +1812,7 @@ namespace ChillHub.Pages {
             try {
                 this.UpdateActionButtonState();
                 if (!state.Enabled && !this.isUpdating && string.IsNullOrWhiteSpace(this.lastErrorDetails)) {
-                    this.StatusText.Text = "Готов";
+                    this.StatusText.Text = "Готово";
                 }
             }
             catch (Exception ex) {
@@ -1744,12 +1888,20 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Идентификатор выбранной игры. Вызывать ТОЛЬКО с UI-потока: SelectedItem принадлежит
+        /// GameList, и обращение из фона бросает исключение. Фоновым задачам следует читать выбор
+        /// через <see cref="DispatcherInvokeAsync(Action)"/>.
+        /// </summary>
         private string? GetSelectedGameId() {
             try {
                 var gi = this.GameList?.SelectedItem as GameInfo;
                 return gi?.GameId;
             }
-            catch {
+            catch (Exception ex) {
+                // Молча вернуть null нельзя: вызывающий примет это за «игра не выбрана» и
+                // потеряет выделение. Фиксируем в логе, чтобы такой вызов было видно.
+                Core.Logging.Logger.Warn($"GetSelectedGameId: выбор недоступен (обращение не с UI-потока?): {ex.Message}");
                 return null;
             }
         }
@@ -1854,14 +2006,26 @@ namespace ChillHub.Pages {
             }
         }
 
-        // Возврат со страницы игры: перечитываем локальные маркеры версий без сетевых запросов
+        // Возврат со страницы игры или из настроек: перечитываем локальные маркеры версий
         private async void HomePage_Loaded(object sender, RoutedEventArgs e) {
             if (!this.loadedOnce) {
                 this.loadedOnce = true;
                 return;
             }
 
-            if (!GamePage.ConsumeLocalStateChanged()) {
+            // Папку для игр могли сменить в настройках: тогда все статусы, оценки объёма
+            // и кеш «проверено» относятся к прежнему каталогу и врут до перезапуска.
+            var gamesPath = ChillHub.Core.ConfigService.Current.GamesPath ?? string.Empty;
+            var gamesPathChanged = !string.Equals(this.knownGamesPath, gamesPath, StringComparison.OrdinalIgnoreCase);
+            if (gamesPathChanged) {
+                this.knownGamesPath = gamesPath;
+                this.spaceHint.Clear();
+                this.ResetVerifiedStatuses();
+                this.FilesSizeText.Text = string.Empty;
+                Core.Logging.Logger.Info($"HomePage: папка игр изменилась на '{gamesPath}', статусы пересчитываются");
+            }
+
+            if (!gamesPathChanged && !GamePage.ConsumeLocalStateChanged()) {
                 return;
             }
 
@@ -1870,6 +2034,12 @@ namespace ChillHub.Pages {
                 await Task.Run(() => this.NormalizeGameIconsAndLocalState(snapshot));
                 this.GameList.Items.Refresh();
                 this.UpdateActionButtonState();
+
+                if (gamesPathChanged && this.allowFileChecks) {
+                    // Полная перепроверка по манифестам — в фоне, чтобы не морозить возврат из настроек
+                    string? gid = this.GetSelectedGameId();
+                    _ = Task.Run(() => this.VerifyAllGamesStatusesAsync(gid));
+                }
             }
             catch (Exception ex) {
                 // Список останется прежним до следующего обновления вручную — не критично

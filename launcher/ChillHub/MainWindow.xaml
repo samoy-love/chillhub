@@ -1,7 +1,7 @@
 <Window x:Class="ChillHub.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Лаунчер Chill Hub" Height="660" Width="1130" WindowStartupLocation="CenterScreen"
+        Title="Лаунчер ChillHub" Height="660" Width="1130" WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize" SizeToContent="Manual"
         Icon="/ChillHub;component/Assets/app.ico"
         Background="{DynamicResource Brush.Background}">
@@ -60,7 +60,7 @@
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="Добро пожаловать в" FontSize="18" Margin="8,0,0,0" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Text}" VerticalAlignment="Center"/>
                     <Image Source="/ChillHub;component/Assets/app.ico" Margin="16,0,0,0" Width="28" Height="28"/>
-                    <TextBlock Text="Chill Hub" FontSize="18" Margin="8,0,0,0" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Text}" VerticalAlignment="Center"/>
+                    <TextBlock Text="ChillHub" FontSize="18" Margin="8,0,0,0" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Text}" VerticalAlignment="Center"/>
                 </StackPanel>
 
                 <!-- Middle: Karaoke area (two-line typewriter + crossfade), aligned to settings with 16px gap -->
