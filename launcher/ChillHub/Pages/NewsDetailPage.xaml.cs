@@ -61,7 +61,7 @@ namespace ChillHub.Pages {
         /// Разовая уборка каталога данных WebView2, оставшегося в папке установки
         /// от версий лаунчера без явного UserDataFolder.
         /// </summary>
-        private static void CleanupLegacyUserDataFolder() {
+        internal static void CleanupLegacyUserDataFolder() {
             if (legacyFolderCleaned) {
                 return;
             }

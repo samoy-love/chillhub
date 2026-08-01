@@ -80,6 +80,17 @@ namespace ChillHub {
             }
             catch {
             }
+
+            // Разовая уборка каталога данных WebView2, оставшегося в папке установки
+            // от версий без явного UserDataFolder. Делаем на старте, а не при первом
+            // открытии новости: иначе у тех, кто новости не читает, он остаётся навсегда.
+            try {
+                ChillHub.Pages.NewsDetailPage.CleanupLegacyUserDataFolder();
+            }
+            catch (Exception ex) {
+                try { Logger.Warn("Cleanup legacy WebView2 folder failed: " + ex.Message); } catch { }
+            }
+
             base.OnStartup(e);
         }
 
