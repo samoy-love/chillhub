@@ -6,6 +6,7 @@
 namespace ChillHub.Core.Home {
     using System;
     using System.Collections.Concurrent;
+    using System.Collections.Generic;
     using System.IO;
     using System.Net;
     using System.Net.Http;
@@ -29,7 +30,11 @@ namespace ChillHub.Core.Home {
             MaxConnectionsPerServer = 16,
         });
 
-        private static readonly ConcurrentDictionary<string, byte> Inflight = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>
+        /// Идущие загрузки по URL. Хранится сама задача, а не признак «занято»:
+        /// второй элемент с тем же URL должен дождаться результата, а не остаться пустым.
+        /// </summary>
+        private static readonly ConcurrentDictionary<string, Task<byte[]>> Inflight = new(StringComparer.OrdinalIgnoreCase);
         private static readonly ConcurrentDictionary<string, BitmapImage> Cache = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Высота декодирования по умолчанию, если у элемента не задан размер.</summary>
@@ -112,31 +117,32 @@ namespace ChillHub.Core.Home {
                     return;
                 }
 
-                // Дедупликация: если этот же URL уже грузится, второй запрос не нужен
-                if (!Inflight.TryAdd(url, 1)) {
-                    DebugLog($"[ImgLoad] skip duplicate inflight url='{url}'");
+                // Дедупликация: сеть дёргаем один раз на URL, но ждут результата ВСЕ элементы.
+                // Раньше второй запрос просто выходил из метода, и одинаковые иконки
+                // (одна игра в списке и в шапке, повторные обложки новостей) оставались пустыми.
+                var download = Inflight.GetOrAdd(url, DownloadAsync);
+                byte[] bytes;
+                try {
+                    bytes = await download.ConfigureAwait(false);
+                }
+                finally {
+                    Inflight.TryRemove(new KeyValuePair<string, Task<byte[]>>(url, download));
+                }
+
+                // Пока ждали, готовую картинку мог положить в кеш другой элемент
+                if (Cache.TryGetValue(url, out var ready)) {
+                    await img.Dispatcher.InvokeAsync(() => {
+                        img.Source = ready;
+                        img.Visibility = Visibility.Visible;
+                    });
                     return;
                 }
 
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                DebugLog($"[ImgLoad] HTTP GET start url='{url}'");
-                using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
-                if (!resp.IsSuccessStatusCode) {
-                    var ct = resp.Content?.Headers?.ContentType?.ToString() ?? string.Empty;
-                    DebugLog($"[ImgLoad] HTTP non-200 status={(int)resp.StatusCode} contentType='{ct}' url='{url}'");
-                    throw new HttpRequestException("HTTP " + (int)resp.StatusCode + " " + resp.StatusCode);
-                }
-
-                await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
-
-                // Копируем в память, чтобы полностью отвязаться от HTTP-потока перед уходом в UI-поток
-                using var ms = new MemoryStream();
-                await stream.CopyToAsync(ms).ConfigureAwait(false);
-                ms.Position = 0;
-                sw.Stop();
-                DebugLog($"[ImgLoad] HTTP ok bytes={ms.Length} elapsedMs={sw.ElapsedMilliseconds} url='{url}'");
-
-                await img.Dispatcher.InvokeAsync(() => ApplyBitmap(img, ms, url));
+                await img.Dispatcher.InvokeAsync(() => {
+                    // Отдельный MemoryStream на элемент: BitmapImage читает его при EndInit
+                    using var ms = new MemoryStream(bytes);
+                    ApplyBitmap(img, ms, url);
+                });
             }
             catch (Exception ex) {
                 Logging.Logger.Warn($"[ImgLoad] error url='{url}': {ex.Message}");
@@ -147,9 +153,6 @@ namespace ChillHub.Core.Home {
                     // Диспетчер уже завершён (окно закрывается) — прятать нечего.
                     Logging.Logger.Warn($"[ImgLoad] не удалось скрыть картинку url='{url}': {exUi.Message}");
                 }
-            }
-            finally {
-                Inflight.TryRemove(url, out _);
             }
         }
 
@@ -210,6 +213,23 @@ namespace ChillHub.Core.Home {
             var resolved = new Uri(apiUri, rel).ToString();
             DebugLog($"[ImgLoad] case='relative' rel='{rel}' url='{resolved}'");
             return resolved;
+        }
+
+        /// <summary>Одна HTTP-загрузка картинки в память; результат разделяют все ждущие элементы.</summary>
+        private static async Task<byte[]> DownloadAsync(string url) {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            DebugLog($"[ImgLoad] HTTP GET start url='{url}'");
+            using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) {
+                var contentType = resp.Content?.Headers?.ContentType?.ToString() ?? string.Empty;
+                DebugLog($"[ImgLoad] HTTP non-200 status={(int)resp.StatusCode} contentType='{contentType}' url='{url}'");
+                throw new HttpRequestException("HTTP " + (int)resp.StatusCode + " " + resp.StatusCode);
+            }
+
+            var bytes = await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            sw.Stop();
+            DebugLog($"[ImgLoad] HTTP ok bytes={bytes.Length} elapsedMs={sw.ElapsedMilliseconds} url='{url}'");
+            return bytes;
         }
 
         private static void ApplyBitmap(Image img, MemoryStream ms, string url) {
