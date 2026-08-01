@@ -28,6 +28,34 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# $ErrorActionPreference DOES NOT APPLY TO NATIVE EXECUTABLES.
+#
+# It only governs PowerShell cmdlets. `dotnet build` and `makensis` are ordinary
+# .exe files: when they fail they set $LASTEXITCODE and PowerShell carries on to
+# the next line as if nothing happened. That is how this script used to print a
+# green "Done." after a failed compile — and, in CI, how a broken build could
+# still upload whatever ChillHub-Setup.exe was left over from a previous run.
+#
+# Every native invocation below is followed by Assert-NativeSuccess.
+#
+# The exit code is passed EXPLICITLY rather than defaulted to $LASTEXITCODE
+# inside the function: a default is evaluated in the function's own scope, and
+# if $LASTEXITCODE happens to be unset there it silently coerces to 0 — a guard
+# that always passes is worse than no guard. An explicit $null is treated as
+# "the executable never ran", which is also a failure.
+function Assert-NativeSuccess {
+    param(
+        [Parameter(Mandatory = $true)][string]$What,
+        [Parameter(Mandatory = $true)][AllowNull()][object]$ExitCode
+    )
+    if ($null -eq $ExitCode -or "$ExitCode" -eq '') {
+        throw "$What did not report an exit code - the executable probably never ran."
+    }
+    if ([int]$ExitCode -ne 0) {
+        throw "$What failed with exit code $ExitCode."
+    }
+}
+
 # Исключения пакета лаунчера. Держать синхронно с:
 #   - ChillHub.Update.PreserveMatcher.DefaultRules (updater/UpdatePreserve.cs)
 #   - списком /x в scripts/installer.nsi
@@ -174,11 +202,13 @@ function Find-Makensis {
 
 Write-Host "[1/3] Restoring .NET packages..." -ForegroundColor Cyan
 & dotnet restore $Csproj
+Assert-NativeSuccess "dotnet restore" $LASTEXITCODE
 
 if ($Publish) {
     Write-Host "[2/3] Publishing self-contained ($Configuration, $Runtime, SelfContained=$SelfContained)..." -ForegroundColor Cyan
     $sc = if ($SelfContained) { "true" } else { "false" }
     & dotnet publish $Csproj -c $Configuration -r $Runtime --self-contained $sc
+    Assert-NativeSuccess "dotnet publish" $LASTEXITCODE
     # Compute publish output path (informational)
     $ProjectDir = Split-Path -Parent $Csproj
     $PublishDir = Join-Path $ProjectDir "bin/$Configuration/net8.0-windows/$Runtime/publish"
@@ -187,8 +217,14 @@ if ($Publish) {
 } else {
     Write-Host "[2/3] Building ($Configuration)..." -ForegroundColor Cyan
     & dotnet build $Csproj -c $Configuration
+    Assert-NativeSuccess "dotnet build" $LASTEXITCODE
     $ProjectDir = Split-Path -Parent $Csproj
     $BuildOutputDir = Join-Path $ProjectDir "bin/$Configuration/net8.0-windows"
+}
+
+# A build that "succeeded" but produced no output directory is a failure too.
+if (-not (Test-Path -LiteralPath $BuildOutputDir)) {
+    throw "Build output directory not found at '$BuildOutputDir' even though the build reported success."
 }
 
 # A3/A9: чистый ZIP полезной нагрузки для самообновления (загружается в админку).
@@ -230,9 +266,24 @@ if ($NoCompress) {
     # Inject a directive override: SetCompress off (at compile-time)
     $nsisArgs += @('/XSetCompress off')
 }
+# Package exactly what we just built. installer.nsi defaults to
+# bin\Release\net8.0-windows when this is not passed, which is why
+# `-Configuration Debug` used to compile Debug and then quietly package a stale
+# Release directory.
+$payloadDirFull = (Resolve-Path -LiteralPath $BuildOutputDir).Path.TrimEnd('\')
+Write-Host "NSIS payload dir: $payloadDirFull" -ForegroundColor Cyan
+$nsisArgs += @("/DPAYLOAD_DIR=$payloadDirFull")
 $nsisArgs += @("$installerPath")
 
 & "$makensis" @nsisArgs
+Assert-NativeSuccess "makensis" $LASTEXITCODE
 
-Write-Host "Done. Look for the generated installer (ChillHub-Setup.exe) near $Installer" -ForegroundColor Green
+# makensis can also exit 0 without writing the file (e.g. OutFile pointing
+# somewhere unexpected). Verify the artefact before declaring success.
+$setupExe = Join-Path $outDir "ChillHub-Setup.exe"
+if (-not (Test-Path -LiteralPath $setupExe)) {
+    throw "makensis reported success but '$setupExe' does not exist."
+}
+$setupSize = (Get-Item -LiteralPath $setupExe).Length
+Write-Host "Done. Installer: $setupExe ($([math]::Round($setupSize / 1MB, 1)) MB)" -ForegroundColor Green
 
