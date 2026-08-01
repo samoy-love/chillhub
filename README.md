@@ -30,8 +30,10 @@
 - Новости лаунчера и игр — Markdown + изображения/ассеты. Показываются в клиенте.
 - Сервер на Golang + nginx:
   - Public API — выдаёт список игр, версии, манифесты, новости (JSON/статик).
-  - Admin API — приём ZIP‑сборок, активация `latest`, редактирование реестра игр, управление новостями и ассетами.
-- Админ‑панель (web) даёт UI для всех административных операций (загрузка версий, правка реестра, новости/ассеты).
+  - Admin API — приём ZIP‑сборок, активация `latest`, редактирование реестра игр, управление новостями и ассетами, режим технических работ, сводка метрик, инбокс обратной связи.
+- Админ‑панель (web) даёт UI для всех административных операций (загрузка версий, правка реестра, новости/ассеты, техработы, метрики, обращения).
+- Манифесты подписываются Ed25519, клиент проверяет подпись до загрузки файлов.
+- Режим технических работ включается с сервера: клиент показывает баннер и блокирует установку/обновление/запуск (по параметрам), а по окончании окна возвращается к нормальной работе сам, без перезапуска.
 
 ## Почему ChillHub
 
@@ -68,16 +70,22 @@ ChillHub решает все «боли» ручной установки игр
     - [`GET /api/games/{gameId}`](Documentation.md#api-get-game-by-id)
     - [`GET /api/games/{gameId}/versions/latest`](Documentation.md#api-get-latest)
     - [`GET /api/games/{gameId}/builds`](Documentation.md#api-get-builds)
+    - [`GET /api/maintenance`](Documentation.md#api-maintenance)
     - [`GET /news/index.json`](Documentation.md#api-news-index)
     - [`GET /news/games/{gameId}/index.json`](Documentation.md#api-news-game-index)
-- Admin UI/API (§8): [`Игры`](Documentation.md#81-игры), [`Лаунчер`](Documentation.md#82-лаунчер), [`Новости`](Documentation.md#83-новости)
+- Admin UI/API (§8): [`Игры`](Documentation.md#81-игры), [`Лаунчер`](Documentation.md#82-лаунчер), [`Новости`](Documentation.md#83-новости), [`Режим техработ`](Documentation.md#85-режим-технических-работ), [`Метрики`](Documentation.md#86-метрики-лаунчера), [`Обратная связь`](Documentation.md#87-обратная-связь-feedback)
+- Подпись манифестов (§5.1): [`Documentation.md#51-подпись-манифестов-ed25519`](Documentation.md#51-подпись-манифестов-ed25519)
 
 - `server/` — Go: `cmd/api` (public) и `cmd/admin` (admin), плюс статика для dev.
-- `launcher/` — C# WPF лаунчер.
+  Обработчики админки живут в `server/internal/adminapi/*`, общая инфраструктура — в
+  `server/internal/{adminutil,httpx,maintenance,metrics,ratelimit}`; в `cmd/admin`
+  осталась только сборка роутера (см. [`Documentation.md#32-разбиение-серверного-кода-по-пакетам`](Documentation.md#32-разбиение-серверного-кода-по-пакетам)).
+- `launcher/` — C# WPF лаунчер (тесты — `launcher/tests/ChillHub.Tests`).
+- `updater/` — отдельный exe самообновления и общие preserve‑правила (`updater/UpdatePreserve.cs`).
 - `landing/` — статический лендинг (отдаётся на корне домена в проде).
-- `content/` — манифесты, файлы версий, новости и их ассеты.
-- `deploy/` — конфиги nginx (`deploy/launcher.conf`), systemd юниты.
-- `scripts/` — вспомогательные скрипты (локальный запуск, сборка инсталлятора, утилиты).
+- `content/` — манифесты, файлы версий, новости и их ассеты, состояние режима техработ, метрики, инбокс обратной связи.
+- `deploy/` — конфиг nginx (`deploy/launcher.conf`, на сервере — `chillhub-launcher.conf`), проверка конфига `deploy/nginx-check.sh`, systemd юниты.
+- `scripts/` — вспомогательные скрипты (локальный запуск, сборка инсталлятора, деплой, утилиты).
 
 ## Доменная схема (prod)
 - `https://launcher.samoy.love`
@@ -85,8 +93,13 @@ ChillHub решает все «боли» ручной установки игр
   - `/api/*` → Public API (`127.0.0.1:55700`).
   - `/admin/api/*` → Admin API (`127.0.0.1:55777`) 1:1 (без переписывания пути).
   - `/admin/`, `/admin/ui/*` — админ‑UI статика.
+  - `/feedback/submit`, `/metrics/report` — публичные POST‑эндпоинты лаунчера, проксируются на Admin API (`127.0.0.1:55777`) без авторизации.
   - `/content/*`, `/manifests/*`, `/news/*` — статика контента.
   - `/assets/*` — единая точка ассетов: сперва ищется в `site/assets`, затем фоллбэк в `launcher/news/assets`. 
+
+На хосте живут и другие проекты, поэтому наш nginx‑конфиг — отдельный файл
+`/etc/nginx/sites-available/chillhub-launcher.conf` (копия `deploy/launcher.conf`),
+описывающий только `launcher.samoy.love`.
 
 Dev‑порты (локально): Public API `:55700`, Admin API `:55777`.
 
@@ -147,6 +160,16 @@ Set-Location "Launcher Project"
 - Кратко: используйте `scripts/run-dev.ps1` для локального запуска API, Admin и WPF‑клиента. Примеры, флаги и подсказки см. в `scripts/README.md`.
 - Управление во время работы: `r/к` — перезапуск всех процессов; `p/з` — сброс пароля админа и `JWT_SECRET` с автоперезапуском; `q/й` — завершение.
 
+### Проверки перед пушем
+
+```bash
+cd server && go test ./...                              # серверные пакеты
+dotnet test launcher/tests/ChillHub.Tests               # клиент: план/дифф, хеши, подпись
+dotnet run --project updater/tests/ManifestPreserveCheck # петля самообновления
+sh deploy/nginx-check.sh                                # настоящий nginx -t в Docker
+make lint                                               # web/go/dotnet линтеры
+```
+
 ## Деплой на сервер (Ubuntu + nginx)
 
 Предполагаем VPS с Ubuntu, пользователь `ubuntu`, домен `launcher.samoy.love` указывает A‑записью на IP сервера.
@@ -159,7 +182,7 @@ Set-Location "Launcher Project"
 |---|---|---|---|
 | 1. Обновить репозиторий | Да | Да | `git fetch && git checkout BRANCH && git pull` (в `~/Launcher-Project`) — см. [Подготовка](#подготовка-1-раз) |
 | 2. Собрать Go‑бинарии (`api`, `admin`) | Да | Нет | `cd server && go build -o ../api ./cmd/api && go build -o ../admin ./cmd/admin` — см. [Раскладка артефактов (ручная)](#раскладка-артефактов-ручная) |
-| 3. Установить nginx‑конфиг и перезагрузить | Да | Да | Скопировать `deploy/launcher.conf` в `/etc/nginx/sites-available`, линк в `sites-enabled`, затем `nginx -t && systemctl reload nginx` — см. [Подготовка](#подготовка-1-раз) |
+| 3. Установить nginx‑конфиг и перезагрузить | Да | Да | Скопировать `deploy/launcher.conf` в `/etc/nginx/sites-available/chillhub-launcher.conf`, линк в `sites-enabled`, затем `nginx -t && systemctl reload nginx` — см. [Подготовка](#подготовка-1-раз) |
 | 4. Синхронизировать лендинг (`landing/`) | Да | Да | `rsync -a --delete ./landing/ /var/www/site/` — см. [Раскладка артефактов (ручная)](#раскладка-артефактов-ручная) |
 | 5. Синхронизировать Admin UI (`server/admin_ui/`) | Да | Да | `rsync -a --delete ./server/admin_ui/ /var/www/launcher/admin_ui/` — см. [Раскладка артефактов (ручная)](#раскладка-артефактов-ручная) |
 | 6. Контент: `manifests/`, `content/`, `news/` | Не трогает | Не трогает | Управляются через Admin UI или вручную — см. [Раскладка артефактов (ручная)](#раскладка-артефактов-ручная) |
@@ -198,9 +221,11 @@ git clone https://github.com/tr0llex/Launcher-Project.git ~/Launcher-Project || 
 # Сертификаты (после настройки DNS A-записей)
 sudo certbot --nginx -d launcher.samoy.love
 
-# Установите nginx-конфиг из репозитория
-sudo install -m 0644 ~/Launcher-Project/deploy/launcher.conf /etc/nginx/sites-available/launcher.conf
-sudo ln -sf /etc/nginx/sites-available/launcher.conf /etc/nginx/sites-enabled/launcher.conf
+# Установите nginx-конфиг из репозитория.
+# ВАЖНО: наш конфиг — отдельный файл chillhub-launcher.conf, а не общий launcher.conf:
+# на хосте живут и другие сайты, и общий файл релиз лаунчера затирал вместе с ними.
+sudo install -m 0644 ~/Launcher-Project/deploy/launcher.conf /etc/nginx/sites-available/chillhub-launcher.conf
+sudo ln -sf /etc/nginx/sites-available/chillhub-launcher.conf /etc/nginx/sites-enabled/chillhub-launcher.conf
 sudo nginx -t && sudo systemctl reload nginx
 
 # Firewall
@@ -230,7 +255,7 @@ make deploy-nobuild BRANCH=main
 Что делает автодеплой:
 - Обновляет репозиторий (fetch/checkout/pull) для указанной ветки.
 - Собирает `server/cmd/api` и `server/cmd/admin` (кроме `deploy-nobuild`).
-- Устанавливает `deploy/launcher.conf`, валидирует `nginx -t`, делает reload.
+- Устанавливает `deploy/launcher.conf` как `/etc/nginx/sites-available/chillhub-launcher.conf` (с бэкапом и откатом), валидирует `nginx -t`, делает reload.
 - Раскладывает ТОЛЬКО статику:
   - `landing/` → `/var/www/site/` (с `--delete`).
   - `server/admin_ui/` → `/var/www/launcher/admin_ui/` (с `--delete`).
@@ -373,7 +398,13 @@ sudo nginx -t && sudo systemctl reload nginx
   - В прод‑скрипте деплоя `manifests/` не синхронизируется и не модифицируется — это сделано намеренно, чтобы не потерять данные.
 
 - **/admin/api/* → 404**
-  - Обновите/пересоберите `server/cmd/admin` и перезапустите `chillhub-admin.service`. В код добавлены зеркальные роуты под префиксом `/admin/api/*` (см. `server/cmd/admin/main.go`).
+  - Обновите/пересоберите `server/cmd/admin` и перезапустите `chillhub-admin.service`. Полный список маршрутов объявлен в `server/cmd/admin/routes.go`: канонический путь — `/admin/api/...`, форма `/admin/...` создаётся автоматически как алиас (кроме `auth/*` и `upload/*` — они существуют только под `/admin/api/...`).
+
+- **В журнале admin: `SECURITY: MANIFEST_SIGNING_KEY is not set — manifests will be published UNSIGNED`**
+  - Не задан приватный ключ подписи манифестов. Сборки при этом публикуются, но без подписи. Как сгенерировать пару и куда её положить — `Documentation.md` §5.1.
+
+- **Метрики в админке пусты**
+  - Это ожидаемо: серверная часть (`POST /metrics/report`) готова, но лаунчер пока не отправляет события.
 
 
 ---
@@ -414,10 +445,24 @@ sudo systemctl restart chillhub-admin.service
 ---
 
 ## Полезные ссылки и файлы
-- Конфиг nginx (prod): `deploy/launcher.conf`
-- Systemd юниты: `deploy/systemd/`
+- Конфиг nginx (prod): `deploy/launcher.conf` → на сервере `/etc/nginx/sites-available/chillhub-launcher.conf`
+- Проверка конфига nginx настоящим `nginx -t` в Docker: `sh deploy/nginx-check.sh` (по умолчанию образ версии прода `nginx:1.24-alpine`; `NGINX_IMAGE=nginx:alpine` — проверка «на будущее»). Подробности — `deploy/README.md`.
+- Systemd юниты: `deploy/systemd/` (там же описана переменная `MANIFEST_SIGNING_KEY`)
 - Документация скриптов: `scripts/README.md`
 - CI/CD (ручной запуск из GitHub Actions): `.github/workflows/deploy.yml`
+
+### Настройка подписи манифестов (один раз)
+
+```bash
+cd server && go run ./internal/adminapi/builds/keygen
+```
+
+Приватную часть (`MANIFEST_SIGNING_KEY=...`) положить в окружение
+`chillhub-admin.service` (лучше через `EnvironmentFile=` с правами 600, в репозиторий
+не коммитить), публичную — в константу `ManifestSignature.PublicKeyBase64` в лаунчере.
+Пока ключ не задан, манифесты публикуются без подписи, а клиент принимает их в
+режиме совместимости. Подробности и порядок включения строгого режима —
+[`Documentation.md#51-подпись-манифестов-ed25519`](Documentation.md#51-подпись-манифестов-ed25519).
 
 ### CI/CD: ручной запуск в GitHub Actions
 
@@ -439,5 +484,7 @@ Workflow `.github/workflows/deploy.yml` можно запустить вручн
 
 ## Примечания по безопасности и качеству
 - Серверные порты приложений 55700/55777 закрыты внешнему миру, доступны только через nginx.
-- Клиент постепенно будет получать подпись кода/инсталлятора (вне MVP).
+- Клиент постепенно будет получать подпись кода/инсталлятора (вне MVP). Подпись **манифестов** (Ed25519) уже реализована — см. выше.
 - Манифесты могут содержать хеши Blake3 и SHA‑256; клиент проверяет значения, если присутствуют.
+- Пользовательские данные лаунчера (`config.json`, логи) лежат в `%APPDATA%\ChillHub`, а НЕ в каталоге установки `%LOCALAPPDATA%\ChillHub`. При обновлении со старой версии конфиг мигрирует автоматически.
+- В ZIP лаунчера не должно быть `config.json` и `launcher.version`: пересечение манифеста с preserve‑правилами апдейтера даёт бесконечный цикл самообновления. Проверка — `dotnet run --project updater/tests/ManifestPreserveCheck`.
