@@ -60,12 +60,22 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	defer f.Close()
 	log.Printf("/admin/upload: kind=%s gid=%s ver=%s zip=%s", kind, gid, ver, hdr.Filename)
 
-	// Where to extract files
-	filesRoot := filepath.Join(h.root, "content", gid, ver, "files")
-	if err := os.MkdirAll(filesRoot, 0o755); err != nil {
+	// Extract into a staging directory next to the published one, exactly like
+	// UploadStream and UploadProcessStream do. Writing straight into
+	// content/<gid>/<ver>/files would leave a half-extracted, already published
+	// version behind if the request is aborted mid-way.
+	finalVerDir := filepath.Join(h.root, "content", gid, ver)
+	stageDir, filesRoot, err := h.stageVersionDir(gid, ver)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	promoted := false
+	defer func() {
+		if !promoted {
+			_ = os.RemoveAll(stageDir)
+		}
+	}()
 
 	// Save zip to temp and extract
 	tmpZip, err := os.CreateTemp("", "upload-*.zip")
@@ -83,6 +93,15 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	tmpZip.Close()
 	defer os.Remove(tmpName)
 
+	// Same precheck as the streaming paths: refuse an archive that cannot fit
+	// rather than filling the volume and failing halfway through extraction.
+	if needBytes, err := estimateZipUncompressedSize(tmpName); err == nil {
+		if freeBytes, ferr := freeSpaceBytes(filesRoot); ferr == nil && freeBytes > 0 && needBytes > freeBytes {
+			http.Error(w, fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes), http.StatusInsufficientStorage)
+			return
+		}
+	}
+
 	if err := unzipTo(tmpName, filesRoot); err != nil {
 		http.Error(w, "unzip failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -94,6 +113,13 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Everything is extracted and hashed: publish the build in one rename.
+	if err := promoteVersionDir(stageDir, finalVerDir); err != nil {
+		http.Error(w, "activate failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	promoted = true
 
 	m := manifest{
 		Version:   ver,
