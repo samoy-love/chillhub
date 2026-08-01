@@ -40,6 +40,17 @@ const (
 
 	metricsRateLimit  = 30
 	metricsRateWindow = time.Minute
+
+	// The login endpoint is unauthenticated by definition and every attempt
+	// costs a bcrypt comparison at cost 12 (~250 ms of CPU on the production
+	// ARM64 box). Without a budget a single client can both brute-force the
+	// password online and starve this process — which also serves the public
+	// /feedback/submit and /metrics/report endpoints — with a handful of
+	// concurrent POSTs. Ten attempts per five minutes is far more than a human
+	// mistyping a password needs and reduces an online guessing rate to
+	// something useless.
+	loginRateLimit  = 10
+	loginRateWindow = 5 * time.Minute
 )
 
 // server owns the content root and the per-domain handler sets. Nothing here is
@@ -57,6 +68,7 @@ type server struct {
 
 	feedbackLimiter *ratelimit.Limiter
 	metricsLimiter  *ratelimit.Limiter
+	loginLimiter    *ratelimit.Limiter
 }
 
 func newServer(contentRoot string) *server {
@@ -80,6 +92,7 @@ func newServer(contentRoot string) *server {
 		metrics:         mx,
 		feedbackLimiter: ratelimit.New(feedbackRateLimit, feedbackRateWindow),
 		metricsLimiter:  ratelimit.New(metricsRateLimit, metricsRateWindow),
+		loginLimiter:    ratelimit.New(loginRateLimit, loginRateWindow),
 	}
 }
 

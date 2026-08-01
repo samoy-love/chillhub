@@ -230,6 +230,41 @@ func TestFeedbackSubmitRateLimited(t *testing.T) {
 	}
 }
 
+// The login endpoint must be rate limited through the registered mux, not just
+// in theory: an unlimited bcrypt cost-12 comparison is both an online password
+// oracle and a CPU exhaustion vector against the public endpoints this same
+// process serves. The request goes through s.register so that dropping the
+// wrapper from the route table fails the test.
+func TestAdminLoginRateLimited(t *testing.T) {
+	s := testServer(t)
+	mux := http.NewServeMux()
+	s.register(mux)
+
+	codes := make([]int, 0, loginRateLimit+2)
+	for i := 0; i < loginRateLimit+2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/auth/login",
+			strings.NewReader(`{"username":"admin","password":"wrong"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "10.0.0.3:1234"
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		codes = append(codes, w.Code)
+	}
+	if codes[len(codes)-1] != http.StatusTooManyRequests {
+		t.Fatalf("login was never rate limited: codes=%v", codes)
+	}
+	// The budget must not be global: a different client address still gets in.
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/auth/login",
+		strings.NewReader(`{"username":"admin","password":"wrong"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "10.0.0.4:1234"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code == http.StatusTooManyRequests {
+		t.Fatal("login limiter is global, expected per-client budget")
+	}
+}
+
 // The public metrics ingest must stay rate limited too — it is the other
 // unauthenticated write endpoint.
 func TestMetricsReportRateLimited(t *testing.T) {
