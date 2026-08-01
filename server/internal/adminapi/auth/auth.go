@@ -1,4 +1,11 @@
-package main
+// Package auth implements cookie/JWT authentication for the admin API:
+// login/logout/refresh handlers, the nginx auth_request verifier and the
+// middleware that protects every /admin route outside the allowlist.
+//
+// Configuration is read from the environment once, by LoadConfig, and carried
+// in the Auth value instead of a package-level global, so nothing outside this
+// package can reach the JWT secret.
+package auth
 
 import (
 	"crypto/rand"
@@ -12,13 +19,16 @@ import (
 	"strings"
 	"time"
 
+	"ChillHub/server/internal/adminutil"
+
 	jwt "github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
 // ===== Configuration =====
 
-type authConfig struct {
+// Config holds everything the admin session layer needs.
+type Config struct {
 	AdminUser    string
 	AdminPassBC  string
 	JWTSecret    []byte
@@ -28,10 +38,9 @@ type authConfig struct {
 	RefreshTTL   time.Duration
 }
 
-var cfg authConfig
-
-func init() {
-	cfg = authConfig{
+// LoadConfig reads the admin auth configuration from the environment.
+func LoadConfig() Config {
+	cfg := Config{
 		AdminUser:    strings.TrimSpace(os.Getenv("ADMIN_USERNAME")),
 		AdminPassBC:  strings.TrimSpace(os.Getenv("ADMIN_PASSWORD_BCRYPT")),
 		JWTSecret:    []byte(strings.TrimSpace(os.Getenv("JWT_SECRET"))),
@@ -64,7 +73,16 @@ func init() {
 			cfg.RefreshTTL = d
 		}
 	}
+	return cfg
 }
+
+// Auth carries the admin auth configuration and serves the session endpoints.
+type Auth struct {
+	cfg Config
+}
+
+// New builds an Auth from the given configuration.
+func New(cfg Config) *Auth { return &Auth{cfg: cfg} }
 
 // ===== JWT helpers =====
 
@@ -81,7 +99,7 @@ type authClaims struct {
 	jwt.RegisteredClaims
 }
 
-func signToken(sub string, typ tokenType, ttl time.Duration) (string, error) {
+func (a *Auth) signToken(sub string, typ tokenType, ttl time.Duration) (string, error) {
 	now := time.Now()
 	cl := authClaims{
 		Typ: string(typ),
@@ -93,13 +111,13 @@ func signToken(sub string, typ tokenType, ttl time.Duration) (string, error) {
 		},
 	}
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, cl)
-	return t.SignedString(cfg.JWTSecret)
+	return t.SignedString(a.cfg.JWTSecret)
 }
 
-func verifyToken(tokenStr string, expected tokenType) (*authClaims, error) {
+func (a *Auth) verifyToken(tokenStr string, expected tokenType) (*authClaims, error) {
 	parser := jwt.NewParser(jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithLeeway(30*time.Second))
 	tok, err := parser.ParseWithClaims(tokenStr, &authClaims{}, func(t *jwt.Token) (interface{}, error) {
-		return cfg.JWTSecret, nil
+		return a.cfg.JWTSecret, nil
 	})
 	if err != nil {
 		return nil, err
@@ -131,13 +149,13 @@ func randCSRF() string {
 	return base64.RawURLEncoding.EncodeToString(b[:])
 }
 
-func setCookie(w http.ResponseWriter, name, val string, ttl time.Duration, httpOnly bool) {
+func (a *Auth) setCookie(w http.ResponseWriter, name, val string, ttl time.Duration, httpOnly bool) {
 	c := &http.Cookie{
 		Name:     name,
 		Value:    val,
 		Path:     "/",
-		Domain:   cfg.CookieDomain,
-		Secure:   cfg.CookieSecure,
+		Domain:   a.cfg.CookieDomain,
+		Secure:   a.cfg.CookieSecure,
 		HttpOnly: httpOnly,
 		SameSite: http.SameSiteLaxMode,
 	}
@@ -148,13 +166,13 @@ func setCookie(w http.ResponseWriter, name, val string, ttl time.Duration, httpO
 	http.SetCookie(w, c)
 }
 
-func clearCookie(w http.ResponseWriter, name string) {
+func (a *Auth) clearCookie(w http.ResponseWriter, name string) {
 	c := &http.Cookie{
 		Name:     name,
 		Value:    "",
 		Path:     "/",
-		Domain:   cfg.CookieDomain,
-		Secure:   cfg.CookieSecure,
+		Domain:   a.cfg.CookieDomain,
+		Secure:   a.cfg.CookieSecure,
 		HttpOnly: true,
 		MaxAge:   -1,
 		Expires:  time.Unix(0, 0),
@@ -163,27 +181,27 @@ func clearCookie(w http.ResponseWriter, name string) {
 	http.SetCookie(w, c)
 }
 
-func issueSession(w http.ResponseWriter, username string) error {
-	access, err := signToken(username, tokenAccess, cfg.AccessTTL)
+func (a *Auth) issueSession(w http.ResponseWriter, username string) error {
+	access, err := a.signToken(username, tokenAccess, a.cfg.AccessTTL)
 	if err != nil {
 		return err
 	}
-	refresh, err := signToken(username, tokenRefresh, cfg.RefreshTTL)
+	refresh, err := a.signToken(username, tokenRefresh, a.cfg.RefreshTTL)
 	if err != nil {
 		return err
 	}
 	csrf := randCSRF()
-	setCookie(w, cookieAccess, access, cfg.AccessTTL, true)
-	setCookie(w, cookieRefresh, refresh, cfg.RefreshTTL, true)
+	a.setCookie(w, cookieAccess, access, a.cfg.AccessTTL, true)
+	a.setCookie(w, cookieRefresh, refresh, a.cfg.RefreshTTL, true)
 	// CSRF cookie is readable by JS (not HttpOnly)
-	setCookie(w, cookieCSRF, csrf, cfg.AccessTTL, false)
+	a.setCookie(w, cookieCSRF, csrf, a.cfg.AccessTTL, false)
 	return nil
 }
 
-func clearSession(w http.ResponseWriter) {
-	clearCookie(w, cookieAccess)
-	clearCookie(w, cookieRefresh)
-	clearCookie(w, cookieCSRF)
+func (a *Auth) clearSession(w http.ResponseWriter) {
+	a.clearCookie(w, cookieAccess)
+	a.clearCookie(w, cookieRefresh)
+	a.clearCookie(w, cookieCSRF)
 }
 
 // ===== Handlers =====
@@ -193,7 +211,8 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
-func handleAuthLogin(w http.ResponseWriter, r *http.Request) {
+// HandleLogin authenticates the admin user and issues a session.
+func (a *Auth) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -212,35 +231,37 @@ func handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing credentials", http.StatusBadRequest)
 		return
 	}
-	if cfg.AdminUser == "" || cfg.AdminPassBC == "" || len(cfg.JWTSecret) == 0 {
+	if a.cfg.AdminUser == "" || a.cfg.AdminPassBC == "" || len(a.cfg.JWTSecret) == 0 {
 		http.Error(w, "auth not configured", http.StatusInternalServerError)
 		return
 	}
-	if subtleLower(in.Username) != subtleLower(cfg.AdminUser) {
+	if subtleLower(in.Username) != subtleLower(a.cfg.AdminUser) {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
-	if bcrypt.CompareHashAndPassword([]byte(cfg.AdminPassBC), []byte(in.Password)) != nil {
+	if bcrypt.CompareHashAndPassword([]byte(a.cfg.AdminPassBC), []byte(in.Password)) != nil {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
-	if err := issueSession(w, cfg.AdminUser); err != nil {
+	if err := a.issueSession(w, a.cfg.AdminUser); err != nil {
 		http.Error(w, "issue session failed", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"status": "ok"})
+	adminutil.WriteJSON(w, map[string]any{"status": "ok"})
 }
 
-func handleAuthLogout(w http.ResponseWriter, r *http.Request) {
+// HandleLogout drops the session cookies.
+func (a *Auth) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	clearSession(w)
-	writeJSON(w, map[string]any{"status": "ok"})
+	a.clearSession(w)
+	adminutil.WriteJSON(w, map[string]any{"status": "ok"})
 }
 
-func handleAuthRefresh(w http.ResponseWriter, r *http.Request) {
+// HandleRefresh exchanges a valid refresh cookie for a fresh session.
+func (a *Auth) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -250,59 +271,64 @@ func handleAuthRefresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no refresh", http.StatusUnauthorized)
 		return
 	}
-	cl, err := verifyToken(c.Value, tokenRefresh)
+	cl, err := a.verifyToken(c.Value, tokenRefresh)
 	if err != nil || cl == nil {
 		http.Error(w, "invalid refresh", http.StatusUnauthorized)
 		return
 	}
-	if err := issueSession(w, cl.Sub); err != nil {
+	if err := a.issueSession(w, cl.Sub); err != nil {
 		http.Error(w, "issue session failed", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"status": "ok"})
+	adminutil.WriteJSON(w, map[string]any{"status": "ok"})
 }
 
-func handleAuthMe(w http.ResponseWriter, r *http.Request) {
-	_, user := currentUser(r)
+// HandleMe reports the currently authenticated user.
+func (a *Auth) HandleMe(w http.ResponseWriter, r *http.Request) {
+	user := a.CurrentUser(r)
 	if user == "" {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	writeJSON(w, map[string]any{"user": user})
+	adminutil.WriteJSON(w, map[string]any{"user": user})
 }
 
-// Used by nginx auth_request
-func handleAuthVerify(w http.ResponseWriter, r *http.Request) {
-	if u, _ := currentUser(r); u == nil {
+// HandleVerify is used by nginx auth_request.
+func (a *Auth) HandleVerify(w http.ResponseWriter, r *http.Request) {
+	if a.CurrentUser(r) == "" {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 }
 
-// Returns (claims, username) if access ok
-func currentUser(r *http.Request) (*authClaims, string) {
+// CurrentUser returns the authenticated username, or "" when the request has no
+// valid access cookie (or fails the CSRF check on a state-changing method).
+func (a *Auth) CurrentUser(r *http.Request) string {
 	c, err := r.Cookie(cookieAccess)
 	if err != nil || c == nil || c.Value == "" {
-		return nil, ""
+		return ""
 	}
-	cl, err := verifyToken(c.Value, tokenAccess)
+	cl, err := a.verifyToken(c.Value, tokenAccess)
 	if err != nil {
-		return nil, ""
+		return ""
 	}
 	// Optional: CSRF check for state-changing methods
 	if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodDelete {
 		csrfC, _ := r.Cookie(cookieCSRF)
 		csrfH := r.Header.Get("X-CSRF-Token")
 		if csrfC == nil || csrfC.Value == "" || csrfH == "" || csrfH != csrfC.Value {
-			return nil, ""
+			return ""
 		}
 	}
-	return cl, cl.Sub
+	return cl.Sub
 }
 
-// Global middleware that protects /admin and /admin/api except allowlist
-func adminAuthMiddleware(next http.Handler) http.Handler {
+// Middleware protects /admin and /admin/api except for the allowlist below.
+// The allowlist is what nginx relies on: static UI assets, the auth endpoints,
+// the health probe, the admin entry point (which serves the login page itself)
+// and the public feedback submit endpoint.
+func (a *Auth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		// Allowlist: static UI and auth endpoints and health
@@ -316,7 +342,7 @@ func adminAuthMiddleware(next http.Handler) http.Handler {
 		}
 		// Protect admin API routes
 		if strings.HasPrefix(p, "/admin/") {
-			if _, user := currentUser(r); user == "" {
+			if a.CurrentUser(r) == "" {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}

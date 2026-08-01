@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package builds
 
 import (
 	"fmt"
@@ -10,7 +10,7 @@ import (
 
 // getFreeSpaceBytesImpl returns available free bytes on the filesystem
 // that contains the given path using WinAPI GetDiskFreeSpaceExW.
-func getFreeSpaceBytesImpl(path string) (uint64, error) {
+func freeSpaceBytesImpl(path string) (uint64, error) {
 	k32 := syscall.NewLazyDLL("kernel32.dll")
 	proc := k32.NewProc("GetDiskFreeSpaceExW")
 	var freeAvail, totalBytes, freeBytes uint64
@@ -32,7 +32,7 @@ func getFreeSpaceBytesImpl(path string) (uint64, error) {
 
 // getDiskSpaceImpl returns available free bytes and total bytes on the filesystem
 // containing the given path (WinAPI GetDiskFreeSpaceExW)
-func getDiskSpaceImpl(path string) (uint64, uint64, error) {
+func diskSpaceImpl(path string) (uint64, uint64, error) {
 	k32 := syscall.NewLazyDLL("kernel32.dll")
 	proc := k32.NewProc("GetDiskFreeSpaceExW")
 	var freeAvail, totalBytes, freeBytes uint64
