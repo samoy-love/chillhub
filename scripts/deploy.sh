@@ -124,10 +124,17 @@ if [[ -z "$DOWNLOADS_DIR" ]]; then
   DOWNLOADS_DIR="$PARENT_DIR/downloads"
 fi
 
-# Load persisted bcrypt if present
+# Load persisted bcrypt if present.
+#
+# ВНИМАНИЕ на имена: в файле переменная называется ADMIN_PASSWORD_BCRYPT (так её
+# читает сервер), а в скрипте — ADMIN_PASS_BCRYPT. Раньше здесь был просто
+# `source`, и подстановка молча не срабатывала: скрипт считал, что учётных данных
+# нет, и уходил в интерактивный запрос пароля — то есть неинтерактивный деплой
+# по SSH обрывался на сервере, где всё уже настроено.
 if [[ -z "$ADMIN_PASS_BCRYPT" && -f "$SECRET_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$SECRET_FILE" || true
+  [[ -z "$ADMIN_PASS_BCRYPT" && -n "${ADMIN_PASSWORD_BCRYPT:-}" ]] && ADMIN_PASS_BCRYPT="$ADMIN_PASSWORD_BCRYPT"
 fi
 
 # If neither plain nor bcrypt provided and no persisted secret, prompt user to set password (no echo)
@@ -339,10 +346,14 @@ TMPD=$(mktemp)
   echo "EnvironmentFile=$SECRET_FILE"
   [[ -n "$COOKIE_DOMAIN" ]] && echo "Environment=\"COOKIE_DOMAIN=$COOKIE_DOMAIN\""
   [[ -n "$COOKIE_SECURE" ]] && echo "Environment=\"COOKIE_SECURE=$COOKIE_SECURE\""
-  [[ -n "$JWT_SECRET" ]] && echo "Environment=\"JWT_SECRET=$JWT_SECRET\""
-  # ADMIN_USERNAME/PASSWORD_BCRYPT come from $SECRET_FILE; explicit CLI values can override by rewriting the file
+  # Секреты (JWT_SECRET, ADMIN_USERNAME, ADMIN_PASSWORD_BCRYPT) сюда НЕ пишем —
+  # они приходят из $SECRET_FILE с правами 0600. Раньше JWT_SECRET подставлялся
+  # прямо в этот файл, а он ставился с правами 0644: секрет подписи админских
+  # сессий мог прочитать любой локальный пользователь.
 } > "$TMPD"
-run "sudo install -m 0644 \"$TMPD\" \"$ADMIN_DROPIN_DIR/override.conf\""
+# 0600, а не 0644: даже без секретов внутри файл описывает конфигурацию доступа,
+# и читать его всем незачем.
+run "sudo install -m 0600 \"$TMPD\" \"$ADMIN_DROPIN_DIR/override.conf\""
 rm -f "$TMPD" || true
 
 section "Nginx: конфиг и перезапуск"
