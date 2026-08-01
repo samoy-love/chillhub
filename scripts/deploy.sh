@@ -391,6 +391,25 @@ if [[ -f "$REPO_DIR/deploy/systemd/chillhub-admin.service" ]]; then
   run "sudo install -m 0644 \"$REPO_DIR/deploy/systemd/chillhub-admin.service\" /etc/systemd/system/chillhub-admin.service"
 fi
 
+# И3: резервное копирование контента (скрипт + таймер).
+#
+# /var/www/launcher/{content,manifests,news} не лежат в репозитории
+# (content/** в .gitignore) и до сих пор не резервировались никуда — копия
+# всего опубликованного контента существовала ровно одна. Процедура
+# восстановления описана в шапке самого скрипта.
+if [[ -f "$REPO_DIR/deploy/backup-content.sh" ]]; then
+  log "Install content backup script and timer"
+  run "sudo install -m 0755 -o root -g root \"$REPO_DIR/deploy/backup-content.sh\" /usr/local/sbin/chillhub-backup-content.sh"
+  run "sudo install -d -m 0700 -o root -g root /var/backups/chillhub"
+  if [[ -f "$REPO_DIR/deploy/systemd/chillhub-backup.service" ]]; then
+    run "sudo install -m 0644 \"$REPO_DIR/deploy/systemd/chillhub-backup.service\" /etc/systemd/system/chillhub-backup.service"
+  fi
+  if [[ -f "$REPO_DIR/deploy/systemd/chillhub-backup.timer" ]]; then
+    run "sudo install -m 0644 \"$REPO_DIR/deploy/systemd/chillhub-backup.timer\" /etc/systemd/system/chillhub-backup.timer"
+    BACKUP_TIMER_INSTALLED=1
+  fi
+fi
+
 # Configure auth env via systemd drop-in using EnvironmentFile to avoid overwrites
 ADMIN_DROPIN_DIR="/etc/systemd/system/chillhub-admin.service.d"
 log "Writing/refreshing systemd drop-in for admin auth env"
@@ -437,6 +456,17 @@ fi
 section "Systemd: перезапуск сервисов"
 log "Reload systemd and restart services"
 run "sudo systemctl daemon-reload"
+
+# И3: таймер бэкапа включаем ЯВНО. Установленный, но не включённый таймер —
+# это ровно то же отсутствие бэкапов, только с ложным ощущением, что они есть.
+if [[ "${BACKUP_TIMER_INSTALLED:-0}" == "1" ]]; then
+  run "sudo systemctl enable --now chillhub-backup.timer"
+  if systemctl is-enabled chillhub-backup.timer >/dev/null 2>&1; then
+    ok "[backup] таймер включён: $(systemctl list-timers chillhub-backup.timer --no-pager --no-legend 2>/dev/null | head -n1 || echo 'следующий запуск см. systemctl list-timers')"
+  else
+    warn "[backup] таймер НЕ включён — бэкапов контента не будет. Проверьте: systemctl status chillhub-backup.timer"
+  fi
+fi
 for s in "${SERVICES[@]}"; do
   run "sudo systemctl restart \"$s\""
   run "sudo systemctl status \"$s\" --no-pager -n 3 || true"
