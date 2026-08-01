@@ -1,11 +1,16 @@
 // Package feedback stores user reports submitted from the launcher and serves
 // the admin endpoints that browse them.
 //
-// The inbox is a single JSON file that is fully read and rewritten on every
-// submit, so both the per-item and the total size are bounded (see Prune).
+// A submission is appended to a small NDJSON journal (inbox.pending.ndjson);
+// the inbox array (inbox.json) is rebuilt from journal + array only when the
+// journal grows past journalCompactBytes or when an admin operation rewrites
+// the inbox anyway. Rewriting the whole array on every public submit made the
+// endpoint quadratic. Per-item and total size stay bounded by Prune, which runs
+// at compaction.
 package feedback
 
 import (
+	"bufio"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -35,8 +40,8 @@ type Item struct {
 	System     map[string]string `json:"system,omitempty"`
 }
 
-// Storage limits. The inbox is a single JSON file that is fully read and
-// rewritten on every submit, so both the per-item and the total size must stay
+// Storage limits. The inbox is a single JSON file that is read and rewritten
+// whole at every compaction, so both the per-item and the total size must stay
 // bounded, otherwise the public submit endpoint degrades to O(n^2).
 const (
 	// MaxLogBytes is the max size of the diagnostics bundle accepted with a single report.
@@ -55,8 +60,8 @@ const (
 	// of newlines cannot push a legitimate report over the line.
 	MaxBodyBytes = 2*MaxLogBytes + (128 << 10)
 	// System is free-form key/value diagnostics from the client; every part of it
-	// is clamped so one report cannot inflate the file that is rewritten on every
-	// single submit.
+	// is clamped so one report cannot inflate the file that is rewritten at every
+	// compaction.
 	maxSystemEntries  = 40
 	maxSystemKeyLen   = 64
 	maxSystemValueLen = 512
@@ -106,19 +111,104 @@ func (h *Handlers) user(r *http.Request) string {
 	return h.CurrentUser(r)
 }
 
+// journalPath is the append-only landing zone for new reports.
+//
+// /feedback/submit is public: rewriting the whole inbox (up to MaxTotalBytes,
+// i.e. 64 MiB) under a global mutex on every single submission made the
+// endpoint quadratic and let anyone keep the admin API busy with disk I/O. A
+// submission now costs one appended line; the array file is rebuilt only when
+// the journal has grown past journalCompactBytes, or whenever an admin
+// operation rewrites the inbox anyway.
+func (h *Handlers) journalPath() string { return filepath.Join(h.dir(), "inbox.pending.ndjson") }
+
+// journalCompactBytes is how much unmerged journal is tolerated before a submit
+// pays for a compaction. It bounds both the extra memory a read costs and how
+// far the inbox can overshoot Prune's limits between compactions.
+const journalCompactBytes = 1 << 20 // 1 MiB
+
+// readAll returns the inbox, newest first: the compacted array plus everything
+// still sitting in the journal.
 func (h *Handlers) readAll() ([]Item, error) {
+	var items []Item
 	b, err := os.ReadFile(h.path())
 	if err != nil {
-		if os.IsNotExist(err) {
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+	} else if json.Unmarshal(b, &items) != nil {
+		items = nil
+	}
+	pending := h.readJournal()
+	if len(pending) == 0 {
+		if items == nil {
 			return []Item{}, nil
 		}
-		return nil, err
+		return items, nil
 	}
-	var items []Item
-	if err := json.Unmarshal(b, &items); err != nil {
-		return []Item{}, nil
+	// The journal is oldest-first; the inbox is newest-first.
+	out := make([]Item, 0, len(items)+len(pending))
+	for i := len(pending) - 1; i >= 0; i-- {
+		out = append(out, pending[i])
 	}
-	return items, nil
+	return append(out, items...), nil
+}
+
+// readJournal returns the un-merged reports in arrival order. A truncated tail
+// line (a crash mid-append) is skipped rather than failing the whole read.
+func (h *Handlers) readJournal() []Item {
+	f, err := os.Open(h.journalPath())
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	var out []Item
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64<<10), 2*MaxBodyBytes)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var it Item
+		if json.Unmarshal(line, &it) != nil {
+			continue
+		}
+		out = append(out, it)
+	}
+	if err := sc.Err(); err != nil {
+		log.Printf("[feedback] journal read: %v", err)
+	}
+	return out
+}
+
+// appendJournal stores one report with a single append and reports the journal
+// size afterwards. Callers hold h.mu.
+func (h *Handlers) appendJournal(it Item) (int64, error) {
+	line, err := json.Marshal(it)
+	if err != nil {
+		return 0, err
+	}
+	line = append(line, '\n')
+	if err := os.MkdirAll(h.dir(), 0o755); err != nil {
+		return 0, err
+	}
+	f, err := os.OpenFile(h.journalPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return 0, err
+	}
+	_, werr := f.Write(line)
+	cerr := f.Close()
+	if werr != nil {
+		return 0, werr
+	}
+	if cerr != nil {
+		return 0, cerr
+	}
+	st, serr := os.Stat(h.journalPath())
+	if serr != nil {
+		return 0, nil
+	}
+	return st.Size(), nil
 }
 
 func (h *Handlers) writeAll(items []Item) error {
@@ -150,11 +240,24 @@ func (h *Handlers) writeAll(items []Item) error {
 		_ = os.Remove(tmpName)
 		return err
 	}
+	// Everything the journal held is now part of the array file.
+	if err := os.Remove(h.journalPath()); err != nil && !os.IsNotExist(err) {
+		log.Printf("[feedback] remove journal: %v", err)
+	}
 	return nil
 }
 
-// itemSize is a cheap estimate of the JSON footprint of one item.
+// itemSize is the JSON footprint of one item.
+//
+// It used to add up the raw field lengths, which undercounts by a lot for the
+// data that actually fills the inbox: a log bundle full of newlines and quotes
+// grows by 5 bytes per escaped character, so the file could pass MaxTotalBytes
+// long before Prune thought it had. Marshalling is only paid during a
+// compaction, not per submission.
 func itemSize(it Item) int {
+	if b, err := json.Marshal(it); err == nil {
+		return len(b) + 4 // indentation and the separating comma
+	}
 	n := len(it.ID) + len(it.CreatedAt) + len(it.Type) + len(it.Name) +
 		len(it.Contact) + len(it.Comment) + len(it.Logs) + 128
 	for k, v := range it.System {
@@ -275,11 +378,16 @@ func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
 		Logs:       sLogs,
 		System:     clampSystem(in.System, clamp),
 	}
+	// One appended line per submission; the inbox array is rebuilt only once the
+	// journal is big enough to be worth it.
 	h.mu.Lock()
-	items, _ := h.readAll()
-	items = append([]Item{item}, items...) // prepend newest
-	items = Prune(items)                   // rotate out the oldest reports
-	err := h.writeAll(items)
+	journalBytes, err := h.appendJournal(item)
+	if err == nil && journalBytes > journalCompactBytes {
+		var items []Item
+		if items, err = h.readAll(); err == nil {
+			err = h.writeAll(Prune(items))
+		}
+	}
 	h.mu.Unlock()
 	if err != nil {
 		// Public endpoint: the error text would carry the content-root path.
@@ -410,7 +518,7 @@ func (h *Handlers) Delete(w http.ResponseWriter, r *http.Request) {
 	err := h.writeAll(out)
 	h.mu.Unlock()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to update the inbox", "feedback", err)
 		return
 	}
 	log.Printf("[audit] feedback delete id=%s by=%s", id, h.user(r))
@@ -447,7 +555,7 @@ func (h *Handlers) ToggleImportant(w http.ResponseWriter, r *http.Request) {
 	err := h.writeAll(items)
 	h.mu.Unlock()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to update the inbox", "feedback", err)
 		return
 	}
 	log.Printf("[audit] feedback important-toggle id=%s now=%v by=%s", id, newVal, h.user(r))
@@ -491,7 +599,7 @@ func (h *Handlers) setStatus(w http.ResponseWriter, r *http.Request, status, aud
 	err := h.writeAll(items)
 	h.mu.Unlock()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to update the inbox", "feedback", err)
 		return
 	}
 	log.Printf("[audit] feedback %s id=%s by=%s", audit, id, h.user(r))
@@ -507,7 +615,7 @@ func (h *Handlers) Clear(w http.ResponseWriter, r *http.Request) {
 	err := h.writeAll([]Item{})
 	h.mu.Unlock()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to update the inbox", "feedback", err)
 		return
 	}
 	log.Printf("[audit] feedback clear by=%s", h.user(r))

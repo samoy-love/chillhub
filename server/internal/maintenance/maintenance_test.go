@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -157,6 +158,46 @@ func TestCacheInvalidatedOnWrite(t *testing.T) {
 	setState(t, s, `{"enabled":false}`)
 	if s.Current().Enabled {
 		t.Fatal("cache served a stale enabled state")
+	}
+}
+
+// A second process (the public API has its own Store) never sees the admin
+// write, and mtime+size cannot tell apart two edits of the same length inside
+// one filesystem timestamp tick. The TTL bounds how long such a change can stay
+// invisible.
+func TestCacheExpiresEvenWhenStatLooksUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	s := New(dir)
+	path := filepath.Join(dir, "maintenance", "state.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Two states of exactly the same length, written with the same mtime.
+	a := []byte(`{"enabled":true, "reason":"aa"}`)
+	b := []byte(`{"enabled":false,"reason":"aa"}`)
+	if len(a) != len(b) {
+		t.Fatalf("test states must be the same length: %d vs %d", len(a), len(b))
+	}
+	stamp := time.Now().Add(-time.Hour)
+	write := func(data []byte) {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(a)
+	if !s.Load().Enabled {
+		t.Fatal("first read should see enabled=true")
+	}
+	write(b)
+	// Simulate the TTL having elapsed rather than sleeping for it.
+	s.mu.Lock()
+	s.cachedAt = time.Now().Add(-2 * cacheTTL)
+	s.mu.Unlock()
+	if s.Load().Enabled {
+		t.Fatal("the cache kept serving a stale state that stat could not distinguish")
 	}
 }
 

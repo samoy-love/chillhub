@@ -132,7 +132,8 @@ func moveFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(dst, b, 0o644); err != nil {
+	// Atomic: dst may be inside the publicly served news tree.
+	if err := adminutil.WriteFileAtomic(dst, b, 0o644); err != nil {
 		return err
 	}
 	return os.Remove(src)
@@ -257,7 +258,9 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to store article", http.StatusInternalServerError)
 		return
 	}
-	if err := os.WriteFile(p, []byte(md), 0o644); err != nil {
+	// Atomic: a published article lands in the tree the launcher reads, and a
+	// truncating write hands a reader in between a half-written markdown file.
+	if err := adminutil.WriteFileAtomic(p, []byte(md), 0o644); err != nil {
 		log.Printf("[news:save] write %s: %v", p, err)
 		http.Error(w, "failed to store article", http.StatusInternalServerError)
 		return
@@ -266,7 +269,14 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 	if other, err := articlePath(d, slug, !cur.Published); err == nil {
 		_ = os.Remove(other)
 	}
-	_ = writeMeta(d, m)
+	// The markdown is on disk; if the metadata does not follow it, the published
+	// flag and the cover are lost and the next RebuildIndex resurrects the old
+	// state — while the client was told everything went fine.
+	if err := writeMeta(d, m); err != nil {
+		log.Printf("[news:save] write meta: %v", err)
+		http.Error(w, "saved but metadata update failed", http.StatusInternalServerError)
+		return
+	}
 	if err := RebuildIndex(d); err != nil {
 		log.Printf("[news:save] rebuild index: %v", err)
 		http.Error(w, "saved but index rebuild failed", http.StatusInternalServerError)
@@ -318,7 +328,13 @@ func (h *Handlers) Delete(w http.ResponseWriter, r *http.Request) {
 	// remove meta entry if exists
 	m := readMeta(d)
 	delete(m, slug)
-	_ = writeMeta(d, m)
+	// Same as in Save: an unreported metadata failure leaves the deleted slug in
+	// news_meta.json and the next rebuild puts it back into the index.
+	if err := writeMeta(d, m); err != nil {
+		log.Printf("[news:delete] write meta: %v", err)
+		http.Error(w, "deleted but metadata update failed", http.StatusInternalServerError)
+		return
+	}
 	if err := RebuildIndex(d); err != nil {
 		log.Printf("[news:delete] rebuild index: %v", err)
 		http.Error(w, "deleted but index rebuild failed", http.StatusInternalServerError)
@@ -450,25 +466,23 @@ func (h *Handlers) UploadCover(w http.ResponseWriter, r *http.Request) {
 	}
 	name := adminutil.SanitizeFilename(hdr.Filename)
 	outPath := filepath.Join(base, name)
-	out, err := os.Create(outPath)
+	// Read through a limit reader: the request cap above bounds the body, but
+	// the part itself must not be trusted to stay inside it. Buffering first and
+	// writing atomically means a rejected or interrupted upload never replaces
+	// the cover that is already published under this name.
+	buf, err := io.ReadAll(io.LimitReader(file, MaxImageBytes+1))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	// Copy through a limit reader: the request cap above bounds the body, but the
-	// part itself must not be trusted to stay inside it.
-	n, err := io.Copy(out, io.LimitReader(file, MaxImageBytes+1))
-	if err != nil {
-		out.Close()
-		_ = os.Remove(outPath)
-		log.Printf("[news:cover] write %s: %v", outPath, err)
+		log.Printf("[news:cover] read upload: %v", err)
 		http.Error(w, "failed to store cover", http.StatusInternalServerError)
 		return
 	}
-	out.Close()
-	if n > MaxImageBytes {
-		_ = os.Remove(outPath)
+	if len(buf) > MaxImageBytes {
 		http.Error(w, "image too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if err := adminutil.WriteFileAtomic(outPath, buf, 0o644); err != nil {
+		log.Printf("[news:cover] write %s: %v", outPath, err)
+		http.Error(w, "failed to store cover", http.StatusInternalServerError)
 		return
 	}
 	// Return a web path expected by the client/launcher
@@ -489,8 +503,19 @@ func (h *Handlers) UploadCover(w http.ResponseWriter, r *http.Request) {
 			cur := m[slug]
 			cur.CoverUrl = url
 			m[slug] = cur
-			_ = writeMeta(d, m)
-			_ = RebuildIndex(d)
+			// The image is stored either way, but if the metadata write fails
+			// the article keeps its old cover — reporting success would hide a
+			// change that did not happen.
+			if err := writeMeta(d, m); err != nil {
+				log.Printf("[news:cover] write meta: %v", err)
+				http.Error(w, "cover stored but metadata update failed", http.StatusInternalServerError)
+				return
+			}
+			if err := RebuildIndex(d); err != nil {
+				log.Printf("[news:cover] rebuild index: %v", err)
+				http.Error(w, "cover stored but index rebuild failed", http.StatusInternalServerError)
+				return
+			}
 		}
 	}
 	adminutil.WriteJSON(w, map[string]string{"coverUrl": url})

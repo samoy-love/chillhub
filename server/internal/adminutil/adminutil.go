@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -33,6 +34,22 @@ func RequireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 		return false
 	}
 	return true
+}
+
+// Fail answers with a generic message and puts the real error in the log.
+//
+// A filesystem error stringifies to something like
+// "open /srv/chillhub/content/news/x.md: permission denied" — the absolute
+// content root, the layout of the deployment and often the reason. That belongs
+// in the journal, not in an HTTP body: several of these endpoints are reachable
+// without authentication (nginx bypasses auth_request for the upload routes,
+// and /feedback/submit is public by design), and the admin panel has nothing to
+// do with the path anyway.
+func Fail(w http.ResponseWriter, code int, publicMsg, tag string, err error) {
+	if err != nil {
+		log.Printf("[%s] %v", tag, err)
+	}
+	http.Error(w, publicMsg, code)
 }
 
 // WriteJSON writes v as application/json with caching disabled.
@@ -99,7 +116,13 @@ func EnsureWithin(base, p string) bool {
 	if err != nil {
 		return false
 	}
-	return !strings.HasPrefix(rel, "..") && rel != ""
+	if rel == "" || rel == ".." {
+		return false
+	}
+	// Only a ".." SEGMENT means "outside base". A plain HasPrefix(rel, "..")
+	// also rejected legitimate names that merely begin with two dots — "..foo",
+	// "..gitkeep" — which are ordinary files inside base.
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // IsSafeGameID allows only [A-Za-z0-9_-] for game IDs and not empty.

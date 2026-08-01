@@ -67,6 +67,25 @@ func TestSweepDropsExpiredEntries(t *testing.T) {
 	}
 }
 
+// The age-based sweep alone cannot help when every address is fresh: that is
+// exactly the flood the cap exists for, and the map used to grow without bound.
+func TestSweepEnforcesHardCapWhenAllEntriesAreFresh(t *testing.T) {
+	l := New(10, time.Hour) // nothing can expire during the test
+	for i := 0; i < gcMaxEntries+2000; i++ {
+		l.Allow(fmt.Sprintf("10.%d.%d.%d", i/65536, (i/256)%256, i%256))
+	}
+	if n := l.Len(); n > gcMaxEntries {
+		t.Fatalf("tracked %d addresses, hard cap is %d", n, gcMaxEntries)
+	}
+	// Eviction must not disable limiting for an address that is still tracked.
+	for i := 0; i < 10; i++ {
+		l.Allow("203.0.113.99")
+	}
+	if l.Allow("203.0.113.99") {
+		t.Fatal("budget must still be enforced after an eviction pass")
+	}
+}
+
 func TestMiddlewareRejectsOverBudget(t *testing.T) {
 	l := New(2, time.Minute)
 	h := l.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

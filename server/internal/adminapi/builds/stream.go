@@ -29,6 +29,9 @@ func streamUnzip(w io.Writer, fl adminutil.Flusher, zipPath, filesRoot string) b
 		return false
 	}
 	defer zr.Close()
+	// See extractBudget: the entry sizes in the archive cannot be trusted, so
+	// the bytes actually written are counted and capped.
+	budget := newExtractBudget()
 	for _, zf := range zr.File {
 		rel := zipEntryRelPath(zf)
 		if rel == "" {
@@ -60,7 +63,7 @@ func streamUnzip(w io.Writer, fl adminutil.Flusher, zipPath, filesRoot string) b
 			streamError(w, fl, err.Error())
 			return false
 		}
-		if _, err := io.Copy(out, rc); err != nil {
+		if err := budget.copy(out, rc); err != nil {
 			out.Close()
 			rc.Close()
 			streamError(w, fl, err.Error())
@@ -96,7 +99,12 @@ func streamCompose(w io.Writer, fl adminutil.Flusher, filesRoot string) ([]manif
 		if rel == "." {
 			return nil
 		}
-		info, _ := d.Info()
+		// A missing FileInfo used to be ignored and info.Size() then panicked on
+		// nil. The manifest cannot be built without the size, so fail the walk.
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
 		f, err := os.Open(path)
 		if err != nil {
 			return err
@@ -152,7 +160,12 @@ func scanManifest(filesRoot string) ([]manifestFile, []string, error) {
 		if rel == "." {
 			return nil
 		}
-		info, _ := d.Info()
+		// See streamCompose: an ignored error here meant a nil FileInfo and a
+		// panic on info.Size().
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
 		f, err := os.Open(path)
 		if err != nil {
 			return err
