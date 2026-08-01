@@ -52,6 +52,10 @@
     const brand = document.querySelector('.site-header .brand');
     if(!brand) return;
     brand.addEventListener('click', (e)=>{
+      // Ctrl/Cmd+клик, Shift+клик и средняя кнопка — это просьба открыть ссылку
+      // в новой вкладке или окне. Раньше preventDefault() стоял безусловно, и
+      // такой клик вместо открытия новой вкладки перезагружал текущую.
+      if(e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;
       // Always handle ourselves to ensure hash reset and scroll-to-top
       e.preventDefault();
       try {
