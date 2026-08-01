@@ -1,15 +1,17 @@
 # Техническое задание (ТЗ) — ChillHub (MVP)
 
-Версия документа: 1.2
-Дата: 2025-09-21
+Версия документа: 1.3
+Дата: 2026-08-01
 
 ## Оглавление
 - [1. Цели и общая концепция](#1-цели-и-общая-концепция)
 - [2. Область MVP](#2-область-mvp)
 - [3. Архитектура и структура проекта](#3-архитектура-и-структура-проекта)
   - [3.1. Карта консистентности путей (Path Consistency)](#31-карта-консистентности-путей-path-consistency)
+  - [3.2. Разбиение серверного кода по пакетам](#32-разбиение-серверного-кода-по-пакетам)
 - [4. Пути установки по умолчанию](#4-пути-установки-по-умолчанию)
 - [5. Безопасность и целостность](#5-безопасность-и-целостность)
+  - [5.1. Подпись манифестов (Ed25519)](#51-подпись-манифестов-ed25519)
 - [6. Форматы данных](#6-форматы-данных)
   - [6.1. Манифест версии](#61-манифест-версии)
   - [6.2. Реестр игр (динамический)](#62-реестр-игр-динамический)
@@ -20,7 +22,15 @@
   - [8.2. Лаунчер](#82-лаунчер)
   - [8.3. Новости](#83-новости)
   - [8.4. Admin login](#84-admin-login)
+  - [8.5. Режим технических работ](#85-режим-технических-работ)
+  - [8.6. Метрики лаунчера](#86-метрики-лаунчера)
+  - [8.7. Обратная связь (Feedback)](#87-обратная-связь-feedback)
 - [9. Клиент (launcher/)](#9-клиент-launcher)
+  - [9.1. Данные клиента: конфиг и логи](#91-данные-клиента-конфиг-и-логи)
+  - [9.2. Проверка целостности игры](#92-проверка-целостности-игры)
+  - [9.3. Страница игры и откат на другую версию сборки](#93-страница-игры-и-откат-на-другую-версию-сборки)
+  - [9.4. Режим технических работ в клиенте](#94-режим-технических-работ-в-клиенте)
+  - [9.5. Discord Rich Presence](#95-discord-rich-presence)
 - [10. Содержимое контента (content/)](#10-содержимое-контента-content)
 - [11. Инсталлятор (NSIS)](#11-инсталлятор-nsis)
 - [12. Nginx (общее)](#12-nginx-общее)
@@ -88,13 +98,14 @@ ChillHub избавляет от рутинной и хрупкой ручной
 ## 3. Архитектура и структура проекта
 См. `README.md`:
 - `server/` — Golang:
-  - Public API (`/api/*`) + статика `/manifests/*`, `/content/*`, `/news/*` для dev.
-  - Admin API (`/admin/*`) и статика админки `server/admin_ui/*`.
+  - Public API (`/api/*`) + статика `/manifests/*`, `/content/*`, `/news/*` для dev — `server/cmd/api`.
+  - Admin API (`/admin/api/*`, с алиасами `/admin/*`) и статика админки `server/admin_ui/*` — `server/cmd/admin`.
 - `launcher/` — C# WPF лаунчер.
+- `updater/` — отдельный exe самообновления (`YourLauncher.Updater`) и общие preserve-правила (`updater/UpdatePreserve.cs`).
 - `landing/` — статический лендинг (отдается по корню `https://launcher.samoy.love/`).
-- `deploy/` — конфиги деплоя: `deploy/launcher.conf` (nginx), systemd unit-файлы.
-- `content/` — статика (манифесты, бинарное содержимое версий, новости и ассеты).
-- `scripts/` — скрипты сборки/публикации (например, `generate-manifest.ps1`, `installer.nsi`).
+- `deploy/` — конфиги деплоя: `deploy/launcher.conf` (nginx; на сервере кладётся как `chillhub-launcher.conf`), `deploy/nginx-check.sh`, systemd unit-файлы.
+- `content/` — статика (манифесты, бинарное содержимое версий, новости и ассеты, состояние режима техработ, метрики, инбокс обратной связи).
+- `scripts/` — скрипты сборки/публикации/деплоя (`run-dev.ps1`, `deploy.sh`, `deploy-win.ps1`, `installer.nsi` и др.).
 
 ### 3.1. Карта консистентности путей (Path Consistency)
 
@@ -106,6 +117,8 @@ ChillHub избавляет от рутинной и хрупкой ручной
   - Манифест лаунчера: `{ApiBase}/manifests/launcher/latest.json` → `{ApiBase}/manifests/launcher/{version}.json`.
   - Контент лаунчера/игр: `{ApiBase}/content/{gameId}/{version}/files/...` (собирается из манифеста).
   - Локальная папка игр по умолчанию: `D:\Games\ChillHub` (или `C:\Games\ChillHub`).
+  - Пользовательские данные клиента: `%APPDATA%\ChillHub\` — `config.json`, `logs\client*.log`, очередь обратной связи.
+    Каталог установки (`%LOCALAPPDATA%\ChillHub`) содержит только файлы сборки; см. [9.1](#91-данные-клиента-конфиг-и-логи).
 
 - Public API (`server/cmd/api`)
   - `/api/*` (проксируется nginx), dev‑статика: `/manifests/*`, `/content/*`, `/news/*`, `/assets/*` → `content/` каталоги.
@@ -114,7 +127,7 @@ ChillHub избавляет от рутинной и хрупкой ручной
   - Prod: `/admin/ui/*` (статика), `/admin/` (admin.html), `/admin/api/*` (backend, защищён через `auth_request`).
   - Dev: `http://localhost:55777/admin` (бэкенд + выдача статики для удобства).
 
-- Nginx (`deploy/launcher.conf`)
+- Nginx (`deploy/launcher.conf` → на сервере `/etc/nginx/sites-available/chillhub-launcher.conf`)
   - root `/var/www/site` → лендинг.
   - alias `/var/www/launcher/{content,manifests,news,admin_ui}`.
   - fallback `/assets/*` → сначала лендинг `/var/www/site/assets/`, затем `@news_assets_fallback` → `/var/www/launcher/news/assets/`.
@@ -125,29 +138,120 @@ ChillHub избавляет от рутинной и хрупкой ручной
   - `/api/*` — прокси на Public API (`127.0.0.1:55700`).
   - `/admin/api/*` — прокси на Admin API (`127.0.0.1:55777`) 1:1 (без переписывания пути).
   - `/admin/` и `/admin/ui/*` — статика админки из `/var/www/launcher/admin_ui/` (точный матч для `/admin/` отдает `admin.html`).
+  - `/feedback/submit` и `/metrics/report` — публичные (без авторизации) POST‑эндпоинты, проксируются на Admin API (`127.0.0.1:55777`); объявлены в конфиге ДО защищённого `location /admin/api/`.
   - `/content/*`, `/manifests/*`, `/news/*` — статика контента (`/var/www/launcher/...`).
   - `/assets/*` — «комбинированные ассеты»: сперва лендинг (`/var/www/site/assets`), затем fallback на новости (`/var/www/launcher/news/assets`).
 - `samoy.love` — плейсхолдер/заглушка (простая страница) — включается при необходимости.
+- Другие проекты на том же хосте (например `metro.samoy.love`) живут в собственных файлах `sites-available` — наш конфиг их не описывает и деплой их не перезаписывает.
 
 Порты (dev):
 - Public API: `:55700` (`server/cmd/api`)
 - Admin API/UI: `:55777` (`server/cmd/admin`)
 
+### 3.2. Разбиение серверного кода по пакетам
+
+`server/cmd/admin` — это только сборка роутера и middleware; обработчики живут в
+`server/internal/*`. Прежний монолитный `server/cmd/admin/main.go` распилен:
+
+| Пакет | Ответственность |
+|---|---|
+| `server/cmd/admin/main.go` | конфигурация процесса, middleware-цепочка, rate‑лимиты публичных эндпоинтов, старт HTTP-сервера |
+| `server/cmd/admin/routes.go` | единый список эндпоинтов (`apiRoutes()`), автогенерация алиасов `/admin/api/... → /admin/...` |
+| `server/internal/adminapi/auth` | вход/выход/refresh/me/verify, cookies, CSRF |
+| `server/internal/adminapi/builds` | загрузка ZIP (обычная, потоковая, чанковая), распаковка, манифесты, `latest`, подпись (`sign.go`), генератор ключей (`keygen`) |
+| `server/internal/adminapi/news` | новости, индексы, Markdown-предпросмотр, ассеты |
+| `server/internal/adminapi/feedback` | инбокс обратной связи + публичный приём обращений |
+| `server/internal/adminapi/games` | реестр игр, иконки, скан папок манифестов |
+| `server/internal/adminapi/media` | обработка изображений (ресайз/конвертация, ffmpeg) |
+| `server/internal/adminutil` | общие примитивы: `RequireMethod`, `WriteJSON`, `DetectContentRoot` и защита от path traversal (`IsSafeGameID`, `IsSafeVersion`, `IsSafeNewsSlug`, `NewsSlugPath`, `EnsureWithin`, `SanitizeFilename`, `SanitizeAssetPath`) |
+| `server/internal/httpx` | RequestID, CORS, логирование, `NoStore` |
+| `server/internal/maintenance` | режим технических работ (публичный и админские эндпоинты) |
+| `server/internal/metrics` | приём и агрегация метрик лаунчера |
+| `server/internal/ratelimit` | лимитер по адресу клиента (`ClientIP` учитывает `X-Forwarded-For`/`X-Real-IP`) |
+
+Два следствия, важных при чтении кода:
+
+- Маршруты объявляются один раз в `apiRoutes()` под каноническим путём
+  `/admin/api/...`; форма `/admin/...` создаётся автоматически (`aliasOf`). Эндпоинты
+  с `noAlias: true` (вся `auth/*`, поддерево `upload/*`) существуют только под
+  `/admin/api/...`.
+- Пакет `maintenance` подключён к обоим бинарям: публичный `GET /api/maintenance`
+  регистрируется в `server/cmd/api`, запись состояния — в `server/cmd/admin`.
+
 ## 4. Пути установки по умолчанию
-- Лаунчер: `%LOCALAPPDATA%/ChillHub/` (`scripts/installer.nsi` — `APPDIR`) 
-- Игры: `D:/Games/ChillHub/` (если диска `D:` нет — `C:/Games/ChillHub/`).
+- Лаунчер (каталог установки): `%LOCALAPPDATA%\ChillHub\` (`scripts/installer.nsi` — `INSTALL_DIR`). Здесь лежат только файлы сборки.
+- Игры: `D:\Games\ChillHub\` (если диска `D:` нет — `C:\Games\ChillHub\`).
+- Пользовательские данные клиента: `%APPDATA%\ChillHub\` (`config.json`, `logs\`). Подробности и миграция — [9.1](#91-данные-клиента-конфиг-и-логи).
+- Локальный bcrypt‑хэш пароля админки для dev‑запуска: `%LOCALAPPDATA%\ChillHub\admin.secret.json` (создаётся `scripts/run-dev.ps1`, к каталогу установки отношения не имеет).
 
 ## 5. Безопасность и целостность
-- Подпись манифестов не используется; целостность обеспечивается хешами файлов (Blake3 — основной, SHA-256 — опционально). Клиент проверяет доступные хеши. На стороне админ‑сервера хеши считаются при загрузке ZIP.
+- Целостность файлов обеспечивается хешами (Blake3 — основной, SHA-256 — опционально). Клиент проверяет доступные хеши. На стороне админ‑сервера оба хеша считаются при загрузке ZIP за один проход по файлу.
+- Подлинность манифеста обеспечивается подписью Ed25519 — см. [5.1](#51-подпись-манифестов-ed25519). Заглушка `dev-mock-signature` больше не используется.
 - Клиент не должен определяться как вирус:
   - Использовать стандартные механики самообновления (robocopy, temp + перезапуск), без подозрительных техник.
   - Подписывать инсталлятор/EXE на этапах релиза (см. раздел 27).
+
+### 5.1. Подпись манифестов (Ed25519)
+
+Клиент скачивает и запускает исполняемые файлы, поэтому одного TLS мало: тот, кто
+получил доступ к раздаче, подменит содержимое. Манифест подписывается приватным
+ключом, который есть только на сервере сборки.
+
+**Сервер** (`server/internal/adminapi/builds/sign.go`):
+
+- Переменная окружения `MANIFEST_SIGNING_KEY` — приватный ключ Ed25519 в base64.
+  Принимается как полный 64‑байтный ключ, так и «голый» 32‑байтный seed; base64
+  допускается standard/URL‑safe, с паддингом и без.
+- Ключ читается один раз и кэшируется. Если переменная не задана или значение
+  не разбирается, в журнал пишется предупреждение `SECURITY: ... manifests will be
+  published UNSIGNED`, а поле `signature` остаётся пустым — сборки при этом
+  публикуются, но без подписи.
+- Значение подписи: `ed25519:<base64 подписи>` (константа `SignaturePrefix`).
+- Подписываются не байты JSON, а каноническое представление
+  (`chillhub-manifest-v1`): строки через LF — заголовок версии схемы, `version`,
+  `gameId`, `buildId`, количество файлов, отсортированные по пути записи
+  (путь, размер, blake3, sha256, флаг исполняемости через TAB), количество пустых
+  каталогов и сами каталоги. Поля `createdAt` и `signature` в подпись НЕ входят,
+  пути нормализуются, хеши приводятся к нижнему регистру. Смена
+  `chillhub-manifest-v1` намеренно обесценивает старые подписи.
+
+**Генерация пары ключей** (из каталога `server/`):
+
+```bash
+cd server && go run ./internal/adminapi/builds/keygen
+```
+
+Команда печатает строку `MANIFEST_SIGNING_KEY=...` (приватная часть — на сервер,
+в репозиторий НЕ коммитить) и публичный ключ (в клиент). На сервере ключ задаётся
+в юните `deploy/systemd/chillhub-admin.service` через `Environment=` либо, что
+предпочтительнее, через `EnvironmentFile=` с правами 600.
+
+**Клиент** (`launcher/ChillHub/Core/Sync/ManifestSignature.cs`):
+
+- Публичный ключ зашит в константе `ManifestSignature.PublicKeyBase64`.
+- Проверка Ed25519 — собственная реализация (`Core/Sync/Ed25519Verifier.cs`),
+  каноническое представление строится тем же алгоритмом, что и на сервере.
+- Статусы проверки: `Valid`, `Missing` (подписи нет вовсе — в том числе старая
+  заглушка), `NoPublicKey` (подпись есть, но в клиент не зашит ключ), `Invalid`.
+- **Режим совместимости (по умолчанию).** `Invalid` — отказ всегда; `Missing` и
+  `NoPublicKey` — предупреждение в лог и работа продолжается. Это нужно, пока на
+  раздаче лежат манифесты, выпущенные до появления подписи.
+- **Строгий режим** — любой манифест без проверяемой подписи отвергается.
+  Включается переменной окружения `CHILLHUB_MANIFEST_STRICT` (`1`/`true`/`yes`),
+  а «навсегда» — переключением константы `ManifestSignature.StrictByDefault`
+  в `true` и выпуском новой версии лаунчера. Делать это можно только после того,
+  как ВСЕ манифесты на раздаче перевыпущены подписанными, иначе обновления сломаются.
+
+Порядок ввода подписи в эксплуатацию: сгенерировать пару → положить приватный ключ
+в окружение админ‑сервиса → вписать публичный в клиент и выпустить лаунчер →
+перевыпустить (пересобрать) все версии, чтобы манифесты получили подпись → только
+после этого включать строгий режим.
 
 ## 6. Форматы данных
 ### 6.1. Манифест версии
 Генерируется сервером Админки при загрузке ZIP и хранится в `content/manifests/{gameId}/{version}.json` (для лаунчера: `gameId = launcher`). Хеши (SHA-256 и Blake3) считаются на сервере.
 
-Структура (единая, подтверждена в `server/cmd/admin/main.go`):
+Структура (единая, подтверждена в `server/internal/adminapi/builds/builds.go`, тип `manifest`):
 ```json
 {
   "version": "1.0.0",
@@ -163,13 +267,16 @@ ChillHub избавляет от рутинной и хрупкой ручной
       "executable": true
     }
   ],
-  "emptyDirs": ["Saves", "Cache"]
+  "emptyDirs": ["Saves", "Cache"],
+  "signature": "ed25519:<base64>"
 }
 ```
 Дополнительно: `content/manifests/{gameId}/latest.json` содержит `{ "version": "1.x.y" }`.
 
 Примечания:
 - Админ-сервер при загрузке ZIP считает оба хеша (SHA-256 и Blake3) за один проход по файлу.
+- `signature` — подпись Ed25519 канонического представления манифеста, см. [5.1](#51-подпись-манифестов-ed25519). Поле пустое, если `MANIFEST_SIGNING_KEY` на сервере не задан; `createdAt` и сама `signature` в подписываемые байты не входят.
+- В манифест лаунчера (`gameId = launcher`) НЕ должны попадать пользовательские файлы (`config.json`, `launcher.version`) — иначе возникает петля самообновления. Проверка: [22](#22-локальная-разработка-и-автотесты-деплоя).
 
 ### 6.2. Реестр игр (динамический)
 Хранится в `content/manifests/_registry/games.json`, управляется из админки.
@@ -233,6 +340,25 @@ Public API использует этот список (если существу
   - Описание: Список доступных версий по файлам в `content/manifests/{gameId}/*.json` (кроме `latest.json`).
   - Ответ 200: `{ gameId: string, items: string[] }`.
 
+<a id="api-maintenance"></a>
+- `GET /api/maintenance` (также `HEAD`)
+  - Описание: состояние режима технических работ. Опрашивается каждым лаунчером при старте и далее раз в 60 секунд.
+  - **Ответ всегда 200** — «режим выключен» это нормальный ответ, а не 404. Отсутствующий или битый файл состояния трактуется как «выключен».
+  - Окно активности вычисляет СЕРВЕР: клиенту не нужно сравнивать дедлайн со своими часами. Если окно ещё не началось или уже истекло, эндпоинт отдаёт `enabled: false` без вмешательства администратора (автосброс).
+  - Ответ 200:
+    ```json
+    {
+      "enabled": true,
+      "reason": "Обновляем раздачу",
+      "startsAt": "2026-08-01T20:00:00Z",
+      "endsAt": "2026-08-01T22:00:00Z",
+      "blocks": { "install": true, "update": true, "launch": false },
+      "serverTime": "2026-08-01T20:13:07Z"
+    }
+    ```
+  - Поля: `enabled` — режим действует прямо сейчас; `reason` — текст для баннера (обрезается сервером до 500 байт при записи); `startsAt`/`endsAt` — RFC 3339 в UTC, возвращаются только пока окно активно, пустые значения означают «с этого момента» / «до отмены»; `blocks` — три независимых запрета (`install` — установка отсутствующей игры, `update` — обновление установленной, `launch` — запуск); `serverTime` — время сервера, чтобы клиент с уехавшими часами правильно показал обратный отсчёт. Поле `updatedBy` наружу не отдаётся.
+  - Реализация: `server/internal/maintenance/maintenance.go` (`PublicHandler`, `Effective`). Состояние кэшируется в памяти и перечитывается только при изменении mtime/размера файла, поэтому опрос стоит один `os.Stat`.
+
 <a id="api-news-index"></a>
 - `GET /news/index.json`
   - Описание: Индекс новостей лаунчера. Сервер фильтрует элементы по `published=true` (если поле отсутствует — пропускает).
@@ -254,30 +380,52 @@ Dev-статика (только в локальном запуске `api`):
 
 Примечание: Базовый URL строится с учетом `X-Forwarded-Proto` (http/https). См. `baseURL()`.
 
+Публичные POST‑эндпоинты, которые обслуживает процесс **admin** (`:55777`), а не `cmd/api`, — nginx проксирует их отдельными `location`, объявленными до защищённого `/admin/api/`:
+- `POST /feedback/submit` — приём обращений из лаунчера, см. [8.7](#87-обратная-связь-feedback).
+- `POST /metrics/report` — приём событий метрик, см. [8.6](#86-метрики-лаунчера).
+
+Rate limit Public API (`server/cmd/api/main.go`): по умолчанию **600 запросов в минуту** на адрес клиента; настраивается переменными `API_RATE_LIMIT` и `API_RATE_WINDOW` (значение лимита `0` или отрицательное — лимит выключен). Лимитер навешен только на JSON‑эндпоинты (`/api/*`, `/news/*.json`): dev‑раздача `/content/` и `/manifests/` под ним не ходит, иначе установка игры (тысячи файлов в 16 потоков) упиралась бы в лимит.
+
 [↑ к оглавлению](#оглавление) • [↑ наверх](#техническое-задание-тз--chillhub-mvp)
 
 ## 8. Admin UI/API (server/cmd/admin + server/admin_ui)
 Админ-панель доступна на `:55777/admin` (dev). Ниже функциональность по разделам и спецификация API.
 
+**Канонический префикс — `/admin/api/...`.** Полный список эндпоинтов объявлен один
+раз в `server/cmd/admin/routes.go` (`apiRoutes()`); форма `/admin/...` регистрируется
+автоматически как алиас (`aliasOf`). Исключения (`noAlias: true`), существующие
+ТОЛЬКО под `/admin/api/...`: все `auth/*` и всё поддерево чанковой загрузки
+`upload/*`. Ниже пути приводятся в канонической форме.
+
 ### 8.1. Игры
 - Загрузка версии (ZIP):
-  - `POST /admin/upload` (может быть оставлен для обратной совместимости; рекомендуем `uploadStream`).
-  - `POST /admin/uploadStream` — потоковый режим с прогрессом (NDJSON), используется UI.
+  - `POST /admin/api/upload` — простая multipart‑загрузка (обратная совместимость; UI её не использует).
+  - `POST /admin/api/uploadStream` — потоковый режим с прогрессом (NDJSON).
     - FormData: `kind=game|launcher`, `gameId?` (для `game`), `version`, `zip`, `updateLatest=0|1`.
     - Ответ: последовательность NDJSON событий: `start`, `zipSaved`, множество `unzip`, затем `composeStart`, множество `file`, `done` или `error`.
-- Список версий: `GET /admin/list?gameId={id}` → `{ items: [{version}], latest }`.
-- Активация latest: `POST /admin/activate?gameId={id}&version={v}` (создает/обновляет `latest.json`).
-- Удаление версии: `POST /admin/deleteVersion?gameId={id}&version={v}` (удаляет манифест и папку `content/{gameId}/{version}`; корректирует `latest.json`).
+  - Чанковая загрузка (используется UI для многогигабайтных сборок; только `/admin/api/...`):
+    `POST /admin/api/upload/init`, `POST /admin/api/upload/chunk`, `GET /admin/api/upload/status`,
+    `POST /admin/api/upload/complete`, `POST /admin/api/upload/process` (NDJSON‑распаковка),
+    `POST /admin/api/upload/cleanup`. Незавершённые загрузки подчищает фоновый janitor
+    (`StartUploadJanitor`).
+  - Публикация атомарна: ZIP распаковывается во временный каталог‑стейдж на том же томе
+    (`stageVersionDir`), и только после полной распаковки и подсчёта хешей каталог версии
+    подменяется одним `rename`. Обрыв загрузки не оставляет битую версию на раздаче.
+  - Манифест, записанный по итогам загрузки, подписывается (см. [5.1](#51-подпись-манифестов-ed25519)).
+- Список версий: `GET /admin/api/list?gameId={id}` → `{ items: [{version}], latest }`.
+- Активация latest: `POST /admin/api/activate?gameId={id}&version={v}` (создает/обновляет `latest.json`).
+- Удаление версии: `POST /admin/api/deleteVersion?gameId={id}&version={v}` (удаляет манифест и папку `content/{gameId}/{version}`; корректирует `latest.json`).
+- Свободное место на диске сервера: `GET /admin/api/system/free`.
 - Подсказка следующей версии: (убрана). Версию вводит администратор вручную в UI.
 - Сборка манифеста из уже разложенных файлов (compose) — убрана в пользу загрузки ZIP.
 - Предпросмотр файлов версии в UI: чтение `GET /manifests/{gameId}/{version}.json` и древовидный показ.
 - Редактор реестра игр (динамический список):
-  - `GET /admin/games` — читает/создает `content/manifests/_registry/games.json`.
-  - `POST /admin/games/save` — сохраняет `{ items: [{ gameId, title, exeRelativePath, iconUrl }] }`.
-  - `GET /admin/games/scan` — ищет новые игры по папкам манифестов (исключая `_registry`, `launcher`, `repo`).
-  - Загрузка иконки игры: `POST /admin/games/icon/upload` (multipart: `gameId`, `file`) → сохраняет `content/manifests/{gameId}/icon.png` и возвращает URL.
+  - `GET /admin/api/games` — читает/создает `content/manifests/_registry/games.json`.
+  - `POST /admin/api/games/save` — сохраняет `{ items: [{ gameId, title, exeRelativePath, iconUrl }] }`.
+  - `GET /admin/api/games/scan` — ищет новые игры по папкам манифестов (исключая `_registry`, `launcher`, `repo`).
+  - Загрузка иконки игры: `POST /admin/api/games/icon/upload` (multipart: `gameId`, `file`) → сохраняет `content/manifests/{gameId}/icon.png` и возвращает URL.
 
-Аутентификация (cookie + JWT, `server/cmd/admin/auth.go`):
+Аутентификация (cookie + JWT, `server/internal/adminapi/auth/auth.go`):
 - `POST /admin/api/auth/login` — тело: `{ username, password }` или `application/x-www-form-urlencoded`.
   - Устанавливает cookies: `access_token` (HttpOnly), `refresh_token` (HttpOnly), `csrf_token` (не HttpOnly).
 - `POST /admin/api/auth/logout` — очистка cookies.
@@ -289,25 +437,28 @@ CSRF: для методов `POST/PUT/PATCH/DELETE` требуется заго�
 
 ### 8.2. Лаунчер
 - Просмотр текущего манифеста лаунчера: UI читает `GET /manifests/launcher/latest.json` и затем `GET /manifests/launcher/{version}.json`.
-- Загрузка версии лаунчера (ZIP): `POST /admin/upload` с `FormData(kind=launcher, version, zip, updateLatest=0|1)`.
+- Загрузка версии лаунчера (ZIP): те же эндпоинты, что и для игр, с `kind=launcher` (`POST /admin/api/uploadStream` или чанковая загрузка).
+- ВАЖНО: в ZIP лаунчера не должно быть `config.json` и `launcher.version` — см. [22](#22-локальная-разработка-и-автотесты-деплоя).
 
 ### 8.3. Новости
-- Индекс по области: `GET /admin/news/list?scope=launcher|game&gameId={optional}`.
-- Получить новость: `GET /admin/news/get?scope=...&gameId=...&slug=...` → `{ markdown, published, coverUrl }`.
-- Сохранить: `POST /admin/news/save` (multipart: `scope, gameId?, slug, markdown, coverUrl?, published?`) — сохраняет, обновляет meta и пересобирает индекс.
-- Удалить: `DELETE /admin/news/delete?scope=...&gameId=...&slug=...`.
-- Публикация: `POST /admin/news/publish` (`scope, gameId?, slug, published=true|false`).
-- Предпросмотр: `POST /admin/news/preview` — `{ listHtml, contentHtml }`.
-- Пересборка индекса: `POST /admin/news/rebuild?scope=...&gameId=...`.
+- Индекс по области: `GET /admin/api/news/list?scope=launcher|game&gameId={optional}`.
+- Получить новость: `GET /admin/api/news/get?scope=...&gameId=...&slug=...` → `{ markdown, published, coverUrl }`.
+- Сохранить: `POST /admin/api/news/save` (multipart: `scope, gameId?, slug, markdown, coverUrl?, published?`) — сохраняет, обновляет meta и пересобирает индекс.
+- Удалить: `DELETE /admin/api/news/delete?scope=...&gameId=...&slug=...`.
+- Публикация: `POST /admin/api/news/publish` (`scope, gameId?, slug, published=true|false`).
+- Предпросмотр: `POST /admin/api/news/preview` — `{ listHtml, contentHtml }`.
+- Пересборка индекса: `POST /admin/api/news/rebuild?scope=...&gameId=...`.
+- Загрузка обложки: `POST /admin/api/news/uploadCover`.
 - Ассеты: базовая директория `content/news/assets`.
-  - Листинг: `GET /admin/news/assets?path={rel}&q={opt}&dirsOnly={0|1}`.
-  - Создать папку: `POST /admin/news/assets/mkdir`.
-  - Переименовать: `POST /admin/news/assets/rename`.
-  - Удалить: `POST /admin/news/assets/delete`.
-  - Загрузка файла: `POST /admin/news/assets/upload` (конвертация изображений, ресайз до 1080 минимальной стороны; GIF/WEBP → WEBP при наличии ffmpeg).
-  - Загрузка по URL: `POST /admin/news/assets/uploadByUrl` (та же обработка, имя подбирается безопасно).
+  - Листинг: `GET /admin/api/news/assets?path={rel}&q={opt}&dirsOnly={0|1}`.
+  - Создать папку: `POST /admin/api/news/assets/mkdir`.
+  - Переименовать: `POST /admin/api/news/assets/rename`.
+  - Удалить: `POST /admin/api/news/assets/delete`.
+  - Загрузка файла: `POST /admin/api/news/assets/upload` (конвертация изображений, ресайз до 1080 минимальной стороны; GIF/WEBP → WEBP при наличии ffmpeg).
+  - Загрузка по URL: `POST /admin/api/news/assets/uploadByUrl` (та же обработка, имя подбирается безопасно).
+- Все параметры `gameId`/`slug`/`path` проверяются общими примитивами `adminutil` (`IsSafeGameID`, `IsSafeNewsSlug`, `EnsureWithin`, `SanitizeAssetPath`); выход за пределы `content/` невозможен.
 
-- Здоровье сервиса: `GET /admin/health` → `ok`. В продакшене публичные вызовы UI обращаются к `/admin/api/*` (та же логика, зеркальные хендлеры зарегистрированы в бэкенде).
+- Здоровье сервиса: `GET /admin/api/health` → `ok` (в nginx вынесен в отдельный `location` до `auth_request`, поэтому доступен без авторизации). Алиас `/admin/health` также зарегистрирован.
 
 UI админки: `server/admin_ui/admin.html` + `admin.js` (Bootstrap 5, темная тема). Кнопки «Собрать» и «Предложить следующую версию» удалены; используется загрузка ZIP и просмотр списков версий.
 
@@ -329,15 +480,131 @@ UI админки: `server/admin_ui/admin.html` + `admin.js` (Bootstrap 5, те�
    - Перед стартом: `./scripts/run-dev.ps1 -ResetAdminAuth ...` — сгенерирует новый случайный пароль (будет показан в консоли), пересчитает `ADMIN_PASSWORD_BCRYPT`, создаст новый `JWT_SECRET` и запустит процессы с этими значениями.
    - Во время работы: в интерактивном окне `run-dev.ps1` нажмите `p` или русскую `з` для сброса пароля и `JWT_SECRET` с последующим автоперезапуском процессов.
 
+### 8.5. Режим технических работ
+
+Позволяет на время релиза или обслуживания раздачи запретить клиентам установку,
+обновление и/или запуск игр и показать баннер с причиной. Реализация —
+`server/internal/maintenance/`.
+
+Хранение: один файл `<contentRoot>/maintenance/state.json` (в проде —
+`/var/www/launcher/maintenance/state.json`). Никакой БД: состояние лежит рядом с
+реестром игр и инбоксом обратной связи, `cat` показывает истину. **Отсутствие
+файла = режим выключен**; это не ошибка. Запись атомарная (temp + rename).
+
+Публичный эндпоинт для лаунчера — `GET /api/maintenance`, см.
+[раздел 7](#api-maintenance). Ниже — админские, все под `/admin/api/...`:
+
+- `GET /admin/api/maintenance/get` → `{ state, effective, path }`, где `state` —
+  запись как она лежит на диске, `effective` — то же, что увидит клиент прямо
+  сейчас (позволяет показать «включено, но окно закончилось час назад»), `path` —
+  путь к файлу состояния (для поддержки).
+- `POST /admin/api/maintenance/set` — тело: полное желаемое состояние
+  ```json
+  {
+    "enabled": true,
+    "reason": "Обновляем раздачу",
+    "startsAt": "2026-08-01T20:00:00Z",
+    "endsAt": "2026-08-01T22:00:00Z",
+    "blocks": { "install": true, "update": true, "launch": false }
+  }
+  ```
+  Частичного обновления нет намеренно: наполовину применённое окно техработ хуже,
+  чем его отсутствие. Валидация: тело не больше 64 КиБ; `reason` обрезается до
+  500 байт; `startsAt`/`endsAt` — строго RFC 3339, иначе **400**; `endsAt` должен
+  быть позже `startsAt`, иначе **400**; обе метки нормализуются в UTC. Сервер сам
+  проставляет `updatedAt` и `updatedBy` (логин администратора). Ответ — та же
+  структура, что у `get`.
+- `POST /admin/api/maintenance/clear` — удаляет файл состояния (канонический
+  «выключено»). Отсутствие файла не считается ошибкой.
+
+Изменения пишутся в журнал строками `[audit] maintenance set ...` / `[audit] maintenance clear ...`.
+
+Автосброс: окно считает сервер (`Effective`) при каждом запросе. Истёкшее или ещё
+не начавшееся окно отдаётся как «выключено» вместе со всеми блокировками —
+устаревший `endsAt` не может навсегда запереть клиентов.
+
+### 8.6. Метрики лаунчера
+
+Минимальная телеметрия (`server/internal/metrics/`): не система мониторинга, а
+файл событий и один агрегирующий запрос. Ни TSDB, ни экспортёров, ни внешних
+зависимостей.
+
+**Публичный приём:** `POST /metrics/report` (без авторизации; обслуживается
+процессом admin, потому что он — единственный писатель файла событий).
+- Rate limit: **30 запросов в минуту** на адрес клиента (`metricsRateLimit` в
+  `server/cmd/admin/main.go`; для сравнения `/feedback/submit` — 5/мин).
+- Ограничение тела: **8 КиБ** (`MaxBodyBytes`).
+- Поля события: `installId`, `event`, `appVersion`, `os`, `gameId`, `version`,
+  `result`, `durationMs`, `bytes`, `errorCode`.
+  - `event` — только из списка: `launcher_start`, `game_install`, `game_update`,
+    `game_launch`, `error`. Неизвестное значение — **400** (опечатка в клиенте
+    видна сразу, а не портит агрегат).
+  - `result` — `ok` | `fail` | `cancel`; иное значение просто отбрасывается.
+  - Отрицательные `durationMs`/`bytes` обнуляются, строки обрезаются по длине
+    (installId 64, версии 64, os 120, gameId 80, errorCode 120).
+  - Время события ставит СЕРВЕР (`ts`, UTC); часы клиента не используются.
+
+**Что собирается и что не собирается** (это осознанное решение, зафиксированное в
+комментарии пакета):
+- Собирается: `installId` — непрозрачный случайный идентификатор, который клиент
+  генерирует один раз и хранит локально; он идентифицирует установку, а не
+  человека, и НЕ выводится из железа, MAC, серийника диска, Windows SID, имени
+  пользователя или аккаунта. Плюс тип события, версия лаунчера, грубая строка ОС,
+  контекст установки/обновления и время приёма.
+- НЕ собирается и отбрасывается, даже если клиент это пришлёт: IP‑адрес (адрес
+  запроса используется только для rate limit и в файл не пишется), имена
+  пользователей и аккаунтов, имя машины, e‑mail, пути файловой системы и каталоги
+  установки, идентификаторы оборудования, отпечатки экрана/локали, произвольный
+  текст логов. Список полей — allowlist самого декодера: посторонние члены JSON
+  отбрасываются, поэтому будущая версия клиента не сможет «случайно» добавить поле.
+
+**Хранение:** `<contentRoot>/metrics/events.jsonl` — по одному JSON‑объекту на
+строку, только дозапись. Ротация вместо подрезки: по достижении `MaxFileBytes`
+(16 МиБ) активный файл становится `events.1.jsonl`, предыдущее поколение
+удаляется. Итого дисковый потолок — 2×16 МиБ. (Инбокс обратной связи устроен
+иначе — он переписывает весь JSON на каждое обращение и потому нуждается в
+жёстком лимите записей; для метрик такая схема была бы квадратичной.)
+
+**Админские эндпоинты:**
+- `GET /admin/api/metrics/summary?from=&to=&gameId=` — сводка за период.
+  `from`/`to` — RFC 3339 (иначе 400), по умолчанию последние 30 суток; `gameId` —
+  необязательный фильтр. Ответ: `totals` (события, запуски лаунчера, установки и
+  их ok/fail, обновления и их ok/fail, запуски игр, ошибки, уникальные установки,
+  скачанные байты, средние `avgInstallMs`/`avgUpdateMs` — только по успешным
+  операциям с указанной длительностью), `byDay` (сутки по UTC, не более 400
+  корзин), `byGame`, `topErrors`, `appVersions`, `os` (топ‑20 в каждом).
+  Битая строка в файле пропускается, обрыв чтения не роняет сводку — частичные
+  числа лучше, чем 500.
+- `POST /admin/api/metrics/clear` — удаляет оба поколения файла; пишет
+  `[audit] metrics clear by=...`.
+
+### 8.7. Обратная связь (Feedback)
+
+- Публичный приём: `POST /feedback/submit` (без авторизации, rate limit 5 запросов
+  в минуту на адрес клиента). Ограничения хранилища: `MaxLogBytes` 256 КиБ на
+  вложенные логи, `MaxItems` 2000 обращений, `MaxTotalBytes` 64 МиБ на файл
+  инбокса; при превышении инбокс подрезается (`Prune`).
+- Хранение: `<contentRoot>/feedback/inbox.json` (в репозитории не отслеживается —
+  там персональные данные пользователей).
+- Админские эндпоинты: `GET /admin/api/feedback/list`, `GET /admin/api/feedback/get`,
+  `POST /admin/api/feedback/delete`, `POST /admin/api/feedback/toggleImportant`,
+  `POST /admin/api/feedback/markRead`, `POST /admin/api/feedback/markUnread`,
+  `POST /admin/api/feedback/clear`.
+- Клиент отправляет как ручные обращения (`Core/Home/FeedbackService.cs`), так и
+  автоматические отчёты о необработанных исключениях (`Core/ErrorReporter.cs`);
+  последние отключаются настройкой «Конфиденциальность» в лаунчере
+  (`AppConfig.AutoErrorReports`).
+
 ## 9. Клиент (launcher/)
 
 [↑ к оглавлению](#оглавление) • [↑ наверх](#техническое-задание-тз--chillhub-mvp)
 - Технологии: C# WPF (.NET 8), NSIS инсталлятор.
-- Конфигурация (упрощенно): `ConfigService.Current` — содержит `ApiBaseUrl`, `GamesPath`, `DownloadThreads` и пр. (см. код клиента).
+- Конфигурация: `ConfigService.Current` (`launcher/ChillHub/Core/Config.cs`) — `ApiBaseUrl`, `GamesPath`, `DownloadThreads` (2–16), `LastGameId`, `AutoErrorReports`, `DiscordRichPresence`. Путь к файлу — только через `ConfigService.ConfigFilePath`, см. [9.1](#91-данные-клиента-конфиг-и-логи).
 - Self-update:
   - При старте открывается окно `UpdateWindow.xaml.cs`, которое:
     - Читает `GET {ApiBase}/manifests/launcher/latest.json`.
-    - Загружает манифест `{ApiBase}/manifests/launcher/{version}.json` и сравнивает по хешам локальные файлы лаунчера (SHA-256 и Blake3, если заданы).
+    - Загружает манифест `{ApiBase}/manifests/launcher/{version}.json`, проверяет его подпись (см. [5.1](#51-подпись-манифестов-ed25519)) и сравнивает по хешам локальные файлы лаунчера (SHA-256 и Blake3, если заданы).
+    - Файлы из preserve‑списка (`config.json`, `launcher.version`) и служебные артефакты апдейтера при сравнении и скачивании ПРОПУСКАЮТСЯ: апдейтер их всё равно не перезаписывает, и любое расхождение по ним даёт бесконечный цикл самообновления. Единый источник правил — `updater/UpdatePreserve.cs` (`PreserveMatcher`), общий для лаунчера и апдейтера.
     - При необходимости скачивает в `%TEMP%/ChillHub/SelfUpdate/{version}` только отличающиеся файлы (через `SimpleSyncService` план/дифф).
     - Применение: генерирует `apply-update.cmd` (robocopy избранных файлов, создание пустых папок) и перезапускает приложение. Логи применения — `apply-update.log` в temp-папке.
     - DEV-флаг: `YL_DEV_SKIP_SELF_UPDATE=1` пропускает проверку самообновления (см. `UpdateWindow.xaml.cs`).
@@ -355,6 +622,90 @@ UI админки: `server/admin_ui/admin.html` + `admin.js` (Bootstrap 5, те�
   - Лаунчер: `GET {ApiBase}/news/index.json`.
   - Игра: `GET {ApiBase}/news/games/{gameId}/index.json`.
   - Полный текст карточки открывается по `*.md` URL (роутинг в клиенте).
+- Проверка подписи манифеста выполняется в единственной точке — `SimpleSyncService.GetManifestAsync` (`ManifestSignature.Enforce`), до любой загрузки файлов. Это покрывает и синхронизацию игр, и самообновление лаунчера.
+
+### 9.1. Данные клиента: конфиг и логи
+
+- Конфигурация: `%APPDATA%\ChillHub\config.json`.
+  **Раньше конфиг лежал в `%LOCALAPPDATA%\ChillHub` — это неверно и исправлено.**
+  `%LOCALAPPDATA%\ChillHub` — это КАТАЛОГ УСТАНОВКИ лаунчера (`ChillHub.exe`, `*.dll`,
+  `runtimes/`), поэтому конфиг оттуда попадал в пакет сборки и в манифест обновления,
+  что давало вечный цикл самообновления.
+- Миграция: при первом запуске новой версии `ConfigService.MigrateLegacyConfig()`
+  переносит `config.json` из `%LOCALAPPDATA%\ChillHub` в `%APPDATA%\ChillHub`.
+  Идемпотентно (если новый файл уже есть — ничего не делает), старый файл намеренно
+  НЕ удаляется: его ещё может читать не обновившаяся версия, и он входит в
+  preserve‑список апдейтера. Ошибки миграции глушатся — она не имеет права ломать запуск.
+- Логи: `%APPDATA%\ChillHub\logs\client.log` с ротацией (потолок 5 МиБ, до 3 архивов
+  `client.1.log`…`client.3.log`). Путь берётся из `Logger.LogDirectory` / `Logger.LogFilePath`.
+- **Логи пишутся по умолчанию.** Переменная `CHILLHUB_CLIENT_LOG` их только
+  ВЫКЛЮЧАЕТ: `0`/`false`/`off`/`no` — выключить, любое другое значение и отсутствие
+  переменной — включено. Без логов обратная связь и авто‑отчёты приходят пустыми.
+
+### 9.2. Проверка целостности игры
+
+Страница «Настройки» → раздел «Целостность игры». Реализация — `Core/Sync/IntegrityChecker.cs`,
+UI — `Pages/SettingsPage.xaml(.cs)`; та же логика доступна со страницы игры.
+
+- Сверяет установленные файлы с манифестом последней опубликованной версии,
+  **пересчитывая хеши с диска**; кеш хешей намеренно обходится, поэтому проверка
+  может занять несколько минут.
+- Отчёт (`IntegrityReport`): всего файлов, отсутствующие, повреждённые, лишние,
+  а также признак незавершённого обновления (маркер `.updating` в корне игры).
+- Результат — готовый `DiffPlan`, который можно сразу передать в
+  `ISyncService.ExecuteAsync`, то есть «Проверить» и «Починить» используют один и
+  тот же механизм, что и обычное обновление.
+- Файлы из preserve‑списка и служебные (`.staging`, `.version`, `.updating`)
+  расхождением не считаются.
+
+### 9.3. Страница игры и откат на другую версию сборки
+
+`Pages/GamePage.xaml(.cs)`, открывается с главной по карточке игры.
+
+- Содержит: сведения об установке и состоянии, прогресс установки/обновления,
+  changelog из новостей игры, раздел «Игра по сети».
+- Кнопки «Играть» на этой странице нет намеренно — запуск остаётся на главной.
+- **Выбор версии сборки, включая откат.** Список версий берётся из
+  `GET {ApiBase}/api/games/{gameId}/builds`; можно установить не только `latest`,
+  но и любую другую опубликованную версию. Переход на другую версию — тот же
+  диффовый механизм: скачивается только разница, лишние файлы удаляются, поэтому
+  откат на предыдущую сборку не требует полной перекачки.
+- Изменения локального состояния со страницы игры (установка/обновление/откат)
+  помечаются флагом, и главная страница обновляет карточку при возврате.
+
+### 9.4. Режим технических работ в клиенте
+
+`Core/Maintenance/MaintenanceService.cs` + `MaintenanceState.cs`.
+
+- Опрашивает `GET {ApiBaseUrl}/api/maintenance` при старте и далее раз в **60 секунд**;
+  таймаут одного запроса — 10 секунд.
+- Отказоустойчивость важнее свежести: сеть недоступна или ответ не разобрался —
+  прежнее состояние сохраняется и пользователю ничего не показывается; сервер без
+  этого эндпоинта (404/501) трактуется как «режим выключен», чтобы лаунчер работал
+  со старым сервером как раньше. Повторяющиеся сбои пишутся в лог только один раз за серию.
+- Что блокировать и как рисовать баннер, решают страницы; сервис лишь хранит
+  `Current` и поднимает событие `Changed` (в UI‑потоке).
+- Выход из режима автоматический: как только сервер ответил `enabled: false`,
+  UI разблокируется без перезапуска клиента.
+
+### 9.5. Discord Rich Presence
+
+`Core/DiscordRichPresence.cs` — минимальный клиент Discord IPC без внешних
+зависимостей (именованный канал `\\.\pipe\discord-ipc-N`, N = 0..9).
+
+- Показывает в статусе Discord название игры, версию сборки и время сессии.
+- **Требуется Application ID владельца лаунчера.** Заведите приложение на
+  <https://discord.com/developers/applications>, скопируйте «Application ID» и
+  подставьте его в константу `ApplicationId` в `Core/DiscordRichPresence.cs`.
+  Пока значение пустое (или не состоит из цифр), `IsConfigured` = false и
+  интеграция просто не активируется — ни ошибок, ни задержек это не вызывает.
+  Картинку для статуса можно загрузить там же (Rich Presence → Art Assets) с ключом
+  `chillhub` (константа `LargeImageKey`).
+- Пользовательский переключатель: «Настройки» → «Интеграции»
+  (`AppConfig.DiscordRichPresence`, по умолчанию `true`).
+- Всё строго опционально и неблокирующе: Discord не запущен, канал недоступен или
+  протокол изменился — молча пишем в лог. Таймауты: 300 мс на подключение к одному
+  каналу, 3 с на операцию целиком.
 
 ## 10. Содержимое контента (content/)
 - Манифесты: `content/manifests/{gameId}/{version}.json`, `latest.json`.
@@ -364,6 +715,10 @@ UI админки: `server/admin_ui/admin.html` + `admin.js` (Bootstrap 5, те�
   - По игре: `content/news/games/{gameId}/index.json`, `content/news/games/{gameId}/{slug}.md`.
   - Ассеты: `content/news/assets/**`.
 - Реестр игр: `content/manifests/_registry/games.json` (источник Public API).
+- Режим технических работ: `content/maintenance/state.json` (отсутствие файла = режим выключен), см. [8.5](#85-режим-технических-работ).
+- Метрики: `content/metrics/events.jsonl` и предыдущее поколение `content/metrics/events.1.jsonl`, см. [8.6](#86-метрики-лаунчера).
+- Обратная связь: `content/feedback/inbox.json` (персональные данные; в git не отслеживается).
+- Временные файлы загрузок админки: `content/tmp/` (чанки и ZIP незавершённых загрузок, подчищаются janitor'ом).
 
 ## 11. Инсталлятор (NSIS)
 - Per-user инсталляция (`RequestExecutionLevel user`).
@@ -373,18 +728,68 @@ UI админки: `server/admin_ui/admin.html` + `admin.js` (Bootstrap 5, те�
 - Uninstall не удаляет пользовательские данные/контент (только ярлыки и записи реестра лаунчера).
 
 ## 12. Nginx (общее)
-Конфигурация prod находится в `deploy/launcher.conf` и включает:
-- Хосты: `launcher.samoy.love` (основной), `samoy.love` (заглушка), дефолтный сервер закрывает прочие хосты `return 444`.
-- HTTP→HTTPS редирект для обоих доменов.
+Конфигурация prod хранится в репозитории как `deploy/launcher.conf` и включает:
+- Хост: **только** `launcher.samoy.love` (вместе с собственным блоком `:80 → :443`).
+  На сервере живут и другие проекты (например `metro.samoy.love`) — они описаны в
+  своих файлах `sites-available` со своими сертификатами; добавлять их в наш
+  `server_name` нельзя.
 - Маршрутизация:
-  - `/api/*` → `http://127.0.0.1:55700` (передаются `X-Forwarded-*`).
-  - `/admin/api/*` → `http://127.0.0.1:55777` (1:1, без переписывания пути).
+  - `/api/*` → `http://127.0.0.1:55700` (передаются `X-Forwarded-*`). Сюда же попадает `/api/maintenance`.
+  - `/feedback/submit` и `/metrics/report` → `http://127.0.0.1:55777`, отдельными `location =` ДО защищённого `/admin/api/` (публичные, без `auth_request`, с малым лимитом тела).
+  - `/admin/api/health` → `http://127.0.0.1:55777` отдельным `location =` до `auth_request`.
+  - `/admin/api/*` → `http://127.0.0.1:55777` (1:1, без переписывания пути), защищено `auth_request /_auth` → `/admin/api/auth/verify`.
   - `/admin/` и `/admin/ui/*` — статика из `/var/www/launcher/admin_ui/` (точный матч на `/admin/` отдает `admin.html`).
   - `/content/*`, `/manifests/*`, `/news/*` — статика из `/var/www/launcher/...`.
   - `/assets/*` — `try_files` с приоритетом ассетов лендинга и fallback на новости (внутренний `@news_assets_fallback`), чтобы избежать ограничения смешивания `alias`/`root`.
 - Добавление `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Forwarded-Port` — для корректного `baseURL()` в Public API.
 - Для стриминга загрузок ZIP в админке отключены буферизации (`proxy_buffering off`, `proxy_request_buffering off`) и увеличены таймауты.
+- gzip включён для текста/JSON и намеренно выключен в `location ^~ /content/` (иначе ломаются `sendfile` и докачка по `Range`) — разбор в `deploy/README.md`.
 - На dev API/UI (`server/cmd/api`, `server/cmd/admin`) сами отдают статику для удобства локального запуска; в prod статику отдает nginx.
+
+### Раскладка конфига на сервере
+
+Наш конфиг — **отдельный файл**, а не общий на несколько сайтов:
+
+```
+/etc/nginx/sites-available/chillhub-launcher.conf   <- копия deploy/launcher.conf
+/etc/nginx/sites-enabled/chillhub-launcher.conf     -> симлинк на неё
+```
+
+Деплой (`scripts/deploy.sh`, `scripts/deploy-nginx.sh`, `scripts/deploy-win.ps1`,
+`.github/workflows/deploy.yml`) перезаписывает **ровно** `chillhub-launcher.conf`.
+Пока файл назывался `launcher.conf` и был общим на два сайта, релиз лаунчера сносил
+чужой проект; отдельное имя делает это невозможным. Старый симлинк `launcher.conf`
+в `sites-enabled` можно удалять только после того, как чужой сайт вынесен в свой файл.
+
+Версия nginx на проде — **1.24.0 (Ubuntu)**, поэтому в конфиге используется
+совместимая форма `listen 443 ssl http2;`: отдельная директива `http2 on;`
+появилась только в 1.25 и на 1.24 роняет `nginx -t`, из‑за чего reload не применит
+конфиг вообще.
+
+### Проверка конфига настоящим `nginx -t` (Docker)
+
+```bash
+# основная проверка — на версии прода (nginx:1.24-alpine):
+sh deploy/nginx-check.sh
+# проверка «на будущее» — на свежем nginx:
+NGINX_IMAGE=nginx:alpine sh deploy/nginx-check.sh
+```
+
+`deploy/nginx-check.sh` поднимает контейнер с официальным образом nginx и гоняет там
+настоящие `nginx -T` и `nginx -t`. Скрипт сам генерирует одноразовую обёртку
+(`events {}` + `http { include ... }`), так как `launcher.conf` — фрагмент для
+`sites-available` и валиден только внутри `http { ... }`; подключает конфиг **без
+изменений** (монтирует read‑only) и создаёт самоподписанный сертификат по тем же
+путям Let's Encrypt, что указаны в конфиге. Код возврата — родной от nginx
+(`0` = конфиг в порядке). Требуется Docker. Скрипт готов к запуску на любом раннере
+с Docker одной строкой (`sh deploy/nginx-check.sh`), но в текущие workflow ещё не
+подключён. Подробности и история (почему `crossplane` было недостаточно) — в
+`deploy/README.md`.
+
+На сервере конфиг всё равно проверяется: `.github/workflows/deploy.yml` и
+`scripts/deploy.sh` делают бэкап, устанавливают файл, выполняют `nginx -t` и
+откатываются при ошибке. Авторитетной проверкой на боевом хосте остаётся
+`sudo nginx -t`.
 
 Производственные директории:
 - Лендинг: `/var/www/site` (копия `landing/`).
@@ -419,17 +824,17 @@ Secrets для CI/CD: `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`.
   - Клиент: индикаторы прогресса, скорость, ETA, блокировка кнопок на время обновления, проверка запускаемой игры.
 
 ## 14. Ограничения и допущения (MVP)
-- Нет клиентских логов по умолчанию. Серверные логи — стандартный вывод (`httpx.Logging` в Public API, `adminLoggingMiddleware` в Admin API).
-- Для отладки клиентские логи можно явно включить переменной окружения `CHILLHUB_CLIENT_LOG=1` (по умолчанию выключено).
-- Подпись манифестов Ed25519 — в планах; поле `signature` присутствует в формате, но может быть пустым.
-- Генерация Blake3-хеша сервером не реализована в `generate-manifest.ps1` (может быть пустым). Клиент поддерживает проверку, если значение присутствует.
-- Защита админки (аутентификация/авторизация) — вне текущего MVP (добавить на проде).
+- Клиентские логи ВКЛЮЧЕНЫ по умолчанию (`%APPDATA%\ChillHub\logs\client.log`, ротация). Переменная `CHILLHUB_CLIENT_LOG=0` их выключает — см. [9.1](#91-данные-клиента-конфиг-и-логи). Серверные логи — стандартный вывод (`httpx.Logging` в обоих сервисах).
+- Подпись манифестов Ed25519 реализована (см. [5.1](#51-подпись-манифестов-ed25519)), но действует **режим совместимости**: манифесты без подписи принимаются с предупреждением. Строгий режим включается после перевыпуска всех манифестов.
+- Генерация Blake3-хеша сервером не реализована в `generate-manifest.ps1` (может быть пустым). Клиент поддерживает проверку, если значение присутствует. Штатный путь публикации — загрузка ZIP через админку, там оба хеша считает сервер.
+- Защита админки реализована: cookie + JWT, CSRF, `auth_request` в nginx (см. [8.4](#84-admin-login)).
+- Метрики принимаются сервером (`POST /metrics/report`), но лаунчер их пока НЕ отправляет: клиентской части нет, поэтому сводка в админке будет пустой.
 
 ## 15. Сценарии и флоу
 - Публикация новой версии игры:
   1) Собрать ZIP с содержимым `{version}/files/...`.
   2) В админке во вкладке «Игры» выбрать `gameId`, `version`, загрузить ZIP с чекбоксом «Обновить latest» при необходимости.
-  3) Проверить список версий (`/admin/list?gameId=`), при необходимости активировать latest отдельной кнопкой.
+  3) Проверить список версий (`/admin/api/list?gameId=`), при необходимости активировать latest отдельной кнопкой.
 
 - Публикация новой версии лаунчера:
   1) Вкладка «Лаунчер»: указать `version`, загрузить ZIP; опционально обновить latest.
@@ -441,6 +846,11 @@ Secrets для CI/CD: `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`.
      - «Добавить» — вручную добавляет строку.
      - «Сохранить» — записывает `content/manifests/_registry/games.json`.
   2) Указать `exeRelativePath` и `iconUrl` для лучшего UX клиента.
+
+- Включение режима технических работ:
+  1) `POST /admin/api/maintenance/set` (из админки) с полным состоянием: `enabled`, `reason`, при необходимости `startsAt`/`endsAt` в RFC 3339 и набор `blocks`.
+  2) Клиенты подхватят режим на ближайшем опросе (не позже чем через минуту) и покажут баннер.
+  3) Выключение: дождаться `endsAt` (сервер сбросит режим сам) либо `POST /admin/api/maintenance/clear`.
 
 - Новости:
   1) Выбрать раздел «Лаунчер» или «Игра», выбрать игру (если требуется).
@@ -458,23 +868,33 @@ Secrets для CI/CD: `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`.
   - Admin API: сохранение реестра, загрузка ZIP, rebuild индексов новостей, работа с ассетами (создание/переименование/удаление/загрузка/по URL) включая ffmpeg и без него.
 
 ## 17. План расширений (после MVP)
-- Подпись манифестов (Ed25519) end-to-end, верификация в клиенте.
-- Авторизация админ-панели (OIDC/JWT), аудит действий.
+- ~~Подпись манифестов (Ed25519) end-to-end, верификация в клиенте~~ — сделано, см. [5.1](#51-подпись-манифестов-ed25519); осталось включить строгий режим после перевыпуска манифестов.
+- ~~Авторизация админ-панели, аудит действий~~ — сделано (cookie+JWT, CSRF, строки `[audit] ...` в журнале). Внешний IdP (OIDC) не требуется.
 - Поддержка дифф-патчей по блокам/битторрент/компрессии.
-- Telemetry/серверные метрики загрузок, квоты, ограничение скорости.
-- Автогенерация Blake3 при сборке контента.
-- CI/CD интеграция, релизные сборки (Release) и подпись кода/инсталлятора.
+- Клиентская часть метрик: лаунчер пока не отправляет события в `POST /metrics/report` (серверная часть готова, см. [8.6](#86-метрики-лаунчера)).
+- Алерты по метрикам (Telegram) и серверные метрики RPS/latency — не реализованы, см. `Backlog.md`.
+- Автогенерация Blake3 при сборке контента вне админки.
+- Релизные сборки (Release) и подпись кода/инсталлятора (Authenticode) — см. раздел 27.
 
 ## 18. Ссылки на ключевые файлы
 - Public API: `server/cmd/api/main.go`
-- Admin API: `server/cmd/admin/main.go`
+- Admin API: `server/cmd/admin/main.go` (процесс), `server/cmd/admin/routes.go` (список эндпоинтов), обработчики — `server/internal/adminapi/*`
+- Режим техработ: `server/internal/maintenance/maintenance.go`
+- Метрики: `server/internal/metrics/metrics.go`
+- Подпись манифестов: `server/internal/adminapi/builds/sign.go`, генератор ключей `server/internal/adminapi/builds/keygen/main.go`
 - Админ UI: `server/admin_ui/admin.html`, `server/admin_ui/admin.js`
 - Клиент: 
   - Обновление лаунчера: `launcher/ChillHub/UpdateWindow.xaml.cs`
   - Синхронизация файлов: `launcher/ChillHub/Core/Sync/SimpleSyncService.cs`
-  - Главная страница: `launcher/ChillHub/Pages/HomePage.xaml.cs`
+  - Проверка подписи манифеста: `launcher/ChillHub/Core/Sync/ManifestSignature.cs`, `Core/Sync/Ed25519Verifier.cs`
+  - Проверка целостности игры: `launcher/ChillHub/Core/Sync/IntegrityChecker.cs`
+  - Конфиг и логи: `launcher/ChillHub/Core/Config.cs`, `launcher/ChillHub/Core/Logging/Logger.cs`
+  - Режим техработ: `launcher/ChillHub/Core/Maintenance/MaintenanceService.cs`
+  - Discord Rich Presence: `launcher/ChillHub/Core/DiscordRichPresence.cs`
+  - Главная страница: `launcher/ChillHub/Pages/HomePage.xaml.cs`; страница игры: `launcher/ChillHub/Pages/GamePage.xaml.cs`; настройки: `launcher/ChillHub/Pages/SettingsPage.xaml.cs`
+- Апдейтер и preserve‑правила: `updater/Program.cs`, `updater/UpdatePreserve.cs`, тест `updater/tests/ManifestPreserveCheck`
 - Инсталлятор: `scripts/installer.nsi`
-- Nginx (prod): `deploy/launcher.conf`
+- Nginx (prod): `deploy/launcher.conf` (на сервере — `chillhub-launcher.conf`), проверка — `deploy/nginx-check.sh`
 - Systemd: `deploy/systemd/chillhub-api.service`, `deploy/systemd/chillhub-admin.service`
 - CI/CD: `.github/workflows/deploy.yml`
 - Документация скриптов: `scripts/README.md`
@@ -500,7 +920,7 @@ Workflow `.github/workflows/deploy.yml` (при наличии):
 `deploy.yml` обязан обеспечивать ту же функциональность, что и `scripts/deploy.sh`:
 - Сборка Go‑бинариев для linux/amd64 и раскладка в `/opt/chillhub`.
 - Синхронизация статик: `landing/` → `/var/www/site`, `server/admin_ui/` → `/var/www/launcher/admin_ui/`.
-- Установка `deploy/launcher.conf` и перезагрузка nginx с валидацией `nginx -t`.
+- Установка `deploy/launcher.conf` как `/etc/nginx/sites-available/chillhub-launcher.conf` и перезагрузка nginx с валидацией `nginx -t` (с бэкапом и откатом при ошибке).
 - Перезапуск `chillhub-api.service`, `chillhub-admin.service` и `daemon-reload`.
 - Опциональная генерация systemd drop-in с переменными окружения из GitHub Secrets (`JWT_SECRET`, `ADMIN_USER`, `ADMIN_PASSWORD_BCRYPT` или `ADMIN_PASSWORD_PLAIN`, `COOKIE_DOMAIN`, `COOKIE_SECURE`).
 - Опциональная синхронизация внешней папки установщиков `DOWNLOADS_DIR` → `/var/www/site/downloads` (если секрет задан и каталог существует на сервере).
@@ -518,7 +938,7 @@ Workflow `.github/workflows/deploy.yml` (при наличии):
     - `landing/` → `/var/www/site/` (с `--delete`).
     - `server/admin_ui/` → `/var/www/launcher/admin_ui/` (с `--delete`).
   - Каталоги контента `/var/www/launcher/{manifests,content,news}` не трогаются. Управляются через Admin UI или вручную — это критично для сохранности данных.
-  - Установка nginx‑конфига `deploy/launcher.conf`, проверка `nginx -t`, `systemctl reload nginx`.
+  - Установка nginx‑конфига в `/etc/nginx/sites-available/chillhub-launcher.conf` (отдельный файл, чужие сайты на хосте не затрагиваются), проверка `nginx -t`, `systemctl reload nginx`.
   - Перезапуск `chillhub-api.service`, `chillhub-admin.service`.
   - Смоук‑тесты (Admin UI, Admin API, лендинг, статика, soft‑checks `latest.json` и `assets/ping.txt`) с диагностикой при сбоях.
 
@@ -543,7 +963,7 @@ Workflow `.github/workflows/deploy.yml` (при наличии):
 См. также сводную таблицу шагов в `README.md` → раздел «[Карта шагов: автодеплой vs вручную](README.md#карта-шагов-автодеплой-vs-вручную)».
 1) Подготовка сервера: `nginx`, `rsync`, `ufw`, `certbot`.
 2) Создать каталоги: `/var/www/site`, `/var/www/launcher/{content,manifests,news,admin_ui}`, `/opt/chillhub`.
-3) Разместить `deploy/launcher.conf` в `/etc/nginx/sites-available/launcher.conf`, включить symlink в `sites-enabled`, проверить `nginx -t`, `systemctl reload nginx`.
+3) Разместить `deploy/launcher.conf` в `/etc/nginx/sites-available/chillhub-launcher.conf`, включить symlink в `sites-enabled`, проверить `nginx -t`, `systemctl reload nginx`. Общий файл `launcher.conf` больше не используется — см. [12](#12-nginx-общее).
 4) Скопировать только админ-UI статику в `var/www/launcher/admin_ui`. Каталоги `manifests/content/news` не трогать — наполняются через Admin UI.
 5) Собрать/скопировать бинарники в `/opt/chillhub`.
 6) Установить systemd сервисы, `daemon-reload`, `enable`, `restart`.
@@ -551,6 +971,54 @@ Workflow `.github/workflows/deploy.yml` (при наличии):
 
 ## 22. Локальная разработка и автотесты деплоя
 Подробные инструкции по локальному запуску и флагам вынесены в `scripts/README.md` (раздел про `run-dev.ps1`).
+
+Локальные проверки, которые стоит гонять перед выкладкой:
+
+```bash
+# Go: юнит-тесты серверных пакетов (auth, builds+подпись, news, feedback,
+# maintenance, metrics, ratelimit, adminutil, роутер admin)
+cd server && go test ./...
+
+# .NET: тесты клиента (план/дифф, кеш хешей, маркер .updating, подпись манифеста, Ed25519)
+dotnet test launcher/tests/ChillHub.Tests
+
+# nginx: настоящий `nginx -t` в Docker на версии прода
+sh deploy/nginx-check.sh
+
+# предохранитель от петли самообновления
+dotnet run --project updater/tests/ManifestPreserveCheck
+```
+
+### Предохранитель от петли самообновления (`updater/tests/ManifestPreserveCheck`)
+
+Класс регрессии, ради которого существует тест: файл попадает **одновременно** в
+манифест лаунчера и под preserve‑правила апдейтера. Апдейтер такой файл не
+перезаписывает (на то он и preserve), а лаунчер сверяет его хеш с манифестом —
+расхождение неустранимо, и обновление предлагается при каждом запуске, каждый раз
+полностью перекачивая лаунчер.
+
+Именно так себя вели `config.json` (расходится после первого запуска игры, когда
+сохраняется `LastGameId`) и `launcher.version` (апдейтер пишет его сам, UTF‑8 с
+BOM — 10 байт против 8 в манифесте). Усугублялось тем, что каталог установки
+`%LOCALAPPDATA%\ChillHub` совпадал с каталогом пользовательского конфига; конфиг
+переехал в `%APPDATA%\ChillHub` — см. [9.1](#91-данные-клиента-конфиг-и-логи).
+
+Поэтому **пользовательские файлы не должны попадать в манифест лаунчера.**
+Preserve‑правила заданы в одном месте — `PreserveMatcher.DefaultRules` в
+`updater/UpdatePreserve.cs` (`config.json`, `launcher.version`); их используют и
+апдейтер, и лаунчер.
+
+Запуск:
+
+```bash
+dotnet run --project updater/tests/ManifestPreserveCheck
+# либо по конкретным файлам/каталогам манифестов:
+dotnet run --project updater/tests/ManifestPreserveCheck -- <файл-или-каталог> [...]
+```
+
+Тест сначала проверяет сам детектор на двух встроенных манифестах («плохой» обязан
+падать, «хороший» — проходить), затем сканирует реальные манифесты репозитория.
+Код возврата: `0` — чисто, `1` — найдено пересечение (или сломан сам детектор).
 
 ## 23. Безопасность секретов
 - SSH-ключи хранятся в GitHub Secrets. На сервере должен быть установлен публичный ключ пользователя `ubuntu`.
@@ -561,24 +1029,25 @@ Workflow `.github/workflows/deploy.yml` (при наличии):
 
 ## 24. Выявленные проблемы и рекомендации
 
-- **Маршруты и путаница путей**
-  - Фактический бэкенд обслуживает Admin API под `/admin/*`, но в проде публичный префикс `/admin/api/*`. Это решено Nginx‑проксированием и клиентским шимом (`server/admin_ui/admin.js`). Рекомендация: в коде бэкенда зарезервировать и обрабатывать префикс `/admin/api/*` напрямую, чтобы убрать прослойку‑шим и снизить риск конфузий.
+- **Маршруты и путаница путей** — решено.
+  - Канонический префикс в коде — `/admin/api/...`; форма `/admin/...` порождается автоматически из того же списка (`server/cmd/admin/routes.go`), поэтому «потерять» маршрут при добавлении нового больше нельзя.
 
 - **Безопасность админки**
   - Используется одна учётная запись из ENV (`ADMIN_USERNAME`/`ADMIN_PASSWORD_BCRYPT`) — этого достаточно. Ограничения по IP и rate‑limit в рамках этого раздела не требуются. Логирование событий входа — да. Поддержка внешнего IdP (OIDC) — не требуется.
   - CSRF реализован (cookie `csrf_token` + заголовок). Проверить и выставить прод‑значения `SameSite`/`Secure` через ENV (`COOKIE_DOMAIN`, `COOKIE_SECURE=true`).
 
-- **CORS в Public API** (`server/internal/httpx/httpx.go`)
-  - Разрешено `*`. Это допустимо для текущих требований; дополнительных ограничений не требуется.
+- **CORS**
+  - Public API (`server/cmd/api`): разрешено `*`. Допустимо — там нет cookie‑авторизации.
+  - Admin API: CORS по умолчанию **выключен** (`httpx.CORSDisabled`), потому что админка отдаётся с того же origin, а авторизация — на cookie. Открыть конкретные origin'ы можно переменной `ADMIN_CORS_ORIGIN` (список через запятую); `*` вместе с cookie использовать нельзя.
 
 - **Контентная синхронизация в CI/CD**
   - Ранее workflow разворачивал `content/` в прод (риск потери данных). Исправлено: `.github/workflows/deploy.yml` синхронизирует только `landing/`, `admin_ui/`, бинарии и конфиги.
 
-- **Проверка подписи манифестов**
-  - Подпись манифестов не используется, поле `signature` удалено; контроль целостности по хешам файлов достаточен.
+- **Проверка подписи манифестов** — реализована.
+  - Сервер подписывает манифесты Ed25519 (`MANIFEST_SIGNING_KEY`), клиент проверяет зашитым публичным ключом до любой загрузки файлов. Действует режим совместимости; включить строгий — после перевыпуска всех манифестов. См. [5.1](#51-подпись-манифестов-ed25519).
 
-- **Клиент: обработка ошибок**
-  - Много молчаливых `catch { }` в `ChillHub.Core` (например, `ConfigService`, `Logger`) скрывают причины сбоев. Рекомендация: централизованный логгер, явные уровни (Verbose по переменной окружения), улучшенные сообщения и диагностический режим.
+- **Клиент: обработка ошибок** — частично решено.
+  - Появился централизованный логгер (`Core/Logging/Logger.cs`, ротация, включён по умолчанию) и авто‑отчёты об ошибках (`Core/ErrorReporter.cs`). Уровней Verbose пока нет; молчаливые `catch { }` в ряде мест остались осознанно (логгер и миграция конфига не имеют права ронять запуск).
 
 - **Статика кеширования**
   - Для больших файлов (`/content/`) выставлен `no-cache`. Возможна оптимизация с ETag/Last-Modified и `Cache-Control: public, max-age=...` для версионных путей.
@@ -586,15 +1055,18 @@ Workflow `.github/workflows/deploy.yml` (при наличии):
 - **Линт и стиль**
   - `golangci-lint` включает "all" — оставить как есть (конфигурация уже настроена). `stylelint`: при необходимости использовать локальные исключения для Bootstrap.
 
-- **Тесты**
-  - Нет автотестов на генерацию манифестов/дифф/хеши. Рекомендация: добавить минимальные unit‑тесты в Go и C#.
+- **Тесты** — частично решено.
+  - Go: есть тесты в `server/cmd/admin` и в пакетах `adminapi/{auth,builds,news,feedback}`, `adminutil`, `maintenance`, `metrics`, `ratelimit` (включая канонизацию и подпись манифеста). Запуск: `cd server && go test ./...`.
+  - .NET: xUnit‑проект `launcher/tests/ChillHub.Tests` (план/дифф `PlanAsyncTests`, кеш хешей, маркер `.updating`, канонизация и проверка подписи манифеста, Ed25519 по векторам RFC 8032) и отдельный предохранитель `updater/tests/ManifestPreserveCheck` (см. [22](#22-локальная-разработка-и-автотесты-деплоя)).
+  - Не покрыто: сценарии «мало места», сетевые сбои и несоответствие хеша на живой загрузке.
 
 ## 25. Дорожная карта доработок (этапы)
 
 ### Этап 1 (высокий приоритет)
-- Перевести бэкенд admin на единственный префикс `/admin/api/*` (задвоить текущие хендлеры под этим префиксом), оставить временно backward‑compat и затем удалить shim в `server/admin_ui/admin.js`.
-- Добавить rate‑limit на `/admin/api/auth/login` на уровне Nginx (`limit_req`) — без изменений кода Go.
-- Провести ревизию и проверку всей документации: схем запросов/ответов Public API и Admin API (включая NDJSON событий), зафиксировать недостающие поля и точные типы; синхронизировать `Documentation.md` и `README.md`.
+- ~~Перевести бэкенд admin на единственный префикс `/admin/api/*`~~ — сделано: канонический список маршрутов в `server/cmd/admin/routes.go`, `/admin/*` — автоматический алиас. Осталось при желании убрать shim в `server/admin_ui/admin.js`.
+- Добавить rate‑limit на `/admin/api/auth/login` на уровне Nginx (`limit_req`) — без изменений кода Go. (Лимиты уже есть у публичных `/feedback/submit` и `/metrics/report` — в коде Go, `server/internal/ratelimit`.)
+- ~~Ревизия документации по схемам Public/Admin API~~ — выполнена в версии 1.3 документа.
+- Подключить `sh deploy/nginx-check.sh` в CI (скрипт готов, workflow пока его не вызывает).
 - Улучшить DX деплоя/запуска (Windows):
   - Makefile цель `make dev`: запуск `api`, `admin`, WPF‑клиента через `scripts/run-dev.ps1` с параметрами (`-ContentRoot`, `-GamesPath`, `-Env`, `-SetClientConfig`, `-BuildServers`).
   - Makefile цель `make smoke`: локальные смоук‑проверки HTTP (health/UI/статика) и простые проверки клиента (чтение конфигурации, базовые вызовы API), с читаемыми отчётами.
@@ -611,14 +1083,14 @@ Workflow `.github/workflows/deploy.yml` (при наличии):
   - VirusTotal API (диагностически) для Release‑кандидатов (учесть rate‑limit; не блокировать релизы на первом этапе).
   - MSIX POC как альтернативная упаковка (опционально; без обязательной миграции).
 - Клиентские логи и диагностика:
-  - Единый логгер с уровнями (Error/Info/Verbose), включение Verbose по переменной окружения.
+  - ~~Единый логгер~~ — сделан (`Core/Logging/Logger.cs`, ротация, `%APPDATA%\ChillHub\logs`). Осталось: уровень Verbose и его включение переменной окружения.
   - Улучшенные сообщения об ошибках (включая коды и краткие рекомендации), запись причины отказа при проверке хешей/свободного места/сетевых сбоях.
   - Отдельный диагностический отчёт по результатам self‑update (в temp), удобный для прикрепления к баг‑репортам.
 
 ### Этап 3 (средний/низкий)
 - Тесты:
-  - Go: unit/интеграционные тесты admin/api (загрузка ZIP, NDJSON, индексы новостей, ассеты).
-  - C#: тесты плана/диффа/хешей, сценарии ошибок (мало места, сетевые сбои, несоответствие хеша), очистка временных файлов.
+  - Go: базовые тесты есть (см. раздел 24 → «Тесты»); не хватает интеграционных на загрузку ZIP и NDJSON‑поток.
+  - C#: тесты плана/диффа/хешей есть; не хватает сценариев ошибок (мало места, сетевые сбои, несоответствие хеша) и очистки временных файлов.
 - Документация API: сгенерировать OpenAPI/Swagger для Public API.
 - Автотесты деплоя как отдельный workflow для stage‑окружения (проверки: `nginx -t`, доступность статики и health endpoints).
 
