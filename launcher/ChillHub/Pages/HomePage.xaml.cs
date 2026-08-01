@@ -790,7 +790,11 @@ namespace ChillHub.Pages {
                 return Task.CompletedTask;
             }
 
-            var tcs = new TaskCompletionSource<object?>();
+            // RunContinuationsAsynchronously обязателен: TrySetResult вызывается ИЗНУТРИ BeginInvoke,
+            // то есть на UI-потоке. Без этого флага продолжение await'а тоже выполнялось бы инлайн
+            // на UI-потоке — и фоновая проверка статусов (VerifyAllGamesStatusesAsync в Task.Run)
+            // после первого же await «переезжала» на UI вместе со всем хешированием файлов.
+            var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
             dispatcher.BeginInvoke(new Action(() => {
                 try {
                     action();
