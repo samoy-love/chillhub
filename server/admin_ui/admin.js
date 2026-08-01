@@ -2437,6 +2437,97 @@ function excerptFromMarkdown(md){
   return '';
 }
 
+// ===== Санитайзер HTML предпросмотра новостей =====
+// Серверный конвертер markdown экранирует, что должен, но предпросмотр — это
+// чужой HTML в странице с активной сессией администратора и с CSP, которая
+// разрешает script-src с jsdelivr/unpkg. Полагаться на одну только серверную
+// сторону нельзя, поэтому разбираем разметку отдельным парсером и оставляем
+// только то, что реально нужно для markdown.
+const SANITIZE_ALLOWED_TAGS = new Set([
+  'p','br','hr','h1','h2','h3','h4','h5','h6',
+  'strong','b','em','i','u','s','del','ins','mark','small','sub','sup',
+  'code','pre','kbd','samp','var','blockquote','q','cite',
+  'ul','ol','li','dl','dt','dd',
+  'a','img','figure','figcaption',
+  'table','thead','tbody','tfoot','tr','th','td','caption','colgroup','col',
+  'span','div','section','article','details','summary'
+]);
+// Теги, которые вырезаем целиком вместе с содержимым: их текст не является
+// текстом статьи (script/style) либо сам по себе является вектором.
+const SANITIZE_DROP_TAGS = new Set([
+  'script','style','iframe','frame','frameset','object','embed','applet',
+  'link','meta','base','form','input','button','select','textarea','option',
+  'svg','math','template','noscript','portal'
+]);
+const SANITIZE_ATTRS = {
+  a: ['href','title'],
+  img: ['src','alt','title','width','height'],
+  ol: ['start','type'],
+  td: ['colspan','rowspan','align'],
+  th: ['colspan','rowspan','align','scope'],
+  col: ['span'],
+  colgroup: ['span'],
+  details: ['open'],
+};
+// Общие атрибуты, безопасные для любого разрешённого тега.
+const SANITIZE_GLOBAL_ATTRS = ['class','title','id','lang','dir'];
+
+// Пропускаем только схемы, которые не умеют выполнять код.
+// javascript: и данные вида data:text/html отсекаются.
+function sanitizeUrl(value, allowDataImage){
+  const v = String(value||'').trim();
+  if(!v) return '';
+  // Ссылка без схемы (относительная, якорь, протокол-относительная) безопасна.
+  if(/^[a-z][a-z0-9+.-]*:/i.test(v)){
+    const scheme = v.slice(0, v.indexOf(':')).toLowerCase();
+    if(scheme === 'http' || scheme === 'https' || scheme === 'mailto') return v;
+    if(allowDataImage && scheme === 'data' && /^data:image\/(png|jpeg|gif|webp|avif);/i.test(v)) return v;
+    return '';
+  }
+  return v;
+}
+
+// Возвращает DocumentFragment с очищенной копией разметки.
+function sanitizeHtmlFragment(html){
+  const out = document.createDocumentFragment();
+  const doc = new DOMParser().parseFromString(String(html||''), 'text/html');
+  // Парсер DOMParser не исполняет скрипты и не загружает ресурсы,
+  // поэтому уже на этом шаге разметка «мертва».
+  const convert = (node, parent)=>{
+    if(node.nodeType === 3){ parent.appendChild(document.createTextNode(node.nodeValue)); return; }
+    if(node.nodeType !== 1) return; // комментарии и прочее — за борт
+    const tag = node.tagName.toLowerCase();
+    if(SANITIZE_DROP_TAGS.has(tag)) return;
+    if(!SANITIZE_ALLOWED_TAGS.has(tag)){
+      // Неизвестный, но и не опасный тег: сохраняем его содержимое.
+      for(const child of Array.from(node.childNodes)) convert(child, parent);
+      return;
+    }
+    const el = document.createElement(tag);
+    const allowed = SANITIZE_GLOBAL_ATTRS.concat(SANITIZE_ATTRS[tag] || []);
+    for(const attr of Array.from(node.attributes)){
+      const name = attr.name.toLowerCase();
+      if(name.startsWith('on')) continue; // обработчики событий — никогда
+      if(!allowed.includes(name)) continue;
+      let val = attr.value;
+      if(name === 'href') val = sanitizeUrl(val, false);
+      if(name === 'src') val = sanitizeUrl(val, true);
+      if(val === '' && (name === 'href' || name === 'src')) continue;
+      el.setAttribute(name, val);
+    }
+    if(tag === 'a' && el.getAttribute('href')){
+      // Предпросмотр открывается в админке; внешняя ссылка не должна получать
+      // доступ к window.opener.
+      el.setAttribute('target', '_blank');
+      el.setAttribute('rel', 'noopener noreferrer nofollow');
+    }
+    for(const child of Array.from(node.childNodes)) convert(child, el);
+    parent.appendChild(el);
+  };
+  for(const child of Array.from(doc.body.childNodes)) convert(child, out);
+  return out;
+}
+
 function escapeHtml(s){
   return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
@@ -2504,7 +2595,10 @@ async function newsPreview(){
   const a=document.getElementById('ns_preview_list'); const b=document.getElementById('ns_preview_content');
   // Build list preview to match launcher design
   if(a){ a.innerHTML = renderListPreviewFromMarkdown(md); }
-  if(b) b.innerHTML = j.contentHtml || '';
+  // contentHtml приходит из серверного конвертера markdown. Даже когда сервер
+  // экранирует всё правильно, вставлять его в innerHTML вслепую нельзя:
+  // прогоняем через собственный санитайзер (см. sanitizeHtmlFragment).
+  if(b) b.replaceChildren(sanitizeHtmlFragment(j.contentHtml || ''));
 }
 
 function renderListPreviewFromMarkdown(md){
