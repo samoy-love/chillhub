@@ -23,7 +23,9 @@ internal static class Program
       "version": "1.1.7",
       "files": [
         { "path": "ChillHub.exe", "size": 100, "sha256": "aa" },
-        { "path": "runtimes/win-x64/native/blake3_dotnet.dll", "size": 200, "sha256": "bb" }
+        { "path": "runtimes/win-x64/native/blake3_dotnet.dll", "size": 200, "sha256": "bb" },
+        { "path": "data/config.json", "size": 45, "sha256": "cc" },
+        { "path": "data/filelist.txt", "size": 12, "sha256": "dd" }
       ],
       "emptyDirs": []
     }
@@ -35,11 +37,36 @@ internal static class Program
       "files": [
         { "path": "ChillHub.exe", "size": 100, "sha256": "aa" },
         { "path": "config.json", "size": 45, "sha256": "cc" },
-        { "path": "launcher.version", "size": 8, "sha256": "5d37ad10" }
+        { "path": "launcher.version", "size": 8, "sha256": "5d37ad10" },
+        { "path": "filelist.txt", "size": 12, "sha256": "ff" }
       ],
       "emptyDirs": []
     }
     """;
+
+    /// <summary>
+    /// A11. Ожидаемый вердикт по каждому пути: правило сравнивает ТОЧНЫЙ путь
+    /// верхнего уровня — ровно так же, как публикующая сторона на сервере.
+    /// Без этих проверок «хороший» манифест ничего не доказывает: он одинаково
+    /// проходит и при точном сравнении, и при сравнении по имени файла.
+    /// </summary>
+    private static readonly (string Path, bool Preserved)[] RuleCases =
+    {
+        // Пользовательское состояние — в preserve.
+        ("config.json", true),
+        ("launcher.version", true),
+
+        // Мусор апдейтера в корне установки.
+        ("filelist.txt", true),
+        ("updater/YourLauncher.Updater.exe", true),
+
+        // A11. Те же имена в подкаталоге — обычные файлы пакета: сервер их публикует,
+        // значит клиент обязан их копировать и сверять.
+        ("data/config.json", false),
+        ("data/launcher.version", false),
+        ("data/filelist.txt", false),
+        ("ChillHub.exe", false),
+    };
 
     public static int Main(string[] args)
     {
@@ -74,6 +101,26 @@ internal static class Program
         else
         {
             Console.WriteLine("self-test ok: good manifest -> 0 violations");
+        }
+
+        // 1b) Само правило сопоставления: точный путь верхнего уровня и ничего больше.
+        foreach (var (path, expected) in RuleCases)
+        {
+            var actual = new PreserveMatcher().ShouldPreserve(path) || PreserveMatcher.IsUpdaterArtifact(path);
+            if (actual == expected)
+            {
+                continue;
+            }
+
+            Console.Error.WriteLine(expected
+                ? $"SELF-TEST FAILED: '{path}' обязан быть в preserve, но матчер его не защищает."
+                : $"SELF-TEST FAILED: '{path}' не должен попадать в preserve — сервер его публикует, клиент молча пропустит.");
+            failures++;
+        }
+
+        if (failures == 0)
+        {
+            Console.WriteLine($"self-test ok: правила сопоставления, {RuleCases.Length} случай(ев)");
         }
 
         // 2) Реальные манифесты репозитория (если есть).
