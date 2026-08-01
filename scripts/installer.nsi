@@ -209,6 +209,110 @@ Section "Install"
 
 SectionEnd
 
+; ============================================================================
+; И18: ПРОВЕРКА ПУТИ ПЕРЕД РЕКУРСИВНЫМ УДАЛЕНИЕМ
+; ============================================================================
+; $Un_GamesDir читается из HKCU (${APP_REG}\GamesDir), куда он попадает из
+; СВОБОДНОГО ТЕКСТОВОГО ПОЛЯ на странице выбора папки для игр. Единственной
+; проверкой перед `RMDir /r` была непустая строка. Пользователь, указавший при
+; установке "D:\", получал при удалении с галочкой рекурсивное стирание всего
+; диска D. Ключ реестра пользовательский, то есть значение может быть и
+; отредактировано вручную.
+;
+; un.SafeRmDir отклоняет:
+;   * пустой путь;
+;   * относительный путь (не вида X:\... и не UNC) — RMDir /r от относительного
+;     пути отсчитывается от текущего каталога и вообще непредсказуем;
+;   * корень диска ("D:", "D:\") и корень UNC-шары;
+;   * системные каталоги и их родителей (Windows, Program Files, Users,
+;     профиль пользователя, рабочий стол, каталоги данных приложений);
+;   * путь, совпадающий с каталогом установки или лежащий выше него.
+;
+; Отказ ГРОМКИЙ: пользователю показывается, какой именно путь отклонён и что
+; удалить его можно вручную. Молчаливый пропуск здесь хуже — человек будет
+; думать, что место освободилось.
+;
+; Отклонить, если проверяемый путь РАВЕН защищённому каталогу или является его
+; РОДИТЕЛЕМ (удаление C:\Users снесло бы профиль). Сравнение в NSIS
+; регистронезависимое, что здесь и требуется.
+;
+; Проверка «родитель» требует, чтобы следующим символом был разделитель:
+; иначе путь D:\Games ложно совпал бы с защищённым D:\GamesData.
+!macro _UN_REJECT_IF Protected Reason
+  ${If} $R1 == "ok"
+  ${AndIf} "${Protected}" != ""
+    ${If} "$R0" == "${Protected}"
+      StrCpy $R1 "${Reason}"
+    ${Else}
+      StrLen $R4 "$R0"
+      IntOp $R4 $R4 + 1
+      StrCpy $R3 "${Protected}" $R4
+      ${If} "$R3" == "$R0\"
+        StrCpy $R1 "внутри него лежит защищённый каталог (${Reason})"
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+; Вход: путь на вершине стека. Выход: путь обратно на стеке, вердикт в $R1
+; ("ok" либо причина отказа человеческим текстом).
+;
+; Логика намеренно написана на LogicLib (${If}), а не на StrCmp/IntCmp с
+; относительными переходами: в NSIS смещения вида `Goto +3` пересчитываются
+; вручную и молча ломаются при любой правке — в коде, который делает RMDir /r,
+; такая хрупкость недопустима.
+Function un.SafeRmDir
+  Exch $R0
+  Push $R2
+  Push $R3
+  Push $R4
+
+  StrCpy $R1 "ok"
+
+  ; Завершающий слэш убираем, чтобы "D:\" и "D:" проверялись одинаково.
+  StrCpy $R2 $R0 1 -1
+  ${If} $R2 == "\"
+    StrCpy $R0 $R0 -1
+  ${EndIf}
+
+  StrLen $R3 $R0
+
+  ${If} $R0 == ""
+    StrCpy $R1 "путь пуст"
+  ${ElseIf} $R3 < 4
+    ; "D:", "D:\", "\\s" — корень диска или огрызок. Осмысленный каталог для
+    ; игр короче четырёх символов быть не может.
+    StrCpy $R1 "путь слишком короткий, это корень диска или его огрызок"
+  ${Else}
+    ; Требуем строго локальный абсолютный путь вида "X:\...".
+    ; UNC (\\server\share) отвергается намеренно: рекурсивно стирать сетевую
+    ; шару из деинсталлятора — это удаление чужих данных, а не своих.
+    StrCpy $R2 $R0 2 1
+    ${If} $R2 != ":\"
+      StrCpy $R1 "путь не является локальным абсолютным (ожидается вида D:\Games\ChillHub)"
+    ${EndIf}
+  ${EndIf}
+
+  ; Системные и пользовательские каталоги — сам путь либо его родитель.
+  !insertmacro _UN_REJECT_IF "$WINDIR"          "системный каталог Windows"
+  !insertmacro _UN_REJECT_IF "$SYSDIR"          "системный каталог Windows"
+  !insertmacro _UN_REJECT_IF "$PROGRAMFILES"    "Program Files"
+  !insertmacro _UN_REJECT_IF "$PROGRAMFILES64"  "Program Files"
+  !insertmacro _UN_REJECT_IF "$COMMONFILES"     "Common Files"
+  !insertmacro _UN_REJECT_IF "$PROFILE"         "профиль пользователя"
+  !insertmacro _UN_REJECT_IF "$DESKTOP"         "рабочий стол"
+  !insertmacro _UN_REJECT_IF "$DOCUMENTS"       "папка документов"
+  !insertmacro _UN_REJECT_IF "$APPDATA"         "каталог данных приложений"
+  !insertmacro _UN_REJECT_IF "$LOCALAPPDATA"    "локальный каталог данных приложений"
+  !insertmacro _UN_REJECT_IF "$TEMP"            "временный каталог"
+  !insertmacro _UN_REJECT_IF "$INSTDIR"         "каталог установки лаунчера"
+
+  Pop $R4
+  Pop $R3
+  Pop $R2
+  Exch $R0
+FunctionEnd
+
 ; Macro to optionally delete games folder on uninstall
 !macro _DELETE_GAMES_IF_CHECKED
   ; Use cached state from un.SelectDeleteGames_Leave, because the page controls are destroyed before this section runs
@@ -216,10 +320,18 @@ SectionEnd
     ${If} $Un_GamesDir == ""
       MessageBox MB_ICONSTOP "Путь к папке с играми пуст. Удаление отменено."
     ${Else}
-      IfFileExists "$Un_GamesDir\*.*" 0 +3
-        RMDir /r "$Un_GamesDir"
-        Goto +2
-      MessageBox MB_ICONINFORMATION "Папка с играми не найдена: $Un_GamesDir"
+      ; И18: проверяем путь ДО рекурсивного удаления.
+      Push "$Un_GamesDir"
+      Call un.SafeRmDir
+      Pop $R0
+      ${If} $R1 != "ok"
+        MessageBox MB_ICONSTOP "Папка с играми НЕ удалена: $R1.$\r$\nПуть: $Un_GamesDir$\r$\nЕсли этот путь действительно нужно удалить, сделайте это вручную."
+      ${Else}
+        IfFileExists "$Un_GamesDir\*.*" 0 +3
+          RMDir /r "$Un_GamesDir"
+          Goto +2
+        MessageBox MB_ICONINFORMATION "Папка с играми не найдена: $Un_GamesDir"
+      ${EndIf}
     ${EndIf}
   ${Else}
     MessageBox MB_ICONINFORMATION "Папка с играми не была удалена. Вы можете удалить её вручную: $Un_GamesDir"
