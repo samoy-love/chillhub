@@ -140,3 +140,36 @@ func TestValidManifestIsAccepted(t *testing.T) {
 		t.Fatalf("a legitimate manifest was rejected: %v", err)
 	}
 }
+
+// A trailing slash on an empty-directory entry is legitimate: "a/b/" and "a/b"
+// name one directory, and the client normalises both before creating it.
+//
+// This is not hypothetical. Both published games carry such an entry
+// (lethal-company: "BepInEx/plugins/Bertogim-LoadingScreen/",
+// drive-beyond-horizons: ".../win64/FreeTP/"), and rejecting it stopped them
+// from installing at all.
+func TestEmptyDirTrailingSlashIsAccepted(t *testing.T) {
+	m := sampleManifest()
+	m.EmptyDirs = []string{
+		"BepInEx/plugins/Bertogim-LoadingScreen/",
+		"DriveBeyondHorizons/Plugins/SteamCorePro/Source/ThirdParty/SteamLibrary/redistributable_bin/win64/FreeTP/",
+	}
+	if err := validateManifest(m); err != nil {
+		t.Fatalf("trailing slash on an empty dir must be accepted: %v", err)
+	}
+
+	// The leniency is exactly one slash's worth: a duplicate that differs only by
+	// the trailing slash is still a duplicate.
+	m.EmptyDirs = []string{"logs/", "logs"}
+	if err := validateManifest(m); err == nil {
+		t.Fatal("«logs/» and «logs» are one directory and must be rejected as a duplicate")
+	}
+
+	// Everything else stays strict.
+	for _, bad := range []string{"../escape/", "/absolute/", "a//b/", " spaced/"} {
+		m.EmptyDirs = []string{bad}
+		if err := validateManifest(m); err == nil {
+			t.Errorf("%q must still be rejected", bad)
+		}
+	}
+}

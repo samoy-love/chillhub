@@ -86,16 +86,27 @@ namespace ChillHub.Core.Sync {
             var dirs = manifest.EmptyDirs ?? new List<string>();
             var seenDirs = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             for (var i = 0; i < dirs.Count; i++) {
-                var reason = ManifestPath.Describe(dirs[i]);
+                // Завершающий слеш у каталога — обычная и однозначная запись: "a/b/" и
+                // "a/b" описывают ОДИН каталог, и планировщик всё равно приводит их к
+                // одному виду (NormalizeRelPath), то есть проверяем и используем одно
+                // и то же. Для файлов такая вольность недопустима — там строка решает,
+                // какой именно файл окажется на диске, — но для каталога выбора нет.
+                //
+                // Без этого послабления клиент отвергал уже опубликованные манифесты:
+                // у drive-beyond-horizons пустой каталог записан со слешем на конце,
+                // и игра переставала устанавливаться вовсе.
+                var dir = (dirs[i] ?? string.Empty).TrimEnd('/', '\\');
+
+                var reason = ManifestPath.Describe(dir);
                 if (reason != null) {
                     throw Fail(source, $"пустой каталог #{i}: путь '{dirs[i]}' отвергнут ({reason})");
                 }
 
-                if (seenDirs.TryGetValue(dirs[i], out var prevDir)) {
+                if (seenDirs.TryGetValue(dir, out var prevDir)) {
                     throw Fail(source, $"пустой каталог '{dirs[i]}' встречается дважды (записи #{prevDir} и #{i})");
                 }
 
-                seenDirs[dirs[i]] = i;
+                seenDirs[dir] = i;
             }
         }
 
