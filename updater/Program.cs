@@ -236,8 +236,15 @@ internal static class Program
                     }
                 }
 
+                // A12. Диффовый режим: лаунчер посчитал план против ПАПКИ УСТАНОВКИ и скачал
+                // только изменившиеся файлы. Значит SRC — это не полный пакет, а дифф,
+                // и «остаточное зеркалирование» всего SRC больше не нужно (и вредно: оно
+                // делало полный проход по несуществующим файлам).
+                var haveFileList = !string.IsNullOrWhiteSpace(files) && File.Exists(files);
+                var copied = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
                 // If file list provided, copy them first (diff), respecting strip-prefix
-                if (!string.IsNullOrWhiteSpace(files) && File.Exists(files))
+                if (haveFileList)
                 {
                     foreach (var rel in File.ReadAllLines(files, Encoding.UTF8))
                     {
@@ -257,12 +264,15 @@ internal static class Program
                             Log($"diff src missing {srcRel}");
                             continue;
                         }
+                        copied.Add(srcRel);
                         await CopyFileAsync(s, d);
                     }
                 }
 
-                // Residual mirror of all SRC files (ensures runtimes/, prereqs/ etc.)
-                if (Directory.Exists(src))
+                // Residual mirror of all SRC files (ensures runtimes/, prereqs/ etc.).
+                // Только для полного пакета (список файлов не передан): при диффе SRC содержит
+                // ровно то, что надо скопировать, и оно уже скопировано выше.
+                if (!haveFileList && Directory.Exists(src))
                 {
                     foreach (var s in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
                     {
@@ -287,6 +297,25 @@ internal static class Program
                         catch { }
                         await CopyFileAsync(s, d);
                     }
+                }
+
+                // Диагностика диффа: всё, что лежит в SRC, но не попало в список копирования.
+                // В норме таких файлов нет; если появились — значит лаунчер и апдейтер разошлись.
+                if (haveFileList && Directory.Exists(src))
+                {
+                    try
+                    {
+                        foreach (var s in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
+                        {
+                            var rel = Path.GetRelativePath(src, s).Replace('\\', '/');
+                            if (copied.Contains(rel) || matcher.ShouldPreserve(rel) || PreserveMatcher.IsUpdaterArtifact(rel))
+                            {
+                                continue;
+                            }
+                            Log($"diff: SRC file not in FILES list, skipped: {rel}");
+                        }
+                    }
+                    catch (Exception ex) { Log($"diff audit error: {ex.Message}"); }
                 }
 
                 // Deletions
@@ -352,29 +381,45 @@ internal static class Program
                         }
                         return false;
                     }
-                    if (Directory.Exists(src))
+                    if (haveFileList)
                     {
-                        foreach (var s in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
+                        // A12. При диффе сверять всю папку установки с SRC бессмысленно: в SRC лежат
+                        // только изменившиеся файлы, остальные дали бы «SRC missing» на каждый файл.
+                        // Проверяем ровно то, что должны были скопировать.
+                        foreach (var rel in copied)
                         {
-                            var rel = Path.GetRelativePath(src, s).Replace('\\','/');
                             if (!IgnoreForHash(rel))
                             {
                                 map.Add(rel);
                             }
                         }
                     }
-                    if (Directory.Exists(dst))
+                    else
                     {
-                        foreach (var d in Directory.EnumerateFiles(dst, "*", SearchOption.AllDirectories))
+                        if (Directory.Exists(src))
                         {
-                            var rel = Path.GetRelativePath(dst, d).Replace('\\','/');
-                            if (!string.IsNullOrWhiteSpace(strip) && !rel.StartsWith(strip + "/", StringComparison.OrdinalIgnoreCase))
+                            foreach (var s in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
                             {
-                                rel = strip + "/" + rel;
+                                var rel = Path.GetRelativePath(src, s).Replace('\\','/');
+                                if (!IgnoreForHash(rel))
+                                {
+                                    map.Add(rel);
+                                }
                             }
-                            if (!IgnoreForHash(rel))
+                        }
+                        if (Directory.Exists(dst))
+                        {
+                            foreach (var d in Directory.EnumerateFiles(dst, "*", SearchOption.AllDirectories))
                             {
-                                map.Add(rel);
+                                var rel = Path.GetRelativePath(dst, d).Replace('\\','/');
+                                if (!string.IsNullOrWhiteSpace(strip) && !rel.StartsWith(strip + "/", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    rel = strip + "/" + rel;
+                                }
+                                if (!IgnoreForHash(rel))
+                                {
+                                    map.Add(rel);
+                                }
                             }
                         }
                     }
