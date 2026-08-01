@@ -162,6 +162,12 @@ namespace ChillHub.Core {
         /// </summary>
         public static async void ReportAsync(Exception ex, string context, bool includeDiagnostics = true) {
             try {
+                // Автоотчёты отправляем только с согласия пользователя (тумблер в настройках).
+                // На ручную отправку обратной связи (TryConsumeManual / формы фидбэка) это не влияет.
+                if (!ChillHub.Core.ConfigService.Current.AutoErrorReports) {
+                    return;
+                }
+
                 var baseApi = (ChillHub.Core.ConfigService.Current.ApiBaseUrl ?? string.Empty).TrimEnd('/');
                 if (string.IsNullOrWhiteSpace(baseApi)) return;
                 var url = baseApi + "/feedback/submit";

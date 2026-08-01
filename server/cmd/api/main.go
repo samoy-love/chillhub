@@ -6,8 +6,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
-    "runtime"
+	"time"
 
 	"ChillHub/server/internal/httpx"
 
@@ -32,15 +33,15 @@ type GamesResponse struct {
 }
 
 func main() {
-    _, err := maxprocs.Set(maxprocs.Logger(func(format string, a ...any) {
-        if runtime.GOOS == "windows" {
-            return
-        }
-        log.Printf("[maxprocs] "+format, a...)
-    }))
-    if err != nil {
-        log.Printf("[maxprocs] set failed: %v", err)
-    }
+	_, err := maxprocs.Set(maxprocs.Logger(func(format string, a ...any) {
+		if runtime.GOOS == "windows" {
+			return
+		}
+		log.Printf("[maxprocs] "+format, a...)
+	}))
+	if err != nil {
+		log.Printf("[maxprocs] set failed: %v", err)
+	}
 	// Determine content root
 	contentRoot = os.Getenv("CONTENT_ROOT")
 	if contentRoot == "" {
@@ -93,7 +94,15 @@ func main() {
 
 	addr := ":55700"
 	log.Printf("public API listening on %s (contentRoot=%s)", addr, contentRoot)
-	log.Fatal(http.ListenAndServe(addr, r))
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	log.Fatal(srv.ListenAndServe())
 }
 
 var contentRoot string

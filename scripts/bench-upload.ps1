@@ -123,6 +123,18 @@ $fi = Get-Item -LiteralPath $FilePath
 $TotalSize = $fi.Length
 Log-Info ("Размер файла: " + (Format-SizeMBGB $TotalSize))
 
+# Normalize BaseUrl: trim trailing slash and prefer HTTPS for non-local hosts (prod)
+try {
+  if($BaseUrl){ $BaseUrl = ($BaseUrl.Trim()).TrimEnd('/') }
+  $tmpUri = [Uri]::new($BaseUrl)
+  $hostLower = $tmpUri.Host.ToLowerInvariant()
+  $isLocal = ($hostLower -eq 'localhost' -or $hostLower -eq '127.0.0.1' -or $hostLower -eq '::1')
+  if($tmpUri.Scheme -eq 'http' -and -not $isLocal){
+    $portPart = if($tmpUri.IsDefaultPort){ '' } else { ':' + $tmpUri.Port }
+    $BaseUrl = 'https://' + $tmpUri.Host + $portPart
+  }
+} catch { throw "Некорректный BaseUrl: $BaseUrl" }
+
 # Simple HTTP helpers
 Add-Type -AssemblyName System.Net.Http
 Add-Type -AssemblyName System
