@@ -22,10 +22,52 @@ namespace ChillHub.Core.Sync {
     using ChillHub.Core.Net;
 
     public class SimpleSyncService : ISyncService {
+        /// <summary>
+        /// Имя файла-маркера незавершённого обновления в корне игры.
+        /// Существует только на время фазы активации: если он остался — обновление
+        /// прервали (отмена/исключение/выключение), и игру нельзя считать рабочей.
+        /// </summary>
+        public const string UpdateMarkerFileName = ".updating";
+
         private readonly HttpClient http;
 
         public SimpleSyncService(HttpClient? http = null) {
             this.http = http ?? HttpClientProvider.Shared;
+        }
+
+        /// <summary>
+        /// Проверяет наличие маркера незавершённого обновления в папке игры.
+        /// </summary>
+        /// <param name="localRoot">Корень локальной папки игры.</param>
+        /// <returns>true, если обновление было прервано и требуется докатить его.</returns>
+        public static bool HasUpdateMarker(string localRoot) {
+            try {
+                if (string.IsNullOrWhiteSpace(localRoot)) {
+                    return false;
+                }
+
+                return File.Exists(Path.Combine(localRoot, UpdateMarkerFileName));
+            }
+            catch (Exception ex) {
+                ChillHub.Core.Logging.Logger.Error(ex, $"HasUpdateMarker({localRoot})");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Читает содержимое маркера незавершённого обновления (для диагностики/подсказок).
+        /// </summary>
+        /// <param name="localRoot">Корень локальной папки игры.</param>
+        /// <returns>Содержимое маркера либо пустая строка.</returns>
+        public static string ReadUpdateMarker(string localRoot) {
+            try {
+                var path = Path.Combine(localRoot, UpdateMarkerFileName);
+                return File.Exists(path) ? File.ReadAllText(path).Trim() : string.Empty;
+            }
+            catch (Exception ex) {
+                ChillHub.Core.Logging.Logger.Error(ex, $"ReadUpdateMarker({localRoot})");
+                return string.Empty;
+            }
         }
 
         /// <inheritdoc/>
@@ -47,6 +89,11 @@ namespace ChillHub.Core.Sync {
             var manifestFiles = new Dictionary<string, ManifestFile>(StringComparer.OrdinalIgnoreCase);
             foreach (var mf in manifest.Files) {
                 var relNorm = mf.Path.Replace('\\', '/');
+                if (IsServiceRelFile(relNorm)) {
+                    // Маркер незавершённого обновления — служебный файл лаунчера, в план он не попадает
+                    continue;
+                }
+
                 if (IsIgnoredRelFile(relNorm)) {
                     // Исключаем спецфайл FreeTP/.hash из проверки и обновления для каждой игры.
                     // Это нужно для пиратских сборок с сайта FreeTP.Org, чтобы при запуске игры
@@ -59,6 +106,9 @@ namespace ChillHub.Core.Sync {
 
             // Локальные файлы относительно корня
             var localExisting = ListLocalFiles(localRoot);
+
+            // Кеш хешей: при неизменных размере и времени модификации файл не перечитывается
+            var hashCache = FileHashCache.Load(manifest.GameId);
 
             // Определим новые/изменённые: при наличии хеша сравниваем по хешу, иначе по размеру
             foreach (var kv in manifestFiles) {
@@ -74,30 +124,27 @@ namespace ChillHub.Core.Sync {
 
                         // Если есть sha256/blake3 в манифесте — считаем локальный хеш и сравним
                         if (!string.IsNullOrWhiteSpace(mf.Sha256) || !string.IsNullOrWhiteSpace(mf.Blake3)) {
-                            using var f = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, useAsync: false);
-                            using var sha = SHA256.Create();
-                            var b3 = Blake3.Hasher.New();
-                            var buf = new byte[256 * 1024];
-                            int r;
-                            while ((r = f.Read(buf, 0, buf.Length)) > 0) {
-                                sha.TransformBlock(buf, 0, r, null, 0);
-                                b3.Update(new ReadOnlySpan<byte>(buf, 0, r));
-                            }
-
-                            sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
-                            var shaHex = Convert.ToHexString(sha.Hash!).ToLowerInvariant();
-                            var b3out = new byte[32];
-                            b3.Finalize(b3out);
-                            var b3Hex = Convert.ToHexString(b3out).ToLowerInvariant();
-
-                            var shaOk = string.IsNullOrWhiteSpace(mf.Sha256) || string.Equals(shaHex, mf.Sha256, StringComparison.OrdinalIgnoreCase);
-                            var b3Ok = string.IsNullOrWhiteSpace(mf.Blake3) || string.Equals(b3Hex, mf.Blake3, StringComparison.OrdinalIgnoreCase);
-                            if (shaOk && b3Ok) {
-                                needDownload = false;
+                            if (mf.Size > 0 && info.Length != mf.Size) {
+                                // Размер отличается — хеш заведомо не совпадёт, файл читать незачем
+                                needDownload = true;
+                                reason = $"size_mismatch local={info.Length} manifest={mf.Size}";
                             }
                             else {
-                                needDownload = true;
-                                reason = $"hash_mismatch shaOk={shaOk} b3Ok={b3Ok}";
+                                var mtimeTicks = info.LastWriteTimeUtc.Ticks;
+                                if (!hashCache.TryGet(rel, info.Length, mtimeTicks, out var shaHex, out var b3Hex)) {
+                                    ComputeHashes(localPath, out shaHex, out b3Hex);
+                                    hashCache.Set(rel, info.Length, mtimeTicks, shaHex, b3Hex);
+                                }
+
+                                var shaOk = string.IsNullOrWhiteSpace(mf.Sha256) || string.Equals(shaHex, mf.Sha256, StringComparison.OrdinalIgnoreCase);
+                                var b3Ok = string.IsNullOrWhiteSpace(mf.Blake3) || string.Equals(b3Hex, mf.Blake3, StringComparison.OrdinalIgnoreCase);
+                                if (shaOk && b3Ok) {
+                                    needDownload = false;
+                                }
+                                else {
+                                    needDownload = true;
+                                    reason = $"hash_mismatch shaOk={shaOk} b3Ok={b3Ok}";
+                                }
                             }
                         }
                         else {
@@ -133,6 +180,9 @@ namespace ChillHub.Core.Sync {
             }
 
             plan.TotalFilesToDownload = plan.Downloads.Count;
+
+            // Чистим кеш от записей об исчезнувших файлах и сохраняем, если что-то поменялось
+            hashCache.PruneAndSave(localExisting);
 
             // Пустые директории для создания
             foreach (var d in manifest.EmptyDirs) {
@@ -314,8 +364,11 @@ namespace ChillHub.Core.Sync {
             // Верификация (хеши пропустим на моках)
             progress.Report(new SyncProgress { Stage = "Verifying", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
 
-            // Активация: перенести staging файлы в основной корень
+            // Активация: перенести staging файлы в основной корень.
+            // Файлы переносятся по одному, поэтому до начала ставим маркер незавершённого обновления:
+            // если процесс прервут посередине, игра останется наполовину обновлённой и запускать её нельзя.
             progress.Report(new SyncProgress { Stage = "Activating", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+            WriteUpdateMarker(plan.LocalRoot, plan.Version);
             foreach (var t in plan.Downloads) {
                 ct.ThrowIfCancellationRequested();
                 var rel = t.RelativePath.Replace('/', Path.DirectorySeparatorChar);
@@ -398,6 +451,9 @@ namespace ChillHub.Core.Sync {
             catch {
             }
 
+            // Обновление доведено до конца — снимаем маркер незавершённого обновления
+            ClearUpdateMarker(plan.LocalRoot);
+
             // Финальный сигнал о завершении
             progress.Report(new SyncProgress { Stage = "Completed", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
         }
@@ -417,6 +473,11 @@ namespace ChillHub.Core.Sync {
             foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)) {
                 var rel = Path.GetRelativePath(root, path).Replace('\\', '/');
                 if (rel.StartsWith(".staging/", StringComparison.OrdinalIgnoreCase)) {
+                    continue;
+                }
+
+                if (IsServiceRelFile(rel)) {
+                    // Служебный маркер незавершённого обновления: не качаем, не удаляем, не считаем файлом игры
                     continue;
                 }
 
@@ -496,9 +557,69 @@ namespace ChillHub.Core.Sync {
             internal const int MOVEFILE_REPLACE_EXISTING = 0x00000001;
         }
 
+        // Служебные файлы лаунчера в корне игры, которые не участвуют
+        // ни в плане загрузки, ни в удалении, ни в подсчёте локальных файлов.
+        private static bool IsServiceRelFile(string rel) {
+            if (string.IsNullOrWhiteSpace(rel)) {
+                return false;
+            }
+
+            var r = rel.Replace('\\', '/').TrimStart('/');
+            return r.Equals(UpdateMarkerFileName, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Считает SHA-256 и Blake3 за один проход по файлу.
+        private static void ComputeHashes(string path, out string sha256Hex, out string blake3Hex) {
+            using var f = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, useAsync: false);
+            using var sha = SHA256.Create();
+            var b3 = Blake3.Hasher.New();
+            var buf = new byte[256 * 1024];
+            int r;
+            while ((r = f.Read(buf, 0, buf.Length)) > 0) {
+                sha.TransformBlock(buf, 0, r, null, 0);
+                b3.Update(new ReadOnlySpan<byte>(buf, 0, r));
+            }
+
+            sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+            sha256Hex = Convert.ToHexString(sha.Hash!).ToLowerInvariant();
+            var b3out = new byte[32];
+            b3.Finalize(b3out);
+            blake3Hex = Convert.ToHexString(b3out).ToLowerInvariant();
+        }
+
+        // Ставит маркер незавершённого обновления перед фазой активации.
+        private static void WriteUpdateMarker(string localRoot, string version) {
+            try {
+                Directory.CreateDirectory(localRoot);
+                var path = Path.Combine(localRoot, UpdateMarkerFileName);
+                var text = $"version={version}\r\nstartedUtc={DateTime.UtcNow:o}\r\npid={Environment.ProcessId}\r\n";
+                File.WriteAllText(path, text);
+                ChillHub.Core.Logging.Logger.Info($"UpdateMarker set root='{localRoot}' version='{version}'");
+            }
+            catch (Exception ex) {
+                ChillHub.Core.Logging.Logger.Error(ex, $"WriteUpdateMarker({localRoot})");
+            }
+        }
+
+        // Снимает маркер после успешного завершения активации.
+        private static void ClearUpdateMarker(string localRoot) {
+            try {
+                var path = Path.Combine(localRoot, UpdateMarkerFileName);
+                if (File.Exists(path)) {
+                    SafeDeleteFile(path);
+                    ChillHub.Core.Logging.Logger.Info($"UpdateMarker cleared root='{localRoot}'");
+                }
+            }
+            catch (Exception ex) {
+                ChillHub.Core.Logging.Logger.Error(ex, $"ClearUpdateMarker({localRoot})");
+            }
+        }
+
         private static void SafeDeleteFile(string path) {
             try {
-                if (!File.Exists(path)) return;
+                if (!File.Exists(path)) {
+                    return;
+                }
 
                 // Remove read-only/system attributes if present
                 try {
@@ -506,44 +627,73 @@ namespace ChillHub.Core.Sync {
                     if ((attrs & (FileAttributes.ReadOnly | FileAttributes.System)) != 0) {
                         File.SetAttributes(path, attrs & ~(FileAttributes.ReadOnly | FileAttributes.System));
                     }
-                } catch { }
+                }
+                catch {
+                }
 
-            int attempts = 5;
+                int attempts = 5;
+                for (int i = 0; i < attempts; i++) {
+                    try {
+                        File.Delete(path);
+                        if (!File.Exists(path)) {
+                            return;
+                        }
+                    }
+                    catch (IOException) {
+                    }
+                    catch (UnauthorizedAccessException) {
+                    }
+
+                    // Give GC a chance to finalize any lingering FileStreams and retry
+                    try {
+                        GC.Collect();
+                        GC.WaitForPendingFinalizers();
+                    }
+                    catch {
+                    }
+
+                    Thread.Sleep(120 * (i + 1));
+                }
+
+                // Fallback: schedule delete on reboot
+                try {
+                    NativeMethods.MoveFileEx(path, null, NativeMethods.MOVEFILE_DELAY_UNTIL_REBOOT);
+                }
+                catch {
+                }
+            }
+            catch {
+            }
+        }
+
+        private static void TryDeleteDirectoryWithRetry(string dir, bool recursive, int attempts, int delayMs) {
             for (int i = 0; i < attempts; i++) {
                 try {
-                    File.Delete(path);
-                    if (!File.Exists(path)) return;
+                    if (!Directory.Exists(dir)) {
+                        return;
+                    }
+
+                    Directory.Delete(dir, recursive);
+                    if (!Directory.Exists(dir)) {
+                        return;
+                    }
                 }
-                catch (IOException) { }
-                catch (UnauthorizedAccessException) { }
+                catch (IOException) {
+                }
+                catch (UnauthorizedAccessException) {
+                }
 
-                // Give GC a chance to finalize any lingering FileStreams and retry
-                try { GC.Collect(); GC.WaitForPendingFinalizers(); } catch { }
-                Thread.Sleep(120 * (i + 1));
+                try {
+                    GC.Collect();
+                    GC.WaitForPendingFinalizers();
+                }
+                catch {
+                }
+
+                Thread.Sleep(delayMs * (i + 1));
             }
 
-            // Fallback: schedule delete on reboot
-            try {
-                NativeMethods.MoveFileEx(path, null, NativeMethods.MOVEFILE_DELAY_UNTIL_REBOOT);
-            } catch { }
+            // best-effort: leave as is; directory should be empty besides locked files which will remain until release
         }
-        catch { }
-    }
-
-    private static void TryDeleteDirectoryWithRetry(string dir, bool recursive, int attempts, int delayMs) {
-        for (int i = 0; i < attempts; i++) {
-            try {
-                if (!Directory.Exists(dir)) return;
-                Directory.Delete(dir, recursive);
-                if (!Directory.Exists(dir)) return;
-            }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-
-            try { GC.Collect(); GC.WaitForPendingFinalizers(); } catch { }
-            Thread.Sleep(delayMs * (i + 1));
-        }
-        // best-effort: leave as is; directory should be empty besides locked files which will remain until release
-    }
     }
 }

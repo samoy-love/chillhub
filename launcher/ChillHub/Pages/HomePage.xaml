@@ -650,6 +650,17 @@
               <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.GameRowHeight}"/>
               <Border Style="{DynamicResource Style.Skeleton}" Height="{StaticResource Skeleton.GameRowHeight}"/>
             </StackPanel>
+            <!-- Пустое состояние: сервер недоступен -->
+            <StackPanel Name="GamesEmptyState" Visibility="Collapsed" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="12">
+              <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xEB5E;" FontSize="28" HorizontalAlignment="Center"
+                         Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,0,0,8"/>
+              <TextBlock Text="Не удалось связаться с сервером" TextWrapping="Wrap" TextAlignment="Center"
+                         FontWeight="SemiBold" Foreground="{DynamicResource Brush.Text}"/>
+              <TextBlock Text="Проверьте подключение к интернету и попробуйте снова." TextWrapping="Wrap" TextAlignment="Center"
+                         FontSize="12" Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,4,0,12"/>
+              <Button Name="RetryLoadBtn" Content="Повторить" Click="RetryLoad_Click"
+                      Style="{DynamicResource Style.Button.GhostNeutral}" Width="140" Height="32" HorizontalAlignment="Center"/>
+            </StackPanel>
             <!-- Листаемый список игр как боковое меню (карточки) -->
             <ListBox Name="GameList" SelectionChanged="GameCombo_SelectionChanged" Visibility="Collapsed" Background="{DynamicResource Brush.Surface}"
                      ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.CanContentScroll="False"
