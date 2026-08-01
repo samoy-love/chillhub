@@ -182,11 +182,11 @@ namespace ChillHub {
                     var manifestUrl = $"{this.BaseApi}/manifests/launcher/{remote}.json";
                     mf = await this.sync.GetManifestAsync(manifestUrl, System.Threading.CancellationToken.None);
                 }
-                catch (Core.Sync.ManifestSignatureException ex) {
-                    // Подпись манифеста не сошлась — предлагать обновление нельзя:
-                    // качать по такому манифесту мы всё равно откажемся.
+                catch (Core.Sync.ManifestValidationException ex) {
+                    // Манифест отклонён проверкой структуры — предлагать обновление
+                    // нельзя: качать по такому манифесту мы всё равно откажемся.
                     try {
-                        Core.Logging.Logger.Error(ex, "UpdateWindow.CheckManifestSignature");
+                        Core.Logging.Logger.Error(ex, "UpdateWindow.CheckManifestValidation");
                     }
                     catch {
                     }
@@ -856,15 +856,15 @@ namespace ChillHub {
                     this.downloaded = true;
                     this.StatusText.Text = "Обновление загружено. Применяем и перезапускаем...";
                 }
-                catch (Core.Sync.ManifestSignatureException ex) {
-                    // Подпись манифеста самообновления не сошлась. Ни одного байта
-                    // ещё не скачано, и скачано не будет: подменённый манифест —
-                    // это подменённый ChillHub.exe.
+                catch (Core.Sync.ManifestValidationException ex) {
+                    // Манифест самообновления отклонён. Ни одного байта ещё не
+                    // скачано, и скачано не будет: манифест определяет, что именно
+                    // ляжет на диск вместо ChillHub.exe.
                     this.StatusText.Text = $"Обновление отменено: {ex.Message}";
                     this.PrimaryBtn.IsEnabled = false;
                     this.downloaded = false;
                     try {
-                        Core.Logging.Logger.Error(ex, "UpdateWindow.ManifestSignature");
+                        Core.Logging.Logger.Error(ex, "UpdateWindow.ManifestValidation");
                     }
                     catch {
                     }

@@ -10,15 +10,15 @@ namespace ChillHub.Core.Sync {
 
     public interface ISyncService {
         /// <summary>
-        /// Загружает манифест и проверяет его подпись.
+        /// Загружает манифест и проверяет его структуру.
         /// </summary>
         /// <param name="manifestUrl">URL манифеста.</param>
         /// <param name="ct">Токен отмены.</param>
         /// <returns>Проверенный манифест.</returns>
-        /// <exception cref="ManifestSignatureException">
-        /// Подпись стоит, но не сходится с содержимым (либо включён строгий режим,
-        /// а подписи нет). Реализация обязана бросить ДО того, как что-либо скачано:
-        /// манифест определяет, какие исполняемые файлы окажутся на диске.
+        /// <exception cref="ManifestValidationException">
+        /// Манифест содержит опасный путь, дубликат записи или запись без хешей.
+        /// Реализация обязана бросить ДО того, как что-либо скачано: манифест
+        /// определяет, какие исполняемые файлы окажутся на диске.
         /// </exception>
         Task<Manifest> GetManifestAsync(string manifestUrl, CancellationToken ct);
 

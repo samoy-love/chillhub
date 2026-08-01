@@ -27,8 +27,9 @@ namespace ChillHub.Core.Sync {
         [JsonPropertyName("emptyDirs")]
         public List<string> EmptyDirs { get; set; } = new();
 
-        [JsonPropertyName("signature")]
-        public string Signature { get; set; } = string.Empty;
+        // Поля "signature" здесь больше нет: подпись манифестов из проекта убрана.
+        // В манифестах, выпущенных раньше, оно ещё встречается — десериализатор
+        // молча игнорирует неизвестные члены, поэтому старые файлы читаются как есть.
     }
 
     public class ManifestFile {

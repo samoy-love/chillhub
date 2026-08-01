@@ -741,11 +741,11 @@ namespace ChillHub.Pages {
 
                 // Отложим Refresh до завершения всех проверок
             }
-            catch (ManifestSignatureException ex) {
+            catch (ManifestValidationException ex) {
                 // Фоновая проверка статуса: молча статус не меняем, но в логе фиксируем именно
-                // проблему подписи, а не «какую-то ошибку сети». Пользователь увидит явный текст,
-                // когда нажмёт «Установить»/«Обновить» — см. StartUpdateAsync.
-                Core.Logging.Logger.Error(ex, $"VerifyGameStatusAsync({game?.GameId}): манифест не прошёл проверку подписи");
+                // отклонённый манифест, а не «какую-то ошибку сети». Пользователь увидит явный
+                // текст, когда нажмёт «Установить»/«Обновить» — см. StartUpdateAsync.
+                Core.Logging.Logger.Error(ex, $"VerifyGameStatusAsync({game?.GameId}): манифест не прошёл проверку");
             }
             catch (Exception ex) {
                 // В случае ошибки проверки — не меняем текущий статус, только логируем
@@ -1622,14 +1622,14 @@ namespace ChillHub.Pages {
                 this.UpdateProgress.Value = 0;
                 this.ReportSyncMetric(currentGid, metricsVersion, metricsIsInstall, "cancel", metricsWatch, metricsBytes);
             }
-            catch (ManifestSignatureException ex) {
-                // Подпись манифеста не сошлась — это не сетевой сбой, а признак подмены раздачи.
+            catch (ManifestValidationException ex) {
+                // Манифест отклонён проверкой структуры — это не сетевой сбой.
                 // Ни одного файла игры мы ещё не тронули, и не тронем: показываем отдельный текст.
                 this.hasUpdateError = true;
                 this.updateErrorGameId = currentGid;
-                this.ShowUserError(ManifestSignature.UserMessage, ex, "HomePage.StartUpdateAsync.ManifestSignature");
+                this.ShowUserError(ManifestValidator.UserMessage, ex, "HomePage.StartUpdateAsync.ManifestValidation");
                 this.ReportSyncMetric(currentGid, metricsVersion, metricsIsInstall, "fail", metricsWatch, metricsBytes);
-                Core.Metrics.MetricsService.Error("manifest_signature", currentGid);
+                Core.Metrics.MetricsService.Error("manifest_invalid", currentGid);
             }
             catch (Exception ex) {
                 this.hasUpdateError = true;

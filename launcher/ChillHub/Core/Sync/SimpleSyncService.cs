@@ -86,7 +86,7 @@ namespace ChillHub.Core.Sync {
             // исполняемые файлы окажутся на диске. Проверка здесь, в единственной
             // точке загрузки манифеста, закрывает и синхронизацию игр, и
             // самообновление лаунчера.
-            ManifestSignature.Enforce(manifest, manifestUrl);
+            ManifestValidator.Validate(manifest, manifestUrl);
             return manifest;
         }
 

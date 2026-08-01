@@ -159,10 +159,9 @@ jobs:
         working-directory: launcher/ChillHub
         run: dotnet build --no-restore -c Release
       - name: Tests (launcher)
-        # 73 теста, среди них векторы RFC 8032 для самописного Ed25519, которым
-        # проверяется подпись манифестов. Без этого шага регрессия в проверке
-        # подписи уезжала бы в релиз незамеченной: тесты в репозитории были,
-        # но не запускались ни в одном прогоне CI.
+        # Тесты плана обновления, разбора манифеста, хешей и структурной проверки
+        # путей. Без этого шага регрессия уезжала бы в релиз незамеченной: тесты
+        # в репозитории были, но не запускались ни в одном прогоне CI.
         working-directory: launcher/tests/ChillHub.Tests
         run: dotnet test --nologo
 
@@ -229,8 +228,6 @@ jobs:
         # No secrets required: scripts/installer.nsi does not sign the output and
         # pulls the optional .NET/WebView2 redistributables with `File /nonfatal`,
         # so a runner without scripts/Redist/ still produces a working setup.exe.
-        # TODO(owner): add code signing (certificate + password as repository
-        # secrets, signtool after makensis) before publishing CI-built setups.
         run: ./scripts/build-installer.ps1 -Configuration Release
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
