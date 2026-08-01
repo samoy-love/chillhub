@@ -592,6 +592,13 @@ func (h *Handlers) UploadComplete(w http.ResponseWriter, r *http.Request) {
 // UploadProcessStream extracts the completed upload and streams NDJSON:
 // start, unzip entries, compose files, done.
 func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
+	// POST, not GET: this handler unpacks the archive, replaces the published
+	// version and deletes the ZIP. The CSRF check only covers state-changing
+	// methods (POST/PUT/PATCH/DELETE), so as a GET it was reachable from any
+	// page an authenticated admin happened to visit.
+	if !adminutil.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
 	if !h.authorized(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -663,6 +670,10 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 		EmptyDirs: emptyDirs,
 	}
 	// Everything is extracted and hashed: publish the build in one rename.
+	// See lockPublish: promote and the manifest write must not interleave with
+	// another publication of the same version.
+	unlock := lockPublish(m.GameID, m.Version)
+	defer unlock()
 	if err := promoteVersionDir(stageDir, finalVerDir); err != nil {
 		streamError(nw, fl, "activate failed: "+err.Error())
 		return

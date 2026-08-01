@@ -151,7 +151,7 @@ func TestProcessRemovesArchiveOnSuccess(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	h.UploadProcessStream(w, httptest.NewRequest(http.MethodGet,
+	h.UploadProcessStream(w, httptest.NewRequest(http.MethodPost,
 		"http://example.com/admin/api/upload/process?uploadId="+id, nil))
 
 	events, garbage := ndjsonEvents(t, w.Body.String())
