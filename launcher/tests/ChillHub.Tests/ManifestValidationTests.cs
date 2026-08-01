@@ -147,20 +147,20 @@ namespace ChillHub.Tests {
         }
 
         [Fact]
-        public void EnforceОтвергаетНеканоническийПутьДажеБезПодписи() {
-            // Режим совместимости распространяется на ОТСУТСТВИЕ подписи, но не на
-            // опасное содержимое: неподписанный манифест с таким путём тоже вне закона.
+        public void ВалидаторОтвергаетНеканоническийПуть() {
+            // Неканоническая форма опасна сама по себе: "/game/app.exe" и
+            // "game/app.exe" — одна и та же запись, но разные строки, а решает,
+            // куда лечь файлу, именно строка.
             var manifest = PlanTestData.Manifest(PlanTestData.File("/game/app.exe", 10, "aa"));
-            manifest.Signature = "dev-mock-signature";
 
             Assert.Throws<ManifestValidationException>(
-                () => ManifestSignature.Enforce(manifest, "test://legacy"));
+                () => ManifestValidator.Validate(manifest, "test://legacy"));
         }
 
         /// <summary>
-        /// Пункт 3: подпись инвариантна к перестановке записей, а планировщик кладёт
-        /// их в словарь и оставляет последнюю. Две записи на один путь = выбор того,
-        /// какой файл получит пользователь, без взлома подписи.
+        /// Планировщик кладёт записи в словарь и оставляет последнюю. Две записи на
+        /// один путь означают, что содержимое файла у пользователя определяется
+        /// порядком в JSON, — манифест перестаёт однозначно описывать сборку.
         /// </summary>
         [Theory]
         [InlineData("data/pack.bin", "data/pack.bin")]
@@ -184,21 +184,6 @@ namespace ChillHub.Tests {
 
             await Assert.ThrowsAsync<ManifestValidationException>(
                 () => PlanTestData.PlanAsync(manifest, dir.Root));
-        }
-
-        [Fact]
-        public void ПерестановкаДубликатовНеМеняетПодписываемыеБайты() {
-            // Контроль к тесту выше: именно поэтому дубликаты нельзя терпеть —
-            // подпись их перестановку не замечает.
-            var a = PlanTestData.Manifest(
-                PlanTestData.File("data/pack.bin", 10, "aa", "b1"),
-                PlanTestData.File("data/pack.bin", 20, "bb", "b2"));
-            var b = PlanTestData.Manifest(
-                PlanTestData.File("data/pack.bin", 20, "bb", "b2"),
-                PlanTestData.File("data/pack.bin", 10, "aa", "b1"));
-            b.GameId = a.GameId;
-
-            Assert.Equal(ManifestSignature.Canonicalize(a), ManifestSignature.Canonicalize(b));
         }
 
         [Theory]

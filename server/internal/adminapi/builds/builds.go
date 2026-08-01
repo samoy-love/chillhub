@@ -44,7 +44,6 @@ type manifest struct {
 	CreatedAt string         `json:"createdAt"`
 	Files     []manifestFile `json:"files"`
 	EmptyDirs []string       `json:"emptyDirs"`
-	Signature string         `json:"signature"`
 }
 
 type manifestFile struct {
@@ -183,15 +182,23 @@ func stripLauncherStateFiles(gameID string, files []manifestFile) []manifestFile
 	return out
 }
 
-// writeManifest signs the manifest, stores it for a version and optionally
+// writeManifest validates the manifest, stores it for a version and optionally
 // points latest.json at it. Returns the manifest path and the exact bytes
 // written.
 //
-// Signing happens here rather than at the call sites so that no publication
-// path can accidentally emit an unsigned manifest.
+// Validation happens here rather than at the call sites so that no publication
+// path can accidentally emit a manifest the client will refuse.
 func (h *Handlers) writeManifest(m manifest, updateLatest bool) (string, []byte, error) {
 	m.Files = stripLauncherStateFiles(m.GameID, m.Files)
-	signManifest(&m)
+
+	// Публиковать манифест, который клиент заведомо отвергнет, бессмысленно:
+	// лучше сломать выкладку здесь, с внятной причиной, чем у пользователя на
+	// установке. Правила те же, что и на клиенте (ManifestValidator).
+	if err := validateManifest(m); err != nil {
+		log.Printf("[builds] refusing to publish manifest gameId=%q version=%q: %v", m.GameID, m.Version, err)
+		return "", nil, err
+	}
+
 	outDir := h.manifestsDir(m.GameID)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", nil, err

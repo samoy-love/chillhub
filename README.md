@@ -32,7 +32,7 @@
   - Public API — выдаёт список игр, версии, манифесты, новости (JSON/статик).
   - Admin API — приём ZIP‑сборок, активация `latest`, редактирование реестра игр, управление новостями и ассетами, режим технических работ, сводка метрик, инбокс обратной связи.
 - Админ‑панель (web) даёт UI для всех административных операций (загрузка версий, правка реестра, новости/ассеты, техработы, метрики, обращения).
-- Манифесты подписываются Ed25519, клиент проверяет подпись до загрузки файлов.
+- Манифест проверяется структурно до загрузки файлов: отвергаются выход за пределы каталога, дубликаты путей и записи без хешей. Криптографической подписи манифестов в проекте нет.
 - Режим технических работ включается с сервера: клиент показывает баннер и блокирует установку/обновление/запуск (по параметрам), а по окончании окна возвращается к нормальной работе сам, без перезапуска.
 
 ## Почему ChillHub
@@ -74,7 +74,6 @@ ChillHub решает все «боли» ручной установки игр
     - [`GET /news/index.json`](Documentation.md#api-news-index)
     - [`GET /news/games/{gameId}/index.json`](Documentation.md#api-news-game-index)
 - Admin UI/API (§8): [`Игры`](Documentation.md#81-игры), [`Лаунчер`](Documentation.md#82-лаунчер), [`Новости`](Documentation.md#83-новости), [`Режим техработ`](Documentation.md#85-режим-технических-работ), [`Метрики`](Documentation.md#86-метрики-лаунчера), [`Обратная связь`](Documentation.md#87-обратная-связь-feedback)
-- Подпись манифестов (§5.1): [`Documentation.md#51-подпись-манифестов-ed25519`](Documentation.md#51-подпись-манифестов-ed25519)
 
 - `server/` — Go: `cmd/api` (public) и `cmd/admin` (admin), плюс статика для dev.
   Обработчики админки живут в `server/internal/adminapi/*`, общая инфраструктура — в
@@ -164,7 +163,7 @@ Set-Location "Launcher Project"
 
 ```bash
 cd server && go test ./...                              # серверные пакеты
-dotnet test launcher/tests/ChillHub.Tests               # клиент: план/дифф, хеши, подпись
+dotnet test launcher/tests/ChillHub.Tests               # клиент: план/дифф, хеши, проверка манифеста
 dotnet run --project updater/tests/ManifestPreserveCheck # петля самообновления
 sh deploy/nginx-check.sh                                # настоящий nginx -t в Docker
 make lint                                               # web/go/dotnet линтеры
@@ -400,9 +399,6 @@ sudo nginx -t && sudo systemctl reload nginx
 - **/admin/api/* → 404**
   - Обновите/пересоберите `server/cmd/admin` и перезапустите `chillhub-admin.service`. Полный список маршрутов объявлен в `server/cmd/admin/routes.go`: канонический путь — `/admin/api/...`, форма `/admin/...` создаётся автоматически как алиас (кроме `auth/*` и `upload/*` — они существуют только под `/admin/api/...`).
 
-- **В журнале admin: `SECURITY: MANIFEST_SIGNING_KEY is not set — manifests will be published UNSIGNED`**
-  - Не задан приватный ключ подписи манифестов. Сборки при этом публикуются, но без подписи. Как сгенерировать пару и куда её положить — `Documentation.md` §5.1.
-
 - **Метрики в админке пусты**
   - Это ожидаемо: серверная часть (`POST /metrics/report`) готова, но лаунчер пока не отправляет события.
 
@@ -447,22 +443,9 @@ sudo systemctl restart chillhub-admin.service
 ## Полезные ссылки и файлы
 - Конфиг nginx (prod): `deploy/launcher.conf` → на сервере `/etc/nginx/sites-available/chillhub-launcher.conf`
 - Проверка конфига nginx настоящим `nginx -t` в Docker: `sh deploy/nginx-check.sh` (по умолчанию образ версии прода `nginx:1.24-alpine`; `NGINX_IMAGE=nginx:alpine` — проверка «на будущее»). Подробности — `deploy/README.md`.
-- Systemd юниты: `deploy/systemd/` (там же описана переменная `MANIFEST_SIGNING_KEY`)
+- Systemd юниты: `deploy/systemd/`
 - Документация скриптов: `scripts/README.md`
 - CI/CD (ручной запуск из GitHub Actions): `.github/workflows/deploy.yml`
-
-### Настройка подписи манифестов (один раз)
-
-```bash
-cd server && go run ./internal/adminapi/builds/keygen
-```
-
-Приватную часть (`MANIFEST_SIGNING_KEY=...`) положить в окружение
-`chillhub-admin.service` (лучше через `EnvironmentFile=` с правами 600, в репозиторий
-не коммитить), публичную — в константу `ManifestSignature.PublicKeyBase64` в лаунчере.
-Пока ключ не задан, манифесты публикуются без подписи, а клиент принимает их в
-режиме совместимости. Подробности и порядок включения строгого режима —
-[`Documentation.md#51-подпись-манифестов-ed25519`](Documentation.md#51-подпись-манифестов-ed25519).
 
 ### CI/CD: ручной запуск в GitHub Actions
 
@@ -484,7 +467,7 @@ Workflow `.github/workflows/deploy.yml` можно запустить вручн
 
 ## Примечания по безопасности и качеству
 - Серверные порты приложений 55700/55777 закрыты внешнему миру, доступны только через nginx.
-- Клиент постепенно будет получать подпись кода/инсталлятора (вне MVP). Подпись **манифестов** (Ed25519) уже реализована — см. выше.
-- Манифесты могут содержать хеши Blake3 и SHA‑256; клиент проверяет значения, если присутствуют.
+- Ни манифесты, ни исполняемые файлы не подписываются: подпись из проекта убрана. Подлинность раздачи держится на TLS, а SmartScreen предупреждает при установке, пока не наберётся репутация загрузок.
+- Каждая запись манифеста обязана нести хотя бы один хеш (Blake3 и/или SHA‑256): запись без хешей означала бы установку файла вообще без проверки целостности, поэтому такой манифест отвергается.
 - Пользовательские данные лаунчера (`config.json`, логи) лежат в `%APPDATA%\ChillHub`, а НЕ в каталоге установки `%LOCALAPPDATA%\ChillHub`. При обновлении со старой версии конфиг мигрирует автоматически.
 - В ZIP лаунчера не должно быть `config.json` и `launcher.version`: пересечение манифеста с preserve‑правилами апдейтера даёт бесконечный цикл самообновления. Проверка — `dotnet run --project updater/tests/ManifestPreserveCheck`.

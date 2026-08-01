@@ -47,7 +47,6 @@
   - Admin UI: http://localhost:55777/admin
 - Полезные переменные окружения для dev:
   - `YL_DEV_SKIP_SELF_UPDATE=1` — пропустить проверку самообновления лаунчера.
-  - `CHILLHUB_MANIFEST_STRICT=1` — строгий режим проверки подписи манифестов (по умолчанию действует режим совместимости).
   - `API_RATE_LIMIT=0` — отключить rate limit публичного API на время нагрузочных проверок.
 
 ---
@@ -125,7 +124,7 @@ make deploy-win HOST=your.vps.host USER=ubuntu KEY="C:/Users/you/.ssh/id_rsa" \
 
 ```bash
 cd server && go test ./...                               # серверные пакеты
-dotnet test launcher/tests/ChillHub.Tests                # клиент: план/дифф, хеши, подпись
+dotnet test launcher/tests/ChillHub.Tests                # клиент: план/дифф, хеши, проверка манифеста
 dotnet run --project updater/tests/ManifestPreserveCheck # петля самообновления
 sh deploy/nginx-check.sh                                 # настоящий nginx -t в Docker
 make lint                                                # web/go/dotnet линтеры

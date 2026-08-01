@@ -61,8 +61,11 @@ func TestWriteManifestDropsLauncherStateFiles(t *testing.T) {
 		Version: "9.9.9",
 		GameID:  LauncherGameID,
 		Files: []manifestFile{
-			{Path: "ChillHub.exe", Size: 1},
-			{Path: "launcher.version", Size: 8},
+			// Хеши обязательны: writeManifest прогоняет манифест через
+			// validateManifest и отказывается публиковать запись, которую
+			// клиенту нечем проверить.
+			{Path: "ChillHub.exe", Size: 1, Blake3: "aaaa"},
+			{Path: "launcher.version", Size: 8, Blake3: "bbbb"},
 		},
 	}
 	_, b, err := h.writeManifest(m, false)
