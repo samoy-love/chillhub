@@ -1,0 +1,19 @@
+[Unit]
+Description=Ежедневный снимок контента ChillHub
+Documentation=file:/usr/local/sbin/chillhub-backup-content.sh
+
+[Timer]
+# Ночью по UTC: и трафик минимальный, и снимок не конкурирует за диск с
+# выкаткой (деплой обычно днём).
+OnCalendar=*-*-* 03:00:00 UTC
+# Разброс, чтобы бэкап не стартовал ровно в ту же секунду, что и любые другие
+# ночные задания на этом хосте (там ещё три проекта).
+RandomizedDelaySec=30m
+# Persistent=true — если хост был выключен в момент срабатывания, снимок
+# сделается сразу после загрузки. Без этого пропущенная ночь означала бы
+# молчаливую дыру в истории бэкапов.
+Persistent=true
+Unit=chillhub-backup.service
+
+[Install]
+WantedBy=timers.target

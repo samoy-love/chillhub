@@ -111,6 +111,8 @@ jobs:
           rsync -a --delete server/admin_ui/ build/launcher_admin_ui/
           rsync -a deploy/systemd/ build/systemd/ || true
           rsync -a deploy/launcher.conf build/deploy/launcher.conf
+          # И3: скрипт резервного копирования контента едет вместе с юнитами.
+          rsync -a deploy/backup-content.sh build/deploy/backup-content.sh
           echo "::endgroup::"
           echo "::group::Manifests"
           manifest() { local root="$1"; local out="$2"; rm -f "$out"; if [ -d "$root" ]; then ( cd "$root" && find . -type f -print0 | xargs -0 sha256sum | awk '{print $2"\t"$1}' | sed 's#^\./##' ) > "$out"; fi }
@@ -124,11 +126,13 @@ jobs:
               [ -f "$f" ] && sha256sum "$f" | awk '{print $2"\t"$1}' >> ../bin.manifest
             done
           )
-          # Whitelist only the two systemd unit files
+          # Whitelist the systemd units we actually install (И3 добавил юниты
+          # бэкапа — их тоже надо сверять, иначе проверка целостности молча
+          # перестала бы покрывать половину раскладываемых юнитов).
           rm -f build/systemd.manifest || true
           (
             cd build/systemd 2>/dev/null || exit 0
-            for f in chillhub-api.service chillhub-admin.service; do
+            for f in chillhub-api.service chillhub-admin.service chillhub-backup.service chillhub-backup.timer; do
               [ -f "$f" ] && sha256sum "$f" | awk '{print $2"\t"$1}' >> ../systemd.manifest
             done
           )
@@ -388,6 +392,34 @@ jobs:
               sudo systemctl daemon-reload || true
               sudo systemctl enable chillhub-api.service || true
               sudo systemctl enable chillhub-admin.service || true
+            fi
+
+            # И3: резервное копирование контента.
+            #
+            # /var/www/launcher/{content,manifests,news} не лежат в репозитории
+            # (content/** в .gitignore) и не резервировались никуда — копия
+            # всего опубликованного контента существовала ровно одна.
+            # Процедура восстановления описана в шапке самого скрипта.
+            if [ -f "$DEPLOY_DIR/deploy/backup-content.sh" ]; then
+              sudo install -m 0755 -o root -g root "$DEPLOY_DIR/deploy/backup-content.sh" /usr/local/sbin/chillhub-backup-content.sh
+              sudo install -d -m 0700 -o root -g root /var/backups/chillhub
+              if [ -f "$DEPLOY_DIR/systemd/chillhub-backup.service" ]; then
+                sudo install -m 0644 "$DEPLOY_DIR/systemd/chillhub-backup.service" /etc/systemd/system/chillhub-backup.service
+              fi
+              if [ -f "$DEPLOY_DIR/systemd/chillhub-backup.timer" ]; then
+                sudo install -m 0644 "$DEPLOY_DIR/systemd/chillhub-backup.timer" /etc/systemd/system/chillhub-backup.timer
+                sudo systemctl daemon-reload || true
+                # enable --now, а не просто enable: установленный, но не
+                # запущенный таймер — это отсутствие бэкапов с ложным
+                # ощущением, что они есть.
+                sudo systemctl enable --now chillhub-backup.timer || true
+                if systemctl is-enabled chillhub-backup.timer >/dev/null 2>&1; then
+                  ok "[backup] таймер включён"
+                  systemctl list-timers chillhub-backup.timer --no-pager --no-legend || true
+                else
+                  warn "[backup] таймер НЕ включён — бэкапов контента не будет"
+                fi
+              fi
             fi
 
             ADMIN_DROPIN_DIR="/etc/systemd/system/chillhub-admin.service.d"
