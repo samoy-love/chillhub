@@ -48,10 +48,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           # The toolchain version comes from server/go.mod, which is the single
           # source of truth for it. The hardcoded '1.22.x' that used to be here
@@ -111,6 +111,10 @@ jobs:
           rsync -a --delete server/admin_ui/ build/launcher_admin_ui/
           rsync -a deploy/systemd/ build/systemd/ || true
           rsync -a deploy/launcher.conf build/deploy/launcher.conf
+          # И3: скрипт резервного копирования контента едет вместе с юнитами.
+          rsync -a deploy/backup-content.sh build/deploy/backup-content.sh
+          # И13: скрипт отката бинарей.
+          rsync -a deploy/rollback-binaries.sh build/deploy/rollback-binaries.sh
           echo "::endgroup::"
           echo "::group::Manifests"
           manifest() { local root="$1"; local out="$2"; rm -f "$out"; if [ -d "$root" ]; then ( cd "$root" && find . -type f -print0 | xargs -0 sha256sum | awk '{print $2"\t"$1}' | sed 's#^\./##' ) > "$out"; fi }
@@ -124,11 +128,13 @@ jobs:
               [ -f "$f" ] && sha256sum "$f" | awk '{print $2"\t"$1}' >> ../bin.manifest
             done
           )
-          # Whitelist only the two systemd unit files
+          # Whitelist the systemd units we actually install (И3 добавил юниты
+          # бэкапа — их тоже надо сверять, иначе проверка целостности молча
+          # перестала бы покрывать половину раскладываемых юнитов).
           rm -f build/systemd.manifest || true
           (
             cd build/systemd 2>/dev/null || exit 0
-            for f in chillhub-api.service chillhub-admin.service; do
+            for f in chillhub-api.service chillhub-admin.service chillhub-backup.service chillhub-backup.timer; do
               [ -f "$f" ] && sha256sum "$f" | awk '{print $2"\t"$1}' >> ../systemd.manifest
             done
           )
@@ -279,8 +285,25 @@ jobs:
           enc FAIL_ON_MISMATCH_B64 "${IN_FAIL_ON_MISMATCH:-}" plain
           echo "Encoded 7 values (nothing printed)."
 
+      # ---------------------------------------------------------------------
+      # И17: СТОРОННИЕ ACTIONS ЗАКРЕПЛЕНЫ ПО COMMIT SHA, А НЕ ПО ТЕГУ.
+      #
+      # Тег в git — ПЕРЕМЕЩАЕМАЯ ссылка: владелец репозитория может переставить
+      # v0.1.7 на любой коммит, и следующий же запуск подтянет другой код без
+      # единого изменения у нас. Для обычного шага это неприятно; для этих трёх
+      # шагов это критично, потому что им передаётся ${{ secrets.SSH_PRIVATE_KEY }}
+      # — приватный ключ от продового сервера. Скомпрометированный или просто
+      # перевыпущенный тег означает, что чужой код получает ключ от прода.
+      #
+      # SHA неизменяем: он либо тот, что мы проверили, либо шаг не запустится.
+      # Комментарий рядом с каждым SHA хранит соответствующую версию, чтобы
+      # обновление оставалось читаемым one-line изменением.
+      #
+      # Обновление: сверить новый SHA командой
+      #   gh api repos/appleboy/scp-action/git/ref/tags/<tag> --jq .object.sha
+      # ---------------------------------------------------------------------
       - name: Upload bundle to server (SCP)
-        uses: appleboy/scp-action@v0.1.7
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634  # v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -290,7 +313,7 @@ jobs:
           strip_components: 1
 
       - name: Deploy on server (SSH)
-        uses: appleboy/ssh-action@v1.2.2
+        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f  # v1.2.2 — см. И17 выше
         env:
           # Produced by the "Resolve admin password hash" step above.
           ADMIN_PASSWORD_BCRYPT_B64: ${{ env.ADMIN_PASSWORD_BCRYPT_B64 }}
@@ -339,17 +362,59 @@ jobs:
 
             sudo mkdir -p "$SITE_DIR" "$LAUNCHER_DIR/admin_ui" "$OPT_DIR"
 
+            # И10: ПРОВАЛ rsync ОБЯЗАН РОНЯТЬ ДЕПЛОЙ.
+            #
+            # Было: `sudo rsync ... | sed ... || true`. Здесь ДВА независимых
+            # способа потерять ошибку:
+            #   1) в конвейере статус берётся от ПОСЛЕДНЕЙ команды, то есть от
+            #      sed, который успешен всегда — даже если rsync упал;
+            #   2) `|| true` глушит и остаток.
+            # Итог: невыложенная статика (нет места, отвалилась сеть, права)
+            # выглядела как успешный шаг, а сайт оставался на старой версии.
+            #
+            # Ниже статус берётся явно из PIPESTATUS[0] — это статус rsync, а
+            # не sed. `set -e` тут не спасёт: он не срабатывает на неуспех
+            # команды слева от конвейера.
+            rsync_or_die() {
+              _label="$1"; shift
+              sudo rsync "$@" | sed -e "s#^#[rsync:$_label] #"
+              _rc=${PIPESTATUS[0]}
+              if [ "$_rc" -ne 0 ]; then
+                err "[rsync:$_label] rsync завершился с кодом $_rc — деплой останавливаю"
+                exit 1
+              fi
+            }
+
             echo "::group::Rsync site"
-            sudo rsync -a --delete --itemize-changes --exclude 'downloads' "$DEPLOY_DIR/site/" "$SITE_DIR/" | sed -e 's#^#[rsync:site] #' || true
+            rsync_or_die site -a --delete --itemize-changes --exclude 'downloads' "$DEPLOY_DIR/site/" "$SITE_DIR/"
             echo "::endgroup::"
 
             echo "::group::Rsync admin_ui"
-            sudo rsync -a --delete --itemize-changes "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/" | sed -e 's#^#[rsync:admin] #' || true
+            rsync_or_die admin -a --delete --itemize-changes "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/"
             echo "::endgroup::"
 
             # Ensure admin content root subdirs exist and are writable by service user
             sudo mkdir -p "$LAUNCHER_DIR/content" "$LAUNCHER_DIR/manifests" "$LAUNCHER_DIR/news" "$LAUNCHER_DIR/tmp"
-            sudo chown -R www-data:www-data "$LAUNCHER_DIR"
+
+            # И11: НЕ `chown -R www-data:www-data "$LAUNCHER_DIR"`.
+            #
+            # Рекурсивный chown по корню обходил ВСЁ дерево контента на каждом
+            # деплое — гигабайты сборок игр и лаунчера, десятки тысяч файлов.
+            # Это, во-первых, долгий проход по диску на каждой выкатке; но
+            # главное — деплой лез в каталоги, которыми управляет бэкенд, и
+            # менял у них метаданные, хотя политика проекта (см. осознанно
+            # обратное поведение в scripts/deploy.sh) прямо говорит:
+            # content/manifests/news деплой не трогает. Заодно chown обновляет
+            # ctime, из-за чего guard-проверки «контент не менялся во время
+            # деплоя» получали ложные срабатывания.
+            #
+            # Приводим workflow к поведению scripts/deploy.sh: владельца
+            # выставляем рекурсивно только там, куда деплой действительно
+            # пишет (admin_ui и tmp), а сами каталоги контента — БЕЗ -R,
+            # чтобы сервис мог создавать в них файлы, но их содержимое
+            # осталось нетронутым.
+            sudo chown -R www-data:www-data "$LAUNCHER_DIR/admin_ui" "$LAUNCHER_DIR/tmp"
+            sudo chown www-data:www-data "$LAUNCHER_DIR" "$LAUNCHER_DIR/content" "$LAUNCHER_DIR/manifests" "$LAUNCHER_DIR/news"
 
             sudo install -d -m 0755 "$OPT_DIR"
             SERVER_ARCH=$(uname -m | tr '[:upper:]' '[:lower:]')
@@ -367,6 +432,32 @@ jobs:
                   ;;
               esac
             fi
+            # И13: СОХРАНЯЕМ ТЕКУЩИЕ БИНАРИ ПЕРЕД ПЕРЕЗАПИСЬЮ.
+            #
+            # Отката не было нигде, кроме конфига nginx: бинари ставились
+            # `install` поверх старых, и предыдущая версия исчезала
+            # безвозвратно. Вернуться к работающей сборке можно было только
+            # новой выкаткой из git — то есть в момент, когда прод лежит, надо
+            # было дождаться сборки, а если ломающий коммит уже в main, ещё и
+            # сначала сделать revert. Сохранение стоит одну копию файла.
+            ROLLBACK_DIR="$OPT_DIR/rollback"
+            sudo install -d -m 0700 -o root -g root "$ROLLBACK_DIR"
+            BIN_STAMP="$(date -u +%Y-%m-%d-%H%M%S)"
+            for _b in api admin; do
+              if [ -f "$OPT_DIR/$_b" ]; then
+                sudo cp -a "$OPT_DIR/$_b" "$ROLLBACK_DIR/$_b.previous"
+                sudo cp -a "$OPT_DIR/$_b" "$ROLLBACK_DIR/$_b.$BIN_STAMP"
+                ok "[rollback] сохранён предыдущий $_b"
+              else
+                info "[rollback] $OPT_DIR/$_b ещё нет — первая установка"
+              fi
+            done
+            # Скрипт отката кладём на хост: он нужен ровно тогда, когда некогда
+            # искать, где он лежит в репозитории.
+            if [ -f "$DEPLOY_DIR/deploy/rollback-binaries.sh" ]; then
+              sudo install -m 0755 -o root -g root "$DEPLOY_DIR/deploy/rollback-binaries.sh" /usr/local/sbin/chillhub-rollback-binaries.sh
+            fi
+
             sudo install -m 0755 "$API_SRC" "$OPT_DIR/api"
             sudo install -m 0755 "$ADMIN_SRC" "$OPT_DIR/admin"
             if command -v file >/dev/null 2>&1; then
@@ -388,6 +479,34 @@ jobs:
               sudo systemctl daemon-reload || true
               sudo systemctl enable chillhub-api.service || true
               sudo systemctl enable chillhub-admin.service || true
+            fi
+
+            # И3: резервное копирование контента.
+            #
+            # /var/www/launcher/{content,manifests,news} не лежат в репозитории
+            # (content/** в .gitignore) и не резервировались никуда — копия
+            # всего опубликованного контента существовала ровно одна.
+            # Процедура восстановления описана в шапке самого скрипта.
+            if [ -f "$DEPLOY_DIR/deploy/backup-content.sh" ]; then
+              sudo install -m 0755 -o root -g root "$DEPLOY_DIR/deploy/backup-content.sh" /usr/local/sbin/chillhub-backup-content.sh
+              sudo install -d -m 0700 -o root -g root /var/backups/chillhub
+              if [ -f "$DEPLOY_DIR/systemd/chillhub-backup.service" ]; then
+                sudo install -m 0644 "$DEPLOY_DIR/systemd/chillhub-backup.service" /etc/systemd/system/chillhub-backup.service
+              fi
+              if [ -f "$DEPLOY_DIR/systemd/chillhub-backup.timer" ]; then
+                sudo install -m 0644 "$DEPLOY_DIR/systemd/chillhub-backup.timer" /etc/systemd/system/chillhub-backup.timer
+                sudo systemctl daemon-reload || true
+                # enable --now, а не просто enable: установленный, но не
+                # запущенный таймер — это отсутствие бэкапов с ложным
+                # ощущением, что они есть.
+                sudo systemctl enable --now chillhub-backup.timer || true
+                if systemctl is-enabled chillhub-backup.timer >/dev/null 2>&1; then
+                  ok "[backup] таймер включён"
+                  systemctl list-timers chillhub-backup.timer --no-pager --no-legend || true
+                else
+                  warn "[backup] таймер НЕ включён — бэкапов контента не будет"
+                fi
+              fi
             fi
 
             ADMIN_DROPIN_DIR="/etc/systemd/system/chillhub-admin.service.d"
@@ -472,13 +591,62 @@ jobs:
               REDIR_OK=0
             fi
 
-            sudo systemctl daemon-reload || true
-            sudo systemctl restart chillhub-api.service || true
-            sudo systemctl restart chillhub-admin.service || true
+            # И12: ПРОВЕРЯЕМ, ЧТО СЕРВИС ОТВЕЧАЕТ, А НЕ ЧТО SYSTEMD ЕГО ЗАПУСТИЛ.
+            #
+            # Было: `systemctl restart ... || true`, а сразу за ним
+            # `systemctl is-active`. Две беды в трёх строках.
+            #
+            # 1) `|| true` глушил провал самого restart.
+            # 2) У обоих юнитов Type=simple, поэтому systemd считает сервис
+            #    активным В МОМЕНТ ЗАПУСКА ПРОЦЕССА — не дожидаясь, пока тот
+            #    прочитает конфиг, откроет порт или хотя бы останется жив.
+            #    Процесс, падающий через 200 мс на кривом JWT_SECRET или
+            #    занятом порте, успевал отрапортовать «active». Проверка
+            #    отвечала на вопрос «systemd попытался?», а не «сервис
+            #    работает?».
+            #
+            # Опрашиваем по HTTP на loopback с ретраями: admin — специально
+            # заведённый /admin/api/health, api — /api/maintenance (у
+            # публичного API health-эндпоинта нет, а этот GET отвечает всегда
+            # и не требует авторизации). Именно 127.0.0.1, а не публичный URL:
+            # здесь проверяется сам сервис, а не nginx с сертификатом — их
+            # отказы надо различать. Публичные проверки идут ниже.
+            sudo systemctl daemon-reload
+            sudo systemctl restart chillhub-api.service
+            sudo systemctl restart chillhub-admin.service
+
+            wait_healthy() {
+              _name="$1"; _url="$2"; _tries="${3:-30}"; _i=1; _code=""
+              while [ "$_i" -le "$_tries" ]; do
+                _code=$(curl -s --max-time 3 -o /dev/null -w "%{http_code}" "$_url" 2>/dev/null || true)
+                if [ "$_code" = "200" ]; then
+                  ok "[health] $_name отвечает 200 на $_url (попытка $_i из $_tries)"
+                  return 0
+                fi
+                _i=$((_i + 1))
+                sleep 1
+              done
+              err "[health] $_name НЕ ответил 200 на $_url за ${_tries} с (последний код: ${_code:-нет ответа})"
+              return 1
+            }
+
+            HEALTH_FAIL=0
+            wait_healthy "chillhub-admin" "http://127.0.0.1:55777/admin/api/health" 30 || HEALTH_FAIL=1
+            wait_healthy "chillhub-api"   "http://127.0.0.1:55700/api/maintenance"  30 || HEALTH_FAIL=1
+
+            # Состояния всё равно собираем: они попадают в HTML-отчёт и в
+            # итоговый $STATUS ниже.
             API_STATE=$(systemctl is-active chillhub-api.service || true)
             ADM_STATE=$(systemctl is-active chillhub-admin.service || true)
             info "[systemd] api=$API_STATE admin=$ADM_STATE"
-            [ "$API_STATE" = active ] && [ "$ADM_STATE" = active ] || { err "[deploy] services NOT active"; exit 1; }
+            if [ "$HEALTH_FAIL" -ne 0 ]; then
+              err "[deploy] сервисы не отвечают на health — собираю диагностику"
+              for _s in chillhub-api.service chillhub-admin.service; do
+                echo "---- systemctl status $_s ----"; sudo systemctl status "$_s" --no-pager -n 20 || true
+                echo "---- journalctl -u $_s ----"; sudo journalctl -u "$_s" -n 50 --no-pager || true
+              done
+              exit 1
+            fi
 
             DOWNLOADS_DIR="$(b64d "${DOWNLOADS_DIR_B64:-}")"
             if [ -n "$DOWNLOADS_DIR" ] && [ -d "$DOWNLOADS_DIR" ]; then
@@ -680,6 +848,25 @@ jobs:
             must_200 "${SITE_BASE}/admin/api/health" "Admin API health"
             must_200 "${SITE_BASE}/" "Landing /"
             must_200 "${SITE_BASE}/styles.css" "Landing styles"
+
+            # Л2: ГЛАВНАЯ КНОПКА ЛЕНДИНГА.
+            #
+            # /downloads/ChillHub-Setup.exe не был покрыт ничем. Это
+            # единственный способ для нового пользователя получить лаунчер, а
+            # файл кладётся отдельным шагом синхронизации каталога downloads.
+            # Пропущенный шаг означал молчаливый 404 на кнопке «Скачать» при
+            # полностью зелёных остальных проверках.
+            #
+            # HEAD, а не GET: тянуть многомегабайтный установщик на каждом
+            # деплое незачем, а 200 на HEAD означает, что файл на месте.
+            DL_CODE=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" -I "${SITE_BASE}/downloads/ChillHub-Setup.exe" || true)
+            if [ "$DL_CODE" = "200" ]; then
+              ok "[test] PASS Installer download (/downloads/ChillHub-Setup.exe)"
+            else
+              err "[test] FAIL Installer download (/downloads/ChillHub-Setup.exe) -> $DL_CODE"
+              err "[test]      Кнопка скачивания на лендинге не работает. Проверьте секрет DOWNLOADS_DIR и шаг синхронизации."
+              FAIL=1
+            fi
             curl -sf "${SITE_BASE}/manifests/launcher/latest.json" >/dev/null && ok "[test] PASS manifest latest.json" || warn "[test] WARN manifest latest.json not present"
             curl -sf "${SITE_BASE}/assets/ping.txt" >/dev/null && ok "[test] PASS assets/ping.txt" || warn "[test] WARN assets/ping.txt not present"
 
@@ -772,6 +959,12 @@ jobs:
             http_row "${SITE_BASE}/admin/api/health" "Admin API health"
             http_row "${SITE_BASE}/" "Landing /"
             http_row "${SITE_BASE}/styles.css" "Landing styles"
+            # Л2: строку про установщик формируем из уже полученного HEAD-кода,
+            # а не через http_row: тот делает GET, то есть скачивал бы
+            # многомегабайтный установщик целиком ради одной строки отчёта.
+            printf '<tr><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>\n' \
+              "${SITE_BASE}/downloads/ChillHub-Setup.exe" "Installer download (HEAD)" "$DL_CODE" "-" \
+              "$( [ "$DL_CODE" = "200" ] && echo OK || echo FAIL )" >> "$REPORT_ROWS_HTTP"
             http_row "${SITE_BASE}/manifests/launcher/latest.json" "Manifest latest.json (soft)"
             http_row "${SITE_BASE}/assets/ping.txt" "News asset ping.txt (soft)"
             STATUS=success
@@ -816,17 +1009,73 @@ jobs:
               echo "</body></html>"
             } > "$REPORT_HTML"; ln -sf "$REPORT_HTML" "$REPORT_DIR/report-latest.html"
 
+            # И30: РОТАЦИЯ ОТЧЁТОВ.
+            #
+            # Каждый деплой писал report-<timestamp>.html и не удалял ничего.
+            # Файлы копились в домашнем каталоге пользователя деплоя
+            # бессрочно; вдобавок шаг скачивания забирал ВСЕ *.html, поэтому
+            # артефакт каждого следующего прогона был больше предыдущего — и
+            # время выкатки росло вместе с ним.
+            #
+            # Держим последние 20: этого хватает, чтобы сравнить несколько
+            # последних выкаток, ради чего отчёты и существуют.
+            REPORT_KEEP=20
+            REPORT_TOTAL=$(find "$REPORT_DIR" -maxdepth 1 -type f -name 'report-20*.html' | wc -l)
+            if [ "$REPORT_TOTAL" -gt "$REPORT_KEEP" ]; then
+              REPORT_DROP=$((REPORT_TOTAL - REPORT_KEEP))
+              # Имена содержат отметку времени, поэтому сортировка по имени =
+              # сортировка по возрасту; -type f не тронет симлинк report-latest.
+              find "$REPORT_DIR" -maxdepth 1 -type f -name 'report-20*.html' -printf '%f\n' \
+                | sort | head -n "$REPORT_DROP" \
+                | while IFS= read -r _old; do rm -f "$REPORT_DIR/$_old"; done
+              info "[report] ротация: было $REPORT_TOTAL, удалено $REPORT_DROP, храним $REPORT_KEEP"
+            fi
+
+            # ------------------------------------------------------------------
+            # И-смоук: РЕЗУЛЬТАТ ПРОВЕРОК ОБЯЗАН ВЛИЯТЬ НА КОД ВОЗВРАТА.
+            #
+            # Выше вычисляются FAIL (HTTP-проверки), MISM_TOTAL (манифесты),
+            # API_STATE/ADM_STATE (сервисы) и REDIR_OK, и всё это сводится в
+            # $STATUS. Но `exit` не было ни одного: скрипт заканчивался записью
+            # HTML-отчёта, шаг завершался кодом 0, и job был ЗЕЛЁНЫМ при любом
+            # провале — упавший сайт, битый сертификат, неподнявшийся сервис.
+            # Отчёт при этом честно писал "fail", но его никто не открывает,
+            # когда галочка зелёная.
+            #
+            # В scripts/deploy.sh это же место сделано правильно (там `if [[ $FAIL
+            # -ne 0 ]]; then ... exit 1`), так что расходились не замыслом, а
+            # недосмотром.
+            #
+            # Отчёт уже записан выше, поэтому падаем ПОСЛЕ него; шаги скачивания
+            # и публикации отчёта помечены `if: always()`, чтобы артефакт
+            # доехал именно тогда, когда он нужен — на красном прогоне.
+            # ------------------------------------------------------------------
+            if [ "$STATUS" != success ]; then
+              err "[deploy] ПРОВАЛ: FAIL=$FAIL mismatches=$MISM_TOTAL api=$API_STATE admin=$ADM_STATE redirect=${REDIR_OK:-1}"
+              err "[deploy] Подробности — в отчёте deploy-report артефакта этого прогона."
+              exit 1
+            fi
+            ok "[deploy] Все проверки пройдены."
+
       - name: Download deploy report from server
-        uses: appleboy/scp-action@v0.1.7
+        # always(): отчёт нужнее всего на красном прогоне (см. И-смоук выше),
+        # а деплой-шаг теперь честно падает при провале проверок.
+        if: always()
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634  # v0.1.7 — см. И17 выше
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: /home/${{ secrets.SSH_USER }}/deploy/report/*.html
+          # И30: забираем ТОЛЬКО отчёт этого прогона (симлинк report-latest
+          # указывает на него), а не весь каталог. Раньше здесь стояло
+          # `report/*.html`, поэтому артефакт каждого следующего запуска
+          # включал отчёты всех предыдущих и рос без ограничений.
+          source: /home/${{ secrets.SSH_USER }}/deploy/report/report-latest.html
           target: ./deploy-report
           overwrite: true
 
       - name: Upload deploy report artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: deploy-report-${{ github.run_id }}-${{ github.run_attempt }}
