@@ -148,20 +148,22 @@ jobs:
 
       - name: Code style check (dotnet format)
         working-directory: launcher/ChillHub
-        # NOTE: still non-blocking, and that is a deliberate, verified decision:
-        # `dotnet format --verify-no-changes` currently reports several hundred
-        # violations across launcher/** (IDE0011 missing braces, SA1202/SA1306
-        # from StyleCop.Analyzers, plus ENDOFLINE issues) — even
-        # `dotnet format whitespace --verify-no-changes` fails. Making the step
-        # blocking today would red-line every PR.
-        # What DID change: the step used to run `dotnet format` in write mode,
-        # which rewrites files in the runner and always exits 0 — it never
-        # checked anything. It now runs --verify-no-changes and reports real
-        # findings in the job log. The obsolete `dotnet tool update -g
-        # dotnet-format` was dropped (the tool is built into the .NET 6+ SDK).
-        # TODO(owner): clean up launcher/** formatting, then delete
-        # `continue-on-error` below to make style regressions blocking.
-        continue-on-error: true
+        # Blocking as of the launcher/** formatting cleanup: the tree is fully
+        # formatted and both Debug and Release build warning-free, so anything
+        # this step reports now is a real regression and should red-line the PR
+        # that introduced it. Reproduce locally by running `dotnet format`
+        # (write mode) in this directory and committing the result.
+        #
+        # Line endings are load-bearing: .editorconfig requires CRLF, so
+        # launcher/.gitattributes pins `*.cs`/`*.xaml` to `eol=crlf`. Without
+        # that, the checkout would follow the runner's core.autocrlf and this
+        # step would report thousands of phantom ENDOFLINE diffs.
+        run: dotnet format --verify-no-changes --verbosity minimal
+
+      - name: Code style check (dotnet format, tests)
+        working-directory: launcher/tests/ChillHub.Tests
+        # The test project is not covered by the step above (dotnet format works
+        # per project), and it is already clean — keep it that way.
         run: dotnet format --verify-no-changes --verbosity minimal
 
   installer-windows:
