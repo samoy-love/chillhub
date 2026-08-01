@@ -1,5 +1,25 @@
 name: Lint
 
+# ---------------------------------------------------------------------------
+# TOOL VERSIONS ARE PINNED ON PURPOSE
+# ---------------------------------------------------------------------------
+# Every linter below used to float: `npm i -g eslint`, `version: latest`,
+# `go-version: stable`. That makes CI non-deterministic in the worst possible
+# way — a green PR turns red hours later because an upstream release added a
+# rule, and nothing in this repository changed. It also means a build cannot be
+# reproduced after the fact.
+#
+# The versions here were run against this tree before being pinned; all pass.
+# Bumping them is a normal, reviewable one-line change — that is the point.
+#
+#   htmlhint                 1.9.2
+#   eslint                   10.8.0
+#   stylelint                17.14.1
+#   stylelint-config-standard 40.0.0
+#   golangci-lint            v2.12.2
+#   Go toolchain             taken from server/go.mod (single source of truth)
+# ---------------------------------------------------------------------------
+
 on:
   push:
     branches: [ main ]
@@ -22,7 +42,7 @@ jobs:
           restore-keys: |
             npm-cache-linters-${{ runner.os }}-node20-
       - name: Install HTMLHint
-        run: npm i -g htmlhint
+        run: npm i -g htmlhint@1.9.2
       - name: Run HTMLHint (landing + admin_ui)
         run: |
           npx htmlhint "landing/**/*.html" "server/admin_ui/**/*.html" || (echo "HTMLHint found issues" && exit 1)
@@ -43,7 +63,7 @@ jobs:
           restore-keys: |
             npm-cache-linters-${{ runner.os }}-node20-
       - name: Install Stylelint
-        run: npm i -g stylelint stylelint-config-standard
+        run: npm i -g stylelint@17.14.1 stylelint-config-standard@40.0.0
       - name: Run Stylelint (landing + admin_ui)
         run: |
           npx stylelint "landing/**/*.css" "server/admin_ui/**/*.css"
@@ -65,7 +85,7 @@ jobs:
           restore-keys: |
             npm-cache-linters-${{ runner.os }}-node20-
       - name: Install ESLint
-        run: npm i -g eslint
+        run: npm i -g eslint@10.8.0
       - name: Run ESLint (landing + admin_ui)
         run: |
           npx eslint "landing/**/*.js" "server/admin_ui/**/*.js" || (echo "ESLint found issues" && exit 1)
@@ -77,14 +97,16 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
-          go-version: stable
+          # Same toolchain the deploy workflow builds with: read from go.mod,
+          # not "stable" (which silently moves with every Go release).
+          go-version-file: server/go.mod
           cache: true
           cache-dependency-path: |
             server/go.sum
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          version: v2.12.2
           working-directory: server
 
       - name: Go vet

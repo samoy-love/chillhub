@@ -3,7 +3,18 @@ permissions:
 
 concurrency:
   group: deploy-to-vps-${{ inputs.environment }}
-  cancel-in-progress: true
+  # MUST STAY false. This workflow is not idempotent-at-any-point: the SSH step
+  # is one long non-atomic sequence — rsync the site, install the binaries,
+  # write the systemd drop-in, lay down the nginx config, THEN reload nginx and
+  # restart the services. `cancel-in-progress: true` kills that sequence
+  # wherever it happens to be: new binaries on disk with the old services still
+  # running, or a fresh chillhub-launcher.conf in sites-available that nobody
+  # has run `nginx -t` against yet — which the next reload (a deploy, a reboot,
+  # or certbot's renew_hook) would pick up blind.
+  #
+  # Queueing a second deploy behind the first costs a few minutes. Cancelling
+  # one mid-flight costs a half-installed production host.
+  cancel-in-progress: false
 name: Deploy to VPS
 
 on:
@@ -42,7 +53,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22.x'
+          # The toolchain version comes from server/go.mod, which is the single
+          # source of truth for it. The hardcoded '1.22.x' that used to be here
+          # did not even match go.mod (`go 1.24.0`), so every build silently
+          # triggered Go's toolchain auto-download — a network fetch of an
+          # unpinned compiler in the middle of a release build.
+          go-version-file: server/go.mod
           cache: true
           cache-dependency-path: server/go.sum
 
@@ -56,12 +72,27 @@ jobs:
             ${{ runner.os }}-go-build-
 
       - name: Build Go servers (linux/amd64 + linux/arm64)
+        # REPRODUCIBLE BUILD — do not reintroduce `go mod tidy` here.
+        #
+        # `go mod tidy` is a MUTATING command: it rewrites go.mod/go.sum, can
+        # add, drop or move dependency versions, and it does so inside the step
+        # that produces the binaries that ship to production. The artefact then
+        # no longer corresponds to the committed go.sum and two runs of the same
+        # commit can produce different binaries.
+        #
+        # The build now only downloads exactly what go.sum already pins, and
+        # GOFLAGS=-mod=readonly makes any attempt to change go.mod a hard error
+        # instead of a silent edit. If a build fails here with "missing go.sum
+        # entry", that is the check working: run `go mod tidy` LOCALLY and
+        # commit the result.
+        env:
+          GOFLAGS: -mod=readonly
         run: |
           set -eux
           echo "::group::Build amd64"
           mkdir -p build/bin
           cd server
-          go mod tidy
+          go mod download
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ../build/bin/api.amd64 ./cmd/api
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ../build/bin/admin.amd64 ./cmd/admin
           echo "::endgroup::"
@@ -198,6 +229,56 @@ jobs:
             echo "ADMIN_PASSWORD_BCRYPT_B64=" >> "$GITHUB_ENV"
           fi
 
+      # ---------------------------------------------------------------------
+      # Everything else that travels into the remote shell — base64, same as
+      # the bcrypt hash above and for exactly the same reason.
+      #
+      # The SSH script used to inline the values textually:
+      #     JWT_SECRET="${{ secrets.JWT_SECRET }}"
+      # A secret containing a double quote, a backtick or a `$(` therefore did
+      # not arrive as data — it arrived as SHELL SYNTAX, in a script that runs
+      # `sudo` on the production host. Best case the deploy dies halfway
+      # through (binaries installed, services not restarted); worst case the
+      # secret executes. The same applies to the two workflow_dispatch inputs:
+      # site_base_url and fail_on_mismatch are free-form operator text.
+      #
+      # Base64 output is [A-Za-z0-9+/=] only, so it survives both the YAML
+      # substitution and appleboy/ssh-action's unquoted `export NAME=VALUE`
+      # injection intact. It is decoded once, into a shell variable, on the
+      # other side.
+      #
+      # Note this step reads the secrets through `env:` rather than expanding
+      # ${{ }} inside `run:` — same injection class, one level earlier.
+      # ---------------------------------------------------------------------
+      - name: Encode deploy inputs for the SSH script (base64)
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          ADMIN_USER: ${{ secrets.ADMIN_USER }}
+          COOKIE_DOMAIN: ${{ secrets.COOKIE_DOMAIN }}
+          COOKIE_SECURE: ${{ secrets.COOKIE_SECURE }}
+          DOWNLOADS_DIR: ${{ secrets.DOWNLOADS_DIR }}
+          IN_SITE_BASE: ${{ inputs.site_base_url }}
+          IN_FAIL_ON_MISMATCH: ${{ inputs.fail_on_mismatch }}
+        run: |
+          set -eu
+          # $1 = target env name, $2 = value, $3 = "secret" to mask the encoding
+          enc() {
+            _name="$1"; _val="${2:-}"; _mask="${3:-}"
+            _b64="$(printf '%s' "$_val" | base64 -w0)"
+            if [ -n "$_val" ] && [ "$_mask" = secret ]; then
+              echo "::add-mask::$_b64"
+            fi
+            echo "${_name}=${_b64}" >> "$GITHUB_ENV"
+          }
+          enc JWT_SECRET_B64       "${JWT_SECRET:-}"          secret
+          enc ADMIN_USER_B64       "${ADMIN_USER:-}"          secret
+          enc COOKIE_DOMAIN_B64    "${COOKIE_DOMAIN:-}"       secret
+          enc COOKIE_SECURE_B64    "${COOKIE_SECURE:-}"       secret
+          enc DOWNLOADS_DIR_B64    "${DOWNLOADS_DIR:-}"       secret
+          enc SITE_BASE_B64        "${IN_SITE_BASE:-}"        plain
+          enc FAIL_ON_MISMATCH_B64 "${IN_FAIL_ON_MISMATCH:-}" plain
+          echo "Encoded 7 values (nothing printed)."
+
       - name: Upload bundle to server (SCP)
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -214,11 +295,20 @@ jobs:
           # Produced by the "Resolve admin password hash" step above.
           ADMIN_PASSWORD_BCRYPT_B64: ${{ env.ADMIN_PASSWORD_BCRYPT_B64 }}
           ADMIN_PASSWORD_BCRYPT_EXPECTED: ${{ env.ADMIN_PASSWORD_BCRYPT_EXPECTED }}
+          # Produced by the "Encode deploy inputs" step above. All base64 —
+          # nothing here is interpolated into the remote shell as text.
+          JWT_SECRET_B64: ${{ env.JWT_SECRET_B64 }}
+          ADMIN_USER_B64: ${{ env.ADMIN_USER_B64 }}
+          COOKIE_DOMAIN_B64: ${{ env.COOKIE_DOMAIN_B64 }}
+          COOKIE_SECURE_B64: ${{ env.COOKIE_SECURE_B64 }}
+          DOWNLOADS_DIR_B64: ${{ env.DOWNLOADS_DIR_B64 }}
+          SITE_BASE_B64: ${{ env.SITE_BASE_B64 }}
+          FAIL_ON_MISMATCH_B64: ${{ env.FAIL_ON_MISMATCH_B64 }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: ADMIN_PASSWORD_BCRYPT_B64,ADMIN_PASSWORD_BCRYPT_EXPECTED
+          envs: ADMIN_PASSWORD_BCRYPT_B64,ADMIN_PASSWORD_BCRYPT_EXPECTED,JWT_SECRET_B64,ADMIN_USER_B64,COOKIE_DOMAIN_B64,COOKIE_SECURE_B64,DOWNLOADS_DIR_B64,SITE_BASE_B64,FAIL_ON_MISMATCH_B64
           script: |
             set -eux
             # ANSI colors for nicer logs over SSH/GitHub Actions
@@ -238,8 +328,14 @@ jobs:
             # отдельным файлам; трогаем строго свой.
             NGINX_SITE_AVAILABLE="/etc/nginx/sites-available/chillhub-launcher.conf"
             NGINX_SITE_ENABLED="/etc/nginx/sites-enabled/chillhub-launcher.conf"
-            SITE_BASE="${{ inputs.site_base_url }}"
-            FAIL_ON_MISMATCH="${{ inputs.fail_on_mismatch }}"
+            # Everything that came from secrets or workflow inputs arrives
+            # base64-encoded (see the "Encode deploy inputs" step) and is
+            # decoded here into ordinary shell variables. Nothing is
+            # interpolated into this script as text — see that step's comment
+            # for why that mattered.
+            b64d() { printf '%s' "${1:-}" | base64 -d 2>/dev/null || true; }
+            SITE_BASE="$(b64d "${SITE_BASE_B64:-}")"
+            FAIL_ON_MISMATCH="$(b64d "${FAIL_ON_MISMATCH_B64:-}")"
 
             sudo mkdir -p "$SITE_DIR" "$LAUNCHER_DIR/admin_ui" "$OPT_DIR"
 
@@ -295,10 +391,12 @@ jobs:
             fi
 
             ADMIN_DROPIN_DIR="/etc/systemd/system/chillhub-admin.service.d"
-            JWT_SECRET="${{ secrets.JWT_SECRET }}"
-            ADMIN_USER="${{ secrets.ADMIN_USER }}"
-            COOKIE_DOMAIN="${{ secrets.COOKIE_DOMAIN }}"
-            COOKIE_SECURE="${{ secrets.COOKIE_SECURE }}"
+            set +x  # xtrace must not echo the decoded secrets
+            JWT_SECRET="$(b64d "${JWT_SECRET_B64:-}")"
+            ADMIN_USER="$(b64d "${ADMIN_USER_B64:-}")"
+            COOKIE_DOMAIN="$(b64d "${COOKIE_DOMAIN_B64:-}")"
+            COOKIE_SECURE="$(b64d "${COOKIE_SECURE_B64:-}")"
+            set -x
 
             # The bcrypt hash is computed on the GitHub runner (see the
             # "Resolve admin password hash (bcrypt on runner)" step) and arrives
@@ -317,17 +415,25 @@ jobs:
               exit 1
             fi
             set -x
+            # systemd's Environment="NAME=VALUE" is itself a quoted string, so a
+            # value containing a backslash or a double quote must be escaped or
+            # the unit file becomes unparseable and the admin service refuses to
+            # start. Same class of bug as the shell interpolation above, one
+            # layer down.
+            sd_esc() { printf '%s' "${1:-}" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
             if [ -n "${JWT_SECRET}${ADMIN_USER}${ADMIN_PASS_BCRYPT}${COOKIE_DOMAIN}${COOKIE_SECURE}" ]; then
               sudo mkdir -p "$ADMIN_DROPIN_DIR"
               TMPD=$(mktemp)
+              set +x  # the drop-in body contains JWT_SECRET and the bcrypt hash
               {
                 echo "[Service]"
-                [ -n "$COOKIE_DOMAIN" ] && echo "Environment=\"COOKIE_DOMAIN=$COOKIE_DOMAIN\""
-                [ -n "$COOKIE_SECURE" ] && echo "Environment=\"COOKIE_SECURE=$COOKIE_SECURE\""
-                [ -n "$JWT_SECRET" ] && echo "Environment=\"JWT_SECRET=$JWT_SECRET\""
-                [ -n "$ADMIN_USER" ] && echo "Environment=\"ADMIN_USERNAME=$ADMIN_USER\""
-                [ -n "$ADMIN_PASS_BCRYPT" ] && echo "Environment=\"ADMIN_PASSWORD_BCRYPT=$ADMIN_PASS_BCRYPT\""
+                [ -n "$COOKIE_DOMAIN" ] && echo "Environment=\"COOKIE_DOMAIN=$(sd_esc "$COOKIE_DOMAIN")\""
+                [ -n "$COOKIE_SECURE" ] && echo "Environment=\"COOKIE_SECURE=$(sd_esc "$COOKIE_SECURE")\""
+                [ -n "$JWT_SECRET" ] && echo "Environment=\"JWT_SECRET=$(sd_esc "$JWT_SECRET")\""
+                [ -n "$ADMIN_USER" ] && echo "Environment=\"ADMIN_USERNAME=$(sd_esc "$ADMIN_USER")\""
+                [ -n "$ADMIN_PASS_BCRYPT" ] && echo "Environment=\"ADMIN_PASSWORD_BCRYPT=$(sd_esc "$ADMIN_PASS_BCRYPT")\""
               } > "$TMPD"
+              set -x
               sudo install -m 0600 -o root -g root "$TMPD" "$ADMIN_DROPIN_DIR/override.conf"  # 0600: внутри JWT_SECRET и bcrypt-хеш
               rm -f "$TMPD" || true
             fi
@@ -374,7 +480,7 @@ jobs:
             info "[systemd] api=$API_STATE admin=$ADM_STATE"
             [ "$API_STATE" = active ] && [ "$ADM_STATE" = active ] || { err "[deploy] services NOT active"; exit 1; }
 
-            DOWNLOADS_DIR="${{ secrets.DOWNLOADS_DIR }}"
+            DOWNLOADS_DIR="$(b64d "${DOWNLOADS_DIR_B64:-}")"
             if [ -n "$DOWNLOADS_DIR" ] && [ -d "$DOWNLOADS_DIR" ]; then
               sudo mkdir -p "$SITE_DIR/downloads"
               sudo rsync -a "$DOWNLOADS_DIR/" "$SITE_DIR/downloads/"
@@ -515,7 +621,38 @@ jobs:
             echo "::endgroup::"
 
             FAIL=0
-            http_code() { curl -ks -o /dev/null -w "%{http_code}" "$1"; }
+            # ------------------------------------------------------------------
+            # TLS IS VERIFIED. DO NOT PUT `-k` BACK.
+            #
+            # Every check below used to run `curl -ks`, i.e. with certificate
+            # verification switched off. That made the single most likely real
+            # outage — an expired or mis-renewed Let's Encrypt certificate —
+            # invisible: the deploy reported all-green while no browser on earth
+            # could open the site. With HSTS on (max-age=604800) that is not a
+            # warning page the visitor can click through, it is a hard refusal
+            # for a week.
+            #
+            # These URLs are the PUBLIC ones (${SITE_BASE}), fetched from the
+            # GitHub runner over the internet against a real Let's Encrypt
+            # certificate, so plain verification is exactly right. A curl exit
+            # code 60 here means "the certificate is broken" and the deploy must
+            # go red — that is the entire point.
+            #
+            # If you ever need to probe the origin directly (e.g. through an
+            # /etc/hosts pin or a private IP) do NOT reach for -k: use
+            # `--resolve host:443:IP`, which keeps verification on.
+            # ------------------------------------------------------------------
+            # Cert check with a real error message, before the per-URL probes:
+            # this way a broken certificate is named as such instead of showing
+            # up as eight identical "-> 000" lines.
+            if curl -sS --head --max-time 20 "${SITE_BASE}/" >/dev/null; then
+              ok "[test] PASS сертификат валиден и TLS-рукопожатие проходит (${SITE_BASE})"
+            else
+              err "[test] FAIL TLS/сертификат: curl не смог проверить ${SITE_BASE} — проверьте certbot и срок сертификата"
+              err "[test]      openssl s_client -connect launcher.samoy.love:443 -servername launcher.samoy.love </dev/null 2>/dev/null | openssl x509 -noout -dates"
+              FAIL=1
+            fi
+            http_code() { curl -s -o /dev/null -w "%{http_code}" "$1"; }
             must_200() {
               url="$1"; name="$2"; code=$(http_code "$url")
               if [ "$code" = 200 ]; then ok "[test] PASS $name ($url)"; else err "[test] FAIL $name ($url) -> $code"; FAIL=1; fi
@@ -529,12 +666,22 @@ jobs:
             else
               err "[test] FAIL /admin/ -> $code"; FAIL=1
             fi
-            must_200 "${SITE_BASE}/admin/ui/admin.js" "Admin UI static"
+            must_200 "${SITE_BASE}/admin/ui/login.js" "Admin UI login script (public)"
+            # admin.js is now behind auth_request together with the rest of the
+            # admin shell (see deploy/launcher.conf). An anonymous 200 here means
+            # the gate is GONE and the 188 KB endpoint map is public again — that
+            # is a failure, not a success.
+            code=$(http_code "${SITE_BASE}/admin/ui/admin.js")
+            if [ "$code" = 401 ] || [ "$code" = 302 ]; then
+              ok "[test] PASS /admin/ui/admin.js gated ($code)"
+            else
+              err "[test] FAIL /admin/ui/admin.js should be gated -> $code"; FAIL=1
+            fi
             must_200 "${SITE_BASE}/admin/api/health" "Admin API health"
             must_200 "${SITE_BASE}/" "Landing /"
             must_200 "${SITE_BASE}/styles.css" "Landing styles"
-            curl -ksf "${SITE_BASE}/manifests/launcher/latest.json" >/dev/null && ok "[test] PASS manifest latest.json" || warn "[test] WARN manifest latest.json not present"
-            curl -ksf "${SITE_BASE}/assets/ping.txt" >/dev/null && ok "[test] PASS assets/ping.txt" || warn "[test] WARN assets/ping.txt not present"
+            curl -sf "${SITE_BASE}/manifests/launcher/latest.json" >/dev/null && ok "[test] PASS manifest latest.json" || warn "[test] WARN manifest latest.json not present"
+            curl -sf "${SITE_BASE}/assets/ping.txt" >/dev/null && ok "[test] PASS assets/ping.txt" || warn "[test] WARN assets/ping.txt not present"
 
             REPORT_DIR="$HOME/deploy/report"
             mkdir -p "$REPORT_DIR"
@@ -609,9 +756,9 @@ jobs:
             http_row() {
               url="$1"
               name="$2"
-              read -r code time < <(curl -ks -o /dev/null -w "%{http_code} %{time_total}" "$url")
+              read -r code time < <(curl -s -o /dev/null -w "%{http_code} %{time_total}" "$url")
               status=FAIL
-              if [ "$name" = "/admin/ gate" ]; then
+              if [ "$name" = "/admin/ gate" ] || [ "$name" = "admin.js gate" ]; then
                 { [ "$code" = 401 ] || [ "$code" = 302 ]; } && status=OK
               else
                 [ "$code" = 200 ] && status=OK
@@ -620,7 +767,8 @@ jobs:
             }
             http_row "${SITE_BASE}/admin/ui/login.html" "Admin UI login"
             http_row "${SITE_BASE}/admin/" "/admin/ gate"
-            http_row "${SITE_BASE}/admin/ui/admin.js" "Admin UI static"
+            http_row "${SITE_BASE}/admin/ui/login.js" "Admin UI login script"
+            http_row "${SITE_BASE}/admin/ui/admin.js" "admin.js gate"
             http_row "${SITE_BASE}/admin/api/health" "Admin API health"
             http_row "${SITE_BASE}/" "Landing /"
             http_row "${SITE_BASE}/styles.css" "Landing styles"

@@ -21,6 +21,19 @@ Unicode true
 Icon "app.ico"
 UninstallIcon "app.ico"
 
+; Directory whose contents are packaged into the installer.
+;
+; This used to be hardcoded to ..\launcher\ChillHub\bin\Release\net8.0-windows
+; while scripts/build-installer.ps1 accepts -Configuration and -Publish. Asking
+; for a Debug build therefore compiled Debug and then silently packaged
+; whatever happened to be lying in bin\Release — a stale Release build, or
+; nothing at all. build-installer.ps1 now passes the directory it actually
+; built with /DPAYLOAD_DIR=...; the !ifndef keeps a bare `makensis installer.nsi`
+; working exactly as before.
+!ifndef PAYLOAD_DIR
+  !define PAYLOAD_DIR "..\launcher\ChillHub\bin\Release\net8.0-windows"
+!endif
+
 ; Prerequisite installer filenames (centralized)
 !define PREREQ_WEBVIEW2 "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
 !define PREREQ_DOTNET   "windowsdesktop-runtime-8.0.20-win-x64.exe"
@@ -101,7 +114,7 @@ Section "Install"
   ;   linux-* / osx-*  — нативные библиотеки из runtimes\ не под Windows (мёртвый вес).
   ; Список исключений обязан совпадать с ChillHub.Update.PreserveMatcher.DefaultRules
   ; и со staging-фильтром в scripts/build-installer.ps1 (New-LauncherPayload).
-  File /r /x "config.json" /x "launcher.version" /x "*.pdb" /x "linux-*" /x "osx-*" "..\launcher\ChillHub\bin\Release\net8.0-windows\*.*"
+  File /r /x "config.json" /x "launcher.version" /x "*.pdb" /x "linux-*" /x "osx-*" "${PAYLOAD_DIR}\*.*"
 
   ; Write uninstaller
   WriteUninstaller "${INSTALL_DIR}\Uninstall.exe"
