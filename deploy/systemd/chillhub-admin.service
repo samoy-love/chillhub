@@ -4,6 +4,13 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+# ADMIN_CORS_ORIGIN — какие Origin допускаются к admin API.
+# По умолчанию CORS ОТКЛЮЧЁН: админка отдаётся тем же nginx с того же origin,
+# а лаунчер ходит из WPF (HttpClient), где CORS неприменим. Задавайте значение,
+# только если появится сторонний браузерный потребитель API:
+#   Environment="ADMIN_CORS_ORIGIN=https://example.com"
+# Допускается список через запятую; "*" открывает API всему миру — не используйте
+# его вместе с cookie-авторизацией.
 Type=simple
 User=www-data
 Group=www-data

@@ -119,6 +119,16 @@ jobs:
         # breakage before a release is cut instead of during a manual build.
         working-directory: launcher/ChillHub
         run: dotnet build --no-restore -c Release
+      - name: Self-update loop guard (A11)
+        # Ловит регрессию «бесконечный цикл самообновления»: файл, попавший
+        # ОДНОВРЕМЕННО в манифест лаунчера и под preserve-правила апдейтера,
+        # делает расхождение хешей неустранимым — лаунчер обновляется вечно.
+        # В репозитории манифестов нет (content/** в .gitignore), поэтому здесь
+        # отрабатывает самопроверка детектора: она падает, если сам детектор
+        # сломан. Против реальных манифестов запускать так:
+        #   ManifestPreserveCheck.exe <путь-к-content/manifests/launcher>
+        run: dotnet run --project updater/tests/ManifestPreserveCheck -c Release
+
       - name: Code style check (dotnet format)
         working-directory: launcher/ChillHub
         # NOTE: still non-blocking, and that is a deliberate, verified decision:
