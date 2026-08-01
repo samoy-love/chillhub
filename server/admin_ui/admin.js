@@ -125,6 +125,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
     { btn: 'tabManifests', sec: 'secManifests' },
     { btn: 'tabNews', sec: 'secNews' },
     { btn: 'tabInbox', sec: 'secInbox' },
+    { btn: 'tabMaint', sec: 'secMaint' },
   ];
   const activate = (id)=>{
     for(const t of tabs){
@@ -134,8 +135,10 @@ document.addEventListener('DOMContentLoaded', ()=>{
       const on = (t.btn===id);
       b.classList.toggle('active', on);
       s.classList.toggle('hidden', !on);
+      if(on){ try{ localStorage.setItem('admin_tab', t.sec); }catch{ /* no-op */ } }
     }
     if(id==='tabInbox') { try{ fbReload(true); }catch{} }
+    if(id==='tabMaint') { try{ mtLoad(); }catch{ /* no-op */ } }
   };
   for(const t of tabs){
     const b = document.getElementById(t.btn);
@@ -574,7 +577,7 @@ async function fbSelect(id){
   fbRenderList();
   // Auto-mark as read on open
   try{ await fetch('/admin/feedback/markRead?id='+encodeURIComponent(id), {method:'POST'}); }catch{}
-  try{ await fbUnreadUpdateBadge(); }catch{}
+  try{ await window.fbUnreadUpdateBadge(); }catch{}
   try{ await fbReload(true); }catch{}
 }
 
@@ -782,9 +785,9 @@ async function manifestsUpload(){
         ],
         series: [ {}, { label: 'Скорость', stroke: '#0d6efd', width: 2.25 } ],
       };
-      speedPlot = new uPlot(opts, speedPlotData, plotHost);
+      speedPlot = new window.uPlot(opts, speedPlotData, plotHost);
       // Resize on wrapper changes
-      const ro = new ResizeObserver(()=>{
+      const ro = new window.ResizeObserver(()=>{
         try{ speedPlot.setSize({ width: speedWrap.clientWidth || plotHost.clientWidth || 600, height: HEIGHT }); }catch{}
       });
       ro.observe(speedWrap);
@@ -1005,7 +1008,7 @@ async function manifestsUpload(){
     const url = '/admin/api/upload/process?uploadId='+encodeURIComponent(uploadId);
     const res = await fetch(url, { headers: { 'Accept':'application/x-ndjson', 'Cache-Control':'no-store' } });
     if(!res.ok){ notify('HTTP '+res.status+' process'); return; }
-    const dec = new TextDecoder();
+    const dec = new window.TextDecoder();
     let gotAny = false;
     if(res.body && typeof res.body.getReader === 'function'){
       const reader = res.body.getReader(); let buf='';
@@ -1868,12 +1871,12 @@ function clearNewsEditorAndPreviews(){
 // Tabs
 function showSection(id){
   // sections (guarded: check element exists before toggling)
-  const sections = ['secLauncher','secManifests','secNews'];
+  const sections = ['secLauncher','secManifests','secNews','secInbox','secMaint','secMetrics'];
   sections.forEach(s=>{ const el = document.getElementById(s); if(el){ if(s===id) el.classList.remove('hidden'); else el.classList.add('hidden'); } });
   // nav active state
-  const tabs = ['tabLauncher','tabManifests','tabNews'];
+  const tabs = ['tabLauncher','tabManifests','tabNews','tabInbox','tabMaint','tabMetrics'];
   tabs.forEach(i=>{ const el=document.getElementById(i); if(el) el.classList.remove('active'); });
-  const map = { 'secLauncher':'tabLauncher', 'secManifests':'tabManifests', 'secNews':'tabNews' };
+  const map = { 'secLauncher':'tabLauncher', 'secManifests':'tabManifests', 'secNews':'tabNews', 'secInbox':'tabInbox', 'secMaint':'tabMaint', 'secMetrics':'tabMetrics' };
   const btn = document.getElementById(map[id]); if(btn) btn.classList.add('active');
   // auto actions per section
   if(id==='secNews') {
@@ -1887,6 +1890,7 @@ function showSection(id){
     try{ lnPrevEnsureVersionsAndRender(); }catch(_){ }
     try{ lnManifestsReload(); }catch(_){ }
   }
+  if(id==='secMaint'){ try{ mtLoad(); }catch(_){ /* no-op */ } }
   try{ localStorage.setItem('admin_tab', id); }catch(e){}
 }
 // Guarded wiring to avoid null errors
@@ -2635,3 +2639,297 @@ function insertImageFromGallery(url){
   const el = document.getElementById('ns_gallery');
   if(window.bootstrap && el){ const modal = window.bootstrap.Modal.getInstance(el) || new window.bootstrap.Modal(el); modal.hide(); }
 }
+
+// ==== Технические работы (maintenance mode) ====
+// Все обработчики вешаются через addEventListener: на проде для админки включён
+// enforcing CSP без 'unsafe-inline' в script-src, поэтому инлайновые onclick=
+// молча перестают работать.
+
+const MT_REASON_MAX_BYTES = 500;
+let __mtLast = null;   // последний AdminView с сервера
+let __mtDirty = false;
+
+function mtEl(id){ return document.getElementById(id); }
+
+// 'YYYY-MM-DDTHH:mm' в местной зоне -> RFC3339 в UTC.
+// Возвращает '' для пустого поля и null, если строку не удалось разобрать.
+function mtLocalToUtc(v){
+  const s = String(v||'').trim();
+  if(!s) return '';
+  const d = new Date(s); // форма без смещения трактуется как местное время
+  if(isNaN(d.getTime())) return null;
+  return toRfc3339(d);
+}
+
+// RFC3339 (обычно UTC) -> значение для <input type="datetime-local"> в местной зоне.
+function mtUtcToLocalInput(v){
+  const s = String(v||'').trim();
+  if(!s) return '';
+  const d = new Date(s);
+  if(isNaN(d.getTime())) return '';
+  const pad = (n)=> (n<10?'0':'')+n;
+  return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());
+}
+
+// Человекочитаемая метка местного времени для RFC3339-значения.
+function mtFmtLocal(v){
+  const s = String(v||'').trim();
+  if(!s) return '';
+  const d = new Date(s);
+  if(isNaN(d.getTime())) return s;
+  return d.toLocaleString('ru-RU');
+}
+
+function mtByteLen(s){
+  try{ return new window.TextEncoder().encode(String(s||'')).length; }
+  catch{ return String(s||'').length; }
+}
+
+function mtBlocksLabel(b){
+  const on = [];
+  if(b && b.install) on.push('установку');
+  if(b && b.update) on.push('обновление');
+  if(b && b.launch) on.push('запуск игр');
+  return on.length ? on.join(', ') : 'ничего (только баннер)';
+}
+
+async function mtErrText(res){
+  try{
+    const t = (await res.text()||'').trim();
+    return t ? ('HTTP '+res.status+': '+t) : ('HTTP '+res.status);
+  }catch{ return 'HTTP '+res.status; }
+}
+
+function mtSetDirty(v){
+  __mtDirty = !!v;
+  const b = mtEl('mt_dirty');
+  if(b) b.style.display = __mtDirty ? '' : 'none';
+}
+
+function mtUpdateReasonCounter(){
+  const ta = mtEl('mt_reason'); const out = mtEl('mt_reason_left');
+  if(!ta || !out) return;
+  const left = MT_REASON_MAX_BYTES - mtByteLen(ta.value);
+  out.textContent = String(left);
+  out.classList.toggle('text-danger', left < 0);
+}
+
+function mtUpdateUtcHint(){
+  const hint = mtEl('mt_utc_hint'); if(!hint) return;
+  const s = mtLocalToUtc(mtEl('mt_starts')?.value || '');
+  const e = mtLocalToUtc(mtEl('mt_ends')?.value || '');
+  if(s === null || e === null){ hint.textContent = 'не удалось разобрать дату'; return; }
+  if(!s && !e){ hint.textContent = 'окно не задано (с этого момента и до выключения)'; return; }
+  hint.textContent = (s || '—') + ' … ' + (e || '—');
+}
+
+// Заполняет форму значениями сохранённого состояния.
+function mtFillForm(state){
+  const st = state || {};
+  const b = st.blocks || {};
+  const set = (id, val)=>{ const el = mtEl(id); if(el) el.value = val; };
+  const chk = (id, val)=>{ const el = mtEl(id); if(el) el.checked = !!val; };
+  chk('mt_enabled', st.enabled);
+  set('mt_reason', st.reason || '');
+  set('mt_starts', mtUtcToLocalInput(st.startsAt));
+  set('mt_ends', mtUtcToLocalInput(st.endsAt));
+  chk('mt_block_install', b.install);
+  chk('mt_block_update', b.update);
+  chk('mt_block_launch', b.launch);
+  mtUpdateReasonCounter();
+  mtUpdateUtcHint();
+  mtSetDirty(false);
+}
+
+function mtRenderStatus(view){
+  const root = mtEl('mt_status'); if(!root) return;
+  const st = (view && view.state) || {};
+  const eff = (view && view.effective) || {};
+
+  const pathEl = mtEl('mt_path');
+  if(pathEl) pathEl.textContent = (view && view.path) || '—';
+
+  const navBadge = mtEl('mt_state_badge');
+  if(navBadge){
+    navBadge.textContent = eff.enabled ? 'вкл' : (st.enabled ? 'ждёт' : 'выкл');
+    navBadge.className = 'badge ms-2 ' + (eff.enabled ? 'text-bg-warning' : (st.enabled ? 'text-bg-info' : 'text-bg-secondary'));
+  }
+
+  if(!st.enabled && !st.reason && !st.startsAt && !st.endsAt && !st.updatedAt){
+    root.innerHTML = '<div class="alert alert-secondary mb-0">'
+      + '<strong>Режим выключен.</strong> Файла состояния нет — это нормальное «выключено».'
+      + ' Лаунчер работает без ограничений.'
+      + '</div>';
+    return;
+  }
+
+  const rows = [];
+  rows.push(['Сохранённый флаг', st.enabled
+    ? '<span class="badge text-bg-warning">включён</span>'
+    : '<span class="badge text-bg-secondary">выключен</span>']);
+  rows.push(['Действует сейчас', eff.enabled
+    ? '<span class="badge text-bg-danger">да</span>'
+    : '<span class="badge text-bg-success">нет</span>']);
+  rows.push(['Причина', st.reason ? escapeHtml(st.reason) : '<span class="text-body-secondary">не задана</span>']);
+  rows.push(['Начало', st.startsAt
+    ? (escapeHtml(mtFmtLocal(st.startsAt)) + ' <span class="text-body-secondary">(' + escapeHtml(st.startsAt) + ')</span>')
+    : '<span class="text-body-secondary">сразу</span>']);
+  rows.push(['Окончание', st.endsAt
+    ? (escapeHtml(mtFmtLocal(st.endsAt)) + ' <span class="text-body-secondary">(' + escapeHtml(st.endsAt) + ')</span>')
+    : '<span class="text-body-secondary">до ручного выключения</span>']);
+  rows.push(['Блокируется', escapeHtml(mtBlocksLabel(st.blocks))]);
+  if(st.updatedAt){
+    rows.push(['Изменено', escapeHtml(mtFmtLocal(st.updatedAt))
+      + (st.updatedBy ? (' <span class="text-body-secondary">' + escapeHtml(st.updatedBy) + '</span>') : '')]);
+  }
+  if(eff.serverTime){
+    rows.push(['Время сервера', escapeHtml(mtFmtLocal(eff.serverTime))
+      + ' <span class="text-body-secondary">(' + escapeHtml(eff.serverTime) + ')</span>']);
+  }
+
+  let note = '';
+  if(st.enabled && !eff.enabled){
+    const now = Date.now();
+    const s = st.startsAt ? Date.parse(st.startsAt) : NaN;
+    const e = st.endsAt ? Date.parse(st.endsAt) : NaN;
+    if(!isNaN(s) && now < s){
+      note = '<div class="alert alert-info mt-3 mb-0">Режим <strong>запланирован</strong>, но ещё не начался: клиенты пока ничего не видят.</div>';
+    } else if(!isNaN(e) && now >= e){
+      note = '<div class="alert alert-success mt-3 mb-0">Окно <strong>истекло</strong> — сервер снял режим автоматически, действий не требуется.</div>';
+    } else {
+      note = '<div class="alert alert-secondary mt-3 mb-0">Флаг в файле включён, но сейчас режим не действует.</div>';
+    }
+  }
+
+  root.innerHTML = '<table class="table table-sm align-middle mb-0"><tbody>'
+    + rows.map(r=> '<tr><th class="text-body-secondary fw-normal" style="width:180px">'+r[0]+'</th><td>'+r[1]+'</td></tr>').join('')
+    + '</tbody></table>' + note;
+}
+
+function mtRenderPreview(view){
+  const root = mtEl('mt_preview'); if(!root) return;
+  const eff = (view && view.effective) || {};
+  if(!eff.enabled){
+    root.innerHTML = '<div class="alert alert-secondary mb-0">Баннер не показывается: режим сейчас не активен.</div>';
+    return;
+  }
+  const reason = eff.reason ? escapeHtml(eff.reason) : 'Идут технические работы.';
+  const until = eff.endsAt
+    ? ('<div class="small mt-1">Ориентировочно до <strong>'+escapeHtml(mtFmtLocal(eff.endsAt))+'</strong> (в часовом поясе смотрящего).</div>')
+    : '<div class="small mt-1">Срок окончания не объявлен.</div>';
+  const b = eff.blocks || {};
+  const blocked = [];
+  if(b.install) blocked.push('установка игр');
+  if(b.update) blocked.push('обновление игр');
+  if(b.launch) blocked.push('запуск игр');
+  const blockLine = blocked.length
+    ? '<div class="small mt-1">Недоступно: <strong>'+escapeHtml(blocked.join(', '))+'</strong>.</div>'
+    : '<div class="small mt-1">Ограничений нет — только информационное сообщение.</div>';
+  root.innerHTML = '<div class="alert alert-warning mb-0">'
+    + '<div class="fw-semibold">Технические работы</div>'
+    + '<div class="mt-1 preserve-ws">'+reason+'</div>'
+    + until + blockLine
+    + '</div>';
+}
+
+function mtShowError(msg){
+  notify(msg);
+  const root = mtEl('mt_status');
+  if(root) root.innerHTML = '<div class="alert alert-danger mb-0">'+escapeHtml(msg)+'</div>';
+}
+
+async function mtLoad(){
+  let res;
+  try{ res = await fetch('/admin/api/maintenance/get'); }
+  catch(e){ mtShowError('Не удалось получить состояние режима: '+e); return; }
+  if(!res.ok){ mtShowError('Не удалось получить состояние режима — '+(await mtErrText(res))); return; }
+  let view;
+  try{ view = await res.json(); }
+  catch(e){ mtShowError('Сервер вернул не JSON: '+e); return; }
+  __mtLast = view;
+  mtRenderStatus(view);
+  mtRenderPreview(view);
+  if(!__mtDirty) mtFillForm(view.state);
+}
+
+async function mtSave(){
+  const reason = mtEl('mt_reason')?.value || '';
+  if(mtByteLen(reason) > MT_REASON_MAX_BYTES){
+    notify('Причина длиннее '+MT_REASON_MAX_BYTES+' байт — сервер её обрежет. Сократите текст.');
+    return;
+  }
+  const startsAt = mtLocalToUtc(mtEl('mt_starts')?.value || '');
+  const endsAt = mtLocalToUtc(mtEl('mt_ends')?.value || '');
+  if(startsAt === null){ notify('Не удалось разобрать дату начала.'); return; }
+  if(endsAt === null){ notify('Не удалось разобрать дату окончания.'); return; }
+  if(startsAt && endsAt && Date.parse(endsAt) <= Date.parse(startsAt)){
+    notify('Окончание должно быть позже начала.');
+    return;
+  }
+  const payload = {
+    enabled: !!mtEl('mt_enabled')?.checked,
+    reason: reason.trim(),
+    startsAt: startsAt,
+    endsAt: endsAt,
+    blocks: {
+      install: !!mtEl('mt_block_install')?.checked,
+      update: !!mtEl('mt_block_update')?.checked,
+      launch: !!mtEl('mt_block_launch')?.checked,
+    },
+  };
+  let res;
+  try{
+    res = await fetch('/admin/api/maintenance/set', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  }catch(e){ notify('Ошибка сети при сохранении режима: '+e); return; }
+  if(!res.ok){ notify('Не удалось сохранить режим — '+(await mtErrText(res))); return; }
+  let view = null;
+  try{ view = await res.json(); }catch{ /* тело не обязательно */ }
+  mtSetDirty(false);
+  if(view && view.state){
+    __mtLast = view;
+    mtRenderStatus(view);
+    mtRenderPreview(view);
+    mtFillForm(view.state);
+  } else {
+    await mtLoad();
+  }
+  notify(payload.enabled ? 'Режим технических работ сохранён и включён.' : 'Состояние сохранено, режим выключен.');
+}
+
+async function mtClear(){
+  if(!confirm('Снять режим технических работ и удалить файл состояния?')) return;
+  let res;
+  try{ res = await fetch('/admin/api/maintenance/clear', { method: 'POST' }); }
+  catch(e){ notify('Ошибка сети при снятии режима: '+e); return; }
+  if(!res.ok){ notify('Не удалось снять режим — '+(await mtErrText(res))); return; }
+  mtSetDirty(false);
+  await mtLoad();
+  mtFillForm({});
+  notify('Режим технических работ снят.');
+}
+
+document.addEventListener('DOMContentLoaded', ()=>{
+  if(!mtEl('secMaint')) return;
+  const onClick = (id, fn)=>{ const el = mtEl(id); if(el) el.addEventListener('click', (e)=>{ e.preventDefault(); fn(); }); };
+  onClick('mt_refresh', ()=> mtLoad());
+  onClick('mt_save', ()=> mtSave());
+  onClick('mt_clear', ()=> mtClear());
+  onClick('mt_reset_form', ()=> mtFillForm(__mtLast && __mtLast.state));
+
+  const reason = mtEl('mt_reason');
+  if(reason) reason.addEventListener('input', ()=>{ mtUpdateReasonCounter(); mtSetDirty(true); });
+  ['mt_starts','mt_ends'].forEach(id=>{
+    const el = mtEl(id);
+    if(el) el.addEventListener('change', ()=>{ mtUpdateUtcHint(); mtSetDirty(true); });
+  });
+  ['mt_enabled','mt_block_install','mt_block_update','mt_block_launch'].forEach(id=>{
+    const el = mtEl(id);
+    if(el) el.addEventListener('change', ()=> mtSetDirty(true));
+  });
+  // Бейдж в навигации должен быть актуален независимо от того, открыта ли вкладка.
+  mtLoad();
+});
