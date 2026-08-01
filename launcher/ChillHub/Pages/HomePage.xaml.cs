@@ -1634,6 +1634,11 @@ namespace ChillHub.Pages {
                     UseShellExecute = true,
                 };
                 Process.Start(psi);
+
+                // Discord Rich Presence: полностью опционален и не должен влиять на запуск.
+                // Пока Application ID не задан владельцем — вызов сразу выходит.
+                ChillHub.Core.DiscordRichPresence.SetPlaying(game.Title, game.LatestVersion);
+
                 this.UpdateActionButtonState();
             }
             catch (Exception ex) {
