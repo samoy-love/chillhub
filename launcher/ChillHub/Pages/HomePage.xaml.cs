@@ -379,10 +379,14 @@ namespace ChillHub.Pages {
                     }
                 });
 
-                // Загрузка сборок и новостей выбранной игры (легковесно для UI)
-                var gid0 = this.GetSelectedGameId();
+                // Загрузка сборок и новостей выбранной игры (легковесно для UI).
+                // Мы здесь уже в пуле потоков (после ConfigureAwait(false) на HTTP-запросах),
+                // а и выделение, и сам LoadBuildsAndGameNewsAsync работают с контролами —
+                // поэтому и чтение выбора, и вызов выполняем на UI-потоке.
+                string? gid0 = null;
+                await this.DispatcherInvokeAsync(() => gid0 = this.GetSelectedGameId());
                 if (!string.IsNullOrWhiteSpace(gid0)) {
-                    await this.LoadBuildsAndGameNewsAsync(gid0);
+                    await this.DispatcherInvokeAsync(() => this.LoadBuildsAndGameNewsAsync(gid0));
                 }
 
                 // После первичного рендеринга — разрешаем тяжёлые проверки и запускаем в фоне
@@ -553,7 +557,11 @@ namespace ChillHub.Pages {
 
                 // После завершения всех — освежим список с приоритетом установленных
                 try {
-                    var selectedId = this.GetSelectedGameId();
+                    // Выделение живёт в GameList и читается только с UI-потока: сюда мы приходим
+                    // из Task.Run, и прямое обращение бросало бы исключение. Раньше оно гасилось,
+                    // GetSelectedGameId возвращал null — и выделение терялось после смены ItemsSource.
+                    string? selectedId = null;
+                    await this.DispatcherInvokeAsync(() => selectedId = this.GetSelectedGameId());
 
                     // Порядок из реестра сохраняем для неустановленных, установленные держим сверху
                     var order2 = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -805,6 +813,19 @@ namespace ChillHub.Pages {
                 }
             }));
             return tcs.Task;
+        }
+
+        /// <summary>
+        /// То же, что и <see cref="DispatcherInvokeAsync(Action)"/>, но для асинхронной работы:
+        /// операция ЗАПУСКАЕТСЯ на UI-потоке (и продолжается на нём, так как захватывает его контекст),
+        /// а вызывающий ждёт её завершения, не занимая UI.
+        /// </summary>
+        private async Task DispatcherInvokeAsync(Func<Task> action) {
+            Task? started = null;
+            await this.DispatcherInvokeAsync(() => started = action()).ConfigureAwait(false);
+            if (started != null) {
+                await started.ConfigureAwait(false);
+            }
         }
 
         // Обновляет заголовок секции новостей игры: "Новости (название игры)"
@@ -1759,12 +1780,20 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Идентификатор выбранной игры. Вызывать ТОЛЬКО с UI-потока: SelectedItem принадлежит
+        /// GameList, и обращение из фона бросает исключение. Фоновым задачам следует читать выбор
+        /// через <see cref="DispatcherInvokeAsync(Action)"/>.
+        /// </summary>
         private string? GetSelectedGameId() {
             try {
                 var gi = this.GameList?.SelectedItem as GameInfo;
                 return gi?.GameId;
             }
-            catch {
+            catch (Exception ex) {
+                // Молча вернуть null нельзя: вызывающий примет это за «игра не выбрана» и
+                // потеряет выделение. Фиксируем в логе, чтобы такой вызов было видно.
+                Core.Logging.Logger.Warn($"GetSelectedGameId: выбор недоступен (обращение не с UI-потока?): {ex.Message}");
                 return null;
             }
         }
