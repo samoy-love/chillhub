@@ -3,7 +3,18 @@ permissions:
 
 concurrency:
   group: deploy-to-vps-${{ inputs.environment }}
-  cancel-in-progress: true
+  # MUST STAY false. This workflow is not idempotent-at-any-point: the SSH step
+  # is one long non-atomic sequence — rsync the site, install the binaries,
+  # write the systemd drop-in, lay down the nginx config, THEN reload nginx and
+  # restart the services. `cancel-in-progress: true` kills that sequence
+  # wherever it happens to be: new binaries on disk with the old services still
+  # running, or a fresh chillhub-launcher.conf in sites-available that nobody
+  # has run `nginx -t` against yet — which the next reload (a deploy, a reboot,
+  # or certbot's renew_hook) would pick up blind.
+  #
+  # Queueing a second deploy behind the first costs a few minutes. Cancelling
+  # one mid-flight costs a half-installed production host.
+  cancel-in-progress: false
 name: Deploy to VPS
 
 on:
