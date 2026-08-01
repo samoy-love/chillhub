@@ -232,8 +232,12 @@ jobs:
             SITE_DIR="/var/www/site"
             LAUNCHER_DIR="/var/www/launcher"
             OPT_DIR="/opt/chillhub"
-            NGINX_SITE_AVAILABLE="/etc/nginx/sites-available/launcher.conf"
-            NGINX_SITE_ENABLED="/etc/nginx/sites-enabled/launcher.conf"
+            # ВАЖНО: раньше здесь был общий launcher.conf, в котором жили ДВА проекта —
+            # наш launcher.samoy.love и metro.samoy.love. Деплой копировал наш конфиг
+            # поверх этого файла, то есть сносил соседний сайт. Проекты разведены по
+            # отдельным файлам; трогаем строго свой.
+            NGINX_SITE_AVAILABLE="/etc/nginx/sites-available/chillhub-launcher.conf"
+            NGINX_SITE_ENABLED="/etc/nginx/sites-enabled/chillhub-launcher.conf"
             SITE_BASE="${{ inputs.site_base_url }}"
             FAIL_ON_MISMATCH="${{ inputs.fail_on_mismatch }}"
 
@@ -328,10 +332,32 @@ jobs:
               rm -f "$TMPD" || true
             fi
 
+            # Раскладка конфига: бэкап -> установка -> nginx -t -> reload, с откатом.
+            # Раньше reload шёл сразу после install без проверки результата `nginx -t`:
+            # при битом конфиге деплой считался успешным, хотя nginx продолжал работать
+            # на старом. Теперь падение теста откатывает файл и валит шаг.
+            NGINX_BACKUP_DIR="/etc/nginx/chillhub-backups"
+            sudo mkdir -p "$NGINX_BACKUP_DIR"
+            NGINX_RESTORE=""
+            if [ -f "$NGINX_SITE_AVAILABLE" ]; then
+              NGINX_RESTORE="$NGINX_BACKUP_DIR/chillhub-launcher.conf.$(date -u +%Y%m%d-%H%M%S)"
+              sudo cp -a "$NGINX_SITE_AVAILABLE" "$NGINX_RESTORE"
+            fi
             sudo install -m 0644 "$DEPLOY_DIR/deploy/launcher.conf" "$NGINX_SITE_AVAILABLE"
             sudo ln -sf "$NGINX_SITE_AVAILABLE" "$NGINX_SITE_ENABLED"
-            sudo nginx -t; echo
-            sudo systemctl reload nginx
+            info "[nginx] включённые сайты: $(ls -1 /etc/nginx/sites-enabled | tr '\n' ' ')"
+            if sudo nginx -t; then
+              sudo systemctl reload nginx
+              ok "[nginx] конфиг применён"
+            else
+              err "[nginx] nginx -t не прошёл — откатываемся, reload не делаем"
+              if [ -n "$NGINX_RESTORE" ]; then
+                sudo install -m 0644 "$NGINX_RESTORE" "$NGINX_SITE_AVAILABLE"
+              else
+                sudo rm -f "$NGINX_SITE_AVAILABLE" "$NGINX_SITE_ENABLED"
+              fi
+              exit 1
+            fi
             if sudo grep -n "error_page 401 =302 /admin/ui/login.html" "$NGINX_SITE_AVAILABLE" >/dev/null 2>&1; then
               info "[nginx] redirect rule present"
               REDIR_OK=1
