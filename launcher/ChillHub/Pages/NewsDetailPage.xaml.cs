@@ -46,18 +46,6 @@ namespace ChillHub.Pages {
         }
 
         /// <summary>
-        /// Каталог данных WebView2 (кеш, куки, localStorage).
-        /// Обязательно вне папки установки: по умолчанию WebView2 кладёт
-        /// "ChillHub.exe.WebView2" рядом с exe, а самообновление сносит всё,
-        /// чего нет в манифесте, — вместе с этим каталогом.
-        /// </summary>
-        /// <returns>Полный путь к каталогу данных WebView2.</returns>
-        private static string GetUserDataFolder() {
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            return Path.Combine(appData, "ChillHub", "WebView2");
-        }
-
-        /// <summary>
         /// Разовая уборка каталога данных WebView2, оставшегося в папке установки
         /// от версий лаунчера без явного UserDataFolder.
         /// </summary>
@@ -89,6 +77,18 @@ namespace ChillHub.Pages {
             catch (Exception ex) {
                 ChillHub.Core.Logging.Logger.Error(ex, "NewsDetailPage.CleanupLegacyUserDataFolder");
             }
+        }
+
+        /// <summary>
+        /// Каталог данных WebView2 (кеш, куки, localStorage).
+        /// Обязательно вне папки установки: по умолчанию WebView2 кладёт
+        /// "ChillHub.exe.WebView2" рядом с exe, а самообновление сносит всё,
+        /// чего нет в манифесте, — вместе с этим каталогом.
+        /// </summary>
+        /// <returns>Полный путь к каталогу данных WebView2.</returns>
+        private static string GetUserDataFolder() {
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            return Path.Combine(appData, "ChillHub", "WebView2");
         }
 
         private static async Task<CoreWebView2Environment> GetEnvironmentAsync() {
