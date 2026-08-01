@@ -472,10 +472,18 @@ for d in site launcher_admin_ui bin systemd; do
 done
 '@
 [System.IO.File]::WriteAllText($preListLocal, ($preListContent -replace "`r`n","`n"), (New-Object System.Text.UTF8Encoding($false)))
-& $SCP @sshCommon $preListLocal "${Remote}:/tmp/prelist.sh"
+# И29. Имя было фиксированным (/tmp/prelist.sh), а следом файл по ЭТОМУ ЖЕ пути
+# исполнялся. На общем /tmp (хост несёт четыре проекта) локальный пользователь
+# может заранее создать там симлинк: scp пишет сквозь него, а bash затем
+# выполняет чужое содержимое от имени пользователя деплоя. Имя запрашиваем у
+# самого сервера через mktemp — оно случайное и создаётся с правами 600.
+$preListRemote = (& $SSH @sshCommon $Remote 'mktemp -t chillhub-prelist-XXXXXXXX.sh' | Select-Object -First 1)
+if (-not $preListRemote) { throw 'Не удалось создать временный файл на сервере (mktemp)' }
+$preListRemote = $preListRemote.Trim()
+& $SCP @sshCommon $preListLocal "${Remote}:$preListRemote"
 Remove-Item -Force $preListLocal -ErrorAction SilentlyContinue
-& $SSH @sshCommon $Remote '/bin/bash' '/tmp/prelist.sh'
-& $SSH @sshCommon $Remote 'rm -f /tmp/prelist.sh' | Out-Null
+& $SSH @sshCommon $Remote '/bin/bash' $preListRemote
+& $SSH @sshCommon $Remote "rm -f '$preListRemote'" | Out-Null
 
 # Remove local temp archives
 foreach ($f in @($siteTgz, $adminTgz, $binTgz, $systemdTgz)) { if ($f) { Remove-Item -Force $f -ErrorAction SilentlyContinue } }
@@ -530,6 +538,14 @@ b64d() { printf '%s' "${1:-}" | base64 -d 2>/dev/null || true; }
 SITE_BASE="$(b64d "%%SITE_BASE_URL_B64%%")"
 FAIL_ON_MISMATCH="%%FAIL_ON_MISMATCH%%"
 MISM_TOTAL=0
+# И9. Манифесты сверки складываем в ПРИВАТНЫЙ каталог, а не в /tmp с известными
+# именами. На хосте четыре проекта и общий /tmp: локальный пользователь мог
+# подставить симлинк на месте "$CHTMP/site.manifest", и запись прошла бы сквозь
+# него, а чтение вернуло бы подложенный файл — то есть сверка целостности
+# выкатки давала бы ложноположительный результат.
+CHTMP="$(mktemp -d -t chillhub-verify-XXXXXXXX)" || { echo "cannot create temp dir"; exit 1; }
+chmod 700 "$CHTMP"
+trap 'rm -rf "$CHTMP"' EXIT
 VERBOSE="%%VERBOSE%%"
 #[[verbose-trace]] enable xtrace only when VERBOSE is set by host
 if [ -n "$VERBOSE" ]; then set -x; fi
@@ -1059,36 +1075,36 @@ SYS_MISM=0
 echo "manifest compare (site)"
 SITE_MAN_B64="%%SITE_MANIFEST%%"
 if [ -n "$SITE_MAN_B64" ]; then
-  printf "%s" "$SITE_MAN_B64" | base64 -d > /tmp/site.manifest || true
-  mism=0; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  site $rel"; else echo "FAIL site $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS site $rel"; mism=$((mism+1)); fi; done < /tmp/site.manifest; if [ "$mism" -ne 0 ]; then echo "site manifest mismatches: $mism"; fi; SITE_MISM=$mism; MISM_TOTAL=$((MISM_TOTAL+ mism))
+  if ! printf "%s" "$SITE_MAN_B64" | base64 -d > "$CHTMP/site.manifest"; then echo "FAIL: манифест site не декодирован — сверка невозможна"; MISM_TOTAL=$((MISM_TOTAL+1)); : > "$CHTMP/site.manifest"; fi
+  mism=0; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  site $rel"; else echo "FAIL site $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS site $rel"; mism=$((mism+1)); fi; done < "$CHTMP/site.manifest"; if [ "$mism" -ne 0 ]; then echo "site manifest mismatches: $mism"; fi; SITE_MISM=$mism; MISM_TOTAL=$((MISM_TOTAL+ mism))
 fi
 
 echo "manifest compare (admin_ui)"
 ADMIN_MAN_B64="%%ADMIN_MANIFEST%%"
 if [ -n "$ADMIN_MAN_B64" ]; then
-  printf "%s" "$ADMIN_MAN_B64" | base64 -d > /tmp/admin.manifest || true
-  mism=0; while IFS=$'\t' read -r rel sha; do f="$LAUNCHER_DIR/admin_ui/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  admin $rel"; else echo "FAIL admin $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS admin $rel"; mism=$((mism+1)); fi; done < /tmp/admin.manifest; if [ "$mism" -ne 0 ]; then echo "admin manifest mismatches: $mism"; fi; ADMIN_MISM=$mism; MISM_TOTAL=$((MISM_TOTAL+ mism))
+  if ! printf "%s" "$ADMIN_MAN_B64" | base64 -d > "$CHTMP/admin.manifest"; then echo "FAIL: манифест admin не декодирован — сверка невозможна"; MISM_TOTAL=$((MISM_TOTAL+1)); : > "$CHTMP/admin.manifest"; fi
+  mism=0; while IFS=$'\t' read -r rel sha; do f="$LAUNCHER_DIR/admin_ui/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  admin $rel"; else echo "FAIL admin $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS admin $rel"; mism=$((mism+1)); fi; done < "$CHTMP/admin.manifest"; if [ "$mism" -ne 0 ]; then echo "admin manifest mismatches: $mism"; fi; ADMIN_MISM=$mism; MISM_TOTAL=$((MISM_TOTAL+ mism))
 fi
 
 echo "manifest compare (downloads)"
 DL_MAN_B64="%%DOWNLOADS_MANIFEST%%"
 if [ -n "$DL_MAN_B64" ]; then
-  printf "%s" "$DL_MAN_B64" | base64 -d > /tmp/downloads.manifest || true
-  mism=0; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/downloads/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  downloads $rel"; else echo "FAIL downloads $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS downloads $rel"; mism=$((mism+1)); fi; done < /tmp/downloads.manifest; if [ "$mism" -ne 0 ]; then echo "downloads manifest mismatches: $mism"; fi; DL_MISM=$mism; MISM_TOTAL=$((MISM_TOTAL+ mism))
+  if ! printf "%s" "$DL_MAN_B64" | base64 -d > "$CHTMP/downloads.manifest"; then echo "FAIL: манифест downloads не декодирован — сверка невозможна"; MISM_TOTAL=$((MISM_TOTAL+1)); : > "$CHTMP/downloads.manifest"; fi
+  mism=0; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/downloads/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  downloads $rel"; else echo "FAIL downloads $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS downloads $rel"; mism=$((mism+1)); fi; done < "$CHTMP/downloads.manifest"; if [ "$mism" -ne 0 ]; then echo "downloads manifest mismatches: $mism"; fi; DL_MISM=$mism; MISM_TOTAL=$((MISM_TOTAL+ mism))
 fi
 
 echo "manifest compare (bin)"
 BIN_MAN_B64="%%BIN_MANIFEST%%"
 if [ -n "$BIN_MAN_B64" ]; then
-  printf "%s" "$BIN_MAN_B64" | base64 -d > /tmp/bin.manifest || true
-  mism=0; while IFS=$'\t' read -r rel sha; do case "$rel" in api|admin) f="/opt/chillhub/$rel";; *) f="$DEPLOY_DIR/bin/$rel";; esac; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  bin $rel"; else echo "FAIL bin $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS bin $rel"; mism=$((mism+1)); fi; done < /tmp/bin.manifest; if [ "$mism" -ne 0 ]; then echo "bin manifest mismatches: $mism"; fi; BIN_MISM=$mism; MISM_TOTAL=$((MISM_TOTAL+ mism))
+  if ! printf "%s" "$BIN_MAN_B64" | base64 -d > "$CHTMP/bin.manifest"; then echo "FAIL: манифест bin не декодирован — сверка невозможна"; MISM_TOTAL=$((MISM_TOTAL+1)); : > "$CHTMP/bin.manifest"; fi
+  mism=0; while IFS=$'\t' read -r rel sha; do case "$rel" in api|admin) f="/opt/chillhub/$rel";; *) f="$DEPLOY_DIR/bin/$rel";; esac; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  bin $rel"; else echo "FAIL bin $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS bin $rel"; mism=$((mism+1)); fi; done < "$CHTMP/bin.manifest"; if [ "$mism" -ne 0 ]; then echo "bin manifest mismatches: $mism"; fi; BIN_MISM=$mism; MISM_TOTAL=$((MISM_TOTAL+ mism))
 fi
 
 echo "manifest compare (systemd)"
 SYS_MAN_B64="%%SYSTEMD_MANIFEST%%"
 if [ -n "$SYS_MAN_B64" ]; then
-  printf "%s" "$SYS_MAN_B64" | base64 -d > /tmp/systemd.manifest || true
-  mism=0; while IFS=$'\t' read -r rel sha; do f="/etc/systemd/system/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  systemd $rel"; else echo "FAIL systemd $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS systemd $rel"; mism=$((mism+1)); fi; done < /tmp/systemd.manifest; if [ "$mism" -ne 0 ]; then echo "systemd manifest mismatches: $mism"; fi; SYS_MISM=$mism; MISM_TOTAL=$((MISM_TOTAL+ mism))
+  if ! printf "%s" "$SYS_MAN_B64" | base64 -d > "$CHTMP/systemd.manifest"; then echo "FAIL: манифест systemd не декодирован — сверка невозможна"; MISM_TOTAL=$((MISM_TOTAL+1)); : > "$CHTMP/systemd.manifest"; fi
+  mism=0; while IFS=$'\t' read -r rel sha; do f="/etc/systemd/system/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  systemd $rel"; else echo "FAIL systemd $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS systemd $rel"; mism=$((mism+1)); fi; done < "$CHTMP/systemd.manifest"; if [ "$mism" -ne 0 ]; then echo "systemd manifest mismatches: $mism"; fi; SYS_MISM=$mism; MISM_TOTAL=$((MISM_TOTAL+ mism))
 fi
 
 # Explicit SHA listings for all copied files (from manifests)
@@ -1099,17 +1115,17 @@ for f in /opt/chillhub/api /opt/chillhub/admin; do if [ -f "$f" ]; then sha256su
 echo "sha listing (admin_ui key file)"
 if [ -f "$LAUNCHER_DIR/admin_ui/admin.js" ]; then sha256sum "$LAUNCHER_DIR/admin_ui/admin.js"; else echo "MISS $LAUNCHER_DIR/admin_ui/admin.js"; fi
 
-if [ -s /tmp/site.manifest ]; then
-  echo "sha listing (site)"; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/$rel"; if [ -f "$f" ]; then sha256sum "$f"; else echo "MISS site $rel"; fi; done < /tmp/site.manifest
+if [ -s "$CHTMP/site.manifest" ]; then
+  echo "sha listing (site)"; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/$rel"; if [ -f "$f" ]; then sha256sum "$f"; else echo "MISS site $rel"; fi; done < "$CHTMP/site.manifest"
 fi
-if [ -s /tmp/admin.manifest ]; then
-  echo "sha listing (admin_ui)"; while IFS=$'\t' read -r rel sha; do f="$LAUNCHER_DIR/admin_ui/$rel"; if [ -f "$f" ]; then sha256sum "$f"; else echo "MISS admin $rel"; fi; done < /tmp/admin.manifest
+if [ -s "$CHTMP/admin.manifest" ]; then
+  echo "sha listing (admin_ui)"; while IFS=$'\t' read -r rel sha; do f="$LAUNCHER_DIR/admin_ui/$rel"; if [ -f "$f" ]; then sha256sum "$f"; else echo "MISS admin $rel"; fi; done < "$CHTMP/admin.manifest"
 fi
-if [ -s /tmp/downloads.manifest ]; then
-  echo "sha listing (downloads)"; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/downloads/$rel"; if [ -f "$f" ]; then sha256sum "$f"; else echo "MISS downloads $rel"; fi; done < /tmp/downloads.manifest
+if [ -s "$CHTMP/downloads.manifest" ]; then
+  echo "sha listing (downloads)"; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/downloads/$rel"; if [ -f "$f" ]; then sha256sum "$f"; else echo "MISS downloads $rel"; fi; done < "$CHTMP/downloads.manifest"
 fi
-if [ -s /tmp/bin.manifest ]; then
-  echo "sha listing (bin)"; while IFS=$'\t' read -r rel sha; do case "$rel" in api|admin) f="/opt/chillhub/$rel";; *) f="$DEPLOY_DIR/bin/$rel";; esac; if [ -f "$f" ]; then sha256sum "$f"; else echo "MISS bin $rel"; fi; done < /tmp/bin.manifest
+if [ -s "$CHTMP/bin.manifest" ]; then
+  echo "sha listing (bin)"; while IFS=$'\t' read -r rel sha; do case "$rel" in api|admin) f="/opt/chillhub/$rel";; *) f="$DEPLOY_DIR/bin/$rel";; esac; if [ -f "$f" ]; then sha256sum "$f"; else echo "MISS bin $rel"; fi; done < "$CHTMP/bin.manifest"
 fi
 
 # Per-section mismatch summary
@@ -1117,30 +1133,30 @@ echo "[summary] mismatches: site=$SITE_MISM admin=$ADMIN_MISM downloads=$DL_MISM
 
 # FINAL manifest compare (re-check at end so results appear last)
 echo "==== FINAL manifest compare (site) ===="
-if [ -s /tmp/site.manifest ]; then
-  mism=0; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  site $rel"; else echo "FAIL site $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS site $rel"; mism=$((mism+1)); fi; done < /tmp/site.manifest; if [ "$mism" -ne 0 ]; then echo "site manifest mismatches: $mism"; fi; fi
+if [ -s "$CHTMP/site.manifest" ]; then
+  mism=0; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  site $rel"; else echo "FAIL site $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS site $rel"; mism=$((mism+1)); fi; done < "$CHTMP/site.manifest"; if [ "$mism" -ne 0 ]; then echo "site manifest mismatches: $mism"; fi; fi
 
 echo "==== FINAL manifest compare (admin_ui) ===="
-if [ -s /tmp/admin.manifest ]; then
-  mism=0; while IFS=$'\t' read -r rel sha; do f="$LAUNCHER_DIR/admin_ui/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  admin $rel"; else echo "FAIL admin $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS admin $rel"; mism=$((mism+1)); fi; done < /tmp/admin.manifest; if [ "$mism" -ne 0 ]; then echo "admin manifest mismatches: $mism"; fi; fi
+if [ -s "$CHTMP/admin.manifest" ]; then
+  mism=0; while IFS=$'\t' read -r rel sha; do f="$LAUNCHER_DIR/admin_ui/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  admin $rel"; else echo "FAIL admin $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS admin $rel"; mism=$((mism+1)); fi; done < "$CHTMP/admin.manifest"; if [ "$mism" -ne 0 ]; then echo "admin manifest mismatches: $mism"; fi; fi
 
 echo "==== FINAL manifest compare (downloads) ===="
-if [ -s /tmp/downloads.manifest ]; then
-  mism=0; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/downloads/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  downloads $rel"; else echo "FAIL downloads $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS downloads $rel"; mism=$((mism+1)); fi; done < /tmp/downloads.manifest; if [ "$mism" -ne 0 ]; then echo "downloads manifest mismatches: $mism"; fi; fi
+if [ -s "$CHTMP/downloads.manifest" ]; then
+  mism=0; while IFS=$'\t' read -r rel sha; do f="$SITE_DIR/downloads/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  downloads $rel"; else echo "FAIL downloads $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS downloads $rel"; mism=$((mism+1)); fi; done < "$CHTMP/downloads.manifest"; if [ "$mism" -ne 0 ]; then echo "downloads manifest mismatches: $mism"; fi; fi
 
 echo "==== FINAL manifest compare (bin) ===="
-if [ -s /tmp/bin.manifest ]; then
-  mism=0; while IFS=$'\t' read -r rel sha; do case "$rel" in api|admin) f="/opt/chillhub/$rel";; *) f="$DEPLOY_DIR/bin/$rel";; esac; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  bin $rel"; else echo "FAIL bin $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS bin $rel"; mism=$((mism+1)); fi; done < /tmp/bin.manifest; if [ "$mism" -ne 0 ]; then echo "bin manifest mismatches: $mism"; fi; fi
+if [ -s "$CHTMP/bin.manifest" ]; then
+  mism=0; while IFS=$'\t' read -r rel sha; do case "$rel" in api|admin) f="/opt/chillhub/$rel";; *) f="$DEPLOY_DIR/bin/$rel";; esac; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  bin $rel"; else echo "FAIL bin $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS bin $rel"; mism=$((mism+1)); fi; done < "$CHTMP/bin.manifest"; if [ "$mism" -ne 0 ]; then echo "bin manifest mismatches: $mism"; fi; fi
 
 echo "==== FINAL manifest compare (systemd) ===="
-if [ -s /tmp/systemd.manifest ]; then
-  mism=0; while IFS=$'\t' read -r rel sha; do f="/etc/systemd/system/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  systemd $rel"; else echo "FAIL systemd $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS systemd $rel"; mism=$((mism+1)); fi; done < /tmp/systemd.manifest; if [ "$mism" -ne 0 ]; then echo "systemd manifest mismatches: $mism"; fi; fi
+if [ -s "$CHTMP/systemd.manifest" ]; then
+  mism=0; while IFS=$'\t' read -r rel sha; do f="/etc/systemd/system/$rel"; if [ -f "$f" ]; then rsha=$(sha256sum "$f" | awk '{print $1}'); if [ "$rsha" = "$sha" ]; then echo "OK  systemd $rel"; else echo "FAIL systemd $rel expected=$sha got=$rsha"; mism=$((mism+1)); fi; else echo "MISS systemd $rel"; mism=$((mism+1)); fi; done < "$CHTMP/systemd.manifest"; if [ "$mism" -ne 0 ]; then echo "systemd manifest mismatches: $mism"; fi; fi
 
 # Final summary of manifest mismatches
 echo "[summary] Manifest mismatch blocks total: $MISM_TOTAL"
 
 # Cleanup temp manifests (now truly at the end) and enforce failure if requested
-rm -f /tmp/site.manifest /tmp/admin.manifest /tmp/bin.manifest /tmp/systemd.manifest /tmp/downloads.manifest || true
+# Временные манифесты удаляет trap на выходе (CHTMP выше).
 if [ -n "$FAIL_ON_MISMATCH" ] && [ "$MISM_TOTAL" -ne 0 ]; then
   echo "[deploy] Manifest mismatches detected (total blocks with mismatches: $MISM_TOTAL)"
   exit 1
