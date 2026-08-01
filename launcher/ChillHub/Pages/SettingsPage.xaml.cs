@@ -16,6 +16,7 @@ namespace ChillHub.Pages {
     using System.Windows.Controls;
 
     using ChillHub.Core;
+    using ChillHub.Core.Home;
     using ChillHub.Core.Sync;
 
     public partial class SettingsPage : Page {
@@ -67,9 +68,10 @@ namespace ChillHub.Pages {
         private void LoadConfigToUi() {
             var cfg = ConfigService.Current ?? new AppConfig();
             if (this.GamesPathBox != null) {
-                // Отображаем путь с одинарными обратными слешами для читаемости
+                // Отображаем путь с одинарными обратными слешами для читаемости.
+                // Ведущий \\ сетевого пути при этом обязан уцелеть — см. NormalizeWindowsPath.
                 var p = cfg.GamesPath ?? string.Empty;
-                this.GamesPathBox.Text = p.Replace("\\\\", "\\");
+                this.GamesPathBox.Text = HomeFormat.NormalizeWindowsPath(p);
             }
 
             if (this.ThreadsSlider != null) {
@@ -375,9 +377,9 @@ namespace ChillHub.Pages {
                         : this.GamesPathBox.Text;
                     var res = dlg.ShowDialog();
                     if (res == System.Windows.Forms.DialogResult.OK) {
-                        // Нормализуем отображение: одинарные обратные слеши
+                        // Нормализуем отображение: одинарные обратные слеши (кроме префикса UNC)
                         var sp = dlg.SelectedPath ?? string.Empty;
-                        this.GamesPathBox.Text = sp.Replace("\\\\", "\\");
+                        this.GamesPathBox.Text = HomeFormat.NormalizeWindowsPath(sp);
                     }
                 }
             }
@@ -399,12 +401,16 @@ namespace ChillHub.Pages {
                     newPath = AppConfig.DefaultGamesPath();
                 }
 
+                // Для файловой системы и конфигурации используем нормальную форму с одинарными
+                // слешами. Сетевой путь вида \\nas\games при этом не превращаем в \nas\games.
+                newPath = HomeFormat.NormalizeWindowsPath(newPath);
                 try {
-                    // Для файловой системы и конфигурации используем нормальную форму с одинарными слешами
-                    newPath = newPath.Replace("\\\\", "\\");
                     Directory.CreateDirectory(newPath);
                 }
-                catch {
+                catch (Exception ex) {
+                    // Каталог мог быть недоступен (сетевая шара оффлайн, нет прав) — настройку
+                    // всё равно сохраняем: путь может стать доступным позже.
+                    ChillHub.Core.Logging.Logger.Warn($"SettingsPage.SaveBtn: не удалось создать папку игр '{newPath}': {ex.Message}");
                 }
 
                 cfg.GamesPath = newPath;
