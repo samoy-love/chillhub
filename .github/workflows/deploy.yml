@@ -816,7 +816,36 @@ jobs:
               echo "</body></html>"
             } > "$REPORT_HTML"; ln -sf "$REPORT_HTML" "$REPORT_DIR/report-latest.html"
 
+            # ------------------------------------------------------------------
+            # И-смоук: РЕЗУЛЬТАТ ПРОВЕРОК ОБЯЗАН ВЛИЯТЬ НА КОД ВОЗВРАТА.
+            #
+            # Выше вычисляются FAIL (HTTP-проверки), MISM_TOTAL (манифесты),
+            # API_STATE/ADM_STATE (сервисы) и REDIR_OK, и всё это сводится в
+            # $STATUS. Но `exit` не было ни одного: скрипт заканчивался записью
+            # HTML-отчёта, шаг завершался кодом 0, и job был ЗЕЛЁНЫМ при любом
+            # провале — упавший сайт, битый сертификат, неподнявшийся сервис.
+            # Отчёт при этом честно писал "fail", но его никто не открывает,
+            # когда галочка зелёная.
+            #
+            # В scripts/deploy.sh это же место сделано правильно (там `if [[ $FAIL
+            # -ne 0 ]]; then ... exit 1`), так что расходились не замыслом, а
+            # недосмотром.
+            #
+            # Отчёт уже записан выше, поэтому падаем ПОСЛЕ него; шаги скачивания
+            # и публикации отчёта помечены `if: always()`, чтобы артефакт
+            # доехал именно тогда, когда он нужен — на красном прогоне.
+            # ------------------------------------------------------------------
+            if [ "$STATUS" != success ]; then
+              err "[deploy] ПРОВАЛ: FAIL=$FAIL mismatches=$MISM_TOTAL api=$API_STATE admin=$ADM_STATE redirect=${REDIR_OK:-1}"
+              err "[deploy] Подробности — в отчёте deploy-report артефакта этого прогона."
+              exit 1
+            fi
+            ok "[deploy] Все проверки пройдены."
+
       - name: Download deploy report from server
+        # always(): отчёт нужнее всего на красном прогоне (см. И-смоук выше),
+        # а деплой-шаг теперь честно падает при провале проверок.
+        if: always()
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -827,6 +856,7 @@ jobs:
           overwrite: true
 
       - name: Upload deploy report artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: deploy-report-${{ github.run_id }}-${{ github.run_attempt }}
