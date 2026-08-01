@@ -53,7 +53,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22.x'
+          # The toolchain version comes from server/go.mod, which is the single
+          # source of truth for it. The hardcoded '1.22.x' that used to be here
+          # did not even match go.mod (`go 1.24.0`), so every build silently
+          # triggered Go's toolchain auto-download — a network fetch of an
+          # unpinned compiler in the middle of a release build.
+          go-version-file: server/go.mod
           cache: true
           cache-dependency-path: server/go.sum
 
@@ -67,12 +72,27 @@ jobs:
             ${{ runner.os }}-go-build-
 
       - name: Build Go servers (linux/amd64 + linux/arm64)
+        # REPRODUCIBLE BUILD — do not reintroduce `go mod tidy` here.
+        #
+        # `go mod tidy` is a MUTATING command: it rewrites go.mod/go.sum, can
+        # add, drop or move dependency versions, and it does so inside the step
+        # that produces the binaries that ship to production. The artefact then
+        # no longer corresponds to the committed go.sum and two runs of the same
+        # commit can produce different binaries.
+        #
+        # The build now only downloads exactly what go.sum already pins, and
+        # GOFLAGS=-mod=readonly makes any attempt to change go.mod a hard error
+        # instead of a silent edit. If a build fails here with "missing go.sum
+        # entry", that is the check working: run `go mod tidy` LOCALLY and
+        # commit the result.
+        env:
+          GOFLAGS: -mod=readonly
         run: |
           set -eux
           echo "::group::Build amd64"
           mkdir -p build/bin
           cd server
-          go mod tidy
+          go mod download
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ../build/bin/api.amd64 ./cmd/api
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ../build/bin/admin.amd64 ./cmd/admin
           echo "::endgroup::"
