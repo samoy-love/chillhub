@@ -57,7 +57,9 @@ namespace ChillHub.Core.Home {
                 dict["os"] = Environment.OSVersion.VersionString;
                 dict["arch"] = Environment.Is64BitOperatingSystem ? "x64" : "x86";
                 dict["dotnet"] = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription;
-                dict["machineName"] = Environment.MachineName;
+
+                // machineName убран намеренно: имя компьютера часто содержит имя владельца,
+                // а для разбора обращения оно не нужно.
                 dict["appVersion"] = typeof(FeedbackService).Assembly.GetName().Version?.ToString() ?? string.Empty;
             }
             catch (Exception ex) {
