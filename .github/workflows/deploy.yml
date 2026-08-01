@@ -377,7 +377,25 @@ jobs:
             # Ensure admin content root subdirs exist and are writable by service user
             sudo mkdir -p "$LAUNCHER_DIR/content" "$LAUNCHER_DIR/manifests" "$LAUNCHER_DIR/news" "$LAUNCHER_DIR/tmp"
 
-            sudo chown -R www-data:www-data "$LAUNCHER_DIR"
+            # И11: НЕ `chown -R www-data:www-data "$LAUNCHER_DIR"`.
+            #
+            # Рекурсивный chown по корню обходил ВСЁ дерево контента на каждом
+            # деплое — гигабайты сборок игр и лаунчера, десятки тысяч файлов.
+            # Это, во-первых, долгий проход по диску на каждой выкатке; но
+            # главное — деплой лез в каталоги, которыми управляет бэкенд, и
+            # менял у них метаданные, хотя политика проекта (см. осознанно
+            # обратное поведение в scripts/deploy.sh) прямо говорит:
+            # content/manifests/news деплой не трогает. Заодно chown обновляет
+            # ctime, из-за чего guard-проверки «контент не менялся во время
+            # деплоя» получали ложные срабатывания.
+            #
+            # Приводим workflow к поведению scripts/deploy.sh: владельца
+            # выставляем рекурсивно только там, куда деплой действительно
+            # пишет (admin_ui и tmp), а сами каталоги контента — БЕЗ -R,
+            # чтобы сервис мог создавать в них файлы, но их содержимое
+            # осталось нетронутым.
+            sudo chown -R www-data:www-data "$LAUNCHER_DIR/admin_ui" "$LAUNCHER_DIR/tmp"
+            sudo chown www-data:www-data "$LAUNCHER_DIR" "$LAUNCHER_DIR/content" "$LAUNCHER_DIR/manifests" "$LAUNCHER_DIR/news"
 
             sudo install -d -m 0755 "$OPT_DIR"
             SERVER_ARCH=$(uname -m | tr '[:upper:]' '[:lower:]')
