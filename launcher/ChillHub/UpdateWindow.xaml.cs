@@ -289,6 +289,64 @@ namespace ChillHub {
                 catch {
                 }
             }
+            finally {
+                this.ShowPreviousUpdateOutcome();
+            }
+        }
+
+        /// <summary>
+        /// A12. Показывает исход ПРОШЛОГО запуска апдейтера.
+        /// <para>
+        /// Апдейтер возвращает 2 («скопировалось не всё») и 3 («фатально»), но читать
+        /// эти коды некому: лаунчер к тому моменту уже завершился, а сам апдейтер
+        /// умирает последним. Поэтому исход он пишет в файл состояния рядом с маркером
+        /// версии, а лаунчер при следующем старте показывает его один раз — иначе
+        /// неудавшееся обновление выглядит как «ничего не произошло», и пользователь
+        /// снова жмёт «Обновить», не понимая, почему предыдущий раз не сработал.
+        /// </para>
+        /// </summary>
+        private void ShowPreviousUpdateOutcome() {
+            try {
+                var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                var status = UpdateStatus.TryRead(baseDir);
+                if (status == null) {
+                    return;
+                }
+
+                // Показываем один раз: файл перезапишет следующий запуск апдейтера.
+                UpdateStatus.Clear(baseDir);
+
+                if (status.IsSuccess) {
+                    try {
+                        Core.Logging.Logger.Info($"Previous self-update: ok, version={status.Version}");
+                    }
+                    catch {
+                    }
+
+                    return;
+                }
+
+                try {
+                    Core.Logging.Logger.Error(
+                        new InvalidOperationException($"Previous self-update failed: outcome={status.Outcome} exit={status.ExitCode} message={status.Message} log={status.LogPath}"),
+                        "UpdateWindow.PreviousUpdateOutcome");
+                }
+                catch {
+                }
+
+                var danger = (Brush)(this.TryFindResource("Brush.Danger") ?? new SolidColorBrush(Color.FromRgb(0xD3, 0x2F, 0x2F)));
+                var text = "Предыдущее обновление не было применено: " +
+                    (string.IsNullOrWhiteSpace(status.Message) ? status.Outcome : status.Message);
+                if (!string.IsNullOrWhiteSpace(status.LogPath)) {
+                    text += $"\nЖурнал: {status.LogPath}";
+                }
+
+                this.StatusText.Inlines.Add(new LineBreak());
+                this.StatusText.Inlines.Add(new Run(text) { Foreground = danger });
+            }
+            catch {
+                // Диагностика не должна мешать запуску.
+            }
         }
 
         /// <summary>
