@@ -126,6 +126,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
     { btn: 'tabNews', sec: 'secNews' },
     { btn: 'tabInbox', sec: 'secInbox' },
     { btn: 'tabMaint', sec: 'secMaint' },
+    { btn: 'tabMetrics', sec: 'secMetrics' },
   ];
   const activate = (id)=>{
     for(const t of tabs){
@@ -139,6 +140,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
     }
     if(id==='tabInbox') { try{ fbReload(true); }catch{} }
     if(id==='tabMaint') { try{ mtLoad(); }catch{ /* no-op */ } }
+    if(id==='tabMetrics') { try{ mxOnTabOpen(); }catch{ /* no-op */ } }
   };
   for(const t of tabs){
     const b = document.getElementById(t.btn);
@@ -1891,6 +1893,7 @@ function showSection(id){
     try{ lnManifestsReload(); }catch(_){ }
   }
   if(id==='secMaint'){ try{ mtLoad(); }catch(_){ /* no-op */ } }
+  if(id==='secMetrics'){ try{ mxOnTabOpen(); }catch(_){ /* no-op */ } }
   try{ localStorage.setItem('admin_tab', id); }catch(e){}
 }
 // Guarded wiring to avoid null errors
@@ -2932,4 +2935,315 @@ document.addEventListener('DOMContentLoaded', ()=>{
   });
   // Бейдж в навигации должен быть актуален независимо от того, открыта ли вкладка.
   mtLoad();
+});
+
+// ==== Метрики ====
+// Здесь тоже только addEventListener и никаких инлайновых скриптов: CSP админки
+// не содержит 'unsafe-inline' в script-src.
+
+let __mxPlot = null;
+let __mxRO = null;
+let __mxGamesLoaded = false;
+let __mxInited = false;
+
+function mxEl(id){ return document.getElementById(id); }
+
+function mxNum(n){
+  const v = Number(n||0);
+  if(!isFinite(v)) return '0';
+  return v.toLocaleString('ru-RU');
+}
+
+// Миллисекунды -> человеческая длительность. 0 означает «нечего усреднять».
+function mxFmtMs(ms){
+  const v = Number(ms||0);
+  if(!(v > 0)) return '—';
+  if(v < 1000) return Math.round(v)+' мс';
+  if(v < 60000) return (v/1000).toFixed(1)+' с';
+  const total = Math.round(v/1000);
+  const m = Math.floor(total/60);
+  const s = total%60;
+  return m+' мин '+(s<10?'0':'')+s+' с';
+}
+
+function mxPct(part, total){
+  const t = Number(total||0);
+  if(!(t > 0)) return '—';
+  return ((Number(part||0)*100)/t).toFixed(1).replace('.', ',')+' %';
+}
+
+// Значение для <input type="datetime-local"> по отступу в днях назад от текущего момента.
+function mxLocalInputAt(msOffsetBack){
+  const d = new Date(Date.now() - (msOffsetBack||0));
+  const pad = (n)=> (n<10?'0':'')+n;
+  return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());
+}
+
+// Верхняя граница периода: datetime-local даёт только минуты, поэтому «по 19:17»
+// без этого отбрасывало бы события с 19:17:01 до 19:17:59 — включая свежие,
+// из-за чего «за последние 7 дней» показывало ноль сразу после отправки события.
+function mxLocalToUtcEnd(v){
+  const s = String(v||'').trim();
+  if(!s) return '';
+  const d = new Date(s);
+  if(isNaN(d.getTime())) return null;
+  d.setSeconds(59, 999);
+  return toRfc3339(d);
+}
+
+function mxEmptyRow(cols, text){
+  return '<tr><td colspan="'+cols+'" class="text-body-secondary">'+escapeHtml(text)+'</td></tr>';
+}
+
+function mxRenderTotals(t){
+  const root = mxEl('mx_totals'); if(!root) return;
+  const tiles = [
+    ['Событий всего', mxNum(t.events), ''],
+    ['Запусков лаунчера', mxNum(t.launcherStarts), ''],
+    ['Уникальных установок', mxNum(t.uniqueInstalls), 'по installId, не по людям'],
+    ['Запусков игр', mxNum(t.gameLaunches), ''],
+    ['Установок', mxNum(t.installs), 'успешно '+mxNum(t.installOk)+', с ошибкой '+mxNum(t.installFail)],
+    ['Обновлений', mxNum(t.updates), 'успешно '+mxNum(t.updateOk)+', с ошибкой '+mxNum(t.updateFail)],
+    ['Ошибок', mxNum(t.errors), 'события вида error'],
+    ['Скачано', formatBytes(Number(t.bytesDownloaded||0)), 'сумма поля bytes'],
+    ['Среднее время установки', mxFmtMs(t.avgInstallMs), 'только успешные'],
+    ['Среднее время обновления', mxFmtMs(t.avgUpdateMs), 'только успешные'],
+  ];
+  root.innerHTML = tiles.map(x=>
+    '<div class="col-6 col-md-4 col-xl-3">'
+    + '<div class="border rounded p-2 bg-body-tertiary h-100">'
+    + '<div class="small text-body-secondary">'+escapeHtml(x[0])+'</div>'
+    + '<div class="fs-5">'+escapeHtml(String(x[1]))+'</div>'
+    + (x[2] ? '<div class="small text-body-secondary">'+escapeHtml(x[2])+'</div>' : '')
+    + '</div></div>'
+  ).join('');
+}
+
+function mxRenderDaysTable(byDay){
+  const tb = mxEl('mx_days_body'); if(!tb) return;
+  if(!byDay || byDay.length===0){ tb.innerHTML = mxEmptyRow(6, 'Нет данных за период.'); return; }
+  tb.innerHTML = byDay.map(d=>
+    '<tr><td>'+escapeHtml(d.date||'')+'</td>'
+    + '<td class="text-end">'+mxNum(d.launcherStarts)+'</td>'
+    + '<td class="text-end">'+mxNum(d.installs)+'</td>'
+    + '<td class="text-end">'+mxNum(d.updates)+'</td>'
+    + '<td class="text-end">'+mxNum(d.gameLaunches)+'</td>'
+    + '<td class="text-end">'+mxNum(d.errors)+'</td></tr>'
+  ).join('');
+}
+
+// График по дням на том же uPlot, что и график скорости загрузки.
+// По оси X — индекс дня, подписи берутся из byDay: так не приходится
+// пересчитывать UTC-сутки в местные и объяснять сдвиг на границе дня.
+function mxRenderChart(byDay){
+  const host = mxEl('mx_chart_host'); if(!host) return;
+  const note = mxEl('mx_chart_note');
+  if(__mxRO){ try{ __mxRO.disconnect(); }catch{ /* no-op */ } __mxRO = null; }
+  if(__mxPlot){ try{ __mxPlot.destroy(); }catch{ /* no-op */ } __mxPlot = null; }
+  host.replaceChildren();
+
+  if(!byDay || byDay.length===0){
+    if(note) note.textContent = '';
+    host.innerHTML = '<div class="text-body-secondary">Событий за период нет — рисовать нечего.</div>';
+    return;
+  }
+  if(!window.uPlot){
+    if(note) note.textContent = 'библиотека uPlot не загрузилась';
+    host.innerHTML = '<div class="alert alert-warning mb-0">График недоступен: uPlot не загрузился. Числа — в таблице ниже.</div>';
+    const det = mxEl('mx_days_details'); if(det) det.open = true;
+    return;
+  }
+  if(note) note.textContent = byDay.length+' дн.';
+
+  const xs = byDay.map((_, i)=> i);
+  const data = [
+    xs,
+    byDay.map(d=> Number(d.launcherStarts||0)),
+    byDay.map(d=> Number(d.installs||0)),
+    byDay.map(d=> Number(d.updates||0)),
+    byDay.map(d=> Number(d.gameLaunches||0)),
+    byDay.map(d=> Number(d.errors||0)),
+  ];
+  const label = (v)=>{
+    const i = Math.round(v);
+    const d = byDay[i];
+    return d ? String(d.date||'').slice(5) : '';
+  };
+  const HEIGHT = 280;
+  const opts = {
+    width: host.clientWidth || 800,
+    height: HEIGHT,
+    cursor: { drag: { x: false, y: false } },
+    scales: { x: { time: false } },
+    legend: { show: true },
+    padding: [8, 12, 8, 8],
+    axes: [
+      { grid: { show: true, stroke: 'rgba(255,255,255,.12)', width: 1 },
+        ticks: { stroke: 'rgba(255,255,255,.25)', width: 1 },
+        stroke: '#adb5bd',
+        values: (u, vals)=> vals.map(label) },
+      { grid: { show: true, stroke: 'rgba(255,255,255,.12)', width: 1 },
+        ticks: { stroke: 'rgba(255,255,255,.25)', width: 1 },
+        stroke: '#adb5bd',
+        values: (u, vals)=> vals.map(v=> mxNum(v)) },
+    ],
+    series: [
+      { label: 'Дата (UTC)', value: (u, v)=> label(v) },
+      { label: 'Запуски лаунчера', stroke: '#0d6efd', width: 2 },
+      { label: 'Установки', stroke: '#198754', width: 2 },
+      { label: 'Обновления', stroke: '#0dcaf0', width: 2 },
+      { label: 'Запуски игр', stroke: '#ffc107', width: 2 },
+      { label: 'Ошибки', stroke: '#dc3545', width: 2 },
+    ],
+  };
+  try{
+    __mxPlot = new window.uPlot(opts, data, host);
+    __mxRO = new window.ResizeObserver(()=>{
+      try{ __mxPlot.setSize({ width: host.clientWidth || 800, height: HEIGHT }); }catch{ /* no-op */ }
+    });
+    __mxRO.observe(host);
+  }catch(e){
+    __mxPlot = null;
+    host.innerHTML = '<div class="alert alert-warning mb-0">Не удалось построить график: '+escapeHtml(String(e))+'. Числа — в таблице ниже.</div>';
+    const det = mxEl('mx_days_details'); if(det) det.open = true;
+  }
+}
+
+function mxRenderGames(byGame){
+  const tb = mxEl('mx_games_body'); if(!tb) return;
+  if(!byGame || byGame.length===0){ tb.innerHTML = mxEmptyRow(5, 'Событий, привязанных к играм, нет.'); return; }
+  tb.innerHTML = byGame.map(g=>
+    '<tr><td><code>'+escapeHtml(g.gameId||'—')+'</code></td>'
+    + '<td class="text-end">'+mxNum(g.installs)+'</td>'
+    + '<td class="text-end">'+mxNum(g.updates)+'</td>'
+    + '<td class="text-end">'+mxNum(g.errors)+'</td>'
+    + '<td class="text-end">'+escapeHtml(formatBytes(Number(g.bytes||0)))+'</td></tr>'
+  ).join('');
+}
+
+function mxRenderCounts(bodyId, items, emptyText, withShare){
+  const tb = mxEl(bodyId); if(!tb) return;
+  const list = Array.isArray(items) ? items : [];
+  const cols = withShare ? 3 : 2;
+  if(list.length===0){ tb.innerHTML = mxEmptyRow(cols, emptyText); return; }
+  const total = list.reduce((a, x)=> a + Number(x.count||0), 0);
+  tb.innerHTML = list.map(x=>
+    '<tr><td>'+escapeHtml(x.key||'—')+'</td>'
+    + '<td class="text-end">'+mxNum(x.count)+'</td>'
+    + (withShare ? '<td class="text-end text-body-secondary">'+escapeHtml(mxPct(x.count, total))+'</td>' : '')
+    + '</tr>'
+  ).join('');
+}
+
+function mxRender(sum){
+  const totals = sum.totals || {};
+  const byDay = Array.isArray(sum.byDay) ? sum.byDay : [];
+
+  const label = mxEl('mx_range_label');
+  if(label){
+    label.textContent = 'Период: ' + (mtFmtLocal(sum.from) || '—') + ' — ' + (mtFmtLocal(sum.to) || '—')
+      + (mxEl('mx_game')?.value ? (' · игра: ' + mxEl('mx_game').value) : ' · все игры');
+  }
+  const empty = mxEl('mx_empty');
+  if(empty) empty.style.display = Number(totals.events||0) === 0 ? '' : 'none';
+
+  mxRenderTotals(totals);
+  mxRenderDaysTable(byDay);
+  mxRenderChart(byDay);
+  mxRenderGames(sum.byGame);
+  mxRenderCounts('mx_errors_body', sum.topErrors, 'Ошибок за период не было.', false);
+  mxRenderCounts('mx_versions_body', sum.appVersions, 'Версии не сообщались.', true);
+  mxRenderCounts('mx_os_body', sum.os, 'ОС не сообщались.', true);
+}
+
+async function mxLoad(){
+  const from = mtLocalToUtc(mxEl('mx_from')?.value || '');
+  const to = mxLocalToUtcEnd(mxEl('mx_to')?.value || '');
+  if(from === null){ notify('Не удалось разобрать дату «с».'); return; }
+  if(to === null){ notify('Не удалось разобрать дату «по».'); return; }
+  if(from && to && Date.parse(to) < Date.parse(from)){
+    notify('Дата «по» раньше даты «с» — сводка будет пустой. Поправьте период.');
+    return;
+  }
+  const p = new URLSearchParams();
+  if(from) p.set('from', from);
+  if(to) p.set('to', to);
+  const gid = mxEl('mx_game')?.value || '';
+  if(gid) p.set('gameId', gid);
+  const qs = p.toString();
+
+  let res;
+  try{ res = await fetch('/admin/api/metrics/summary'+(qs?('?'+qs):'')); }
+  catch(e){ notify('Ошибка сети при запросе метрик: '+e); return; }
+  if(!res.ok){ notify('Не удалось получить метрики — '+(await mtErrText(res))); return; }
+  let sum;
+  try{ sum = await res.json(); }
+  catch(e){ notify('Сервер вернул не JSON: '+e); return; }
+  mxRender(sum);
+  notify('Метрики обновлены: событий '+mxNum((sum.totals||{}).events)+'.');
+}
+
+async function mxLoadGames(){
+  const sel = mxEl('mx_game'); if(!sel) return;
+  let res;
+  try{ res = await fetch('/admin/games'); }
+  catch{ return; } // список игр — удобство, без него фильтр просто пустой
+  if(!res.ok) return;
+  let j;
+  try{ j = await res.json(); }catch{ return; }
+  const keep = sel.value;
+  sel.innerHTML = '';
+  const all = document.createElement('option');
+  all.value = ''; all.textContent = 'Все игры';
+  sel.appendChild(all);
+  (j.items||[]).forEach(it=>{
+    const opt = document.createElement('option');
+    opt.value = it.gameId;
+    opt.textContent = (it.title ? (it.title+' ('+it.gameId+')') : it.gameId);
+    sel.appendChild(opt);
+  });
+  sel.value = keep;
+  __mxGamesLoaded = true;
+}
+
+function mxSetPreset(days){
+  const f = mxEl('mx_from'); const t = mxEl('mx_to');
+  if(f) f.value = mxLocalInputAt(days*24*3600*1000);
+  if(t) t.value = mxLocalInputAt(0);
+}
+
+async function mxClear(){
+  if(!confirm('Удалить все накопленные метрики? Действие необратимо.')) return;
+  let res;
+  try{ res = await fetch('/admin/api/metrics/clear', { method: 'POST' }); }
+  catch(e){ notify('Ошибка сети при очистке метрик: '+e); return; }
+  if(!res.ok){ notify('Не удалось очистить метрики — '+(await mtErrText(res))); return; }
+  notify('Метрики удалены.');
+  await mxLoad();
+}
+
+function mxOnTabOpen(){
+  if(!mxEl('secMetrics')) return;
+  if(!__mxInited){
+    __mxInited = true;
+    if(!mxEl('mx_from')?.value && !mxEl('mx_to')?.value) mxSetPreset(30);
+  }
+  if(!__mxGamesLoaded){ mxLoadGames().then(()=> mxLoad()); return; }
+  mxLoad();
+}
+
+document.addEventListener('DOMContentLoaded', ()=>{
+  if(!mxEl('secMetrics')) return;
+  const onClick = (id, fn)=>{ const el = mxEl(id); if(el) el.addEventListener('click', (e)=>{ e.preventDefault(); fn(); }); };
+  onClick('mx_refresh', ()=> mxLoad());
+  onClick('mx_clear', ()=> mxClear());
+  onClick('mx_last7', ()=>{ mxSetPreset(7); mxLoad(); });
+  onClick('mx_last30', ()=>{ mxSetPreset(30); mxLoad(); });
+  onClick('mx_last90', ()=>{ mxSetPreset(90); mxLoad(); });
+  const sel = mxEl('mx_game');
+  if(sel) sel.addEventListener('change', ()=> mxLoad());
+  // Восстановление вкладки из localStorage происходит на этапе разбора файла,
+  // раньше объявлений let ниже, поэтому тот вызов mxOnTabOpen() гарантированно
+  // падает в TDZ и гасится try/catch. Догружаем здесь, если вкладка уже открыта.
+  if(!mxEl('secMetrics').classList.contains('hidden')) mxOnTabOpen();
 });
