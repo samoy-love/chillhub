@@ -52,6 +52,11 @@ namespace ChillHub.Pages {
         // Загрузка данных выбранной игры: сериализуется воротами, предыдущая отменяется токеном.
         private readonly SemaphoreSlim selectionGate = new(1, 1);
         private CancellationTokenSource? selectionCts;
+
+        // Порядок игр, полученный от API. Нужен, чтобы список сортировался одинаково
+        // во всех местах: раньше часть кода упорядочивала по API, часть — по названию,
+        // и список прыгал после установки или удаления игры.
+        private readonly Dictionary<string, int> apiOrder = new(StringComparer.OrdinalIgnoreCase);
         private readonly ISyncService sync = new SimpleSyncService();
         private double emaSpeedMBs = 0.0; // сглаженная скорость
         private const double EmaAlpha = 0.2; // чувствительность EMA
@@ -371,18 +376,8 @@ namespace ChillHub.Pages {
                 this.NormalizeGameIconsAndLocalState(games);
 
                 // Сортировка: установленные сначала, затем порядок из полученного списка
-                var orderMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-                for (int i = 0; i < games.Count; i++) {
-                    var id = games[i]?.GameId ?? string.Empty;
-                    if (!orderMap.ContainsKey(id)) {
-                        orderMap[id] = i;
-                    }
-                }
-
-                var ordered = games
-                    .OrderBy(g => g.IsInstalled ? 0 : 1)
-                    .ThenBy(g => orderMap.TryGetValue(g.GameId ?? string.Empty, out var idx) ? idx : int.MaxValue)
-                    .ToList();
+                this.RememberApiOrder(games);
+                var ordered = this.SortGames(games);
 
                 await this.DispatcherInvokeAsync(() => {
                     try {
@@ -629,19 +624,8 @@ namespace ChillHub.Pages {
                     string? selectedId = null;
                     await this.DispatcherInvokeAsync(() => selectedId = this.GetSelectedGameId());
 
-                    // Порядок из реестра сохраняем для неустановленных, установленные держим сверху
-                    var order2 = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-                    for (int i = 0; i < this.games.Count; i++) {
-                        var id = this.games[i]?.GameId ?? string.Empty;
-                        if (!order2.ContainsKey(id)) {
-                            order2[id] = i;
-                        }
-                    }
-
-                    this.games = this.games
-                        .OrderBy(x => x.IsInstalled ? 0 : 1)
-                        .ThenBy(x => order2.TryGetValue(x.GameId ?? string.Empty, out var idx) ? idx : int.MaxValue)
-                        .ToList();
+                    // Порядок из ответа API сохраняем, установленные держим сверху
+                    this.games = this.SortGames(this.games);
                     await this.DispatcherInvokeAsync(() => {
                         this.GameList.ItemsSource = this.games;
                         this.GameList.Items.Refresh();
@@ -802,6 +786,36 @@ namespace ChillHub.Pages {
                 this.verifiedGameIds.Clear();
             }
         }
+
+        /// <summary>
+        /// Запоминает порядок игр, пришедший от API: он задаёт положение игр внутри групп.
+        /// </summary>
+        private void RememberApiOrder(IEnumerable<GameInfo> games) {
+            this.apiOrder.Clear();
+            var i = 0;
+            foreach (var g in games) {
+                var id = g?.GameId ?? string.Empty;
+                if (!this.apiOrder.ContainsKey(id)) {
+                    this.apiOrder[id] = i;
+                }
+
+                i++;
+            }
+        }
+
+        /// <summary>
+        /// Единственное правило сортировки списка игр: установленные сверху, внутри группы —
+        /// порядок из ответа API, при его отсутствии — по названию. Раньше правил было два
+        /// (одно после загрузки, другое после установки и удаления), и список перетасовывался
+        /// сам собой прямо под курсором.
+        /// </summary>
+        /// <param name="games">Исходный список.</param>
+        /// <returns>Новый отсортированный список.</returns>
+        private List<GameInfo> SortGames(IEnumerable<GameInfo> games) =>
+            games.OrderBy(g => g.IsInstalled ? 0 : 1)
+                 .ThenBy(g => this.apiOrder.TryGetValue(g.GameId ?? string.Empty, out var idx) ? idx : int.MaxValue)
+                 .ThenBy(g => g.Title, StringComparer.CurrentCultureIgnoreCase)
+                 .ToList();
 
         // Короткое сообщение пользователю в статусе; технические детали — в лог и в подсказку (C5)
         private void ShowUserError(string userMessage, Exception? ex = null, string? context = null) {
@@ -1304,18 +1318,8 @@ namespace ChillHub.Pages {
                 this.NormalizeGameIconsAndLocalState(this.games);
 
                 // Сортировка: установленные сначала, затем порядок, полученный от API
-                var orderR = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-                for (int i = 0; i < this.games.Count; i++) {
-                    var id = this.games[i]?.GameId ?? string.Empty;
-                    if (!orderR.ContainsKey(id)) {
-                        orderR[id] = i;
-                    }
-                }
-
-                this.games = this.games
-                    .OrderBy(g => g.IsInstalled ? 0 : 1)
-                    .ThenBy(g => orderR.TryGetValue(g.GameId ?? string.Empty, out var idx) ? idx : int.MaxValue)
-                    .ToList();
+                this.RememberApiOrder(this.games);
+                this.games = this.SortGames(this.games);
                 this.GameList.ItemsSource = this.games;
 
                 // Восстановим выбранную игру, если она осталась в списке
@@ -1667,10 +1671,7 @@ namespace ChillHub.Pages {
                 _ = Task.Run(async () => {
                     try {
                         await this.VerifyGameStatusAsync(this.games.FirstOrDefault(x => x.GameId == gid) ?? new GameInfo { GameId = gid, LatestVersion = version ?? string.Empty });
-                        var reordered = this.games
-                            .OrderByDescending(x => x.IsInstalled)
-                            .ThenBy(x => x.Title, StringComparer.CurrentCultureIgnoreCase)
-                            .ToList();
+                        var reordered = this.SortGames(this.games);
                         await this.DispatcherInvokeAsync(() => {
                             this.games = reordered;
                             this.GameList.ItemsSource = this.games;
@@ -2290,10 +2291,7 @@ namespace ChillHub.Pages {
                     g.NeedsUpdate = false;
                 }
 
-                this.games = this.games
-                    .OrderByDescending(x => x.IsInstalled)
-                    .ThenBy(x => x.Title, StringComparer.CurrentCultureIgnoreCase)
-                    .ToList();
+                this.games = this.SortGames(this.games);
                 this.GameList.ItemsSource = this.games;
                 this.GameList.Items.Refresh();
                 if (!string.IsNullOrWhiteSpace(selectedId)) {
