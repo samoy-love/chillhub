@@ -9,6 +9,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -131,8 +132,12 @@ func (h *Handlers) IconUpload(w http.ResponseWriter, r *http.Request) {
 	if !adminutil.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
+	// Bound the whole request before parsing, exactly as the news asset upload
+	// does: without this a client can make the process buffer and then read an
+	// arbitrary amount of data.
+	r.Body = http.MaxBytesReader(w, r.Body, media.MaxImageBytes+(1<<20))
 	if err := r.ParseMultipartForm(16 << 20); err != nil { // 16MB
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "request too large or malformed", http.StatusBadRequest)
 		return
 	}
 	gid := strings.TrimSpace(r.FormValue("gameId"))
@@ -153,9 +158,17 @@ func (h *Handlers) IconUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	data, err := io.ReadAll(file)
+	// io.ReadAll on a multipart part is unbounded by itself: the part may have
+	// been spooled to disk and be far larger than the parse window, so the whole
+	// file would land in RAM.
+	data, err := io.ReadAll(io.LimitReader(file, media.MaxImageBytes+1))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[games:icon] read upload: %v", err)
+		http.Error(w, "failed to read upload", http.StatusInternalServerError)
+		return
+	}
+	if len(data) > media.MaxImageBytes {
+		http.Error(w, "image too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 	// Check the declared dimensions from the header before decoding: a tiny
@@ -191,14 +204,18 @@ func (h *Handlers) IconUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
-	out, err := os.Create(outPath)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	// Encode into memory and write atomically. os.Create truncates the live
+	// icon first, so a failed encode used to leave a zero-length or half-written
+	// file in a tree the public API serves — and the working icon was gone.
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		log.Printf("[games:icon] encode %s: %v", gid, err)
+		http.Error(w, "failed to encode image", http.StatusInternalServerError)
 		return
 	}
-	defer out.Close()
-	if err := png.Encode(out, img); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := adminutil.WriteFileAtomic(outPath, buf.Bytes(), 0o644); err != nil {
+		log.Printf("[games:icon] write %s: %v", outPath, err)
+		http.Error(w, "failed to save icon", http.StatusInternalServerError)
 		return
 	}
 	url := "/manifests/" + gid + "/icon.png"
