@@ -211,13 +211,27 @@ sudo mkdir -p "$SITE_ROOT/downloads"
 
 
 section "Git: обновление репозитория ($BRANCH)"
+
+# Скрипт запускается через sudo, но обращаться к GitHub нужно НЕ от root: ключ
+# развёрнут у владельца репозитория, а у root его нет. Раньше деплой падал на
+# первом же fetch с «Permission denied (publickey)», хотя тот же fetch от
+# владельца проходил. Поэтому все git-команды выполняем от владельца каталога.
+REPO_OWNER="$(stat -c '%U' "$REPO_DIR" 2>/dev/null || echo root)"
+git_as_owner(){
+  if [[ "$(id -un)" == "$REPO_OWNER" ]]; then
+    run "git -C \"$REPO_DIR\" $*"
+  else
+    run "sudo -u \"$REPO_OWNER\" git -C \"$REPO_DIR\" $*"
+  fi
+}
+
 if [[ ! -d "$REPO_DIR/.git" ]]; then
-  run "git clone git@github.com:tr0llex/Launcher-Project.git \"$REPO_DIR\""
+  run "sudo -u \"$REPO_OWNER\" git clone git@github.com:tr0llex/Launcher-Project.git \"$REPO_DIR\""
 fi
-run "git -C \"$REPO_DIR\" fetch --all --prune"
-run "git -C \"$REPO_DIR\" checkout $BRANCH"
-run "git -C \"$REPO_DIR\" config core.filemode false || true"
-run "git -C \"$REPO_DIR\" pull --ff-only"
+git_as_owner "fetch --all --prune"
+git_as_owner "checkout $BRANCH"
+git_as_owner "config core.filemode false || true"
+git_as_owner "pull --ff-only"
 
 # Generate secrets if not provided
 if [[ -z "$JWT_SECRET" ]]; then
