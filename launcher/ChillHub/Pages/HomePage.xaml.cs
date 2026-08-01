@@ -214,13 +214,12 @@ namespace ChillHub.Pages {
                 this.Loaded += (s, e) => this.feedback?.Resume();
                 this.Unloaded += (s, e) => this.feedback?.Stop();
 
-                // Баннер о том, что отчёт об ошибке ушёл автоматически
-                ChillHub.Core.ErrorReporter.AutoReported += (ctx) =>
-                    _ = this.DispatcherInvokeAsync(() => this.ShowToast("Произошла ошибка. Отчёт автоматически отправлен"));
-                ChillHub.Core.ErrorReporter.AutoReportSuppressed += (ts) => {
-                    var mins = Math.Max(1, (int)Math.Ceiling(ts.TotalMinutes));
-                    _ = this.DispatcherInvokeAsync(() => this.ShowToast($"Лимит авто-репортов исчерпан. Доступно через ~{mins} мин."));
-                };
+                // Баннер о том, что отчёт об ошибке ушёл автоматически.
+                // ErrorReporter — статический класс, его события переживают страницу: подписка
+                // лямбдой без отписки удерживала бы HomePage в памяти навсегда (как и MaintenanceService).
+                this.SubscribeErrorReporter();
+                this.Loaded += (s, e) => this.SubscribeErrorReporter();
+                this.Unloaded += (s, e) => this.UnsubscribeErrorReporter();
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Error(ex, "HomePage.ctor");
@@ -1719,6 +1718,38 @@ namespace ChillHub.Pages {
         // Режим техработ может включиться и выключиться, пока страница открыта.
         // Подписываемся на время видимости страницы, чтобы не держать ссылку на неё в статическом событии.
         private bool maintenanceSubscribed;
+
+        // Авто-отчёты об ошибках: как и режим техработ, события статические,
+        // поэтому подписка живёт ровно столько, сколько страница показана.
+        private bool errorReporterSubscribed;
+
+        private void SubscribeErrorReporter() {
+            if (this.errorReporterSubscribed) {
+                return;
+            }
+
+            Core.ErrorReporter.AutoReported += this.OnAutoReported;
+            Core.ErrorReporter.AutoReportSuppressed += this.OnAutoReportSuppressed;
+            this.errorReporterSubscribed = true;
+        }
+
+        private void UnsubscribeErrorReporter() {
+            if (!this.errorReporterSubscribed) {
+                return;
+            }
+
+            Core.ErrorReporter.AutoReported -= this.OnAutoReported;
+            Core.ErrorReporter.AutoReportSuppressed -= this.OnAutoReportSuppressed;
+            this.errorReporterSubscribed = false;
+        }
+
+        private void OnAutoReported(string context) =>
+            _ = this.DispatcherInvokeAsync(() => this.ShowToast("Произошла ошибка. Отчёт автоматически отправлен"));
+
+        private void OnAutoReportSuppressed(TimeSpan retryAfter) {
+            var mins = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalMinutes));
+            _ = this.DispatcherInvokeAsync(() => this.ShowToast($"Лимит авто-репортов исчерпан. Доступно через ~{mins} мин."));
+        }
 
         private void SubscribeMaintenance() {
             if (this.maintenanceSubscribed) {
