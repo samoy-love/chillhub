@@ -204,6 +204,15 @@ namespace ChillHub {
                 try { Logger.Warn("Discord shutdown failed: " + ex.Message); } catch { }
             }
 
+            // Останавливаем опрос режима технических работ (задача 25)
+            try {
+                ChillHub.Core.Maintenance.MaintenanceService.Stop();
+            }
+            catch (Exception ex) {
+                // Logger.Write гасит собственные ошибки, дополнительная защита не нужна
+                Logger.Warn("Maintenance poll stop failed: " + ex.Message);
+            }
+
             base.OnExit(e);
         }
 
