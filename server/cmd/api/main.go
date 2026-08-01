@@ -339,37 +339,47 @@ func readLatest(path string) (latestMeta, bool) {
 	return m, true
 }
 
-func handleNewsIndex(w http.ResponseWriter, r *http.Request) {
-	path := filepath.Join(contentRoot, "news", "index.json")
+// servePublishedIndex reads a news index file and serves only the published
+// entries.
+//
+// There is deliberately no "return the file as-is" fallback: it used to run
+// whenever the index failed to parse OR simply had no items, and in the second
+// case it handed the raw bytes — drafts included — to the public. A file that
+// cannot be parsed cannot be filtered either, so the only safe answer is an
+// empty list.
+func servePublishedIndex(w http.ResponseWriter, path string) {
+	empty := map[string]any{"items": []any{}}
 	b, err := os.ReadFile(path)
 	if err != nil {
-		writeJSON(w, map[string]any{"items": []any{}})
+		writeJSON(w, empty)
 		return
 	}
-	// filter by published
 	var idx struct {
 		Items []map[string]any `json:"items"`
 	}
-	if json.Unmarshal(b, &idx) == nil && len(idx.Items) > 0 {
-		out := make([]map[string]any, 0, len(idx.Items))
-		for _, it := range idx.Items {
-			// Include by default if "published" is missing.
-			include := true
-			if v, ok := it["published"]; ok {
-				if bv, ok2 := v.(bool); ok2 {
-					include = bv
-				}
-			}
-			if include {
-				out = append(out, it)
-			}
-		}
-		writeJSON(w, map[string]any{"items": out})
+	if json.Unmarshal(b, &idx) != nil {
+		log.Printf("news index %s: malformed json, serving empty list", filepath.Base(path))
+		writeJSON(w, empty)
 		return
 	}
-	// fallback: return as-is
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(b)
+	out := make([]map[string]any, 0, len(idx.Items))
+	for _, it := range idx.Items {
+		// Include by default if "published" is missing.
+		include := true
+		if v, ok := it["published"]; ok {
+			if bv, ok2 := v.(bool); ok2 {
+				include = bv
+			}
+		}
+		if include {
+			out = append(out, it)
+		}
+	}
+	writeJSON(w, map[string]any{"items": out})
+}
+
+func handleNewsIndex(w http.ResponseWriter, r *http.Request) {
+	servePublishedIndex(w, filepath.Join(contentRoot, "news", "index.json"))
 }
 
 // handleGameNewsIndex filters per-game news by published=true
@@ -378,34 +388,7 @@ func handleGameNewsIndex(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	path := filepath.Join(contentRoot, "news", "games", gid, "index.json")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		writeJSON(w, map[string]any{"items": []any{}})
-		return
-	}
-	var idx struct {
-		Items []map[string]any `json:"items"`
-	}
-	if json.Unmarshal(b, &idx) == nil && len(idx.Items) > 0 {
-		out := make([]map[string]any, 0, len(idx.Items))
-		for _, it := range idx.Items {
-			// Include by default if "published" is missing.
-			include := true
-			if v, ok := it["published"]; ok {
-				if bv, ok2 := v.(bool); ok2 {
-					include = bv
-				}
-			}
-			if include {
-				out = append(out, it)
-			}
-		}
-		writeJSON(w, map[string]any{"items": out})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(b)
+	servePublishedIndex(w, filepath.Join(contentRoot, "news", "games", gid, "index.json"))
 }
 
 // handleBuilds returns list of available versions for a game by scanning manifests/{gameId}/ for *.json (excluding latest.json)

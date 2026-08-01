@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -52,6 +53,59 @@ func TestGameIDIsValidatedOnPublicRoutes(t *testing.T) {
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("GET %s = %d, want 404", p, rec.Code)
 		}
+	}
+}
+
+func TestNewsIndexNeverServesRawFile(t *testing.T) {
+	root := withContentRoot(t)
+	if err := os.MkdirAll(filepath.Join(root, "news"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// An index whose "items" key is absent used to fall through to the raw
+	// bytes, leaking whatever the file contained.
+	raw := `{"drafts":[{"slug":"secret","published":false}]}`
+	if err := os.WriteFile(filepath.Join(root, "news", "index.json"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	testRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/news/index.json", nil))
+	if strings.Contains(rec.Body.String(), "secret") {
+		t.Fatalf("raw index leaked to the client: %s", rec.Body.String())
+	}
+
+	// Malformed JSON must not be echoed either.
+	if err := os.WriteFile(filepath.Join(root, "news", "index.json"), []byte(`{"items":[`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	testRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/news/index.json", nil))
+	var got struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("response is not valid json: %v (%s)", err, rec.Body.String())
+	}
+	if len(got.Items) != 0 {
+		t.Fatalf("want empty items, got %v", got.Items)
+	}
+}
+
+func TestNewsIndexFiltersUnpublished(t *testing.T) {
+	root := withContentRoot(t)
+	if err := os.MkdirAll(filepath.Join(root, "news", "games", "demo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"items":[{"slug":"a","published":true},{"slug":"b","published":false},{"slug":"c"}]}`
+	if err := os.WriteFile(filepath.Join(root, "news", "games", "demo", "index.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	testRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/news/games/demo/index.json", nil))
+	if strings.Contains(rec.Body.String(), `"b"`) {
+		t.Fatalf("unpublished item served: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"a"`) || !strings.Contains(rec.Body.String(), `"c"`) {
+		t.Fatalf("published items missing: %s", rec.Body.String())
 	}
 }
 
