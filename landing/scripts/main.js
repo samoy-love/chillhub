@@ -18,6 +18,35 @@
     return hc <= 2 || mem <= 2 || oldIOS || oldAndroid;
   })();
 
+  // Image fallbacks — replaces the inline onerror="" attributes that used to
+  // live in index.html. Those attributes forced script-src 'unsafe-inline' in
+  // the site's Content-Security-Policy, which defeats most of the point of
+  // having a CSP at all. The intent now lives in a data-fallback attribute:
+  //   data-fallback="hide"          -> hide the element if it fails to load
+  //   data-fallback="<url>"         -> swap in this URL if it fails to load
+  //
+  // This must cope with images that have ALREADY failed by the time this runs:
+  // main.js is loaded with defer, so parsing is finished and an eager image
+  // (or a cached failure) may have fired its error event before any listener
+  // existed. A decoded-but-broken image reports complete === true together
+  // with naturalWidth === 0, which is the check used below.
+  (function setupImageFallbacks(){
+    const apply = (img) => {
+      if(img.dataset.fallbackApplied) return;   // never react twice
+      img.dataset.fallbackApplied = '1';
+      const fb = img.getAttribute('data-fallback');
+      if(!fb) return;
+      if(fb === 'hide'){ img.style.display = 'none'; return; }
+      // If the fallback itself 404s we simply stop: the guard above means the
+      // error handler cannot re-enter and start an infinite src-swap loop.
+      img.src = fb;
+    };
+    document.querySelectorAll('img[data-fallback]').forEach((img)=>{
+      img.addEventListener('error', ()=> apply(img), { once:true });
+      if(img.complete && img.naturalWidth === 0) apply(img);
+    });
+  })();
+
   // Brand click: reload page, clear hash, and scroll to top
   (function setupBrandReload(){
     const brand = document.querySelector('.site-header .brand');

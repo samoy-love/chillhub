@@ -110,6 +110,94 @@ jobs:
           path: build/*.manifest
           if-no-files-found: ignore
 
+      # ---------------------------------------------------------------------
+      # Admin password hash — computed HERE, on the runner, never on the VPS.
+      #
+      # This step used to live inside the remote deploy script: it wrote a
+      # temporary .go file onto the production host and ran `go run` on it to
+      # turn ADMIN_PASSWORD_PLAIN into a bcrypt hash. That required a full Go
+      # toolchain to be installed on a box whose only job is to run two static
+      # binaries, and it compiled+executed generated source code in production
+      # on every deploy. Both are removed now: the runner already has Go (see
+      # the "Set up Go" step) and the server receives only the finished hash.
+      #
+      # As a side effect the PLAINTEXT admin password no longer travels to the
+      # server at all — ADMIN_PASSWORD_PLAIN is consumed on the runner and
+      # never referenced in the SSH script again.
+      #
+      # Nothing here echoes the password or the hash: the step runs without
+      # `set -x`, the hash is registered with ::add-mask:: before it can reach
+      # any log, and it is handed to later steps through $GITHUB_ENV (which is
+      # not printed) rather than through a step output.
+      # ---------------------------------------------------------------------
+      - name: Resolve admin password hash (bcrypt on runner)
+        env:
+          ADMIN_PASSWORD_BCRYPT: ${{ secrets.ADMIN_PASSWORD_BCRYPT }}
+          ADMIN_PASSWORD_PLAIN: ${{ secrets.ADMIN_PASSWORD_PLAIN }}
+        run: |
+          set -eu
+          HASH=""
+          if [ -n "${ADMIN_PASSWORD_BCRYPT:-}" ]; then
+            echo "ADMIN_PASSWORD_BCRYPT secret is set - passing it through unchanged."
+            HASH="$ADMIN_PASSWORD_BCRYPT"
+          elif [ -n "${ADMIN_PASSWORD_PLAIN:-}" ]; then
+            echo "Only ADMIN_PASSWORD_PLAIN is set - hashing it here on the runner."
+            TOOL_DIR="server/deploy_bcrypt_tool"
+            mkdir -p "$TOOL_DIR"
+            # Built inside the existing server module so golang.org/x/crypto
+            # resolves from the pinned go.mod/go.sum and the warmed module
+            # cache - no extra download, no floating version.
+            cat > "$TOOL_DIR/main.go" <<'GOEOF'
+          package main
+
+          import (
+          	"fmt"
+          	"os"
+
+          	"golang.org/x/crypto/bcrypt"
+          )
+
+          func main() {
+          	pw := os.Getenv("PW")
+          	if pw == "" {
+          		fmt.Fprintln(os.Stderr, "PW is empty")
+          		os.Exit(1)
+          	}
+          	h, err := bcrypt.GenerateFromPassword([]byte(pw), 12)
+          	if err != nil {
+          		fmt.Fprintln(os.Stderr, "bcrypt failed:", err)
+          		os.Exit(1)
+          	}
+          	fmt.Print(string(h))
+          }
+          GOEOF
+            HASH="$(cd server && PW="$ADMIN_PASSWORD_PLAIN" go run ./deploy_bcrypt_tool)"
+            rm -rf "$TOOL_DIR"
+            if [ -z "$HASH" ]; then
+              echo "::error::bcrypt hashing produced an empty result"
+              exit 1
+            fi
+            echo "Hashing succeeded (${#HASH} chars)."
+          else
+            echo "Neither ADMIN_PASSWORD_BCRYPT nor ADMIN_PASSWORD_PLAIN is set - the admin drop-in will not set a password."
+          fi
+          # The hash is shipped to the server base64-encoded, NOT raw. A bcrypt
+          # hash looks like $2a$12$... and appleboy/ssh-action injects env vars
+          # into the remote script as `export NAME=VALUE` without quoting, so a
+          # raw hash would be mangled by the remote shell's parameter expansion
+          # ($2a -> positional parameter, etc). Base64 output is [A-Za-z0-9+/=]
+          # only, which survives that injection intact.
+          if [ -n "$HASH" ]; then
+            echo "::add-mask::$HASH"
+            B64="$(printf '%s' "$HASH" | base64 -w0)"
+            echo "::add-mask::$B64"
+            echo "ADMIN_PASSWORD_BCRYPT_EXPECTED=1" >> "$GITHUB_ENV"
+            echo "ADMIN_PASSWORD_BCRYPT_B64=$B64" >> "$GITHUB_ENV"
+          else
+            echo "ADMIN_PASSWORD_BCRYPT_EXPECTED=0" >> "$GITHUB_ENV"
+            echo "ADMIN_PASSWORD_BCRYPT_B64=" >> "$GITHUB_ENV"
+          fi
+
       - name: Upload bundle to server (SCP)
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -122,10 +210,15 @@ jobs:
 
       - name: Deploy on server (SSH)
         uses: appleboy/ssh-action@v1.2.2
+        env:
+          # Produced by the "Resolve admin password hash" step above.
+          ADMIN_PASSWORD_BCRYPT_B64: ${{ env.ADMIN_PASSWORD_BCRYPT_B64 }}
+          ADMIN_PASSWORD_BCRYPT_EXPECTED: ${{ env.ADMIN_PASSWORD_BCRYPT_EXPECTED }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: ADMIN_PASSWORD_BCRYPT_B64,ADMIN_PASSWORD_BCRYPT_EXPECTED
           script: |
             set -eux
             # ANSI colors for nicer logs over SSH/GitHub Actions
@@ -200,16 +293,26 @@ jobs:
             ADMIN_DROPIN_DIR="/etc/systemd/system/chillhub-admin.service.d"
             JWT_SECRET="${{ secrets.JWT_SECRET }}"
             ADMIN_USER="${{ secrets.ADMIN_USER }}"
-            ADMIN_PASS_BCRYPT="${{ secrets.ADMIN_PASSWORD_BCRYPT }}"
-            ADMIN_PASS_PLAIN="${{ secrets.ADMIN_PASSWORD_PLAIN }}"
             COOKIE_DOMAIN="${{ secrets.COOKIE_DOMAIN }}"
             COOKIE_SECURE="${{ secrets.COOKIE_SECURE }}"
-            if [ -n "${ADMIN_PASS_PLAIN}" ] && [ -z "${ADMIN_PASS_BCRYPT}" ]; then
-              TMPGO=$(mktemp -t bcrypt-XXXXXX.go)
-              printf '%s\n' 'package main' 'import ("fmt" "golang.org/x/crypto/bcrypt" "os")' 'func main(){ p:=os.Getenv("PW"); if p=="" {fmt.Println(""); return}; h,_:=bcrypt.GenerateFromPassword([]byte(p),12); fmt.Print(string(h))}' > "$TMPGO"
-              ADMIN_PASS_BCRYPT=$(PW="$ADMIN_PASS_PLAIN" go run "$TMPGO" 2>/dev/null || true)
-              rm -f "$TMPGO" || true
+
+            # The bcrypt hash is computed on the GitHub runner (see the
+            # "Resolve admin password hash (bcrypt on runner)" step) and arrives
+            # here base64-encoded. This host no longer needs a Go toolchain and
+            # no longer compiles or runs generated code, and the PLAINTEXT admin
+            # password is never sent here at all.
+            set +x  # never let xtrace echo the hash
+            ADMIN_PASS_BCRYPT=""
+            if [ -n "${ADMIN_PASSWORD_BCRYPT_B64:-}" ]; then
+              ADMIN_PASS_BCRYPT="$(printf '%s' "$ADMIN_PASSWORD_BCRYPT_B64" | base64 -d)"
             fi
+            if [ "${ADMIN_PASSWORD_BCRYPT_EXPECTED:-0}" = "1" ] && [ -z "$ADMIN_PASS_BCRYPT" ]; then
+              # Fail loudly instead of quietly rewriting override.conf without a
+              # password line, which would lock the operator out of the panel.
+              err "[deploy] runner produced an admin password hash but it did not survive the transfer"
+              exit 1
+            fi
+            set -x
             if [ -n "${JWT_SECRET}${ADMIN_USER}${ADMIN_PASS_BCRYPT}${COOKIE_DOMAIN}${COOKIE_SECURE}" ]; then
               sudo mkdir -p "$ADMIN_DROPIN_DIR"
               TMPD=$(mktemp)
@@ -302,6 +405,88 @@ jobs:
             info "[manifest] total mismatches: $MISM_TOTAL"; echo
             echo "::endgroup::"
             [ "${FAIL_ON_MISMATCH}" = "true" ] && [ "$MISM_TOTAL" -ne 0 ] && { err "[deploy] mismatch found"; exit 1; }
+
+            echo "::group::Launcher manifest preserve-path audit"
+            # A11 — регрессия «бесконечный цикл самообновления».
+            #
+            # Если путь попадает ОДНОВРЕМЕННО в манифест лаунчера и под
+            # preserve-правила апдейтера (config.json, launcher.version), то
+            # апдейтер такой файл не перезаписывает — это пользовательское
+            # состояние, — а лаунчер сверяет его хеш с манифестом. Расхождение
+            # неустранимо, и обновление предлагается снова и снова.
+            #
+            # Проверка ПРЕДУПРЕЖДАЮЩАЯ, а не блокирующая: битые манифесты уже
+            # лежат на проде (как минимум 1.0.2, 1.0.3, 1.1.7), и блокировка
+            # остановила бы вообще все выкатки, включая ту, которая это чинит.
+            # Задача проверки — назвать конкретные файлы, которые надо
+            # перевыпустить. Сборочный предохранитель, который НЕ пускает новые
+            # такие манифесты в репозиторий, живёт отдельно, в CI
+            # (updater/tests/ManifestPreserveCheck).
+            LM_DIR="$LAUNCHER_DIR/manifests/launcher"
+            PRESERVE_OUT="$DEPLOY_DIR/preserve_audit.txt"
+            : > "$PRESERVE_OUT"
+            PRESERVE_BAD=0
+            PRESERVE_STATUS="skipped"
+            if [ ! -d "$LM_DIR" ]; then
+              warn "[preserve] $LM_DIR не найден — пропускаю проверку"
+            elif command -v python3 >/dev/null 2>&1; then
+              PRESERVE_STATUS="python3"
+              # ВАЖНО: строки python-скрипта ниже намеренно начинаются с той же
+              # базовой отступной позиции, что и остальной скрипт (12 пробелов).
+              # YAML срезает ровно этот общий отступ, поэтому python получает
+              # код с нулевой колонки. Если сдвинуть их к краю файла — сломается
+              # блочный скаляр YAML; если добавить лишние пробелы — упадёт сам
+              # python с IndentationError.
+              python3 -c '
+            import glob, json, os, sys
+            preserve = {"config.json", "launcher.version"}
+            root = sys.argv[1]
+            for p in sorted(glob.glob(os.path.join(root, "**", "*.json"), recursive=True)):
+                try:
+                    with open(p, encoding="utf-8") as fh:
+                        doc = json.load(fh)
+                except Exception as exc:
+                    print("PARSE-ERROR\t%s\t%s" % (p, exc))
+                    continue
+                if not isinstance(doc, dict):
+                    continue
+                files = doc.get("files") or []
+                paths = set()
+                for item in files:
+                    if isinstance(item, dict):
+                        raw = str(item.get("path", "")).replace("\\", "/")
+                        while raw.startswith("./"):
+                            raw = raw[2:]
+                        paths.add(raw)
+                hits = sorted(paths & preserve)
+                if hits:
+                    print("VIOLATION\t%s\t%s" % (p, ", ".join(hits)))
+            ' "$LM_DIR" > "$PRESERVE_OUT" 2>&1 || { warn "[preserve] python3-проверка завершилась с ошибкой"; PRESERVE_STATUS="python3-error"; }
+            else
+              # Запасной вариант без python3: манифесты — это JSON, поэтому
+              # ищем ровно значение ключа "path" (пробелы вокруг ':'
+              # необязательны, минифицированный JSON тоже ловится).
+              PRESERVE_STATUS="grep"
+              grep -rlE '"path"[[:space:]]*:[[:space:]]*"(\./)?(config\.json|launcher\.version)"' "$LM_DIR" --include='*.json' 2>/dev/null \
+                | sed -e 's#^#VIOLATION\t#' -e 's#$#\tconfig.json/launcher.version#' > "$PRESERVE_OUT" || true
+            fi
+            PRESERVE_BAD=$(grep -c '^VIOLATION' "$PRESERVE_OUT" 2>/dev/null || true)
+            PRESERVE_BAD=${PRESERVE_BAD:-0}
+            if [ "$PRESERVE_BAD" -eq 0 ]; then
+              ok "[preserve] чисто: ни один манифест лаунчера в $LM_DIR не содержит config.json / launcher.version (детектор: $PRESERVE_STATUS)"
+            else
+              warn "[preserve] ВНИМАНИЕ: $PRESERVE_BAD манифест(ов) лаунчера содержат preserve-пути и вызывают бесконечный цикл самообновления."
+              warn "[preserve] Эти манифесты надо ПЕРЕВЫПУСТИТЬ без указанных путей:"
+              while IFS=$'\t' read -r kind file hits; do
+                [ "$kind" = "VIOLATION" ] || continue
+                warn "[preserve]   $file  ->  $hits"
+              done < "$PRESERVE_OUT"
+              warn "[preserve] Деплой НЕ остановлен: проверка предупреждающая (см. комментарий в deploy.yml)."
+            fi
+            grep '^PARSE-ERROR' "$PRESERVE_OUT" 2>/dev/null | while IFS=$'\t' read -r _ file msg; do
+              warn "[preserve] не удалось разобрать JSON: $file ($msg)"
+            done
+            echo "::endgroup::"
 
             FAIL=0
             http_code() { curl -ks -o /dev/null -w "%{http_code}" "$1"; }
@@ -430,6 +615,7 @@ jobs:
               echo "<b>Site</b><div>${SITE_BASE}</div>"
               echo "<b>Systemd</b><div>api: $API_STATE; admin: $ADM_STATE</div>"
               echo "<b>Manifests</b><div>total mismatches: $MISM_TOTAL</div>"
+              echo "<b>Preserve audit</b><div class=\"$( [ \"${PRESERVE_BAD:-0}\" -eq 0 ] && echo ok || echo warn )\">launcher manifests with preserve paths: ${PRESERVE_BAD:-0}</div>"
               echo "<b>Nginx redirect</b><div>$( [ \"${REDIR_OK:-1}\" -eq 1 ] && echo OK || echo MISSING )</div>"
               echo "</div>"
               echo "<h2>Manifest summary</h2>"
@@ -441,6 +627,17 @@ jobs:
               echo "</tbody></table>"
               echo "<h2>Manifest FAIL/MISS</h2><table><thead><tr><th>Section</th><th>Path</th><th>Status</th><th>Expected</th><th>Got</th></tr></thead><tbody>"; cat "$REPORT_ROWS_MAN"; echo "</tbody></table>"
               echo "<h2>HTTP checks</h2><table><thead><tr><th>URL</th><th>Name</th><th>Code</th><th>Time</th><th>Status</th></tr></thead><tbody>"; cat "$REPORT_ROWS_HTTP"; echo "</tbody></table>"
+              echo "<h2>Launcher manifests vs preserve list</h2>"
+              if [ "${PRESERVE_BAD:-0}" -eq 0 ]; then
+                echo "<p class=\"ok\">Чисто: ни один манифест лаунчера не содержит <code>config.json</code> или <code>launcher.version</code>.</p>"
+              else
+                echo "<p class=\"warn\">Эти манифесты содержат preserve-пути и вызывают бесконечный цикл самообновления. Их надо перевыпустить (проверка предупреждающая, деплой не блокируется):</p>"
+                echo "<table><thead><tr><th>Манифест</th><th>Пути</th></tr></thead><tbody>"
+                grep '^VIOLATION' "$PRESERVE_OUT" 2>/dev/null | while IFS=$'\t' read -r _ file hits; do
+                  printf '<tr><td><code>%s</code></td><td><code>%s</code></td></tr>\n' "$file" "$hits"
+                done
+                echo "</tbody></table>"
+              fi
               echo "<h2>What to do</h2><ul><li>Manifest FAIL/MISS: повторно синхронизируйте соответствующую секцию и проверьте исходные хеши.</li><li>Service not active: проверьте journalctl, исправьте конфиг/секреты и перезапустите сервисы.</li><li>Nginx redirect missing: добавьте ‘error_page 401 =302 /admin/ui/login.html’, затем nginx -t && reload.</li><li>HTTP FAIL: откройте URL, проверьте роутинг/права/конфиги, логи nginx и сервисов.</li></ul>"
               echo "</body></html>"
             } > "$REPORT_HTML"; ln -sf "$REPORT_HTML" "$REPORT_DIR/report-latest.html"
