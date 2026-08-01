@@ -634,7 +634,7 @@
             <ProgressBar Grid.Column="1" Name="GamesVerifyIndicator" Width="100" Height="6" VerticalAlignment="Center"
                          IsIndeterminate="True" Visibility="Collapsed"
                          Style="{StaticResource Style.ProgressBar.Verify}" Margin="8,0,8,0"/>
-            <Button Grid.Column="2" Width="32" Height="32" ToolTip="Обновить список и статусы" Click="RefreshGames_Click" Margin="8,0,0,0">
+            <Button Grid.Column="2" Name="RefreshGamesBtn" Width="32" Height="32" ToolTip="Обновить список и статусы" Click="RefreshGames_Click" Margin="8,0,0,0">
               <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="14" VerticalAlignment="Center" HorizontalAlignment="Center"/>
             </Button>
           </Grid>

@@ -45,6 +45,7 @@ namespace ChillHub.Pages {
         private CancellationTokenSource? cts;
         private bool isBusy;
         private List<string> builds = new();
+        private GameState currentState = GameState.NotInstalled;
         private string localVersion = string.Empty;
         private double emaSpeedMBs;
 
@@ -170,6 +171,9 @@ namespace ChillHub.Pages {
 
         private void ApplyState(GameState state) {
             try {
+                // Запоминаем состояние: от него зависит, что означает нажатие кнопки действия
+                this.currentState = state;
+
                 // Синхронизируем модель, чтобы главная страница показала тот же статус после возврата
                 this.game.InstalledVersion = this.localVersion;
                 this.game.IsInstalled = state != GameState.NotInstalled;
@@ -216,7 +220,12 @@ namespace ChillHub.Pages {
             try {
                 var url = $"{this.BaseApi}/api/games/{gid}/builds";
                 var resp = await this.http.GetFromJsonAsync<BuildsResponse>(url).ConfigureAwait(true);
-                this.builds = resp?.Items ?? new List<string>();
+
+                // От новых к старым: сервер порядок не гарантирует, а выпадающий список
+                // и выбор «по умолчанию» опираются на него.
+                this.builds = (resp?.Items ?? new List<string>())
+                    .OrderByDescending(v => v, Comparer<string>.Create(VersionOrder.Compare))
+                    .ToList();
                 this.BuildsCombo.ItemsSource = this.builds;
 
                 // По умолчанию подставляем установленную версию, иначе последнюю
@@ -227,7 +236,7 @@ namespace ChillHub.Pages {
             }
             catch (Exception ex) {
                 // Без списка сборок страница остаётся рабочей, просто нельзя переключить версию
-                Core.Logging.Logger.Error(ex, $"GamePage.LoadBuildsAsync(gid={gid})");
+                Core.Logging.Logger.ErrorNoReport(ex, $"GamePage.LoadBuildsAsync(gid={gid})");
                 this.builds = new List<string>();
                 this.BuildsCombo.ItemsSource = this.builds;
                 this.VersionHintText.Text = "Не удалось получить список версий. Проверьте подключение к интернету.";
@@ -252,7 +261,7 @@ namespace ChillHub.Pages {
             }
             catch (Exception ex) {
                 // Changelog второстепенен: установка и обновление работают без него
-                Core.Logging.Logger.Error(ex, $"GamePage.LoadChangelogAsync(gid={gid})");
+                Core.Logging.Logger.ErrorNoReport(ex, $"GamePage.LoadChangelogAsync(gid={gid})");
                 this.ChangelogList.ItemsSource = Array.Empty<NewsItem>();
                 this.ChangelogEmptyText.Text = "Не удалось загрузить changelog. Проверьте подключение к интернету.";
                 this.ChangelogEmptyText.Visibility = Visibility.Visible;
@@ -303,7 +312,9 @@ namespace ChillHub.Pages {
 
             var version = (this.game.LatestVersion ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(version)) {
-                version = this.builds.Count > 0 ? (this.builds[0] ?? string.Empty).Trim() : string.Empty;
+                // Список сборок приходит с сервера неотсортированным: берём максимальную по смыслу,
+                // а не первую попавшуюся (иначе «установить последнюю» ставит самую старую).
+                version = VersionOrder.SelectLatest(this.builds) ?? string.Empty;
             }
 
             if (string.IsNullOrWhiteSpace(version)) {
@@ -311,7 +322,10 @@ namespace ChillHub.Pages {
                 return;
             }
 
-            _ = this.StartSyncAsync(version, isVersionSwitch: false);
+            // В состоянии «Установлена» кнопка означает «Проверить файлы»: это сверка с
+            // манифестом, после которой всё лишнее удаляется. Такое удаление требует
+            // подтверждения — как и при переключении версии.
+            _ = this.StartSyncAsync(version, isVersionSwitch: false, confirmDeletions: this.currentState == GameState.Installed);
         }
 
         private void BuildsCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) {
@@ -533,7 +547,7 @@ namespace ChillHub.Pages {
             }
         }
 
-        private async Task StartSyncAsync(string version, bool isVersionSwitch) {
+        private async Task StartSyncAsync(string version, bool isVersionSwitch, bool confirmDeletions = false) {
             var gid = this.game.GameId;
             if (string.IsNullOrWhiteSpace(gid)) {
                 this.StatusText.Text = "Не удалось определить игру";
@@ -548,7 +562,12 @@ namespace ChillHub.Pages {
             }
 
             var localRoot = this.LocalRoot;
+
+            // Предыдущая операция уже завершилась (isBusy проверен вызывающими):
+            // освобождаем её источник, а не оставляем на сборщик мусора.
+            var previousCts = this.cts;
             this.cts = new CancellationTokenSource();
+            previousCts?.Dispose();
             var token = this.cts.Token;
             this.SetBusy(true);
             this.emaSpeedMBs = 0.0;
@@ -578,6 +597,23 @@ namespace ChillHub.Pages {
                 // на всё время обхода — уводим в пул потоков (как в IntegrityChecker).
                 var plan = await Task.Run(() => this.sync.PlanAsync(manifest, localRoot, contentBase, token), token).ConfigureAwait(true);
                 Core.Logging.Logger.Info($"GamePage plan gid={gid} downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count}");
+
+                // Проверка целостности удаляет всё, чего нет в манифесте: моды, скриншоты,
+                // сохранения, положенные в папку игры. Спрашиваем до того, как это произойдёт,
+                // и называем число файлов — как в диалоге переключения версии.
+                if (confirmDeletions && plan.ToDelete.Count > 0) {
+                    var answer = MessageBox.Show(
+                        $"В папке игры найдено файлов, которых нет в версии {version}: {plan.ToDelete.Count}.\n\n"
+                        + "Проверка удалит их: это могут быть моды, сохранения внутри папки игры и остатки прежних версий.\n\nПродолжить?",
+                        "Проверка файлов",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning,
+                        MessageBoxResult.No);
+                    if (answer != MessageBoxResult.Yes) {
+                        this.StatusText.Text = "Проверка отменена.";
+                        return;
+                    }
+                }
 
                 // Свободного места может не хватить — предупреждаем до начала закачки
                 var free = GameLocalState.GetAvailableFreeSpaceFor(gid);
@@ -610,17 +646,13 @@ namespace ChillHub.Pages {
                 // Манифест отклонён проверкой структуры: опасный путь, дубликат или
                 // запись без хешей. Файлы игры не тронуты — говорим об этом прямо,
                 // а не общей фразой «попробуйте ещё раз».
-                this.StatusText.Text = ManifestValidator.UserMessage;
-                this.StatusText.ToolTip = "Подробнее: " + ex.Message;
-                Core.Logging.Logger.Error(ex, $"GamePage.StartSyncAsync.ManifestValidation(gid={gid}, version={version})");
+                this.ShowUserError(ManifestValidator.UserMessage, ex, $"GamePage.StartSyncAsync.ManifestValidation(gid={gid}, version={version})");
             }
             catch (Exception ex) {
                 var message = ex is IOException
                     ? "Не удалось записать файлы игры. Проверьте свободное место и права доступа."
                     : "Не удалось завершить операцию. Попробуйте ещё раз.";
-                this.StatusText.Text = message;
-                this.StatusText.ToolTip = "Подробнее: " + ex.Message;
-                Core.Logging.Logger.Error(ex, $"GamePage.StartSyncAsync(gid={gid}, version={version})");
+                this.ShowUserError(message, ex, $"GamePage.StartSyncAsync(gid={gid}, version={version})");
             }
             finally {
                 this.SetBusy(false);
@@ -631,6 +663,36 @@ namespace ChillHub.Pages {
                 catch (Exception ex) {
                     Core.Logging.Logger.Error(ex, "GamePage.StartSyncAsync.RefreshState");
                 }
+            }
+        }
+
+        /// <summary>
+        /// Единая точка показа ошибки, как на главной странице: пользователю — суть,
+        /// технические подробности — в лог и в подсказку к строке состояния. Раньше
+        /// каждая ветка catch собирала текст по-своему.
+        /// </summary>
+        /// <param name="userMessage">Короткое сообщение для пользователя.</param>
+        /// <param name="ex">Исключение (уходит в лог).</param>
+        /// <param name="context">Место, где ошибка поймана.</param>
+        private void ShowUserError(string userMessage, Exception? ex = null, string? context = null) {
+            try {
+                if (ex != null) {
+                    Core.Logging.Logger.Error(ex, context ?? "GamePage");
+                }
+                else if (!string.IsNullOrWhiteSpace(context)) {
+                    Core.Logging.Logger.Error($"{context}: {userMessage}");
+                }
+            }
+            catch (Exception logEx) {
+                System.Diagnostics.Debug.WriteLine("GamePage.ShowUserError: " + logEx.Message);
+            }
+
+            try {
+                this.StatusText.Text = userMessage;
+                this.StatusText.ToolTip = ex == null ? null : "Подробнее: " + ex.Message;
+            }
+            catch (Exception uiEx) {
+                Core.Logging.Logger.Warn($"GamePage.ShowUserError: {uiEx.Message}");
             }
         }
 

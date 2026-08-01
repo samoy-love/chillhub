@@ -39,15 +39,23 @@ namespace ChillHub.Core.Home {
             this.EnsureTransform();
             var dur = duration ?? DefaultDuration;
 
-            // Отменяем предыдущую анимацию: новое сообщение перебивает старое
-            this.cts?.Cancel();
-            this.cts = new CancellationTokenSource();
-            var ct = this.cts.Token;
+            // Отменяем предыдущую анимацию: новое сообщение перебивает старое.
+            // Освобождает источник его собственный показ (в finally RunAsync) — иначе
+            // отменённая анимация обращалась бы к уже уничтоженному объекту.
+            var cts = new CancellationTokenSource();
+            var previous = Interlocked.Exchange(ref this.cts, cts);
+            try {
+                previous?.Cancel();
+            }
+            catch (ObjectDisposedException) {
+                // Предыдущий показ уже завершился и освободил свой источник
+            }
 
-            _ = this.RunAsync(message, dur, ct);
+            _ = this.RunAsync(message, dur, cts);
         }
 
-        private async Task RunAsync(string message, TimeSpan dur, CancellationToken ct) {
+        private async Task RunAsync(string message, TimeSpan dur, CancellationTokenSource cts) {
+            var ct = cts.Token;
             try {
                 // Если тост сейчас виден — быстро убираем его перед показом нового текста
                 if (this.host.Visibility == Visibility.Visible && this.host.Opacity > 0.1) {
@@ -75,6 +83,10 @@ namespace ChillHub.Core.Home {
                 // Уведомление второстепенно: сбой анимации не должен всплывать в UI-поток.
                 Logging.Logger.Warn($"ToastHost: показ уведомления прерван: {ex.Message}");
             }
+            finally {
+                Interlocked.CompareExchange(ref this.cts, null, cts);
+                cts.Dispose();
+            }
         }
 
         private void EnsureTransform() {
@@ -91,8 +103,12 @@ namespace ChillHub.Core.Home {
             this.initialized = true;
         }
 
-        private Task AnimateAsync(bool fadeIn, TimeSpan duration, CancellationToken ct) {
+        private async Task AnimateAsync(bool fadeIn, TimeSpan duration, CancellationToken ct) {
             var tcs = new TaskCompletionSource<bool>();
+
+            // Регистрацию на токене обязательно освобождаем: иначе делегат каждой анимации
+            // остаётся висеть на источнике до его отмены, а тостов за сессию сотни.
+            var registration = default(CancellationTokenRegistration);
             try {
                 if (this.host.RenderTransform is not TranslateTransform translate) {
                     translate = new TranslateTransform(0, 0);
@@ -145,7 +161,7 @@ namespace ChillHub.Core.Home {
                 translate.BeginAnimation(TranslateTransform.YProperty, animY);
 
                 if (ct.CanBeCanceled) {
-                    ct.Register(() => {
+                    registration = ct.Register(() => {
                         this.host.BeginAnimation(UIElement.OpacityProperty, null);
                         translate.BeginAnimation(TranslateTransform.YProperty, null);
                         tcs.TrySetCanceled();
@@ -163,7 +179,12 @@ namespace ChillHub.Core.Home {
                 tcs.TrySetException(ex);
             }
 
-            return tcs.Task;
+            try {
+                await tcs.Task.ConfigureAwait(true);
+            }
+            finally {
+                registration.Dispose();
+            }
         }
     }
 }

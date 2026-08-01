@@ -30,6 +30,9 @@ namespace ChillHub.Core.Sync {
         /// </summary>
         public const string UpdateMarkerFileName = ".updating";
 
+        /// <summary>Минимальный интервал между отчётами о прогрессе скачивания, мс.</summary>
+        private const int ProgressThrottleMs = 100;
+
         private readonly HttpClient http;
 
         public SimpleSyncService(HttpClient? http = null) {
@@ -76,16 +79,11 @@ namespace ChillHub.Core.Sync {
             var manifest = await this.http.GetFromJsonAsync<Manifest>(manifestUrl, ct)
                            ?? throw new InvalidDataException("manifest is null");
 
-            // Структура — раньше подписи. Опасный путь отвергается ВСЕГДА, в любом
-            // режиме совместимости: подпись отвечает на вопрос «наш ли это манифест»,
-            // а не «не пишет ли он файл в автозагрузку».
-            ManifestValidator.Validate(manifest, manifestUrl);
-
-            // Подпись проверяем ДО того, как что-либо качать и применять: манифест
-            // задаёт список файлов и их хеши, значит именно он определяет, какие
-            // исполняемые файлы окажутся на диске. Проверка здесь, в единственной
-            // точке загрузки манифеста, закрывает и синхронизацию игр, и
-            // самообновление лаунчера.
+            // Проверяем ДО того, как что-либо качать и применять: манифест задаёт список
+            // файлов и их хеши, то есть именно он определяет, какие исполняемые файлы
+            // окажутся на диске. Проверка здесь, в единственной точке загрузки манифеста,
+            // закрывает и синхронизацию игр, и самообновление лаунчера.
+            // Опасный путь отвергается ВСЕГДА, в любом режиме совместимости.
             ManifestValidator.Validate(manifest, manifestUrl);
             return manifest;
         }
@@ -307,140 +305,231 @@ namespace ChillHub.Core.Sync {
             // Скачивание недостающих/изменённых (многопоточно)
             progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = 0, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
             var degree = Math.Clamp(ConfigService.Current.DownloadThreads, 2, 16);
+
+            // Отчёт о прогрессе шёл на каждые 256 КБ в каждом потоке: при восьми потоках это
+            // сотни обращений к диспетчеру в секунду, и UI занимался только перерисовкой
+            // строки скорости. Глазу хватает десяти обновлений в секунду.
+            var lastReportTicks = 0L;
+            void ReportDownloadProgress() {
+                var now = Environment.TickCount64;
+                var last = Interlocked.Read(ref lastReportTicks);
+                if (now - last < ProgressThrottleMs) {
+                    return;
+                }
+
+                // Отчёт делает тот поток, который выиграл обмен: остальные просто пропускают такт
+                if (Interlocked.CompareExchange(ref lastReportTicks, now, last) != last) {
+                    return;
+                }
+
+                progress.Report(new SyncProgress {
+                    Stage = "Downloading",
+                    BytesDownloaded = Interlocked.Read(ref downloaded),
+                    TotalBytes = total,
+                    FilesDownloaded = Volatile.Read(ref filesDone),
+                    TotalFiles = totalFiles,
+                });
+            }
+
             using (var sem = new SemaphoreSlim(degree)) {
                 var tasks = new List<Task>();
-                foreach (var t in plan.Downloads) {
-                    await sem.WaitAsync(ct);
-                    tasks.Add(Task.Run(
-                        async () => {
-                            try {
-                                ct.ThrowIfCancellationRequested();
-                                var stagingFile = ManifestPath.Combine(stagingRoot, t.RelativePath);
-                                var stagingDir = Path.GetDirectoryName(stagingFile)!;
-                                Directory.CreateDirectory(stagingDir);
+                try {
+                    foreach (var t in plan.Downloads) {
+                        await sem.WaitAsync(ct).ConfigureAwait(false);
+                        tasks.Add(Task.Run(
+                            async () => {
+                                try {
+                                    ct.ThrowIfCancellationRequested();
+                                    var stagingFile = ManifestPath.Combine(stagingRoot, t.RelativePath);
+                                    var stagingDir = Path.GetDirectoryName(stagingFile)!;
+                                    Directory.CreateDirectory(stagingDir);
 
-                                // Скачивание в .part
-                                var partPath = stagingFile + ".part";
-                                {
-                                    long existing = 0;
-                                    if (File.Exists(partPath)) {
-                                        try {
-                                            existing = new FileInfo(partPath).Length;
-                                        }
-                                        catch {
-                                        }
-                                    }
-
-                                    var attempt = 0;
-                                    var maxAttempts = 3;
-                                    var buffer = new byte[256 * 1024];
-                                    while (true) {
-                                        ct.ThrowIfCancellationRequested();
-                                        try {
-                                            using var req = new HttpRequestMessage(HttpMethod.Get, t.Url);
-                                            if (existing > 0 && existing < t.Size) {
-                                                req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(existing, null);
-                                            }
-
-                                            using var resp = await this.http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
-                                            resp.EnsureSuccessStatusCode();
-
-                                            // Если сервер вернул 200 OK, несмотря на Range — перезаписываем файл заново
-                                            if (existing > 0 && resp.StatusCode == HttpStatusCode.OK) {
-                                                existing = 0;
-                                                try {
-                                                    File.Delete(partPath);
-                                                }
-                                                catch {
-                                                }
-                                            }
-
-                                            using var src = await resp.Content.ReadAsStreamAsync(ct);
-                                            using var dst = new FileStream(partPath, FileMode.Append, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true);
-                                            int read;
-                                            while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), ct)) > 0) {
-                                                await dst.WriteAsync(buffer.AsMemory(0, read), ct);
-                                                Interlocked.Add(ref downloaded, read);
-                                                progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
-                                            }
-
-                                            break; // success
-                                        }
-                                        catch (Exception ex) {
-                                            attempt++;
-                                            if (attempt >= maxAttempts) {
-                                                throw new IOException($"Ошибка загрузки {t.RelativePath}: {ex.Message}", ex);
-                                            }
-
-                                            var delayMs = (int)Math.Min(5000, 500 * Math.Pow(2, attempt - 1));
-                                            await Task.Delay(delayMs, ct);
-
-                                            // обновить existing на случай частичного дозаписи
+                                    // Скачивание в .part
+                                    var partPath = stagingFile + ".part";
+                                    {
+                                        long existing = 0;
+                                        if (File.Exists(partPath)) {
                                             try {
                                                 existing = new FileInfo(partPath).Length;
                                             }
                                             catch {
                                             }
                                         }
+
+                                        var attempt = 0;
+                                        var maxAttempts = 3;
+                                        var buffer = new byte[256 * 1024];
+                                        while (true) {
+                                            ct.ThrowIfCancellationRequested();
+                                            try {
+                                                using var req = new HttpRequestMessage(HttpMethod.Get, t.Url);
+                                                if (existing > 0 && existing < t.Size) {
+                                                    req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(existing, null);
+                                                }
+
+                                                using var resp = await this.http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                                                resp.EnsureSuccessStatusCode();
+
+                                                // Если сервер вернул 200 OK, несмотря на Range — перезаписываем файл заново
+                                                if (existing > 0 && resp.StatusCode == HttpStatusCode.OK) {
+                                                    existing = 0;
+                                                    try {
+                                                        File.Delete(partPath);
+                                                    }
+                                                    catch {
+                                                    }
+                                                }
+
+                                                using var src = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+                                                using var dst = new FileStream(partPath, FileMode.Append, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true);
+                                                int read;
+                                                while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false)) > 0) {
+                                                    await dst.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+                                                    Interlocked.Add(ref downloaded, read);
+                                                    ReportDownloadProgress();
+                                                }
+
+                                                // Проверка хешей — ВНУТРИ цикла ретраев. Раньше она стояла
+                                                // за ним, и «протухший» .part (докачанный поверх обрывка от
+                                                // другой версии) валил всё обновление целиком, хотя лечится
+                                                // одной перезакачкой с нуля.
+                                                VerifyDownloadedFile(partPath, t);
+
+                                                break; // success
+                                            }
+                                            catch (Exception ex) {
+                                                attempt++;
+                                                if (attempt >= maxAttempts) {
+                                                    throw ex is InvalidDataException
+                                                        ? new InvalidDataException($"Файл {t.RelativePath} не прошёл проверку хеша после {maxAttempts} попыток", ex)
+                                                        : new IOException($"Ошибка загрузки {t.RelativePath}: {ex.Message}", ex);
+                                                }
+
+                                                if (ex is InvalidDataException) {
+                                                    // Докачивать битый файл бессмысленно: начинаем с нуля
+                                                    SafeDeleteFile(partPath);
+                                                    existing = 0;
+                                                    ChillHub.Core.Logging.Logger.Warn($"Скачанный файл '{t.RelativePath}' не прошёл проверку хеша, качаем заново (попытка {attempt + 1} из {maxAttempts})");
+                                                }
+
+                                                var delayMs = (int)Math.Min(5000, 500 * Math.Pow(2, attempt - 1));
+                                                await Task.Delay(delayMs, ct).ConfigureAwait(false);
+
+                                                // обновить existing на случай частичного дозаписи
+                                                try {
+                                                    existing = new FileInfo(partPath).Length;
+                                                }
+                                                catch {
+                                                }
+                                            }
+                                        }
                                     }
+
+                                    // Переименовать .part -> готовый stagingFile
+                                    if (File.Exists(stagingFile)) {
+                                        File.Delete(stagingFile);
+                                    }
+
+                                    File.Move(partPath, stagingFile);
                                 }
-
-                                // Верификация хешей (SHA-256 и Blake3), если доступны — за один проход
-                                if (!string.IsNullOrWhiteSpace(t.Sha256) || !string.IsNullOrWhiteSpace(t.Blake3)) {
-                                    using var f = new FileStream(partPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, useAsync: true);
-                                    using var sha = SHA256.Create();
-                                    var b3 = Blake3.Hasher.New();
-                                    var buf = new byte[256 * 1024];
-                                    int r;
-
-                                    // NOTE: Use synchronous reads to avoid awaiting while a ref-struct (Hasher) is alive (C# 12 limitation)
-                                    while ((r = f.Read(buf, 0, buf.Length)) > 0) {
-                                        sha.TransformBlock(buf, 0, r, null, 0);
-                                        b3.Update(new ReadOnlySpan<byte>(buf, 0, r));
-                                    }
-
-                                    sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
-                                    var shaHex = Convert.ToHexString(sha.Hash!).ToLowerInvariant();
-                                    var b3out = new byte[32];
-                                    b3.Finalize(b3out);
-                                    var b3Hex = Convert.ToHexString(b3out).ToLowerInvariant();
-
-                                    if (!string.IsNullOrWhiteSpace(t.Sha256) && !string.Equals(shaHex, t.Sha256, StringComparison.OrdinalIgnoreCase)) {
-                                        File.Delete(partPath);
-                                        throw new InvalidDataException($"Хеш SHA-256 не совпадает: {t.RelativePath}");
-                                    }
-
-                                    if (!string.IsNullOrWhiteSpace(t.Blake3) && !string.Equals(b3Hex, t.Blake3, StringComparison.OrdinalIgnoreCase)) {
-                                        File.Delete(partPath);
-                                        throw new InvalidDataException($"Хеш Blake3 не совпадает: {t.RelativePath}");
-                                    }
+                                finally {
+                                    Interlocked.Increment(ref filesDone);
+                                    ReportDownloadProgress();
+                                    sem.Release();
                                 }
+                            }, ct));
+                    }
 
-                                // Переименовать .part -> готовый stagingFile
-                                if (File.Exists(stagingFile)) {
-                                    File.Delete(stagingFile);
-                                }
-
-                                File.Move(partPath, stagingFile);
-                            }
-                            finally {
-                                Interlocked.Increment(ref filesDone);
-                                progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
-                                sem.Release();
-                            }
-                        }, ct));
+                    await Task.WhenAll(tasks).ConfigureAwait(false);
                 }
+                catch {
+                    // Из using нельзя выходить, пока живы задачи: каждая делает sem.Release()
+                    // в finally, а семафор к тому моменту был бы уже уничтожен. Отмена
+                    // прилетала прямо из sem.WaitAsync(ct), Task.WhenAll пропускался — и
+                    // после «Отменено» скачивание продолжалось в фоне, роняя ObjectDisposedException.
+                    try {
+                        await Task.WhenAll(tasks).ConfigureAwait(false);
+                    }
+                    catch (Exception drainEx) {
+                        // Причина остановки уже известна из внешнего исключения
+                        ChillHub.Core.Logging.Logger.Info($"Загрузка остановлена: {drainEx.Message}");
+                    }
 
-                await Task.WhenAll(tasks);
+                    throw;
+                }
             }
+
+            // Итоговые цифры скачивания — уже без троттлинга, иначе счётчик файлов
+            // может замереть на предпоследнем значении
+            progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
 
             // Верификация (хеши пропустим на моках)
             progress.Report(new SyncProgress { Stage = "Verifying", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
 
             // Активация: перенести staging файлы в основной корень.
-            // Файлы переносятся по одному, поэтому до начала ставим маркер незавершённого обновления:
-            // если процесс прервут посередине, игра останется наполовину обновлённой и запускать её нельзя.
+            // Фаза целиком синхронная и тяжёлая (File.Move по каждому файлу, SafeDeleteFile
+            // с ожиданиями и GC.Collect, обход дерева каталогов). Вызывающие стартуют
+            // ExecuteAsync с UI-потока, поэтому уводим её в пул: иначе окно замирает
+            // на десятки секунд и «Отмена» физически не нажимается.
             progress.Report(new SyncProgress { Stage = "Activating", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+            await Task.Run(() => ApplyPlan(plan, stagingRoot, ct), ct).ConfigureAwait(false);
+
+            // Финальный сигнал о завершении
+            progress.Report(new SyncProgress { Stage = "Completed", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+        }
+
+        /// <summary>
+        /// Сверяет скачанный .part с хешами из манифеста (SHA-256 и Blake3 за один проход).
+        /// Файл не удаляет: решение о повторной попытке принимает цикл ретраев.
+        /// </summary>
+        /// <param name="partPath">Путь к скачанному файлу.</param>
+        /// <param name="t">Задание из плана с ожидаемыми хешами.</param>
+        /// <exception cref="InvalidDataException">Содержимое не совпало с манифестом.</exception>
+        private static void VerifyDownloadedFile(string partPath, FileTask t) {
+            if (string.IsNullOrWhiteSpace(t.Sha256) && string.IsNullOrWhiteSpace(t.Blake3)) {
+                return;
+            }
+
+            string shaHex;
+            string b3Hex;
+            using (var f = new FileStream(partPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, useAsync: false)) {
+                using var sha = SHA256.Create();
+                var b3 = Blake3.Hasher.New();
+                var buf = new byte[256 * 1024];
+                int r;
+
+                // NOTE: Use synchronous reads to avoid awaiting while a ref-struct (Hasher) is alive (C# 12 limitation)
+                while ((r = f.Read(buf, 0, buf.Length)) > 0) {
+                    sha.TransformBlock(buf, 0, r, null, 0);
+                    b3.Update(new ReadOnlySpan<byte>(buf, 0, r));
+                }
+
+                sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+                shaHex = Convert.ToHexString(sha.Hash!).ToLowerInvariant();
+                var b3out = new byte[32];
+                b3.Finalize(b3out);
+                b3Hex = Convert.ToHexString(b3out).ToLowerInvariant();
+            }
+
+            // Файл закрыт: иначе повторная попытка не смогла бы его удалить
+            if (!string.IsNullOrWhiteSpace(t.Sha256) && !string.Equals(shaHex, t.Sha256, StringComparison.OrdinalIgnoreCase)) {
+                throw new InvalidDataException($"Хеш SHA-256 не совпадает: {t.RelativePath}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(t.Blake3) && !string.Equals(b3Hex, t.Blake3, StringComparison.OrdinalIgnoreCase)) {
+                throw new InvalidDataException($"Хеш Blake3 не совпадает: {t.RelativePath}");
+            }
+        }
+
+        /// <summary>
+        /// Фаза активации: перенос скачанного из staging в корень игры, удаление лишних
+        /// файлов, очистка пустых каталогов и снятие маркера. Синхронная и блокирующая —
+        /// вызывать только из пула потоков.
+        /// </summary>
+        /// <param name="plan">План различий.</param>
+        /// <param name="stagingRoot">Каталог со скачанными файлами.</param>
+        /// <param name="ct">Токен отмены.</param>
+        private static void ApplyPlan(DiffPlan plan, string stagingRoot, CancellationToken ct) {
             WriteUpdateMarker(plan.LocalRoot, plan.Version);
             foreach (var t in plan.Downloads) {
                 ct.ThrowIfCancellationRequested();
@@ -518,6 +607,7 @@ namespace ChillHub.Core.Sync {
             }
 
             // Удаление лишних файлов (с устойчивостью к блокировкам сторонними процессами)
+            var deletedRel = new List<string>();
             foreach (var rel in plan.ToDelete) {
                 // Список сформирован обходом самой папки игры, но удаление — необратимо,
                 // поэтому проверяем и его: подмена DiffPlan не должна стирать чужие файлы.
@@ -525,15 +615,20 @@ namespace ChillHub.Core.Sync {
                 try {
                     if (File.Exists(path)) {
                         SafeDeleteFile(path);
+                        if (!File.Exists(path)) {
+                            deletedRel.Add(rel);
+                        }
                     }
                 }
                 catch {
                 }
             }
 
-            // Очистка пустых папок, которых нет в манифесте
+            // Убираем каталоги, опустевшие ИМЕННО из-за нашего удаления. Раньше здесь шёл
+            // обход всего дерева игры, и под нож попадали пустые папки, созданные самой
+            // игрой (Saves, Config, логи) — игра теряла их при каждом обновлении.
             var keep = new HashSet<string>(plan.EmptyDirsToCreate.Select(s => s.Replace('/', Path.DirectorySeparatorChar).TrimEnd(Path.DirectorySeparatorChar)), StringComparer.OrdinalIgnoreCase);
-            CleanupEmptyDirs(plan.LocalRoot, keep);
+            CleanupDirsEmptiedByUpdate(plan.LocalRoot, deletedRel, keep);
 
             // Создаём пустые директории из манифеста (гарантированно после очистки)
             foreach (var dirRel in plan.EmptyDirsToCreate) {
@@ -553,9 +648,6 @@ namespace ChillHub.Core.Sync {
 
             // Обновление доведено до конца — снимаем маркер незавершённого обновления
             ClearUpdateMarker(plan.LocalRoot);
-
-            // Финальный сигнал о завершении
-            progress.Report(new SyncProgress { Stage = "Completed", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
         }
 
         /// <summary>
@@ -652,29 +744,66 @@ namespace ChillHub.Core.Sync {
             return r.Equals("freetp", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static void CleanupEmptyDirs(string root, HashSet<string> keep) {
+        /// <summary>
+        /// Удаляет каталоги, опустевшие из-за удаления перечисленных файлов, поднимаясь
+        /// от каждого такого файла к корню игры. Каталоги, которых мы не касались (в том
+        /// числе пустые папки, созданные самой игрой), не трогаем.
+        /// </summary>
+        /// <param name="root">Корень игры.</param>
+        /// <param name="deletedRel">Относительные пути файлов, которые мы удалили.</param>
+        /// <param name="keep">Каталоги из манифеста, которые должны остаться.</param>
+        private static void CleanupDirsEmptiedByUpdate(string root, IEnumerable<string> deletedRel, HashSet<string> keep) {
             if (!Directory.Exists(root)) {
                 return;
             }
 
-            // Проходим снизу вверх
-            foreach (var dir in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories)
-                                         .OrderByDescending(d => d.Length)) {
-                try {
-                    // Нормализуем относительный путь для сравнения с keep
-                    var rel = Path.GetRelativePath(root, dir).TrimEnd(Path.DirectorySeparatorChar);
-                    if (IsIgnoredRelDir(rel)) {
-                        // Не удаляем директорию FreeTP даже если она пуста.
-                        // Это нужно для пиратских сборок с FreeTP.Org, чтобы при запуске игр
-                        // не провоцировать открытие сайта. Папку FreeTP сохраняем.
-                        continue;
+            string rootFull;
+            try {
+                rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar);
+            }
+            catch (Exception ex) {
+                ChillHub.Core.Logging.Logger.Warn($"CleanupDirsEmptiedByUpdate('{root}'): {ex.Message}");
+                return;
+            }
+
+            foreach (var rel in deletedRel) {
+                var dir = Path.GetDirectoryName(ManifestPath.Combine(root, rel));
+                while (!string.IsNullOrEmpty(dir)) {
+                    string full;
+                    try {
+                        full = Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar);
+                    }
+                    catch {
+                        break;
                     }
 
-                    if (!Directory.EnumerateFileSystemEntries(dir).Any() && !keep.Contains(rel)) {
-                        Directory.Delete(dir, false);
+                    // До корня игры и не выше: снаружи хозяйничать нельзя
+                    if (string.Equals(full, rootFull, StringComparison.OrdinalIgnoreCase)
+                        || !full.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) {
+                        break;
                     }
-                }
-                catch {
+
+                    var relDir = Path.GetRelativePath(rootFull, full).TrimEnd(Path.DirectorySeparatorChar);
+
+                    // Папку FreeTP сохраняем даже пустой: см. IsIgnoredRelDir
+                    if (IsIgnoredRelDir(relDir) || keep.Contains(relDir)) {
+                        break;
+                    }
+
+                    try {
+                        if (Directory.Exists(full)) {
+                            if (Directory.EnumerateFileSystemEntries(full).Any()) {
+                                break; // в каталоге ещё что-то есть — выше подниматься незачем
+                            }
+
+                            Directory.Delete(full, false);
+                        }
+                    }
+                    catch {
+                        break;
+                    }
+
+                    dir = Path.GetDirectoryName(full);
                 }
             }
         }

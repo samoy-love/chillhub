@@ -161,7 +161,15 @@ namespace ChillHub.Core.Home {
                 var newPath = dlg.SelectedPath;
                 if (ProbeWritable(newPath) == WriteProbe.Ok) {
                     cfg.GamesPath = newPath;
-                    ConfigService.Save(cfg);
+                    if (!ConfigService.TrySave(cfg, out var saveError)) {
+                        // Иначе выбранная папка «примется» только до перезапуска
+                        MessageBox.Show(
+                            "Папка выбрана, но настройки сохранить не удалось: " + saveError,
+                            "Ошибка",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Error);
+                    }
+
                     return true;
                 }
 
