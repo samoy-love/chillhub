@@ -137,8 +137,9 @@ func main() {
 	// Serve manifests, content and news statically for local dev (no indirection)
 	r.PathPrefix("/manifests/").Handler(httpx.NoStore(http.StripPrefix("/manifests/", http.FileServer(http.Dir(filepath.Join(contentRoot, "manifests"))))))
 	r.PathPrefix("/content/").Handler(httpx.NoStore(http.StripPrefix("/content/", http.FileServer(http.Dir(filepath.Join(contentRoot, "content"))))))
+	// /news/ already covers /news/games/... — a second, later PathPrefix for it
+	// would never be reached, so there is none.
 	r.PathPrefix("/news/").Handler(httpx.NoStore(http.StripPrefix("/news/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news"))))))
-	r.PathPrefix("/news/games/").Handler(httpx.NoStore(http.StripPrefix("/news/games/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news", "games"))))))
 	r.PathPrefix("/assets/").Handler(httpx.NoStore(http.StripPrefix("/assets/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news", "assets"))))))
 
 	// Loopback by default: in production nginx proxies to 127.0.0.1. For a dev
