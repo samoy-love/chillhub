@@ -70,6 +70,14 @@ namespace ChillHub {
                 Logger.Warn("Cleanup legacy WebView2 folder failed: " + ex.Message);
             }
 
+            // Обезличенная статистика: «выстрелил и забыл», сеть не ждём.
+            try {
+                ChillHub.Core.Metrics.MetricsService.LauncherStart();
+            }
+            catch (Exception ex) {
+                Logger.Warn("Не удалось отправить метрику запуска: " + ex.Message);
+            }
+
             base.OnStartup(e);
         }
 

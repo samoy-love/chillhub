@@ -1319,9 +1319,42 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Одна точка отправки метрики установки/обновления: и успех, и отмена,
+        /// и сбой уходят одинаково, отличаясь только полем result. Сама отправка
+        /// не блокирует и не бросает, но обёртка стоит на случай, если однажды
+        /// начнёт.
+        /// </summary>
+        private void ReportSyncMetric(
+            string? gameId,
+            string? version,
+            bool isInstall,
+            string result,
+            System.Diagnostics.Stopwatch watch,
+            long bytes) {
+            try {
+                var ms = (long)watch.Elapsed.TotalMilliseconds;
+                if (isInstall) {
+                    Core.Metrics.MetricsService.GameInstall(gameId, version, result, ms, bytes);
+                }
+                else {
+                    Core.Metrics.MetricsService.GameUpdate(gameId, version, result, ms, bytes);
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"Метрика синхронизации не отправлена: {ex.Message}");
+            }
+        }
+
         private async Task StartUpdateAsync(CancellationToken token) {
             // Нужен и в catch: по нему запоминаем, к какой игре относится «Повторить»
             string? currentGid = null;
+
+            // Для метрики: нужна и в catch, чтобы отличить отмену от сбоя.
+            var metricsWatch = System.Diagnostics.Stopwatch.StartNew();
+            var metricsIsInstall = false;
+            string? metricsVersion = null;
+            long metricsBytes = 0;
             try {
                 if (this.GetSelectedGameId() is not string gid || string.IsNullOrWhiteSpace(gid)) {
                     this.StatusText.Text = "Не выбрана игра";
@@ -1345,6 +1378,8 @@ namespace ChillHub.Pages {
 
                 // Подстраховка на случай, если работы начались уже после отрисовки кнопки
                 var isInstall = game?.IsInstalled != true;
+                metricsIsInstall = isInstall;
+                metricsVersion = version;
                 var maintenance = Core.Maintenance.MaintenanceService.Current;
                 if (isInstall ? maintenance.BlocksInstall : maintenance.BlocksUpdate) {
                     this.StatusText.Text = maintenance.BuildBannerText();
@@ -1498,8 +1533,11 @@ namespace ChillHub.Pages {
                     }
                 });
 
+                metricsBytes = plan.TotalDownloadBytes;
                 await this.sync.ExecuteAsync(plan, prog, token);
                 Core.Logging.Logger.Info($"StartUpdateAsync execute done gid={gid} version={version}");
+
+                this.ReportSyncMetric(gid, metricsVersion, metricsIsInstall, "ok", metricsWatch, metricsBytes);
 
                 this.StatusText.Text = "Готово";
                 this.SpeedEtaText.Text = string.Empty;
@@ -1582,6 +1620,7 @@ namespace ChillHub.Pages {
                 this.SpeedEtaText.Text = string.Empty;
                 this.UpdateProgress.IsIndeterminate = false;
                 this.UpdateProgress.Value = 0;
+                this.ReportSyncMetric(currentGid, metricsVersion, metricsIsInstall, "cancel", metricsWatch, metricsBytes);
             }
             catch (ManifestSignatureException ex) {
                 // Подпись манифеста не сошлась — это не сетевой сбой, а признак подмены раздачи.
@@ -1589,6 +1628,8 @@ namespace ChillHub.Pages {
                 this.hasUpdateError = true;
                 this.updateErrorGameId = currentGid;
                 this.ShowUserError(ManifestSignature.UserMessage, ex, "HomePage.StartUpdateAsync.ManifestSignature");
+                this.ReportSyncMetric(currentGid, metricsVersion, metricsIsInstall, "fail", metricsWatch, metricsBytes);
+                Core.Metrics.MetricsService.Error("manifest_signature", currentGid);
             }
             catch (Exception ex) {
                 this.hasUpdateError = true;
@@ -1597,6 +1638,11 @@ namespace ChillHub.Pages {
                     ? "Не удалось записать файлы игры. Проверьте свободное место и права доступа."
                     : "Не удалось завершить обновление. Попробуйте ещё раз.";
                 this.ShowUserError(userMessage, ex, "HomePage.StartUpdateAsync");
+                this.ReportSyncMetric(currentGid, metricsVersion, metricsIsInstall, "fail", metricsWatch, metricsBytes);
+
+                // Код классифицирует сбой по типу исключения. Текст исключения НЕ отправляем:
+                // в нём регулярно встречаются пути с именем пользователя.
+                Core.Metrics.MetricsService.Error(ex is IOException ? "sync_io" : "sync_failed", currentGid);
             }
             finally {
                 this.isUpdating = false;
@@ -1876,6 +1922,8 @@ namespace ChillHub.Pages {
                     UseShellExecute = true,
                 };
                 Process.Start(psi);
+
+                ChillHub.Core.Metrics.MetricsService.GameLaunch(game.GameId, game.LatestVersion);
 
                 // Discord Rich Presence: полностью опционален и не должен влиять на запуск.
                 // Пока Application ID не задан владельцем — вызов сразу выходит.

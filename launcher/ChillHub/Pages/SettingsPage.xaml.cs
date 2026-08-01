@@ -87,6 +87,10 @@ namespace ChillHub.Pages {
                 this.ThreadsValueText.Text = cfg.DownloadThreads.ToString();
             }
 
+            if (this.UsageMetricsCheck != null) {
+                this.UsageMetricsCheck.IsChecked = cfg.SendUsageMetrics;
+            }
+
             if (this.AutoErrorReportsCheck != null) {
                 this.AutoErrorReportsCheck.IsChecked = cfg.AutoErrorReports;
             }
@@ -417,6 +421,10 @@ namespace ChillHub.Pages {
                 cfg.DownloadThreads = (int)this.ThreadsSlider.Value;
                 if (this.AutoErrorReportsCheck != null) {
                     cfg.AutoErrorReports = this.AutoErrorReportsCheck.IsChecked == true;
+                }
+
+                if (this.UsageMetricsCheck != null) {
+                    cfg.SendUsageMetrics = this.UsageMetricsCheck.IsChecked == true;
                 }
 
                 if (this.DiscordRpcCheck != null) {

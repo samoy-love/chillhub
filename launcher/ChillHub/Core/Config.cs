@@ -25,6 +25,11 @@ namespace ChillHub.Core {
         // На ручную отправку обратной связи не влияет.
         public bool AutoErrorReports { get; set; } = true;
 
+        // Отправлять обезличенную статистику использования (запуски, установки, ошибки).
+        // Персональных данных не содержит: ни имени пользователя, ни имени машины, ни путей —
+        // см. Core/Metrics/MetricsService.cs. По умолчанию true, как и у отчётов об ошибках.
+        public bool SendUsageMetrics { get; set; } = true;
+
         // Показывать в Discord статус «сейчас играет …» (Rich Presence).
         // По умолчанию true. Фактически интеграция работает только если владелец лаунчера
         // подставил Application ID в Core/DiscordRichPresence.cs — см. DiscordRichPresence.IsConfigured.

@@ -135,7 +135,10 @@
           <TextBlock Text="Конфиденциальность" FontWeight="SemiBold"/>
           <StackPanel Grid.Row="1" Orientation="Vertical" Margin="0,8,0,0">
             <CheckBox Name="AutoErrorReportsCheck" Content="Отправлять автоматические отчёты об ошибках"/>
-            <TextBlock Text="Включает отправку необработанных исключений вместе с логами, конфигурацией и именем компьютера. Ручная отправка обратной связи работает всегда."
+            <TextBlock Text="Включает отправку необработанных исключений вместе с логами и конфигурацией. Пути сокращаются, имя пользователя и имя компьютера не передаются. Ручная отправка обратной связи работает всегда."
+                       Foreground="{DynamicResource Brush.TextSecondary}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+            <CheckBox Name="UsageMetricsCheck" Content="Отправлять обезличенную статистику использования" Margin="0,12,0,0"/>
+            <TextBlock Text="Запуски лаунчера, установки и обновления игр, коды ошибок. Без имени пользователя, имени компьютера и путей."
                        Foreground="{DynamicResource Brush.TextSecondary}" TextWrapping="Wrap" Margin="0,6,0,0"/>
           </StackPanel>
         </Grid>
