@@ -343,16 +343,40 @@ jobs:
 
             sudo mkdir -p "$SITE_DIR" "$LAUNCHER_DIR/admin_ui" "$OPT_DIR"
 
+            # И10: ПРОВАЛ rsync ОБЯЗАН РОНЯТЬ ДЕПЛОЙ.
+            #
+            # Было: `sudo rsync ... | sed ... || true`. Здесь ДВА независимых
+            # способа потерять ошибку:
+            #   1) в конвейере статус берётся от ПОСЛЕДНЕЙ команды, то есть от
+            #      sed, который успешен всегда — даже если rsync упал;
+            #   2) `|| true` глушит и остаток.
+            # Итог: невыложенная статика (нет места, отвалилась сеть, права)
+            # выглядела как успешный шаг, а сайт оставался на старой версии.
+            #
+            # Ниже статус берётся явно из PIPESTATUS[0] — это статус rsync, а
+            # не sed. `set -e` тут не спасёт: он не срабатывает на неуспех
+            # команды слева от конвейера.
+            rsync_or_die() {
+              _label="$1"; shift
+              sudo rsync "$@" | sed -e "s#^#[rsync:$_label] #"
+              _rc=${PIPESTATUS[0]}
+              if [ "$_rc" -ne 0 ]; then
+                err "[rsync:$_label] rsync завершился с кодом $_rc — деплой останавливаю"
+                exit 1
+              fi
+            }
+
             echo "::group::Rsync site"
-            sudo rsync -a --delete --itemize-changes --exclude 'downloads' "$DEPLOY_DIR/site/" "$SITE_DIR/" | sed -e 's#^#[rsync:site] #' || true
+            rsync_or_die site -a --delete --itemize-changes --exclude 'downloads' "$DEPLOY_DIR/site/" "$SITE_DIR/"
             echo "::endgroup::"
 
             echo "::group::Rsync admin_ui"
-            sudo rsync -a --delete --itemize-changes "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/" | sed -e 's#^#[rsync:admin] #' || true
+            rsync_or_die admin -a --delete --itemize-changes "$DEPLOY_DIR/launcher_admin_ui/" "$LAUNCHER_DIR/admin_ui/"
             echo "::endgroup::"
 
             # Ensure admin content root subdirs exist and are writable by service user
             sudo mkdir -p "$LAUNCHER_DIR/content" "$LAUNCHER_DIR/manifests" "$LAUNCHER_DIR/news" "$LAUNCHER_DIR/tmp"
+
             sudo chown -R www-data:www-data "$LAUNCHER_DIR"
 
             sudo install -d -m 0755 "$OPT_DIR"
