@@ -108,6 +108,36 @@ public sealed class PreserveMatcher
         return false;
     }
 
+    /// <summary>
+    /// True when the relative path is an artifact of the update machinery itself
+    /// (<see cref="UpdaterArtifactFiles"/> or anything under <see cref="UpdaterArtifactDir"/>).
+    /// Such paths must never be mirrored into — and must be scrubbed from — the installation directory.
+    /// </summary>
+    public static bool IsUpdaterArtifact(string? relativePath)
+    {
+        var norm = (relativePath ?? string.Empty).Replace('\\', '/').Trim('/');
+        if (norm.Length == 0)
+        {
+            return false;
+        }
+
+        if (norm.StartsWith(UpdaterArtifactDir + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var leaf = norm.Contains('/') ? norm[(norm.LastIndexOf('/') + 1)..] : norm;
+        foreach (var name in UpdaterArtifactFiles)
+        {
+            if (leaf.Equals(name, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool WildcardIsMatch(string text, string pattern)
     {
         var sb = new StringBuilder();

@@ -93,7 +93,15 @@ Section "Install"
   ; Adjust path if you need Debug or Publish output.
   ; If you publish self-contained, update the path accordingly.
   ; Package framework-dependent build output (requires .NET 8 Desktop Runtime)
-  File /r "..\launcher\ChillHub\bin\Release\net8.0-windows\*.*"
+  ;
+  ; A3/A9: из пакета исключаются
+  ;   config.json      — пользовательская настройка (живёт в %APPDATA%, апдейтер её не трогает);
+  ;   launcher.version — маркер версии, он пишется ниже явно (иначе разъедется с манифестом);
+  ;   *.pdb            — отладочные символы, в релизе не нужны;
+  ;   linux-* / osx-*  — нативные библиотеки из runtimes\ не под Windows (мёртвый вес).
+  ; Список исключений обязан совпадать с ChillHub.Update.PreserveMatcher.DefaultRules
+  ; и со staging-фильтром в scripts/build-installer.ps1 (New-LauncherPayload).
+  File /r /x "config.json" /x "launcher.version" /x "*.pdb" /x "linux-*" /x "osx-*" "..\launcher\ChillHub\bin\Release\net8.0-windows\*.*"
 
   ; Write uninstaller
   WriteUninstaller "${INSTALL_DIR}\Uninstall.exe"
