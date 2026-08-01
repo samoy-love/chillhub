@@ -371,6 +371,23 @@ log "Sync static only (landing, admin_ui). Do not touch server content dirs."
 # Admin UI can be fully replaced
 run "sudo rsync -a --delete \"$REPO_DIR/server/admin_ui/\"   \"$LAUNCHER_ROOT/admin_ui/\""
 
+# И9: ДИАГНОСТИЧЕСКИЙ ping.txt СОЗДАЁТСЯ ДО СНИМКА PRE, А НЕ ПОСЛЕ.
+#
+# Раньше он создавался ниже, между снимками PRE и POST, и тут же попадал под
+# guard, который ищет изменения в news/ и валит деплой. То есть ПЕРВЫЙ деплой
+# на чистый хост падал ВСЕГДА — уже после перезапуска сервисов, то есть в
+# состоянии «наполовину выкачено»: сервисы новые, а шаг помечен как провал.
+#
+# Теперь файл создаётся до снятия PRE, поэтому попадает в оба снимка одинаково
+# и guard его не видит как изменение. Сам файл нужен смоук-тесту
+# (/assets/ping.txt) как признак того, что раздача новостных ассетов жива.
+PING_PATH="$LAUNCHER_ROOT/news/assets/ping.txt"
+if [[ ! -f "$PING_PATH" ]]; then
+  log "Creating diagnostic $PING_PATH (first deploy on this host)"
+  run "sudo mkdir -p \"$(dirname "$PING_PATH")\""
+  echo "ok" | sudo tee "$PING_PATH" >/dev/null || true
+fi
+
 # Guard snapshot (PRE): capture sample hashes and counts for server-managed dirs to detect unintended changes
 TMP_PRE_DIR="/tmp/chillhub-pre"; TMP_POST_DIR="/tmp/chillhub-post"; run "sudo mkdir -p \"$TMP_PRE_DIR\" \"$TMP_POST_DIR\""
 sample_hash(){ local d="$1"; if [[ ! -d "$d" ]]; then echo "missing"; return; fi; local list; list=$(LC_ALL=C find "$d" -type f -printf '%P\n' | sort | awk 'NR<=50'); if [[ -z "$list" ]]; then echo "empty"; else while IFS= read -r f; do sha256sum "$d/$f" | awk '{print $1"  "$2}'; done <<< "$list" | sha256sum | awk '{print $1}'; fi; }
@@ -537,11 +554,8 @@ if [[ $FAIL_ON_MISMATCH -ne 0 && $MISM_TOTAL -ne 0 ]]; then
   err "Manifest mismatches detected (total sections with mism: $MISM_TOTAL)"; exit 1
 fi
 
-# Create news/assets/ping.txt for diagnostics if missing (does not overwrite user files)
-PING_PATH="/var/www/launcher/news/assets/ping.txt"
-if [[ ! -f "$PING_PATH" ]]; then
-  echo "ok" | sudo tee "$PING_PATH" >/dev/null || true
-fi
+# И9: ping.txt теперь создаётся ВЫШЕ, до снимка PRE. Здесь его создавать было
+# нельзя: он попадал между PRE и POST и сам же валил guard.
 
 section "HTTP: автотесты ($SITE_BASE_URL)"
 
@@ -557,7 +571,11 @@ for d in content manifests news; do
     printf "%s" "$cnt" | sudo tee "$TMP_POST_DIR/${d}.count" >/dev/null
     sample_hash "$dir" | sudo tee "$TMP_POST_DIR/${d}.hash" >/dev/null
     echo "[guard] recent (<=5min) changes in $dir:"
-    recent=$(sudo find "$dir" -type f -mmin -5 -printf '%TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null | head -n 50 || true)
+    # И9: диагностический ping.txt исключён. Его создаёт сам деплой (выше, до
+    # снимка PRE), поэтому на первом деплое он по определению «изменён за
+    # последние 5 минут» — и guard ловил бы собственный след деплоя, а не
+    # чужую запись. Настоящую защиту даёт сравнение PRE/POST ниже.
+    recent=$(sudo find "$dir" -type f -mmin -5 ! -path "$PING_PATH" -printf '%TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null | head -n 50 || true)
     if [[ -n "$recent" ]]; then echo "$recent"; echo "[guard][FAIL] Recent changes detected in $dir"; FAIL_GUARD=1; else echo "(none)"; fi
   else
     echo "[guard] $dir (missing)"
