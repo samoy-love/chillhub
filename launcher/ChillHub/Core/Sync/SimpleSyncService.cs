@@ -394,12 +394,27 @@ namespace ChillHub.Core.Sync {
                                                     ReportDownloadProgress();
                                                 }
 
+                                                // Проверка хешей — ВНУТРИ цикла ретраев. Раньше она стояла
+                                                // за ним, и «протухший» .part (докачанный поверх обрывка от
+                                                // другой версии) валил всё обновление целиком, хотя лечится
+                                                // одной перезакачкой с нуля.
+                                                VerifyDownloadedFile(partPath, t);
+
                                                 break; // success
                                             }
                                             catch (Exception ex) {
                                                 attempt++;
                                                 if (attempt >= maxAttempts) {
-                                                    throw new IOException($"Ошибка загрузки {t.RelativePath}: {ex.Message}", ex);
+                                                    throw ex is InvalidDataException
+                                                        ? new InvalidDataException($"Файл {t.RelativePath} не прошёл проверку хеша после {maxAttempts} попыток", ex)
+                                                        : new IOException($"Ошибка загрузки {t.RelativePath}: {ex.Message}", ex);
+                                                }
+
+                                                if (ex is InvalidDataException) {
+                                                    // Докачивать битый файл бессмысленно: начинаем с нуля
+                                                    SafeDeleteFile(partPath);
+                                                    existing = 0;
+                                                    ChillHub.Core.Logging.Logger.Warn($"Скачанный файл '{t.RelativePath}' не прошёл проверку хеша, качаем заново (попытка {attempt + 1} из {maxAttempts})");
                                                 }
 
                                                 var delayMs = (int)Math.Min(5000, 500 * Math.Pow(2, attempt - 1));
@@ -412,37 +427,6 @@ namespace ChillHub.Core.Sync {
                                                 catch {
                                                 }
                                             }
-                                        }
-                                    }
-
-                                    // Верификация хешей (SHA-256 и Blake3), если доступны — за один проход
-                                    if (!string.IsNullOrWhiteSpace(t.Sha256) || !string.IsNullOrWhiteSpace(t.Blake3)) {
-                                        using var f = new FileStream(partPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, useAsync: true);
-                                        using var sha = SHA256.Create();
-                                        var b3 = Blake3.Hasher.New();
-                                        var buf = new byte[256 * 1024];
-                                        int r;
-
-                                        // NOTE: Use synchronous reads to avoid awaiting while a ref-struct (Hasher) is alive (C# 12 limitation)
-                                        while ((r = f.Read(buf, 0, buf.Length)) > 0) {
-                                            sha.TransformBlock(buf, 0, r, null, 0);
-                                            b3.Update(new ReadOnlySpan<byte>(buf, 0, r));
-                                        }
-
-                                        sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
-                                        var shaHex = Convert.ToHexString(sha.Hash!).ToLowerInvariant();
-                                        var b3out = new byte[32];
-                                        b3.Finalize(b3out);
-                                        var b3Hex = Convert.ToHexString(b3out).ToLowerInvariant();
-
-                                        if (!string.IsNullOrWhiteSpace(t.Sha256) && !string.Equals(shaHex, t.Sha256, StringComparison.OrdinalIgnoreCase)) {
-                                            File.Delete(partPath);
-                                            throw new InvalidDataException($"Хеш SHA-256 не совпадает: {t.RelativePath}");
-                                        }
-
-                                        if (!string.IsNullOrWhiteSpace(t.Blake3) && !string.Equals(b3Hex, t.Blake3, StringComparison.OrdinalIgnoreCase)) {
-                                            File.Delete(partPath);
-                                            throw new InvalidDataException($"Хеш Blake3 не совпадает: {t.RelativePath}");
                                         }
                                     }
 
@@ -497,6 +481,49 @@ namespace ChillHub.Core.Sync {
 
             // Финальный сигнал о завершении
             progress.Report(new SyncProgress { Stage = "Completed", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+        }
+
+        /// <summary>
+        /// Сверяет скачанный .part с хешами из манифеста (SHA-256 и Blake3 за один проход).
+        /// Файл не удаляет: решение о повторной попытке принимает цикл ретраев.
+        /// </summary>
+        /// <param name="partPath">Путь к скачанному файлу.</param>
+        /// <param name="t">Задание из плана с ожидаемыми хешами.</param>
+        /// <exception cref="InvalidDataException">Содержимое не совпало с манифестом.</exception>
+        private static void VerifyDownloadedFile(string partPath, FileTask t) {
+            if (string.IsNullOrWhiteSpace(t.Sha256) && string.IsNullOrWhiteSpace(t.Blake3)) {
+                return;
+            }
+
+            string shaHex;
+            string b3Hex;
+            using (var f = new FileStream(partPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, useAsync: false)) {
+                using var sha = SHA256.Create();
+                var b3 = Blake3.Hasher.New();
+                var buf = new byte[256 * 1024];
+                int r;
+
+                // NOTE: Use synchronous reads to avoid awaiting while a ref-struct (Hasher) is alive (C# 12 limitation)
+                while ((r = f.Read(buf, 0, buf.Length)) > 0) {
+                    sha.TransformBlock(buf, 0, r, null, 0);
+                    b3.Update(new ReadOnlySpan<byte>(buf, 0, r));
+                }
+
+                sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+                shaHex = Convert.ToHexString(sha.Hash!).ToLowerInvariant();
+                var b3out = new byte[32];
+                b3.Finalize(b3out);
+                b3Hex = Convert.ToHexString(b3out).ToLowerInvariant();
+            }
+
+            // Файл закрыт: иначе повторная попытка не смогла бы его удалить
+            if (!string.IsNullOrWhiteSpace(t.Sha256) && !string.Equals(shaHex, t.Sha256, StringComparison.OrdinalIgnoreCase)) {
+                throw new InvalidDataException($"Хеш SHA-256 не совпадает: {t.RelativePath}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(t.Blake3) && !string.Equals(b3Hex, t.Blake3, StringComparison.OrdinalIgnoreCase)) {
+                throw new InvalidDataException($"Хеш Blake3 не совпадает: {t.RelativePath}");
+            }
         }
 
         /// <summary>
