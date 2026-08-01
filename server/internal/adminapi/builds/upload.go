@@ -394,7 +394,14 @@ func countTree(root string) (int, int64) {
 		if d.IsDir() {
 			return nil
 		}
-		info, _ := d.Info()
+		info, err := d.Info()
+		if err != nil {
+			// The file vanished between the directory read and the stat (an
+			// aborted upload being cleaned up, say). Ignoring the error and
+			// calling info.Size() on a nil FileInfo panicked the handler; these
+			// numbers only drive a progress bar, so skipping the entry is fine.
+			return nil
+		}
 		totalFiles++
 		totalBytes += info.Size()
 		return nil

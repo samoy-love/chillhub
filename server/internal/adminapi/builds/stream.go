@@ -96,7 +96,12 @@ func streamCompose(w io.Writer, fl adminutil.Flusher, filesRoot string) ([]manif
 		if rel == "." {
 			return nil
 		}
-		info, _ := d.Info()
+		// A missing FileInfo used to be ignored and info.Size() then panicked on
+		// nil. The manifest cannot be built without the size, so fail the walk.
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
 		f, err := os.Open(path)
 		if err != nil {
 			return err
@@ -152,7 +157,12 @@ func scanManifest(filesRoot string) ([]manifestFile, []string, error) {
 		if rel == "." {
 			return nil
 		}
-		info, _ := d.Info()
+		// See streamCompose: an ignored error here meant a nil FileInfo and a
+		// panic on info.Size().
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
 		f, err := os.Open(path)
 		if err != nil {
 			return err
