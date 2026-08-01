@@ -84,6 +84,21 @@ namespace ChillHub.Pages {
                 this.AutoErrorReportsCheck.IsChecked = cfg.AutoErrorReports;
             }
 
+            if (this.DiscordRpcCheck != null) {
+                this.DiscordRpcCheck.IsChecked = cfg.DiscordRichPresence;
+            }
+
+            // Честно предупреждаем: без Application ID переключатель ничего не включает.
+            // Иначе он создаёт иллюзию работающей интеграции, а статуса в Discord нет.
+            if (this.DiscordRpcHintText != null) {
+                var configured = ChillHub.Core.DiscordRichPresence.IsConfigured;
+                this.DiscordRpcHintText.Visibility = configured ? Visibility.Collapsed : Visibility.Visible;
+                this.DiscordRpcHintText.Text = configured
+                    ? string.Empty
+                    : "Интеграция пока не настроена владельцем лаунчера (не указан Application ID приложения Discord), "
+                      + "поэтому статус не появится даже при включённом переключателе. Настройка сохранится и заработает после обновления лаунчера.";
+            }
+
             if (this.VersionText != null) {
                 this.VersionText.Text = GetLauncherVersion();
             }
@@ -396,6 +411,21 @@ namespace ChillHub.Pages {
                 cfg.DownloadThreads = (int)this.ThreadsSlider.Value;
                 if (this.AutoErrorReportsCheck != null) {
                     cfg.AutoErrorReports = this.AutoErrorReportsCheck.IsChecked == true;
+                }
+
+                if (this.DiscordRpcCheck != null) {
+                    var wasEnabled = cfg.DiscordRichPresence;
+                    cfg.DiscordRichPresence = this.DiscordRpcCheck.IsChecked == true;
+
+                    // Выключили при запущенной игре — статус надо снять сразу, а не при выходе из лаунчера
+                    if (wasEnabled && !cfg.DiscordRichPresence) {
+                        try {
+                            ChillHub.Core.DiscordRichPresence.Shutdown();
+                        }
+                        catch (Exception ex) {
+                            ChillHub.Core.Logging.Logger.Warn($"SettingsPage: снять статус Discord не удалось: {ex.Message}");
+                        }
+                    }
                 }
 
                 ConfigService.Save(cfg); // также применяет тему

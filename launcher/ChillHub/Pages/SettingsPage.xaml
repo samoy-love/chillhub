@@ -141,6 +141,25 @@
         </Grid>
       </Border>
 
+      <!-- Integrations section -->
+      <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,0,0,14">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <TextBlock Text="Интеграции" FontWeight="SemiBold"/>
+          <StackPanel Grid.Row="1" Orientation="Vertical" Margin="0,8,0,0">
+            <CheckBox Name="DiscordRpcCheck" Content="Показывать в Discord, во что вы играете"/>
+            <TextBlock Text="Discord будет показывать название игры, версию сборки и время сессии в вашем статусе. Работает, только если Discord запущен на этом компьютере."
+                       Foreground="{DynamicResource Brush.TextSecondary}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+            <!-- Текст задаётся в коде: пока владелец не подставил Application ID, интеграция не активируется -->
+            <TextBlock Name="DiscordRpcHintText" Foreground="{DynamicResource Brush.TextSecondary}"
+                       TextWrapping="Wrap" Margin="0,6,0,0" Visibility="Collapsed"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+
       <!-- About / diagnostics section -->
       <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,0,0,6">
         <Grid>

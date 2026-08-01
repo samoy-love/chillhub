@@ -25,6 +25,11 @@ namespace ChillHub.Core {
         // На ручную отправку обратной связи не влияет.
         public bool AutoErrorReports { get; set; } = true;
 
+        // Показывать в Discord статус «сейчас играет …» (Rich Presence).
+        // По умолчанию true. Фактически интеграция работает только если владелец лаунчера
+        // подставил Application ID в Core/DiscordRichPresence.cs — см. DiscordRichPresence.IsConfigured.
+        public bool DiscordRichPresence { get; set; } = true;
+
         public static string DefaultGamesPath() {
             if (Directory.Exists(@"D:\")) {
                 return @"D:\Games\ChillHub";
