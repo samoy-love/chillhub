@@ -216,121 +216,12 @@ namespace ChillHub.Pages {
             } catch { }
         }
 
-        // Toast helper: show non-intrusive notification in bottom-right corner with smooth animations
-        private System.Threading.CancellationTokenSource? toastCts;
-        private bool toastInit;
+        // Всплывающие уведомления в правом нижнем углу: анимации и таймеры — в Core/Home/ToastHost.
+        private ToastHost? toastHost;
 
-        private void EnsureToastTransform() {
-            try {
-                if (!toastInit) {
-                    if (this.Toast.RenderTransform is not System.Windows.Media.TranslateTransform) {
-                        this.Toast.RenderTransform = new System.Windows.Media.TranslateTransform(0, 20);
-                    }
-                    this.Toast.Opacity = 0;
-                    this.Toast.Visibility = Visibility.Collapsed;
-                    toastInit = true;
-                }
-            } catch { }
-        }
+        private ToastHost Toaster => this.toastHost ??= new ToastHost(this.Toast, this.ToastText);
 
-        private void ShowToast(string message, TimeSpan? duration = null) {
-            EnsureToastTransform();
-            var dur = duration ?? TimeSpan.FromSeconds(3);
-
-            // cancel previous animation if any (overwrite support)
-            try { toastCts?.Cancel(); } catch { }
-            toastCts = new System.Threading.CancellationTokenSource();
-            var ct = toastCts.Token;
-
-            async void Run()
-            {
-                try {
-                    // If currently visible, animate out quickly before showing new text (overwrite behavior)
-                    if (this.Toast.Visibility == Visibility.Visible && this.Toast.Opacity > 0.1) {
-                        await AnimateToastAsync(fadeIn: false, TimeSpan.FromMilliseconds(140), ct);
-                    }
-
-                    this.ToastText.Text = message;
-                    this.Toast.Visibility = Visibility.Visible;
-                    // animate in
-                    await AnimateToastAsync(fadeIn: true, TimeSpan.FromMilliseconds(200), ct);
-
-                    // stay visible for duration
-                    try { await Task.Delay(dur, ct).ConfigureAwait(true); } catch { }
-                    if (ct.IsCancellationRequested) return;
-
-                    // animate out
-                    await AnimateToastAsync(fadeIn: false, TimeSpan.FromMilliseconds(220), ct);
-                    if (!ct.IsCancellationRequested) {
-                        this.Toast.Visibility = Visibility.Collapsed;
-                    }
-                } catch { }
-            }
-
-            Run();
-        }
-
-        private Task AnimateToastAsync(bool fadeIn, TimeSpan duration, System.Threading.CancellationToken ct)
-        {
-            var tcs = new TaskCompletionSource<bool>();
-            try {
-                var translate = this.Toast.RenderTransform as System.Windows.Media.TranslateTransform;
-                if (translate == null) {
-                    translate = new System.Windows.Media.TranslateTransform(0, 0);
-                    this.Toast.RenderTransform = translate;
-                }
-
-                // prepare animations
-                var animOpacity = new System.Windows.Media.Animation.DoubleAnimation {
-                    From = fadeIn ? (double?)0.0 : this.Toast.Opacity,
-                    To = fadeIn ? 1.0 : 0.0,
-                    Duration = new Duration(duration),
-                    EasingFunction = new System.Windows.Media.Animation.QuadraticEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut },
-                    FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop,
-                };
-                var fromY = translate.Y;
-                var animY = new System.Windows.Media.Animation.DoubleAnimation {
-                    From = fadeIn ? (double?)20.0 : fromY,
-                    To = fadeIn ? 0.0 : 10.0,
-                    Duration = new Duration(duration),
-                    EasingFunction = new System.Windows.Media.Animation.QuadraticEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut },
-                    FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop,
-                };
-
-                int completed = 0;
-                void checkDone() { if (++completed >= 2) { tcs.TrySetResult(true); } }
-
-                animOpacity.Completed += (s, e) => {
-                    try { this.Toast.Opacity = fadeIn ? 1.0 : 0.0; } catch { }
-                    if (ct.IsCancellationRequested) tcs.TrySetCanceled(ct); else checkDone();
-                };
-                animY.Completed += (s, e) => {
-                    try { translate.Y = fadeIn ? 0.0 : 10.0; } catch { }
-                    if (ct.IsCancellationRequested) tcs.TrySetCanceled(ct); else checkDone();
-                };
-
-                this.Toast.BeginAnimation(System.Windows.UIElement.OpacityProperty, animOpacity);
-                translate.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, animY);
-
-                if (ct.CanBeCanceled) {
-                    ct.Register(() => {
-                        try {
-                            this.Toast.BeginAnimation(System.Windows.UIElement.OpacityProperty, null);
-                            translate.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, null);
-                        } catch { }
-                        tcs.TrySetCanceled();
-                    });
-                }
-            } catch (Exception ex) {
-                // fallback: no animation
-                try {
-                    this.Toast.Opacity = fadeIn ? 1.0 : 0.0;
-                    if (!fadeIn) this.Toast.Visibility = Visibility.Collapsed;
-                } catch { }
-                tcs.TrySetException(ex);
-            }
-            return tcs.Task;
-        }
+        private void ShowToast(string message, TimeSpan? duration = null) => this.Toaster.Show(message, duration);
 
         // Удалено: ручной выбор сборки больше не поддерживается в UI
         private void NormalizeCoverUrls(IEnumerable<NewsItem> items) {
@@ -384,7 +275,7 @@ namespace ChillHub.Pages {
 
                 // Проверка доступа к папке для игр и предложение выбрать другую при отсутствии прав
                 try {
-                    this.EnsureGamesPathAccessibleOrPrompt();
+                    HomeDialogs.EnsureGamesPathAccessibleOrPrompt();
                 }
                 catch {
                 }
@@ -1034,101 +925,6 @@ namespace ChillHub.Pages {
                 }
             }
             catch {
-            }
-        }
-
-        // Проверяет, доступна ли для записи папка с играми. Если нет прав (например, D:\\Games\\ChillHub под ограниченной учётной записью),
-        // предлагает пользователю выбрать другую папку и сохраняет выбор в конфиг.
-        private bool EnsureGamesPathAccessibleOrPrompt() {
-            try {
-                var cfg = ConfigService.Current;
-                var path = cfg.GamesPath;
-                if (string.IsNullOrWhiteSpace(path)) {
-                    path = AppConfig.DefaultGamesPath();
-                }
-
-                // Попробуем создать папку и временный файл для проверки записи
-                try {
-                    Directory.CreateDirectory(path);
-                }
-                catch {
-                }
-                var testFile = System.IO.Path.Combine(path, ".write_test.tmp");
-                try {
-                    using (var fs = new FileStream(testFile, FileMode.Create, FileAccess.Write, FileShare.None)) {
-                        fs.WriteByte(0);
-                    }
-
-                    try {
-                        File.Delete(testFile);
-                    }
-                    catch {
-                    }
-                    return true; // доступ есть
-                }
-                catch (UnauthorizedAccessException) {
-                    // Нет прав: предложим выбрать другую папку
-                }
-                catch (IOException ioex) {
-                    // Некоторые IO ошибки тоже могут означать запрет записи (например, Access denied)
-                    var msg = ioex.Message ?? string.Empty;
-                    if (!msg.Contains("доступ", StringComparison.OrdinalIgnoreCase) &&
-                        !msg.Contains("access", StringComparison.OrdinalIgnoreCase)) {
-                        // Не похоже на отказ в доступе — не беспокоим пользователя
-                        return true;
-                    }
-
-                    // Иначе упадём в диалог выбора
-                }
-
-                var currentPath = path;
-                var question = $"Нет доступа к папке для игр:\n{currentPath}\n\nВыбрать другую папку сейчас?";
-                var res = MessageBox.Show(question, "Нет доступа", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-                if (res == MessageBoxResult.Yes) {
-                    try {
-                        using (var dlg = new System.Windows.Forms.FolderBrowserDialog()) {
-                            dlg.Description = "Выберите папку для игр";
-                            dlg.ShowNewFolderButton = true;
-                            dlg.SelectedPath = AppConfig.DefaultGamesPath();
-                            var dres = dlg.ShowDialog();
-                            if (dres == System.Windows.Forms.DialogResult.OK) {
-                                var newPath = dlg.SelectedPath;
-                                try {
-                                    Directory.CreateDirectory(newPath);
-                                }
-                                catch {
-                                }
-
-                                // Повторная быстрая проверка записи
-                                var test2 = System.IO.Path.Combine(newPath, ".write_test.tmp");
-                                try {
-                                    using (var fs = new FileStream(test2, FileMode.Create, FileAccess.Write, FileShare.None)) {
-                                        fs.WriteByte(0);
-                                    }
-
-                                    try {
-                                        File.Delete(test2);
-                                    }
-                                    catch {
-                                    }
-                                    cfg.GamesPath = newPath;
-                                    ConfigService.Save(cfg);
-                                    return true;
-                                }
-                                catch {
-                                    MessageBox.Show($"Нет доступа к выбранной папке: {newPath}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
-                                }
-                            }
-                        }
-                    }
-                    catch {
-                    }
-                }
-
-                return false;
-            }
-            catch {
-                return true;
             }
         }
 
@@ -2233,87 +2029,6 @@ namespace ChillHub.Pages {
             }
         }
 
-        // --- Delete confirmation dialog (themed) and helpers ---
-        private bool ShowDeleteConfirmationDialog(string title, string folderPath) {
-            try {
-                var wnd = new Window {
-                    Title = "Удаление локальных файлов",
-                    Owner = Application.Current?.MainWindow,
-                    WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                    ResizeMode = ResizeMode.NoResize,
-                    SizeToContent = SizeToContent.WidthAndHeight,
-                    ShowInTaskbar = false,
-                    Background = this.TryFindResource("Brush.Surface") as Brush ?? new SolidColorBrush(Color.FromRgb(18, 18, 18)),
-                    BorderBrush = this.TryFindResource("Brush.Border") as Brush,
-                    BorderThickness = new Thickness(1.5),
-                    Padding = new Thickness(16),
-                    Foreground = this.TryFindResource("Brush.Text") as Brush ?? Brushes.White,
-                };
-
-                try {
-                    // Apply themed title bar like main windows
-                    wnd.SourceInitialized += (_, __) => {
-                        try { Core.UI.AcrylicHelper.ApplyTitleBarTheme(wnd, true); } catch { }
-                    };
-                } catch { }
-
-                var grid = new Grid();
-                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-                var tb1 = new TextBlock {
-                    Text = $"Удалить локальные файлы игры \"{title}\"?",
-                    FontSize = 16,
-                    FontWeight = FontWeights.SemiBold,
-                    Foreground = this.TryFindResource("Brush.Title") as Brush ?? Brushes.White,
-                    Margin = new Thickness(0, 0, 0, 8),
-                };
-                Grid.SetRow(tb1, 0);
-
-                var normPath = NormalizeDisplayPath(folderPath);
-                var tb2 = new TextBlock {
-                    Text = $"Будет удалена папка: {normPath}",
-                    Foreground = this.TryFindResource("Brush.TextSecondary") as Brush ?? new SolidColorBrush(Color.FromRgb(156, 163, 175)),
-                    Margin = new Thickness(0, 0, 0, 16),
-                };
-                Grid.SetRow(tb2, 1);
-
-                var panel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-                var cancelBtn = new Button { Content = "Отмена", MinWidth = 100, Margin = new Thickness(0, 0, 8, 0) };
-                var deleteBtn = new Button { Content = "Удалить", MinWidth = 120 };
-                try { deleteBtn.Style = (Style)this.FindResource("Style.Button.Primary"); } catch { }
-                try { cancelBtn.Style = (Style)this.FindResource("Style.Button.GhostNeutral"); } catch { }
-                panel.Children.Add(cancelBtn);
-                panel.Children.Add(deleteBtn);
-                Grid.SetRow(panel, 2);
-
-                grid.Children.Add(tb1);
-                grid.Children.Add(tb2);
-                grid.Children.Add(panel);
-                wnd.Content = new Border {
-                    CornerRadius = new CornerRadius(8),
-                    Background = this.TryFindResource("Brush.Surface") as Brush ?? new SolidColorBrush(Color.FromRgb(18, 18, 18)),
-                    BorderBrush = this.TryFindResource("Brush.Border") as Brush,
-                    BorderThickness = new Thickness(1.5),
-                    Padding = new Thickness(12),
-                    Child = grid,
-                };
-
-                bool result = false;
-                cancelBtn.Click += (s, e) => { result = false; wnd.DialogResult = false; };
-                deleteBtn.Click += (s, e) => { result = true; wnd.DialogResult = true; };
-
-                wnd.ShowDialog();
-                return result;
-            }
-            catch {
-                // Fallback
-                var norm = NormalizeDisplayPath(folderPath);
-                var res = MessageBox.Show($"Удалить локальные файлы игры \"{title}\"?\nБудет удалена папка: {norm}", "Удаление локальных файлов", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-                return res == MessageBoxResult.Yes;
-            }
-        }
 
         // DTOs moved to ChillHub.Core.Models
 
@@ -2463,7 +2178,7 @@ namespace ChillHub.Pages {
 
                 // Подтверждение удаления (кастомный диалог в стиле темы)
                 var title = string.IsNullOrWhiteSpace(gi?.Title) ? gid : gi!.Title;
-                if (!this.ShowDeleteConfirmationDialog(title!, localRoot)) {
+                if (!HomeDialogs.ConfirmDeleteGameFiles(this, title!, localRoot)) {
                     return;
                 }
 
