@@ -1009,6 +1009,28 @@ jobs:
               echo "</body></html>"
             } > "$REPORT_HTML"; ln -sf "$REPORT_HTML" "$REPORT_DIR/report-latest.html"
 
+            # И30: РОТАЦИЯ ОТЧЁТОВ.
+            #
+            # Каждый деплой писал report-<timestamp>.html и не удалял ничего.
+            # Файлы копились в домашнем каталоге пользователя деплоя
+            # бессрочно; вдобавок шаг скачивания забирал ВСЕ *.html, поэтому
+            # артефакт каждого следующего прогона был больше предыдущего — и
+            # время выкатки росло вместе с ним.
+            #
+            # Держим последние 20: этого хватает, чтобы сравнить несколько
+            # последних выкаток, ради чего отчёты и существуют.
+            REPORT_KEEP=20
+            REPORT_TOTAL=$(find "$REPORT_DIR" -maxdepth 1 -type f -name 'report-20*.html' | wc -l)
+            if [ "$REPORT_TOTAL" -gt "$REPORT_KEEP" ]; then
+              REPORT_DROP=$((REPORT_TOTAL - REPORT_KEEP))
+              # Имена содержат отметку времени, поэтому сортировка по имени =
+              # сортировка по возрасту; -type f не тронет симлинк report-latest.
+              find "$REPORT_DIR" -maxdepth 1 -type f -name 'report-20*.html' -printf '%f\n' \
+                | sort | head -n "$REPORT_DROP" \
+                | while IFS= read -r _old; do rm -f "$REPORT_DIR/$_old"; done
+              info "[report] ротация: было $REPORT_TOTAL, удалено $REPORT_DROP, храним $REPORT_KEEP"
+            fi
+
             # ------------------------------------------------------------------
             # И-смоук: РЕЗУЛЬТАТ ПРОВЕРОК ОБЯЗАН ВЛИЯТЬ НА КОД ВОЗВРАТА.
             #
@@ -1044,7 +1066,11 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: /home/${{ secrets.SSH_USER }}/deploy/report/*.html
+          # И30: забираем ТОЛЬКО отчёт этого прогона (симлинк report-latest
+          # указывает на него), а не весь каталог. Раньше здесь стояло
+          # `report/*.html`, поэтому артефакт каждого следующего запуска
+          # включал отчёты всех предыдущих и рос без ограничений.
+          source: /home/${{ secrets.SSH_USER }}/deploy/report/report-latest.html
           target: ./deploy-report
           overwrite: true
 
