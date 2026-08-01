@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 using ChillHub.Update;
@@ -12,9 +14,17 @@ using ChillHub.Update;
 internal static class Program
 {
     // Коды возврата: 0 — успех, 2 — были ошибки копирования (обновление НЕ применено полностью), 3 — фатальная ошибка.
+    // Читать их некому (родителя к этому моменту уже нет), поэтому исход дублируется
+    // в файл состояния рядом с маркером версии — см. UpdateStatus (A12).
     private const int ExitOk = 0;
     private const int ExitCopyErrors = 2;
     private const int ExitFatal = 3;
+
+    /// <summary>Сколько ждём освобождения замка на каталог установки (A3).</summary>
+    private const int LockWaitMs = 30_000;
+
+    /// <summary>Сколько ждём выхода родительского процесса.</summary>
+    private const int ParentWaitMs = 120_000;
 
     // Все служебные списки пишем в UTF-8 БЕЗ BOM: BOM ломает сверку размера/хеша
     // (например, launcher.version становится 10 байт вместо 8).
@@ -22,25 +32,39 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
-        // Simple args parser: expects --key value pairs
-        static Dictionary<string, string?> ParseArgs(string[] a)
+        var log = new UpdateLog();
+        var ctx = new RunContext();
+        var exit = ExitFatal;
+
+        // A5/A9. Ни одна строчка подготовки больше не живёт вне try: раньше
+        // отсутствующий --log или несоздаваемый каталог убивали процесс до
+        // единственной записи в журнал — и лаунчер, который к этому моменту уже
+        // завершился, не перезапускал никто. Теперь любой исход проходит через
+        // finally: состояние на диск, лаунчер обратно на экран.
+        try
         {
-            var dict = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-            for (int i = 0; i < a.Length; i++)
-            {
-                var tok = a[i];
-                if (!tok.StartsWith("--"))
-                {
-                    continue;
-                }
-                var key = tok;
-                string? val = null;
-                if (i + 1 < a.Length && !a[i + 1].StartsWith("--")) { val = a[++i]; }
-                dict[key] = val;
-            }
-            return dict;
+            exit = await RunAsync(args, log, ctx);
+        }
+        catch (Exception ex)
+        {
+            log.Write($"fatal: {ex}");
+            ctx.Outcome = "fatal";
+            ctx.Message = $"{ex.GetType().Name}: {ex.Message}";
+            exit = ExitFatal;
+        }
+        finally
+        {
+            UpdateLock.Release(ctx.Lock);
+            WriteStatus(ctx, exit, log);
+            Restart(ctx, log);
+            log.Write($"updater finished with exit code {exit} ({ctx.Outcome})");
         }
 
+        return exit;
+    }
+
+    private static async Task<int> RunAsync(string[] args, UpdateLog log, RunContext ctx)
+    {
         var argsMap = ParseArgs(args);
         string Req(string key)
         {
@@ -52,12 +76,28 @@ internal static class Program
         }
         string Opt(string key, string def = "") => (argsMap.TryGetValue(key, out var v) && !string.IsNullOrWhiteSpace(v)) ? v! : def;
 
+        // Журнал открываем ПЕРВЫМ делом: всё, что случится дальше, должно попасть в файл.
+        log.Open(Opt("--log"));
+
         var src = Req("--src");
         var dst = Req("--dst");
         var exe = Req("--exe");
+        ctx.Dst = dst;
+        ctx.Exe = exe;
+        ctx.ExeArgsFile = Opt("--exe-args-file");
+
         var parentStr = Opt("--parent", "0");
-        _ = int.TryParse(parentStr, out var parent);
-        var log = Req("--log");
+        if (!int.TryParse(parentStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parent))
+        {
+            // A13. Молча превращать мусор в parent=0 нельзя: это отказ от ожидания
+            // родителя, то есть копирование поверх ЖИВОГО лаунчера. Половина файлов
+            // залочена, обновление разваливается — и никто не понимает почему.
+            log.Write($"FATAL: --parent='{parentStr}' не число; ждать родителя нечего, копировать поверх работающего лаунчера нельзя");
+            ctx.Outcome = "fatal";
+            ctx.Message = $"Некорректный аргумент --parent='{parentStr}'.";
+            return ExitFatal;
+        }
+
         var files = Opt("--files", string.Empty);
         var dirs = Opt("--dirs", string.Empty);
         var del = Opt("--del", string.Empty);
@@ -67,493 +107,722 @@ internal static class Program
         var autoStrip = !string.Equals(Opt("--auto-strip", "true"), "false", StringComparison.OrdinalIgnoreCase);
         var preserve = Opt("--preserve", PreserveMatcher.DefaultRulesArg);
         var newVersion = Opt("--version", string.Empty);
+        ctx.Version = newVersion.Trim();
 
-        Directory.CreateDirectory(Path.GetDirectoryName(log) ?? Path.GetTempPath());
-        void Log(string msg)
+        // Log all options and basic file stats
+        string ExistsStat(string? p) => string.IsNullOrWhiteSpace(p) ? "<null>" : ($"'{p}' exists={(File.Exists(p) ? "file" : Directory.Exists(p) ? "dir" : "no")} ");
+        log.Write($"Updater start\n  --src={ExistsStat(src)}\n  --dst={ExistsStat(dst)}\n  --exe={ExistsStat(exe)}\n  --parent={parent}\n  --log='{log.Path}'\n  --files={ExistsStat(files)}\n  --dirs={ExistsStat(dirs)}\n  --del={ExistsStat(del)}\n  --strip-prefix='{strip}'\n  --auto-strip={autoStrip}\n  --preserve='{preserve}'\n  --exe-args-file={ExistsStat(ctx.ExeArgsFile)}");
+
+        // A3. Замок на каталог установки. Два апдейтера в одной папке — это
+        // перемешанные бэкапы и невосстановимая смесь версий.
+        if (!UpdateLock.TryAcquire(dst, LockWaitMs, out var mutex))
         {
-            try { File.AppendAllText(log, $"[{DateTime.Now:O}] {msg}\r\n", Utf8NoBom); } catch { }
-        }
+            log.Write($"FATAL: другой процесс уже применяет обновление в '{dst}' (ждали {LockWaitMs / 1000} с)");
+            ctx.Outcome = "busy";
+            ctx.Message = "Обновление уже применяется другим процессом.";
 
-        var copyErrors = 0;
-        var copyOk = 0;
-
-        try
-        {
-                // Log all options and basic file stats
-                string ExistsStat(string? p) => string.IsNullOrWhiteSpace(p) ? "<null>" : ($"'{p}' exists={(File.Exists(p) ? "file" : Directory.Exists(p) ? "dir" : "no")} ");
-                Log($"Updater start\n  --src={ExistsStat(src)}\n  --dst={ExistsStat(dst)}\n  --exe={ExistsStat(exe)}\n  --parent={parent}\n  --log='{log}'\n  --files={ExistsStat(files)}\n  --dirs={ExistsStat(dirs)}\n  --del={ExistsStat(del)}\n  --strip-prefix='{strip}'\n  --auto-strip={autoStrip}\n  --preserve='{preserve}'");
-                // Wait parent
-                //
-                // Ждать нужно обязательно: пока лаунчер жив, его exe и dll заблокированы,
-                // и копирование поверх них провалится. Но ждать БЕЗ ограничения нельзя —
-                // подвисший лаунчер оставлял апдейтер висеть вечно, без окна и без
-                // единой строки в логе, а пользователь видел просто «обновление не
-                // заканчивается».
-                //
-                // По таймауту всё равно идём дальше: копирование само упадёт на
-                // заблокированных файлах, а маркер версии при ошибках копирования
-                // не пишется — значит следующий запуск честно повторит обновление.
-                if (parent > 0)
-                {
-                    const int ParentWaitMs = 120_000;
-                    try
-                    {
-                        var proc = Process.GetProcessById(parent);
-                        if (proc.WaitForExit(ParentWaitMs))
-                        {
-                            Log($"Parent {parent} exited");
-                        }
-                        else
-                        {
-                            Log($"WARNING: parent {parent} is still running after {ParentWaitMs / 1000}s; " +
-                                "proceeding anyway — locked files will fail to copy and the update will be retried on next launch");
-                        }
-                    }
-                    catch (ArgumentException)
-                    {
-                        // Процесса с таким id уже нет — ровно то, чего мы и ждали.
-                        Log($"Parent {parent} already gone");
-                    }
-                    catch (Exception ex)
-                    {
-                        Log($"WARNING: cannot wait for parent {parent}: {ex.GetType().Name}: {ex.Message}");
-                    }
-                }
-                // Ensure dst
-                try { Directory.CreateDirectory(dst); } catch { }
-
-                // Detect strip prefix if not provided (только если автоопределение разрешено)
-                if (string.IsNullOrWhiteSpace(strip) && autoStrip)
-                {
-                    try
-                    {
-                        // Prefer detection from FILES list if present: require a single shared top-level segment
-                        string? detected = null;
-                        if (!string.IsNullOrWhiteSpace(files) && File.Exists(files))
-                        {
-                            var lines = File.ReadAllLines(files, Encoding.UTF8)
-                                .Select(l => (l ?? string.Empty).Replace('\\','/').Trim('/'))
-                                .Where(l => !string.IsNullOrWhiteSpace(l))
-                                .ToArray();
-                            var firstSegs = lines
-                                .Select(l => l.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty)
-                                .Where(s => !string.IsNullOrWhiteSpace(s))
-                                .Distinct(StringComparer.OrdinalIgnoreCase)
-                                .ToArray();
-                            if (firstSegs.Length == 1)
-                            {
-                                var candidate = firstSegs[0];
-                                var allHave = lines.All(l => l.StartsWith(candidate + "/", StringComparison.OrdinalIgnoreCase));
-                                if (allHave && Directory.Exists(Path.Combine(src, candidate)))
-                                {
-                                    detected = candidate;
-                                }
-                            }
-                        }
-                        // Fallback: top-level of SRC has exactly one directory and no files
-                        if (detected == null && Directory.Exists(src))
-                        {
-                            var topFiles = Directory.EnumerateFiles(src, "*", SearchOption.TopDirectoryOnly).Any();
-                            var topDirs = Directory.EnumerateDirectories(src, "*", SearchOption.TopDirectoryOnly).ToArray();
-                            if (!topFiles && topDirs.Length == 1)
-                            {
-                                detected = Path.GetFileName(topDirs[0]);
-                            }
-                        }
-                        if (!string.IsNullOrWhiteSpace(detected))
-                        {
-                            strip = detected!;
-                        }
-                    }
-                    catch { }
-                }
-                Log($"effective strip-prefix='{strip}'");
-
-                // Пути из списков — данные, а не команды. Апдейтер пишет в папку УСТАНОВКИ
-                // и работает с правами пользователя (а после UAC — и выше), поэтому запись
-                // по пути с ".." или "C:\..." уводит файл куда угодно: в автозагрузку,
-                // в System32, в чужой профиль. Проверяем ВСЕ списки до первой операции
-                // и отказываемся целиком: частично применённое обновление хуже неприменённого.
-                if (!ValidateLists(new[] { files, dirs, del }, strip, Log))
-                {
-                    Log("FATAL: списки содержат небезопасные пути, обновление не применялось");
-                    return ExitFatal;
-                }
-
-                // Preserve rules: единый матчер, общий с лаунчером (ChillHub.Update.PreserveMatcher)
-                var matcher = new PreserveMatcher(preserve);
-                try { Log($"preserve rules: [{string.Join(", ", matcher.Rules)}]"); } catch { }
-
-                bool ShouldPreserve(string rel, string reason)
-                    => matcher.ShouldPreserve(rel, m => Log($"skip {reason}: {m}"));
-
-                // Log lists content if provided
-                try
-                {
-                    if (!string.IsNullOrWhiteSpace(files))
-                    {
-                        if (File.Exists(files))
-                        {
-                            var lines = File.ReadAllLines(files, Encoding.UTF8);
-                            Log($"FILES list: path='{files}', count={lines.Length}");
-                            foreach (var l in lines)
-                            {
-                                Log($"  FILE: {l}");
-                            }
-                        }
-                        else
-                        {
-                            Log($"FILES list missing: '{files}'");
-                        }
-                    }
-                    if (!string.IsNullOrWhiteSpace(dirs))
-                    {
-                        if (File.Exists(dirs))
-                        {
-                            var lines = File.ReadAllLines(dirs, Encoding.UTF8);
-                            Log($"DIRS list: path='{dirs}', count={lines.Length}");
-                            foreach (var l in lines)
-                            {
-                                Log($"  DIR: {l}");
-                            }
-                        }
-                        else
-                        {
-                            Log($"DIRS list missing: '{dirs}'");
-                        }
-                    }
-                    if (!string.IsNullOrWhiteSpace(del))
-                    {
-                        if (File.Exists(del))
-                        {
-                            var lines = File.ReadAllLines(del, Encoding.UTF8);
-                            Log($"DEL list: path='{del}', count={lines.Length}");
-                            foreach (var l in lines)
-                            {
-                                Log($"  DEL: {l}");
-                            }
-                        }
-                        else
-                        {
-                            Log($"DEL list missing: '{del}'");
-                        }
-                    }
-                }
-                catch (Exception ex) { Log($"lists log error: {ex.Message}"); }
-
-                // Copy function. Возвращает true при успехе; неудачи считаем — они влияют на exit code (A7).
-                async Task<bool> CopyFileAsync(string sourceFile, string destFile)
-                {
-                    Directory.CreateDirectory(Path.GetDirectoryName(destFile)!);
-                    if (File.Exists(destFile))
-                    {
-                        try { var fi = new FileInfo(destFile); fi.IsReadOnly = false; } catch { }
-                    }
-                    const int maxAttempts = 10;
-                    var attempt = 0;
-                    while (true)
-                    {
-                        try
-                        {
-                            using (var srcFs = new FileStream(sourceFile, FileMode.Open, FileAccess.Read, FileShare.Read))
-                            using (var dstFs = new FileStream(destFile, FileMode.Create, FileAccess.Write, FileShare.Read))
-                            {
-                                await srcFs.CopyToAsync(dstFs);
-                            }
-                            copyOk++;
-                            return true;
-                        }
-                        catch (Exception ex)
-                        {
-                            attempt++;
-                            if (attempt >= maxAttempts)
-                            {
-                                copyErrors++;
-                                Log($"copy FAILED (giving up after {maxAttempts}) {sourceFile} -> {destFile}: {ex.Message}");
-                                return false;
-                            }
-                            var delay = Math.Min(5000, 200 * (int)Math.Pow(2, Math.Max(0, attempt - 1)));
-                            Log($"copy retry {attempt}/{maxAttempts} {sourceFile}: {ex.Message}; {delay}ms");
-                            await Task.Delay(delay);
-                        }
-                    }
-                }
-
-                // A12. Диффовый режим: лаунчер посчитал план против ПАПКИ УСТАНОВКИ и скачал
-                // только изменившиеся файлы. Значит SRC — это не полный пакет, а дифф,
-                // и «остаточное зеркалирование» всего SRC больше не нужно (и вредно: оно
-                // делало полный проход по несуществующим файлам).
-                var haveFileList = !string.IsNullOrWhiteSpace(files) && File.Exists(files);
-                var copied = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                // If file list provided, copy them first (diff), respecting strip-prefix
-                if (haveFileList)
-                {
-                    foreach (var rel in File.ReadAllLines(files, Encoding.UTF8))
-                    {
-                        var clean = (rel ?? string.Empty).Replace('\\','/').Trim('/');
-                        if (string.IsNullOrWhiteSpace(clean))
-                        {
-                            continue;
-                        }
-                        if (ShouldPreserve(clean, "copy")) { continue; }
-                        if (PreserveMatcher.IsUpdaterArtifact(clean)) { Log($"skip copy updater artifact {clean}"); continue; }
-                        var srcRel = clean;
-                        var dstRel = string.IsNullOrWhiteSpace(strip) ? clean : clean.StartsWith(strip + "/", StringComparison.OrdinalIgnoreCase) ? clean.Substring(strip.Length + 1) : clean;
-                        var s = ManifestPath.Combine(src, srcRel);
-                        var d = ManifestPath.Combine(dst, dstRel);
-                        if (!File.Exists(s))
-                        {
-                            Log($"diff src missing {srcRel}");
-                            continue;
-                        }
-                        copied.Add(srcRel);
-                        await CopyFileAsync(s, d);
-                    }
-                }
-
-                // Residual mirror of all SRC files (ensures runtimes/, prereqs/ etc.).
-                // Только для полного пакета (список файлов не передан): при диффе SRC содержит
-                // ровно то, что надо скопировать, и оно уже скопировано выше.
-                if (!haveFileList && Directory.Exists(src))
-                {
-                    foreach (var s in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
-                    {
-                        var rel = Path.GetRelativePath(src, s).Replace('\\','/');
-                        if (matcher.ShouldPreserve(rel)) { continue; }
-                        // Служебные файлы апдейтера в папку установки не переносим никогда (A6).
-                        if (PreserveMatcher.IsUpdaterArtifact(rel)) { Log($"mirror skip updater artifact {rel}"); continue; }
-                        var dstRel = string.IsNullOrWhiteSpace(strip) ? rel : rel.StartsWith(strip + "/", StringComparison.OrdinalIgnoreCase) ? rel.Substring(strip.Length + 1) : rel;
-                        var d = Path.Combine(dst, dstRel.Replace('/', Path.DirectorySeparatorChar));
-                        // Cheap skip: same size
-                        try
-                        {
-                            if (File.Exists(d))
-                            {
-                                var s1 = new FileInfo(s).Length; var s2 = new FileInfo(d).Length;
-                                if (s1 == s2)
-                                {
-                                    continue;
-                                }
-                            }
-                        }
-                        catch { }
-                        await CopyFileAsync(s, d);
-                    }
-                }
-
-                // Диагностика диффа: всё, что лежит в SRC, но не попало в список копирования.
-                // В норме таких файлов нет; если появились — значит лаунчер и апдейтер разошлись.
-                if (haveFileList && Directory.Exists(src))
-                {
-                    try
-                    {
-                        foreach (var s in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
-                        {
-                            var rel = Path.GetRelativePath(src, s).Replace('\\', '/');
-                            if (copied.Contains(rel) || matcher.ShouldPreserve(rel) || PreserveMatcher.IsUpdaterArtifact(rel))
-                            {
-                                continue;
-                            }
-                            Log($"diff: SRC file not in FILES list, skipped: {rel}");
-                        }
-                    }
-                    catch (Exception ex) { Log($"diff audit error: {ex.Message}"); }
-                }
-
-                // Deletions
-                if (!string.IsNullOrWhiteSpace(del) && File.Exists(del))
-                {
-                    foreach (var rel in File.ReadAllLines(del, Encoding.UTF8))
-                    {
-                        var clean = (rel ?? string.Empty).Replace('\\','/').Trim('/');
-                        if (string.IsNullOrWhiteSpace(clean))
-                        {
-                            continue;
-                        }
-                        if (ShouldPreserve(clean, "delete")) { continue; }
-                        var delPath = ManifestPath.Combine(dst, clean);
-                        try { if (File.Exists(delPath)) { var fi = new FileInfo(delPath); fi.IsReadOnly = false; File.Delete(delPath); Log($"deleted {clean}"); } } catch (Exception ex) { Log($"delete failed {clean}: {ex.Message}"); }
-                    }
-                }
-
-                // Empty dirs
-                if (!string.IsNullOrWhiteSpace(dirs) && File.Exists(dirs))
-                {
-                    foreach (var rel in File.ReadAllLines(dirs, Encoding.UTF8))
-                    {
-                        var clean = (rel ?? string.Empty).Replace('\\','/').Trim('/');
-                        if (string.IsNullOrWhiteSpace(clean))
-                        {
-                            continue;
-                        }
-                        var p = ManifestPath.Combine(dst, clean);
-                        try { Directory.CreateDirectory(p); } catch { }
-                    }
-                }
-
-                // Разовая очистка уже засорённых инсталляций: служебные файлы апдейтера,
-                // которые прошлые версии копировали прямо в папку установки (A6).
-                CleanupUpdaterArtifacts(dst, Log);
-
-                // Full union hash compare
-                try
-                {
-                    var map = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    var logFileName = Path.GetFileName(log);
-                    bool IgnoreForHash(string rel)
-                    {
-                        var r = (rel ?? string.Empty).Replace('\\','/').Trim('/');
-                        if (string.IsNullOrEmpty(r))
-                        {
-                            return true;
-                        }
-                        // ignore updater artifacts and logs/lists
-                        if (string.Equals(Path.GetFileName(r), logFileName, StringComparison.OrdinalIgnoreCase))
-                        {
-                            return true;
-                        }
-                        if (PreserveMatcher.IsUpdaterArtifact(r))
-                        {
-                            return true;
-                        }
-                        // preserve-файлы намеренно расходятся — они не участвуют в сверке
-                        if (matcher.ShouldPreserve(r))
-                        {
-                            return true;
-                        }
-                        return false;
-                    }
-                    if (haveFileList)
-                    {
-                        // A12. При диффе сверять всю папку установки с SRC бессмысленно: в SRC лежат
-                        // только изменившиеся файлы, остальные дали бы «SRC missing» на каждый файл.
-                        // Проверяем ровно то, что должны были скопировать.
-                        foreach (var rel in copied)
-                        {
-                            if (!IgnoreForHash(rel))
-                            {
-                                map.Add(rel);
-                            }
-                        }
-                    }
-                    else
-                    {
-                        if (Directory.Exists(src))
-                        {
-                            foreach (var s in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
-                            {
-                                var rel = Path.GetRelativePath(src, s).Replace('\\','/');
-                                if (!IgnoreForHash(rel))
-                                {
-                                    map.Add(rel);
-                                }
-                            }
-                        }
-                        if (Directory.Exists(dst))
-                        {
-                            foreach (var d in Directory.EnumerateFiles(dst, "*", SearchOption.AllDirectories))
-                            {
-                                var rel = Path.GetRelativePath(dst, d).Replace('\\','/');
-                                if (!string.IsNullOrWhiteSpace(strip) && !rel.StartsWith(strip + "/", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    rel = strip + "/" + rel;
-                                }
-                                if (!IgnoreForHash(rel))
-                                {
-                                    map.Add(rel);
-                                }
-                            }
-                        }
-                    }
-                    int ok = 0, mm = 0, missS = 0, missD = 0, total = 0;
-                    foreach (var key in map)
-                    {
-                        total++;
-                        var relSrc = key;
-                        var relDst = string.IsNullOrWhiteSpace(strip) ? key : key.StartsWith(strip + "/", StringComparison.OrdinalIgnoreCase) ? key.Substring(strip.Length + 1) : key;
-                        var sp = ManifestPath.Combine(src, relSrc);
-                        var dp = ManifestPath.Combine(dst, relDst);
-                        var se = File.Exists(sp);
-                        var de = File.Exists(dp);
-                        if (!se) { missS++; Log($"hash: SRC missing {relSrc}"); continue; }
-                        if (!de)
-                        {
-                            missD++; Log($"hash: DST missing {relDst}");
-                            continue;
-                        }
-                        var h1 = Sha256Hex(sp); var h2 = Sha256Hex(dp);
-                        if (!string.IsNullOrEmpty(h1) && h1.Equals(h2, StringComparison.OrdinalIgnoreCase)) { ok++; Log($"hash ok {relDst} {h2}"); }
-                        else { mm++; Log($"hash MISMATCH {relDst} src={h1} dst={h2}"); }
-                    }
-                    Log($"hash union summary: total={total} ok={ok} mismatch={mm} src_missing={missS} dst_missing={missD}");
-                }
-                catch (Exception ex) { Log($"hash union compare error: {ex.Message}"); }
-
-                // Write version marker (if provided) — ТОЛЬКО при полностью успешном копировании.
-                // UTF-8 без BOM и без завершающего перевода строки — ровно как пишет installer.nsi.
-                //
-                // Почему условие обязательно: маркер — это утверждение «на диске лежит
-                // версия N». Лаунчер верит ему безоговорочно: предохранитель
-                // `remote == local` выходит из проверки ДО сверки хешей. Если записать
-                // маркер после частичного копирования (пара файлов залочена антивирусом),
-                // установка со смесью старых и новых сборок будет считаться исправной
-                // навсегда, счётчик попыток обнулится, и расхождение уже никто не заметит.
-                // Это зеркало исходной петли: раньше обновление не могло остановиться,
-                // так оно не смогло бы заметить, что не доехало. Чинится только
-                // переустановкой, поэтому лучше оставить старый маркер и обновиться снова.
-                if (copyErrors > 0)
-                {
-                    Log($"version marker NOT written: copy had {copyErrors} error(s); leaving the previous version in place so the next launch retries");
-                }
-                else
-                {
-                    try
-                    {
-                        if (!string.IsNullOrWhiteSpace(newVersion))
-                        {
-                            var marker = Path.Combine(dst, "launcher.version");
-                            try { Directory.CreateDirectory(Path.GetDirectoryName(marker)!); } catch { }
-                            File.WriteAllText(marker, newVersion.Trim(), Utf8NoBom);
-                            Log($"wrote version marker: {marker} = '{newVersion.Trim()}'");
-                        }
-                    }
-                    catch (Exception ex) { Log($"version marker write error: {ex.Message}"); }
-                }
-
-                // Итог по копированию (A7): при ненулевом счётчике ошибок обновление применено НЕ полностью.
-                if (copyErrors > 0)
-                {
-                    Log($"COPY SUMMARY: FAILED. ok={copyOk} errors={copyErrors}. Update was NOT applied completely; exit code {ExitCopyErrors}.");
-                }
-                else
-                {
-                    Log($"COPY SUMMARY: OK. ok={copyOk} errors=0");
-                }
-
-                // Start
-                try
-                {
-                    await Task.Delay(150);
-                    var psi = new ProcessStartInfo
-                    {
-                        FileName = exe,
-                        WorkingDirectory = dst,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    };
-                    Process.Start(psi);
-                    Log($"Start issued for {exe}");
-                }
-                catch (Exception ex) { Log($"start phase error: {ex.Message}"); }
-        }
-        catch (Exception ex)
-        {
-            Log($"fatal: {ex}");
+            // Перезапуск лаунчера — забота того апдейтера, который держит замок.
+            ctx.Restart = false;
             return ExitFatal;
         }
 
-        return copyErrors > 0 ? ExitCopyErrors : ExitOk;
+        ctx.Lock = mutex;
+        log.Write($"install lock acquired: {UpdateLock.MutexName(dst)}");
+
+        // Wait parent
+        //
+        // Ждать нужно обязательно: пока лаунчер жив, его exe и dll заблокированы,
+        // и копирование поверх них провалится. Но ждать БЕЗ ограничения нельзя —
+        // подвисший лаунчер оставлял апдейтер висеть вечно, без окна и без
+        // единой строки в логе, а пользователь видел просто «обновление не
+        // заканчивается».
+        //
+        // По таймауту всё равно идём дальше: копирование само упадёт на
+        // заблокированных файлах, а маркер версии при ошибках копирования
+        // не пишется — значит следующий запуск честно повторит обновление.
+        if (parent > 0)
+        {
+            try
+            {
+                var proc = Process.GetProcessById(parent);
+                if (proc.WaitForExit(ParentWaitMs))
+                {
+                    log.Write($"Parent {parent} exited");
+                }
+                else
+                {
+                    log.Write($"WARNING: parent {parent} is still running after {ParentWaitMs / 1000}s; " +
+                        "proceeding anyway — locked files will fail to copy and the update will be retried on next launch");
+                }
+            }
+            catch (ArgumentException)
+            {
+                // Процесса с таким id уже нет — ровно то, чего мы и ждали.
+                log.Write($"Parent {parent} already gone");
+            }
+            catch (Exception ex)
+            {
+                log.Write($"WARNING: cannot wait for parent {parent}: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        // Ensure dst
+        try { Directory.CreateDirectory(dst); } catch (Exception ex) { log.Write($"create dst error: {ex.Message}"); }
+
+        // A2. Права на запись проверяем ОДИН РАЗ и заранее. Отказ в доступе —
+        // не временная помеха: раньше он ретраился по 10 раз с бэкоффом на КАЖДЫЙ
+        // файл (~26 секунд), и на сотне файлов это десятки минут тишины,
+        // после которых обновление всё равно не применялось.
+        var accessProblem = DescribeWriteAccess(dst);
+        if (accessProblem != null)
+        {
+            log.Write($"FATAL: нет прав на запись в '{dst}': {accessProblem}");
+            ctx.Outcome = "access-denied";
+            ctx.Message = $"Нет прав на запись в папку установки '{dst}'. Обновление не применялось.";
+            return ExitFatal;
+        }
+
+        // Detect strip prefix if not provided (только если автоопределение разрешено)
+        if (string.IsNullOrWhiteSpace(strip) && autoStrip)
+        {
+            strip = DetectStripPrefix(src, files) ?? strip;
+        }
+        log.Write($"effective strip-prefix='{strip}'");
+
+        // Пути из списков — данные, а не команды. Апдейтер пишет в папку УСТАНОВКИ
+        // и работает с правами пользователя (а после UAC — и выше), поэтому запись
+        // по пути с ".." или "C:\..." уводит файл куда угодно: в автозагрузку,
+        // в System32, в чужой профиль. Проверяем ВСЕ списки до первой операции
+        // и отказываемся целиком: частично применённое обновление хуже неприменённого.
+        if (!ValidateLists(new[] { files, dirs, del }, strip, log.Write))
+        {
+            log.Write("FATAL: списки содержат небезопасные пути, обновление не применялось");
+            ctx.Outcome = "fatal";
+            ctx.Message = "Списки обновления содержат небезопасные пути.";
+            return ExitFatal;
+        }
+
+        // Preserve rules: единый матчер, общий с лаунчером (ChillHub.Update.PreserveMatcher)
+        var matcher = new PreserveMatcher(preserve);
+        try { log.Write($"preserve rules: [{string.Join(", ", matcher.Rules)}]"); } catch { }
+
+        bool ShouldPreserve(string rel, string reason)
+            => matcher.ShouldPreserve(rel, m => log.Write($"skip {reason}: {m}"));
+
+        LogLists(files, dirs, del, log);
+
+        // Хвосты прерванного прогона (*.chtmp/*.chbak) убираем ДО начала работы,
+        // иначе они смешаются с бэкапами текущей транзакции.
+        UpdateTransaction.CleanupLeftovers(dst, log.Write);
+
+        var tx = new UpdateTransaction(log.Write);
+        var copyErrors = 0;
+        var copyOk = 0;
+
+        // B2. Копирование идёт через транзакцию: каждый файл встаёт на место
+        // атомарной подменой, старое содержимое лежит в бэкапе. Пока транзакция
+        // не подтверждена, откат возвращает установку в исходное состояние целиком.
+        async Task<bool> CopyFileAsync(string sourceFile, string destFile)
+        {
+            const int maxAttempts = 5;
+            var attempt = 0;
+            while (true)
+            {
+                try
+                {
+                    tx.CopyFile(sourceFile, destFile);
+                    copyOk++;
+                    return true;
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    // A2. Права не появятся от повторов — прерываем весь проход.
+                    throw new UpdaterAbortException(
+                        $"отказ в доступе при записи '{destFile}': {ex.Message}. " +
+                        "Проверьте права на папку установки и антивирус; обновление не применено.",
+                        ex);
+                }
+                catch (Exception ex)
+                {
+                    attempt++;
+                    if (attempt >= maxAttempts)
+                    {
+                        copyErrors++;
+                        log.Write($"copy FAILED (giving up after {maxAttempts}) {sourceFile} -> {destFile}: {ex.Message}");
+                        return false;
+                    }
+                    var delay = Math.Min(2000, 200 * (int)Math.Pow(2, Math.Max(0, attempt - 1)));
+                    log.Write($"copy retry {attempt}/{maxAttempts} {sourceFile}: {ex.Message}; {delay}ms");
+                    await Task.Delay(delay);
+                }
+            }
+        }
+
+        // A12 (диффовый режим). Лаунчер посчитал план против ПАПКИ УСТАНОВКИ и скачал
+        // только изменившиеся файлы. Значит SRC — это не полный пакет, а дифф,
+        // и «остаточное зеркалирование» всего SRC больше не нужно.
+        var haveFileList = !string.IsNullOrWhiteSpace(files) && File.Exists(files);
+        var copied = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var integrityErrors = 0;
+
+        try
+        {
+            // If file list provided, copy them first (diff), respecting strip-prefix
+            if (haveFileList)
+            {
+                foreach (var rel in File.ReadAllLines(files, Encoding.UTF8))
+                {
+                    var clean = (rel ?? string.Empty).Replace('\\', '/').Trim('/');
+                    if (string.IsNullOrWhiteSpace(clean))
+                    {
+                        continue;
+                    }
+                    if (ShouldPreserve(clean, "copy")) { continue; }
+                    if (PreserveMatcher.IsUpdaterArtifact(clean)) { log.Write($"skip copy updater artifact {clean}"); continue; }
+                    var srcRel = clean;
+                    var dstRel = StripOf(clean, strip);
+                    var s = ManifestPath.Combine(src, srcRel);
+                    var d = ManifestPath.Combine(dst, dstRel);
+                    if (!File.Exists(s))
+                    {
+                        log.Write($"diff src missing {srcRel}");
+                        continue;
+                    }
+                    copied.Add(srcRel);
+                    await CopyFileAsync(s, d);
+                }
+            }
+
+            // Residual mirror of all SRC files (ensures runtimes/, prereqs/ etc.).
+            // Только для полного пакета (список файлов не передан): при диффе SRC содержит
+            // ровно то, что надо скопировать, и оно уже скопировано выше.
+            if (!haveFileList && Directory.Exists(src))
+            {
+                foreach (var s in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
+                {
+                    var rel = Path.GetRelativePath(src, s).Replace('\\', '/');
+                    if (matcher.ShouldPreserve(rel)) { continue; }
+                    // Служебные файлы апдейтера в папку установки не переносим никогда (A6).
+                    if (PreserveMatcher.IsUpdaterArtifact(rel)) { log.Write($"mirror skip updater artifact {rel}"); continue; }
+                    var dstRel = StripOf(rel, strip);
+                    var d = ManifestPath.Combine(dst, dstRel);
+                    copied.Add(rel);
+                    // Cheap skip: same size
+                    try
+                    {
+                        if (File.Exists(d))
+                        {
+                            var s1 = new FileInfo(s).Length; var s2 = new FileInfo(d).Length;
+                            if (s1 == s2)
+                            {
+                                continue;
+                            }
+                        }
+                    }
+                    catch { }
+                    await CopyFileAsync(s, d);
+                }
+            }
+
+            // Диагностика диффа: всё, что лежит в SRC, но не попало в список копирования.
+            // В норме таких файлов нет; если появились — значит лаунчер и апдейтер разошлись.
+            if (haveFileList && Directory.Exists(src))
+            {
+                try
+                {
+                    foreach (var s in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
+                    {
+                        var rel = Path.GetRelativePath(src, s).Replace('\\', '/');
+                        if (copied.Contains(rel) || matcher.ShouldPreserve(rel) || PreserveMatcher.IsUpdaterArtifact(rel))
+                        {
+                            continue;
+                        }
+                        log.Write($"diff: SRC file not in FILES list, skipped: {rel}");
+                    }
+                }
+                catch (Exception ex) { log.Write($"diff audit error: {ex.Message}"); }
+            }
+
+            // A1. Сверка хешей — это ПРОВЕРКА, а не заметка в журнале. Раньше её итог
+            // (mismatch / dst_missing) не влиял ни на что: маркер писался, код возврата
+            // оставался нулевым, и установка «скопировалось, но байт не тот» считалась
+            // исправной навсегда. Теперь расхождение — такая же ошибка, как отказ копирования.
+            integrityErrors = await VerifyAsync(src, dst, strip, copied, haveFileList, matcher, log, CopyFileAsync);
+        }
+        catch (UpdaterAbortException ex)
+        {
+            log.Write($"ABORT: {ex.Message}");
+            tx.Rollback();
+            ctx.Outcome = "access-denied";
+            ctx.Message = ex.Message;
+            return ExitFatal;
+        }
+        catch (ManifestPathException ex)
+        {
+            log.Write($"ABORT: небезопасный путь: {ex.Message}");
+            tx.Rollback();
+            ctx.Outcome = "fatal";
+            ctx.Message = ex.Message;
+            return ExitFatal;
+        }
+
+        // B3. Удаления — только после ПОЛНОСТЬЮ успешного копирования.
+        // Раньше deletelist применялся до проверки счётчика ошибок: старые файлы
+        // уже снесены, новые не легли, и на диске оставалась дыра, из которой
+        // лаунчер не стартует. Порядок «сначала всё скопировать, потом удалять»
+        // и есть то, что делает откат возможным.
+        if (copyErrors > 0 || integrityErrors > 0)
+        {
+            log.Write($"COPY SUMMARY: FAILED. ok={copyOk} copy_errors={copyErrors} integrity_errors={integrityErrors}. " +
+                      "Удаления НЕ выполнялись, маркер версии НЕ записан, изменения откатываются.");
+            tx.Rollback();
+            ctx.Outcome = "copy-errors";
+            ctx.Message = $"Обновление до {(string.IsNullOrWhiteSpace(ctx.Version) ? "новой версии" : ctx.Version)} не применено: " +
+                          $"{copyErrors} ошибок копирования, {integrityErrors} расхождений по хешу. Прежняя версия восстановлена.";
+            return ExitCopyErrors;
+        }
+
+        // Deletions
+        if (!string.IsNullOrWhiteSpace(del) && File.Exists(del))
+        {
+            foreach (var rel in File.ReadAllLines(del, Encoding.UTF8))
+            {
+                var clean = (rel ?? string.Empty).Replace('\\', '/').Trim('/');
+                if (string.IsNullOrWhiteSpace(clean))
+                {
+                    continue;
+                }
+                if (ShouldPreserve(clean, "delete")) { continue; }
+                string delPath;
+                try { delPath = ManifestPath.Combine(dst, clean); }
+                catch (ManifestPathException ex) { log.Write($"delete rejected {clean}: {ex.Reason}"); continue; }
+                try { if (File.Exists(delPath)) { var fi = new FileInfo(delPath); fi.IsReadOnly = false; File.Delete(delPath); log.Write($"deleted {clean}"); } }
+                catch (Exception ex) { log.Write($"delete failed {clean}: {ex.Message}"); }
+            }
+        }
+
+        // Empty dirs
+        if (!string.IsNullOrWhiteSpace(dirs) && File.Exists(dirs))
+        {
+            foreach (var rel in File.ReadAllLines(dirs, Encoding.UTF8))
+            {
+                var clean = (rel ?? string.Empty).Replace('\\', '/').Trim('/');
+                if (string.IsNullOrWhiteSpace(clean))
+                {
+                    continue;
+                }
+                try { Directory.CreateDirectory(ManifestPath.Combine(dst, clean)); } catch (Exception ex) { log.Write($"mkdir failed {clean}: {ex.Message}"); }
+            }
+        }
+
+        // Разовая очистка уже засорённых инсталляций: служебные файлы апдейтера,
+        // которые прошлые версии копировали прямо в папку установки (A6).
+        CleanupUpdaterArtifacts(dst, log.Write);
+
+        // Write version marker (if provided) — ТОЛЬКО при полностью успешном копировании.
+        // UTF-8 без BOM и без завершающего перевода строки — ровно как пишет installer.nsi.
+        //
+        // Почему условие обязательно: маркер — это утверждение «на диске лежит
+        // версия N». Лаунчер верит ему безоговорочно: предохранитель
+        // `remote == local` выходит из проверки ДО сверки хешей. Если записать
+        // маркер после частичного копирования (пара файлов залочена антивирусом),
+        // установка со смесью старых и новых сборок будет считаться исправной
+        // навсегда, счётчик попыток обнулится, и расхождение уже никто не заметит.
+        //
+        // A7: пишем атомарно. File.WriteAllText — это truncate+write, и обрыв
+        // между ними оставляет ПУСТОЙ маркер, после которого обновление
+        // не предлагается уже никогда.
+        if (!string.IsNullOrWhiteSpace(newVersion))
+        {
+            try
+            {
+                var marker = Path.Combine(dst, "launcher.version");
+                AtomicFile.WriteAllText(marker, newVersion.Trim(), Utf8NoBom);
+                log.Write($"wrote version marker: {marker} = '{newVersion.Trim()}'");
+            }
+            catch (Exception ex)
+            {
+                // Маркер не записан — установка новая, а лаунчер считает её старой.
+                // Это не порча данных, но обновление предложится снова: сообщаем честно.
+                log.Write($"version marker write error: {ex.Message}");
+                tx.Commit();
+                ctx.Outcome = "marker-failed";
+                ctx.Message = $"Файлы обновлены, но маркер версии не записан: {ex.Message}";
+                return ExitCopyErrors;
+            }
+        }
+
+        tx.Commit();
+        log.Write($"COPY SUMMARY: OK. ok={copyOk} errors=0");
+        ctx.Outcome = "ok";
+        ctx.Message = string.IsNullOrWhiteSpace(ctx.Version)
+            ? "Обновление применено."
+            : $"Обновление до {ctx.Version} применено.";
+        return ExitOk;
+    }
+
+    /// <summary>
+    /// Сверяет то, что должно было скопироваться, с источником. Одно расхождение
+    /// пробуем починить повторным копированием (частый случай — «пропустили по
+    /// совпадению размера»), и только затем считаем ошибкой.
+    /// </summary>
+    /// <returns>Количество неустранённых расхождений.</returns>
+    private static async Task<int> VerifyAsync(
+        string src,
+        string dst,
+        string strip,
+        HashSet<string> copied,
+        bool haveFileList,
+        PreserveMatcher matcher,
+        UpdateLog log,
+        Func<string, string, Task<bool>> copy)
+    {
+        var errors = 0;
+        try
+        {
+            var map = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var logFileName = Path.GetFileName(log.Path);
+            bool IgnoreForHash(string rel)
+            {
+                var r = (rel ?? string.Empty).Replace('\\', '/').Trim('/');
+                if (string.IsNullOrEmpty(r))
+                {
+                    return true;
+                }
+                // ignore updater artifacts and logs/lists
+                if (!string.IsNullOrEmpty(logFileName) && string.Equals(Path.GetFileName(r), logFileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+                if (PreserveMatcher.IsUpdaterArtifact(r))
+                {
+                    return true;
+                }
+                // preserve-файлы намеренно расходятся — они не участвуют в сверке
+                if (matcher.ShouldPreserve(r))
+                {
+                    return true;
+                }
+                return false;
+            }
+
+            // Сверяем ровно то, что должны были положить на диск. Полный обход папки
+            // установки бессмысленен: при диффе в SRC лежат только изменившиеся файлы,
+            // а файлы, которых нет в SRC, к результату копирования отношения не имеют.
+            foreach (var rel in copied)
+            {
+                if (!IgnoreForHash(rel))
+                {
+                    map.Add(rel);
+                }
+            }
+
+            int ok = 0, mm = 0, missS = 0, missD = 0, total = 0, repaired = 0;
+            foreach (var key in map)
+            {
+                total++;
+                var relSrc = key;
+                var relDst = StripOf(key, strip);
+                var sp = ManifestPath.Combine(src, relSrc);
+                var dp = ManifestPath.Combine(dst, relDst);
+                if (!File.Exists(sp)) { missS++; log.Write($"hash: SRC missing {relSrc}"); continue; }
+
+                var h1 = Sha256Hex(sp);
+                if (File.Exists(dp) && !string.IsNullOrEmpty(h1) && h1.Equals(Sha256Hex(dp), StringComparison.OrdinalIgnoreCase))
+                {
+                    ok++;
+                    continue;
+                }
+
+                // Одна попытка починки: файл мог быть пропущен по совпадению размера
+                // либо перезаписан кем-то между копированием и сверкой.
+                log.Write($"hash: {(File.Exists(dp) ? "MISMATCH" : "DST missing")} {relDst} — повторное копирование");
+                await copy(sp, dp);
+                if (File.Exists(dp) && !string.IsNullOrEmpty(h1) && h1.Equals(Sha256Hex(dp), StringComparison.OrdinalIgnoreCase))
+                {
+                    repaired++;
+                    continue;
+                }
+
+                if (File.Exists(dp)) { mm++; } else { missD++; }
+                errors++;
+                log.Write($"hash ERROR {relDst}: содержимое не совпадает с источником после повторного копирования");
+            }
+
+            log.Write($"hash summary: total={total} ok={ok} repaired={repaired} mismatch={mm} src_missing={missS} dst_missing={missD}");
+        }
+        catch (UpdaterAbortException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Не смогли проверить — считаем это ошибкой: «не проверено» не равно «в порядке».
+            log.Write($"hash compare error: {ex.Message}");
+            errors++;
+        }
+
+        return errors;
+    }
+
+    /// <summary>Убирает strip-prefix из относительного пути.</summary>
+    private static string StripOf(string rel, string strip)
+        => string.IsNullOrWhiteSpace(strip)
+            ? rel
+            : rel.StartsWith(strip + "/", StringComparison.OrdinalIgnoreCase) ? rel.Substring(strip.Length + 1) : rel;
+
+    private static Dictionary<string, string?> ParseArgs(string[] a)
+    {
+        var dict = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < a.Length; i++)
+        {
+            var tok = a[i];
+            if (!tok.StartsWith("--", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            var key = tok;
+            string? val = null;
+            if (i + 1 < a.Length && !a[i + 1].StartsWith("--", StringComparison.Ordinal)) { val = a[++i]; }
+            dict[key] = val;
+        }
+        return dict;
+    }
+
+    /// <summary>
+    /// A2. Проверка прав на запись в папку установки ДО первой операции.
+    /// Возвращает описание проблемы либо null.
+    /// </summary>
+    private static string? DescribeWriteAccess(string dir)
+    {
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var probe = Path.Combine(dir, $".chillhub-write-probe-{Environment.ProcessId}{AtomicFile.TempSuffix}");
+            using (var fs = new FileStream(probe, FileMode.Create, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose))
+            {
+                fs.WriteByte(0);
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return $"{ex.GetType().Name}: {ex.Message}";
+        }
+    }
+
+    private static string? DetectStripPrefix(string src, string files)
+    {
+        try
+        {
+            // Prefer detection from FILES list if present: require a single shared top-level segment
+            if (!string.IsNullOrWhiteSpace(files) && File.Exists(files))
+            {
+                var lines = File.ReadAllLines(files, Encoding.UTF8)
+                    .Select(l => (l ?? string.Empty).Replace('\\', '/').Trim('/'))
+                    .Where(l => !string.IsNullOrWhiteSpace(l))
+                    .ToArray();
+                var firstSegs = lines
+                    .Select(l => l.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty)
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                if (firstSegs.Length == 1)
+                {
+                    var candidate = firstSegs[0];
+                    var allHave = lines.All(l => l.StartsWith(candidate + "/", StringComparison.OrdinalIgnoreCase));
+                    if (allHave && Directory.Exists(Path.Combine(src, candidate)))
+                    {
+                        return candidate;
+                    }
+                }
+            }
+
+            // Fallback: top-level of SRC has exactly one directory and no files
+            if (Directory.Exists(src))
+            {
+                var topFiles = Directory.EnumerateFiles(src, "*", SearchOption.TopDirectoryOnly).Any();
+                var topDirs = Directory.EnumerateDirectories(src, "*", SearchOption.TopDirectoryOnly).ToArray();
+                if (!topFiles && topDirs.Length == 1)
+                {
+                    return Path.GetFileName(topDirs[0]);
+                }
+            }
+        }
+        catch { }
+
+        return null;
+    }
+
+    private static void LogLists(string files, string dirs, string del, UpdateLog log)
+    {
+        try
+        {
+            foreach (var (name, path) in new[] { ("FILES", files), ("DIRS", dirs), ("DEL", del) })
+            {
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    continue;
+                }
+
+                if (!File.Exists(path))
+                {
+                    log.Write($"{name} list missing: '{path}'");
+                    continue;
+                }
+
+                var lines = File.ReadAllLines(path, Encoding.UTF8);
+                log.Write($"{name} list: path='{path}', count={lines.Length}");
+                foreach (var l in lines)
+                {
+                    log.Write($"  {name}: {l}");
+                }
+            }
+        }
+        catch (Exception ex) { log.Write($"lists log error: {ex.Message}"); }
+    }
+
+    /// <summary>
+    /// A12. Кладёт исход рядом с маркером версии, чтобы лаунчер при следующем
+    /// запуске мог объяснить, почему обновление не применилось.
+    /// </summary>
+    private static void WriteStatus(RunContext ctx, int exit, UpdateLog log)
+    {
+        if (string.IsNullOrWhiteSpace(ctx.Dst))
+        {
+            log.Write("update status not written: каталог установки неизвестен");
+            return;
+        }
+
+        UpdateStatus.Write(
+            ctx.Dst,
+            new UpdateStatus
+            {
+                Outcome = string.IsNullOrWhiteSpace(ctx.Outcome) ? "fatal" : ctx.Outcome,
+                ExitCode = exit,
+                Version = ctx.Version,
+                Message = ctx.Message,
+                LogPath = log.Path,
+            },
+            log.Write);
+    }
+
+    /// <summary>
+    /// A9. Перезапуск лаунчера — в finally и с повторами.
+    /// <para>
+    /// Лаунчер завершил себя сам, чтобы освободить файлы. Если апдейтер после
+    /// этого просто умрёт (исключение, недоступный лог, отказ в правах), у
+    /// пользователя не останется вообще ничего: окно закрылось, новое не
+    /// открылось, а причина видна только в логе, который он не найдёт.
+    /// Поэтому лаунчер поднимается при ЛЮБОМ исходе, включая фатальный.
+    /// </para>
+    /// </summary>
+    private static void Restart(RunContext ctx, UpdateLog log)
+    {
+        if (!ctx.Restart)
+        {
+            log.Write("restart skipped by design");
+            return;
+        }
+
+        var candidates = new List<string>();
+        if (!string.IsNullOrWhiteSpace(ctx.Exe))
+        {
+            candidates.Add(ctx.Exe);
+            if (!string.IsNullOrWhiteSpace(ctx.Dst))
+            {
+                var sameName = Path.Combine(ctx.Dst, Path.GetFileName(ctx.Exe));
+                if (!string.Equals(sameName, ctx.Exe, StringComparison.OrdinalIgnoreCase))
+                {
+                    candidates.Add(sameName);
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(ctx.Dst))
+        {
+            candidates.Add(Path.Combine(ctx.Dst, "ChillHub.exe"));
+        }
+
+        var exeArgs = ReadExeArgs(ctx.ExeArgsFile, log);
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            foreach (var exe in candidates)
+            {
+                try
+                {
+                    if (!File.Exists(exe))
+                    {
+                        continue;
+                    }
+
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = exe,
+                        WorkingDirectory = Directory.Exists(ctx.Dst) ? ctx.Dst : (Path.GetDirectoryName(exe) ?? string.Empty),
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                    };
+
+                    // Исходные аргументы лаунчера восстанавливаем через ArgumentList:
+                    // так пути с пробелами и кавычками доезжают дословно.
+                    foreach (var a in exeArgs)
+                    {
+                        psi.ArgumentList.Add(a);
+                    }
+
+                    var p = Process.Start(psi);
+                    if (p != null)
+                    {
+                        log.Write($"launcher restarted: '{exe}' pid={p.Id} args={exeArgs.Count}");
+                        return;
+                    }
+
+                    log.Write($"restart: Process.Start('{exe}') вернул null");
+                }
+                catch (Exception ex)
+                {
+                    log.Write($"restart attempt {attempt} for '{exe}' failed: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+
+            Thread.Sleep(500);
+        }
+
+        log.Write("CRITICAL: перезапустить лаунчер не удалось — пользователь остался без запущенного приложения. " +
+                  "Кандидаты: " + string.Join(", ", candidates));
+    }
+
+    /// <summary>
+    /// Читает исходные аргументы командной строки лаунчера (по одному на строку).
+    /// Файл, а не строка в командной строке: так не нужно ничего экранировать и
+    /// нечему потеряться при повторном разборе.
+    /// </summary>
+    private static List<string> ReadExeArgs(string? path, UpdateLog log)
+    {
+        var result = new List<string>();
+        try
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                return result;
+            }
+
+            foreach (var line in File.ReadAllLines(path, Encoding.UTF8))
+            {
+                if (!string.IsNullOrEmpty(line))
+                {
+                    result.Add(line);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            log.Write($"exe args read error: {ex.Message}");
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -673,5 +942,27 @@ internal static class Program
             return Convert.ToHexString(sha.Hash!).ToLowerInvariant();
         }
         catch { return string.Empty; }
+    }
+
+    /// <summary>Состояние прогона, нужное блоку finally (лог, статус, перезапуск).</summary>
+    private sealed class RunContext
+    {
+        public string Exe = string.Empty;
+        public string Dst = string.Empty;
+        public string Version = string.Empty;
+        public string? ExeArgsFile;
+        public string Outcome = "fatal";
+        public string Message = string.Empty;
+        public bool Restart = true;
+        public Mutex? Lock;
+    }
+
+    /// <summary>Прерывание всего прохода: повторять бессмысленно (например, отказ в доступе).</summary>
+    private sealed class UpdaterAbortException : Exception
+    {
+        public UpdaterAbortException(string message, Exception? inner = null)
+            : base(message, inner)
+        {
+        }
     }
 }
