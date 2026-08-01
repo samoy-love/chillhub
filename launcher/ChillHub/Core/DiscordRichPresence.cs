@@ -158,49 +158,19 @@ namespace ChillHub.Core {
         }
 
         /// <summary>
-        /// Читает пользовательский флаг «Discord Rich Presence».
-        /// <para>
-        /// ВЛАДЕЛЬЦУ: чтобы добавить переключатель в настройки, достаточно объявить в
-        /// <c>AppConfig</c> свойство <c>public bool DiscordRichPresence { get; set; } = true;</c>
-        /// и привязать к нему CheckBox на странице настроек — по аналогии с
-        /// <c>AutoErrorReports</c>. Этот метод найдёт свойство сам, менять код здесь не нужно.
-        /// </para>
-        /// <para>
-        /// Пока такого свойства нет, флаг читается напрямую из config.json по ключу
-        /// <c>DiscordRichPresence</c>. По умолчанию интеграция включена.
-        /// </para>
+        /// Читает пользовательский флаг «Discord Rich Presence» из настроек
+        /// (<see cref="AppConfig.DiscordRichPresence"/>, переключатель — на странице настроек).
+        /// Конфиг недоступен — считаем, что интеграция включена: это поведение по умолчанию.
         /// </summary>
         /// <returns>True, если пользователь не отключил интеграцию.</returns>
         private static bool IsEnabledByConfig() {
-            // 1) Свойство в AppConfig, если владелец его уже завёл
             try {
-                var cfg = ConfigService.Current;
-                var prop = cfg?.GetType().GetProperty("DiscordRichPresence");
-                if (prop != null && prop.PropertyType == typeof(bool)) {
-                    return (bool)(prop.GetValue(cfg) ?? true);
-                }
+                return ConfigService.Current?.DiscordRichPresence ?? true;
             }
             catch (Exception ex) {
-                Logging.Logger.Warn($"DiscordRichPresence: чтение флага из AppConfig не удалось: {ex.Message}");
+                Logging.Logger.Warn($"DiscordRichPresence: чтение флага из настроек не удалось: {ex.Message}");
+                return true;
             }
-
-            // 2) Фолбэк: ключ прямо из config.json (позволяет отключить функцию вручную уже сейчас)
-            try {
-                var path = ConfigService.ConfigFilePath;
-                if (File.Exists(path)) {
-                    using var doc = JsonDocument.Parse(File.ReadAllText(path));
-                    if (doc.RootElement.ValueKind == JsonValueKind.Object
-                        && doc.RootElement.TryGetProperty("DiscordRichPresence", out var flag)
-                        && (flag.ValueKind == JsonValueKind.True || flag.ValueKind == JsonValueKind.False)) {
-                        return flag.GetBoolean();
-                    }
-                }
-            }
-            catch (Exception ex) {
-                Logging.Logger.Warn($"DiscordRichPresence: чтение флага из config.json не удалось: {ex.Message}");
-            }
-
-            return true;
         }
 
         /// <summary>Application ID Discord — это строка из цифр (snowflake).</summary>
