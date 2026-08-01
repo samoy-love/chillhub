@@ -27,6 +27,12 @@ namespace ChillHub {
         /// </summary>
         private const int MaxSameVersionAttempts = 3;
 
+        /// <summary>
+        /// Сколько каталогов версий в %TEMP%\ChillHub\SelfUpdate оставляем при уборке (19b):
+        /// самый свежий (его мог только что использовать апдейтер) и один предыдущий.
+        /// </summary>
+        private const int KeepTempSessionDirs = 2;
+
         /// <summary>UTF-8 без BOM: BOM ломает сверку размеров/хешей служебных списков.</summary>
         private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
 
@@ -50,7 +56,7 @@ namespace ChillHub {
 
         public UpdateWindow() {
             this.InitializeComponent();
-            TryCleanupTempUpdaterDirs();
+            TryCleanupTempSelfUpdateDirs();
             TryCleanupInstalledUpdaterArtifacts();
 
             // In DEBUG builds, pre-check the DEV skip checkbox by default
@@ -537,28 +543,104 @@ namespace ChillHub {
             }
         }
 
-        // Cleanup TEMP updater directories from previous runs
-        private static void TryCleanupTempUpdaterDirs() {
+        /// <summary>
+        /// 19b. Уборка %TEMP%\ChillHub\SelfUpdate от каталогов старых версий.
+        ///
+        /// Раньше чистилась только подпапка updater, а сами каталоги версий оставались навсегда —
+        /// по копии пакета обновления на каждую версию. Теперь каталоги старых версий удаляются
+        /// целиком; оставляем самые свежие: в новейшем может ещё дописывать лог апдейтер,
+        /// который только что перезапустил лаунчер.
+        ///
+        /// Всё best-effort: залоченные файлы просто доживают до следующего запуска.
+        /// </summary>
+        private static void TryCleanupTempSelfUpdateDirs() {
             try {
                 var root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ChillHub", "SelfUpdate");
                 if (!System.IO.Directory.Exists(root)) {
                     return;
                 }
 
-                foreach (var verDir in System.IO.Directory.EnumerateDirectories(root)) {
-                    // Старая раскладка (updater прямо в папке версии) и новая (work\updater).
-                    foreach (var candidate in new[] {
-                        System.IO.Path.Combine(verDir, PreserveMatcher.UpdaterArtifactDir),
-                        System.IO.Path.Combine(verDir, "work", PreserveMatcher.UpdaterArtifactDir),
-                    }) {
+                var dirs = new System.Collections.Generic.List<System.IO.DirectoryInfo>();
+                foreach (var p in System.IO.Directory.EnumerateDirectories(root)) {
+                    try {
+                        dirs.Add(new System.IO.DirectoryInfo(p));
+                    }
+                    catch {
+                    }
+                }
+
+                // Свежие — в начало списка.
+                dirs.Sort((a, b) => DirStamp(b).CompareTo(DirStamp(a)));
+
+                for (var i = 0; i < dirs.Count; i++) {
+                    var dir = dirs[i].FullName;
+                    if (i < KeepTempSessionDirs) {
+                        // Свежие сессии целиком не сносим, но копию апдейтера из них выносим:
+                        // старая раскладка (updater прямо в папке версии) и новая (work\updater).
+                        TryDeleteDirectoryBestEffort(System.IO.Path.Combine(dir, PreserveMatcher.UpdaterArtifactDir));
+                        TryDeleteDirectoryBestEffort(System.IO.Path.Combine(dir, "work", PreserveMatcher.UpdaterArtifactDir));
+                        continue;
+                    }
+
+                    TryDeleteDirectoryBestEffort(dir);
+                }
+            }
+            catch {
+            }
+        }
+
+        /// <summary>Время последнего изменения каталога; при ошибке — «очень давно».</summary>
+        private static DateTime DirStamp(System.IO.DirectoryInfo d) {
+            try {
+                var w = d.LastWriteTimeUtc;
+                var c = d.CreationTimeUtc;
+                return w > c ? w : c;
+            }
+            catch {
+                return DateTime.MinValue;
+            }
+        }
+
+        /// <summary>
+        /// Удаляет каталог, переживая залоченные файлы и атрибут «только чтение».
+        /// Ничего не бросает: уборка мусора не должна мешать запуску лаунчера.
+        /// </summary>
+        private static void TryDeleteDirectoryBestEffort(string path) {
+            try {
+                if (!System.IO.Directory.Exists(path)) {
+                    return;
+                }
+
+                try {
+                    System.IO.Directory.Delete(path, true);
+                    return;
+                }
+                catch {
+                }
+
+                // Не вышло с первого раза: снимаем read-only и выносим файлы поштучно,
+                // чтобы освободить место даже если один файл кем-то занят.
+                try {
+                    foreach (var f in System.IO.Directory.EnumerateFiles(path, "*", System.IO.SearchOption.AllDirectories)) {
                         try {
-                            if (System.IO.Directory.Exists(candidate)) {
-                                System.IO.Directory.Delete(candidate, true);
+                            var attrs = System.IO.File.GetAttributes(f);
+                            if ((attrs & (System.IO.FileAttributes.ReadOnly | System.IO.FileAttributes.System)) != 0) {
+                                System.IO.File.SetAttributes(f, attrs & ~(System.IO.FileAttributes.ReadOnly | System.IO.FileAttributes.System));
                             }
+
+                            System.IO.File.Delete(f);
                         }
                         catch {
                         }
                     }
+                }
+                catch {
+                }
+
+                try {
+                    System.IO.Directory.Delete(path, true);
+                }
+                catch {
                 }
             }
             catch {
