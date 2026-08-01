@@ -98,19 +98,12 @@ namespace ChillHub.Core.Sync {
         /// </summary>
         public static bool Strict {
             get {
-                var env = Environment.GetEnvironmentVariable(StrictEnvVar);
-                if (!string.IsNullOrWhiteSpace(env)) {
-                    var v = env.Trim();
-                    if (v is "1" or "true" or "TRUE" or "yes" or "YES") {
-                        return true;
-                    }
-
-                    if (v is "0" or "false" or "FALSE" or "no" or "NO") {
-                        return false;
-                    }
-                }
-
-                return StrictByDefault;
+                // Переменная окружения умеет ТОЛЬКО повышать строгость, но не понижать.
+                // Иначе защиту снимает любой, кто может задать окружение процессу —
+                // ярлык, .bat-обёртка, инжект в родительский процесс, — то есть ровно
+                // тот, от кого мы и защищаемся. «Выключить проверку подписи» не должно
+                // быть доступно снаружи бинаря ни при каких значениях.
+                return StrictByDefault || EnvRequestsStrict();
             }
         }
 
@@ -276,6 +269,21 @@ namespace ChillHub.Core.Sync {
         /// снова начнёт покрывать не тот путь, который создаётся.
         /// </para>
         /// </summary>
+        /// <summary>
+        /// Запрошен ли строгий режим переменной окружения. Значения, выключающие
+        /// строгость, намеренно не поддерживаются: переменная только повышает планку.
+        /// </summary>
+        /// <returns>true, если переменная требует строгого режима.</returns>
+        private static bool EnvRequestsStrict() {
+            var env = Environment.GetEnvironmentVariable(StrictEnvVar);
+            if (string.IsNullOrWhiteSpace(env)) {
+                return false;
+            }
+
+            var v = env.Trim();
+            return v is "1" or "true" or "TRUE" or "yes" or "YES";
+        }
+
         private static string CanonPath(string? p) => ChillHub.Update.ManifestPath.Canonicalize(p);
     }
 

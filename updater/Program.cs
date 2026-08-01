@@ -458,19 +458,36 @@ internal static class Program
                 }
                 catch (Exception ex) { Log($"hash union compare error: {ex.Message}"); }
 
-                // Write version marker (if provided).
+                // Write version marker (if provided) — ТОЛЬКО при полностью успешном копировании.
                 // UTF-8 без BOM и без завершающего перевода строки — ровно как пишет installer.nsi.
-                try
+                //
+                // Почему условие обязательно: маркер — это утверждение «на диске лежит
+                // версия N». Лаунчер верит ему безоговорочно: предохранитель
+                // `remote == local` выходит из проверки ДО сверки хешей. Если записать
+                // маркер после частичного копирования (пара файлов залочена антивирусом),
+                // установка со смесью старых и новых сборок будет считаться исправной
+                // навсегда, счётчик попыток обнулится, и расхождение уже никто не заметит.
+                // Это зеркало исходной петли: раньше обновление не могло остановиться,
+                // так оно не смогло бы заметить, что не доехало. Чинится только
+                // переустановкой, поэтому лучше оставить старый маркер и обновиться снова.
+                if (copyErrors > 0)
                 {
-                    if (!string.IsNullOrWhiteSpace(newVersion))
-                    {
-                        var marker = Path.Combine(dst, "launcher.version");
-                        try { Directory.CreateDirectory(Path.GetDirectoryName(marker)!); } catch { }
-                        File.WriteAllText(marker, newVersion.Trim(), Utf8NoBom);
-                        Log($"wrote version marker: {marker} = '{newVersion.Trim()}'");
-                    }
+                    Log($"version marker NOT written: copy had {copyErrors} error(s); leaving the previous version in place so the next launch retries");
                 }
-                catch (Exception ex) { Log($"version marker write error: {ex.Message}"); }
+                else
+                {
+                    try
+                    {
+                        if (!string.IsNullOrWhiteSpace(newVersion))
+                        {
+                            var marker = Path.Combine(dst, "launcher.version");
+                            try { Directory.CreateDirectory(Path.GetDirectoryName(marker)!); } catch { }
+                            File.WriteAllText(marker, newVersion.Trim(), Utf8NoBom);
+                            Log($"wrote version marker: {marker} = '{newVersion.Trim()}'");
+                        }
+                    }
+                    catch (Exception ex) { Log($"version marker write error: {ex.Message}"); }
+                }
 
                 // Итог по копированию (A7): при ненулевом счётчике ошибок обновление применено НЕ полностью.
                 if (copyErrors > 0)
