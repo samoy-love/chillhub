@@ -309,129 +309,146 @@ namespace ChillHub.Core.Sync {
             var degree = Math.Clamp(ConfigService.Current.DownloadThreads, 2, 16);
             using (var sem = new SemaphoreSlim(degree)) {
                 var tasks = new List<Task>();
-                foreach (var t in plan.Downloads) {
-                    await sem.WaitAsync(ct).ConfigureAwait(false);
-                    tasks.Add(Task.Run(
-                        async () => {
-                            try {
-                                ct.ThrowIfCancellationRequested();
-                                var stagingFile = ManifestPath.Combine(stagingRoot, t.RelativePath);
-                                var stagingDir = Path.GetDirectoryName(stagingFile)!;
-                                Directory.CreateDirectory(stagingDir);
+                try {
+                    foreach (var t in plan.Downloads) {
+                        await sem.WaitAsync(ct).ConfigureAwait(false);
+                        tasks.Add(Task.Run(
+                            async () => {
+                                try {
+                                    ct.ThrowIfCancellationRequested();
+                                    var stagingFile = ManifestPath.Combine(stagingRoot, t.RelativePath);
+                                    var stagingDir = Path.GetDirectoryName(stagingFile)!;
+                                    Directory.CreateDirectory(stagingDir);
 
-                                // Скачивание в .part
-                                var partPath = stagingFile + ".part";
-                                {
-                                    long existing = 0;
-                                    if (File.Exists(partPath)) {
-                                        try {
-                                            existing = new FileInfo(partPath).Length;
-                                        }
-                                        catch {
-                                        }
-                                    }
-
-                                    var attempt = 0;
-                                    var maxAttempts = 3;
-                                    var buffer = new byte[256 * 1024];
-                                    while (true) {
-                                        ct.ThrowIfCancellationRequested();
-                                        try {
-                                            using var req = new HttpRequestMessage(HttpMethod.Get, t.Url);
-                                            if (existing > 0 && existing < t.Size) {
-                                                req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(existing, null);
-                                            }
-
-                                            using var resp = await this.http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-                                            resp.EnsureSuccessStatusCode();
-
-                                            // Если сервер вернул 200 OK, несмотря на Range — перезаписываем файл заново
-                                            if (existing > 0 && resp.StatusCode == HttpStatusCode.OK) {
-                                                existing = 0;
-                                                try {
-                                                    File.Delete(partPath);
-                                                }
-                                                catch {
-                                                }
-                                            }
-
-                                            using var src = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-                                            using var dst = new FileStream(partPath, FileMode.Append, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true);
-                                            int read;
-                                            while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false)) > 0) {
-                                                await dst.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
-                                                Interlocked.Add(ref downloaded, read);
-                                                progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
-                                            }
-
-                                            break; // success
-                                        }
-                                        catch (Exception ex) {
-                                            attempt++;
-                                            if (attempt >= maxAttempts) {
-                                                throw new IOException($"Ошибка загрузки {t.RelativePath}: {ex.Message}", ex);
-                                            }
-
-                                            var delayMs = (int)Math.Min(5000, 500 * Math.Pow(2, attempt - 1));
-                                            await Task.Delay(delayMs, ct).ConfigureAwait(false);
-
-                                            // обновить existing на случай частичного дозаписи
+                                    // Скачивание в .part
+                                    var partPath = stagingFile + ".part";
+                                    {
+                                        long existing = 0;
+                                        if (File.Exists(partPath)) {
                                             try {
                                                 existing = new FileInfo(partPath).Length;
                                             }
                                             catch {
                                             }
                                         }
+
+                                        var attempt = 0;
+                                        var maxAttempts = 3;
+                                        var buffer = new byte[256 * 1024];
+                                        while (true) {
+                                            ct.ThrowIfCancellationRequested();
+                                            try {
+                                                using var req = new HttpRequestMessage(HttpMethod.Get, t.Url);
+                                                if (existing > 0 && existing < t.Size) {
+                                                    req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(existing, null);
+                                                }
+
+                                                using var resp = await this.http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                                                resp.EnsureSuccessStatusCode();
+
+                                                // Если сервер вернул 200 OK, несмотря на Range — перезаписываем файл заново
+                                                if (existing > 0 && resp.StatusCode == HttpStatusCode.OK) {
+                                                    existing = 0;
+                                                    try {
+                                                        File.Delete(partPath);
+                                                    }
+                                                    catch {
+                                                    }
+                                                }
+
+                                                using var src = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+                                                using var dst = new FileStream(partPath, FileMode.Append, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true);
+                                                int read;
+                                                while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false)) > 0) {
+                                                    await dst.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+                                                    Interlocked.Add(ref downloaded, read);
+                                                    progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+                                                }
+
+                                                break; // success
+                                            }
+                                            catch (Exception ex) {
+                                                attempt++;
+                                                if (attempt >= maxAttempts) {
+                                                    throw new IOException($"Ошибка загрузки {t.RelativePath}: {ex.Message}", ex);
+                                                }
+
+                                                var delayMs = (int)Math.Min(5000, 500 * Math.Pow(2, attempt - 1));
+                                                await Task.Delay(delayMs, ct).ConfigureAwait(false);
+
+                                                // обновить existing на случай частичного дозаписи
+                                                try {
+                                                    existing = new FileInfo(partPath).Length;
+                                                }
+                                                catch {
+                                                }
+                                            }
+                                        }
                                     }
+
+                                    // Верификация хешей (SHA-256 и Blake3), если доступны — за один проход
+                                    if (!string.IsNullOrWhiteSpace(t.Sha256) || !string.IsNullOrWhiteSpace(t.Blake3)) {
+                                        using var f = new FileStream(partPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, useAsync: true);
+                                        using var sha = SHA256.Create();
+                                        var b3 = Blake3.Hasher.New();
+                                        var buf = new byte[256 * 1024];
+                                        int r;
+
+                                        // NOTE: Use synchronous reads to avoid awaiting while a ref-struct (Hasher) is alive (C# 12 limitation)
+                                        while ((r = f.Read(buf, 0, buf.Length)) > 0) {
+                                            sha.TransformBlock(buf, 0, r, null, 0);
+                                            b3.Update(new ReadOnlySpan<byte>(buf, 0, r));
+                                        }
+
+                                        sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+                                        var shaHex = Convert.ToHexString(sha.Hash!).ToLowerInvariant();
+                                        var b3out = new byte[32];
+                                        b3.Finalize(b3out);
+                                        var b3Hex = Convert.ToHexString(b3out).ToLowerInvariant();
+
+                                        if (!string.IsNullOrWhiteSpace(t.Sha256) && !string.Equals(shaHex, t.Sha256, StringComparison.OrdinalIgnoreCase)) {
+                                            File.Delete(partPath);
+                                            throw new InvalidDataException($"Хеш SHA-256 не совпадает: {t.RelativePath}");
+                                        }
+
+                                        if (!string.IsNullOrWhiteSpace(t.Blake3) && !string.Equals(b3Hex, t.Blake3, StringComparison.OrdinalIgnoreCase)) {
+                                            File.Delete(partPath);
+                                            throw new InvalidDataException($"Хеш Blake3 не совпадает: {t.RelativePath}");
+                                        }
+                                    }
+
+                                    // Переименовать .part -> готовый stagingFile
+                                    if (File.Exists(stagingFile)) {
+                                        File.Delete(stagingFile);
+                                    }
+
+                                    File.Move(partPath, stagingFile);
                                 }
-
-                                // Верификация хешей (SHA-256 и Blake3), если доступны — за один проход
-                                if (!string.IsNullOrWhiteSpace(t.Sha256) || !string.IsNullOrWhiteSpace(t.Blake3)) {
-                                    using var f = new FileStream(partPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, useAsync: true);
-                                    using var sha = SHA256.Create();
-                                    var b3 = Blake3.Hasher.New();
-                                    var buf = new byte[256 * 1024];
-                                    int r;
-
-                                    // NOTE: Use synchronous reads to avoid awaiting while a ref-struct (Hasher) is alive (C# 12 limitation)
-                                    while ((r = f.Read(buf, 0, buf.Length)) > 0) {
-                                        sha.TransformBlock(buf, 0, r, null, 0);
-                                        b3.Update(new ReadOnlySpan<byte>(buf, 0, r));
-                                    }
-
-                                    sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
-                                    var shaHex = Convert.ToHexString(sha.Hash!).ToLowerInvariant();
-                                    var b3out = new byte[32];
-                                    b3.Finalize(b3out);
-                                    var b3Hex = Convert.ToHexString(b3out).ToLowerInvariant();
-
-                                    if (!string.IsNullOrWhiteSpace(t.Sha256) && !string.Equals(shaHex, t.Sha256, StringComparison.OrdinalIgnoreCase)) {
-                                        File.Delete(partPath);
-                                        throw new InvalidDataException($"Хеш SHA-256 не совпадает: {t.RelativePath}");
-                                    }
-
-                                    if (!string.IsNullOrWhiteSpace(t.Blake3) && !string.Equals(b3Hex, t.Blake3, StringComparison.OrdinalIgnoreCase)) {
-                                        File.Delete(partPath);
-                                        throw new InvalidDataException($"Хеш Blake3 не совпадает: {t.RelativePath}");
-                                    }
+                                finally {
+                                    Interlocked.Increment(ref filesDone);
+                                    progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+                                    sem.Release();
                                 }
+                            }, ct));
+                    }
 
-                                // Переименовать .part -> готовый stagingFile
-                                if (File.Exists(stagingFile)) {
-                                    File.Delete(stagingFile);
-                                }
-
-                                File.Move(partPath, stagingFile);
-                            }
-                            finally {
-                                Interlocked.Increment(ref filesDone);
-                                progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
-                                sem.Release();
-                            }
-                        }, ct));
+                    await Task.WhenAll(tasks).ConfigureAwait(false);
                 }
+                catch {
+                    // Из using нельзя выходить, пока живы задачи: каждая делает sem.Release()
+                    // в finally, а семафор к тому моменту был бы уже уничтожен. Отмена
+                    // прилетала прямо из sem.WaitAsync(ct), Task.WhenAll пропускался — и
+                    // после «Отменено» скачивание продолжалось в фоне, роняя ObjectDisposedException.
+                    try {
+                        await Task.WhenAll(tasks).ConfigureAwait(false);
+                    }
+                    catch (Exception drainEx) {
+                        // Причина остановки уже известна из внешнего исключения
+                        ChillHub.Core.Logging.Logger.Info($"Загрузка остановлена: {drainEx.Message}");
+                    }
 
-                await Task.WhenAll(tasks).ConfigureAwait(false);
+                    throw;
+                }
             }
 
             // Верификация (хеши пропустим на моках)
