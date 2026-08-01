@@ -193,6 +193,20 @@ namespace ChillHub {
         /// boot.log лежит там же, где остальные логи клиента (см. <see cref="Logger.LogDirectory"/>),
         /// а не в %TEMP%, который чистится системой.
         /// </summary>
+        /// <inheritdoc/>
+        protected override void OnExit(ExitEventArgs e) {
+            // Снимаем статус в Discord, иначе он останется висеть после закрытия лаунчера.
+            // Метод сам ничего не делает, если интеграция не настроена или Discord не запущен.
+            try {
+                ChillHub.Core.DiscordRichPresence.Shutdown();
+            }
+            catch (Exception ex) {
+                try { Logger.Warn("Discord shutdown failed: " + ex.Message); } catch { }
+            }
+
+            base.OnExit(e);
+        }
+
         private static string GetBootLogPath() {
             try {
                 var dir = Logger.LogDirectory;
