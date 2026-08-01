@@ -2,6 +2,7 @@ package news
 
 import (
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -114,13 +115,28 @@ func (h *Handlers) AssetsMkdir(w http.ResponseWriter, r *http.Request) {
 	adminutil.WriteJSON(w, map[string]string{"status": "ok"})
 }
 
+// Image upload bounds. Assets are pictures for news articles, so a few tens of
+// megabytes is already generous; MaxImageBytes is enforced on the request body
+// AND on the read into memory, because the whole file is decoded in RAM.
+// imageFormMemory only says how much of the multipart body may stay in RAM
+// before it is spooled to a temp file.
+const (
+	// MaxImageBytes caps one uploaded image.
+	MaxImageBytes = 32 << 20 // 32 MiB
+	// imageFormMemory is the in-RAM part of a multipart image upload.
+	imageFormMemory = 8 << 20 // 8 MiB
+)
+
 // AssetsUpload accepts a multipart image, converts it and stores it.
 func (h *Handlers) AssetsUpload(w http.ResponseWriter, r *http.Request) {
 	if !adminutil.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	if err := r.ParseMultipartForm(64 << 20); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	// Bound the whole request before parsing: without this a single client can
+	// make the process buffer an arbitrary amount of data.
+	r.Body = http.MaxBytesReader(w, r.Body, MaxImageBytes+(1<<20))
+	if err := r.ParseMultipartForm(imageFormMemory); err != nil {
+		http.Error(w, "request too large or malformed", http.StatusBadRequest)
 		return
 	}
 	base := h.assetsRoot()
@@ -132,9 +148,16 @@ func (h *Handlers) AssetsUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
-	data, err := io.ReadAll(f)
+	// io.ReadAll on a multipart part is unbounded by itself: the part may have
+	// been spooled to disk and be far larger than the parse window.
+	data, err := io.ReadAll(io.LimitReader(f, MaxImageBytes+1))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[news:assets] read upload: %v", err)
+		http.Error(w, "failed to read upload", http.StatusInternalServerError)
+		return
+	}
+	if len(data) > MaxImageBytes {
+		http.Error(w, "image too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 	inName := strings.ToLower(hdr.Filename)

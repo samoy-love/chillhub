@@ -13,13 +13,22 @@ import (
 	"ChillHub/server/internal/adminutil"
 )
 
+// uploadFormMemory is how much of a multipart body ParseMultipartForm may keep
+// in RAM; everything beyond it is spooled to a temp file. It is NOT a limit on
+// the upload size — nginx allows 30 GB bodies here.
+//
+// It used to be 1 GiB, which meant every concurrent upload could pin a gigabyte
+// of heap on a box that also serves the public endpoints. The ZIP is streamed to
+// disk immediately afterwards anyway, so a small window costs nothing.
+const uploadFormMemory = 8 << 20 // 8 MiB
+
 // Upload handles a plain multipart ZIP upload and publishes a release
 // (launcher or game), returning the manifest JSON.
 func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	if !adminutil.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	if err := r.ParseMultipartForm(1 << 30); err != nil { // up to 1GB form parsing window
+	if err := r.ParseMultipartForm(uploadFormMemory); err != nil {
 		http.Error(w, "multipart parse error: "+err.Error(), http.StatusBadRequest)
 		return
 	}
