@@ -546,13 +546,62 @@ jobs:
               REDIR_OK=0
             fi
 
-            sudo systemctl daemon-reload || true
-            sudo systemctl restart chillhub-api.service || true
-            sudo systemctl restart chillhub-admin.service || true
+            # И12: ПРОВЕРЯЕМ, ЧТО СЕРВИС ОТВЕЧАЕТ, А НЕ ЧТО SYSTEMD ЕГО ЗАПУСТИЛ.
+            #
+            # Было: `systemctl restart ... || true`, а сразу за ним
+            # `systemctl is-active`. Две беды в трёх строках.
+            #
+            # 1) `|| true` глушил провал самого restart.
+            # 2) У обоих юнитов Type=simple, поэтому systemd считает сервис
+            #    активным В МОМЕНТ ЗАПУСКА ПРОЦЕССА — не дожидаясь, пока тот
+            #    прочитает конфиг, откроет порт или хотя бы останется жив.
+            #    Процесс, падающий через 200 мс на кривом JWT_SECRET или
+            #    занятом порте, успевал отрапортовать «active». Проверка
+            #    отвечала на вопрос «systemd попытался?», а не «сервис
+            #    работает?».
+            #
+            # Опрашиваем по HTTP на loopback с ретраями: admin — специально
+            # заведённый /admin/api/health, api — /api/maintenance (у
+            # публичного API health-эндпоинта нет, а этот GET отвечает всегда
+            # и не требует авторизации). Именно 127.0.0.1, а не публичный URL:
+            # здесь проверяется сам сервис, а не nginx с сертификатом — их
+            # отказы надо различать. Публичные проверки идут ниже.
+            sudo systemctl daemon-reload
+            sudo systemctl restart chillhub-api.service
+            sudo systemctl restart chillhub-admin.service
+
+            wait_healthy() {
+              _name="$1"; _url="$2"; _tries="${3:-30}"; _i=1; _code=""
+              while [ "$_i" -le "$_tries" ]; do
+                _code=$(curl -s --max-time 3 -o /dev/null -w "%{http_code}" "$_url" 2>/dev/null || true)
+                if [ "$_code" = "200" ]; then
+                  ok "[health] $_name отвечает 200 на $_url (попытка $_i из $_tries)"
+                  return 0
+                fi
+                _i=$((_i + 1))
+                sleep 1
+              done
+              err "[health] $_name НЕ ответил 200 на $_url за ${_tries} с (последний код: ${_code:-нет ответа})"
+              return 1
+            }
+
+            HEALTH_FAIL=0
+            wait_healthy "chillhub-admin" "http://127.0.0.1:55777/admin/api/health" 30 || HEALTH_FAIL=1
+            wait_healthy "chillhub-api"   "http://127.0.0.1:55700/api/maintenance"  30 || HEALTH_FAIL=1
+
+            # Состояния всё равно собираем: они попадают в HTML-отчёт и в
+            # итоговый $STATUS ниже.
             API_STATE=$(systemctl is-active chillhub-api.service || true)
             ADM_STATE=$(systemctl is-active chillhub-admin.service || true)
             info "[systemd] api=$API_STATE admin=$ADM_STATE"
-            [ "$API_STATE" = active ] && [ "$ADM_STATE" = active ] || { err "[deploy] services NOT active"; exit 1; }
+            if [ "$HEALTH_FAIL" -ne 0 ]; then
+              err "[deploy] сервисы не отвечают на health — собираю диагностику"
+              for _s in chillhub-api.service chillhub-admin.service; do
+                echo "---- systemctl status $_s ----"; sudo systemctl status "$_s" --no-pager -n 20 || true
+                echo "---- journalctl -u $_s ----"; sudo journalctl -u "$_s" -n 50 --no-pager || true
+              done
+              exit 1
+            fi
 
             DOWNLOADS_DIR="$(b64d "${DOWNLOADS_DIR_B64:-}")"
             if [ -n "$DOWNLOADS_DIR" ] && [ -d "$DOWNLOADS_DIR" ]; then

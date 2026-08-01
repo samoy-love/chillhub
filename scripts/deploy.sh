@@ -489,11 +489,50 @@ for s in "${SERVICES[@]}"; do
   run "sudo systemctl status \"$s\" --no-pager -n 3 || true"
 done
 
-# Verify services active (hard fail)
-for s in "${SERVICES[@]}"; do
-  if ! systemctl is-active "$s" >/dev/null 2>&1; then err "Service $s is not active"; exit 1; fi
-done
-ok "Services are active"
+# И12: ПРОВЕРЯЕМ, ЧТО СЕРВИС ОТВЕЧАЕТ, А НЕ ЧТО SYSTEMD ЕГО ЗАПУСТИЛ.
+#
+# Здесь стоял `systemctl is-active` сразу после restart. У обоих юнитов
+# Type=simple, а это значит, что systemd считает сервис активным В МОМЕНТ
+# ЗАПУСКА ПРОЦЕССА — не дожидаясь, пока тот прочитает конфиг, откроет порт или
+# вообще останется жив. Процесс, падающий через 200 мс на кривом JWT_SECRET
+# или занятом порте, успевал отрапортовать «active», и деплой шёл дальше как
+# ни в чём не бывало. Проверка отвечала на вопрос «systemd попытался?», а не
+# «сервис работает?».
+#
+# Опрашиваем сервисы по HTTP на loopback, с ретраями:
+#   * admin — /admin/api/health (специально заведён для проб);
+#   * api   — /api/maintenance (у публичного API health-эндпоинта нет, а этот
+#             GET отвечает всегда и не требует авторизации).
+# 127.0.0.1, а не публичный URL: на этом шаге проверяется сам сервис, а не
+# nginx с сертификатом — их отказы надо различать. Публичные проверки идут
+# ниже, в блоке смоук-тестов.
+wait_healthy(){
+  local name="$1" url="$2" tries="${3:-30}" i code=""
+  for ((i=1; i<=tries; i++)); do
+    code=$(curl -s --max-time 3 -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || true)
+    if [[ "$code" == "200" ]]; then
+      ok "[health] $name отвечает 200 на $url (попытка $i из $tries)"
+      return 0
+    fi
+    sleep 1
+  done
+  err "[health] $name НЕ ответил 200 на $url за ${tries} с (последний код: ${code:-нет ответа})"
+  return 1
+}
+
+HEALTH_FAIL=0
+wait_healthy "chillhub-admin" "http://127.0.0.1:55777/admin/api/health" 30 || HEALTH_FAIL=1
+wait_healthy "chillhub-api"   "http://127.0.0.1:55700/api/maintenance"  30 || HEALTH_FAIL=1
+
+if [[ $HEALTH_FAIL -ne 0 ]]; then
+  err "Сервисы не поднялись. Диагностика:"
+  for s in "${SERVICES[@]}"; do
+    echo "---- systemctl status $s ----"; sudo systemctl status "$s" --no-pager -n 20 || true
+    echo "---- journalctl -u $s (последние 50) ----"; sudo journalctl -u "$s" -n 50 --no-pager || true
+  done
+  exit 1
+fi
+ok "Services are up and answering"
 
 # Integrity verification (manifests)
 section "Integrity: манифесты и сравнение"

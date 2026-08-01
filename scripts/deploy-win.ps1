@@ -730,30 +730,61 @@ if [ -n "$ADMIN_USER$ADMIN_PASS_BCRYPT$ADMIN_PASS_PLAIN$JWT_SECRET$COOKIE_DOMAIN
   echo "[debug] wrote override.conf (JWT:$([ -n "$JWT_SECRET" ] && echo 1 || echo 0) PLAIN:$([ -n "$ADMIN_PASS_PLAIN" ] && echo 1 || echo 0) BCRYPT:$([ -n "$ADMIN_PASS_BCRYPT" ] && echo 1 || echo 0))"
 fi
 
-  # Reload services AFTER writing admin drop-in so env vars are applied
-  sudo systemctl daemon-reload || true
-  sudo systemctl restart chillhub-api.service || true
-  sudo systemctl restart chillhub-admin.service || true
+  # И12: ПРОВЕРЯЕМ, ЧТО СЕРВИС ОТВЕЧАЕТ, А НЕ ЧТО SYSTEMD ЕГО ЗАПУСТИЛ.
+  #
+  # Было: `systemctl restart ... || true`, сразу за ним `is-active`, и лишь
+  # потом — необязательное ожидание health, которое при неуспехе печатало
+  # «proceeding but tests may fail» и шло дальше. Проблемы:
+  #
+  #   1) `|| true` глушил провал самого restart;
+  #   2) у обоих юнитов Type=simple, поэтому systemd считает сервис активным
+  #      В МОМЕНТ ЗАПУСКА ПРОЦЕССА — не дожидаясь, пока тот прочитает конфиг,
+  #      откроет порт или просто останется жив. Процесс, падающий через 200 мс
+  #      на кривом JWT_SECRET, успевал отрапортовать «active»;
+  #   3) настоящая проверка (health) была неблокирующей и вдобавок
+  #      срабатывала только для admin; api не проверялся никак;
+  #   4) жёсткость проверки зависела от --fail-on-mismatch, то есть от флага
+  #      про СВЕРКУ МАНИФЕСТОВ — к живости сервисов он отношения не имеет.
+  #
+  # Теперь опрос health обязателен для обоих сервисов и валит деплой.
+  sudo systemctl daemon-reload
+  sudo systemctl restart chillhub-api.service
+  sudo systemctl restart chillhub-admin.service
+
+  # No -k anywhere here: это plain http:// на loopback, TLS отсутствует как
+  # явление. 127.0.0.1, а не публичный URL, — чтобы отличать отказ сервиса от
+  # отказа nginx/сертификата; публичные проверки идут ниже.
+  wait_healthy() {
+    _name="$1"; _url="$2"; _tries="${3:-30}"; _i=1; _code=""
+    while [ "$_i" -le "$_tries" ]; do
+      _code=$(curl -s --max-time 3 -o /dev/null -w "%{http_code}" "$_url" 2>/dev/null || true)
+      if [ "$_code" = "200" ]; then
+        echo "[health] $_name отвечает 200 на $_url (попытка $_i из $_tries)"
+        return 0
+      fi
+      _i=$((_i + 1))
+      sleep 1
+    done
+    echo "[health] $_name НЕ ответил 200 на $_url за ${_tries} с (последний код: ${_code:-нет ответа})"
+    return 1
+  }
+
+  HEALTH_FAIL=0
+  wait_healthy "chillhub-admin" "http://127.0.0.1:55777/admin/api/health" 30 || HEALTH_FAIL=1
+  wait_healthy "chillhub-api"   "http://127.0.0.1:55700/api/maintenance"  30 || HEALTH_FAIL=1
+
   API_STATE=$(systemctl is-active chillhub-api.service 2>/dev/null || true)
   ADM_STATE=$(systemctl is-active chillhub-admin.service 2>/dev/null || true)
   echo "[systemd] api=$API_STATE admin=$ADM_STATE"
-  if [ -n "$FAIL_ON_MISMATCH" ]; then
-    if [ "$API_STATE" != "active" ] || [ "$ADM_STATE" != "active" ]; then echo "[deploy] One or more services not active after restart"; exit 1; fi
+  if [ "$HEALTH_FAIL" -ne 0 ]; then
+    echo "[deploy] сервисы не отвечают на health — собираю диагностику"
+    for _s in chillhub-api.service chillhub-admin.service; do
+      echo "---- systemctl status $_s ----"; sudo systemctl status "$_s" --no-pager -n 20 || true
+      echo "---- journalctl -u $_s ----"; sudo journalctl -u "$_s" -n 50 --no-pager || true
+    done
+    exit 1
   fi
 
-  # Wait for admin backend readiness to avoid transient 502/500 during smoke tests
-  echo "[wait] Waiting for admin backend health at http://127.0.0.1:55777/admin/api/health"
-  READY=0
-  for i in {1..30}; do
-    # No -k: this is plain http:// to loopback, there is no TLS to skip.
-    code=$(curl -s --max-time 2 -o /dev/null -w "%{http_code}" "http://127.0.0.1:55777/admin/api/health" || true)
-    if [ "$code" = "200" ]; then echo "[wait] admin backend READY (health=200)"; READY=1; break; fi
-    sleep 1
-  done
-  if [ "$READY" -ne 1 ]; then
-    echo "[wait] admin backend did not become ready within timeout; proceeding but tests may fail"
-  fi
-  
 # ---------------------------------------------------------------------------
 # Nginx site config: бэкап -> установка -> nginx -t -> reload, С ОТКАТОМ.
 #
