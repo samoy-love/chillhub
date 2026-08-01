@@ -32,6 +32,14 @@
     <!-- Ensure WPF can load the icon via pack URI (Icon=\"Assets/app.ico\") -->
     <Resource Include="Assets\app.ico" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Ed25519Verifier намеренно internal: это деталь реализации проверки подписи.
+         Но проверять её надо напрямую векторами RFC 8032, а не только через
+         ManifestSignature, иначе самописная криптография остаётся непроверенной. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ChillHub.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
   <PropertyGroup>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisLevel>latest</AnalysisLevel>
