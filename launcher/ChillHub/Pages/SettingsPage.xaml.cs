@@ -47,7 +47,60 @@ namespace ChillHub.Pages {
                 this.ThreadsValueText.Text = cfg.DownloadThreads.ToString();
             }
 
+            if (this.AutoErrorReportsCheck != null) {
+                this.AutoErrorReportsCheck.IsChecked = cfg.AutoErrorReports;
+            }
+
+            if (this.VersionText != null) {
+                this.VersionText.Text = GetLauncherVersion();
+            }
+
             // Single dark theme now; no theme selection UI
+        }
+
+        /// <summary>
+        /// Версия лаунчера: сначала маркер launcher.version рядом с exe (его пишет апдейтер),
+        /// иначе — версия сборки. Своя маленькая копия логики, чтобы не тянуть зависимость от UpdateWindow.
+        /// </summary>
+        private static string GetLauncherVersion() {
+            try {
+                var markerPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launcher.version");
+                if (File.Exists(markerPath)) {
+                    var marker = (File.ReadAllText(markerPath) ?? string.Empty).Trim();
+                    if (!string.IsNullOrWhiteSpace(marker)) {
+                        return marker;
+                    }
+                }
+            }
+            catch {
+            }
+
+            try {
+                var v = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+                if (v != null) {
+                    return $"{v.Major}.{v.Minor}.{v.Build}";
+                }
+            }
+            catch {
+            }
+
+            return "неизвестно";
+        }
+
+        private void OpenLogsBtn_Click(object sender, RoutedEventArgs e) {
+            try {
+                // Логи пишет Logger в %TEMP%\ChillHub
+                var dir = Path.Combine(Path.GetTempPath(), "ChillHub");
+                Directory.CreateDirectory(dir);
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
+                    FileName = dir,
+                    UseShellExecute = true,
+                });
+            }
+            catch (Exception ex) {
+                MessageBox.Show($"Не удалось открыть папку с логами: {ex.Message}", "Ошибка",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
 
         private void BackBtn_Click(object sender, RoutedEventArgs e) {
@@ -104,6 +157,9 @@ namespace ChillHub.Pages {
 
                 cfg.GamesPath = newPath;
                 cfg.DownloadThreads = (int)this.ThreadsSlider.Value;
+                if (this.AutoErrorReportsCheck != null) {
+                    cfg.AutoErrorReports = this.AutoErrorReportsCheck.IsChecked == true;
+                }
 
                 ConfigService.Save(cfg); // также применяет тему
                 try {
