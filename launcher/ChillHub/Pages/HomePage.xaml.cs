@@ -663,7 +663,7 @@ namespace ChillHub.Pages {
                     // После завершения всегда выставляем финальный статус, чтобы не зависало "Проверка игр X/Y".
                     // Сообщение об ошибке при этом не затираем — оно важнее.
                     if (string.IsNullOrWhiteSpace(this.lastErrorDetails)) {
-                        this.StatusText.Text = "Готов";
+                        this.StatusText.Text = "Готово";
                     }
 
                     this.UpdateActionButtonState();
@@ -1029,7 +1029,7 @@ namespace ChillHub.Pages {
 
                 // Если сейчас не выполняется обновление, сбросим состояние прогресса и статусы
                 if (!this.isUpdating) {
-                    this.StatusText.Text = "Готов";
+                    this.StatusText.Text = "Готово";
                     this.UpdateProgress.IsIndeterminate = false;
                     this.UpdateProgress.Value = 0;
                     this.SpeedEtaText.Text = string.Empty;
@@ -1065,7 +1065,7 @@ namespace ChillHub.Pages {
             }
             else {
                 if (!this.isUpdating) {
-                    this.StatusText.Text = "Готов";
+                    this.StatusText.Text = "Готово";
                     this.UpdateProgress.IsIndeterminate = false;
                     this.UpdateProgress.Value = 0;
                     this.SpeedEtaText.Text = string.Empty;
@@ -1812,7 +1812,7 @@ namespace ChillHub.Pages {
             try {
                 this.UpdateActionButtonState();
                 if (!state.Enabled && !this.isUpdating && string.IsNullOrWhiteSpace(this.lastErrorDetails)) {
-                    this.StatusText.Text = "Готов";
+                    this.StatusText.Text = "Готово";
                 }
             }
             catch (Exception ex) {

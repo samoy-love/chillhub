@@ -848,7 +848,7 @@
                             <TextBlock>
                               <TextBlock.Style>
                                 <Style TargetType="TextBlock">
-                                  <Setter Property="Text" Value="Не установлено"/>
+                                  <Setter Property="Text" Value="Не установлена"/>
                                   <Style.Triggers>
                                     <DataTrigger Binding="{Binding NeedsUpdate}" Value="True">
                                       <Setter Property="Text" Value="Требуется обновление"/>
@@ -894,7 +894,7 @@
             </StackPanel>
             <StackPanel Orientation="Horizontal" Margin="0,0,4,0" VerticalAlignment="Center">
               <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="12" Text="&#xE896;" Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,1,8,0" VerticalAlignment="Center"/>
-              <TextBlock Text="Не установлено" FontSize="11" Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center"/>
+              <TextBlock Text="Не установлена" FontSize="11" Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center"/>
             </StackPanel>
           </StackPanel>
         </Grid>
@@ -1104,7 +1104,7 @@
             <RowDefinition Height="20"/>
           </Grid.RowDefinitions>
           <!-- Основной статус -->
-          <TextBlock Grid.Row="0" Name="StatusText" Text="Готов" FontWeight="SemiBold" FontSize="16" VerticalAlignment="Center"/>
+          <TextBlock Grid.Row="0" Name="StatusText" Text="Готово" FontWeight="SemiBold" FontSize="16" VerticalAlignment="Center"/>
           <!-- Прогрессбар -->
           <ProgressBar Grid.Row="1" Name="UpdateProgress" Height="20" Minimum="0" Maximum="100" Value="0" Margin="0,4,0,0"
                        Style="{StaticResource Style.ProgressBar.Rounded}" VerticalAlignment="Center"/>
@@ -1318,3 +1318,4 @@
     </Grid>
   </Grid>
 </Page>
+
