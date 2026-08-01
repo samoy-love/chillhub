@@ -7,6 +7,9 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -67,6 +70,67 @@ func TestCheckImageBoundsAcceptsNormalImages(t *testing.T) {
 	for _, dim := range [][2]int{{16, 16}, {1920, 1080}, {3000, 2000}} {
 		if err := CheckImageBounds(smallPNG(t, dim[0], dim[1])); err != nil {
 			t.Errorf("%dx%d rejected: %v", dim[0], dim[1], err)
+		}
+	}
+}
+
+// DownloadURL runs inside the server's network: it must not be usable as a
+// probe of loopback, the LAN or the cloud metadata service.
+func TestDownloadURLBlocksPrivateAddresses(t *testing.T) {
+	blocked := []string{
+		"http://127.0.0.1:55777/admin/api/health",
+		"http://localhost:55777/admin/",
+		"http://[::1]:8080/",
+		"http://169.254.169.254/latest/meta-data/",
+		"http://10.0.0.5/x.png",
+		"http://192.168.1.1/x.png",
+		"http://172.16.0.1/x.png",
+		"http://100.64.0.1/x.png",
+		"http://0.0.0.0/",
+	}
+	for _, u := range blocked {
+		if _, _, err := DownloadURL(u); err == nil {
+			t.Errorf("%s was fetched", u)
+		}
+	}
+	// Non-HTTP schemes stay refused too.
+	for _, u := range []string{"file:///etc/passwd", "gopher://x/", "ftp://example.com/x"} {
+		if _, _, err := DownloadURL(u); err == nil {
+			t.Errorf("%s was fetched", u)
+		}
+	}
+}
+
+// The same block must apply to a hostname that only resolves to loopback, and
+// to a redirect that lands there.
+func TestDownloadURLBlocksLoopbackServer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("secret"))
+	}))
+	defer srv.Close()
+	if b, _, err := DownloadURL(srv.URL); err == nil {
+		t.Fatalf("fetched a loopback server: %q", string(b))
+	}
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, srv.URL, http.StatusFound)
+	}))
+	defer redirector.Close()
+	if _, _, err := DownloadURL(redirector.URL); err == nil {
+		t.Fatal("followed a redirect into loopback")
+	}
+}
+
+func TestBlockedIPClassification(t *testing.T) {
+	for _, s := range []string{"127.0.0.1", "::1", "10.1.2.3", "192.168.0.1", "172.20.0.1",
+		"169.254.169.254", "0.0.0.0", "fc00::1", "100.100.0.1", "224.0.0.1"} {
+		if !blockedIP(net.ParseIP(s)) {
+			t.Errorf("%s must be blocked", s)
+		}
+	}
+	for _, s := range []string{"8.8.8.8", "1.1.1.1", "93.184.216.34", "2606:4700::1111"} {
+		if blockedIP(net.ParseIP(s)) {
+			t.Errorf("%s must be allowed", s)
 		}
 	}
 }
