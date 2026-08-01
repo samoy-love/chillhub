@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>ManifestPreserveCheck</AssemblyName>
+    <RootNamespace>ChillHub.Update.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Тестируем ровно тот же исходник, что компилируется в апдейтер и лаунчер. -->
+    <Compile Include="..\..\UpdatePreserve.cs" Link="UpdatePreserve.cs" />
+  </ItemGroup>
+</Project>

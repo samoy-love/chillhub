@@ -1,3 +1,16 @@
+# =============================================================================
+# Сборка инсталлятора ChillHub (NSIS) + подготовка «чистого» пакета самообновления.
+#
+# ГДЕ СОБИРАЕТСЯ ZIP ДЛЯ САМООБНОВЛЕНИЯ (важно, A3/A9):
+#   Этот скрипт НЕ формирует манифест content/manifests/launcher/<version>.json.
+#   Манифест строит серверная часть (Go-бэкенд) из ZIP-архива, который релиз-инженер
+#   загружает через админку (server/admin_ui -> загрузка сборки лаунчера).
+#   Поэтому здесь мы делаем максимум возможного на своей стороне: ключ -PackageZip
+#   собирает архив из build-вывода, вычищая файлы, которых в манифесте быть не должно
+#   (см. New-LauncherPayload). Загружать в админку следует именно этот архив —
+#   иначе в манифест снова попадут config.json / launcher.version, апдейтер их не
+#   перезапишет (preserve), и лаунчер уйдёт в бесконечный цикл обновления.
+# =============================================================================
 param(
     [switch]$Publish = $false,
     [string]$Configuration = "Release",
@@ -6,10 +19,87 @@ param(
     [string]$MakensisPath,
     [string]$Runtime = "win-x64",
     [switch]$SelfContained,
-    [switch]$NoCompress
+    [switch]$NoCompress,
+    # Собрать ZIP полезной нагрузки для самообновления (для загрузки в админку)
+    [switch]$PackageZip,
+    # Пропустить компиляцию NSIS (полезно, когда нужен только ZIP)
+    [switch]$SkipInstaller
 )
 
 $ErrorActionPreference = "Stop"
+
+# Исключения пакета лаунчера. Держать синхронно с:
+#   - ChillHub.Update.PreserveMatcher.DefaultRules (updater/UpdatePreserve.cs)
+#   - списком /x в scripts/installer.nsi
+$script:PayloadExcludeFiles = @('config.json', 'launcher.version')
+$script:PayloadExcludeGlobs = @('*.pdb')
+# Нативные библиотеки не под Windows: runtimes/linux-*, runtimes/osx-*
+$script:PayloadExcludeDirGlobs = @('linux-*', 'osx-*')
+
+function Test-PayloadExcluded {
+    param([string]$RelativePath)
+    $rel = $RelativePath -replace '\\', '/'
+    $leaf = Split-Path -Leaf $rel
+
+    foreach ($f in $script:PayloadExcludeFiles) {
+        if ($leaf -ieq $f) { return $true }
+    }
+    foreach ($g in $script:PayloadExcludeGlobs) {
+        if ($leaf -like $g) { return $true }
+    }
+    foreach ($seg in ($rel -split '/')) {
+        foreach ($g in $script:PayloadExcludeDirGlobs) {
+            if ($seg -like $g) { return $true }
+        }
+    }
+    return $false
+}
+
+function New-LauncherPayload {
+    <#
+      Готовит staging-копию build-вывода без файлов, которых не должно быть в манифесте,
+      и упаковывает её в ZIP. Архив плоский (без корневой папки) — так его понимает
+      апдейтер без strip-prefix.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceDir,
+        [Parameter(Mandatory = $true)][string]$OutZip
+    )
+
+    if (-not (Test-Path -LiteralPath $SourceDir)) {
+        throw "Build output not found at '$SourceDir'. Build first (or pass -Publish)."
+    }
+
+    $staging = Join-Path ([IO.Path]::GetTempPath()) ("chillhub-payload-" + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $staging -Force | Out-Null
+    try {
+        $srcFull = (Resolve-Path -LiteralPath $SourceDir).Path.TrimEnd('\')
+        $skipped = 0
+        $copied = 0
+        Get-ChildItem -LiteralPath $srcFull -Recurse -File | ForEach-Object {
+            $rel = $_.FullName.Substring($srcFull.Length).TrimStart('\')
+            if (Test-PayloadExcluded -RelativePath $rel) {
+                $skipped++
+                Write-Host "  exclude: $rel" -ForegroundColor DarkGray
+                return
+            }
+            $dest = Join-Path $staging $rel
+            $destDir = Split-Path -Parent $dest
+            if (-not (Test-Path -LiteralPath $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+            Copy-Item -LiteralPath $_.FullName -Destination $dest -Force
+            $copied++
+        }
+
+        $outDirZip = Split-Path -Parent $OutZip
+        if ($outDirZip -and -not (Test-Path -LiteralPath $outDirZip)) { New-Item -ItemType Directory -Path $outDirZip -Force | Out-Null }
+        if (Test-Path -LiteralPath $OutZip) { Remove-Item -LiteralPath $OutZip -Force }
+        Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $OutZip -CompressionLevel Optimal
+        Write-Host "Payload ZIP: $OutZip (files=$copied, excluded=$skipped)" -ForegroundColor Green
+    }
+    finally {
+        try { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction Stop } catch {}
+    }
+}
 
 # Ensure Unicode I/O
 try {
@@ -93,9 +183,25 @@ if ($Publish) {
     $ProjectDir = Split-Path -Parent $Csproj
     $PublishDir = Join-Path $ProjectDir "bin/$Configuration/net8.0-windows/$Runtime/publish"
     Write-Host "Publish output: $PublishDir" -ForegroundColor Cyan
+    $BuildOutputDir = $PublishDir
 } else {
     Write-Host "[2/3] Building ($Configuration)..." -ForegroundColor Cyan
     & dotnet build $Csproj -c $Configuration
+    $ProjectDir = Split-Path -Parent $Csproj
+    $BuildOutputDir = Join-Path $ProjectDir "bin/$Configuration/net8.0-windows"
+}
+
+# A3/A9: чистый ZIP полезной нагрузки для самообновления (загружается в админку).
+if ($PackageZip) {
+    Write-Host "[2b/3] Packaging self-update payload ZIP..." -ForegroundColor Cyan
+    $zipOutDir = Join-Path (Split-Path $Installer -Parent) "generated_downloads"
+    $zipPath = Join-Path $zipOutDir "ChillHub-launcher-payload.zip"
+    New-LauncherPayload -SourceDir $BuildOutputDir -OutZip $zipPath
+}
+
+if ($SkipInstaller) {
+    Write-Host "SkipInstaller: NSIS compilation skipped." -ForegroundColor Yellow
+    return
 }
 
 $makensis = Find-Makensis -ExplicitPath $MakensisPath

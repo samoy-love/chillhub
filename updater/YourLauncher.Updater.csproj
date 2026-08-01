@@ -6,4 +6,10 @@
     <Nullable>enable</Nullable>
     <AssemblyName>YourLauncher.Updater</AssemblyName>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- tests/ — отдельный проект (ManifestPreserveCheck), в апдейтер не компилируется -->
+    <Compile Remove="tests\**" />
+    <None Remove="tests\**" />
+    <EmbeddedResource Remove="tests\**" />
+  </ItemGroup>
 </Project>
