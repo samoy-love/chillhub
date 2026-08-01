@@ -48,8 +48,7 @@ namespace ChillHub.Pages {
         private const double EmaAlpha = 0.2; // чувствительность EMA
 
         // Кэш оценок требуемого объёма скачивания по игре (обновляется при VerifyGameStatusAsync)
-        private readonly object spaceCacheLock = new();
-        private readonly Dictionary<string, long> neededBytesCache = new(StringComparer.OrdinalIgnoreCase);
+        private readonly SpaceHint spaceHint = new();
 
         // Раньше здесь был флаг initialVerifyRunning, блокировавший любые действия на время
         // полной проверки всех игр. Теперь блокировка точечная: см. verifiedGameIds (C4).
@@ -766,13 +765,7 @@ namespace ChillHub.Pages {
                 }
 
                 // Обновим кэш требуемого объёма скачивания
-                try {
-                    lock (this.spaceCacheLock) {
-                        this.neededBytesCache[gid] = plan.TotalDownloadBytes;
-                    }
-                }
-                catch {
-                }
+                this.spaceHint.Remember(gid, plan.TotalDownloadBytes);
 
                 // Для статуса учитываем только недостающие/изменённые файлы.
                 // Удаления (лишние локальные файлы, например логи/кэш) не считаем признаком "требуется обновление".
@@ -1126,58 +1119,21 @@ namespace ChillHub.Pages {
         // Показывает строку вида: "Нужно: <size> (<available> доступно)", если для установки/обновления требуется загрузка
         private async Task UpdateSpaceHintAsync(string gid) {
             try {
-                if (this.isUpdating) {
-                    return; // не вмешиваемся в активный процесс
-                }
-
-                // Если игра установлена и не требует обновления — показываем соответствующее сообщение и выходим
-                var g = this.games?.FirstOrDefault(x => string.Equals(x.GameId, gid, StringComparison.OrdinalIgnoreCase));
-                if (g != null && g.IsInstalled && !g.NeedsUpdate) {
-                    this.FilesSizeText.Text = "Последняя версия игры уже установлена";
+                if (!this.TryShowTrivialSpaceHint(gid)) {
                     return;
                 }
 
-                if (string.IsNullOrWhiteSpace(gid)) {
+                // Есть готовая оценка — сеть не трогаем
+                if (this.spaceHint.TryGet(gid, out _)) {
+                    this.FilesSizeText.Text = this.spaceHint.BuildTextFromCache(gid);
                     return;
                 }
 
-                // Сначала попытаемся взять кэш
-                long cachedNeed = -1;
-                try {
-                    lock (this.spaceCacheLock) {
-                        if (this.neededBytesCache.TryGetValue(gid, out var v)) {
-                            cachedNeed = v;
-                        }
-                    }
-                }
-                catch {
-                }
-                if (cachedNeed >= 0) {
-                    long haveFast = 0;
-                    try {
-                        var localRootFast = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
-                        var rootFast = Path.GetPathRoot(Path.GetFullPath(localRootFast)) ?? localRootFast;
-                        var driveFast = new DriveInfo(rootFast);
-                        haveFast = driveFast.AvailableFreeSpace;
-                    }
-                    catch {
-                    }
-                    if (cachedNeed > 0) {
-                        this.FilesSizeText.Text = $"Нужно: {FormatSize(cachedNeed)} ({FormatSize(haveFast)} доступно)";
-                    }
-                    else {
-                        this.FilesSizeText.Text = string.Empty;
-                    }
-
-                    return;
-                }
-                // Определим версию: используем latest из списка игр или первый элемент из _builds
+                // Версия: latest из списка игр, иначе первая из списка сборок
                 var game = this.games?.FirstOrDefault(g => g.GameId == gid);
                 var version = game?.LatestVersion;
-                if (string.IsNullOrWhiteSpace(version)) {
-                    if (this.builds != null && this.builds.Count > 0) {
-                        version = this.builds[0];
-                    }
+                if (string.IsNullOrWhiteSpace(version) && this.builds != null && this.builds.Count > 0) {
+                    version = this.builds[0];
                 }
 
                 if (string.IsNullOrWhiteSpace(version)) {
@@ -1187,83 +1143,61 @@ namespace ChillHub.Pages {
 
                 var manifestUrl = $"{this.BaseApi}/manifests/{gid}/{version}.json";
                 var contentBase = $"{this.BaseApi}/content/{gid}/{version}/files";
-                var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
+                var localRoot = GameLocalRoot(gid);
 
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, CancellationToken.None);
                 var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, CancellationToken.None);
 
-                long need = plan.TotalDownloadBytes;
-                try {
-                    lock (this.spaceCacheLock) {
-                        this.neededBytesCache[gid] = need;
-                    }
-                }
-                catch {
-                }
-                long have = 0;
-                try {
-                    var root = Path.GetPathRoot(Path.GetFullPath(localRoot)) ?? localRoot;
-                    var drive = new DriveInfo(root);
-                    have = drive.AvailableFreeSpace;
-                }
-                catch {
-                }
-
-                if (need > 0) {
-                    this.FilesSizeText.Text = $"Нужно: {FormatSize(need)} ({FormatSize(have)} доступно)";
-                }
-                else {
-                    this.FilesSizeText.Text = string.Empty;
-                }
+                this.spaceHint.Remember(gid, plan.TotalDownloadBytes);
+                this.FilesSizeText.Text = SpaceHint.BuildText(plan.TotalDownloadBytes, GetAvailableFreeSpaceFor(gid));
             }
-            catch {
-                // В случае ошибки расчёта не ломаем UI
-                try {
-                    this.FilesSizeText.Text = string.Empty;
-                }
-                catch {
-                }
+            catch (Exception ex) {
+                // Подсказка о размере не критична: сервер мог не отдать манифест — просто прячем строку.
+                Core.Logging.Logger.Warn($"UpdateSpaceHint gid={gid}: {ex.Message}");
+                this.SetFilesSizeTextSafe(string.Empty);
             }
         }
 
         // Обновляет FilesSizeText только из кэша, не выполняя сетевых запросов
         private void UpdateSpaceHintFromCache(string gid) {
             try {
-                if (this.isUpdating) {
+                if (!this.TryShowTrivialSpaceHint(gid)) {
                     return;
                 }
 
-                // Если игра установлена и не требует обновления — показываем соответствующее сообщение и выходим
-                var g = this.games?.FirstOrDefault(x => string.Equals(x.GameId, gid, StringComparison.OrdinalIgnoreCase));
-                if (g != null && g.IsInstalled && !g.NeedsUpdate) {
-                    this.FilesSizeText.Text = "Последняя версия игры уже установлена";
-                    return;
-                }
-
-                if (string.IsNullOrWhiteSpace(gid)) {
-                    return;
-                }
-
-                long need;
-                lock (this.spaceCacheLock) {
-                    if (!this.neededBytesCache.TryGetValue(gid, out need)) {
-                        this.FilesSizeText.Text = string.Empty;
-                        return;
-                    }
-                }
-
-                long have = 0;
-                try {
-                    var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
-                    var root = Path.GetPathRoot(Path.GetFullPath(localRoot)) ?? localRoot;
-                    var drive = new DriveInfo(root);
-                    have = drive.AvailableFreeSpace;
-                }
-                catch {
-                }
-                this.FilesSizeText.Text = (need > 0) ? $"Нужно: {FormatSize(need)} ({FormatSize(have)} доступно)" : string.Empty;
+                this.FilesSizeText.Text = this.spaceHint.BuildTextFromCache(gid);
             }
-            catch {
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"UpdateSpaceHintFromCache gid={gid}: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Общая часть обеих подсказок: во время активной установки не вмешиваемся,
+        /// для актуально установленной игры показываем готовый текст.
+        /// Возвращает true, если вызывающему коду ещё нужно посчитать размер.
+        /// </summary>
+        private bool TryShowTrivialSpaceHint(string gid) {
+            if (this.isUpdating) {
+                return false; // не вмешиваемся в активный процесс
+            }
+
+            var g = this.games?.FirstOrDefault(x => string.Equals(x.GameId, gid, StringComparison.OrdinalIgnoreCase));
+            if (g != null && g.IsInstalled && !g.NeedsUpdate) {
+                this.FilesSizeText.Text = "Последняя версия игры уже установлена";
+                return false;
+            }
+
+            return !string.IsNullOrWhiteSpace(gid);
+        }
+
+        // Сброс строки размера не должен сам стать источником исключения в обработчике ошибок
+        private void SetFilesSizeTextSafe(string text) {
+            try {
+                this.FilesSizeText.Text = text;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"FilesSizeText недоступен: {ex.Message}");
             }
         }
 
@@ -1683,13 +1617,7 @@ namespace ChillHub.Pages {
                 this.MarkInstalled(gid, version);
 
                 // Обновим кэш: для установленной последней версии скачивание не требуется
-                try {
-                    lock (this.spaceCacheLock) {
-                        this.neededBytesCache[gid] = 0;
-                    }
-                }
-                catch {
-                }
+                this.spaceHint.Remember(gid, 0);
                 this.GameList.Items.Refresh();
 
                 // Зафиксируем текущий выбор на UI-потоке
@@ -2203,13 +2131,7 @@ namespace ChillHub.Pages {
                     }
 
                     // Очистим кэш требуемого места
-                    try {
-                        lock (this.spaceCacheLock) {
-                            this.neededBytesCache[gid] = 0;
-                        }
-                    }
-                    catch {
-                    }
+                    this.spaceHint.Remember(gid, 0);
 
                     // Кеш хешей для удалённой игры больше не нужен
                     ChillHub.Core.Sync.FileHashCache.Remove(gid);
