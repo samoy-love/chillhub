@@ -321,11 +321,6 @@ namespace ChillHub.Pages {
             }
         }
 
-        private void DisableMainUi() {
-            this.ActionBtn.IsEnabled = false;
-            this.GameList.IsEnabled = false;
-        }
-
         // Удалена legacy-проверка самообновления: ею занимается UpdateWindow
         private async Task LoadInitialAsync() {
             try {
