@@ -45,6 +45,52 @@ func WriteJSON(w http.ResponseWriter, v any) {
 	w.Write(b)
 }
 
+// WriteFileAtomic writes data to path through a temporary file in the same
+// directory followed by a rename.
+//
+// Every state file this server keeps — manifests, latest.json, the games
+// registry, news index.json and news_meta.json — is read by the PUBLIC API
+// while the admin API rewrites it. A plain os.WriteFile truncates first, so a
+// crash, a full disk or simply an unlucky read in between hands out a truncated
+// JSON document; a rename is atomic and readers see either the old file or the
+// new one.
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() {
+		tmp.Close()
+		_ = os.Remove(tmpPath)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Chmod(tmpPath, perm); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
 // EnsureWithin reports whether p resolves to a location inside base.
 func EnsureWithin(base, p string) bool {
 	b, _ := filepath.Abs(base)

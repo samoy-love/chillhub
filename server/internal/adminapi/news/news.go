@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"ChillHub/server/internal/adminutil"
@@ -23,6 +24,11 @@ import (
 // Handlers serves the news endpoints for one content root.
 type Handlers struct {
 	root string
+	// mu serialises the read-modify-write cycles on news_meta.json and the two
+	// index.json files, like feedback and metrics do for their stores. Two admins
+	// saving at the same time used to interleave — the second writer read the
+	// metadata before the first had written it and silently dropped its change.
+	mu sync.Mutex
 }
 
 // New returns handlers rooted at the given content directory.
@@ -141,6 +147,8 @@ func (h *Handlers) List(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	b, err := os.ReadFile(adminIndexPath(d))
 	if err != nil {
 		// First call after the drafts moved out of the public tree: build the
@@ -175,6 +183,8 @@ func (h *Handlers) Get(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	p, _, err := findArticle(d, slug)
 	if err != nil {
 		http.Error(w, "article not found", http.StatusNotFound)
@@ -219,6 +229,11 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// The whole read-modify-write of the metadata plus both indexes is one
+	// critical section; a concurrent Save must not observe or overwrite it
+	// half-done.
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	// update meta if provided
 	m := readMeta(d)
 	cur := m[slug]
@@ -277,6 +292,8 @@ func (h *Handlers) Delete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	// The article may sit in either directory, so remove both candidates and
 	// report 500 only when a file that does exist refuses to go away.
 	removed := false
@@ -337,6 +354,8 @@ func (h *Handlers) Publish(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	m := readMeta(d)
 	cur := m[slug]
 	cur.Published = pub
@@ -368,6 +387,8 @@ func (h *Handlers) Rebuild(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if err := RebuildIndex(d); err != nil {
 		log.Printf("[news:rebuild] %v", err)
 		http.Error(w, "index rebuild failed", http.StatusInternalServerError)
@@ -462,6 +483,8 @@ func (h *Handlers) UploadCover(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if d, err := h.dirs(scope, gid); err == nil {
+			h.mu.Lock()
+			defer h.mu.Unlock()
 			m := readMeta(d)
 			cur := m[slug]
 			cur.CoverUrl = url
@@ -615,7 +638,9 @@ func writeIndex(path string, items []newsItem) error {
 	b, _ := json.MarshalIndent(struct {
 		Items []newsItem `json:"items"`
 	}{Items: items}, "", "  ")
-	return os.WriteFile(path, b, 0o644)
+	// index.json is served to the launcher straight off disk; half of it is
+	// worse than the previous generation of it.
+	return adminutil.WriteFileAtomic(path, b, 0o644)
 }
 
 // assetURL builds the web path of an asset stored at rel/name.
