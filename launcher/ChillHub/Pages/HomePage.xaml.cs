@@ -41,6 +41,9 @@ namespace ChillHub.Pages {
         private List<string> builds = new();
         private CancellationTokenSource? cts;
         private bool isUpdating = false;
+
+        // Идёт удаление локальных файлов игры: блокирует повторный запуск и установку
+        private bool isDeleting = false;
         private readonly ISyncService sync = new SimpleSyncService();
         private double emaSpeedMBs = 0.0; // сглаженная скорость
         private const double EmaAlpha = 0.2; // чувствительность EMA
@@ -1291,6 +1294,12 @@ namespace ChillHub.Pages {
 
         // Theme toggle and icon are now managed in MainWindow header
         private void ActionBtn_Click(object sender, RoutedEventArgs e) {
+            // Идёт удаление файлов игры — начинать установку в ту же папку нельзя
+            if (this.isDeleting) {
+                this.ShowToast("Идёт удаление файлов игры. Дождитесь завершения.");
+                return;
+            }
+
             // Блокируем действия только пока не известен статус ВЫБРАННОЙ игры.
             // Проверка остальных игр в фоне работе не мешает (C4).
             if (!this.isUpdating && !this.IsGameStatusKnown(this.GetSelectedGameId())) {
@@ -2229,6 +2238,17 @@ namespace ChillHub.Pages {
 
         private async void DeleteGame_Click(object sender, RoutedEventArgs e) {
             try {
+                // Установка идёт прямо сейчас: Directory.Delete снёс бы файлы из-под
+                // работающей закачки, а сама закачка продолжила бы писать в удаляемую папку.
+                if (this.isUpdating) {
+                    this.ShowToast("Идёт установка или обновление. Дождитесь завершения или нажмите «Отмена».");
+                    return;
+                }
+
+                if (this.isDeleting) {
+                    return; // удаление уже запущено — второй проход не нужен
+                }
+
                 var gi = (sender as FrameworkElement)?.GetValue(MenuItem.CommandParameterProperty) as GameInfo
                          ?? (sender as FrameworkElement)?.DataContext as GameInfo;
                 var gid = gi?.GameId;
@@ -2265,33 +2285,48 @@ namespace ChillHub.Pages {
                     Core.Logging.Logger.Warn($"DeleteGame_Click: проверка запущенного процесса не выполнена: {ex.Message}");
                 }
 
-                // Пытаемся удалить папку целиком
+                // Пытаемся удалить папку целиком.
+                // Обход дерева на десятки тысяч файлов занимает секунды и минуты на HDD,
+                // поэтому сама операция уходит в фон, а окно показывает индикатор.
+                this.isDeleting = true;
+                this.GameList.IsEnabled = false;
+                this.ActionBtn.IsEnabled = false;
+                this.StatusText.Text = $"Удаление файлов {title}…";
+                this.UpdateProgress.IsIndeterminate = true;
                 try {
-                    if (Directory.Exists(localRoot)) {
-                        Directory.Delete(localRoot, true);
-                    }
+                    await Task.Run(() => {
+                        if (Directory.Exists(localRoot)) {
+                            Directory.Delete(localRoot, true);
+                        }
+
+                        // Кеш хешей для удалённой игры больше не нужен
+                        ChillHub.Core.Sync.FileHashCache.Remove(gid);
+                    });
 
                     // Очистим кэш требуемого места
                     this.spaceHint.Remember(gid, 0);
 
-                    // Кеш хешей для удалённой игры больше не нужен
-                    ChillHub.Core.Sync.FileHashCache.Remove(gid);
-
                     // Обновим маркеры/UI
                     this.FilesSizeText.Text = string.Empty;
                     this.MarkUninstalled(gid);
-                    this.UpdateActionButtonState();
-
-                    // Перепроверим статусы игр (легко и асинхронно)
-                    await this.VerifyAllGamesStatusesAsync();
-
-                    // Покажем ненавязчивый Toast вместо изменения строки статуса
-                    this.ShowToast($"Локальные файлы {title} удалены");
                 }
                 catch (Exception exDel) {
                     this.StatusText.Text = $"Не удалось удалить локальные файлы: {exDel.Message}";
                     Core.Logging.Logger.Error(exDel, "HomePage.DeleteGame_Click");
+                    return;
                 }
+                finally {
+                    this.isDeleting = false;
+                    this.GameList.IsEnabled = true;
+                    this.UpdateProgress.IsIndeterminate = false;
+                    this.UpdateActionButtonState();
+                }
+
+                // Перепроверим статусы игр (легко и асинхронно)
+                await this.VerifyAllGamesStatusesAsync();
+
+                // Покажем ненавязчивый Toast вместо изменения строки статуса
+                this.ShowToast($"Локальные файлы {title} удалены");
             }
             catch (Exception ex) {
                 this.StatusText.Text = $"Ошибка удаления: {ex.Message}";
