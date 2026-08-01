@@ -1,6 +1,15 @@
 #!/usr/bin/env sh
 # Validate deploy/launcher.conf with a REAL nginx binary, in Docker.
 #
+# NOTE for Git Bash / MSYS on Windows: it rewrites arguments that look like
+# absolute POSIX paths into Windows paths, so container-side paths such as
+# /check/run.sh arrive as C:/Program Files/Git/check/run.sh and the run fails
+# with "can't open". Disabling the conversion here keeps the script runnable
+# from Git Bash without the caller having to know this.
+MSYS_NO_PATHCONV=1
+MSYS2_ARG_CONV_EXCL='*'
+export MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
+#
 # Why this exists
 # ---------------
 # launcher.conf used to be checked only by a third-party config parser
