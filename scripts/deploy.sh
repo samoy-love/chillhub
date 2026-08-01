@@ -802,6 +802,26 @@ must_200 "$SITE_BASE_URL/admin/api/health" "Admin API /admin/api/health"
 must_200 "$SITE_BASE_URL/" "Landing /"
 must_200 "$SITE_BASE_URL/styles.css" "Landing static /styles.css"
 
+# Л2: ГЛАВНАЯ КНОПКА ЛЕНДИНГА.
+#
+# /downloads/ChillHub-Setup.exe не был покрыт ничем. Между тем это единственный
+# способ для нового пользователя получить лаунчер, а файл кладётся отдельным
+# шагом синхронизации внешнего каталога downloads/ — тем самым, который из-за
+# Б9 не отрабатывал НИКОГДА. Сочетание давало ровно то, что и должно было:
+# кнопка «Скачать» молча отдавала 404, все остальные проверки при этом были
+# зелёными.
+#
+# Проверяем HEAD-запросом: тянуть многомегабайтный установщик на каждом деплое
+# незачем, а 200 на HEAD означает, что файл на месте и раздаётся.
+dl_code=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" -I "$SITE_BASE_URL/downloads/ChillHub-Setup.exe" || true)
+if [[ "$dl_code" == "200" ]]; then
+  echo -e "[test] ${GREEN}PASS${NC} Installer download (/downloads/ChillHub-Setup.exe)"
+else
+  echo -e "[test] ${RED}FAIL${NC} Installer download (/downloads/ChillHub-Setup.exe) -> $dl_code"
+  echo -e "[test]      Кнопка скачивания на лендинге не работает. Проверьте синхронизацию каталога downloads (--downloads-dir)."
+  FAIL=1
+fi
+
 # 4) Manifests
 MANI_DIR="$LAUNCHER_ROOT/manifests/launcher"
 if [[ -f "$MANI_DIR/latest.json" ]]; then

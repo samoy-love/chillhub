@@ -848,6 +848,25 @@ jobs:
             must_200 "${SITE_BASE}/admin/api/health" "Admin API health"
             must_200 "${SITE_BASE}/" "Landing /"
             must_200 "${SITE_BASE}/styles.css" "Landing styles"
+
+            # Л2: ГЛАВНАЯ КНОПКА ЛЕНДИНГА.
+            #
+            # /downloads/ChillHub-Setup.exe не был покрыт ничем. Это
+            # единственный способ для нового пользователя получить лаунчер, а
+            # файл кладётся отдельным шагом синхронизации каталога downloads.
+            # Пропущенный шаг означал молчаливый 404 на кнопке «Скачать» при
+            # полностью зелёных остальных проверках.
+            #
+            # HEAD, а не GET: тянуть многомегабайтный установщик на каждом
+            # деплое незачем, а 200 на HEAD означает, что файл на месте.
+            DL_CODE=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" -I "${SITE_BASE}/downloads/ChillHub-Setup.exe" || true)
+            if [ "$DL_CODE" = "200" ]; then
+              ok "[test] PASS Installer download (/downloads/ChillHub-Setup.exe)"
+            else
+              err "[test] FAIL Installer download (/downloads/ChillHub-Setup.exe) -> $DL_CODE"
+              err "[test]      Кнопка скачивания на лендинге не работает. Проверьте секрет DOWNLOADS_DIR и шаг синхронизации."
+              FAIL=1
+            fi
             curl -sf "${SITE_BASE}/manifests/launcher/latest.json" >/dev/null && ok "[test] PASS manifest latest.json" || warn "[test] WARN manifest latest.json not present"
             curl -sf "${SITE_BASE}/assets/ping.txt" >/dev/null && ok "[test] PASS assets/ping.txt" || warn "[test] WARN assets/ping.txt not present"
 
@@ -940,6 +959,12 @@ jobs:
             http_row "${SITE_BASE}/admin/api/health" "Admin API health"
             http_row "${SITE_BASE}/" "Landing /"
             http_row "${SITE_BASE}/styles.css" "Landing styles"
+            # Л2: строку про установщик формируем из уже полученного HEAD-кода,
+            # а не через http_row: тот делает GET, то есть скачивал бы
+            # многомегабайтный установщик целиком ради одной строки отчёта.
+            printf '<tr><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>\n' \
+              "${SITE_BASE}/downloads/ChillHub-Setup.exe" "Installer download (HEAD)" "$DL_CODE" "-" \
+              "$( [ "$DL_CODE" = "200" ] && echo OK || echo FAIL )" >> "$REPORT_ROWS_HTTP"
             http_row "${SITE_BASE}/manifests/launcher/latest.json" "Manifest latest.json (soft)"
             http_row "${SITE_BASE}/assets/ping.txt" "News asset ping.txt (soft)"
             STATUS=success

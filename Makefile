@@ -75,6 +75,9 @@ smoke:
 	expect "$(SITE_BASE)/admin/api/health" "health админки" "200"; \
 	expect "$(SITE_BASE)/manifests/launcher/latest.json" "latest.json" "200"; \
 	expect "$(SITE_BASE)/assets/ping.txt" "новостные ассеты" "200"; \
+	_dl=$$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -I "$(SITE_BASE)/downloads/ChillHub-Setup.exe"); \
+	if [ "$$_dl" = "200" ]; then echo "[smoke] PASS установщик на лендинге (200)"; \
+	else echo "[smoke] FAIL установщик на лендинге -> $$_dl (кнопка «Скачать» отдаёт ошибку)"; FAIL=1; fi; \
 	expect "$(SITE_BASE)/admin/" "/admin/ закрыт" "401 302"; \
 	expect "$(SITE_BASE)/admin/ui/admin.js" "admin.js закрыт" "401 302"; \
 	if [ "$$FAIL" -ne 0 ]; then echo "[smoke] ЕСТЬ ПРОВАЛЫ"; exit 1; fi; \
