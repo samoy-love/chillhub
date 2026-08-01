@@ -108,22 +108,74 @@ jobs:
           cache-dependency-path: |
             **/*.csproj
             **/packages.lock.json
-      - name: Cache .NET tools
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.dotnet/tools
-          key: dotnet-tools-${{ runner.os }}-v1
       - name: Restore
         working-directory: launcher/ChillHub
         run: dotnet restore
-      - name: Build (warnings as errors off for lint stage)
+      - name: Build (Debug)
         working-directory: launcher/ChillHub
         run: dotnet build --no-restore -c Debug
+      - name: Build (Release)
+        # Release is what ships; building it here catches configuration-specific
+        # breakage before a release is cut instead of during a manual build.
+        working-directory: launcher/ChillHub
+        run: dotnet build --no-restore -c Release
       - name: Code style check (dotnet format)
         working-directory: launcher/ChillHub
-        # Make non-blocking: report formatting issues without failing the job
+        # NOTE: still non-blocking, and that is a deliberate, verified decision:
+        # `dotnet format --verify-no-changes` currently reports several hundred
+        # violations across launcher/** (IDE0011 missing braces, SA1202/SA1306
+        # from StyleCop.Analyzers, plus ENDOFLINE issues) — even
+        # `dotnet format whitespace --verify-no-changes` fails. Making the step
+        # blocking today would red-line every PR.
+        # What DID change: the step used to run `dotnet format` in write mode,
+        # which rewrites files in the runner and always exits 0 — it never
+        # checked anything. It now runs --verify-no-changes and reports real
+        # findings in the job log. The obsolete `dotnet tool update -g
+        # dotnet-format` was dropped (the tool is built into the .NET 6+ SDK).
+        # TODO(owner): clean up launcher/** formatting, then delete
+        # `continue-on-error` below to make style regressions blocking.
         continue-on-error: true
+        run: dotnet format --verify-no-changes --verbosity minimal
+
+  installer-windows:
+    name: Installer (NSIS)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+          cache: true
+          cache-dependency-path: |
+            **/*.csproj
+            **/packages.lock.json
+      - name: Ensure NSIS is available
+        shell: pwsh
+        # The windows-latest image normally ships NSIS, but do not rely on it:
+        # install via Chocolatey only when makensis is missing.
         run: |
-          dotnet tool update -g dotnet-format
-          dotnet format --verbosity minimal
+          if (Get-Command makensis -ErrorAction SilentlyContinue) {
+            Write-Host "makensis found: $((Get-Command makensis).Source)"
+          } elseif (Test-Path 'C:\Program Files (x86)\NSIS\makensis.exe') {
+            Write-Host "makensis found in the default install directory"
+            Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files (x86)\NSIS'
+          } else {
+            Write-Host "makensis not found, installing NSIS via Chocolatey"
+            choco install nsis --no-progress -y
+            Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files (x86)\NSIS'
+          }
+      - name: Build installer
+        shell: pwsh
+        # No secrets required: scripts/installer.nsi does not sign the output and
+        # pulls the optional .NET/WebView2 redistributables with `File /nonfatal`,
+        # so a runner without scripts/Redist/ still produces a working setup.exe.
+        # TODO(owner): add code signing (certificate + password as repository
+        # secrets, signtool after makensis) before publishing CI-built setups.
+        run: ./scripts/build-installer.ps1 -Configuration Release
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChillHub-Setup-${{ github.run_id }}
+          path: scripts/generated_downloads/ChillHub-Setup.exe
+          if-no-files-found: error
