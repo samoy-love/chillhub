@@ -1,34 +1,32 @@
-// Copyright (c) 2025 ChillHub
-// Licensed under the MIT License.
-
-namespace ChillHub.Update;
-
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 
+namespace ChillHub.Update;
+
 /// <summary>
-/// Единый источник правды о том, какие файлы установки НЕ трогает апдейтер.
-/// Используется и апдейтером (что не перезаписывать / не удалять),
-/// и лаунчером (что не учитывать при сверке хешей манифеста и что передавать в --preserve).
-/// Рассинхрон этих двух списков — причина бесконечного цикла самообновления.
+/// Single source of truth for the "preserve" rules shared by the launcher (UpdateWindow)
+/// and the native updater (Program).
+///
+/// A preserved file is user/machine state: the updater never overwrites or deletes it, and the
+/// launcher must never treat it as a self-update trigger (otherwise the launcher and the updater
+/// disagree forever and the update loops).
+///
+/// This type lives in the updater assembly because the launcher project already has a
+/// ProjectReference to it; the dependency cannot go the other way.
 /// </summary>
 public sealed class PreserveMatcher
 {
-    /// <summary>
-    /// Правила по умолчанию в том виде, в котором они передаются в апдейтер через --preserve.
-    /// ВАЖНО: эти же файлы обязаны отсутствовать в манифесте лаунчера
-    /// (см. тест updater/tests — ManifestPreserveCheck).
-    /// </summary>
-    public const string DefaultRulesCsv = "config.json,launcher.version";
+    /// <summary>Default rules. Keep in sync with nothing else — this IS the definition.</summary>
+    public static readonly string[] DefaultRules = { "config.json", "launcher.version" };
+
+    /// <summary>Value to pass to the updater's --preserve option.</summary>
+    public static string DefaultRulesArg => string.Join(",", DefaultRules);
 
     /// <summary>
-    /// Служебные файлы апдейтера. Они никогда не должны попадать в папку установки
-    /// и подлежат разовой очистке на уже «засорённых» инсталляциях.
+    /// Files produced by the update machinery itself. They are never part of the launcher payload
+    /// and must be scrubbed from the installation directory if an older buggy updater copied them there.
     /// </summary>
-    public static readonly IReadOnlyList<string> UpdaterArtifactFiles = new[]
+    public static readonly string[] UpdaterArtifactFiles =
     {
         "filelist.txt",
         "emptydirs.txt",
@@ -37,56 +35,38 @@ public sealed class PreserveMatcher
         "apply-update.cmd",
     };
 
-    /// <summary>
-    /// Служебный подкаталог с копией апдейтера (тоже не должен оказаться в папке установки).
-    /// </summary>
+    /// <summary>Directory (relative to the installation root) an older updater mirrored into place.</summary>
     public const string UpdaterArtifactDir = "updater";
 
     private readonly List<string> rules;
 
-    public PreserveMatcher(IEnumerable<string> rules)
+    public PreserveMatcher(string? csv = null)
     {
-        this.rules = (rules ?? Enumerable.Empty<string>())
-            .Select(s => (s ?? string.Empty).Replace('\\', '/').Trim())
+        var source = string.IsNullOrWhiteSpace(csv) ? DefaultRulesArg : csv!;
+        this.rules = source
+            .Split(',', StringSplitOptions.RemoveEmptyEntries)
+            .Select(s => s.Replace('\\', '/').Trim())
             .Where(s => !string.IsNullOrWhiteSpace(s))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
-    /// <summary>Матчер с правилами по умолчанию.</summary>
-    public static PreserveMatcher Default => Parse(DefaultRulesCsv);
-
-    /// <summary>Активные правила (нормализованные).</summary>
     public IReadOnlyList<string> Rules => this.rules;
 
-    /// <summary>Разбирает CSV-строку правил (формат аргумента --preserve).</summary>
-    public static PreserveMatcher Parse(string? csv)
-    {
-        var src = string.IsNullOrWhiteSpace(csv) ? DefaultRulesCsv : csv!;
-        return new PreserveMatcher(src.Split(',', StringSplitOptions.RemoveEmptyEntries));
-    }
-
-    /// <summary>Правила в виде CSV — ровно то, что нужно передать в --preserve.</summary>
-    public string ToCsv() => string.Join(",", this.rules);
-
     /// <summary>
-    /// Проверяет, попадает ли относительный путь под правила preserve.
-    /// Поддерживаются: каталоги (правило оканчивается на '/'), точный относительный путь,
-    /// только имя файла, а также простые маски '*' и '?'.
+    /// Returns true when the relative path must not be written/deleted by the updater and must not
+    /// be considered a mismatch by the launcher's integrity check.
+    /// Supports directory rules ("logs/"), exact relative paths, filename-only rules and '*'/'?' wildcards.
     /// </summary>
-    public bool ShouldPreserve(string? rel) => this.ShouldPreserve(rel, out _);
-
-    /// <summary>То же, но дополнительно возвращает сработавшее правило (для логов).</summary>
-    public bool ShouldPreserve(string? rel, out string? matchedRule)
+    public bool ShouldPreserve(string? relativePath, Action<string>? log = null)
     {
-        matchedRule = null;
-        var norm = (rel ?? string.Empty).Replace('\\', '/').Trim('/');
+        var norm = (relativePath ?? string.Empty).Replace('\\', '/').Trim('/');
         if (norm.Length == 0)
         {
             return false;
         }
 
-        var leaf = norm.Split('/').Last();
+        var leaf = norm.Contains('/') ? norm[(norm.LastIndexOf('/') + 1)..] : norm;
         foreach (var rule in this.rules)
         {
             if (rule.EndsWith('/'))
@@ -94,24 +74,24 @@ public sealed class PreserveMatcher
                 var dir = rule.Trim('/');
                 if (dir.Length == 0)
                 {
-                    matchedRule = rule;
+                    log?.Invoke($"preserve (root dir): {norm} by '{rule}'");
                     return true;
                 }
 
                 if (norm.StartsWith(dir + "/", StringComparison.OrdinalIgnoreCase))
                 {
-                    matchedRule = rule;
+                    log?.Invoke($"preserve (dir): {norm} by '{rule}'");
                     return true;
                 }
 
                 continue;
             }
 
-            if (rule.Contains('*', StringComparison.Ordinal) || rule.Contains('?', StringComparison.Ordinal))
+            if (rule.Contains('*') || rule.Contains('?'))
             {
                 if (WildcardIsMatch(norm, rule) || WildcardIsMatch(leaf, rule))
                 {
-                    matchedRule = rule;
+                    log?.Invoke($"preserve (wildcard): {norm} by '{rule}'");
                     return true;
                 }
 
@@ -120,7 +100,7 @@ public sealed class PreserveMatcher
 
             if (norm.Equals(rule, StringComparison.OrdinalIgnoreCase) || leaf.Equals(rule, StringComparison.OrdinalIgnoreCase))
             {
-                matchedRule = rule;
+                log?.Invoke($"preserve (exact): {norm} by '{rule}'");
                 return true;
             }
         }
@@ -129,11 +109,13 @@ public sealed class PreserveMatcher
     }
 
     /// <summary>
-    /// Служебный ли это файл/каталог апдейтера (мусор от прошлых версий в папке установки).
+    /// True when the relative path is an artifact of the update machinery itself
+    /// (<see cref="UpdaterArtifactFiles"/> or anything under <see cref="UpdaterArtifactDir"/>).
+    /// Such paths must never be mirrored into — and must be scrubbed from — the installation directory.
     /// </summary>
-    public static bool IsUpdaterArtifact(string? rel)
+    public static bool IsUpdaterArtifact(string? relativePath)
     {
-        var norm = (rel ?? string.Empty).Replace('\\', '/').Trim('/');
+        var norm = (relativePath ?? string.Empty).Replace('\\', '/').Trim('/');
         if (norm.Length == 0)
         {
             return false;
@@ -144,7 +126,7 @@ public sealed class PreserveMatcher
             return true;
         }
 
-        var leaf = norm.Split('/').Last();
+        var leaf = norm.Contains('/') ? norm[(norm.LastIndexOf('/') + 1)..] : norm;
         foreach (var name in UpdaterArtifactFiles)
         {
             if (leaf.Equals(name, StringComparison.OrdinalIgnoreCase))
