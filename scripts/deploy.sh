@@ -526,13 +526,19 @@ soft_200_if_exists(){ local path="$1"; local url="$2"; local name="$3";
   fi
 }
 
-# 1) Admin UI (login is public; /admin/ is protected and should be 401 without cookies)
+# 1) Admin UI (login is public; /admin/ is protected without cookies)
+#
+# Защищённый ответ — это И 401, И 302: nginx-конфиг содержит
+# `error_page 401 =302 /admin/ui/login.html`, то есть отказ авторизации
+# намеренно превращается в редирект на форму входа. Тест знал только про 401 и
+# поэтому валил весь деплой ровно тогда, когда защита начинала работать как
+# задумано.
 must_200 "$SITE_BASE_URL/admin/ui/login.html" "Admin UI login"
 code=$(http_code "$SITE_BASE_URL/admin/")
 if [[ "$code" == "200" ]]; then
   if [[ $STRICT_MODE -eq 1 ]]; then echo -e "[test] ${RED}FAIL${NC} /admin/ returned 200 (expected 401/302)"; FAIL=1; else echo -e "[test] ${YELLOW}WARN${NC} /admin/ returned 200 (maybe already authorized)"; fi
-elif [[ "$code" == "401" ]]; then
-  echo -e "[test] ${GREEN}PASS${NC} /admin/ protected (401 without cookies)"
+elif [[ "$code" == "401" || "$code" == "302" ]]; then
+  echo -e "[test] ${GREEN}PASS${NC} /admin/ protected ($code without cookies)"
 else
   echo -e "[test] ${RED}FAIL${NC} /admin/ unexpected code -> $code"; FAIL=1
 fi
