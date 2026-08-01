@@ -72,7 +72,10 @@ namespace ChillHub.Pages {
             Update,
             Play,
             Cancel,
-            Retry
+            Retry,
+
+            // Действие запрещено режимом технических работ на сервере (задача 25)
+            Maintenance
         }
 
         // ===== Обратная связь =====
@@ -194,6 +197,11 @@ namespace ChillHub.Pages {
 
                 // Возврат со страницы игры: подхватываем изменившееся локальное состояние
                 this.Loaded += this.HomePage_Loaded;
+
+                // Режим технических работ: следим за ним, только пока страница показана
+                this.SubscribeMaintenance();
+                this.Loaded += (s, e) => this.SubscribeMaintenance();
+                this.Unloaded += (s, e) => this.UnsubscribeMaintenance();
 
                 // Баннер о том, что отчёт об ошибке ушёл автоматически
                 ChillHub.Core.ErrorReporter.AutoReported += (ctx) =>
@@ -623,7 +631,7 @@ namespace ChillHub.Pages {
                 var gid = game.GameId;
                 var latest = game.LatestVersion;
                 var hasLatest = !string.IsNullOrWhiteSpace(latest);
-                var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
+                var localRoot = GameLocalRoot(gid);
                 var hasLocalFiles = HasAnyLocalGameFiles(localRoot);
                 var unfinished = ChillHub.Core.Sync.SimpleSyncService.HasUpdateMarker(localRoot);
                 if (unfinished) {
@@ -647,10 +655,10 @@ namespace ChillHub.Pages {
                 }
 
                 // Получаем манифест latest и план сравнения
-                var manifestUrl = $"{this.BaseApi}/manifests/{gid}/{latest}.json";
+                var manifestUrl = IntegrityChecker.ManifestUrl(this.BaseApi, gid, latest);
                 Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} fetching manifest {manifestUrl}");
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, CancellationToken.None);
-                var contentBase = $"{this.BaseApi}/content/{gid}/{latest}/files";
+                var contentBase = IntegrityChecker.ContentBaseUrl(this.BaseApi, gid, latest);
                 var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, CancellationToken.None);
                 Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
                 LogPlanDownloads(gid, "verify", plan, localRoot);
@@ -678,6 +686,12 @@ namespace ChillHub.Pages {
                 Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} result: IsInstalled={game.IsInstalled} NeedsUpdate={game.NeedsUpdate}");
 
                 // Отложим Refresh до завершения всех проверок
+            }
+            catch (ManifestSignatureException ex) {
+                // Фоновая проверка статуса: молча статус не меняем, но в логе фиксируем именно
+                // проблему подписи, а не «какую-то ошибку сети». Пользователь увидит явный текст,
+                // когда нажмёт «Установить»/«Обновить» — см. StartUpdateAsync.
+                Core.Logging.Logger.Error(ex, $"VerifyGameStatusAsync({game?.GameId}): манифест не прошёл проверку подписи");
             }
             catch (Exception ex) {
                 // В случае ошибки проверки — не меняем текущий статус, только логируем
@@ -986,8 +1000,8 @@ namespace ChillHub.Pages {
                     return;
                 }
 
-                var manifestUrl = $"{this.BaseApi}/manifests/{gid}/{version}.json";
-                var contentBase = $"{this.BaseApi}/content/{gid}/{version}/files";
+                var manifestUrl = IntegrityChecker.ManifestUrl(this.BaseApi, gid, version);
+                var contentBase = IntegrityChecker.ContentBaseUrl(this.BaseApi, gid, version);
                 var localRoot = GameLocalRoot(gid);
 
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, CancellationToken.None);
@@ -1222,6 +1236,16 @@ namespace ChillHub.Pages {
                     this.StatusText.Text = "Нет доступных сборок для установки";
                     return;
                 }
+
+                // Подстраховка на случай, если работы начались уже после отрисовки кнопки
+                var isInstall = game?.IsInstalled != true;
+                var maintenance = Core.Maintenance.MaintenanceService.Current;
+                if (isInstall ? maintenance.BlocksInstall : maintenance.BlocksUpdate) {
+                    this.StatusText.Text = maintenance.BuildBannerText();
+                    this.UpdateActionButtonState();
+                    return;
+                }
+
                 Core.Logging.Logger.Info($"StartUpdateAsync gid={gid} version={version}");
 
                 this.isUpdating = true;
@@ -1233,8 +1257,8 @@ namespace ChillHub.Pages {
                 this.SpeedEtaText.Text = string.Empty;
                 this.emaSpeedMBs = 0.0;
 
-                var manifestUrl = $"{this.BaseApi}/manifests/{gid}/{version}.json";
-                var contentBase = $"{this.BaseApi}/content/{gid}/{version}/files";
+                var manifestUrl = IntegrityChecker.ManifestUrl(this.BaseApi, gid, version);
+                var contentBase = IntegrityChecker.ContentBaseUrl(this.BaseApi, gid, version);
 
                 this.StatusText.Text = "Загрузка манифеста...";
                 this.UpdateProgress.IsIndeterminate = true;
@@ -1245,7 +1269,7 @@ namespace ChillHub.Pages {
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, token);
                 this.StatusText.Text = "Проверка...";
                 this.UpdateProgress.IsIndeterminate = true;
-                var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
+                var localRoot = GameLocalRoot(gid);
                 var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, token);
                 Core.Logging.Logger.Info($"StartUpdateAsync plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
                 LogPlanDownloads(gid, "update", plan, localRoot);
@@ -1452,6 +1476,12 @@ namespace ChillHub.Pages {
                 this.UpdateProgress.IsIndeterminate = false;
                 this.UpdateProgress.Value = 0;
             }
+            catch (ManifestSignatureException ex) {
+                // Подпись манифеста не сошлась — это не сетевой сбой, а признак подмены раздачи.
+                // Ни одного файла игры мы ещё не тронули, и не тронем: показываем отдельный текст.
+                this.hasUpdateError = true;
+                this.ShowUserError(ManifestSignature.UserMessage, ex, "HomePage.StartUpdateAsync.ManifestSignature");
+            }
             catch (Exception ex) {
                 this.hasUpdateError = true;
                 var userMessage = ex is IOException
@@ -1511,6 +1541,12 @@ namespace ChillHub.Pages {
                         this.ActionBtn.IsEnabled = true;
                         this.ApplyActionButtonStyle("Style.ActionButton.Retry");
                         break;
+                    case ActionMode.Maintenance:
+                        // Причина и сроки — в баннере шапки, на кнопке только суть запрета
+                        this.ActionBtn.Content = "Технические работы";
+                        this.ActionBtn.IsEnabled = false;
+                        this.ApplyActionButtonStyle("Style.ActionButton.Checking");
+                        break;
                     case ActionMode.Install:
                         this.ActionBtn.Content = "Установить";
                         this.ActionBtn.IsEnabled = true;
@@ -1557,32 +1593,89 @@ namespace ChillHub.Pages {
                     return;
                 }
 
+                // Сначала решаем, что вообще предложить пользователю, и только потом сверяемся
+                // с режимом технических работ: так запрет не «съедает» логику состояний.
+                var unfinished = HasUnfinishedUpdate(g?.GameId);
+                ActionMode intended;
                 if (this.hasUpdateError) {
-                    this.SetActionMode(ActionMode.Retry);
+                    intended = ActionMode.Retry;
+                }
+                else if (unfinished) {
+                    // Осталось незавершённое обновление — «Играть» не предлагаем, нужно докатить (C2)
+                    intended = ActionMode.Update;
+                }
+                else if (isInstalled && !needsUpdate) {
+                    intended = ActionMode.Play;
+                }
+                else {
+                    // Не установлена или требует обновления
+                    intended = isInstalled ? ActionMode.Update : ActionMode.Install;
+                }
+
+                if (IsBlockedByMaintenance(intended)) {
+                    this.SetActionMode(ActionMode.Maintenance);
+                    this.StatusText.Text = Core.Maintenance.MaintenanceService.Current.BuildBannerText();
                     return;
                 }
 
-                // Осталось незавершённое обновление — «Играть» не предлагаем, нужно докатить (C2)
-                if (HasUnfinishedUpdate(g?.GameId)) {
-                    this.SetActionMode(ActionMode.Update);
-                    if (!this.isUpdating) {
-                        this.StatusText.Text = "Обновление не завершено. Нажмите «Обновить», чтобы восстановить игру.";
-                    }
-
-                    return;
+                this.SetActionMode(intended);
+                if (intended == ActionMode.Update && unfinished && !this.isUpdating) {
+                    this.StatusText.Text = "Обновление не завершено. Нажмите «Обновить», чтобы восстановить игру.";
                 }
-
-                if (isInstalled && !needsUpdate) {
-                    this.SetActionMode(ActionMode.Play);
-                    return;
-                }
-
-                // Не установлена или требует обновления
-                this.SetActionMode(isInstalled ? ActionMode.Update : ActionMode.Install);
             }
             catch (Exception ex) {
                 // Метод дёргается отовсюду (в т.ч. из фоновых задач) — он обязан быть безопасным
                 Core.Logging.Logger.Error(ex, "UpdateActionButtonState");
+            }
+        }
+
+        /// <summary>
+        /// Запрещено ли задуманное действие текущим режимом технических работ.
+        /// «Повторить» приравниваем к обновлению: за ним стоит та же закачка.
+        /// </summary>
+        private static bool IsBlockedByMaintenance(ActionMode mode) {
+            var state = Core.Maintenance.MaintenanceService.Current;
+            return mode switch {
+                ActionMode.Install => state.BlocksInstall,
+                ActionMode.Update or ActionMode.Retry => state.BlocksUpdate,
+                ActionMode.Play => state.BlocksPlay,
+                _ => false,
+            };
+        }
+
+        // Режим техработ может включиться и выключиться, пока страница открыта.
+        // Подписываемся на время видимости страницы, чтобы не держать ссылку на неё в статическом событии.
+        private bool maintenanceSubscribed;
+
+        private void SubscribeMaintenance() {
+            if (this.maintenanceSubscribed) {
+                return;
+            }
+
+            Core.Maintenance.MaintenanceService.Changed += this.OnMaintenanceChanged;
+            this.maintenanceSubscribed = true;
+        }
+
+        private void UnsubscribeMaintenance() {
+            if (!this.maintenanceSubscribed) {
+                return;
+            }
+
+            Core.Maintenance.MaintenanceService.Changed -= this.OnMaintenanceChanged;
+            this.maintenanceSubscribed = false;
+        }
+
+        // Сервер сообщил о смене режима: работы начались или закончились.
+        // Перезапуск клиента не нужен — просто пересчитываем кнопку.
+        private void OnMaintenanceChanged(Core.Maintenance.MaintenanceState state) {
+            try {
+                this.UpdateActionButtonState();
+                if (!state.Enabled && !this.isUpdating && string.IsNullOrWhiteSpace(this.lastErrorDetails)) {
+                    this.StatusText.Text = "Готов";
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "HomePage.OnMaintenanceChanged");
             }
         }
 
@@ -1604,6 +1697,14 @@ namespace ChillHub.Pages {
                     return;
                 }
 
+                // Сервер может запретить и запуск (например, работы на игровых серверах)
+                var maintenance = Core.Maintenance.MaintenanceService.Current;
+                if (maintenance.BlocksPlay) {
+                    this.StatusText.Text = maintenance.BuildBannerText();
+                    this.UpdateActionButtonState();
+                    return;
+                }
+
                 // Предыдущее обновление не довели до конца — файлы игры смешаны из двух версий (C2)
                 if (HasUnfinishedUpdate(gid)) {
                     this.StatusText.Text = "Обновление не завершено. Нажмите «Обновить», чтобы восстановить игру.";
@@ -1616,7 +1717,7 @@ namespace ChillHub.Pages {
                 var cfg = ChillHub.Core.ConfigService.Current;
                 cfg.LastGameId = gid;
                 ChillHub.Core.ConfigService.Save(cfg);
-                var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
+                var localRoot = GameLocalRoot(gid);
                 var rel = game.ExeRelativePath.Replace('/', System.IO.Path.DirectorySeparatorChar).Replace('\\', System.IO.Path.DirectorySeparatorChar);
                 var exePath = System.IO.Path.Combine(localRoot, rel);
                 if (!System.IO.File.Exists(exePath)) {
@@ -1685,7 +1786,7 @@ namespace ChillHub.Pages {
                     return;
                 }
 
-                var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
+                var localRoot = GameLocalRoot(gid);
                 var hasFiles = Directory.Exists(localRoot) && HasAnyLocalGameFiles(localRoot);
 
                 if (fe?.ContextMenu != null) {
@@ -1887,7 +1988,7 @@ namespace ChillHub.Pages {
                     this.StatusText.Text = "Не удалось определить игру";
                     return;
                 }
-                var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
+                var localRoot = GameLocalRoot(gid);
                 if (!Directory.Exists(localRoot)) {
                     this.StatusText.Text = "Папка игры не найдена";
                     return;
@@ -1914,7 +2015,7 @@ namespace ChillHub.Pages {
                     this.StatusText.Text = "Не удалось определить игру";
                     return;
                 }
-                var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
+                var localRoot = GameLocalRoot(gid);
 
                 // Переключаем текущий выбор на удаляемую игру, чтобы область действий и статусы относились к ней
                 if (gi != null) {

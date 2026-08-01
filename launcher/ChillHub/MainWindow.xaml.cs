@@ -65,6 +65,48 @@ namespace ChillHub {
             this.StateChanged += this.MainWindow_StateChanged;
             this.Activated += (s, e) => this.ResumeKaraoke();
             this.Deactivated += (s, e) => this.PauseKaraoke();
+
+            // Режим технических работ (задача 25): баннер в шапке появляется и исчезает сам,
+            // по ответам сервера. Опрос переживает недоступный сервер молча.
+            try {
+                Core.Maintenance.MaintenanceService.Changed += this.OnMaintenanceChanged;
+                this.Closed += (s, e) => {
+                    Core.Maintenance.MaintenanceService.Changed -= this.OnMaintenanceChanged;
+                    Core.Maintenance.MaintenanceService.Stop();
+                };
+                this.ApplyMaintenanceState(Core.Maintenance.MaintenanceService.Current);
+                Core.Maintenance.MaintenanceService.Start();
+            }
+            catch (Exception ex) {
+                // Баннер — вспомогательная информация: его отсутствие не повод не открывать окно
+                Core.Logging.Logger.Error(ex, "MainWindow.MaintenanceInit");
+            }
+        }
+
+        private void OnMaintenanceChanged(Core.Maintenance.MaintenanceState state) => this.ApplyMaintenanceState(state);
+
+        /// <summary>
+        /// Показывает или убирает баннер работ. Вызывается и при старте, и при каждой смене
+        /// состояния — в том числе когда сервер сообщил, что работы закончены.
+        /// </summary>
+        private void ApplyMaintenanceState(Core.Maintenance.MaintenanceState? state) {
+            try {
+                if (this.MaintenanceBanner == null || this.MaintenanceBannerText == null) {
+                    return;
+                }
+
+                if (state is not { Enabled: true }) {
+                    this.MaintenanceBanner.Visibility = Visibility.Collapsed;
+                    this.MaintenanceBannerText.Text = string.Empty;
+                    return;
+                }
+
+                this.MaintenanceBannerText.Text = state.BuildBannerText();
+                this.MaintenanceBanner.Visibility = Visibility.Visible;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "MainWindow.ApplyMaintenanceState");
+            }
         }
 
         private void CatalogBtn_Click(object sender, RoutedEventArgs e) {
