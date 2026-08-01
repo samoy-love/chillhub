@@ -310,7 +310,7 @@ namespace ChillHub.Core.Sync {
             using (var sem = new SemaphoreSlim(degree)) {
                 var tasks = new List<Task>();
                 foreach (var t in plan.Downloads) {
-                    await sem.WaitAsync(ct);
+                    await sem.WaitAsync(ct).ConfigureAwait(false);
                     tasks.Add(Task.Run(
                         async () => {
                             try {
@@ -342,7 +342,7 @@ namespace ChillHub.Core.Sync {
                                                 req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(existing, null);
                                             }
 
-                                            using var resp = await this.http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+                                            using var resp = await this.http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
                                             resp.EnsureSuccessStatusCode();
 
                                             // Если сервер вернул 200 OK, несмотря на Range — перезаписываем файл заново
@@ -355,11 +355,11 @@ namespace ChillHub.Core.Sync {
                                                 }
                                             }
 
-                                            using var src = await resp.Content.ReadAsStreamAsync(ct);
+                                            using var src = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
                                             using var dst = new FileStream(partPath, FileMode.Append, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true);
                                             int read;
-                                            while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), ct)) > 0) {
-                                                await dst.WriteAsync(buffer.AsMemory(0, read), ct);
+                                            while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false)) > 0) {
+                                                await dst.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
                                                 Interlocked.Add(ref downloaded, read);
                                                 progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
                                             }
@@ -373,7 +373,7 @@ namespace ChillHub.Core.Sync {
                                             }
 
                                             var delayMs = (int)Math.Min(5000, 500 * Math.Pow(2, attempt - 1));
-                                            await Task.Delay(delayMs, ct);
+                                            await Task.Delay(delayMs, ct).ConfigureAwait(false);
 
                                             // обновить existing на случай частичного дозаписи
                                             try {
@@ -431,16 +431,33 @@ namespace ChillHub.Core.Sync {
                         }, ct));
                 }
 
-                await Task.WhenAll(tasks);
+                await Task.WhenAll(tasks).ConfigureAwait(false);
             }
 
             // Верификация (хеши пропустим на моках)
             progress.Report(new SyncProgress { Stage = "Verifying", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
 
             // Активация: перенести staging файлы в основной корень.
-            // Файлы переносятся по одному, поэтому до начала ставим маркер незавершённого обновления:
-            // если процесс прервут посередине, игра останется наполовину обновлённой и запускать её нельзя.
+            // Фаза целиком синхронная и тяжёлая (File.Move по каждому файлу, SafeDeleteFile
+            // с ожиданиями и GC.Collect, обход дерева каталогов). Вызывающие стартуют
+            // ExecuteAsync с UI-потока, поэтому уводим её в пул: иначе окно замирает
+            // на десятки секунд и «Отмена» физически не нажимается.
             progress.Report(new SyncProgress { Stage = "Activating", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+            await Task.Run(() => ApplyPlan(plan, stagingRoot, ct), ct).ConfigureAwait(false);
+
+            // Финальный сигнал о завершении
+            progress.Report(new SyncProgress { Stage = "Completed", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+        }
+
+        /// <summary>
+        /// Фаза активации: перенос скачанного из staging в корень игры, удаление лишних
+        /// файлов, очистка пустых каталогов и снятие маркера. Синхронная и блокирующая —
+        /// вызывать только из пула потоков.
+        /// </summary>
+        /// <param name="plan">План различий.</param>
+        /// <param name="stagingRoot">Каталог со скачанными файлами.</param>
+        /// <param name="ct">Токен отмены.</param>
+        private static void ApplyPlan(DiffPlan plan, string stagingRoot, CancellationToken ct) {
             WriteUpdateMarker(plan.LocalRoot, plan.Version);
             foreach (var t in plan.Downloads) {
                 ct.ThrowIfCancellationRequested();
@@ -553,9 +570,6 @@ namespace ChillHub.Core.Sync {
 
             // Обновление доведено до конца — снимаем маркер незавершённого обновления
             ClearUpdateMarker(plan.LocalRoot);
-
-            // Финальный сигнал о завершении
-            progress.Report(new SyncProgress { Stage = "Completed", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
         }
 
         /// <summary>
