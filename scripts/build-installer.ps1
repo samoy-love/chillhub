@@ -318,10 +318,29 @@ Write-Host "[1/3] Restoring .NET packages..." -ForegroundColor Cyan
 & dotnet restore $Csproj
 Assert-NativeSuccess "dotnet restore" $LASTEXITCODE
 
+# Б8, вторая половина. Версия доезжала до установщика (/DAPP_VERSION), но НЕ до
+# самой сборки: в csproj версия не задана, поэтому ChillHub.exe объявлял себя
+# 1.0.0 независимо от того, что мы выпускаем. Последствия:
+#   * «О программе» показывает 1.0.0, если маркер launcher.version недоступен;
+#   * Resolve-AppVersion ниже, вызванный БЕЗ -AppVersion, читает версию из
+#     метаданных бинаря — то есть получил бы 1.0.0 и справедливо отказался
+#     собирать релиз.
+# Штампуем версию в сборку, когда она задана явно: тогда бинарь, установщик и
+# манифест несут одно и то же число.
+$versionStamp = @()
+if ($AppVersion -and $AppVersion.Trim()) {
+    $v = $AppVersion.Trim()
+    # AssemblyVersion требует строго числовой четырёхкомпонентный вид, поэтому
+    # суффиксы вида "-rc1" отдаём только в информационную версию.
+    $numeric = ($v -split '[-+]')[0]
+    $versionStamp = @("-p:Version=$v", "-p:InformationalVersion=$v", "-p:FileVersion=$numeric", "-p:AssemblyVersion=$numeric")
+    Write-Host "Stamping build version: $v" -ForegroundColor Cyan
+}
+
 if ($Publish) {
     Write-Host "[2/3] Publishing self-contained ($Configuration, $Runtime, SelfContained=$SelfContained)..." -ForegroundColor Cyan
     $sc = if ($SelfContained) { "true" } else { "false" }
-    & dotnet publish $Csproj -c $Configuration -r $Runtime --self-contained $sc
+    & dotnet publish $Csproj -c $Configuration -r $Runtime --self-contained $sc @versionStamp
     Assert-NativeSuccess "dotnet publish" $LASTEXITCODE
     # Compute publish output path (informational)
     $ProjectDir = Split-Path -Parent $Csproj
@@ -330,7 +349,7 @@ if ($Publish) {
     $BuildOutputDir = $PublishDir
 } else {
     Write-Host "[2/3] Building ($Configuration)..." -ForegroundColor Cyan
-    & dotnet build $Csproj -c $Configuration
+    & dotnet build $Csproj -c $Configuration @versionStamp
     Assert-NativeSuccess "dotnet build" $LASTEXITCODE
     $ProjectDir = Split-Path -Parent $Csproj
     $BuildOutputDir = Join-Path $ProjectDir "bin/$Configuration/net8.0-windows"
