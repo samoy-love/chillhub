@@ -20,6 +20,7 @@ namespace ChillHub.Core.Sync {
 
     using ChillHub.Core;
     using ChillHub.Core.Net;
+    using ChillHub.Update;
 
     public class SimpleSyncService : ISyncService {
         /// <summary>
@@ -75,6 +76,11 @@ namespace ChillHub.Core.Sync {
             var manifest = await this.http.GetFromJsonAsync<Manifest>(manifestUrl, ct)
                            ?? throw new InvalidDataException("manifest is null");
 
+            // Структура — раньше подписи. Опасный путь отвергается ВСЕГДА, в любом
+            // режиме совместимости: подпись отвечает на вопрос «наш ли это манифест»,
+            // а не «не пишет ли он файл в автозагрузку».
+            ManifestValidator.Validate(manifest, manifestUrl);
+
             // Подпись проверяем ДО того, как что-либо качать и применять: манифест
             // задаёт список файлов и их хеши, значит именно он определяет, какие
             // исполняемые файлы окажутся на диске. Проверка здесь, в единственной
@@ -92,6 +98,12 @@ namespace ChillHub.Core.Sync {
         /// <inheritdoc/>
         public Task<DiffPlan> PlanAsync(Manifest manifest, string localRoot, string contentBaseUrl, PlanOptions options, CancellationToken ct) {
             options ??= PlanOptions.Default;
+
+            // Планировщик — вторая (и последняя) точка входа манифеста в код,
+            // который трогает диск: сюда попадают и манифесты, полученные не через
+            // GetManifestAsync. Проверка идемпотентна и стоит копейки.
+            ManifestValidator.Validate(manifest, $"план для '{localRoot}'");
+
             var plan = new DiffPlan {
                 GameId = manifest.GameId,
                 Version = manifest.Version,
@@ -147,7 +159,10 @@ namespace ChillHub.Core.Sync {
                 ct.ThrowIfCancellationRequested();
                 var rel = kv.Key;
                 var mf = kv.Value;
-                var localPath = Path.Combine(localRoot, rel.Replace('/', Path.DirectorySeparatorChar));
+
+                // ManifestPath.Combine, а не Path.Combine: путь пришёл из манифеста,
+                // и он обязан остаться внутри корня игры (включая случай с junction'ом).
+                var localPath = ManifestPath.Combine(localRoot, rel);
                 bool needDownload = true;
                 string reason = "missing";
                 if (File.Exists(localPath)) {
@@ -300,8 +315,7 @@ namespace ChillHub.Core.Sync {
                         async () => {
                             try {
                                 ct.ThrowIfCancellationRequested();
-                                var targetRel = t.RelativePath.Replace('/', Path.DirectorySeparatorChar);
-                                var stagingFile = Path.Combine(stagingRoot, targetRel);
+                                var stagingFile = ManifestPath.Combine(stagingRoot, t.RelativePath);
                                 var stagingDir = Path.GetDirectoryName(stagingFile)!;
                                 Directory.CreateDirectory(stagingDir);
 
@@ -430,9 +444,8 @@ namespace ChillHub.Core.Sync {
             WriteUpdateMarker(plan.LocalRoot, plan.Version);
             foreach (var t in plan.Downloads) {
                 ct.ThrowIfCancellationRequested();
-                var rel = t.RelativePath.Replace('/', Path.DirectorySeparatorChar);
-                var dstPath = Path.Combine(plan.LocalRoot, rel);
-                var srcPath = Path.Combine(stagingRoot, rel);
+                var dstPath = ManifestPath.Combine(plan.LocalRoot, t.RelativePath);
+                var srcPath = ManifestPath.Combine(stagingRoot, t.RelativePath);
                 Directory.CreateDirectory(Path.GetDirectoryName(dstPath)!);
                 if (File.Exists(dstPath)) {
                     SafeDeleteFile(dstPath);
@@ -483,7 +496,9 @@ namespace ChillHub.Core.Sync {
 
             // Удаление лишних файлов (с устойчивостью к блокировкам сторонними процессами)
             foreach (var rel in plan.ToDelete) {
-                var path = Path.Combine(plan.LocalRoot, rel.Replace('/', Path.DirectorySeparatorChar));
+                // Список сформирован обходом самой папки игры, но удаление — необратимо,
+                // поэтому проверяем и его: подмена DiffPlan не должна стирать чужие файлы.
+                var path = ManifestPath.Combine(plan.LocalRoot, rel);
                 try {
                     if (File.Exists(path)) {
                         SafeDeleteFile(path);
@@ -500,7 +515,7 @@ namespace ChillHub.Core.Sync {
             // Создаём пустые директории из манифеста (гарантированно после очистки)
             foreach (var dirRel in plan.EmptyDirsToCreate) {
                 ct.ThrowIfCancellationRequested();
-                var dirPath = Path.Combine(plan.LocalRoot, dirRel.Replace('/', Path.DirectorySeparatorChar));
+                var dirPath = ManifestPath.Combine(plan.LocalRoot, dirRel);
                 Directory.CreateDirectory(dirPath);
             }
 
