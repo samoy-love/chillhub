@@ -90,20 +90,56 @@ func (h *Handlers) stageVersionDir(gid, ver string) (stageDir, filesRoot string,
 	return stageDir, filesRoot, nil
 }
 
-// promoteVersionDir atomically replaces the published version directory with a
-// fully extracted staging directory. os.Rename cannot overwrite an existing
-// directory (on any OS, and notably on Windows), so the old one is removed
-// first.
+// promoteVersionDir replaces the published version directory with a fully
+// extracted staging directory.
+//
+// os.Rename cannot overwrite an existing directory (on any OS, and notably on
+// Windows), so the old version has to be moved out of the way first. It is
+// RENAMED ASIDE rather than deleted:
+//
+//   - deleting it left the version absent for as long as the delete took —
+//     minutes for a multi-gigabyte build — and every client asking for it in
+//     that window got a 404; two renames close that gap to microseconds;
+//   - if the second rename then failed, the published version was gone for
+//     good with nothing to restore. Now it is put back.
+//
+// The old tree is deleted only once the new one is live.
 func promoteVersionDir(stageDir, finalDir string) error {
 	if err := os.MkdirAll(filepath.Dir(finalDir), 0o755); err != nil {
 		return err
 	}
+	// Sweep backups a previous crash may have left next to this version.
+	if leftovers, err := filepath.Glob(finalDir + ".old-*"); err == nil {
+		for _, p := range leftovers {
+			_ = os.RemoveAll(p)
+		}
+	}
+
+	backup := ""
 	if _, err := os.Stat(finalDir); err == nil {
-		if err := os.RemoveAll(finalDir); err != nil {
+		backup = finalDir + ".old-" + adminutil.GenID()
+		if err := os.Rename(finalDir, backup); err != nil {
 			return err
 		}
 	}
-	return os.Rename(stageDir, finalDir)
+	if err := os.Rename(stageDir, finalDir); err != nil {
+		if backup != "" {
+			if rerr := os.Rename(backup, finalDir); rerr != nil {
+				// Both the promote and the rollback failed: the published version
+				// now only exists under the backup name. Say so loudly — it is
+				// recoverable by hand, and silence would hide that.
+				log.Printf("[builds] CRITICAL: promote of %s failed (%v) and rollback failed too (%v); "+
+					"the previous version is still on disk as %s", finalDir, err, rerr, backup)
+			}
+		}
+		return err
+	}
+	if backup != "" {
+		if err := os.RemoveAll(backup); err != nil {
+			log.Printf("[builds] cannot remove the replaced version %s: %v", backup, err)
+		}
+	}
+	return nil
 }
 
 // LauncherGameID is the game id the launcher publishes itself under.
@@ -162,12 +198,13 @@ func (h *Handlers) writeManifest(m manifest, updateLatest bool) (string, []byte,
 	}
 	outPath := filepath.Join(outDir, m.Version+".json")
 	b, _ := json.MarshalIndent(m, "", "  ")
-	if err := os.WriteFile(outPath, b, 0o644); err != nil {
+	// Atomic: the public API serves these files while they are being written.
+	if err := adminutil.WriteFileAtomic(outPath, b, 0o644); err != nil {
 		return "", nil, err
 	}
 	if updateLatest {
 		bl, _ := json.MarshalIndent(map[string]string{"version": m.Version}, "", "  ")
-		_ = os.WriteFile(filepath.Join(outDir, "latest.json"), bl, 0o644)
+		_ = adminutil.WriteFileAtomic(filepath.Join(outDir, "latest.json"), bl, 0o644)
 	}
 	return outPath, b, nil
 }
@@ -179,13 +216,19 @@ func (h *Handlers) ListVersions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing gameId", http.StatusBadRequest)
 		return
 	}
+	if !adminutil.IsSafeGameID(gid) {
+		http.Error(w, "invalid gameId", http.StatusBadRequest)
+		return
+	}
 	dir := h.manifestsDir(gid)
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		dir = filepath.Join(h.root, "content", "manifests", gid)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		// Do not echo the filesystem error: it carries the absolute content root.
+		log.Printf("[builds] list %s: %v", gid, err)
+		http.Error(w, "game not found", http.StatusNotFound)
 		return
 	}
 	type item struct {
@@ -229,6 +272,10 @@ func (h *Handlers) Activate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing gameId or version", http.StatusBadRequest)
 		return
 	}
+	if !adminutil.IsSafeGameID(gid) || !adminutil.IsSafeVersion(ver) {
+		http.Error(w, "invalid gameId or version", http.StatusBadRequest)
+		return
+	}
 	dir := h.manifestsDir(gid)
 	if _, err := os.Stat(filepath.Join(dir, ver+".json")); err != nil {
 		dir = filepath.Join(h.root, "content", "manifests", gid)
@@ -239,8 +286,9 @@ func (h *Handlers) Activate(w http.ResponseWriter, r *http.Request) {
 	}
 	latest := map[string]string{"version": ver}
 	b, _ := json.MarshalIndent(latest, "", "  ")
-	if err := os.WriteFile(filepath.Join(dir, "latest.json"), b, 0o644); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := adminutil.WriteFileAtomic(filepath.Join(dir, "latest.json"), b, 0o644); err != nil {
+		log.Printf("[builds] activate %s/%s: %v", gid, ver, err)
+		http.Error(w, "failed to activate version", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -268,7 +316,8 @@ func (h *Handlers) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 	manPath := filepath.Join(manDir, ver+".json")
 	if err := os.Remove(manPath); err != nil {
 		if !os.IsNotExist(err) {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("[builds] delete %s/%s: %v", gid, ver, err)
+			http.Error(w, "failed to delete version", http.StatusInternalServerError)
 			return
 		}
 	}
@@ -305,7 +354,7 @@ func (h *Handlers) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 		} else {
 			newLatest := vers[len(vers)-1]
 			b, _ := json.MarshalIndent(map[string]string{"version": newLatest}, "", "  ")
-			_ = os.WriteFile(latestPath, b, 0o644)
+			_ = adminutil.WriteFileAtomic(latestPath, b, 0o644)
 		}
 	}
 	adminutil.WriteJSON(w, map[string]string{"status": "ok"})
@@ -325,7 +374,8 @@ func (h *Handlers) FreeSpace(w http.ResponseWriter, r *http.Request) {
 		free = f2
 		total = 0
 	} else {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[builds] free space %s: %v", base, err)
+		http.Error(w, "failed to query free space", http.StatusInternalServerError)
 		return
 	}
 	adminutil.WriteJSON(w, map[string]any{

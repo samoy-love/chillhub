@@ -217,7 +217,10 @@ func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
 		ErrorCode:  clamp(in.ErrorCode, maxErrorCode),
 	}
 	if err := h.append(ev); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		// This endpoint is public and unauthenticated: err.Error() would hand a
+		// stranger the absolute content-root path the moment the disk fills up.
+		log.Printf("[metrics] append: %v", err)
+		http.Error(w, "failed to store event", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
@@ -465,7 +468,8 @@ func (h *Handlers) Summary(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Unlock()
 	if scanErr != nil {
-		http.Error(w, scanErr.Error(), http.StatusInternalServerError)
+		log.Printf("[metrics] summary scan: %v", scanErr)
+		http.Error(w, "failed to read metrics", http.StatusInternalServerError)
 		return
 	}
 
@@ -512,7 +516,8 @@ func (h *Handlers) Clear(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 	for _, err := range []error{err1, err2} {
 		if err != nil && !os.IsNotExist(err) {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("[metrics] clear: %v", err)
+			http.Error(w, "failed to clear metrics", http.StatusInternalServerError)
 			return
 		}
 	}

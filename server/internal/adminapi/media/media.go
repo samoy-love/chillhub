@@ -12,6 +12,7 @@ import (
 	"image/png"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,10 +20,48 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"ChillHub/server/internal/adminutil"
 )
+
+// Decoding bounds.
+//
+// A decoder allocates width*height*4 bytes for the pixel buffer before anything
+// else happens, and the header that declares those numbers costs a few bytes to
+// compress: a 20 KB PNG claiming 30000x30000 makes the process ask for 3.6 GB.
+// The dimensions are therefore read from the header alone (image.DecodeConfig)
+// and checked BEFORE the image is decoded.
+const (
+	// MaxImageDimension is the largest allowed width or height.
+	MaxImageDimension = 8000
+	// MaxImagePixels bounds width*height (~128 MiB of RGBA in the worst case).
+	MaxImagePixels = 32 << 20
+)
+
+// ErrImageTooLarge reports an image whose declared dimensions are refused.
+var ErrImageTooLarge = fmt.Errorf("image dimensions too large")
+
+// CheckImageBounds reads only the image header and reports whether the declared
+// dimensions are safe to decode. An undecodable header is left to the caller's
+// decoder to report.
+func CheckImageBounds(data []byte) error {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil // not a format we can pre-check; the decode below will fail
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 {
+		return ErrImageTooLarge
+	}
+	if cfg.Width > MaxImageDimension || cfg.Height > MaxImageDimension {
+		return ErrImageTooLarge
+	}
+	if int64(cfg.Width)*int64(cfg.Height) > MaxImagePixels {
+		return ErrImageTooLarge
+	}
+	return nil
+}
 
 // ProcessAndSaveAsset converts and saves image bytes into the assets directory.
 //   - Chooses output extension and pipeline (static -> JPEG; animated GIF/WEBP -> WEBP if possible)
@@ -129,6 +168,9 @@ func ProcessAndSaveAsset(base, rel, desired string, data []byte, extHint, conten
 		return outName, meta, nil
 	}
 
+	if err := CheckImageBounds(data); err != nil {
+		return "", nil, err
+	}
 	img, format, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		switch ext {
@@ -165,8 +207,62 @@ func ProcessAndSaveAsset(base, rel, desired string, data []byte, extHint, conten
 	return outName, meta, nil
 }
 
+// ErrBlockedAddress reports a fetch aimed at the server's own network.
+var ErrBlockedAddress = fmt.Errorf("address not allowed")
+
+// blockedIP reports whether an address belongs to the infrastructure rather
+// than the public internet.
+//
+// "Fetch this URL for me" runs inside the server's network: without this check
+// an admin panel field reaches the loopback interface (the admin API itself, on
+// :55777, and any other service bound to localhost), the private LAN and the
+// cloud metadata endpoint at 169.254.169.254 — and the response is then stored
+// under the publicly served /assets/ tree.
+func blockedIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() || ip.IsMulticast() {
+		return true
+	}
+	if ip.IsPrivate() { // 10/8, 172.16/12, 192.168/16, fc00::/7
+		return true
+	}
+	if v4 := ip.To4(); v4 != nil {
+		// 100.64.0.0/10 (carrier-grade NAT) and 192.0.0.0/24 (IETF protocol
+		// assignments) are not covered by IsPrivate.
+		if v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 {
+			return true
+		}
+		if v4[0] == 192 && v4[1] == 0 && v4[2] == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// safeDialer refuses to connect to a blocked address. The check runs per dial,
+// so it also covers redirects and a DNS answer that changes between the lookup
+// and the connection.
+func safeDialer() *net.Dialer {
+	d := &net.Dialer{Timeout: 10 * time.Second}
+	d.Control = func(network, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return ErrBlockedAddress
+		}
+		if blockedIP(net.ParseIP(host)) {
+			return ErrBlockedAddress
+		}
+		return nil
+	}
+	return d
+}
+
 // DownloadURL fetches an http(s) URL, capped at 50 MiB, and returns the body
-// together with the reported Content-Type.
+// together with the reported Content-Type. Addresses inside the server's own
+// networks are refused; see blockedIP.
 func DownloadURL(u string) ([]byte, string, error) {
 	pu, err := url.Parse(strings.TrimSpace(u))
 	if err != nil {
@@ -175,9 +271,29 @@ func DownloadURL(u string) ([]byte, string, error) {
 	if pu.Scheme != "http" && pu.Scheme != "https" {
 		return nil, "", fmt.Errorf("unsupported scheme")
 	}
+	if pu.Hostname() == "" {
+		return nil, "", ErrBlockedAddress
+	}
+	// Reject a literal private address up front so the error is precise; the
+	// dialer's Control catches everything that only resolves to one later.
+	if ip := net.ParseIP(pu.Hostname()); ip != nil && blockedIP(ip) {
+		return nil, "", ErrBlockedAddress
+	}
 	req, _ := http.NewRequest("GET", pu.String(), nil)
 	req.Header.Set("User-Agent", "ChillHub-Admin/1.0")
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{
+		Timeout:   20 * time.Second,
+		Transport: &http.Transport{DialContext: safeDialer().DialContext},
+		CheckRedirect: func(r *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			if r.URL.Scheme != "http" && r.URL.Scheme != "https" {
+				return fmt.Errorf("unsupported scheme")
+			}
+			return nil
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", err

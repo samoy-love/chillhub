@@ -47,7 +47,13 @@ func (s *server) apiRoutes() []route {
 		{path: "/admin/api/health", handler: func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") }},
 
 		// Session endpoints; nginx routes these verbatim, they have no /admin alias.
-		{path: "/admin/api/auth/login", handler: s.auth.HandleLogin, noAlias: true},
+		//
+		// Login carries its own (tight) budget: it is unauthenticated and each
+		// attempt burns a bcrypt cost-12 comparison, so it is both the online
+		// password-guessing surface and the cheapest way to saturate the CPU of a
+		// process that also answers the public /feedback/submit and
+		// /metrics/report endpoints.
+		{path: "/admin/api/auth/login", handler: s.loginLimiter.Wrap(s.auth.HandleLogin, http.MethodPost), noAlias: true},
 		{path: "/admin/api/auth/logout", handler: s.auth.HandleLogout, noAlias: true},
 		{path: "/admin/api/auth/refresh", handler: s.auth.HandleRefresh, noAlias: true},
 		{path: "/admin/api/auth/me", handler: s.auth.HandleMe, noAlias: true},
