@@ -1838,7 +1838,15 @@ function updateCoverPreview(){
   // small top image area: fit inside and center
   box.style.display = 'block';
   if(url){
-    box.innerHTML = '<img src="'+url+'" alt="cover" style="width:100%;height:100%;object-fit:contain;object-position:center center;display:block"/>';
+    // url приходит из ответа /admin/news/get (поле coverUrl) либо из markdown.
+    // Собираем узел через DOM, а не конкатенацией в innerHTML: тогда кавычка
+    // в URL не может закрыть атрибут и дописать onerror=/<script src>.
+    box.replaceChildren();
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = 'cover';
+    img.style.cssText = 'width:100%;height:100%;object-fit:contain;object-position:center center;display:block';
+    box.appendChild(img);
   } else {
     box.innerHTML = '<div class="text-body-secondary small d-flex w-100 h-100 align-items-center justify-content-center">Не задано</div>';
   }
