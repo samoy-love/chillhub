@@ -9,6 +9,7 @@ package builds
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -105,6 +106,47 @@ func promoteVersionDir(stageDir, finalDir string) error {
 	return os.Rename(stageDir, finalDir)
 }
 
+// LauncherGameID is the game id the launcher publishes itself under.
+const LauncherGameID = "launcher"
+
+// LauncherStateFiles are files that live in the launcher's installation
+// directory but belong to the USER, not to the build: the updater is told to
+// preserve them and never overwrites them.
+//
+// They must never appear in a launcher manifest. If they do, the launcher
+// compares their hashes against the manifest, the updater refuses to rewrite
+// them, the mismatch is unresolvable — and the launcher offers the same update
+// forever. That is exactly what happened with versions 1.0.2, 1.0.3 and 1.1.7.
+//
+// Keep in sync with PreserveMatcher.DefaultRules in updater/UpdatePreserve.cs;
+// the guard test updater/tests/ManifestPreserveCheck enforces the invariant.
+var LauncherStateFiles = []string{"config.json", "launcher.version"}
+
+// stripLauncherStateFiles drops user-state entries from a launcher manifest.
+// For regular games the names are ordinary content and are left alone.
+func stripLauncherStateFiles(gameID string, files []manifestFile) []manifestFile {
+	if !strings.EqualFold(strings.TrimSpace(gameID), LauncherGameID) || len(files) == 0 {
+		return files
+	}
+	out := files[:0:0]
+	for _, f := range files {
+		rel := strings.TrimLeft(strings.ReplaceAll(f.Path, "\\", "/"), "/")
+		drop := false
+		for _, bad := range LauncherStateFiles {
+			if strings.EqualFold(rel, bad) {
+				drop = true
+				break
+			}
+		}
+		if drop {
+			log.Printf("[builds] manifest %s: dropping user-state file %q (see LauncherStateFiles)", gameID, f.Path)
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
 // writeManifest signs the manifest, stores it for a version and optionally
 // points latest.json at it. Returns the manifest path and the exact bytes
 // written.
@@ -112,6 +154,7 @@ func promoteVersionDir(stageDir, finalDir string) error {
 // Signing happens here rather than at the call sites so that no publication
 // path can accidentally emit an unsigned manifest.
 func (h *Handlers) writeManifest(m manifest, updateLatest bool) (string, []byte, error) {
+	m.Files = stripLauncherStateFiles(m.GameID, m.Files)
 	signManifest(&m)
 	outDir := h.manifestsDir(m.GameID)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
