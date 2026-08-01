@@ -656,7 +656,7 @@ namespace ChillHub.Pages {
                 Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} fetching manifest {manifestUrl}");
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, CancellationToken.None);
                 var contentBase = IntegrityChecker.ContentBaseUrl(this.BaseApi, gid, latest);
-                var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, CancellationToken.None);
+                var plan = await this.PlanOffUiThreadAsync(manifest, localRoot, contentBase, CancellationToken.None);
                 Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
                 LogPlanDownloads(gid, "verify", plan, localRoot);
 
@@ -760,6 +760,17 @@ namespace ChillHub.Pages {
             this.lastErrorDetails = string.Empty;
             this.StatusText.ToolTip = null;
         }
+
+        /// <summary>
+        /// Строит план различий, гарантированно не занимая UI-поток.
+        /// <see cref="ISyncService.PlanAsync(Manifest, string, string, CancellationToken)"/> только выглядит
+        /// асинхронным: внутри полный обход папки игры с пересчётом хешей, а результат возвращается
+        /// через уже завершённый Task. При вызове с UI-потока окно замирает на всё время обхода
+        /// (гигабайты SHA-256/BLAKE3), Windows рисует «Не отвечает», и даже «Отмена» не нажимается.
+        /// Тот же приём применён в <see cref="IntegrityChecker"/>.
+        /// </summary>
+        private Task<DiffPlan> PlanOffUiThreadAsync(Manifest manifest, string localRoot, string contentBaseUrl, CancellationToken token) =>
+            Task.Run(() => this.sync.PlanAsync(manifest, localRoot, contentBaseUrl, token), token);
 
         private Task DispatcherInvokeAsync(Action action) {
             Dispatcher? dispatcher;
@@ -1002,7 +1013,7 @@ namespace ChillHub.Pages {
                 var localRoot = GameLocalRoot(gid);
 
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, CancellationToken.None);
-                var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, CancellationToken.None);
+                var plan = await this.PlanOffUiThreadAsync(manifest, localRoot, contentBase, CancellationToken.None);
 
                 this.spaceHint.Remember(gid, plan.TotalDownloadBytes);
                 this.FilesSizeText.Text = SpaceHint.BuildText(plan.TotalDownloadBytes, GetAvailableFreeSpaceFor(gid));
@@ -1267,7 +1278,7 @@ namespace ChillHub.Pages {
                 this.StatusText.Text = "Проверка...";
                 this.UpdateProgress.IsIndeterminate = true;
                 var localRoot = GameLocalRoot(gid);
-                var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, token);
+                var plan = await this.PlanOffUiThreadAsync(manifest, localRoot, contentBase, token);
                 Core.Logging.Logger.Info($"StartUpdateAsync plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
                 LogPlanDownloads(gid, "update", plan, localRoot);
 
