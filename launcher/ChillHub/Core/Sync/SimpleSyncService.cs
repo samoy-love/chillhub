@@ -618,7 +618,16 @@ namespace ChillHub.Core.Sync {
             }
 
             var r = rel.Replace('\\', '/').TrimStart('/');
-            return r.Equals(UpdateMarkerFileName, StringComparison.OrdinalIgnoreCase);
+
+            // .updating — маркер незавершённого обновления.
+            // .version — маркер установленной версии. Его тоже нельзя трогать: в манифесте
+            // его нет, поэтому без этой проверки он попадал в ToDelete и стирался при
+            // синхронизации. При обычной установке это маскировалось — сразу после
+            // ExecuteAsync вызывается WriteLocalVersion. Но «проверка целостности» из
+            // настроек делает ExecuteAsync БЕЗ последующей записи маркера, и после
+            // успешного ремонта игра показывалась как неустановленная.
+            return r.Equals(UpdateMarkerFileName, StringComparison.OrdinalIgnoreCase)
+                || r.Equals(IntegrityChecker.VersionMarkerFileName, StringComparison.OrdinalIgnoreCase);
         }
 
         // Считает SHA-256 и Blake3 за один проход по файлу.

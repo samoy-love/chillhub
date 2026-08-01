@@ -127,14 +127,13 @@ namespace ChillHub.Tests {
         }
 
         [Fact]
-        public async Task PlanAsync_МаркерВерсииПопадаетВСписокНаУдаление_ИзвестноеРасхождение() {
-            // ВНИМАНИЕ: тест фиксирует ТЕКУЩЕЕ поведение, а не желаемое.
-            // GameLocalState и IntegrityChecker считают `.version` служебным файлом,
-            // а SimpleSyncService.IsServiceRelFile знает только про `.updating`.
-            // Из-за этого `.version` оказывается в ToDelete и стирается на фазе активации.
-            // В обычной установке это маскируется тем, что версия перезаписывается сразу после
-            // ExecuteAsync, но при «проверке целостности» (SettingsPage) её никто не восстанавливает,
-            // и игра после ремонта показывается как неустановленная.
+        public async Task PlanAsync_МаркерВерсииНеПопадаетВСписокНаУдаление() {
+            // Регрессия: `.version` в манифесте отсутствует, и пока IsServiceRelFile знал
+            // только про `.updating`, маркер версии попадал в ToDelete и стирался на фазе
+            // активации. При обычной установке это маскировалось — WriteLocalVersion
+            // вызывается сразу после ExecuteAsync. Но «проверка целостности» из настроек
+            // делает ExecuteAsync БЕЗ записи маркера, и после успешного ремонта игра
+            // показывалась как неустановленная.
             using var dir = new TempDir();
             dir.WriteFile(".version", "1.0.0");
             dir.WriteFile("game.exe", "x");
@@ -142,7 +141,14 @@ namespace ChillHub.Tests {
             var manifest = PlanTestData.Manifest(PlanTestData.File("game.exe", 1, "cafebabe"));
             var plan = await PlanTestData.PlanAsync(manifest, dir.Root);
 
-            Assert.Contains(".version", plan.ToDelete);
+            Assert.DoesNotContain(".version", plan.ToDelete);
+
+            // Контроль: посторонний файл в ToDelete попадать обязан — иначе тест зелёный
+            // просто потому, что список пуст.
+            dir.WriteFile("stale.dat", "y");
+            var plan2 = await PlanTestData.PlanAsync(manifest, dir.Root);
+            Assert.Contains("stale.dat", plan2.ToDelete);
+            Assert.DoesNotContain(".version", plan2.ToDelete);
         }
     }
 
