@@ -10,6 +10,7 @@ namespace ChillHub.Core {
     using System.Text.Json;
     using System.Threading.Tasks;
     using System.Windows;
+
     using ChillHub.Core.Net;
 
     /// <summary>
@@ -42,21 +43,24 @@ namespace ChillHub.Core {
 
         private sealed class ManualQuotaState { public int Count { get; set; } public DateTime WindowStartUtc { get; set; } }
 
-        public static bool TryConsumeGlobal(out TimeSpan retryAfter)
-        {
+        public static bool TryConsumeGlobal(out TimeSpan retryAfter) {
             retryAfter = TimeSpan.Zero;
             try {
                 lock (gqLock) {
                     var path = GlobalQuotaPath;
                     var dir = System.IO.Path.GetDirectoryName(path);
-                    if (!string.IsNullOrWhiteSpace(dir)) System.IO.Directory.CreateDirectory(dir);
+                    if (!string.IsNullOrWhiteSpace(dir)) {
+                        System.IO.Directory.CreateDirectory(dir);
+                    }
+
                     GlobalQuotaState st = new GlobalQuotaState { Count = 0, WindowStartUtc = DateTime.UtcNow };
                     try {
                         if (System.IO.File.Exists(path)) {
                             var json = System.IO.File.ReadAllText(path, Encoding.UTF8);
                             st = System.Text.Json.JsonSerializer.Deserialize<GlobalQuotaState>(json) ?? st;
                         }
-                    } catch { }
+                    }
+                    catch { }
 
                     var now = DateTime.UtcNow;
                     if (st.WindowStartUtc == default || (now - st.WindowStartUtc) >= GLOBAL_WINDOW) {
@@ -72,24 +76,28 @@ namespace ChillHub.Core {
                     try { System.IO.File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(st), Encoding.UTF8); } catch { }
                     return true;
                 }
-            } catch { return true; }
+            }
+            catch { return true; }
         }
 
-        public static bool TryConsumeManual(out TimeSpan retryAfter)
-        {
+        public static bool TryConsumeManual(out TimeSpan retryAfter) {
             retryAfter = TimeSpan.Zero;
             try {
                 lock (mqLock) {
                     var path = ManualQuotaPath;
                     var dir = System.IO.Path.GetDirectoryName(path);
-                    if (!string.IsNullOrWhiteSpace(dir)) System.IO.Directory.CreateDirectory(dir);
+                    if (!string.IsNullOrWhiteSpace(dir)) {
+                        System.IO.Directory.CreateDirectory(dir);
+                    }
+
                     ManualQuotaState st = new ManualQuotaState { Count = 0, WindowStartUtc = DateTime.UtcNow };
                     try {
                         if (System.IO.File.Exists(path)) {
                             var json = System.IO.File.ReadAllText(path, Encoding.UTF8);
                             st = System.Text.Json.JsonSerializer.Deserialize<ManualQuotaState>(json) ?? st;
                         }
-                    } catch { }
+                    }
+                    catch { }
 
                     var now = DateTime.UtcNow;
                     if (st.WindowStartUtc == default || (now - st.WindowStartUtc) >= MANUAL_WINDOW) {
@@ -105,7 +113,8 @@ namespace ChillHub.Core {
                     try { System.IO.File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(st), Encoding.UTF8); } catch { }
                     return true;
                 }
-            } catch { return true; }
+            }
+            catch { return true; }
         }
 
         /// <summary>
@@ -116,38 +125,50 @@ namespace ChillHub.Core {
             try {
                 AppDomain.CurrentDomain.UnhandledException -= CurrentDomain_UnhandledException;
                 AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
-            } catch { }
+            }
+            catch { }
 
             try {
                 if (Application.Current != null) {
                     Application.Current.DispatcherUnhandledException -= Current_DispatcherUnhandledException;
                     Application.Current.DispatcherUnhandledException += Current_DispatcherUnhandledException;
                 }
-            } catch { }
+            }
+            catch { }
 
             try {
                 TaskScheduler.UnobservedTaskException -= TaskScheduler_UnobservedTaskException;
                 TaskScheduler.UnobservedTaskException += TaskScheduler_UnobservedTaskException;
-            } catch { }
+            }
+            catch { }
         }
 
         private static void CurrentDomain_UnhandledException(object? sender, UnhandledExceptionEventArgs e) {
             try {
                 var ex = e.ExceptionObject as Exception;
-                if (ex != null) ReportAsync(ex, "AppDomain.UnhandledException", includeDiagnostics: true);
-            } catch { }
+                if (ex != null) {
+                    ReportAsync(ex, "AppDomain.UnhandledException", includeDiagnostics: true);
+                }
+            }
+            catch { }
         }
 
         private static void Current_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e) {
             try {
-                if (e?.Exception != null) ReportAsync(e.Exception, "DispatcherUnhandledException", includeDiagnostics: true);
-            } catch { }
+                if (e?.Exception != null) {
+                    ReportAsync(e.Exception, "DispatcherUnhandledException", includeDiagnostics: true);
+                }
+            }
+            catch { }
         }
 
         private static void TaskScheduler_UnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e) {
             try {
-                if (e?.Exception != null) ReportAsync(e.Exception, "TaskScheduler.UnobservedTaskException", includeDiagnostics: true);
-            } catch { }
+                if (e?.Exception != null) {
+                    ReportAsync(e.Exception, "TaskScheduler.UnobservedTaskException", includeDiagnostics: true);
+                }
+            }
+            catch { }
         }
 
         /// <summary>
@@ -169,12 +190,17 @@ namespace ChillHub.Core {
                 }
 
                 var baseApi = (ChillHub.Core.ConfigService.Current.ApiBaseUrl ?? string.Empty).TrimEnd('/');
-                if (string.IsNullOrWhiteSpace(baseApi)) return;
+                if (string.IsNullOrWhiteSpace(baseApi)) {
+                    return;
+                }
+
                 var url = baseApi + "/feedback/submit";
 
                 // Rate limit identical errors
                 var sig = BuildSignature(ex, context);
-                if (ShouldThrottle(sig)) return;
+                if (ShouldThrottle(sig)) {
+                    return;
+                }
 
                 // Global persistent quota
                 if (!TryConsumeGlobal(out var retryAfter)) { OnAutoReportSuppressed(retryAfter); return; }
@@ -186,8 +212,11 @@ namespace ChillHub.Core {
                     try {
                         var bundle = Diagnostics.Build();
                         logs = bundle.LogsMarkdown;
-                        foreach (var kv in bundle.SystemHints) system[kv.Key] = kv.Value;
-                    } catch { }
+                        foreach (var kv in bundle.SystemHints) {
+                            system[kv.Key] = kv.Value;
+                        }
+                    }
+                    catch { }
                 }
 
                 var payload = new {
@@ -206,14 +235,16 @@ namespace ChillHub.Core {
                 HttpResponseMessage res;
                 try {
                     res = await http.SendAsync(req).ConfigureAwait(false);
-                } catch {
+                }
+                catch {
                     // Fallback for local dev to admin port 55777
                     if (TryBuildLocalAdminUrl(baseApi, out var adminUrl)) {
                         try {
                             using var req2 = new HttpRequestMessage(HttpMethod.Post, adminUrl) { Content = req.Content };
                             var r2 = await http.SendAsync(req2).ConfigureAwait(false);
                             if (r2.IsSuccessStatusCode) { OnAutoReported(context); }
-                        } catch { }
+                        }
+                        catch { }
                     }
                     return;
                 }
@@ -225,10 +256,13 @@ namespace ChillHub.Core {
                             using var req3 = new HttpRequestMessage(HttpMethod.Post, adminUrl2) { Content = req.Content };
                             var r3 = await http.SendAsync(req3).ConfigureAwait(false);
                             if (r3.IsSuccessStatusCode) { OnAutoReported(context); }
-                        } catch { }
+                        }
+                        catch { }
                     }
-                } else { OnAutoReported(context); }
-            } catch { }
+                }
+                else { OnAutoReported(context); }
+            }
+            catch { }
         }
 
         private static void OnAutoReported(string context) { try { AutoReported?.Invoke(context); } catch { } }
@@ -237,14 +271,18 @@ namespace ChillHub.Core {
         private static bool TryBuildLocalAdminUrl(string baseApi, out string adminUrl) {
             adminUrl = string.Empty;
             try {
-                if (!Uri.TryCreate(baseApi, UriKind.Absolute, out var u)) return false;
+                if (!Uri.TryCreate(baseApi, UriKind.Absolute, out var u)) {
+                    return false;
+                }
+
                 var host = (u.Host ?? string.Empty).ToLowerInvariant();
                 if (host == "localhost" || host == "127.0.0.1") {
                     var ub = new UriBuilder(u) { Port = 55777 };
                     adminUrl = new Uri(ub.Uri, "/feedback/submit").ToString();
                     return true;
                 }
-            } catch { }
+            }
+            catch { }
             return false;
         }
 
@@ -256,7 +294,8 @@ namespace ChillHub.Core {
                 dict["dotnet"] = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription;
                 dict["machineName"] = Environment.MachineName;
                 dict["appVersion"] = typeof(ErrorReporter).Assembly.GetName().Version?.ToString() ?? string.Empty;
-            } catch { }
+            }
+            catch { }
             return dict;
         }
 
@@ -269,13 +308,19 @@ namespace ChillHub.Core {
                     var st = ex.StackTrace ?? "";
                     int nl = st.IndexOf('\n');
                     top = nl > 0 ? st.Substring(0, nl) : st;
-                } catch { }
+                }
+                catch { }
                 var raw = (context ?? "") + "|" + type + "|" + msg + "|" + top;
                 // simple stable hash
                 unchecked {
-                    int h = 17; foreach (var ch in raw) h = h*31 + ch; return h.ToString("x8");
+                    int h = 17; foreach (var ch in raw) {
+                        h = h * 31 + ch;
+                    }
+
+                    return h.ToString("x8");
                 }
-            } catch { return "sig"; }
+            }
+            catch { return "sig"; }
         }
 
         private static bool ShouldThrottle(string sig) {

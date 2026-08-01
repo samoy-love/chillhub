@@ -11,16 +11,15 @@ namespace ChillHub.Pages {
     using System.Linq;
     using System.Net.Http;
     using System.Net.Http.Json;
-    using System.Text;
     using System.Security.Cryptography;
+    using System.Text;
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
     using System.Windows;
     using System.Windows.Controls;
-    using System.Windows.Media;
     using System.Windows.Input;
-
+    using System.Windows.Media;
     using System.Windows.Media.Imaging;
     using System.Windows.Threading;
 
@@ -28,7 +27,6 @@ namespace ChillHub.Pages {
     using ChillHub.Core.Home;
     using ChillHub.Core.Net;
     using ChillHub.Core.Sync;
-
     // Вспомогательная логика вынесена в Core/Home/*: форматирование, локальное состояние игр,
     // загрузка картинок, диагностика плана синхронизации. using static — чтобы не менять места вызова.
     using static ChillHub.Core.Home.GameLocalState;
@@ -216,8 +214,7 @@ namespace ChillHub.Pages {
             }
         }
 
-        private void HomePage_PreviewKeyDown(object sender, KeyEventArgs e)
-        {
+        private void HomePage_PreviewKeyDown(object sender, KeyEventArgs e) {
             try {
                 if (e.Key == Key.Escape && this.FeedbackOverlay != null && this.FeedbackOverlay.Visibility == Visibility.Visible) {
                     e.Handled = true;

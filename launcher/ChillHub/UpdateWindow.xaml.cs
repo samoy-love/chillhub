@@ -138,22 +138,18 @@ namespace ChillHub {
                 var remote = latest?.Version?.Trim();
                 // Prefer a version marker written by updater; fallback to assembly version
                 string local;
-                try
-                {
+                try {
                     var markerPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launcher.version");
-                    if (System.IO.File.Exists(markerPath))
-                    {
+                    if (System.IO.File.Exists(markerPath)) {
                         local = (System.IO.File.ReadAllText(markerPath) ?? string.Empty).Trim();
                     }
-                    else
-                    {
+                    else {
                         var asm = Assembly.GetExecutingAssembly();
                         var v = asm?.GetName()?.Version;
                         local = v != null ? $"{v.Major}.{v.Minor}.{v.Build}" : string.Empty;
                     }
                 }
-                catch
-                {
+                catch {
                     var asm = Assembly.GetExecutingAssembly();
                     var v = asm?.GetName()?.Version;
                     local = v != null ? $"{v.Major}.{v.Minor}.{v.Build}" : string.Empty;
@@ -977,8 +973,7 @@ namespace ChillHub {
                 A("--files " + Q(System.IO.Path.Combine(selfUpdateDir, "filelist.txt")));
                 A("--dirs " + Q(System.IO.Path.Combine(selfUpdateDir, "emptydirs.txt")));
                 A("--del " + Q(System.IO.Path.Combine(selfUpdateDir, "deletelist.txt")));
-                if (!string.IsNullOrWhiteSpace(this.remoteVersion))
-                {
+                if (!string.IsNullOrWhiteSpace(this.remoteVersion)) {
                     A("--version " + Q(this.remoteVersion!));
                 }
 

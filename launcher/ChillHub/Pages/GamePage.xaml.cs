@@ -48,7 +48,7 @@ namespace ChillHub.Pages {
         private string localVersion = string.Empty;
         private double emaSpeedMBs;
 
-        /// <summary>Инициализирует страницу для конкретной игры.</summary>
+        /// <summary>Initializes a new instance of the <see cref="GamePage"/> class — страницу для конкретной игры.</summary>
         /// <param name="game">Описание игры из списка главной страницы (объект переиспользуется, чтобы статусы совпадали).</param>
         public GamePage(GameInfo game) {
             this.InitializeComponent();
