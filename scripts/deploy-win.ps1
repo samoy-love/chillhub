@@ -702,7 +702,8 @@ fi
   echo "[wait] Waiting for admin backend health at http://127.0.0.1:55777/admin/api/health"
   READY=0
   for i in {1..30}; do
-    code=$(curl -ks --max-time 2 -o /dev/null -w "%{http_code}" "http://127.0.0.1:55777/admin/api/health" || true)
+    # No -k: this is plain http:// to loopback, there is no TLS to skip.
+    code=$(curl -s --max-time 2 -o /dev/null -w "%{http_code}" "http://127.0.0.1:55777/admin/api/health" || true)
     if [ "$code" = "200" ]; then echo "[wait] admin backend READY (health=200)"; READY=1; break; fi
     sleep 1
   done
@@ -825,13 +826,22 @@ fi
 
   # Smoke tests
   FAIL=0
-  http_code() { curl -ks --max-time 8 -o /dev/null -w "%{http_code}" "$1"; }
+  # TLS IS VERIFIED — do not put `-k` back. These probes hit the public
+  # $SITE_BASE over a real Let's Encrypt certificate; with -k an expired cert
+  # produced a fully green smoke-test run while no browser could open the site
+  # (and with HSTS the visitor cannot click through). See the same note in
+  # .github/workflows/deploy.yml.
+  http_code() { curl -s --max-time 8 -o /dev/null -w "%{http_code}" "$1"; }
   must_200() { url="$1"; name="$2"; code=$(http_code "$url"); if [ "$code" = "200" ]; then echo "[test] PASS $name ($url)"; else echo "[test] FAIL $name ($url) -> $code"; FAIL=1; fi; }
 
 must_200 "$SITE_BASE/admin/ui/login.html" "Admin UI login"
 code=$(http_code "$SITE_BASE/admin/")
 if [ "$code" = "200" ]; then echo "[test] WARN /admin/ returned 200 (maybe authorized)"; elif [ "$code" = "401" ]; then echo "[test] PASS /admin/ protected (401 Unauthorized)"; elif [ "$code" = "302" ]; then echo "[test] PASS /admin/ protected (302 Found)"; else echo "[test] FAIL /admin/ -> $code"; FAIL=1; fi
-must_200 "$SITE_BASE/admin/ui/admin.js" "Admin UI static admin.js"
+must_200 "$SITE_BASE/admin/ui/login.js" "Admin UI login script (public)"
+# admin.js is behind auth_request together with the rest of the admin shell
+# (deploy/launcher.conf). A 200 here would mean the gate is gone.
+code=$(http_code "$SITE_BASE/admin/ui/admin.js")
+if [ "$code" = "401" ] || [ "$code" = "302" ]; then echo "[test] PASS /admin/ui/admin.js gated ($code)"; else echo "[test] FAIL /admin/ui/admin.js should be gated -> $code"; FAIL=1; fi
 # Admin API health should be public (no auth) and return 200
 must_200 "$SITE_BASE/admin/api/health" "Admin API health"
 must_200 "$SITE_BASE/" "Landing root"
@@ -840,17 +850,17 @@ must_200 "$SITE_BASE/styles.css" "Landing styles"
 # Extra curl diagnostics (headers)
   if [ -n "$VERBOSE" ]; then
     echo "[curl] HEADers"
-    curl -ksSI --max-time 8 "$SITE_BASE/admin/ui/login.html" || true
-    curl -ksSI --max-time 8 "$SITE_BASE/admin/ui/admin.js" || true
-    curl -ksSI --max-time 8 "$SITE_BASE/admin/api/health" || true
+    curl -sSI --max-time 8 "$SITE_BASE/admin/ui/login.html" || true
+    curl -sSI --max-time 8 "$SITE_BASE/admin/ui/admin.js" || true
+    curl -sSI --max-time 8 "$SITE_BASE/admin/api/health" || true
   fi
 
-if curl -ksf --max-time 5 "$SITE_BASE/manifests/launcher/latest.json" >/dev/null; then
+if curl -sf --max-time 5 "$SITE_BASE/manifests/launcher/latest.json" >/dev/null; then
   echo "[test] PASS manifests/launcher/latest.json"
 else
   echo "[test] WARN manifests/launcher/latest.json not present"
 fi
-if curl -ksf --max-time 5 "$SITE_BASE/assets/ping.txt" >/dev/null; then
+if curl -sf --max-time 5 "$SITE_BASE/assets/ping.txt" >/dev/null; then
   echo "[test] PASS assets/ping.txt"
 else
   echo "[test] WARN assets/ping.txt not present"
@@ -1246,9 +1256,9 @@ else
   ls -l /opt/chillhub/api /opt/chillhub/admin 2>/dev/null || true
 fi
 printf "%s %s\n" "[sum] Admin service:" "$(systemctl is-active chillhub-admin.service 2>/dev/null || true)"
-printf "%s %s\n" "[sum] Admin health code (external):" "$(curl -ks -o /dev/null -w '%{http_code}' https://launcher.samoy.love/admin/api/health || true)"
-printf "%s %s\n" "[sum] Admin gate code:" "$(curl -ks -o /dev/null -w '%{http_code}' https://launcher.samoy.love/admin/ || true)"
-printf "%s %s\n" "[sum] Site root:" "$(curl -ks -o /dev/null -w '%{http_code}' https://launcher.samoy.love/ || true)"
+printf "%s %s\n" "[sum] Admin health code (external):" "$(curl -s -o /dev/null -w '%{http_code}' https://launcher.samoy.love/admin/api/health || true)"
+printf "%s %s\n" "[sum] Admin gate code:" "$(curl -s -o /dev/null -w '%{http_code}' https://launcher.samoy.love/admin/ || true)"
+printf "%s %s\n" "[sum] Site root:" "$(curl -s -o /dev/null -w '%{http_code}' https://launcher.samoy.love/ || true)"
 printf "%s " "[sum] Downloads dir (server):"; sudo bash -lc 'test -d /var/www/site/downloads && (ls -1 /var/www/site/downloads | wc -l || true) || echo "missing"' || true
 printf "%s %s\n" "[sum] Admin health (localhost):" "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:55777/admin/api/health || true)"
 printf "%s %s\n" "[sum] Public API games (localhost GET):" "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:55700/api/games || true)"

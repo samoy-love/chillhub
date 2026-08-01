@@ -526,7 +526,38 @@ jobs:
             echo "::endgroup::"
 
             FAIL=0
-            http_code() { curl -ks -o /dev/null -w "%{http_code}" "$1"; }
+            # ------------------------------------------------------------------
+            # TLS IS VERIFIED. DO NOT PUT `-k` BACK.
+            #
+            # Every check below used to run `curl -ks`, i.e. with certificate
+            # verification switched off. That made the single most likely real
+            # outage — an expired or mis-renewed Let's Encrypt certificate —
+            # invisible: the deploy reported all-green while no browser on earth
+            # could open the site. With HSTS on (max-age=604800) that is not a
+            # warning page the visitor can click through, it is a hard refusal
+            # for a week.
+            #
+            # These URLs are the PUBLIC ones (${SITE_BASE}), fetched from the
+            # GitHub runner over the internet against a real Let's Encrypt
+            # certificate, so plain verification is exactly right. A curl exit
+            # code 60 here means "the certificate is broken" and the deploy must
+            # go red — that is the entire point.
+            #
+            # If you ever need to probe the origin directly (e.g. through an
+            # /etc/hosts pin or a private IP) do NOT reach for -k: use
+            # `--resolve host:443:IP`, which keeps verification on.
+            # ------------------------------------------------------------------
+            # Cert check with a real error message, before the per-URL probes:
+            # this way a broken certificate is named as such instead of showing
+            # up as eight identical "-> 000" lines.
+            if curl -sS --head --max-time 20 "${SITE_BASE}/" >/dev/null; then
+              ok "[test] PASS сертификат валиден и TLS-рукопожатие проходит (${SITE_BASE})"
+            else
+              err "[test] FAIL TLS/сертификат: curl не смог проверить ${SITE_BASE} — проверьте certbot и срок сертификата"
+              err "[test]      openssl s_client -connect launcher.samoy.love:443 -servername launcher.samoy.love </dev/null 2>/dev/null | openssl x509 -noout -dates"
+              FAIL=1
+            fi
+            http_code() { curl -s -o /dev/null -w "%{http_code}" "$1"; }
             must_200() {
               url="$1"; name="$2"; code=$(http_code "$url")
               if [ "$code" = 200 ]; then ok "[test] PASS $name ($url)"; else err "[test] FAIL $name ($url) -> $code"; FAIL=1; fi
@@ -554,8 +585,8 @@ jobs:
             must_200 "${SITE_BASE}/admin/api/health" "Admin API health"
             must_200 "${SITE_BASE}/" "Landing /"
             must_200 "${SITE_BASE}/styles.css" "Landing styles"
-            curl -ksf "${SITE_BASE}/manifests/launcher/latest.json" >/dev/null && ok "[test] PASS manifest latest.json" || warn "[test] WARN manifest latest.json not present"
-            curl -ksf "${SITE_BASE}/assets/ping.txt" >/dev/null && ok "[test] PASS assets/ping.txt" || warn "[test] WARN assets/ping.txt not present"
+            curl -sf "${SITE_BASE}/manifests/launcher/latest.json" >/dev/null && ok "[test] PASS manifest latest.json" || warn "[test] WARN manifest latest.json not present"
+            curl -sf "${SITE_BASE}/assets/ping.txt" >/dev/null && ok "[test] PASS assets/ping.txt" || warn "[test] WARN assets/ping.txt not present"
 
             REPORT_DIR="$HOME/deploy/report"
             mkdir -p "$REPORT_DIR"
@@ -630,7 +661,7 @@ jobs:
             http_row() {
               url="$1"
               name="$2"
-              read -r code time < <(curl -ks -o /dev/null -w "%{http_code} %{time_total}" "$url")
+              read -r code time < <(curl -s -o /dev/null -w "%{http_code} %{time_total}" "$url")
               status=FAIL
               if [ "$name" = "/admin/ gate" ] || [ "$name" = "admin.js gate" ]; then
                 { [ "$code" = 401 ] || [ "$code" = 302 ]; } && status=OK
