@@ -438,18 +438,21 @@ namespace ChillHub.Core.Sync {
                     var backup = dstPath + $".old.{pid}";
                     try {
                         File.Move(dstPath, backup, overwrite: true);
-                    } catch { }
+                    }
+                    catch { }
 
                     if (File.Exists(dstPath)) {
                         // As a last resort: place new file as .new and schedule replacement on reboot
                         var pending = dstPath + ".new";
-                        try { if (File.Exists(pending)) SafeDeleteFile(pending); } catch { }
+                        try { if (File.Exists(pending)) { SafeDeleteFile(pending); } } catch { }
                         File.Move(srcPath, pending);
                         try { NativeMethods.MoveFileEx(pending, dstPath, NativeMethods.MOVEFILE_DELAY_UNTIL_REBOOT /*| NativeMethods.MOVEFILE_REPLACE_EXISTING*/); } catch { }
-                    } else {
+                    }
+                    else {
                         File.Move(srcPath, dstPath);
                     }
-                } else {
+                }
+                else {
                     File.Move(srcPath, dstPath);
                 }
                 if (t.Executable) {

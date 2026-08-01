@@ -144,14 +144,18 @@ namespace ChillHub.Core.Logging {
 
                 try {
                     var oldest = Archive(MaxArchives);
-                    if (File.Exists(oldest)) File.Delete(oldest);
+                    if (File.Exists(oldest)) {
+                        File.Delete(oldest);
+                    }
                 }
                 catch { }
 
                 for (var i = MaxArchives - 1; i >= 1; i--) {
                     try {
                         var src = Archive(i);
-                        if (File.Exists(src)) File.Move(src, Archive(i + 1), overwrite: true);
+                        if (File.Exists(src)) {
+                            File.Move(src, Archive(i + 1), overwrite: true);
+                        }
                     }
                     catch { }
                 }

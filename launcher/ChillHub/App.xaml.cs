@@ -7,8 +7,8 @@ namespace ChillHub {
     using System;
     using System.IO;
     using System.Runtime.InteropServices;
-    using System.Windows;
     using System.Threading.Tasks;
+    using System.Windows;
 
     using ChillHub.Core;
     using ChillHub.Core.Logging;
@@ -76,7 +76,8 @@ namespace ChillHub {
                         try { Logger.Error(ex.Exception, "TaskScheduler.UnobservedTaskException"); } catch { }
                         try { ChillHub.Core.ErrorReporter.Report(ex.Exception, "TaskScheduler.UnobservedTaskException"); } catch { }
                     };
-                } catch { }
+                }
+                catch { }
             }
             catch {
             }

@@ -1,0 +1,7 @@
+# .editorconfig requires end_of_line = crlf for the launcher sources, and the
+# `dotnet format --verify-no-changes` step in .github/workflows/lint.yml is
+# blocking. Without an explicit attribute the line endings in a fresh checkout
+# depend on the runner's core.autocrlf, so the check could pass locally and fail
+# in CI (or vice versa). Pin it: LF in the repository, CRLF in the working tree.
+*.cs text eol=crlf
+*.xaml text eol=crlf

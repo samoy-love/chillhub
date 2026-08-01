@@ -28,8 +28,7 @@ namespace ChillHub.Core {
 
         public sealed record DiagnosticsBundle(string LogsMarkdown, Dictionary<string, string> SystemHints);
 
-        public static DiagnosticsBundle Build()
-        {
+        public static DiagnosticsBundle Build() {
             var sb = new StringBuilder(32 * 1024);
             var hints = new Dictionary<string, string>();
             try {
@@ -49,10 +48,12 @@ namespace ChillHub.Core {
                         sb.AppendLine("```json");
                         sb.AppendLine(json);
                         sb.AppendLine("```");
-                    } else {
+                    }
+                    else {
                         sb.AppendLine("(config.json not found)");
                     }
-                } catch (Exception ex) { sb.AppendLine($"(config read error: {ex.Message})"); }
+                }
+                catch (Exception ex) { sb.AppendLine($"(config read error: {ex.Message})"); }
                 sb.AppendLine();
 
                 // App root quick hashes (limited)
@@ -62,7 +63,8 @@ namespace ChillHub.Core {
                     var appRoot = string.IsNullOrWhiteSpace(asmLoc) ? AppDomain.CurrentDomain.BaseDirectory : Path.GetDirectoryName(asmLoc)!;
                     hints["appRoot"] = appRoot;
                     AppendDirHashes(sb, appRoot, maxFiles: 200, maxBytesPerFile: 5 * 1024 * 1024);
-                } catch (Exception ex) { sb.AppendLine($"(hash listing error: {ex.Message})"); }
+                }
+                catch (Exception ex) { sb.AppendLine($"(hash listing error: {ex.Message})"); }
                 sb.AppendLine();
 
                 // Games root folder tree (depth up to 10)
@@ -71,7 +73,8 @@ namespace ChillHub.Core {
                     var gamesRoot = ChillHub.Core.ConfigService.Current.GamesPath;
                     hints["gamesRoot"] = gamesRoot;
                     AppendFolderTree(sb, gamesRoot, maxDepth: 10);
-                } catch (Exception ex) { sb.AppendLine($"(games listing error: {ex.Message})"); }
+                }
+                catch (Exception ex) { sb.AppendLine($"(games listing error: {ex.Message})"); }
                 sb.AppendLine();
 
                 // Логи клиента: одна секция вместо прежних «Logs» + «Temp Logs».
@@ -93,10 +96,12 @@ namespace ChillHub.Core {
                             hints["legacyLogsDir"] = legacyDir;
                             CollectLogFiles(files, legacyDir, new[] { "client*.log", "boot*.log" });
                         }
-                    } catch { }
+                    }
+                    catch { }
 
                     AppendSpecificLogs(sb, files, maxFiles: 6, maxTailBytes: LogTailBytes, budget: budget);
-                } catch (Exception ex) { sb.AppendLine($"(logs error: {ex.Message})"); }
+                }
+                catch (Exception ex) { sb.AppendLine($"(logs error: {ex.Message})"); }
                 sb.AppendLine();
 
                 // SelfUpdate logs (apply-update.log) produced by native updater
@@ -108,24 +113,32 @@ namespace ChillHub.Core {
                     if (Directory.Exists(suRoot)) {
                         foreach (var verDir in Directory.EnumerateDirectories(suRoot)) {
                             var log1 = Path.Combine(verDir, "apply-update.log");
-                            if (File.Exists(log1)) files.Add(log1);
+                            if (File.Exists(log1)) {
+                                files.Add(log1);
+                            }
+
                             var updDir = Path.Combine(verDir, "updater");
                             if (Directory.Exists(updDir)) {
                                 // include any *.log in updater dir if present
-                                try { files.AddRange(Directory.GetFiles(updDir, "*.log", SearchOption.TopDirectoryOnly)); } catch {}
+                                try { files.AddRange(Directory.GetFiles(updDir, "*.log", SearchOption.TopDirectoryOnly)); } catch { }
                             }
                         }
                     }
                     AppendSpecificLogs(sb, files, maxFiles: 4, maxTailBytes: LogTailBytes, budget: budget);
-                } catch (Exception ex) { sb.AppendLine($"(selfupdate logs error: {ex.Message})"); }
+                }
+                catch (Exception ex) { sb.AppendLine($"(selfupdate logs error: {ex.Message})"); }
                 sb.AppendLine();
 
                 // Feedback queue path hint (if present)
                 try {
                     var qPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ChillHub", "feedback_queue.json");
-                    if (File.Exists(qPath)) hints["feedbackQueuePath"] = qPath;
-                } catch { }
-            } catch { }
+                    if (File.Exists(qPath)) {
+                        hints["feedbackQueuePath"] = qPath;
+                    }
+                }
+                catch { }
+            }
+            catch { }
             return new DiagnosticsBundle(sb.ToString(), hints);
         }
 
@@ -134,33 +147,41 @@ namespace ChillHub.Core {
                 if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) { sb.AppendLine("(games root not found)"); return; }
                 sb.AppendLine($"Root: {root}");
                 void Walk(string dir, int depth) {
-                    if (depth > maxDepth) return;
-                    string indent = new string(' ', Math.Max(0, (depth-1))) + (depth>0?"":"");
+                    if (depth > maxDepth) {
+                        return;
+                    }
+
+                    string indent = new string(' ', Math.Max(0, (depth - 1))) + (depth > 0 ? "" : "");
                     if (depth == 0) {
                         // top-level: list immediate folders
                         foreach (var d in SafeGetDirs(dir)) {
                             sb.AppendLine("- " + d);
-                            Walk(d, depth+1);
+                            Walk(d, depth + 1);
                         }
-                    } else {
+                    }
+                    else {
                         foreach (var d in SafeGetDirs(dir)) {
                             // show relative path from root for readability
                             string rel = MakeRelative(root, d);
-                            sb.AppendLine("  "+new string(' ', Math.Max(0, (depth-1)*2))+"- "+rel);
-                            Walk(d, depth+1);
+                            sb.AppendLine("  " + new string(' ', Math.Max(0, (depth - 1) * 2)) + "- " + rel);
+                            Walk(d, depth + 1);
                         }
                     }
                 }
                 Walk(root, 0);
-            } catch (Exception ex) { sb.AppendLine($"(listing error: {ex.Message})"); }
+            }
+            catch (Exception ex) { sb.AppendLine($"(listing error: {ex.Message})"); }
 
             static IEnumerable<string> SafeGetDirs(string p) { try { return Directory.GetDirectories(p); } catch { return Array.Empty<string>(); } }
             static string MakeRelative(string root, string path) {
                 try {
-                    var r = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)+Path.DirectorySeparatorChar;
+                    var r = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
                     var q = Path.GetFullPath(path);
-                    if (q.StartsWith(r, StringComparison.OrdinalIgnoreCase)) return q.Substring(r.Length).Replace(Path.DirectorySeparatorChar,'/');
-                } catch {}
+                    if (q.StartsWith(r, StringComparison.OrdinalIgnoreCase)) {
+                        return q.Substring(r.Length).Replace(Path.DirectorySeparatorChar, '/');
+                    }
+                }
+                catch { }
                 return path;
             }
         }
@@ -178,9 +199,11 @@ namespace ChillHub.Core {
                         var sha = ComputeSha256(path);
                         sb.AppendLine($"- {path}  {sha}");
                         count++;
-                    } catch (Exception ex) { sb.AppendLine($"- {path} (error: {ex.Message})"); }
+                    }
+                    catch (Exception ex) { sb.AppendLine($"- {path} (error: {ex.Message})"); }
                 }
-            } catch (Exception ex) { sb.AppendLine($"(hash error: {ex.Message})"); }
+            }
+            catch (Exception ex) { sb.AppendLine($"(hash error: {ex.Message})"); }
         }
 
         private static string ComputeSha256(string file) {
@@ -189,7 +212,8 @@ namespace ChillHub.Core {
                 using var sha = SHA256.Create();
                 var hash = sha.ComputeHash(fs);
                 return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
-            } catch { return string.Empty; }
+            }
+            catch { return string.Empty; }
         }
 
         /// <summary>
@@ -228,11 +252,13 @@ namespace ChillHub.Core {
             catch { }
         }
 
-        private static void AppendSpecificLogs(StringBuilder sb, IEnumerable<string> filesIn, int maxFiles, int maxTailBytes, LogBudget budget)
-        {
+        private static void AppendSpecificLogs(StringBuilder sb, IEnumerable<string> filesIn, int maxFiles, int maxTailBytes, LogBudget budget) {
             try {
                 var files = new List<string>();
-                foreach (var f in filesIn) { if (!string.IsNullOrWhiteSpace(f) && File.Exists(f)) files.Add(f); }
+                foreach (var f in filesIn) { if (!string.IsNullOrWhiteSpace(f) && File.Exists(f)) {
+                        files.Add(f);
+                    }
+                }
                 if (files.Count == 0) { sb.AppendLine("(no log files found)"); return; }
                 int used = 0;
                 foreach (var f in files) {
@@ -252,16 +278,19 @@ namespace ChillHub.Core {
                             sb.AppendLine(Encoding.UTF8.GetString(tail));
                             sb.AppendLine("```\n(tail only)");
                             budget.Remaining -= allowance;
-                        } else {
+                        }
+                        else {
                             sb.AppendLine("```log");
                             sb.AppendLine(Encoding.UTF8.GetString(bytes));
                             sb.AppendLine("```");
                             budget.Remaining -= bytes.Length;
                         }
-                    } catch (Exception ex) { sb.AppendLine($"(read error: {ex.Message})"); }
+                    }
+                    catch (Exception ex) { sb.AppendLine($"(read error: {ex.Message})"); }
                     used++;
                 }
-            } catch (Exception ex) { sb.AppendLine($"(specific logs error: {ex.Message})"); }
+            }
+            catch (Exception ex) { sb.AppendLine($"(specific logs error: {ex.Message})"); }
         }
     }
 }
