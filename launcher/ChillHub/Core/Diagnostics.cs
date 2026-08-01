@@ -175,8 +175,12 @@ namespace ChillHub.Core {
         /// <summary>
         /// Убирает из текста имя пользователя Windows: сначала полный путь к профилю,
         /// затем само имя (оно встречается и в путях вида C:\Users\ivan\...).
+        /// Публичный, потому что редактировать нужно не только бандл диагностики:
+        /// текст исключения в авто-отчёте тоже полон путей с именем пользователя.
         /// </summary>
-        private static string Redact(string text) {
+        /// <param name="text">Исходный текст.</param>
+        /// <returns>Текст без имени пользователя Windows.</returns>
+        public static string Redact(string text) {
             if (string.IsNullOrEmpty(text)) {
                 return text ?? string.Empty;
             }
