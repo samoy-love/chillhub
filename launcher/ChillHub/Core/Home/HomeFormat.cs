@@ -93,18 +93,42 @@ namespace ChillHub.Core.Home {
             return string.IsNullOrEmpty(s) ? "Game" : s;
         }
 
-        /// <summary>Путь для показа пользователю: прямые слэши, без дублей.</summary>
+        /// <summary>
+        /// Путь для показа пользователю: прямые слэши, без задвоенных разделителей.
+        /// Ведущий «//» сохраняется: у сетевого пути (\\nas\games) это не дубль, а синтаксис UNC,
+        /// и без него путь указывает уже не туда.
+        /// </summary>
         internal static string NormalizeDisplayPath(string path) {
             if (string.IsNullOrWhiteSpace(path)) {
                 return string.Empty;
             }
 
             var s = path.Replace('\\', '/');
-            while (s.Contains("//")) {
-                s = s.Replace("//", "/");
+            var uncPrefix = s.StartsWith("//", StringComparison.Ordinal) ? "//" : string.Empty;
+            var rest = s.Substring(uncPrefix.Length);
+            while (rest.Contains("//", StringComparison.Ordinal)) {
+                rest = rest.Replace("//", "/");
             }
 
-            return s;
+            return uncPrefix + rest;
+        }
+
+        /// <summary>
+        /// Приводит windows-путь к нормальной форме: одинарные обратные слеши вместо задвоенных.
+        /// Ведущий «\\» сохраняется — это префикс UNC, а не результат экранирования.
+        /// </summary>
+        internal static string NormalizeWindowsPath(string path) {
+            if (string.IsNullOrWhiteSpace(path)) {
+                return path ?? string.Empty;
+            }
+
+            var uncPrefix = path.StartsWith(@"\\", StringComparison.Ordinal) ? @"\\" : string.Empty;
+            var rest = path.Substring(uncPrefix.Length);
+            while (rest.Contains(@"\\", StringComparison.Ordinal)) {
+                rest = rest.Replace(@"\\", @"\");
+            }
+
+            return uncPrefix + rest;
         }
     }
 }
