@@ -1540,7 +1540,7 @@ function openPickUploadDialog(mode){
     grid.innerHTML = '<div class="text-body-secondary">Загрузка...</div>';
     let url = '/admin/news/assets?path=' + encodeURIComponent(pickPath);
     let res; try{ res = await fetch(url); }catch(e){ grid.innerHTML = '<div class="text-danger">Ошибка загрузки</div>'; return; }
-    if(!res.ok){ grid.innerHTML = '<div class="text-danger">HTTP '+res.status+'</div>'; return; }
+    if(!res.ok){ grid.innerHTML = '<div class="text-danger">HTTP '+escapeHtml(res.status+' '+(res.statusText||''))+'</div>'; return; }
     let j; try{ j = await res.json(); }catch(e){ grid.innerHTML = '<div class="text-danger">Плохой JSON</div>'; return; }
     pickPath = j.path || pickPath; pathInput.value = pickPath;
     renderPickGrid(j.items||[]);
@@ -1689,7 +1689,7 @@ function openPasteUploadDialog(file, mode){
     grid.innerHTML = '<div class="text-body-secondary">Загрузка...</div>';
     let url = '/admin/news/assets?path=' + encodeURIComponent(pastePath);
     let res; try{ res = await fetch(url); }catch(e){ grid.innerHTML = '<div class="text-danger">Ошибка загрузки</div>'; return; }
-    if(!res.ok){ grid.innerHTML = '<div class="text-danger">HTTP '+res.status+'</div>'; return; }
+    if(!res.ok){ grid.innerHTML = '<div class="text-danger">HTTP '+escapeHtml(res.status+' '+(res.statusText||''))+'</div>'; return; }
     let j; try{ j = await res.json(); }catch(e){ grid.innerHTML = '<div class="text-danger">Плохой JSON</div>'; return; }
     pastePath = j.path || pastePath; pathInput.value = pastePath;
     renderPasteGrid(j.items||[]);
@@ -2683,7 +2683,9 @@ async function galleryFetchAndRender(){
 
 function renderGalleryError(msg){
   const grid = document.getElementById('ns_gallery_grid'); if(!grid) return;
-  grid.innerHTML = '<div class="text-danger">'+(msg||'Ошибка')+'</div>';
+  // msg собирается из res.statusText и String(e) — это данные сервера и текст
+  // исключения, а не наш литерал, поэтому экранируем.
+  grid.innerHTML = '<div class="text-danger">'+escapeHtml(msg||'Ошибка')+'</div>';
 }
 
 function renderGalleryGrid(items){
