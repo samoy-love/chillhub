@@ -497,7 +497,10 @@ Function un.SelectDeleteGames_Create
   ${If} $0 == error
     Abort
   ${EndIf}
-  ${NSD_CreateLabel} 0 0 100% 40 "Удалить папку с играми?\r\nПапка: $Un_GamesDir"
+  ; И27: перенос строки в NSIS — это $\r$\n, а не \r\n. С обратными слэшами
+  ; пользователь видел в диалоге удаления буквальные символы:
+  ;   «Удалить папку с играми?\r\nПапка: D:\Games\ChillHub»
+  ${NSD_CreateLabel} 0 0 100% 40 "Удалить папку с играми?$\r$\nПапка: $Un_GamesDir"
   Pop $1
   ${NSD_CreateCheckbox} 0 46 100% 18 "Удалить папку с играми (безвозвратно)"
   Pop $DeleteGames_Check
