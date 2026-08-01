@@ -347,7 +347,7 @@ run "sudo rsync -a --delete \"$REPO_DIR/server/admin_ui/\"   \"$LAUNCHER_ROOT/ad
 
 # Guard snapshot (PRE): capture sample hashes and counts for server-managed dirs to detect unintended changes
 TMP_PRE_DIR="/tmp/chillhub-pre"; TMP_POST_DIR="/tmp/chillhub-post"; run "sudo mkdir -p \"$TMP_PRE_DIR\" \"$TMP_POST_DIR\""
-sample_hash(){ local d="$1"; if [[ ! -d "$d" ]]; then echo "missing"; return; fi; local list; list=$(LC_ALL=C find "$d" -type f -printf '%P\n' | sort | head -n 50); if [[ -z "$list" ]]; then echo "empty"; else while IFS= read -r f; do sha256sum "$d/$f" | awk '{print $1"  "$2}'; done <<< "$list" | sha256sum | awk '{print $1}'; fi; }
+sample_hash(){ local d="$1"; if [[ ! -d "$d" ]]; then echo "missing"; return; fi; local list; list=$(LC_ALL=C find "$d" -type f -printf '%P\n' | sort | awk 'NR<=50'); if [[ -z "$list" ]]; then echo "empty"; else while IFS= read -r f; do sha256sum "$d/$f" | awk '{print $1"  "$2}'; done <<< "$list" | sha256sum | awk '{print $1}'; fi; }
 for d in content manifests news; do dir="$LAUNCHER_ROOT/$d"; if [[ -d "$dir" ]]; then find "$dir" -type f 2>/dev/null | wc -l | awk '{print $1}' | sudo tee "$TMP_PRE_DIR/${d}.count" >/dev/null; sample_hash "$dir" | sudo tee "$TMP_PRE_DIR/${d}.hash" >/dev/null; else echo "-1" | sudo tee "$TMP_PRE_DIR/${d}.count" >/dev/null; echo "missing" | sudo tee "$TMP_PRE_DIR/${d}.hash" >/dev/null; fi; done
 
 # Ensure admin content root subdirs exist (do not touch content/manifests/news ownership)
@@ -467,7 +467,7 @@ section "HTTP: автотесты ($SITE_BASE_URL)"
 echo "[guard] Проверка, что серверные директории не изменены: $LAUNCHER_ROOT/content, /manifests, /news"
 FAIL_GUARD=0
 # POST snapshot and recent changes
-sample_hash(){ local d="$1"; if [[ ! -d "$d" ]]; then echo "missing"; return; fi; local list; list=$(LC_ALL=C find "$d" -type f -printf '%P\n' | sort | head -n 50); if [[ -z "$list" ]]; then echo "empty"; else while IFS= read -r f; do sha256sum "$d/$f" | awk '{print $1"  "$2}'; done <<< "$list" | sha256sum | awk '{print $1}'; fi; }
+sample_hash(){ local d="$1"; if [[ ! -d "$d" ]]; then echo "missing"; return; fi; local list; list=$(LC_ALL=C find "$d" -type f -printf '%P\n' | sort | awk 'NR<=50'); if [[ -z "$list" ]]; then echo "empty"; else while IFS= read -r f; do sha256sum "$d/$f" | awk '{print $1"  "$2}'; done <<< "$list" | sha256sum | awk '{print $1}'; fi; }
 for d in content manifests news; do
   dir="$LAUNCHER_ROOT/$d"
   if [[ -d "$dir" ]]; then
