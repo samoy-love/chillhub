@@ -27,6 +27,12 @@ namespace ChillHub {
         /// </summary>
         private const int MaxSameVersionAttempts = 3;
 
+        /// <summary>
+        /// Сколько каталогов версий в %TEMP%\ChillHub\SelfUpdate оставляем при уборке (19b):
+        /// самый свежий (его мог только что использовать апдейтер) и один предыдущий.
+        /// </summary>
+        private const int KeepTempSessionDirs = 2;
+
         /// <summary>UTF-8 без BOM: BOM ломает сверку размеров/хешей служебных списков.</summary>
         private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
 
@@ -50,7 +56,7 @@ namespace ChillHub {
 
         public UpdateWindow() {
             this.InitializeComponent();
-            TryCleanupTempUpdaterDirs();
+            TryCleanupTempSelfUpdateDirs();
             TryCleanupInstalledUpdaterArtifacts();
 
             // In DEBUG builds, pre-check the DEV skip checkbox by default
@@ -207,43 +213,9 @@ namespace ChillHub {
                             continue;
                         }
 
-                        var localRel = this.StripLocal(rel);
-                        var localPath = System.IO.Path.Combine(baseDir, localRel.Replace('/', System.IO.Path.DirectorySeparatorChar));
-                        if (!System.IO.File.Exists(localPath)) {
+                        if (!this.LocalFileMatches(baseDir, f, out _)) {
                             allMatch = false;
                             break;
-                        }
-
-                        // Если в манифесте есть sha256/blake3 — считаем оба, иначе считаем совпадением по размеру
-                        if (!string.IsNullOrWhiteSpace(f.Sha256) || !string.IsNullOrWhiteSpace(f.Blake3)) {
-                            using var fs = new System.IO.FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, useAsync: false);
-                            using var sha = System.Security.Cryptography.SHA256.Create();
-                            var b3 = Blake3.Hasher.New();
-                            var buf = new byte[256 * 1024];
-                            int r;
-                            while ((r = fs.Read(buf, 0, buf.Length)) > 0) {
-                                sha.TransformBlock(buf, 0, r, null, 0);
-                                b3.Update(new ReadOnlySpan<byte>(buf, 0, r));
-                            }
-
-                            sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
-                            var shaHex = Convert.ToHexString(sha.Hash!).ToLowerInvariant();
-                            var b3out = new byte[32];
-                            b3.Finalize(b3out);
-                            var b3Hex = Convert.ToHexString(b3out).ToLowerInvariant();
-                            var okSha = string.IsNullOrWhiteSpace(f.Sha256) || string.Equals(shaHex, f.Sha256, StringComparison.OrdinalIgnoreCase);
-                            var okB3 = string.IsNullOrWhiteSpace(f.Blake3) || string.Equals(b3Hex, f.Blake3, StringComparison.OrdinalIgnoreCase);
-                            if (!(okSha && okB3)) {
-                                allMatch = false;
-                                break;
-                            }
-                        }
-                        else {
-                            var info = new System.IO.FileInfo(localPath);
-                            if (info.Length != f.Size) {
-                                allMatch = false;
-                                break;
-                            }
                         }
                     }
                 }
@@ -351,6 +323,166 @@ namespace ChillHub {
                 : norm;
         }
 
+        /// <summary>
+        /// A12. Сравнивает один файл манифеста с ФАКТИЧЕСКИМ файлом в папке установки.
+        /// Возвращает true, если файл на месте и совпадает (по хешам, а при их отсутствии — по размеру).
+        /// Любая ошибка чтения трактуется как «не совпадает»: лучше лишний раз скачать файл,
+        /// чем оставить установку в неконсистентном состоянии.
+        /// </summary>
+        /// <param name="baseDir">Папка установки лаунчера.</param>
+        /// <param name="f">Запись манифеста.</param>
+        /// <param name="reason">Человекочитаемая причина расхождения (для лога).</param>
+        /// <returns>true, если локальный файл соответствует манифесту.</returns>
+        private bool LocalFileMatches(string baseDir, ManifestFile f, out string reason) {
+            reason = string.Empty;
+            try {
+                var rel = (f.Path ?? string.Empty).Replace('\\', '/').Trim('/');
+                if (rel.Length == 0) {
+                    return true;
+                }
+
+                var localRel = this.StripLocal(rel);
+                var localPath = System.IO.Path.Combine(baseDir, localRel.Replace('/', System.IO.Path.DirectorySeparatorChar));
+                if (!System.IO.File.Exists(localPath)) {
+                    reason = "missing";
+                    return false;
+                }
+
+                var info = new System.IO.FileInfo(localPath);
+
+                // Если в манифесте есть sha256/blake3 — считаем оба, иначе считаем совпадением по размеру
+                if (!string.IsNullOrWhiteSpace(f.Sha256) || !string.IsNullOrWhiteSpace(f.Blake3)) {
+                    if (f.Size > 0 && info.Length != f.Size) {
+                        // Размер отличается — хеш заведомо не совпадёт, файл читать незачем
+                        reason = $"size {info.Length} != {f.Size}";
+                        return false;
+                    }
+
+                    using var fs = new System.IO.FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, useAsync: false);
+                    using var sha = System.Security.Cryptography.SHA256.Create();
+                    var b3 = Blake3.Hasher.New();
+                    var buf = new byte[256 * 1024];
+                    int r;
+                    while ((r = fs.Read(buf, 0, buf.Length)) > 0) {
+                        sha.TransformBlock(buf, 0, r, null, 0);
+                        b3.Update(new ReadOnlySpan<byte>(buf, 0, r));
+                    }
+
+                    sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+                    var shaHex = Convert.ToHexString(sha.Hash!).ToLowerInvariant();
+                    var b3out = new byte[32];
+                    b3.Finalize(b3out);
+                    var b3Hex = Convert.ToHexString(b3out).ToLowerInvariant();
+                    var okSha = string.IsNullOrWhiteSpace(f.Sha256) || string.Equals(shaHex, f.Sha256, StringComparison.OrdinalIgnoreCase);
+                    var okB3 = string.IsNullOrWhiteSpace(f.Blake3) || string.Equals(b3Hex, f.Blake3, StringComparison.OrdinalIgnoreCase);
+                    if (okSha && okB3) {
+                        return true;
+                    }
+
+                    reason = $"hash_mismatch shaOk={okSha} b3Ok={okB3}";
+                    return false;
+                }
+
+                if (info.Length == f.Size) {
+                    return true;
+                }
+
+                reason = $"size {info.Length} != {f.Size}";
+                return false;
+            }
+            catch (Exception ex) {
+                reason = $"io_error {ex.Message}";
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// A12. Строит ЧЕСТНЫЙ диффовый план самообновления.
+        ///
+        /// Раньше план считался против пустого временного каталога, поэтому «недостающими»
+        /// оказывались ВСЕ файлы манифеста и каждое обновление тянуло лаунчер целиком.
+        /// Теперь сравнение идёт с фактической папкой установки, а качаем всё равно во временный
+        /// каталог: файлы работающего лаунчера залочены, копирует их внешний updater после выхода.
+        /// </summary>
+        /// <param name="manifest">Манифест целевой версии.</param>
+        /// <param name="tempRoot">Временный каталог загрузки (LocalRoot плана).</param>
+        /// <param name="contentBase">База URL с файлами версии.</param>
+        /// <returns>План, в котором Downloads — только реально изменившиеся файлы.</returns>
+        private DiffPlan BuildSelfUpdatePlan(Manifest manifest, string tempRoot, string contentBase) {
+            var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            var plan = new DiffPlan {
+                GameId = manifest.GameId,
+                Version = manifest.Version,
+                LocalRoot = tempRoot,
+            };
+
+            foreach (var f in manifest.Files) {
+                var rel = (f.Path ?? string.Empty).Replace('\\', '/').Trim('/');
+                if (rel.Length == 0) {
+                    continue;
+                }
+
+                // Preserve-файлы апдейтер не перезаписывает — качать их бессмысленно,
+                // а служебный мусор апдейтера в пакет вообще попадать не должен.
+                if (Preserve.ShouldPreserve(rel) || PreserveMatcher.IsUpdaterArtifact(rel)) {
+                    continue;
+                }
+
+                if (this.LocalFileMatches(baseDir, f, out var reason)) {
+                    continue;
+                }
+
+                plan.Downloads.Add(new FileTask {
+                    RelativePath = rel,
+                    Size = f.Size,
+                    Url = contentBase.TrimEnd('/') + "/" + rel,
+                    Blake3 = f.Blake3,
+                    Sha256 = f.Sha256,
+                    Executable = f.Executable,
+                });
+                plan.TotalDownloadBytes += f.Size;
+                try {
+                    Core.Logging.Logger.Info($"SelfUpdate diff include '{rel}' size={f.Size} reason={reason}");
+                }
+                catch {
+                }
+            }
+
+            plan.TotalFilesToDownload = plan.Downloads.Count;
+
+            // ВАЖНО: ToDelete и EmptyDirsToCreate плана намеренно пусты.
+            // Их LocalRoot — это временный каталог, и ExecuteAsync применил бы их к нему,
+            // а не к папке установки. Реальные удаления/пустые каталоги едут отдельными
+            // списками (deletelist.txt / emptydirs.txt) и применяются апдейтером.
+            return plan;
+        }
+
+        /// <summary>
+        /// A12. Ситуация «версии разные, но все файлы манифеста уже лежат на месте».
+        /// Гонять апдейтер незачем — копировать и удалять нечего. Обновляем только маркер версии,
+        /// иначе диалог обновления будет всплывать при каждом запуске.
+        /// </summary>
+        /// <param name="manifest">Манифест целевой версии (пустой манифест маркер не обновляет).</param>
+        private void MarkAlreadyUpToDate(Manifest manifest) {
+            if (manifest.Files.Count > 0 && !string.IsNullOrWhiteSpace(this.remoteVersion)) {
+                try {
+                    var marker = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launcher.version");
+                    System.IO.File.WriteAllText(marker, this.remoteVersion!.Trim(), Utf8NoBom);
+                }
+                catch {
+                }
+            }
+
+            ResetUpdateAttempts();
+            this.updateRequired = false;
+            this.downloaded = false;
+            this.Progress.IsIndeterminate = false;
+            this.Progress.Value = 100;
+            this.StatusText.Text = "Файлы лаунчера уже соответствуют новой версии — обновление не требуется.";
+            this.PrimaryBtn.Content = "Продолжить";
+            this.PrimaryBtn.IsEnabled = true;
+        }
+
         private void ExitBtn_Click(object sender, RoutedEventArgs e) {
             this.DialogResult = false;
         }
@@ -411,28 +543,104 @@ namespace ChillHub {
             }
         }
 
-        // Cleanup TEMP updater directories from previous runs
-        private static void TryCleanupTempUpdaterDirs() {
+        /// <summary>
+        /// 19b. Уборка %TEMP%\ChillHub\SelfUpdate от каталогов старых версий.
+        ///
+        /// Раньше чистилась только подпапка updater, а сами каталоги версий оставались навсегда —
+        /// по копии пакета обновления на каждую версию. Теперь каталоги старых версий удаляются
+        /// целиком; оставляем самые свежие: в новейшем может ещё дописывать лог апдейтер,
+        /// который только что перезапустил лаунчер.
+        ///
+        /// Всё best-effort: залоченные файлы просто доживают до следующего запуска.
+        /// </summary>
+        private static void TryCleanupTempSelfUpdateDirs() {
             try {
                 var root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ChillHub", "SelfUpdate");
                 if (!System.IO.Directory.Exists(root)) {
                     return;
                 }
 
-                foreach (var verDir in System.IO.Directory.EnumerateDirectories(root)) {
-                    // Старая раскладка (updater прямо в папке версии) и новая (work\updater).
-                    foreach (var candidate in new[] {
-                        System.IO.Path.Combine(verDir, PreserveMatcher.UpdaterArtifactDir),
-                        System.IO.Path.Combine(verDir, "work", PreserveMatcher.UpdaterArtifactDir),
-                    }) {
+                var dirs = new System.Collections.Generic.List<System.IO.DirectoryInfo>();
+                foreach (var p in System.IO.Directory.EnumerateDirectories(root)) {
+                    try {
+                        dirs.Add(new System.IO.DirectoryInfo(p));
+                    }
+                    catch {
+                    }
+                }
+
+                // Свежие — в начало списка.
+                dirs.Sort((a, b) => DirStamp(b).CompareTo(DirStamp(a)));
+
+                for (var i = 0; i < dirs.Count; i++) {
+                    var dir = dirs[i].FullName;
+                    if (i < KeepTempSessionDirs) {
+                        // Свежие сессии целиком не сносим, но копию апдейтера из них выносим:
+                        // старая раскладка (updater прямо в папке версии) и новая (work\updater).
+                        TryDeleteDirectoryBestEffort(System.IO.Path.Combine(dir, PreserveMatcher.UpdaterArtifactDir));
+                        TryDeleteDirectoryBestEffort(System.IO.Path.Combine(dir, "work", PreserveMatcher.UpdaterArtifactDir));
+                        continue;
+                    }
+
+                    TryDeleteDirectoryBestEffort(dir);
+                }
+            }
+            catch {
+            }
+        }
+
+        /// <summary>Время последнего изменения каталога; при ошибке — «очень давно».</summary>
+        private static DateTime DirStamp(System.IO.DirectoryInfo d) {
+            try {
+                var w = d.LastWriteTimeUtc;
+                var c = d.CreationTimeUtc;
+                return w > c ? w : c;
+            }
+            catch {
+                return DateTime.MinValue;
+            }
+        }
+
+        /// <summary>
+        /// Удаляет каталог, переживая залоченные файлы и атрибут «только чтение».
+        /// Ничего не бросает: уборка мусора не должна мешать запуску лаунчера.
+        /// </summary>
+        private static void TryDeleteDirectoryBestEffort(string path) {
+            try {
+                if (!System.IO.Directory.Exists(path)) {
+                    return;
+                }
+
+                try {
+                    System.IO.Directory.Delete(path, true);
+                    return;
+                }
+                catch {
+                }
+
+                // Не вышло с первого раза: снимаем read-only и выносим файлы поштучно,
+                // чтобы освободить место даже если один файл кем-то занят.
+                try {
+                    foreach (var f in System.IO.Directory.EnumerateFiles(path, "*", System.IO.SearchOption.AllDirectories)) {
                         try {
-                            if (System.IO.Directory.Exists(candidate)) {
-                                System.IO.Directory.Delete(candidate, true);
+                            var attrs = System.IO.File.GetAttributes(f);
+                            if ((attrs & (System.IO.FileAttributes.ReadOnly | System.IO.FileAttributes.System)) != 0) {
+                                System.IO.File.SetAttributes(f, attrs & ~(System.IO.FileAttributes.ReadOnly | System.IO.FileAttributes.System));
                             }
+
+                            System.IO.File.Delete(f);
                         }
                         catch {
                         }
                     }
+                }
+                catch {
+                }
+
+                try {
+                    System.IO.Directory.Delete(path, true);
+                }
+                catch {
                 }
             }
             catch {
@@ -536,7 +744,52 @@ namespace ChillHub {
                     var emptyDirsPath = System.IO.Path.Combine(workDir, "emptydirs.txt");
                     var deleteListPath = System.IO.Path.Combine(workDir, "deletelist.txt");
 
-                    var plan = await this.sync.PlanAsync(manifest, tempRoot, contentBase, System.Threading.CancellationToken.None);
+                    // A12. План считаем против ПАПКИ УСТАНОВКИ, а не против пустого temp,
+                    // иначе «недостающими» окажутся все файлы манифеста и лаунчер качается целиком.
+                    var plan = this.BuildSelfUpdatePlan(manifest, tempRoot, contentBase);
+
+                    // Список удалений — всё, чего нет в манифесте.
+                    // A10: пути манифеста приводим к путям относительно папки установки (strip-prefix),
+                    // иначе при упакованной корневой папке в список попадёт ВСЯ папка установки.
+                    var toDelete = new System.Collections.Generic.List<string>();
+                    try {
+                        var targetDirForDel = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(System.IO.Path.DirectorySeparatorChar);
+                        var manifestSet = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+                        foreach (var f in manifest.Files) {
+                            manifestSet.Add(this.StripLocal(f.Path ?? string.Empty));
+                        }
+
+                        if (manifestSet.Count > 0) {
+                            foreach (var diskFile in System.IO.Directory.EnumerateFiles(targetDirForDel, "*", System.IO.SearchOption.AllDirectories)) {
+                                var rel = diskFile.Substring(targetDirForDel.Length).TrimStart(System.IO.Path.DirectorySeparatorChar).Replace(System.IO.Path.DirectorySeparatorChar, '/');
+                                if (Preserve.ShouldPreserve(rel)) {
+                                    continue;
+                                }
+
+                                if (PreserveMatcher.IsUpdaterArtifact(rel)) {
+                                    // Служебный мусор апдейтера удаляет он сам (CleanupUpdaterArtifacts).
+                                    continue;
+                                }
+
+                                if (!manifestSet.Contains(rel)) {
+                                    toDelete.Add(rel);
+                                }
+                            }
+                        }
+
+                        // Пустой манифест — удалять нечего; страхуемся от сноса установки.
+                    }
+                    catch {
+                        // Не смогли посчитать удаления — обновление это не отменяет, список остаётся пустым.
+                        toDelete.Clear();
+                    }
+
+                    // A12. Нечего копировать и нечего удалять — обновление вообще не запускаем.
+                    // Иначе получаем полный цикл «останов лаунчера → апдейтер → перезапуск» впустую.
+                    if (plan.Downloads.Count == 0 && toDelete.Count == 0) {
+                        this.MarkAlreadyUpToDate(manifest);
+                        return;
+                    }
 
                     // Формируем файлы для копирования из реально изменённых (diff plan),
                     // исключая preserve-файлы: апдейтер их всё равно не тронет.
@@ -558,47 +811,24 @@ namespace ChillHub {
                     catch {
                     }
 
-                    // Список удалений — всё, чего нет в манифесте.
-                    // A10: пути манифеста приводим к путям относительно папки установки (strip-prefix),
-                    // иначе при упакованной корневой папке в список попадёт ВСЯ папка установки.
                     try {
-                        var targetDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(System.IO.Path.DirectorySeparatorChar);
-                        var manifestSet = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
-                        foreach (var f in manifest.Files) {
-                            manifestSet.Add(this.StripLocal(f.Path ?? string.Empty));
-                        }
+                        System.IO.File.WriteAllLines(deleteListPath, toDelete, Utf8NoBom);
+                    }
+                    catch {
+                    }
 
-                        if (manifestSet.Count == 0) {
-                            // Пустой манифест — удалять нечего; страхуемся от сноса установки.
-                            System.IO.File.WriteAllLines(deleteListPath, Array.Empty<string>(), Utf8NoBom);
-                        }
-                        else {
-                            var toDelete = new System.Collections.Generic.List<string>();
-                            foreach (var diskFile in System.IO.Directory.EnumerateFiles(targetDir, "*", System.IO.SearchOption.AllDirectories)) {
-                                var rel = diskFile.Substring(targetDir.Length).TrimStart(System.IO.Path.DirectorySeparatorChar).Replace(System.IO.Path.DirectorySeparatorChar, '/');
-                                if (Preserve.ShouldPreserve(rel)) {
-                                    continue;
-                                }
-
-                                if (PreserveMatcher.IsUpdaterArtifact(rel)) {
-                                    // Служебный мусор апдейтера удаляет он сам (CleanupUpdaterArtifacts).
-                                    continue;
-                                }
-
-                                if (!manifestSet.Contains(rel)) {
-                                    toDelete.Add(rel);
-                                }
-                            }
-
-                            System.IO.File.WriteAllLines(deleteListPath, toDelete, Utf8NoBom);
-                        }
+                    try {
+                        Core.Logging.Logger.Info(
+                            $"SelfUpdate diff: download={plan.Downloads.Count} files, {plan.TotalDownloadBytes} bytes; delete={toDelete.Count}; manifest files={manifest.Files.Count}");
                     }
                     catch {
                     }
 
                     this.StatusText.Text = $"Скачивание из: {contentBase}\nВременная папка: {tempRoot}";
 
-                    this.StatusText.Text = "Скачивание файлов обновления...";
+                    this.StatusText.Text = plan.Downloads.Count > 0
+                        ? $"Скачивание обновления: {plan.Downloads.Count} файл(ов) из {manifest.Files.Count}..."
+                        : "Изменившихся файлов нет, применяем удаления...";
                     var prog = new Progress<SyncProgress>(p => {
                         this.Progress.IsIndeterminate = false;
                         if (p.TotalBytes > 0) {
