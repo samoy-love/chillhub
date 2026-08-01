@@ -113,6 +113,8 @@ jobs:
           rsync -a deploy/launcher.conf build/deploy/launcher.conf
           # И3: скрипт резервного копирования контента едет вместе с юнитами.
           rsync -a deploy/backup-content.sh build/deploy/backup-content.sh
+          # И13: скрипт отката бинарей.
+          rsync -a deploy/rollback-binaries.sh build/deploy/rollback-binaries.sh
           echo "::endgroup::"
           echo "::group::Manifests"
           manifest() { local root="$1"; local out="$2"; rm -f "$out"; if [ -d "$root" ]; then ( cd "$root" && find . -type f -print0 | xargs -0 sha256sum | awk '{print $2"\t"$1}' | sed 's#^\./##' ) > "$out"; fi }
@@ -413,6 +415,32 @@ jobs:
                   ;;
               esac
             fi
+            # И13: СОХРАНЯЕМ ТЕКУЩИЕ БИНАРИ ПЕРЕД ПЕРЕЗАПИСЬЮ.
+            #
+            # Отката не было нигде, кроме конфига nginx: бинари ставились
+            # `install` поверх старых, и предыдущая версия исчезала
+            # безвозвратно. Вернуться к работающей сборке можно было только
+            # новой выкаткой из git — то есть в момент, когда прод лежит, надо
+            # было дождаться сборки, а если ломающий коммит уже в main, ещё и
+            # сначала сделать revert. Сохранение стоит одну копию файла.
+            ROLLBACK_DIR="$OPT_DIR/rollback"
+            sudo install -d -m 0700 -o root -g root "$ROLLBACK_DIR"
+            BIN_STAMP="$(date -u +%Y-%m-%d-%H%M%S)"
+            for _b in api admin; do
+              if [ -f "$OPT_DIR/$_b" ]; then
+                sudo cp -a "$OPT_DIR/$_b" "$ROLLBACK_DIR/$_b.previous"
+                sudo cp -a "$OPT_DIR/$_b" "$ROLLBACK_DIR/$_b.$BIN_STAMP"
+                ok "[rollback] сохранён предыдущий $_b"
+              else
+                info "[rollback] $OPT_DIR/$_b ещё нет — первая установка"
+              fi
+            done
+            # Скрипт отката кладём на хост: он нужен ровно тогда, когда некогда
+            # искать, где он лежит в репозитории.
+            if [ -f "$DEPLOY_DIR/deploy/rollback-binaries.sh" ]; then
+              sudo install -m 0755 -o root -g root "$DEPLOY_DIR/deploy/rollback-binaries.sh" /usr/local/sbin/chillhub-rollback-binaries.sh
+            fi
+
             sudo install -m 0755 "$API_SRC" "$OPT_DIR/api"
             sudo install -m 0755 "$ADMIN_SRC" "$OPT_DIR/admin"
             if command -v file >/dev/null 2>&1; then

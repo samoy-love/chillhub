@@ -626,6 +626,25 @@ if [ ! -f "$API_SRC" ] || [ ! -f "$ADMIN_SRC" ]; then
   ls -lah "$DEPLOY_DIR/bin" || true
   exit 1
 fi
+# И13: сохраняем текущие бинари перед перезаписью.
+#
+# Отката не было нигде, кроме конфига nginx: `install` затирал предыдущую
+# версию безвозвратно, и вернуться к работающей сборке можно было только новой
+# выкаткой. Сохранение стоит одну копию файла; восстановление —
+# /usr/local/sbin/chillhub-rollback-binaries.sh (deploy/rollback-binaries.sh).
+ROLLBACK_DIR="$OPT_DIR/rollback"
+sudo install -d -m 0700 -o root -g root "$ROLLBACK_DIR"
+BIN_STAMP="$(date -u +%Y-%m-%d-%H%M%S)"
+for _b in api admin; do
+  if [ -f "$OPT_DIR/$_b" ]; then
+    sudo cp -a "$OPT_DIR/$_b" "$ROLLBACK_DIR/$_b.previous"
+    sudo cp -a "$OPT_DIR/$_b" "$ROLLBACK_DIR/$_b.$BIN_STAMP"
+    echo "[rollback] сохранён предыдущий $_b"
+  else
+    echo "[rollback] $OPT_DIR/$_b ещё нет — первая установка"
+  fi
+done
+
 sudo install -m 0755 "$API_SRC" "$OPT_DIR/api"
 sudo install -m 0755 "$ADMIN_SRC" "$OPT_DIR/admin"
 
