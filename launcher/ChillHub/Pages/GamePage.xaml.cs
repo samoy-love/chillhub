@@ -542,7 +542,11 @@ namespace ChillHub.Pages {
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, token).ConfigureAwait(true);
 
                 this.StatusText.Text = "Сравнение файлов…";
-                var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, token).ConfigureAwait(true);
+
+                // PlanAsync только выглядит асинхронным: внутри полный обход папки игры с пересчётом
+                // хешей, а Task возвращается уже завершённым. С UI-потока это подвешивает окно
+                // на всё время обхода — уводим в пул потоков (как в IntegrityChecker).
+                var plan = await Task.Run(() => this.sync.PlanAsync(manifest, localRoot, contentBase, token), token).ConfigureAwait(true);
                 Core.Logging.Logger.Info($"GamePage plan gid={gid} downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count}");
 
                 // Свободного места может не хватить — предупреждаем до начала закачки
