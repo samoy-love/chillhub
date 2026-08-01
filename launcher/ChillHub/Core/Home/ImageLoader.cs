@@ -293,10 +293,14 @@ namespace ChillHub.Core.Home {
             return string.Empty;
         }
 
+        /// <summary>
+        /// Трассировка загрузки картинок. В client.log НЕ пишет: на каждую иконку
+        /// приходилось три-четыре строки, и полезные записи (планы обновления, ошибки)
+        /// вытеснялись из лога ротацией ещё до того, как их успевали прочитать.
+        /// Ошибки загрузки логируются отдельно, через Logger.Warn.
+        /// </summary>
         private static void DebugLog(string msg) {
-            Logging.Logger.Info(msg); // Logger.Write никогда не бросает — обёртка не нужна
             System.Diagnostics.Debug.WriteLine(msg);
-            Console.WriteLine(msg);
         }
     }
 }
