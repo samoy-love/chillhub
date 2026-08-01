@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -295,8 +296,9 @@ func (h *Handlers) UploadCover(w http.ResponseWriter, r *http.Request) {
 	if !adminutil.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	r.Body = http.MaxBytesReader(w, r.Body, MaxImageBytes+(1<<20))
+	if err := r.ParseMultipartForm(imageFormMemory); err != nil {
+		http.Error(w, "request too large or malformed", http.StatusBadRequest)
 		return
 	}
 	file, hdr, err := r.FormFile("file")
@@ -317,12 +319,22 @@ func (h *Handlers) UploadCover(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if _, err := io.Copy(out, file); err != nil {
+	// Copy through a limit reader: the request cap above bounds the body, but the
+	// part itself must not be trusted to stay inside it.
+	n, err := io.Copy(out, io.LimitReader(file, MaxImageBytes+1))
+	if err != nil {
 		out.Close()
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		_ = os.Remove(outPath)
+		log.Printf("[news:cover] write %s: %v", outPath, err)
+		http.Error(w, "failed to store cover", http.StatusInternalServerError)
 		return
 	}
 	out.Close()
+	if n > MaxImageBytes {
+		_ = os.Remove(outPath)
+		http.Error(w, "image too large", http.StatusRequestEntityTooLarge)
+		return
+	}
 	// Return a web path expected by the client/launcher
 	url := "/assets/" + name
 	// Optionally update meta if scope+slug provided
