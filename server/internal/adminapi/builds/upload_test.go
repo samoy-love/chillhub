@@ -4,12 +4,14 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -124,6 +126,90 @@ func TestUploadFailureKeepsPreviousVersion(t *testing.T) {
 	if err != nil || string(b) != "v1" {
 		t.Fatalf("previously published build was damaged: %v %q", err, string(b))
 	}
+}
+
+// The plain upload must spool the archive inside the content root, not into
+// the system temp directory: a 30 GB body would otherwise fill the root
+// partition while the free-space precheck measures the content volume.
+func TestUploadSpoolsIntoContentRootAndCleansUp(t *testing.T) {
+	root := t.TempDir()
+	sysTmp := t.TempDir()
+	// os.CreateTemp("") would land here; nothing must.
+	t.Setenv("TMPDIR", sysTmp)
+	t.Setenv("TMP", sysTmp)
+	t.Setenv("TEMP", sysTmp)
+	h := New(root)
+
+	w := httptest.NewRecorder()
+	h.Upload(w, uploadRequest(t, "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "hello"})))
+	if w.Code != http.StatusOK {
+		t.Fatalf("upload failed: %d %s", w.Code, w.Body.String())
+	}
+	if entries, err := os.ReadDir(sysTmp); err == nil && len(entries) != 0 {
+		t.Fatalf("upload wrote to the system temp dir: %v", entries)
+	}
+	// The scratch copy must not survive the request either.
+	if entries, err := os.ReadDir(filepath.Join(root, "tmp")); err == nil {
+		for _, e := range entries {
+			t.Fatalf("temp zip left behind: %s", e.Name())
+		}
+	}
+}
+
+// Two publications of the same gameId+version must not interleave: promote
+// deletes every *.old-* backup before creating its own, so unsynchronised runs
+// destroyed each other's backup and could pair one build's content with the
+// other build's manifest.
+func TestConcurrentUploadsOfSameVersionAreSerialised(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+
+	const n = 4
+	var wg sync.WaitGroup
+	codes := make([]int, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			w := httptest.NewRecorder()
+			h.Upload(w, uploadRequest(t, "game", "1.0.0", zipBytes(t, map[string]string{
+				"a.txt":                       "payload",
+				fmt.Sprintf("only-%d.txt", i): "x",
+			})))
+			codes[i] = w.Code
+		}(i)
+	}
+	wg.Wait()
+	for i, c := range codes {
+		if c != http.StatusOK {
+			t.Fatalf("upload %d failed: %d", i, c)
+		}
+	}
+
+	// The manifest that ended up published must describe the tree that ended up
+	// published: exactly one only-N.txt, and it must exist on disk.
+	b, err := os.ReadFile(filepath.Join(root, "manifests", "game", "1.0.0.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m manifest
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	files := filepath.Join(root, "content", "game", "1.0.0", "files")
+	for _, f := range m.Files {
+		if _, err := os.Stat(filepath.Join(files, filepath.FromSlash(f.Path))); err != nil {
+			t.Fatalf("manifest lists %s but the published tree does not have it: %v", f.Path, err)
+		}
+	}
+	entries, err := os.ReadDir(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != len(m.Files) {
+		t.Fatalf("published tree has %d files, manifest lists %d", len(entries), len(m.Files))
+	}
+	assertNoStagingLeftovers(t, filepath.Join(root, "content", "game"))
 }
 
 // assertNoStagingLeftovers fails if any *.tmp-* staging directory survived.

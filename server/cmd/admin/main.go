@@ -130,7 +130,9 @@ func main() {
 	paths := s.register(mux)
 	go s.builds.StartUploadJanitor()
 
-	addr := ":55777"
+	// Loopback by default: nginx proxies to 127.0.0.1 and nothing else has any
+	// business talking to the admin API directly. ADMIN_LISTEN_ADDR overrides.
+	addr := httpx.ListenAddr("ADMIN_LISTEN_ADDR", 55777)
 	log.Printf("admin API listening on %s (CONTENT_ROOT=%s, routes=%d)", addr, contentRoot, len(paths))
 	// Middlewares: RequestID -> CORS -> Auth -> Logging
 	var h http.Handler = mux

@@ -67,7 +67,7 @@ func TestChunkedHandlersRejectUnsafeUploadID(t *testing.T) {
 	}{
 		"status":   {h.UploadStatus, http.MethodGet},
 		"complete": {h.UploadComplete, http.MethodPost},
-		"process":  {h.UploadProcessStream, http.MethodGet},
+		"process":  {h.UploadProcessStream, http.MethodPost},
 		"chunk":    {h.UploadChunk, http.MethodPut},
 	}
 	for name, hd := range handlers {
@@ -79,6 +79,21 @@ func TestChunkedHandlersRejectUnsafeUploadID(t *testing.T) {
 			if w.Code != http.StatusBadRequest {
 				t.Errorf("%s(uploadId=%q) = %d, want 400", name, id, w.Code)
 			}
+		}
+	}
+}
+
+// The processing endpoint publishes a build, so it must not be reachable with a
+// method the CSRF check ignores.
+func TestUploadProcessStreamRequiresPost(t *testing.T) {
+	h := New(t.TempDir())
+	h.CurrentUser = func(*http.Request) string { return "admin" }
+	for _, m := range []string{http.MethodGet, http.MethodHead} {
+		w := httptest.NewRecorder()
+		h.UploadProcessStream(w, httptest.NewRequest(m,
+			"http://example.com/admin/api/upload/process?uploadId=0123456789abcdef0123456789abcdef", nil))
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s process = %d, want 405", m, w.Code)
 		}
 	}
 }

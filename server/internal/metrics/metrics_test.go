@@ -3,6 +3,7 @@ package metrics
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -191,6 +192,30 @@ func TestRotationKeepsTwoGenerations(t *testing.T) {
 	// Both generations are aggregated, so nothing was lost.
 	if got := summary(t, h, "").Totals.Events; got != n {
 		t.Fatalf("events after rotation = %d, want %d", got, n)
+	}
+}
+
+// Numbers come from the client and nothing bounded them upwards: a single
+// durationMs/bytes of MaxInt64 overflowed the running sums in Totals into
+// negative values and made the whole summary nonsense.
+func TestSubmitClampsNumericFields(t *testing.T) {
+	h := New(t.TempDir())
+	body := fmt.Sprintf(`{"event":"game_install","gameId":"g","result":"ok","durationMs":%d,"bytes":%d}`,
+		int64(math.MaxInt64), int64(math.MaxInt64))
+	for i := 0; i < 3; i++ {
+		if w := submit(t, h, body); w.Code != http.StatusOK {
+			t.Fatalf("submit %d: %d %s", i, w.Code, w.Body.String())
+		}
+	}
+	s := summary(t, h, "")
+	if s.Totals.BytesDownloaded <= 0 {
+		t.Fatalf("bytesDownloaded overflowed: %d", s.Totals.BytesDownloaded)
+	}
+	if s.Totals.AvgInstallMs <= 0 || s.Totals.AvgInstallMs > maxDurationMs {
+		t.Fatalf("avgInstallMs out of range: %d", s.Totals.AvgInstallMs)
+	}
+	if s.ByGame[0].Bytes <= 0 {
+		t.Fatalf("per-game bytes overflowed: %d", s.ByGame[0].Bytes)
 	}
 }
 

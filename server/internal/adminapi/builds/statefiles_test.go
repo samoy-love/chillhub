@@ -39,6 +39,37 @@ func TestStripLauncherStateFilesNormalisesPaths(t *testing.T) {
 	}
 }
 
+// Uninstall.exe is written by the NSIS installer on the user's machine, so its
+// hash can never match a manifest entry.
+func TestStripLauncherStateFilesRemovesUninstaller(t *testing.T) {
+	in := []manifestFile{
+		{Path: "Uninstall.exe"},
+		{Path: "uninstall.exe"},
+		{Path: "ChillHub.exe"},
+	}
+	out := stripLauncherStateFiles("launcher", in)
+	if len(out) != 1 || out[0].Path != "ChillHub.exe" {
+		t.Fatalf("expected only ChillHub.exe to survive, got %+v", out)
+	}
+}
+
+// The rule matches the EXACT top-level path — the same contract the updater's
+// PreserveMatcher implements. A file that merely ends with the same name, or
+// one nested in a subdirectory, is ordinary build content.
+func TestStripLauncherStateFilesMatchesExactTopLevelPathOnly(t *testing.T) {
+	in := []manifestFile{
+		{Path: "data/config.json"},
+		{Path: "tools/Uninstall.exe"},
+		{Path: "myconfig.json"},
+		{Path: "config.json.bak"},
+		{Path: "launcher.version.old"},
+	}
+	out := stripLauncherStateFiles("launcher", in)
+	if len(out) != len(in) {
+		t.Fatalf("nothing should have been dropped, got %+v", out)
+	}
+}
+
 // For a regular game these names are ordinary content and must be preserved:
 // a game may legitimately ship its own config.json.
 func TestStripLauncherStateFilesLeavesGamesAlone(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"ChillHub/server/internal/adminutil"
 	"ChillHub/server/internal/httpx"
 	"ChillHub/server/internal/maintenance"
 	"ChillHub/server/internal/ratelimit"
@@ -109,39 +110,11 @@ func main() {
 
 	limit, window := apiRateLimit()
 	limiter := ratelimit.New(limit, window)
+	r := newRouter(limiter)
 
-	r := mux.NewRouter()
-	r.Use(httpx.RequestID())
-	r.Use(httpx.CORS("*"))
-	r.Use(httpx.Logging("PUBLIC"))
-
-	// The limiter is attached per JSON endpoint, NOT router-wide. In dev this
-	// process also serves /content/ and /manifests/, and installing a game is
-	// thousands of file requests fanned out over up to 16 download threads —
-	// a router-wide budget would trip mid-install and fail the download. In
-	// production nginx serves those paths directly, so limiting them here buys
-	// nothing anyway. What we do want capped is the cheap-to-request,
-	// expensive-to-serve JSON that a scraper or a retry storm would hammer.
-	r.HandleFunc("/api/games", limiter.Wrap(handleGames)).Methods("GET")
-	r.HandleFunc("/api/games/{gameId}", limiter.Wrap(handleGame)).Methods("GET")
-	r.HandleFunc("/api/games/{gameId}/versions/latest", limiter.Wrap(handleLatest)).Methods("GET")
-	r.HandleFunc("/api/games/{gameId}/builds", limiter.Wrap(handleBuilds)).Methods("GET")
-	// Maintenance mode flag. Polled by every launcher at startup and on a timer,
-	// so it is served from an mtime-checked in-memory cache (see the package
-	// doc) and shares the same generous JSON budget as the rest.
-	maint := maintenance.New(contentRoot)
-	r.HandleFunc("/api/maintenance", limiter.Wrap(maint.PublicHandler)).Methods("GET", "HEAD")
-	r.HandleFunc("/news/index.json", limiter.Wrap(handleNewsIndex)).Methods("GET")
-	r.HandleFunc("/news/games/{gameId}/index.json", limiter.Wrap(handleGameNewsIndex)).Methods("GET")
-
-	// Serve manifests, content and news statically for local dev (no indirection)
-	r.PathPrefix("/manifests/").Handler(httpx.NoStore(http.StripPrefix("/manifests/", http.FileServer(http.Dir(filepath.Join(contentRoot, "manifests"))))))
-	r.PathPrefix("/content/").Handler(httpx.NoStore(http.StripPrefix("/content/", http.FileServer(http.Dir(filepath.Join(contentRoot, "content"))))))
-	r.PathPrefix("/news/").Handler(httpx.NoStore(http.StripPrefix("/news/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news"))))))
-	r.PathPrefix("/news/games/").Handler(httpx.NoStore(http.StripPrefix("/news/games/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news", "games"))))))
-	r.PathPrefix("/assets/").Handler(httpx.NoStore(http.StripPrefix("/assets/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news", "assets"))))))
-
-	addr := ":55700"
+	// Loopback by default: in production nginx proxies to 127.0.0.1. For a dev
+	// box that has to be reachable from another machine set API_LISTEN_ADDR.
+	addr := httpx.ListenAddr("API_LISTEN_ADDR", 55700)
 	if limit > 0 {
 		log.Printf("public API rate limit: %d requests per %s per client IP", limit, window)
 	} else {
@@ -160,6 +133,48 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 	log.Fatal(srv.ListenAndServe())
+}
+
+// newRouter wires the public routes. It is separate from main so that tests can
+// drive the real routing table (method matching included) without a listener.
+func newRouter(limiter *ratelimit.Limiter) *mux.Router {
+	r := mux.NewRouter()
+	r.Use(httpx.RequestID())
+	r.Use(httpx.CORS("*"))
+	r.Use(httpx.Logging("PUBLIC"))
+
+	// The limiter is attached per JSON endpoint, NOT router-wide. In dev this
+	// process also serves /content/ and /manifests/, and installing a game is
+	// thousands of file requests fanned out over up to 16 download threads —
+	// a router-wide budget would trip mid-install and fail the download. In
+	// production nginx serves those paths directly, so limiting them here buys
+	// nothing anyway. What we do want capped is the cheap-to-request,
+	// expensive-to-serve JSON that a scraper or a retry storm would hammer.
+	//
+	// Every GET route also answers HEAD: RFC 9110 requires HEAD wherever GET is
+	// supported, and net/http already produces a headers-only response from the
+	// GET handler, so listing the method is all that is needed.
+	r.HandleFunc("/api/games", limiter.Wrap(handleGames)).Methods("GET", "HEAD")
+	r.HandleFunc("/api/games/{gameId}", limiter.Wrap(handleGame)).Methods("GET", "HEAD")
+	r.HandleFunc("/api/games/{gameId}/versions/latest", limiter.Wrap(handleLatest)).Methods("GET", "HEAD")
+	r.HandleFunc("/api/games/{gameId}/builds", limiter.Wrap(handleBuilds)).Methods("GET", "HEAD")
+	// Maintenance mode flag. Polled by every launcher at startup and on a timer,
+	// so it is served from an mtime-checked in-memory cache (see the package
+	// doc) and shares the same generous JSON budget as the rest.
+	maint := maintenance.New(contentRoot)
+	r.HandleFunc("/api/maintenance", limiter.Wrap(maint.PublicHandler)).Methods("GET", "HEAD")
+	r.HandleFunc("/news/index.json", limiter.Wrap(handleNewsIndex)).Methods("GET", "HEAD")
+	r.HandleFunc("/news/games/{gameId}/index.json", limiter.Wrap(handleGameNewsIndex)).Methods("GET", "HEAD")
+
+	// Serve manifests, content and news statically for local dev (no indirection)
+	r.PathPrefix("/manifests/").Handler(httpx.NoStore(http.StripPrefix("/manifests/", http.FileServer(http.Dir(filepath.Join(contentRoot, "manifests"))))))
+	r.PathPrefix("/content/").Handler(httpx.NoStore(http.StripPrefix("/content/", http.FileServer(http.Dir(filepath.Join(contentRoot, "content"))))))
+	// /news/ already covers /news/games/... — a second, later PathPrefix for it
+	// would never be reached, so there is none.
+	r.PathPrefix("/news/").Handler(httpx.NoStore(http.StripPrefix("/news/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news"))))))
+	r.PathPrefix("/assets/").Handler(httpx.NoStore(http.StripPrefix("/assets/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news", "assets"))))))
+
+	return r
 }
 
 var contentRoot string
@@ -242,9 +257,35 @@ func handleGames(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, GamesResponse{Items: items})
 }
 
+// maxGameIDLen bounds the {gameId} path variable. Real IDs are short slugs;
+// anything longer is either a probe or a mistake and must not reach the disk.
+const maxGameIDLen = 64
+
+// publicGameID validates the {gameId} path variable and answers 404 when it is
+// not a plausible identifier.
+//
+// Every admin handler already gates its game id through adminutil.IsSafeGameID;
+// the public handlers used to pass the raw value straight to filepath.Join.
+// Traversal was blocked by Join's normalisation, but the missing check still
+// leaked information: "_registry" is the internal registry directory and
+// /api/games/_registry/builds answered 200 with its contents, and a 300-char id
+// was happily turned into a stat() call.
+func publicGameID(w http.ResponseWriter, r *http.Request) (string, bool) {
+	gid := mux.Vars(r)["gameId"]
+	// A leading underscore is reserved for internal directories such as
+	// _registry, which loadGamesByScanning already skips.
+	if len(gid) > maxGameIDLen || strings.HasPrefix(gid, "_") || !adminutil.IsSafeGameID(gid) {
+		http.NotFound(w, r)
+		return "", false
+	}
+	return gid, true
+}
+
 func handleGame(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	gid := vars["gameId"]
+	gid, ok := publicGameID(w, r)
+	if !ok {
+		return
+	}
 	base := baseURL(r)
 	for _, g := range loadGames() {
 		if g.GameID == gid {
@@ -264,8 +305,10 @@ func handleGame(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleLatest(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	gid := vars["gameId"]
+	gid, ok := publicGameID(w, r)
+	if !ok {
+		return
+	}
 	base := baseURL(r)
 	latestPath := filepath.Join(contentRoot, "manifests", gid, "latest.json")
 	latest, ok := readLatest(latestPath)
@@ -296,81 +339,64 @@ func readLatest(path string) (latestMeta, bool) {
 	return m, true
 }
 
-func handleNewsIndex(w http.ResponseWriter, r *http.Request) {
-	path := filepath.Join(contentRoot, "news", "index.json")
+// servePublishedIndex reads a news index file and serves only the published
+// entries.
+//
+// There is deliberately no "return the file as-is" fallback: it used to run
+// whenever the index failed to parse OR simply had no items, and in the second
+// case it handed the raw bytes — drafts included — to the public. A file that
+// cannot be parsed cannot be filtered either, so the only safe answer is an
+// empty list.
+func servePublishedIndex(w http.ResponseWriter, path string) {
+	empty := map[string]any{"items": []any{}}
 	b, err := os.ReadFile(path)
 	if err != nil {
-		writeJSON(w, map[string]any{"items": []any{}})
+		writeJSON(w, empty)
 		return
 	}
-	// filter by published
 	var idx struct {
 		Items []map[string]any `json:"items"`
 	}
-	if json.Unmarshal(b, &idx) == nil && len(idx.Items) > 0 {
-		out := make([]map[string]any, 0, len(idx.Items))
-		for _, it := range idx.Items {
-			// Include by default if "published" is missing.
-			include := true
-			if v, ok := it["published"]; ok {
-				if bv, ok2 := v.(bool); ok2 {
-					include = bv
-				}
-			}
-			if include {
-				out = append(out, it)
-			}
-		}
-		writeJSON(w, map[string]any{"items": out})
+	if json.Unmarshal(b, &idx) != nil {
+		log.Printf("news index %s: malformed json, serving empty list", filepath.Base(path))
+		writeJSON(w, empty)
 		return
 	}
-	// fallback: return as-is
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(b)
+	out := make([]map[string]any, 0, len(idx.Items))
+	for _, it := range idx.Items {
+		// Include by default if "published" is missing.
+		include := true
+		if v, ok := it["published"]; ok {
+			if bv, ok2 := v.(bool); ok2 {
+				include = bv
+			}
+		}
+		if include {
+			out = append(out, it)
+		}
+	}
+	writeJSON(w, map[string]any{"items": out})
+}
+
+func handleNewsIndex(w http.ResponseWriter, r *http.Request) {
+	servePublishedIndex(w, filepath.Join(contentRoot, "news", "index.json"))
 }
 
 // handleGameNewsIndex filters per-game news by published=true
 func handleGameNewsIndex(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	gid := vars["gameId"]
-	if gid == "" {
-		writeJSON(w, map[string]any{"items": []any{}})
+	gid, ok := publicGameID(w, r)
+	if !ok {
 		return
 	}
-	path := filepath.Join(contentRoot, "news", "games", gid, "index.json")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		writeJSON(w, map[string]any{"items": []any{}})
-		return
-	}
-	var idx struct {
-		Items []map[string]any `json:"items"`
-	}
-	if json.Unmarshal(b, &idx) == nil && len(idx.Items) > 0 {
-		out := make([]map[string]any, 0, len(idx.Items))
-		for _, it := range idx.Items {
-			// Include by default if "published" is missing.
-			include := true
-			if v, ok := it["published"]; ok {
-				if bv, ok2 := v.(bool); ok2 {
-					include = bv
-				}
-			}
-			if include {
-				out = append(out, it)
-			}
-		}
-		writeJSON(w, map[string]any{"items": out})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(b)
+	servePublishedIndex(w, filepath.Join(contentRoot, "news", "games", gid, "index.json"))
 }
 
 // handleBuilds returns list of available versions for a game by scanning manifests/{gameId}/ for *.json (excluding latest.json)
 func handleBuilds(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	gid := vars["gameId"]
+	gid, ok := publicGameID(w, r)
+	if !ok {
+		return
+	}
 	dir := filepath.Join(contentRoot, "manifests", gid)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -391,6 +417,10 @@ func handleBuilds(w http.ResponseWriter, r *http.Request) {
 			versions = append(versions, v)
 		}
 	}
+	// os.ReadDir returns names in lexicographic order, which is not version
+	// order: "1.1.10" would come before "1.1.9". Clients take the list as
+	// newest-first, so sort it semantically.
+	adminutil.SortVersionsDesc(versions)
 	writeJSON(w, map[string]any{"gameId": gid, "items": versions})
 }
 

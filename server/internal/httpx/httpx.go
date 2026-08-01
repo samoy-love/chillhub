@@ -64,11 +64,41 @@ func NoStore(h http.Handler) http.Handler {
 	})
 }
 
-// RequestID middleware: ensures each request has an X-Request-Id header (incoming preserved, otherwise generated)
+// maxRequestIDLen bounds an incoming X-Request-Id.
+const maxRequestIDLen = 64
+
+// sanitizeRequestID returns the caller's request id if it is safe to keep, or
+// "" if a fresh one should be generated.
+//
+// The value ends up in every log line for the request and is echoed back in a
+// response header, and it is entirely attacker-controlled: without a bound a
+// client can pad the access log with kilobytes per request, and with control
+// characters it can forge log lines (a newline plus a fake entry) or smuggle
+// terminal escapes into whatever reads the log. Only a short, printable ASCII
+// identifier is accepted.
+func sanitizeRequestID(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" || len(v) > maxRequestIDLen {
+		return ""
+	}
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-', c == '_', c == '.', c == ':':
+		default:
+			return ""
+		}
+	}
+	return v
+}
+
+// RequestID middleware: ensures each request has an X-Request-Id header
+// (a sane incoming value is preserved, anything else is replaced).
 func RequestID() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			rid := strings.TrimSpace(r.Header.Get("X-Request-Id"))
+			rid := sanitizeRequestID(r.Header.Get("X-Request-Id"))
 			if rid == "" {
 				// generate 16 random bytes as hex (32 chars)
 				var b [16]byte

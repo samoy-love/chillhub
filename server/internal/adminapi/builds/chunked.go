@@ -337,7 +337,7 @@ func (h *Handlers) UploadInit(w http.ResponseWriter, r *http.Request) {
 	tmpRoot := h.uploadBaseDir()
 	if err := os.MkdirAll(tmpRoot, 0o755); err != nil {
 		log.Printf("[upload:init] mkdir tmpRoot=%s error: %v", tmpRoot, err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "upload storage error", http.StatusInternalServerError)
 		return
 	}
 	if free, err := freeSpaceBytes(tmpRoot); err == nil && free > 0 && uint64(in.TotalSize) > free {
@@ -357,26 +357,27 @@ func (h *Handlers) UploadInit(w http.ResponseWriter, r *http.Request) {
 	}
 	// create per-upload directory and part file (truncate to size)
 	if err := os.MkdirAll(h.uploadDir(id), 0o755); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[upload:init] mkdir uploadDir uploadId=%s error: %v", id, err)
+		http.Error(w, "upload storage error", http.StatusInternalServerError)
 		return
 	}
 	part := h.uploadZipPartPath(id)
 	f, err := os.OpenFile(part, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		log.Printf("[upload:init] open part uploadId=%s path=%s error: %v", id, part, err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "upload storage error", http.StatusInternalServerError)
 		return
 	}
 	if err := f.Truncate(in.TotalSize); err != nil {
 		f.Close()
 		log.Printf("[upload:init] truncate part uploadId=%s size=%d error: %v", id, in.TotalSize, err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "upload storage error", http.StatusInternalServerError)
 		return
 	}
 	f.Close()
 	if err := h.writeUploadMeta(m); err != nil {
 		log.Printf("[upload:init] write meta uploadId=%s error: %v", id, err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "upload storage error", http.StatusInternalServerError)
 		return
 	}
 	// Recommend maxParallel based on CPUs (2..maxParLimit)
@@ -451,7 +452,7 @@ func (h *Handlers) UploadChunk(w http.ResponseWriter, r *http.Request) {
 	f, err := os.OpenFile(h.uploadZipPartPath(id), os.O_WRONLY, 0)
 	if err != nil {
 		log.Printf("[upload:chunk] open part uploadId=%s error: %v", id, err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "upload storage error", http.StatusInternalServerError)
 		return
 	}
 	t0 := time.Now()
@@ -459,7 +460,7 @@ func (h *Handlers) UploadChunk(w http.ResponseWriter, r *http.Request) {
 	f.Close()
 	if werr != nil && !errors.Is(werr, io.EOF) {
 		log.Printf("[upload:chunk] write uploadId=%s index=%d error: %v", id, idx, werr)
-		http.Error(w, werr.Error(), http.StatusInternalServerError)
+		http.Error(w, "upload storage error", http.StatusInternalServerError)
 		return
 	}
 	if int(n) != exp {
@@ -559,14 +560,14 @@ func (h *Handlers) UploadComplete(w http.ResponseWriter, r *http.Request) {
 	f, err := os.Open(h.uploadZipPartPath(id))
 	if err != nil {
 		log.Printf("[upload:complete] open part uploadId=%s error: %v", id, err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "upload storage error", http.StatusInternalServerError)
 		return
 	}
 	hash := sha256.New()
 	if _, err := io.Copy(hash, f); err != nil {
 		f.Close()
 		log.Printf("[upload:complete] read part uploadId=%s error: %v", id, err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "upload storage error", http.StatusInternalServerError)
 		return
 	}
 	f.Close()
@@ -581,7 +582,7 @@ func (h *Handlers) UploadComplete(w http.ResponseWriter, r *http.Request) {
 	// rename to final zip inside upload dir
 	if err := os.Rename(h.uploadZipPartPath(id), h.uploadZipPath(id)); err != nil {
 		log.Printf("[upload:complete] rename part->zip uploadId=%s error: %v", id, err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "upload storage error", http.StatusInternalServerError)
 		return
 	}
 	m.Status = "ready"
@@ -592,6 +593,13 @@ func (h *Handlers) UploadComplete(w http.ResponseWriter, r *http.Request) {
 // UploadProcessStream extracts the completed upload and streams NDJSON:
 // start, unzip entries, compose files, done.
 func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
+	// POST, not GET: this handler unpacks the archive, replaces the published
+	// version and deletes the ZIP. The CSRF check only covers state-changing
+	// methods (POST/PUT/PATCH/DELETE), so as a GET it was reachable from any
+	// page an authenticated admin happened to visit.
+	if !adminutil.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
 	if !h.authorized(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -663,6 +671,10 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 		EmptyDirs: emptyDirs,
 	}
 	// Everything is extracted and hashed: publish the build in one rename.
+	// See lockPublish: promote and the manifest write must not interleave with
+	// another publication of the same version.
+	unlock := lockPublish(m.GameID, m.Version)
+	defer unlock()
 	if err := promoteVersionDir(stageDir, finalVerDir); err != nil {
 		streamError(nw, fl, "activate failed: "+err.Error())
 		return
