@@ -65,8 +65,11 @@ namespace ChillHub.Pages {
 
             this.Unloaded += this.GamePage_Unloaded;
 
-            // Режим технических работ может включиться и выключиться, пока страница открыта (задача 25)
-            Core.Maintenance.MaintenanceService.Changed += this.OnMaintenanceChanged;
+            // Режим технических работ может включиться и выключиться, пока страница открыта (задача 25).
+            // Подписка нужна на КАЖДЫЙ показ: после возврата из changelog страница снова Loaded,
+            // а отписка уже произошла в Unloaded — иначе режим работ до неё больше не доходит.
+            this.SubscribeMaintenance();
+            this.Loaded += (s, e) => this.SubscribeMaintenance();
 
             _ = this.InitAsync();
         }
@@ -407,8 +410,34 @@ namespace ChillHub.Pages {
             }
 
             // Статическое событие переживёт страницу — отписываемся, иначе утечёт ссылка
+            this.UnsubscribeMaintenance();
+        }
+
+        // Подписка на статическое событие живёт ровно столько, сколько страница показана.
+        private bool maintenanceSubscribed;
+
+        private void SubscribeMaintenance() {
+            if (this.maintenanceSubscribed) {
+                return;
+            }
+
+            try {
+                Core.Maintenance.MaintenanceService.Changed += this.OnMaintenanceChanged;
+                this.maintenanceSubscribed = true;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"GamePage: подписка на режим работ не выполнилась: {ex.Message}");
+            }
+        }
+
+        private void UnsubscribeMaintenance() {
+            if (!this.maintenanceSubscribed) {
+                return;
+            }
+
             try {
                 Core.Maintenance.MaintenanceService.Changed -= this.OnMaintenanceChanged;
+                this.maintenanceSubscribed = false;
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Warn($"GamePage.Unloaded: отписка от режима работ: {ex.Message}");
