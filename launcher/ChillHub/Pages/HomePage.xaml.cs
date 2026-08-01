@@ -818,6 +818,67 @@ namespace ChillHub.Pages {
                  .ToList();
 
         // Короткое сообщение пользователю в статусе; технические детали — в лог и в подсказку (C5)
+
+        /// <summary>
+        /// Удаляет содержимое папки игры, доводя проход до конца.
+        /// <para>
+        /// <see cref="Directory.Delete(string, bool)"/> обрывается на ПЕРВОМ занятом файле,
+        /// когда остальное уже удалено. Пользователь видел «не удалось удалить», игра
+        /// оставалась помеченной установленной, а на диске лежали её остатки, неспособные
+        /// запуститься. Здесь занятый файл не прерывает работу: он попадает в список,
+        /// который вызывающий код показывает пользователю.
+        /// </para>
+        /// </summary>
+        /// <param name="root">Корень папки игры.</param>
+        /// <returns>Файлы, которые удалить не удалось (пустой список — всё снесено).</returns>
+        private static List<string> DeleteGameFiles(string root) {
+            var blocked = new List<string>();
+            if (!Directory.Exists(root)) {
+                return blocked;
+            }
+
+            // Списки материализуем заранее: удалять во время ленивого обхода нельзя.
+            var files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).ToList();
+            foreach (var file in files) {
+                try {
+                    var info = new FileInfo(file);
+                    if (info.IsReadOnly) {
+                        info.IsReadOnly = false;
+                    }
+
+                    File.Delete(file);
+                }
+                catch (Exception ex) {
+                    blocked.Add(file);
+                    Core.Logging.Logger.Warn($"DeleteGameFiles: файл занят и не удалён: '{Path.GetFileName(file)}': {ex.Message}");
+                }
+            }
+
+            // Каталоги — от самых глубоких к корню. Непустые (из-за занятых файлов)
+            // просто не удалятся, и это ожидаемо.
+            var dirs = Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories)
+                                .OrderByDescending(d => d.Length).ToList();
+            foreach (var dir in dirs) {
+                try {
+                    Directory.Delete(dir, false);
+                }
+                catch (Exception ex) {
+                    Core.Logging.Logger.Warn($"DeleteGameFiles: каталог не удалён: '{dir}': {ex.Message}");
+                }
+            }
+
+            if (blocked.Count == 0) {
+                try {
+                    Directory.Delete(root, true);
+                }
+                catch (Exception ex) {
+                    Core.Logging.Logger.Warn($"DeleteGameFiles: корень игры не удалён: {ex.Message}");
+                }
+            }
+
+            return blocked;
+        }
+
         private void ShowUserError(string userMessage, Exception? ex = null, string? context = null) {
             try {
                 if (ex != null) {
@@ -2405,21 +2466,32 @@ namespace ChillHub.Pages {
                 this.StatusText.Text = $"Удаление файлов {title}…";
                 this.UpdateProgress.IsIndeterminate = true;
                 try {
-                    await Task.Run(() => {
-                        if (Directory.Exists(localRoot)) {
-                            Directory.Delete(localRoot, true);
-                        }
+                    // Directory.Delete(recursive) обрывается на ПЕРВОМ занятом файле, когда
+                    // остальное уже снесено. Пользователь при этом видел «не удалось удалить»,
+                    // игра продолжала числиться установленной — а на диске лежали её остатки,
+                    // неспособные запуститься. Поэтому удаляем сами, по файлу, и доводим до
+                    // конца: занятые собираем в список и потом честно называем.
+                    var blocked = await Task.Run(() => DeleteGameFiles(localRoot));
 
-                        // Кеш хешей для удалённой игры больше не нужен
-                        ChillHub.Core.Sync.FileHashCache.Remove(gid);
-                    });
-
-                    // Очистим кэш требуемого места
+                    ChillHub.Core.Sync.FileHashCache.Remove(gid);
                     this.spaceHint.Remember(gid, 0);
-
-                    // Обновим маркеры/UI
                     this.FilesSizeText.Text = string.Empty;
+
+                    // Состояние обновляем в любом случае: игра с вырванными файлами не
+                    // запустится, и показывать её установленной — врать пользователю.
                     this.MarkUninstalled(gid);
+
+                    if (blocked.Count > 0) {
+                        var names = string.Join(", ", blocked.Take(3).Select(Path.GetFileName));
+                        var tail = blocked.Count > 3 ? $" и ещё {blocked.Count - 3}" : string.Empty;
+                        this.ShowUserError(
+                            $"Файлы игры удалены частично: {blocked.Count} шт. заняты другой программой ({names}{tail}). "
+                            + "Закройте игру, лаунчеры модов и антивирусную проверку, затем удалите ещё раз. "
+                            + "До этого игра работать не будет.",
+                            null,
+                            $"HomePage.DeleteGame_Click: {blocked.Count} файлов заняты");
+                        return;
+                    }
                 }
                 catch (Exception exDel) {
                     this.ShowUserError(
