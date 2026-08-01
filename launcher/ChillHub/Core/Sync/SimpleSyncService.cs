@@ -607,6 +607,7 @@ namespace ChillHub.Core.Sync {
             }
 
             // Удаление лишних файлов (с устойчивостью к блокировкам сторонними процессами)
+            var deletedRel = new List<string>();
             foreach (var rel in plan.ToDelete) {
                 // Список сформирован обходом самой папки игры, но удаление — необратимо,
                 // поэтому проверяем и его: подмена DiffPlan не должна стирать чужие файлы.
@@ -614,15 +615,20 @@ namespace ChillHub.Core.Sync {
                 try {
                     if (File.Exists(path)) {
                         SafeDeleteFile(path);
+                        if (!File.Exists(path)) {
+                            deletedRel.Add(rel);
+                        }
                     }
                 }
                 catch {
                 }
             }
 
-            // Очистка пустых папок, которых нет в манифесте
+            // Убираем каталоги, опустевшие ИМЕННО из-за нашего удаления. Раньше здесь шёл
+            // обход всего дерева игры, и под нож попадали пустые папки, созданные самой
+            // игрой (Saves, Config, логи) — игра теряла их при каждом обновлении.
             var keep = new HashSet<string>(plan.EmptyDirsToCreate.Select(s => s.Replace('/', Path.DirectorySeparatorChar).TrimEnd(Path.DirectorySeparatorChar)), StringComparer.OrdinalIgnoreCase);
-            CleanupEmptyDirs(plan.LocalRoot, keep);
+            CleanupDirsEmptiedByUpdate(plan.LocalRoot, deletedRel, keep);
 
             // Создаём пустые директории из манифеста (гарантированно после очистки)
             foreach (var dirRel in plan.EmptyDirsToCreate) {
@@ -738,29 +744,66 @@ namespace ChillHub.Core.Sync {
             return r.Equals("freetp", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static void CleanupEmptyDirs(string root, HashSet<string> keep) {
+        /// <summary>
+        /// Удаляет каталоги, опустевшие из-за удаления перечисленных файлов, поднимаясь
+        /// от каждого такого файла к корню игры. Каталоги, которых мы не касались (в том
+        /// числе пустые папки, созданные самой игрой), не трогаем.
+        /// </summary>
+        /// <param name="root">Корень игры.</param>
+        /// <param name="deletedRel">Относительные пути файлов, которые мы удалили.</param>
+        /// <param name="keep">Каталоги из манифеста, которые должны остаться.</param>
+        private static void CleanupDirsEmptiedByUpdate(string root, IEnumerable<string> deletedRel, HashSet<string> keep) {
             if (!Directory.Exists(root)) {
                 return;
             }
 
-            // Проходим снизу вверх
-            foreach (var dir in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories)
-                                         .OrderByDescending(d => d.Length)) {
-                try {
-                    // Нормализуем относительный путь для сравнения с keep
-                    var rel = Path.GetRelativePath(root, dir).TrimEnd(Path.DirectorySeparatorChar);
-                    if (IsIgnoredRelDir(rel)) {
-                        // Не удаляем директорию FreeTP даже если она пуста.
-                        // Это нужно для пиратских сборок с FreeTP.Org, чтобы при запуске игр
-                        // не провоцировать открытие сайта. Папку FreeTP сохраняем.
-                        continue;
+            string rootFull;
+            try {
+                rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar);
+            }
+            catch (Exception ex) {
+                ChillHub.Core.Logging.Logger.Warn($"CleanupDirsEmptiedByUpdate('{root}'): {ex.Message}");
+                return;
+            }
+
+            foreach (var rel in deletedRel) {
+                var dir = Path.GetDirectoryName(ManifestPath.Combine(root, rel));
+                while (!string.IsNullOrEmpty(dir)) {
+                    string full;
+                    try {
+                        full = Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar);
+                    }
+                    catch {
+                        break;
                     }
 
-                    if (!Directory.EnumerateFileSystemEntries(dir).Any() && !keep.Contains(rel)) {
-                        Directory.Delete(dir, false);
+                    // До корня игры и не выше: снаружи хозяйничать нельзя
+                    if (string.Equals(full, rootFull, StringComparison.OrdinalIgnoreCase)
+                        || !full.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) {
+                        break;
                     }
-                }
-                catch {
+
+                    var relDir = Path.GetRelativePath(rootFull, full).TrimEnd(Path.DirectorySeparatorChar);
+
+                    // Папку FreeTP сохраняем даже пустой: см. IsIgnoredRelDir
+                    if (IsIgnoredRelDir(relDir) || keep.Contains(relDir)) {
+                        break;
+                    }
+
+                    try {
+                        if (Directory.Exists(full)) {
+                            if (Directory.EnumerateFileSystemEntries(full).Any()) {
+                                break; // в каталоге ещё что-то есть — выше подниматься незачем
+                            }
+
+                            Directory.Delete(full, false);
+                        }
+                    }
+                    catch {
+                        break;
+                    }
+
+                    dir = Path.GetDirectoryName(full);
                 }
             }
         }
