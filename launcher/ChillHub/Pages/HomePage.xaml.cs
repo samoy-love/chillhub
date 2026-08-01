@@ -44,6 +44,10 @@ namespace ChillHub.Pages {
 
         // Идёт удаление локальных файлов игры: блокирует повторный запуск и установку
         private bool isDeleting = false;
+
+        // 1, пока идёт проход VerifyAllGamesStatusesAsync. Взводится через Interlocked:
+        // метод зовут и из UI-потока, и из фоновых задач.
+        private int verifyRunning;
         private readonly ISyncService sync = new SimpleSyncService();
         private double emaSpeedMBs = 0.0; // сглаженная скорость
         private const double EmaAlpha = 0.2; // чувствительность EMA
@@ -524,12 +528,23 @@ namespace ChillHub.Pages {
         // priorityGameId: игру с этим id проверяем первой и сразу разблокируем для неё кнопку действия,
         // остальные догоняются в фоне и лишь обновляют свои бейджи (C4).
         private async Task VerifyAllGamesStatusesAsync(string? priorityGameId = null) {
-            try {
-                if (this.games == null || this.games.Count == 0) {
-                    return;
-                }
+            if (this.games == null || this.games.Count == 0) {
+                return;
+            }
 
-                await this.DispatcherInvokeAsync(() => this.GamesVerifyIndicator.Visibility = Visibility.Visible);
+            // Проход считает хеши всех файлов всех игр. Второй такой же, запущенный
+            // двойным кликом по «обновить» (или удалением игры во время первичной проверки),
+            // просто удваивает дисковую нагрузку и наперегонки правит те же GameInfo.
+            if (Interlocked.CompareExchange(ref this.verifyRunning, 1, 0) != 0) {
+                Core.Logging.Logger.Info("VerifyAllGamesStatusesAsync: проверка уже идёт, повторный запуск пропущен");
+                return;
+            }
+
+            try {
+                await this.DispatcherInvokeAsync(() => {
+                    this.GamesVerifyIndicator.Visibility = Visibility.Visible;
+                    this.RefreshGamesBtn.IsEnabled = false;
+                });
 
                 // Лёгкий прогресс: processed/total в StatusText, чтобы пользователь видел процесс
                 int total = this.games.Count;
@@ -660,8 +675,10 @@ namespace ChillHub.Pages {
                     Core.Logging.Logger.Error(ex, "VerifyAllGamesStatusesAsync.finally");
                 }
 
+                Interlocked.Exchange(ref this.verifyRunning, 0);
                 await this.DispatcherInvokeAsync(() => {
                     this.GamesVerifyIndicator.Visibility = Visibility.Collapsed;
+                    this.RefreshGamesBtn.IsEnabled = true;
 
                     // После завершения всегда выставляем финальный статус, чтобы не зависало "Проверка игр X/Y".
                     // Сообщение об ошибке при этом не затираем — оно важнее.
