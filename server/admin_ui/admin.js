@@ -42,7 +42,7 @@
   const UNSAFE_METHODS = new Set(['POST','PUT','PATCH','DELETE']);
   function isSameOrigin(u){
     try{
-      if(u == null) return false;
+      if(!u) return false;
       const s = (typeof u === 'string') ? u : (u && typeof u.url === 'string' ? u.url : String(u));
       return new URL(s, window.location.href).origin === window.location.origin;
     }catch{ return false; }
@@ -544,10 +544,10 @@ async function fbReload(immediate){
   // Ответы приходят не в порядке отправки: без счётчика поиск «мигал» старыми
   // результатами, а фоновый поллинг мог затереть свежую выдачу фильтра.
   const seq = ++__fbSeq;
-  let res; try{ res = await fetch('/admin/feedback/list'+(qs?'?'+qs:'')); }catch(e){ return; }
+  let res; try{ res = await fetch('/admin/feedback/list'+(qs?'?'+qs:'')); }catch(e){ notify('Не удалось загрузить обращения: '+e); return; }
   if(seq !== __fbSeq) return;
-  if(!res.ok) return;
-  let j; try{ j = await res.json(); }catch{ return; }
+  if(!res.ok){ notify('Не удалось загрузить обращения — HTTP '+res.status+' '+res.statusText); return; }
+  let j; try{ j = await res.json(); }catch(e){ notify('Список обращений: сервер вернул не JSON'); return; }
   if(seq !== __fbSeq) return;
   __fbItems = Array.isArray(j.items)? j.items : [];
   fbRenderList();
@@ -562,9 +562,9 @@ async function fbSelect(id){
   __fbSel = id||'';
   const view = document.getElementById('fb_view'); if(!view) return;
   if(!id){ view.textContent=''; return; }
-  let res; try{ res = await fetch('/admin/feedback/get?id='+encodeURIComponent(id)); }catch(e){ return; }
-  if(!res.ok){ return; }
-  let it; try{ it = await res.json(); }catch{ return; }
+  let res; try{ res = await fetch('/admin/feedback/get?id='+encodeURIComponent(id)); }catch(e){ notify('Не удалось открыть обращение: '+e); return; }
+  if(!res.ok){ notify('Не удалось открыть обращение — HTTP '+res.status+' '+res.statusText); return; }
+  let it; try{ it = await res.json(); }catch(e){ notify('Обращение: сервер вернул не JSON'); return; }
   const sys = it.system||{};
   const hasSys = Object.keys(sys).length > 0;
   const sysBlock = hasSys ? '<pre class="bg-body-tertiary p-2 border rounded" style="max-height:240px;overflow:auto">'+escapeHtml(JSON.stringify(sys,null,2))+'</pre>' : '';
@@ -592,8 +592,8 @@ async function fbSelect(id){
 
 async function fbAction(url){
   const id = __fbSel; if(!id) return;
-  let res; try{ res = await fetch(url+'?id='+encodeURIComponent(id), { method:'POST' }); }catch(e){ return; }
-  if(!res.ok) return;
+  let res; try{ res = await fetch(url+'?id='+encodeURIComponent(id), { method:'POST' }); }catch(e){ notify('Действие не выполнено: '+e); return; }
+  if(!res.ok){ notify('Действие не выполнено — HTTP '+res.status+' '+res.statusText); return; }
   await fbReload(true);
   if(url.includes('delete')){
     // move to next item
@@ -608,7 +608,16 @@ async function fbAction(url){
 document.addEventListener('DOMContentLoaded', ()=>{
   const bind = (id, fn)=>{ const el=document.getElementById(id); if(el) el.addEventListener('click', (e)=>{ e.preventDefault(); fn(); }); };
   bind('fb_refresh', ()=> fbReload(true));
-  bind('fb_clear', async ()=>{ if(!confirm('Очистить все обращения?')) return; let r; try{ r=await fetch('/admin/feedback/clear',{method:'POST'});}catch{}; fbReload(true); __fbSel=''; document.getElementById('fb_view')?.replaceChildren(); });
+  bind('fb_clear', async ()=>{
+    if(!confirm('Очистить все обращения?')) return;
+    let r;
+    try{ r = await fetch('/admin/feedback/clear',{method:'POST'}); }
+    catch(e){ notify('Не удалось очистить обращения: '+e); return; }
+    if(!r.ok){ notify('Не удалось очистить обращения — HTTP '+r.status+' '+r.statusText); return; }
+    __fbSel=''; document.getElementById('fb_view')?.replaceChildren();
+    await fbReload(true);
+    notify('Обращения очищены.');
+  });
   bind('fb_mark_read', ()=> fbAction('/admin/feedback/markRead'));
   bind('fb_mark_unread', ()=> fbAction('/admin/feedback/markUnread'));
   bind('fb_toggle_imp', ()=> fbAction('/admin/feedback/toggleImportant'));
@@ -1579,13 +1588,13 @@ function openPickUploadDialog(mode){
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path fill="#fff" d="M3 17.25V21h3.75l11.06-11.06-3.75-3.75L3 17.25zm14.81-9.06c.2-.2.2-.51 0-.71l-2.29-2.29a.5.5 0 0 0-.71 0l-1.83 1.83 3 3 1.83-1.83z"/>\
 </svg>';
-        rn.onclick=async()=>{ const nn=prompt('Новое имя папки', it.name); if(!nn||nn===it.name) return; await fetch('/admin/news/assets/rename', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({path: pickPath||'', from: it.name, to: nn}).toString()}); fetchPickList(); };
+        rn.onclick=async()=>{ const nn=prompt('Новое имя папки', it.name); if(!nn||nn===it.name) return; if(!await assetsMutate('/admin/news/assets/rename', {path: pickPath||'', from: it.name, to: nn})) return; fetchPickList(); };
         const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
 </svg>';
-        del.onclick=async()=>{ if(!confirm('Удалить папку '+it.name+'?')) return; await fetch('/admin/news/assets/delete', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({path: pickPath||'', name: it.name}).toString()}); fetchPickList(); };
+        del.onclick=async()=>{ if(!confirm('Удалить папку '+it.name+'?')) return; if(!await assetsMutate('/admin/news/assets/delete', {path: pickPath||'', name: it.name})) return; fetchPickList(); };
         actions.appendChild(rn); actions.appendChild(del);
         body.appendChild(cap); body.appendChild(actions); card.appendChild(body);
         // Make the whole folder card clickable (except action buttons)
@@ -1599,13 +1608,13 @@ function openPickUploadDialog(mode){
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path fill="#fff" d="M3 17.25V21h3.75l11.06-11.06-3.75-3.75L3 17.25zm14.81-9.06c.2-.2.2-.51 0-.71l-2.29-2.29a.5.5 0 0 0-.71 0l-1.83 1.83 3 3 1.83-1.83z"/>\
 </svg>';
-        rn.onclick=async()=>{ const nn=prompt('Новое имя файла', it.name); if(!nn||nn===it.name) return; await fetch('/admin/news/assets/rename', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({path: pickPath||'', from: it.name, to: nn}).toString()}); fetchPickList(); };
+        rn.onclick=async()=>{ const nn=prompt('Новое имя файла', it.name); if(!nn||nn===it.name) return; if(!await assetsMutate('/admin/news/assets/rename', {path: pickPath||'', from: it.name, to: nn})) return; fetchPickList(); };
         const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
 </svg>';
-        del.onclick=async()=>{ if(!confirm('Удалить файл '+it.name+'?')) return; await fetch('/admin/news/assets/delete', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({path: pickPath||'', name: it.name}).toString()}); fetchPickList(); };
+        del.onclick=async()=>{ if(!confirm('Удалить файл '+it.name+'?')) return; if(!await assetsMutate('/admin/news/assets/delete', {path: pickPath||'', name: it.name})) return; fetchPickList(); };
         actions.appendChild(rn); actions.appendChild(del);
         body.appendChild(cap); body.appendChild(actions); card.appendChild(body);
       }
@@ -1615,9 +1624,8 @@ function openPickUploadDialog(mode){
   // mkdir
   el.querySelector('#pick_mkdir').addEventListener('click', async ()=>{
     const name = prompt('Имя новой папки:'); if(!name) return;
-    const fd = new URLSearchParams(); fd.set('path', pickPath||''); fd.set('name', name);
-    let res; try{ res = await fetch('/admin/news/assets/mkdir', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: fd.toString() }); }catch(e){ return; }
-    if(res && res.ok){ fetchPickList(); }
+    if(!await assetsMutate('/admin/news/assets/mkdir', {path: pickPath||'', name: name})) return;
+    fetchPickList();
   });
   // sync manual edits
   pathInput.addEventListener('change', ()=>{ pickPath = (pathInput.value||'').replace(/^\/+|\/+$/g,''); fetchPickList(); });
@@ -1727,13 +1735,13 @@ function openPasteUploadDialog(file, mode){
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path fill="#fff" d="M3 17.25V21h3.75l11.06-11.06-3.75-3.75L3 17.25zm14.81-9.06c.2-.2.2-.51 0-.71l-2.29-2.29a.5.5 0 0 0-.71 0l-1.83 1.83 3 3 1.83-1.83z"/>\
 </svg>';
-        rn.onclick=async()=>{ const nn=prompt('Новое имя папки', it.name); if(!nn||nn===it.name) return; await fetch('/admin/news/assets/rename', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({path: pastePath||'', from: it.name, to: nn}).toString()}); fetchPasteList(); };
+        rn.onclick=async()=>{ const nn=prompt('Новое имя папки', it.name); if(!nn||nn===it.name) return; if(!await assetsMutate('/admin/news/assets/rename', {path: pastePath||'', from: it.name, to: nn})) return; fetchPasteList(); };
         const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
 </svg>';
-        del.onclick=async()=>{ if(!confirm('Удалить папку '+it.name+'?')) return; await fetch('/admin/news/assets/delete', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({path: pastePath||'', name: it.name}).toString()}); fetchPasteList(); };
+        del.onclick=async()=>{ if(!confirm('Удалить папку '+it.name+'?')) return; if(!await assetsMutate('/admin/news/assets/delete', {path: pastePath||'', name: it.name})) return; fetchPasteList(); };
         actions.appendChild(rn); actions.appendChild(del);
         body.appendChild(cap); body.appendChild(actions); card.appendChild(body);
         card.addEventListener('click', (e)=>{ if(e.target!==rn && e.target!==del){ pastePath = pastePath? (pastePath+'/'+it.name): it.name; pathInput.value=pastePath; fetchPasteList(); } });
@@ -1746,13 +1754,13 @@ function openPasteUploadDialog(file, mode){
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path fill="#fff" d="M3 17.25V21h3.75l11.06-11.06-3.75-3.75L3 17.25zm14.81-9.06c.2-.2.2-.51 0-.71l-2.29-2.29a.5.5 0 0 0-.71 0l-1.83 1.83 3 3 1.83-1.83z"/>\
 </svg>';
-        rn.onclick=async()=>{ const nn=prompt('Новое имя файла', it.name); if(!nn||nn===it.name) return; await fetch('/admin/news/assets/rename', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({path: pastePath||'', from: it.name, to: nn}).toString()}); fetchPasteList(); };
+        rn.onclick=async()=>{ const nn=prompt('Новое имя файла', it.name); if(!nn||nn===it.name) return; if(!await assetsMutate('/admin/news/assets/rename', {path: pastePath||'', from: it.name, to: nn})) return; fetchPasteList(); };
         const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
 </svg>';
-        del.onclick=async()=>{ if(!confirm('Удалить файл '+it.name+'?')) return; await fetch('/admin/news/assets/delete', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({path: pastePath||'', name: it.name}).toString()}); fetchPasteList(); };
+        del.onclick=async()=>{ if(!confirm('Удалить файл '+it.name+'?')) return; if(!await assetsMutate('/admin/news/assets/delete', {path: pastePath||'', name: it.name})) return; fetchPasteList(); };
         actions.appendChild(rn); actions.appendChild(del);
         body.appendChild(cap); body.appendChild(actions); card.appendChild(body);
       }
@@ -1762,9 +1770,8 @@ function openPasteUploadDialog(file, mode){
   // mkdir
   el.querySelector('#paste_mkdir').addEventListener('click', async ()=>{
     const name = prompt('Имя новой папки:'); if(!name) return;
-    const fd = new URLSearchParams(); fd.set('path', pastePath||''); fd.set('name', name);
-    let res; try{ res = await fetch('/admin/news/assets/mkdir', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: fd.toString() }); }catch(e){ return; }
-    if(res && res.ok){ fetchPasteList(); }
+    if(!await assetsMutate('/admin/news/assets/mkdir', {path: pastePath||'', name: name})) return;
+    fetchPasteList();
   });
   // sync manual edits
   pathInput.addEventListener('change', ()=>{ pastePath = (pathInput.value||'').replace(/^\/+|\/+$/g,''); fetchPasteList(); });
@@ -1787,6 +1794,30 @@ function openPasteUploadDialog(file, mode){
     if(modal) modal.hide(); setTimeout(()=>{ el.remove(); URL.revokeObjectURL(url); }, 300);
   });
   el.addEventListener('hidden.bs.modal', ()=>{ el.remove(); URL.revokeObjectURL(url); });
+}
+
+// Общая обёртка для операций над ассетами (переименование/удаление/mkdir).
+// Раньше эти вызовы делались как `await fetch(...)` без единой проверки: при
+// отказе сервера список просто перерисовывался в прежнем виде, пользователь
+// считал, что промахнулся по кнопке, и жал ещё раз. Сообщение показываем через
+// alert: эти операции запускаются в том числе из модальных диалогов, где панель
+// #out закрыта подложкой и её никто не увидит.
+async function assetsMutate(url, params){
+  let r;
+  try{
+    r = await fetch(url, {
+      method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body: new URLSearchParams(params).toString()
+    });
+  }catch(e){ alert('Не удалось выполнить операцию: '+e); return false; }
+  if(!r.ok){
+    let detail = '';
+    try{ detail = (await r.text()||'').trim(); }catch{ /* тело не обязательно */ }
+    alert('Не удалось выполнить операцию — HTTP '+r.status+' '+r.statusText+(detail? ('\n'+detail) : ''));
+    return false;
+  }
+  return true;
 }
 
 async function galleryMkdir(){
@@ -2508,7 +2539,7 @@ function sanitizeUrl(value, allowDataImage){
 // Возвращает DocumentFragment с очищенной копией разметки.
 function sanitizeHtmlFragment(html){
   const out = document.createDocumentFragment();
-  const doc = new DOMParser().parseFromString(String(html||''), 'text/html');
+  const doc = new window.DOMParser().parseFromString(String(html||''), 'text/html');
   // Парсер DOMParser не исполняет скрипты и не загружает ресурсы,
   // поэтому уже на этом шаге разметка «мертва».
   const convert = (node, parent)=>{
@@ -2727,13 +2758,13 @@ function renderGalleryGrid(items){
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path fill="#fff" d="M3 17.25V21h3.75l11.06-11.06-3.75-3.75L3 17.25zm14.81-9.06c.2-.2.2-.51 0-.71l-2.29-2.29a.5.5 0 0 0-.71 0l-1.83 1.83 3 3 1.83-1.83z"/>\
 </svg>';
-      rn.onclick=async()=>{ const nn=prompt('Новое имя папки', it.name); if(!nn||nn===it.name) return; await fetch('/admin/news/assets/rename', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({path: galleryPath||'', from: it.name, to: nn}).toString()}); galleryFetchAndRender(); };
+      rn.onclick=async()=>{ const nn=prompt('Новое имя папки', it.name); if(!nn||nn===it.name) return; if(!await assetsMutate('/admin/news/assets/rename', {path: galleryPath||'', from: it.name, to: nn})) return; galleryFetchAndRender(); };
       const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" fill="#fff" xmlns="http://www.w3.org/2000/svg">\
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
 </svg>';
-      del.onclick=async()=>{ if(!confirm('Удалить папку '+it.name+'?')) return; await fetch('/admin/news/assets/delete', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({path: galleryPath||'', name: it.name}).toString()}); galleryFetchAndRender(); };
+      del.onclick=async()=>{ if(!confirm('Удалить папку '+it.name+'?')) return; if(!await assetsMutate('/admin/news/assets/delete', {path: galleryPath||'', name: it.name})) return; galleryFetchAndRender(); };
       actions.appendChild(rn); actions.appendChild(del);
       body.appendChild(cap); body.appendChild(actions); card.appendChild(body);
       // Make the whole folder card clickable (except action buttons)
@@ -2747,13 +2778,13 @@ function renderGalleryGrid(items){
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path fill="#fff" d="M3 17.25V21h3.75l11.06-11.06-3.75-3.75L3 17.25zm14.81-9.06c.2-.2.2-.51 0-.71l-2.29-2.29a.5.5 0 0 0-.71 0l-1.83 1.83 3 3 1.83-1.83z"/>\
 </svg>';
-      rn.onclick=async()=>{ const nn=prompt('Новое имя файла', it.name); if(!nn||nn===it.name) return; await fetch('/admin/news/assets/rename', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({path: galleryPath||'', from: it.name, to: nn}).toString()}); galleryFetchAndRender(); };
+      rn.onclick=async()=>{ const nn=prompt('Новое имя файла', it.name); if(!nn||nn===it.name) return; if(!await assetsMutate('/admin/news/assets/rename', {path: galleryPath||'', from: it.name, to: nn})) return; galleryFetchAndRender(); };
       const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" fill="#fff" xmlns="http://www.w3.org/2000/svg">\
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
 </svg>';
-      del.onclick=async()=>{ if(!confirm('Удалить файл '+it.name+'?')) return; await fetch('/admin/news/assets/delete', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({path: galleryPath||'', name: it.name}).toString()}); galleryFetchAndRender(); };
+      del.onclick=async()=>{ if(!confirm('Удалить файл '+it.name+'?')) return; if(!await assetsMutate('/admin/news/assets/delete', {path: galleryPath||'', name: it.name})) return; galleryFetchAndRender(); };
       actions.appendChild(rn); actions.appendChild(del);
       body.appendChild(cap); body.appendChild(actions);
       card.appendChild(img); card.appendChild(body);
