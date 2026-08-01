@@ -89,14 +89,16 @@ namespace ChillHub.Core.Home {
                 var baseApi = this.baseApiProvider().TrimEnd('/');
                 var url = baseApi + "/feedback/submit";
 
-                // Общий персистентный лимит (делится с ErrorReporter): не заваливаем сервер отчётами
-                if (!ErrorReporter.TryConsumeManual(out var retryAfter)) {
-                    if (!silent) {
-                        var mins = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalMinutes));
-                        var text = $"Лимит ручных отправок исчерпан. Повторите через ~{mins} мин.";
-                        this.setStatus(text);
-                        this.showToast(text);
-                    }
+                // Лимит ручных отправок тратит ТОЛЬКО ручная отправка (silent: false).
+                // Раньше его списывал и фоновый ретрай: при лежащем сервере очередь за полминуты
+                // выжигала все 5 попыток, и живой человек получал отказ ровно тогда, когда
+                // обратная связь нужнее всего. Частоту фоновых попыток ограничивают
+                // MaxSentPerFlush и интервал таймера, а не пользовательская квота.
+                if (!silent && !ErrorReporter.TryConsumeManual(out var retryAfter)) {
+                    var mins = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalMinutes));
+                    var text = $"Лимит ручных отправок исчерпан. Повторите через ~{mins} мин.";
+                    this.setStatus(text);
+                    this.showToast(text);
 
                     return false;
                 }
