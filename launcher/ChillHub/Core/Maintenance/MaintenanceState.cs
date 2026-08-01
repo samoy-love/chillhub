@@ -7,26 +7,46 @@ namespace ChillHub.Core.Maintenance {
     using System;
     using System.Text.Json.Serialization;
 
+    /// <summary>Флаги блокировок из ответа сервера (вложенный объект <c>blocks</c>).</summary>
+    public sealed class MaintenanceBlocks {
+        /// <summary>Gets or sets a value indicating whether установка запрещена.</summary>
+        [JsonPropertyName("install")]
+        public bool? Install { get; set; }
+
+        /// <summary>Gets or sets a value indicating whether обновление запрещено.</summary>
+        [JsonPropertyName("update")]
+        public bool? Update { get; set; }
+
+        /// <summary>Gets or sets a value indicating whether запуск игры запрещён.</summary>
+        [JsonPropertyName("launch")]
+        public bool? Launch { get; set; }
+    }
+
     /// <summary>
     /// Состояние режима технических работ, как его отдаёт сервер.
     /// <para>
-    /// <b>Контракт предположительный</b> — серверная часть задачи 25 делается параллельно.
-    /// Ожидаемый ответ <c>GET {ApiBaseUrl}/api/maintenance</c> (см. <see cref="MaintenanceService.EndpointPath"/>):
+    /// Контракт сверен с серверной реализацией (<c>server/internal/maintenance</c>).
+    /// Ответ <c>GET {ApiBaseUrl}/api/maintenance</c> (см. <see cref="MaintenanceService.EndpointPath"/>):
     /// </para>
     /// <code>
     /// {
     ///   "enabled": true,
-    ///   "reason": "Переезд раздачи на новый сервер",
-    ///   "until": "2026-08-01T18:30:00Z",
-    ///   "blockInstall": true,
-    ///   "blockUpdate": true,
-    ///   "blockPlay": false
+    ///   "reason": "Меняем диск на сервере раздачи",
+    ///   "startsAt": "2026-08-01T10:00:00Z",
+    ///   "endsAt": "2026-08-01T12:00:00Z",
+    ///   "blocks": { "install": true, "update": true, "launch": false },
+    ///   "serverTime": "2026-08-01T10:31:02Z"
     /// }
     /// </code>
     /// <para>
-    /// Все поля кроме <c>enabled</c> необязательны. Флаги блокировок — <see cref="bool"/>?
-    /// намеренно: надо отличать «сервер явно разрешил» от «сервер поле не прислал».
-    /// Значения по умолчанию см. в <see cref="BlocksInstall"/> и соседях.
+    /// Сервер всегда отвечает 200 и всегда присылает <c>blocks</c>; 404 не бывает — отсутствие
+    /// файла состояния это <c>enabled:false</c>. Окно работ сервер считает сам: вне окна
+    /// приходит <c>enabled:false</c> со всеми флагами <c>false</c>, поэтому клиенту не нужен
+    /// собственный таймер — следующий опрос сам снимет баннер.
+    /// </para>
+    /// <para>
+    /// Флаги всё равно объявлены как <see cref="bool"/>? — на случай ответа от более старого
+    /// или частично реализованного сервера: надо отличать «явно разрешил» от «поля не было».
     /// </para>
     /// </summary>
     public sealed class MaintenanceState {
@@ -41,21 +61,25 @@ namespace ChillHub.Core.Maintenance {
         [JsonPropertyName("reason")]
         public string? Reason { get; set; }
 
+        /// <summary>Gets or sets время начала работ. Информационное поле.</summary>
+        [JsonPropertyName("startsAt")]
+        public DateTimeOffset? StartsAt { get; set; }
+
         /// <summary>Gets or sets ожидаемое время окончания работ. Null — сервер не назвал срок.</summary>
-        [JsonPropertyName("until")]
-        public DateTimeOffset? Until { get; set; }
+        [JsonPropertyName("endsAt")]
+        public DateTimeOffset? EndsAt { get; set; }
 
-        /// <summary>Gets or sets флаг запрета установки. Null — поля не было в ответе.</summary>
-        [JsonPropertyName("blockInstall")]
-        public bool? BlockInstall { get; set; }
+        /// <summary>Gets or sets флаги блокировок.</summary>
+        [JsonPropertyName("blocks")]
+        public MaintenanceBlocks? Blocks { get; set; }
 
-        /// <summary>Gets or sets флаг запрета обновления. Null — поля не было в ответе.</summary>
-        [JsonPropertyName("blockUpdate")]
-        public bool? BlockUpdate { get; set; }
-
-        /// <summary>Gets or sets флаг запрета запуска игры. Null — поля не было в ответе.</summary>
-        [JsonPropertyName("blockPlay")]
-        public bool? BlockPlay { get; set; }
+        /// <summary>
+        /// Gets or sets время на сервере в момент ответа. Нужно, чтобы считать обратный отсчёт
+        /// по серверным часам: у пользователя они бывают сбиты на часы, и тогда «осталось 20 минут»
+        /// превращается во «время вышло» на ровном месте.
+        /// </summary>
+        [JsonPropertyName("serverTime")]
+        public DateTimeOffset? ServerTime { get; set; }
 
         /// <summary>
         /// Gets a value indicating whether установка запрещена.
@@ -63,11 +87,11 @@ namespace ChillHub.Core.Maintenance {
         /// контента недоступна, и качать всё равно нечего.
         /// </summary>
         [JsonIgnore]
-        public bool BlocksInstall => this.Enabled && (this.BlockInstall ?? true);
+        public bool BlocksInstall => this.Enabled && (this.Blocks?.Install ?? true);
 
         /// <summary>Gets a value indicating whether обновление запрещено. Умолчание — запрещено, причина та же.</summary>
         [JsonIgnore]
-        public bool BlocksUpdate => this.Enabled && (this.BlockUpdate ?? true);
+        public bool BlocksUpdate => this.Enabled && (this.Blocks?.Update ?? true);
 
         /// <summary>
         /// Gets a value indicating whether запуск игры запрещён.
@@ -75,7 +99,7 @@ namespace ChillHub.Core.Maintenance {
         /// работает без сервера, а отбирать её без явного указания сервера незачем.
         /// </summary>
         [JsonIgnore]
-        public bool BlocksPlay => this.Enabled && (this.BlockPlay ?? false);
+        public bool BlocksPlay => this.Enabled && (this.Blocks?.Launch ?? false);
 
         /// <summary>Текст баннера: причина плюс ожидаемое время окончания.</summary>
         /// <returns>Готовая строка для показа в шапке.</returns>
@@ -88,16 +112,20 @@ namespace ChillHub.Core.Maintenance {
             return string.IsNullOrEmpty(eta) ? reason : $"{reason} {eta}";
         }
 
-        /// <summary>Человекочитаемое «до …» по <see cref="Until"/>. Пусто, если срок не назван или уже прошёл.</summary>
+        /// <summary>Человекочитаемое «до …» по <see cref="EndsAt"/>. Пусто, если срок не назван или уже прошёл.</summary>
         /// <returns>Текст об ожидаемом окончании работ.</returns>
         public string BuildEtaText() {
-            if (this.Until is not DateTimeOffset until) {
+            if (this.EndsAt is not DateTimeOffset until) {
                 return string.Empty;
             }
 
             try {
                 var local = until.ToLocalTime();
-                var left = local - DateTimeOffset.Now;
+
+                // Остаток считаем по часам СЕРВЕРА: у пользователя они бывают сбиты,
+                // и тогда корректный срок выглядел бы истёкшим (или наоборот).
+                var now = this.ServerTime ?? DateTimeOffset.Now;
+                var left = until - now;
                 if (left <= TimeSpan.Zero) {
                     // Срок вышел, а сервер всё ещё сообщает о работах — обещать время не будем
                     return "Работы затянулись, ждём сообщения от сервера.";
@@ -110,7 +138,7 @@ namespace ChillHub.Core.Maintenance {
             }
             catch (Exception ex) {
                 // Кривая дата от сервера не должна ломать баннер: покажем только причину
-                Logging.Logger.Warn($"MaintenanceState.BuildEtaText('{this.Until}'): {ex.Message}");
+                Logging.Logger.Warn($"MaintenanceState.BuildEtaText({this.EndsAt}): {ex.Message}");
                 return string.Empty;
             }
         }
@@ -128,7 +156,7 @@ namespace ChillHub.Core.Maintenance {
 
             return this.Enabled == other.Enabled
                 && string.Equals(this.Reason ?? string.Empty, other.Reason ?? string.Empty, StringComparison.Ordinal)
-                && Nullable.Equals(this.Until, other.Until)
+                && Nullable.Equals(this.EndsAt, other.EndsAt)
                 && this.BlocksInstall == other.BlocksInstall
                 && this.BlocksUpdate == other.BlocksUpdate
                 && this.BlocksPlay == other.BlocksPlay;
