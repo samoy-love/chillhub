@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"ChillHub/server/internal/adminutil"
 )
@@ -139,6 +140,55 @@ func promoteVersionDir(stageDir, finalDir string) error {
 		}
 	}
 	return nil
+}
+
+// publishLocks serialises publication per gameId+version.
+//
+// promoteVersionDir first deletes every finalDir+".old-*" it finds and only
+// then renames the live version aside under that same pattern. Two publications
+// of the SAME version running at once therefore destroy each other's backup,
+// and — worse — the winner of the content rename is not necessarily the one
+// that writes the manifest last, so the published manifest can describe the
+// other build's files. Every publication path takes this lock around
+// promote + writeManifest, which is short (two renames and a small JSON write)
+// and does not serialise the long extraction.
+var publishLocks struct {
+	mu sync.Mutex
+	m  map[string]*publishLock
+}
+
+type publishLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lockPublish blocks until the gameId+version pair is free and returns the
+// unlock function. Entries are reference-counted so the map cannot grow with
+// every published version.
+func lockPublish(gid, ver string) func() {
+	key := strings.ToLower(gid) + "\x00" + ver
+	publishLocks.mu.Lock()
+	if publishLocks.m == nil {
+		publishLocks.m = make(map[string]*publishLock)
+	}
+	l := publishLocks.m[key]
+	if l == nil {
+		l = &publishLock{}
+		publishLocks.m[key] = l
+	}
+	l.refs++
+	publishLocks.mu.Unlock()
+
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		publishLocks.mu.Lock()
+		l.refs--
+		if l.refs == 0 {
+			delete(publishLocks.m, key)
+		}
+		publishLocks.mu.Unlock()
+	}
 }
 
 // LauncherGameID is the game id the launcher publishes itself under.

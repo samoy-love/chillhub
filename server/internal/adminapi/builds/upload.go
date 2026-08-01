@@ -123,6 +123,10 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Everything is extracted and hashed: publish the build in one rename.
+	// The lock keeps a concurrent publication of the same version from
+	// interleaving its content rename with our manifest write.
+	unlock := lockPublish(gid, ver)
+	defer unlock()
 	if err := promoteVersionDir(stageDir, finalVerDir); err != nil {
 		http.Error(w, "activate failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -367,6 +371,10 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Everything is extracted and hashed: publish the build in one rename.
+	// See lockPublish: promote and the manifest write must not interleave with
+	// another publication of the same version.
+	unlock := lockPublish(gid, ver)
+	defer unlock()
 	if err := promoteVersionDir(stageDir, finalVerDir); err != nil {
 		streamError(nw, fl, "activate failed: "+err.Error())
 		return
