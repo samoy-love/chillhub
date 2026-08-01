@@ -10,6 +10,18 @@ Unicode true
 !define APP_NAME "ChillHub"
 !define COMPANY_NAME "ChillHub"
 !define APP_EXE "ChillHub.exe"
+; ЗНАЧЕНИЕ ПО УМОЛЧАНИЮ для страницы выбора каталога — и только оно.
+;
+; И5: раньше эта константа подставлялась ПОВСЮДУ — в секции установки, в
+; ярлыки, в реестр, в деинсталляцию. Вместе с подключённой страницей
+; MUI_PAGE_DIRECTORY это давало прямой обман пользователя: он выбирал,
+; например, D:\ChillHub, установщик показывал этот путь, а файлы всё равно
+; уезжали в $LOCALAPPDATA\ChillHub. Выбор не игнорировался тихо — он
+; игнорировался ПОСЛЕ того, как его подтвердили.
+;
+; Теперь везде используется $INSTDIR (его и заполняет страница выбора), а эта
+; константа осталась ровно там, где ей место: в InstallDir как значение по
+; умолчанию.
 !define INSTALL_DIR "$LOCALAPPDATA\ChillHub"
 !define UNINST_KEY "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ChillHub"
 !define APP_REG "Software\\ChillHub\\Install"
@@ -115,8 +127,8 @@ InstallDir "${INSTALL_DIR}"
 ; ------------------------
 Section "Install"
   ; Ensure install dir
-  CreateDirectory "${INSTALL_DIR}"
-  SetOutPath "${INSTALL_DIR}"
+  CreateDirectory "$INSTDIR"
+  SetOutPath "$INSTDIR"
 
   ; Files from build output (default: Release)
   ; NOTE: build-installer.ps1 builds Release by default.
@@ -140,19 +152,21 @@ Section "Install"
   File /r /x "config.json" /x "launcher.version" /x "launcher.update-status" /x "Uninstall.exe" /x "*.pdb" /x "linux-*" /x "osx-*" "${PAYLOAD_DIR}\*.*"
 
   ; Write uninstaller
-  WriteUninstaller "${INSTALL_DIR}\Uninstall.exe"
+  WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   ; Shortcuts
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
-  CreateShortCut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "${INSTALL_DIR}\${APP_EXE}"
-  CreateShortCut "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk" "${INSTALL_DIR}\Uninstall.exe"
-  CreateShortCut "$DESKTOP\${APP_NAME}.lnk" "${INSTALL_DIR}\${APP_EXE}"
+  CreateShortCut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
+  CreateShortCut "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
+  CreateShortCut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
 
   ; Uninstall registry (per-user)
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${APP_NAME}"
-  WriteRegStr HKCU "${UNINST_KEY}" "UninstallString" '"${INSTALL_DIR}\\Uninstall.exe"'
-  WriteRegStr HKCU "${UNINST_KEY}" "InstallLocation" "${INSTALL_DIR}"
-  WriteRegStr HKCU "${UNINST_KEY}" "DisplayIcon" "${INSTALL_DIR}\${APP_EXE}"
+  ; Один слэш, а не два: NSIS не обрабатывает \\ как escape, и в реестр
+  ; уезжала строка с задвоенным разделителем.
+  WriteRegStr HKCU "${UNINST_KEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
+  WriteRegStr HKCU "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKCU "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\${APP_EXE}"
   WriteRegStr HKCU "${UNINST_KEY}" "Publisher" "${COMPANY_NAME}"
   ; DisplayVersion is optional; can be updated by CI if needed
   ; WriteRegStr HKCU "${UNINST_KEY}" "DisplayVersion" "1.0.0"
@@ -182,7 +196,7 @@ Section "Install"
   ExecWait '"powershell" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\write-config.ps1" -GamesDir "$GAMES_DIR"'
 
   ; Write launcher.version with exact content (no newline)
-  FileOpen $4 "${INSTALL_DIR}\launcher.version" w
+  FileOpen $4 "$INSTDIR\launcher.version" w
   FileWrite $4 "${APP_VERSION}"
   FileClose $4
 
@@ -222,18 +236,18 @@ Section "Uninstall"
   Delete "$DESKTOP\${APP_NAME}.lnk"
 
   ; Preserve user config.json if present in install dir
-  StrCpy $0 "${INSTALL_DIR}\config.json"
+  StrCpy $0 "$INSTDIR\config.json"
   StrCpy $1 "$TEMP\${APP_NAME}_config.json"
   IfFileExists "$0" 0 +3
     CopyFiles /SILENT "$0" "$1"
 
   ; Remove application files
-  RMDir /r "${INSTALL_DIR}"
+  RMDir /r "$INSTDIR"
 
   ; Restore config.json if it was preserved
   IfFileExists "$1" 0 +4
-    CreateDirectory "${INSTALL_DIR}"
-    CopyFiles /SILENT "$1" "${INSTALL_DIR}\config.json"
+    CreateDirectory "$INSTDIR"
+    CopyFiles /SILENT "$1" "$INSTDIR\config.json"
     Delete "$1"
 
   ; Remove registry uninstall entry
@@ -321,14 +335,14 @@ Function InstallPrereqs
     ExecWait '"$1"'
   ; If user asked to run app, do it now after prereqs
   StrCmp $LaunchAfterFlag 1 0 +2
-    ExecShell "open" "${INSTALL_DIR}\${APP_EXE}"
+    ExecShell "open" "$INSTDIR\${APP_EXE}"
 FunctionEnd
 
 Function .onInstSuccess
   ; If only "Run app" was selected (without prereqs), launch now
   StrCmp $LaunchAfterFlag 1 0 done
   StrCmp $PrereqsRan 1 done 0
-  ExecShell "open" "${INSTALL_DIR}\${APP_EXE}"
+  ExecShell "open" "$INSTDIR\${APP_EXE}"
 done:
 FunctionEnd
 
