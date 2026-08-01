@@ -317,6 +317,29 @@ if [[ $NO_BUILD -eq 0 ]]; then
   # Compute shas BEFORE install for later comparison
   BIN_SHA_API=$(sha256sum "$BUILD_DIR/api" | awk '{print $1}')
   BIN_SHA_ADMIN=$(sha256sum "$BUILD_DIR/admin" | awk '{print $1}')
+  # И13: СОХРАНЯЕМ ТЕКУЩИЕ БИНАРИ ПЕРЕД ПЕРЕЗАПИСЬЮ.
+  #
+  # Отката не было нигде, кроме конфига nginx: бинари ставились `install`
+  # поверх старых, и предыдущая версия исчезала безвозвратно. Вернуться к
+  # работающей сборке можно было только новой выкаткой из git — то есть в
+  # момент, когда прод лежит, надо было дождаться сборки, а если ломающий
+  # коммит уже в main, сначала ещё и сделать revert.
+  #
+  # Сохранение стоит одну копию файла. Восстановление — deploy/rollback-binaries.sh
+  # (ставится ниже как /usr/local/sbin/chillhub-rollback-binaries.sh).
+  ROLLBACK_DIR="/opt/chillhub/rollback"
+  run "sudo install -d -m 0700 -o root -g root \"$ROLLBACK_DIR\""
+  BIN_STAMP="$(date -u +%Y-%m-%d-%H%M%S)"
+  for b in api admin; do
+    if [[ -f "/opt/chillhub/$b" ]]; then
+      run "sudo cp -a \"/opt/chillhub/$b\" \"$ROLLBACK_DIR/$b.previous\""
+      run "sudo cp -a \"/opt/chillhub/$b\" \"$ROLLBACK_DIR/$b.$BIN_STAMP\""
+      ok "[rollback] сохранён предыдущий $b"
+    else
+      log "[rollback] /opt/chillhub/$b ещё нет — сохранять нечего (первая установка)"
+    fi
+  done
+
   log "Installing binaries"
   run "sudo install -m 0755 \"$BUILD_DIR/api\"   \"$API_BIN\""
   run "sudo install -m 0755 \"$BUILD_DIR/admin\" \"$ADMIN_BIN\""
@@ -418,6 +441,11 @@ if [[ -f "$REPO_DIR/deploy/backup-content.sh" ]]; then
   log "Install content backup script and timer"
   run "sudo install -m 0755 -o root -g root \"$REPO_DIR/deploy/backup-content.sh\" /usr/local/sbin/chillhub-backup-content.sh"
   run "sudo install -d -m 0700 -o root -g root /var/backups/chillhub"
+  # И13: скрипт отката бинарей кладём рядом — он нужен ровно тогда, когда
+  # некогда искать, где он лежит в репозитории.
+  if [[ -f "$REPO_DIR/deploy/rollback-binaries.sh" ]]; then
+    run "sudo install -m 0755 -o root -g root \"$REPO_DIR/deploy/rollback-binaries.sh\" /usr/local/sbin/chillhub-rollback-binaries.sh"
+  fi
   if [[ -f "$REPO_DIR/deploy/systemd/chillhub-backup.service" ]]; then
     run "sudo install -m 0644 \"$REPO_DIR/deploy/systemd/chillhub-backup.service\" /etc/systemd/system/chillhub-backup.service"
   fi
