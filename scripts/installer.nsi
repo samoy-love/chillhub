@@ -180,10 +180,27 @@ Section "Install"
 
   ; Write config.json with GamesPath (JSON, UTF-8) via temporary PowerShell script; merge if exists
   ; Important: we assign the raw path to the PS object and rely on ConvertTo-Json to escape backslashes
+  ;
+  ; И19: КАНОНИЧЕСКОЕ РАСПОЛОЖЕНИЕ КОНФИГА — %APPDATA%\ChillHub\config.json.
+  ;
+  ; Здесь стояло 'LocalApplicationData', то есть установщик писал конфиг в
+  ; %LOCALAPPDATA%\ChillHub — а это, по умолчанию, КАТАЛОГ УСТАНОВКИ лаунчера
+  ; (см. ${INSTALL_DIR} выше). Лаунчер же читает конфиг из %APPDATA%\ChillHub
+  ; (launcher/ChillHub/Core/Config.cs: ConfigPath), а из LOCALAPPDATA только
+  ; ОДИН РАЗ мигрирует, и то лишь если целевого файла ещё нет.
+  ;
+  ; Последствия были: при переустановке поверх существующего профиля выбранная
+  ; пользователем папка для игр молча игнорировалась — миграция не срабатывала,
+  ; потому что %APPDATA%\ChillHub\config.json уже существовал. Плюс конфиг
+  ; оказывался внутри каталога установки, откуда он и попадал когда-то в пакет
+  ; сборки (тот самый цикл самообновления, ради которого он вынесен в APPDATA).
+  ;
+  ; Теперь установщик пишет туда же, откуда лаунчер читает, и делает это
+  ; независимо от того, какой каталог установки выбран.
   InitPluginsDir
   FileOpen $3 "$PLUGINSDIR\write-config.ps1" w
   FileWrite $3 "param([string]$${GamesDir})$\r$\n"
-  FileWrite $3 "$${dir} = [Environment]::GetFolderPath('LocalApplicationData')$\r$\n"
+  FileWrite $3 "$${dir} = [Environment]::GetFolderPath('ApplicationData')$\r$\n"
   FileWrite $3 "$${app} = Join-Path $${dir} 'ChillHub'$\r$\n"
   FileWrite $3 "if (-not (Test-Path $${app})) { New-Item -ItemType Directory -Path $${app} | Out-Null }$\r$\n"
   FileWrite $3 "$${cfg} = Join-Path $${app} 'config.json'$\r$\n"
@@ -347,20 +364,23 @@ Section "Uninstall"
   ; Remove Desktop shortcut
   Delete "$DESKTOP\${APP_NAME}.lnk"
 
-  ; Preserve user config.json if present in install dir
-  StrCpy $0 "$INSTDIR\config.json"
-  StrCpy $1 "$TEMP\${APP_NAME}_config.json"
-  IfFileExists "$0" 0 +3
-    CopyFiles /SILENT "$0" "$1"
-
-  ; Remove application files
+  ; И19: удаление действительно УДАЛЯЕТ каталог установки.
+  ;
+  ; Здесь была пляска «сохранить $INSTDIR\config.json во временный файл ->
+  ; удалить каталог -> СОЗДАТЬ КАТАЛОГ ЗАНОВО и положить конфиг обратно».
+  ; После «полного удаления» на диске оставался каталог с config.json внутри,
+  ; и пользователь, выбравший удаление, получал не то, что просил.
+  ;
+  ; Вдобавок пляска была бессмысленной: пользовательский конфиг живёт в
+  ; %APPDATA%\ChillHub\config.json (см. Config.cs и запись конфига в секции
+  ; установки выше), а не в каталоге установки. Условие IfFileExists почти
+  ; всегда было ложным, и весь блок сводился к воссозданию пустого каталога.
+  ;
+  ; Настройки пользователя в %APPDATA% НЕ трогаем намеренно: они переживают
+  ; переустановку, это ожидаемое поведение. Полная очистка — ручная, и это
+  ; сознательный выбор: молча стирать настройки при удалении приложения хуже,
+  ; чем оставить небольшой JSON.
   RMDir /r "$INSTDIR"
-
-  ; Restore config.json if it was preserved
-  IfFileExists "$1" 0 +4
-    CreateDirectory "$INSTDIR"
-    CopyFiles /SILENT "$1" "$INSTDIR\config.json"
-    Delete "$1"
 
   ; Remove registry uninstall entry
   DeleteRegKey HKCU "${UNINST_KEY}"
