@@ -8,6 +8,7 @@ namespace ChillHub.Core {
     using System.Diagnostics;
     using System.IO;
     using System.Text.Json;
+    using System.Threading;
     using System.Windows;
     using System.Windows.Media;
 
@@ -55,7 +56,12 @@ namespace ChillHub.Core {
         private static readonly string LegacyAppDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChillHub");
         private static readonly string LegacyConfigPath = Path.Combine(LegacyAppDir, "config.json");
 
-        private static AppConfig cache = null!;
+        // Конфиг читают и фоновые задачи (сеть, синхронизация), и UI. Без синхронизации
+        // два одновременных промаха кеша запускали два Load, каждый со своей записью на
+        // диск, а вызывающий мог увидеть недособранный объект.
+        private static readonly object cacheLock = new object();
+
+        private static AppConfig? cache;
 
         /// <summary>
         /// Фактический путь к конфигу. Единственный источник правды: другие компоненты
@@ -74,6 +80,108 @@ namespace ChillHub.Core {
         /// </summary>
         /// <returns>Конфигурация приложения.</returns>
         public static AppConfig Load() {
+            lock (cacheLock) {
+                return LoadLocked();
+            }
+        }
+
+        /// <summary>
+        /// Сохраняет конфигурацию. Ошибку не глушит: возвращает false, чтобы вызывающий
+        /// мог сказать пользователю правду. Раньше страница настроек рапортовала об успехе
+        /// даже когда запись не удалась, и настройки молча терялись при перезапуске.
+        /// </summary>
+        /// <param name="cfg">Сохраняемая конфигурация.</param>
+        /// <returns>true, если файл записан.</returns>
+        public static bool Save(AppConfig cfg) => TrySave(cfg, out _);
+
+        /// <summary>
+        /// То же, что <see cref="Save"/>, но с текстом ошибки для показа пользователю.
+        /// </summary>
+        /// <param name="cfg">Сохраняемая конфигурация.</param>
+        /// <param name="error">Описание сбоя; пустая строка при успехе.</param>
+        /// <returns>true, если файл записан.</returns>
+        public static bool TrySave(AppConfig cfg, out string error) {
+            error = string.Empty;
+            lock (cacheLock) {
+                try {
+                    Clamp(cfg);
+                    Directory.CreateDirectory(AppDir);
+                    var json = JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true });
+                    File.WriteAllText(ConfigPath, json);
+
+                    // Кеш обновляем только после удачной записи: иначе в памяти живут настройки,
+                    // которых на диске нет, и после перезапуска они «откатываются» сами.
+                    cache = cfg;
+                    ApplyTheme();
+                    return true;
+                }
+                catch (Exception ex) {
+                    error = ex.Message;
+                    Logging.Logger.Warn($"Config.Save: настройки не сохранены: {ex.Message}");
+                    return false;
+                }
+            }
+        }
+
+        public static void EnsureDir(string path) {
+            try {
+                Directory.CreateDirectory(path);
+            }
+            catch {
+            }
+        }
+
+        /// <summary>
+        /// Текущая конфигурация. Обращаются и из UI, и из фоновых задач, поэтому промах
+        /// кеша разрешается под замком: иначе два потока одновременно уходили в Load,
+        /// и каждый писал на диск свою копию.
+        /// </summary>
+        public static AppConfig Current {
+            get {
+                var cached = Volatile.Read(ref cache);
+                if (cached != null) {
+                    return cached;
+                }
+
+                lock (cacheLock) {
+                    return cache ?? LoadLocked();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Применяет единственную тёмную тему. Выбор темы из конфига убран — тема одна.
+        /// </summary>
+        public static void ApplyTheme() {
+            try {
+                var app = Application.Current;
+                if (app == null) {
+                    return;
+                }
+
+                // remove previous theme dictionaries
+                for (int i = app.Resources.MergedDictionaries.Count - 1; i >= 0; i--) {
+                    var md = app.Resources.MergedDictionaries[i];
+                    var src = md.Source?.OriginalString ?? string.Empty;
+                    if (src.IndexOf("Themes/", StringComparison.OrdinalIgnoreCase) >= 0) {
+                        app.Resources.MergedDictionaries.RemoveAt(i);
+                    }
+                }
+
+                // Always use dark theme
+                var uri = new Uri("/ChillHub;component/Themes/Theme.Dark.xaml", UriKind.Relative);
+                app.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = uri });
+                if (app.MainWindow != null) {
+                    app.MainWindow.SetResourceReference(Window.BackgroundProperty, "Brush.Background");
+                }
+            }
+            catch (Exception ex) {
+                Debug.WriteLine($"[Theme] ApplyTheme error: {ex.Message}");
+            }
+        }
+
+        /// <summary>Тело <see cref="Load"/>; вызывается уже под замком кеша.</summary>
+        private static AppConfig LoadLocked() {
             try {
                 MigrateLegacyConfig();
             }
@@ -113,83 +221,6 @@ namespace ChillHub.Core {
                 Logging.Logger.Warn($"Config.Load: config.json повреждён, откатываемся на значения по умолчанию: {ex.Message}");
                 BackupCorruptedConfig();
                 return CreateAndSaveDefaults();
-            }
-        }
-
-        /// <summary>
-        /// Сохраняет конфигурацию. Ошибку не глушит: возвращает false, чтобы вызывающий
-        /// мог сказать пользователю правду. Раньше страница настроек рапортовала об успехе
-        /// даже когда запись не удалась, и настройки молча терялись при перезапуске.
-        /// </summary>
-        /// <param name="cfg">Сохраняемая конфигурация.</param>
-        /// <returns>true, если файл записан.</returns>
-        public static bool Save(AppConfig cfg) => TrySave(cfg, out _);
-
-        /// <summary>
-        /// То же, что <see cref="Save"/>, но с текстом ошибки для показа пользователю.
-        /// </summary>
-        /// <param name="cfg">Сохраняемая конфигурация.</param>
-        /// <param name="error">Описание сбоя; пустая строка при успехе.</param>
-        /// <returns>true, если файл записан.</returns>
-        public static bool TrySave(AppConfig cfg, out string error) {
-            error = string.Empty;
-            try {
-                Clamp(cfg);
-                Directory.CreateDirectory(AppDir);
-                var json = JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(ConfigPath, json);
-
-                // Кеш обновляем только после удачной записи: иначе в памяти живут настройки,
-                // которых на диске нет, и после перезапуска они «откатываются» сами.
-                cache = cfg;
-                ApplyTheme();
-                return true;
-            }
-            catch (Exception ex) {
-                error = ex.Message;
-                Logging.Logger.Warn($"Config.Save: настройки не сохранены: {ex.Message}");
-                return false;
-            }
-        }
-
-        public static void EnsureDir(string path) {
-            try {
-                Directory.CreateDirectory(path);
-            }
-            catch {
-            }
-        }
-
-        public static AppConfig Current => cache ?? Load();
-
-        /// <summary>
-        /// Применяет единственную тёмную тему. Выбор темы из конфига убран — тема одна.
-        /// </summary>
-        public static void ApplyTheme() {
-            try {
-                var app = Application.Current;
-                if (app == null) {
-                    return;
-                }
-
-                // remove previous theme dictionaries
-                for (int i = app.Resources.MergedDictionaries.Count - 1; i >= 0; i--) {
-                    var md = app.Resources.MergedDictionaries[i];
-                    var src = md.Source?.OriginalString ?? string.Empty;
-                    if (src.IndexOf("Themes/", StringComparison.OrdinalIgnoreCase) >= 0) {
-                        app.Resources.MergedDictionaries.RemoveAt(i);
-                    }
-                }
-
-                // Always use dark theme
-                var uri = new Uri("/ChillHub;component/Themes/Theme.Dark.xaml", UriKind.Relative);
-                app.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = uri });
-                if (app.MainWindow != null) {
-                    app.MainWindow.SetResourceReference(Window.BackgroundProperty, "Brush.Background");
-                }
-            }
-            catch (Exception ex) {
-                Debug.WriteLine($"[Theme] ApplyTheme error: {ex.Message}");
             }
         }
 
