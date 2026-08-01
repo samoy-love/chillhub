@@ -20,6 +20,15 @@ name: Lint
 #   Go toolchain             taken from server/go.mod (single source of truth)
 # ---------------------------------------------------------------------------
 
+# И16: минимальные права для GITHUB_TOKEN.
+#
+# Блока permissions не было вовсе, поэтому действовали настройки репозитория —
+# по умолчанию это read/write на contents, а значит токен, доступный каждому
+# шагу (включая `npm i -g` и golangci-lint-action), мог писать в репозиторий.
+# Линтеру нужно ровно одно: прочитать код. В deploy.yml такой блок уже есть.
+permissions:
+  contents: read
+
 on:
   push:
     branches: [ main ]
