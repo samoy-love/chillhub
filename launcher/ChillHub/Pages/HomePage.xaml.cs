@@ -2098,64 +2098,6 @@ namespace ChillHub.Pages {
             }
         }
 
-        private async Task FakeUpdateAsync(CancellationToken token) {
-            try {
-                this.isUpdating = true;
-                this.SetActionMode(ActionMode.Cancel);
-                this.GameList.IsEnabled = false;
-
-                this.StatusText.Text = "Проверка версии...";
-                await Task.Delay(500, token);
-
-                this.StatusText.Text = "Скачивание обновления...";
-                var totalFiles = 34; // псевдо-кол-во файлов
-                long totalBytes = 512L * 1024 * 1024; // 512 МБ для примера
-                long downloadedBytes = 0;
-                var start = DateTime.UtcNow;
-                for (int i = 0; i <= 100; i++) {
-                    token.ThrowIfCancellationRequested();
-                    this.UpdateProgress.Value = i;
-                    downloadedBytes = (long)(totalBytes * (i / 100.0));
-                    var elapsed = (DateTime.UtcNow - start).TotalSeconds;
-                    var speedMBs = elapsed > 0 ? (downloadedBytes / 1024.0 / 1024.0) / elapsed : 0; // МБ/с
-                    var remainBytes = totalBytes - downloadedBytes;
-                    var etaSec = speedMBs > 0 ? (remainBytes / 1024.0 / 1024.0) / speedMBs : 0;
-                    this.SpeedEtaText.Text = $"Скорость: {speedMBs:0.0} МБ/с • Осталось: {FormatEta(etaSec)}";
-
-                    var downloadedFiles = (int)Math.Round(totalFiles * (i / 100.0));
-                    this.FilesSizeText.Text = $"{downloadedFiles}/{totalFiles} • {FormatSize(downloadedBytes)}/{FormatSize(totalBytes)}";
-                    await Task.Delay(50, token);
-                }
-
-                this.StatusText.Text = "Верификация файлов...";
-                await Task.Delay(800, token);
-
-                this.StatusText.Text = "Активация версии...";
-                await Task.Delay(400, token);
-
-                this.StatusText.Text = "Готово. Установлена последняя версия.";
-                this.SpeedEtaText.Text = string.Empty;
-            }
-            catch (OperationCanceledException) {
-                this.StatusText.Text = "Операция отменена пользователем.";
-                this.SpeedEtaText.Text = string.Empty;
-            }
-            catch (Exception ex) {
-                this.StatusText.Text = $"Ошибка обновления: {ex.Message}";
-            }
-            finally {
-                this.isUpdating = false;
-                this.GameList.IsEnabled = true;
-                this.UpdateProgress.Value = 0;
-                this.FilesSizeText.Text = string.Empty;
-                try {
-                    this.UpdateActionButtonState();
-                }
-                catch {
-                }
-            }
-        }
-
         private string? GetSelectedGameId() {
             try {
                 var gi = this.GameList?.SelectedItem as GameInfo;
