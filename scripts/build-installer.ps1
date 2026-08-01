@@ -125,7 +125,15 @@ manifests/launcher/latest.json. Ошибочное значение = беско
 # Исключения пакета лаунчера. Держать синхронно с:
 #   - ChillHub.Update.PreserveMatcher.DefaultRules (updater/UpdatePreserve.cs)
 #   - списком /x в scripts/installer.nsi
-$script:PayloadExcludeFiles = @('config.json', 'launcher.version')
+#
+# Uninstall.exe (Б6, согласовано с апдейтером и сервером): это артефакт ВРЕМЕНИ
+# УСТАНОВКИ — его создаёт сам NSIS (WriteUninstaller) уже в каталоге установки,
+# в build-выводе его нет и быть не должно. Если он всё же попадёт в ZIP (проще
+# всего — если кто-то ставил лаунчер прямо в каталог сборки), он окажется в
+# манифесте, а апдейтер его не перезапишет: получится неустранимое расхождение
+# хешей и вечный цикл обновления, ровно как с config.json/launcher.version.
+# Дешевле исключить его безусловно, чем ловить это на проде.
+$script:PayloadExcludeFiles = @('config.json', 'launcher.version', 'Uninstall.exe')
 $script:PayloadExcludeGlobs = @('*.pdb')
 # Нативные библиотеки не под Windows: runtimes/linux-*, runtimes/osx-*
 $script:PayloadExcludeDirGlobs = @('linux-*', 'osx-*')

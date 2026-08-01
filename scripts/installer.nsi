@@ -128,10 +128,14 @@ Section "Install"
   ;   config.json      — пользовательская настройка (живёт в %APPDATA%, апдейтер её не трогает);
   ;   launcher.version — маркер версии, он пишется ниже явно (иначе разъедется с манифестом);
   ;   *.pdb            — отладочные символы, в релизе не нужны;
-  ;   linux-* / osx-*  — нативные библиотеки из runtimes\ не под Windows (мёртвый вес).
+  ;   linux-* / osx-*  — нативные библиотеки из runtimes\ не под Windows (мёртвый вес);
+  ;   Uninstall.exe    — Б6: артефакт времени установки, его пишет WriteUninstaller
+  ;                      ниже. Если бы он приехал из PAYLOAD_DIR, он попал бы и в
+  ;                      манифест публикуемой сборки — а апдейтер его не
+  ;                      перезаписывает, что даёт вечный цикл обновления.
   ; Список исключений обязан совпадать с ChillHub.Update.PreserveMatcher.DefaultRules
   ; и со staging-фильтром в scripts/build-installer.ps1 (New-LauncherPayload).
-  File /r /x "config.json" /x "launcher.version" /x "*.pdb" /x "linux-*" /x "osx-*" "${PAYLOAD_DIR}\*.*"
+  File /r /x "config.json" /x "launcher.version" /x "Uninstall.exe" /x "*.pdb" /x "linux-*" /x "osx-*" "${PAYLOAD_DIR}\*.*"
 
   ; Write uninstaller
   WriteUninstaller "${INSTALL_DIR}\Uninstall.exe"
