@@ -82,6 +82,19 @@ const (
 	maxErrorCode = 120
 )
 
+// Numeric caps. The client supplies these values and nothing validated them
+// upwards: a single event with durationMs = MaxInt64 (a bug, a stuck stopwatch
+// or a hostile client) overflowed the running sums in Totals and turned the
+// whole summary into nonsense — including negative numbers. Values are clamped
+// rather than rejected, so a bogus number costs one wrong event, not the event.
+const (
+	// maxDurationMs is 24 hours: no install or update takes longer, and the
+	// launcher would have been restarted by then anyway.
+	maxDurationMs int64 = 24 * 60 * 60 * 1000
+	// maxEventBytes is 1 TiB, far above any build.
+	maxEventBytes int64 = 1 << 40
+)
+
 // eventKinds is the allowlist of event names. An unknown kind is rejected with
 // 400 so a typo in the client shows up immediately instead of silently
 // polluting the aggregate.
@@ -148,6 +161,17 @@ func (h *Handlers) user(r *http.Request) string {
 	return h.CurrentUser(r)
 }
 
+// clampInt64 forces a client-supplied number into [0, max].
+func clampInt64(v, max int64) int64 {
+	if v < 0 {
+		return 0
+	}
+	if v > max {
+		return max
+	}
+	return v
+}
+
 func clamp(s string, n int) string {
 	s = strings.TrimSpace(s)
 	if len(s) > n {
@@ -195,12 +219,8 @@ func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
 	if res != "" && !results[res] {
 		res = ""
 	}
-	if in.DurationMs < 0 {
-		in.DurationMs = 0
-	}
-	if in.Bytes < 0 {
-		in.Bytes = 0
-	}
+	in.DurationMs = clampInt64(in.DurationMs, maxDurationMs)
+	in.Bytes = clampInt64(in.Bytes, maxEventBytes)
 	ev := Event{
 		// Server time on purpose: a wrong client clock would otherwise scatter
 		// events across the day buckets.
@@ -321,6 +341,10 @@ type Summary struct {
 	TopErrors  []CountBucket `json:"topErrors"`
 	AppVersion []CountBucket `json:"appVersions"`
 	OS         []CountBucket `json:"os"`
+	// DaysTruncated reports that the requested period held more distinct days
+	// than maxSummaryDays: Totals and the per-game/error breakdowns still cover
+	// every event, but ByDay does not.
+	DaysTruncated bool `json:"daysTruncated,omitempty"`
 }
 
 // Summary serves GET /admin/api/metrics/summary?from=&to=&gameId=.
@@ -363,7 +387,15 @@ func (h *Handlers) Summary(w http.ResponseWriter, r *http.Request) {
 	var installMsSum, updateMsSum int64
 	var installMsN, updateMsN int64
 
-	h.mu.Lock()
+	// The scan deliberately runs WITHOUT h.mu.
+	//
+	// Holding it for the whole pass — up to 32 MiB of NDJSON — blocked the
+	// public /metrics/report endpoint (and the launchers behind it) for as long
+	// as an admin's summary took. The store is append-only, so a concurrent
+	// writer can only add whole lines at the end: a scan may or may not see an
+	// event that arrives while it runs, and a rotation in the middle of a pass
+	// can cost the rotated tail for that one summary. Both are acceptable for an
+	// aggregate; blocking ingest is not.
 	// Oldest generation first so byDay comes out chronological before sorting.
 	files := []string{h.prevPath(), h.path()}
 	var scanErr error
@@ -380,6 +412,10 @@ func (h *Handlers) Summary(w http.ResponseWriter, r *http.Request) {
 			if gameFilter != "" && ev.GameID != gameFilter {
 				return
 			}
+			// Old lines were written before the numeric caps existed, so clamp
+			// again here: one bogus value must not poison the totals.
+			ev.DurationMs = clampInt64(ev.DurationMs, maxDurationMs)
+			ev.Bytes = clampInt64(ev.Bytes, maxEventBytes)
 			out.Totals.Events++
 			if ev.InstallID != "" {
 				uniq[ev.InstallID] = struct{}{}
@@ -396,10 +432,18 @@ func (h *Handlers) Summary(w http.ResponseWriter, r *http.Request) {
 			d := days[key]
 			if d == nil {
 				if len(days) >= maxSummaryDays {
-					return
+					// The day cap must not skip the event: Totals were already
+					// incremented above, so returning here made the headline
+					// numbers disagree with the per-type breakdown below without
+					// a word to the caller. The event is counted everywhere; only
+					// its (capped) day bucket is dropped, and the response says
+					// so.
+					d = &DayBucket{Date: key}
+					out.DaysTruncated = true
+				} else {
+					d = &DayBucket{Date: key}
+					days[key] = d
 				}
-				d = &DayBucket{Date: key}
-				days[key] = d
 			}
 			var g *GameBucket
 			if ev.GameID != "" {
@@ -466,7 +510,6 @@ func (h *Handlers) Summary(w http.ResponseWriter, r *http.Request) {
 			scanErr = err
 		}
 	}
-	h.mu.Unlock()
 	if scanErr != nil {
 		log.Printf("[metrics] summary scan: %v", scanErr)
 		http.Error(w, "failed to read metrics", http.StatusInternalServerError)
