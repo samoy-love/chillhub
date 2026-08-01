@@ -123,8 +123,9 @@ func (h *Handlers) AssetsMkdir(w http.ResponseWriter, r *http.Request) {
 // imageFormMemory only says how much of the multipart body may stay in RAM
 // before it is spooled to a temp file.
 const (
-	// MaxImageBytes caps one uploaded image.
-	MaxImageBytes = 32 << 20 // 32 MiB
+	// MaxImageBytes caps one uploaded image (defined in media so that the game
+	// icon upload enforces the same limit).
+	MaxImageBytes = media.MaxImageBytes
 	// imageFormMemory is the in-RAM part of a multipart image upload.
 	imageFormMemory = 8 << 20 // 8 MiB
 )

@@ -6,6 +6,7 @@ package media
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -38,6 +39,10 @@ const (
 	MaxImageDimension = 8000
 	// MaxImagePixels bounds width*height (~128 MiB of RGBA in the worst case).
 	MaxImagePixels = 32 << 20
+	// MaxImageBytes caps one uploaded image file. It lives here, next to the
+	// other image bounds, so that every upload endpoint (news assets, news
+	// covers, game icons) enforces the same number.
+	MaxImageBytes = 32 << 20 // 32 MiB
 )
 
 // ErrImageTooLarge reports an image whose declared dimensions are refused.
@@ -131,17 +136,29 @@ func ProcessAndSaveAsset(base, rel, desired string, data []byte, extHint, conten
 				return "", nil, err
 			}
 			tmpIn.Close()
+			defer os.Remove(tmpIn.Name())
+			// ffmpeg writes to a scratch file next to the destination and the
+			// result is renamed into place. Letting it write outPath directly
+			// meant a failed or killed transcode replaced a working asset with a
+			// truncated one, in a tree that is served to the public.
+			tmpOut := outPath + ".tmp-" + adminutil.GenID() + ".webp"
+			defer os.Remove(tmpOut)
 			scaleExpr := "scale='if(gte(min(iw,ih),1080), if(lte(iw,ih), -2, 1080), iw)':'if(gte(min(iw,ih),1080), if(lte(iw,ih), 1080, -2), ih)'"
 			// Use quality 95 for lossy output and encode with libwebp preserving animation
 			// Add pixel format with alpha, preset and compression level for ffmpeg 6 compatibility
 			args := []string{"-y", "-i", tmpIn.Name(), "-vf", scaleExpr,
 				"-c:v", "libwebp", "-lossless", "0", "-q:v", "95", "-compression_level", "4",
-				"-preset", "picture", "-pix_fmt", "yuva420p", "-vsync", "0", "-loop", "0", outPath}
+				"-preset", "picture", "-pix_fmt", "yuva420p", "-vsync", "0", "-loop", "0", tmpOut}
 			if err := runFFmpegTranscode(args); err != nil {
-				os.Remove(tmpIn.Name())
 				return "", nil, fmt.Errorf("ffmpeg failed: %w", err)
 			}
-			os.Remove(tmpIn.Name())
+			b, err := os.ReadFile(tmpOut)
+			if err != nil {
+				return "", nil, err
+			}
+			if err := adminutil.WriteFileAtomic(outPath, b, 0o644); err != nil {
+				return "", nil, err
+			}
 			return outName, meta, nil
 		}
 		// Fallback: keep original content and original extension to avoid misleading .webp name
@@ -160,7 +177,9 @@ func ProcessAndSaveAsset(base, rel, desired string, data []byte, extHint, conten
 		// Rebuild final path/name with original extension
 		outName = adminutil.SanitizeFilename(desired) + origExt
 		outPath = filepath.Join(outDir, outName)
-		if err := os.WriteFile(outPath, data, 0o644); err != nil {
+		// Atomic: the asset tree is served publicly while it is rewritten, and
+		// os.WriteFile truncates first — a reader in between gets a broken image.
+		if err := adminutil.WriteFileAtomic(outPath, data, 0o644); err != nil {
 			return "", nil, err
 		}
 		log.Printf("ffmpeg not found: saved original animated image as %s", outName)
@@ -196,12 +215,15 @@ func ProcessAndSaveAsset(base, rel, desired string, data []byte, extHint, conten
 		meta["format"] = format
 	}
 	outImg := ResizeToMinSide1080(img)
-	out, err := os.Create(outPath)
-	if err != nil {
+	// Encode into memory first, then write atomically: os.Create truncated the
+	// existing asset before the encode had a chance to fail, so a failure left a
+	// half-written file where a working image used to be — in a tree that is
+	// served to the public.
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, outImg, &jpeg.Options{Quality: 95}); err != nil {
 		return "", nil, err
 	}
-	defer out.Close()
-	if err := jpeg.Encode(out, outImg, &jpeg.Options{Quality: 95}); err != nil {
+	if err := adminutil.WriteFileAtomic(outPath, buf.Bytes(), 0o644); err != nil {
 		return "", nil, err
 	}
 	return outName, meta, nil
@@ -363,14 +385,29 @@ func FFmpegPath() string {
 // HasFFmpeg reports whether ffmpeg is available.
 func HasFFmpeg() bool { return FFmpegPath() != "" }
 
+// ffmpegTimeout bounds one transcode.
+//
+// The admin server runs with WriteTimeout deliberately set to 0 (multi-hour
+// build uploads), so nothing else would ever stop a wedged ffmpeg: the process
+// stayed alive holding CPU, memory and its input file until the box was
+// restarted. Converting a single animated image is a matter of seconds; five
+// minutes is a generous ceiling.
+const ffmpegTimeout = 5 * time.Minute
+
 func runFFmpegTranscode(args []string) error {
 	exe := FFmpegPath()
 	if exe == "" {
 		return fmt.Errorf("ffmpeg not found")
 	}
-	cmd := exec.Command(exe, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), ffmpegTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, exe, args...)
 	// Capture combined stdout/stderr to include in logs
 	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		log.Printf("ffmpeg timed out after %s exe=%q args=%q output:\n%s", ffmpegTimeout, exe, args, string(out))
+		return fmt.Errorf("ffmpeg timed out after %s", ffmpegTimeout)
+	}
 	if err != nil {
 		exitCode := 0
 		if ee, ok := err.(*exec.ExitError); ok {
