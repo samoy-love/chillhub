@@ -74,7 +74,7 @@ func (h *Handlers) Get(w http.ResponseWriter, r *http.Request) {
 		b, _ := json.MarshalIndent(struct {
 			Items []Entry `json:"items"`
 		}{Items: items}, "", "  ")
-		_ = os.WriteFile(p, b, 0o644)
+		_ = adminutil.WriteFileAtomic(p, b, 0o644)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(b)
 		return
@@ -106,7 +106,9 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b, _ := json.MarshalIndent(payload, "", "  ")
-	if err := os.WriteFile(h.registryPath(), b, 0o644); err != nil {
+	// The launcher reads this registry through the public API; a truncated write
+	// would be served as-is.
+	if err := adminutil.WriteFileAtomic(h.registryPath(), b, 0o644); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

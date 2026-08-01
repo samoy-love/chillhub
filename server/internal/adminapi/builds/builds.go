@@ -162,12 +162,13 @@ func (h *Handlers) writeManifest(m manifest, updateLatest bool) (string, []byte,
 	}
 	outPath := filepath.Join(outDir, m.Version+".json")
 	b, _ := json.MarshalIndent(m, "", "  ")
-	if err := os.WriteFile(outPath, b, 0o644); err != nil {
+	// Atomic: the public API serves these files while they are being written.
+	if err := adminutil.WriteFileAtomic(outPath, b, 0o644); err != nil {
 		return "", nil, err
 	}
 	if updateLatest {
 		bl, _ := json.MarshalIndent(map[string]string{"version": m.Version}, "", "  ")
-		_ = os.WriteFile(filepath.Join(outDir, "latest.json"), bl, 0o644)
+		_ = adminutil.WriteFileAtomic(filepath.Join(outDir, "latest.json"), bl, 0o644)
 	}
 	return outPath, b, nil
 }
@@ -247,8 +248,9 @@ func (h *Handlers) Activate(w http.ResponseWriter, r *http.Request) {
 	}
 	latest := map[string]string{"version": ver}
 	b, _ := json.MarshalIndent(latest, "", "  ")
-	if err := os.WriteFile(filepath.Join(dir, "latest.json"), b, 0o644); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := adminutil.WriteFileAtomic(filepath.Join(dir, "latest.json"), b, 0o644); err != nil {
+		log.Printf("[builds] activate %s/%s: %v", gid, ver, err)
+		http.Error(w, "failed to activate version", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -313,7 +315,7 @@ func (h *Handlers) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 		} else {
 			newLatest := vers[len(vers)-1]
 			b, _ := json.MarshalIndent(map[string]string{"version": newLatest}, "", "  ")
-			_ = os.WriteFile(latestPath, b, 0o644)
+			_ = adminutil.WriteFileAtomic(latestPath, b, 0o644)
 		}
 	}
 	adminutil.WriteJSON(w, map[string]string{"status": "ok"})

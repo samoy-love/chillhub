@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"ChillHub/server/internal/adminutil"
 )
 
 // meta is the per-article record kept in news_meta.json alongside index.json,
@@ -61,7 +63,7 @@ func writeMeta(d dirs, m map[string]meta) error {
 	if err := os.MkdirAll(d.priv, 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(metaPath(d), b, 0o644); err != nil {
+	if err := adminutil.WriteFileAtomic(metaPath(d), b, 0o644); err != nil {
 		return err
 	}
 	// Drop any legacy copy from the public tree.
