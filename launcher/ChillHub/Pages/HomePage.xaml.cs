@@ -166,6 +166,13 @@ namespace ChillHub.Pages {
         private ActionMode actionMode = ActionMode.Checking;
         private bool hasUpdateError = false;
 
+        /// <summary>
+        /// Игра, на которой сорвалось обновление. «Повторить» относится только к ней:
+        /// раньше флаг сбрасывался лишь в начале StartUpdateAsync, поэтому после неудачи
+        /// на игре A выбор игры B тоже показывал «Повторить» вместо «Играть».
+        /// </summary>
+        private string? updateErrorGameId;
+
         // Loaded срабатывает и при первом показе, и при возврате со страницы игры/новости.
         // Первый раз пропускаем: там уже отрабатывает полная загрузка.
         private bool loadedOnce = false;
@@ -956,8 +963,28 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Сбрасывает «залипший» режим «Повторить» при переходе к другой игре.
+        /// Ошибка обновления относится к конкретной игре, а не ко всей странице.
+        /// </summary>
+        private void ResetUpdateErrorIfGameChanged(string? gid) {
+            if (!this.hasUpdateError || this.isUpdating) {
+                return;
+            }
+
+            if (string.Equals(this.updateErrorGameId, gid, StringComparison.OrdinalIgnoreCase)) {
+                return; // та же игра — «Повторить» по-прежнему уместно
+            }
+
+            this.hasUpdateError = false;
+            this.updateErrorGameId = null;
+            this.ClearErrorDetails();
+        }
+
         private async void GameCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) {
             if (this.GetSelectedGameId() is string gid && !string.IsNullOrWhiteSpace(gid)) {
+                this.ResetUpdateErrorIfGameChanged(gid);
+
                 // Если сейчас не выполняется обновление, сбросим состояние прогресса и статусы
                 if (!this.isUpdating) {
                     this.StatusText.Text = "Готов";
@@ -1251,11 +1278,15 @@ namespace ChillHub.Pages {
         }
 
         private async Task StartUpdateAsync(CancellationToken token) {
+            // Нужен и в catch: по нему запоминаем, к какой игре относится «Повторить»
+            string? currentGid = null;
             try {
                 if (this.GetSelectedGameId() is not string gid || string.IsNullOrWhiteSpace(gid)) {
                     this.StatusText.Text = "Не выбрана игра";
                     return;
                 }
+
+                currentGid = gid;
 
                 // Всегда используем latest; список версий доступен только для просмотра
                 var game = this.games.FirstOrDefault(g => g.GameId == gid);
@@ -1283,6 +1314,7 @@ namespace ChillHub.Pages {
 
                 this.isUpdating = true;
                 this.hasUpdateError = false;
+                this.updateErrorGameId = null;
                 this.SetActionMode(ActionMode.Cancel);
                 this.GameList.IsEnabled = false;
                 this.UpdateProgress.Value = 0;
@@ -1513,10 +1545,12 @@ namespace ChillHub.Pages {
                 // Подпись манифеста не сошлась — это не сетевой сбой, а признак подмены раздачи.
                 // Ни одного файла игры мы ещё не тронули, и не тронем: показываем отдельный текст.
                 this.hasUpdateError = true;
+                this.updateErrorGameId = currentGid;
                 this.ShowUserError(ManifestSignature.UserMessage, ex, "HomePage.StartUpdateAsync.ManifestSignature");
             }
             catch (Exception ex) {
                 this.hasUpdateError = true;
+                this.updateErrorGameId = currentGid;
                 var userMessage = ex is IOException
                     ? "Не удалось записать файлы игры. Проверьте свободное место и права доступа."
                     : "Не удалось завершить обновление. Попробуйте ещё раз.";
