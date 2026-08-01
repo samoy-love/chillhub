@@ -478,12 +478,7 @@ namespace ChillHub {
         /// <param name="manifest">Манифест целевой версии (пустой манифест маркер не обновляет).</param>
         private void MarkAlreadyUpToDate(Manifest manifest) {
             if (manifest.Files.Count > 0 && !string.IsNullOrWhiteSpace(this.remoteVersion)) {
-                try {
-                    var marker = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launcher.version");
-                    System.IO.File.WriteAllText(marker, this.remoteVersion!.Trim(), Utf8NoBom);
-                }
-                catch {
-                }
+                TryWriteVersionMarker(this.remoteVersion!, out _);
             }
 
             ResetUpdateAttempts();
@@ -494,6 +489,38 @@ namespace ChillHub {
             this.StatusText.Text = "Файлы лаунчера уже соответствуют новой версии — обновление не требуется.";
             this.PrimaryBtn.Content = "Продолжить";
             this.PrimaryBtn.IsEnabled = true;
+        }
+
+        /// <summary>
+        /// A7. Пишет маркер версии АТОМАРНО.
+        /// <para>
+        /// File.WriteAllText — это truncate + write: между ними файл существует и он
+        /// пустой. Обрыв ровно в этот момент оставляет пустой launcher.version, а
+        /// пустой маркер лаунчер читает как «версия неизвестна» — и обновление после
+        /// этого не предлагается уже НИКОГДА. Поэтому содержимое сначала целиком
+        /// ложится во временный файл рядом и лишь потом подменяет маркер.
+        /// </para>
+        /// </summary>
+        /// <param name="version">Версия для записи.</param>
+        /// <param name="error">Текст ошибки, если запись не удалась.</param>
+        /// <returns>true, если маркер записан.</returns>
+        private static bool TryWriteVersionMarker(string version, out string error) {
+            error = string.Empty;
+            try {
+                var marker = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launcher.version");
+                AtomicFile.WriteAllText(marker, (version ?? string.Empty).Trim(), Utf8NoBom);
+                return true;
+            }
+            catch (Exception ex) {
+                error = ex.Message;
+                try {
+                    Core.Logging.Logger.Error(ex, "UpdateWindow.WriteVersionMarker");
+                }
+                catch {
+                }
+
+                return false;
+            }
         }
 
         private void ExitBtn_Click(object sender, RoutedEventArgs e) {
