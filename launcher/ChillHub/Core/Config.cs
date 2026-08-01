@@ -16,14 +16,16 @@ namespace ChillHub.Core {
 
         public int DownloadThreads { get; set; } = 8; // 2..16
 
-        public string Theme { get; set; } = "dark"; // light | dark (default: dark)
-
         public string ApiBaseUrl { get; set; } = "https://launcher.samoy.love"; // base URL for server API/content
 
         public string LastGameId { get; set; } = string.Empty; // last launched game id
 
+        // Автоматическая отправка отчётов об ошибках (необработанные исключения + диагностика).
+        // По умолчанию true, чтобы не менять текущее поведение при обновлении.
+        // На ручную отправку обратной связи не влияет.
+        public bool AutoErrorReports { get; set; } = true;
+
         public static string DefaultGamesPath() {
-            var dDrive = Path.GetPathRoot(@"D:\")?.TrimEnd(Path.DirectorySeparatorChar);
             if (Directory.Exists(@"D:\")) {
                 return @"D:\Games\ChillHub";
             }
@@ -33,18 +35,28 @@ namespace ChillHub.Core {
     }
 
     public static class ConfigService {
-        private static readonly string AppDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChillHub");
+        // Пользовательские данные держим в %APPDATA%\ChillHub (роуминг-состояние: очередь фидбэка, счётчики отчётов).
+        // %LOCALAPPDATA%\ChillHub — это КАТАЛОГ УСТАНОВКИ лаунчера (там ChillHub.exe, *.dll, runtimes/),
+        // поэтому конфиг оттуда попадал в пакет сборки и в манифест обновления -> вечный цикл самообновления.
+        private static readonly string AppDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ChillHub");
         private static readonly string ConfigPath = Path.Combine(AppDir, "config.json");
+
+        // Старое (унаследованное) расположение конфига — только для чтения при миграции.
+        private static readonly string LegacyAppDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChillHub");
+        private static readonly string LegacyConfigPath = Path.Combine(LegacyAppDir, "config.json");
+
         private static AppConfig cache = null!;
 
         public static AppConfig Load() {
             try {
+                MigrateLegacyConfig();
+
                 if (File.Exists(ConfigPath)) {
                     var json = File.ReadAllText(ConfigPath);
                     var cfg = JsonSerializer.Deserialize<AppConfig>(json) ?? new AppConfig();
                     Clamp(cfg);
                     cache = cfg;
-                    ApplyTheme(cfg.Theme);
+                    ApplyTheme();
                     return cfg;
                 }
             }
@@ -63,9 +75,46 @@ namespace ChillHub.Core {
                 Directory.CreateDirectory(AppDir);
                 var json = JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(ConfigPath, json);
-                ApplyTheme(cfg.Theme);
+                ApplyTheme();
             }
             catch {
+            }
+        }
+
+        /// <summary>
+        /// Одноразовый перенос config.json из %LOCALAPPDATA%\ChillHub в %APPDATA%\ChillHub.
+        /// Идемпотентно: если новый файл уже есть — ничего не делает.
+        /// Старый файл НЕ удаляем намеренно: его ещё может читать не обновившаяся версия лаунчера,
+        /// и апдейтер держит config.json в списке --preserve. Удаление сделает откат/старый билд неработающим.
+        /// Все ошибки (нет прав, файл занят) глушим — миграция не должна ломать запуск.
+        /// </summary>
+        private static void MigrateLegacyConfig() {
+            try {
+                if (File.Exists(ConfigPath)) {
+                    return;
+                }
+
+                if (!File.Exists(LegacyConfigPath)) {
+                    return;
+                }
+
+                var legacyJson = File.ReadAllText(LegacyConfigPath);
+
+                // Проверяем, что старый файл вообще парсится: мусор переносить смысла нет.
+                var probe = JsonSerializer.Deserialize<AppConfig>(legacyJson);
+                if (probe == null) {
+                    return;
+                }
+
+                Directory.CreateDirectory(AppDir);
+
+                // Пишем уже нормализованную модель: устаревшие поля (напр. Theme) отбрасываются.
+                Clamp(probe);
+                File.WriteAllText(ConfigPath, JsonSerializer.Serialize(probe, new JsonSerializerOptions { WriteIndented = true }));
+                Debug.WriteLine("[Config] Мигрировали config.json из LOCALAPPDATA в APPDATA");
+            }
+            catch (Exception ex) {
+                Debug.WriteLine($"[Config] Ошибка миграции конфига: {ex.Message}");
             }
         }
 
@@ -90,11 +139,6 @@ namespace ChillHub.Core {
                 cfg.GamesPath = AppConfig.DefaultGamesPath();
             }
 
-            if (string.IsNullOrWhiteSpace(cfg.Theme)) {
-                cfg.Theme = "dark";
-            }
-
-            cfg.Theme = cfg.Theme.Equals("dark", StringComparison.OrdinalIgnoreCase) ? "dark" : "light";
             if (string.IsNullOrWhiteSpace(cfg.ApiBaseUrl)) {
                 cfg.ApiBaseUrl = "https://launcher.samoy.love";
             }
@@ -102,7 +146,10 @@ namespace ChillHub.Core {
 
         public static AppConfig Current => cache ?? Load();
 
-        public static void ApplyTheme(string theme) {
+        /// <summary>
+        /// Применяет единственную тёмную тему. Выбор темы из конфига убран — тема одна.
+        /// </summary>
+        public static void ApplyTheme() {
             try {
                 var app = Application.Current;
                 if (app == null) {
