@@ -18,9 +18,10 @@
 //
 // The public endpoint is polled by every client at startup and periodically
 // afterwards, so it must stay cheap. It is: the parsed state is cached in
-// memory and only re-read when the file's mtime or size changes, which makes a
-// poll one os.Stat plus a small JSON encode. Nothing is allocated per game and
-// nothing touches the manifests tree.
+// memory and only re-read when the file's mtime or size changes — or when the
+// cache entry is older than cacheTTL — which makes a poll one os.Stat plus a
+// small JSON encode. Nothing is allocated per game and nothing touches the
+// manifests tree.
 //
 // AUTOMATIC RESET. The client is not asked to run a timer against a deadline;
 // the server decides. Effective() compares startsAt/endsAt with the current
@@ -44,6 +45,11 @@ import (
 // maxReasonBytes bounds the operator-supplied reason; it is displayed verbatim
 // in a client banner, and the file is re-read on every cache miss.
 const maxReasonBytes = 500
+
+// cacheTTL is how long a parsed state may be reused without re-reading the
+// file even when mtime and size are unchanged. Two seconds is invisible to an
+// operator turning maintenance on and cheap for the poll rate the launcher uses.
+const cacheTTL = 2 * time.Second
 
 // Blocks says which client actions the mode forbids. All three are independent:
 // a release can block installs while letting people keep playing what they
@@ -99,6 +105,7 @@ type Store struct {
 	cached    State
 	cachedMod time.Time
 	cachedLen int64
+	cachedAt  time.Time
 	valid     bool
 
 	// CurrentUser resolves the acting admin for audit log lines. It may be nil.
@@ -134,7 +141,15 @@ func (s *Store) loadLocked() State {
 		s.cached = State{}
 		return State{}
 	}
-	if s.valid && st.ModTime().Equal(s.cachedMod) && st.Size() == s.cachedLen {
+	// mtime+size alone is not a reliable change signal: many filesystems store
+	// mtime with coarse granularity, so two edits inside one tick that happen to
+	// produce the same length (flipping a flag, swapping one character of the
+	// reason) look identical — and the PUBLIC api process, which has its own
+	// copy of this cache and never sees the admin write, would keep serving the
+	// old state indefinitely. The TTL puts a hard ceiling on that staleness
+	// while keeping a poll to one os.Stat in the common case.
+	if s.valid && st.ModTime().Equal(s.cachedMod) && st.Size() == s.cachedLen &&
+		time.Since(s.cachedAt) < cacheTTL {
 		return s.cached
 	}
 	b, err := os.ReadFile(s.path())
@@ -148,6 +163,7 @@ func (s *Store) loadLocked() State {
 		return State{}
 	}
 	s.cached, s.cachedMod, s.cachedLen, s.valid = v, st.ModTime(), st.Size(), true
+	s.cachedAt = time.Now()
 	return v
 }
 
