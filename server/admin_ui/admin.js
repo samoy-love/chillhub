@@ -200,8 +200,8 @@ async function lnManifestsReload(){
   const rows = items.map(it=>{
     const ver = it.version || '';
     const isLatest = latest && ver === latest;
-    const actBtn = isLatest ? '<span class="badge text-bg-success">latest</span>' : ('<button data-ver="'+ver+'" class="btn btn-sm btn-outline-primary ln-activate">Сделать активной</button>');
-    const delBtn = '<button data-ver="'+ver+'" class="btn btn-sm btn-outline-danger ms-2 ln-delete">Удалить</button>';
+    const actBtn = isLatest ? '<span class="badge text-bg-success">latest</span>' : ('<button data-ver="'+escapeHtml(ver)+'" class="btn btn-sm btn-outline-primary ln-activate">Сделать активной</button>');
+    const delBtn = '<button data-ver="'+escapeHtml(ver)+'" class="btn btn-sm btn-outline-danger ms-2 ln-delete">Удалить</button>';
     return '<tr><td class="text-monospace">'+escapeHtml(ver)+'</td><td>'+(isLatest?'<span class="text-success">Активна</span>':'<span class="text-body-secondary">—</span>')+'</td><td class="text-end">'+actBtn+delBtn+'</td></tr>';
   }).join('');
   root.innerHTML = '<div class="table-responsive"><table class="table table-dark table-striped align-middle"><thead><tr><th>Версия</th><th>Статус</th><th class="text-end"></th></tr></thead><tbody>'+rows+'</tbody></table></div>';
@@ -678,8 +678,8 @@ async function manifestsReload(){
   const rows = items.map(it=>{
     const ver = it.version || '';
     const isLatest = latest && ver === latest;
-    const actBtn = isLatest ? '<span class="badge text-bg-success">latest</span>' : ('<button data-ver="'+ver+'" class="btn btn-sm btn-outline-primary man-activate">Сделать активной</button>');
-    const delBtn = '<button data-ver="'+ver+'" class="btn btn-sm btn-outline-danger ms-2 man-delete">Удалить</button>';
+    const actBtn = isLatest ? '<span class="badge text-bg-success">latest</span>' : ('<button data-ver="'+escapeHtml(ver)+'" class="btn btn-sm btn-outline-primary man-activate">Сделать активной</button>');
+    const delBtn = '<button data-ver="'+escapeHtml(ver)+'" class="btn btn-sm btn-outline-danger ms-2 man-delete">Удалить</button>';
     return '<tr><td class="text-monospace">'+escapeHtml(ver)+'</td><td>'+(isLatest?'<span class="text-success">Активна</span>':'<span class="text-body-secondary">—</span>')+'</td><td class="text-end">'+actBtn+delBtn+'</td></tr>';
   }).join('');
   root.innerHTML = '<div class="table-responsive"><table class="table table-dark table-striped align-middle"><thead><tr><th>Версия</th><th>Статус</th><th class="text-end"></th></tr></thead><tbody>'+rows+'</tbody></table></div>';
@@ -1419,7 +1419,7 @@ async function openExePicker(gameId, targetInput){
     const files = Array.isArray(manifest?.files)? manifest.files: [];
     const exeFiles = files.map(f=> String(f.path||'')).filter(p=> /\.exe$/i.test(p));
     const el = document.createElement('div'); el.className='modal fade'; el.tabIndex=-1;
-    const list = exeFiles.map(p=> '<li class="list-group-item list-group-item-action" data-p="'+p+'"><code>'+escapeHtml(p)+'</code></li>').join('') || '<li class="list-group-item">.exe не найдены</li>';
+    const list = exeFiles.map(p=> '<li class="list-group-item list-group-item-action" data-p="'+escapeHtml(p)+'"><code>'+escapeHtml(p)+'</code></li>').join('') || '<li class="list-group-item">.exe не найдены</li>';
     el.innerHTML = '\n<div class="modal-dialog"><div class="modal-content">\n  <div class="modal-header"><h5 class="modal-title">Выбор исполняемого файла для '+escapeHtml(gameId)+'</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>\n  <div class="modal-body"><ul class="list-group">'+list+'</ul></div>\n  <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Закрыть</button></div>\n</div></div>';
     document.body.appendChild(el);
     const modal = window.bootstrap ? new window.bootstrap.Modal(el) : null; if(modal) modal.show();
@@ -1531,7 +1531,7 @@ function openPickUploadDialog(mode){
     const segs = pickPath? pickPath.split('/') : [];
     const parts = ['<a href="#" data-p="" class="text-decoration-none">assets</a>'];
     let acc = '';
-    segs.forEach((s,i)=>{ acc += (i?'/':'')+s; parts.push(' / <a href="#" data-p="'+acc+'" class="text-decoration-none">'+s+'</a>'); });
+    segs.forEach((s,i)=>{ acc += (i?'/':'')+s; parts.push(' / <a href="#" data-p="'+escapeHtml(acc)+'" class="text-decoration-none">'+escapeHtml(s)+'</a>'); });
     bc.innerHTML = parts.join('');
     bc.querySelectorAll('a').forEach(a=> a.addEventListener('click', (e)=>{ e.preventDefault(); const p=e.currentTarget.getAttribute('data-p'); pickPath=p||''; pathInput.value=pickPath; fetchPickList(); }));
   }
@@ -1680,7 +1680,7 @@ function openPasteUploadDialog(file, mode){
     const segs = pastePath? pastePath.split('/') : [];
     const parts = ['<a href="#" data-p="" class="text-decoration-none">assets</a>'];
     let acc = '';
-    segs.forEach((s,i)=>{ acc += (i?'/':'')+s; parts.push(' / <a href="#" data-p="'+acc+'" class="text-decoration-none">'+s+'</a>'); });
+    segs.forEach((s,i)=>{ acc += (i?'/':'')+s; parts.push(' / <a href="#" data-p="'+escapeHtml(acc)+'" class="text-decoration-none">'+escapeHtml(s)+'</a>'); });
     bc.innerHTML = parts.join('');
     bc.querySelectorAll('a').forEach(a=> a.addEventListener('click', (e)=>{ e.preventDefault(); const p=e.currentTarget.getAttribute('data-p'); pastePath=p||''; pathInput.value=pastePath; fetchPasteList(); }));
   }
@@ -2561,7 +2561,7 @@ function renderGalleryBreadcrumbs(){
   const segs = galleryPath? galleryPath.split('/') : [];
   const parts = ['<a href="#" data-p="" class="text-decoration-none">assets</a>'];
   let acc = '';
-  segs.forEach((s,i)=>{ acc += (i?'/':'')+s; parts.push(' / <a href="#" data-p="'+acc+'" class="text-decoration-none">'+s+'</a>'); });
+  segs.forEach((s,i)=>{ acc += (i?'/':'')+s; parts.push(' / <a href="#" data-p="'+escapeHtml(acc)+'" class="text-decoration-none">'+escapeHtml(s)+'</a>'); });
   bc.innerHTML = parts.join('');
   bc.querySelectorAll('a').forEach(a=> a.addEventListener('click', (e)=>{ e.preventDefault(); const p=e.currentTarget.getAttribute('data-p'); gallerySetPath(p); galleryFetchAndRender(); }));
 }
