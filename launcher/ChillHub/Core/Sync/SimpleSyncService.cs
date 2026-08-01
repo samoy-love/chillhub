@@ -30,6 +30,9 @@ namespace ChillHub.Core.Sync {
         /// </summary>
         public const string UpdateMarkerFileName = ".updating";
 
+        /// <summary>Минимальный интервал между отчётами о прогрессе скачивания, мс.</summary>
+        private const int ProgressThrottleMs = 100;
+
         private readonly HttpClient http;
 
         public SimpleSyncService(HttpClient? http = null) {
@@ -307,6 +310,32 @@ namespace ChillHub.Core.Sync {
             // Скачивание недостающих/изменённых (многопоточно)
             progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = 0, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
             var degree = Math.Clamp(ConfigService.Current.DownloadThreads, 2, 16);
+
+            // Отчёт о прогрессе шёл на каждые 256 КБ в каждом потоке: при восьми потоках это
+            // сотни обращений к диспетчеру в секунду, и UI занимался только перерисовкой
+            // строки скорости. Глазу хватает десяти обновлений в секунду.
+            var lastReportTicks = 0L;
+            void ReportDownloadProgress() {
+                var now = Environment.TickCount64;
+                var last = Interlocked.Read(ref lastReportTicks);
+                if (now - last < ProgressThrottleMs) {
+                    return;
+                }
+
+                // Отчёт делает тот поток, который выиграл обмен: остальные просто пропускают такт
+                if (Interlocked.CompareExchange(ref lastReportTicks, now, last) != last) {
+                    return;
+                }
+
+                progress.Report(new SyncProgress {
+                    Stage = "Downloading",
+                    BytesDownloaded = Interlocked.Read(ref downloaded),
+                    TotalBytes = total,
+                    FilesDownloaded = Volatile.Read(ref filesDone),
+                    TotalFiles = totalFiles,
+                });
+            }
+
             using (var sem = new SemaphoreSlim(degree)) {
                 var tasks = new List<Task>();
                 try {
@@ -362,7 +391,7 @@ namespace ChillHub.Core.Sync {
                                                 while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false)) > 0) {
                                                     await dst.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
                                                     Interlocked.Add(ref downloaded, read);
-                                                    progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+                                                    ReportDownloadProgress();
                                                 }
 
                                                 break; // success
@@ -426,7 +455,7 @@ namespace ChillHub.Core.Sync {
                                 }
                                 finally {
                                     Interlocked.Increment(ref filesDone);
-                                    progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+                                    ReportDownloadProgress();
                                     sem.Release();
                                 }
                             }, ct));
@@ -450,6 +479,10 @@ namespace ChillHub.Core.Sync {
                     throw;
                 }
             }
+
+            // Итоговые цифры скачивания — уже без троттлинга, иначе счётчик файлов
+            // может замереть на предпоследнем значении
+            progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
 
             // Верификация (хеши пропустим на моках)
             progress.Report(new SyncProgress { Stage = "Verifying", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
