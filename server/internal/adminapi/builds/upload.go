@@ -13,14 +13,14 @@ import (
 	"ChillHub/server/internal/adminutil"
 )
 
-// uploadFormMemory is how much of a multipart body ParseMultipartForm may keep
-// in RAM; everything beyond it is spooled to a temp file. It is NOT a limit on
-// the upload size — nginx allows 30 GB bodies here.
+// tmpDir is the upload scratch directory INSIDE the content root.
 //
-// It used to be 1 GiB, which meant every concurrent upload could pin a gigabyte
-// of heap on a box that also serves the public endpoints. The ZIP is streamed to
-// disk immediately afterwards anyway, so a small window costs nothing.
-const uploadFormMemory = 8 << 20 // 8 MiB
+// It must not be the system temp directory: the ZIPs are up to 30 GB (nginx
+// client_max_body_size), so spooling them to /tmp fills the root partition
+// while the free-space precheck happily measures the — much larger — content
+// volume. Keeping the scratch file next to the content also makes every
+// subsequent move a same-volume rename.
+func (h *Handlers) tmpDir() string { return filepath.Join(h.root, "tmp") }
 
 // Upload handles a plain multipart ZIP upload and publishes a release
 // (launcher or game), returning the manifest JSON.
@@ -28,14 +28,28 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	if !adminutil.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	if err := r.ParseMultipartForm(uploadFormMemory); err != nil {
-		http.Error(w, "multipart parse error: "+err.Error(), http.StatusBadRequest)
+	// The body is read part by part rather than through ParseMultipartForm:
+	// ParseMultipartForm spools everything above its memory budget into
+	// os.TempDir(), which for a 30 GB archive meant a second full copy on the
+	// root partition on top of the one we write ourselves.
+	var tmpName string
+	defer func() {
+		if tmpName != "" {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	parts, code, err := readUploadParts(r, h.tmpDir(), nil)
+	if parts != nil {
+		tmpName = parts.tmpName
+	}
+	if err != nil {
+		http.Error(w, err.Error(), code)
 		return
 	}
-	kind := r.FormValue("kind")
-	gid := r.FormValue("gameId")
-	ver := r.FormValue("version")
-	upd := r.FormValue("updateLatest") == "1"
+	kind := parts.kind
+	gid := parts.gid
+	ver := parts.ver
+	upd := parts.updateLatest
 	if kind == "" {
 		http.Error(w, "missing kind (launcher|game)", http.StatusBadRequest)
 		return
@@ -61,13 +75,11 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f, hdr, err := r.FormFile("zip")
-	if err != nil {
-		http.Error(w, "missing zip: "+err.Error(), http.StatusBadRequest)
+	if tmpName == "" {
+		http.Error(w, "missing zip part", http.StatusBadRequest)
 		return
 	}
-	defer f.Close()
-	log.Printf("/admin/upload: kind=%s gid=%s ver=%s zip=%s", kind, gid, ver, hdr.Filename)
+	log.Printf("/admin/upload: kind=%s gid=%s ver=%s zip=%s bytes=%d", kind, gid, ver, parts.filename, parts.saved)
 
 	// Extract into a staging directory next to the published one, exactly like
 	// UploadStream and UploadProcessStream do. Writing straight into
@@ -86,24 +98,11 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Save zip to temp and extract
-	tmpZip, err := os.CreateTemp("", "upload-*.zip")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	tmpName := tmpZip.Name()
-	if _, err := io.Copy(tmpZip, f); err != nil {
-		tmpZip.Close()
-		os.Remove(tmpName)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	tmpZip.Close()
-	defer os.Remove(tmpName)
-
 	// Same precheck as the streaming paths: refuse an archive that cannot fit
 	// rather than filling the volume and failing halfway through extraction.
+	// filesRoot is under the content root, i.e. the same volume the ZIP was
+	// just written to, so this now measures the volume that will actually be
+	// filled.
 	if needBytes, err := estimateZipUncompressedSize(tmpName); err == nil {
 		if freeBytes, ferr := freeSpaceBytes(filesRoot); ferr == nil && freeBytes > 0 && needBytes > freeBytes {
 			http.Error(w, fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes), http.StatusInsufficientStorage)
@@ -148,6 +147,93 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
+// uploadParts is the decoded multipart body of a publish request: the small
+// form fields, plus the ZIP already spooled to disk.
+type uploadParts struct {
+	kind         string
+	gid          string
+	ver          string
+	updateLatest bool
+	filename     string
+	tmpName      string
+	saved        int64
+}
+
+// maxUploadFieldBytes caps the small text fields of a publish request. They are
+// identifiers a few dozen bytes long; the cap only stops a malformed body from
+// being read into memory in full.
+const maxUploadFieldBytes = 1 << 20
+
+// readUploadParts streams a multipart publish request: text fields are read
+// into memory under a cap, the "zip" part goes straight to a temp file in
+// tmpDir. onZipSaved, when set, is called right after the archive has landed
+// (the NDJSON handler uses it to emit its zipSaved event).
+//
+// It returns the HTTP status to answer with alongside the error. On failure the
+// temp file is left in parts.tmpName for the caller's cleanup defer, which is
+// already armed before this is called.
+func readUploadParts(r *http.Request, tmpDir string, onZipSaved func(filename string, n int64)) (*uploadParts, int, error) {
+	out := &uploadParts{}
+	mr, err := r.MultipartReader()
+	if err != nil {
+		return out, http.StatusBadRequest, fmt.Errorf("multipart reader error: %w", err)
+	}
+	field := func(part io.Reader) string {
+		b, _ := io.ReadAll(io.LimitReader(part, maxUploadFieldBytes))
+		return strings.TrimSpace(string(b))
+	}
+	for {
+		part, perr := mr.NextPart()
+		if perr == io.EOF {
+			break
+		}
+		if perr != nil {
+			return out, http.StatusBadRequest, perr
+		}
+		switch strings.TrimSpace(part.FormName()) {
+		case "":
+			io.Copy(io.Discard, part)
+		case "kind":
+			out.kind = strings.ToLower(field(part))
+		case "gameId":
+			out.gid = field(part)
+		case "version":
+			out.ver = field(part)
+		case "updateLatest":
+			out.updateLatest = field(part) == "1"
+		case "zip":
+			if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+				part.Close()
+				return out, http.StatusInternalServerError, err
+			}
+			tmpZip, err := os.CreateTemp(tmpDir, "upload-*.zip")
+			if err != nil {
+				part.Close()
+				return out, http.StatusInternalServerError, err
+			}
+			out.tmpName = tmpZip.Name()
+			out.filename = part.FileName()
+			// A larger buffer pays off on multi-gigabyte uploads.
+			buf := make([]byte, 4<<20) // 4 MiB
+			n, cerr := io.CopyBuffer(tmpZip, part, buf)
+			_ = tmpZip.Close()
+			_ = part.Close()
+			if cerr != nil {
+				return out, http.StatusInternalServerError, cerr
+			}
+			out.saved = n
+			if onZipSaved != nil {
+				onZipSaved(out.filename, n)
+			}
+		default:
+			// Consume but ignore other fields
+			io.Copy(io.Discard, part)
+		}
+		_ = part.Close()
+	}
+	return out, http.StatusOK, nil
+}
+
 // UploadStream uploads a ZIP and streams progress (NDJSON): start, unzip
 // entries, compose files, done.
 func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
@@ -166,27 +252,10 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 	nw := newNDJSONWriter(w)
 	fl := adminutil.Flusher(nw)
 
-	// Prefer true streaming to avoid extra disk copies and huge memory use
-	mr, err := r.MultipartReader()
-	if err != nil {
-		nw.fail(http.StatusBadRequest, "multipart reader error: "+err.Error())
-		return
-	}
-
-	// Collect fields and stream the file part directly to temp ZIP on disk
-	var (
-		kind         string
-		gid          string
-		ver          string
-		upd          bool
-		origFilename string
-		tmpName      string
-		saved        int64
-	)
-
 	// The temp ZIP is this handler's alone: whatever happens below — a rejected
 	// parameter, a full disk, a broken archive — it must not survive the request.
 	// Only the successful path removes it early (and a second Remove is a no-op).
+	var tmpName string
 	defer func() {
 		if tmpName != "" {
 			_ = os.Remove(tmpName)
@@ -195,80 +264,26 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 
 	// Optional precheck: ensure enough temp space based on Content-Length if known
 	if r.ContentLength > 0 {
-		tmpDir := filepath.Join(h.root, "tmp")
-		if err := os.MkdirAll(tmpDir, 0o755); err == nil {
-			if free, ferr := freeSpaceBytes(tmpDir); ferr == nil && free > 0 && uint64(r.ContentLength) > free {
+		if err := os.MkdirAll(h.tmpDir(), 0o755); err == nil {
+			if free, ferr := freeSpaceBytes(h.tmpDir()); ferr == nil && free > 0 && uint64(r.ContentLength) > free {
 				nw.fail(http.StatusInsufficientStorage, fmt.Sprintf("insufficient temp space: need %d bytes, have %d bytes", r.ContentLength, free))
 				return
 			}
 		}
 	}
 
-	// Iterate parts
-	for {
-		part, perr := mr.NextPart()
-		if perr == io.EOF {
-			break
-		}
-		if perr != nil {
-			nw.fail(http.StatusBadRequest, perr.Error())
-			return
-		}
-		name := strings.TrimSpace(part.FormName())
-		if name == "" {
-			// skip unnamed parts
-			io.Copy(io.Discard, part)
-			_ = part.Close()
-			continue
-		}
-		switch name {
-		case "kind":
-			b, _ := io.ReadAll(io.LimitReader(part, 1<<20))
-			kind = strings.ToLower(strings.TrimSpace(string(b)))
-		case "gameId":
-			b, _ := io.ReadAll(io.LimitReader(part, 1<<20))
-			gid = strings.TrimSpace(string(b))
-		case "version":
-			b, _ := io.ReadAll(io.LimitReader(part, 1<<20))
-			ver = strings.TrimSpace(string(b))
-		case "updateLatest":
-			b, _ := io.ReadAll(io.LimitReader(part, 1<<20))
-			upd = strings.TrimSpace(string(b)) == "1"
-		case "zip":
-			// Create temp dir and file once we hit the file part; stream directly
-			tmpDir := filepath.Join(h.root, "tmp")
-			if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-				nw.fail(http.StatusInternalServerError, err.Error())
-				part.Close()
-				return
-			}
-			tmpZip, err := os.CreateTemp(tmpDir, "upload-*.zip")
-			if err != nil {
-				nw.fail(http.StatusInternalServerError, err.Error())
-				part.Close()
-				return
-			}
-			tmpName = tmpZip.Name()
-			origFilename = part.FileName()
-			// Copy with a larger buffer for better throughput on big uploads
-			buf := make([]byte, 4<<20) // 4 MiB
-			n, cerr := io.CopyBuffer(tmpZip, part, buf)
-			// Close resources
-			_ = tmpZip.Close()
-			_ = part.Close()
-			if cerr != nil {
-				nw.fail(http.StatusInternalServerError, cerr.Error())
-				return
-			}
-			saved = n
-			fmt.Fprintf(nw, "{\"type\":\"zipSaved\",\"filename\":%q,\"bytes\":%d}\n", origFilename, saved)
-			fl.Flush()
-		default:
-			// Consume but ignore other fields
-			io.Copy(io.Discard, part)
-		}
-		_ = part.Close()
+	parts, code, err := readUploadParts(r, h.tmpDir(), func(filename string, n int64) {
+		fmt.Fprintf(nw, "{\"type\":\"zipSaved\",\"filename\":%q,\"bytes\":%d}\n", filename, n)
+		fl.Flush()
+	})
+	if parts != nil {
+		tmpName = parts.tmpName
 	}
+	if err != nil {
+		nw.fail(code, err.Error())
+		return
+	}
+	kind, gid, ver, upd := parts.kind, parts.gid, parts.ver, parts.updateLatest
 
 	if kind == "launcher" {
 		gid = "launcher"

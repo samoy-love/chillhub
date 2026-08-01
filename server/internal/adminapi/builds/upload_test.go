@@ -126,6 +126,34 @@ func TestUploadFailureKeepsPreviousVersion(t *testing.T) {
 	}
 }
 
+// The plain upload must spool the archive inside the content root, not into
+// the system temp directory: a 30 GB body would otherwise fill the root
+// partition while the free-space precheck measures the content volume.
+func TestUploadSpoolsIntoContentRootAndCleansUp(t *testing.T) {
+	root := t.TempDir()
+	sysTmp := t.TempDir()
+	// os.CreateTemp("") would land here; nothing must.
+	t.Setenv("TMPDIR", sysTmp)
+	t.Setenv("TMP", sysTmp)
+	t.Setenv("TEMP", sysTmp)
+	h := New(root)
+
+	w := httptest.NewRecorder()
+	h.Upload(w, uploadRequest(t, "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "hello"})))
+	if w.Code != http.StatusOK {
+		t.Fatalf("upload failed: %d %s", w.Code, w.Body.String())
+	}
+	if entries, err := os.ReadDir(sysTmp); err == nil && len(entries) != 0 {
+		t.Fatalf("upload wrote to the system temp dir: %v", entries)
+	}
+	// The scratch copy must not survive the request either.
+	if entries, err := os.ReadDir(filepath.Join(root, "tmp")); err == nil {
+		for _, e := range entries {
+			t.Fatalf("temp zip left behind: %s", e.Name())
+		}
+	}
+}
+
 // assertNoStagingLeftovers fails if any *.tmp-* staging directory survived.
 func assertNoStagingLeftovers(t *testing.T, parent string) {
 	t.Helper()
