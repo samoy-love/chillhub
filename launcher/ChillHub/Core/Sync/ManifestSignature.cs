@@ -68,7 +68,7 @@ namespace ChillHub.Core.Sync {
         /// режиме это предупреждение, в строгом — отказ.
         /// </para>
         /// </summary>
-        public const string PublicKeyBase64 = "";
+        public const string PublicKeyBase64 = "jMkDIZ6gbdU5KEQNMRgOcDZf5JUNxEHrgFCPu11tvok=";
 
         /// <summary>
         /// Имя переменной окружения, включающей строгий режим (значение "1", "true" или "yes").
