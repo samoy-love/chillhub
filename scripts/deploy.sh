@@ -8,9 +8,14 @@
 # - (New) Manifest-based integrity verification (site/admin_ui/bin/systemd)
 #
 # Usage:
+#   # Секреты — через окружение (И14): аргументы командной строки видны в `ps`
+#   # любому пользователю хоста, а на этом хосте живут ещё три проекта.
+#   CHILLHUB_JWT_SECRET='...' \
+#   CHILLHUB_ADMIN_PASSWORD_BCRYPT='$2y$12$...' \
 #   bash ./scripts/deploy.sh \
 #     [--branch <name>] [--no-build] [--repo-dir <path>] \
-#     [--jwt-secret <val>] [--admin-user <val>] \
+#     [--admin-user <val>] \
+#     [--jwt-secret <val>] \
 #     [--admin-pass-bcrypt <val>] [--admin-pass <val>] \
 #     [--cookie-domain <val>] [--cookie-secure <true|false>] \
 #     [--downloads-dir <path>] \
@@ -54,6 +59,36 @@ ARCH="auto"   # auto|amd64|arm64
 need_cmd(){ command -v "$1" >/dev/null 2>&1 || { err "Missing required command: $1"; exit 1; }; }
 for c in git rsync sudo nginx systemctl curl sha256sum; do need_cmd "$c"; done
 
+# И14: СЕКРЕТЫ БЕРУТСЯ ИЗ ОКРУЖЕНИЯ, А НЕ ИЗ АРГУМЕНТОВ.
+#
+# Аргументы командной строки видны в /proc/<pid>/cmdline и, следовательно, в
+# выводе `ps` ЛЮБОМУ пользователю системы — на хосте, где живут ещё три
+# проекта. Утекали при этом самые чувствительные значения: JWT_SECRET (им
+# подписываются админские сессии) и пароль администратора открытым текстом.
+# Секрет виден в ps всё время работы деплоя, то есть минуты.
+#
+# Окружение процесса (/proc/<pid>/environ) читает только владелец процесса и
+# root, поэтому переменные окружения здесь — не идеал, но на порядок лучше.
+#
+# Флаги --jwt-secret / --admin-pass / --admin-pass-bcrypt оставлены рабочими
+# ради совместимости, но теперь предупреждают о том, что значение утекает.
+JWT_SECRET="${CHILLHUB_JWT_SECRET:-}"
+ADMIN_PASS_BCRYPT="${CHILLHUB_ADMIN_PASSWORD_BCRYPT:-}"
+ADMIN_PASS="${CHILLHUB_ADMIN_PASSWORD:-}"
+# if/fi, а не `[[ ... ]] && ...`: под `set -e` ложное условие в конце такой
+# строки само по себе обрывает скрипт.
+if [[ -n "$JWT_SECRET" ]];        then ok "JWT_SECRET получен из окружения (CHILLHUB_JWT_SECRET)"; fi
+if [[ -n "$ADMIN_PASS_BCRYPT" ]]; then ok "ADMIN_PASSWORD_BCRYPT получен из окружения (CHILLHUB_ADMIN_PASSWORD_BCRYPT)"; fi
+if [[ -n "$ADMIN_PASS" ]];        then ok "ADMIN_PASSWORD получен из окружения (CHILLHUB_ADMIN_PASSWORD)"; fi
+# Дальше по скрипту значения не нужны в окружении: чтобы они не наследовались
+# каждым дочерним процессом (включая go build и rsync), убираем их отсюда.
+unset CHILLHUB_JWT_SECRET CHILLHUB_ADMIN_PASSWORD_BCRYPT CHILLHUB_ADMIN_PASSWORD
+
+warn_secret_on_cmdline(){
+  warn "Флаг $1 передаёт секрет аргументом командной строки — он виден в \`ps\` любому пользователю хоста."
+  warn "Используйте переменную окружения $2 (см. комментарий И14 в этом скрипте)."
+}
+
 # Parse args
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -64,12 +99,15 @@ while [[ $# -gt 0 ]]; do
     --repo-dir)
       EXPLICIT_REPO_DIR="${2:-}"; shift 2;;
     --jwt-secret)
+      warn_secret_on_cmdline "--jwt-secret" "CHILLHUB_JWT_SECRET"
       JWT_SECRET="${2:-}"; shift 2;;
     --admin-user)
       ADMIN_USER="${2:-}"; shift 2;;
     --admin-pass-bcrypt)
+      warn_secret_on_cmdline "--admin-pass-bcrypt" "CHILLHUB_ADMIN_PASSWORD_BCRYPT"
       ADMIN_PASS_BCRYPT="${2:-}"; shift 2;;
     --admin-pass)
+      warn_secret_on_cmdline "--admin-pass" "CHILLHUB_ADMIN_PASSWORD"
       ADMIN_PASS="${2:-}"; shift 2;;
     --cookie-domain)
       COOKIE_DOMAIN="${2:-}"; shift 2;;

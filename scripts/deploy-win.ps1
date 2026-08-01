@@ -41,6 +41,36 @@ param(
 $ErrorActionPreference = "Stop"
 $UseColor = -not $NoColor
 
+# И14: СЕКРЕТЫ ПРЕДПОЧТИТЕЛЬНО БЕРУТСЯ ИЗ ОКРУЖЕНИЯ, А НЕ ИЗ АРГУМЕНТОВ.
+#
+# Аргументы командной строки видны в списке процессов: на Windows их показывает
+# и Диспетчер задач, и `Get-CimInstance Win32_Process | select CommandLine`, без
+# каких-либо прав администратора. Утекали самые чувствительные значения —
+# JWT_SECRET (им подписываются админские сессии) и пароль администратора
+# открытым текстом, причём на всё время работы деплоя.
+#
+# Makefile теперь передаёт их через окружение (цель deploy-win). Параметры
+# -JwtSecret / -AdminPasswordBcrypt / -AdminPasswordPlain оставлены рабочими
+# ради совместимости, но предупреждают.
+function Resolve-SecretParam {
+    param(
+        [AllowNull()][string]$Value,
+        [Parameter(Mandatory = $true)][string]$EnvName,
+        [Parameter(Mandatory = $true)][string]$ParamName
+    )
+    if (-not [string]::IsNullOrEmpty($Value)) {
+        Write-Warn "$ParamName передан аргументом командной строки — значение видно в списке процессов."
+        Write-Warn "Предпочтительно задать переменную окружения $EnvName (см. комментарий И14)."
+        return $Value
+    }
+    $fromEnv = [Environment]::GetEnvironmentVariable($EnvName)
+    if (-not [string]::IsNullOrEmpty($fromEnv)) {
+        Write-Info "$ParamName получен из окружения ($EnvName)."
+        return $fromEnv
+    }
+    return ""
+}
+
 # Log level helper (error<warn<info<debug)
 function Test-Level {
   param([string]$lvl)
@@ -111,6 +141,19 @@ if (-not $SSH -or -not $SCP) {
 # Validate key path
 if (-not (Test-Path -LiteralPath $KeyPath)) {
   throw "SSH key not found: $KeyPath"
+}
+
+# И14: разрешаем секреты (окружение приоритетнее — см. Resolve-SecretParam).
+# Вызовы стоят здесь, а не рядом с определением функции, потому что она
+# печатает через Write-Info/Write-Warn, а те объявлены выше по файлу.
+$JwtSecret           = Resolve-SecretParam -Value $JwtSecret           -EnvName 'CHILLHUB_JWT_SECRET'              -ParamName '-JwtSecret'
+$AdminPasswordBcrypt = Resolve-SecretParam -Value $AdminPasswordBcrypt -EnvName 'CHILLHUB_ADMIN_PASSWORD_BCRYPT'   -ParamName '-AdminPasswordBcrypt'
+$AdminPasswordPlain  = Resolve-SecretParam -Value $AdminPasswordPlain  -EnvName 'CHILLHUB_ADMIN_PASSWORD'          -ParamName '-AdminPasswordPlain'
+# Из окружения ЭТОГО процесса значения убираем: иначе они наследуются каждым
+# запускаемым дочерним процессом (ssh, scp, go, tar), а их командные строки и
+# окружение видны шире, чем нужно.
+foreach ($n in 'CHILLHUB_JWT_SECRET','CHILLHUB_ADMIN_PASSWORD_BCRYPT','CHILLHUB_ADMIN_PASSWORD') {
+    [Environment]::SetEnvironmentVariable($n, $null)
 }
 
 # И2: ОДИН набор ssh/scp-опций на весь скрипт.

@@ -115,6 +115,20 @@ run-local:
 .PHONY: deploy-win
 # Usage:
 # make deploy-win HOST=your.vps.host USER=ubuntu KEY="C:/Users/you/.ssh/id_rsa" [BRANCH=main] [JWT=...] [ADMIN_USER=admin] [ADMIN_BCRYPT=...] [ADMIN_PLAIN=...] [COOKIE_DOMAIN=launcher.samoy.love] [COOKIE_SECURE=true] [DOWNLOADS_DIR=C:/path/downloads]
+#
+# И14: СЕКРЕТЫ ПЕРЕДАЮТСЯ СКРИПТУ ЧЕРЕЗ ОКРУЖЕНИЕ, А НЕ АРГУМЕНТАМИ.
+#
+# Раньше JWT, ADMIN_BCRYPT и ADMIN_PLAIN подставлялись прямо в командную строку
+# powershell. Такая строка видна в списке процессов кому угодно на машине:
+# Диспетчер задач и `Get-CimInstance Win32_Process | select CommandLine`
+# показывают её без прав администратора, и висит она там всё время деплоя.
+#
+# Вдобавок у рецепта не было префикса @, поэтому make ПЕЧАТАЛ всю команду
+# целиком — секреты уезжали ещё и в терминал, а оттуда в историю оболочки.
+# Префикс @ добавлен вместе с переходом на окружение.
+#
+# Значения JWT/ADMIN_BCRYPT/ADMIN_PLAIN по-прежнему берутся из deploy.local.mk
+# (он в .gitignore) — меняется только способ доставки до скрипта.
 deploy-win:
 ifeq ($(strip $(HOST)),)
 	$(error HOST is not set. Put it in deploy.local.mk or pass HOST=... on the command line)
@@ -126,15 +140,15 @@ ifeq ($(strip $(KEY)),)
 	$(error KEY is not set. Put it in deploy.local.mk or pass KEY=... on the command line)
 endif
 	@echo Deploying to $(HOST) as $(USER) using PowerShell script
-	powershell -NoProfile -ExecutionPolicy Bypass -File "scripts/deploy-win.ps1" \
+	@CHILLHUB_JWT_SECRET="$(JWT)" \
+	 CHILLHUB_ADMIN_PASSWORD_BCRYPT="$(ADMIN_BCRYPT)" \
+	 CHILLHUB_ADMIN_PASSWORD="$(ADMIN_PLAIN)" \
+	 powershell -NoProfile -ExecutionPolicy Bypass -File "scripts/deploy-win.ps1" \
 	 -SshHost "$(HOST)" \
 	 -SshUser "$(USER)" \
 	 -KeyPath "$(KEY)" \
 	 -Branch "$(BRANCH)" \
-	 -JwtSecret "$(JWT)" \
 	 -AdminUser "$(ADMIN_USER)" \
-	 -AdminPasswordBcrypt "$(ADMIN_BCRYPT)" \
-	 -AdminPasswordPlain "$(ADMIN_PLAIN)" \
 	 -CookieDomain "$(COOKIE_DOMAIN)" \
 	 -CookieSecure "$(COOKIE_SECURE)" \
 	 -DownloadsDir "$(DOWNLOADS_DIR)" \
