@@ -7,6 +7,7 @@ package ratelimit
 
 import (
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,6 +47,10 @@ const (
 	gcEvery = 128
 	// hard cap on tracked IPs; a sweep is forced once exceeded
 	gcMaxEntries = 10000
+	// how far below the cap an over-cap eviction trims, so that the (sorted)
+	// eviction pass runs once in a while rather than on every request that
+	// arrives while the map sits exactly at the cap.
+	gcTargetEntries = gcMaxEntries * 3 / 4
 )
 
 type entry struct {
@@ -103,12 +108,40 @@ func (l *Limiter) Len() int {
 	return len(l.entries)
 }
 
-// sweepLocked drops entries whose window is long expired. Callers hold l.mu.
+// sweepLocked drops entries whose window is long expired and, if that was not
+// enough, evicts the oldest ones until the map is back under the cap. Callers
+// hold l.mu.
+//
+// The age-based pass alone did NOT keep the promise in the package doc: it only
+// removes entries older than 10 windows, so a flood from freshly seen addresses
+// — exactly the case the cap exists for — left every entry in place and the map
+// grew without bound. Evicting the oldest entries is a real bound.
+//
+// Evicting an entry resets that address's counter. The oldest entries are the
+// ones closest to their window expiring anyway, so the budget an attacker can
+// recover this way is negligible compared to the memory a hard cap saves; and
+// reaching this path at all requires more than gcMaxEntries distinct addresses
+// inside one window.
 func (l *Limiter) sweepLocked(now time.Time) {
 	for ip, st := range l.entries {
 		if st.windowStart.IsZero() || now.Sub(st.windowStart) > 10*l.window {
 			delete(l.entries, ip)
 		}
+	}
+	if len(l.entries) <= gcMaxEntries {
+		return
+	}
+	type aged struct {
+		ip    string
+		start time.Time
+	}
+	all := make([]aged, 0, len(l.entries))
+	for ip, st := range l.entries {
+		all = append(all, aged{ip: ip, start: st.windowStart})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].start.Before(all[j].start) })
+	for i := 0; i < len(all)-gcTargetEntries; i++ {
+		delete(l.entries, all[i].ip)
 	}
 }
 
