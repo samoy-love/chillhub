@@ -9,6 +9,7 @@ package auth
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -326,7 +327,13 @@ func (a *Auth) CurrentUser(r *http.Request) string {
 	if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodDelete {
 		csrfC, _ := r.Cookie(cookieCSRF)
 		csrfH := r.Header.Get("X-CSRF-Token")
-		if csrfC == nil || csrfC.Value == "" || csrfH == "" || csrfH != csrfC.Value {
+		if csrfC == nil || csrfC.Value == "" || csrfH == "" {
+			return ""
+		}
+		// Constant time: a plain != returns as soon as two bytes differ, and the
+		// attacker controls the header, so the timing tells them how much of the
+		// token they have guessed right.
+		if subtle.ConstantTimeCompare([]byte(csrfH), []byte(csrfC.Value)) != 1 {
 			return ""
 		}
 	}

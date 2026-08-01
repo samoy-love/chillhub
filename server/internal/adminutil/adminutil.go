@@ -99,7 +99,13 @@ func EnsureWithin(base, p string) bool {
 	if err != nil {
 		return false
 	}
-	return !strings.HasPrefix(rel, "..") && rel != ""
+	if rel == "" || rel == ".." {
+		return false
+	}
+	// Only a ".." SEGMENT means "outside base". A plain HasPrefix(rel, "..")
+	// also rejected legitimate names that merely begin with two dots — "..foo",
+	// "..gitkeep" — which are ordinary files inside base.
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // IsSafeGameID allows only [A-Za-z0-9_-] for game IDs and not empty.
