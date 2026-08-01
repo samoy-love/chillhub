@@ -47,6 +47,12 @@ namespace ChillHub.Core {
 
         private static AppConfig cache = null!;
 
+        /// <summary>
+        /// Фактический путь к конфигу. Единственный источник правды: другие компоненты
+        /// (например сбор диагностики) должны спрашивать его здесь, а не составлять путь заново.
+        /// </summary>
+        public static string ConfigFilePath => ConfigPath;
+
         public static AppConfig Load() {
             try {
                 MigrateLegacyConfig();

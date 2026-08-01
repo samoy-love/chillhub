@@ -42,17 +42,18 @@ function New-RandomPassword {
 # Helper (stub): bcrypt generation disabled in dev script; server will hash plain
 function New-BcryptFromPlain { param([string]$Plain) return "" }
 
-# Helper: Update client config in %LOCALAPPDATA%\ChillHub
+# Helper: Update client config in %APPDATA%\ChillHub
+# ВАЖНО: конфиг живёт в %APPDATA%, а НЕ в %LOCALAPPDATA% — последний является каталогом
+# установки лаунчера, и конфиг оттуда попадал в пакет обновления (вечный цикл самообновления).
 function Set-ChillHubClientConfig {
   param([string]$ApiBaseUrl, [string]$GamesPath)
   try {
-    $configDir = Join-Path $env:LOCALAPPDATA 'ChillHub'
+    $configDir = Join-Path $env:APPDATA 'ChillHub'
     if (!(Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir | Out-Null }
     $configPath = Join-Path $configDir 'config.json'
     $cfg = @{
       GamesPath = $GamesPath
       DownloadThreads = 8
-      Theme = 'dark'
       ApiBaseUrl = $ApiBaseUrl
       LastGameId = ''
     } | ConvertTo-Json -Depth 4
