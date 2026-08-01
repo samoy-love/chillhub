@@ -702,7 +702,8 @@ fi
   echo "[wait] Waiting for admin backend health at http://127.0.0.1:55777/admin/api/health"
   READY=0
   for i in {1..30}; do
-    code=$(curl -ks --max-time 2 -o /dev/null -w "%{http_code}" "http://127.0.0.1:55777/admin/api/health" || true)
+    # No -k: this is plain http:// to loopback, there is no TLS to skip.
+    code=$(curl -s --max-time 2 -o /dev/null -w "%{http_code}" "http://127.0.0.1:55777/admin/api/health" || true)
     if [ "$code" = "200" ]; then echo "[wait] admin backend READY (health=200)"; READY=1; break; fi
     sleep 1
   done
@@ -710,68 +711,79 @@ fi
     echo "[wait] admin backend did not become ready within timeout; proceeding but tests may fail"
   fi
   
-# Nginx site config
+# ---------------------------------------------------------------------------
+# Nginx site config: бэкап -> установка -> nginx -t -> reload, С ОТКАТОМ.
+#
+# Раньше здесь были install + ln + `nginx -t` + reload без разбора результата.
+# При битом конфиге `set -e` обрывал скрипт СРАЗУ ПОСЛЕ install: файл и симлинк
+# оставались на месте, reload не делался — и до следующей перезагрузки всё
+# выглядело живым. А следующий reload по ЛЮБОЙ причине (чужой деплой, ребут,
+# certbot renew_hook) поднимал бы этот битый конфиг и уронил бы ВСЕ ТРИ сайта
+# на хосте: launcher, metro и snakes живут в одном nginx.
+#
+# Схема приведена к той же, что в scripts/deploy-nginx.sh и в
+# .github/workflows/deploy.yml, чтобы все три пути деплоя вели себя одинаково.
+# ---------------------------------------------------------------------------
+NGINX_BACKUP_DIR="/etc/nginx/chillhub-backups"
+sudo mkdir -p "$NGINX_BACKUP_DIR"
+NGINX_RESTORE=""
+if [ -f "$NGINX_SITE_AVAILABLE" ]; then
+  NGINX_RESTORE="$NGINX_BACKUP_DIR/$(basename "$NGINX_SITE_AVAILABLE").$(date -u +%Y%m%d-%H%M%S)"
+  sudo cp -a "$NGINX_SITE_AVAILABLE" "$NGINX_RESTORE"
+  echo "[nginx] backup: $NGINX_RESTORE"
+fi
 sudo install -m 0644 "$DEPLOY_DIR/deploy/launcher.conf" "$NGINX_SITE_AVAILABLE"
 sudo ln -sf "$NGINX_SITE_AVAILABLE" "$NGINX_SITE_ENABLED"
+# Показываем соседей: если мы вдруг что-то заденем, это будет видно в логе
+# деплоя, а не обнаружится жалобой чужого проекта.
+echo "[nginx] sites-enabled: $(ls -1 /etc/nginx/sites-enabled | tr '\n' ' ')"
 
-## Sanitize tuning.conf to avoid duplicate core directives (e.g., sendfile) across configs
-TCONF="/etc/nginx/conf.d/tuning.conf"
-if [ -f "$TCONF" ]; then
-  DUMP=$(sudo nginx -T 2>/dev/null || true)
-  for d in sendfile tcp_nopush tcp_nodelay; do
-    if printf "%s" "$DUMP" | awk -v d="$d" 'tolower($0) ~ "^[[:space:]]*" d "[[:space:]]" {found=1} END{exit !found}'; then
-      # Remove duplicate directive lines from tuning.conf
-      sudo sed -i -E "/^[[:space:]]*${d}[[:space:]]/d" "$TCONF" || true
-    fi
-  done
-  # Drop empty lines
-  sudo sed -i -E '/^[[:space:]]*$/d' "$TCONF" || true
-  # If file is now empty, remove it
-  if ! sudo grep -q '[^[:space:]]' "$TCONF" 2>/dev/null; then sudo rm -f "$TCONF" || true; fi
-fi
-sudo nginx -t
-sudo systemctl reload nginx
-# Note: we intentionally do not (re)create /etc/nginx/conf.d/tuning.conf here to avoid
-# introducing duplicate core directives. Base tuning should live in the primary nginx config.
-# Ensure worker_processes auto; and reasonable worker_connections in main nginx.conf
-NGX_MAIN="/etc/nginx/nginx.conf"
-if sudo test -f "$NGX_MAIN"; then
-  # Create a backup once, avoiding non-portable -n warnings
-  if [ ! -f "$NGX_MAIN.bak" ]; then sudo cp "$NGX_MAIN" "$NGX_MAIN.bak" || true; fi
-  # worker_processes auto;
-  if sudo grep -qE '^[[:space:]]*worker_processes[[:space:]]+auto;' "$NGX_MAIN"; then
-    true
-  elif sudo grep -qE '^[[:space:]]*worker_processes[[:space:]]+' "$NGX_MAIN"; then
-    sudo sed -ri 's/^[[:space:]]*worker_processes[[:space:]]+[^;]+;/worker_processes auto;/' "$NGX_MAIN"
+# ---------------------------------------------------------------------------
+# УДАЛЕНО: правка ОБЩИХ файлов nginx. Не возвращать.
+#
+# Здесь стояли две вещи, которые деплой лаунчера делать не имеет права:
+#
+#   1. `sed -i` по /etc/nginx/conf.d/tuning.conf — вычищал оттуда sendfile,
+#      tcp_nopush и tcp_nodelay, а если файл после этого оставался пустым,
+#      делал `rm -f`. То есть выкатка ChillHub молча УДАЛЯЛА общий файл
+#      тюнинга.
+#   2. Правка /etc/nginx/nginx.conf: worker_processes и worker_connections
+#      переписывались через sed/awk с `sudo tee`, включая ветку, которая
+#      дописывала целый блок `events { ... }` в конец файла.
+#
+# Оба файла — глобальные и общие для трёх независимых проектов на этом хосте
+# (launcher, metro, snakes). Деплой одного проекта, меняющий их, — это авария
+# в чужом сайте, которую никто не свяжет с нашим релизом. Плюс правка
+# nginx.conf шла ПОСЛЕ успешного reload нашего конфига и уже без всякого
+# отката: awk-ветка, дописывающая events-блок в файл, где events уже есть в
+# другом форматировании, оставляла бы nginx.conf, который не проходит
+# `nginx -t` вообще.
+#
+# Этот скрипт теперь трогает строго свой файл:
+# /etc/nginx/sites-available/chillhub-launcher.conf (см. блок выше).
+#
+# ЕСЛИ ТЮНИНГ РЕАЛЬНО НУЖЕН — это разовая ручная операция владельца хоста, а
+# не шаг выкатки. См. deploy/README.md.
+# ---------------------------------------------------------------------------
+if ! sudo nginx -t; then
+  echo "[nginx] nginx -t не прошёл — откатываемся, reload НЕ делаем" >&2
+  if [ -n "$NGINX_RESTORE" ]; then
+    sudo install -m 0644 "$NGINX_RESTORE" "$NGINX_SITE_AVAILABLE"
+    echo "[nginx] rollback: восстановлен предыдущий $NGINX_SITE_AVAILABLE" >&2
   else
-    # insert after user directive or at file start
-    if sudo grep -nE '^[[:space:]]*user[[:space:]]+' "$NGX_MAIN" >/dev/null 2>&1; then
-      ln=$(sudo awk 'BEGIN{ln=0} /^[[:space:]]*user[[:space:]]+/{ ln=NR; print ln; exit }' "$NGX_MAIN")
-      sudo awk -v ln="$ln" 'NR==ln{print; print "worker_processes auto;"; next} {print}' "$NGX_MAIN" | sudo tee "$NGX_MAIN.tmp" >/dev/null && sudo mv "$NGX_MAIN.tmp" "$NGX_MAIN"
-    else
-      printf "%s\n%s\n" "worker_processes auto;" "$(sudo cat "$NGX_MAIN")" | sudo tee "$NGX_MAIN" >/dev/null
-    fi
+    sudo rm -f "$NGINX_SITE_AVAILABLE" "$NGINX_SITE_ENABLED"
+    echo "[nginx] rollback: удалён только что добавленный сайт" >&2
   fi
-  # events { worker_connections 4096; }
-  # Make tuning changes non-fatal to avoid portability issues; nginx -t will still validate
-  set +e
-  if sudo grep -qE '^[[:space:]]*events[[:space:]]*\{' "$NGX_MAIN"; then
-    # Replace existing worker_connections inside events block if present
-    if sudo awk '/^[[:space:]]*events[[:space:]]*\{/{blk=1} blk && /^[[:space:]]*\}/{blk=0} blk && /worker_connections/{found=1} END{exit(found?0:1)}' "$NGX_MAIN"; then
-      sudo sed -ri '/^[[:space:]]*events[[:space:]]*\{/,/^[[:space:]]*\}/{s/^[[:space:]]*worker_connections[[:space:]]+[^;]+;/    worker_connections 4096;/}' "$NGX_MAIN" || true
-    else
-      # Insert a worker_connections line immediately after the opening of events block
-      sudo awk 'BEGIN{inserted=0} /^[[:space:]]*events[[:space:]]*\{[[:space:]]*$/{print; if(!inserted){print "    worker_connections 4096;"; inserted=1; next}} {print}' "$NGX_MAIN" | sudo tee "$NGX_MAIN.tmp" >/dev/null && sudo mv "$NGX_MAIN.tmp" "$NGX_MAIN" || true
-    fi
-  else
-    # Append minimal events block at end if missing
-    printf "%s\n%s\n%s\n" "events {" "    worker_connections 4096;" "}" | sudo tee -a "$NGX_MAIN" >/dev/null || true
-  fi
-  set -e
+  # Если и после отката конфиг битый — ломали не мы, и это надо сказать вслух,
+  # иначе владелец будет искать причину в этом деплое.
+  sudo nginx -t >/dev/null 2>&1 || echo "[nginx] ВНИМАНИЕ: конфигурация nginx была битой и ДО этого деплоя" >&2
+  exit 1
 fi
-
-sudo nginx -t
 sudo systemctl reload nginx
+echo "[nginx] конфиг применён"
+# Правка /etc/nginx/nginx.conf (worker_processes / worker_connections) и второй
+# пары `nginx -t` + reload здесь БОЛЬШЕ НЕТ — см. блок «УДАЛЕНО: правка ОБЩИХ
+# файлов nginx» выше. Наш конфиг уже проверен и применён.
 echo "[check] Nginx site file sha and redirect rule"
 sudo sha256sum "$NGINX_SITE_AVAILABLE" || true
 NGX_EXPECT="%%NGINX_CONF_SHA%%"
@@ -825,13 +837,22 @@ fi
 
   # Smoke tests
   FAIL=0
-  http_code() { curl -ks --max-time 8 -o /dev/null -w "%{http_code}" "$1"; }
+  # TLS IS VERIFIED — do not put `-k` back. These probes hit the public
+  # $SITE_BASE over a real Let's Encrypt certificate; with -k an expired cert
+  # produced a fully green smoke-test run while no browser could open the site
+  # (and with HSTS the visitor cannot click through). See the same note in
+  # .github/workflows/deploy.yml.
+  http_code() { curl -s --max-time 8 -o /dev/null -w "%{http_code}" "$1"; }
   must_200() { url="$1"; name="$2"; code=$(http_code "$url"); if [ "$code" = "200" ]; then echo "[test] PASS $name ($url)"; else echo "[test] FAIL $name ($url) -> $code"; FAIL=1; fi; }
 
 must_200 "$SITE_BASE/admin/ui/login.html" "Admin UI login"
 code=$(http_code "$SITE_BASE/admin/")
 if [ "$code" = "200" ]; then echo "[test] WARN /admin/ returned 200 (maybe authorized)"; elif [ "$code" = "401" ]; then echo "[test] PASS /admin/ protected (401 Unauthorized)"; elif [ "$code" = "302" ]; then echo "[test] PASS /admin/ protected (302 Found)"; else echo "[test] FAIL /admin/ -> $code"; FAIL=1; fi
-must_200 "$SITE_BASE/admin/ui/admin.js" "Admin UI static admin.js"
+must_200 "$SITE_BASE/admin/ui/login.js" "Admin UI login script (public)"
+# admin.js is behind auth_request together with the rest of the admin shell
+# (deploy/launcher.conf). A 200 here would mean the gate is gone.
+code=$(http_code "$SITE_BASE/admin/ui/admin.js")
+if [ "$code" = "401" ] || [ "$code" = "302" ]; then echo "[test] PASS /admin/ui/admin.js gated ($code)"; else echo "[test] FAIL /admin/ui/admin.js should be gated -> $code"; FAIL=1; fi
 # Admin API health should be public (no auth) and return 200
 must_200 "$SITE_BASE/admin/api/health" "Admin API health"
 must_200 "$SITE_BASE/" "Landing root"
@@ -840,17 +861,17 @@ must_200 "$SITE_BASE/styles.css" "Landing styles"
 # Extra curl diagnostics (headers)
   if [ -n "$VERBOSE" ]; then
     echo "[curl] HEADers"
-    curl -ksSI --max-time 8 "$SITE_BASE/admin/ui/login.html" || true
-    curl -ksSI --max-time 8 "$SITE_BASE/admin/ui/admin.js" || true
-    curl -ksSI --max-time 8 "$SITE_BASE/admin/api/health" || true
+    curl -sSI --max-time 8 "$SITE_BASE/admin/ui/login.html" || true
+    curl -sSI --max-time 8 "$SITE_BASE/admin/ui/admin.js" || true
+    curl -sSI --max-time 8 "$SITE_BASE/admin/api/health" || true
   fi
 
-if curl -ksf --max-time 5 "$SITE_BASE/manifests/launcher/latest.json" >/dev/null; then
+if curl -sf --max-time 5 "$SITE_BASE/manifests/launcher/latest.json" >/dev/null; then
   echo "[test] PASS manifests/launcher/latest.json"
 else
   echo "[test] WARN manifests/launcher/latest.json not present"
 fi
-if curl -ksf --max-time 5 "$SITE_BASE/assets/ping.txt" >/dev/null; then
+if curl -sf --max-time 5 "$SITE_BASE/assets/ping.txt" >/dev/null; then
   echo "[test] PASS assets/ping.txt"
 else
   echo "[test] WARN assets/ping.txt not present"
@@ -1246,9 +1267,9 @@ else
   ls -l /opt/chillhub/api /opt/chillhub/admin 2>/dev/null || true
 fi
 printf "%s %s\n" "[sum] Admin service:" "$(systemctl is-active chillhub-admin.service 2>/dev/null || true)"
-printf "%s %s\n" "[sum] Admin health code (external):" "$(curl -ks -o /dev/null -w '%{http_code}' https://launcher.samoy.love/admin/api/health || true)"
-printf "%s %s\n" "[sum] Admin gate code:" "$(curl -ks -o /dev/null -w '%{http_code}' https://launcher.samoy.love/admin/ || true)"
-printf "%s %s\n" "[sum] Site root:" "$(curl -ks -o /dev/null -w '%{http_code}' https://launcher.samoy.love/ || true)"
+printf "%s %s\n" "[sum] Admin health code (external):" "$(curl -s -o /dev/null -w '%{http_code}' https://launcher.samoy.love/admin/api/health || true)"
+printf "%s %s\n" "[sum] Admin gate code:" "$(curl -s -o /dev/null -w '%{http_code}' https://launcher.samoy.love/admin/ || true)"
+printf "%s %s\n" "[sum] Site root:" "$(curl -s -o /dev/null -w '%{http_code}' https://launcher.samoy.love/ || true)"
 printf "%s " "[sum] Downloads dir (server):"; sudo bash -lc 'test -d /var/www/site/downloads && (ls -1 /var/www/site/downloads | wc -l || true) || echo "missing"' || true
 printf "%s %s\n" "[sum] Admin health (localhost):" "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:55777/admin/api/health || true)"
 printf "%s %s\n" "[sum] Public API games (localhost GET):" "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:55700/api/games || true)"
