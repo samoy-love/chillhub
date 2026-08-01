@@ -232,7 +232,7 @@ namespace ChillHub.Pages {
             }
             catch (Exception ex) {
                 // Без списка сборок страница остаётся рабочей, просто нельзя переключить версию
-                Core.Logging.Logger.Error(ex, $"GamePage.LoadBuildsAsync(gid={gid})");
+                Core.Logging.Logger.ErrorNoReport(ex, $"GamePage.LoadBuildsAsync(gid={gid})");
                 this.builds = new List<string>();
                 this.BuildsCombo.ItemsSource = this.builds;
                 this.VersionHintText.Text = "Не удалось получить список версий. Проверьте подключение к интернету.";
@@ -257,7 +257,7 @@ namespace ChillHub.Pages {
             }
             catch (Exception ex) {
                 // Changelog второстепенен: установка и обновление работают без него
-                Core.Logging.Logger.Error(ex, $"GamePage.LoadChangelogAsync(gid={gid})");
+                Core.Logging.Logger.ErrorNoReport(ex, $"GamePage.LoadChangelogAsync(gid={gid})");
                 this.ChangelogList.ItemsSource = Array.Empty<NewsItem>();
                 this.ChangelogEmptyText.Text = "Не удалось загрузить changelog. Проверьте подключение к интернету.";
                 this.ChangelogEmptyText.Visibility = Visibility.Visible;

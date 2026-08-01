@@ -7,6 +7,7 @@ namespace ChillHub.Core.Logging {
     using System;
     using System.IO;
     using System.Text;
+    using System.Threading.Tasks;
 
     public static class Logger {
         /// <summary>Потолок размера активного файла лога.</summary>
@@ -45,9 +46,52 @@ namespace ChillHub.Core.Logging {
 
         public static void Error(string message) => Write("ERROR", message);
 
+        /// <summary>
+        /// Записывает исключение в лог и отправляет авто-отчёт.
+        /// Сетевые сбои (сервер недоступен, таймаут, обрыв соединения) отчёт НЕ порождают:
+        /// это не дефект лаунчера, а запуск без интернета показывал из-за них
+        /// «Произошла ошибка. Отчёт автоматически отправлен».
+        /// </summary>
+        /// <param name="ex">Исключение.</param>
+        /// <param name="message">Контекст, в котором оно поймано.</param>
         public static void Error(Exception ex, string? message = null) {
+            if (IsNetworkFailure(ex)) {
+                ErrorNoReport(ex, message);
+                return;
+            }
+
             Write("ERROR", (message == null ? string.Empty : message + ": ") + ex.ToString());
             try { ChillHub.Core.ErrorReporter.Report(ex, message ?? "exception"); } catch { }
+        }
+
+        /// <summary>
+        /// Записывает исключение в лог, но не отправляет авто-отчёт.
+        /// Для штатных путей вида «сервер недоступен»: пользователю там нужен понятный
+        /// статус, а не сообщение об отправленном отчёте.
+        /// </summary>
+        /// <param name="ex">Исключение.</param>
+        /// <param name="message">Контекст, в котором оно поймано.</param>
+        public static void ErrorNoReport(Exception ex, string? message = null) {
+            Write("ERROR", (message == null ? string.Empty : message + ": ") + ex.ToString());
+        }
+
+        /// <summary>
+        /// Сбой связи, а не дефект кода: перебираем и вложенные исключения,
+        /// потому что HttpClient заворачивает сокетные ошибки.
+        /// </summary>
+        private static bool IsNetworkFailure(Exception? ex) {
+            for (var e = ex; e != null; e = e.InnerException) {
+                if (e is System.Net.Http.HttpRequestException
+                    or System.Net.Sockets.SocketException
+                    or System.Net.WebException
+                    or TimeoutException
+                    or TaskCanceledException
+                    or OperationCanceledException) {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

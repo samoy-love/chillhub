@@ -149,7 +149,7 @@ namespace ChillHub.Core.Home {
                     res = await this.http.SendAsync(req).ConfigureAwait(false);
                 }
                 catch (Exception exSend) {
-                    Logging.Logger.Error(exSend, "Feedback.Send.HttpError");
+                    Logging.Logger.ErrorNoReport(exSend, "Feedback.Send.HttpError");
                     if (!silent) {
                         this.showToast("Не удалось отправить (сеть/сервер недоступны)");
                     }
