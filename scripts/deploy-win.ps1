@@ -565,7 +565,11 @@ for d in site launcher_admin_ui bin systemd; do
 done
 
 # Guard snapshot (PRE): capture sample hashes and counts for server-managed dirs to detect unintended changes
-TMP_PRE_DIR="/tmp/chillhub-pre"; TMP_POST_DIR="/tmp/chillhub-post"; mkdir -p "$TMP_PRE_DIR" "$TMP_POST_DIR"
+# И29: приватные каталоги под снимки вместо предсказуемых /tmp/chillhub-pre и
+# /tmp/chillhub-post — /tmp общий, на хосте четыре проекта.
+TMP_PRE_DIR="$(mktemp -d -t chillhub-pre-XXXXXXXX)"; TMP_POST_DIR="$(mktemp -d -t chillhub-post-XXXXXXXX)"
+chmod 700 "$TMP_PRE_DIR" "$TMP_POST_DIR"
+trap 'rm -rf "$TMP_PRE_DIR" "$TMP_POST_DIR" 2>/dev/null || true' EXIT
 sample_hash(){ d="$1"; if [ ! -d "$d" ]; then echo "missing"; return; fi; list=$(LC_ALL=C find "$d" -type f -printf '%P\n' | sort | awk 'NR<=50'); if [ -z "$list" ]; then echo "empty"; else while IFS= read -r f; do sha256sum "$d/$f" | awk '{print $1"  "$2}'; done <<< "$list" | sha256sum | awk '{print $1}'; fi; }
 for d in content manifests news; do dir="$LAUNCHER_DIR/$d"; if [ -d "$dir" ]; then find "$dir" -type f 2>/dev/null | wc -l | awk '{print $1}' > "$TMP_PRE_DIR/${d}.count"; sample_hash "$dir" > "$TMP_PRE_DIR/${d}.hash"; else echo "-1" > "$TMP_PRE_DIR/${d}.count"; echo "missing" > "$TMP_PRE_DIR/${d}.hash"; fi; done
 
@@ -1289,53 +1293,97 @@ try {
 $injected = $injected.Replace('%%NGINX_CONF_SHA%%', (Convert-ToBashDqEscaped ${ngxSha}))
 # Normalize newlines to LF to avoid CR issues on remote bash
 $normalized = ($injected -replace "`r`n","`n") -replace "`r",""
-# Write to a local temp file as UTF-8 (no BOM)
-$tmpLocal = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'chillhub-deploy.ps1.tmp')
+# И29: НИКАКИХ ФИКСИРОВАННЫХ ИМЁН В ОБЩЕМ /tmp НА ПРОДЕ.
+#
+# Скрипт деплоя уезжал в /tmp/chillhub-deploy.sh, обёртка — в
+# /tmp/run-remote.sh, лог — в /tmp/chillhub-deploy.log. Имена фиксированные и
+# известны, а /tmp общий на хосте с четырьмя проектами. Отсюда две вещи:
+#
+#   * содержимое скрипта деплоя — это, в том числе, подставленные секреты
+#     (JWT_SECRET, bcrypt-хеш админа), и они лежали по известному пути;
+#   * любой локальный пользователь мог заранее создать эти пути (в том числе
+#     символической ссылкой) и вмешаться в то, что будет записано и затем
+#     исполнено.
+#
+# Теперь на каждый прогон генерируется случайный каталог с правами 0700 внутри
+# домашнего каталога пользователя деплоя — не в общем /tmp вовсе. Каталог
+# удаляется по завершении.
+$remoteRunId = [Guid]::NewGuid().ToString('N').Substring(0, 12)
+# Пути ОТНОСИТЕЛЬНЫЕ (от домашнего каталога), а не через $HOME: scp в режиме
+# SFTP — а он по умолчанию в современных OpenSSH — передаёт путь буквально и
+# переменную оболочки НЕ раскрывает, поэтому "$HOME/..." создал бы каталог с
+# именем «$HOME». Относительный путь sftp разрешает от домашнего каталога, а
+# ssh-команды всё равно стартуют с cwd=$HOME. Так работают и остальные scp в
+# этом скрипте (deploy/site и прочие).
+$remoteRunRel      = ".chillhub-deploy-run-$remoteRunId"
+$remoteScriptRel   = "$remoteRunRel/deploy.sh"
+$remoteWrapperRel  = "$remoteRunRel/run-remote.sh"
+$remoteLogRel      = "$remoteRunRel/deploy.log"
+# Внутри bash-обёртки нужен абсолютный путь — там $HOME раскроется штатно.
+$remoteScriptPath  = "`$HOME/$remoteScriptRel"
+$remoteLogPath     = "`$HOME/$remoteLogRel"
+# Каталог создаём заранее и сразу закрываем правами, ДО того как в него
+# попадёт скрипт с секретами.
+& $SSH @sshCommon $Remote "umask 077; mkdir -p '$remoteRunRel'; chmod 700 '$remoteRunRel'" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Не удалось создать приватный каталог прогона на сервере ($remoteRunRel)" }
+
+# Write to a local temp file as UTF-8 (no BOM). Локальное имя тоже уникально:
+# на машине оператора /tmp (или %TEMP%) точно так же общий.
+$tmpLocal = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "chillhub-deploy-$remoteRunId.tmp")
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($tmpLocal, $normalized, $utf8NoBom)
-# Upload to remote fixed path
-& $SCP @sshCommon $tmpLocal "${Remote}:/tmp/chillhub-deploy.sh"
+& $SCP @sshCommon $tmpLocal "${Remote}:$remoteScriptRel"
 # cleanup local temp file
 Remove-Item -Force $tmpLocal -ErrorAction SilentlyContinue
 
 # Build a small remote wrapper to avoid complex quoting via SSH
-$wrapperLocal = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'run-remote.sh')
+$wrapperLocal = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "chillhub-run-remote-$remoteRunId.sh")
 $wrapperContent = @'
 #!/bin/bash
 set -euo pipefail
+# Файлы прогона лежат в приватном каталоге 0700, созданном под этот запуск
+# (см. И29 в scripts/deploy-win.ps1). Маску держим строгой и здесь: лог
+# содержит вывод деплоя и не должен быть доступен другим пользователям хоста.
+umask 077
 rc=0
-run_cmd="/bin/bash /tmp/chillhub-deploy.sh"
+DEPLOY_SCRIPT="%%RUN_SCRIPT%%"
+DEPLOY_LOG="%%RUN_LOG%%"
 # Pre-run: убедиться, что подстановка вообще произошла.
 #
 # Раньше здесь был `grep -nE '^(JWT_SECRET|...)='`, который печатал строки
 # ЦЕЛИКОМ — то есть выкладывал секреты в лог, а лог потом ещё и скачивается
-# на машину оператора. Печатаем только имя переменной и длину значения:
+# на машину оператора. Печатаем только имя переменной и факт наличия:
 # для «подставилось или нет» этого достаточно, а секрет не утекает.
-echo "[precheck] injected vars in /tmp/chillhub-deploy.sh (names and lengths only)"
-grep -nE '^(JWT_SECRET|ADMIN_USER|ADMIN_PASS_BCRYPT|ADMIN_PASS_PLAIN|COOKIE_DOMAIN|COOKIE_SECURE)=' /tmp/chillhub-deploy.sh \
+echo "[precheck] injected vars (names only)"
+grep -nE '^(JWT_SECRET|ADMIN_USER|ADMIN_PASS_BCRYPT|ADMIN_PASS_PLAIN|COOKIE_DOMAIN|COOKIE_SECURE)=' "$DEPLOY_SCRIPT" \
   | sed -E 's/^([0-9]+):([A-Z_]+)=.*/[precheck] line \1: \2 present/' || true
 # Execute and capture reliably to a file, then print it unconditionally
-{ eval "$run_cmd"; } > /tmp/chillhub-deploy.log 2>&1 || rc=$?
+{ /bin/bash "$DEPLOY_SCRIPT"; } > "$DEPLOY_LOG" 2>&1 || rc=$?
 echo "--- REMOTE LOG DUMP BEGIN ---"
-cat /tmp/chillhub-deploy.log 2>/dev/null || true
+cat "$DEPLOY_LOG" 2>/dev/null || true
 echo "--- REMOTE LOG DUMP END ---"
-# keep /tmp/chillhub-deploy.log for later retrieval; clean the deploy script and wrapper
-rm -f /tmp/chillhub-deploy.sh "$0" 2>/dev/null || true
+# Скрипт деплоя удаляем немедленно: в нём подставленные секреты. Лог остаётся
+# до скачивания, каталог целиком убирает вызывающая сторона.
+rm -f "$DEPLOY_SCRIPT" "$0" 2>/dev/null || true
 exit $rc
 '@
+$wrapperContent = $wrapperContent.Replace('%%RUN_SCRIPT%%', $remoteScriptPath).Replace('%%RUN_LOG%%', $remoteLogPath)
 $wrapperNormalized = ($wrapperContent -replace "`r`n","`n") -replace "`r",""
 [System.IO.File]::WriteAllText($wrapperLocal, $wrapperNormalized, $utf8NoBom)
-& $SCP @sshCommon $wrapperLocal "${Remote}:/tmp/run-remote.sh"
+& $SCP @sshCommon $wrapperLocal "${Remote}:$remoteWrapperRel"
 Remove-Item -Force $wrapperLocal -ErrorAction SilentlyContinue
-& $SSH @sshCommon $Remote '/bin/bash' '/tmp/run-remote.sh'
-if ($LASTEXITCODE -ne 0) {
-  throw "Remote deploy failed (rc=$LASTEXITCODE)"
-}
+& $SSH @sshCommon $Remote '/bin/bash' "$remoteWrapperRel"
+$remoteRc = $LASTEXITCODE
 
-# Try to fetch remote log (if present) so that all remote output including manifest comparison is visible locally
+# Лог забираем и каталог прогона убираем ДО возможного throw.
+#
+# Раньше `throw` стоял сразу после запуска, а скачивание лога — после него:
+# при неуспешном деплое (единственный случай, когда лог реально нужен) до
+# скачивания дело не доходило. Заодно приватный каталог прогона оставался на
+# сервере навсегда, накапливаясь с каждым неудачным запуском.
 try {
-  $remoteLogLocal = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'chillhub-deploy.remote.log')
-  & $SCP @sshCommon "${Remote}:/tmp/chillhub-deploy.log" $remoteLogLocal | Out-Null
+  $remoteLogLocal = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "chillhub-deploy-$remoteRunId.remote.log")
+  & $SCP @sshCommon "${Remote}:$remoteLogRel" $remoteLogLocal | Out-Null
   if (Test-Path -LiteralPath $remoteLogLocal) {
     Write-Section "Remote script log"
     Get-Content -Raw -LiteralPath $remoteLogLocal | Write-Host
@@ -1343,6 +1391,25 @@ try {
   }
 } catch {
   Write-Warn ("Could not fetch remote log: {0}" -f $_.Exception.Message)
+}
+
+# И29: уборка приватного каталога прогона.
+#
+# Скрипт деплоя (с секретами) обёртка удаляет сразу после исполнения; здесь
+# остаётся только лог. Его ещё читает сводный скрипт ниже, поэтому полная
+# уборка сделана в самом конце (Remove-RemoteRunDir), а тут — только на пути
+# аварийного выхода, где до конца скрипта дело не дойдёт.
+function Remove-RemoteRunDir {
+  try {
+    & $SSH @sshCommon $Remote "rm -rf '$remoteRunRel'" | Out-Null
+  } catch {
+    Write-Warn ("Не удалось удалить каталог прогона на сервере ({0}): {1}" -f $remoteRunRel, $_.Exception.Message)
+  }
+}
+
+if ($remoteRc -ne 0) {
+  Remove-RemoteRunDir
+  throw "Remote deploy failed (rc=$remoteRc)"
 }
 
 # Post-deploy external smoke tests (from this machine)
@@ -1560,7 +1627,7 @@ fi
 # Enforce failure on manifest report too
   FAIL_FLAG="%%FAIL_ON_MISMATCH%%"
   if [ -n "$FAIL_FLAG" ]; then
-    if grep -qE '^(FAIL|MISS) ' /tmp/chillhub-deploy.log 2>/dev/null; then
+    if grep -qE '^(FAIL|MISS) ' "%%RUN_LOG%%" 2>/dev/null; then
       echo "---- DIAGNOSTICS (summary) ----"
       echo "---- NGINX ERROR LOG (last 200) ----"; sudo tail -n 200 /var/log/nginx/error.log || true
       echo "---- NGINX ACCESS LOG (last 200) ----"; sudo tail -n 200 /var/log/nginx/access.log || true
@@ -1578,6 +1645,9 @@ fi
   $summaryInjected = $summaryInjected.Replace('%%DOWNLOADS_MANIFEST%%', (Convert-ToBashDqEscaped $downloadsManifestB64))
   # Also inject fail flag
   $summaryInjected = $summaryInjected.Replace('%%FAIL_ON_MISMATCH%%', (Convert-ToBashDqEscaped $failFlag))
+  # И29: путь к логу прогона — он лежит в приватном каталоге этого запуска,
+  # а не под фиксированным именем в общем /tmp.
+  $summaryInjected = $summaryInjected.Replace('%%RUN_LOG%%', $remoteLogPath)
   # Make header compatible with shells lacking pipefail and force bash shebang; normalize to LF
   $summaryInjected = $summaryInjected -replace 'set -euo pipefail', "set -eu`n(set -o pipefail) 2>/dev/null || true"
   # Prepend a bash shebang if not present
@@ -1586,12 +1656,18 @@ fi
   if ($summaryInjected -match 'set -eu') { $summaryInjected = $summaryInjected -replace 'set -eu', "set -eu`n: `${VERBOSE:=}" }
   $summaryInjected = ($summaryInjected -replace "`r`n","`n") -replace "`r",""
   [System.IO.File]::WriteAllText($summaryLocal, $summaryInjected, $utf8NoBom)
-  & $SCP @sshCommon $summaryLocal "${Remote}:/tmp/summary-remote.sh"
+  # И29: сводный скрипт тоже кладём в приватный каталог прогона, а не под
+  # фиксированным /tmp/summary-remote.sh — он исполняется на сервере, где
+  # живут ещё три проекта.
+  & $SCP @sshCommon $summaryLocal "${Remote}:$remoteRunRel/summary-remote.sh"
   Remove-Item -Force $summaryLocal -ErrorAction SilentlyContinue
-  & $SSH @sshCommon $Remote '/bin/bash' '/tmp/summary-remote.sh'
-  & $SSH @sshCommon $Remote 'rm -f /tmp/summary-remote.sh' | Out-Null
+  & $SSH @sshCommon $Remote '/bin/bash' "$remoteRunRel/summary-remote.sh"
 } catch {
   Write-Warn ("Could not fetch final remote summary: {0}" -f $_.Exception.Message)
 }
+
+# И29: каталог прогона убираем в самом конце — до этого момента его лог читал
+# сводный скрипт выше.
+Remove-RemoteRunDir
 
 Write-Ok "Done"
