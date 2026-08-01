@@ -986,8 +986,11 @@ namespace ChillHub.Pages {
                 throw;
             }
             catch (Exception ex) {
-                this.StatusText.Text = $"Ошибка загрузки сборок/новостей игры (GET {this.BaseApi}/api/games/{gameId}/builds, /news/games/{gameId}/index.json): {ex.Message}";
-                Core.Logging.Logger.ErrorNoReport(ex, "HomePage.LoadBuildsAndGameNewsAsync");
+                // Пользователю — суть, URL и текст исключения уходят в лог и в подсказку
+                this.ShowUserError(
+                    "Не удалось загрузить сведения об игре. Проверьте подключение к интернету.",
+                    ex,
+                    $"HomePage.LoadBuildsAndGameNewsAsync: GET {this.BaseApi}/api/games/{gameId}/builds, /news/games/{gameId}/index.json");
 
                 // В случае ошибки не оставляем старые новости от предыдущей игры
                 this.GameNewsList.ItemsSource = Array.Empty<NewsItem>();
@@ -1015,8 +1018,7 @@ namespace ChillHub.Pages {
                 this.LauncherNewsList.ItemsSource = launcherNews;
             }
             catch (Exception ex) {
-                this.StatusText.Text = $"Не удалось обновить новости лаунчера: {ex.Message}";
-                Core.Logging.Logger.Error(ex, "HomePage.ReloadLauncherNewsAsync");
+                this.ShowUserError("Не удалось обновить новости лаунчера.", ex, "HomePage.ReloadLauncherNewsAsync");
             }
             finally {
                 this.LauncherNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
@@ -1045,8 +1047,7 @@ namespace ChillHub.Pages {
                 this.GameNewsList.ItemsSource = items;
             }
             catch (Exception ex) {
-                this.StatusText.Text = $"Не удалось обновить новости игры: {ex.Message}";
-                Core.Logging.Logger.Error(ex, "HomePage.ReloadGameNewsAsync");
+                this.ShowUserError("Не удалось обновить новости игры.", ex, "HomePage.ReloadGameNewsAsync");
             }
             finally {
                 this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
@@ -2329,8 +2330,7 @@ namespace ChillHub.Pages {
                 Process.Start(psi);
             }
             catch (Exception ex) {
-                this.StatusText.Text = $"Не удалось открыть папку игры: {ex.Message}";
-                Core.Logging.Logger.Error(ex, "HomePage.OpenGameFolder_Click");
+                this.ShowUserError("Не удалось открыть папку игры.", ex, "HomePage.OpenGameFolder_Click");
             }
         }
 
@@ -2409,8 +2409,10 @@ namespace ChillHub.Pages {
                     this.MarkUninstalled(gid);
                 }
                 catch (Exception exDel) {
-                    this.StatusText.Text = $"Не удалось удалить локальные файлы: {exDel.Message}";
-                    Core.Logging.Logger.Error(exDel, "HomePage.DeleteGame_Click");
+                    this.ShowUserError(
+                        "Не удалось удалить файлы игры. Возможно, они заняты другой программой.",
+                        exDel,
+                        "HomePage.DeleteGame_Click");
                     return;
                 }
                 finally {
@@ -2427,8 +2429,7 @@ namespace ChillHub.Pages {
                 this.ShowToast($"Локальные файлы {title} удалены");
             }
             catch (Exception ex) {
-                this.StatusText.Text = $"Ошибка удаления: {ex.Message}";
-                Core.Logging.Logger.Error(ex, "HomePage.DeleteGame_Click");
+                this.ShowUserError("Не удалось удалить файлы игры.", ex, "HomePage.DeleteGame_Click");
             }
         }
 

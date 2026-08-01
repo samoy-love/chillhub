@@ -646,17 +646,13 @@ namespace ChillHub.Pages {
                 // Манифест отклонён проверкой структуры: опасный путь, дубликат или
                 // запись без хешей. Файлы игры не тронуты — говорим об этом прямо,
                 // а не общей фразой «попробуйте ещё раз».
-                this.StatusText.Text = ManifestValidator.UserMessage;
-                this.StatusText.ToolTip = "Подробнее: " + ex.Message;
-                Core.Logging.Logger.Error(ex, $"GamePage.StartSyncAsync.ManifestValidation(gid={gid}, version={version})");
+                this.ShowUserError(ManifestValidator.UserMessage, ex, $"GamePage.StartSyncAsync.ManifestValidation(gid={gid}, version={version})");
             }
             catch (Exception ex) {
                 var message = ex is IOException
                     ? "Не удалось записать файлы игры. Проверьте свободное место и права доступа."
                     : "Не удалось завершить операцию. Попробуйте ещё раз.";
-                this.StatusText.Text = message;
-                this.StatusText.ToolTip = "Подробнее: " + ex.Message;
-                Core.Logging.Logger.Error(ex, $"GamePage.StartSyncAsync(gid={gid}, version={version})");
+                this.ShowUserError(message, ex, $"GamePage.StartSyncAsync(gid={gid}, version={version})");
             }
             finally {
                 this.SetBusy(false);
@@ -667,6 +663,36 @@ namespace ChillHub.Pages {
                 catch (Exception ex) {
                     Core.Logging.Logger.Error(ex, "GamePage.StartSyncAsync.RefreshState");
                 }
+            }
+        }
+
+        /// <summary>
+        /// Единая точка показа ошибки, как на главной странице: пользователю — суть,
+        /// технические подробности — в лог и в подсказку к строке состояния. Раньше
+        /// каждая ветка catch собирала текст по-своему.
+        /// </summary>
+        /// <param name="userMessage">Короткое сообщение для пользователя.</param>
+        /// <param name="ex">Исключение (уходит в лог).</param>
+        /// <param name="context">Место, где ошибка поймана.</param>
+        private void ShowUserError(string userMessage, Exception? ex = null, string? context = null) {
+            try {
+                if (ex != null) {
+                    Core.Logging.Logger.Error(ex, context ?? "GamePage");
+                }
+                else if (!string.IsNullOrWhiteSpace(context)) {
+                    Core.Logging.Logger.Error($"{context}: {userMessage}");
+                }
+            }
+            catch (Exception logEx) {
+                System.Diagnostics.Debug.WriteLine("GamePage.ShowUserError: " + logEx.Message);
+            }
+
+            try {
+                this.StatusText.Text = userMessage;
+                this.StatusText.ToolTip = ex == null ? null : "Подробнее: " + ex.Message;
+            }
+            catch (Exception uiEx) {
+                Core.Logging.Logger.Warn($"GamePage.ShowUserError: {uiEx.Message}");
             }
         }
 
