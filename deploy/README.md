@@ -5,11 +5,14 @@
 - Общая документация/спецификации API/Admin: [`Documentation.md`](../Documentation.md)
 
 Содержание:
-- [Nginx (prod) — полный пример конфига](#nginx-prod-—-полный-пример-конфига)
+- [Nginx (prod) — полный пример конфига](#nginx-prod--полный-пример-конфига)
+- [Сжатие при раздаче (gzip)](#сжатие-при-раздаче-gzip)
 
 ## Nginx (prod) — полный пример конфига
 
 Полный пример актуального конфига для хоста `launcher.samoy.love`. Этот файл служит справкой к рабочему конфигу `deploy/launcher.conf` и может использоваться для сравнения/отладки.
+
+> **Внимание:** блок ниже — упрощённая иллюстрация, а не копия боевого конфига. В нём нет security-заголовков, HSTS, CSP, правил кеширования, `client_max_body_size 30g`, таймаутов 6h и директив сжатия; `listen 443 ssl http2` — устаревшая форма (в конфиге используется отдельная директива `http2 on;`). Единственный источник правды — `deploy/launcher.conf`.
 
 <details>
 <summary>Показать полный конфиг nginx</summary>
@@ -102,85 +105,188 @@ server {
 
 ---
 
-## Сжатие (Gzip/Brotli) — настройка сервера «в первый раз»
+## Сжатие при раздаче (gzip)
 
-В боевом конфиге `deploy/launcher.conf` уже включён безопасный Gzip (внутри `server { ... }`). Этого достаточно для большинства клиентов. Brotli даёт +5–15% к экономии на текстовых файлах, но требует отдельного модуля. Ниже — как включить и проверить.
+Короткий вывод: **gzip включён для текста/JSON и намеренно выключен для `/content/`.** zstd и brotli на сегодня не нужны — не потому что «лень собирать модуль», а потому что клиент их не запрашивает (см. ниже).
 
-### 1) Gzip — уже включён
+### 1) Что именно сделано в `deploy/launcher.conf`
 
-- Ничего ставить не нужно: модуль gzip встроен в nginx.
-- В конфиг добавлены:
-  - `gzip on; gzip_comp_level 5; gzip_min_length 1024; gzip_vary on; gzip_proxied any;`
-  - `gzip_types text/css application/javascript application/json image/svg+xml font/* ...`
-  - `gzip_static on;` — если рядом с файлом лежит precompress-версия `.gz`, nginx будет отдавать её.
+На уровне `server { ... }`:
 
-Опционально можно сделать предсжатие тяжёлых ассетов в пайплайне/на сервере:
-
-```bash
-# Предсжать статические ассеты в /var/www/site
-sudo bash -lc '
-  find /var/www/site -type f \
-    \( -name "*.css" -o -name "*.js" -o -name "*.svg" -o -name "*.json" -o -name "*.html" \) \
-    -exec gzip -k -f -9 {} \;'
+```nginx
+gzip on;
+gzip_comp_level 5;
+gzip_min_length 1024;
+gzip_vary on;
+gzip_proxied any;
+gzip_types application/json application/manifest+json application/javascript
+           text/javascript application/x-javascript text/css text/plain
+           text/xml application/xml application/rss+xml application/atom+xml
+           image/svg+xml text/markdown application/wasm;
+gzip_disable "msie6";
 ```
 
-### 2) Brotli — опционально (если модуль доступен в вашей сборке nginx)
+и ровно одно исключение — в `location ^~ /content/`:
 
-В репозиториях Debian/Ubuntu модуль может отсутствовать в стандартной сборке. Варианты:
-
-- Установка модульного пакета (если доступно в вашей ОС):
-
-```bash
-sudo apt update
-# В некоторых дистрибутивах пакет называется nginx-module-brotli или входит в nginx-extras
-sudo apt install -y nginx-extras brotli
+```nginx
+gzip off;
 ```
 
-- Либо использовать сторонний репозиторий с модулями nginx (например, PPA от Ondřej Surý). Оцените риски и политику обновлений перед использованием.
+`text/html` в `gzip_types` не указан сознательно: nginx сжимает его всегда, а явное перечисление в части версий считается ошибкой конфигурации.
 
-После установки модуля подключите его (обычно через файл в `/etc/nginx/modules-enabled/`):
+### 2) Замеры на реальных данных репозитория
+
+Мерялось локально утилитой `gzip -N` на файлах из `content/manifests/` (это ровно те байты, которые nginx отдаёт из `/manifests/`).
+
+| файл | сырой размер, B | L1 | L4 | **L5 (наш)** | L6 | L9 |
+|---|---:|---:|---:|---:|---:|---:|
+| `drive-beyond-horizons/1.0.2.json` (2809 файлов) | 905 549 | 290 999 | 274 767 | **272 404** | 272 152 | 268 824 |
+| `lethal-company/1.0.7.json` | 905 542 | 290 981 | 274 757 | **272 399** | 272 133 | 268 814 |
+| `repo/1.0.0.json` | 89 236 | 30 966 | 28 950 | **28 640** | 28 607 | 28 291 |
+| `launcher/1.1.7.json` | 8 207 | 3 228 | 3 102 | **3 052** | 3 050 | 3 034 |
+| `_registry/games.json` | 542 | — | — | **не сжимается** (< `gzip_min_length`) | — | — |
+
+Коэффициенты на уровне 5: **3.32x** для крупного манифеста (905 549 → 272 404 B, экономия ≈ 618 KiB на один запрос), **3.12x** для среднего, **2.69x** для мелкого.
+
+Почему уровень 5, а не 9: переход L1→L5 даёт −6.4% к сжатому размеру, а L5→L9 — всего −1.3% при примерно +35% процессорного времени (замер: 10 проходов по манифесту 905 KB — 0.355 s на L5 против 0.470 s на L9). Уровень 5 — колено кривой для этих данных.
+
+Почему это важно: манифест качается при **каждой** проверке обновления, для каждой игры, каждым клиентом. Это самый частый крупный текстовый ответ на сервере.
+
+### 3) Почему `/content/` — `gzip off`
+
+Разбор состава реальной сборки (`drive-beyond-horizons/1.0.2`, 2809 файлов, 10.6 GiB) по данным самого манифеста:
+
+| расширение | объём | доля |
+|---|---:|---:|
+| `.lethalbundle` | 4 522 MiB | 41.6% |
+| `.assetbundle` | 3 515 MiB | 32.4% |
+| без расширения | 1 012 MiB | 9.3% |
+| `.ress` | 1 001 MiB | 9.2% |
+| `.dll` | 234 MiB | 2.2% |
+| `.ogg` | 202 MiB | 1.9% |
+| `.assets` / `.mp4` / `.resource` / `.png` | 346 MiB | 3.2% |
+
+Больше 74% байт — Unity-бандлы, внутри уже сжатые (LZ4/LZMA); плюс `.ogg`, `.mp4`, `.png` — тоже готовые сжатые форматы. gzip поверх них даёт около нуля, но стоит процессора на каждом гигабайте.
+
+Кроме бесполезности есть два конкретных вреда:
+
+1. **Ломается `sendfile`/`directio`.** В `location ^~ /content/` настроены `sendfile on; tcp_nopush on; directio 8m;`. Любой фильтр тела (а gzip — фильтр) выключает zero-copy путь: nginx начинает гонять гигабайты через userspace.
+2. **Ломается докачка по `Range`.** Клиент возобновляет прерванные загрузки, выставляя `Range` (`launcher/ChillHub/Core/Sync/SimpleSyncService.cs`, `req.Headers.Range = new RangeHeaderValue(existing, null)`). nginx не умеет отдавать диапазон из потока, сжимаемого на лету, — сервер ответил бы `200 OK` целиком, и клиент (там есть явная ветка «если пришёл 200 несмотря на Range — перезаписываем файл заново») скачал бы многогигабайтный файл с нуля.
+
+То есть `gzip off;` в `/content/` — это не косметика, а несущая директива. Не убирайте её.
+
+### 4) Совместимость с клиентом — проверено
+
+`launcher/ChillHub/Core/Net/HttpClientProvider.cs` (файл не менялся):
+
+- `AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate` — распаковка выполняется прозрачно в `HttpClientHandler`;
+- `http.DefaultRequestHeaders.AcceptEncoding.ParseAdd("gzip, deflate")` — заголовок уходит на каждом запросе.
+
+Значит:
+
+- манифесты, `/api/*` и `/news/*.json` клиент получает уже сжатыми и распаковывает сам, без изменений в коде лаунчера;
+- **клиент не объявляет `br` и не объявляет `zstd`.** Даже если поставить соответствующий модуль в nginx, лаунчеру он не даст ничего: без `Accept-Encoding: br`/`zstd` nginx обязан отдать gzip или identity. Выигрыш достался бы только браузерам на лендинге и в админке.
+
+Проверка того, что и клиент, и сжатие ведут себя правильно (сравнение размеров одного и того же манифеста):
 
 ```bash
-# Пример (пути зависят от пакета в вашей ОС)
-echo 'load_module modules/ngx_http_brotli_filter_module.so;' | sudo tee /etc/nginx/modules-enabled/60-brotli-filter.conf
-echo 'load_module modules/ngx_http_brotli_static_module.so;' | sudo tee /etc/nginx/modules-enabled/60-brotli-static.conf
+URL=https://launcher.samoy.love/manifests/drive-beyond-horizons/1.0.2.json
 
+# заголовки: ожидаем Content-Encoding: gzip и Vary: Accept-Encoding
+curl -sI -H 'Accept-Encoding: gzip' "$URL" | grep -iE 'content-encoding|vary|cache-control'
+
+# фактическая экономия
+curl -so /dev/null -H 'Accept-Encoding: gzip'     -w 'gzip:     %{size_download}\n' "$URL"
+curl -so /dev/null -H 'Accept-Encoding: identity' -w 'identity: %{size_download}\n' "$URL"
+
+# КОНТРОЛЬ: на /content/ сжатия быть НЕ должно (ожидаем пустой вывод по content-encoding)
+curl -sI -H 'Accept-Encoding: gzip' https://launcher.samoy.love/content/<game>/<hash> | grep -i content-encoding
+
+# КОНТРОЛЬ: докачка по Range на /content/ жива (ожидаем 206 Partial Content)
+curl -sI -H 'Accept-Encoding: gzip' -H 'Range: bytes=0-1023' \
+     https://launcher.samoy.love/content/<game>/<hash> | head -1
+```
+
+### 5) Нужен ли zstd или brotli — оценка, а не догадка
+
+Сравнение на том же манифесте `drive-beyond-horizons/1.0.2.json` (905 549 B):
+
+| кодек | размер, B | коэффициент | выигрыш к нашему gzip -5 |
+|---|---:|---:|---:|
+| gzip -5 (текущий) | 272 404 | 3.32x | — |
+| gzip -9 | 268 824 | 3.37x | −3 580 B (−1.3%) |
+| zstd -3 | 253 424 | 3.57x | −18 980 B (−7.0%) |
+| zstd -9 | 244 919 | 3.70x | −27 485 B (−10.1%) |
+| zstd -19 | 226 129 | 4.00x | −46 275 B (−17.0%) |
+| brotli -q 5 | 257 320 | 3.52x | −15 084 B (−5.5%) |
+| brotli -q 11 | 218 592 | 4.14x | −53 812 B (−19.8%) |
+
+На `repo/1.0.0.json` (89 236 B) картина та же: gzip -5 = 28 640, zstd -19 = 24 490, brotli -q 11 = 23 356.
+
+Вывод: **zstd/brotli объективно лучше gzip на 5–20% сжатого объёма, но внедрять их сейчас не стоит.** Причины, по убыванию веса:
+
+1. **Клиент их не запросит** (см. п. 4). Основной потребитель манифестов — лаунчер, а он умеет только gzip/deflate. Модуль работал бы вхолостую для 100% трафика манифестов.
+2. **Ни zstd, ни brotli не входят в стоковую сборку nginx.** `zstd-nginx-module` и `ngx_brotli` — сторонние модули; в Debian/Ubuntu их нет в пакете `nginx`.
+3. Экономия измеряется десятками килобайт на запрос, тогда как gzip уже снял основные ~618 KiB из 884 KiB.
+
+Что потребуется от владельца, если внедрять всё-таки решим (для полноты; **сначала нужно расширить клиент**):
+
+- добавить в лаунчер `DecompressionMethods.Brotli` и `br` в `Accept-Encoding` (для zstd в .NET готовой поддержки нет вовсе — пришлось бы тащить стороннюю библиотеку и распаковывать вручную);
+- на сервере: либо перейти на сборку/репозиторий с модулем (`nginx-extras`, PPA Ondřej Surý), либо собрать nginx из исходников с `--add-module=/path/to/ngx_brotli` — это ручной пересбор при каждом обновлении nginx и потеря автообновлений безопасности из пакетов;
+- подключить модуль (`load_module ...;` в `/etc/nginx/modules-enabled/`), после чего **обязательно** `sudo nginx -t && sudo systemctl reload nginx`. Если модуль не загрузится, `nginx -t` упадёт и reload не пройдёт — то есть это ещё и риск для деплоя.
+
+Оценка: соотношение «риск + ручной пересбор + правка клиента» против «−5…20% от 272 KB» — не в пользу внедрения. Пересмотреть стоит, если манифесты вырастут на порядок или появится веб-клиент.
+
+### 6) Опция без CPU: предсжатые манифесты + `gzip_static`
+
+Альтернатива, которая убирает процессорную стоимость целиком: сжимать манифест один раз при публикации сборки и класть рядом `<version>.json.gz`, а в nginx включить `gzip_static on;` в `location ^~ /manifests/`. Тогда nginx отдаёт готовый файл, можно позволить себе `gzip -9` (268 824 B вместо 272 404 B) и не тратить CPU вообще.
+
+Не включено по умолчанию по двум причинам:
+
+1. требуется модуль `ngx_http_gzip_static_module` — он есть в пакетах Debian/Ubuntu, но это надо подтвердить на конкретном хосте:
+   ```bash
+   nginx -V 2>&1 | tr ' ' '\n' | grep -i gzip_static   # ожидаем --with-http_gzip_static_module
+   ```
+2. требуется изменение на стороне публикации сборок (админ-бэкенд должен писать `.gz` рядом с манифестом), иначе директива просто ничего не делает.
+
+Разовое предсжатие уже опубликованных манифестов, если решите попробовать:
+
+```bash
+sudo bash -lc 'find /var/www/launcher/manifests -type f -name "*.json" -exec gzip -k -f -9 {} \;'
+```
+
+Важно: при таком подходе `.gz` надо перегенерировать при **каждом** изменении `.json`, иначе nginx отдаст устаревшее содержимое.
+
+### 7) Почему сжатие делается в nginx, а не в Go
+
+`/api/*` проксируется на Go (`server/cmd/api`), но компрессию там включать не нужно, и она сознательно не добавлена:
+
+- nginx уже терминирует TLS, знает MIME-тип ответа и корректно ведёт `Vary: Accept-Encoding`;
+- одно место конфигурации вместо двух: правило «текст жмём, `/content/` не жмём» существует в одном файле и проверяется одним `nginx -t`;
+- в Go пришлось бы городить middleware поверх `httpx` с собственным разбором `Accept-Encoding`, ломая `http.FileServer` (dev-режим раздаёт `/content/` тем же процессом — сжатие там повторило бы ровно ту проблему с `Range`, от которой мы уходим в проде);
+- двойное сжатие (Go отдаёт gzip → nginx не сжимает повторно, но и не может изменить уровень) лишает возможности управлять компромиссом из конфига.
+
+Поэтому в `server/internal/httpx` и `server/cmd/api` по этой задаче не менялось ничего.
+
+### 8) Проверка конфига
+
+```bash
+# Авторитетная проверка — только на сервере:
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-Далее можно включить директивы Brotli в `server { ... }` (или `http { ... }`). Мы не включили их в `deploy/launcher.conf` по умолчанию, чтобы не ломать `nginx -t`, если модуль отсутствует. Если модуль точно есть, добавьте в ваш рабочий конфиг:
-
-```nginx
-# Brotli (включайте только если модуль загружается корректно)
-brotli on;
-brotli_comp_level 5;          # 4–6 — хороший баланс
-brotli_static on;             # отдавать заранее сжатые .br при наличии
-brotli_types
-  text/plain text/css text/javascript application/javascript application/json 
-  application/manifest+json application/xml image/svg+xml font/ttf font/otf font/collection;
-```
-
-Предсжатие статических файлов Brotli:
+Локально (без бинарника nginx) синтаксис проверялся парсером `crossplane`. Важно: файл `deploy/launcher.conf` — фрагмент для `http { ... }`, поэтому парсить его надо через обёртку:
 
 ```bash
-sudo bash -lc '
-  find /var/www/site -type f \
-    \( -name "*.css" -o -name "*.js" -o -name "*.svg" -o -name "*.json" -o -name "*.html" \) \
-    -exec brotli -f -q 11 {} \;'
+pip install crossplane
+cat > /tmp/wrap.conf <<'EOF'
+events { }
+http {
+    include "/absolute/path/to/deploy/launcher.conf";
+}
+EOF
+crossplane parse /tmp/wrap.conf | python -c 'import json,sys; d=json.load(sys.stdin); print(d["status"], d["errors"])'
+# ожидаем: ok []
 ```
 
-### 3) Проверка, что сжатие работает
-
-```bash
-# Gzip: смотрим, что сервер отдаёт gzip при запросе с Accept-Encoding
-curl -sI -H 'Accept-Encoding: gzip' https://launcher.samoy.love/styles.css | grep -iE 'content-encoding|cache-control'
-
-# Brotli (если включён):
-curl -sI -H 'Accept-Encoding: br' https://launcher.samoy.love/styles.css | grep -iE 'content-encoding|cache-control'
-
-# Проверка фактической экономии
-curl -so /dev/null -H 'Accept-Encoding: gzip' -w '%{size_download}\n' https://launcher.samoy.love/styles.css
-curl -so /dev/null -H 'Accept-Encoding: identity' -w '%{size_download}\n' https://launcher.samoy.love/styles.css
-```
-
-Если `Content-Encoding: gzip`/`br` присутствует — всё ок. Для HTML в нашем конфиге включено `no-store`, но сжатие для HTML nginx всё равно применяет (если не запрещать отдельно).
+`crossplane` проверяет синтаксис, контексты и число аргументов директив, но **не** проверяет наличие модулей и не заменяет `nginx -t` на боевом хосте.
