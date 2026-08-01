@@ -623,7 +623,7 @@ namespace ChillHub.Pages {
                 var gid = game.GameId;
                 var latest = game.LatestVersion;
                 var hasLatest = !string.IsNullOrWhiteSpace(latest);
-                var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
+                var localRoot = GameLocalRoot(gid);
                 var hasLocalFiles = HasAnyLocalGameFiles(localRoot);
                 var unfinished = ChillHub.Core.Sync.SimpleSyncService.HasUpdateMarker(localRoot);
                 if (unfinished) {
@@ -647,10 +647,10 @@ namespace ChillHub.Pages {
                 }
 
                 // Получаем манифест latest и план сравнения
-                var manifestUrl = $"{this.BaseApi}/manifests/{gid}/{latest}.json";
+                var manifestUrl = IntegrityChecker.ManifestUrl(this.BaseApi, gid, latest);
                 Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} fetching manifest {manifestUrl}");
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, CancellationToken.None);
-                var contentBase = $"{this.BaseApi}/content/{gid}/{latest}/files";
+                var contentBase = IntegrityChecker.ContentBaseUrl(this.BaseApi, gid, latest);
                 var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, CancellationToken.None);
                 Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
                 LogPlanDownloads(gid, "verify", plan, localRoot);
@@ -992,8 +992,8 @@ namespace ChillHub.Pages {
                     return;
                 }
 
-                var manifestUrl = $"{this.BaseApi}/manifests/{gid}/{version}.json";
-                var contentBase = $"{this.BaseApi}/content/{gid}/{version}/files";
+                var manifestUrl = IntegrityChecker.ManifestUrl(this.BaseApi, gid, version);
+                var contentBase = IntegrityChecker.ContentBaseUrl(this.BaseApi, gid, version);
                 var localRoot = GameLocalRoot(gid);
 
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, CancellationToken.None);
@@ -1239,8 +1239,8 @@ namespace ChillHub.Pages {
                 this.SpeedEtaText.Text = string.Empty;
                 this.emaSpeedMBs = 0.0;
 
-                var manifestUrl = $"{this.BaseApi}/manifests/{gid}/{version}.json";
-                var contentBase = $"{this.BaseApi}/content/{gid}/{version}/files";
+                var manifestUrl = IntegrityChecker.ManifestUrl(this.BaseApi, gid, version);
+                var contentBase = IntegrityChecker.ContentBaseUrl(this.BaseApi, gid, version);
 
                 this.StatusText.Text = "Загрузка манифеста...";
                 this.UpdateProgress.IsIndeterminate = true;
@@ -1251,7 +1251,7 @@ namespace ChillHub.Pages {
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, token);
                 this.StatusText.Text = "Проверка...";
                 this.UpdateProgress.IsIndeterminate = true;
-                var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
+                var localRoot = GameLocalRoot(gid);
                 var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, token);
                 Core.Logging.Logger.Info($"StartUpdateAsync plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
                 LogPlanDownloads(gid, "update", plan, localRoot);
@@ -1628,7 +1628,7 @@ namespace ChillHub.Pages {
                 var cfg = ChillHub.Core.ConfigService.Current;
                 cfg.LastGameId = gid;
                 ChillHub.Core.ConfigService.Save(cfg);
-                var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
+                var localRoot = GameLocalRoot(gid);
                 var rel = game.ExeRelativePath.Replace('/', System.IO.Path.DirectorySeparatorChar).Replace('\\', System.IO.Path.DirectorySeparatorChar);
                 var exePath = System.IO.Path.Combine(localRoot, rel);
                 if (!System.IO.File.Exists(exePath)) {
@@ -1697,7 +1697,7 @@ namespace ChillHub.Pages {
                     return;
                 }
 
-                var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
+                var localRoot = GameLocalRoot(gid);
                 var hasFiles = Directory.Exists(localRoot) && HasAnyLocalGameFiles(localRoot);
 
                 if (fe?.ContextMenu != null) {
@@ -1899,7 +1899,7 @@ namespace ChillHub.Pages {
                     this.StatusText.Text = "Не удалось определить игру";
                     return;
                 }
-                var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
+                var localRoot = GameLocalRoot(gid);
                 if (!Directory.Exists(localRoot)) {
                     this.StatusText.Text = "Папка игры не найдена";
                     return;
@@ -1926,7 +1926,7 @@ namespace ChillHub.Pages {
                     this.StatusText.Text = "Не удалось определить игру";
                     return;
                 }
-                var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
+                var localRoot = GameLocalRoot(gid);
 
                 // Переключаем текущий выбор на удаляемую игру, чтобы область действий и статусы относились к ней
                 if (gi != null) {

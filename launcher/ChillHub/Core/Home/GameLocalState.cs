@@ -14,11 +14,14 @@ namespace ChillHub.Core.Home {
     /// </summary>
     internal static class GameLocalState {
         /// <summary>Имя файла-маркера с установленной версией.</summary>
-        internal const string VersionMarkerFileName = ".version";
+        internal const string VersionMarkerFileName = Sync.IntegrityChecker.VersionMarkerFileName;
 
-        /// <summary>Путь к локальной папке игры.</summary>
+        /// <summary>
+        /// Путь к локальной папке игры. Тонкая обёртка над <see cref="Sync.IntegrityChecker.GameLocalRoot"/>:
+        /// здесь только подстановка папки игр из конфига.
+        /// </summary>
         internal static string GameLocalRoot(string? gameId)
-            => Path.Combine(ConfigService.Current.GamesPath, gameId ?? string.Empty);
+            => Sync.IntegrityChecker.GameLocalRoot(ConfigService.Current.GamesPath, gameId);
 
         /// <summary>Осталось ли от прерванного обновления полусобранное состояние игры (C2).</summary>
         internal static bool HasUnfinishedUpdate(string? gameId) {
@@ -31,39 +34,11 @@ namespace ChillHub.Core.Home {
 
         /// <summary>
         /// Есть ли в папке игры хотя бы один «полезный» файл (служебные `.staging/`, `.version`
-        /// и маркер обновления не считаются).
+        /// и маркер обновления не считаются). Реализация одна на весь клиент — в
+        /// <see cref="Sync.IntegrityChecker.HasAnyLocalGameFiles"/>.
         /// </summary>
-        internal static bool HasAnyLocalGameFiles(string localRoot) {
-            try {
-                if (string.IsNullOrWhiteSpace(localRoot) || !Directory.Exists(localRoot)) {
-                    return false;
-                }
-
-                foreach (var path in Directory.EnumerateFiles(localRoot, "*", SearchOption.AllDirectories)) {
-                    var rel = Path.GetRelativePath(localRoot, path).Replace('\\', '/');
-                    if (rel.StartsWith(".staging/", StringComparison.OrdinalIgnoreCase)) {
-                        continue;
-                    }
-
-                    if (string.Equals(rel, VersionMarkerFileName, StringComparison.OrdinalIgnoreCase)) {
-                        continue;
-                    }
-
-                    if (string.Equals(rel, Sync.SimpleSyncService.UpdateMarkerFileName, StringComparison.OrdinalIgnoreCase)) {
-                        // Маркер незавершённого обновления — служебный файл, не считаем его файлом игры
-                        continue;
-                    }
-
-                    return true; // нашли хотя бы один полезный файл
-                }
-            }
-            catch (Exception ex) {
-                // Папка может быть недоступна/удалена во время обхода — считаем, что файлов нет.
-                Logging.Logger.Warn($"GameLocalState.HasAnyLocalGameFiles: не удалось обойти '{localRoot}': {ex.Message}");
-            }
-
-            return false;
-        }
+        internal static bool HasAnyLocalGameFiles(string localRoot)
+            => Sync.IntegrityChecker.HasAnyLocalGameFiles(localRoot);
 
         /// <summary>Читает установленную версию из маркера. Пустая строка = игра не установлена.</summary>
         internal static string ReadLocalVersion(string? gameId) {
