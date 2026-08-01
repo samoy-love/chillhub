@@ -39,6 +39,10 @@ namespace ChillHub.Core.Sync {
             ArgumentNullException.ThrowIfNull(manifest);
 
             var files = manifest.Files ?? new List<ManifestFile>();
+
+            // Регистронезависимо — ровно как ключуется словарь в планировщике и как
+            // ведёт себя файловая система Windows: "A.dll" и "a.dll" — один файл.
+            var seenFiles = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             for (var i = 0; i < files.Count; i++) {
                 var f = files[i];
                 if (f is null) {
@@ -49,14 +53,30 @@ namespace ChillHub.Core.Sync {
                 if (reason != null) {
                     throw Fail(source, $"файл #{i}: путь '{f.Path}' отвергнут ({reason})");
                 }
+
+                // Подпись инвариантна к перестановке записей (список сортируется),
+                // а планировщик оставляет ПОСЛЕДНЮЮ. Значит две записи на один путь
+                // позволяют выбрать, какой файл получит пользователь, не трогая подпись.
+                if (seenFiles.TryGetValue(f.Path, out var prev)) {
+                    throw Fail(source, $"путь '{f.Path}' встречается дважды (записи #{prev} и #{i})");
+                }
+
+                seenFiles[f.Path] = i;
             }
 
             var dirs = manifest.EmptyDirs ?? new List<string>();
+            var seenDirs = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             for (var i = 0; i < dirs.Count; i++) {
                 var reason = ManifestPath.Describe(dirs[i]);
                 if (reason != null) {
                     throw Fail(source, $"пустой каталог #{i}: путь '{dirs[i]}' отвергнут ({reason})");
                 }
+
+                if (seenDirs.TryGetValue(dirs[i], out var prevDir)) {
+                    throw Fail(source, $"пустой каталог '{dirs[i]}' встречается дважды (записи #{prevDir} и #{i})");
+                }
+
+                seenDirs[dirs[i]] = i;
             }
         }
 
