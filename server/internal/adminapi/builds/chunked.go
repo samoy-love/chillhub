@@ -32,6 +32,16 @@ import (
 const (
 	uploadChunkSizeDefault = 8 << 20 // 8 MiB
 	uploadExpire           = 12 * time.Hour
+	// uploadIdleGrace is how long an upload may sit untouched before the manual
+	// cleanup endpoint treats it as abandoned. It is far shorter than
+	// uploadExpire (that one is the unattended janitor's budget) but still long
+	// enough that a running multi-gigabyte upload — which refreshes its meta on
+	// every chunk — is never in scope.
+	uploadIdleGrace = time.Hour
+	// uploadDoneRetention is how long the record of a finished upload is kept
+	// around so a late status poll still answers. Its payload is deleted as soon
+	// as processing succeeds, so this holds a few hundred bytes, not 30 GB.
+	uploadDoneRetention = time.Hour
 )
 
 var uploadMu sync.Mutex
@@ -130,7 +140,53 @@ func (h *Handlers) writeUploadMeta(m *uploadMeta) error {
 	return os.Rename(tmpPath, h.uploadMetaPath(m.UploadID))
 }
 
-// UploadCleanup triggers immediate cleanup of stale/broken tmp uploads.
+// entryModTime returns the modification time of a directory entry, or the zero
+// time when it cannot be read.
+func entryModTime(e os.DirEntry) time.Time {
+	info, err := e.Info()
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
+}
+
+// uploadIdle reports how long an upload has been untouched. The meta file is
+// rewritten on every chunk, so its UpdatedAt is the liveness signal; a directory
+// without meta falls back to its modification time.
+func uploadIdle(m *uploadMeta, fallback time.Time, now time.Time) time.Duration {
+	ts := fallback
+	if m != nil && m.UpdatedAt > 0 {
+		ts = time.Unix(m.UpdatedAt, 0)
+	}
+	if ts.IsZero() {
+		// Unknown age: treat as ancient rather than immortal.
+		return 365 * 24 * time.Hour
+	}
+	return now.Sub(ts)
+}
+
+// reapUpload decides whether an upload directory may be deleted.
+//
+// It exists because "remove everything under tmp" destroyed uploads that were
+// actively being written by another admin: a 30 GB build takes hours, and one
+// click on "clean up" threw it away mid-flight.
+func reapUpload(m *uploadMeta, idle, expire time.Duration) bool {
+	if m == nil { // broken leftover with no metadata
+		return idle > uploadIdleGrace
+	}
+	switch m.Status {
+	case "done", "processed":
+		// The ZIP is already gone; only the record is left.
+		return idle > uploadDoneRetention
+	}
+	return idle > expire
+}
+
+// UploadCleanup removes abandoned tmp uploads.
+//
+// It deliberately does NOT wipe contentRoot/tmp wholesale: uploads in progress
+// live there too, and another admin's multi-gigabyte transfer must survive
+// somebody pressing this button.
 func (h *Handlers) UploadCleanup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -140,23 +196,53 @@ func (h *Handlers) UploadCleanup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	// Force-remove all entries under contentRoot/tmp
-	tmpRoot := filepath.Join(h.root, "tmp")
-	entries, err := os.ReadDir(tmpRoot)
-	if err != nil {
-		// If tmp root doesn't exist, nothing to remove
-		adminutil.WriteJSON(w, map[string]any{"status": "ok", "removed": 0})
-		return
-	}
+	now := time.Now()
 	removed := 0
-	for _, e := range entries {
-		p := filepath.Join(tmpRoot, e.Name())
-		if err := os.RemoveAll(p); err != nil {
-			log.Printf("[upload:cleanup] failed to remove %s: %v", p, err)
-		} else {
+
+	// 1. Abandoned chunked uploads.
+	if entries, err := os.ReadDir(h.uploadBaseDir()); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			id := e.Name()
+			if !adminutil.IsHexID(id) {
+				// Not something this server created; only drop it once it is stale.
+				if now.Sub(entryModTime(e)) <= uploadIdleGrace {
+					continue
+				}
+			}
+			m, _ := h.readUploadMeta(id)
+			if !reapUpload(m, uploadIdle(m, entryModTime(e), now), uploadIdleGrace) {
+				continue
+			}
+			if err := os.RemoveAll(h.uploadDir(id)); err != nil {
+				log.Printf("[upload:cleanup] failed to remove %s: %v", h.uploadDir(id), err)
+				continue
+			}
 			removed++
 		}
 	}
+
+	// 2. Leftover temp ZIPs from the /uploadStream path.
+	tmpRoot := filepath.Join(h.root, "tmp")
+	if entries, err := os.ReadDir(tmpRoot); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasPrefix(e.Name(), "upload-") {
+				continue
+			}
+			if now.Sub(entryModTime(e)) <= uploadIdleGrace {
+				continue // still being written by a live request
+			}
+			p := filepath.Join(tmpRoot, e.Name())
+			if err := os.Remove(p); err != nil {
+				log.Printf("[upload:cleanup] failed to remove %s: %v", p, err)
+				continue
+			}
+			removed++
+		}
+	}
+
 	adminutil.WriteJSON(w, map[string]any{"status": "ok", "removed": removed})
 }
 
@@ -520,6 +606,12 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	// Keep the record's liveness up to date: the janitor and the cleanup endpoint
+	// decide what to delete from it, and a run that neither refreshes nor
+	// finalises its meta looks abandoned.
+	m.Status = "processing"
+	_ = h.writeUploadMeta(m)
+
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	nw := newNDJSONWriter(w)
 	fl := adminutil.Flusher(nw)
@@ -582,6 +674,15 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 		streamError(nw, fl, err.Error())
 		return
 	}
+	// The archive has served its purpose. Dropping it here — rather than waiting
+	// out the janitor's 12 hours — is what keeps a 30 GB upload from occupying
+	// the volume long after the build is live.
+	if err := os.Remove(zipPath); err != nil && !os.IsNotExist(err) {
+		log.Printf("[upload:process] uploadId=%s: cannot remove %s: %v", id, zipPath, err)
+	}
+	m.Status = "done"
+	_ = h.writeUploadMeta(m)
+
 	fmt.Fprintf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
 	fl.Flush()
 }
@@ -591,28 +692,30 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) StartUploadJanitor() {
 	for {
 		time.Sleep(15 * time.Minute)
-		d := h.uploadBaseDir()
-		entries, err := os.ReadDir(d)
-		if err != nil {
+		h.sweepUploads(time.Now())
+	}
+}
+
+// sweepUploads is one janitor pass, factored out so the tests can run it.
+//
+// The old version skipped status "done"/"processed" forever — values nothing
+// ever wrote, since UploadComplete sets "ready" and the processing handler did
+// not touch the meta at all. Now the processing handler maintains the status and
+// deletes the (up to 30 GB) ZIP as soon as it has been extracted, so this pass
+// only has to expire records.
+func (h *Handlers) sweepUploads(now time.Time) {
+	entries, err := os.ReadDir(h.uploadBaseDir())
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
 			continue
 		}
-		cut := time.Now().Add(-uploadExpire).Unix()
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			id := e.Name()
-			m, err := h.readUploadMeta(id)
-			if err != nil { // no meta -> stale dir
-				_ = os.RemoveAll(h.uploadDir(id))
-				continue
-			}
-			if m.Status == "done" || m.Status == "processed" {
-				continue
-			}
-			if m.UpdatedAt == 0 || m.UpdatedAt < cut {
-				_ = os.RemoveAll(h.uploadDir(id))
-			}
+		id := e.Name()
+		m, _ := h.readUploadMeta(id)
+		if reapUpload(m, uploadIdle(m, entryModTime(e), now), uploadExpire) {
+			_ = os.RemoveAll(h.uploadDir(id))
 		}
 	}
 }
