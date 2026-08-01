@@ -1,5 +1,11 @@
 # Скрипты разработки
 
+Содержание:
+- [`run-dev.ps1` — локальная разработка (3 окна)](#run-devps1--локальная-разработка-3-окна)
+- [`deploy-win.ps1` — удалённый деплой с Windows](#deploy-winps1--удалённый-деплой-с-windows)
+- [Прочие скрипты](#прочие-скрипты)
+- [Проверки перед пушем](#проверки-перед-пушем)
+
 ## `run-dev.ps1` — локальная разработка (3 окна)
 Скрипт запускает три процесса в отдельных окнах: Public API (`server/cmd/api`), Admin (`server/cmd/admin`) и клиент WPF (`launcher/ChillHub`). Умеет обновлять клиентскую конфигурацию (`%APPDATA%/ChillHub/config.json`). Требования: Go 1.22+, .NET 8 SDK. Windows PowerShell/PowerShell 7.
 
@@ -32,10 +38,17 @@
 - Нажмите `q` или русскую `й` + Enter — корректное завершение (освобождает порты, закрывает клиент).
 
 ### Примечания
-- Для запуска клиента против прод‑сервера задайте `-Env prod` (пропишет `ApiBaseUrl` в `%APPDATA%/ChillHub/config.json`).
+- Для запуска клиента против прод‑сервера задайте `-Env prod` (пропишет `ApiBaseUrl` в `%APPDATA%\ChillHub\config.json`).
+- Конфиг клиента живёт в `%APPDATA%\ChillHub`, а НЕ в `%LOCALAPPDATA%\ChillHub`: последний — это каталог установки лаунчера, и конфиг оттуда попадал в манифест обновления, давая бесконечный цикл самообновления. Локальный bcrypt‑хэш админа (`admin.secret.json`) при этом по‑прежнему лежит в `%LOCALAPPDATA%\ChillHub` — это отдельный файл dev‑скрипта.
+- Логи клиента: `%APPDATA%\ChillHub\logs\client.log` (ротация, до 3 архивов). Пишутся по умолчанию; выключить — `CHILLHUB_CLIENT_LOG=0`.
 - Проверка доступности после старта:
   - API: http://localhost:55700/api/games
+  - Режим техработ: http://localhost:55700/api/maintenance (всегда 200)
   - Admin UI: http://localhost:55777/admin
+- Полезные переменные окружения для dev:
+  - `YL_DEV_SKIP_SELF_UPDATE=1` — пропустить проверку самообновления лаунчера.
+  - `CHILLHUB_MANIFEST_STRICT=1` — строгий режим проверки подписи манифестов (по умолчанию действует режим совместимости).
+  - `API_RATE_LIMIT=0` — отключить rate limit публичного API на время нагрузочных проверок.
 
 ---
 
@@ -89,3 +102,36 @@ make deploy-win HOST=your.vps.host USER=ubuntu KEY="C:/Users/you/.ssh/id_rsa" \
 Замечания по безопасности:
 - По возможности используйте `-AdminPasswordBcrypt` вместо `-AdminPasswordPlain`.
 - При передаче plain‑пароля через командную строку он может попасть в историю/журналы — используйте с осторожностью.
+
+---
+
+## Прочие скрипты
+
+| Скрипт | Где запускается | Назначение |
+|---|---|---|
+| `deploy.sh` | сервер / по SSH | полный деплой: сборка, статика, конфиг nginx, systemd, смоук‑тесты |
+| `deploy-nginx.sh` | НА СЕРВЕРЕ, под root | идемпотентная раскладка nginx‑конфига в **свой** файл `/etc/nginx/sites-available/chillhub-launcher.conf` + симлинк, бэкап, `nginx -t` и откат при ошибке. Имя файла переопределяется переменной `SITE_NAME`. Чужие сайты на хосте не затрагиваются |
+| `build-installer.ps1` | Windows | сборка NSIS‑инсталлятора (`installer.nsi`) |
+| `bench-upload.ps1` | Windows | замеры скорости загрузки сборок в админку |
+| `compress-images.ps1` | Windows | пакетное сжатие изображений |
+| `run-admin.ps1` / `run-client.ps1` / `dev.ps1` / `env.ps1` | Windows | точечный запуск отдельных частей и настройка окружения |
+
+Проверка nginx‑конфига без сервера — `sh deploy/nginx-check.sh` (настоящий `nginx -t`
+в Docker на версии прода); подробности в `deploy/README.md`.
+
+---
+
+## Проверки перед пушем
+
+```bash
+cd server && go test ./...                               # серверные пакеты
+dotnet test launcher/tests/ChillHub.Tests                # клиент: план/дифф, хеши, подпись
+dotnet run --project updater/tests/ManifestPreserveCheck # петля самообновления
+sh deploy/nginx-check.sh                                 # настоящий nginx -t в Docker
+make lint                                                # web/go/dotnet линтеры
+```
+
+`ManifestPreserveCheck` падает, если в манифест лаунчера попали пользовательские
+файлы (`config.json`, `launcher.version`) — это ровно та ситуация, из‑за которой
+лаунчер начинает предлагать обновление при каждом запуске. Подробности —
+`Documentation.md` §22.
