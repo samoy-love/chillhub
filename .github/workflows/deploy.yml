@@ -110,6 +110,94 @@ jobs:
           path: build/*.manifest
           if-no-files-found: ignore
 
+      # ---------------------------------------------------------------------
+      # Admin password hash — computed HERE, on the runner, never on the VPS.
+      #
+      # This step used to live inside the remote deploy script: it wrote a
+      # temporary .go file onto the production host and ran `go run` on it to
+      # turn ADMIN_PASSWORD_PLAIN into a bcrypt hash. That required a full Go
+      # toolchain to be installed on a box whose only job is to run two static
+      # binaries, and it compiled+executed generated source code in production
+      # on every deploy. Both are removed now: the runner already has Go (see
+      # the "Set up Go" step) and the server receives only the finished hash.
+      #
+      # As a side effect the PLAINTEXT admin password no longer travels to the
+      # server at all — ADMIN_PASSWORD_PLAIN is consumed on the runner and
+      # never referenced in the SSH script again.
+      #
+      # Nothing here echoes the password or the hash: the step runs without
+      # `set -x`, the hash is registered with ::add-mask:: before it can reach
+      # any log, and it is handed to later steps through $GITHUB_ENV (which is
+      # not printed) rather than through a step output.
+      # ---------------------------------------------------------------------
+      - name: Resolve admin password hash (bcrypt on runner)
+        env:
+          ADMIN_PASSWORD_BCRYPT: ${{ secrets.ADMIN_PASSWORD_BCRYPT }}
+          ADMIN_PASSWORD_PLAIN: ${{ secrets.ADMIN_PASSWORD_PLAIN }}
+        run: |
+          set -eu
+          HASH=""
+          if [ -n "${ADMIN_PASSWORD_BCRYPT:-}" ]; then
+            echo "ADMIN_PASSWORD_BCRYPT secret is set - passing it through unchanged."
+            HASH="$ADMIN_PASSWORD_BCRYPT"
+          elif [ -n "${ADMIN_PASSWORD_PLAIN:-}" ]; then
+            echo "Only ADMIN_PASSWORD_PLAIN is set - hashing it here on the runner."
+            TOOL_DIR="server/deploy_bcrypt_tool"
+            mkdir -p "$TOOL_DIR"
+            # Built inside the existing server module so golang.org/x/crypto
+            # resolves from the pinned go.mod/go.sum and the warmed module
+            # cache - no extra download, no floating version.
+            cat > "$TOOL_DIR/main.go" <<'GOEOF'
+          package main
+
+          import (
+          	"fmt"
+          	"os"
+
+          	"golang.org/x/crypto/bcrypt"
+          )
+
+          func main() {
+          	pw := os.Getenv("PW")
+          	if pw == "" {
+          		fmt.Fprintln(os.Stderr, "PW is empty")
+          		os.Exit(1)
+          	}
+          	h, err := bcrypt.GenerateFromPassword([]byte(pw), 12)
+          	if err != nil {
+          		fmt.Fprintln(os.Stderr, "bcrypt failed:", err)
+          		os.Exit(1)
+          	}
+          	fmt.Print(string(h))
+          }
+          GOEOF
+            HASH="$(cd server && PW="$ADMIN_PASSWORD_PLAIN" go run ./deploy_bcrypt_tool)"
+            rm -rf "$TOOL_DIR"
+            if [ -z "$HASH" ]; then
+              echo "::error::bcrypt hashing produced an empty result"
+              exit 1
+            fi
+            echo "Hashing succeeded (${#HASH} chars)."
+          else
+            echo "Neither ADMIN_PASSWORD_BCRYPT nor ADMIN_PASSWORD_PLAIN is set - the admin drop-in will not set a password."
+          fi
+          # The hash is shipped to the server base64-encoded, NOT raw. A bcrypt
+          # hash looks like $2a$12$... and appleboy/ssh-action injects env vars
+          # into the remote script as `export NAME=VALUE` without quoting, so a
+          # raw hash would be mangled by the remote shell's parameter expansion
+          # ($2a -> positional parameter, etc). Base64 output is [A-Za-z0-9+/=]
+          # only, which survives that injection intact.
+          if [ -n "$HASH" ]; then
+            echo "::add-mask::$HASH"
+            B64="$(printf '%s' "$HASH" | base64 -w0)"
+            echo "::add-mask::$B64"
+            echo "ADMIN_PASSWORD_BCRYPT_EXPECTED=1" >> "$GITHUB_ENV"
+            echo "ADMIN_PASSWORD_BCRYPT_B64=$B64" >> "$GITHUB_ENV"
+          else
+            echo "ADMIN_PASSWORD_BCRYPT_EXPECTED=0" >> "$GITHUB_ENV"
+            echo "ADMIN_PASSWORD_BCRYPT_B64=" >> "$GITHUB_ENV"
+          fi
+
       - name: Upload bundle to server (SCP)
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -122,10 +210,15 @@ jobs:
 
       - name: Deploy on server (SSH)
         uses: appleboy/ssh-action@v1.2.2
+        env:
+          # Produced by the "Resolve admin password hash" step above.
+          ADMIN_PASSWORD_BCRYPT_B64: ${{ env.ADMIN_PASSWORD_BCRYPT_B64 }}
+          ADMIN_PASSWORD_BCRYPT_EXPECTED: ${{ env.ADMIN_PASSWORD_BCRYPT_EXPECTED }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: ADMIN_PASSWORD_BCRYPT_B64,ADMIN_PASSWORD_BCRYPT_EXPECTED
           script: |
             set -eux
             # ANSI colors for nicer logs over SSH/GitHub Actions
@@ -200,16 +293,26 @@ jobs:
             ADMIN_DROPIN_DIR="/etc/systemd/system/chillhub-admin.service.d"
             JWT_SECRET="${{ secrets.JWT_SECRET }}"
             ADMIN_USER="${{ secrets.ADMIN_USER }}"
-            ADMIN_PASS_BCRYPT="${{ secrets.ADMIN_PASSWORD_BCRYPT }}"
-            ADMIN_PASS_PLAIN="${{ secrets.ADMIN_PASSWORD_PLAIN }}"
             COOKIE_DOMAIN="${{ secrets.COOKIE_DOMAIN }}"
             COOKIE_SECURE="${{ secrets.COOKIE_SECURE }}"
-            if [ -n "${ADMIN_PASS_PLAIN}" ] && [ -z "${ADMIN_PASS_BCRYPT}" ]; then
-              TMPGO=$(mktemp -t bcrypt-XXXXXX.go)
-              printf '%s\n' 'package main' 'import ("fmt" "golang.org/x/crypto/bcrypt" "os")' 'func main(){ p:=os.Getenv("PW"); if p=="" {fmt.Println(""); return}; h,_:=bcrypt.GenerateFromPassword([]byte(p),12); fmt.Print(string(h))}' > "$TMPGO"
-              ADMIN_PASS_BCRYPT=$(PW="$ADMIN_PASS_PLAIN" go run "$TMPGO" 2>/dev/null || true)
-              rm -f "$TMPGO" || true
+
+            # The bcrypt hash is computed on the GitHub runner (see the
+            # "Resolve admin password hash (bcrypt on runner)" step) and arrives
+            # here base64-encoded. This host no longer needs a Go toolchain and
+            # no longer compiles or runs generated code, and the PLAINTEXT admin
+            # password is never sent here at all.
+            set +x  # never let xtrace echo the hash
+            ADMIN_PASS_BCRYPT=""
+            if [ -n "${ADMIN_PASSWORD_BCRYPT_B64:-}" ]; then
+              ADMIN_PASS_BCRYPT="$(printf '%s' "$ADMIN_PASSWORD_BCRYPT_B64" | base64 -d)"
             fi
+            if [ "${ADMIN_PASSWORD_BCRYPT_EXPECTED:-0}" = "1" ] && [ -z "$ADMIN_PASS_BCRYPT" ]; then
+              # Fail loudly instead of quietly rewriting override.conf without a
+              # password line, which would lock the operator out of the panel.
+              err "[deploy] runner produced an admin password hash but it did not survive the transfer"
+              exit 1
+            fi
+            set -x
             if [ -n "${JWT_SECRET}${ADMIN_USER}${ADMIN_PASS_BCRYPT}${COOKIE_DOMAIN}${COOKIE_SECURE}" ]; then
               sudo mkdir -p "$ADMIN_DROPIN_DIR"
               TMPD=$(mktemp)
