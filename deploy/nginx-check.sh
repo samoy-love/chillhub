@@ -26,15 +26,25 @@
 # Log files under /var/log/nginx are opened by `nginx -t`, and that directory
 # already exists in the official image.
 #
+# Which version to check against
+# ------------------------------
+# The default is PRODUCTION's version, not the newest one. Production runs
+# nginx 1.24.0 (Ubuntu), and 1.24 rejects directives that a 1.27+ image happily
+# accepts (`http2 on;` is the one that bit us) — checking only on `nginx:alpine`
+# yields a false green and a failed reload on the server.
+#
 # Usage
 # -----
-#   sh deploy/nginx-check.sh              # default image (nginx:alpine, >= 1.25)
-#   NGINX_IMAGE=nginx:1.29-alpine sh deploy/nginx-check.sh
+#   sh deploy/nginx-check.sh                       # production version (1.24)
+#   NGINX_IMAGE=nginx:alpine sh deploy/nginx-check.sh   # newest, forward check
+#
+# Run BOTH before touching this config: 1.24 is what must not break today, the
+# newest tag tells you whether anything you rely on has been removed.
 #
 # Exit code is nginx's own: 0 = config OK, non-zero = errors (printed verbatim).
 set -eu
 
-NGINX_IMAGE="${NGINX_IMAGE:-nginx:alpine}"
+NGINX_IMAGE="${NGINX_IMAGE:-nginx:1.24-alpine}"
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 conf="$script_dir/launcher.conf"

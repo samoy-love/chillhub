@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -44,6 +45,12 @@ func TestMutatingHandlersRejectGET(t *testing.T) {
 		{name: "newsAssetsUploadByURL", h: s.news.AssetsUploadByURL, url: "http://example.com/admin/news/assets/uploadByUrl"},
 		{name: "newsAssetsDelete", h: s.news.AssetsDelete, url: "http://example.com/admin/news/assets/delete"},
 		{name: "newsAssetsRename", h: s.news.AssetsRename, url: "http://example.com/admin/news/assets/rename"},
+
+		{name: "maintenanceSet", h: s.maintenance.Set, url: "http://example.com/admin/maintenance/set"},
+		{name: "maintenanceClear", h: s.maintenance.Clear, url: "http://example.com/admin/maintenance/clear"},
+
+		{name: "metricsClear", h: s.metrics.Clear, url: "http://example.com/admin/metrics/clear"},
+		{name: "metricsReport", h: s.metrics.Submit, url: "http://example.com/metrics/report"},
 	}
 
 	for _, tc := range cases {
@@ -88,6 +95,11 @@ var wantPaths = []string{
 	"/admin/api/games/scan",
 	"/admin/api/health",
 	"/admin/api/list",
+	"/admin/api/maintenance/clear",
+	"/admin/api/maintenance/get",
+	"/admin/api/maintenance/set",
+	"/admin/api/metrics/clear",
+	"/admin/api/metrics/summary",
 	"/admin/api/news/assets",
 	"/admin/api/news/assets/delete",
 	"/admin/api/news/assets/mkdir",
@@ -125,6 +137,11 @@ var wantPaths = []string{
 	"/admin/games/scan",
 	"/admin/health",
 	"/admin/list",
+	"/admin/maintenance/clear",
+	"/admin/maintenance/get",
+	"/admin/maintenance/set",
+	"/admin/metrics/clear",
+	"/admin/metrics/summary",
 	"/admin/news/assets",
 	"/admin/news/assets/delete",
 	"/admin/news/assets/mkdir",
@@ -143,6 +160,7 @@ var wantPaths = []string{
 	"/admin/upload",
 	"/admin/uploadStream",
 	"/feedback/submit",
+	"/metrics/report",
 }
 
 // staticPaths are mounted conditionally (only when their directory exists), so
@@ -209,5 +227,26 @@ func TestFeedbackSubmitRateLimited(t *testing.T) {
 	}
 	if !limited {
 		t.Fatal("feedback submit was never rate limited")
+	}
+}
+
+// The public metrics ingest must stay rate limited too — it is the other
+// unauthenticated write endpoint.
+func TestMetricsReportRateLimited(t *testing.T) {
+	s := testServer(t)
+	h := s.metricsLimiter.Wrap(s.metrics.Submit, http.MethodPost)
+	limited := false
+	for i := 0; i < metricsRateLimit+2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "http://example.com/metrics/report",
+			strings.NewReader(`{"event":"launcher_start"}`))
+		req.RemoteAddr = "10.0.0.2:1234"
+		w := httptest.NewRecorder()
+		h(w, req)
+		if w.Code == http.StatusTooManyRequests {
+			limited = true
+		}
+	}
+	if !limited {
+		t.Fatal("metrics report was never rate limited")
 	}
 }

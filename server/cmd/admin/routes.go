@@ -41,6 +41,7 @@ func aliasOf(path string) string {
 // both prefixes; there is no second list to keep in sync.
 func (s *server) apiRoutes() []route {
 	b, n, g, f := s.builds, s.news, s.games, s.feedback
+	mt, mx := s.maintenance, s.metrics
 	return []route{
 		// Health probe (allowlisted in the auth middleware).
 		{path: "/admin/api/health", handler: func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") }},
@@ -78,6 +79,16 @@ func (s *server) apiRoutes() []route {
 		{path: "/admin/api/feedback/markRead", handler: f.MarkRead},
 		{path: "/admin/api/feedback/markUnread", handler: f.MarkUnread},
 		{path: "/admin/api/feedback/clear", handler: f.Clear},
+
+		// Maintenance mode. The launcher reads the state from the PUBLIC API
+		// (GET /api/maintenance on :55700); these three only write it.
+		{path: "/admin/api/maintenance/get", handler: mt.Get},
+		{path: "/admin/api/maintenance/set", handler: mt.Set},
+		{path: "/admin/api/maintenance/clear", handler: mt.Clear},
+
+		// Launcher metrics (the public ingest endpoint is registered separately).
+		{path: "/admin/api/metrics/summary", handler: mx.Summary},
+		{path: "/admin/api/metrics/clear", handler: mx.Clear},
 
 		// News management.
 		{path: "/admin/api/news/list", handler: n.List},
@@ -137,6 +148,12 @@ func (s *server) register(mux *http.ServeMux) []string {
 	// Public feedback submit (no auth; allowlisted in the auth middleware and
 	// rate limited per client IP).
 	add("/feedback/submit", s.feedbackLimiter.Wrap(s.feedback.Submit, http.MethodPost))
+
+	// Public metrics ingest (no auth; same shape as /feedback/submit — outside
+	// the /admin/ prefix, so the auth middleware never sees it, and rate limited
+	// per client IP). It lives on the admin process rather than the public API
+	// because this process is the single writer of the events file.
+	add("/metrics/report", s.metricsLimiter.Wrap(s.metrics.Submit, http.MethodPost))
 
 	// Static trees. Serving news/assets/manifests here lets the admin UI display
 	// images without an external nginx; each is only mounted when it exists.
