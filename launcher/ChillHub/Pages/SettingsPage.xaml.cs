@@ -89,8 +89,9 @@ namespace ChillHub.Pages {
 
         private void OpenLogsBtn_Click(object sender, RoutedEventArgs e) {
             try {
-                // Логи пишет Logger в %TEMP%\ChillHub
-                var dir = Path.Combine(Path.GetTempPath(), "ChillHub");
+                // Путь берём у Logger: логи переехали из %TEMP% (его чистит система
+                // вместе с отчётами) в %APPDATA%\ChillHub, к остальному состоянию.
+                var dir = ChillHub.Core.Logging.Logger.LogDirectory;
                 Directory.CreateDirectory(dir);
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
                     FileName = dir,

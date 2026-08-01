@@ -9,6 +9,23 @@ namespace ChillHub.Core {
     using System.Text;
 
     public static class Diagnostics {
+        /// <summary>
+        /// Потолок всего бандла в БАЙТАХ UTF-8. На сервере (admin, feedbackMaxLogBytes) стоит 256 КиБ,
+        /// и всё, что больше, молча обрезается. Держим запас.
+        /// </summary>
+        private const int BundleMaxBytes = 240 * 1024;
+
+        /// <summary>Суммарный бюджет на содержимое логов внутри бандла.</summary>
+        private const int LogsTotalBudgetBytes = 160 * 1024;
+
+        /// <summary>Потолок хвоста одного файла лога.</summary>
+        private const int LogTailBytes = 48 * 1024;
+
+        /// <summary>Общий бюджет на все секции логов: чтобы один болтливый файл не съел весь бандл.</summary>
+        private sealed class LogBudget {
+            public int Remaining = LogsTotalBudgetBytes;
+        }
+
         public sealed record DiagnosticsBundle(string LogsMarkdown, Dictionary<string, string> SystemHints);
 
         public static DiagnosticsBundle Build()
@@ -57,24 +74,29 @@ namespace ChillHub.Core {
                 } catch (Exception ex) { sb.AppendLine($"(games listing error: {ex.Message})"); }
                 sb.AppendLine();
 
-                // Logs
+                // Логи клиента: одна секция вместо прежних «Logs» + «Temp Logs».
+                // Путь берём у Logger, чтобы не разъезжаться с ним при переездах каталога.
+                var budget = new LogBudget();
                 sb.AppendLine("## Logs");
                 try {
-                    var logsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChillHub", "logs");
+                    var logsDir = ChillHub.Core.Logging.Logger.LogDirectory;
                     hints["logsDir"] = logsDir;
-                    AppendLogs(sb, logsDir, new[] { "launcher*.log", "updater*.log" }, maxFiles: 4, maxTailBytes: 150 * 1024);
-                } catch (Exception ex) { sb.AppendLine($"(logs error: {ex.Message})"); }
-                sb.AppendLine();
 
-                // Boot/client logs in TEMP (App boot, Logger)
-                sb.AppendLine("## Temp Logs");
-                try {
-                    var tmpCh = Path.Combine(Path.GetTempPath(), "ChillHub");
-                    var bootLog = Path.Combine(tmpCh, "boot.log");
-                    var clientLog = Path.Combine(tmpCh, "client.log");
-                    hints["tempDir"] = tmpCh;
-                    AppendSpecificLogs(sb, new[]{bootLog, clientLog}, maxFiles: 2, maxTailBytes: 120*1024);
-                } catch (Exception ex) { sb.AppendLine($"(temp logs error: {ex.Message})"); }
+                    // Собираем и активные, и архивные файлы после ротации (client.1.log и т.п.).
+                    var files = new List<string>();
+                    CollectLogFiles(files, logsDir, ChillHub.Core.Logging.Logger.LogFilePatterns);
+
+                    // Старое расположение (%TEMP%\ChillHub) — у тех, кто ещё не перезапускался после переезда.
+                    try {
+                        var legacyDir = Path.Combine(Path.GetTempPath(), "ChillHub");
+                        if (!string.Equals(Path.GetFullPath(legacyDir), Path.GetFullPath(logsDir), StringComparison.OrdinalIgnoreCase)) {
+                            hints["legacyLogsDir"] = legacyDir;
+                            CollectLogFiles(files, legacyDir, new[] { "client*.log", "boot*.log" });
+                        }
+                    } catch { }
+
+                    AppendSpecificLogs(sb, files, maxFiles: 6, maxTailBytes: LogTailBytes, budget: budget);
+                } catch (Exception ex) { sb.AppendLine($"(logs error: {ex.Message})"); }
                 sb.AppendLine();
 
                 // SelfUpdate logs (apply-update.log) produced by native updater
@@ -94,7 +116,7 @@ namespace ChillHub.Core {
                             }
                         }
                     }
-                    AppendSpecificLogs(sb, files, maxFiles: 6, maxTailBytes: 160*1024);
+                    AppendSpecificLogs(sb, files, maxFiles: 4, maxTailBytes: LogTailBytes, budget: budget);
                 } catch (Exception ex) { sb.AppendLine($"(selfupdate logs error: {ex.Message})"); }
                 sb.AppendLine();
 
@@ -170,61 +192,71 @@ namespace ChillHub.Core {
             } catch { return string.Empty; }
         }
 
-        private static void AppendLogs(StringBuilder sb, string logsDir, string[] patterns, int maxFiles, int maxTailBytes) {
+        /// <summary>
+        /// Складывает в <paramref name="files"/> существующие файлы логов каталога по маскам.
+        /// Свежие — первыми: при исчерпании бюджета обрезается самое старое, а не самое нужное.
+        /// </summary>
+        private static void CollectLogFiles(List<string> files, string dir, string[] patterns) {
             try {
-                if (!Directory.Exists(logsDir)) { sb.AppendLine($"(logs dir not found: {logsDir})"); return; }
-                var files = new List<string>();
-                foreach (var pat in patterns) {
-                    try { files.AddRange(Directory.GetFiles(logsDir, pat, SearchOption.TopDirectoryOnly)); } catch { }
+                if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir)) {
+                    return;
                 }
-                files.Sort(StringComparer.OrdinalIgnoreCase);
-                if (files.Count == 0) { sb.AppendLine("(no log files matched)"); return; }
-                int used = 0;
-                foreach (var f in files) {
-                    if (used >= maxFiles) { sb.AppendLine($"(limit reached: {maxFiles} files)"); break; }
-                    sb.AppendLine($"### {f}");
+
+                var found = new List<string>();
+                foreach (var pat in patterns ?? Array.Empty<string>()) {
                     try {
-                        var bytes = File.ReadAllBytes(f);
-                        if (bytes.Length > maxTailBytes) {
-                            var tail = new byte[maxTailBytes];
-                            Buffer.BlockCopy(bytes, bytes.Length - maxTailBytes, tail, 0, maxTailBytes);
-                            sb.AppendLine("```log");
-                            sb.AppendLine(Encoding.UTF8.GetString(tail));
-                            sb.AppendLine("```\n(tail only)");
-                        } else {
-                            sb.AppendLine("```log");
-                            sb.AppendLine(Encoding.UTF8.GetString(bytes));
-                            sb.AppendLine("```");
-                        }
-                    } catch (Exception ex) { sb.AppendLine($"(read error: {ex.Message})"); }
-                    used++;
+                        found.AddRange(Directory.GetFiles(dir, pat, SearchOption.TopDirectoryOnly));
+                    }
+                    catch { }
                 }
-            } catch (Exception ex) { sb.AppendLine($"(logs listing error: {ex.Message})"); }
+
+                found.Sort((a, b) => {
+                    try {
+                        return File.GetLastWriteTimeUtc(b).CompareTo(File.GetLastWriteTimeUtc(a));
+                    }
+                    catch {
+                        return StringComparer.OrdinalIgnoreCase.Compare(a, b);
+                    }
+                });
+
+                foreach (var f in found) {
+                    if (!files.Exists(x => string.Equals(x, f, StringComparison.OrdinalIgnoreCase))) {
+                        files.Add(f);
+                    }
+                }
+            }
+            catch { }
         }
 
-        private static void AppendSpecificLogs(StringBuilder sb, IEnumerable<string> filesIn, int maxFiles, int maxTailBytes)
+        private static void AppendSpecificLogs(StringBuilder sb, IEnumerable<string> filesIn, int maxFiles, int maxTailBytes, LogBudget budget)
         {
             try {
                 var files = new List<string>();
                 foreach (var f in filesIn) { if (!string.IsNullOrWhiteSpace(f) && File.Exists(f)) files.Add(f); }
-                files.Sort(StringComparer.OrdinalIgnoreCase);
-                if (files.Count == 0) { sb.AppendLine("(no temp/selfupdate logs found)"); return; }
+                if (files.Count == 0) { sb.AppendLine("(no log files found)"); return; }
                 int used = 0;
                 foreach (var f in files) {
                     if (used >= maxFiles) { sb.AppendLine($"(limit reached: {maxFiles} files)"); break; }
+                    if (budget.Remaining <= 0) { sb.AppendLine("(log budget exhausted; remaining files omitted)"); break; }
+
+                    // Не даём одному болтливому файлу съесть весь бандл: сервер режет всё,
+                    // что больше feedbackMaxLogBytes, и обрезка была бы молчаливой.
+                    var allowance = Math.Min(maxTailBytes, budget.Remaining);
                     sb.AppendLine($"### {f}");
                     try {
                         var bytes = File.ReadAllBytes(f);
-                        if (bytes.Length > maxTailBytes) {
-                            var tail = new byte[maxTailBytes];
-                            Buffer.BlockCopy(bytes, bytes.Length - maxTailBytes, tail, 0, maxTailBytes);
+                        if (bytes.Length > allowance) {
+                            var tail = new byte[allowance];
+                            Buffer.BlockCopy(bytes, bytes.Length - allowance, tail, 0, allowance);
                             sb.AppendLine("```log");
                             sb.AppendLine(Encoding.UTF8.GetString(tail));
                             sb.AppendLine("```\n(tail only)");
+                            budget.Remaining -= allowance;
                         } else {
                             sb.AppendLine("```log");
                             sb.AppendLine(Encoding.UTF8.GetString(bytes));
                             sb.AppendLine("```");
+                            budget.Remaining -= bytes.Length;
                         }
                     } catch (Exception ex) { sb.AppendLine($"(read error: {ex.Message})"); }
                     used++;

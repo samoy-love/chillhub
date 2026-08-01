@@ -31,7 +31,7 @@ namespace ChillHub {
                 try { ChillHub.Core.ErrorReporter.InitGlobalHandlers(); } catch { }
                 AppDomain.CurrentDomain.UnhandledException += (s, ex) => {
                     try {
-                        File.AppendAllText(GetBootLogPath(), "[" + DateTime.Now.ToString("o") + $"] UnhandledException: {ex.ExceptionObject}\r\n");
+                        AppendBootLog($"UnhandledException: {ex.ExceptionObject}");
                     }
                     catch {
                     }
@@ -52,7 +52,7 @@ namespace ChillHub {
                 };
                 this.DispatcherUnhandledException += (s, ex) => {
                     try {
-                        File.AppendAllText(GetBootLogPath(), "[" + DateTime.Now.ToString("o") + $"] DispatcherUnhandledException: {ex.Exception.Message}\r\n{ex.Exception}\r\n");
+                        AppendBootLog($"DispatcherUnhandledException: {ex.Exception.Message}\r\n{ex.Exception}");
                     }
                     catch {
                     }
@@ -85,7 +85,7 @@ namespace ChillHub {
 
         private void Application_Startup(object sender, StartupEventArgs e) {
             try {
-                File.AppendAllText(GetBootLogPath(), "[" + DateTime.Now.ToString("o") + "] Starting Application_Startup\r\n");
+                AppendBootLog("Starting Application_Startup");
             }
             catch {
             }
@@ -109,7 +109,7 @@ namespace ChillHub {
                 }
             };
             try {
-                File.AppendAllText(GetBootLogPath(), "[" + DateTime.Now.ToString("o") + "] Showing UpdateWindow\r\n");
+                AppendBootLog("Showing UpdateWindow");
             }
             catch {
             }
@@ -120,7 +120,7 @@ namespace ChillHub {
             }
             var ok = upd.ShowDialog() == true || upd.Proceed;
             try {
-                File.AppendAllText(GetBootLogPath(), "[" + DateTime.Now.ToString("o") + $"] UpdateWindow result ok={ok}\r\n");
+                AppendBootLog($"UpdateWindow result ok={ok}");
             }
             catch {
             }
@@ -132,7 +132,7 @@ namespace ChillHub {
             if (!ok) {
                 // Пользователь закрыл окно или обновление обязательно
                 try {
-                    File.AppendAllText(GetBootLogPath(), "[" + DateTime.Now.ToString("o") + "] Shutting down after update dialog\r\n");
+                    AppendBootLog("Shutting down after update dialog");
                 }
                 catch {
                 }
@@ -158,7 +158,7 @@ namespace ChillHub {
             this.MainWindow = mw;
             this.ShutdownMode = ShutdownMode.OnMainWindowClose; // возвращаем обычный режим
             try {
-                File.AppendAllText(GetBootLogPath(), "[" + DateTime.Now.ToString("o") + "] Showing MainWindow\r\n");
+                AppendBootLog("Showing MainWindow");
             }
             catch {
             }
@@ -170,14 +170,74 @@ namespace ChillHub {
             mw.Show();
         }
 
+        /// <summary>Потолок boot.log: при превышении оставляем только последнюю часть файла.</summary>
+        private const long BootLogMaxBytes = 512 * 1024;
+
+        /// <summary>Сколько байт хвоста сохраняем при обрезании boot.log.</summary>
+        private const int BootLogKeepBytes = 128 * 1024;
+
+        private static readonly object bootLogLock = new object();
+
+        /// <summary>
+        /// boot.log лежит там же, где остальные логи клиента (см. <see cref="Logger.LogDirectory"/>),
+        /// а не в %TEMP%, который чистится системой.
+        /// </summary>
         private static string GetBootLogPath() {
             try {
-                var dir = Path.Combine(Path.GetTempPath(), "ChillHub");
+                var dir = Logger.LogDirectory;
                 Directory.CreateDirectory(dir);
                 return Path.Combine(dir, "boot.log");
             }
             catch {
                 return Path.Combine(Environment.CurrentDirectory, "boot.log");
+            }
+        }
+
+        /// <summary>
+        /// Дописывает строку в boot.log в формате «[ISO8601] текст» и не даёт файлу расти вечно.
+        /// Никогда не бросает исключений.
+        /// </summary>
+        private static void AppendBootLog(string message) {
+            try {
+                var path = GetBootLogPath();
+                var line = "[" + DateTime.Now.ToString("o") + "] " + message + "\r\n";
+                var utf8 = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+                lock (bootLogLock) {
+                    TrimBootLog(path, utf8);
+                    File.AppendAllText(path, line, utf8);
+                }
+            }
+            catch {
+            }
+        }
+
+        /// <summary>Простая обрезка с начала: оставляем последние BootLogKeepBytes байт.</summary>
+        private static void TrimBootLog(string path, System.Text.Encoding utf8) {
+            try {
+                if (!File.Exists(path)) {
+                    return;
+                }
+
+                var len = new FileInfo(path).Length;
+                if (len <= BootLogMaxBytes) {
+                    return;
+                }
+
+                var bytes = File.ReadAllBytes(path);
+                var keep = Math.Min(BootLogKeepBytes, bytes.Length);
+                var tail = new byte[keep];
+                Buffer.BlockCopy(bytes, bytes.Length - keep, tail, 0, keep);
+                var text = utf8.GetString(tail);
+
+                // Первая строка после обрезки почти наверняка неполная — отбрасываем её.
+                var nl = text.IndexOf('\n');
+                if (nl >= 0 && nl + 1 < text.Length) {
+                    text = text.Substring(nl + 1);
+                }
+
+                File.WriteAllText(path, "[" + DateTime.Now.ToString("o") + "] INFO boot.log truncated\r\n" + text, utf8);
+            }
+            catch {
             }
         }
 
