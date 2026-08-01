@@ -663,7 +663,7 @@
     // No mute button currently rendered; keep sound on user gesture via ensureAudio in spin
 
     // Start idle gentle scroll (all devices) until user clicks — no initial delay
-    if(idle && demoAllowed){ idleLastT = performance.now(); if(!raf) raf = requestAnimationFrame(idleStep); }
+    if(idle && demoAllowed){ idleLastWall = performance.now(); if(!raf) raf = requestAnimationFrame(idleStep); }
 
     // Pause/resume idle based on visibility in viewport
     try {
@@ -676,7 +676,7 @@
           // Still avoid heavy hints when off-screen
           if(!spinning) setAnimating(false);
           // If we were off-screen and come back, ensure idle is ticking
-          if(idle && !spinning && !raf){ idleLastT = performance.now(); raf = requestAnimationFrame(idleStep); }
+          if(idle && !spinning && !raf){ idleLastWall = performance.now(); raf = requestAnimationFrame(idleStep); }
         });
       }, { threshold: 0.0, rootMargin: `${headerH}px 0px ${Math.max(0, Math.floor(headerH/2))}px 0px` });
       ioReels.observe(reelsWrap);

@@ -10,6 +10,7 @@
 @media (pointer: fine) and (hover: hover) {
   .lightbox { right: var(--sb-size); }
 }
+
 @media (pointer: fine) and (hover: hover) {
   /* Header leaves room for the native scrollbar area so nothing can overlap it visually */
   .site-header { right: 0; padding-right: var(--sb-size); }
@@ -27,6 +28,7 @@
   .brand { gap: 12px; }
   .site-header .brand span { font-size: 1.05rem; }
 }
+
 /* Fonts & Reset */
 :root {
   --bg-1: #0b0b1a;
@@ -43,17 +45,22 @@
   --stroke: #2a2a4d;
   --primary: #7c3aed;
   --shadow: 0 10px 30px rgb(0 0 0 / 35%);
+
   /* Fixed header heights */
   --header-h: 64px;
+
   /* Scrollbar theme (dark translucent glass) */
   --sb-size: 16px;
-  --sb-thumb: rgba(70, 70, 90, 0.92);           /* dark gray, highly visible */
-  --sb-thumb-hover: rgba(90, 90, 120, 0.98);    /* slightly brighter on hover */
-  --sb-track: rgba(12, 12, 20, 0.30);           /* dark track for contrast */
+  --sb-thumb: rgb(70 70 90 / 92%);           /* dark gray, highly visible */
+  --sb-thumb-hover: rgb(90 90 120 / 98%);    /* slightly brighter on hover */
+  --sb-track: rgb(12 12 20 / 30%);           /* dark track for contrast */
+
   /* Unified vertical spacing between sections */
   --space-section: 36px;
+
   /* Amount of the next section to peek under the hero */
   --peek-next: 28dvh;
+
   /* Spacing scale */
   --space-xs: 6px;
   --space-s: 8px;
@@ -61,6 +68,7 @@
   --space-l: 16px;
   --space-xl: 24px;
   --space-xxl: 32px;
+
   /* Gallery row height */
   --shots-h: 360px;
 }
@@ -76,6 +84,7 @@ body {
 
 /* Prevent any horizontal scrolling on all browsers; allow the ROOT to scroll vertically */
 html { overflow-x: hidden; -webkit-text-size-adjust: 100%; touch-action: manipulation; }
+
 /* Let the UA manage vertical scrolling on the root so iOS Safari can hide URL bar */
 html, body { overflow-y: auto; scrollbar-gutter: auto; }
 
@@ -87,6 +96,7 @@ body {
     linear-gradient(180deg, var(--bg-2), var(--bg-1));
   overflow-x: hidden;
   user-select: text; /* allow selecting text for better UX/accessibility */
+
   /* Space for fixed header */
   padding-top: calc(var(--header-h) + env(safe-area-inset-top, 0px));
   min-height: 100dvh;
@@ -116,6 +126,7 @@ img {
 /* Scrollbars (Chrome/WebKit) — style both html and body to cover all engines */
 html::-webkit-scrollbar, body::-webkit-scrollbar { width: var(--sb-size); height: var(--sb-size); }
 html::-webkit-scrollbar-track, body::-webkit-scrollbar-track { background: var(--sb-track); }
+
 html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   background-color: var(--sb-thumb);
   border-radius: 999px;
@@ -123,6 +134,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 }
 html::-webkit-scrollbar-thumb:hover, body::-webkit-scrollbar-thumb:hover { background-color: var(--sb-thumb-hover); }
 html::-webkit-scrollbar-corner, body::-webkit-scrollbar-corner { background: var(--sb-track); }
+
 /* Firefox */
 html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
 
@@ -134,20 +146,22 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
 /* Header */
 .site-header {
   position: fixed;
-  inset: 0 0 auto 0; /* top:0; left:0; right:0 */
+  inset: 0 0 auto; /* top:0; left:0; right:0 */
   z-index: 1000;
   backdrop-filter: saturate(1.3) blur(14px);
   -webkit-backdrop-filter: saturate(1.3) blur(14px);
+
   /* Consistent semi-opaque background so the header never visually disappears */
-  background: rgba(10, 10, 20, 0.70);
+  background: rgb(10 10 20 / 70%);
   border-bottom: 1px solid rgb(255 255 255 / 6%);
   box-shadow: 0 6px 24px rgb(0 0 0 / 25%);
+
   /* Improve stability: avoid GPU transform to prevent subpixel drift */
   will-change: auto;
   transform: none;
   contain: layout paint;
   height: var(--header-h);
-  padding-top: env(safe-area-inset-top, 0px);
+  padding-top: env(safe-area-inset-top, 0);
 }
 
 .site-header .container {
@@ -155,6 +169,7 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
   align-items: center;
   justify-content: space-between;
   height: 100%;
+
   /* Desktop-first: center like main content */
   padding: 0 20px;
   margin-inline: auto;
@@ -208,6 +223,7 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
   justify-content: center;
   gap: .6rem;
   border-radius: 14px;
+
   /* Replace border with inset stroke to avoid gradient seams on corners */
   border: 0; /* physical borders can show faint seams at rounded edges */
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 12%), 0 10px 25px rgb(0 0 0 / 25%);
@@ -216,9 +232,11 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
   text-decoration: none;
   transition: transform .2s ease, background .2s ease, box-shadow .2s ease;
   backdrop-filter: saturate(1.2);
+
   /* Prevent background from painting under the stroke and leaking at edges */
   background-clip: padding-box;
   -webkit-background-clip: padding-box;
+
   /* Avoid corner artifacts on WebKit and with backdrop-filter */
   overflow: hidden;
   position: relative;
@@ -262,14 +280,18 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
 /* Hero */
 .hero {
   position: relative;
+
   /* Equal padding top/bottom */
   padding: 40px 0;
   text-align: center;
+
   /* Center the inner container vertically */
   display: flex;
   align-items: center;
+
   /* Let a bit of the next section be visible */
   min-height: calc(100dvh - var(--peek-next));
+
   /* Unified background like .site-footer */
   background: rgb(0 0 0 / 15%);
 }
@@ -456,11 +478,13 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
   align-items: center;
   margin-top: var(--space-xl); /* add space above buttons */
 }
+
 .hero .cta .btn {
   width: auto;         /* do not stretch */
   min-width: 180px;    /* keep equal visual width */
 }
-@media (max-width: 640px) {
+
+@media (width <= 640px) {
   .hero .cta .btn { justify-self: center; min-width: 150px; }
   .hero .cta .btn.btn--lg { padding: .8rem .95rem; font-size: .95rem; }
 }
@@ -500,7 +524,7 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
 }
 
 /* Mobile: make the brand-badge more compact */
-@media (max-width: 640px) {
+@media (width <= 640px) {
   .brand-badge { gap: 8px; padding: 6px 10px; border-radius: 12px; }
   .brand-badge img { width: 22px; height: 22px; }
   .brand-badge .name { font-size: .95rem; }
@@ -510,6 +534,7 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
 /* Sections */
 .section {
   padding: var(--space-section) 0;
+
   /* Unified background like .site-footer */
   background: rgb(0 0 0 / 15%);
 }
@@ -530,8 +555,10 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
 
 .section--cta {
   text-align: center;
+
   /* Use unified background; keep the subtle border */
   background: rgb(0 0 0 / 28%);
+
   /* Subtle separation from animated waves without touching their z-index */
   backdrop-filter: blur(4px) saturate(1.05);
   -webkit-backdrop-filter: blur(4px) saturate(1.05);
@@ -549,9 +576,11 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
 #download.section h2 { 
   text-shadow: 0 2px 10px rgb(0 0 0 / 55%);
 }
+
 #download.section p { 
   text-shadow: 0 1px 8px rgb(0 0 0 / 45%);
 }
+
 #download.section .muted {
   color: rgb(220 224 255 / 86%);
 }
@@ -707,7 +736,7 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
   font-size: clamp(20px, 2.6vw, 30px); /* smaller than main section h2 */
   font-weight: 800;
   letter-spacing: .2px;
-  opacity: .92;
+  opacity: 92%;
 }
 
 .reels-head {
@@ -776,6 +805,7 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
   word-break: keep-all;           /* keep words intact */
   overflow-wrap: break-word;
   margin: 4px; /* outer spacing around each slot */
+
   /* Keep text inside the card at all times */
   overflow: hidden;
   background: linear-gradient(135deg, rgb(124 58 237 / 22%), rgb(244 63 94 / 22%));
@@ -799,6 +829,7 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
   /* clearer emphasis so the winning card is obvious */
   border: 2px solid transparent; /* only ::after draws the visible ring */
   position: relative;
+
   /* remove outer ring-like shadow; keep only elevation */
   box-shadow: 0 12px 28px rgb(0 0 0 / 42%);
 }
@@ -813,6 +844,7 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
   background: linear-gradient(135deg, #8b5cf6, #f472b6, #a78bfa, #ec4899, #22d3ee);
   background-size: 320% 320%;
   background-position: 0% 50%;
+
   /* Mask out the center so only the ring is visible */
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
@@ -834,8 +866,8 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
 }
 
 @keyframes borderGlow {
-  0%,100% { filter: drop-shadow(0 0 22px rgba(139,92,246,.85)) drop-shadow(0 0 42px rgba(236,72,153,.75)); }
-  50%     { filter: drop-shadow(0 0 30px rgba(139,92,246,.95)) drop-shadow(0 0 54px rgba(236,72,153,.90)); }
+  0%,100% { filter: drop-shadow(0 0 22px rgb(139 92 246 / 85%)) drop-shadow(0 0 42px rgb(236 72 153 / 75%)); }
+  50%     { filter: drop-shadow(0 0 30px rgb(139 92 246 / 95%)) drop-shadow(0 0 54px rgb(236 72 153 / 90%)); }
 }
 
 /* Removed border-image workaround to avoid Safari inconsistencies */
@@ -846,14 +878,17 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
 }
 
 /* Colorful dot markers per column for a more playful casino look */
+
 /* Lamps: visible by default on desktop (including active slots), hidden on mobile via media query below.
    Render BOTH lamps via a single ::before that spans the slot; ::after stays reserved for the active ring. */
 .reel.r1 { --lampL1:#7c3aed; --lampL2:#22d3ee; --lampR1:#22d3ee; --lampR2:#7c3aed; }
 .reel.r2 { --lampL1:#22d3ee; --lampL2:#60a5fa; --lampR1:#60a5fa; --lampR2:#22d3ee; }
 .reel.r3 { --lampL1:#f472b6; --lampL2:#f59e0b; --lampR1:#f59e0b; --lampR2:#f472b6; }
 .reels { --lamp-offset: 9px; --lampL-size: 14px; --lampR-size: 14px; }
+
 .reels .slot::before{
   content:""; position:absolute; inset:0; z-index:0; pointer-events:none;
+
   /* Clean solid dots without any glow/shine */
   background-image:
     radial-gradient(circle at center, var(--lampL1) 0 50%, transparent 51%),
@@ -873,16 +908,18 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
 }
 
 /* No idle twinkle when glow disabled */
-@keyframes lampTwinkle{ 0%{opacity:1} 100%{opacity:1} }
+@keyframes lampTwinkle{ 0%{opacity:100%} 100%{opacity:100%} }
+
 /* During spinning we tone down idle twinkle a bit */
-.reels.spinning .slot::before{ animation: none; opacity: 1; }
+.reels.spinning .slot::before{ animation: none; opacity: 100%; }
 
 /* During the winning moment, blink only the active (centered) row lamps brightly for 5s (controlled by JS) */
 .reels.lamps-blink .slot--active::before {
   animation: blink-strong .6s ease-in-out infinite;
   filter: brightness(1.8) saturate(1.4);
 }
-@keyframes lampBlink{ 0%{opacity:1} 100%{opacity:1} }
+
+@keyframes lampBlink{ 0%{opacity:100%} 100%{opacity:100%} }
 
 @keyframes blink-strong {
   0%   { filter: brightness(1.8) saturate(1.4); }
@@ -893,7 +930,7 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
 /* Keep lamps visible on active slot; ring sits above via z-index */
 
 /* Mobile: hide all lamps entirely */
-@media (max-width: 640px) { .reels .slot::before { display: none !important; } }
+@media (width <= 640px) { .reels .slot::before { display: none !important; } }
 
 /* Lamps are disabled for the active slot via :not(.slot--active) scoping above */
 
@@ -947,7 +984,7 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
   transform: translateY(-1px);
   background: linear-gradient(90deg, rgb(34 211 238 / 0%), rgb(255 255 255 / 40%), rgb(124 58 237 / 55%), rgb(244 114 182 / 40%), rgb(34 211 238 / 0%));
   box-shadow: 0 0 12px rgb(124 58 237 / 30%), 0 0 22px rgb(34 211 238 / 18%);
-  opacity: .9;
+  opacity: 90%;
   z-index: 2;
   pointer-events: none;
 }
@@ -962,7 +999,7 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
 .lightbox {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,.85);
+  background: rgb(0 0 0 / 85%);
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);
   display: none;
@@ -971,12 +1008,14 @@ html, body { scrollbar-color: var(--sb-thumb) var(--sb-track); }
   z-index: 2000;
 }
 .lightbox.show { display: flex; }
+
 .lightbox__img {
   max-width: 92vw;
   max-height: 88vh;
   border-radius: 16px;
   box-shadow: 0 20px 60px rgb(0 0 0 / 60%);
 }
+
 .lightbox__close {
   position: absolute;
   top: calc(12px + env(safe-area-inset-top, 0px));
@@ -1040,6 +1079,7 @@ body.modal-open { overflow: hidden; }
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 12%), 0 8px 18px rgb(0 0 0 / 20%);
   transition: background .2s ease, box-shadow .2s ease;
 }
+
 .btn.btn--reels .emoji {
   display: inline-block;
   font-size: 1.3em;                  /* scale emoji proportionally to bigger text */
@@ -1059,21 +1099,25 @@ body.modal-open { overflow: hidden; }
   .btn.btn--reels { font-size: .95rem; gap: 4px; padding: .85rem .9rem; }
   .btn.btn--reels .emoji { font-size: 1.15em; }
 }
+
 .btn.btn--reels:hover {
   background: linear-gradient(135deg, rgb(124 58 237 / 36%), rgb(244 114 182 / 34%));
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 14%), 0 12px 24px rgb(0 0 0 / 28%);
 }
 
 /* Category themes for reels (muted) */
+
 /* Per-reel product theming */
 .reel.r1 .slot {
   background: linear-gradient(135deg, rgb(167 139 250 / 22%), rgb(124 58 237 / 18%));
   border-color: rgb(167 139 250 / 16%);
 }
+
 .reel.r2 .slot {
   background: linear-gradient(135deg, rgb(34 211 238 / 20%), rgb(59 130 246 / 18%));
   border-color: rgb(34 211 238 / 14%);
 }
+
 .reel.r3 .slot {
   background: linear-gradient(135deg, rgb(244 114 182 / 20%), rgb(251 191 36 / 18%));
   border-color: rgb(244 114 182 / 14%);
@@ -1106,6 +1150,7 @@ body.modal-open { overflow: hidden; }
   cursor: zoom-in;
 }
 .screenshot-win .win-body:focus { outline: none; }
+
 .screenshot-win .win-body:focus-visible {
   outline: 2px solid rgb(124 58 237 / 65%);
   outline-offset: 2px;
@@ -1120,9 +1165,11 @@ body.modal-open { overflow: hidden; }
   max-height: 50vh;
   border-radius: inherit;           /* match container rounding automatically */
   filter: saturate(1.04) contrast(1.03);
+
   /* No hover animations */
   transition: none;
 }
+
 /* (removed) Caption under screenshot */
 
 /* Ensure consistent centering without forcing full width */
@@ -1133,14 +1180,16 @@ body.modal-open { overflow: hidden; }
   background: #101026;
   overflow: hidden;
 }
+
 .skeleton::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.10), rgba(255,255,255,0));
+  background: linear-gradient(90deg, rgb(255 255 255 / 0%), rgb(255 255 255 / 10%), rgb(255 255 255 / 0%));
   transform: translateX(-100%);
   animation: skeleton-shimmer 1.2s ease-in-out infinite;
 }
+
 @keyframes skeleton-shimmer {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(100%); }
@@ -1171,6 +1220,7 @@ img:not(.skeleton)::after { display: none; }
 
 @media (width <= 640px) {
   :root { --shots-h: 220px; }
+
   .game-card.coming.full {
     /* Use container width to avoid horizontal overflow */
     width: 100%;
@@ -1208,6 +1258,7 @@ img:not(.skeleton)::after { display: none; }
   /* Smaller lamps on phones */
   .reels.guideline .slot:not(.slot--active)::before,
   .reels.spinning  .slot:not(.slot--active)::before { left: 4px; width: 5px; height: 5px; }
+
   .reels.guideline .slot:not(.slot--active)::after,
   .reels.spinning  .slot:not(.slot--active)::after  { right: 4px; width: 4px; height: 4px; }
 }
@@ -1228,6 +1279,7 @@ img:not(.skeleton)::after { display: none; }
     justify-content: center;
     gap: var(--space-s) 10px;
   }
+
   .benefit {
     width: auto;
     justify-content: center;
@@ -1247,25 +1299,31 @@ img:not(.skeleton)::after { display: none; }
 @media (width <= 640px) {
   :root { --header-h: 56px; }
   :root { --peek-next: 40dvh; }
+
   /* Ensure cards are centered and do not overflow the grid */
   .games-grid { justify-items: stretch; }
   .game-card { width: 100%; }
+
   /* Stronger blur and comfortable size for benefits on mobile */
-  .benefits-strip { backdrop-filter: none; -webkit-backdrop-filter: none; padding: 10px 10px; }
+  .benefits-strip { backdrop-filter: none; -webkit-backdrop-filter: none; padding: 10px; }
   .benefit { font-size: 15px; padding: .38rem .65rem; backdrop-filter: blur(22px) saturate(1.1); -webkit-backdrop-filter: blur(22px) saturate(1.1); background: rgb(8 10 22 / 58%); }
+
   /* Make hero paragraph more compact so it fits ~2 lines */
   .hero .container > p { font-size: 12.5px; line-height: 1.45; letter-spacing: 0; width: 100%; margin-top: 4px; }
+
   /* Disable heavy parallax layers on small screens */
   .parallax { display: none; }
+
   /* Keep header blur and semi-opaque background on mobile */
   .site-header {
     backdrop-filter: saturate(1.2) blur(12px);
     -webkit-backdrop-filter: saturate(1.2) blur(12px);
-    background: rgba(10, 10, 20, 0.72);
+    background: rgb(10 10 20 / 72%);
     z-index: 1000;
     transform: none; /* ensure no GPU rounding drift */
     contain: layout paint;
   }
+
   /* Tighter padding on mobile to expose next section */
   .hero { padding: 16px 0; }
   .hero h1 { font-size: clamp(28px, 7.2vw, 42px); }
@@ -1275,16 +1333,20 @@ img:not(.skeleton)::after { display: none; }
   .btn--xl { padding: .95rem 1.2rem; font-size: 1rem; }
   .game-card h3 { font-size: 18px; }
   .tag { font-size: 11px; padding: .24rem .45rem; }
+
   /* Smaller feature titles and texts */
   .features .feature h3 { font-size: 18px; }
   .features .feature p { font-size: 14px; }
+
   /* Add breathing room and spacing between brand and nav */
   .site-header .container {
     padding: 0 8px;
     gap: 24px; /* space between brand and nav */
   }
+
   /* Allow hero sun rays to render fully on mobile */
   .hero .sun-title { overflow: visible; contain: unset; }
+
   /* Make the sun rays larger and reduce masking on small screens */
   .sun-title .accent::before {
     width: clamp(420px, 100vw, 1000px);
@@ -1292,18 +1354,20 @@ img:not(.skeleton)::after { display: none; }
     left: 50%;
     top: 50%;
     transform: translate(-50%, -50%);
+
     /* Remove mask on mobile to prevent collapse into a small circle */
     mask-image: none;
     -webkit-mask-image: none;
     filter: blur(18px) brightness(0.9);
-    opacity: 0.45;
+    opacity: 45%;
   }
+
   /* Strengthen the outer halo slightly to compensate */
   .sun-title .accent::after {
     width: clamp(380px, 100vw, 980px);
     height: clamp(380px, 100vw, 980px);
     filter: blur(18px);
-    opacity: 0.4;
+    opacity: 40%;
   }
 }
 
@@ -1348,7 +1412,7 @@ img:not(.skeleton)::after { display: none; }
   width: 18px;
   height: 18px;
   flex: 0 0 auto;
-  opacity: .9;
+  opacity: 90%;
 }
 
 .feature {
@@ -1379,6 +1443,7 @@ img:not(.skeleton)::after { display: none; }
   width: 46px;
   height: 46px;
   border-radius: 12px;
+
   /* Blue–Violet–Cyan gradient (no green) */
   background: linear-gradient(135deg, #22d3ee, #7c3aed, #60a5fa);
   opacity: 95%;
@@ -1389,7 +1454,7 @@ img:not(.skeleton)::after { display: none; }
   justify-content: center;
 }
 
-.feature .ico svg { width: 32px; height: 32px; color: #eef1ff; opacity: .95; }
+.feature .ico svg { width: 32px; height: 32px; color: #eef1ff; opacity: 95%; }
 
 /* Subtle interactive hover */
 .feature:hover {
@@ -1424,7 +1489,7 @@ img:not(.skeleton)::after { display: none; }
   -webkit-backdrop-filter: blur(8px) saturate(1.05);
 }
 
-.benefit svg { width: 16px; height: 16px; color: #dbeafe; opacity: .95; }
+.benefit svg { width: 16px; height: 16px; color: #dbeafe; opacity: 95%; }
 
 /* Desktop: keep all in a single row */
 @media (width > 840px) {
@@ -1435,6 +1500,7 @@ img:not(.skeleton)::after { display: none; }
 }
 
 /* Mobile: two per row, centered */
+
 /* Tablet and below: two columns */
 @media (width <= 840px) {
   .benefits-strip {
@@ -1450,6 +1516,7 @@ img:not(.skeleton)::after { display: none; }
     /* keep two columns, adjust spacing on phones */
     gap: 8px;
   }
+
   .benefit {
     width: 100%;
     justify-content: center;
@@ -1484,6 +1551,7 @@ img:not(.skeleton)::after { display: none; }
 @media (width > 640px) and (width <= 840px) {
   /* Keep benefits in a single row like desktop */
   .benefits-strip { display: flex; flex-wrap: nowrap; justify-content: center; }
+
   /* Keep 3 features per row like desktop */
   .features { grid-template-columns: repeat(3, 1fr); }
 }
@@ -1553,13 +1621,13 @@ img:not(.skeleton)::after { display: none; }
 
 /* Canvas is hidden until the first frame is rendered to avoid visual flash */
 .waves-bg canvas {
-  opacity: 0;
+  opacity: 0%;
   transition: opacity .35s ease;
   display: block;
   width: 100%;
   height: 100%;
 }
-.waves-bg.ready canvas { opacity: 1; }
+.waves-bg.ready canvas { opacity: 100%; }
 
 /* Loader overlay covering the canvas area */
 .waves-loader {
@@ -1576,10 +1644,11 @@ img:not(.skeleton)::after { display: none; }
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  border: 3px solid rgba(255,255,255,.18);
-  border-top-color: rgba(255,255,255,.65);
+  border: 3px solid rgb(255 255 255 / 18%);
+  border-top-color: rgb(255 255 255 / 65%);
   animation: spin .9s linear infinite;
 }
+
 @keyframes spin { to { transform: rotate(360deg); } }
 
 #waves-canvas {
@@ -1605,7 +1674,7 @@ img:not(.skeleton)::after { display: none; }
 }
 
 /* Mobile override: tighter rounding for the screenshot window */
-@media (max-width: 640px) {
+@media (width <= 640px) {
   .screenshot-win { border-radius: 4px; }
   .screenshot-win img { border-radius: 4px; }
 }
