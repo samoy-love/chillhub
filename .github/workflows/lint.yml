@@ -87,6 +87,14 @@ jobs:
           version: latest
           working-directory: server
 
+      - name: Go vet
+        working-directory: server
+        run: go vet ./...
+
+      - name: Go test
+        working-directory: server
+        run: go test ./...
+
   dotnet-lint:
     name: C# (launcher)
     runs-on: windows-latest
