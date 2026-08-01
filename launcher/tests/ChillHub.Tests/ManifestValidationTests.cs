@@ -126,6 +126,50 @@ namespace ChillHub.Tests {
                 () => ManifestSignature.Enforce(manifest, "test://legacy"));
         }
 
+        /// <summary>
+        /// Пункт 3: подпись инвариантна к перестановке записей, а планировщик кладёт
+        /// их в словарь и оставляет последнюю. Две записи на один путь = выбор того,
+        /// какой файл получит пользователь, без взлома подписи.
+        /// </summary>
+        [Theory]
+        [InlineData("data/pack.bin", "data/pack.bin")]
+        [InlineData("data/pack.bin", "DATA/Pack.BIN")]
+        [InlineData("game.exe", "GAME.EXE")]
+        public async Task ДубликатПутиОтвергаетМанифест(string first, string second) {
+            using var dir = new TempDir();
+            var manifest = PlanTestData.Manifest(
+                PlanTestData.File(first, 10, "aa"),
+                PlanTestData.File(second, 20, "bb"));
+
+            await Assert.ThrowsAsync<ManifestValidationException>(
+                () => PlanTestData.PlanAsync(manifest, dir.Root));
+        }
+
+        [Fact]
+        public async Task ДубликатПустогоКаталогаОтвергаетМанифест() {
+            using var dir = new TempDir();
+            var manifest = PlanTestData.Manifest(PlanTestData.File("game.exe", 1, "aa"));
+            manifest.EmptyDirs = new List<string> { "logs", "LOGS" };
+
+            await Assert.ThrowsAsync<ManifestValidationException>(
+                () => PlanTestData.PlanAsync(manifest, dir.Root));
+        }
+
+        [Fact]
+        public void ПерестановкаДубликатовНеМеняетПодписываемыеБайты() {
+            // Контроль к тесту выше: именно поэтому дубликаты нельзя терпеть —
+            // подпись их перестановку не замечает.
+            var a = PlanTestData.Manifest(
+                PlanTestData.File("data/pack.bin", 10, "aa", "b1"),
+                PlanTestData.File("data/pack.bin", 20, "bb", "b2"));
+            var b = PlanTestData.Manifest(
+                PlanTestData.File("data/pack.bin", 20, "bb", "b2"),
+                PlanTestData.File("data/pack.bin", 10, "aa", "b1"));
+            b.GameId = a.GameId;
+
+            Assert.Equal(ManifestSignature.Canonicalize(a), ManifestSignature.Canonicalize(b));
+        }
+
         [Theory]
         [InlineData("game.exe")]
         [InlineData("data/pack.bin")]
