@@ -338,7 +338,7 @@ namespace ChillHub.Pages {
                 catch (Exception ex) {
                     // Ошибку показываем ниже как empty-state «сервер недоступен», а не как исключение
                     gamesError = ex;
-                    Core.Logging.Logger.Error(ex, $"LoadInitialAsync: GET {gamesUrl}");
+                    Core.Logging.Logger.ErrorNoReport(ex, $"LoadInitialAsync: GET {gamesUrl}");
                 }
 
                 try {
@@ -346,7 +346,7 @@ namespace ChillHub.Pages {
                 }
                 catch (Exception ex) {
                     // Новости второстепенны: без них лаунчер полностью работоспособен
-                    Core.Logging.Logger.Error(ex, $"LoadInitialAsync: GET {newsUrl}");
+                    Core.Logging.Logger.ErrorNoReport(ex, $"LoadInitialAsync: GET {newsUrl}");
                 }
 
                 var games = gamesResp?.Items ?? new List<GameInfo>();
@@ -944,7 +944,7 @@ namespace ChillHub.Pages {
             }
             catch (Exception ex) {
                 this.StatusText.Text = $"Ошибка загрузки сборок/новостей игры (GET {this.BaseApi}/api/games/{gameId}/builds, /news/games/{gameId}/index.json): {ex.Message}";
-                Core.Logging.Logger.Error(ex, "HomePage.LoadBuildsAndGameNewsAsync");
+                Core.Logging.Logger.ErrorNoReport(ex, "HomePage.LoadBuildsAndGameNewsAsync");
 
                 // В случае ошибки не оставляем старые новости от предыдущей игры
                 this.GameNewsList.ItemsSource = Array.Empty<NewsItem>();
