@@ -26,7 +26,9 @@ func (h *Handlers) AssetsList(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		// The error text embeds the absolute path of the content root.
+		log.Printf("[news:assets] list %s: %v", dir, err)
+		http.Error(w, "directory not found", http.StatusNotFound)
 		return
 	}
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
