@@ -8,6 +8,8 @@
     <RootNamespace>ChillHub</RootNamespace>
     <AssemblyName>ChillHub</AssemblyName>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <!-- Манифест приложения: longPathAware (пути длиннее 260 символов) и asInvoker. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Markdig" Version="0.31.0" />
