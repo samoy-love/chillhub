@@ -63,26 +63,57 @@ namespace ChillHub.Core {
         /// </summary>
         public static string ConfigFilePath => ConfigPath;
 
+        /// <summary>
+        /// Читает конфиг с диска.
+        /// Повреждённый JSON и недоступный файл — разные беды, и лечатся они по-разному:
+        /// битый JSON чинить нечем (делаем бэкап и разворачиваем дефолты), а занятый или
+        /// недоступный файл через секунду прочитается. Раньше оба случая ловил один пустой
+        /// catch, который тут же ПЕРЕЗАПИСЫВАЛ конфиг дефолтами: достаточно было антивирусу
+        /// подержать config.json открытым, чтобы пользователь потерял GamesPath и увидел
+        /// «игры не установлены».
+        /// </summary>
+        /// <returns>Конфигурация приложения.</returns>
         public static AppConfig Load() {
             try {
                 MigrateLegacyConfig();
+            }
+            catch (Exception ex) {
+                // Logger.Warn, а не Error: Error поднимает ErrorReporter, который сам читает
+                // конфиг — получили бы рекурсию ровно в момент, когда конфига ещё нет.
+                Logging.Logger.Warn($"Config.Load: миграция не выполнена: {ex.Message}");
+            }
 
-                if (File.Exists(ConfigPath)) {
-                    var json = File.ReadAllText(ConfigPath);
-                    var cfg = JsonSerializer.Deserialize<AppConfig>(json) ?? new AppConfig();
-                    Clamp(cfg);
-                    cache = cfg;
-                    ApplyTheme();
-                    return cfg;
+            string json;
+            try {
+                if (!File.Exists(ConfigPath)) {
+                    return CreateAndSaveDefaults();
                 }
+
+                json = File.ReadAllText(ConfigPath);
             }
-            catch {
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                // Файл занят или недоступен. Ничего не пишем на диск и ничего не кешируем:
+                // следующее обращение попробует снова, а до тех пор отдаём последнее
+                // известное состояние.
+                Logging.Logger.Warn($"Config.Load: config.json недоступен, настройки не перезаписываем: {ex.Message}");
+                return cache ?? new AppConfig();
             }
-            var def = new AppConfig();
-            EnsureDir(Path.GetDirectoryName(def.GamesPath)!);
-            cache = def;
-            Save(def);
-            return def;
+
+            try {
+                var cfg = JsonSerializer.Deserialize<AppConfig>(json)
+                          ?? throw new JsonException("config.json пуст");
+                Clamp(cfg);
+                cache = cfg;
+                ApplyTheme();
+                return cfg;
+            }
+            catch (JsonException ex) {
+                // Содержимое испорчено — восстановить из него нечего. Сохраняем копию,
+                // чтобы пользователь мог достать оттуда путь к играм, и разворачиваем дефолты.
+                Logging.Logger.Warn($"Config.Load: config.json повреждён, откатываемся на значения по умолчанию: {ex.Message}");
+                BackupCorruptedConfig();
+                return CreateAndSaveDefaults();
+            }
         }
 
         public static void Save(AppConfig cfg) {
@@ -135,6 +166,27 @@ namespace ChillHub.Core {
             }
             catch (Exception ex) {
                 Debug.WriteLine($"[Theme] ApplyTheme error: {ex.Message}");
+            }
+        }
+
+        /// <summary>Разворачивает и сохраняет конфигурацию по умолчанию.</summary>
+        private static AppConfig CreateAndSaveDefaults() {
+            var def = new AppConfig();
+            EnsureDir(Path.GetDirectoryName(def.GamesPath)!);
+            cache = def;
+            Save(def);
+            return def;
+        }
+
+        /// <summary>Откладывает повреждённый конфиг в сторону: config.corrupted.json.</summary>
+        private static void BackupCorruptedConfig() {
+            try {
+                var backup = Path.Combine(AppDir, "config.corrupted.json");
+                File.Copy(ConfigPath, backup, overwrite: true);
+                Logging.Logger.Warn($"Config.Load: копия повреждённого конфига сохранена как '{backup}'");
+            }
+            catch (Exception ex) {
+                Logging.Logger.Warn($"Config.Load: копию повреждённого конфига сделать не удалось: {ex.Message}");
             }
         }
 
