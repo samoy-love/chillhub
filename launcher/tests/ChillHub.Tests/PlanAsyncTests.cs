@@ -88,20 +88,25 @@ namespace ChillHub.Tests {
             Assert.Single(plan.Downloads);
         }
 
+        /// <summary>
+        /// Раньше манифест без хешей планировался по одному лишь размеру, и файл
+        /// приезжал на диск без всякой проверки: блок верификации в загрузчике
+        /// целиком обёрнут в «если задан хоть один хеш». Совпадение размеров —
+        /// не целостность, подобрать файл нужной длины тривиально. Теперь такая
+        /// запись отвергается ещё до загрузки.
+        /// </summary>
         [Fact]
-        public async Task БезХешейВМанифестеСравнениеИдётПоРазмеру() {
+        public async Task БезХешейВМанифестеЗаписьОтвергается() {
             using var dir = new TempDir();
             var same = dir.WriteFile("same.bin", "12345");
             dir.WriteFile("other.bin", "12345");
 
-            var plan = await PlanTestData.PlanAsync(
-                PlanTestData.Manifest(
-                    PlanTestData.File("same.bin", new FileInfo(same).Length),
-                    PlanTestData.File("other.bin", 999)),
-                dir.Root);
-
-            Assert.Single(plan.Downloads);
-            Assert.Equal("other.bin", plan.Downloads[0].RelativePath);
+            await Assert.ThrowsAsync<ManifestValidationException>(
+                () => PlanTestData.PlanAsync(
+                    PlanTestData.Manifest(
+                        PlanTestData.File("same.bin", new FileInfo(same).Length),
+                        PlanTestData.File("other.bin", 999)),
+                    dir.Root));
         }
 
         [Fact]

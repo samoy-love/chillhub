@@ -74,6 +74,37 @@ namespace ChillHub.Tests {
                 () => PlanTestData.PlanAsync(manifest, dir.Root));
         }
 
+        /// <summary>
+        /// Запись без единого хеша отвергается: в загрузчике вся проверка
+        /// целостности обёрнута в «если хоть один хеш задан», поэтому такой файл
+        /// скачивался и ставился вообще без контроля. В режиме совместимости
+        /// (он включён по умолчанию) неподписанный манифест — это лишь
+        /// предупреждение, так что пустые хеши давали установку произвольного
+        /// файла тому, кто раздаёт манифест.
+        /// </summary>
+        [Fact]
+        public async Task ЗаписьБезХешейОтвергается() {
+            using var dir = new TempDir();
+            var manifest = PlanTestData.Manifest(
+                PlanTestData.File("game.exe", 1, "cafebabe"),
+                PlanTestData.File("payload.exe", 2));
+
+            await Assert.ThrowsAsync<ManifestValidationException>(
+                () => PlanTestData.PlanAsync(manifest, dir.Root));
+        }
+
+        /// <summary>Одного хеша достаточно — второй не обязателен.</summary>
+        [Theory]
+        [InlineData("cafebabe", "")]
+        [InlineData(null, "deadbeef")]
+        public async Task ОдногоХешаДостаточно(string? sha256, string blake3) {
+            using var dir = new TempDir();
+            var manifest = PlanTestData.Manifest(PlanTestData.File("game.exe", 1, sha256, blake3));
+
+            var plan = await PlanTestData.PlanAsync(manifest, dir.Root);
+            Assert.NotNull(plan);
+        }
+
         [Fact]
         public async Task НормальныйМанифестПроходитПроверку() {
             using var dir = new TempDir();
