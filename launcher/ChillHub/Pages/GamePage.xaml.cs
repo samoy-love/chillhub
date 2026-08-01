@@ -555,7 +555,12 @@ namespace ChillHub.Pages {
             }
 
             var localRoot = this.LocalRoot;
+
+            // Предыдущая операция уже завершилась (isBusy проверен вызывающими):
+            // освобождаем её источник, а не оставляем на сборщик мусора.
+            var previousCts = this.cts;
             this.cts = new CancellationTokenSource();
+            previousCts?.Dispose();
             var token = this.cts.Token;
             this.SetBusy(true);
             this.emaSpeedMBs = 0.0;
