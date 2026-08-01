@@ -14,6 +14,24 @@ param(
     [string]$LogLevel = 'info',
     [int]$Parallel = 8,
     [string]$SiteBaseUrl = "https://launcher.samoy.love",
+    # И2: политика проверки ключа хоста. ПО УМОЛЧАНИЮ СТРОГАЯ.
+    #
+    # Раньше поведением по умолчанию было StrictHostKeyChecking=no, а строгая
+    # проверка включалась опциональным -StrictHostKey, которого нет ни в
+    # Makefile, ни в примерах. То есть на практике деплой всегда соглашался с
+    # любым ключом: при подмене маршрута (DNS, ARP, перехваченный IP) ssh молча
+    # подключался к чужому хосту, и туда уезжали JWT_SECRET, bcrypt-хеш админа,
+    # а при -AdminPasswordPlain — и пароль открытым текстом.
+    #
+    #   yes         — (по умолчанию) хост обязан быть в known_hosts;
+    #   accept-new  — принять НОВЫЙ хост, но отвергнуть ИЗМЕНИВШИЙСЯ ключ;
+    #   no          — не проверять. Осознанный опасный режим, печатает
+    #                 предупреждение. Существует только для одноразовой
+    #                 отладки, не для регулярного деплоя.
+    [ValidateSet('yes','accept-new','no')]
+    [string]$HostKeyChecking = 'yes',
+    # Устаревший ключ: строгая проверка теперь и так по умолчанию.
+    # Оставлен, чтобы старые команды не падали на неизвестном параметре.
     [switch]$StrictHostKey,
     [switch]$FailOnManifestMismatch,
     [switch]$StartAtRemote,
@@ -95,6 +113,28 @@ if (-not (Test-Path -LiteralPath $KeyPath)) {
   throw "SSH key not found: $KeyPath"
 }
 
+# И2: ОДИН набор ssh/scp-опций на весь скрипт.
+#
+# Раньше этот набор собирался в трёх местах (StartAtRemote, автоопределение
+# архитектуры, загрузка бандла) отдельными if/else, и во всех трёх ветка «по
+# умолчанию» ставила StrictHostKeyChecking=no. Три копии — три шанса разойтись,
+# поэтому теперь значение вычисляется один раз здесь.
+if ($StrictHostKey -and $HostKeyChecking -eq 'yes') {
+  Write-Info "-StrictHostKey устарел: строгая проверка ключа хоста теперь и так по умолчанию."
+}
+if ($HostKeyChecking -eq 'no') {
+  Write-Warn "ОПАСНО: -HostKeyChecking no. Подлинность сервера НЕ проверяется."
+  Write-Warn "При подмене маршрута секреты (JWT_SECRET, хеш/пароль админа) уедут чужому хосту."
+  Write-Warn "Используйте этот режим только для одноразовой отладки."
+}
+$sshCommon = @(
+  "-i", $KeyPath,
+  "-o", "StrictHostKeyChecking=$HostKeyChecking",
+  "-o", "ConnectTimeout=10",
+  "-o", "ServerAliveInterval=15",
+  "-o", "ServerAliveCountMax=4"
+)
+
 # Paths
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $BuildRoot = Join-Path $RepoRoot "build"
@@ -138,23 +178,7 @@ try {
 if ($StartAtRemote) {
   Write-Section "StartAtRemote"
   Write-Warn "Skipping local build and upload; proceeding directly to remote deploy"
-  $sshCommon = if ($StrictHostKey) {
-    @(
-      "-i", $KeyPath,
-      "-o", "StrictHostKeyChecking=accept-new",
-      "-o", "ConnectTimeout=10",
-      "-o", "ServerAliveInterval=15",
-      "-o", "ServerAliveCountMax=4"
-    )
-  } else {
-    @(
-      "-i", $KeyPath,
-      "-o", "StrictHostKeyChecking=no",
-      "-o", "ConnectTimeout=10",
-      "-o", "ServerAliveInterval=15",
-      "-o", "ServerAliveCountMax=4"
-    )
-  }
+  # $sshCommon задан один раз выше (см. И2).
   $Remote = "${SshUser}@${SshHost}"
   # Ensure remote deploy dir exists and upload the latest nginx site config even in StartAtRemote mode
   try {
@@ -168,11 +192,7 @@ if ($StartAtRemote) {
   }
 } else {
   # Auto-detect remote architecture to build correct binaries (avoids Exec format errors)
-  $sshCommonDetect = if ($StrictHostKey) {
-    @("-i", $KeyPath, "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4")
-  } else {
-    @("-i", $KeyPath, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4")
-  }
+  $sshCommonDetect = $sshCommon   # см. И2: единый набор опций
   $remoteDetect = "${SshUser}@${SshHost}"
   $unameM = ""
   try {
@@ -259,23 +279,7 @@ if ($StartAtRemote) {
   # Upload bundle via scp (ensure remote dirs exist, avoid wildcard expansion issues)
   Write-Section "Upload bundle"
   Write-Info "Preparing remote directory structure"
-  $sshCommon = if ($StrictHostKey) {
-    @(
-      "-i", $KeyPath,
-      "-o", "StrictHostKeyChecking=accept-new",
-      "-o", "ConnectTimeout=10",
-      "-o", "ServerAliveInterval=15",
-      "-o", "ServerAliveCountMax=4"
-    )
-  } else {
-    @(
-      "-i", $KeyPath,
-      "-o", "StrictHostKeyChecking=no",
-      "-o", "ConnectTimeout=10",
-      "-o", "ServerAliveInterval=15",
-      "-o", "ServerAliveCountMax=4"
-    )
-  }
+  # $sshCommon задан один раз выше (см. И2).
   $Remote = "${SshUser}@${SshHost}"
   # Quick SSH preflight to catch key-permissions issues early
   try {
@@ -285,6 +289,14 @@ if ($StartAtRemote) {
     Write-Err "SSH preflight failed. If you see 'UNPROTECTED PRIVATE KEY FILE' or 'Permission denied (publickey)', fix key ACLs on Windows:"
     Write-Err "  icacls \"$KeyPath\" /inheritance:r"
     Write-Err "  icacls \"$KeyPath\" /grant:r \"$env:USERNAME:R\""
+    # И2: со строгой проверкой ключа первый в жизни коннект к хосту падает
+    # намеренно — иначе проверять было бы нечего.
+    Write-Err "Если ошибка про ключ хоста ('Host key verification failed' / 'No RSA host key is known'):"
+    Write-Err "  хост ещё не в known_hosts. Добавьте его ОДИН раз, СВЕРИВ отпечаток по независимому каналу"
+    Write-Err "  (панель хостера / прошлый доверенный коннект), а не просто скопировав вывод:"
+    Write-Err "    ssh-keyscan -H $SshHost | Out-File -Append -Encoding ascii `$env:USERPROFILE\.ssh\known_hosts"
+    Write-Err "  Либо для первого подключения: -HostKeyChecking accept-new (принимает новый хост,"
+    Write-Err "  но по-прежнему отвергает ПОДМЕНЁННЫЙ ключ)."
     throw
   }
   & $SSH @sshCommon $Remote "mkdir -p deploy/site deploy/launcher_admin_ui deploy/bin deploy/systemd deploy/deploy" | Out-Null
