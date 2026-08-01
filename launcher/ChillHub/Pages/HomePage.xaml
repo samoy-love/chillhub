@@ -664,7 +664,8 @@
             <!-- Листаемый список игр как боковое меню (карточки) -->
             <ListBox Name="GameList" SelectionChanged="GameCombo_SelectionChanged" MouseDoubleClick="GameList_MouseDoubleClick"
                      Visibility="Collapsed" Background="{DynamicResource Brush.Surface}"
-                     ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.CanContentScroll="False"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.CanContentScroll="False"
                      VirtualizingPanel.IsVirtualizing="False"
                      BorderThickness="0"
                      HorizontalContentAlignment="Stretch">
@@ -676,7 +677,15 @@
               <ListBox.Template>
                 <ControlTemplate TargetType="ListBox">
                   <Border Background="{DynamicResource Brush.Surface}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" SnapsToDevicePixels="True">
-                    <ScrollViewer Focusable="False" Padding="{TemplateBinding Padding}">
+                    <!-- Видимости полос ОБЯЗАТЕЛЬНО пробрасываем из присоединённых свойств.
+                         Свой ControlTemplate заменяет штатный, где эти связи есть, поэтому без
+                         них ScrollViewer брал СВОИ значения по умолчанию — а у него горизонтальная
+                         полоса по умолчанию Visible. Отсюда и появлялся горизонтальный скролл, и
+                         содержимое переставало ограничиваться шириной контейнера. -->
+                    <ScrollViewer Focusable="False" Padding="{TemplateBinding Padding}"
+                                  HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                                  VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}"
+                                  CanContentScroll="{TemplateBinding ScrollViewer.CanContentScroll}">
                       <ItemsPresenter/>
                     </ScrollViewer>
                   </Border>
@@ -773,7 +782,12 @@
                       </Grid>
                       <!-- Название -->
                       <StackPanel Grid.Column="1" Margin="10,0,8,0" VerticalAlignment="Center">
-                        <TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="16"/>
+                        <!-- Длинное название теперь не может распирать строку: горизонтальной
+                             прокрутки нет, поэтому обрезаем многоточием, а полное показываем
+                             в подсказке. -->
+                        <TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="16"
+                                   TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                                   ToolTip="{Binding Title}"/>
                       </StackPanel>
                       <!-- Переход на страницу игры (то же делает двойной клик по строке) -->
                       <Button Grid.Column="2" Width="26" Height="26" Margin="0,0,6,0" VerticalAlignment="Center"
