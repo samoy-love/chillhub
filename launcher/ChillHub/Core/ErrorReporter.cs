@@ -145,15 +145,27 @@ namespace ChillHub.Core {
 
         /// <summary>
         /// Fire-and-forget error report.
+        /// Работа целиком уходит в пул потоков: сбор диагностики синхронный и тяжёлый
+        /// (SHA-256 файлов лаунчера, обход дерева папки игр, чтение логов), а Report вызывается
+        /// из Logger.Error — то есть часто с UI-потока. Раньше запуск без интернета подвешивал
+        /// интерфейс на секунды ещё до первого сетевого await.
         /// </summary>
         public static void Report(Exception ex, string context, bool includeDiagnostics = true) {
-            try { ReportAsync(ex, context, includeDiagnostics); } catch { }
+            try {
+                _ = Task.Run(() => ReportCoreAsync(ex, context, includeDiagnostics));
+            }
+            catch (Exception scheduleEx) {
+                // Пул потоков недоступен (выгрузка приложения) — отчёт не важнее живучести
+                System.Diagnostics.Debug.WriteLine("ErrorReporter.Report: " + scheduleEx.Message);
+            }
         }
 
         /// <summary>
         /// Sends error report asynchronously. Does not throw; failures are swallowed.
+        /// Вызывать только из <see cref="Report"/>: метод рассчитывает, что уже находится
+        /// не на UI-потоке.
         /// </summary>
-        public static async void ReportAsync(Exception ex, string context, bool includeDiagnostics = true) {
+        private static async Task ReportCoreAsync(Exception ex, string context, bool includeDiagnostics = true) {
             try {
                 // Автоотчёты отправляем только с согласия пользователя (тумблер в настройках).
                 // На ручную отправку обратной связи (TryConsumeManual / формы фидбэка) это не влияет.
@@ -241,7 +253,7 @@ namespace ChillHub.Core {
             try {
                 var ex = e.ExceptionObject as Exception;
                 if (ex != null) {
-                    ReportAsync(ex, "AppDomain.UnhandledException", includeDiagnostics: true);
+                    Report(ex, "AppDomain.UnhandledException", includeDiagnostics: true);
                 }
             }
             catch { }
@@ -250,7 +262,7 @@ namespace ChillHub.Core {
         private static void Current_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e) {
             try {
                 if (e?.Exception != null) {
-                    ReportAsync(e.Exception, "DispatcherUnhandledException", includeDiagnostics: true);
+                    Report(e.Exception, "DispatcherUnhandledException", includeDiagnostics: true);
                 }
             }
             catch { }
@@ -259,7 +271,7 @@ namespace ChillHub.Core {
         private static void TaskScheduler_UnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e) {
             try {
                 if (e?.Exception != null) {
-                    ReportAsync(e.Exception, "TaskScheduler.UnobservedTaskException", includeDiagnostics: true);
+                    Report(e.Exception, "TaskScheduler.UnobservedTaskException", includeDiagnostics: true);
                 }
             }
             catch { }
