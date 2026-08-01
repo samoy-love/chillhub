@@ -216,7 +216,12 @@ namespace ChillHub.Pages {
             try {
                 var url = $"{this.BaseApi}/api/games/{gid}/builds";
                 var resp = await this.http.GetFromJsonAsync<BuildsResponse>(url).ConfigureAwait(true);
-                this.builds = resp?.Items ?? new List<string>();
+
+                // От новых к старым: сервер порядок не гарантирует, а выпадающий список
+                // и выбор «по умолчанию» опираются на него.
+                this.builds = (resp?.Items ?? new List<string>())
+                    .OrderByDescending(v => v, Comparer<string>.Create(VersionOrder.Compare))
+                    .ToList();
                 this.BuildsCombo.ItemsSource = this.builds;
 
                 // По умолчанию подставляем установленную версию, иначе последнюю
@@ -303,7 +308,9 @@ namespace ChillHub.Pages {
 
             var version = (this.game.LatestVersion ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(version)) {
-                version = this.builds.Count > 0 ? (this.builds[0] ?? string.Empty).Trim() : string.Empty;
+                // Список сборок приходит с сервера неотсортированным: берём максимальную по смыслу,
+                // а не первую попавшуюся (иначе «установить последнюю» ставит самую старую).
+                version = VersionOrder.SelectLatest(this.builds) ?? string.Empty;
             }
 
             if (string.IsNullOrWhiteSpace(version)) {
