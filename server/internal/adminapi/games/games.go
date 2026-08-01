@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"ChillHub/server/internal/adminapi/media"
 	"ChillHub/server/internal/adminutil"
 )
 
@@ -74,7 +75,7 @@ func (h *Handlers) Get(w http.ResponseWriter, r *http.Request) {
 		b, _ := json.MarshalIndent(struct {
 			Items []Entry `json:"items"`
 		}{Items: items}, "", "  ")
-		_ = os.WriteFile(p, b, 0o644)
+		_ = adminutil.WriteFileAtomic(p, b, 0o644)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(b)
 		return
@@ -106,7 +107,9 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b, _ := json.MarshalIndent(payload, "", "  ")
-	if err := os.WriteFile(h.registryPath(), b, 0o644); err != nil {
+	// The launcher reads this registry through the public API; a truncated write
+	// would be served as-is.
+	if err := adminutil.WriteFileAtomic(h.registryPath(), b, 0o644); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -137,6 +140,13 @@ func (h *Handlers) IconUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing gameId", http.StatusBadRequest)
 		return
 	}
+	// Validate BEFORE the id is turned into a path: the EnsureWithin check below
+	// used to run only after os.MkdirAll had already created (or traversed into)
+	// whatever directory the client asked for.
+	if !adminutil.IsSafeGameID(gid) {
+		http.Error(w, "invalid gameId", http.StatusBadRequest)
+		return
+	}
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "missing file: "+err.Error(), http.StatusBadRequest)
@@ -146,6 +156,12 @@ func (h *Handlers) IconUpload(w http.ResponseWriter, r *http.Request) {
 	data, err := io.ReadAll(file)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Check the declared dimensions from the header before decoding: a tiny
+	// PNG can announce 30000x30000 and cost gigabytes of pixel buffer.
+	if err := media.CheckImageBounds(data); err != nil {
+		http.Error(w, "image dimensions too large", http.StatusBadRequest)
 		return
 	}
 	// Decode using stdlib; support PNG/JPEG. For unsupported formats return 400.

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -201,6 +202,42 @@ func emptyDirsOf(allDirs, dirHasFile map[string]bool) []string {
 func streamError(w io.Writer, fl adminutil.Flusher, msg string) {
 	fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", msg)
 	fl.Flush()
+}
+
+// ndjsonWriter wraps the ResponseWriter of a publish handler and remembers
+// whether any event has already been sent.
+//
+// Once the first NDJSON line is out the status code is fixed at 200 and the
+// body is a typed event stream: calling http.Error at that point is silently
+// ignored except for the plain-text line it injects into the stream, which the
+// client parses as garbage and — having seen no {"type":"error"} — reports the
+// publication as successful. fail() therefore picks the only reporting channel
+// that still works.
+type ndjsonWriter struct {
+	w       http.ResponseWriter
+	fl      adminutil.Flusher
+	started bool
+}
+
+func newNDJSONWriter(w http.ResponseWriter) *ndjsonWriter {
+	return &ndjsonWriter{w: w, fl: adminutil.FlusherFor(w)}
+}
+
+func (n *ndjsonWriter) Write(p []byte) (int, error) {
+	n.started = true
+	return n.w.Write(p)
+}
+
+func (n *ndjsonWriter) Flush() { n.fl.Flush() }
+
+// fail reports an error to the client: with an HTTP status while the response
+// is still empty, as an error event once the stream has started.
+func (n *ndjsonWriter) fail(code int, msg string) {
+	if n.started {
+		streamError(n, n, msg)
+		return
+	}
+	http.Error(n.w, msg, code)
 }
 
 func hasTrailingSlash(s string) bool { return len(s) > 0 && s[len(s)-1] == '/' }

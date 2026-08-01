@@ -45,7 +45,45 @@ const (
 	MaxItems = 2000
 	// MaxTotalBytes is a soft budget for the whole inbox file.
 	MaxTotalBytes = 64 << 20 // 64 MiB
+	// MaxBodyBytes caps a single submission. /feedback/submit is public and
+	// unauthenticated, so the decoder must not be handed an unbounded body —
+	// metrics.Submit has done this from the start.
+	//
+	// The launcher caps its diagnostics bundle at 240 KiB (Diagnostics.cs,
+	// BundleMaxBytes) and the server clamps it to MaxLogBytes; the budget here is
+	// twice that plus room for the other fields, so JSON escaping of a log full
+	// of newlines cannot push a legitimate report over the line.
+	MaxBodyBytes = 2*MaxLogBytes + (128 << 10)
+	// System is free-form key/value diagnostics from the client; every part of it
+	// is clamped so one report cannot inflate the file that is rewritten on every
+	// single submit.
+	maxSystemEntries  = 40
+	maxSystemKeyLen   = 64
+	maxSystemValueLen = 512
 )
+
+// clampSystem bounds the free-form diagnostics map: the number of entries and
+// the length of every key and value.
+func clampSystem(in map[string]string, clamp func(string, int) string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	// Deterministic truncation: without sorting, which entries survive would
+	// depend on Go's randomised map order.
+	keys := make([]string, 0, len(in))
+	for k := range in {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if len(keys) > maxSystemEntries {
+		keys = keys[:maxSystemEntries]
+	}
+	out := make(map[string]string, len(keys))
+	for _, k := range keys {
+		out[strings.TrimSpace(clamp(k, maxSystemKeyLen))] = clamp(in[k], maxSystemValueLen)
+	}
+	return out
+}
 
 // Handlers serves the feedback endpoints for one content root.
 type Handlers struct {
@@ -198,8 +236,14 @@ func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
 		Logs       string            `json:"logs"`
 		System     map[string]string `json:"system"`
 	}
-	dec := json.NewDecoder(r.Body)
-	_ = dec.Decode(&in)
+	// Bound the body and REPORT a decode failure. Swallowing it stored a report
+	// with every field empty, so a truncated or malformed submission looked to
+	// the admin like a blank message from a user instead of an error.
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxBodyBytes))
+	if err := dec.Decode(&in); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
 	// sanitize inputs and limit lengths to prevent abuse; PRESERVE whitespace/newlines for Comment
 	clamp := func(s string, n int) string {
 		if len(s) <= n {
@@ -229,7 +273,7 @@ func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
 		Status:     "new",
 		AttachLogs: in.AttachLogs,
 		Logs:       sLogs,
-		System:     in.System,
+		System:     clampSystem(in.System, clamp),
 	}
 	h.mu.Lock()
 	items, _ := h.readAll()
@@ -238,7 +282,9 @@ func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
 	err := h.writeAll(items)
 	h.mu.Unlock()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		// Public endpoint: the error text would carry the content-root path.
+		log.Printf("[feedback] store report: %v", err)
+		http.Error(w, "failed to store report", http.StatusInternalServerError)
 		return
 	}
 	adminutil.WriteJSON(w, map[string]any{"status": "ok", "id": item.ID})

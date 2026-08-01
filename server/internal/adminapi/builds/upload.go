@@ -13,13 +13,22 @@ import (
 	"ChillHub/server/internal/adminutil"
 )
 
+// uploadFormMemory is how much of a multipart body ParseMultipartForm may keep
+// in RAM; everything beyond it is spooled to a temp file. It is NOT a limit on
+// the upload size — nginx allows 30 GB bodies here.
+//
+// It used to be 1 GiB, which meant every concurrent upload could pin a gigabyte
+// of heap on a box that also serves the public endpoints. The ZIP is streamed to
+// disk immediately afterwards anyway, so a small window costs nothing.
+const uploadFormMemory = 8 << 20 // 8 MiB
+
 // Upload handles a plain multipart ZIP upload and publishes a release
 // (launcher or game), returning the manifest JSON.
 func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	if !adminutil.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	if err := r.ParseMultipartForm(1 << 30); err != nil { // up to 1GB form parsing window
+	if err := r.ParseMultipartForm(uploadFormMemory); err != nil {
 		http.Error(w, "multipart parse error: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -60,12 +69,22 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	defer f.Close()
 	log.Printf("/admin/upload: kind=%s gid=%s ver=%s zip=%s", kind, gid, ver, hdr.Filename)
 
-	// Where to extract files
-	filesRoot := filepath.Join(h.root, "content", gid, ver, "files")
-	if err := os.MkdirAll(filesRoot, 0o755); err != nil {
+	// Extract into a staging directory next to the published one, exactly like
+	// UploadStream and UploadProcessStream do. Writing straight into
+	// content/<gid>/<ver>/files would leave a half-extracted, already published
+	// version behind if the request is aborted mid-way.
+	finalVerDir := filepath.Join(h.root, "content", gid, ver)
+	stageDir, filesRoot, err := h.stageVersionDir(gid, ver)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	promoted := false
+	defer func() {
+		if !promoted {
+			_ = os.RemoveAll(stageDir)
+		}
+	}()
 
 	// Save zip to temp and extract
 	tmpZip, err := os.CreateTemp("", "upload-*.zip")
@@ -83,6 +102,15 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	tmpZip.Close()
 	defer os.Remove(tmpName)
 
+	// Same precheck as the streaming paths: refuse an archive that cannot fit
+	// rather than filling the volume and failing halfway through extraction.
+	if needBytes, err := estimateZipUncompressedSize(tmpName); err == nil {
+		if freeBytes, ferr := freeSpaceBytes(filesRoot); ferr == nil && freeBytes > 0 && needBytes > freeBytes {
+			http.Error(w, fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes), http.StatusInsufficientStorage)
+			return
+		}
+	}
+
 	if err := unzipTo(tmpName, filesRoot); err != nil {
 		http.Error(w, "unzip failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -94,6 +122,13 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Everything is extracted and hashed: publish the build in one rename.
+	if err := promoteVersionDir(stageDir, finalVerDir); err != nil {
+		http.Error(w, "activate failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	promoted = true
 
 	m := manifest{
 		Version:   ver,
@@ -124,14 +159,17 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	// Streaming setup (tolerate environments without http.Flusher)
+	// Streaming setup (tolerate environments without http.Flusher). Everything
+	// this handler writes goes through nw, so it knows whether an error can
+	// still be reported as an HTTP status or has to become an error event.
 	w.Header().Set("Content-Type", "application/x-ndjson")
-	fl := adminutil.FlusherFor(w)
+	nw := newNDJSONWriter(w)
+	fl := adminutil.Flusher(nw)
 
 	// Prefer true streaming to avoid extra disk copies and huge memory use
 	mr, err := r.MultipartReader()
 	if err != nil {
-		http.Error(w, "multipart reader error: "+err.Error(), http.StatusBadRequest)
+		nw.fail(http.StatusBadRequest, "multipart reader error: "+err.Error())
 		return
 	}
 
@@ -146,12 +184,21 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 		saved        int64
 	)
 
+	// The temp ZIP is this handler's alone: whatever happens below — a rejected
+	// parameter, a full disk, a broken archive — it must not survive the request.
+	// Only the successful path removes it early (and a second Remove is a no-op).
+	defer func() {
+		if tmpName != "" {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
 	// Optional precheck: ensure enough temp space based on Content-Length if known
 	if r.ContentLength > 0 {
 		tmpDir := filepath.Join(h.root, "tmp")
 		if err := os.MkdirAll(tmpDir, 0o755); err == nil {
 			if free, ferr := freeSpaceBytes(tmpDir); ferr == nil && free > 0 && uint64(r.ContentLength) > free {
-				http.Error(w, fmt.Sprintf("insufficient temp space: need %d bytes, have %d bytes", r.ContentLength, free), http.StatusInsufficientStorage)
+				nw.fail(http.StatusInsufficientStorage, fmt.Sprintf("insufficient temp space: need %d bytes, have %d bytes", r.ContentLength, free))
 				return
 			}
 		}
@@ -164,7 +211,7 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if perr != nil {
-			http.Error(w, perr.Error(), http.StatusBadRequest)
+			nw.fail(http.StatusBadRequest, perr.Error())
 			return
 		}
 		name := strings.TrimSpace(part.FormName())
@@ -191,13 +238,13 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 			// Create temp dir and file once we hit the file part; stream directly
 			tmpDir := filepath.Join(h.root, "tmp")
 			if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-				streamError(w, fl, err.Error())
+				nw.fail(http.StatusInternalServerError, err.Error())
 				part.Close()
 				return
 			}
 			tmpZip, err := os.CreateTemp(tmpDir, "upload-*.zip")
 			if err != nil {
-				streamError(w, fl, err.Error())
+				nw.fail(http.StatusInternalServerError, err.Error())
 				part.Close()
 				return
 			}
@@ -210,12 +257,11 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 			_ = tmpZip.Close()
 			_ = part.Close()
 			if cerr != nil {
-				os.Remove(tmpName)
-				streamError(w, fl, cerr.Error())
+				nw.fail(http.StatusInternalServerError, cerr.Error())
 				return
 			}
 			saved = n
-			fmt.Fprintf(w, "{\"type\":\"zipSaved\",\"filename\":%q,\"bytes\":%d}\n", origFilename, saved)
+			fmt.Fprintf(nw, "{\"type\":\"zipSaved\",\"filename\":%q,\"bytes\":%d}\n", origFilename, saved)
 			fl.Flush()
 		default:
 			// Consume but ignore other fields
@@ -227,29 +273,33 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 	if kind == "launcher" {
 		gid = "launcher"
 	}
+	// These checks run after the parts loop, i.e. after the zipSaved event has
+	// already been flushed: nw.fail turns them into error events instead of an
+	// http.Error whose status is ignored and whose plain-text body corrupts the
+	// stream (leaving the client to conclude the build was published).
 	if kind == "" {
-		http.Error(w, "missing kind (launcher|game)", http.StatusBadRequest)
+		nw.fail(http.StatusBadRequest, "missing kind (launcher|game)")
 		return
 	}
 	if ver == "" {
-		http.Error(w, "missing version", http.StatusBadRequest)
+		nw.fail(http.StatusBadRequest, "missing version")
 		return
 	}
 	if kind == "game" && strings.TrimSpace(gid) == "" {
-		http.Error(w, "missing gameId for kind=game", http.StatusBadRequest)
+		nw.fail(http.StatusBadRequest, "missing gameId for kind=game")
 		return
 	}
 	if !adminutil.IsSafeGameID(gid) || !adminutil.IsSafeVersion(ver) {
-		http.Error(w, "invalid gameId or version", http.StatusBadRequest)
+		nw.fail(http.StatusBadRequest, "invalid gameId or version")
 		return
 	}
 	if tmpName == "" {
-		streamError(w, fl, "missing zip part")
+		nw.fail(http.StatusBadRequest, "missing zip part")
 		return
 	}
 
 	// Send start event after we know parameters
-	fmt.Fprintf(w, "{\"type\":\"start\",\"kind\":%q,\"gameId\":%q,\"version\":%q}\n", kind, gid, ver)
+	fmt.Fprintf(nw, "{\"type\":\"start\",\"kind\":%q,\"gameId\":%q,\"version\":%q}\n", kind, gid, ver)
 	fl.Flush()
 
 	// Save zip to temp was already done (tmpName). Extract into a staging dir on
@@ -258,7 +308,7 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 	finalVerDir := filepath.Join(h.root, "content", gid, ver)
 	stageDir, filesRoot, err := h.stageVersionDir(gid, ver)
 	if err != nil {
-		streamError(w, fl, err.Error())
+		nw.fail(http.StatusInternalServerError, err.Error())
 		return
 	}
 	promoted := false
@@ -271,13 +321,13 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 	// Check free space before unzip (estimate total uncompressed size of ZIP)
 	if needBytes, err := estimateZipUncompressedSize(tmpName); err == nil {
 		if freeBytes, ferr := freeSpaceBytes(filesRoot); ferr == nil && freeBytes > 0 && needBytes > freeBytes {
-			http.Error(w, fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes), http.StatusInsufficientStorage)
+			nw.fail(http.StatusInsufficientStorage, fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes))
 			return
 		}
 	}
 
 	// Unzip with progress
-	if !streamUnzip(w, fl, tmpName, filesRoot) {
+	if !streamUnzip(nw, fl, tmpName, filesRoot) {
 		return
 	}
 	// Remove temp zip
@@ -285,10 +335,10 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 
 	// Compose manifest with progress: pre-scan totals first
 	totalFiles, totalBytes := countTree(filesRoot)
-	fmt.Fprintf(w, "{\"type\":\"composeStart\",\"totalFiles\":%d,\"totalBytes\":%d}\n", totalFiles, totalBytes)
+	fmt.Fprintf(nw, "{\"type\":\"composeStart\",\"totalFiles\":%d,\"totalBytes\":%d}\n", totalFiles, totalBytes)
 	fl.Flush()
 
-	files, emptyDirs, ok := streamCompose(w, fl, filesRoot)
+	files, emptyDirs, ok := streamCompose(nw, fl, filesRoot)
 	if !ok {
 		return
 	}
@@ -303,18 +353,18 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 
 	// Everything is extracted and hashed: publish the build in one rename.
 	if err := promoteVersionDir(stageDir, finalVerDir); err != nil {
-		streamError(w, fl, "activate failed: "+err.Error())
+		streamError(nw, fl, "activate failed: "+err.Error())
 		return
 	}
 	promoted = true
 
 	outPath, _, err := h.writeManifest(m, upd)
 	if err != nil {
-		streamError(w, fl, err.Error())
+		streamError(nw, fl, err.Error())
 		return
 	}
 
-	fmt.Fprintf(w, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
+	fmt.Fprintf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
 	fl.Flush()
 }
 

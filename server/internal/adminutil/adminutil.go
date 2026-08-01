@@ -45,6 +45,52 @@ func WriteJSON(w http.ResponseWriter, v any) {
 	w.Write(b)
 }
 
+// WriteFileAtomic writes data to path through a temporary file in the same
+// directory followed by a rename.
+//
+// Every state file this server keeps — manifests, latest.json, the games
+// registry, news index.json and news_meta.json — is read by the PUBLIC API
+// while the admin API rewrites it. A plain os.WriteFile truncates first, so a
+// crash, a full disk or simply an unlucky read in between hands out a truncated
+// JSON document; a rename is atomic and readers see either the old file or the
+// new one.
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() {
+		tmp.Close()
+		_ = os.Remove(tmpPath)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Chmod(tmpPath, perm); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
 // EnsureWithin reports whether p resolves to a location inside base.
 func EnsureWithin(base, p string) bool {
 	b, _ := filepath.Abs(base)
@@ -78,6 +124,23 @@ func IsSafeVersion(s string) bool {
 	}
 	for _, r := range s {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// IsHexID reports whether s is a plain lower/upper-case hex identifier of a
+// plausible length. Both GenID and NewBuildID emit exactly that, so every
+// server-generated id (upload ids, build ids) that comes back from a client and
+// is turned into a path must pass this check before it reaches filepath.Join.
+func IsHexID(s string) bool {
+	if len(s) < 8 || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
 			continue
 		}
 		return false
