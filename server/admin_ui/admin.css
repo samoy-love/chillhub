@@ -101,6 +101,17 @@ textarea {
   animation: blink-critical 1s linear infinite;
 }
 
+/* Бесконечное мигание — раздражитель и триггер для вестибулярных расстройств,
+   а индикатор висит в шапке на всех вкладках. Тем, кто попросил уменьшить
+   анимацию, показываем то же состояние статикой: красный фон и подсветка
+   остаются, критичность по-прежнему читается. */
+@media (prefers-reduced-motion: reduce) {
+  .badge-critical {
+    animation: none;
+    filter: drop-shadow(0 0 0.2rem rgb(220 53 69 / 70%));
+  }
+}
+
 /* Preserve original whitespace/newlines for comment body in Inbox */
 .preserve-ws {
   white-space: pre-wrap;    /* preserve spaces and newlines, allow wrapping */
