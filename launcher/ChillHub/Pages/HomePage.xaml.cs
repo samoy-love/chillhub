@@ -165,6 +165,10 @@ namespace ChillHub.Pages {
         private ActionMode actionMode = ActionMode.Checking;
         private bool hasUpdateError = false;
 
+        // Loaded срабатывает и при первом показе, и при возврате со страницы игры/новости.
+        // Первый раз пропускаем: там уже отрабатывает полная загрузка.
+        private bool loadedOnce = false;
+
         public HomePage() {
             this.InitializeComponent();
 
@@ -187,6 +191,9 @@ namespace ChillHub.Pages {
 
                 // ESC закрывает форму обратной связи (с подтверждением)
                 this.PreviewKeyDown += this.HomePage_PreviewKeyDown;
+
+                // Возврат со страницы игры: подхватываем изменившееся локальное состояние
+                this.Loaded += this.HomePage_Loaded;
 
                 // Баннер о том, что отчёт об ошибке ушёл автоматически
                 ChillHub.Core.ErrorReporter.AutoReported += (ctx) =>
@@ -1661,7 +1668,8 @@ namespace ChillHub.Pages {
             ImageLoader.HandleImageFailed(img, e.ErrorException);
         }
 
-        // Блокируем контекстное меню для неустановленных игр (или если нет папки игры)
+        // Пункты работы с файлами доступны только для установленных игр.
+        // Сам пункт «Подробнее об игре» доступен всегда — страница игры полезна и до установки.
         private void GameItem_ContextMenuOpening(object sender, ContextMenuEventArgs e) {
             try {
                 var fe = sender as FrameworkElement;
@@ -1671,15 +1679,98 @@ namespace ChillHub.Pages {
                     e.Handled = true;
                     return;
                 }
-                var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
 
-                // Скрываем контекстное меню, если нет папки или нет содержимых файлов (кроме служебных)
-                if (!Directory.Exists(localRoot) || !HasAnyLocalGameFiles(localRoot)) {
-                    e.Handled = true;
+                var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
+                var hasFiles = Directory.Exists(localRoot) && HasAnyLocalGameFiles(localRoot);
+
+                if (fe?.ContextMenu != null) {
+                    foreach (var raw in fe.ContextMenu.Items) {
+                        // Первый пункт («Подробнее об игре») оставляем активным всегда
+                        if (raw is MenuItem mi && !ReferenceEquals(mi, fe.ContextMenu.Items.Count > 0 ? fe.ContextMenu.Items[0] : null)) {
+                            mi.IsEnabled = hasFiles;
+                        }
+                    }
                 }
             }
-            catch {
+            catch (Exception ex) {
+                // Не смогли подготовить меню — лучше его не показывать вовсе
+                Core.Logging.Logger.Warn($"GameItem_ContextMenuOpening: {ex.Message}");
                 e.Handled = true;
+            }
+        }
+
+        // --- Переход на страницу игры (задача 24) ---
+        private void GameDetails_Click(object sender, RoutedEventArgs e) {
+            var gi = (sender as FrameworkElement)?.GetValue(MenuItem.CommandParameterProperty) as GameInfo
+                     ?? (sender as FrameworkElement)?.DataContext as GameInfo
+                     ?? this.GetSelectedGame();
+            this.OpenGamePage(gi);
+        }
+
+        private void GameList_MouseDoubleClick(object sender, MouseButtonEventArgs e) {
+            // Двойной клик по пустому месту списка игнорируем: интересует только строка игры
+            var source = e.OriginalSource as DependencyObject;
+            var item = FindAncestorListBoxItem(source);
+            if (item?.DataContext is GameInfo gi) {
+                e.Handled = true;
+                this.OpenGamePage(gi);
+            }
+        }
+
+        private static ListBoxItem? FindAncestorListBoxItem(DependencyObject? node) {
+            while (node != null) {
+                if (node is ListBoxItem lbi) {
+                    return lbi;
+                }
+
+                node = node is System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D
+                    ? System.Windows.Media.VisualTreeHelper.GetParent(node)
+                    : LogicalTreeHelper.GetParent(node);
+            }
+
+            return null;
+        }
+
+        private void OpenGamePage(GameInfo? game) {
+            try {
+                if (game == null || string.IsNullOrWhiteSpace(game.GameId)) {
+                    this.StatusText.Text = "Не удалось определить игру";
+                    return;
+                }
+
+                // Синхронизируем выделение, чтобы после возврата действия относились к той же игре
+                if (!ReferenceEquals(this.GameList.SelectedItem, game)) {
+                    this.GameList.SelectedItem = game;
+                }
+
+                var win = Window.GetWindow(this) as ChillHub.MainWindow;
+                win?.ContentFrame.Navigate(new GamePage(game));
+            }
+            catch (Exception ex) {
+                this.ShowUserError("Не удалось открыть страницу игры.", ex, "HomePage.OpenGamePage");
+            }
+        }
+
+        // Возврат со страницы игры: перечитываем локальные маркеры версий без сетевых запросов
+        private async void HomePage_Loaded(object sender, RoutedEventArgs e) {
+            if (!this.loadedOnce) {
+                this.loadedOnce = true;
+                return;
+            }
+
+            if (!GamePage.ConsumeLocalStateChanged()) {
+                return;
+            }
+
+            try {
+                var snapshot = this.games?.ToList() ?? new List<GameInfo>();
+                await Task.Run(() => this.NormalizeGameIconsAndLocalState(snapshot));
+                this.GameList.Items.Refresh();
+                this.UpdateActionButtonState();
+            }
+            catch (Exception ex) {
+                // Список останется прежним до следующего обновления вручную — не критично
+                Core.Logging.Logger.Error(ex, "HomePage.HomePage_Loaded");
             }
         }
 
