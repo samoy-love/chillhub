@@ -124,20 +124,27 @@ namespace ChillHub.Core.Sync {
 
                         // Если есть sha256/blake3 в манифесте — считаем локальный хеш и сравним
                         if (!string.IsNullOrWhiteSpace(mf.Sha256) || !string.IsNullOrWhiteSpace(mf.Blake3)) {
-                            var mtimeTicks = info.LastWriteTimeUtc.Ticks;
-                            if (!hashCache.TryGet(rel, info.Length, mtimeTicks, out var shaHex, out var b3Hex)) {
-                                ComputeHashes(localPath, out shaHex, out b3Hex);
-                                hashCache.Set(rel, info.Length, mtimeTicks, shaHex, b3Hex);
-                            }
-
-                            var shaOk = string.IsNullOrWhiteSpace(mf.Sha256) || string.Equals(shaHex, mf.Sha256, StringComparison.OrdinalIgnoreCase);
-                            var b3Ok = string.IsNullOrWhiteSpace(mf.Blake3) || string.Equals(b3Hex, mf.Blake3, StringComparison.OrdinalIgnoreCase);
-                            if (shaOk && b3Ok) {
-                                needDownload = false;
+                            if (mf.Size > 0 && info.Length != mf.Size) {
+                                // Размер отличается — хеш заведомо не совпадёт, файл читать незачем
+                                needDownload = true;
+                                reason = $"size_mismatch local={info.Length} manifest={mf.Size}";
                             }
                             else {
-                                needDownload = true;
-                                reason = $"hash_mismatch shaOk={shaOk} b3Ok={b3Ok}";
+                                var mtimeTicks = info.LastWriteTimeUtc.Ticks;
+                                if (!hashCache.TryGet(rel, info.Length, mtimeTicks, out var shaHex, out var b3Hex)) {
+                                    ComputeHashes(localPath, out shaHex, out b3Hex);
+                                    hashCache.Set(rel, info.Length, mtimeTicks, shaHex, b3Hex);
+                                }
+
+                                var shaOk = string.IsNullOrWhiteSpace(mf.Sha256) || string.Equals(shaHex, mf.Sha256, StringComparison.OrdinalIgnoreCase);
+                                var b3Ok = string.IsNullOrWhiteSpace(mf.Blake3) || string.Equals(b3Hex, mf.Blake3, StringComparison.OrdinalIgnoreCase);
+                                if (shaOk && b3Ok) {
+                                    needDownload = false;
+                                }
+                                else {
+                                    needDownload = true;
+                                    reason = $"hash_mismatch shaOk={shaOk} b3Ok={b3Ok}";
+                                }
                             }
                         }
                         else {
