@@ -285,8 +285,25 @@ jobs:
           enc FAIL_ON_MISMATCH_B64 "${IN_FAIL_ON_MISMATCH:-}" plain
           echo "Encoded 7 values (nothing printed)."
 
+      # ---------------------------------------------------------------------
+      # И17: СТОРОННИЕ ACTIONS ЗАКРЕПЛЕНЫ ПО COMMIT SHA, А НЕ ПО ТЕГУ.
+      #
+      # Тег в git — ПЕРЕМЕЩАЕМАЯ ссылка: владелец репозитория может переставить
+      # v0.1.7 на любой коммит, и следующий же запуск подтянет другой код без
+      # единого изменения у нас. Для обычного шага это неприятно; для этих трёх
+      # шагов это критично, потому что им передаётся ${{ secrets.SSH_PRIVATE_KEY }}
+      # — приватный ключ от продового сервера. Скомпрометированный или просто
+      # перевыпущенный тег означает, что чужой код получает ключ от прода.
+      #
+      # SHA неизменяем: он либо тот, что мы проверили, либо шаг не запустится.
+      # Комментарий рядом с каждым SHA хранит соответствующую версию, чтобы
+      # обновление оставалось читаемым one-line изменением.
+      #
+      # Обновление: сверить новый SHA командой
+      #   gh api repos/appleboy/scp-action/git/ref/tags/<tag> --jq .object.sha
+      # ---------------------------------------------------------------------
       - name: Upload bundle to server (SCP)
-        uses: appleboy/scp-action@v0.1.7
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634  # v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -296,7 +313,7 @@ jobs:
           strip_components: 1
 
       - name: Deploy on server (SSH)
-        uses: appleboy/ssh-action@v1.2.2
+        uses: appleboy/ssh-action@2ead5e36573f08b82fbfce1504f1a4b05a647c6f  # v1.2.2 — см. И17 выше
         env:
           # Produced by the "Resolve admin password hash" step above.
           ADMIN_PASSWORD_BCRYPT_B64: ${{ env.ADMIN_PASSWORD_BCRYPT_B64 }}
@@ -997,7 +1014,7 @@ jobs:
         # always(): отчёт нужнее всего на красном прогоне (см. И-смоук выше),
         # а деплой-шаг теперь честно падает при провале проверок.
         if: always()
-        uses: appleboy/scp-action@v0.1.7
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634  # v0.1.7 — см. И17 выше
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
