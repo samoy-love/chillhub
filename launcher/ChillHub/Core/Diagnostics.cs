@@ -23,7 +23,9 @@ namespace ChillHub.Core {
                 // Config dump
                 sb.AppendLine("## Config");
                 try {
-                    var cfgPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChillHub", "config.json");
+                    // Берём путь у ConfigService: конфиг переехал в %APPDATA%\ChillHub,
+                    // потому что %LOCALAPPDATA%\ChillHub — это каталог установки лаунчера.
+                    var cfgPath = ChillHub.Core.ConfigService.ConfigFilePath;
                     hints["configPath"] = cfgPath;
                     if (File.Exists(cfgPath)) {
                         var json = File.ReadAllText(cfgPath, Encoding.UTF8);
