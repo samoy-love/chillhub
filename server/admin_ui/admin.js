@@ -1430,6 +1430,7 @@ document.addEventListener('DOMContentLoaded', function(){
   }); }
 });
 
+let __dlgSeq = 0; // счётчик для генерации id заголовков диалогов
 // Показывает динамически собранный модальный диалог.
 // Раньше каждый такой диалог делал `document.body.appendChild(el)` и сразу
 // `window.bootstrap ? new Modal(el) : null`. Если bootstrap не загрузился
@@ -1446,6 +1447,15 @@ function openDynamicModal(el, onDispose){
     dispose();
     alert('Диалог не открылся: не загрузилась библиотека Bootstrap (CDN недоступен?). Обновите страницу.');
     return null;
+  }
+  // Доступность: role/aria-modal bootstrap проставляет сам при показе, но
+  // связать диалог с его заголовком он не может — делаем это здесь, иначе
+  // скринридер объявляет диалог без имени.
+  el.setAttribute('role', 'dialog');
+  const titleEl = el.querySelector('.modal-title');
+  if(titleEl){
+    if(!titleEl.id){ titleEl.id = 'dlg-title-' + (++__dlgSeq); }
+    el.setAttribute('aria-labelledby', titleEl.id);
   }
   document.body.appendChild(el);
   el.addEventListener('hidden.bs.modal', dispose, { once: true });
@@ -1605,12 +1615,12 @@ function openPickUploadDialog(mode){
         const cap = document.createElement('div'); cap.className='small text-truncate fw-semibold'; cap.textContent = it.name; cap.style.cursor='pointer';
         cap.addEventListener('click', ()=>{ pickPath = pickPath? (pickPath+'/'+it.name): it.name; pathInput.value=pickPath; fetchPickList(); });
         const actions = document.createElement('div'); actions.className='mt-1';
-        const rn = document.createElement('button'); rn.className='btn btn-sm btn-dark'; rn.title='Переименовать'; rn.innerHTML='\
+        const rn = document.createElement('button'); rn.className='btn btn-sm btn-dark'; rn.title='Переименовать'; rn.setAttribute('aria-label','Переименовать'); rn.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path fill="#fff" d="M3 17.25V21h3.75l11.06-11.06-3.75-3.75L3 17.25zm14.81-9.06c.2-.2.2-.51 0-.71l-2.29-2.29a.5.5 0 0 0-.71 0l-1.83 1.83 3 3 1.83-1.83z"/>\
 </svg>';
         rn.onclick=async()=>{ const nn=prompt('Новое имя папки', it.name); if(!nn||nn===it.name) return; if(!await assetsMutate('/admin/news/assets/rename', {path: pickPath||'', from: it.name, to: nn})) return; fetchPickList(); };
-        const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.innerHTML='\
+        const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.setAttribute('aria-label','Удалить'); del.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
@@ -1625,12 +1635,12 @@ function openPickUploadDialog(mode){
         const body = document.createElement('div'); body.className='card-body p-2 mt-auto';
         const cap = document.createElement('div'); cap.className='small text-truncate'; cap.textContent = it.name;
         const actions = document.createElement('div'); actions.className='mt-1';
-        const rn = document.createElement('button'); rn.className='btn btn-sm btn-dark'; rn.title='Переименовать'; rn.innerHTML='\
+        const rn = document.createElement('button'); rn.className='btn btn-sm btn-dark'; rn.title='Переименовать'; rn.setAttribute('aria-label','Переименовать'); rn.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path fill="#fff" d="M3 17.25V21h3.75l11.06-11.06-3.75-3.75L3 17.25zm14.81-9.06c.2-.2.2-.51 0-.71l-2.29-2.29a.5.5 0 0 0-.71 0l-1.83 1.83 3 3 1.83-1.83z"/>\
 </svg>';
         rn.onclick=async()=>{ const nn=prompt('Новое имя файла', it.name); if(!nn||nn===it.name) return; if(!await assetsMutate('/admin/news/assets/rename', {path: pickPath||'', from: it.name, to: nn})) return; fetchPickList(); };
-        const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.innerHTML='\
+        const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.setAttribute('aria-label','Удалить'); del.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
@@ -1751,12 +1761,12 @@ function openPasteUploadDialog(file, mode){
         const cap = document.createElement('div'); cap.className='small text-truncate fw-semibold'; cap.textContent = it.name; cap.style.cursor='pointer';
         cap.addEventListener('click', ()=>{ pastePath = pastePath? (pastePath+'/'+it.name): it.name; pathInput.value=pastePath; fetchPasteList(); });
         const actions = document.createElement('div'); actions.className='mt-1';
-        const rn = document.createElement('button'); rn.className='btn btn-sm btn-dark'; rn.title='Переименовать'; rn.innerHTML='\
+        const rn = document.createElement('button'); rn.className='btn btn-sm btn-dark'; rn.title='Переименовать'; rn.setAttribute('aria-label','Переименовать'); rn.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path fill="#fff" d="M3 17.25V21h3.75l11.06-11.06-3.75-3.75L3 17.25zm14.81-9.06c.2-.2.2-.51 0-.71l-2.29-2.29a.5.5 0 0 0-.71 0l-1.83 1.83 3 3 1.83-1.83z"/>\
 </svg>';
         rn.onclick=async()=>{ const nn=prompt('Новое имя папки', it.name); if(!nn||nn===it.name) return; if(!await assetsMutate('/admin/news/assets/rename', {path: pastePath||'', from: it.name, to: nn})) return; fetchPasteList(); };
-        const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.innerHTML='\
+        const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.setAttribute('aria-label','Удалить'); del.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
@@ -1770,12 +1780,12 @@ function openPasteUploadDialog(file, mode){
         const body = document.createElement('div'); body.className='card-body p-2 mt-auto';
         const cap = document.createElement('div'); cap.className='small text-truncate'; cap.textContent = it.name;
         const actions = document.createElement('div'); actions.className='mt-1';
-        const rn = document.createElement('button'); rn.className='btn btn-sm btn-dark'; rn.title='Переименовать'; rn.innerHTML='\
+        const rn = document.createElement('button'); rn.className='btn btn-sm btn-dark'; rn.title='Переименовать'; rn.setAttribute('aria-label','Переименовать'); rn.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path fill="#fff" d="M3 17.25V21h3.75l11.06-11.06-3.75-3.75L3 17.25zm14.81-9.06c.2-.2.2-.51 0-.71l-2.29-2.29a.5.5 0 0 0-.71 0l-1.83 1.83 3 3 1.83-1.83z"/>\
 </svg>';
         rn.onclick=async()=>{ const nn=prompt('Новое имя файла', it.name); if(!nn||nn===it.name) return; if(!await assetsMutate('/admin/news/assets/rename', {path: pastePath||'', from: it.name, to: nn})) return; fetchPasteList(); };
-        const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.innerHTML='\
+        const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.setAttribute('aria-label','Удалить'); del.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
@@ -2806,12 +2816,12 @@ function renderGalleryGrid(items){
       const cap = document.createElement('div'); cap.className='small text-truncate fw-semibold'; cap.textContent = it.name; cap.style.cursor='pointer';
       cap.addEventListener('click', ()=>{ gallerySetPath(galleryPath? (galleryPath+'/'+it.name): it.name); galleryFetchAndRender(); });
       const actions = document.createElement('div'); actions.className='mt-1';
-      const rn = document.createElement('button'); rn.className='btn btn-sm btn-dark'; rn.title='Переименовать'; rn.innerHTML='\
+      const rn = document.createElement('button'); rn.className='btn btn-sm btn-dark'; rn.title='Переименовать'; rn.setAttribute('aria-label','Переименовать'); rn.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path fill="#fff" d="M3 17.25V21h3.75l11.06-11.06-3.75-3.75L3 17.25zm14.81-9.06c.2-.2.2-.51 0-.71l-2.29-2.29a.5.5 0 0 0-.71 0l-1.83 1.83 3 3 1.83-1.83z"/>\
 </svg>';
       rn.onclick=async()=>{ const nn=prompt('Новое имя папки', it.name); if(!nn||nn===it.name) return; if(!await assetsMutate('/admin/news/assets/rename', {path: galleryPath||'', from: it.name, to: nn})) return; galleryFetchAndRender(); };
-      const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.innerHTML='\
+      const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.setAttribute('aria-label','Удалить'); del.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" fill="#fff" xmlns="http://www.w3.org/2000/svg">\
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
@@ -2826,12 +2836,12 @@ function renderGalleryGrid(items){
       const body = document.createElement('div'); body.className='card-body p-2 mt-auto';
       const cap = document.createElement('div'); cap.className='small text-truncate'; cap.textContent = it.name||'';
       const actions = document.createElement('div'); actions.className='mt-1';
-      const rn = document.createElement('button'); rn.className='btn btn-sm btn-dark'; rn.title='Переименовать'; rn.innerHTML='\
+      const rn = document.createElement('button'); rn.className='btn btn-sm btn-dark'; rn.title='Переименовать'; rn.setAttribute('aria-label','Переименовать'); rn.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
   <path fill="#fff" d="M3 17.25V21h3.75l11.06-11.06-3.75-3.75L3 17.25zm14.81-9.06c.2-.2.2-.51 0-.71l-2.29-2.29a.5.5 0 0 0-.71 0l-1.83 1.83 3 3 1.83-1.83z"/>\
 </svg>';
       rn.onclick=async()=>{ const nn=prompt('Новое имя файла', it.name); if(!nn||nn===it.name) return; if(!await assetsMutate('/admin/news/assets/rename', {path: galleryPath||'', from: it.name, to: nn})) return; galleryFetchAndRender(); };
-      const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.innerHTML='\
+      const del = document.createElement('button'); del.className='btn btn-sm btn-dark ms-1'; del.title='Удалить'; del.setAttribute('aria-label','Удалить'); del.innerHTML='\
 <svg width="18" height="18" viewBox="0 0 24 24" fill="#fff" xmlns="http://www.w3.org/2000/svg">\
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
