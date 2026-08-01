@@ -168,8 +168,28 @@ Section "Install"
   WriteRegStr HKCU "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\${APP_EXE}"
   WriteRegStr HKCU "${UNINST_KEY}" "Publisher" "${COMPANY_NAME}"
-  ; DisplayVersion is optional; can be updated by CI if needed
-  ; WriteRegStr HKCU "${UNINST_KEY}" "DisplayVersion" "1.0.0"
+
+  ; И28: поля, которые «Установка и удаление программ» ожидает увидеть.
+  ;
+  ; DisplayVersion отсутствовал (был закомментирован с заглушкой 1.0.0), из-за
+  ; чего в списке программ у ChillHub была пустая колонка версии — и понять,
+  ; что именно установлено, штатными средствами Windows было нельзя. Значение
+  ; берём из той же ${APP_VERSION}, что пишется в launcher.version, чтобы
+  ; реестр и маркер версии не разъезжались (см. Б8).
+  WriteRegStr HKCU "${UNINST_KEY}" "DisplayVersion" "${APP_VERSION}"
+
+  ; NoModify/NoRepair: у установщика нет ни режима изменения, ни режима
+  ; восстановления. Без этих флагов Windows показывает кнопки «Изменить» и
+  ; «Восстановить», которые запускают обычную установку заново — поведение,
+  ; которого пользователь не просил.
+  WriteRegDWORD HKCU "${UNINST_KEY}" "NoModify" 1
+  WriteRegDWORD HKCU "${UNINST_KEY}" "NoRepair" 1
+
+  ; EstimatedSize (в КиБ) считается ПОСЛЕ распаковки файлов — иначе считать
+  ; было бы нечего. Без него Windows показывает пустой размер.
+  ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
+  IntFmt $0 "0x%08X" $0
+  WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" "$0"
 
   ; Persist selected GamesDir in our app registry for uninstall
   WriteRegStr HKCU "${APP_REG}" "GamesDir" "$GAMES_DIR"
