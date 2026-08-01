@@ -738,21 +738,33 @@ sudo ln -sf "$NGINX_SITE_AVAILABLE" "$NGINX_SITE_ENABLED"
 # деплоя, а не обнаружится жалобой чужого проекта.
 echo "[nginx] sites-enabled: $(ls -1 /etc/nginx/sites-enabled | tr '\n' ' ')"
 
-## Sanitize tuning.conf to avoid duplicate core directives (e.g., sendfile) across configs
-TCONF="/etc/nginx/conf.d/tuning.conf"
-if [ -f "$TCONF" ]; then
-  DUMP=$(sudo nginx -T 2>/dev/null || true)
-  for d in sendfile tcp_nopush tcp_nodelay; do
-    if printf "%s" "$DUMP" | awk -v d="$d" 'tolower($0) ~ "^[[:space:]]*" d "[[:space:]]" {found=1} END{exit !found}'; then
-      # Remove duplicate directive lines from tuning.conf
-      sudo sed -i -E "/^[[:space:]]*${d}[[:space:]]/d" "$TCONF" || true
-    fi
-  done
-  # Drop empty lines
-  sudo sed -i -E '/^[[:space:]]*$/d' "$TCONF" || true
-  # If file is now empty, remove it
-  if ! sudo grep -q '[^[:space:]]' "$TCONF" 2>/dev/null; then sudo rm -f "$TCONF" || true; fi
-fi
+# ---------------------------------------------------------------------------
+# УДАЛЕНО: правка ОБЩИХ файлов nginx. Не возвращать.
+#
+# Здесь стояли две вещи, которые деплой лаунчера делать не имеет права:
+#
+#   1. `sed -i` по /etc/nginx/conf.d/tuning.conf — вычищал оттуда sendfile,
+#      tcp_nopush и tcp_nodelay, а если файл после этого оставался пустым,
+#      делал `rm -f`. То есть выкатка ChillHub молча УДАЛЯЛА общий файл
+#      тюнинга.
+#   2. Правка /etc/nginx/nginx.conf: worker_processes и worker_connections
+#      переписывались через sed/awk с `sudo tee`, включая ветку, которая
+#      дописывала целый блок `events { ... }` в конец файла.
+#
+# Оба файла — глобальные и общие для трёх независимых проектов на этом хосте
+# (launcher, metro, snakes). Деплой одного проекта, меняющий их, — это авария
+# в чужом сайте, которую никто не свяжет с нашим релизом. Плюс правка
+# nginx.conf шла ПОСЛЕ успешного reload нашего конфига и уже без всякого
+# отката: awk-ветка, дописывающая events-блок в файл, где events уже есть в
+# другом форматировании, оставляла бы nginx.conf, который не проходит
+# `nginx -t` вообще.
+#
+# Этот скрипт теперь трогает строго свой файл:
+# /etc/nginx/sites-available/chillhub-launcher.conf (см. блок выше).
+#
+# ЕСЛИ ТЮНИНГ РЕАЛЬНО НУЖЕН — это разовая ручная операция владельца хоста, а
+# не шаг выкатки. См. deploy/README.md.
+# ---------------------------------------------------------------------------
 if ! sudo nginx -t; then
   echo "[nginx] nginx -t не прошёл — откатываемся, reload НЕ делаем" >&2
   if [ -n "$NGINX_RESTORE" ]; then
@@ -769,47 +781,9 @@ if ! sudo nginx -t; then
 fi
 sudo systemctl reload nginx
 echo "[nginx] конфиг применён"
-# Note: we intentionally do not (re)create /etc/nginx/conf.d/tuning.conf here to avoid
-# introducing duplicate core directives. Base tuning should live in the primary nginx config.
-# Ensure worker_processes auto; and reasonable worker_connections in main nginx.conf
-NGX_MAIN="/etc/nginx/nginx.conf"
-if sudo test -f "$NGX_MAIN"; then
-  # Create a backup once, avoiding non-portable -n warnings
-  if [ ! -f "$NGX_MAIN.bak" ]; then sudo cp "$NGX_MAIN" "$NGX_MAIN.bak" || true; fi
-  # worker_processes auto;
-  if sudo grep -qE '^[[:space:]]*worker_processes[[:space:]]+auto;' "$NGX_MAIN"; then
-    true
-  elif sudo grep -qE '^[[:space:]]*worker_processes[[:space:]]+' "$NGX_MAIN"; then
-    sudo sed -ri 's/^[[:space:]]*worker_processes[[:space:]]+[^;]+;/worker_processes auto;/' "$NGX_MAIN"
-  else
-    # insert after user directive or at file start
-    if sudo grep -nE '^[[:space:]]*user[[:space:]]+' "$NGX_MAIN" >/dev/null 2>&1; then
-      ln=$(sudo awk 'BEGIN{ln=0} /^[[:space:]]*user[[:space:]]+/{ ln=NR; print ln; exit }' "$NGX_MAIN")
-      sudo awk -v ln="$ln" 'NR==ln{print; print "worker_processes auto;"; next} {print}' "$NGX_MAIN" | sudo tee "$NGX_MAIN.tmp" >/dev/null && sudo mv "$NGX_MAIN.tmp" "$NGX_MAIN"
-    else
-      printf "%s\n%s\n" "worker_processes auto;" "$(sudo cat "$NGX_MAIN")" | sudo tee "$NGX_MAIN" >/dev/null
-    fi
-  fi
-  # events { worker_connections 4096; }
-  # Make tuning changes non-fatal to avoid portability issues; nginx -t will still validate
-  set +e
-  if sudo grep -qE '^[[:space:]]*events[[:space:]]*\{' "$NGX_MAIN"; then
-    # Replace existing worker_connections inside events block if present
-    if sudo awk '/^[[:space:]]*events[[:space:]]*\{/{blk=1} blk && /^[[:space:]]*\}/{blk=0} blk && /worker_connections/{found=1} END{exit(found?0:1)}' "$NGX_MAIN"; then
-      sudo sed -ri '/^[[:space:]]*events[[:space:]]*\{/,/^[[:space:]]*\}/{s/^[[:space:]]*worker_connections[[:space:]]+[^;]+;/    worker_connections 4096;/}' "$NGX_MAIN" || true
-    else
-      # Insert a worker_connections line immediately after the opening of events block
-      sudo awk 'BEGIN{inserted=0} /^[[:space:]]*events[[:space:]]*\{[[:space:]]*$/{print; if(!inserted){print "    worker_connections 4096;"; inserted=1; next}} {print}' "$NGX_MAIN" | sudo tee "$NGX_MAIN.tmp" >/dev/null && sudo mv "$NGX_MAIN.tmp" "$NGX_MAIN" || true
-    fi
-  else
-    # Append minimal events block at end if missing
-    printf "%s\n%s\n%s\n" "events {" "    worker_connections 4096;" "}" | sudo tee -a "$NGX_MAIN" >/dev/null || true
-  fi
-  set -e
-fi
-
-sudo nginx -t
-sudo systemctl reload nginx
+# Правка /etc/nginx/nginx.conf (worker_processes / worker_connections) и второй
+# пары `nginx -t` + reload здесь БОЛЬШЕ НЕТ — см. блок «УДАЛЕНО: правка ОБЩИХ
+# файлов nginx» выше. Наш конфиг уже проверен и применён.
 echo "[check] Nginx site file sha and redirect rule"
 sudo sha256sum "$NGINX_SITE_AVAILABLE" || true
 NGX_EXPECT="%%NGINX_CONF_SHA%%"
