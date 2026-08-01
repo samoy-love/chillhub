@@ -529,7 +529,17 @@ jobs:
             else
               err "[test] FAIL /admin/ -> $code"; FAIL=1
             fi
-            must_200 "${SITE_BASE}/admin/ui/admin.js" "Admin UI static"
+            must_200 "${SITE_BASE}/admin/ui/login.js" "Admin UI login script (public)"
+            # admin.js is now behind auth_request together with the rest of the
+            # admin shell (see deploy/launcher.conf). An anonymous 200 here means
+            # the gate is GONE and the 188 KB endpoint map is public again — that
+            # is a failure, not a success.
+            code=$(http_code "${SITE_BASE}/admin/ui/admin.js")
+            if [ "$code" = 401 ] || [ "$code" = 302 ]; then
+              ok "[test] PASS /admin/ui/admin.js gated ($code)"
+            else
+              err "[test] FAIL /admin/ui/admin.js should be gated -> $code"; FAIL=1
+            fi
             must_200 "${SITE_BASE}/admin/api/health" "Admin API health"
             must_200 "${SITE_BASE}/" "Landing /"
             must_200 "${SITE_BASE}/styles.css" "Landing styles"
@@ -611,7 +621,7 @@ jobs:
               name="$2"
               read -r code time < <(curl -ks -o /dev/null -w "%{http_code} %{time_total}" "$url")
               status=FAIL
-              if [ "$name" = "/admin/ gate" ]; then
+              if [ "$name" = "/admin/ gate" ] || [ "$name" = "admin.js gate" ]; then
                 { [ "$code" = 401 ] || [ "$code" = 302 ]; } && status=OK
               else
                 [ "$code" = 200 ] && status=OK
@@ -620,7 +630,8 @@ jobs:
             }
             http_row "${SITE_BASE}/admin/ui/login.html" "Admin UI login"
             http_row "${SITE_BASE}/admin/" "/admin/ gate"
-            http_row "${SITE_BASE}/admin/ui/admin.js" "Admin UI static"
+            http_row "${SITE_BASE}/admin/ui/login.js" "Admin UI login script"
+            http_row "${SITE_BASE}/admin/ui/admin.js" "admin.js gate"
             http_row "${SITE_BASE}/admin/api/health" "Admin API health"
             http_row "${SITE_BASE}/" "Landing /"
             http_row "${SITE_BASE}/styles.css" "Landing styles"
