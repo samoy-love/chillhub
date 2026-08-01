@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -16,6 +18,58 @@ func submit(t *testing.T, h *Handlers, body string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	h.Submit(w, req)
 	return w
+}
+
+// A submit must cost one appended line, not a rewrite of the whole inbox: the
+// endpoint is public, and rewriting a 64 MiB array per submission is quadratic.
+func TestSubmitAppendsToJournalAndStaysReadable(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	for i := 0; i < 5; i++ {
+		if w := submit(t, h, fmt.Sprintf(`{"comment":"report %d","type":"bug"}`, i)); w.Code != http.StatusOK {
+			t.Fatalf("submit %d: %d %s", i, w.Code, w.Body.String())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "feedback", "inbox.pending.ndjson")); err != nil {
+		t.Fatalf("nothing was journalled: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "feedback", "inbox.json")); !os.IsNotExist(err) {
+		t.Fatalf("the array file was rewritten for a handful of submissions: %v", err)
+	}
+	// The merged view is what every admin endpoint reads, newest first.
+	items, err := h.readAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 5 {
+		t.Fatalf("readAll returned %d items, want 5", len(items))
+	}
+	if items[0].Comment != "report 4" {
+		t.Fatalf("items are not newest-first: %q", items[0].Comment)
+	}
+	// An admin write compacts the journal away.
+	w := httptest.NewRecorder()
+	h.Delete(w, httptest.NewRequest(http.MethodPost, "http://example.com/x?id="+items[0].ID, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "feedback", "inbox.pending.ndjson")); !os.IsNotExist(err) {
+		t.Fatalf("journal survived a compaction: %v", err)
+	}
+	items, _ = h.readAll()
+	if len(items) != 4 {
+		t.Fatalf("after delete: %d items, want 4", len(items))
+	}
+}
+
+// itemSize must account for JSON escaping: a log bundle of newlines and quotes
+// costs several bytes per character in the stored file.
+func TestItemSizeCountsEscaping(t *testing.T) {
+	raw := strings.Repeat("\n\"", 1000)
+	plain := strings.Repeat("ab", 1000)
+	if itemSize(Item{Logs: raw}) <= itemSize(Item{Logs: plain}) {
+		t.Fatal("escaped characters must not be counted as one byte each")
+	}
 }
 
 // A body larger than the budget must be refused, not buffered and decoded.
