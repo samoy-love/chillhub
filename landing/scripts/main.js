@@ -731,7 +731,6 @@
   function setupLuckyCenterScroll(){
     const anchorSel = 'a[href="#casino"]';
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const luckyDirect = document.querySelector(anchorSel);
     function headerHeight(){ const h = document.querySelector('.site-header'); return h ? Math.round(h.getBoundingClientRect().height) : 0; }
     function computeCenteredTop(el){
       const rect = el.getBoundingClientRect();
@@ -787,7 +786,11 @@
       // Update URL without native jump
       if(history.pushState){ history.pushState(null, '', '#casino'); }
     }
-    if(luckyDirect){ luckyDirect.addEventListener('click', onLuckyClick, { passive: false }); }
+    // Только делегирование. Раньше обработчик вешался ещё и напрямую на
+    // найденную ссылку, поэтому один клик по ней запускал onLuckyClick дважды:
+    // два history.pushState (лишняя запись в истории, «назад» не возвращал) и
+    // два конкурирующих window.scrollTo с разными расчётами позиции.
+    // Делегирование покрывает и уже существующие ссылки, и добавленные позже.
     document.addEventListener('click', (e)=>{
       const a = e.target.closest(anchorSel);
       if(!a) return;
