@@ -67,6 +67,113 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 2
 fi
 
+# =============================================================================
+# СТАТИЧЕСКИЕ ПРОВЕРКИ (И8) — И ЧЕСТНАЯ ГРАНИЦА ТОГО, ЧТО ЗДЕСЬ ПРОВЕРЯЕТСЯ
+# =============================================================================
+# ЧЕГО ЭТОТ СКРИПТ ПРИНЦИПИАЛЬНО НЕ ЛОВИТ
+# ---------------------------------------
+# `nginx -t` ниже гоняет ТОЛЬКО этот файл, в пустом контейнере, без соседей. На
+# проде launcher.conf лежит рядом с конфигами ещё трёх сайтов (metro.samoy.love,
+# snakes.samoy.love, samoy.love), и целый класс отказов возникает лишь от их
+# СОСЕДСТВА:
+#
+#   * конфликт server_name — два vhost'а заявляют одно имя на одном порту;
+#     nginx оставляет первый и пишет «conflicting server name», причём какой из
+#     них окажется первым, зависит от порядка обхода sites-enabled;
+#   * два default_server на одном listen — это уже не предупреждение, а ошибка,
+#     и она валит перезагрузку nginx ЦЕЛИКОМ, то есть кладёт все четыре сайта;
+#   * коллизии имён в общих для http{} пространствах: log_format,
+#     limit_req_zone, limit_conn_zone, proxy_cache_path, upstream, map, geo,
+#     shared-зоны SSL. Имя, уже занятое соседом, — тоже ошибка уровня http.
+#
+# Воспроизвести это здесь нельзя, не втащив в проверку чужие конфиги (которых
+# нет в этом репозитории и которые меняются без нашего участия). Поэтому:
+# ЗЕЛЁНЫЙ РЕЗУЛЬТАТ ЭТОГО СКРИПТА НЕ ГАРАНТИРУЕТ УСПЕШНЫЙ `nginx -t` НА ПРОДЕ.
+# Финальная проверка — `sudo nginx -t` на самом хосте, и она есть в обоих путях
+# деплоя (scripts/deploy-nginx.sh делает её с откатом).
+#
+# ЧТО МЫ ВСЁ-ТАКИ ПРОВЕРЯЕМ ЗАРАНЕЕ
+# ---------------------------------
+# Явные признаки, видимые внутри одного файла:
+#   1) наличие default_server — почти наверняка конфликт с соседями;
+#   2) дубли server_name на одном и том же listen внутри нашего файла;
+#   3) объявления в общих для http{} пространствах имён — печатаем списком,
+#      чтобы перед выкаткой их можно было сверить с соседями глазами.
+static_checks() {
+    _f="$1"
+    _fail=0
+
+    echo "nginx-check: статические проверки (см. заметку И8 в этом скрипте)"
+
+    # 1) default_server
+    if grep -nE '^[^#]*listen[^;#]*default_server' "$_f" >/dev/null 2>&1; then
+        echo "nginx-check: ОШИБКА — найден default_server:" >&2
+        grep -nE '^[^#]*listen[^;#]*default_server' "$_f" >&2
+        echo "nginx-check:   На хосте четыре сайта. Второй default_server на том же listen — ошибка" >&2
+        echo "nginx-check:   уровня http, из-за неё `nginx -t` падает и не перезагружается НИ ОДИН сайт." >&2
+        _fail=1
+    else
+        echo "nginx-check:   [ok] default_server не объявлен"
+    fi
+
+    # 2) дубли server_name на одном listen внутри файла.
+    #    Пара (порт, имя) собирается по каждому блоку server{}; одно и то же
+    #    имя на :80 и на :443 — это норма, а вот дважды на одном порту — нет.
+    _dups=$(awk '
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*server[[:space:]]*\{/ { inblk=1; nports=0; nnames=0; delete ports; delete names; next }
+        inblk && /listen[[:space:]]/ {
+            line=$0; sub(/.*listen[[:space:]]+/, "", line); sub(/;.*/, "", line);
+            split(line, a, /[[:space:]]+/);
+            p=a[1]; sub(/.*:/, "", p);
+            if (p ~ /^[0-9]+$/) { ports[++nports]=p }
+        }
+        inblk && /server_name[[:space:]]/ {
+            line=$0; sub(/.*server_name[[:space:]]+/, "", line); sub(/;.*/, "", line);
+            n=split(line, b, /[[:space:]]+/);
+            for (i=1; i<=n; i++) if (b[i] != "") names[++nnames]=b[i]
+        }
+        inblk && /^[[:space:]]*\}/ {
+            # Пары внутри ОДНОГО блока дедуплицируем: `listen 80;` вместе с
+            # `listen [::]:80;` — это один и тот же порт, записанный дважды
+            # (IPv4 и IPv6), а не два разных слушателя с одним именем.
+            delete seen;
+            for (i=1; i<=nports; i++) for (j=1; j<=nnames; j++) {
+                key = ports[i] "|" names[j];
+                if (!(key in seen)) { seen[key]=1; print key }
+            }
+            inblk=0
+        }
+    ' "$_f" | sort | uniq -d)
+    if [ -n "$_dups" ]; then
+        echo "nginx-check: ОШИБКА — один и тот же server_name дважды на одном порту:" >&2
+        printf '%s\n' "$_dups" | sed 's/^/nginx-check:   порт /; s/|/ имя /' >&2
+        _fail=1
+    else
+        echo "nginx-check:   [ok] дублей server_name на одном порту внутри файла нет"
+    fi
+
+    # 3) общие для http{} пространства имён — информационно.
+    _shared=$(grep -nE '^[^#]*(log_format|limit_req_zone|limit_conn_zone|proxy_cache_path|upstream|[^_]map[[:space:]]|geo[[:space:]])' "$_f" 2>/dev/null || true)
+    _zones=$(grep -oE 'shared:[A-Za-z0-9_]+' "$_f" 2>/dev/null | sort -u || true)
+    if [ -n "$_shared" ] || [ -n "$_zones" ]; then
+        echo "nginx-check:   имена в ОБЩИХ для http{} пространствах — сверьте с соседними сайтами вручную:"
+        [ -n "$_shared" ] && printf '%s\n' "$_shared" | sed 's/^/nginx-check:     /'
+        [ -n "$_zones" ]  && printf '%s\n' "$_zones"  | sed 's/^/nginx-check:     зона /'
+        echo "nginx-check:     (проверить занятость: sudo nginx -T | grep -n '<имя>')"
+    else
+        echo "nginx-check:   [ok] объявлений в общих пространствах имён http{} нет"
+    fi
+
+    return $_fail
+}
+
+if ! static_checks "$conf"; then
+    echo "nginx-check: статические проверки НЕ пройдены (см. выше). Docker-проверка не запускалась." >&2
+    exit 1
+fi
+echo
+
 work="$script_dir/.nginx-check.tmp"
 rm -rf "$work"
 mkdir -p "$work"
