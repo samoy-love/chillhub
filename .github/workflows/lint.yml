@@ -228,7 +228,14 @@ jobs:
         # No secrets required: scripts/installer.nsi does not sign the output and
         # pulls the optional .NET/WebView2 redistributables with `File /nonfatal`,
         # so a runner without scripts/Redist/ still produces a working setup.exe.
-        run: ./scripts/build-installer.ps1 -Configuration Release
+        #
+        # -AppVersion обязателен (Б8): installer.nsi больше не имеет молчаливого
+        # дефолта версии. Здесь ЗАВЕДОМО нерелизное значение 0.0.0-ci — этот
+        # артефакт собирается только чтобы поймать поломку .nsi/сборки, он не
+        # подписывается и не публикуется. Если такой билд всё же кто-то поставит,
+        # версия 0.0.0-ci не совпадёт ни с одним манифестом и будет видна сразу,
+        # вместо того чтобы притвориться настоящим релизом.
+        run: ./scripts/build-installer.ps1 -Configuration Release -AppVersion 0.0.0-ci
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:

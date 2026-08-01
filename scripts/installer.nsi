@@ -12,8 +12,25 @@ Unicode true
 !define APP_EXE "ChillHub.exe"
 !define INSTALL_DIR "$LOCALAPPDATA\ChillHub"
 !define UNINST_KEY "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ChillHub"
-!define APP_VERSION "1.1.7"
 !define APP_REG "Software\\ChillHub\\Install"
+
+; APP_VERSION — версия, которая будет записана в launcher.version (см. секцию
+; Install ниже). Значение приходит СНАРУЖИ: scripts/build-installer.ps1 передаёт
+; /DAPP_VERSION=<версия>.
+;
+; Здесь намеренно НЕТ дефолта. Раньше стояло `!define APP_VERSION "1.1.7"`, и это
+; была не косметика, а блокер релиза: build-installer.ps1 передавал в makensis
+; только /DPAYLOAD_DIR, поэтому любая сборка — какой бы код в неё ни попал —
+; объявляла себя версией 1.1.7. Свежеустановленный лаунчер читал launcher.version,
+; видел в manifests/launcher/latest.json например 1.1.8, скачивал обновление,
+; после которого маркер снова оказывался равен 1.1.7 (апдейтер его не трогает,
+; это preserve-файл), и предлагал обновиться опять — вечный цикл обновления.
+;
+; Молчаливый дефолт здесь опаснее ошибки сборки: он выпускает НЕПРАВИЛЬНО
+; помеченный инсталлятор, и узнают об этом пользователи. Поэтому — !error.
+!ifndef APP_VERSION
+  !error "APP_VERSION is not defined. Build through scripts/build-installer.ps1 (it passes /DAPP_VERSION=...), or pass it by hand: makensis /DAPP_VERSION=1.2.3 /DPAYLOAD_DIR=... installer.nsi"
+!endif
 
 ; Branding icons (paths relative to this .nsi file in scripts/)
 !define MUI_ICON "app.ico"

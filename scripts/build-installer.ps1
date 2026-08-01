@@ -20,6 +20,14 @@ param(
     [string]$Runtime = "win-x64",
     [switch]$SelfContained,
     [switch]$NoCompress,
+    # Версия, которая попадёт в launcher.version внутри установки (Б8).
+    #
+    # Раньше версия была захардкожена в scripts/installer.nsi (!define APP_VERSION
+    # "1.1.7"), а сюда не передавалась вообще. Любая сборка объявляла себя 1.1.7,
+    # видела на сервере более свежий latest.json и уходила в бесконечный цикл
+    # обновления. Теперь версия обязана прийти снаружи; см. Resolve-AppVersion —
+    # молчаливого дефолта нет ни здесь, ни в .nsi.
+    [string]$AppVersion,
     # Собрать ZIP полезной нагрузки для самообновления (для загрузки в админку)
     [switch]$PackageZip,
     # Пропустить компиляцию NSIS (полезно, когда нужен только ZIP)
@@ -54,6 +62,64 @@ function Assert-NativeSuccess {
     if ([int]$ExitCode -ne 0) {
         throw "$What failed with exit code $ExitCode."
     }
+}
+
+# Версия установки (Б8).
+#
+# Порядок источников — явный параметр, затем метаданные собранного ChillHub.exe.
+# Никакого «ну ладно, поставим 1.0.0»: версия из launcher.version сравнивается с
+# manifests/launcher/latest.json ПОСИМВОЛЬНО, поэтому неверное значение не
+# деградирует, а зацикливает обновление у каждого, кто поставил такой билд.
+# Лучше уронить сборку здесь, чем выпустить неправильно помеченный инсталлятор.
+#
+# 1.0.0 из метаданных считается «версия не задана», а не версией: launcher/ChillHub
+# не объявляет <Version> в csproj, поэтому 1.0.0 — это дефолт .NET SDK, который
+# получается сам собой и ничего не означает.
+function Resolve-AppVersion {
+    param(
+        [AllowNull()][string]$Explicit,
+        [Parameter(Mandatory = $true)][string]$BuildOutputDir
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Explicit)) {
+        $v = $Explicit.Trim()
+        Write-Host "App version: $v (from -AppVersion)" -ForegroundColor Cyan
+        return $v
+    }
+
+    $exe = Join-Path $BuildOutputDir 'ChillHub.exe'
+    $fromExe = $null
+    if (Test-Path -LiteralPath $exe) {
+        $info = (Get-Item -LiteralPath $exe).VersionInfo
+        # ProductVersion несёт InformationalVersion (может быть "1.2.3+sha"),
+        # FileVersion — четырёхкомпонентный. Берём первое непустое и режем до
+        # трёх компонентов, потому что ровно в таком виде версия лежит в
+        # latest.json.
+        foreach ($cand in @($info.ProductVersion, $info.FileVersion)) {
+            if ([string]::IsNullOrWhiteSpace($cand)) { continue }
+            $m = [regex]::Match($cand.Trim(), '^\d+\.\d+\.\d+')
+            if ($m.Success) { $fromExe = $m.Value; break }
+        }
+    }
+
+    if ($fromExe -and $fromExe -ne '1.0.0') {
+        Write-Host "App version: $fromExe (from $exe)" -ForegroundColor Cyan
+        return $fromExe
+    }
+
+    $seen = if ($fromExe) { "'$fromExe' (это дефолт .NET SDK, а не заданная версия)" } else { "метаданные версии отсутствуют" }
+    throw @"
+Не удалось определить версию сборки: $seen.
+
+Версия обязана быть явной — она пишется в launcher.version и сравнивается с
+manifests/launcher/latest.json. Ошибочное значение = бесконечный цикл
+самообновления у всех, кто поставит этот билд.
+
+Как чинить (любой из вариантов):
+  * передать версию: .\scripts\build-installer.ps1 -AppVersion 1.1.8
+  * либо задать <Version> в launcher/ChillHub/ChillHub.csproj, тогда версия
+    будет браться из собранного ChillHub.exe автоматически.
+"@
 }
 
 # Исключения пакета лаунчера. Держать синхронно с:
@@ -240,6 +306,10 @@ if ($SkipInstaller) {
     return
 }
 
+# Резолвим версию ДО поиска makensis: если версии нет, падать надо сразу, а не
+# после того, как найден компилятор и созданы выходные каталоги.
+$resolvedVersion = Resolve-AppVersion -Explicit $AppVersion -BuildOutputDir $BuildOutputDir
+
 $makensis = Find-Makensis -ExplicitPath $MakensisPath
 # Resolve to full path and ensure string type
 try { $makensis = (Resolve-Path -LiteralPath $makensis).Path } catch { }
@@ -273,6 +343,9 @@ if ($NoCompress) {
 $payloadDirFull = (Resolve-Path -LiteralPath $BuildOutputDir).Path.TrimEnd('\')
 Write-Host "NSIS payload dir: $payloadDirFull" -ForegroundColor Cyan
 $nsisArgs += @("/DPAYLOAD_DIR=$payloadDirFull")
+# Версия установки (Б8). installer.nsi без /DAPP_VERSION не компилируется —
+# см. !ifndef APP_VERSION там и Resolve-AppVersion выше.
+$nsisArgs += @("/DAPP_VERSION=$resolvedVersion")
 $nsisArgs += @("$installerPath")
 
 & "$makensis" @nsisArgs
