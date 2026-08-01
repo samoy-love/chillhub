@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"ChillHub/server/internal/adminutil"
 	"ChillHub/server/internal/httpx"
 	"ChillHub/server/internal/maintenance"
 	"ChillHub/server/internal/ratelimit"
@@ -256,9 +257,35 @@ func handleGames(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, GamesResponse{Items: items})
 }
 
+// maxGameIDLen bounds the {gameId} path variable. Real IDs are short slugs;
+// anything longer is either a probe or a mistake and must not reach the disk.
+const maxGameIDLen = 64
+
+// publicGameID validates the {gameId} path variable and answers 404 when it is
+// not a plausible identifier.
+//
+// Every admin handler already gates its game id through adminutil.IsSafeGameID;
+// the public handlers used to pass the raw value straight to filepath.Join.
+// Traversal was blocked by Join's normalisation, but the missing check still
+// leaked information: "_registry" is the internal registry directory and
+// /api/games/_registry/builds answered 200 with its contents, and a 300-char id
+// was happily turned into a stat() call.
+func publicGameID(w http.ResponseWriter, r *http.Request) (string, bool) {
+	gid := mux.Vars(r)["gameId"]
+	// A leading underscore is reserved for internal directories such as
+	// _registry, which loadGamesByScanning already skips.
+	if len(gid) > maxGameIDLen || strings.HasPrefix(gid, "_") || !adminutil.IsSafeGameID(gid) {
+		http.NotFound(w, r)
+		return "", false
+	}
+	return gid, true
+}
+
 func handleGame(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	gid := vars["gameId"]
+	gid, ok := publicGameID(w, r)
+	if !ok {
+		return
+	}
 	base := baseURL(r)
 	for _, g := range loadGames() {
 		if g.GameID == gid {
@@ -278,8 +305,10 @@ func handleGame(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleLatest(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	gid := vars["gameId"]
+	gid, ok := publicGameID(w, r)
+	if !ok {
+		return
+	}
 	base := baseURL(r)
 	latestPath := filepath.Join(contentRoot, "manifests", gid, "latest.json")
 	latest, ok := readLatest(latestPath)
@@ -345,10 +374,8 @@ func handleNewsIndex(w http.ResponseWriter, r *http.Request) {
 
 // handleGameNewsIndex filters per-game news by published=true
 func handleGameNewsIndex(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	gid := vars["gameId"]
-	if gid == "" {
-		writeJSON(w, map[string]any{"items": []any{}})
+	gid, ok := publicGameID(w, r)
+	if !ok {
 		return
 	}
 	path := filepath.Join(contentRoot, "news", "games", gid, "index.json")
@@ -383,8 +410,10 @@ func handleGameNewsIndex(w http.ResponseWriter, r *http.Request) {
 
 // handleBuilds returns list of available versions for a game by scanning manifests/{gameId}/ for *.json (excluding latest.json)
 func handleBuilds(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	gid := vars["gameId"]
+	gid, ok := publicGameID(w, r)
+	if !ok {
+		return
+	}
 	dir := filepath.Join(contentRoot, "manifests", gid)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
