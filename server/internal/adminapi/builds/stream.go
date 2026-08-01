@@ -29,6 +29,9 @@ func streamUnzip(w io.Writer, fl adminutil.Flusher, zipPath, filesRoot string) b
 		return false
 	}
 	defer zr.Close()
+	// See extractBudget: the entry sizes in the archive cannot be trusted, so
+	// the bytes actually written are counted and capped.
+	budget := newExtractBudget()
 	for _, zf := range zr.File {
 		rel := zipEntryRelPath(zf)
 		if rel == "" {
@@ -60,7 +63,7 @@ func streamUnzip(w io.Writer, fl adminutil.Flusher, zipPath, filesRoot string) b
 			streamError(w, fl, err.Error())
 			return false
 		}
-		if _, err := io.Copy(out, rc); err != nil {
+		if err := budget.copy(out, rc); err != nil {
 			out.Close()
 			rc.Close()
 			streamError(w, fl, err.Error())

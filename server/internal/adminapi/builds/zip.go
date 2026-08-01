@@ -5,8 +5,10 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -15,7 +17,57 @@ import (
 	"golang.org/x/text/encoding/charmap"
 )
 
-// estimateZipUncompressedSize sums UncompressedSize64 of all regular files in the ZIP.
+// maxUncompressedBytesDefault is the hard ceiling on what one archive may
+// expand to on disk.
+//
+// The sizes in a ZIP header are whatever the archive says they are, so they can
+// neither be trusted for a precheck nor relied upon during extraction: a small
+// upload can declare tiny entries and then stream gigabytes (a zip bomb), and
+// the extraction loop used a plain io.Copy with no bound at all. The real,
+// written byte count is therefore counted and cut off here. The default is
+// generous — the largest legitimate build is far below it — and
+// BUILD_MAX_UNCOMPRESSED_BYTES can raise or lower it without a rebuild.
+const maxUncompressedBytesDefault int64 = 128 << 30 // 128 GiB
+
+func maxUncompressedBytes() int64 {
+	if v := strings.TrimSpace(os.Getenv("BUILD_MAX_UNCOMPRESSED_BYTES")); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return maxUncompressedBytesDefault
+}
+
+// extractBudget bounds the total number of bytes an extraction may write.
+type extractBudget struct {
+	limit     int64
+	remaining int64
+}
+
+func newExtractBudget() *extractBudget {
+	n := maxUncompressedBytes()
+	return &extractBudget{limit: n, remaining: n}
+}
+
+// copy writes src into dst, counting the bytes actually produced and failing
+// as soon as the budget is exhausted — the declared entry size is not consulted
+// at all, so a lying header cannot get past it.
+func (b *extractBudget) copy(dst io.Writer, src io.Reader) error {
+	n, err := io.Copy(dst, io.LimitReader(src, b.remaining+1))
+	b.remaining -= n
+	if err != nil {
+		return err
+	}
+	if b.remaining < 0 {
+		return fmt.Errorf("archive expands beyond the allowed size (%d bytes)", b.limit)
+	}
+	return nil
+}
+
+// estimateZipUncompressedSize sums UncompressedSize64 of all regular files in
+// the ZIP. The result is only a precheck hint: the values come from the archive
+// headers and may be wrong or hostile, which is why the sum saturates instead
+// of wrapping around and why extraction enforces its own budget.
 func estimateZipUncompressedSize(zipPath string) (uint64, error) {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
@@ -27,7 +79,11 @@ func estimateZipUncompressedSize(zipPath string) (uint64, error) {
 		if f.FileInfo().IsDir() {
 			continue
 		}
-		total += f.UncompressedSize64
+		sz := f.UncompressedSize64
+		if total+sz < total { // wrapped: crafted headers summing past 2^64
+			return math.MaxUint64, nil
+		}
+		total += sz
 	}
 	return total, nil
 }
@@ -150,6 +206,7 @@ func unzipTo(zipPath, target string) error {
 		return err
 	}
 	defer r.Close()
+	budget := newExtractBudget()
 	for _, f := range r.File {
 		// normalize entry name and guard against ZipSlip
 		rel := zipEntryRelPath(f)
@@ -201,7 +258,7 @@ func unzipTo(zipPath, target string) error {
 			rc.Close()
 			return fmt.Errorf("create file failed for entry %q -> %s: %w", rel, full, err)
 		}
-		if _, err := io.Copy(out, rc); err != nil {
+		if err := budget.copy(out, rc); err != nil {
 			out.Close()
 			rc.Close()
 			return fmt.Errorf("write file failed for entry %q -> %s: %w", rel, full, err)
