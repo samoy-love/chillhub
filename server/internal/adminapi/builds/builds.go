@@ -190,7 +190,9 @@ func (h *Handlers) ListVersions(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		// Do not echo the filesystem error: it carries the absolute content root.
+		log.Printf("[builds] list %s: %v", gid, err)
+		http.Error(w, "game not found", http.StatusNotFound)
 		return
 	}
 	type item struct {
@@ -278,7 +280,8 @@ func (h *Handlers) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 	manPath := filepath.Join(manDir, ver+".json")
 	if err := os.Remove(manPath); err != nil {
 		if !os.IsNotExist(err) {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("[builds] delete %s/%s: %v", gid, ver, err)
+			http.Error(w, "failed to delete version", http.StatusInternalServerError)
 			return
 		}
 	}
@@ -335,7 +338,8 @@ func (h *Handlers) FreeSpace(w http.ResponseWriter, r *http.Request) {
 		free = f2
 		total = 0
 	} else {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[builds] free space %s: %v", base, err)
+		http.Error(w, "failed to query free space", http.StatusInternalServerError)
 		return
 	}
 	adminutil.WriteJSON(w, map[string]any{
