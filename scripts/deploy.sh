@@ -489,7 +489,14 @@ if [[ ! -f "$PING_PATH" ]]; then
 fi
 
 # Guard snapshot (PRE): capture sample hashes and counts for server-managed dirs to detect unintended changes
-TMP_PRE_DIR="/tmp/chillhub-pre"; TMP_POST_DIR="/tmp/chillhub-post"; run "sudo mkdir -p \"$TMP_PRE_DIR\" \"$TMP_POST_DIR\""
+# И29: снимки кладём в приватный временный каталог, а не в предсказуемые
+# /tmp/chillhub-pre и /tmp/chillhub-post. Подробности — в комментарии к
+# STAGE_DIR ниже; здесь та же причина: /tmp общий, на хосте четыре проекта.
+TMP_PRE_DIR="$(sudo mktemp -d -p /tmp chillhub-pre-XXXXXXXX)"
+TMP_POST_DIR="$(sudo mktemp -d -p /tmp chillhub-post-XXXXXXXX)"
+run "sudo chmod 0700 \"$TMP_PRE_DIR\" \"$TMP_POST_DIR\""
+cleanup_tmp_dirs(){ sudo rm -rf "$TMP_PRE_DIR" "$TMP_POST_DIR" "${STAGE_DIR:-}" 2>/dev/null || true; }
+trap cleanup_tmp_dirs EXIT
 sample_hash(){ local d="$1"; if [[ ! -d "$d" ]]; then echo "missing"; return; fi; local list; list=$(LC_ALL=C find "$d" -type f -printf '%P\n' | sort | awk 'NR<=50'); if [[ -z "$list" ]]; then echo "empty"; else while IFS= read -r f; do sha256sum "$d/$f" | awk '{print $1"  "$2}'; done <<< "$list" | sha256sum | awk '{print $1}'; fi; }
 for d in content manifests news; do dir="$LAUNCHER_ROOT/$d"; if [[ -d "$dir" ]]; then find "$dir" -type f 2>/dev/null | wc -l | awk '{print $1}' | sudo tee "$TMP_PRE_DIR/${d}.count" >/dev/null; sample_hash "$dir" | sudo tee "$TMP_PRE_DIR/${d}.hash" >/dev/null; else echo "-1" | sudo tee "$TMP_PRE_DIR/${d}.count" >/dev/null; echo "missing" | sudo tee "$TMP_PRE_DIR/${d}.hash" >/dev/null; fi; done
 
@@ -561,10 +568,26 @@ log "Install nginx site config and reload"
 # с тем же server_name (conflicting server name, выигрывает случайный).
 # Логика установки с бэкапом, nginx -t и откатом вынесена в scripts/deploy-nginx.sh,
 # чтобы все пути деплоя вели себя одинаково.
-run "sudo install -m 0755 \"$REPO_DIR/scripts/deploy-nginx.sh\" /tmp/chillhub-deploy-nginx.sh"
-run "sudo install -m 0644 \"$REPO_DIR/deploy/launcher.conf\" /tmp/chillhub-launcher.conf"
+# И29: ПРОМЕЖУТОЧНЫЕ ФАЙЛЫ — В ПРИВАТНЫЙ КАТАЛОГ С ПРЕДСКАЗУЕМЫМ ВЛАДЕЛЬЦЕМ,
+# А НЕ ПОД ФИКСИРОВАННЫМИ ИМЕНАМИ В ОБЩЕМ /tmp.
+#
+# Здесь было `sudo install ... /tmp/chillhub-deploy-nginx.sh`, а следом
+# `sudo /tmp/chillhub-deploy-nginx.sh`. Имя фиксированное и известно всем, а
+# /tmp — общий каталог на хосте с четырьмя проектами. Любой локальный
+# пользователь мог заранее создать по этому пути символическую ссылку: install
+# пишет СКВОЗЬ неё, то есть содержимое уезжает в подставленный файл, а затем
+# root исполняет то, что лежит по известному злоумышленнику пути. Это
+# классическая гонка в /tmp, и цена ей здесь — выполнение кода от root.
+#
+# mktemp -d создаёт каталог с уникальным именем и правами 0700, принадлежащий
+# root (мы вызываем его через sudo). Подменить путь внутри такого каталога
+# нельзя: он не существует до создания и недоступен другим пользователям.
+STAGE_DIR="$(sudo mktemp -d -p /tmp chillhub-deploy-XXXXXXXX)"
+run "sudo chmod 0700 \"$STAGE_DIR\""
+run "sudo install -m 0700 -o root -g root \"$REPO_DIR/scripts/deploy-nginx.sh\" \"$STAGE_DIR/deploy-nginx.sh\""
+run "sudo install -m 0600 -o root -g root \"$REPO_DIR/deploy/launcher.conf\" \"$STAGE_DIR/launcher.conf\""
 if [[ $NO_NGINX_RELOAD -eq 0 ]]; then
-  run "sudo /tmp/chillhub-deploy-nginx.sh /tmp/chillhub-launcher.conf"
+  run "sudo \"$STAGE_DIR/deploy-nginx.sh\" \"$STAGE_DIR/launcher.conf\""
   # Check redirect rule presence
   if sudo grep -n "error_page 401 =302 /admin/ui/login.html" /etc/nginx/sites-available/chillhub-launcher.conf >/dev/null 2>&1; then
     ok "[nginx] redirect rule present"
