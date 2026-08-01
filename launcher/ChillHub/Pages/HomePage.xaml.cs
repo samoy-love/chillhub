@@ -1422,7 +1422,11 @@ namespace ChillHub.Pages {
                 case ActionMode.Update:
                 case ActionMode.Retry:
                 default:
+                    // Источник от прошлой установки уже отработал (сюда попадаем только
+                    // при isUpdating == false) — освобождаем его, а не теряем.
+                    var previous = this.cts;
                     this.cts = new CancellationTokenSource();
+                    previous?.Dispose();
                     _ = this.StartUpdateAsync(this.cts.Token);
                     break;
             }
