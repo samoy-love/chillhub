@@ -465,7 +465,12 @@ fi
 FAIL=0
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; NC='\033[0m'
 
-http_code(){ curl -ks --max-time 5 -o /dev/null -w "%{http_code}" "$1"; }
+# TLS IS VERIFIED — do not put `-k` back. These probes hit the public
+# $SITE_BASE_URL over a real Let's Encrypt certificate; with -k an expired cert
+# produced a fully green smoke-test run while no browser could open the site
+# (and with HSTS the visitor cannot click through). See the same note in
+# .github/workflows/deploy.yml.
+http_code(){ curl -s --max-time 5 -o /dev/null -w "%{http_code}" "$1"; }
 must_200(){ local url="$1"; local name="$2"; local code; code=$(http_code "$url");
   if [[ "$code" == "200" ]]; then
     echo -e "[test] ${GREEN}PASS${NC} $name ($url)"
@@ -491,7 +496,15 @@ elif [[ "$code" == "401" ]]; then
 else
   echo -e "[test] ${RED}FAIL${NC} /admin/ unexpected code -> $code"; FAIL=1
 fi
-must_200 "$SITE_BASE_URL/admin/ui/admin.js" "Admin UI static /admin/ui/admin.js"
+must_200 "$SITE_BASE_URL/admin/ui/login.js" "Admin UI login script (public)"
+# admin.js is behind auth_request together with the rest of the admin shell
+# (deploy/launcher.conf). A 200 here would mean the gate is gone.
+code=$(http_code "$SITE_BASE_URL/admin/ui/admin.js")
+if [[ "$code" == "401" || "$code" == "302" ]]; then
+  echo -e "[test] ${GREEN}PASS${NC} /admin/ui/admin.js gated ($code)"
+else
+  echo -e "[test] ${RED}FAIL${NC} /admin/ui/admin.js should be gated -> $code"; FAIL=1
+fi
 
 # 2) Admin API (health is public; protected endpoints are not tested without auth)
 must_200 "$SITE_BASE_URL/admin/api/health" "Admin API /admin/api/health"
