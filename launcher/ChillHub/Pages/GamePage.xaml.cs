@@ -45,6 +45,7 @@ namespace ChillHub.Pages {
         private CancellationTokenSource? cts;
         private bool isBusy;
         private List<string> builds = new();
+        private GameState currentState = GameState.NotInstalled;
         private string localVersion = string.Empty;
         private double emaSpeedMBs;
 
@@ -170,6 +171,9 @@ namespace ChillHub.Pages {
 
         private void ApplyState(GameState state) {
             try {
+                // Запоминаем состояние: от него зависит, что означает нажатие кнопки действия
+                this.currentState = state;
+
                 // Синхронизируем модель, чтобы главная страница показала тот же статус после возврата
                 this.game.InstalledVersion = this.localVersion;
                 this.game.IsInstalled = state != GameState.NotInstalled;
@@ -318,7 +322,10 @@ namespace ChillHub.Pages {
                 return;
             }
 
-            _ = this.StartSyncAsync(version, isVersionSwitch: false);
+            // В состоянии «Установлена» кнопка означает «Проверить файлы»: это сверка с
+            // манифестом, после которой всё лишнее удаляется. Такое удаление требует
+            // подтверждения — как и при переключении версии.
+            _ = this.StartSyncAsync(version, isVersionSwitch: false, confirmDeletions: this.currentState == GameState.Installed);
         }
 
         private void BuildsCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) {
@@ -540,7 +547,7 @@ namespace ChillHub.Pages {
             }
         }
 
-        private async Task StartSyncAsync(string version, bool isVersionSwitch) {
+        private async Task StartSyncAsync(string version, bool isVersionSwitch, bool confirmDeletions = false) {
             var gid = this.game.GameId;
             if (string.IsNullOrWhiteSpace(gid)) {
                 this.StatusText.Text = "Не удалось определить игру";
@@ -590,6 +597,23 @@ namespace ChillHub.Pages {
                 // на всё время обхода — уводим в пул потоков (как в IntegrityChecker).
                 var plan = await Task.Run(() => this.sync.PlanAsync(manifest, localRoot, contentBase, token), token).ConfigureAwait(true);
                 Core.Logging.Logger.Info($"GamePage plan gid={gid} downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count}");
+
+                // Проверка целостности удаляет всё, чего нет в манифесте: моды, скриншоты,
+                // сохранения, положенные в папку игры. Спрашиваем до того, как это произойдёт,
+                // и называем число файлов — как в диалоге переключения версии.
+                if (confirmDeletions && plan.ToDelete.Count > 0) {
+                    var answer = MessageBox.Show(
+                        $"В папке игры найдено файлов, которых нет в версии {version}: {plan.ToDelete.Count}.\n\n"
+                        + "Проверка удалит их: это могут быть моды, сохранения внутри папки игры и остатки прежних версий.\n\nПродолжить?",
+                        "Проверка файлов",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning,
+                        MessageBoxResult.No);
+                    if (answer != MessageBoxResult.Yes) {
+                        this.StatusText.Text = "Проверка отменена.";
+                        return;
+                    }
+                }
 
                 // Свободного места может не хватить — предупреждаем до начала закачки
                 var free = GameLocalState.GetAvailableFreeSpaceFor(gid);
