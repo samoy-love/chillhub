@@ -51,10 +51,18 @@ namespace ChillHub {
             public int TimerTickMs => Math.Max(10, this.CharIntervalMs / 2);
         }
 
+        /// <summary>
+        /// Единственный экземпляр главной страницы. Раньше каждый клик по «Каталогу» создавал
+        /// новый HomePage, а вместе с ним — ещё один FeedbackService со своей копией очереди и
+        /// своим 10-секундным таймером, который никто не останавливал: таймер старой страницы
+        /// перезаписывал feedback_queue.json без нового сообщения, и оно терялось навсегда.
+        /// </summary>
+        private Pages.HomePage? homePage;
+
         public MainWindow() {
             this.InitializeComponent();
             Console.WriteLine("[BOOT] Showing MainWindow");
-            this.ContentFrame.Navigate(new Pages.HomePage());
+            this.NavigateToHome();
 
             // Karaoke setup
             // Используем собранные настройки выше
@@ -80,6 +88,25 @@ namespace ChillHub {
             catch (Exception ex) {
                 // Баннер — вспомогательная информация: его отсутствие не повод не открывать окно
                 Core.Logging.Logger.Error(ex, "MainWindow.MaintenanceInit");
+            }
+        }
+
+        /// <summary>
+        /// Показывает главную страницу, переиспользуя единственный экземпляр.
+        /// Если она уже открыта — ничего не делает (как и «Настройки»).
+        /// </summary>
+        public void NavigateToHome() {
+            try {
+                if (this.ContentFrame.Content is Pages.HomePage) {
+                    return;
+                }
+
+                this.homePage ??= new Pages.HomePage();
+                this.ContentFrame.Navigate(this.homePage);
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "MainWindow.NavigateToHome");
+                MessageBox.Show($"Не удалось открыть каталог: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -110,7 +137,7 @@ namespace ChillHub {
         }
 
         private void CatalogBtn_Click(object sender, RoutedEventArgs e) {
-            this.ContentFrame.Navigate(new Pages.HomePage());
+            this.NavigateToHome();
         }
 
         private void SettingsBtn_Click(object sender, RoutedEventArgs e) {

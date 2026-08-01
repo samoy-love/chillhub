@@ -256,9 +256,10 @@ namespace ChillHub.Pages {
                 return;
             }
 
-            // Fallback: если по какой-то причине стека нет, открываем новый HomePage
+            // Fallback: если по какой-то причине стека нет — открываем главную,
+            // переиспользуя единственный экземпляр страницы
             var win = Window.GetWindow(this) as ChillHub.MainWindow;
-            win?.ContentFrame.Navigate(new HomePage());
+            win?.NavigateToHome();
         }
 
         private static string BrushToCss(string key, string fallback) {

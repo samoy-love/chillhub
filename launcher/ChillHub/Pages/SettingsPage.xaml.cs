@@ -363,8 +363,10 @@ namespace ChillHub.Pages {
                 return;
             }
 
+            // Переиспользуем единственный HomePage, иначе получим вторую копию страницы
+            // со своим FeedbackService и своей очередью сообщений
             var win = Window.GetWindow(this) as ChillHub.MainWindow;
-            win?.ContentFrame.Navigate(new HomePage());
+            win?.NavigateToHome();
         }
 
         private void ChooseBtn_Click(object sender, RoutedEventArgs e) {

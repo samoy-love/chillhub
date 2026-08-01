@@ -208,6 +208,12 @@ namespace ChillHub.Pages {
                 this.Loaded += (s, e) => this.SubscribeMaintenance();
                 this.Unloaded += (s, e) => this.UnsubscribeMaintenance();
 
+                // Фоновый ретрай очереди обратной связи держим только пока страница на экране:
+                // таймер, переживший страницу, перезаписывает feedback_queue.json своей копией
+                // очереди и способен затереть только что добавленное сообщение.
+                this.Loaded += (s, e) => this.feedback?.Resume();
+                this.Unloaded += (s, e) => this.feedback?.Stop();
+
                 // Баннер о том, что отчёт об ошибке ушёл автоматически
                 ChillHub.Core.ErrorReporter.AutoReported += (ctx) =>
                     _ = this.DispatcherInvokeAsync(() => this.ShowToast("Произошла ошибка. Отчёт автоматически отправлен"));

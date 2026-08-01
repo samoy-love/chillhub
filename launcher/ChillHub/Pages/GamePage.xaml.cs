@@ -265,8 +265,9 @@ namespace ChillHub.Pages {
                     return;
                 }
 
+                // Переиспользуем единственный HomePage, иначе получим вторую копию страницы
                 var win = Window.GetWindow(this) as ChillHub.MainWindow;
-                win?.ContentFrame.Navigate(new HomePage());
+                win?.NavigateToHome();
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Error(ex, "GamePage.BackBtn_Click");

@@ -74,6 +74,28 @@ namespace ChillHub.Core.Home {
             this.StartRetryLoop();
         }
 
+        /// <summary>
+        /// Останавливает фоновый ретрай. Обязательно вызывать, когда владелец сервиса уходит
+        /// с экрана: DispatcherTimer держит ссылку на колбэк и продолжает переписывать
+        /// feedback_queue.json своей (устаревшей) копией очереди.
+        /// </summary>
+        internal void Stop() {
+            try {
+                this.retryTimer?.Stop();
+                this.retryTimer = null;
+            }
+            catch (Exception ex) {
+                Logging.Logger.Warn($"Feedback.Stop: {ex.Message}");
+            }
+        }
+
+        /// <summary>Возобновляет фоновый ретрай, не перечитывая очередь с диска.</summary>
+        internal void Resume() {
+            if (this.retryTimer == null) {
+                this.StartRetryLoop();
+            }
+        }
+
         /// <summary>Кладёт сообщение в очередь и сразу пробует её разобрать.</summary>
         internal void Enqueue(FeedbackDraft d) {
             this.queue.Add(d);
