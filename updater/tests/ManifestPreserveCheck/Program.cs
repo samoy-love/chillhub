@@ -113,11 +113,15 @@ internal static class Program
         if (checkedFiles == 0)
         {
             // Важно не выдавать это за успешную проверку: реальные манифесты не смотрели вообще.
-            Console.WriteLine("ВНИМАНИЕ: реальные манифесты НЕ проверены — найден только самотест детектора.");
-            Console.WriteLine("  Каталог content/manifests/launcher не найден от текущего каталога и от каталога сборки.");
-            Console.WriteLine("  Под `dotnet run` рабочий каталог отличается: запускайте собранный бинарь из корня репозитория");
-            Console.WriteLine("  (updater/tests/ManifestPreserveCheck/bin/<cfg>/net8.0/ManifestPreserveCheck.exe)");
-            Console.WriteLine("  либо передайте путь к манифестам аргументом.");
+            // Штатная ситуация для CI: content/** в .gitignore, в чекауте его просто нет.
+            Console.WriteLine("ВНИМАНИЕ: реальные манифесты НЕ проверены — отработал только самотест детектора.");
+            Console.WriteLine("  Каталог content/manifests/launcher не найден вверх по дереву ни от одного из корней:");
+            foreach (var root in ProbedRoots)
+            {
+                Console.WriteLine($"    {root}");
+            }
+
+            Console.WriteLine("  Укажите путь явно: аргументом командной строки либо переменной CHILLHUB_MANIFESTS_DIR.");
         }
 
         Console.WriteLine(failures == 0
@@ -179,25 +183,40 @@ internal static class Program
         return File.Exists(target) ? new[] { target } : Array.Empty<string>();
     }
 
-    /// <summary>Ищет content/manifests/launcher вверх по дереву от текущего каталога.</summary>
+    /// <summary>Каталоги, от которых искали манифесты (для внятной диагностики).</summary>
+    private static readonly List<string> ProbedRoots = new();
+
+    /// <summary>
+    /// Ищет content/manifests/launcher вверх по дереву от нескольких стартовых точек.
+    ///
+    /// Одного рабочего каталога мало: под `dotnet run` он задаётся вызывающим, у собранного
+    /// .exe отличается ещё сильнее, а в git-worktree каталог content/** (он в .gitignore)
+    /// лежит только в основном рабочем каталоге. Поиск только по CWD молча ничего не находил —
+    /// и тест «проходил», не проверив ни одного реального манифеста.
+    /// </summary>
     private static string[] DefaultTargets()
     {
-        // Ищем и от текущего каталога, и от каталога сборки: под `dotnet run` рабочий каталог
-        // не совпадает с корнем репозитория, и поиск только по CWD молча ничего не находит —
-        // тест тогда «проходит», не проверив ни одного реального манифеста.
-        foreach (var start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+        // Явное указание побеждает любой автопоиск (удобно для CI и ручных прогонов).
+        var fromEnv = Environment.GetEnvironmentVariable("CHILLHUB_MANIFESTS_DIR");
+        if (!string.IsNullOrWhiteSpace(fromEnv))
         {
-            if (string.IsNullOrWhiteSpace(start))
+            ProbedRoots.Add($"CHILLHUB_MANIFESTS_DIR={fromEnv}");
+            if (Directory.Exists(fromEnv) || File.Exists(fromEnv))
             {
-                continue;
+                return new[] { fromEnv };
             }
+        }
 
+        foreach (var start in SearchRoots())
+        {
+            ProbedRoots.Add(start);
             var dir = new DirectoryInfo(start);
             while (dir != null)
             {
                 var candidate = Path.Combine(dir.FullName, "content", "manifests", "launcher");
                 if (Directory.Exists(candidate))
                 {
+                    Console.WriteLine($"манифесты: {candidate}");
                     return new[] { candidate };
                 }
 
@@ -206,5 +225,62 @@ internal static class Program
         }
 
         return Array.Empty<string>();
+    }
+
+    /// <summary>Стартовые точки поиска, без повторов и без несуществующих путей.</summary>
+    private static IEnumerable<string> SearchRoots()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var candidates = new List<string?>
+        {
+            Directory.GetCurrentDirectory(),
+            AppContext.BaseDirectory,
+
+            // У single-file публикации BaseDirectory — каталог распаковки, а не каталог программы.
+            SafeDirectoryOf(Environment.ProcessPath),
+        };
+
+        foreach (var c in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(c))
+            {
+                continue;
+            }
+
+            string full;
+            try
+            {
+                full = Path.GetFullPath(c!);
+
+                // Снимаем хвостовой разделитель: у AppContext.BaseDirectory он есть, у CWD нет,
+                // и без этого один и тот же каталог считается двумя разными корнями.
+                var trimmed = full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (trimmed.Length > 0 && !trimmed.EndsWith(':'))
+                {
+                    full = trimmed;
+                }
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (Directory.Exists(full) && seen.Add(full))
+            {
+                yield return full;
+            }
+        }
+    }
+
+    private static string? SafeDirectoryOf(string? path)
+    {
+        try
+        {
+            return string.IsNullOrWhiteSpace(path) ? null : Path.GetDirectoryName(path);
+        }
+        catch
+        {
+            return null;
+        }
     }
 }
