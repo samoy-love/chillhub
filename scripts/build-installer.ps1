@@ -133,7 +133,17 @@ manifests/launcher/latest.json. Ошибочное значение = беско
 # манифесте, а апдейтер его не перезапишет: получится неустранимое расхождение
 # хешей и вечный цикл обновления, ровно как с config.json/launcher.version.
 # Дешевле исключить его безусловно, чем ловить это на проде.
-$script:PayloadExcludeFiles = @('config.json', 'launcher.version', 'Uninstall.exe')
+#
+# launcher.update-status — файл состояния апдейтера: он пишется рядом с
+# launcher.version в каталоге установки и хранит исход последнего обновления,
+# чтобы лаунчер мог показать причину неудачи. Он добавлен в preserve-правила
+# апдейтера, а значит подчиняется тому же правилу, что config.json: попал в
+# манифест — получил неустранимое расхождение хешей и вечный цикл обновления.
+#
+# ПОЛНЫЙ preserve-список на сегодня (держать синхронно с
+# ChillHub.Update.PreserveMatcher.DefaultRules и со списком /x в installer.nsi):
+#   config.json, launcher.version, launcher.update-status, Uninstall.exe
+$script:PayloadExcludeFiles = @('config.json', 'launcher.version', 'launcher.update-status', 'Uninstall.exe')
 $script:PayloadExcludeGlobs = @('*.pdb')
 # Нативные библиотеки не под Windows: runtimes/linux-*, runtimes/osx-*
 $script:PayloadExcludeDirGlobs = @('linux-*', 'osx-*')
@@ -196,7 +206,33 @@ function New-LauncherPayload {
         if ($outDirZip -and -not (Test-Path -LiteralPath $outDirZip)) { New-Item -ItemType Directory -Path $outDirZip -Force | Out-Null }
         if (Test-Path -LiteralPath $OutZip) { Remove-Item -LiteralPath $OutZip -Force }
         Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $OutZip -CompressionLevel Optimal
+
+        # Постусловие: ни одного preserve-файла в готовом архиве.
+        #
+        # Фильтр выше уже должен был их отсеять, но проверяется именно то, что
+        # уедет в админку и станет манифестом. Ошибка в Test-PayloadExcluded
+        # иначе всплыла бы только на проде — вечным циклом самообновления у
+        # всех пользователей, как это уже было на 1.0.2, 1.0.3 и 1.1.7.
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [IO.Compression.ZipFile]::OpenRead($OutZip)
+        try {
+            $leaked = @()
+            foreach ($entry in $zip.Entries) {
+                if ([string]::IsNullOrEmpty($entry.Name)) { continue }   # каталог
+                foreach ($f in $script:PayloadExcludeFiles) {
+                    if ($entry.Name -ieq $f) { $leaked += $entry.FullName }
+                }
+            }
+        }
+        finally { $zip.Dispose() }
+        if ($leaked.Count -gt 0) {
+            throw ("В payload-ZIP попали preserve-файлы: {0}. " -f ($leaked -join ', ')) +
+                  "Они окажутся в манифесте, апдейтер их не перезапишет, и лаунчер уйдёт в вечный цикл обновления. " +
+                  "Проверьте Test-PayloadExcluded и `$script:PayloadExcludeFiles."
+        }
+
         Write-Host "Payload ZIP: $OutZip (files=$copied, excluded=$skipped)" -ForegroundColor Green
+        Write-Host ("  preserve-check OK: ни одного из [{0}] в архиве нет" -f ($script:PayloadExcludeFiles -join ', ')) -ForegroundColor DarkGray
     }
     finally {
         try { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction Stop } catch {}
