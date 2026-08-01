@@ -1,0 +1,168 @@
+package main
+
+import (
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"ChillHub/server/internal/httpx"
+)
+
+// The admin API is reachable under two prefixes: nginx proxies /admin/api/... ,
+// while direct access (and older UI builds) use /admin/... . Instead of
+// registering both by hand — which is how routes used to go missing — every
+// entry below is declared once under its canonical /admin/api path and the
+// /admin alias is derived automatically.
+//
+// Endpoints that must NOT be mirrored (auth, the chunked upload sub-tree and
+// the /admin/api entry point itself) set noAlias, because their /admin/...
+// forms either mean something different or are not part of the contract.
+type route struct {
+	path    string
+	handler http.HandlerFunc
+	// noAlias suppresses the derived /admin/... path for this entry.
+	noAlias bool
+}
+
+// aliasOf returns the /admin/... form of an /admin/api/... path, or "" when the
+// path has no alias form.
+func aliasOf(path string) string {
+	const apiPrefix = "/admin/api/"
+	if !strings.HasPrefix(path, apiPrefix) {
+		return ""
+	}
+	return "/admin/" + strings.TrimPrefix(path, apiPrefix)
+}
+
+// apiRoutes lists every canonical admin endpoint. Adding one here registers
+// both prefixes; there is no second list to keep in sync.
+func (s *server) apiRoutes() []route {
+	b, n, g, f := s.builds, s.news, s.games, s.feedback
+	return []route{
+		// Health probe (allowlisted in the auth middleware).
+		{path: "/admin/api/health", handler: func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") }},
+
+		// Session endpoints; nginx routes these verbatim, they have no /admin alias.
+		{path: "/admin/api/auth/login", handler: s.auth.HandleLogin, noAlias: true},
+		{path: "/admin/api/auth/logout", handler: s.auth.HandleLogout, noAlias: true},
+		{path: "/admin/api/auth/refresh", handler: s.auth.HandleRefresh, noAlias: true},
+		{path: "/admin/api/auth/me", handler: s.auth.HandleMe, noAlias: true},
+		{path: "/admin/api/auth/verify", handler: s.auth.HandleVerify, noAlias: true},
+
+		// Builds and versions.
+		{path: "/admin/api/list", handler: b.ListVersions},
+		{path: "/admin/api/activate", handler: b.Activate},
+		{path: "/admin/api/deleteVersion", handler: b.DeleteVersion},
+		{path: "/admin/api/upload", handler: b.Upload},
+		{path: "/admin/api/uploadStream", handler: b.UploadStream},
+
+		// Chunked upload; the client always calls the /admin/api form.
+		{path: "/admin/api/upload/init", handler: b.UploadInit, noAlias: true},
+		{path: "/admin/api/upload/chunk", handler: b.UploadChunk, noAlias: true},
+		{path: "/admin/api/upload/status", handler: b.UploadStatus, noAlias: true},
+		{path: "/admin/api/upload/complete", handler: b.UploadComplete, noAlias: true},
+		{path: "/admin/api/upload/process", handler: b.UploadProcessStream, noAlias: true},
+		{path: "/admin/api/upload/cleanup", handler: b.UploadCleanup, noAlias: true},
+
+		// System info.
+		{path: "/admin/api/system/free", handler: b.FreeSpace},
+
+		// Feedback inbox (the public submit endpoint is registered separately).
+		{path: "/admin/api/feedback/list", handler: f.List},
+		{path: "/admin/api/feedback/get", handler: f.Get},
+		{path: "/admin/api/feedback/delete", handler: f.Delete},
+		{path: "/admin/api/feedback/toggleImportant", handler: f.ToggleImportant},
+		{path: "/admin/api/feedback/markRead", handler: f.MarkRead},
+		{path: "/admin/api/feedback/markUnread", handler: f.MarkUnread},
+		{path: "/admin/api/feedback/clear", handler: f.Clear},
+
+		// News management.
+		{path: "/admin/api/news/list", handler: n.List},
+		{path: "/admin/api/news/get", handler: n.Get},
+		{path: "/admin/api/news/save", handler: n.Save},
+		{path: "/admin/api/news/delete", handler: n.Delete},
+		{path: "/admin/api/news/rebuild", handler: n.Rebuild},
+		{path: "/admin/api/news/publish", handler: n.Publish},
+		{path: "/admin/api/news/preview", handler: n.Preview},
+		{path: "/admin/api/news/uploadCover", handler: n.UploadCover},
+
+		// Assets gallery.
+		{path: "/admin/api/news/assets", handler: n.AssetsList},
+		{path: "/admin/api/news/assets/mkdir", handler: n.AssetsMkdir},
+		{path: "/admin/api/news/assets/upload", handler: n.AssetsUpload},
+		{path: "/admin/api/news/assets/uploadByUrl", handler: n.AssetsUploadByURL},
+		{path: "/admin/api/news/assets/delete", handler: n.AssetsDelete},
+		{path: "/admin/api/news/assets/rename", handler: n.AssetsRename},
+
+		// Games registry.
+		{path: "/admin/api/games", handler: g.Get},
+		{path: "/admin/api/games/save", handler: g.Save},
+		{path: "/admin/api/games/icon/upload", handler: g.IconUpload},
+		{path: "/admin/api/games/scan", handler: g.Scan},
+	}
+}
+
+// register wires every route (plus its alias) into mux and returns the full
+// list of registered paths, sorted — handy for tests and for the boot log.
+func (s *server) register(mux *http.ServeMux) []string {
+	var paths []string
+	add := func(p string, h http.Handler) {
+		mux.Handle(p, h)
+		paths = append(paths, p)
+	}
+
+	for _, rt := range s.apiRoutes() {
+		add(rt.path, rt.handler)
+		if rt.noAlias {
+			continue
+		}
+		if alias := aliasOf(rt.path); alias != "" {
+			add(alias, rt.handler)
+		}
+	}
+
+	// Admin UI entry points. /admin/api serves the UI too (historic behaviour of
+	// a bare API prefix hit from a browser); /admin redirects to /admin/ so that
+	// relative asset links resolve.
+	add("/admin/", http.HandlerFunc(s.handleAdminUI))
+	add("/admin/api", http.HandlerFunc(s.handleAdminUI))
+	add("/admin", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Normalize to trailing slash for relative asset links
+		http.Redirect(w, r, "/admin/", http.StatusFound)
+	}))
+
+	// Public feedback submit (no auth; allowlisted in the auth middleware and
+	// rate limited per client IP).
+	add("/feedback/submit", s.feedbackLimiter.Wrap(s.feedback.Submit, http.MethodPost))
+
+	// Static trees. Serving news/assets/manifests here lets the admin UI display
+	// images without an external nginx; each is only mounted when it exists.
+	newsDir := filepath.Join(s.contentRoot, "news")
+	if isDir(newsDir) {
+		add("/news/", httpx.NoStore(http.StripPrefix("/news/", http.FileServer(http.Dir(newsDir)))))
+	}
+	assetsDir := filepath.Join(newsDir, "assets")
+	if isDir(assetsDir) {
+		add("/assets/", httpx.NoStore(http.StripPrefix("/assets/", http.FileServer(http.Dir(assetsDir)))))
+	}
+	manifestsDir := filepath.Join(s.contentRoot, "manifests")
+	if isDir(manifestsDir) {
+		add("/manifests/", httpx.NoStore(http.StripPrefix("/manifests/", http.FileServer(http.Dir(manifestsDir)))))
+	}
+	// Static Admin UI assets from server/admin_ui
+	uiDir := detectAdminUIDir()
+	if isDir(uiDir) {
+		add("/admin/ui/", httpx.NoStore(http.StripPrefix("/admin/ui/", http.FileServer(http.Dir(uiDir)))))
+	}
+
+	sort.Strings(paths)
+	return paths
+}
+
+func isDir(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.IsDir()
+}
