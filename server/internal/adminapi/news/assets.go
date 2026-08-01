@@ -95,7 +95,7 @@ func (h *Handlers) AssetsMkdir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "malformed form", http.StatusBadRequest)
 		return
 	}
 	base := h.assetsRoot()
@@ -111,7 +111,7 @@ func (h *Handlers) AssetsMkdir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to create the directory", "news:assets", err)
 		return
 	}
 	adminutil.WriteJSON(w, map[string]string{"status": "ok"})
@@ -173,7 +173,7 @@ func (h *Handlers) AssetsUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	outName, metaFields, err := media.ProcessAndSaveAsset(base, rel, desired, data, extHint, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to process the image", "news:assets", err)
 		return
 	}
 	resp := map[string]string{"status": "ok", "url": assetURL(rel, outName), "filename": outName}
@@ -189,7 +189,7 @@ func (h *Handlers) AssetsUploadByURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "malformed form", http.StatusBadRequest)
 		return
 	}
 	base := h.assetsRoot()
@@ -212,7 +212,7 @@ func (h *Handlers) AssetsUploadByURL(w http.ResponseWriter, r *http.Request) {
 	extHint := strings.ToLower(filepath.Ext(strings.Split(strings.Split(srcURL, "?")[0], "#")[0]))
 	outName, metaFields, err := media.ProcessAndSaveAsset(base, rel, desired, data, extHint, ct)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to process the image", "news:assets", err)
 		return
 	}
 	resp := map[string]string{"status": "ok", "url": assetURL(rel, outName), "filename": outName}
@@ -228,7 +228,7 @@ func (h *Handlers) AssetsDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "malformed form", http.StatusBadRequest)
 		return
 	}
 	base := h.assetsRoot()
@@ -244,7 +244,7 @@ func (h *Handlers) AssetsDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := os.RemoveAll(target); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to delete", "news:assets", err)
 		return
 	}
 	adminutil.WriteJSON(w, map[string]string{"status": "ok"})
@@ -256,7 +256,7 @@ func (h *Handlers) AssetsRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "malformed form", http.StatusBadRequest)
 		return
 	}
 	base := h.assetsRoot()
@@ -274,7 +274,7 @@ func (h *Handlers) AssetsRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := os.Rename(src, dst); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to rename", "news:assets", err)
 		return
 	}
 	adminutil.WriteJSON(w, map[string]string{"status": "ok"})

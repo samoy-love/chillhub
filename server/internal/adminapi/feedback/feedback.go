@@ -40,8 +40,8 @@ type Item struct {
 	System     map[string]string `json:"system,omitempty"`
 }
 
-// Storage limits. The inbox is a single JSON file that is fully read and
-// rewritten on every submit, so both the per-item and the total size must stay
+// Storage limits. The inbox is a single JSON file that is read and rewritten
+// whole at every compaction, so both the per-item and the total size must stay
 // bounded, otherwise the public submit endpoint degrades to O(n^2).
 const (
 	// MaxLogBytes is the max size of the diagnostics bundle accepted with a single report.
@@ -60,8 +60,8 @@ const (
 	// of newlines cannot push a legitimate report over the line.
 	MaxBodyBytes = 2*MaxLogBytes + (128 << 10)
 	// System is free-form key/value diagnostics from the client; every part of it
-	// is clamped so one report cannot inflate the file that is rewritten on every
-	// single submit.
+	// is clamped so one report cannot inflate the file that is rewritten at every
+	// compaction.
 	maxSystemEntries  = 40
 	maxSystemKeyLen   = 64
 	maxSystemValueLen = 512
@@ -518,7 +518,7 @@ func (h *Handlers) Delete(w http.ResponseWriter, r *http.Request) {
 	err := h.writeAll(out)
 	h.mu.Unlock()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to update the inbox", "feedback", err)
 		return
 	}
 	log.Printf("[audit] feedback delete id=%s by=%s", id, h.user(r))
@@ -555,7 +555,7 @@ func (h *Handlers) ToggleImportant(w http.ResponseWriter, r *http.Request) {
 	err := h.writeAll(items)
 	h.mu.Unlock()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to update the inbox", "feedback", err)
 		return
 	}
 	log.Printf("[audit] feedback important-toggle id=%s now=%v by=%s", id, newVal, h.user(r))
@@ -599,7 +599,7 @@ func (h *Handlers) setStatus(w http.ResponseWriter, r *http.Request, status, aud
 	err := h.writeAll(items)
 	h.mu.Unlock()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to update the inbox", "feedback", err)
 		return
 	}
 	log.Printf("[audit] feedback %s id=%s by=%s", audit, id, h.user(r))
@@ -615,7 +615,7 @@ func (h *Handlers) Clear(w http.ResponseWriter, r *http.Request) {
 	err := h.writeAll([]Item{})
 	h.mu.Unlock()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to update the inbox", "feedback", err)
 		return
 	}
 	log.Printf("[audit] feedback clear by=%s", h.user(r))

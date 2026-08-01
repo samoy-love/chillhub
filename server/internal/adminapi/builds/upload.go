@@ -43,7 +43,8 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 		tmpName = parts.tmpName
 	}
 	if err != nil {
-		http.Error(w, err.Error(), code)
+		// The detail (a temp path, a disk error) goes to the log only.
+		adminutil.Fail(w, code, "failed to read the upload", "upload", err)
 		return
 	}
 	kind := parts.kind
@@ -88,7 +89,7 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	finalVerDir := filepath.Join(h.root, "content", gid, ver)
 	stageDir, filesRoot, err := h.stageVersionDir(gid, ver)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to prepare the staging directory", "upload", err)
 		return
 	}
 	promoted := false
@@ -111,14 +112,14 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := unzipTo(tmpName, filesRoot); err != nil {
-		http.Error(w, "unzip failed: "+err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "unzip failed", "upload", err)
 		return
 	}
 
 	// Build manifest by scanning extracted files
 	files, emptyDirs, err := scanManifest(filesRoot)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to scan the extracted build", "upload", err)
 		return
 	}
 
@@ -128,7 +129,7 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	unlock := lockPublish(gid, ver)
 	defer unlock()
 	if err := promoteVersionDir(stageDir, finalVerDir); err != nil {
-		http.Error(w, "activate failed: "+err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "activate failed", "upload", err)
 		return
 	}
 	promoted = true
@@ -143,7 +144,7 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	_, b, err := h.writeManifest(m, upd)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to write the manifest", "upload", err)
 		return
 	}
 	// return manifest JSON

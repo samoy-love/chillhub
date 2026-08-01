@@ -450,8 +450,9 @@ func (h *Handlers) FreeSpace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to query free space", http.StatusInternalServerError)
 		return
 	}
+	// "path" is deliberately absent: it is the absolute content root, and the
+	// panel only ever displays the numbers.
 	adminutil.WriteJSON(w, map[string]any{
-		"path":  base,
 		"bytes": free,
 		"total": total,
 	})
