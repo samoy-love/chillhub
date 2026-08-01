@@ -200,7 +200,7 @@ namespace ChillHub.Core.Maintenance {
             Current = state;
             Logging.Logger.Info(
                 $"MaintenanceService: состояние изменилось enabled={previous.Enabled}->{state.Enabled} "
-                + $"install={state.BlocksInstall} update={state.BlocksUpdate} play={state.BlocksPlay} reason='{state.Reason}' until={state.Until}");
+                + $"install={state.BlocksInstall} update={state.BlocksUpdate} play={state.BlocksPlay} reason='{state.Reason}' endsAt={state.EndsAt}");
 
             RaiseChanged(state);
         }
