@@ -24,6 +24,43 @@ import (
 	"ChillHub/server/internal/adminutil"
 )
 
+// Decoding bounds.
+//
+// A decoder allocates width*height*4 bytes for the pixel buffer before anything
+// else happens, and the header that declares those numbers costs a few bytes to
+// compress: a 20 KB PNG claiming 30000x30000 makes the process ask for 3.6 GB.
+// The dimensions are therefore read from the header alone (image.DecodeConfig)
+// and checked BEFORE the image is decoded.
+const (
+	// MaxImageDimension is the largest allowed width or height.
+	MaxImageDimension = 8000
+	// MaxImagePixels bounds width*height (~128 MiB of RGBA in the worst case).
+	MaxImagePixels = 32 << 20
+)
+
+// ErrImageTooLarge reports an image whose declared dimensions are refused.
+var ErrImageTooLarge = fmt.Errorf("image dimensions too large")
+
+// CheckImageBounds reads only the image header and reports whether the declared
+// dimensions are safe to decode. An undecodable header is left to the caller's
+// decoder to report.
+func CheckImageBounds(data []byte) error {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil // not a format we can pre-check; the decode below will fail
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 {
+		return ErrImageTooLarge
+	}
+	if cfg.Width > MaxImageDimension || cfg.Height > MaxImageDimension {
+		return ErrImageTooLarge
+	}
+	if int64(cfg.Width)*int64(cfg.Height) > MaxImagePixels {
+		return ErrImageTooLarge
+	}
+	return nil
+}
+
 // ProcessAndSaveAsset converts and saves image bytes into the assets directory.
 //   - Chooses output extension and pipeline (static -> JPEG; animated GIF/WEBP -> WEBP if possible)
 //   - Resizes so that the minimal side is 1080 if larger
@@ -129,6 +166,9 @@ func ProcessAndSaveAsset(base, rel, desired string, data []byte, extHint, conten
 		return outName, meta, nil
 	}
 
+	if err := CheckImageBounds(data); err != nil {
+		return "", nil, err
+	}
 	img, format, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		switch ext {

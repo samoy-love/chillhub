@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"ChillHub/server/internal/adminapi/media"
 	"ChillHub/server/internal/adminutil"
 )
 
@@ -155,6 +156,12 @@ func (h *Handlers) IconUpload(w http.ResponseWriter, r *http.Request) {
 	data, err := io.ReadAll(file)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Check the declared dimensions from the header before decoding: a tiny
+	// PNG can announce 30000x30000 and cost gigabytes of pixel buffer.
+	if err := media.CheckImageBounds(data); err != nil {
+		http.Error(w, "image dimensions too large", http.StatusBadRequest)
 		return
 	}
 	// Decode using stdlib; support PNG/JPEG. For unsupported formats return 400.

@@ -2,6 +2,8 @@ package games
 
 import (
 	"bytes"
+	"encoding/binary"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
@@ -64,6 +66,45 @@ func TestIconUploadRejectsUnsafeGameIDBeforeMkdir(t *testing.T) {
 			t.Fatalf("IconUpload created %q for an invalid gameId", e.Name())
 		}
 	}
+}
+
+// A tiny PNG declaring enormous dimensions must be refused before the decoder
+// allocates its pixel buffer.
+func TestIconUploadRejectsImageBomb(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	w := httptest.NewRecorder()
+	h.IconUpload(w, iconRequest(t, "game", pngBombBytes(t, 30000, 30000)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("IconUpload accepted an image bomb: %d %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "manifests", "game", "icon.png")); err == nil {
+		t.Fatal("the bomb was written to disk")
+	}
+}
+
+// pngBombBytes builds a valid PNG header declaring huge dimensions.
+func pngBombBytes(t *testing.T, w, h uint32) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	buf.Write([]byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a})
+	var ihdr bytes.Buffer
+	_ = binary.Write(&ihdr, binary.BigEndian, w)
+	_ = binary.Write(&ihdr, binary.BigEndian, h)
+	ihdr.Write([]byte{8, 6, 0, 0, 0})
+	chunk := func(typ string, data []byte) {
+		_ = binary.Write(&buf, binary.BigEndian, uint32(len(data)))
+		buf.WriteString(typ)
+		buf.Write(data)
+		c := crc32.NewIEEE()
+		c.Write([]byte(typ))
+		c.Write(data)
+		_ = binary.Write(&buf, binary.BigEndian, c.Sum32())
+	}
+	chunk("IHDR", ihdr.Bytes())
+	chunk("IDAT", []byte{0x78, 0x9c, 0x01, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01})
+	chunk("IEND", nil)
+	return buf.Bytes()
 }
 
 func TestIconUploadAcceptsValidGameID(t *testing.T) {
