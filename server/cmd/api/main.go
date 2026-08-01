@@ -141,7 +141,9 @@ func main() {
 	r.PathPrefix("/news/games/").Handler(httpx.NoStore(http.StripPrefix("/news/games/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news", "games"))))))
 	r.PathPrefix("/assets/").Handler(httpx.NoStore(http.StripPrefix("/assets/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news", "assets"))))))
 
-	addr := ":55700"
+	// Loopback by default: in production nginx proxies to 127.0.0.1. For a dev
+	// box that has to be reachable from another machine set API_LISTEN_ADDR.
+	addr := httpx.ListenAddr("API_LISTEN_ADDR", 55700)
 	if limit > 0 {
 		log.Printf("public API rate limit: %d requests per %s per client IP", limit, window)
 	} else {
