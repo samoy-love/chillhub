@@ -108,14 +108,24 @@ func TestClientIPPrefersForwardedHeaders(t *testing.T) {
 		want   string
 	}{
 		{
-			name:   "x-forwarded-for chain",
-			set:    func(r *http.Request) { r.Header.Set("X-Forwarded-For", "198.51.100.5, 10.0.0.1") },
+			// nginx uses $proxy_add_x_forwarded_for, which APPENDS the real
+			// address to whatever the client sent. Only the LAST element was
+			// added by our proxy; everything to the left is attacker-supplied.
+			// Reading the first element let anyone reset their own counter by
+			// sending a random X-Forwarded-For on every request.
+			name:   "x-forwarded-for chain: trust the last hop, not the client",
+			set:    func(r *http.Request) { r.Header.Set("X-Forwarded-For", "1.2.3.4, 198.51.100.5") },
 			remote: "10.0.0.1:443",
 			want:   "198.51.100.5",
 		},
 		{
-			name:   "x-real-ip",
-			set:    func(r *http.Request) { r.Header.Set("X-Real-IP", "198.51.100.6") },
+			// X-Real-IP is set by nginx from $remote_addr and cannot be spoofed,
+			// so it outranks the forwarded chain entirely.
+			name: "x-real-ip wins over a forged forwarded chain",
+			set: func(r *http.Request) {
+				r.Header.Set("X-Forwarded-For", "1.2.3.4")
+				r.Header.Set("X-Real-IP", "198.51.100.6")
+			},
 			remote: "10.0.0.1:443",
 			want:   "198.51.100.6",
 		},

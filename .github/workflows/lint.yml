@@ -136,6 +136,14 @@ jobs:
         # breakage before a release is cut instead of during a manual build.
         working-directory: launcher/ChillHub
         run: dotnet build --no-restore -c Release
+      - name: Tests (launcher)
+        # 73 теста, среди них векторы RFC 8032 для самописного Ed25519, которым
+        # проверяется подпись манифестов. Без этого шага регрессия в проверке
+        # подписи уезжала бы в релиз незамеченной: тесты в репозитории были,
+        # но не запускались ни в одном прогоне CI.
+        working-directory: launcher/tests/ChillHub.Tests
+        run: dotnet test --nologo
+
       - name: Self-update loop guard (A11)
         # Ловит регрессию «бесконечный цикл самообновления»: файл, попавший
         # ОДНОВРЕМЕННО в манифест лаунчера и под preserve-правила апдейтера,

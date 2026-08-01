@@ -115,6 +115,15 @@ func (a *Auth) signToken(sub string, typ tokenType, ttl time.Duration) (string, 
 }
 
 func (a *Auth) verifyToken(tokenStr string, expected tokenType) (*authClaims, error) {
+	// An empty JWT_SECRET must never authenticate anyone. HS256 with an empty
+	// key is a perfectly valid signature, so without this guard a service that
+	// started without its systemd drop-in (first deploy, damaged override.conf,
+	// manual `systemctl start`) accepts a token anybody can forge — which means
+	// upload access, which means arbitrary builds shipped to every user.
+	// HandleLogin already refuses in that state; this closes the other door.
+	if len(a.cfg.JWTSecret) == 0 {
+		return nil, errors.New("auth not configured: JWT secret is empty")
+	}
 	parser := jwt.NewParser(jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithLeeway(30*time.Second))
 	tok, err := parser.ParseWithClaims(tokenStr, &authClaims{}, func(t *jwt.Token) (interface{}, error) {
 		return a.cfg.JWTSecret, nil

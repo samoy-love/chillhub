@@ -347,13 +347,19 @@ rm -f "$TMPD" || true
 
 section "Nginx: конфиг и перезапуск"
 log "Install nginx site config and reload"
-run "sudo install -m 0644 \"$REPO_DIR/deploy/launcher.conf\" /etc/nginx/sites-available/launcher.conf"
-run "sudo ln -sf /etc/nginx/sites-available/launcher.conf /etc/nginx/sites-enabled/launcher.conf"
-run "sudo nginx -t"
+# ВАЖНО: раскладываем в СВОЙ файл chillhub-launcher.conf, а не в общий launcher.conf.
+# В общем файле исторически жили два проекта (наш и metro.samoy.love), и запись
+# поверх него сносила чужой сайт. Сейчас на хосте три независимых конфига, и
+# писать в старое имя — значит либо затереть соседа, либо создать второй vhost
+# с тем же server_name (conflicting server name, выигрывает случайный).
+# Логика установки с бэкапом, nginx -t и откатом вынесена в scripts/deploy-nginx.sh,
+# чтобы все пути деплоя вели себя одинаково.
+run "sudo install -m 0755 \"$REPO_DIR/scripts/deploy-nginx.sh\" /tmp/chillhub-deploy-nginx.sh"
+run "sudo install -m 0644 \"$REPO_DIR/deploy/launcher.conf\" /tmp/chillhub-launcher.conf"
 if [[ $NO_NGINX_RELOAD -eq 0 ]]; then
-  run "sudo systemctl reload nginx"
+  run "sudo /tmp/chillhub-deploy-nginx.sh /tmp/chillhub-launcher.conf"
   # Check redirect rule presence
-  if sudo grep -n "error_page 401 =302 /admin/ui/login.html" /etc/nginx/sites-available/launcher.conf >/dev/null 2>&1; then
+  if sudo grep -n "error_page 401 =302 /admin/ui/login.html" /etc/nginx/sites-available/chillhub-launcher.conf >/dev/null 2>&1; then
     ok "[nginx] redirect rule present"
   else
     warn "[nginx] redirect rule NOT present"

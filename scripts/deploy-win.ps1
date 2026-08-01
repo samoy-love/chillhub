@@ -454,8 +454,10 @@ DEPLOY_DIR="$HOME/deploy"
 SITE_DIR="/var/www/site"
 LAUNCHER_DIR="/var/www/launcher"
 OPT_DIR="/opt/chillhub"
-NGINX_SITE_AVAILABLE="/etc/nginx/sites-available/launcher.conf"
-NGINX_SITE_ENABLED="/etc/nginx/sites-enabled/launcher.conf"
+# Свой файл, а не общий launcher.conf: в нём исторически жили два проекта,
+# и запись поверх сносила чужой сайт. См. scripts/deploy-nginx.sh.
+NGINX_SITE_AVAILABLE="/etc/nginx/sites-available/chillhub-launcher.conf"
+NGINX_SITE_ENABLED="/etc/nginx/sites-enabled/chillhub-launcher.conf"
 SITE_BASE="%%SITE_BASE_URL%%"
 FAIL_ON_MISMATCH="%%FAIL_ON_MISMATCH%%"
 MISM_TOTAL=0
