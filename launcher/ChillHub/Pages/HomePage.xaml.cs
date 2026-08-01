@@ -25,8 +25,15 @@ namespace ChillHub.Pages {
     using System.Windows.Threading;
 
     using ChillHub.Core;
+    using ChillHub.Core.Home;
     using ChillHub.Core.Net;
     using ChillHub.Core.Sync;
+
+    // Вспомогательная логика вынесена в Core/Home/*: форматирование, локальное состояние игр,
+    // загрузка картинок, диагностика плана синхронизации. using static — чтобы не менять места вызова.
+    using static ChillHub.Core.Home.GameLocalState;
+    using static ChillHub.Core.Home.HomeFormat;
+    using static ChillHub.Core.Home.SyncPlanLog;
 
     public partial class HomePage : Page {
         private string BaseApi => ChillHub.Core.ConfigService.Current.ApiBaseUrl;
@@ -1083,48 +1090,6 @@ namespace ChillHub.Pages {
             }
         }
 
-        private static bool HasAnyLocalGameFiles(string localRoot) {
-            try {
-                if (string.IsNullOrWhiteSpace(localRoot) || !Directory.Exists(localRoot)) {
-                    return false;
-                }
-
-                foreach (var path in Directory.EnumerateFiles(localRoot, "*", SearchOption.AllDirectories)) {
-                    var rel = Path.GetRelativePath(localRoot, path).Replace('\\', '/');
-                    if (rel.StartsWith(".staging/", StringComparison.OrdinalIgnoreCase)) {
-                        continue;
-                    }
-
-                    if (string.Equals(rel, ".version", StringComparison.OrdinalIgnoreCase)) {
-                        continue;
-                    }
-
-                    if (string.Equals(rel, ChillHub.Core.Sync.SimpleSyncService.UpdateMarkerFileName, StringComparison.OrdinalIgnoreCase)) {
-                        // Маркер незавершённого обновления — служебный файл, не считаем его файлом игры
-                        continue;
-                    }
-
-                    return true; // нашли хотя бы один полезный файл
-                }
-            }
-            catch {
-            }
-            return false;
-        }
-
-        // Путь к локальной папке игры
-        private static string GameLocalRoot(string gameId) => System.IO.Path.Combine(ConfigService.Current.GamesPath, gameId ?? string.Empty);
-
-        // Осталось ли от прерванного обновления полусобранное состояние игры (C2)
-        private static bool HasUnfinishedUpdate(string? gameId) {
-            if (string.IsNullOrWhiteSpace(gameId)) {
-                return false;
-            }
-
-            return ChillHub.Core.Sync.SimpleSyncService.HasUpdateMarker(GameLocalRoot(gameId));
-        }
-
-        // --- Статусы проверки по играм (C4) ---
         private bool IsGameStatusKnown(string? gameId) {
             if (string.IsNullOrWhiteSpace(gameId)) {
                 return true; // нет выбора — нечего блокировать
@@ -1350,7 +1315,7 @@ namespace ChillHub.Pages {
                 var game = this.games.FirstOrDefault(g => g.GameId == gameId);
 
                 // Чтение версии с диска выполняем в фоновом потоке
-                var localVer = await Task.Run(() => this.ReadLocalVersion(gameId));
+                var localVer = await Task.Run(() => ReadLocalVersion(gameId));
                 var localTrimmed = string.IsNullOrWhiteSpace(localVer) ? string.Empty : localVer.Trim();
                 try {
                     Core.Logging.Logger.Info($"LoadBuildsAndGameNewsAsync gid={gameId} local='{localTrimmed}'");
@@ -1478,7 +1443,7 @@ namespace ChillHub.Pages {
 
                 // Обновим локальный статус выбранной игры для списка
                 var g = this.games.FirstOrDefault(x => x.GameId == gid);
-                var localVer = await Task.Run(() => this.ReadLocalVersion(gid));
+                var localVer = await Task.Run(() => ReadLocalVersion(gid));
                 var localTrimmed = string.IsNullOrWhiteSpace(localVer) ? string.Empty : localVer.Trim();
                 if (g != null) {
                     g.IsInstalled = !string.IsNullOrWhiteSpace(localTrimmed);
@@ -2085,7 +2050,7 @@ namespace ChillHub.Pages {
                 this.FilesSizeText.Text = "Последняя версия игры уже установлена"; // показываем итоговый статус
 
                 // Сохраним версию в локальный маркер и отметим игру установленной
-                this.WriteLocalVersion(gid, version);
+                WriteLocalVersion(gid, version);
                 this.MarkInstalled(gid, version);
 
                 // Обновим кэш: для установленной последней версии скачивание не требуется
@@ -2396,388 +2361,13 @@ namespace ChillHub.Pages {
             }
         }
 
-        private static void TryCreateDesktopShortcut(string title, string exePath) {
-            try {
-                if (string.IsNullOrWhiteSpace(exePath) || !System.IO.File.Exists(exePath)) {
-                    return;
-                }
-
-                var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-                var name = string.IsNullOrWhiteSpace(title) ? System.IO.Path.GetFileNameWithoutExtension(exePath) : title;
-                var linkPath = System.IO.Path.Combine(desktop, SanitizeFileName(name) + ".lnk");
-
-                var shellType = Type.GetTypeFromProgID("WScript.Shell");
-                if (shellType == null) {
-                    return;
-                }
-
-                dynamic shell = Activator.CreateInstance(shellType)!;
-                dynamic shortcut = shell.CreateShortcut(linkPath);
-                shortcut.TargetPath = exePath;
-                shortcut.WorkingDirectory = System.IO.Path.GetDirectoryName(exePath);
-                shortcut.Description = name;
-                shortcut.IconLocation = exePath + ",0";
-                shortcut.Save();
-            }
-            catch {
-            }
-        }
-
-        private static string SanitizeFileName(string name) {
-            var invalid = System.IO.Path.GetInvalidFileNameChars();
-            var arr = name.ToCharArray();
-            for (int i = 0; i < arr.Length; i++) {
-                if (Array.IndexOf(invalid, arr[i]) >= 0) {
-                    arr[i] = '_';
-                }
-            }
-
-            var s = new string(arr).Trim();
-            return string.IsNullOrEmpty(s) ? "Game" : s;
-        }
-
-        private static string FormatSize(long bytes) {
-            const double KB = 1024.0;
-            const double MB = KB * 1024.0;
-            const double GB = MB * 1024.0;
-            if (bytes >= (long)GB) {
-                return $"{bytes / GB:0.0} ГБ";
-            }
-
-            if (bytes >= (long)MB) {
-                return $"{bytes / MB:0.0} МБ";
-            }
-
-            if (bytes >= (long)KB) {
-                return $"{bytes / KB:0.0} КБ";
-            }
-
-            return $"{bytes} Б";
-        }
-
-        // Формат оставшегося времени: "[N дней][00:]00:00"
-        private static string FormatEta(double seconds)
-        {
-            try {
-                if (double.IsNaN(seconds) || double.IsInfinity(seconds)) return "—";
-                var total = Math.Max(0, (long)Math.Ceiling(seconds));
-                var ts = TimeSpan.FromSeconds(total);
-
-                // С префиксом дней, если >= 1 суток
-                if (ts.TotalDays >= 1)
-                {
-                    int days = ts.Days;
-                    string dayWord = PluralizeDayRu(days);
-                    return $"{days} {dayWord} {ts.Hours:00}:{ts.Minutes:00}:{ts.Seconds:00}";
-                }
-
-                // Если часов 1+ — HH:MM:SS, иначе MM:SS
-                if (ts.TotalHours >= 1)
-                {
-                    // Важно: суммарные часы, если потенциально > 24 (но TotalDays < 1 уже исключили)
-                    return $"{(int)ts.TotalHours:00}:{ts.Minutes:00}:{ts.Seconds:00}";
-                }
-
-                return $"{ts.Minutes:00}:{ts.Seconds:00}";
-            } catch { return "—"; }
-        }
-
-        private static string PluralizeDayRu(int n)
-        {
-            try {
-                int n10 = n % 10;
-                int n100 = n % 100;
-                if (n10 == 1 && n100 != 11) return "день";
-                if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return "дня";
-                return "дней";
-            } catch { return "дней"; }
-        }
-
-        // Diagnostic: log detailed info about files that are planned to download, files to delete, and empty dirs to create
-        private static void LogPlanDownloads(string gid, string stage, ChillHub.Core.Sync.DiffPlan plan, string localRoot) {
-            try {
-                int total = plan.Downloads.Count;
-                int limit = Math.Min(total, 10);
-                for (int i = 0; i < limit; i++) {
-                    var t = plan.Downloads[i];
-                    var rel = t.RelativePath;
-                    var size = t.Size;
-                    var hasSha = !string.IsNullOrWhiteSpace(t.Sha256);
-                    var hasB3 = !string.IsNullOrWhiteSpace(t.Blake3);
-                    var localPath = System.IO.Path.Combine(localRoot, rel.Replace('/', System.IO.Path.DirectorySeparatorChar));
-                    bool exists = System.IO.File.Exists(localPath);
-                    long len = 0;
-                    if (exists) {
-                        try {
-                            len = new System.IO.FileInfo(localPath).Length;
-                        }
-                        catch {
-                        }
-                    }
-
-                    ChillHub.Core.Logging.Logger.Info($"Plan[{stage}] gid={gid} file='{rel}' size={size} hasSha={hasSha} hasB3={hasB3} localExists={exists} localLen={len}");
-                }
-
-                if (total > limit) {
-                    ChillHub.Core.Logging.Logger.Info($"Plan[{stage}] gid={gid} ... and {total - limit} more files");
-                }
-
-                // Log deletions
-                int delTotal = plan.ToDelete.Count;
-                int delLimit = Math.Min(delTotal, 10);
-                for (int i = 0; i < delLimit; i++) {
-                    var rel = plan.ToDelete[i];
-                    var path = System.IO.Path.Combine(localRoot, rel.Replace('/', System.IO.Path.DirectorySeparatorChar));
-                    bool exists = System.IO.File.Exists(path);
-                    ChillHub.Core.Logging.Logger.Info($"Plan[{stage}] gid={gid} toDelete='{rel}' localExists={exists}");
-                }
-
-                if (delTotal > delLimit) {
-                    ChillHub.Core.Logging.Logger.Info($"Plan[{stage}] gid={gid} ... and {delTotal - delLimit} more deletions");
-                }
-
-                // Log empty dirs to create
-                int dirTotal = plan.EmptyDirsToCreate.Count;
-                int dirLimit = Math.Min(dirTotal, 10);
-                for (int i = 0; i < dirLimit; i++) {
-                    var rel = plan.EmptyDirsToCreate[i];
-                    var path = System.IO.Path.Combine(localRoot, rel.Replace('/', System.IO.Path.DirectorySeparatorChar));
-                    bool exists = System.IO.Directory.Exists(path);
-                    ChillHub.Core.Logging.Logger.Info($"Plan[{stage}] gid={gid} emptyDir='{rel}' localExists={exists}");
-                }
-
-                if (dirTotal > dirLimit) {
-                    ChillHub.Core.Logging.Logger.Info($"Plan[{stage}] gid={gid} ... and {dirTotal - dirLimit} more empty dirs");
-                }
-            }
-            catch {
-            }
-        }
-
-        // Helper: find sibling skeleton placeholder by name under the same parent container
-        private static Border? FindImgSkeleton(DependencyObject? parent) {
-            try {
-                if (parent == null) {
-                    return null;
-                }
-
-                int count = VisualTreeHelper.GetChildrenCount(parent);
-                for (int i = 0; i < count; i++) {
-                    var child = VisualTreeHelper.GetChild(parent, i);
-                    if (child is Border b && b.Name == "ImgSkeleton") {
-                        return b;
-                    }
-                }
-            }
-            catch {
-            }
-            return null;
-        }
-
-        // HttpClient tuned for many small image fetches in parallel
-        private static readonly System.Net.Http.HttpClient s_httpClient =
-            new System.Net.Http.HttpClient(new System.Net.Http.HttpClientHandler {
-                AllowAutoRedirect = true,
-                AutomaticDecompression = System.Net.DecompressionMethods.All,
-                UseCookies = true,
-#if NET462 || NET48 || NET5_0_OR_GREATER
-                MaxConnectionsPerServer = 16,
-#endif
-            });
-        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> s_imgInflight = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
-        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, BitmapImage> s_imgCache = new System.Collections.Concurrent.ConcurrentDictionary<string, BitmapImage>(StringComparer.OrdinalIgnoreCase);
-
-        private static void DebugLog(string msg)
-        {
-            try { ChillHub.Core.Logging.Logger.Info(msg); } catch { }
-            try { System.Diagnostics.Debug.WriteLine(msg); } catch { }
-            try { Console.WriteLine(msg); } catch { }
-        }
-
-        private async Task LoadImageAsync(Image img, string url) {
-            try {
-                // Cache hit: apply immediately
-                if (s_imgCache.TryGetValue(url, out var cached)) {
-                    DebugLog($"[ImgLoad] cache hit url='{url}'");
-                    await img.Dispatcher.InvokeAsync(() => {
-                        try { img.Source = cached; img.Visibility = Visibility.Visible; } catch { img.Visibility = Visibility.Visible; }
-                    });
-                    return;
-                }
-
-                // Deduplicate in-flight loads for the same URL
-                if (!s_imgInflight.TryAdd(url, 1)) {
-                    DebugLog($"[ImgLoad] skip duplicate inflight url='{url}'");
-                    return;
-                }
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                DebugLog($"[ImgLoad] HTTP GET start url='{url}'");
-                using var resp = await s_httpClient.GetAsync(url, System.Net.Http.HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
-                if (!resp.IsSuccessStatusCode) {
-                    var ct = resp.Content?.Headers?.ContentType?.ToString() ?? "";
-                    DebugLog($"[ImgLoad] HTTP non-200 status={(int)resp.StatusCode} contentType='{ct}' url='{url}'");
-                    throw new Exception("HTTP " + (int)resp.StatusCode + " " + resp.StatusCode);
-                }
-                await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
-                // Copy to memory to fully detach from HTTP stream before moving to UI thread
-                using var ms = new System.IO.MemoryStream();
-                await stream.CopyToAsync(ms).ConfigureAwait(false);
-                ms.Position = 0;
-                sw.Stop();
-                DebugLog($"[ImgLoad] HTTP ok bytes={ms.Length} elapsedMs={sw.ElapsedMilliseconds} url='{url}'");
-                await img.Dispatcher.InvokeAsync(() => {
-                    try {
-                        var bi = new BitmapImage();
-                        bi.BeginInit();
-                        bi.CacheOption = BitmapCacheOption.OnLoad;
-                        bi.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
-                        // Decode to roughly the visual size to speed up load and reduce memory
-                        try {
-                            int targetH = 0;
-                            if (img.Height > 0 && !double.IsNaN(img.Height)) targetH = (int)Math.Round(img.Height);
-                            // Fallback to desired size if Height is not set
-                            if (targetH <= 0 && img.DesiredSize.Height > 0) targetH = (int)Math.Round(img.DesiredSize.Height);
-                            if (targetH <= 0) targetH = 88; // common icon height in UI
-                            bi.DecodePixelHeight = targetH;
-                        } catch { }
-                        bi.StreamSource = ms;
-                        bi.EndInit();
-                        bi.Freeze();
-                        // Put into cache (frozen, safe to reuse across threads)
-                        try { s_imgCache[url] = bi; } catch { }
-                        img.Source = bi;
-                        img.Visibility = Visibility.Visible;
-                        DebugLog($"[ImgLoad] image applied url='{url}'");
-                    } catch (Exception ex) { img.Visibility = Visibility.Collapsed; DebugLog($"[ImgLoad] apply error url='{url}' err='{ex.Message}'"); }
-                });
-            }
-            catch (Exception ex) {
-                DebugLog($"[ImgLoad] error url='{url}' err='{ex.Message}'");
-                await img.Dispatcher.InvokeAsync(() => { img.Visibility = Visibility.Collapsed; });
-            }
-            finally {
-                s_imgInflight.TryRemove(url, out _);
-            }
-        }
-
+        // Обработчики остаются здесь: на их имена ссылается XAML. Вся логика — в Core/Home/ImageLoader.
         private void CoverImg_Loaded(object sender, RoutedEventArgs e) {
             if (sender is not Image img) {
                 return;
             }
 
-            // 1) Получаем сырой URL из Tag, иначе из DataContext (IconUrl для GameInfo / CoverUrl для NewsItem), иначе из текущего Source.Uri
-            string raw = (img.Tag as string) ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(raw)) {
-                try {
-                    if (img.DataContext is ChillHub.Core.GameInfo gi) {
-                        // GameInfo имеет только IconUrl
-                        raw = gi.IconUrl ?? string.Empty;
-                    }
-                    else if (img.DataContext is ChillHub.Core.NewsItem ni) {
-                        // NewsItem использует CoverUrl
-                        raw = ni.CoverUrl;
-                    }
-                }
-                catch { }
-            }
-
-            if (string.IsNullOrWhiteSpace(raw)) {
-                try {
-                    if (img.Source is BitmapImage bi && bi.UriSource != null) {
-                        raw = bi.UriSource.OriginalString;
-                    }
-                }
-                catch { }
-            }
-
-            if (string.IsNullOrWhiteSpace(raw)) {
-                img.Visibility = Visibility.Collapsed;
-                try {
-                    var sk0 = FindImgSkeleton(VisualTreeHelper.GetParent(img));
-                    if (sk0 != null) {
-                        sk0.Visibility = Visibility.Collapsed;
-                    }
-                }
-                catch {
-                }
-                return;
-            }
-            try {
-                // Нормализуем URL и жёстко привязываем к origin из BaseApi (scheme+host[:port])
-                var apiUri = new Uri(this.BaseApi.TrimEnd('/') + "/", UriKind.Absolute);
-                string url;
-                DebugLog($"[ImgLoad] raw='{raw}' baseApi='{this.BaseApi}' origin='{apiUri.Scheme}://{apiUri.Authority}'");
-
-                // Поддержка протокол-относительных URL (//host/path)
-                if (raw.StartsWith("//")) {
-                    url = new Uri(apiUri.Scheme + ":" + raw, UriKind.Absolute).ToString();
-                    DebugLog($"[ImgLoad] case='protocol-relative' url='{url}'");
-                }
-                // Абсолютные URL (http/https)
-                else if (Uri.TryCreate(raw, UriKind.Absolute, out var abs)) {
-                    url = abs.ToString();
-                    DebugLog($"[ImgLoad] case='absolute' url='{url}'");
-                }
-                else {
-                    // Относительные URL: принудительно делаем корневыми к origin
-                    // Пример: "manifests/game/icon.png" -> "/manifests/game/icon.png"
-                    var rel = raw.StartsWith("/") ? raw : ("/" + raw);
-                    url = new Uri(apiUri, rel).ToString();
-                    DebugLog($"[ImgLoad] case='relative' rel='{rel}' url='{url}'");
-                }
-
-                // Не добавляем динамический cache-busting параметр — это вызывало мигание при переключении игр.
-                // Полагайтесь на кеширование и проверку равенства URL ниже, чтобы не перезагружать изображение без надобности.
-
-                DebugLog($"[ImgLoad] resolved url='{url}'");
-
-                // Если уже есть валидный источник с тем же URL — просто показать и скрыть скелетон
-                try {
-                    if (img.Source is BitmapImage existing && existing.UriSource != null &&
-                        string.Equals(existing.UriSource.OriginalString, url, StringComparison.OrdinalIgnoreCase)) {
-                        img.Visibility = Visibility.Visible;
-                        var parent0 = VisualTreeHelper.GetParent(img);
-                        var sk0 = FindImgSkeleton(parent0);
-                        if (sk0 != null) {
-                            sk0.Visibility = Visibility.Collapsed;
-                        }
-
-                        return;
-                    }
-                }
-                catch {
-                }
-
-                // Загрузка через HttpClient -> Stream, чтобы избежать проблем с относительными путями/кэшем
-                _ = LoadImageAsync(img, url);
-
-                // Скрыть скелетон сразу
-                try {
-                    var parent = VisualTreeHelper.GetParent(img);
-                    var sk = FindImgSkeleton(parent);
-                    if (sk != null) {
-                        sk.Visibility = Visibility.Collapsed;
-                    }
-                }
-                catch {
-                }
-            }
-            catch {
-                img.Visibility = Visibility.Collapsed;
-                try {
-                    ChillHub.Core.Logging.Logger.Info("[ImgLoad] failed to set image source");
-                }
-                catch {
-                }
-                try {
-                    var sk = FindImgSkeleton(VisualTreeHelper.GetParent(img));
-                    if (sk != null) {
-                        sk.Visibility = Visibility.Collapsed;
-                    }
-                }
-                catch {
-                }
-            }
+            ImageLoader.AttachAndLoad(img, this.BaseApi);
         }
 
         private void CoverImg_ImageFailed(object sender, ExceptionRoutedEventArgs e) {
@@ -2785,23 +2375,7 @@ namespace ChillHub.Pages {
                 return;
             }
 
-            img.Visibility = Visibility.Collapsed;
-
-            // Также скрыть скелетон, чтобы не висел вечно
-            try {
-                var parent = VisualTreeHelper.GetParent(img);
-                var sk = FindImgSkeleton(parent);
-                if (sk != null) {
-                    sk.Visibility = Visibility.Collapsed;
-                }
-            }
-            catch {
-            }
-            try {
-                ChillHub.Core.Logging.Logger.Info($"[ImgLoad] ImageFailed: {e.ErrorException?.Message}");
-            }
-            catch {
-            }
+            ImageLoader.HandleImageFailed(img, e.ErrorException);
         }
 
         // Блокируем контекстное меню для неустановленных игр (или если нет папки игры)
@@ -2827,24 +2401,6 @@ namespace ChillHub.Pages {
         }
 
         // --- Delete confirmation dialog (themed) and helpers ---
-        private static string NormalizeDisplayPath(string path) {
-            try {
-                if (string.IsNullOrWhiteSpace(path)) {
-                    return string.Empty;
-                }
-
-                var s = path.Replace('\\', '/');
-                while (s.Contains("//")) {
-                    s = s.Replace("//", "/");
-                }
-
-                return s;
-            }
-            catch {
-                return path;
-            }
-        }
-
         private bool ShowDeleteConfirmationDialog(string title, string folderPath) {
             try {
                 var wnd = new Window {
@@ -2947,7 +2503,7 @@ namespace ChillHub.Pages {
                     }
 
                     // Determine local state from version marker
-                    var ver = this.ReadLocalVersion(g.GameId);
+                    var ver = ReadLocalVersion(g.GameId);
                     var verTrimmed = string.IsNullOrWhiteSpace(ver) ? string.Empty : ver.Trim();
                     g.IsInstalled = !string.IsNullOrWhiteSpace(verTrimmed);
                     g.InstalledVersion = verTrimmed ?? string.Empty;
@@ -2968,50 +2524,6 @@ namespace ChillHub.Pages {
                 }
                 catch {
                 }
-            }
-        }
-
-        private string ReadLocalVersion(string gameId) {
-            try {
-                if (string.IsNullOrWhiteSpace(gameId)) {
-                    return string.Empty;
-                }
-
-                var root = Path.Combine(ConfigService.Current.GamesPath, gameId);
-                var marker = Path.Combine(root, ".version");
-                if (File.Exists(marker)) {
-                    var text = File.ReadAllText(marker).Trim();
-                    try {
-                        ChillHub.Core.Logging.Logger.Info($"ReadLocalVersion gid={gameId} value='{text}'");
-                    }
-                    catch {
-                    }
-                    return text;
-                }
-            }
-            catch {
-            }
-            return string.Empty;
-        }
-
-        private void WriteLocalVersion(string gameId, string? version) {
-            try {
-                if (string.IsNullOrWhiteSpace(gameId)) {
-                    return;
-                }
-
-                var root = Path.Combine(ConfigService.Current.GamesPath, gameId);
-                Directory.CreateDirectory(root);
-                var marker = Path.Combine(root, ".version");
-                var toWrite = (version ?? string.Empty).Trim();
-                File.WriteAllText(marker, toWrite);
-                try {
-                    ChillHub.Core.Logging.Logger.Info($"WriteLocalVersion gid={gameId} value='{toWrite}'");
-                }
-                catch {
-                }
-            }
-            catch {
             }
         }
 
