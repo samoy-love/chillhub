@@ -132,36 +132,11 @@ try{
   });
 })();
 
-// ==== Tabs switching (Launcher / Games / News / Inbox) ====
-document.addEventListener('DOMContentLoaded', ()=>{
-  const tabs = [
-    { btn: 'tabLauncher', sec: 'secLauncher' },
-    { btn: 'tabManifests', sec: 'secManifests' },
-    { btn: 'tabNews', sec: 'secNews' },
-    { btn: 'tabInbox', sec: 'secInbox' },
-    { btn: 'tabMaint', sec: 'secMaint' },
-    { btn: 'tabMetrics', sec: 'secMetrics' },
-  ];
-  const activate = (id)=>{
-    for(const t of tabs){
-      const b = document.getElementById(t.btn);
-      const s = document.getElementById(t.sec);
-      if(!b||!s) continue;
-      const on = (t.btn===id);
-      b.classList.toggle('active', on);
-      s.classList.toggle('hidden', !on);
-      if(on){ try{ localStorage.setItem('admin_tab', t.sec); }catch{ /* no-op */ } }
-    }
-    if(id==='tabInbox') { try{ fbReload(true); }catch{} }
-    if(id==='tabMaint') { try{ mtLoad(); }catch{ /* no-op */ } }
-    if(id==='tabMetrics') { try{ mxOnTabOpen(); }catch{ /* no-op */ } }
-  };
-  for(const t of tabs){
-    const b = document.getElementById(t.btn);
-    if(!b) continue;
-    b.addEventListener('click', (e)=>{ e.preventDefault(); activate(t.btn); });
-  }
-});
+// ==== Tabs switching ====
+// Единственная система вкладок живёт в showSection() ниже. Раньше здесь был
+// второй, независимый набор обработчиков: обе системы вешались на одни и те же
+// ссылки, tabManifests был привязан дважды, и один клик по вкладке порождал
+// 4-6 лишних HTTP-запросов (списки версий, реестр игр, обращения). См. TAB_MAP.
 
 // ==== Launcher preview: ensure versions list and render selected ====
 let __lnPrevSeq = 0;
@@ -1349,12 +1324,15 @@ document.addEventListener('DOMContentLoaded', function(){
       }
     } catch { /* ignore */ }
   })();
-  // Initial load for Launcher tab: populate latest badge and manifest tree
-  try{ lnRefresh(); }catch(_){}
-  // Initial load for launcher versions selector and list
-  try{ lnPrevEnsureVersionsAndRender(); }catch(_){}
+  // Начальную загрузку вкладки «Лаунчер» уже сделал showSection() при разборе
+  // файла — повторять её здесь значит удваивать запросы. Остаётся только карточка
+  // «Версии лаунчера»: её нет в разметке, она добавляется скриптом, поэтому
+  // список версий заполняем после инъекции и только если вкладка открыта.
   try{ ensureLauncherVersionsCard(); }catch(_){}
-  try{ lnManifestsReload(); }catch(_){}
+  try{
+    const sec = document.getElementById('secLauncher');
+    if(sec && !sec.classList.contains('hidden')) lnManifestsReload();
+  }catch(_){}
   // Launcher tab controls are bound later in guarded wiring section
 
   const btn = document.getElementById('gm_prev_refresh');
@@ -1896,16 +1874,22 @@ function clearNewsEditorAndPreviews(){
 // drafts removed: new just clears editor (handler wired below)
 
 // Tabs
+// Единственный источник правды о вкладках: кнопка -> секция -> что подгрузить.
+const TAB_MAP = [
+  { btn: 'tabLauncher',  sec: 'secLauncher' },
+  { btn: 'tabManifests', sec: 'secManifests' },
+  { btn: 'tabNews',      sec: 'secNews' },
+  { btn: 'tabInbox',     sec: 'secInbox' },
+  { btn: 'tabMaint',     sec: 'secMaint' },
+  { btn: 'tabMetrics',   sec: 'secMetrics' },
+];
+
 function showSection(id){
   // sections (guarded: check element exists before toggling)
-  const sections = ['secLauncher','secManifests','secNews','secInbox','secMaint','secMetrics'];
-  sections.forEach(s=>{ const el = document.getElementById(s); if(el){ if(s===id) el.classList.remove('hidden'); else el.classList.add('hidden'); } });
+  TAB_MAP.forEach(t=>{ const el = document.getElementById(t.sec); if(el){ el.classList.toggle('hidden', t.sec !== id); } });
   // nav active state
-  const tabs = ['tabLauncher','tabManifests','tabNews','tabInbox','tabMaint','tabMetrics'];
-  tabs.forEach(i=>{ const el=document.getElementById(i); if(el) el.classList.remove('active'); });
-  const map = { 'secLauncher':'tabLauncher', 'secManifests':'tabManifests', 'secNews':'tabNews', 'secInbox':'tabInbox', 'secMaint':'tabMaint', 'secMetrics':'tabMetrics' };
-  const btn = document.getElementById(map[id]); if(btn) btn.classList.add('active');
-  // auto actions per section
+  TAB_MAP.forEach(t=>{ const el = document.getElementById(t.btn); if(el) el.classList.toggle('active', t.sec === id); });
+  // auto actions per section — ровно один раз на переключение
   if(id==='secNews') {
     try{ newsList(); }catch(_){}
     // If no slug is set, ensure editor and previews are empty
@@ -1917,27 +1901,26 @@ function showSection(id){
     try{ lnPrevEnsureVersionsAndRender(); }catch(_){ }
     try{ lnManifestsReload(); }catch(_){ }
   }
+  if(id==='secManifests'){
+    try{ manifestsReload(); }catch(_){ /* no-op */ }
+    try{ mgmReload(); }catch(_){ /* no-op */ }
+  }
+  if(id==='secInbox'){ try{ fbReload(true); }catch(_){ /* no-op */ } }
   if(id==='secMaint'){ try{ mtLoad(); }catch(_){ /* no-op */ } }
   if(id==='secMetrics'){ try{ mxOnTabOpen(); }catch(_){ /* no-op */ } }
   try{ localStorage.setItem('admin_tab', id); }catch(e){}
 }
-// Guarded wiring to avoid null errors
-if (document.getElementById('tabLauncher')) document.getElementById('tabLauncher').addEventListener('click', ()=>{ showSection('secLauncher'); lnRefresh(); });
-if (document.getElementById('tabManifests')) document.getElementById('tabManifests').addEventListener('click', ()=>showSection('secManifests'));
-if (document.getElementById('tabNews')) document.getElementById('tabNews').addEventListener('click', ()=>{ showSection('secNews'); try{ newsList(); }catch(e){} });
-if (document.getElementById('tabManifests')) document.getElementById('tabManifests').addEventListener('click', ()=>{ showSection('secManifests'); manifestsReload(); mgmReload(); });
+// Guarded wiring to avoid null errors: по одному обработчику на вкладку.
+TAB_MAP.forEach(t=>{
+  const btn = document.getElementById(t.btn);
+  if(!btn) return;
+  btn.addEventListener('click', (e)=>{ e.preventDefault(); showSection(t.sec); });
+});
 // Ensure initial active state reflects saved section
 try{
   const saved = localStorage.getItem('admin_tab');
-  if(saved){
-    showSection(saved);
-    if(saved==='secGames'){ /* removed */ }
-    if(saved==='secManifests'){ manifestsReload(); mgmReload(); }
-    if(saved==='secLauncher'){ lnRefresh(); }
-  } else {
-    showSection('secLauncher');
-    try{ lnRefresh(); }catch(e){}
-  }
+  const known = TAB_MAP.some(t=> t.sec === saved);
+  showSection(known ? saved : 'secLauncher');
 }catch(e){ showSection('secLauncher'); }
 
 // Guarded wiring for editor actions (drafts removed)
