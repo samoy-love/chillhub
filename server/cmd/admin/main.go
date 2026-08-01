@@ -21,16 +21,25 @@ import (
 	"ChillHub/server/internal/adminapi/news"
 	"ChillHub/server/internal/adminutil"
 	"ChillHub/server/internal/httpx"
+	"ChillHub/server/internal/maintenance"
+	"ChillHub/server/internal/metrics"
 	"ChillHub/server/internal/ratelimit"
 
 	"go.uber.org/automaxprocs/maxprocs"
 )
 
-// Public feedback submit is the only unauthenticated write endpoint, so it
-// keeps its own budget: 5 reports per minute per client address.
+// Unauthenticated write endpoints get their own budgets per client address.
+//
+// Feedback is typed by a human, so 5 per minute is already generous. Metrics
+// are emitted by the launcher itself: a start event, then a handful around each
+// install or update, so 30 per minute leaves room for a burst (several games
+// updated back to back) while still capping a runaway retry loop.
 const (
 	feedbackRateLimit  = 5
 	feedbackRateWindow = time.Minute
+
+	metricsRateLimit  = 30
+	metricsRateWindow = time.Minute
 )
 
 // server owns the content root and the per-domain handler sets. Nothing here is
@@ -43,8 +52,11 @@ type server struct {
 	news        *news.Handlers
 	games       *games.Handlers
 	feedback    *feedback.Handlers
+	maintenance *maintenance.Store
+	metrics     *metrics.Handlers
 
 	feedbackLimiter *ratelimit.Limiter
+	metricsLimiter  *ratelimit.Limiter
 }
 
 func newServer(contentRoot string) *server {
@@ -53,6 +65,10 @@ func newServer(contentRoot string) *server {
 	b.CurrentUser = a.CurrentUser
 	f := feedback.New(contentRoot)
 	f.CurrentUser = a.CurrentUser
+	mt := maintenance.New(contentRoot)
+	mt.CurrentUser = a.CurrentUser
+	mx := metrics.New(contentRoot)
+	mx.CurrentUser = a.CurrentUser
 	return &server{
 		contentRoot:     contentRoot,
 		auth:            a,
@@ -60,7 +76,10 @@ func newServer(contentRoot string) *server {
 		news:            news.New(contentRoot),
 		games:           games.New(contentRoot),
 		feedback:        f,
+		maintenance:     mt,
+		metrics:         mx,
 		feedbackLimiter: ratelimit.New(feedbackRateLimit, feedbackRateWindow),
+		metricsLimiter:  ratelimit.New(metricsRateLimit, metricsRateWindow),
 	}
 }
 
