@@ -662,7 +662,8 @@
                       Style="{DynamicResource Style.Button.GhostNeutral}" Width="140" Height="32" HorizontalAlignment="Center"/>
             </StackPanel>
             <!-- Листаемый список игр как боковое меню (карточки) -->
-            <ListBox Name="GameList" SelectionChanged="GameCombo_SelectionChanged" Visibility="Collapsed" Background="{DynamicResource Brush.Surface}"
+            <ListBox Name="GameList" SelectionChanged="GameCombo_SelectionChanged" MouseDoubleClick="GameList_MouseDoubleClick"
+                     Visibility="Collapsed" Background="{DynamicResource Brush.Surface}"
                      ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.CanContentScroll="False"
                      VirtualizingPanel.IsVirtualizing="False"
                      BorderThickness="0"
@@ -711,6 +712,7 @@
                           ContextMenuOpening="GameItem_ContextMenuOpening">
                     <Border.ContextMenu>
                       <ContextMenu>
+                        <MenuItem Header="Подробнее об игре" Click="GameDetails_Click" CommandParameter="{Binding}"/>
                         <MenuItem Header="Открыть расположение игры" Click="OpenGameFolder_Click" CommandParameter="{Binding}"/>
                         <MenuItem Header="Удалить локальные файлы" Click="DeleteGame_Click" CommandParameter="{Binding}"/>
                       </ContextMenu>
@@ -732,14 +734,15 @@
                         <ColumnDefinition Width="36"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                       </Grid.ColumnDefinitions>
                       <!-- Per-row shimmer overlay -->
                       <!-- Spacer to enforce taller layout when skeleton is shown -->
-                      <Border x:Name="GameRowSkeletonSpacer" Grid.ColumnSpan="3"
+                      <Border x:Name="GameRowSkeletonSpacer" Grid.ColumnSpan="4"
                               Height="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=ActualHeight}"
                               Margin="{StaticResource Skeleton.GameTopOffsetThickness}" Background="Transparent"
                               Visibility="{Binding ElementName=GameRowSkeleton, Path=Visibility}"/>
-                      <ContentControl x:Name="GameRowSkeleton" Grid.ColumnSpan="3" Panel.ZIndex="1"
+                      <ContentControl x:Name="GameRowSkeleton" Grid.ColumnSpan="4" Panel.ZIndex="1"
                                       HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="{StaticResource Skeleton.GameTopOffsetThickness}"
                                       IsHitTestVisible="False"
                                       Height="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=ActualHeight}">
@@ -772,8 +775,17 @@
                       <StackPanel Grid.Column="1" Margin="10,0,8,0" VerticalAlignment="Center">
                         <TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="16"/>
                       </StackPanel>
+                      <!-- Переход на страницу игры (то же делает двойной клик по строке) -->
+                      <Button Grid.Column="2" Width="26" Height="26" Margin="0,0,6,0" VerticalAlignment="Center"
+                              Padding="0" ToolTip="Подробнее об игре"
+                              Click="GameDetails_Click" CommandParameter="{Binding}"
+                              Background="Transparent" BorderThickness="0"
+                              Foreground="{DynamicResource Brush.TextSecondary}">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE946;" FontSize="14"
+                                   VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                      </Button>
                       <!-- Флаг статуса (векторные иконки) -->
-                      <Grid Grid.Column="2" Width="22" Height="22" VerticalAlignment="Center" SnapsToDevicePixels="True">
+                      <Grid Grid.Column="3" Width="22" Height="22" VerticalAlignment="Center" SnapsToDevicePixels="True">
                         <!-- Иконка "требуется обновление": SVG-путь, масштабируемый -->
                         <Grid x:Name="IconNeedsUpdate">
                           <Grid.Style>
