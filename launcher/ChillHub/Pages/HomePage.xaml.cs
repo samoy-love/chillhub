@@ -25,8 +25,15 @@ namespace ChillHub.Pages {
     using System.Windows.Threading;
 
     using ChillHub.Core;
+    using ChillHub.Core.Home;
     using ChillHub.Core.Net;
     using ChillHub.Core.Sync;
+
+    // Вспомогательная логика вынесена в Core/Home/*: форматирование, локальное состояние игр,
+    // загрузка картинок, диагностика плана синхронизации. using static — чтобы не менять места вызова.
+    using static ChillHub.Core.Home.GameLocalState;
+    using static ChillHub.Core.Home.HomeFormat;
+    using static ChillHub.Core.Home.SyncPlanLog;
 
     public partial class HomePage : Page {
         private string BaseApi => ChillHub.Core.ConfigService.Current.ApiBaseUrl;
@@ -41,8 +48,7 @@ namespace ChillHub.Pages {
         private const double EmaAlpha = 0.2; // чувствительность EMA
 
         // Кэш оценок требуемого объёма скачивания по игре (обновляется при VerifyGameStatusAsync)
-        private readonly object spaceCacheLock = new();
-        private readonly Dictionary<string, long> neededBytesCache = new(StringComparer.OrdinalIgnoreCase);
+        private readonly SpaceHint spaceHint = new();
 
         // Раньше здесь был флаг initialVerifyRunning, блокировавший любые действия на время
         // полной проверки всех игр. Теперь блокировка точечная: см. verifiedGameIds (C4).
@@ -69,11 +75,20 @@ namespace ChillHub.Pages {
             Retry
         }
 
-        // ===== Feedback model and queue =====
-        private record FeedbackDraft(string Name, string Contact, string Type, string Comment, bool AttachLogs, Dictionary<string, string>? System);
-        private List<FeedbackDraft> feedbackQueue = new();
-        private DispatcherTimer? feedbackRetryTimer;
-        private string FeedbackQueuePath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ChillHub", "feedback_queue.json");
+        // ===== Обратная связь =====
+        // Отправка, оффлайн-очередь и ретраи живут в Core/Home/FeedbackService.
+        // Здесь остаются только обработчики, на имена которых ссылается XAML.
+        private FeedbackService? feedback;
+
+        private FeedbackService Feedback => this.feedback ??= new FeedbackService(
+            this.http,
+            () => this.BaseApi,
+            msg => this.ShowToast(msg),
+            text => {
+                if (this.FbStatus != null) {
+                    this.FbStatus.Text = text;
+                }
+            });
 
         private void FeedbackBtn_Click(object sender, RoutedEventArgs e) {
             try {
@@ -81,251 +96,74 @@ namespace ChillHub.Pages {
                 this.FbContact.Text = string.Empty;
                 this.FbComment.Text = string.Empty;
                 this.FbStatus.Text = string.Empty;
-                try { this.FbType.SelectedIndex = 0; } catch { }
+                this.FbType.SelectedIndex = 0;
                 this.FeedbackOverlay.Visibility = Visibility.Visible;
-                // No pre-validation on open; user will see validation only on Send
-            } catch { }
+
+                // Валидация только по нажатию «Отправить»: на открытии ничего не подсвечиваем
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "Feedback.OpenForm");
+                this.ShowToast("Не удалось открыть форму обратной связи");
+            }
         }
 
         private void FbCancel_Click(object sender, RoutedEventArgs e) {
-            try { this.FeedbackOverlay.Visibility = Visibility.Collapsed; } catch { }
+            this.FeedbackOverlay.Visibility = Visibility.Collapsed;
         }
 
         private async void FbSend_Click(object sender, RoutedEventArgs e) {
             try {
-                var name = this.FbName.Text?.Trim() ?? string.Empty;
-                var contact = this.FbContact.Text?.Trim() ?? string.Empty;
                 var comment = this.FbComment.Text?.Trim() ?? string.Empty;
-                var attach = true; // always attach logs per UX change
-                var type = GetFeedbackTypeString();
-                if (string.IsNullOrWhiteSpace(comment) || comment.Length < 5) { this.FbStatus.Text = "Опишите проблему (мин. 5 символов)"; return; }
-                var system = attach ? this.CollectSystemInfo() : null;
-                var draft = new FeedbackDraft(name, contact, type, comment, attach, system);
+                if (comment.Length < 5) {
+                    this.FbStatus.Text = "Опишите проблему (мин. 5 символов)";
+                    return;
+                }
+
+                var draft = new FeedbackService.FeedbackDraft(
+                    this.FbName.Text?.Trim() ?? string.Empty,
+                    this.FbContact.Text?.Trim() ?? string.Empty,
+                    this.GetFeedbackTypeString(),
+                    comment,
+                    true, // логи прикрепляем всегда — так решили в UX
+                    FeedbackService.CollectSystemInfo());
+
                 this.FbStatus.Text = "Отправка...";
-                var ok = await this.TrySendFeedbackAsync(draft, silent: false).ConfigureAwait(true);
+                var ok = await this.Feedback.TrySendAsync(draft, silent: false).ConfigureAwait(true);
                 if (ok) {
                     this.FbStatus.Text = "Отправлено";
                     this.ShowToast("Спасибо! Сообщение отправлено");
-                    this.FeedbackOverlay.Visibility = Visibility.Collapsed;
-                } else {
-                    EnqueueFeedback(draft);
+                }
+                else {
+                    this.Feedback.Enqueue(draft);
                     this.FbStatus.Text = "В ожидании отправки (оффлайн)";
                     this.ShowToast("Сообщение поставлено в очередь");
-                    this.FeedbackOverlay.Visibility = Visibility.Collapsed;
                 }
-            } catch (Exception ex) {
-                try { Core.Logging.Logger.Error(ex, "Feedback.Send"); } catch { }
+
+                this.FeedbackOverlay.Visibility = Visibility.Collapsed;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "Feedback.Send");
                 this.ShowToast("Ошибка отправки");
             }
         }
 
-        // Disable live validation: do nothing on each input change
+        // Живая валидация отключена: проверяем только по нажатию «Отправить»
         private void FbField_Changed(object? sender, TextChangedEventArgs e) { /* no-op */ }
-
-        private void UpdateFeedbackValidation()
-        {
-            try {
-                var comment = this.FbComment?.Text ?? string.Empty;
-                var isOk = !string.IsNullOrWhiteSpace(comment) && comment.Trim().Length >= 5;
-
-                // pick brushes
-                var okBrush = (this.TryFindResource("Brush.Border") as Brush) ?? new SolidColorBrush(Color.FromRgb(64,64,64));
-                var errBrush = new SolidColorBrush(Color.FromRgb(255,107,107)); // matches danger accents
-                if (this.FbComment != null) this.FbComment.BorderBrush = isOk ? okBrush : errBrush;
-                if (this.FbSendBtn != null) this.FbSendBtn.IsEnabled = isOk;
-                if (this.FbStatus != null) this.FbStatus.Text = isOk ? string.Empty : "Опишите проблему (мин. 5 символов)";
-            } catch { }
-        }
 
         private string GetFeedbackTypeString() {
             try {
                 var item = this.FbType.SelectedItem as ComboBoxItem;
-                var txt = item?.Content?.ToString()?.Trim()?.ToLowerInvariant() ?? "";
+                var txt = item?.Content?.ToString()?.Trim()?.ToLowerInvariant() ?? string.Empty;
                 return txt switch { "баг" => "bug", "идея" => "idea", "вопрос" => "question", _ => "other" };
-            } catch { return "other"; }
-        }
-
-        private Dictionary<string, string> CollectSystemInfo() {
-            var dict = new Dictionary<string, string>();
-            try {
-                dict["os"] = Environment.OSVersion.VersionString;
-                dict["arch"] = Environment.Is64BitOperatingSystem ? "x64" : "x86";
-                dict["dotnet"] = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription;
-                dict["machineName"] = Environment.MachineName;
-                dict["appVersion"] = typeof(HomePage).Assembly.GetName().Version?.ToString() ?? "";
-            } catch { }
-            return dict;
-        }
-
-        private async Task<bool> TrySendFeedbackAsync(FeedbackDraft d, bool silent = true) {
-            try {
-                var baseApi = this.BaseApi.TrimEnd('/');
-                var url = baseApi + "/feedback/submit";
-                // Global persistent quota (shared with ErrorReporter): limit total reports per window
-                try {
-                    if (!ChillHub.Core.ErrorReporter.TryConsumeManual(out var retryAfter)) {
-                        if (!silent) {
-                            var mins = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalMinutes));
-                            this.FbStatus.Text = $"Лимит ручных отправок исчерпан. Повторите через ~{mins} мин.";
-                            this.ShowToast($"Лимит ручных отправок исчерпан. Повторите через ~{mins} мин.");
-                        }
-                        return false;
-                    }
-                } catch { }
-                // Build rich diagnostics bundle if requested
-                string logsPayload = string.Empty;
-                Dictionary<string, string>? extraSystem = d.System;
-                if (d.AttachLogs) {
-                    try {
-                        var bundle = await Task.Run(() => ChillHub.Core.Diagnostics.Build()).ConfigureAwait(true);
-                        logsPayload = bundle.LogsMarkdown;
-                        // augment system with computed hints
-                        extraSystem = extraSystem ?? new Dictionary<string, string>();
-                        foreach (var kv in bundle.SystemHints) { extraSystem[kv.Key] = kv.Value; }
-                    } catch { /* non-fatal */ }
-                }
-                using var req = new HttpRequestMessage(HttpMethod.Post, url) {
-                    Content = new StringContent(JsonSerializer.Serialize(new {
-                        name = d.Name,
-                        contact = d.Contact,
-                        type = d.Type,
-                        comment = d.Comment,
-                        attachLogs = d.AttachLogs,
-                        logs = logsPayload,
-                        system = extraSystem,
-                    }), Encoding.UTF8, "application/json")
-                };
-                HttpResponseMessage res;
-                try {
-                    res = await this.http.SendAsync(req).ConfigureAwait(false);
-                } catch (Exception exSend) {
-                    try { Core.Logging.Logger.Error(exSend, "Feedback.Send.HttpError"); } catch { }
-                    if (!silent) { this.ShowToast("Не удалось отправить (сеть/сервер недоступны)"); }
-                    // Local-dev fallback: if BaseApi is localhost and network failed, try admin port 55777
-                    if (TryBuildLocalAdminUrl(baseApi, out var adminUrl)) {
-                        try {
-                            using var req2 = new HttpRequestMessage(HttpMethod.Post, adminUrl) { Content = req.Content };
-                            var res2 = await this.http.SendAsync(req2).ConfigureAwait(false);
-                            if (res2.IsSuccessStatusCode) return true;
-                        } catch (Exception exSend2) { try { Core.Logging.Logger.Error(exSend2, "Feedback.Send.HttpError.Fallback"); } catch { } }
-                    }
-                    return false;
-                }
-                if (res.IsSuccessStatusCode) {
-                    return true;
-                }
-                // capture body snippet for diagnostics
-                string body = string.Empty;
-                try { body = await res.Content.ReadAsStringAsync().ConfigureAwait(false); } catch { }
-                try { Core.Logging.Logger.Warn($"Feedback.Send failed: {(int)res.StatusCode} {res.ReasonPhrase}; body='{body}'"); } catch { }
-                // Local-dev fallback for wrong port (e.g., 404 on API port): retry against admin port 55777
-                if (TryBuildLocalAdminUrl(baseApi, out var adminUrl2)) {
-                    try {
-                        using var req3 = new HttpRequestMessage(HttpMethod.Post, adminUrl2) { Content = req.Content };
-                        var res3 = await this.http.SendAsync(req3).ConfigureAwait(false);
-                        if (res3.IsSuccessStatusCode) return true;
-                        try {
-                            var b3 = await res3.Content.ReadAsStringAsync().ConfigureAwait(false);
-                            Core.Logging.Logger.Warn($"Feedback.Send fallback failed: {(int)res3.StatusCode} {res3.ReasonPhrase}; body='{b3}'");
-                        } catch { }
-                    } catch (Exception exSend3) { try { Core.Logging.Logger.Error(exSend3, "Feedback.Send.FallbackUnexpected"); } catch { } }
-                }
-                if (!silent) { this.ShowToast($"Сервер отклонил отправку: {(int)res.StatusCode}"); }
-                return false;
-            } catch (Exception ex) {
-                try { Core.Logging.Logger.Error(ex, "Feedback.Send.Unexpected"); } catch { }
-                if (!silent) { this.ShowToast("Ошибка отправки"); }
-                return false;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"Feedback.GetType: {ex.Message}; используем 'other'");
+                return "other";
             }
         }
 
-        private static bool TryBuildLocalAdminUrl(string baseApi, out string adminUrl)
-        {
-            adminUrl = string.Empty;
-            try {
-                if (!Uri.TryCreate(baseApi, UriKind.Absolute, out var u)) return false;
-                var host = (u.Host ?? "").ToLowerInvariant();
-                if (host == "localhost" || host == "127.0.0.1") {
-                    var ub = new UriBuilder(u);
-                    ub.Port = 55777; // admin in local dev
-                    adminUrl = new Uri(ub.Uri, "/feedback/submit").ToString();
-                    return true;
-                }
-            } catch { }
-            return false;
-        }
-
-        private void EnqueueFeedback(FeedbackDraft d) {
-            try {
-                this.feedbackQueue.Add(d);
-                this.SaveFeedbackQueue();
-                _ = this.FlushFeedbackQueueNowAsync();
-            } catch { }
-        }
-
-        private void LoadFeedbackQueue() {
-            try {
-                var p = this.FeedbackQueuePath;
-                var dir = System.IO.Path.GetDirectoryName(p);
-                if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
-                if (!File.Exists(p)) { this.feedbackQueue = new List<FeedbackDraft>(); return; }
-                var json = File.ReadAllText(p, Encoding.UTF8);
-                var items = JsonSerializer.Deserialize<List<FeedbackDraft>>(json) ?? new List<FeedbackDraft>();
-                this.feedbackQueue = items;
-            } catch { this.feedbackQueue = new List<FeedbackDraft>(); }
-        }
-
-        private void SaveFeedbackQueue() {
-            try {
-                var p = this.FeedbackQueuePath;
-                var dir = System.IO.Path.GetDirectoryName(p);
-                if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
-                var json = JsonSerializer.Serialize(this.feedbackQueue, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(p, json, Encoding.UTF8);
-            } catch { }
-        }
-
-        private async Task FlushFeedbackQueueNowAsync() {
-            try {
-                if (this.feedbackQueue.Count == 0) return;
-                int i = 0; int sent = 0;
-                while (i < this.feedbackQueue.Count && sent < 5) {
-                    var d = this.feedbackQueue[i];
-                    // quick immediate retry for robustness
-                    var ok = await this.TrySendFeedbackAsync(d, silent: true).ConfigureAwait(true);
-                    if (!ok) {
-                        // do a short backoff retry once
-                        try { await Task.Delay(800).ConfigureAwait(true); } catch { }
-                        ok = await this.TrySendFeedbackAsync(d, silent: true).ConfigureAwait(true);
-                    }
-                    if (ok) { this.feedbackQueue.RemoveAt(i); sent++; }
-                    else { i++; }
-                }
-                if (sent > 0) {
-                    this.SaveFeedbackQueue();
-                    try {
-                        var msg = sent == 1 ? "Одно отложенное сообщение отправлено" : $"Отправлены отложенные сообщения: {sent}";
-                        this.ShowToast(msg);
-                    } catch { }
-                }
-            } catch { }
-        }
-
-        private void StartFeedbackRetryLoop() {
-            try {
-                this.feedbackRetryTimer?.Stop();
-                this.feedbackRetryTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(10) };
-                this.feedbackRetryTimer.Tick += async (s, e) => {
-                    await this.FlushFeedbackQueueNowAsync();
-                };
-                this.feedbackRetryTimer.Start();
-            } catch { }
-        }
         private ActionMode actionMode = ActionMode.Checking;
         private bool hasUpdateError = false;
-
-        // Feedback retry loop timer reference (declared later near queue as well)
-        // kept here only if needed; actual implementation declared below
 
         public HomePage() {
             this.InitializeComponent();
@@ -333,33 +171,34 @@ namespace ChillHub.Pages {
             // Самообновление обрабатывается отдельным окном UpdateWindow до показа MainWindow
             _ = this.StartupAsync();
 
-            // Инициализация состояния единой кнопки действий
+            // Ни одна из инициализаций ниже не должна ронять конструктор страницы:
+            // при сбое любой из них лаунчер обязан открыться, пусть и без части удобств.
             try {
+                // Начальное состояние единой кнопки действий
                 this.UpdateActionButtonState();
-            }
-            catch {
-            }
 
-            // Init feedback retry loop and load queued items
-            try { this.LoadFeedbackQueue(); this.StartFeedbackRetryLoop(); } catch { }
-            // Do not disable Send by default; validation is performed on click
-            try { if (this.FbSendBtn != null) this.FbSendBtn.IsEnabled = true; } catch { }
+                // Оффлайн-очередь обратной связи: поднимаем с диска и запускаем ретраи
+                this.Feedback.Start();
 
-            // Handle ESC to close feedback overlay with confirmation
-            try { this.PreviewKeyDown += HomePage_PreviewKeyDown; } catch { }
+                // Кнопку «Отправить» не блокируем: валидация выполняется по клику
+                if (this.FbSendBtn != null) {
+                    this.FbSendBtn.IsEnabled = true;
+                }
 
-            // Subscribe to auto error reports to show a toast banner
-            try {
-                ChillHub.Core.ErrorReporter.AutoReported += (ctx) => {
-                    try { _ = this.DispatcherInvokeAsync(() => this.ShowToast("Произошла ошибка. Отчёт автоматически отправлен")); } catch { }
-                };
+                // ESC закрывает форму обратной связи (с подтверждением)
+                this.PreviewKeyDown += this.HomePage_PreviewKeyDown;
+
+                // Баннер о том, что отчёт об ошибке ушёл автоматически
+                ChillHub.Core.ErrorReporter.AutoReported += (ctx) =>
+                    _ = this.DispatcherInvokeAsync(() => this.ShowToast("Произошла ошибка. Отчёт автоматически отправлен"));
                 ChillHub.Core.ErrorReporter.AutoReportSuppressed += (ts) => {
-                    try {
-                        var mins = Math.Max(1, (int)Math.Ceiling(ts.TotalMinutes));
-                        _ = this.DispatcherInvokeAsync(() => this.ShowToast($"Лимит авто-репортов исчерпан. Доступно через ~{mins} мин."));
-                    } catch { }
+                    var mins = Math.Max(1, (int)Math.Ceiling(ts.TotalMinutes));
+                    _ = this.DispatcherInvokeAsync(() => this.ShowToast($"Лимит авто-репортов исчерпан. Доступно через ~{mins} мин."));
                 };
-            } catch { }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "HomePage.ctor");
+            }
         }
 
         private void HomePage_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -373,124 +212,19 @@ namespace ChillHub.Pages {
                         this.FeedbackOverlay.Visibility = Visibility.Collapsed;
                     }
                 }
-            } catch { }
-        }
-
-        // Toast helper: show non-intrusive notification in bottom-right corner with smooth animations
-        private System.Threading.CancellationTokenSource? toastCts;
-        private bool toastInit;
-
-        private void EnsureToastTransform() {
-            try {
-                if (!toastInit) {
-                    if (this.Toast.RenderTransform is not System.Windows.Media.TranslateTransform) {
-                        this.Toast.RenderTransform = new System.Windows.Media.TranslateTransform(0, 20);
-                    }
-                    this.Toast.Opacity = 0;
-                    this.Toast.Visibility = Visibility.Collapsed;
-                    toastInit = true;
-                }
-            } catch { }
-        }
-
-        private void ShowToast(string message, TimeSpan? duration = null) {
-            EnsureToastTransform();
-            var dur = duration ?? TimeSpan.FromSeconds(3);
-
-            // cancel previous animation if any (overwrite support)
-            try { toastCts?.Cancel(); } catch { }
-            toastCts = new System.Threading.CancellationTokenSource();
-            var ct = toastCts.Token;
-
-            async void Run()
-            {
-                try {
-                    // If currently visible, animate out quickly before showing new text (overwrite behavior)
-                    if (this.Toast.Visibility == Visibility.Visible && this.Toast.Opacity > 0.1) {
-                        await AnimateToastAsync(fadeIn: false, TimeSpan.FromMilliseconds(140), ct);
-                    }
-
-                    this.ToastText.Text = message;
-                    this.Toast.Visibility = Visibility.Visible;
-                    // animate in
-                    await AnimateToastAsync(fadeIn: true, TimeSpan.FromMilliseconds(200), ct);
-
-                    // stay visible for duration
-                    try { await Task.Delay(dur, ct).ConfigureAwait(true); } catch { }
-                    if (ct.IsCancellationRequested) return;
-
-                    // animate out
-                    await AnimateToastAsync(fadeIn: false, TimeSpan.FromMilliseconds(220), ct);
-                    if (!ct.IsCancellationRequested) {
-                        this.Toast.Visibility = Visibility.Collapsed;
-                    }
-                } catch { }
             }
-
-            Run();
-        }
-
-        private Task AnimateToastAsync(bool fadeIn, TimeSpan duration, System.Threading.CancellationToken ct)
-        {
-            var tcs = new TaskCompletionSource<bool>();
-            try {
-                var translate = this.Toast.RenderTransform as System.Windows.Media.TranslateTransform;
-                if (translate == null) {
-                    translate = new System.Windows.Media.TranslateTransform(0, 0);
-                    this.Toast.RenderTransform = translate;
-                }
-
-                // prepare animations
-                var animOpacity = new System.Windows.Media.Animation.DoubleAnimation {
-                    From = fadeIn ? (double?)0.0 : this.Toast.Opacity,
-                    To = fadeIn ? 1.0 : 0.0,
-                    Duration = new Duration(duration),
-                    EasingFunction = new System.Windows.Media.Animation.QuadraticEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut },
-                    FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop,
-                };
-                var fromY = translate.Y;
-                var animY = new System.Windows.Media.Animation.DoubleAnimation {
-                    From = fadeIn ? (double?)20.0 : fromY,
-                    To = fadeIn ? 0.0 : 10.0,
-                    Duration = new Duration(duration),
-                    EasingFunction = new System.Windows.Media.Animation.QuadraticEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut },
-                    FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop,
-                };
-
-                int completed = 0;
-                void checkDone() { if (++completed >= 2) { tcs.TrySetResult(true); } }
-
-                animOpacity.Completed += (s, e) => {
-                    try { this.Toast.Opacity = fadeIn ? 1.0 : 0.0; } catch { }
-                    if (ct.IsCancellationRequested) tcs.TrySetCanceled(ct); else checkDone();
-                };
-                animY.Completed += (s, e) => {
-                    try { translate.Y = fadeIn ? 0.0 : 10.0; } catch { }
-                    if (ct.IsCancellationRequested) tcs.TrySetCanceled(ct); else checkDone();
-                };
-
-                this.Toast.BeginAnimation(System.Windows.UIElement.OpacityProperty, animOpacity);
-                translate.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, animY);
-
-                if (ct.CanBeCanceled) {
-                    ct.Register(() => {
-                        try {
-                            this.Toast.BeginAnimation(System.Windows.UIElement.OpacityProperty, null);
-                            translate.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, null);
-                        } catch { }
-                        tcs.TrySetCanceled();
-                    });
-                }
-            } catch (Exception ex) {
-                // fallback: no animation
-                try {
-                    this.Toast.Opacity = fadeIn ? 1.0 : 0.0;
-                    if (!fadeIn) this.Toast.Visibility = Visibility.Collapsed;
-                } catch { }
-                tcs.TrySetException(ex);
+            catch (Exception ex) {
+                // Обработчик клавиш не имеет права ронять окно
+                Core.Logging.Logger.Error(ex, "HomePage.PreviewKeyDown");
             }
-            return tcs.Task;
         }
+
+        // Всплывающие уведомления в правом нижнем углу: анимации и таймеры — в Core/Home/ToastHost.
+        private ToastHost? toastHost;
+
+        private ToastHost Toaster => this.toastHost ??= new ToastHost(this.Toast, this.ToastText);
+
+        private void ShowToast(string message, TimeSpan? duration = null) => this.Toaster.Show(message, duration);
 
         // Удалено: ручной выбор сборки больше не поддерживается в UI
         private void NormalizeCoverUrls(IEnumerable<NewsItem> items) {
@@ -503,51 +237,32 @@ namespace ChillHub.Pages {
 
         private async Task StartupAsync() {
             try {
-                // Give UI a chance to render before heavy async work
+                // Дадим UI отрисоваться до тяжёлой асинхронной работы
                 await Task.Yield();
 
                 // Самообновление проверяется в UpdateWindow. Здесь не блокируем UI: запускаем загрузку в фоне
                 _ = this.LoadInitialAsync();
             }
             catch (Exception ex) {
-                try {
-                    Core.Logging.Logger.Error(ex, "HomePage.StartupAsync");
-                }
-                catch {
-                }
+                // Страница уже показана — падать нельзя, пользователь увидит пустой список и кнопку «Повторить»
+                Core.Logging.Logger.Error(ex, "HomePage.StartupAsync");
             }
         }
 
         private void DisableMainUi() {
-            try {
-                this.ActionBtn.IsEnabled = false;
-                this.GameList.IsEnabled = false;
-            }
-            catch {
-            }
+            this.ActionBtn.IsEnabled = false;
+            this.GameList.IsEnabled = false;
         }
 
         // Удалена legacy-проверка самообновления: ею занимается UpdateWindow
         private async Task LoadInitialAsync() {
             try {
                 // Показ скелетонов по секциям: Игры видимые, список скрыт до загрузки
-                try {
-                    this.GamesSkeleton.Visibility = System.Windows.Visibility.Visible;
-                }
-                catch {
-                }
-                try {
-                    this.GameList.Visibility = System.Windows.Visibility.Collapsed;
-                }
-                catch {
-                }
+                this.GamesSkeleton.Visibility = System.Windows.Visibility.Visible;
+                this.GameList.Visibility = System.Windows.Visibility.Collapsed;
 
                 // Проверка доступа к папке для игр и предложение выбрать другую при отсутствии прав
-                try {
-                    this.EnsureGamesPathAccessibleOrPrompt();
-                }
-                catch {
-                }
+                HomeDialogs.EnsureGamesPathAccessibleOrPrompt();
 
                 // Быстрая параллельная загрузка игр и новостей лаунчера
                 var gamesUrl = $"{this.BaseApi}/api/games";
@@ -560,22 +275,17 @@ namespace ChillHub.Pages {
                     gamesResp = await this.http.GetFromJsonAsync<GamesResponse>(gamesUrl).ConfigureAwait(false);
                 }
                 catch (Exception ex) {
+                    // Ошибку показываем ниже как empty-state «сервер недоступен», а не как исключение
                     gamesError = ex;
-                    try {
-                        Core.Logging.Logger.Error(ex, $"LoadInitialAsync: GET {gamesUrl}");
-                    }
-                    catch {
-                    }
+                    Core.Logging.Logger.Error(ex, $"LoadInitialAsync: GET {gamesUrl}");
                 }
+
                 try {
                     newsResp = await this.http.GetFromJsonAsync<NewsIndex>(newsUrl).ConfigureAwait(false);
                 }
                 catch (Exception ex) {
-                    try {
-                        Core.Logging.Logger.Error(ex, $"LoadInitialAsync: GET {newsUrl}");
-                    }
-                    catch {
-                    }
+                    // Новости второстепенны: без них лаунчер полностью работоспособен
+                    Core.Logging.Logger.Error(ex, $"LoadInitialAsync: GET {newsUrl}");
                 }
 
                 var games = gamesResp?.Items ?? new List<GameInfo>();
@@ -591,11 +301,7 @@ namespace ChillHub.Pages {
                 await this.DispatcherInvokeAsync(() => this.HideServerUnavailableState());
 
                 // Нормализация URL и локального состояния до биндинга в UI
-                try {
-                    this.NormalizeGameIconsAndLocalState(games);
-                }
-                catch {
-                }
+                this.NormalizeGameIconsAndLocalState(games);
 
                 // Сортировка: установленные сначала, затем порядок из полученного списка
                 var orderMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -636,23 +342,13 @@ namespace ChillHub.Pages {
                         }
 
                         // Скелетоны -> список
-                        try {
-                            this.GamesSkeleton.Visibility = System.Windows.Visibility.Collapsed;
-                        }
-                        catch {
-                        }
-                        try {
-                            this.GameList.Visibility = System.Windows.Visibility.Visible;
-                        }
-                        catch {
-                        }
-                        try {
-                            this.UpdateActionButtonState();
-                        }
-                        catch {
-                        }
+                        this.GamesSkeleton.Visibility = System.Windows.Visibility.Collapsed;
+                        this.GameList.Visibility = System.Windows.Visibility.Visible;
+                        this.UpdateActionButtonState();
                     }
-                    catch {
+                    catch (Exception ex) {
+                        // Список получили, но привязать не смогли: сообщаем и оставляем страницу живой
+                        this.ShowUserError("Не удалось отобразить список игр.", ex, "LoadInitialAsync.BindGames");
                     }
                 });
 
@@ -665,7 +361,9 @@ namespace ChillHub.Pages {
                         this.LauncherNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
                         this.LauncherNewsList.Visibility = System.Windows.Visibility.Visible;
                     }
-                    catch {
+                    catch (Exception ex) {
+                        // Новости — необязательная секция, из-за неё не мешаем работать с играми
+                        Core.Logging.Logger.Error(ex, "LoadInitialAsync.BindLauncherNews");
                     }
                 });
 
@@ -680,17 +378,8 @@ namespace ChillHub.Pages {
                 this.ResetVerifiedStatuses();
 
                 // Сразу обновим состояние кнопки: показать "Проверка…" на время первичной проверки
-                try {
-                    await this.DispatcherInvokeAsync(() => {
-                        try {
-                            this.UpdateActionButtonState();
-                        }
-                        catch {
-                        }
-                    });
-                }
-                catch {
-                }
+                await this.DispatcherInvokeAsync(() => this.UpdateActionButtonState());
+
                 string? priorityGid = null;
                 await this.DispatcherInvokeAsync(() => priorityGid = this.GetSelectedGameId());
                 _ = Task.Run(async () => {
@@ -701,16 +390,12 @@ namespace ChillHub.Pages {
                         await this.DispatcherInvokeAsync(() => gid = this.GetSelectedGameId());
                         if (!string.IsNullOrWhiteSpace(gid)) {
                             await this.DispatcherInvokeAsync(() => this.UpdateSpaceHintFromCache(gid));
-                            await this.DispatcherInvokeAsync(() => {
-                                try {
-                                    this.UpdateActionButtonState();
-                                }
-                                catch {
-                                }
-                            });
+                            await this.DispatcherInvokeAsync(() => this.UpdateActionButtonState());
                         }
                     }
-                    catch {
+                    catch (Exception ex) {
+                        // Фоновая доводка UI после проверки статусов: сбой не должен ронять фоновую задачу
+                        Core.Logging.Logger.Error(ex, "LoadInitialAsync.PostVerifyUi");
                     }
                 });
             }
@@ -734,11 +419,8 @@ namespace ChillHub.Pages {
                 this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
             }
             catch (Exception uiEx) {
-                try {
-                    Core.Logging.Logger.Error(uiEx, "HomePage.ShowServerUnavailableState");
-                }
-                catch {
-                }
+                // Даже если не удалось перерисовать секции, сообщение об ошибке ниже показать обязаны
+                Core.Logging.Logger.Error(uiEx, "HomePage.ShowServerUnavailableState");
             }
 
             this.ShowUserError("Не удалось связаться с сервером.", ex, "HomePage.LoadInitialAsync");
@@ -746,17 +428,13 @@ namespace ChillHub.Pages {
                 this.SetActionMode(ActionMode.Retry);
                 this.ActionBtn.IsEnabled = false; // действия недоступны: список игр пуст
             }
-            catch {
+            catch (Exception btnEx) {
+                Core.Logging.Logger.Error(btnEx, "HomePage.ShowServerUnavailableState.ActionButton");
             }
         }
 
         private void HideServerUnavailableState() {
-            try {
-                this.GamesEmptyState.Visibility = System.Windows.Visibility.Collapsed;
-            }
-            catch {
-            }
-
+            this.GamesEmptyState.Visibility = System.Windows.Visibility.Collapsed;
             this.ClearErrorDetails();
         }
 
@@ -783,13 +461,7 @@ namespace ChillHub.Pages {
                     return;
                 }
 
-                await this.DispatcherInvokeAsync(() => {
-                    try {
-                        this.GamesVerifyIndicator.Visibility = Visibility.Visible;
-                    }
-                    catch {
-                    }
-                });
+                await this.DispatcherInvokeAsync(() => this.GamesVerifyIndicator.Visibility = Visibility.Visible);
 
                 // Лёгкий прогресс: processed/total в StatusText, чтобы пользователь видел процесс
                 int total = this.games.Count;
@@ -799,17 +471,7 @@ namespace ChillHub.Pages {
                 var lastUi = System.Diagnostics.Stopwatch.StartNew();
 
                 // Явно покажем старт проверки
-                try {
-                    await this.DispatcherInvokeAsync(() => {
-                        try {
-                            this.StatusText.Text = $"Проверка игр: {processed}/{total}";
-                        }
-                        catch {
-                        }
-                    });
-                }
-                catch {
-                }
+                await this.DispatcherInvokeAsync(() => this.StatusText.Text = $"Проверка игр: {processed}/{total}");
 
                 // Сначала — выбранная игра, чтобы кнопка действия стала доступной как можно раньше
                 var pending = new List<GameInfo>(this.games);
@@ -821,22 +483,15 @@ namespace ChillHub.Pages {
                             await this.VerifyGameStatusAsync(first);
                         }
                         catch (Exception ex) {
-                            try {
-                                Core.Logging.Logger.Error(ex, $"VerifyGameStatusAsync(priority {first.GameId})");
-                            }
-                            catch {
-                            }
+                            // Одна игра не проверилась — остальные проверяем дальше, статус этой останется прежним
+                            Core.Logging.Logger.Error(ex, $"VerifyGameStatusAsync(priority {first.GameId})");
                         }
 
                         Interlocked.Increment(ref processed);
                         await this.DispatcherInvokeAsync(() => {
-                            try {
-                                this.GameList.Items.Refresh();
-                                this.UpdateActionButtonState();
-                                this.StatusText.Text = $"Проверка игр: {processed}/{total}";
-                            }
-                            catch {
-                            }
+                            this.GameList.Items.Refresh();
+                            this.UpdateActionButtonState();
+                            this.StatusText.Text = $"Проверка игр: {processed}/{total}";
                         });
                     }
                 }
@@ -849,43 +504,32 @@ namespace ChillHub.Pages {
                             await this.VerifyGameStatusAsync(g);
                         }
                         catch (Exception ex) {
-                            try {
-                                Core.Logging.Logger.Error(ex, $"VerifyGameStatusAsync({g.GameId})");
-                            }
-                            catch {
-                            }
+                            Core.Logging.Logger.Error(ex, $"VerifyGameStatusAsync({g.GameId})");
                         }
                         finally {
                             Interlocked.Increment(ref processed);
                             try {
                                 // Бейдж проверенной игры обновляем сразу, чтобы статусы появлялись по мере готовности
                                 await this.DispatcherInvokeAsync(() => {
-                                    try {
-                                        this.GameList.Items.Refresh();
+                                    this.GameList.Items.Refresh();
 
-                                        // Если это выбранная игра — кнопка действия должна разблокироваться немедленно
-                                        if (string.Equals(this.GetSelectedGameId(), g.GameId, StringComparison.OrdinalIgnoreCase)) {
-                                            this.UpdateActionButtonState();
-                                        }
-                                    }
-                                    catch {
+                                    // Если это выбранная игра — кнопка действия должна разблокироваться немедленно
+                                    if (string.Equals(this.GetSelectedGameId(), g.GameId, StringComparison.OrdinalIgnoreCase)) {
+                                        this.UpdateActionButtonState();
                                     }
                                 });
 
                                 // Обновляем текст прогресса не слишком часто (не чаще ~5 раз/сек)
                                 if (lastUi.ElapsedMilliseconds >= 200) {
                                     lastUi.Restart();
-                                    await this.DispatcherInvokeAsync(() => {
-                                        try {
-                                            this.StatusText.Text = $"Проверка игр: {processed}/{total}";
-                                        }
-                                        catch {
-                                        }
-                                    });
+                                    await this.DispatcherInvokeAsync(() => this.StatusText.Text = $"Проверка игр: {processed}/{total}");
                                 }
                             }
-                            catch {
+                            catch (Exception exUi) {
+                                // Обновление индикаторов не должно ронять фоновую проверку остальных игр
+                                Core.Logging.Logger.Error(exUi, "VerifyAllGamesStatusesAsync.ProgressUi");
                             }
+
                             sem.Release();
                         }
                     });
@@ -899,7 +543,7 @@ namespace ChillHub.Pages {
                 try {
                     var selectedId = this.GetSelectedGameId();
 
-                    // Preserve registry order for non-installed, keep installed first
+                    // Порядок из реестра сохраняем для неустановленных, установленные держим сверху
                     var order2 = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
                     for (int i = 0; i < this.games.Count; i++) {
                         var id = this.games[i]?.GameId ?? string.Empty;
@@ -913,7 +557,8 @@ namespace ChillHub.Pages {
                         .ThenBy(x => order2.TryGetValue(x.GameId ?? string.Empty, out var idx) ? idx : int.MaxValue)
                         .ToList();
                     await this.DispatcherInvokeAsync(() => {
-                        this.GameList.ItemsSource = this.games; this.GameList.Items.Refresh();
+                        this.GameList.ItemsSource = this.games;
+                        this.GameList.Items.Refresh();
                         if (!string.IsNullOrWhiteSpace(selectedId)) {
                             var idx = this.games.FindIndex(x => x.GameId == selectedId);
                             if (idx >= 0) {
@@ -922,10 +567,14 @@ namespace ChillHub.Pages {
                         }
                     });
                 }
-                catch {
+                catch (Exception ex) {
+                    // Пересортировка — косметика: статусы уже проверены и показаны
+                    Core.Logging.Logger.Error(ex, "VerifyAllGamesStatusesAsync.Reorder");
                 }
             }
-            catch {
+            catch (Exception ex) {
+                // Проверка статусов фоновая: не показываем модальных ошибок, но фиксируем в логе
+                Core.Logging.Logger.Error(ex, "VerifyAllGamesStatusesAsync");
             }
             finally {
                 // Подстраховка: после завершения прохода статус любой игры считается известным,
@@ -936,34 +585,19 @@ namespace ChillHub.Pages {
                     }
                 }
                 catch (Exception ex) {
-                    try {
-                        Core.Logging.Logger.Error(ex, "VerifyAllGamesStatusesAsync.finally");
-                    }
-                    catch {
-                    }
+                    Core.Logging.Logger.Error(ex, "VerifyAllGamesStatusesAsync.finally");
                 }
 
                 await this.DispatcherInvokeAsync(() => {
-                    try {
-                        this.GamesVerifyIndicator.Visibility = Visibility.Collapsed;
-                    }
-                    catch {
-                    }
+                    this.GamesVerifyIndicator.Visibility = Visibility.Collapsed;
 
                     // После завершения всегда выставляем финальный статус, чтобы не зависало "Проверка игр X/Y".
                     // Сообщение об ошибке при этом не затираем — оно важнее.
-                    try {
-                        if (string.IsNullOrWhiteSpace(this.lastErrorDetails)) {
-                            this.StatusText.Text = "Готов";
-                        }
+                    if (string.IsNullOrWhiteSpace(this.lastErrorDetails)) {
+                        this.StatusText.Text = "Готов";
                     }
-                    catch {
-                    }
-                    try {
-                        this.UpdateActionButtonState();
-                    }
-                    catch {
-                    }
+
+                    this.UpdateActionButtonState();
                 });
             }
         }
@@ -990,11 +624,7 @@ namespace ChillHub.Pages {
                     // Игру нельзя считать готовой — предлагаем докатить обновление.
                     game.IsInstalled = hasLocalFiles;
                     game.NeedsUpdate = true;
-                    try {
-                        Core.Logging.Logger.Warn($"VerifyGameStatusAsync gid={gid} найден маркер незавершённого обновления: {ChillHub.Core.Sync.SimpleSyncService.ReadUpdateMarker(localRoot)}");
-                    }
-                    catch {
-                    }
+                    Core.Logging.Logger.Warn($"VerifyGameStatusAsync gid={gid} найден маркер незавершённого обновления: {ChillHub.Core.Sync.SimpleSyncService.ReadUpdateMarker(localRoot)}");
 
                     return;
                 }
@@ -1003,11 +633,7 @@ namespace ChillHub.Pages {
                     // Нет эталона для сравнения — считаем не установленной, если нет локальных файлов; иначе установленной без статуса обновления
                     game.IsInstalled = hasLocalFiles;
                     game.NeedsUpdate = false; // нет способа сравнить
-                    try {
-                        Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} latest=<none> hasLocalFiles={hasLocalFiles} -> IsInstalled={game.IsInstalled} NeedsUpdate={game.NeedsUpdate}");
-                    }
-                    catch {
-                    }
+                    Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} latest=<none> hasLocalFiles={hasLocalFiles} -> IsInstalled={game.IsInstalled} NeedsUpdate={game.NeedsUpdate}");
 
                     // Отложим Refresh до завершения всех проверок, чтобы не трясти UI на каждую игру
                     return;
@@ -1015,33 +641,15 @@ namespace ChillHub.Pages {
 
                 // Получаем манифест latest и план сравнения
                 var manifestUrl = $"{this.BaseApi}/manifests/{gid}/{latest}.json";
-                try {
-                    Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} fetching manifest {manifestUrl}");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} fetching manifest {manifestUrl}");
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, CancellationToken.None);
                 var contentBase = $"{this.BaseApi}/content/{gid}/{latest}/files";
                 var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, CancellationToken.None);
-                try {
-                    Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
-                }
-                catch {
-                }
-                try {
-                    LogPlanDownloads(gid, "verify", plan, localRoot);
-                }
-                catch {
-                }
+                Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
+                LogPlanDownloads(gid, "verify", plan, localRoot);
 
                 // Обновим кэш требуемого объёма скачивания
-                try {
-                    lock (this.spaceCacheLock) {
-                        this.neededBytesCache[gid] = plan.TotalDownloadBytes;
-                    }
-                }
-                catch {
-                }
+                this.spaceHint.Remember(gid, plan.TotalDownloadBytes);
 
                 // Для статуса учитываем только недостающие/изменённые файлы.
                 // Удаления (лишние локальные файлы, например логи/кэш) не считаем признаком "требуется обновление".
@@ -1060,21 +668,13 @@ namespace ChillHub.Pages {
                     game.NeedsUpdate = true;
                 }
 
-                try {
-                    Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} result: IsInstalled={game.IsInstalled} NeedsUpdate={game.NeedsUpdate}");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} result: IsInstalled={game.IsInstalled} NeedsUpdate={game.NeedsUpdate}");
 
                 // Отложим Refresh до завершения всех проверок
             }
             catch (Exception ex) {
                 // В случае ошибки проверки — не меняем текущий статус, только логируем
-                try {
-                    Core.Logging.Logger.Error(ex, $"VerifyGameStatusAsync({game?.GameId})");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Error(ex, $"VerifyGameStatusAsync({game?.GameId})");
             }
             finally {
                 // Статус игры считается известным даже при ошибке проверки:
@@ -1083,48 +683,6 @@ namespace ChillHub.Pages {
             }
         }
 
-        private static bool HasAnyLocalGameFiles(string localRoot) {
-            try {
-                if (string.IsNullOrWhiteSpace(localRoot) || !Directory.Exists(localRoot)) {
-                    return false;
-                }
-
-                foreach (var path in Directory.EnumerateFiles(localRoot, "*", SearchOption.AllDirectories)) {
-                    var rel = Path.GetRelativePath(localRoot, path).Replace('\\', '/');
-                    if (rel.StartsWith(".staging/", StringComparison.OrdinalIgnoreCase)) {
-                        continue;
-                    }
-
-                    if (string.Equals(rel, ".version", StringComparison.OrdinalIgnoreCase)) {
-                        continue;
-                    }
-
-                    if (string.Equals(rel, ChillHub.Core.Sync.SimpleSyncService.UpdateMarkerFileName, StringComparison.OrdinalIgnoreCase)) {
-                        // Маркер незавершённого обновления — служебный файл, не считаем его файлом игры
-                        continue;
-                    }
-
-                    return true; // нашли хотя бы один полезный файл
-                }
-            }
-            catch {
-            }
-            return false;
-        }
-
-        // Путь к локальной папке игры
-        private static string GameLocalRoot(string gameId) => System.IO.Path.Combine(ConfigService.Current.GamesPath, gameId ?? string.Empty);
-
-        // Осталось ли от прерванного обновления полусобранное состояние игры (C2)
-        private static bool HasUnfinishedUpdate(string? gameId) {
-            if (string.IsNullOrWhiteSpace(gameId)) {
-                return false;
-            }
-
-            return ChillHub.Core.Sync.SimpleSyncService.HasUpdateMarker(GameLocalRoot(gameId));
-        }
-
-        // --- Статусы проверки по играм (C4) ---
         private bool IsGameStatusKnown(string? gameId) {
             if (string.IsNullOrWhiteSpace(gameId)) {
                 return true; // нет выбора — нечего блокировать
@@ -1161,7 +719,9 @@ namespace ChillHub.Pages {
                     Core.Logging.Logger.Error($"{context}: {userMessage}");
                 }
             }
-            catch {
+            catch (Exception logEx) {
+                // Сам обработчик ошибок бросать не должен: показать сообщение пользователю важнее записи в лог
+                System.Diagnostics.Debug.WriteLine("ShowUserError: не удалось записать лог: " + logEx.Message);
             }
 
             var details = ex?.Message ?? string.Empty;
@@ -1173,47 +733,45 @@ namespace ChillHub.Pages {
                     : "Подробнее: " + this.lastErrorDetails;
             }
             catch (Exception uiEx) {
-                try {
-                    Core.Logging.Logger.Error(uiEx, "HomePage.ShowUserError");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Error(uiEx, "HomePage.ShowUserError");
             }
         }
 
         // Сброс подсказки с техническими деталями при переходе к обычному статусу
         private void ClearErrorDetails() {
             this.lastErrorDetails = string.Empty;
-            try {
-                this.StatusText.ToolTip = null;
-            }
-            catch {
-            }
+            this.StatusText.ToolTip = null;
         }
 
         private Task DispatcherInvokeAsync(Action action) {
+            Dispatcher? dispatcher;
             try {
-                var dispatcher = Application.Current?.Dispatcher;
-                if (dispatcher == null || dispatcher.CheckAccess()) {
-                    action();
-                    return Task.CompletedTask;
-                }
-                var tcs = new TaskCompletionSource<object?>();
-                dispatcher.BeginInvoke(new Action(() => {
-                    try {
-                        action();
-                        tcs.TrySetResult(null);
-                    }
-                    catch (Exception ex) {
-                        tcs.TrySetException(ex);
-                    }
-                }));
-                return tcs.Task;
+                dispatcher = Application.Current?.Dispatcher;
             }
-            catch {
+            catch (Exception ex) {
+                // Приложение уже выгружается — выполним действие прямо здесь.
+                // Важно: сам action() наружу не оборачиваем, иначе при его падении
+                // он выполнялся бы дважды (старое поведение этого метода).
+                Core.Logging.Logger.Warn($"DispatcherInvokeAsync: диспетчер недоступен: {ex.Message}");
+                dispatcher = null;
+            }
+
+            if (dispatcher == null || dispatcher.CheckAccess()) {
                 action();
                 return Task.CompletedTask;
             }
+
+            var tcs = new TaskCompletionSource<object?>();
+            dispatcher.BeginInvoke(new Action(() => {
+                try {
+                    action();
+                    tcs.TrySetResult(null);
+                }
+                catch (Exception ex) {
+                    tcs.TrySetException(ex);
+                }
+            }));
+            return tcs.Task;
         }
 
         // Обновляет заголовок секции новостей игры: "Новости (название игры)"
@@ -1229,108 +787,11 @@ namespace ChillHub.Pages {
                     }
                 }
 
-                try {
-                    this.GameNewsHeader.Text = title;
-                }
-                catch {
-                }
+                this.GameNewsHeader.Text = title;
             }
-            catch {
-            }
-        }
-
-        // Проверяет, доступна ли для записи папка с играми. Если нет прав (например, D:\\Games\\ChillHub под ограниченной учётной записью),
-        // предлагает пользователю выбрать другую папку и сохраняет выбор в конфиг.
-        private bool EnsureGamesPathAccessibleOrPrompt() {
-            try {
-                var cfg = ConfigService.Current;
-                var path = cfg.GamesPath;
-                if (string.IsNullOrWhiteSpace(path)) {
-                    path = AppConfig.DefaultGamesPath();
-                }
-
-                // Попробуем создать папку и временный файл для проверки записи
-                try {
-                    Directory.CreateDirectory(path);
-                }
-                catch {
-                }
-                var testFile = System.IO.Path.Combine(path, ".write_test.tmp");
-                try {
-                    using (var fs = new FileStream(testFile, FileMode.Create, FileAccess.Write, FileShare.None)) {
-                        fs.WriteByte(0);
-                    }
-
-                    try {
-                        File.Delete(testFile);
-                    }
-                    catch {
-                    }
-                    return true; // доступ есть
-                }
-                catch (UnauthorizedAccessException) {
-                    // Нет прав: предложим выбрать другую папку
-                }
-                catch (IOException ioex) {
-                    // Некоторые IO ошибки тоже могут означать запрет записи (например, Access denied)
-                    var msg = ioex.Message ?? string.Empty;
-                    if (!msg.Contains("доступ", StringComparison.OrdinalIgnoreCase) &&
-                        !msg.Contains("access", StringComparison.OrdinalIgnoreCase)) {
-                        // Не похоже на отказ в доступе — не беспокоим пользователя
-                        return true;
-                    }
-
-                    // Иначе упадём в диалог выбора
-                }
-
-                var currentPath = path;
-                var question = $"Нет доступа к папке для игр:\n{currentPath}\n\nВыбрать другую папку сейчас?";
-                var res = MessageBox.Show(question, "Нет доступа", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-                if (res == MessageBoxResult.Yes) {
-                    try {
-                        using (var dlg = new System.Windows.Forms.FolderBrowserDialog()) {
-                            dlg.Description = "Выберите папку для игр";
-                            dlg.ShowNewFolderButton = true;
-                            dlg.SelectedPath = AppConfig.DefaultGamesPath();
-                            var dres = dlg.ShowDialog();
-                            if (dres == System.Windows.Forms.DialogResult.OK) {
-                                var newPath = dlg.SelectedPath;
-                                try {
-                                    Directory.CreateDirectory(newPath);
-                                }
-                                catch {
-                                }
-
-                                // Повторная быстрая проверка записи
-                                var test2 = System.IO.Path.Combine(newPath, ".write_test.tmp");
-                                try {
-                                    using (var fs = new FileStream(test2, FileMode.Create, FileAccess.Write, FileShare.None)) {
-                                        fs.WriteByte(0);
-                                    }
-
-                                    try {
-                                        File.Delete(test2);
-                                    }
-                                    catch {
-                                    }
-                                    cfg.GamesPath = newPath;
-                                    ConfigService.Save(cfg);
-                                    return true;
-                                }
-                                catch {
-                                    MessageBox.Show($"Нет доступа к выбранной папке: {newPath}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
-                                }
-                            }
-                        }
-                    }
-                    catch {
-                    }
-                }
-
-                return false;
-            }
-            catch {
-                return true;
+            catch (Exception ex) {
+                // Заголовок секции новостей — косметика, оставляем прежний текст
+                Core.Logging.Logger.Warn($"UpdateGameNewsHeader: {ex.Message}");
             }
         }
 
@@ -1350,13 +811,9 @@ namespace ChillHub.Pages {
                 var game = this.games.FirstOrDefault(g => g.GameId == gameId);
 
                 // Чтение версии с диска выполняем в фоновом потоке
-                var localVer = await Task.Run(() => this.ReadLocalVersion(gameId));
+                var localVer = await Task.Run(() => ReadLocalVersion(gameId));
                 var localTrimmed = string.IsNullOrWhiteSpace(localVer) ? string.Empty : localVer.Trim();
-                try {
-                    Core.Logging.Logger.Info($"LoadBuildsAndGameNewsAsync gid={gameId} local='{localTrimmed}'");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Info($"LoadBuildsAndGameNewsAsync gid={gameId} local='{localTrimmed}'");
                 if (game != null) {
                     game.IsInstalled = !string.IsNullOrWhiteSpace(localTrimmed);
                     game.InstalledVersion = localTrimmed ?? string.Empty;
@@ -1374,19 +831,11 @@ namespace ChillHub.Pages {
                 this.GameNewsList.Visibility = System.Windows.Visibility.Visible;
 
                 // После загрузки — обновим заголовок (на случай, если он ещё не обновлён)
-                try {
-                    this.UpdateGameNewsHeader();
-                }
-                catch {
-                }
+                this.UpdateGameNewsHeader();
             }
             catch (Exception ex) {
                 this.StatusText.Text = $"Ошибка загрузки сборок/новостей игры (GET {this.BaseApi}/api/games/{gameId}/builds, /news/games/{gameId}/index.json): {ex.Message}";
-                try {
-                    Core.Logging.Logger.Error(ex, "HomePage.LoadBuildsAndGameNewsAsync");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Error(ex, "HomePage.LoadBuildsAndGameNewsAsync");
 
                 // В случае ошибки не оставляем старые новости от предыдущей игры
                 this.GameNewsList.ItemsSource = Array.Empty<NewsItem>();
@@ -1394,11 +843,7 @@ namespace ChillHub.Pages {
                 this.GameNewsList.Visibility = System.Windows.Visibility.Visible;
 
                 // Обновим заголовок до дефолтного/актуального
-                try {
-                    this.UpdateGameNewsHeader();
-                }
-                catch {
-                }
+                this.UpdateGameNewsHeader();
             }
         }
 
@@ -1419,11 +864,7 @@ namespace ChillHub.Pages {
             }
             catch (Exception ex) {
                 this.StatusText.Text = $"Не удалось обновить новости лаунчера: {ex.Message}";
-                try {
-                    Core.Logging.Logger.Error(ex, "HomePage.ReloadLauncherNewsAsync");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Error(ex, "HomePage.ReloadLauncherNewsAsync");
             }
             finally {
                 this.LauncherNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
@@ -1453,11 +894,7 @@ namespace ChillHub.Pages {
             }
             catch (Exception ex) {
                 this.StatusText.Text = $"Не удалось обновить новости игры: {ex.Message}";
-                try {
-                    Core.Logging.Logger.Error(ex, "HomePage.ReloadGameNewsAsync");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Error(ex, "HomePage.ReloadGameNewsAsync");
             }
             finally {
                 this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
@@ -1478,7 +915,7 @@ namespace ChillHub.Pages {
 
                 // Обновим локальный статус выбранной игры для списка
                 var g = this.games.FirstOrDefault(x => x.GameId == gid);
-                var localVer = await Task.Run(() => this.ReadLocalVersion(gid));
+                var localVer = await Task.Run(() => ReadLocalVersion(gid));
                 var localTrimmed = string.IsNullOrWhiteSpace(localVer) ? string.Empty : localVer.Trim();
                 if (g != null) {
                     g.IsInstalled = !string.IsNullOrWhiteSpace(localTrimmed);
@@ -1488,11 +925,7 @@ namespace ChillHub.Pages {
                 this.GameList.Items.Refresh();
 
                 // Обновим заголовок новостей игры под выбранную игру
-                try {
-                    this.UpdateGameNewsHeader();
-                }
-                catch {
-                }
+                this.UpdateGameNewsHeader();
 
                 // Показать имеющийся кэш сразу (мгновенно), затем уточнить расчётом
                 this.UpdateSpaceHintFromCache(gid);
@@ -1505,11 +938,7 @@ namespace ChillHub.Pages {
                 }
 
                 // Всегда обновляем состояние кнопки при смене выбора
-                try {
-                    this.UpdateActionButtonState();
-                }
-                catch {
-                }
+                this.UpdateActionButtonState();
             }
             else {
                 if (!this.isUpdating) {
@@ -1521,69 +950,28 @@ namespace ChillHub.Pages {
                 }
 
                 // Сброс заголовка при отсутствии выбранной игры
-                try {
-                    this.UpdateGameNewsHeader();
-                }
-                catch {
-                }
+                this.UpdateGameNewsHeader();
             }
         }
 
         // Показывает строку вида: "Нужно: <size> (<available> доступно)", если для установки/обновления требуется загрузка
         private async Task UpdateSpaceHintAsync(string gid) {
             try {
-                if (this.isUpdating) {
-                    return; // не вмешиваемся в активный процесс
-                }
-
-                // Если игра установлена и не требует обновления — показываем соответствующее сообщение и выходим
-                var g = this.games?.FirstOrDefault(x => string.Equals(x.GameId, gid, StringComparison.OrdinalIgnoreCase));
-                if (g != null && g.IsInstalled && !g.NeedsUpdate) {
-                    this.FilesSizeText.Text = "Последняя версия игры уже установлена";
+                if (!this.TryShowTrivialSpaceHint(gid)) {
                     return;
                 }
 
-                if (string.IsNullOrWhiteSpace(gid)) {
+                // Есть готовая оценка — сеть не трогаем
+                if (this.spaceHint.TryGet(gid, out _)) {
+                    this.FilesSizeText.Text = this.spaceHint.BuildTextFromCache(gid);
                     return;
                 }
 
-                // Сначала попытаемся взять кэш
-                long cachedNeed = -1;
-                try {
-                    lock (this.spaceCacheLock) {
-                        if (this.neededBytesCache.TryGetValue(gid, out var v)) {
-                            cachedNeed = v;
-                        }
-                    }
-                }
-                catch {
-                }
-                if (cachedNeed >= 0) {
-                    long haveFast = 0;
-                    try {
-                        var localRootFast = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
-                        var rootFast = Path.GetPathRoot(Path.GetFullPath(localRootFast)) ?? localRootFast;
-                        var driveFast = new DriveInfo(rootFast);
-                        haveFast = driveFast.AvailableFreeSpace;
-                    }
-                    catch {
-                    }
-                    if (cachedNeed > 0) {
-                        this.FilesSizeText.Text = $"Нужно: {FormatSize(cachedNeed)} ({FormatSize(haveFast)} доступно)";
-                    }
-                    else {
-                        this.FilesSizeText.Text = string.Empty;
-                    }
-
-                    return;
-                }
-                // Определим версию: используем latest из списка игр или первый элемент из _builds
+                // Версия: latest из списка игр, иначе первая из списка сборок
                 var game = this.games?.FirstOrDefault(g => g.GameId == gid);
                 var version = game?.LatestVersion;
-                if (string.IsNullOrWhiteSpace(version)) {
-                    if (this.builds != null && this.builds.Count > 0) {
-                        version = this.builds[0];
-                    }
+                if (string.IsNullOrWhiteSpace(version) && this.builds != null && this.builds.Count > 0) {
+                    version = this.builds[0];
                 }
 
                 if (string.IsNullOrWhiteSpace(version)) {
@@ -1593,83 +981,61 @@ namespace ChillHub.Pages {
 
                 var manifestUrl = $"{this.BaseApi}/manifests/{gid}/{version}.json";
                 var contentBase = $"{this.BaseApi}/content/{gid}/{version}/files";
-                var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
+                var localRoot = GameLocalRoot(gid);
 
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, CancellationToken.None);
                 var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, CancellationToken.None);
 
-                long need = plan.TotalDownloadBytes;
-                try {
-                    lock (this.spaceCacheLock) {
-                        this.neededBytesCache[gid] = need;
-                    }
-                }
-                catch {
-                }
-                long have = 0;
-                try {
-                    var root = Path.GetPathRoot(Path.GetFullPath(localRoot)) ?? localRoot;
-                    var drive = new DriveInfo(root);
-                    have = drive.AvailableFreeSpace;
-                }
-                catch {
-                }
-
-                if (need > 0) {
-                    this.FilesSizeText.Text = $"Нужно: {FormatSize(need)} ({FormatSize(have)} доступно)";
-                }
-                else {
-                    this.FilesSizeText.Text = string.Empty;
-                }
+                this.spaceHint.Remember(gid, plan.TotalDownloadBytes);
+                this.FilesSizeText.Text = SpaceHint.BuildText(plan.TotalDownloadBytes, GetAvailableFreeSpaceFor(gid));
             }
-            catch {
-                // В случае ошибки расчёта не ломаем UI
-                try {
-                    this.FilesSizeText.Text = string.Empty;
-                }
-                catch {
-                }
+            catch (Exception ex) {
+                // Подсказка о размере не критична: сервер мог не отдать манифест — просто прячем строку.
+                Core.Logging.Logger.Warn($"UpdateSpaceHint gid={gid}: {ex.Message}");
+                this.SetFilesSizeTextSafe(string.Empty);
             }
         }
 
         // Обновляет FilesSizeText только из кэша, не выполняя сетевых запросов
         private void UpdateSpaceHintFromCache(string gid) {
             try {
-                if (this.isUpdating) {
+                if (!this.TryShowTrivialSpaceHint(gid)) {
                     return;
                 }
 
-                // Если игра установлена и не требует обновления — показываем соответствующее сообщение и выходим
-                var g = this.games?.FirstOrDefault(x => string.Equals(x.GameId, gid, StringComparison.OrdinalIgnoreCase));
-                if (g != null && g.IsInstalled && !g.NeedsUpdate) {
-                    this.FilesSizeText.Text = "Последняя версия игры уже установлена";
-                    return;
-                }
-
-                if (string.IsNullOrWhiteSpace(gid)) {
-                    return;
-                }
-
-                long need;
-                lock (this.spaceCacheLock) {
-                    if (!this.neededBytesCache.TryGetValue(gid, out need)) {
-                        this.FilesSizeText.Text = string.Empty;
-                        return;
-                    }
-                }
-
-                long have = 0;
-                try {
-                    var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
-                    var root = Path.GetPathRoot(Path.GetFullPath(localRoot)) ?? localRoot;
-                    var drive = new DriveInfo(root);
-                    have = drive.AvailableFreeSpace;
-                }
-                catch {
-                }
-                this.FilesSizeText.Text = (need > 0) ? $"Нужно: {FormatSize(need)} ({FormatSize(have)} доступно)" : string.Empty;
+                this.FilesSizeText.Text = this.spaceHint.BuildTextFromCache(gid);
             }
-            catch {
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"UpdateSpaceHintFromCache gid={gid}: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Общая часть обеих подсказок: во время активной установки не вмешиваемся,
+        /// для актуально установленной игры показываем готовый текст.
+        /// Возвращает true, если вызывающему коду ещё нужно посчитать размер.
+        /// </summary>
+        private bool TryShowTrivialSpaceHint(string gid) {
+            if (this.isUpdating) {
+                return false; // не вмешиваемся в активный процесс
+            }
+
+            var g = this.games?.FirstOrDefault(x => string.Equals(x.GameId, gid, StringComparison.OrdinalIgnoreCase));
+            if (g != null && g.IsInstalled && !g.NeedsUpdate) {
+                this.FilesSizeText.Text = "Последняя версия игры уже установлена";
+                return false;
+            }
+
+            return !string.IsNullOrWhiteSpace(gid);
+        }
+
+        // Сброс строки размера не должен сам стать источником исключения в обработчике ошибок
+        private void SetFilesSizeTextSafe(string text) {
+            try {
+                this.FilesSizeText.Text = text;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"FilesSizeText недоступен: {ex.Message}");
             }
         }
 
@@ -1716,16 +1082,8 @@ namespace ChillHub.Pages {
             this.ResetVerifiedStatuses();
             this.ClearErrorDetails();
             try {
-                try {
-                    this.GamesSkeleton.Visibility = Visibility.Visible;
-                }
-                catch {
-                }
-                try {
-                    this.GameList.Visibility = Visibility.Collapsed;
-                }
-                catch {
-                }
+                this.GamesSkeleton.Visibility = Visibility.Visible;
+                this.GameList.Visibility = Visibility.Collapsed;
 
                 var gamesUrl = $"{this.BaseApi}/api/games";
                 var gamesResp = await this.http.GetFromJsonAsync<GamesResponse>(gamesUrl);
@@ -1733,7 +1091,7 @@ namespace ChillHub.Pages {
                 this.HideServerUnavailableState();
                 this.NormalizeGameIconsAndLocalState(this.games);
 
-                // Sorting: installed first, then by registry/API order received
+                // Сортировка: установленные сначала, затем порядок, полученный от API
                 var orderR = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
                 for (int i = 0; i < this.games.Count; i++) {
                     var id = this.games[i]?.GameId ?? string.Empty;
@@ -1749,15 +1107,11 @@ namespace ChillHub.Pages {
                 this.GameList.ItemsSource = this.games;
 
                 // Восстановим выбранную игру, если она осталась в списке
-                try {
-                    if (!string.IsNullOrWhiteSpace(prevSelectedId)) {
-                        var idxSel = this.games.FindIndex(g => string.Equals(g.GameId, prevSelectedId, StringComparison.OrdinalIgnoreCase));
-                        if (idxSel >= 0) {
-                            this.GameList.SelectedIndex = idxSel;
-                        }
+                if (!string.IsNullOrWhiteSpace(prevSelectedId)) {
+                    var idxSel = this.games.FindIndex(g => string.Equals(g.GameId, prevSelectedId, StringComparison.OrdinalIgnoreCase));
+                    if (idxSel >= 0) {
+                        this.GameList.SelectedIndex = idxSel;
                     }
-                }
-                catch {
                 }
             }
             catch (Exception ex) {
@@ -1770,32 +1124,24 @@ namespace ChillHub.Pages {
                 }
             }
             finally {
+                // finally выполняется без внешнего try: любой сбой здесь уронил бы async void-обработчик
                 try {
                     this.GamesSkeleton.Visibility = Visibility.Collapsed;
-                }
-                catch {
-                }
-                try {
+
                     // Список показываем только если не активно пустое состояние «сервер недоступен»
                     if (this.GamesEmptyState.Visibility != Visibility.Visible) {
                         this.GameList.Visibility = Visibility.Visible;
                     }
-                }
-                catch {
-                }
-                try {
+
                     this.UpdateActionButtonState();
                 }
-                catch {
+                catch (Exception exUi) {
+                    Core.Logging.Logger.Error(exUi, "RefreshGames_Click.finally");
                 }
             }
 
             // Запустить асинхронную проверку статусов по манифесту
-            try {
-                this.GamesVerifyIndicator.Visibility = Visibility.Visible;
-            }
-            catch {
-            }
+            this.GamesVerifyIndicator.Visibility = Visibility.Visible;
             await this.VerifyAllGamesStatusesAsync(this.GetSelectedGameId());
 
             // После обновления статусов — освежим подсказку по текущей игре из кэша
@@ -1805,11 +1151,7 @@ namespace ChillHub.Pages {
                 if (string.IsNullOrWhiteSpace(gid) && !string.IsNullOrWhiteSpace(prevSelectedId)) {
                     var idxSel2 = this.games.FindIndex(g => string.Equals(g.GameId, prevSelectedId, StringComparison.OrdinalIgnoreCase));
                     if (idxSel2 >= 0) {
-                        try {
-                            this.GameList.SelectedIndex = idxSel2;
-                        }
-                        catch {
-                        }
+                        this.GameList.SelectedIndex = idxSel2;
                         gid = prevSelectedId;
                     }
                 }
@@ -1817,14 +1159,12 @@ namespace ChillHub.Pages {
                 if (!string.IsNullOrWhiteSpace(gid)) {
                     // Выполним полный пересчёт требуемого места, чтобы сразу увидеть оценку
                     await this.UpdateSpaceHintAsync(gid);
-                    try {
-                        this.UpdateActionButtonState();
-                    }
-                    catch {
-                    }
+                    this.UpdateActionButtonState();
                 }
             }
-            catch {
+            catch (Exception ex) {
+                // Список уже обновлён; подсказка о размере — необязательная доводка
+                Core.Logging.Logger.Error(ex, "RefreshGames_Click.PostVerify");
             }
         }
 
@@ -1837,11 +1177,7 @@ namespace ChillHub.Pages {
         }
 
         private async void RefreshStatuses_Click(object sender, RoutedEventArgs e) {
-            try {
-                this.GamesVerifyIndicator.Visibility = Visibility.Visible;
-            }
-            catch {
-            }
+            this.GamesVerifyIndicator.Visibility = Visibility.Visible;
 
             var selectedId = this.GetSelectedGameId();
             this.ResetVerifiedStatuses();
@@ -1864,7 +1200,9 @@ namespace ChillHub.Pages {
                     this.UpdateProgress.IsIndeterminate = true;
                     this.SetActionMode(ActionMode.Checking);
                 }
-                catch {
+                catch (Exception ex) {
+                    // Показать «Проверка…» не вышло — всё равно выходим, действие пока недоступно
+                    Core.Logging.Logger.Error(ex, "ActionBtn_Click.CheckingState");
                 }
                 return;
             }
@@ -1907,11 +1245,7 @@ namespace ChillHub.Pages {
                     this.StatusText.Text = "Нет доступных сборок для установки";
                     return;
                 }
-                try {
-                    Core.Logging.Logger.Info($"StartUpdateAsync gid={gid} version={version}");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Info($"StartUpdateAsync gid={gid} version={version}");
 
                 this.isUpdating = true;
                 this.hasUpdateError = false;
@@ -1930,26 +1264,14 @@ namespace ChillHub.Pages {
                 this.UpdateProgress.Value = 0;
                 this.SpeedEtaText.Text = string.Empty;
                 this.FilesSizeText.Text = string.Empty;
-                try {
-                    Core.Logging.Logger.Info($"StartUpdateAsync fetching manifest {manifestUrl}");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Info($"StartUpdateAsync fetching manifest {manifestUrl}");
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, token);
                 this.StatusText.Text = "Проверка...";
                 this.UpdateProgress.IsIndeterminate = true;
                 var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
                 var plan = await this.sync.PlanAsync(manifest, localRoot, contentBase, token);
-                try {
-                    Core.Logging.Logger.Info($"StartUpdateAsync plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
-                }
-                catch {
-                }
-                try {
-                    LogPlanDownloads(gid, "update", plan, localRoot);
-                }
-                catch {
-                }
+                Core.Logging.Logger.Info($"StartUpdateAsync plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
+                LogPlanDownloads(gid, "update", plan, localRoot);
 
                 // Оценка требуемого места и проверка доступного до скачивания
                 try {
@@ -1976,15 +1298,14 @@ namespace ChillHub.Pages {
                         this.UpdateProgress.Value = 0;
 
                         // Обновим подписи/видимость кнопок согласно текущему состоянию
-                        try {
-                            this.UpdateActionButtonState();
-                        }
-                        catch {
-                        }
+                        this.UpdateActionButtonState();
                         return;
                     }
                 }
-                catch {
+                catch (Exception ex) {
+                    // Не смогли оценить свободное место (сетевой диск, необычный путь).
+                    // Это не повод отменять установку: пойдём дальше, ошибку записи поймает сам sync.
+                    Core.Logging.Logger.Warn($"StartUpdateAsync: оценка свободного места не удалась: {ex.Message}");
                 }
 
                 // Guard: если игра запущена — блокируем обновление
@@ -2005,11 +1326,7 @@ namespace ChillHub.Pages {
                             this.FilesSizeText.Text = string.Empty;
 
                             // Обновим подписи/видимость кнопок согласно текущему состоянию
-                            try {
-                                this.UpdateActionButtonState();
-                            }
-                            catch {
-                            }
+                            this.UpdateActionButtonState();
                             return;
                         }
                     }
@@ -2074,28 +1391,18 @@ namespace ChillHub.Pages {
                 });
 
                 await this.sync.ExecuteAsync(plan, prog, token);
-                try {
-                    Core.Logging.Logger.Info($"StartUpdateAsync execute done gid={gid} version={version}");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Info($"StartUpdateAsync execute done gid={gid} version={version}");
 
                 this.StatusText.Text = "Готово";
                 this.SpeedEtaText.Text = string.Empty;
                 this.FilesSizeText.Text = "Последняя версия игры уже установлена"; // показываем итоговый статус
 
                 // Сохраним версию в локальный маркер и отметим игру установленной
-                this.WriteLocalVersion(gid, version);
+                WriteLocalVersion(gid, version);
                 this.MarkInstalled(gid, version);
 
                 // Обновим кэш: для установленной последней версии скачивание не требуется
-                try {
-                    lock (this.spaceCacheLock) {
-                        this.neededBytesCache[gid] = 0;
-                    }
-                }
-                catch {
-                }
+                this.spaceHint.Remember(gid, 0);
                 this.GameList.Items.Refresh();
 
                 // Зафиксируем текущий выбор на UI-потоке
@@ -2111,60 +1418,55 @@ namespace ChillHub.Pages {
                             .ThenBy(x => x.Title, StringComparer.CurrentCultureIgnoreCase)
                             .ToList();
                         await this.DispatcherInvokeAsync(() => {
-                            try {
-                                this.games = reordered;
-                                this.GameList.ItemsSource = this.games; this.GameList.Items.Refresh();
-                                if (!string.IsNullOrWhiteSpace(selectedIdAfterUpdate)) {
-                                    var idx = this.games.FindIndex(x => x.GameId == selectedIdAfterUpdate);
-                                    if (idx >= 0) {
-                                        this.GameList.SelectedIndex = idx;
-                                    }
+                            this.games = reordered;
+                            this.GameList.ItemsSource = this.games;
+                            this.GameList.Items.Refresh();
+                            if (!string.IsNullOrWhiteSpace(selectedIdAfterUpdate)) {
+                                var idx = this.games.FindIndex(x => x.GameId == selectedIdAfterUpdate);
+                                if (idx >= 0) {
+                                    this.GameList.SelectedIndex = idx;
                                 }
+                            }
 
-                                // После изменения источника данных — обновим состояние кнопки
-                                try {
-                                    this.UpdateActionButtonState();
-                                }
-                                catch {
-                                }
-                            }
-                            catch {
-                            }
+                            // После изменения источника данных — обновим состояние кнопки
+                            this.UpdateActionButtonState();
                         });
                     }
-                    catch {
+                    catch (Exception ex) {
+                        // Игра уже установлена и версия записана: это лишь фоновая пересортировка списка
+                        Core.Logging.Logger.Error(ex, "StartUpdateAsync.PostInstallRefresh");
                     }
                 });
 
-                // Создание ярлыка: вычислим параметры на UI-потоке, а COM-вызов выполним в STA-потоке
+                // Создание ярлыка: параметры считаем на UI-потоке, а COM-вызов делаем в STA-потоке
                 try {
-                    string? shortcutTitle = null; string? shortcutExe = null;
+                    string? shortcutTitle = null;
+                    string? shortcutExe = null;
                     var gLocal = this.games.FirstOrDefault(g => g.GameId == gid);
                     if (gLocal != null && !string.IsNullOrWhiteSpace(gLocal.ExeRelativePath)) {
                         var rel = gLocal.ExeRelativePath.Replace('/', System.IO.Path.DirectorySeparatorChar).Replace('\\', System.IO.Path.DirectorySeparatorChar);
-                        var exePath = System.IO.Path.Combine(localRoot, rel);
-                        shortcutExe = exePath;
+                        shortcutExe = System.IO.Path.Combine(localRoot, rel);
                         shortcutTitle = string.IsNullOrWhiteSpace(gLocal.Title) ? gid : gLocal.Title;
                     }
 
                     if (!string.IsNullOrWhiteSpace(shortcutExe) && File.Exists(shortcutExe)) {
-                        var t = new System.Threading.Thread(() => {
-                            try {
-                                TryCreateDesktopShortcut(shortcutTitle!, shortcutExe!);
-                            }
-                            catch {
-                            }
-                        });
+                        // TryCreateDesktopShortcut гасит собственные ошибки: ярлык не критичен для установки
+                        var t = new System.Threading.Thread(() => TryCreateDesktopShortcut(shortcutTitle!, shortcutExe!));
                         t.IsBackground = true;
                         try {
                             t.SetApartmentState(System.Threading.ApartmentState.STA);
                         }
-                        catch {
+                        catch (Exception exSta) {
+                            // Поток уже запущен/состояние занято — попробуем создать ярлык как есть
+                            Core.Logging.Logger.Warn($"StartUpdateAsync: не удалось выставить STA для потока ярлыка: {exSta.Message}");
                         }
+
                         t.Start();
                     }
                 }
-                catch {
+                catch (Exception ex) {
+                    // Ярлык на рабочем столе — приятная мелочь, установка уже завершена успешно
+                    Core.Logging.Logger.Warn($"StartUpdateAsync: ярлык не создан: {ex.Message}");
                 }
             }
             catch (OperationCanceledException) {
@@ -2190,11 +1492,7 @@ namespace ChillHub.Pages {
                 if (this.hasUpdateError) {
                     this.FilesSizeText.Text = string.Empty;
                 }
-                try {
-                    this.UpdateActionButtonState();
-                }
-                catch {
-                }
+                this.UpdateActionButtonState();
             }
         }
 
@@ -2205,7 +1503,9 @@ namespace ChillHub.Pages {
                     return this.games.FirstOrDefault(x => string.Equals(x.GameId, gid, StringComparison.OrdinalIgnoreCase));
                 }
             }
-            catch {
+            catch (Exception ex) {
+                // Вызывается из фоновых задач, где список игр может пересобираться параллельно
+                Core.Logging.Logger.Warn($"GetSelectedGame: {ex.Message}");
             }
             return null;
         }
@@ -2217,61 +1517,49 @@ namespace ChillHub.Pages {
                     case ActionMode.Cancel:
                         this.ActionBtn.Content = "Отмена";
                         this.ActionBtn.IsEnabled = true;
-                        try {
-                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Cancel");
-                        }
-                        catch {
-                        }
+                        this.ApplyActionButtonStyle("Style.ActionButton.Cancel");
                         break;
                     case ActionMode.Checking:
                         this.ActionBtn.Content = "Проверка…";
                         this.ActionBtn.IsEnabled = false;
-                        try {
-                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Checking");
-                        }
-                        catch {
-                        }
+                        this.ApplyActionButtonStyle("Style.ActionButton.Checking");
                         break;
                     case ActionMode.Play:
                         this.ActionBtn.Content = "Играть";
                         this.ActionBtn.IsEnabled = true;
-                        try {
-                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Play");
-                        }
-                        catch {
-                        }
+                        this.ApplyActionButtonStyle("Style.ActionButton.Play");
                         break;
                     case ActionMode.Retry:
                         this.ActionBtn.Content = "Повторить";
                         this.ActionBtn.IsEnabled = true;
-                        try {
-                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Retry");
-                        }
-                        catch {
-                        }
+                        this.ApplyActionButtonStyle("Style.ActionButton.Retry");
                         break;
                     case ActionMode.Install:
                         this.ActionBtn.Content = "Установить";
                         this.ActionBtn.IsEnabled = true;
-                        try {
-                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Install");
-                        }
-                        catch {
-                        }
+                        this.ApplyActionButtonStyle("Style.ActionButton.Install");
                         break;
                     case ActionMode.Update:
                     default:
                         this.ActionBtn.Content = "Обновить";
                         this.ActionBtn.IsEnabled = true;
-                        try {
-                            this.ActionBtn.Style = (Style)this.FindResource("Style.ActionButton.Update");
-                        }
-                        catch {
-                        }
+                        this.ApplyActionButtonStyle("Style.ActionButton.Update");
                         break;
                 }
             }
-            catch {
+            catch (Exception ex) {
+                // Кнопка действия — центральный элемент экрана: не даём сбою оформления уронить страницу
+                Core.Logging.Logger.Error(ex, $"SetActionMode({mode})");
+            }
+        }
+
+        // Стиль кнопки берём из темы; если ресурс не найден, оставляем оформление по умолчанию
+        private void ApplyActionButtonStyle(string styleKey) {
+            if (this.TryFindResource(styleKey) is Style style) {
+                this.ActionBtn.Style = style;
+            }
+            else {
+                Core.Logging.Logger.Warn($"Стиль '{styleKey}' не найден в теме, кнопка действия останется с оформлением по умолчанию");
             }
         }
 
@@ -2300,12 +1588,8 @@ namespace ChillHub.Pages {
                 // Осталось незавершённое обновление — «Играть» не предлагаем, нужно докатить (C2)
                 if (HasUnfinishedUpdate(g?.GameId)) {
                     this.SetActionMode(ActionMode.Update);
-                    try {
-                        if (!this.isUpdating) {
-                            this.StatusText.Text = "Обновление не завершено. Нажмите «Обновить», чтобы восстановить игру.";
-                        }
-                    }
-                    catch {
+                    if (!this.isUpdating) {
+                        this.StatusText.Text = "Обновление не завершено. Нажмите «Обновить», чтобы восстановить игру.";
                     }
 
                     return;
@@ -2319,7 +1603,9 @@ namespace ChillHub.Pages {
                 // Не установлена или требует обновления
                 this.SetActionMode(isInstalled ? ActionMode.Update : ActionMode.Install);
             }
-            catch {
+            catch (Exception ex) {
+                // Метод дёргается отовсюду (в т.ч. из фоновых задач) — он обязан быть безопасным
+                Core.Logging.Logger.Error(ex, "UpdateActionButtonState");
             }
         }
 
@@ -2344,11 +1630,7 @@ namespace ChillHub.Pages {
                 // Предыдущее обновление не довели до конца — файлы игры смешаны из двух версий (C2)
                 if (HasUnfinishedUpdate(gid)) {
                     this.StatusText.Text = "Обновление не завершено. Нажмите «Обновить», чтобы восстановить игру.";
-                    try {
-                        this.UpdateActionButtonState();
-                    }
-                    catch {
-                    }
+                    this.UpdateActionButtonState();
 
                     return;
                 }
@@ -2375,11 +1657,7 @@ namespace ChillHub.Pages {
                     UseShellExecute = true,
                 };
                 Process.Start(psi);
-                try {
-                    this.UpdateActionButtonState();
-                }
-                catch {
-                }
+                this.UpdateActionButtonState();
             }
             catch (Exception ex) {
                 this.ShowUserError("Не удалось запустить игру.", ex, "HomePage.PlaySelectedGame");
@@ -2396,388 +1674,13 @@ namespace ChillHub.Pages {
             }
         }
 
-        private static void TryCreateDesktopShortcut(string title, string exePath) {
-            try {
-                if (string.IsNullOrWhiteSpace(exePath) || !System.IO.File.Exists(exePath)) {
-                    return;
-                }
-
-                var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-                var name = string.IsNullOrWhiteSpace(title) ? System.IO.Path.GetFileNameWithoutExtension(exePath) : title;
-                var linkPath = System.IO.Path.Combine(desktop, SanitizeFileName(name) + ".lnk");
-
-                var shellType = Type.GetTypeFromProgID("WScript.Shell");
-                if (shellType == null) {
-                    return;
-                }
-
-                dynamic shell = Activator.CreateInstance(shellType)!;
-                dynamic shortcut = shell.CreateShortcut(linkPath);
-                shortcut.TargetPath = exePath;
-                shortcut.WorkingDirectory = System.IO.Path.GetDirectoryName(exePath);
-                shortcut.Description = name;
-                shortcut.IconLocation = exePath + ",0";
-                shortcut.Save();
-            }
-            catch {
-            }
-        }
-
-        private static string SanitizeFileName(string name) {
-            var invalid = System.IO.Path.GetInvalidFileNameChars();
-            var arr = name.ToCharArray();
-            for (int i = 0; i < arr.Length; i++) {
-                if (Array.IndexOf(invalid, arr[i]) >= 0) {
-                    arr[i] = '_';
-                }
-            }
-
-            var s = new string(arr).Trim();
-            return string.IsNullOrEmpty(s) ? "Game" : s;
-        }
-
-        private static string FormatSize(long bytes) {
-            const double KB = 1024.0;
-            const double MB = KB * 1024.0;
-            const double GB = MB * 1024.0;
-            if (bytes >= (long)GB) {
-                return $"{bytes / GB:0.0} ГБ";
-            }
-
-            if (bytes >= (long)MB) {
-                return $"{bytes / MB:0.0} МБ";
-            }
-
-            if (bytes >= (long)KB) {
-                return $"{bytes / KB:0.0} КБ";
-            }
-
-            return $"{bytes} Б";
-        }
-
-        // Формат оставшегося времени: "[N дней][00:]00:00"
-        private static string FormatEta(double seconds)
-        {
-            try {
-                if (double.IsNaN(seconds) || double.IsInfinity(seconds)) return "—";
-                var total = Math.Max(0, (long)Math.Ceiling(seconds));
-                var ts = TimeSpan.FromSeconds(total);
-
-                // С префиксом дней, если >= 1 суток
-                if (ts.TotalDays >= 1)
-                {
-                    int days = ts.Days;
-                    string dayWord = PluralizeDayRu(days);
-                    return $"{days} {dayWord} {ts.Hours:00}:{ts.Minutes:00}:{ts.Seconds:00}";
-                }
-
-                // Если часов 1+ — HH:MM:SS, иначе MM:SS
-                if (ts.TotalHours >= 1)
-                {
-                    // Важно: суммарные часы, если потенциально > 24 (но TotalDays < 1 уже исключили)
-                    return $"{(int)ts.TotalHours:00}:{ts.Minutes:00}:{ts.Seconds:00}";
-                }
-
-                return $"{ts.Minutes:00}:{ts.Seconds:00}";
-            } catch { return "—"; }
-        }
-
-        private static string PluralizeDayRu(int n)
-        {
-            try {
-                int n10 = n % 10;
-                int n100 = n % 100;
-                if (n10 == 1 && n100 != 11) return "день";
-                if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return "дня";
-                return "дней";
-            } catch { return "дней"; }
-        }
-
-        // Diagnostic: log detailed info about files that are planned to download, files to delete, and empty dirs to create
-        private static void LogPlanDownloads(string gid, string stage, ChillHub.Core.Sync.DiffPlan plan, string localRoot) {
-            try {
-                int total = plan.Downloads.Count;
-                int limit = Math.Min(total, 10);
-                for (int i = 0; i < limit; i++) {
-                    var t = plan.Downloads[i];
-                    var rel = t.RelativePath;
-                    var size = t.Size;
-                    var hasSha = !string.IsNullOrWhiteSpace(t.Sha256);
-                    var hasB3 = !string.IsNullOrWhiteSpace(t.Blake3);
-                    var localPath = System.IO.Path.Combine(localRoot, rel.Replace('/', System.IO.Path.DirectorySeparatorChar));
-                    bool exists = System.IO.File.Exists(localPath);
-                    long len = 0;
-                    if (exists) {
-                        try {
-                            len = new System.IO.FileInfo(localPath).Length;
-                        }
-                        catch {
-                        }
-                    }
-
-                    ChillHub.Core.Logging.Logger.Info($"Plan[{stage}] gid={gid} file='{rel}' size={size} hasSha={hasSha} hasB3={hasB3} localExists={exists} localLen={len}");
-                }
-
-                if (total > limit) {
-                    ChillHub.Core.Logging.Logger.Info($"Plan[{stage}] gid={gid} ... and {total - limit} more files");
-                }
-
-                // Log deletions
-                int delTotal = plan.ToDelete.Count;
-                int delLimit = Math.Min(delTotal, 10);
-                for (int i = 0; i < delLimit; i++) {
-                    var rel = plan.ToDelete[i];
-                    var path = System.IO.Path.Combine(localRoot, rel.Replace('/', System.IO.Path.DirectorySeparatorChar));
-                    bool exists = System.IO.File.Exists(path);
-                    ChillHub.Core.Logging.Logger.Info($"Plan[{stage}] gid={gid} toDelete='{rel}' localExists={exists}");
-                }
-
-                if (delTotal > delLimit) {
-                    ChillHub.Core.Logging.Logger.Info($"Plan[{stage}] gid={gid} ... and {delTotal - delLimit} more deletions");
-                }
-
-                // Log empty dirs to create
-                int dirTotal = plan.EmptyDirsToCreate.Count;
-                int dirLimit = Math.Min(dirTotal, 10);
-                for (int i = 0; i < dirLimit; i++) {
-                    var rel = plan.EmptyDirsToCreate[i];
-                    var path = System.IO.Path.Combine(localRoot, rel.Replace('/', System.IO.Path.DirectorySeparatorChar));
-                    bool exists = System.IO.Directory.Exists(path);
-                    ChillHub.Core.Logging.Logger.Info($"Plan[{stage}] gid={gid} emptyDir='{rel}' localExists={exists}");
-                }
-
-                if (dirTotal > dirLimit) {
-                    ChillHub.Core.Logging.Logger.Info($"Plan[{stage}] gid={gid} ... and {dirTotal - dirLimit} more empty dirs");
-                }
-            }
-            catch {
-            }
-        }
-
-        // Helper: find sibling skeleton placeholder by name under the same parent container
-        private static Border? FindImgSkeleton(DependencyObject? parent) {
-            try {
-                if (parent == null) {
-                    return null;
-                }
-
-                int count = VisualTreeHelper.GetChildrenCount(parent);
-                for (int i = 0; i < count; i++) {
-                    var child = VisualTreeHelper.GetChild(parent, i);
-                    if (child is Border b && b.Name == "ImgSkeleton") {
-                        return b;
-                    }
-                }
-            }
-            catch {
-            }
-            return null;
-        }
-
-        // HttpClient tuned for many small image fetches in parallel
-        private static readonly System.Net.Http.HttpClient s_httpClient =
-            new System.Net.Http.HttpClient(new System.Net.Http.HttpClientHandler {
-                AllowAutoRedirect = true,
-                AutomaticDecompression = System.Net.DecompressionMethods.All,
-                UseCookies = true,
-#if NET462 || NET48 || NET5_0_OR_GREATER
-                MaxConnectionsPerServer = 16,
-#endif
-            });
-        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> s_imgInflight = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
-        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, BitmapImage> s_imgCache = new System.Collections.Concurrent.ConcurrentDictionary<string, BitmapImage>(StringComparer.OrdinalIgnoreCase);
-
-        private static void DebugLog(string msg)
-        {
-            try { ChillHub.Core.Logging.Logger.Info(msg); } catch { }
-            try { System.Diagnostics.Debug.WriteLine(msg); } catch { }
-            try { Console.WriteLine(msg); } catch { }
-        }
-
-        private async Task LoadImageAsync(Image img, string url) {
-            try {
-                // Cache hit: apply immediately
-                if (s_imgCache.TryGetValue(url, out var cached)) {
-                    DebugLog($"[ImgLoad] cache hit url='{url}'");
-                    await img.Dispatcher.InvokeAsync(() => {
-                        try { img.Source = cached; img.Visibility = Visibility.Visible; } catch { img.Visibility = Visibility.Visible; }
-                    });
-                    return;
-                }
-
-                // Deduplicate in-flight loads for the same URL
-                if (!s_imgInflight.TryAdd(url, 1)) {
-                    DebugLog($"[ImgLoad] skip duplicate inflight url='{url}'");
-                    return;
-                }
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                DebugLog($"[ImgLoad] HTTP GET start url='{url}'");
-                using var resp = await s_httpClient.GetAsync(url, System.Net.Http.HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
-                if (!resp.IsSuccessStatusCode) {
-                    var ct = resp.Content?.Headers?.ContentType?.ToString() ?? "";
-                    DebugLog($"[ImgLoad] HTTP non-200 status={(int)resp.StatusCode} contentType='{ct}' url='{url}'");
-                    throw new Exception("HTTP " + (int)resp.StatusCode + " " + resp.StatusCode);
-                }
-                await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
-                // Copy to memory to fully detach from HTTP stream before moving to UI thread
-                using var ms = new System.IO.MemoryStream();
-                await stream.CopyToAsync(ms).ConfigureAwait(false);
-                ms.Position = 0;
-                sw.Stop();
-                DebugLog($"[ImgLoad] HTTP ok bytes={ms.Length} elapsedMs={sw.ElapsedMilliseconds} url='{url}'");
-                await img.Dispatcher.InvokeAsync(() => {
-                    try {
-                        var bi = new BitmapImage();
-                        bi.BeginInit();
-                        bi.CacheOption = BitmapCacheOption.OnLoad;
-                        bi.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
-                        // Decode to roughly the visual size to speed up load and reduce memory
-                        try {
-                            int targetH = 0;
-                            if (img.Height > 0 && !double.IsNaN(img.Height)) targetH = (int)Math.Round(img.Height);
-                            // Fallback to desired size if Height is not set
-                            if (targetH <= 0 && img.DesiredSize.Height > 0) targetH = (int)Math.Round(img.DesiredSize.Height);
-                            if (targetH <= 0) targetH = 88; // common icon height in UI
-                            bi.DecodePixelHeight = targetH;
-                        } catch { }
-                        bi.StreamSource = ms;
-                        bi.EndInit();
-                        bi.Freeze();
-                        // Put into cache (frozen, safe to reuse across threads)
-                        try { s_imgCache[url] = bi; } catch { }
-                        img.Source = bi;
-                        img.Visibility = Visibility.Visible;
-                        DebugLog($"[ImgLoad] image applied url='{url}'");
-                    } catch (Exception ex) { img.Visibility = Visibility.Collapsed; DebugLog($"[ImgLoad] apply error url='{url}' err='{ex.Message}'"); }
-                });
-            }
-            catch (Exception ex) {
-                DebugLog($"[ImgLoad] error url='{url}' err='{ex.Message}'");
-                await img.Dispatcher.InvokeAsync(() => { img.Visibility = Visibility.Collapsed; });
-            }
-            finally {
-                s_imgInflight.TryRemove(url, out _);
-            }
-        }
-
+        // Обработчики остаются здесь: на их имена ссылается XAML. Вся логика — в Core/Home/ImageLoader.
         private void CoverImg_Loaded(object sender, RoutedEventArgs e) {
             if (sender is not Image img) {
                 return;
             }
 
-            // 1) Получаем сырой URL из Tag, иначе из DataContext (IconUrl для GameInfo / CoverUrl для NewsItem), иначе из текущего Source.Uri
-            string raw = (img.Tag as string) ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(raw)) {
-                try {
-                    if (img.DataContext is ChillHub.Core.GameInfo gi) {
-                        // GameInfo имеет только IconUrl
-                        raw = gi.IconUrl ?? string.Empty;
-                    }
-                    else if (img.DataContext is ChillHub.Core.NewsItem ni) {
-                        // NewsItem использует CoverUrl
-                        raw = ni.CoverUrl;
-                    }
-                }
-                catch { }
-            }
-
-            if (string.IsNullOrWhiteSpace(raw)) {
-                try {
-                    if (img.Source is BitmapImage bi && bi.UriSource != null) {
-                        raw = bi.UriSource.OriginalString;
-                    }
-                }
-                catch { }
-            }
-
-            if (string.IsNullOrWhiteSpace(raw)) {
-                img.Visibility = Visibility.Collapsed;
-                try {
-                    var sk0 = FindImgSkeleton(VisualTreeHelper.GetParent(img));
-                    if (sk0 != null) {
-                        sk0.Visibility = Visibility.Collapsed;
-                    }
-                }
-                catch {
-                }
-                return;
-            }
-            try {
-                // Нормализуем URL и жёстко привязываем к origin из BaseApi (scheme+host[:port])
-                var apiUri = new Uri(this.BaseApi.TrimEnd('/') + "/", UriKind.Absolute);
-                string url;
-                DebugLog($"[ImgLoad] raw='{raw}' baseApi='{this.BaseApi}' origin='{apiUri.Scheme}://{apiUri.Authority}'");
-
-                // Поддержка протокол-относительных URL (//host/path)
-                if (raw.StartsWith("//")) {
-                    url = new Uri(apiUri.Scheme + ":" + raw, UriKind.Absolute).ToString();
-                    DebugLog($"[ImgLoad] case='protocol-relative' url='{url}'");
-                }
-                // Абсолютные URL (http/https)
-                else if (Uri.TryCreate(raw, UriKind.Absolute, out var abs)) {
-                    url = abs.ToString();
-                    DebugLog($"[ImgLoad] case='absolute' url='{url}'");
-                }
-                else {
-                    // Относительные URL: принудительно делаем корневыми к origin
-                    // Пример: "manifests/game/icon.png" -> "/manifests/game/icon.png"
-                    var rel = raw.StartsWith("/") ? raw : ("/" + raw);
-                    url = new Uri(apiUri, rel).ToString();
-                    DebugLog($"[ImgLoad] case='relative' rel='{rel}' url='{url}'");
-                }
-
-                // Не добавляем динамический cache-busting параметр — это вызывало мигание при переключении игр.
-                // Полагайтесь на кеширование и проверку равенства URL ниже, чтобы не перезагружать изображение без надобности.
-
-                DebugLog($"[ImgLoad] resolved url='{url}'");
-
-                // Если уже есть валидный источник с тем же URL — просто показать и скрыть скелетон
-                try {
-                    if (img.Source is BitmapImage existing && existing.UriSource != null &&
-                        string.Equals(existing.UriSource.OriginalString, url, StringComparison.OrdinalIgnoreCase)) {
-                        img.Visibility = Visibility.Visible;
-                        var parent0 = VisualTreeHelper.GetParent(img);
-                        var sk0 = FindImgSkeleton(parent0);
-                        if (sk0 != null) {
-                            sk0.Visibility = Visibility.Collapsed;
-                        }
-
-                        return;
-                    }
-                }
-                catch {
-                }
-
-                // Загрузка через HttpClient -> Stream, чтобы избежать проблем с относительными путями/кэшем
-                _ = LoadImageAsync(img, url);
-
-                // Скрыть скелетон сразу
-                try {
-                    var parent = VisualTreeHelper.GetParent(img);
-                    var sk = FindImgSkeleton(parent);
-                    if (sk != null) {
-                        sk.Visibility = Visibility.Collapsed;
-                    }
-                }
-                catch {
-                }
-            }
-            catch {
-                img.Visibility = Visibility.Collapsed;
-                try {
-                    ChillHub.Core.Logging.Logger.Info("[ImgLoad] failed to set image source");
-                }
-                catch {
-                }
-                try {
-                    var sk = FindImgSkeleton(VisualTreeHelper.GetParent(img));
-                    if (sk != null) {
-                        sk.Visibility = Visibility.Collapsed;
-                    }
-                }
-                catch {
-                }
-            }
+            ImageLoader.AttachAndLoad(img, this.BaseApi);
         }
 
         private void CoverImg_ImageFailed(object sender, ExceptionRoutedEventArgs e) {
@@ -2785,23 +1688,7 @@ namespace ChillHub.Pages {
                 return;
             }
 
-            img.Visibility = Visibility.Collapsed;
-
-            // Также скрыть скелетон, чтобы не висел вечно
-            try {
-                var parent = VisualTreeHelper.GetParent(img);
-                var sk = FindImgSkeleton(parent);
-                if (sk != null) {
-                    sk.Visibility = Visibility.Collapsed;
-                }
-            }
-            catch {
-            }
-            try {
-                ChillHub.Core.Logging.Logger.Info($"[ImgLoad] ImageFailed: {e.ErrorException?.Message}");
-            }
-            catch {
-            }
+            ImageLoader.HandleImageFailed(img, e.ErrorException);
         }
 
         // Блокируем контекстное меню для неустановленных игр (или если нет папки игры)
@@ -2826,105 +1713,6 @@ namespace ChillHub.Pages {
             }
         }
 
-        // --- Delete confirmation dialog (themed) and helpers ---
-        private static string NormalizeDisplayPath(string path) {
-            try {
-                if (string.IsNullOrWhiteSpace(path)) {
-                    return string.Empty;
-                }
-
-                var s = path.Replace('\\', '/');
-                while (s.Contains("//")) {
-                    s = s.Replace("//", "/");
-                }
-
-                return s;
-            }
-            catch {
-                return path;
-            }
-        }
-
-        private bool ShowDeleteConfirmationDialog(string title, string folderPath) {
-            try {
-                var wnd = new Window {
-                    Title = "Удаление локальных файлов",
-                    Owner = Application.Current?.MainWindow,
-                    WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                    ResizeMode = ResizeMode.NoResize,
-                    SizeToContent = SizeToContent.WidthAndHeight,
-                    ShowInTaskbar = false,
-                    Background = this.TryFindResource("Brush.Surface") as Brush ?? new SolidColorBrush(Color.FromRgb(18, 18, 18)),
-                    BorderBrush = this.TryFindResource("Brush.Border") as Brush,
-                    BorderThickness = new Thickness(1.5),
-                    Padding = new Thickness(16),
-                    Foreground = this.TryFindResource("Brush.Text") as Brush ?? Brushes.White,
-                };
-
-                try {
-                    // Apply themed title bar like main windows
-                    wnd.SourceInitialized += (_, __) => {
-                        try { Core.UI.AcrylicHelper.ApplyTitleBarTheme(wnd, true); } catch { }
-                    };
-                } catch { }
-
-                var grid = new Grid();
-                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-                var tb1 = new TextBlock {
-                    Text = $"Удалить локальные файлы игры \"{title}\"?",
-                    FontSize = 16,
-                    FontWeight = FontWeights.SemiBold,
-                    Foreground = this.TryFindResource("Brush.Title") as Brush ?? Brushes.White,
-                    Margin = new Thickness(0, 0, 0, 8),
-                };
-                Grid.SetRow(tb1, 0);
-
-                var normPath = NormalizeDisplayPath(folderPath);
-                var tb2 = new TextBlock {
-                    Text = $"Будет удалена папка: {normPath}",
-                    Foreground = this.TryFindResource("Brush.TextSecondary") as Brush ?? new SolidColorBrush(Color.FromRgb(156, 163, 175)),
-                    Margin = new Thickness(0, 0, 0, 16),
-                };
-                Grid.SetRow(tb2, 1);
-
-                var panel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-                var cancelBtn = new Button { Content = "Отмена", MinWidth = 100, Margin = new Thickness(0, 0, 8, 0) };
-                var deleteBtn = new Button { Content = "Удалить", MinWidth = 120 };
-                try { deleteBtn.Style = (Style)this.FindResource("Style.Button.Primary"); } catch { }
-                try { cancelBtn.Style = (Style)this.FindResource("Style.Button.GhostNeutral"); } catch { }
-                panel.Children.Add(cancelBtn);
-                panel.Children.Add(deleteBtn);
-                Grid.SetRow(panel, 2);
-
-                grid.Children.Add(tb1);
-                grid.Children.Add(tb2);
-                grid.Children.Add(panel);
-                wnd.Content = new Border {
-                    CornerRadius = new CornerRadius(8),
-                    Background = this.TryFindResource("Brush.Surface") as Brush ?? new SolidColorBrush(Color.FromRgb(18, 18, 18)),
-                    BorderBrush = this.TryFindResource("Brush.Border") as Brush,
-                    BorderThickness = new Thickness(1.5),
-                    Padding = new Thickness(12),
-                    Child = grid,
-                };
-
-                bool result = false;
-                cancelBtn.Click += (s, e) => { result = false; wnd.DialogResult = false; };
-                deleteBtn.Click += (s, e) => { result = true; wnd.DialogResult = true; };
-
-                wnd.ShowDialog();
-                return result;
-            }
-            catch {
-                // Fallback
-                var norm = NormalizeDisplayPath(folderPath);
-                var res = MessageBox.Show($"Удалить локальные файлы игры \"{title}\"?\nБудет удалена папка: {norm}", "Удаление локальных файлов", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-                return res == MessageBoxResult.Yes;
-            }
-        }
 
         // DTOs moved to ChillHub.Core.Models
 
@@ -2947,7 +1735,7 @@ namespace ChillHub.Pages {
                     }
 
                     // Determine local state from version marker
-                    var ver = this.ReadLocalVersion(g.GameId);
+                    var ver = ReadLocalVersion(g.GameId);
                     var verTrimmed = string.IsNullOrWhiteSpace(ver) ? string.Empty : ver.Trim();
                     g.IsInstalled = !string.IsNullOrWhiteSpace(verTrimmed);
                     g.InstalledVersion = verTrimmed ?? string.Empty;
@@ -2960,58 +1748,13 @@ namespace ChillHub.Pages {
                     if (HasUnfinishedUpdate(g.GameId)) {
                         g.NeedsUpdate = true;
                     }
-                    try {
-                        ChillHub.Core.Logging.Logger.Info($"NormalizeState gid={g.GameId} latest='{g.LatestVersion}' local='{g.InstalledVersion}' isInstalled={g.IsInstalled} needsUpdate={g.NeedsUpdate}");
-                    }
-                    catch {
-                    }
-                }
-                catch {
-                }
-            }
-        }
 
-        private string ReadLocalVersion(string gameId) {
-            try {
-                if (string.IsNullOrWhiteSpace(gameId)) {
-                    return string.Empty;
+                    ChillHub.Core.Logging.Logger.Info($"NormalizeState gid={g.GameId} latest='{g.LatestVersion}' local='{g.InstalledVersion}' isInstalled={g.IsInstalled} needsUpdate={g.NeedsUpdate}");
                 }
-
-                var root = Path.Combine(ConfigService.Current.GamesPath, gameId);
-                var marker = Path.Combine(root, ".version");
-                if (File.Exists(marker)) {
-                    var text = File.ReadAllText(marker).Trim();
-                    try {
-                        ChillHub.Core.Logging.Logger.Info($"ReadLocalVersion gid={gameId} value='{text}'");
-                    }
-                    catch {
-                    }
-                    return text;
+                catch (Exception ex) {
+                    // Одна игра с некорректными данными не должна ломать нормализацию всего списка
+                    ChillHub.Core.Logging.Logger.Error(ex, $"NormalizeGameIconsAndLocalState(gid={g?.GameId})");
                 }
-            }
-            catch {
-            }
-            return string.Empty;
-        }
-
-        private void WriteLocalVersion(string gameId, string? version) {
-            try {
-                if (string.IsNullOrWhiteSpace(gameId)) {
-                    return;
-                }
-
-                var root = Path.Combine(ConfigService.Current.GamesPath, gameId);
-                Directory.CreateDirectory(root);
-                var marker = Path.Combine(root, ".version");
-                var toWrite = (version ?? string.Empty).Trim();
-                File.WriteAllText(marker, toWrite);
-                try {
-                    ChillHub.Core.Logging.Logger.Info($"WriteLocalVersion gid={gameId} value='{toWrite}'");
-                }
-                catch {
-                }
-            }
-            catch {
             }
         }
 
@@ -3032,7 +1775,9 @@ namespace ChillHub.Pages {
                 // Лёгкое обновление UI без пересортировки и смены ItemsSource — это сделает фоновой шаг
                 this.GameList.Items.Refresh();
             }
-            catch {
+            catch (Exception ex) {
+                // Версия на диске уже записана; здесь только обновление отображения
+                Core.Logging.Logger.Error(ex, $"MarkInstalled(gid={gameId})");
             }
         }
 
@@ -3061,7 +1806,9 @@ namespace ChillHub.Pages {
                     }
                 }
             }
-            catch {
+            catch (Exception ex) {
+                // Файлы уже удалены; здесь только пересборка списка — ошибку показываем в статусе
+                this.ShowUserError("Список игр обновится после перезапуска лаунчера.", ex, $"MarkUninstalled(gid={gameId})");
             }
         }
 
@@ -3088,11 +1835,7 @@ namespace ChillHub.Pages {
             }
             catch (Exception ex) {
                 this.StatusText.Text = $"Не удалось открыть папку игры: {ex.Message}";
-                try {
-                    Core.Logging.Logger.Error(ex, "HomePage.OpenGameFolder_Click");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Error(ex, "HomePage.OpenGameFolder_Click");
             }
         }
 
@@ -3108,17 +1851,13 @@ namespace ChillHub.Pages {
                 var localRoot = System.IO.Path.Combine(ConfigService.Current.GamesPath, gid);
 
                 // Переключаем текущий выбор на удаляемую игру, чтобы область действий и статусы относились к ней
-                try {
-                    if (gi != null) {
-                        this.GameList.SelectedItem = gi;
-                    }
-                }
-                catch {
+                if (gi != null) {
+                    this.GameList.SelectedItem = gi;
                 }
 
                 // Подтверждение удаления (кастомный диалог в стиле темы)
                 var title = string.IsNullOrWhiteSpace(gi?.Title) ? gid : gi!.Title;
-                if (!this.ShowDeleteConfirmationDialog(title!, localRoot)) {
+                if (!HomeDialogs.ConfirmDeleteGameFiles(this, title!, localRoot)) {
                     return;
                 }
 
@@ -3133,7 +1872,9 @@ namespace ChillHub.Pages {
                         }
                     }
                 }
-                catch {
+                catch (Exception ex) {
+                    // Не удалось опросить процессы — не блокируем удаление, файлы всё равно защищены самой ОС
+                    Core.Logging.Logger.Warn($"DeleteGame_Click: проверка запущенного процесса не выполнена: {ex.Message}");
                 }
 
                 // Пытаемся удалить папку целиком
@@ -3143,13 +1884,7 @@ namespace ChillHub.Pages {
                     }
 
                     // Очистим кэш требуемого места
-                    try {
-                        lock (this.spaceCacheLock) {
-                            this.neededBytesCache[gid] = 0;
-                        }
-                    }
-                    catch {
-                    }
+                    this.spaceHint.Remember(gid, 0);
 
                     // Кеш хешей для удалённой игры больше не нужен
                     ChillHub.Core.Sync.FileHashCache.Remove(gid);
@@ -3157,11 +1892,7 @@ namespace ChillHub.Pages {
                     // Обновим маркеры/UI
                     this.FilesSizeText.Text = string.Empty;
                     this.MarkUninstalled(gid);
-                    try {
-                        this.UpdateActionButtonState();
-                    }
-                    catch {
-                    }
+                    this.UpdateActionButtonState();
 
                     // Перепроверим статусы игр (легко и асинхронно)
                     await this.VerifyAllGamesStatusesAsync();
@@ -3171,20 +1902,12 @@ namespace ChillHub.Pages {
                 }
                 catch (Exception exDel) {
                     this.StatusText.Text = $"Не удалось удалить локальные файлы: {exDel.Message}";
-                    try {
-                        Core.Logging.Logger.Error(exDel, "HomePage.DeleteGame_Click");
-                    }
-                    catch {
-                    }
+                    Core.Logging.Logger.Error(exDel, "HomePage.DeleteGame_Click");
                 }
             }
             catch (Exception ex) {
                 this.StatusText.Text = $"Ошибка удаления: {ex.Message}";
-                try {
-                    Core.Logging.Logger.Error(ex, "HomePage.DeleteGame_Click");
-                }
-                catch {
-                }
+                Core.Logging.Logger.Error(ex, "HomePage.DeleteGame_Click");
             }
         }
 
