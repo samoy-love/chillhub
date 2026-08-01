@@ -72,7 +72,10 @@ namespace ChillHub.Pages {
             Update,
             Play,
             Cancel,
-            Retry
+            Retry,
+
+            // Действие запрещено режимом технических работ на сервере (задача 25)
+            Maintenance
         }
 
         // ===== Обратная связь =====
@@ -194,6 +197,11 @@ namespace ChillHub.Pages {
 
                 // Возврат со страницы игры: подхватываем изменившееся локальное состояние
                 this.Loaded += this.HomePage_Loaded;
+
+                // Режим технических работ: следим за ним, только пока страница показана
+                this.SubscribeMaintenance();
+                this.Loaded += (s, e) => this.SubscribeMaintenance();
+                this.Unloaded += (s, e) => this.UnsubscribeMaintenance();
 
                 // Баннер о том, что отчёт об ошибке ушёл автоматически
                 ChillHub.Core.ErrorReporter.AutoReported += (ctx) =>
@@ -1228,6 +1236,16 @@ namespace ChillHub.Pages {
                     this.StatusText.Text = "Нет доступных сборок для установки";
                     return;
                 }
+
+                // Подстраховка на случай, если работы начались уже после отрисовки кнопки
+                var isInstall = game?.IsInstalled != true;
+                var maintenance = Core.Maintenance.MaintenanceService.Current;
+                if (isInstall ? maintenance.BlocksInstall : maintenance.BlocksUpdate) {
+                    this.StatusText.Text = maintenance.BuildBannerText();
+                    this.UpdateActionButtonState();
+                    return;
+                }
+
                 Core.Logging.Logger.Info($"StartUpdateAsync gid={gid} version={version}");
 
                 this.isUpdating = true;
@@ -1523,6 +1541,12 @@ namespace ChillHub.Pages {
                         this.ActionBtn.IsEnabled = true;
                         this.ApplyActionButtonStyle("Style.ActionButton.Retry");
                         break;
+                    case ActionMode.Maintenance:
+                        // Причина и сроки — в баннере шапки, на кнопке только суть запрета
+                        this.ActionBtn.Content = "Технические работы";
+                        this.ActionBtn.IsEnabled = false;
+                        this.ApplyActionButtonStyle("Style.ActionButton.Checking");
+                        break;
                     case ActionMode.Install:
                         this.ActionBtn.Content = "Установить";
                         this.ActionBtn.IsEnabled = true;
@@ -1569,32 +1593,89 @@ namespace ChillHub.Pages {
                     return;
                 }
 
+                // Сначала решаем, что вообще предложить пользователю, и только потом сверяемся
+                // с режимом технических работ: так запрет не «съедает» логику состояний.
+                var unfinished = HasUnfinishedUpdate(g?.GameId);
+                ActionMode intended;
                 if (this.hasUpdateError) {
-                    this.SetActionMode(ActionMode.Retry);
+                    intended = ActionMode.Retry;
+                }
+                else if (unfinished) {
+                    // Осталось незавершённое обновление — «Играть» не предлагаем, нужно докатить (C2)
+                    intended = ActionMode.Update;
+                }
+                else if (isInstalled && !needsUpdate) {
+                    intended = ActionMode.Play;
+                }
+                else {
+                    // Не установлена или требует обновления
+                    intended = isInstalled ? ActionMode.Update : ActionMode.Install;
+                }
+
+                if (IsBlockedByMaintenance(intended)) {
+                    this.SetActionMode(ActionMode.Maintenance);
+                    this.StatusText.Text = Core.Maintenance.MaintenanceService.Current.BuildBannerText();
                     return;
                 }
 
-                // Осталось незавершённое обновление — «Играть» не предлагаем, нужно докатить (C2)
-                if (HasUnfinishedUpdate(g?.GameId)) {
-                    this.SetActionMode(ActionMode.Update);
-                    if (!this.isUpdating) {
-                        this.StatusText.Text = "Обновление не завершено. Нажмите «Обновить», чтобы восстановить игру.";
-                    }
-
-                    return;
+                this.SetActionMode(intended);
+                if (intended == ActionMode.Update && unfinished && !this.isUpdating) {
+                    this.StatusText.Text = "Обновление не завершено. Нажмите «Обновить», чтобы восстановить игру.";
                 }
-
-                if (isInstalled && !needsUpdate) {
-                    this.SetActionMode(ActionMode.Play);
-                    return;
-                }
-
-                // Не установлена или требует обновления
-                this.SetActionMode(isInstalled ? ActionMode.Update : ActionMode.Install);
             }
             catch (Exception ex) {
                 // Метод дёргается отовсюду (в т.ч. из фоновых задач) — он обязан быть безопасным
                 Core.Logging.Logger.Error(ex, "UpdateActionButtonState");
+            }
+        }
+
+        /// <summary>
+        /// Запрещено ли задуманное действие текущим режимом технических работ.
+        /// «Повторить» приравниваем к обновлению: за ним стоит та же закачка.
+        /// </summary>
+        private static bool IsBlockedByMaintenance(ActionMode mode) {
+            var state = Core.Maintenance.MaintenanceService.Current;
+            return mode switch {
+                ActionMode.Install => state.BlocksInstall,
+                ActionMode.Update or ActionMode.Retry => state.BlocksUpdate,
+                ActionMode.Play => state.BlocksPlay,
+                _ => false,
+            };
+        }
+
+        // Режим техработ может включиться и выключиться, пока страница открыта.
+        // Подписываемся на время видимости страницы, чтобы не держать ссылку на неё в статическом событии.
+        private bool maintenanceSubscribed;
+
+        private void SubscribeMaintenance() {
+            if (this.maintenanceSubscribed) {
+                return;
+            }
+
+            Core.Maintenance.MaintenanceService.Changed += this.OnMaintenanceChanged;
+            this.maintenanceSubscribed = true;
+        }
+
+        private void UnsubscribeMaintenance() {
+            if (!this.maintenanceSubscribed) {
+                return;
+            }
+
+            Core.Maintenance.MaintenanceService.Changed -= this.OnMaintenanceChanged;
+            this.maintenanceSubscribed = false;
+        }
+
+        // Сервер сообщил о смене режима: работы начались или закончились.
+        // Перезапуск клиента не нужен — просто пересчитываем кнопку.
+        private void OnMaintenanceChanged(Core.Maintenance.MaintenanceState state) {
+            try {
+                this.UpdateActionButtonState();
+                if (!state.Enabled && !this.isUpdating && string.IsNullOrWhiteSpace(this.lastErrorDetails)) {
+                    this.StatusText.Text = "Готов";
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "HomePage.OnMaintenanceChanged");
             }
         }
 
@@ -1613,6 +1694,14 @@ namespace ChillHub.Pages {
 
                 if (string.IsNullOrWhiteSpace(game.ExeRelativePath)) {
                     this.StatusText.Text = "Для игры не указан путь к исполняемому файлу. Настройте его в админ-панели.";
+                    return;
+                }
+
+                // Сервер может запретить и запуск (например, работы на игровых серверах)
+                var maintenance = Core.Maintenance.MaintenanceService.Current;
+                if (maintenance.BlocksPlay) {
+                    this.StatusText.Text = maintenance.BuildBannerText();
+                    this.UpdateActionButtonState();
                     return;
                 }
 

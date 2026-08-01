@@ -8,6 +8,7 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="56"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
@@ -89,8 +90,26 @@
             </Grid>
         </Border>
 
+        <!-- Баннер режима технических работ (задача 25). Скрыт, пока сервер не сообщил о работах. -->
+        <Border x:Name="MaintenanceBanner" Grid.Row="1" Visibility="Collapsed"
+                Background="{DynamicResource Brush.Surface}"
+                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1"
+                Padding="16,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" FontFamily="Segoe MDL2 Assets" Text="&#xE7BA;" FontSize="16"
+                           VerticalAlignment="Center" Margin="0,0,10,0"
+                           Foreground="{DynamicResource Brush.Danger}"/>
+                <TextBlock Grid.Column="1" x:Name="MaintenanceBannerText" TextWrapping="Wrap"
+                           VerticalAlignment="Center" Foreground="{DynamicResource Brush.Text}"/>
+            </Grid>
+        </Border>
+
         <!-- Content -->
-        <Grid Grid.Row="1" Background="{DynamicResource Brush.Background}">
+        <Grid Grid.Row="2" Background="{DynamicResource Brush.Background}">
             <Frame Name="ContentFrame" NavigationUIVisibility="Hidden" Background="Transparent"/>
         </Grid>
     </Grid>

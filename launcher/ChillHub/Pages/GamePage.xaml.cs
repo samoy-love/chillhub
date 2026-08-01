@@ -64,6 +64,10 @@ namespace ChillHub.Pages {
             }
 
             this.Unloaded += this.GamePage_Unloaded;
+
+            // Режим технических работ может включиться и выключиться, пока страница открыта (задача 25)
+            Core.Maintenance.MaintenanceService.Changed += this.OnMaintenanceChanged;
+
             _ = this.InitAsync();
         }
 
@@ -195,6 +199,9 @@ namespace ChillHub.Pages {
                 }
 
                 this.ActionBtn.IsEnabled = true;
+
+                // Последним словом остаётся режим технических работ: он может запретить действие
+                this.ApplyMaintenanceToButtons();
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Error(ex, $"GamePage.ApplyState({state})");
@@ -397,6 +404,65 @@ namespace ChillHub.Pages {
             catch (Exception ex) {
                 Core.Logging.Logger.Warn($"GamePage.Unloaded: отмена не выполнилась: {ex.Message}");
             }
+
+            // Статическое событие переживёт страницу — отписываемся, иначе утечёт ссылка
+            try {
+                Core.Maintenance.MaintenanceService.Changed -= this.OnMaintenanceChanged;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"GamePage.Unloaded: отписка от режима работ: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Сервер сообщил, что работы начались или закончились. Перезапуск клиента не нужен:
+        /// просто пересчитываем доступность кнопок.
+        /// </summary>
+        private void OnMaintenanceChanged(Core.Maintenance.MaintenanceState state) {
+            try {
+                this.ApplyMaintenanceToButtons();
+                this.UpdateVersionSwitchAvailability();
+                if (state.Enabled) {
+                    this.StatusText.Text = state.BuildBannerText();
+                }
+                else if (!this.isBusy) {
+                    this.StatusText.Text = string.Empty;
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "GamePage.OnMaintenanceChanged");
+            }
+        }
+
+        /// <summary>
+        /// Блокирует установку/обновление, если сервер объявил технические работы.
+        /// Подпись кнопки объясняет причину, чтобы неактивная кнопка не выглядела поломкой.
+        /// </summary>
+        private void ApplyMaintenanceToButtons() {
+            try {
+                if (this.isBusy) {
+                    return; // идёт закачка: кнопка работает как «Отмена», её не трогаем
+                }
+
+                if (this.IsSyncBlockedByMaintenance()) {
+                    this.ActionBtn.Content = "Технические работы";
+                    this.ActionBtn.IsEnabled = false;
+                    this.SwitchVersionBtn.IsEnabled = false;
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "GamePage.ApplyMaintenanceToButtons");
+            }
+        }
+
+        /// <summary>
+        /// Запрещена ли сейчас любая работа с файлами игры. Установка и обновление ходят по
+        /// одной и той же раздаче, поэтому блокируем, если запрещено хотя бы одно из них
+        /// применительно к текущему состоянию игры.
+        /// </summary>
+        private bool IsSyncBlockedByMaintenance() {
+            var state = Core.Maintenance.MaintenanceService.Current;
+            return this.game.IsInstalled ? state.BlocksUpdate : state.BlocksInstall;
         }
 
         // --- Установка / обновление / переключение версии ---
@@ -415,10 +481,14 @@ namespace ChillHub.Pages {
                 // повторная установка той же версии в этом случае осмысленна.
                 var unfinished = GameLocalState.HasUnfinishedUpdate(this.game.GameId);
 
-                this.SwitchVersionBtn.IsEnabled = !this.isBusy && (!sameAsInstalled || unfinished);
+                var maintenanceBlocked = this.IsSyncBlockedByMaintenance();
+                this.SwitchVersionBtn.IsEnabled = !this.isBusy && !maintenanceBlocked && (!sameAsInstalled || unfinished);
 
                 var latest = (this.game.LatestVersion ?? string.Empty).Trim();
-                if (sameAsInstalled && !unfinished) {
+                if (maintenanceBlocked) {
+                    this.VersionHintText.Text = "Переключение версии недоступно: на сервере идут технические работы.";
+                }
+                else if (sameAsInstalled && !unfinished) {
                     this.VersionHintText.Text = "Эта версия уже установлена.";
                 }
                 else if (!string.IsNullOrWhiteSpace(latest) && !string.Equals(selected, latest, StringComparison.OrdinalIgnoreCase)) {
@@ -437,6 +507,13 @@ namespace ChillHub.Pages {
             var gid = this.game.GameId;
             if (string.IsNullOrWhiteSpace(gid)) {
                 this.StatusText.Text = "Не удалось определить игру";
+                return;
+            }
+
+            // Подстраховка: работы могли начаться уже после отрисовки кнопок
+            if (this.IsSyncBlockedByMaintenance()) {
+                this.StatusText.Text = Core.Maintenance.MaintenanceService.Current.BuildBannerText();
+                this.ApplyMaintenanceToButtons();
                 return;
             }
 
