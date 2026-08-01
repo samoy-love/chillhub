@@ -711,9 +711,32 @@ fi
     echo "[wait] admin backend did not become ready within timeout; proceeding but tests may fail"
   fi
   
-# Nginx site config
+# ---------------------------------------------------------------------------
+# Nginx site config: бэкап -> установка -> nginx -t -> reload, С ОТКАТОМ.
+#
+# Раньше здесь были install + ln + `nginx -t` + reload без разбора результата.
+# При битом конфиге `set -e` обрывал скрипт СРАЗУ ПОСЛЕ install: файл и симлинк
+# оставались на месте, reload не делался — и до следующей перезагрузки всё
+# выглядело живым. А следующий reload по ЛЮБОЙ причине (чужой деплой, ребут,
+# certbot renew_hook) поднимал бы этот битый конфиг и уронил бы ВСЕ ТРИ сайта
+# на хосте: launcher, metro и snakes живут в одном nginx.
+#
+# Схема приведена к той же, что в scripts/deploy-nginx.sh и в
+# .github/workflows/deploy.yml, чтобы все три пути деплоя вели себя одинаково.
+# ---------------------------------------------------------------------------
+NGINX_BACKUP_DIR="/etc/nginx/chillhub-backups"
+sudo mkdir -p "$NGINX_BACKUP_DIR"
+NGINX_RESTORE=""
+if [ -f "$NGINX_SITE_AVAILABLE" ]; then
+  NGINX_RESTORE="$NGINX_BACKUP_DIR/$(basename "$NGINX_SITE_AVAILABLE").$(date -u +%Y%m%d-%H%M%S)"
+  sudo cp -a "$NGINX_SITE_AVAILABLE" "$NGINX_RESTORE"
+  echo "[nginx] backup: $NGINX_RESTORE"
+fi
 sudo install -m 0644 "$DEPLOY_DIR/deploy/launcher.conf" "$NGINX_SITE_AVAILABLE"
 sudo ln -sf "$NGINX_SITE_AVAILABLE" "$NGINX_SITE_ENABLED"
+# Показываем соседей: если мы вдруг что-то заденем, это будет видно в логе
+# деплоя, а не обнаружится жалобой чужого проекта.
+echo "[nginx] sites-enabled: $(ls -1 /etc/nginx/sites-enabled | tr '\n' ' ')"
 
 ## Sanitize tuning.conf to avoid duplicate core directives (e.g., sendfile) across configs
 TCONF="/etc/nginx/conf.d/tuning.conf"
@@ -730,8 +753,22 @@ if [ -f "$TCONF" ]; then
   # If file is now empty, remove it
   if ! sudo grep -q '[^[:space:]]' "$TCONF" 2>/dev/null; then sudo rm -f "$TCONF" || true; fi
 fi
-sudo nginx -t
+if ! sudo nginx -t; then
+  echo "[nginx] nginx -t не прошёл — откатываемся, reload НЕ делаем" >&2
+  if [ -n "$NGINX_RESTORE" ]; then
+    sudo install -m 0644 "$NGINX_RESTORE" "$NGINX_SITE_AVAILABLE"
+    echo "[nginx] rollback: восстановлен предыдущий $NGINX_SITE_AVAILABLE" >&2
+  else
+    sudo rm -f "$NGINX_SITE_AVAILABLE" "$NGINX_SITE_ENABLED"
+    echo "[nginx] rollback: удалён только что добавленный сайт" >&2
+  fi
+  # Если и после отката конфиг битый — ломали не мы, и это надо сказать вслух,
+  # иначе владелец будет искать причину в этом деплое.
+  sudo nginx -t >/dev/null 2>&1 || echo "[nginx] ВНИМАНИЕ: конфигурация nginx была битой и ДО этого деплоя" >&2
+  exit 1
+fi
 sudo systemctl reload nginx
+echo "[nginx] конфиг применён"
 # Note: we intentionally do not (re)create /etc/nginx/conf.d/tuning.conf here to avoid
 # introducing duplicate core directives. Base tuning should live in the primary nginx config.
 # Ensure worker_processes auto; and reasonable worker_connections in main nginx.conf
