@@ -37,15 +37,29 @@
     } catch { /* no-op */ }
     return u;
   }
+  // CSRF-токен — это секрет сессии админки. Отправлять его можно только на свой
+  // origin: запрос на чужой хост утащил бы токен туда в заголовке.
+  const UNSAFE_METHODS = new Set(['POST','PUT','PATCH','DELETE']);
+  function isSameOrigin(u){
+    try{
+      if(u == null) return false;
+      const s = (typeof u === 'string') ? u : (u && typeof u.url === 'string' ? u.url : String(u));
+      return new URL(s, window.location.href).origin === window.location.origin;
+    }catch{ return false; }
+  }
+  function needsCsrf(method, url){
+    return UNSAFE_METHODS.has(String(method||'GET').toUpperCase()) && isSameOrigin(url);
+  }
   // Low-level fetch wrapper: rewrite URL, attach CSRF for unsafe, auto-refresh on 401 once
   try {
     const origFetch = window.fetch;
     async function doFetchOnce(input, init){
       const r = rewrite(input);
       const opts = init ? { ...init } : {};
-      const method = (opts.method||'GET').toUpperCase();
-      if (method !== 'GET' && method !== 'HEAD') {
-        opts.headers = new Headers(opts.headers||{});
+      // Метод может быть задан и в init, и в самом Request — учитываем оба.
+      const method = (opts.method || (r && typeof r === 'object' && r.method) || 'GET');
+      if (needsCsrf(method, r)) {
+        opts.headers = new Headers(opts.headers || (r && typeof r === 'object' ? r.headers : undefined) || {});
         if (!opts.headers.has('X-CSRF-Token')) {
           const csrf = getCsrf(); if (csrf) opts.headers.set('X-CSRF-Token', csrf);
         }
@@ -71,19 +85,19 @@
           url = ADMIN_API_PREFIX + url.slice(ADMIN_PREFIX.length);
         }
       } catch { /* ignore */ }
-      try { this._method = method; } catch {}
+      try { this._method = method; this._url = url; } catch {}
       return origOpen.call(this, method, url, ...rest);
     };
     // also patch send to attach CSRF for unsafe methods
     const origSend = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.send = function(body){
       try{
-        const method = (this._method||this.method||'GET').toUpperCase();
-      }catch{}
-      try{
-        // Best-effort: if method is not GET/HEAD, attach CSRF
-        const csrf = getCsrf();
-        if (csrf) this.setRequestHeader('X-CSRF-Token', csrf);
+        // Раньше метод вычислялся, но не использовался, и токен уходил вообще
+        // с каждым XHR — включая GET и запросы на чужой origin.
+        if (needsCsrf(this._method, this._url)) {
+          const csrf = getCsrf();
+          if (csrf) this.setRequestHeader('X-CSRF-Token', csrf);
+        }
       }catch{}
       return origSend.call(this, body);
     };
