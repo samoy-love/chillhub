@@ -7,8 +7,19 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 
+using ChillHub.Update;
+
 internal static class Program
 {
+    // Коды возврата: 0 — успех, 2 — были ошибки копирования (обновление НЕ применено полностью), 3 — фатальная ошибка.
+    private const int ExitOk = 0;
+    private const int ExitCopyErrors = 2;
+    private const int ExitFatal = 3;
+
+    // Все служебные списки пишем в UTF-8 БЕЗ BOM: BOM ломает сверку размера/хеша
+    // (например, launcher.version становится 10 байт вместо 8).
+    private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
+
     public static async Task<int> Main(string[] args)
     {
         // Simple args parser: expects --key value pairs
@@ -51,20 +62,26 @@ internal static class Program
         var dirs = Opt("--dirs", string.Empty);
         var del = Opt("--del", string.Empty);
         var strip = Opt("--strip-prefix", string.Empty);
-        var preserve = Opt("--preserve", "config.json,launcher.version");
+        // --auto-strip false отключает автоопределение корневой папки архива:
+        // лаунчер считает strip-prefix сам по манифесту и передаёт его явно (см. A10).
+        var autoStrip = !string.Equals(Opt("--auto-strip", "true"), "false", StringComparison.OrdinalIgnoreCase);
+        var preserve = Opt("--preserve", PreserveMatcher.DefaultRulesCsv);
         var newVersion = Opt("--version", string.Empty);
 
         Directory.CreateDirectory(Path.GetDirectoryName(log) ?? Path.GetTempPath());
         void Log(string msg)
         {
-            try { File.AppendAllText(log, $"[{DateTime.Now:O}] {msg}\r\n"); } catch { }
+            try { File.AppendAllText(log, $"[{DateTime.Now:O}] {msg}\r\n", Utf8NoBom); } catch { }
         }
+
+        var copyErrors = 0;
+        var copyOk = 0;
 
         try
         {
                 // Log all options and basic file stats
                 string ExistsStat(string? p) => string.IsNullOrWhiteSpace(p) ? "<null>" : ($"'{p}' exists={(File.Exists(p) ? "file" : Directory.Exists(p) ? "dir" : "no")} ");
-                Log($"Updater start\n  --src={ExistsStat(src)}\n  --dst={ExistsStat(dst)}\n  --exe={ExistsStat(exe)}\n  --parent={parent}\n  --log='{log}'\n  --files={ExistsStat(files)}\n  --dirs={ExistsStat(dirs)}\n  --del={ExistsStat(del)}\n  --strip-prefix='{strip}'\n  --preserve='{preserve}'");
+                Log($"Updater start\n  --src={ExistsStat(src)}\n  --dst={ExistsStat(dst)}\n  --exe={ExistsStat(exe)}\n  --parent={parent}\n  --log='{log}'\n  --files={ExistsStat(files)}\n  --dirs={ExistsStat(dirs)}\n  --del={ExistsStat(del)}\n  --strip-prefix='{strip}'\n  --auto-strip={autoStrip}\n  --preserve='{preserve}'");
                 // Wait parent
                 if (parent > 0)
                 {
@@ -73,8 +90,8 @@ internal static class Program
                 // Ensure dst
                 try { Directory.CreateDirectory(dst); } catch { }
 
-                // Detect strip prefix if not provided
-                if (string.IsNullOrWhiteSpace(strip))
+                // Detect strip prefix if not provided (только если автоопределение разрешено)
+                if (string.IsNullOrWhiteSpace(strip) && autoStrip)
                 {
                     try
                     {
@@ -120,62 +137,16 @@ internal static class Program
                 }
                 Log($"effective strip-prefix='{strip}'");
 
-                // Preserve rules: support directory rules (ending with '/'), exact relative paths, filename-only, and simple wildcards '*' and '?'
-                var preserveRules = (preserve ?? "config.json")
-                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(s => s.Replace('\\','/').Trim())
-                    .Where(s => !string.IsNullOrWhiteSpace(s))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-                try { Log($"preserve rules: [{string.Join(", ", preserveRules)}]"); } catch { }
+                // Preserve rules: единый матчер, общий с лаунчером (ChillHub.Update.PreserveMatcher)
+                var matcher = PreserveMatcher.Parse(preserve);
+                try { Log($"preserve rules: [{string.Join(", ", matcher.Rules)}]"); } catch { }
 
-                bool WildcardIsMatch(string text, string pattern)
+                bool ShouldPreserve(string rel, string reason)
                 {
-                    // convert simple wildcard to regex
-                    var sb = new StringBuilder();
-                    sb.Append('^');
-                    foreach (var ch in pattern)
+                    if (matcher.ShouldPreserve(rel, out var rule))
                     {
-                        switch (ch)
-                        {
-                            case '*': sb.Append(".*"); break;
-                            case '?': sb.Append('.'); break;
-                            case '.': sb.Append("\\."); break;
-                            case '\\': sb.Append("\\\\"); break;
-                            case '/': sb.Append('/'); break;
-                            default: sb.Append(ch); break;
-                        }
-                    }
-                    sb.Append('$');
-                    try { return System.Text.RegularExpressions.Regex.IsMatch(text, sb.ToString(), System.Text.RegularExpressions.RegexOptions.IgnoreCase); }
-                    catch { return false; }
-                }
-
-                bool ShouldPreserve(string rel)
-                {
-                    // rel must be forward-slash relative path
-                    var norm = rel.Replace('\\','/').Trim('/');
-                    var leaf = Path.GetFileName(norm);
-                    foreach (var rule in preserveRules)
-                    {
-                        var r = rule;
-                        if (r.EndsWith('/'))
-                        {
-                            // directory prefix match
-                            var dir = r.Trim('/');
-                            if (!string.IsNullOrEmpty(dir) && norm.StartsWith(dir + '/', StringComparison.OrdinalIgnoreCase)) { Log($"preserve (dir): {norm} by '{rule}'"); return true; }
-                            if (string.IsNullOrEmpty(dir)) { Log($"preserve (root dir): {norm} by '{rule}'"); return true; }
-                            continue;
-                        }
-                        if (r.Contains('*') || r.Contains('?'))
-                        {
-                            if (WildcardIsMatch(norm, r) || WildcardIsMatch(leaf, r)) { Log($"preserve (wildcard): {norm} by '{rule}'"); return true; }
-                        }
-                        else
-                        {
-                            // exact relative path or filename
-                            if (norm.Equals(r, StringComparison.OrdinalIgnoreCase) || leaf.Equals(r, StringComparison.OrdinalIgnoreCase)) { Log($"preserve (exact): {norm} by '{rule}'"); return true; }
-                        }
+                        Log($"preserve ({reason}): {rel} by '{rule}'");
+                        return true;
                     }
                     return false;
                 }
@@ -234,8 +205,8 @@ internal static class Program
                 }
                 catch (Exception ex) { Log($"lists log error: {ex.Message}"); }
 
-                // Copy function
-                async Task CopyFileAsync(string sourceFile, string destFile)
+                // Copy function. Возвращает true при успехе; неудачи считаем — они влияют на exit code (A7).
+                async Task<bool> CopyFileAsync(string sourceFile, string destFile)
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(destFile)!);
                     if (File.Exists(destFile))
@@ -248,15 +219,23 @@ internal static class Program
                     {
                         try
                         {
-                            using var srcFs = new FileStream(sourceFile, FileMode.Open, FileAccess.Read, FileShare.Read);
-                            using var dstFs = new FileStream(destFile, FileMode.Create, FileAccess.Write, FileShare.Read);
-                            await srcFs.CopyToAsync(dstFs);
-                            break;
+                            using (var srcFs = new FileStream(sourceFile, FileMode.Open, FileAccess.Read, FileShare.Read))
+                            using (var dstFs = new FileStream(destFile, FileMode.Create, FileAccess.Write, FileShare.Read))
+                            {
+                                await srcFs.CopyToAsync(dstFs);
+                            }
+                            copyOk++;
+                            return true;
                         }
                         catch (Exception ex)
                         {
                             attempt++;
-                            if (attempt >= maxAttempts) { Log($"copy failed {sourceFile} -> {destFile}: {ex.Message}"); break; }
+                            if (attempt >= maxAttempts)
+                            {
+                                copyErrors++;
+                                Log($"copy FAILED (giving up after {maxAttempts}) {sourceFile} -> {destFile}: {ex.Message}");
+                                return false;
+                            }
                             var delay = Math.Min(5000, 200 * (int)Math.Pow(2, Math.Max(0, attempt - 1)));
                             Log($"copy retry {attempt}/{maxAttempts} {sourceFile}: {ex.Message}; {delay}ms");
                             await Task.Delay(delay);
@@ -274,7 +253,8 @@ internal static class Program
                         {
                             continue;
                         }
-                        if (ShouldPreserve(clean)) { Log($"skip copy preserve {clean}"); continue; }
+                        if (ShouldPreserve(clean, "copy")) { continue; }
+                        if (PreserveMatcher.IsUpdaterArtifact(clean)) { Log($"skip copy updater artifact {clean}"); continue; }
                         var srcRel = clean;
                         var dstRel = string.IsNullOrWhiteSpace(strip) ? clean : clean.StartsWith(strip + "/", StringComparison.OrdinalIgnoreCase) ? clean.Substring(strip.Length + 1) : clean;
                         var s = Path.Combine(src, srcRel.Replace('/', Path.DirectorySeparatorChar));
@@ -294,7 +274,9 @@ internal static class Program
                     foreach (var s in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
                     {
                         var rel = Path.GetRelativePath(src, s).Replace('\\','/');
-                        if (ShouldPreserve(rel)) { continue; }
+                        if (matcher.ShouldPreserve(rel)) { continue; }
+                        // Служебные файлы апдейтера в папку установки не переносим никогда (A6).
+                        if (PreserveMatcher.IsUpdaterArtifact(rel)) { Log($"mirror skip updater artifact {rel}"); continue; }
                         var dstRel = string.IsNullOrWhiteSpace(strip) ? rel : rel.StartsWith(strip + "/", StringComparison.OrdinalIgnoreCase) ? rel.Substring(strip.Length + 1) : rel;
                         var d = Path.Combine(dst, dstRel.Replace('/', Path.DirectorySeparatorChar));
                         // Cheap skip: same size
@@ -324,7 +306,7 @@ internal static class Program
                         {
                             continue;
                         }
-                        if (ShouldPreserve(clean)) { Log($"skip delete preserve {clean}"); continue; }
+                        if (ShouldPreserve(clean, "delete")) { continue; }
                         var delPath = Path.Combine(dst, clean.Replace('/', Path.DirectorySeparatorChar));
                         try { if (File.Exists(delPath)) { var fi = new FileInfo(delPath); fi.IsReadOnly = false; File.Delete(delPath); Log($"deleted {clean}"); } } catch (Exception ex) { Log($"delete failed {clean}: {ex.Message}"); }
                     }
@@ -345,6 +327,10 @@ internal static class Program
                     }
                 }
 
+                // Разовая очистка уже засорённых инсталляций: служебные файлы апдейтера,
+                // которые прошлые версии копировали прямо в папку установки (A6).
+                CleanupUpdaterArtifacts(dst, Log);
+
                 // Full union hash compare
                 try
                 {
@@ -362,10 +348,12 @@ internal static class Program
                         {
                             return true;
                         }
-                        var leaf = Path.GetFileName(r);
-                        if (leaf.Equals("filelist.txt", StringComparison.OrdinalIgnoreCase) ||
-                            leaf.Equals("emptydirs.txt", StringComparison.OrdinalIgnoreCase) ||
-                            leaf.Equals("deletelist.txt", StringComparison.OrdinalIgnoreCase))
+                        if (PreserveMatcher.IsUpdaterArtifact(r))
+                        {
+                            return true;
+                        }
+                        // preserve-файлы намеренно расходятся — они не участвуют в сверке
+                        if (matcher.ShouldPreserve(r))
                         {
                             return true;
                         }
@@ -410,8 +398,7 @@ internal static class Program
                         if (!se) { missS++; Log($"hash: SRC missing {relSrc}"); continue; }
                         if (!de)
                         {
-                            // Do not flag as missing if it is intentionally preserved from copy
-                            if (!ShouldPreserve(relDst)) { missD++; Log($"hash: DST missing {relDst}"); }
+                            missD++; Log($"hash: DST missing {relDst}");
                             continue;
                         }
                         var h1 = Sha256Hex(sp); var h2 = Sha256Hex(dp);
@@ -422,18 +409,29 @@ internal static class Program
                 }
                 catch (Exception ex) { Log($"hash union compare error: {ex.Message}"); }
 
-                // Write version marker (if provided)
+                // Write version marker (if provided).
+                // UTF-8 без BOM и без завершающего перевода строки — ровно как пишет installer.nsi.
                 try
                 {
                     if (!string.IsNullOrWhiteSpace(newVersion))
                     {
                         var marker = Path.Combine(dst, "launcher.version");
                         try { Directory.CreateDirectory(Path.GetDirectoryName(marker)!); } catch { }
-                        File.WriteAllText(marker, newVersion + Environment.NewLine, Encoding.UTF8);
-                        Log($"wrote version marker: {marker} = '{newVersion}'");
+                        File.WriteAllText(marker, newVersion.Trim(), Utf8NoBom);
+                        Log($"wrote version marker: {marker} = '{newVersion.Trim()}'");
                     }
                 }
                 catch (Exception ex) { Log($"version marker write error: {ex.Message}"); }
+
+                // Итог по копированию (A7): при ненулевом счётчике ошибок обновление применено НЕ полностью.
+                if (copyErrors > 0)
+                {
+                    Log($"COPY SUMMARY: FAILED. ok={copyOk} errors={copyErrors}. Update was NOT applied completely; exit code {ExitCopyErrors}.");
+                }
+                else
+                {
+                    Log($"COPY SUMMARY: OK. ok={copyOk} errors=0");
+                }
 
                 // Start
                 try
@@ -454,9 +452,47 @@ internal static class Program
         catch (Exception ex)
         {
             Log($"fatal: {ex}");
+            return ExitFatal;
         }
 
-        return 0;
+        return copyErrors > 0 ? ExitCopyErrors : ExitOk;
+    }
+
+    /// <summary>
+    /// Удаляет из папки установки служебные файлы апдейтера, оставшиеся от прошлых версий
+    /// (filelist.txt / deletelist.txt / emptydirs.txt / apply-update.log / apply-update.cmd и подпапку updater\).
+    /// </summary>
+    private static void CleanupUpdaterArtifacts(string dst, Action<string> log)
+    {
+        try
+        {
+            foreach (var name in PreserveMatcher.UpdaterArtifactFiles)
+            {
+                var p = Path.Combine(dst, name);
+                try
+                {
+                    if (File.Exists(p))
+                    {
+                        new FileInfo(p) { IsReadOnly = false }.Refresh();
+                        File.Delete(p);
+                        log($"cleanup: removed stale updater artifact {name}");
+                    }
+                }
+                catch (Exception ex) { log($"cleanup failed {name}: {ex.Message}"); }
+            }
+
+            var dir = Path.Combine(dst, PreserveMatcher.UpdaterArtifactDir);
+            try
+            {
+                if (Directory.Exists(dir))
+                {
+                    Directory.Delete(dir, true);
+                    log($"cleanup: removed stale updater directory '{PreserveMatcher.UpdaterArtifactDir}'");
+                }
+            }
+            catch (Exception ex) { log($"cleanup failed dir '{PreserveMatcher.UpdaterArtifactDir}': {ex.Message}"); }
+        }
+        catch (Exception ex) { log($"cleanup error: {ex.Message}"); }
     }
 
     private static string Sha256Hex(string path)
