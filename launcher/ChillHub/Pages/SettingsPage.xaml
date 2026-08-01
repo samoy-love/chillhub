@@ -75,6 +75,44 @@
           </Grid>
         </Grid>
       </Border>
+
+      <!-- Privacy section -->
+      <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,14,0,14">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <TextBlock Text="Конфиденциальность" FontWeight="SemiBold"/>
+          <StackPanel Grid.Row="1" Orientation="Vertical" Margin="0,8,0,0">
+            <CheckBox Name="AutoErrorReportsCheck" Content="Отправлять автоматические отчёты об ошибках"/>
+            <TextBlock Text="Включает отправку необработанных исключений вместе с логами, конфигурацией и именем компьютера. Ручная отправка обратной связи работает всегда."
+                       Foreground="{DynamicResource Brush.TextSecondary}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <!-- About / diagnostics section -->
+      <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,0,0,6">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <TextBlock Text="О программе" FontWeight="SemiBold"/>
+          <Grid Grid.Row="1" Margin="0,8,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="160"/>
+              <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="Версия лаунчера" Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center"/>
+            <TextBlock Grid.Column="1" Name="VersionText" Text="—" Margin="12,0,0,0" VerticalAlignment="Center"/>
+          </Grid>
+          <Button Grid.Row="2" Name="OpenLogsBtn" Content="Открыть папку с логами" Click="OpenLogsBtn_Click"
+                  HorizontalAlignment="Left" Padding="12,8" MinHeight="36" MinWidth="200" Margin="0,10,0,0"/>
+        </Grid>
+      </Border>
     </StackPanel>
 
     <!-- Footer actions -->
