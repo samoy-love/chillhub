@@ -93,6 +93,10 @@ const (
 	maxDurationMs int64 = 24 * 60 * 60 * 1000
 	// maxEventBytes is 1 TiB, far above any build.
 	maxEventBytes int64 = 1 << 40
+	// maxEventFiles bounds the file counters of one event. Ten million files is
+	// orders of magnitude above the largest build and keeps a bogus value from
+	// dominating the sums the same way durationMs once did.
+	maxEventFiles int64 = 10_000_000
 )
 
 // eventKinds is the allowlist of event names. An unknown kind is rejected with
@@ -109,12 +113,21 @@ var eventKinds = map[string]bool{
 	"game_launch": true,
 	// something failed; errorCode carries the classification
 	"error": true,
+	// the user asked to verify an installed game against the manifest;
+	// hashMismatches carries how many files disagreed
+	"integrity_check": true,
 }
 
 // results is the allowlist for the outcome of install/update/launch events.
 var results = map[string]bool{"ok": true, "fail": true, "cancel": true}
 
 // Event is one stored line. Field names are the wire contract with the client.
+//
+// FilesDownloaded/FilesTotal/FullBytes/HashMismatches were added later and are
+// optional: an older launcher simply omits them, and every consumer treats 0 as
+// "not reported" rather than as a real zero. They exist because Bytes alone
+// cannot answer the question the launcher was built to answer — how much of the
+// build the user did NOT have to download.
 type Event struct {
 	TS         string `json:"ts"`
 	InstallID  string `json:"installId,omitempty"`
@@ -127,6 +140,14 @@ type Event struct {
 	DurationMs int64  `json:"durationMs,omitempty"`
 	Bytes      int64  `json:"bytes,omitempty"`
 	ErrorCode  string `json:"errorCode,omitempty"`
+	// FilesDownloaded is how many files the operation actually fetched.
+	FilesDownloaded int64 `json:"filesDownloaded,omitempty"`
+	// FilesTotal is how many files the build has in total.
+	FilesTotal int64 `json:"filesTotal,omitempty"`
+	// FullBytes is what the same operation would have weighed as a full download.
+	FullBytes int64 `json:"fullBytes,omitempty"`
+	// HashMismatches counts files whose hash disagreed with the manifest.
+	HashMismatches int64 `json:"hashMismatches,omitempty"`
 }
 
 // Handlers serves the metrics endpoints for one content root.
@@ -135,6 +156,9 @@ type Handlers struct {
 	mu   sync.Mutex
 	// CurrentUser resolves the acting admin for audit log lines. It may be nil.
 	CurrentUser func(*http.Request) string
+	// Prom mirrors accepted events into Prometheus counters. It may be nil (the
+	// tests and any process that does not export metrics leave it unset).
+	Prom *Product
 	// MaxBytes overrides MaxFileBytes; 0 means the constant. Only the tests set
 	// it, so they can exercise rotation without writing 16 MiB.
 	MaxBytes int64
@@ -195,23 +219,29 @@ func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
 	// The decoder target IS the allowlist: unknown JSON members are dropped, so
 	// a client cannot smuggle extra data into the store.
 	var in struct {
-		InstallID  string `json:"installId"`
-		Event      string `json:"event"`
-		AppVersion string `json:"appVersion"`
-		OS         string `json:"os"`
-		GameID     string `json:"gameId"`
-		Version    string `json:"version"`
-		Result     string `json:"result"`
-		DurationMs int64  `json:"durationMs"`
-		Bytes      int64  `json:"bytes"`
-		ErrorCode  string `json:"errorCode"`
+		InstallID       string `json:"installId"`
+		Event           string `json:"event"`
+		AppVersion      string `json:"appVersion"`
+		OS              string `json:"os"`
+		GameID          string `json:"gameId"`
+		Version         string `json:"version"`
+		Result          string `json:"result"`
+		DurationMs      int64  `json:"durationMs"`
+		Bytes           int64  `json:"bytes"`
+		ErrorCode       string `json:"errorCode"`
+		FilesDownloaded int64  `json:"filesDownloaded"`
+		FilesTotal      int64  `json:"filesTotal"`
+		FullBytes       int64  `json:"fullBytes"`
+		HashMismatches  int64  `json:"hashMismatches"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxBodyBytes)).Decode(&in); err != nil {
+		h.Prom.Reject("bad_body")
 		http.Error(w, "invalid json body", http.StatusBadRequest)
 		return
 	}
 	kind := strings.ToLower(clamp(in.Event, 40))
 	if !eventKinds[kind] {
+		h.Prom.Reject("unknown_event")
 		http.Error(w, "unknown event", http.StatusBadRequest)
 		return
 	}
@@ -221,6 +251,10 @@ func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
 	}
 	in.DurationMs = clampInt64(in.DurationMs, maxDurationMs)
 	in.Bytes = clampInt64(in.Bytes, maxEventBytes)
+	in.FullBytes = clampInt64(in.FullBytes, maxEventBytes)
+	in.FilesDownloaded = clampInt64(in.FilesDownloaded, maxEventFiles)
+	in.FilesTotal = clampInt64(in.FilesTotal, maxEventFiles)
+	in.HashMismatches = clampInt64(in.HashMismatches, maxEventFiles)
 	ev := Event{
 		// Server time on purpose: a wrong client clock would otherwise scatter
 		// events across the day buckets.
@@ -235,14 +269,24 @@ func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
 		DurationMs: in.DurationMs,
 		Bytes:      in.Bytes,
 		ErrorCode:  clamp(in.ErrorCode, maxErrorCode),
+
+		FilesDownloaded: in.FilesDownloaded,
+		FilesTotal:      in.FilesTotal,
+		FullBytes:       in.FullBytes,
+		HashMismatches:  in.HashMismatches,
 	}
 	if err := h.append(ev); err != nil {
 		// This endpoint is public and unauthenticated: err.Error() would hand a
 		// stranger the absolute content-root path the moment the disk fills up.
 		log.Printf("[metrics] append: %v", err)
+		h.Prom.Reject("store_failed")
 		http.Error(w, "failed to store event", http.StatusInternalServerError)
 		return
 	}
+	// Считаем только то, что действительно легло в файл: иначе график и сводка
+	// админки разошлись бы ровно в тот момент, когда что-то сломалось, то есть
+	// когда сверять их важнее всего.
+	h.Prom.Record(ev)
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 

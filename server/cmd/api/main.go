@@ -14,6 +14,7 @@ import (
 	"ChillHub/server/internal/adminutil"
 	"ChillHub/server/internal/httpx"
 	"ChillHub/server/internal/maintenance"
+	"ChillHub/server/internal/promexp"
 	"ChillHub/server/internal/ratelimit"
 
 	"github.com/gorilla/mux"
@@ -110,7 +111,14 @@ func main() {
 
 	limit, window := apiRateLimit()
 	limiter := ratelimit.New(limit, window)
-	r := newRouter(limiter)
+	reg := promexp.New()
+	r := newRouter(limiter, reg)
+
+	// Экспортёр живёт на своём порту и по умолчанию на loopback: продуктовые
+	// метрики не должны зависеть от того, не появился ли в конфиге nginx ещё
+	// один location. Prometheus работает в контейнере и ходит на хост через
+	// docker-мост, поэтому на проде адрес задаётся явно.
+	go promexp.Serve(httpx.ListenAddr("API_METRICS_LISTEN_ADDR", 55701), reg)
 
 	// Loopback by default: in production nginx proxies to 127.0.0.1. For a dev
 	// box that has to be reachable from another machine set API_LISTEN_ADDR.
@@ -137,8 +145,12 @@ func main() {
 
 // newRouter wires the public routes. It is separate from main so that tests can
 // drive the real routing table (method matching included) without a listener.
-func newRouter(limiter *ratelimit.Limiter) *mux.Router {
+func newRouter(limiter *ratelimit.Limiter, reg *promexp.Registry) *mux.Router {
 	r := mux.NewRouter()
+	// Счётчик первым в цепочке: запрос, отбитый лимитером или CORS, — это тоже
+	// ответ, и «всем прилетает 429» должно быть видно на графике, а не только
+	// в логе.
+	r.Use(httpx.Metrics(reg, "api", muxRoute))
 	r.Use(httpx.RequestID())
 	r.Use(httpx.CORS("*"))
 	r.Use(httpx.Logging("PUBLIC"))
@@ -178,6 +190,20 @@ func newRouter(limiter *ratelimit.Limiter) *mux.Router {
 }
 
 var contentRoot string
+
+// muxRoute names the matched route by its path TEMPLATE ("/api/games/{gameId}"),
+// not by the requested path. The template is a closed set defined in this file,
+// so no request can add a time series; the concrete game id would add one per
+// game — and one per typo — for a breakdown that the product counters already
+// provide with a bounded label.
+func muxRoute(r *http.Request) string {
+	if route := mux.CurrentRoute(r); route != nil {
+		if tpl, err := route.GetPathTemplate(); err == nil && tpl != "" {
+			return tpl
+		}
+	}
+	return "other"
+}
 
 // loadGamesFromRegistry attempts to read admin-managed registry:
 //

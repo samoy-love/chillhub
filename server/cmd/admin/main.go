@@ -23,6 +23,7 @@ import (
 	"ChillHub/server/internal/httpx"
 	"ChillHub/server/internal/maintenance"
 	"ChillHub/server/internal/metrics"
+	"ChillHub/server/internal/promexp"
 	"ChillHub/server/internal/ratelimit"
 
 	"go.uber.org/automaxprocs/maxprocs"
@@ -65,6 +66,7 @@ type server struct {
 	feedback    *feedback.Handlers
 	maintenance *maintenance.Store
 	metrics     *metrics.Handlers
+	prom        *adminMetrics
 
 	feedbackLimiter *ratelimit.Limiter
 	metricsLimiter  *ratelimit.Limiter
@@ -81,6 +83,12 @@ func newServer(contentRoot string) *server {
 	mt.CurrentUser = a.CurrentUser
 	mx := metrics.New(contentRoot)
 	mx.CurrentUser = a.CurrentUser
+
+	// Свой реестр на каждый экземпляр сервера: имя метрики регистрируется
+	// однократно, а тесты поднимают сервер по нескольку раз за прогон.
+	reg := promexp.New()
+	mx.Prom = metrics.NewProduct(reg)
+
 	return &server{
 		contentRoot:     contentRoot,
 		auth:            a,
@@ -90,6 +98,7 @@ func newServer(contentRoot string) *server {
 		feedback:        f,
 		maintenance:     mt,
 		metrics:         mx,
+		prom:            newAdminMetrics(reg, mt),
 		feedbackLimiter: ratelimit.New(feedbackRateLimit, feedbackRateWindow),
 		metricsLimiter:  ratelimit.New(metricsRateLimit, metricsRateWindow),
 		loginLimiter:    ratelimit.New(loginRateLimit, loginRateWindow),
@@ -134,12 +143,20 @@ func main() {
 	// business talking to the admin API directly. ADMIN_LISTEN_ADDR overrides.
 	addr := httpx.ListenAddr("ADMIN_LISTEN_ADDR", 55777)
 	log.Printf("admin API listening on %s (CONTENT_ROOT=%s, routes=%d)", addr, contentRoot, len(paths))
-	// Middlewares: RequestID -> CORS -> Auth -> Logging
+	// Экспортёр на отдельном порту и по умолчанию на loopback: наружу торчит
+	// только nginx, и ни один его location сюда не ведёт.
+	go promexp.Serve(httpx.ListenAddr("ADMIN_METRICS_LISTEN_ADDR", 55778), s.prom.reg)
+
+	// Middlewares: Metrics -> RequestID -> CORS -> Auth -> Logging
+	// Счётчик снаружи авторизации: 401 и 429 — это тоже ответы, и всплеск
+	// именно таких кодов виден только если их считают.
+	exact, prefixes := routeLabels(paths)
 	var h http.Handler = mux
 	h = httpx.RequestID()(h)
 	h = httpx.CORS(adminCORSOrigin())(h)
 	h = s.auth.Middleware(h)
 	h = httpx.Logging("ADMIN")(h)
+	h = httpx.Metrics(s.prom.reg, "admin", httpx.StaticRoutes(exact, prefixes))(h)
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           h,
