@@ -1,0 +1,132 @@
+name: Deploy
+
+# Выкатка через общий пайплайн deploy-kit. Пять целей проекта разведены:
+# можно выкатить только админку, не трогая публичный API и наоборот.
+#
+# Пароль админки живёт хешем в systemd drop-in на сервере и задаётся отдельно
+# от выкатки — поэтому шага с bcrypt здесь нет и не должно быть.
+
+# Публикация установщика в GitHub Release требует записи в contents.
+# Вызываемый workflow не может запросить прав больше, чем есть у вызывающего:
+# без этого блока запуск падает ещё до первого шага.
+permissions:
+  contents: write
+
+# Триггер общий для всех проектов samoy.love: мерж в main уезжает на прод.
+# Единственный вход, кроме ручного запуска, — именно он.
+#
+# ТЕГ БОЛЬШЕ НЕ ТРИГГЕР. Установщик из-за этого собирается только вручную:
+# `workflow_dispatch` с target=installer. Автоматически по выпуску версии он
+# больше не собирается, потому что выпуска версии как события здесь больше нет.
+#
+# Если установщик снова понадобится по тегу, вернуть надо ДВЕ вещи: `tags` сюда
+# и теговое слагаемое в условие job'ы installer. Имя GitHub Release при этом
+# берётся из имени ссылки, поэтому на push в main его публиковать нельзя —
+# релиз назывался бы «main».
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Что катим'
+        type: choice
+        options: [site, api, admin, admin-ui, servers, all, installer]
+        default: all
+      dry-run:
+        type: boolean
+        default: false
+
+# ЦЕЛИ ВЫКАТЫВАЮТСЯ ПО ОЧЕРЕДИ, а не разом.
+#
+# На хосте один замок (flock в release.sh), и он не ждёт, а падает:
+# «очередь на хосте занята нами». Пока цели разводила группа параллелизма в
+# deploy-kit, очередь получалась побочным эффектом — ценой того, что лишние
+# задачи ОТМЕНЯЛИСЬ и `target=all` не мог выкатить всё. Группу починили, цели
+# пошли одновременно и столкнулись на замке: тег v1.2.3 уронил все пять разом.
+#
+# Порядок здесь явный. `always()` нужен, чтобы отказ одной цели не отменял
+# остальные: они независимы, и невыкаченное из-за чужой ошибки — хуже, чем
+# частичная выкатка, о которой видно, что она частичная.
+#
+# Условия целей читаются так: «выбрана явно через workflow_dispatch ИЛИ это
+# мерж в main». Скобки вокруг всего набора после `always()`
+# обязательны: `&&` связывает сильнее `||`, и без них `always()` относился бы
+# только к первому слагаемому, а остальные проверялись бы сами по себе.
+jobs:
+  site:
+    if: >-
+      inputs.target == 'site' || inputs.target == 'all'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    uses: tr0llex/deploy-kit/.github/workflows/static-site.yml@main
+    with:
+      config: .deploy-kit/site.env
+      # Лендинг — статика без сборки; регресс для него это линтеры разметки.
+      gates: npx --yes htmlhint@1.9.2 "landing/**/*.html" && npm i -g stylelint@17.14.1 stylelint-config-standard@40.0.0 >/dev/null && npx stylelint "landing/**/*.css"
+      dry-run: ${{ inputs.dry-run == true }}
+    secrets: inherit
+
+  api:
+    needs: [site]
+    if: >-
+      always() && (
+        inputs.target == 'api' || inputs.target == 'servers' || inputs.target == 'all'
+        || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      )
+    uses: tr0llex/deploy-kit/.github/workflows/go-service.yml@main
+    with:
+      config: .deploy-kit/api.env
+      workdir: server
+      gates: go vet ./... && go test ./... -race -coverprofile=coverage.out -covermode=atomic
+      dry-run: ${{ inputs.dry-run == true }}
+    secrets: inherit
+
+  admin:
+    needs: [api]
+    if: >-
+      always() && (
+        inputs.target == 'admin' || inputs.target == 'servers' || inputs.target == 'all'
+        || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      )
+    uses: tr0llex/deploy-kit/.github/workflows/go-service.yml@main
+    with:
+      config: .deploy-kit/admin.env
+      workdir: server
+      gates: go vet ./... && go test ./... -race -coverprofile=coverage.out -covermode=atomic
+      dry-run: ${{ inputs.dry-run == true }}
+    secrets: inherit
+
+  admin-ui:
+    needs: [admin]
+    if: >-
+      always() && (
+        inputs.target == 'admin-ui' || inputs.target == 'admin' || inputs.target == 'all'
+        || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      )
+    uses: tr0llex/deploy-kit/.github/workflows/static-site.yml@main
+    with:
+      config: .deploy-kit/admin-ui.env
+      # Морда админки — та же разметка и стили, что и лендинг: гейт тот же.
+      gates: npx --yes htmlhint@1.9.2 "server/admin_ui/**/*.html" && npm i -g stylelint@17.14.1 stylelint-config-standard@40.0.0 >/dev/null && npx stylelint "server/admin_ui/**/*.css"
+      dry-run: ${{ inputs.dry-run == true }}
+    secrets: inherit
+
+  installer:
+    needs: [admin-ui]
+    # ТОЛЬКО ручной запуск. Тега как триггера у этого workflow больше нет, а
+    # мержа в main здесь нет намеренно: имя GitHub Release берётся из имени
+    # ссылки, и на push в main релиз назывался бы «main».
+    #
+    # То есть выпуск установщика теперь — осознанное действие человека:
+    # «Run workflow» с target=installer.
+    if: always() && inputs.target == 'installer'
+    uses: tr0llex/deploy-kit/.github/workflows/desktop-artifact.yml@main
+    with:
+      # Ведущая `v` из тега СНИМАЕТСЯ. Тег называется v1.2.3, а версия уезжает
+      # в launcher.version и сравнивается с manifests/launcher/latest.json
+      # ПОСИМВОЛЬНО: «v1.2.3» против «1.2.3» — это вечный цикл обновления у
+      # каждого, кто поставит такой билд. Тегов в репозитории ещё не было,
+      # поэтому ловушка ни разу не срабатывала.
+      build: ./scripts/build-installer.ps1 -Configuration Release -AppVersion ($env:DEPLOY_VERSION -replace '^v','')
+      artifact: scripts/generated_downloads/ChillHub-Setup.exe
+    secrets: inherit

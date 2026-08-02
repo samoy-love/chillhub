@@ -2,9 +2,10 @@
 
 English · [Русский](README.ru.md)
 
-[![CI](https://github.com/tr0llex/chillhub/actions/workflows/lint.yml/badge.svg)](https://github.com/tr0llex/chillhub/actions/workflows/lint.yml)
+[![CI](https://github.com/tr0llex/chillhub/actions/workflows/ci.yml/badge.svg)](https://github.com/tr0llex/chillhub/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/tr0llex/chillhub/branch/main/graph/badge.svg)](https://codecov.io/gh/tr0llex/chillhub)
 [![prod](https://img.shields.io/website?url=https%3A%2F%2Flauncher.samoy.love&up_message=online&up_color=2ea043&down_message=offline&label=launcher.samoy.love)](https://launcher.samoy.love)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A Windows launcher that distributes modded game builds and keeps them up to
 date for a small circle of players — [launcher.samoy.love](https://launcher.samoy.love).
@@ -13,6 +14,10 @@ Updating a modpack should mean "Update → Play", not "download the archive,
 unpack it here, delete those three files, and don't lose your config". Every
 manual step in that sequence is a step someone performs wrong, and a broken
 install is indistinguishable from a broken build until somebody debugs it.
+
+ChillHub grew out of a private mod updater for Lethal Company (C#, WinForms,
+2023–2024): one game, a hardcoded file list, updates poured over whatever was
+there. Same problem, rebuilt for many games — with diffs, hashes and rollbacks.
 
 ![Launcher main screen](docs/img/launcher-main.svg)
 
@@ -134,7 +139,7 @@ dk deploy --all --dry-run   # show the plan, touch nothing
 dk rollback chillhub-admin
 ```
 
-From CI: Actions → Release → Run workflow, with the target selectable there.
+From CI: Actions → Deploy → Run workflow, with the target selectable there.
 `all` ships the four targets above but does NOT build the installer — that
 needs either a separate run with `target=installer` or a `v*` tag, which does
 both.

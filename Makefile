@@ -109,8 +109,8 @@ lint-web:
 # Второе хуже первого: локальный прогон и CI использовали РАЗНЫЕ версии
 # линтеров. Расхождение проявлялось самым неприятным образом — «у меня всё
 # чисто», а PR краснеет; либо наоборот, локально ругается на то, чего CI не
-# видит. Версии здесь совпадают с пинами в .github/workflows/lint.yml,
-# и менять их надо в двух местах ОДНОВРЕМЕННО (список — в шапке lint.yml).
+# видит. Версии здесь совпадают с пинами в .github/workflows/ci.yml,
+# и менять их надо в двух местах ОДНОВРЕМЕННО (список — в шапке ci.yml).
 	@echo [lint:web] HTMLHint (landing + server/admin_ui)
 	npx -y htmlhint@1.9.2 "landing/**/*.html" "server/admin_ui/**/*.html"
 	@echo [lint:web] Stylelint (landing + server/admin_ui)
@@ -127,7 +127,7 @@ lint-go:
 	@echo [lint:go] golangci-lint (if installed)
 # `-` оставлен намеренно ТОЛЬКО здесь: golangci-lint может быть не установлен
 # локально, и «не установлен» — это не «код плохой». В CI он обязателен и
-# закреплён версией (lint.yml).
+# закреплён версией (ci.yml).
 	@- cmd /C "where golangci-lint >NUL 2>&1 && ( cd server && golangci-lint run ) || echo [lint:go] golangci-lint not found - skipping"
 	@echo [lint:go] Running go vet
 # И26: без `-`. go vet есть в любой установке Go, и в CI этот шаг блокирующий —
