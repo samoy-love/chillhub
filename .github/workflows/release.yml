@@ -26,6 +26,17 @@ on:
         type: boolean
         default: false
 
+# ЦЕЛИ ВЫКАТЫВАЮТСЯ ПО ОЧЕРЕДИ, а не разом.
+#
+# На хосте один замок (flock в release.sh), и он не ждёт, а падает:
+# «очередь на хосте занята нами». Пока цели разводила группа параллелизма в
+# deploy-kit, очередь получалась побочным эффектом — ценой того, что лишние
+# задачи ОТМЕНЯЛИСЬ и `target=all` не мог выкатить всё. Группу починили, цели
+# пошли одновременно и столкнулись на замке: тег v1.2.3 уронил все пять разом.
+#
+# Порядок здесь явный. `always()` нужен, чтобы отказ одной цели не отменял
+# остальные: они независимы, и невыкаченное из-за чужой ошибки — хуже, чем
+# частичная выкатка, о которой видно, что она частичная.
 jobs:
   site:
     if: inputs.target == 'site' || inputs.target == 'all' || startsWith(github.ref, 'refs/tags/')
@@ -38,7 +49,8 @@ jobs:
     secrets: inherit
 
   api:
-    if: inputs.target == 'api' || inputs.target == 'servers' || inputs.target == 'all' || startsWith(github.ref, 'refs/tags/')
+    needs: [site]
+    if: always() && inputs.target == 'api' || inputs.target == 'servers' || inputs.target == 'all' || startsWith(github.ref, 'refs/tags/')
     uses: tr0llex/deploy-kit/.github/workflows/go-service.yml@main
     with:
       config: .deploy-kit/api.env
@@ -48,7 +60,8 @@ jobs:
     secrets: inherit
 
   admin:
-    if: inputs.target == 'admin' || inputs.target == 'servers' || inputs.target == 'all' || startsWith(github.ref, 'refs/tags/')
+    needs: [api]
+    if: always() && inputs.target == 'admin' || inputs.target == 'servers' || inputs.target == 'all' || startsWith(github.ref, 'refs/tags/')
     uses: tr0llex/deploy-kit/.github/workflows/go-service.yml@main
     with:
       config: .deploy-kit/admin.env
@@ -58,7 +71,8 @@ jobs:
     secrets: inherit
 
   admin-ui:
-    if: inputs.target == 'admin-ui' || inputs.target == 'admin' || inputs.target == 'all' || startsWith(github.ref, 'refs/tags/')
+    needs: [admin]
+    if: always() && inputs.target == 'admin-ui' || inputs.target == 'admin' || inputs.target == 'all' || startsWith(github.ref, 'refs/tags/')
     uses: tr0llex/deploy-kit/.github/workflows/static-site.yml@main
     with:
       config: .deploy-kit/admin-ui.env
@@ -68,7 +82,8 @@ jobs:
     secrets: inherit
 
   installer:
-    if: inputs.target == 'installer' || startsWith(github.ref, 'refs/tags/')
+    needs: [admin-ui]
+    if: always() && inputs.target == 'installer' || startsWith(github.ref, 'refs/tags/')
     uses: tr0llex/deploy-kit/.github/workflows/desktop-artifact.yml@main
     with:
       # Ведущая `v` из тега СНИМАЕТСЯ. Тег называется v1.2.3, а версия уезжает
