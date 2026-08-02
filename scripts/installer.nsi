@@ -64,8 +64,21 @@ UninstallIcon "app.ico"
 !endif
 
 ; Prerequisite installer filenames (centralized)
-!define PREREQ_WEBVIEW2 "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
-!define PREREQ_DOTNET   "windowsdesktop-runtime-8.0.20-win-x64.exe"
+;
+; WEBVIEW2 — ЭТО BOOTSTRAPPER (~2 МБ), А НЕ ОФЛАЙН-ИНСТАЛЛЯТОР (~183 МБ).
+; Раньше в установщик зашивался полный офлайн-пакет, и он один давал три
+; четверти веса дистрибутива. При этом WebView2 предустановлен в Windows 11 и
+; давно разъехался на Windows 10 вместе с Edge, то есть почти всем этот пакет
+; был не нужен. Bootstrapper проверяет наличие рантайма и качает его только
+; тем, у кого его действительно нет.
+;
+; Инсталлятор .NET отсюда убран: лаунчер публикуется self-contained, рантайм
+; едет внутри сборки, и доустанавливать нечего.
+!define PREREQ_WEBVIEW2 "MicrosoftEdgeWebview2Setup.exe"
+
+; Ключ, по которому Edge регистрирует установленный WebView2 Runtime.
+; Он одинаков для машинной и пользовательской установки, различается только улей.
+!define WEBVIEW2_CLIENT_KEY "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
 Var GAMES_DIR
 Var GamesDir_Edit
@@ -76,6 +89,7 @@ Var Un_GamesDir
 Var DeleteGames_State
 Var LaunchAfterFlag
 Var PrereqsRan
+Var WebView2Present
 
 ; Output installer
 Name "${APP_NAME}"
@@ -97,7 +111,7 @@ SetDatablockOptimize on
 
 ; Finish page settings: show prerequisites first, then run app
 !define MUI_FINISHPAGE_SHOWREADME
-!define MUI_FINISHPAGE_SHOWREADME_TEXT "Установить зависимости (.NET 8 Desktop, WebView2)"
+!define MUI_FINISHPAGE_SHOWREADME_TEXT "Доустановить WebView2 (нужен для показа новостей)"
 !define MUI_FINISHPAGE_SHOWREADME_FUNCTION InstallPrereqs
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Запустить ${APP_NAME}"
@@ -242,7 +256,6 @@ Section "Install"
   ; Use non-fatal includes so build continues if prereqs are not present
   ; NSIS will emit a warning if the file is missing and continue
   File /nonfatal "Redist\${PREREQ_WEBVIEW2}"
-  File /nonfatal "Redist\${PREREQ_DOTNET}"
 
 SectionEnd
 
@@ -473,18 +486,38 @@ Function RunAppAfterInstall
   StrCpy $LaunchAfterFlag 1
 FunctionEnd
 
+; Проверяет, установлен ли WebView2 Runtime. Результат — в $WebView2Present
+; (1 — есть, 0 — нет).
+;
+; Смотрим оба улья: рантайм ставится либо на машину (HKLM, обычный случай —
+; приехал с Edge), либо в профиль пользователя (HKCU). Непустая версия в
+; значении "pv" и означает установленный рантайм.
+Function DetectWebView2
+  StrCpy $WebView2Present 0
+  ReadRegStr $0 HKLM "SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\${WEBVIEW2_CLIENT_KEY}" "pv"
+  StrCmp $0 "" 0 found
+  ReadRegStr $0 HKLM "SOFTWARE\Microsoft\EdgeUpdate\Clients\${WEBVIEW2_CLIENT_KEY}" "pv"
+  StrCmp $0 "" 0 found
+  ReadRegStr $0 HKCU "SOFTWARE\Microsoft\EdgeUpdate\Clients\${WEBVIEW2_CLIENT_KEY}" "pv"
+  StrCmp $0 "" done found
+found:
+  ; "0.0.0.0" Edge пишет как признак «зарегистрировано, но не установлено».
+  StrCmp $0 "0.0.0.0" done 0
+  StrCpy $WebView2Present 1
+done:
+FunctionEnd
+
 Function InstallPrereqs
-  ; Offer to run .NET Desktop Runtime 8 and WebView2 installers (interactive UI)
-  ; Run sequentially and only after both finish optionally launch the app if requested
+  ; Единственная оставшаяся зависимость — WebView2 Runtime. Инсталлятор .NET
+  ; больше не нужен: сборка self-contained несёт рантайм внутри себя.
   StrCpy $PrereqsRan 1
-  StrCpy $0 "$PLUGINSDIR\Redist\${PREREQ_DOTNET}"
+  Call DetectWebView2
+  StrCmp $WebView2Present 1 skip 0
   StrCpy $1 "$PLUGINSDIR\Redist\${PREREQ_WEBVIEW2}"
-  ; .NET Runtime
-  IfFileExists "$0" 0 +2
-    ExecWait '"$0"'
-  ; WebView2
-  IfFileExists "$1" 0 +2
-    ExecWait '"$1"'
+  IfFileExists "$1" 0 skip
+    ; Bootstrapper сам решает, что качать; //silent /install проходит без окон.
+    ExecWait '"$1" /silent /install'
+skip:
   ; If user asked to run app, do it now after prereqs
   StrCmp $LaunchAfterFlag 1 0 +2
     ExecShell "open" "$INSTDIR\${APP_EXE}"

@@ -12,13 +12,28 @@
 #   перезапишет (preserve), и лаунчер уйдёт в бесконечный цикл обновления.
 # =============================================================================
 param(
-    [switch]$Publish = $false,
+    # SELF-CONTAINED ПО УМОЛЧАНИЮ.
+    #
+    # Раньше сборка была framework-dependent, и установщик тащил с собой
+    # windowsdesktop-runtime (55.8 МБ), который пользователь ставил галочкой на
+    # финальной странице. Снял галочку — получил лаунчер, который не стартует:
+    # ни .NET 8, ни любой другой .NET в Windows 10/11 не предустановлен (в системе
+    # есть только .NET Framework, а это другой продукт).
+    #
+    # Self-contained убирает этот шаг совсем. Цена — сборка вырастает с 6 МБ до
+    # 166 МБ на диске (68 МБ в сжатом виде против 2.3 МБ), но инсталлятор .NET
+    # больше не нужен, так что итоговый дистрибутив прибавляет всего ~10 МБ.
+    # На самообновление это почти не влияет: обновления диффовые, а файлы рантайма
+    # между версиями лаунчера не меняются и повторно не скачиваются.
+    #
+    # Отключить: -Publish:$false -SelfContained:$false
+    [switch]$Publish = $true,
     [string]$Configuration = "Release",
     [string]$Csproj = "launcher/ChillHub/ChillHub.csproj",
     [string]$Installer = "scripts/installer.nsi",
     [string]$MakensisPath,
     [string]$Runtime = "win-x64",
-    [switch]$SelfContained,
+    [switch]$SelfContained = $true,
     [switch]$NoCompress,
     # Версия, которая попадёт в launcher.version внутри установки (Б8).
     #
@@ -409,6 +424,52 @@ if ($SkipInstaller) {
     Write-Host "SkipInstaller: NSIS compilation skipped." -ForegroundColor Yellow
     return
 }
+
+# WebView2 Evergreen Bootstrapper.
+#
+# scripts/Redist/ лежит в .gitignore, и CI его ничем не наполнял: из-за
+# `File /nonfatal` в installer.nsi сборка молча проходила БЕЗ зависимостей, и
+# установщик, который выкладывается на сайт, не содержал ни .NET, ни WebView2.
+# Пользователь получал лаунчер, который не запускается, без единой подсказки.
+#
+# Bootstrapper весит ~2 МБ (офлайн-пакет — 183 МБ), поэтому его дешевле забирать
+# на каждой сборке, чем держать в репозитории. Если сети нет — не валимся:
+# установщик соберётся без него, ровно как раньше, но об этом будет сказано вслух.
+function Ensure-WebView2Bootstrapper {
+    param([Parameter(Mandatory = $true)][string]$RedistDir)
+
+    $target = Join-Path $RedistDir 'MicrosoftEdgeWebview2Setup.exe'
+    if (Test-Path -LiteralPath $target) {
+        $mb = [math]::Round((Get-Item -LiteralPath $target).Length / 1MB, 1)
+        Write-Host "WebView2 bootstrapper: уже на месте ($mb МБ)" -ForegroundColor Cyan
+        return
+    }
+
+    New-Item -ItemType Directory -Force -Path $RedistDir | Out-Null
+    # Официальный вечный редирект Microsoft на актуальный bootstrapper.
+    $url = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703'
+    try {
+        Write-Host "WebView2 bootstrapper: качаю..." -ForegroundColor Cyan
+        $tmp = "$target.tmp"
+        Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -TimeoutSec 120
+        # Проверяем, что приехал исполняемый файл, а не страница-заглушка:
+        # HTML вместо .exe молча превратился бы в неработающую зависимость.
+        $head = [System.IO.File]::ReadAllBytes($tmp)[0..1]
+        if ($head[0] -ne 0x4D -or $head[1] -ne 0x5A) {
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+            throw "по ссылке пришёл не исполняемый файл (нет сигнатуры MZ)"
+        }
+        Move-Item -LiteralPath $tmp -Destination $target -Force
+        $mb = [math]::Round((Get-Item -LiteralPath $target).Length / 1MB, 1)
+        Write-Host "WebView2 bootstrapper: готов ($mb МБ)" -ForegroundColor Green
+    }
+    catch {
+        Write-Warning "WebView2 bootstrapper не скачан: $($_.Exception.Message)"
+        Write-Warning "Установщик соберётся без него — на машине без WebView2 не откроются новости."
+    }
+}
+
+Ensure-WebView2Bootstrapper -RedistDir (Join-Path (Split-Path $Installer -Parent) 'Redist')
 
 # Резолвим версию ДО поиска makensis: если версии нет, падать надо сразу, а не
 # после того, как найден компилятор и созданы выходные каталоги.
