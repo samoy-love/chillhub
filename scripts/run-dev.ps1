@@ -92,6 +92,11 @@ function Set-AuthEnv {
     if (-not $env:JWT_SECRET -or $env:JWT_SECRET.Trim() -eq '') { $env:JWT_SECRET = 'dev-secret-please-change-32bytes-min' }
     # Always force admin username as requested
     $env:ADMIN_USERNAME = 'admin'
+    # ADMIN_PASSWORD_PLAIN действует на сервере только вместе с этим флагом:
+    # без него сервер громко игнорирует открытый пароль. Флаг ставится здесь,
+    # в скрипте локального запуска, и НИКОГДА не попадает в прод-юнит —
+    # именно поэтому случайно скопированный туда PLAIN там не сработает.
+    $env:ADMIN_ALLOW_PLAIN_PASSWORD = '1'
     # If plain is set, ensure bcrypt is unset so server picks dev fallback
     if ($env:ADMIN_PASSWORD_PLAIN -and $env:ADMIN_PASSWORD_PLAIN.Trim() -ne '') {
       try { Remove-Item Env:ADMIN_PASSWORD_BCRYPT -ErrorAction SilentlyContinue } catch {}
@@ -183,8 +188,10 @@ function Reset-AdminAuth {
     }
     # Generate random password and bcrypt
     $plain = New-RandomPassword -Len 18
-    # Dev: let server hash plain on startup
+    # Dev: let server hash plain on startup. Открытый пароль работает только
+    # вместе с ADMIN_ALLOW_PLAIN_PASSWORD — см. LoadConfig в auth.go.
     $env:ADMIN_PASSWORD_PLAIN = $plain
+    $env:ADMIN_ALLOW_PLAIN_PASSWORD = '1'
     try { Remove-Item Env:ADMIN_PASSWORD_BCRYPT -ErrorAction SilentlyContinue } catch {}
     # Generate new JWT secret (32 bytes base64url)
     $env:JWT_SECRET = New-Base64Url -Size 32
@@ -265,6 +272,7 @@ function Start-All {
   # Enforce auth env exclusivity: if plain set, clear bcrypt
   if ($env:ADMIN_PASSWORD_PLAIN -and $env:ADMIN_PASSWORD_PLAIN.Trim() -ne '') {
     try { Remove-Item Env:ADMIN_PASSWORD_BCRYPT -ErrorAction SilentlyContinue } catch {}
+    $env:ADMIN_ALLOW_PLAIN_PASSWORD = '1'
   }
   try {
     $gc = Get-Command go -ErrorAction SilentlyContinue
