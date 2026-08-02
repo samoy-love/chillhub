@@ -1,0 +1,230 @@
+package builds
+
+import (
+	"bytes"
+	"errors"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// uploadRequestParts builds a multipart POST whose "zip" part is repeated once
+// per element of zips. The plain uploadRequest helper cannot express that, and
+// a duplicated part is exactly what the R6 regression is about.
+func uploadRequestParts(t *testing.T, gid, ver string, zips ...[]byte) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	_ = mw.WriteField("kind", "game")
+	_ = mw.WriteField("gameId", gid)
+	_ = mw.WriteField("version", ver)
+	for i, z := range zips {
+		fw, err := mw.CreateFormFile("zip", "build.zip")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fw.Write(z); err != nil {
+			t.Fatalf("zip part %d: %v", i, err)
+		}
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/upload", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	return req
+}
+
+// assertTmpDirEmpty fails if any spool file survived the request. Everything the
+// upload path writes into <root>/tmp is scratch: a leftover there is a leak on a
+// partition production shares with the public API and three other sites.
+func assertTmpDirEmpty(t *testing.T, root string) {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(root, "tmp"))
+	if err != nil {
+		return // never created is as good as empty
+	}
+	for _, e := range entries {
+		t.Fatalf("scratch file left behind in tmp: %s", e.Name())
+	}
+}
+
+// stubFreeSpace replaces the free-space probe for the duration of one test.
+// A full volume cannot be arranged on the machine running the suite, so the
+// only way to exercise the 507 paths at all is to lie about the disk.
+func stubFreeSpace(t *testing.T, fn func(string) (uint64, error)) {
+	t.Helper()
+	prev := freeSpaceFn
+	freeSpaceFn = fn
+	t.Cleanup(func() { freeSpaceFn = prev })
+}
+
+// An archive past the ceiling must be refused with 413 and must not leave the
+// bytes it did manage to write on disk. Before the limit existed the copy had
+// no upper bound at all: one client could write until /srv was full and take
+// down every service on the host with it.
+func TestUploadOversizedArchiveIsRejectedAndCleanedUp(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+
+	prev := uploadZipLimit
+	uploadZipLimit = 512
+	t.Cleanup(func() { uploadZipLimit = prev })
+
+	payload := bytes.Repeat([]byte("A"), 64<<10)
+	w := httptest.NewRecorder()
+	h.Upload(w, uploadRequestParts(t, "game", "1.0.0", payload))
+
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for an oversized archive, got %d: %s", w.Code, w.Body.String())
+	}
+	assertTmpDirEmpty(t, root)
+	if _, err := os.Stat(filepath.Join(root, "content", "game", "1.0.0")); err == nil {
+		t.Fatal("a rejected upload published a version")
+	}
+}
+
+// THE R6 regression: a body with two "zip" parts used to overwrite tmpName with
+// the second temp file's path, so the caller's cleanup defer removed only the
+// second one and the first stayed in tmp forever. The request must be refused
+// and tmp must be empty afterwards — both files, not just the last.
+func TestUploadDuplicateZipPartLeavesNoScratchFiles(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+
+	first := zipBytes(t, map[string]string{"a.txt": "first"})
+	second := zipBytes(t, map[string]string{"b.txt": "second"})
+
+	w := httptest.NewRecorder()
+	h.Upload(w, uploadRequestParts(t, "game", "1.0.0", first, second))
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a duplicated zip part, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "duplicate zip part") {
+		t.Fatalf("the client cannot tell what went wrong: %q", w.Body.String())
+	}
+	assertTmpDirEmpty(t, root)
+	if _, err := os.Stat(filepath.Join(root, "content", "game", "1.0.0")); err == nil {
+		t.Fatal("an ambiguous request published a version")
+	}
+}
+
+// The two guards must not break the ordinary case: a normal archive on a
+// healthy volume still publishes, and still leaves no scratch behind.
+func TestUploadUnderLimitStillPublishes(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	stubFreeSpace(t, func(string) (uint64, error) { return 500 << 30, nil })
+
+	w := httptest.NewRecorder()
+	h.Upload(w, uploadRequestParts(t, "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "hello"})))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("normal upload broke: %d %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "content", "game", "1.0.0", "files", "a.txt")); err != nil {
+		t.Fatalf("build not published: %v", err)
+	}
+	assertTmpDirEmpty(t, root)
+}
+
+// A volume with nothing but the reserve left must be refused before a single
+// byte is written. Filling the partition and only then failing is what takes
+// the neighbouring services down.
+func TestUploadRefusesWhenVolumeIsAlreadyFull(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	stubFreeSpace(t, func(string) (uint64, error) { return uploadFreeSpaceReserveBytes, nil })
+
+	w := httptest.NewRecorder()
+	h.Upload(w, uploadRequestParts(t, "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "hello"})))
+
+	if w.Code != http.StatusInsufficientStorage {
+		t.Fatalf("expected 507 on a full volume, got %d: %s", w.Code, w.Body.String())
+	}
+	assertTmpDirEmpty(t, root)
+}
+
+// Space that runs out DURING the copy must stop it too. A ceiling derived from
+// Content-Length cannot catch this: the disk is shared, so another writer can
+// consume the room after the request was admitted — and a chunked body has no
+// Content-Length to check in the first place.
+func TestUploadStopsWhenSpaceRunsOutMidCopy(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	// Just enough budget (reserve + 16 bytes) that the precheck passes and the
+	// very first buffer of the archive exceeds it.
+	stubFreeSpace(t, func(string) (uint64, error) { return uploadFreeSpaceReserveBytes + 16, nil })
+
+	w := httptest.NewRecorder()
+	h.Upload(w, uploadRequestParts(t, "game", "1.0.0", bytes.Repeat([]byte("A"), 8<<10)))
+
+	if w.Code != http.StatusInsufficientStorage {
+		t.Fatalf("expected 507 when the volume fills up mid-copy, got %d: %s", w.Code, w.Body.String())
+	}
+	assertTmpDirEmpty(t, root)
+}
+
+// A disk we cannot measure must not block publishing: freeSpaceBytes fails on
+// exotic filesystems and in some containers, and refusing every upload there
+// would be a worse outage than the one the guard prevents.
+func TestUploadProceedsWhenFreeSpaceIsUnknown(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	stubFreeSpace(t, func(string) (uint64, error) { return 0, errors.New("statfs not supported") })
+
+	w := httptest.NewRecorder()
+	h.Upload(w, uploadRequestParts(t, "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "hello"})))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("an unmeasurable volume blocked a valid upload: %d %s", w.Code, w.Body.String())
+	}
+	assertTmpDirEmpty(t, root)
+}
+
+// spaceBudget decides between "refuse" and "do not enforce", and the two are
+// both encoded in a (uint64, bool) pair — an easy place to invert a condition
+// and either block every upload or stop guarding at all.
+func TestSpaceBudget(t *testing.T) {
+	cases := []struct {
+		name       string
+		free       uint64
+		err        error
+		wantBudget uint64
+		wantKnown  bool
+	}{
+		{"probe failed: guard disabled", 0, errors.New("nope"), 0, false},
+		{"filesystem reports zero: guard disabled", 0, nil, 0, false},
+		{"below the reserve: nothing may be written", uploadFreeSpaceReserveBytes - 1, nil, 0, true},
+		{"exactly the reserve: nothing may be written", uploadFreeSpaceReserveBytes, nil, 0, true},
+		{"above the reserve: the surplus may be written", uploadFreeSpaceReserveBytes + 4096, nil, 4096, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stubFreeSpace(t, func(string) (uint64, error) { return tc.free, tc.err })
+			budget, known := spaceBudget(t.TempDir())
+			if budget != tc.wantBudget || known != tc.wantKnown {
+				t.Fatalf("got (%d, %v), want (%d, %v)", budget, known, tc.wantBudget, tc.wantKnown)
+			}
+		})
+	}
+}
+
+// The real, unstubbed probe has to work on the platform the suite runs on:
+// Statfs on Linux, GetDiskFreeSpaceExW on Windows. If it silently failed, every
+// space guard above would degrade to "not enforced" in production and nobody
+// would notice until the partition filled.
+func TestFreeSpaceBytesReportsRealVolume(t *testing.T) {
+	free, err := freeSpaceBytes(t.TempDir())
+	if err != nil {
+		t.Fatalf("free space probe failed on this platform: %v", err)
+	}
+	if free == 0 {
+		t.Fatal("free space probe reported 0 bytes on a writable temp volume")
+	}
+}

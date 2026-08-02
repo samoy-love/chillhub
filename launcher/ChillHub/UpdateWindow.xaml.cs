@@ -12,6 +12,7 @@ namespace ChillHub {
     using System.Reflection;
     using System.Text;
     using System.Text.RegularExpressions;
+    using System.Threading;
     using System.Threading.Tasks;
     using System.Windows;
     using System.Windows.Documents;
@@ -478,8 +479,9 @@ namespace ChillHub {
         /// <param name="baseDir">Папка установки лаунчера.</param>
         /// <param name="f">Запись манифеста.</param>
         /// <param name="reason">Человекочитаемая причина расхождения (для лога).</param>
+        /// <param name="ct">Токен отмены: подсчёт хеша большого файла — это минуты.</param>
         /// <returns>true, если локальный файл соответствует манифесту.</returns>
-        private bool LocalFileMatches(string baseDir, ManifestFile f, out string reason) {
+        private bool LocalFileMatches(string baseDir, ManifestFile f, out string reason, CancellationToken ct = default) {
             reason = string.Empty;
             try {
                 var rel = (f.Path ?? string.Empty).Replace('\\', '/').Trim('/');
@@ -489,52 +491,16 @@ namespace ChillHub {
 
                 var localRel = this.StripLocal(rel);
                 var localPath = System.IO.Path.Combine(baseDir, localRel.Replace('/', System.IO.Path.DirectorySeparatorChar));
-                if (!System.IO.File.Exists(localPath)) {
-                    reason = "missing";
-                    return false;
-                }
 
-                var info = new System.IO.FileInfo(localPath);
-
-                // Если в манифесте есть sha256/blake3 — считаем оба, иначе считаем совпадением по размеру
-                if (!string.IsNullOrWhiteSpace(f.Sha256) || !string.IsNullOrWhiteSpace(f.Blake3)) {
-                    if (f.Size > 0 && info.Length != f.Size) {
-                        // Размер отличается — хеш заведомо не совпадёт, файл читать незачем
-                        reason = $"size {info.Length} != {f.Size}";
-                        return false;
-                    }
-
-                    using var fs = new System.IO.FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, useAsync: false);
-                    using var sha = System.Security.Cryptography.SHA256.Create();
-                    var b3 = Blake3.Hasher.New();
-                    var buf = new byte[256 * 1024];
-                    int r;
-                    while ((r = fs.Read(buf, 0, buf.Length)) > 0) {
-                        sha.TransformBlock(buf, 0, r, null, 0);
-                        b3.Update(new ReadOnlySpan<byte>(buf, 0, r));
-                    }
-
-                    sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
-                    var shaHex = Convert.ToHexString(sha.Hash!).ToLowerInvariant();
-                    var b3out = new byte[32];
-                    b3.Finalize(b3out);
-                    var b3Hex = Convert.ToHexString(b3out).ToLowerInvariant();
-                    var okSha = string.IsNullOrWhiteSpace(f.Sha256) || string.Equals(shaHex, f.Sha256, StringComparison.OrdinalIgnoreCase);
-                    var okB3 = string.IsNullOrWhiteSpace(f.Blake3) || string.Equals(b3Hex, f.Blake3, StringComparison.OrdinalIgnoreCase);
-                    if (okSha && okB3) {
-                        return true;
-                    }
-
-                    reason = $"hash_mismatch shaOk={okSha} b3Ok={okB3}";
-                    return false;
-                }
-
-                if (info.Length == f.Size) {
-                    return true;
-                }
-
-                reason = $"size {info.Length} != {f.Size}";
-                return false;
+                // Р5. Раньше здесь лежала своя копия цикла хеширования — она успела разойтись
+                // с копией планировщика игр (не проверяла отмену). Разные вердикты на одинаковых
+                // входах приводили к тому, что лаунчер бесконечно предлагал одно и то же обновление.
+                // Теперь и сверка самообновления, и сверка файлов игры идут через FileHasher.
+                return FileHasher.Matches(localPath, f.Size, f.Sha256, f.Blake3, out reason, ct);
+            }
+            catch (OperationCanceledException) {
+                // Отмену не глушим: иначе отменённая проверка «подтвердила» бы битый файл.
+                throw;
             }
             catch (Exception ex) {
                 reason = $"io_error {ex.Message}";

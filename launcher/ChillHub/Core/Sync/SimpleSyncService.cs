@@ -182,7 +182,7 @@ namespace ChillHub.Core.Sync {
                                 // В режиме проверки целостности кеш не спрашиваем: он подтвердил бы
                                 // повреждённый файл по совпадению размера и времени модификации.
                                 if (options.ForceRehash || !hashCache.TryGet(rel, info.Length, mtimeTicks, out shaHex, out b3Hex)) {
-                                    ComputeHashes(localPath, out shaHex, out b3Hex, ct);
+                                    FileHasher.ComputeHashes(localPath, out shaHex, out b3Hex, ct);
                                     hashCache.Set(rel, info.Length, mtimeTicks, shaHex, b3Hex);
                                 }
 
@@ -497,26 +497,8 @@ namespace ChillHub.Core.Sync {
                 return;
             }
 
-            string shaHex;
-            string b3Hex;
-            using (var f = new FileStream(partPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, useAsync: false)) {
-                using var sha = SHA256.Create();
-                var b3 = Blake3.Hasher.New();
-                var buf = new byte[256 * 1024];
-                int r;
-
-                // NOTE: Use synchronous reads to avoid awaiting while a ref-struct (Hasher) is alive (C# 12 limitation)
-                while ((r = f.Read(buf, 0, buf.Length)) > 0) {
-                    sha.TransformBlock(buf, 0, r, null, 0);
-                    b3.Update(new ReadOnlySpan<byte>(buf, 0, r));
-                }
-
-                sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
-                shaHex = Convert.ToHexString(sha.Hash!).ToLowerInvariant();
-                var b3out = new byte[32];
-                b3.Finalize(b3out);
-                b3Hex = Convert.ToHexString(b3out).ToLowerInvariant();
-            }
+            // ComputeHashes закрывает файл до выхода: иначе повторная попытка не смогла бы его удалить.
+            FileHasher.ComputeHashes(partPath, out var shaHex, out var b3Hex);
 
             // Файл закрыт: иначе повторная попытка не смогла бы его удалить
             if (!string.IsNullOrWhiteSpace(t.Sha256) && !string.Equals(shaHex, t.Sha256, StringComparison.OrdinalIgnoreCase)) {
@@ -840,27 +822,6 @@ namespace ChillHub.Core.Sync {
             // успешного ремонта игра показывалась как неустановленная.
             return r.Equals(UpdateMarkerFileName, StringComparison.OrdinalIgnoreCase)
                 || r.Equals(IntegrityChecker.VersionMarkerFileName, StringComparison.OrdinalIgnoreCase);
-        }
-
-        // Считает SHA-256 и Blake3 за один проход по файлу.
-        // Отмену проверяем на каждом блоке: у больших файлов один проход — это минуты.
-        private static void ComputeHashes(string path, out string sha256Hex, out string blake3Hex, CancellationToken ct = default) {
-            using var f = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, useAsync: false);
-            using var sha = SHA256.Create();
-            var b3 = Blake3.Hasher.New();
-            var buf = new byte[256 * 1024];
-            int r;
-            while ((r = f.Read(buf, 0, buf.Length)) > 0) {
-                ct.ThrowIfCancellationRequested();
-                sha.TransformBlock(buf, 0, r, null, 0);
-                b3.Update(new ReadOnlySpan<byte>(buf, 0, r));
-            }
-
-            sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
-            sha256Hex = Convert.ToHexString(sha.Hash!).ToLowerInvariant();
-            var b3out = new byte[32];
-            b3.Finalize(b3out);
-            blake3Hex = Convert.ToHexString(b3out).ToLowerInvariant();
         }
 
         // Ставит маркер незавершённого обновления перед фазой активации.

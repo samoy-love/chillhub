@@ -436,7 +436,9 @@ namespace ChillHub.Pages {
                 string? gid0 = null;
                 await this.DispatcherInvokeAsync(() => gid0 = this.GetSelectedGameId());
                 if (!string.IsNullOrWhiteSpace(gid0)) {
-                    await this.DispatcherInvokeAsync(() => this.LoadBuildsAndGameNewsAsync(gid0));
+                    // Task-версия: загрузку нужно ДОЖДАТЬСЯ, иначе следом включаются тяжёлые
+                    // проверки файлов и конкурируют с ней за UI-поток.
+                    await this.DispatcherInvokeTaskAsync(() => this.LoadBuildsAndGameNewsAsync(gid0));
                 }
 
                 // После первичного рендеринга — разрешаем тяжёлые проверки и запускаем в фоне
@@ -962,22 +964,27 @@ namespace ChillHub.Pages {
         /// То же, что и <see cref="DispatcherInvokeAsync(Action)"/>, но для асинхронной работы:
         /// операция ЗАПУСКАЕТСЯ на UI-потоке (и продолжается на нём, так как захватывает его контекст),
         /// а вызывающий ждёт её завершения, не занимая UI.
+        /// <para>
+        /// ИМЯ У ЭТОГО МЕТОДА ДРУГОЕ НЕ ИЗ КРАСОТЫ. Пока обе версии назывались
+        /// <c>DispatcherInvokeAsync</c>, они были перегрузками, и метод рекурсивно вызывал
+        /// сам себя: в строке ниже выражение <c>started = action()</c> имеет ТИП Task,
+        /// поэтому лямбда подходила и под <see cref="Action"/> (значение отбрасывается),
+        /// и под <see cref="Func{Task}"/> — а при разрешении перегрузок C# предпочитает
+        /// делегат, возвращаемый тип которого совпадает с выведенным типом лямбды, то есть
+        /// эту же перегрузку. Стек переполнялся мгновенно, и процесс умирал, не успев ни
+        /// записать лог, ни отправить отчёт об ошибке (так падала версия 1.2.1).
+        /// </para>
+        /// <para>
+        /// Спасали фигурные скобки — блочная лямбда значения не возвращает и приводится
+        /// только к <see cref="Action"/>, — но это защита, которую ломает одна случайная
+        /// правка. Разные имена делают ошибку невыразимой. Сведение имён обратно вернёт
+        /// рекурсию.
+        /// </para>
         /// </summary>
-        private async Task DispatcherInvokeAsync(Func<Task> action) {
+        private async Task DispatcherInvokeTaskAsync(Func<Task> action) {
             Task? started = null;
 
-            // ФИГУРНЫЕ СКОБКИ ЗДЕСЬ ОБЯЗАТЕЛЬНЫ — без них метод вызывает сам себя.
-            //
-            // Было: DispatcherInvokeAsync(() => started = action())
-            // Выражение `started = action()` имеет ТИП Task, поэтому лямбда подходит и
-            // под Action (значение отбрасывается), и под Func<Task>. При разрешении
-            // перегрузок C# предпочитает делегат, возвращаемый тип которого совпадает
-            // с выведенным типом лямбды, то есть Func<Task> — эту же перегрузку.
-            // Получалась бесконечная рекурсия и мгновенное переполнение стека: процесс
-            // умирал, не успев ни записать лог, ни отправить отчёт об ошибке.
-            //
-            // Блочная лямбда значения не возвращает и приводится ТОЛЬКО к Action.
-            await this.DispatcherInvokeAsync(() => { started = action(); }).ConfigureAwait(false);
+            await this.DispatcherInvokeAsync(() => started = action()).ConfigureAwait(false);
 
             if (started != null) {
                 await started.ConfigureAwait(false);
