@@ -467,22 +467,31 @@ function normalizeHumanDate(str, endOfDay){
   // Patterns
   const ymd = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/;
   const dmy = /^(\d{2})\.(\d{2})\.(\d{4})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/;
-  let m;
-  if((m = ymd.exec(s))){
-    const Y = +m[1], M = +m[2], D = +m[3];
-    const hh = m[4]!==undefined ? +m[4] : (endOfDay?23:0);
-    const mm = m[5]!==undefined ? +m[5] : (endOfDay?59:0);
-    const ss = m[6]!==undefined ? +m[6] : (endOfDay?59:0);
+  // new Date(Y, M-1, D, ...) молча переполняется: 99.99.9999 превратилось бы в
+  // 10007-06-06, а пятизначный год сервер в RFC3339 уже не разберёт. Проверяем
+  // диапазоны сами, чтобы мусор дал пустой фильтр, а не другую дату.
+  const build = (Y, M, D, hh, mm, ss)=>{
+    if(M<1 || M>12 || D<1 || D>31 || hh>23 || mm>59 || ss>59) return null;
     const dt = new Date(Y, M-1, D, hh, mm, ss, endOfDay?999:0);
-    if(!isNaN(dt.getTime())) return toRfc3339(dt);
+    if(isNaN(dt.getTime())) return null;
+    // 31.02 существует в регэкспе, но не в календаре — Date сдвинет его на март.
+    if(dt.getFullYear()!==Y || dt.getMonth()!==M-1 || dt.getDate()!==D) return null;
+    return toRfc3339(dt);
+  };
+  let m, out;
+  if((m = ymd.exec(s))){
+    out = build(+m[1], +m[2], +m[3],
+      m[4]!==undefined ? +m[4] : (endOfDay?23:0),
+      m[5]!==undefined ? +m[5] : (endOfDay?59:0),
+      m[6]!==undefined ? +m[6] : (endOfDay?59:0));
+    if(out) return out;
   }
   if((m = dmy.exec(s))){
-    const D = +m[1], M = +m[2], Y = +m[3];
-    const hh = m[4]!==undefined ? +m[4] : (endOfDay?23:0);
-    const mm = m[5]!==undefined ? +m[5] : (endOfDay?59:0);
-    const ss = m[6]!==undefined ? +m[6] : (endOfDay?59:0);
-    const dt = new Date(Y, M-1, D, hh, mm, ss, endOfDay?999:0);
-    if(!isNaN(dt.getTime())) return toRfc3339(dt);
+    out = build(+m[3], +m[2], +m[1],
+      m[4]!==undefined ? +m[4] : (endOfDay?23:0),
+      m[5]!==undefined ? +m[5] : (endOfDay?59:0),
+      m[6]!==undefined ? +m[6] : (endOfDay?59:0));
+    if(out) return out;
   }
   // Fallback: try native Date.parse on s
   const d = new Date(s);
