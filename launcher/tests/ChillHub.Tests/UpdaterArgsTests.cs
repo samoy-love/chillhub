@@ -140,6 +140,109 @@ namespace ChillHub.Tests {
     }
 
     /// <summary>
+    /// Разбор --parent: идентификатора процесса лаунчера, выхода которого апдейтер обязан дождаться.
+    /// <para>
+    /// A13. Пока лаунчер жив, его exe и dll заблокированы, и копирование поверх них
+    /// проваливается. Ждать нечего только при parent=0 — и раньше именно этот ноль
+    /// подставлялся молча, стоило значению не разобраться. Хуже того, значение
+    /// теряется незаметно: разбор командной строки считает следующий токен с «--»
+    /// новым ключом, поэтому «--parent --dst C:\app» даёт у --parent ровно null,
+    /// а «0» после него выглядит как честно переданный ноль.
+    /// </para>
+    /// <para>
+    /// Что видит пользователь, если ноль подставить: апдейтер начинает копировать
+    /// поверх РАБОТАЮЩЕГО лаунчера, часть файлов залочена, обновление
+    /// откатывается — и так при каждом запуске, без внятной причины в логе.
+    /// Поэтому непонятый --parent обязан быть фатальной ошибкой.
+    /// </para>
+    /// </summary>
+    public class UpdaterParentPidTests {
+        /// <summary>Нормальный pid разбирается — иначе не применится ни одно обновление.</summary>
+        [Theory]
+        [InlineData("1234", 1234)]
+        [InlineData(" 1234 ", 1234)]
+        [InlineData("2147483647", int.MaxValue)]
+        public void ЧисловойИдентификаторРазбирается(string raw, int expected) {
+            Assert.True(global::Program.TryParseParentPid(raw, out var pid, out var problem));
+            Assert.Equal(expected, pid);
+            Assert.Equal(string.Empty, problem);
+        }
+
+        /// <summary>
+        /// Явный ноль — законное «ждать некого» (лаунчер уже не запущен). Отличие от
+        /// дефекта в том, что этот ноль передал человек, а не подставил разбор.
+        /// </summary>
+        [Fact]
+        public void ЯвныйНольДопустим() {
+            Assert.True(global::Program.TryParseParentPid("0", out var pid, out _));
+            Assert.Equal(0, pid);
+        }
+
+        /// <summary>
+        /// ГЛАВНОЕ. Значения нет вовсе (ключ «съеден» следующим ключом) — это отказ,
+        /// а не ноль. Молчаливый ноль здесь означает копирование поверх живого лаунчера.
+        /// </summary>
+        [Fact]
+        public void ОтсутствующееЗначениеЭтоОтказАНеНоль() {
+            Assert.False(global::Program.TryParseParentPid(null, out var pid, out var problem));
+            Assert.Equal(0, pid);
+            Assert.False(string.IsNullOrWhiteSpace(problem));
+        }
+
+        /// <summary>Пустое значение и пробелы — тоже отказ: ждать по ним нечего.</summary>
+        [Theory]
+        [InlineData("")]
+        [InlineData("   ")]
+        [InlineData("\t")]
+        public void ПустоеЗначениеОтвергается(string raw) {
+            Assert.False(global::Program.TryParseParentPid(raw, out _, out var problem));
+            Assert.False(string.IsNullOrWhiteSpace(problem));
+        }
+
+        /// <summary>Мусор вместо числа отвергается — включая «почти числа», которые легко получить склейкой команды.</summary>
+        [Theory]
+        [InlineData("abc")]
+        [InlineData("12.5")]
+        [InlineData("1 2")]
+        [InlineData("0x10")]
+        [InlineData("99999999999999999999")]
+        [InlineData("--dst")]
+        public void НечисловоеЗначениеОтвергается(string raw) {
+            Assert.False(global::Program.TryParseParentPid(raw, out _, out var problem));
+            Assert.False(string.IsNullOrWhiteSpace(problem));
+        }
+
+        /// <summary>Отрицательного pid не бывает: такое значение — признак испорченной команды, а не «ждать некого».</summary>
+        [Fact]
+        public void ОтрицательныйИдентификаторОтвергается() {
+            Assert.False(global::Program.TryParseParentPid("-1", out _, out var problem));
+            Assert.False(string.IsNullOrWhiteSpace(problem));
+        }
+
+        /// <summary>
+        /// Сквозная проверка вместе с разбором командной строки: ровно та команда,
+        /// на которой защита A13 обходилась молча.
+        /// </summary>
+        [Theory]
+        [InlineData(@"--parent|--dst|C:\app")]
+        [InlineData(@"--src|C:\tmp|--parent")]
+        [InlineData(@"--parent|   |--dst|C:\app")]
+        public void КомандаБезЗначенияParentНеДаётМолчаливогоНуля(string commandLine) {
+            var map = global::Program.ParseArgs(commandLine.Split('|'));
+            var raw = map.TryGetValue("--parent", out var v) ? v : null;
+
+            Assert.False(global::Program.TryParseParentPid(raw, out _, out _));
+        }
+
+        /// <summary>Причина отказа попадает в текст: она уходит и в журнал, и в статус обновления для пользователя.</summary>
+        [Fact]
+        public void ПричинаОтказаОписанаТекстом() {
+            Assert.False(global::Program.TryParseParentPid("мусор", out _, out var problem));
+            Assert.Contains("мусор", problem, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// Чтение аргументов перезапуска лаунчера.
     /// <para>
     /// Лаунчер сам себя закрывает, чтобы отдать файлы апдейтеру, и поднять его обратно

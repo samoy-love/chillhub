@@ -86,15 +86,18 @@ internal static class Program
         ctx.Exe = exe;
         ctx.ExeArgsFile = Opt("--exe-args-file");
 
-        var parentStr = Opt("--parent", "0");
-        if (!int.TryParse(parentStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parent))
+        // A13. Молча превращать мусор в parent=0 нельзя: это отказ от ожидания
+        // родителя, то есть копирование поверх ЖИВОГО лаунчера. Половина файлов
+        // залочена, обновление разваливается — и никто не понимает почему.
+        // Отсутствующее значение опаснее мусора: "--parent --dst C:\app" (ключ
+        // без значения) выглядит как обычная команда, поэтому его нельзя добирать
+        // значением по умолчанию — только фатальный отказ.
+        var parentStr = argsMap.TryGetValue("--parent", out var parentRaw) ? parentRaw : null;
+        if (!TryParseParentPid(parentStr, out var parent, out var parentProblem))
         {
-            // A13. Молча превращать мусор в parent=0 нельзя: это отказ от ожидания
-            // родителя, то есть копирование поверх ЖИВОГО лаунчера. Половина файлов
-            // залочена, обновление разваливается — и никто не понимает почему.
-            log.Write($"FATAL: --parent='{parentStr}' не число; ждать родителя нечего, копировать поверх работающего лаунчера нельзя");
+            log.Write($"FATAL: --parent: {parentProblem}; ждать родителя нечего, копировать поверх работающего лаунчера нельзя");
             ctx.Outcome = "fatal";
-            ctx.Message = $"Некорректный аргумент --parent='{parentStr}'.";
+            ctx.Message = $"Некорректный аргумент --parent: {parentProblem}.";
             return ExitFatal;
         }
 
@@ -185,7 +188,7 @@ internal static class Program
         // Detect strip prefix if not provided (только если автоопределение разрешено)
         if (string.IsNullOrWhiteSpace(strip) && autoStrip)
         {
-            strip = DetectStripPrefix(src, files) ?? strip;
+            strip = DetectStripPrefix(src, files, log.Write) ?? strip;
         }
         log.Write($"effective strip-prefix='{strip}'");
 
@@ -272,8 +275,14 @@ internal static class Program
             {
                 foreach (var rel in File.ReadAllLines(files, Encoding.UTF8))
                 {
-                    var clean = (rel ?? string.Empty).Replace('\\', '/').Trim('/');
-                    if (string.IsNullOrWhiteSpace(clean))
+                    var clean = CleanListEntry(rel, out var entryReason);
+                    if (entryReason != null)
+                    {
+                        // Сюда доходить нечему: ValidateLists уже отвергла бы весь список.
+                        log.Write($"copy rejected '{rel}': {entryReason}");
+                        continue;
+                    }
+                    if (string.IsNullOrEmpty(clean))
                     {
                         continue;
                     }
@@ -387,8 +396,13 @@ internal static class Program
         {
             foreach (var rel in File.ReadAllLines(del, Encoding.UTF8))
             {
-                var clean = (rel ?? string.Empty).Replace('\\', '/').Trim('/');
-                if (string.IsNullOrWhiteSpace(clean))
+                var clean = CleanListEntry(rel, out var entryReason);
+                if (entryReason != null)
+                {
+                    log.Write($"delete rejected '{rel}': {entryReason}");
+                    continue;
+                }
+                if (string.IsNullOrEmpty(clean))
                 {
                     continue;
                 }
@@ -406,8 +420,13 @@ internal static class Program
         {
             foreach (var rel in File.ReadAllLines(dirs, Encoding.UTF8))
             {
-                var clean = (rel ?? string.Empty).Replace('\\', '/').Trim('/');
-                if (string.IsNullOrWhiteSpace(clean))
+                var clean = CleanListEntry(rel, out var entryReason);
+                if (entryReason != null)
+                {
+                    log.Write($"mkdir rejected '{rel}': {entryReason}");
+                    continue;
+                }
+                if (string.IsNullOrEmpty(clean))
                 {
                     continue;
                 }
@@ -467,7 +486,7 @@ internal static class Program
     /// совпадению размера»), и только затем считаем ошибкой.
     /// </summary>
     /// <returns>Количество неустранённых расхождений.</returns>
-    private static async Task<int> VerifyAsync(
+    internal static async Task<int> VerifyAsync(
         string src,
         string dst,
         string strip,
@@ -517,7 +536,7 @@ internal static class Program
                 }
             }
 
-            int ok = 0, mm = 0, missS = 0, missD = 0, total = 0, repaired = 0;
+            int ok = 0, mm = 0, missS = 0, missD = 0, total = 0, repaired = 0, unreadable = 0;
             foreach (var key in map)
             {
                 total++;
@@ -527,8 +546,21 @@ internal static class Program
                 var dp = ManifestPath.Combine(dst, relDst);
                 if (!File.Exists(sp)) { missS++; log.Write($"hash: SRC missing {relSrc}"); continue; }
 
-                var h1 = Sha256Hex(sp);
-                if (File.Exists(dp) && !string.IsNullOrEmpty(h1) && h1.Equals(Sha256Hex(dp), StringComparison.OrdinalIgnoreCase))
+                // Нечитаемый ИСТОЧНИК — это не расхождение. Раньше пустой хеш источника
+                // молча проваливался в общую ветку и объявлял «содержимое не совпадает»,
+                // хотя сравнивать было нечего: файл не прочитан (чаще всего его держит
+                // антивирус). Провал безопасный, но настоящая причина в журнал не попадала.
+                var h1 = Sha256Hex(sp, out var srcError);
+                if (srcError != null)
+                {
+                    unreadable++;
+                    errors++;
+                    log.Write($"hash ERROR {relSrc}: не удалось прочитать файл-источник — {srcError}. " +
+                              "Содержимое НЕ сравнивалось; типичная причина — файл держит антивирус.");
+                    continue;
+                }
+
+                if (File.Exists(dp) && h1.Equals(Sha256Hex(dp), StringComparison.OrdinalIgnoreCase))
                 {
                     ok++;
                     continue;
@@ -538,18 +570,37 @@ internal static class Program
                 // либо перезаписан кем-то между копированием и сверкой.
                 log.Write($"hash: {(File.Exists(dp) ? "MISMATCH" : "DST missing")} {relDst} — повторное копирование");
                 await copy(sp, dp);
-                if (File.Exists(dp) && !string.IsNullOrEmpty(h1) && h1.Equals(Sha256Hex(dp), StringComparison.OrdinalIgnoreCase))
+
+                if (!File.Exists(dp))
+                {
+                    missD++;
+                    errors++;
+                    log.Write($"hash ERROR {relDst}: файла нет в папке установки после повторного копирования");
+                    continue;
+                }
+
+                var h2 = Sha256Hex(dp, out var dstError);
+                if (dstError != null)
+                {
+                    unreadable++;
+                    errors++;
+                    log.Write($"hash ERROR {relDst}: не удалось прочитать записанный файл — {dstError}. " +
+                              "Содержимое НЕ сравнивалось; типичная причина — файл держит антивирус.");
+                    continue;
+                }
+
+                if (h1.Equals(h2, StringComparison.OrdinalIgnoreCase))
                 {
                     repaired++;
                     continue;
                 }
 
-                if (File.Exists(dp)) { mm++; } else { missD++; }
+                mm++;
                 errors++;
                 log.Write($"hash ERROR {relDst}: содержимое не совпадает с источником после повторного копирования");
             }
 
-            log.Write($"hash summary: total={total} ok={ok} repaired={repaired} mismatch={mm} src_missing={missS} dst_missing={missD}");
+            log.Write($"hash summary: total={total} ok={ok} repaired={repaired} mismatch={mm} src_missing={missS} dst_missing={missD} unreadable={unreadable}");
         }
         catch (UpdaterAbortException)
         {
@@ -563,6 +614,99 @@ internal static class Program
         }
 
         return errors;
+    }
+
+    /// <summary>
+    /// A13. Разбирает идентификатор родительского процесса (--parent).
+    /// <para>
+    /// Значение обязано быть передано и обязано быть числом. Раньше отсутствующее
+    /// значение добиралось умолчанием "0", а parent=0 означает «ждать некого»:
+    /// апдейтер начинал копировать поверх ЖИВОГО лаунчера, половина файлов была
+    /// залочена, обновление разваливалось. Причём отсутствие значения — не
+    /// экзотика: "--parent --dst C:\app" (ключ, у которого значение потерялось при
+    /// сборке команды) разбирается в null и внешне ничем не отличается от нормы.
+    /// Поэтому любой непонятый --parent — фатальная ошибка, а не тихий ноль.
+    /// </para>
+    /// </summary>
+    /// <param name="raw">Значение из командной строки (null — ключа или значения не было).</param>
+    /// <param name="pid">Разобранный идентификатор процесса.</param>
+    /// <param name="problem">Описание проблемы для журнала и статуса; пустое при успехе.</param>
+    /// <returns>true, если значение разобрано.</returns>
+    internal static bool TryParseParentPid(string? raw, out int pid, out string problem)
+    {
+        pid = 0;
+
+        if (raw == null)
+        {
+            problem = "значение не передано";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            problem = $"значение '{raw}' пустое";
+            return false;
+        }
+
+        if (!int.TryParse(raw.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+        {
+            problem = $"значение '{raw}' не число";
+            return false;
+        }
+
+        if (parsed < 0)
+        {
+            problem = $"значение '{raw}' отрицательное — такого процесса не бывает";
+            return false;
+        }
+
+        pid = parsed;
+        problem = string.Empty;
+        return true;
+    }
+
+    /// <summary>
+    /// Приводит строку списка (filelist/emptydirs/deletelist) к относительному пути.
+    /// <para>
+    /// Единая точка для проверки и для циклов копирования/удаления: разойдись они,
+    /// проверка смотрела бы на одну строку, а на диск уходила другая.
+    /// </para>
+    /// <para>
+    /// Ведущий слеш и UNC отвергаются ЯВНО. Раньше "/Windows/System32/x.dll"
+    /// просто обрезался до "Windows/System32/x.dll" и принимался как обычная
+    /// запись внутри папки установки: за корень она не выходит, но это заведомо
+    /// не тот файл, который имел в виду автор списка. Тихо «починить» такую
+    /// строку — значит применить обновление не туда, вместо отказа.
+    /// </para>
+    /// </summary>
+    /// <param name="line">Строка списка как она записана в файле.</param>
+    /// <param name="reason">Причина отказа либо null.</param>
+    /// <returns>Относительный путь; пустая строка означает «строку пропустить» (пустая либо отвергнутая).</returns>
+    internal static string CleanListEntry(string? line, out string? reason)
+    {
+        reason = null;
+        var raw = (line ?? string.Empty).Replace('\\', '/');
+        var clean = raw.Trim('/');
+
+        // Пустые строки (включая "///" и хвостовой перевод строки) — не пути.
+        if (string.IsNullOrWhiteSpace(clean))
+        {
+            return string.Empty;
+        }
+
+        if (raw.StartsWith("//", StringComparison.Ordinal))
+        {
+            reason = "UNC-путь (\\\\сервер\\ресурс) — файл ушёл бы мимо папки установки";
+            return string.Empty;
+        }
+
+        if (raw[0] == '/')
+        {
+            reason = "ведущий слеш — путь от корня диска, а не от папки установки";
+            return string.Empty;
+        }
+
+        return clean;
     }
 
     /// <summary>Убирает strip-prefix из относительного пути.</summary>
@@ -612,7 +756,21 @@ internal static class Program
         }
     }
 
-    internal static string? DetectStripPrefix(string src, string files)
+    /// <summary>
+    /// Определяет общий префикс архива (обёртку вида «ChillHub-1.2.3/»).
+    /// <para>
+    /// Сбой ввода-вывода здесь обязан быть виден в журнале: молчаливый null
+    /// неотличим от честного «обёртки нет», а последствия разные. Если список
+    /// файлов не прочитался (занят, нет прав), префикс не находится, вся новая
+    /// сборка ложится в ПОДПАПКУ установки, запускаемый лаунчер остаётся старым —
+    /// и обновление предлагается при каждом старте, навсегда.
+    /// </para>
+    /// </summary>
+    /// <param name="src">Каталог с распакованным обновлением.</param>
+    /// <param name="files">Путь к списку файлов (может отсутствовать).</param>
+    /// <param name="log">Куда писать причину сбоя (необязательно).</param>
+    /// <returns>Префикс либо null.</returns>
+    internal static string? DetectStripPrefix(string src, string files, Action<string>? log = null)
     {
         try
         {
@@ -650,7 +808,11 @@ internal static class Program
                 }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            log?.Invoke($"strip-prefix detect error: {ex.GetType().Name}: {ex.Message}. " +
+                        "Обёртка архива не определена — если она есть, обновление ляжет в подпапку установки.");
+        }
 
         return null;
     }
@@ -871,8 +1033,15 @@ internal static class Program
 
             for (var i = 0; i < lines.Length; i++)
             {
-                var clean = (lines[i] ?? string.Empty).Replace('\\', '/').Trim('/');
-                if (string.IsNullOrWhiteSpace(clean))
+                var clean = CleanListEntry(lines[i], out var entryReason);
+                if (entryReason != null)
+                {
+                    log($"REJECT '{listPath}' строка {i + 1}: '{lines[i]}' — {entryReason}");
+                    ok = false;
+                    continue;
+                }
+
+                if (string.IsNullOrEmpty(clean))
                 {
                     continue;
                 }
@@ -904,7 +1073,9 @@ internal static class Program
                 {
                     if (File.Exists(p))
                     {
-                        new FileInfo(p) { IsReadOnly = false }.Refresh();
+                        // Атрибут «только чтение» снимаем перед удалением: иначе File.Delete
+                        // откажет и артефакт останется в папке установки навсегда.
+                        new FileInfo(p).IsReadOnly = false;
                         File.Delete(p);
                         log($"cleanup: removed stale updater artifact {name}");
                     }
@@ -917,6 +1088,15 @@ internal static class Program
             {
                 if (Directory.Exists(dir))
                 {
+                    // Directory.Delete(recursive) спотыкается о файлы «только для чтения»:
+                    // достаточно одного такого внутри updater\, и вся папка остаётся
+                    // в установке, попадая в сверку с сервером как лишние файлы.
+                    foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+                    {
+                        try { new FileInfo(f).IsReadOnly = false; }
+                        catch (Exception ex) { log($"cleanup: не снят атрибут «только чтение» с '{f}': {ex.Message}"); }
+                    }
+
                     Directory.Delete(dir, true);
                     log($"cleanup: removed stale updater directory '{PreserveMatcher.UpdaterArtifactDir}'");
                 }
@@ -926,8 +1106,28 @@ internal static class Program
         catch (Exception ex) { log($"cleanup error: {ex.Message}"); }
     }
 
-    internal static string Sha256Hex(string path)
+    /// <summary>
+    /// SHA-256 файла в hex (нижний регистр). Пустая строка — файл прочитать не удалось.
+    /// </summary>
+    /// <param name="path">Путь к файлу.</param>
+    /// <returns>Хеш либо пустая строка.</returns>
+    internal static string Sha256Hex(string path) => Sha256Hex(path, out _);
+
+    /// <summary>
+    /// То же, но с причиной неудачи.
+    /// <para>
+    /// Причина обязана выходить наружу: типичный отказ здесь — антивирус, который
+    /// держит только что распакованный файл. Без неё в журнале оставалось
+    /// «содержимое не совпадает с источником», и разбор уходил в поиск
+    /// несуществующей порчи файлов вместо настоящей причины — файл НЕ ПРОЧИТАН.
+    /// </para>
+    /// </summary>
+    /// <param name="path">Путь к файлу.</param>
+    /// <param name="error">Описание ошибки чтения либо null.</param>
+    /// <returns>Хеш либо пустая строка.</returns>
+    internal static string Sha256Hex(string path, out string? error)
     {
+        error = null;
         try
         {
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -941,7 +1141,11 @@ internal static class Program
             sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
             return Convert.ToHexString(sha.Hash!).ToLowerInvariant();
         }
-        catch { return string.Empty; }
+        catch (Exception ex)
+        {
+            error = $"{ex.GetType().Name}: {ex.Message}";
+            return string.Empty;
+        }
     }
 
     /// <summary>Состояние прогона, нужное блоку finally (лог, статус, перезапуск).</summary>
