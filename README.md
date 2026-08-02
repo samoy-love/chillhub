@@ -14,6 +14,10 @@ unpack it here, delete those three files, and don't lose your config". Every
 manual step in that sequence is a step someone performs wrong, and a broken
 install is indistinguishable from a broken build until somebody debugs it.
 
+ChillHub grew out of a private mod updater for Lethal Company (C#, WinForms,
+2023–2024): one game, a hardcoded file list, updates poured over whatever was
+there. Same problem, rebuilt for many games — with diffs, hashes and rollbacks.
+
 ![Launcher main screen](docs/img/launcher-main.svg)
 
 ## How it works
