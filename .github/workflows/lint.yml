@@ -152,22 +152,11 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
-  nginx-config:
-    name: nginx config (real nginx -t)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      # Прогоняем НАСТОЯЩИЙ nginx -t в контейнере. Парсер конфигов принимает то,
-      # что nginx отвергает, и наоборот: директивы из отсутствующих модулей,
-      # `http2 on;` на nginx < 1.25, особенности регулярок.
-      # Версия по умолчанию совпадает с продом (1.24) — иначе проверка была бы
-      # ложно-зелёной ровно на том, что там сломается.
-      - name: nginx -t (версия прода)
-        run: sh deploy/nginx-check.sh
-      # Вторым шагом — свежий nginx: заранее увидим, что сломается при апгрейде.
-      - name: nginx -t (свежий, некритично)
-        continue-on-error: true
-        run: NGINX_IMAGE=nginx:alpine sh deploy/nginx-check.sh
+  # Джоба `nginx config (real nginx -t)` жила здесь до тех пор, пока в этом
+  # репозитории лежал свой vhost. Конфиг переехал в deploy-kit (nginx/sites/)
+  # вместе со скриптом проверки, а джоба осталась звать `deploy/nginx-check.sh` —
+  # файл, которого больше нет, отчего и падала. Настоящий `nginx -t` версии
+  # прода теперь гоняет CI самого deploy-kit, там же, где лежит конфиг.
 
   dotnet-lint:
     name: C# (launcher)
