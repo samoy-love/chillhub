@@ -33,7 +33,7 @@ jobs:
     with:
       config: .deploy-kit/site.env
       # Лендинг — статика без сборки; регресс для него это линтеры разметки.
-      gates: npx --yes htmlhint@1.9.2 "landing/**/*.html" && npx --yes -p stylelint@17.14.1 -p stylelint-config-standard@40.0.0 stylelint "landing/**/*.css"
+      gates: npx --yes htmlhint@1.9.2 "landing/**/*.html" && npm i -g stylelint@17.14.1 stylelint-config-standard@40.0.0 >/dev/null && npx stylelint "landing/**/*.css"
       dry-run: ${{ inputs.dry-run == true }}
     secrets: inherit
 
@@ -63,7 +63,7 @@ jobs:
     with:
       config: .deploy-kit/admin-ui.env
       # Морда админки — та же разметка и стили, что и лендинг: гейт тот же.
-      gates: npx --yes htmlhint@1.9.2 "server/admin_ui/**/*.html" && npx --yes -p stylelint@17.14.1 -p stylelint-config-standard@40.0.0 stylelint "server/admin_ui/**/*.css"
+      gates: npx --yes htmlhint@1.9.2 "server/admin_ui/**/*.html" && npm i -g stylelint@17.14.1 stylelint-config-standard@40.0.0 >/dev/null && npx stylelint "server/admin_ui/**/*.css"
       dry-run: ${{ inputs.dry-run == true }}
     secrets: inherit
 
