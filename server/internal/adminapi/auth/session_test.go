@@ -88,13 +88,19 @@ func TestTamperedSignatureIsRejected(t *testing.T) {
 	if len(parts) != 3 {
 		t.Fatalf("unexpected token shape: %q", valid)
 	}
-	sig := []byte(parts[2])
-	if sig[len(sig)-1] == 'A' {
-		sig[len(sig)-1] = 'B'
-	} else {
-		sig[len(sig)-1] = 'A'
+	// Портить надо байт подписи, а не символ base64. Подпись HS256 — 32 байта,
+	// это 43 символа RawURLEncoding: 258 бит на 256 значащих. Последний символ
+	// несёт четыре значащих бита и два лишних, поэтому у него есть три
+	// двойника, декодирующихся в те же 32 байта. Замена хвоста на 'A'/'B'
+	// попадала в такой двойник в 4 случаях из 64 — подпись оставалась
+	// валидной, и тест падал сообщением про пробитую авторизацию примерно
+	// раз на шестнадцать прогонов.
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		t.Fatalf("signature is not valid base64: %v", err)
 	}
-	tampered := parts[0] + "." + parts[1] + "." + string(sig)
+	sig[0] ^= 0x01
+	tampered := parts[0] + "." + parts[1] + "." + base64.RawURLEncoding.EncodeToString(sig)
 	if user := a.CurrentUser(authGet(t, tampered)); user != "" {
 		t.Fatalf("token with a broken signature authenticates as %q", user)
 	}
