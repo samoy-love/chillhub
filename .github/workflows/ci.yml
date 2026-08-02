@@ -344,6 +344,24 @@ jobs:
         # вопрос, который читатель ему задаёт.
         run: dotnet test --nologo --collect:"XPlat Code Coverage"
 
+      - name: Собрать отчёт о покрытии в предсказуемое место
+        # coverlet кладёт отчёт в каталог со случайным GUID. Дальше его надо
+        # передать другой job, а `files:` у codecov-action НЕ разворачивает
+        # шаблоны — он ищет путь буквально. Молча: шаг завершается успехом, а
+        # отчёт не уезжает, и покрытие падает на всю долю клиента. Ровно это и
+        # произошло на первом прогоне этой ветки: 73.6% -> 37.4%.
+        #
+        # Поэтому GUID разбирается здесь, где шаблоны работают, а дальше идёт
+        # одно фиксированное имя.
+        shell: pwsh
+        run: |
+          $report = Get-ChildItem -Recurse -Filter coverage.cobertura.xml `
+            -Path launcher/tests/ChillHub.Tests/TestResults | Select-Object -First 1
+          if (-not $report) { throw "coverlet не оставил coverage.cobertura.xml" }
+          New-Item -ItemType Directory -Force -Path coverage-out | Out-Null
+          Copy-Item $report.FullName coverage-out/launcher.cobertura.xml
+          Write-Host "отчёт: $($report.FullName)"
+
       - name: Сохранить отчёт о покрытии
         # Отчёт УЕЗЖАЕТ артефактом, а загружает его в Codecov отдельная job на
         # ubuntu. Причина — цена: сам шаг загрузки на windows-раннере занимал
@@ -354,9 +372,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: coverage-launcher
-          # Путь coverlet складывает в каталог со случайным GUID, поэтому
-          # шаблон, а не точное имя.
-          path: launcher/tests/ChillHub.Tests/TestResults/**/coverage.cobertura.xml
+          path: coverage-out/launcher.cobertura.xml
           retention-days: 1
           if-no-files-found: error
 
@@ -484,12 +500,21 @@ jobs:
           name: coverage-launcher
           path: coverage-launcher
 
+      - name: Убедиться, что отчёт на месте
+        # Без этой проверки промах пути проходит молча: codecov-action при
+        # fail_ci_if_error: false завершается успехом, ничего не отправив, а
+        # покрытие падает на всю долю клиента — и заметить это можно только по
+        # чужому статусу codecov/project. Пусть падает здесь и по делу.
+        run: test -s coverage-launcher/launcher.cobertura.xml
+
       - name: Отправить покрытие клиента в Codecov
         # Приколот к SHA, а не к тегу: тег мутабелен, и у Codecov уже был
         # прецедент компрометации релиза.
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
-          files: coverage-launcher/**/coverage.cobertura.xml
+          files: coverage-launcher/launcher.cobertura.xml
           flags: launcher
           token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
+          # Здесь наоборот: промах уже отсечён шагом выше, и если отправка всё
+          # же не удалась — цифра будет врать, а это хуже красной сборки.
+          fail_ci_if_error: true
