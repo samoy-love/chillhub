@@ -36,6 +36,12 @@ Environment=API_METRICS_LISTEN_ADDR=172.17.0.1:55701
 Environment=ADMIN_METRICS_LISTEN_ADDR=172.17.0.1:55778
 ```
 
+Эти строки не набираются на сервере руками: они лежат в репозитории —
+`deploy/systemd/chillhub-api.service.d/20-metrics.conf` и
+`deploy/systemd/chillhub-admin.service.d/20-metrics.conf`. Drop-in, живущий
+только в `/etc/systemd/system`, исчезает при первой переустановке юнита, и
+метрики пропадают молча.
+
 Адрес моста доступен только с самого хоста и его контейнеров; снаружи по
 публичному адресу сервера эти порты не отвечают. Экспортёр пишет в лог
 предупреждение, если слушает не loopback, — чтобы «временно повесил на 0.0.0.0»
