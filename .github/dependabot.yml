@@ -1,39 +1,28 @@
-# Обновление зависимостей.
-#
-# До этого файла зависимости обновлялись руками и потому не обновлялись: к
-# августу 2026 x/crypto отстал на 26 минорных версий, а тулчейн Go — на две.
-# Отставание в x/crypto особенно неприятно: на нём bcrypt админки.
-#
-# Раз в неделю, а не ежедневно: этот проект не выдержит ежедневного потока
-# пул-реквестов, а недельный ритм догоняет всё, что важно.
 version: 2
 
+# Обновления зависимостей раз в неделю, по понедельникам: реже — и копится
+# пачка, которую разбирают залпом и потому невнимательно; чаще — и PR
+# перестают читать вовсе.
+#
+# open-pull-requests-limit держит очередь короткой намеренно. Двадцать
+# открытых PR от бота — это не двадцать обновлений, а ноль.
+#
+# Сообщения на русском в повелительном наклонении, как везде в этих
+# репозиториях (CLAUDE.md). Префикс deps: отделяет машинные правки от
+# человеческих.
+
 updates:
-  # Go — сервер: публичный API и админка.
-  - package-ecosystem: gomod
-    directory: /server
+  - package-ecosystem: "github-actions"
+    directory: "/"
     schedule:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
     commit-message:
       prefix: "deps"
-    groups:
-      # Модули golang.org/x/* выходят согласованно; отдельный пул-реквест на
-      # каждый — это шум ради шума.
-      golang-x:
-        patterns:
-          - "golang.org/x/*"
 
-  # NuGet — клиент и апдейтер.
-  #
-  # ВНИМАНИЕ при ревью этих пул-реквестов: пакет Blake3 считает хеши всей
-  # системы обновления. Версия 3.x отказалась от нативной реализации и
-  # замедлила хеширование в 3.6 раза (стало медленнее SHA-256), поэтому проект
-  # намеренно сидит на линии 2.x. Не сливайте обновление Blake3, не сверив
-  # эталонные векторы и скорость.
-  - package-ecosystem: nuget
-    directory: /launcher/ChillHub
+  - package-ecosystem: "nuget"
+    directory: "/launcher/ChillHub"
     schedule:
       interval: weekly
       day: monday
@@ -41,12 +30,28 @@ updates:
     commit-message:
       prefix: "deps"
     ignore:
-      # StyleCop: в проекте стоит 1.2.0-beta.556, а последняя стабильная —
-      # 1.1.118, то есть «обновление» было бы откатом на более старую линию.
-      - dependency-name: StyleCop.Analyzers
+      # BLAKE3 ОСТАЁТСЯ НА МАЖОРЕ 2. ЭТО РЕШЕНИЕ, А НЕ ЗАБЫТОЕ ОБНОВЛЕНИЕ.
+      #
+      # Значения хешей — контракт между сервером и КАЖДЫМ установленным
+      # лаунчером: манифест опубликованной версии хранит их навсегда, а клиент
+      # пересчитывает файлы на диске и сравнивает. Разъехавшиеся реализации не
+      # дают никакой ошибки — каждый установленный лаунчер просто решает, что
+      # не совпадает ни один файл, и перекачивает игры целиком.
+      #
+      # Эталонные векторы в тестах (HashVectorTests.cs и
+      # server/internal/adminapi/builds/hashvector_test.go) расхождение ловят,
+      # но риск здесь несимметричный: цена ошибки — не красный прогон, а
+      # гигабайты трафика у пользователей, замеченные ими, а не нами. Выгода
+      # же от мажорного обновления хеш-библиотеки близка к нулю: BLAKE3 —
+      # замороженная спецификация, считать «лучше» тут нечего.
+      #
+      # Снимать это правило — только вместе с планом, что делать с уже
+      # опубликованными манифестами.
+      - dependency-name: "Blake3"
+        update-types: ["version-update:semver-major"]
 
-  - package-ecosystem: nuget
-    directory: /launcher/tests/ChillHub.Tests
+  - package-ecosystem: "nuget"
+    directory: "/launcher/tests/ChillHub.Tests"
     schedule:
       interval: weekly
       day: monday
@@ -54,16 +59,20 @@ updates:
     commit-message:
       prefix: "deps"
 
-  # Сами GitHub Actions: они закреплены тегами, и без этого блока теги
-  # застывают навсегда.
-  - package-ecosystem: github-actions
-    directory: /
+  - package-ecosystem: "nuget"
+    directory: "/updater"
     schedule:
       interval: weekly
       day: monday
+    open-pull-requests-limit: 5
     commit-message:
-      prefix: "ci"
-    groups:
-      actions:
-        patterns:
-          - "*"
+      prefix: "deps"
+
+  - package-ecosystem: "gomod"
+    directory: "/server"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
