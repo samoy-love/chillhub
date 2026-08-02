@@ -39,7 +39,7 @@ indent_style = tab
 # CRLF, а не общий LF сверху. Это не вкусовщина: launcher/.gitattributes
 # закрепляет `*.cs text eol=crlf`, то есть git кладёт в рабочую копию именно
 # CRLF. Пока здесь стояло lf, `dotnet format --verify-no-changes` требовал
-# переписать КАЖДЫЙ файл лаунчера, а этот шаг в lint.yml блокирующий.
+# переписать КАЖДЫЙ файл лаунчера, а этот шаг в ci.yml блокирующий.
 # Два файла должны говорить одно и то же; менять решение надо в обоих сразу.
 end_of_line = crlf
 csharp_new_line_before_open_brace = all:warning
