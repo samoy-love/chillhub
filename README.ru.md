@@ -2,9 +2,10 @@
 
 [English](README.md) · Русский
 
-[![CI](https://github.com/tr0llex/chillhub/actions/workflows/lint.yml/badge.svg)](https://github.com/tr0llex/chillhub/actions/workflows/lint.yml)
+[![CI](https://github.com/tr0llex/chillhub/actions/workflows/ci.yml/badge.svg)](https://github.com/tr0llex/chillhub/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/tr0llex/chillhub/branch/main/graph/badge.svg)](https://codecov.io/gh/tr0llex/chillhub)
 [![прод](https://img.shields.io/website?url=https%3A%2F%2Flauncher.samoy.love&up_message=online&up_color=2ea043&down_message=offline&label=launcher.samoy.love)](https://launcher.samoy.love)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Лаунчер для Windows, который раздаёт сборки игр с модами небольшому кругу
 игроков и держит их в актуальном состоянии —
@@ -132,7 +133,7 @@ dk deploy --all --dry-run   # посмотреть план, ничего не �
 dk rollback chillhub-admin
 ```
 
-Из CI: Actions → Release → Run workflow, там же выбор цели. Значение `all`
+Из CI: Actions → Deploy → Run workflow, там же выбор цели. Значение `all`
 выкатывает четыре цели выше, но установщик НЕ собирает — для него нужен
 отдельный запуск с `target=installer` либо тег `v*`, который делает и то и
 другое.
