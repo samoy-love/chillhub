@@ -101,24 +101,44 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
-        /// Пока замок держат, второй апдейтер его не получает. Проверяется из другого
-        /// потока: мьютекс реентерабелен для владельца, и из того же потока захват прошёл бы.
+        /// Пока замок держат, второй апдейтер его не получает.
+        /// <para>
+        /// Замок держит ВЫДЕЛЕННЫЙ поток, а не поток пула. Мьютекс принадлежит потоку и
+        /// реентерабелен для владельца: если держать его на потоке пула, то Task.Run для
+        /// проверки может попасть на тот же самый поток, и повторный захват законно
+        /// пройдёт — тест «сломается» на исправном коде. Ровно это и вылезло при
+        /// обновлении раннера тестов: прежний давал телу теста отдельный поток и
+        /// случайно маскировал ошибочное допущение.
+        /// </para>
         /// </summary>
         [Fact]
-        public async Task ЗанятыйКаталогВторымАпдейтеромНеЗахватывается() {
+        public void ЗанятыйКаталогВторымАпдейтеромНеЗахватывается() {
             using var dir = new TempDir();
-            Assert.True(UpdateLock.TryAcquire(dir.Root, 0, out var held));
-            try {
-                var busy = await Task.Run(() => UpdateLock.IsBusy(dir.Root));
-                Assert.True(busy, "второй апдейтер не увидел, что каталог занят");
+            using var acquired = new ManualResetEventSlim(false);
+            using var release = new ManualResetEventSlim(false);
+            var gotLock = false;
 
-                var acquired = await Task.Run(() => UpdateLock.TryAcquire(dir.Root, 0, out var second)
-                    ? Release(second)
-                    : false);
-                Assert.False(acquired, "второй апдейтер захватил уже занятый каталог");
+            var holder = new Thread(() => {
+                gotLock = UpdateLock.TryAcquire(dir.Root, 0, out var m);
+                acquired.Set();
+                release.Wait();
+                UpdateLock.Release(m);
+            }) { IsBackground = true };
+            holder.Start();
+
+            Assert.True(acquired.Wait(TimeSpan.FromSeconds(10)), "поток-держатель не успел взять замок");
+            Assert.True(gotLock, "свободный каталог не удалось захватить");
+
+            try {
+                Assert.True(UpdateLock.IsBusy(dir.Root), "второй апдейтер не увидел, что каталог занят");
+                Assert.False(
+                    UpdateLock.TryAcquire(dir.Root, 0, out var second),
+                    "второй апдейтер захватил уже занятый каталог");
+                UpdateLock.Release(second);
             }
             finally {
-                UpdateLock.Release(held);
+                release.Set();
+                holder.Join(TimeSpan.FromSeconds(10));
             }
         }
 
