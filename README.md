@@ -146,6 +146,7 @@ dk rollback chillhub-admin
 | [metro.samoy.love](https://metro.samoy.love) | Офлайн-PWA со схемой московского метро — [tr0llex/metro-map](https://github.com/tr0llex/metro-map) |
 | [status.samoy.love](https://status.samoy.love) | Статус сервисов: агент на хосте, бот в Telegram и внешний сторож — [tr0llex/status.samoy.love](https://github.com/tr0llex/status.samoy.love) |
 | [samoy.love](https://samoy.love) | Личная страница — [tr0llex/samoy.love](https://github.com/tr0llex/samoy.love) |
+| — | [metrics.samoy.love](https://github.com/tr0llex/metrics.samoy.love): туда собираются продуктовые метрики лаунчера — установки, дифф против полной загрузки, расхождения хешей |
 | — | [deploy-kit](https://github.com/tr0llex/deploy-kit): общий релизный пайплайн для всех перечисленных |
 
 ## Дальше

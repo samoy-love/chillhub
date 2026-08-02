@@ -25,8 +25,10 @@
 | `API_METRICS_LISTEN_ADDR` | `127.0.0.1:55701` | адрес экспортёра публичного API |
 | `ADMIN_METRICS_LISTEN_ADDR` | `127.0.0.1:55778` | адрес экспортёра админки |
 
-Prometheus работает в контейнере (`samoy-monitoring`) и до `127.0.0.1` хоста не
-достаёт — из своего сетевого namespace он видит хост по адресу docker-моста.
+Prometheus работает в контейнере стека `samoylove-metrics`
+([metrics.samoy.love](https://github.com/tr0llex/metrics.samoy.love)) и до
+`127.0.0.1` хоста не достаёт — из своего сетевого namespace он видит хост по
+адресу docker-моста.
 Поэтому на проде адрес задаётся явно:
 
 ```ini
