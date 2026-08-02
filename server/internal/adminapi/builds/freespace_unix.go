@@ -19,12 +19,19 @@ func freeSpaceBytesImpl(path string) (uint64, error) {
 		// always propagated the error — the two had simply drifted apart.
 		return 0, err
 	}
-	// Use Bsize for portability across Unix variants (darwin doesn't expose Frsize)
+	// Use Bsize for portability across Unix variants (darwin doesn't expose Frsize).
+	// The conversion stays because the field's type differs by platform: int64 on
+	// Linux, uint32 on darwin.
+	//
+	// #nosec G115 -- Bsize is a filesystem block size: a small power of two set by
+	// the kernel, never negative and nowhere near the int64 range where the
+	// conversion could wrap.
 	blockSize := uint64(st.Bsize)
 	if blockSize == 0 {
 		blockSize = 4096
 	}
-	free := uint64(st.Bavail) * blockSize
+	// Bavail is uint64 on every Unix this builds for; no conversion needed.
+	free := st.Bavail * blockSize
 	return free, nil
 }
 
@@ -34,11 +41,13 @@ func diskSpaceImpl(path string) (uint64, uint64, error) {
 	if err := unix.Statfs(path, &st); err != nil {
 		return 0, 0, err
 	}
+	// #nosec G115 -- see freeSpaceBytesImpl: a block size cannot wrap.
 	blockSize := uint64(st.Bsize)
 	if blockSize == 0 {
 		blockSize = 4096
 	}
-	free := uint64(st.Bavail) * blockSize
-	total := uint64(st.Blocks) * blockSize
+	// Bavail and Blocks are uint64 on every Unix this builds for; no conversion.
+	free := st.Bavail * blockSize
+	total := st.Blocks * blockSize
 	return free, total, nil
 }
