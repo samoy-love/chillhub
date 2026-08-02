@@ -12,4 +12,13 @@
     <None Remove="tests\**" />
     <EmbeddedResource Remove="tests\**" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Хелперы Program (разбор аргументов, проверка списков, strip-prefix, уборка
+         артефактов) намеренно internal: это детали реализации апдейтера. Но именно
+         они решают, куда лягут файлы обновления, поэтому проверяются напрямую —
+         Main и RunAsync запускают процессы и в тестах непригодны. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ChillHub.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
 </Project>
