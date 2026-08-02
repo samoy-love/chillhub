@@ -235,15 +235,24 @@ jobs:
       # NuGet-пакеты сверяются со списком известных уязвимостей. Флаг
       # --include-transitive обязателен: прямых зависимостей у лаунчера пять,
       # а тянут они за собой десятки.
+      #
+      # EnableWindowsTargeting нужен потому, что клиент целится в net8.0-windows
+      # (WPF), а раннер здесь линуксовый: без флага восстановление падает с
+      # NETSDK1100 ещё до того, как дойдёт до проверки. Собирать проект при этом
+      # не требуется — списку пакетов хватает восстановления.
       - name: Уязвимые NuGet-пакеты
         shell: bash
         run: |
           set -o pipefail
-          out=$(dotnet list launcher/ChillHub/ChillHub.csproj package --vulnerable --include-transitive 2>&1 | tee /dev/stderr)
-          if echo "$out" | grep -qiE "has the following vulnerable"; then
-            echo "::error::найдены уязвимые NuGet-пакеты"
-            exit 1
-          fi
+          for proj in launcher/ChillHub/ChillHub.csproj launcher/tests/ChillHub.Tests/ChillHub.Tests.csproj; do
+            echo "== $proj"
+            dotnet restore "$proj" -p:EnableWindowsTargeting=true >/dev/null
+            out=$(dotnet list "$proj" package --vulnerable --include-transitive 2>&1 | tee /dev/stderr)
+            if echo "$out" | grep -qiE "has the following vulnerable"; then
+              echo "::error::найдены уязвимые NuGet-пакеты в $proj"
+              exit 1
+            fi
+          done
 
   dotnet-lint:
     name: C# (launcher)
