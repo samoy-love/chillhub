@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" role="img" aria-label="Placeholder for the launcher main screen screenshot">
+  <rect width="1600" height="900" fill="#12141a"/>
+  <rect x="0.5" y="0.5" width="1599" height="899" fill="none" stroke="#2a2f3a"/>
+
+  <rect x="64" y="64" width="320" height="772" rx="10" fill="#181b23" stroke="#2a2f3a"/>
+  <rect x="96" y="104" width="180" height="18" rx="9" fill="#2a2f3a"/>
+  <rect x="96" y="164" width="256" height="72" rx="8" fill="#1e2330" stroke="#2a2f3a"/>
+  <rect x="96" y="252" width="256" height="72" rx="8" fill="#1e2330" stroke="#2a2f3a"/>
+  <rect x="96" y="340" width="256" height="72" rx="8" fill="#1e2330" stroke="#2a2f3a"/>
+
+  <rect x="416" y="64" width="1120" height="480" rx="10" fill="#181b23" stroke="#2a2f3a"/>
+  <rect x="416" y="576" width="1120" height="260" rx="10" fill="#181b23" stroke="#2a2f3a"/>
+  <rect x="448" y="616" width="1056" height="14" rx="7" fill="#2a2f3a"/>
+  <rect x="448" y="616" width="612" height="14" rx="7" fill="#3d4a63"/>
+  <rect x="448" y="664" width="420" height="12" rx="6" fill="#232833"/>
+  <rect x="448" y="700" width="300" height="12" rx="6" fill="#232833"/>
+  <rect x="1336" y="756" width="168" height="44" rx="8" fill="#2f3a4f"/>
+
+  <g font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif" text-anchor="middle">
+    <text x="976" y="286" fill="#8a93a6" font-size="30" letter-spacing="0.14em">SCREENSHOT PLACEHOLDER</text>
+    <text x="976" y="336" fill="#5d6577" font-size="20">Launcher main screen: game list, news, download progress</text>
+  </g>
+</svg>
