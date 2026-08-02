@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"ChillHub/server/internal/promexp"
 	"ChillHub/server/internal/ratelimit"
 )
 
@@ -25,7 +26,7 @@ func withContentRoot(t *testing.T) string {
 }
 
 func testRouter() http.Handler {
-	return newRouter(ratelimit.New(0, time.Minute))
+	return newRouter(ratelimit.New(0, time.Minute), promexp.New())
 }
 
 func TestGameIDIsValidatedOnPublicRoutes(t *testing.T) {

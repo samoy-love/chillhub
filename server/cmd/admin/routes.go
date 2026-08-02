@@ -53,7 +53,7 @@ func (s *server) apiRoutes() []route {
 		// password-guessing surface and the cheapest way to saturate the CPU of a
 		// process that also answers the public /feedback/submit and
 		// /metrics/report endpoints.
-		{path: "/admin/api/auth/login", handler: s.loginLimiter.Wrap(s.auth.HandleLogin, http.MethodPost), noAlias: true},
+		{path: "/admin/api/auth/login", handler: s.prom.count(s.prom.logins, s.loginLimiter.Wrap(s.auth.HandleLogin, http.MethodPost)), noAlias: true},
 		{path: "/admin/api/auth/logout", handler: s.auth.HandleLogout, noAlias: true},
 		{path: "/admin/api/auth/refresh", handler: s.auth.HandleRefresh, noAlias: true},
 		{path: "/admin/api/auth/me", handler: s.auth.HandleMe, noAlias: true},
@@ -61,7 +61,10 @@ func (s *server) apiRoutes() []route {
 
 		// Builds and versions.
 		{path: "/admin/api/list", handler: b.ListVersions},
-		{path: "/admin/api/activate", handler: b.Activate},
+		// Активация — момент, когда сборка становится «последней» для всех
+		// лаунчеров сразу. Без отметки на графике всплеск установок или ошибок
+		// после неё выглядит как погода, а не как следствие выкатки.
+		{path: "/admin/api/activate", handler: s.prom.count(s.prom.activations, b.Activate)},
 		{path: "/admin/api/deleteVersion", handler: b.DeleteVersion},
 		{path: "/admin/api/upload", handler: b.Upload},
 		{path: "/admin/api/uploadStream", handler: b.UploadStream},
@@ -89,8 +92,8 @@ func (s *server) apiRoutes() []route {
 		// Maintenance mode. The launcher reads the state from the PUBLIC API
 		// (GET /api/maintenance on :55700); these three only write it.
 		{path: "/admin/api/maintenance/get", handler: mt.Get},
-		{path: "/admin/api/maintenance/set", handler: mt.Set},
-		{path: "/admin/api/maintenance/clear", handler: mt.Clear},
+		{path: "/admin/api/maintenance/set", handler: s.prom.count(s.prom.maintenance, mt.Set, "set")},
+		{path: "/admin/api/maintenance/clear", handler: s.prom.count(s.prom.maintenance, mt.Clear, "clear")},
 
 		// Launcher metrics (the public ingest endpoint is registered separately).
 		{path: "/admin/api/metrics/summary", handler: mx.Summary},
@@ -153,7 +156,7 @@ func (s *server) register(mux *http.ServeMux) []string {
 
 	// Public feedback submit (no auth; allowlisted in the auth middleware and
 	// rate limited per client IP).
-	add("/feedback/submit", s.feedbackLimiter.Wrap(s.feedback.Submit, http.MethodPost))
+	add("/feedback/submit", s.prom.count(s.prom.feedback, s.feedbackLimiter.Wrap(s.feedback.Submit, http.MethodPost)))
 
 	// Public metrics ingest (no auth; same shape as /feedback/submit — outside
 	// the /admin/ prefix, so the auth middleware never sees it, and rate limited

@@ -11,8 +11,7 @@ using System.Threading.Tasks;
 
 using ChillHub.Update;
 
-internal static class Program
-{
+internal static class Program {
     // Коды возврата: 0 — успех, 2 — были ошибки копирования (обновление НЕ применено полностью), 3 — фатальная ошибка.
     // Читать их некому (родителя к этому моменту уже нет), поэтому исход дублируется
     // в файл состояния рядом с маркером версии — см. UpdateStatus (A12).
@@ -30,8 +29,7 @@ internal static class Program
     // (например, launcher.version становится 10 байт вместо 8).
     private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
 
-    public static async Task<int> Main(string[] args)
-    {
+    public static async Task<int> Main(string[] args) {
         var log = new UpdateLog();
         var ctx = new RunContext();
         var exit = ExitFatal;
@@ -41,19 +39,16 @@ internal static class Program
         // единственной записи в журнал — и лаунчер, который к этому моменту уже
         // завершился, не перезапускал никто. Теперь любой исход проходит через
         // finally: состояние на диск, лаунчер обратно на экран.
-        try
-        {
+        try {
             exit = await RunAsync(args, log, ctx);
         }
-        catch (Exception ex)
-        {
+        catch (Exception ex) {
             log.Write($"fatal: {ex}");
             ctx.Outcome = "fatal";
             ctx.Message = $"{ex.GetType().Name}: {ex.Message}";
             exit = ExitFatal;
         }
-        finally
-        {
+        finally {
             UpdateLock.Release(ctx.Lock);
             WriteStatus(ctx, exit, log);
             Restart(ctx, log);
@@ -63,13 +58,10 @@ internal static class Program
         return exit;
     }
 
-    private static async Task<int> RunAsync(string[] args, UpdateLog log, RunContext ctx)
-    {
+    private static async Task<int> RunAsync(string[] args, UpdateLog log, RunContext ctx) {
         var argsMap = ParseArgs(args);
-        string Req(string key)
-        {
-            if (!argsMap.TryGetValue(key, out var v) || string.IsNullOrWhiteSpace(v))
-            {
+        string Req(string key) {
+            if (!argsMap.TryGetValue(key, out var v) || string.IsNullOrWhiteSpace(v)) {
                 throw new ArgumentException($"Missing required option {key}");
             }
             return v!;
@@ -93,8 +85,7 @@ internal static class Program
         // без значения) выглядит как обычная команда, поэтому его нельзя добирать
         // значением по умолчанию — только фатальный отказ.
         var parentStr = argsMap.TryGetValue("--parent", out var parentRaw) ? parentRaw : null;
-        if (!TryParseParentPid(parentStr, out var parent, out var parentProblem))
-        {
+        if (!TryParseParentPid(parentStr, out var parent, out var parentProblem)) {
             log.Write($"FATAL: --parent: {parentProblem}; ждать родителя нечего, копировать поверх работающего лаунчера нельзя");
             ctx.Outcome = "fatal";
             ctx.Message = $"Некорректный аргумент --parent: {parentProblem}.";
@@ -118,8 +109,7 @@ internal static class Program
 
         // A3. Замок на каталог установки. Два апдейтера в одной папке — это
         // перемешанные бэкапы и невосстановимая смесь версий.
-        if (!UpdateLock.TryAcquire(dst, LockWaitMs, out var mutex))
-        {
+        if (!UpdateLock.TryAcquire(dst, LockWaitMs, out var mutex)) {
             log.Write($"FATAL: другой процесс уже применяет обновление в '{dst}' (ждали {LockWaitMs / 1000} с)");
             ctx.Outcome = "busy";
             ctx.Message = "Обновление уже применяется другим процессом.";
@@ -143,28 +133,22 @@ internal static class Program
         // По таймауту всё равно идём дальше: копирование само упадёт на
         // заблокированных файлах, а маркер версии при ошибках копирования
         // не пишется — значит следующий запуск честно повторит обновление.
-        if (parent > 0)
-        {
-            try
-            {
+        if (parent > 0) {
+            try {
                 var proc = Process.GetProcessById(parent);
-                if (proc.WaitForExit(ParentWaitMs))
-                {
+                if (proc.WaitForExit(ParentWaitMs)) {
                     log.Write($"Parent {parent} exited");
                 }
-                else
-                {
+                else {
                     log.Write($"WARNING: parent {parent} is still running after {ParentWaitMs / 1000}s; " +
                         "proceeding anyway — locked files will fail to copy and the update will be retried on next launch");
                 }
             }
-            catch (ArgumentException)
-            {
+            catch (ArgumentException) {
                 // Процесса с таким id уже нет — ровно то, чего мы и ждали.
                 log.Write($"Parent {parent} already gone");
             }
-            catch (Exception ex)
-            {
+            catch (Exception ex) {
                 log.Write($"WARNING: cannot wait for parent {parent}: {ex.GetType().Name}: {ex.Message}");
             }
         }
@@ -177,8 +161,7 @@ internal static class Program
         // файл (~26 секунд), и на сотне файлов это десятки минут тишины,
         // после которых обновление всё равно не применялось.
         var accessProblem = DescribeWriteAccess(dst);
-        if (accessProblem != null)
-        {
+        if (accessProblem != null) {
             log.Write($"FATAL: нет прав на запись в '{dst}': {accessProblem}");
             ctx.Outcome = "access-denied";
             ctx.Message = $"Нет прав на запись в папку установки '{dst}'. Обновление не применялось.";
@@ -186,8 +169,7 @@ internal static class Program
         }
 
         // Detect strip prefix if not provided (только если автоопределение разрешено)
-        if (string.IsNullOrWhiteSpace(strip) && autoStrip)
-        {
+        if (string.IsNullOrWhiteSpace(strip) && autoStrip) {
             strip = DetectStripPrefix(src, files, log.Write) ?? strip;
         }
         log.Write($"effective strip-prefix='{strip}'");
@@ -197,8 +179,7 @@ internal static class Program
         // по пути с ".." или "C:\..." уводит файл куда угодно: в автозагрузку,
         // в System32, в чужой профиль. Проверяем ВСЕ списки до первой операции
         // и отказываемся целиком: частично применённое обновление хуже неприменённого.
-        if (!ValidateLists(new[] { files, dirs, del }, strip, log.Write))
-        {
+        if (!ValidateLists(new[] { files, dirs, del }, strip, log.Write)) {
             log.Write("FATAL: списки содержат небезопасные пути, обновление не применялось");
             ctx.Outcome = "fatal";
             ctx.Message = "Списки обновления содержат небезопасные пути.";
@@ -225,31 +206,25 @@ internal static class Program
         // B2. Копирование идёт через транзакцию: каждый файл встаёт на место
         // атомарной подменой, старое содержимое лежит в бэкапе. Пока транзакция
         // не подтверждена, откат возвращает установку в исходное состояние целиком.
-        async Task<bool> CopyFileAsync(string sourceFile, string destFile)
-        {
+        async Task<bool> CopyFileAsync(string sourceFile, string destFile) {
             const int maxAttempts = 5;
             var attempt = 0;
-            while (true)
-            {
-                try
-                {
+            while (true) {
+                try {
                     tx.CopyFile(sourceFile, destFile);
                     copyOk++;
                     return true;
                 }
-                catch (UnauthorizedAccessException ex)
-                {
+                catch (UnauthorizedAccessException ex) {
                     // A2. Права не появятся от повторов — прерываем весь проход.
                     throw new UpdaterAbortException(
                         $"отказ в доступе при записи '{destFile}': {ex.Message}. " +
                         "Проверьте права на папку установки и антивирус; обновление не применено.",
                         ex);
                 }
-                catch (Exception ex)
-                {
+                catch (Exception ex) {
                     attempt++;
-                    if (attempt >= maxAttempts)
-                    {
+                    if (attempt >= maxAttempts) {
                         copyErrors++;
                         log.Write($"copy FAILED (giving up after {maxAttempts}) {sourceFile} -> {destFile}: {ex.Message}");
                         return false;
@@ -268,22 +243,17 @@ internal static class Program
         var copied = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var integrityErrors = 0;
 
-        try
-        {
+        try {
             // If file list provided, copy them first (diff), respecting strip-prefix
-            if (haveFileList)
-            {
-                foreach (var rel in File.ReadAllLines(files, Encoding.UTF8))
-                {
+            if (haveFileList) {
+                foreach (var rel in File.ReadAllLines(files, Encoding.UTF8)) {
                     var clean = CleanListEntry(rel, out var entryReason);
-                    if (entryReason != null)
-                    {
+                    if (entryReason != null) {
                         // Сюда доходить нечему: ValidateLists уже отвергла бы весь список.
                         log.Write($"copy rejected '{rel}': {entryReason}");
                         continue;
                     }
-                    if (string.IsNullOrEmpty(clean))
-                    {
+                    if (string.IsNullOrEmpty(clean)) {
                         continue;
                     }
                     if (ShouldPreserve(clean, "copy")) { continue; }
@@ -292,8 +262,7 @@ internal static class Program
                     var dstRel = StripOf(clean, strip);
                     var s = ManifestPath.Combine(src, srcRel);
                     var d = ManifestPath.Combine(dst, dstRel);
-                    if (!File.Exists(s))
-                    {
+                    if (!File.Exists(s)) {
                         log.Write($"diff src missing {srcRel}");
                         continue;
                     }
@@ -305,10 +274,8 @@ internal static class Program
             // Residual mirror of all SRC files (ensures runtimes/, prereqs/ etc.).
             // Только для полного пакета (список файлов не передан): при диффе SRC содержит
             // ровно то, что надо скопировать, и оно уже скопировано выше.
-            if (!haveFileList && Directory.Exists(src))
-            {
-                foreach (var s in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
-                {
+            if (!haveFileList && Directory.Exists(src)) {
+                foreach (var s in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories)) {
                     var rel = Path.GetRelativePath(src, s).Replace('\\', '/');
                     if (matcher.ShouldPreserve(rel)) { continue; }
                     // Служебные файлы апдейтера в папку установки не переносим никогда (A6).
@@ -317,13 +284,10 @@ internal static class Program
                     var d = ManifestPath.Combine(dst, dstRel);
                     copied.Add(rel);
                     // Cheap skip: same size
-                    try
-                    {
-                        if (File.Exists(d))
-                        {
+                    try {
+                        if (File.Exists(d)) {
                             var s1 = new FileInfo(s).Length; var s2 = new FileInfo(d).Length;
-                            if (s1 == s2)
-                            {
+                            if (s1 == s2) {
                                 continue;
                             }
                         }
@@ -335,15 +299,11 @@ internal static class Program
 
             // Диагностика диффа: всё, что лежит в SRC, но не попало в список копирования.
             // В норме таких файлов нет; если появились — значит лаунчер и апдейтер разошлись.
-            if (haveFileList && Directory.Exists(src))
-            {
-                try
-                {
-                    foreach (var s in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
-                    {
+            if (haveFileList && Directory.Exists(src)) {
+                try {
+                    foreach (var s in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories)) {
                         var rel = Path.GetRelativePath(src, s).Replace('\\', '/');
-                        if (copied.Contains(rel) || matcher.ShouldPreserve(rel) || PreserveMatcher.IsUpdaterArtifact(rel))
-                        {
+                        if (copied.Contains(rel) || matcher.ShouldPreserve(rel) || PreserveMatcher.IsUpdaterArtifact(rel)) {
                             continue;
                         }
                         log.Write($"diff: SRC file not in FILES list, skipped: {rel}");
@@ -358,16 +318,14 @@ internal static class Program
             // исправной навсегда. Теперь расхождение — такая же ошибка, как отказ копирования.
             integrityErrors = await VerifyAsync(src, dst, strip, copied, haveFileList, matcher, log, CopyFileAsync);
         }
-        catch (UpdaterAbortException ex)
-        {
+        catch (UpdaterAbortException ex) {
             log.Write($"ABORT: {ex.Message}");
             tx.Rollback();
             ctx.Outcome = "access-denied";
             ctx.Message = ex.Message;
             return ExitFatal;
         }
-        catch (ManifestPathException ex)
-        {
+        catch (ManifestPathException ex) {
             log.Write($"ABORT: небезопасный путь: {ex.Message}");
             tx.Rollback();
             ctx.Outcome = "fatal";
@@ -380,8 +338,7 @@ internal static class Program
         // уже снесены, новые не легли, и на диске оставалась дыра, из которой
         // лаунчер не стартует. Порядок «сначала всё скопировать, потом удалять»
         // и есть то, что делает откат возможным.
-        if (copyErrors > 0 || integrityErrors > 0)
-        {
+        if (copyErrors > 0 || integrityErrors > 0) {
             log.Write($"COPY SUMMARY: FAILED. ok={copyOk} copy_errors={copyErrors} integrity_errors={integrityErrors}. " +
                       "Удаления НЕ выполнялись, маркер версии НЕ записан, изменения откатываются.");
             tx.Rollback();
@@ -392,18 +349,14 @@ internal static class Program
         }
 
         // Deletions
-        if (!string.IsNullOrWhiteSpace(del) && File.Exists(del))
-        {
-            foreach (var rel in File.ReadAllLines(del, Encoding.UTF8))
-            {
+        if (!string.IsNullOrWhiteSpace(del) && File.Exists(del)) {
+            foreach (var rel in File.ReadAllLines(del, Encoding.UTF8)) {
                 var clean = CleanListEntry(rel, out var entryReason);
-                if (entryReason != null)
-                {
+                if (entryReason != null) {
                     log.Write($"delete rejected '{rel}': {entryReason}");
                     continue;
                 }
-                if (string.IsNullOrEmpty(clean))
-                {
+                if (string.IsNullOrEmpty(clean)) {
                     continue;
                 }
                 if (ShouldPreserve(clean, "delete")) { continue; }
@@ -416,18 +369,14 @@ internal static class Program
         }
 
         // Empty dirs
-        if (!string.IsNullOrWhiteSpace(dirs) && File.Exists(dirs))
-        {
-            foreach (var rel in File.ReadAllLines(dirs, Encoding.UTF8))
-            {
+        if (!string.IsNullOrWhiteSpace(dirs) && File.Exists(dirs)) {
+            foreach (var rel in File.ReadAllLines(dirs, Encoding.UTF8)) {
                 var clean = CleanListEntry(rel, out var entryReason);
-                if (entryReason != null)
-                {
+                if (entryReason != null) {
                     log.Write($"mkdir rejected '{rel}': {entryReason}");
                     continue;
                 }
-                if (string.IsNullOrEmpty(clean))
-                {
+                if (string.IsNullOrEmpty(clean)) {
                     continue;
                 }
                 try { Directory.CreateDirectory(ManifestPath.Combine(dst, clean)); } catch (Exception ex) { log.Write($"mkdir failed {clean}: {ex.Message}"); }
@@ -451,16 +400,13 @@ internal static class Program
         // A7: пишем атомарно. File.WriteAllText — это truncate+write, и обрыв
         // между ними оставляет ПУСТОЙ маркер, после которого обновление
         // не предлагается уже никогда.
-        if (!string.IsNullOrWhiteSpace(newVersion))
-        {
-            try
-            {
+        if (!string.IsNullOrWhiteSpace(newVersion)) {
+            try {
                 var marker = Path.Combine(dst, "launcher.version");
                 AtomicFile.WriteAllText(marker, newVersion.Trim(), Utf8NoBom);
                 log.Write($"wrote version marker: {marker} = '{newVersion.Trim()}'");
             }
-            catch (Exception ex)
-            {
+            catch (Exception ex) {
                 // Маркер не записан — установка новая, а лаунчер считает её старой.
                 // Это не порча данных, но обновление предложится снова: сообщаем честно.
                 log.Write($"version marker write error: {ex.Message}");
@@ -494,32 +440,25 @@ internal static class Program
         bool haveFileList,
         PreserveMatcher matcher,
         UpdateLog log,
-        Func<string, string, Task<bool>> copy)
-    {
+        Func<string, string, Task<bool>> copy) {
         var errors = 0;
-        try
-        {
+        try {
             var map = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var logFileName = Path.GetFileName(log.Path);
-            bool IgnoreForHash(string rel)
-            {
+            bool IgnoreForHash(string rel) {
                 var r = (rel ?? string.Empty).Replace('\\', '/').Trim('/');
-                if (string.IsNullOrEmpty(r))
-                {
+                if (string.IsNullOrEmpty(r)) {
                     return true;
                 }
                 // ignore updater artifacts and logs/lists
-                if (!string.IsNullOrEmpty(logFileName) && string.Equals(Path.GetFileName(r), logFileName, StringComparison.OrdinalIgnoreCase))
-                {
+                if (!string.IsNullOrEmpty(logFileName) && string.Equals(Path.GetFileName(r), logFileName, StringComparison.OrdinalIgnoreCase)) {
                     return true;
                 }
-                if (PreserveMatcher.IsUpdaterArtifact(r))
-                {
+                if (PreserveMatcher.IsUpdaterArtifact(r)) {
                     return true;
                 }
                 // preserve-файлы намеренно расходятся — они не участвуют в сверке
-                if (matcher.ShouldPreserve(r))
-                {
+                if (matcher.ShouldPreserve(r)) {
                     return true;
                 }
                 return false;
@@ -528,17 +467,14 @@ internal static class Program
             // Сверяем ровно то, что должны были положить на диск. Полный обход папки
             // установки бессмысленен: при диффе в SRC лежат только изменившиеся файлы,
             // а файлы, которых нет в SRC, к результату копирования отношения не имеют.
-            foreach (var rel in copied)
-            {
-                if (!IgnoreForHash(rel))
-                {
+            foreach (var rel in copied) {
+                if (!IgnoreForHash(rel)) {
                     map.Add(rel);
                 }
             }
 
             int ok = 0, mm = 0, missS = 0, missD = 0, total = 0, repaired = 0, unreadable = 0;
-            foreach (var key in map)
-            {
+            foreach (var key in map) {
                 total++;
                 var relSrc = key;
                 var relDst = StripOf(key, strip);
@@ -551,8 +487,7 @@ internal static class Program
                 // хотя сравнивать было нечего: файл не прочитан (чаще всего его держит
                 // антивирус). Провал безопасный, но настоящая причина в журнал не попадала.
                 var h1 = Sha256Hex(sp, out var srcError);
-                if (srcError != null)
-                {
+                if (srcError != null) {
                     unreadable++;
                     errors++;
                     log.Write($"hash ERROR {relSrc}: не удалось прочитать файл-источник — {srcError}. " +
@@ -560,8 +495,7 @@ internal static class Program
                     continue;
                 }
 
-                if (File.Exists(dp) && h1.Equals(Sha256Hex(dp), StringComparison.OrdinalIgnoreCase))
-                {
+                if (File.Exists(dp) && h1.Equals(Sha256Hex(dp), StringComparison.OrdinalIgnoreCase)) {
                     ok++;
                     continue;
                 }
@@ -571,8 +505,7 @@ internal static class Program
                 log.Write($"hash: {(File.Exists(dp) ? "MISMATCH" : "DST missing")} {relDst} — повторное копирование");
                 await copy(sp, dp);
 
-                if (!File.Exists(dp))
-                {
+                if (!File.Exists(dp)) {
                     missD++;
                     errors++;
                     log.Write($"hash ERROR {relDst}: файла нет в папке установки после повторного копирования");
@@ -580,8 +513,7 @@ internal static class Program
                 }
 
                 var h2 = Sha256Hex(dp, out var dstError);
-                if (dstError != null)
-                {
+                if (dstError != null) {
                     unreadable++;
                     errors++;
                     log.Write($"hash ERROR {relDst}: не удалось прочитать записанный файл — {dstError}. " +
@@ -589,8 +521,7 @@ internal static class Program
                     continue;
                 }
 
-                if (h1.Equals(h2, StringComparison.OrdinalIgnoreCase))
-                {
+                if (h1.Equals(h2, StringComparison.OrdinalIgnoreCase)) {
                     repaired++;
                     continue;
                 }
@@ -602,12 +533,10 @@ internal static class Program
 
             log.Write($"hash summary: total={total} ok={ok} repaired={repaired} mismatch={mm} src_missing={missS} dst_missing={missD} unreadable={unreadable}");
         }
-        catch (UpdaterAbortException)
-        {
+        catch (UpdaterAbortException) {
             throw;
         }
-        catch (Exception ex)
-        {
+        catch (Exception ex) {
             // Не смогли проверить — считаем это ошибкой: «не проверено» не равно «в порядке».
             log.Write($"hash compare error: {ex.Message}");
             errors++;
@@ -632,30 +561,25 @@ internal static class Program
     /// <param name="pid">Разобранный идентификатор процесса.</param>
     /// <param name="problem">Описание проблемы для журнала и статуса; пустое при успехе.</param>
     /// <returns>true, если значение разобрано.</returns>
-    internal static bool TryParseParentPid(string? raw, out int pid, out string problem)
-    {
+    internal static bool TryParseParentPid(string? raw, out int pid, out string problem) {
         pid = 0;
 
-        if (raw == null)
-        {
+        if (raw == null) {
             problem = "значение не передано";
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(raw))
-        {
+        if (string.IsNullOrWhiteSpace(raw)) {
             problem = $"значение '{raw}' пустое";
             return false;
         }
 
-        if (!int.TryParse(raw.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
-        {
+        if (!int.TryParse(raw.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)) {
             problem = $"значение '{raw}' не число";
             return false;
         }
 
-        if (parsed < 0)
-        {
+        if (parsed < 0) {
             problem = $"значение '{raw}' отрицательное — такого процесса не бывает";
             return false;
         }
@@ -682,26 +606,22 @@ internal static class Program
     /// <param name="line">Строка списка как она записана в файле.</param>
     /// <param name="reason">Причина отказа либо null.</param>
     /// <returns>Относительный путь; пустая строка означает «строку пропустить» (пустая либо отвергнутая).</returns>
-    internal static string CleanListEntry(string? line, out string? reason)
-    {
+    internal static string CleanListEntry(string? line, out string? reason) {
         reason = null;
         var raw = (line ?? string.Empty).Replace('\\', '/');
         var clean = raw.Trim('/');
 
         // Пустые строки (включая "///" и хвостовой перевод строки) — не пути.
-        if (string.IsNullOrWhiteSpace(clean))
-        {
+        if (string.IsNullOrWhiteSpace(clean)) {
             return string.Empty;
         }
 
-        if (raw.StartsWith("//", StringComparison.Ordinal))
-        {
+        if (raw.StartsWith("//", StringComparison.Ordinal)) {
             reason = "UNC-путь (\\\\сервер\\ресурс) — файл ушёл бы мимо папки установки";
             return string.Empty;
         }
 
-        if (raw[0] == '/')
-        {
+        if (raw[0] == '/') {
             reason = "ведущий слеш — путь от корня диска, а не от папки установки";
             return string.Empty;
         }
@@ -715,14 +635,11 @@ internal static class Program
             ? rel
             : rel.StartsWith(strip + "/", StringComparison.OrdinalIgnoreCase) ? rel.Substring(strip.Length + 1) : rel;
 
-    internal static Dictionary<string, string?> ParseArgs(string[] a)
-    {
+    internal static Dictionary<string, string?> ParseArgs(string[] a) {
         var dict = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        for (int i = 0; i < a.Length; i++)
-        {
+        for (int i = 0; i < a.Length; i++) {
             var tok = a[i];
-            if (!tok.StartsWith("--", StringComparison.Ordinal))
-            {
+            if (!tok.StartsWith("--", StringComparison.Ordinal)) {
                 continue;
             }
             var key = tok;
@@ -737,21 +654,17 @@ internal static class Program
     /// A2. Проверка прав на запись в папку установки ДО первой операции.
     /// Возвращает описание проблемы либо null.
     /// </summary>
-    internal static string? DescribeWriteAccess(string dir)
-    {
-        try
-        {
+    internal static string? DescribeWriteAccess(string dir) {
+        try {
             Directory.CreateDirectory(dir);
             var probe = Path.Combine(dir, $".chillhub-write-probe-{Environment.ProcessId}{AtomicFile.TempSuffix}");
-            using (var fs = new FileStream(probe, FileMode.Create, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose))
-            {
+            using (var fs = new FileStream(probe, FileMode.Create, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose)) {
                 fs.WriteByte(0);
             }
 
             return null;
         }
-        catch (Exception ex)
-        {
+        catch (Exception ex) {
             return $"{ex.GetType().Name}: {ex.Message}";
         }
     }
@@ -770,13 +683,10 @@ internal static class Program
     /// <param name="files">Путь к списку файлов (может отсутствовать).</param>
     /// <param name="log">Куда писать причину сбоя (необязательно).</param>
     /// <returns>Префикс либо null.</returns>
-    internal static string? DetectStripPrefix(string src, string files, Action<string>? log = null)
-    {
-        try
-        {
+    internal static string? DetectStripPrefix(string src, string files, Action<string>? log = null) {
+        try {
             // Prefer detection from FILES list if present: require a single shared top-level segment
-            if (!string.IsNullOrWhiteSpace(files) && File.Exists(files))
-            {
+            if (!string.IsNullOrWhiteSpace(files) && File.Exists(files)) {
                 var lines = File.ReadAllLines(files, Encoding.UTF8)
                     .Select(l => (l ?? string.Empty).Replace('\\', '/').Trim('/'))
                     .Where(l => !string.IsNullOrWhiteSpace(l))
@@ -786,30 +696,25 @@ internal static class Program
                     .Where(s => !string.IsNullOrWhiteSpace(s))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToArray();
-                if (firstSegs.Length == 1)
-                {
+                if (firstSegs.Length == 1) {
                     var candidate = firstSegs[0];
                     var allHave = lines.All(l => l.StartsWith(candidate + "/", StringComparison.OrdinalIgnoreCase));
-                    if (allHave && Directory.Exists(Path.Combine(src, candidate)))
-                    {
+                    if (allHave && Directory.Exists(Path.Combine(src, candidate))) {
                         return candidate;
                     }
                 }
             }
 
             // Fallback: top-level of SRC has exactly one directory and no files
-            if (Directory.Exists(src))
-            {
+            if (Directory.Exists(src)) {
                 var topFiles = Directory.EnumerateFiles(src, "*", SearchOption.TopDirectoryOnly).Any();
                 var topDirs = Directory.EnumerateDirectories(src, "*", SearchOption.TopDirectoryOnly).ToArray();
-                if (!topFiles && topDirs.Length == 1)
-                {
+                if (!topFiles && topDirs.Length == 1) {
                     return Path.GetFileName(topDirs[0]);
                 }
             }
         }
-        catch (Exception ex)
-        {
+        catch (Exception ex) {
             log?.Invoke($"strip-prefix detect error: {ex.GetType().Name}: {ex.Message}. " +
                         "Обёртка архива не определена — если она есть, обновление ляжет в подпапку установки.");
         }
@@ -817,27 +722,21 @@ internal static class Program
         return null;
     }
 
-    private static void LogLists(string files, string dirs, string del, UpdateLog log)
-    {
-        try
-        {
-            foreach (var (name, path) in new[] { ("FILES", files), ("DIRS", dirs), ("DEL", del) })
-            {
-                if (string.IsNullOrWhiteSpace(path))
-                {
+    private static void LogLists(string files, string dirs, string del, UpdateLog log) {
+        try {
+            foreach (var (name, path) in new[] { ("FILES", files), ("DIRS", dirs), ("DEL", del) }) {
+                if (string.IsNullOrWhiteSpace(path)) {
                     continue;
                 }
 
-                if (!File.Exists(path))
-                {
+                if (!File.Exists(path)) {
                     log.Write($"{name} list missing: '{path}'");
                     continue;
                 }
 
                 var lines = File.ReadAllLines(path, Encoding.UTF8);
                 log.Write($"{name} list: path='{path}', count={lines.Length}");
-                foreach (var l in lines)
-                {
+                foreach (var l in lines) {
                     log.Write($"  {name}: {l}");
                 }
             }
@@ -849,18 +748,15 @@ internal static class Program
     /// A12. Кладёт исход рядом с маркером версии, чтобы лаунчер при следующем
     /// запуске мог объяснить, почему обновление не применилось.
     /// </summary>
-    private static void WriteStatus(RunContext ctx, int exit, UpdateLog log)
-    {
-        if (string.IsNullOrWhiteSpace(ctx.Dst))
-        {
+    private static void WriteStatus(RunContext ctx, int exit, UpdateLog log) {
+        if (string.IsNullOrWhiteSpace(ctx.Dst)) {
             log.Write("update status not written: каталог установки неизвестен");
             return;
         }
 
         UpdateStatus.Write(
             ctx.Dst,
-            new UpdateStatus
-            {
+            new UpdateStatus {
                 Outcome = string.IsNullOrWhiteSpace(ctx.Outcome) ? "fatal" : ctx.Outcome,
                 ExitCode = exit,
                 Version = ctx.Version,
@@ -880,47 +776,36 @@ internal static class Program
     /// Поэтому лаунчер поднимается при ЛЮБОМ исходе, включая фатальный.
     /// </para>
     /// </summary>
-    private static void Restart(RunContext ctx, UpdateLog log)
-    {
-        if (!ctx.Restart)
-        {
+    private static void Restart(RunContext ctx, UpdateLog log) {
+        if (!ctx.Restart) {
             log.Write("restart skipped by design");
             return;
         }
 
         var candidates = new List<string>();
-        if (!string.IsNullOrWhiteSpace(ctx.Exe))
-        {
+        if (!string.IsNullOrWhiteSpace(ctx.Exe)) {
             candidates.Add(ctx.Exe);
-            if (!string.IsNullOrWhiteSpace(ctx.Dst))
-            {
+            if (!string.IsNullOrWhiteSpace(ctx.Dst)) {
                 var sameName = Path.Combine(ctx.Dst, Path.GetFileName(ctx.Exe));
-                if (!string.Equals(sameName, ctx.Exe, StringComparison.OrdinalIgnoreCase))
-                {
+                if (!string.Equals(sameName, ctx.Exe, StringComparison.OrdinalIgnoreCase)) {
                     candidates.Add(sameName);
                 }
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(ctx.Dst))
-        {
+        if (!string.IsNullOrWhiteSpace(ctx.Dst)) {
             candidates.Add(Path.Combine(ctx.Dst, "ChillHub.exe"));
         }
 
         var exeArgs = ReadExeArgs(ctx.ExeArgsFile, log);
-        for (var attempt = 1; attempt <= 3; attempt++)
-        {
-            foreach (var exe in candidates)
-            {
-                try
-                {
-                    if (!File.Exists(exe))
-                    {
+        for (var attempt = 1; attempt <= 3; attempt++) {
+            foreach (var exe in candidates) {
+                try {
+                    if (!File.Exists(exe)) {
                         continue;
                     }
 
-                    var psi = new ProcessStartInfo
-                    {
+                    var psi = new ProcessStartInfo {
                         FileName = exe,
                         WorkingDirectory = Directory.Exists(ctx.Dst) ? ctx.Dst : (Path.GetDirectoryName(exe) ?? string.Empty),
                         UseShellExecute = false,
@@ -929,22 +814,19 @@ internal static class Program
 
                     // Исходные аргументы лаунчера восстанавливаем через ArgumentList:
                     // так пути с пробелами и кавычками доезжают дословно.
-                    foreach (var a in exeArgs)
-                    {
+                    foreach (var a in exeArgs) {
                         psi.ArgumentList.Add(a);
                     }
 
                     var p = Process.Start(psi);
-                    if (p != null)
-                    {
+                    if (p != null) {
                         log.Write($"launcher restarted: '{exe}' pid={p.Id} args={exeArgs.Count}");
                         return;
                     }
 
                     log.Write($"restart: Process.Start('{exe}') вернул null");
                 }
-                catch (Exception ex)
-                {
+                catch (Exception ex) {
                     log.Write($"restart attempt {attempt} for '{exe}' failed: {ex.GetType().Name}: {ex.Message}");
                 }
             }
@@ -961,26 +843,20 @@ internal static class Program
     /// Файл, а не строка в командной строке: так не нужно ничего экранировать и
     /// нечему потеряться при повторном разборе.
     /// </summary>
-    internal static List<string> ReadExeArgs(string? path, UpdateLog log)
-    {
+    internal static List<string> ReadExeArgs(string? path, UpdateLog log) {
         var result = new List<string>();
-        try
-        {
-            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-            {
+        try {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) {
                 return result;
             }
 
-            foreach (var line in File.ReadAllLines(path, Encoding.UTF8))
-            {
-                if (!string.IsNullOrEmpty(line))
-                {
+            foreach (var line in File.ReadAllLines(path, Encoding.UTF8)) {
+                if (!string.IsNullOrEmpty(line)) {
                     result.Add(line);
                 }
             }
         }
-        catch (Exception ex)
-        {
+        catch (Exception ex) {
             log.Write($"exe args read error: {ex.Message}");
         }
 
@@ -999,56 +875,45 @@ internal static class Program
     /// <param name="strip">Префикс корневой папки архива — он тоже подставляется в пути.</param>
     /// <param name="log">Логгер.</param>
     /// <returns>true, если всё безопасно.</returns>
-    internal static bool ValidateLists(IEnumerable<string?> listPaths, string strip, Action<string> log)
-    {
+    internal static bool ValidateLists(IEnumerable<string?> listPaths, string strip, Action<string> log) {
         var ok = true;
 
-        if (!string.IsNullOrWhiteSpace(strip))
-        {
+        if (!string.IsNullOrWhiteSpace(strip)) {
             var reason = ManifestPath.Describe(strip.Replace('\\', '/').Trim('/'));
-            if (reason != null)
-            {
+            if (reason != null) {
                 log($"REJECT strip-prefix '{strip}': {reason}");
                 ok = false;
             }
         }
 
-        foreach (var listPath in listPaths)
-        {
-            if (string.IsNullOrWhiteSpace(listPath) || !File.Exists(listPath))
-            {
+        foreach (var listPath in listPaths) {
+            if (string.IsNullOrWhiteSpace(listPath) || !File.Exists(listPath)) {
                 continue;
             }
 
             string[] lines;
-            try
-            {
+            try {
                 lines = File.ReadAllLines(listPath, Encoding.UTF8);
             }
-            catch (Exception ex)
-            {
+            catch (Exception ex) {
                 log($"REJECT list '{listPath}': не читается ({ex.Message})");
                 return false;
             }
 
-            for (var i = 0; i < lines.Length; i++)
-            {
+            for (var i = 0; i < lines.Length; i++) {
                 var clean = CleanListEntry(lines[i], out var entryReason);
-                if (entryReason != null)
-                {
+                if (entryReason != null) {
                     log($"REJECT '{listPath}' строка {i + 1}: '{lines[i]}' — {entryReason}");
                     ok = false;
                     continue;
                 }
 
-                if (string.IsNullOrEmpty(clean))
-                {
+                if (string.IsNullOrEmpty(clean)) {
                     continue;
                 }
 
                 var reason = ManifestPath.Describe(clean);
-                if (reason != null)
-                {
+                if (reason != null) {
                     log($"REJECT '{listPath}' строка {i + 1}: '{clean}' — {reason}");
                     ok = false;
                 }
@@ -1062,17 +927,12 @@ internal static class Program
     /// Удаляет из папки установки служебные файлы апдейтера, оставшиеся от прошлых версий
     /// (filelist.txt / deletelist.txt / emptydirs.txt / apply-update.log / apply-update.cmd и подпапку updater\).
     /// </summary>
-    internal static void CleanupUpdaterArtifacts(string dst, Action<string> log)
-    {
-        try
-        {
-            foreach (var name in PreserveMatcher.UpdaterArtifactFiles)
-            {
+    internal static void CleanupUpdaterArtifacts(string dst, Action<string> log) {
+        try {
+            foreach (var name in PreserveMatcher.UpdaterArtifactFiles) {
                 var p = Path.Combine(dst, name);
-                try
-                {
-                    if (File.Exists(p))
-                    {
+                try {
+                    if (File.Exists(p)) {
                         // Атрибут «только чтение» снимаем перед удалением: иначе File.Delete
                         // откажет и артефакт останется в папке установки навсегда.
                         new FileInfo(p).IsReadOnly = false;
@@ -1084,15 +944,12 @@ internal static class Program
             }
 
             var dir = Path.Combine(dst, PreserveMatcher.UpdaterArtifactDir);
-            try
-            {
-                if (Directory.Exists(dir))
-                {
+            try {
+                if (Directory.Exists(dir)) {
                     // Directory.Delete(recursive) спотыкается о файлы «только для чтения»:
                     // достаточно одного такого внутри updater\, и вся папка остаётся
                     // в установке, попадая в сверку с сервером как лишние файлы.
-                    foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
-                    {
+                    foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)) {
                         try { new FileInfo(f).IsReadOnly = false; }
                         catch (Exception ex) { log($"cleanup: не снят атрибут «только чтение» с '{f}': {ex.Message}"); }
                     }
@@ -1125,32 +982,27 @@ internal static class Program
     /// <param name="path">Путь к файлу.</param>
     /// <param name="error">Описание ошибки чтения либо null.</param>
     /// <returns>Хеш либо пустая строка.</returns>
-    internal static string Sha256Hex(string path, out string? error)
-    {
+    internal static string Sha256Hex(string path, out string? error) {
         error = null;
-        try
-        {
+        try {
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
             using var sha = SHA256.Create();
             var buf = new byte[262144];
             int r;
-            while ((r = fs.Read(buf, 0, buf.Length)) > 0)
-            {
+            while ((r = fs.Read(buf, 0, buf.Length)) > 0) {
                 sha.TransformBlock(buf, 0, r, null, 0);
             }
             sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
             return Convert.ToHexString(sha.Hash!).ToLowerInvariant();
         }
-        catch (Exception ex)
-        {
+        catch (Exception ex) {
             error = $"{ex.GetType().Name}: {ex.Message}";
             return string.Empty;
         }
     }
 
     /// <summary>Состояние прогона, нужное блоку finally (лог, статус, перезапуск).</summary>
-    private sealed class RunContext
-    {
+    private sealed class RunContext {
         public string Exe = string.Empty;
         public string Dst = string.Empty;
         public string Version = string.Empty;
@@ -1162,11 +1014,9 @@ internal static class Program
     }
 
     /// <summary>Прерывание всего прохода: повторять бессмысленно (например, отказ в доступе).</summary>
-    private sealed class UpdaterAbortException : Exception
-    {
+    private sealed class UpdaterAbortException : Exception {
         public UpdaterAbortException(string message, Exception? inner = null)
-            : base(message, inner)
-        {
+            : base(message, inner) {
         }
     }
 }
