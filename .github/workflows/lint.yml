@@ -99,6 +99,24 @@ jobs:
         run: |
           npx eslint "landing/**/*.js" "server/admin_ui/**/*.js" || (echo "ESLint found issues" && exit 1)
 
+  web-tests:
+    name: Тесты веба (node --test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # Раннер встроен в Node — ни одной внешней зависимости.
+      #
+      # Здесь проверяются чистые функции админки: экранирование HTML и разбор URL.
+      # На них держится защита от XSS, и одна дыра в sanitizeUrl уже находилась
+      # ЧТЕНИЕМ кода, а не проверкой: значение вида "java<TAB>script:" не
+      # признавалось схемой и проходило как относительная ссылка, тогда как
+      # браузер вырезает управляющие символы ДО разбора схемы и выполняет её.
+      - name: node --test
+        run: node --test tests/web/*.test.js
+
   go-lint:
     name: Go (api + admin)
     runs-on: ubuntu-latest
