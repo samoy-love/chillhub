@@ -162,9 +162,125 @@ namespace ChillHub.Tests {
             Assert.True(global::Program.ValidateLists(Array.Empty<string?>(), strip, _ => { }));
         }
 
+        /// <summary>
+        /// Путь от корня диска отвергается, а не «чинится» обрезкой ведущего слеша.
+        /// <para>
+        /// Раньше строка нормализовалась заменой слешей и обрезкой краевых, поэтому
+        /// «/Windows/System32/x.dll» превращалась в «Windows/System32/x.dll» и
+        /// принималась как обычная запись ВНУТРИ папки установки. За корень она не
+        /// выходит, но это заведомо не тот файл, который имел в виду автор списка:
+        /// обновление применяется не туда вместо честного отказа, и понять это
+        /// потом можно только по странной папке Windows\ в каталоге установки.
+        /// </para>
+        /// </summary>
+        [Theory]
+        [InlineData("/Windows/System32/evil.dll")]
+        [InlineData(@"\Windows\System32\evil.dll")]
+        [InlineData("/ChillHub.exe")]
+        public void ВедущийСлешОтвергается(string line) {
+            using var dir = new TempDir();
+            var files = dir.WriteFile("filelist.txt", line + "\r\n");
+
+            Assert.False(Validate(dir, files));
+        }
+
+        /// <summary>
+        /// UNC-путь отвергается: «\\сервер\ресурс\x.dll» после обрезки слешей
+        /// выглядел как безобидное «сервер/ресурс/x.dll» и принимался.
+        /// </summary>
+        [Theory]
+        [InlineData(@"\\сервер\ресурс\evil.dll")]
+        [InlineData("//сервер/ресурс/evil.dll")]
+        [InlineData(@"\\?\C:\Windows\evil.dll")]
+        public void UNCПутьОтвергается(string line) {
+            using var dir = new TempDir();
+            var files = dir.WriteFile("filelist.txt", line + "\r\n");
+
+            Assert.False(Validate(dir, files));
+        }
+
+        /// <summary>Отказ объясняется в логе — иначе битый список не отличить от битого апдейтера.</summary>
+        [Fact]
+        public void ПричинаОтказаПоВедущемуСлешуПопадаетВЛог() {
+            using var dir = new TempDir();
+            var files = dir.WriteFile("filelist.txt", "/Windows/System32/evil.dll\r\n");
+            var log = new List<string>();
+
+            Assert.False(global::Program.ValidateLists(new string?[] { files }, string.Empty, log.Add));
+            Assert.Contains(log, l => l.Contains("REJECT", StringComparison.Ordinal) && l.Contains("строка 1", StringComparison.Ordinal));
+        }
+
         // Прогоняет один список файлов через проверку, отбрасывая журнал.
         private static bool Validate(TempDir dir, string files)
             => global::Program.ValidateLists(new string?[] { files }, string.Empty, _ => { });
+    }
+
+    /// <summary>
+    /// Разбор одной строки списка обновления.
+    /// <para>
+    /// Эта функция — единственная точка, где строка списка превращается в путь.
+    /// Проверка списков и циклы копирования/удаления обязаны пользоваться именно ей:
+    /// разойдись они хоть на пробел, проверка смотрела бы на одну строку, а на диск
+    /// уходила бы другая — то есть проверка перестала бы что-либо значить.
+    /// </para>
+    /// </summary>
+    public class UpdaterListEntryTests {
+        /// <summary>Обычная строка приводится к относительному пути со слешами вперёд.</summary>
+        [Theory]
+        [InlineData("ChillHub.exe", "ChillHub.exe")]
+        [InlineData(@"sub\dir\lib.dll", "sub/dir/lib.dll")]
+        [InlineData("sub/dir/lib.dll/", "sub/dir/lib.dll")]
+        public void ОбычнаяСтрокаНормализуется(string line, string expected) {
+            Assert.Equal(expected, global::Program.CleanListEntry(line, out var reason));
+            Assert.Null(reason);
+        }
+
+        /// <summary>
+        /// Пустая строка — не путь и не ошибка: хвостовой перевод строки есть в любом
+        /// файле списка, и отвергать из-за него всё обновление было бы абсурдом.
+        /// </summary>
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        [InlineData("///")]
+        [InlineData(@"\\")]
+        public void ПустаяСтрокаПропускаетсяБезОтказа(string? line) {
+            Assert.Equal(string.Empty, global::Program.CleanListEntry(line, out var reason));
+            Assert.Null(reason);
+        }
+
+        /// <summary>Ведущий слеш — отказ с причиной, а не тихая обрезка до пути внутри установки.</summary>
+        [Theory]
+        [InlineData("/Windows/System32/evil.dll")]
+        [InlineData(@"\Windows\System32\evil.dll")]
+        [InlineData("/config.json")]
+        public void ВедущийСлешДаётПричинуОтказа(string line) {
+            Assert.Equal(string.Empty, global::Program.CleanListEntry(line, out var reason));
+            Assert.False(string.IsNullOrWhiteSpace(reason));
+        }
+
+        /// <summary>UNC-путь тоже отказ: он адресует чужую машину, а не папку установки.</summary>
+        [Theory]
+        [InlineData(@"\\сервер\ресурс\evil.dll")]
+        [InlineData("//сервер/ресурс/evil.dll")]
+        public void UNCДаётПричинуОтказа(string line) {
+            Assert.Equal(string.Empty, global::Program.CleanListEntry(line, out var reason));
+            Assert.False(string.IsNullOrWhiteSpace(reason));
+        }
+
+        /// <summary>
+        /// Отвергнутая строка не превращается в путь ни при каких условиях: вернуть
+        /// «почти правильный» путь опаснее, чем не вернуть ничего.
+        /// </summary>
+        [Fact]
+        public void ОтвергнутаяСтрокаНеВозвращаетПуть() {
+            var clean = global::Program.CleanListEntry("/Windows/System32/evil.dll", out var reason);
+
+            Assert.NotNull(reason);
+            Assert.Equal(string.Empty, clean);
+            Assert.DoesNotContain("Windows", clean, StringComparison.Ordinal);
+        }
     }
 
     /// <summary>
@@ -341,6 +457,43 @@ namespace ChillHub.Tests {
             using var dir = new TempDir();
 
             Assert.Null(global::Program.DetectStripPrefix(dir.PathTo("нет-такого"), dir.PathTo("нет-списка.txt")));
+        }
+
+        /// <summary>
+        /// Сбой чтения списка обязан попадать в журнал с причиной.
+        /// <para>
+        /// Без этого «не смогли прочитать список» неотличимо от «обёртки нет» — обе
+        /// ситуации возвращают null. А последствия разные: если обёртка на самом деле
+        /// есть, вся новая сборка ляжет в ПОДПАПКУ установки, запускаемый лаунчер
+        /// останется старым, и обновление будет предлагаться при каждом старте.
+        /// Причина сбоя (файл занят антивирусом, нет прав) — единственное, по чему
+        /// это можно разобрать постфактум.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void СбойЧтенияСпискаОбъясняетсяВЛоге() {
+            using var dir = new TempDir();
+            dir.WriteFile("src/pkg/ChillHub.exe", "x");
+            var files = dir.WriteFile("filelist.txt", "pkg/ChillHub.exe\r\n");
+            var log = new List<string>();
+
+            using var hold = new FileStream(files, FileMode.Open, FileAccess.Read, FileShare.None);
+
+            Assert.Null(global::Program.DetectStripPrefix(dir.PathTo("src"), files, log.Add));
+            Assert.NotEmpty(log);
+            Assert.Contains(log, l => l.Contains("strip-prefix", StringComparison.Ordinal));
+        }
+
+        /// <summary>Штатное определение префикса журнал не засоряет: шум в логе апдейтера мешает разбирать настоящие сбои.</summary>
+        [Fact]
+        public void УспешноеОпределениеНеПишетОшибок() {
+            using var dir = new TempDir();
+            dir.WriteFile("src/pkg/ChillHub.exe", "x");
+            var files = dir.WriteFile("filelist.txt", "pkg/ChillHub.exe\r\n");
+            var log = new List<string>();
+
+            Assert.Equal("pkg", global::Program.DetectStripPrefix(dir.PathTo("src"), files, log.Add));
+            Assert.Empty(log);
         }
 
         /// <summary>Пустой список файлов не должен выглядеть как «общий корень найден».</summary>

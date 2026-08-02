@@ -3,8 +3,8 @@ name: Release
 # Выкатка через общий пайплайн deploy-kit. Пять целей проекта разведены:
 # можно выкатить только админку, не трогая публичный API и наоборот.
 #
-# Старый deploy.yml пока остаётся: он умеет то, чего здесь ещё нет —
-# раскладку сайта с сохранением downloads/ и установку пароля админки.
+# Пароль админки живёт хешем в systemd drop-in на сервере и задаётся отдельно
+# от выкатки — поэтому шага с bcrypt здесь нет и не должно быть.
 
 # Публикация установщика в GitHub Release требует записи в contents.
 # Вызываемый workflow не может запросить прав больше, чем есть у вызывающего:
@@ -20,7 +20,7 @@ on:
       target:
         description: 'Что катим'
         type: choice
-        options: [site, api, admin, servers, all, installer]
+        options: [site, api, admin, admin-ui, servers, all, installer]
         default: all
       dry-run:
         type: boolean
@@ -55,6 +55,16 @@ jobs:
       config: .deploy-kit/admin.env
       workdir: server
       gates: go vet ./... && go test ./... -race -coverprofile=coverage.out -covermode=atomic
+      dry-run: ${{ inputs.dry-run == true }}
+    secrets: inherit
+
+  admin-ui:
+    if: inputs.target == 'admin-ui' || inputs.target == 'admin' || inputs.target == 'all' || startsWith(github.ref, 'refs/tags/')
+    uses: tr0llex/deploy-kit/.github/workflows/static-site.yml@main
+    with:
+      config: .deploy-kit/admin-ui.env
+      # Морда админки — та же разметка и стили, что и лендинг: гейт тот же.
+      gates: npx --yes htmlhint@1.9.2 "server/admin_ui/**/*.html" && npx --yes stylelint@17.14.1 "server/admin_ui/**/*.css"
       dry-run: ${{ inputs.dry-run == true }}
     secrets: inherit
 

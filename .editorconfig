@@ -19,3 +19,79 @@ trim_trailing_whitespace = false
 
 [Makefile]
 indent_style = tab
+
+# ---------------------------------------------------------------------------
+# C#: настройки анализаторов.
+#
+# Этот блок восстановлен после коммита 558a8c7, который заменил .editorconfig
+# целиком. Тот коммит был про CLAUDE.md и LF для шелл-скриптов, но заодно унёс
+# подавления StyleCop — и сборка Debug стала выдавать 9364 предупреждения при
+# нуле до него. 8176 из них — одно правило SA1500 «фигурная скобка не должна
+# делить строку с оператором», а весь код проекта написан именно так: `if (x) {`.
+# То есть правило требует переписать каждый файл ради стиля, который выбран
+# сознательно. Остальные подавления такого же рода: обязательная документация
+# на каждый член, порядок членов, пробелы вокруг скобок.
+#
+# Конец строки (LF) из нового файла НЕ переопределяется — это осознанное решение,
+# согласованное с .gitattributes.
+# ---------------------------------------------------------------------------
+[*.cs]
+csharp_new_line_before_open_brace = all:warning
+csharp_preferred_modifier_order = public,private,protected,internal,static,extern,new,virtual,abstract,sealed,override,readonly,unsafe,volatile,async:suggestion
+csharp_style_var_for_built_in_types = true:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_var_elsewhere = true:suggestion
+csharp_using_directive_placement = inside_namespace:warning
+dotnet_sort_system_directives_first = true
+csharp_prefer_braces = true:warning
+csharp_prefer_trailing_comma_in_multi_line_lists = true:suggestion
+file_header_template = Copyright (c) 2025 ChillHub\nLicensed under the MIT License.
+dotnet_diagnostic.SA1649.severity = none    # File name should match first type name
+dotnet_diagnostic.SA1402.severity = none    # File may only contain a single type
+dotnet_diagnostic.SA1513.severity = suggestion  # Closing brace should be followed by blank line
+dotnet_diagnostic.SA1201.severity = suggestion  # Ordering of elements
+dotnet_diagnostic.SA1204.severity = suggestion  # Static members before non-static
+dotnet_diagnostic.SA1214.severity = suggestion  # Readonly before non-readonly
+dotnet_diagnostic.SA1203.severity = suggestion  # Const before non-const
+dotnet_diagnostic.SA1311.severity = suggestion  # Static readonly fields should begin with upper-case
+dotnet_diagnostic.SA1107.severity = suggestion  # Multiple statements on one line
+dotnet_diagnostic.SA1117.severity = suggestion  # Parameter wrapping
+dotnet_diagnostic.SA1413.severity = suggestion  # Trailing comma in multi-line initializers
+dotnet_diagnostic.SA0001.severity = none        # XML comment analysis disabled notice
+dotnet_diagnostic.SA1500.severity = none    # Braces for multi-line statements should not share line
+dotnet_diagnostic.SA1600.severity = none    # Elements should be documented
+dotnet_diagnostic.SA1601.severity = none    # Partial elements should be documented
+dotnet_diagnostic.SA1602.severity = none    # Enumeration items should be documented
+dotnet_diagnostic.SA1604.severity = none    # Element documentation header should have summary
+dotnet_diagnostic.SA1609.severity = none    # Property documentation must have value
+dotnet_diagnostic.SA1611.severity = none    # Element parameters should be documented
+dotnet_diagnostic.SA1615.severity = none    # Element return value should be documented
+dotnet_diagnostic.SA1618.severity = none    # Generic type parameters should be documented
+dotnet_diagnostic.SA1623.severity = none    # Property documentation should match accessors
+dotnet_diagnostic.SA1629.severity = none    # Documentation text should end with a period
+dotnet_diagnostic.SA1633.severity = none    # File must have header
+dotnet_diagnostic.SA1515.severity = none    # Single-line comment should be preceded by blank line
+dotnet_diagnostic.SA1516.severity = none    # Elements should be separated by blank line
+dotnet_diagnostic.SA1507.severity = none    # Multiple blank lines in a row
+dotnet_diagnostic.SA1512.severity = none    # Single-line comments should not be followed by blank line
+dotnet_diagnostic.SA1501.severity = none    # Statement should not be on a single line
+dotnet_diagnostic.SA1502.severity = none    # Element should not be on a single line
+dotnet_diagnostic.SA1508.severity = none    # Closing brace should not be preceded by a blank line
+dotnet_diagnostic.SA1137.severity = none    # Elements should have the same indentation
+dotnet_diagnostic.SA1210.severity = none    # Using directives should be ordered alphabetically
+dotnet_diagnostic.SA1308.severity = none    # Field should not begin with 's_'
+dotnet_diagnostic.SA1300.severity = none    # Element should begin with an uppercase letter
+dotnet_diagnostic.SA1310.severity = none    # Field names should not contain underscore
+dotnet_diagnostic.SA1001.severity = none    # Commas should be followed by whitespace
+dotnet_diagnostic.SA1003.severity = none    # Operator spacing
+dotnet_diagnostic.SA1009.severity = none    # Closing parenthesis should be followed by a space
+dotnet_diagnostic.SA1011.severity = none    # Closing square bracket should be followed by a space
+dotnet_diagnostic.SA1012.severity = none    # Opening brace spacing
+dotnet_diagnostic.SA1013.severity = none    # Closing brace spacing
+dotnet_diagnostic.SA1024.severity = none    # Colon spacing
+dotnet_diagnostic.SA1503.severity = none    # Braces should not be omitted
+dotnet_diagnostic.SA1116.severity = none    # Parameter list wrapping placement
+dotnet_diagnostic.SA1119.severity = none    # Unnecessary parenthesis
+dotnet_diagnostic.SA1122.severity = none    # Use string.Empty for empty strings
+dotnet_diagnostic.SA1101.severity = none    # Prefix local calls with this
+dotnet_diagnostic.SA1407.severity = none    # Arithmetic expressions should declare precedence

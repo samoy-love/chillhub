@@ -9,6 +9,7 @@ namespace ChillHub.Tests {
     using System.IO;
     using System.Linq;
     using System.Text;
+    using System.Threading.Tasks;
 
     using ChillHub.Update;
 
@@ -134,6 +135,146 @@ namespace ChillHub.Tests {
             using var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
             Assert.Equal(TestHash.Sha256OfFile(path), global::Program.Sha256Hex(path));
         }
+
+        /// <summary>Успешное чтение причины не выдумывает — иначе журнал наполнился бы несуществующими сбоями.</summary>
+        [Fact]
+        public void УспешноеЧтениеНеДаётПричины() {
+            using var dir = new TempDir();
+            var path = dir.WriteFile("a.txt", "ChillHub");
+
+            var hash = global::Program.Sha256Hex(path, out var error);
+
+            Assert.Null(error);
+            Assert.Equal(TestHash.Sha256OfFile(path), hash);
+        }
+
+        /// <summary>
+        /// Причина неудачи выходит наружу, а не тонет в пустой строке.
+        /// <para>
+        /// Пустой хеш безопасен: он не совпадёт ни с чем, и обновление честно
+        /// откатится. Но в журнале от этого оставалось только «содержимое не
+        /// совпадает с источником», а это неправда — файл не «не совпал», его НЕ
+        /// УДАЛОСЬ ПРОЧИТАТЬ (типичная причина — антивирус держит только что
+        /// распакованный файл). Разбор такого лога уходил в поиск несуществующей
+        /// порчи файлов; настоящая причина не попадала туда вообще.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void ЗанятыйФайлСообщаетПричину() {
+            using var dir = new TempDir();
+            var path = dir.WriteFile("locked.bin", "x");
+
+            using var hold = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+            Assert.Equal(string.Empty, global::Program.Sha256Hex(path, out var error));
+            Assert.False(string.IsNullOrWhiteSpace(error));
+            Assert.Contains(": ", error!, StringComparison.Ordinal);
+        }
+
+        /// <summary>Отсутствующий файл и каталог вместо файла тоже объясняются, а не молчат.</summary>
+        [Fact]
+        public void НедоступныйПутьСообщаетПричину() {
+            using var dir = new TempDir();
+
+            Assert.Equal(string.Empty, global::Program.Sha256Hex(dir.PathTo("нет-такого.bin"), out var missing));
+            Assert.False(string.IsNullOrWhiteSpace(missing));
+
+            Assert.Equal(string.Empty, global::Program.Sha256Hex(dir.Root, out var isDir));
+            Assert.False(string.IsNullOrWhiteSpace(isDir));
+        }
+    }
+
+    /// <summary>
+    /// Итоговая сверка скопированного с источником.
+    /// <para>
+    /// Это последняя проверка перед записью маркера версии, и её сообщения —
+    /// единственное, что останется от неудачного обновления: пользователь увидит
+    /// откат, а разбираться будут по логу. Значит «не смогли прочитать файл» и
+    /// «содержимое не совпало» обязаны выглядеть по-разному: первое лечится
+    /// исключением в антивирусе, второе означает битую раздачу или порчу на диске.
+    /// </para>
+    /// </summary>
+    public class UpdaterVerifyTests {
+        /// <summary>Совпавшие файлы расхождений не дают — иначе не применилось бы ни одно обновление.</summary>
+        [Fact]
+        public async Task СовпавшиеФайлыОшибокНеДают() {
+            using var dir = new TempDir();
+            dir.WriteFile("src/ChillHub.exe", "новая сборка");
+            dir.WriteFile("dst/ChillHub.exe", "новая сборка");
+
+            var (errors, log) = await VerifyAsync(dir, "ChillHub.exe");
+
+            Assert.Equal(0, errors);
+            Assert.Contains("ok=1", log, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Нечитаемый источник — это ошибка «не смогли прочитать», а не «не совпало».
+        /// Ровно этот случай раньше объявлялся расхождением содержимого, и причина
+        /// (файл держит антивирус) не попадала в журнал вообще.
+        /// </summary>
+        [Fact]
+        public async Task НечитаемыйИсточникНеНазываетсяРасхождением() {
+            using var dir = new TempDir();
+            var srcFile = dir.WriteFile("src/ChillHub.exe", "новая сборка");
+            dir.WriteFile("dst/ChillHub.exe", "старая сборка");
+
+            string log;
+            int errors;
+            using (var hold = new FileStream(srcFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) {
+                (errors, log) = await VerifyAsync(dir, "ChillHub.exe");
+            }
+
+            Assert.Equal(1, errors);
+            Assert.Contains("не удалось прочитать", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("не совпадает с источником", log, StringComparison.Ordinal);
+        }
+
+        /// <summary>Настоящее расхождение по-прежнему называется расхождением: подмену смысла проверяем в обе стороны.</summary>
+        [Fact]
+        public async Task НастоящееРасхождениеНазываетсяРасхождением() {
+            using var dir = new TempDir();
+            dir.WriteFile("src/ChillHub.exe", "новая сборка");
+            dir.WriteFile("dst/ChillHub.exe", "старая сборка");
+
+            var (errors, log) = await VerifyAsync(dir, "ChillHub.exe");
+
+            Assert.Equal(1, errors);
+            Assert.Contains("не совпадает с источником", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("не удалось прочитать", log, StringComparison.Ordinal);
+        }
+
+        /// <summary>Отсутствие файла в папке установки — третий, тоже отдельный диагноз.</summary>
+        [Fact]
+        public async Task ОтсутствующийФайлУстановкиОписанОтдельно() {
+            using var dir = new TempDir();
+            dir.WriteFile("src/ChillHub.exe", "новая сборка");
+            Directory.CreateDirectory(dir.PathTo("dst"));
+
+            var (errors, log) = await VerifyAsync(dir, "ChillHub.exe");
+
+            Assert.Equal(1, errors);
+            Assert.Contains("файла нет в папке установки", log, StringComparison.Ordinal);
+        }
+
+        // Прогоняет сверку по одному относительному пути и возвращает число ошибок вместе с текстом журнала.
+        // Повторное копирование намеренно ничего не делает: чинить нечего, проверяется именно диагноз.
+        private static async Task<(int Errors, string Log)> VerifyAsync(TempDir dir, string rel) {
+            var log = new UpdateLog();
+            log.Open(dir.PathTo("update.log"));
+
+            var errors = await global::Program.VerifyAsync(
+                dir.PathTo("src"),
+                dir.PathTo("dst"),
+                string.Empty,
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rel },
+                haveFileList: true,
+                new PreserveMatcher(string.Empty),
+                log,
+                (_, _) => Task.FromResult(false));
+
+            return (errors, File.ReadAllText(log.Path));
+        }
     }
 
     /// <summary>
@@ -214,6 +355,44 @@ namespace ChillHub.Tests {
             using var dir = new TempDir();
             var path = dir.WriteFile("filelist.txt", "мусор");
             File.SetAttributes(path, FileAttributes.ReadOnly);
+
+            global::Program.CleanupUpdaterArtifacts(dir.Root, _ => { });
+
+            Assert.False(File.Exists(path));
+        }
+
+        /// <summary>
+        /// Файл «только для чтения» ВНУТРИ папки updater\ не должен спасать её от уборки.
+        /// <para>
+        /// Рекурсивное удаление каталога спотыкается о такой файл и отказывает целиком:
+        /// достаточно одного атрибута (его ставят и антивирусы, и распаковщики), чтобы
+        /// папка апдейтера осталась в установке навсегда. А раз она осталась, её файлы
+        /// попадают в сверку с сервером как лишние, и проверка целостности не сходится
+        /// никогда — лаунчер бесконечно предлагает «восстановить» установку.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void АртефактТолькоДляЧтенияВнутриПапкиНеМешаетУборке() {
+            using var dir = new TempDir();
+            var inner = dir.WriteFile(PreserveMatcher.UpdaterArtifactDir + "/sub/YourLauncher.Updater.exe", "x");
+            dir.WriteFile(PreserveMatcher.UpdaterArtifactDir + "/обычный.dll", "y");
+            File.SetAttributes(inner, FileAttributes.ReadOnly);
+
+            global::Program.CleanupUpdaterArtifacts(dir.Root, _ => { });
+
+            Assert.False(Directory.Exists(dir.PathTo(PreserveMatcher.UpdaterArtifactDir)));
+        }
+
+        /// <summary>
+        /// Атрибут «только для чтения» действительно снимается ДО удаления, а не после:
+        /// проверяется на артефакте, который сначала не удаётся удалить из-за захвата,
+        /// а после освобождения обязан уйти без остатка.
+        /// </summary>
+        [Fact]
+        public void АтрибутТолькоЧтениеСнимаетсяПередУдалением() {
+            using var dir = new TempDir();
+            var path = dir.WriteFile("emptydirs.txt", "мусор");
+            File.SetAttributes(path, FileAttributes.ReadOnly | FileAttributes.Hidden);
 
             global::Program.CleanupUpdaterArtifacts(dir.Root, _ => { });
 
