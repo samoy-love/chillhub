@@ -12,23 +12,23 @@ version: 2
 # человеческих.
 
 updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
+  - package-ecosystem: 'github-actions'
+    directory: '/'
     schedule:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
     commit-message:
-      prefix: "deps"
+      prefix: 'deps'
 
-  - package-ecosystem: "nuget"
-    directory: "/launcher/ChillHub"
+  - package-ecosystem: 'nuget'
+    directory: '/launcher/ChillHub'
     schedule:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
     commit-message:
-      prefix: "deps"
+      prefix: 'deps'
     ignore:
       # BLAKE3 ОСТАЁТСЯ НА МАЖОРЕ 2. ЭТО РЕШЕНИЕ, А НЕ ЗАБЫТОЕ ОБНОВЛЕНИЕ.
       #
@@ -47,32 +47,32 @@ updates:
       #
       # Снимать это правило — только вместе с планом, что делать с уже
       # опубликованными манифестами.
-      - dependency-name: "Blake3"
-        update-types: ["version-update:semver-major"]
+      - dependency-name: 'Blake3'
+        update-types: ['version-update:semver-major']
 
-  - package-ecosystem: "nuget"
-    directory: "/launcher/tests/ChillHub.Tests"
+  - package-ecosystem: 'nuget'
+    directory: '/launcher/tests/ChillHub.Tests'
     schedule:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
     commit-message:
-      prefix: "deps"
+      prefix: 'deps'
 
-  - package-ecosystem: "nuget"
-    directory: "/updater"
+  - package-ecosystem: 'nuget'
+    directory: '/updater'
     schedule:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
     commit-message:
-      prefix: "deps"
+      prefix: 'deps'
 
-  - package-ecosystem: "gomod"
-    directory: "/server"
+  - package-ecosystem: 'gomod'
+    directory: '/server'
     schedule:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
     commit-message:
-      prefix: "deps"
+      prefix: 'deps'
