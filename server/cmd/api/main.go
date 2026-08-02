@@ -67,6 +67,46 @@ type GamesResponse struct {
 	Items []GameInfo `json:"items"`
 }
 
+// isDir отвечает, существует ли путь и каталог ли это.
+func isDir(path string) bool {
+	stat, err := os.Stat(path)
+	return err == nil && stat.IsDir()
+}
+
+// resolveContentRoot определяет каталог с контентом.
+//
+// Явный CONTENT_ROOT — единственный способ, которым это задаётся на проде.
+// Всё остальное здесь нужно для запуска из исходников: сначала пробуем путь
+// относительно исполняемого файла (он обычно лежит в server/cmd/api), затем —
+// относительно рабочего каталога и двух уровней над ним.
+//
+// Вынесено из main: поиск каталога — самостоятельная задача с собственными
+// ветвлениями, и в main от неё нужен ровно один ответ. Заодно main снова стал
+// тем, чем должен быть, — списком того, что поднимается при старте.
+func resolveContentRoot() string {
+	if root := os.Getenv("CONTENT_ROOT"); root != "" {
+		return root
+	}
+
+	exe, _ := os.Executable()
+	if try := filepath.Clean(filepath.Join(filepath.Dir(exe), "..", "..", "..", "content")); isDir(try) {
+		return try
+	}
+
+	cwd, _ := os.Getwd()
+	for _, candidate := range []string{
+		filepath.Join(cwd, "content"),
+		filepath.Join(cwd, "..", "content"),
+		filepath.Join(cwd, "..", "..", "content"),
+	} {
+		if isDir(candidate) {
+			return candidate
+		}
+	}
+
+	return "content" // последняя надежда: относительный путь от рабочего каталога
+}
+
 func main() {
 	_, err := maxprocs.Set(maxprocs.Logger(func(format string, a ...any) {
 		if runtime.GOOS == "windows" {
@@ -77,37 +117,7 @@ func main() {
 	if err != nil {
 		log.Printf("[maxprocs] set failed: %v", err)
 	}
-	// Determine content root
-	contentRoot = os.Getenv("CONTENT_ROOT")
-	if contentRoot == "" {
-		// Fallback to ../../content relative to this file's directory at runtime
-		exe, _ := os.Executable()
-		base := filepath.Dir(exe)
-		// try ../../../content (since exe is typically in server/cmd/api)
-		try1 := filepath.Clean(filepath.Join(base, "..", "..", "..", "content"))
-		if stat, err := os.Stat(try1); err == nil && stat.IsDir() {
-			contentRoot = try1
-		} else {
-			// Try from current working directory and its parents
-			cwd, _ := os.Getwd()
-			candidates := []string{
-				filepath.Join(cwd, "content"),
-				filepath.Join(cwd, "..", "content"),
-				filepath.Join(cwd, "..", "..", "content"),
-			}
-			found := false
-			for _, c := range candidates {
-				if stat, err := os.Stat(c); err == nil && stat.IsDir() {
-					contentRoot = c
-					found = true
-					break
-				}
-			}
-			if !found {
-				contentRoot = "content" // last resort
-			}
-		}
-	}
+	contentRoot = resolveContentRoot()
 
 	limit, window := apiRateLimit()
 	limiter := ratelimit.New(limit, window)

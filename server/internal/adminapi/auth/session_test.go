@@ -2,7 +2,6 @@ package auth
 
 import (
 	"encoding/base64"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -25,8 +24,14 @@ func secureAuth(t *testing.T) *Auth {
 	})
 }
 
+// cookieSource — всё, у чего можно спросить выданные куки: и *http.Response,
+// и loginResult из handlers_test.go.
+type cookieSource interface {
+	Cookies() []*http.Cookie
+}
+
 // cookiesOf indexes a response's Set-Cookie headers by name.
-func cookiesOf(resp *http.Response) map[string]*http.Cookie {
+func cookiesOf(resp cookieSource) map[string]*http.Cookie {
 	out := map[string]*http.Cookie{}
 	for _, c := range resp.Cookies() {
 		out[c.Name] = c
@@ -276,7 +281,7 @@ func TestCSRFRequiresBothHalvesNonEmpty(t *testing.T) {
 				r.AddCookie(&http.Cookie{Name: cookieCSRF, Value: c.cookie})
 			}
 			if c.setHeader {
-				r.Header.Set("X-CSRF-Token", c.hdr)
+				r.Header.Set(headerCSRF, c.hdr)
 			}
 			got := a.CurrentUser(r) != ""
 			if got != c.wantAuthorized {
@@ -309,7 +314,7 @@ func TestCSRFPairWithoutSessionIsNotACredential(t *testing.T) {
 	a := secureAuth(t)
 	r := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/x", nil)
 	r.AddCookie(&http.Cookie{Name: cookieCSRF, Value: "some-token"})
-	r.Header.Set("X-CSRF-Token", "some-token")
+	r.Header.Set(headerCSRF, "some-token")
 	if user := a.CurrentUser(r); user != "" {
 		t.Fatalf("a CSRF pair alone authenticated as %q", user)
 	}
@@ -330,8 +335,7 @@ func TestUnknownUserAndWrongPasswordAnswerIdentically(t *testing.T) {
 		t.Errorf("status differs: wrong password %d vs unknown user %d",
 			wrongPass.StatusCode, unknownUser.StatusCode)
 	}
-	b1 := readAll(t, wrongPass)
-	b2 := readAll(t, unknownUser)
+	b1, b2 := wrongPass.Body, unknownUser.Body
 	if b1 != b2 {
 		t.Errorf("body differs: wrong password %q vs unknown user %q", b1, b2)
 	}
@@ -606,12 +610,3 @@ func TestMiddlewarePassesAuthenticatedRequestsAndStopsCSRFLessWrites(t *testing.
 
 // ===== helpers =====
 
-func readAll(t *testing.T, resp *http.Response) string {
-	t.Helper()
-	defer resp.Body.Close()
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(b)
-}

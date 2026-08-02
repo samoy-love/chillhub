@@ -45,7 +45,7 @@ func TestCSRFHeaderMustMatchCookie(t *testing.T) {
 			r.AddCookie(&http.Cookie{Name: cookieAccess, Value: access})
 			r.AddCookie(&http.Cookie{Name: cookieCSRF, Value: token})
 			if c.header != "" {
-				r.Header.Set("X-CSRF-Token", c.header)
+				r.Header.Set(headerCSRF, c.header)
 			}
 			if got := a.CurrentUser(r); got != c.want {
 				t.Fatalf("CurrentUser = %q, want %q", got, c.want)
