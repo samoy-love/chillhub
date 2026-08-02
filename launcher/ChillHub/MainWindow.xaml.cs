@@ -137,10 +137,6 @@ namespace ChillHub {
             }
         }
 
-        private void CatalogBtn_Click(object sender, RoutedEventArgs e) {
-            this.NavigateToHome();
-        }
-
         private void SettingsBtn_Click(object sender, RoutedEventArgs e) {
             try {
                 // Do not re-open Settings if it's already shown

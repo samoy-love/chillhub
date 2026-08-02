@@ -134,22 +134,6 @@
     var idle = true; // gentle infinite scroll until user clicks
     var demoAllowed = true; // gated by visibility
     var raf = 0;
-    // Detect active page scrolling and temporarily freeze idle reel movement
-    let isScrolling = false; let scrollTO = 0;
-    const markScrolling = ()=>{
-      isScrolling = true;
-      clearTimeout(scrollTO);
-      // slightly longer debounce to cover momentum scrolling
-      scrollTO = setTimeout(()=>{ isScrolling = false; }, 240);
-    };
-    window.addEventListener('scroll', markScrolling, { passive: true });
-    window.addEventListener('wheel', markScrolling, { passive: true });
-    window.addEventListener('touchmove', markScrolling, { passive: true });
-    window.addEventListener('keydown', (e)=>{
-      // Keys that typically cause scroll
-      if(['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(e.key)) markScrolling();
-    }, { passive: true });
-
     if(statusEl){ statusEl.style.display = 'none'; }
 
     // Activate JS mode: disable CSS keyframes
@@ -675,8 +659,10 @@
       const header = document.querySelector('.site-header');
       const headerH = header ? Math.round(header.getBoundingClientRect().height) : 0;
       const ioReels = new IntersectionObserver((entries)=>{
-        entries.forEach(e=>{
-          // Do not stop idle off-screen anymore to keep demo running at all times
+        // Сама запись не используется намеренно: логику «останавливать вне экрана»
+        // отсюда убрали, и реакция одинакова для входа и выхода из области видимости.
+        // Параметр поэтому не объявляем — иначе он висит неиспользуемым.
+        entries.forEach(()=>{
           // Still avoid heavy hints when off-screen
           if(!spinning) setAnimating(false);
           // If we were off-screen and come back, ensure idle is ticking
@@ -735,18 +721,6 @@
   function setupLuckyCenterScroll(){
     const anchorSel = 'a[href="#casino"]';
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-    function headerHeight(){ const h = document.querySelector('.site-header'); return h ? Math.round(h.getBoundingClientRect().height) : 0; }
-    function computeCenteredTop(el){
-      const rect = el.getBoundingClientRect();
-      const scrollY = window.scrollY || window.pageYOffset || 0;
-      const vh = window.innerHeight || document.documentElement.clientHeight || 0;
-      const hH = headerHeight();
-      const elH = rect.height;
-      const visH = Math.max(1, vh - hH);
-      if(elH >= visH){ return Math.max(0, Math.round(scrollY + rect.top - hH - 8)); }
-      const centerY = hH + visH/2;
-      return Math.max(0, Math.round(scrollY + rect.top + elH/2 - centerY));
-    }
     function onLuckyClick(e){
       const target = document.getElementById('casino');
       if(!target) return;
