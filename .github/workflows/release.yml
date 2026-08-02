@@ -32,7 +32,6 @@ jobs:
     uses: tr0llex/deploy-kit/.github/workflows/static-site.yml@main
     with:
       config: .deploy-kit/site.env
-      nginx-conf: deploy/launcher.conf
       # Лендинг — статика без сборки; регресс для него это линтеры разметки.
       gates: npx --yes htmlhint@1.9.2 "landing/**/*.html" && npx --yes stylelint@17.14.1 "landing/**/*.css"
       dry-run: ${{ inputs.dry-run == true }}
