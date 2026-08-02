@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -29,14 +30,42 @@ func newTestAuth(t *testing.T) (*Auth, string) {
 	return a, pass
 }
 
-func login(t *testing.T, a *Auth, user, pass string) *http.Response {
+// loginResult — прочитанный ответ на попытку входа: код, куки и тело.
+//
+// Раньше login отдавал *http.Response, тело которого не закрывал ни один из
+// тринадцати вызовов в двух файлах. Для httptest это буфер в памяти, а не
+// сокет, но правило одно на весь код: незакрытое тело ответа рано или поздно
+// оказывается настоящим соединением. Держать `defer resp.Body.Close()` в
+// тринадцати местах — худший из вариантов: строчка, про которую надо помнить,
+// и ни одной проверки, которая напомнит. Поэтому ответ вычитывается и
+// закрывается один раз, внутри login, а тесты получают уже готовые значения.
+type loginResult struct {
+	StatusCode int
+	Body       string
+	cookies    []*http.Cookie
+}
+
+// Cookies повторяет сигнатуру (*http.Response).Cookies, чтобы вызовы в тестах
+// читались так же, как раньше.
+func (l loginResult) Cookies() []*http.Cookie { return l.cookies }
+
+func login(t *testing.T, a *Auth, user, pass string) loginResult {
 	t.Helper()
 	body := `{"username":"` + user + `","password":"` + pass + `"}`
 	r := httptest.NewRequest(http.MethodPost, "/admin/api/auth/login", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	a.HandleLogin(w, r)
-	return w.Result()
+
+	resp := w.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("не удалось прочитать ответ на вход: %v", err)
+	}
+
+	return loginResult{StatusCode: resp.StatusCode, Body: string(raw), cookies: resp.Cookies()}
 }
 
 // The wrong password must not authenticate — and must not leak whether the user exists.

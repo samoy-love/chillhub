@@ -151,6 +151,14 @@ const (
 	cookieAccess  = "access_token"
 	cookieRefresh = "refresh_token"
 	cookieCSRF    = "csrf_token"
+
+	// headerCSRF — имя заголовка с CSRF-токеном в канонической записи Go
+	// ("X-Csrf-Token"). Админка отправляет его как "X-CSRF-Token", и это
+	// по-прежнему верно: имена заголовков в HTTP регистронезависимы, а
+	// http.Header канонизирует ключ и на чтении, и на записи. Одна константа
+	// вместо строкового литерала в четырёх местах — чтобы написание не
+	// разъехалось при следующей правке.
+	headerCSRF = "X-Csrf-Token"
 )
 
 func randCSRF() string {
@@ -221,15 +229,21 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
-// HandleLogin authenticates the admin user and issues a session.
-func (a *Auth) HandleLogin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+// readLoginRequest достаёт логин и пароль из запроса.
+//
+// Форма входа умеет оба формата: JSON шлёт admin_ui, а обычный POST формы
+// остаётся рабочим запасным путём, когда JS недоступен. Ошибки разбора здесь
+// намеренно не различаются — при любой из них поля остаются пустыми, и
+// HandleLogin отвечает одинаковым "missing credentials". Разные ответы на
+// «сломанный JSON» и «пустой пароль» рассказывали бы о форме входа больше,
+// чем нужно тому, кто её перебирает.
+//
+// Вынесено из HandleLogin: разбор формата запроса и собственно проверка
+// учётных данных — разные вещи, и держать их в одной функции значило
+// пересказывать в ней оба сюжета сразу.
+func readLoginRequest(r *http.Request) loginRequest {
 	var in loginRequest
-	ct := r.Header.Get("Content-Type")
-	if strings.Contains(ct, "application/json") {
+	if strings.Contains(r.Header.Get("Content-Type"), "application/json") {
 		_ = json.NewDecoder(r.Body).Decode(&in)
 	} else {
 		_ = r.ParseForm()
@@ -237,6 +251,16 @@ func (a *Auth) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		in.Password = r.FormValue("password")
 	}
 	in.Username = strings.TrimSpace(in.Username)
+	return in
+}
+
+// HandleLogin authenticates the admin user and issues a session.
+func (a *Auth) HandleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	in := readLoginRequest(r)
 	if in.Username == "" || in.Password == "" {
 		http.Error(w, "missing credentials", http.StatusBadRequest)
 		return
@@ -326,7 +350,11 @@ func (a *Auth) CurrentUser(r *http.Request) string {
 	// Optional: CSRF check for state-changing methods
 	if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodDelete {
 		csrfC, _ := r.Cookie(cookieCSRF)
-		csrfH := r.Header.Get("X-CSRF-Token")
+		// Заголовок в канонической записи Go. На проводе он остаётся прежним:
+		// админка шлёт "X-CSRF-Token" (см. admin_ui/admin.js), имена заголовков
+		// в HTTP регистронезависимы, а Header.Get приводит ключ к канону сам.
+		// Менять здесь нечего, кроме написания строки, — и клиент об этом не знает.
+		csrfH := r.Header.Get(headerCSRF)
 		if csrfC == nil || csrfC.Value == "" || csrfH == "" {
 			return ""
 		}
