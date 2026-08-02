@@ -360,3 +360,27 @@ func TestDetectContentRootNeverReturnsEmpty(t *testing.T) {
 		t.Fatal("DetectContentRoot returned an empty path; every join would then be absolute-ish garbage")
 	}
 }
+
+// The result must not depend on the OS the server runs on.
+//
+// SanitizeAssetPath used filepath.ToSlash, which rewrites backslashes on Windows
+// and does nothing on Linux. The value comes from an admin form filled on a
+// Windows machine, so the same input produced a nested directory on a
+// developer's box and one directory literally named "news\2026" on the Linux
+// server. This test states the invariant rather than the platform: every
+// expectation below is written without reference to GOOS, so it fails on
+// whichever side drifts.
+func TestSanitizeAssetPathIsPlatformIndependent(t *testing.T) {
+	for in, want := range map[string]string{
+		`news\2026`:        "news/2026",
+		`news\2026\covers`: "news/2026/covers",
+		`news/2026`:        "news/2026",
+		`\news\`:           "news",
+		`..\..\etc`:        "_/_/etc",
+		`news\..\..\etc`:   "news/_/_/etc",
+	} {
+		if got := SanitizeAssetPath(in); got != want {
+			t.Errorf("SanitizeAssetPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
