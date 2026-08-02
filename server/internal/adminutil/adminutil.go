@@ -371,9 +371,18 @@ func shortNameHash(name string) string {
 
 // SanitizeAssetPath normalizes a relative directory path inside the asset tree.
 // The result must still be checked with EnsureWithin after joining.
+//
+// A BACKSLASH IS A SEPARATOR ON EVERY PLATFORM, and that is why the replacement
+// is explicit instead of filepath.ToSlash: ToSlash rewrites backslashes on
+// Windows and does NOTHING on Linux. The value comes from an admin form field
+// filled on a Windows machine, so "news\2026" is a real input — and it used to
+// become a nested directory on a developer's box and one directory literally
+// named "news\2026" on the Linux server.
+//
+// Deciding it here also keeps the guard honest: ".." is blanked out AFTER the
+// separators are known, so "..\.." cannot slip through as a single odd name.
 func SanitizeAssetPath(p string) string {
-	p = filepath.ToSlash(strings.TrimSpace(p))
-	p = strings.TrimPrefix(p, "/")
+	p = strings.ReplaceAll(strings.TrimSpace(p), "\\", "/")
 	p = strings.Trim(p, "/")
 	p = strings.ReplaceAll(p, "..", "_")
 	return p
