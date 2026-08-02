@@ -34,10 +34,20 @@ on:
     branches: [ main ]
   pull_request:
 
+# Устаревший прогон отменяется, как только пришёл следующий пуш в ту же ветку.
+# Без этого пять правок подряд держат пять параллельных прогонов, и первым
+# завершается самый старый — то есть зелёная галочка может относиться к коду,
+# которого уже нет. Для main отмену НЕ включаем: там каждый коммит должен
+# получить свой честный результат, он же попадает в историю.
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   htmlhint-web:
     name: HTMLHint (web)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
@@ -59,6 +69,7 @@ jobs:
   stylelint-web:
     name: Stylelint (web)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
@@ -81,6 +92,7 @@ jobs:
   eslint-web:
     name: ESLint (web)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
@@ -102,6 +114,7 @@ jobs:
   web-tests:
     name: Тесты веба (node --test)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
@@ -118,8 +131,23 @@ jobs:
         run: node --test tests/web/*.test.js
 
   go-lint:
-    name: Go (api + admin)
-    runs-on: ubuntu-latest
+    name: Go (${{ matrix.os }})
+    # ДВЕ ПЛАТФОРМЫ, А НЕ ОДНА.
+    #
+    # Прод — Linux, разработка — Windows, и код между ними расходится молча.
+    # За один день это выстрелило дважды: filepath.ToSlash в разборе имён из
+    # ZIP и в SanitizeAssetPath заменяет обратные слеши на Windows и НЕ делает
+    # ничего на Linux — локально зелено, на сервере другое поведение. А файлы
+    # под `//go:build !windows` (freespace_unix.go) на Windows не проверяются
+    # ни линтером, ни компилятором вовсе.
+    #
+    # Прогон на обеих платформах ловит это на пул-реквесте, а не на проде.
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -140,11 +168,31 @@ jobs:
         working-directory: server
         run: go vet ./...
 
-      - name: Go test
+      # Кросс-компиляция под прод: ловит то, что не собирается под
+      # linux/arm64, даже когда прогон идёт на Windows.
+      - name: Go build (linux/arm64, как на проде)
+        if: matrix.os == 'windows-latest'
         working-directory: server
-        run: go test ./... -coverprofile=coverage.out -covermode=atomic
+        env:
+          GOOS: linux
+          GOARCH: arm64
+        run: go build ./...
+
+      # -race только на Linux: он требует cgo, а на windows-раннере это тянет
+      # mingw и заметно замедляет прогон. Гонки платформенно-независимы, так
+      # что одного детектора достаточно.
+      - name: Go test (-race)
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: server
+        run: go test ./... -race -coverprofile=coverage.out -covermode=atomic
+
+      - name: Go test
+        if: matrix.os != 'ubuntu-latest'
+        working-directory: server
+        run: go test ./...
 
       - name: Отправить покрытие в Codecov
+        if: matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@v5
         with:
           files: server/coverage.out
@@ -158,9 +206,49 @@ jobs:
   # файл, которого больше нет, отчего и падала. Настоящий `nginx -t` версии
   # прода теперь гоняет CI самого deploy-kit, там же, где лежит конфиг.
 
+  vuln-scan:
+    name: Уязвимости в зависимостях
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: server/go.mod
+          cache: true
+          cache-dependency-path: server/go.sum
+
+      # govulncheck отличается от обычного сканера зависимостей: он сверяет не
+      # версии, а ДОСТИЖИМОСТЬ уязвимого кода по графу вызовов. Уязвимость в
+      # функции, которую проект не зовёт, не поднимает тревогу — поэтому его
+      # находки стоит читать, а не привыкать к ним.
+      - name: govulncheck (Go)
+        working-directory: server
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # NuGet-пакеты сверяются со списком известных уязвимостей. Флаг
+      # --include-transitive обязателен: прямых зависимостей у лаунчера пять,
+      # а тянут они за собой десятки.
+      - name: Уязвимые NuGet-пакеты
+        shell: bash
+        run: |
+          set -o pipefail
+          out=$(dotnet list launcher/ChillHub/ChillHub.csproj package --vulnerable --include-transitive 2>&1 | tee /dev/stderr)
+          if echo "$out" | grep -qiE "has the following vulnerable"; then
+            echo "::error::найдены уязвимые NuGet-пакеты"
+            exit 1
+          fi
+
   dotnet-lint:
     name: C# (launcher)
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - name: Setup .NET
@@ -222,6 +310,7 @@ jobs:
   installer-windows:
     name: Installer (NSIS)
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - name: Setup .NET
