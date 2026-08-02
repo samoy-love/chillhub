@@ -57,6 +57,7 @@ dk rollback <цель> # откатить
 
 ```
 README.md          единственный markdown в корне
+README.<lang>.md   исключение: языковые версии README ищутся именно в корне
 docs/              всё остальное, если нужно
 .deploy-kit/       описания целей выкатки
 .github/workflows/ вызовы переиспользуемых workflow из deploy-kit
