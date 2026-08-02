@@ -344,17 +344,21 @@ jobs:
         # вопрос, который читатель ему задаёт.
         run: dotnet test --nologo --collect:"XPlat Code Coverage"
 
-      - name: Отправить покрытие клиента в Codecov
-        # Приколот к SHA, а не к тегу: тег мутабелен, и у Codecov уже был
-        # прецедент компрометации релиза.
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+      - name: Сохранить отчёт о покрытии
+        # Отчёт УЕЗЖАЕТ артефактом, а загружает его в Codecov отдельная job на
+        # ubuntu. Причина — цена: сам шаг загрузки на windows-раннере занимал
+        # 57 секунд из 169, потому что uploader там скачивается и стартует в
+        # разы дольше. Работа при этом одна и та же — отправить готовый xml.
+        #
+        # Отчёт тот же самый, флаг тот же, цифра в Codecov не меняется.
+        uses: actions/upload-artifact@v7
         with:
+          name: coverage-launcher
           # Путь coverlet складывает в каталог со случайным GUID, поэтому
           # шаблон, а не точное имя.
-          files: launcher/tests/ChillHub.Tests/TestResults/**/coverage.cobertura.xml
-          flags: launcher
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
+          path: launcher/tests/ChillHub.Tests/TestResults/**/coverage.cobertura.xml
+          retention-days: 1
+          if-no-files-found: error
 
       - name: Self-update loop guard (A11)
         # Ловит регрессию «бесконечный цикл самообновления»: файл, попавший
@@ -455,3 +459,37 @@ jobs:
           name: ChillHub-Setup-${{ github.run_id }}
           path: scripts/generated_downloads/ChillHub-Setup.exe
           if-no-files-found: error
+
+  # Загрузка покрытия клиента вынесена сюда из джобы «C# (launcher)».
+  #
+  # Причина — цена, а не смысл: сам шаг загрузки на windows-раннере занимал
+  # 57 секунд из 169, потому что uploader там скачивается и стартует в разы
+  # дольше. Работа при этом одна и та же — отправить готовый cobertura-xml,
+  # и на ubuntu она занимает секунды.
+  #
+  # Отчёт тот же, флаг тот же, цифра в Codecov не меняется. Джоба не входит в
+  # required checks: она ничего не гейтит, а её падение не повод не мержить
+  # исправный код — ровно поэтому у неё и стоит fail_ci_if_error: false.
+  coverage-launcher:
+    name: Покрытие клиента в Codecov
+    runs-on: ubuntu-latest
+    needs: dotnet-lint
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Забрать отчёт из джобы клиента
+        uses: actions/download-artifact@v7
+        with:
+          name: coverage-launcher
+          path: coverage-launcher
+
+      - name: Отправить покрытие клиента в Codecov
+        # Приколот к SHA, а не к тегу: тег мутабелен, и у Codecov уже был
+        # прецедент компрометации релиза.
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: coverage-launcher/**/coverage.cobertura.xml
+          flags: launcher
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
