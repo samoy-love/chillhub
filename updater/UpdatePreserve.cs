@@ -1,7 +1,10 @@
+namespace ChillHub.Update;
+
+// Директивы using стоят ПОСЛЕ объявления пространства имён — так требует IDE0065,
+// включённый как ошибка в конфигурации Debug. Локальная сборка Release этого не
+// показывает, CI собирает Debug и падал на этом файле каждый прогон.
 using System.Text;
 using System.Text.RegularExpressions;
-
-namespace ChillHub.Update;
 
 /// <summary>
 /// Single source of truth for the "preserve" rules shared by the launcher (UpdateWindow)
