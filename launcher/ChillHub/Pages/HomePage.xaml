@@ -11,10 +11,6 @@
     <SolidColorBrush x:Key="Brush.ProgressTrack" Color="#1A122B"/>
     <!-- Base dim colors -->
     <!-- Play state uses logo's purple (secondary accent family) -->
-    <sys:Double x:Key="SkeletonOffset">4</sys:Double>
-    <sys:Double x:Key="SkeletonSizeSmall">20</sys:Double>
-    <sys:Double x:Key="SkeletonSizeMedium">40</sys:Double>
-    <sys:Double x:Key="SkeletonSizeLarge">60</sys:Double>
     <!-- ... rest of the code remains the same ... -->
     <SolidColorBrush x:Key="Btn.Play.Bg" Color="#6F3AFF"/>
     <SolidColorBrush x:Key="Btn.Play.Bg.Hover" Color="#7C3AED"/>
@@ -37,7 +33,6 @@
     <SolidColorBrush x:Key="Btn.Install.Bg.Hover" Color="{DynamicResource Color.AccentHover}"/>
     <SolidColorBrush x:Key="Btn.Install.Bg.Disabled" Color="#7A2748"/>
     <SolidColorBrush x:Key="Btn.Install.Fg" Color="#FFEAF1"/>
-    <SolidColorBrush x:Key="Btn.Install.Border" Color="#FF6A95"/>
 
     <!-- Variant C: softly filled danger for Retry -->
     <SolidColorBrush x:Key="Btn.Retry.Bg" Color="#3A2222"/>
@@ -182,16 +177,6 @@
     </Style>
 
     <!-- News-specific selectable style: hover uses progress border; keep selected states as base -->
-    <Style x:Key="Style.ListBoxItem.SelectableCard.News" TargetType="ListBoxItem" BasedOn="{StaticResource Style.ListBoxItem.SelectableCard}">
-      <Style.Triggers>
-        <!-- Hover (any selection state): use brighter accent -->
-        <Trigger Property="IsMouseOver" Value="True">
-          <Setter Property="BorderBrush" Value="{DynamicResource Brush.CardHoverBorder}"/>
-          <Setter Property="BorderThickness" Value="1.2"/>
-        </Trigger>
-        <!-- If selected + hover, keep selection thickness from base/style triggers -->
-      </Style.Triggers>
-    </Style>
 
     <!-- Generic dim button template -->
     <Style x:Key="Style.Button.Dim.Base" TargetType="Button">
