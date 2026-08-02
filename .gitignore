@@ -114,3 +114,6 @@ scripts/bench-upload-results.csv
 
 # Локальные настройки деплоя: путь к приватному ключу и секреты
 deploy.local.mk
+
+# Каталоги сборки для выкатки (deploy-kit)
+stage-*/

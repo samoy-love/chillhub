@@ -14,15 +14,26 @@ on:
       target:
         description: 'Что катим'
         type: choice
-        options: [api, admin, both, installer]
-        default: both
+        options: [site, api, admin, servers, all, installer]
+        default: all
       dry-run:
         type: boolean
         default: false
 
 jobs:
+  site:
+    if: inputs.target == 'site' || inputs.target == 'all' || startsWith(github.ref, 'refs/tags/')
+    uses: tr0llex/deploy-kit/.github/workflows/static-site.yml@main
+    with:
+      config: .deploy-kit/site.env
+      nginx-conf: deploy/launcher.conf
+      # Лендинг — статика без сборки; регресс для него это линтеры разметки.
+      gates: npx --yes htmlhint@1.9.2 "landing/**/*.html" && npx --yes stylelint@17.14.1 "landing/**/*.css"
+      dry-run: ${{ inputs.dry-run == true }}
+    secrets: inherit
+
   api:
-    if: inputs.target == 'api' || inputs.target == 'both' || startsWith(github.ref, 'refs/tags/')
+    if: inputs.target == 'api' || inputs.target == 'servers' || inputs.target == 'all' || startsWith(github.ref, 'refs/tags/')
     uses: tr0llex/deploy-kit/.github/workflows/go-service.yml@main
     with:
       config: .deploy-kit/api.env
@@ -32,7 +43,7 @@ jobs:
     secrets: inherit
 
   admin:
-    if: inputs.target == 'admin' || inputs.target == 'both' || startsWith(github.ref, 'refs/tags/')
+    if: inputs.target == 'admin' || inputs.target == 'servers' || inputs.target == 'all' || startsWith(github.ref, 'refs/tags/')
     uses: tr0llex/deploy-kit/.github/workflows/go-service.yml@main
     with:
       config: .deploy-kit/admin.env
