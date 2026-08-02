@@ -26,7 +26,6 @@ namespace ChillHub {
         private bool karaokeTransitionRunning = false;
         // time-base for current line typing
         private DateTime karaokeLineStartAtUtc;
-        private TimeSpan karaokePausedAccum = TimeSpan.Zero;
         private DateTime? karaokePauseStartedUtc = null;
         private DateTime karaokeLastProgressAtUtc;
 
@@ -374,7 +373,6 @@ namespace ChillHub {
             this.SetKaraokeTexts(current: string.Empty, next: this.GetNextKaraokeLine());
             // reset time-base
             this.karaokeLineStartAtUtc = DateTime.UtcNow;
-            this.karaokePausedAccum = TimeSpan.Zero;
             this.karaokePauseStartedUtc = null;
             this.karaokeLastProgressAtUtc = this.karaokeLineStartAtUtc;
         }
@@ -467,7 +465,6 @@ namespace ChillHub {
             // accumulate paused time
             if (this.karaokePauseStartedUtc != null) {
                 var pausedDur = (DateTime.UtcNow - this.karaokePauseStartedUtc.Value);
-                this.karaokePausedAccum += pausedDur;
                 // сдвигаем маркер последнего прогресса вперёд на время паузы, чтобы при возобновлении не "догоняло" сразу всю строку
                 try {
                     this.karaokeLastProgressAtUtc += pausedDur;
@@ -578,7 +575,6 @@ namespace ChillHub {
                 this.SetKaraokeTexts(string.Empty, this.GetNextKaraokeLine());
                 // reset time-base for new line
                 this.karaokeLineStartAtUtc = DateTime.UtcNow;
-                this.karaokePausedAccum = TimeSpan.Zero;
                 this.karaokePauseStartedUtc = null;
                 this.karaokeLastProgressAtUtc = this.karaokeLineStartAtUtc;
             }
