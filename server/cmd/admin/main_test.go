@@ -3,8 +3,11 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
+
+	"ChillHub/server/internal/httpx"
 )
 
 func testServer(t *testing.T) *server {
@@ -55,7 +58,7 @@ func TestMutatingHandlersRejectGET(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, tc.url, nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tc.url, nil)
 			w := httptest.NewRecorder()
 			tc.h(w, req)
 			if w.Code != http.StatusMethodNotAllowed {
@@ -215,8 +218,8 @@ func TestFeedbackSubmitRateLimited(t *testing.T) {
 	s := testServer(t)
 	h := s.feedbackLimiter.Wrap(s.feedback.Submit, http.MethodPost)
 	limited := false
-	for i := 0; i < feedbackRateLimit+2; i++ {
-		req := httptest.NewRequest(http.MethodPost, "http://example.com/feedback/submit", nil)
+	for range feedbackRateLimit + 2 {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/feedback/submit", nil)
 		req.RemoteAddr = "10.0.0.1:1234"
 		w := httptest.NewRecorder()
 		h(w, req)
@@ -240,8 +243,8 @@ func TestAdminLoginRateLimited(t *testing.T) {
 	s.register(mux)
 
 	codes := make([]int, 0, loginRateLimit+2)
-	for i := 0; i < loginRateLimit+2; i++ {
-		req := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/auth/login",
+	for range loginRateLimit + 2 {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/admin/api/auth/login",
 			strings.NewReader(`{"username":"admin","password":"wrong"}`))
 		req.Header.Set("Content-Type", "application/json")
 		req.RemoteAddr = "10.0.0.3:1234"
@@ -253,7 +256,7 @@ func TestAdminLoginRateLimited(t *testing.T) {
 		t.Fatalf("login was never rate limited: codes=%v", codes)
 	}
 	// The budget must not be global: a different client address still gets in.
-	req := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/auth/login",
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/admin/api/auth/login",
 		strings.NewReader(`{"username":"admin","password":"wrong"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "10.0.0.4:1234"
@@ -270,8 +273,8 @@ func TestMetricsReportRateLimited(t *testing.T) {
 	s := testServer(t)
 	h := s.metricsLimiter.Wrap(s.metrics.Submit, http.MethodPost)
 	limited := false
-	for i := 0; i < metricsRateLimit+2; i++ {
-		req := httptest.NewRequest(http.MethodPost, "http://example.com/metrics/report",
+	for range metricsRateLimit + 2 {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/metrics/report",
 			strings.NewReader(`{"event":"launcher_start"}`))
 		req.RemoteAddr = "10.0.0.2:1234"
 		w := httptest.NewRecorder()
@@ -282,5 +285,28 @@ func TestMetricsReportRateLimited(t *testing.T) {
 	}
 	if !limited {
 		t.Fatal("metrics report was never rate limited")
+	}
+}
+
+// configureMaxProcs replaced an init function, so it is no longer exercised by
+// merely importing the package. It must stay callable and must never leave
+// GOMAXPROCS at a value that would stop the scheduler.
+func TestConfigureMaxProcs(t *testing.T) {
+	configureMaxProcs()
+	if n := runtime.GOMAXPROCS(0); n < 1 {
+		t.Fatalf("GOMAXPROCS = %d after configureMaxProcs", n)
+	}
+}
+
+// adminCORSOrigin must not hand out a wildcard: the admin API authenticates
+// with cookies.
+func TestAdminCORSOriginDefaultsToDisabled(t *testing.T) {
+	t.Setenv("ADMIN_CORS_ORIGIN", "")
+	if got := adminCORSOrigin(); got != httpx.CORSDisabled {
+		t.Fatalf("default origin = %q, want the disabled marker", got)
+	}
+	t.Setenv("ADMIN_CORS_ORIGIN", " https://admin.example.com ")
+	if got := adminCORSOrigin(); got != "https://admin.example.com" {
+		t.Fatalf("configured origin = %q", got)
 	}
 }

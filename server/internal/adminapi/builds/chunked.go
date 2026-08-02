@@ -62,8 +62,8 @@ type uploadMeta struct {
 	Status         string `json:"status"`    // init|uploading|ready|processing|done|error
 }
 
-// logging helper with level and request-id (uploadId)
-func linfo(id string, format string, a ...any) {
+// linfof logs one line with a level and the request id (uploadId).
+func linfof(id string, format string, a ...any) {
 	if id == "" {
 		id = "-"
 	}
@@ -111,11 +111,14 @@ func (h *Handlers) readUploadMeta(id string) (*uploadMeta, error) {
 }
 
 func (h *Handlers) writeUploadMeta(m *uploadMeta) error {
-	if err := os.MkdirAll(h.uploadDir(m.UploadID), 0o755); err != nil {
+	if err := os.MkdirAll(h.uploadDir(m.UploadID), contentDirPerm); err != nil {
 		return err
 	}
 	m.UpdatedAt = time.Now().Unix()
-	b, _ := json.MarshalIndent(m, "", "  ")
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
 	// Atomic write: write to a temp file and rename over meta.json
 	dir := h.uploadDir(m.UploadID)
 	tmp, err := os.CreateTemp(dir, "meta-*.json.tmp")
@@ -123,21 +126,26 @@ func (h *Handlers) writeUploadMeta(m *uploadMeta) error {
 		return err
 	}
 	tmpPath := tmp.Name()
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
+	if err := writeAndSync(tmp, b); err != nil {
 		_ = os.Remove(tmpPath)
 		return err
 	}
 	return os.Rename(tmpPath, h.uploadMetaPath(m.UploadID))
+}
+
+// writeAndSync writes b to f, flushes it to the platter and closes the handle.
+// The Close error matters as much as the others: it is where a deferred write
+// failure surfaces, and the caller is about to rename this file over live state.
+func writeAndSync(f *os.File, b []byte) error {
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // entryModTime returns the modification time of a directory entry, or the zero
@@ -285,57 +293,11 @@ func (h *Handlers) UploadInit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid totalSize", http.StatusBadRequest)
 		return
 	}
-	// Heuristics and env-driven bounds
-	envInt := func(name string, def int) int {
-		if v := strings.TrimSpace(os.Getenv(name)); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				return n
-			}
-		}
-		return def
-	}
-	minChunk := envInt("UPLOAD_CHUNK_MIN", 64<<10)  // 64 KiB
-	maxChunk := envInt("UPLOAD_CHUNK_MAX", 512<<20) // 512 MiB
-	maxParLimit := envInt("UPLOAD_MAX_PARALLEL", 100)
-	if minChunk < (64 << 10) {
-		minChunk = 64 << 10
-	}
-	if maxChunk < minChunk {
-		maxChunk = minChunk
-	}
-
-	// Recommended chunk by total size buckets (clamped)
-	recChunk := uploadChunkSizeDefault
-	switch {
-	case in.TotalSize <= 512<<20: // < 512 MiB
-		recChunk = 4 << 20
-	case in.TotalSize <= 2<<30: // < 2 GiB
-		recChunk = 8 << 20
-	case in.TotalSize <= 8<<30: // < 8 GiB
-		recChunk = 16 << 20
-	default:
-		recChunk = 32 << 20
-	}
-	if recChunk < minChunk {
-		recChunk = minChunk
-	}
-	if recChunk > maxChunk {
-		recChunk = maxChunk
-	}
-
-	// If client didn't specify, use our recommendation; otherwise clamp client value
-	if in.ChunkSize <= 0 {
-		in.ChunkSize = recChunk
-	}
-	if in.ChunkSize < minChunk {
-		in.ChunkSize = minChunk
-	}
-	if in.ChunkSize > maxChunk {
-		in.ChunkSize = maxChunk
-	}
+	plan := planChunks(in.TotalSize, in.ChunkSize)
+	in.ChunkSize = plan.chunkSize
 	// free space precheck
 	tmpRoot := h.uploadBaseDir()
-	if err := os.MkdirAll(tmpRoot, 0o755); err != nil {
+	if err := os.MkdirAll(tmpRoot, contentDirPerm); err != nil {
 		log.Printf("[upload:init] mkdir tmpRoot=%s error: %v", tmpRoot, err)
 		http.Error(w, "upload storage error", http.StatusInternalServerError)
 		return
@@ -356,49 +318,98 @@ func (h *Handlers) UploadInit(w http.ResponseWriter, r *http.Request) {
 		Status:         "init",
 	}
 	// create per-upload directory and part file (truncate to size)
-	if err := os.MkdirAll(h.uploadDir(id), 0o755); err != nil {
-		log.Printf("[upload:init] mkdir uploadDir uploadId=%s error: %v", id, err)
+	if err := h.createPartFile(id, in.TotalSize); err != nil {
+		log.Printf("[upload:init] part file uploadId=%s: %v", id, err)
 		http.Error(w, "upload storage error", http.StatusInternalServerError)
 		return
 	}
-	part := h.uploadZipPartPath(id)
-	f, err := os.OpenFile(part, os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		log.Printf("[upload:init] open part uploadId=%s path=%s error: %v", id, part, err)
-		http.Error(w, "upload storage error", http.StatusInternalServerError)
-		return
-	}
-	if err := f.Truncate(in.TotalSize); err != nil {
-		f.Close()
-		log.Printf("[upload:init] truncate part uploadId=%s size=%d error: %v", id, in.TotalSize, err)
-		http.Error(w, "upload storage error", http.StatusInternalServerError)
-		return
-	}
-	f.Close()
 	if err := h.writeUploadMeta(m); err != nil {
 		log.Printf("[upload:init] write meta uploadId=%s error: %v", id, err)
 		http.Error(w, "upload storage error", http.StatusInternalServerError)
 		return
 	}
-	// Recommend maxParallel based on CPUs (2..maxParLimit)
-	cpus := runtime.NumCPU()
-	recPar := cpus
-	if recPar < 2 {
-		recPar = 2
-	}
-	if recPar > maxParLimit {
-		recPar = maxParLimit
-	}
 	w.Header().Set("X-Request-ID", id)
-	linfo(id, "init ok kind=%s gameId=%s version=%s zip=%s total=%d chunkSize=%d recChunk=%d maxPar=%d from=%s",
-		strings.ToLower(in.Kind), in.GameID, in.Version, in.ZipName, in.TotalSize, m.ChunkSize, recChunk, recPar, r.RemoteAddr)
+	linfof(id, "init ok kind=%s gameId=%s version=%s zip=%s total=%d chunkSize=%d recChunk=%d maxPar=%d from=%s",
+		strings.ToLower(in.Kind), in.GameID, in.Version, in.ZipName, in.TotalSize, m.ChunkSize, plan.recommended, plan.maxParallel, r.RemoteAddr)
 	adminutil.WriteJSON(w, map[string]any{
 		"uploadId":             id,
 		"chunkSize":            m.ChunkSize,
 		"totalChunks":          m.TotalChunks,
-		"maxParallel":          recPar,
-		"recommendedChunkSize": recChunk,
+		"maxParallel":          plan.maxParallel,
+		"recommendedChunkSize": plan.recommended,
 	})
+}
+
+// uploadChunkPlan is the chunk geometry UploadInit answers a client with.
+type uploadChunkPlan struct {
+	chunkSize   int
+	recommended int
+	maxParallel int
+}
+
+// planChunks recommends a chunk size for the announced total and clamps the
+// client's own choice into the configured window. UPLOAD_CHUNK_MIN,
+// UPLOAD_CHUNK_MAX and UPLOAD_MAX_PARALLEL move the bounds without a rebuild;
+// the 64 KiB floor holds regardless, because a smaller chunk turns a 30 GB
+// upload into half a million requests.
+func planChunks(totalSize int64, requested int) uploadChunkPlan {
+	minChunk := max(envInt("UPLOAD_CHUNK_MIN", 64<<10), 64<<10) // 64 KiB
+	maxChunk := max(envInt("UPLOAD_CHUNK_MAX", 512<<20), minChunk)
+	maxParLimit := envInt("UPLOAD_MAX_PARALLEL", 100)
+
+	// Recommended chunk by total size buckets (clamped)
+	var recChunk int
+	switch {
+	case totalSize <= 512<<20: // < 512 MiB
+		recChunk = 4 << 20
+	case totalSize <= 2<<30: // < 2 GiB
+		recChunk = uploadChunkSizeDefault
+	case totalSize <= 8<<30: // < 8 GiB
+		recChunk = 16 << 20
+	default:
+		recChunk = 32 << 20
+	}
+	recChunk = min(max(recChunk, minChunk), maxChunk)
+
+	// If the client didn't specify, use our recommendation; otherwise clamp it.
+	chunk := requested
+	if chunk <= 0 {
+		chunk = recChunk
+	}
+	return uploadChunkPlan{
+		chunkSize:   min(max(chunk, minChunk), maxChunk),
+		recommended: recChunk,
+		// Recommend maxParallel based on CPUs (2..maxParLimit).
+		maxParallel: min(max(runtime.NumCPU(), 2), maxParLimit),
+	}
+}
+
+// envInt reads a positive integer from the environment, falling back to def.
+func envInt(name string, def int) int {
+	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
+// createPartFile lays down the fixed-size file the chunks are written into, so
+// that every chunk handler can seek straight to its offset.
+func (h *Handlers) createPartFile(id string, totalSize int64) error {
+	if err := os.MkdirAll(h.uploadDir(id), contentDirPerm); err != nil {
+		return fmt.Errorf("mkdir %s: %w", h.uploadDir(id), err)
+	}
+	part := h.uploadZipPartPath(id)
+	f, err := os.OpenFile(part, os.O_CREATE|os.O_RDWR, contentFilePerm)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", part, err)
+	}
+	if err := f.Truncate(totalSize); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("truncate %s to %d: %w", part, totalSize, err)
+	}
+	return f.Close()
 }
 
 // UploadChunk writes one chunk at its offset in the part file.
@@ -424,7 +435,7 @@ func (h *Handlers) UploadChunk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var m *uploadMeta
-	for attempt := 0; attempt < 5; attempt++ {
+	for attempt := range 5 {
 		if m, err = h.readUploadMeta(id); err == nil {
 			break
 		}
@@ -439,25 +450,9 @@ func (h *Handlers) UploadChunk(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "index out of range", http.StatusBadRequest)
 		return
 	}
-	// compute expected size
-	exp := m.ChunkSize
-	if idx == m.TotalChunks-1 {
-		rem := int(m.TotalSize - int64((m.TotalChunks-1)*m.ChunkSize))
-		if rem > 0 {
-			exp = rem
-		}
-	}
-	// write at offset
-	off := int64(idx * m.ChunkSize)
-	f, err := os.OpenFile(h.uploadZipPartPath(id), os.O_WRONLY, 0)
-	if err != nil {
-		log.Printf("[upload:chunk] open part uploadId=%s error: %v", id, err)
-		http.Error(w, "upload storage error", http.StatusInternalServerError)
-		return
-	}
+	exp := expectedChunkSize(m, idx)
 	t0 := time.Now()
-	n, werr := io.CopyN(&writeAt{f: f, off: off}, r.Body, int64(exp))
-	f.Close()
+	n, werr := h.writeChunk(id, int64(idx)*int64(m.ChunkSize), r.Body, int64(exp))
 	if werr != nil && !errors.Is(werr, io.EOF) {
 		log.Printf("[upload:chunk] write uploadId=%s index=%d error: %v", id, idx, werr)
 		http.Error(w, "upload storage error", http.StatusInternalServerError)
@@ -481,6 +476,34 @@ func (h *Handlers) UploadChunk(w http.ResponseWriter, r *http.Request) {
 	_ = h.writeUploadMeta(m)
 	uploadMu.Unlock()
 	adminutil.WriteJSON(w, map[string]any{"status": "ok", "bytes": int(n), "writeMs": time.Since(t0).Milliseconds()})
+}
+
+// expectedChunkSize returns how many bytes chunk idx must carry. Every chunk
+// but the last one is a full ChunkSize.
+func expectedChunkSize(m *uploadMeta, idx int) int {
+	if idx != m.TotalChunks-1 {
+		return m.ChunkSize
+	}
+	rem := int(m.TotalSize - int64(m.TotalChunks-1)*int64(m.ChunkSize))
+	if rem <= 0 {
+		return m.ChunkSize
+	}
+	return rem
+}
+
+// writeChunk copies exactly n bytes of body into the part file at off.
+func (h *Handlers) writeChunk(id string, off int64, body io.Reader, n int64) (int64, error) {
+	f, err := os.OpenFile(h.uploadZipPartPath(id), os.O_WRONLY, 0)
+	if err != nil {
+		return 0, err
+	}
+	written, werr := io.CopyN(&writeAt{f: f, off: off}, body, n)
+	// A Close that fails on a file we just wrote to is a lost chunk; it must not
+	// hide behind the copy error, but the copy error is the more specific one.
+	if cerr := f.Close(); cerr != nil && werr == nil {
+		return written, cerr
+	}
+	return written, werr
 }
 
 type writeAt struct {
@@ -557,21 +580,12 @@ func (h *Handlers) UploadComplete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// compute sha256 of full file
-	f, err := os.Open(h.uploadZipPartPath(id))
+	sum, err := sha256OfFile(h.uploadZipPartPath(id))
 	if err != nil {
-		log.Printf("[upload:complete] open part uploadId=%s error: %v", id, err)
-		http.Error(w, "upload storage error", http.StatusInternalServerError)
-		return
-	}
-	hash := sha256.New()
-	if _, err := io.Copy(hash, f); err != nil {
-		f.Close()
 		log.Printf("[upload:complete] read part uploadId=%s error: %v", id, err)
 		http.Error(w, "upload storage error", http.StatusInternalServerError)
 		return
 	}
-	f.Close()
-	sum := strings.ToLower(hex.EncodeToString(hash.Sum(nil)))
 	if m.ExpectedSha256 != "" && sum != m.ExpectedSha256 {
 		log.Printf("[upload:complete] sha256 mismatch uploadId=%s expected=%s actual=%s", id, m.ExpectedSha256, sum)
 		m.Status = "error"
@@ -588,6 +602,20 @@ func (h *Handlers) UploadComplete(w http.ResponseWriter, r *http.Request) {
 	m.Status = "ready"
 	_ = h.writeUploadMeta(m)
 	adminutil.WriteJSON(w, map[string]any{"status": "ok", "sha256": sum})
+}
+
+// sha256OfFile returns the lower-case hex sha256 of a file's contents.
+func sha256OfFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, f); err != nil {
+		return "", err
+	}
+	return strings.ToLower(hex.EncodeToString(hash.Sum(nil))), nil
 }
 
 // UploadProcessStream extracts the completed upload and streams NDJSON:
@@ -623,7 +651,7 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	nw := newNDJSONWriter(w)
 	fl := adminutil.Flusher(nw)
-	fmt.Fprintf(nw, "{\"type\":\"start\",\"kind\":%q,\"gameId\":%q,\"version\":%q}\n", m.Kind, m.GameID, m.Version)
+	emitEventf(nw, "{\"type\":\"start\",\"kind\":%q,\"gameId\":%q,\"version\":%q}\n", m.Kind, m.GameID, m.Version)
 	fl.Flush()
 	zipPath := h.uploadZipPath(id)
 	// The gameId/version pair was validated at upload init, but re-check before
@@ -695,7 +723,7 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	m.Status = "done"
 	_ = h.writeUploadMeta(m)
 
-	fmt.Fprintf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
+	emitEventf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
 	fl.Flush()
 }
 

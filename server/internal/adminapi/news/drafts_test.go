@@ -18,11 +18,10 @@ func publicTree(t *testing.T, root string) []string {
 	base := filepath.Join(root, "news")
 	var out []string
 	_ = filepath.WalkDir(base, func(p string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
+		if err == nil && !d.IsDir() {
+			rel, _ := filepath.Rel(base, p)
+			out = append(out, filepath.ToSlash(rel))
 		}
-		rel, _ := filepath.Rel(base, p)
-		out = append(out, filepath.ToSlash(rel))
 		return nil
 	})
 	return out
@@ -68,10 +67,7 @@ func TestDraftsAreNotInThePublicTree(t *testing.T) {
 	}
 
 	// The publicly served index must not list the draft either.
-	b, err := os.ReadFile(filepath.Join(root, "news", "index.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	b := readFile(t, filepath.Join(root, "news", "index.json"))
 	if strings.Contains(string(b), "draft-one") {
 		t.Errorf("public index.json leaks the draft: %s", string(b))
 	}
@@ -87,7 +83,7 @@ func TestAdminListStillSeesDrafts(t *testing.T) {
 	saveArticle(t, h, "live-one", "# live", true)
 
 	w := httptest.NewRecorder()
-	h.List(w, httptest.NewRequest(http.MethodGet, "http://example.com/admin/news/list?scope=launcher", nil))
+	h.List(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/admin/news/list?scope=launcher", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("list: %d %s", w.Code, w.Body.String())
 	}
@@ -152,24 +148,24 @@ func TestPublishMovesArticleBetweenTrees(t *testing.T) {
 func TestRebuildMigratesLegacyLayout(t *testing.T) {
 	h, root := newHandlers(t)
 	base := filepath.Join(root, "news")
-	if err := os.MkdirAll(base, 0o755); err != nil {
+	if err := os.MkdirAll(base, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	for name, body := range map[string]string{
 		"old-draft.md": "# old draft",
 		"old-live.md":  "# old live",
 	} {
-		if err := os.WriteFile(filepath.Join(base, name), []byte(body), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(base, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	legacyMeta := `{"old-draft":{"published":false,"coverUrl":""},"old-live":{"published":true,"coverUrl":""}}`
-	if err := os.WriteFile(filepath.Join(base, "news_meta.json"), []byte(legacyMeta), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(base, "news_meta.json"), []byte(legacyMeta), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	w := httptest.NewRecorder()
-	h.Rebuild(w, httptest.NewRequest(http.MethodPost, "http://example.com/admin/news/rebuild?scope=launcher", nil))
+	h.Rebuild(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/admin/news/rebuild?scope=launcher", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("rebuild: %d %s", w.Code, w.Body.String())
 	}
@@ -188,7 +184,7 @@ func TestRebuildMigratesLegacyLayout(t *testing.T) {
 	}
 	// The flags survived the migration.
 	w = httptest.NewRecorder()
-	h.Get(w, httptest.NewRequest(http.MethodGet,
+	h.Get(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet,
 		"http://example.com/admin/news/get?scope=launcher&slug=old-draft", nil))
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"published":false`) {
 		t.Errorf("draft metadata lost: %d %s", w.Code, w.Body.String())

@@ -24,7 +24,7 @@ func decodePublic(t *testing.T, w *httptest.ResponseRecorder) Public {
 func TestMissingFileIsDisabled(t *testing.T) {
 	s := New(t.TempDir())
 	w := httptest.NewRecorder()
-	s.PublicHandler(w, httptest.NewRequest(http.MethodGet, "http://x/api/maintenance", nil))
+	s.PublicHandler(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://x/api/maintenance", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200", w.Code)
 	}
@@ -41,10 +41,10 @@ func TestMissingFileIsDisabled(t *testing.T) {
 func TestCorruptFileIsDisabled(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
-	if err := os.MkdirAll(s.dir(), 0o755); err != nil {
+	if err := os.MkdirAll(s.dir(), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(s.path(), []byte("{not json"), 0o644); err != nil {
+	if err := os.WriteFile(s.path(), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if s.Current().Enabled {
@@ -54,7 +54,7 @@ func TestCorruptFileIsDisabled(t *testing.T) {
 
 func setState(t *testing.T, s *Store, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "http://x/admin/api/maintenance/set", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://x/admin/api/maintenance/set", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	s.Set(w, req)
 	return w
@@ -68,7 +68,7 @@ func TestSetEnablesAndPublicReflectsIt(t *testing.T) {
 		t.Fatalf("set failed: %d %s", w.Code, w.Body.String())
 	}
 	pw := httptest.NewRecorder()
-	s.PublicHandler(pw, httptest.NewRequest(http.MethodGet, "http://x/api/maintenance", nil))
+	s.PublicHandler(pw, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://x/api/maintenance", nil))
 	p := decodePublic(t, pw)
 	if !p.Enabled || p.Reason != "disk swap" {
 		t.Fatalf("unexpected public state: %+v", p)
@@ -127,7 +127,7 @@ func TestClearRemovesFile(t *testing.T) {
 		t.Fatal("precondition failed: not enabled")
 	}
 	w := httptest.NewRecorder()
-	s.Clear(w, httptest.NewRequest(http.MethodPost, "http://x/admin/api/maintenance/clear", nil))
+	s.Clear(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://x/admin/api/maintenance/clear", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("clear failed: %d", w.Code)
 	}
@@ -139,7 +139,7 @@ func TestClearRemovesFile(t *testing.T) {
 	}
 	// Clearing twice is not an error.
 	w2 := httptest.NewRecorder()
-	s.Clear(w2, httptest.NewRequest(http.MethodPost, "http://x/admin/api/maintenance/clear", nil))
+	s.Clear(w2, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://x/admin/api/maintenance/clear", nil))
 	if w2.Code != http.StatusOK {
 		t.Fatalf("second clear failed: %d", w2.Code)
 	}
@@ -169,7 +169,7 @@ func TestCacheExpiresEvenWhenStatLooksUnchanged(t *testing.T) {
 	dir := t.TempDir()
 	s := New(dir)
 	path := filepath.Join(dir, "maintenance", "state.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	// Two states of exactly the same length, written with the same mtime.
@@ -180,7 +180,7 @@ func TestCacheExpiresEvenWhenStatLooksUnchanged(t *testing.T) {
 	}
 	stamp := time.Now().Add(-time.Hour)
 	write := func(data []byte) {
-		if err := os.WriteFile(path, data, 0o644); err != nil {
+		if err := os.WriteFile(path, data, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chtimes(path, stamp, stamp); err != nil {
@@ -207,5 +207,59 @@ func TestReasonIsClamped(t *testing.T) {
 	setState(t, s, `{"enabled":true,"reason":"`+long+`"}`)
 	if got := len(s.Load().Reason); got != maxReasonBytes {
 		t.Fatalf("reason length = %d, want %d", got, maxReasonBytes)
+	}
+}
+
+// writeJSON must never emit 200 plus a truncated body: a value that cannot be
+// encoded is a server error, and the client has to be able to tell.
+func TestWriteJSONReportsEncodingFailure(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeJSON(w, map[string]any{"bad": make(chan int)})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("code = %d, want 500 (body %q)", w.Code, w.Body.String())
+	}
+}
+
+// Get is the admin read side: it must report both the stored record and the
+// effective one, so the panel can show "enabled, but the window ended".
+func TestAdminGetReportsStoredAndEffectiveState(t *testing.T) {
+	s := New(t.TempDir())
+	past := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	setState(t, s, `{"enabled":true,"reason":"истёкшее окно","endsAt":"`+past+`"}`)
+
+	w := httptest.NewRecorder()
+	s.Get(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://x/admin/api/maintenance/get", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d", w.Code)
+	}
+	var v AdminView
+	if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil {
+		t.Fatalf("bad json %q: %v", w.Body.String(), err)
+	}
+	if !v.State.Enabled {
+		t.Fatalf("stored state lost enabled=true: %+v", v.State)
+	}
+	if v.Effective.Enabled {
+		t.Fatalf("an expired window must be reported as off: %+v", v.Effective)
+	}
+	if v.Path == "" {
+		t.Fatal("path is not reported")
+	}
+}
+
+// The public endpoint answers GET and HEAD and refuses everything else.
+func TestPublicHandlerMethods(t *testing.T) {
+	s := New(t.TempDir())
+	for method, want := range map[string]int{
+		http.MethodGet:     http.StatusOK,
+		http.MethodHead:    http.StatusOK,
+		http.MethodOptions: http.StatusNoContent,
+		http.MethodPost:    http.StatusMethodNotAllowed,
+	} {
+		w := httptest.NewRecorder()
+		s.PublicHandler(w, httptest.NewRequestWithContext(t.Context(), method, "http://x/api/maintenance", nil))
+		if w.Code != want {
+			t.Errorf("%s = %d, want %d", method, w.Code, want)
+		}
 	}
 }

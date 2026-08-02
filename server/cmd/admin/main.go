@@ -105,8 +105,11 @@ func newServer(contentRoot string) *server {
 	}
 }
 
-func init() {
-	// Configure GOMAXPROCS automatically. On Windows (no cgroup quotas) suppress noisy info message.
+// configureMaxProcs matches GOMAXPROCS to the cgroup quota. It lives in main
+// rather than in an init function so that it runs when the command runs, not
+// whenever something imports this package.
+func configureMaxProcs() {
+	// On Windows (no cgroup quotas) suppress the noisy info message.
 	_, err := maxprocs.Set(maxprocs.Logger(func(format string, a ...any) {
 		if runtime.GOOS == "windows" {
 			return
@@ -132,6 +135,7 @@ func adminCORSOrigin() string {
 }
 
 func main() {
+	configureMaxProcs()
 	contentRoot := adminutil.DetectContentRoot()
 	s := newServer(contentRoot)
 
@@ -210,7 +214,7 @@ func detectAdminUIDir() string {
 	// 2) fallback: walk up to 6 levels from working directory and try server/admin_ui and admin_ui
 	wd, _ := os.Getwd()
 	cur := wd
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		cand1 := filepath.Join(cur, "server", "admin_ui")
 		if isDir(cand1) {
 			return cand1

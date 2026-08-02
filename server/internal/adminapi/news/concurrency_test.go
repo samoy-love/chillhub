@@ -17,16 +17,19 @@ import (
 // Run with -race to also catch the concurrent map access this used to allow.
 func TestConcurrentSavesKeepEveryArticle(t *testing.T) {
 	h, _ := newHandlers(t)
-	const n = 12
+	// One letter per goroutine: the slug has to differ per save, and indexing a
+	// string keeps it a plain ASCII suffix.
+	const slugLetters = "abcdefghijkl"
+	const n = len(slugLetters)
 
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			req := multipartForm(t, "http://example.com/admin/news/save", map[string]string{
 				"scope":     "launcher",
-				"slug":      "article-" + string(rune('a'+i)),
+				"slug":      "article-" + slugLetters[i:i+1],
 				"markdown":  "# article",
 				"published": "true",
 			})
@@ -40,7 +43,7 @@ func TestConcurrentSavesKeepEveryArticle(t *testing.T) {
 	wg.Wait()
 
 	w := httptest.NewRecorder()
-	h.List(w, httptest.NewRequest(http.MethodGet, "http://example.com/admin/news/list?scope=launcher", nil))
+	h.List(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/admin/news/list?scope=launcher", nil))
 	var idx struct {
 		Items []struct {
 			Slug      string `json:"slug"`
@@ -86,10 +89,7 @@ func TestConcurrentPublishKeepsMetadata(t *testing.T) {
 	}
 	wg.Wait()
 
-	b, err := os.ReadFile(filepath.Join(root, "news_private", "news_meta.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	b := readFile(t, filepath.Join(root, "news_private", "news_meta.json"))
 	var m map[string]meta
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatalf("news_meta.json is not valid JSON after concurrent writes: %v (%s)", err, string(b))
@@ -112,10 +112,7 @@ func TestIndexAndMetaAreWrittenAtomically(t *testing.T) {
 		filepath.Join(root, "news_private", "index.json"),
 		filepath.Join(root, "news_private", "news_meta.json"),
 	} {
-		b, err := os.ReadFile(p)
-		if err != nil {
-			t.Fatalf("%s: %v", p, err)
-		}
+		b := readFile(t, p)
 		var v any
 		if err := json.Unmarshal(b, &v); err != nil {
 			t.Errorf("%s is not valid JSON: %v", p, err)

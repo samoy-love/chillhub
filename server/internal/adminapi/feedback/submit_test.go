@@ -13,7 +13,7 @@ import (
 
 func submit(t *testing.T, h *Handlers, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "http://example.com/feedback/submit", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/feedback/submit", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.Submit(w, req)
@@ -25,7 +25,7 @@ func submit(t *testing.T, h *Handlers, body string) *httptest.ResponseRecorder {
 func TestSubmitAppendsToJournalAndStaysReadable(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if w := submit(t, h, fmt.Sprintf(`{"comment":"report %d","type":"bug"}`, i)); w.Code != http.StatusOK {
 			t.Fatalf("submit %d: %d %s", i, w.Code, w.Body.String())
 		}
@@ -49,7 +49,7 @@ func TestSubmitAppendsToJournalAndStaysReadable(t *testing.T) {
 	}
 	// An admin write compacts the journal away.
 	w := httptest.NewRecorder()
-	h.Delete(w, httptest.NewRequest(http.MethodPost, "http://example.com/x?id="+items[0].ID, nil))
+	h.Delete(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/x?id="+items[0].ID, nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("delete: %d %s", w.Code, w.Body.String())
 	}
@@ -110,7 +110,7 @@ func TestSubmitRejectsMalformedBody(t *testing.T) {
 func TestSubmitClampsSystemMap(t *testing.T) {
 	h := New(t.TempDir())
 	sys := map[string]string{}
-	for i := 0; i < maxSystemEntries*3; i++ {
+	for i := range maxSystemEntries * 3 {
 		sys[fmt.Sprintf("key-%03d-%s", i, strings.Repeat("k", 200))] = strings.Repeat("v", 4000)
 	}
 	payload, err := json.Marshal(map[string]any{"comment": "hi", "system": sys})

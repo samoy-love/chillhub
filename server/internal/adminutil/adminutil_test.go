@@ -47,7 +47,7 @@ func TestIsHexID(t *testing.T) {
 		}
 	}
 	// Everything the server generates must pass.
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		if !IsHexID(GenID()) || !IsHexID(NewBuildID()) {
 			t.Fatal("a generated id was rejected")
 		}
@@ -65,7 +65,7 @@ func TestWriteFileAtomicReplacesWholeFile(t *testing.T) {
 	if err := WriteFileAtomic(p, []byte(`{"v":2}`), 0o644); err != nil {
 		t.Fatalf("overwrite: %v", err)
 	}
-	b, err := os.ReadFile(p)
+	b, err := os.ReadFile(p) // #nosec G304 -- p is built from t.TempDir(), not from any request.
 	if err != nil {
 		t.Fatal(err)
 	}

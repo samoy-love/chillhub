@@ -54,7 +54,9 @@ func LoadConfig() Config {
 	if plain := strings.TrimSpace(os.Getenv("ADMIN_PASSWORD_PLAIN")); plain != "" {
 		if hb, err := bcrypt.GenerateFromPassword([]byte(plain), 12); err == nil {
 			cfg.AdminPassBC = string(hb)
-			log.Printf("[ADMIN AUTH] ADMIN_PASSWORD_PLAIN provided; using its bcrypt for user %q", cfg.AdminUser)
+			// %q, and the value comes from the unit file rather than from a
+			// request: nothing a client sends can reach this line.
+			log.Printf("[ADMIN AUTH] ADMIN_PASSWORD_PLAIN provided; using its bcrypt for user %q", cfg.AdminUser) // #nosec G706 -- ADMIN_USERNAME is deployment config, and %q escapes it.
 		} else {
 			log.Printf("[ADMIN AUTH] Failed to hash ADMIN_PASSWORD_PLAIN: %v", err)
 		}
@@ -95,10 +97,28 @@ const (
 )
 
 type authClaims struct {
+	jwt.RegisteredClaims
+
 	Typ string `json:"typ"`
 	Sub string `json:"sub"`
-	jwt.RegisteredClaims
 }
+
+// Token rejection reasons. They are sentinels rather than one-off errors so a
+// caller can tell "this deployment has no secret" (a misconfigured service that
+// must be fixed) apart from "this token is not good" (a normal 401), which the
+// journal cannot show once every path returns the same anonymous string.
+var (
+	// ErrAuthNotConfigured means JWT_SECRET is empty: nothing can be verified,
+	// so nothing is authenticated.
+	ErrAuthNotConfigured = errors.New("auth not configured: JWT secret is empty")
+	// ErrInvalidToken means the parser accepted the shape but not the token.
+	ErrInvalidToken = errors.New("invalid token")
+	// ErrBadClaims means the claims were not the ones this package issues.
+	ErrBadClaims = errors.New("bad claims")
+	// ErrWrongTokenType means an access token was presented where a refresh one
+	// was required, or the other way round.
+	ErrWrongTokenType = errors.New("wrong token type")
+)
 
 func (a *Auth) signToken(sub string, typ tokenType, ttl time.Duration) (string, error) {
 	now := time.Now()
@@ -123,24 +143,24 @@ func (a *Auth) verifyToken(tokenStr string, expected tokenType) (*authClaims, er
 	// upload access, which means arbitrary builds shipped to every user.
 	// HandleLogin already refuses in that state; this closes the other door.
 	if len(a.cfg.JWTSecret) == 0 {
-		return nil, errors.New("auth not configured: JWT secret is empty")
+		return nil, ErrAuthNotConfigured
 	}
 	parser := jwt.NewParser(jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithLeeway(30*time.Second))
-	tok, err := parser.ParseWithClaims(tokenStr, &authClaims{}, func(t *jwt.Token) (interface{}, error) {
+	tok, err := parser.ParseWithClaims(tokenStr, &authClaims{}, func(*jwt.Token) (any, error) {
 		return a.cfg.JWTSecret, nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	if !tok.Valid {
-		return nil, errors.New("invalid token")
+		return nil, ErrInvalidToken
 	}
 	cl, ok := tok.Claims.(*authClaims)
 	if !ok {
-		return nil, errors.New("bad claims")
+		return nil, ErrBadClaims
 	}
 	if cl.Typ != string(expected) {
-		return nil, errors.New("wrong token type")
+		return nil, ErrWrongTokenType
 	}
 	return cl, nil
 }
@@ -167,8 +187,20 @@ func randCSRF() string {
 	return base64.RawURLEncoding.EncodeToString(b[:])
 }
 
+// setCookie issues one session cookie.
+//
+// gosec flags the literal below because it cannot see that Secure and HttpOnly
+// are set from values rather than from constants. Both are deliberate:
+//   - Secure follows cfg.CookieSecure, which defaults to true and is only turned
+//     off by an explicit COOKIE_SECURE=false on a plain-HTTP dev box;
+//   - httpOnly is false for exactly one cookie, csrf_token, which the admin UI
+//     has to read from JavaScript to echo back in the header — that is what
+//     makes double-submit work.
+//
+// TestSessionCookiesCarryEveryProtectionFlag asserts all three flags on the
+// cookies this actually issues, which is the check gosec cannot perform.
 func (a *Auth) setCookie(w http.ResponseWriter, name, val string, ttl time.Duration, httpOnly bool) {
-	c := &http.Cookie{
+	c := &http.Cookie{ // #nosec G124 -- flags are set from config/parameter, see above.
 		Name:     name,
 		Value:    val,
 		Path:     "/",
@@ -184,8 +216,11 @@ func (a *Auth) setCookie(w http.ResponseWriter, name, val string, ttl time.Durat
 	http.SetCookie(w, c)
 }
 
+// clearCookie expires one session cookie. The flags must match the ones the
+// cookie was issued with, or the browser keeps the original alongside the
+// expired copy — hence Secure from config again, and gosec's same blind spot.
 func (a *Auth) clearCookie(w http.ResponseWriter, name string) {
-	c := &http.Cookie{
+	c := &http.Cookie{ // #nosec G124 -- Secure follows cfg.CookieSecure; HttpOnly and SameSite are set below.
 		Name:     name,
 		Value:    "",
 		Path:     "/",
@@ -347,25 +382,43 @@ func (a *Auth) CurrentUser(r *http.Request) string {
 	if err != nil {
 		return ""
 	}
-	// Optional: CSRF check for state-changing methods
-	if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodDelete {
-		csrfC, _ := r.Cookie(cookieCSRF)
-		// Заголовок в канонической записи Go. На проводе он остаётся прежним:
-		// админка шлёт "X-CSRF-Token" (см. admin_ui/admin.js), имена заголовков
-		// в HTTP регистронезависимы, а Header.Get приводит ключ к канону сам.
-		// Менять здесь нечего, кроме написания строки, — и клиент об этом не знает.
-		csrfH := r.Header.Get(headerCSRF)
-		if csrfC == nil || csrfC.Value == "" || csrfH == "" {
-			return ""
-		}
-		// Constant time: a plain != returns as soon as two bytes differ, and the
-		// attacker controls the header, so the timing tells them how much of the
-		// token they have guessed right.
-		if subtle.ConstantTimeCompare([]byte(csrfH), []byte(csrfC.Value)) != 1 {
-			return ""
-		}
+	if isStateChanging(r.Method) && !csrfOK(r) {
+		return ""
 	}
 	return cl.Sub
+}
+
+// isStateChanging reports whether the method needs the CSRF check. Every
+// mutating verb is listed: leaving one out makes the corresponding endpoints
+// reachable from any page the admin has open.
+func isStateChanging(method string) bool {
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
+}
+
+// csrfOK verifies the double-submit pair: the value the admin UI read from the
+// non-HttpOnly cookie must come back in the header. A cross-site page can make
+// the browser send the cookie but cannot read it, so it cannot set the header.
+func csrfOK(r *http.Request) bool {
+	csrfC, _ := r.Cookie(cookieCSRF)
+	// Заголовок в канонической записи Go. На проводе он остаётся прежним:
+	// админка шлёт "X-CSRF-Token" (см. admin_ui/admin.js), имена заголовков
+	// в HTTP регистронезависимы, а Header.Get приводит ключ к канону сам.
+	// Менять здесь нечего, кроме написания строки, — и клиент об этом не знает.
+	csrfH := r.Header.Get(headerCSRF)
+	// Both halves must be present and non-empty: an empty-vs-empty comparison
+	// would otherwise "match" and let any cross-site POST through.
+	if csrfC == nil || csrfC.Value == "" || csrfH == "" {
+		return false
+	}
+	// Constant time: a plain != returns as soon as two bytes differ, and the
+	// attacker controls the header, so the timing tells them how much of the
+	// token they have guessed right.
+	return subtle.ConstantTimeCompare([]byte(csrfH), []byte(csrfC.Value)) == 1
 }
 
 // Middleware protects /admin and /admin/api except for the allowlist below.

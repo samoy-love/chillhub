@@ -13,7 +13,7 @@ import (
 // markdown so that a rebuild never infers them from the article body.
 type meta struct {
 	Published bool   `json:"published"`
-	CoverUrl  string `json:"coverUrl"`
+	CoverURL  string `json:"coverUrl"`
 }
 
 // dirs is the pair of directories one news scope lives in.
@@ -59,7 +59,13 @@ func readMeta(d dirs) map[string]meta {
 }
 
 func writeMeta(d dirs, m map[string]meta) error {
-	b, _ := json.MarshalIndent(m, "", "  ")
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	// #nosec G301 -- the content root is one tree created with the same mode
+	// throughout; news_private is kept out of reach by not being mapped by any
+	// web server, not by its directory bits.
 	if err := os.MkdirAll(d.priv, 0o755); err != nil {
 		return err
 	}

@@ -37,14 +37,14 @@ func unicodePathExtra(legacyName, utf8Name string) []byte {
 // download URL, so a mismatch is a 404 on install for every user.
 func TestZipNameTakesTheInfoZipUnicodePath(t *testing.T) {
 	const legacy = "\x8f\xa0\xaa\xa5\xe2.dat" // "Пакет.dat" in CP866
-	const real = "Пакет.dat"
+	const want = "Пакет.dat"
 	f := &zip.File{FileHeader: zip.FileHeader{
 		Name:    legacy,
 		NonUTF8: true,
-		Extra:   unicodePathExtra(legacy, real),
+		Extra:   unicodePathExtra(legacy, want),
 	}}
-	if got := zipFileDecodedName(f); got != real {
-		t.Fatalf("decoded %q, want %q", got, real)
+	if got := zipFileDecodedName(f); got != want {
+		t.Fatalf("decoded %q, want %q", got, want)
 	}
 }
 
@@ -70,8 +70,8 @@ func TestZipNameIgnoresBrokenUnicodePathField(t *testing.T) {
 // build published under an unreadable name that no client can request; Cyrillic
 // asset names are routine in this project.
 func TestCyrillicNameIsRecoveredFromCP437Mojibake(t *testing.T) {
-	const real = "Данные/уровень.dat"
-	cp866, err := charmap.CodePage866.NewEncoder().String(real)
+	const want = "Данные/уровень.dat"
+	cp866, err := charmap.CodePage866.NewEncoder().String(want)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,12 +79,12 @@ func TestCyrillicNameIsRecoveredFromCP437Mojibake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mojibake == real {
+	if mojibake == want {
 		t.Fatal("the fixture is not mojibake; the test would prove nothing")
 	}
 	f := &zip.File{FileHeader: zip.FileHeader{Name: mojibake, NonUTF8: true}}
-	if got := zipFileDecodedName(f); got != real {
-		t.Fatalf("recovered %q, want %q", got, real)
+	if got := zipFileDecodedName(f); got != want {
+		t.Fatalf("recovered %q, want %q", got, want)
 	}
 }
 

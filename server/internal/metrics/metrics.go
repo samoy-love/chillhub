@@ -185,13 +185,13 @@ func (h *Handlers) user(r *http.Request) string {
 	return h.CurrentUser(r)
 }
 
-// clampInt64 forces a client-supplied number into [0, max].
-func clampInt64(v, max int64) int64 {
+// clampInt64 forces a client-supplied number into [0, hi].
+func clampInt64(v, hi int64) int64 {
 	if v < 0 {
 		return 0
 	}
-	if v > max {
-		return max
+	if v > hi {
+		return hi
 	}
 	return v
 }
@@ -300,7 +300,11 @@ func (h *Handlers) append(ev Event) error {
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if err := os.MkdirAll(h.dir(), 0o755); err != nil {
+	// 0o750/0o600 rather than the 0o755/0o644 of the content tree: nothing
+	// serves <contentRoot>/metrics, it is read back only by this process, and
+	// the lines carry installIds. There is no reason for it to be world
+	// readable.
+	if err := os.MkdirAll(h.dir(), 0o750); err != nil {
 		return err
 	}
 	limit := h.maxBytes()
@@ -316,7 +320,7 @@ func (h *Handlers) append(ev Event) error {
 			}
 		}
 	}
-	f, err := os.OpenFile(h.path(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(h.path(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
@@ -391,17 +395,16 @@ type Summary struct {
 	DaysTruncated bool `json:"daysTruncated,omitempty"`
 }
 
-// Summary serves GET /admin/api/metrics/summary?from=&to=&gameId=.
-// from/to are RFC 3339; the default period is the last 30 days.
-func (h *Handlers) Summary(w http.ResponseWriter, r *http.Request) {
+// summaryPeriod resolves the requested period. It answers 400 itself and
+// reports ok=false, so the caller only has to return.
+func summaryPeriod(w http.ResponseWriter, r *http.Request) (from, to time.Time, ok bool) {
 	now := time.Now().UTC()
-	from := now.AddDate(0, 0, -30)
-	to := now
+	from, to = now.AddDate(0, 0, -30), now
 	if v := strings.TrimSpace(r.URL.Query().Get("from")); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
 			http.Error(w, "from must be RFC3339", http.StatusBadRequest)
-			return
+			return from, to, false
 		}
 		from = t.UTC()
 	}
@@ -409,27 +412,237 @@ func (h *Handlers) Summary(w http.ResponseWriter, r *http.Request) {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
 			http.Error(w, "to must be RFC3339", http.StatusBadRequest)
-			return
+			return from, to, false
 		}
 		to = t.UTC()
 	}
-	gameFilter := strings.TrimSpace(r.URL.Query().Get("gameId"))
+	return from, to, true
+}
 
-	out := Summary{
-		From:      from.Format(time.RFC3339),
-		To:        to.Format(time.RFC3339),
-		ByDay:     []DayBucket{},
-		ByGame:    []GameBucket{},
-		TopErrors: []CountBucket{},
+// summaryAgg accumulates one summary pass.
+//
+// It exists so the fold is a handful of small named steps rather than one long
+// closure inside the handler: these counters have to agree with each other
+// (Totals against ByDay against ByGame), and that is only reviewable when each
+// rule sits next to the field it updates. Every instance is local to one
+// request, so nothing here is shared between goroutines.
+type summaryAgg struct {
+	from, to   time.Time
+	gameFilter string
+
+	out      Summary
+	days     map[string]*DayBucket
+	gamesAgg map[string]*GameBucket
+	errs     map[string]int
+	appVers  map[string]int
+	oses     map[string]int
+	uniq     map[string]struct{}
+
+	installMsSum, installMsN int64
+	updateMsSum, updateMsN   int64
+}
+
+func newSummaryAgg(from, to time.Time, gameFilter string) *summaryAgg {
+	return &summaryAgg{
+		from:       from,
+		to:         to,
+		gameFilter: gameFilter,
+		out: Summary{
+			From:      from.Format(time.RFC3339),
+			To:        to.Format(time.RFC3339),
+			ByDay:     []DayBucket{},
+			ByGame:    []GameBucket{},
+			TopErrors: []CountBucket{},
+		},
+		days:     map[string]*DayBucket{},
+		gamesAgg: map[string]*GameBucket{},
+		errs:     map[string]int{},
+		appVers:  map[string]int{},
+		oses:     map[string]int{},
+		uniq:     map[string]struct{}{},
 	}
-	days := map[string]*DayBucket{}
-	gamesAgg := map[string]*GameBucket{}
-	errs := map[string]int{}
-	appVers := map[string]int{}
-	oses := map[string]int{}
-	uniq := map[string]struct{}{}
-	var installMsSum, updateMsSum int64
-	var installMsN, updateMsN int64
+}
+
+// accept reports whether one stored line belongs in this summary, returning its
+// parsed timestamp. An unparsable ts is dropped rather than counted at the zero
+// time, which would fall outside every requested period anyway.
+func (a *summaryAgg) accept(ev Event) (time.Time, bool) {
+	t, err := time.Parse(time.RFC3339, ev.TS)
+	if err != nil {
+		return time.Time{}, false
+	}
+	t = t.UTC()
+	if t.Before(a.from) || t.After(a.to) {
+		return time.Time{}, false
+	}
+	if a.gameFilter != "" && ev.GameID != a.gameFilter {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+// add folds one stored event into every breakdown it belongs to.
+func (a *summaryAgg) add(ev Event) {
+	t, ok := a.accept(ev)
+	if !ok {
+		return
+	}
+	// Old lines were written before the numeric caps existed, so clamp again
+	// here: one bogus value must not poison the totals.
+	ev.DurationMs = clampInt64(ev.DurationMs, maxDurationMs)
+	ev.Bytes = clampInt64(ev.Bytes, maxEventBytes)
+	a.out.Totals.Events++
+	if ev.InstallID != "" {
+		a.uniq[ev.InstallID] = struct{}{}
+	}
+	if ev.AppVersion != "" {
+		a.appVers[ev.AppVersion]++
+	}
+	if ev.OS != "" {
+		a.oses[ev.OS]++
+	}
+	a.out.Totals.BytesDownloaded += ev.Bytes
+	a.addKind(ev, a.dayBucket(t), a.gameBucket(ev))
+}
+
+// dayBucket returns the bucket for one calendar day, honouring the day cap.
+//
+// Over the cap the event still gets a bucket — a throwaway one that is never
+// published. Returning early instead made the headline Totals, already
+// incremented by then, disagree with the per-type breakdown without a word to
+// the caller; now only the day bucket is dropped, and DaysTruncated says so.
+func (a *summaryAgg) dayBucket(t time.Time) *DayBucket {
+	key := t.Format("2006-01-02")
+	if d := a.days[key]; d != nil {
+		return d
+	}
+	d := &DayBucket{Date: key}
+	if len(a.days) >= maxSummaryDays {
+		a.out.DaysTruncated = true
+		return d
+	}
+	a.days[key] = d
+	return d
+}
+
+// gameBucket returns the per-game bucket, or nil for an event with no game.
+func (a *summaryAgg) gameBucket(ev Event) *GameBucket {
+	if ev.GameID == "" {
+		return nil
+	}
+	g := a.gamesAgg[ev.GameID]
+	if g == nil {
+		g = &GameBucket{GameID: ev.GameID}
+		a.gamesAgg[ev.GameID] = g
+	}
+	g.Bytes += ev.Bytes
+	return g
+}
+
+// addKind folds the counters that depend on the event kind. g is nil for an
+// event that names no game.
+func (a *summaryAgg) addKind(ev Event, d *DayBucket, g *GameBucket) {
+	switch ev.Event {
+	case "launcher_start":
+		a.out.Totals.LauncherStarts++
+		d.LauncherStarts++
+	case "game_install":
+		a.addInstall(ev, d, g)
+	case "game_update":
+		a.addUpdate(ev, d, g)
+	case "game_launch":
+		a.out.Totals.GameLaunches++
+		d.GameLaunches++
+	case "error":
+		a.out.Totals.Errors++
+		d.Errors++
+		if g != nil {
+			g.Errors++
+		}
+		code := ev.ErrorCode
+		if code == "" {
+			code = "unknown"
+		}
+		a.errs[code]++
+	}
+}
+
+// addInstall also feeds the average duration, which counts successful installs
+// only: a cancelled download would otherwise drag the average down.
+func (a *summaryAgg) addInstall(ev Event, d *DayBucket, g *GameBucket) {
+	a.out.Totals.Installs++
+	d.Installs++
+	if g != nil {
+		g.Installs++
+	}
+	switch ev.Result {
+	case "ok":
+		a.out.Totals.InstallOK++
+		if ev.DurationMs > 0 {
+			a.installMsSum += ev.DurationMs
+			a.installMsN++
+		}
+	case "fail":
+		a.out.Totals.InstallFail++
+	}
+}
+
+// addUpdate is addInstall for the update counters.
+func (a *summaryAgg) addUpdate(ev Event, d *DayBucket, g *GameBucket) {
+	a.out.Totals.Updates++
+	d.Updates++
+	if g != nil {
+		g.Updates++
+	}
+	switch ev.Result {
+	case "ok":
+		a.out.Totals.UpdateOK++
+		if ev.DurationMs > 0 {
+			a.updateMsSum += ev.DurationMs
+			a.updateMsN++
+		}
+	case "fail":
+		a.out.Totals.UpdateFail++
+	}
+}
+
+// finish turns the accumulated maps into the sorted, capped response.
+func (a *summaryAgg) finish() Summary {
+	a.out.Totals.UniqueInstalls = len(a.uniq)
+	if a.installMsN > 0 {
+		a.out.Totals.AvgInstallMs = a.installMsSum / a.installMsN
+	}
+	if a.updateMsN > 0 {
+		a.out.Totals.AvgUpdateMs = a.updateMsSum / a.updateMsN
+	}
+	for _, d := range a.days {
+		a.out.ByDay = append(a.out.ByDay, *d)
+	}
+	sort.Slice(a.out.ByDay, func(i, j int) bool { return a.out.ByDay[i].Date < a.out.ByDay[j].Date })
+	for _, g := range a.gamesAgg {
+		a.out.ByGame = append(a.out.ByGame, *g)
+	}
+	sort.Slice(a.out.ByGame, func(i, j int) bool {
+		x, y := a.out.ByGame[i], a.out.ByGame[j]
+		if x.Installs+x.Updates != y.Installs+y.Updates {
+			return x.Installs+x.Updates > y.Installs+y.Updates
+		}
+		return x.GameID < y.GameID
+	})
+	a.out.TopErrors = topN(a.errs, 20)
+	a.out.AppVersion = topN(a.appVers, 20)
+	a.out.OS = topN(a.oses, 20)
+	return a.out
+}
+
+// Summary serves GET /admin/api/metrics/summary?from=&to=&gameId=.
+// from/to are RFC 3339; the default period is the last 30 days.
+func (h *Handlers) Summary(w http.ResponseWriter, r *http.Request) {
+	from, to, ok := summaryPeriod(w, r)
+	if !ok {
+		return
+	}
+	agg := newSummaryAgg(from, to, strings.TrimSpace(r.URL.Query().Get("gameId")))
 
 	// The scan deliberately runs WITHOUT h.mu.
 	//
@@ -441,116 +654,9 @@ func (h *Handlers) Summary(w http.ResponseWriter, r *http.Request) {
 	// can cost the rotated tail for that one summary. Both are acceptable for an
 	// aggregate; blocking ingest is not.
 	// Oldest generation first so byDay comes out chronological before sorting.
-	files := []string{h.prevPath(), h.path()}
 	var scanErr error
-	for _, p := range files {
-		if err := scanFile(p, func(ev Event) {
-			t, err := time.Parse(time.RFC3339, ev.TS)
-			if err != nil {
-				return
-			}
-			t = t.UTC()
-			if t.Before(from) || t.After(to) {
-				return
-			}
-			if gameFilter != "" && ev.GameID != gameFilter {
-				return
-			}
-			// Old lines were written before the numeric caps existed, so clamp
-			// again here: one bogus value must not poison the totals.
-			ev.DurationMs = clampInt64(ev.DurationMs, maxDurationMs)
-			ev.Bytes = clampInt64(ev.Bytes, maxEventBytes)
-			out.Totals.Events++
-			if ev.InstallID != "" {
-				uniq[ev.InstallID] = struct{}{}
-			}
-			if ev.AppVersion != "" {
-				appVers[ev.AppVersion]++
-			}
-			if ev.OS != "" {
-				oses[ev.OS]++
-			}
-			out.Totals.BytesDownloaded += ev.Bytes
-
-			key := t.Format("2006-01-02")
-			d := days[key]
-			if d == nil {
-				if len(days) >= maxSummaryDays {
-					// The day cap must not skip the event: Totals were already
-					// incremented above, so returning here made the headline
-					// numbers disagree with the per-type breakdown below without
-					// a word to the caller. The event is counted everywhere; only
-					// its (capped) day bucket is dropped, and the response says
-					// so.
-					d = &DayBucket{Date: key}
-					out.DaysTruncated = true
-				} else {
-					d = &DayBucket{Date: key}
-					days[key] = d
-				}
-			}
-			var g *GameBucket
-			if ev.GameID != "" {
-				g = gamesAgg[ev.GameID]
-				if g == nil {
-					g = &GameBucket{GameID: ev.GameID}
-					gamesAgg[ev.GameID] = g
-				}
-				g.Bytes += ev.Bytes
-			}
-
-			switch ev.Event {
-			case "launcher_start":
-				out.Totals.LauncherStarts++
-				d.LauncherStarts++
-			case "game_install":
-				out.Totals.Installs++
-				d.Installs++
-				if g != nil {
-					g.Installs++
-				}
-				switch ev.Result {
-				case "ok":
-					out.Totals.InstallOK++
-					if ev.DurationMs > 0 {
-						installMsSum += ev.DurationMs
-						installMsN++
-					}
-				case "fail":
-					out.Totals.InstallFail++
-				}
-			case "game_update":
-				out.Totals.Updates++
-				d.Updates++
-				if g != nil {
-					g.Updates++
-				}
-				switch ev.Result {
-				case "ok":
-					out.Totals.UpdateOK++
-					if ev.DurationMs > 0 {
-						updateMsSum += ev.DurationMs
-						updateMsN++
-					}
-				case "fail":
-					out.Totals.UpdateFail++
-				}
-			case "game_launch":
-				out.Totals.GameLaunches++
-				d.GameLaunches++
-			case "error":
-				out.Totals.Errors++
-				d.Errors++
-				if g != nil {
-					g.Errors++
-				}
-				code := ev.ErrorCode
-				if code == "" {
-					code = "unknown"
-				}
-				errs[code]++
-			}
-		}); err != nil {
+	for _, p := range []string{h.prevPath(), h.path()} {
+		if err := scanFile(p, agg.add); err != nil {
 			scanErr = err
 		}
 	}
@@ -559,32 +665,7 @@ func (h *Handlers) Summary(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read metrics", http.StatusInternalServerError)
 		return
 	}
-
-	out.Totals.UniqueInstalls = len(uniq)
-	if installMsN > 0 {
-		out.Totals.AvgInstallMs = installMsSum / installMsN
-	}
-	if updateMsN > 0 {
-		out.Totals.AvgUpdateMs = updateMsSum / updateMsN
-	}
-	for _, d := range days {
-		out.ByDay = append(out.ByDay, *d)
-	}
-	sort.Slice(out.ByDay, func(i, j int) bool { return out.ByDay[i].Date < out.ByDay[j].Date })
-	for _, g := range gamesAgg {
-		out.ByGame = append(out.ByGame, *g)
-	}
-	sort.Slice(out.ByGame, func(i, j int) bool {
-		a, b := out.ByGame[i], out.ByGame[j]
-		if a.Installs+a.Updates != b.Installs+b.Updates {
-			return a.Installs+a.Updates > b.Installs+b.Updates
-		}
-		return a.GameID < b.GameID
-	})
-	out.TopErrors = topN(errs, 20)
-	out.AppVersion = topN(appVers, 20)
-	out.OS = topN(oses, 20)
-	writeJSON(w, out)
+	writeJSON(w, agg.finish())
 }
 
 // Clear serves POST /admin/api/metrics/clear: drops both generations.
@@ -633,6 +714,9 @@ func topN(m map[string]int, n int) []CountBucket {
 // malformed line is skipped: half a line at the tail (a crash mid-append) must
 // not make the whole summary fail.
 func scanFile(path string, fn func(Event)) error {
+	// #nosec G304 -- path is h.path()/h.prevPath(): both are built from the
+	// configured content root and two constant name components. No part of it
+	// comes from a request.
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -640,7 +724,7 @@ func scanFile(path string, fn func(Event)) error {
 		}
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64<<10), MaxScanLineBytes)
 	for sc.Scan() {
@@ -662,11 +746,19 @@ func scanFile(path string, fn func(Event)) error {
 	return nil
 }
 
+// writeJSON marshals before writing a single header: an encoder that fails
+// mid-stream would have already sent 200 plus a truncated body, which a client
+// reports as corrupt JSON instead of as the server error it is.
 func writeJSON(w http.ResponseWriter, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		log.Printf("[metrics] encode response: %v", err)
+		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
-	b, _ := json.Marshal(v)
 	_, _ = w.Write(b)
 }

@@ -7,6 +7,7 @@ package news
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -20,6 +21,32 @@ import (
 
 	"ChillHub/server/internal/adminutil"
 )
+
+// The scope errors. They reach the admin panel as the body of a 400, so the
+// wording is what the operator reads; they are sentinels so that a caller can
+// tell them apart without matching on that text.
+var (
+	errGameIDRequired = errors.New("gameId required for scope=game")
+	errInvalidGameID  = errors.New("invalid gameId")
+	errInvalidScope   = errors.New("invalid scope")
+)
+
+// maxArticleBytes bounds one save or preview request body.
+//
+// The payload is markdown text, so tens of megabytes is already far past
+// anything the editor can produce. Without a bound ParseMultipartForm keeps its
+// parse window in RAM and spools the REST of the body to a temp file with no
+// ceiling at all, so one request could fill the disk.
+const maxArticleBytes = 32 << 20
+
+// formBool reads the truthy spellings the admin UI sends for a checkbox.
+func formBool(v string) bool {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case "true", "1", "yes":
+		return true
+	}
+	return false
+}
 
 // Handlers serves the news endpoints for one content root.
 type Handlers struct {
@@ -56,18 +83,18 @@ func (h *Handlers) Base(scope, gid string) (string, error) {
 	}
 	if scope == "game" {
 		if strings.TrimSpace(gid) == "" {
-			return "", fmt.Errorf("gameId required for scope=game")
+			return "", errGameIDRequired
 		}
 		if !adminutil.IsSafeGameID(gid) {
-			return "", fmt.Errorf("invalid gameId")
+			return "", errInvalidGameID
 		}
 		p := filepath.Join(root, "games", gid)
 		if !adminutil.EnsureWithin(root, p) {
-			return "", fmt.Errorf("invalid gameId")
+			return "", errInvalidGameID
 		}
 		return p, nil
 	}
-	return "", fmt.Errorf("invalid scope: %s", scope)
+	return "", fmt.Errorf("%w: %s", errInvalidScope, scope)
 }
 
 // dirs resolves both the public and the private directory of a scope. Every
@@ -82,7 +109,7 @@ func (h *Handlers) dirs(scope, gid string) (dirs, error) {
 	if scope == "game" {
 		priv = filepath.Join(priv, "games", gid)
 		if !adminutil.EnsureWithin(h.privateNewsRoot(), priv) {
-			return dirs{}, fmt.Errorf("invalid gameId")
+			return dirs{}, errInvalidGameID
 		}
 	}
 	return dirs{pub: pub, priv: priv}, nil
@@ -98,11 +125,15 @@ func articlePath(d dirs, slug string, published bool) (string, error) {
 }
 
 // findArticle locates the markdown of slug, wherever it currently lives.
+//
+// Both candidates come out of adminutil.NewsSlugPath, which rejects the slug
+// unless it passes IsSafeNewsSlug and the joined path stays inside the base.
 func findArticle(d dirs, slug string) (string, bool, error) {
 	pubPath, err := adminutil.NewsSlugPath(d.pub, slug)
 	if err != nil {
 		return "", false, err
 	}
+	// #nosec G703 -- pubPath was just validated by NewsSlugPath.
 	if _, err := os.Stat(pubPath); err == nil {
 		return pubPath, true, nil
 	}
@@ -110,24 +141,71 @@ func findArticle(d dirs, slug string) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
+	// #nosec G703 -- privPath was just validated by NewsSlugPath.
 	if _, err := os.Stat(privPath); err == nil {
 		return privPath, false, nil
 	}
 	return "", false, os.ErrNotExist
 }
 
+// writeArticle stores a markdown body at p, which articlePath resolved.
+func writeArticle(p, md string) error {
+	// #nosec G301 -- content/news is handed out by nginx, which runs as a
+	// different user than the API; 0750 would make it unreadable.
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	// Atomic: a published article lands in the tree the launcher reads, and a
+	// truncating write hands a reader in between a half-written markdown file.
+	return adminutil.WriteFileAtomic(p, []byte(md), 0o644)
+}
+
+// errRemoveFailed marks a deletion that failed on a file that does exist, as
+// opposed to a slug the caller spelled wrong.
+var errRemoveFailed = errors.New("failed to remove article file")
+
+// removeArticleFiles drops the markdown of slug from both directories and
+// reports whether anything was actually there. The article may sit on either
+// side, so both candidates are tried and only a file that exists and refuses to
+// go away is an error.
+func removeArticleFiles(d dirs, slug string) (bool, error) {
+	removed := false
+	for _, published := range []bool{true, false} {
+		p, err := articlePath(d, slug, published)
+		if err != nil {
+			return false, err
+		}
+		// #nosec G703 -- p comes from articlePath, i.e. from NewsSlugPath.
+		err = os.Remove(p)
+		switch {
+		case err == nil:
+			removed = true
+		case !os.IsNotExist(err):
+			return false, fmt.Errorf("%w %q: %w", errRemoveFailed, p, err)
+		}
+	}
+	return removed, nil
+}
+
 // moveFile relocates src onto dst, replacing dst if it exists (os.Rename
 // refuses to overwrite on Windows).
+//
+// Both paths are produced by articlePath, i.e. by adminutil.NewsSlugPath, so
+// neither can point outside the two news directories.
 func moveFile(src, dst string) error {
 	if src == dst {
 		return nil
 	}
+	// #nosec G301 -- content/news is handed out by nginx, which runs as a
+	// different user than the API; 0750 would make it unreadable.
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
+	// #nosec G703 -- src and dst come from articlePath, see the doc comment.
 	if err := os.Rename(src, dst); err == nil {
 		return nil
 	}
+	// #nosec G304 -- src comes from articlePath, see the doc comment.
 	b, err := os.ReadFile(src)
 	if err != nil {
 		return err
@@ -136,6 +214,7 @@ func moveFile(src, dst string) error {
 	if err := adminutil.WriteFileAtomic(dst, b, 0o644); err != nil {
 		return err
 	}
+	// #nosec G703 -- src comes from articlePath, see the doc comment.
 	return os.Remove(src)
 }
 
@@ -163,7 +242,7 @@ func (h *Handlers) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(b)
+	_, _ = w.Write(b)
 }
 
 // Get returns the markdown of one slug together with its metadata.
@@ -191,6 +270,7 @@ func (h *Handlers) Get(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "article not found", http.StatusNotFound)
 		return
 	}
+	// #nosec G304 -- p comes from findArticle, i.e. from NewsSlugPath.
 	b, err := os.ReadFile(p)
 	if err != nil {
 		http.Error(w, "article not found", http.StatusNotFound)
@@ -198,7 +278,7 @@ func (h *Handlers) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	meta := readMeta(d)[slug]
 	w.Header().Set("Content-Type", "application/json")
-	adminutil.WriteJSON(w, map[string]any{"markdown": string(b), "published": meta.Published, "coverUrl": meta.CoverUrl})
+	adminutil.WriteJSON(w, map[string]any{"markdown": string(b), "published": meta.Published, "coverUrl": meta.CoverURL})
 }
 
 // Save writes the markdown for a slug, updates metadata and rebuilds the index.
@@ -206,6 +286,10 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 	if !adminutil.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
+	// Bound the whole request before parsing: ParseMultipartForm spools whatever
+	// does not fit its window to a temp file, with no ceiling of its own.
+	r.Body = http.MaxBytesReader(w, r.Body, maxArticleBytes)
+	// #nosec G120 -- the body is bounded by the MaxBytesReader above.
 	if err := r.ParseMultipartForm(16 << 20); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -215,8 +299,7 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 	slug := r.FormValue("slug")
 	md := r.FormValue("markdown")
 	cov := strings.TrimSpace(r.FormValue("coverUrl"))
-	pubStr := strings.TrimSpace(strings.ToLower(r.FormValue("published")))
-	pub := pubStr == "true" || pubStr == "1" || pubStr == "yes"
+	pub := formBool(r.FormValue("published"))
 	if slug == "" {
 		http.Error(w, "missing slug", http.StatusBadRequest)
 		return
@@ -239,7 +322,7 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 	m := readMeta(d)
 	cur := m[slug]
 	if cov != "" {
-		cur.CoverUrl = cov
+		cur.CoverURL = cov
 	}
 	// honor explicit published flag in save (if not provided, leave as-is)
 	if r.Form.Has("published") {
@@ -253,20 +336,14 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		log.Printf("[news:save] mkdir %s: %v", filepath.Dir(p), err)
-		http.Error(w, "failed to store article", http.StatusInternalServerError)
-		return
-	}
-	// Atomic: a published article lands in the tree the launcher reads, and a
-	// truncating write hands a reader in between a half-written markdown file.
-	if err := adminutil.WriteFileAtomic(p, []byte(md), 0o644); err != nil {
-		log.Printf("[news:save] write %s: %v", p, err)
+	if err := writeArticle(p, md); err != nil {
+		log.Printf("[news:save] write %q: %v", p, err)
 		http.Error(w, "failed to store article", http.StatusInternalServerError)
 		return
 	}
 	// Drop the copy in the other directory, if the article moved.
-	if other, err := articlePath(d, slug, !cur.Published); err == nil {
+	if other, oerr := articlePath(d, slug, !cur.Published); oerr == nil {
+		// #nosec G703 -- other comes from articlePath, i.e. from NewsSlugPath.
 		_ = os.Remove(other)
 	}
 	// The markdown is on disk; if the metadata does not follow it, the published
@@ -304,22 +381,15 @@ func (h *Handlers) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	// The article may sit in either directory, so remove both candidates and
-	// report 500 only when a file that does exist refuses to go away.
-	removed := false
-	for _, published := range []bool{true, false} {
-		p, perr := articlePath(d, slug, published)
-		if perr != nil {
-			http.Error(w, perr.Error(), http.StatusBadRequest)
-			return
-		}
-		if err := os.Remove(p); err == nil {
-			removed = true
-		} else if !os.IsNotExist(err) {
-			log.Printf("[news:delete] remove %s: %v", p, err)
+	removed, err := removeArticleFiles(d, slug)
+	if err != nil {
+		if errors.Is(err, errRemoveFailed) {
+			log.Printf("[news:delete] remove %q: %v", slug, err)
 			http.Error(w, "failed to delete article", http.StatusInternalServerError)
 			return
 		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	if !removed {
 		// Nothing was there to begin with. That is a 404, not a server fault: the
@@ -358,8 +428,7 @@ func (h *Handlers) Publish(w http.ResponseWriter, r *http.Request) {
 	scope := r.FormValue("scope")
 	gid := r.FormValue("gameId")
 	slug := r.FormValue("slug")
-	pubStr := strings.TrimSpace(strings.ToLower(r.FormValue("published")))
-	pub := pubStr == "true" || pubStr == "1" || pubStr == "yes"
+	pub := formBool(r.FormValue("published"))
 	if strings.TrimSpace(slug) == "" {
 		http.Error(w, "missing slug", http.StatusBadRequest)
 		return
@@ -429,6 +498,9 @@ func (h *Handlers) Preview(w http.ResponseWriter, r *http.Request) {
 	if !adminutil.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
+	// Same bound as Save: the editor previews the body it is about to save.
+	r.Body = http.MaxBytesReader(w, r.Body, maxArticleBytes)
+	// #nosec G120 -- the body is bounded by the MaxBytesReader above.
 	if err := r.ParseMultipartForm(4 << 20); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -460,6 +532,7 @@ func (h *Handlers) UploadCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, MaxImageBytes+(1<<20))
+	// #nosec G120 -- the body is bounded by the MaxBytesReader above.
 	if err := r.ParseMultipartForm(imageFormMemory); err != nil {
 		http.Error(w, "request too large or malformed", http.StatusBadRequest)
 		return
@@ -480,8 +553,10 @@ func (h *Handlers) UploadCover(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing file: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	base := h.assetsRoot()
+	// #nosec G301 -- the gallery is handed out under /assets/ by nginx, which
+	// runs as a different user than the API; 0750 would make it unreadable.
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -503,48 +578,52 @@ func (h *Handlers) UploadCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := adminutil.WriteFileAtomic(outPath, buf, 0o644); err != nil {
-		log.Printf("[news:cover] write %s: %v", outPath, err)
+		log.Printf("[news:cover] write %q: %v", outPath, err)
 		http.Error(w, "failed to store cover", http.StatusInternalServerError)
 		return
 	}
 	// Return a web path expected by the client/launcher
-	url := "/assets/" + name
+	coverURL := "/assets/" + name
 	// Optionally update meta if scope+slug provided (already validated above).
-	if slug != "" {
-		if d, err := h.dirs(scope, gid); err == nil {
-			h.mu.Lock()
-			defer h.mu.Unlock()
-			m := readMeta(d)
-			cur := m[slug]
-			cur.CoverUrl = url
-			m[slug] = cur
-			// The image is stored either way, but if the metadata write fails
-			// the article keeps its old cover — reporting success would hide a
-			// change that did not happen.
-			if err := writeMeta(d, m); err != nil {
-				log.Printf("[news:cover] write meta: %v", err)
-				http.Error(w, "cover stored but metadata update failed", http.StatusInternalServerError)
-				return
-			}
-			if err := RebuildIndex(d); err != nil {
-				log.Printf("[news:cover] rebuild index: %v", err)
-				http.Error(w, "cover stored but index rebuild failed", http.StatusInternalServerError)
-				return
-			}
+	if d, derr := h.dirs(scope, gid); slug != "" && derr == nil {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if msg, err := h.attachCover(d, slug, coverURL); err != nil {
+			log.Printf("[news:cover] %s: %v", msg, err)
+			http.Error(w, "cover stored but "+msg, http.StatusInternalServerError)
+			return
 		}
 	}
-	adminutil.WriteJSON(w, map[string]string{"coverUrl": url})
+	adminutil.WriteJSON(w, map[string]string{"coverUrl": coverURL})
+}
+
+// attachCover records coverURL as the cover of slug and rebuilds the index. The
+// image is stored either way, but if the metadata write fails the article keeps
+// its old cover — reporting success would hide a change that did not happen.
+// The returned string names the step that failed, for the log and the response.
+func (h *Handlers) attachCover(d dirs, slug, coverURL string) (string, error) {
+	m := readMeta(d)
+	cur := m[slug]
+	cur.CoverURL = coverURL
+	m[slug] = cur
+	if err := writeMeta(d, m); err != nil {
+		return "metadata update failed", err
+	}
+	if err := RebuildIndex(d); err != nil {
+		return "index rebuild failed", err
+	}
+	return "", nil
 }
 
 // newsItem is one entry of index.json. The field names are the wire contract
 // with both the launcher and the admin UI.
 type newsItem struct {
-	Id        string `json:"id"`
+	ID        string `json:"id"`
 	Title     string `json:"title"`
 	Slug      string `json:"slug"`
 	CreatedAt string `json:"createdAt"`
 	Summary   string `json:"summary"`
-	CoverUrl  string `json:"coverUrl"`
+	CoverURL  string `json:"coverUrl"`
 	Published bool   `json:"published"`
 }
 
@@ -576,76 +655,14 @@ func markdownSlugs(dir string) []string {
 // build, or an article whose flag just changed) are moved here, which doubles
 // as the migration path for content published before this split.
 func RebuildIndex(d dirs) error {
+	// #nosec G301 -- the content root is one tree managed by the deploy; see the
+	// note on moveFile.
 	if err := os.MkdirAll(d.priv, 0o755); err != nil {
 		return err
 	}
-	meta := readMeta(d)
-
-	// Union of both directories; the public one may still hold drafts.
-	seen := map[string]bool{}
-	slugs := make([]string, 0)
-	for _, dir := range []string{d.pub, d.priv} {
-		for _, s := range markdownSlugs(dir) {
-			if !seen[s] {
-				seen[s] = true
-				slugs = append(slugs, s)
-			}
-		}
-	}
-
-	var items []newsItem
-	for _, slug := range slugs {
-		if !adminutil.IsSafeNewsSlug(slug) {
-			continue
-		}
-		pubWanted := meta[slug].Published
-		src, atPub, err := findArticle(d, slug)
-		if err != nil {
-			continue
-		}
-		if atPub != pubWanted {
-			dst, derr := articlePath(d, slug, pubWanted)
-			if derr == nil {
-				if err := moveFile(src, dst); err != nil {
-					return err
-				}
-				src = dst
-			}
-		}
-		p := src
-		b, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		body := string(b)
-		// compute content-based fields
-		t, s, cFromBody := ExtractMeta(body)
-		// take cover and published strictly from meta file; do not infer on rebuild
-		metaEntry, ok := meta[slug]
-		c := ""
-		pub := false
-		if ok {
-			c = metaEntry.CoverUrl
-			pub = metaEntry.Published
-		} else {
-			// keep index consistent even if meta entry missing
-			c = cFromBody
-			pub = false
-		}
-		st, _ := os.Stat(p)
-		created := time.Now().UTC().Format(time.RFC3339)
-		if st != nil {
-			created = st.ModTime().UTC().Format(time.RFC3339)
-		}
-		items = append(items, newsItem{
-			Id:        slug,
-			Title:     t,
-			Slug:      slug,
-			CreatedAt: created,
-			Summary:   s,
-			CoverUrl:  c,
-			Published: pub,
-		})
+	items, err := collectItems(d, readMeta(d))
+	if err != nil {
+		return err
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt > items[j].CreatedAt })
 
@@ -658,6 +675,7 @@ func RebuildIndex(d dirs) error {
 	if err := writeIndex(adminIndexPath(d), items); err != nil {
 		return err
 	}
+	// #nosec G301 -- content/news is handed out by nginx; see moveFile.
 	if err := os.MkdirAll(d.pub, 0o755); err != nil {
 		return err
 	}
@@ -670,14 +688,121 @@ func RebuildIndex(d dirs) error {
 	return nil
 }
 
+// locateArticle is findArticle with "not there" reduced to a plain bool: the
+// rebuild simply skips a slug whose markdown it cannot find.
+func locateArticle(d dirs, slug string) (string, bool, bool) {
+	p, atPub, err := findArticle(d, slug)
+	return p, atPub, err == nil
+}
+
+// readArticleBody returns the markdown stored at p, which findArticle resolved,
+// or false when it cannot be read.
+func readArticleBody(p string) (string, bool) {
+	// #nosec G304 -- p comes from findArticle, i.e. from NewsSlugPath.
+	b, err := os.ReadFile(p)
+	return string(b), err == nil
+}
+
+// knownSlugs is the union of both directories, in public-then-private order.
+// The public one may still hold drafts written by an older build.
+func knownSlugs(d dirs) []string {
+	seen := map[string]bool{}
+	slugs := make([]string, 0)
+	for _, dir := range []string{d.pub, d.priv} {
+		for _, s := range markdownSlugs(dir) {
+			if !seen[s] {
+				seen[s] = true
+				slugs = append(slugs, s)
+			}
+		}
+	}
+	return slugs
+}
+
+// collectItems builds the index entry of every article in the scope, putting
+// each markdown on the side its published flag calls for along the way.
+//
+// A slug whose file cannot be found or read is left out of the index; a move
+// that fails is an error, because dropping the article silently would take it
+// off the launcher's list without anybody asking for that.
+func collectItems(d dirs, meta map[string]meta) ([]newsItem, error) {
+	var items []newsItem
+	for _, slug := range knownSlugs(d) {
+		if !adminutil.IsSafeNewsSlug(slug) {
+			continue
+		}
+		src, ok, err := placeArticle(d, slug, meta[slug].Published)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		body, ok := readArticleBody(src)
+		if !ok {
+			continue
+		}
+		items = append(items, indexItem(slug, src, body, meta))
+	}
+	return items, nil
+}
+
+// placeArticle moves the markdown of slug to the directory pubWanted calls for
+// and reports where it ended up. ok is false when the slug has no file at all.
+func placeArticle(d dirs, slug string, pubWanted bool) (string, bool, error) {
+	src, atPub, ok := locateArticle(d, slug)
+	if !ok {
+		return "", false, nil
+	}
+	if atPub != pubWanted {
+		if dst, derr := articlePath(d, slug, pubWanted); derr == nil {
+			if err := moveFile(src, dst); err != nil {
+				return "", false, err
+			}
+			src = dst
+		}
+	}
+	return src, true, nil
+}
+
+// indexItem builds the index entry of one article.
+func indexItem(slug, path, body string, meta map[string]meta) newsItem {
+	// compute content-based fields
+	title, summary, coverFromBody := ExtractMeta(body)
+	// Take cover and published strictly from the meta file; do not infer on
+	// rebuild. Without an entry the index still has to stay consistent, so the
+	// body's first image stands in and the article counts as a draft.
+	cover, published := coverFromBody, false
+	if entry, ok := meta[slug]; ok {
+		cover, published = entry.CoverURL, entry.Published
+	}
+	created := time.Now().UTC().Format(time.RFC3339)
+	// #nosec G703 -- path comes from findArticle, i.e. from NewsSlugPath.
+	if st, err := os.Stat(path); err == nil {
+		created = st.ModTime().UTC().Format(time.RFC3339)
+	}
+	return newsItem{
+		ID:        slug,
+		Title:     title,
+		Slug:      slug,
+		CreatedAt: created,
+		Summary:   summary,
+		CoverURL:  cover,
+		Published: published,
+	}
+}
+
 // writeIndex serialises an index file.
 func writeIndex(path string, items []newsItem) error {
 	if items == nil {
 		items = []newsItem{}
 	}
-	b, _ := json.MarshalIndent(struct {
+	b, err := json.MarshalIndent(struct {
 		Items []newsItem `json:"items"`
 	}{Items: items}, "", "  ")
+	if err != nil {
+		return err
+	}
 	// index.json is served to the launcher straight off disk; half of it is
 	// worse than the previous generation of it.
 	return adminutil.WriteFileAtomic(path, b, 0o644)

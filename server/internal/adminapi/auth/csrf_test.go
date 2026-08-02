@@ -41,9 +41,9 @@ func TestCSRFHeaderMustMatchCookie(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/x", nil)
-			r.AddCookie(&http.Cookie{Name: cookieAccess, Value: access})
-			r.AddCookie(&http.Cookie{Name: cookieCSRF, Value: token})
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/admin/api/x", nil)
+			addTestCookie(r, cookieAccess, access)
+			addTestCookie(r, cookieCSRF, token)
 			if c.header != "" {
 				r.Header.Set(headerCSRF, c.header)
 			}
@@ -61,8 +61,8 @@ func TestCSRFNotRequiredForGet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := httptest.NewRequest(http.MethodGet, "http://example.com/admin/api/x", nil)
-	r.AddCookie(&http.Cookie{Name: cookieAccess, Value: access})
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/admin/api/x", nil)
+	addTestCookie(r, cookieAccess, access)
 	if got := a.CurrentUser(r); got != "admin" {
 		t.Fatalf("CurrentUser = %q, want admin", got)
 	}

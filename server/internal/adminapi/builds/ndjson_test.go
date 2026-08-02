@@ -16,7 +16,7 @@ import (
 // line that is not JSON at all (i.e. plain text injected into the stream).
 func ndjsonEvents(t *testing.T, body string) (events []map[string]any, garbage []string) {
 	t.Helper()
-	for _, line := range strings.Split(strings.TrimSpace(body), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(body), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

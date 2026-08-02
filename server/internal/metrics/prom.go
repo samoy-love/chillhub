@@ -11,6 +11,7 @@
 // Рестарт сервиса обнуляет их — для counter это штатная ситуация, rate() и
 // increase() распознают сброс. Абсолютные суммы «за всё время» по-прежнему
 // живут в файле, а не тут.
+
 package metrics
 
 import (
@@ -108,7 +109,14 @@ func (p *Product) Record(ev Event) {
 	}
 	game := gameLabel(ev.GameID)
 	p.events.Inc(labelOr(ev.Event, "unknown"))
+	p.recordVolume(ev, game)
+	p.recordKind(ev, game)
+}
 
+// recordVolume folds the "how much traffic did this cost" counters. Every field
+// is optional: an older launcher reports none of them, and a zero must not be
+// added as if it were a measurement.
+func (p *Product) recordVolume(ev Event, game string) {
 	if ev.Bytes > 0 {
 		p.bytes.Add(float64(ev.Bytes), game)
 	}
@@ -124,27 +132,35 @@ func (p *Product) Record(ev Event) {
 	if ev.HashMismatches > 0 {
 		p.mismatch.Add(float64(ev.HashMismatches), game)
 	}
+}
 
+// recordKind folds the counters that depend on the event kind.
+func (p *Product) recordKind(ev Event, game string) {
 	result := labelOr(ev.Result, "unknown")
 	switch ev.Event {
 	case "launcher_start":
 		p.starts.Inc(versionLabel(ev.AppVersion))
 	case "game_install":
 		p.installs.Inc(game, result)
-		if ev.Result == "ok" && ev.DurationMs > 0 {
-			p.installMs.Observe(float64(ev.DurationMs)/1000, game)
-		}
+		observeDuration(p.installMs, ev, game)
 	case "game_update":
 		p.updates.Inc(game, result, updateMode(ev))
-		if ev.Result == "ok" && ev.DurationMs > 0 {
-			p.updateMs.Observe(float64(ev.DurationMs)/1000, game)
-		}
+		observeDuration(p.updateMs, ev, game)
 	case "game_launch":
 		p.launches.Inc(game)
 	case "integrity_check":
 		p.integrity.Inc(game, result)
 	case "error":
 		p.errors.Inc(labelOr(ev.ErrorCode, "unknown"))
+	}
+}
+
+// observeDuration records how long a successful operation took. A failed or
+// cancelled run is deliberately not observed: it stopped early, so its duration
+// would drag the quantiles towards a number nobody waited for.
+func observeDuration(h *promexp.Histogram, ev Event, game string) {
+	if ev.Result == "ok" && ev.DurationMs > 0 {
+		h.Observe(float64(ev.DurationMs)/1000, game)
 	}
 }
 
@@ -206,7 +222,7 @@ func labelOr(v, def string) string {
 // codes. Anything else — spaces, quotes, non-ASCII — is a value nobody meant to
 // aggregate by.
 func isSafeLabel(s string) bool {
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		c := s[i]
 		switch {
 		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':

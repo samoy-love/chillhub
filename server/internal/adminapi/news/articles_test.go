@@ -12,13 +12,31 @@ import (
 	"unicode/utf8"
 )
 
-// readIndex loads one of the two index.json files as a slug -> item map.
-func readIndex(t *testing.T, path string) map[string]newsItem {
+// readFile reads a file the test itself put under its own t.TempDir().
+func readFile(t *testing.T, path string) []byte {
 	t.Helper()
+	// #nosec G304 -- path is built by the test from the t.TempDir() it created.
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
+	return b
+}
+
+// markdownOf pulls the markdown field out of a decoded Get answer.
+func markdownOf(t *testing.T, got map[string]any) string {
+	t.Helper()
+	md, ok := got["markdown"].(string)
+	if !ok {
+		t.Fatalf("the answer carries no markdown: %v", got)
+	}
+	return md
+}
+
+// readIndex loads one of the two index.json files as a slug -> item map.
+func readIndex(t *testing.T, path string) map[string]newsItem {
+	t.Helper()
+	b := readFile(t, path)
 	var idx struct {
 		Items []newsItem `json:"items"`
 	}
@@ -46,7 +64,7 @@ func adminIndex(t *testing.T, root string) map[string]newsItem {
 func getArticle(t *testing.T, h *Handlers, slug string) (int, map[string]any) {
 	t.Helper()
 	w := httptest.NewRecorder()
-	h.Get(w, httptest.NewRequest(http.MethodGet,
+	h.Get(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet,
 		"http://example.com/admin/news/get?scope=launcher&slug="+url.QueryEscape(slug), nil))
 	var out map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &out)
@@ -70,7 +88,7 @@ func TestCyrillicSlugWorksInEveryHandler(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("get: %d", code)
 	}
-	if !strings.Contains(got["markdown"].(string), "Обновление") {
+	if !strings.Contains(markdownOf(t, got), "Обновление") {
 		t.Fatalf("markdown lost: %v", got)
 	}
 
@@ -89,7 +107,7 @@ func TestCyrillicSlugWorksInEveryHandler(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	h.Delete(w, httptest.NewRequest(http.MethodPost,
+	h.Delete(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 		"http://example.com/admin/news/delete?scope=launcher&slug="+url.QueryEscape(slug), nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("delete: %d %s", w.Code, w.Body.String())
@@ -105,12 +123,12 @@ func TestCyrillicSlugWorksInEveryHandler(t *testing.T) {
 func TestCyrillicSlugWithTraversalIsRejected(t *testing.T) {
 	h, root := newHandlers(t)
 	outside := filepath.Join(root, "секрет.md")
-	if err := os.WriteFile(outside, []byte("TOP-SECRET"), 0o644); err != nil {
+	if err := os.WriteFile(outside, []byte("TOP-SECRET"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, slug := range []string{"../секрет", "..\\секрет", "новости/секрет", "..новость", ".новость"} {
 		w := httptest.NewRecorder()
-		h.Get(w, httptest.NewRequest(http.MethodGet,
+		h.Get(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet,
 			"http://example.com/admin/news/get?scope=launcher&slug="+url.QueryEscape(slug), nil))
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("slug %q: got %d, want 400", slug, w.Code)
@@ -134,10 +152,7 @@ func TestRejectedSaveLeavesTheIndexIntact(t *testing.T) {
 	saveArticle(t, h, "live", "# Live\n\nbody", true)
 
 	pubPath := filepath.Join(root, "news", "index.json")
-	before, err := os.ReadFile(pubPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := readFile(t, pubPath)
 
 	rejected := []map[string]string{
 		{"scope": "launcher", "slug": "../pwned", "markdown": "# x"},
@@ -153,6 +168,7 @@ func TestRejectedSaveLeavesTheIndexIntact(t *testing.T) {
 		}
 	}
 
+	// #nosec G304 -- pubPath is inside the t.TempDir() this test created.
 	after, err := os.ReadFile(pubPath)
 	if err != nil {
 		t.Fatalf("the public index disappeared after rejected saves: %v", err)
@@ -217,10 +233,10 @@ func TestRebuildResolvesAnArticlePresentInBothTrees(t *testing.T) {
 	// Simulate the leftover: an older draft body still sitting in the private
 	// tree while the article is published.
 	priv := filepath.Join(root, "news_private")
-	if err := os.MkdirAll(priv, 0o755); err != nil {
+	if err := os.MkdirAll(priv, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(priv, "story.md"), []byte("# stale draft copy"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(priv, "story.md"), []byte("# stale draft copy"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -235,6 +251,7 @@ func TestRebuildResolvesAnArticlePresentInBothTrees(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "news", "story.md")); err == nil {
 		t.Fatal("the unpublished article is still in the served tree")
 	}
+	// #nosec G304 -- priv is inside the t.TempDir() this test created.
 	b, err := os.ReadFile(filepath.Join(priv, "story.md"))
 	if err != nil {
 		t.Fatalf("the article was lost instead of moved: %v", err)
@@ -279,8 +296,8 @@ func TestArticleWithoutMetadataFallsBackCleanly(t *testing.T) {
 	if it.Summary != "просто текст без заголовка" {
 		t.Errorf("summary = %q, want the first paragraph", it.Summary)
 	}
-	if it.CoverUrl != "" {
-		t.Errorf("a cover was invented: %q", it.CoverUrl)
+	if it.CoverURL != "" {
+		t.Errorf("a cover was invented: %q", it.CoverURL)
 	}
 }
 
@@ -296,9 +313,8 @@ func TestVeryLongArticleRoundTrips(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("get: %d", code)
 	}
-	if got["markdown"].(string) != body {
-		t.Fatalf("the article was altered: stored %d bytes, got %d",
-			len(body), len(got["markdown"].(string)))
+	if md := markdownOf(t, got); md != body {
+		t.Fatalf("the article was altered: stored %d bytes, got %d", len(body), len(md))
 	}
 	if _, ok := publicIndex(t, root)["long"]; !ok {
 		t.Fatal("the long article is missing from the index")
@@ -382,8 +398,8 @@ func TestPublishedIndexCarriesNoMarkdownInTheSummary(t *testing.T) {
 	if it.Summary != "Мы починили загрузку." {
 		t.Fatalf("summary = %q, want the first sentence of the article", it.Summary)
 	}
-	if it.CoverUrl != "" {
-		t.Errorf("the cover comes from the metadata, not from the body: %q", it.CoverUrl)
+	if it.CoverURL != "" {
+		t.Errorf("the cover comes from the metadata, not from the body: %q", it.CoverURL)
 	}
 }
 
@@ -415,7 +431,7 @@ func TestSummaryIsBoundedAndCutOnAWordAndRuneBoundary(t *testing.T) {
 	}
 	// Only the index is shortened; the article itself is untouched.
 	code, got := getArticle(t, h, "long")
-	if code != http.StatusOK || !strings.HasSuffix(got["markdown"].(string), para) {
+	if code != http.StatusOK || !strings.HasSuffix(markdownOf(t, got), para) {
 		t.Fatalf("the stored article was truncated too (%d)", code)
 	}
 }
@@ -481,7 +497,7 @@ func TestUploadCoverAttachesTheImageToTheArticle(t *testing.T) {
 	if !strings.HasPrefix(resp["coverUrl"], "/assets/") {
 		t.Fatalf("coverUrl = %q, the launcher resolves it against /assets/", resp["coverUrl"])
 	}
-	if got := publicIndex(t, root)["story"].CoverUrl; got != resp["coverUrl"] {
+	if got := publicIndex(t, root)["story"].CoverURL; got != resp["coverUrl"] {
 		t.Errorf("index coverUrl = %q, want %q", got, resp["coverUrl"])
 	}
 	if _, m := getArticle(t, h, "story"); m["coverUrl"] != resp["coverUrl"] {
@@ -505,7 +521,7 @@ func TestUploadCoverRejectsTraversalSlug(t *testing.T) {
 			t.Errorf("slug %q: got %d, want 400", slug, w.Code)
 		}
 	}
-	if publicIndex(t, root)["story"].CoverUrl != "" {
+	if publicIndex(t, root)["story"].CoverURL != "" {
 		t.Error("a rejected upload still changed an article's cover")
 	}
 	// The rejection also has to come before the file hits the disk. The name is
@@ -514,7 +530,7 @@ func TestUploadCoverRejectsTraversalSlug(t *testing.T) {
 	// piling up in the picker every editor browses.
 	entries, err := os.ReadDir(filepath.Join(root, "news", "assets"))
 	if err == nil && len(entries) > 0 {
-		var got []string
+		got := make([]string, 0, len(entries))
 		for _, e := range entries {
 			got = append(got, e.Name())
 		}
@@ -542,7 +558,7 @@ func TestDeleteKeepsTheSharedAssetButDropsTheMetaEntry(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	h.Delete(w, httptest.NewRequest(http.MethodPost,
+	h.Delete(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 		"http://example.com/admin/news/delete?scope=launcher&slug=story", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("delete: %d %s", w.Code, w.Body.String())
@@ -553,10 +569,7 @@ func TestDeleteKeepsTheSharedAssetButDropsTheMetaEntry(t *testing.T) {
 	}
 	// The dangling coverUrl must be gone from both the metadata and the index,
 	// otherwise the next rebuild resurrects the deleted card.
-	b, err := os.ReadFile(filepath.Join(root, "news_private", "news_meta.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	b := readFile(t, filepath.Join(root, "news_private", "news_meta.json"))
 	if strings.Contains(string(b), "story") {
 		t.Errorf("news_meta.json still references the deleted article: %s", b)
 	}
@@ -575,7 +588,7 @@ func TestGetMissingArticleIsNotFound(t *testing.T) {
 		t.Fatalf("got %d, want 404", code)
 	}
 	w := httptest.NewRecorder()
-	h.Get(w, httptest.NewRequest(http.MethodGet, "http://example.com/admin/news/get?scope=launcher", nil))
+	h.Get(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/admin/news/get?scope=launcher", nil))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("a missing slug answered %d, want 400", w.Code)
 	}
@@ -591,7 +604,7 @@ func TestGetMissingArticleIsNotFound(t *testing.T) {
 func TestDeleteMissingArticleIsNotFound(t *testing.T) {
 	h, _ := newHandlers(t)
 	w := httptest.NewRecorder()
-	h.Delete(w, httptest.NewRequest(http.MethodPost,
+	h.Delete(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 		"http://example.com/admin/news/delete?scope=launcher&slug=ghost", nil))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("deleting a missing article answered %d, want 404", w.Code)
@@ -616,10 +629,7 @@ func TestPublishingAMissingArticleIsNotFoundAndWritesNoMetadata(t *testing.T) {
 		t.Fatalf("got %d, want 404: %s", w.Code, w.Body.String())
 	}
 
-	b, err := os.ReadFile(filepath.Join(root, "news_private", "news_meta.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	b := readFile(t, filepath.Join(root, "news_private", "news_meta.json"))
 	if strings.Contains(string(b), "ghost") {
 		t.Fatalf("a phantom entry was written into news_meta.json: %s", b)
 	}
@@ -638,7 +648,7 @@ func TestPublishingAMissingArticleIsNotFoundAndWritesNoMetadata(t *testing.T) {
 func TestListBuildsAnEmptyIndexForAFreshScope(t *testing.T) {
 	h, _ := newHandlers(t)
 	w := httptest.NewRecorder()
-	h.List(w, httptest.NewRequest(http.MethodGet,
+	h.List(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet,
 		"http://example.com/admin/news/list?scope=game&gameId=brandnew", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("list: %d %s", w.Code, w.Body.String())
@@ -667,7 +677,7 @@ func TestNewsWriteEndpointsRejectGet(t *testing.T) {
 		"uploadCover": h.UploadCover,
 	} {
 		w := httptest.NewRecorder()
-		handler(w, httptest.NewRequest(http.MethodGet, "http://example.com/admin/news/"+name+"?scope=launcher", nil))
+		handler(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/admin/news/"+name+"?scope=launcher", nil))
 		if w.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s answered GET with %d, want 405", name, w.Code)
 		}
@@ -678,7 +688,7 @@ func TestNewsWriteEndpointsRejectGet(t *testing.T) {
 // whatever ParseForm managed to salvage.
 func TestPublishRejectsMalformedForm(t *testing.T) {
 	h, _ := newHandlers(t)
-	req := httptest.NewRequest(http.MethodPost, "http://example.com/admin/news/publish",
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/admin/news/publish",
 		strings.NewReader("scope=launcher&slug=%zz&published=true"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -699,7 +709,7 @@ func TestDeleteRejectsBadScope(t *testing.T) {
 		"scope=launcher&slug=%20%20",
 	} {
 		w := httptest.NewRecorder()
-		h.Delete(w, httptest.NewRequest(http.MethodPost, "http://example.com/admin/news/delete?"+q, nil))
+		h.Delete(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/admin/news/delete?"+q, nil))
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("%s: got %d, want 400", q, w.Code)
 		}
@@ -709,7 +719,7 @@ func TestDeleteRejectsBadScope(t *testing.T) {
 // A malformed multipart body must be a 400, not a panic or a partial write.
 func TestSaveRejectsMalformedBody(t *testing.T) {
 	h, _ := newHandlers(t)
-	req := httptest.NewRequest(http.MethodPost, "http://example.com/admin/news/save",
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/admin/news/save",
 		strings.NewReader("this is not multipart"))
 	req.Header.Set("Content-Type", "multipart/form-data; boundary=nope")
 	w := httptest.NewRecorder()

@@ -7,6 +7,7 @@ package ratelimit
 
 import (
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,9 +44,9 @@ func ClientIP(r *http.Request) string {
 }
 
 const (
-	// how often (in allowed requests) stale entries are swept
+	// how often (in allowed requests) stale entries are swept.
 	gcEvery = 128
-	// hard cap on tracked IPs; a sweep is forced once exceeded
+	// hard cap on tracked IPs; a sweep is forced once exceeded.
 	gcMaxEntries = 10000
 	// how far below the cap an over-cap eviction trims, so that the (sorted)
 	// eviction pass runs once in a while rather than on every request that
@@ -140,7 +141,7 @@ func (l *Limiter) sweepLocked(now time.Time) {
 		all = append(all, aged{ip: ip, start: st.windowStart})
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].start.Before(all[j].start) })
-	for i := 0; i < len(all)-gcTargetEntries; i++ {
+	for i := range len(all) - gcTargetEntries {
 		delete(l.entries, all[i].ip)
 	}
 }
@@ -170,18 +171,9 @@ func (l *Limiter) Wrap(h http.HandlerFunc, methods ...string) http.HandlerFunc {
 			h(w, r)
 			return
 		}
-		if len(methods) > 0 {
-			counted := false
-			for _, m := range methods {
-				if r.Method == m {
-					counted = true
-					break
-				}
-			}
-			if !counted {
-				h(w, r)
-				return
-			}
+		if len(methods) > 0 && !slices.Contains(methods, r.Method) {
+			h(w, r)
+			return
 		}
 		if !l.Allow(ClientIP(r)) {
 			http.Error(w, "too many requests", http.StatusTooManyRequests)
@@ -192,9 +184,6 @@ func (l *Limiter) Wrap(h http.HandlerFunc, methods ...string) http.HandlerFunc {
 }
 
 func retryAfter(d time.Duration) string {
-	secs := int(d.Seconds())
-	if secs < 1 {
-		secs = 1
-	}
+	secs := max(int(d.Seconds()), 1)
 	return strconv.Itoa(secs)
 }

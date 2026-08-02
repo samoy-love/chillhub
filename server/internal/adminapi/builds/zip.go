@@ -3,6 +3,7 @@ package builds
 import (
 	"archive/zip"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -29,6 +30,14 @@ import (
 // generous — the largest legitimate build is far below it — and
 // BUILD_MAX_UNCOMPRESSED_BYTES can raise or lower it without a rebuild.
 const maxUncompressedBytesDefault int64 = 128 << 30 // 128 GiB
+
+// Reasons an archive is refused. They are sentinels because the publish paths
+// hand them to the operator verbatim and the tests match on them; wrapping adds
+// the offending entry or the limit.
+var (
+	errArchiveTooLarge = errors.New("archive expands beyond the allowed size")
+	errZipSlip         = errors.New("zip entry outside target")
+)
 
 func maxUncompressedBytes() int64 {
 	if v := strings.TrimSpace(os.Getenv("BUILD_MAX_UNCOMPRESSED_BYTES")); v != "" {
@@ -60,7 +69,7 @@ func (b *extractBudget) copy(dst io.Writer, src io.Reader) error {
 		return err
 	}
 	if b.remaining < 0 {
-		return fmt.Errorf("archive expands beyond the allowed size (%d bytes)", b.limit)
+		return fmt.Errorf("%w (%d bytes)", errArchiveTooLarge, b.limit)
 	}
 	return nil
 }
@@ -74,7 +83,7 @@ func estimateZipUncompressedSize(zipPath string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	var total uint64
 	for _, f := range r.File {
 		if f.FileInfo().IsDir() {
@@ -122,14 +131,17 @@ func parseZipUnicodePath(extra []byte) string {
 	return ""
 }
 
-func countCyrillicRunes(s string) (cyr, total int) {
+// countCyrillicRunes returns how many of a string's runes are Cyrillic, and how
+// many runes it has in total.
+func countCyrillicRunes(s string) (int, int) {
+	cyr, total := 0, 0
 	for _, r := range s {
 		total++
 		if (r >= 'Ѐ' && r <= 'ӿ') || (r >= 'Ԁ' && r <= 'ԯ') {
 			cyr++
 		}
 	}
-	return
+	return cyr, total
 }
 
 // tryFixCyrillicFromCP437 attempts to re-decode a mojibake filename that was decoded as CP437
@@ -227,7 +239,7 @@ func unzipTo(zipPath, target string) error {
 	if err != nil {
 		return err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	budget := newExtractBudget()
 	for _, f := range r.File {
 		// normalize entry name and guard against ZipSlip
@@ -238,55 +250,85 @@ func unzipTo(zipPath, target string) error {
 		// ensure final destination is within target
 		full := filepath.Join(target, rel)
 		if !adminutil.EnsureWithin(target, full) {
-			return fmt.Errorf("zip entry outside target: %s", rel)
+			return fmt.Errorf("%w: %s", errZipSlip, rel)
 		}
 		// directory entry: check header info and suffix
 		if f.FileInfo().IsDir() || strings.HasSuffix(rel, "/") {
-			if err := os.MkdirAll(full, 0o755); err != nil {
-				// Fallbacks: ensure parent exists, handle possible file-vs-dir collision
-				_ = os.MkdirAll(filepath.Dir(full), 0o755)
-				if err2 := os.MkdirAll(full, 0o755); err2 != nil {
-					// if a file exists at 'full', remove it and retry
-					if st, e := os.Stat(full); e == nil && !st.IsDir() {
-						_ = os.Remove(full)
-						if err3 := os.MkdirAll(full, 0o755); err3 == nil {
-							continue
-						}
-					}
-					return fmt.Errorf("mkdir dir failed for entry %q -> %s: %w", rel, full, err2)
-				}
+			if err := makeEntryDir(full); err != nil {
+				return fmt.Errorf("mkdir dir failed for entry %q -> %s: %w", rel, full, err)
 			}
 			continue
 		}
-		// ensure directory exists
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			// handle possible file-vs-dir collision on parent
-			parent := filepath.Dir(full)
-			if st, e := os.Stat(parent); e == nil && !st.IsDir() {
-				_ = os.Remove(parent)
-				if err2 := os.MkdirAll(parent, 0o755); err2 != nil {
-					return fmt.Errorf("mkdir parent failed for entry %q -> %s: %w", rel, parent, err)
-				}
-			} else {
-				return fmt.Errorf("mkdir parent failed for entry %q -> %s: %w", rel, parent, err)
-			}
+		if err := extractZipEntry(f, rel, full, budget); err != nil {
+			return err
 		}
-		rc, err := f.Open()
-		if err != nil {
-			return fmt.Errorf("open zip entry %q: %w", rel, err)
+	}
+	return nil
+}
+
+// makeEntryDir creates the directory an archive entry asks for, recovering from
+// the two states a sloppy archive leaves behind: a missing parent, and a plain
+// file sitting where the directory has to go.
+func makeEntryDir(full string) error {
+	if err := os.MkdirAll(full, contentDirPerm); err == nil {
+		return nil
+	}
+	// Fallbacks: ensure parent exists, handle possible file-vs-dir collision.
+	_ = os.MkdirAll(filepath.Dir(full), contentDirPerm)
+	err := os.MkdirAll(full, contentDirPerm)
+	if err == nil {
+		return nil
+	}
+	// if a file exists at 'full', remove it and retry
+	if st, e := os.Stat(full); e == nil && !st.IsDir() {
+		_ = os.Remove(full)
+		if err3 := os.MkdirAll(full, contentDirPerm); err3 == nil {
+			return nil
 		}
-		out, err := os.OpenFile(full, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-		if err != nil {
-			rc.Close()
-			return fmt.Errorf("create file failed for entry %q -> %s: %w", rel, full, err)
+	}
+	return err
+}
+
+// makeEntryParent creates the directory that will hold an extracted file,
+// removing a plain file that occupies its place.
+func makeEntryParent(full string) error {
+	parent := filepath.Dir(full)
+	err := os.MkdirAll(parent, contentDirPerm)
+	if err == nil {
+		return nil
+	}
+	// handle possible file-vs-dir collision on parent
+	if st, e := os.Stat(parent); e == nil && !st.IsDir() {
+		_ = os.Remove(parent)
+		if err2 := os.MkdirAll(parent, contentDirPerm); err2 == nil {
+			return nil
 		}
-		if err := budget.copy(out, rc); err != nil {
-			out.Close()
-			rc.Close()
-			return fmt.Errorf("write file failed for entry %q -> %s: %w", rel, full, err)
-		}
-		out.Close()
-		rc.Close()
+	}
+	return fmt.Errorf("mkdir parent failed for %s: %w", parent, err)
+}
+
+// extractZipEntry writes one regular file entry to disk under the budget.
+func extractZipEntry(f *zip.File, rel, full string, budget *extractBudget) error {
+	if err := makeEntryParent(full); err != nil {
+		return fmt.Errorf("entry %q: %w", rel, err)
+	}
+	rc, err := f.Open()
+	if err != nil {
+		return fmt.Errorf("open zip entry %q: %w", rel, err)
+	}
+	defer func() { _ = rc.Close() }()
+	out, err := os.OpenFile(full, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, contentFilePerm)
+	if err != nil {
+		return fmt.Errorf("create file failed for entry %q -> %s: %w", rel, full, err)
+	}
+	if err := budget.copy(out, rc); err != nil {
+		_ = out.Close()
+		return fmt.Errorf("write file failed for entry %q -> %s: %w", rel, full, err)
+	}
+	// A Close that fails on a file we just wrote is a lost write, not noise: on
+	// a full or failing volume this is where the error surfaces.
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("write file failed for entry %q -> %s: %w", rel, full, err)
 	}
 	return nil
 }

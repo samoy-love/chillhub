@@ -3,6 +3,7 @@ package news
 import (
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +14,29 @@ import (
 	"ChillHub/server/internal/adminapi/media"
 	"ChillHub/server/internal/adminutil"
 )
+
+// galleryItem is one row of the gallery browser.
+type galleryItem struct {
+	Name    string `json:"name"`
+	URL     string `json:"url"`
+	Size    int64  `json:"size"`
+	ModTime string `json:"modTime"`
+	IsDir   bool   `json:"isDir"`
+}
+
+// galleryRow describes one directory entry for the browser. Directories carry
+// no URL, size or time: they are navigated into, not linked to.
+func galleryRow(e os.DirEntry, rel string) galleryItem {
+	if e.IsDir() {
+		return galleryItem{Name: e.Name(), IsDir: true}
+	}
+	row := galleryItem{Name: e.Name(), URL: assetURL(rel, e.Name())}
+	if info, err := e.Info(); err == nil {
+		row.Size = info.Size()
+		row.ModTime = info.ModTime().UTC().Format(time.RFC3339)
+	}
+	return row
+}
 
 // AssetsList returns the contents of a directory under content/news/assets for
 // the gallery browser.
@@ -26,58 +50,28 @@ func (h *Handlers) AssetsList(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		// The error text embeds the absolute path of the content root.
-		log.Printf("[news:assets] list %s: %v", dir, err)
+		// The error text embeds the absolute path of the content root, so it
+		// only goes to the log. %q, not %s: SanitizeAssetPath leaves control
+		// characters alone, and a newline in the path would otherwise let the
+		// caller write a forged line into the server log.
+		log.Printf("[news:assets] list %q: %v", dir, err)
 		http.Error(w, "directory not found", http.StatusNotFound)
 		return
 	}
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	dirsOnly := r.URL.Query().Get("dirsOnly") == "1"
-	type item struct {
-		Name    string `json:"name"`
-		URL     string `json:"url"`
-		Size    int64  `json:"size"`
-		ModTime string `json:"modTime"`
-		IsDir   bool   `json:"isDir"`
-	}
 	out := struct {
-		Path  string `json:"path"`
-		Items []item `json:"items"`
-	}{Path: filepath.ToSlash(rel), Items: []item{}}
+		Path  string        `json:"path"`
+		Items []galleryItem `json:"items"`
+	}{Path: filepath.ToSlash(rel), Items: []galleryItem{}}
 	for _, e := range entries {
-		if e.IsDir() {
-			name := e.Name()
-			if q != "" && !strings.Contains(strings.ToLower(name), q) {
-				continue
-			}
-			out.Items = append(out.Items, item{Name: name, URL: "", Size: 0, ModTime: "", IsDir: true})
+		if dirsOnly && !e.IsDir() {
 			continue
 		}
-		if dirsOnly {
+		if q != "" && !strings.Contains(strings.ToLower(e.Name()), q) {
 			continue
 		}
-		name := e.Name()
-		if q != "" && !strings.Contains(strings.ToLower(name), q) {
-			continue
-		}
-		info, _ := e.Info()
-		out.Items = append(out.Items, item{
-			Name: name,
-			URL:  assetURL(rel, name),
-			Size: func() int64 {
-				if info != nil {
-					return info.Size()
-				}
-				return 0
-			}(),
-			ModTime: func() string {
-				if info != nil {
-					return info.ModTime().UTC().Format(time.RFC3339)
-				}
-				return ""
-			}(),
-			IsDir: false,
-		})
+		out.Items = append(out.Items, galleryRow(e, rel))
 	}
 	// sort by modTime desc
 	sort.Slice(out.Items, func(i, j int) bool {
@@ -125,6 +119,8 @@ func (h *Handlers) AssetsMkdir(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
+	// #nosec G301 -- the gallery is handed out under /assets/ by nginx, which
+	// runs as a different user than the API; 0750 would make it unreadable.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to create the directory", "news:assets", err)
 		return
@@ -153,6 +149,7 @@ func (h *Handlers) AssetsUpload(w http.ResponseWriter, r *http.Request) {
 	// Bound the whole request before parsing: without this a single client can
 	// make the process buffer an arbitrary amount of data.
 	r.Body = http.MaxBytesReader(w, r.Body, MaxImageBytes+(1<<20))
+	// #nosec G120 -- the body is bounded by the MaxBytesReader above.
 	if err := r.ParseMultipartForm(imageFormMemory); err != nil {
 		http.Error(w, "request too large or malformed", http.StatusBadRequest)
 		return
@@ -165,7 +162,7 @@ func (h *Handlers) AssetsUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing file", http.StatusBadRequest)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	// io.ReadAll on a multipart part is unbounded by itself: the part may have
 	// been spooled to disk and be far larger than the parse window.
 	data, err := io.ReadAll(io.LimitReader(f, MaxImageBytes+1))
@@ -192,9 +189,7 @@ func (h *Handlers) AssetsUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]string{"status": "ok", "url": assetURL(rel, outName), "filename": outName}
-	for k, v := range metaFields {
-		resp[k] = v
-	}
+	maps.Copy(resp, metaFields)
 	adminutil.WriteJSON(w, resp)
 }
 
@@ -219,7 +214,9 @@ func (h *Handlers) AssetsUploadByURL(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "empty url", http.StatusBadRequest)
 		return
 	}
-	data, ct, err := media.DownloadURL(srcURL)
+	// The fetch runs on behalf of this request, so it is bound to its context:
+	// an admin who navigates away stops the outbound download too.
+	data, ct, err := media.DownloadURL(r.Context(), srcURL)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -231,9 +228,7 @@ func (h *Handlers) AssetsUploadByURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]string{"status": "ok", "url": assetURL(rel, outName), "filename": outName}
-	for k, v := range metaFields {
-		resp[k] = v
-	}
+	maps.Copy(resp, metaFields)
 	adminutil.WriteJSON(w, resp)
 }
 
@@ -264,10 +259,13 @@ func (h *Handlers) AssetsDelete(w http.ResponseWriter, r *http.Request) {
 	// deletion that never happened and dropped the row from its listing — while
 	// the picture the admin actually meant to remove is still served. Lstat, not
 	// Stat, so a dangling symlink can still be cleaned up.
+	// #nosec G703 -- target is SanitizeFilename output joined onto the gallery
+	// and confirmed by EnsureWithin to stay inside it, and it is not the root.
 	if _, err := os.Lstat(target); err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	// #nosec G703 -- see the check above.
 	if err := os.RemoveAll(target); err != nil {
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to delete", "news:assets", err)
 		return
@@ -303,6 +301,8 @@ func (h *Handlers) AssetsRename(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
+	// #nosec G703 -- both ends are SanitizeFilename output joined onto the
+	// gallery, confirmed by EnsureWithin to stay inside it and not to be its root.
 	if err := os.Rename(src, dst); err != nil {
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to rename", "news:assets", err)
 		return

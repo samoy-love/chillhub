@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -29,12 +30,12 @@ import (
 type Item struct {
 	ID         string            `json:"id"`
 	CreatedAt  string            `json:"createdAt"`
-	Type       string            `json:"type"` // bug | idea | question | other
+	Type       string            `json:"type"` // one of: idea, question, bug, other
 	Name       string            `json:"name"`
 	Contact    string            `json:"contact"`
 	Comment    string            `json:"comment"`
 	Important  bool              `json:"important"`
-	Status     string            `json:"status"` // new | read | deleted
+	Status     string            `json:"status"` // one of: new, read, deleted
 	AttachLogs bool              `json:"attachLogs"`
 	Logs       string            `json:"logs,omitempty"`
 	System     map[string]string `json:"system,omitempty"`
@@ -73,6 +74,19 @@ const (
 	maxSystemEntries  = 40
 	maxSystemKeyLen   = 64
 	maxSystemValueLen = 512
+	// The free-text fields of one report.
+	maxNameLen    = 200
+	maxContactLen = 200
+	maxCommentLen = 5000
+
+	// The inbox holds what users typed plus the diagnostics bundles their
+	// launchers uploaded: names, contacts, log excerpts. It lives under the
+	// content root, which nginx serves at /content/, so it must not be
+	// world-readable — and it does not need to be group-readable either, since
+	// only this service ever reads it back. The systemd units set UMask=0027
+	// already; these constants make the code say the same thing.
+	inboxDirPerm  os.FileMode = 0o750
+	inboxFilePerm os.FileMode = 0o600
 )
 
 // clampSystem bounds the free-form diagnostics map: the number of entries and
@@ -155,8 +169,8 @@ func (h *Handlers) readAll() ([]Item, error) {
 	}
 	// The journal is oldest-first; the inbox is newest-first.
 	out := make([]Item, 0, len(items)+len(pending))
-	for i := len(pending) - 1; i >= 0; i-- {
-		out = append(out, pending[i])
+	for _, it := range slices.Backward(pending) {
+		out = append(out, it)
 	}
 	return append(out, items...), nil
 }
@@ -168,7 +182,7 @@ func (h *Handlers) readJournal() []Item {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var out []Item
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64<<10), 2*MaxBodyBytes)
@@ -197,10 +211,10 @@ func (h *Handlers) appendJournal(it Item) (int64, error) {
 		return 0, err
 	}
 	line = append(line, '\n')
-	if err := os.MkdirAll(h.dir(), 0o755); err != nil {
+	if err := os.MkdirAll(h.dir(), inboxDirPerm); err != nil {
 		return 0, err
 	}
-	f, err := os.OpenFile(h.journalPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(h.journalPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, inboxFilePerm)
 	if err != nil {
 		return 0, err
 	}
@@ -212,18 +226,31 @@ func (h *Handlers) appendJournal(it Item) (int64, error) {
 	if cerr != nil {
 		return 0, cerr
 	}
+	// The report is already durably appended at this point. A failed Stat only
+	// means we cannot tell whether the journal is now big enough to be worth
+	// compacting, which is a decision that can safely wait for the next submit —
+	// failing here instead would answer 500 for a report that WAS stored, and
+	// the launcher would resend it.
 	st, serr := os.Stat(h.journalPath())
 	if serr != nil {
+		log.Printf("[feedback] journal size unknown, compaction deferred: %v", serr)
 		return 0, nil
 	}
 	return st.Size(), nil
 }
 
 func (h *Handlers) writeAll(items []Item) error {
-	if err := os.MkdirAll(h.dir(), 0o755); err != nil {
+	if err := os.MkdirAll(h.dir(), inboxDirPerm); err != nil {
 		return err
 	}
-	b2, _ := json.MarshalIndent(items, "", "  ")
+	// Item is a plain struct of strings, bools and a map[string]string, so this
+	// cannot fail today — but writeAll is what replaces the whole inbox, and
+	// truncating it to a nil buffer because a future field turned out to be
+	// unmarshalable would silently destroy every report.
+	b2, err := json.MarshalIndent(items, "", "  ")
+	if err != nil {
+		return err
+	}
 	dst := h.path()
 	dir := filepath.Dir(dst)
 	tmp, err := os.CreateTemp(dir, "inbox-*.json")
@@ -274,36 +301,45 @@ func itemSize(it Item) int {
 	return n
 }
 
+// pruneToCount drops the oldest reports until at most MaxItems are left,
+// preferring to keep the ones an admin flagged as important: pass one takes only
+// non-important reports, and pass two goes back over the rest, still oldest
+// first. Order is preserved for everything that survives.
+func pruneToCount(items []Item) []Item {
+	drop := len(items) - MaxItems
+	if drop <= 0 {
+		return items
+	}
+	removed := make([]bool, len(items))
+	// pass 1: oldest non-important
+	for i := len(items) - 1; i >= 0 && drop > 0; i-- {
+		if !items[i].Important {
+			removed[i] = true
+			drop--
+		}
+	}
+	// pass 2: everything else, oldest first
+	for i := len(items) - 1; i >= 0 && drop > 0; i-- {
+		if !removed[i] {
+			removed[i] = true
+			drop--
+		}
+	}
+	kept := make([]Item, 0, MaxItems)
+	for i, it := range items {
+		if !removed[i] {
+			kept = append(kept, it)
+		}
+	}
+	return kept
+}
+
 // Prune enforces the count and total-size limits.
 // items must be ordered newest-first (as stored). Oldest non-important reports
 // are discarded first; if the size budget is still exceeded, log bundles of the
 // oldest reports are dropped, and only then whole reports.
 func Prune(items []Item) []Item {
-	if len(items) > MaxItems {
-		removed := make([]bool, len(items))
-		drop := len(items) - MaxItems
-		// pass 1: oldest non-important
-		for i := len(items) - 1; i >= 0 && drop > 0; i-- {
-			if !items[i].Important {
-				removed[i] = true
-				drop--
-			}
-		}
-		// pass 2: everything else, oldest first
-		for i := len(items) - 1; i >= 0 && drop > 0; i-- {
-			if !removed[i] {
-				removed[i] = true
-				drop--
-			}
-		}
-		kept := make([]Item, 0, MaxItems)
-		for i, it := range items {
-			if !removed[i] {
-				kept = append(kept, it)
-			}
-		}
-		items = kept
-	}
+	items = pruneToCount(items)
 
 	total := 0
 	for _, it := range items {
@@ -325,6 +361,59 @@ func Prune(items []Item) []Item {
 	return items
 }
 
+// submission is the wire shape of a report as the launcher posts it. Every
+// field is attacker-controlled — /feedback/submit is public — so nothing here
+// reaches the inbox before toItem has bounded it.
+type submission struct {
+	Name       string            `json:"name"`
+	Contact    string            `json:"contact"`
+	Comment    string            `json:"comment"`
+	Type       string            `json:"type"`
+	AttachLogs bool              `json:"attachLogs"`
+	Logs       string            `json:"logs"`
+	System     map[string]string `json:"system"`
+}
+
+// clamp truncates s to at most n bytes.
+func clamp(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+// normalizeType folds anything the client sends into the four known kinds, so
+// the admin filter cannot be handed an unbounded set of values.
+func normalizeType(v string) string {
+	switch t := strings.ToLower(strings.TrimSpace(v)); t {
+	case "bug", "idea", "question":
+		return t
+	default:
+		return "other"
+	}
+}
+
+// toItem turns a submission into the stored report, with every length bounded.
+func (s submission) toItem() Item {
+	return Item{
+		ID:        adminutil.GenID(),
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		Type:      normalizeType(s.Type),
+		Name:      strings.TrimSpace(clamp(s.Name, maxNameLen)),
+		Contact:   strings.TrimSpace(clamp(s.Contact, maxContactLen)),
+		// Kept as-is: the newlines and indentation the user typed are part of
+		// what makes a bug report readable.
+		Comment:   clamp(s.Comment, maxCommentLen),
+		Important: false,
+		Status:    "new",
+		// Diagnostics bundles are capped: the whole inbox is rewritten on
+		// compaction, so one report must not be able to inflate it.
+		AttachLogs: s.AttachLogs,
+		Logs:       clamp(s.Logs, MaxLogBytes),
+		System:     clampSystem(s.System, clamp),
+	}
+}
+
 // Submit is the public endpoint: accepts JSON or form; fields: name, contact,
 // comment, type, attachLogs, logs, system.
 func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
@@ -337,16 +426,7 @@ func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// Accept JSON body
-	var in struct {
-		Name       string            `json:"name"`
-		Contact    string            `json:"contact"`
-		Comment    string            `json:"comment"`
-		Type       string            `json:"type"`
-		AttachLogs bool              `json:"attachLogs"`
-		Logs       string            `json:"logs"`
-		System     map[string]string `json:"system"`
-	}
+	var in submission
 	// Bound the body and REPORT a decode failure. Swallowing it stored a report
 	// with every field empty, so a truncated or malformed submission looked to
 	// the admin like a blank message from a user instead of an error.
@@ -355,37 +435,7 @@ func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json body", http.StatusBadRequest)
 		return
 	}
-	// sanitize inputs and limit lengths to prevent abuse; PRESERVE whitespace/newlines for Comment
-	clamp := func(s string, n int) string {
-		if len(s) <= n {
-			return s
-		}
-		return s[:n]
-	}
-	sName := strings.TrimSpace(clamp(in.Name, 200))
-	sContact := strings.TrimSpace(clamp(in.Contact, 200))
-	rawComment := clamp(in.Comment, 5000) // keep as-is to preserve newlines and spaces
-	// Diagnostics bundles are capped: the whole inbox is rewritten on each submit
-	sLogs := clamp(in.Logs, MaxLogBytes)
-	t := strings.ToLower(strings.TrimSpace(in.Type))
-	switch t {
-	case "bug", "idea", "question":
-	default:
-		t = "other"
-	}
-	item := Item{
-		ID:         adminutil.GenID(),
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-		Type:       t,
-		Name:       sName,
-		Contact:    sContact,
-		Comment:    rawComment,
-		Important:  false,
-		Status:     "new",
-		AttachLogs: in.AttachLogs,
-		Logs:       sLogs,
-		System:     clampSystem(in.System, clamp),
-	}
+	item := in.toItem()
 	// One appended line per submission; the inbox array is rebuilt only once the
 	// journal is big enough to be worth it.
 	h.mu.Lock()
@@ -412,77 +462,103 @@ func (h *Handlers) List(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	items, _ := h.readAll()
 	h.mu.Unlock()
-	// Filters
-	fType := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
-	fImp := strings.TrimSpace(r.URL.Query().Get("important"))
-	fQ := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
-	fStatus := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
-	fFrom := strings.TrimSpace(r.URL.Query().Get("from"))
-	fTo := strings.TrimSpace(r.URL.Query().Get("to"))
-	fAuto := strings.TrimSpace(r.URL.Query().Get("auto"))
-	var fromT, toT time.Time
-	if fFrom != "" {
-		if t, err := time.Parse(time.RFC3339, fFrom); err == nil {
-			fromT = t
-		}
-	}
-	if fTo != "" {
-		if t, err := time.Parse(time.RFC3339, fTo); err == nil {
-			toT = t
-		}
-	}
+
+	f := parseListFilters(r)
 	out := make([]Item, 0, len(items))
 	for _, it := range items {
-		if fType != "" && strings.ToLower(it.Type) != fType {
-			continue
+		if f.matches(it) {
+			out = append(out, it)
 		}
-		if fStatus != "" && strings.ToLower(it.Status) != fStatus {
-			continue
-		}
-		if fImp != "" {
-			want := fImp == "1" || strings.EqualFold(fImp, "true")
-			if it.Important != want {
-				continue
-			}
-		}
-		if fAuto != "" {
-			want := fAuto == "1" || strings.EqualFold(fAuto, "true")
-			got := false
-			if it.System != nil {
-				if v, ok := it.System["auto"]; ok {
-					got = (v == "1" || strings.EqualFold(v, "true"))
-				}
-			}
-			if want != got {
-				continue
-			}
-		}
-		if !fromT.IsZero() || !toT.IsZero() {
-			if t, err := time.Parse(time.RFC3339, it.CreatedAt); err == nil {
-				if !fromT.IsZero() && t.Before(fromT) {
-					continue
-				}
-				if !toT.IsZero() && t.After(toT) {
-					continue
-				}
-			}
-		}
-		if fQ != "" {
-			hay := strings.ToLower(it.Name + "\n" + it.Contact + "\n" + it.Comment)
-			if !strings.Contains(hay, fQ) {
-				continue
-			}
-		}
-		if it.Status == "deleted" {
-			continue
-		}
-		out = append(out, it)
 	}
 	// Sort by CreatedAt desc
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
 	adminutil.WriteJSON(w, struct {
 		Items []Item `json:"items"`
 	}{Items: out})
+}
+
+// listFilters is the parsed query of a List call. An empty field means "do not
+// filter on this", which is why they are kept as strings rather than as typed
+// zero values: "important=0" and no "important" at all are different requests.
+type listFilters struct {
+	kind     string // lower-cased Type
+	status   string // lower-cased Status
+	query    string // lower-cased substring of name/contact/comment
+	imp      string // "" | truthy | falsy
+	auto     string // "" | truthy | falsy
+	from, to time.Time
+}
+
+// parseListFilters reads the filters off the query string. An unparseable date
+// is treated as no bound at all: a typo in the admin UI must not silently hide
+// every report.
+func parseListFilters(r *http.Request) listFilters {
+	q := r.URL.Query()
+	f := listFilters{
+		kind:   strings.ToLower(strings.TrimSpace(q.Get("type"))),
+		status: strings.ToLower(strings.TrimSpace(q.Get("status"))),
+		query:  strings.ToLower(strings.TrimSpace(q.Get("q"))),
+		imp:    strings.TrimSpace(q.Get("important")),
+		auto:   strings.TrimSpace(q.Get("auto")),
+	}
+	if t, err := time.Parse(time.RFC3339, strings.TrimSpace(q.Get("from"))); err == nil {
+		f.from = t
+	}
+	if t, err := time.Parse(time.RFC3339, strings.TrimSpace(q.Get("to"))); err == nil {
+		f.to = t
+	}
+	return f
+}
+
+// isTruthy reads the 1/0 and true/false spellings the admin UI sends.
+func isTruthy(v string) bool { return v == "1" || strings.EqualFold(v, "true") }
+
+// matches reports whether the report passes every active filter. Deleted reports
+// never pass: Delete is a hard delete, but a report can also be soft-deleted by
+// status and must not come back through the list.
+func (f listFilters) matches(it Item) bool {
+	if it.Status == "deleted" {
+		return false
+	}
+	if f.kind != "" && strings.ToLower(it.Type) != f.kind {
+		return false
+	}
+	if f.status != "" && strings.ToLower(it.Status) != f.status {
+		return false
+	}
+	if f.imp != "" && it.Important != isTruthy(f.imp) {
+		return false
+	}
+	if f.auto != "" && isTruthy(it.System["auto"]) != isTruthy(f.auto) {
+		return false
+	}
+	if !f.inDateRange(it) {
+		return false
+	}
+	if f.query != "" {
+		hay := strings.ToLower(it.Name + "\n" + it.Contact + "\n" + it.Comment)
+		if !strings.Contains(hay, f.query) {
+			return false
+		}
+	}
+	return true
+}
+
+// inDateRange applies the created-at bounds. A report whose CreatedAt does not
+// parse is kept rather than dropped — losing a report because its timestamp is
+// malformed would hide exactly the submissions worth looking at.
+func (f listFilters) inDateRange(it Item) bool {
+	if f.from.IsZero() && f.to.IsZero() {
+		return true
+	}
+	t, err := time.Parse(time.RFC3339, it.CreatedAt)
+	if err != nil {
+		return true
+	}
+	if !f.from.IsZero() && t.Before(f.from) {
+		return false
+	}
+	return f.to.IsZero() || !t.After(f.to)
 }
 
 // Get returns a single report by id.
@@ -529,7 +605,7 @@ func (h *Handlers) Delete(w http.ResponseWriter, r *http.Request) {
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to update the inbox", "feedback", err)
 		return
 	}
-	log.Printf("[audit] feedback delete id=%s by=%s", id, h.user(r))
+	log.Printf("[audit] feedback delete id=%q by=%q", id, h.user(r))
 	adminutil.WriteJSON(w, map[string]string{"status": "ok"})
 }
 
@@ -566,7 +642,7 @@ func (h *Handlers) ToggleImportant(w http.ResponseWriter, r *http.Request) {
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to update the inbox", "feedback", err)
 		return
 	}
-	log.Printf("[audit] feedback important-toggle id=%s now=%v by=%s", id, newVal, h.user(r))
+	log.Printf("[audit] feedback important-toggle id=%q now=%v by=%q", id, newVal, h.user(r))
 	adminutil.WriteJSON(w, map[string]string{"status": "ok"})
 }
 
@@ -610,7 +686,7 @@ func (h *Handlers) setStatus(w http.ResponseWriter, r *http.Request, status, aud
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to update the inbox", "feedback", err)
 		return
 	}
-	log.Printf("[audit] feedback %s id=%s by=%s", audit, id, h.user(r))
+	log.Printf("[audit] feedback %s id=%q by=%q", audit, id, h.user(r))
 	adminutil.WriteJSON(w, map[string]string{"status": "ok"})
 }
 
@@ -626,6 +702,6 @@ func (h *Handlers) Clear(w http.ResponseWriter, r *http.Request) {
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to update the inbox", "feedback", err)
 		return
 	}
-	log.Printf("[audit] feedback clear by=%s", h.user(r))
+	log.Printf("[audit] feedback clear by=%q", h.user(r))
 	adminutil.WriteJSON(w, map[string]string{"status": "ok"})
 }

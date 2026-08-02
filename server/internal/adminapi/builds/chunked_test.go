@@ -90,12 +90,9 @@ func TestChunkedUploadPublishesTheReassembledArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < m.TotalChunks; i++ {
+	for i := range m.TotalChunks {
 		lo := i * m.ChunkSize
-		hi := lo + m.ChunkSize
-		if hi > len(zipData) {
-			hi = len(zipData)
-		}
+		hi := min(lo+m.ChunkSize, len(zipData))
 		if w := putChunk(t, h, id, i, zipData[lo:hi]); w.Code != http.StatusOK {
 			t.Fatalf("chunk %d: %d %s", i, w.Code, w.Body.String())
 		}

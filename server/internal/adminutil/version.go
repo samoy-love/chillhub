@@ -22,11 +22,7 @@ func CompareVersions(a, b string) int {
 
 	aParts := strings.Split(aCore, ".")
 	bParts := strings.Split(bCore, ".")
-	n := len(aParts)
-	if len(bParts) > n {
-		n = len(bParts)
-	}
-	for i := 0; i < n; i++ {
+	for i := range max(len(aParts), len(bParts)) {
 		ap, bp := "", ""
 		if i < len(aParts) {
 			ap = aParts[i]
@@ -39,14 +35,20 @@ func CompareVersions(a, b string) int {
 		}
 	}
 
+	return comparePreRelease(aPre, bPre)
+}
+
+// comparePreRelease orders the suffix of two versions whose numeric cores are
+// equal. An absent suffix wins: "1.2.0" is newer than "1.2.0-rc1".
+func comparePreRelease(a, b string) int {
 	switch {
-	case aPre == bPre:
+	case a == b:
 		return 0
-	case aPre == "": // release beats its own pre-releases
+	case a == "": // release beats its own pre-releases
 		return 1
-	case bPre == "":
+	case b == "":
 		return -1
-	case aPre < bPre:
+	case a < b:
 		return -1
 	default:
 		return 1
@@ -54,7 +56,7 @@ func CompareVersions(a, b string) int {
 }
 
 // splitPreRelease cuts "1.2.0-rc1" into ("1.2.0", "rc1").
-func splitPreRelease(v string) (core, pre string) {
+func splitPreRelease(v string) (string, string) {
 	v = strings.TrimSpace(v)
 	if i := strings.IndexAny(v, "-+"); i >= 0 {
 		return v[:i], v[i+1:]

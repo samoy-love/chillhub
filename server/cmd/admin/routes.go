@@ -44,7 +44,7 @@ func (s *server) apiRoutes() []route {
 	mt, mx := s.maintenance, s.metrics
 	return []route{
 		// Health probe (allowlisted in the auth middleware).
-		{path: "/admin/api/health", handler: func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") }},
+		{path: "/admin/api/health", handler: func(w http.ResponseWriter, _ *http.Request) { _, _ = fmt.Fprintln(w, "ok") }},
 
 		// Session endpoints; nginx routes these verbatim, they have no /admin alias.
 		//

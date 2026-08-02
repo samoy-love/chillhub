@@ -35,8 +35,8 @@ func TestEmptySecretRejectsForgedToken(t *testing.T) {
 		t.Fatalf("sign with empty key: %v", err)
 	}
 
-	r := httptest.NewRequest(http.MethodGet, "http://example.com/admin/api/list", nil)
-	r.AddCookie(&http.Cookie{Name: cookieAccess, Value: signed})
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/admin/api/list", nil)
+	addTestCookie(r, cookieAccess, signed)
 
 	if user := a.CurrentUser(r); user != "" {
 		t.Fatalf("forged token accepted with empty secret: user=%q", user)
@@ -58,7 +58,7 @@ func TestRealSecretStillAuthenticates(t *testing.T) {
 		t.Fatalf("issueSession: %v", err)
 	}
 
-	r := httptest.NewRequest(http.MethodGet, "http://example.com/admin/api/list", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/admin/api/list", nil)
 	for _, c := range w.Result().Cookies() {
 		r.AddCookie(c)
 	}

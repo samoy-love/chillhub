@@ -1,3 +1,6 @@
+// Command api serves the public launcher API on :55700 — the game registry,
+// per-game builds, the published news indexes and the maintenance flag — plus
+// the static content trees when it runs without nginx in front of it.
 package main
 
 import (
@@ -231,6 +234,8 @@ func loadGamesFromRegistry() ([]GameInfo, bool) {
 		Items []regItem `json:"items"`
 	}
 	p := filepath.Join(contentRoot, "manifests", "_registry", "games.json")
+	// #nosec G304 -- p is the content root plus three constant path components.
+	// No part of it comes from the request.
 	b, err := os.ReadFile(p)
 	if err != nil {
 		return nil, false
@@ -240,8 +245,23 @@ func loadGamesFromRegistry() ([]GameInfo, bool) {
 	}
 	out := make([]GameInfo, 0, len(reg.Items))
 	for _, it := range reg.Items {
+		// The stored registry is not a trusted source of path components: every
+		// handler below joins an id onto the manifests directory. An id that is
+		// not a plausible slug is dropped rather than turned into a path. The
+		// admin save endpoint now refuses such ids outright, so reaching this
+		// line means the file was edited by hand.
+		if !adminutil.IsSafeGameID(it.GameID) {
+			log.Printf("registry: skipping entry with unusable gameId %q", filepath.Base(it.GameID))
+			continue
+		}
 		out = append(out, GameInfo{GameID: it.GameID, Title: it.Title, ExeRelativePath: it.ExeRelativePath, IconURL: it.IconURL})
 	}
+	// An existing registry stays authoritative even when everything in it was
+	// dropped. Falling back to a directory scan here would look like a repair
+	// but is not one: a scanned entry carries no title and no exe path, so the
+	// launcher would list games under raw ids whose Play button does nothing.
+	// A visibly empty list plus the log lines above points at the real problem.
+	// The scan below is for "no registry yet", which is a different situation.
 	return out, true
 }
 
@@ -364,6 +384,9 @@ type latestMeta struct {
 }
 
 func readLatest(path string) (latestMeta, bool) {
+	// #nosec G304 -- callers build path from the content root, the constant
+	// "manifests" component and a game id that passed publicGameID or the
+	// registry filter in loadGamesFromRegistry.
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return latestMeta{}, false
@@ -385,6 +408,8 @@ func readLatest(path string) (latestMeta, bool) {
 // empty list.
 func servePublishedIndex(w http.ResponseWriter, path string) {
 	empty := map[string]any{"items": []any{}}
+	// #nosec G304 -- path is the content root plus constant components and, for
+	// the per-game index, a game id already validated by publicGameID.
 	b, err := os.ReadFile(path)
 	if err != nil {
 		writeJSON(w, empty)
@@ -394,6 +419,9 @@ func servePublishedIndex(w http.ResponseWriter, path string) {
 		Items []map[string]any `json:"items"`
 	}
 	if json.Unmarshal(b, &idx) != nil {
+		// #nosec G706 -- the base name is "index.json" or a directory component
+		// built from a game id that publicGameID has already restricted to
+		// [A-Za-z0-9_-]; there is nothing to inject with.
 		log.Printf("news index %s: malformed json, serving empty list", filepath.Base(path))
 		writeJSON(w, empty)
 		return
@@ -414,11 +442,11 @@ func servePublishedIndex(w http.ResponseWriter, path string) {
 	writeJSON(w, map[string]any{"items": out})
 }
 
-func handleNewsIndex(w http.ResponseWriter, r *http.Request) {
+func handleNewsIndex(w http.ResponseWriter, _ *http.Request) {
 	servePublishedIndex(w, filepath.Join(contentRoot, "news", "index.json"))
 }
 
-// handleGameNewsIndex filters per-game news by published=true
+// handleGameNewsIndex filters per-game news by published=true.
 func handleGameNewsIndex(w http.ResponseWriter, r *http.Request) {
 	gid, ok := publicGameID(w, r)
 	if !ok {
@@ -427,7 +455,8 @@ func handleGameNewsIndex(w http.ResponseWriter, r *http.Request) {
 	servePublishedIndex(w, filepath.Join(contentRoot, "news", "games", gid, "index.json"))
 }
 
-// handleBuilds returns list of available versions for a game by scanning manifests/{gameId}/ for *.json (excluding latest.json)
+// handleBuilds returns list of available versions for a game by scanning
+// manifests/{gameId}/ for *.json (excluding latest.json).
 func handleBuilds(w http.ResponseWriter, r *http.Request) {
 	gid, ok := publicGameID(w, r)
 	if !ok {
@@ -475,18 +504,30 @@ func baseURL(r *http.Request) string {
 	}
 	port := strings.TrimSpace(r.Header.Get("X-Forwarded-Port"))
 	if port != "" && !strings.Contains(host, ":") {
-		if !(proto == "http" && port == "80") && !(proto == "https" && port == "443") {
+		// The default port for the scheme is left off: "http://x:80" and
+		// "https://x:443" are the same URL as "http://x" and "https://x", and
+		// the launcher stores the base URL it is given.
+		isDefaultPort := (proto == "http" && port == "80") || (proto == "https" && port == "443")
+		if !isDefaultPort {
 			host = host + ":" + port
 		}
 	}
 	return proto + "://" + host
 }
 
+// writeJSON marshals before writing a single header: an encoder that failed
+// mid-stream would have already sent 200 plus a truncated body, which a client
+// reports as corrupt JSON instead of as the server error it is.
 func writeJSON(w http.ResponseWriter, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		log.Printf("encode response: %v", err)
+		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
-	enc := json.NewEncoder(w)
-	_ = enc.Encode(v)
+	_, _ = w.Write(b)
 }
