@@ -67,6 +67,24 @@ export default [
     }
   },
 
+  // Тесты веба запускаются в node (`node --test`), а не в браузере: у них
+  // CommonJS-модули и свой набор глобалей. Без этого блока ESLint помечает
+  // require/__dirname как no-undef.
+  {
+    files: ['tests/web/**/*.js'],
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: {
+        require: 'readonly',
+        module: 'writable',
+        __dirname: 'readonly',
+        __filename: 'readonly',
+        process: 'readonly',
+        Buffer: 'readonly',
+      }
+    }
+  },
+
   // Targeted overrides for web UI code if needed in the future
   {
     files: ['landing/**/*.js', 'server/admin_ui/**/*.js'],
