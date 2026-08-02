@@ -242,7 +242,7 @@ jobs:
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: server/coverage.out
-          flags: go
+          flags: server
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
@@ -337,7 +337,24 @@ jobs:
         # путей. Без этого шага регрессия уезжала бы в релиз незамеченной: тесты
         # в репозитории были, но не запускались ни в одном прогоне CI.
         working-directory: launcher/tests/ChillHub.Tests
-        run: dotnet test --nologo
+        # --collect берёт coverlet.collector, который и так лежал в
+        # зависимостях тестового проекта, но не использовался: покрытие
+        # клиента не считалось вовсе. Бейдж codecov при этом стоял в README и
+        # показывал ТОЛЬКО серверную часть на Go — то есть отвечал не на тот
+        # вопрос, который читатель ему задаёт.
+        run: dotnet test --nologo --collect:"XPlat Code Coverage"
+
+      - name: Отправить покрытие клиента в Codecov
+        # Приколот к SHA, а не к тегу: тег мутабелен, и у Codecov уже был
+        # прецедент компрометации релиза.
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          # Путь coverlet складывает в каталог со случайным GUID, поэтому
+          # шаблон, а не точное имя.
+          files: launcher/tests/ChillHub.Tests/TestResults/**/coverage.cobertura.xml
+          flags: launcher
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
       - name: Self-update loop guard (A11)
         # Ловит регрессию «бесконечный цикл самообновления»: файл, попавший
