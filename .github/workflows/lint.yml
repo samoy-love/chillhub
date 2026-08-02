@@ -124,7 +124,15 @@ jobs:
 
       - name: Go test
         working-directory: server
-        run: go test ./...
+        run: go test ./... -coverprofile=coverage.out -covermode=atomic
+
+      - name: Отправить покрытие в Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: server/coverage.out
+          flags: go
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
   nginx-config:
     name: nginx config (real nginx -t)

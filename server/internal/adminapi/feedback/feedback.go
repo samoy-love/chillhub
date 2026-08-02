@@ -45,7 +45,12 @@ type Item struct {
 // bounded, otherwise the public submit endpoint degrades to O(n^2).
 const (
 	// MaxLogBytes is the max size of the diagnostics bundle accepted with a single report.
-	MaxLogBytes = 256 << 10 // 256 KiB
+	//
+	// Keep in step with Diagnostics.BundleMaxBytes in the launcher: the client trims
+	// its bundle to that budget, and anything larger is clamped here. If the client
+	// budget ever exceeds MaxBodyBytes below, reports do not get truncated — they are
+	// rejected outright and lost.
+	MaxLogBytes = 1 << 20 // 1 MiB
 	// MaxItems is the max number of reports kept in the inbox.
 	MaxItems = 2000
 	// MaxTotalBytes is a soft budget for the whole inbox file.
@@ -54,10 +59,13 @@ const (
 	// unauthenticated, so the decoder must not be handed an unbounded body —
 	// metrics.Submit has done this from the start.
 	//
-	// The launcher caps its diagnostics bundle at 240 KiB (Diagnostics.cs,
-	// BundleMaxBytes) and the server clamps it to MaxLogBytes; the budget here is
+	// The launcher caps its diagnostics bundle at MaxLogBytes (Diagnostics.cs,
+	// BundleMaxBytes) and the server clamps it to the same; the budget here is
 	// twice that plus room for the other fields, so JSON escaping of a log full
 	// of newlines cannot push a legitimate report over the line.
+	//
+	// nginx must allow MORE than this for /feedback/submit, otherwise it rejects
+	// the request first with a bare 413 instead of the JSON error from here.
 	MaxBodyBytes = 2*MaxLogBytes + (128 << 10)
 	// System is free-form key/value diagnostics from the client; every part of it
 	// is clamped so one report cannot inflate the file that is rewritten at every

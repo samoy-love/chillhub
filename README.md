@@ -1,5 +1,9 @@
 # ChillHub — README
 
+[![CI](https://github.com/tr0llex/Launcher-Project/actions/workflows/lint.yml/badge.svg)](https://github.com/tr0llex/Launcher-Project/actions/workflows/lint.yml)
+[![codecov](https://codecov.io/gh/tr0llex/Launcher-Project/branch/main/graph/badge.svg)](https://codecov.io/gh/tr0llex/Launcher-Project)
+
+
 Кроссплатформенный проект лаунчера и серверной части для распределения игр, автообновлений и новостей.
 
 ## Оглавление
