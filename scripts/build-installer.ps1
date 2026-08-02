@@ -345,12 +345,18 @@ if ($AppVersion -and $AppVersion.Trim()) {
     # `dotnet build`. Если релиз штампует другое число, значит csproj протух, и
     # любая локальная сборка врёт о своей версии. Расходиться этим значениям
     # молча нельзя: версия сравнивается с latest.json посимвольно.
+    #
+    # Заглушки 0.0.0* исключены: CI собирает установщик с -AppVersion 0.0.0-ci,
+    # чтобы просто проверить, что он собирается. Это не релиз — 0.0.0 никогда не
+    # публикуется в latest.json, — и требовать от csproj совпадения с заглушкой
+    # значило бы ронять проверку сборки на каждом коммите.
     $declared = $null
+    $isPlaceholder = $v -like '0.0.0*'
     $csprojXml = [xml](Get-Content -LiteralPath $Csproj -Raw)
     foreach ($pg in $csprojXml.Project.PropertyGroup) {
         if ($pg.Version) { $declared = ([string]$pg.Version).Trim() }
     }
-    if ($declared -and $declared -ne $v) {
+    if ($declared -and -not $isPlaceholder -and $declared -ne $v) {
         throw @"
 Версия релиза ($v) не совпадает с <Version> в csproj ($declared).
 
