@@ -50,15 +50,40 @@ func LoadConfig() Config {
 		AccessTTL:    24 * time.Hour, // per user request: 1 day
 		RefreshTTL:   30 * 24 * time.Hour,
 	}
-	// Dev-friendly precedence: if ADMIN_PASSWORD_PLAIN is provided, hash it and override any bcrypt.
+	// ADMIN_PASSWORD_PLAIN — удобство для разработки, и теперь это ПРОВЕРЯЕМЫЙ
+	// факт, а не соглашение в документации.
+	//
+	// Раньше переменная действовала всегда и молча перекрывала
+	// ADMIN_PASSWORD_BCRYPT. Ошибиться было нечем: достаточно один раз
+	// скопировать dev-строку в прод-юнит — и пароль администратора лежит в
+	// /etc/systemd открытым текстом, пересчитываясь bcrypt'ом при каждом
+	// старте, а настоящий хеш при этом остаётся в конфиге и создаёт
+	// впечатление, что используется именно он.
+	//
+	// Теперь ярлык включается только явным ADMIN_ALLOW_PLAIN_PASSWORD=1.
+	// Прод-юнит этой строки не содержит и содержать не должен, поэтому
+	// случайно перенесённый ADMIN_PASSWORD_PLAIN там ничего не включит —
+	// он будет громко проигнорирован.
 	if plain := strings.TrimSpace(os.Getenv("ADMIN_PASSWORD_PLAIN")); plain != "" {
-		if hb, err := bcrypt.GenerateFromPassword([]byte(plain), 12); err == nil {
-			cfg.AdminPassBC = string(hb)
-			// %q, and the value comes from the unit file rather than from a
-			// request: nothing a client sends can reach this line.
-			log.Printf("[ADMIN AUTH] ADMIN_PASSWORD_PLAIN provided; using its bcrypt for user %q", cfg.AdminUser) // #nosec G706 -- ADMIN_USERNAME is deployment config, and %q escapes it.
-		} else {
-			log.Printf("[ADMIN AUTH] Failed to hash ADMIN_PASSWORD_PLAIN: %v", err)
+		allowed, _ := strconv.ParseBool(strings.TrimSpace(os.Getenv("ADMIN_ALLOW_PLAIN_PASSWORD")))
+		switch {
+		case !allowed:
+			// Молчать нельзя: администратор, задавший только PLAIN, иначе
+			// получил бы «auth not configured» без единой подсказки почему.
+			log.Print("[ADMIN AUTH] ADMIN_PASSWORD_PLAIN задан, но ADMIN_ALLOW_PLAIN_PASSWORD не выставлен — переменная ПРОИГНОРИРОВАНА. Пароль в открытом виде допустим только для разработки; на проде задавайте ADMIN_PASSWORD_BCRYPT")
+		case cfg.AdminPassBC != "":
+			// Две противоречащие настройки — это не «одна победит», это
+			// неопределённость в том, каким паролем вообще пускают внутрь.
+			log.Print("[ADMIN AUTH] заданы и ADMIN_PASSWORD_PLAIN, и ADMIN_PASSWORD_BCRYPT — задайте что-то одно. Открытый пароль ПРОИГНОРИРОВАН, действует bcrypt")
+		default:
+			if hb, err := bcrypt.GenerateFromPassword([]byte(plain), 12); err == nil {
+				cfg.AdminPassBC = string(hb)
+				// %q, and the value comes from the unit file rather than from a
+				// request: nothing a client sends can reach this line.
+				log.Printf("[ADMIN AUTH] режим разработки: пароль взят из ADMIN_PASSWORD_PLAIN для пользователя %q", cfg.AdminUser) // #nosec G706 -- ADMIN_USERNAME is deployment config, and %q escapes it.
+			} else {
+				log.Printf("[ADMIN AUTH] не удалось захешировать ADMIN_PASSWORD_PLAIN: %v", err)
+			}
 		}
 	}
 	if v := strings.TrimSpace(os.Getenv("COOKIE_SECURE")); v != "" {
@@ -304,7 +329,7 @@ func (a *Auth) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "auth not configured", http.StatusInternalServerError)
 		return
 	}
-	if subtleLower(in.Username) != subtleLower(a.cfg.AdminUser) {
+	if !equalFoldConstantTime(in.Username, a.cfg.AdminUser) {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
@@ -448,4 +473,21 @@ func (a *Auth) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-func subtleLower(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+// equalFoldConstantTime сравнивает логины без учёта регистра и окружающих
+// пробелов, но за время, не зависящее от того, где именно строки разошлись.
+//
+// Раньше здесь была пара `subtleLower(a) != subtleLower(b)`: имя обещало
+// constant-time, а сравнение выполнял обычный `!=`, который останавливается на
+// первом несовпавшем байте. Утечки это не давало — логин администратора не
+// секрет, — но название врало, и следующий, кто скопирует эту строку для
+// сравнения чего-то настоящего, унаследует не то, что прочитал.
+//
+// Длина через ConstantTimeEq не скрывается специально: она и так видна по
+// размеру запроса.
+func equalFoldConstantTime(a, b string) bool {
+	x, y := strings.ToLower(strings.TrimSpace(a)), strings.ToLower(strings.TrimSpace(b))
+	if len(x) != len(y) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(x), []byte(y)) == 1
+}
