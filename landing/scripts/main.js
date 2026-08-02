@@ -1081,7 +1081,7 @@
       if(!el) return;
       try{
         if(typeof navigator.sendBeacon === 'function'){
-          navigator.sendBeacon('/e/download_click', new Blob([], { type: 'text/plain' }));
+          navigator.sendBeacon('/e/download_click');
         }else if(typeof fetch === 'function'){
           fetch('/e/download_click', { method: 'POST', keepalive: true }).catch(()=>{});
         }
