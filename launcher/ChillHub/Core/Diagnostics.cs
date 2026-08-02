@@ -10,10 +10,17 @@ namespace ChillHub.Core {
 
     public static class Diagnostics {
         /// <summary>
-        /// Потолок всего бандла в БАЙТАХ UTF-8. На сервере (admin, feedbackMaxLogBytes) стоит 256 КиБ,
-        /// и всё, что больше, молча обрезается. Держим запас.
+        /// Потолок всего бандла в БАЙТАХ UTF-8.
+        /// <para>
+        /// Держать его согласованным с сервером ОБЯЗАТЕЛЬНО: там стоит
+        /// <c>feedback.MaxLogBytes</c> (столько же) и <c>MaxBodyBytes</c> = вдвое больше плюс
+        /// запас, потому что JSON-экранирование лога, полного переводов строк, заметно
+        /// раздувает тело запроса. Если бандл превысит серверный лимит тела, запрос будет
+        /// отвергнут ЦЕЛИКОМ — отчёт не обрежется, а пропадёт. Третье звено — nginx
+        /// (client_max_body_size для /feedback/submit), он должен пропускать больше сервера.
+        /// </para>
         /// </summary>
-        private const int BundleMaxBytes = 240 * 1024;
+        private const int BundleMaxBytes = 1024 * 1024;
 
         /// <summary>Суммарный бюджет на содержимое логов внутри бандла.</summary>
         private const int LogsTotalBudgetBytes = 160 * 1024;
@@ -169,7 +176,7 @@ namespace ChillHub.Core {
                 redactedHints[kv.Key] = Redact(kv.Value);
             }
 
-            return new DiagnosticsBundle(Redact(sb.ToString()), redactedHints);
+            return new DiagnosticsBundle(TrimToBudget(Redact(sb.ToString()), BundleMaxBytes), redactedHints);
         }
 
         /// <summary>
@@ -203,6 +210,83 @@ namespace ChillHub.Core {
                 // Лучше отдать неотредактированный текст, чем не отдать ничего:
                 // без бандла разбор жалобы невозможен.
                 System.Diagnostics.Debug.WriteLine("Diagnostics.Redact: " + ex.Message);
+            }
+
+            return text;
+        }
+
+        /// <summary>
+        /// Приводит текст к бюджету в байтах UTF-8, вырезая СЕРЕДИНУ.
+        /// <para>
+        /// Обрезать хвост нельзя: там самые свежие записи лога, ради которых отчёт и
+        /// собирают. Обрезать начало тоже нельзя: там конфигурация и версии, без которых
+        /// непонятно, на чём воспроизводить. Поэтому оставляем оба края и явно помечаем
+        /// вырезанное — молчаливая потеря куска хуже, чем видимая.
+        /// </para>
+        /// <para>
+        /// Отдельные разделы уже ограничены своими бюджетами (см. LogsTotalBudgetBytes и
+        /// соседние), так что этот потолок — страховка на случай, когда их сумма всё равно
+        /// выходит за предел.
+        /// </para>
+        /// </summary>
+        /// <param name="text">Исходный текст бандла.</param>
+        /// <param name="maxBytes">Бюджет в байтах UTF-8.</param>
+        /// <returns>Текст, укладывающийся в бюджет.</returns>
+        internal static string TrimToBudget(string text, int maxBytes) {
+            if (string.IsNullOrEmpty(text) || Encoding.UTF8.GetByteCount(text) <= maxBytes) {
+                return text;
+            }
+
+            var marker = $"{Environment.NewLine}{Environment.NewLine}... середина вырезана: бандл не помещался в {maxBytes / 1024} КиБ ...{Environment.NewLine}{Environment.NewLine}";
+            var budget = maxBytes - Encoding.UTF8.GetByteCount(marker);
+            if (budget <= 0) {
+                return marker;
+            }
+
+            // Начало — контекст, хвост — свежие события; хвосту отдаём больше.
+            var headBudget = budget / 3;
+            var tailBudget = budget - headBudget;
+
+            var head = TakeBytesFromStart(text, headBudget);
+            var tail = TakeBytesFromEnd(text, tailBudget);
+            return head + marker + tail;
+        }
+
+        /// <summary>Берёт префикс, укладывающийся в бюджет байт, не разрывая суррогатные пары.</summary>
+        /// <param name="text">Текст.</param>
+        /// <param name="maxBytes">Бюджет в байтах.</param>
+        /// <returns>Префикс.</returns>
+        private static string TakeBytesFromStart(string text, int maxBytes) {
+            var count = 0;
+            for (var i = 0; i < text.Length;) {
+                var step = char.IsHighSurrogate(text[i]) && i + 1 < text.Length ? 2 : 1;
+                var size = Encoding.UTF8.GetByteCount(text.Substring(i, step));
+                if (count + size > maxBytes) {
+                    return text.Substring(0, i);
+                }
+
+                count += size;
+                i += step;
+            }
+
+            return text;
+        }
+
+        /// <summary>Берёт суффикс, укладывающийся в бюджет байт, не разрывая суррогатные пары.</summary>
+        /// <param name="text">Текст.</param>
+        /// <param name="maxBytes">Бюджет в байтах.</param>
+        /// <returns>Суффикс.</returns>
+        private static string TakeBytesFromEnd(string text, int maxBytes) {
+            var count = 0;
+            for (var i = text.Length; i > 0;) {
+                var step = char.IsLowSurrogate(text[i - 1]) && i - 2 >= 0 ? 2 : 1;
+                var size = Encoding.UTF8.GetByteCount(text.Substring(i - step, step));
+                if (count + size > maxBytes) {
+                    return text.Substring(i);
+                }
+
+                count += size;
+                i -= step;
             }
 
             return text;
