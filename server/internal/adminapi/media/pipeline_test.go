@@ -54,6 +54,99 @@ func TestExtensionIsGuessedFromContentType(t *testing.T) {
 	}
 }
 
+// Every non-ASCII rune used to become '_', so any two Cyrillic names of the same
+// length landed on the same file: the second upload overwrote the first through
+// WriteFileAtomic, and the post that linked the first image started showing the
+// second one with no error anywhere.
+func TestCyrillicNamesDoNotOverwriteEachOther(t *testing.T) {
+	base := t.TempDir()
+	first, _, err := ProcessAndSaveAsset(base, "assets", "скриншот", smallPNG(t, 64, 48), ".png", "")
+	if err != nil {
+		t.Fatalf("ProcessAndSaveAsset: %v", err)
+	}
+	second, _, err := ProcessAndSaveAsset(base, "assets", "картинка", smallPNG(t, 32, 32), ".png", "")
+	if err != nil {
+		t.Fatalf("ProcessAndSaveAsset: %v", err)
+	}
+	if first == second {
+		t.Fatalf("both uploads were stored as %q; one of them is gone", first)
+	}
+	// Both files must still be on disk, and the first must still be the first.
+	img, err := jpeg.Decode(bytes.NewReader(readOutput(t, base, "assets", first)))
+	if err != nil {
+		t.Fatalf("the first asset is not readable: %v", err)
+	}
+	if got := img.Bounds().Dx(); got != 64 {
+		t.Errorf("%q is %dpx wide, want the 64px image that was uploaded under that name", first, got)
+	}
+	readOutput(t, base, "assets", second)
+}
+
+// The stored name ends up in a /assets/ URL served by nginx, so it must be
+// ASCII and URL-safe whatever alphabet the admin's file came from.
+func TestStoredNamesAreASCIIAndURLSafe(t *testing.T) {
+	base := t.TempDir()
+	for _, desired := range []string{"скриншот", "Обложка", "文件", "🙂", "ъь"} {
+		name, _, err := ProcessAndSaveAsset(base, "assets", desired, smallPNG(t, 8, 8), ".png", "")
+		if err != nil {
+			t.Fatalf("desired %q: %v", desired, err)
+		}
+		for _, r := range name {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_' {
+				continue
+			}
+			t.Fatalf("desired %q produced %q, which is not URL-safe ASCII", desired, name)
+		}
+		if strings.TrimSuffix(name, ".jpg") == "" {
+			t.Fatalf("desired %q produced the nameless file %q", desired, name)
+		}
+		readOutput(t, base, "assets", name)
+	}
+}
+
+// Re-uploading the same picture must replace it: the URL is already published in
+// a news post, so a fresh name each time would leave the post on the old file.
+func TestSameNameReplacesTheAsset(t *testing.T) {
+	base := t.TempDir()
+	first, _, err := ProcessAndSaveAsset(base, "assets", "скриншот", smallPNG(t, 64, 48), ".png", "")
+	if err != nil {
+		t.Fatalf("ProcessAndSaveAsset: %v", err)
+	}
+	second, _, err := ProcessAndSaveAsset(base, "assets", "скриншот", smallPNG(t, 32, 32), ".png", "")
+	if err != nil {
+		t.Fatalf("ProcessAndSaveAsset: %v", err)
+	}
+	if first != second {
+		t.Fatalf("the same source name produced %q and then %q", first, second)
+	}
+	entries, err := os.ReadDir(filepath.Join(base, "assets"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("two uploads of the same name left %d files", len(entries))
+	}
+}
+
+// An ASCII name still maps onto itself: every asset stored before this changed
+// is addressed by that name from published posts.
+func TestASCIINamesAreStoredUnchanged(t *testing.T) {
+	base := t.TempDir()
+	for desired, want := range map[string]string{
+		"screenshot": "screenshot.jpg",
+		"cover-1":    "cover-1.jpg",
+		"my_file.2":  "my_file.2.jpg",
+	} {
+		name, _, err := ProcessAndSaveAsset(base, "assets", desired, smallPNG(t, 8, 8), ".png", "")
+		if err != nil {
+			t.Fatalf("desired %q: %v", desired, err)
+		}
+		if name != want {
+			t.Errorf("desired %q was stored as %q, want %q", desired, name, want)
+		}
+	}
+}
+
 // The desired name comes from the admin's form field and lands on disk. A
 // traversal there would write outside the asset tree, which nginx serves.
 func TestDesiredNameCannotEscapeTheAssetTree(t *testing.T) {
