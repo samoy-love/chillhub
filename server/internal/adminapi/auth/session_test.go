@@ -571,24 +571,102 @@ func TestLoadConfigDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
-// ADMIN_PASSWORD_PLAIN is the development shortcut: it is hashed on startup and
-// takes precedence over the configured bcrypt. Getting the precedence backwards
-// would leave a dev box authenticating against a stale production hash.
+// ADMIN_PASSWORD_PLAIN — ярлык для разработки, и он работает ТОЛЬКО при явном
+// ADMIN_ALLOW_PLAIN_PASSWORD. Это и есть граница между dev и продом: юнит на
+// сервере флага не содержит, поэтому строка с открытым паролем, случайно туда
+// перенесённая, ничего не включает.
 //
-// One bcrypt at the production cost runs here, deliberately once.
-func TestLoadConfigPlainPasswordOverridesBcrypt(t *testing.T) {
+// Один bcrypt по боевой цене — здесь и намеренно один раз.
+func TestLoadConfigPlainPasswordNeedsExplicitOptIn(t *testing.T) {
 	t.Setenv("ADMIN_USERNAME", "admin")
-	t.Setenv("ADMIN_PASSWORD_BCRYPT", "$2a$12$stale-hash-that-must-not-win")
+	t.Setenv("ADMIN_PASSWORD_BCRYPT", "")
 	t.Setenv("ADMIN_PASSWORD_PLAIN", "dev-password")
 	t.Setenv("JWT_SECRET", "dev-secret")
+	t.Setenv("ADMIN_ALLOW_PLAIN_PASSWORD", "1")
 
 	cfg := LoadConfig()
-	if cfg.AdminPassBC == "$2a$12$stale-hash-that-must-not-win" {
-		t.Fatal("ADMIN_PASSWORD_PLAIN did not override ADMIN_PASSWORD_BCRYPT")
-	}
 	a := New(cfg)
 	if resp := login(t, a, "admin", "dev-password"); resp.StatusCode != http.StatusOK {
-		t.Fatalf("the plain password does not authenticate: %d", resp.StatusCode)
+		t.Fatalf("с разрешающим флагом открытый пароль обязан пускать: %d", resp.StatusCode)
+	}
+}
+
+// Без флага открытый пароль не действует — иначе прод-юнит с одной лишней
+// строкой молча начал бы пускать по паролю, который лежит рядом открытым
+// текстом.
+func TestLoadConfigPlainPasswordIgnoredWithoutOptIn(t *testing.T) {
+	t.Setenv("ADMIN_USERNAME", "admin")
+	t.Setenv("ADMIN_PASSWORD_BCRYPT", "")
+	t.Setenv("ADMIN_PASSWORD_PLAIN", "dev-password")
+	t.Setenv("JWT_SECRET", "dev-secret")
+	t.Setenv("ADMIN_ALLOW_PLAIN_PASSWORD", "")
+
+	cfg := LoadConfig()
+	if cfg.AdminPassBC != "" {
+		t.Fatal("ADMIN_PASSWORD_PLAIN подействовал без ADMIN_ALLOW_PLAIN_PASSWORD")
+	}
+}
+
+// Заданы обе переменные — это не «одна победит», а неопределённость. Побеждает
+// bcrypt, открытый пароль игнорируется: иначе dev-строка, забытая рядом с
+// боевым хешем, тихо подменяла бы боевой пароль.
+func TestLoadConfigBcryptWinsOverPlain(t *testing.T) {
+	const configured = "$2a$12$configured-hash-that-must-win"
+	t.Setenv("ADMIN_USERNAME", "admin")
+	t.Setenv("ADMIN_PASSWORD_BCRYPT", configured)
+	t.Setenv("ADMIN_PASSWORD_PLAIN", "dev-password")
+	t.Setenv("JWT_SECRET", "dev-secret")
+	t.Setenv("ADMIN_ALLOW_PLAIN_PASSWORD", "1")
+
+	cfg := LoadConfig()
+	if cfg.AdminPassBC != configured {
+		t.Fatalf("ADMIN_PASSWORD_PLAIN перекрыл заданный bcrypt: %q", cfg.AdminPassBC)
+	}
+}
+
+// nginxAuthRequestBypassed — маршруты, которые в chillhub-launcher.conf идут
+// МИМО `auth_request /_auth`.
+//
+// Так сделано намеренно: auth_request заставляет nginx прочитать тело запроса
+// целиком до проверки, а через эти ручки едут сборки на десятки гигабайт.
+// Плата — то, что для них рубеж остаётся ровно один: middleware этого пакета.
+// Проверка ниже превращает «мы помним, что здесь важно» в машинный факт: если
+// путь попадёт в allowlist Middleware, тест покраснеет, а не прод откроется.
+//
+// Список синхронизируется вручную с location-блоками nginx. Добавляя туда
+// новый bypass, добавьте строку и сюда — иначе новая ручка окажется без
+// проверки с обеих сторон сразу.
+var nginxAuthRequestBypassed = []string{
+	"/admin/api/upload",
+	"/admin/api/uploadStream",
+	"/admin/api/upload/init",
+	"/admin/api/upload/chunk",
+	"/admin/api/upload/status",
+	"/admin/api/upload/complete",
+	"/admin/api/upload/process",
+	"/admin/api/upload/cleanup",
+}
+
+func TestUploadRoutesBypassingNginxAuthAreStillGuardedByMiddleware(t *testing.T) {
+	a := secureAuth(t)
+	for _, p := range nginxAuthRequestBypassed {
+		t.Run(p, func(t *testing.T) {
+			reached := false
+			h := a.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				reached = true
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, p, nil))
+
+			if reached {
+				t.Fatalf("%s: запрос без сессии дошёл до обработчика — в nginx этот путь идёт мимо auth_request, второго рубежа нет", p)
+			}
+			if w.Code != http.StatusUnauthorized {
+				t.Fatalf("%s: ожидался 401, получен %d", p, w.Code)
+			}
+		})
 	}
 }
 
