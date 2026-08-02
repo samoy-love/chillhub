@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -187,12 +188,33 @@ func zipFileDecodedName(f *zip.File) string {
 
 // zipEntryRelPath normalizes an archive entry name into a relative slash path,
 // or "" when the entry should be skipped.
+//
+// A BACKSLASH IN AN ENTRY NAME IS TREATED AS A DIRECTORY SEPARATOR, on every
+// platform. The ZIP specification (APPNOTE 4.4.17.1) allows only the forward
+// slash, so "dir\file.txt" only ever comes from a tool that wrote the Windows
+// separator by mistake — and the old normalization went through
+// filepath.ToSlash, which resolves it on Windows and does NOTHING on Linux. The
+// same archive therefore extracted into a directory tree on a developer's
+// machine and into one file literally named "dir\file.txt" on the Linux
+// production host, where validateManifest then rejected the whole publication
+// ("backslash in path"). A build that passes review must not fail on deploy for
+// that reason, so the separator is decided here rather than by the host OS.
+//
+// Separator, rather than a literal character, is the only reading that can
+// produce an installable build: everything published here is a Windows tree, and
+// Windows cannot hold a file whose name contains a backslash, so the client could
+// never write such a file even if the manifest allowed it. It is also the safer
+// reading — the traversal guard below then runs over the real segments, so
+// "..\..\evil" is collapsed by Clean instead of surviving as an odd file name.
+//
+// path.Clean, not filepath.Clean, for the same reason: the result must not depend
+// on which OS the server runs on.
 func zipEntryRelPath(f *zip.File) string {
-	name := zipFileDecodedName(f)
-	// remove any drive letters or leading slashes/backslashes
-	rel := filepath.ToSlash(strings.TrimLeft(strings.TrimSpace(name), "/\\"))
-	// collapse any .. segments
-	rel = filepath.ToSlash(filepath.Clean(rel))
+	name := strings.ReplaceAll(strings.TrimSpace(zipFileDecodedName(f)), "\\", "/")
+	// remove any leading slashes so the entry is anchored inside the target
+	rel := strings.TrimLeft(name, "/")
+	// collapse any . and .. segments
+	rel = path.Clean(rel)
 	if rel == "." || rel == "" {
 		return ""
 	}

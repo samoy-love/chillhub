@@ -111,11 +111,15 @@ func (h *Handlers) AssetsMkdir(w http.ResponseWriter, r *http.Request) {
 	}
 	base := h.assetsRoot()
 	rel := adminutil.SanitizeAssetPath(r.FormValue("path"))
-	name := adminutil.SanitizeFilename(r.FormValue("name"))
+	// Checked before sanitising, which never returns "": an empty name comes back
+	// as "file" and whitespace as "___", so the dialog answered OK and quietly
+	// left a folder nobody asked for in the gallery.
+	name := strings.TrimSpace(r.FormValue("name"))
 	if name == "" {
 		http.Error(w, "empty name", http.StatusBadRequest)
 		return
 	}
+	name = adminutil.SanitizeFilename(name)
 	dir := filepath.Join(base, rel, name)
 	if !adminutil.EnsureWithin(base, dir) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
@@ -244,14 +248,24 @@ func (h *Handlers) AssetsDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	base := h.assetsRoot()
 	rel := adminutil.SanitizeAssetPath(r.FormValue("path"))
-	name := adminutil.SanitizeFilename(r.FormValue("name"))
+	// See AssetsMkdir: sanitising first turns an empty name into "file".
+	name := strings.TrimSpace(r.FormValue("name"))
 	if name == "" {
 		http.Error(w, "empty name", http.StatusBadRequest)
 		return
 	}
+	name = adminutil.SanitizeFilename(name)
 	target := filepath.Join(base, rel, name)
 	if !adminutil.EnsureWithin(base, target) || isAssetsRoot(base, target) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	// os.RemoveAll treats a missing target as success, so the gallery reported a
+	// deletion that never happened and dropped the row from its listing — while
+	// the picture the admin actually meant to remove is still served. Lstat, not
+	// Stat, so a dangling symlink can still be cleaned up.
+	if _, err := os.Lstat(target); err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	if err := os.RemoveAll(target); err != nil {
@@ -272,12 +286,16 @@ func (h *Handlers) AssetsRename(w http.ResponseWriter, r *http.Request) {
 	}
 	base := h.assetsRoot()
 	rel := adminutil.SanitizeAssetPath(r.FormValue("path"))
-	from := adminutil.SanitizeFilename(r.FormValue("from"))
-	to := adminutil.SanitizeFilename(r.FormValue("to"))
+	// See AssetsMkdir: sanitising first turns an empty name into "file", so an
+	// empty "to" would rename the picture to a placeholder instead of failing.
+	from := strings.TrimSpace(r.FormValue("from"))
+	to := strings.TrimSpace(r.FormValue("to"))
 	if from == "" || to == "" {
 		http.Error(w, "empty names", http.StatusBadRequest)
 		return
 	}
+	from = adminutil.SanitizeFilename(from)
+	to = adminutil.SanitizeFilename(to)
 	src := filepath.Join(base, rel, from)
 	dst := filepath.Join(base, rel, to)
 	if !adminutil.EnsureWithin(base, src) || !adminutil.EnsureWithin(base, dst) ||

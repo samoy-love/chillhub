@@ -114,7 +114,7 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	// just written to, so this now measures the volume that will actually be
 	// filled.
 	if needBytes, err := estimateZipUncompressedSize(tmpName); err == nil {
-		if freeBytes, ferr := freeSpaceBytes(filesRoot); ferr == nil && freeBytes > 0 && needBytes > freeBytes {
+		if freeBytes, ferr := freeSpaceFn(filesRoot); ferr == nil && freeBytes > 0 && needBytes > freeBytes {
 			http.Error(w, fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes), http.StatusInsufficientStorage)
 			return
 		}
@@ -228,9 +228,11 @@ func isPublicUploadError(err error) bool {
 	return errors.Is(err, errDuplicateZipPart) || errors.Is(err, errZipTooLarge) || errors.Is(err, errNoTempSpace)
 }
 
-// freeSpaceFn is the free-space probe the upload guard uses. It is a variable
-// only so tests can simulate a volume that is full or filling up, which cannot
-// be arranged on a real machine.
+// freeSpaceFn is the free-space probe every upload guard uses: the spool budget
+// as well as the precheck each publish path runs before extraction. It is a
+// variable only so tests can simulate a volume that is full or filling up, which
+// cannot be arranged on a real machine — the guards must be called through it and
+// never through freeSpaceBytes directly, or the branch becomes untestable.
 var freeSpaceFn = freeSpaceBytes
 
 // spoolZipPart copies the "zip" part into dst under two independent limits:
@@ -497,7 +499,7 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 
 	// Check free space before unzip (estimate total uncompressed size of ZIP)
 	if needBytes, err := estimateZipUncompressedSize(tmpName); err == nil {
-		if freeBytes, ferr := freeSpaceBytes(filesRoot); ferr == nil && freeBytes > 0 && needBytes > freeBytes {
+		if freeBytes, ferr := freeSpaceFn(filesRoot); ferr == nil && freeBytes > 0 && needBytes > freeBytes {
 			nw.fail(http.StatusInsufficientStorage, fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes))
 			return
 		}
