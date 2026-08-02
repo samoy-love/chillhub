@@ -134,8 +134,10 @@ dk deploy --all --dry-run   # show the plan, touch nothing
 dk rollback chillhub-admin
 ```
 
-From CI: Actions → Release → Run workflow, with the target selectable there. A
-`v*` tag deploys everything and builds the installer.
+From CI: Actions → Release → Run workflow, with the target selectable there.
+`all` ships the four targets above but does NOT build the installer — that
+needs either a separate run with `target=installer` or a `v*` tag, which does
+both.
 
 The admin password is stored as a hash in a systemd drop-in and set separately
 from deployment: it changes rarely, and carrying a secret through every deploy
