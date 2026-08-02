@@ -2336,10 +2336,6 @@ function gamesAppendRow(tb, it){
   tb.appendChild(tr);
 }
 
-function gamesAddRow(){
-  const tb = document.querySelector('#gm_table tbody');
-  gamesAppendRow(tb, {gameId:'', title:'', exeRelativePath:''});
-}
 
 async function gamesSave(){
   const rows = Array.from(document.querySelectorAll('#gm_table tbody tr'));
@@ -2498,16 +2494,6 @@ async function newsInsertImageFromFile(){
   editorDirty = true; ta.dispatchEvent(new Event('input'));
 }
 
-function newsInsertImageByUrl(){
-  const url = prompt('URL изображения (относительный или абсолютный):','/assets/sample.png');
-  if(!url) return;
-  const ta = document.getElementById('ns_md');
-  insertAtCursor(ta, '![image](' + url + ')');
-  autosizeTextArea(ta);
-  updateCoverPreview();
-  newsPreview();
-  editorDirty = true; ta.dispatchEvent(new Event('input'));
-}
 
 async function newsSave(){
   const scope=document.getElementById('ns_scope').value; const gid=document.getElementById('ns_gid').value; const slug=document.getElementById('ns_slug').value; const md=document.getElementById('ns_md').value;
@@ -2534,14 +2520,6 @@ function slugify(s){
   return (s||'').toLowerCase().replace(/[^a-z0-9а-яё\-\s_]/g,'').replace(/[\s_]+/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');
 }
 
-// no-op: kept for compatibility with earlier calls
-function stripCoverImageFromMarkdown(md, url){
-  if(!md||!url) return md||'';
-  const u = normalizeUrlForPreview(url);
-  // remove leading image line if URL matches cover
-  const re = new RegExp('^!\\[[^\n]*?\\]\\((?:'+escapeRegExp(u)+')\\)\\s*\\n?', 'm');
-  return (md||'').replace(re, '');
-}
 
 function excerptFromMarkdown(md){
   md = md || '';
@@ -2656,9 +2634,6 @@ function escapeHtml(s){
   return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
-function escapeRegExp(s){
-  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 function titleFromMarkdown(md){
   const m = /^#\s+(.+)$/m.exec(md||'');
   return m? m[1].trim(): '';

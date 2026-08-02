@@ -128,6 +128,111 @@ func TestSanitizeFilenameLeavesPlainNamesAlone(t *testing.T) {
 	}
 }
 
+// Two different Cyrillic names of the same length used to sanitise to the same
+// row of underscores, so the second upload silently overwrote the first and a
+// published post showed the wrong picture.
+func TestSanitizeFilenameKeepsDifferentCyrillicNamesApart(t *testing.T) {
+	names := []string{
+		"скриншот.png", "картинка.png", "снимок01.png", "снимок02.png",
+		"Скриншот.png", "экран.png", "екран.png", "мой файл.png",
+		"文件.png", "画像.png", "🙂.png", "ﬁle.png",
+	}
+	seen := map[string]string{}
+	for _, in := range names {
+		got := SanitizeFilename(in)
+		if prev, dup := seen[got]; dup {
+			t.Errorf("SanitizeFilename(%q) = %q, which already belongs to %q", in, got, prev)
+		}
+		seen[got] = in
+	}
+}
+
+// The stored name is served by nginx under /assets/, so it has to stay ASCII and
+// URL-safe whatever the source alphabet was — and it must keep the extension
+// last, or the browser gets a file with no type.
+func TestSanitizeFilenameStaysURLSafeAndKeepsTheExtension(t *testing.T) {
+	for _, in := range []string{"скриншот.png", "文件.png", "🙂🙂.jpeg", "ьъ.png", "имя файла.webp"} {
+		got := SanitizeFilename(in)
+		for _, r := range got {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_' {
+				continue
+			}
+			t.Fatalf("SanitizeFilename(%q) = %q, which contains the unsafe rune %q", in, got, r)
+		}
+		ext := filepath.Ext(in)
+		if !strings.HasSuffix(got, ext) {
+			t.Errorf("SanitizeFilename(%q) = %q, want it to still end in %q", in, got, ext)
+		}
+		if strings.TrimSuffix(got, ext) == "" {
+			t.Errorf("SanitizeFilename(%q) = %q, a file with no name", in, got)
+		}
+	}
+}
+
+// A name with nothing transliterable left must still be usable, not a bare
+// extension or a string of underscores that collides with the next one.
+func TestSanitizeFilenameGivesFullyNonASCIINamesAStem(t *testing.T) {
+	for _, in := range []string{"文件", "🙂", "ъь", "日本語.png"} {
+		got := SanitizeFilename(in)
+		stem := strings.TrimSuffix(got, filepath.Ext(got))
+		if strings.Trim(stem, "_") == "" {
+			t.Errorf("SanitizeFilename(%q) = %q, whose stem is empty or all underscores", in, got)
+		}
+	}
+}
+
+// Cyrillic is transliterated rather than blanked, so the URL stays readable
+// instead of turning into a hash with no hint of what the picture is.
+func TestSanitizeFilenameTransliteratesCyrillic(t *testing.T) {
+	for in, want := range map[string]string{
+		"скриншот.png": "skrinshot",
+		"Картинка.jpg": "Kartinka",
+		"обложка":      "oblozhka",
+	} {
+		if got := SanitizeFilename(in); !strings.HasPrefix(got, want+"-") {
+			t.Errorf("SanitizeFilename(%q) = %q, want it to start with %q", in, got, want+"-")
+		}
+	}
+}
+
+// The same source name must keep producing the same stored name: re-uploading a
+// corrected image is expected to replace the asset the post already links to.
+func TestSanitizeFilenameIsStableAndIdempotent(t *testing.T) {
+	for _, in := range []string{"скриншот.png", "文件.png", "screenshot.png"} {
+		first := SanitizeFilename(in)
+		if second := SanitizeFilename(in); second != first {
+			t.Errorf("SanitizeFilename(%q) is not stable: %q then %q", in, first, second)
+		}
+		// The upload path sanitises the name, splits the extension off and
+		// sanitises the stem again before storing it.
+		if again := SanitizeFilename(first); again != first {
+			t.Errorf("SanitizeFilename(%q) = %q, re-sanitising it gives %q", in, first, again)
+		}
+	}
+}
+
+// ASCII names must come through byte for byte: every asset already stored is
+// addressed by the name this function produced, and the URLs are in published
+// posts.
+func TestSanitizeFilenameLeavesASCIIBehaviourUnchanged(t *testing.T) {
+	for in, want := range map[string]string{
+		"screenshot.png":     "screenshot.png",
+		"cover-1.jpg":        "cover-1.jpg",
+		"my_file.2.webp":     "my_file.2.webp",
+		"file name (1).png":  "file_name__1_.png",
+		"________.jpg":       "________.jpg",
+		"../../etc/passwd":   ".._.._etc_passwd",
+		"":                   "file",
+		"   ":                "___",
+		"UPPER.PNG":          "UPPER.PNG",
+		"a-b_c.1.2.3.tar.gz": "a-b_c.1.2.3.tar.gz",
+	} {
+		if got := SanitizeFilename(in); got != want {
+			t.Errorf("SanitizeFilename(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // The asset subdirectory comes from a form field and is joined onto the assets
 // root; "..", leading slashes and backslashes must not survive.
 func TestSanitizeAssetPathStripsTraversal(t *testing.T) {
