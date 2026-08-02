@@ -1,0 +1,69 @@
+# Обновление зависимостей.
+#
+# До этого файла зависимости обновлялись руками и потому не обновлялись: к
+# августу 2026 x/crypto отстал на 26 минорных версий, а тулчейн Go — на две.
+# Отставание в x/crypto особенно неприятно: на нём bcrypt админки.
+#
+# Раз в неделю, а не ежедневно: этот проект не выдержит ежедневного потока
+# пул-реквестов, а недельный ритм догоняет всё, что важно.
+version: 2
+
+updates:
+  # Go — сервер: публичный API и админка.
+  - package-ecosystem: gomod
+    directory: /server
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    groups:
+      # Модули golang.org/x/* выходят согласованно; отдельный пул-реквест на
+      # каждый — это шум ради шума.
+      golang-x:
+        patterns:
+          - "golang.org/x/*"
+
+  # NuGet — клиент и апдейтер.
+  #
+  # ВНИМАНИЕ при ревью этих пул-реквестов: пакет Blake3 считает хеши всей
+  # системы обновления. Версия 3.x отказалась от нативной реализации и
+  # замедлила хеширование в 3.6 раза (стало медленнее SHA-256), поэтому проект
+  # намеренно сидит на линии 2.x. Не сливайте обновление Blake3, не сверив
+  # эталонные векторы и скорость.
+  - package-ecosystem: nuget
+    directory: /launcher/ChillHub
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    ignore:
+      # StyleCop: в проекте стоит 1.2.0-beta.556, а последняя стабильная —
+      # 1.1.118, то есть «обновление» было бы откатом на более старую линию.
+      - dependency-name: StyleCop.Analyzers
+
+  - package-ecosystem: nuget
+    directory: /launcher/tests/ChillHub.Tests
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+
+  # Сами GitHub Actions: они закреплены тегами, и без этого блока теги
+  # застывают навсегда.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns:
+          - "*"
