@@ -1,6 +1,7 @@
 package builds
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"ChillHub/server/internal/adminutil"
@@ -43,8 +45,15 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 		tmpName = parts.tmpName
 	}
 	if err != nil {
-		// The detail (a temp path, a disk error) goes to the log only.
-		adminutil.Fail(w, code, "failed to read the upload", "upload", err)
+		// The detail (a temp path, a disk error) goes to the log only; the
+		// size and space guards are the exception, since an operator staring at
+		// a rejected publish has to know whether the archive was too big or the
+		// volume was too full.
+		msg := "failed to read the upload"
+		if isPublicUploadError(err) {
+			msg = err.Error()
+		}
+		adminutil.Fail(w, code, msg, "upload", err)
 		return
 	}
 	kind := parts.kind
@@ -169,6 +178,141 @@ type uploadParts struct {
 // being read into memory in full.
 const maxUploadFieldBytes = 1 << 20
 
+// maxUploadZipBytes is the hard ceiling for the "zip" part of a publish
+// request.
+//
+// The number is taken from deploy/launcher.conf, where every upload location
+// sets client_max_body_size 30g: nginx already refuses anything bigger, and a
+// lower value here would reject builds the platform is deliberately
+// provisioned to accept (launcher builds are tens of MB, game builds run to
+// several GB). The point of repeating the limit in the handler is the paths
+// nginx does not cover — a request straight to :55777, or a chunked body with
+// no Content-Length for the precheck to look at — so that no client can ever
+// make us write an unbounded amount of data.
+const maxUploadZipBytes = 30 << 30
+
+// uploadZipLimit is the ceiling actually enforced. It exists as a variable
+// purely so tests can lower it: streaming 30 GiB through a multipart reader to
+// observe the refusal is not something a test suite can do.
+var uploadZipLimit int64 = maxUploadZipBytes
+
+// uploadFreeSpaceReserveBytes is the slack the upload guard leaves on the
+// tmpDir volume. On production /srv is shared by the public API, the admin API
+// and three other sites, so "the disk is exactly full" is already an outage:
+// the upload has to give up while there is still room for the neighbours' logs
+// and state files.
+const uploadFreeSpaceReserveBytes = 1 << 30 // 1 GiB
+
+// zipCopyBufferBytes is the copy buffer for the archive. A large buffer pays
+// off on multi-gigabyte uploads.
+const zipCopyBufferBytes = 4 << 20 // 4 MiB
+
+// zipSpaceRecheckBytes is how often the copy re-measures free space. The
+// precheck only knows the disk as it was when the request started; on a shared
+// volume another writer (or a concurrent upload) can eat the room while we
+// stream, so the budget is refreshed as we go.
+const zipSpaceRecheckBytes = 256 << 20 // 256 MiB
+
+// Guards that reject an upload for a reason the operator has to see: unlike a
+// temp path or a raw disk error, these texts are safe to send back to the
+// client and the admin UI needs to tell them apart.
+var (
+	errDuplicateZipPart = errors.New("duplicate zip part: a publish request must carry exactly one archive")
+	errZipTooLarge      = errors.New("zip part exceeds the maximum upload size")
+	errNoTempSpace      = errors.New("insufficient free space to spool the archive")
+)
+
+// isPublicUploadError reports whether err is one of the guards above, i.e.
+// whether its message may be used as the HTTP response body.
+func isPublicUploadError(err error) bool {
+	return errors.Is(err, errDuplicateZipPart) || errors.Is(err, errZipTooLarge) || errors.Is(err, errNoTempSpace)
+}
+
+// freeSpaceFn is the free-space probe the upload guard uses. It is a variable
+// only so tests can simulate a volume that is full or filling up, which cannot
+// be arranged on a real machine.
+var freeSpaceFn = freeSpaceBytes
+
+// spoolZipPart copies the "zip" part into dst under two independent limits:
+// the hard maxUploadZipBytes ceiling, and the space the tmpDir volume can
+// actually still absorb. It returns the number of bytes written, the HTTP
+// status to answer with, and the error.
+//
+// A volume we cannot measure does not block the upload: freeSpaceBytes fails
+// on exotic filesystems and inside containers, and refusing every publish there
+// would be a worse failure than the one being prevented. In that case only the
+// byte ceiling applies and the reason is logged.
+func spoolZipPart(dst io.Writer, src io.Reader, tmpDir string) (int64, int, error) {
+	budget, budgetKnown := spaceBudget(tmpDir)
+	if budgetKnown && budget == 0 {
+		return 0, http.StatusInsufficientStorage, errNoTempSpace
+	}
+
+	buf := make([]byte, zipCopyBufferBytes)
+	var total int64
+	// budget describes the volume as of measuredAt bytes written, so it is
+	// spent against total-measuredAt, not against total: measuring free space
+	// again after writing 5 GB and then comparing it to all 5 GB would refuse
+	// any upload larger than half the disk.
+	measuredAt := int64(0)
+	nextRecheck := int64(zipSpaceRecheckBytes)
+	for {
+		n, rerr := src.Read(buf)
+		if n > 0 {
+			if total+int64(n) > uploadZipLimit {
+				return total, http.StatusRequestEntityTooLarge, errZipTooLarge
+			}
+			if budgetKnown && uint64(total-measuredAt)+uint64(n) > budget {
+				return total, http.StatusInsufficientStorage, errNoTempSpace
+			}
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				// A write that fails because the volume filled up anyway (the
+				// budget is a snapshot, not a reservation) is a 507, not a 500.
+				if errors.Is(werr, syscall.ENOSPC) {
+					return total, http.StatusInsufficientStorage, errNoTempSpace
+				}
+				return total, http.StatusInternalServerError, werr
+			}
+			total += int64(n)
+			if total >= nextRecheck {
+				budget, budgetKnown = spaceBudget(tmpDir)
+				if budgetKnown && budget == 0 {
+					return total, http.StatusInsufficientStorage, errNoTempSpace
+				}
+				measuredAt = total
+				nextRecheck = total + zipSpaceRecheckBytes
+			}
+		}
+		if rerr == io.EOF {
+			return total, http.StatusOK, nil
+		}
+		if rerr != nil {
+			return total, http.StatusBadRequest, rerr
+		}
+	}
+}
+
+// spaceBudget returns how many bytes the volume behind dir may still be given,
+// i.e. free space minus the reserve. The second result is false when the volume
+// cannot be measured, which callers must treat as "no space limit known" rather
+// than as "no space left".
+func spaceBudget(dir string) (uint64, bool) {
+	free, err := freeSpaceFn(dir)
+	if err != nil {
+		log.Printf("[builds] free space %s: %v (falling back to the byte ceiling alone)", dir, err)
+		return 0, false
+	}
+	if free == 0 {
+		// Some filesystems report 0 instead of failing; treating that as a
+		// full disk would block every upload there.
+		return 0, false
+	}
+	if free <= uploadFreeSpaceReserveBytes {
+		return 0, true
+	}
+	return free - uploadFreeSpaceReserveBytes, true
+}
+
 // readUploadParts streams a multipart publish request: text fields are read
 // into memory under a cap, the "zip" part goes straight to a temp file in
 // tmpDir. onZipSaved, when set, is called right after the archive has landed
@@ -207,24 +351,34 @@ func readUploadParts(r *http.Request, tmpDir string, onZipSaved func(filename st
 		case "updateLatest":
 			out.updateLatest = field(part) == "1"
 		case "zip":
+			// A second "zip" part is refused rather than silently replacing the
+			// first. The caller's cleanup defer only ever learns one temp name,
+			// so overwriting out.tmpName orphaned the first spool file in
+			// tmpDir permanently — a leak an attacker could repeat at will. No
+			// legitimate client sends two archives in one publish request.
+			if out.tmpName != "" {
+				_ = part.Close()
+				return out, http.StatusBadRequest, errDuplicateZipPart
+			}
 			if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-				part.Close()
+				_ = part.Close()
 				return out, http.StatusInternalServerError, err
 			}
 			tmpZip, err := os.CreateTemp(tmpDir, "upload-*.zip")
 			if err != nil {
-				part.Close()
+				_ = part.Close()
 				return out, http.StatusInternalServerError, err
 			}
+			// Recorded before the copy so that the caller removes the file on
+			// every failure path below, including 413 and 507.
 			out.tmpName = tmpZip.Name()
 			out.filename = part.FileName()
-			// A larger buffer pays off on multi-gigabyte uploads.
-			buf := make([]byte, 4<<20) // 4 MiB
-			n, cerr := io.CopyBuffer(tmpZip, part, buf)
+			n, code, cerr := spoolZipPart(tmpZip, part, tmpDir)
+			// Closed before returning: on Windows an open handle would make the
+			// caller's os.Remove fail and leave the partial archive behind.
 			_ = tmpZip.Close()
-			_ = part.Close()
 			if cerr != nil {
-				return out, http.StatusInternalServerError, cerr
+				return out, code, cerr
 			}
 			out.saved = n
 			if onZipSaved != nil {
@@ -267,10 +421,13 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Optional precheck: ensure enough temp space based on Content-Length if known
+	// Optional precheck: ensure enough temp space based on Content-Length if
+	// known. It only saves the client from streaming a body that is doomed —
+	// a chunked request has no Content-Length at all, so the guard that
+	// actually protects the volume is the one inside spoolZipPart.
 	if r.ContentLength > 0 {
 		if err := os.MkdirAll(h.tmpDir(), 0o755); err == nil {
-			if free, ferr := freeSpaceBytes(h.tmpDir()); ferr == nil && free > 0 && uint64(r.ContentLength) > free {
+			if free, ferr := freeSpaceFn(h.tmpDir()); ferr == nil && free > 0 && uint64(r.ContentLength) > free {
 				nw.fail(http.StatusInsufficientStorage, fmt.Sprintf("insufficient temp space: need %d bytes, have %d bytes", r.ContentLength, free))
 				return
 			}
