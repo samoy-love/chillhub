@@ -566,12 +566,12 @@ internal static class Program
     }
 
     /// <summary>Убирает strip-prefix из относительного пути.</summary>
-    private static string StripOf(string rel, string strip)
+    internal static string StripOf(string rel, string strip)
         => string.IsNullOrWhiteSpace(strip)
             ? rel
             : rel.StartsWith(strip + "/", StringComparison.OrdinalIgnoreCase) ? rel.Substring(strip.Length + 1) : rel;
 
-    private static Dictionary<string, string?> ParseArgs(string[] a)
+    internal static Dictionary<string, string?> ParseArgs(string[] a)
     {
         var dict = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         for (int i = 0; i < a.Length; i++)
@@ -593,7 +593,7 @@ internal static class Program
     /// A2. Проверка прав на запись в папку установки ДО первой операции.
     /// Возвращает описание проблемы либо null.
     /// </summary>
-    private static string? DescribeWriteAccess(string dir)
+    internal static string? DescribeWriteAccess(string dir)
     {
         try
         {
@@ -612,7 +612,7 @@ internal static class Program
         }
     }
 
-    private static string? DetectStripPrefix(string src, string files)
+    internal static string? DetectStripPrefix(string src, string files)
     {
         try
         {
@@ -799,7 +799,7 @@ internal static class Program
     /// Файл, а не строка в командной строке: так не нужно ничего экранировать и
     /// нечему потеряться при повторном разборе.
     /// </summary>
-    private static List<string> ReadExeArgs(string? path, UpdateLog log)
+    internal static List<string> ReadExeArgs(string? path, UpdateLog log)
     {
         var result = new List<string>();
         try
@@ -837,7 +837,7 @@ internal static class Program
     /// <param name="strip">Префикс корневой папки архива — он тоже подставляется в пути.</param>
     /// <param name="log">Логгер.</param>
     /// <returns>true, если всё безопасно.</returns>
-    private static bool ValidateLists(IEnumerable<string?> listPaths, string strip, Action<string> log)
+    internal static bool ValidateLists(IEnumerable<string?> listPaths, string strip, Action<string> log)
     {
         var ok = true;
 
@@ -893,7 +893,7 @@ internal static class Program
     /// Удаляет из папки установки служебные файлы апдейтера, оставшиеся от прошлых версий
     /// (filelist.txt / deletelist.txt / emptydirs.txt / apply-update.log / apply-update.cmd и подпапку updater\).
     /// </summary>
-    private static void CleanupUpdaterArtifacts(string dst, Action<string> log)
+    internal static void CleanupUpdaterArtifacts(string dst, Action<string> log)
     {
         try
         {
@@ -926,7 +926,7 @@ internal static class Program
         catch (Exception ex) { log($"cleanup error: {ex.Message}"); }
     }
 
-    private static string Sha256Hex(string path)
+    internal static string Sha256Hex(string path)
     {
         try
         {

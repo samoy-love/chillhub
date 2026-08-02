@@ -150,12 +150,22 @@ $script:PayloadExcludeDirGlobs = @('linux-*', 'osx-*')
 
 function Test-PayloadExcluded {
     param([string]$RelativePath)
-    $rel = $RelativePath -replace '\\', '/'
+    $rel = ($RelativePath -replace '\\', '/').TrimStart('/')
     $leaf = Split-Path -Leaf $rel
 
+    # ТОЧНЫЙ путь верхнего уровня, а НЕ имя файла в любом подкаталоге.
+    #
+    # Здесь стояло сравнение с $leaf, и оно вырезало из пакета data/config.json,
+    # tools/Uninstall.exe и любой другой обычный файл сборки, которому не повезло
+    # с именем. Сервер (LauncherStateFiles в builds.go) и клиент
+    # (PreserveMatcher.DefaultRules) оба сравнивают точный путь верхнего уровня;
+    # правило обязано быть одним на все три стороны — см. A11 в UpdatePreserve.cs.
+    # Расхождение здесь давало тихую пропажу вложенного файла из сборки.
     foreach ($f in $script:PayloadExcludeFiles) {
-        if ($leaf -ieq $f) { return $true }
+        if ($rel -ieq $f) { return $true }
     }
+    # Глобы, наоборот, работают по имени в любом подкаталоге: отладочные
+    # символы не нужны нигде.
     foreach ($g in $script:PayloadExcludeGlobs) {
         if ($leaf -like $g) { return $true }
     }
@@ -330,6 +340,27 @@ Assert-NativeSuccess "dotnet restore" $LASTEXITCODE
 $versionStamp = @()
 if ($AppVersion -and $AppVersion.Trim()) {
     $v = $AppVersion.Trim()
+
+    # <Version> в csproj — то, чем сборка объявляет себя при обычном
+    # `dotnet build`. Если релиз штампует другое число, значит csproj протух, и
+    # любая локальная сборка врёт о своей версии. Расходиться этим значениям
+    # молча нельзя: версия сравнивается с latest.json посимвольно.
+    $declared = $null
+    $csprojXml = [xml](Get-Content -LiteralPath $Csproj -Raw)
+    foreach ($pg in $csprojXml.Project.PropertyGroup) {
+        if ($pg.Version) { $declared = ([string]$pg.Version).Trim() }
+    }
+    if ($declared -and $declared -ne $v) {
+        throw @"
+Версия релиза ($v) не совпадает с <Version> в csproj ($declared).
+
+Эти числа обязаны совпадать: <Version> — источник версии для обычной сборки, и
+протухшее значение означает, что локальный билд объявляет себя не тем, что он есть.
+
+Как чинить: поднять <Version> в launcher/ChillHub/ChillHub.csproj до $v.
+"@
+    }
+
     # AssemblyVersion требует строго числовой четырёхкомпонентный вид, поэтому
     # суффиксы вида "-rc1" отдаём только в информационную версию.
     $numeric = ($v -split '[-+]')[0]

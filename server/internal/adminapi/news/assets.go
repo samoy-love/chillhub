@@ -89,6 +89,17 @@ func (h *Handlers) AssetsList(w http.ResponseWriter, r *http.Request) {
 	adminutil.WriteJSON(w, out)
 }
 
+// isAssetsRoot reports whether p is the gallery root itself.
+//
+// adminutil.EnsureWithin answers "inside" for base itself, so a name of "."
+// (SanitizeFilename keeps dots) resolves the delete/rename target to the whole
+// gallery. os.RemoveAll on it takes out every news cover, every landing-page
+// picture and every game icon in one request, with no undo — and a rename of
+// the root breaks every /assets/ URL already stored in an article.
+func isAssetsRoot(base, p string) bool {
+	return filepath.Clean(p) == filepath.Clean(base)
+}
+
 // AssetsMkdir creates a directory in the gallery (POST path, name).
 func (h *Handlers) AssetsMkdir(w http.ResponseWriter, r *http.Request) {
 	if !adminutil.RequireMethod(w, r, http.MethodPost) {
@@ -239,7 +250,7 @@ func (h *Handlers) AssetsDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target := filepath.Join(base, rel, name)
-	if !adminutil.EnsureWithin(base, target) {
+	if !adminutil.EnsureWithin(base, target) || isAssetsRoot(base, target) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
@@ -269,7 +280,8 @@ func (h *Handlers) AssetsRename(w http.ResponseWriter, r *http.Request) {
 	}
 	src := filepath.Join(base, rel, from)
 	dst := filepath.Join(base, rel, to)
-	if !adminutil.EnsureWithin(base, src) || !adminutil.EnsureWithin(base, dst) {
+	if !adminutil.EnsureWithin(base, src) || !adminutil.EnsureWithin(base, dst) ||
+		isAssetsRoot(base, src) || isAssetsRoot(base, dst) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}

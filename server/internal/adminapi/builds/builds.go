@@ -217,6 +217,51 @@ const LauncherGameID = "launcher"
 // the guard test updater/tests/ManifestPreserveCheck enforces the invariant.
 var LauncherStateFiles = []string{"config.json", "launcher.version", "launcher.update-status", "Uninstall.exe"}
 
+// LauncherUpdaterArtifacts are files the update machinery itself writes into the
+// installation directory. They are not part of any build.
+//
+// They belong in a launcher manifest even less than the preserve rules do: the
+// launcher skips them in the integrity check, in the download plan and in the
+// delete list, and the updater actively scrubs them. Publishing them therefore
+// promises the client files it will never fetch and never verify — and the
+// repository's own guard (updater/tests/ManifestPreserveCheck) already reports
+// such a manifest as a violation, while the publishing side used to emit it
+// happily.
+//
+// Keep in sync with PreserveMatcher.UpdaterArtifactFiles in
+// updater/UpdatePreserve.cs.
+var LauncherUpdaterArtifacts = []string{
+	"filelist.txt", "emptydirs.txt", "deletelist.txt", "apply-update.log", "apply-update.cmd",
+}
+
+// LauncherUpdaterArtifactDir is the directory an older updater mirrored into the
+// installation root. Everything under it is scrubbed by the client, so nothing
+// under it may be published. Keep in sync with
+// PreserveMatcher.UpdaterArtifactDir.
+const LauncherUpdaterArtifactDir = "updater"
+
+// isLauncherNonPayload reports whether a launcher-relative path names a file the
+// client will never write from a manifest: user state, an installation-time
+// artifact, or leftovers of the updater.
+//
+// The comparison is on the EXACT top-level path (plus the one directory prefix),
+// which is what the client's PreserveMatcher does; a basename match here would
+// silently drop legitimate content such as data/config.json.
+func isLauncherNonPayload(rel string) bool {
+	for _, bad := range LauncherStateFiles {
+		if strings.EqualFold(rel, bad) {
+			return true
+		}
+	}
+	for _, bad := range LauncherUpdaterArtifacts {
+		if strings.EqualFold(rel, bad) {
+			return true
+		}
+	}
+	return len(rel) > len(LauncherUpdaterArtifactDir) &&
+		strings.EqualFold(rel[:len(LauncherUpdaterArtifactDir)+1], LauncherUpdaterArtifactDir+"/")
+}
+
 // stripLauncherStateFiles drops user-state entries from a launcher manifest.
 // For regular games the names are ordinary content and are left alone.
 func stripLauncherStateFiles(gameID string, files []manifestFile) []manifestFile {
@@ -226,14 +271,7 @@ func stripLauncherStateFiles(gameID string, files []manifestFile) []manifestFile
 	out := files[:0:0]
 	for _, f := range files {
 		rel := strings.TrimLeft(strings.ReplaceAll(f.Path, "\\", "/"), "/")
-		drop := false
-		for _, bad := range LauncherStateFiles {
-			if strings.EqualFold(rel, bad) {
-				drop = true
-				break
-			}
-		}
-		if drop {
+		if isLauncherNonPayload(rel) {
 			log.Printf("[builds] manifest %s: dropping user-state file %q (see LauncherStateFiles)", gameID, f.Path)
 			continue
 		}
