@@ -609,4 +609,3 @@ func TestMiddlewarePassesAuthenticatedRequestsAndStopsCSRFLessWrites(t *testing.
 }
 
 // ===== helpers =====
-
