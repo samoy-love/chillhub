@@ -280,6 +280,42 @@ func stripLauncherStateFiles(gameID string, files []manifestFile) []manifestFile
 	return out
 }
 
+// isLauncherNonPayloadDir reports whether a launcher-relative DIRECTORY is one
+// the client will never keep.
+//
+// It is the file rule plus the artifact directory itself: the updater runs
+// Directory.Delete(<install>/updater, recursive) in CleanupUpdaterArtifacts, so
+// "updater" is removed as well as everything under it.
+func isLauncherNonPayloadDir(rel string) bool {
+	dir := strings.TrimRight(rel, "/")
+	return isLauncherNonPayload(dir) || strings.EqualFold(dir, LauncherUpdaterArtifactDir)
+}
+
+// stripLauncherStateDirs drops the same paths from a launcher manifest's
+// emptyDirs list.
+//
+// Directories carry no hashes, so a stray entry here cannot produce the endless
+// update loop a stray FILE does — but it is the same broken promise, and the
+// hole stayed open while only Files were filtered. The client creates every
+// emptyDir it is given and the updater deletes the "updater" directory in the
+// very same run, so the manifest permanently describes an installation that
+// cannot exist.
+func stripLauncherStateDirs(gameID string, dirs []string) []string {
+	if !strings.EqualFold(strings.TrimSpace(gameID), LauncherGameID) || len(dirs) == 0 {
+		return dirs
+	}
+	out := dirs[:0:0]
+	for _, d := range dirs {
+		rel := strings.TrimLeft(strings.ReplaceAll(d, "\\", "/"), "/")
+		if isLauncherNonPayloadDir(rel) {
+			log.Printf("[builds] manifest %s: dropping updater-owned directory %q (see LauncherUpdaterArtifactDir)", gameID, d)
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
 // writeManifest validates the manifest, stores it for a version and optionally
 // points latest.json at it. Returns the manifest path and the exact bytes
 // written.
@@ -288,6 +324,7 @@ func stripLauncherStateFiles(gameID string, files []manifestFile) []manifestFile
 // path can accidentally emit a manifest the client will refuse.
 func (h *Handlers) writeManifest(m manifest, updateLatest bool) (string, []byte, error) {
 	m.Files = stripLauncherStateFiles(m.GameID, m.Files)
+	m.EmptyDirs = stripLauncherStateDirs(m.GameID, m.EmptyDirs)
 
 	// Публиковать манифест, который клиент заведомо отвергнет, бессмысленно:
 	// лучше сломать выкладку здесь, с внятной причиной, чем у пользователя на

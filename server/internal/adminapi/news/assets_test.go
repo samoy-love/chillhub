@@ -258,6 +258,109 @@ func TestAssetsMkdirCannotCreateFoldersOutsideTheGallery(t *testing.T) {
 	}
 }
 
+// The "new folder" dialog submits whatever is in its text box, empty included —
+// a mis-hit Enter is enough. The guard used to run on the sanitised name, and
+// SanitizeFilename never returns "": an empty string comes back as "file" and
+// spaces as "___". So the dialog answered OK and left a folder called "___" in
+// the gallery that the admin then had to find and delete by hand.
+func TestAssetsMkdirRejectsAnEmptyName(t *testing.T) {
+	h, root := newHandlers(t)
+	for _, name := range []string{"", "   ", "\t\n"} {
+		w := httptest.NewRecorder()
+		h.AssetsMkdir(w, urlencodedForm(t, "http://example.com/admin/api/news/assets/mkdir", url.Values{
+			"path": {""}, "name": {name},
+		}))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("name %q: got %d, want 400", name, w.Code)
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "news", "assets"))
+	if err == nil && len(entries) > 0 {
+		var got []string
+		for _, e := range entries {
+			got = append(got, e.Name())
+		}
+		t.Errorf("an empty name still created something: %v", got)
+	}
+}
+
+// The same guard on delete and rename. An empty name there is worse than a
+// no-op: sanitised, it addresses a real path, so delete would remove whatever
+// happens to be called "file" and rename would move a picture onto that name,
+// breaking every /assets/ URL already stored in an article.
+func TestAssetsDeleteAndRenameRejectEmptyNames(t *testing.T) {
+	h, root := newHandlers(t)
+	base := filepath.Join(root, "news", "assets")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"file", "keep.jpg"} {
+		if err := os.WriteFile(filepath.Join(base, n), []byte("picture"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	w := httptest.NewRecorder()
+	h.AssetsDelete(w, urlencodedForm(t, "http://example.com/admin/api/news/assets/delete", url.Values{
+		"path": {""}, "name": {"   "},
+	}))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("delete with an empty name: got %d, want 400", w.Code)
+	}
+
+	for _, v := range []url.Values{
+		{"path": {""}, "from": {"keep.jpg"}, "to": {""}},
+		{"path": {""}, "from": {"keep.jpg"}, "to": {"  "}},
+		{"path": {""}, "from": {""}, "to": {"other.jpg"}},
+	} {
+		w := httptest.NewRecorder()
+		h.AssetsRename(w, urlencodedForm(t, "http://example.com/admin/api/news/assets/rename", v))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%v: got %d, want 400", v, w.Code)
+		}
+	}
+	for _, n := range []string{"file", "keep.jpg"} {
+		if _, err := os.Stat(filepath.Join(base, n)); err != nil {
+			t.Errorf("%s was touched by a request that should have been refused: %v", n, err)
+		}
+	}
+}
+
+// os.RemoveAll calls a missing target a success, so deleting a name that is not
+// in the gallery answered 200. The browser drops the row on 200, which is how
+// an admin comes away certain that a picture is gone while nginx still serves
+// it — the name they actually typed had a typo in it.
+func TestAssetsDeleteOfAMissingEntryIsNotFound(t *testing.T) {
+	h, root := newHandlers(t)
+	base := filepath.Join(root, "news", "assets")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "keep.jpg"), []byte("picture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ghost.png", "keep.jpeg", "no-such-folder"} {
+		w := httptest.NewRecorder()
+		h.AssetsDelete(w, urlencodedForm(t, "http://example.com/admin/api/news/assets/delete", url.Values{
+			"path": {""}, "name": {name},
+		}))
+		if w.Code != http.StatusNotFound {
+			t.Errorf("deleting %q: got %d, want 404", name, w.Code)
+		}
+	}
+	// A file that is there still goes away.
+	w := httptest.NewRecorder()
+	h.AssetsDelete(w, urlencodedForm(t, "http://example.com/admin/api/news/assets/delete", url.Values{
+		"path": {""}, "name": {"keep.jpg"},
+	}))
+	if w.Code != http.StatusOK {
+		t.Fatalf("deleting a real file: %d %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(base, "keep.jpg")); err == nil {
+		t.Error("the file survived a deletion that reported success")
+	}
+}
+
 // Downloading a cover by URL is a server-side fetch driven by admin input. It
 // must refuse the empty case and anything pointing back at the machine itself,
 // or the admin panel becomes a port scanner for the internal network.

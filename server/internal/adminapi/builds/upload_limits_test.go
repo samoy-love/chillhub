@@ -187,6 +187,115 @@ func TestUploadProceedsWhenFreeSpaceIsUnknown(t *testing.T) {
 	assertTmpDirEmpty(t, root)
 }
 
+// stubTightContentVolume makes the volume that will hold the EXTRACTED tree look
+// almost full while the spool volume stays roomy. Both are measured through the
+// same probe, so they are told apart by their path: the extraction root always
+// lives under <root>/content, the spool file under <root>/tmp.
+func stubTightContentVolume(t *testing.T, contentFree uint64) {
+	t.Helper()
+	stubFreeSpace(t, func(p string) (uint64, error) {
+		if strings.Contains(filepath.ToSlash(p), "/content/") {
+			return contentFree, nil
+		}
+		return 500 << 30, nil
+	})
+}
+
+// An archive that cannot possibly fit must be refused BEFORE extraction starts.
+// Finding out halfway through fills the content partition — which production
+// shares with the public API and three other sites — and leaves a staging tree
+// of up to 30 GB behind for someone to notice and delete by hand.
+func TestUploadRefusesAnArchiveTooBigForTheContentVolume(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	stubTightContentVolume(t, 4096)
+
+	w := httptest.NewRecorder()
+	h.Upload(w, uploadRequest(t, "game", "1.0.0", zipBytes(t, map[string]string{
+		"big.bin": strings.Repeat("A", 64<<10),
+	})))
+
+	if w.Code != http.StatusInsufficientStorage {
+		t.Fatalf("expected 507 for an archive that does not fit, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "insufficient disk space") {
+		t.Errorf("the operator cannot tell the volume was the problem: %q", w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "content", "game", "1.0.0")); err == nil {
+		t.Error("a build that does not fit was published anyway")
+	}
+	assertNoStagingLeftovers(t, filepath.Join(root, "content", "game"))
+	assertTmpDirEmpty(t, root)
+}
+
+// The same guard on the streaming path, where the refusal has to travel as an
+// NDJSON error event rather than a status line: the admin UI reads a stream with
+// no error event as a successful publication.
+func TestUploadStreamRefusesAnArchiveTooBigForTheContentVolume(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	h.CurrentUser = func(*http.Request) string { return "admin" }
+	stubTightContentVolume(t, 4096)
+
+	w := httptest.NewRecorder()
+	h.UploadStream(w, streamUploadRequest(t,
+		map[string]string{"kind": "game", "gameId": "game", "version": "1.0.0"},
+		zipBytes(t, map[string]string{"big.bin": strings.Repeat("A", 64<<10)})))
+
+	events, garbage := ndjsonEvents(t, w.Body.String())
+	if len(garbage) > 0 {
+		t.Errorf("plain text injected into the NDJSON stream: %q", garbage)
+	}
+	if !hasErrorEvent(events) {
+		t.Fatalf("no error event; the UI would report this build as published: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "insufficient disk space") {
+		t.Errorf("the operator cannot tell the volume was the problem: %q", w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "content", "game", "1.0.0")); err == nil {
+		t.Error("a build that does not fit was published anyway")
+	}
+	assertNoStagingLeftovers(t, filepath.Join(root, "content", "game"))
+	assertNoTempZip(t, root)
+}
+
+// And on the chunked path, which is the one real multi-gigabyte releases use —
+// i.e. the only path where the volume genuinely runs out.
+func TestUploadProcessStreamRefusesAnArchiveTooBigForTheContentVolume(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	h.CurrentUser = func(*http.Request) string { return "admin" }
+	stubTightContentVolume(t, 4096)
+
+	id := "0123456789abcdef0123456789abcdef"
+	mustMkdirAll(t, h.uploadDir(id))
+	if err := os.WriteFile(h.uploadZipPath(id),
+		zipBytes(t, map[string]string{"big.bin": strings.Repeat("A", 64<<10)}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.writeUploadMeta(&uploadMeta{
+		UploadID: id, Kind: "game", GameID: "game", Version: "1.0.0", Status: "ready",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	h.UploadProcessStream(w, httptest.NewRequest(http.MethodPost,
+		"http://example.com/admin/api/upload/process?uploadId="+id, nil))
+
+	events, _ := ndjsonEvents(t, w.Body.String())
+	if !hasErrorEvent(events) {
+		t.Fatalf("no error event: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "insufficient disk space") {
+		t.Errorf("the operator cannot tell the volume was the problem: %q", w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "content", "game", "1.0.0")); err == nil {
+		t.Error("a build that does not fit was published anyway")
+	}
+	assertNoStagingLeftovers(t, filepath.Join(root, "content", "game"))
+}
+
 // spaceBudget decides between "refuse" and "do not enforce", and the two are
 // both encoded in a (uint64, bool) pair — an easy place to invert a condition
 // and either block every upload or stop guarding at all.

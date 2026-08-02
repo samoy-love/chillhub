@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // readIndex loads one of the two index.json files as a slug -> item map.
@@ -321,8 +322,9 @@ func TestExtractMetaTitleAndSummary(t *testing.T) {
 		// Windows editors and pasted content bring \r along; a summary ending in
 		// a stray carriage return renders as a broken line in the client.
 		{"crlf line endings", "# T\r\n\r\nabc\r\n", "T", "abc"},
-		// Only the first H1 is the title; a second one belongs to the body.
-		{"second h1 stays in the body", "# first\n\n# second", "first", "# second"},
+		// Only the first H1 is the title. A further heading is still a heading,
+		// not body text, so it must not become the card's summary line.
+		{"second h1 is not a summary", "# first\n\n# second", "first", ""},
 		// A multi-line paragraph is one summary, not just its first line.
 		{"wrapped paragraph", "# T\n\nline one\nline two\n\nnext", "T", "line one\nline two"},
 	}
@@ -333,6 +335,97 @@ func TestExtractMetaTitleAndSummary(t *testing.T) {
 				t.Fatalf("got (%q, %q), want (%q, %q)", title, summary, c.title, c.summary)
 			}
 		})
+	}
+}
+
+// Nearly every article here opens with its cover picture on the first line,
+// often followed by a subheading. The summary is drawn as plain text on the
+// card — in the launcher's news list and on the landing page — so taking the
+// opening block verbatim showed the reader "![c](pic.png)" where the first
+// sentence of the article was supposed to be.
+func TestSummarySkipsMarkupAndTakesTheFirstRealText(t *testing.T) {
+	cases := []struct {
+		name, md, summary string
+	}{
+		{"cover on the first line", "![c](pic.png)\n\n# Заголовок\n\nПервый абзац", "Первый абзац"},
+		{"cover then a subheading", "![c](pic.png)\n\n# T\n\n## Что нового\n\nТекст", "Текст"},
+		{"cover glued to the heading", "![c](pic.png)\n# T\nТекст", "Текст"},
+		{"horizontal rule first", "# T\n\n---\n\nТекст", "Текст"},
+		{"code fence first", "# T\n\n```\ngo build\n```\n\nТекст", "Текст"},
+		// A bullet list is perfectly readable once the bullets are gone; patch
+		// notes are written that way and would otherwise get no summary at all.
+		{"bullet list", "# T\n\n- первый пункт\n- второй пункт", "первый пункт\nвторой пункт"},
+		{"numbered list", "# T\n\n1. первый\n2. второй", "первый\nвторой"},
+		{"quote", "# T\n\n> цитата", "цитата"},
+		{"link keeps its label", "# T\n\nСкачайте [лаунчер](https://x.dev) сейчас", "Скачайте лаунчер сейчас"},
+		{"emphasis is dropped", "# T\n\n**Важно:** мы *обновились*", "Важно: мы обновились"},
+		// An article that is nothing but pictures has no summary. An empty card
+		// line is honest; a line of markdown is not.
+		{"pictures only", "![a](1.png)\n\n![b](2.png)", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, summary, _ := ExtractMeta(c.md); summary != c.summary {
+				t.Fatalf("summary = %q, want %q", summary, c.summary)
+			}
+		})
+	}
+}
+
+// The same thing end to end: what the launcher actually downloads is
+// index.json, and that is where the raw markdown used to land.
+func TestPublishedIndexCarriesNoMarkdownInTheSummary(t *testing.T) {
+	h, root := newHandlers(t)
+	saveArticle(t, h, "cover-first", "![c](pic.png)\n\n# Обновление\n\nМы починили загрузку.", true)
+
+	it := publicIndex(t, root)["cover-first"]
+	if it.Summary != "Мы починили загрузку." {
+		t.Fatalf("summary = %q, want the first sentence of the article", it.Summary)
+	}
+	if it.CoverUrl != "" {
+		t.Errorf("the cover comes from the metadata, not from the body: %q", it.CoverUrl)
+	}
+}
+
+// index.json is fetched by every launcher on every start. An article whose
+// opening paragraph is a wall of text used to be shipped in it in full, so one
+// long post inflated the file every client downloads. The cut has to happen on
+// a rune boundary: the articles are in Russian and a byte-sized cut splits a
+// two-byte character into a replacement glyph on the card.
+func TestSummaryIsBoundedAndCutOnAWordAndRuneBoundary(t *testing.T) {
+	h, root := newHandlers(t)
+	para := strings.Repeat("Очень длинный абзац без единого разрыва строки. ", 20000)
+	saveArticle(t, h, "long", "# Заголовок\n\n"+para, true)
+
+	it := publicIndex(t, root)["long"]
+	if n := utf8.RuneCountInString(it.Summary); n > 300 {
+		t.Fatalf("summary is %d runes long; index.json ships this to every client", n)
+	}
+	if !utf8.ValidString(it.Summary) || strings.ContainsRune(it.Summary, '�') {
+		t.Fatalf("the cut broke a multi-byte character: %q", it.Summary)
+	}
+	if !strings.HasSuffix(it.Summary, "…") {
+		t.Fatalf("a shortened summary must say so: %q", it.Summary)
+	}
+	// The last word must be whole: the text before the ellipsis is a prefix of
+	// the paragraph that ends exactly where a space does.
+	head := strings.TrimSuffix(it.Summary, "…")
+	if !strings.HasPrefix(para, head) || !strings.HasPrefix(para[len(head):], " ") {
+		t.Fatalf("the summary was cut mid-word: %q", it.Summary)
+	}
+	// Only the index is shortened; the article itself is untouched.
+	code, got := getArticle(t, h, "long")
+	if code != http.StatusOK || !strings.HasSuffix(got["markdown"].(string), para) {
+		t.Fatalf("the stored article was truncated too (%d)", code)
+	}
+}
+
+// A summary that fits must stay exactly as written — no stray ellipsis on the
+// short cards, which are the majority.
+func TestShortSummaryIsLeftAlone(t *testing.T) {
+	_, summary, _ := ExtractMeta("# T\n\nКороткий анонс.")
+	if summary != "Короткий анонс." {
+		t.Fatalf("summary = %q, want it verbatim", summary)
 	}
 }
 
@@ -415,6 +508,18 @@ func TestUploadCoverRejectsTraversalSlug(t *testing.T) {
 	if publicIndex(t, root)["story"].CoverUrl != "" {
 		t.Error("a rejected upload still changed an article's cover")
 	}
+	// The rejection also has to come before the file hits the disk. The name is
+	// sanitised, so nothing escapes the gallery, but every refused upload used to
+	// leave one more orphan in it — pictures nobody can attribute to an article,
+	// piling up in the picker every editor browses.
+	entries, err := os.ReadDir(filepath.Join(root, "news", "assets"))
+	if err == nil && len(entries) > 0 {
+		var got []string
+		for _, e := range entries {
+			got = append(got, e.Name())
+		}
+		t.Errorf("rejected cover uploads left files in the gallery: %v", got)
+	}
 }
 
 // Deleting an article must not delete the images: content/news/assets is one
@@ -479,13 +584,51 @@ func TestGetMissingArticleIsNotFound(t *testing.T) {
 // Deleting something that is not there must not report success: the admin UI
 // removes the row from its list on 200, so a false OK hides an article that is
 // still live for every user.
-func TestDeleteMissingArticleDoesNotReportSuccess(t *testing.T) {
+//
+// It must be a 404 and not a 500 either. The panel treats 5xx as "the backend
+// is down" — it retries and tells the admin the server is broken, when the only
+// thing that happened is that the row they clicked was already gone.
+func TestDeleteMissingArticleIsNotFound(t *testing.T) {
 	h, _ := newHandlers(t)
 	w := httptest.NewRecorder()
 	h.Delete(w, httptest.NewRequest(http.MethodPost,
 		"http://example.com/admin/news/delete?scope=launcher&slug=ghost", nil))
-	if w.Code < 400 {
-		t.Fatalf("deleting a missing article answered %d", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("deleting a missing article answered %d, want 404", w.Code)
+	}
+}
+
+// Publishing a slug that has no markdown file must fail and change nothing.
+// It used to answer 200 and put an entry into news_meta.json that no article
+// corresponds to: RebuildIndex only walks the .md files, so the entry never
+// showed up anywhere and could not be cleared from the panel — it just sat
+// there, and would have flipped a real article to "published" the moment
+// somebody later created an article with that slug.
+func TestPublishingAMissingArticleIsNotFoundAndWritesNoMetadata(t *testing.T) {
+	h, root := newHandlers(t)
+	saveArticle(t, h, "real", "# real", false)
+
+	w := httptest.NewRecorder()
+	h.Publish(w, urlencodedForm(t, "http://example.com/admin/news/publish", url.Values{
+		"scope": {"launcher"}, "slug": {"ghost"}, "published": {"true"},
+	}))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("got %d, want 404: %s", w.Code, w.Body.String())
+	}
+
+	b, err := os.ReadFile(filepath.Join(root, "news_private", "news_meta.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "ghost") {
+		t.Fatalf("a phantom entry was written into news_meta.json: %s", b)
+	}
+	if _, ok := adminIndex(t, root)["ghost"]; ok {
+		t.Error("the admin index lists an article that has no file")
+	}
+	// The real article was not disturbed on the way.
+	if adminIndex(t, root)["real"].Published {
+		t.Error("the rejected publish leaked onto another article")
 	}
 }
 

@@ -322,7 +322,10 @@ func (h *Handlers) Delete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !removed {
-		http.Error(w, "article not found", http.StatusInternalServerError)
+		// Nothing was there to begin with. That is a 404, not a server fault: the
+		// admin UI retries on 5xx and shows "the server is broken", when in fact
+		// the row it is trying to delete is simply gone already.
+		http.Error(w, "article not found", http.StatusNotFound)
 		return
 	}
 	// remove meta entry if exists
@@ -372,6 +375,14 @@ func (h *Handlers) Publish(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	// Publishing a slug that has no markdown anywhere used to create a metadata
+	// entry no file corresponds to. RebuildIndex skips it (it iterates over the
+	// .md files), so the entry stayed in news_meta.json forever, invisible and
+	// impossible to clear from the admin panel.
+	if _, _, err := findArticle(d, slug); err != nil {
+		http.Error(w, "article not found", http.StatusNotFound)
+		return
+	}
 	m := readMeta(d)
 	cur := m[slug]
 	cur.Published = pub
@@ -453,6 +464,17 @@ func (h *Handlers) UploadCover(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "request too large or malformed", http.StatusBadRequest)
 		return
 	}
+	// Everything that can reject the request is checked before anything is
+	// written: the image used to be stored (under a sanitised name, so no
+	// traversal, but still) and only then did the slug check fire, so every
+	// rejected upload left one more orphaned file in the gallery.
+	scope := r.FormValue("scope")
+	gid := r.FormValue("gameId")
+	slug := strings.TrimSpace(r.FormValue("slug"))
+	if slug != "" && !adminutil.IsSafeNewsSlug(slug) {
+		http.Error(w, "invalid slug", http.StatusBadRequest)
+		return
+	}
 	file, hdr, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "missing file: "+err.Error(), http.StatusBadRequest)
@@ -487,15 +509,8 @@ func (h *Handlers) UploadCover(w http.ResponseWriter, r *http.Request) {
 	}
 	// Return a web path expected by the client/launcher
 	url := "/assets/" + name
-	// Optionally update meta if scope+slug provided
-	scope := r.FormValue("scope")
-	gid := r.FormValue("gameId")
-	slug := r.FormValue("slug")
-	if strings.TrimSpace(slug) != "" {
-		if !adminutil.IsSafeNewsSlug(slug) {
-			http.Error(w, "invalid slug", http.StatusBadRequest)
-			return
-		}
+	// Optionally update meta if scope+slug provided (already validated above).
+	if slug != "" {
 		if d, err := h.dirs(scope, gid); err == nil {
 			h.mu.Lock()
 			defer h.mu.Unlock()

@@ -1,6 +1,9 @@
 package builds
 
 import (
+	"archive/zip"
+	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -109,6 +112,102 @@ func TestPublishingLauncherBuildNeverManifestsClientSkippedFiles(t *testing.T) {
 			t.Errorf("published launcher manifest lost %q: the client will never receive the file", good)
 		}
 	}
+}
+
+// The directory rule has to cover the artifact directory ITSELF, not only what
+// is inside it: CleanupUpdaterArtifacts deletes <install>/updater recursively, so
+// a manifest listing "updater/" as a directory to create describes a state the
+// client destroys in the same run.
+func TestLauncherNonPayloadDirCoversTheArtifactDirectoryItself(t *testing.T) {
+	for _, d := range []string{"updater", "updater/", "updater/backup", "updater/backup/"} {
+		if !isLauncherNonPayloadDir(d) {
+			t.Errorf("%q must never reach a launcher manifest: the updater removes it in the same run", d)
+		}
+	}
+	for _, d := range []string{"updaters/", "my-updater/", "data/updater/", "logs/", "mods/"} {
+		if isLauncherNonPayloadDir(d) {
+			t.Errorf("%q is ordinary build content: dropping it means the directory never exists after installation", d)
+		}
+	}
+}
+
+// The end-to-end version of the same guarantee. Only Files used to be filtered,
+// so an empty "updater/" swept into the launcher ZIP by a previous update run
+// travelled into emptyDirs untouched. Directories carry no hashes, so this does
+// not produce the endless update loop a stray file does — it produces a manifest
+// that permanently promises a directory the updater deletes on every run, which
+// is the same broken promise with the loud part removed.
+func TestPublishingLauncherBuildNeverManifestsUpdaterOwnedDirectories(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	w := httptest.NewRecorder()
+	h.Upload(w, launcherUploadRequest(t, "1.1.9", zipWithEmptyDirs(t,
+		map[string]string{"ChillHub.exe": "payload"},
+		[]string{"updater/", "updater/backup/", "logs/"})))
+	if w.Code != http.StatusOK {
+		t.Fatalf("publish failed: %d %s", w.Code, w.Body.String())
+	}
+	got := map[string]bool{}
+	for _, d := range decodeManifest(t, w.Body.Bytes()).EmptyDirs {
+		got[d] = true
+	}
+	for _, bad := range []string{"updater/", "updater/backup/"} {
+		if got[bad] {
+			t.Errorf("published launcher manifest lists directory %q; the updater deletes it in the same run, so the installation never matches the manifest", bad)
+		}
+	}
+	if !got["logs/"] {
+		t.Errorf("ordinary empty directory %q was dropped: it will not exist after installation, %v", "logs/", got)
+	}
+}
+
+// A game build is not the launcher's installation directory: a game may perfectly
+// well ship an empty folder called "updater", and dropping it would leave the
+// game without a directory it needs to start.
+func TestPublishingGameBuildKeepsUpdaterNamedDirectories(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	w := httptest.NewRecorder()
+	h.Upload(w, uploadRequest(t, "lethal-company", "1.0.0", zipWithEmptyDirs(t,
+		map[string]string{"game.exe": "x"}, []string{"updater/"})))
+	if w.Code != http.StatusOK {
+		t.Fatalf("publish failed: %d %s", w.Code, w.Body.String())
+	}
+	found := false
+	for _, d := range decodeManifest(t, w.Body.Bytes()).EmptyDirs {
+		if d == "updater/" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("game manifest lost the empty directory \"updater/\": the launcher preserve rules describe the launcher's own installation and nothing else")
+	}
+}
+
+// zipWithEmptyDirs builds an archive carrying explicit directory entries next to
+// its files — the only way a ZIP can express a directory that holds nothing.
+func zipWithEmptyDirs(t *testing.T, files map[string]string, dirs []string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, d := range dirs {
+		if _, err := zw.CreateHeader(&zip.FileHeader{Name: d}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, body := range files {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(w, body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 // The same names in a game build are ordinary content. A game shipping its own

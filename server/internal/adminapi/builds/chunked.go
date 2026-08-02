@@ -650,7 +650,7 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	}()
 	// estimate and free-space precheck (optional)
 	if needBytes, err := estimateZipUncompressedSize(zipPath); err == nil {
-		if freeBytes, ferr := freeSpaceBytes(filesRoot); ferr == nil && freeBytes > 0 && needBytes > freeBytes {
+		if freeBytes, ferr := freeSpaceFn(filesRoot); ferr == nil && freeBytes > 0 && needBytes > freeBytes {
 			nw.fail(http.StatusInsufficientStorage, fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes))
 			return
 		}

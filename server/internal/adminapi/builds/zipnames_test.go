@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -127,6 +129,61 @@ func TestZipEntryRelPathNormalisation(t *testing.T) {
 		if got := zipEntryRelPath(f); got != want {
 			t.Errorf("%q -> %q, want %q", in, got, want)
 		}
+	}
+}
+
+// A ZIP entry name written with the WINDOWS separator ("dir\file.txt") must
+// resolve to a directory tree on every platform.
+//
+// The ZIP specification stores paths with a forward slash, so a backslash only
+// ever comes from a broken archiver — but those exist and their archives are
+// otherwise perfectly good builds. The normalisation used to run through
+// filepath.ToSlash, which resolves the separator on Windows and does nothing on
+// Linux: the same archive published fine on a developer's machine and failed on
+// the Linux production host, where the entry became one file literally named
+// "dir\file.txt" and validateManifest rejected the release with "backslash in
+// path". The expected values below are deliberately not conditioned on GOOS —
+// that the two platforms agree IS the property under test.
+func TestZipEntryRelPathTreatsBackslashAsASeparatorOnEveryPlatform(t *testing.T) {
+	cases := map[string]string{
+		`runtimes\win-x64\native\b3.dll`: "runtimes/win-x64/native/b3.dll",
+		`dir\file.txt`:                   "dir/file.txt",
+		`mixed\sub/deep\leaf.dat`:        "mixed/sub/deep/leaf.dat",
+		`\leading\back.txt`:              "leading/back.txt",
+		`a\.\b\c.txt`:                    "a/b/c.txt",
+		`data\\double.txt`:               "data/double.txt",
+		// The traversal guard has to see real segments, not one odd file name.
+		`..\..\evil.txt`: "../../evil.txt",
+		`\`:              "",
+	}
+	for in, want := range cases {
+		f := &zip.File{FileHeader: zip.FileHeader{Name: in}}
+		if got := zipEntryRelPath(f); got != want {
+			t.Errorf("%q -> %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The end-to-end consequence: such an archive must publish identically wherever
+// the server runs. What the manifest promises has to be a path the client can
+// turn into a download URL and into a file on disk — and the extracted tree has
+// to match it.
+func TestPublishingAnArchiveWithWindowsSeparatorsProducesASlashTree(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	w := httptest.NewRecorder()
+	h.Upload(w, uploadRequest(t, "game", "1.0.0", zipWithNames(t, [][2]string{
+		{`runtimes\win-x64\native\b3.dll`, "native"},
+		{`top.txt`, "t"},
+	})))
+	if w.Code != http.StatusOK {
+		t.Fatalf("an archive written by a careless archiver was refused: %d %s", w.Code, w.Body.String())
+	}
+	const want = "runtimes/win-x64/native/b3.dll"
+	manifestEntry(t, decodeManifest(t, w.Body.Bytes()), want)
+	if _, err := os.Stat(filepath.Join(root, "content", "game", "1.0.0", "files",
+		filepath.FromSlash(want))); err != nil {
+		t.Fatalf("the manifest path does not resolve to a file on disk: %v", err)
 	}
 }
 
