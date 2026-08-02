@@ -30,9 +30,19 @@ permissions:
   contents: read
 
 on:
+  # ТОЛЬКО pull_request. Раньше здесь был ещё push во все ветки, кроме main, и
+  # каждый джоб выполнялся ДВАЖДЫ: один раз на пуш ветки, второй — на тот же
+  # коммит в PR. Это не удвоенная надёжность, а удвоенное время и деньги: в
+  # metro-map сквозные тесты идут минутами, и половина этих минут уходила в
+  # прогон, результат которого никто не читает.
+  #
+  # Гейт — мерж, а мерж идёт через PR, поэтому проверять нужно ровно то, что
+  # мержится: pull_request считает проверки на результате слияния с main, а не
+  # на голой ветке. Ветка без PR остаётся непроверенной сознательно — её и не
+  # во что мержить.
   pull_request:
-  push:
-    branches-ignore: [main]
+  # Для ветки без PR: запустить руками, если понадобилось.
+  workflow_dispatch:
 
 # Устаревший прогон отменяется, как только пришёл следующий пуш в ту же ветку.
 # Без этого пять правок подряд держат пять параллельных прогонов, и первым
@@ -60,11 +70,9 @@ jobs:
 
       - name: Проверить сообщения
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            RANGE="origin/${{ github.base_ref }}..HEAD"
-          else
-            RANGE="origin/main..HEAD"
-          fi
+          # Событие всегда pull_request (см. блок on:), поэтому диапазон один:
+          # то, что ветка добавляет к своей базе.
+          RANGE="origin/${{ github.base_ref }}..HEAD"
           echo "проверяю $RANGE"
 
           BAD=$(git log "$RANGE" --format='%H %B' \
@@ -234,7 +242,7 @@ jobs:
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: server/coverage.out
-          flags: go
+          flags: server
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
@@ -329,7 +337,24 @@ jobs:
         # путей. Без этого шага регрессия уезжала бы в релиз незамеченной: тесты
         # в репозитории были, но не запускались ни в одном прогоне CI.
         working-directory: launcher/tests/ChillHub.Tests
-        run: dotnet test --nologo
+        # --collect берёт coverlet.collector, который и так лежал в
+        # зависимостях тестового проекта, но не использовался: покрытие
+        # клиента не считалось вовсе. Бейдж codecov при этом стоял в README и
+        # показывал ТОЛЬКО серверную часть на Go — то есть отвечал не на тот
+        # вопрос, который читатель ему задаёт.
+        run: dotnet test --nologo --collect:"XPlat Code Coverage"
+
+      - name: Отправить покрытие клиента в Codecov
+        # Приколот к SHA, а не к тегу: тег мутабелен, и у Codecov уже был
+        # прецедент компрометации релиза.
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          # Путь coverlet складывает в каталог со случайным GUID, поэтому
+          # шаблон, а не точное имя.
+          files: launcher/tests/ChillHub.Tests/TestResults/**/coverage.cobertura.xml
+          flags: launcher
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
       - name: Self-update loop guard (A11)
         # Ловит регрессию «бесконечный цикл самообновления»: файл, попавший
