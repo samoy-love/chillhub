@@ -7,6 +7,7 @@ package media
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -45,27 +46,92 @@ const (
 	MaxImageBytes = 32 << 20 // 32 MiB
 )
 
-// ErrImageTooLarge reports an image whose declared dimensions are refused.
-var ErrImageTooLarge = fmt.Errorf("image dimensions too large")
+// The errors this package reports. They are sentinels rather than one-off
+// fmt.Errorf values so that a caller can tell them apart with errors.Is; the
+// admin API surfaces several of them to the panel verbatim, so the wording is
+// part of the contract.
+var (
+	// ErrImageTooLarge reports an image whose declared dimensions are refused.
+	ErrImageTooLarge = errors.New("image dimensions too large")
+	// ErrBlockedAddress reports a fetch aimed at the server's own network.
+	ErrBlockedAddress = errors.New("address not allowed")
+
+	errInvalidPath       = errors.New("invalid path")
+	errUnsupportedFormat = errors.New("unsupported format")
+	errUnsupportedScheme = errors.New("unsupported scheme")
+	errTooManyRedirects  = errors.New("too many redirects")
+	errFileTooLarge      = errors.New("file too large")
+	errHTTPStatus        = errors.New("http")
+	errFFmpegMissing     = errors.New("ffmpeg not found")
+	errFFmpegTimedOut    = errors.New("ffmpeg timed out")
+	errFFmpegExit        = errors.New("ffmpeg exited with code")
+)
 
 // CheckImageBounds reads only the image header and reports whether the declared
 // dimensions are safe to decode. An undecodable header is left to the caller's
 // decoder to report.
 func CheckImageBounds(data []byte) error {
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		return nil // not a format we can pre-check; the decode below will fail
+	if err == nil {
+		switch {
+		case cfg.Width <= 0 || cfg.Height <= 0:
+			return ErrImageTooLarge
+		case cfg.Width > MaxImageDimension || cfg.Height > MaxImageDimension:
+			return ErrImageTooLarge
+		case int64(cfg.Width)*int64(cfg.Height) > MaxImagePixels:
+			return ErrImageTooLarge
+		}
 	}
-	if cfg.Width <= 0 || cfg.Height <= 0 {
-		return ErrImageTooLarge
-	}
-	if cfg.Width > MaxImageDimension || cfg.Height > MaxImageDimension {
-		return ErrImageTooLarge
-	}
-	if int64(cfg.Width)*int64(cfg.Height) > MaxImagePixels {
-		return ErrImageTooLarge
-	}
+	// Not a format we can pre-check: the decode that follows will fail on it.
 	return nil
+}
+
+// sourceExt resolves the source extension from the client's hint, falling back
+// to the reported Content-Type when the upload carried no filename.
+func sourceExt(extHint, contentType string) string {
+	ext := strings.ToLower(strings.TrimSpace(extHint))
+	if ext != "" || contentType == "" {
+		return ext
+	}
+	switch {
+	case strings.Contains(contentType, "png"):
+		return ".png"
+	case strings.Contains(contentType, "jpeg"), strings.Contains(contentType, "jpg"):
+		return ".jpg"
+	case strings.Contains(contentType, "gif"):
+		return ".gif"
+	case strings.Contains(contentType, "webp"):
+		return ".webp"
+	}
+	return ""
+}
+
+// outputPlan picks the extension the asset is stored under and reports whether
+// the source may carry animation (GIF/WEBP), which needs the ffmpeg pipeline.
+func outputPlan(ext, contentType string) (string, bool) {
+	switch ext {
+	case ".gif", ".webp":
+		return ".webp", true
+	case ".png", ".jpg", ".jpeg":
+		return ".jpg", false
+	}
+	lower := strings.ToLower(contentType)
+	if strings.Contains(lower, "gif") || strings.Contains(lower, "webp") {
+		return ".webp", true
+	}
+	return ".jpg", false
+}
+
+// originalAnimatedExt is the extension an animated source keeps when no
+// transcode runs. A GIF stored under a .webp name is refused by every browser.
+func originalAnimatedExt(ext, contentType string) string {
+	if ext != "" {
+		return ext
+	}
+	if strings.Contains(strings.ToLower(contentType), "webp") {
+		return ".webp"
+	}
+	return ".gif"
 }
 
 // ProcessAndSaveAsset converts and saves image bytes into the assets directory.
@@ -74,108 +140,33 @@ func CheckImageBounds(data []byte) error {
 //   - Returns final filename and optional meta fields (e.g., note, format)
 func ProcessAndSaveAsset(base, rel, desired string, data []byte, extHint, contentType string) (string, map[string]string, error) {
 	meta := map[string]string{}
-	ext := strings.ToLower(strings.TrimSpace(extHint))
-	if ext == "" && contentType != "" {
-		if strings.Contains(contentType, "png") {
-			ext = ".png"
-		} else if strings.Contains(contentType, "jpeg") || strings.Contains(contentType, "jpg") {
-			ext = ".jpg"
-		} else if strings.Contains(contentType, "gif") {
-			ext = ".gif"
-		} else if strings.Contains(contentType, "webp") {
-			ext = ".webp"
-		}
-	}
-
-	outExt := ".jpg"
-	inAnimated := false
-	switch ext {
-	case ".png":
-		outExt = ".jpg"
-	case ".jpg", ".jpeg":
-		outExt = ".jpg"
-	case ".gif":
-		outExt = ".webp"
-		inAnimated = true
-	case ".webp":
-		outExt = ".webp"
-		inAnimated = true
-	default:
-		if strings.Contains(strings.ToLower(contentType), "gif") {
-			outExt = ".webp"
-			inAnimated = true
-		} else if strings.Contains(strings.ToLower(contentType), "webp") {
-			outExt = ".webp"
-			inAnimated = true
-		} else {
-			outExt = ".jpg"
-		}
-	}
+	ext := sourceExt(extHint, contentType)
+	outExt, animated := outputPlan(ext, contentType)
 
 	if strings.TrimSpace(desired) == "" {
 		desired = "image"
 	}
 	outName := adminutil.SanitizeFilename(desired) + outExt
 	outDir := filepath.Join(base, rel)
+	// #nosec G301 -- the asset tree is handed out under /assets/ by nginx, which
+	// runs as a different user than the API; 0750 would make it unreadable.
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", nil, err
 	}
 	outPath := filepath.Join(outDir, outName)
 	if !adminutil.EnsureWithin(base, outPath) {
-		return "", nil, fmt.Errorf("invalid path")
+		return "", nil, errInvalidPath
 	}
 
-	if inAnimated {
+	if animated {
 		if HasFFmpeg() {
-			tmpIn, err := os.CreateTemp("", "asset_in_*")
-			if err != nil {
-				return "", nil, err
-			}
-			if _, err := tmpIn.Write(data); err != nil {
-				tmpIn.Close()
-				return "", nil, err
-			}
-			tmpIn.Close()
-			defer os.Remove(tmpIn.Name())
-			// ffmpeg writes to a scratch file next to the destination and the
-			// result is renamed into place. Letting it write outPath directly
-			// meant a failed or killed transcode replaced a working asset with a
-			// truncated one, in a tree that is served to the public.
-			tmpOut := outPath + ".tmp-" + adminutil.GenID() + ".webp"
-			defer os.Remove(tmpOut)
-			scaleExpr := "scale='if(gte(min(iw,ih),1080), if(lte(iw,ih), -2, 1080), iw)':'if(gte(min(iw,ih),1080), if(lte(iw,ih), 1080, -2), ih)'"
-			// Use quality 95 for lossy output and encode with libwebp preserving animation
-			// Add pixel format with alpha, preset and compression level for ffmpeg 6 compatibility
-			args := []string{"-y", "-i", tmpIn.Name(), "-vf", scaleExpr,
-				"-c:v", "libwebp", "-lossless", "0", "-q:v", "95", "-compression_level", "4",
-				"-preset", "picture", "-pix_fmt", "yuva420p", "-vsync", "0", "-loop", "0", tmpOut}
-			if err := runFFmpegTranscode(args); err != nil {
-				return "", nil, fmt.Errorf("ffmpeg failed: %w", err)
-			}
-			b, err := os.ReadFile(tmpOut)
-			if err != nil {
-				return "", nil, err
-			}
-			if err := adminutil.WriteFileAtomic(outPath, b, 0o644); err != nil {
+			if err := transcodeAnimated(data, outPath); err != nil {
 				return "", nil, err
 			}
 			return outName, meta, nil
 		}
-		// Fallback: keep original content and original extension to avoid misleading .webp name
-		// Adjust output path/name to use input extension
-		origExt := ext
-		if origExt == "" {
-			// try guess from contentType
-			if strings.Contains(strings.ToLower(contentType), "gif") {
-				origExt = ".gif"
-			} else if strings.Contains(strings.ToLower(contentType), "webp") {
-				origExt = ".webp"
-			} else {
-				origExt = ".gif"
-			}
-		}
-		// Rebuild final path/name with original extension
-		outName = adminutil.SanitizeFilename(desired) + origExt
+		// Fallback: keep the original bytes under the original extension.
+		outName = adminutil.SanitizeFilename(desired) + originalAnimatedExt(ext, contentType)
 		outPath = filepath.Join(outDir, outName)
 		// Atomic: the asset tree is served publicly while it is rewritten, and
 		// os.WriteFile truncates first — a reader in between gets a broken image.
@@ -187,50 +178,98 @@ func ProcessAndSaveAsset(base, rel, desired string, data []byte, extHint, conten
 		return outName, meta, nil
 	}
 
-	if err := CheckImageBounds(data); err != nil {
-		return "", nil, err
-	}
-	img, format, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		switch ext {
-		case ".png":
-			if im, e2 := png.Decode(bytes.NewReader(data)); e2 == nil {
-				img = im
-				format = "png"
-			} else {
-				return "", nil, e2
-			}
-		case ".jpg", ".jpeg":
-			if im, e2 := jpeg.Decode(bytes.NewReader(data)); e2 == nil {
-				img = im
-				format = "jpeg"
-			} else {
-				return "", nil, e2
-			}
-		default:
-			return "", nil, fmt.Errorf("unsupported format")
-		}
-	}
-	if format != "" {
-		meta["format"] = format
-	}
-	outImg := ResizeToMinSide1080(img)
-	// Encode into memory first, then write atomically: os.Create truncated the
-	// existing asset before the encode had a chance to fail, so a failure left a
-	// half-written file where a working image used to be — in a tree that is
-	// served to the public.
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, outImg, &jpeg.Options{Quality: 95}); err != nil {
-		return "", nil, err
-	}
-	if err := adminutil.WriteFileAtomic(outPath, buf.Bytes(), 0o644); err != nil {
+	if err := storeStatic(outPath, ext, data, meta); err != nil {
 		return "", nil, err
 	}
 	return outName, meta, nil
 }
 
-// ErrBlockedAddress reports a fetch aimed at the server's own network.
-var ErrBlockedAddress = fmt.Errorf("address not allowed")
+// transcodeAnimated converts an animated source to WEBP through ffmpeg and
+// stores the result at outPath.
+func transcodeAnimated(data []byte, outPath string) error {
+	tmpIn, err := os.CreateTemp("", "asset_in_*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmpIn.Name()) }()
+	if _, err := tmpIn.Write(data); err != nil {
+		_ = tmpIn.Close()
+		return err
+	}
+	if err := tmpIn.Close(); err != nil {
+		return err
+	}
+	// ffmpeg writes to a scratch file next to the destination and the result is
+	// renamed into place. Letting it write outPath directly meant a failed or
+	// killed transcode replaced a working asset with a truncated one, in a tree
+	// that is served to the public.
+	tmpOut := outPath + ".tmp-" + adminutil.GenID() + ".webp"
+	defer func() { _ = os.Remove(tmpOut) }()
+	scaleExpr := "scale='if(gte(min(iw,ih),1080), if(lte(iw,ih), -2, 1080), iw)':'if(gte(min(iw,ih),1080), if(lte(iw,ih), 1080, -2), ih)'"
+	// Use quality 95 for lossy output and encode with libwebp preserving animation
+	// Add pixel format with alpha, preset and compression level for ffmpeg 6 compatibility
+	args := []string{"-y", "-i", tmpIn.Name(), "-vf", scaleExpr,
+		"-c:v", "libwebp", "-lossless", "0", "-q:v", "95", "-compression_level", "4",
+		"-preset", "picture", "-pix_fmt", "yuva420p", "-vsync", "0", "-loop", "0", tmpOut}
+	if err := runFFmpegTranscode(args); err != nil {
+		return fmt.Errorf("ffmpeg failed: %w", err)
+	}
+	// #nosec G304 -- tmpOut is built right here from outPath, which EnsureWithin
+	// already confirmed is inside the asset tree, plus a generated suffix.
+	b, err := os.ReadFile(tmpOut)
+	if err != nil {
+		return err
+	}
+	return adminutil.WriteFileAtomic(outPath, b, 0o644)
+}
+
+// decodeStatic decodes a still image, falling back to the decoder the extension
+// names when the generic registry cannot make sense of the bytes.
+func decodeStatic(data []byte, ext string) (image.Image, string, error) {
+	img, format, err := image.Decode(bytes.NewReader(data))
+	if err == nil {
+		return img, format, nil
+	}
+	switch ext {
+	case ".png":
+		im, perr := png.Decode(bytes.NewReader(data))
+		if perr != nil {
+			return nil, "", perr
+		}
+		return im, "png", nil
+	case ".jpg", ".jpeg":
+		im, jerr := jpeg.Decode(bytes.NewReader(data))
+		if jerr != nil {
+			return nil, "", jerr
+		}
+		return im, "jpeg", nil
+	}
+	return nil, "", errUnsupportedFormat
+}
+
+// storeStatic re-encodes a still image to JPEG and writes it to outPath,
+// recording the source format in meta.
+func storeStatic(outPath, ext string, data []byte, meta map[string]string) error {
+	if err := CheckImageBounds(data); err != nil {
+		return err
+	}
+	img, format, err := decodeStatic(data, ext)
+	if err != nil {
+		return err
+	}
+	if format != "" {
+		meta["format"] = format
+	}
+	// Encode into memory first, then write atomically: os.Create truncated the
+	// existing asset before the encode had a chance to fail, so a failure left a
+	// half-written file where a working image used to be — in a tree that is
+	// served to the public.
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, ResizeToMinSide1080(img), &jpeg.Options{Quality: 95}); err != nil {
+		return err
+	}
+	return adminutil.WriteFileAtomic(outPath, buf.Bytes(), 0o644)
+}
 
 // blockedIP reports whether an address belongs to the infrastructure rather
 // than the public internet.
@@ -244,24 +283,36 @@ func blockedIP(ip net.IP) bool {
 	if ip == nil {
 		return true
 	}
-	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() || ip.IsMulticast() {
-		return true
-	}
-	if ip.IsPrivate() { // 10/8, 172.16/12, 192.168/16, fc00::/7
+	if blockedIPKind(ip) {
 		return true
 	}
 	if v4 := ip.To4(); v4 != nil {
-		// 100.64.0.0/10 (carrier-grade NAT) and 192.0.0.0/24 (IETF protocol
-		// assignments) are not covered by IsPrivate.
-		if v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 {
-			return true
-		}
-		if v4[0] == 192 && v4[1] == 0 && v4[2] == 0 {
-			return true
-		}
+		return blockedIPv4Range(v4)
 	}
 	return false
+}
+
+// blockedIPKind covers the address classes the standard library names itself.
+func blockedIPKind(ip net.IP) bool {
+	switch {
+	case ip.IsLoopback(), ip.IsUnspecified():
+		return true
+	case ip.IsLinkLocalUnicast(), ip.IsLinkLocalMulticast(), ip.IsInterfaceLocalMulticast(), ip.IsMulticast():
+		return true
+	case ip.IsPrivate(): // 10/8, 172.16/12, 192.168/16, fc00::/7
+		return true
+	}
+	return false
+}
+
+// blockedIPv4Range covers the IPv4 ranges net.IP.IsPrivate does not know about.
+func blockedIPv4Range(v4 net.IP) bool {
+	// 100.64.0.0/10, carrier-grade NAT.
+	if v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 {
+		return true
+	}
+	// 192.0.0.0/24, IETF protocol assignments.
+	return v4[0] == 192 && v4[1] == 0 && v4[2] == 0
 }
 
 // safeDialer refuses to connect to a blocked address. The check runs per dial,
@@ -269,7 +320,7 @@ func blockedIP(ip net.IP) bool {
 // and the connection.
 func safeDialer() *net.Dialer {
 	d := &net.Dialer{Timeout: 10 * time.Second}
-	d.Control = func(network, address string, _ syscall.RawConn) error {
+	d.Control = func(_, address string, _ syscall.RawConn) error {
 		host, _, err := net.SplitHostPort(address)
 		if err != nil {
 			return ErrBlockedAddress
@@ -282,59 +333,81 @@ func safeDialer() *net.Dialer {
 	return d
 }
 
-// DownloadURL fetches an http(s) URL, capped at 50 MiB, and returns the body
-// together with the reported Content-Type. Addresses inside the server's own
-// networks are refused; see blockedIP.
-func DownloadURL(u string) ([]byte, string, error) {
+// maxDownloadBytes caps the body DownloadURL will buffer.
+const maxDownloadBytes = 50 << 20
+
+// parseFetchTarget validates a URL the admin asked the server to fetch.
+func parseFetchTarget(u string) (*url.URL, error) {
 	pu, err := url.Parse(strings.TrimSpace(u))
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	if pu.Scheme != "http" && pu.Scheme != "https" {
-		return nil, "", fmt.Errorf("unsupported scheme")
+		return nil, errUnsupportedScheme
 	}
 	if pu.Hostname() == "" {
-		return nil, "", ErrBlockedAddress
+		return nil, ErrBlockedAddress
 	}
 	// Reject a literal private address up front so the error is precise; the
 	// dialer's Control catches everything that only resolves to one later.
 	if ip := net.ParseIP(pu.Hostname()); ip != nil && blockedIP(ip) {
-		return nil, "", ErrBlockedAddress
+		return nil, ErrBlockedAddress
 	}
-	req, _ := http.NewRequest("GET", pu.String(), nil)
-	req.Header.Set("User-Agent", "ChillHub-Admin/1.0")
-	client := &http.Client{
+	return pu, nil
+}
+
+// fetchClient is the client DownloadURL uses: it dials through safeDialer and
+// re-checks the scheme on every redirect.
+func fetchClient() *http.Client {
+	return &http.Client{
 		Timeout:   20 * time.Second,
 		Transport: &http.Transport{DialContext: safeDialer().DialContext},
 		CheckRedirect: func(r *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
-				return fmt.Errorf("too many redirects")
+				return errTooManyRedirects
 			}
 			if r.URL.Scheme != "http" && r.URL.Scheme != "https" {
-				return fmt.Errorf("unsupported scheme")
+				return errUnsupportedScheme
 			}
 			return nil
 		},
 	}
-	resp, err := client.Do(req)
+}
+
+// DownloadURL fetches an http(s) URL, capped at 50 MiB, and returns the body
+// together with the reported Content-Type. Addresses inside the server's own
+// networks are refused; see blockedIP.
+//
+// The context comes from the admin request that asked for the fetch, so a
+// cancelled request stops the outbound download instead of leaving it running
+// against a host the caller no longer waits for.
+func DownloadURL(ctx context.Context, u string) ([]byte, string, error) {
+	pu, err := parseFetchTarget(u)
 	if err != nil {
 		return nil, "", err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, resp.Header.Get("Content-Type"), fmt.Errorf("http %d", resp.StatusCode)
-	}
-	// limit 50MB
-	const max = 50 << 20
-	r := io.LimitReader(resp.Body, max+1)
-	b, err := io.ReadAll(r)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pu.String(), nil)
 	if err != nil {
-		return nil, resp.Header.Get("Content-Type"), err
+		return nil, "", err
 	}
-	if int64(len(b)) > max {
-		return nil, resp.Header.Get("Content-Type"), fmt.Errorf("file too large")
+	req.Header.Set("User-Agent", "ChillHub-Admin/1.0")
+	resp, err := fetchClient().Do(req)
+	if err != nil {
+		return nil, "", err
 	}
-	return b, resp.Header.Get("Content-Type"), nil
+	defer func() { _ = resp.Body.Close() }()
+	contentType := resp.Header.Get("Content-Type")
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, contentType, fmt.Errorf("%w %d", errHTTPStatus, resp.StatusCode)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadBytes+1))
+	if err != nil {
+		return nil, contentType, err
+	}
+	if int64(len(b)) > maxDownloadBytes {
+		return nil, contentType, errFileTooLarge
+	}
+	return b, contentType, nil
 }
 
 // ResizeToMinSide1080 downscales img so that its shorter side is 1080px.
@@ -342,22 +415,19 @@ func DownloadURL(u string) ([]byte, string, error) {
 func ResizeToMinSide1080(img image.Image) image.Image {
 	w := img.Bounds().Dx()
 	h := img.Bounds().Dy()
-	min := w
-	if h < min {
-		min = h
-	}
-	if min <= 1080 {
+	shorter := min(w, h)
+	if shorter <= 1080 {
 		return img
 	}
 	// scale so that min side becomes 1080
-	scale := float64(1080) / float64(min)
+	scale := float64(1080) / float64(shorter)
 	newW := int(float64(w) * scale)
 	newH := int(float64(h) * scale)
 	dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
 	// simple and dependency-free resizing using nearest neighbor sampling
 	// note: for higher quality, switch to x/image/draw.ApproxBiLinear
-	for y := 0; y < newH; y++ {
-		for x := 0; x < newW; x++ {
+	for y := range newH {
+		for x := range newW {
 			sx := int(float64(x) / scale)
 			sy := int(float64(y) / scale)
 			dst.Set(x, y, img.At(sx, sy))
@@ -397,24 +467,27 @@ const ffmpegTimeout = 5 * time.Minute
 func runFFmpegTranscode(args []string) error {
 	exe := FFmpegPath()
 	if exe == "" {
-		return fmt.Errorf("ffmpeg not found")
+		return errFFmpegMissing
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), ffmpegTimeout)
 	defer cancel()
+	// #nosec G204 -- exe is resolved by FFmpegPath from FFMPEG_PATH or PATH, and
+	// args are built by this package; nothing here comes from a request.
 	cmd := exec.CommandContext(ctx, exe, args...)
 	// Capture combined stdout/stderr to include in logs
 	out, err := cmd.CombinedOutput()
-	if ctx.Err() == context.DeadlineExceeded {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		log.Printf("ffmpeg timed out after %s exe=%q args=%q output:\n%s", ffmpegTimeout, exe, args, string(out))
-		return fmt.Errorf("ffmpeg timed out after %s", ffmpegTimeout)
+		return fmt.Errorf("%w after %s", errFFmpegTimedOut, ffmpegTimeout)
 	}
 	if err != nil {
 		exitCode := 0
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			exitCode = ee.ExitCode()
 		}
 		log.Printf("ffmpeg failed (code=%d) exe=%q args=%q output:\n%s", exitCode, exe, args, string(out))
-		return fmt.Errorf("ffmpeg exited with code %d", exitCode)
+		return fmt.Errorf("%w %d", errFFmpegExit, exitCode)
 	}
 	log.Printf("ffmpeg succeeded exe=%q args=%q output:\n%s", exe, args, string(out))
 	return nil

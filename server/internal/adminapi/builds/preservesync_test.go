@@ -252,7 +252,7 @@ func updatePreserveSource(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		p := filepath.Join(dir, "updater", "UpdatePreserve.cs")
 		if b, err := os.ReadFile(p); err == nil {
 			return string(b)

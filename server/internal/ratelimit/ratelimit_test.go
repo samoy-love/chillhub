@@ -10,7 +10,7 @@ import (
 
 func TestAllowEnforcesWindowBudget(t *testing.T) {
 	l := New(3, time.Minute)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if !l.Allow("1.2.3.4") {
 			t.Fatalf("request %d should be allowed", i)
 		}
@@ -40,7 +40,7 @@ func TestAllowResetsAfterWindow(t *testing.T) {
 
 func TestZeroLimitDisablesLimiting(t *testing.T) {
 	l := New(0, time.Minute)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		if !l.Allow("1.2.3.4") {
 			t.Fatal("limiting must be off when limit <= 0")
 		}
@@ -53,13 +53,13 @@ func TestZeroLimitDisablesLimiting(t *testing.T) {
 // A flood of one-off addresses must not grow the map without bound.
 func TestSweepDropsExpiredEntries(t *testing.T) {
 	l := New(10, time.Millisecond)
-	for i := 0; i < 2000; i++ {
+	for i := range 2000 {
 		l.Allow(fmt.Sprintf("10.0.%d.%d", i/256, i%256))
 	}
 	// every window above is long expired by now; one more sweep-triggering pass
 	time.Sleep(20 * time.Millisecond)
 	before := l.Len()
-	for i := 0; i < gcEvery; i++ {
+	for range gcEvery {
 		l.Allow("192.168.0.1")
 	}
 	if l.Len() >= before {
@@ -71,14 +71,14 @@ func TestSweepDropsExpiredEntries(t *testing.T) {
 // exactly the flood the cap exists for, and the map used to grow without bound.
 func TestSweepEnforcesHardCapWhenAllEntriesAreFresh(t *testing.T) {
 	l := New(10, time.Hour) // nothing can expire during the test
-	for i := 0; i < gcMaxEntries+2000; i++ {
+	for i := range gcMaxEntries + 2000 {
 		l.Allow(fmt.Sprintf("10.%d.%d.%d", i/65536, (i/256)%256, i%256))
 	}
 	if n := l.Len(); n > gcMaxEntries {
 		t.Fatalf("tracked %d addresses, hard cap is %d", n, gcMaxEntries)
 	}
 	// Eviction must not disable limiting for an address that is still tracked.
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		l.Allow("203.0.113.99")
 	}
 	if l.Allow("203.0.113.99") {
@@ -88,12 +88,12 @@ func TestSweepEnforcesHardCapWhenAllEntriesAreFresh(t *testing.T) {
 
 func TestMiddlewareRejectsOverBudget(t *testing.T) {
 	l := New(2, time.Minute)
-	h := l.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := l.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	codes := make([]int, 0, 3)
-	for i := 0; i < 3; i++ {
-		req := httptest.NewRequest(http.MethodGet, "http://example.com/api/games", nil)
+	for range 3 {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/api/games", nil)
 		req.RemoteAddr = "203.0.113.7:5555"
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
@@ -107,9 +107,9 @@ func TestMiddlewareRejectsOverBudget(t *testing.T) {
 // OPTIONS is exempt so that CORS preflight never burns budget.
 func TestMiddlewareSkipsOptions(t *testing.T) {
 	l := New(1, time.Minute)
-	h := l.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	for i := 0; i < 10; i++ {
-		req := httptest.NewRequest(http.MethodOptions, "http://example.com/api/games", nil)
+	h := l.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+	for range 10 {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodOptions, "http://example.com/api/games", nil)
 		req.RemoteAddr = "203.0.113.8:5555"
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
@@ -150,14 +150,14 @@ func TestClientIPPrefersForwardedHeaders(t *testing.T) {
 		},
 		{
 			name:   "remote addr fallback",
-			set:    func(r *http.Request) {},
+			set:    func(_ *http.Request) {},
 			remote: "198.51.100.7:12345",
 			want:   "198.51.100.7",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/", nil)
 			req.RemoteAddr = tc.remote
 			tc.set(req)
 			if got := ClientIP(req); got != tc.want {

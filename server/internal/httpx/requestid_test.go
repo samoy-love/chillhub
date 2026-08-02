@@ -20,10 +20,10 @@ func TestRequestIDRejectsHostileValues(t *testing.T) {
 	}
 	for _, v := range bad {
 		var seen string
-		h := RequestID()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := RequestID()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 			seen = r.Header.Get("X-Request-Id")
 		}))
-		req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/", nil)
 		req.Header.Set("X-Request-Id", v)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -44,10 +44,10 @@ func TestRequestIDRejectsHostileValues(t *testing.T) {
 func TestRequestIDKeepsSaneValues(t *testing.T) {
 	const want = "0123456789abcdef-req.1:2"
 	var seen string
-	h := RequestID()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := RequestID()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		seen = r.Header.Get("X-Request-Id")
 	}))
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/", nil)
 	req.Header.Set("X-Request-Id", want)
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	if seen != want {

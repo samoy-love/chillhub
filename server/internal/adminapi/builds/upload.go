@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -60,20 +61,12 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	gid := parts.gid
 	ver := parts.ver
 	upd := parts.updateLatest
-	if kind == "" {
-		http.Error(w, "missing kind (launcher|game)", http.StatusBadRequest)
-		return
-	}
-	if ver == "" {
-		http.Error(w, "missing version", http.StatusBadRequest)
-		return
-	}
-	if kind == "game" && gid == "" {
-		http.Error(w, "missing gameId for kind=game", http.StatusBadRequest)
-		return
-	}
 	if kind == "launcher" {
 		gid = "launcher"
+	}
+	if problem := missingPublishParam(kind, gid, ver); problem != "" {
+		http.Error(w, problem, http.StatusBadRequest)
+		return
 	}
 	// validate inputs
 	if !adminutil.IsSafeGameID(gid) {
@@ -84,7 +77,6 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid version", http.StatusBadRequest)
 		return
 	}
-
 	if tmpName == "" {
 		http.Error(w, "missing zip part", http.StatusBadRequest)
 		return
@@ -113,11 +105,9 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	// filesRoot is under the content root, i.e. the same volume the ZIP was
 	// just written to, so this now measures the volume that will actually be
 	// filled.
-	if needBytes, err := estimateZipUncompressedSize(tmpName); err == nil {
-		if freeBytes, ferr := freeSpaceFn(filesRoot); ferr == nil && freeBytes > 0 && needBytes > freeBytes {
-			http.Error(w, fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes), http.StatusInsufficientStorage)
-			return
-		}
+	if msg := extractSpaceProblem(tmpName, filesRoot); msg != "" {
+		http.Error(w, msg, http.StatusInsufficientStorage)
+		return
 	}
 
 	if err := unzipTo(tmpName, filesRoot); err != nil {
@@ -158,7 +148,71 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	// return manifest JSON
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(b)
+	// The build is published; a client that hung up before reading the manifest
+	// changes nothing and cannot be told anything either.
+	_, _ = w.Write(b)
+}
+
+// extractSpaceProblem reports why an archive cannot be unpacked next to its
+// destination, or "" when it fits — or cannot be judged.
+//
+// Neither unknown blocks a publish. The estimate comes from the archive headers
+// and may be absent or hostile, and the free-space probe fails on exotic
+// filesystems and inside containers; refusing every publish there would be a
+// worse failure than the one being prevented. Extraction enforces its own byte
+// budget regardless (see extractBudget).
+//
+// All three publish paths share it, and all three must: this is the guard that
+// keeps a build from filling the volume the live content sits on.
+func extractSpaceProblem(zipPath, filesRoot string) string {
+	needBytes, err := estimateZipUncompressedSize(zipPath)
+	if err != nil {
+		return ""
+	}
+	freeBytes, ferr := freeSpaceFn(filesRoot)
+	if ferr != nil || freeBytes == 0 || needBytes <= freeBytes {
+		return ""
+	}
+	return fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes)
+}
+
+// spoolSpaceProblem reports why a body of the announced length cannot be
+// spooled, or "" when it fits or the answer is unknown.
+//
+// It only saves the client from streaming a body that is doomed: a chunked
+// request has no Content-Length at all, so the guard that actually protects the
+// volume is the one inside spoolZipPart.
+func (h *Handlers) spoolSpaceProblem(contentLength int64) string {
+	if contentLength <= 0 {
+		return ""
+	}
+	// The announced body length is an int64 and free space a uint64, so one of
+	// the two has to change type; contentLength is > 0 by the check above, which
+	// makes this conversion exact.
+	need := uint64(contentLength)
+	if err := os.MkdirAll(h.tmpDir(), contentDirPerm); err != nil {
+		return ""
+	}
+	free, ferr := freeSpaceFn(h.tmpDir())
+	if ferr != nil || free == 0 || need <= free {
+		return ""
+	}
+	return fmt.Sprintf("insufficient temp space: need %d bytes, have %d bytes", contentLength, free)
+}
+
+// missingPublishParam returns the message for the first mandatory publish
+// parameter that is absent, or "" when all of them are present. Both publish
+// entry points apply the same three rules in the same order.
+func missingPublishParam(kind, gid, ver string) string {
+	switch {
+	case kind == "":
+		return "missing kind (launcher|game)"
+	case ver == "":
+		return "missing version"
+	case kind == "game" && strings.TrimSpace(gid) == "":
+		return "missing gameId for kind=game"
+	}
+	return ""
 }
 
 // uploadParts is the decoded multipart body of a publish request: the small
@@ -250,48 +304,71 @@ func spoolZipPart(dst io.Writer, src io.Reader, tmpDir string) (int64, int, erro
 		return 0, http.StatusInsufficientStorage, errNoTempSpace
 	}
 
+	sp := &zipSpool{dst: dst, tmpDir: tmpDir, budget: budget, budgetKnown: budgetKnown, nextRecheck: zipSpaceRecheckBytes}
 	buf := make([]byte, zipCopyBufferBytes)
-	var total int64
-	// budget describes the volume as of measuredAt bytes written, so it is
-	// spent against total-measuredAt, not against total: measuring free space
-	// again after writing 5 GB and then comparing it to all 5 GB would refuse
-	// any upload larger than half the disk.
-	measuredAt := int64(0)
-	nextRecheck := int64(zipSpaceRecheckBytes)
 	for {
 		n, rerr := src.Read(buf)
 		if n > 0 {
-			if total+int64(n) > uploadZipLimit {
-				return total, http.StatusRequestEntityTooLarge, errZipTooLarge
-			}
-			if budgetKnown && uint64(total-measuredAt)+uint64(n) > budget {
-				return total, http.StatusInsufficientStorage, errNoTempSpace
-			}
-			if _, werr := dst.Write(buf[:n]); werr != nil {
-				// A write that fails because the volume filled up anyway (the
-				// budget is a snapshot, not a reservation) is a 507, not a 500.
-				if errors.Is(werr, syscall.ENOSPC) {
-					return total, http.StatusInsufficientStorage, errNoTempSpace
-				}
-				return total, http.StatusInternalServerError, werr
-			}
-			total += int64(n)
-			if total >= nextRecheck {
-				budget, budgetKnown = spaceBudget(tmpDir)
-				if budgetKnown && budget == 0 {
-					return total, http.StatusInsufficientStorage, errNoTempSpace
-				}
-				measuredAt = total
-				nextRecheck = total + zipSpaceRecheckBytes
+			if code, werr := sp.write(buf[:n]); werr != nil {
+				return sp.total, code, werr
 			}
 		}
 		if rerr == io.EOF {
-			return total, http.StatusOK, nil
+			return sp.total, http.StatusOK, nil
 		}
 		if rerr != nil {
-			return total, http.StatusBadRequest, rerr
+			return sp.total, http.StatusBadRequest, rerr
 		}
 	}
+}
+
+// zipSpool is the write side of spoolZipPart: the running byte count plus the
+// free-space budget, so that the copy loop above stays a copy loop.
+//
+// budget describes the volume as it was at the last measurement, so it is spent
+// against sinceMeasure and not against total: measuring free space again after
+// writing 5 GB and then comparing it to all 5 GB would refuse any upload larger
+// than half the disk.
+type zipSpool struct {
+	dst          io.Writer
+	tmpDir       string
+	total        int64
+	budget       uint64
+	budgetKnown  bool
+	sinceMeasure uint64
+	nextRecheck  int64
+}
+
+// write stores one chunk, refusing it if either limit would be crossed, and
+// re-measures the volume every zipSpaceRecheckBytes. It returns the HTTP status
+// to answer with alongside the error.
+func (s *zipSpool) write(p []byte) (int, error) {
+	n := len(p)
+	if s.total+int64(n) > uploadZipLimit {
+		return http.StatusRequestEntityTooLarge, errZipTooLarge
+	}
+	if s.budgetKnown && s.sinceMeasure+uint64(n) > s.budget {
+		return http.StatusInsufficientStorage, errNoTempSpace
+	}
+	if _, werr := s.dst.Write(p); werr != nil {
+		// A write that fails because the volume filled up anyway (the budget is
+		// a snapshot, not a reservation) is a 507, not a 500.
+		if errors.Is(werr, syscall.ENOSPC) {
+			return http.StatusInsufficientStorage, errNoTempSpace
+		}
+		return http.StatusInternalServerError, werr
+	}
+	s.total += int64(n)
+	s.sinceMeasure += uint64(n)
+	if s.total >= s.nextRecheck {
+		s.budget, s.budgetKnown = spaceBudget(s.tmpDir)
+		if s.budgetKnown && s.budget == 0 {
+			return http.StatusInsufficientStorage, errNoTempSpace
+		}
+		s.sinceMeasure = 0
+		s.nextRecheck = s.total + zipSpaceRecheckBytes
+	}
+	return http.StatusOK, nil
 }
 
 // spaceBudget returns how many bytes the volume behind dir may still be given,
@@ -342,8 +419,6 @@ func readUploadParts(r *http.Request, tmpDir string, onZipSaved func(filename st
 			return out, http.StatusBadRequest, perr
 		}
 		switch strings.TrimSpace(part.FormName()) {
-		case "":
-			io.Copy(io.Discard, part)
 		case "kind":
 			out.kind = strings.ToLower(field(part))
 		case "gameId":
@@ -353,46 +428,55 @@ func readUploadParts(r *http.Request, tmpDir string, onZipSaved func(filename st
 		case "updateLatest":
 			out.updateLatest = field(part) == "1"
 		case "zip":
-			// A second "zip" part is refused rather than silently replacing the
-			// first. The caller's cleanup defer only ever learns one temp name,
-			// so overwriting out.tmpName orphaned the first spool file in
-			// tmpDir permanently — a leak an attacker could repeat at will. No
-			// legitimate client sends two archives in one publish request.
-			if out.tmpName != "" {
+			code, zerr := out.spoolZip(part, tmpDir)
+			if zerr != nil {
 				_ = part.Close()
-				return out, http.StatusBadRequest, errDuplicateZipPart
+				return out, code, zerr
 			}
-			if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-				_ = part.Close()
-				return out, http.StatusInternalServerError, err
-			}
-			tmpZip, err := os.CreateTemp(tmpDir, "upload-*.zip")
-			if err != nil {
-				_ = part.Close()
-				return out, http.StatusInternalServerError, err
-			}
-			// Recorded before the copy so that the caller removes the file on
-			// every failure path below, including 413 and 507.
-			out.tmpName = tmpZip.Name()
-			out.filename = part.FileName()
-			n, code, cerr := spoolZipPart(tmpZip, part, tmpDir)
-			// Closed before returning: on Windows an open handle would make the
-			// caller's os.Remove fail and leave the partial archive behind.
-			_ = tmpZip.Close()
-			if cerr != nil {
-				return out, code, cerr
-			}
-			out.saved = n
 			if onZipSaved != nil {
-				onZipSaved(out.filename, n)
+				onZipSaved(out.filename, out.saved)
 			}
 		default:
-			// Consume but ignore other fields
-			io.Copy(io.Discard, part)
+			// Consume but ignore unnamed and unknown fields. A read error here
+			// is the body ending early, which the next NextPart reports anyway.
+			_, _ = io.Copy(io.Discard, part)
 		}
 		_ = part.Close()
 	}
 	return out, http.StatusOK, nil
+}
+
+// spoolZip writes the "zip" part of a publish request to a temp file in tmpDir
+// and records it on out. It returns the HTTP status to answer with.
+func (out *uploadParts) spoolZip(part *multipart.Part, tmpDir string) (int, error) {
+	// A second "zip" part is refused rather than silently replacing the first.
+	// The caller's cleanup defer only ever learns one temp name, so overwriting
+	// out.tmpName orphaned the first spool file in tmpDir permanently — a leak
+	// an attacker could repeat at will. No legitimate client sends two archives
+	// in one publish request.
+	if out.tmpName != "" {
+		return http.StatusBadRequest, errDuplicateZipPart
+	}
+	if err := os.MkdirAll(tmpDir, contentDirPerm); err != nil {
+		return http.StatusInternalServerError, err
+	}
+	tmpZip, err := os.CreateTemp(tmpDir, "upload-*.zip")
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+	// Recorded before the copy so that the caller removes the file on every
+	// failure path below, including 413 and 507.
+	out.tmpName = tmpZip.Name()
+	out.filename = part.FileName()
+	n, code, cerr := spoolZipPart(tmpZip, part, tmpDir)
+	// Closed before returning: on Windows an open handle would make the caller's
+	// os.Remove fail and leave the partial archive behind.
+	_ = tmpZip.Close()
+	if cerr != nil {
+		return code, cerr
+	}
+	out.saved = n
+	return http.StatusOK, nil
 }
 
 // UploadStream uploads a ZIP and streams progress (NDJSON): start, unzip
@@ -427,17 +511,13 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 	// known. It only saves the client from streaming a body that is doomed —
 	// a chunked request has no Content-Length at all, so the guard that
 	// actually protects the volume is the one inside spoolZipPart.
-	if r.ContentLength > 0 {
-		if err := os.MkdirAll(h.tmpDir(), 0o755); err == nil {
-			if free, ferr := freeSpaceFn(h.tmpDir()); ferr == nil && free > 0 && uint64(r.ContentLength) > free {
-				nw.fail(http.StatusInsufficientStorage, fmt.Sprintf("insufficient temp space: need %d bytes, have %d bytes", r.ContentLength, free))
-				return
-			}
-		}
+	if msg := h.spoolSpaceProblem(r.ContentLength); msg != "" {
+		nw.fail(http.StatusInsufficientStorage, msg)
+		return
 	}
 
 	parts, code, err := readUploadParts(r, h.tmpDir(), func(filename string, n int64) {
-		fmt.Fprintf(nw, "{\"type\":\"zipSaved\",\"filename\":%q,\"bytes\":%d}\n", filename, n)
+		emitEventf(nw, "{\"type\":\"zipSaved\",\"filename\":%q,\"bytes\":%d}\n", filename, n)
 		fl.Flush()
 	})
 	if parts != nil {
@@ -456,16 +536,8 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 	// already been flushed: nw.fail turns them into error events instead of an
 	// http.Error whose status is ignored and whose plain-text body corrupts the
 	// stream (leaving the client to conclude the build was published).
-	if kind == "" {
-		nw.fail(http.StatusBadRequest, "missing kind (launcher|game)")
-		return
-	}
-	if ver == "" {
-		nw.fail(http.StatusBadRequest, "missing version")
-		return
-	}
-	if kind == "game" && strings.TrimSpace(gid) == "" {
-		nw.fail(http.StatusBadRequest, "missing gameId for kind=game")
+	if problem := missingPublishParam(kind, gid, ver); problem != "" {
+		nw.fail(http.StatusBadRequest, problem)
 		return
 	}
 	if !adminutil.IsSafeGameID(gid) || !adminutil.IsSafeVersion(ver) {
@@ -478,7 +550,7 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send start event after we know parameters
-	fmt.Fprintf(nw, "{\"type\":\"start\",\"kind\":%q,\"gameId\":%q,\"version\":%q}\n", kind, gid, ver)
+	emitEventf(nw, "{\"type\":\"start\",\"kind\":%q,\"gameId\":%q,\"version\":%q}\n", kind, gid, ver)
 	fl.Flush()
 
 	// Save zip to temp was already done (tmpName). Extract into a staging dir on
@@ -498,23 +570,22 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Check free space before unzip (estimate total uncompressed size of ZIP)
-	if needBytes, err := estimateZipUncompressedSize(tmpName); err == nil {
-		if freeBytes, ferr := freeSpaceFn(filesRoot); ferr == nil && freeBytes > 0 && needBytes > freeBytes {
-			nw.fail(http.StatusInsufficientStorage, fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes))
-			return
-		}
+	if msg := extractSpaceProblem(tmpName, filesRoot); msg != "" {
+		nw.fail(http.StatusInsufficientStorage, msg)
+		return
 	}
 
 	// Unzip with progress
 	if !streamUnzip(nw, fl, tmpName, filesRoot) {
 		return
 	}
-	// Remove temp zip
-	os.Remove(tmpName)
+	// Remove the temp zip. The deferred cleanup above removes it too, so a
+	// failure here is not worth reporting: it only means the janitor gets it.
+	_ = os.Remove(tmpName)
 
 	// Compose manifest with progress: pre-scan totals first
 	totalFiles, totalBytes := countTree(filesRoot)
-	fmt.Fprintf(nw, "{\"type\":\"composeStart\",\"totalFiles\":%d,\"totalBytes\":%d}\n", totalFiles, totalBytes)
+	emitEventf(nw, "{\"type\":\"composeStart\",\"totalFiles\":%d,\"totalBytes\":%d}\n", totalFiles, totalBytes)
 	fl.Flush()
 
 	files, emptyDirs, ok := streamCompose(nw, fl, filesRoot)
@@ -547,15 +618,18 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Fprintf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
+	emitEventf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
 	fl.Flush()
 }
 
 // countTree returns the number of files and their total size under root.
+//
+// The walk error is dropped on purpose: these two numbers only drive a progress
+// bar, and the walk that actually builds the manifest reports its own failures.
 func countTree(root string) (int, int64) {
 	var totalFiles int
 	var totalBytes int64
-	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(root, func(_ string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -568,7 +642,7 @@ func countTree(root string) (int, int64) {
 			// aborted upload being cleaned up, say). Ignoring the error and
 			// calling info.Size() on a nil FileInfo panicked the handler; these
 			// numbers only drive a progress bar, so skipping the entry is fine.
-			return nil
+			return nil //nolint:nilerr // a vanished file is skipped, not reported
 		}
 		totalFiles++
 		totalBytes += info.Size()

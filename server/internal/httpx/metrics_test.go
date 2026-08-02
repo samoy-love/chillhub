@@ -30,7 +30,7 @@ func TestMetricsCountsCodesAndRoutes(t *testing.T) {
 	}))
 
 	for _, p := range []string{"/api/games", "/api/games", "/content/x.pak", "/whatever"} {
-		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, p, nil))
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, p, nil))
 	}
 
 	out := dump(t, reg)
@@ -50,11 +50,11 @@ func TestMetricsCountsCodesAndRoutes(t *testing.T) {
 // ни другое не должно уметь плодить ряды в TSDB.
 func TestMetricsFoldsUnknownPathsAndMethods(t *testing.T) {
 	reg := promexp.New()
-	h := Metrics(reg, "api", StaticRoutes(nil, nil))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	for i := 0; i < 50; i++ {
-		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/"+strings.Repeat("a", i+1), nil))
+	h := Metrics(reg, "api", StaticRoutes(nil, nil))(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+	for i := range 50 {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/"+strings.Repeat("a", i+1), nil))
 	}
-	r := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", nil)
 	r.Method = "TRACE"
 	h.ServeHTTP(httptest.NewRecorder(), r)
 

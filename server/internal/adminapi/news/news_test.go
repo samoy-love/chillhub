@@ -32,7 +32,7 @@ func multipartForm(t *testing.T, rawURL string, fields map[string]string) *http.
 	if err := mw.Close(); err != nil {
 		t.Fatalf("close multipart: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, rawURL, &buf)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, rawURL, &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	return req
 }
@@ -40,7 +40,7 @@ func multipartForm(t *testing.T, rawURL string, fields map[string]string) *http.
 // urlencodedForm builds an application/x-www-form-urlencoded POST request.
 func urlencodedForm(t *testing.T, rawURL string, values url.Values) *http.Request {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, rawURL, strings.NewReader(values.Encode()))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, rawURL, strings.NewReader(values.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	return req
 }
@@ -84,11 +84,11 @@ func TestNewsBaseRejectsTraversalGameID(t *testing.T) {
 func TestHandleNewsGetRejectsTraversal(t *testing.T) {
 	h, root := newHandlers(t)
 	secret := filepath.Join(root, "secret.md")
-	if err := os.WriteFile(secret, []byte("TOP-SECRET"), 0o644); err != nil {
+	if err := os.WriteFile(secret, []byte("TOP-SECRET"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, slug := range traversalSlugs {
-		req := httptest.NewRequest(http.MethodGet,
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
 			"http://example.com/admin/news/get?scope=launcher&slug="+url.QueryEscape(slug), nil)
 		w := httptest.NewRecorder()
 		h.Get(w, req)
@@ -139,10 +139,10 @@ func TestHandleNewsSaveRejectsTraversal(t *testing.T) {
 func TestHandleNewsDeleteRejectsTraversal(t *testing.T) {
 	h, root := newHandlers(t)
 	victim := filepath.Join(root, "victim.md")
-	if err := os.WriteFile(victim, []byte("keep me"), 0o644); err != nil {
+	if err := os.WriteFile(victim, []byte("keep me"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodPost,
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 		"http://example.com/admin/news/delete?scope=launcher&slug="+url.QueryEscape("../victim"), nil)
 	w := httptest.NewRecorder()
 	h.Delete(w, req)
@@ -184,7 +184,7 @@ func TestNewsScopeHandlersRejectTraversalGameID(t *testing.T) {
 	}
 	for _, tc := range cases {
 		for _, gid := range traversalGameIDs {
-			req := httptest.NewRequest(tc.method,
+			req := httptest.NewRequestWithContext(t.Context(), tc.method,
 				"http://example.com"+tc.path+"?scope=game&gameId="+url.QueryEscape(gid), nil)
 			w := httptest.NewRecorder()
 			tc.h(w, req)
@@ -210,7 +210,7 @@ func TestNewsSaveGetDeleteRoundTrip(t *testing.T) {
 		t.Fatalf("save: expected 200, got %d (%s)", w.Code, w.Body.String())
 	}
 
-	get := httptest.NewRequest(http.MethodGet,
+	get := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
 		"http://example.com/admin/news/get?scope=launcher&slug="+url.QueryEscape(slug), nil)
 	w = httptest.NewRecorder()
 	h.Get(w, get)
@@ -221,7 +221,7 @@ func TestNewsSaveGetDeleteRoundTrip(t *testing.T) {
 		t.Fatalf("get: markdown not returned: %s", w.Body.String())
 	}
 
-	del := httptest.NewRequest(http.MethodPost,
+	del := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 		"http://example.com/admin/news/delete?scope=launcher&slug="+url.QueryEscape(slug), nil)
 	w = httptest.NewRecorder()
 	h.Delete(w, del)

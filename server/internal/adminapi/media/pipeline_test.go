@@ -10,10 +10,13 @@ import (
 	"testing"
 )
 
-// readOutput returns the bytes of the asset the pipeline reported writing.
-func readOutput(t *testing.T, base, rel, name string) []byte {
+// readOutput returns the bytes of the asset the pipeline reported writing into
+// the "assets" subdirectory every test in this file uses.
+func readOutput(t *testing.T, base, name string) []byte {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(base, rel, name))
+	// #nosec G304 -- base is this test's own t.TempDir() and name is what the
+	// pipeline just reported writing there.
+	b, err := os.ReadFile(filepath.Join(base, "assets", name))
 	if err != nil {
 		t.Fatalf("the pipeline reported %q but nothing is there: %v", name, err)
 	}
@@ -34,7 +37,7 @@ func TestPNGIsReEncodedToJPEG(t *testing.T) {
 	if meta["format"] != "png" {
 		t.Errorf("meta lost the source format: %+v", meta)
 	}
-	if _, err := jpeg.Decode(bytes.NewReader(readOutput(t, base, "assets", name))); err != nil {
+	if _, err := jpeg.Decode(bytes.NewReader(readOutput(t, base, name))); err != nil {
 		t.Fatalf("the stored asset is not a decodable JPEG: %v", err)
 	}
 }
@@ -72,18 +75,34 @@ func TestCyrillicNamesDoNotOverwriteEachOther(t *testing.T) {
 		t.Fatalf("both uploads were stored as %q; one of them is gone", first)
 	}
 	// Both files must still be on disk, and the first must still be the first.
-	img, err := jpeg.Decode(bytes.NewReader(readOutput(t, base, "assets", first)))
+	img, err := jpeg.Decode(bytes.NewReader(readOutput(t, base, first)))
 	if err != nil {
 		t.Fatalf("the first asset is not readable: %v", err)
 	}
 	if got := img.Bounds().Dx(); got != 64 {
 		t.Errorf("%q is %dpx wide, want the 64px image that was uploaded under that name", first, got)
 	}
-	readOutput(t, base, "assets", second)
+	readOutput(t, base, second)
+}
+
+// isURLSafeASCII reports whether every rune of name may appear in a /assets/
+// URL without escaping.
+func isURLSafeASCII(name string) bool {
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == '.' || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // The stored name ends up in a /assets/ URL served by nginx, so it must be
-// ASCII and URL-safe whatever alphabet the admin's file came from.
+// ASCII and URL-safe whatever alphabet the admin's file came from. The CJK and
+// emoji names below are the input under test, not stray localised strings.
+//
+//nolint:gosmopolitan // the non-Latin names are exactly what this test covers
 func TestStoredNamesAreASCIIAndURLSafe(t *testing.T) {
 	base := t.TempDir()
 	for _, desired := range []string{"скриншот", "Обложка", "文件", "🙂", "ъь"} {
@@ -91,16 +110,13 @@ func TestStoredNamesAreASCIIAndURLSafe(t *testing.T) {
 		if err != nil {
 			t.Fatalf("desired %q: %v", desired, err)
 		}
-		for _, r := range name {
-			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_' {
-				continue
-			}
+		if !isURLSafeASCII(name) {
 			t.Fatalf("desired %q produced %q, which is not URL-safe ASCII", desired, name)
 		}
 		if strings.TrimSuffix(name, ".jpg") == "" {
 			t.Fatalf("desired %q produced the nameless file %q", desired, name)
 		}
-		readOutput(t, base, "assets", name)
+		readOutput(t, base, name)
 	}
 }
 
@@ -184,7 +200,7 @@ func TestEmptyDesiredNameStillProducesAFile(t *testing.T) {
 		if strings.TrimSuffix(name, ".jpg") == "" {
 			t.Fatalf("desired %q produced the nameless file %q", desired, name)
 		}
-		readOutput(t, base, "assets", name)
+		readOutput(t, base, name)
 	}
 }
 
@@ -220,7 +236,7 @@ func TestAnimatedFallbackKeepsTheOriginalExtension(t *testing.T) {
 	if !strings.HasSuffix(name, ".gif") {
 		t.Fatalf("output is %q; a GIF stored under a .webp name will not render", name)
 	}
-	if !bytes.Equal(readOutput(t, base, "assets", name), gif) {
+	if !bytes.Equal(readOutput(t, base, name), gif) {
 		t.Error("the original bytes were altered although no transcode ran")
 	}
 	if meta["note"] == "" {
@@ -327,7 +343,7 @@ func TestUnparseableHeaderIsNotRejectedByBoundsCheck(t *testing.T) {
 // A URL that does not parse, or has no host, must not reach the network.
 func TestDownloadURLRefusesMalformedInput(t *testing.T) {
 	for _, u := range []string{"", "   ", "http://", "https:///path", "не ссылка", "://x"} {
-		if _, _, err := DownloadURL(u); err == nil {
+		if _, _, err := DownloadURL(t.Context(), u); err == nil {
 			t.Errorf("DownloadURL(%q) succeeded", u)
 		}
 	}

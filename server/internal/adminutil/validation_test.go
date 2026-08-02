@@ -71,7 +71,7 @@ func TestVersionCheckAloneDoesNotStopDotDot(t *testing.T) {
 // Ids that come back from a client and become paths must be recognisably
 // server-generated.
 func TestIsHexIDMatchesWhatTheServerGenerates(t *testing.T) {
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		if id := GenID(); !IsHexID(id) {
 			t.Fatalf("GenID produced %q, which IsHexID rejects", id)
 		}
@@ -85,7 +85,7 @@ func TestIsHexIDMatchesWhatTheServerGenerates(t *testing.T) {
 // overwrite another's staging directory.
 func TestGeneratedIDsAreUnique(t *testing.T) {
 	seen := map[string]bool{}
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		id := NewBuildID()
 		if seen[id] {
 			t.Fatalf("NewBuildID repeated %q after %d draws", id, i)
@@ -135,7 +135,7 @@ func TestSanitizeFilenameKeepsDifferentCyrillicNamesApart(t *testing.T) {
 	names := []string{
 		"скриншот.png", "картинка.png", "снимок01.png", "снимок02.png",
 		"Скриншот.png", "экран.png", "екран.png", "мой файл.png",
-		"文件.png", "画像.png", "🙂.png", "ﬁle.png",
+		"文件.png", "画像.png", "🙂.png", "ﬁle.png", //nolint:gosmopolitan // Non-Latin test input is the point: these names must not collide.
 	}
 	seen := map[string]string{}
 	for _, in := range names {
@@ -151,10 +151,10 @@ func TestSanitizeFilenameKeepsDifferentCyrillicNamesApart(t *testing.T) {
 // URL-safe whatever the source alphabet was — and it must keep the extension
 // last, or the browser gets a file with no type.
 func TestSanitizeFilenameStaysURLSafeAndKeepsTheExtension(t *testing.T) {
-	for _, in := range []string{"скриншот.png", "文件.png", "🙂🙂.jpeg", "ьъ.png", "имя файла.webp"} {
+	for _, in := range []string{"скриншот.png", "文件.png", "🙂🙂.jpeg", "ьъ.png", "имя файла.webp"} { //nolint:gosmopolitan // Non-Latin test input is the point.
 		got := SanitizeFilename(in)
 		for _, r := range got {
-			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_' {
+			if isASCIIAlnum(r) || r == '.' || r == '-' || r == '_' {
 				continue
 			}
 			t.Fatalf("SanitizeFilename(%q) = %q, which contains the unsafe rune %q", in, got, r)
@@ -172,7 +172,7 @@ func TestSanitizeFilenameStaysURLSafeAndKeepsTheExtension(t *testing.T) {
 // A name with nothing transliterable left must still be usable, not a bare
 // extension or a string of underscores that collides with the next one.
 func TestSanitizeFilenameGivesFullyNonASCIINamesAStem(t *testing.T) {
-	for _, in := range []string{"文件", "🙂", "ъь", "日本語.png"} {
+	for _, in := range []string{"文件", "🙂", "ъь", "日本語.png"} { //nolint:gosmopolitan // Non-Latin test input is the point.
 		got := SanitizeFilename(in)
 		stem := strings.TrimSuffix(got, filepath.Ext(got))
 		if strings.Trim(stem, "_") == "" {
@@ -198,7 +198,7 @@ func TestSanitizeFilenameTransliteratesCyrillic(t *testing.T) {
 // The same source name must keep producing the same stored name: re-uploading a
 // corrected image is expected to replace the asset the post already links to.
 func TestSanitizeFilenameIsStableAndIdempotent(t *testing.T) {
-	for _, in := range []string{"скриншот.png", "文件.png", "screenshot.png"} {
+	for _, in := range []string{"скриншот.png", "文件.png", "screenshot.png"} { //nolint:gosmopolitan // Non-Latin test input is the point.
 		first := SanitizeFilename(in)
 		if second := SanitizeFilename(in); second != first {
 			t.Errorf("SanitizeFilename(%q) is not stable: %q then %q", in, first, second)
@@ -221,7 +221,7 @@ func TestSanitizeFilenameLeavesASCIIBehaviourUnchanged(t *testing.T) {
 		"my_file.2.webp":     "my_file.2.webp",
 		"file name (1).png":  "file_name__1_.png",
 		"________.jpg":       "________.jpg",
-		"../../etc/passwd":   ".._.._etc_passwd",
+		"../../etc/passwd":   ".._.._etc_passwd", // #nosec G101 -- a traversal fixture, not a credential.
 		"":                   "file",
 		"   ":                "___",
 		"UPPER.PNG":          "UPPER.PNG",
@@ -268,7 +268,7 @@ func TestSanitizeAssetPathKeepsNormalSubdirectories(t *testing.T) {
 // so a GET mutation is triggerable from any page the admin has open.
 func TestRequireMethodRefusesTheWrongVerb(t *testing.T) {
 	w := httptest.NewRecorder()
-	if RequireMethod(w, httptest.NewRequest(http.MethodGet, "/admin/api/save", nil), http.MethodPost) {
+	if RequireMethod(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/save", nil), http.MethodPost) {
 		t.Fatal("a GET was allowed through a POST-only guard")
 	}
 	if w.Code != http.StatusMethodNotAllowed {
@@ -280,14 +280,14 @@ func TestRequireMethodRefusesTheWrongVerb(t *testing.T) {
 // here makes the browser cancel the real request.
 func TestRequireMethodLetsPreflightThrough(t *testing.T) {
 	w := httptest.NewRecorder()
-	if !RequireMethod(w, httptest.NewRequest(http.MethodOptions, "/admin/api/save", nil), http.MethodPost) {
+	if !RequireMethod(w, httptest.NewRequestWithContext(t.Context(), http.MethodOptions, "/admin/api/save", nil), http.MethodPost) {
 		t.Fatal("a preflight was refused")
 	}
 }
 
 func TestRequireMethodAllowsTheMatchingVerb(t *testing.T) {
 	w := httptest.NewRecorder()
-	if !RequireMethod(w, httptest.NewRequest(http.MethodPost, "/admin/api/save", nil), http.MethodPost) {
+	if !RequireMethod(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/save", nil), http.MethodPost) {
 		t.Fatalf("a matching POST was refused: %d", w.Code)
 	}
 }
@@ -337,7 +337,7 @@ func TestWriteJSONDisablesCaching(t *testing.T) {
 }
 
 // A writer that cannot flush must not crash the NDJSON streaming handlers.
-func TestFlusherForFallsBackToANoop(t *testing.T) {
+func TestFlusherForFallsBackToANoop(_ *testing.T) {
 	FlusherFor(httptest.NewRecorder()).Flush() // recorders do implement Flusher
 	FlusherFor(nonFlusher{httptest.NewRecorder()}).Flush()
 }

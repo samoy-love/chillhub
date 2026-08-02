@@ -232,7 +232,7 @@ type AdminView struct {
 }
 
 // Get serves GET /admin/api/maintenance/get.
-func (s *Store) Get(w http.ResponseWriter, r *http.Request) {
+func (s *Store) Get(w http.ResponseWriter, _ *http.Request) {
 	st := s.Load()
 	writeJSON(w, AdminView{State: st, Effective: Effective(st, time.Now()), Path: s.path()})
 }
@@ -261,26 +261,8 @@ func (s *Store) Set(w http.ResponseWriter, r *http.Request) {
 	if len(in.Reason) > maxReasonBytes {
 		in.Reason = in.Reason[:maxReasonBytes]
 	}
-	start, startOK := parseTime(in.StartsAt)
-	if strings.TrimSpace(in.StartsAt) != "" && !startOK {
-		http.Error(w, "startsAt must be RFC3339", http.StatusBadRequest)
+	if !normalizeWindow(w, &in) {
 		return
-	}
-	end, endOK := parseTime(in.EndsAt)
-	if strings.TrimSpace(in.EndsAt) != "" && !endOK {
-		http.Error(w, "endsAt must be RFC3339", http.StatusBadRequest)
-		return
-	}
-	if startOK && endOK && !end.After(start) {
-		http.Error(w, "endsAt must be after startsAt", http.StatusBadRequest)
-		return
-	}
-	// Normalize to UTC so every consumer sees one format.
-	if startOK {
-		in.StartsAt = start.UTC().Format(time.RFC3339)
-	}
-	if endOK {
-		in.EndsAt = end.UTC().Format(time.RFC3339)
 	}
 	now := time.Now()
 	in.UpdatedAt = now.UTC().Format(time.RFC3339)
@@ -290,8 +272,38 @@ func (s *Store) Set(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	logAudit("maintenance set enabled=%v blocks=%+v ends=%q by=%s", in.Enabled, in.Blocks, in.EndsAt, in.UpdatedBy)
+	logAuditf("maintenance set enabled=%v blocks=%+v ends=%q by=%s", in.Enabled, in.Blocks, in.EndsAt, in.UpdatedBy)
 	writeJSON(w, AdminView{State: in, Effective: Effective(in, now), Path: s.path()})
+}
+
+// normalizeWindow validates startsAt/endsAt and rewrites them in UTC so every
+// consumer sees one format. It answers 400 itself and reports ok=false, so the
+// caller only has to return.
+//
+// A malformed timestamp is a 400 rather than a silently ignored field: a
+// deadline nobody stored leaves every client blocked forever.
+func normalizeWindow(w http.ResponseWriter, in *State) bool {
+	start, startOK := parseTime(in.StartsAt)
+	if strings.TrimSpace(in.StartsAt) != "" && !startOK {
+		http.Error(w, "startsAt must be RFC3339", http.StatusBadRequest)
+		return false
+	}
+	end, endOK := parseTime(in.EndsAt)
+	if strings.TrimSpace(in.EndsAt) != "" && !endOK {
+		http.Error(w, "endsAt must be RFC3339", http.StatusBadRequest)
+		return false
+	}
+	if startOK && endOK && !end.After(start) {
+		http.Error(w, "endsAt must be after startsAt", http.StatusBadRequest)
+		return false
+	}
+	if startOK {
+		in.StartsAt = start.UTC().Format(time.RFC3339)
+	}
+	if endOK {
+		in.EndsAt = end.UTC().Format(time.RFC3339)
+	}
+	return true
 }
 
 // Clear serves POST /admin/api/maintenance/clear: removes the state file, which
@@ -314,7 +326,7 @@ func (s *Store) Clear(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	logAudit("maintenance clear by=%s", s.user(r))
+	logAuditf("maintenance clear by=%s", s.user(r))
 	writeJSON(w, AdminView{Effective: Effective(State{}, time.Now()), Path: s.path()})
 }
 
@@ -323,7 +335,9 @@ func (s *Store) Clear(w http.ResponseWriter, r *http.Request) {
 func (s *Store) save(v State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := os.MkdirAll(s.dir(), 0o755); err != nil {
+	// 0o750, not the 0o755 of the content tree: this directory is never served,
+	// only the two server processes read it.
+	if err := os.MkdirAll(s.dir(), 0o750); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(v, "", "  ")
@@ -357,14 +371,22 @@ func (s *Store) save(v State) error {
 	return nil
 }
 
-// logAudit mirrors the "[audit] ..." lines the other admin domains emit.
-func logAudit(format string, a ...any) { log.Printf("[audit] "+format, a...) }
+// logAuditf mirrors the "[audit] ..." lines the other admin domains emit.
+func logAuditf(format string, a ...any) { log.Printf("[audit] "+format, a...) }
 
+// writeJSON marshals before writing a single header: an encoder that failed
+// mid-stream would have already sent 200 plus a truncated body, which a client
+// reports as corrupt JSON instead of as the server error it is.
 func writeJSON(w http.ResponseWriter, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		log.Printf("[maintenance] encode response: %v", err)
+		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
-	b, _ := json.Marshal(v)
 	_, _ = w.Write(b)
 }

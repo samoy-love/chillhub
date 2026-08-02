@@ -61,7 +61,7 @@ func pathProblem(p string) string {
 	if p != canonPath(p) {
 		return "path is not in canonical form"
 	}
-	for _, seg := range strings.Split(p, "/") {
+	for seg := range strings.SplitSeq(p, "/") {
 		if seg == "" {
 			return "empty path segment"
 		}
@@ -76,10 +76,7 @@ func pathProblem(p string) string {
 		if strings.ContainsAny(seg, "*?\"<>|") {
 			return "invalid character in path segment"
 		}
-		stem := seg
-		if i := strings.IndexByte(seg, '.'); i >= 0 {
-			stem = seg[:i]
-		}
+		stem, _, _ := strings.Cut(seg, ".")
 		if reservedNames[strings.ToUpper(stem)] {
 			return "reserved device name " + stem
 		}

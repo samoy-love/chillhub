@@ -14,7 +14,7 @@ import (
 
 func submit(t *testing.T, h *Handlers, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "http://x/metrics/report", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://x/metrics/report", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.Submit(w, req)
 	return w
@@ -22,7 +22,7 @@ func submit(t *testing.T, h *Handlers, body string) *httptest.ResponseRecorder {
 
 func summary(t *testing.T, h *Handlers, query string) Summary {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "http://x/admin/api/metrics/summary"+query, nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://x/admin/api/metrics/summary"+query, nil)
 	w := httptest.NewRecorder()
 	h.Summary(w, req)
 	if w.Code != http.StatusOK {
@@ -115,7 +115,7 @@ func TestUnknownFieldsAreNotStored(t *testing.T) {
 // The client's address is used for rate limiting only; it must never be stored.
 func TestClientAddressNotStored(t *testing.T) {
 	h := New(t.TempDir())
-	req := httptest.NewRequest(http.MethodPost, "http://x/metrics/report", strings.NewReader(`{"event":"launcher_start"}`))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://x/metrics/report", strings.NewReader(`{"event":"launcher_start"}`))
 	req.RemoteAddr = "203.0.113.9:5555"
 	req.Header.Set("X-Forwarded-For", "198.51.100.7")
 	w := httptest.NewRecorder()
@@ -143,7 +143,7 @@ func TestSummaryFiltersByPeriodAndGame(t *testing.T) {
 		t.Errorf("stale period: events = %d, want 0", old.Totals.Events)
 	}
 	// Bad timestamps are rejected loudly.
-	req := httptest.NewRequest(http.MethodGet, "http://x/admin/api/metrics/summary?from=yesterday", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://x/admin/api/metrics/summary?from=yesterday", nil)
 	w := httptest.NewRecorder()
 	h.Summary(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -155,12 +155,12 @@ func TestSummaryFiltersByPeriodAndGame(t *testing.T) {
 func TestSummarySkipsCorruptLines(t *testing.T) {
 	h := New(t.TempDir())
 	submit(t, h, `{"event":"launcher_start"}`)
-	f, err := os.OpenFile(h.path(), os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(h.path(), os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, _ = f.WriteString("{\"event\":\"launcher_st\n")
-	f.Close()
+	_ = f.Close()
 	if got := summary(t, h, "").Totals.Events; got != 1 {
 		t.Fatalf("events = %d, want 1", got)
 	}
@@ -202,7 +202,7 @@ func TestSubmitClampsNumericFields(t *testing.T) {
 	h := New(t.TempDir())
 	body := fmt.Sprintf(`{"event":"game_install","gameId":"g","result":"ok","durationMs":%d,"bytes":%d}`,
 		int64(math.MaxInt64), int64(math.MaxInt64))
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if w := submit(t, h, body); w.Code != http.StatusOK {
 			t.Fatalf("submit %d: %d %s", i, w.Code, w.Body.String())
 		}
@@ -223,7 +223,7 @@ func TestClearDropsBothGenerations(t *testing.T) {
 	h := New(t.TempDir())
 	submit(t, h, `{"event":"launcher_start"}`)
 	w := httptest.NewRecorder()
-	h.Clear(w, httptest.NewRequest(http.MethodPost, "http://x/admin/api/metrics/clear", nil))
+	h.Clear(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://x/admin/api/metrics/clear", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("clear code = %d", w.Code)
 	}

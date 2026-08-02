@@ -19,31 +19,36 @@ const summaryMaxRunes = 280
 // ExtractMeta pulls the title (first H1), the summary (first paragraph that
 // carries readable text, shortened to card size) and the cover (first inline
 // image) out of an article body.
+// firstImageURL returns the normalised target of the first ![alt](url) on a
+// line, or "" when the line carries no complete image.
+func firstImageURL(line string) string {
+	s := strings.TrimSpace(line)
+	i := strings.Index(s, "![")
+	if i < 0 {
+		return ""
+	}
+	j := strings.Index(s[i:], "](")
+	if j < 0 {
+		return ""
+	}
+	j += i
+	k := strings.Index(s[j+2:], ")")
+	if k < 0 {
+		return ""
+	}
+	return normalize(strings.TrimSpace(s[j+2 : j+2+k]))
+}
+
 func ExtractMeta(md string) (string, string, string) {
-	lines := strings.Split(md, "\n")
 	title := ""
 	cover := ""
 	var paras []string
 	cur := ""
-	for _, ln := range lines {
+	for ln := range strings.SplitSeq(md, "\n") {
 		s := strings.TrimRight(ln, "\r")
 		// first image ![alt](url) if cover not set yet
 		if cover == "" {
-			ts2 := strings.TrimSpace(s)
-			if i := strings.Index(ts2, "!["); i >= 0 {
-				j := strings.Index(ts2[i:], "](")
-				if j >= 0 {
-					j = i + j
-					k := strings.Index(ts2[j+2:], ")")
-					if k >= 0 {
-						k = j + 2 + k
-						url := normalize(strings.TrimSpace(ts2[j+2 : k]))
-						if url != "" {
-							cover = url
-						}
-					}
-				}
-			}
+			cover = firstImageURL(s)
 		}
 		if strings.HasPrefix(s, "# ") && title == "" {
 			title = strings.TrimSpace(strings.TrimPrefix(s, "# "))
@@ -93,7 +98,7 @@ func summarize(paras []string) string {
 // blank line in it is several blocks, and a build log is not a summary.
 func summaryText(block string, inCode bool) (string, bool) {
 	var out []string
-	for _, ln := range strings.Split(block, "\n") {
+	for ln := range strings.SplitSeq(block, "\n") {
 		s := strings.TrimSpace(ln)
 		if isFenceLine(s) {
 			inCode = !inCode
@@ -241,7 +246,7 @@ func dropImages(s string) string {
 
 // unwrapLinks replaces every [label](url) with its label.
 func unwrapLinks(s string) string {
-	out := ""
+	var out strings.Builder
 	for {
 		i := strings.Index(s, "[")
 		if i < 0 {
@@ -256,10 +261,11 @@ func unwrapLinks(s string) string {
 		if k < 0 {
 			break
 		}
-		out += s[:i] + s[i+1:j]
+		out.WriteString(s[:i])
+		out.WriteString(s[i+1 : j])
 		s = s[j+2+k+1:]
 	}
-	return out + s
+	return out.String() + s
 }
 
 // normalize turns a markdown image/link target into a web path, defaulting
@@ -276,8 +282,8 @@ func normalize(u string) string {
 	if strings.HasPrefix(u, "/") {
 		return u
 	}
-	if strings.HasPrefix(u, "assets/") {
-		return "/assets/" + strings.TrimPrefix(u, "assets/")
+	if rest, ok := strings.CutPrefix(u, "assets/"); ok {
+		return "/assets/" + rest
 	}
 	// default: treat as /assets/<u>
 	return "/assets/" + u
@@ -286,43 +292,35 @@ func normalize(u string) string {
 // mdToHTML is a very small markdown to HTML converter for the editor preview
 // (H1/H2, paragraphs, code blocks, links, bold/italic).
 func mdToHTML(md string) string {
-	esc := escapeHTML
-	// code blocks ```
-	out := ""
-	lines := strings.Split(md, "\n")
+	var out strings.Builder
 	inCode := false
 	para := ""
 	flushPara := func() {
 		if strings.TrimSpace(para) != "" {
-			out += "<p>" + inlineMD(esc(para)) + "</p>\n"
+			out.WriteString("<p>" + inlineMD(escapeHTML(para)) + "</p>\n")
 		}
 		para = ""
 	}
-	for _, ln := range lines {
+	for ln := range strings.SplitSeq(md, "\n") {
+		// code blocks ```
 		if strings.HasPrefix(strings.TrimSpace(ln), "```") {
 			if inCode {
-				out += "</pre>\n"
-				inCode = false
+				out.WriteString("</pre>\n")
 			} else {
 				flushPara()
-				out += "<pre>"
-				inCode = true
+				out.WriteString("<pre>")
 			}
+			inCode = !inCode
 			continue
 		}
 		if inCode {
-			out += esc(ln) + "\n"
+			out.WriteString(escapeHTML(ln) + "\n")
 			continue
 		}
 		s := strings.TrimRight(ln, "\r")
-		if strings.HasPrefix(s, "# ") {
+		if h := headingHTML(s); h != "" {
 			flushPara()
-			out += "<h1>" + inlineMD(esc(strings.TrimSpace(strings.TrimPrefix(s, "# ")))) + "</h1>\n"
-			continue
-		}
-		if strings.HasPrefix(s, "## ") {
-			flushPara()
-			out += "<h2>" + inlineMD(esc(strings.TrimSpace(strings.TrimPrefix(s, "## ")))) + "</h2>\n"
+			out.WriteString(h)
 			continue
 		}
 		if strings.TrimSpace(s) == "" {
@@ -334,10 +332,19 @@ func mdToHTML(md string) string {
 		}
 		para += s
 	}
-	if strings.TrimSpace(para) != "" {
-		out += "<p>" + inlineMD(esc(para)) + "</p>\n"
+	flushPara()
+	return out.String()
+}
+
+// headingHTML renders an H1 or H2 line, or returns "" when s is neither.
+func headingHTML(s string) string {
+	switch {
+	case strings.HasPrefix(s, "# "):
+		return "<h1>" + inlineMD(escapeHTML(strings.TrimSpace(strings.TrimPrefix(s, "# ")))) + "</h1>\n"
+	case strings.HasPrefix(s, "## "):
+		return "<h2>" + inlineMD(escapeHTML(strings.TrimSpace(strings.TrimPrefix(s, "## ")))) + "</h2>\n"
 	}
-	return out
+	return ""
 }
 
 // escapeHTML makes text safe both between tags and inside a double- or
@@ -373,20 +380,39 @@ func escapeQuotes(s string) string {
 // inlineMD handles a very small subset (**bold**, *italic*, [text](url)).
 // It expects text that has already been through escapeHTML.
 func inlineMD(s string) string {
-	// images ![alt](url)
+	s = renderImages(s)
+	// bold before italic: "**" has to be consumed before a lone "*" is.
+	s = wrapDelimited(s, "**", "<strong>", "</strong>")
+	s = wrapDelimited(s, "*", "<em>", "</em>")
+	return renderLinks(s)
+}
+
+// wrapDelimited puts every stretch of s between a pair of delimiters between
+// the given tags. An unpaired trailing delimiter is dropped, which is what the
+// editor sees while a word is still being typed.
+func wrapDelimited(s, delim, openTag, closeTag string) string {
+	parts := strings.Split(s, delim)
+	for i := 1; i < len(parts); i += 2 {
+		parts[i] = openTag + parts[i] + closeTag
+	}
+	return strings.Join(parts, "")
+}
+
+// renderImages replaces every ![alt](url) with an <img>.
+func renderImages(s string) string {
 	for {
 		i := strings.Index(s, "![")
 		if i < 0 {
-			break
+			return s
 		}
 		j := strings.Index(s[i:], "](")
 		if j < 0 {
-			break
+			return s
 		}
-		j = i + j
+		j += i
 		k := strings.Index(s[j+2:], ")")
 		if k < 0 {
-			break
+			return s
 		}
 		k = j + 2 + k
 		alt := escapeQuotes(s[i+2 : j])
@@ -394,34 +420,23 @@ func inlineMD(s string) string {
 		rep := "<img src=\"" + url + "\" alt=\"" + alt + "\" style=\"max-width:100%\">"
 		s = s[:i] + rep + s[k+1:]
 	}
-	// bold **text**
-	s = strings.ReplaceAll(s, "**", "\x00")
-	parts := strings.Split(s, "\x00")
-	for i := 1; i < len(parts); i += 2 {
-		parts[i] = "<strong>" + parts[i] + "</strong>"
-	}
-	s = strings.Join(parts, "")
-	// italic *text*
-	s = strings.ReplaceAll(s, "*", "\x01")
-	parts = strings.Split(s, "\x01")
-	for i := 1; i < len(parts); i += 2 {
-		parts[i] = "<em>" + parts[i] + "</em>"
-	}
-	s = strings.Join(parts, "")
-	// links [text](url) (very naive)
+}
+
+// renderLinks replaces every [text](url) with an <a> (very naive).
+func renderLinks(s string) string {
 	for {
 		i := strings.Index(s, "[")
 		if i < 0 {
-			break
+			return s
 		}
 		j := strings.Index(s[i:], "](")
 		if j < 0 {
-			break
+			return s
 		}
-		j = i + j
+		j += i
 		k := strings.Index(s[j+2:], ")")
 		if k < 0 {
-			break
+			return s
 		}
 		k = j + 2 + k
 		text := escapeQuotes(s[i+1 : j])
@@ -429,5 +444,4 @@ func inlineMD(s string) string {
 		rep := "<a href=\"" + url + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + text + "</a>"
 		s = s[:i] + rep + s[k+1:]
 	}
-	return s
 }

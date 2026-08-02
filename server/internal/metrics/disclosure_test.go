@@ -16,13 +16,13 @@ func TestSubmitDoesNotLeakFilesystemPaths(t *testing.T) {
 	root := t.TempDir()
 	// Make the metrics directory impossible to create by putting a FILE where it
 	// has to go; every OS then fails the MkdirAll with a path-carrying error.
-	if err := os.WriteFile(filepath.Join(root, "metrics"), []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "metrics"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	h := New(root)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "http://example.com/metrics/report",
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/metrics/report",
 		strings.NewReader(`{"event":"launcher_start"}`))
 	h.Submit(w, r)
 

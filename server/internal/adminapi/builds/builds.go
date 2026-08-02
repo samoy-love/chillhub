@@ -9,6 +9,7 @@ package builds
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -31,6 +32,19 @@ type Handlers struct {
 
 // New returns handlers rooted at the given content directory.
 func New(root string) *Handlers { return &Handlers{root: root} }
+
+// Permissions for everything this package creates.
+//
+// The published tree is not read by this process alone: nginx serves content/
+// and manifests/ straight off disk (deploy/launcher.conf), and the deployment
+// and backup jobs walk the same directories. Narrowing these bits is an
+// infrastructure change, not a code change, so the values are the historic ones
+// — named here only so that a single place decides them. On the host they end
+// up tighter anyway: chillhub-admin.service sets UMask=0027.
+const (
+	contentDirPerm  = 0o755
+	contentFilePerm = 0o644
+)
 
 // authorized reports whether the request carries a valid admin session.
 func (h *Handlers) authorized(r *http.Request) bool {
@@ -77,14 +91,17 @@ func (h *Handlers) manifestsDir(gid string) string {
 // stageVersionDir creates a staging directory for a build next to its final
 // location, so that the finished tree can be moved into place with a rename on
 // the same volume. Returns the staging dir and the files root inside it.
-func (h *Handlers) stageVersionDir(gid, ver string) (stageDir, filesRoot string, err error) {
+func (h *Handlers) stageVersionDir(gid, ver string) (string, string, error) {
+	// gid and ver are proven safe by adminutil.IsSafeGameID/IsSafeVersion at
+	// every entry point before publication starts; neither can contain a
+	// separator or a "..".
 	parent := filepath.Join(h.root, "content", gid)
-	if err = os.MkdirAll(parent, 0o755); err != nil {
+	if err := os.MkdirAll(parent, contentDirPerm); err != nil {
 		return "", "", err
 	}
-	stageDir = filepath.Join(parent, ver+".tmp-"+adminutil.GenID())
-	filesRoot = filepath.Join(stageDir, "files")
-	if err = os.MkdirAll(filesRoot, 0o755); err != nil {
+	stageDir := filepath.Join(parent, ver+".tmp-"+adminutil.GenID())
+	filesRoot := filepath.Join(stageDir, "files")
+	if err := os.MkdirAll(filesRoot, contentDirPerm); err != nil {
 		return "", "", err
 	}
 	return stageDir, filesRoot, nil
@@ -105,41 +122,73 @@ func (h *Handlers) stageVersionDir(gid, ver string) (stageDir, filesRoot string,
 //
 // The old tree is deleted only once the new one is live.
 func promoteVersionDir(stageDir, finalDir string) error {
-	if err := os.MkdirAll(filepath.Dir(finalDir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(finalDir), contentDirPerm); err != nil {
 		return err
 	}
-	// Sweep backups a previous crash may have left next to this version.
-	if leftovers, err := filepath.Glob(finalDir + ".old-*"); err == nil {
-		for _, p := range leftovers {
-			_ = os.RemoveAll(p)
-		}
-	}
+	sweepStaleBackups(finalDir)
 
-	backup := ""
-	if _, err := os.Stat(finalDir); err == nil {
-		backup = finalDir + ".old-" + adminutil.GenID()
-		if err := os.Rename(finalDir, backup); err != nil {
-			return err
-		}
+	backup, err := moveLiveVersionAside(finalDir)
+	if err != nil {
+		return err
 	}
 	if err := os.Rename(stageDir, finalDir); err != nil {
-		if backup != "" {
-			if rerr := os.Rename(backup, finalDir); rerr != nil {
-				// Both the promote and the rollback failed: the published version
-				// now only exists under the backup name. Say so loudly — it is
-				// recoverable by hand, and silence would hide that.
-				log.Printf("[builds] CRITICAL: promote of %s failed (%v) and rollback failed too (%v); "+
-					"the previous version is still on disk as %s", finalDir, err, rerr, backup)
-			}
-		}
+		rollbackLiveVersion(backup, finalDir, err)
 		return err
 	}
-	if backup != "" {
-		if err := os.RemoveAll(backup); err != nil {
-			log.Printf("[builds] cannot remove the replaced version %s: %v", backup, err)
-		}
-	}
+	dropBackup(backup)
 	return nil
+}
+
+// sweepStaleBackups removes backups a previous crash may have left next to this
+// version.
+func sweepStaleBackups(finalDir string) {
+	leftovers, err := filepath.Glob(finalDir + ".old-*")
+	if err != nil {
+		return
+	}
+	for _, p := range leftovers {
+		_ = os.RemoveAll(p)
+	}
+}
+
+// moveLiveVersionAside renames the published version out of the way and returns
+// its new path, or "" when there was nothing published yet.
+func moveLiveVersionAside(finalDir string) (string, error) {
+	// A stat that fails for any reason means "nothing to move aside", exactly as
+	// before: the rename below would fail on its own if the directory is really
+	// there but unreachable.
+	if _, statErr := os.Stat(finalDir); statErr != nil {
+		return "", nil //nolint:nilerr // absence is the expected case, not an error to report
+	}
+	backup := finalDir + ".old-" + adminutil.GenID()
+	if err := os.Rename(finalDir, backup); err != nil {
+		return "", err
+	}
+	return backup, nil
+}
+
+// rollbackLiveVersion puts the previous version back after a failed promote.
+func rollbackLiveVersion(backup, finalDir string, cause error) {
+	if backup == "" {
+		return
+	}
+	if rerr := os.Rename(backup, finalDir); rerr != nil {
+		// Both the promote and the rollback failed: the published version now
+		// only exists under the backup name. Say so loudly — it is recoverable
+		// by hand, and silence would hide that.
+		log.Printf("[builds] CRITICAL: promote of %s failed (%v) and rollback failed too (%v); "+
+			"the previous version is still on disk as %s", finalDir, cause, rerr, backup)
+	}
+}
+
+// dropBackup deletes the replaced version once the new one is live.
+func dropBackup(backup string) {
+	if backup == "" {
+		return
+	}
+	if err := os.RemoveAll(backup); err != nil {
+		log.Printf("[builds] cannot remove the replaced version %s: %v", backup, err)
+	}
 }
 
 // publishLocks serialises publication per gameId+version.
@@ -335,20 +384,47 @@ func (h *Handlers) writeManifest(m manifest, updateLatest bool) (string, []byte,
 	}
 
 	outDir := h.manifestsDir(m.GameID)
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	if err := os.MkdirAll(outDir, contentDirPerm); err != nil {
 		return "", nil, err
 	}
 	outPath := filepath.Join(outDir, m.Version+".json")
-	b, _ := json.MarshalIndent(m, "", "  ")
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return "", nil, err
+	}
 	// Atomic: the public API serves these files while they are being written.
-	if err := adminutil.WriteFileAtomic(outPath, b, 0o644); err != nil {
+	if err := adminutil.WriteFileAtomic(outPath, b, contentFilePerm); err != nil {
 		return "", nil, err
 	}
 	if updateLatest {
-		bl, _ := json.MarshalIndent(map[string]string{"version": m.Version}, "", "  ")
-		_ = adminutil.WriteFileAtomic(filepath.Join(outDir, "latest.json"), bl, 0o644)
+		// A failed latest.json write FAILS THE PUBLICATION.
+		//
+		// The operator ticked "update latest", so the whole point of the request
+		// was to make this version the one launchers download. If the pointer is
+		// not repointed, the version sits on disk and every client keeps getting
+		// the previous one — while the panel says the build was published. The
+		// operator walks away, and the discrepancy surfaces days later as
+		// "players do not get the update".
+		//
+		// The files already written are harmless: an unreferenced version
+		// directory and its manifest are exactly what an inactive version looks
+		// like, and republishing overwrites them. Reporting the failure costs a
+		// retry; hiding it costs a silent non-release.
+		if err := writeLatestJSON(outDir, m.Version); err != nil {
+			log.Printf("[builds] manifest %s/%s written but latest.json not updated: %v", m.GameID, m.Version, err)
+			return "", nil, fmt.Errorf("manifest written but latest.json not updated: %w", err)
+		}
 	}
 	return outPath, b, nil
+}
+
+// writeLatestJSON points the game's latest.json at a version.
+func writeLatestJSON(dir, version string) error {
+	b, err := json.MarshalIndent(map[string]string{"version": version}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return adminutil.WriteFileAtomic(filepath.Join(dir, "latest.json"), b, contentFilePerm)
 }
 
 // ListVersions returns the versions available for a game plus the active one.
@@ -380,31 +456,46 @@ func (h *Handlers) ListVersions(w http.ResponseWriter, r *http.Request) {
 		Items  []item `json:"items"`
 		Latest string `json:"latest"`
 	}{Items: []item{}, Latest: ""}
-	for _, e := range entries {
-		name := e.Name()
-		if strings.EqualFold(name, "latest.json") {
-			continue
-		}
-		if strings.HasSuffix(strings.ToLower(name), ".json") {
-			out.Items = append(out.Items, item{Version: strings.TrimSuffix(name, ".json")})
-		}
+	for _, v := range manifestVersions(entries) {
+		out.Items = append(out.Items, item{Version: v})
 	}
 	// Ascending, as the admin UI expects, but compared by numeric components:
 	// a plain string sort puts 1.1.10 before 1.1.9.
 	sort.SliceStable(out.Items, func(i, j int) bool {
 		return adminutil.CompareVersions(out.Items[i].Version, out.Items[j].Version) < 0
 	})
-	// read latest.json if present
-	lb, err := os.ReadFile(filepath.Join(dir, "latest.json"))
-	if err == nil {
-		var m map[string]string
-		if json.Unmarshal(lb, &m) == nil {
-			if v := strings.TrimSpace(m["version"]); v != "" {
-				out.Latest = v
-			}
+	out.Latest = readLatestVersion(dir)
+	adminutil.WriteJSON(w, out)
+}
+
+// manifestVersions returns the versions named by the *.json files of a manifest
+// directory, latest.json excluded.
+func manifestVersions(entries []os.DirEntry) []string {
+	vers := make([]string, 0, len(entries))
+	for _, e := range entries {
+		name := e.Name()
+		if strings.EqualFold(name, "latest.json") {
+			continue
+		}
+		if strings.HasSuffix(strings.ToLower(name), ".json") {
+			vers = append(vers, strings.TrimSuffix(name, ".json"))
 		}
 	}
-	adminutil.WriteJSON(w, out)
+	return vers
+}
+
+// readLatestVersion returns the version latest.json points at, or "" when the
+// file is absent or unreadable.
+func readLatestVersion(dir string) string {
+	lb, err := os.ReadFile(filepath.Join(dir, "latest.json"))
+	if err != nil {
+		return ""
+	}
+	var m map[string]string
+	if json.Unmarshal(lb, &m) != nil {
+		return ""
+	}
+	return strings.TrimSpace(m["version"])
 }
 
 // Activate points latest.json at an existing version.
@@ -430,15 +521,19 @@ func (h *Handlers) Activate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	latest := map[string]string{"version": ver}
-	b, _ := json.MarshalIndent(latest, "", "  ")
-	if err := adminutil.WriteFileAtomic(filepath.Join(dir, "latest.json"), b, 0o644); err != nil {
+	b, err := json.MarshalIndent(map[string]string{"version": ver}, "", "  ")
+	if err == nil {
+		err = adminutil.WriteFileAtomic(filepath.Join(dir, "latest.json"), b, contentFilePerm)
+	}
+	if err != nil {
 		log.Printf("[builds] activate %s/%s: %v", gid, ver, err)
 		http.Error(w, "failed to activate version", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(b)
+	// The response body is the same JSON that was just persisted; a failed write
+	// to the client is the client's problem and cannot be reported any more.
+	_, _ = w.Write(b)
 }
 
 // DeleteVersion removes manifests/{gid}/{ver}.json and content/{gid}/{ver},
@@ -471,44 +566,32 @@ func (h *Handlers) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 	filesDir := filepath.Join(h.root, "content", gid, ver)
 	_ = os.RemoveAll(filesDir)
 	// adjust latest.json if it pointed to deleted version
-	latestPath := filepath.Join(manDir, "latest.json")
-	needRecalc := false
-	if b, err := os.ReadFile(latestPath); err == nil {
-		var m map[string]string
-		if json.Unmarshal(b, &m) == nil {
-			if strings.TrimSpace(m["version"]) == ver {
-				needRecalc = true
-			}
-		}
-	}
-	if needRecalc {
-		entries, _ := os.ReadDir(manDir)
-		vers := make([]string, 0)
-		for _, e := range entries {
-			name := e.Name()
-			if strings.EqualFold(name, "latest.json") {
-				continue
-			}
-			if strings.HasSuffix(strings.ToLower(name), ".json") {
-				vers = append(vers, strings.TrimSuffix(name, ".json"))
-			}
-		}
-		if len(vers) == 0 {
-			// no versions remain: remove latest.json
-			_ = os.Remove(latestPath)
-		} else {
-			// Same trap as in ListVersions: the highest version is not the last
-			// one in string order (1.1.9 > 1.1.10 lexicographically).
-			newLatest := adminutil.MaxVersion(vers)
-			b, _ := json.MarshalIndent(map[string]string{"version": newLatest}, "", "  ")
-			_ = adminutil.WriteFileAtomic(latestPath, b, 0o644)
-		}
+	if readLatestVersion(manDir) == ver {
+		recalcLatest(manDir)
 	}
 	adminutil.WriteJSON(w, map[string]string{"status": "ok"})
 }
 
+// recalcLatest repoints latest.json at the highest remaining version, or
+// removes it when the game has none left.
+func recalcLatest(manDir string) {
+	entries, _ := os.ReadDir(manDir)
+	vers := manifestVersions(entries)
+	latestPath := filepath.Join(manDir, "latest.json")
+	if len(vers) == 0 {
+		// no versions remain: remove latest.json
+		_ = os.Remove(latestPath)
+		return
+	}
+	// Same trap as in ListVersions: the highest version is not the last one in
+	// string order (1.1.9 > 1.1.10 lexicographically).
+	if err := writeLatestJSON(manDir, adminutil.MaxVersion(vers)); err != nil {
+		log.Printf("[builds] cannot repoint %s: %v", latestPath, err)
+	}
+}
+
 // FreeSpace reports free and total bytes on the volume holding the content root.
-func (h *Handlers) FreeSpace(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) FreeSpace(w http.ResponseWriter, _ *http.Request) {
 	base := h.root
 	if strings.TrimSpace(base) == "" {
 		base = "."
@@ -542,7 +625,7 @@ func freeSpaceBytes(path string) (uint64, error) {
 		base = "."
 	}
 	if _, err := os.Stat(base); os.IsNotExist(err) {
-		if err2 := os.MkdirAll(base, 0o755); err2 != nil {
+		if err2 := os.MkdirAll(base, contentDirPerm); err2 != nil {
 			// fallback to its parent
 			base = filepath.Dir(base)
 		}

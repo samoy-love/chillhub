@@ -52,7 +52,7 @@ func (l loginResult) Cookies() []*http.Cookie { return l.cookies }
 func login(t *testing.T, a *Auth, user, pass string) loginResult {
 	t.Helper()
 	body := `{"username":"` + user + `","password":"` + pass + `"}`
-	r := httptest.NewRequest(http.MethodPost, "/admin/api/auth/login", strings.NewReader(body))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/auth/login", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	a.HandleLogin(w, r)
@@ -127,7 +127,7 @@ func TestSessionFromLoginAuthenticates(t *testing.T) {
 	a, pass := newTestAuth(t)
 	resp := login(t, a, "admin", pass)
 
-	r := httptest.NewRequest(http.MethodGet, "/admin/api/list", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/list", nil)
 	for _, c := range resp.Cookies() {
 		r.AddCookie(c)
 	}
@@ -140,7 +140,7 @@ func TestSessionFromLoginAuthenticates(t *testing.T) {
 // everything under /admin/ is closed without a session.
 func TestMiddlewareAllowlist(t *testing.T) {
 	a, _ := newTestAuth(t)
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusTeapot) })
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
 	h := a.Middleware(next)
 
 	open := []string{
@@ -154,7 +154,7 @@ func TestMiddlewareAllowlist(t *testing.T) {
 	}
 	for _, p := range open {
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, p, nil))
+		h.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, p, nil))
 		if w.Code != http.StatusTeapot {
 			t.Errorf("%s must be reachable without a session, got %d", p, w.Code)
 		}
@@ -168,7 +168,7 @@ func TestMiddlewareAllowlist(t *testing.T) {
 	}
 	for _, p := range closed {
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, p, nil))
+		h.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, p, nil))
 		if w.Code == http.StatusTeapot {
 			t.Errorf("%s reached the handler without a session", p)
 		}
@@ -188,9 +188,9 @@ func TestMiddlewareAllowlist(t *testing.T) {
 func TestAdminScriptIsGatedByNginxNotByGo(t *testing.T) {
 	a, _ := newTestAuth(t)
 	reached := false
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true })
+	next := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { reached = true })
 	w := httptest.NewRecorder()
-	a.Middleware(next).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/admin/ui/admin.js", nil))
+	a.Middleware(next).ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/ui/admin.js", nil))
 	if !reached {
 		t.Fatal("Go now blocks admin.js — the nginx auth_request block is redundant, remove one of the two")
 	}
@@ -201,7 +201,7 @@ func TestLogoutClearsCookies(t *testing.T) {
 	a, pass := newTestAuth(t)
 	loginResp := login(t, a, "admin", pass)
 
-	r := httptest.NewRequest(http.MethodPost, "/admin/api/auth/logout", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/auth/logout", nil)
 	for _, c := range loginResp.Cookies() {
 		r.AddCookie(c)
 	}
@@ -220,13 +220,13 @@ func TestHandleMeRequiresSession(t *testing.T) {
 	a, pass := newTestAuth(t)
 
 	w := httptest.NewRecorder()
-	a.HandleMe(w, httptest.NewRequest(http.MethodGet, "/admin/api/auth/me", nil))
+	a.HandleMe(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/auth/me", nil))
 	if w.Code == http.StatusOK && strings.Contains(w.Body.String(), "admin") {
 		t.Error("an anonymous caller was told the admin username")
 	}
 
 	resp := login(t, a, "admin", pass)
-	r := httptest.NewRequest(http.MethodGet, "/admin/api/auth/me", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/auth/me", nil)
 	for _, c := range resp.Cookies() {
 		r.AddCookie(c)
 	}
@@ -242,13 +242,13 @@ func TestHandleVerifyGatesOnSession(t *testing.T) {
 	a, pass := newTestAuth(t)
 
 	w := httptest.NewRecorder()
-	a.HandleVerify(w, httptest.NewRequest(http.MethodGet, "/admin/api/auth/verify", nil))
+	a.HandleVerify(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/auth/verify", nil))
 	if w.Code >= 200 && w.Code < 300 {
 		t.Errorf("verify allowed an anonymous request (%d) — nginx would open the admin UI", w.Code)
 	}
 
 	resp := login(t, a, "admin", pass)
-	r := httptest.NewRequest(http.MethodGet, "/admin/api/auth/verify", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/auth/verify", nil)
 	for _, c := range resp.Cookies() {
 		r.AddCookie(c)
 	}
@@ -262,7 +262,7 @@ func TestHandleVerifyGatesOnSession(t *testing.T) {
 // A login body that is not JSON must be refused, not panic the handler.
 func TestLoginRejectsGarbageBody(t *testing.T) {
 	a, _ := newTestAuth(t)
-	r := httptest.NewRequest(http.MethodPost, "/admin/api/auth/login", strings.NewReader("не json"))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/auth/login", strings.NewReader("не json"))
 	w := httptest.NewRecorder()
 	a.HandleLogin(w, r)
 	if w.Code == http.StatusOK {

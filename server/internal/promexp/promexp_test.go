@@ -109,7 +109,7 @@ func TestLabelValuesAreEscaped(t *testing.T) {
 func TestCardinalityIsCapped(t *testing.T) {
 	r := New()
 	c := r.NewCounter("g_total", "g", "game")
-	for i := 0; i < MaxSeries+50; i++ {
+	for i := range MaxSeries + 50 {
 		c.Inc(strings.Repeat("a", i+1))
 	}
 	out := render(t, r)
@@ -147,7 +147,7 @@ func TestHandler(t *testing.T) {
 	r.NewCounter("h_total", "h").Inc()
 
 	rec := httptest.NewRecorder()
-	r.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, Path, nil))
+	r.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, Path, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("код %d", rec.Code)
 	}
@@ -159,7 +159,7 @@ func TestHandler(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	r.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, Path, nil))
+	r.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, Path, nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST на экспортёр вернул %d", rec.Code)
 	}

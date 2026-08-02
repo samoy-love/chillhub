@@ -41,7 +41,7 @@ func iconRequest(t *testing.T, gid string, data []byte) *http.Request {
 	if err := mw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/games/icon/upload", &body)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/admin/api/games/icon/upload", &body)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	return req
 }
@@ -93,12 +93,15 @@ func pngBombBytes(t *testing.T, w, h uint32) []byte {
 	_ = binary.Write(&ihdr, binary.BigEndian, h)
 	ihdr.Write([]byte{8, 6, 0, 0, 0})
 	chunk := func(typ string, data []byte) {
+		// #nosec G115 -- the chunk payloads below are literals of a few bytes;
+		// the conversion cannot overflow.
 		_ = binary.Write(&buf, binary.BigEndian, uint32(len(data)))
 		buf.WriteString(typ)
 		buf.Write(data)
 		c := crc32.NewIEEE()
-		c.Write([]byte(typ))
-		c.Write(data)
+		// hash.Hash.Write never returns an error.
+		_, _ = c.Write([]byte(typ))
+		_, _ = c.Write(data)
 		_ = binary.Write(&buf, binary.BigEndian, c.Sum32())
 	}
 	chunk("IHDR", ihdr.Bytes())

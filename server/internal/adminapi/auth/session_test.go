@@ -39,10 +39,22 @@ func cookiesOf(resp cookieSource) map[string]*http.Cookie {
 	return out
 }
 
+// addTestCookie attaches a bare name/value cookie to an OUTGOING test request.
+//
+// Secure/HttpOnly/SameSite are absent on purpose and gosec's G124 does not apply
+// here: those are Set-Cookie attributes a server sends to a browser. A request
+// cookie is just "name=value" on the wire, and the flags the server does set are
+// asserted directly in TestSessionCookiesCarryEveryProtectionFlag and
+// TestClearedCookiesKeepTheirFlags.
+func addTestCookie(r *http.Request, name, value string) {
+	r.AddCookie(&http.Cookie{Name: name, Value: value}) // #nosec G124 -- request-side cookie: attributes do not exist on the wire, see above.
+}
+
 // authGet builds a GET carrying one access cookie.
-func authGet(token string) *http.Request {
-	r := httptest.NewRequest(http.MethodGet, "http://example.com/admin/api/list", nil)
-	r.AddCookie(&http.Cookie{Name: cookieAccess, Value: token})
+func authGet(t *testing.T, token string) *http.Request {
+	t.Helper()
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/admin/api/list", nil)
+	addTestCookie(r, cookieAccess, token)
 	return r
 }
 
@@ -58,7 +70,7 @@ func TestExpiredAccessTokenIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if user := a.CurrentUser(authGet(expired)); user != "" {
+	if user := a.CurrentUser(authGet(t, expired)); user != "" {
 		t.Fatalf("expired token still authenticates as %q", user)
 	}
 }
@@ -83,7 +95,7 @@ func TestTamperedSignatureIsRejected(t *testing.T) {
 		sig[len(sig)-1] = 'A'
 	}
 	tampered := parts[0] + "." + parts[1] + "." + string(sig)
-	if user := a.CurrentUser(authGet(tampered)); user != "" {
+	if user := a.CurrentUser(authGet(t, tampered)); user != "" {
 		t.Fatalf("token with a broken signature authenticates as %q", user)
 	}
 }
@@ -99,7 +111,7 @@ func TestAlgNoneTokenIsRejected(t *testing.T) {
 	payload := enc(`{"typ":"access","sub":"admin","exp":` + strconv.FormatInt(exp, 10) + `}`)
 	// A trailing dot with an empty signature is the shape alg=none uses.
 	unsigned := header + "." + payload + "."
-	if user := a.CurrentUser(authGet(unsigned)); user != "" {
+	if user := a.CurrentUser(authGet(t, unsigned)); user != "" {
 		t.Fatalf("alg=none token authenticates as %q", user)
 	}
 }
@@ -119,7 +131,7 @@ func TestTokenSignedWithAnotherSecretIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if user := a.CurrentUser(authGet(foreign)); user != "" {
+	if user := a.CurrentUser(authGet(t, foreign)); user != "" {
 		t.Fatalf("foreign token authenticates as %q", user)
 	}
 }
@@ -133,7 +145,7 @@ func TestTokenTypesAreNotInterchangeable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if user := a.CurrentUser(authGet(refresh)); user != "" {
+	if user := a.CurrentUser(authGet(t, refresh)); user != "" {
 		t.Fatalf("a refresh token was accepted as an access token (user %q)", user)
 	}
 
@@ -141,8 +153,8 @@ func TestTokenTypesAreNotInterchangeable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/auth/refresh", nil)
-	r.AddCookie(&http.Cookie{Name: cookieRefresh, Value: access})
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/admin/api/auth/refresh", nil)
+	addTestCookie(r, cookieRefresh, access)
 	w := httptest.NewRecorder()
 	a.HandleRefresh(w, r)
 	if w.Code == http.StatusOK {
@@ -154,7 +166,7 @@ func TestTokenTypesAreNotInterchangeable(t *testing.T) {
 func TestMalformedTokenIsRejected(t *testing.T) {
 	a := secureAuth(t)
 	for _, tok := range []string{"not-a-token", "a.b.c", "...", strings.Repeat("x", 4096)} {
-		if user := a.CurrentUser(authGet(tok)); user != "" {
+		if user := a.CurrentUser(authGet(t, tok)); user != "" {
 			t.Errorf("token %.20q authenticates as %q", tok, user)
 		}
 	}
@@ -231,7 +243,7 @@ func TestClearedCookiesKeepTheirFlags(t *testing.T) {
 func TestEachSessionGetsAFreshCSRFToken(t *testing.T) {
 	a := secureAuth(t)
 	seen := map[string]bool{}
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		w := httptest.NewRecorder()
 		if err := a.issueSession(w, "admin"); err != nil {
 			t.Fatal(err)
@@ -258,6 +270,7 @@ func TestCSRFRequiresBothHalvesNonEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// #nosec G101 -- a fixed CSRF value so the assertions are deterministic, not a credential.
 	const token = "csrf-token-value-0123456789"
 	cases := []struct {
 		name           string
@@ -275,10 +288,10 @@ func TestCSRFRequiresBothHalvesNonEmpty(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/news/save", nil)
-			r.AddCookie(&http.Cookie{Name: cookieAccess, Value: access})
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/admin/api/news/save", nil)
+			addTestCookie(r, cookieAccess, access)
 			if c.setCookie {
-				r.AddCookie(&http.Cookie{Name: cookieCSRF, Value: c.cookie})
+				addTestCookie(r, cookieCSRF, c.cookie)
 			}
 			if c.setHeader {
 				r.Header.Set(headerCSRF, c.hdr)
@@ -300,8 +313,8 @@ func TestCSRFIsEnforcedOnEveryWriteMethod(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
-		r := httptest.NewRequest(m, "http://example.com/admin/api/x", nil)
-		r.AddCookie(&http.Cookie{Name: cookieAccess, Value: access})
+		r := httptest.NewRequestWithContext(t.Context(), m, "http://example.com/admin/api/x", nil)
+		addTestCookie(r, cookieAccess, access)
 		if user := a.CurrentUser(r); user != "" {
 			t.Errorf("%s passed without a CSRF token (user %q)", m, user)
 		}
@@ -312,8 +325,8 @@ func TestCSRFIsEnforcedOnEveryWriteMethod(t *testing.T) {
 // token is a second factor against cross-site use, never a credential.
 func TestCSRFPairWithoutSessionIsNotACredential(t *testing.T) {
 	a := secureAuth(t)
-	r := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/x", nil)
-	r.AddCookie(&http.Cookie{Name: cookieCSRF, Value: "some-token"})
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/admin/api/x", nil)
+	addTestCookie(r, cookieCSRF, "some-token")
 	r.Header.Set(headerCSRF, "some-token")
 	if user := a.CurrentUser(r); user != "" {
 		t.Fatalf("a CSRF pair alone authenticated as %q", user)
@@ -361,7 +374,7 @@ func TestUsernameIsNormalisedButPasswordIsNot(t *testing.T) {
 func TestLoginAcceptsFormEncodedBody(t *testing.T) {
 	a, pass := newTestAuth(t)
 	body := "username=admin&password=" + strings.ReplaceAll(pass, " ", "+")
-	r := httptest.NewRequest(http.MethodPost, "/admin/api/auth/login", strings.NewReader(body))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/auth/login", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	a.HandleLogin(w, r)
@@ -403,7 +416,7 @@ func TestSessionEndpointsRejectGet(t *testing.T) {
 		"refresh": a.HandleRefresh,
 	} {
 		w := httptest.NewRecorder()
-		h(w, httptest.NewRequest(http.MethodGet, "/admin/api/auth/"+name, nil))
+		h(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/auth/"+name, nil))
 		if w.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s answered GET with %d, want 405", name, w.Code)
 		}
@@ -416,7 +429,7 @@ func TestLogoutLeavesNoUsableSession(t *testing.T) {
 	a, pass := newTestAuth(t)
 	loginResp := login(t, a, "admin", pass)
 
-	r := httptest.NewRequest(http.MethodPost, "/admin/api/auth/logout", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/auth/logout", nil)
 	for _, c := range loginResp.Cookies() {
 		r.AddCookie(c)
 	}
@@ -427,7 +440,7 @@ func TestLogoutLeavesNoUsableSession(t *testing.T) {
 	}
 
 	// What the browser keeps after applying the Set-Cookie headers.
-	next := httptest.NewRequest(http.MethodGet, "/admin/api/list", nil)
+	next := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/list", nil)
 	for _, c := range w.Result().Cookies() {
 		next.AddCookie(c)
 	}
@@ -442,7 +455,7 @@ func TestRefreshIssuesANewSession(t *testing.T) {
 	a, pass := newTestAuth(t)
 	loginResp := login(t, a, "admin", pass)
 
-	r := httptest.NewRequest(http.MethodPost, "/admin/api/auth/refresh", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/auth/refresh", nil)
 	for _, c := range loginResp.Cookies() {
 		r.AddCookie(c)
 	}
@@ -457,7 +470,7 @@ func TestRefreshIssuesANewSession(t *testing.T) {
 			t.Errorf("refresh did not reissue %s", name)
 		}
 	}
-	next := httptest.NewRequest(http.MethodGet, "/admin/api/list", nil)
+	next := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/list", nil)
 	next.AddCookie(set[cookieAccess])
 	if user := a.CurrentUser(next); user != "admin" {
 		t.Fatalf("the refreshed session does not authenticate: %q", user)
@@ -484,9 +497,9 @@ func TestRefreshRejectsMissingExpiredAndForgedTokens(t *testing.T) {
 		"garbage": "not.a.jwt",
 	}
 	for name, tok := range cases {
-		r := httptest.NewRequest(http.MethodPost, "/admin/api/auth/refresh", nil)
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/auth/refresh", nil)
 		if name != "absent" {
-			r.AddCookie(&http.Cookie{Name: cookieRefresh, Value: tok})
+			addTestCookie(r, cookieRefresh, tok)
 		}
 		w := httptest.NewRecorder()
 		a.HandleRefresh(w, r)
@@ -584,9 +597,9 @@ func TestMiddlewarePassesAuthenticatedRequestsAndStopsCSRFLessWrites(t *testing.
 	set := cookiesOf(resp)
 
 	reached := false
-	h := a.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true }))
+	h := a.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { reached = true }))
 
-	get := httptest.NewRequest(http.MethodGet, "/admin/api/news/list", nil)
+	get := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/news/list", nil)
 	get.AddCookie(set[cookieAccess])
 	h.ServeHTTP(httptest.NewRecorder(), get)
 	if !reached {
@@ -594,7 +607,7 @@ func TestMiddlewarePassesAuthenticatedRequestsAndStopsCSRFLessWrites(t *testing.
 	}
 
 	reached = false
-	post := httptest.NewRequest(http.MethodPost, "/admin/api/news/save", nil)
+	post := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/news/save", nil)
 	post.AddCookie(set[cookieAccess])
 	post.AddCookie(set[cookieCSRF])
 	// No X-CSRF-Token header: this is what a cross-site form post looks like.

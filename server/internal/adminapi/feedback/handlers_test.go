@@ -11,17 +11,17 @@ import (
 // submit posts a public report and returns the response.
 func postReport(t *testing.T, h *Handlers, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodPost, "/feedback/submit", strings.NewReader(body))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/feedback/submit", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.Submit(w, r)
 	return w
 }
 
-// listItems calls List and decodes the inbox.
-func listItems(t *testing.T, h *Handlers, query string) []Item {
+// listItems calls List and decodes the whole inbox.
+func listItems(t *testing.T, h *Handlers) []Item {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodGet, "/admin/api/feedback/list?"+query, nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/feedback/list", nil)
 	w := httptest.NewRecorder()
 	h.List(w, r)
 	if w.Code != http.StatusOK {
@@ -47,7 +47,7 @@ func TestSubmittedReportBecomesVisible(t *testing.T) {
 		t.Fatalf("submit returned %d: %s", w.Code, w.Body.String())
 	}
 
-	items := listItems(t, h, "")
+	items := listItems(t, h)
 	if len(items) != 1 {
 		t.Fatalf("inbox holds %d items, want 1", len(items))
 	}
@@ -67,12 +67,12 @@ func TestSubmittedReportBecomesVisible(t *testing.T) {
 func TestEverySubmissionSurvives(t *testing.T) {
 	h := New(t.TempDir())
 	const n = 12
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if w := postReport(t, h, `{"name":"u","type":"idea","comment":"c"}`); w.Code != http.StatusOK {
 			t.Fatalf("submit %d returned %d", i, w.Code)
 		}
 	}
-	if got := len(listItems(t, h, "")); got != n {
+	if got := len(listItems(t, h)); got != n {
 		t.Fatalf("inbox holds %d items, want %d", got, n)
 	}
 }
@@ -81,16 +81,16 @@ func TestEverySubmissionSurvives(t *testing.T) {
 func TestMarkReadPersists(t *testing.T) {
 	h := New(t.TempDir())
 	postReport(t, h, `{"name":"u","type":"bug","comment":"c"}`)
-	id := listItems(t, h, "")[0].ID
+	id := listItems(t, h)[0].ID
 
-	r := httptest.NewRequest(http.MethodPost, "/admin/api/feedback/markRead?id="+id, nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/feedback/markRead?id="+id, nil)
 	w := httptest.NewRecorder()
 	h.MarkRead(w, r)
 	if w.Code != http.StatusOK {
 		t.Fatalf("markRead returned %d: %s", w.Code, w.Body.String())
 	}
 
-	if got := listItems(t, h, "")[0].Status; got != "read" {
+	if got := listItems(t, h)[0].Status; got != "read" {
 		t.Fatalf("status = %q after markRead, want read", got)
 	}
 }
@@ -99,16 +99,16 @@ func TestMarkReadPersists(t *testing.T) {
 func TestToggleImportantFlipsBothWays(t *testing.T) {
 	h := New(t.TempDir())
 	postReport(t, h, `{"name":"u","type":"bug","comment":"c"}`)
-	id := listItems(t, h, "")[0].ID
+	id := listItems(t, h)[0].ID
 
 	toggle := func() bool {
-		r := httptest.NewRequest(http.MethodPost, "/admin/api/feedback/toggleImportant?id="+id, nil)
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/feedback/toggleImportant?id="+id, nil)
 		w := httptest.NewRecorder()
 		h.ToggleImportant(w, r)
 		if w.Code != http.StatusOK {
 			t.Fatalf("toggleImportant returned %d", w.Code)
 		}
-		return listItems(t, h, "")[0].Important
+		return listItems(t, h)[0].Important
 	}
 
 	if !toggle() {
@@ -124,19 +124,19 @@ func TestDeleteRemovesFromInbox(t *testing.T) {
 	h := New(t.TempDir())
 	postReport(t, h, `{"name":"u","type":"bug","comment":"первое"}`)
 	postReport(t, h, `{"name":"u","type":"bug","comment":"второе"}`)
-	items := listItems(t, h, "")
+	items := listItems(t, h)
 	if len(items) != 2 {
 		t.Fatalf("setup produced %d items", len(items))
 	}
 
-	r := httptest.NewRequest(http.MethodPost, "/admin/api/feedback/delete?id="+items[0].ID, nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/feedback/delete?id="+items[0].ID, nil)
 	w := httptest.NewRecorder()
 	h.Delete(w, r)
 	if w.Code != http.StatusOK {
 		t.Fatalf("delete returned %d: %s", w.Code, w.Body.String())
 	}
 
-	left := listItems(t, h, "")
+	left := listItems(t, h)
 	if len(left) != 1 {
 		t.Fatalf("inbox holds %d items after delete, want 1", len(left))
 	}
@@ -150,9 +150,9 @@ func TestDeleteRemovesFromInbox(t *testing.T) {
 func TestGetByIDAndUnknownID(t *testing.T) {
 	h := New(t.TempDir())
 	postReport(t, h, `{"name":"Иван","type":"bug","comment":"текст"}`)
-	id := listItems(t, h, "")[0].ID
+	id := listItems(t, h)[0].ID
 
-	r := httptest.NewRequest(http.MethodGet, "/admin/api/feedback/get?id="+id, nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/feedback/get?id="+id, nil)
 	w := httptest.NewRecorder()
 	h.Get(w, r)
 	if w.Code != http.StatusOK {
@@ -166,7 +166,7 @@ func TestGetByIDAndUnknownID(t *testing.T) {
 		t.Errorf("wrong report returned: %+v", item)
 	}
 
-	r = httptest.NewRequest(http.MethodGet, "/admin/api/feedback/get?id=нет-такого", nil)
+	r = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/feedback/get?id=нет-такого", nil)
 	w = httptest.NewRecorder()
 	h.Get(w, r)
 	if w.Code == http.StatusOK {
@@ -177,17 +177,17 @@ func TestGetByIDAndUnknownID(t *testing.T) {
 // Clear empties the inbox — it is the "start over" button.
 func TestClearEmptiesInbox(t *testing.T) {
 	h := New(t.TempDir())
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		postReport(t, h, `{"name":"u","type":"bug","comment":"c"}`)
 	}
 
-	r := httptest.NewRequest(http.MethodPost, "/admin/api/feedback/clear", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/feedback/clear", nil)
 	w := httptest.NewRecorder()
 	h.Clear(w, r)
 	if w.Code != http.StatusOK {
 		t.Fatalf("clear returned %d", w.Code)
 	}
-	if got := len(listItems(t, h, "")); got != 0 {
+	if got := len(listItems(t, h)); got != 0 {
 		t.Fatalf("inbox still holds %d items", got)
 	}
 }
@@ -203,7 +203,7 @@ func TestSubmitRejectsGarbage(t *testing.T) {
 		}
 	}
 	// Whatever happened, the inbox must still be readable.
-	listItems(t, h, "")
+	listItems(t, h)
 }
 
 // An oversized diagnostics bundle is clamped, not stored whole: the inbox file is
@@ -211,14 +211,17 @@ func TestSubmitRejectsGarbage(t *testing.T) {
 func TestOversizedBundleIsClamped(t *testing.T) {
 	h := New(t.TempDir())
 	huge := strings.Repeat("x", MaxLogBytes+50_000)
-	body, _ := json.Marshal(map[string]any{
+	body, err := json.Marshal(map[string]any{
 		"name": "u", "type": "bug", "comment": "c", "attachLogs": true, "logs": huge,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if w := postReport(t, h, string(body)); w.Code != http.StatusOK {
 		t.Fatalf("submit returned %d: %s", w.Code, w.Body.String())
 	}
 
-	items := listItems(t, h, "")
+	items := listItems(t, h)
 	if len(items) != 1 {
 		t.Fatalf("inbox holds %d items", len(items))
 	}
@@ -232,15 +235,18 @@ func TestOversizedBundleIsClamped(t *testing.T) {
 func TestSystemMapIsClamped(t *testing.T) {
 	h := New(t.TempDir())
 	sys := map[string]string{}
-	for i := 0; i < maxSystemEntries*3; i++ {
+	for i := range maxSystemEntries * 3 {
 		sys[strings.Repeat("k", maxSystemKeyLen*2)+string(rune('a'+i%26))] = strings.Repeat("v", maxSystemValueLen*2)
 	}
-	body, _ := json.Marshal(map[string]any{"name": "u", "type": "bug", "comment": "c", "system": sys})
+	body, err := json.Marshal(map[string]any{"name": "u", "type": "bug", "comment": "c", "system": sys})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if w := postReport(t, h, string(body)); w.Code != http.StatusOK {
 		t.Fatalf("submit returned %d", w.Code)
 	}
 
-	got := listItems(t, h, "")[0].System
+	got := listItems(t, h)[0].System
 	if len(got) > maxSystemEntries {
 		t.Errorf("system map kept %d entries, limit is %d", len(got), maxSystemEntries)
 	}

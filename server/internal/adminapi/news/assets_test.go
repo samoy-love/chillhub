@@ -49,7 +49,7 @@ func imageUpload(t *testing.T, rawURL, filename string, fields map[string]string
 	if err := mw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodPost, rawURL, &body)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, rawURL, &body)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	return req
 }
@@ -64,7 +64,7 @@ func coverUpload(t *testing.T, filename string, fields map[string]string) *http.
 func assetsList(t *testing.T, h *Handlers, path string) (int, map[string]any) {
 	t.Helper()
 	w := httptest.NewRecorder()
-	h.AssetsList(w, httptest.NewRequest(http.MethodGet,
+	h.AssetsList(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet,
 		"http://example.com/admin/api/news/assets/list?path="+url.QueryEscape(path), nil))
 	var out map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &out)
@@ -154,11 +154,11 @@ func TestAssetsGalleryRoundTrip(t *testing.T) {
 // first thing anybody with a session tries to walk out of.
 func TestAssetsListCannotEscapeTheGallery(t *testing.T) {
 	h, root := newHandlers(t)
-	if err := os.MkdirAll(filepath.Join(root, "news", "assets"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "news", "assets"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	// Something recognisable outside the gallery but inside the content root.
-	if err := os.WriteFile(filepath.Join(root, "news", "index.json"), []byte("{}"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "news", "index.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []string{"..", "../..", "../../..", "/", "//", "sub/../..", "....//"} {
@@ -179,11 +179,11 @@ func TestAssetsListCannotEscapeTheGallery(t *testing.T) {
 func TestAssetsDeleteCannotWipeTheGalleryRoot(t *testing.T) {
 	h, root := newHandlers(t)
 	base := filepath.Join(root, "news", "assets")
-	if err := os.MkdirAll(base, 0o755); err != nil {
+	if err := os.MkdirAll(base, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	keep := filepath.Join(base, "keep.jpg")
-	if err := os.WriteFile(keep, []byte("picture"), 0o644); err != nil {
+	if err := os.WriteFile(keep, []byte("picture"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -209,7 +209,7 @@ func TestAssetsDeleteCannotWipeTheGalleryRoot(t *testing.T) {
 func TestAssetsRenameCannotMoveTheGalleryRoot(t *testing.T) {
 	h, root := newHandlers(t)
 	base := filepath.Join(root, "news", "assets")
-	if err := os.MkdirAll(base, 0o755); err != nil {
+	if err := os.MkdirAll(base, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	for _, v := range []url.Values{
@@ -276,7 +276,7 @@ func TestAssetsMkdirRejectsAnEmptyName(t *testing.T) {
 	}
 	entries, err := os.ReadDir(filepath.Join(root, "news", "assets"))
 	if err == nil && len(entries) > 0 {
-		var got []string
+		got := make([]string, 0, len(entries))
 		for _, e := range entries {
 			got = append(got, e.Name())
 		}
@@ -291,11 +291,11 @@ func TestAssetsMkdirRejectsAnEmptyName(t *testing.T) {
 func TestAssetsDeleteAndRenameRejectEmptyNames(t *testing.T) {
 	h, root := newHandlers(t)
 	base := filepath.Join(root, "news", "assets")
-	if err := os.MkdirAll(base, 0o755); err != nil {
+	if err := os.MkdirAll(base, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	for _, n := range []string{"file", "keep.jpg"} {
-		if err := os.WriteFile(filepath.Join(base, n), []byte("picture"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(base, n), []byte("picture"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -333,10 +333,10 @@ func TestAssetsDeleteAndRenameRejectEmptyNames(t *testing.T) {
 func TestAssetsDeleteOfAMissingEntryIsNotFound(t *testing.T) {
 	h, root := newHandlers(t)
 	base := filepath.Join(root, "news", "assets")
-	if err := os.MkdirAll(base, 0o755); err != nil {
+	if err := os.MkdirAll(base, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(base, "keep.jpg"), []byte("picture"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(base, "keep.jpg"), []byte("picture"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"ghost.png", "keep.jpeg", "no-such-folder"} {
@@ -409,7 +409,7 @@ func TestAssetsWriteEndpointsRejectGet(t *testing.T) {
 		"rename":      h.AssetsRename,
 	} {
 		w := httptest.NewRecorder()
-		handler(w, httptest.NewRequest(http.MethodGet, "http://example.com/admin/api/news/assets/"+name, nil))
+		handler(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/admin/api/news/assets/"+name, nil))
 		if w.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s answered GET with %d, want 405", name, w.Code)
 		}
@@ -422,7 +422,7 @@ func TestAssetsWriteEndpointsRejectGet(t *testing.T) {
 func TestAssetsListHidesTheContentRootOnError(t *testing.T) {
 	h, root := newHandlers(t)
 	w := httptest.NewRecorder()
-	h.AssetsList(w, httptest.NewRequest(http.MethodGet,
+	h.AssetsList(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet,
 		"http://example.com/admin/api/news/assets/list?path=nope", nil))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("got %d, want 404", w.Code)
@@ -437,17 +437,17 @@ func TestAssetsListHidesTheContentRootOnError(t *testing.T) {
 func TestAssetsListFiltersByNameAndDirsOnly(t *testing.T) {
 	h, root := newHandlers(t)
 	base := filepath.Join(root, "news", "assets")
-	if err := os.MkdirAll(filepath.Join(base, "screens"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(base, "screens"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	for _, n := range []string{"alpha.jpg", "beta.jpg"} {
-		if err := os.WriteFile(filepath.Join(base, n), []byte("x"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(base, n), []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	w := httptest.NewRecorder()
-	h.AssetsList(w, httptest.NewRequest(http.MethodGet,
+	h.AssetsList(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet,
 		"http://example.com/admin/api/news/assets/list?dirsOnly=1", nil))
 	var listing map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &listing); err != nil {
@@ -458,7 +458,7 @@ func TestAssetsListFiltersByNameAndDirsOnly(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	h.AssetsList(w, httptest.NewRequest(http.MethodGet,
+	h.AssetsList(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet,
 		"http://example.com/admin/api/news/assets/list?q=ALPHA", nil))
 	if err := json.Unmarshal(w.Body.Bytes(), &listing); err != nil {
 		t.Fatal(err)

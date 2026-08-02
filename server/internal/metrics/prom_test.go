@@ -106,7 +106,7 @@ func TestHostileLabelsAreFolded(t *testing.T) {
 	}
 }
 
-func TestNilProductIsSafe(t *testing.T) {
+func TestNilProductIsSafe(_ *testing.T) {
 	// Тесты и процессы без экспортёра оставляют Handlers.Prom пустым — приём
 	// событий не должен от этого падать.
 	var p *Product
@@ -126,15 +126,18 @@ func TestSubmitFeedsCounters(t *testing.T) {
 		"durationMs": 30000, "bytes": 7, "fullBytes": 700,
 		"filesDownloaded": 1, "filesTotal": 70,
 	}
-	b, _ := json.Marshal(body)
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rec := httptest.NewRecorder()
-	h.Submit(rec, httptest.NewRequest(http.MethodPost, "/metrics/report", bytes.NewReader(b)))
+	h.Submit(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/metrics/report", bytes.NewReader(b)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("приём вернул %d: %s", rec.Code, rec.Body.String())
 	}
 
 	rec = httptest.NewRecorder()
-	h.Submit(rec, httptest.NewRequest(http.MethodPost, "/metrics/report", strings.NewReader(`{"event":"нет такого"}`)))
+	h.Submit(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/metrics/report", strings.NewReader(`{"event":"нет такого"}`)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("неизвестное событие вернуло %d", rec.Code)
 	}
@@ -158,7 +161,7 @@ func TestSubmitClampsFileCounts(t *testing.T) {
 
 	b := []byte(`{"event":"game_update","gameId":"kitty","result":"ok","filesTotal":999999999999,"filesDownloaded":-5,"hashMismatches":999999999999}`)
 	rec := httptest.NewRecorder()
-	h.Submit(rec, httptest.NewRequest(http.MethodPost, "/metrics/report", bytes.NewReader(b)))
+	h.Submit(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/metrics/report", bytes.NewReader(b)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("код %d", rec.Code)
 	}

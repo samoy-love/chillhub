@@ -311,3 +311,48 @@ func TestRepublishingSameVersionReplacesContentAndManifestTogether(t *testing.T)
 	}
 	assertNoStagingLeftovers(t, filepath.Join(root, "content", "game"))
 }
+
+// A publish that cannot repoint latest.json must FAIL, not report success.
+//
+// "Update latest" is the whole point of the request: the operator wants this
+// version to be the one launchers download. If the pointer stays where it was,
+// the version sits on disk unused while the panel says the build is published —
+// and the discrepancy surfaces days later as "players are not getting the
+// update". The files left behind are harmless: an unreferenced version
+// directory is exactly what an inactive version looks like, and republishing
+// overwrites it.
+func TestPublishFailsWhenLatestCannotBeRepointed(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+
+	// Publish once so that manifests/game/ exists and latest.json points at 1.0.0.
+	w := httptest.NewRecorder()
+	h.Upload(w, uploadRequestWithLatest(t, "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "first"})))
+	if w.Code != http.StatusOK {
+		t.Fatalf("setup publish returned %d: %s", w.Code, w.Body.String())
+	}
+
+	// Make latest.json impossible to replace: WriteFileAtomic renames a temp file
+	// over it, and a DIRECTORY under that name cannot be replaced by a file.
+	manDir := filepath.Join(root, "manifests", "game")
+	latest := filepath.Join(manDir, "latest.json")
+	if err := os.Remove(latest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(latest, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	w2 := httptest.NewRecorder()
+	h.Upload(w2, uploadRequestWithLatest(t, "game", "2.0.0", zipBytes(t, map[string]string{"b.txt": "second"})))
+
+	if w2.Code == http.StatusOK {
+		t.Fatalf("publish reported success while latest.json was not updated (%d)", w2.Code)
+	}
+	// latest.json is still the directory we planted: nothing pretended to
+	// activate 2.0.0 behind the failed write.
+	st, err := os.Stat(latest)
+	if err != nil || !st.IsDir() {
+		t.Fatalf("latest.json was replaced despite the failure: stat=%v", err)
+	}
+}

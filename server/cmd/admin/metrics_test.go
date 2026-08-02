@@ -34,7 +34,7 @@ func TestExporterIsNotOnTheAdminMux(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, promexp.Path, nil))
+	mux.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, promexp.Path, nil))
 	if rec.Code == http.StatusOK && strings.Contains(rec.Body.String(), "chillhub_") {
 		t.Fatalf("%s отвечает метриками на порту админки:\n%s", promexp.Path, rec.Body.String())
 	}
@@ -46,7 +46,7 @@ func TestFeedbackSubmitIsCounted(t *testing.T) {
 	s.register(mux)
 
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/feedback/submit",
+	mux.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/feedback/submit",
 		strings.NewReader(`{"message":"привет","category":"idea"}`)))
 
 	out := scrape(t, s)
@@ -68,9 +68,9 @@ func TestActivateAndMaintenanceAreCounted(t *testing.T) {
 
 	// Без авторизации оба вернут не-2xx — считаем именно это, метка result для
 	// того и существует.
-	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/admin/api/activate?gameId=kitty&version=1.0.0", nil))
-	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/admin/api/maintenance/set", strings.NewReader(`{"enabled":true}`)))
-	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/admin/api/maintenance/clear", nil))
+	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/activate?gameId=kitty&version=1.0.0", nil))
+	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/maintenance/set", strings.NewReader(`{"enabled":true}`)))
+	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/maintenance/clear", nil))
 
 	out := scrape(t, s)
 	for _, want := range []string{

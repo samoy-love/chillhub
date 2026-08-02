@@ -26,12 +26,14 @@ func pngBomb(t *testing.T, w, h uint32) []byte {
 	ihdr.Write([]byte{8, 6, 0, 0, 0}) // bit depth 8, RGBA, no interlace
 
 	chunk := func(typ string, data []byte) {
+		// #nosec G115 -- the chunks are literals built in this helper, a few
+		// dozen bytes each; the length cannot come near the uint32 range.
 		_ = binary.Write(&buf, binary.BigEndian, uint32(len(data)))
 		buf.WriteString(typ)
 		buf.Write(data)
 		c := crc32.NewIEEE()
-		c.Write([]byte(typ))
-		c.Write(data)
+		_, _ = c.Write([]byte(typ))
+		_, _ = c.Write(data)
 		_ = binary.Write(&buf, binary.BigEndian, c.Sum32())
 	}
 	chunk("IHDR", ihdr.Bytes())
@@ -89,13 +91,13 @@ func TestDownloadURLBlocksPrivateAddresses(t *testing.T) {
 		"http://0.0.0.0/",
 	}
 	for _, u := range blocked {
-		if _, _, err := DownloadURL(u); err == nil {
+		if _, _, err := DownloadURL(t.Context(), u); err == nil {
 			t.Errorf("%s was fetched", u)
 		}
 	}
 	// Non-HTTP schemes stay refused too.
 	for _, u := range []string{"file:///etc/passwd", "gopher://x/", "ftp://example.com/x"} {
-		if _, _, err := DownloadURL(u); err == nil {
+		if _, _, err := DownloadURL(t.Context(), u); err == nil {
 			t.Errorf("%s was fetched", u)
 		}
 	}
@@ -104,11 +106,11 @@ func TestDownloadURLBlocksPrivateAddresses(t *testing.T) {
 // The same block must apply to a hostname that only resolves to loopback, and
 // to a redirect that lands there.
 func TestDownloadURLBlocksLoopbackServer(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("secret"))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("secret"))
 	}))
 	defer srv.Close()
-	if b, _, err := DownloadURL(srv.URL); err == nil {
+	if b, _, err := DownloadURL(t.Context(), srv.URL); err == nil {
 		t.Fatalf("fetched a loopback server: %q", string(b))
 	}
 
@@ -116,7 +118,7 @@ func TestDownloadURLBlocksLoopbackServer(t *testing.T) {
 		http.Redirect(w, r, srv.URL, http.StatusFound)
 	}))
 	defer redirector.Close()
-	if _, _, err := DownloadURL(redirector.URL); err == nil {
+	if _, _, err := DownloadURL(t.Context(), redirector.URL); err == nil {
 		t.Fatal("followed a redirect into loopback")
 	}
 }

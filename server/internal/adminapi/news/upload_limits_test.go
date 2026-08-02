@@ -40,7 +40,7 @@ func multipartFile(t *testing.T, name string, n int) (*bytes.Buffer, string) {
 func TestAssetsUploadRejectsOversizedBody(t *testing.T) {
 	h := New(t.TempDir())
 	body, ct := multipartFile(t, "big.png", MaxImageBytes+(4<<20))
-	req := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/news/assets/upload", body)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/admin/api/news/assets/upload", body)
 	req.Header.Set("Content-Type", ct)
 	w := httptest.NewRecorder()
 	h.AssetsUpload(w, req)
@@ -55,7 +55,7 @@ func TestAssetsUploadRejectsOversizedBody(t *testing.T) {
 func TestUploadCoverRejectsOversizedBody(t *testing.T) {
 	h := New(t.TempDir())
 	body, ct := multipartFile(t, "big.png", MaxImageBytes+(4<<20))
-	req := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/news/uploadCover", body)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/admin/api/news/uploadCover", body)
 	req.Header.Set("Content-Type", ct)
 	w := httptest.NewRecorder()
 	h.UploadCover(w, req)
@@ -71,7 +71,7 @@ func TestUploadCoverRejectsOversizedBody(t *testing.T) {
 func TestUploadCoverAcceptsSmallImage(t *testing.T) {
 	h := New(t.TempDir())
 	body, ct := multipartFile(t, "small.png", 1<<10)
-	req := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/news/uploadCover", body)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/admin/api/news/uploadCover", body)
 	req.Header.Set("Content-Type", ct)
 	w := httptest.NewRecorder()
 	h.UploadCover(w, req)

@@ -8,17 +8,17 @@ import (
 	"testing"
 )
 
-func ok(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
+func ok(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
 
 // Manifests, content and news are served with no-store on purpose: a stale manifest
 // makes the launcher compare against the wrong build and either miss an update or
 // download files that no longer exist.
 func TestNoStoreSetsHeadersOnEveryResponse(t *testing.T) {
-	h := NoStore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := NoStore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/manifests/x.json", nil))
+	h.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/manifests/x.json", nil))
 
 	cc := w.Header().Get("Cache-Control")
 	if !strings.Contains(cc, "no-store") {
@@ -34,7 +34,7 @@ func TestCORSDoesNotEchoArbitraryOrigin(t *testing.T) {
 	h := CORS("https://admin.example")(http.HandlerFunc(ok))
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/admin/api/list", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/list", nil)
 	r.Header.Set("Origin", "https://evil.example")
 	h.ServeHTTP(w, r)
 
@@ -46,10 +46,10 @@ func TestCORSDoesNotEchoArbitraryOrigin(t *testing.T) {
 // A preflight must not reach the handler: it carries no body and no session.
 func TestCORSHandlesPreflightWithoutCallingHandler(t *testing.T) {
 	called := false
-	h := CORS("*")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
+	h := CORS("*")(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodOptions, "/api/games", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodOptions, "/api/games", nil)
 	r.Header.Set("Origin", "https://example.com")
 	r.Header.Set("Access-Control-Request-Method", "GET")
 	h.ServeHTTP(w, r)
@@ -68,7 +68,7 @@ func TestCORSHandlesPreflightWithoutCallingHandler(t *testing.T) {
 func TestCORSDisabledEmitsNoHeaders(t *testing.T) {
 	h := CORS(CORSDisabled)(http.HandlerFunc(ok))
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/admin/api/list", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/list", nil)
 	r.Header.Set("Origin", "https://example.com")
 	h.ServeHTTP(w, r)
 
@@ -87,7 +87,7 @@ func TestCORSDisabledEmitsNoHeaders(t *testing.T) {
 func TestCORSEmptySpecMeansWildcard(t *testing.T) {
 	h := CORS("")(http.HandlerFunc(ok))
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/games", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/games", nil)
 	r.Header.Set("Origin", "https://example.com")
 	h.ServeHTTP(w, r)
 
@@ -101,7 +101,7 @@ func TestCORSEmptySpecMeansWildcard(t *testing.T) {
 func TestCORSEchoesAllowlistedOrigin(t *testing.T) {
 	h := CORS("https://admin.example")(http.HandlerFunc(ok))
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/admin/api/list", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/list", nil)
 	r.Header.Set("Origin", "https://admin.example")
 	h.ServeHTTP(w, r)
 
@@ -112,12 +112,12 @@ func TestCORSEchoesAllowlistedOrigin(t *testing.T) {
 
 // Logging must not swallow the handler's status code or body.
 func TestLoggingPassesResponseThrough(t *testing.T) {
-	h := Logging("TEST")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := Logging("TEST")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 		_, _ = w.Write([]byte("тело"))
 	}))
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x", nil))
+	h.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", nil))
 
 	if w.Code != http.StatusTeapot {
 		t.Errorf("status = %d, want 418", w.Code)
@@ -148,7 +148,7 @@ func TestWriteJSONSetsContentTypeAndEncodes(t *testing.T) {
 // Manifest URLs handed to clients are built from this. Ignoring the proxy headers
 // nginx sets would point every launcher at http://127.0.0.1.
 func TestBaseURLFollowsProxyHeaders(t *testing.T) {
-	r := httptest.NewRequest(http.MethodGet, "/api/games", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/games", nil)
 	r.Host = "127.0.0.1:55700"
 	r.Header.Set("X-Forwarded-Proto", "https")
 	r.Header.Set("X-Forwarded-Host", "launcher.samoy.love")
@@ -160,7 +160,7 @@ func TestBaseURLFollowsProxyHeaders(t *testing.T) {
 
 // Without proxy headers the request's own host is used — the dev case.
 func TestBaseURLFallsBackToRequestHost(t *testing.T) {
-	r := httptest.NewRequest(http.MethodGet, "/api/games", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/games", nil)
 	r.Host = "localhost:55700"
 	if got := BaseURL(r); !strings.Contains(got, "localhost:55700") {
 		t.Fatalf("BaseURL = %q", got)
@@ -170,7 +170,7 @@ func TestBaseURLFallsBackToRequestHost(t *testing.T) {
 // The standard port must not be repeated in the URL: "https://host:443" is legal
 // but breaks string comparisons against the configured base URL.
 func TestBaseURLOmitsDefaultPort(t *testing.T) {
-	r := httptest.NewRequest(http.MethodGet, "/api/games", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/games", nil)
 	r.Host = "launcher.samoy.love"
 	r.Header.Set("X-Forwarded-Proto", "https")
 	r.Header.Set("X-Forwarded-Port", "443")

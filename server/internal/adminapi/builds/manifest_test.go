@@ -129,7 +129,9 @@ func TestManifestHashesAndSizesDescribeTheRealBytes(t *testing.T) {
 		t.Errorf("sha256 %q does not describe the published bytes", f.Sha256)
 	}
 	hb := blake3.New()
-	hb.Write([]byte(payload))
+	if _, err := hb.Write([]byte(payload)); err != nil {
+		t.Fatal(err)
+	}
 	if f.Blake3 != hex.EncodeToString(hb.Sum(nil)) {
 		t.Errorf("blake3 %q does not describe the published bytes", f.Blake3)
 	}

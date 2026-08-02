@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -22,6 +23,13 @@ import (
 	"time"
 	"unicode"
 )
+
+// ErrInvalidSlug is returned by NewsSlugPath when a slug cannot be turned into
+// a path inside the news directory — either it failed IsSafeNewsSlug or the
+// joined path escaped base. It is one error for both cases on purpose: the
+// caller answers 400 either way, and telling a client WHICH check it tripped is
+// free help for anyone probing the traversal guard.
+var ErrInvalidSlug = errors.New("invalid slug")
 
 // RequireMethod reports whether the request may proceed. OPTIONS is let through
 // (the CORS middleware answers preflight); any other mismatch is answered with
@@ -54,13 +62,25 @@ func Fail(w http.ResponseWriter, code int, publicMsg, tag string, err error) {
 }
 
 // WriteJSON writes v as application/json with caching disabled.
+//
+// v is an any, so marshalling can genuinely fail (a channel, a func, a cycle).
+// The old code ignored that and wrote the nil buffer, which answered 200 with an
+// empty body — the admin UI then reported "unexpected end of JSON input" with
+// nothing in the journal to explain it. Nothing has been written to the socket
+// yet at this point, so a real 500 is still possible.
 func WriteJSON(w http.ResponseWriter, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		Fail(w, http.StatusInternalServerError, "failed to encode the response", "adminutil", err)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
-	b, _ := json.Marshal(v)
-	w.Write(b)
+	// A write failure here is a client that hung up mid-response; there is no
+	// status left to change and nothing useful to log per request.
+	_, _ = w.Write(b)
 }
 
 // WriteFileAtomic writes data to path through a temporary file in the same
@@ -74,7 +94,11 @@ func WriteJSON(w http.ResponseWriter, v any) {
 // new one.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// 0o750, not 0o755: nginx serves this tree as www-data, the same user both
+	// services run as (deploy/systemd/*.service), so the group bit is all it
+	// needs. The units already set UMask=0027, which strips the world bits
+	// anyway — this only makes the code agree with the deployment.
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
@@ -83,7 +107,7 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	}
 	tmpPath := tmp.Name()
 	cleanup := func() {
-		tmp.Close()
+		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
 	}
 	if _, err := tmp.Write(data); err != nil {
@@ -126,13 +150,28 @@ func EnsureWithin(base, p string) bool {
 	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// isASCIIAlnum reports whether r is [A-Za-z0-9].
+//
+// The guards below all start from this class and only differ in which
+// punctuation they add. Spelling the three ranges out at every call site is how
+// a check ends up subtly different from its neighbours — and one loose guard
+// here is one path that reaches filepath.Join.
+func isASCIIAlnum(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+}
+
+// isASCIIHexDigit reports whether r is [0-9A-Fa-f].
+func isASCIIHexDigit(r rune) bool {
+	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+}
+
 // IsSafeGameID allows only [A-Za-z0-9_-] for game IDs and not empty.
 func IsSafeGameID(s string) bool {
 	if strings.TrimSpace(s) == "" {
 		return false
 	}
 	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+		if isASCIIAlnum(r) || r == '-' || r == '_' {
 			continue
 		}
 		return false
@@ -147,7 +186,7 @@ func IsSafeVersion(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+		if isASCIIAlnum(r) || r == '-' || r == '_' || r == '.' {
 			continue
 		}
 		return false
@@ -164,7 +203,7 @@ func IsHexID(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+		if isASCIIHexDigit(r) {
 			continue
 		}
 		return false
@@ -200,11 +239,11 @@ func IsSafeNewsSlug(s string) bool {
 // verified to stay inside base.
 func NewsSlugPath(base, slug string) (string, error) {
 	if !IsSafeNewsSlug(slug) {
-		return "", fmt.Errorf("invalid slug")
+		return "", ErrInvalidSlug
 	}
 	p := filepath.Join(base, slug+".md")
 	if !EnsureWithin(base, p) {
-		return "", fmt.Errorf("invalid slug")
+		return "", ErrInvalidSlug
 	}
 	return p, nil
 }
@@ -258,7 +297,7 @@ func sanitizeToASCII(name string) (string, bool) {
 	hadNonASCII := false
 	for _, r := range name {
 		if r < 0x80 {
-			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_' {
+			if isASCIIAlnum(r) || r == '.' || r == '-' || r == '_' {
 				b.WriteRune(r)
 			} else {
 				b.WriteByte('_')
@@ -317,7 +356,7 @@ func splitFileExt(name string) (string, string) {
 		return name, ""
 	}
 	for _, r := range ext {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+		if !isASCIIAlnum(r) {
 			return name, ""
 		}
 	}
@@ -369,12 +408,21 @@ type NoopFlusher struct{}
 func (NoopFlusher) Flush() {}
 
 // FlusherFor returns the ResponseWriter's Flusher, or a no-op one.
+//
+// The interface IS the return value here: callers must not care whether they
+// got the real http.Flusher or NoopFlusher, which is the whole point.
+//
+//nolint:ireturn // See above: the fallback only works through an interface.
 func FlusherFor(w http.ResponseWriter) Flusher {
 	if f, ok := w.(http.Flusher); ok {
 		return f
 	}
 	return NoopFlusher{}
 }
+
+// contentRootSearchDepth is how many directories above the executable are
+// searched for a "content" directory.
+const contentRootSearchDepth = 6
 
 // DetectContentRoot resolves the content root from CONTENT_ROOT, then by
 // walking up from the executable, then from the working directory.
@@ -384,7 +432,7 @@ func DetectContentRoot() string {
 	}
 	if exe, err := os.Executable(); err == nil && exe != "" {
 		d := filepath.Dir(exe)
-		for i := 0; i < 6; i++ {
+		for range contentRootSearchDepth {
 			p := filepath.Join(d, "content")
 			if st, err := os.Stat(p); err == nil && st.IsDir() {
 				return p

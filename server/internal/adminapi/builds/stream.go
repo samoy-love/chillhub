@@ -20,6 +20,17 @@ import (
 // /upload/process) emit the same event stream, so extraction and manifest
 // composition live here instead of being duplicated per handler.
 
+// emitEventf writes one NDJSON event.
+//
+// The write error is dropped, deliberately and in exactly this one place: the
+// only way it fails is a client that hung up, and the publication must still
+// run to completion — abandoning it half-way would leave a staging directory
+// and, worse, a build the operator believes is live. There is also nowhere left
+// to report it to, the response being the stream itself.
+func emitEventf(w io.Writer, format string, a ...any) {
+	_, _ = fmt.Fprintf(w, format, a...)
+}
+
 // streamUnzip extracts zipPath into filesRoot, emitting one {"type":"unzip"}
 // event per entry. On failure it emits {"type":"error"} and reports false.
 func streamUnzip(w io.Writer, fl adminutil.Flusher, zipPath, filesRoot string) bool {
@@ -28,7 +39,7 @@ func streamUnzip(w io.Writer, fl adminutil.Flusher, zipPath, filesRoot string) b
 		streamError(w, fl, err.Error())
 		return false
 	}
-	defer zr.Close()
+	defer func() { _ = zr.Close() }()
 	// See extractBudget: the entry sizes in the archive cannot be trusted, so
 	// the bytes actually written are counted and capped.
 	budget := newExtractBudget()
@@ -39,39 +50,20 @@ func streamUnzip(w io.Writer, fl adminutil.Flusher, zipPath, filesRoot string) b
 		}
 		full := filepath.Join(filesRoot, rel)
 		if !adminutil.EnsureWithin(filesRoot, full) {
-			streamError(w, fl, "zip entry outside target: "+rel)
+			streamError(w, fl, errZipSlip.Error()+": "+rel)
 			return false
 		}
 		if zf.FileInfo().IsDir() || hasTrailingSlash(rel) {
-			_ = os.MkdirAll(full, 0o755)
-			fmt.Fprintf(w, "{\"type\":\"unzip\",\"path\":%q}\n", rel)
+			_ = os.MkdirAll(full, contentDirPerm)
+			emitEventf(w, "{\"type\":\"unzip\",\"path\":%q}\n", rel)
 			fl.Flush()
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		if err := extractZipEntry(zf, rel, full, budget); err != nil {
 			streamError(w, fl, err.Error())
 			return false
 		}
-		rc, err := zf.Open()
-		if err != nil {
-			streamError(w, fl, err.Error())
-			return false
-		}
-		out, err := os.OpenFile(full, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-		if err != nil {
-			rc.Close()
-			streamError(w, fl, err.Error())
-			return false
-		}
-		if err := budget.copy(out, rc); err != nil {
-			out.Close()
-			rc.Close()
-			streamError(w, fl, err.Error())
-			return false
-		}
-		out.Close()
-		rc.Close()
-		fmt.Fprintf(w, "{\"type\":\"unzip\",\"path\":%q}\n", rel)
+		emitEventf(w, "{\"type\":\"unzip\",\"path\":%q}\n", rel)
 		fl.Flush()
 	}
 	return true
@@ -81,12 +73,39 @@ func streamUnzip(w io.Writer, fl adminutil.Flusher, zipPath, filesRoot string) b
 // {"type":"file"} event per entry. On failure it emits {"type":"error"} and
 // reports false.
 func streamCompose(w io.Writer, fl adminutil.Flusher, filesRoot string) ([]manifestFile, []string, bool) {
+	var idx int
+	var bytesDone int64
+	files, emptyDirs, err := walkManifest(filesRoot, func(mf manifestFile) {
+		idx++
+		bytesDone += mf.Size
+		emitEventf(w, "{\"type\":\"file\",\"idx\":%d,\"path\":%q,\"bytesDone\":%d}\n", idx, mf.Path, bytesDone)
+		fl.Flush()
+	})
+	if err != nil {
+		streamError(w, fl, err.Error())
+		return nil, nil, false
+	}
+	return files, emptyDirs, true
+}
+
+// scanManifest walks filesRoot without emitting progress; used by the
+// non-streaming upload endpoint.
+func scanManifest(filesRoot string) ([]manifestFile, []string, error) {
+	return walkManifest(filesRoot, nil)
+}
+
+// walkManifest hashes every file under filesRoot and returns the manifest
+// entries plus the directories that hold no files. onFile, when set, is called
+// after each entry, which is how the streaming publish paths report progress.
+//
+// The two publish pipelines used to carry a copy of this walk each; they drifted
+// apart once already (only one of them stopped ignoring a failed d.Info(), the
+// other kept panicking on the nil FileInfo).
+func walkManifest(filesRoot string, onFile func(manifestFile)) ([]manifestFile, []string, error) {
 	var files []manifestFile
 	dirHasFile := map[string]bool{}
 	allDirs := map[string]bool{}
-	var idx int
-	var bytesDone int64
-	errWalk := filepath.WalkDir(filesRoot, func(path string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(filesRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -105,89 +124,21 @@ func streamCompose(w io.Writer, fl adminutil.Flusher, filesRoot string) ([]manif
 		if err != nil {
 			return err
 		}
-		f, err := os.Open(path)
+		b3Sum, shaSum, err := hashFile(path)
 		if err != nil {
 			return err
 		}
-		hSha := sha256.New()
-		hB3 := blake3.New()
-		if _, err := io.Copy(io.MultiWriter(hSha, hB3), f); err != nil {
-			f.Close()
-			return err
-		}
-		f.Close()
-		files = append(files, manifestFile{
+		mf := manifestFile{
 			Path:       rel,
 			Size:       info.Size(),
-			Blake3:     hex.EncodeToString(hB3.Sum(nil)),
-			Sha256:     hex.EncodeToString(hSha.Sum(nil)),
+			Blake3:     b3Sum,
+			Sha256:     shaSum,
 			Executable: isExecutable(rel),
-		})
-		p := filepath.ToSlash(filepath.Dir(rel))
-		for p != "." && p != "/" {
-			dirHasFile[p] = true
-			p = filepath.ToSlash(filepath.Dir(p))
 		}
-		idx++
-		bytesDone += info.Size()
-		fmt.Fprintf(w, "{\"type\":\"file\",\"idx\":%d,\"path\":%q,\"bytesDone\":%d}\n", idx, rel, bytesDone)
-		fl.Flush()
-		return nil
-	})
-	if errWalk != nil {
-		streamError(w, fl, errWalk.Error())
-		return nil, nil, false
-	}
-	return files, emptyDirsOf(allDirs, dirHasFile), true
-}
-
-// scanManifest walks filesRoot without emitting progress; used by the
-// non-streaming upload endpoint.
-func scanManifest(filesRoot string) ([]manifestFile, []string, error) {
-	var files []manifestFile
-	dirHasFile := map[string]bool{}
-	allDirs := map[string]bool{}
-	err := filepath.WalkDir(filesRoot, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(filesRoot, path)
-		rel = filepath.ToSlash(rel)
-		if d.IsDir() {
-			allDirs[rel] = true
-			return nil
-		}
-		if rel == "." {
-			return nil
-		}
-		// See streamCompose: an ignored error here meant a nil FileInfo and a
-		// panic on info.Size().
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		hSha := sha256.New()
-		hB3 := blake3.New()
-		if _, err := io.Copy(io.MultiWriter(hSha, hB3), f); err != nil {
-			f.Close()
-			return err
-		}
-		f.Close()
-		files = append(files, manifestFile{
-			Path:       rel,
-			Size:       info.Size(),
-			Blake3:     hex.EncodeToString(hB3.Sum(nil)),
-			Sha256:     hex.EncodeToString(hSha.Sum(nil)),
-			Executable: isExecutable(rel),
-		})
-		p := filepath.ToSlash(filepath.Dir(rel))
-		for p != "." && p != "/" {
-			dirHasFile[p] = true
-			p = filepath.ToSlash(filepath.Dir(p))
+		files = append(files, mf)
+		markParentDirs(dirHasFile, rel)
+		if onFile != nil {
+			onFile(mf)
 		}
 		return nil
 	})
@@ -195,6 +146,30 @@ func scanManifest(filesRoot string) ([]manifestFile, []string, error) {
 		return nil, nil, err
 	}
 	return files, emptyDirsOf(allDirs, dirHasFile), nil
+}
+
+// hashFile returns the blake3 and sha256 digests of one extracted file.
+func hashFile(path string) (string, string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", "", err
+	}
+	defer func() { _ = f.Close() }()
+	hSha := sha256.New()
+	hB3 := blake3.New()
+	if _, err := io.Copy(io.MultiWriter(hSha, hB3), f); err != nil {
+		return "", "", err
+	}
+	return hex.EncodeToString(hB3.Sum(nil)), hex.EncodeToString(hSha.Sum(nil)), nil
+}
+
+// markParentDirs records every ancestor directory of rel as non-empty.
+func markParentDirs(dirHasFile map[string]bool, rel string) {
+	p := filepath.ToSlash(filepath.Dir(rel))
+	for p != "." && p != "/" {
+		dirHasFile[p] = true
+		p = filepath.ToSlash(filepath.Dir(p))
+	}
 }
 
 // emptyDirsOf returns the sorted, slash-terminated directories that hold no files.
@@ -213,7 +188,7 @@ func emptyDirsOf(allDirs, dirHasFile map[string]bool) []string {
 }
 
 func streamError(w io.Writer, fl adminutil.Flusher, msg string) {
-	fmt.Fprintf(w, "{\"type\":\"error\",\"message\":%q}\n", msg)
+	emitEventf(w, "{\"type\":\"error\",\"message\":%q}\n", msg)
 	fl.Flush()
 }
 
