@@ -35,7 +35,13 @@ indent_style = tab
 # Конец строки (LF) из нового файла НЕ переопределяется — это осознанное решение,
 # согласованное с .gitattributes.
 # ---------------------------------------------------------------------------
-[*.cs]
+[*.{cs,xaml}]
+# CRLF, а не общий LF сверху. Это не вкусовщина: launcher/.gitattributes
+# закрепляет `*.cs text eol=crlf`, то есть git кладёт в рабочую копию именно
+# CRLF. Пока здесь стояло lf, `dotnet format --verify-no-changes` требовал
+# переписать КАЖДЫЙ файл лаунчера, а этот шаг в lint.yml блокирующий.
+# Два файла должны говорить одно и то же; менять решение надо в обоих сразу.
+end_of_line = crlf
 csharp_new_line_before_open_brace = all:warning
 csharp_preferred_modifier_order = public,private,protected,internal,static,extern,new,virtual,abstract,sealed,override,readonly,unsafe,volatile,async:suggestion
 csharp_style_var_for_built_in_types = true:suggestion

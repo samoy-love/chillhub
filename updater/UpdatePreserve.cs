@@ -17,8 +17,7 @@ using System.Text.RegularExpressions;
 /// This type lives in the updater assembly because the launcher project already has a
 /// ProjectReference to it; the dependency cannot go the other way.
 /// </summary>
-public sealed class PreserveMatcher
-{
+public sealed class PreserveMatcher {
     /// <summary>
     /// Default rules. Keep in sync with nothing else — this IS the definition.
     ///
@@ -62,8 +61,7 @@ public sealed class PreserveMatcher
 
     private readonly List<string> rules;
 
-    public PreserveMatcher(string? csv = null)
-    {
+    public PreserveMatcher(string? csv = null) {
         var source = string.IsNullOrWhiteSpace(csv) ? DefaultRulesArg : csv!;
         this.rules = source
             .Split(',', StringSplitOptions.RemoveEmptyEntries)
@@ -87,27 +85,21 @@ public sealed class PreserveMatcher
     /// сервер публиковал, а клиент молча пропускал: файл никогда не обновлялся, и
     /// проверка целостности расходилась вечно. Правило должно быть ОДНО на обе стороны.
     /// </summary>
-    public bool ShouldPreserve(string? relativePath, Action<string>? log = null)
-    {
+    public bool ShouldPreserve(string? relativePath, Action<string>? log = null) {
         var norm = (relativePath ?? string.Empty).Replace('\\', '/').Trim('/');
-        if (norm.Length == 0)
-        {
+        if (norm.Length == 0) {
             return false;
         }
 
-        foreach (var rule in this.rules)
-        {
-            if (rule.EndsWith('/'))
-            {
+        foreach (var rule in this.rules) {
+            if (rule.EndsWith('/')) {
                 var dir = rule.Trim('/');
-                if (dir.Length == 0)
-                {
+                if (dir.Length == 0) {
                     log?.Invoke($"preserve (root dir): {norm} by '{rule}'");
                     return true;
                 }
 
-                if (norm.StartsWith(dir + "/", StringComparison.OrdinalIgnoreCase))
-                {
+                if (norm.StartsWith(dir + "/", StringComparison.OrdinalIgnoreCase)) {
                     log?.Invoke($"preserve (dir): {norm} by '{rule}'");
                     return true;
                 }
@@ -115,10 +107,8 @@ public sealed class PreserveMatcher
                 continue;
             }
 
-            if (rule.Contains('*') || rule.Contains('?'))
-            {
-                if (WildcardIsMatch(norm, rule))
-                {
+            if (rule.Contains('*') || rule.Contains('?')) {
+                if (WildcardIsMatch(norm, rule)) {
                     log?.Invoke($"preserve (wildcard): {norm} by '{rule}'");
                     return true;
                 }
@@ -126,8 +116,7 @@ public sealed class PreserveMatcher
                 continue;
             }
 
-            if (norm.Equals(rule, StringComparison.OrdinalIgnoreCase))
-            {
+            if (norm.Equals(rule, StringComparison.OrdinalIgnoreCase)) {
                 log?.Invoke($"preserve (exact): {norm} by '{rule}'");
                 return true;
             }
@@ -141,26 +130,21 @@ public sealed class PreserveMatcher
     /// (<see cref="UpdaterArtifactFiles"/> or anything under <see cref="UpdaterArtifactDir"/>).
     /// Such paths must never be mirrored into — and must be scrubbed from — the installation directory.
     /// </summary>
-    public static bool IsUpdaterArtifact(string? relativePath)
-    {
+    public static bool IsUpdaterArtifact(string? relativePath) {
         var norm = (relativePath ?? string.Empty).Replace('\\', '/').Trim('/');
-        if (norm.Length == 0)
-        {
+        if (norm.Length == 0) {
             return false;
         }
 
-        if (norm.StartsWith(UpdaterArtifactDir + "/", StringComparison.OrdinalIgnoreCase))
-        {
+        if (norm.StartsWith(UpdaterArtifactDir + "/", StringComparison.OrdinalIgnoreCase)) {
             return true;
         }
 
         // A11. Только верхний уровень, как и в preserve: имя файла в произвольном
         // подкаталоге (например "data/filelist.txt") — это обычный файл пакета,
         // и клиент не имеет права молча его пропускать, раз сервер его публикует.
-        foreach (var name in UpdaterArtifactFiles)
-        {
-            if (norm.Equals(name, StringComparison.OrdinalIgnoreCase))
-            {
+        foreach (var name in UpdaterArtifactFiles) {
+            if (norm.Equals(name, StringComparison.OrdinalIgnoreCase)) {
                 return true;
             }
         }
@@ -168,14 +152,11 @@ public sealed class PreserveMatcher
         return false;
     }
 
-    private static bool WildcardIsMatch(string text, string pattern)
-    {
+    private static bool WildcardIsMatch(string text, string pattern) {
         var sb = new StringBuilder();
         sb.Append('^');
-        foreach (var ch in pattern)
-        {
-            switch (ch)
-            {
+        foreach (var ch in pattern) {
+            switch (ch) {
                 case '*': sb.Append(".*"); break;
                 case '?': sb.Append('.'); break;
                 case '.': sb.Append("\\."); break;
@@ -186,12 +167,10 @@ public sealed class PreserveMatcher
         }
 
         sb.Append('$');
-        try
-        {
+        try {
             return Regex.IsMatch(text, sb.ToString(), RegexOptions.IgnoreCase);
         }
-        catch (ArgumentException)
-        {
+        catch (ArgumentException) {
             return false;
         }
     }
