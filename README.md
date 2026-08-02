@@ -1,158 +1,170 @@
 # ChillHub
 
-[![Lint](https://github.com/tr0llex/chillhub/actions/workflows/lint.yml/badge.svg)](https://github.com/tr0llex/chillhub/actions/workflows/lint.yml)
+English · [Русский](README.ru.md)
+
+[![CI](https://github.com/tr0llex/chillhub/actions/workflows/lint.yml/badge.svg)](https://github.com/tr0llex/chillhub/actions/workflows/lint.yml)
 [![codecov](https://codecov.io/gh/tr0llex/chillhub/branch/main/graph/badge.svg)](https://codecov.io/gh/tr0llex/chillhub)
-[![прод](https://img.shields.io/website?url=https%3A%2F%2Flauncher.samoy.love&up_message=online&up_color=2ea043&down_message=offline&label=launcher.samoy.love)](https://launcher.samoy.love)
+[![prod](https://img.shields.io/website?url=https%3A%2F%2Flauncher.samoy.love&up_message=online&up_color=2ea043&down_message=offline&label=launcher.samoy.love)](https://launcher.samoy.love)
 
-**Русский** · [English](README.en.md)
+A Windows launcher that distributes modded game builds and keeps them up to
+date for a small circle of players — [launcher.samoy.love](https://launcher.samoy.love).
 
-Лаунчер игр для Windows 10–11: раздача сборок с модами, автообновления и
-новости. Сайт — **[launcher.samoy.love](https://launcher.samoy.love)**.
+Updating a modpack should mean "Update → Play", not "download the archive,
+unpack it here, delete those three files, and don't lose your config". Every
+manual step in that sequence is a step someone performs wrong, and a broken
+install is indistinguishable from a broken build until somebody debugs it.
 
-Обновить модпак должно значить «Обновить → Играть», а не «скачай архив,
-распакуй сюда, эти три файла удали, а свой конфиг не потеряй». Ради этого всё и
-затевалось.
+![Launcher main screen](docs/img/launcher-main.svg)
 
-![Главный экран лаунчера](docs/images/launcher-main.png)
+## How it works
 
-## Обновления идут диффом
+**Updates are diffs, because a modpack changes by a few megabytes at a time.**
+The server publishes a manifest per version: each file's path, size and two
+hashes, Blake3 and SHA-256. The client hashes what is already on disk and
+builds a plan — what to download, what to delete, which empty directories to
+create. When it finishes, the game folder is an exact copy of the published
+version with no leftovers from earlier builds, and moving between versions in
+either direction, rollback included, costs the same diff rather than a full
+re-download.
 
-Сервер публикует манифест версии: путь каждого файла, размер и два хеша —
-Blake3 и SHA-256. Клиент считает хеши того, что лежит на диске, и строит план:
-что скачать, что удалить, какие пустые каталоги создать. После установки папка
-игры — точная копия серверной версии, без «хвостов» от предыдущих сборок.
+**Downloads assume the connection will drop.** Transfers run in 2–16 parallel
+streams over HTTP Range (`SimpleSyncService.cs`), partial data stays in `.part`
+files, and a resumed file continues from the byte it stopped at. Nothing is
+accepted into the game folder until its hashes match the manifest, so an
+interrupted or corrupted transfer fails loudly instead of producing an install
+that only misbehaves later.
 
-Скачивание идёт в 2–16 потоков через HTTP Range, недокачанное остаётся в
-`.part` и переживает обрыв связи. Каждый файл принимается только после сверки
-хешей. То же самое работает в обе стороны: переход на любую опубликованную
-версию, включая откат назад, — тот же дифф, а не полная перекачка.
+**The hash seam between two languages is pinned by tests.** The server hashes
+with a Go library, the client with a C# one. If the implementations ever
+drifted, nothing would report an error — every installed launcher would simply
+conclude that no file matches and re-download whole games. The same reference
+vector is therefore asserted on both sides.
 
-Проверка целостности в настройках пересчитывает хеши с диска мимо кеша и
-показывает недостающие, повреждённые и лишние файлы; кнопка «Починить» отдаёт
-получившийся план тому же механизму обновления.
+**The launcher updates itself from a separate executable.** A running process
+cannot overwrite its own files, so `updater/` copies the new ones, skips
+user-owned paths (`config.json`, `launcher.version`) and restarts the app. That
+preserve list is the reason user data lives in `%APPDATA%\ChillHub` rather than
+next to the binaries: a config inside the install directory would land in the
+update package and produce an endless self-update loop, so a check verifies the
+manifest and the preserve rules never overlap.
 
-Себя лаунчер обновляет отдельным exe: он копирует новые файлы, обходя
-пользовательские (`config.json`, `launcher.version`), и перезапускает
-приложение.
+**Nothing is signed, and that is a decision rather than an omission.**
+Authenticity rests on TLS; SmartScreen warns on install until download
+reputation accumulates. The installer stays per-user — NSIS with
+`RequestExecutionLevel user`, installing into `%LOCALAPPDATA%\ChillHub` — so
+that it never has to ask for administrator rights on a machine it is only
+borrowing.
 
-## Стек
+## Stack
 
-**Клиент** — C# WPF на .NET 8. Публикуется self-contained, поэтому рантайма на
-машине пользователя не требуется.
+**Client** — C# WPF on .NET 8, published self-contained, so no runtime has to
+be present on the user's machine. Distributed as a single NSIS installer built
+in CI.
 
-**Сервер** — Go, два независимых бинаря: публичный API (игры, версии,
-манифесты, новости) и админский (приём ZIP-сборок, реестр игр, новости,
-техработы, метрики, обратная связь). Оба слушают только loopback.
+**Server** — Go, two independent binaries: the public API (games, versions,
+manifests, news) and the admin one (ZIP build uploads, game registry, news,
+maintenance mode, metrics, feedback). Both listen on loopback only. The admin
+UI is vanilla JS with no bundler.
 
-**Админка** — vanilla JS, без сборщика.
+**Production** — systemd units behind the system nginx, atomic releases with
+rollback via [deploy-kit](https://github.com/tr0llex/deploy-kit). One host
+serves everything: `/` the landing page, `/api/*` the public API,
+`/admin/api/*` and `/admin/ui/*` the admin side, `/content/*` and
+`/downloads/*` the builds straight from nginx.
 
-**Прод** — systemd за системным nginx, атомарные релизы с откатом через
-[deploy-kit](https://github.com/tr0llex/deploy-kit).
+## Quick start
 
-## Из чего состоит
-
-| Каталог | Что делает |
-|---|---|
-| `launcher/` | Клиент: обновления, запуск игр, новости, проверка целостности |
-| `updater/` | Отдельный exe самообновления и правила сохранения пользовательских файлов |
-| `server/cmd/api` | Публичный API |
-| `server/cmd/admin` | Админ-API: приём сборок, активация `latest`, реестр, новости, техработы |
-| `server/admin_ui/` | Веб-морда админки |
-| `landing/` | Лендинг на корне домена |
-| `content/` | Манифесты, файлы версий, новости, состояние техработ |
-
-Один хост раздаёт всё: `/` — лендинг, `/api/*` — публичный API, `/admin/api/*`
-и `/admin/ui/*` — админка, `/content/*` и `/downloads/*` — сборки, их отдаёт
-nginx напрямую. Наружу смотрит только nginx.
-
-![Админка: загрузка сборки лаунчера](docs/images/admin-builds.png)
-
-## Установщик
-
-Один exe на 57 МБ: NSIS, внутри self-contained сборка со всем рантаймом .NET.
-Ставится в профиль пользователя (`%LOCALAPPDATA%\ChillHub`) за несколько секунд
-и **не просит прав администратора**. WebView2 берётся из системы — в Windows 11 он есть всегда, а
-на редких машинах без него bootstrapper дотягивает рантайм сам.
-
-Пользовательские данные лежат отдельно от каталога установки, в
-`%APPDATA%\ChillHub`, — иначе конфиг попадал бы в пакет обновления и давал
-бесконечный цикл самообновления.
-
-Подписи нет ни у манифестов, ни у исполняемых файлов: это осознанное решение.
-Подлинность раздачи держится на TLS, а SmartScreen предупреждает при установке,
-пока не наберётся репутация загрузок.
-
-## Тесты
-
-504 теста на клиенте (xUnit) и 363 на сервере (`go test -race`, покрытие 78%).
-Красный прогон останавливает выкатку.
-
-Отдельно закреплён стык двух языков: сервер считает хеши библиотекой Go, клиент
-— библиотекой C#, и разъехавшиеся реализации не дали бы никакой ошибки — просто
-каждый установленный лаунчер решил бы, что не совпадает ни один файл, и
-перекачал бы игры целиком. Поэтому один и тот же эталонный вектор проверяется с
-обеих сторон: `server/internal/adminapi/builds/hashvector_test.go` и
-`launcher/tests/ChillHub.Tests/HashVectorTests.cs`.
-
-Второй такой стык — манифест лаунчера против preserve-правил апдейтера: их
-пересечение даёт бесконечный цикл самообновления. Проверка —
-`dotnet run --project updater/tests/ManifestPreserveCheck`.
-
-## Разработка
-
-Нужны Go 1.26+, .NET 8 SDK и PowerShell 7.
+Requires Go 1.26+, the .NET 8 SDK and PowerShell 7.
 
 ```powershell
-scripts\run-dev.ps1     # api + admin + клиент, три окна
-scripts\run-admin.ps1   # только админка
-scripts\run-client.ps1  # только клиент
+scripts\run-dev.ps1     # api + admin + client, three windows
+scripts\run-admin.ps1   # admin only
+scripts\run-client.ps1  # client only
 ```
 
-Перед пушем — то же, что гоняет CI:
+Before pushing, the same gates CI runs:
 
 ```powershell
 cd server; go vet ./...; go test ./... -race
 cd ..\launcher; dotnet test
 ```
 
-## Выкатка
+## Layout
 
-Четыре цели катятся по отдельности: лендинг, публичный API, админ-сервер и
-морда админки. Установщик собирается только в CI и приезжает в GitHub Release.
+| Path | Purpose |
+|---|---|
+| `launcher/` | Client: updates, launching games, news, integrity checks |
+| `updater/` | Self-update executable and the rules for preserving user files |
+| `server/cmd/api` | Public API |
+| `server/cmd/admin` | Admin API: build uploads, `latest` promotion, registry, news, maintenance |
+| `server/admin_ui/` | Admin web UI |
+| `landing/` | Landing page at the domain root |
+| `content/` | Manifests, version files, news, maintenance state |
+| `scripts/` | Dev runners, installer build, NSIS script |
+| `.deploy-kit/` | Deployment target definitions |
+| `docs/` | [Specification](docs/spec.md), [configuration](docs/configuration.md), [security policy](docs/SECURITY.md) |
+
+## Tests
+
+504 tests on the client (xUnit) and 377 on the server (`go test -race`, 80%
+statement coverage). A red run stops the deployment.
+
+CI gates more than the test suites: golangci-lint and `go vet` on both Linux
+and Windows, a cross-compile to linux/arm64 as on production, `dotnet format
+--verify-no-changes`, ESLint, Stylelint and HTMLHint for the landing page and
+admin UI, `node --test` for the admin UI's escaping helpers, and govulncheck
+plus a vulnerable-NuGet scan.
+
+Two cross-language seams get their own checks: the hash reference vector
+(`server/internal/adminapi/builds/hashvector_test.go` and
+`launcher/tests/ChillHub.Tests/HashVectorTests.cs`), and the launcher manifest
+against the updater's preserve rules
+(`dotnet run --project updater/tests/ManifestPreserveCheck`).
+
+## Deployment
+
+Four targets ship independently — landing page, public API, admin server, admin
+UI — through [deploy-kit](https://github.com/tr0llex/deploy-kit). The installer
+is built in CI only and attached to a GitHub Release.
 
 ```bash
-dk deploy chillhub-api      # только публичный API
-dk deploy --all --dry-run   # посмотреть план, ничего не трогая
+dk                          # what is on production right now
+dk deploy chillhub-api      # public API only
+dk deploy --all --dry-run   # show the plan, touch nothing
 dk rollback chillhub-admin
 ```
 
-Из CI: Actions → Release → Run workflow, там же выбор цели. Тег `v*` катит всё
-и собирает установщик в GitHub Release.
+From CI: Actions → Release → Run workflow, with the target selectable there.
+`all` ships the four targets above but does NOT build the installer — that
+needs either a separate run with `target=installer` or a `v*` tag, which does
+both.
 
-Пароль админки хранится хешем в systemd drop-in на сервере и задаётся отдельно
-от выкатки: он меняется редко, а провозить секрет через каждый деплой — лишний
-повод его потерять. Контент (сборки, новости, обращения) снимает
-`deploy/backup-content.sh` по systemd-таймеру — этих данных нет больше нигде.
+The admin password is stored as a hash in a systemd drop-in and set separately
+from deployment: it changes rarely, and carrying a secret through every deploy
+is one more chance to lose it. Content — builds, news, feedback — is
+snapshotted by `deploy/backup-content.sh` on a systemd timer; that data exists
+nowhere else.
 
-## Часть samoy.love
+## Part of samoy.love
 
-Домен читается как фамилия владельца — Самойлов; остальное вышло само собой.
-Все проекты живут на одном хосте и катятся одним пайплайном.
+The domain reads as the owner's surname, Samoylov. Every project below lives on
+one host and ships through one pipeline.
 
-| Проект | Что это |
+| Project | What it is |
 |---|---|
-| [launcher.samoy.love](https://launcher.samoy.love) | Этот лаунчер |
-| [snakes.samoy.love](https://snakes.samoy.love) | Браузерная игра в захват территории — [tr0llex/snakes](https://github.com/tr0llex/snakes) |
-| [metro.samoy.love](https://metro.samoy.love) | Офлайн-PWA со схемой московского метро — [tr0llex/metro-map](https://github.com/tr0llex/metro-map) |
-| [status.samoy.love](https://status.samoy.love) | Статус сервисов: агент на хосте, бот в Telegram и внешний сторож — [tr0llex/status.samoy.love](https://github.com/tr0llex/status.samoy.love) |
-| [samoy.love](https://samoy.love) | Личная страница — [tr0llex/samoy.love](https://github.com/tr0llex/samoy.love) |
-| — | [metrics.samoy.love](https://github.com/tr0llex/metrics.samoy.love): туда собираются продуктовые метрики лаунчера — установки, дифф против полной загрузки, расхождения хешей |
-| — | [deploy-kit](https://github.com/tr0llex/deploy-kit): общий релизный пайплайн для всех перечисленных |
+| [launcher.samoy.love](https://launcher.samoy.love) | This launcher — [tr0llex/chillhub](https://github.com/tr0llex/chillhub) |
+| [snakes.samoy.love](https://snakes.samoy.love) | Browser territory-capture game — [tr0llex/snakes](https://github.com/tr0llex/snakes) |
+| [metro.samoy.love](https://metro.samoy.love) | Offline PWA of the Moscow metro map — [tr0llex/metro-map](https://github.com/tr0llex/metro-map) |
+| [status.samoy.love](https://status.samoy.love) | Service status: an on-host agent, a Telegram bot and an external watchdog — [tr0llex/status.samoy.love](https://github.com/tr0llex/status.samoy.love) |
+| [samoy.love](https://samoy.love) | Personal site — [tr0llex/samoy.love](https://github.com/tr0llex/samoy.love) |
+| Monitoring | [tr0llex/metrics.samoy.love](https://github.com/tr0llex/metrics.samoy.love) — monitoring for the whole ecosystem; both ChillHub binaries expose a Prometheus endpoint on loopback for it to scrape |
+| Pipeline | [tr0llex/deploy-kit](https://github.com/tr0llex/deploy-kit) — the shared release pipeline behind all of the above |
 
-## Дальше
+## Contacts and license
 
-Спецификация API, админки и клиента — [docs/spec.md](docs/spec.md),
-переменные окружения сервисов — [docs/configuration.md](docs/configuration.md).
-Задачи и планы — в [issues](https://github.com/tr0llex/chillhub/issues).
+Alexey Samoylov — [alex@samoy.love](mailto:alex@samoy.love),
+[t.me/tr0llex](https://t.me/tr0llex). Security reports:
+[docs/SECURITY.md](docs/SECURITY.md). Tasks and plans live in
+[issues](https://github.com/tr0llex/chillhub/issues).
 
-Связаться: [alex@samoy.love](mailto:alex@samoy.love).
+MIT, see [LICENSE](LICENSE).
