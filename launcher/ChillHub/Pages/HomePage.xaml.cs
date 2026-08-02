@@ -1525,14 +1525,19 @@ namespace ChillHub.Pages {
             bool isInstall,
             string result,
             System.Diagnostics.Stopwatch watch,
-            long bytes) {
+            long bytes,
+            long filesDownloaded = 0,
+            long filesTotal = 0,
+            long fullBytes = 0) {
             try {
                 var ms = (long)watch.Elapsed.TotalMilliseconds;
                 if (isInstall) {
-                    Core.Metrics.MetricsService.GameInstall(gameId, version, result, ms, bytes);
+                    Core.Metrics.MetricsService.GameInstall(
+                        gameId, version, result, ms, bytes, filesDownloaded, filesTotal, fullBytes);
                 }
                 else {
-                    Core.Metrics.MetricsService.GameUpdate(gameId, version, result, ms, bytes);
+                    Core.Metrics.MetricsService.GameUpdate(
+                        gameId, version, result, ms, bytes, filesDownloaded, filesTotal, fullBytes);
                 }
             }
             catch (Exception ex) {
@@ -1549,6 +1554,14 @@ namespace ChillHub.Pages {
             var metricsIsInstall = false;
             string? metricsVersion = null;
             long metricsBytes = 0;
+
+            // Экономия трафика видна только парой чисел: сколько скачали и
+            // сколько весила бы сборка целиком. Держим их рядом со счётчиком
+            // байт, чтобы отчёт об отмене и об ошибке уходил с теми же цифрами,
+            // что и отчёт об успехе.
+            long metricsFiles = 0;
+            long metricsFilesTotal = 0;
+            long metricsFullBytes = 0;
             try {
                 if (this.GetSelectedGameId() is not string gid || string.IsNullOrWhiteSpace(gid)) {
                     this.StatusText.Text = "Не выбрана игра";
@@ -1728,10 +1741,13 @@ namespace ChillHub.Pages {
                 });
 
                 metricsBytes = plan.TotalDownloadBytes;
+                metricsFiles = plan.TotalFilesToDownload;
+                metricsFilesTotal = plan.TotalManifestFiles;
+                metricsFullBytes = plan.TotalManifestBytes;
                 await this.sync.ExecuteAsync(plan, prog, token);
                 Core.Logging.Logger.Info($"StartUpdateAsync execute done gid={gid} version={version}");
 
-                this.ReportSyncMetric(gid, metricsVersion, metricsIsInstall, "ok", metricsWatch, metricsBytes);
+                this.ReportSyncMetric(gid, metricsVersion, metricsIsInstall, "ok", metricsWatch, metricsBytes, metricsFiles, metricsFilesTotal, metricsFullBytes);
 
                 this.StatusText.Text = "Готово";
                 this.SpeedEtaText.Text = string.Empty;
@@ -1811,7 +1827,7 @@ namespace ChillHub.Pages {
                 this.SpeedEtaText.Text = string.Empty;
                 this.UpdateProgress.IsIndeterminate = false;
                 this.UpdateProgress.Value = 0;
-                this.ReportSyncMetric(currentGid, metricsVersion, metricsIsInstall, "cancel", metricsWatch, metricsBytes);
+                this.ReportSyncMetric(currentGid, metricsVersion, metricsIsInstall, "cancel", metricsWatch, metricsBytes, metricsFiles, metricsFilesTotal, metricsFullBytes);
             }
             catch (ManifestValidationException ex) {
                 // Манифест отклонён проверкой структуры — это не сетевой сбой.
@@ -1819,7 +1835,7 @@ namespace ChillHub.Pages {
                 this.hasUpdateError = true;
                 this.updateErrorGameId = currentGid;
                 this.ShowUserError(ManifestValidator.UserMessage, ex, "HomePage.StartUpdateAsync.ManifestValidation");
-                this.ReportSyncMetric(currentGid, metricsVersion, metricsIsInstall, "fail", metricsWatch, metricsBytes);
+                this.ReportSyncMetric(currentGid, metricsVersion, metricsIsInstall, "fail", metricsWatch, metricsBytes, metricsFiles, metricsFilesTotal, metricsFullBytes);
                 Core.Metrics.MetricsService.Error("manifest_invalid", currentGid);
             }
             catch (Exception ex) {
@@ -1829,7 +1845,7 @@ namespace ChillHub.Pages {
                     ? "Не удалось записать файлы игры. Проверьте свободное место и права доступа."
                     : "Не удалось завершить обновление. Попробуйте ещё раз.";
                 this.ShowUserError(userMessage, ex, "HomePage.StartUpdateAsync");
-                this.ReportSyncMetric(currentGid, metricsVersion, metricsIsInstall, "fail", metricsWatch, metricsBytes);
+                this.ReportSyncMetric(currentGid, metricsVersion, metricsIsInstall, "fail", metricsWatch, metricsBytes, metricsFiles, metricsFilesTotal, metricsFullBytes);
 
                 // Код классифицирует сбой по типу исключения. Текст исключения НЕ отправляем:
                 // в нём регулярно встречаются пути с именем пользователя.

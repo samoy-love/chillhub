@@ -242,6 +242,13 @@ namespace ChillHub.Core.Sync {
             catch {
             }
 
+            // Проверку целостности запускает сам пользователь, и запускает её
+            // тогда, когда игра уже ведёт себя странно. Частота этих запусков и
+            // доля неудачных — единственный сигнал о порче файлов, который
+            // приходит раньше жалобы в обратную связь.
+            ChillHub.Core.Metrics.MetricsService.IntegrityCheck(
+                gameId, version, report.IsOk, totalFiles, plan.HashMismatches);
+
             return report;
         }
 

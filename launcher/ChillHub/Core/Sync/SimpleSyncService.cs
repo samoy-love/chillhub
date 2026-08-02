@@ -138,11 +138,19 @@ namespace ChillHub.Core.Sync {
             long checkedBytes = 0;
             var totalToCheck = manifestFiles.Count;
             long totalBytesToCheck = 0;
-            if (options.Progress != null) {
-                foreach (var kv in manifestFiles) {
-                    totalBytesToCheck += kv.Value.Size;
-                }
 
+            // Считаем полный вес сборки ВСЕГДА, а не только при подписке на
+            // прогресс: это же число уходит в метрику экономии трафика, и
+            // молча терять его на тихих сценариях (самообновление, проверка
+            // целостности) нельзя.
+            foreach (var kv in manifestFiles) {
+                totalBytesToCheck += kv.Value.Size;
+            }
+
+            plan.TotalManifestBytes = totalBytesToCheck;
+            plan.TotalManifestFiles = totalToCheck;
+
+            if (options.Progress != null) {
                 options.Progress.Report(new SyncProgress {
                     Stage = "Checking",
                     FilesDownloaded = 0,
@@ -194,6 +202,11 @@ namespace ChillHub.Core.Sync {
                                 else {
                                     needDownload = true;
                                     reason = $"hash_mismatch shaOk={shaOk} b3Ok={b3Ok}";
+
+                                    // Файл на месте и нужного размера, а хеш другой:
+                                    // это порча, а не «ещё не скачали». Считаем
+                                    // отдельно от остальных причин загрузки.
+                                    plan.HashMismatches++;
                                 }
                             }
                         }

@@ -90,8 +90,15 @@ namespace ChillHub.Core.Metrics {
         /// <param name="result">ok, fail или cancel.</param>
         /// <param name="durationMs">Длительность в миллисекундах.</param>
         /// <param name="bytes">Скачано байт.</param>
-        public static void GameInstall(string? gameId, string? version, string result, long durationMs, long bytes)
-            => Report("game_install", gameId, version, result, durationMs, bytes);
+        /// <param name="filesDownloaded">Скачано файлов.</param>
+        /// <param name="filesTotal">Файлов в сборке целиком.</param>
+        /// <param name="fullBytes">Вес сборки целиком.</param>
+        public static void GameInstall(
+            string? gameId, string? version, string result, long durationMs, long bytes,
+            long filesDownloaded = 0, long filesTotal = 0, long fullBytes = 0)
+            => Report(
+                "game_install", gameId, version, result, durationMs, bytes,
+                filesDownloaded: filesDownloaded, filesTotal: filesTotal, fullBytes: fullBytes);
 
         /// <summary>
         /// Обновление уже установленной игры.
@@ -101,8 +108,35 @@ namespace ChillHub.Core.Metrics {
         /// <param name="result">ok, fail или cancel.</param>
         /// <param name="durationMs">Длительность в миллисекундах.</param>
         /// <param name="bytes">Скачано байт.</param>
-        public static void GameUpdate(string? gameId, string? version, string result, long durationMs, long bytes)
-            => Report("game_update", gameId, version, result, durationMs, bytes);
+        /// <param name="filesDownloaded">Скачано файлов.</param>
+        /// <param name="filesTotal">Файлов в сборке целиком.</param>
+        /// <param name="fullBytes">Вес сборки целиком.</param>
+        /// <remarks>
+        /// Пары «скачано / всего» отправляются именно здесь, а не считаются на
+        /// сервере: сервер видит только запросы за файлами и не знает, сколько
+        /// файлов у пользователя УЖЕ совпало с манифестом — а вся экономия
+        /// лаунчера состоит ровно из них.
+        /// </remarks>
+        public static void GameUpdate(
+            string? gameId, string? version, string result, long durationMs, long bytes,
+            long filesDownloaded = 0, long filesTotal = 0, long fullBytes = 0)
+            => Report(
+                "game_update", gameId, version, result, durationMs, bytes,
+                filesDownloaded: filesDownloaded, filesTotal: filesTotal, fullBytes: fullBytes);
+
+        /// <summary>
+        /// Проверка целостности установленной игры.
+        /// </summary>
+        /// <param name="gameId">Идентификатор игры.</param>
+        /// <param name="version">Проверяемая версия.</param>
+        /// <param name="ok">Все файлы на месте и совпали.</param>
+        /// <param name="filesTotal">Файлов в сборке.</param>
+        /// <param name="hashMismatches">Файлов с разошедшимся хешем.</param>
+        public static void IntegrityCheck(
+            string? gameId, string? version, bool ok, long filesTotal, long hashMismatches)
+            => Report(
+                "integrity_check", gameId, version, ok ? "ok" : "fail",
+                filesTotal: filesTotal, hashMismatches: hashMismatches);
 
         /// <summary>
         /// Запуск игры.
@@ -131,6 +165,10 @@ namespace ChillHub.Core.Metrics {
         /// <param name="durationMs">Длительность в миллисекундах.</param>
         /// <param name="bytes">Скачано байт.</param>
         /// <param name="errorCode">Код ошибки.</param>
+        /// <param name="filesDownloaded">Скачано файлов.</param>
+        /// <param name="filesTotal">Файлов в сборке целиком.</param>
+        /// <param name="fullBytes">Вес сборки целиком.</param>
+        /// <param name="hashMismatches">Файлов с разошедшимся хешем.</param>
         public static void Report(
             string kind,
             string? gameId = null,
@@ -138,7 +176,11 @@ namespace ChillHub.Core.Metrics {
             string? result = null,
             long durationMs = 0,
             long bytes = 0,
-            string? errorCode = null) {
+            string? errorCode = null,
+            long filesDownloaded = 0,
+            long filesTotal = 0,
+            long fullBytes = 0,
+            long hashMismatches = 0) {
             if (!Enabled) {
                 return;
             }
@@ -165,6 +207,10 @@ namespace ChillHub.Core.Metrics {
                     durationMs,
                     bytes,
                     errorCode = errorCode ?? string.Empty,
+                    filesDownloaded,
+                    filesTotal,
+                    fullBytes,
+                    hashMismatches,
                 });
             }
             catch {

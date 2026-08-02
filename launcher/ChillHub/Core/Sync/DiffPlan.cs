@@ -29,6 +29,32 @@ namespace ChillHub.Core.Sync {
 
         public int TotalFilesToDownload { get; set; }
 
+        /// <summary>
+        /// Gets or sets полный вес сборки по манифесту — сколько весила бы та же
+        /// операция, если качать всё целиком.
+        /// <para>
+        /// Ради этого числа лаунчер и существует: <see cref="TotalDownloadBytes"/>
+        /// сам по себе говорит «скачали 40 МБ», и только рядом с полным весом
+        /// видно, что вместо 12 ГБ. Заполняется всегда, даже без подписки на
+        /// прогресс, — иначе метрика зависела бы от того, открыт ли экран.
+        /// </para>
+        /// </summary>
+        public long TotalManifestBytes { get; set; }
+
+        /// <summary>Gets or sets число файлов в сборке целиком.</summary>
+        public int TotalManifestFiles { get; set; }
+
+        /// <summary>
+        /// Gets or sets сколько файлов не сошлись по хешу с манифестом.
+        /// <para>
+        /// Отличается от «файл отсутствует» и от «размер не тот»: расхождение
+        /// хеша при совпадающем размере — это либо порча на диске, либо сборка,
+        /// собранная не из того, что лежит в манифесте. И то и другое стоит
+        /// увидеть на графике раньше, чем об этом напишут в обратную связь.
+        /// </para>
+        /// </summary>
+        public int HashMismatches { get; set; }
+
         public List<FileTask> Downloads { get; set; } = new();
 
         public List<string> ToDelete { get; set; } = new();
