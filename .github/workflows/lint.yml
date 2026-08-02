@@ -242,11 +242,18 @@ jobs:
       # не требуется — списку пакетов хватает восстановления.
       - name: Уязвимые NuGet-пакеты
         shell: bash
+        # Через ПЕРЕМЕННУЮ ОКРУЖЕНИЯ, а не через -p: у `dotnet restore`.
+        # MSBuild читает переменные окружения как глобальные свойства, и это
+        # единственный способ донести флаг до `dotnet list package` — он
+        # переоценивает проект заново и своих -p: не принимает, поэтому флага
+        # на restore не хватало.
+        env:
+          EnableWindowsTargeting: 'true'
         run: |
           set -o pipefail
           for proj in launcher/ChillHub/ChillHub.csproj launcher/tests/ChillHub.Tests/ChillHub.Tests.csproj; do
             echo "== $proj"
-            dotnet restore "$proj" -p:EnableWindowsTargeting=true >/dev/null
+            dotnet restore "$proj" >/dev/null
             out=$(dotnet list "$proj" package --vulnerable --include-transitive 2>&1 | tee /dev/stderr)
             if echo "$out" | grep -qiE "has the following vulnerable"; then
               echo "::error::найдены уязвимые NuGet-пакеты в $proj"
