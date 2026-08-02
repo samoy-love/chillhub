@@ -151,6 +151,7 @@ there. Every project lives on one host and ships through one pipeline.
 | [metro.samoy.love](https://metro.samoy.love) | Offline PWA of the Moscow metro map — [tr0llex/metro-map](https://github.com/tr0llex/metro-map) |
 | [status.samoy.love](https://status.samoy.love) | Service status: an on-host agent, a Telegram bot and an external watchdog — [tr0llex/status.samoy.love](https://github.com/tr0llex/status.samoy.love) |
 | [samoy.love](https://samoy.love) | Personal site — [tr0llex/samoy.love](https://github.com/tr0llex/samoy.love) |
+| — | [metrics.samoy.love](https://github.com/tr0llex/metrics.samoy.love): where the launcher's product metrics go — installs, diff vs full download, hash mismatches |
 | — | [deploy-kit](https://github.com/tr0llex/deploy-kit): the shared release pipeline behind all of the above |
 
 ## Further reading
