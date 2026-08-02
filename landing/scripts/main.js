@@ -1066,4 +1066,28 @@
   // (removed) Gallery-specific behaviors
 
   // Removed randomization: curated reels stay fixed per column
+
+  /* Счётчик нажатий «Скачать».
+     Сама загрузка /downloads/ChillHub-Setup.exe видна серверу и считается по
+     журналу nginx. А кнопки в шапке и на первом экране ведут якорем на
+     #download — до сервера не доходит ничего, и намерение остаётся невидимым.
+     Разница между двумя числами и есть отвал на пути к загрузке.
+
+     Что уходит: пустой POST на /e/download_click. Ни тела, ни параметров, ни
+     cookie, ни идентификатора; в журнале нет ни IP, ни User-Agent. */
+  (function(){
+    document.addEventListener('click', (e)=>{
+      const el = e.target && e.target.closest ? e.target.closest('a[href="#download"]') : null;
+      if(!el) return;
+      try{
+        if(typeof navigator.sendBeacon === 'function'){
+          navigator.sendBeacon('/e/download_click', new Blob([], { type: 'text/plain' }));
+        }else if(typeof fetch === 'function'){
+          fetch('/e/download_click', { method: 'POST', keepalive: true }).catch(()=>{});
+        }
+      }catch{
+        // Блокировщик, офлайн — счётчик не важнее кнопки.
+      }
+    });
+  })();
 })();
