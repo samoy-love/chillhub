@@ -71,6 +71,11 @@ jobs:
     if: inputs.target == 'installer' || startsWith(github.ref, 'refs/tags/')
     uses: tr0llex/deploy-kit/.github/workflows/desktop-artifact.yml@main
     with:
-      build: ./scripts/build-installer.ps1 -Configuration Release -AppVersion $env:DEPLOY_VERSION
+      # Ведущая `v` из тега СНИМАЕТСЯ. Тег называется v1.2.3, а версия уезжает
+      # в launcher.version и сравнивается с manifests/launcher/latest.json
+      # ПОСИМВОЛЬНО: «v1.2.3» против «1.2.3» — это вечный цикл обновления у
+      # каждого, кто поставит такой билд. Тегов в репозитории ещё не было,
+      # поэтому ловушка ни разу не срабатывала.
+      build: ./scripts/build-installer.ps1 -Configuration Release -AppVersion ($env:DEPLOY_VERSION -replace '^v','')
       artifact: scripts/generated_downloads/ChillHub-Setup.exe
     secrets: inherit
