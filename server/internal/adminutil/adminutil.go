@@ -10,6 +10,7 @@ package adminutil
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -209,19 +210,124 @@ func NewsSlugPath(base, slug string) (string, error) {
 }
 
 // SanitizeFilename keeps only safe characters for filenames.
+//
+// The result is stored in the asset tree that nginx serves under /assets/, so it
+// must stay URL-safe ASCII. Replacing every non-ASCII rune with '_' did that but
+// mapped every name of the same length onto the same file: "скриншот.png" and
+// "картинка.png" both became "________.png", and the second upload silently
+// overwrote the first — a published post then showed the wrong picture with no
+// error anywhere.
+//
+// Cyrillic is therefore transliterated so the name stays readable, and any name
+// that contained non-ASCII at all also gets a short hash of the original
+// appended. The hash is what actually guarantees distinctness: transliteration
+// is not injective ("е" and "э" both become "e"), and scripts with no table
+// entry still collapse to '_'. It is derived from the input, not random, so
+// re-uploading the same file still replaces its own asset instead of piling up
+// copies.
+//
+// Pure ASCII input is returned exactly as before, so names of already stored
+// assets — including the "________.png" ones — are unaffected.
 func SanitizeFilename(name string) string {
-	safe := make([]rune, 0, len(name))
+	safe, hadNonASCII := sanitizeToASCII(name)
+	if !hadNonASCII {
+		if safe == "" {
+			return "file"
+		}
+		return safe
+	}
+	stem, ext := splitFileExt(safe)
+	// A stem that starts with '.' or '-' is a hidden file or a flag-looking
+	// argument; both are reachable here because the leading rune was dropped
+	// ("ьскриншот.png").
+	stem = strings.TrimLeft(stem, ".-")
+	// Nothing survived transliteration ("文件.png", "ъь.png"): the hash alone
+	// would be a usable but anonymous name, so give it the stem an empty name
+	// gets.
+	if strings.Trim(stem, "_") == "" {
+		stem = "file"
+	}
+	return stem + "-" + shortNameHash(name) + ext
+}
+
+// sanitizeToASCII maps name onto the safe character set and reports whether it
+// held any non-ASCII rune (which is what makes the mapping lossy).
+func sanitizeToASCII(name string) (string, bool) {
+	var b strings.Builder
+	b.Grow(len(name))
+	hadNonASCII := false
 	for _, r := range name {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_' {
-			safe = append(safe, r)
-		} else {
-			safe = append(safe, '_')
+		if r < 0x80 {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_' {
+				b.WriteRune(r)
+			} else {
+				b.WriteByte('_')
+			}
+			continue
+		}
+		hadNonASCII = true
+		if s, ok := translitRune(r); ok {
+			b.WriteString(s) // may be empty: "ъ" and "ь" have no Latin equivalent
+			continue
+		}
+		b.WriteByte('_')
+	}
+	return b.String(), hadNonASCII
+}
+
+// cyrillicTranslit maps lowercase Cyrillic letters onto ASCII. Uppercase is
+// derived from it by translitRune, so only one row per letter is maintained.
+var cyrillicTranslit = map[rune]string{
+	'а': "a", 'б': "b", 'в': "v", 'г': "g", 'д': "d", 'е': "e", 'ё': "yo",
+	'ж': "zh", 'з': "z", 'и': "i", 'й': "j", 'к': "k", 'л': "l", 'м': "m",
+	'н': "n", 'о': "o", 'п': "p", 'р': "r", 'с': "s", 'т': "t", 'у': "u",
+	'ф': "f", 'х': "h", 'ц': "c", 'ч': "ch", 'ш': "sh", 'щ': "sch",
+	'ъ': "", 'ы': "y", 'ь': "", 'э': "e", 'ю': "yu", 'я': "ya",
+	// Ukrainian and Belarusian letters that are not in the Russian alphabet.
+	'і': "i", 'ї': "yi", 'є': "ye", 'ґ': "g", 'ў': "u",
+}
+
+// translitRune returns the ASCII spelling of a Cyrillic rune, keeping the case
+// of the first letter so that "Скриншот" stays "Skrinshot".
+func translitRune(r rune) (string, bool) {
+	if s, ok := cyrillicTranslit[r]; ok {
+		return s, true
+	}
+	lower := unicode.ToLower(r)
+	if lower == r {
+		return "", false
+	}
+	s, ok := cyrillicTranslit[lower]
+	if !ok || s == "" {
+		return s, ok
+	}
+	return strings.ToUpper(s[:1]) + s[1:], true
+}
+
+// splitFileExt splits an already sanitised name into its stem and a trailing
+// ".ext", so a disambiguating suffix lands before the extension rather than
+// after it — "file.png-a1b2c3d4" would be served as a nameless type.
+func splitFileExt(name string) (string, string) {
+	i := strings.LastIndexByte(name, '.')
+	if i < 0 || i == len(name)-1 {
+		return name, ""
+	}
+	ext := name[i+1:]
+	if len(ext) > 8 {
+		return name, ""
+	}
+	for _, r := range ext {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+			return name, ""
 		}
 	}
-	if len(safe) == 0 {
-		return "file"
-	}
-	return string(safe)
+	return name[:i], name[i:]
+}
+
+// shortNameHash returns 8 hex characters derived from the original name.
+func shortNameHash(name string) string {
+	sum := sha256.Sum256([]byte(name))
+	return hex.EncodeToString(sum[:4])
 }
 
 // SanitizeAssetPath normalizes a relative directory path inside the asset tree.
