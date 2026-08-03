@@ -17,6 +17,7 @@ name: CI
 #   stylelint                17.14.1
 #   stylelint-config-standard 40.0.0
 #   golangci-lint            v2.12.2
+#   govulncheck              v1.1.4
 #   Go toolchain             taken from server/go.mod (single source of truth)
 # ---------------------------------------------------------------------------
 
@@ -286,10 +287,17 @@ jobs:
       # версии, а ДОСТИЖИМОСТЬ уязвимого кода по графу вызовов. Уязвимость в
       # функции, которую проект не зовёт, не поднимает тревогу — поэтому его
       # находки стоит читать, а не привыкать к ним.
+      #
+      # Версия приколота, как и всё остальное в этом файле (см. шапку): @latest
+      # тянул в джоб с выкачанным репозиторием неприколотый бинарник и делал
+      # прогон невоспроизводимым — зелёный PR краснел от чужого релиза. База
+      # уязвимостей у govulncheck грузится с сервера и свежа независимо от
+      # версии инструмента, так что пин не устаревает по существу. Бампается
+      # обычным ревьюабельным однострочником.
       - name: govulncheck (Go)
         working-directory: server
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
           govulncheck ./...
 
       - uses: actions/setup-dotnet@v6
