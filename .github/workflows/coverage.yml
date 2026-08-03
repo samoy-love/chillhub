@@ -106,7 +106,7 @@ jobs:
     needs: launcher-build
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: coverage-launcher
           path: .
