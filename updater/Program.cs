@@ -263,7 +263,16 @@ internal static class Program {
                     var s = ManifestPath.Combine(src, srcRel);
                     var d = ManifestPath.Combine(dst, dstRel);
                     if (!File.Exists(s)) {
-                        log.Write($"diff src missing {srcRel}");
+                        // A1. Отсутствие файла в SRC — это не «нечего копировать», а сбой:
+                        // лаунчер включил файл в план, значит на диске обязана оказаться
+                        // новая версия. Раньше запись просто пропускалась, и прогон
+                        // доходил до маркера версии с копиями старых сборок на диске.
+                        // Дальше это уже не чинится: предохранитель `remote == local`
+                        // в лаунчере выходит из проверки ДО сверки хешей, и установка
+                        // считается исправной навсегда. Считаем ошибкой копирования —
+                        // прогон откатывается, маркер не пишется, обновление предложится снова.
+                        copyErrors++;
+                        log.Write($"copy FAILED: файла нет в пакете обновления (diff src missing) {srcRel}");
                         continue;
                     }
                     copied.Add(srcRel);
@@ -480,7 +489,16 @@ internal static class Program {
                 var relDst = StripOf(key, strip);
                 var sp = ManifestPath.Combine(src, relSrc);
                 var dp = ManifestPath.Combine(dst, relDst);
-                if (!File.Exists(sp)) { missS++; log.Write($"hash: SRC missing {relSrc}"); continue; }
+                // Источник был на месте в момент копирования (иначе запись не попала бы
+                // в `copied`), а теперь его нет — файл увели из-под ног прямо во время
+                // прогона. Сверить содержимое не с чем, значит «в порядке» утверждать
+                // нельзя: непроверенное — это ошибка, а не пустая строка в журнале.
+                if (!File.Exists(sp)) {
+                    missS++;
+                    errors++;
+                    log.Write($"hash ERROR {relSrc}: файл-источник исчез во время обновления — содержимое НЕ сравнивалось");
+                    continue;
+                }
 
                 // Нечитаемый ИСТОЧНИК — это не расхождение. Раньше пустой хеш источника
                 // молча проваливался в общую ветку и объявлял «содержимое не совпадает»,
