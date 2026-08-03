@@ -152,8 +152,9 @@ type Event struct {
 
 // Handlers serves the metrics endpoints for one content root.
 type Handlers struct {
-	root string
-	mu   sync.Mutex
+	root  string
+	games *gameRegistry
+	mu    sync.Mutex
 	// CurrentUser resolves the acting admin for audit log lines. It may be nil.
 	CurrentUser func(*http.Request) string
 	// Prom mirrors accepted events into Prometheus counters. It may be nil (the
@@ -165,7 +166,9 @@ type Handlers struct {
 }
 
 // New returns handlers rooted at the given content directory.
-func New(root string) *Handlers { return &Handlers{root: root} }
+func New(root string) *Handlers {
+	return &Handlers{root: root, games: newGameRegistry(root)}
+}
 
 func (h *Handlers) maxBytes() int64 {
 	if h.MaxBytes > 0 {
@@ -249,6 +252,17 @@ func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
 	if res != "" && !results[res] {
 		res = ""
 	}
+	// An event about a game that does not exist is not data about anything, and
+	// it is rejected rather than stored with the gameId blanked: the same
+	// argument as for an unknown event kind above. A client naming a game the
+	// server has never heard of is broken or hostile, and either way its counts
+	// should not land in the totals.
+	gameID := clamp(in.GameID, maxGameID)
+	if !h.gameIDOK(gameID) {
+		h.Prom.Reject("unknown_game")
+		http.Error(w, "unknown game", http.StatusBadRequest)
+		return
+	}
 	in.DurationMs = clampInt64(in.DurationMs, maxDurationMs)
 	in.Bytes = clampInt64(in.Bytes, maxEventBytes)
 	in.FullBytes = clampInt64(in.FullBytes, maxEventBytes)
@@ -263,7 +277,7 @@ func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
 		Event:      kind,
 		AppVersion: clamp(in.AppVersion, maxVersion),
 		OS:         clamp(in.OS, maxOS),
-		GameID:     clamp(in.GameID, maxGameID),
+		GameID:     gameID,
 		Version:    clamp(in.Version, maxVersion),
 		Result:     res,
 		DurationMs: in.DurationMs,
@@ -429,6 +443,12 @@ func summaryPeriod(w http.ResponseWriter, r *http.Request) (from, to time.Time, 
 type summaryAgg struct {
 	from, to   time.Time
 	gameFilter string
+	// gameOK gates the gameId of a stored line, the same way Submit gates an
+	// incoming one. It is applied on read as well as on write because the file
+	// already holds the events that were accepted before the gate existed:
+	// hundreds of rows named after a random hex id. Filtering here retires them
+	// from the panel without rewriting or deleting a single stored line.
+	gameOK func(string) bool
 
 	out      Summary
 	days     map[string]*DayBucket
@@ -442,11 +462,15 @@ type summaryAgg struct {
 	updateMsSum, updateMsN   int64
 }
 
-func newSummaryAgg(from, to time.Time, gameFilter string) *summaryAgg {
+func newSummaryAgg(from, to time.Time, gameFilter string, gameOK func(string) bool) *summaryAgg {
+	if gameOK == nil {
+		gameOK = func(string) bool { return true }
+	}
 	return &summaryAgg{
 		from:       from,
 		to:         to,
 		gameFilter: gameFilter,
+		gameOK:     gameOK,
 		out: Summary{
 			From:      from.Format(time.RFC3339),
 			To:        to.Format(time.RFC3339),
@@ -476,6 +500,9 @@ func (a *summaryAgg) accept(ev Event) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	if a.gameFilter != "" && ev.GameID != a.gameFilter {
+		return time.Time{}, false
+	}
+	if !a.gameOK(ev.GameID) {
 		return time.Time{}, false
 	}
 	return t, true
@@ -642,7 +669,7 @@ func (h *Handlers) Summary(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	agg := newSummaryAgg(from, to, strings.TrimSpace(r.URL.Query().Get("gameId")))
+	agg := newSummaryAgg(from, to, strings.TrimSpace(r.URL.Query().Get("gameId")), h.gameIDOK)
 
 	// The scan deliberately runs WITHOUT h.mu.
 	//
