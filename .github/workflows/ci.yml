@@ -347,6 +347,14 @@ jobs:
       - name: Отправить покрытие клиента в Codecov
         # Приколот к SHA, а не к тегу: тег мутабелен, и у Codecov уже был
         # прецедент компрометации релиза.
+        #
+        # PYTHONUTF8 — не украшение: CLI Codecov на windows-раннере читает файлы
+        # в кодировке консоли и падает с UnicodeDecodeError ДО отправки. Из-за
+        # fail_ci_if_error: false ниже это было незаметно, и покрытие клиента не
+        # доезжало вовсе.
+        env:
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: utf-8
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           # Путь coverlet складывает в каталог со случайным GUID, поэтому

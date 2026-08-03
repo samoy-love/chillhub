@@ -96,6 +96,15 @@ jobs:
           Write-Host "отчёт: $($report.FullName)"
 
       - name: Отправить покрытие клиента в Codecov
+        # PYTHONUTF8 — не украшение. CLI Codecov собран PyInstaller-ом, и на
+        # windows-раннере он читает файлы в кодировке консоли (cp1252):
+        #   UnicodeDecodeError: 'charmap' codec can't decode byte 0x81
+        # Падение происходит ДО отправки, то есть покрытие клиента не доезжало
+        # никогда — в ci.yml тот же шаг стоял с fail_ci_if_error: false и
+        # ошибку глушил, поэтому промах был не виден.
+        env:
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: utf-8
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: launcher.cobertura.xml
