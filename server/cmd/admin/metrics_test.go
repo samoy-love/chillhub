@@ -68,7 +68,7 @@ func TestActivateAndMaintenanceAreCounted(t *testing.T) {
 
 	// Без авторизации оба вернут не-2xx — считаем именно это, метка result для
 	// того и существует.
-	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/activate?gameId=kitty&version=1.0.0", nil))
+	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/activate?gameId=metro&version=1.0.0", nil))
 	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/maintenance/set", strings.NewReader(`{"enabled":true}`)))
 	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/maintenance/clear", nil))
 
