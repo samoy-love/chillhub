@@ -1,0 +1,104 @@
+name: Покрытие main
+
+# ЗАЧЕМ ОТДЕЛЬНЫЙ ВОРКФЛОУ, А НЕ ШАГ В ci.yml.
+#
+# Codecov привязывает отчёт к КОММИТУ, а бейдж и «project»-статус считает по
+# ветке по умолчанию. Отчёты из ci.yml приходят на коммиты веток PR — для main
+# они не приезжают никогда, потому что ci.yml намеренно ходит только по
+# pull_request (см. комментарий к его триггеру).
+#
+# Пока этого файла не было, данные main стояли на месте: бейдж в README
+# показывал цифру того дня, когда CI последний раз запускался на push в main.
+# Бейдж покрытия, который не обновляется, — ровно то «украшение, которое
+# врёт», от которого его и заводили.
+#
+# Возвращать `push: branches: [main]` в ci.yml было бы дороже: там ещё восемь
+# джоб с линтерами, сборкой инсталлятора и проверкой уязвимостей — всё это уже
+# отработало на PR и на том же дереве. Здесь только то, что даёт цифру.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Мержи иногда идут подряд; предыдущий счёт не нужен, важен последний main.
+concurrency:
+  group: coverage-main
+  cancel-in-progress: true
+
+jobs:
+  # ДВА ФЛАГА, И ОБА ОБЯЗАНЫ ПРИЕХАТЬ.
+  #
+  # Сервер на Go и клиент на C# считаются раздельно (см. codecov.yml). Если на
+  # main приедет только один, на ветке по умолчанию окажется половина картины,
+  # и сравнение «PR против main» будет показывать разницу там, где её нет.
+  # Поэтому клиент здесь считается тоже — несмотря на то, что windows-раннер
+  # медленный: один прогон на мерж в main дешевле, чем врущий бейдж.
+  server:
+    name: Покрытие сервера в Codecov
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      # Та же команда, что и на PR: цифры обязаны считаться одинаково.
+      - name: Go test (-race)
+        working-directory: server
+        run: go test ./... -race -coverprofile=coverage.out -covermode=atomic
+
+      - name: Отправить покрытие в Codecov
+        # Приколот к SHA, а не к тегу: тег мутабелен, и у Codecov уже был
+        # прецедент компрометации релиза.
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: server/coverage.out
+          flags: server
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # Строго: молча не отправленный отчёт означает застывший бейдж — ровно
+          # ту поломку, ради которой файл и заведён.
+          fail_ci_if_error: true
+
+  launcher:
+    name: Покрытие клиента в Codecov
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+          cache: true
+          cache-dependency-path: |
+            **/*.csproj
+            **/packages.lock.json
+
+      - name: Tests (launcher)
+        working-directory: launcher/tests/ChillHub.Tests
+        run: dotnet test --nologo --collect:"XPlat Code Coverage"
+
+      - name: Найти отчёт
+        # coverlet кладёт отчёт в каталог со случайным GUID, а `files:` у
+        # codecov-action шаблоны НЕ разворачивает — он ищет путь буквально.
+        # Промах при этом молчалив: шаг завершается успехом, ничего не отправив.
+        # Поэтому GUID разбирается здесь, где шаблоны работают.
+        shell: pwsh
+        run: |
+          $report = Get-ChildItem -Recurse -Filter coverage.cobertura.xml `
+            -Path launcher/tests/ChillHub.Tests/TestResults | Select-Object -First 1
+          if (-not $report) { throw "coverlet не оставил coverage.cobertura.xml" }
+          Copy-Item $report.FullName launcher.cobertura.xml
+          Write-Host "отчёт: $($report.FullName)"
+
+      - name: Отправить покрытие клиента в Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: launcher.cobertura.xml
+          flags: launcher
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
