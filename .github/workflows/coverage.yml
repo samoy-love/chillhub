@@ -9,12 +9,10 @@ name: Покрытие main
 #
 # Пока этого файла не было, данные main стояли на месте: бейдж в README
 # показывал цифру того дня, когда CI последний раз запускался на push в main.
-# Бейдж покрытия, который не обновляется, — ровно то «украшение, которое
-# врёт», от которого его и заводили.
 #
-# Возвращать `push: branches: [main]` в ci.yml было бы дороже: там ещё восемь
-# джоб с линтерами, сборкой инсталлятора и проверкой уязвимостей — всё это уже
-# отработало на PR и на том же дереве. Здесь только то, что даёт цифру.
+# ТРИ СЛАГАЕМЫХ, А НЕ ОДНО. В репозитории три независимых набора кода: сервер
+# на Go, клиент на C# и браузерный JS (лендинг + морда админки). Пока считался
+# один сервер, бейдж отвечал не на тот вопрос, который ему задают.
 
 on:
   push:
@@ -29,13 +27,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ДВА ФЛАГА, И ОБА ОБЯЗАНЫ ПРИЕХАТЬ.
-  #
-  # Сервер на Go и клиент на C# считаются раздельно (см. codecov.yml). Если на
-  # main приедет только один, на ветке по умолчанию окажется половина картины,
-  # и сравнение «PR против main» будет показывать разницу там, где её нет.
-  # Поэтому клиент здесь считается тоже — несмотря на то, что windows-раннер
-  # медленный: один прогон на мерж в main дешевле, чем врущий бейдж.
   server:
     name: Покрытие сервера в Codecov
     runs-on: ubuntu-latest
@@ -63,8 +54,15 @@ jobs:
           # ту поломку, ради которой файл и заведён.
           fail_ci_if_error: true
 
-  launcher:
-    name: Покрытие клиента в Codecov
+  # Клиент считается на Windows, а ОТПРАВЛЯЕТСЯ с Linux — двумя джобами.
+  #
+  # CLI Codecov собран PyInstaller-ом и на windows-раннере падает ДО отправки:
+  #   UnicodeDecodeError: 'charmap' codec can't decode byte 0x81
+  # PYTHONUTF8 не помогает. Пока шаг стоял с fail_ci_if_error: false, падение
+  # никто не видел, и флаг launcher не приезжал НИ РАЗУ — при том, что бейдж
+  # покрытия в README стоял и читался как «покрытие проекта».
+  launcher-build:
+    name: Покрытие клиента (сборка отчёта)
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -85,8 +83,8 @@ jobs:
       - name: Найти отчёт
         # coverlet кладёт отчёт в каталог со случайным GUID, а `files:` у
         # codecov-action шаблоны НЕ разворачивает — он ищет путь буквально.
-        # Промах при этом молчалив: шаг завершается успехом, ничего не отправив.
-        # Поэтому GUID разбирается здесь, где шаблоны работают.
+        # Промах при этом молчалив. Поэтому GUID разбирается здесь, где
+        # шаблоны работают, и дальше идёт одно фиксированное имя.
         shell: pwsh
         run: |
           $report = Get-ChildItem -Recurse -Filter coverage.cobertura.xml `
@@ -95,19 +93,65 @@ jobs:
           Copy-Item $report.FullName launcher.cobertura.xml
           Write-Host "отчёт: $($report.FullName)"
 
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-launcher
+          path: launcher.cobertura.xml
+          retention-days: 1
+          if-no-files-found: error
+
+  launcher-upload:
+    name: Покрытие клиента в Codecov
+    runs-on: ubuntu-latest
+    needs: launcher-build
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: coverage-launcher
+          path: .
+
+      - name: Убедиться, что отчёт на месте
+        # Без этой проверки промах пути проходит молча: при fail_ci_if_error
+        # ненайденный файл не считается ошибкой. Пусть падает здесь и по делу.
+        run: test -s launcher.cobertura.xml
+
       - name: Отправить покрытие клиента в Codecov
-        # PYTHONUTF8 — не украшение. CLI Codecov собран PyInstaller-ом, и на
-        # windows-раннере он читает файлы в кодировке консоли (cp1252):
-        #   UnicodeDecodeError: 'charmap' codec can't decode byte 0x81
-        # Падение происходит ДО отправки, то есть покрытие клиента не доезжало
-        # никогда — в ci.yml тот же шаг стоял с fail_ci_if_error: false и
-        # ошибку глушил, поэтому промах был не виден.
-        env:
-          PYTHONUTF8: '1'
-          PYTHONIOENCODING: utf-8
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: launcher.cobertura.xml
           flags: launcher
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
+
+  web:
+    name: Покрытие браузерного JS в Codecov
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      # --all ОБЯЗАТЕЛЕН, и это главное здесь.
+      #
+      # Без него в отчёт попадают только файлы, которые тесты действительно
+      # загрузили, — то есть непокрытый код просто исчезает из знаменателя, и
+      # процент растёт от того, что кода стало «меньше». С --all лендинг и
+      # морда админки входят в счёт целиком, и цифра наконец отвечает на
+      # вопрос «сколько кода проверено», а не «сколько кода мы посчитали».
+      - name: Тесты веба с покрытием
+        run: >
+          npx --yes c8 --all
+          --include 'server/admin_ui/**/*.js'
+          --include 'landing/**/*.js'
+          --reporter=text --reporter=lcov
+          node --test tests/web/*.test.js
+
+      - name: Отправить покрытие веба в Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: ./coverage/lcov.info
+          flags: web
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: true

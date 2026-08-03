@@ -169,8 +169,26 @@ jobs:
       # ЧТЕНИЕМ кода, а не проверкой: значение вида "java<TAB>script:" не
       # признавалось схемой и проходило как относительная ссылка, тогда как
       # браузер вырезает управляющие символы ДО разбора схемы и выполняет её.
-      - name: node --test
-        run: node --test tests/web/*.test.js
+      # --all ОБЯЗАТЕЛЕН. Без него в отчёт попадают только файлы, которые
+      # тесты действительно загрузили, то есть непокрытый код исчезает из
+      # знаменателя и процент растёт от того, что кода стало «меньше».
+      - name: node --test с покрытием
+        run: >
+          npx --yes c8 --all
+          --include 'server/admin_ui/**/*.js'
+          --include 'landing/**/*.js'
+          --reporter=text --reporter=lcov
+          node --test tests/web/*.test.js
+
+      - name: Отправить покрытие веба в Codecov
+        # Приколот к SHA, а не к тегу: тег мутабелен, и у Codecov уже был
+        # прецедент компрометации релиза.
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: ./coverage/lcov.info
+          flags: web
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
   go-lint:
     name: Go (${{ matrix.os }})
@@ -344,25 +362,27 @@ jobs:
         # вопрос, который читатель ему задаёт.
         run: dotnet test --nologo --collect:"XPlat Code Coverage"
 
-      - name: Отправить покрытие клиента в Codecov
-        # Приколот к SHA, а не к тегу: тег мутабелен, и у Codecov уже был
-        # прецедент компрометации релиза.
-        #
-        # PYTHONUTF8 — не украшение: CLI Codecov на windows-раннере читает файлы
-        # в кодировке консоли и падает с UnicodeDecodeError ДО отправки. Из-за
-        # fail_ci_if_error: false ниже это было незаметно, и покрытие клиента не
-        # доезжало вовсе.
-        env:
-          PYTHONUTF8: '1'
-          PYTHONIOENCODING: utf-8
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+      - name: Найти отчёт о покрытии
+        # coverlet кладёт отчёт в каталог со случайным GUID, а `files:` у
+        # codecov-action шаблоны НЕ разворачивает. GUID разбирается здесь.
+        shell: pwsh
+        run: |
+          $report = Get-ChildItem -Recurse -Filter coverage.cobertura.xml `
+            -Path launcher/tests/ChillHub.Tests/TestResults | Select-Object -First 1
+          if (-not $report) { throw "coverlet не оставил coverage.cobertura.xml" }
+          Copy-Item $report.FullName launcher.cobertura.xml
+
+      - uses: actions/upload-artifact@v7
+        # Отчёт уезжает артефактом, а отправляет его джоба coverage-launcher на
+        # ubuntu. CLI Codecov собран PyInstaller-ом и на windows-раннере падает
+        # ДО отправки: UnicodeDecodeError на cp1252. PYTHONUTF8 не спасает.
+        # Пока шаг стоял здесь с fail_ci_if_error: false, падение не видел
+        # никто, и флаг launcher не приезжал ни разу.
         with:
-          # Путь coverlet складывает в каталог со случайным GUID, поэтому
-          # шаблон, а не точное имя.
-          files: launcher/tests/ChillHub.Tests/TestResults/**/coverage.cobertura.xml
-          flags: launcher
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
+          name: coverage-launcher
+          path: launcher.cobertura.xml
+          retention-days: 1
+          if-no-files-found: error
 
       - name: Self-update loop guard (A11)
         # Ловит регрессию «бесконечный цикл самообновления»: файл, попавший
@@ -463,3 +483,28 @@ jobs:
           name: ChillHub-Setup-${{ github.run_id }}
           path: scripts/generated_downloads/ChillHub-Setup.exe
           if-no-files-found: error
+
+  coverage-launcher:
+    name: Покрытие клиента в Codecov
+    runs-on: ubuntu-latest
+    needs: dotnet-lint
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: coverage-launcher
+          path: .
+
+      - name: Убедиться, что отчёт на месте
+        run: test -s launcher.cobertura.xml
+
+      - name: Отправить покрытие клиента в Codecov
+        # Приколот к SHA, а не к тегу: тег мутабелен, и у Codecov уже был
+        # прецедент компрометации релиза.
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: launcher.cobertura.xml
+          flags: launcher
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
