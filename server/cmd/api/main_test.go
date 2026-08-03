@@ -143,6 +143,49 @@ func TestBuildsAreSortedSemanticallyNewestFirst(t *testing.T) {
 	}
 }
 
+func TestBuildsHidesVersionsNewerThanLatest(t *testing.T) {
+	root := withContentRoot(t)
+	dir := filepath.Join(root, "manifests", "demo")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"1.0.1", "1.0.2", "1.0.3", "1.0.4"} {
+		if err := os.WriteFile(filepath.Join(dir, v+".json"), []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The operator published 1.0.1; 1.0.2-1.0.4 are staged or rolled back.
+	if err := os.WriteFile(filepath.Join(dir, "latest.json"), []byte(`{"version":"1.0.1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	testRouter().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/games/demo/builds", nil))
+	var got struct {
+		Items []string `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"1.0.1"}
+	if len(got.Items) != len(want) || got.Items[0] != want[0] {
+		t.Fatalf("items = %v, want %v", got.Items, want)
+	}
+
+	// Without latest.json there is nothing to filter against: serve everything.
+	if err := os.Remove(filepath.Join(dir, "latest.json")); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	testRouter().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/games/demo/builds", nil))
+	got.Items = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Items) != 4 {
+		t.Fatalf("items = %v, want all four versions", got.Items)
+	}
+}
+
 func TestHeadIsAllowedWhereverGetIs(t *testing.T) {
 	root := withContentRoot(t)
 	if err := os.MkdirAll(filepath.Join(root, "manifests", "demo"), 0o750); err != nil {
