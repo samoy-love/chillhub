@@ -58,6 +58,35 @@ namespace ChillHub.Tests {
             Assert.InRange(cfg.DownloadThreads, 2, 16);
         }
 
+        /// <summary>
+        /// Адрес сервера из config.json обязан быть https.
+        /// <para>
+        /// Подписи манифестов из формата убраны, поэтому TLS до нужного хоста — единственное,
+        /// что связывает скачанные файлы с их источником, а по этому адресу лаунчер берёт
+        /// манифест самообновления и кладёт полученные файлы поверх ChillHub.exe.
+        /// Пока проверялась только пустота значения, подменённый config.json (файл лежит
+        /// в %APPDATA% и правится чем угодно от имени пользователя) уводил обновление
+        /// на произвольный http-хост.
+        /// </para>
+        /// </summary>
+        /// <param name="url">Проверяемое значение.</param>
+        /// <param name="acceptable">Ожидаемый вердикт.</param>
+        [Theory]
+        [InlineData("https://launcher.samoy.love", true)]
+        [InlineData("https://launcher.samoy.love/", true)]
+        [InlineData("http://localhost:8080", true)]
+        [InlineData("http://127.0.0.1:8080", true)]
+        [InlineData("http://attacker.invalid", false)]
+        [InlineData("http://launcher.samoy.love", false)]
+        [InlineData("ftp://launcher.samoy.love", false)]
+        [InlineData("file://C:/tmp", false)]
+        [InlineData("launcher.samoy.love", false)]
+        [InlineData("", false)]
+        [InlineData(null, false)]
+        public void АдресСервераПринимаетсяТолькоПоHttps(string? url, bool acceptable) {
+            Assert.Equal(acceptable, ConfigService.IsAcceptableApiBaseUrl(url));
+        }
+
         /// <summary>Путь по умолчанию — абсолютный и с корнем диска, иначе игры уедут в каталог запуска.</summary>
         [Fact]
         public void ПутьКИграмПоУмолчаниюАбсолютный() {

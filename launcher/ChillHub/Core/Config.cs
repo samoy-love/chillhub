@@ -13,11 +13,14 @@ namespace ChillHub.Core {
     using System.Windows.Media;
 
     public class AppConfig {
+        /// <summary>Адрес сервера по умолчанию; он же — запасной вариант для отклонённого значения из конфига.</summary>
+        public const string DefaultApiBaseUrl = "https://launcher.samoy.love";
+
         public string GamesPath { get; set; } = DefaultGamesPath();
 
         public int DownloadThreads { get; set; } = 8; // 2..16
 
-        public string ApiBaseUrl { get; set; } = "https://launcher.samoy.love"; // base URL for server API/content
+        public string ApiBaseUrl { get; set; } = DefaultApiBaseUrl; // base URL for server API/content
 
         public string LastGameId { get; set; } = string.Empty; // last launched game id
 
@@ -180,6 +183,36 @@ namespace ChillHub.Core {
             }
         }
 
+        /// <summary>
+        /// Проверяет адрес сервера из config.json.
+        /// <para>
+        /// Подписи манифестов из формата убраны, поэтому единственное, что связывает
+        /// скачанные файлы с их источником, — это TLS до нужного хоста: по этому адресу
+        /// лаунчер берёт манифест самообновления и кладёт полученные файлы поверх
+        /// ChillHub.exe. config.json лежит в %APPDATA% и правится чем угодно, работающим
+        /// от имени пользователя, так что http:// здесь принимать нельзя.
+        /// Исключение — петлевые адреса: локальный сервер разработки сетью не ходит,
+        /// а без него отладка против localhost стала бы невозможной.
+        /// </para>
+        /// </summary>
+        /// <param name="url">Значение из конфига.</param>
+        /// <returns>true, если адрес можно использовать.</returns>
+        internal static bool IsAcceptableApiBaseUrl(string? url) {
+            if (string.IsNullOrWhiteSpace(url)) {
+                return false;
+            }
+
+            if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri)) {
+                return false;
+            }
+
+            if (uri.Scheme == Uri.UriSchemeHttps) {
+                return true;
+            }
+
+            return uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback;
+        }
+
         /// <summary>Тело <see cref="Load"/>; вызывается уже под замком кеша.</summary>
         private static AppConfig LoadLocked() {
             try {
@@ -295,8 +328,12 @@ namespace ChillHub.Core {
                 cfg.GamesPath = AppConfig.DefaultGamesPath();
             }
 
-            if (string.IsNullOrWhiteSpace(cfg.ApiBaseUrl)) {
-                cfg.ApiBaseUrl = "https://launcher.samoy.love";
+            if (!IsAcceptableApiBaseUrl(cfg.ApiBaseUrl)) {
+                if (!string.IsNullOrWhiteSpace(cfg.ApiBaseUrl)) {
+                    Logging.Logger.Warn($"Config: ApiBaseUrl '{cfg.ApiBaseUrl}' отклонён, используем {AppConfig.DefaultApiBaseUrl}");
+                }
+
+                cfg.ApiBaseUrl = AppConfig.DefaultApiBaseUrl;
             }
         }
     }

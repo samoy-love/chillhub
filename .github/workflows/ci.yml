@@ -17,6 +17,7 @@ name: CI
 #   stylelint                17.14.1
 #   stylelint-config-standard 40.0.0
 #   golangci-lint            v2.12.2
+#   govulncheck              v1.1.4
 #   Go toolchain             taken from server/go.mod (single source of truth)
 # ---------------------------------------------------------------------------
 
@@ -286,10 +287,17 @@ jobs:
       # версии, а ДОСТИЖИМОСТЬ уязвимого кода по графу вызовов. Уязвимость в
       # функции, которую проект не зовёт, не поднимает тревогу — поэтому его
       # находки стоит читать, а не привыкать к ним.
+      #
+      # Версия приколота, как и всё остальное в этом файле (см. шапку): @latest
+      # тянул в джоб с выкачанным репозиторием неприколотый бинарник и делал
+      # прогон невоспроизводимым — зелёный PR краснел от чужого релиза. База
+      # уязвимостей у govulncheck грузится с сервера и свежа независимо от
+      # версии инструмента, так что пин не устаревает по существу. Бампается
+      # обычным ревьюабельным однострочником.
       - name: govulncheck (Go)
         working-directory: server
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
           govulncheck ./...
 
       - uses: actions/setup-dotnet@v6
@@ -412,6 +420,25 @@ jobs:
         working-directory: launcher/tests/ChillHub.Tests
         # The test project is not covered by the step above (dotnet format works
         # per project), and it is already clean — keep it that way.
+        run: dotnet format --verify-no-changes --verbosity minimal
+
+      - name: Code style check (dotnet format, updater)
+        working-directory: updater
+        # The two steps above guard launcher/** only. «Per project» is the whole
+        # problem: a project nobody listed is a project nobody checks, and the
+        # updater — тот же C#, тот же .editorconfig, тот же solution — не
+        # проверялся ничем. Теперь проверяется, и правило перестаёт зависеть от
+        # того, вспомнил ли автор про этот каталог.
+        #
+        # Line endings are pinned by updater/.gitattributes for the same reason
+        # they are pinned in launcher/: without it the checkout follows the
+        # runner's core.autocrlf and this step reports phantom ENDOFLINE diffs.
+        run: dotnet format --verify-no-changes --verbosity minimal
+
+      - name: Code style check (dotnet format, updater self-test)
+        working-directory: updater/tests/ManifestPreserveCheck
+        # The A11 guard above is built as its own project, so the step above does
+        # not reach it — same split as launcher/ChillHub vs its test project.
         run: dotnet format --verify-no-changes --verbosity minimal
 
   installer-windows:

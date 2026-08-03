@@ -150,6 +150,27 @@ namespace ChillHub.Tests {
             Assert.Contains("stale.dat", plan2.ToDelete);
             Assert.DoesNotContain(".version", plan2.ToDelete);
         }
+
+        [Fact]
+        public async Task PlanAsync_ОтложеннаяЗаменаNewНеПопадаетВСписокНаУдаление() {
+            // Файл, который держит игра или античит, активация кладёт рядом как
+            // "<файл>.new" и заказывает замену на перезагрузку через MoveFileEx.
+            // В манифесте такого файла нет по определению, и пока он считался «лишним»,
+            // следующий план стирал его — отложенная замена молча отменялась, а игра
+            // навсегда оставалась со старым содержимым.
+            using var dir = new TempDir();
+            dir.WriteFile("game.exe", "x");
+            dir.WriteFile("game.exe.new", "новое содержимое");
+            dir.WriteFile("orphan.new", "y");
+
+            var manifest = PlanTestData.Manifest(PlanTestData.File("game.exe", 1, "cafebabe"));
+            var plan = await PlanTestData.PlanAsync(manifest, dir.Root);
+
+            Assert.DoesNotContain("game.exe.new", plan.ToDelete);
+
+            // ".new" без парного файла в манифесте — обычный мусор: его удаляем как раньше.
+            Assert.Contains("orphan.new", plan.ToDelete);
+        }
     }
 
     /// <summary>

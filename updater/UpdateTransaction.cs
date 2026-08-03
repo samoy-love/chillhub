@@ -27,6 +27,13 @@ using System.IO;
 /// </summary>
 public sealed class UpdateTransaction {
     private readonly List<Entry> entries = new();
+
+    /// <summary>
+    /// Пути, для которых бэкап уже снят. Имя бэкапа выводится из имени цели
+    /// (<c>файл.chbak</c>) и потому одно на все записи в один и тот же путь.
+    /// </summary>
+    private readonly HashSet<string> backed = new(StringComparer.OrdinalIgnoreCase);
+
     private readonly Action<string> log;
 
     /// <summary>Initializes a new instance of the <see cref="UpdateTransaction"/> class.</summary>
@@ -51,7 +58,21 @@ public sealed class UpdateTransaction {
 
         var tmp = destFile + AtomicFile.TempSuffix;
         var existed = File.Exists(destFile);
-        var backup = existed ? destFile + AtomicFile.BackupSuffix : null;
+
+        // ВТОРАЯ запись в тот же путь бэкап НЕ снимает.
+        //
+        // Имя бэкапа детерминировано, а AtomicFile.Replace перед подменой сносит старый
+        // бэкап. Значит повторное копирование того же файла (починка после расхождения
+        // хешей в VerifyAsync либо дубль строки в filelist) затирало бы единственную
+        // копию ИСХОДНОГО содержимого, оставляя вместо неё содержимое первой копии —
+        // то есть уже новое. Откат после этого «успешно восстанавливал» новый файл
+        // и давал ровно ту смесь старых и новых сборок, ради которой транзакция и заведена.
+        //
+        // Исходное содержимое сохранила первая запись; последующие идут без бэкапа
+        // и не добавляют вторую запись в журнал — откат обязан вернуться к состоянию
+        // ДО транзакции, а не к промежуточному.
+        var known = this.backed.Contains(destFile);
+        var backup = existed && !known ? destFile + AtomicFile.BackupSuffix : null;
 
         try {
             using (var srcFs = new FileStream(sourceFile, FileMode.Open, FileAccess.Read, FileShare.Read))
@@ -69,7 +90,10 @@ public sealed class UpdateTransaction {
 
         // Запись в журнал делаем ТОЛЬКО после успешной подмены: иначе откат
         // попытался бы «восстановить» бэкап, которого нет, и снёс бы живой файл.
-        this.entries.Add(new Entry(destFile, backup, created: !existed));
+        if (!known) {
+            this.backed.Add(destFile);
+            this.entries.Add(new Entry(destFile, backup, created: !existed));
+        }
     }
 
     /// <summary>
@@ -88,6 +112,7 @@ public sealed class UpdateTransaction {
         }
 
         this.entries.Clear();
+        this.backed.Clear();
     }
 
     /// <summary>
@@ -106,10 +131,22 @@ public sealed class UpdateTransaction {
                     continue;
                 }
 
-                if (e.Backup != null && File.Exists(e.Backup)) {
+                if (e.Backup == null) {
+                    continue;
+                }
+
+                if (File.Exists(e.Backup)) {
                     AtomicFile.Replace(e.Backup, e.Path, backup: null);
                     restored++;
+                    continue;
                 }
+
+                // Бэкап есть в журнале, но не на диске — исходное содержимое
+                // потеряно, и на месте файла осталось новое. Молчать об этом нельзя:
+                // «rollback: failed=0» читается как «установка вернулась в прежнее
+                // состояние», а она в этот момент смешанная.
+                failed++;
+                this.log($"ROLLBACK FAILED for {e.Path}: бэкап '{e.Backup}' отсутствует, прежнее содержимое НЕ восстановлено");
             }
             catch (Exception ex) {
                 failed++;
@@ -119,6 +156,7 @@ public sealed class UpdateTransaction {
 
         this.log($"rollback: restored={restored} failed={failed} of {this.entries.Count} change(s)");
         this.entries.Clear();
+        this.backed.Clear();
     }
 
     /// <summary>

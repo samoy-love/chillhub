@@ -237,6 +237,25 @@ namespace ChillHub {
                     return;
                 }
 
+                // Понижение версии обновлением не считается. Раньше «не равно» означало
+                // «обновляемся»: latest.json, указывающий на СТАРУЮ сборку (откат оператора,
+                // протухший кеш, чужой адрес сервера в config.json), молча заменял лаунчер
+                // на более раннюю версию — вместе с уже закрытыми в ней дырами. Подписи
+                // манифестов из формата убраны, поэтому кроме этой проверки понижение
+                // ничем не ограничено. Сравниваем по смыслу — тем же VersionOrder,
+                // которым давно упорядочиваются сборки игр.
+                if (Core.VersionOrder.Compare(remote, local) < 0) {
+                    try {
+                        Core.Logging.Logger.Warn($"Self-update отклонён: сервер предлагает версию {remote}, установлена более новая {local}");
+                    }
+                    catch {
+                    }
+
+                    this.SetUpToDate();
+                    this.PrimaryBtn.IsEnabled = true;
+                    return;
+                }
+
                 // Версии разные — уточняем решение по манифесту (вдруг файлы уже на месте).
                 Manifest? mf = null;
                 try {
@@ -1131,30 +1150,37 @@ namespace ChillHub {
                         return;
                     }
 
-                    // Формируем файлы для копирования из реально изменённых (diff plan),
-                    // исключая preserve-файлы: апдейтер их всё равно не тронет.
+                    // Эти три списка — ЕДИНСТВЕННОЕ, из чего апдейтер узнаёт, что именно
+                    // копировать и что удалять. Проглоченная ошибка записи меняла его
+                    // поведение молча: без filelist.txt он переходит в режим полного
+                    // зеркалирования, без deletelist.txt не удаляет ничего, а оборванная
+                    // на середине запись (кончилось место) оставляла файл с ЧАСТЬЮ диффа —
+                    // и всё это выглядело как обычное обновление. Лучше остановиться здесь,
+                    // до остановки лаунчера и запуска апдейтера.
                     try {
+                        // Формируем файлы для копирования из реально изменённых (diff plan),
+                        // исключая preserve-файлы: апдейтер их всё равно не тронет.
                         var changed = System.Linq.Enumerable.ToArray(
                             System.Linq.Enumerable.Where(
                                 System.Linq.Enumerable.Select(plan.Downloads, t => t.RelativePath.Replace('\\', '/')),
                                 rel => !Preserve.ShouldPreserve(rel) && !PreserveMatcher.IsUpdaterArtifact(rel)));
                         System.IO.File.WriteAllLines(filesListPath, changed, Utf8NoBom);
-                    }
-                    catch {
-                    }
 
-                    // Пустые директории — из манифеста
-                    try {
+                        // Пустые директории — из манифеста
                         var dirLines = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(manifest.EmptyDirs, d => this.StripLocal(d)));
                         System.IO.File.WriteAllLines(emptyDirsPath, dirLines, Utf8NoBom);
-                    }
-                    catch {
-                    }
 
-                    try {
                         System.IO.File.WriteAllLines(deleteListPath, toDelete, Utf8NoBom);
                     }
-                    catch {
+                    catch (Exception ex) {
+                        try {
+                            Core.Logging.Logger.Error(ex, "UpdateWindow.WriteUpdateLists");
+                        }
+                        catch {
+                        }
+
+                        throw new IOException(
+                            $"Не удалось записать списки файлов обновления в {workDir}: {ex.Message}", ex);
                     }
 
                     try {

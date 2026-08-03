@@ -33,10 +33,25 @@ namespace ChillHub.Core.Sync {
         /// <summary>Минимальный интервал между отчётами о прогрессе скачивания, мс.</summary>
         private const int ProgressThrottleMs = 100;
 
+        /// <summary>
+        /// Сколько ждать следующий байт от сервера, прежде чем считать попытку зависшей, мс.
+        /// Это таймаут ПРОСТОЯ, а не всей загрузки: пока данные идут, он сбрасывается,
+        /// поэтому многогигабайтный файл на медленном канале докачивается, а мёртвое
+        /// соединение всё равно обрывается и уходит в ретрай с докачкой по Range.
+        /// </summary>
+        private const int StallTimeoutMs = 100_000;
+
         private readonly HttpClient http;
+        private readonly HttpClient downloadHttp;
 
         public SimpleSyncService(HttpClient? http = null) {
             this.http = http ?? HttpClientProvider.Shared;
+
+            // Тело файла читается клиентом без общего таймаута: HttpClient.Timeout тикает
+            // и во время чтения потока, то есть на общем клиенте (100 с) любой файл, который
+            // качается дольше, обрывался посреди загрузки. Явно переданный клиент уважаем
+            // как есть — его подставляют тесты.
+            this.downloadHttp = http ?? HttpClientProvider.Downloads;
         }
 
         /// <summary>
@@ -276,6 +291,15 @@ namespace ChillHub.Core.Sync {
                 }
 
                 if (!manifestFiles.ContainsKey(norm)) {
+                    // "<файл>.new" рядом с файлом ИЗ манифеста — это отложенная замена
+                    // заблокированного файла, уже поставленная в очередь MoveFileEx на
+                    // перезагрузку. В манифесте её нет по определению, и без этой проверки
+                    // следующий план молча стирал её, отменяя обновление этого файла.
+                    if (norm.EndsWith(".new", StringComparison.OrdinalIgnoreCase)
+                        && manifestFiles.ContainsKey(norm.Substring(0, norm.Length - 4))) {
+                        continue;
+                    }
+
                     plan.ToDelete.Add(norm);
                 }
             }
@@ -374,13 +398,20 @@ namespace ChillHub.Core.Sync {
                                         var buffer = new byte[256 * 1024];
                                         while (true) {
                                             ct.ThrowIfCancellationRequested();
+
+                                            // Дедлайн на попытку — по ПРОСТОЮ, а не по общему времени: таймер
+                                            // переводится после каждой порции данных, поэтому длинная честная
+                                            // загрузка доживает до конца, а зависшее соединение обрывается.
+                                            using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                                            stallCts.CancelAfter(StallTimeoutMs);
+                                            var attemptCt = stallCts.Token;
                                             try {
                                                 using var req = new HttpRequestMessage(HttpMethod.Get, t.Url);
                                                 if (existing > 0 && existing < t.Size) {
                                                     req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(existing, null);
                                                 }
 
-                                                using var resp = await this.http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                                                using var resp = await this.downloadHttp.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, attemptCt).ConfigureAwait(false);
                                                 resp.EnsureSuccessStatusCode();
 
                                                 // Если сервер вернул 200 OK, несмотря на Range — перезаписываем файл заново
@@ -399,12 +430,15 @@ namespace ChillHub.Core.Sync {
                                                 // вызванная при живом дескрипторе, падала с «файл занят другим
                                                 // процессом», хотя процесс был наш собственный. Три повтора
                                                 // упирались в то же самое, и обновление обрывалось.
-                                                using (var src = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false))
+                                                using (var src = await resp.Content.ReadAsStreamAsync(attemptCt).ConfigureAwait(false))
                                                 using (var dst = new FileStream(partPath, FileMode.Append, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true)) {
                                                     int read;
-                                                    while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false)) > 0) {
-                                                        await dst.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+                                                    while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), attemptCt).ConfigureAwait(false)) > 0) {
+                                                        await dst.WriteAsync(buffer.AsMemory(0, read), attemptCt).ConfigureAwait(false);
                                                         Interlocked.Add(ref downloaded, read);
+
+                                                        // Данные пришли — отодвигаем дедлайн простоя
+                                                        stallCts.CancelAfter(StallTimeoutMs);
                                                         ReportDownloadProgress();
                                                     }
                                                 }
@@ -418,6 +452,11 @@ namespace ChillHub.Core.Sync {
                                                 break; // success
                                             }
                                             catch (Exception ex) {
+                                                // Отмену пользователя не превращаем в «ошибку загрузки» и не тратим
+                                                // на неё попытки: с появлением связанного CTS обрыв по простою и
+                                                // настоящая отмена приходят одним и тем же типом исключения.
+                                                ct.ThrowIfCancellationRequested();
+
                                                 attempt++;
                                                 if (attempt >= maxAttempts) {
                                                     throw ex is InvalidDataException
@@ -533,6 +572,10 @@ namespace ChillHub.Core.Sync {
         /// <param name="ct">Токен отмены.</param>
         private static void ApplyPlan(DiffPlan plan, string stagingRoot, CancellationToken ct) {
             WriteUpdateMarker(plan.LocalRoot, plan.Version);
+
+            // Файлы, которые физически заменятся только после перезагрузки: пока список
+            // не пуст, обновление НЕ завершено, сколько бы удачно ни прошло остальное.
+            var deferred = new List<string>();
             foreach (var t in plan.Downloads) {
                 ct.ThrowIfCancellationRequested();
                 var dstPath = ManifestPath.Combine(plan.LocalRoot, t.RelativePath);
@@ -580,6 +623,10 @@ namespace ChillHub.Core.Sync {
                         catch (Exception ex) {
                             ChillHub.Core.Logging.Logger.Warn($"MoveFileEx('{t.RelativePath}'): {ex.Message}");
                         }
+
+                        // И при успешном планировании, и при отказе MoveFileEx на диске
+                        // сейчас лежит СТАРОЕ содержимое: игра обновлена не полностью.
+                        deferred.Add(t.RelativePath);
                     }
                     else {
                         File.Move(srcPath, dstPath);
@@ -648,7 +695,17 @@ namespace ChillHub.Core.Sync {
             catch {
             }
 
-            // Обновление доведено до конца — снимаем маркер незавершённого обновления
+            // Маркер снимаем ТОЛЬКО если обновление реально доведено до конца. Если хотя бы
+            // один файл был занят и заменится лишь после перезагрузки, снятие маркера
+            // означало бы «игра обновлена», хотя на диске у неё старый исполняемый файл:
+            // запуск такой сборки — это как раз то, от чего маркер и защищает.
+            if (deferred.Count > 0) {
+                WriteRebootPendingMarker(plan.LocalRoot, plan.Version, deferred);
+                ChillHub.Core.Logging.Logger.Warn(
+                    $"Обновление до {plan.Version} применено не полностью: {deferred.Count} файл(ов) заменятся после перезагрузки ({string.Join(", ", deferred.Take(5))}).");
+                return;
+            }
+
             ClearUpdateMarker(plan.LocalRoot);
         }
 
@@ -848,6 +905,26 @@ namespace ChillHub.Core.Sync {
             }
             catch (Exception ex) {
                 ChillHub.Core.Logging.Logger.Error(ex, $"WriteUpdateMarker({localRoot})");
+            }
+        }
+
+        // Оставляет маркер на месте, но с причиной: часть файлов заменится после перезагрузки.
+        // Содержимое читает ReadUpdateMarker и показывает в подсказке/логе.
+        private static void WriteRebootPendingMarker(string localRoot, string version, IReadOnlyList<string> deferred) {
+            try {
+                var path = Path.Combine(localRoot, UpdateMarkerFileName);
+                var lines = new List<string> {
+                    $"version={version}",
+                    "state=reboot-required",
+                    $"updatedUtc={DateTime.UtcNow:o}",
+                    $"pid={Environment.ProcessId}",
+                    $"pending={deferred.Count}",
+                };
+                lines.AddRange(deferred.Take(20).Select(r => $"pendingFile={r}"));
+                File.WriteAllText(path, string.Join("\r\n", lines) + "\r\n");
+            }
+            catch (Exception ex) {
+                ChillHub.Core.Logging.Logger.Error(ex, $"WriteRebootPendingMarker({localRoot})");
             }
         }
 

@@ -457,6 +457,18 @@ func handleGameNewsIndex(w http.ResponseWriter, r *http.Request) {
 
 // handleBuilds returns list of available versions for a game by scanning
 // manifests/{gameId}/ for *.json (excluding latest.json).
+//
+// latest.json is the publication gate, not just a hint: a manifest may be
+// uploaded without repointing latest.json, and the admin API documents that
+// state as "an inactive version". Everything newer than the version latest.json
+// names is therefore either staged or rolled back, and must not be listed —
+// clients treat this list as installable and fall back to its newest entry
+// whenever the latest endpoint is silent, so listing a staged build is the same
+// as publishing it. Older versions stay listed on purpose: they were published
+// once, and switching back to one is a supported action.
+//
+// When latest.json is missing or unreadable nothing can be filtered against, so
+// the list is served unfiltered, exactly as before.
 func handleBuilds(w http.ResponseWriter, r *http.Request) {
 	gid, ok := publicGameID(w, r)
 	if !ok {
@@ -468,6 +480,7 @@ func handleBuilds(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"gameId": gid, "items": []string{}})
 		return
 	}
+	published, hasLatest := readLatest(filepath.Join(dir, "latest.json"))
 	versions := make([]string, 0)
 	for _, e := range entries {
 		if e.IsDir() {
@@ -479,6 +492,9 @@ func handleBuilds(w http.ResponseWriter, r *http.Request) {
 		}
 		if strings.HasSuffix(strings.ToLower(name), ".json") {
 			v := strings.TrimSuffix(name, ".json")
+			if hasLatest && adminutil.CompareVersions(v, published.Version) > 0 {
+				continue
+			}
 			versions = append(versions, v)
 		}
 	}

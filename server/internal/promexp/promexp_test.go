@@ -19,15 +19,15 @@ func render(t *testing.T, r *Registry) string {
 func TestCounterFormat(t *testing.T) {
 	r := New()
 	c := r.NewCounter("chillhub_installs_total", "Установки", "game", "result")
-	c.Inc("kitty", "ok")
-	c.Inc("kitty", "ok")
-	c.Inc("kitty", "fail")
+	c.Inc("metro", "ok")
+	c.Inc("metro", "ok")
+	c.Inc("metro", "fail")
 
 	got := render(t, r)
 	want := "# HELP chillhub_installs_total Установки\n" +
 		"# TYPE chillhub_installs_total counter\n" +
-		`chillhub_installs_total{game="kitty",result="fail"} 1` + "\n" +
-		`chillhub_installs_total{game="kitty",result="ok"} 2` + "\n"
+		`chillhub_installs_total{game="metro",result="fail"} 1` + "\n" +
+		`chillhub_installs_total{game="metro",result="ok"} 2` + "\n"
 	if got != want {
 		t.Fatalf("вывод не совпал:\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}

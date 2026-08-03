@@ -50,14 +50,159 @@ on:
 # частичная выкатка, о которой видно, что она частичная.
 #
 # Условия целей читаются так: «выбрана явно через workflow_dispatch ИЛИ это
-# мерж в main». Скобки вокруг всего набора после `always()`
-# обязательны: `&&` связывает сильнее `||`, и без них `always()` относился бы
-# только к первому слагаемому, а остальные проверялись бы сами по себе.
+# мерж в main И эту цель задело изменение». Скобки вокруг всего набора после
+# `always()` обязательны: `&&` связывает сильнее `||`, и без них `always()`
+# относился бы только к первому слагаемому, а остальные проверялись бы сами по
+# себе.
+#
+# Ручной запуск (`workflow_dispatch`) НЕ смотрит на изменения вообще: цель
+# выбрал человек, и раз выбрал — катим. Поэтому слагаемые с `inputs.target`
+# остались буква в букву прежними, включая `servers` (api+admin) и `all`.
+# Дописано только слагаемое про push.
 jobs:
+  # Что вообще менялось.
+  #
+  # До этой job'ы любой пуш в main катил ВСЕ ЧЕТЫРЕ цели: в условии каждой
+  # стояло голое `github.event_name == 'push'`. Правка одной буквы в лендинге
+  # перезапускала API и админку, обнуляя их аптайм, и слала в Telegram четыре
+  # сообщения о выкатке вместо одного. Журнал изменений при этом писался всем
+  # четырём — то есть врал про три из них.
+  #
+  # Раскладка путей по целям (выведена из .deploy-kit/*.env и из того, кто что
+  # реально импортирует, а не из имён каталогов):
+  #
+  #   site      — landing/**. BUILD_CMD в site.env буквально `cp -r landing`,
+  #               больше в артефакт лендинга не попадает ничего.
+  #   admin-ui  — server/admin_ui/**. Тоже голое копирование каталога; бинарь
+  #               админки эту статику не встраивает (`go:embed` в server/ нет
+  #               ни одного), её раздаёт nginx напрямую.
+  #   api/admin — оба собираются из модуля server/ (`workdir: server`), и
+  #               именно здесь легко недокатить. Разложено так:
+  #                 server/cmd/api/**    → только api
+  #                 server/cmd/admin/**  → только admin
+  #                 server/<файл в корне модуля> → ОБА (go.mod, go.sum и всё,
+  #                   что там однажды заведётся: это общий модуль)
+  #                 server/internal/**   → всегда admin, потому что админка
+  #                   импортирует ВСЕ семь пакетов internal; api — тоже, кроме
+  #                   случая, когда изменения целиком лежат в adminapi/ или
+  #                   metrics/: этих двух в cmd/api/main.go нет.
+  #
+  # Правило про internal сознательно вывернуто «от обратного»: считаем пакет
+  # общим, пока не доказано, что он админский. Новый пакет, добавленный завтра,
+  # по умолчанию попадёт в ОБА сервиса. Лишняя выкатка — это шум; недокат —
+  # это прод, молча живущий на старом бинаре, и узнают о нём через неделю.
+  #
+  # Конфиги линтеров (.htmlhintrc, .stylelintrc.json, .stylelintignore) —
+  # это gates целей site и admin-ui, а не украшение: их правка меняет
+  # результат гейта, поэтому обе статические цели надо прогнать заново.
+  #
+  # ВСЁ разом катят только две вещи: сам этот файл и .deploy-kit/**. Описание
+  # цели задаёт NEIGHBOURS, KEEP и HEALTH — ошибка там видна лишь на реальной
+  # выкатке, и проверить её надо на всех четырёх сразу.
+  #
+  # НИЧЕГО не катят (просто не попав ни под одно правило, отдельного «списка
+  # исключений» нет — он бы рассинхронизировался): README*.md, docs/**,
+  # launcher/**, updater/**, build/**, scripts/**, Directory.Build.props —
+  # это десктопный клиент, он уезжает только целью installer и только руками;
+  # content/** и manifests — их редактируют через админку прямо на сервере,
+  # выкатка их не трогает (см. комментарий в api.env); tests/**, codecov.yml,
+  # .github/workflows/ci.yml и coverage.yml — это CI, а не прод.
+  #
+  # Отдельно про deploy/**: юниты systemd и backup-content.sh не входят НИ В
+  # ОДИН артефакт — все четыре BUILD_CMD либо собирают только бинарь, либо
+  # копируют только landing/ и server/admin_ui/. Выкатка по правке юнита не
+  # привезла бы на машину ничего, поэтому deploy/** здесь намеренно не катит
+  # никакую цель. В samoy-status тот же самый каталог, наоборот, ЕДЕТ: там
+  # юниты кладутся в артефакт через BUILD_CMD, и пути deploy/ прописаны в
+  # расчёте изменений. Правило оттуда сюда не переносить, не сверившись с
+  # BUILD_CMD в .deploy-kit/*.env этого репозитория.
+  # Внимание: landing/README.md под «доки» НЕ подпадает — он лежит внутри
+  # landing/ и уезжает на прод вместе с ней, поэтому правило `^landing/`
+  # намеренно без исключений по расширению.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      site: ${{ steps.f.outputs.site }}
+      api: ${{ steps.f.outputs.api }}
+      admin: ${{ steps.f.outputs.admin }}
+      # Ключ через подчёркивание, а не `admin-ui`: в выражениях GitHub дефис
+      # в имени свойства читается как минус, и `outputs.admin-ui` не разберётся.
+      admin_ui: ${{ steps.f.outputs.admin_ui }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Двух хватает: сравниваем HEAD с первым родителем. Для мержа в main
+          # первый родитель — это предыдущая вершина main, то есть диф покажет
+          # ВСЁ, что мерж принёс, сколько бы файлов в нём ни было. Это ровно то
+          # поведение, которое нужно: катим по совокупности ветки, а не по
+          # последнему коммиту в ней.
+          fetch-depth: 2
+
+      - id: f
+        run: |
+          all() {
+            echo "$1"
+            printf 'site=true\napi=true\nadmin=true\nadmin_ui=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          # На ручном запуске цель выбирает человек, условия job'ов сюда даже
+          # не смотрят. Отвечаем «менялось всё», чтобы значения никогда не были
+          # пустыми, если гейтирование однажды перепишут на inputs.
+          [ "${{ github.event_name }}" = "push" ] || all 'ручной запуск — цель выбирает человек'
+
+          # Первый коммит в истории (или ветка без родителя после force-push):
+          # сравнивать не с чем. Не «ничего не менялось», а «менялось всё» —
+          # пустой вывод здесь означал бы тихий пропуск всех четырёх целей.
+          git rev-parse -q --verify HEAD^ >/dev/null || all 'нет родителя у HEAD — катим всё'
+
+          FILES=$(git diff --name-only HEAD^ HEAD)
+          echo "изменилось:"; echo "$FILES" | sed 's/^/  /'
+
+          echo "$FILES" | grep -qE '^(\.github/workflows/deploy\.yml|\.deploy-kit/)' \
+            && all 'задет сам пайплайн или описание целей — катим всё'
+
+          # Конфиги линтеров — часть гейта обеих статических целей.
+          LINT='\.htmlhintrc|\.stylelintrc\.json|\.stylelintignore'
+
+          echo "$FILES" | grep -qE "^(landing/|$LINT)"          && SITE=true  || SITE=false
+          echo "$FILES" | grep -qE "^(server/admin_ui/|$LINT)"  && UI=true    || UI=false
+
+          # Админка тянет весь internal, поэтому здесь достаточно одного грепа.
+          echo "$FILES" | grep -qE '^server/(cmd/admin/|internal/|[^/]+$)' && ADMIN=true || ADMIN=false
+
+          # API: своя команда и корень модуля — сразу.
+          echo "$FILES" | grep -qE '^server/(cmd/api/|[^/]+$)' && API=true || API=false
+          # …и любой пакет internal, кроме adminapi/ и metrics/ — их в api нет.
+          # `if` вокруг конвейера, а не `&&`: шаг идёт под `bash -e`, и цепочка,
+          # закончившаяся ненулевым кодом, уронила бы весь расчёт.
+          if [ "$API" = false ] \
+             && echo "$FILES" | grep -E '^server/internal/' \
+                              | grep -qvE '^server/internal/(adminapi|metrics)/'; then
+            API=true
+          fi
+
+          printf 'site=%s\napi=%s\nadmin=%s\nadmin_ui=%s\n' \
+            "$SITE" "$API" "$ADMIN" "$UI" | tee -a "$GITHUB_OUTPUT"
+
   site:
+    # `changes` в needs у ВСЕХ четырёх целей, и у site тоже — а раз появился
+    # needs, понадобился и `always()`: job с упавшим предком пропускается молча,
+    # какое бы условие ни стояло в `if`, если в нём нет статус-функции.
+    #
+    # `needs.changes.result != 'success'` — страховка, и она есть у всех
+    # четырёх. Если расчёт изменений упал (сломался grep, не хватило глубины
+    # клона), его outputs пусты, и сравнение с 'true' даст ложь по всем целям:
+    # зелёный прогон, из которого не выкатилось НИЧЕГО, — худший исход, потому
+    # что о нём никто не узнает. Поэтому упавший `changes` означает «катим всё,
+    # как раньше»: сам он при этом горит красным, и потеряться это не может.
+    needs: [changes]
     if: >-
-      inputs.target == 'site' || inputs.target == 'all'
-      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      always() && (
+        inputs.target == 'site' || inputs.target == 'all'
+        || (github.event_name == 'push' && github.ref == 'refs/heads/main'
+            && (needs.changes.result != 'success' || needs.changes.outputs.site == 'true'))
+      )
     uses: tr0llex/deploy-kit/.github/workflows/static-site.yml@main
     with:
       config: .deploy-kit/site.env
@@ -67,11 +212,15 @@ jobs:
     secrets: inherit
 
   api:
-    needs: [site]
+    # site остаётся в needs ради ОЧЕРЕДИ на хосте (см. блок выше) — changes
+    # добавлен рядом, а не вместо: порядок site → api → admin → admin-ui
+    # сохранён буква в букву.
+    needs: [changes, site]
     if: >-
       always() && (
         inputs.target == 'api' || inputs.target == 'servers' || inputs.target == 'all'
-        || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        || (github.event_name == 'push' && github.ref == 'refs/heads/main'
+            && (needs.changes.result != 'success' || needs.changes.outputs.api == 'true'))
       )
     uses: tr0llex/deploy-kit/.github/workflows/go-service.yml@main
     with:
@@ -82,11 +231,12 @@ jobs:
     secrets: inherit
 
   admin:
-    needs: [api]
+    needs: [changes, api]
     if: >-
       always() && (
         inputs.target == 'admin' || inputs.target == 'servers' || inputs.target == 'all'
-        || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        || (github.event_name == 'push' && github.ref == 'refs/heads/main'
+            && (needs.changes.result != 'success' || needs.changes.outputs.admin == 'true'))
       )
     uses: tr0llex/deploy-kit/.github/workflows/go-service.yml@main
     with:
@@ -97,11 +247,17 @@ jobs:
     secrets: inherit
 
   admin-ui:
-    needs: [admin]
+    needs: [changes, admin]
+    # `inputs.target == 'admin'` тянет морду за собой — оставлено как было: это
+    # удобство ручного запуска, «выкати админку целиком». На push такой связки
+    # нет намеренно: морда — статика, которую раздаёт nginx, и правка Go-кода
+    # её файлов не меняет. Случай «поменяли и бинарь, и морду» ловится сам —
+    # тогда задеты оба набора путей и обе цели поедут.
     if: >-
       always() && (
         inputs.target == 'admin-ui' || inputs.target == 'admin' || inputs.target == 'all'
-        || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        || (github.event_name == 'push' && github.ref == 'refs/heads/main'
+            && (needs.changes.result != 'success' || needs.changes.outputs.admin_ui == 'true'))
       )
     uses: tr0llex/deploy-kit/.github/workflows/static-site.yml@main
     with:
