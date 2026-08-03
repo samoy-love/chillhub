@@ -422,6 +422,25 @@ jobs:
         # per project), and it is already clean — keep it that way.
         run: dotnet format --verify-no-changes --verbosity minimal
 
+      - name: Code style check (dotnet format, updater)
+        working-directory: updater
+        # The two steps above guard launcher/** only. «Per project» is the whole
+        # problem: a project nobody listed is a project nobody checks, and the
+        # updater — тот же C#, тот же .editorconfig, тот же solution — не
+        # проверялся ничем. Теперь проверяется, и правило перестаёт зависеть от
+        # того, вспомнил ли автор про этот каталог.
+        #
+        # Line endings are pinned by updater/.gitattributes for the same reason
+        # they are pinned in launcher/: without it the checkout follows the
+        # runner's core.autocrlf and this step reports phantom ENDOFLINE diffs.
+        run: dotnet format --verify-no-changes --verbosity minimal
+
+      - name: Code style check (dotnet format, updater self-test)
+        working-directory: updater/tests/ManifestPreserveCheck
+        # The A11 guard above is built as its own project, so the step above does
+        # not reach it — same split as launcher/ChillHub vs its test project.
+        run: dotnet format --verify-no-changes --verbosity minimal
+
   installer-windows:
     name: Installer (NSIS)
     runs-on: windows-latest

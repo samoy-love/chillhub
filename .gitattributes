@@ -12,6 +12,16 @@ bin/*  text eol=lf
 *.cmd text eol=crlf
 *.bat text eol=crlf
 
+# C# и XAML: .editorconfig задаёт для них end_of_line = crlf, а
+# `dotnet format --verify-no-changes` в CI — блокирующий шаг. Правило стоит
+# здесь, в корне, а не только в launcher/ и updater/: иначе оно действует лишь
+# там, где кто-то не забыл завести свой .gitattributes, и следующий проект на
+# C# снова приедет с LF и посыплется на ENDOFLINE. launcher/.gitattributes и
+# updater/.gitattributes повторяют это правило — они должны говорить то же
+# самое, менять решение надо во всех трёх местах сразу.
+*.cs text eol=crlf
+*.xaml text eol=crlf
+
 # Бинарное не трогаем.
 *.png binary
 *.jpg binary

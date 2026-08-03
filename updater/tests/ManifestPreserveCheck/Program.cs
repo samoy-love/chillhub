@@ -16,8 +16,7 @@ using System.Text.Json;
 
 using ChillHub.Update;
 
-internal static class Program
-{
+internal static class Program {
     private const string GoodManifest = """
     {
       "version": "1.1.7",
@@ -76,8 +75,7 @@ internal static class Program
         ("ChillHub.exe", false),
     };
 
-    public static int Main(string[] args)
-    {
+    public static int Main(string[] args) {
         // Без этого русские сообщения превращаются в мусор в консоли Windows и в логах CI.
         try {
             Console.OutputEncoding = new System.Text.UTF8Encoding(false);
@@ -90,33 +88,27 @@ internal static class Program
 
         // 1) Самопроверка детектора: «плохой» манифест обязан падать, «хороший» — проходить.
         var badHits = Violations(ParsePaths(BadManifest));
-        if (badHits.Count == 0)
-        {
+        if (badHits.Count == 0) {
             Console.Error.WriteLine("SELF-TEST FAILED: детектор не увидел config.json/launcher.version в манифесте.");
             failures++;
         }
-        else
-        {
+        else {
             Console.WriteLine($"self-test ok: bad manifest -> {badHits.Count} violation(s): {string.Join(", ", badHits)}");
         }
 
         var goodHits = Violations(ParsePaths(GoodManifest));
-        if (goodHits.Count != 0)
-        {
+        if (goodHits.Count != 0) {
             Console.Error.WriteLine($"SELF-TEST FAILED: ложное срабатывание на «хорошем» манифесте: {string.Join(", ", goodHits)}");
             failures++;
         }
-        else
-        {
+        else {
             Console.WriteLine("self-test ok: good manifest -> 0 violations");
         }
 
         // 1b) Само правило сопоставления: точный путь верхнего уровня и ничего больше.
-        foreach (var (path, expected) in RuleCases)
-        {
+        foreach (var (path, expected) in RuleCases) {
             var actual = new PreserveMatcher().ShouldPreserve(path) || PreserveMatcher.IsUpdaterArtifact(path);
-            if (actual == expected)
-            {
+            if (actual == expected) {
                 continue;
             }
 
@@ -126,53 +118,44 @@ internal static class Program
             failures++;
         }
 
-        if (failures == 0)
-        {
+        if (failures == 0) {
             Console.WriteLine($"self-test ok: правила сопоставления, {RuleCases.Length} случай(ев)");
         }
 
         // 2) Реальные манифесты репозитория (если есть).
         var targets = args.Length > 0 ? args : DefaultTargets();
         var checkedFiles = 0;
-        foreach (var target in targets)
-        {
-            foreach (var file in ExpandTarget(target))
-            {
+        foreach (var target in targets) {
+            foreach (var file in ExpandTarget(target)) {
                 checkedFiles++;
                 List<string> hits;
-                try
-                {
+                try {
                     hits = Violations(ParsePaths(File.ReadAllText(file)));
                 }
-                catch (Exception ex)
-                {
+                catch (Exception ex) {
                     Console.Error.WriteLine($"FAILED to read manifest '{file}': {ex.Message}");
                     failures++;
                     continue;
                 }
 
-                if (hits.Count > 0)
-                {
+                if (hits.Count > 0) {
                     Console.Error.WriteLine($"VIOLATION in '{file}': пути попадают и в манифест, и под preserve: {string.Join(", ", hits)}");
                     Console.Error.WriteLine("  => апдейтер их не перезапишет, лаунчер будет обновляться вечно.");
                     Console.Error.WriteLine("  => исключите их из пакета (scripts/installer.nsi, build-installer.ps1 -PackageZip) и пересоберите манифест.");
                     failures++;
                 }
-                else
-                {
+                else {
                     Console.WriteLine($"ok: {file}");
                 }
             }
         }
 
-        if (checkedFiles == 0)
-        {
+        if (checkedFiles == 0) {
             // Важно не выдавать это за успешную проверку: реальные манифесты не смотрели вообще.
             // Штатная ситуация для CI: content/** в .gitignore, в чекауте его просто нет.
             Console.WriteLine("ВНИМАНИЕ: реальные манифесты НЕ проверены — отработал только самотест детектора.");
             Console.WriteLine("  Каталог content/manifests/launcher не найден вверх по дереву ни от одного из корней:");
-            foreach (var root in ProbedRoots)
-            {
+            foreach (var root in ProbedRoots) {
                 Console.WriteLine($"    {root}");
             }
 
@@ -186,14 +169,11 @@ internal static class Program
     }
 
     /// <summary>Пути манифеста, попадающие под preserve-правила или являющиеся мусором апдейтера.</summary>
-    private static List<string> Violations(IEnumerable<string> paths)
-    {
+    private static List<string> Violations(IEnumerable<string> paths) {
         var matcher = new PreserveMatcher();
         var hits = new List<string>();
-        foreach (var p in paths)
-        {
-            if (matcher.ShouldPreserve(p) || PreserveMatcher.IsUpdaterArtifact(p))
-            {
+        foreach (var p in paths) {
+            if (matcher.ShouldPreserve(p) || PreserveMatcher.IsUpdaterArtifact(p)) {
                 hits.Add(p);
             }
         }
@@ -201,24 +181,19 @@ internal static class Program
         return hits;
     }
 
-    private static List<string> ParsePaths(string json)
-    {
+    private static List<string> ParsePaths(string json) {
         var result = new List<string>();
         using var doc = JsonDocument.Parse(json);
         if (doc.RootElement.ValueKind != JsonValueKind.Object ||
             !doc.RootElement.TryGetProperty("files", out var files) ||
-            files.ValueKind != JsonValueKind.Array)
-        {
+            files.ValueKind != JsonValueKind.Array) {
             return result;
         }
 
-        foreach (var f in files.EnumerateArray())
-        {
-            if (f.ValueKind == JsonValueKind.Object && f.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String)
-            {
+        foreach (var f in files.EnumerateArray()) {
+            if (f.ValueKind == JsonValueKind.Object && f.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String) {
                 var v = p.GetString();
-                if (!string.IsNullOrWhiteSpace(v))
-                {
+                if (!string.IsNullOrWhiteSpace(v)) {
                     result.Add(v!);
                 }
             }
@@ -227,10 +202,8 @@ internal static class Program
         return result;
     }
 
-    private static IEnumerable<string> ExpandTarget(string target)
-    {
-        if (Directory.Exists(target))
-        {
+    private static IEnumerable<string> ExpandTarget(string target) {
+        if (Directory.Exists(target)) {
             return Directory.EnumerateFiles(target, "*.json", SearchOption.TopDirectoryOnly)
                 .Where(p => !Path.GetFileName(p).Equals("latest.json", StringComparison.OrdinalIgnoreCase));
         }
@@ -249,28 +222,22 @@ internal static class Program
     /// лежит только в основном рабочем каталоге. Поиск только по CWD молча ничего не находил —
     /// и тест «проходил», не проверив ни одного реального манифеста.
     /// </summary>
-    private static string[] DefaultTargets()
-    {
+    private static string[] DefaultTargets() {
         // Явное указание побеждает любой автопоиск (удобно для CI и ручных прогонов).
         var fromEnv = Environment.GetEnvironmentVariable("CHILLHUB_MANIFESTS_DIR");
-        if (!string.IsNullOrWhiteSpace(fromEnv))
-        {
+        if (!string.IsNullOrWhiteSpace(fromEnv)) {
             ProbedRoots.Add($"CHILLHUB_MANIFESTS_DIR={fromEnv}");
-            if (Directory.Exists(fromEnv) || File.Exists(fromEnv))
-            {
+            if (Directory.Exists(fromEnv) || File.Exists(fromEnv)) {
                 return new[] { fromEnv };
             }
         }
 
-        foreach (var start in SearchRoots())
-        {
+        foreach (var start in SearchRoots()) {
             ProbedRoots.Add(start);
             var dir = new DirectoryInfo(start);
-            while (dir != null)
-            {
+            while (dir != null) {
                 var candidate = Path.Combine(dir.FullName, "content", "manifests", "launcher");
-                if (Directory.Exists(candidate))
-                {
+                if (Directory.Exists(candidate)) {
                     Console.WriteLine($"манифесты: {candidate}");
                     return new[] { candidate };
                 }
@@ -283,8 +250,7 @@ internal static class Program
     }
 
     /// <summary>Стартовые точки поиска, без повторов и без несуществующих путей.</summary>
-    private static IEnumerable<string> SearchRoots()
-    {
+    private static IEnumerable<string> SearchRoots() {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var candidates = new List<string?>
         {
@@ -295,46 +261,37 @@ internal static class Program
             SafeDirectoryOf(Environment.ProcessPath),
         };
 
-        foreach (var c in candidates)
-        {
-            if (string.IsNullOrWhiteSpace(c))
-            {
+        foreach (var c in candidates) {
+            if (string.IsNullOrWhiteSpace(c)) {
                 continue;
             }
 
             string full;
-            try
-            {
+            try {
                 full = Path.GetFullPath(c!);
 
                 // Снимаем хвостовой разделитель: у AppContext.BaseDirectory он есть, у CWD нет,
                 // и без этого один и тот же каталог считается двумя разными корнями.
                 var trimmed = full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                if (trimmed.Length > 0 && !trimmed.EndsWith(':'))
-                {
+                if (trimmed.Length > 0 && !trimmed.EndsWith(':')) {
                     full = trimmed;
                 }
             }
-            catch
-            {
+            catch {
                 continue;
             }
 
-            if (Directory.Exists(full) && seen.Add(full))
-            {
+            if (Directory.Exists(full) && seen.Add(full)) {
                 yield return full;
             }
         }
     }
 
-    private static string? SafeDirectoryOf(string? path)
-    {
-        try
-        {
+    private static string? SafeDirectoryOf(string? path) {
+        try {
             return string.IsNullOrWhiteSpace(path) ? null : Path.GetDirectoryName(path);
         }
-        catch
-        {
+        catch {
             return null;
         }
     }
