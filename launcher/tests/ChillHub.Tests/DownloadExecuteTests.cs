@@ -161,6 +161,27 @@ namespace ChillHub.Tests {
             Assert.Equal(content, await File.ReadAllBytesAsync(landed));
         }
 
+        /// <summary>
+        /// Файл того же размера, но от другой сборки, за готовый не сходит: staging
+        /// мог остаться от прерванного обновления на другую версию, и совпадение
+        /// размера там не значит ничего.
+        /// </summary>
+        [Fact]
+        public async Task ЧужаяВерсияВStagingПерекачивается() {
+            using var dir = new TempDir();
+            var content = Encoding.UTF8.GetBytes("содержимое версии 2");
+            var sha = Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
+
+            var staged = Path.Combine(dir.Root, ".staging", "app", "data.bin");
+            Directory.CreateDirectory(Path.GetDirectoryName(staged)!);
+            await File.WriteAllBytesAsync(staged, Encoding.UTF8.GetBytes("содержимое версии 1"));
+            Assert.Equal(content.Length, new FileInfo(staged).Length);
+
+            var landed = await DownloadOneAsync(dir.Root, "app/data.bin", content, sha);
+
+            Assert.Equal(content, await File.ReadAllBytesAsync(landed));
+        }
+
         /// <summary>Скачивает один файл через подставной HTTP и возвращает путь, куда он лёг.</summary>
         private static async Task<string> DownloadOneAsync(string root, string rel, byte[] content, string sha256) {
             var handler = new StubContentHandler(content);
