@@ -22,11 +22,12 @@ namespace ChillHub.Core.Logging {
 
         // Логи пишутся ПО УМОЛЧАНИЮ: без них обратная связь и авто-отчёты приходят пустыми.
         // CHILLHUB_CLIENT_LOG=0 (false/off/no) — выключить, =1 (true/on/yes) — явно включить.
-        private static readonly bool enabled = ResolveEnabled();
+        // Не readonly только ради OverrideForTests — в остальном значение задаётся один раз.
+        private static bool enabled = ResolveEnabled();
 
         // Логи лежат рядом с остальным пользовательским состоянием (%APPDATA%\ChillHub),
         // а не в %TEMP%, который чистится системой вместе с отчётами.
-        private static readonly string logDirectory = ResolveLogDirectory();
+        private static string logDirectory = ResolveLogDirectory();
 
         /// <summary>Текущий размер активного файла; -1 — ещё не считали с диска.</summary>
         private static long currentSize = -1;
@@ -108,6 +109,26 @@ namespace ChillHub.Core.Logging {
         /// Используется диагностикой, чтобы не хардкодить имена.
         /// </summary>
         public static string[] LogFilePatterns => new[] { "client*.log", "boot*.log" };
+
+        /// <summary>
+        /// Временно уводит логгер в указанный каталог и включает запись.
+        /// <para>
+        /// Иначе логгер непроверяем в принципе: тестовый прогон выключает запись целиком
+        /// (<c>CHILLHUB_CLIENT_LOG=0</c>), потому что настоящий каталог — это
+        /// <c>%APPDATA%\ChillHub\logs</c> живого пользователя, и засорять его данными,
+        /// которые тесты специально делают битыми, нельзя. Флаг читается один раз при
+        /// инициализации типа, так что «включить на один тест» без этого шва невозможно —
+        /// только на весь процесс.
+        /// </para>
+        /// <para>
+        /// Подмена глобальная и живёт до Dispose: пока она активна, в подставной каталог
+        /// пишет весь процесс. Для тестов это и нужно — именно так проверяются ротация
+        /// и чтение лога при открытом дескрипторе.
+        /// </para>
+        /// </summary>
+        /// <param name="directory">Каталог, куда писать лог, пока подмена активна.</param>
+        /// <returns>Объект, возвращающий логгер в исходное состояние.</returns>
+        internal static IDisposable OverrideForTests(string directory) => new TestOverride(directory);
 
         private static bool ResolveEnabled() {
             try {
@@ -211,6 +232,36 @@ namespace ChillHub.Core.Logging {
         private static void CloseStream() {
             try { stream?.Dispose(); } catch { }
             stream = null;
+        }
+
+        /// <summary>Восстанавливает каталог и флаг записи, подменённые <see cref="OverrideForTests"/>.</summary>
+        private sealed class TestOverride : IDisposable {
+            private readonly string previousDirectory;
+            private readonly bool previousEnabled;
+
+            internal TestOverride(string directory) {
+                Directory.CreateDirectory(directory);
+                lock (@lock) {
+                    this.previousDirectory = logDirectory;
+                    this.previousEnabled = enabled;
+
+                    // Открытый поток смотрит на прежний файл — его нужно закрыть,
+                    // иначе запись продолжилась бы мимо подставного каталога.
+                    CloseStream();
+                    logDirectory = directory;
+                    enabled = true;
+                    currentSize = -1;
+                }
+            }
+
+            public void Dispose() {
+                lock (@lock) {
+                    CloseStream();
+                    logDirectory = this.previousDirectory;
+                    enabled = this.previousEnabled;
+                    currentSize = -1;
+                }
+            }
         }
 
         /// <summary>client.log -&gt; client.1.log -&gt; ... -&gt; client.N.log, самый старый удаляем.</summary>
