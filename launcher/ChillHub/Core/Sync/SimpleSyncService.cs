@@ -33,6 +33,9 @@ namespace ChillHub.Core.Sync {
         /// <summary>Минимальный интервал между отчётами о прогрессе скачивания, мс.</summary>
         private const int ProgressThrottleMs = 100;
 
+        /// <summary>Сколько файлов из плана показать в логе поимённо; остальные — только в сводке.</summary>
+        private const int PlanLogSamples = 20;
+
         /// <summary>
         /// Сколько ждать следующий байт от сервера, прежде чем считать попытку зависшей, мс.
         /// Это таймаут ПРОСТОЯ, а не всей загрузки: пока данные идут, он сбрасывается,
@@ -175,6 +178,13 @@ namespace ChillHub.Core.Sync {
                 });
             }
 
+            // Причины попадания в план: сводка вместо строки лога на каждый файл.
+            // Построчный лог обходился в открытие файла на запись на КАЖДЫЙ файл сборки
+            // (десятки тысяч), а мегабайты однотипных строк вытесняли ротацией всё, ради
+            // чего лог и читают. Примеры оставляем — по ним чинят конкретные сборки.
+            var reasonCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var reasonSamples = new List<string>();
+
             // Определим новые/изменённые: при наличии хеша сравниваем по хешу, иначе по размеру
             foreach (var kv in manifestFiles) {
                 ct.ThrowIfCancellationRequested();
@@ -253,10 +263,13 @@ namespace ChillHub.Core.Sync {
                         Executable = mf.Executable,
                     });
                     plan.TotalDownloadBytes += mf.Size;
-                    try {
-                        ChillHub.Core.Logging.Logger.Info($"Plan include gid={manifest.GameId} file='{rel}' size={mf.Size} reason={reason}");
-                    }
-                    catch {
+
+                    // Ключ сводки — вид причины без цифр: «size_mismatch local=… manifest=…»
+                    // у каждого файла свой, и как ключ он бы дал столько же строк, сколько файлов.
+                    var kind = reason.Split(' ')[0];
+                    reasonCounts[kind] = reasonCounts.TryGetValue(kind, out var c) ? c + 1 : 1;
+                    if (reasonSamples.Count < PlanLogSamples) {
+                        reasonSamples.Add($"'{rel}' size={mf.Size} reason={reason}");
                     }
                 }
 
@@ -274,6 +287,19 @@ namespace ChillHub.Core.Sync {
             }
 
             plan.TotalFilesToDownload = plan.Downloads.Count;
+
+            if (plan.Downloads.Count > 0) {
+                var byReason = string.Join(", ", reasonCounts.OrderByDescending(p => p.Value).Select(p => $"{p.Key}={p.Value}"));
+                ChillHub.Core.Logging.Logger.Info(
+                    $"Plan gid={manifest.GameId} ver={manifest.Version} files={plan.Downloads.Count}/{totalToCheck} bytes={plan.TotalDownloadBytes}/{totalBytesToCheck} reasons: {byReason}");
+                foreach (var sample in reasonSamples) {
+                    ChillHub.Core.Logging.Logger.Info($"Plan include {sample}");
+                }
+
+                if (plan.Downloads.Count > reasonSamples.Count) {
+                    ChillHub.Core.Logging.Logger.Info($"Plan include ... ещё {plan.Downloads.Count - reasonSamples.Count} файл(ов), см. сводку выше");
+                }
+            }
 
             // Чистим кеш от записей об исчезнувших файлах и сохраняем, если что-то поменялось
             hashCache.PruneAndSave(localExisting);
@@ -502,12 +528,8 @@ namespace ChillHub.Core.Sync {
                                         }
                                     }
 
-                                    // Переименовать .part -> готовый stagingFile
-                                    if (File.Exists(stagingFile)) {
-                                        File.Delete(stagingFile);
-                                    }
-
-                                    File.Move(partPath, stagingFile);
+                                    // Переименовать .part -> готовый файл в staging
+                                    File.Move(partPath, stagingFile, overwrite: true);
                                 }
                                 finally {
                                     Interlocked.Increment(ref filesDone);
@@ -634,11 +656,36 @@ namespace ChillHub.Core.Sync {
             // Файлы, которые физически заменятся только после перезагрузки: пока список
             // не пуст, обновление НЕ завершено, сколько бы удачно ни прошло остальное.
             var deferred = new List<string>();
+
+            // Каталоги создаём по одному разу: в сборке на десятки тысяч файлов почти все
+            // они лежат в одних и тех же папках, а Directory.CreateDirectory на каждый файл —
+            // это обращение к диску на каждый файл.
+            var createdDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var moved = 0;
+
             foreach (var t in plan.Downloads) {
                 ct.ThrowIfCancellationRequested();
                 var dstPath = ManifestPath.Combine(plan.LocalRoot, t.RelativePath);
                 var srcPath = ManifestPath.Combine(stagingRoot, t.RelativePath);
-                Directory.CreateDirectory(Path.GetDirectoryName(dstPath)!);
+                var dstDir = Path.GetDirectoryName(dstPath)!;
+                if (createdDirs.Add(dstDir)) {
+                    Directory.CreateDirectory(dstDir);
+                }
+
+                // Быстрый путь: одно переименование с заменой вместо связки
+                // «проверить — удалить — проверить — переместить». Он же и обычный —
+                // медленная ветка ниже нужна только для файлов, которые кто-то держит
+                // (запущенная игра, античит, антивирус), и включается по отказу.
+                try {
+                    File.Move(srcPath, dstPath, overwrite: true);
+                    moved++;
+                    continue;
+                }
+                catch (IOException) {
+                }
+                catch (UnauthorizedAccessException) {
+                }
+
                 if (File.Exists(dstPath)) {
                     SafeDeleteFile(dstPath);
                 }
@@ -665,11 +712,11 @@ namespace ChillHub.Core.Sync {
                         // месте, хеш не сходился, и «требуется обновление» повторялось
                         // бесконечно, накапливая по .new за попытку.
                         try {
-                            var moved = NativeMethods.MoveFileEx(
+                            var scheduled = NativeMethods.MoveFileEx(
                                 pending,
                                 dstPath,
                                 NativeMethods.MOVEFILE_DELAY_UNTIL_REBOOT | NativeMethods.MOVEFILE_REPLACE_EXISTING);
-                            if (moved) {
+                            if (scheduled) {
                                 ChillHub.Core.Logging.Logger.Info(
                                     $"Файл '{t.RelativePath}' занят другим процессом: замена запланирована на перезагрузку.");
                             }
@@ -688,30 +735,26 @@ namespace ChillHub.Core.Sync {
                     }
                     else {
                         File.Move(srcPath, dstPath);
+                        moved++;
                     }
                 }
                 else {
                     File.Move(srcPath, dstPath);
+                    moved++;
                 }
+
                 if (t.Executable) {
                     // Для Windows можно оставить как есть; при необходимости добавить атрибуты
                 }
-
-                try {
-                    long len = 0;
-                    bool exists = File.Exists(dstPath);
-                    if (exists) {
-                        try {
-                            len = new FileInfo(dstPath).Length;
-                        }
-                        catch {
-                        }
-                    }
-                    ChillHub.Core.Logging.Logger.Info($"Activated file='{t.RelativePath}' exists={exists} len={len} expected={t.Size}");
-                }
-                catch {
-                }
             }
+
+            // Сводка вместо строки лога на каждый файл. Прежний лог перепроверял каждый файл
+            // («на месте? какой длины?») и писал результат — два обращения к диску и запись
+            // в лог на КАЖДЫЙ файл сборки. Проверять там было нечего: содержимое сверено с
+            // хешем ещё до staging, а File.Move либо переносит файл, либо бросает исключение.
+            // Что действительно стоит видеть — файлы, которых перенос не коснулся; они ниже.
+            ChillHub.Core.Logging.Logger.Info(
+                $"Activated gid={plan.GameId} ver={plan.Version} moved={moved}/{plan.Downloads.Count} deferred={deferred.Count}");
 
             // Удаление лишних файлов (с устойчивостью к блокировкам сторонними процессами)
             var deletedRel = new List<string>();
@@ -1024,12 +1067,18 @@ namespace ChillHub.Core.Sync {
                     catch (UnauthorizedAccessException) {
                     }
 
-                    // Give GC a chance to finalize any lingering FileStreams and retry
-                    try {
-                        GC.Collect();
-                        GC.WaitForPendingFinalizers();
-                    }
-                    catch {
+                    // Один раз даём финализаторам закрыть забытые FileStream'ы. Именно
+                    // один: полная блокирующая сборка стоит десятки миллисекунд и на
+                    // втором заходе уже ничего не находит — файл держит чужой процесс,
+                    // а не наш мусор. Повторять её на каждой из пяти попыток по каждому
+                    // занятому файлу — чистая трата времени фазы активации.
+                    if (i == 0) {
+                        try {
+                            GC.Collect();
+                            GC.WaitForPendingFinalizers();
+                        }
+                        catch {
+                        }
                     }
 
                     Thread.Sleep(120 * (i + 1));

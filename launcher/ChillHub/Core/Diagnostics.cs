@@ -353,9 +353,23 @@ namespace ChillHub.Core {
             catch (Exception ex) { sb.AppendLine($"(hash error: {ex.Message})"); }
         }
 
+        /// <summary>
+        /// Открывает файл на чтение, не мешая тому, кто его уже пишет.
+        /// <para>
+        /// <c>File.OpenRead</c> и <c>File.ReadAllBytes</c> просят <see cref="FileShare.Read"/>,
+        /// то есть запрещают писать в файл всем остальным. Логгер держит client.log открытым
+        /// на запись (иначе строка стоила бы открытия файла), и такое чтение падало бы с
+        /// «файл занят» — молча, в catch, превращая логи в отчёте в «(read error)».
+        /// </para>
+        /// </summary>
+        /// <param name="file">Путь к файлу.</param>
+        /// <returns>Поток на чтение.</returns>
+        private static FileStream OpenShared(string file)
+            => new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+
         private static string ComputeSha256(string file) {
             try {
-                using var fs = File.OpenRead(file);
+                using var fs = OpenShared(file);
                 using var sha = SHA256.Create();
                 var hash = sha.ComputeHash(fs);
                 return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
@@ -419,7 +433,12 @@ namespace ChillHub.Core {
                     var allowance = Math.Min(maxTailBytes, budget.Remaining);
                     sb.AppendLine($"### {f}");
                     try {
-                        var bytes = File.ReadAllBytes(f);
+                        byte[] bytes;
+                        using (var fs = OpenShared(f)) {
+                            bytes = new byte[fs.Length];
+                            fs.ReadExactly(bytes);
+                        }
+
                         if (bytes.Length > allowance) {
                             var tail = new byte[allowance];
                             Buffer.BlockCopy(bytes, bytes.Length - allowance, tail, 0, allowance);
