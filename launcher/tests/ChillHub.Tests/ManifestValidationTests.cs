@@ -195,7 +195,11 @@ namespace ChillHub.Tests {
             manifest.EmptyDirs = new List<string> { dir };
 
             var plan = await PlanTestData.PlanAsync(manifest, tmp.Root);
-            Assert.NotNull(plan);
+
+            // В план должна лечь канонизированная форма: дальше её подставляют в
+            // ManifestPath.Combine, а он сырую строку со слешем отвергает — послабление
+            // на входе без канонизации переносило отказ из валидатора в применение плана.
+            Assert.Equal(new[] { dir.TrimEnd('/') }, plan.EmptyDirsToCreate);
         }
 
         /// <summary>Послабление ровно на один слеш: «logs/» и «logs» — по-прежнему дубликат.</summary>
