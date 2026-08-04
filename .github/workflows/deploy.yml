@@ -23,14 +23,14 @@ permissions:
 # Триггер общий для всех проектов samoy.love: мерж в main уезжает на прод.
 # Единственный вход, кроме ручного запуска, — именно он.
 #
-# ТЕГ БОЛЬШЕ НЕ ТРИГГЕР. Установщик из-за этого собирается только вручную:
-# `workflow_dispatch` с target=installer. Автоматически по выпуску версии он
-# больше не собирается, потому что выпуска версии как события здесь больше нет.
+# ТЕГ БОЛЬШЕ НЕ ТРИГГЕР, но установщик собирается уже не только руками:
+# push в main, задевший файлы клиента, пересобирает его и подменяет
+# /downloads/ChillHub-Setup.exe на сайте (см. job'у installer). GitHub
+# Release это не трогает — он остаётся за ручным запуском по тегу: имя
+# релиза берётся из имени ссылки, и на push в main он назывался бы «main».
 #
 # Если установщик снова понадобится по тегу, вернуть надо ДВЕ вещи: `tags` сюда
-# и теговое слагаемое в условие job'ы installer. Имя GitHub Release при этом
-# берётся из имени ссылки, поэтому на push в main его публиковать нельзя —
-# релиз назывался бы «main».
+# и теговое слагаемое в условие job'ы installer.
 #
 # ФИЛЬТР ПУТЕЙ НА ТРИГГЕРЕ — вторая половина того же требования, что решает
 # job `changes`. Она отвечает на вопрос «какую цель катим», но ответить «ни
@@ -49,6 +49,13 @@ permissions:
 #                 разбор, кого из троих задело, делает `changes`, и дублировать
 #                 его здесь значило бы завести второй список, который однажды
 #                 разойдётся с первым.
+#   launcher/**, updater/**, Directory.Build.props,
+#   scripts/build-installer.ps1, scripts/installer.nsi, scripts/app.ico
+#                 client: всё, из чего build-installer.ps1 собирает
+#                 установщик. Апдейтер входит ProjectReference'ом, props —
+#                 общие свойства компиляции, три файла в scripts/ — сам
+#                 сценарий сборки, сценарий NSIS и иконка. Остальной
+#                 scripts/** в артефакт не попадает и цель не задевает.
 #   .htmlhintrc*, .stylelint*
 #                 гейты обеих статических целей: их правка меняет результат
 #                 гейта. Со звёздочкой, потому что в `changes` они проверяются
@@ -78,6 +85,9 @@ permissions:
 #   ^server/(cmd/admin/|internal/|[^/]+$) → server/**
 #   ^server/(cmd/api/|[^/]+$)            → server/**
 #   ^server/internal/                    → server/**
+#   ^(launcher/|updater/|…)              → launcher/**, updater/**,
+#                                          Directory.Build.props и три файла
+#                                          сборки установщика в scripts/
 #
 # Обратное направление намеренно неточное: `server/**` шире, чем сумма правил
 # `changes` (скажем, будущий server/cmd/tool/ сюда пройдёт, а цели не задел бы).
@@ -93,6 +103,12 @@ on:
     paths:
       - 'landing/**'
       - 'server/**'
+      - 'launcher/**'
+      - 'updater/**'
+      - 'Directory.Build.props'
+      - 'scripts/build-installer.ps1'
+      - 'scripts/installer.nsi'
+      - 'scripts/app.ico'
       - '.htmlhintrc*'
       - '.stylelint*'
       - '.deploy-kit/**'
@@ -157,6 +173,13 @@ jobs:
   #                   импортирует ВСЕ семь пакетов internal; api — тоже, кроме
   #                   случая, когда изменения целиком лежат в adminapi/ или
   #                   metrics/: этих двух в cmd/api/main.go нет.
+  #   client    — установщик лаунчера на сайте (/downloads/ChillHub-Setup.exe).
+  #               Списан с того, что читает build-installer.ps1: launcher/**
+  #               (сам клиент), updater/** (входит ProjectReference'ом и
+  #               кладётся в установку), Directory.Build.props (общие свойства
+  #               компиляции) и три файла в scripts/ — build-installer.ps1,
+  #               installer.nsi, app.ico. scripts/Redist/ в git пуст
+  #               (.gitkeep): bootstrapper WebView2 сборка скачивает сама.
   #
   # Правило про internal сознательно вывернуто «от обратного»: считаем пакет
   # общим, пока не доказано, что он админский. Новый пакет, добавленный завтра,
@@ -175,11 +198,11 @@ jobs:
   # исключений» нет — он бы рассинхронизировался). Больше того: коммит, целиком
   # состоящий из таких файлов, теперь не заводит и самого прогона — его отсекает
   # `paths` на триггере (см. блок над `on`). Это они: README*.md, docs/**,
-  # launcher/**, updater/**, build/**, scripts/**, Directory.Build.props —
-  # это десктопный клиент, он уезжает только целью installer и только руками;
-  # content/** и manifests — их редактируют через админку прямо на сервере,
-  # выкатка их не трогает (см. комментарий в api.env); tests/**, codecov.yml,
-  # .github/workflows/ci.yml и coverage.yml — это CI, а не прод.
+  # scripts/** сверх трёх файлов сборки установщика (dev-скрипты, замеры,
+  # сжатие картинок — в артефакты не попадают); content/** и manifests — их
+  # редактируют через админку прямо на сервере, выкатка их не трогает (см.
+  # комментарий в api.env); tests/**, codecov.yml, .github/workflows/ci.yml
+  # и coverage.yml — это CI, а не прод.
   #
   # Отдельно про deploy/**: юниты systemd и backup-content.sh не входят НИ В
   # ОДИН артефакт — все четыре BUILD_CMD либо собирают только бинарь, либо
@@ -201,6 +224,7 @@ jobs:
       # Ключ через подчёркивание, а не `admin-ui`: в выражениях GitHub дефис
       # в имени свойства читается как минус, и `outputs.admin-ui` не разберётся.
       admin_ui: ${{ steps.f.outputs.admin_ui }}
+      client: ${{ steps.f.outputs.client }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -218,7 +242,7 @@ jobs:
         run: |
           all() {
             echo "$1"
-            printf 'site=true\napi=true\nadmin=true\nadmin_ui=true\n' >> "$GITHUB_OUTPUT"
+            printf 'site=true\napi=true\nadmin=true\nadmin_ui=true\nclient=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           }
 
@@ -277,8 +301,14 @@ jobs:
             API=true
           fi
 
-          printf 'site=%s\napi=%s\nadmin=%s\nadmin_ui=%s\n' \
-            "$SITE" "$API" "$ADMIN" "$UI" | tee -a "$GITHUB_OUTPUT"
+          # Установщик: всё, из чего build-installer.ps1 собирает артефакт
+          # (см. раскладку в комментарии job'ы). Один греп без разбора на
+          # части: установщик один, точнее делить нечего.
+          echo "$FILES" | grep -qE '^(launcher/|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|installer\.nsi|app\.ico)$)' \
+            && CLIENT=true || CLIENT=false
+
+          printf 'site=%s\napi=%s\nadmin=%s\nadmin_ui=%s\nclient=%s\n' \
+            "$SITE" "$API" "$ADMIN" "$UI" "$CLIENT" | tee -a "$GITHUB_OUTPUT"
 
   site:
     # `changes` в needs у ВСЕХ четырёх целей, и у site тоже — а раз появился
@@ -363,14 +393,30 @@ jobs:
     secrets: inherit
 
   installer:
-    needs: [admin-ui]
-    # ТОЛЬКО ручной запуск. Тега как триггера у этого workflow больше нет, а
-    # мержа в main здесь нет намеренно: имя GitHub Release берётся из имени
-    # ссылки, и на push в main релиз назывался бы «main».
+    needs: [changes, admin-ui]
+    # Триггера два, и публикуют они РАЗНОЕ:
     #
-    # То есть выпуск установщика теперь — осознанное действие человека:
-    # «Run workflow» с target=installer.
-    if: always() && inputs.target == 'installer'
+    #   * push в main, задевший файлы клиента (расчёт — job'а `changes`),
+    #     пересобирает установщик и подменяет /downloads/ChillHub-Setup.exe
+    #     на сайте: кнопка «Скачать» обновляется тем же мержем, что и всё
+    #     остальное, а не отстаёт от main на месяцы, как отстала однажды.
+    #     GitHub Release на push не публикуется — имя релиза берётся из
+    #     имени ссылки, и он назывался бы «main»; шаг публикации внутри
+    #     desktop-artifact сам пропускает не-теги.
+    #   * ручной запуск с target=installer — прежний путь; на теге он ещё и
+    #     публикует GitHub Release.
+    #
+    # Страховка `needs.changes.result != 'success'` — та же и по той же
+    # причине, что у четырёх целей выше: упавший расчёт означает «катим»,
+    # а не «молчим». Лишняя пересборка установщика — полчаса раннера и
+    # безвредная подмена файла тем же содержимым; тихо не выкаченный
+    # установщик — сайт, месяцами раздающий старый билд.
+    if: >-
+      always() && (
+        inputs.target == 'installer'
+        || (github.event_name == 'push' && github.ref == 'refs/heads/main'
+            && (needs.changes.result != 'success' || needs.changes.outputs.client == 'true'))
+      )
     uses: tr0llex/deploy-kit/.github/workflows/desktop-artifact.yml@main
     with:
       # Ведущая `v` из тега СНИМАЕТСЯ. Тег называется v1.2.3, а версия уезжает
@@ -380,4 +426,17 @@ jobs:
       # поэтому ловушка ни разу не срабатывала.
       build: ./scripts/build-installer.ps1 -Configuration Release -AppVersion ($env:DEPLOY_VERSION -replace '^v','')
       artifact: scripts/generated_downloads/ChillHub-Setup.exe
+      # На прогонах без тега версию объявляет сам репозиторий: <Version> из
+      # csproj — ровно тот источник, с которым build-installer.ps1 сверяет
+      # -AppVersion. Публиковать установщик с заглушкой 0.0.0 нельзя: она
+      # уехала бы в launcher.version каждому скачавшему.
+      version-cmd: sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' launcher/ChillHub/ChillHub.csproj | head -1
+      # Куда смотрит кнопка «Скачать для Windows» на лендинге. Каталог живёт
+      # вне релизов сайта — см. location /downloads/ в конфиге nginx
+      # (deploy-kit/nginx/sites/chillhub-launcher.conf).
+      upload-dest: /var/www/site-downloads/ChillHub-Setup.exe
+      # Сверка после публикации: прод обязан раздавать ровно ту сумму,
+      # которую посчитал раннер, — «зелёный деплой со старыми файлами»
+      # ловится здесь.
+      verify-url: https://launcher.samoy.love/downloads/ChillHub-Setup.exe.sha256
     secrets: inherit
