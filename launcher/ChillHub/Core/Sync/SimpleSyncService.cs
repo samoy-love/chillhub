@@ -556,6 +556,46 @@ namespace ChillHub.Core.Sync {
         }
 
         /// <summary>
+        /// Проверяет, годится ли уже лежащий в staging файл вместо повторной загрузки.
+        /// Негодный (обрывок, файл от другой версии) удаляет, чтобы он не мешал дальше.
+        /// </summary>
+        /// <param name="stagingFile">Путь к готовому файлу в staging.</param>
+        /// <param name="t">Задание из плана с ожидаемым размером и хешами.</param>
+        /// <returns>true, если файл совпал с манифестом и качать его не нужно.</returns>
+        private static bool TryReuseStagedFile(string stagingFile, FileTask t) {
+            try {
+                if (!File.Exists(stagingFile)) {
+                    return false;
+                }
+
+                if (t.Size > 0 && new FileInfo(stagingFile).Length != t.Size) {
+                    SafeDeleteFile(stagingFile);
+                    return false;
+                }
+
+                if (t.Size <= 0 && string.IsNullOrWhiteSpace(t.Sha256) && string.IsNullOrWhiteSpace(t.Blake3)) {
+                    // Подтвердить нечем: ни размера, ни хеша. Качаем как обычно.
+                    return false;
+                }
+
+                // Без хешей размер — единственное, что у нас есть; с хешами верим только им:
+                // staging мог остаться от прерванного обновления на ДРУГУЮ версию, и совпадение
+                // размера там ничего не значит.
+                VerifyDownloadedFile(stagingFile, t);
+                ChillHub.Core.Logging.Logger.Info($"Staged reuse file='{t.RelativePath}' size={t.Size}");
+                return true;
+            }
+            catch (InvalidDataException) {
+                SafeDeleteFile(stagingFile);
+                return false;
+            }
+            catch (Exception ex) {
+                ChillHub.Core.Logging.Logger.Warn($"TryReuseStagedFile('{t.RelativePath}'): {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Сверяет скачанный .part с хешами из манифеста (SHA-256 и Blake3 за один проход).
         /// Файл не удаляет: решение о повторной попытке принимает цикл ретраев.
         /// </summary>
