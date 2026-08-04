@@ -61,6 +61,42 @@ namespace ChillHub.Tests {
             Assert.DoesNotContain("используется другим", ex.ToString(), StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>
+        /// Пустой каталог с завершающим слешем доходит до диска.
+        /// <para>
+        /// Валидатор такую запись пропускает (иначе игры с уже опубликованными
+        /// манифестами не ставятся вовсе), но в план она клалась сырой, а применение
+        /// плана гоняет путь через <c>ManifestPath.Combine</c>, который неканоническую
+        /// форму отвергает. Обновление lethal-company падало на ровном месте: файлов
+        /// качать нечего, а «Небезопасный путь в манифесте» — есть.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public async Task ПустойКаталогСоСлешемСоздаётсяНаДиске() {
+            using var dir = new TempDir();
+            var rel = "BepInEx/plugins/Bertogim-LoadingScreen";
+            var sync = new SimpleSyncService(new HttpClient(new StubContentHandler(Array.Empty<byte>())));
+            var manifest = new Manifest {
+                GameId = "emptydir-test",
+                Version = "1.0.7",
+                Files = new List<ManifestFile>(),
+                EmptyDirs = new List<string> { rel + "/" },
+            };
+
+            try {
+                var plan = await sync.PlanAsync(manifest, dir.Root, "https://example.invalid/content", CancellationToken.None);
+                Assert.Empty(plan.Downloads);
+                await sync.ExecuteAsync(plan, new Progress<SyncProgress>(), CancellationToken.None);
+            }
+            finally {
+                FileHashCache.Remove(manifest.GameId);
+            }
+
+            Assert.True(
+                Directory.Exists(Path.Combine(dir.Root, rel.Replace('/', Path.DirectorySeparatorChar))),
+                "каталог из манифеста должен быть создан");
+        }
+
         /// <summary>Скачивает один файл через подставной HTTP и возвращает путь, куда он лёг.</summary>
         private static async Task<string> DownloadOneAsync(string root, string rel, byte[] content, string sha256) {
             var handler = new StubContentHandler(content);

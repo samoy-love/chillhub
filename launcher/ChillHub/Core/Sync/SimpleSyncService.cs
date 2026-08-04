@@ -278,9 +278,15 @@ namespace ChillHub.Core.Sync {
             // Чистим кеш от записей об исчезнувших файлах и сохраняем, если что-то поменялось
             hashCache.PruneAndSave(localExisting);
 
-            // Пустые директории для создания
+            // Пустые директории для создания.
+            //
+            // Канонизируем ровно так же, как валидатор: он допускает завершающий
+            // слеш у каталога и проверяет форму УЖЕ без него. Клади мы в план сырую
+            // строку — ApplyPlan подставил бы её в ManifestPath.Combine, а тот
+            // отвергает неканоническую форму, и обновление падало бы на манифесте,
+            // который сам же лаунчер только что признал корректным.
             foreach (var d in manifest.EmptyDirs) {
-                plan.EmptyDirsToCreate.Add(NormalizeRelPath(d));
+                plan.EmptyDirsToCreate.Add(ManifestPath.Canonicalize(d));
             }
 
             // Файлы к удалению (есть локально, нет в манифесте)
@@ -380,6 +386,18 @@ namespace ChillHub.Core.Sync {
                                     var stagingFile = ManifestPath.Combine(stagingRoot, t.RelativePath);
                                     var stagingDir = Path.GetDirectoryName(stagingFile)!;
                                     Directory.CreateDirectory(stagingDir);
+
+                                    // Файл мог быть докачан до конца прошлой, прерванной попыткой:
+                                    // staging переезжает в папку игры только в фазе активации, поэтому
+                                    // после отмены план строится по старому содержимому и снова просит
+                                    // скачать ВСЁ. Докачка по Range спасала лишь те файлы, что были в
+                                    // работе в момент отмены (по одному на поток), а всё завершённое
+                                    // качалось заново — из 9 ГБ второй заход опять требовал 9 ГБ.
+                                    if (TryReuseStagedFile(stagingFile, t)) {
+                                        Interlocked.Add(ref downloaded, t.Size);
+                                        ReportDownloadProgress();
+                                        return;
+                                    }
 
                                     // Скачивание в .part
                                     var partPath = stagingFile + ".part";
@@ -769,11 +787,6 @@ namespace ChillHub.Core.Sync {
             }
 
             return list;
-        }
-
-        private static string NormalizeRelPath(string rel) {
-            var r = rel.Replace('\\', '/');
-            return r.TrimStart('/');
         }
 
         // ВАЖНО: игнорируем специальный файл FreeTP/.hash для всех игр.
