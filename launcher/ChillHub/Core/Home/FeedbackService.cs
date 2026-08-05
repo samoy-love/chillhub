@@ -30,6 +30,11 @@ namespace ChillHub.Core.Home {
         /// <summary>Сколько сообщений разбираем за один проход очереди.</summary>
         private const int MaxSentPerFlush = 5;
 
+        // Подмена файла очереди на время теста. AsyncLocal, а не обычное статическое поле:
+        // классы xUnit по умолчанию идут параллельно, и глобальная подмена увела бы в
+        // подставной файл чужой тест. В приложении значение всегда null.
+        private static readonly AsyncLocal<string?> ScopedQueuePath = new AsyncLocal<string?>();
+
         private readonly HttpClient http;
         private readonly Func<string> baseApiProvider;
         private readonly Action<string> showToast;
@@ -49,7 +54,10 @@ namespace ChillHub.Core.Home {
         }
 
         /// <summary>Путь к файлу оффлайн-очереди.</summary>
-        internal static string QueuePath => Path.Combine(
+        internal static string QueuePath => ScopedQueuePath.Value ?? DefaultQueuePath;
+
+        /// <summary>Настоящее расположение очереди: рядом с остальным роуминг-состоянием.</summary>
+        private static string DefaultQueuePath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ChillHub", "feedback_queue.json");
 
         /// <summary>Сколько сообщений сейчас ждёт отправки.</summary>
@@ -267,6 +275,22 @@ namespace ChillHub.Core.Home {
             return true;
         }
 
+        /// <summary>
+        /// Уводит оффлайн-очередь во временный файл на время теста.
+        /// <para>
+        /// Без этого шва Start, Enqueue и сохранение очереди проверить нечем: они пишут в
+        /// настоящий %APPDATA%\ChillHub\feedback_queue.json, а это единственное место, где
+        /// лаунчер держит написанный пользователем текст, — затереть его тестом нельзя.
+        /// </para>
+        /// <para>
+        /// Подмена видна только тому потоку выполнения, который её выставил, поэтому
+        /// параллельные классы тестов продолжают видеть настоящий путь.
+        /// </para>
+        /// </summary>
+        /// <param name="path">Файл, играющий роль feedback_queue.json.</param>
+        /// <returns>Объект, возвращающий очередь на настоящее место.</returns>
+        internal static IDisposable OverrideQueuePathForTests(string path) => new QueuePathOverride(path);
+
         private async Task<(string Logs, Dictionary<string, string>? System)> BuildDiagnosticsAsync(FeedbackDraft d) {
             Dictionary<string, string>? extraSystem = d.System;
             if (!d.AttachLogs) {
@@ -372,6 +396,18 @@ namespace ChillHub.Core.Home {
                 // Без таймера очередь разберётся при следующем запуске лаунчера.
                 Logging.Logger.Error(ex, "Feedback.StartRetryLoop");
             }
+        }
+
+        /// <summary>Возвращает очередь на настоящее место после <see cref="OverrideQueuePathForTests"/>.</summary>
+        private sealed class QueuePathOverride : IDisposable {
+            private readonly string? previous;
+
+            internal QueuePathOverride(string path) {
+                this.previous = ScopedQueuePath.Value;
+                ScopedQueuePath.Value = path;
+            }
+
+            public void Dispose() => ScopedQueuePath.Value = this.previous;
         }
     }
 }
