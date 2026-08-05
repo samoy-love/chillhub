@@ -96,6 +96,32 @@ namespace ChillHub.Tests {
             }
         }
 
+        /// <summary>
+        /// Ротация соседним экземпляром не уводит запись в архив.
+        /// <para>
+        /// Одиночность процесса ничем не гарантирована, а дескриптор переживает
+        /// переименование файла: пока мы держим client.log открытым, соседний экземпляр
+        /// может увести его в client.1.log — и наши строки продолжали бы литься в архив,
+        /// мимо свежего лога.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void ПослеЧужойРотацииПишемВНовыйФайл() {
+            using var dir = new TempDir();
+            using (Logger.OverrideForTests(dir.Root)) {
+                Logger.Info("строка до чужой ротации");
+
+                // Ровно то, что делает с файлом ротация в соседнем процессе
+                var archive = Path.Combine(dir.Root, "client.1.log");
+                File.Move(Logger.LogFilePath, archive);
+
+                Logger.Info("строка после чужой ротации");
+
+                Assert.Contains("строка после чужой ротации", ReadShared(Logger.LogFilePath));
+                Assert.DoesNotContain("строка после чужой ротации", ReadShared(archive));
+            }
+        }
+
         /// <summary>Чтение файла, который кто-то держит открытым на запись.</summary>
         private static string ReadShared(string path) {
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);

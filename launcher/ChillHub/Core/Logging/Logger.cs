@@ -16,6 +16,9 @@ namespace ChillHub.Core.Logging {
         /// <summary>Сколько архивных копий храним (client.1.log ... client.3.log).</summary>
         private const int MaxArchives = 3;
 
+        /// <summary>Обычный интервал проверки на «файл переименовали под нами», мс.</summary>
+        private const int DefaultStaleCheckIntervalMs = 2000;
+
         private static readonly object @lock = new object();
 
         private static readonly UTF8Encoding Utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
@@ -31,6 +34,15 @@ namespace ChillHub.Core.Logging {
 
         /// <summary>Текущий размер активного файла; -1 — ещё не считали с диска.</summary>
         private static long currentSize = -1;
+
+        /// <summary>
+        /// Как часто проверять, что открытый файл — всё ещё client.log, мс.
+        /// В тестах обнуляется, чтобы проверка шла на каждой записи.
+        /// </summary>
+        private static int staleCheckIntervalMs = DefaultStaleCheckIntervalMs;
+
+        /// <summary>Когда в последний раз проверяли, что пишем не в переименованный файл.</summary>
+        private static long lastStaleCheckTicks;
 
         /// <summary>
         /// Открытый файл лога. Держим его между записями вместо открытия и закрытия
@@ -190,6 +202,8 @@ namespace ChillHub.Core.Logging {
                         try { currentSize = File.Exists(path) ? new FileInfo(path).Length : 0; } catch { currentSize = 0; }
                     }
 
+                    DropStreamIfRotatedAway(path);
+
                     if (currentSize + buf.Length > MaxFileBytes) {
                         // Ротация — это переименования, а переименовать открытый файл нельзя:
                         // поток закрываем до неё и открываем заново уже на новый client.log.
@@ -228,6 +242,47 @@ namespace ChillHub.Core.Logging {
             }
         }
 
+        /// <summary>
+        /// Закрывает поток, если файл под ним переименовали.
+        /// <para>
+        /// Одиночность процесса ничем не гарантирована, а ротация — это переименование:
+        /// пока мы держим client.log открытым, соседний экземпляр может увести его в
+        /// client.1.log. Дескриптор переживает переименование, и мы продолжали бы писать
+        /// в архив, а свежий client.log рос бы без наших строк.
+        /// </para>
+        /// <para>
+        /// Признак — файл по пути короче, чем мы в него уже написали. Второй писатель
+        /// файл только удлиняет, укоротить его может лишь подмена. Проверка стоит одного
+        /// обращения к метаданным и потому идёт по интервалу, а не на каждой строке:
+        /// иначе она съела бы ровно тот выигрыш, ради которого поток и держится открытым.
+        /// </para>
+        /// </summary>
+        /// <param name="path">Путь к активному файлу лога.</param>
+        private static void DropStreamIfRotatedAway(string path) {
+            if (stream == null) {
+                return;
+            }
+
+            var now = Environment.TickCount64;
+            if (staleCheckIntervalMs > 0 && now - lastStaleCheckTicks < staleCheckIntervalMs) {
+                return;
+            }
+
+            lastStaleCheckTicks = now;
+            try {
+                var actual = File.Exists(path) ? new FileInfo(path).Length : -1;
+                if (actual >= currentSize) {
+                    return;
+                }
+
+                CloseStream();
+                currentSize = actual < 0 ? 0 : actual;
+            }
+            catch {
+                // Не смогли посмотреть — оставляем как есть, следующая проверка повторит
+            }
+        }
+
         /// <summary>Закрывает открытый файл лога. Вызывать только под <see cref="@lock"/>.</summary>
         private static void CloseStream() {
             try { stream?.Dispose(); } catch { }
@@ -251,6 +306,11 @@ namespace ChillHub.Core.Logging {
                     logDirectory = directory;
                     enabled = true;
                     currentSize = -1;
+
+                    // На каждой записи: тесту нужна детерминированная проверка, а не
+                    // ожидание интервала.
+                    staleCheckIntervalMs = 0;
+                    lastStaleCheckTicks = 0;
                 }
             }
 
@@ -260,6 +320,7 @@ namespace ChillHub.Core.Logging {
                     logDirectory = this.previousDirectory;
                     enabled = this.previousEnabled;
                     currentSize = -1;
+                    staleCheckIntervalMs = DefaultStaleCheckIntervalMs;
                 }
             }
         }
