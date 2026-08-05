@@ -490,42 +490,15 @@ jobs:
           cache-dependency-path: |
             **/*.csproj
             **/packages.lock.json
+      # Логика (вместе с закреплённой версией NSIS и отчётом «какой компилятор
+      # собрал артефакт») живёт в scripts/ci/ensure-nsis.ps1 и зовётся ещё из
+      # входа `build` job'ы installer в deploy.yml. Пока она лежала здесь
+      # инлайном, путь выкатки молча полагался на NSIS из образа раннера — а
+      # образ его больше не несёт: CI зелёный, публикация упала. Копий больше
+      # нет, чтобы зазор между ними не завёлся снова.
       - name: Ensure NSIS is available
         shell: pwsh
-        env:
-          # И31: версия NSIS закреплена явно.
-          #
-          # Было `choco install nsis` без версии — то есть «что окажется
-          # свежим в момент запуска». Установщик собирается компилятором,
-          # который может смениться между двумя прогонами одного и того же
-          # коммита; это ровно та невоспроизводимость, ради борьбы с которой
-          # в шапке этого файла закреплены все остальные линтеры.
-          #
-          # Если Chocolatey отвергнет эту версию, шаг упадёт с внятной
-          # ошибкой — это нормальное, ревьюируемое однострочное обновление.
-          # Посмотреть доступные версии: choco list nsis --all-versions
-          NSIS_VERSION: '3.11'
-        # The windows-latest image normally ships NSIS, but do not rely on it:
-        # install via Chocolatey only when makensis is missing.
-        run: |
-          if (Get-Command makensis -ErrorAction SilentlyContinue) {
-            Write-Host "makensis found: $((Get-Command makensis).Source)"
-          } elseif (Test-Path 'C:\Program Files (x86)\NSIS\makensis.exe') {
-            Write-Host "makensis found in the default install directory"
-            Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files (x86)\NSIS'
-          } else {
-            Write-Host "makensis not found, installing NSIS $env:NSIS_VERSION via Chocolatey"
-            choco install nsis --version=$env:NSIS_VERSION --no-progress -y
-            if ($LASTEXITCODE -ne 0) {
-              throw "choco install nsis --version=$env:NSIS_VERSION failed. Если версия больше не публикуется, обновите NSIS_VERSION в этом шаге (choco list nsis --all-versions)."
-            }
-            Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files (x86)\NSIS'
-          }
-      - name: Report NSIS version
-        shell: pwsh
-        # Какой именно компилятор собрал артефакт — это должно быть видно в
-        # логе, а не выясняться постфактум.
-        run: makensis /VERSION; Write-Host ""
+        run: ./scripts/ci/ensure-nsis.ps1
       - name: Build installer
         shell: pwsh
         # No secrets required: scripts/installer.nsi does not sign the output and
