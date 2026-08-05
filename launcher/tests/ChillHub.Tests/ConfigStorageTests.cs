@@ -243,6 +243,38 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// Сорвавшийся перенос обязан оставить след в журнале.
+        /// <para>
+        /// Это единственный случай, когда настройки пользователя теряются целиком: старый
+        /// config.json остался на прежнем месте, новый не написан, лаунчер разворачивает
+        /// умолчания — человек видит «игры не установлены» и заново качает десятки гигабайт.
+        /// Пока перенос гасил свои ошибки сам, в client.log об этом не было ни строки,
+        /// и разбирать жалобу было не по чему.
+        /// </para>
+        /// <para>
+        /// Запись делается невозможной так же, как при отсутствии прав: на месте config.json
+        /// оказывается каталог.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void СорвавшийсяПереносКонфигаПопадаетВЖурнал() {
+            using var cfgDir = new ConfigDirsScope();
+            using var logs = new TempDir();
+            cfgDir.WriteLegacyConfig(JsonSerializer.Serialize(new AppConfig { GamesPath = @"E:\Старые игры" }));
+            Directory.CreateDirectory(cfgDir.ConfigPath);
+
+            using (ChillHub.Core.Logging.Logger.OverrideForTests(logs.Root)) {
+                // Запуск ломаться не должен: перенос — не условие работоспособности.
+                Assert.Equal(AppConfig.DefaultGamesPath(), ConfigService.Load().GamesPath);
+            }
+
+            Assert.Contains(
+                "миграция не выполнена",
+                File.ReadAllText(Path.Combine(logs.Root, "client.log")),
+                StringComparison.Ordinal);
+        }
+
+        /// <summary>
         /// Правки руками нормализуются при чтении: config.json лежит в %APPDATA% и правится
         /// чем угодно, работающим от имени пользователя, а по ApiBaseUrl лаунчер берёт
         /// файлы самообновления.
