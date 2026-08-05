@@ -18,7 +18,6 @@ namespace ChillHub.Core {
     /// Non-blocking: reports are sent fire-and-forget.
     /// </summary>
     public static class ErrorReporter {
-        private static readonly HttpClient http = HttpClientProvider.Shared;
         private static readonly object rlLock = new object();
         private static readonly Dictionary<string, (int Count, DateTime WindowStart, DateTime LastSent)> rate = new();
         private const int RL_WindowSeconds = 180;  // signature throttle window (3 minutes)
@@ -42,6 +41,55 @@ namespace ChillHub.Core {
         private static string ManualQuotaPath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ChillHub", "report_manual_rl.json");
 
         private sealed class ManualQuotaState { public int Count { get; set; } public DateTime WindowStartUtc { get; set; } }
+
+        // Не readonly только ради OverrideHttpForTests: в приложении значение задаётся один раз.
+        private static HttpClient http = HttpClientProvider.Shared;
+
+        /// <summary>
+        /// Уводит отправку отчётов на подставной транспорт на время теста.
+        /// <para>
+        /// Без этого шва <see cref="ReportCoreAsync"/> нечем проверить: единственный способ
+        /// убедиться, что выключенный тумблер автоотчётов не выпускает НИ ОДНОГО запроса,
+        /// а имя пользователя не утекает в тело письма, — посмотреть на то, что реально
+        /// ушло бы в сеть.
+        /// </para>
+        /// </summary>
+        /// <param name="client">Клиент, которым отправлять отчёты.</param>
+        /// <returns>Объект, возвращающий настоящий транспорт.</returns>
+        internal static IDisposable OverrideHttpForTests(HttpClient client) => new HttpOverride(client);
+
+        /// <summary>
+        /// Даёт тесту дождаться отправки отчёта. <see cref="Report"/> сознательно
+        /// «выстрелил и забыл», поэтому наблюдать за его результатом нечем.
+        /// </summary>
+        /// <param name="ex">Исключение, о котором сообщаем.</param>
+        /// <param name="context">Место, где оно случилось.</param>
+        /// <param name="includeDiagnostics">Прикладывать ли логи и диагностику.</param>
+        /// <returns>Задача отправки.</returns>
+        internal static Task ReportForTestsAsync(Exception ex, string context, bool includeDiagnostics = false)
+            => ReportCoreAsync(ex, context, includeDiagnostics);
+
+        /// <summary>
+        /// Забывает счётчики повторов. Окно дедупликации живёт в статике и переживает
+        /// границы тестов: без сброса второй тест получал бы чужой счётчик.
+        /// </summary>
+        internal static void ResetThrottleForTests() {
+            lock (rlLock) {
+                rate.Clear();
+            }
+        }
+
+        /// <summary>Возвращает настоящий транспорт после <see cref="OverrideHttpForTests"/>.</summary>
+        private sealed class HttpOverride : IDisposable {
+            private readonly HttpClient previous;
+
+            internal HttpOverride(HttpClient client) {
+                this.previous = http;
+                http = client;
+            }
+
+            public void Dispose() => http = this.previous;
+        }
 
         public static bool TryConsumeGlobal(out TimeSpan retryAfter) {
             retryAfter = TimeSpan.Zero;
@@ -282,7 +330,7 @@ namespace ChillHub.Core {
         private static void OnAutoReported(string context) { try { AutoReported?.Invoke(context); } catch { } }
         private static void OnAutoReportSuppressed(TimeSpan retryAfter) { try { AutoReportSuppressed?.Invoke(retryAfter); } catch { } }
 
-        private static bool TryBuildLocalAdminUrl(string baseApi, out string adminUrl) {
+        internal static bool TryBuildLocalAdminUrl(string baseApi, out string adminUrl) {
             adminUrl = string.Empty;
             try {
                 if (!Uri.TryCreate(baseApi, UriKind.Absolute, out var u)) {
@@ -300,7 +348,7 @@ namespace ChillHub.Core {
             return false;
         }
 
-        private static Dictionary<string, string> CollectSystemInfo() {
+        internal static Dictionary<string, string> CollectSystemInfo() {
             var dict = new Dictionary<string, string>();
             try {
                 dict["os"] = Environment.OSVersion.VersionString;
@@ -314,7 +362,7 @@ namespace ChillHub.Core {
             return dict;
         }
 
-        private static string BuildSignature(Exception ex, string context) {
+        internal static string BuildSignature(Exception ex, string context) {
             try {
                 var type = ex.GetType().FullName ?? "";
                 var msg = ex.Message ?? "";
@@ -338,7 +386,7 @@ namespace ChillHub.Core {
             catch { return "sig"; }
         }
 
-        private static bool ShouldThrottle(string sig) {
+        internal static bool ShouldThrottle(string sig) {
             lock (rlLock) {
                 var now = DateTime.UtcNow;
                 if (!rate.TryGetValue(sig, out var st)) {
