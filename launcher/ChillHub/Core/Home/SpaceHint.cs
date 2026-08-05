@@ -13,6 +13,9 @@ namespace ChillHub.Core.Home {
     /// и собирает готовую строку для UI. Сам ничего не рисует.
     /// </summary>
     internal sealed class SpaceHint {
+        /// <summary>Текст для игры, которой ничего докачивать не нужно.</summary>
+        internal const string UpToDateText = "Последняя версия игры уже установлена";
+
         private readonly object cacheLock = new();
         private readonly Dictionary<string, long> neededBytes = new(StringComparer.OrdinalIgnoreCase);
 
@@ -64,5 +67,37 @@ namespace ChillHub.Core.Home {
         /// <summary>Собирает строку вида «Нужно: 1,2 ГБ (40,0 ГБ доступно)».</summary>
         internal static string BuildText(long need, long have)
             => need > 0 ? $"Нужно: {HomeFormat.FormatSize(need)} ({HomeFormat.FormatSize(have)} доступно)" : string.Empty;
+
+        /// <summary>
+        /// Общая часть обеих подсказок: во время активной установки не вмешиваемся,
+        /// для актуально установленной игры показываем готовый текст.
+        /// </summary>
+        /// <param name="isUpdating">Идёт установка или обновление.</param>
+        /// <param name="game">Игра, для которой считаем объём (может отсутствовать в списке).</param>
+        /// <param name="gameId">Идентификатор выбранной игры.</param>
+        /// <returns>Что делать со строкой размера.</returns>
+        internal static SpaceHintAction Decide(bool isUpdating, GameInfo? game, string? gameId) {
+            if (isUpdating) {
+                return SpaceHintAction.Skip; // не вмешиваемся в активный процесс
+            }
+
+            if (game != null && game.IsInstalled && !game.NeedsUpdate) {
+                return SpaceHintAction.ShowUpToDate;
+            }
+
+            return string.IsNullOrWhiteSpace(gameId) ? SpaceHintAction.Skip : SpaceHintAction.Compute;
+        }
+    }
+
+    /// <summary>Что делать со строкой «сколько нужно скачать».</summary>
+    internal enum SpaceHintAction {
+        /// <summary>Строку не трогаем.</summary>
+        Skip,
+
+        /// <summary>Показываем «последняя версия уже установлена».</summary>
+        ShowUpToDate,
+
+        /// <summary>Нужно посчитать объём.</summary>
+        Compute,
     }
 }
