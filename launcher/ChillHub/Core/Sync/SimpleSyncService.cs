@@ -196,9 +196,11 @@ namespace ChillHub.Core.Sync {
                 var localPath = ManifestPath.Combine(localRoot, rel);
                 bool needDownload = true;
                 string reason = "missing";
+                long localSize = 0;
                 if (File.Exists(localPath)) {
                     try {
                         var info = new FileInfo(localPath);
+                        localSize = info.Length;
 
                         // Если есть sha256/blake3 в манифесте — считаем локальный хеш и сравним
                         if (!string.IsNullOrWhiteSpace(mf.Sha256) || !string.IsNullOrWhiteSpace(mf.Blake3)) {
@@ -263,6 +265,11 @@ namespace ChillHub.Core.Sync {
                         Executable = mf.Executable,
                     });
                     plan.TotalDownloadBytes += mf.Size;
+
+                    // Место, которое освободит этот файл, когда новая версия встанет на
+                    // его место. Нужно для честной оценки требуемого свободного места:
+                    // заменяемый файл не прибавляет к занятому объёму, он его меняет.
+                    plan.ReplacedBytes += localSize;
 
                     // Ключ сводки — вид причины без цифр: «size_mismatch local=… manifest=…»
                     // у каждого файла свой, и как ключ он бы дал столько же строк, сколько файлов.
@@ -368,17 +375,20 @@ namespace ChillHub.Core.Sync {
                 TryDeleteDirectoryWithRetry(legacyStaging, recursive: true, attempts: 3, delayMs: 150);
             }
 
+            var degree = Math.Clamp(ConfigService.Current.DownloadThreads, 2, 16);
+
             // Проверка свободного места (без запаса) на КАЖДОМ задействованном диске.
             // Скачиваем в LocalRoot, а применяем в ApplyRoot — при самообновлении это
             // разные тома (%TEMP% и каталог установки), и проверка только по одному
             // пропускала случай «в TEMP место есть, а на системном диске нет».
-            if (total > 0) {
+            var required = RequiredFreeBytes(plan, degree);
+            if (required > 0) {
                 foreach (var checkedRoot in EnumerateDistinctDrives(plan.LocalRoot, plan.ApplyRoot)) {
                     var drive = new DriveInfo(checkedRoot);
-                    if (drive.AvailableFreeSpace < total) {
+                    if (drive.AvailableFreeSpace < required) {
                         throw new IOException(
                             $"Недостаточно свободного места на диске {checkedRoot}. " +
-                            $"Требуется {total} байт, доступно {drive.AvailableFreeSpace} байт.");
+                            $"Требуется {required} байт, доступно {drive.AvailableFreeSpace} байт.");
                     }
                 }
             }
@@ -405,7 +415,6 @@ namespace ChillHub.Core.Sync {
 
             // Скачивание недостающих/изменённых (многопоточно)
             progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = 0, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
-            var degree = Math.Clamp(ConfigService.Current.DownloadThreads, 2, 16);
 
             // Отчёт о прогрессе шёл на каждые 256 КБ в каждом потоке: при восьми потоках это
             // сотни обращений к диспетчеру в секунду, и UI занимался только перерисовкой
@@ -606,6 +615,45 @@ namespace ChillHub.Core.Sync {
         }
 
         /// <summary>
+        /// Сколько места на диске обновлению нужно на самом деле.
+        /// <para>
+        /// Пока файлы качались в staging, ответом был весь объём загрузки: вторая копия
+        /// лежала на диске целиком, рядом со старой сборкой. Теперь файл качается в
+        /// «.part» рядом с целью и подменяет её сразу после сверки, поэтому старые байты
+        /// освобождаются по ходу дела. Нужно ровно два слагаемых: прирост занятого места
+        /// и запас на файлы, которые лежат недокачанными ОДНОВРЕМЕННО.
+        /// </para>
+        /// <para>
+        /// Требовать по-прежнему весь объём загрузки — значит отказывать в обновлении,
+        /// которое спокойно поместилось бы: сборка, где меняется почти всё, просила бы
+        /// свободным второй свой размер, хотя реально ей нужно место под несколько
+        /// файлов в работе.
+        /// </para>
+        /// </summary>
+        /// <param name="plan">План различий.</param>
+        /// <param name="degree">Сколько файлов качается одновременно.</param>
+        /// <returns>Требуемое число свободных байт.</returns>
+        internal static long RequiredFreeBytes(DiffPlan plan, int degree) {
+            if (plan.TotalDownloadBytes <= 0) {
+                return 0;
+            }
+
+            // Прирост может быть и отрицательным (новая сборка легче старой) — тогда
+            // по этой части требований нет.
+            var growth = Math.Max(0, plan.TotalDownloadBytes - plan.ReplacedBytes);
+
+            // Запас: самые тяжёлые файлы, которые могут оказаться в работе разом. Каждый
+            // из них какое-то время лежит на диске дважды — старой версией и своим ".part".
+            var inFlight = plan.Downloads
+                .Select(d => d.Size)
+                .OrderByDescending(s => s)
+                .Take(Math.Max(1, degree))
+                .Sum();
+
+            return growth + inFlight;
+        }
+
+        /// <summary>
         /// Ставит скачанный и сверенный файл на его место в игре.
         /// <para>
         /// Быстрый путь — одно переименование с заменой. Медленная ветка нужна только для
@@ -784,6 +832,7 @@ namespace ChillHub.Core.Sync {
 
             ClearUpdateMarker(plan.LocalRoot);
         }
+
 
         /// <summary>
         /// Корни томов для переданных путей, без повторов и без пустых значений.

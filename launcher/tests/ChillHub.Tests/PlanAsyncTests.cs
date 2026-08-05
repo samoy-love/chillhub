@@ -35,6 +35,49 @@ namespace ChillHub.Tests {
             Assert.Equal(0, plan.TotalDownloadBytes);
         }
 
+        /// <summary>
+        /// План считает, сколько занимают заменяемые файлы прямо сейчас.
+        /// <para>
+        /// Разница с весом загрузки — реальный прирост занятого места. Пока файлы
+        /// качались в staging, вторая копия лежала на диске целиком и вопрос не стоял;
+        /// теперь загрузка идёт сразу на место, и без этого числа проверка свободного
+        /// места требовала бы весь объём загрузки — отказывая в обновлении, которое
+        /// спокойно поместилось бы.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public async Task ПланСчитаетМестоЗаменяемыхФайлов() {
+            using var dir = new TempDir();
+            var oldContent = new string('с', 500);
+            dir.WriteFile("game.exe", oldContent);
+            var oldSize = new FileInfo(dir.PathTo("game.exe")).Length;
+
+            // Тот же путь, другое содержимое — файл попадёт в загрузку как заменяемый
+            var manifest = PlanTestData.Manifest(
+                PlanTestData.File("game.exe", 900, new string('a', 64)),
+                PlanTestData.File("new.dat", 300, new string('b', 64)));
+
+            var plan = await PlanTestData.PlanAsync(manifest, dir.Root);
+
+            Assert.Equal(2, plan.Downloads.Count);
+            Assert.Equal(1200, plan.TotalDownloadBytes);
+
+            // Только game.exe существует локально; new.dat заменять нечего
+            Assert.Equal(oldSize, plan.ReplacedBytes);
+        }
+
+        /// <summary>Нечего заменять — считать освобождаемое место не из чего.</summary>
+        [Fact]
+        public async Task ЧистаяУстановкаНичегоНеЗаменяет() {
+            using var dir = new TempDir();
+            var manifest = PlanTestData.Manifest(PlanTestData.File("game.exe", 900, new string('a', 64)));
+
+            var plan = await PlanTestData.PlanAsync(manifest, dir.Root);
+
+            Assert.Single(plan.Downloads);
+            Assert.Equal(0, plan.ReplacedBytes);
+        }
+
         [Fact]
         public async Task СовпавшийПоBlake3ФайлВПланНеПопадает() {
             using var dir = new TempDir();
