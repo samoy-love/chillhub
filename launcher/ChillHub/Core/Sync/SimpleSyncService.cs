@@ -332,6 +332,15 @@ namespace ChillHub.Core.Sync {
                         continue;
                     }
 
+                    // "<файл>.part" рядом с файлом ИЗ манифеста — недокачанное тело этого
+                    // самого файла: загрузка идёт прямо в папку игры, и по нему обновление
+                    // возобновляется с места обрыва. В манифесте его нет по определению,
+                    // и без этой проверки план стирал бы ровно то, ради чего докачка есть.
+                    if (norm.EndsWith(".part", StringComparison.OrdinalIgnoreCase)
+                        && manifestFiles.ContainsKey(norm.Substring(0, norm.Length - 5))) {
+                        continue;
+                    }
+
                     plan.ToDelete.Add(norm);
                 }
             }
@@ -346,10 +355,18 @@ namespace ChillHub.Core.Sync {
             var total = plan.TotalDownloadBytes;
             var totalFiles = plan.TotalFilesToDownload;
 
-            // Создать папку назначения и staging
-            var stagingRoot = Path.Combine(plan.LocalRoot, ".staging");
-            Directory.CreateDirectory(stagingRoot);
             Directory.CreateDirectory(plan.LocalRoot);
+
+            // Наследство прежней схемы: файлы качались в .staging и переезжали в игру
+            // одним пакетом в конце. Это держало на диске вторую копию всего, что
+            // обновление заменяет, — на сборке, которая меняется целиком, выходило
+            // двойное место. Теперь каждый файл встаёт на своё место сразу после сверки
+            // хеша, а брошенный staging от прерванных обновлений только занимает диск.
+            var legacyStaging = Path.Combine(plan.LocalRoot, ".staging");
+            if (Directory.Exists(legacyStaging)) {
+                ChillHub.Core.Logging.Logger.Info($"Убираем staging от прежней схемы: {legacyStaging}");
+                TryDeleteDirectoryWithRetry(legacyStaging, recursive: true, attempts: 3, delayMs: 150);
+            }
 
             // Проверка свободного места (без запаса) на КАЖДОМ задействованном диске.
             // Скачиваем в LocalRoot, а применяем в ApplyRoot — при самообновлении это
@@ -367,6 +384,21 @@ namespace ChillHub.Core.Sync {
             }
 
             progress.Report(new SyncProgress { Stage = "Checking", BytesDownloaded = 0, TotalBytes = total, FilesDownloaded = 0, TotalFiles = totalFiles });
+
+            // Маркер ставится ДО первой записи в папку игры, а не перед активацией.
+            // Раньше он и не был нужен раньше: до самого конца загрузки папку игры никто
+            // не трогал. Теперь файлы встают на место по мере готовности, и с первого же
+            // из них сборка смешанная — прерви обновление, и запускать её нельзя. Пока
+            // маркер на месте, лаунчер показывает «требуется обновление», а не «играть».
+            var changesDisk = plan.Downloads.Count > 0 || plan.ToDelete.Count > 0;
+            if (changesDisk) {
+                WriteUpdateMarker(plan.LocalRoot, plan.Version);
+            }
+
+            // Файлы, которые физически заменятся только после перезагрузки. Собирается из
+            // потоков загрузки, поэтому потокобезопасный: пока список не пуст, обновление
+            // НЕ завершено, сколько бы удачно ни прошло остальное.
+            var deferred = new System.Collections.Concurrent.ConcurrentBag<string>();
 
             // Пустые директории будем создавать в самом конце (после очистки),
             // чтобы их не удалить во время Cleanup
@@ -409,24 +441,17 @@ namespace ChillHub.Core.Sync {
                             async () => {
                                 try {
                                     ct.ThrowIfCancellationRequested();
-                                    var stagingFile = ManifestPath.Combine(stagingRoot, t.RelativePath);
-                                    var stagingDir = Path.GetDirectoryName(stagingFile)!;
-                                    Directory.CreateDirectory(stagingDir);
 
-                                    // Файл мог быть докачан до конца прошлой, прерванной попыткой:
-                                    // staging переезжает в папку игры только в фазе активации, поэтому
-                                    // после отмены план строится по старому содержимому и снова просит
-                                    // скачать ВСЁ. Докачка по Range спасала лишь те файлы, что были в
-                                    // работе в момент отмены (по одному на поток), а всё завершённое
-                                    // качалось заново — из 9 ГБ второй заход опять требовал 9 ГБ.
-                                    if (TryReuseStagedFile(stagingFile, t)) {
-                                        Interlocked.Add(ref downloaded, t.Size);
-                                        ReportDownloadProgress();
-                                        return;
-                                    }
+                                    // Целевое имя — сразу конечное, без промежуточного каталога.
+                                    // Старый файл при этом остаётся нетронутым до последнего
+                                    // момента: рядом с ним копится ".part", и подменяется он одним
+                                    // переименованием, когда содержимое уже сверено с манифестом.
+                                    var dstPath = ManifestPath.Combine(plan.LocalRoot, t.RelativePath);
+                                    Directory.CreateDirectory(Path.GetDirectoryName(dstPath)!);
 
-                                    // Скачивание в .part
-                                    var partPath = stagingFile + ".part";
+                                    // Скачивание в .part. Уцелевший от прерванной попытки
+                                    // докачивается по Range — это и есть возобновление.
+                                    var partPath = dstPath + ".part";
                                     {
                                         long existing = 0;
                                         if (File.Exists(partPath)) {
@@ -528,8 +553,11 @@ namespace ChillHub.Core.Sync {
                                         }
                                     }
 
-                                    // Переименовать .part -> готовый файл в staging
-                                    File.Move(partPath, stagingFile, overwrite: true);
+                                    // Содержимое сверено — ставим файл на место. С этого
+                                    // момента сборка на диске смешанная, о чём и говорит маркер.
+                                    if (!ApplyDownloadedFile(partPath, dstPath, t.RelativePath)) {
+                                        deferred.Add(t.RelativePath);
+                                    }
                                 }
                                 finally {
                                     Interlocked.Increment(ref filesDone);
@@ -565,56 +593,102 @@ namespace ChillHub.Core.Sync {
             // Верификация (хеши пропустим на моках)
             progress.Report(new SyncProgress { Stage = "Verifying", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
 
-            // Активация: перенести staging файлы в основной корень.
-            // Фаза целиком синхронная и тяжёлая (File.Move по каждому файлу, SafeDeleteFile
-            // с ожиданиями и GC.Collect, обход дерева каталогов). Вызывающие стартуют
-            // ExecuteAsync с UI-потока, поэтому уводим её в пул: иначе окно замирает
-            // на десятки секунд и «Отмена» физически не нажимается.
+            // Завершение: убрать лишние файлы, опустевшие каталоги и снять маркер. Сами
+            // файлы игры уже на своих местах — их поставили потоки загрузки. Фаза синхронная
+            // и блокирующая (SafeDeleteFile с ожиданиями, обход дерева каталогов), а
+            // вызывающие стартуют ExecuteAsync с UI-потока — уводим её в пул, иначе окно
+            // замирает и «Отмена» физически не нажимается.
             progress.Report(new SyncProgress { Stage = "Activating", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
-            await Task.Run(() => ApplyPlan(plan, stagingRoot, ct), ct).ConfigureAwait(false);
+            await Task.Run(() => FinishPlan(plan, deferred, changesDisk, ct), ct).ConfigureAwait(false);
 
             // Финальный сигнал о завершении
             progress.Report(new SyncProgress { Stage = "Completed", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
         }
 
         /// <summary>
-        /// Проверяет, годится ли уже лежащий в staging файл вместо повторной загрузки.
-        /// Негодный (обрывок, файл от другой версии) удаляет, чтобы он не мешал дальше.
+        /// Ставит скачанный и сверенный файл на его место в игре.
+        /// <para>
+        /// Быстрый путь — одно переименование с заменой. Медленная ветка нужна только для
+        /// файлов, которые кто-то держит (запущенная игра, античит, антивирус): старый
+        /// отводится в сторону, новый кладётся рядом как «.new», а замена планируется на
+        /// перезагрузку. Пока такие файлы есть, обновление не завершено.
+        /// </para>
         /// </summary>
-        /// <param name="stagingFile">Путь к готовому файлу в staging.</param>
-        /// <param name="t">Задание из плана с ожидаемым размером и хешами.</param>
-        /// <returns>true, если файл совпал с манифестом и качать его не нужно.</returns>
-        private static bool TryReuseStagedFile(string stagingFile, FileTask t) {
+        /// <param name="partPath">Скачанный файл (.part).</param>
+        /// <param name="dstPath">Куда он должен встать.</param>
+        /// <param name="rel">Относительный путь — для сообщений в лог.</param>
+        /// <returns>true, если файл встал на место; false — если замена отложена до перезагрузки.</returns>
+        private static bool ApplyDownloadedFile(string partPath, string dstPath, string rel) {
             try {
-                if (!File.Exists(stagingFile)) {
-                    return false;
-                }
-
-                if (t.Size > 0 && new FileInfo(stagingFile).Length != t.Size) {
-                    SafeDeleteFile(stagingFile);
-                    return false;
-                }
-
-                if (t.Size <= 0 && string.IsNullOrWhiteSpace(t.Sha256) && string.IsNullOrWhiteSpace(t.Blake3)) {
-                    // Подтвердить нечем: ни размера, ни хеша. Качаем как обычно.
-                    return false;
-                }
-
-                // Без хешей размер — единственное, что у нас есть; с хешами верим только им:
-                // staging мог остаться от прерванного обновления на ДРУГУЮ версию, и совпадение
-                // размера там ничего не значит.
-                VerifyDownloadedFile(stagingFile, t);
-                ChillHub.Core.Logging.Logger.Info($"Staged reuse file='{t.RelativePath}' size={t.Size}");
+                File.Move(partPath, dstPath, overwrite: true);
                 return true;
             }
-            catch (InvalidDataException) {
-                SafeDeleteFile(stagingFile);
-                return false;
+            catch (IOException) {
+            }
+            catch (UnauthorizedAccessException) {
+            }
+
+            if (File.Exists(dstPath)) {
+                SafeDeleteFile(dstPath);
+            }
+
+            if (!File.Exists(dstPath)) {
+                File.Move(partPath, dstPath, overwrite: true);
+                return true;
+            }
+
+            // Удалить не вышло — пробуем отвести старый файл в сторону
+            var backup = dstPath + $".old.{Environment.ProcessId}";
+            try {
+                File.Move(dstPath, backup, overwrite: true);
+            }
+            catch {
+            }
+
+            if (!File.Exists(dstPath)) {
+                File.Move(partPath, dstPath, overwrite: true);
+                return true;
+            }
+
+            // Последнее средство: кладём новый файл рядом и планируем замену на перезагрузку
+            var pending = dstPath + ".new";
+            try {
+                if (File.Exists(pending)) {
+                    SafeDeleteFile(pending);
+                }
+            }
+            catch {
+            }
+
+            File.Move(partPath, pending, overwrite: true);
+
+            // REPLACE_EXISTING обязателен: сюда мы попадаем ровно тогда, когда dstPath
+            // СУЩЕСТВУЕТ и не удаляется. Без флага MoveFileEx на существующем целевом
+            // файле возвращает ошибку — то есть резервный путь, ради которого всё это
+            // написано, не срабатывал никогда: .new оставался мусором, старый файл на
+            // месте, хеш не сходился, и «требуется обновление» повторялось бесконечно,
+            // накапливая по .new за попытку.
+            try {
+                var scheduled = NativeMethods.MoveFileEx(
+                    pending,
+                    dstPath,
+                    NativeMethods.MOVEFILE_DELAY_UNTIL_REBOOT | NativeMethods.MOVEFILE_REPLACE_EXISTING);
+                if (scheduled) {
+                    ChillHub.Core.Logging.Logger.Info(
+                        $"Файл '{rel}' занят другим процессом: замена запланирована на перезагрузку.");
+                }
+                else {
+                    ChillHub.Core.Logging.Logger.Warn(
+                        $"Не удалось запланировать замену '{rel}' на перезагрузку (код {Marshal.GetLastWin32Error()}).");
+                }
             }
             catch (Exception ex) {
-                ChillHub.Core.Logging.Logger.Warn($"TryReuseStagedFile('{t.RelativePath}'): {ex.Message}");
-                return false;
+                ChillHub.Core.Logging.Logger.Warn($"MoveFileEx('{rel}'): {ex.Message}");
             }
+
+            // И при успешном планировании, и при отказе MoveFileEx на диске сейчас
+            // лежит СТАРОЕ содержимое: игра обновлена не полностью.
+            return false;
         }
 
         /// <summary>
@@ -643,118 +717,22 @@ namespace ChillHub.Core.Sync {
         }
 
         /// <summary>
-        /// Фаза активации: перенос скачанного из staging в корень игры, удаление лишних
-        /// файлов, очистка пустых каталогов и снятие маркера. Синхронная и блокирующая —
-        /// вызывать только из пула потоков.
+        /// Завершение обновления: удаление лишних файлов, очистка опустевших каталогов,
+        /// создание пустых каталогов из манифеста и снятие маркера. Сами файлы игры к
+        /// этому моменту уже на своих местах — их поставили потоки загрузки.
+        /// Синхронная и блокирующая — вызывать только из пула потоков.
         /// </summary>
         /// <param name="plan">План различий.</param>
-        /// <param name="stagingRoot">Каталог со скачанными файлами.</param>
+        /// <param name="deferred">Файлы, замена которых отложена до перезагрузки.</param>
+        /// <param name="changesDisk">Ставился ли маркер незавершённого обновления.</param>
         /// <param name="ct">Токен отмены.</param>
-        private static void ApplyPlan(DiffPlan plan, string stagingRoot, CancellationToken ct) {
-            WriteUpdateMarker(plan.LocalRoot, plan.Version);
-
-            // Файлы, которые физически заменятся только после перезагрузки: пока список
-            // не пуст, обновление НЕ завершено, сколько бы удачно ни прошло остальное.
-            var deferred = new List<string>();
-
-            // Каталоги создаём по одному разу: в сборке на десятки тысяч файлов почти все
-            // они лежат в одних и тех же папках, а Directory.CreateDirectory на каждый файл —
-            // это обращение к диску на каждый файл.
-            var createdDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var moved = 0;
-
-            foreach (var t in plan.Downloads) {
-                ct.ThrowIfCancellationRequested();
-                var dstPath = ManifestPath.Combine(plan.LocalRoot, t.RelativePath);
-                var srcPath = ManifestPath.Combine(stagingRoot, t.RelativePath);
-                var dstDir = Path.GetDirectoryName(dstPath)!;
-                if (createdDirs.Add(dstDir)) {
-                    Directory.CreateDirectory(dstDir);
-                }
-
-                // Быстрый путь: одно переименование с заменой вместо связки
-                // «проверить — удалить — проверить — переместить». Он же и обычный —
-                // медленная ветка ниже нужна только для файлов, которые кто-то держит
-                // (запущенная игра, античит, антивирус), и включается по отказу.
-                try {
-                    File.Move(srcPath, dstPath, overwrite: true);
-                    moved++;
-                    continue;
-                }
-                catch (IOException) {
-                }
-                catch (UnauthorizedAccessException) {
-                }
-
-                if (File.Exists(dstPath)) {
-                    SafeDeleteFile(dstPath);
-                }
-
-                if (File.Exists(dstPath)) {
-                    // Still cannot remove: try rename old away and put new file in place
-                    var pid = Environment.ProcessId;
-                    var backup = dstPath + $".old.{pid}";
-                    try {
-                        File.Move(dstPath, backup, overwrite: true);
-                    }
-                    catch { }
-
-                    if (File.Exists(dstPath)) {
-                        // As a last resort: place new file as .new and schedule replacement on reboot
-                        var pending = dstPath + ".new";
-                        try { if (File.Exists(pending)) { SafeDeleteFile(pending); } } catch { }
-                        File.Move(srcPath, pending);
-                        // REPLACE_EXISTING обязателен: сюда мы попадаем ровно тогда, когда
-                        // dstPath СУЩЕСТВУЕТ и не удаляется (файл держит игра или античит).
-                        // Без флага MoveFileEx на существующем целевом файле возвращает
-                        // ошибку — то есть резервный путь, ради которого всё это написано,
-                        // не срабатывал никогда: .new оставался мусором, старый файл на
-                        // месте, хеш не сходился, и «требуется обновление» повторялось
-                        // бесконечно, накапливая по .new за попытку.
-                        try {
-                            var scheduled = NativeMethods.MoveFileEx(
-                                pending,
-                                dstPath,
-                                NativeMethods.MOVEFILE_DELAY_UNTIL_REBOOT | NativeMethods.MOVEFILE_REPLACE_EXISTING);
-                            if (scheduled) {
-                                ChillHub.Core.Logging.Logger.Info(
-                                    $"Файл '{t.RelativePath}' занят другим процессом: замена запланирована на перезагрузку.");
-                            }
-                            else {
-                                ChillHub.Core.Logging.Logger.Warn(
-                                    $"Не удалось запланировать замену '{t.RelativePath}' на перезагрузку (код {Marshal.GetLastWin32Error()}).");
-                            }
-                        }
-                        catch (Exception ex) {
-                            ChillHub.Core.Logging.Logger.Warn($"MoveFileEx('{t.RelativePath}'): {ex.Message}");
-                        }
-
-                        // И при успешном планировании, и при отказе MoveFileEx на диске
-                        // сейчас лежит СТАРОЕ содержимое: игра обновлена не полностью.
-                        deferred.Add(t.RelativePath);
-                    }
-                    else {
-                        File.Move(srcPath, dstPath);
-                        moved++;
-                    }
-                }
-                else {
-                    File.Move(srcPath, dstPath);
-                    moved++;
-                }
-
-                if (t.Executable) {
-                    // Для Windows можно оставить как есть; при необходимости добавить атрибуты
-                }
-            }
-
-            // Сводка вместо строки лога на каждый файл. Прежний лог перепроверял каждый файл
-            // («на месте? какой длины?») и писал результат — два обращения к диску и запись
-            // в лог на КАЖДЫЙ файл сборки. Проверять там было нечего: содержимое сверено с
-            // хешем ещё до staging, а File.Move либо переносит файл, либо бросает исключение.
-            // Что действительно стоит видеть — файлы, которых перенос не коснулся; они ниже.
+        private static void FinishPlan(
+            DiffPlan plan,
+            System.Collections.Concurrent.ConcurrentBag<string> deferred,
+            bool changesDisk,
+            CancellationToken ct) {
             ChillHub.Core.Logging.Logger.Info(
-                $"Activated gid={plan.GameId} ver={plan.Version} moved={moved}/{plan.Downloads.Count} deferred={deferred.Count}");
+                $"Applied gid={plan.GameId} ver={plan.Version} files={plan.Downloads.Count} deferred={deferred.Count} toDelete={plan.ToDelete.Count}");
 
             // Удаление лишних файлов (с устойчивостью к блокировкам сторонними процессами)
             var deletedRel = new List<string>();
@@ -787,23 +765,20 @@ namespace ChillHub.Core.Sync {
                 Directory.CreateDirectory(dirPath);
             }
 
-            // Удаляем staging (с короткой повторной попыткой)
-            try {
-                if (Directory.Exists(stagingRoot)) {
-                    TryDeleteDirectoryWithRetry(stagingRoot, recursive: true, attempts: 3, delayMs: 150);
-                }
-            }
-            catch {
+            if (!changesDisk) {
+                // Ничего не меняли — и маркера не ставили, снимать нечего.
+                return;
             }
 
             // Маркер снимаем ТОЛЬКО если обновление реально доведено до конца. Если хотя бы
             // один файл был занят и заменится лишь после перезагрузки, снятие маркера
             // означало бы «игра обновлена», хотя на диске у неё старый исполняемый файл:
             // запуск такой сборки — это как раз то, от чего маркер и защищает.
-            if (deferred.Count > 0) {
-                WriteRebootPendingMarker(plan.LocalRoot, plan.Version, deferred);
+            var pending = deferred.ToArray();
+            if (pending.Length > 0) {
+                WriteRebootPendingMarker(plan.LocalRoot, plan.Version, pending);
                 ChillHub.Core.Logging.Logger.Warn(
-                    $"Обновление до {plan.Version} применено не полностью: {deferred.Count} файл(ов) заменятся после перезагрузки ({string.Join(", ", deferred.Take(5))}).");
+                    $"Обновление до {plan.Version} применено не полностью: {pending.Length} файл(ов) заменятся после перезагрузки ({string.Join(", ", pending.Take(5))}).");
                 return;
             }
 
