@@ -52,19 +52,31 @@ namespace ChillHub.Core {
         // Пользовательские данные держим в %APPDATA%\ChillHub (роуминг-состояние: очередь фидбэка, счётчики отчётов).
         // %LOCALAPPDATA%\ChillHub — это КАТАЛОГ УСТАНОВКИ лаунчера (там ChillHub.exe, *.dll, runtimes/),
         // поэтому конфиг оттуда попадал в пакет сборки и в манифест обновления -> вечный цикл самообновления.
-        private static readonly string AppDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ChillHub");
-        private static readonly string ConfigPath = Path.Combine(AppDir, "config.json");
+        // Второй каталог — старое (унаследованное) расположение конфига, только для чтения при миграции.
+        private static readonly ConfigStore DefaultStore = new ConfigStore(
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ChillHub"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChillHub"));
 
-        // Старое (унаследованное) расположение конфига — только для чтения при миграции.
-        private static readonly string LegacyAppDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChillHub");
-        private static readonly string LegacyConfigPath = Path.Combine(LegacyAppDir, "config.json");
+        // Подмена каталогов на время теста. AsyncLocal, а не обычное статическое поле:
+        // классы xUnit по умолчанию идут параллельно, и глобальная подмена увела бы в
+        // подставной каталог чужой тест, который в этот момент читает Current или
+        // ConfigFilePath. Значение видно только внутри того потока выполнения, где его
+        // выставили; в приложении оно всегда null, и работает DefaultStore.
+        private static readonly AsyncLocal<ConfigStore?> ScopedStore = new AsyncLocal<ConfigStore?>();
 
         // Конфиг читают и фоновые задачи (сеть, синхронизация), и UI. Без синхронизации
         // два одновременных промаха кеша запускали два Load, каждый со своей записью на
         // диск, а вызывающий мог увидеть недособранный объект.
         private static readonly object cacheLock = new object();
 
-        private static AppConfig? cache;
+        /// <summary>Действующее хранилище: подставленное тестом либо настоящее.</summary>
+        private static ConfigStore Store => ScopedStore.Value ?? DefaultStore;
+
+        private static string AppDir => Store.AppDir;
+
+        private static string ConfigPath => Path.Combine(Store.AppDir, "config.json");
+
+        private static string LegacyConfigPath => Path.Combine(Store.LegacyAppDir, "config.json");
 
         /// <summary>
         /// Фактический путь к конфигу. Единственный источник правды: другие компоненты
@@ -114,7 +126,7 @@ namespace ChillHub.Core {
 
                     // Кеш обновляем только после удачной записи: иначе в памяти живут настройки,
                     // которых на диске нет, и после перезапуска они «откатываются» сами.
-                    cache = cfg;
+                    Store.Cache = cfg;
                     ApplyTheme();
                     return true;
                 }
@@ -141,13 +153,14 @@ namespace ChillHub.Core {
         /// </summary>
         public static AppConfig Current {
             get {
-                var cached = Volatile.Read(ref cache);
+                var store = Store;
+                var cached = store.Cache;
                 if (cached != null) {
                     return cached;
                 }
 
                 lock (cacheLock) {
-                    return cache ?? LoadLocked();
+                    return store.Cache ?? LoadLocked();
                 }
             }
         }
@@ -213,6 +226,35 @@ namespace ChillHub.Core {
             return uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback;
         }
 
+        /// <summary>
+        /// Уводит чтение и запись конфига во временные каталоги на время теста.
+        /// <para>
+        /// Без этого шва проверить <see cref="Load"/> и <see cref="TrySave"/> нечем: они ходят
+        /// в настоящий %APPDATA%\ChillHub\config.json, и тест затирал бы рабочие настройки
+        /// разработчика — ровно то, от чего эти методы и защищают пользователя.
+        /// </para>
+        /// <para>
+        /// Подставленное хранилище живёт со своим кешем и видно только тому потоку
+        /// выполнения, который его выставил: параллельные классы тестов продолжают
+        /// работать с настоящим конфигом.
+        /// </para>
+        /// </summary>
+        /// <param name="appDir">Каталог, играющий роль %APPDATA%\ChillHub.</param>
+        /// <param name="legacyAppDir">Каталог, играющий роль %LOCALAPPDATA%\ChillHub.</param>
+        /// <returns>Объект, возвращающий конфиг к настоящим каталогам.</returns>
+        internal static IDisposable OverrideForTests(string appDir, string legacyAppDir)
+            => new TestOverride(appDir, legacyAppDir);
+
+        /// <summary>
+        /// Забывает прочитанное, чтобы следующее обращение сходило на диск.
+        /// Нужно тесту, который подменил содержимое файла у работающего сервиса.
+        /// </summary>
+        internal static void InvalidateCache() {
+            lock (cacheLock) {
+                Store.Cache = null;
+            }
+        }
+
         /// <summary>Тело <see cref="Load"/>; вызывается уже под замком кеша.</summary>
         private static AppConfig LoadLocked() {
             try {
@@ -237,14 +279,14 @@ namespace ChillHub.Core {
                 // следующее обращение попробует снова, а до тех пор отдаём последнее
                 // известное состояние.
                 Logging.Logger.Warn($"Config.Load: config.json недоступен, настройки не перезаписываем: {ex.Message}");
-                return cache ?? new AppConfig();
+                return Store.Cache ?? new AppConfig();
             }
 
             try {
                 var cfg = JsonSerializer.Deserialize<AppConfig>(json)
                           ?? throw new JsonException("config.json пуст");
                 Clamp(cfg);
-                cache = cfg;
+                Store.Cache = cfg;
                 ApplyTheme();
                 return cfg;
             }
@@ -261,7 +303,7 @@ namespace ChillHub.Core {
         private static AppConfig CreateAndSaveDefaults() {
             var def = new AppConfig();
             EnsureDir(Path.GetDirectoryName(def.GamesPath)!);
-            cache = def;
+            Store.Cache = def;
             Save(def);
             return def;
         }
@@ -315,7 +357,13 @@ namespace ChillHub.Core {
             }
         }
 
-        private static void Clamp(AppConfig cfg) {
+        /// <summary>
+        /// Приводит прочитанный конфиг к пригодному виду: чинит число потоков, пустой путь
+        /// к играм и отклоняет неприемлемый адрес сервера. Чистая функция над переданным
+        /// объектом — диска не касается, поэтому проверяется напрямую.
+        /// </summary>
+        /// <param name="cfg">Конфигурация, которую нужно нормализовать на месте.</param>
+        internal static void Clamp(AppConfig cfg) {
             if (cfg.DownloadThreads < 2) {
                 cfg.DownloadThreads = 2;
             }
@@ -335,6 +383,44 @@ namespace ChillHub.Core {
 
                 cfg.ApiBaseUrl = AppConfig.DefaultApiBaseUrl;
             }
+        }
+
+        /// <summary>
+        /// Каталоги, откуда конфиг читается и куда пишется, вместе с кешем прочитанного.
+        /// Кеш лежит здесь, а не рядом с путями: подменённое хранилище не должно делить
+        /// закешированную конфигурацию с настоящим %APPDATA%.
+        /// </summary>
+        private sealed class ConfigStore {
+            private AppConfig? cached;
+
+            internal ConfigStore(string appDir, string legacyAppDir) {
+                this.AppDir = appDir;
+                this.LegacyAppDir = legacyAppDir;
+            }
+
+            /// <summary>Каталог с config.json и копией повреждённого конфига.</summary>
+            internal string AppDir { get; }
+
+            /// <summary>Каталог, из которого конфиг переносится при миграции.</summary>
+            internal string LegacyAppDir { get; }
+
+            /// <summary>Последняя удачно прочитанная или записанная конфигурация; null — ещё не читали.</summary>
+            internal AppConfig? Cache {
+                get => Volatile.Read(ref this.cached);
+                set => Volatile.Write(ref this.cached, value);
+            }
+        }
+
+        /// <summary>Возвращает конфиг к настоящим каталогам после <see cref="OverrideForTests"/>.</summary>
+        private sealed class TestOverride : IDisposable {
+            private readonly ConfigStore? previous;
+
+            internal TestOverride(string appDir, string legacyAppDir) {
+                this.previous = ScopedStore.Value;
+                ScopedStore.Value = new ConfigStore(appDir, legacyAppDir);
+            }
+
+            public void Dispose() => ScopedStore.Value = this.previous;
         }
     }
 }
