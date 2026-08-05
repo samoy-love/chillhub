@@ -161,7 +161,43 @@ namespace ChillHub.Tests {
             }
         }
 
-        /// <summary>Есть ли на машине WScript.Shell — без неё ярлык не создаётся в принципе.</summary>
-        private static bool ShellAvailable => Type.GetTypeFromProgID("WScript.Shell") != null;
+        /// <summary>
+        /// Умеет ли окружение ДЕЙСТВИТЕЛЬНО создать ярлык.
+        /// <para>
+        /// Раньше здесь проверялся только резолв ProgID — и этого оказалось мало. На
+        /// сборочном агенте `WScript.Shell` резолвится, а `Save()` падает: скриптовый
+        /// хост отключён политикой. Проверки «ярлык создан» валили прогон на ровном
+        /// месте, хотя проверяемый код вёл себя ровно так, как задумано, — молча не
+        /// создавал ярлык и не ронял установку.
+        /// </para>
+        /// <para>
+        /// Поэтому проба настоящая: создаём ярлык во временном каталоге и смотрим, лёг
+        /// ли он на диск. Результат считается один раз на прогон.
+        /// </para>
+        /// </summary>
+        private static bool ShellAvailable => ShellCanCreateShortcuts.Value;
+
+        private static readonly Lazy<bool> ShellCanCreateShortcuts = new Lazy<bool>(ProbeShortcutCreation);
+
+        private static bool ProbeShortcutCreation() {
+            try {
+                var shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType == null) {
+                    return false;
+                }
+
+                using var probe = new TempDir();
+                var link = Path.Combine(probe.Root, "проба.lnk");
+                dynamic shell = Activator.CreateInstance(shellType)!;
+                dynamic shortcut = shell.CreateShortcut(link);
+                shortcut.TargetPath = Path.Combine(probe.Root, "проба.exe");
+                shortcut.Save();
+                return File.Exists(link);
+            }
+            catch {
+                // Оболочка есть, но ярлыки не создаёт: политика, урезанная система, агент сборки.
+                return false;
+            }
+        }
     }
 }
