@@ -6,6 +6,7 @@
 namespace ChillHub.Core.Home {
     using System;
     using System.IO;
+    using System.Threading;
 
     /// <summary>
     /// Локальное состояние установленной игры на диске: путь к папке, маркер версии `.version`,
@@ -15,6 +16,20 @@ namespace ChillHub.Core.Home {
     internal static class GameLocalState {
         /// <summary>Имя файла-маркера с установленной версией.</summary>
         internal const string VersionMarkerFileName = Sync.IntegrityChecker.VersionMarkerFileName;
+
+        /// <summary>ProgID оболочки Windows, через которую создаётся файл ярлыка.</summary>
+        private const string ShellProgId = "WScript.Shell";
+
+        /// <summary>
+        /// Подмена окружения ярлыка на время теста; null — работает настоящее окружение.
+        /// <para>
+        /// AsyncLocal, а не обычное статическое поле, по той же причине, что и у конфига:
+        /// подмена видна только тому потоку выполнения, где её выставили, и не уводит
+        /// соседний тест в чужой каталог.
+        /// </para>
+        /// </summary>
+        private static readonly AsyncLocal<ShortcutEnvironment?> ScopedShortcutEnv
+            = new AsyncLocal<ShortcutEnvironment?>();
 
         /// <summary>
         /// Путь к локальной папке игры. Тонкая обёртка над <see cref="Sync.IntegrityChecker.GameLocalRoot"/>:
@@ -102,6 +117,23 @@ namespace ChillHub.Core.Home {
             }
         }
 
+        /// <summary>
+        /// Уводит создание ярлыка в подставной каталог на время теста.
+        /// <para>
+        /// Без этого шва проверить <see cref="TryCreateDesktopShortcut"/> нечем: он кладёт
+        /// файл на НАСТОЯЩИЙ рабочий стол пользователя, и прогон тестов засорял бы его
+        /// ярлыками несуществующих игр. Подменяемый ProgID нужен для второй ветки: на
+        /// машине без WScript.Shell (урезанная Windows, политика на скриптовый хост)
+        /// ярлык не создаётся, и установка обязана это пережить.
+        /// </para>
+        /// </summary>
+        /// <param name="desktopDirectory">Каталог, играющий роль рабочего стола.</param>
+        /// <param name="shellProgId">ProgID оболочки; несуществующий имитирует её отсутствие.</param>
+        /// <returns>Объект, возвращающий настоящее окружение.</returns>
+        internal static IDisposable OverrideShortcutEnvironmentForTests(
+            string desktopDirectory, string? shellProgId = null)
+            => new ShortcutEnvironmentOverride(desktopDirectory, shellProgId ?? ShellProgId);
+
         /// <summary>Создаёт ярлык игры на рабочем столе. Ошибки не критичны для сценария установки.</summary>
         internal static void TryCreateDesktopShortcut(string title, string exePath) {
             try {
@@ -109,11 +141,13 @@ namespace ChillHub.Core.Home {
                     return;
                 }
 
-                var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                var env = ScopedShortcutEnv.Value;
+                var desktop = env?.DesktopDirectory
+                    ?? Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
                 var name = string.IsNullOrWhiteSpace(title) ? Path.GetFileNameWithoutExtension(exePath) : title;
                 var linkPath = Path.Combine(desktop, HomeFormat.SanitizeFileName(name) + ".lnk");
 
-                var shellType = Type.GetTypeFromProgID("WScript.Shell");
+                var shellType = Type.GetTypeFromProgID(env?.ShellProgId ?? ShellProgId);
                 if (shellType == null) {
                     Logging.Logger.Warn("TryCreateDesktopShortcut: WScript.Shell недоступен, ярлык не создан");
                     return;
@@ -131,6 +165,23 @@ namespace ChillHub.Core.Home {
                 // Ярлык — приятная мелочь, а не часть установки: молча не падаем, но пишем в лог.
                 Logging.Logger.Warn($"TryCreateDesktopShortcut('{title}'): {ex.Message}");
             }
+        }
+
+        /// <summary>Куда кладётся ярлык и через какую оболочку он создаётся.</summary>
+        /// <param name="DesktopDirectory">Каталог рабочего стола.</param>
+        /// <param name="ShellProgId">ProgID оболочки Windows.</param>
+        private sealed record ShortcutEnvironment(string DesktopDirectory, string ShellProgId);
+
+        /// <summary>Возвращает настоящее окружение ярлыка после <see cref="OverrideShortcutEnvironmentForTests"/>.</summary>
+        private sealed class ShortcutEnvironmentOverride : IDisposable {
+            private readonly ShortcutEnvironment? previous;
+
+            internal ShortcutEnvironmentOverride(string desktopDirectory, string shellProgId) {
+                this.previous = ScopedShortcutEnv.Value;
+                ScopedShortcutEnv.Value = new ShortcutEnvironment(desktopDirectory, shellProgId);
+            }
+
+            public void Dispose() => ScopedShortcutEnv.Value = this.previous;
         }
     }
 }
