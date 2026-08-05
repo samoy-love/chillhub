@@ -604,7 +604,11 @@ func (h *Handlers) FreeSpace(w http.ResponseWriter, _ *http.Request) {
 		free = f2
 		total = 0
 	} else {
-		log.Printf("[builds] free space %s: %v", base, err)
+		// Both probes are reported. Logging only the first one left the operator
+		// with "no such file or directory" from diskSpaceImpl and no word about
+		// why the fallback — which creates the directory before measuring — also
+		// gave up, and those two fail for different reasons.
+		log.Printf("[builds] free space %s: %v (free-bytes probe: %v)", base, err, err2)
 		http.Error(w, "failed to query free space", http.StatusInternalServerError)
 		return
 	}
