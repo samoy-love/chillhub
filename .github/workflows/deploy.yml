@@ -424,29 +424,10 @@ jobs:
       )
     uses: tr0llex/deploy-kit/.github/workflows/desktop-artifact.yml@main
     with:
-      # Ведущая `v` из тега СНИМАЕТСЯ. Тег называется v1.2.3, а версия уезжает
-      # в launcher.version и сравнивается с manifests/launcher/latest.json
-      # ПОСИМВОЛЬНО: «v1.2.3» против «1.2.3» — это вечный цикл обновления у
-      # каждого, кто поставит такой билд. Тегов в репозитории ещё не было,
-      # поэтому ловушка ни разу не срабатывала.
-      #
-      # ensure-nsis.ps1 — первой командой, а не отдельным шагом: сборка и
-      # подготовка окружения у desktop-artifact живут в одном входе `build`.
-      # Образ windows-latest НЕ несёт NSIS — полагаться на него нельзя, первая
-      # же публикация на этом и упала, пока установка жила только в ci.yml.
-      build: ./scripts/ci/ensure-nsis.ps1; ./scripts/build-installer.ps1 -Configuration Release -AppVersion ($env:DEPLOY_VERSION -replace '^v','')
-      artifact: scripts/generated_downloads/ChillHub-Setup.exe
-      # На прогонах без тега версию объявляет сам репозиторий: <Version> из
-      # csproj — ровно тот источник, с которым build-installer.ps1 сверяет
-      # -AppVersion. Публиковать установщик с заглушкой 0.0.0 нельзя: она
-      # уехала бы в launcher.version каждому скачавшему.
-      version-cmd: sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' launcher/ChillHub/ChillHub.csproj | head -1
-      # Куда смотрит кнопка «Скачать для Windows» на лендинге. Каталог живёт
-      # вне релизов сайта — см. location /downloads/ в конфиге nginx
-      # (deploy-kit/nginx/sites/chillhub-launcher.conf).
-      upload-dest: /var/www/site-downloads/ChillHub-Setup.exe
-      # Сверка после публикации: прод обязан раздавать ровно ту сумму,
-      # которую посчитал раннер, — «зелёный деплой со старыми файлами»
-      # ловится здесь.
-      verify-url: https://launcher.samoy.love/downloads/ChillHub-Setup.exe.sha256
+      # ВСЯ цель — сборка, версия, куда класть и что сверять — описана в
+      # .deploy-kit/installer.env, и это описание общее с локальной выкаткой:
+      # dk deploy chillhub-installer читает тот же файл и публикует тем же
+      # publish-file.sh. Дублировать параметры здесь входами нельзя — два
+      # списка одного и того же разъедутся, как разъезжались фильтры путей.
+      config: .deploy-kit/installer.env
     secrets: inherit
