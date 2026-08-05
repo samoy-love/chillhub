@@ -30,7 +30,9 @@ namespace ChillHub.Tests {
         [Fact]
         public void СвободныйЗамокПозволяетЗапуск() {
             try {
-                Assert.True(SingleInstance.TryAcquire(100));
+                // Именно та перегрузка, которую зовёт App: на свободном замке
+                // она отвечает сразу и ожиданием прогон не задерживает.
+                Assert.True(SingleInstance.TryAcquire());
             }
             finally {
                 // Иначе замок остался бы за потоком xunit и следующий тест увидел бы
@@ -64,6 +66,66 @@ namespace ChillHub.Tests {
             finally {
                 SingleInstance.ReleaseForTests();
                 release.Set();
+                holder.Join(5000);
+            }
+        }
+
+        /// <summary>
+        /// Брошенный замок не запирает лаунчер навсегда.
+        /// <para>
+        /// Лаунчер, убитый из диспетчера, замок не отпускает. Если бы это считалось
+        /// «уже запущен», лаунчер перестал бы стартовать до перезагрузки.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void БрошенныйЗамокНеЗапираетЛаунчерНавсегда() {
+            // Поток занимает замок и умирает, не отпустив, — ровно как убитый процесс
+            var holder = new Thread(() => {
+                var m = new Mutex(initiallyOwned: false, MutexName);
+                m.WaitOne();
+            });
+            holder.IsBackground = true;
+            holder.Start();
+            Assert.True(holder.Join(5000), "поток-владелец должен завершиться");
+
+            try {
+                Assert.True(SingleInstance.TryAcquire(100), "брошенный замок должен доставаться нам");
+            }
+            finally {
+                SingleInstance.ReleaseForTests();
+            }
+        }
+
+        /// <summary>
+        /// Замок, освободившийся во время ожидания, пускает.
+        /// <para>
+        /// Ради этого ожидание и заведено: апдейтер перезапускает лаунчер, не всегда
+        /// дождавшись выхода прежнего, и мгновенный отказ означал бы «после обновления
+        /// лаунчер не запускается».
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void ОсвободившийсяВоВремяОжиданияЗамокПускает() {
+            using var held = new ManualResetEventSlim(false);
+
+            var holder = new Thread(() => {
+                using var m = new Mutex(initiallyOwned: false, MutexName);
+                m.WaitOne();
+                held.Set();
+                Thread.Sleep(200);
+                m.ReleaseMutex();
+            });
+            holder.IsBackground = true;
+            holder.Start();
+
+            Assert.True(held.Wait(5000), "поток-владелец должен успеть занять замок");
+
+            try {
+                // На входе замок занят: ждём и дожидаемся
+                Assert.True(SingleInstance.TryAcquire(5000));
+            }
+            finally {
+                SingleInstance.ReleaseForTests();
                 holder.Join(5000);
             }
         }
