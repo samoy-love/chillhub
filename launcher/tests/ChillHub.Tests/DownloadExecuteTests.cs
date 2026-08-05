@@ -98,88 +98,106 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
-        /// Уже скачанное в staging переживает отмену и не качается второй раз.
+        /// Пока новый файл не сверен с манифестом, старый остаётся нетронутым.
         /// <para>
-        /// Staging переезжает в папку игры только в фазе активации, поэтому после отмены
-        /// план строится по старому содержимому и снова просит скачать всё. Докачка по
-        /// Range спасала лишь файлы, бывшие в работе в момент отмены, а всё завершённое
-        /// качалось заново: из 9 ГБ второй заход опять требовал 9 ГБ.
+        /// Это то единственное, что осталось от staging, когда его убрали: загрузка идёт
+        /// в «.part» рядом с целью, и старое содержимое подменяется одним переименованием
+        /// уже после сверки хеша. Сорвись загрузка — на диске рабочий старый файл, а не
+        /// обрубок под его именем.
         /// </para>
         /// </summary>
         [Fact]
-        public async Task ЗавершённыйФайлИзStagingНеКачаетсяЗаново() {
+        public async Task СорваннаяЗагрузкаНеПортитСтарыйФайл() {
             using var dir = new TempDir();
-            var rel = "app/data.bin";
-            var content = Encoding.UTF8.GetBytes("файл, докачанный до отмены");
-            var sha = Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
+            var oldContent = Encoding.UTF8.GetBytes("рабочая старая версия");
+            var target = dir.WriteBytes("app/data.bin", oldContent);
 
-            // Ровно то, что осталось бы на диске от прерванной попытки
-            var staged = Path.Combine(dir.Root, ".staging", "app", "data.bin");
-            Directory.CreateDirectory(Path.GetDirectoryName(staged)!);
-            await File.WriteAllBytesAsync(staged, content);
+            // Сервер отдаёт не то, что обещает манифест: сверка хеша не пройдёт
+            await Assert.ThrowsAnyAsync<Exception>(() => DownloadOneAsync(
+                dir.Root,
+                "app/data.bin",
+                Encoding.UTF8.GetBytes("подменённое содержимое"),
+                new string('a', 64)));
 
-            // Любой сетевой запрос — провал теста: качать тут нечего
-            var sync = new SimpleSyncService(new HttpClient(new FailingHandler()));
+            Assert.Equal(oldContent, await File.ReadAllBytesAsync(target));
+        }
+
+        /// <summary>
+        /// Недокачанный «.part» лежит рядом с целью и переживает план: по нему
+        /// обновление возобновляется, а не начинается заново.
+        /// </summary>
+        [Fact]
+        public async Task НедокачанныйФайлНеПопадаетВУдаление() {
+            using var dir = new TempDir();
+            var content = Encoding.UTF8.GetBytes("полное содержимое файла");
+            dir.WriteBytes("app/data.bin.part", Encoding.UTF8.GetBytes("полное соде"));
+
+            var sync = new SimpleSyncService(new HttpClient(new StubContentHandler(content)));
             var manifest = new Manifest {
-                GameId = "staging-reuse-test",
+                GameId = "part-keep-" + Guid.NewGuid().ToString("N"),
                 Version = "1.0.0",
                 Files = new List<ManifestFile> {
-                    new ManifestFile { Path = rel, Size = content.Length, Sha256 = sha },
+                    new ManifestFile {
+                        Path = "app/data.bin",
+                        Size = content.Length,
+                        Sha256 = Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant(),
+                    },
                 },
             };
 
             try {
                 var plan = await sync.PlanAsync(manifest, dir.Root, "https://example.invalid/content", CancellationToken.None);
-                Assert.Single(plan.Downloads);
-                await sync.ExecuteAsync(plan, new Progress<SyncProgress>(), CancellationToken.None);
+                Assert.DoesNotContain(plan.ToDelete, p => p.EndsWith(".part", StringComparison.OrdinalIgnoreCase));
             }
             finally {
                 FileHashCache.Remove(manifest.GameId);
             }
-
-            var landed = Path.Combine(dir.Root, "app", "data.bin");
-            Assert.True(File.Exists(landed), "файл должен переехать из staging в папку игры");
-            Assert.Equal(content, await File.ReadAllBytesAsync(landed));
         }
 
         /// <summary>
-        /// Обрывок в staging не выдаётся за готовый файл: он не совпадает с манифестом
-        /// ни размером, ни хешем, и его нужно перекачать.
+        /// Каталог «.staging», оставшийся от прежней схемы, убирается: он занимает место
+        /// под копию сборки, которой больше никто не пользуется.
         /// </summary>
         [Fact]
-        public async Task ОбрывокВStagingПерекачивается() {
+        public async Task StagingОтПрежнейСхемыУдаляется() {
             using var dir = new TempDir();
-            var content = Encoding.UTF8.GetBytes("полное содержимое файла");
-            var sha = Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
+            dir.WriteBytes(".staging/app/data.bin", Encoding.UTF8.GetBytes("копия от прежней схемы"));
 
-            var staged = Path.Combine(dir.Root, ".staging", "app", "data.bin");
-            Directory.CreateDirectory(Path.GetDirectoryName(staged)!);
-            await File.WriteAllBytesAsync(staged, Encoding.UTF8.GetBytes("полное соде"));
+            var content = Encoding.UTF8.GetBytes("новый файл");
+            await DownloadOneAsync(
+                dir.Root,
+                "app/data.bin",
+                content,
+                Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant());
 
-            var landed = await DownloadOneAsync(dir.Root, "app/data.bin", content, sha);
-
-            Assert.Equal(content, await File.ReadAllBytesAsync(landed));
+            Assert.False(Directory.Exists(Path.Combine(dir.Root, ".staging")), "брошенный staging должен быть убран");
         }
 
         /// <summary>
-        /// Файл того же размера, но от другой сборки, за готовый не сходит: staging
-        /// мог остаться от прерванного обновления на другую версию, и совпадение
-        /// размера там не значит ничего.
+        /// Маркер незавершённого обновления ставится ДО первой записи в папку игры и
+        /// снимается только после успеха: с первым же применённым файлом сборка смешанная.
         /// </summary>
         [Fact]
-        public async Task ЧужаяВерсияВStagingПерекачивается() {
+        public async Task МаркерДержитсяПокаОбновлениеНеЗавершено() {
             using var dir = new TempDir();
-            var content = Encoding.UTF8.GetBytes("содержимое версии 2");
-            var sha = Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
+            dir.WriteBytes("app/data.bin", Encoding.UTF8.GetBytes("старая версия"));
 
-            var staged = Path.Combine(dir.Root, ".staging", "app", "data.bin");
-            Directory.CreateDirectory(Path.GetDirectoryName(staged)!);
-            await File.WriteAllBytesAsync(staged, Encoding.UTF8.GetBytes("содержимое версии 1"));
-            Assert.Equal(content.Length, new FileInfo(staged).Length);
+            // Сорванное обновление: маркер обязан остаться
+            await Assert.ThrowsAnyAsync<Exception>(() => DownloadOneAsync(
+                dir.Root,
+                "app/data.bin",
+                Encoding.UTF8.GetBytes("подменённое содержимое"),
+                new string('a', 64)));
+            Assert.True(SimpleSyncService.HasUpdateMarker(dir.Root), "после срыва маркер должен остаться");
 
-            var landed = await DownloadOneAsync(dir.Root, "app/data.bin", content, sha);
-
-            Assert.Equal(content, await File.ReadAllBytesAsync(landed));
+            // Успешное — снимает
+            var content = Encoding.UTF8.GetBytes("новая версия");
+            await DownloadOneAsync(
+                dir.Root,
+                "app/data.bin",
+                content,
+                Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant());
+            Assert.False(SimpleSyncService.HasUpdateMarker(dir.Root), "после успеха маркера быть не должно");
         }
 
         /// <summary>
@@ -267,13 +285,6 @@ namespace ChillHub.Tests {
             }
 
             return Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar));
-        }
-
-        /// <summary>Падает на любом запросе: используется там, где сеть трогать не должны.</summary>
-        private sealed class FailingHandler : HttpMessageHandler {
-            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) {
-                throw new InvalidOperationException($"неожиданный запрос к сети: {request.RequestUri}");
-            }
         }
 
         /// <summary>Отдаёт заранее заданное содержимое на любой запрос.</summary>
