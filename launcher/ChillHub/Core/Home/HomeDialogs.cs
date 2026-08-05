@@ -19,6 +19,20 @@ namespace ChillHub.Core.Home {
         private const string WriteTestFileName = ".write_test.tmp";
 
         /// <summary>
+        /// Признак того, что HRESULT собран из кода Win32: старший байт 0x80, средние два — FACILITY_WIN32.
+        /// </summary>
+        private const int Win32FacilityMask = unchecked((int)0xFFFF0000);
+
+        /// <summary>Значение старших разрядов HRESULT для ошибок Win32.</summary>
+        private const int Win32FacilityBits = unchecked((int)0x80070000);
+
+        /// <summary>
+        /// Коды Win32, означающие «писать сюда нельзя»: отказ в доступе, защита от записи,
+        /// занятый или заблокированный файл, нехватка привилегий.
+        /// </summary>
+        private static readonly int[] DeniedWin32Codes = { 5, 19, 32, 33, 1314 };
+
+        /// <summary>
         /// Спрашивает подтверждение на удаление папки игры. При любом сбое построения
         /// оформленного окна откатывается на системный MessageBox — вопрос пользователь увидит в любом случае.
         /// </summary>
@@ -223,13 +237,37 @@ namespace ChillHub.Core.Home {
                 return WriteProbe.Denied;
             }
             catch (IOException ioex) {
-                // Часть отказов в доступе прилетает именно как IOException — ловим их по тексту
-                var msg = ioex.Message ?? string.Empty;
-                bool looksLikeDenied = msg.Contains("доступ", StringComparison.OrdinalIgnoreCase)
-                    || msg.Contains("access", StringComparison.OrdinalIgnoreCase);
-                Logging.Logger.Warn($"ProbeWritable: IO-ошибка для '{path}': {msg}");
-                return looksLikeDenied ? WriteProbe.Denied : WriteProbe.UnknownIoError;
+                Logging.Logger.Warn($"ProbeWritable: IO-ошибка для '{path}': {ioex.Message}");
+                return ClassifyIoFailure(ioex);
             }
+        }
+
+        /// <summary>
+        /// Решает, похожа ли IO-ошибка на отказ в доступе — от этого зависит,
+        /// предложат ли пользователю выбрать другую папку.
+        /// <para>
+        /// Вердикт выносится по коду Win32 внутри HRESULT, а не по тексту сообщения.
+        /// Текст исключения локализован: на немецкой Windows там будет «Zugriff», на
+        /// французской — «accès», и проверка на «доступ»/«access» отказ бы не узнала.
+        /// Пользователю не предложили бы другую папку, и установка упиралась бы
+        /// в непонятный сбой.
+        /// </para>
+        /// <para>
+        /// Текст остаётся запасным признаком на случай, когда HRESULT не из Win32
+        /// (исключение собрано вручную или пришло не от файловой системы): без него
+        /// русская и английская локаль потеряли бы часть уже работающих распознаваний.
+        /// </para>
+        /// </summary>
+        private static WriteProbe ClassifyIoFailure(IOException ioex) {
+            if ((ioex.HResult & Win32FacilityMask) == Win32FacilityBits) {
+                var code = ioex.HResult & 0xFFFF;
+                return Array.IndexOf(DeniedWin32Codes, code) >= 0 ? WriteProbe.Denied : WriteProbe.UnknownIoError;
+            }
+
+            var msg = ioex.Message ?? string.Empty;
+            bool looksLikeDenied = msg.Contains("доступ", StringComparison.OrdinalIgnoreCase)
+                || msg.Contains("access", StringComparison.OrdinalIgnoreCase);
+            return looksLikeDenied ? WriteProbe.Denied : WriteProbe.UnknownIoError;
         }
 
         private static Brush? Resource(FrameworkElement owner, string key) => owner.TryFindResource(key) as Brush;
