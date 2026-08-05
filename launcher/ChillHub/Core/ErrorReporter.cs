@@ -263,8 +263,14 @@ namespace ChillHub.Core {
                     system = system,
                 };
 
+                // Тело сериализуем один раз, а объект контента у каждого запроса свой:
+                // запасные запросы переиспользовали контент первого и освобождали его
+                // повторно вместе со своим using. Для StringContent это сходило с рук,
+                // но с потоковым контентом запасной путь молча отправил бы пустое тело.
+                var json = JsonSerializer.Serialize(payload);
+
                 using var req = new HttpRequestMessage(HttpMethod.Post, url) {
-                    Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
+                    Content = new StringContent(json, Encoding.UTF8, "application/json")
                 };
                 HttpResponseMessage res;
                 try {
@@ -274,7 +280,9 @@ namespace ChillHub.Core {
                     // Fallback for local dev to admin port 55777
                     if (TryBuildLocalAdminUrl(baseApi, out var adminUrl)) {
                         try {
-                            using var req2 = new HttpRequestMessage(HttpMethod.Post, adminUrl) { Content = req.Content };
+                            using var req2 = new HttpRequestMessage(HttpMethod.Post, adminUrl) {
+                                Content = new StringContent(json, Encoding.UTF8, "application/json")
+                            };
                             var r2 = await http.SendAsync(req2).ConfigureAwait(false);
                             if (r2.IsSuccessStatusCode) { OnAutoReported(context); }
                         }
@@ -287,7 +295,9 @@ namespace ChillHub.Core {
                     // Try admin fallback if API rejected (port mismatch etc.)
                     if (TryBuildLocalAdminUrl(baseApi, out var adminUrl2)) {
                         try {
-                            using var req3 = new HttpRequestMessage(HttpMethod.Post, adminUrl2) { Content = req.Content };
+                            using var req3 = new HttpRequestMessage(HttpMethod.Post, adminUrl2) {
+                                Content = new StringContent(json, Encoding.UTF8, "application/json")
+                            };
                             var r3 = await http.SendAsync(req3).ConfigureAwait(false);
                             if (r3.IsSuccessStatusCode) { OnAutoReported(context); }
                         }
