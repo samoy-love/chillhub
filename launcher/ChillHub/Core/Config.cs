@@ -261,6 +261,10 @@ namespace ChillHub.Core {
                 MigrateLegacyConfig();
             }
             catch (Exception ex) {
+                // Все ошибки миграции (нет прав, файл занят, диск полон) глушим здесь:
+                // миграция не должна ломать запуск, чтение конфига продолжается ниже.
+                // Но глушим ГРОМКО: потерянные настройки пользователя обязаны оставить
+                // след, иначе разбирать жалобу «настройки сбросились» не по чему.
                 // Logger.Warn, а не Error: Error поднимает ErrorReporter, который сам читает
                 // конфиг — получили бы рекурсию ровно в момент, когда конфига ещё нет.
                 Logging.Logger.Warn($"Config.Load: миграция не выполнена: {ex.Message}");
@@ -325,36 +329,33 @@ namespace ChillHub.Core {
         /// Идемпотентно: если новый файл уже есть — ничего не делает.
         /// Старый файл НЕ удаляем намеренно: его ещё может читать не обновившаяся версия лаунчера,
         /// и апдейтер держит config.json в списке --preserve. Удаление сделает откат/старый билд неработающим.
-        /// Все ошибки (нет прав, файл занят) глушим — миграция не должна ломать запуск.
+        /// Ошибки не глушит: их ловит и записывает в журнал вызывающий (<see cref="LoadLocked"/>).
+        /// Пока перенос гасил их сам, сорвавшаяся миграция не оставляла в client.log ни строки,
+        /// и потерянные настройки выглядели как «сбросилось само».
         /// </summary>
         private static void MigrateLegacyConfig() {
-            try {
-                if (File.Exists(ConfigPath)) {
-                    return;
-                }
-
-                if (!File.Exists(LegacyConfigPath)) {
-                    return;
-                }
-
-                var legacyJson = File.ReadAllText(LegacyConfigPath);
-
-                // Проверяем, что старый файл вообще парсится: мусор переносить смысла нет.
-                var probe = JsonSerializer.Deserialize<AppConfig>(legacyJson);
-                if (probe == null) {
-                    return;
-                }
-
-                Directory.CreateDirectory(AppDir);
-
-                // Пишем уже нормализованную модель: устаревшие поля (напр. Theme) отбрасываются.
-                Clamp(probe);
-                File.WriteAllText(ConfigPath, JsonSerializer.Serialize(probe, new JsonSerializerOptions { WriteIndented = true }));
-                Debug.WriteLine("[Config] Мигрировали config.json из LOCALAPPDATA в APPDATA");
+            if (File.Exists(ConfigPath)) {
+                return;
             }
-            catch (Exception ex) {
-                Debug.WriteLine($"[Config] Ошибка миграции конфига: {ex.Message}");
+
+            if (!File.Exists(LegacyConfigPath)) {
+                return;
             }
+
+            var legacyJson = File.ReadAllText(LegacyConfigPath);
+
+            // Проверяем, что старый файл вообще парсится: мусор переносить смысла нет.
+            var probe = JsonSerializer.Deserialize<AppConfig>(legacyJson);
+            if (probe == null) {
+                return;
+            }
+
+            Directory.CreateDirectory(AppDir);
+
+            // Пишем уже нормализованную модель: устаревшие поля (напр. Theme) отбрасываются.
+            Clamp(probe);
+            File.WriteAllText(ConfigPath, JsonSerializer.Serialize(probe, new JsonSerializerOptions { WriteIndented = true }));
+            Debug.WriteLine("[Config] Мигрировали config.json из LOCALAPPDATA в APPDATA");
         }
 
         /// <summary>

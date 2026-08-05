@@ -170,14 +170,54 @@ namespace ChillHub.Tests {
             Assert.False(scope.Panel.Busy);
         }
 
-        /// <summary>Отмена без идущей проверки ничего не ломает — кнопку нажимают когда угодно.</summary>
+        /// <summary>
+        /// Отмена без идущей проверки ничего не ломает — кнопку нажимают когда угодно —
+        /// и ничего не говорит: отменять нечего. Слово «Отмена…» здесь описывало бы
+        /// действие, которого не было.
+        /// </summary>
         [Fact]
-        public void ОтменаБезИдущейПроверкиНеПадает() {
+        public void ОтменаБезИдущейПроверкиМолчит() {
             using var scope = new PanelScope();
 
             scope.Panel.Cancel();
 
-            Assert.Equal("Отмена…", scope.LastStatus);
+            Assert.Equal(string.Empty, scope.LastStatus);
+        }
+
+        /// <summary>
+        /// Отмена в покое НЕ затирает результат закончившейся проверки. Человек нажимает
+        /// «Отмена» вслед закрывшемуся прогрессу — и раньше ответ, ради которого он и
+        /// запускал проверку («Всё в порядке» или список расхождений), подменялся словом
+        /// «Отмена…»: результат приходилось получать заново, перечитывая диск целиком.
+        /// </summary>
+        [Fact]
+        public async Task ОтменаПослеПроверкиНеЗатираетЕёРезультат() {
+            using var scope = new PanelScope();
+            scope.InstallGame(intact: 1, missing: 0, extra: 0);
+            await scope.CheckAsync();
+            var result = scope.LastStatus;
+
+            scope.Panel.Cancel();
+
+            Assert.Equal(result, scope.LastStatus);
+            Assert.Contains("Всё в порядке", scope.LastStatus, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Отмена после завершившейся проверки не падает, хотя источник отмены к этому
+        /// моменту уже освобождён: между концом проверки и следующим нажатием ничего
+        /// не мешает пользователю нажать кнопку ещё раз.
+        /// </summary>
+        [Fact]
+        public async Task ОтменаПослеОсвобождённогоИсточникаНеПадает() {
+            using var scope = new PanelScope();
+            scope.InstallGame(intact: 1, missing: 0, extra: 0);
+            await scope.CheckAsync();
+
+            scope.Panel.Cancel();
+            scope.Panel.Cancel();
+
+            Assert.False(scope.Panel.Busy);
         }
 
         /// <summary>

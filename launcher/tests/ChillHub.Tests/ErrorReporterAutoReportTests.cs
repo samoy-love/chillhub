@@ -396,6 +396,43 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// Запасной запрос собирает СВОЙ контент, а не переиспользует контент первого.
+        /// <para>
+        /// Переиспользованный объект уходил под второй <c>using</c> и освобождался дважды.
+        /// StringContent такое переживает, поэтому отказ здесь молчалив ровно до того дня,
+        /// когда отчёт начнут отправлять потоком: тогда запасной путь ушёл бы с пустым или
+        /// уже прочитанным телом — то есть ровно в тот момент, когда основной адрес и так
+        /// не отвечает. Проверяется и совпадение тел: своё тело обязано быть тем же самым.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public async Task ЗапаснойОтчётПослеОбрываСетиУходитСоСвоимКонтентом() {
+            using var scope = new ReportScope(
+                req => req.RequestUri!.Port == 55777 ? Ok() : throw new HttpRequestException("сеть недоступна"),
+                apiBaseUrl: "http://localhost:5000");
+
+            await ErrorReporter.ReportForTestsAsync(new InvalidOperationException("падение"), "Тест");
+
+            Assert.Equal(new[] { 5000, 55777 }, scope.Requests.Select(u => u.Port).ToArray());
+            Assert.Equal(scope.Bodies[0], scope.Bodies[1]);
+            Assert.NotSame(scope.Contents[0], scope.Contents[1]);
+        }
+
+        /// <summary>То же самое на втором запасном пути — после отказа сервера, а не обрыва сети.</summary>
+        [Fact]
+        public async Task ЗапаснойОтчётПослеОтказаСервераУходитСоСвоимКонтентом() {
+            using var scope = new ReportScope(
+                req => req.RequestUri!.Port == 55777 ? Ok() : new HttpResponseMessage(HttpStatusCode.InternalServerError),
+                apiBaseUrl: "http://127.0.0.1:5000");
+
+            await ErrorReporter.ReportForTestsAsync(new InvalidOperationException("падение"), "Тест");
+
+            Assert.Equal(new[] { 5000, 55777 }, scope.Requests.Select(u => u.Port).ToArray());
+            Assert.Equal(scope.Bodies[0], scope.Bodies[1]);
+            Assert.NotSame(scope.Contents[0], scope.Contents[1]);
+        }
+
+        /// <summary>
         /// Обрыв сети не роняет вызывающего и не выдаёт неотправленный отчёт за успех.
         /// Report зовут из Logger.Error — то есть уже посреди обработки другой ошибки:
         /// исключение отсюда убило бы приложение вместо того, чтобы сообщить о поломке.
@@ -573,6 +610,9 @@ namespace ChillHub.Tests {
             /// <summary>Тела отправленных запросов.</summary>
             internal IReadOnlyList<string> Bodies => this.handler.Bodies;
 
+            /// <summary>Сами объекты контента: по ним видно переиспользование одного тела двумя запросами.</summary>
+            internal IReadOnlyList<HttpContent?> Contents => this.handler.Contents;
+
             /// <summary>Контексты, о которых поднялось событие успешной отправки.</summary>
             internal IReadOnlyList<string> Reported => this.reported.ToArray();
 
@@ -660,6 +700,7 @@ namespace ChillHub.Tests {
             private readonly Func<HttpRequestMessage, HttpResponseMessage> reply;
             private readonly ConcurrentQueue<Uri> seen = new();
             private readonly ConcurrentQueue<string> bodies = new();
+            private readonly ConcurrentQueue<HttpContent?> contents = new();
 
             internal FakeHandler(Func<HttpRequestMessage, HttpResponseMessage> reply) => this.reply = reply;
 
@@ -667,9 +708,16 @@ namespace ChillHub.Tests {
 
             internal IReadOnlyList<string> Bodies => this.bodies.ToArray();
 
+            /// <summary>
+            /// Объекты контента как есть. Тела запросов совпадают и при переиспользовании
+            /// одного объекта, поэтому отличить своё тело от чужого можно только по ссылке.
+            /// </summary>
+            internal IReadOnlyList<HttpContent?> Contents => this.contents.ToArray();
+
             protected override Task<HttpResponseMessage> SendAsync(
                 HttpRequestMessage request, CancellationToken cancellationToken) {
                 this.seen.Enqueue(request.RequestUri!);
+                this.contents.Enqueue(request.Content);
 
                 // Тело читается прямо здесь: запрос живёт до конца using в продакшн-коде,
                 // а тесту оно нужно после возврата.

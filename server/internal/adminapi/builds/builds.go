@@ -498,6 +498,30 @@ func readLatestVersion(dir string) string {
 	return strings.TrimSpace(m["version"])
 }
 
+// versionManifestsDir returns the manifest directory that actually holds
+// {ver}.json for a game, and whether it was found there.
+//
+// A content root pointed at the parent directory (resolveContentRoot in
+// cmd/api, adminutil.DetectContentRoot in cmd/admin) leaves the manifests under
+// {root}/content/manifests/{gid} instead of {root}/manifests/{gid}. A handler
+// that knows only the first layout works on the wrong directory in silence: the
+// delete endpoint answered 200 while the manifest stayed, so the version kept
+// showing in the list and stayed activatable although its files were already
+// gone. Presence of the version file — not of the directory — is what tells the
+// two layouts apart. When neither holds it, the primary path is returned so
+// that callers which treat a missing version as "already done" keep doing so.
+func (h *Handlers) versionManifestsDir(gid, ver string) (string, bool) {
+	dir := h.manifestsDir(gid)
+	if _, err := os.Stat(filepath.Join(dir, ver+".json")); err == nil {
+		return dir, true
+	}
+	legacy := filepath.Join(h.root, "content", "manifests", gid)
+	if _, err := os.Stat(filepath.Join(legacy, ver+".json")); err == nil {
+		return legacy, true
+	}
+	return dir, false
+}
+
 // Activate points latest.json at an existing version.
 func (h *Handlers) Activate(w http.ResponseWriter, r *http.Request) {
 	if !adminutil.RequireMethod(w, r, http.MethodPost) {
@@ -513,13 +537,10 @@ func (h *Handlers) Activate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid gameId or version", http.StatusBadRequest)
 		return
 	}
-	dir := h.manifestsDir(gid)
-	if _, err := os.Stat(filepath.Join(dir, ver+".json")); err != nil {
-		dir = filepath.Join(h.root, "content", "manifests", gid)
-		if _, err2 := os.Stat(filepath.Join(dir, ver+".json")); err2 != nil {
-			http.Error(w, "version manifest not found", http.StatusNotFound)
-			return
-		}
+	dir, ok := h.versionManifestsDir(gid, ver)
+	if !ok {
+		http.Error(w, "version manifest not found", http.StatusNotFound)
+		return
 	}
 	b, err := json.MarshalIndent(map[string]string{"version": ver}, "", "  ")
 	if err == nil {
@@ -553,7 +574,7 @@ func (h *Handlers) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// remove manifest file
-	manDir := h.manifestsDir(gid)
+	manDir, _ := h.versionManifestsDir(gid, ver)
 	manPath := filepath.Join(manDir, ver+".json")
 	if err := os.Remove(manPath); err != nil {
 		if !os.IsNotExist(err) {
@@ -564,7 +585,21 @@ func (h *Handlers) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 	}
 	// remove extracted content folder
 	filesDir := filepath.Join(h.root, "content", gid, ver)
-	_ = os.RemoveAll(filesDir)
+	if err := os.RemoveAll(filesDir); err != nil {
+		// A locked file, a lost permission or a mount point under the version
+		// directory leaves gigabytes on disk while the panel counts the version as
+		// gone, and the free-space figure it shows drifts away from reality with
+		// nothing anywhere to explain it. The journal gets the absolute path — it
+		// is not public, unlike the response body.
+		//
+		// The status stays 200 on purpose: the manifest is already removed, so the
+		// version has disappeared for every client, and the operation the operator
+		// asked for is complete. A 500 would make the panel retry deleting a
+		// version that is no longer in the list and turn a finished job into a
+		// failure. What is left is a leftover directory for the operator to clear,
+		// and the journal is where that belongs.
+		log.Printf("[builds] delete content %s/%s: %v", gid, ver, err)
+	}
 	// adjust latest.json if it pointed to deleted version
 	if readLatestVersion(manDir) == ver {
 		recalcLatest(manDir)
