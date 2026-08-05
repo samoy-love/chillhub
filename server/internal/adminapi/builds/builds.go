@@ -585,7 +585,21 @@ func (h *Handlers) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 	}
 	// remove extracted content folder
 	filesDir := filepath.Join(h.root, "content", gid, ver)
-	_ = os.RemoveAll(filesDir)
+	if err := os.RemoveAll(filesDir); err != nil {
+		// A locked file, a lost permission or a mount point under the version
+		// directory leaves gigabytes on disk while the panel counts the version as
+		// gone, and the free-space figure it shows drifts away from reality with
+		// nothing anywhere to explain it. The journal gets the absolute path — it
+		// is not public, unlike the response body.
+		//
+		// The status stays 200 on purpose: the manifest is already removed, so the
+		// version has disappeared for every client, and the operation the operator
+		// asked for is complete. A 500 would make the panel retry deleting a
+		// version that is no longer in the list and turn a finished job into a
+		// failure. What is left is a leftover directory for the operator to clear,
+		// and the journal is where that belongs.
+		log.Printf("[builds] delete content %s/%s: %v", gid, ver, err)
+	}
 	// adjust latest.json if it pointed to deleted version
 	if readLatestVersion(manDir) == ver {
 		recalcLatest(manDir)
