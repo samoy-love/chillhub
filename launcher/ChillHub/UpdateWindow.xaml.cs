@@ -257,13 +257,11 @@ namespace ChillHub {
 
                 if (download.Result == SelfUpdateDownloadResult.AlreadyUpToDate) {
                     this.updateRequired = false;
-                    this.downloaded = false;
                     return;
                 }
 
                 if (!download.Downloaded) {
                     // Ни один отказ загрузки не ведёт к применению: пакета нет.
-                    this.downloaded = false;
                     return;
                 }
 
