@@ -18,11 +18,6 @@ namespace ChillHub.Core.Home {
     /// (контейнер + текстовый блок), собственной разметки не создаёт.
     /// </summary>
     internal sealed class ToastHost {
-        private static readonly TimeSpan DefaultDuration = TimeSpan.FromSeconds(3);
-        private static readonly TimeSpan OverwriteOutDuration = TimeSpan.FromMilliseconds(140);
-        private static readonly TimeSpan FadeInDuration = TimeSpan.FromMilliseconds(200);
-        private static readonly TimeSpan FadeOutDuration = TimeSpan.FromMilliseconds(220);
-
         private readonly FrameworkElement host;
         private readonly TextBlock text;
 
@@ -33,6 +28,39 @@ namespace ChillHub.Core.Home {
             this.host = host;
             this.text = text;
         }
+
+        /// <summary>
+        /// Сколько уведомление висит на экране, если длительность не задана явно.
+        /// <para>
+        /// Свойства, а не константы, только ради тестов: прогон, честно ждущий три секунды
+        /// на каждый тост, стоил бы минуты, и его бы просто выключили. Продакшн эти
+        /// значения не меняет.
+        /// </para>
+        /// </summary>
+        internal static TimeSpan DefaultDuration { get; set; } = TimeSpan.FromSeconds(3);
+
+        /// <summary>Быстрое исчезновение старого тоста перед показом нового.</summary>
+        internal static TimeSpan OverwriteOutDuration { get; set; } = TimeSpan.FromMilliseconds(140);
+
+        /// <summary>Появление тоста.</summary>
+        internal static TimeSpan FadeInDuration { get; set; } = TimeSpan.FromMilliseconds(200);
+
+        /// <summary>Исчезновение тоста по истечении времени показа.</summary>
+        internal static TimeSpan FadeOutDuration { get; set; } = TimeSpan.FromMilliseconds(220);
+
+        /// <summary>Возвращает длительности к рабочим значениям.</summary>
+        internal static void ResetDurationsForTests() {
+            DefaultDuration = TimeSpan.FromSeconds(3);
+            OverwriteOutDuration = TimeSpan.FromMilliseconds(140);
+            FadeInDuration = TimeSpan.FromMilliseconds(200);
+            FadeOutDuration = TimeSpan.FromMilliseconds(220);
+        }
+
+        /// <summary>
+        /// Задача последнего показа. Нужна тесту: без неё дожидаться конца анимации
+        /// пришлось бы сном на глазок, а такой тест мигает на загруженной машине.
+        /// </summary>
+        internal Task? Current { get; private set; }
 
         /// <summary>Показывает сообщение; предыдущее, если есть, аккуратно убирается.</summary>
         internal void Show(string message, TimeSpan? duration = null) {
@@ -51,7 +79,7 @@ namespace ChillHub.Core.Home {
                 // Предыдущий показ уже завершился и освободил свой источник
             }
 
-            _ = this.RunAsync(message, dur, cts);
+            this.Current = this.RunAsync(message, dur, cts);
         }
 
         private async Task RunAsync(string message, TimeSpan dur, CancellationTokenSource cts) {

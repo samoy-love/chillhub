@@ -33,6 +33,29 @@ namespace ChillHub.Core.Home {
         private static readonly int[] DeniedWin32Codes = { 5, 19, 32, 33, 1314 };
 
         /// <summary>
+        /// Задаёт пользователю вопрос «да/нет». Отдельным швом — чтобы проверять логику
+        /// выбора папки без живого <see cref="MessageBox"/>: модальное окно в тестовом
+        /// прогоне повесило бы его насмерть.
+        /// </summary>
+        internal static Func<string, string, bool> AskYesNo { get; set; } = DefaultAskYesNo;
+
+        /// <summary>Сообщает пользователю об ошибке. Шов того же назначения, что и <see cref="AskYesNo"/>.</summary>
+        internal static Action<string, string> ShowError { get; set; } = DefaultShowError;
+
+        /// <summary>
+        /// Просит выбрать папку; null — пользователь отказался.
+        /// Шов того же назначения, что и <see cref="AskYesNo"/>.
+        /// </summary>
+        internal static Func<string?> PickFolder { get; set; } = DefaultPickFolder;
+
+        /// <summary>Возвращает показ диалогов к настоящим окнам.</summary>
+        internal static void ResetDialogsForTests() {
+            AskYesNo = DefaultAskYesNo;
+            ShowError = DefaultShowError;
+            PickFolder = DefaultPickFolder;
+        }
+
+        /// <summary>
         /// Спрашивает подтверждение на удаление папки игры. При любом сбое построения
         /// оформленного окна откатывается на системный MessageBox — вопрос пользователь увидит в любом случае.
         /// </summary>
@@ -64,51 +87,12 @@ namespace ChillHub.Core.Home {
                     }
                 };
 
-                var grid = new Grid();
-                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-                var tb1 = new TextBlock {
-                    Text = $"Удалить локальные файлы игры \"{title}\"?",
-                    FontSize = 16,
-                    FontWeight = FontWeights.SemiBold,
-                    Foreground = Resource(owner, "Brush.Title") ?? Brushes.White,
-                    Margin = new Thickness(0, 0, 0, 8),
-                };
-                Grid.SetRow(tb1, 0);
-
-                var tb2 = new TextBlock {
-                    Text = $"Будет удалена папка: {HomeFormat.NormalizeDisplayPath(folderPath)}",
-                    Foreground = Resource(owner, "Brush.TextSecondary") ?? new SolidColorBrush(Color.FromRgb(156, 163, 175)),
-                    Margin = new Thickness(0, 0, 0, 16),
-                };
-                Grid.SetRow(tb2, 1);
-
-                var panel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-                var cancelBtn = new Button { Content = "Отмена", MinWidth = 100, Margin = new Thickness(0, 0, 8, 0) };
-                var deleteBtn = new Button { Content = "Удалить", MinWidth = 120 };
-                ApplyStyle(owner, deleteBtn, "Style.Button.Primary");
-                ApplyStyle(owner, cancelBtn, "Style.Button.GhostNeutral");
-                panel.Children.Add(cancelBtn);
-                panel.Children.Add(deleteBtn);
-                Grid.SetRow(panel, 2);
-
-                grid.Children.Add(tb1);
-                grid.Children.Add(tb2);
-                grid.Children.Add(panel);
-                wnd.Content = new Border {
-                    CornerRadius = new CornerRadius(8),
-                    Background = Resource(owner, "Brush.Surface") ?? new SolidColorBrush(Color.FromRgb(18, 18, 18)),
-                    BorderBrush = Resource(owner, "Brush.Border"),
-                    BorderThickness = new Thickness(1.5),
-                    Padding = new Thickness(12),
-                    Child = grid,
-                };
+                var content = BuildConfirmDeleteContent(owner, title, folderPath);
+                wnd.Content = content.Root;
 
                 bool result = false;
-                cancelBtn.Click += (s, e) => { result = false; wnd.DialogResult = false; };
-                deleteBtn.Click += (s, e) => { result = true; wnd.DialogResult = true; };
+                content.CancelButton.Click += (s, e) => { result = false; wnd.DialogResult = false; };
+                content.DeleteButton.Click += (s, e) => { result = true; wnd.DialogResult = true; };
 
                 wnd.ShowDialog();
                 return result;
@@ -123,6 +107,62 @@ namespace ChillHub.Core.Home {
                     MessageBoxImage.Warning);
                 return res == MessageBoxResult.Yes;
             }
+        }
+
+        /// <summary>
+        /// Собирает начинку окна вопроса. Отдельно от самого окна — потому что окно
+        /// показывается модально: в прогоне тестов проверить содержимое вопроса можно,
+        /// только не открывая его.
+        /// </summary>
+        internal static ConfirmDeleteContent BuildConfirmDeleteContent(FrameworkElement owner, string title, string folderPath) {
+            var grid = new Grid();
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var tb1 = new TextBlock {
+                Text = $"Удалить локальные файлы игры \"{title}\"?",
+                FontSize = 16,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = Resource(owner, "Brush.Title") ?? Brushes.White,
+                Margin = new Thickness(0, 0, 0, 8),
+            };
+            Grid.SetRow(tb1, 0);
+
+            var tb2 = new TextBlock {
+                Text = $"Будет удалена папка: {HomeFormat.NormalizeDisplayPath(folderPath)}",
+                Foreground = Resource(owner, "Brush.TextSecondary") ?? new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                Margin = new Thickness(0, 0, 0, 16),
+            };
+            Grid.SetRow(tb2, 1);
+
+            var panel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            var cancelBtn = new Button { Content = "Отмена", MinWidth = 100, Margin = new Thickness(0, 0, 8, 0) };
+            var deleteBtn = new Button { Content = "Удалить", MinWidth = 120 };
+            ApplyStyle(owner, deleteBtn, "Style.Button.Primary");
+            ApplyStyle(owner, cancelBtn, "Style.Button.GhostNeutral");
+            panel.Children.Add(cancelBtn);
+            panel.Children.Add(deleteBtn);
+            Grid.SetRow(panel, 2);
+
+            grid.Children.Add(tb1);
+            grid.Children.Add(tb2);
+            grid.Children.Add(panel);
+
+            return new ConfirmDeleteContent {
+                Root = new Border {
+                    CornerRadius = new CornerRadius(8),
+                    Background = Resource(owner, "Brush.Surface") ?? new SolidColorBrush(Color.FromRgb(18, 18, 18)),
+                    BorderBrush = Resource(owner, "Brush.Border"),
+                    BorderThickness = new Thickness(1.5),
+                    Padding = new Thickness(12),
+                    Child = grid,
+                },
+                Question = tb1,
+                FolderLine = tb2,
+                CancelButton = cancelBtn,
+                DeleteButton = deleteBtn,
+            };
         }
 
         /// <summary>
@@ -146,8 +186,7 @@ namespace ChillHub.Core.Home {
                 }
 
                 var question = $"Нет доступа к папке для игр:\n{path}\n\nВыбрать другую папку сейчас?";
-                var res = MessageBox.Show(question, "Нет доступа", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-                if (res != MessageBoxResult.Yes) {
+                if (!AskYesNo(question, "Нет доступа")) {
                     return false;
                 }
 
@@ -162,32 +201,22 @@ namespace ChillHub.Core.Home {
 
         private static bool TryPickNewGamesPath(AppConfig cfg) {
             try {
-                using var dlg = new System.Windows.Forms.FolderBrowserDialog {
-                    Description = "Выберите папку для игр",
-                    ShowNewFolderButton = true,
-                    SelectedPath = AppConfig.DefaultGamesPath(),
-                };
-
-                if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) {
+                var newPath = PickFolder();
+                if (string.IsNullOrWhiteSpace(newPath)) {
                     return false;
                 }
 
-                var newPath = dlg.SelectedPath;
                 if (ProbeWritable(newPath) == WriteProbe.Ok) {
                     cfg.GamesPath = newPath;
                     if (!ConfigService.TrySave(cfg, out var saveError)) {
                         // Иначе выбранная папка «примется» только до перезапуска
-                        MessageBox.Show(
-                            "Папка выбрана, но настройки сохранить не удалось: " + saveError,
-                            "Ошибка",
-                            MessageBoxButton.OK,
-                            MessageBoxImage.Error);
+                        ShowError("Папка выбрана, но настройки сохранить не удалось: " + saveError, "Ошибка");
                     }
 
                     return true;
                 }
 
-                MessageBox.Show($"Нет доступа к выбранной папке: {newPath}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                ShowError($"Нет доступа к выбранной папке: {newPath}", "Ошибка");
                 return false;
             }
             catch (Exception ex) {
@@ -196,7 +225,23 @@ namespace ChillHub.Core.Home {
             }
         }
 
-        private enum WriteProbe {
+        private static bool DefaultAskYesNo(string message, string caption)
+            => MessageBox.Show(message, caption, MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes;
+
+        private static void DefaultShowError(string message, string caption)
+            => MessageBox.Show(message, caption, MessageBoxButton.OK, MessageBoxImage.Error);
+
+        private static string? DefaultPickFolder() {
+            using var dlg = new System.Windows.Forms.FolderBrowserDialog {
+                Description = "Выберите папку для игр",
+                ShowNewFolderButton = true,
+                SelectedPath = AppConfig.DefaultGamesPath(),
+            };
+
+            return dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK ? dlg.SelectedPath : null;
+        }
+
+        internal enum WriteProbe {
             /// <summary>В папку можно писать.</summary>
             Ok,
 
@@ -207,7 +252,11 @@ namespace ChillHub.Core.Home {
             UnknownIoError,
         }
 
-        private static WriteProbe ProbeWritable(string path) {
+        /// <summary>
+        /// Выясняет, можно ли писать в папку: создаёт её при необходимости и пробует
+        /// записать туда временный файл.
+        /// </summary>
+        internal static WriteProbe ProbeWritable(string path) {
             try {
                 Directory.CreateDirectory(path);
             }
@@ -258,7 +307,7 @@ namespace ChillHub.Core.Home {
         /// русская и английская локаль потеряли бы часть уже работающих распознаваний.
         /// </para>
         /// </summary>
-        private static WriteProbe ClassifyIoFailure(IOException ioex) {
+        internal static WriteProbe ClassifyIoFailure(IOException ioex) {
             if ((ioex.HResult & Win32FacilityMask) == Win32FacilityBits) {
                 var code = ioex.HResult & 0xFFFF;
                 return Array.IndexOf(DeniedWin32Codes, code) >= 0 ? WriteProbe.Denied : WriteProbe.UnknownIoError;
@@ -268,6 +317,24 @@ namespace ChillHub.Core.Home {
             bool looksLikeDenied = msg.Contains("доступ", StringComparison.OrdinalIgnoreCase)
                 || msg.Contains("access", StringComparison.OrdinalIgnoreCase);
             return looksLikeDenied ? WriteProbe.Denied : WriteProbe.UnknownIoError;
+        }
+
+        /// <summary>Начинка окна вопроса об удалении вместе с элементами, на которые вешаются обработчики.</summary>
+        internal sealed class ConfirmDeleteContent {
+            /// <summary>Корень разметки — то, что кладётся в окно.</summary>
+            internal required Border Root { get; init; }
+
+            /// <summary>Сам вопрос.</summary>
+            internal required TextBlock Question { get; init; }
+
+            /// <summary>Строка с папкой, которую собираются удалить.</summary>
+            internal required TextBlock FolderLine { get; init; }
+
+            /// <summary>Кнопка отказа.</summary>
+            internal required Button CancelButton { get; init; }
+
+            /// <summary>Кнопка подтверждения.</summary>
+            internal required Button DeleteButton { get; init; }
         }
 
         private static Brush? Resource(FrameworkElement owner, string key) => owner.TryFindResource(key) as Brush;
