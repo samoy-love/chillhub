@@ -774,7 +774,7 @@ namespace ChillHub.Core.Sync {
         /// <param name="deferred">Файлы, замена которых отложена до перезагрузки.</param>
         /// <param name="changesDisk">Ставился ли маркер незавершённого обновления.</param>
         /// <param name="ct">Токен отмены.</param>
-        private static void FinishPlan(
+        internal static void FinishPlan(
             DiffPlan plan,
             System.Collections.Concurrent.ConcurrentBag<string> deferred,
             bool changesDisk,
@@ -785,10 +785,21 @@ namespace ChillHub.Core.Sync {
             // Удаление лишних файлов (с устойчивостью к блокировкам сторонними процессами)
             var deletedRel = new List<string>();
             foreach (var rel in plan.ToDelete) {
-                // Список сформирован обходом самой папки игры, но удаление — необратимо,
-                // поэтому проверяем и его: подмена DiffPlan не должна стирать чужие файлы.
-                var path = ManifestPath.Combine(plan.LocalRoot, rel);
                 try {
+                    // Список сформирован обходом самой папки игры, но удаление — необратимо,
+                    // поэтому проверяем и его: подмена DiffPlan не должна стирать чужие файлы.
+                    //
+                    // Combine СТОИТ ВНУТРИ try осознанно. Он бросает ManifestPathException на
+                    // любом пути, который не проходит проверку, а в папке игры такой путь
+                    // заводится без всякой подмены: файл с именем устройства (CON.txt), имя
+                    // с краевым пробелом или точкой, путь длиннее 1024 символов — всё это
+                    // NTFS позволяет создать, и обход папки честно вернёт их в ToDelete.
+                    // Пока исключение улетало наружу, один такой файл ронял ВСЮ фазу
+                    // завершения: остальные удаления не выполнялись, пустые каталоги из
+                    // манифеста не создавались, а маркер незавершённого обновления не
+                    // снимался — игра навсегда оставалась «обновление прервано» и чинилась
+                    // только удалением вручную. Пропустить одну запись несравнимо дешевле.
+                    var path = ManifestPath.Combine(plan.LocalRoot, rel);
                     if (File.Exists(path)) {
                         SafeDeleteFile(path);
                         if (!File.Exists(path)) {
@@ -796,7 +807,8 @@ namespace ChillHub.Core.Sync {
                         }
                     }
                 }
-                catch {
+                catch (Exception ex) {
+                    ChillHub.Core.Logging.Logger.Warn($"FinishPlan gid={plan.GameId}: '{rel}' не удалён: {ex.Message}");
                 }
             }
 
@@ -900,7 +912,7 @@ namespace ChillHub.Core.Sync {
         // Это сделано для пиратских сборок с сайта FreeTP.Org, чтобы при запуске игр
         // не открывался сайт FreeTP при каждом запуске. Лаунчер не должен проверять,
         // скачивать или удалять этот файл.
-        private static bool IsIgnoredRelFile(string rel) {
+        internal static bool IsIgnoredRelFile(string rel) {
             if (string.IsNullOrWhiteSpace(rel)) {
                 return false;
             }
@@ -912,7 +924,7 @@ namespace ChillHub.Core.Sync {
         // ВАЖНО: сохраняем директорию FreeTP внутри игры и не удаляем её при очистке пустых папок.
         // Это также связано с пиратскими сборками с FreeTP.Org — пустая папка может понадобиться,
         // а её удаление может спровоцировать нежелательное поведение (например, открытие сайта).
-        private static bool IsIgnoredRelDir(string relDir) {
+        internal static bool IsIgnoredRelDir(string relDir) {
             if (string.IsNullOrWhiteSpace(relDir)) {
                 return false;
             }
@@ -931,7 +943,7 @@ namespace ChillHub.Core.Sync {
         /// <param name="root">Корень игры.</param>
         /// <param name="deletedRel">Относительные пути файлов, которые мы удалили.</param>
         /// <param name="keep">Каталоги из манифеста, которые должны остаться.</param>
-        private static void CleanupDirsEmptiedByUpdate(string root, IEnumerable<string> deletedRel, HashSet<string> keep) {
+        internal static void CleanupDirsEmptiedByUpdate(string root, IEnumerable<string> deletedRel, HashSet<string> keep) {
             if (!Directory.Exists(root)) {
                 return;
             }
@@ -996,7 +1008,7 @@ namespace ChillHub.Core.Sync {
 
         // Служебные файлы лаунчера в корне игры, которые не участвуют
         // ни в плане загрузки, ни в удалении, ни в подсчёте локальных файлов.
-        private static bool IsServiceRelFile(string rel) {
+        internal static bool IsServiceRelFile(string rel) {
             if (string.IsNullOrWhiteSpace(rel)) {
                 return false;
             }
@@ -1015,7 +1027,7 @@ namespace ChillHub.Core.Sync {
         }
 
         // Ставит маркер незавершённого обновления перед фазой активации.
-        private static void WriteUpdateMarker(string localRoot, string version) {
+        internal static void WriteUpdateMarker(string localRoot, string version) {
             try {
                 Directory.CreateDirectory(localRoot);
                 var path = Path.Combine(localRoot, UpdateMarkerFileName);
@@ -1030,7 +1042,7 @@ namespace ChillHub.Core.Sync {
 
         // Оставляет маркер на месте, но с причиной: часть файлов заменится после перезагрузки.
         // Содержимое читает ReadUpdateMarker и показывает в подсказке/логе.
-        private static void WriteRebootPendingMarker(string localRoot, string version, IReadOnlyList<string> deferred) {
+        internal static void WriteRebootPendingMarker(string localRoot, string version, IReadOnlyList<string> deferred) {
             try {
                 var path = Path.Combine(localRoot, UpdateMarkerFileName);
                 var lines = new List<string> {
@@ -1049,7 +1061,7 @@ namespace ChillHub.Core.Sync {
         }
 
         // Снимает маркер после успешного завершения активации.
-        private static void ClearUpdateMarker(string localRoot) {
+        internal static void ClearUpdateMarker(string localRoot) {
             try {
                 var path = Path.Combine(localRoot, UpdateMarkerFileName);
                 if (File.Exists(path)) {
@@ -1062,7 +1074,7 @@ namespace ChillHub.Core.Sync {
             }
         }
 
-        private static void SafeDeleteFile(string path) {
+        internal static void SafeDeleteFile(string path) {
             try {
                 if (!File.Exists(path)) {
                     return;
