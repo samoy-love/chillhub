@@ -128,9 +128,12 @@ against the updater's preserve rules
 
 ## Deployment
 
-Four targets ship independently — landing page, public API, admin server, admin
-UI — through [deploy-kit](https://github.com/tr0llex/deploy-kit). The installer
-is built in CI only and attached to a GitHub Release.
+Five targets ship independently — landing page, public API, admin server, admin
+UI and the installer — through
+[deploy-kit](https://github.com/tr0llex/deploy-kit). The installer is rebuilt by
+every merge that touches the client: the exe is swapped on the site
+(`/downloads/ChillHub-Setup.exe`) and the self-update build goes to the admin
+panel; making it active is a manual `latest` switch there.
 
 ```bash
 dk                          # what is on production right now
