@@ -50,12 +50,15 @@ permissions:
 #                 его здесь значило бы завести второй список, который однажды
 #                 разойдётся с первым.
 #   launcher/**, updater/**, Directory.Build.props,
-#   scripts/build-installer.ps1, scripts/installer.nsi, scripts/app.ico
+#   scripts/build-installer.ps1, scripts/installer.nsi, scripts/app.ico,
+#   scripts/ci/ensure-nsis.ps1
 #                 client: всё, из чего build-installer.ps1 собирает
 #                 установщик. Апдейтер входит ProjectReference'ом, props —
-#                 общие свойства компиляции, три файла в scripts/ — сам
-#                 сценарий сборки, сценарий NSIS и иконка. Остальной
-#                 scripts/** в артефакт не попадает и цель не задевает.
+#                 общие свойства компиляции, четыре файла в scripts/ — сам
+#                 сценарий сборки, сценарий NSIS, иконка и установка NSIS
+#                 (закреплённая там версия компилятора — тоже вход сборки).
+#                 Остальной scripts/** в артефакт не попадает и цель не
+#                 задевает.
 #   .htmlhintrc*, .stylelint*
 #                 гейты обеих статических целей: их правка меняет результат
 #                 гейта. Со звёздочкой, потому что в `changes` они проверяются
@@ -86,7 +89,7 @@ permissions:
 #   ^server/(cmd/api/|[^/]+$)            → server/**
 #   ^server/internal/                    → server/**
 #   ^(launcher/|updater/|…)              → launcher/**, updater/**,
-#                                          Directory.Build.props и три файла
+#                                          Directory.Build.props и четыре файла
 #                                          сборки установщика в scripts/
 #
 # Обратное направление намеренно неточное: `server/**` шире, чем сумма правил
@@ -109,6 +112,7 @@ on:
       - 'scripts/build-installer.ps1'
       - 'scripts/installer.nsi'
       - 'scripts/app.ico'
+      - 'scripts/ci/ensure-nsis.ps1'
       - '.htmlhintrc*'
       - '.stylelint*'
       - '.deploy-kit/**'
@@ -177,8 +181,9 @@ jobs:
   #               Списан с того, что читает build-installer.ps1: launcher/**
   #               (сам клиент), updater/** (входит ProjectReference'ом и
   #               кладётся в установку), Directory.Build.props (общие свойства
-  #               компиляции) и три файла в scripts/ — build-installer.ps1,
-  #               installer.nsi, app.ico. scripts/Redist/ в git пуст
+  #               компиляции) и четыре файла в scripts/ — build-installer.ps1,
+  #               installer.nsi, app.ico, ci/ensure-nsis.ps1 (закреплённая
+  #               версия NSIS — тоже вход сборки). scripts/Redist/ в git пуст
   #               (.gitkeep): bootstrapper WebView2 сборка скачивает сама.
   #
   # Правило про internal сознательно вывернуто «от обратного»: считаем пакет
@@ -198,7 +203,7 @@ jobs:
   # исключений» нет — он бы рассинхронизировался). Больше того: коммит, целиком
   # состоящий из таких файлов, теперь не заводит и самого прогона — его отсекает
   # `paths` на триггере (см. блок над `on`). Это они: README*.md, docs/**,
-  # scripts/** сверх трёх файлов сборки установщика (dev-скрипты, замеры,
+  # scripts/** сверх четырёх файлов сборки установщика (dev-скрипты, замеры,
   # сжатие картинок — в артефакты не попадают); content/** и manifests — их
   # редактируют через админку прямо на сервере, выкатка их не трогает (см.
   # комментарий в api.env); tests/**, codecov.yml, .github/workflows/ci.yml
@@ -304,7 +309,7 @@ jobs:
           # Установщик: всё, из чего build-installer.ps1 собирает артефакт
           # (см. раскладку в комментарии job'ы). Один греп без разбора на
           # части: установщик один, точнее делить нечего.
-          echo "$FILES" | grep -qE '^(launcher/|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|installer\.nsi|app\.ico)$)' \
+          echo "$FILES" | grep -qE '^(launcher/|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|installer\.nsi|app\.ico|ci/ensure-nsis\.ps1)$)' \
             && CLIENT=true || CLIENT=false
 
           printf 'site=%s\napi=%s\nadmin=%s\nadmin_ui=%s\nclient=%s\n' \
@@ -424,7 +429,12 @@ jobs:
       # ПОСИМВОЛЬНО: «v1.2.3» против «1.2.3» — это вечный цикл обновления у
       # каждого, кто поставит такой билд. Тегов в репозитории ещё не было,
       # поэтому ловушка ни разу не срабатывала.
-      build: ./scripts/build-installer.ps1 -Configuration Release -AppVersion ($env:DEPLOY_VERSION -replace '^v','')
+      #
+      # ensure-nsis.ps1 — первой командой, а не отдельным шагом: сборка и
+      # подготовка окружения у desktop-artifact живут в одном входе `build`.
+      # Образ windows-latest НЕ несёт NSIS — полагаться на него нельзя, первая
+      # же публикация на этом и упала, пока установка жила только в ci.yml.
+      build: ./scripts/ci/ensure-nsis.ps1; ./scripts/build-installer.ps1 -Configuration Release -AppVersion ($env:DEPLOY_VERSION -replace '^v','')
       artifact: scripts/generated_downloads/ChillHub-Setup.exe
       # На прогонах без тега версию объявляет сам репозиторий: <Version> из
       # csproj — ровно тот источник, с которым build-installer.ps1 сверяет
