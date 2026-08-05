@@ -175,7 +175,16 @@ namespace ChillHub.Core.Settings {
         /// <summary>Отменяет текущую проверку или восстановление по кнопке.</summary>
         internal void Cancel() {
             try {
-                this.integrityCts?.Cancel();
+                // Источник отмены живёт ровно столько, сколько идёт работа, и другого
+                // признака «есть что отменять» у панели нет. Без этой проверки нажатая
+                // в покое кнопка писала «Отмена…» поверх результата только что
+                // закончившейся проверки — человек терял ответ, ради которого её и запускал.
+                var cts = this.integrityCts;
+                if (cts == null) {
+                    return;
+                }
+
+                cts.Cancel();
                 this.ShowStatus("Отмена…");
             }
             catch (Exception ex) {
