@@ -130,7 +130,33 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 		_ = os.Remove(tmpPath)
 		return err
 	}
+	syncDirEntry(dir)
 	return nil
+}
+
+// syncDirEntry flushes the directory entry the rename has just created.
+//
+// The rename is atomic for READERS the moment it returns, but the directory
+// block that binds the name to the new inode can sit in the page cache for
+// seconds. tmp.Sync above puts the CONTENT on the platter; without this the
+// machine can come back from a power cut showing the previous document — or the
+// temporary name and no state file at all, which is how a games registry or a
+// latest.json goes missing after an outage.
+//
+// The price is one extra syscall per write of a state file, and these writes
+// are rare: publishing a build, activating a version, editing the news.
+//
+// A directory that cannot be opened or synced is NOT a failed write, and the
+// renamed file is not taken back: it is in place and every reader already sees
+// it. Windows does not support flushing a directory handle at all, so the error
+// there is the normal outcome rather than a symptom.
+func syncDirEntry(dir string) {
+	d, err := os.Open(dir) // #nosec G304 -- the directory the caller's file was just written into.
+	if err != nil {
+		return
+	}
+	_ = d.Sync()
+	_ = d.Close()
 }
 
 // EnsureWithin reports whether p resolves to a location inside base.
