@@ -6,30 +6,37 @@
 namespace ChillHub.Pages {
     using System;
     using System.Collections.Generic;
-    using System.IO;
-    using System.Linq;
     using System.Net.Http;
     using System.Net.Http.Json;
-    using System.Threading;
     using System.Threading.Tasks;
     using System.Windows;
     using System.Windows.Controls;
 
     using ChillHub.Core;
-    using ChillHub.Core.Home;
+    using ChillHub.Core.Settings;
+    using ChillHub.Core.Shell;
     using ChillHub.Core.Sync;
 
     public partial class SettingsPage : Page {
-        private readonly ISyncService sync = new SimpleSyncService();
         private readonly HttpClient http = ChillHub.Core.Net.HttpClientProvider.Shared;
-
-        private CancellationTokenSource? integrityCts;
-        private IntegrityReport? lastReport;
-        private bool integrityBusy;
-        private bool integrityRepairing;
+        private readonly IntegrityPanel integrity = new IntegrityPanel(new SimpleSyncService());
 
         public SettingsPage() {
             this.InitializeComponent();
+
+            // Панель проверки целостности про контролы не знает — связываем её с ними здесь
+            this.integrity.ShowStatus = this.SetIntegrityStatus;
+            this.integrity.ShowBusy = this.SetIntegrityBusy;
+            this.integrity.ShowRepairButton = visible =>
+                this.IntegrityRepairBtn.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+            this.integrity.ShowProgress = (percent, text) => {
+                if (this.IntegrityProgress == null) {
+                    return;
+                }
+
+                this.IntegrityProgress.Value = percent;
+                this.SetIntegrityStatus(text);
+            };
 
             // Defer UI population until the page is fully loaded to avoid template/resource init races (seen in dark theme)
             this.Loaded += this.SettingsPage_Loaded;
@@ -55,116 +62,47 @@ namespace ChillHub.Pages {
                 }), System.Windows.Threading.DispatcherPriority.Loaded);
         }
 
-        private void SettingsPage_Unloaded(object sender, RoutedEventArgs e) {
-            // Уходим со страницы — отменяем незавершённую проверку, чтобы она не читала диск впустую.
-            // Восстановление НЕ трогаем: обрыв на фазе активации оставит маркер .updating
-            // и наполовину обновлённую игру, поэтому доводим его до конца в фоне.
-            try {
-                if (!this.integrityRepairing) {
-                    this.integrityCts?.Cancel();
-                }
-            }
-            catch (Exception ex) {
-                // Проверка могла уже завершиться и освободить источник отмены
-                ChillHub.Core.Logging.Logger.Warn($"SettingsPage.Unloaded: отмена проверки целостности: {ex.Message}");
-            }
-        }
+        private void SettingsPage_Unloaded(object sender, RoutedEventArgs e) => this.integrity.LeavePage();
 
         private void LoadConfigToUi() {
-            var cfg = ConfigService.Current ?? new AppConfig();
+            var view = SettingsView.Build(ConfigService.Current);
             if (this.GamesPathBox != null) {
-                // Отображаем путь с одинарными обратными слешами для читаемости.
-                // Ведущий \\ сетевого пути при этом обязан уцелеть — см. NormalizeWindowsPath.
-                var p = cfg.GamesPath ?? string.Empty;
-                this.GamesPathBox.Text = HomeFormat.NormalizeWindowsPath(p);
+                this.GamesPathBox.Text = view.GamesPath;
             }
 
             if (this.ThreadsSlider != null) {
-                this.ThreadsSlider.Value = cfg.DownloadThreads;
+                this.ThreadsSlider.Value = view.DownloadThreads;
             }
 
             if (this.ThreadsValueText != null) {
-                this.ThreadsValueText.Text = cfg.DownloadThreads.ToString();
+                this.ThreadsValueText.Text = view.DownloadThreadsText;
             }
 
             if (this.UsageMetricsCheck != null) {
-                this.UsageMetricsCheck.IsChecked = cfg.SendUsageMetrics;
+                this.UsageMetricsCheck.IsChecked = view.SendUsageMetrics;
             }
 
             if (this.AutoErrorReportsCheck != null) {
-                this.AutoErrorReportsCheck.IsChecked = cfg.AutoErrorReports;
+                this.AutoErrorReportsCheck.IsChecked = view.AutoErrorReports;
             }
 
             if (this.DiscordRpcCheck != null) {
-                this.DiscordRpcCheck.IsChecked = cfg.DiscordRichPresence;
+                this.DiscordRpcCheck.IsChecked = view.DiscordRichPresence;
             }
 
-            // Честно предупреждаем: без Application ID переключатель ничего не включает.
-            // Иначе он создаёт иллюзию работающей интеграции, а статуса в Discord нет.
             if (this.DiscordRpcHintText != null) {
-                var configured = ChillHub.Core.DiscordRichPresence.IsConfigured;
-                this.DiscordRpcHintText.Visibility = configured ? Visibility.Collapsed : Visibility.Visible;
-                this.DiscordRpcHintText.Text = configured
-                    ? string.Empty
-                    : "Интеграция пока не настроена владельцем лаунчера (не указан Application ID приложения Discord), "
-                      + "поэтому статус не появится даже при включённом переключателе. Настройка сохранится и заработает после обновления лаунчера.";
+                this.DiscordRpcHintText.Visibility = view.DiscordHintVisible ? Visibility.Visible : Visibility.Collapsed;
+                this.DiscordRpcHintText.Text = view.DiscordHintText;
             }
 
             if (this.VersionText != null) {
-                this.VersionText.Text = GetLauncherVersion();
+                this.VersionText.Text = view.VersionText;
             }
 
             // Single dark theme now; no theme selection UI
         }
 
-        /// <summary>
-        /// Версия лаунчера: сначала маркер launcher.version рядом с exe (его пишет апдейтер),
-        /// иначе — версия сборки. Своя маленькая копия логики, чтобы не тянуть зависимость от UpdateWindow.
-        /// </summary>
-        private static string GetLauncherVersion() {
-            try {
-                var markerPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launcher.version");
-                if (File.Exists(markerPath)) {
-                    var marker = (File.ReadAllText(markerPath) ?? string.Empty).Trim();
-                    if (!string.IsNullOrWhiteSpace(marker)) {
-                        return marker;
-                    }
-                }
-            }
-            catch (Exception ex) {
-                // Маркера может не быть или он недоступен — ниже возьмём версию сборки
-                ChillHub.Core.Logging.Logger.Warn($"SettingsPage.GetLauncherVersion: маркер launcher.version не прочитан: {ex.Message}");
-            }
-
-            try {
-                var v = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
-                if (v != null) {
-                    return $"{v.Major}.{v.Minor}.{v.Build}";
-                }
-            }
-            catch (Exception ex) {
-                ChillHub.Core.Logging.Logger.Warn($"SettingsPage.GetLauncherVersion: версия сборки недоступна: {ex.Message}");
-            }
-
-            return "неизвестно";
-        }
-
-        private void OpenLogsBtn_Click(object sender, RoutedEventArgs e) {
-            try {
-                // Путь берём у Logger: логи переехали из %TEMP% (его чистит система
-                // вместе с отчётами) в %APPDATA%\ChillHub, к остальному состоянию.
-                var dir = ChillHub.Core.Logging.Logger.LogDirectory;
-                Directory.CreateDirectory(dir);
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
-                    FileName = dir,
-                    UseShellExecute = true,
-                });
-            }
-            catch (Exception ex) {
-                MessageBox.Show($"Не удалось открыть папку с логами: {ex.Message}", "Ошибка",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
+        private void OpenLogsBtn_Click(object sender, RoutedEventArgs e) => SettingsActions.OpenLogsFolder();
 
         // ---- Проверка целостности игры (задача 18) ----
 
@@ -188,12 +126,8 @@ namespace ChillHub.Pages {
                 }
 
                 // Подставим последнюю запускавшуюся игру, иначе первую установленную, иначе первую в списке
-                var gamesPath = ConfigService.Current.GamesPath;
-                var lastId = ConfigService.Current.LastGameId;
-                var preselect = games.FirstOrDefault(g => string.Equals(g.GameId, lastId, StringComparison.OrdinalIgnoreCase))
-                                ?? games.FirstOrDefault(g => IntegrityChecker.HasAnyLocalGameFiles(IntegrityChecker.GameLocalRoot(gamesPath, g.GameId)))
-                                ?? games[0];
-                this.IntegrityGameBox.SelectedItem = preselect;
+                this.IntegrityGameBox.SelectedItem = IntegrityPanel.Preselect(
+                    games, ConfigService.Current.GamesPath, ConfigService.Current.LastGameId);
             }
             catch (Exception ex) {
                 // Logger сам гасит свои ошибки — дополнительная обёртка не нужна
@@ -202,128 +136,15 @@ namespace ChillHub.Pages {
             }
         }
 
-        private async void IntegrityCheckBtn_Click(object sender, RoutedEventArgs e) {
-            if (this.integrityBusy) {
-                return;
-            }
+        private async void IntegrityCheckBtn_Click(object sender, RoutedEventArgs e)
+            => await this.integrity.CheckAsync(this.IntegrityGameBox?.SelectedItem as GameInfo);
 
-            var game = this.IntegrityGameBox?.SelectedItem as GameInfo;
-            if (game == null || string.IsNullOrWhiteSpace(game.GameId)) {
-                this.SetIntegrityStatus("Выберите игру для проверки.");
-                return;
-            }
+        private async void IntegrityRepairBtn_Click(object sender, RoutedEventArgs e)
+            => await this.integrity.RepairAsync();
 
-            this.lastReport = null;
-            this.SetIntegrityBusy(true, repairing: false);
-            this.IntegrityRepairBtn.Visibility = Visibility.Collapsed;
-            this.SetIntegrityStatus("Проверка файлов…");
+        private void IntegrityCancelBtn_Click(object sender, RoutedEventArgs e) => this.integrity.Cancel();
 
-            var cts = new CancellationTokenSource();
-            this.integrityCts = cts;
-            var progress = new Progress<SyncProgress>(p => this.ReportIntegrityProgress(p, "Проверено"));
-
-            try {
-                var report = await IntegrityChecker.CheckAsync(
-                    this.sync,
-                    this.BaseApi,
-                    game.GameId,
-                    game.LatestVersion,
-                    ConfigService.Current.GamesPath,
-                    progress,
-                    cts.Token);
-
-                this.lastReport = report;
-                this.SetIntegrityStatus(IntegrityChecker.Describe(report));
-                this.IntegrityRepairBtn.Visibility = report.NeedsRepair ? Visibility.Visible : Visibility.Collapsed;
-            }
-            catch (OperationCanceledException) {
-                this.SetIntegrityStatus("Проверка отменена.");
-            }
-            catch (IntegrityCheckException ex) {
-                this.SetIntegrityStatus(ex.Message);
-            }
-            catch (Exception ex) {
-                ChillHub.Core.Logging.Logger.Error(ex, "SettingsPage.IntegrityCheck");
-                this.SetIntegrityStatus($"Не удалось проверить целостность: {ex.Message}");
-            }
-            finally {
-                this.SetIntegrityBusy(false, repairing: false);
-                this.integrityCts = null;
-                cts.Dispose();
-            }
-        }
-
-        private async void IntegrityRepairBtn_Click(object sender, RoutedEventArgs e) {
-            if (this.integrityBusy) {
-                return;
-            }
-
-            var report = this.lastReport;
-            if (report == null || !report.NeedsRepair) {
-                this.SetIntegrityStatus("Восстанавливать нечего — сначала выполните проверку.");
-                return;
-            }
-
-            var confirm = MessageBox.Show(
-                $"Будет перекачано файлов: {report.Plan.Downloads.Count}, удалено лишних: {report.Plan.ToDelete.Count}.\n\nПродолжить восстановление?",
-                "Восстановление файлов игры",
-                MessageBoxButton.OKCancel,
-                MessageBoxImage.Question);
-            if (confirm != MessageBoxResult.OK) {
-                return;
-            }
-
-            this.SetIntegrityBusy(true, repairing: true);
-            this.IntegrityRepairBtn.Visibility = Visibility.Collapsed;
-            this.SetIntegrityStatus("Восстановление…");
-
-            var cts = new CancellationTokenSource();
-            this.integrityCts = cts;
-            var progress = new Progress<SyncProgress>(p => this.ReportIntegrityProgress(p, StageToRu(p.Stage)));
-
-            try {
-                // Маркер .updating ставится и снимается внутри ExecuteAsync
-                await this.sync.ExecuteAsync(report.Plan, progress, cts.Token);
-                this.lastReport = null;
-                this.SetIntegrityStatus("Восстановление завершено. Рекомендуем проверить целостность ещё раз.");
-            }
-            catch (OperationCanceledException) {
-                this.SetIntegrityStatus("Восстановление отменено. Игра может остаться в незавершённом состоянии — повторите восстановление.");
-            }
-            catch (Exception ex) {
-                ChillHub.Core.Logging.Logger.Error(ex, "SettingsPage.IntegrityRepair");
-                this.SetIntegrityStatus($"Не удалось восстановить файлы: {ex.Message}");
-            }
-            finally {
-                this.SetIntegrityBusy(false, repairing: false);
-                this.integrityCts = null;
-                cts.Dispose();
-            }
-        }
-
-        private void IntegrityCancelBtn_Click(object sender, RoutedEventArgs e) {
-            try {
-                this.integrityCts?.Cancel();
-                this.SetIntegrityStatus("Отмена…");
-            }
-            catch (Exception ex) {
-                ChillHub.Core.Logging.Logger.Warn($"SettingsPage.IntegrityCancel: {ex.Message}");
-            }
-        }
-
-        private void ReportIntegrityProgress(SyncProgress p, string label) {
-            if (p == null || this.IntegrityProgress == null) {
-                return;
-            }
-
-            var percent = p.TotalFiles > 0 ? p.FilesDownloaded * 100.0 / p.TotalFiles : 0;
-            this.IntegrityProgress.Value = Math.Clamp(percent, 0, 100);
-            this.SetIntegrityStatus($"{label}: {p.FilesDownloaded} из {p.TotalFiles}…");
-        }
-
-        private void SetIntegrityBusy(bool busy, bool repairing) {
-            this.integrityBusy = busy;
-            this.integrityRepairing = busy && repairing;
+        private void SetIntegrityBusy(bool busy) {
             if (this.IntegrityProgressPanel != null) {
                 this.IntegrityProgressPanel.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
             }
@@ -347,18 +168,9 @@ namespace ChillHub.Pages {
             }
         }
 
-        private static string StageToRu(string stage) => stage switch {
-            "Checking" => "Подготовка",
-            "Downloading" => "Скачано",
-            "Verifying" => "Проверка",
-            "Activating" => "Установка",
-            "Completed" => "Готово",
-            _ => "Обработано",
-        };
-
         private void BackBtn_Click(object sender, RoutedEventArgs e) {
-            if (this.NavigationService != null && this.NavigationService.CanGoBack) {
-                this.NavigationService.GoBack();
+            if (ShellNavigation.ShouldGoBack(this.NavigationService != null, this.NavigationService?.CanGoBack == true)) {
+                this.NavigationService!.GoBack();
                 return;
             }
 
@@ -369,25 +181,9 @@ namespace ChillHub.Pages {
         }
 
         private void ChooseBtn_Click(object sender, RoutedEventArgs e) {
-            try {
-                using (var dlg = new System.Windows.Forms.FolderBrowserDialog()) {
-                    dlg.Description = "Выберите папку для игр";
-                    dlg.ShowNewFolderButton = true;
-                    dlg.SelectedPath = string.IsNullOrWhiteSpace(this.GamesPathBox.Text)
-                        ? AppConfig.DefaultGamesPath()
-                        : this.GamesPathBox.Text;
-                    var res = dlg.ShowDialog();
-                    if (res == System.Windows.Forms.DialogResult.OK) {
-                        // Нормализуем отображение: одинарные обратные слеши (кроме префикса UNC)
-                        var sp = dlg.SelectedPath ?? string.Empty;
-                        this.GamesPathBox.Text = HomeFormat.NormalizeWindowsPath(sp);
-                    }
-                }
-            }
-            catch (Exception ex) {
-                // Диалог выбора папки может не открыться (нет прав, сбой оболочки) —
-                // путь всегда можно ввести руками, поэтому не мешаем пользователю
-                ChillHub.Core.Logging.Logger.Error(ex, "SettingsPage.ChooseBtn_Click");
+            var chosen = SettingsActions.ChooseGamesFolder(this.GamesPathBox.Text);
+            if (chosen != null) {
+                this.GamesPathBox.Text = chosen;
             }
         }
 
@@ -398,77 +194,28 @@ namespace ChillHub.Pages {
         }
 
         private void SaveBtn_Click(object sender, RoutedEventArgs e) {
+            var saved = SettingsActions.Save(new SettingsInput {
+                GamesPathText = this.GamesPathBox.Text,
+                DownloadThreads = this.ThreadsSlider.Value,
+                AutoErrorReports = this.AutoErrorReportsCheck == null ? null : this.AutoErrorReportsCheck.IsChecked == true,
+                SendUsageMetrics = this.UsageMetricsCheck == null ? null : this.UsageMetricsCheck.IsChecked == true,
+                DiscordRichPresence = this.DiscordRpcCheck == null ? null : this.DiscordRpcCheck.IsChecked == true,
+            });
+            if (!saved) {
+                return;
+            }
+
             try {
-                var cfg = ConfigService.Current;
-                var newPath = this.GamesPathBox.Text?.Trim();
-                if (string.IsNullOrWhiteSpace(newPath)) {
-                    newPath = AppConfig.DefaultGamesPath();
-                }
-
-                // Для файловой системы и конфигурации используем нормальную форму с одинарными
-                // слешами. Сетевой путь вида \\nas\games при этом не превращаем в \nas\games.
-                newPath = HomeFormat.NormalizeWindowsPath(newPath);
-                try {
-                    Directory.CreateDirectory(newPath);
-                }
-                catch (Exception ex) {
-                    // Каталог мог быть недоступен (сетевая шара оффлайн, нет прав) — настройку
-                    // всё равно сохраняем: путь может стать доступным позже.
-                    ChillHub.Core.Logging.Logger.Warn($"SettingsPage.SaveBtn: не удалось создать папку игр '{newPath}': {ex.Message}");
-                }
-
-                cfg.GamesPath = newPath;
-                cfg.DownloadThreads = (int)this.ThreadsSlider.Value;
-                if (this.AutoErrorReportsCheck != null) {
-                    cfg.AutoErrorReports = this.AutoErrorReportsCheck.IsChecked == true;
-                }
-
-                if (this.UsageMetricsCheck != null) {
-                    cfg.SendUsageMetrics = this.UsageMetricsCheck.IsChecked == true;
-                }
-
-                if (this.DiscordRpcCheck != null) {
-                    var wasEnabled = cfg.DiscordRichPresence;
-                    cfg.DiscordRichPresence = this.DiscordRpcCheck.IsChecked == true;
-
-                    // Выключили при запущенной игре — статус надо снять сразу, а не при выходе из лаунчера
-                    if (wasEnabled && !cfg.DiscordRichPresence) {
-                        try {
-                            ChillHub.Core.DiscordRichPresence.Shutdown();
-                        }
-                        catch (Exception ex) {
-                            ChillHub.Core.Logging.Logger.Warn($"SettingsPage: снять статус Discord не удалось: {ex.Message}");
-                        }
-                    }
-                }
-
-                // Запись может не удаться (нет прав на %APPDATA%, диск заполнен, файл занят).
-                // Молчать нельзя: пользователь уйдёт со страницы уверенный, что настройки сохранены.
-                if (!ConfigService.TrySave(cfg, out var saveError)) {
-                    MessageBox.Show(
-                        "Не удалось сохранить настройки: " + saveError,
-                        "Ошибка",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Error);
-                    return;
-                }
-
-                try {
-                    // Мгновенно обновим цвет заголовка окна согласно новой теме
-                    var win = Window.GetWindow(this) as ChillHub.MainWindow;
-                    if (win != null) {
-                        bool isDark = true; // single dark theme
-                        ChillHub.Core.UI.AcrylicHelper.ApplyTitleBarTheme(win, isDark);
-                    }
-                }
-                catch (Exception ex) {
-                    // Цвет заголовка окна — косметика; настройки уже сохранены
-                    ChillHub.Core.Logging.Logger.Warn($"SettingsPage.SaveBtn: тема заголовка не применена: {ex.Message}");
+                // Мгновенно обновим цвет заголовка окна согласно новой теме
+                var win = Window.GetWindow(this) as ChillHub.MainWindow;
+                if (win != null) {
+                    bool isDark = true; // single dark theme
+                    ChillHub.Core.UI.AcrylicHelper.ApplyTitleBarTheme(win, isDark);
                 }
             }
             catch (Exception ex) {
-                MessageBox.Show($"Не удалось сохранить настройки: {ex.Message}", "Ошибка",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
+                // Цвет заголовка окна — косметика; настройки уже сохранены
+                ChillHub.Core.Logging.Logger.Warn($"SettingsPage.SaveBtn: тема заголовка не применена: {ex.Message}");
             }
         }
     }
