@@ -161,6 +161,89 @@ namespace ChillHub.Tests {
             Assert.Equal(content, await File.ReadAllBytesAsync(landed));
         }
 
+        /// <summary>
+        /// Файл того же размера, но от другой сборки, за готовый не сходит: staging
+        /// мог остаться от прерванного обновления на другую версию, и совпадение
+        /// размера там не значит ничего.
+        /// </summary>
+        [Fact]
+        public async Task ЧужаяВерсияВStagingПерекачивается() {
+            using var dir = new TempDir();
+            var content = Encoding.UTF8.GetBytes("содержимое версии 2");
+            var sha = Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
+
+            var staged = Path.Combine(dir.Root, ".staging", "app", "data.bin");
+            Directory.CreateDirectory(Path.GetDirectoryName(staged)!);
+            await File.WriteAllBytesAsync(staged, Encoding.UTF8.GetBytes("содержимое версии 1"));
+            Assert.Equal(content.Length, new FileInfo(staged).Length);
+
+            var landed = await DownloadOneAsync(dir.Root, "app/data.bin", content, sha);
+
+            Assert.Equal(content, await File.ReadAllBytesAsync(landed));
+        }
+
+        /// <summary>
+        /// Обновление заменяет уже лежащий на месте файл.
+        /// <para>
+        /// Основной путь активации: одно переименование с заменой вместо связки
+        /// «проверить — удалить — проверить — переместить». Тестов на замену не было
+        /// вовсе — покрыта была только установка на пустое место, где заменять нечего.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public async Task ОбновлениеЗаменяетСуществующийФайл() {
+            using var dir = new TempDir();
+            var oldContent = Encoding.UTF8.GetBytes("старая версия файла");
+            var newContent = Encoding.UTF8.GetBytes("новая версия файла, заметно длиннее старой");
+            dir.WriteBytes("app/data.bin", oldContent);
+
+            var landed = await DownloadOneAsync(
+                dir.Root,
+                "app/data.bin",
+                newContent,
+                Convert.ToHexString(SHA256.HashData(newContent)).ToLowerInvariant());
+
+            Assert.Equal(newContent, await File.ReadAllBytesAsync(landed));
+        }
+
+        /// <summary>
+        /// Занятый файл не валит обновление: он уходит в отложенную замену, а игра
+        /// честно остаётся помеченной как обновлённая не до конца.
+        /// <para>
+        /// Это запасная ветка активации — та самая, ради которой существуют
+        /// <c>SafeDeleteFile</c>, <c>.new</c> и <c>MoveFileEx</c>. Проверяем именно её
+        /// поведение, а не то, что успеет сделать система на перезагрузке.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public async Task ЗанятыйФайлУходитВОтложеннуюЗамену() {
+            using var dir = new TempDir();
+            var oldContent = Encoding.UTF8.GetBytes("старая версия");
+            var newContent = Encoding.UTF8.GetBytes("новая версия!");
+            var target = dir.WriteBytes("app/data.bin", oldContent);
+
+            // Держим файл так, как его держит запущенная игра свой exe: читать можно,
+            // а переименовать или удалить — нет. Именно на этом спотыкается активация.
+            using (new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read)) {
+                var landed = await DownloadOneAsync(
+                    dir.Root,
+                    "app/data.bin",
+                    newContent,
+                    Convert.ToHexString(SHA256.HashData(newContent)).ToLowerInvariant());
+
+                // Старое содержимое на месте — заменить его сейчас физически нельзя
+                Assert.Equal(oldContent, await File.ReadAllBytesAsync(landed));
+
+                // Новое лежит рядом и ждёт перезагрузки
+                Assert.True(File.Exists(landed + ".new"), "новый файл должен ждать заменой на перезагрузку");
+                Assert.Equal(newContent, await File.ReadAllBytesAsync(landed + ".new"));
+            }
+
+            // Маркер обязан остаться: игра обновлена не полностью, запускать её нельзя
+            Assert.True(SimpleSyncService.HasUpdateMarker(dir.Root), "маркер незавершённого обновления должен остаться");
+            Assert.Contains("reboot-required", SimpleSyncService.ReadUpdateMarker(dir.Root));
+        }
+
         /// <summary>Скачивает один файл через подставной HTTP и возвращает путь, куда он лёг.</summary>
         private static async Task<string> DownloadOneAsync(string root, string rel, byte[] content, string sha256) {
             var handler = new StubContentHandler(content);

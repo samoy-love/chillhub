@@ -22,14 +22,24 @@ namespace ChillHub.Core.Logging {
 
         // Логи пишутся ПО УМОЛЧАНИЮ: без них обратная связь и авто-отчёты приходят пустыми.
         // CHILLHUB_CLIENT_LOG=0 (false/off/no) — выключить, =1 (true/on/yes) — явно включить.
-        private static readonly bool enabled = ResolveEnabled();
+        // Не readonly только ради OverrideForTests — в остальном значение задаётся один раз.
+        private static bool enabled = ResolveEnabled();
 
         // Логи лежат рядом с остальным пользовательским состоянием (%APPDATA%\ChillHub),
         // а не в %TEMP%, который чистится системой вместе с отчётами.
-        private static readonly string logDirectory = ResolveLogDirectory();
+        private static string logDirectory = ResolveLogDirectory();
 
         /// <summary>Текущий размер активного файла; -1 — ещё не считали с диска.</summary>
         private static long currentSize = -1;
+
+        /// <summary>
+        /// Открытый файл лога. Держим его между записями вместо открытия и закрытия
+        /// на каждую строку: открытие файла — это ~0,15 мс, и на путях, где строка
+        /// пишется на КАЖДЫЙ файл игры (планирование и активация обновления), десятки
+        /// тысяч файлов превращались в минуты, потраченные на логирование. Запись в
+        /// уже открытый поток с Flush стоит ~0,002 мс — в шестьдесят раз дешевле.
+        /// </summary>
+        private static FileStream? stream;
 
         /// <summary>Каталог с логами клиента. Остальные части приложения должны брать путь отсюда.</summary>
         public static string LogDirectory => logDirectory;
@@ -100,6 +110,26 @@ namespace ChillHub.Core.Logging {
         /// </summary>
         public static string[] LogFilePatterns => new[] { "client*.log", "boot*.log" };
 
+        /// <summary>
+        /// Временно уводит логгер в указанный каталог и включает запись.
+        /// <para>
+        /// Иначе логгер непроверяем в принципе: тестовый прогон выключает запись целиком
+        /// (<c>CHILLHUB_CLIENT_LOG=0</c>), потому что настоящий каталог — это
+        /// <c>%APPDATA%\ChillHub\logs</c> живого пользователя, и засорять его данными,
+        /// которые тесты специально делают битыми, нельзя. Флаг читается один раз при
+        /// инициализации типа, так что «включить на один тест» без этого шва невозможно —
+        /// только на весь процесс.
+        /// </para>
+        /// <para>
+        /// Подмена глобальная и живёт до Dispose: пока она активна, в подставной каталог
+        /// пишет весь процесс. Для тестов это и нужно — именно так проверяются ротация
+        /// и чтение лога при открытом дескрипторе.
+        /// </para>
+        /// </summary>
+        /// <param name="directory">Каталог, куда писать лог, пока подмена активна.</param>
+        /// <returns>Объект, возвращающий логгер в исходное состояние.</returns>
+        internal static IDisposable OverrideForTests(string directory) => new TestOverride(directory);
+
         private static bool ResolveEnabled() {
             try {
                 var raw = Environment.GetEnvironmentVariable("CHILLHUB_CLIENT_LOG");
@@ -152,7 +182,7 @@ namespace ChillHub.Core.Logging {
 
                 // Формат строки менять нельзя: на него смотрит человек в отчётах.
                 var line = "[" + DateTime.Now.ToString("o") + "] " + level + " " + message + "\r\n";
-                var bytes = Utf8.GetByteCount(line);
+                var buf = Utf8.GetBytes(line);
                 var path = LogFilePath;
 
                 lock (@lock) {
@@ -160,20 +190,77 @@ namespace ChillHub.Core.Logging {
                         try { currentSize = File.Exists(path) ? new FileInfo(path).Length : 0; } catch { currentSize = 0; }
                     }
 
-                    if (currentSize + bytes > MaxFileBytes) {
-                        // Ротация — это только переименования (без копирования данных),
-                        // поэтому блокировка держится ровно столько, сколько нужно.
+                    if (currentSize + buf.Length > MaxFileBytes) {
+                        // Ротация — это переименования, а переименовать открытый файл нельзя:
+                        // поток закрываем до неё и открываем заново уже на новый client.log.
+                        CloseStream();
                         Rotate(path);
                         currentSize = 0;
                     }
 
-                    File.AppendAllText(path, line, Utf8);
-                    currentSize += bytes;
+                    // FileShare.Delete здесь не мелочь: единственного экземпляра лаунчера
+                    // никто не гарантирует, а ротация — это переименование файла. Держи мы
+                    // его без права на удаление — соседний процесс не смог бы ротировать
+                    // лог и вместо архива просто затирал бы его.
+                    stream ??= new FileStream(
+                        path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, 4096);
+                    stream.Write(buf, 0, buf.Length);
+
+                    // Flush на каждой строке обязателен: логи читает диагностика ЖИВОГО
+                    // процесса и разбор падений. Он отдаёт данные системе, а не диску,
+                    // поэтому строка переживает и падение процесса, и убийство из
+                    // диспетчера — и при этом почти ничего не стоит.
+                    stream.Flush();
+                    currentSize += buf.Length;
                 }
             }
             catch {
-                // Логгер не имеет права ронять приложение.
-                try { lock (@lock) { currentSize = -1; } } catch { }
+                // Логгер не имеет права ронять приложение. Поток мог остаться в негодном
+                // состоянии (диск отвалился, файл удалили) — закрываем, следующая запись
+                // откроет заново.
+                try {
+                    lock (@lock) {
+                        CloseStream();
+                        currentSize = -1;
+                    }
+                }
+                catch { }
+            }
+        }
+
+        /// <summary>Закрывает открытый файл лога. Вызывать только под <see cref="@lock"/>.</summary>
+        private static void CloseStream() {
+            try { stream?.Dispose(); } catch { }
+            stream = null;
+        }
+
+        /// <summary>Восстанавливает каталог и флаг записи, подменённые <see cref="OverrideForTests"/>.</summary>
+        private sealed class TestOverride : IDisposable {
+            private readonly string previousDirectory;
+            private readonly bool previousEnabled;
+
+            internal TestOverride(string directory) {
+                Directory.CreateDirectory(directory);
+                lock (@lock) {
+                    this.previousDirectory = logDirectory;
+                    this.previousEnabled = enabled;
+
+                    // Открытый поток смотрит на прежний файл — его нужно закрыть,
+                    // иначе запись продолжилась бы мимо подставного каталога.
+                    CloseStream();
+                    logDirectory = directory;
+                    enabled = true;
+                    currentSize = -1;
+                }
+            }
+
+            public void Dispose() {
+                lock (@lock) {
+                    CloseStream();
+                    logDirectory = this.previousDirectory;
+                    enabled = this.previousEnabled;
+                    currentSize = -1;
+                }
             }
         }
 
