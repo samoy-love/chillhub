@@ -97,26 +97,32 @@ func TestRollbackLiveVersionShoutsWhenTheRestoreFails(t *testing.T) {
 	}
 }
 
-// promoteVersionDir must not delete the previous build when it could neither
-// promote the new one nor put the old one back. The backup is the last copy;
-// dropping it would turn a recoverable incident into a lost release.
-func TestPromoteVersionDirKeepsTheBackupWhenTheRestoreFails(t *testing.T) {
+// A failed restore must not take the backup with it. The backup is the last
+// copy of the published build; dropping it turns a recoverable incident into a
+// lost release that no one can undo from the panel.
+//
+// Обструкция здесь — существующий непустой каталог на месте цели, а не права
+// на родителя. Через права этот случай не собирается: read-only родитель ломает
+// уже ПЕРВЫЙ rename (увод живой версии в бэкап), promoteVersionDir выходит с
+// ошибкой раньше, чем доходит до восстановления, и проверять становится нечего.
+// Ровно на этом тест и падал на Linux, а на Windows молча скипался — то есть не
+// выполнялся нигде. Непустой каталог отвергается rename и там, и там.
+func TestRollbackLiveVersionKeepsTheBackupWhenTheRestoreFails(t *testing.T) {
 	logs := captureLog(t)
 	root := t.TempDir()
 	parent := filepath.Join(root, "content", "game")
 	final := filepath.Join(parent, "1.0.0")
-	mustMkdirAll(t, final)
-	mustWriteFile(t, filepath.Join(final, "live.txt"), "live")
+	backup := final + ".old-deadbeefcafe"
 
-	// The staging directory does not exist, so the promoting rename fails; the
-	// obstruction then makes the restoring rename fail too.
-	stage := filepath.Join(parent, "1.0.0.tmp-missing")
-	if !denyWritesIn(t, parent) {
-		t.Skip("the filesystem does not honour a read-only parent directory here")
-	}
-	if err := promoteVersionDir(stage, final); err == nil {
-		t.Fatal("promoting a missing staging dir reported success")
-	}
+	mustMkdirAll(t, backup)
+	mustWriteFile(t, filepath.Join(backup, "live.txt"), "live")
+
+	// Цель занята непустым каталогом: переименовать поверх неё нельзя.
+	mustMkdirAll(t, final)
+	mustWriteFile(t, filepath.Join(final, "blocker.txt"), "blocker")
+
+	rollbackLiveVersion(backup, final, errors.New("promote failed"))
+
 	if !strings.Contains(logs.String(), "CRITICAL") {
 		t.Fatalf("the unrecoverable state was not reported: %q", logs.String())
 	}
