@@ -240,6 +240,11 @@ namespace ChillHub.Tests {
             var newContent = Encoding.UTF8.GetBytes("новая версия!");
             var target = dir.WriteBytes("app/data.bin", oldContent);
 
+            // Остаток от прошлой такой же попытки. Его обязаны заменить, а не оставить
+            // рядом: каждая попытка копила бы по ".new", а замена на перезагрузке
+            // подставила бы содержимое от позапрошлой версии.
+            dir.WriteBytes("app/data.bin.new", Encoding.UTF8.GetBytes("остаток от прошлой попытки"));
+
             // Держим файл так, как его держит запущенная игра свой exe: читать можно,
             // а переименовать или удалить — нет. Именно на этом спотыкается активация.
             using (new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read)) {
