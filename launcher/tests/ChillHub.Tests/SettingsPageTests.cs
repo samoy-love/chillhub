@@ -244,11 +244,17 @@ namespace ChillHub.Tests {
             using var cfgDir = new ConfigDirsScope();
             _ = new DialogLog();
             Assert.True(SettingsActions.Save(new SettingsInput {
-                DownloadThreads = 8, AutoErrorReports = false, SendUsageMetrics = false, DiscordRichPresence = false,
+                DownloadThreads = 8,
+                AutoErrorReports = false,
+                SendUsageMetrics = false,
+                DiscordRichPresence = false,
             }));
 
             Assert.True(SettingsActions.Save(new SettingsInput {
-                DownloadThreads = 8, AutoErrorReports = true, SendUsageMetrics = true, DiscordRichPresence = true,
+                DownloadThreads = 8,
+                AutoErrorReports = true,
+                SendUsageMetrics = true,
+                DiscordRichPresence = true,
             }));
 
             var saved = cfgDir.ReadConfigFromDisk();
@@ -267,7 +273,10 @@ namespace ChillHub.Tests {
             using var cfgDir = new ConfigDirsScope();
             _ = new DialogLog();
             Assert.True(SettingsActions.Save(new SettingsInput {
-                DownloadThreads = 8, AutoErrorReports = true, SendUsageMetrics = true, DiscordRichPresence = true,
+                DownloadThreads = 8,
+                AutoErrorReports = true,
+                SendUsageMetrics = true,
+                DiscordRichPresence = true,
             }));
 
             // Ни одного тумблера в input — как если бы контролов на странице не оказалось
