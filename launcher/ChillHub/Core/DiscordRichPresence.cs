@@ -39,7 +39,7 @@ namespace ChillHub.Core {
         /// <see cref="LargeImageKey"/> — она будет показана рядом со статусом.
         /// </para>
         /// </summary>
-        private const string ApplicationId = "";
+        private const string DefaultApplicationId = "";
 
         /// <summary>Ключ большой картинки из Art Assets приложения Discord. Если такой картинки нет — Discord просто её не покажет.</summary>
         private const string LargeImageKey = "chillhub";
@@ -75,6 +75,23 @@ namespace ChillHub.Core {
 
         /// <summary>Включена ли интеграция (настройка владельца) и задан ли валидный Application ID.</summary>
         public static bool IsConfigured => IsValidApplicationId(ApplicationId);
+
+        /// <summary>
+        /// Gets or sets действующий Application ID. В приложении это всегда
+        /// <see cref="DefaultApplicationId"/>: значение выведено в свойство только затем,
+        /// чтобы ветки, доступные лишь настроенной интеграции, можно было проверить,
+        /// не подменяя константу сборки.
+        /// </summary>
+        internal static string ApplicationId { get; set; } = DefaultApplicationId;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether Discord признан недоступным.
+        /// Флаг выставляется один раз за запуск и глушит дальнейшие попытки достучаться до канала.
+        /// </summary>
+        internal static bool Unavailable {
+            get => unavailable;
+            set => unavailable = value;
+        }
 
         /// <summary>
         /// Сообщает Discord, что пользователь запустил игру. Вызов не блокирует UI:
@@ -145,7 +162,7 @@ namespace ChillHub.Core {
         /// Включена ли интеграция. Учитывает Application ID и пользовательскую настройку.
         /// </summary>
         /// <returns>True, если можно пытаться работать с Discord.</returns>
-        private static bool IsEnabled() {
+        internal static bool IsEnabled() {
             if (!IsConfigured) {
                 return false;
             }
@@ -155,6 +172,94 @@ namespace ChillHub.Core {
             }
 
             return IsEnabledByConfig();
+        }
+
+        /// <summary>Application ID Discord — это строка из цифр (snowflake).</summary>
+        internal static bool IsValidApplicationId(string? id) {
+            if (string.IsNullOrWhiteSpace(id)) {
+                return false;
+            }
+
+            foreach (var ch in id) {
+                if (ch < '0' || ch > '9') {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>Формирует объект activity протокола Discord. null означает «убрать статус».</summary>
+        internal static object? BuildActivity(string details, string state, DateTimeOffset? startedAt) {
+            object? timestamps = startedAt.HasValue
+                ? new { start = startedAt.Value.ToUnixTimeSeconds() }
+                : null;
+
+            return new {
+                details,
+                state,
+                timestamps,
+                assets = new { large_image = LargeImageKey, large_text = "ChillHub" },
+            };
+        }
+
+        /// <summary>
+        /// Пишет в канал один кадр протокола: opcode, длина тела и само тело.
+        /// Длина считается В БАЙТАХ UTF-8 — на символах Discord сразу теряет синхронизацию.
+        /// </summary>
+        internal static async Task WriteFrameAsync(Stream stream, int opcode, string json, CancellationToken token) {
+            var body = Encoding.UTF8.GetBytes(json);
+            var frame = new byte[8 + body.Length];
+            BitConverter.TryWriteBytes(frame.AsSpan(0, 4), opcode);
+            BitConverter.TryWriteBytes(frame.AsSpan(4, 4), body.Length);
+            Buffer.BlockCopy(body, 0, frame, 8, body.Length);
+
+            // Протокол little-endian; на big-endian машине порядок надо развернуть.
+            if (!BitConverter.IsLittleEndian) {
+                Array.Reverse(frame, 0, 4);
+                Array.Reverse(frame, 4, 4);
+            }
+
+            await stream.WriteAsync(frame.AsMemory(0, frame.Length), token).ConfigureAwait(false);
+            await stream.FlushAsync(token).ConfigureAwait(false);
+        }
+
+        /// <summary>Вычитывает один ответный кадр, если он есть. Содержимое нам не нужно.</summary>
+        internal static async Task TryDrainAsync(Stream stream, CancellationToken token) {
+            try {
+                var header = new byte[8];
+                var read = await stream.ReadAsync(header.AsMemory(0, 8), token).ConfigureAwait(false);
+                if (read < 8) {
+                    return;
+                }
+
+                if (!BitConverter.IsLittleEndian) {
+                    Array.Reverse(header, 0, 4);
+                    Array.Reverse(header, 4, 4);
+                }
+
+                var length = BitConverter.ToInt32(header, 4);
+
+                // Защита от мусора в канале: разумный ответ Discord не бывает больше пары сотен КБ
+                if (length <= 0 || length > 256 * 1024) {
+                    return;
+                }
+
+                var body = new byte[length];
+                var offset = 0;
+                while (offset < length) {
+                    var chunk = await stream.ReadAsync(body.AsMemory(offset, length - offset), token).ConfigureAwait(false);
+                    if (chunk <= 0) {
+                        break;
+                    }
+
+                    offset += chunk;
+                }
+            }
+            catch (Exception ex) {
+                // Ответ не обязателен: статус мог уже примениться
+                Logging.Logger.Info($"DiscordRichPresence: ответ не прочитан ({ex.GetType().Name}: {ex.Message})");
+            }
         }
 
         /// <summary>
@@ -171,35 +276,6 @@ namespace ChillHub.Core {
                 Logging.Logger.Warn($"DiscordRichPresence: чтение флага из настроек не удалось: {ex.Message}");
                 return true;
             }
-        }
-
-        /// <summary>Application ID Discord — это строка из цифр (snowflake).</summary>
-        private static bool IsValidApplicationId(string? id) {
-            if (string.IsNullOrWhiteSpace(id)) {
-                return false;
-            }
-
-            foreach (var ch in id) {
-                if (ch < '0' || ch > '9') {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        /// <summary>Формирует объект activity протокола Discord. null означает «убрать статус».</summary>
-        private static object? BuildActivity(string details, string state, DateTimeOffset? startedAt) {
-            object? timestamps = startedAt.HasValue
-                ? new { start = startedAt.Value.ToUnixTimeSeconds() }
-                : null;
-
-            return new {
-                details,
-                state,
-                timestamps,
-                assets = new { large_image = LargeImageKey, large_text = "ChillHub" },
-            };
         }
 
         private static async Task SendActivityAsync(object? activity) {
@@ -284,61 +360,6 @@ namespace ChillHub.Core {
             unavailable = true;
             Logging.Logger.Info("DiscordRichPresence: Discord не найден, интеграция не активируется");
             return null;
-        }
-
-        private static async Task WriteFrameAsync(Stream stream, int opcode, string json, CancellationToken token) {
-            var body = Encoding.UTF8.GetBytes(json);
-            var frame = new byte[8 + body.Length];
-            BitConverter.TryWriteBytes(frame.AsSpan(0, 4), opcode);
-            BitConverter.TryWriteBytes(frame.AsSpan(4, 4), body.Length);
-            Buffer.BlockCopy(body, 0, frame, 8, body.Length);
-
-            // Протокол little-endian; на big-endian машине порядок надо развернуть.
-            if (!BitConverter.IsLittleEndian) {
-                Array.Reverse(frame, 0, 4);
-                Array.Reverse(frame, 4, 4);
-            }
-
-            await stream.WriteAsync(frame.AsMemory(0, frame.Length), token).ConfigureAwait(false);
-            await stream.FlushAsync(token).ConfigureAwait(false);
-        }
-
-        /// <summary>Вычитывает один ответный кадр, если он есть. Содержимое нам не нужно.</summary>
-        private static async Task TryDrainAsync(Stream stream, CancellationToken token) {
-            try {
-                var header = new byte[8];
-                var read = await stream.ReadAsync(header.AsMemory(0, 8), token).ConfigureAwait(false);
-                if (read < 8) {
-                    return;
-                }
-
-                if (!BitConverter.IsLittleEndian) {
-                    Array.Reverse(header, 0, 4);
-                    Array.Reverse(header, 4, 4);
-                }
-
-                var length = BitConverter.ToInt32(header, 4);
-
-                // Защита от мусора в канале: разумный ответ Discord не бывает больше пары сотен КБ
-                if (length <= 0 || length > 256 * 1024) {
-                    return;
-                }
-
-                var body = new byte[length];
-                var offset = 0;
-                while (offset < length) {
-                    var chunk = await stream.ReadAsync(body.AsMemory(offset, length - offset), token).ConfigureAwait(false);
-                    if (chunk <= 0) {
-                        break;
-                    }
-
-                    offset += chunk;
-                }
-            }
-            catch (Exception ex) {
-                // Ответ не обязателен: статус мог уже примениться
-                Logging.Logger.Info($"DiscordRichPresence: ответ не прочитан ({ex.GetType().Name}: {ex.Message})");
-            }
         }
 
         private static async Task CloseAsync() {
