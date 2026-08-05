@@ -43,7 +43,7 @@ namespace ChillHub.Core.Maintenance {
         public const string EndpointPath = "/api/maintenance";
 
         /// <summary>Как часто перепроверяем состояние. Достаточно редко, чтобы не шуметь в сети.</summary>
-        private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(60);
+        private static readonly TimeSpan DefaultPollInterval = TimeSpan.FromSeconds(60);
 
         /// <summary>Таймаут одного запроса: висеть на нём в фоне смысла нет.</summary>
         private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
@@ -55,6 +55,9 @@ namespace ChillHub.Core.Maintenance {
         /// <summary>Сколько раз подряд опрос не удался — чтобы не засорять лог одинаковыми записями.</summary>
         private static int consecutiveFailures;
 
+        /// <summary>Сколько циклов опроса сейчас живо. Больше одного означало бы двойной опрос.</summary>
+        private static int runningLoops;
+
         /// <summary>
         /// Состояние изменилось. Подписчикам приходит уже актуальное состояние;
         /// событие поднимается в UI-потоке, если приложение живо.
@@ -63,6 +66,25 @@ namespace ChillHub.Core.Maintenance {
 
         /// <summary>Gets текущее известное состояние. До первого успешного опроса — «работы не идут».</summary>
         public static MaintenanceState Current { get; private set; } = MaintenanceState.Off;
+
+        /// <summary>
+        /// Gets or sets интервал между опросами. В приложении всегда
+        /// <see cref="DefaultPollInterval"/>; отдельная точка нужна тестам, чтобы проверять
+        /// поведение цикла, не ожидая минуту реального времени.
+        /// </summary>
+        internal static TimeSpan PollInterval { get; set; } = DefaultPollInterval;
+
+        /// <summary>
+        /// Gets or sets клиента, которым выполняется запрос. null — общий клиент приложения.
+        /// Единственный шов, позволяющий проверить разбор ответов сервера без сети.
+        /// </summary>
+        internal static HttpClient? HttpOverride { get; set; }
+
+        /// <summary>Gets число живых циклов опроса: повторный <see cref="Start"/> не должен его увеличивать.</summary>
+        internal static int RunningLoops => Volatile.Read(ref runningLoops);
+
+        /// <summary>Gets длину текущей серии неудачных опросов.</summary>
+        internal static int ConsecutiveFailures => Volatile.Read(ref consecutiveFailures);
 
         /// <summary>
         /// Запускает фоновый опрос. Повторные вызовы игнорируются, поэтому метод можно
@@ -108,29 +130,58 @@ namespace ChillHub.Core.Maintenance {
             return Current;
         }
 
+        /// <summary>
+        /// Собирает адрес эндпоинта из базового адреса сервера. Вынесено отдельно от чтения
+        /// конфигурации, потому что ошибиться здесь можно только со слешами, а проверять это
+        /// удобнее без подмены настроек пользователя.
+        /// </summary>
+        /// <param name="baseUrl">Базовый адрес API (может быть пустым или с хвостовым слешем).</param>
+        /// <returns>Полный адрес запроса.</returns>
+        internal static string BuildUrl(string? baseUrl)
+            => (baseUrl ?? string.Empty).TrimEnd('/') + EndpointPath;
+
+        /// <summary>
+        /// Возвращает сервис в исходное состояние. Нужно тестам: состояние статическое,
+        /// и без сброса результат одного теста утекал бы в следующий.
+        /// </summary>
+        internal static void ResetForTests() {
+            Stop();
+            Changed = null;
+            Current = MaintenanceState.Off;
+            Volatile.Write(ref consecutiveFailures, 0);
+            HttpOverride = null;
+            PollInterval = DefaultPollInterval;
+        }
+
         private static async Task PollLoopAsync(CancellationToken token) {
-            while (!token.IsCancellationRequested) {
-                try {
-                    var state = await FetchAsync(token).ConfigureAwait(false);
-                    if (state != null) {
-                        Apply(state);
+            Interlocked.Increment(ref runningLoops);
+            try {
+                while (!token.IsCancellationRequested) {
+                    try {
+                        var state = await FetchAsync(token).ConfigureAwait(false);
+                        if (state != null) {
+                            Apply(state);
+                        }
+                    }
+                    catch (OperationCanceledException) {
+                        return;
+                    }
+                    catch (Exception ex) {
+                        // Цикл обязан пережить любую ошибку: иначе клиент навсегда останется
+                        // с последним известным состоянием и не выйдет из режима автоматически.
+                        Logging.Logger.Warn($"MaintenanceService.PollLoop: {ex.Message}");
+                    }
+
+                    try {
+                        await Task.Delay(PollInterval, token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) {
+                        return;
                     }
                 }
-                catch (OperationCanceledException) {
-                    return;
-                }
-                catch (Exception ex) {
-                    // Цикл обязан пережить любую ошибку: иначе клиент навсегда останется
-                    // с последним известным состоянием и не выйдет из режима автоматически.
-                    Logging.Logger.Warn($"MaintenanceService.PollLoop: {ex.Message}");
-                }
-
-                try {
-                    await Task.Delay(PollInterval, token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) {
-                    return;
-                }
+            }
+            finally {
+                Interlocked.Decrement(ref runningLoops);
             }
         }
 
@@ -145,7 +196,7 @@ namespace ChillHub.Core.Maintenance {
             timeout.CancelAfter(RequestTimeout);
 
             try {
-                using var resp = await HttpClientProvider.Shared
+                using var resp = await (HttpOverride ?? HttpClientProvider.Shared)
                     .GetAsync(url, HttpCompletionOption.ResponseHeadersRead, timeout.Token)
                     .ConfigureAwait(false);
 
@@ -186,10 +237,7 @@ namespace ChillHub.Core.Maintenance {
             }
         }
 
-        private static string BuildUrl() {
-            var baseUrl = (ConfigService.Current?.ApiBaseUrl ?? string.Empty).TrimEnd('/');
-            return baseUrl + EndpointPath;
-        }
+        private static string BuildUrl() => BuildUrl(ConfigService.Current?.ApiBaseUrl);
 
         private static void Apply(MaintenanceState state) {
             if (state.SameAs(Current)) {

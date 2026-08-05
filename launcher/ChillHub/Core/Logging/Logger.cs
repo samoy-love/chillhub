@@ -101,7 +101,7 @@ namespace ChillHub.Core.Logging {
         /// Сбой связи, а не дефект кода: перебираем и вложенные исключения,
         /// потому что HttpClient заворачивает сокетные ошибки.
         /// </summary>
-        private static bool IsNetworkFailure(Exception? ex) {
+        internal static bool IsNetworkFailure(Exception? ex) {
             for (var e = ex; e != null; e = e.InnerException) {
                 if (e is System.Net.Http.HttpRequestException
                     or System.Net.Sockets.SocketException
@@ -142,7 +142,16 @@ namespace ChillHub.Core.Logging {
         /// <returns>Объект, возвращающий логгер в исходное состояние.</returns>
         internal static IDisposable OverrideForTests(string directory) => new TestOverride(directory);
 
-        private static bool ResolveEnabled() {
+        /// <summary>
+        /// Читает <c>CHILLHUB_CLIENT_LOG</c>. Значение по умолчанию — «писать»: без логов
+        /// обратная связь и авто-отчёты приходят пустыми.
+        /// <para>
+        /// Вызывается один раз при инициализации типа, поэтому проверить решение через
+        /// поведение логгера нельзя — отсюда доступ на уровне сборки.
+        /// </para>
+        /// </summary>
+        /// <returns>true, если запись логов включена.</returns>
+        internal static bool ResolveEnabled() {
             try {
                 var raw = Environment.GetEnvironmentVariable("CHILLHUB_CLIENT_LOG");
                 if (string.IsNullOrWhiteSpace(raw)) {
@@ -164,7 +173,17 @@ namespace ChillHub.Core.Logging {
             }
         }
 
-        private static string ResolveLogDirectory() {
+        /// <summary>
+        /// Выбирает каталог логов: роуминг, при неудаче — %TEMP%, в крайнем случае текущий.
+        /// <para>
+        /// Роуминг здесь принципиален: %LOCALAPPDATA%\ChillHub — это каталог УСТАНОВКИ
+        /// лаунчера, и лог, положенный туда, самообновление снесло бы вместе со старыми
+        /// файлами. Вызывается один раз при инициализации типа — отсюда доступ на уровне
+        /// сборки, иначе проверить выбор нечем.
+        /// </para>
+        /// </summary>
+        /// <returns>Каталог, в который пишется лог.</returns>
+        internal static string ResolveLogDirectory() {
             try {
                 var dir = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -325,8 +344,16 @@ namespace ChillHub.Core.Logging {
             }
         }
 
-        /// <summary>client.log -&gt; client.1.log -&gt; ... -&gt; client.N.log, самый старый удаляем.</summary>
-        private static void Rotate(string path) {
+        /// <summary>
+        /// client.log -&gt; client.1.log -&gt; ... -&gt; client.N.log, самый старый удаляем.
+        /// <para>
+        /// Доступ на уровне сборки — ради теста: через <see cref="Write"/> сюда попадаешь
+        /// только записав пять мегабайт, и проверка сдвига архивов стоила бы десятков
+        /// мегабайт ввода-вывода на каждый прогон.
+        /// </para>
+        /// </summary>
+        /// <param name="path">Путь к активному файлу лога.</param>
+        internal static void Rotate(string path) {
             try {
                 var dir = Path.GetDirectoryName(path) ?? logDirectory;
                 var name = Path.GetFileNameWithoutExtension(path);

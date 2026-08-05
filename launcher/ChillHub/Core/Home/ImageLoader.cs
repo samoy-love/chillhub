@@ -22,14 +22,6 @@ namespace ChillHub.Core.Home {
     /// скелетоном-заглушкой рядом с картинкой.
     /// </summary>
     internal static class ImageLoader {
-        /// <summary>Отдельный HttpClient: много мелких параллельных запросов за картинками.</summary>
-        private static readonly HttpClient Http = new HttpClient(new HttpClientHandler {
-            AllowAutoRedirect = true,
-            AutomaticDecompression = DecompressionMethods.All,
-            UseCookies = true,
-            MaxConnectionsPerServer = 16,
-        });
-
         /// <summary>
         /// Идущие загрузки по URL. Хранится сама задача, а не признак «занято»:
         /// второй элемент с тем же URL должен дождаться результата, а не остаться пустым.
@@ -39,6 +31,34 @@ namespace ChillHub.Core.Home {
 
         /// <summary>Высота декодирования по умолчанию, если у элемента не задан размер.</summary>
         private const int DefaultDecodeHeight = 88;
+
+        /// <summary>Отдельный HttpClient: много мелких параллельных запросов за картинками.</summary>
+        private static HttpClient http = CreateDefaultClient();
+
+        /// <summary>
+        /// Клиент, которым качаются картинки. Выведен наружу сборки только затем, чтобы тесты
+        /// могли подставить свой обработчик: иначе проверить дедупликацию и поведение при
+        /// отказе сети можно было бы только реальными запросами наружу.
+        /// </summary>
+        internal static HttpClient Http {
+            get => http;
+            set => http = value ?? CreateDefaultClient();
+        }
+
+        /// <summary>
+        /// Возвращает загрузчик в исходное состояние: пустой кеш, пустой список идущих
+        /// загрузок, клиент по умолчанию.
+        /// Нужно тестам: статика переживает границу теста, и без сброса результат одного
+        /// теста подменял бы сеть в следующем.
+        /// </summary>
+        internal static void ResetForTests() {
+            Cache.Clear();
+            Inflight.Clear();
+            http = CreateDefaultClient();
+        }
+
+        /// <summary>Есть ли готовая картинка для этого URL — проверяется без обращения к сети.</summary>
+        internal static bool IsCached(string url) => Cache.ContainsKey(url);
 
         /// <summary>
         /// Полный сценарий обработчика Loaded у картинки: достать URL (Tag → DataContext → текущий Source),
@@ -51,11 +71,11 @@ namespace ChillHub.Core.Home {
 
             string raw = (img.Tag as string) ?? string.Empty;
             if (string.IsNullOrWhiteSpace(raw)) {
-                raw = ExtractUrlFromDataContext(img);
+                raw = ExtractUrlFromDataContext(img.DataContext);
             }
 
             if (string.IsNullOrWhiteSpace(raw)) {
-                raw = ExtractUrlFromSource(img);
+                raw = ExtractUrlFromSource(img.Source);
             }
 
             if (string.IsNullOrWhiteSpace(raw)) {
@@ -117,17 +137,7 @@ namespace ChillHub.Core.Home {
                     return;
                 }
 
-                // Дедупликация: сеть дёргаем один раз на URL, но ждут результата ВСЕ элементы.
-                // Раньше второй запрос просто выходил из метода, и одинаковые иконки
-                // (одна игра в списке и в шапке, повторные обложки новостей) оставались пустыми.
-                var download = Inflight.GetOrAdd(url, DownloadAsync);
-                byte[] bytes;
-                try {
-                    bytes = await download.ConfigureAwait(false);
-                }
-                finally {
-                    Inflight.TryRemove(new KeyValuePair<string, Task<byte[]>>(url, download));
-                }
+                byte[] bytes = await FetchBytesAsync(url).ConfigureAwait(false);
 
                 // Пока ждали, готовую картинку мог положить в кеш другой элемент
                 if (Cache.TryGetValue(url, out var ready)) {
@@ -153,6 +163,25 @@ namespace ChillHub.Core.Home {
                     // Диспетчер уже завершён (окно закрывается) — прятать нечего.
                     Logging.Logger.Warn($"[ImgLoad] не удалось скрыть картинку url='{url}': {exUi.Message}");
                 }
+            }
+        }
+
+        /// <summary>
+        /// Байты картинки по URL: сеть дёргается ОДИН раз на URL, результат разделяют все ждущие.
+        /// <para>
+        /// Раньше второй запрос за тем же адресом просто выходил из метода, и одинаковые
+        /// иконки (одна игра в списке и в шапке, повторные обложки новостей) оставались пустыми.
+        /// </para>
+        /// </summary>
+        internal static async Task<byte[]> FetchBytesAsync(string url) {
+            var download = Inflight.GetOrAdd(url, DownloadAsync);
+            try {
+                return await download.ConfigureAwait(false);
+            }
+            finally {
+                // Ключ убираем ровно на свою задачу: за это время под тем же URL
+                // мог появиться уже следующий, не связанный с нашим, запрос.
+                Inflight.TryRemove(new KeyValuePair<string, Task<byte[]>>(url, download));
             }
         }
 
@@ -215,24 +244,10 @@ namespace ChillHub.Core.Home {
             return resolved;
         }
 
-        /// <summary>Одна HTTP-загрузка картинки в память; результат разделяют все ждущие элементы.</summary>
-        private static async Task<byte[]> DownloadAsync(string url) {
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            DebugLog($"[ImgLoad] HTTP GET start url='{url}'");
-            using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
-            if (!resp.IsSuccessStatusCode) {
-                var contentType = resp.Content?.Headers?.ContentType?.ToString() ?? string.Empty;
-                DebugLog($"[ImgLoad] HTTP non-200 status={(int)resp.StatusCode} contentType='{contentType}' url='{url}'");
-                throw new HttpRequestException("HTTP " + (int)resp.StatusCode + " " + resp.StatusCode);
-            }
-
-            var bytes = await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-            sw.Stop();
-            DebugLog($"[ImgLoad] HTTP ok bytes={bytes.Length} elapsedMs={sw.ElapsedMilliseconds} url='{url}'");
-            return bytes;
-        }
-
-        private static void ApplyBitmap(Image img, MemoryStream ms, string url) {
+        /// <summary>
+        /// Раскодирует скачанные байты и показывает картинку. Вызывается только в UI-потоке.
+        /// </summary>
+        internal static void ApplyBitmap(Image img, MemoryStream ms, string url) {
             try {
                 var bi = new BitmapImage();
                 bi.BeginInit();
@@ -266,9 +281,14 @@ namespace ChillHub.Core.Home {
             }
         }
 
-        private static string ExtractUrlFromDataContext(Image img) {
+        /// <summary>
+        /// URL картинки из модели, к которой привязан элемент.
+        /// Принимает сам DataContext, а не элемент: разбор модели к интерфейсу отношения не имеет,
+        /// и проверять его WPF-элементом было бы незачем.
+        /// </summary>
+        internal static string ExtractUrlFromDataContext(object? dataContext) {
             try {
-                return img.DataContext switch {
+                return dataContext switch {
                     GameInfo gi => gi.IconUrl ?? string.Empty, // у GameInfo только IconUrl
                     NewsItem ni => ni.CoverUrl ?? string.Empty, // NewsItem использует CoverUrl
                     _ => string.Empty,
@@ -280,9 +300,13 @@ namespace ChillHub.Core.Home {
             }
         }
 
-        private static string ExtractUrlFromSource(Image img) {
+        /// <summary>
+        /// URL картинки из уже назначенного источника — последняя надежда, когда ни Tag,
+        /// ни модель адреса не дали.
+        /// </summary>
+        internal static string ExtractUrlFromSource(ImageSource? source) {
             try {
-                if (img.Source is BitmapImage bi && bi.UriSource != null) {
+                if (source is BitmapImage bi && bi.UriSource != null) {
                     return bi.UriSource.OriginalString;
                 }
             }
@@ -291,6 +315,31 @@ namespace ChillHub.Core.Home {
             }
 
             return string.Empty;
+        }
+
+        /// <summary>Клиент по умолчанию: много мелких параллельных запросов за картинками.</summary>
+        private static HttpClient CreateDefaultClient() => new HttpClient(new HttpClientHandler {
+            AllowAutoRedirect = true,
+            AutomaticDecompression = DecompressionMethods.All,
+            UseCookies = true,
+            MaxConnectionsPerServer = 16,
+        });
+
+        /// <summary>Одна HTTP-загрузка картинки в память; результат разделяют все ждущие элементы.</summary>
+        private static async Task<byte[]> DownloadAsync(string url) {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            DebugLog($"[ImgLoad] HTTP GET start url='{url}'");
+            using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) {
+                var contentType = resp.Content?.Headers?.ContentType?.ToString() ?? string.Empty;
+                DebugLog($"[ImgLoad] HTTP non-200 status={(int)resp.StatusCode} contentType='{contentType}' url='{url}'");
+                throw new HttpRequestException("HTTP " + (int)resp.StatusCode + " " + resp.StatusCode);
+            }
+
+            var bytes = await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            sw.Stop();
+            DebugLog($"[ImgLoad] HTTP ok bytes={bytes.Length} elapsedMs={sw.ElapsedMilliseconds} url='{url}'");
+            return bytes;
         }
 
         /// <summary>

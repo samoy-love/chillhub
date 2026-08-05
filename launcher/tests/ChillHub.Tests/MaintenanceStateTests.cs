@@ -138,5 +138,99 @@ namespace ChillHub.Tests {
             Assert.Contains("Обновление сервера", text, StringComparison.Ordinal);
             Assert.Contains("Ожидаемое окончание", text, StringComparison.Ordinal);
         }
+
+        /// <summary>
+        /// Неизменившийся ответ сервера не считается новым состоянием: опрос идёт раз в
+        /// минуту, и без этого сравнения баннер перерисовывался бы и писал в лог на каждом
+        /// круге. ServerTime в сравнение не входит намеренно — он меняется всегда.
+        /// </summary>
+        [Fact]
+        public void ОдинаковыеСостоянияСчитаютсяРавными() {
+            var a = Enabled("Меняем диск", install: true, update: true, launch: false);
+            var b = Enabled("Меняем диск", install: true, update: true, launch: false);
+            b.ServerTime = DateTimeOffset.UtcNow;
+
+            Assert.True(a.SameAs(b));
+            Assert.True(b.SameAs(a));
+        }
+
+        /// <summary>Выход из режима обязан считаться изменением, иначе баннер не снимется.</summary>
+        [Fact]
+        public void ВыключениеРежимаЭтоИзменение() {
+            var on = Enabled("Работы", install: true, update: true, launch: true);
+
+            Assert.False(on.SameAs(MaintenanceState.Off));
+            Assert.False(MaintenanceState.Off.SameAs(on));
+        }
+
+        /// <summary>Смена причины меняет текст баннера — значит это другое состояние.</summary>
+        [Fact]
+        public void СменаПричиныЭтоИзменение() {
+            var a = Enabled("Меняем диск", install: true, update: true, launch: false);
+            var b = Enabled("Обновляем раздачу", install: true, update: true, launch: false);
+
+            Assert.False(a.SameAs(b));
+        }
+
+        /// <summary>Отсутствующая причина и пустая строка — одно и то же, баннер одинаков.</summary>
+        [Fact]
+        public void ПустаяИОтсутствующаяПричинаРавны() {
+            var a = Enabled(null, install: true, update: true, launch: false);
+            var b = Enabled(string.Empty, install: true, update: true, launch: false);
+
+            Assert.True(a.SameAs(b));
+        }
+
+        /// <summary>Сдвиг срока окончания виден пользователю в баннере — это изменение.</summary>
+        [Fact]
+        public void СменаСрокаЭтоИзменение() {
+            var a = Enabled("Работы", install: true, update: true, launch: false);
+            a.EndsAt = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+            var b = Enabled("Работы", install: true, update: true, launch: false);
+            b.EndsAt = a.EndsAt.Value.AddHours(1);
+
+            Assert.False(a.SameAs(b));
+        }
+
+        /// <summary>
+        /// Смена любого флага блокировки — изменение: именно по ним страницы решают,
+        /// гасить ли кнопки «Установить», «Обновить» и «Играть».
+        /// </summary>
+        [Theory]
+        [InlineData(false, true, false)]
+        [InlineData(true, false, false)]
+        [InlineData(true, true, true)]
+        public void СменаЛюбойБлокировкиЭтоИзменение(bool install, bool update, bool launch) {
+            var a = Enabled("Работы", install: true, update: true, launch: false);
+            var b = Enabled("Работы", install, update, launch);
+
+            Assert.False(a.SameAs(b));
+        }
+
+        /// <summary>
+        /// Пропущенный блок <c>blocks</c> и явные умолчания (install/update запрещены,
+        /// launch разрешён) дают одинаковый набор запретов — состояние одно и то же.
+        /// Сравнивать надо вычисленные запреты, а не сырые поля.
+        /// </summary>
+        [Fact]
+        public void ОтсутствующиеФлагиРавныСвоимУмолчаниям() {
+            var noBlocks = new MaintenanceState { Enabled = true, Reason = "Работы" };
+            var explicitBlocks = Enabled("Работы", install: true, update: true, launch: false);
+
+            Assert.True(noBlocks.SameAs(explicitBlocks));
+        }
+
+        /// <summary>Сравнение с null — не «то же самое», иначе первый ответ сервера потерялся бы.</summary>
+        [Fact]
+        public void СравнениеСNullВсегдаЛожь() {
+            Assert.False(MaintenanceState.Off.SameAs(null));
+        }
+
+        private static MaintenanceState Enabled(string? reason, bool install, bool update, bool launch)
+            => new MaintenanceState {
+                Enabled = true,
+                Reason = reason,
+                Blocks = new MaintenanceBlocks { Install = install, Update = update, Launch = launch },
+            };
     }
 }

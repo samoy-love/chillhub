@@ -29,7 +29,15 @@ internal static class Program {
     // (например, launcher.version становится 10 байт вместо 8).
     private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
 
-    public static async Task<int> Main(string[] args) {
+    public static Task<int> Main(string[] args) => RunMainAsync(args, new UpdaterHost());
+
+    /// <summary>
+    /// Точка входа с подставляемым швом к процессам.
+    /// </summary>
+    /// <param name="args">Аргументы командной строки.</param>
+    /// <param name="host">Ожидание родителя и запуск лаунчера.</param>
+    /// <returns>Код возврата процесса.</returns>
+    internal static async Task<int> RunMainAsync(string[] args, UpdaterHost host) {
         var log = new UpdateLog();
         var ctx = new RunContext();
         var exit = ExitFatal;
@@ -40,7 +48,7 @@ internal static class Program {
         // завершился, не перезапускал никто. Теперь любой исход проходит через
         // finally: состояние на диск, лаунчер обратно на экран.
         try {
-            exit = await RunAsync(args, log, ctx);
+            exit = await RunAsync(args, log, ctx, host);
         }
         catch (Exception ex) {
             log.Write($"fatal: {ex}");
@@ -51,14 +59,28 @@ internal static class Program {
         finally {
             UpdateLock.Release(ctx.Lock);
             WriteStatus(ctx, exit, log);
-            Restart(ctx, log);
+            Restart(ctx, log, host);
             log.Write($"updater finished with exit code {exit} ({ctx.Outcome})");
         }
 
         return exit;
     }
 
-    private static async Task<int> RunAsync(string[] args, UpdateLog log, RunContext ctx) {
+    /// <summary>
+    /// Разбор командной строки, замок на каталог установки и ожидание родителя.
+    /// <para>
+    /// Всё, что здесь происходит, завязано на окружение процесса: аргументы,
+    /// именованный мьютекс, чужой pid. Сама работа с файлами вынесена в
+    /// <see cref="ApplyAsync"/> — ради неё апдейтер и существует, и проверять её
+    /// нужно без запуска процессов.
+    /// </para>
+    /// </summary>
+    /// <param name="args">Аргументы командной строки.</param>
+    /// <param name="log">Журнал.</param>
+    /// <param name="ctx">Состояние прогона для блока finally.</param>
+    /// <param name="host">Шов к процессам операционной системы.</param>
+    /// <returns>Код возврата.</returns>
+    internal static async Task<int> RunAsync(string[] args, UpdateLog log, RunContext ctx, UpdaterHost host) {
         var argsMap = ParseArgs(args);
         string Req(string key) {
             if (!argsMap.TryGetValue(key, out var v) || string.IsNullOrWhiteSpace(v)) {
@@ -71,12 +93,17 @@ internal static class Program {
         // Журнал открываем ПЕРВЫМ делом: всё, что случится дальше, должно попасть в файл.
         log.Open(Opt("--log"));
 
-        var src = Req("--src");
+        // A9. Каталог установки и exe лаунчера запоминаем СРАЗУ, до остальных
+        // обязательных аргументов. Пока они присваивались после всех проверок,
+        // отсутствие любого другого аргумента оставляло блок finally без путей:
+        // ни файла состояния (писать некуда), ни перезапуска (запускать нечего) —
+        // а лаунчер к этому моменту уже закрыл себя сам.
         var dst = Req("--dst");
-        var exe = Req("--exe");
         ctx.Dst = dst;
+        var exe = Req("--exe");
         ctx.Exe = exe;
         ctx.ExeArgsFile = Opt("--exe-args-file");
+        var src = Req("--src");
 
         // A13. Молча превращать мусор в parent=0 нельзя: это отказ от ожидания
         // родителя, то есть копирование поверх ЖИВОГО лаунчера. Половина файлов
@@ -122,36 +149,54 @@ internal static class Program {
         ctx.Lock = mutex;
         log.Write($"install lock acquired: {UpdateLock.MutexName(dst)}");
 
-        // Wait parent
-        //
-        // Ждать нужно обязательно: пока лаунчер жив, его exe и dll заблокированы,
-        // и копирование поверх них провалится. Но ждать БЕЗ ограничения нельзя —
-        // подвисший лаунчер оставлял апдейтер висеть вечно, без окна и без
-        // единой строки в логе, а пользователь видел просто «обновление не
-        // заканчивается».
-        //
-        // По таймауту всё равно идём дальше: копирование само упадёт на
-        // заблокированных файлах, а маркер версии при ошибках копирования
-        // не пишется — значит следующий запуск честно повторит обновление.
-        if (parent > 0) {
-            try {
-                var proc = Process.GetProcessById(parent);
-                if (proc.WaitForExit(ParentWaitMs)) {
-                    log.Write($"Parent {parent} exited");
-                }
-                else {
-                    log.Write($"WARNING: parent {parent} is still running after {ParentWaitMs / 1000}s; " +
-                        "proceeding anyway — locked files will fail to copy and the update will be retried on next launch");
-                }
-            }
-            catch (ArgumentException) {
-                // Процесса с таким id уже нет — ровно то, чего мы и ждали.
-                log.Write($"Parent {parent} already gone");
-            }
-            catch (Exception ex) {
-                log.Write($"WARNING: cannot wait for parent {parent}: {ex.GetType().Name}: {ex.Message}");
-            }
-        }
+        host.WaitForParent(parent, log);
+
+        return await ApplyAsync(
+            new ApplyRequest {
+                Src = src,
+                Dst = dst,
+                Files = files,
+                Dirs = dirs,
+                Del = del,
+                Strip = strip,
+                AutoStrip = autoStrip,
+                Preserve = preserve,
+                Version = newVersion,
+            },
+            log,
+            ctx);
+    }
+
+    /// <summary>
+    /// Применяет обновление к папке установки: копирование, сверка, удаления,
+    /// пустые каталоги, маркер версии.
+    /// <para>
+    /// Здесь не запускается ни один процесс и не ждётся ни один pid — только файлы.
+    /// Это и есть та часть, ошибка в которой оставляет пользователя с неработающим
+    /// лаунчером, поэтому она отделена от окружения процесса и проверяется целиком.
+    /// </para>
+    /// <para>
+    /// Порядок операций менять нельзя: транзакция → сверка → удаления/маркер →
+    /// коммит. Любая ошибка до коммита откатывает установку в исходное состояние.
+    /// </para>
+    /// </summary>
+    /// <param name="req">Что и куда применять.</param>
+    /// <param name="log">Журнал.</param>
+    /// <param name="ctx">Состояние прогона (исход, сообщение, версия).</param>
+    /// <returns>Код возврата: 0 — успех, 2 — обновление не доехало, 3 — фатально.</returns>
+    internal static async Task<int> ApplyAsync(ApplyRequest req, UpdateLog log, RunContext ctx) {
+        var src = req.Src;
+        var dst = req.Dst;
+        var files = req.Files;
+        var dirs = req.Dirs;
+        var del = req.Del;
+        var strip = req.Strip;
+        var autoStrip = req.AutoStrip;
+        var preserve = req.Preserve;
+        var newVersion = req.Version;
+
+        ctx.Dst = dst;
+        ctx.Version = newVersion.Trim();
 
         // Ensure dst
         try { Directory.CreateDirectory(dst); } catch (Exception ex) { log.Write($"create dst error: {ex.Message}"); }
@@ -740,7 +785,20 @@ internal static class Program {
         return null;
     }
 
-    private static void LogLists(string files, string dirs, string del, UpdateLog log) {
+    /// <summary>
+    /// Выкладывает содержимое списков в журнал.
+    /// <para>
+    /// Это единственная запись о том, что именно апдейтер собирался сделать:
+    /// временные списки после прогона удаляются, и разбирать чужой сбой больше не по чему.
+    /// Отсутствующий или нечитаемый список обязан быть строкой в журнале, а не отказом:
+    /// диагностика не имеет права мешать обновлению.
+    /// </para>
+    /// </summary>
+    /// <param name="files">Путь к filelist.</param>
+    /// <param name="dirs">Путь к emptydirs.</param>
+    /// <param name="del">Путь к deletelist.</param>
+    /// <param name="log">Журнал.</param>
+    internal static void LogLists(string files, string dirs, string del, UpdateLog log) {
         try {
             foreach (var (name, path) in new[] { ("FILES", files), ("DIRS", dirs), ("DEL", del) }) {
                 if (string.IsNullOrWhiteSpace(path)) {
@@ -766,7 +824,10 @@ internal static class Program {
     /// A12. Кладёт исход рядом с маркером версии, чтобы лаунчер при следующем
     /// запуске мог объяснить, почему обновление не применилось.
     /// </summary>
-    private static void WriteStatus(RunContext ctx, int exit, UpdateLog log) {
+    /// <param name="ctx">Состояние прогона.</param>
+    /// <param name="exit">Код возврата.</param>
+    /// <param name="log">Журнал.</param>
+    internal static void WriteStatus(RunContext ctx, int exit, UpdateLog log) {
         if (string.IsNullOrWhiteSpace(ctx.Dst)) {
             log.Write("update status not written: каталог установки неизвестен");
             return;
@@ -794,27 +855,16 @@ internal static class Program {
     /// Поэтому лаунчер поднимается при ЛЮБОМ исходе, включая фатальный.
     /// </para>
     /// </summary>
-    private static void Restart(RunContext ctx, UpdateLog log) {
+    /// <param name="ctx">Состояние прогона.</param>
+    /// <param name="log">Журнал.</param>
+    /// <param name="host">Шов к процессам операционной системы.</param>
+    internal static void Restart(RunContext ctx, UpdateLog log, UpdaterHost host) {
         if (!ctx.Restart) {
             log.Write("restart skipped by design");
             return;
         }
 
-        var candidates = new List<string>();
-        if (!string.IsNullOrWhiteSpace(ctx.Exe)) {
-            candidates.Add(ctx.Exe);
-            if (!string.IsNullOrWhiteSpace(ctx.Dst)) {
-                var sameName = Path.Combine(ctx.Dst, Path.GetFileName(ctx.Exe));
-                if (!string.Equals(sameName, ctx.Exe, StringComparison.OrdinalIgnoreCase)) {
-                    candidates.Add(sameName);
-                }
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(ctx.Dst)) {
-            candidates.Add(Path.Combine(ctx.Dst, "ChillHub.exe"));
-        }
-
+        var candidates = RestartCandidates(ctx);
         var exeArgs = ReadExeArgs(ctx.ExeArgsFile, log);
         for (var attempt = 1; attempt <= 3; attempt++) {
             foreach (var exe in candidates) {
@@ -836,9 +886,9 @@ internal static class Program {
                         psi.ArgumentList.Add(a);
                     }
 
-                    var p = Process.Start(psi);
-                    if (p != null) {
-                        log.Write($"launcher restarted: '{exe}' pid={p.Id} args={exeArgs.Count}");
+                    var pid = host.StartProcess(psi);
+                    if (pid != null) {
+                        log.Write($"launcher restarted: '{exe}' pid={pid.Value} args={exeArgs.Count}");
                         return;
                     }
 
@@ -849,11 +899,41 @@ internal static class Program {
                 }
             }
 
-            Thread.Sleep(500);
+            host.Sleep(500);
         }
 
         log.Write("CRITICAL: перезапустить лаунчер не удалось — пользователь остался без запущенного приложения. " +
                   "Кандидаты: " + string.Join(", ", candidates));
+    }
+
+    /// <summary>
+    /// Кандидаты на перезапуск, в порядке предпочтения.
+    /// <para>
+    /// Один путь здесь недостаточен: exe лаунчера мог переехать (обновление сменило
+    /// имя файла) или прийти из временной копии, из которой лаунчер запускал апдейтер.
+    /// Промах по всем кандидатам оставляет пользователя без запущенного приложения —
+    /// окно он закрыл сам, чтобы освободить файлы.
+    /// </para>
+    /// </summary>
+    /// <param name="ctx">Состояние прогона (exe и каталог установки).</param>
+    /// <returns>Пути к exe в порядке проверки.</returns>
+    internal static List<string> RestartCandidates(RunContext ctx) {
+        var candidates = new List<string>();
+        if (!string.IsNullOrWhiteSpace(ctx.Exe)) {
+            candidates.Add(ctx.Exe);
+            if (!string.IsNullOrWhiteSpace(ctx.Dst)) {
+                var sameName = Path.Combine(ctx.Dst, Path.GetFileName(ctx.Exe));
+                if (!string.Equals(sameName, ctx.Exe, StringComparison.OrdinalIgnoreCase)) {
+                    candidates.Add(sameName);
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(ctx.Dst)) {
+            candidates.Add(Path.Combine(ctx.Dst, "ChillHub.exe"));
+        }
+
+        return candidates;
     }
 
     /// <summary>
@@ -1019,8 +1099,95 @@ internal static class Program {
         }
     }
 
+    /// <summary>Что и куда применять — исходные данные файловой части обновления.</summary>
+    internal sealed class ApplyRequest {
+        /// <summary>Каталог с распакованным обновлением.</summary>
+        public string Src = string.Empty;
+
+        /// <summary>Каталог установки — сюда пишем.</summary>
+        public string Dst = string.Empty;
+
+        /// <summary>Путь к filelist (пусто — полный пакет без диффа).</summary>
+        public string Files = string.Empty;
+
+        /// <summary>Путь к emptydirs.</summary>
+        public string Dirs = string.Empty;
+
+        /// <summary>Путь к deletelist.</summary>
+        public string Del = string.Empty;
+
+        /// <summary>Общий префикс архива, который нужно снять с путей.</summary>
+        public string Strip = string.Empty;
+
+        /// <summary>Разрешено ли определять префикс самостоятельно.</summary>
+        public bool AutoStrip = true;
+
+        /// <summary>Правила preserve через запятую.</summary>
+        public string Preserve = PreserveMatcher.DefaultRulesArg;
+
+        /// <summary>Версия для маркера (пусто — маркер не писать).</summary>
+        public string Version = string.Empty;
+    }
+
+    /// <summary>
+    /// Шов к операционной системе: ожидание родителя, запуск процессов, сон.
+    /// <para>
+    /// Всё, что здесь собрано, нельзя выполнить в тесте: настоящий лаунчер
+    /// запускать нельзя, а ждать чужой процесс — значит ждать по-настоящему.
+    /// Поведение по умолчанию — боевое, подмена нужна только проверкам.
+    /// </para>
+    /// </summary>
+    internal sealed class UpdaterHost {
+        /// <summary>Ждёт выхода родительского процесса (pid 0 — ждать некого).</summary>
+        public Action<int, UpdateLog> WaitForParent = DefaultWaitForParent;
+
+        /// <summary>Запускает процесс; возвращает pid либо null, если запуск не дал процесса.</summary>
+        public Func<ProcessStartInfo, int?> StartProcess = psi => Process.Start(psi)?.Id;
+
+        /// <summary>Пауза между попытками перезапуска.</summary>
+        public Action<int> Sleep = Thread.Sleep;
+
+        /// <summary>
+        /// Ждать нужно обязательно: пока лаунчер жив, его exe и dll заблокированы,
+        /// и копирование поверх них провалится. Но ждать БЕЗ ограничения нельзя —
+        /// подвисший лаунчер оставлял апдейтер висеть вечно, без окна и без
+        /// единой строки в логе, а пользователь видел просто «обновление не
+        /// заканчивается».
+        /// <para>
+        /// По таймауту всё равно идём дальше: копирование само упадёт на
+        /// заблокированных файлах, а маркер версии при ошибках копирования
+        /// не пишется — значит следующий запуск честно повторит обновление.
+        /// </para>
+        /// </summary>
+        /// <param name="parent">Идентификатор родительского процесса.</param>
+        /// <param name="log">Журнал.</param>
+        private static void DefaultWaitForParent(int parent, UpdateLog log) {
+            if (parent <= 0) {
+                return;
+            }
+
+            try {
+                var proc = Process.GetProcessById(parent);
+                if (proc.WaitForExit(ParentWaitMs)) {
+                    log.Write($"Parent {parent} exited");
+                }
+                else {
+                    log.Write($"WARNING: parent {parent} is still running after {ParentWaitMs / 1000}s; " +
+                        "proceeding anyway — locked files will fail to copy and the update will be retried on next launch");
+                }
+            }
+            catch (ArgumentException) {
+                // Процесса с таким id уже нет — ровно то, чего мы и ждали.
+                log.Write($"Parent {parent} already gone");
+            }
+            catch (Exception ex) {
+                log.Write($"WARNING: cannot wait for parent {parent}: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+    }
+
     /// <summary>Состояние прогона, нужное блоку finally (лог, статус, перезапуск).</summary>
-    private sealed class RunContext {
+    internal sealed class RunContext {
         public string Exe = string.Empty;
         public string Dst = string.Empty;
         public string Version = string.Empty;

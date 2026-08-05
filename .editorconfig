@@ -56,6 +56,10 @@ dotnet_diagnostic.SA1649.severity = none    # File name should match first type 
 dotnet_diagnostic.SA1402.severity = none    # File may only contain a single type
 dotnet_diagnostic.SA1513.severity = suggestion  # Closing brace should be followed by blank line
 dotnet_diagnostic.SA1201.severity = suggestion  # Ordering of elements
+dotnet_diagnostic.SA1202.severity = suggestion  # Access-level ordering: internal before private.
+                                                # Помощники, открытые тестам через InternalsVisibleTo,
+                                                # стоят рядом с кодом, который они обслуживают, а не
+                                                # согнаны в начало класса по признаку модификатора.
 dotnet_diagnostic.SA1204.severity = suggestion  # Static members before non-static
 dotnet_diagnostic.SA1214.severity = suggestion  # Readonly before non-readonly
 dotnet_diagnostic.SA1203.severity = suggestion  # Const before non-const
