@@ -380,7 +380,16 @@ namespace ChillHub.Pages {
         /// </summary>
         private void OnMaintenanceChanged(Core.Maintenance.MaintenanceState state) {
             try {
-                this.ApplyMaintenanceToButtons();
+                // ApplyState, а не ApplyMaintenanceToButtons: последняя умеет только ЗАПРЕЩАТЬ.
+                // Пока звали её, окончание работ не снимало запрет — кнопка действия держала
+                // подпись «Технические работы» и оставалась серой до конца следующей операции,
+                // хотя запрета уже не было. Кнопку смены версии спасал пересчёт ниже, кнопку
+                // действия — ничто.
+                //
+                // ApplyState заново берёт подписи из текущего состояния игры и последним шагом
+                // сам применяет режим работ, поэтому одинаково верно отрабатывает и начало
+                // работ, и их окончание.
+                this.ApplyState(this.currentState);
                 this.UpdateVersionSwitchAvailability();
                 if (state.Enabled) {
                     this.StatusText.Text = state.BuildBannerText();
@@ -578,7 +587,26 @@ namespace ChillHub.Pages {
             try {
                 this.ActionBtn.Content = busy ? "Отмена" : this.ActionBtn.Content;
                 this.ActionBtn.IsEnabled = true;
-                this.SwitchVersionBtn.IsEnabled = !busy && this.SwitchVersionBtn.IsEnabled;
+
+                // Доступность кнопки смены версии считает ТОЛЬКО UpdateVersionSwitchAvailability:
+                // там сходятся выбранная версия, версия на диске, маркер незавершённого обновления
+                // и режим техработ. Здесь решается лишь занятость.
+                //
+                // Раньше стояло `!busy && this.SwitchVersionBtn.IsEnabled`, то есть состояние
+                // читалось из самого контрола. При busy: true второй множитель становился false
+                // навсегда, и снятие занятости кнопку уже не возвращало: она оставалась мёртвой
+                // до ухода со страницы, если пересчёт в finally успевал бросить.
+                //
+                // Кэшировать доперационное разрешение и возвращать его тоже нельзя: пересчёт идёт
+                // после пяти чтений диска, и в этом окне кнопка была бы жива с устаревшим
+                // разрешением — предлагала бы переустановить только что установленное.
+                if (busy) {
+                    this.SwitchVersionBtn.IsEnabled = false;
+                }
+                else {
+                    this.UpdateVersionSwitchAvailability();
+                }
+
                 this.BuildsCombo.IsEnabled = !busy;
                 if (busy) {
                     this.StatusText.ToolTip = null;
