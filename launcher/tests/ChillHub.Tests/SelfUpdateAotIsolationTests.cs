@@ -33,35 +33,33 @@ namespace ChillHub.Tests {
     /// 'hostpolicy.dll' ... not found).
     /// </para>
     /// <para>
-    /// Тест это проверяет буквально в две стадии, каждая — настоящий прогон, а не
-    /// догадка по коду: сперва воспроизводит СТАРОЕ поведение (build, а не publish,
-    /// с теми же унаследованными self-contained/RID-свойствами, что и раньше давал
-    /// ProjectReference) и убеждается, что изолированный запуск ломается ровно так
-    /// же, как на проде; затем публикует апдейтер как Native AOT — тем же ключом,
-    /// что и <c>Publish-UpdaterAot</c> в scripts/build-installer.ps1, — и убеждается,
-    /// что изолированный запуск уже работает.
+    /// Тест воспроизводит СТАРОЕ поведение по-настоящему, а не по описанию:
+    /// собирает апдейтер тем же способом, каким его раньше строил ChillHub
+    /// (<c>dotnet build</c>, а не <c>publish</c>, с self-contained/RID на
+    /// командной строке — ровно то, что раньше давал унаследованный
+    /// ProjectReference), копирует в изоляцию только то, что реально копирует
+    /// PrepareUpdaterPayload, и убеждается, что копия падает ровно так же, как на
+    /// проде. Требует одного управляемого <c>dotnet build</c> — без публикации и
+    /// без тулчейна C++, поэтому идёт в общем тестовом прогоне, а не только в
+    /// сборке инсталлятора.
     /// </para>
     /// <para>
-    /// Обе стадии требуют установленного тулчейна C++
-    /// (см. https://aka.ms/nativeaot-prerequisites): на CI (windows-latest, тот же
-    /// образ, что уже собирает NSIS-инсталлятор) он есть, на машине разработчика без
-    /// Visual Studio C++ workload может не быть. Проба настоящая: без нужного
-    /// тулчейна dotnet сам откажет с понятной причиной ("Platform linker not
-    /// found"), и тест отличает это от настоящего регресса — тот же приём, что уже
-    /// применяется для пробы создания ярлыков (см. GameLocalStateShortcutTests).
+    /// Проверку НОВОГО поведения (что после фикса — Native AOT — изолированный
+    /// запуск уже работает) намеренно не дублирует здесь: она уже идёт настоящим
+    /// прогоном на каждом PR в <c>Publish-UpdaterAot</c>
+    /// (scripts/build-installer.ps1, шаг "Installer (NSIS)" в CI) — тем же
+    /// ключом, той же изоляцией, тем же ожиданием кода 3. Повторять её ещё и
+    /// здесь значило бы дважды на каждый PR платить временем на publish и
+    /// нативное связывание за проверку одного и того же.
     /// </para>
     /// </summary>
     public class SelfUpdateAotIsolationTests {
-        private const string LinkerMissingMarker = "Platform linker not found";
-
         [Fact]
-        public void СтараяСборкаПадаетВИзоляцииНоваяРаботает() {
+        public void СтараяСборкаПадаетВИзоляции() {
             var repoRoot = FindRepoRoot();
             var csproj = Path.Combine(repoRoot, "updater", "YourLauncher.Updater.csproj");
             Assert.True(File.Exists(csproj), $"не нашли {csproj} — проверь FindRepoRoot");
 
-            // --- Стадия 1: воспроизводим СТАРОЕ поведение ---
-            //
             // -p:SelfContained=true -p:RuntimeIdentifier=win-x64 на КОМАНДНОЙ СТРОКЕ —
             // это ровно то, что раньше апдейтер получал от ChillHub как глобальные
             // свойства MSBuild при сборке ProjectReference. Мы используем `build`,
@@ -74,10 +72,7 @@ namespace ChillHub.Tests {
                 repoRoot,
                 TimeSpan.FromMinutes(3));
 
-            if (oldBuildExit != 0) {
-                AssertEnvironmentLimitation(oldBuildOutput, "сборка старой версии апдейтера");
-                return;
-            }
+            Assert.True(oldBuildExit == 0, $"сборка старой версии апдейтера упала неожиданно:\n{oldBuildOutput}");
 
             using var oldIsolated = new TempDir();
             CopyUpdaterArtifactGlob(oldBuildOut.Root, oldIsolated.Root);
@@ -89,43 +84,13 @@ namespace ChillHub.Tests {
 
             // Если это когда-нибудь станет 3 — воспроизведение старого бага сломалось
             // (например, сменился способ, которым MSBuild прокидывает self-contained/RID
-            // в ProjectReference), и стадию 1 придётся пересматривать: сама по себе
+            // в ProjectReference), и тест придётся пересматривать: сама по себе
             // сходимость с "3" здесь ничего не доказывает, раз стадия ничего не
             // воспроизводит.
             Assert.True(
                 oldExitCode != 3,
                 "воспроизведение старого бага не удалось: изолированная копия старой сборки апдейтера " +
                 $"запустилась и корректно отказала (код 3), как будто рантайм ей не требовался. Вывод: {oldOutput}");
-
-            // --- Стадия 2: проверяем НОВОЕ поведение ---
-            using var newPublishOut = new TempDir();
-            var (newPublishExit, newPublishOutput) = Run(
-                "dotnet",
-                $"publish \"{csproj}\" -c Release -r win-x64 -p:PublishAot=true -o \"{newPublishOut.Root}\"",
-                repoRoot,
-                TimeSpan.FromMinutes(3));
-
-            if (newPublishExit != 0) {
-                AssertEnvironmentLimitation(newPublishOutput, "публикация Native AOT");
-                return;
-            }
-
-            var newExe = Path.Combine(newPublishOut.Root, "YourLauncher.Updater.exe");
-            Assert.True(File.Exists(newExe), $"публикация отчиталась успехом, но {newExe} не появился");
-
-            using var newIsolated = new TempDir();
-            var isolatedNewExe = Path.Combine(newIsolated.Root, "YourLauncher.Updater.exe");
-            File.Copy(newExe, isolatedNewExe);
-
-            var (newExitCode, newOutput) = Run(isolatedNewExe, string.Empty, newIsolated.Root, TimeSpan.FromSeconds(15));
-
-            // Без единого аргумента апдейтер обязан дойти до Main, разобрать аргументы
-            // и аккуратно отказать с ExitFatal=3 ("Missing required option --dst"). Любой
-            // другой код — процесс либо не стартовал (тот самый баг), либо упал иначе.
-            Assert.True(
-                newExitCode == 3,
-                "апдейтер после Native AOT в изоляции (без .dll/.deps.json/.runtimeconfig.json/рантайма " +
-                $"рядом) вернул код {newExitCode}, ожидался 3 (fatal: аргументы не переданы). Вывод: {newOutput}");
         }
 
         /// <summary>
@@ -137,16 +102,6 @@ namespace ChillHub.Tests {
         private static void CopyUpdaterArtifactGlob(string sourceDir, string destDir) {
             foreach (var f in Directory.EnumerateFiles(sourceDir, "YourLauncher.Updater*", SearchOption.TopDirectoryOnly)) {
                 File.Copy(f, Path.Combine(destDir, Path.GetFileName(f)));
-            }
-        }
-
-        /// <summary>
-        /// Отличает "тулчейна C++ здесь нет" (свойство машины, не регресс — на CI он
-        /// есть) от настоящего неожиданного отказа сборки.
-        /// </summary>
-        private static void AssertEnvironmentLimitation(string output, string what) {
-            if (!output.Contains(LinkerMissingMarker, StringComparison.Ordinal)) {
-                Assert.Fail($"{what} упала неожиданно (не из-за отсутствия тулчейна C++):\n{output}");
             }
         }
 
