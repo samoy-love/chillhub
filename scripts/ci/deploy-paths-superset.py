@@ -302,6 +302,88 @@ def check(paths, script):
     return 0
 
 
+
+# --------------------------------------------------------------------------
+# Третий фильтр: гейт роста версии лаунчера (ci.yml, job launcher-version-bump)
+# --------------------------------------------------------------------------
+#
+# ЗАЧЕМ. Списков стало три, а не два. Третий решает, спрашивать ли рост
+# `<Version>`, и обязан покрывать всё, от чего пересобирается установщик:
+# сами файлы клиента И то, что валит `changes` в фолбэк «катим всё»
+# (описания целей, сам deploy.yml). Разъехавшись, он пропускает PR, после
+# мержа которого установщик собирается со старой, уже опубликованной версией
+# и падает на публикации — уже после мержа, когда чинить дороже.
+#
+# Так и случилось 2026-08-08: PR трогал только `.deploy-kit/*.env`, гейт это
+# не заметил, и выкатка упала на «launcher version 1.3.2 is already
+# published». Правило записали комментарием, а комментарий не проверяется.
+
+CI_YML = pathlib.Path(".github/workflows/ci.yml")
+
+# Шаблоны `changes`, которые ведут к пересборке установщика. Опознаются по
+# кускам, которые в них обязаны быть: у фолбэка — описания целей и сам
+# пайплайн, у сборки установщика — её скрипт.
+INSTALLER_MARKERS = ("deploy-kit", "build-installer")
+
+
+def version_gate_pattern():
+    """ERE, которым `launcher-version-bump` решает, спрашивать ли рост версии."""
+    doc = load_workflow(CI_YML)
+    jobs = doc.get("jobs")
+    if not isinstance(jobs, dict) or "launcher-version-bump" not in jobs:
+        die("в ci.yml нет job'ы `launcher-version-bump` — гейт версии переехал, "
+            "проверку надо чинить")
+    steps = jobs["launcher-version-bump"].get("steps")
+    if not isinstance(steps, list):
+        die("у job'ы `launcher-version-bump` нет шагов")
+    script = "\n".join(
+        s["run"] for s in steps if isinstance(s, dict) and isinstance(s.get("run"), str)
+    )
+    pats = [p for _raw, p in grep_patterns(script)]
+    if len(pats) != 1:
+        die(f"в `launcher-version-bump` ожидался ровно один положительный греп, "
+            f"найдено {len(pats)}: разбирать несколько шаблонов эта сверка не умеет")
+    return pats[0]
+
+
+def check_version_gate(script):
+    """Гейт версии обязан покрывать всё, от чего пересобирается установщик."""
+    gate_raw = version_gate_pattern()
+    # Ветки шаблона, а не re: expand уже разобрал ERE в пары «текст, привязан
+    # ли конец», и второй разбор тем же файлом двумя способами разошёлся бы.
+    gate_branches = expand(gate_raw)
+
+    def covered(path):
+        return any(path == text if ended else path.startswith(text)
+                   for text, ended in gate_branches)
+
+    print("\nгейт роста версии (ci.yml, launcher-version-bump):")
+    print(f"  {gate_raw}")
+
+    relevant = [
+        (raw, pat)
+        for raw, pat in grep_patterns(script)
+        if any(m in raw for m in INSTALLER_MARKERS)
+    ]
+    if not relevant:
+        die("в `changes` не нашлось ни одного шаблона про установщик — "
+            f"опознание идёт по кускам {INSTALLER_MARKERS}, и оно устарело")
+
+    problems = []
+    for raw, pattern in relevant:
+        for path in witnesses(pattern):
+            if not covered(path):
+                problems.append((raw, path))
+                print(f"      {path}  гейт версии ПРОПУСКАЕТ (из {raw})")
+    if problems:
+        print(
+            "\nгейт версии УЖЕ гейт: путь, по которому установщик пересобирается, "
+            "но роста версии не спрашивают, означает падение публикации ПОСЛЕ мержа"
+        )
+        return 1
+    print("  покрывает все пути пересборки установщика")
+    return 0
+
 def die(msg):
     print(f"::error file={DEPLOY_YML}::{msg}")
     sys.exit(1)
@@ -346,7 +428,11 @@ def main(argv):
         if "--self-test" in argv:
             return self_test()
         doc = load_workflow(DEPLOY_YML)
-        return check(push_paths(doc), changes_script(doc))
+        script = changes_script(doc)
+        rc = check(push_paths(doc), script)
+        # Второй сверкой, а не вместо первой: списки разные и ломаются
+        # независимо. Возвращается худший из двух исходов.
+        return max(rc, check_version_gate(script))
     except Unsupported as exc:
         die(f"сверка не смогла разобрать deploy.yml: {exc}. Пока непонятное не разобрано, "
             f"считать фильтр надмножеством нельзя")
