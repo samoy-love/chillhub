@@ -439,9 +439,6 @@ func (h *Handlers) ListVersions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dir := h.manifestsDir(gid)
-	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
-		dir = filepath.Join(h.root, "content", "manifests", gid)
-	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		// Do not echo the filesystem error: it carries the absolute content root.
@@ -498,28 +495,20 @@ func readLatestVersion(dir string) string {
 	return strings.TrimSpace(m["version"])
 }
 
-// versionManifestsDir returns the manifest directory that actually holds
-// {ver}.json for a game, and whether it was found there.
+// hasVersionManifest reports whether {ver}.json exists for a game.
 //
-// A content root pointed at the parent directory (resolveContentRoot in
-// cmd/api, adminutil.DetectContentRoot in cmd/admin) leaves the manifests under
-// {root}/content/manifests/{gid} instead of {root}/manifests/{gid}. A handler
-// that knows only the first layout works on the wrong directory in silence: the
-// delete endpoint answered 200 while the manifest stayed, so the version kept
-// showing in the list and stayed activatable although its files were already
-// gone. Presence of the version file — not of the directory — is what tells the
-// two layouts apart. When neither holds it, the primary path is returned so
-// that callers which treat a missing version as "already done" keep doing so.
-func (h *Handlers) versionManifestsDir(gid, ver string) (string, bool) {
-	dir := h.manifestsDir(gid)
-	if _, err := os.Stat(filepath.Join(dir, ver+".json")); err == nil {
-		return dir, true
-	}
-	legacy := filepath.Join(h.root, "content", "manifests", gid)
-	if _, err := os.Stat(filepath.Join(legacy, ver+".json")); err == nil {
-		return legacy, true
-	}
-	return dir, false
+// There is exactly one layout: {root}/manifests/{gid}. An inherited one put the
+// manifests under {root}/content/manifests/{gid} when the content root was
+// pointed at the parent directory, and the handlers used to search both places.
+// Nothing on the server has that layout — the admin service runs with
+// CONTENT_ROOT=/var/www/launcher and there is no content/manifests under it —
+// so the search was a second path through a destructive operation that could
+// never fire. Should the inherited layout ever come back, the fix is to point
+// CONTENT_ROOT at the directory that actually holds manifests/, not to teach
+// every handler two ways of finding the same file.
+func (h *Handlers) hasVersionManifest(gid, ver string) bool {
+	_, err := os.Stat(filepath.Join(h.manifestsDir(gid), ver+".json"))
+	return err == nil
 }
 
 // Activate points latest.json at an existing version.
@@ -537,11 +526,11 @@ func (h *Handlers) Activate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid gameId or version", http.StatusBadRequest)
 		return
 	}
-	dir, ok := h.versionManifestsDir(gid, ver)
-	if !ok {
+	if !h.hasVersionManifest(gid, ver) {
 		http.Error(w, "version manifest not found", http.StatusNotFound)
 		return
 	}
+	dir := h.manifestsDir(gid)
 	b, err := json.MarshalIndent(map[string]string{"version": ver}, "", "  ")
 	if err == nil {
 		err = adminutil.WriteFileAtomic(filepath.Join(dir, "latest.json"), b, contentFilePerm)
@@ -574,7 +563,7 @@ func (h *Handlers) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// remove manifest file
-	manDir, _ := h.versionManifestsDir(gid, ver)
+	manDir := h.manifestsDir(gid)
 	manPath := filepath.Join(manDir, ver+".json")
 	if err := os.Remove(manPath); err != nil {
 		if !os.IsNotExist(err) {
