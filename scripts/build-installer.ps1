@@ -30,6 +30,10 @@ param(
     [switch]$Publish = $true,
     [string]$Configuration = "Release",
     [string]$Csproj = "launcher/ChillHub/ChillHub.csproj",
+    # Апдейтер публикуется отдельно от ChillHub (см. Publish-UpdaterAot) —
+    # ему нужен собственный self-contained набор, а не то, что достаётся
+    # транзитивно через ProjectReference.
+    [string]$UpdaterCsproj = "updater/YourLauncher.Updater.csproj",
     [string]$Installer = "scripts/installer.nsi",
     [string]$MakensisPath,
     [string]$Runtime = "win-x64",
@@ -268,6 +272,98 @@ function New-LauncherPayload {
     }
 }
 
+function Publish-UpdaterAot {
+    <#
+      Публикует апдейтер как Native AOT и подменяет им framework-dependent-стиля
+      .exe, который транзитивная сборка ChillHub (ProjectReference) кладёт в
+      $TargetExePath.
+
+      ПОЧЕМУ ОТДЕЛЬНЫЙ ШАГ, А НЕ СВОЙСТВО В САМОМ ПРОЕКТЕ.
+      ChillHub self-contained, и апдейтер как ProjectReference наследует его
+      RuntimeIdentifier/SelfContained — но НАСЛЕДУЕТ только при обычной сборке
+      (`build`), а не при `publish`: транзитивная сборка копирует 4 файла
+      апдейтера (exe/dll/deps.json/runtimeconfig.json) в общую папку установки,
+      где рядом уже лежит self-contained-рантайм ChillHub (hostfxr.dll и
+      остальное). В общей папке апдейтер выглядит рабочим. При самообновлении
+      же PrepareUpdaterPayload копирует апдейтер В ИЗОЛЯЦИИ — без соседнего
+      рантайма, — и апдейтер падает мгновенно, до единой строки в своём
+      журнале: раздельная его же диагностика уходит в Windows Event Log
+      ('hostpolicy.dll' ... not found), а не в apply-update.log, потому что
+      падение происходит до того, как управление вообще доходит до Main.
+
+      AOT публикуется отдельно и явно (`dotnet publish` с PublishAot=true
+      именно для updater/YourLauncher.Updater.csproj), потому что PublishAot
+      действует только на этапе Publish ТОГО проекта, для которого он
+      указан — транзитивная сборка через ProjectReference её не подхватывает
+      ни при каких обстоятельствах, поэтому нельзя просто прописать
+      <PublishAot> в csproj апдейтера и полагаться на обычную публикацию
+      ChillHub.
+
+      Результат — один нативный .exe без .dll/.deps.json/.runtimeconfig.json:
+      копировать для самостоятельного запуска больше нечего, изоляция
+      PrepareUpdaterPayload перестаёт быть проблемой в принципе, а не только
+      в этом конкретном списке файлов.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$UpdaterCsproj,
+        [Parameter(Mandatory = $true)][string]$Configuration,
+        [Parameter(Mandatory = $true)][string]$Runtime,
+        [Parameter(Mandatory = $true)][string]$TargetExePath
+    )
+
+    $aotOut = Join-Path ([IO.Path]::GetTempPath()) ("chillhub-updater-aot-" + [Guid]::NewGuid().ToString('N'))
+    try {
+        & dotnet publish $UpdaterCsproj -c $Configuration -r $Runtime -p:PublishAot=true -o $aotOut
+        Assert-NativeSuccess "dotnet publish (updater, Native AOT)" $LASTEXITCODE
+
+        $aotExe = Join-Path $aotOut "YourLauncher.Updater.exe"
+        if (-not (Test-Path -LiteralPath $aotExe)) {
+            throw "AOT publish reported success but '$aotExe' does not exist."
+        }
+
+        # Постусловие: апдейтер обязан стартовать БЕЗ соседних .dll/.deps.json/
+        # .runtimeconfig.json — ровно в тех условиях, в каких он оказывается
+        # при самообновлении. Раньше self-contained-апдейтер выглядел рабочим
+        # в общей папке установки (рантайм лежал рядом, общий с ChillHub) и
+        # падал только в изоляции. Голая AOT-сборка такой зависимости иметь
+        # не должна: лучше уронить сборку здесь, чем узнать об этом на проде
+        # петлёй самообновления.
+        #
+        # Проверяем ИМЕННО кодом возврата, а не фактом запуска: без единого
+        # аргумента апдейтер обязан дойти до Main, разобрать аргументы,
+        # аккуратно отказать с ExitFatal=3 ("Missing required option --dst")
+        # и завершиться. Любой другой код — процесс либо не стартовал
+        # (провал резолва рантайма, тот самый сегодняшний баг), либо упал
+        # иначе, чем ожидалось.
+        $isolated = Join-Path ([IO.Path]::GetTempPath()) ("chillhub-updater-isolation-check-" + [Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $isolated -Force | Out-Null
+        try {
+            $isolatedExe = Join-Path $isolated "YourLauncher.Updater.exe"
+            Copy-Item -LiteralPath $aotExe -Destination $isolatedExe -Force
+            $proc = Start-Process -FilePath $isolatedExe -NoNewWindow -PassThru -WorkingDirectory $isolated
+            if (-not $proc.WaitForExit(15000)) {
+                try { $proc.Kill() } catch {}
+                throw "Изолированная проверка апдейтера не завершилась за 15 секунд — похоже на зависание, а не на ожидаемый быстрый отказ разбора аргументов."
+            }
+            if ($proc.ExitCode -ne 3) {
+                throw "Изолированная проверка апдейтера вернула код $($proc.ExitCode), ожидался 3 (fatal: аргументы не переданы). " +
+                      "Апдейтер либо не самодостаточен как self-contained, либо сломан иначе. Файл: $aotExe."
+            }
+            Write-Host "  isolation check OK: апдейтер стартует без соседних .dll/.deps.json/.runtimeconfig.json (exit=3, как и ожидалось)" -ForegroundColor DarkGray
+        }
+        finally {
+            try { Remove-Item -LiteralPath $isolated -Recurse -Force -ErrorAction Stop } catch {}
+        }
+
+        Copy-Item -LiteralPath $aotExe -Destination $TargetExePath -Force
+        $mb = [math]::Round((Get-Item -LiteralPath $TargetExePath).Length / 1MB, 1)
+        Write-Host "Updater (Native AOT): $TargetExePath ($mb MB)" -ForegroundColor Green
+    }
+    finally {
+        try { Remove-Item -LiteralPath $aotOut -Recurse -Force -ErrorAction Stop } catch {}
+    }
+}
+
 # Ensure Unicode I/O
 try {
     [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($true)
@@ -283,6 +379,10 @@ try {
 
 if (-not (Test-Path -LiteralPath $Csproj)) {
     throw "CSProj not found at '$Csproj'. Adjust -Csproj argument."
+}
+
+if (-not (Test-Path -LiteralPath $UpdaterCsproj)) {
+    throw "CSProj not found at '$UpdaterCsproj'. Adjust -UpdaterCsproj argument."
 }
 
 function Find-Makensis {
@@ -410,6 +510,17 @@ if ($Publish) {
 # A build that "succeeded" but produced no output directory is a failure too.
 if (-not (Test-Path -LiteralPath $BuildOutputDir)) {
     throw "Build output directory not found at '$BuildOutputDir' even though the build reported success."
+}
+
+# A-AOT. Апдейтер, скопированный сюда транзитивно вместе с ChillHub, self-contained
+# только на бумаге (см. Publish-UpdaterAot) — заменяем его настоящим, самостоятельным.
+# Только когда ChillHub сам self-contained: framework-dependent сборка ChillHub уже
+# была рабочей без этого (апдейтер полагается на глобальный .NET, который в этом
+# режиме и так требуется).
+if ($Publish -and $SelfContained) {
+    Write-Host "[2c/3] Publishing updater as Native AOT..." -ForegroundColor Cyan
+    $updaterTargetExe = Join-Path $BuildOutputDir "YourLauncher.Updater.exe"
+    Publish-UpdaterAot -UpdaterCsproj $UpdaterCsproj -Configuration $Configuration -Runtime $Runtime -TargetExePath $updaterTargetExe
 }
 
 # A3/A9: чистый ZIP полезной нагрузки для самообновления (загружается в админку).
