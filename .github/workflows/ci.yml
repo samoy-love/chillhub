@@ -543,3 +543,76 @@ jobs:
           flags: launcher
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+  # Довозили-2026-08-08: 1.3.0..1.3.2 собрались, смержились, но <Version> в
+  # ChillHub.csproj остался на 1.3.0 — уже установленным клиентам было нечего
+  # предлагать, самообновление молчало у всех троих подряд, а заметили только
+  # на четвёртом мерже (#56, "Довезти до пользователей..."). Ничто в CI до
+  # этого коммита не спрашивало, выросла ли версия — только человек, руками,
+  # после факта.
+  #
+  # Единственный источник правды — VERSION_CMD в .deploy-kit/installer.env:
+  # `<Version>` из ChillHub.csproj и есть версия, которую увидит прод (сверка
+  # с ней встроена в build-installer.ps1, Resolve-AppVersion). Проверять
+  # что-то ещё значило бы завести второй источник, который может разъехаться
+  # с первым.
+  launcher-version-bump:
+    name: Версия лаунчера растёт при правках клиента
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Полная история: сравниваем с базой PR, а не с последним коммитом
+          # ветки — правка версии в любом из коммитов PR засчитывается.
+          fetch-depth: 0
+      - name: Сверить <Version> с тем, что уже на проде
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.sha }}"
+          if [ -z "$BASE" ]; then
+            echo "нет base.sha (не pull_request?) — сверять не с чем, пропускаю"
+            exit 0
+          fi
+
+          # Не трогали клиент — версии не про что расти. Директория целиком,
+          # а не отдельные файлы: любая правка кода лаунчера или апдейтера
+          # меняет то, что реально уедет пользователю самообновлением.
+          if ! git diff --name-only "$BASE" "$HEAD" -- launcher/ updater/ | grep -q .; then
+            echo "PR не трогает launcher/ или updater/ — версия клиента ни при чём"
+            exit 0
+          fi
+
+          CSPROJ=launcher/ChillHub/ChillHub.csproj
+          DECLARED="$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' "$CSPROJ" | head -1)"
+          if [ -z "$DECLARED" ]; then
+            echo "::error::в $CSPROJ нет <Version> — версия обязана быть явной (см. CLAUDE.md, раздел «Версии»)"
+            exit 1
+          fi
+
+          LIVE_JSON="$(curl -fsSL https://launcher.samoy.love/manifests/launcher/latest.json)" \
+            || { echo "::error::не удалось прочитать https://launcher.samoy.love/manifests/launcher/latest.json"; exit 1; }
+          LIVE="$(printf '%s' "$LIVE_JSON" | sed -n 's#.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*#\1#p')"
+          if [ -z "$LIVE" ]; then
+            echo "::error::не удалось разобрать версию из latest.json: $LIVE_JSON"
+            exit 1
+          fi
+
+          echo "На проде сейчас: $LIVE"
+          echo "В этом PR:       $DECLARED"
+
+          if [ "$DECLARED" = "$LIVE" ]; then
+            echo "::error::<Version> в $CSPROJ ($DECLARED) совпадает с тем, что уже на проде. PR меняет launcher/updater — версия обязана вырасти, иначе самообновление не увидит эту сборку и следующая загрузка того же номера в админку молча заменит уже раздаваемую (см. #56)."
+            exit 1
+          fi
+
+          HIGHEST="$(printf '%s\n%s\n' "$LIVE" "$DECLARED" | sort -V | tail -1)"
+          if [ "$HIGHEST" != "$DECLARED" ]; then
+            echo "::error::<Version> в $CSPROJ ($DECLARED) ниже того, что уже на проде ($LIVE). Версия обязана расти, а не откатываться."
+            exit 1
+          fi
+
+          echo "OK: $DECLARED > $LIVE"
