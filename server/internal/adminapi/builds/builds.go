@@ -527,6 +527,13 @@ func (h *Handlers) hasVersionManifest(gid, ver string) bool {
 //
 // Scoped to gid=="launcher" only — games keep the existing overwrite
 // behaviour, since nothing about that incident applies to them.
+//
+// This alone only tells a caller "a manifest already exists here" — it does
+// not by itself distinguish the incident (different content, same number)
+// from a harmless retry (the exact same content, re-published because an
+// earlier attempt failed after promotion but before the deploy finished).
+// See launcherRepublishMatches, which every call site but UploadInit uses to
+// tell the two apart once the new bytes are actually on disk to compare.
 func (h *Handlers) launcherVersionAlreadyPublished(gid, ver string) bool {
 	return gid == "launcher" && h.hasVersionManifest(gid, ver)
 }
@@ -538,6 +545,87 @@ func launcherVersionConflictMessage(ver string) string {
 	return fmt.Sprintf(
 		"launcher version %s is already published; bump <Version> in launcher/ChillHub/ChillHub.csproj and re-run the release",
 		ver)
+}
+
+// launcherRepublishMatches reports whether a freshly extracted launcher build
+// is content-identical to the one already published under this version: same
+// file paths, same sizes, same blake3 — plus the same empty directories.
+//
+// This is what keeps launcherVersionAlreadyPublished from turning a rerun of a
+// deploy that already reached this step into a hard failure: a CI retry, or a
+// job further down the same pipeline stumbling and getting re-run, uploads
+// EXACTLY the same archive again. Nothing about the 2026-08-08 incident
+// applies to that case — the version's meaning on disk never changes. Two
+// genuinely different builds under the same number are the incident, and stay
+// a 409 (see launcherVersionAlreadyPublished).
+//
+// The comparison is against the manifest actually sitting on disk, not
+// against anything this process remembers, so a match can be trusted even
+// across separate requests or separate processes.
+func (h *Handlers) launcherRepublishMatches(gid, ver string, files []manifestFile, emptyDirs []string) bool {
+	existing, err := h.loadManifest(gid, ver)
+	if err != nil {
+		// The guard above already proved the manifest file exists; a read
+		// failure here is something else going wrong. Either way equality
+		// cannot be proven, so this fails closed exactly like a real mismatch.
+		log.Printf("[builds] cannot read published manifest %s/%s to compare a re-upload: %v", gid, ver, err)
+		return false
+	}
+	// The stored manifest already had state files stripped by writeManifest;
+	// strip the fresh scan the same way so a re-upload isn't rejected over a
+	// config.json neither copy ever actually published.
+	newFiles := stripLauncherStateFiles(gid, files)
+	newDirs := stripLauncherStateDirs(gid, emptyDirs)
+	return manifestFilesEqual(existing.Files, newFiles) && stringSetsEqual(existing.EmptyDirs, newDirs)
+}
+
+// loadManifest reads back a previously published manifest.
+func (h *Handlers) loadManifest(gid, ver string) (manifest, error) {
+	b, err := os.ReadFile(filepath.Join(h.manifestsDir(gid), ver+".json"))
+	if err != nil {
+		return manifest{}, err
+	}
+	var m manifest
+	if err := json.Unmarshal(b, &m); err != nil {
+		return manifest{}, err
+	}
+	return m, nil
+}
+
+// manifestFilesEqual compares two file lists by path, size and blake3,
+// ignoring order — the two scans being compared were not necessarily walked
+// in the same run.
+func manifestFilesEqual(a, b []manifestFile) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	as := append([]manifestFile(nil), a...)
+	bs := append([]manifestFile(nil), b...)
+	sort.Slice(as, func(i, j int) bool { return as[i].Path < as[j].Path })
+	sort.Slice(bs, func(i, j int) bool { return bs[i].Path < bs[j].Path })
+	for i := range as {
+		if as[i].Path != bs[i].Path || as[i].Size != bs[i].Size || as[i].Blake3 != bs[i].Blake3 {
+			return false
+		}
+	}
+	return true
+}
+
+// stringSetsEqual compares two string slices as sets, ignoring order.
+func stringSetsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	as := append([]string(nil), a...)
+	bs := append([]string(nil), b...)
+	sort.Strings(as)
+	sort.Strings(bs)
+	for i := range as {
+		if as[i] != bs[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Activate points latest.json at an existing version.

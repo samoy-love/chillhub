@@ -71,6 +71,89 @@ func TestLauncherReuploadUnderSameVersionRejected(t *testing.T) {
 	}
 }
 
+// TestLauncherReuploadWithIdenticalContentSucceeds is the idempotency half of
+// the same guard: a deploy retry that re-sends EXACTLY the same archive under
+// a version that is already published (e.g. a later CI job re-running after
+// an unrelated failure) must not be treated as the 2026-08-08 incident. It has
+// nothing in common with it — the version's meaning on disk never changes —
+// so it must succeed, and it must change nothing on disk.
+func TestLauncherReuploadWithIdenticalContentSucceeds(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	zip := zipBytes(t, map[string]string{"ChillHub.exe": "same build"})
+
+	w1 := httptest.NewRecorder()
+	h.Upload(w1, kindUploadRequest(t, "launcher", "launcher", "1.3.2", zip))
+	if w1.Code != http.StatusOK {
+		t.Fatalf("first upload: %d %s", w1.Code, w1.Body.String())
+	}
+	firstManifest, err := os.ReadFile(filepath.Join(root, "manifests", "launcher", "1.3.2.json"))
+	if err != nil {
+		t.Fatalf("read first manifest: %v", err)
+	}
+
+	w2 := httptest.NewRecorder()
+	h.Upload(w2, kindUploadRequest(t, "launcher", "launcher", "1.3.2", zip))
+	if w2.Code != http.StatusOK {
+		t.Fatalf("identical re-upload: got %d %s, want %d", w2.Code, w2.Body.String(), http.StatusOK)
+	}
+
+	secondManifest, err := os.ReadFile(filepath.Join(root, "manifests", "launcher", "1.3.2.json"))
+	if err != nil {
+		t.Fatalf("read manifest after re-upload: %v", err)
+	}
+	if !bytes.Equal(firstManifest, secondManifest) {
+		t.Fatalf("manifest changed on an identical re-upload:\nfirst:  %s\nsecond: %s", firstManifest, secondManifest)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "content", "launcher", "1.3.2", "files", "ChillHub.exe"))
+	if err != nil {
+		t.Fatalf("content missing after identical re-upload: %v", err)
+	}
+	if string(got) != "same build" {
+		t.Fatalf("content = %q, want %q", got, "same build")
+	}
+}
+
+// TestUploadStreamReuploadWithIdenticalContentSucceeds is the NDJSON entry
+// point's copy of TestLauncherReuploadWithIdenticalContentSucceeds — this is
+// the endpoint bin/selfupdate-upload (deploy-kit) actually calls, so it is the
+// one a real CI retry exercises.
+func TestUploadStreamReuploadWithIdenticalContentSucceeds(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	h.CurrentUser = func(*http.Request) string { return "admin" }
+	zip := zipBytes(t, map[string]string{"ChillHub.exe": "same build"})
+	fields := map[string]string{"kind": "launcher", "gameId": "launcher", "version": "1.3.2"}
+
+	w1 := httptest.NewRecorder()
+	h.UploadStream(w1, streamUploadRequest(t, fields, zip))
+	events1, garbage1 := ndjsonEvents(t, w1.Body.String())
+	if len(garbage1) > 0 {
+		t.Fatalf("plain text in the NDJSON stream: %q", garbage1)
+	}
+	if hasErrorEvent(events1) {
+		t.Fatalf("first upload reported an error: %s", w1.Body.String())
+	}
+
+	w2 := httptest.NewRecorder()
+	h.UploadStream(w2, streamUploadRequest(t, fields, zip))
+	events2, garbage2 := ndjsonEvents(t, w2.Body.String())
+	if len(garbage2) > 0 {
+		t.Fatalf("plain text in the NDJSON stream: %q", garbage2)
+	}
+	if hasErrorEvent(events2) {
+		t.Fatalf("identical re-upload reported an error: %s", w2.Body.String())
+	}
+
+	got, err := os.ReadFile(filepath.Join(root, "content", "launcher", "1.3.2", "files", "ChillHub.exe"))
+	if err != nil {
+		t.Fatalf("content missing after identical re-upload: %v", err)
+	}
+	if string(got) != "same build" {
+		t.Fatalf("content = %q, want %q", got, "same build")
+	}
+}
+
 // TestGameReuploadUnderSameVersionStillAllowed pins the boundary of the guard:
 // it is scoped to gid=="launcher" only. Games keep the pre-existing "same
 // version, new content" workflow — the 2026-08-08 incident was specific to

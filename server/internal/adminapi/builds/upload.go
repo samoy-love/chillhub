@@ -81,11 +81,8 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing zip part", http.StatusBadRequest)
 		return
 	}
-	if h.launcherVersionAlreadyPublished(gid, ver) {
-		log.Printf("/admin/upload: refused: launcher version %s already published", ver)
-		http.Error(w, launcherVersionConflictMessage(ver), http.StatusConflict)
-		return
-	}
+	// The already-published check happens after extraction (below), once the
+	// fresh content actually exists to compare — see the comment there for why.
 	log.Printf("/admin/upload: kind=%s gid=%s ver=%s zip=%s bytes=%d", kind, gid, ver, parts.filename, parts.saved)
 
 	// Extract into a staging directory next to the published one, exactly like
@@ -124,6 +121,30 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	files, emptyDirs, err := scanManifest(filesRoot)
 	if err != nil {
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to scan the extracted build", "upload", err)
+		return
+	}
+
+	// The archive is already fully extracted and hashed at this point — the
+	// same amount of work would have happened whether or not this version
+	// turns out to already be published — so checking here rather than before
+	// extraction costs nothing and is what makes a same-content re-upload
+	// answerable at all: without the fresh manifest there would be nothing to
+	// compare the published one against. promoted is still false, so the
+	// deferred cleanup above removes stageDir without touching anything live.
+	if h.launcherVersionAlreadyPublished(gid, ver) {
+		if !h.launcherRepublishMatches(gid, ver, files, emptyDirs) {
+			log.Printf("/admin/upload: refused: launcher version %s already published with different content", ver)
+			http.Error(w, launcherVersionConflictMessage(ver), http.StatusConflict)
+			return
+		}
+		b, rerr := os.ReadFile(filepath.Join(h.manifestsDir(gid), ver+".json"))
+		if rerr != nil {
+			adminutil.Fail(w, http.StatusInternalServerError, "failed to read the published manifest", "upload", rerr)
+			return
+		}
+		log.Printf("/admin/upload: launcher version %s re-uploaded with identical content, no-op", ver)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(b)
 		return
 	}
 
@@ -549,10 +570,10 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 		nw.fail(http.StatusBadRequest, "invalid gameId or version")
 		return
 	}
-	if h.launcherVersionAlreadyPublished(gid, ver) {
-		nw.fail(http.StatusConflict, launcherVersionConflictMessage(ver))
-		return
-	}
+	// The already-published check happens after compose (below), once the
+	// fresh content actually exists to compare against the published manifest
+	// — see the comment there for why, and see UploadInit for the one entry
+	// point where that isn't possible.
 	if tmpName == "" {
 		nw.fail(http.StatusBadRequest, "missing zip part")
 		return
@@ -601,6 +622,25 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+
+	// Same reasoning as Upload: the zip was already fully spooled and
+	// extracted before this point regardless of the outcome below, so
+	// checking here — with the fresh manifest in hand — costs nothing extra
+	// and is what lets an identical re-upload succeed instead of just failing
+	// less usefully. promoted is still false, so the deferred cleanup removes
+	// stageDir without touching the live version.
+	if h.launcherVersionAlreadyPublished(gid, ver) {
+		if !h.launcherRepublishMatches(gid, ver, files, emptyDirs) {
+			nw.fail(http.StatusConflict, launcherVersionConflictMessage(ver))
+			return
+		}
+		outPath := filepath.Join(h.manifestsDir(gid), ver+".json")
+		log.Printf("[builds] uploadStream: launcher version %s re-uploaded with identical content, no-op", ver)
+		emitEventf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
+		fl.Flush()
+		return
+	}
+
 	m := manifest{
 		Version:   ver,
 		BuildID:   adminutil.NewBuildID(),
