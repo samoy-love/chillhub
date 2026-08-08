@@ -62,7 +62,7 @@ jobs:
   # хук (.githooks/commit-msg) ловит это раньше, но он включается вручную и в
   # клоне отсутствует — здесь страховка.
   commits:
-    name: Коммиты без упоминаний ИИ
+    name: Commit messages
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -104,7 +104,7 @@ jobs:
   # намеренно: список, переписанный в проверку, разъехался бы с оригиналом ровно
   # так же, как разъезжаются эти два.
   deploy-paths:
-    name: Фильтр путей deploy.yml покрывает расчёт целей
+    name: Deploy path filter coverage
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -191,7 +191,7 @@ jobs:
           npx eslint "landing/**/*.js" "server/admin_ui/**/*.js" || (echo "ESLint found issues" && exit 1)
 
   web-tests:
-    name: Тесты веба (node --test)
+    name: Web tests (node --test)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -252,9 +252,34 @@ jobs:
           # Same toolchain the deploy workflow builds with: read from go.mod,
           # not "stable" (which silently moves with every Go release).
           go-version-file: server/go.mod
-          cache: true
-          cache-dependency-path: |
-            server/go.sum
+          # Кэш здесь НЕ через встроенный `cache: true`.
+          #
+          # На windows-latest этот джоб не только тестирует нативно, но ещё и
+          # кросс-компилирует linux/arm64 (шаг ниже). Встроенный кэш setup-go
+          # ключуется от runner.os + хэша go.sum и не знает про GOOS/GOARCH —
+          # объекты нативной сборки и кросс-компиляции падали в один и тот же
+          # GOCACHE и вытесняли друг друга: отсюда разброс 5m21s/1m35s на
+          # идентичных шагах между прогонами. Ключ ниже разводит их явно.
+          cache: false
+      - name: Определить пути кэша Go
+        id: go-cache-paths
+        shell: bash
+        run: |
+          echo "gocache=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "gomodcache=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+      - name: Cache Go
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.gocache }}
+            ${{ steps.go-cache-paths.outputs.gomodcache }}
+          # Отдельное измерение ключа для windows-джобы: она одна собирает под
+          # двумя разными GOOS/GOARCH в рамках одного прогона (нативно и
+          # linux/arm64), поэтому её кэш держится отдельно от простого
+          # ubuntu-native, чтобы не смешивать объекты двух платформ.
+          key: go-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'native-and-linux-arm64' || 'native' }}-${{ hashFiles('server/go.sum') }}
+          restore-keys: |
+            go-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'native-and-linux-arm64' || 'native' }}-
       - name: Run golangci-lint
         # Приколот к SHA, а не к тегу: тег v8 мутабелен, а этот шаг выполняется
         # рядом с исходниками и кэшем модулей.
@@ -308,7 +333,7 @@ jobs:
   # прода теперь гоняет CI самого deploy-kit, там же, где лежит конфиг.
 
   vuln-scan:
-    name: Уязвимости в зависимостях
+    name: Dependency vulnerabilities
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -438,8 +463,38 @@ jobs:
         #   ManifestPreserveCheck.exe <путь-к-content/manifests/launcher>
         run: dotnet run --project updater/tests/ManifestPreserveCheck -c Release
 
+  # Раньше это были четыре последовательных шага `dotnet format` внутри
+  # dotnet-lint: launcher/ChillHub, launcher/tests/ChillHub.Tests, updater,
+  # updater/tests/ManifestPreserveCheck. Каждый шаг — самостоятельная проверка
+  # своего проекта, ни один не зависит от результата другого и не зависит от
+  # build/test выше в dotnet-lint (dotnet format сам restore'ит, что нужно).
+  # Четыре independent checks одна за другой — это просто последовательно
+  # потраченное время раннера. Матрица гоняет их параллельно, и красный один
+  # раз в матрице отмечает конкретный проект, а не общий шаг в длинном логе.
+  format:
+    name: dotnet format (${{ matrix.project }})
+    runs-on: windows-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - launcher/ChillHub
+          - launcher/tests/ChillHub.Tests
+          - updater
+          - updater/tests/ManifestPreserveCheck
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+          cache: true
+          cache-dependency-path: |
+            **/*.csproj
+            **/packages.lock.json
       - name: Code style check (dotnet format)
-        working-directory: launcher/ChillHub
+        working-directory: ${{ matrix.project }}
         # Blocking as of the launcher/** formatting cleanup: the tree is fully
         # formatted and both Debug and Release build warning-free, so anything
         # this step reports now is a real regression and should red-line the PR
@@ -447,34 +502,10 @@ jobs:
         # (write mode) in this directory and committing the result.
         #
         # Line endings are load-bearing: .editorconfig requires CRLF, so
-        # launcher/.gitattributes pins `*.cs`/`*.xaml` to `eol=crlf`. Without
-        # that, the checkout would follow the runner's core.autocrlf and this
-        # step would report thousands of phantom ENDOFLINE diffs.
-        run: dotnet format --verify-no-changes --verbosity minimal
-
-      - name: Code style check (dotnet format, tests)
-        working-directory: launcher/tests/ChillHub.Tests
-        # The test project is not covered by the step above (dotnet format works
-        # per project), and it is already clean — keep it that way.
-        run: dotnet format --verify-no-changes --verbosity minimal
-
-      - name: Code style check (dotnet format, updater)
-        working-directory: updater
-        # The two steps above guard launcher/** only. «Per project» is the whole
-        # problem: a project nobody listed is a project nobody checks, and the
-        # updater — тот же C#, тот же .editorconfig, тот же solution — не
-        # проверялся ничем. Теперь проверяется, и правило перестаёт зависеть от
-        # того, вспомнил ли автор про этот каталог.
-        #
-        # Line endings are pinned by updater/.gitattributes for the same reason
-        # they are pinned in launcher/: without it the checkout follows the
-        # runner's core.autocrlf and this step reports phantom ENDOFLINE diffs.
-        run: dotnet format --verify-no-changes --verbosity minimal
-
-      - name: Code style check (dotnet format, updater self-test)
-        working-directory: updater/tests/ManifestPreserveCheck
-        # The A11 guard above is built as its own project, so the step above does
-        # not reach it — same split as launcher/ChillHub vs its test project.
+        # launcher/.gitattributes and updater/.gitattributes pin `*.cs`/`*.xaml`
+        # to `eol=crlf`. Without that, the checkout would follow the runner's
+        # core.autocrlf and this step would report thousands of phantom
+        # ENDOFLINE diffs.
         run: dotnet format --verify-no-changes --verbosity minimal
 
   installer-windows:
@@ -521,7 +552,7 @@ jobs:
           if-no-files-found: error
 
   coverage-launcher:
-    name: Покрытие клиента в Codecov
+    name: Launcher coverage (Codecov)
     runs-on: ubuntu-latest
     needs: dotnet-lint
     timeout-minutes: 10
@@ -558,7 +589,7 @@ jobs:
   # что-то ещё значило бы завести второй источник, который может разъехаться
   # с первым.
   launcher-version-bump:
-    name: Версия лаунчера растёт при правках клиента
+    name: Launcher version bump
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
