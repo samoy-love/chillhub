@@ -33,7 +33,7 @@ concurrency:
 
 jobs:
   server:
-    name: Покрытие сервера в Codecov
+    name: Server coverage (Codecov)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -68,7 +68,7 @@ jobs:
   # никто не видел, и флаг launcher не приезжал НИ РАЗУ — при том, что бейдж
   # покрытия в README стоял и читался как «покрытие проекта».
   launcher-build:
-    name: Покрытие клиента (сборка отчёта)
+    name: Launcher coverage (build report)
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -107,7 +107,7 @@ jobs:
           if-no-files-found: error
 
   launcher-upload:
-    name: Покрытие клиента в Codecov
+    name: Launcher coverage (Codecov)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: launcher-build
@@ -132,7 +132,7 @@ jobs:
           fail_ci_if_error: true
 
   web:
-    name: Покрытие браузерного JS в Codecov
+    name: Web coverage (Codecov)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
