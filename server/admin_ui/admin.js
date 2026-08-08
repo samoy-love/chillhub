@@ -2010,11 +2010,28 @@ TAB_MAP.forEach(t=>{
   if(!btn) return;
   btn.addEventListener('click', (e)=>{ e.preventDefault(); showSection(t.sec); });
 });
-// Ensure initial active state reflects saved section
+
+// #launcher, #manifests, ... открывают нужную вкладку сразу при загрузке —
+// не дожидаясь клика и не завися от того, что этот браузер запомнил в
+// прошлый раз. Нужно для ссылок из уведомлений о выкатке: "версия
+// опубликована" должно вести прямо на вкладку "Лаунчер", а не на то, что
+// было открыто в последний визит.
+const HASH_TAB_MAP = { launcher:'secLauncher', manifests:'secManifests', news:'secNews', inbox:'secInbox', maint:'secMaint', metrics:'secMetrics' };
+function sectionFromHash(){
+  const raw = (location.hash || '').replace(/^#/, '').trim().toLowerCase();
+  return HASH_TAB_MAP[raw] || null;
+}
+window.addEventListener('hashchange', ()=>{
+  const sec = sectionFromHash();
+  if(sec) showSection(sec);
+});
+
+// Ensure initial active state reflects the hash, then the saved section.
 try{
+  const fromHash = sectionFromHash();
   const saved = localStorage.getItem('admin_tab');
   const known = TAB_MAP.some(t=> t.sec === saved);
-  showSection(known ? saved : 'secLauncher');
+  showSection(fromHash || (known ? saved : 'secLauncher'));
 }catch(e){ showSection('secLauncher'); }
 
 // Guarded wiring for editor actions (drafts removed)

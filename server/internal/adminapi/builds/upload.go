@@ -81,6 +81,11 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing zip part", http.StatusBadRequest)
 		return
 	}
+	if h.launcherVersionAlreadyPublished(gid, ver) {
+		log.Printf("/admin/upload: refused: launcher version %s already published", ver)
+		http.Error(w, launcherVersionConflictMessage(ver), http.StatusConflict)
+		return
+	}
 	log.Printf("/admin/upload: kind=%s gid=%s ver=%s zip=%s bytes=%d", kind, gid, ver, parts.filename, parts.saved)
 
 	// Extract into a staging directory next to the published one, exactly like
@@ -542,6 +547,10 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 	}
 	if !adminutil.IsSafeGameID(gid) || !adminutil.IsSafeVersion(ver) {
 		nw.fail(http.StatusBadRequest, "invalid gameId or version")
+		return
+	}
+	if h.launcherVersionAlreadyPublished(gid, ver) {
+		nw.fail(http.StatusConflict, launcherVersionConflictMessage(ver))
 		return
 	}
 	if tmpName == "" {
