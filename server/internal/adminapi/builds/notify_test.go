@@ -1,6 +1,7 @@
 package builds
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -72,7 +73,7 @@ func TestNotifyPublishedInvokesScript(t *testing.T) {
 	}
 
 	t.Setenv(notifyScriptEnv, script)
-	notifyPublished("chillhub-installer", "1.3.2")
+	notifyPublished(context.Background(), "chillhub-installer", "1.3.2")
 
 	got, err := os.ReadFile(logPath)
 	if err != nil {
@@ -95,7 +96,7 @@ func TestNotifyPublishedInvokesScript(t *testing.T) {
 // configured script simply isn't there.
 func TestNotifyPublishedSkipsMissingScript(t *testing.T) {
 	t.Setenv(notifyScriptEnv, filepath.Join(t.TempDir(), "does-not-exist.sh"))
-	notifyPublished("chillhub-installer", "1.3.2")
+	notifyPublished(context.Background(), "chillhub-installer", "1.3.2")
 }
 
 func shellQuote(s string) string {

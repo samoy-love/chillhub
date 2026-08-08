@@ -115,10 +115,16 @@ func TestUploadInitRefusesAlreadyPublishedLauncherVersion(t *testing.T) {
 		t.Fatalf("seed upload: %d %s", w1.Code, w1.Body.String())
 	}
 
-	initBody, _ := json.Marshal(map[string]any{
-		"kind": "launcher", "gameId": "launcher", "version": "1.3.2",
-		"zipName": "build.zip", "totalSize": 1024,
-	})
+	initBody, err := json.Marshal(struct {
+		Kind      string `json:"kind"`
+		GameID    string `json:"gameId"`
+		Version   string `json:"version"`
+		ZipName   string `json:"zipName"`
+		TotalSize int64  `json:"totalSize"`
+	}{"launcher", "launcher", "1.3.2", "build.zip", 1024})
+	if err != nil {
+		t.Fatalf("marshal init body: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/upload/init", bytes.NewReader(initBody))
 	w2 := httptest.NewRecorder()
 	h.UploadInit(w2, req)

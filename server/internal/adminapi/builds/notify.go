@@ -59,7 +59,12 @@ func notifyPublishedArgs(app, version string, changelogFile string) []string {
 // Launcher tab (see admin.js's hash routing) rather than commitURL/runURL:
 // those two are validated against https://github.com/… only (lib/notify.sh),
 // and an admin.samoy.love link would just be silently dropped there.
-func notifyPublished(app, version string) {
+//
+// Takes ctx rather than deriving one internally: the caller decides the
+// deadline for this call site — Activate hands it a fresh context.Background()
+// with its own timeout, since the goroutine outlives the HTTP request that
+// triggered it and must not be cancelled by the client hanging up.
+func notifyPublished(ctx context.Context, app, version string) {
 	script := strings.TrimSpace(os.Getenv(notifyScriptEnv))
 	if script == "" {
 		script = defaultNotifyScript
@@ -78,9 +83,13 @@ func notifyPublished(app, version string) {
 		defer cleanup()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	args := append([]string{script}, notifyPublishedArgs(app, version, changelogFile)...)
+	// #nosec G702 -- not a shell invocation (exec.CommandContext passes argv
+	// directly, no shell interpolation); app is a compile-time literal at every
+	// call site and version already passed adminutil.IsSafeVersion before
+	// Activate could reach this call.
 	out, err := exec.CommandContext(ctx, "bash", args...).CombinedOutput()
 	if err != nil {
 		log.Printf("[builds] notify published %s %s: %v: %s", app, version, err, strings.TrimSpace(string(out)))

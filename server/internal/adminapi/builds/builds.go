@@ -8,6 +8,7 @@
 package builds
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -575,7 +576,14 @@ func (h *Handlers) Activate(w http.ResponseWriter, r *http.Request) {
 		// Nothing in this package told anyone about THIS moment before: a build
 		// could sit uploaded and unactivated indefinitely with no signal that
 		// anyone was still waiting on a human to click the button.
-		go notifyPublished("chillhub-installer", ver)
+		//
+		// context.Background(), not r.Context(), deliberately: this goroutine
+		// outlives the request. r.Context() is cancelled as soon as the handler
+		// returns and the response is written, which would race the notify call
+		// against the "_, _ = w.Write(b)" a few lines down and could cut it off
+		// before lib/notify.sh even started.
+		//nolint:contextcheck // see above: an inherited context would be wrong here, not just unused
+		go notifyPublished(context.Background(), "chillhub-installer", ver)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
