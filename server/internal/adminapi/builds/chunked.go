@@ -724,21 +724,7 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	// extraction, not before. This also covers the race UploadInit's own
 	// check cannot see — another publish landing after Init let this one
 	// through but before this process step ran.
-	if h.launcherVersionAlreadyPublished(m.GameID, m.Version) {
-		if !h.launcherRepublishMatches(m.GameID, m.Version, files, emptyDirs) {
-			nw.fail(http.StatusConflict, launcherVersionConflictMessage(m.Version))
-			return
-		}
-		outPath := filepath.Join(h.manifestsDir(m.GameID), m.Version+".json")
-		log.Printf("[upload:process] uploadId=%s: launcher version %s re-uploaded with identical content, no-op", id, m.Version)
-		// The archive already did its job; there is nothing left to publish.
-		if rerr := os.Remove(zipPath); rerr != nil && !os.IsNotExist(rerr) {
-			log.Printf("[upload:process] uploadId=%s: cannot remove %s: %v", id, zipPath, rerr)
-		}
-		m.Status = "done"
-		_ = h.writeUploadMeta(m)
-		emitEventf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
-		fl.Flush()
+	if h.processLauncherRepublish(nw, fl, m, id, zipPath, files, emptyDirs) {
 		return
 	}
 
@@ -777,6 +763,33 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 
 	emitEventf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
 	fl.Flush()
+}
+
+// processLauncherRepublish is UploadProcessStream's version of
+// streamLauncherRepublish (upload.go): same content/conflict decision, plus
+// the chunked pipeline's own bookkeeping on a match — dropping the
+// now-redundant upload.zip and marking the upload done, exactly like a
+// normal process run does once it has promoted. Kept as its own function,
+// same as its two siblings, to keep UploadProcessStream's cyclomatic
+// complexity under the linter's ceiling.
+func (h *Handlers) processLauncherRepublish(nw *ndjsonWriter, fl adminutil.Flusher, m *uploadMeta, id, zipPath string, files []manifestFile, emptyDirs []string) bool {
+	if !h.launcherVersionAlreadyPublished(m.GameID, m.Version) {
+		return false
+	}
+	if !h.launcherRepublishMatches(m.GameID, m.Version, files, emptyDirs) {
+		nw.fail(http.StatusConflict, launcherVersionConflictMessage(m.Version))
+		return true
+	}
+	if err := os.Remove(zipPath); err != nil && !os.IsNotExist(err) {
+		log.Printf("[upload:process] uploadId=%s: cannot remove %s: %v", id, zipPath, err)
+	}
+	m.Status = "done"
+	_ = h.writeUploadMeta(m)
+	outPath := filepath.Join(h.manifestsDir(m.GameID), m.Version+".json")
+	log.Printf("[upload:process] uploadId=%s: launcher version %s re-uploaded with identical content, no-op", id, m.Version)
+	emitEventf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
+	fl.Flush()
+	return true
 }
 
 // StartUploadJanitor removes expired upload staging directories. It blocks and

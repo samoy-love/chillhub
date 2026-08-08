@@ -131,20 +131,7 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	// answerable at all: without the fresh manifest there would be nothing to
 	// compare the published one against. promoted is still false, so the
 	// deferred cleanup above removes stageDir without touching anything live.
-	if h.launcherVersionAlreadyPublished(gid, ver) {
-		if !h.launcherRepublishMatches(gid, ver, files, emptyDirs) {
-			log.Printf("/admin/upload: refused: launcher version %s already published with different content", ver)
-			http.Error(w, launcherVersionConflictMessage(ver), http.StatusConflict)
-			return
-		}
-		b, rerr := os.ReadFile(filepath.Join(h.manifestsDir(gid), ver+".json"))
-		if rerr != nil {
-			adminutil.Fail(w, http.StatusInternalServerError, "failed to read the published manifest", "upload", rerr)
-			return
-		}
-		log.Printf("/admin/upload: launcher version %s re-uploaded with identical content, no-op", ver)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(b)
+	if h.respondLauncherRepublish(w, gid, ver, files, emptyDirs) {
 		return
 	}
 
@@ -177,6 +164,35 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	// The build is published; a client that hung up before reading the manifest
 	// changes nothing and cannot be told anything either.
 	_, _ = w.Write(b)
+}
+
+// respondLauncherRepublish answers a plain-multipart publish whose version is
+// an already-published launcher build: it writes either the existing
+// manifest (identical content) or the 409 conflict, and reports whether it
+// wrote anything at all. false means the version isn't an already-published
+// launcher build, and the caller should proceed to promote as normal.
+//
+// Pulled out of Upload as its own function (rather than left as inline ifs)
+// purely to keep Upload's own cyclomatic complexity under the linter's
+// ceiling — see the identical split for UploadStream and UploadProcessStream.
+func (h *Handlers) respondLauncherRepublish(w http.ResponseWriter, gid, ver string, files []manifestFile, emptyDirs []string) bool {
+	if !h.launcherVersionAlreadyPublished(gid, ver) {
+		return false
+	}
+	if !h.launcherRepublishMatches(gid, ver, files, emptyDirs) {
+		log.Printf("/admin/upload: refused: launcher version %s already published with different content", ver)
+		http.Error(w, launcherVersionConflictMessage(ver), http.StatusConflict)
+		return true
+	}
+	b, err := os.ReadFile(filepath.Join(h.manifestsDir(gid), ver+".json"))
+	if err != nil {
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to read the published manifest", "upload", err)
+		return true
+	}
+	log.Printf("/admin/upload: launcher version %s re-uploaded with identical content, no-op", ver)
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(b)
+	return true
 }
 
 // extractSpaceProblem reports why an archive cannot be unpacked next to its
@@ -629,15 +645,7 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 	// and is what lets an identical re-upload succeed instead of just failing
 	// less usefully. promoted is still false, so the deferred cleanup removes
 	// stageDir without touching the live version.
-	if h.launcherVersionAlreadyPublished(gid, ver) {
-		if !h.launcherRepublishMatches(gid, ver, files, emptyDirs) {
-			nw.fail(http.StatusConflict, launcherVersionConflictMessage(ver))
-			return
-		}
-		outPath := filepath.Join(h.manifestsDir(gid), ver+".json")
-		log.Printf("[builds] uploadStream: launcher version %s re-uploaded with identical content, no-op", ver)
-		emitEventf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
-		fl.Flush()
+	if h.streamLauncherRepublish(nw, fl, gid, ver, files, emptyDirs, "[builds] uploadStream") {
 		return
 	}
 
@@ -669,6 +677,27 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 
 	emitEventf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
 	fl.Flush()
+}
+
+// streamLauncherRepublish is respondLauncherRepublish's NDJSON counterpart,
+// used by UploadStream. chunked.go's UploadProcessStream has its own
+// variant (processLauncherRepublish) because a match there also has to
+// drop the now-redundant upload.zip and mark the chunked upload done —
+// bookkeeping this function knows nothing about. logTag identifies the
+// caller in the log line only; the emitted event is identical either way.
+func (h *Handlers) streamLauncherRepublish(nw *ndjsonWriter, fl adminutil.Flusher, gid, ver string, files []manifestFile, emptyDirs []string, logTag string) bool {
+	if !h.launcherVersionAlreadyPublished(gid, ver) {
+		return false
+	}
+	if !h.launcherRepublishMatches(gid, ver, files, emptyDirs) {
+		nw.fail(http.StatusConflict, launcherVersionConflictMessage(ver))
+		return true
+	}
+	outPath := filepath.Join(h.manifestsDir(gid), ver+".json")
+	log.Printf("%s: launcher version %s re-uploaded with identical content, no-op", logTag, ver)
+	emitEventf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
+	fl.Flush()
+	return true
 }
 
 // countTree returns the number of files and their total size under root.
