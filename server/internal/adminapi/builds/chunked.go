@@ -288,6 +288,11 @@ func (h *Handlers) UploadInit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid gameId or version", http.StatusBadRequest)
 		return
 	}
+	if h.launcherVersionAlreadyPublished(in.GameID, in.Version) {
+		log.Printf("[upload:init] refused: launcher version %s already published", in.Version)
+		http.Error(w, launcherVersionConflictMessage(in.Version), http.StatusConflict)
+		return
+	}
 	if in.TotalSize <= 0 {
 		log.Printf("[upload:init] invalid totalSize: %d (gameId=%s version=%s)", in.TotalSize, in.GameID, in.Version)
 		http.Error(w, "invalid totalSize", http.StatusBadRequest)
@@ -660,6 +665,13 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	// dropped by the client, which would then treat the build as published.
 	if !adminutil.IsSafeGameID(m.GameID) || !adminutil.IsSafeVersion(m.Version) {
 		nw.fail(http.StatusBadRequest, "invalid gameId or version")
+		return
+	}
+	// UploadInit already refused this pairing when it was reachable there; this
+	// is the same check for uploads started before that guard existed, or for
+	// any future path into UploadProcessStream that doesn't go through Init.
+	if h.launcherVersionAlreadyPublished(m.GameID, m.Version) {
+		nw.fail(http.StatusConflict, launcherVersionConflictMessage(m.Version))
 		return
 	}
 	// Extract into a staging dir on the same volume and publish with a single

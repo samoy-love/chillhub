@@ -511,6 +511,34 @@ func (h *Handlers) hasVersionManifest(gid, ver string) bool {
 	return err == nil
 }
 
+// launcherVersionAlreadyPublished refuses to publish a LAUNCHER build under a
+// version number that already has a manifest.
+//
+// promoteVersionDir happily replaces an existing version directory — by
+// design, and correctly so for games, where a same-version re-upload is a
+// legitimate "fix this build without a new number" workflow. For the
+// launcher it is not: self-update compares version STRINGS, not content, so
+// a client that already updated to "1.3.0" from a first upload has no way to
+// notice a second upload silently replacing what "1.3.0" means. That is
+// exactly what happened on 2026-08-08: the same version got re-uploaded
+// three times in one day, and every client that had already "updated" to the
+// first of the three never saw the other two.
+//
+// Scoped to gid=="launcher" only — games keep the existing overwrite
+// behaviour, since nothing about that incident applies to them.
+func (h *Handlers) launcherVersionAlreadyPublished(gid, ver string) bool {
+	return gid == "launcher" && h.hasVersionManifest(gid, ver)
+}
+
+// launcherVersionConflictMessage is the operator-facing explanation for
+// launcherVersionAlreadyPublished, shared by every upload entry point so the
+// wording (and the fix it points to) can't drift between them.
+func launcherVersionConflictMessage(ver string) string {
+	return fmt.Sprintf(
+		"launcher version %s is already published; bump <Version> in launcher/ChillHub/ChillHub.csproj and re-run the release",
+		ver)
+}
+
 // Activate points latest.json at an existing version.
 func (h *Handlers) Activate(w http.ResponseWriter, r *http.Request) {
 	if !adminutil.RequireMethod(w, r, http.MethodPost) {
@@ -540,6 +568,16 @@ func (h *Handlers) Activate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to activate version", http.StatusInternalServerError)
 		return
 	}
+
+	if gid == "launcher" {
+		// The Activate click is the moment the update actually becomes visible
+		// to installed clients — the build finishing earlier in CI is not.
+		// Nothing in this package told anyone about THIS moment before: a build
+		// could sit uploaded and unactivated indefinitely with no signal that
+		// anyone was still waiting on a human to click the button.
+		go notifyPublished("chillhub-installer", ver)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	// The response body is the same JSON that was just persisted; a failed write
 	// to the client is the client's problem and cannot be reported any more.
