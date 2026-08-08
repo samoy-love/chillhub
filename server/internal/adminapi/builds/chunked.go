@@ -288,6 +288,24 @@ func (h *Handlers) UploadInit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid gameId or version", http.StatusBadRequest)
 		return
 	}
+	// Unlike every other call site of launcherVersionAlreadyPublished, this one
+	// cannot be turned into a content comparison: init runs before a single
+	// byte of the archive has been transferred, so there is nothing yet to
+	// compare against the published manifest. The choice is therefore between
+	// two costs, not between "smart" and "dumb": reject here and risk refusing
+	// a harmless identical retry with nothing to prove it's harmless, or let
+	// it through and risk spooling gigabytes over a slow link only to 409 once
+	// UploadProcessStream can finally see the bytes.
+	//
+	// The reject stays here. A rejected identical retry is one small failed
+	// request an operator re-runs after bumping the version, which is the
+	// existing, well-understood recovery; a silently accepted transfer that
+	// turns out to be pointless burns bandwidth and time on exactly the
+	// object — a launcher build — this code's own comment says is "tens of
+	// MB", i.e. cheap enough that a client with new content can just retry
+	// without chunking at all. Losing this precheck would mean losing it on
+	// every mismatched retry, not just the identical ones, since a client
+	// cannot know in advance which one it is about to make.
 	if h.launcherVersionAlreadyPublished(in.GameID, in.Version) {
 		log.Printf("[upload:init] refused: launcher version %s already published", in.Version)
 		http.Error(w, launcherVersionConflictMessage(in.Version), http.StatusConflict)
@@ -667,13 +685,12 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 		nw.fail(http.StatusBadRequest, "invalid gameId or version")
 		return
 	}
-	// UploadInit already refused this pairing when it was reachable there; this
-	// is the same check for uploads started before that guard existed, or for
-	// any future path into UploadProcessStream that doesn't go through Init.
-	if h.launcherVersionAlreadyPublished(m.GameID, m.Version) {
-		nw.fail(http.StatusConflict, launcherVersionConflictMessage(m.Version))
-		return
-	}
+	// The already-published check happens after compose (below): by the time
+	// this handler runs the whole archive already sits on disk as upload.zip
+	// (UploadComplete only got here once every chunk landed), so — unlike
+	// UploadInit — there is no bandwidth left to save by rejecting early, and
+	// checking after extraction is what lets an identical re-run of this exact
+	// step succeed instead of failing for no reason a retry can act on.
 	// Extract into a staging dir on the same volume and publish with a single
 	// rename, so an interrupted run never leaves a partial version in place.
 	finalVerDir := filepath.Join(h.root, "content", m.GameID, m.Version)
@@ -702,6 +719,15 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	if !ok2 {
 		return
 	}
+
+	// See the comment above stageDir's setup: this is deliberately after
+	// extraction, not before. This also covers the race UploadInit's own
+	// check cannot see — another publish landing after Init let this one
+	// through but before this process step ran.
+	if h.processLauncherRepublish(nw, fl, m, id, zipPath, files, emptyDirs) {
+		return
+	}
+
 	mOut := manifest{
 		Version:   m.Version,
 		BuildID:   adminutil.NewBuildID(),
@@ -737,6 +763,33 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 
 	emitEventf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
 	fl.Flush()
+}
+
+// processLauncherRepublish is UploadProcessStream's version of
+// streamLauncherRepublish (upload.go): same content/conflict decision, plus
+// the chunked pipeline's own bookkeeping on a match — dropping the
+// now-redundant upload.zip and marking the upload done, exactly like a
+// normal process run does once it has promoted. Kept as its own function,
+// same as its two siblings, to keep UploadProcessStream's cyclomatic
+// complexity under the linter's ceiling.
+func (h *Handlers) processLauncherRepublish(nw *ndjsonWriter, fl adminutil.Flusher, m *uploadMeta, id, zipPath string, files []manifestFile, emptyDirs []string) bool {
+	if !h.launcherVersionAlreadyPublished(m.GameID, m.Version) {
+		return false
+	}
+	if !h.launcherRepublishMatches(m.GameID, m.Version, files, emptyDirs) {
+		nw.fail(http.StatusConflict, launcherVersionConflictMessage(m.Version))
+		return true
+	}
+	if err := os.Remove(zipPath); err != nil && !os.IsNotExist(err) {
+		log.Printf("[upload:process] uploadId=%s: cannot remove %s: %v", id, zipPath, err)
+	}
+	m.Status = "done"
+	_ = h.writeUploadMeta(m)
+	outPath := filepath.Join(h.manifestsDir(m.GameID), m.Version+".json")
+	log.Printf("[upload:process] uploadId=%s: launcher version %s re-uploaded with identical content, no-op", id, m.Version)
+	emitEventf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
+	fl.Flush()
+	return true
 }
 
 // StartUploadJanitor removes expired upload staging directories. It blocks and
