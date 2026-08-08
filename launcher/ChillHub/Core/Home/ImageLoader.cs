@@ -32,6 +32,27 @@ namespace ChillHub.Core.Home {
         /// <summary>Высота декодирования по умолчанию, если у элемента не задан размер.</summary>
         private const int DefaultDecodeHeight = 88;
 
+        /// <summary>
+        /// Потолок на одну картинку.
+        /// <para>
+        /// Адрес обложки приходит в новости с сервера, то есть это внешний вход, а не наша
+        /// константа. Без предела ответ читается в память целиком, сколько бы его ни отдали.
+        /// 16 МиБ заведомо больше любой разумной обложки и заведомо меньше того, от чего
+        /// лаунчеру станет плохо.
+        /// </para>
+        /// </summary>
+        internal const int MaxImageBytes = 16 * 1024 * 1024;
+
+        /// <summary>
+        /// Сколько ждать одну картинку.
+        /// <para>
+        /// Своего таймаута у загрузки не было, работал общий <see cref="HttpClient.Timeout"/>
+        /// в 100 секунд — и всё это время элемент списка стоял пустым. Обложка столько
+        /// ожидания не стоит: лучше показать карточку без картинки.
+        /// </para>
+        /// </summary>
+        internal static readonly TimeSpan DownloadTimeout = TimeSpan.FromSeconds(20);
+
         /// <summary>Отдельный HttpClient: много мелких параллельных запросов за картинками.</summary>
         private static HttpClient http = CreateDefaultClient();
 
@@ -329,14 +350,39 @@ namespace ChillHub.Core.Home {
         private static async Task<byte[]> DownloadAsync(string url) {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             DebugLog($"[ImgLoad] HTTP GET start url='{url}'");
-            using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+            // Таймаут ставится здесь, а не на клиенте: клиент общий и подменяемый тестами,
+            // а ждать дольше положенного не должна ни одна картинка.
+            using var cts = new System.Threading.CancellationTokenSource(DownloadTimeout);
+            using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode) {
                 var contentType = resp.Content?.Headers?.ContentType?.ToString() ?? string.Empty;
                 DebugLog($"[ImgLoad] HTTP non-200 status={(int)resp.StatusCode} contentType='{contentType}' url='{url}'");
                 throw new HttpRequestException("HTTP " + (int)resp.StatusCode + " " + resp.StatusCode);
             }
 
-            var bytes = await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            // Заявленную длину проверяем ДО чтения — это отсекает заведомо большой ответ,
+            // не потратив ни байта памяти. Но полагаться только на неё нельзя: заголовка
+            // может не быть вовсе, а может стоять и неправда. Поэтому предел проверяется
+            // ещё раз по факту прочитанного, ниже.
+            var declared = resp.Content.Headers.ContentLength;
+            if (declared > MaxImageBytes) {
+                throw new InvalidDataException(
+                    $"картинка заявлена размером {declared} Б при пределе {MaxImageBytes} Б: {url}");
+            }
+
+            using var stream = await resp.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
+            using var buffer = new MemoryStream(declared is > 0 and <= MaxImageBytes ? (int)declared : 0);
+            var chunk = new byte[81920];
+            int read;
+            while ((read = await stream.ReadAsync(chunk, 0, chunk.Length, cts.Token).ConfigureAwait(false)) > 0) {
+                if (buffer.Length + read > MaxImageBytes) {
+                    throw new InvalidDataException($"картинка больше предела {MaxImageBytes} Б: {url}");
+                }
+
+                buffer.Write(chunk, 0, read);
+            }
+
+            var bytes = buffer.ToArray();
             sw.Stop();
             DebugLog($"[ImgLoad] HTTP ok bytes={bytes.Length} elapsedMs={sw.ElapsedMilliseconds} url='{url}'");
             return bytes;

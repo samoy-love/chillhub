@@ -151,13 +151,11 @@ namespace ChillHub.Pages {
                 catch {
                 }
                 try {
-                    // Loader removed: no need to toggle overlay on events
-                    this.Browser.CoreWebView2.DOMContentLoaded += (_, __) => { };
-                    this.Browser.CoreWebView2.NavigationCompleted += (_, __) => { };
-                    this.Browser.CoreWebView2.WebMessageReceived += (_, e) => {
-                        // Loader removed: ignore 'loaded' message; read once to avoid warnings
-                        e.TryGetWebMessageAsString();
-                    };
+                    // Подписки на DOMContentLoaded, NavigationCompleted и WebMessageReceived
+                    // убраны: их обработчики были пустыми. Они остались от индикатора загрузки,
+                    // который гасился по этим событиям, — сам индикатор удалён давно, а
+                    // подписки пережили его и создавали видимость, будто страница чего-то ждёт
+                    // от содержимого. Ждать нечего: страница новости статична.
 
                     // Открывать внешние ссылки во внешнем браузере
                     this.Browser.CoreWebView2.NewWindowRequested += (s, ev) => {
