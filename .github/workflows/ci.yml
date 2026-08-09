@@ -679,6 +679,27 @@ jobs:
     name: Защита ветки соответствует задачам CI
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # needs — не про очерёдность результата, а про то, что видит Jobs API.
+    # GitHub регистрирует задачу с зависимостями в API прогона только когда
+    # её needs выполнены и она реально стартовала — без needs эта задача
+    # финиширует за секунды и застаёт API в момент, когда половина остальных
+    # задач ещё не создана, а не пропущена. Итог — те же ложные "пропала
+    # проверка", от которых задача должна защищать.
+    needs:
+      - commits
+      - deploy-paths
+      - htmlhint-web
+      - stylelint-web
+      - eslint-web
+      - web-tests
+      - go-lint
+      - vuln-scan
+      - dotnet-lint
+      - format
+      - installer-windows
+      - coverage-launcher
+      - launcher-version-bump
+    if: always()
     steps:
       - uses: actions/checkout@v7
 
