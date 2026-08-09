@@ -112,19 +112,25 @@ export default [
         pickClosestChunkOption: 'readonly',
         benchUploadOnce: 'readonly',
         makeUiThrottler: 'readonly',
-        drawSpeedChart: 'readonly'
+        drawSpeedChart: 'readonly',
+        drawMultiLineChart: 'readonly'
       }
     }
   },
 
-  // upload-bench.js, ui-throttle.js and speed-chart.js are UMD modules:
-  // `module` is only referenced behind a `typeof module === 'object'` guard
-  // so they work as a plain <script> in the browser too, but that guard
+  // upload-bench.js, ui-throttle.js, speed-chart.js and line-chart.js are UMD
+  // modules: `module` is only referenced behind a `typeof module === 'object'`
+  // guard so they work as a plain <script> in the browser too, but that guard
   // doesn't stop no-undef from flagging the bare identifier — the browser
   // globals list above has no `module`/`exports` because real browser code
   // must never see them.
   {
-    files: ['server/admin_ui/upload-bench.js', 'server/admin_ui/ui-throttle.js', 'server/admin_ui/speed-chart.js'],
+    files: [
+      'server/admin_ui/upload-bench.js',
+      'server/admin_ui/ui-throttle.js',
+      'server/admin_ui/speed-chart.js',
+      'server/admin_ui/line-chart.js'
+    ],
     languageOptions: {
       globals: {
         module: 'readonly'

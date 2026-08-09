@@ -3172,7 +3172,6 @@ document.addEventListener('DOMContentLoaded', ()=>{
 // Здесь тоже только addEventListener и никаких инлайновых скриптов: CSP админки
 // не содержит 'unsafe-inline' в script-src.
 
-let __mxPlot = null;
 let __mxRO = null;
 let __mxGamesLoaded = false;
 let __mxInited = false;
@@ -3263,14 +3262,16 @@ function mxRenderDaysTable(byDay){
   ).join('');
 }
 
-// График по дням на том же uPlot, что и график скорости загрузки.
+// График по дням на том же canvas-модуле (line-chart.js), что и график
+// скорости загрузки (speed-chart.js) — оба заменили uPlot, который эта
+// страница грузила отдельным <script> с unpkg.com; см. комментарий в шапке
+// speed-chart.js про то, почему внешний CDN здесь больше не используется.
 // По оси X — индекс дня, подписи берутся из byDay: так не приходится
 // пересчитывать UTC-сутки в местные и объяснять сдвиг на границе дня.
 function mxRenderChart(byDay){
   const host = mxEl('mx_chart_host'); if(!host) return;
   const note = mxEl('mx_chart_note');
   if(__mxRO){ try{ __mxRO.disconnect(); }catch{ /* no-op */ } __mxRO = null; }
-  if(__mxPlot){ try{ __mxPlot.destroy(); }catch{ /* no-op */ } __mxPlot = null; }
   host.replaceChildren();
 
   if(!byDay || byDay.length===0){
@@ -3278,66 +3279,29 @@ function mxRenderChart(byDay){
     host.innerHTML = '<div class="text-body-secondary">Событий за период нет — рисовать нечего.</div>';
     return;
   }
-  if(!window.uPlot){
-    if(note) note.textContent = 'библиотека uPlot не загрузилась';
-    host.innerHTML = '<div class="alert alert-warning mb-0">График недоступен: uPlot не загрузился. Числа — в таблице ниже.</div>';
-    const det = mxEl('mx_days_details'); if(det) det.open = true;
-    return;
-  }
   if(note) note.textContent = byDay.length+' дн.';
 
+  const legendHost = document.createElement('div');
+  legendHost.className = 'small mb-2';
+  const canvas = document.createElement('canvas');
+  canvas.style.width = '100%';
+  canvas.style.height = '280px';
+  host.appendChild(legendHost);
+  host.appendChild(canvas);
+
   const xs = byDay.map((_, i)=> i);
-  const data = [
-    xs,
-    byDay.map(d=> Number(d.launcherStarts||0)),
-    byDay.map(d=> Number(d.installs||0)),
-    byDay.map(d=> Number(d.updates||0)),
-    byDay.map(d=> Number(d.gameLaunches||0)),
-    byDay.map(d=> Number(d.errors||0)),
+  const series = [
+    { label: 'Запуски лаунчера', color: '#0d6efd', values: byDay.map(d=> Number(d.launcherStarts||0)) },
+    { label: 'Установки', color: '#198754', values: byDay.map(d=> Number(d.installs||0)) },
+    { label: 'Обновления', color: '#0dcaf0', values: byDay.map(d=> Number(d.updates||0)) },
+    { label: 'Запуски игр', color: '#ffc107', values: byDay.map(d=> Number(d.gameLaunches||0)) },
+    { label: 'Ошибки', color: '#dc3545', values: byDay.map(d=> Number(d.errors||0)) },
   ];
-  const label = (v)=>{
-    const i = Math.round(v);
-    const d = byDay[i];
-    return d ? String(d.date||'').slice(5) : '';
-  };
-  const HEIGHT = 280;
-  const opts = {
-    width: host.clientWidth || 800,
-    height: HEIGHT,
-    cursor: { drag: { x: false, y: false } },
-    scales: { x: { time: false } },
-    legend: { show: true },
-    padding: [8, 12, 8, 8],
-    axes: [
-      { grid: { show: true, stroke: 'rgba(255,255,255,.12)', width: 1 },
-        ticks: { stroke: 'rgba(255,255,255,.25)', width: 1 },
-        stroke: '#adb5bd',
-        values: (u, vals)=> vals.map(label) },
-      { grid: { show: true, stroke: 'rgba(255,255,255,.12)', width: 1 },
-        ticks: { stroke: 'rgba(255,255,255,.25)', width: 1 },
-        stroke: '#adb5bd',
-        values: (u, vals)=> vals.map(v=> mxNum(v)) },
-    ],
-    series: [
-      { label: 'Дата (UTC)', value: (u, v)=> label(v) },
-      { label: 'Запуски лаунчера', stroke: '#0d6efd', width: 2 },
-      { label: 'Установки', stroke: '#198754', width: 2 },
-      { label: 'Обновления', stroke: '#0dcaf0', width: 2 },
-      { label: 'Запуски игр', stroke: '#ffc107', width: 2 },
-      { label: 'Ошибки', stroke: '#dc3545', width: 2 },
-    ],
-  };
-  try{
-    __mxPlot = new window.uPlot(opts, data, host);
-    __mxRO = new window.ResizeObserver(()=>{
-      try{ __mxPlot.setSize({ width: host.clientWidth || 800, height: HEIGHT }); }catch{ /* no-op */ }
-    });
-    __mxRO.observe(host);
-  }catch(e){
-    __mxPlot = null;
-    host.innerHTML = '<div class="alert alert-warning mb-0">Не удалось построить график: '+escapeHtml(String(e))+'. Числа — в таблице ниже.</div>';
-    const det = mxEl('mx_days_details'); if(det) det.open = true;
-  }
+  const xLabelFor = (i)=>{ const d = byDay[i]; return d ? String(d.date||'').slice(5) : ''; };
+  const render = ()=> drawMultiLineChart(canvas, xs, series, { xLabelFor, formatY: mxNum, legendHost });
+  render();
+  __mxRO = new window.ResizeObserver(render);
+  __mxRO.observe(host);
 }
 
 function mxRenderGames(byGame){

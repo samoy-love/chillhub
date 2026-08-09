@@ -60,3 +60,12 @@ test('speed-chart.js в браузерном режиме кладёт функ�
     1
   );
 });
+
+test('line-chart.js в браузерном режиме кладёт функции графика в window', () => {
+  const w = loadAsBrowserScript('server/admin_ui/line-chart.js');
+  assert.strictEqual(typeof w.mapSeriesToPixels, 'function');
+  assert.strictEqual(typeof w.drawMultiLineChart, 'function');
+  const px = w.mapSeriesToPixels([{ values: [1, 2] }], { width: 10, height: 10, padding: { left: 0, right: 0, top: 0, bottom: 0 } });
+  assert.strictEqual(Array.from(px).length, 1);
+  assert.strictEqual(Array.from(px[0]).length, 2);
+});
