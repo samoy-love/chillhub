@@ -495,12 +495,14 @@
                 <div class="small text-body-secondary">
                   Загружает пробный кусок выбранного файла с каждой комбинацией «размер чанка × параллельность» на сервер и
                   сразу отбрасывает загруженное (<code>/admin/api/upload/abort</code>), не создавая версию и не трогая манифесты.
+                  Значения по умолчанию рассчитаны на архивы порядка 10–15 ГБ — для более мелких сборок пробу и чанки стоит
+                  уменьшить, иначе сама проба займёт заметную долю времени полной заливки.
                 </div>
                 <div class="d-flex flex-wrap align-items-end gap-2">
                   <label class="me-2">Файл: <input id="bench_zip" type="file"></label>
-                  <label class="me-2">Проба, МБ: <input id="bench_probe_mb" type="number" min="1" value="256" style="width:90px"></label>
-                  <label class="me-2">Чанки, МБ (через запятую): <input id="bench_chunks_mb" value="4,8,16,32,64" style="width:160px"></label>
-                  <label class="me-2">Параллельность (через запятую): <input id="bench_concs" value="2,6,12,24,48" style="width:160px"></label>
+                  <label class="me-2">Проба, МБ: <input id="bench_probe_mb" type="number" min="1" value="512" style="width:90px"></label>
+                  <label class="me-2">Чанки, МБ (через запятую): <input id="bench_chunks_mb" value="16,32,64,128,256" style="width:180px"></label>
+                  <label class="me-2">Параллельность (через запятую): <input id="bench_concs" value="4,8,16,32,64" style="width:160px"></label>
                   <button type="button" id="bench_run" class="btn btn-sm btn-primary">Запустить тест</button>
                 </div>
                 <div class="small text-body-secondary" id="bench_status"></div>
@@ -620,6 +622,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/uplot@1.6.30/dist/uPlot.iife.min.js" integrity="sha384-1NEYi76CBpge3gahk4+X4M4JzdOV3WYq84RnByqYdAd5SdvJBTNCPFh/nsoHfN6i" crossorigin="anonymous"></script>
+  <script src="/admin/ui/upload-bench.js"></script>
   <script src="/admin/ui/admin.js"></script>
   <!-- Gallery Modal -->
   <div class="modal fade" id="ns_gallery" tabindex="-1" aria-hidden="true">

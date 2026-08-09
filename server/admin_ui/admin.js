@@ -737,56 +737,11 @@ async function manifestsReload(){
   });
 }
 
-// benchUploadOnce measures raw chunk-upload throughput for one (chunkSize,
-// concurrency) pair against a probe slice of `file` (not the whole file — a
-// grid of combinations would otherwise re-upload the entire archive once per
-// cell). It never calls complete/process, so no version or manifest is ever
-// created; the throwaway upload is dropped immediately via /admin/api/upload/abort
-// instead of waiting for the hourly janitor (UploadCleanup) to reap it.
-async function benchUploadOnce(file, chunkSizeMB, conc, probeBytes){
-  const desiredChunk = Math.max(1, Math.round(chunkSizeMB*1024*1024));
-  const totalSize = Math.max(desiredChunk, Math.min(probeBytes, file.size));
-  const probeName = 'bench-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2, 8);
-  let initRes;
-  try{
-    initRes = await fetch('/admin/api/upload/init', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({
-      kind:'game', gameId:'bench', version: probeName, zipName:'bench.bin', totalSize, chunkSize: desiredChunk
-    }) });
-  }catch(e){ return { ok:false, error: String(e) }; }
-  if(!initRes.ok){ return { ok:false, error: 'HTTP '+initRes.status+' init' }; }
-  const init = await initRes.json();
-  const uploadId = init.uploadId;
-  const chunkSize = init.chunkSize || desiredChunk;
-  const totalChunks = init.totalChunks || Math.ceil(totalSize/chunkSize);
-  const idxs = []; for(let i=0;i<totalChunks;i++) idxs.push(i);
-  let ptr = 0, active = 0, uploadedBytes = 0, failed = false;
-  const t0 = performance.now();
-  await new Promise((resolve)=>{
-    function next(){
-      if(failed){ if(active===0) resolve(); return; }
-      if(ptr >= idxs.length){ if(active===0) resolve(); return; }
-      const i = idxs[ptr++];
-      active++;
-      const start = i*chunkSize; const end = Math.min(start+chunkSize, totalSize);
-      const blob = file.slice(start, end);
-      fetch('/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+i, { method:'PUT', body: blob })
-        .then(r=>{ if(r.ok){ uploadedBytes += (end-start); } else { failed = true; } })
-        .catch(()=>{ failed = true; })
-        .finally(()=>{ active--; if(!failed && ptr < idxs.length) next(); else if(active===0) resolve(); });
-    }
-    for(let j=0;j<Math.min(conc, idxs.length); j++) next();
-  });
-  const elapsedSec = Math.max(0.001, (performance.now()-t0)/1000);
-  try{ await fetch('/admin/api/upload/abort?uploadId='+encodeURIComponent(uploadId), { method:'POST' }); }catch(_){ }
-  if(failed || uploadedBytes<=0){ return { ok:false, error:'upload failed' }; }
-  return { ok:true, chunkSize, concurrency: conc, bytes: uploadedBytes, seconds: elapsedSec, speed: uploadedBytes/elapsedSec };
-}
-
-function parseBenchList(input, scale){
-  return String(input||'').split(',').map(s=> s.trim()).filter(Boolean)
-    .map(s=> Number(s)*scale).filter(n=> Number.isFinite(n) && n>0);
-}
-
+// runUploadBench and applyBenchBest are thin DOM wiring around the testable
+// core in upload-bench.js (parseBenchList, benchCombos, benchUploadOnce,
+// pickClosestChunkOption) — that file is loaded as a separate <script> before
+// this one specifically so it can be covered by tests/web/*.test.js as an
+// ordinary required module, see the comment at its top.
 async function runUploadBench(){
   const file = document.getElementById('bench_zip')?.files?.[0];
   if(!file){ notify('Выберите файл для теста'); return; }
@@ -800,8 +755,7 @@ async function runUploadBench(){
   const applyWrap = document.getElementById('bench_apply_wrap'); const bestEl = document.getElementById('bench_best');
   if(table) table.style.display='table'; if(applyWrap) applyWrap.style.display='none';
   if(tbody) tbody.innerHTML='';
-  const combos = [];
-  for(const cs of chunkSizesMB){ for(const c of concs){ combos.push({cs, c}); } }
+  const combos = benchCombos(chunkSizesMB, concs);
   const results = [];
   for(let i=0;i<combos.length;i++){
     const {cs, c} = combos[i];
@@ -830,10 +784,9 @@ function applyBenchBest(chunkSelId, concSliderId, concValId){
   const best = window.__benchBest; if(!best){ notify('Сначала запустите тест'); return; }
   const sel = document.getElementById(chunkSelId);
   if(sel){
-    // Pick the closest available option to the measured optimal chunk size.
-    let bestOpt = null, bestDiff = Infinity;
-    for(const opt of sel.options){ const v = Number(opt.value)||0; const diff = Math.abs(v - best.chunkSize); if(diff < bestDiff){ bestDiff = diff; bestOpt = opt; } }
-    if(bestOpt) sel.value = bestOpt.value;
+    const values = Array.from(sel.options).map(opt=> Number(opt.value)||0);
+    const closest = pickClosestChunkOption(values, best.chunkSize);
+    if(closest!==null) sel.value = String(closest);
   }
   const slider = document.getElementById(concSliderId); const val = document.getElementById(concValId);
   if(slider){ slider.value = String(Math.max(1, Math.min(100, best.concurrency))); slider.dispatchEvent(new Event('input')); }
