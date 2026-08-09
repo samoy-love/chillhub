@@ -823,63 +823,10 @@ async function manifestsUpload(){
   if(activeNowEl) activeNowEl.textContent = '0';
   const speedWrap = document.getElementById('man_speed_wrap'); const speedCanvas = document.getElementById('man_speed');
   if(speedWrap) speedWrap.style.display='block';
+  if(speedCanvas) speedCanvas.style.height='180px';
   let speedPoints = []; // [{t, bps}]
   let peakBps = 0;
   const HORIZON_MS = 120000; // 2 minutes window
-  // Initialize uPlot chart if available
-  let speedPlot = null; let speedPlotData = [[], []]; // [timeSec[], bps[]]
-  try{
-    if (speedWrap && window.uPlot) {
-      // Hide old canvas if present
-      try{ if(speedCanvas) speedCanvas.style.display = 'none'; }catch{}
-      // Remove previous plot if exists (repeat upload)
-      try{ const prevPlot = document.getElementById('man_speed_plot'); if(prevPlot) prevPlot.remove(); }catch{}
-      const plotHost = document.createElement('div');
-      plotHost.id = 'man_speed_plot';
-      plotHost.style.width = '100%';
-      plotHost.style.height = '180px';
-      plotHost.style.background = '#e7eef8';
-      plotHost.style.borderRadius = '6px';
-      plotHost.style.padding = '4px';
-      speedWrap.appendChild(plotHost);
-      const fmtBps = (v)=> formatSpeed(v) || '0';
-      const wrapW = speedWrap.clientWidth || plotHost.clientWidth || 600;
-      const HEIGHT = 180;
-      const opts = {
-        width: wrapW,
-        height: HEIGHT,
-        cursor: { drag: { x: false, y: false } },
-        scales: { 
-          x: { time: false }, 
-          y: { auto: false, range: (u, min, max) => [0, Math.max(1, peakBps)] }
-        },
-        legend: { show: false },
-        padding: [8, 8, 8, 12],
-        axes: [
-          { 
-            grid: { show: true, stroke: '#e5e7eb', width: 1 },
-            ticks: { stroke: '#9aa1a9', width: 1 },
-            stroke: '#000000',
-            values: (u, vals)=> vals.map(v=> (v>=0? (Math.round((speedPlotData[0].length>0? (speedPlotData[0][speedPlotData[0].length-1] - v):0))+'s') : ''))
-          },
-          { 
-            grid: { show: true, stroke: '#e5e7eb', width: 1 },
-            ticks: { stroke: '#9aa1a9', width: 1 },
-            stroke: '#000000',
-            values: (u, vals)=> vals.map(fmtBps),
-            size: 96 
-          }
-        ],
-        series: [ {}, { label: 'Скорость', stroke: '#0d6efd', width: 2.25 } ],
-      };
-      speedPlot = new window.uPlot(opts, speedPlotData, plotHost);
-      // Resize on wrapper changes
-      const ro = new window.ResizeObserver(()=>{
-        try{ speedPlot.setSize({ width: speedWrap.clientWidth || plotHost.clientWidth || 600, height: HEIGHT }); }catch{}
-      });
-      ro.observe(speedWrap);
-    }
-  }catch{}
 
   // INIT
   let initRes; try{
@@ -911,7 +858,11 @@ async function manifestsUpload(){
   let curPar = Math.max(1, Math.min(100, userPar));
   console.log('[resume] already have', received.size, 'chunks; scheduling', allIdx.length, 'chunks; chunkSize=', chunkSize, 'startPar=', curPar);
 
-  const t0 = performance.now(); let lastT = t0; let lastLoaded = uploadedBytes; let avgSpeed = 0; const alpha = 0.2; const UI_INTERVAL=500;
+  const t0 = performance.now(); let lastT = t0; let lastLoaded = uploadedBytes; let avgSpeed = 0; const alpha = 0.2;
+  // 200мс, а не 500 — на чанках размером в десятки МБ пять обновлений в
+  // секунду всё ещё дешёвы (перерисовка холста и пара textContent), а разница
+  // ощущается: полоса и график иначе кажутся "подвисающими" рывками.
+  const UI_INTERVAL=200;
   function updateUI(now){
     const pct = Math.floor((uploadedBytes*100)/totalBytes);
     if(bar) bar.style.width = pct+'%';
@@ -928,40 +879,20 @@ async function manifestsUpload(){
     if(peakEl) peakEl.textContent = peakBps>0 ? ('пик '+formatSpeed(peakBps)) : '';
     if(etaEl) etaEl.textContent = eta>0 ? ('ETA '+formatEta(eta)) : '';
     if(inst>0){
-      // Keep raw points for median calc
+      // Keep raw points for median calc and for the chart
       speedPoints.push({t: now, bps: inst});
       const horizon = HORIZON_MS; // 120s window
       while(speedPoints.length>0 && (now - speedPoints[0].t) > horizon){ speedPoints.shift(); }
-      // Update uPlot if available
-      if (typeof uPlot !== 'undefined' && speedPlot) {
-        const nowSec = now/1000;
-        // append point
-        speedPlotData[0].push(nowSec);
-        speedPlotData[1].push(inst);
-        // trim by time horizon
-        const cutoffSec = nowSec - (horizon/1000);
-        let startIdx = 0;
-        while(startIdx < speedPlotData[0].length && speedPlotData[0][startIdx] < cutoffSec){ startIdx++; }
-        if(startIdx>0){
-          speedPlotData[0] = speedPlotData[0].slice(startIdx);
-          speedPlotData[1] = speedPlotData[1].slice(startIdx);
-        }
-        // Limit max points to avoid memory bloat
-        const MAX_PTS = 500;
-        if(speedPlotData[0].length > MAX_PTS){
-          const extra = speedPlotData[0].length - MAX_PTS;
-          speedPlotData[0].splice(0, extra);
-          speedPlotData[1].splice(0, extra);
-        }
-        try{ speedPlot.setData(speedPlotData); }catch{}
-      }
+    }
+    if(speedCanvas){
+      try{ drawSpeedChart(speedCanvas, speedPoints, { now, horizonMs: HORIZON_MS, peakBps, formatSpeed }); }catch(_){ }
     }
   }
   // See ui-throttle.js for why this goes through setTimeout instead of
   // requestAnimationFrame: rAF stops firing the moment this tab is
-  // backgrounded, which used to freeze the percentage, speed and the uPlot
-  // graph for the rest of a long upload — looking exactly like "the graph
-  // doesn't draw at all".
+  // backgrounded, which used to freeze the percentage, speed and the graph
+  // for the rest of a long upload — looking exactly like "the graph doesn't
+  // draw at all".
   const uiThrottle = makeUiThrottler(UI_INTERVAL, ()=> updateUI(performance.now()));
   function scheduleUI(){ uiThrottle.schedule(); }
 
@@ -2147,7 +2078,7 @@ async function upload(){
     let lastLoaded = 0;
     let avgSpeed = 0; // EMA
     const alpha = 0.2;
-    const UI_INTERVAL = 250; // ms
+    const UI_INTERVAL = 150; // ms — text-only, cheaper than the canvas chart above
     const uiState = { pct:0, loaded:0, total: file.size, speed:0, eta:0 };
     function applyUI(){
       if (bar) bar.style.width = uiState.pct + '%';
@@ -3241,7 +3172,6 @@ document.addEventListener('DOMContentLoaded', ()=>{
 // Здесь тоже только addEventListener и никаких инлайновых скриптов: CSP админки
 // не содержит 'unsafe-inline' в script-src.
 
-let __mxPlot = null;
 let __mxRO = null;
 let __mxGamesLoaded = false;
 let __mxInited = false;
@@ -3332,14 +3262,16 @@ function mxRenderDaysTable(byDay){
   ).join('');
 }
 
-// График по дням на том же uPlot, что и график скорости загрузки.
+// График по дням на том же canvas-модуле (line-chart.js), что и график
+// скорости загрузки (speed-chart.js) — оба заменили uPlot, который эта
+// страница грузила отдельным <script> с unpkg.com; см. комментарий в шапке
+// speed-chart.js про то, почему внешний CDN здесь больше не используется.
 // По оси X — индекс дня, подписи берутся из byDay: так не приходится
 // пересчитывать UTC-сутки в местные и объяснять сдвиг на границе дня.
 function mxRenderChart(byDay){
   const host = mxEl('mx_chart_host'); if(!host) return;
   const note = mxEl('mx_chart_note');
   if(__mxRO){ try{ __mxRO.disconnect(); }catch{ /* no-op */ } __mxRO = null; }
-  if(__mxPlot){ try{ __mxPlot.destroy(); }catch{ /* no-op */ } __mxPlot = null; }
   host.replaceChildren();
 
   if(!byDay || byDay.length===0){
@@ -3347,66 +3279,29 @@ function mxRenderChart(byDay){
     host.innerHTML = '<div class="text-body-secondary">Событий за период нет — рисовать нечего.</div>';
     return;
   }
-  if(!window.uPlot){
-    if(note) note.textContent = 'библиотека uPlot не загрузилась';
-    host.innerHTML = '<div class="alert alert-warning mb-0">График недоступен: uPlot не загрузился. Числа — в таблице ниже.</div>';
-    const det = mxEl('mx_days_details'); if(det) det.open = true;
-    return;
-  }
   if(note) note.textContent = byDay.length+' дн.';
 
+  const legendHost = document.createElement('div');
+  legendHost.className = 'small mb-2';
+  const canvas = document.createElement('canvas');
+  canvas.style.width = '100%';
+  canvas.style.height = '280px';
+  host.appendChild(legendHost);
+  host.appendChild(canvas);
+
   const xs = byDay.map((_, i)=> i);
-  const data = [
-    xs,
-    byDay.map(d=> Number(d.launcherStarts||0)),
-    byDay.map(d=> Number(d.installs||0)),
-    byDay.map(d=> Number(d.updates||0)),
-    byDay.map(d=> Number(d.gameLaunches||0)),
-    byDay.map(d=> Number(d.errors||0)),
+  const series = [
+    { label: 'Запуски лаунчера', color: '#0d6efd', values: byDay.map(d=> Number(d.launcherStarts||0)) },
+    { label: 'Установки', color: '#198754', values: byDay.map(d=> Number(d.installs||0)) },
+    { label: 'Обновления', color: '#0dcaf0', values: byDay.map(d=> Number(d.updates||0)) },
+    { label: 'Запуски игр', color: '#ffc107', values: byDay.map(d=> Number(d.gameLaunches||0)) },
+    { label: 'Ошибки', color: '#dc3545', values: byDay.map(d=> Number(d.errors||0)) },
   ];
-  const label = (v)=>{
-    const i = Math.round(v);
-    const d = byDay[i];
-    return d ? String(d.date||'').slice(5) : '';
-  };
-  const HEIGHT = 280;
-  const opts = {
-    width: host.clientWidth || 800,
-    height: HEIGHT,
-    cursor: { drag: { x: false, y: false } },
-    scales: { x: { time: false } },
-    legend: { show: true },
-    padding: [8, 12, 8, 8],
-    axes: [
-      { grid: { show: true, stroke: 'rgba(255,255,255,.12)', width: 1 },
-        ticks: { stroke: 'rgba(255,255,255,.25)', width: 1 },
-        stroke: '#adb5bd',
-        values: (u, vals)=> vals.map(label) },
-      { grid: { show: true, stroke: 'rgba(255,255,255,.12)', width: 1 },
-        ticks: { stroke: 'rgba(255,255,255,.25)', width: 1 },
-        stroke: '#adb5bd',
-        values: (u, vals)=> vals.map(v=> mxNum(v)) },
-    ],
-    series: [
-      { label: 'Дата (UTC)', value: (u, v)=> label(v) },
-      { label: 'Запуски лаунчера', stroke: '#0d6efd', width: 2 },
-      { label: 'Установки', stroke: '#198754', width: 2 },
-      { label: 'Обновления', stroke: '#0dcaf0', width: 2 },
-      { label: 'Запуски игр', stroke: '#ffc107', width: 2 },
-      { label: 'Ошибки', stroke: '#dc3545', width: 2 },
-    ],
-  };
-  try{
-    __mxPlot = new window.uPlot(opts, data, host);
-    __mxRO = new window.ResizeObserver(()=>{
-      try{ __mxPlot.setSize({ width: host.clientWidth || 800, height: HEIGHT }); }catch{ /* no-op */ }
-    });
-    __mxRO.observe(host);
-  }catch(e){
-    __mxPlot = null;
-    host.innerHTML = '<div class="alert alert-warning mb-0">Не удалось построить график: '+escapeHtml(String(e))+'. Числа — в таблице ниже.</div>';
-    const det = mxEl('mx_days_details'); if(det) det.open = true;
-  }
+  const xLabelFor = (i)=>{ const d = byDay[i]; return d ? String(d.date||'').slice(5) : ''; };
+  const render = ()=> drawMultiLineChart(canvas, xs, series, { xLabelFor, formatY: mxNum, legendHost });
+  render();
+  __mxRO = new window.ResizeObserver(render);
+  __mxRO.observe(host);
 }
 
 function mxRenderGames(byGame){

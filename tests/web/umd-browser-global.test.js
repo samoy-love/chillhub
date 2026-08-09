@@ -1,5 +1,6 @@
-// Проверяет, что upload-bench.js и ui-throttle.js реально работают в том
-// режиме, для которого их UMD-обёртка и написана: как обычный <script> в
+// Проверяет, что upload-bench.js, ui-throttle.js и speed-chart.js реально
+// работают в том режиме, для которого их UMD-обёртка и написана: как обычный
+// <script> в
 // браузере, без CommonJS. require() в остальных tests/web/*.test.js всегда
 // идёт по ветке `module.exports` и никогда не исполняет `Object.assign(root,
 // factory())` — этот тест исполняет исходники в vm-контексте без `module`,
@@ -48,4 +49,23 @@ test('ui-throttle.js в браузерном режиме кладёт makeUiThr
   });
   schedule();
   assert.strictEqual(runs, 1);
+});
+
+test('speed-chart.js в браузерном режиме кладёт функции графика в window', () => {
+  const w = loadAsBrowserScript('server/admin_ui/speed-chart.js');
+  assert.strictEqual(typeof w.mapPointsToPixels, 'function');
+  assert.strictEqual(typeof w.drawSpeedChart, 'function');
+  assert.deepStrictEqual(
+    Array.from(w.mapPointsToPixels([{ t: 0, bps: 1 }], { width: 10, height: 10, padding: 0, horizonMs: 1000, now: 0 })).length,
+    1
+  );
+});
+
+test('line-chart.js в браузерном режиме кладёт функции графика в window', () => {
+  const w = loadAsBrowserScript('server/admin_ui/line-chart.js');
+  assert.strictEqual(typeof w.mapSeriesToPixels, 'function');
+  assert.strictEqual(typeof w.drawMultiLineChart, 'function');
+  const px = w.mapSeriesToPixels([{ values: [1, 2] }], { width: 10, height: 10, padding: { left: 0, right: 0, top: 0, bottom: 0 } });
+  assert.strictEqual(Array.from(px).length, 1);
+  assert.strictEqual(Array.from(px[0]).length, 2);
 });
