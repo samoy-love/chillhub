@@ -900,7 +900,16 @@ async function manifestsUpload(){
       }
     }
   }
-  function scheduleUI(){ const now=performance.now(); if(now-lastUiTs<UI_INTERVAL) return; lastUiTs=now; if(uiScheduled) return; uiScheduled=true; requestAnimationFrame(()=>{ uiScheduled=false; updateUI(performance.now()); }); }
+  // requestAnimationFrame stops firing the moment this tab loses focus or is
+  // backgrounded — Chrome/Firefox both suspend it at 0 fps for hidden tabs.
+  // A multi-gigabyte build upload can run for many minutes, long enough that
+  // an admin switches tabs while waiting, and rAF-only scheduling then freezes
+  // the percentage, speed and the uPlot graph until the tab is refocused —
+  // which looks exactly like "the graph doesn't draw at all". setTimeout keeps
+  // firing (throttled, but never stopped) in background tabs, so it is used
+  // here instead; on a focused tab the UI_INTERVAL cap makes the two behave
+  // identically.
+  function scheduleUI(){ const now=performance.now(); if(now-lastUiTs<UI_INTERVAL) return; lastUiTs=now; if(uiScheduled) return; uiScheduled=true; setTimeout(()=>{ uiScheduled=false; updateUI(performance.now()); }, 0); }
 
   let active = 0;
   const win = []; // recent writeMs per chunk
@@ -950,7 +959,13 @@ async function manifestsUpload(){
     await new Promise(res=> setTimeout(res, 200));
     if(failed) break;
   }
-  
+  // Force one final, unthrottled UI sync: on a fast link (or a small build) the
+  // whole chunk phase can finish inside a single UI_INTERVAL window, so the
+  // scheduled updateUI() from the last chunk may never have run yet. Without
+  // this, the bar/graph can sit at their pre-upload state through the entire
+  // complete+process phase, which reads the same as the frozen-graph bug above.
+  updateUI(performance.now());
+
   // Retry pass for failed chunks (if any)
   if(!failed && failedChunks.length>0){
     console.group('[retry pass] re-upload failed chunks');
@@ -2090,12 +2105,15 @@ async function upload(){
         txt.textContent = 'Загружено ' + uiState.pct + '% (' + formatBytes(uiState.loaded) + ' / ' + formatBytes(uiState.total) + ')' + speedStr + etaStr;
       }
     }
+    // See the comment on the game-upload scheduleUI() above: requestAnimationFrame
+    // stops firing entirely in a backgrounded tab, freezing this progress line for
+    // the rest of a long upload. setTimeout keeps going (throttled, not stopped).
     function scheduleUI(nowMs){
       if (uiScheduled) return;
       if (nowMs - lastUiTs < UI_INTERVAL) return;
       uiScheduled = true;
       lastUiTs = nowMs;
-      requestAnimationFrame(()=>{ uiScheduled = false; applyUI(); });
+      setTimeout(()=>{ uiScheduled = false; applyUI(); }, 0);
     }
     xhr.upload.onprogress = (e)=>{
       if(!e.lengthComputable) return;
