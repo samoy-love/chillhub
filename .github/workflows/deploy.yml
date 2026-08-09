@@ -277,6 +277,44 @@ jobs:
             BASE=HEAD^
           fi
 
+          # ЖИВОЙ ПРОД РАСШИРЯЕТ ДИАПАЗОН, А НЕ ЗАМЕНЯЕТ ЕГО.
+          #
+          # BEFORE годится только пока прогоны не отменяются очередью. На группу
+          # concurrency у GitHub — ровно одна ожидающая задача: катится A, ждёт B,
+          # приходит C — B отменяется целиком, C увидит event.before только от
+          # своего пуша и про файлы, задетые ТОЛЬКО прогоном B, не узнает никогда.
+          # Та же болезнь уже была у списка изменений и лечится тем же приёмом
+          # (deploy-kit/.github/workflows/static-site.yml, шаг «Собрать список
+          # изменений»): точка отсчёта — коммит, который РЕАЛЬНО стоит на проде, а
+          # не то, что было до этого пуша.
+          #
+          # У `changes` диапазон один на все пять целей, а живой коммит есть не у
+          # каждой (WRITE_VERSION_FILE=0 — version.json не раздаётся, это законная
+          # норма, а не поломка). Поэтому берём САМЫЙ СТАРЫЙ живой коммит среди
+          # целей, у которых VERSION_URL вообще есть: это надмножество диапазона,
+          # который нужен любой отдельной цели, а цена ошибки в эту сторону —
+          # лишний прогон гейтов, не недокат. Цели без VERSION_URL остаются на
+          # диапазоне пуша — не тихо, см. warning ниже.
+          LIVE_BASE=""
+          for ENV in .deploy-kit/site.env .deploy-kit/api.env .deploy-kit/admin.env .deploy-kit/admin-ui.env; do
+            [ -f "$ENV" ] || continue
+            VURL=$(sed -n 's/^VERSION_URL=//p' "$ENV" | head -1)
+            [ -n "$VURL" ] || continue
+            VJ=$(curl -fsS --max-time 10 "$VURL" 2>/dev/null | tr ',' '\n')
+            COMMIT=$(printf '%s\n' "$VJ" | sed -n 's/.*"commit"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+            if [ -z "$COMMIT" ] || ! git cat-file -e "$COMMIT^{commit}" 2>/dev/null; then
+              echo "::warning::$ENV — прод не сказал, что на нём стоит (нет ответа или version.json без commit) — эта цель подстрахована только диапазоном пуша"
+              continue
+            fi
+            if [ -z "$LIVE_BASE" ] || git merge-base --is-ancestor "$COMMIT" "$LIVE_BASE" 2>/dev/null; then
+              LIVE_BASE="$COMMIT"
+            fi
+          done
+          if [ -n "$LIVE_BASE" ] && git merge-base --is-ancestor "$LIVE_BASE" "$BASE" 2>/dev/null; then
+            echo "живой прод старше диапазона пуша ($LIVE_BASE) — беру его точкой отсчёта"
+            BASE="$LIVE_BASE"
+          fi
+
           # Первый коммит в истории (или ветка без родителя после force-push):
           # сравнивать не с чем. Не «ничего не менялось», а «менялось всё» —
           # пустой вывод здесь означал бы тихий пропуск всех четырёх целей.
