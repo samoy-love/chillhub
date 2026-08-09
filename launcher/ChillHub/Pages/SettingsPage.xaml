@@ -29,8 +29,11 @@
       </Button>
     </Grid>
 
-    <!-- Content -->
-    <StackPanel Grid.Row="1" Orientation="Vertical" VerticalAlignment="Top">
+    <!-- Content. Обёрнуто в ScrollViewer: карточек шесть, и на невысоком окне
+         они не влезают по вертикали — без прокрутки «Конфиденциальность» и всё,
+         что ниже, просто обрезалось по низу страницы. -->
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <StackPanel Orientation="Vertical" VerticalAlignment="Top">
       <!-- Thin divider under header -->
       <Border Height="1" Background="{DynamicResource Brush.Border}" Margin="0,0,0,14"/>
       <!-- Storage section -->
@@ -185,6 +188,7 @@
         </Grid>
       </Border>
     </StackPanel>
+    </ScrollViewer>
 
     <!-- Footer actions -->
     <Grid Grid.Row="2" Margin="0,16,0,0">
