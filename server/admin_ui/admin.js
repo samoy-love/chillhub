@@ -911,7 +911,7 @@ async function manifestsUpload(){
   let curPar = Math.max(1, Math.min(100, userPar));
   console.log('[resume] already have', received.size, 'chunks; scheduling', allIdx.length, 'chunks; chunkSize=', chunkSize, 'startPar=', curPar);
 
-  const t0 = performance.now(); let lastT = t0; let lastLoaded = uploadedBytes; let avgSpeed = 0; const alpha = 0.2; const UI_INTERVAL=500; let lastUiTs=0, uiScheduled=false;
+  const t0 = performance.now(); let lastT = t0; let lastLoaded = uploadedBytes; let avgSpeed = 0; const alpha = 0.2; const UI_INTERVAL=500;
   function updateUI(now){
     const pct = Math.floor((uploadedBytes*100)/totalBytes);
     if(bar) bar.style.width = pct+'%';
@@ -957,16 +957,13 @@ async function manifestsUpload(){
       }
     }
   }
-  // requestAnimationFrame stops firing the moment this tab loses focus or is
-  // backgrounded — Chrome/Firefox both suspend it at 0 fps for hidden tabs.
-  // A multi-gigabyte build upload can run for many minutes, long enough that
-  // an admin switches tabs while waiting, and rAF-only scheduling then freezes
-  // the percentage, speed and the uPlot graph until the tab is refocused —
-  // which looks exactly like "the graph doesn't draw at all". setTimeout keeps
-  // firing (throttled, but never stopped) in background tabs, so it is used
-  // here instead; on a focused tab the UI_INTERVAL cap makes the two behave
-  // identically.
-  function scheduleUI(){ const now=performance.now(); if(now-lastUiTs<UI_INTERVAL) return; lastUiTs=now; if(uiScheduled) return; uiScheduled=true; setTimeout(()=>{ uiScheduled=false; updateUI(performance.now()); }, 0); }
+  // See ui-throttle.js for why this goes through setTimeout instead of
+  // requestAnimationFrame: rAF stops firing the moment this tab is
+  // backgrounded, which used to freeze the percentage, speed and the uPlot
+  // graph for the rest of a long upload — looking exactly like "the graph
+  // doesn't draw at all".
+  const uiThrottle = makeUiThrottler(UI_INTERVAL, ()=> updateUI(performance.now()));
+  function scheduleUI(){ uiThrottle.schedule(); }
 
   let active = 0;
   const win = []; // recent writeMs per chunk
@@ -2151,27 +2148,20 @@ async function upload(){
     let avgSpeed = 0; // EMA
     const alpha = 0.2;
     const UI_INTERVAL = 250; // ms
-    let lastUiTs = 0;
-    let uiScheduled = false;
     const uiState = { pct:0, loaded:0, total: file.size, speed:0, eta:0 };
     function applyUI(){
       if (bar) bar.style.width = uiState.pct + '%';
       if (txt) {
-        const speedStr = uiState.speed > 0 ? (' \u2022 ' + formatSpeed(uiState.speed)) : '';
-        const etaStr = uiState.eta > 0 ? (' \u2022 ETA ' + formatEta(uiState.eta)) : '';
+        const speedStr = uiState.speed > 0 ? (' • ' + formatSpeed(uiState.speed)) : '';
+        const etaStr = uiState.eta > 0 ? (' • ETA ' + formatEta(uiState.eta)) : '';
         txt.textContent = 'Загружено ' + uiState.pct + '% (' + formatBytes(uiState.loaded) + ' / ' + formatBytes(uiState.total) + ')' + speedStr + etaStr;
       }
     }
-    // See the comment on the game-upload scheduleUI() above: requestAnimationFrame
-    // stops firing entirely in a backgrounded tab, freezing this progress line for
-    // the rest of a long upload. setTimeout keeps going (throttled, not stopped).
-    function scheduleUI(nowMs){
-      if (uiScheduled) return;
-      if (nowMs - lastUiTs < UI_INTERVAL) return;
-      uiScheduled = true;
-      lastUiTs = nowMs;
-      setTimeout(()=>{ uiScheduled = false; applyUI(); }, 0);
-    }
+    // See ui-throttle.js for why this goes through setTimeout instead of
+    // requestAnimationFrame — rAF stops firing entirely in a backgrounded tab,
+    // which used to freeze this progress line for the rest of a long upload.
+    const uiThrottle = makeUiThrottler(UI_INTERVAL, applyUI);
+    function scheduleUI(){ uiThrottle.schedule(); }
     xhr.upload.onprogress = (e)=>{
       if(!e.lengthComputable) return;
       const now = performance.now();
@@ -2186,7 +2176,7 @@ async function upload(){
       uiState.loaded = e.loaded;
       uiState.speed = avgSpeed;
       uiState.eta = eta;
-      scheduleUI(now);
+      scheduleUI();
     };
 
     // Streaming NDJSON parsing from response (throttled & capped)
