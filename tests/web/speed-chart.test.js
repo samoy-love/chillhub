@@ -7,7 +7,23 @@ const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 
-const { mapPointsToPixels, drawSpeedChart } = require(path.join('..', '..', 'server', 'admin_ui', 'speed-chart.js'));
+const { mapPointsToPixels, drawSpeedChart, formatAge } = require(path.join('..', '..', 'server', 'admin_ui', 'speed-chart.js'));
+
+test('mapPointsToPixels принимает раздельные отступы по сторонам', () => {
+  const now = 0;
+  const points = [{ t: 0, bps: 5 }];
+  const px = mapPointsToPixels(points, { width: 100, height: 100, padding: { left: 50, right: 0, top: 0, bottom: 0 }, horizonMs: 1000, now, maxBps: 10 });
+  // Точка "сейчас" должна быть у правого края (width), независимо от левого отступа.
+  assert.ok(px[0].x > 90, 'левый отступ не должен сдвигать точку "сейчас": x=' + px[0].x);
+});
+
+test('formatAge форматирует секунды и минуты', () => {
+  assert.strictEqual(formatAge(5000), '5с');
+  assert.strictEqual(formatAge(59000), '59с');
+  assert.strictEqual(formatAge(60000), '1м');
+  assert.strictEqual(formatAge(90000), '1м 30с');
+  assert.strictEqual(formatAge(120000), '2м');
+});
 
 test('mapPointsToPixels отбрасывает точки старше horizonMs', () => {
   const now = 100000;
@@ -74,6 +90,8 @@ function fakeCanvas(width, height) {
     set strokeStyle(v) { calls.push(['strokeStyle', v]); },
     set lineWidth(v) { calls.push(['lineWidth', v]); },
     set font(v) { calls.push(['font', v]); },
+    set textAlign(v) { calls.push(['textAlign', v]); },
+    set textBaseline(v) { calls.push(['textBaseline', v]); },
   };
   return {
     calls,
@@ -114,4 +132,26 @@ test('drawSpeedChart подписывает пик, если передан form
   const canvas = fakeCanvas(200, 100);
   drawSpeedChart(canvas, [{ t: 0, bps: 5_000_000 }], { now: 0, formatSpeed: (v) => v + ' B/s' });
   assert.ok(canvas.calls.some(c => c[0] === 'fillText' && String(c[1]).includes('B/s')));
+});
+
+test('drawSpeedChart подписывает три деления оси скорости слева', () => {
+  const canvas = fakeCanvas(200, 100);
+  drawSpeedChart(canvas, [{ t: 0, bps: 100 }], { now: 0, formatSpeed: (v) => Math.round(v) + 'bps' });
+  // x=2 — фиксированная колонка подписей оси Y (см. fillText(..., 2, y) в реализации).
+  const yLabels = canvas.calls.filter(c => c[0] === 'fillText' && c[2] === 2);
+  assert.strictEqual(yLabels.length, 3, 'ожидались подписи для верха/середины/низа оси Y: ' + JSON.stringify(yLabels));
+  assert.ok(yLabels.some(c => c[1] === '100bps'), 'верхняя подпись — максимум');
+  // Ноль — литерал "0", а не formatSpeed(0): у formatSpeed из admin.js есть
+  // отдельная семантика "скорость ещё не измерена" -> '', которая на оси
+  // читалась бы как пустая подпись, а не как честный ноль.
+  assert.ok(yLabels.some(c => c[1] === '0'), 'нижняя подпись — явный ноль, не formatSpeed(0)');
+});
+
+test('drawSpeedChart подписывает три деления оси времени снизу', () => {
+  const canvas = fakeCanvas(200, 100);
+  drawSpeedChart(canvas, [{ t: 900000, bps: 10 }], { now: 900000, horizonMs: 60000 });
+  const xLabels = canvas.calls.filter(c => c[0] === 'fillText' && (String(c[1]).includes('назад') || c[1] === 'сейчас'));
+  assert.strictEqual(xLabels.length, 3, 'ожидались подписи горизонта/середины/сейчас: ' + JSON.stringify(xLabels));
+  assert.ok(xLabels.some(c => c[1] === 'сейчас'));
+  assert.ok(xLabels.some(c => c[1] === '1м назад'));
 });
