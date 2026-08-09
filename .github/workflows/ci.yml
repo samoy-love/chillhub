@@ -659,3 +659,52 @@ jobs:
           fi
 
           echo "OK: $DECLARED > $LIVE"
+
+  # Переименование или слияние задачи CI не красит сам прогон в красный —
+  # красной становится защита ветки main, и не сразу, а на СЛЕДУЮЩЕМ PR: она
+  # хранит старое имя задачи и ждёт его вечно, а кнопка "Merge" просто
+  # неактивна без единого объяснения почему. Правится руками в
+  # Settings → Branches, но руками же и забывается при очередном
+  # переименовании job'ы.
+  #
+  # GITHUB_TOKEN для чтения защиты ветки не годится: у него нет permission
+  # scope "administration" (полный список — actions, artifact-metadata,
+  # attestations, checks, contents, deployments, discussions, id-token,
+  # issues, models, packages, pages, pull-requests, repository-projects,
+  # security-events, statuses). Поэтому нужен secrets.PROTECTION_READ_TOKEN —
+  # fine-grained PAT с правами Administration: Read-only (список обязательных
+  # проверок) и Actions: Read-only (список задач текущего прогона), заведённый
+  # вручную в настройках репозитория. Токен передаётся только этому шагу.
+  protection-sync:
+    name: Защита ветки соответствует задачам CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # needs — не про очерёдность результата, а про то, что видит Jobs API.
+    # GitHub регистрирует задачу с зависимостями в API прогона только когда
+    # её needs выполнены и она реально стартовала — без needs эта задача
+    # финиширует за секунды и застаёт API в момент, когда половина остальных
+    # задач ещё не создана, а не пропущена. Итог — те же ложные "пропала
+    # проверка", от которых задача должна защищать.
+    needs:
+      - commits
+      - deploy-paths
+      - htmlhint-web
+      - stylelint-web
+      - eslint-web
+      - web-tests
+      - go-lint
+      - vuln-scan
+      - dotnet-lint
+      - format
+      - installer-windows
+      - coverage-launcher
+      - launcher-version-bump
+    if: always()
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Сверить задачи с обязательными проверками main
+        env:
+          GH_TOKEN: ${{ secrets.PROTECTION_READ_TOKEN }}
+          SELF_JOB_NAME: Защита ветки соответствует задачам CI
+        run: bash ci/branch-protection-check.sh
