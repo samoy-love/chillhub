@@ -318,6 +318,39 @@ func TestUploadInitForcesTheLauncherGameID(t *testing.T) {
 	}
 }
 
+// The benchmark tool allocates and discards many throwaway uploadIds in a row;
+// abort must remove the upload directory immediately rather than waiting for
+// UploadCleanup's hourly idle grace, or a run of the bench tool would strand a
+// full preallocated part file per candidate (chunkSize, concurrency) pair.
+func TestUploadAbortRemovesTheUploadImmediately(t *testing.T) {
+	h, _ := adminHandlers(t)
+	id, _ := initUpload(t, h, `{"kind":"game","gameId":"g","version":"1.0.0","totalSize":1048576}`)
+	if _, err := os.Stat(h.uploadDir(id)); err != nil {
+		t.Fatalf("upload dir missing right after init: %v", err)
+	}
+	w := httptest.NewRecorder()
+	h.UploadAbort(w, httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/upload/abort?uploadId="+id, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("abort failed: %d %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(h.uploadDir(id)); !os.IsNotExist(err) {
+		t.Fatalf("upload dir still present after abort: err=%v", err)
+	}
+}
+
+func TestUploadAbortRejectsGET(t *testing.T) {
+	h, _ := adminHandlers(t)
+	id, _ := initUpload(t, h, `{"kind":"game","gameId":"g","version":"1.0.0","totalSize":1024}`)
+	w := httptest.NewRecorder()
+	h.UploadAbort(w, httptest.NewRequest(http.MethodGet, "http://example.com/admin/api/upload/abort?uploadId="+id, nil))
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET abort = %d, want 405", w.Code)
+	}
+	if _, err := os.Stat(h.uploadDir(id)); err != nil {
+		t.Fatalf("GET must not remove the upload: %v", err)
+	}
+}
+
 // Every chunked endpoint runs behind an nginx location that bypasses
 // auth_request, so the only authentication these handlers get is their own. A
 // gap here is an unauthenticated write into the content root.
@@ -331,6 +364,7 @@ func TestChunkedEndpointsRequireAuth(t *testing.T) {
 		"complete": h.UploadComplete,
 		"process":  h.UploadProcessStream,
 		"cleanup":  h.UploadCleanup,
+		"abort":    h.UploadAbort,
 		"stream":   h.UploadStream,
 	}
 	for name, fn := range calls {

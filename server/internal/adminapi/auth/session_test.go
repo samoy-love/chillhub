@@ -645,6 +645,7 @@ var nginxAuthRequestBypassed = []string{
 	"/admin/api/upload/complete",
 	"/admin/api/upload/process",
 	"/admin/api/upload/cleanup",
+	"/admin/api/upload/abort",
 }
 
 func TestUploadRoutesBypassingNginxAuthAreStillGuardedByMiddleware(t *testing.T) {

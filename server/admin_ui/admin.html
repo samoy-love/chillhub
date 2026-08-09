@@ -490,6 +490,33 @@
               </div>
             </div>
             <div class="card mt-3">
+              <div class="card-header">Тест параметров загрузки (подбор размера чанка и параллельности)</div>
+              <div class="card-body d-flex flex-column gap-2">
+                <div class="small text-body-secondary">
+                  Загружает пробный кусок выбранного файла с каждой комбинацией «размер чанка × параллельность» на сервер и
+                  сразу отбрасывает загруженное (<code>/admin/api/upload/abort</code>), не создавая версию и не трогая манифесты.
+                </div>
+                <div class="d-flex flex-wrap align-items-end gap-2">
+                  <label class="me-2">Файл: <input id="bench_zip" type="file"></label>
+                  <label class="me-2">Проба, МБ: <input id="bench_probe_mb" type="number" min="1" value="256" style="width:90px"></label>
+                  <label class="me-2">Чанки, МБ (через запятую): <input id="bench_chunks_mb" value="4,8,16,32,64" style="width:160px"></label>
+                  <label class="me-2">Параллельность (через запятую): <input id="bench_concs" value="2,6,12,24,48" style="width:160px"></label>
+                  <button type="button" id="bench_run" class="btn btn-sm btn-primary">Запустить тест</button>
+                </div>
+                <div class="small text-body-secondary" id="bench_status"></div>
+                <div class="table-responsive">
+                  <table class="table table-dark table-striped align-middle table-sm" id="bench_table" style="display:none">
+                    <thead><tr><th>Чанк</th><th>Параллельность</th><th>Скорость</th><th>Время</th></tr></thead>
+                    <tbody id="bench_tbody"></tbody>
+                  </table>
+                </div>
+                <div class="d-flex gap-2" id="bench_apply_wrap" style="display:none">
+                  <span class="small text-body-secondary align-self-center">Лучшая комбинация: <b id="bench_best"></b></span>
+                  <button type="button" id="bench_apply_game" class="btn btn-sm btn-outline-primary">Применить к загрузке игры</button>
+                </div>
+              </div>
+            </div>
+            <div class="card mt-3">
               <div class="card-header d-flex align-items-center justify-content-between">
                 <span>Версии игры</span>
                 <button type="button" id="btnList" class="btn btn-sm btn-outline-secondary">Обновить список</button>

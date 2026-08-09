@@ -574,6 +574,35 @@ func (h *Handlers) UploadStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// UploadAbort discards an in-progress chunked upload immediately, without
+// waiting for the idle grace that UploadCleanup applies to abandoned ones.
+// It exists for callers that know for certain the upload is disposable right
+// now, such as the admin panel's parameter-benchmark tool, which allocates
+// throwaway uploadIds by the dozen and must not leave gigabytes of
+// preallocated part files sitting until the hourly reaper gets to them.
+func (h *Handlers) UploadAbort(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !h.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	id, ok := uploadID(r)
+	if !ok {
+		http.Error(w, "missing id", http.StatusBadRequest)
+		return
+	}
+	if err := os.RemoveAll(h.uploadDir(id)); err != nil {
+		log.Printf("[upload:abort] uploadId=%s failed to remove: %v", id, err)
+		http.Error(w, "abort failed", http.StatusInternalServerError)
+		return
+	}
+	linfof(id, "abort ok")
+	adminutil.WriteJSON(w, map[string]any{"status": "ok"})
+}
+
 // UploadComplete verifies the assembled part file and renames it to upload.zip.
 func (h *Handlers) UploadComplete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

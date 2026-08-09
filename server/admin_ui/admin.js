@@ -737,6 +737,110 @@ async function manifestsReload(){
   });
 }
 
+// benchUploadOnce measures raw chunk-upload throughput for one (chunkSize,
+// concurrency) pair against a probe slice of `file` (not the whole file — a
+// grid of combinations would otherwise re-upload the entire archive once per
+// cell). It never calls complete/process, so no version or manifest is ever
+// created; the throwaway upload is dropped immediately via /admin/api/upload/abort
+// instead of waiting for the hourly janitor (UploadCleanup) to reap it.
+async function benchUploadOnce(file, chunkSizeMB, conc, probeBytes){
+  const desiredChunk = Math.max(1, Math.round(chunkSizeMB*1024*1024));
+  const totalSize = Math.max(desiredChunk, Math.min(probeBytes, file.size));
+  const probeName = 'bench-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2, 8);
+  let initRes;
+  try{
+    initRes = await fetch('/admin/api/upload/init', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({
+      kind:'game', gameId:'bench', version: probeName, zipName:'bench.bin', totalSize, chunkSize: desiredChunk
+    }) });
+  }catch(e){ return { ok:false, error: String(e) }; }
+  if(!initRes.ok){ return { ok:false, error: 'HTTP '+initRes.status+' init' }; }
+  const init = await initRes.json();
+  const uploadId = init.uploadId;
+  const chunkSize = init.chunkSize || desiredChunk;
+  const totalChunks = init.totalChunks || Math.ceil(totalSize/chunkSize);
+  const idxs = []; for(let i=0;i<totalChunks;i++) idxs.push(i);
+  let ptr = 0, active = 0, uploadedBytes = 0, failed = false;
+  const t0 = performance.now();
+  await new Promise((resolve)=>{
+    function next(){
+      if(failed){ if(active===0) resolve(); return; }
+      if(ptr >= idxs.length){ if(active===0) resolve(); return; }
+      const i = idxs[ptr++];
+      active++;
+      const start = i*chunkSize; const end = Math.min(start+chunkSize, totalSize);
+      const blob = file.slice(start, end);
+      fetch('/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+i, { method:'PUT', body: blob })
+        .then(r=>{ if(r.ok){ uploadedBytes += (end-start); } else { failed = true; } })
+        .catch(()=>{ failed = true; })
+        .finally(()=>{ active--; if(!failed && ptr < idxs.length) next(); else if(active===0) resolve(); });
+    }
+    for(let j=0;j<Math.min(conc, idxs.length); j++) next();
+  });
+  const elapsedSec = Math.max(0.001, (performance.now()-t0)/1000);
+  try{ await fetch('/admin/api/upload/abort?uploadId='+encodeURIComponent(uploadId), { method:'POST' }); }catch(_){ }
+  if(failed || uploadedBytes<=0){ return { ok:false, error:'upload failed' }; }
+  return { ok:true, chunkSize, concurrency: conc, bytes: uploadedBytes, seconds: elapsedSec, speed: uploadedBytes/elapsedSec };
+}
+
+function parseBenchList(input, scale){
+  return String(input||'').split(',').map(s=> s.trim()).filter(Boolean)
+    .map(s=> Number(s)*scale).filter(n=> Number.isFinite(n) && n>0);
+}
+
+async function runUploadBench(){
+  const file = document.getElementById('bench_zip')?.files?.[0];
+  if(!file){ notify('Выберите файл для теста'); return; }
+  const probeMB = Number(document.getElementById('bench_probe_mb')?.value||256)||256;
+  const probeBytes = Math.max(1, probeMB)*1024*1024;
+  const chunkSizesMB = parseBenchList(document.getElementById('bench_chunks_mb')?.value, 1);
+  const concs = parseBenchList(document.getElementById('bench_concs')?.value, 1).map(n=> Math.max(1, Math.min(100, Math.round(n))));
+  if(!chunkSizesMB.length || !concs.length){ notify('Укажите хотя бы один размер чанка и одну параллельность'); return; }
+  const statusEl = document.getElementById('bench_status');
+  const table = document.getElementById('bench_table'); const tbody = document.getElementById('bench_tbody');
+  const applyWrap = document.getElementById('bench_apply_wrap'); const bestEl = document.getElementById('bench_best');
+  if(table) table.style.display='table'; if(applyWrap) applyWrap.style.display='none';
+  if(tbody) tbody.innerHTML='';
+  const combos = [];
+  for(const cs of chunkSizesMB){ for(const c of concs){ combos.push({cs, c}); } }
+  const results = [];
+  for(let i=0;i<combos.length;i++){
+    const {cs, c} = combos[i];
+    if(statusEl) statusEl.textContent = 'Тест '+(i+1)+'/'+combos.length+': чанк '+cs+' МБ, параллельность '+c+'...';
+    const r = await benchUploadOnce(file, cs, c, probeBytes);
+    const row = document.createElement('tr');
+    if(r.ok){
+      results.push(r);
+      row.innerHTML = '<td>'+formatBytes(r.chunkSize)+'</td><td>'+r.concurrency+'</td><td>'+formatSpeed(r.speed)+'</td><td>'+r.seconds.toFixed(2)+' c</td>';
+    } else {
+      row.innerHTML = '<td>'+cs+' МБ</td><td>'+c+'</td><td colspan="2" class="text-danger">'+(r.error||'ошибка')+'</td>';
+    }
+    if(tbody) tbody.appendChild(row);
+  }
+  if(statusEl) statusEl.textContent = 'Готово. Проверено комбинаций: '+combos.length+', успешно: '+results.length+'.';
+  if(results.length){
+    results.sort((a,b)=> b.speed - a.speed);
+    const best = results[0];
+    window.__benchBest = best;
+    if(bestEl) bestEl.textContent = formatBytes(best.chunkSize)+' / '+best.concurrency+' поток(ов) — '+formatSpeed(best.speed);
+    if(applyWrap) applyWrap.style.display='flex';
+  }
+}
+
+function applyBenchBest(chunkSelId, concSliderId, concValId){
+  const best = window.__benchBest; if(!best){ notify('Сначала запустите тест'); return; }
+  const sel = document.getElementById(chunkSelId);
+  if(sel){
+    // Pick the closest available option to the measured optimal chunk size.
+    let bestOpt = null, bestDiff = Infinity;
+    for(const opt of sel.options){ const v = Number(opt.value)||0; const diff = Math.abs(v - best.chunkSize); if(diff < bestDiff){ bestDiff = diff; bestOpt = opt; } }
+    if(bestOpt) sel.value = bestOpt.value;
+  }
+  const slider = document.getElementById(concSliderId); const val = document.getElementById(concValId);
+  if(slider){ slider.value = String(Math.max(1, Math.min(100, best.concurrency))); slider.dispatchEvent(new Event('input')); }
+  if(val) val.textContent = slider ? slider.value : String(best.concurrency);
+  notify('Параметры применены: '+formatBytes(best.chunkSize)+' / '+best.concurrency+' поток(ов)');
+}
+
 async function manifestsUpload(){
   const gid = (document.getElementById('gid')?.value||'').trim();
   const ver = (document.getElementById('ver')?.value||'').trim();
@@ -2218,6 +2322,8 @@ function bindBusyClick(id, fn, busyText){
 bindBusyClick('btnUpload', upload, 'Загрузка...');
 // Manifests wiring
 bindBusyClick('man_upload', manifestsUpload, 'Загрузка...');
+bindBusyClick('bench_run', runUploadBench, 'Тестирование...');
+(()=>{ const b = document.getElementById('bench_apply_game'); if(b) b.addEventListener('click', ()=> applyBenchBest('man_chunk_size','man_conc','man_conc_val')); })();
 // Show live value for concurrency slider
 (()=>{ const s = document.getElementById('man_conc'); const v = document.getElementById('man_conc_val'); if(s&&v){ v.textContent = String(s.value||'6'); s.addEventListener('input', ()=>{ v.textContent = String(s.value||'6'); }); }})();
 // Cleanup button
