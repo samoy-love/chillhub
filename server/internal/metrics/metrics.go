@@ -239,12 +239,14 @@ func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxBodyBytes)).Decode(&in); err != nil {
 		h.Prom.Reject("bad_body")
+		log.Printf("[metrics] reject bad_body: %v", err)
 		http.Error(w, "invalid json body", http.StatusBadRequest)
 		return
 	}
 	kind := strings.ToLower(clamp(in.Event, 40))
 	if !eventKinds[kind] {
 		h.Prom.Reject("unknown_event")
+		log.Printf("[metrics] reject unknown_event: %q", kind)
 		http.Error(w, "unknown event", http.StatusBadRequest)
 		return
 	}
@@ -260,6 +262,7 @@ func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
 	gameID := clamp(in.GameID, maxGameID)
 	if !h.gameIDOK(gameID) {
 		h.Prom.Reject("unknown_game")
+		log.Printf("[metrics] reject unknown_game: %q", gameID)
 		http.Error(w, "unknown game", http.StatusBadRequest)
 		return
 	}
