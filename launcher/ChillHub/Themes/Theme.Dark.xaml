@@ -198,6 +198,14 @@
     </Style.Triggers>
   </Style>
 
+  <!-- Гасит системную пунктирную рамку фокуса по Tab на элементах, у которых нет
+       своего implicit-стиля ниже. Button/TextBox/ComboBox и остальные со своим
+       стилем это правило не увидят — им та же настройка проставлена в их
+       собственных стилях; здесь — страховка для всего, что появится позже. -->
+  <Style TargetType="Control">
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+  </Style>
+
   <!-- Window/Page background -->
   <Style TargetType="Window">
     <Setter Property="Background" Value="{DynamicResource Brush.Background}"/>
@@ -216,6 +224,11 @@
     <Setter Property="Margin" Value="0,0,8,0"/>
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="SnapsToDevicePixels" Value="True"/>
+    <!-- Кнопки — единственный часто табаемый элемент, у которого не было своего
+         шаблона: остальные (TextBox, ComboBox, ListBox…) уже гасят рамку ниже
+         по файлу, а Button рисовал системный пунктирный прямоугольник поверх
+         тёмной темы. -->
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Button">
@@ -285,6 +298,7 @@
     <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Padding" Value="8,6"/>
     <Setter Property="Margin" Value="0,0,8,0"/>
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
   </Style>
   <Style TargetType="ComboBox">
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
