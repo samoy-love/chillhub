@@ -370,45 +370,6 @@
       </Setter>
     </Style>
 
-    <!-- Local button styles for Feedback modal (match UpdateWindow styles) -->
-    <!-- Accent gradient like in UpdateWindow for primary action -->
-    <LinearGradientBrush x:Key="Brush.AccentGradientPrimary" StartPoint="0,0" EndPoint="1,1">
-      <GradientStop Offset="0" Color="#3A2966"/>
-      <GradientStop Offset="1" Color="#8A2A4A"/>
-    </LinearGradientBrush>
-    <!-- Hover/pressed helpers (fallbacks if not defined globally) -->
-    <SolidColorBrush x:Key="Brush.Accent" Color="#6F3AFF"/>
-    <SolidColorBrush x:Key="Brush.AccentHover" Color="#8A2A4A"/>
-
-    <Style x:Key="Style.Button.PrimaryLocal" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-      <Setter Property="Background" Value="{DynamicResource Brush.AccentGradientPrimary}"/>
-      <Setter Property="Foreground" Value="#0A0A0A"/>
-      <Setter Property="BorderThickness" Value="0"/>
-      <Setter Property="BorderBrush" Value="Transparent"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" CornerRadius="6" Background="{TemplateBinding Background}"
-                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.AccentHover}"/>
-                <Setter Property="Foreground" Value="#FFFFFF"/>
-              </Trigger>
-              <Trigger Property="IsPressed" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Accent}"/>
-              </Trigger>
-              <Trigger Property="IsEnabled" Value="False">
-                <Setter Property="Opacity" Value="0.6"/>
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
     <Style x:Key="Style.Button.GhostNeutral" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
       <Setter Property="Background" Value="Transparent"/>
       <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
@@ -1152,12 +1113,14 @@
     <Grid x:Name="FeedbackOverlay" Visibility="Collapsed" Background="#C0000000"
           HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Grid.RowSpan="4">
       <!-- Shadow layer (no effects on content to keep text crisp) -->
-      <Border Width="720" HorizontalAlignment="Center" VerticalAlignment="Center"
-              CornerRadius="12" Background="#000000" Opacity="0.22" Margin="0,6,0,0"
+      <Border Width="720" HorizontalAlignment="Center" VerticalAlignment="Stretch" Margin="0,40,0,34"
+              CornerRadius="12" Background="#000000" Opacity="0.22"
               SnapsToDevicePixels="True" UseLayoutRounding="True"/>
-      <!-- Content card (sharp text) -->
+      <!-- Content card (sharp text). VerticalAlignment=Stretch + Margin caps the card to the
+           window height instead of Center's unbounded height, which is what let the message
+           field run off the bottom of the screen on smaller windows. -->
       <Border Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderHover}" BorderThickness="1.5" CornerRadius="10"
-              Padding="20" Width="720" HorizontalAlignment="Center" VerticalAlignment="Center"
+              Padding="20" Width="720" HorizontalAlignment="Center" VerticalAlignment="Stretch" Margin="0,40,0,40"
               SnapsToDevicePixels="True" UseLayoutRounding="True"
               TextOptions.TextRenderingMode="ClearType" TextOptions.TextFormattingMode="Display"
               TextOptions.TextHintingMode="Fixed"
@@ -1235,8 +1198,13 @@
               </TextBlock>
             </Grid>
           </StackPanel>
-          <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Margin="0,0,0,4">
-            <StackPanel Orientation="Horizontal" Margin="0,0,0,12" VerticalAlignment="Center">
+          <Grid Grid.Row="2" Grid.ColumnSpan="2" Margin="0,0,0,4">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12" VerticalAlignment="Center">
               <TextBlock Text="Тип:" Margin="0,0,8,0" VerticalAlignment="Center"/>
               <ComboBox x:Name="FbType" Width="160">
                 <ComboBoxItem Content="Баг"/>
@@ -1245,9 +1213,13 @@
                 <ComboBoxItem Content="Другое"/>
               </ComboBox>
             </StackPanel>
-            <TextBlock Text="Сообщение" FontSize="13" Foreground="{DynamicResource Brush.TextSecondary}"/>
-            <Grid>
-              <TextBox x:Name="FbComment" AcceptsReturn="True" Height="260" TextWrapping="Wrap" TextChanged="FbField_Changed"
+            <TextBlock Grid.Row="1" Text="Сообщение" FontSize="13" Foreground="{DynamicResource Brush.TextSecondary}"/>
+            <!-- Row is "*", а не Auto: карточка теперь ограничена высотой окна (см. VerticalAlignment=Stretch
+                 у Border выше), и поле обязано СЖИМАТЬСЯ вместе с ней, а не тащить фиксированные 260px за
+                 собой — раньше это и обрезало поле снизу на невысоких окнах. Прокрутка внутри поля (атрибут
+                 ниже) при этом остаётся: длинный текст скроллится, а не растягивает карточку дальше. -->
+            <Grid Grid.Row="2">
+              <TextBox x:Name="FbComment" AcceptsReturn="True" MinHeight="100" VerticalAlignment="Stretch" TextWrapping="Wrap" TextChanged="FbField_Changed"
                        Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" Padding="10,8"
                        Foreground="{DynamicResource Brush.Text}" FontSize="14"
                        ScrollViewer.VerticalScrollBarVisibility="Auto">
@@ -1298,10 +1270,10 @@
                 </TextBlock.Style>
               </TextBlock>
             </Grid>
-          </StackPanel>
+          </Grid>
           <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0" >
             <TextBlock x:Name="FbStatus" Margin="0,0,12,0" VerticalAlignment="Center" Foreground="{DynamicResource Brush.TextSecondary}"/>
-            <Button x:Name="FbSendBtn" Content="Отправить" MinWidth="200" Height="36" FontSize="13" FontWeight="SemiBold" Padding="12,6" Click="FbSend_Click" Margin="0,0,8,0" Style="{DynamicResource Style.Button.PrimaryLocal}"/>
+            <Button x:Name="FbSendBtn" Content="Отправить" Click="FbSend_Click" Margin="0,0,8,0" Style="{DynamicResource Style.Button.Primary}"/>
             <Button Content="Отмена" Width="120" Height="36" FontSize="13" FontWeight="SemiBold" Padding="12,6" Click="FbCancel_Click" Style="{DynamicResource Style.Button.GhostNeutral}"/>
           </StackPanel>
           <!-- Что уходит вместе с сообщением: показываем честно и даём выключить -->
