@@ -737,6 +737,63 @@ async function manifestsReload(){
   });
 }
 
+// runUploadBench and applyBenchBest are thin DOM wiring around the testable
+// core in upload-bench.js (parseBenchList, benchCombos, benchUploadOnce,
+// pickClosestChunkOption) — that file is loaded as a separate <script> before
+// this one specifically so it can be covered by tests/web/*.test.js as an
+// ordinary required module, see the comment at its top.
+async function runUploadBench(){
+  const file = document.getElementById('bench_zip')?.files?.[0];
+  if(!file){ notify('Выберите файл для теста'); return; }
+  const probeMB = Number(document.getElementById('bench_probe_mb')?.value||256)||256;
+  const probeBytes = Math.max(1, probeMB)*1024*1024;
+  const chunkSizesMB = parseBenchList(document.getElementById('bench_chunks_mb')?.value, 1);
+  const concs = parseBenchList(document.getElementById('bench_concs')?.value, 1).map(n=> Math.max(1, Math.min(100, Math.round(n))));
+  if(!chunkSizesMB.length || !concs.length){ notify('Укажите хотя бы один размер чанка и одну параллельность'); return; }
+  const statusEl = document.getElementById('bench_status');
+  const table = document.getElementById('bench_table'); const tbody = document.getElementById('bench_tbody');
+  const applyWrap = document.getElementById('bench_apply_wrap'); const bestEl = document.getElementById('bench_best');
+  if(table) table.style.display='table'; if(applyWrap) applyWrap.style.display='none';
+  if(tbody) tbody.innerHTML='';
+  const combos = benchCombos(chunkSizesMB, concs);
+  const results = [];
+  for(let i=0;i<combos.length;i++){
+    const {cs, c} = combos[i];
+    if(statusEl) statusEl.textContent = 'Тест '+(i+1)+'/'+combos.length+': чанк '+cs+' МБ, параллельность '+c+'...';
+    const r = await benchUploadOnce(file, cs, c, probeBytes);
+    const row = document.createElement('tr');
+    if(r.ok){
+      results.push(r);
+      row.innerHTML = '<td>'+formatBytes(r.chunkSize)+'</td><td>'+r.concurrency+'</td><td>'+formatSpeed(r.speed)+'</td><td>'+r.seconds.toFixed(2)+' c</td>';
+    } else {
+      row.innerHTML = '<td>'+cs+' МБ</td><td>'+c+'</td><td colspan="2" class="text-danger">'+(r.error||'ошибка')+'</td>';
+    }
+    if(tbody) tbody.appendChild(row);
+  }
+  if(statusEl) statusEl.textContent = 'Готово. Проверено комбинаций: '+combos.length+', успешно: '+results.length+'.';
+  if(results.length){
+    results.sort((a,b)=> b.speed - a.speed);
+    const best = results[0];
+    window.__benchBest = best;
+    if(bestEl) bestEl.textContent = formatBytes(best.chunkSize)+' / '+best.concurrency+' поток(ов) — '+formatSpeed(best.speed);
+    if(applyWrap) applyWrap.style.display='flex';
+  }
+}
+
+function applyBenchBest(chunkSelId, concSliderId, concValId){
+  const best = window.__benchBest; if(!best){ notify('Сначала запустите тест'); return; }
+  const sel = document.getElementById(chunkSelId);
+  if(sel){
+    const values = Array.from(sel.options).map(opt=> Number(opt.value)||0);
+    const closest = pickClosestChunkOption(values, best.chunkSize);
+    if(closest!==null) sel.value = String(closest);
+  }
+  const slider = document.getElementById(concSliderId); const val = document.getElementById(concValId);
+  if(slider){ slider.value = String(Math.max(1, Math.min(100, best.concurrency))); slider.dispatchEvent(new Event('input')); }
+  if(val) val.textContent = slider ? slider.value : String(best.concurrency);
+  notify('Параметры применены: '+formatBytes(best.chunkSize)+' / '+best.concurrency+' поток(ов)');
+}
+
 async function manifestsUpload(){
   const gid = (document.getElementById('gid')?.value||'').trim();
   const ver = (document.getElementById('ver')?.value||'').trim();
@@ -854,7 +911,7 @@ async function manifestsUpload(){
   let curPar = Math.max(1, Math.min(100, userPar));
   console.log('[resume] already have', received.size, 'chunks; scheduling', allIdx.length, 'chunks; chunkSize=', chunkSize, 'startPar=', curPar);
 
-  const t0 = performance.now(); let lastT = t0; let lastLoaded = uploadedBytes; let avgSpeed = 0; const alpha = 0.2; const UI_INTERVAL=500; let lastUiTs=0, uiScheduled=false;
+  const t0 = performance.now(); let lastT = t0; let lastLoaded = uploadedBytes; let avgSpeed = 0; const alpha = 0.2; const UI_INTERVAL=500;
   function updateUI(now){
     const pct = Math.floor((uploadedBytes*100)/totalBytes);
     if(bar) bar.style.width = pct+'%';
@@ -900,7 +957,13 @@ async function manifestsUpload(){
       }
     }
   }
-  function scheduleUI(){ const now=performance.now(); if(now-lastUiTs<UI_INTERVAL) return; lastUiTs=now; if(uiScheduled) return; uiScheduled=true; requestAnimationFrame(()=>{ uiScheduled=false; updateUI(performance.now()); }); }
+  // See ui-throttle.js for why this goes through setTimeout instead of
+  // requestAnimationFrame: rAF stops firing the moment this tab is
+  // backgrounded, which used to freeze the percentage, speed and the uPlot
+  // graph for the rest of a long upload — looking exactly like "the graph
+  // doesn't draw at all".
+  const uiThrottle = makeUiThrottler(UI_INTERVAL, ()=> updateUI(performance.now()));
+  function scheduleUI(){ uiThrottle.schedule(); }
 
   let active = 0;
   const win = []; // recent writeMs per chunk
@@ -950,7 +1013,13 @@ async function manifestsUpload(){
     await new Promise(res=> setTimeout(res, 200));
     if(failed) break;
   }
-  
+  // Force one final, unthrottled UI sync: on a fast link (or a small build) the
+  // whole chunk phase can finish inside a single UI_INTERVAL window, so the
+  // scheduled updateUI() from the last chunk may never have run yet. Without
+  // this, the bar/graph can sit at their pre-upload state through the entire
+  // complete+process phase, which reads the same as the frozen-graph bug above.
+  updateUI(performance.now());
+
   // Retry pass for failed chunks (if any)
   if(!failed && failedChunks.length>0){
     console.group('[retry pass] re-upload failed chunks');
@@ -2079,24 +2148,20 @@ async function upload(){
     let avgSpeed = 0; // EMA
     const alpha = 0.2;
     const UI_INTERVAL = 250; // ms
-    let lastUiTs = 0;
-    let uiScheduled = false;
     const uiState = { pct:0, loaded:0, total: file.size, speed:0, eta:0 };
     function applyUI(){
       if (bar) bar.style.width = uiState.pct + '%';
       if (txt) {
-        const speedStr = uiState.speed > 0 ? (' \u2022 ' + formatSpeed(uiState.speed)) : '';
-        const etaStr = uiState.eta > 0 ? (' \u2022 ETA ' + formatEta(uiState.eta)) : '';
+        const speedStr = uiState.speed > 0 ? (' • ' + formatSpeed(uiState.speed)) : '';
+        const etaStr = uiState.eta > 0 ? (' • ETA ' + formatEta(uiState.eta)) : '';
         txt.textContent = 'Загружено ' + uiState.pct + '% (' + formatBytes(uiState.loaded) + ' / ' + formatBytes(uiState.total) + ')' + speedStr + etaStr;
       }
     }
-    function scheduleUI(nowMs){
-      if (uiScheduled) return;
-      if (nowMs - lastUiTs < UI_INTERVAL) return;
-      uiScheduled = true;
-      lastUiTs = nowMs;
-      requestAnimationFrame(()=>{ uiScheduled = false; applyUI(); });
-    }
+    // See ui-throttle.js for why this goes through setTimeout instead of
+    // requestAnimationFrame — rAF stops firing entirely in a backgrounded tab,
+    // which used to freeze this progress line for the rest of a long upload.
+    const uiThrottle = makeUiThrottler(UI_INTERVAL, applyUI);
+    function scheduleUI(){ uiThrottle.schedule(); }
     xhr.upload.onprogress = (e)=>{
       if(!e.lengthComputable) return;
       const now = performance.now();
@@ -2111,7 +2176,7 @@ async function upload(){
       uiState.loaded = e.loaded;
       uiState.speed = avgSpeed;
       uiState.eta = eta;
-      scheduleUI(now);
+      scheduleUI();
     };
 
     // Streaming NDJSON parsing from response (throttled & capped)
@@ -2200,6 +2265,8 @@ function bindBusyClick(id, fn, busyText){
 bindBusyClick('btnUpload', upload, 'Загрузка...');
 // Manifests wiring
 bindBusyClick('man_upload', manifestsUpload, 'Загрузка...');
+bindBusyClick('bench_run', runUploadBench, 'Тестирование...');
+(()=>{ const b = document.getElementById('bench_apply_game'); if(b) b.addEventListener('click', ()=> applyBenchBest('man_chunk_size','man_conc','man_conc_val')); })();
 // Show live value for concurrency slider
 (()=>{ const s = document.getElementById('man_conc'); const v = document.getElementById('man_conc_val'); if(s&&v){ v.textContent = String(s.value||'6'); s.addEventListener('input', ()=>{ v.textContent = String(s.value||'6'); }); }})();
 // Cleanup button

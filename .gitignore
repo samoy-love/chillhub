@@ -53,6 +53,7 @@ server/build/
 
 # Node-related (if added later)
 node_modules/
+coverage/
 # Frontend build artifacts (if any are introduced)
 dist/
 build/

@@ -97,5 +97,36 @@ export default [
     rules: {
       'no-unused-vars': 'off'
     }
+  },
+
+  // upload-bench.js attaches its exports to `window` (see the UMD wrapper at
+  // its top) precisely so admin.js can call them as plain globals, the same
+  // way it calls every other helper in this directory — ESLint just can't see
+  // across the <script> boundary that defines them.
+  {
+    files: ['server/admin_ui/admin.js'],
+    languageOptions: {
+      globals: {
+        parseBenchList: 'readonly',
+        benchCombos: 'readonly',
+        pickClosestChunkOption: 'readonly',
+        benchUploadOnce: 'readonly',
+        makeUiThrottler: 'readonly'
+      }
+    }
+  },
+
+  // upload-bench.js and ui-throttle.js are UMD modules: `module` is only
+  // referenced behind a `typeof module === 'object'` guard so they work as a
+  // plain <script> in the browser too, but that guard doesn't stop no-undef
+  // from flagging the bare identifier — the browser globals list above has no
+  // `module`/`exports` because real browser code must never see them.
+  {
+    files: ['server/admin_ui/upload-bench.js', 'server/admin_ui/ui-throttle.js'],
+    languageOptions: {
+      globals: {
+        module: 'readonly'
+      }
+    }
   }
 ];

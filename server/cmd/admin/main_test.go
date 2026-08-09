@@ -118,6 +118,7 @@ var wantPaths = []string{
 	"/admin/api/news/uploadCover",
 	"/admin/api/system/free",
 	"/admin/api/upload",
+	"/admin/api/upload/abort",
 	"/admin/api/upload/chunk",
 	"/admin/api/upload/cleanup",
 	"/admin/api/upload/complete",

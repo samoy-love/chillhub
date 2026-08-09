@@ -76,6 +76,7 @@ func (s *server) apiRoutes() []route {
 		{path: "/admin/api/upload/complete", handler: b.UploadComplete, noAlias: true},
 		{path: "/admin/api/upload/process", handler: b.UploadProcessStream, noAlias: true},
 		{path: "/admin/api/upload/cleanup", handler: b.UploadCleanup, noAlias: true},
+		{path: "/admin/api/upload/abort", handler: b.UploadAbort, noAlias: true},
 
 		// System info.
 		{path: "/admin/api/system/free", handler: b.FreeSpace},
