@@ -234,7 +234,7 @@ jobs:
       admin_ui: ${{ steps.f.outputs.admin_ui }}
       client: ${{ steps.f.outputs.client }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Вся история, а не два коммита: диапазон считается от предыдущей
           # вершины main (github.event.before, см. ниже), и при глубине 2 её
