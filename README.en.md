@@ -23,42 +23,23 @@ there. Same problem, rebuilt for many games — with diffs, hashes and rollbacks
 
 ## How it works
 
-**Updates are diffs, because a modpack changes by a few megabytes at a time.**
-The server publishes a manifest per version: each file's path, size and two
-hashes, Blake3 and SHA-256. The client hashes what is already on disk and
-builds a plan — what to download, what to delete, which empty directories to
-create. When it finishes, the game folder is an exact copy of the published
-version with no leftovers from earlier builds, and moving between versions in
-either direction, rollback included, costs the same diff rather than a full
-re-download.
+**Updates are diffs.** The server publishes a manifest per version (paths,
+sizes, Blake3 and SHA-256 hashes); the client compares it against what's on
+disk and downloads only the difference — over several HTTP Range streams,
+resuming after any drop. The game folder ends up an exact copy of the
+published version, and switching to any version, rollback included, costs the
+same diff rather than a full re-download.
 
-**Downloads assume the connection will drop.** Transfers run in 2–16 parallel
-streams over HTTP Range (`SimpleSyncService.cs`), partial data stays in `.part`
-files, and a resumed file continues from the byte it stopped at. Nothing is
-accepted into the game folder until its hashes match the manifest, so an
-interrupted or corrupted transfer fails loudly instead of producing an install
-that only misbehaves later.
+**The launcher updates itself from a separate executable** (`updater/`),
+because a running process can't overwrite its own files. That's also why user
+data lives in `%APPDATA%\ChillHub` rather than next to the binaries.
 
-**The hash seam between two languages is pinned by tests.** The server hashes
-with a Go library, the client with a C# one. If the implementations ever
-drifted, nothing would report an error — every installed launcher would simply
-conclude that no file matches and re-download whole games. The same reference
-vector is therefore asserted on both sides.
+**Nothing is signed** — a deliberate choice, not an omission: authenticity
+rests on TLS, and SmartScreen warns on install until download reputation
+accumulates. The installer is per-user (NSIS, no admin rights required).
 
-**The launcher updates itself from a separate executable.** A running process
-cannot overwrite its own files, so `updater/` copies the new ones, skips
-user-owned paths (`config.json`, `launcher.version`) and restarts the app. That
-preserve list is the reason user data lives in `%APPDATA%\ChillHub` rather than
-next to the binaries: a config inside the install directory would land in the
-update package and produce an endless self-update loop, so a check verifies the
-manifest and the preserve rules never overlap.
-
-**Nothing is signed, and that is a decision rather than an omission.**
-Authenticity rests on TLS; SmartScreen warns on install until download
-reputation accumulates. The installer stays per-user — NSIS with
-`RequestExecutionLevel user`, installing into `%LOCALAPPDATA%\ChillHub` — so
-that it never has to ask for administrator rights on a machine it is only
-borrowing.
+Details — manifest format, the diff algorithm, the updater's preserve rules,
+integrity checks — are in [docs/spec.md](docs/spec.md).
 
 ## Stack
 
@@ -111,20 +92,18 @@ cd ..\launcher; dotnet test
 
 ## Tests
 
-504 tests on the client (xUnit) and 377 on the server (`go test -race`, 80%
-statement coverage). A red run stops the deployment.
+Over a thousand tests on the client (xUnit) and several hundred on the server
+(`go test -race`); current coverage is on the codecov badge above. A red run
+stops the deployment.
 
 CI gates more than the test suites: golangci-lint and `go vet` on both Linux
 and Windows, a cross-compile to linux/arm64 as on production, `dotnet format
 --verify-no-changes`, ESLint, Stylelint and HTMLHint for the landing page and
 admin UI, `node --test` for the admin UI's escaping helpers, and govulncheck
-plus a vulnerable-NuGet scan.
-
-Two cross-language seams get their own checks: the hash reference vector
-(`server/internal/adminapi/builds/hashvector_test.go` and
-`launcher/tests/ChillHub.Tests/HashVectorTests.cs`), and the launcher manifest
-against the updater's preserve rules
-(`dotnet run --project updater/tests/ManifestPreserveCheck`).
+plus a vulnerable-NuGet scan. The hash seam between Go and C# is pinned
+separately (`hashvector_test.go` / `HashVectorTests.cs`), as is the launcher
+manifest against the updater's preserve rules — details in
+[docs/spec.md](docs/spec.md).
 
 ## Deployment
 
