@@ -794,34 +794,40 @@ function applyBenchBest(chunkSelId, concSliderId, concValId){
   notify('Параметры применены: '+formatBytes(best.chunkSize)+' / '+best.concurrency+' поток(ов)');
 }
 
-async function manifestsUpload(){
-  const gid = (document.getElementById('gid')?.value||'').trim();
-  const ver = (document.getElementById('ver')?.value||'').trim();
-  if(!gid){ notify('Укажите идентификатор игры'); return; }
-  if(!ver){ notify('Укажите версию'); return; }
-  const file = (window.__manDroppedFile) || document.getElementById('man_zip')?.files?.[0];
-  if(!file){ notify('Выберите ZIP-файл'); return; }
-  const wrap=document.getElementById('man_prog_wrap'); const bar=document.getElementById('man_pb');
-  const pctEl=document.getElementById('man_prog_pct'); const bytesEl=document.getElementById('man_prog_bytes');
-  const speedEl=document.getElementById('man_prog_speed'); const medianEl=document.getElementById('man_prog_median'); const peakEl=document.getElementById('man_prog_peak'); const etaEl=document.getElementById('man_prog_eta');
-  const txt = document.getElementById('man_prog_text');
+// runChunkedUpload drives the resumable init/chunk/complete/process pipeline
+// against a ZIP file, updating the progress UI rooted at `${prefix}_*` ids
+// (mirroring the man_* markup this was extracted from: prog_wrap/pb/
+// prog_pct/..., chunk_size, conc(+_val), active_now/active_cap,
+// speed_wrap/speed). Shared by the game upload card (`man`) and the
+// launcher upload card (`up`) so both get the same parallel chunked
+// pipeline — the launcher card used to POST the whole ZIP as one unchunked
+// XHR request, which is exactly the "3 МБ/с и не разгоняется" bottleneck
+// that started this whole investigation.
+// Returns true once the archive is published (extracted + manifest written).
+async function runChunkedUpload(prefix, kind, gameId, version, file){
+  const id = (suffix)=> document.getElementById(prefix+'_'+suffix);
+  const gid = gameId, ver = version;
+  const wrap=id('prog_wrap'); const bar=id('pb');
+  const pctEl=id('prog_pct'); const bytesEl=id('prog_bytes');
+  const speedEl=id('prog_speed'); const medianEl=id('prog_median'); const peakEl=id('prog_peak'); const etaEl=id('prog_eta');
+  const txt = id('prog_text');
   if(wrap) wrap.style.display='block';
   if(bar) bar.style.width='0%';
   if(pctEl) pctEl.textContent='Подготовка к загрузке...';
   clearStatusError(txt, '');
 
   // UI controls: chunk size and concurrency
-  const chunkSel = document.getElementById('man_chunk_size');
+  const chunkSel = id('chunk_size');
   let desiredChunk = Number(chunkSel?.value||0)|0; if(desiredChunk<=0) desiredChunk = 8*1024*1024;
-  const concSlider = document.getElementById('man_conc');
-  const concVal = document.getElementById('man_conc_val');
-  const activeNowEl = document.getElementById('man_active_now');
-  const activeCapEl = document.getElementById('man_active_cap');
+  const concSlider = id('conc');
+  const concVal = id('conc_val');
+  const activeNowEl = id('active_now');
+  const activeCapEl = id('active_cap');
   let userPar = Number(concSlider?.value||6)|0; if(userPar<1) userPar=1; if(userPar>100) userPar=100;
   if(concVal) concVal.textContent = String(userPar);
   if(activeCapEl) activeCapEl.textContent = String(userPar);
   if(activeNowEl) activeNowEl.textContent = '0';
-  const speedWrap = document.getElementById('man_speed_wrap'); const speedCanvas = document.getElementById('man_speed');
+  const speedWrap = id('speed_wrap'); const speedCanvas = id('speed');
   if(speedWrap) speedWrap.style.display='block';
   if(speedCanvas) speedCanvas.style.height='180px';
   let speedPoints = []; // [{t, bps}]
@@ -832,12 +838,12 @@ async function manifestsUpload(){
   let initRes; try{
     console.group('Upload ZIP');
     console.time('upload_total');
-    console.log('[init] request', { gid, ver, file: { name: file.name, size: file.size }, chunkSize: desiredChunk, userPar });
+    console.log('[init] request', { kind, gid, ver, file: { name: file.name, size: file.size }, chunkSize: desiredChunk, userPar });
     initRes = await fetch('/admin/api/upload/init', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({
-      kind:'game', gameId: gid, version: ver, zipName: file.name, totalSize: file.size, chunkSize: desiredChunk
+      kind, gameId: gid, version: ver, zipName: file.name, totalSize: file.size, chunkSize: desiredChunk
     }) });
-  }catch(e){ setStatusError(txt, 'Ошибка init: '+e); notify('Ошибка init: '+e); return; }
-  if(!initRes.ok){ setStatusError(txt, 'HTTP '+initRes.status+' init'); notify('HTTP '+initRes.status+' init'); return; }
+  }catch(e){ setStatusError(txt, 'Ошибка init: '+e); notify('Ошибка init: '+e); console.groupEnd(); return false; }
+  if(!initRes.ok){ setStatusError(txt, 'HTTP '+initRes.status+' init'); notify('HTTP '+initRes.status+' init'); console.groupEnd(); return false; }
   const init = await initRes.json();
   console.log('[init] response', init);
   const uploadId = init.uploadId; const chunkSize = init.chunkSize || desiredChunk || (8*1024*1024); const totalChunks = init.totalChunks||Math.ceil(file.size/chunkSize);
@@ -1009,9 +1015,9 @@ async function manifestsUpload(){
     for(let j=0;j<Math.min(curPar, failedChunks.length); j++){ runFailed(); }
     while(missPtr < failedChunks.length || missActive > 0){ await new Promise(res=> setTimeout(res, 150)); if(missFailed) break; }
     console.groupEnd();
-    if(missFailed){ console.timeEnd('upload_total'); console.groupEnd(); const m='Повторная загрузка неудачных чанков завершилась с ошибкой'; setStatusError(txt, m); notify(m); return; }
+    if(missFailed){ console.timeEnd('upload_total'); console.groupEnd(); const m='Повторная загрузка неудачных чанков завершилась с ошибкой'; setStatusError(txt, m); notify(m); return false; }
   }
-  if(failed){ console.timeEnd('upload_total'); console.groupEnd(); const m='Загрузка чанков завершилась с ошибкой'; setStatusError(txt, m); notify(m); return; }
+  if(failed){ console.timeEnd('upload_total'); console.groupEnd(); const m='Загрузка чанков завершилась с ошибкой'; setStatusError(txt, m); notify(m); return false; }
 
   // COMPLETE
   async function uploadMissingAndRetryComplete(maxRounds=3){
@@ -1062,10 +1068,11 @@ async function manifestsUpload(){
   }
 
   const okComplete = await uploadMissingAndRetryComplete(3);
-  if(!okComplete){ console.timeEnd('upload_total'); console.groupEnd(); const m='Ошибка завершения загрузки (complete)'; setStatusError(txt, m); notify(m); return; }
+  if(!okComplete){ console.timeEnd('upload_total'); console.groupEnd(); const m='Ошибка завершения загрузки (complete)'; setStatusError(txt, m); notify(m); return false; }
   if(txt) txt.textContent = 'Сервера проверяет sha256 и готовит распаковку...';
 
   // PROCESS (NDJSON)
+  let processOk = true;
   try{
     console.log('[process] start');
     const url = '/admin/api/upload/process?uploadId='+encodeURIComponent(uploadId);
@@ -1074,7 +1081,7 @@ async function manifestsUpload(){
     // POST/PUT/PATCH/DELETE, поэтому GET оставлял бы эту операцию без защиты.
     // Заголовок X-CSRF-Token подставит обёртка fetch в начале файла.
     const res = await fetch(url, { method:'POST', headers: { 'Accept':'application/x-ndjson', 'Cache-Control':'no-store' } });
-    if(!res.ok){ notify('HTTP '+res.status+' process'); return; }
+    if(!res.ok){ setStatusError(txt, 'HTTP '+res.status+' process'); notify('HTTP '+res.status+' process'); console.timeEnd('upload_total'); console.groupEnd(); return false; }
     const dec = new window.TextDecoder();
     let gotAny = false;
     if(res.body && typeof res.body.getReader === 'function'){
@@ -1097,6 +1104,7 @@ async function manifestsUpload(){
             // ровно то, что выглядит как "ничего не произошло".
             setStatusError(txt, 'Ошибка обработки: '+(ev.message||'unknown'));
             notify('Ошибка: '+(ev.message||'unknown'));
+            processOk = false;
           }
         }catch{} }
       }
@@ -1113,12 +1121,28 @@ async function manifestsUpload(){
         else if(ev.type==='error'){
           setStatusError(txt, 'Ошибка обработки: '+(ev.message||'unknown'));
           notify('Ошибка: '+(ev.message||'unknown'));
+          processOk = false;
         }
       }catch{} }
     }
     if(!gotAny){ console.warn('[process] no NDJSON received (maybe buffering)'); }
-  }catch(e){ setStatusError(txt, 'Ошибка обработки: '+e); notify('Ошибка process: '+e); }
+  }catch(e){ setStatusError(txt, 'Ошибка обработки: '+e); notify('Ошибка process: '+e); console.timeEnd('upload_total'); console.groupEnd(); return false; }
 
+  console.timeEnd('upload_total');
+  console.groupEnd();
+  return processOk;
+}
+
+async function manifestsUpload(){
+  const gid = (document.getElementById('gid')?.value||'').trim();
+  const ver = (document.getElementById('ver')?.value||'').trim();
+  if(!gid){ notify('Укажите идентификатор игры'); return; }
+  if(!ver){ notify('Укажите версию'); return; }
+  const file = (window.__manDroppedFile) || document.getElementById('man_zip')?.files?.[0];
+  if(!file){ notify('Выберите ZIP-файл'); return; }
+  const ok = await runChunkedUpload('man', 'game', gid, ver, file);
+  window.__manDroppedFile = null;
+  if(!ok) return;
   try{ manifestsReload(); }catch(_){ }
   try{ gmPrevEnsureVersionsAndRender(gid); }catch(_){ }
   // Optionally set this version as latest
@@ -1129,9 +1153,6 @@ async function manifestsUpload(){
       if(!act.ok){ notify('HTTP '+act.status+' activate'); }
     }
   }catch(e){ notify('Ошибка activate: '+e); }
-  console.timeEnd('upload_total');
-  console.groupEnd();
-  window.__manDroppedFile = null;
 }
 
 // Drag-n-drop for manifests ZIP
@@ -2090,127 +2111,22 @@ try{
 
 async function upload(){
   console.log('upload clicked');
-  // Launcher-only upload
-  var kind='launcher';
-  var ver=document.getElementById('up_ver').value;
-  // allow dropped file fallback
-  var file=(window.__upDroppedFile)||document.getElementById('up_zip').files[0];
-  var latest=document.getElementById('up_latest').checked? '1':'0';
+  const ver = document.getElementById('up_ver').value;
+  const file = (window.__upDroppedFile) || document.getElementById('up_zip').files[0];
+  const latest = document.getElementById('up_latest').checked;
   if(!file){ notify('Выберите ZIP-файл'); return; }
   if(!ver){ notify('Укажите версию'); return; }
-  const fd = new FormData();
-  fd.append('kind', kind);
-  // launcher uploads use fixed gameId
-  fd.append('gameId', 'launcher');
-  fd.append('version', ver);
-  fd.append('zip', file);
-  fd.append('updateLatest', latest);
-  // show progress UI
-  const wrap=document.getElementById('up_prog_wrap'); const bar=document.getElementById('up_pb'); const txt=document.getElementById('up_prog_text');
-  if(wrap) wrap.style.display='block'; if(bar) bar.style.width='0%'; clearStatusError(txt, 'Подготовка к загрузке...');
-
-  // use XHR streaming (NDJSON) to mirror game upload UX
-  await new Promise((resolve)=>{
-    // Путь пишем сразу канонический, с /api/: в nginx описан только
-    // `location = /admin/api/uploadStream`, а `location /` отсутствует, поэтому
-    // «/admin/uploadStream» уходит в статику и отдаёт 404. Полагаться на shim
-    // XMLHttpRequest.open в начале файла нельзя — это подстраховка, а не контракт.
-    const xhr = new XMLHttpRequest(); xhr.open('POST','/admin/api/uploadStream');
-    xhr.setRequestHeader('Accept','application/x-ndjson');
-    // Upload progress (throttled, with lightweight smoothing)
-    // То же скользящее окно, что и у чанковой заливки выше: onprogress
-    // отражает не сеть, а опустошение буфера сокета, и мгновенная
-    // производная по нему скачет между нулём и сотнями МБ/с (см. шапку
-    // rate-estimator.js).
-    const rateEstimator = makeRateEstimator(5000);
-    let shownSpeed = 0;
-    const UI_INTERVAL = 150; // ms — text-only, cheaper than the canvas chart above
-    const uiState = { pct:0, loaded:0, total: file.size, speed:0, eta:0 };
-    function applyUI(){
-      if (bar) bar.style.width = uiState.pct + '%';
-      if (txt) {
-        const speedStr = uiState.speed > 0 ? (' • ' + formatSpeed(uiState.speed)) : '';
-        const etaStr = uiState.eta > 0 ? (' • ETA ' + formatEta(uiState.eta)) : '';
-        txt.textContent = 'Загружено ' + uiState.pct + '% (' + formatBytes(uiState.loaded) + ' / ' + formatBytes(uiState.total) + ')' + speedStr + etaStr;
-      }
-    }
-    // See ui-throttle.js for why this goes through setTimeout instead of
-    // requestAnimationFrame — rAF stops firing entirely in a backgrounded tab,
-    // which used to freeze this progress line for the rest of a long upload.
-    const uiThrottle = makeUiThrottler(UI_INTERVAL, applyUI);
-    function scheduleUI(){ uiThrottle.schedule(); }
-    xhr.upload.onprogress = (e)=>{
-      if(!e.lengthComputable) return;
-      const inst = rateEstimator.push(performance.now(), e.loaded);
-      if (inst > 0) shownSpeed = inst;
-      const remain = Math.max(0, e.total - e.loaded);
-      const eta = (shownSpeed > 0) ? (remain/shownSpeed) : 0;
-      uiState.pct = Math.floor(e.loaded*100/e.total);
-      uiState.loaded = e.loaded;
-      uiState.speed = shownSpeed;
-      uiState.eta = eta;
-      scheduleUI();
-    };
-
-    // Streaming NDJSON parsing from response (throttled & capped)
-    let lastLen = 0;
-    let lastRespTs = 0;
-    const RESP_INTERVAL = 250; // ms
-    const MAX_RESP_LINES_PER_TICK = 200;
-    xhr.onprogress = ()=>{
-      const now = performance.now();
-      if (now - lastRespTs < RESP_INTERVAL) return;
-      lastRespTs = now;
-      const resp = xhr.responseText || '';
-      const chunk = resp.substring(lastLen);
-      lastLen = resp.length;
-      const lines = chunk.split(/\r?\n/).filter(Boolean);
-      const toProcess = lines.length > MAX_RESP_LINES_PER_TICK ? lines.slice(lines.length - MAX_RESP_LINES_PER_TICK) : lines;
-      for(const line of toProcess){
-        try{
-          const ev = JSON.parse(line);
-          if(ev.type === 'start'){
-            if(txt) txt.textContent = 'Старт обработки: launcher '+(ev.version||ver);
-          } else if(ev.type === 'zipSaved'){
-            if(txt) txt.textContent = 'Загрузка завершена, обработка ZIP ('+formatBytes(ev.bytes||0)+')...';
-            if(bar) bar.style.width='100%';
-          } else if(ev.type === 'unzip'){
-            if(txt) txt.textContent = 'Распаковка: '+ev.path;
-          } else if(ev.type === 'composeStart'){
-            if(txt) txt.textContent = 'Подготовка манифеста: 0/'+(ev.totalFiles||0)+' файлов';
-          } else if(ev.type === 'file'){
-            if(txt) txt.textContent = 'Манифест: '+(ev.idx||0)+' файлов, '+formatBytes(ev.bytesDone||0);
-          } else if(ev.type === 'done'){
-            if(txt) txt.textContent = 'Готово. Манифест лаунчера записан';
-            try{ lnRefresh(); }catch(_){ }
-          } else if(ev.type === 'error'){
-            // См. комментарий у аналогичной ветки в manifestsUpload: notify()
-            // пишет в маленький #out внизу страницы, а без обновления txt
-            // строка статуса так и остаётся на "Старт обработки..." навсегда.
-            setStatusError(txt, 'Ошибка обработки: '+(ev.message||'unknown'));
-            notify('Ошибка: '+(ev.message||'unknown'));
-          }
-        }catch(_){ /* ignore JSON parse errors for partial lines */ }
-      }
-    };
-    xhr.onreadystatechange = ()=>{
-      if(xhr.readyState===4){
-        if(!(xhr.status>=200 && xhr.status<300)){
-          const msg = 'HTTP '+xhr.status+' '+xhr.statusText+' '+(xhr.responseText||'');
-          setStatusError(txt, 'Ошибка обработки: '+msg);
-          notify(msg);
-        } else {
-          // ensure UI reflects new latest
-          try{ lnRefresh(); }catch(_){ }
-        }
-        window.__upDroppedFile=null; resolve();
-      }
-    };
-    xhr.onerror = ()=>{ setStatusError(txt, 'Ошибка загрузки'); notify('Ошибка загрузки'); window.__upDroppedFile=null; resolve(); };
-    xhr.send(fd);
-  });
+  const ok = await runChunkedUpload('up', 'launcher', 'launcher', ver, file);
+  window.__upDroppedFile = null;
+  if(!ok) return;
+  try{ lnRefresh(); }catch(_){ }
+  if(latest){
+    try{
+      const act = await fetch('/admin/activate?gameId=launcher&version='+encodeURIComponent(ver), { method:'POST' });
+      if(!act.ok){ notify('HTTP '+act.status+' activate'); } else { try{ lnRefresh(); }catch(_){ } }
+    }catch(e){ notify('Ошибка activate: '+e); }
+  }
 }
-
 
 // Кнопки длительных операций (заливка ZIP, сохранение реестра, сохранение
 // новости) должны блокироваться на время работы: без этого повторный клик
@@ -2248,8 +2164,13 @@ bindBusyClick('bench_run', runUploadBench, 'Тестирование...');
 (()=>{ const b = document.getElementById('bench_apply_game'); if(b) b.addEventListener('click', ()=> applyBenchBest('man_chunk_size','man_conc','man_conc_val')); })();
 // Show live value for concurrency slider
 (()=>{ const s = document.getElementById('man_conc'); const v = document.getElementById('man_conc_val'); if(s&&v){ v.textContent = String(s.value||'6'); s.addEventListener('input', ()=>{ v.textContent = String(s.value||'6'); }); }})();
+(()=>{ const s = document.getElementById('up_conc'); const v = document.getElementById('up_conc_val'); if(s&&v){ v.textContent = String(s.value||'6'); s.addEventListener('input', ()=>{ v.textContent = String(s.value||'6'); }); }})();
 // Cleanup button
 (()=>{ const btn = document.getElementById('man_cleanup'); if(!btn) return; btn.addEventListener('click', async ()=>{
+  if(!confirm('Очистить старые/битые временные загрузки?')) return;
+  try{ const r = await fetch('/admin/api/upload/cleanup', { method:'POST' }); if(!r.ok){ notify('HTTP '+r.status+' cleanup'); return; } const j = await r.json(); notify('Удалено: '+(j.removed||0)); }catch(e){ notify('Ошибка cleanup: '+e); }
+}); })();
+(()=>{ const btn = document.getElementById('up_cleanup'); if(!btn) return; btn.addEventListener('click', async ()=>{
   if(!confirm('Очистить старые/битые временные загрузки?')) return;
   try{ const r = await fetch('/admin/api/upload/cleanup', { method:'POST' }); if(!r.ok){ notify('HTTP '+r.status+' cleanup'); return; } const j = await r.json(); notify('Удалено: '+(j.removed||0)); }catch(e){ notify('Ошибка cleanup: '+e); }
 }); })();
