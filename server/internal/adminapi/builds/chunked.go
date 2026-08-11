@@ -20,7 +20,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -402,8 +401,26 @@ func planChunks(totalSize int64, requested int) uploadChunkPlan {
 	return uploadChunkPlan{
 		chunkSize:   min(max(chunk, minChunk), maxChunk),
 		recommended: recChunk,
-		// Recommend maxParallel based on CPUs (2..maxParLimit).
-		maxParallel: min(max(runtime.NumCPU(), 2), maxParLimit),
+		maxParallel: min(max(recommendedParallel(totalSize), 2), maxParLimit),
+	}
+}
+
+// recommendedParallel scales with the announced upload size, not with this
+// process's CPU count. A chunk PUT spends its time waiting on the network,
+// not the CPU — that used to come back as a literal maxPar=4 on a 4-core
+// box regardless of the file being 10 KB or 15 GB, which is a number a
+// laptop-sized VM has no business handing out for a bandwidth-bound
+// transfer. Buckets mirror the chunk-size buckets above.
+func recommendedParallel(totalSize int64) int {
+	switch {
+	case totalSize <= 512<<20: // < 512 MiB
+		return 4
+	case totalSize <= 2<<30: // < 2 GiB
+		return 8
+	case totalSize <= 8<<30: // < 8 GiB
+		return 16
+	default:
+		return 24
 	}
 }
 

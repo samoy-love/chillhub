@@ -858,22 +858,31 @@ async function manifestsUpload(){
   let curPar = Math.max(1, Math.min(100, userPar));
   console.log('[resume] already have', received.size, 'chunks; scheduling', allIdx.length, 'chunks; chunkSize=', chunkSize, 'startPar=', curPar);
 
+  // inFlight — байты, уже застриманные в ещё НЕ завершённые чанки (ключ —
+  // индекс чанка). uploadedBytes считает только целиком подтверждённые
+  // чанки; без inFlight прогресс на крупных чанках (десятки-сотни МБ) рос бы
+  // скачками раз в десятки секунд — см. комментарий в шапке chunk-upload.js
+  // про то, почему это само по себе выглядело как «загрузка не начинается»
+  // и «скорость меряется неправильно».
+  const inFlight = new Map();
+
   const t0 = performance.now(); let lastT = t0; let lastLoaded = uploadedBytes; let avgSpeed = 0; const alpha = 0.2;
   // 200мс, а не 500 — на чанках размером в десятки МБ пять обновлений в
   // секунду всё ещё дешёвы (перерисовка холста и пара textContent), а разница
   // ощущается: полоса и график иначе кажутся "подвисающими" рывками.
   const UI_INTERVAL=200;
   function updateUI(now){
-    const pct = Math.floor((uploadedBytes*100)/totalBytes);
+    const displayed = Math.min(totalBytes, uploadedBytes + pendingBytes(inFlight));
+    const pct = Math.floor((displayed*100)/totalBytes);
     if(bar) bar.style.width = pct+'%';
-    const dt = (now - lastT)/1000; let inst=0; if(dt>0) inst = (uploadedBytes - lastLoaded)/dt; if(inst>0) avgSpeed = avgSpeed? (alpha*inst+(1-alpha)*avgSpeed):inst; lastT=now; lastLoaded=uploadedBytes;
-    const remain = Math.max(0, totalBytes - uploadedBytes); const eta = (avgSpeed>0)? (remain/avgSpeed):0;
+    const dt = (now - lastT)/1000; let inst=0; if(dt>0) inst = (displayed - lastLoaded)/dt; if(inst>0) avgSpeed = avgSpeed? (alpha*inst+(1-alpha)*avgSpeed):inst; lastT=now; lastLoaded=displayed;
+    const remain = Math.max(0, totalBytes - displayed); const eta = (avgSpeed>0)? (remain/avgSpeed):0;
     // Update peak and median (window 8s)
     if(inst>0){ peakBps = Math.max(peakBps, inst); }
     const horizon = HORIZON_MS; const windowPts = speedPoints.filter(p=> now-p.t <= horizon);
     let medianBps = 0; if(windowPts.length>0){ const arr = windowPts.map(p=> p.bps).sort((a,b)=>a-b); const mid = Math.floor(arr.length/2); medianBps = arr.length%2 ? arr[mid] : ((arr[mid-1]+arr[mid])/2); }
     if(pctEl) pctEl.textContent = 'Загружено '+pct+'%';
-    if(bytesEl) bytesEl.textContent = '('+formatBytes(uploadedBytes)+' / '+formatBytes(totalBytes)+')';
+    if(bytesEl) bytesEl.textContent = '('+formatBytes(displayed)+' / '+formatBytes(totalBytes)+')';
     if(speedEl) speedEl.textContent = avgSpeed>0 ? formatSpeed(avgSpeed) : '';
     if(medianEl) medianEl.textContent = medianBps>0 ? ('мед '+formatSpeed(medianBps)) : '';
     if(peakEl) peakEl.textContent = peakBps>0 ? ('пик '+formatSpeed(peakBps)) : '';
@@ -907,20 +916,21 @@ async function manifestsUpload(){
     if(activeNowEl) activeNowEl.textContent = String(active);
     const start = i*chunkSize; const end = Math.min(start+chunkSize, file.size);
     const blob = file.slice(start, end);
+    const b = (end-start);
     let ok=false, attempts=0; const MAX_ATTEMPTS=5; while(!ok && attempts<MAX_ATTEMPTS){ attempts++;
+      inFlight.set(i, 0);
       try{
-        const r = await fetch('/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+i, { method:'PUT', body: blob });
+        const r = await putChunkXHR('/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+i, blob, (loaded)=>{ inFlight.set(i, loaded); scheduleUI(); });
         if(r.ok){
-          let j = null; try{ j = await r.json(); }catch(_){}
-          const wms = Number(j && j.writeMs || 0)|0; const b = (end-start);
+          const wms = Number(r.json && r.json.writeMs || 0)|0;
           if(wms>0){ win.push(wms); if(win.length>WIN_MAX) win.shift(); }
           if(attempts>1){ console.log('[chunk ok after retry]', { index:i, attempts, bytes:b, writeMs:wms }); } else { console.log('[chunk ok]', { index:i, bytes:b, writeMs:wms, par:curPar, active, left: allIdx.length - ptr }); }
-          ok = true; uploadedBytes += b; scheduleUI();
-        } else if(r.status===409){ ok=true; console.log('[chunk skip:exists]', { index:i }); }
+          ok = true; inFlight.delete(i); uploadedBytes += b; scheduleUI();
+        } else if(r.status===409){ ok=true; inFlight.delete(i); console.log('[chunk skip:exists]', { index:i }); }
         else {
-          errors++; console.warn('[chunk http]', { index:i, status:r.status, attempt:attempts }); await new Promise(res=> setTimeout(res, 400*attempts));
+          errors++; inFlight.delete(i); console.warn('[chunk http]', { index:i, status:r.status, attempt:attempts }); await new Promise(res=> setTimeout(res, 400*attempts));
         }
-      }catch(e){ errors++; console.warn('[chunk fetch]', { index:i, error:String(e), attempt:attempts }); await new Promise(res=> setTimeout(res, 400*attempts)); }
+      }catch(e){ errors++; inFlight.delete(i); console.warn('[chunk fetch]', { index:i, error:String(e), attempt:attempts }); await new Promise(res=> setTimeout(res, 400*attempts)); }
     }
     if(!ok){ failedChunks.push(i); }
     active--;
@@ -963,12 +973,13 @@ async function manifestsUpload(){
       const s = idx*chunkSize; const e = Math.min(s+chunkSize, file.size);
       const bl = file.slice(s, e);
       let ok=false, attempts=0; const MAX=5; while(!ok && attempts<MAX){ attempts++;
+        inFlight.set(idx, 0);
         try{
-          const r = await fetch('/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+idx, { method:'PUT', body: bl });
-          if(r.ok){ ok=true; uploadedBytes += (e-s); scheduleUI(); if(attempts>1){ console.log('[retry ok]', { index:idx, attempts }); } }
-          else if(r.status===409){ ok=true; }
-          else { console.warn('[retry http]', { index:idx, status:r.status, attempt:attempts }); await new Promise(res=> setTimeout(res, 500*attempts)); }
-        }catch(err){ console.warn('[retry fetch]', { index:idx, error:String(err), attempt:attempts }); await new Promise(res=> setTimeout(res, 500*attempts)); }
+          const r = await putChunkXHR('/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+idx, bl, (loaded)=>{ inFlight.set(idx, loaded); scheduleUI(); });
+          if(r.ok){ ok=true; inFlight.delete(idx); uploadedBytes += (e-s); scheduleUI(); if(attempts>1){ console.log('[retry ok]', { index:idx, attempts }); } }
+          else if(r.status===409){ ok=true; inFlight.delete(idx); }
+          else { inFlight.delete(idx); console.warn('[retry http]', { index:idx, status:r.status, attempt:attempts }); await new Promise(res=> setTimeout(res, 500*attempts)); }
+        }catch(err){ inFlight.delete(idx); console.warn('[retry fetch]', { index:idx, error:String(err), attempt:attempts }); await new Promise(res=> setTimeout(res, 500*attempts)); }
       }
       if(!ok){ missFailed = true; }
       missActive--; if(activeNowEl) activeNowEl.textContent = String(missActive);
@@ -1009,12 +1020,13 @@ async function manifestsUpload(){
         const start = i*chunkSize; const end = Math.min(start+chunkSize, file.size);
         const blob = file.slice(start, end);
         let ok=false, attempts=0; while(!ok && attempts<3){ attempts++;
+          inFlight.set(i, 0);
           try{
-            const r = await fetch('/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+i, { method:'PUT', body: blob });
-            if(r.ok){ ok=true; uploadedBytes += (end-start); scheduleUI(); }
-            else if(r.status===409){ ok=true; }
-            else { await new Promise(res=> setTimeout(res, 300*attempts)); }
-          }catch{ await new Promise(res=> setTimeout(res, 300*attempts)); }
+            const r = await putChunkXHR('/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+i, blob, (loaded)=>{ inFlight.set(i, loaded); scheduleUI(); });
+            if(r.ok){ ok=true; inFlight.delete(i); uploadedBytes += (end-start); scheduleUI(); }
+            else if(r.status===409){ ok=true; inFlight.delete(i); }
+            else { inFlight.delete(i); await new Promise(res=> setTimeout(res, 300*attempts)); }
+          }catch{ inFlight.delete(i); await new Promise(res=> setTimeout(res, 300*attempts)); }
         }
         if(!ok){ missFailed = true; }
         missActive--; if(activeNowEl) activeNowEl.textContent = String(missActive);

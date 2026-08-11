@@ -376,3 +376,46 @@ func TestChunkedEndpointsRequireAuth(t *testing.T) {
 		}
 	}
 }
+
+// recommendedParallel used to be runtime.NumCPU() clamped into range — a
+// number that describes this process's host, not the network path between
+// an admin's browser and it. A 4-core box recommended maxPar=4 for a 15 GB
+// upload on prod, which is nonsensical for a transfer that spends its time
+// waiting on the network, not the CPU.
+func TestRecommendedParallelScalesWithSizeNotCPUCount(t *testing.T) {
+	cases := []struct {
+		name      string
+		totalSize int64
+		want      int
+	}{
+		{"tiny", 1 << 20, 4},
+		{"at 512MiB boundary", 512 << 20, 4},
+		{"just over 512MiB", 512<<20 + 1, 8},
+		{"at 2GiB boundary", 2 << 30, 8},
+		{"just over 2GiB", 2<<30 + 1, 16},
+		{"at 8GiB boundary", 8 << 30, 16},
+		{"just over 8GiB", 8<<30 + 1, 24},
+		{"huge", 100 << 30, 24},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := recommendedParallel(tc.totalSize); got != tc.want {
+				t.Errorf("recommendedParallel(%d) = %d, want %d", tc.totalSize, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPlanChunksMaxParallelHonoursEnvLimitAndFloor(t *testing.T) {
+	t.Setenv("UPLOAD_MAX_PARALLEL", "3")
+	// recommendedParallel would say 24 for a huge upload; the env cap must win.
+	if got := planChunks(100<<30, 0).maxParallel; got != 3 {
+		t.Errorf("maxParallel = %d, want env cap 3", got)
+	}
+	t.Setenv("UPLOAD_MAX_PARALLEL", "")
+	// Default cap (100) must not clip the small-file recommendation, and the
+	// floor of 2 never applies since every bucket already recommends >= 4.
+	if got := planChunks(1<<20, 0).maxParallel; got != 4 {
+		t.Errorf("maxParallel = %d, want 4", got)
+	}
+}
