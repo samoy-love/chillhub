@@ -85,3 +85,11 @@ test('rate-estimator.js в браузерном режиме кладёт фун
   samples = w.pushByteSample(samples, { t: 1000, bytes: 1000 }, 1000);
   assert.strictEqual(w.windowedRate(samples), 1000);
 });
+
+test('ui-status.js в браузерном режиме кладёт setStatusError/clearStatusError в window', () => {
+  const w = loadAsBrowserScript('server/admin_ui/ui-status.js');
+  assert.strictEqual(typeof w.setStatusError, 'function');
+  assert.strictEqual(typeof w.clearStatusError, 'function');
+  // window тут — тот самый sandbox.window из vm-контекста, а не наш process.
+  assert.doesNotThrow(() => w.setStatusError(null, 'x'));
+});
