@@ -698,6 +698,91 @@ func (h *Handlers) Summary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, agg.finish())
 }
 
+// maxErrorEvents caps how many raw events ErrorEvents returns. The point is to
+// see what a failing code actually looks like — versions, games, timestamps —
+// not to page through the whole store from a browser.
+const maxErrorEvents = 100
+
+// ErrorEvents serves GET /admin/api/metrics/errors?code=&from=&to=&gameId=.
+//
+// The summary answers "sync_failed happened 8 times" and stops there: which
+// build, which game, when — все эти вопросы упирались в отсутствие ручки.
+// This one returns the most recent matching events, newest first.
+func (h *Handlers) ErrorEvents(w http.ResponseWriter, r *http.Request) {
+	from, to, ok := summaryPeriod(w, r)
+	if !ok {
+		return
+	}
+	code := strings.TrimSpace(r.URL.Query().Get("code"))
+	if code == "" {
+		http.Error(w, "missing code", http.StatusBadRequest)
+		return
+	}
+	gameFilter := strings.TrimSpace(r.URL.Query().Get("gameId"))
+	if gameFilter != "" && !h.gameIDOK(gameFilter) {
+		http.Error(w, "unknown gameId", http.StatusBadRequest)
+		return
+	}
+
+	// Keep the tail only: a full period can hold far more matches than the cap,
+	// and the useful ones are the recent ones.
+	items := make([]Event, 0, maxErrorEvents)
+	collect := func(ev Event) {
+		if ev.Event != "error" {
+			return
+		}
+		c := ev.ErrorCode
+		if c == "" {
+			c = "unknown"
+		}
+		if c != code {
+			return
+		}
+		if gameFilter != "" && ev.GameID != gameFilter {
+			return
+		}
+		ts, err := time.Parse(time.RFC3339, ev.TS)
+		if err != nil || ts.Before(from) || ts.After(to) {
+			return
+		}
+		items = append(items, ev)
+		if len(items) > maxErrorEvents {
+			items = items[1:]
+		}
+	}
+	// Same lock-free rationale as Summary: scanning holds no mutex.
+	var scanErr error
+	for _, p := range []string{h.prevPath(), h.path()} {
+		if err := scanFile(p, collect); err != nil {
+			scanErr = err
+		}
+	}
+	if scanErr != nil {
+		log.Printf("[metrics] error events scan: %v", scanErr)
+		http.Error(w, "failed to read metrics", http.StatusInternalServerError)
+		return
+	}
+	// Newest first for the UI.
+	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
+		items[i], items[j] = items[j], items[i]
+	}
+	writeJSON(w, struct {
+		Code   string  `json:"code"`
+		From   string  `json:"from"`
+		To     string  `json:"to"`
+		Limit  int     `json:"limit"`
+		Items  []Event `json:"items"`
+		Capped bool    `json:"capped"`
+	}{
+		Code:   code,
+		From:   from.Format(time.RFC3339),
+		To:     to.Format(time.RFC3339),
+		Limit:  maxErrorEvents,
+		Items:  items,
+		Capped: len(items) == maxErrorEvents,
+	})
+}
+
 // Clear serves POST /admin/api/metrics/clear: drops both generations.
 func (h *Handlers) Clear(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
