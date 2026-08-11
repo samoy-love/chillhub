@@ -84,17 +84,28 @@ namespace ChillHub {
                 Logger.Error(ex.Exception, "TaskScheduler.UnobservedTaskException");
         }
 
-        private void Application_Startup(object sender, StartupEventArgs e) {
+        private async void Application_Startup(object sender, StartupEventArgs e) {
             BootConsole.Trace("Starting Application_Startup");
 
-            // Шаг 1. Окно проверки/обновления лаунчера
+            // Шаг 1. Проверка/обновление лаунчера. Окно показываем, только если
+            // есть что показать — версия актуальна и рассказывать нечего, экран
+            // самообновления только тормозил бы каждый обычный запуск.
             this.ShutdownMode = ShutdownMode.OnExplicitShutdown; // не завершаем приложение при закрытии диалога
 
-            var upd = new UpdateWindow();
-            upd.SourceInitialized += (_, __) => ApplyWindowChrome(upd);
-            BootConsole.Trace("Showing UpdateWindow");
-            var ok = StartupSequence.ShouldShowMainWindow(upd.ShowDialog(), upd.Proceed);
-            BootConsole.Trace($"UpdateWindow result ok={ok}");
+            var precheck = await UpdateWindow.PrecheckAsync();
+            bool ok;
+            if (!precheck.NeedsWindow) {
+                BootConsole.Trace("Skipping UpdateWindow: launcher is up to date");
+                ok = true;
+            }
+            else {
+                var upd = new UpdateWindow(precheck);
+                upd.SourceInitialized += (_, __) => ApplyWindowChrome(upd);
+                BootConsole.Trace("Showing UpdateWindow");
+                ok = StartupSequence.ShouldShowMainWindow(upd.ShowDialog(), upd.Proceed);
+                BootConsole.Trace($"UpdateWindow result ok={ok}");
+            }
+
             if (!ok) {
                 // Пользователь закрыл окно или обновление обязательно
                 BootConsole.Trace("Shutting down after update dialog");
