@@ -218,30 +218,6 @@ func extractSpaceProblem(zipPath, filesRoot string) string {
 	return fmt.Sprintf("insufficient disk space: need %d bytes, have %d bytes", needBytes, freeBytes)
 }
 
-// spoolSpaceProblem reports why a body of the announced length cannot be
-// spooled, or "" when it fits or the answer is unknown.
-//
-// It only saves the client from streaming a body that is doomed: a chunked
-// request has no Content-Length at all, so the guard that actually protects the
-// volume is the one inside spoolZipPart.
-func (h *Handlers) spoolSpaceProblem(contentLength int64) string {
-	if contentLength <= 0 {
-		return ""
-	}
-	// The announced body length is an int64 and free space a uint64, so one of
-	// the two has to change type; contentLength is > 0 by the check above, which
-	// makes this conversion exact.
-	need := uint64(contentLength)
-	if err := os.MkdirAll(h.tmpDir(), contentDirPerm); err != nil {
-		return ""
-	}
-	free, ferr := freeSpaceFn(h.tmpDir())
-	if ferr != nil || free == 0 || need <= free {
-		return ""
-	}
-	return fmt.Sprintf("insufficient temp space: need %d bytes, have %d bytes", contentLength, free)
-}
-
 // missingPublishParam returns the message for the first mandatory publish
 // parameter that is absent, or "" when all of them are present. Both publish
 // entry points apply the same three rules in the same order.
@@ -519,33 +495,4 @@ func (out *uploadParts) spoolZip(part *multipart.Part, tmpDir string) (int, erro
 	}
 	out.saved = n
 	return http.StatusOK, nil
-}
-
-// countTree returns the number of files and their total size under root.
-//
-// The walk error is dropped on purpose: these two numbers only drive a progress
-// bar, and the walk that actually builds the manifest reports its own failures.
-func countTree(root string) (int, int64) {
-	var totalFiles int
-	var totalBytes int64
-	_ = filepath.WalkDir(root, func(_ string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			// The file vanished between the directory read and the stat (an
-			// aborted upload being cleaned up, say). Ignoring the error and
-			// calling info.Size() on a nil FileInfo panicked the handler; these
-			// numbers only drive a progress bar, so skipping the entry is fine.
-			return nil //nolint:nilerr // a vanished file is skipped, not reported
-		}
-		totalFiles++
-		totalBytes += info.Size()
-		return nil
-	})
-	return totalFiles, totalBytes
 }
