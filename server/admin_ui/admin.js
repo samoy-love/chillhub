@@ -794,32 +794,6 @@ function applyBenchBest(chunkSelId, concSliderId, concValId){
   notify('Параметры применены: '+formatBytes(best.chunkSize)+' / '+best.concurrency+' поток(ов)');
 }
 
-// putChunkXHR PUTs one chunk and reports byte-level progress via onProgress
-// as it streams, not just once at the very end. fetch() has no upload
-// progress event at all, so a chunk-upload loop built on fetch() only learns
-// about bytes once the WHOLE chunk (tens to hundreds of MB) has landed. On a
-// slow or throttled link, where a single large chunk can take a minute or
-// more, that reads as "stuck at 0%" for the entire chunk and then a sudden
-// jump — and the same lumpy signal feeds the speed calculation, so the
-// reported speed is just as wrong as the progress bar. XHR's
-// upload.onprogress fires continuously during the PUT, so both problems are
-// fixed by the same change.
-function putChunkXHR(url, blob, onProgress){
-  return new Promise((resolve)=>{
-    const xhr = new XMLHttpRequest();
-    xhr.open('PUT', url);
-    xhr.upload.onprogress = (e)=>{ if(e.lengthComputable && onProgress) onProgress(e.loaded); };
-    xhr.onreadystatechange = ()=>{
-      if(xhr.readyState===4){
-        let json = null; try{ json = JSON.parse(xhr.responseText||'null'); }catch(_){}
-        resolve({ ok: xhr.status>=200 && xhr.status<300, status: xhr.status, json });
-      }
-    };
-    xhr.onerror = ()=> resolve({ ok:false, status:0, json:null });
-    xhr.send(blob);
-  });
-}
-
 async function manifestsUpload(){
   const gid = (document.getElementById('gid')?.value||'').trim();
   const ver = (document.getElementById('ver')?.value||'').trim();
@@ -887,11 +861,10 @@ async function manifestsUpload(){
   // inFlight — байты, уже застриманные в ещё НЕ завершённые чанки (ключ —
   // индекс чанка). uploadedBytes считает только целиком подтверждённые
   // чанки; без inFlight прогресс на крупных чанках (десятки-сотни МБ) рос бы
-  // скачками раз в десятки секунд — см. putChunkXHR выше про то, почему это
-  // само по себе выглядело как «загрузка не начинается» и «скорость меряется
-  // неправильно».
+  // скачками раз в десятки секунд — см. комментарий в шапке chunk-upload.js
+  // про то, почему это само по себе выглядело как «загрузка не начинается»
+  // и «скорость меряется неправильно».
   const inFlight = new Map();
-  function pendingBytes(){ let s=0; for(const v of inFlight.values()) s+=v; return s; }
 
   const t0 = performance.now(); let lastT = t0; let lastLoaded = uploadedBytes; let avgSpeed = 0; const alpha = 0.2;
   // 200мс, а не 500 — на чанках размером в десятки МБ пять обновлений в
@@ -899,7 +872,7 @@ async function manifestsUpload(){
   // ощущается: полоса и график иначе кажутся "подвисающими" рывками.
   const UI_INTERVAL=200;
   function updateUI(now){
-    const displayed = Math.min(totalBytes, uploadedBytes + pendingBytes());
+    const displayed = Math.min(totalBytes, uploadedBytes + pendingBytes(inFlight));
     const pct = Math.floor((displayed*100)/totalBytes);
     if(bar) bar.style.width = pct+'%';
     const dt = (now - lastT)/1000; let inst=0; if(dt>0) inst = (displayed - lastLoaded)/dt; if(inst>0) avgSpeed = avgSpeed? (alpha*inst+(1-alpha)*avgSpeed):inst; lastT=now; lastLoaded=displayed;

@@ -69,3 +69,10 @@ test('line-chart.js в браузерном режиме кладёт функц
   assert.strictEqual(Array.from(px).length, 1);
   assert.strictEqual(Array.from(px[0]).length, 2);
 });
+
+test('chunk-upload.js в браузерном режиме кладёт putChunkXHR/pendingBytes в window', () => {
+  const w = loadAsBrowserScript('server/admin_ui/chunk-upload.js');
+  assert.strictEqual(typeof w.putChunkXHR, 'function');
+  assert.strictEqual(typeof w.pendingBytes, 'function');
+  assert.strictEqual(w.pendingBytes(new Map([[0, 5], [1, 7]])), 12);
+});
