@@ -365,6 +365,7 @@ func TestChunkedEndpointsRequireAuth(t *testing.T) {
 		"process":  h.UploadProcessStream,
 		"cleanup":  h.UploadCleanup,
 		"abort":    h.UploadAbort,
+		"stream":   h.UploadStream,
 	}
 	for name, fn := range calls {
 		w := httptest.NewRecorder()
