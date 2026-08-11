@@ -866,16 +866,27 @@ async function manifestsUpload(){
   // и «скорость меряется неправильно».
   const inFlight = new Map();
 
-  const t0 = performance.now(); let lastT = t0; let lastLoaded = uploadedBytes; let avgSpeed = 0; const alpha = 0.2;
+  let avgSpeed = 0; const alpha = 0.2;
   // 200мс, а не 500 — на чанках размером в десятки МБ пять обновлений в
   // секунду всё ещё дешёвы (перерисовка холста и пара textContent), а разница
   // ощущается: полоса и график иначе кажутся "подвисающими" рывками.
   const UI_INTERVAL=200;
+  // Скорость считается не между соседними тиками (200мс), а по скользящему
+  // окну в несколько секунд — см. комментарий в шапке rate-estimator.js про
+  // то, почему "байты с прошлого тика / 200мс" даёт всплески в сотни МБ/с на
+  // каждой волне одновременно завершившихся чанков. 5с — компромисс между
+  // тем, чтобы реально сгладить такую волну (на проде волны шли примерно раз
+  // в 15-20с — время одного чанка при высокой параллельности), и тем, чтобы
+  // цифра не казалась заторможенной на быстрой/короткой загрузке.
+  const RATE_WINDOW_MS = 5000;
+  let byteSamples = [];
   function updateUI(now){
     const displayed = Math.min(totalBytes, uploadedBytes + pendingBytes(inFlight));
     const pct = Math.floor((displayed*100)/totalBytes);
     if(bar) bar.style.width = pct+'%';
-    const dt = (now - lastT)/1000; let inst=0; if(dt>0) inst = (displayed - lastLoaded)/dt; if(inst>0) avgSpeed = avgSpeed? (alpha*inst+(1-alpha)*avgSpeed):inst; lastT=now; lastLoaded=displayed;
+    byteSamples = pushByteSample(byteSamples, { t: now, bytes: displayed }, RATE_WINDOW_MS);
+    const inst = windowedRate(byteSamples);
+    if(inst>0) avgSpeed = avgSpeed? (alpha*inst+(1-alpha)*avgSpeed):inst;
     const remain = Math.max(0, totalBytes - displayed); const eta = (avgSpeed>0)? (remain/avgSpeed):0;
     // Update peak and median (window 8s)
     if(inst>0){ peakBps = Math.max(peakBps, inst); }

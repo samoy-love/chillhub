@@ -76,3 +76,12 @@ test('chunk-upload.js в браузерном режиме кладёт putChunk
   assert.strictEqual(typeof w.pendingBytes, 'function');
   assert.strictEqual(w.pendingBytes(new Map([[0, 5], [1, 7]])), 12);
 });
+
+test('rate-estimator.js в браузерном режиме кладёт функции окна скорости в window', () => {
+  const w = loadAsBrowserScript('server/admin_ui/rate-estimator.js');
+  assert.strictEqual(typeof w.pushByteSample, 'function');
+  assert.strictEqual(typeof w.windowedRate, 'function');
+  let samples = w.pushByteSample([], { t: 0, bytes: 0 }, 1000);
+  samples = w.pushByteSample(samples, { t: 1000, bytes: 1000 }, 1000);
+  assert.strictEqual(w.windowedRate(samples), 1000);
+});
