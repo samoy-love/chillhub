@@ -16,9 +16,9 @@ import (
 	"github.com/zeebo/blake3"
 )
 
-// The two NDJSON publish pipelines (POST /uploadStream and the chunked
-// /upload/process) emit the same event stream, so extraction and manifest
-// composition live here instead of being duplicated per handler.
+// The chunked NDJSON publish pipeline (/upload/process) emits its event
+// stream through the helpers in this file, kept separate from the handler
+// itself so extraction and manifest composition aren't duplicated inline.
 
 // emitEventf writes one NDJSON event.
 //

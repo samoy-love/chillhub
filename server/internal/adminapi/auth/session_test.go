@@ -638,7 +638,6 @@ func TestLoadConfigBcryptWinsOverPlain(t *testing.T) {
 // проверки с обеих сторон сразу.
 var nginxAuthRequestBypassed = []string{
 	"/admin/api/upload",
-	"/admin/api/uploadStream",
 	"/admin/api/upload/init",
 	"/admin/api/upload/chunk",
 	"/admin/api/upload/status",

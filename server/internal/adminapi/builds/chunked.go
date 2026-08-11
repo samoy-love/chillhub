@@ -231,7 +231,7 @@ func (h *Handlers) UploadCleanup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 2. Leftover temp ZIPs from the /uploadStream path.
+	// 2. Leftover temp ZIPs from the plain-multipart /upload path.
 	tmpRoot := filepath.Join(h.root, "tmp")
 	if entries, err := os.ReadDir(tmpRoot); err == nil {
 		for _, e := range entries {
@@ -811,12 +811,12 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	fl.Flush()
 }
 
-// processLauncherRepublish is UploadProcessStream's version of
-// streamLauncherRepublish (upload.go): same content/conflict decision, plus
+// processLauncherRepublish is respondLauncherRepublish's (upload.go) NDJSON
+// counterpart for the chunked pipeline: same content/conflict decision, plus
 // the chunked pipeline's own bookkeeping on a match — dropping the
 // now-redundant upload.zip and marking the upload done, exactly like a
 // normal process run does once it has promoted. Kept as its own function,
-// same as its two siblings, to keep UploadProcessStream's cyclomatic
+// same as respondLauncherRepublish, to keep UploadProcessStream's cyclomatic
 // complexity under the linter's ceiling.
 func (h *Handlers) processLauncherRepublish(nw *ndjsonWriter, fl adminutil.Flusher, m *uploadMeta, id, zipPath string, files []manifestFile, emptyDirs []string) bool {
 	if !h.launcherVersionAlreadyPublished(m.GameID, m.Version) {

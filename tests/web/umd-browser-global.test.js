@@ -75,4 +75,22 @@ test('chunk-upload.js в браузерном режиме кладёт putChunk
   assert.strictEqual(typeof w.putChunkXHR, 'function');
   assert.strictEqual(typeof w.pendingBytes, 'function');
   assert.strictEqual(w.pendingBytes(new Map([[0, 5], [1, 7]])), 12);
+  assert.strictEqual(typeof w.uploadChunkWithRetries, 'function');
+  assert.strictEqual(typeof w.runWorkerPool, 'function');
+});
+
+test('rate-estimator.js в браузерном режиме кладёт функции окна скорости в window', () => {
+  const w = loadAsBrowserScript('server/admin_ui/rate-estimator.js');
+  assert.strictEqual(typeof w.makeRateEstimator, 'function');
+  const est = w.makeRateEstimator(1000);
+  est.push(0, 0);
+  assert.strictEqual(est.push(1000, 1000), 1000);
+});
+
+test('ui-status.js в браузерном режиме кладёт setStatusError/clearStatusError в window', () => {
+  const w = loadAsBrowserScript('server/admin_ui/ui-status.js');
+  assert.strictEqual(typeof w.setStatusError, 'function');
+  assert.strictEqual(typeof w.clearStatusError, 'function');
+  // window тут — тот самый sandbox.window из vm-контекста, а не наш process.
+  assert.doesNotThrow(() => w.setStatusError(null, 'x'));
 });

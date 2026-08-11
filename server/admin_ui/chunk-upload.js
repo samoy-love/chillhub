@@ -50,5 +50,61 @@
     return sum;
   }
 
-  return { putChunkXHR, pendingBytes };
+  // uploadChunkWithRetries заливает один чанк с повторными попытками — это
+  // тело, которое раньше было продублировано втроём в admin.js (первый
+  // проход, ретрай сорвавшихся чанков, дозаливка недостающих перед complete).
+  // 409 — чанк уже лежит на сервере (гонка с ретраем или устаревший ответ
+  // /status) и считается успехом, а не ошибкой.
+  async function uploadChunkWithRetries(uploadId, index, blob, opts) {
+    const o = opts || {};
+    const maxAttempts = o.maxAttempts || 5;
+    const retryDelayMs = o.retryDelayMs || 400;
+    const put = o.put || putChunkXHR;
+    let attempts = 0;
+    while (attempts < maxAttempts) {
+      attempts++;
+      try {
+        const r = await put(o.url, blob, o.onProgress, o.deps);
+        if (r.ok) return { ok: true, attempts, exists: false, writeMs: Number((r.json && r.json.writeMs) || 0) | 0 };
+        if (r.status === 409) return { ok: true, attempts, exists: true, writeMs: 0 };
+        if (o.onAttemptFailed) o.onAttemptFailed({ index, attempts, status: r.status });
+        await new Promise((res) => setTimeout(res, retryDelayMs * attempts));
+      } catch (e) {
+        if (o.onAttemptFailed) o.onAttemptFailed({ index, attempts, error: e });
+        await new Promise((res) => setTimeout(res, retryDelayMs * attempts));
+      }
+    }
+    return { ok: false, attempts, exists: false, writeMs: 0 };
+  }
+
+  // runWorkerPool гоняет worker(index) над indexes с ограниченной
+  // параллельностью. concurrencyRef() читается перед каждым запуском
+  // очередного воркера, так что предел можно менять на лету (пользователь
+  // двигает слайдер параллельности прямо во время заливки). onActiveChange
+  // получает текущее число активных воркеров после каждого изменения.
+  function runWorkerPool(indexes, concurrencyRef, worker, onActiveChange) {
+    return new Promise((resolve) => {
+      let ptr = 0;
+      let active = 0;
+      const failed = [];
+      if (indexes.length === 0) { resolve(failed); return; }
+      function next() {
+        while (active < concurrencyRef() && ptr < indexes.length) {
+          const idx = indexes[ptr++];
+          active++;
+          if (onActiveChange) onActiveChange(active);
+          Promise.resolve(worker(idx)).then((ok) => {
+            active--;
+            if (onActiveChange) onActiveChange(active);
+            if (!ok) failed.push(idx);
+            if (ptr >= indexes.length && active === 0) resolve(failed);
+            else next();
+          });
+        }
+      }
+      next();
+    });
+  }
+
+  return { putChunkXHR, pendingBytes, uploadChunkWithRetries, runWorkerPool };
 });

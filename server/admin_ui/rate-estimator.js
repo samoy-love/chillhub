@@ -1,0 +1,76 @@
+// Скользящее окно для расчёта скорости загрузки — вместо мгновенной
+// производной "байты с прошлого тика / время с прошлого тика".
+//
+// ПОЧЕМУ НЕ ХВАТАЕТ РАЗНИЦЫ МЕЖДУ СОСЕДНИМИ ТИКАМИ. Байты чанка учитываются
+// по событию xhr.upload.onprogress (см. putChunkXHR в chunk-upload.js), а оно
+// считает не то, что принял сервер, а то, что браузер успел отдать в сокет
+// ОС. Отдаётся это рывками: пока буфер сокета полон, прогресса нет вовсе,
+// потом сеть его разгребает и за один UI-тик прилетает сразу несколько
+// мегабайт. Деление такого рывка на 200мс тика давало на экране всплески в
+// сотни МБ/с, которых на канале не было ни секунды, — а в паузах между
+// рывками ноль. Окно в несколько секунд усредняет ровно эту рябь буфера:
+// берётся разница байт между самой старой и самой новой точкой окна,
+// делённая на разницу их времени.
+//
+// ПОЧЕМУ ЭТО ОТДЕЛЬНЫЙ МОДУЛЬ, А НЕ КУСОК ЛОГИКИ В updateUI — по той же
+// причине, что upload-bench.js/ui-throttle.js/chunk-upload.js: только
+// обычный require()-имый CommonJS-модуль даёт c8 построчное покрытие, код,
+// вытащенный из admin.js регэкспом и исполненный через new Function, V8 с
+// исходным файлом не связывает (см. шапку upload-bench.js).
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) {
+    module.exports = factory();
+  } else {
+    Object.assign(root, factory());
+  }
+})(typeof window !== 'undefined' ? window : globalThis, function () {
+
+  // makeRateEstimator — фабрика (как makeUiThrottler в ui-throttle.js):
+  // буфер точек и ширина окна живут внутри, наружу торчат только push и
+  // rate. Вызывающему коду не нужно ни хранить массив, ни знать, что точки
+  // вообще существуют.
+  //
+  //   const est = makeRateEstimator(4000);
+  //   const bps = est.push(performance.now(), bytesSoFar);
+  //
+  function makeRateEstimator(windowMs) {
+    const samples = []; // [{t, bytes}], всегда в пределах windowMs от последней
+    let lastBytes = null;
+
+    // push добавляет точку, выбрасывает всё, что старше windowMs от неё, и
+    // возвращает текущую скорость — «обновить и прочитать» тут всегда одна
+    // операция, отдельно пушить незачем.
+    //
+    // ОТКАТ СЧЁТЧИКА. Вся арифметика ниже держится на том, что bytes не
+    // убывает, иначе скорость уходит в минус. Вызывающий счётчик убывать
+    // умеет: при ретрае чанка его недоотправленные байты выкидываются из
+    // inFlight (см. runNext в admin.js). Инвариант поэтому чинится здесь, а
+    // не надеждой на вызывающего: откат просто игнорируется, окно видит
+    // полку. Это честно — сорванный чанк действительно не продвинул
+    // загрузку, и пока байты не перезальются, скорость обязана просесть.
+    function push(t, bytes) {
+      if (lastBytes !== null && bytes < lastBytes) bytes = lastBytes;
+      lastBytes = bytes;
+      samples.push({ t, bytes });
+      const cutoff = t - windowMs;
+      while (samples.length > 1 && samples[0].t < cutoff) samples.shift();
+      return rate();
+    }
+
+    // rate — байт/сек между краями окна. Меньше двух точек или нулевая
+    // разница времени — скорость неизвестна, и это 0, а не NaN/Infinity:
+    // вызывающий код отличает «нет данных» проверкой > 0.
+    function rate() {
+      if (samples.length < 2) return 0;
+      const first = samples[0];
+      const last = samples[samples.length - 1];
+      const dt = (last.t - first.t) / 1000;
+      if (dt <= 0) return 0;
+      return (last.bytes - first.bytes) / dt;
+    }
+
+    return { push, rate };
+  }
+
+  return { makeRateEstimator };
+});

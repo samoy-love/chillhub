@@ -115,24 +115,32 @@ export default [
         drawSpeedChart: 'readonly',
         drawMultiLineChart: 'readonly',
         putChunkXHR: 'readonly',
-        pendingBytes: 'readonly'
+        pendingBytes: 'readonly',
+        uploadChunkWithRetries: 'readonly',
+        runWorkerPool: 'readonly',
+        makeRateEstimator: 'readonly',
+        setStatusError: 'readonly',
+        clearStatusError: 'readonly'
       }
     }
   },
 
-  // upload-bench.js, ui-throttle.js, speed-chart.js, line-chart.js and
-  // chunk-upload.js are UMD modules: `module` is only referenced behind a
-  // `typeof module === 'object'` guard so they work as a plain <script> in
-  // the browser too, but that guard doesn't stop no-undef from flagging the
-  // bare identifier — the browser globals list above has no `module`/
-  // `exports` because real browser code must never see them.
+  // upload-bench.js, ui-throttle.js, speed-chart.js, line-chart.js,
+  // chunk-upload.js, rate-estimator.js and ui-status.js are UMD modules:
+  // `module` is only referenced behind a `typeof module === 'object'` guard
+  // so they work as a plain <script> in the browser too, but that guard
+  // doesn't stop no-undef from flagging the bare identifier — the browser
+  // globals list above has no `module`/`exports` because real browser code
+  // must never see them.
   {
     files: [
       'server/admin_ui/upload-bench.js',
       'server/admin_ui/ui-throttle.js',
       'server/admin_ui/speed-chart.js',
       'server/admin_ui/line-chart.js',
-      'server/admin_ui/chunk-upload.js'
+      'server/admin_ui/chunk-upload.js',
+      'server/admin_ui/rate-estimator.js',
+      'server/admin_ui/ui-status.js'
     ],
     languageOptions: {
       globals: {

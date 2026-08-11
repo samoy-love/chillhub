@@ -794,34 +794,40 @@ function applyBenchBest(chunkSelId, concSliderId, concValId){
   notify('Параметры применены: '+formatBytes(best.chunkSize)+' / '+best.concurrency+' поток(ов)');
 }
 
-async function manifestsUpload(){
-  const gid = (document.getElementById('gid')?.value||'').trim();
-  const ver = (document.getElementById('ver')?.value||'').trim();
-  if(!gid){ notify('Укажите идентификатор игры'); return; }
-  if(!ver){ notify('Укажите версию'); return; }
-  const file = (window.__manDroppedFile) || document.getElementById('man_zip')?.files?.[0];
-  if(!file){ notify('Выберите ZIP-файл'); return; }
-  const wrap=document.getElementById('man_prog_wrap'); const bar=document.getElementById('man_pb');
-  const pctEl=document.getElementById('man_prog_pct'); const bytesEl=document.getElementById('man_prog_bytes');
-  const speedEl=document.getElementById('man_prog_speed'); const medianEl=document.getElementById('man_prog_median'); const peakEl=document.getElementById('man_prog_peak'); const etaEl=document.getElementById('man_prog_eta');
-  const txt = document.getElementById('man_prog_text');
+// runChunkedUpload drives the resumable init/chunk/complete/process pipeline
+// against a ZIP file, updating the progress UI rooted at `${prefix}_*` ids
+// (mirroring the man_* markup this was extracted from: prog_wrap/pb/
+// prog_pct/..., chunk_size, conc(+_val), active_now/active_cap,
+// speed_wrap/speed). Shared by the game upload card (`man`) and the
+// launcher upload card (`up`) so both get the same parallel chunked
+// pipeline — the launcher card used to POST the whole ZIP as one unchunked
+// XHR request, which is exactly the "3 МБ/с и не разгоняется" bottleneck
+// that started this whole investigation.
+// Returns true once the archive is published (extracted + manifest written).
+async function runChunkedUpload(prefix, kind, gameId, version, file){
+  const id = (suffix)=> document.getElementById(prefix+'_'+suffix);
+  const gid = gameId, ver = version;
+  const wrap=id('prog_wrap'); const bar=id('pb');
+  const pctEl=id('prog_pct'); const bytesEl=id('prog_bytes');
+  const speedEl=id('prog_speed'); const medianEl=id('prog_median'); const peakEl=id('prog_peak'); const etaEl=id('prog_eta');
+  const txt = id('prog_text');
   if(wrap) wrap.style.display='block';
   if(bar) bar.style.width='0%';
   if(pctEl) pctEl.textContent='Подготовка к загрузке...';
-  if(txt) txt.textContent = '';
+  clearStatusError(txt, '');
 
   // UI controls: chunk size and concurrency
-  const chunkSel = document.getElementById('man_chunk_size');
+  const chunkSel = id('chunk_size');
   let desiredChunk = Number(chunkSel?.value||0)|0; if(desiredChunk<=0) desiredChunk = 8*1024*1024;
-  const concSlider = document.getElementById('man_conc');
-  const concVal = document.getElementById('man_conc_val');
-  const activeNowEl = document.getElementById('man_active_now');
-  const activeCapEl = document.getElementById('man_active_cap');
+  const concSlider = id('conc');
+  const concVal = id('conc_val');
+  const activeNowEl = id('active_now');
+  const activeCapEl = id('active_cap');
   let userPar = Number(concSlider?.value||6)|0; if(userPar<1) userPar=1; if(userPar>100) userPar=100;
   if(concVal) concVal.textContent = String(userPar);
   if(activeCapEl) activeCapEl.textContent = String(userPar);
   if(activeNowEl) activeNowEl.textContent = '0';
-  const speedWrap = document.getElementById('man_speed_wrap'); const speedCanvas = document.getElementById('man_speed');
+  const speedWrap = id('speed_wrap'); const speedCanvas = id('speed');
   if(speedWrap) speedWrap.style.display='block';
   if(speedCanvas) speedCanvas.style.height='180px';
   let speedPoints = []; // [{t, bps}]
@@ -832,12 +838,12 @@ async function manifestsUpload(){
   let initRes; try{
     console.group('Upload ZIP');
     console.time('upload_total');
-    console.log('[init] request', { gid, ver, file: { name: file.name, size: file.size }, chunkSize: desiredChunk, userPar });
+    console.log('[init] request', { kind, gid, ver, file: { name: file.name, size: file.size }, chunkSize: desiredChunk, userPar });
     initRes = await fetch('/admin/api/upload/init', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({
-      kind:'game', gameId: gid, version: ver, zipName: file.name, totalSize: file.size, chunkSize: desiredChunk
+      kind, gameId: gid, version: ver, zipName: file.name, totalSize: file.size, chunkSize: desiredChunk
     }) });
-  }catch(e){ notify('Ошибка init: '+e); return; }
-  if(!initRes.ok){ notify('HTTP '+initRes.status+' init'); return; }
+  }catch(e){ setStatusError(txt, 'Ошибка init: '+e); notify('Ошибка init: '+e); console.groupEnd(); return false; }
+  if(!initRes.ok){ setStatusError(txt, 'HTTP '+initRes.status+' init'); notify('HTTP '+initRes.status+' init'); console.groupEnd(); return false; }
   const init = await initRes.json();
   console.log('[init] response', init);
   const uploadId = init.uploadId; const chunkSize = init.chunkSize || desiredChunk || (8*1024*1024); const totalChunks = init.totalChunks||Math.ceil(file.size/chunkSize);
@@ -852,7 +858,7 @@ async function manifestsUpload(){
   const allIdx = [];
   for(let i=0;i<totalChunks;i++){ if(!received.has(i)) allIdx.push(i); }
   const totalBytes = file.size; let uploadedBytes = received.size * chunkSize; if(uploadedBytes>totalBytes) uploadedBytes = totalBytes;
-  let ptr = 0; let failed = false; let errors = 0; const failedChunks = [];
+  const failedChunks = [];
   // Concurrency is strictly user-controlled (1:1 with slider), clamped to [1..100]
   const maxCap = 100;
   let curPar = Math.max(1, Math.min(100, userPar));
@@ -866,24 +872,41 @@ async function manifestsUpload(){
   // и «скорость меряется неправильно».
   const inFlight = new Map();
 
-  const t0 = performance.now(); let lastT = t0; let lastLoaded = uploadedBytes; let avgSpeed = 0; const alpha = 0.2;
   // 200мс, а не 500 — на чанках размером в десятки МБ пять обновлений в
   // секунду всё ещё дешёвы (перерисовка холста и пара textContent), а разница
   // ощущается: полоса и график иначе кажутся "подвисающими" рывками.
   const UI_INTERVAL=200;
+  // Скорость считается не между соседними тиками (200мс), а по скользящему
+  // окну — см. комментарий в шапке rate-estimator.js про то, почему рывки
+  // буфера сокета иначе дают всплески в сотни МБ/с. 5с — компромисс между
+  // тем, чтобы сгладить рывок целиком, и тем, чтобы цифра не казалась
+  // заторможенной на быстрой/короткой загрузке.
+  //
+  // Экспоненциального сглаживания поверх окна намеренно нет: соседние окна
+  // перекрываются почти целиком, так что усреднения EMA уже не добавляет —
+  // только задержку, из-за которой скорость и ETA отставали от реальности на
+  // старте и на финише заливки.
+  const rateEstimator = makeRateEstimator(5000);
+  let shownSpeed = 0;
   function updateUI(now){
     const displayed = Math.min(totalBytes, uploadedBytes + pendingBytes(inFlight));
     const pct = Math.floor((displayed*100)/totalBytes);
     if(bar) bar.style.width = pct+'%';
-    const dt = (now - lastT)/1000; let inst=0; if(dt>0) inst = (displayed - lastLoaded)/dt; if(inst>0) avgSpeed = avgSpeed? (alpha*inst+(1-alpha)*avgSpeed):inst; lastT=now; lastLoaded=displayed;
-    const remain = Math.max(0, totalBytes - displayed); const eta = (avgSpeed>0)? (remain/avgSpeed):0;
-    // Update peak and median (window 8s)
+    // Пока окно не набрало двух точек (первый тик) скорость неизвестна —
+    // показываем прошлую, а не мигаем пустотой.
+    const inst = rateEstimator.push(now, displayed);
+    if(inst>0) shownSpeed = inst;
+    const remain = Math.max(0, totalBytes - displayed); const eta = (shownSpeed>0)? (remain/shownSpeed):0;
+    // «Пик» теперь означает максимум пятисекундного среднего, а не максимум
+    // мгновенной производной — та показывала рывок буфера сокета и за любую
+    // длинную заливку успевала упереться в число, которого канал никогда не
+    // выдавал. Медиана считается по точкам графика за HORIZON_MS (120с).
     if(inst>0){ peakBps = Math.max(peakBps, inst); }
     const horizon = HORIZON_MS; const windowPts = speedPoints.filter(p=> now-p.t <= horizon);
     let medianBps = 0; if(windowPts.length>0){ const arr = windowPts.map(p=> p.bps).sort((a,b)=>a-b); const mid = Math.floor(arr.length/2); medianBps = arr.length%2 ? arr[mid] : ((arr[mid-1]+arr[mid])/2); }
     if(pctEl) pctEl.textContent = 'Загружено '+pct+'%';
     if(bytesEl) bytesEl.textContent = '('+formatBytes(displayed)+' / '+formatBytes(totalBytes)+')';
-    if(speedEl) speedEl.textContent = avgSpeed>0 ? formatSpeed(avgSpeed) : '';
+    if(speedEl) speedEl.textContent = shownSpeed>0 ? formatSpeed(shownSpeed) : '';
     if(medianEl) medianEl.textContent = medianBps>0 ? ('мед '+formatSpeed(medianBps)) : '';
     if(peakEl) peakEl.textContent = peakBps>0 ? ('пик '+formatSpeed(peakBps)) : '';
     if(etaEl) etaEl.textContent = eta>0 ? ('ETA '+formatEta(eta)) : '';
@@ -905,55 +928,41 @@ async function manifestsUpload(){
   const uiThrottle = makeUiThrottler(UI_INTERVAL, ()=> updateUI(performance.now()));
   function scheduleUI(){ uiThrottle.schedule(); }
 
-  let active = 0;
   const win = []; // recent writeMs per chunk
   const WIN_MAX = 50;
 
-  async function runNext(){
-    if (ptr >= allIdx.length) return;
-    const i = allIdx[ptr++];
-    active++;
-    if(activeNowEl) activeNowEl.textContent = String(active);
+  async function uploadOne(i){
     const start = i*chunkSize; const end = Math.min(start+chunkSize, file.size);
     const blob = file.slice(start, end);
     const b = (end-start);
-    let ok=false, attempts=0; const MAX_ATTEMPTS=5; while(!ok && attempts<MAX_ATTEMPTS){ attempts++;
-      inFlight.set(i, 0);
-      try{
-        const r = await putChunkXHR('/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+i, blob, (loaded)=>{ inFlight.set(i, loaded); scheduleUI(); });
-        if(r.ok){
-          const wms = Number(r.json && r.json.writeMs || 0)|0;
-          if(wms>0){ win.push(wms); if(win.length>WIN_MAX) win.shift(); }
-          if(attempts>1){ console.log('[chunk ok after retry]', { index:i, attempts, bytes:b, writeMs:wms }); } else { console.log('[chunk ok]', { index:i, bytes:b, writeMs:wms, par:curPar, active, left: allIdx.length - ptr }); }
-          ok = true; inFlight.delete(i); uploadedBytes += b; scheduleUI();
-        } else if(r.status===409){ ok=true; inFlight.delete(i); console.log('[chunk skip:exists]', { index:i }); }
-        else {
-          errors++; inFlight.delete(i); console.warn('[chunk http]', { index:i, status:r.status, attempt:attempts }); await new Promise(res=> setTimeout(res, 400*attempts));
-        }
-      }catch(e){ errors++; inFlight.delete(i); console.warn('[chunk fetch]', { index:i, error:String(e), attempt:attempts }); await new Promise(res=> setTimeout(res, 400*attempts)); }
+    const r = await uploadChunkWithRetries(uploadId, i, blob, {
+      url: '/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+i,
+      onProgress: (loaded)=>{ inFlight.set(i, loaded); scheduleUI(); },
+      onAttemptFailed: (info)=> console.warn('[chunk fail]', info),
+    });
+    inFlight.delete(i);
+    if(r.ok){
+      if(r.writeMs>0){ win.push(r.writeMs); if(win.length>WIN_MAX) win.shift(); }
+      // 409 (r.exists) — чанк уже лежит на сервере (гонка с ретраем или
+      // устаревший ответ /status). Байты всё равно надо засчитать: чанк на
+      // месте, а без прибавки прогресс-бар недосчитывал бы его до самого
+      // конца и не доходил до 100%.
+      if(r.exists){ console.log('[chunk skip:exists]', { index:i }); } else if(r.attempts>1){ console.log('[chunk ok after retry]', { index:i, attempts:r.attempts, bytes:b, writeMs:r.writeMs }); } else { console.log('[chunk ok]', { index:i, bytes:b, writeMs:r.writeMs, par:curPar }); }
+      uploadedBytes += b; scheduleUI();
     }
-    if(!ok){ failedChunks.push(i); }
-    active--;
-    if(activeNowEl) activeNowEl.textContent = String(active);
-    // Keep pipeline full up to curPar
-    while(active < curPar && ptr < allIdx.length){ runNext(); }
+    return r.ok;
   }
 
-  // Handle live concurrency changes
+  // Handle live concurrency changes: curPar is read fresh by runWorkerPool
+  // before scheduling each next worker, so moving the slider mid-upload just
+  // takes effect on the next slot instead of needing a restart.
   if(concSlider){ concSlider.addEventListener('input', ()=>{ userPar = Number(concSlider.value|0); if(userPar<1) userPar=1; if(userPar>100) userPar=100; if(concVal) concVal.textContent=String(userPar); if(activeCapEl) activeCapEl.textContent = String(userPar);
-    const prev = curPar; curPar = Math.max(1, Math.min(100, userPar)); if(curPar!==prev){ while(active < curPar && ptr < allIdx.length){ runNext(); } }
+    curPar = Math.max(1, Math.min(100, userPar));
   }); }
 
-  // Start initial workers
   console.log('[upload] start', { curPar, maxCap, totalChunks, pending: allIdx.length });
-  for(let j=0; j<Math.min(curPar, allIdx.length); j++){ runNext(); }
-  // No adaptive timer: concurrency is fixed by user settings
-
-  // Wait until all scheduled chunks are processed
-  while(ptr < allIdx.length || active > 0){
-    await new Promise(res=> setTimeout(res, 200));
-    if(failed) break;
-  }
+  const poolFailed = await runWorkerPool(allIdx, ()=> curPar, uploadOne, (active)=>{ if(activeNowEl) activeNowEl.textContent = String(active); });
+  failedChunks.push(...poolFailed);
   // Force one final, unthrottled UI sync: on a fast link (or a small build) the
   // whole chunk phase can finish inside a single UI_INTERVAL window, so the
   // scheduled updateUI() from the last chunk may never have run yet. Without
@@ -961,36 +970,27 @@ async function manifestsUpload(){
   // complete+process phase, which reads the same as the frozen-graph bug above.
   updateUI(performance.now());
 
+  async function uploadOneRetry(idx){
+    const s = idx*chunkSize; const e = Math.min(s+chunkSize, file.size);
+    const bl = file.slice(s, e);
+    const r = await uploadChunkWithRetries(uploadId, idx, bl, {
+      url: '/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+idx,
+      onProgress: (loaded)=>{ inFlight.set(idx, loaded); scheduleUI(); },
+      onAttemptFailed: (info)=> console.warn('[retry chunk fail]', info),
+    });
+    inFlight.delete(idx);
+    if(r.ok){ uploadedBytes += (e-s); scheduleUI(); if(r.attempts>1){ console.log('[retry ok]', { index:idx, attempts:r.attempts }); } }
+    return r.ok;
+  }
+
   // Retry pass for failed chunks (if any)
-  if(!failed && failedChunks.length>0){
+  if(failedChunks.length>0){
     console.group('[retry pass] re-upload failed chunks');
     console.log('failedChunks count', failedChunks.length);
-    let missPtr = 0; let missActive = 0; let missFailed = false;
-    async function runFailed(){
-      if(missPtr >= failedChunks.length) return;
-      const idx = failedChunks[missPtr++];
-      missActive++; if(activeNowEl) activeNowEl.textContent = String(missActive);
-      const s = idx*chunkSize; const e = Math.min(s+chunkSize, file.size);
-      const bl = file.slice(s, e);
-      let ok=false, attempts=0; const MAX=5; while(!ok && attempts<MAX){ attempts++;
-        inFlight.set(idx, 0);
-        try{
-          const r = await putChunkXHR('/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+idx, bl, (loaded)=>{ inFlight.set(idx, loaded); scheduleUI(); });
-          if(r.ok){ ok=true; inFlight.delete(idx); uploadedBytes += (e-s); scheduleUI(); if(attempts>1){ console.log('[retry ok]', { index:idx, attempts }); } }
-          else if(r.status===409){ ok=true; inFlight.delete(idx); }
-          else { inFlight.delete(idx); console.warn('[retry http]', { index:idx, status:r.status, attempt:attempts }); await new Promise(res=> setTimeout(res, 500*attempts)); }
-        }catch(err){ inFlight.delete(idx); console.warn('[retry fetch]', { index:idx, error:String(err), attempt:attempts }); await new Promise(res=> setTimeout(res, 500*attempts)); }
-      }
-      if(!ok){ missFailed = true; }
-      missActive--; if(activeNowEl) activeNowEl.textContent = String(missActive);
-      while(missActive < curPar && missPtr < failedChunks.length){ runFailed(); }
-    }
-    for(let j=0;j<Math.min(curPar, failedChunks.length); j++){ runFailed(); }
-    while(missPtr < failedChunks.length || missActive > 0){ await new Promise(res=> setTimeout(res, 150)); if(missFailed) break; }
+    const stillFailed = await runWorkerPool(failedChunks, ()=> curPar, uploadOneRetry, (active)=>{ if(activeNowEl) activeNowEl.textContent = String(active); });
     console.groupEnd();
-    if(missFailed){ console.timeEnd('upload_total'); console.groupEnd(); notify('Повторная загрузка неудачных чанков завершилась с ошибкой'); return; }
+    if(stillFailed.length>0){ console.timeEnd('upload_total'); console.groupEnd(); const m='Повторная загрузка неудачных чанков завершилась с ошибкой'; setStatusError(txt, m); notify(m); return false; }
   }
-  if(failed){ console.timeEnd('upload_total'); console.groupEnd(); notify('Загрузка чанков завершилась с ошибкой'); return; }
 
   // COMPLETE
   async function uploadMissingAndRetryComplete(maxRounds=3){
@@ -1012,39 +1012,31 @@ async function manifestsUpload(){
       }
       console.log('[complete] will re-upload missing', missing.length);
       // Re-upload missing with current concurrency
-      let missPtr = 0; let missActive = 0; let missFailed = false;
-      async function runMissing(){
-        if(missPtr >= missing.length) return;
-        const i = missing[missPtr++];
-        missActive++; if(activeNowEl) activeNowEl.textContent = String(missActive);
+      async function runMissing(i){
         const start = i*chunkSize; const end = Math.min(start+chunkSize, file.size);
         const blob = file.slice(start, end);
-        let ok=false, attempts=0; while(!ok && attempts<3){ attempts++;
-          inFlight.set(i, 0);
-          try{
-            const r = await putChunkXHR('/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+i, blob, (loaded)=>{ inFlight.set(i, loaded); scheduleUI(); });
-            if(r.ok){ ok=true; inFlight.delete(i); uploadedBytes += (end-start); scheduleUI(); }
-            else if(r.status===409){ ok=true; inFlight.delete(i); }
-            else { inFlight.delete(i); await new Promise(res=> setTimeout(res, 300*attempts)); }
-          }catch{ inFlight.delete(i); await new Promise(res=> setTimeout(res, 300*attempts)); }
-        }
-        if(!ok){ missFailed = true; }
-        missActive--; if(activeNowEl) activeNowEl.textContent = String(missActive);
-        while(missActive < curPar && missPtr < missing.length){ runMissing(); }
+        const r = await uploadChunkWithRetries(uploadId, i, blob, {
+          url: '/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+i,
+          maxAttempts: 3, retryDelayMs: 300,
+          onProgress: (loaded)=>{ inFlight.set(i, loaded); scheduleUI(); },
+        });
+        inFlight.delete(i);
+        if(r.ok){ uploadedBytes += (end-start); scheduleUI(); }
+        return r.ok;
       }
-      for(let j=0;j<Math.min(curPar, missing.length); j++){ runMissing(); }
-      while(missPtr < missing.length || missActive > 0){ await new Promise(res=> setTimeout(res, 150)); if(missFailed) break; }
-      if(missFailed){ notify('Повторная загрузка пропущенных чанков завершилась с ошибкой'); return false; }
+      const missingFailed = await runWorkerPool(missing, ()=> curPar, runMissing, (active)=>{ if(activeNowEl) activeNowEl.textContent = String(active); });
+      if(missingFailed.length>0){ notify('Повторная загрузка пропущенных чанков завершилась с ошибкой'); return false; }
       // try complete next round
     }
     return false;
   }
 
   const okComplete = await uploadMissingAndRetryComplete(3);
-  if(!okComplete){ console.timeEnd('upload_total'); console.groupEnd(); notify('Ошибка завершения загрузки (complete)'); return; }
+  if(!okComplete){ console.timeEnd('upload_total'); console.groupEnd(); const m='Ошибка завершения загрузки (complete)'; setStatusError(txt, m); notify(m); return false; }
   if(txt) txt.textContent = 'Сервера проверяет sha256 и готовит распаковку...';
 
   // PROCESS (NDJSON)
+  let processOk = true;
   try{
     console.log('[process] start');
     const url = '/admin/api/upload/process?uploadId='+encodeURIComponent(uploadId);
@@ -1053,7 +1045,7 @@ async function manifestsUpload(){
     // POST/PUT/PATCH/DELETE, поэтому GET оставлял бы эту операцию без защиты.
     // Заголовок X-CSRF-Token подставит обёртка fetch в начале файла.
     const res = await fetch(url, { method:'POST', headers: { 'Accept':'application/x-ndjson', 'Cache-Control':'no-store' } });
-    if(!res.ok){ notify('HTTP '+res.status+' process'); return; }
+    if(!res.ok){ setStatusError(txt, 'HTTP '+res.status+' process'); notify('HTTP '+res.status+' process'); console.timeEnd('upload_total'); console.groupEnd(); return false; }
     const dec = new window.TextDecoder();
     let gotAny = false;
     if(res.body && typeof res.body.getReader === 'function'){
@@ -1067,7 +1059,17 @@ async function manifestsUpload(){
           else if(ev.type==='composeStart'){ console.log('[composeStart]', ev); if(txt) txt.textContent = 'Подготовка манифеста: '+(ev.totalFiles||0)+' файлов'; }
           else if(ev.type==='file'){ if((ev.idx||0)%100===0) console.log('[file]', ev.idx, ev.path); if(txt) txt.textContent = 'Манифест: '+(ev.idx||0)+' файлов, '+formatBytes(ev.bytesDone||0); }
           else if(ev.type==='done'){ console.log('[done]', ev.outPath); if(txt) txt.textContent = 'Готово. Манифест записан'; }
-          else if(ev.type==='error'){ console.warn('[process error]', ev.message); notify('Ошибка: '+(ev.message||'unknown')); }
+          else if(ev.type==='error'){
+            console.warn('[process error]', ev.message);
+            // notify() пишет в #out — маленький <pre> в самом низу страницы,
+            // до которого ещё надо долистать. Без обновления txt (заметная
+            // строка статуса прямо под прогрессом) экран так и остаётся на
+            // "Старт обработки: ..." навсегда, а ошибка тихо ждёт внизу —
+            // ровно то, что выглядит как "ничего не произошло".
+            setStatusError(txt, 'Ошибка обработки: '+(ev.message||'unknown'));
+            notify('Ошибка: '+(ev.message||'unknown'));
+            processOk = false;
+          }
         }catch{} }
       }
     } else {
@@ -1080,12 +1082,31 @@ async function manifestsUpload(){
         else if(ev.type==='composeStart'){ if(txt) txt.textContent = 'Подготовка манифеста: '+(ev.totalFiles||0)+' файлов'; }
         else if(ev.type==='file'){ if(txt) txt.textContent = 'Манифест: '+(ev.idx||0)+' файлов, '+formatBytes(ev.bytesDone||0); }
         else if(ev.type==='done'){ if(txt) txt.textContent = 'Готово. Манифест записан'; }
-        else if(ev.type==='error'){ notify('Ошибка: '+(ev.message||'unknown')); }
+        else if(ev.type==='error'){
+          setStatusError(txt, 'Ошибка обработки: '+(ev.message||'unknown'));
+          notify('Ошибка: '+(ev.message||'unknown'));
+          processOk = false;
+        }
       }catch{} }
     }
     if(!gotAny){ console.warn('[process] no NDJSON received (maybe buffering)'); }
-  }catch(e){ notify('Ошибка process: '+e); }
+  }catch(e){ setStatusError(txt, 'Ошибка обработки: '+e); notify('Ошибка process: '+e); console.timeEnd('upload_total'); console.groupEnd(); return false; }
 
+  console.timeEnd('upload_total');
+  console.groupEnd();
+  return processOk;
+}
+
+async function manifestsUpload(){
+  const gid = (document.getElementById('gid')?.value||'').trim();
+  const ver = (document.getElementById('ver')?.value||'').trim();
+  if(!gid){ notify('Укажите идентификатор игры'); return; }
+  if(!ver){ notify('Укажите версию'); return; }
+  const file = (window.__manDroppedFile) || document.getElementById('man_zip')?.files?.[0];
+  if(!file){ notify('Выберите ZIP-файл'); return; }
+  const ok = await runChunkedUpload('man', 'game', gid, ver, file);
+  window.__manDroppedFile = null;
+  if(!ok) return;
   try{ manifestsReload(); }catch(_){ }
   try{ gmPrevEnsureVersionsAndRender(gid); }catch(_){ }
   // Optionally set this version as latest
@@ -1096,9 +1117,6 @@ async function manifestsUpload(){
       if(!act.ok){ notify('HTTP '+act.status+' activate'); }
     }
   }catch(e){ notify('Ошибка activate: '+e); }
-  console.timeEnd('upload_total');
-  console.groupEnd();
-  window.__manDroppedFile = null;
 }
 
 // Drag-n-drop for manifests ZIP
@@ -2057,124 +2075,22 @@ try{
 
 async function upload(){
   console.log('upload clicked');
-  // Launcher-only upload
-  var kind='launcher';
-  var ver=document.getElementById('up_ver').value;
-  // allow dropped file fallback
-  var file=(window.__upDroppedFile)||document.getElementById('up_zip').files[0];
-  var latest=document.getElementById('up_latest').checked? '1':'0';
+  const ver = document.getElementById('up_ver').value;
+  const file = (window.__upDroppedFile) || document.getElementById('up_zip').files[0];
+  const latest = document.getElementById('up_latest').checked;
   if(!file){ notify('Выберите ZIP-файл'); return; }
   if(!ver){ notify('Укажите версию'); return; }
-  const fd = new FormData();
-  fd.append('kind', kind);
-  // launcher uploads use fixed gameId
-  fd.append('gameId', 'launcher');
-  fd.append('version', ver);
-  fd.append('zip', file);
-  fd.append('updateLatest', latest);
-  // show progress UI
-  const wrap=document.getElementById('up_prog_wrap'); const bar=document.getElementById('up_pb'); const txt=document.getElementById('up_prog_text');
-  if(wrap) wrap.style.display='block'; if(bar) bar.style.width='0%'; if(txt) txt.textContent='Подготовка к загрузке...';
-
-  // use XHR streaming (NDJSON) to mirror game upload UX
-  await new Promise((resolve)=>{
-    // Путь пишем сразу канонический, с /api/: в nginx описан только
-    // `location = /admin/api/uploadStream`, а `location /` отсутствует, поэтому
-    // «/admin/uploadStream» уходит в статику и отдаёт 404. Полагаться на shim
-    // XMLHttpRequest.open в начале файла нельзя — это подстраховка, а не контракт.
-    const xhr = new XMLHttpRequest(); xhr.open('POST','/admin/api/uploadStream');
-    xhr.setRequestHeader('Accept','application/x-ndjson');
-    // Upload progress (throttled, with lightweight smoothing)
-    const t0 = performance.now();
-    let lastT = t0;
-    let lastLoaded = 0;
-    let avgSpeed = 0; // EMA
-    const alpha = 0.2;
-    const UI_INTERVAL = 150; // ms — text-only, cheaper than the canvas chart above
-    const uiState = { pct:0, loaded:0, total: file.size, speed:0, eta:0 };
-    function applyUI(){
-      if (bar) bar.style.width = uiState.pct + '%';
-      if (txt) {
-        const speedStr = uiState.speed > 0 ? (' • ' + formatSpeed(uiState.speed)) : '';
-        const etaStr = uiState.eta > 0 ? (' • ETA ' + formatEta(uiState.eta)) : '';
-        txt.textContent = 'Загружено ' + uiState.pct + '% (' + formatBytes(uiState.loaded) + ' / ' + formatBytes(uiState.total) + ')' + speedStr + etaStr;
-      }
-    }
-    // See ui-throttle.js for why this goes through setTimeout instead of
-    // requestAnimationFrame — rAF stops firing entirely in a backgrounded tab,
-    // which used to freeze this progress line for the rest of a long upload.
-    const uiThrottle = makeUiThrottler(UI_INTERVAL, applyUI);
-    function scheduleUI(){ uiThrottle.schedule(); }
-    xhr.upload.onprogress = (e)=>{
-      if(!e.lengthComputable) return;
-      const now = performance.now();
-      const dt = (now - lastT)/1000;
-      let inst = 0;
-      if (dt > 0) inst = (e.loaded - lastLoaded)/dt;
-      if (inst > 0) avgSpeed = avgSpeed ? (alpha*inst + (1-alpha)*avgSpeed) : inst;
-      lastT = now; lastLoaded = e.loaded;
-      const remain = Math.max(0, e.total - e.loaded);
-      const eta = (avgSpeed > 0) ? (remain/avgSpeed) : 0;
-      uiState.pct = Math.floor(e.loaded*100/e.total);
-      uiState.loaded = e.loaded;
-      uiState.speed = avgSpeed;
-      uiState.eta = eta;
-      scheduleUI();
-    };
-
-    // Streaming NDJSON parsing from response (throttled & capped)
-    let lastLen = 0;
-    let lastRespTs = 0;
-    const RESP_INTERVAL = 250; // ms
-    const MAX_RESP_LINES_PER_TICK = 200;
-    xhr.onprogress = ()=>{
-      const now = performance.now();
-      if (now - lastRespTs < RESP_INTERVAL) return;
-      lastRespTs = now;
-      const resp = xhr.responseText || '';
-      const chunk = resp.substring(lastLen);
-      lastLen = resp.length;
-      const lines = chunk.split(/\r?\n/).filter(Boolean);
-      const toProcess = lines.length > MAX_RESP_LINES_PER_TICK ? lines.slice(lines.length - MAX_RESP_LINES_PER_TICK) : lines;
-      for(const line of toProcess){
-        try{
-          const ev = JSON.parse(line);
-          if(ev.type === 'start'){
-            if(txt) txt.textContent = 'Старт обработки: launcher '+(ev.version||ver);
-          } else if(ev.type === 'zipSaved'){
-            if(txt) txt.textContent = 'Загрузка завершена, обработка ZIP ('+formatBytes(ev.bytes||0)+')...';
-            if(bar) bar.style.width='100%';
-          } else if(ev.type === 'unzip'){
-            if(txt) txt.textContent = 'Распаковка: '+ev.path;
-          } else if(ev.type === 'composeStart'){
-            if(txt) txt.textContent = 'Подготовка манифеста: 0/'+(ev.totalFiles||0)+' файлов';
-          } else if(ev.type === 'file'){
-            if(txt) txt.textContent = 'Манифест: '+(ev.idx||0)+' файлов, '+formatBytes(ev.bytesDone||0);
-          } else if(ev.type === 'done'){
-            if(txt) txt.textContent = 'Готово. Манифест лаунчера записан';
-            try{ lnRefresh(); }catch(_){ }
-          } else if(ev.type === 'error'){
-            notify('Ошибка: '+(ev.message||'unknown'));
-          }
-        }catch(_){ /* ignore JSON parse errors for partial lines */ }
-      }
-    };
-    xhr.onreadystatechange = ()=>{
-      if(xhr.readyState===4){
-        if(!(xhr.status>=200 && xhr.status<300)){
-          notify('HTTP '+xhr.status+' '+xhr.statusText+' '+(xhr.responseText||''));
-        } else {
-          // ensure UI reflects new latest
-          try{ lnRefresh(); }catch(_){ }
-        }
-        window.__upDroppedFile=null; resolve();
-      }
-    };
-    xhr.onerror = ()=>{ notify('Ошибка загрузки'); window.__upDroppedFile=null; resolve(); };
-    xhr.send(fd);
-  });
+  const ok = await runChunkedUpload('up', 'launcher', 'launcher', ver, file);
+  window.__upDroppedFile = null;
+  if(!ok) return;
+  try{ lnRefresh(); }catch(_){ }
+  if(latest){
+    try{
+      const act = await fetch('/admin/activate?gameId=launcher&version='+encodeURIComponent(ver), { method:'POST' });
+      if(!act.ok){ notify('HTTP '+act.status+' activate'); } else { try{ lnRefresh(); }catch(_){ } }
+    }catch(e){ notify('Ошибка activate: '+e); }
+  }
 }
-
 
 // Кнопки длительных операций (заливка ZIP, сохранение реестра, сохранение
 // новости) должны блокироваться на время работы: без этого повторный клик
@@ -2212,8 +2128,13 @@ bindBusyClick('bench_run', runUploadBench, 'Тестирование...');
 (()=>{ const b = document.getElementById('bench_apply_game'); if(b) b.addEventListener('click', ()=> applyBenchBest('man_chunk_size','man_conc','man_conc_val')); })();
 // Show live value for concurrency slider
 (()=>{ const s = document.getElementById('man_conc'); const v = document.getElementById('man_conc_val'); if(s&&v){ v.textContent = String(s.value||'6'); s.addEventListener('input', ()=>{ v.textContent = String(s.value||'6'); }); }})();
+(()=>{ const s = document.getElementById('up_conc'); const v = document.getElementById('up_conc_val'); if(s&&v){ v.textContent = String(s.value||'6'); s.addEventListener('input', ()=>{ v.textContent = String(s.value||'6'); }); }})();
 // Cleanup button
 (()=>{ const btn = document.getElementById('man_cleanup'); if(!btn) return; btn.addEventListener('click', async ()=>{
+  if(!confirm('Очистить старые/битые временные загрузки?')) return;
+  try{ const r = await fetch('/admin/api/upload/cleanup', { method:'POST' }); if(!r.ok){ notify('HTTP '+r.status+' cleanup'); return; } const j = await r.json(); notify('Удалено: '+(j.removed||0)); }catch(e){ notify('Ошибка cleanup: '+e); }
+}); })();
+(()=>{ const btn = document.getElementById('up_cleanup'); if(!btn) return; btn.addEventListener('click', async ()=>{
   if(!confirm('Очистить старые/битые временные загрузки?')) return;
   try{ const r = await fetch('/admin/api/upload/cleanup', { method:'POST' }); if(!r.ok){ notify('HTTP '+r.status+' cleanup'); return; } const j = await r.json(); notify('Удалено: '+(j.removed||0)); }catch(e){ notify('Ошибка cleanup: '+e); }
 }); })();
