@@ -447,15 +447,23 @@ func (h *Handlers) ListVersions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "game not found", http.StatusNotFound)
 		return
 	}
+	// Версия, дата, размер и число файлов. Раньше отдавалась только версия, и
+	// таблица в админке состояла из строк «1.3.5 — —»: что это за сборка,
+	// когда собрана и сколько весит, узнать было неоткуда, а решение «можно ли
+	// удалить» принимается именно по этим полям.
 	type item struct {
-		Version string `json:"version"`
+		Version   string `json:"version"`
+		CreatedAt string `json:"createdAt,omitempty"`
+		Files     int    `json:"files"`
+		Bytes     int64  `json:"bytes"`
 	}
 	out := struct {
 		Items  []item `json:"items"`
 		Latest string `json:"latest"`
 	}{Items: []item{}, Latest: ""}
 	for _, v := range manifestVersions(entries) {
-		out.Items = append(out.Items, item{Version: v})
+		created, files, bytes := manifestStats(filepath.Join(dir, v+".json"))
+		out.Items = append(out.Items, item{Version: v, CreatedAt: created, Files: files, Bytes: bytes})
 	}
 	// Ascending, as the admin UI expects, but compared by numeric components:
 	// a plain string sort puts 1.1.10 before 1.1.9.
@@ -480,6 +488,32 @@ func manifestVersions(entries []os.DirEntry) []string {
 		}
 	}
 	return vers
+}
+
+// manifestStats reads one version manifest and reports when it was built, how
+// many files it lists and their total size. A manifest that cannot be read or
+// parsed yields zero values: the versions list is a convenience view, and a
+// single broken file must not blank the whole table.
+func manifestStats(path string) (createdAt string, files int, bytes int64) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", 0, 0
+	}
+	// Decoding into the narrow shape keeps the hashes (the bulk of the file)
+	// out of memory twice over for every version in the list.
+	var m struct {
+		CreatedAt string `json:"createdAt"`
+		Files     []struct {
+			Size int64 `json:"size"`
+		} `json:"files"`
+	}
+	if json.Unmarshal(b, &m) != nil {
+		return "", 0, 0
+	}
+	for _, f := range m.Files {
+		bytes += f.Size
+	}
+	return m.CreatedAt, len(m.Files), bytes
 }
 
 // readLatestVersion returns the version latest.json points at, or "" when the
