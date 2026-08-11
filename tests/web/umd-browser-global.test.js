@@ -75,6 +75,8 @@ test('chunk-upload.js в браузерном режиме кладёт putChunk
   assert.strictEqual(typeof w.putChunkXHR, 'function');
   assert.strictEqual(typeof w.pendingBytes, 'function');
   assert.strictEqual(w.pendingBytes(new Map([[0, 5], [1, 7]])), 12);
+  assert.strictEqual(typeof w.uploadChunkWithRetries, 'function');
+  assert.strictEqual(typeof w.runWorkerPool, 'function');
 });
 
 test('rate-estimator.js в браузерном режиме кладёт функции окна скорости в window', () => {

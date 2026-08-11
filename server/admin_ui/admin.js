@@ -858,7 +858,7 @@ async function runChunkedUpload(prefix, kind, gameId, version, file){
   const allIdx = [];
   for(let i=0;i<totalChunks;i++){ if(!received.has(i)) allIdx.push(i); }
   const totalBytes = file.size; let uploadedBytes = received.size * chunkSize; if(uploadedBytes>totalBytes) uploadedBytes = totalBytes;
-  let ptr = 0; let failed = false; let errors = 0; const failedChunks = [];
+  const failedChunks = [];
   // Concurrency is strictly user-controlled (1:1 with slider), clamped to [1..100]
   const maxCap = 100;
   let curPar = Math.max(1, Math.min(100, userPar));
@@ -928,59 +928,41 @@ async function runChunkedUpload(prefix, kind, gameId, version, file){
   const uiThrottle = makeUiThrottler(UI_INTERVAL, ()=> updateUI(performance.now()));
   function scheduleUI(){ uiThrottle.schedule(); }
 
-  let active = 0;
   const win = []; // recent writeMs per chunk
   const WIN_MAX = 50;
 
-  async function runNext(){
-    if (ptr >= allIdx.length) return;
-    const i = allIdx[ptr++];
-    active++;
-    if(activeNowEl) activeNowEl.textContent = String(active);
+  async function uploadOne(i){
     const start = i*chunkSize; const end = Math.min(start+chunkSize, file.size);
     const blob = file.slice(start, end);
     const b = (end-start);
-    let ok=false, attempts=0; const MAX_ATTEMPTS=5; while(!ok && attempts<MAX_ATTEMPTS){ attempts++;
-      inFlight.set(i, 0);
-      try{
-        const r = await putChunkXHR('/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+i, blob, (loaded)=>{ inFlight.set(i, loaded); scheduleUI(); });
-        if(r.ok){
-          const wms = Number(r.json && r.json.writeMs || 0)|0;
-          if(wms>0){ win.push(wms); if(win.length>WIN_MAX) win.shift(); }
-          if(attempts>1){ console.log('[chunk ok after retry]', { index:i, attempts, bytes:b, writeMs:wms }); } else { console.log('[chunk ok]', { index:i, bytes:b, writeMs:wms, par:curPar, active, left: allIdx.length - ptr }); }
-          ok = true; inFlight.delete(i); uploadedBytes += b; scheduleUI();
-        // 409 — чанк уже лежит на сервере (гонка с ретраем или устаревший
-        // ответ /status). Байты всё равно надо засчитать: чанк на месте, а
-        // без прибавки прогресс-бар недосчитывал бы его до самого конца и
-        // не доходил до 100%.
-        } else if(r.status===409){ ok=true; inFlight.delete(i); uploadedBytes += b; console.log('[chunk skip:exists]', { index:i }); }
-        else {
-          errors++; inFlight.delete(i); console.warn('[chunk http]', { index:i, status:r.status, attempt:attempts }); await new Promise(res=> setTimeout(res, 400*attempts));
-        }
-      }catch(e){ errors++; inFlight.delete(i); console.warn('[chunk fetch]', { index:i, error:String(e), attempt:attempts }); await new Promise(res=> setTimeout(res, 400*attempts)); }
+    const r = await uploadChunkWithRetries(uploadId, i, blob, {
+      url: '/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+i,
+      onProgress: (loaded)=>{ inFlight.set(i, loaded); scheduleUI(); },
+      onAttemptFailed: (info)=> console.warn('[chunk fail]', info),
+    });
+    inFlight.delete(i);
+    if(r.ok){
+      if(r.writeMs>0){ win.push(r.writeMs); if(win.length>WIN_MAX) win.shift(); }
+      // 409 (r.exists) — чанк уже лежит на сервере (гонка с ретраем или
+      // устаревший ответ /status). Байты всё равно надо засчитать: чанк на
+      // месте, а без прибавки прогресс-бар недосчитывал бы его до самого
+      // конца и не доходил до 100%.
+      if(r.exists){ console.log('[chunk skip:exists]', { index:i }); } else if(r.attempts>1){ console.log('[chunk ok after retry]', { index:i, attempts:r.attempts, bytes:b, writeMs:r.writeMs }); } else { console.log('[chunk ok]', { index:i, bytes:b, writeMs:r.writeMs, par:curPar }); }
+      uploadedBytes += b; scheduleUI();
     }
-    if(!ok){ failedChunks.push(i); }
-    active--;
-    if(activeNowEl) activeNowEl.textContent = String(active);
-    // Keep pipeline full up to curPar
-    while(active < curPar && ptr < allIdx.length){ runNext(); }
+    return r.ok;
   }
 
-  // Handle live concurrency changes
+  // Handle live concurrency changes: curPar is read fresh by runWorkerPool
+  // before scheduling each next worker, so moving the slider mid-upload just
+  // takes effect on the next slot instead of needing a restart.
   if(concSlider){ concSlider.addEventListener('input', ()=>{ userPar = Number(concSlider.value|0); if(userPar<1) userPar=1; if(userPar>100) userPar=100; if(concVal) concVal.textContent=String(userPar); if(activeCapEl) activeCapEl.textContent = String(userPar);
-    const prev = curPar; curPar = Math.max(1, Math.min(100, userPar)); if(curPar!==prev){ while(active < curPar && ptr < allIdx.length){ runNext(); } }
+    curPar = Math.max(1, Math.min(100, userPar));
   }); }
 
-  // Start initial workers
   console.log('[upload] start', { curPar, maxCap, totalChunks, pending: allIdx.length });
-  for(let j=0; j<Math.min(curPar, allIdx.length); j++){ runNext(); }
-  // No adaptive timer: concurrency is fixed by user settings
-
-  // Wait until all scheduled chunks are processed
-  while(ptr < allIdx.length || active > 0){
-    await new Promise(res=> setTimeout(res, 200));
-    if(failed) break;
-  }
+  const poolFailed = await runWorkerPool(allIdx, ()=> curPar, uploadOne, (active)=>{ if(activeNowEl) activeNowEl.textContent = String(active); });
+  failedChunks.push(...poolFailed);
   // Force one final, unthrottled UI sync: on a fast link (or a small build) the
   // whole chunk phase can finish inside a single UI_INTERVAL window, so the
   // scheduled updateUI() from the last chunk may never have run yet. Without
@@ -988,36 +970,27 @@ async function runChunkedUpload(prefix, kind, gameId, version, file){
   // complete+process phase, which reads the same as the frozen-graph bug above.
   updateUI(performance.now());
 
+  async function uploadOneRetry(idx){
+    const s = idx*chunkSize; const e = Math.min(s+chunkSize, file.size);
+    const bl = file.slice(s, e);
+    const r = await uploadChunkWithRetries(uploadId, idx, bl, {
+      url: '/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+idx,
+      onProgress: (loaded)=>{ inFlight.set(idx, loaded); scheduleUI(); },
+      onAttemptFailed: (info)=> console.warn('[retry chunk fail]', info),
+    });
+    inFlight.delete(idx);
+    if(r.ok){ uploadedBytes += (e-s); scheduleUI(); if(r.attempts>1){ console.log('[retry ok]', { index:idx, attempts:r.attempts }); } }
+    return r.ok;
+  }
+
   // Retry pass for failed chunks (if any)
-  if(!failed && failedChunks.length>0){
+  if(failedChunks.length>0){
     console.group('[retry pass] re-upload failed chunks');
     console.log('failedChunks count', failedChunks.length);
-    let missPtr = 0; let missActive = 0; let missFailed = false;
-    async function runFailed(){
-      if(missPtr >= failedChunks.length) return;
-      const idx = failedChunks[missPtr++];
-      missActive++; if(activeNowEl) activeNowEl.textContent = String(missActive);
-      const s = idx*chunkSize; const e = Math.min(s+chunkSize, file.size);
-      const bl = file.slice(s, e);
-      let ok=false, attempts=0; const MAX=5; while(!ok && attempts<MAX){ attempts++;
-        inFlight.set(idx, 0);
-        try{
-          const r = await putChunkXHR('/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+idx, bl, (loaded)=>{ inFlight.set(idx, loaded); scheduleUI(); });
-          if(r.ok){ ok=true; inFlight.delete(idx); uploadedBytes += (e-s); scheduleUI(); if(attempts>1){ console.log('[retry ok]', { index:idx, attempts }); } }
-          else if(r.status===409){ ok=true; inFlight.delete(idx); }
-          else { inFlight.delete(idx); console.warn('[retry http]', { index:idx, status:r.status, attempt:attempts }); await new Promise(res=> setTimeout(res, 500*attempts)); }
-        }catch(err){ inFlight.delete(idx); console.warn('[retry fetch]', { index:idx, error:String(err), attempt:attempts }); await new Promise(res=> setTimeout(res, 500*attempts)); }
-      }
-      if(!ok){ missFailed = true; }
-      missActive--; if(activeNowEl) activeNowEl.textContent = String(missActive);
-      while(missActive < curPar && missPtr < failedChunks.length){ runFailed(); }
-    }
-    for(let j=0;j<Math.min(curPar, failedChunks.length); j++){ runFailed(); }
-    while(missPtr < failedChunks.length || missActive > 0){ await new Promise(res=> setTimeout(res, 150)); if(missFailed) break; }
+    const stillFailed = await runWorkerPool(failedChunks, ()=> curPar, uploadOneRetry, (active)=>{ if(activeNowEl) activeNowEl.textContent = String(active); });
     console.groupEnd();
-    if(missFailed){ console.timeEnd('upload_total'); console.groupEnd(); const m='Повторная загрузка неудачных чанков завершилась с ошибкой'; setStatusError(txt, m); notify(m); return false; }
+    if(stillFailed.length>0){ console.timeEnd('upload_total'); console.groupEnd(); const m='Повторная загрузка неудачных чанков завершилась с ошибкой'; setStatusError(txt, m); notify(m); return false; }
   }
-  if(failed){ console.timeEnd('upload_total'); console.groupEnd(); const m='Загрузка чанков завершилась с ошибкой'; setStatusError(txt, m); notify(m); return false; }
 
   // COMPLETE
   async function uploadMissingAndRetryComplete(maxRounds=3){
@@ -1039,29 +1012,20 @@ async function runChunkedUpload(prefix, kind, gameId, version, file){
       }
       console.log('[complete] will re-upload missing', missing.length);
       // Re-upload missing with current concurrency
-      let missPtr = 0; let missActive = 0; let missFailed = false;
-      async function runMissing(){
-        if(missPtr >= missing.length) return;
-        const i = missing[missPtr++];
-        missActive++; if(activeNowEl) activeNowEl.textContent = String(missActive);
+      async function runMissing(i){
         const start = i*chunkSize; const end = Math.min(start+chunkSize, file.size);
         const blob = file.slice(start, end);
-        let ok=false, attempts=0; while(!ok && attempts<3){ attempts++;
-          inFlight.set(i, 0);
-          try{
-            const r = await putChunkXHR('/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+i, blob, (loaded)=>{ inFlight.set(i, loaded); scheduleUI(); });
-            if(r.ok){ ok=true; inFlight.delete(i); uploadedBytes += (end-start); scheduleUI(); }
-            else if(r.status===409){ ok=true; inFlight.delete(i); }
-            else { inFlight.delete(i); await new Promise(res=> setTimeout(res, 300*attempts)); }
-          }catch{ inFlight.delete(i); await new Promise(res=> setTimeout(res, 300*attempts)); }
-        }
-        if(!ok){ missFailed = true; }
-        missActive--; if(activeNowEl) activeNowEl.textContent = String(missActive);
-        while(missActive < curPar && missPtr < missing.length){ runMissing(); }
+        const r = await uploadChunkWithRetries(uploadId, i, blob, {
+          url: '/admin/api/upload/chunk?uploadId='+encodeURIComponent(uploadId)+'&index='+i,
+          maxAttempts: 3, retryDelayMs: 300,
+          onProgress: (loaded)=>{ inFlight.set(i, loaded); scheduleUI(); },
+        });
+        inFlight.delete(i);
+        if(r.ok){ uploadedBytes += (end-start); scheduleUI(); }
+        return r.ok;
       }
-      for(let j=0;j<Math.min(curPar, missing.length); j++){ runMissing(); }
-      while(missPtr < missing.length || missActive > 0){ await new Promise(res=> setTimeout(res, 150)); if(missFailed) break; }
-      if(missFailed){ notify('Повторная загрузка пропущенных чанков завершилась с ошибкой'); return false; }
+      const missingFailed = await runWorkerPool(missing, ()=> curPar, runMissing, (active)=>{ if(activeNowEl) activeNowEl.textContent = String(active); });
+      if(missingFailed.length>0){ notify('Повторная загрузка пропущенных чанков завершилась с ошибкой'); return false; }
       // try complete next round
     }
     return false;

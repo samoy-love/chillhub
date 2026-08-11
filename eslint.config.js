@@ -116,6 +116,8 @@ export default [
         drawMultiLineChart: 'readonly',
         putChunkXHR: 'readonly',
         pendingBytes: 'readonly',
+        uploadChunkWithRetries: 'readonly',
+        runWorkerPool: 'readonly',
         makeRateEstimator: 'readonly',
         setStatusError: 'readonly',
         clearStatusError: 'readonly'
