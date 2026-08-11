@@ -808,7 +808,7 @@ async function manifestsUpload(){
   if(wrap) wrap.style.display='block';
   if(bar) bar.style.width='0%';
   if(pctEl) pctEl.textContent='Подготовка к загрузке...';
-  if(txt) txt.textContent = '';
+  if(txt){ txt.textContent = ''; txt.classList.remove('text-danger'); }
 
   // UI controls: chunk size and concurrency
   const chunkSel = document.getElementById('man_chunk_size');
@@ -836,8 +836,8 @@ async function manifestsUpload(){
     initRes = await fetch('/admin/api/upload/init', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({
       kind:'game', gameId: gid, version: ver, zipName: file.name, totalSize: file.size, chunkSize: desiredChunk
     }) });
-  }catch(e){ notify('Ошибка init: '+e); return; }
-  if(!initRes.ok){ notify('HTTP '+initRes.status+' init'); return; }
+  }catch(e){ if(txt){ txt.textContent='Ошибка init: '+e; txt.classList.add('text-danger'); } notify('Ошибка init: '+e); return; }
+  if(!initRes.ok){ if(txt){ txt.textContent='HTTP '+initRes.status+' init'; txt.classList.add('text-danger'); } notify('HTTP '+initRes.status+' init'); return; }
   const init = await initRes.json();
   console.log('[init] response', init);
   const uploadId = init.uploadId; const chunkSize = init.chunkSize || desiredChunk || (8*1024*1024); const totalChunks = init.totalChunks||Math.ceil(file.size/chunkSize);
@@ -999,9 +999,9 @@ async function manifestsUpload(){
     for(let j=0;j<Math.min(curPar, failedChunks.length); j++){ runFailed(); }
     while(missPtr < failedChunks.length || missActive > 0){ await new Promise(res=> setTimeout(res, 150)); if(missFailed) break; }
     console.groupEnd();
-    if(missFailed){ console.timeEnd('upload_total'); console.groupEnd(); notify('Повторная загрузка неудачных чанков завершилась с ошибкой'); return; }
+    if(missFailed){ console.timeEnd('upload_total'); console.groupEnd(); const m='Повторная загрузка неудачных чанков завершилась с ошибкой'; if(txt){ txt.textContent=m; txt.classList.add('text-danger'); } notify(m); return; }
   }
-  if(failed){ console.timeEnd('upload_total'); console.groupEnd(); notify('Загрузка чанков завершилась с ошибкой'); return; }
+  if(failed){ console.timeEnd('upload_total'); console.groupEnd(); const m='Загрузка чанков завершилась с ошибкой'; if(txt){ txt.textContent=m; txt.classList.add('text-danger'); } notify(m); return; }
 
   // COMPLETE
   async function uploadMissingAndRetryComplete(maxRounds=3){
@@ -1052,7 +1052,7 @@ async function manifestsUpload(){
   }
 
   const okComplete = await uploadMissingAndRetryComplete(3);
-  if(!okComplete){ console.timeEnd('upload_total'); console.groupEnd(); notify('Ошибка завершения загрузки (complete)'); return; }
+  if(!okComplete){ console.timeEnd('upload_total'); console.groupEnd(); const m='Ошибка завершения загрузки (complete)'; if(txt){ txt.textContent=m; txt.classList.add('text-danger'); } notify(m); return; }
   if(txt) txt.textContent = 'Сервера проверяет sha256 и готовит распаковку...';
 
   // PROCESS (NDJSON)
@@ -1078,7 +1078,16 @@ async function manifestsUpload(){
           else if(ev.type==='composeStart'){ console.log('[composeStart]', ev); if(txt) txt.textContent = 'Подготовка манифеста: '+(ev.totalFiles||0)+' файлов'; }
           else if(ev.type==='file'){ if((ev.idx||0)%100===0) console.log('[file]', ev.idx, ev.path); if(txt) txt.textContent = 'Манифест: '+(ev.idx||0)+' файлов, '+formatBytes(ev.bytesDone||0); }
           else if(ev.type==='done'){ console.log('[done]', ev.outPath); if(txt) txt.textContent = 'Готово. Манифест записан'; }
-          else if(ev.type==='error'){ console.warn('[process error]', ev.message); notify('Ошибка: '+(ev.message||'unknown')); }
+          else if(ev.type==='error'){
+            console.warn('[process error]', ev.message);
+            // notify() пишет в #out — маленький <pre> в самом низу страницы,
+            // до которого ещё надо долистать. Без обновления txt (заметная
+            // строка статуса прямо под прогрессом) экран так и остаётся на
+            // "Старт обработки: ..." навсегда, а ошибка тихо ждёт внизу —
+            // ровно то, что выглядит как "ничего не произошло".
+            if(txt){ txt.textContent = 'Ошибка обработки: '+(ev.message||'unknown'); txt.classList.add('text-danger'); }
+            notify('Ошибка: '+(ev.message||'unknown'));
+          }
         }catch{} }
       }
     } else {
@@ -1091,11 +1100,14 @@ async function manifestsUpload(){
         else if(ev.type==='composeStart'){ if(txt) txt.textContent = 'Подготовка манифеста: '+(ev.totalFiles||0)+' файлов'; }
         else if(ev.type==='file'){ if(txt) txt.textContent = 'Манифест: '+(ev.idx||0)+' файлов, '+formatBytes(ev.bytesDone||0); }
         else if(ev.type==='done'){ if(txt) txt.textContent = 'Готово. Манифест записан'; }
-        else if(ev.type==='error'){ notify('Ошибка: '+(ev.message||'unknown')); }
+        else if(ev.type==='error'){
+          if(txt){ txt.textContent = 'Ошибка обработки: '+(ev.message||'unknown'); txt.classList.add('text-danger'); }
+          notify('Ошибка: '+(ev.message||'unknown'));
+        }
       }catch{} }
     }
     if(!gotAny){ console.warn('[process] no NDJSON received (maybe buffering)'); }
-  }catch(e){ notify('Ошибка process: '+e); }
+  }catch(e){ if(txt){ txt.textContent = 'Ошибка обработки: '+e; txt.classList.add('text-danger'); } notify('Ошибка process: '+e); }
 
   try{ manifestsReload(); }catch(_){ }
   try{ gmPrevEnsureVersionsAndRender(gid); }catch(_){ }
@@ -2085,7 +2097,7 @@ async function upload(){
   fd.append('updateLatest', latest);
   // show progress UI
   const wrap=document.getElementById('up_prog_wrap'); const bar=document.getElementById('up_pb'); const txt=document.getElementById('up_prog_text');
-  if(wrap) wrap.style.display='block'; if(bar) bar.style.width='0%'; if(txt) txt.textContent='Подготовка к загрузке...';
+  if(wrap) wrap.style.display='block'; if(bar) bar.style.width='0%'; if(txt){ txt.textContent='Подготовка к загрузке...'; txt.classList.remove('text-danger'); }
 
   // use XHR streaming (NDJSON) to mirror game upload UX
   await new Promise((resolve)=>{
@@ -2165,6 +2177,10 @@ async function upload(){
             if(txt) txt.textContent = 'Готово. Манифест лаунчера записан';
             try{ lnRefresh(); }catch(_){ }
           } else if(ev.type === 'error'){
+            // См. комментарий у аналогичной ветки в manifestsUpload: notify()
+            // пишет в маленький #out внизу страницы, а без обновления txt
+            // строка статуса так и остаётся на "Старт обработки..." навсегда.
+            if(txt){ txt.textContent = 'Ошибка обработки: '+(ev.message||'unknown'); txt.classList.add('text-danger'); }
             notify('Ошибка: '+(ev.message||'unknown'));
           }
         }catch(_){ /* ignore JSON parse errors for partial lines */ }
@@ -2173,7 +2189,9 @@ async function upload(){
     xhr.onreadystatechange = ()=>{
       if(xhr.readyState===4){
         if(!(xhr.status>=200 && xhr.status<300)){
-          notify('HTTP '+xhr.status+' '+xhr.statusText+' '+(xhr.responseText||''));
+          const msg = 'HTTP '+xhr.status+' '+xhr.statusText+' '+(xhr.responseText||'');
+          if(txt){ txt.textContent = 'Ошибка обработки: '+msg; txt.classList.add('text-danger'); }
+          notify(msg);
         } else {
           // ensure UI reflects new latest
           try{ lnRefresh(); }catch(_){ }
@@ -2181,7 +2199,7 @@ async function upload(){
         window.__upDroppedFile=null; resolve();
       }
     };
-    xhr.onerror = ()=>{ notify('Ошибка загрузки'); window.__upDroppedFile=null; resolve(); };
+    xhr.onerror = ()=>{ if(txt){ txt.textContent = 'Ошибка загрузки'; txt.classList.add('text-danger'); } notify('Ошибка загрузки'); window.__upDroppedFile=null; resolve(); };
     xhr.send(fd);
   });
 }
