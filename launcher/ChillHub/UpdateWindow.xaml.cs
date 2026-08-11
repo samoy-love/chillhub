@@ -31,6 +31,7 @@ namespace ChillHub {
         private readonly SelfUpdateChecker checker;
         private readonly SelfUpdateDownloader downloader;
         private readonly SelfUpdateApplier applier;
+        private readonly SelfUpdatePrecheck? precheck;
 
         private bool updateRequired = false; // есть ли новая версия
         private bool loopBlocked = false;    // A4: автообновление остановлено защитой от петли
@@ -45,14 +46,27 @@ namespace ChillHub {
 
         private string BaseApi => ConfigService.Current.ApiBaseUrl;
 
-        public UpdateWindow() {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="UpdateWindow"/> class.
+        /// </summary>
+        /// <param name="precheck">
+        /// Решение, посчитанное ДО показа окна (см. <see cref="PrecheckAsync"/>):
+        /// позволяет пропустить повторный поход в сеть внутри <see cref="Window_Loaded"/>,
+        /// когда окно всё же приходится показать (например, обновление доступно).
+        /// null — обычный путь: окно само проверяет обновление после отрисовки.
+        /// </param>
+        internal UpdateWindow(SelfUpdatePrecheck? precheck = null) {
             this.InitializeComponent();
+            this.precheck = precheck;
             this.checker = new SelfUpdateChecker(this.http, this.sync, () => this.BaseApi, this.paths, this.attempts);
             this.downloader = new SelfUpdateDownloader(this.sync, () => this.BaseApi, this.paths, this.attempts, this.ApplyUiState);
             this.applier = new SelfUpdateApplier(this.paths, this.attempts, this.ApplyUiState);
 
-            SelfUpdateCleanup.TryCleanupTempSelfUpdateDirs(this.paths.TempRoot);
-            SelfUpdateCleanup.TryCleanupInstalledUpdaterArtifacts(this.paths.InstallDir);
+            if (precheck == null) {
+                // Иначе уборка уже выполнена внутри PrecheckAsync — до создания окна.
+                SelfUpdateCleanup.TryCleanupTempSelfUpdateDirs(this.paths.TempRoot);
+                SelfUpdateCleanup.TryCleanupInstalledUpdaterArtifacts(this.paths.InstallDir);
+            }
 
             // A14. Второй заход при закрытии окна: к этому моменту каталоги, которые
             // в конструкторе были заняты (лог апдейтера, дочитывавшийся при старте),
@@ -164,10 +178,17 @@ namespace ChillHub {
 
         private async void Window_Loaded(object sender, RoutedEventArgs e) {
             try {
-                this.StatusText.Text = "Проверка обновлений лаунчера...";
-                this.Progress.IsIndeterminate = true;
-                this.PrimaryBtn.IsEnabled = false;
-                this.ShowDecision(await this.checker.CheckAsync());
+                if (this.precheck is SelfUpdatePrecheck pre) {
+                    // Решение уже посчитано в PrecheckAsync — окно всё равно показали
+                    // (например, само обновление доступно), но второй поход в сеть не нужен.
+                    this.ShowDecision(pre.Decision);
+                }
+                else {
+                    this.StatusText.Text = "Проверка обновлений лаунчера...";
+                    this.Progress.IsIndeterminate = true;
+                    this.PrimaryBtn.IsEnabled = false;
+                    this.ShowDecision(await this.checker.CheckAsync());
+                }
             }
             catch (Exception ex) {
                 // Сама проверка свои отказы уже разбирает и возвращает решением.
@@ -193,7 +214,9 @@ namespace ChillHub {
         /// <summary>A12. Дописывает к статусу исход прошлого запуска апдейтера, если тот провалился.</summary>
         private void ShowPreviousUpdateOutcome() {
             try {
-                var text = PreviousUpdateOutcome.Describe(this.paths.InstallDir);
+                // Уже посчитано в PrecheckAsync — Describe() снимает файл состояния при
+                // чтении, повторный вызов на том же старте всегда вернул бы null.
+                var text = this.precheck is SelfUpdatePrecheck pre ? pre.PreviousOutcomeText : PreviousUpdateOutcome.Describe(this.paths.InstallDir);
                 if (text == null) {
                     return;
                 }
@@ -291,5 +314,49 @@ namespace ChillHub {
                 }
             }
         }
+
+        /// <summary>
+        /// Проверяет обновление и чистит временные каталоги ДО показа окна. Строится
+        /// из тех же компонентов, что и конструктор окна, но не привязана к
+        /// экземпляру — вызывается раньше, чтобы решить, показывать ли окно вообще
+        /// (см. <see cref="SelfUpdatePrecheck.NeedsWindow"/>).
+        /// </summary>
+        internal static async Task<SelfUpdatePrecheck> PrecheckAsync() {
+            var paths = SelfUpdatePaths.Default;
+
+            // Уборка — не часть решения «показывать ли окно», а обязательный шаг
+            // каждого запуска независимо от исхода проверки версии.
+            SelfUpdateCleanup.TryCleanupTempSelfUpdateDirs(paths.TempRoot);
+            SelfUpdateCleanup.TryCleanupInstalledUpdaterArtifacts(paths.InstallDir);
+
+            var checker = new SelfUpdateChecker(
+                HttpClientProvider.Shared,
+                new SimpleSyncService(),
+                () => ConfigService.Current.ApiBaseUrl,
+                paths,
+                new UpdateAttemptsStore());
+            var decision = await checker.CheckAsync();
+
+            // Describe() снимает файл состояния при чтении — считаем один раз здесь,
+            // а не заново в самом окне (если оно всё же будет показано).
+            var previousOutcome = PreviousUpdateOutcome.Describe(paths.InstallDir);
+
+            return new SelfUpdatePrecheck { Decision = decision, PreviousOutcomeText = previousOutcome };
+        }
+    }
+
+    /// <summary>Решение проверки обновления, посчитанное до показа <see cref="UpdateWindow"/>.</summary>
+    internal readonly struct SelfUpdatePrecheck {
+        internal SelfUpdateDecision Decision { get; init; }
+
+        internal string? PreviousOutcomeText { get; init; }
+
+        /// <summary>
+        /// Окно можно не показывать вовсе: версия актуальна, а рассказать пользователю
+        /// нечего (нет ни доступного обновления, ни исхода прошлого неудачного
+        /// обновления — иначе сбой выглядел бы как «ничего не произошло», см.
+        /// <see cref="PreviousUpdateOutcome"/>).
+        /// </summary>
+        internal bool NeedsWindow => this.Decision.State != SelfUpdateState.UpToDate || this.PreviousOutcomeText != null;
     }
 }
