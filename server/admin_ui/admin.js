@@ -866,35 +866,41 @@ async function manifestsUpload(){
   // и «скорость меряется неправильно».
   const inFlight = new Map();
 
-  let avgSpeed = 0; const alpha = 0.2;
   // 200мс, а не 500 — на чанках размером в десятки МБ пять обновлений в
   // секунду всё ещё дешёвы (перерисовка холста и пара textContent), а разница
   // ощущается: полоса и график иначе кажутся "подвисающими" рывками.
   const UI_INTERVAL=200;
   // Скорость считается не между соседними тиками (200мс), а по скользящему
-  // окну в несколько секунд — см. комментарий в шапке rate-estimator.js про
-  // то, почему "байты с прошлого тика / 200мс" даёт всплески в сотни МБ/с на
-  // каждой волне одновременно завершившихся чанков. 5с — компромисс между
-  // тем, чтобы реально сгладить такую волну (на проде волны шли примерно раз
-  // в 15-20с — время одного чанка при высокой параллельности), и тем, чтобы
-  // цифра не казалась заторможенной на быстрой/короткой загрузке.
-  const RATE_WINDOW_MS = 5000;
-  let byteSamples = [];
+  // окну — см. комментарий в шапке rate-estimator.js про то, почему рывки
+  // буфера сокета иначе дают всплески в сотни МБ/с. 5с — компромисс между
+  // тем, чтобы сгладить рывок целиком, и тем, чтобы цифра не казалась
+  // заторможенной на быстрой/короткой загрузке.
+  //
+  // Экспоненциального сглаживания поверх окна намеренно нет: соседние окна
+  // перекрываются почти целиком, так что усреднения EMA уже не добавляет —
+  // только задержку, из-за которой скорость и ETA отставали от реальности на
+  // старте и на финише заливки.
+  const rateEstimator = makeRateEstimator(5000);
+  let shownSpeed = 0;
   function updateUI(now){
     const displayed = Math.min(totalBytes, uploadedBytes + pendingBytes(inFlight));
     const pct = Math.floor((displayed*100)/totalBytes);
     if(bar) bar.style.width = pct+'%';
-    byteSamples = pushByteSample(byteSamples, { t: now, bytes: displayed }, RATE_WINDOW_MS);
-    const inst = windowedRate(byteSamples);
-    if(inst>0) avgSpeed = avgSpeed? (alpha*inst+(1-alpha)*avgSpeed):inst;
-    const remain = Math.max(0, totalBytes - displayed); const eta = (avgSpeed>0)? (remain/avgSpeed):0;
-    // Update peak and median (window 8s)
+    // Пока окно не набрало двух точек (первый тик) скорость неизвестна —
+    // показываем прошлую, а не мигаем пустотой.
+    const inst = rateEstimator.push(now, displayed);
+    if(inst>0) shownSpeed = inst;
+    const remain = Math.max(0, totalBytes - displayed); const eta = (shownSpeed>0)? (remain/shownSpeed):0;
+    // «Пик» теперь означает максимум пятисекундного среднего, а не максимум
+    // мгновенной производной — та показывала рывок буфера сокета и за любую
+    // длинную заливку успевала упереться в число, которого канал никогда не
+    // выдавал. Медиана считается по точкам графика за HORIZON_MS (120с).
     if(inst>0){ peakBps = Math.max(peakBps, inst); }
     const horizon = HORIZON_MS; const windowPts = speedPoints.filter(p=> now-p.t <= horizon);
     let medianBps = 0; if(windowPts.length>0){ const arr = windowPts.map(p=> p.bps).sort((a,b)=>a-b); const mid = Math.floor(arr.length/2); medianBps = arr.length%2 ? arr[mid] : ((arr[mid-1]+arr[mid])/2); }
     if(pctEl) pctEl.textContent = 'Загружено '+pct+'%';
     if(bytesEl) bytesEl.textContent = '('+formatBytes(displayed)+' / '+formatBytes(totalBytes)+')';
-    if(speedEl) speedEl.textContent = avgSpeed>0 ? formatSpeed(avgSpeed) : '';
+    if(speedEl) speedEl.textContent = shownSpeed>0 ? formatSpeed(shownSpeed) : '';
     if(medianEl) medianEl.textContent = medianBps>0 ? ('мед '+formatSpeed(medianBps)) : '';
     if(peakEl) peakEl.textContent = peakBps>0 ? ('пик '+formatSpeed(peakBps)) : '';
     if(etaEl) etaEl.textContent = eta>0 ? ('ETA '+formatEta(eta)) : '';
@@ -937,7 +943,11 @@ async function manifestsUpload(){
           if(wms>0){ win.push(wms); if(win.length>WIN_MAX) win.shift(); }
           if(attempts>1){ console.log('[chunk ok after retry]', { index:i, attempts, bytes:b, writeMs:wms }); } else { console.log('[chunk ok]', { index:i, bytes:b, writeMs:wms, par:curPar, active, left: allIdx.length - ptr }); }
           ok = true; inFlight.delete(i); uploadedBytes += b; scheduleUI();
-        } else if(r.status===409){ ok=true; inFlight.delete(i); console.log('[chunk skip:exists]', { index:i }); }
+        // 409 — чанк уже лежит на сервере (гонка с ретраем или устаревший
+        // ответ /status). Байты всё равно надо засчитать: чанк на месте, а
+        // без прибавки прогресс-бар недосчитывал бы его до самого конца и
+        // не доходил до 100%.
+        } else if(r.status===409){ ok=true; inFlight.delete(i); uploadedBytes += b; console.log('[chunk skip:exists]', { index:i }); }
         else {
           errors++; inFlight.delete(i); console.warn('[chunk http]', { index:i, status:r.status, attempt:attempts }); await new Promise(res=> setTimeout(res, 400*attempts));
         }
@@ -2108,11 +2118,12 @@ async function upload(){
     const xhr = new XMLHttpRequest(); xhr.open('POST','/admin/api/uploadStream');
     xhr.setRequestHeader('Accept','application/x-ndjson');
     // Upload progress (throttled, with lightweight smoothing)
-    const t0 = performance.now();
-    let lastT = t0;
-    let lastLoaded = 0;
-    let avgSpeed = 0; // EMA
-    const alpha = 0.2;
+    // То же скользящее окно, что и у чанковой заливки выше: onprogress
+    // отражает не сеть, а опустошение буфера сокета, и мгновенная
+    // производная по нему скачет между нулём и сотнями МБ/с (см. шапку
+    // rate-estimator.js).
+    const rateEstimator = makeRateEstimator(5000);
+    let shownSpeed = 0;
     const UI_INTERVAL = 150; // ms — text-only, cheaper than the canvas chart above
     const uiState = { pct:0, loaded:0, total: file.size, speed:0, eta:0 };
     function applyUI(){
@@ -2130,17 +2141,13 @@ async function upload(){
     function scheduleUI(){ uiThrottle.schedule(); }
     xhr.upload.onprogress = (e)=>{
       if(!e.lengthComputable) return;
-      const now = performance.now();
-      const dt = (now - lastT)/1000;
-      let inst = 0;
-      if (dt > 0) inst = (e.loaded - lastLoaded)/dt;
-      if (inst > 0) avgSpeed = avgSpeed ? (alpha*inst + (1-alpha)*avgSpeed) : inst;
-      lastT = now; lastLoaded = e.loaded;
+      const inst = rateEstimator.push(performance.now(), e.loaded);
+      if (inst > 0) shownSpeed = inst;
       const remain = Math.max(0, e.total - e.loaded);
-      const eta = (avgSpeed > 0) ? (remain/avgSpeed) : 0;
+      const eta = (shownSpeed > 0) ? (remain/shownSpeed) : 0;
       uiState.pct = Math.floor(e.loaded*100/e.total);
       uiState.loaded = e.loaded;
-      uiState.speed = avgSpeed;
+      uiState.speed = shownSpeed;
       uiState.eta = eta;
       scheduleUI();
     };

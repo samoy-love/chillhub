@@ -116,8 +116,7 @@ export default [
         drawMultiLineChart: 'readonly',
         putChunkXHR: 'readonly',
         pendingBytes: 'readonly',
-        pushByteSample: 'readonly',
-        windowedRate: 'readonly',
+        makeRateEstimator: 'readonly',
         setStatusError: 'readonly',
         clearStatusError: 'readonly'
       }

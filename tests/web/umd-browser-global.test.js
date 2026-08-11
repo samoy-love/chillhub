@@ -79,11 +79,10 @@ test('chunk-upload.js в браузерном режиме кладёт putChunk
 
 test('rate-estimator.js в браузерном режиме кладёт функции окна скорости в window', () => {
   const w = loadAsBrowserScript('server/admin_ui/rate-estimator.js');
-  assert.strictEqual(typeof w.pushByteSample, 'function');
-  assert.strictEqual(typeof w.windowedRate, 'function');
-  let samples = w.pushByteSample([], { t: 0, bytes: 0 }, 1000);
-  samples = w.pushByteSample(samples, { t: 1000, bytes: 1000 }, 1000);
-  assert.strictEqual(w.windowedRate(samples), 1000);
+  assert.strictEqual(typeof w.makeRateEstimator, 'function');
+  const est = w.makeRateEstimator(1000);
+  est.push(0, 0);
+  assert.strictEqual(est.push(1000, 1000), 1000);
 });
 
 test('ui-status.js в браузерном режиме кладёт setStatusError/clearStatusError в window', () => {
