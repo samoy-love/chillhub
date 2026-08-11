@@ -115,7 +115,7 @@ func TestErrorEventsRejectsUnknownGame(t *testing.T) {
 // must be told, otherwise "100 events" reads as the total.
 func TestErrorEventsCapsAndFlags(t *testing.T) {
 	h := New(t.TempDir())
-	for i := 0; i < maxErrorEvents+10; i++ {
+	for i := range maxErrorEvents + 10 {
 		if w := submit(t, h, `{"event":"error","errorCode":"flood"}`); w.Code != http.StatusOK {
 			t.Fatalf("submit #%d -> %d", i, w.Code)
 		}
