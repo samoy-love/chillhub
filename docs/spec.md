@@ -342,9 +342,6 @@ Rate limit Public API (`server/cmd/api/main.go`): по умолчанию **600 
 ### 8.1. Игры
 - Загрузка версии (ZIP):
   - `POST /admin/api/upload` — простая multipart‑загрузка (обратная совместимость; UI её не использует).
-  - `POST /admin/api/uploadStream` — потоковый режим с прогрессом (NDJSON).
-    - FormData: `kind=game|launcher`, `gameId?` (для `game`), `version`, `zip`, `updateLatest=0|1`.
-    - Ответ: последовательность NDJSON событий: `start`, `zipSaved`, множество `unzip`, затем `composeStart`, множество `file`, `done` или `error`.
   - Чанковая загрузка (используется UI для многогигабайтных сборок; только `/admin/api/...`):
     `POST /admin/api/upload/init`, `POST /admin/api/upload/chunk`, `GET /admin/api/upload/status`,
     `POST /admin/api/upload/complete`, `POST /admin/api/upload/process` (NDJSON‑распаковка),
@@ -379,7 +376,7 @@ CSRF: для методов `POST/PUT/PATCH/DELETE` требуется заго�
 
 ### 8.2. Лаунчер
 - Просмотр текущего манифеста лаунчера: UI читает `GET /manifests/launcher/latest.json` и затем `GET /manifests/launcher/{version}.json`.
-- Загрузка версии лаунчера (ZIP): те же эндпоинты, что и для игр, с `kind=launcher` (`POST /admin/api/uploadStream` или чанковая загрузка).
+- Загрузка версии лаунчера (ZIP): те же эндпоинты, что и для игр, с `kind=launcher` (`POST /admin/api/upload` или чанковая загрузка).
 - ВАЖНО: в ZIP лаунчера не должно быть `config.json` и `launcher.version` — см. [22](#22-локальная-разработка-и-автотесты-деплоя).
 
 ### 8.3. Новости

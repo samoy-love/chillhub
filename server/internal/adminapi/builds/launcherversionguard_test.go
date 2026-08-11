@@ -114,46 +114,6 @@ func TestLauncherReuploadWithIdenticalContentSucceeds(t *testing.T) {
 	}
 }
 
-// TestUploadStreamReuploadWithIdenticalContentSucceeds is the NDJSON entry
-// point's copy of TestLauncherReuploadWithIdenticalContentSucceeds — this is
-// the endpoint bin/selfupdate-upload (deploy-kit) actually calls, so it is the
-// one a real CI retry exercises.
-func TestUploadStreamReuploadWithIdenticalContentSucceeds(t *testing.T) {
-	root := t.TempDir()
-	h := New(root)
-	h.CurrentUser = func(*http.Request) string { return "admin" }
-	zip := zipBytes(t, map[string]string{"ChillHub.exe": "same build"})
-	fields := map[string]string{"kind": "launcher", "gameId": "launcher", "version": "1.3.2"}
-
-	w1 := httptest.NewRecorder()
-	h.UploadStream(w1, streamUploadRequest(t, fields, zip))
-	events1, garbage1 := ndjsonEvents(t, w1.Body.String())
-	if len(garbage1) > 0 {
-		t.Fatalf("plain text in the NDJSON stream: %q", garbage1)
-	}
-	if hasErrorEvent(events1) {
-		t.Fatalf("first upload reported an error: %s", w1.Body.String())
-	}
-
-	w2 := httptest.NewRecorder()
-	h.UploadStream(w2, streamUploadRequest(t, fields, zip))
-	events2, garbage2 := ndjsonEvents(t, w2.Body.String())
-	if len(garbage2) > 0 {
-		t.Fatalf("plain text in the NDJSON stream: %q", garbage2)
-	}
-	if hasErrorEvent(events2) {
-		t.Fatalf("identical re-upload reported an error: %s", w2.Body.String())
-	}
-
-	got, err := os.ReadFile(filepath.Join(root, "content", "launcher", "1.3.2", "files", "ChillHub.exe"))
-	if err != nil {
-		t.Fatalf("content missing after identical re-upload: %v", err)
-	}
-	if string(got) != "same build" {
-		t.Fatalf("content = %q, want %q", got, "same build")
-	}
-}
-
 // TestGameReuploadUnderSameVersionStillAllowed pins the boundary of the guard:
 // it is scoped to gid=="launcher" only. Games keep the pre-existing "same
 // version, new content" workflow — the 2026-08-08 incident was specific to
@@ -214,45 +174,6 @@ func TestUploadInitRefusesAlreadyPublishedLauncherVersion(t *testing.T) {
 	h.UploadInit(w2, req)
 	if w2.Code != http.StatusConflict {
 		t.Fatalf("UploadInit for an already-published launcher version: got %d %s, want %d", w2.Code, w2.Body.String(), http.StatusConflict)
-	}
-}
-
-// TestUploadStreamRefusesAlreadyPublishedLauncherVersion is the streaming
-// upload's own copy of the same guard (see launcherVersionAlreadyPublished's
-// call sites). The zip part comes first over the wire, so by the time the
-// handler can even see gameId/version the zipSaved event is already flushed —
-// the rejection has to travel as an NDJSON error event, not an http.Error.
-func TestUploadStreamRefusesAlreadyPublishedLauncherVersion(t *testing.T) {
-	root := t.TempDir()
-	h := New(root)
-	h.CurrentUser = func(*http.Request) string { return "admin" }
-
-	w1 := httptest.NewRecorder()
-	h.Upload(w1, kindUploadRequest(t, "launcher", "launcher", "1.3.2", zipBytes(t, map[string]string{
-		"ChillHub.exe": "already published",
-	})))
-	if w1.Code != http.StatusOK {
-		t.Fatalf("seed upload: %d %s", w1.Code, w1.Body.String())
-	}
-
-	w2 := httptest.NewRecorder()
-	h.UploadStream(w2, streamUploadRequest(t,
-		map[string]string{"kind": "launcher", "gameId": "launcher", "version": "1.3.2"},
-		zipBytes(t, map[string]string{"ChillHub.exe": "second, different build"})))
-
-	events, garbage := ndjsonEvents(t, w2.Body.String())
-	if len(garbage) > 0 {
-		t.Fatalf("plain text in the NDJSON stream: %q", garbage)
-	}
-	if !hasErrorEvent(events) {
-		t.Fatalf("no error event for a re-upload under the same version: %s", w2.Body.String())
-	}
-	got, err := os.ReadFile(filepath.Join(root, "content", "launcher", "1.3.2", "files", "ChillHub.exe"))
-	if err != nil {
-		t.Fatalf("original content missing after rejected re-upload: %v", err)
-	}
-	if string(got) != "already published" {
-		t.Fatalf("content = %q, want the first upload untouched", got)
 	}
 }
 

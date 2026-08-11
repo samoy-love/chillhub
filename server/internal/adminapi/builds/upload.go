@@ -86,7 +86,7 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	log.Printf("/admin/upload: kind=%s gid=%s ver=%s zip=%s bytes=%d", kind, gid, ver, parts.filename, parts.saved)
 
 	// Extract into a staging directory next to the published one, exactly like
-	// UploadStream and UploadProcessStream do. Writing straight into
+	// UploadProcessStream does. Writing straight into
 	// content/<gid>/<ver>/files would leave a half-extracted, already published
 	// version behind if the request is aborted mid-way.
 	finalVerDir := filepath.Join(h.root, "content", gid, ver)
@@ -174,7 +174,7 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 //
 // Pulled out of Upload as its own function (rather than left as inline ifs)
 // purely to keep Upload's own cyclomatic complexity under the linter's
-// ceiling — see the identical split for UploadStream and UploadProcessStream.
+// ceiling — see the identical split for UploadProcessStream.
 func (h *Handlers) respondLauncherRepublish(w http.ResponseWriter, gid, ver string, files []manifestFile, emptyDirs []string) bool {
 	if !h.launcherVersionAlreadyPublished(gid, ver) {
 		return false
@@ -519,185 +519,6 @@ func (out *uploadParts) spoolZip(part *multipart.Part, tmpDir string) (int, erro
 	}
 	out.saved = n
 	return http.StatusOK, nil
-}
-
-// UploadStream uploads a ZIP and streams progress (NDJSON): start, unzip
-// entries, compose files, done.
-func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
-	if !adminutil.RequireMethod(w, r, http.MethodPost) {
-		return
-	}
-	// Enforce auth here (since nginx bypasses auth_request for this endpoint)
-	if !h.authorized(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	// Streaming setup (tolerate environments without http.Flusher). Everything
-	// this handler writes goes through nw, so it knows whether an error can
-	// still be reported as an HTTP status or has to become an error event.
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	nw := newNDJSONWriter(w)
-	fl := adminutil.Flusher(nw)
-
-	// The temp ZIP is this handler's alone: whatever happens below — a rejected
-	// parameter, a full disk, a broken archive — it must not survive the request.
-	// Only the successful path removes it early (and a second Remove is a no-op).
-	var tmpName string
-	defer func() {
-		if tmpName != "" {
-			_ = os.Remove(tmpName)
-		}
-	}()
-
-	// Optional precheck: ensure enough temp space based on Content-Length if
-	// known. It only saves the client from streaming a body that is doomed —
-	// a chunked request has no Content-Length at all, so the guard that
-	// actually protects the volume is the one inside spoolZipPart.
-	if msg := h.spoolSpaceProblem(r.ContentLength); msg != "" {
-		nw.fail(http.StatusInsufficientStorage, msg)
-		return
-	}
-
-	parts, code, err := readUploadParts(r, h.tmpDir(), func(filename string, n int64) {
-		emitEventf(nw, "{\"type\":\"zipSaved\",\"filename\":%q,\"bytes\":%d}\n", filename, n)
-		fl.Flush()
-	})
-	if parts != nil {
-		tmpName = parts.tmpName
-	}
-	if err != nil {
-		nw.fail(code, err.Error())
-		return
-	}
-	kind, gid, ver, upd := parts.kind, parts.gid, parts.ver, parts.updateLatest
-
-	if kind == "launcher" {
-		gid = "launcher"
-	}
-	// These checks run after the parts loop, i.e. after the zipSaved event has
-	// already been flushed: nw.fail turns them into error events instead of an
-	// http.Error whose status is ignored and whose plain-text body corrupts the
-	// stream (leaving the client to conclude the build was published).
-	if problem := missingPublishParam(kind, gid, ver); problem != "" {
-		nw.fail(http.StatusBadRequest, problem)
-		return
-	}
-	if !adminutil.IsSafeGameID(gid) || !adminutil.IsSafeVersion(ver) {
-		nw.fail(http.StatusBadRequest, "invalid gameId or version")
-		return
-	}
-	// The already-published check happens after compose (below), once the
-	// fresh content actually exists to compare against the published manifest
-	// — see the comment there for why, and see UploadInit for the one entry
-	// point where that isn't possible.
-	if tmpName == "" {
-		nw.fail(http.StatusBadRequest, "missing zip part")
-		return
-	}
-
-	// Send start event after we know parameters
-	emitEventf(nw, "{\"type\":\"start\",\"kind\":%q,\"gameId\":%q,\"version\":%q}\n", kind, gid, ver)
-	fl.Flush()
-
-	// Save zip to temp was already done (tmpName). Extract into a staging dir on
-	// the same volume; the published directory is only replaced once the whole
-	// build is on disk, so an aborted upload can never leave a half version live.
-	finalVerDir := filepath.Join(h.root, "content", gid, ver)
-	stageDir, filesRoot, err := h.stageVersionDir(gid, ver)
-	if err != nil {
-		nw.fail(http.StatusInternalServerError, err.Error())
-		return
-	}
-	promoted := false
-	defer func() {
-		if !promoted {
-			_ = os.RemoveAll(stageDir)
-		}
-	}()
-
-	// Check free space before unzip (estimate total uncompressed size of ZIP)
-	if msg := extractSpaceProblem(tmpName, filesRoot); msg != "" {
-		nw.fail(http.StatusInsufficientStorage, msg)
-		return
-	}
-
-	// Unzip with progress
-	if !streamUnzip(nw, fl, tmpName, filesRoot) {
-		return
-	}
-	// Remove the temp zip. The deferred cleanup above removes it too, so a
-	// failure here is not worth reporting: it only means the janitor gets it.
-	_ = os.Remove(tmpName)
-
-	// Compose manifest with progress: pre-scan totals first
-	totalFiles, totalBytes := countTree(filesRoot)
-	emitEventf(nw, "{\"type\":\"composeStart\",\"totalFiles\":%d,\"totalBytes\":%d}\n", totalFiles, totalBytes)
-	fl.Flush()
-
-	files, emptyDirs, ok := streamCompose(nw, fl, filesRoot)
-	if !ok {
-		return
-	}
-
-	// Same reasoning as Upload: the zip was already fully spooled and
-	// extracted before this point regardless of the outcome below, so
-	// checking here — with the fresh manifest in hand — costs nothing extra
-	// and is what lets an identical re-upload succeed instead of just failing
-	// less usefully. promoted is still false, so the deferred cleanup removes
-	// stageDir without touching the live version.
-	if h.streamLauncherRepublish(nw, fl, gid, ver, files, emptyDirs, "[builds] uploadStream") {
-		return
-	}
-
-	m := manifest{
-		Version:   ver,
-		BuildID:   adminutil.NewBuildID(),
-		GameID:    gid,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
-		Files:     files,
-		EmptyDirs: emptyDirs,
-	}
-
-	// Everything is extracted and hashed: publish the build in one rename.
-	// See lockPublish: promote and the manifest write must not interleave with
-	// another publication of the same version.
-	unlock := lockPublish(gid, ver)
-	defer unlock()
-	if err := promoteVersionDir(stageDir, finalVerDir); err != nil {
-		streamError(nw, fl, "activate failed: "+err.Error())
-		return
-	}
-	promoted = true
-
-	outPath, _, err := h.writeManifest(m, upd)
-	if err != nil {
-		streamError(nw, fl, err.Error())
-		return
-	}
-
-	emitEventf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
-	fl.Flush()
-}
-
-// streamLauncherRepublish is respondLauncherRepublish's NDJSON counterpart,
-// used by UploadStream. chunked.go's UploadProcessStream has its own
-// variant (processLauncherRepublish) because a match there also has to
-// drop the now-redundant upload.zip and mark the chunked upload done —
-// bookkeeping this function knows nothing about. logTag identifies the
-// caller in the log line only; the emitted event is identical either way.
-func (h *Handlers) streamLauncherRepublish(nw *ndjsonWriter, fl adminutil.Flusher, gid, ver string, files []manifestFile, emptyDirs []string, logTag string) bool {
-	if !h.launcherVersionAlreadyPublished(gid, ver) {
-		return false
-	}
-	if !h.launcherRepublishMatches(gid, ver, files, emptyDirs) {
-		nw.fail(http.StatusConflict, launcherVersionConflictMessage(ver))
-		return true
-	}
-	outPath := filepath.Join(h.manifestsDir(gid), ver+".json")
-	log.Printf("%s: launcher version %s re-uploaded with identical content, no-op", logTag, ver)
-	emitEventf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
-	fl.Flush()
-	return true
 }
 
 // countTree returns the number of files and their total size under root.
