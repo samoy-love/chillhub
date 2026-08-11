@@ -21,7 +21,7 @@ function extract(name) {
 }
 
 function load(...names) {
-  // Функции ссылаются друг на друга (normalizeHumanDate зовёт toRfc3339),
+  // Функции ссылаются друг на друга (mtLocalToUtc зовёт toRfc3339),
   // поэтому объявляем их в одной области.
   const body = names.map(extract).join('\n');
   return new Function(body + '\nreturn {' + names.join(',') + '};')();
@@ -36,7 +36,7 @@ function extractConst(name) {
 
 const { bumpSemverPatch } = load('bumpSemverPatch');
 const { formatBytes } = load('formatBytes');
-const { normalizeHumanDate, toRfc3339 } = load('toRfc3339', 'normalizeHumanDate');
+const { toRfc3339, mtLocalToUtc, mxLocalToUtcEnd } = load('toRfc3339', 'mtLocalToUtc', 'mxLocalToUtcEnd');
 
 // sectionFromHash зовёт HASH_TAB_MAP, а не другую function, поэтому load()
 // (которая склеивает только function-объявления) сюда не годится — константа
@@ -75,32 +75,27 @@ test('formatBytes читаем и не выдаёт NaN', () => {
   }
 });
 
-test('разбор даты понимает оба формата фильтра', () => {
-  // Поля фильтра в инбоксе принимают ISO и русский формат, с временем и без.
-  for (const s of ['2026-01-15', '15.01.2026', '2026-01-15 10:30', '15.01.2026 10:30']) {
-    const out = normalizeHumanDate(s, false);
-    assert.match(out, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/, s + ' -> ' + out);
-  }
+test('mtLocalToUtc переводит значение datetime-local в RFC3339', () => {
+  // Единственная форма, которую вообще может отдать <input type="datetime-local">.
+  const out = mtLocalToUtc('2026-01-15T10:30');
+  assert.match(out, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/, out);
 });
 
-test('признак endOfDay сдвигает время к концу суток', () => {
-  const start = normalizeHumanDate('2026-01-15', false);
-  const end = normalizeHumanDate('2026-01-15', true);
-  assert.notStrictEqual(start, end, 'начало и конец суток обязаны различаться');
-  // Конец суток должен быть ПОЗЖЕ начала — иначе фильтр «с … по …» не найдёт ничего.
+test('mtLocalToUtc различает пустое поле и неразбираемое значение', () => {
+  // '' — это «границы нет», null — «строку понять не удалось»: фильтры
+  // обращений и метрик разводят эти случаи по разным веткам.
+  assert.strictEqual(mtLocalToUtc(''), '');
+  assert.strictEqual(mtLocalToUtc('   '), '');
+  assert.strictEqual(mtLocalToUtc('вчера'), null);
+});
+
+test('mxLocalToUtcEnd дотягивает верхнюю границу до конца минуты', () => {
+  // datetime-local не даёт секунд: без этого «по 19:17» отбрасывало бы всё,
+  // что случилось в 19:17:30 — включая только что отправленное событие.
+  const start = mtLocalToUtc('2026-01-15T19:17');
+  const end = mxLocalToUtcEnd('2026-01-15T19:17');
   assert.ok(new Date(end) > new Date(start), start + ' .. ' + end);
-});
-
-test('пустая и неразбираемая дата дают пустую строку, а не Invalid Date', () => {
-  // 99.99.9999 и 31.02 проходят регэксп, но не календарь: раньше Date молча
-  // переполнялся и фильтр уезжал на другую дату (вплоть до пятизначного года,
-  // который сервер в RFC3339 не разбирает).
-  for (const bad of ['', '   ', 'вчера', '99.99.9999', '31.02.2026', '2026-02-31', '2026-13-01', null, undefined]) {
-    const out = normalizeHumanDate(bad, false);
-    assert.ok(out === '' || /^\d{4}-/.test(out),
-      JSON.stringify(bad) + ' дало ' + JSON.stringify(out));
-    assert.ok(!/Invalid/.test(String(out)));
-  }
+  assert.match(end, /T\d{2}:\d{2}:59Z$/, end);
 });
 
 test('toRfc3339 всегда выдаёт UTC с суффиксом Z', () => {
@@ -150,4 +145,95 @@ test('sectionFromHash даёт null на пустом или неизвестн�
 test('toRfc3339 дополняет однозначные числа нулём', () => {
   const out = toRfc3339(new Date(Date.UTC(2026, 0, 5, 4, 3, 2)));
   assert.strictEqual(out, '2026-01-05T04:03:02Z');
+});
+
+// ---- Диф манифестов ----
+//
+// diffManifests отвечает на главный вопрос релиза («что изменилось с прошлой
+// версии»), и ошибиться здесь дороже всего: ложное «отличий нет» читается как
+// «сборка та же», хотя выкатывается другая.
+const { manifestFileMap, diffManifests } = load('manifestFileMap', 'diffManifests');
+
+const mf = (files) => ({ files });
+
+test('diffManifests различает добавленные, изменённые и пропавшие файлы', () => {
+  const cur = manifestFileMap(mf([
+    { path: 'a.dll', size: 10, blake3: 'h1' },
+    { path: 'b.dll', size: 20, blake3: 'h2-new' },
+    { path: 'new.dll', size: 5, blake3: 'h3' },
+  ]));
+  const base = manifestFileMap(mf([
+    { path: 'a.dll', size: 10, blake3: 'h1' },
+    { path: 'b.dll', size: 20, blake3: 'h2-old' },
+    { path: 'gone.dll', size: 7, blake3: 'h4' },
+  ]));
+  const d = diffManifests(cur, base);
+  assert.strictEqual(d.added, 1);
+  assert.strictEqual(d.modified, 1);
+  assert.deepStrictEqual(d.removed, ['gone.dll']);
+  assert.strictEqual(d.status.get('a.dll'), 'same');
+  assert.strictEqual(d.status.get('b.dll'), 'mod');
+  assert.strictEqual(d.status.get('new.dll'), 'add');
+});
+
+test('diffManifests ловит изменение по размеру, когда хеша нет', () => {
+  // Старые манифесты могли не нести blake3: сравнение по размеру — последнее,
+  // что остаётся, и молча считать такие файлы одинаковыми нельзя.
+  const cur = manifestFileMap(mf([{ path: 'a.bin', size: 11 }]));
+  const base = manifestFileMap(mf([{ path: 'a.bin', size: 10 }]));
+  assert.strictEqual(diffManifests(cur, base).modified, 1);
+});
+
+test('diffManifests на одинаковых манифестах не находит отличий', () => {
+  const files = mf([{ path: 'a.dll', size: 1, blake3: 'h' }]);
+  const d = diffManifests(manifestFileMap(files), manifestFileMap(files));
+  assert.deepStrictEqual([d.added, d.modified, d.removed.length], [0, 0, 0]);
+});
+
+test('manifestFileMap срезает ведущий слэш и пропускает пустые пути', () => {
+  const m = manifestFileMap(mf([{ path: '/x/a.dll', size: 1 }, { path: '', size: 2 }]));
+  assert.deepStrictEqual([...m.keys()], ['x/a.dll']);
+});
+
+// ---- Проверка версии перед заливкой ----
+const { uploadVersionValid } = load('uploadVersionValid');
+
+test('uploadVersionValid пропускает только три числа через точку', () => {
+  for (const ok of ['1.2.3', '0.0.1', '10.20.30', ' 1.2.3 ']) {
+    assert.ok(uploadVersionValid(ok), ok);
+  }
+  // «1.39» — самая правдоподобная опечатка: раньше она уезжала на сервер
+  // вместе со всем ZIP и падала только там.
+  for (const bad of ['1.39', '1.2.3.4', 'v1.2.3', '1.2.x', '', 'latest']) {
+    assert.ok(!uploadVersionValid(bad), bad);
+  }
+});
+
+// ---- Сводка исходов в метриках ----
+const { mxOutcomeNote } = new Function(
+  extract('mxNum') + '\n' + extract('mxOutcomeNote') + '\nreturn {mxOutcomeNote};')();
+
+test('mxOutcomeNote объясняет остаток, а не оставляет числа несходящимися', () => {
+  // 19 = 4 + 8 + 7: седьмую часть событий пользователю приходилось угадывать.
+  assert.strictEqual(mxOutcomeNote(19, 4, 8), 'успешно 4, с ошибкой 8, без результата 7');
+});
+
+test('mxOutcomeNote молчит про остаток, когда его нет', () => {
+  assert.strictEqual(mxOutcomeNote(12, 10, 2), 'успешно 10, с ошибкой 2');
+  // Отрицательного остатка быть не может даже на битых данных.
+  assert.strictEqual(mxOutcomeNote(1, 5, 5), 'успешно 5, с ошибкой 5');
+});
+
+// ---- Определение картинок в галерее ----
+const { isImageName } = new Function(
+  src.match(/const IMAGE_EXT_RE[\s\S]*?\n/)[0] + extract('isImageName') + '\nreturn {isImageName};')();
+
+test('isImageName отличает картинку от прочего файла', () => {
+  for (const ok of ['a.png', 'B.JPG', 'x.jpeg', 'y.webp', 'z.svg', 'q.gif?v=2']) {
+    assert.ok(isImageName(ok), ok);
+  }
+  // ping.txt лежит в той же галерее и раньше рисовался битым <img>.
+  for (const bad of ['ping.txt', 'archive.zip', 'noext', '', 'a.png.txt']) {
+    assert.ok(!isImageName(bad), bad);
+  }
 });

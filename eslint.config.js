@@ -120,7 +120,9 @@ export default [
         runWorkerPool: 'readonly',
         makeRateEstimator: 'readonly',
         setStatusError: 'readonly',
-        clearStatusError: 'readonly'
+        clearStatusError: 'readonly',
+        mountUploadCards: 'readonly',
+        uploadCardHtml: 'readonly'
       }
     }
   },
@@ -140,7 +142,8 @@ export default [
       'server/admin_ui/line-chart.js',
       'server/admin_ui/chunk-upload.js',
       'server/admin_ui/rate-estimator.js',
-      'server/admin_ui/ui-status.js'
+      'server/admin_ui/ui-status.js',
+      'server/admin_ui/upload-card.js'
     ],
     languageOptions: {
       globals: {

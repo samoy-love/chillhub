@@ -1,11 +1,69 @@
 /* Admin UI styles */
+
+/* Панель открывается на Full HD/2K, и раньше вся вёрстка жила в
+   `.news-wrap { max-width: 90% }`: на 2560 это 2300 px, по которым размазаны
+   две колонки, а половина экрана под ними — пустая. Ширину теперь задаёт
+   секция: «плиточные» (метрики, лаунчер, игры) занимают экран целиком,
+   текстовые (новости, техработы) ограничены читаемой мерой. */
+:root {
+  --admin-wide: 2100px;
+  --admin-text: 1700px;
+
+  /* Высота, на которую опускается «липкая» панель: шапка + вкладки + отступ. */
+  --admin-sticky-top: 12px;
+
+  /* Сколько по вертикали остаётся под длинные списки: экран минус шапка,
+     вкладки, заголовок секции и подвал журнала. */
+  --admin-panel-h: calc(100vh - 260px);
+}
+
 .hidden {
   display: none;
 }
 
+.admin-wrap {
+  max-width: var(--admin-wide);
+  margin: 0 auto;
+}
+
+/* Секции с длинным текстом (редактор новостей, форма техработ) не должны
+   растягиваться на всю ширину 2K-монитора: строка в 2000 px нечитаема. */
+.admin-wrap-text {
+  max-width: var(--admin-text);
+  margin: 0 auto;
+}
+
+/* Колонка, которая должна оставаться на виду при прокрутке соседней:
+   дерево манифеста на 478 файлов иначе уводит страницу на два экрана вниз,
+   и карточка загрузки справа уезжает из поля зрения. */
+.sticky-col {
+  position: sticky;
+  top: var(--admin-sticky-top);
+}
+
+/* Прокручиваемая область внутри карточки: скроллится содержимое, а не вся
+   страница. Высота считается от вьюпорта, поэтому на 1080 и на 1440 панель
+   занимает одинаковую долю экрана, а не фиксированные 200 px. */
+.panel-scroll {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.panel-scroll-sm { max-height: clamp(220px, 34vh, 460px); }
+.panel-scroll-md { max-height: clamp(280px, 46vh, 680px); }
+.panel-scroll-lg { max-height: clamp(320px, var(--admin-panel-h), 1100px); }
+
 textarea {
   width: 100%;
-  height: 260px;
+}
+
+/* Редактор новости — основное рабочее поле вкладки: фиксированные 260 px
+   посреди 1400 px свободной высоты заставляли скроллить текст в щели.
+   Селектор по id тут неизбежен: идентификатор поля задан разметкой и на нём
+   висит весь JS вкладки (см. ns_md в admin.js). */
+/* stylelint-disable-next-line selector-id-pattern */
+#ns_md {
+  min-height: clamp(320px, 52vh, 900px);
 }
 
 .card-news {
@@ -16,11 +74,6 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-
-.news-wrap {
-  max-width: 90%;
-  margin: 0 auto;
 }
 
 /* News list: make cover images shorter with spacing around */
@@ -40,14 +93,16 @@ textarea {
   height: 24px;
 }
 
-/* Icon-only button (header refresh): show only the white icon */
+/* Icon-only button (header refresh): show only the white icon.
+   24×24 — минимальная зона нажатия, которую можно попасть мышью без
+   прицеливания; до этого кнопка была 20×20 и промахивалась. */
 .btn-icon {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
+  padding: 2px;
   border: none;
   background: transparent;
   color: #fff; /* makes SVG with stroke="currentColor" white */
@@ -68,6 +123,14 @@ textarea {
 }
 .btn-icon svg { width: 100%; height: 100%; display: block; }
 
+/* Вкладки: переключение идёт по клику и по стрелкам (role="tab"), поэтому
+   у активной вкладки должен быть видимый фокус — иначе с клавиатуры не видно,
+   где находишься. */
+.nav-tabs .nav-link:focus-visible {
+  outline: 2px solid #0d6efd;
+  outline-offset: -2px;
+}
+
 /* Collapsible tree in manifests preview */
 .tree-dir { margin: 2px 0; }
 
@@ -85,6 +148,14 @@ textarea {
   transform: rotate(0deg);
 }
 .tree-dir[open] > summary .twisty { transform: rotate(90deg); }
+
+/* Подсветка результатов поиска по дереву файлов. */
+.tree-row-hit { background: rgb(13 110 253 / 18%); border-radius: 4px; }
+
+/* Диф между версиями: строка добавлена / удалена / изменена. */
+.tree-add { color: #75b798; }
+.tree-del { color: #ea868f; text-decoration: line-through; }
+.tree-mod { color: #ffda6a; }
 
 /* Selected game row highlight (Games tab) */
 #mgm-table tbody tr.mgm-selected {
@@ -127,3 +198,105 @@ textarea {
   white-space: pre-wrap;    /* preserve spaces and newlines, allow wrapping */
   overflow-wrap: break-word;   /* avoid overflow on very long tokens; word-break:break-word устарел */
 }
+
+/* Таблицы. Bootstrap-класс table-dark поверх data-bs-theme="dark" давал
+   таблицам собственный, более светлый фон, чем у карточки, в которой они
+   лежат. Тема уже тёмная — таблице достаточно прозрачного фона. */
+.table-admin {
+  --bs-table-bg: transparent;
+  --bs-table-striped-bg: rgb(255 255 255 / 3%);
+  --bs-table-hover-bg: rgb(13 110 253 / 10%);
+}
+
+/* Тосты: единственное место, где сообщение видно с любой позиции скролла.
+   Журнал внизу страницы (#out) для этого не годился — ошибка заливки
+   оказывалась в двух экранах ниже прогресс-бара, за которым следят. */
+.toast-host {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 1080;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(460px, 92vw);
+  pointer-events: none;
+}
+
+.toast-host > * { pointer-events: auto; }
+
+.admin-toast {
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #fff;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 45%);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: #343a40;
+  border-left: 4px solid #6c757d;
+  animation: toast-in .14s ease-out;
+}
+
+@keyframes toast-in {
+  from { opacity: 0%; transform: translateY(-6px); }
+  to   { opacity: 100%; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-toast { animation: none; }
+}
+
+.admin-toast-info    { border-left-color: #0d6efd; }
+.admin-toast-success { border-left-color: #198754; }
+.admin-toast-warn    { border-left-color: #ffc107; }
+.admin-toast-error   { border-left-color: #dc3545; }
+
+.admin-toast-body {
+  flex: 1 1 auto;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font-size: .9rem;
+}
+
+.admin-toast-time {
+  font-variant-numeric: tabular-nums;
+  opacity: 65%;
+  font-size: .78rem;
+}
+
+/* Журнал: то же самое, но с историей и временем. Свёрнут по умолчанию —
+   раньше на его месте был самый светлый прямоугольник на странице, занятый
+   одной строкой без времени. */
+.journal-log {
+  max-height: 260px;
+  overflow: auto;
+  font-size: .82rem;
+  margin: 0;
+}
+
+.journal-line { display: flex; gap: 8px; align-items: baseline; }
+.journal-line + .journal-line { margin-top: 2px; }
+.journal-time { color: #8a9199; font-variant-numeric: tabular-nums; }
+.journal-error { color: #ea868f; }
+.journal-warn { color: #ffda6a; }
+.journal-success { color: #75b798; }
+
+/* Зона необратимых действий: визуально отделена от рабочих кнопок, чтобы
+   «Удалить все метрики» не стояла в одном ряду с «Показать». */
+.danger-zone {
+  border: 1px solid rgb(220 53 69 / 35%);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgb(220 53 69 / 6%);
+}
+
+/* Служебные настройки заливки (размер чанка, параллельность): нужны раз при
+   подборе и потом не трогаются — по умолчанию свёрнуты. */
+.tuning > summary {
+  cursor: pointer;
+  color: #adb5bd;
+  font-size: .85rem;
+}
+
+.tuning[open] > summary { margin-bottom: .5rem; }
