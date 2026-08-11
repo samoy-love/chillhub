@@ -38,6 +38,10 @@ const SCRIPT_ORDER = [
   'chunk-upload.js',
   'rate-estimator.js',
   'ui-status.js',
+  // upload-card.js собирает обе карточки заливки из общего шаблона; без него
+  // в разметке на их месте остаются пустые <div data-upload-card>, и ни один
+  // из up_*/man_* элементов не существует.
+  'upload-card.js',
   'admin.js',
 ];
 

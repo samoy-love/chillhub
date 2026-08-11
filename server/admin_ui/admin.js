@@ -114,6 +114,195 @@ try{
   });
 }catch{}
 
+// Карточки загрузки собираются из общего шаблона (upload-card.js) ДО всего
+// остального кода этого файла: ниже идут getElementById('up_conc'),
+// ('man_drop') и десятки других, и к моменту их вызова элементы уже должны
+// быть в DOM. В разметке на их месте стоят пустые <div data-upload-card>.
+try{ mountUploadCards(document); }catch(e){ console.error('upload cards', e); }
+
+// ==== Тосты и журнал ====
+//
+// ПОЧЕМУ: единственным каналом сообщений был <pre id="out"> в самом низу
+// страницы, и notify() затирал в нём предыдущую строку — без времени, без
+// уровня, без истории. На вкладке «Лаунчер» с деревом на 478 файлов этот
+// блок находится в двух экранах ниже прогресс-бара, за которым следят, так
+// что ошибка заливки фактически оставалась незамеченной (тот же случай
+// описан в шапке ui-status.js). Тост виден с любой позиции скролла, журнал
+// хранит историю с отметками времени, а #out остаётся приёмником последнего
+// сообщения — на него смотрит обработчик window.onerror и тесты.
+const JOURNAL_LIMIT = 200;
+const __journal = [];
+
+function nowHms(){
+  const d = new Date();
+  const pad = (n)=> (n<10?'0':'')+n;
+  return pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+}
+
+// Уровень сообщения по его тексту: почти весь существующий код зовёт
+// notify() одной строкой, и переписывать все вызовы ради второго аргумента
+// не нужно — «HTTP 500», «Ошибка ...», «Не удалось ...» распознаются сами.
+function guessLevel(msg){
+  const s = String(msg||'');
+  if(/(ошибк|не удалось|HTTP [45]\d\d|провал|отказ)/i.test(s)) return 'error';
+  if(/(внимание|осторожно|битые|устарел)/i.test(s)) return 'warn';
+  if(/(готово|успешно|сохранен|обновлен|удалена|удалены|создан|применен|пересобран)/i.test(s)) return 'success';
+  return 'info';
+}
+
+const TOAST_TTL = { error: 12000, warn: 9000, success: 5000, info: 5000 };
+
+function showToast(msg, level){
+  const host = document.getElementById('toast_host'); if(!host) return;
+  const lvl = level || guessLevel(msg);
+  const el = document.createElement('div');
+  el.className = 'admin-toast admin-toast-'+lvl;
+  el.setAttribute('role', lvl==='error' ? 'alert' : 'status');
+  const time = document.createElement('span');
+  time.className = 'admin-toast-time';
+  time.textContent = nowHms();
+  const body = document.createElement('div');
+  body.className = 'admin-toast-body';
+  body.textContent = String(msg||'');
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'btn-close btn-close-white btn-sm';
+  close.setAttribute('aria-label', 'Закрыть');
+  close.addEventListener('click', ()=> el.remove());
+  el.appendChild(time); el.appendChild(body); el.appendChild(close);
+  host.appendChild(el);
+  // Ошибку не гасим по таймеру слишком быстро: её должны успеть прочитать.
+  const ttl = TOAST_TTL[lvl] || 5000;
+  setTimeout(()=>{ if(el.isConnected) el.remove(); }, ttl);
+  // Больше пяти тостов на экране — уже стена: старые убираем.
+  while(host.children.length > 5){ host.removeChild(host.firstChild); }
+}
+
+function journalRender(){
+  const log = document.getElementById('journal_log');
+  const cnt = document.getElementById('journal_count');
+  const last = document.getElementById('journal_last');
+  if(cnt) cnt.textContent = String(__journal.length);
+  if(last){
+    const l = __journal[__journal.length-1];
+    last.textContent = l ? (l.time+' · '+l.msg.slice(0,80)) : '';
+    last.className = 'ms-2 small journal-'+(l ? l.level : 'info');
+  }
+  if(!log) return;
+  // Новые сверху: журнал читают сразу после действия, а не с начала сессии.
+  log.innerHTML = __journal.slice().reverse().map(e=>
+    '<div class="journal-line"><span class="journal-time">'+escapeHtml(e.time)+'</span>'
+    + '<span class="journal-'+e.level+'">'+escapeHtml(e.msg)+'</span></div>'
+  ).join('');
+}
+
+function journalAdd(msg, level){
+  __journal.push({ time: nowHms(), msg: String(msg||''), level: level || guessLevel(msg) });
+  while(__journal.length > JOURNAL_LIMIT) __journal.shift();
+  journalRender();
+}
+
+// notifyLevel — то же, что notify(), но с явным уровнем: для мест, где текст
+// сообщения не даёт его угадать («Метрики удалены» — это success, а не info).
+function notifyLevel(msg, level){
+  const o = document.getElementById('out'); if(o) o.textContent = msg;
+  journalAdd(msg, level);
+  showToast(msg, level);
+}
+
+// notifyQuiet — для рутины, которая случается сама («метрики обновлены» при
+// каждом открытии вкладки). Такое место в журнале есть, а всплывать поверх
+// экрана ему незачем: тост, который показывают без просьбы, перестают читать.
+function notifyQuiet(msg, level){
+  const o = document.getElementById('out'); if(o) o.textContent = msg;
+  journalAdd(msg, level);
+}
+
+// httpErrText разворачивает ответ сервера в читаемое сообщение. Сервер шлёт
+// осмысленный текст (http.Error(w, "saved but index rebuild failed", ...)),
+// а UI показывал голое «HTTP 500» и выбрасывал тело — половина диагностики
+// до пользователя не доезжала.
+async function httpErrText(res, prefix){
+  const head = (prefix ? prefix+' — ' : '') + 'HTTP ' + res.status + (res.statusText ? ' '+res.statusText : '');
+  let body = '';
+  try{ body = (await res.text()||'').trim(); }catch{ /* тело может быть уже прочитано */ }
+  if(!body) return head;
+  // JSON-ошибки вида {"error":"..."} показываем полем, а не всем телом.
+  try{
+    const j = JSON.parse(body);
+    const m = j && (j.error || j.message || j.detail);
+    if(m) return head + ': ' + m;
+  }catch{ /* обычный текст */ }
+  if(body.length > 400) body = body.slice(0, 400)+'…';
+  return head + ': ' + body;
+}
+
+// notifyHttp — стандартная реакция на неуспешный ответ.
+async function notifyHttp(res, prefix){
+  notifyLevel(await httpErrText(res, prefix), 'error');
+}
+
+// ==== Диалоги подтверждения ====
+//
+// Нативный confirm() одинаково защищал и «очистить временные файлы», и
+// «удалить версию вместе с файлами сборки»: одна и та же кнопка OK под
+// Enter. Здесь у опасного действия своя модалка с красной кнопкой, которая
+// не в фокусе, а у необратимого — ещё и ввод подтверждающего слова.
+//
+// Без bootstrap (тесты в jsdom, недоступный CDN раньше) откатываемся на
+// нативные confirm/prompt: поведение сохраняется, теряется только оформление.
+function askConfirm(opts){
+  const o = opts || {};
+  const title = o.title || 'Подтверждение';
+  const body = o.body || '';
+  const okText = o.okText || 'Продолжить';
+  const danger = !!o.danger;
+  const requireText = o.requireText || '';
+  if(!window.bootstrap || !window.bootstrap.Modal){
+    if(requireText){
+      const v = window.prompt(title+'\n'+body+'\n\nВведите «'+requireText+'» для подтверждения:');
+      return Promise.resolve(String(v||'').trim() === requireText);
+    }
+    return Promise.resolve(!!window.confirm(title + (body ? '\n\n'+body : '')));
+  }
+  return new Promise((resolve)=>{
+    const el = document.createElement('div');
+    el.className = 'modal fade';
+    el.setAttribute('tabindex','-1');
+    el.innerHTML = ''+
+      '<div class="modal-dialog modal-dialog-centered"><div class="modal-content">'+
+      '  <div class="modal-header"><h5 class="modal-title">'+escapeHtml(title)+'</h5>'+
+      '    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button></div>'+
+      '  <div class="modal-body">'+
+      '    <div class="preserve-ws">'+escapeHtml(body)+'</div>'+
+      (requireText
+        ? '    <div class="mt-3"><label class="form-label small" for="__ask_input">Введите <code>'+escapeHtml(requireText)+'</code> для подтверждения:</label>'+
+          '    <input id="__ask_input" class="form-control form-control-sm" autocomplete="off"></div>'
+        : '')+
+      '  </div>'+
+      '  <div class="modal-footer">'+
+      '    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" id="__ask_cancel">Отмена</button>'+
+      '    <button type="button" class="btn '+(danger?'btn-danger':'btn-primary')+'" id="__ask_ok"'+(requireText?' disabled':'')+'>'+escapeHtml(okText)+'</button>'+
+      '  </div>'+
+      '</div></div>';
+    document.body.appendChild(el);
+    const modal = new window.bootstrap.Modal(el);
+    let answer = false;
+    const okBtn = el.querySelector('#__ask_ok');
+    const input = el.querySelector('#__ask_input');
+    if(input){
+      input.addEventListener('input', ()=>{ okBtn.disabled = input.value.trim() !== requireText; });
+      el.addEventListener('shown.bs.modal', ()=> input.focus());
+    } else {
+      // Фокус остаётся на «Отмена»: Enter не должен подтверждать удаление.
+      el.addEventListener('shown.bs.modal', ()=> el.querySelector('#__ask_cancel')?.focus());
+    }
+    okBtn.addEventListener('click', ()=>{ answer = true; modal.hide(); });
+    el.addEventListener('hidden.bs.modal', ()=>{ el.remove(); resolve(answer); });
+    modal.show();
+  });
+}
+
 // Drag-n-drop wiring for ZIP upload (Launcher tab)
 (function(){
   const dz = document.getElementById('up_drop'); if(!dz) return;
@@ -128,7 +317,8 @@ try{
     const txt=document.getElementById('up_prog_text'); const wrap=document.getElementById('up_prog_wrap'); const bar=document.getElementById('up_pb');
     if(wrap){ wrap.style.display='block'; }
     if(bar){ bar.style.width='0%'; }
-    if(txt){ txt.textContent = 'Выбран файл: '+f.name+' ('+f.size+' байт)'; }
+    if(txt){ txt.textContent = 'Выбран файл: '+f.name+' ('+formatBytes(f.size)+')'; }
+    uploadSpaceCheck('up', f);
   });
 })();
 
@@ -162,60 +352,168 @@ async function lnPrevEnsureVersionsAndRender(){
     }
     sel.appendChild(frag);
     if(latest) sel.value = latest;
+    // Второй селектор — база сравнения. По умолчанию это версия, стоящая в
+    // списке прямо перед показываемой: «что изменилось с прошлого релиза» —
+    // ровно тот вопрос, ради которого сюда заходят.
+    fillDiffSelect('ln_diff_ver', items.map(it=> it.version), sel.value||'');
     await lnPrevRender(sel.value||'');
   }catch(e){ const tree=document.getElementById('ln_tree'); if(tree) tree.textContent='Ошибка: '+e; }
 }
 
+// fillDiffSelect наполняет селектор «Сравнить с» всеми версиями, кроме
+// показываемой, и выбирает предыдущую по порядку.
+function fillDiffSelect(selectId, versions, current){
+  const sel = document.getElementById(selectId); if(!sel) return;
+  const prevValue = sel.value;
+  sel.innerHTML = '';
+  const none = document.createElement('option');
+  none.value = ''; none.textContent = '— без сравнения —';
+  sel.appendChild(none);
+  const list = (versions||[]).filter(v=> v && v !== current);
+  for(const v of list){
+    const o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o);
+  }
+  const idx = (versions||[]).indexOf(current);
+  const suggested = idx > 0 ? versions[idx-1] : '';
+  sel.value = list.includes(prevValue) ? prevValue : (list.includes(suggested) ? suggested : '');
+}
+
+// fetchManifest возвращает манифест версии или null (сообщение об ошибке —
+// забота вызывающего: у превью игры и лаунчера разные адреса).
+async function fetchManifest(url){
+  try{
+    const r = await fetch(url);
+    if(!r.ok) return null;
+    return await r.json();
+  }catch{ return null; }
+}
+
 async function lnPrevRender(version){
   const tree = document.getElementById('ln_tree'); if(!tree) return;
-  if(!version){ tree.textContent = 'Выберите версию лаунчера'; return; }
+  const sum = document.getElementById('ln_diff_summary');
+  if(!version){ tree.textContent = 'Выберите версию лаунчера'; if(sum) sum.innerHTML=''; return; }
   tree.innerHTML = '<span class="text-body-secondary">Загрузка манифеста...</span>';
   try{
     const r = await fetch('/manifests/launcher/'+encodeURIComponent(version)+'.json');
-    if(!r.ok){ tree.textContent = 'HTTP '+r.status; return; }
+    if(!r.ok){ tree.textContent = await httpErrText(r, 'Манифест '+version); return; }
     const manifest = await r.json();
-    lnRenderTree(tree, manifest);
+    const baseVer = document.getElementById('ln_diff_ver')?.value || '';
+    const base = baseVer ? await fetchManifest('/manifests/launcher/'+encodeURIComponent(baseVer)+'.json') : null;
+    const diff = lnRenderTree(tree, manifest, base);
+    if(sum) sum.innerHTML = baseVer && !base
+      ? '<span class="text-danger">Манифест '+escapeHtml(baseVer)+' не прочитан</span>'
+      : treeDiffSummaryHtml(diff, baseVer);
   }catch(e){ tree.textContent = 'Ошибка: '+e; }
+}
+
+// ==== Список версий (общий для лаунчера и игр) ====
+//
+// Раньше таблица состояла из версии, прочерка в колонке «Статус» и двух
+// кнопок. По ней нельзя было ответить ни на один вопрос, который перед ней
+// ставят: что это за сборка, когда собрана, сколько занимает, безопасно ли её
+// удалять. Данные для этого сервер теперь отдаёт вместе со списком
+// (ListVersions -> createdAt/files/bytes).
+
+// Дата сборки в местной зоне; пустое значение — прочерк, а не «Invalid Date».
+function fmtDateTime(v){
+  const s = String(v||'').trim();
+  if(!s) return '—';
+  const d = new Date(s);
+  if(isNaN(d.getTime())) return s;
+  return d.toLocaleString('ru-RU', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+}
+
+// «Активна» против «—» читалось как «нет данных». Версия, не помеченная
+// latest, — это архив, и так и называется.
+function versionsTableHtml(items, latest, cls){
+  const rows = items.map(it=>{
+    const ver = it.version || '';
+    const isLatest = latest && ver === latest;
+    const actBtn = isLatest
+      ? '<span class="badge text-bg-success">latest</span>'
+      : ('<button data-ver="'+escapeHtml(ver)+'" class="btn btn-sm btn-outline-primary '+cls+'-activate">Сделать активной</button>');
+    const delBtn = '<button data-ver="'+escapeHtml(ver)+'" class="btn btn-sm btn-outline-danger ms-2 '+cls+'-delete">Удалить</button>';
+    const status = isLatest
+      ? '<span class="text-success">активна</span>'
+      : '<span class="text-body-secondary">архив</span>';
+    const files = Number(it.files||0);
+    const bytes = Number(it.bytes||0);
+    return '<tr>'
+      + '<td class="text-monospace">'+escapeHtml(ver)+'</td>'
+      + '<td>'+status+'</td>'
+      + '<td class="text-body-secondary">'+escapeHtml(fmtDateTime(it.createdAt))+'</td>'
+      + '<td class="text-end text-body-secondary">'+(files? escapeHtml(String(files)) : '—')+'</td>'
+      + '<td class="text-end text-body-secondary">'+(bytes? escapeHtml(formatBytes(bytes)) : '—')+'</td>'
+      + '<td class="text-end text-nowrap">'+actBtn+delBtn+'</td>'
+      + '</tr>';
+  }).join('');
+  const total = items.reduce((a, it)=> a + Number(it.bytes||0), 0);
+  const foot = items.length
+    ? '<tfoot><tr><td colspan="4" class="text-body-secondary">Версий: '+items.length+'</td>'
+      + '<td class="text-end text-body-secondary">'+escapeHtml(formatBytes(total))+'</td><td></td></tr></tfoot>'
+    : '';
+  return '<div class="table-responsive"><table class="table table-admin table-striped align-middle">'
+    + '<thead><tr><th>Версия</th><th>Статус</th><th>Собрана</th>'
+    + '<th class="text-end">Файлов</th><th class="text-end">Размер</th><th class="text-end"></th></tr></thead>'
+    + '<tbody>'+(rows || '<tr><td colspan="6" class="text-body-secondary">Версий нет</td></tr>')+'</tbody>'
+    + foot + '</table></div>';
+}
+
+// bindVersionActions вешает подтверждения на кнопки таблицы. Удаление версии
+// сносит и манифест, и файлы сборки — это необратимо, поэтому здесь требуется
+// ввести номер версии, а не просто нажать Enter на кнопке OK.
+function bindVersionActions(root, cls, gameId, afterChange){
+  root.querySelectorAll('.'+cls+'-activate').forEach(btn=>{
+    btn.addEventListener('click', async (ev)=>{
+      const ver = ev.currentTarget.getAttribute('data-ver'); if(!ver) return;
+      const ok = await askConfirm({
+        title: 'Сделать версию активной',
+        body: 'Версия '+ver+' станет latest: все лаунчеры увидят её как текущую и начнут обновляться на неё.',
+        okText: 'Сделать активной',
+      });
+      if(!ok) return;
+      let r;
+      try{ r = await fetch('/admin/activate?gameId='+encodeURIComponent(gameId)+'&version='+encodeURIComponent(ver), {method:'POST'}); }
+      catch(e){ notifyLevel('Не удалось активировать версию: '+e, 'error'); return; }
+      if(!r.ok){ await notifyHttp(r, 'Активация версии '+ver); return; }
+      notifyLevel('Версия '+ver+' активна', 'success');
+      try{ await afterChange(); }catch(_){ /* обновление вида не критично */ }
+    });
+  });
+  root.querySelectorAll('.'+cls+'-delete').forEach(btn=>{
+    btn.addEventListener('click', async (ev)=>{
+      const ver = ev.currentTarget.getAttribute('data-ver'); if(!ver) return;
+      const ok = await askConfirm({
+        title: 'Удалить версию '+ver+'?',
+        body: 'Будут безвозвратно удалены манифест и все файлы сборки. Восстановить их можно только повторной заливкой ZIP.',
+        okText: 'Удалить версию',
+        danger: true,
+        requireText: ver,
+      });
+      if(!ok) return;
+      let r;
+      try{ r = await fetch('/admin/deleteVersion?gameId='+encodeURIComponent(gameId)+'&version='+encodeURIComponent(ver), {method:'POST'}); }
+      catch(e){ notifyLevel('Не удалось удалить версию: '+e, 'error'); return; }
+      if(!r.ok){ await notifyHttp(r, 'Удаление версии '+ver); return; }
+      notifyLevel('Версия '+ver+' удалена', 'success');
+      try{ await afterChange(); }catch(_){ /* обновление вида не критично */ }
+    });
+  });
 }
 
 // ==== Launcher versions list (right column on Launcher tab) ====
 async function lnManifestsReload(){
   const root = document.getElementById('ln_ver_list'); if(!root) return;
   let res; try{ res = await fetch('/admin/list?gameId=launcher'); }catch(e){ root.textContent = 'Ошибка: '+e; return; }
-  if(!res.ok){ root.textContent = 'HTTP '+res.status+' '+res.statusText; return; }
+  if(!res.ok){ root.textContent = await httpErrText(res, 'Список версий лаунчера'); return; }
   let j; try{ j = await res.json(); }catch(e){ root.textContent = 'Ошибка парсинга JSON'; return; }
   const latest = j.latest||'';
   const items = Array.isArray(j.items)? j.items: [];
-  const rows = items.map(it=>{
-    const ver = it.version || '';
-    const isLatest = latest && ver === latest;
-    const actBtn = isLatest ? '<span class="badge text-bg-success">latest</span>' : ('<button data-ver="'+escapeHtml(ver)+'" class="btn btn-sm btn-outline-primary ln-activate">Сделать активной</button>');
-    const delBtn = '<button data-ver="'+escapeHtml(ver)+'" class="btn btn-sm btn-outline-danger ms-2 ln-delete">Удалить</button>';
-    return '<tr><td class="text-monospace">'+escapeHtml(ver)+'</td><td>'+(isLatest?'<span class="text-success">Активна</span>':'<span class="text-body-secondary">—</span>')+'</td><td class="text-end">'+actBtn+delBtn+'</td></tr>';
-  }).join('');
-  root.innerHTML = '<div class="table-responsive"><table class="table table-dark table-striped align-middle"><thead><tr><th>Версия</th><th>Статус</th><th class="text-end"></th></tr></thead><tbody>'+rows+'</tbody></table></div>';
-  // bind activate buttons
-  root.querySelectorAll('.ln-activate').forEach(btn=>{
-    btn.addEventListener('click', async (ev)=>{
-      const ver = ev.currentTarget.getAttribute('data-ver'); if(!ver) return;
-      if(!confirm('Сделать версию '+ver+' активной?')) return;
-      let r; try{ r = await fetch('/admin/activate?gameId=launcher&version='+encodeURIComponent(ver), {method:'POST'}); }catch(e){ notify('Ошибка: '+e); return; }
-      if(!r.ok){ notify('HTTP '+r.status+' '+r.statusText); return; }
-      try{ await lnManifestsReload(); }catch(_){ }
-      try{ await lnRefresh(); }catch(_){ }
-    });
-  });
-  // bind delete buttons
-  root.querySelectorAll('.ln-delete').forEach(btn=>{
-    btn.addEventListener('click', async (ev)=>{
-      const ver = ev.currentTarget.getAttribute('data-ver'); if(!ver) return;
-      if(!confirm('Удалить версию '+ver+'?\nБудут удалены манифест и файлы сборки.')) return;
-      let r; try{ r = await fetch('/admin/deleteVersion?gameId=launcher&version='+encodeURIComponent(ver), {method:'POST'}); }catch(e){ notify('Ошибка: '+e); return; }
-      if(!r.ok){ notify('HTTP '+r.status+' '+r.statusText); return; }
-      notify('Версия '+ver+' удалена');
-      try{ await lnManifestsReload(); }catch(_){ }
-      try{ await lnRefresh(); }catch(_){ }
-    });
+  root.innerHTML = versionsTableHtml(items, latest, 'ln');
+  bindVersionActions(root, 'ln', 'launcher', async ()=>{
+    await lnManifestsReload();
+    await lnRefresh();
+    await lnPrevEnsureVersionsAndRender();
   });
 }
 
@@ -265,7 +563,6 @@ function formatEta(sec){
 }
 
 // ==== System free space indicator ====
-let __sysFreeTimer = null; // reserved; not used after change
 let __sysFreeReq = 0;
 async function sysFreeRefresh(){
   const badge = document.getElementById('sys_free');
@@ -279,6 +576,12 @@ async function sysFreeRefresh(){
     if(myReq !== __sysFreeReq) return; // stale
     const bytes = Number(j && j.bytes);
     const total = Number(j && j.total);
+    __sysFreeBytes = Number.isFinite(bytes) ? bytes : null;
+    // Пересчитать «влезет ли» для уже выбранных файлов.
+    try{
+      uploadSpaceCheck('up', window.__upDroppedFile || document.getElementById('up_zip')?.files?.[0]);
+      uploadSpaceCheck('man', window.__manDroppedFile || document.getElementById('man_zip')?.files?.[0]);
+    }catch(_){ /* карточки могут быть ещё не смонтированы */ }
     const freeStr = Number.isFinite(bytes) ? formatBytes(bytes) : '—';
     const totalStr = Number.isFinite(total) && total > 0 ? formatBytes(total) : '';
     badge.textContent = totalStr ? (freeStr + ' / ' + totalStr) : freeStr;
@@ -307,6 +610,34 @@ async function sysFreeRefresh(){
     badge.classList.add('text-bg-secondary');
   }
 }
+// Последнее известное свободное место: нужно, чтобы прикинуть, влезет ли
+// выбранный архив, не дожидаясь ответа сервера на каждый выбор файла.
+let __sysFreeBytes = null;
+
+// Заливка 10–15 ГБ, упавшая на «кончилось место», — это полчаса впустую.
+// Проверка делается до старта: распакованная сборка занимает примерно вдвое
+// больше самого ZIP (архив лежит во временном каталоге, пока разворачивается
+// содержимое), поэтому запас считается с коэффициентом.
+const UPLOAD_SPACE_FACTOR = 2.2;
+
+function uploadSpaceCheck(prefix, file){
+  const out = document.getElementById(prefix+'_fit');
+  if(!out) return true;
+  if(!file || __sysFreeBytes === null){ out.textContent = ''; out.className = 'small text-body-secondary'; return true; }
+  const need = Math.round(file.size * UPLOAD_SPACE_FACTOR);
+  const enough = need <= __sysFreeBytes;
+  out.textContent = (enough ? '≈' : 'Не хватает места: нужно ≈')
+    + formatBytes(need) + ' из ' + formatBytes(__sysFreeBytes) + ' свободных';
+  out.className = 'small ' + (enough ? 'text-body-secondary' : 'text-danger');
+  return enough;
+}
+
+// Валидация версии до отправки: поле принимало «1.39» и «1.2.3 » молча, а
+// ошибка всплывала уже на сервере — после того, как ZIP уехал целиком.
+function uploadVersionValid(ver){
+  return /^\d+\.\d+\.\d+$/.test(String(ver||'').trim());
+}
+
 // No debounce-based auto-refresh anymore; refresh only by clicking the button
 async function lnRefresh(){
   const treeEl = document.getElementById('ln_tree'); if(!treeEl) return;
@@ -321,73 +652,197 @@ async function lnRefresh(){
     if(badge){ badge.textContent = ver || '—'; }
   }catch(_){ }
   if(!ver){ treeEl.textContent = 'Не найден latest.json'; return; }
-  // show latest and prefill upload version with next patch
-  const upVer = document.getElementById('up_ver'); if(upVer){ upVer.value = bumpSemverPatch(ver); }
+  // show latest and prefill upload version with next patch (пока поле не
+  // трогали руками — иначе автоподстановка затирает набранное)
+  const upVer = document.getElementById('up_ver'); if(upVer && !upVer.dataset.touched){ upVer.value = bumpSemverPatch(ver); }
   treeEl.innerHTML = '<div class="small text-body-secondary mb-1">Текущая версия лаунчера: <code>'+escapeHtml(ver)+'</code></div>'+
                      '<span class="text-body-secondary">Загрузка манифеста...</span>';
   let manifest; try{ const r2 = await fetch('/manifests/launcher/'+encodeURIComponent(ver)+'.json?t='+bust); if(!r2.ok){ treeEl.textContent = 'HTTP '+r2.status+' '+r2.statusText; return; } manifest = await r2.json(); }catch(e){ treeEl.textContent = 'Ошибка загрузки манифеста: '+e; return; }
   lnRenderTree(treeEl, manifest);
 }
 
-function lnRenderTree(rootEl, manifest){
+// ==== Дерево файлов манифеста ====
+//
+// Дерево лаунчера — это 478 файлов в пятнадцати языковых папках, и до сих пор
+// с ним нельзя было сделать ничего: ни найти файл, ни свернуть всё разом, ни
+// узнать, чем сборка отличается от предыдущей. Последнее — главный вопрос
+// каждого релиза, и данные для ответа лежали рядом: селектор версии уже был.
+
+// manifestFileMap: путь -> {size, hash} по одному манифесту.
+function manifestFileMap(manifest){
+  const m = new Map();
   const files = Array.isArray(manifest?.files) ? manifest.files : [];
-  const emptyDirs = new Set(Array.isArray(manifest?.emptyDirs)? manifest.emptyDirs : []);
-  // build a tree structure
-  const node = ()=>({children:new Map(), files:[]});
-  const root = node();
   for(const f of files){
     const p = String(f.path||'').replace(/^\/+/, '');
-    const parts = p.split('/').filter(Boolean);
+    if(!p) continue;
+    const sz = Number(f.size);
+    m.set(p, { size: Number.isFinite(sz)? sz : 0, hash: String(f.blake3||f.sha256||'') });
+  }
+  return m;
+}
+
+// diffManifests сравнивает две карты файлов и возвращает статус по каждому
+// пути текущей версии плюс список пропавших. Файл считается изменённым, если
+// разошёлся хеш; при его отсутствии — по размеру.
+function diffManifests(cur, base){
+  const status = new Map();
+  let added = 0, modified = 0;
+  for(const [p, f] of cur){
+    const b = base.get(p);
+    if(!b){ status.set(p, 'add'); added++; continue; }
+    const changed = (f.hash && b.hash) ? (f.hash !== b.hash) : (f.size !== b.size);
+    if(changed){ status.set(p, 'mod'); modified++; }
+    else status.set(p, 'same');
+  }
+  const removed = [];
+  for(const [p] of base){ if(!cur.has(p)) removed.push(p); }
+  return { status, added, modified, removed };
+}
+
+const TREE_MARK = { add: '+', mod: '~', del: '−' };
+
+// treeRender строит DOM дерева из подготовленных данных. Вынесено отдельно от
+// загрузки, потому что фильтр и «развернуть всё» перерисовывают то же самое,
+// не ходя в сеть повторно.
+function treeRender(rootEl){
+  const data = rootEl.__treeData; if(!data) return;
+  const { files, emptyDirs, diff, forceOpen } = data;
+  const query = String(data.query||'').trim().toLowerCase();
+  const onlyChanged = !!data.onlyChanged;
+
+  // Список строк: файлы текущей версии плюс пропавшие из базовой (их надо
+  // показать, иначе «удалено 3» не с чем сопоставить).
+  const rows = files.map(f=>({
+    path: f.path,
+    size: f.size,
+    state: diff ? (diff.status.get(f.path) || 'same') : 'same',
+  }));
+  if(diff){
+    for(const p of diff.removed) rows.push({ path: p, size: 0, state: 'del' });
+  }
+
+  const visible = rows.filter(r=>{
+    if(onlyChanged && r.state === 'same') return false;
+    if(query && !r.path.toLowerCase().includes(query)) return false;
+    return true;
+  });
+
+  const node = ()=>({children:new Map(), files:[]});
+  const root = node();
+  for(const r of visible){
+    const parts = r.path.split('/').filter(Boolean);
     let cur = root;
     for(let i=0;i<parts.length-1;i++){
       const k = parts[i]; if(!cur.children.has(k)) cur.children.set(k, node()); cur = cur.children.get(k);
     }
-    const fname = parts[parts.length-1] || '';
-    const sz = Number(f.size);
-    cur.files.push({name: fname, size: Number.isFinite(sz) ? sz : 0});
+    cur.files.push({ name: parts[parts.length-1] || '', size: r.size, state: r.state, path: r.path });
   }
-  for(const d of emptyDirs){
-    const parts = String(d||'').split('/').filter(Boolean);
-    let cur = root;
-    for(let i=0;i<parts.length;i++){
-      const k = parts[i]; if(!cur.children.has(k)) cur.children.set(k, node()); cur = cur.children.get(k);
+  // Пустые папки показываем только когда ничего не отфильтровано: иначе они
+  // создают ложное впечатление, что поиск что-то нашёл.
+  if(!query && !onlyChanged){
+    for(const d of emptyDirs){
+      const parts = String(d||'').split('/').filter(Boolean);
+      let cur = root;
+      for(let i=0;i<parts.length;i++){
+        const k = parts[i]; if(!cur.children.has(k)) cur.children.set(k, node()); cur = cur.children.get(k);
+      }
     }
   }
-  // render
+
+  // Фильтр бесполезен, если найденное спрятано внутри свёрнутых папок.
+  const openAll = forceOpen === true || (forceOpen !== false && (!!query || onlyChanged));
+
   const renderNode = (name, n, depth)=>{
-    // Visual indent for folder rows: no indent for root-level folders (depth===1)
-    // For deeper folders, indent by 16px per additional level beyond root
     const folderIndent = (depth>1) ? 16*(depth-1) : 0;
-    // Files don't have a twisty; add a base spacer equal to the twisty width (~20px)
     const twistyPad = 20;
     let html = '';
     if(name!==null){
-      // Folder block as <details> collapsed by default, with SVG twisty and counts
       const dirCount = n.children.size;
       const fileCount = n.files.length;
-      html += '<details class="tree-dir" style="margin-left:'+folderIndent+'px">'
+      html += '<details class="tree-dir"'+(openAll?' open':'')+' style="margin-left:'+folderIndent+'px">'
            +  '<summary class="d-flex align-items-center tree-summary">'
            +    '<svg class="twisty me-2" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l8 7-8 7V5z" fill="currentColor"/></svg>'
            +    '<span class="me-2">📁</span><strong>'+escapeHtml(name)+'</strong>'
            +    '<span class="ms-2 small text-body-secondary">('+dirCount+' папок, '+fileCount+' файлов)</span>'
            +  '</summary>';
     }
-    // folders first
     const keys = Array.from(n.children.keys()).sort((a,b)=> a.localeCompare(b));
     for(const k of keys){ html += renderNode(k, n.children.get(k), depth+1); }
-    // files
     for(const f of n.files.sort((a,b)=> a.name.localeCompare(b.name))){
-      // For files not in root, indent one extra step for clearer hierarchy
       const filePad = (depth>0 ? 16*depth : 0) + twistyPad;
-      html += '<div class="d-flex align-items-center" style="padding-left:'+filePad+'px">'
-           + '<span class="me-2">📄</span><span>'+escapeHtml(f.name)+'</span>'
-           + '<span class="ms-auto small text-body-secondary" title="'+(Number.isFinite(f.size)?f.size:0)+' байт">'+formatBytes(f.size)+'</span>'
+      const cls = (f.state && f.state!=='same') ? (' tree-'+f.state) : '';
+      const mark = TREE_MARK[f.state] ? ('<span class="me-1">'+TREE_MARK[f.state]+'</span>') : '';
+      const hit = query ? ' tree-row-hit' : '';
+      const size = (f.state === 'del') ? '' : ('<span class="ms-auto small text-body-secondary" title="'+(Number.isFinite(f.size)?f.size:0)+' байт">'+formatBytes(f.size)+'</span>');
+      html += '<div class="d-flex align-items-center'+hit+'" style="padding-left:'+filePad+'px" title="'+escapeHtml(f.path)+'">'
+           + '<span class="me-2">📄</span><span class="'+cls.trim()+'">'+mark+escapeHtml(f.name)+'</span>'
+           + size
            + '</div>';
     }
     if(name!==null){ html += '</details>'; }
     return html;
   };
-  rootEl.innerHTML = '<div class="small text-body-secondary mb-1">Всего файлов: '+files.length+'</div>' + renderNode(null, root, 0);
+
+  const head = query || onlyChanged
+    ? 'Показано файлов: '+visible.length+' из '+rows.length
+    : 'Всего файлов: '+files.length;
+  const body = visible.length
+    ? renderNode(null, root, 0)
+    : '<div class="text-body-secondary">Ничего не найдено</div>';
+  rootEl.innerHTML = '<div class="small text-body-secondary mb-1">'+escapeHtml(head)+'</div>' + body;
+}
+
+// lnRenderTree принимает манифест (и, необязательно, базовый для сравнения),
+// запоминает разобранные данные на элементе и рисует их.
+function lnRenderTree(rootEl, manifest, baseManifest){
+  const files = [];
+  for(const f of (Array.isArray(manifest?.files) ? manifest.files : [])){
+    const p = String(f.path||'').replace(/^\/+/, '');
+    const sz = Number(f.size);
+    files.push({ path: p, size: Number.isFinite(sz)? sz : 0 });
+  }
+  const emptyDirs = Array.isArray(manifest?.emptyDirs)? manifest.emptyDirs : [];
+  const diff = baseManifest
+    ? diffManifests(manifestFileMap(manifest), manifestFileMap(baseManifest))
+    : null;
+  const prev = rootEl.__treeData || {};
+  rootEl.__treeData = {
+    files, emptyDirs, diff,
+    query: prev.query || '',
+    onlyChanged: false,
+    forceOpen: undefined,
+  };
+  treeRender(rootEl);
+  return diff;
+}
+
+// treeDiffSummaryHtml — строка «+3 / ~12 / −1» под селекторами версий.
+function treeDiffSummaryHtml(diff, baseVer){
+  if(!diff) return '';
+  if(!diff.added && !diff.modified && !diff.removed.length){
+    return '<span class="text-body-secondary">Отличий от '+escapeHtml(baseVer)+' нет</span>';
+  }
+  return 'Относительно <code>'+escapeHtml(baseVer)+'</code>: '
+    + '<span class="tree-add">+'+diff.added+'</span> · '
+    + '<span class="tree-mod">~'+diff.modified+'</span> · '
+    + '<span class="tree-del">−'+diff.removed.length+'</span>';
+}
+
+// wireTreeControls связывает поле фильтра и кнопки «развернуть/свернуть всё»
+// с деревом. Одинаково для вкладок «Лаунчер» (ln_) и «Игры» (gm_).
+function wireTreeControls(prefix, treeId){
+  const tree = document.getElementById(treeId); if(!tree) return;
+  const q = document.getElementById(prefix+'_tree_q');
+  const expand = document.getElementById(prefix+'_tree_expand');
+  const collapse = document.getElementById(prefix+'_tree_collapse');
+  const apply = (patch)=>{
+    if(!tree.__treeData) return;
+    Object.assign(tree.__treeData, patch);
+    treeRender(tree);
+  };
+  if(q) q.addEventListener('input', debounce(()=> apply({ query: q.value, forceOpen: undefined }), 150));
+  if(expand) expand.addEventListener('click', (e)=>{ e.preventDefault(); apply({ forceOpen: true }); });
+  if(collapse) collapse.addEventListener('click', (e)=>{ e.preventDefault(); apply({ forceOpen: false }); });
 }
 
 // Also reflect file selection in launcher upload area
@@ -401,10 +856,31 @@ document.addEventListener('DOMContentLoaded', ()=>{
         const txt=document.getElementById('up_prog_text'); const wrap=document.getElementById('up_prog_wrap'); const bar=document.getElementById('up_pb');
         if(wrap) wrap.style.display='block';
         if(bar) bar.style.width='0%';
-        if(txt) txt.textContent = 'Выбран файл: '+file.name+' ('+file.size+' байт)';
+        if(txt) txt.textContent = 'Выбран файл: '+file.name+' ('+formatBytes(file.size)+')';
+        uploadSpaceCheck('up', file);
       }
     });
   }
+  const manZip = document.getElementById('man_zip');
+  if(manZip){
+    manZip.addEventListener('change', (ev)=>{
+      const file = ev.currentTarget.files && ev.currentTarget.files[0];
+      if(file) uploadSpaceCheck('man', file);
+    });
+  }
+  // Ручная правка версии отключает автоподстановку следующего патча: иначе
+  // введённое затирается при первом же обновлении списка версий.
+  ['ver','up_ver'].forEach(id=>{
+    const el = document.getElementById(id); if(!el) return;
+    el.addEventListener('input', ()=>{ el.dataset.touched = '1'; });
+  });
+});
+
+// Кнопка очистки журнала.
+document.addEventListener('DOMContentLoaded', ()=>{
+  const btn = document.getElementById('journal_clear');
+  if(btn) btn.addEventListener('click', (e)=>{ e.preventDefault(); __journal.length = 0; journalRender(); });
+  journalRender();
 });
 
 // Init system free space UI (only manual refresh by button)
@@ -429,9 +905,14 @@ function fbQueryParams(){
   const q = document.getElementById('fb_q')?.value||'';
   const fromRaw = document.getElementById('fb_from')?.value||'';
   const toRaw = document.getElementById('fb_to')?.value||'';
-  // Normalize human-friendly dates to RFC3339 Z
-  const from = normalizeHumanDate(fromRaw, /*endOfDay*/false);
-  const to = normalizeHumanDate(toRaw, /*endOfDay*/true);
+  // Поля — <input type="datetime-local">, как на вкладках «Метрики» и
+  // «Технические работы»: браузер отдаёт либо пустую строку, либо
+  // 'YYYY-MM-DDTHH:mm' в местной зоне, и разбираются они теми же двумя
+  // функциями, что и там. Верхняя граница округляется вверх до конца минуты
+  // (см. mxLocalToUtcEnd): datetime-local не даёт секунд, и «по 19:17» иначе
+  // отбрасывало бы обращение, отправленное в 19:17:30.
+  const from = mtLocalToUtc(fromRaw) || '';
+  const to = mxLocalToUtcEnd(toRaw) || '';
   const p = new URLSearchParams();
   if(type){
     if(type === 'bug_auto'){
@@ -447,56 +928,6 @@ function fbQueryParams(){
   if(from) p.set('from', from);
   if(to) p.set('to', to);
   return p.toString();
-}
-
-// Convert human-friendly date strings to RFC3339 (UTC, Z)
-// Accepts:
-//  - YYYY-MM-DD
-//  - DD.MM.YYYY
-//  - YYYY-MM-DD HH:MM[:SS]
-//  - DD.MM.YYYY HH:MM[:SS]
-// Also passes through valid ISO-like strings if Date parses them.
-function normalizeHumanDate(str, endOfDay){
-  const s = String(str||'').trim();
-  if(!s) return '';
-  // If looks like ISO already and parses, use it (ensure Z)
-  if(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)){
-    const d = new Date(s);
-    if(!isNaN(d.getTime())) return toRfc3339(d);
-  }
-  // Patterns
-  const ymd = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/;
-  const dmy = /^(\d{2})\.(\d{2})\.(\d{4})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/;
-  // new Date(Y, M-1, D, ...) молча переполняется: 99.99.9999 превратилось бы в
-  // 10007-06-06, а пятизначный год сервер в RFC3339 уже не разберёт. Проверяем
-  // диапазоны сами, чтобы мусор дал пустой фильтр, а не другую дату.
-  const build = (Y, M, D, hh, mm, ss)=>{
-    if(M<1 || M>12 || D<1 || D>31 || hh>23 || mm>59 || ss>59) return null;
-    const dt = new Date(Y, M-1, D, hh, mm, ss, endOfDay?999:0);
-    if(isNaN(dt.getTime())) return null;
-    // 31.02 существует в регэкспе, но не в календаре — Date сдвинет его на март.
-    if(dt.getFullYear()!==Y || dt.getMonth()!==M-1 || dt.getDate()!==D) return null;
-    return toRfc3339(dt);
-  };
-  let m, out;
-  if((m = ymd.exec(s))){
-    out = build(+m[1], +m[2], +m[3],
-      m[4]!==undefined ? +m[4] : (endOfDay?23:0),
-      m[5]!==undefined ? +m[5] : (endOfDay?59:0),
-      m[6]!==undefined ? +m[6] : (endOfDay?59:0));
-    if(out) return out;
-  }
-  if((m = dmy.exec(s))){
-    out = build(+m[3], +m[2], +m[1],
-      m[4]!==undefined ? +m[4] : (endOfDay?23:0),
-      m[5]!==undefined ? +m[5] : (endOfDay?59:0),
-      m[6]!==undefined ? +m[6] : (endOfDay?59:0));
-    if(out) return out;
-  }
-  // Fallback: try native Date.parse on s
-  const d = new Date(s);
-  if(!isNaN(d.getTime())) return toRfc3339(d);
-  return '';
 }
 
 function toRfc3339(date){
@@ -567,20 +998,47 @@ async function fbReload(immediate){
   if(immediate===true) return;
 }
 
+// Последнее открытое обращение целиком: нужно кнопкам «Ответить» и
+// «Копировать дебаг», чтобы не ходить за ним на сервер повторно.
+let __fbCur = null;
+
+function fbSyncActions(){
+  const has = !!__fbSel;
+  ['fb_toggle_imp','fb_reply','fb_copy_debug','fb_close_view','fb_delete'].forEach(id=>{
+    const el = document.getElementById(id); if(el) el.disabled = !has;
+  });
+  const sw = document.getElementById('fb_read_switch');
+  if(sw){
+    sw.disabled = !has;
+    sw.checked = !!(__fbCur && __fbCur.status === 'read');
+  }
+  // Ответить можно только если человек оставил контакт, похожий на почту.
+  const reply = document.getElementById('fb_reply');
+  if(reply && has){
+    const c = String(__fbCur?.contact||'').trim();
+    const mail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c);
+    reply.disabled = !mail;
+    reply.title = mail ? ('Написать на '+c) : 'Контакт не указан или это не адрес почты';
+  }
+}
+
 async function fbSelect(id){
   __fbSel = id||'';
   const view = document.getElementById('fb_view'); if(!view) return;
-  if(!id){ view.textContent=''; return; }
+  if(!id){ view.textContent=''; __fbCur = null; fbSyncActions(); return; }
   let res; try{ res = await fetch('/admin/feedback/get?id='+encodeURIComponent(id)); }catch(e){ notify('Не удалось открыть обращение: '+e); return; }
-  if(!res.ok){ notify('Не удалось открыть обращение — HTTP '+res.status+' '+res.statusText); return; }
+  if(!res.ok){ await notifyHttp(res, 'Открытие обращения'); return; }
   let it; try{ it = await res.json(); }catch(e){ notify('Обращение: сервер вернул не JSON'); return; }
+  __fbCur = it;
   const sys = it.system||{};
   const hasSys = Object.keys(sys).length > 0;
-  const sysBlock = hasSys ? '<pre class="bg-body-tertiary p-2 border rounded" style="max-height:240px;overflow:auto">'+escapeHtml(JSON.stringify(sys,null,2))+'</pre>' : '';
+  // Высоты в vh, а не 240px: на 1440 под этими блоками оставалось пол-экрана
+  // пустоты, а сама диагностика читалась в щели на восемь строк.
+  const sysBlock = hasSys ? '<pre class="bg-body-tertiary p-2 border rounded panel-scroll panel-scroll-sm">'+escapeHtml(JSON.stringify(sys,null,2))+'</pre>' : '';
   const hasLogs = !!(it.attachLogs && it.logs);
-  const logsBlock = hasLogs ? '<pre class="bg-body-tertiary p-2 border rounded" style="max-height:240px;overflow:auto">'+escapeHtml(String(it.logs))+'</pre>' : '';
+  const logsBlock = hasLogs ? '<pre class="bg-body-tertiary p-2 border rounded panel-scroll panel-scroll-md">'+escapeHtml(String(it.logs))+'</pre>' : '';
   const debugBlock = (hasLogs || hasSys)
-    ? '<details class="mt-3"><summary>Дебаг-информация</summary>' + logsBlock + sysBlock + '</details>'
+    ? '<details class="mt-3" open><summary>Дебаг-информация</summary>' + logsBlock + sysBlock + '</details>'
     : '';
   const isAuto = !!(sys && (sys.auto==='1' || String(sys.auto).toLowerCase()==='true'));
   const tlabel = (it && it.type==='bug' && isAuto) ? 'Баг (авто)' : (it?.type||'');
@@ -593,6 +1051,7 @@ async function fbSelect(id){
     +'<div class="mt-3 preserve-ws">'+escapeHtml(it.comment||'')+'</div>'
     + debugBlock;
   fbRenderList();
+  fbSyncActions();
   // Auto-mark as read on open
   try{ await fetch('/admin/feedback/markRead?id='+encodeURIComponent(id), {method:'POST'}); }catch{}
   try{ await window.fbUnreadUpdateBadge(); }catch{}
@@ -601,8 +1060,8 @@ async function fbSelect(id){
 
 async function fbAction(url){
   const id = __fbSel; if(!id) return;
-  let res; try{ res = await fetch(url+'?id='+encodeURIComponent(id), { method:'POST' }); }catch(e){ notify('Действие не выполнено: '+e); return; }
-  if(!res.ok){ notify('Действие не выполнено — HTTP '+res.status+' '+res.statusText); return; }
+  let res; try{ res = await fetch(url+'?id='+encodeURIComponent(id), { method:'POST' }); }catch(e){ notifyLevel('Действие не выполнено: '+e, 'error'); return; }
+  if(!res.ok){ await notifyHttp(res, 'Действие над обращением'); return; }
   await fbReload(true);
   if(url.includes('delete')){
     // move to next item
@@ -617,23 +1076,73 @@ async function fbAction(url){
 document.addEventListener('DOMContentLoaded', ()=>{
   const bind = (id, fn)=>{ const el=document.getElementById(id); if(el) el.addEventListener('click', (e)=>{ e.preventDefault(); fn(); }); };
   bind('fb_refresh', ()=> fbReload(true));
+  bind('fb_reset_dates', ()=>{
+    const f = document.getElementById('fb_from'); const t = document.getElementById('fb_to');
+    if(f) f.value = ''; if(t) t.value = '';
+    fbReload(true);
+  });
   bind('fb_clear', async ()=>{
-    if(!confirm('Очистить все обращения?')) return;
+    const n = __fbItems.length;
+    const ok = await askConfirm({
+      title: 'Очистить все обращения?',
+      body: 'Будут удалены ВСЕ обращения ('+n+' в текущей выдаче, на сервере может быть больше — фильтр на удаление не влияет). Восстановить их неоткуда.',
+      okText: 'Удалить всё',
+      danger: true,
+      requireText: 'удалить',
+    });
+    if(!ok) return;
     let r;
     try{ r = await fetch('/admin/feedback/clear',{method:'POST'}); }
-    catch(e){ notify('Не удалось очистить обращения: '+e); return; }
-    if(!r.ok){ notify('Не удалось очистить обращения — HTTP '+r.status+' '+r.statusText); return; }
-    __fbSel=''; document.getElementById('fb_view')?.replaceChildren();
+    catch(e){ notifyLevel('Не удалось очистить обращения: '+e, 'error'); return; }
+    if(!r.ok){ await notifyHttp(r, 'Очистка обращений'); return; }
+    __fbSel=''; __fbCur = null; document.getElementById('fb_view')?.replaceChildren();
     await fbReload(true);
-    notify('Обращения очищены.');
+    notifyLevel('Обращения очищены.', 'success');
   });
-  bind('fb_mark_read', ()=> fbAction('/admin/feedback/markRead'));
-  bind('fb_mark_unread', ()=> fbAction('/admin/feedback/markUnread'));
+  // Один переключатель вместо пары кнопок «Прочитано» / «Пометить непрочитанным»:
+  // это одно состояние, а не два действия.
+  const readSwitch = document.getElementById('fb_read_switch');
+  if(readSwitch){
+    readSwitch.addEventListener('change', ()=>{
+      if(!__fbSel){ readSwitch.checked = false; return; }
+      fbAction(readSwitch.checked ? '/admin/feedback/markRead' : '/admin/feedback/markUnread');
+    });
+  }
   bind('fb_toggle_imp', ()=> fbAction('/admin/feedback/toggleImportant'));
-  bind('fb_delete', ()=>{ if(!__fbSel) return; if(!confirm('Удалить обращение?')) return; fbAction('/admin/feedback/delete'); });
+  bind('fb_delete', async ()=>{
+    if(!__fbSel) return;
+    const ok = await askConfirm({
+      title: 'Удалить обращение?',
+      body: 'Запись пропадёт вместе с приложенной диагностикой.',
+      okText: 'Удалить',
+      danger: true,
+    });
+    if(ok) fbAction('/admin/feedback/delete');
+  });
+  // Цикл обратной связи обрывался на просмотре: контакт был, а ответить —
+  // нечем. mailto открывает почтовый клиент с уже подставленной темой.
+  bind('fb_reply', ()=>{
+    const c = String(__fbCur?.contact||'').trim();
+    if(!c){ notify('В обращении нет контакта'); return; }
+    const subject = 'ChillHub: ответ на ваше обращение';
+    const quoted = String(__fbCur?.comment||'').split(/\r?\n/).map(l=> '> '+l).join('\n');
+    const body = '\n\n---\nВаше обращение от '+String(__fbCur?.createdAt||'').replace('T',' ').replace('Z','')+':\n'+quoted+'\n';
+    location.href = 'mailto:'+encodeURIComponent(c)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
+  });
+  bind('fb_copy_debug', async ()=>{
+    if(!__fbCur){ notify('Обращение не выбрано'); return; }
+    const parts = [];
+    if(__fbCur.logs) parts.push(String(__fbCur.logs));
+    if(__fbCur.system && Object.keys(__fbCur.system).length) parts.push(JSON.stringify(__fbCur.system, null, 2));
+    const text = parts.join('\n\n');
+    if(!text){ notify('В обращении нет диагностики'); return; }
+    try{ await navigator.clipboard.writeText(text); notifyLevel('Диагностика скопирована в буфер обмена', 'success'); }
+    catch(e){ notifyLevel('Не удалось скопировать: '+e, 'error'); }
+  });
   // Close view button clears selection
   const closeBtn = document.getElementById('fb_close_view');
-  if(closeBtn){ closeBtn.addEventListener('click', (e)=>{ e.preventDefault(); __fbSel=''; document.getElementById('fb_view')?.replaceChildren(); fbRenderList(); }); }
+  if(closeBtn){ closeBtn.addEventListener('click', (e)=>{ e.preventDefault(); __fbSel=''; __fbCur = null; document.getElementById('fb_view')?.replaceChildren(); fbRenderList(); fbSyncActions(); }); }
+  fbSyncActions();
   // Filters live change
   // Поиск раньше слал запрос на каждое нажатие клавиши, хотя debounce в файле
   // уже был. Порядок ответов гарантирует счётчик внутри fbReload.
@@ -696,45 +1205,26 @@ document.addEventListener('DOMContentLoaded', ()=>{
 async function manifestsReload(){
   const gid = (document.getElementById('gid')?.value||'').trim();
   if(!gid){ notify('Укажите идентификатор игры'); return; }
-  let res; try{ res = await fetch('/admin/list?gameId='+encodeURIComponent(gid)); }catch(e){ notify('Ошибка: '+e); return; }
-  if(!res.ok){ notify('HTTP '+res.status+' '+res.statusText); return; }
-  let j; try{ j = await res.json(); }catch(e){ notify('Ошибка парсинга'); return; }
+  let res; try{ res = await fetch('/admin/list?gameId='+encodeURIComponent(gid)); }catch(e){ notifyLevel('Не удалось получить список версий: '+e, 'error'); return; }
+  if(!res.ok){ await notifyHttp(res, 'Список версий '+gid); return; }
+  let j; try{ j = await res.json(); }catch(e){ notifyLevel('Список версий: сервер вернул не JSON', 'error'); return; }
   const root = document.getElementById('ver_list'); if(!root) return;
   const latest = j.latest||'';
   const items = Array.isArray(j.items)? j.items: [];
-  // render table
-  const rows = items.map(it=>{
-    const ver = it.version || '';
-    const isLatest = latest && ver === latest;
-    const actBtn = isLatest ? '<span class="badge text-bg-success">latest</span>' : ('<button data-ver="'+escapeHtml(ver)+'" class="btn btn-sm btn-outline-primary man-activate">Сделать активной</button>');
-    const delBtn = '<button data-ver="'+escapeHtml(ver)+'" class="btn btn-sm btn-outline-danger ms-2 man-delete">Удалить</button>';
-    return '<tr><td class="text-monospace">'+escapeHtml(ver)+'</td><td>'+(isLatest?'<span class="text-success">Активна</span>':'<span class="text-body-secondary">—</span>')+'</td><td class="text-end">'+actBtn+delBtn+'</td></tr>';
-  }).join('');
-  root.innerHTML = '<div class="table-responsive"><table class="table table-dark table-striped align-middle"><thead><tr><th>Версия</th><th>Статус</th><th class="text-end"></th></tr></thead><tbody>'+rows+'</tbody></table></div>';
-  // bind activate buttons
-  root.querySelectorAll('.man-activate').forEach(btn=>{
-    btn.addEventListener('click', async (ev)=>{
-      const ver = ev.currentTarget.getAttribute('data-ver'); if(!ver) return;
-      if(!confirm('Сделать версию '+ver+' активной?')) return;
-      let r; try{ r = await fetch('/admin/activate?gameId='+encodeURIComponent(gid)+'&version='+encodeURIComponent(ver), {method:'POST'}); }catch(e){ notify('Ошибка: '+e); return; }
-      if(!r.ok){ notify('HTTP '+r.status+' '+r.statusText); return; }
-      manifestsReload();
-    });
+  root.innerHTML = versionsTableHtml(items, latest, 'man');
+  bindVersionActions(root, 'man', gid, async ()=>{
+    await manifestsReload();
+    const curGid = (document.getElementById('gid')?.value||'').trim();
+    if(curGid) await gmPrevEnsureVersionsAndRender(curGid);
   });
-  // bind delete buttons
-  root.querySelectorAll('.man-delete').forEach(btn=>{
-    btn.addEventListener('click', async (ev)=>{
-      const ver = ev.currentTarget.getAttribute('data-ver'); if(!ver) return;
-      if(!confirm('Удалить версию '+ver+'?\nБудут удалены манифест и файлы сборки.')) return;
-      let r; try{ r = await fetch('/admin/deleteVersion?gameId='+encodeURIComponent(gid)+'&version='+encodeURIComponent(ver), {method:'POST'}); }catch(e){ notify('Ошибка: '+e); return; }
-      if(!r.ok){ notify('HTTP '+r.status+' '+r.statusText); return; }
-      notify('Версия '+ver+' удалена');
-      manifestsReload();
-      // refresh preview version list if this game is selected
-      const curGid = (document.getElementById('gid')?.value||'').trim();
-      if(curGid){ gmPrevEnsureVersionsAndRender(curGid); }
-    });
-  });
+  // Следующая версия подставляется по последней существующей: поле по
+  // умолчанию показывало 1.0.0 даже когда на сервере уже лежала 1.1.0.
+  const verEl = document.getElementById('ver');
+  if(verEl && !verEl.dataset.touched){
+    const known = items.map(it=> it.version).filter(Boolean);
+    const base = latest || known[known.length-1] || '';
+    verEl.value = base ? bumpSemverPatch(base) : '1.0.0';
+  }
 }
 
 // runUploadBench and applyBenchBest are thin DOM wiring around the testable
@@ -827,6 +1317,10 @@ async function runChunkedUpload(prefix, kind, gameId, version, file){
   if(concVal) concVal.textContent = String(userPar);
   if(activeCapEl) activeCapEl.textContent = String(userPar);
   if(activeNowEl) activeNowEl.textContent = '0';
+  // «активно 0/0» в простое — шум: счётчик показывается только на время
+  // заливки, когда он что-то значит.
+  const activeWrap = id('active_wrap');
+  if(activeWrap) activeWrap.style.display='';
   const speedWrap = id('speed_wrap'); const speedCanvas = id('speed');
   if(speedWrap) speedWrap.style.display='block';
   if(speedCanvas) speedCanvas.style.height='180px';
@@ -1097,6 +1591,16 @@ async function runChunkedUpload(prefix, kind, gameId, version, file){
   return processOk;
 }
 
+// uploadFinished прибирает индикаторы, которые имеют смысл только во время
+// заливки, и обновляет остаток места — он только что изменился на гигабайты.
+function uploadFinished(prefix){
+  const wrap = document.getElementById(prefix+'_active_wrap');
+  if(wrap) wrap.style.display = 'none';
+  const fit = document.getElementById(prefix+'_fit');
+  if(fit){ fit.textContent = ''; fit.className = 'small text-body-secondary'; }
+  try{ sysFreeRefresh(); }catch(_){ /* индикатор места не критичен */ }
+}
+
 async function manifestsUpload(){
   const gid = (document.getElementById('gid')?.value||'').trim();
   const ver = (document.getElementById('ver')?.value||'').trim();
@@ -1104,7 +1608,18 @@ async function manifestsUpload(){
   if(!ver){ notify('Укажите версию'); return; }
   const file = (window.__manDroppedFile) || document.getElementById('man_zip')?.files?.[0];
   if(!file){ notify('Выберите ZIP-файл'); return; }
+  if(!uploadVersionValid(ver)){ notifyLevel('Версия должна быть вида 1.2.3 — введено «'+ver+'»', 'error'); return; }
+  if(!uploadSpaceCheck('man', file)){
+    const go = await askConfirm({
+      title: 'Места может не хватить',
+      body: 'Архив '+formatBytes(file.size)+', при распаковке потребуется примерно '+formatBytes(Math.round(file.size*UPLOAD_SPACE_FACTOR))+', а свободно '+formatBytes(__sysFreeBytes||0)+'. Заливка, скорее всего, оборвётся на распаковке.',
+      okText: 'Всё равно загрузить',
+      danger: true,
+    });
+    if(!go) return;
+  }
   const ok = await runChunkedUpload('man', 'game', gid, ver, file);
+  uploadFinished('man');
   window.__manDroppedFile = null;
   if(!ok) return;
   try{ manifestsReload(); }catch(_){ }
@@ -1129,11 +1644,36 @@ async function manifestsUpload(){
     const f = files[0]; if(!/\.zip$/i.test(f.name)){ notify('Ожидается ZIP-файл'); return; }
     window.__manDroppedFile = f;
     const wrap=document.getElementById('man_prog_wrap'); const bar=document.getElementById('man_pb'); const txt=document.getElementById('man_prog_text');
-    if(wrap) wrap.style.display='block'; if(bar) bar.style.width='0%'; if(txt) txt.textContent = 'Выбран файл: '+f.name+' ('+f.size+' байт)';
+    if(wrap) wrap.style.display='block'; if(bar) bar.style.width='0%'; if(txt) txt.textContent = 'Выбран файл: '+f.name+' ('+formatBytes(f.size)+')';
+    uploadSpaceCheck('man', f);
   });
 })();
 
 // ==== Manifests page: editable games list (mgm_*) ====
+//
+// Таблица игр редактируется прямо на месте, а перечитывание с сервера
+// (mgmReload) молча затирает несохранённые правки. Раньше это было особенно
+// легко сделать кнопкой «Обновить», которая ещё и была жёлтой — то есть
+// выглядела опаснее зелёного «Сохранить», хотя предупреждения не давала.
+let __mgmDirty = false;
+
+function mgmSetDirty(v){
+  __mgmDirty = !!v;
+  const b = document.getElementById('mgm_dirty');
+  if(b) b.style.display = __mgmDirty ? '' : 'none';
+}
+
+// mgmConfirmDiscard спрашивает, можно ли выбросить правки таблицы.
+async function mgmConfirmDiscard(what){
+  if(!__mgmDirty) return true;
+  return askConfirm({
+    title: 'Несохранённые изменения',
+    body: 'В таблице игр есть правки, которые не сохранены. '+what+' перечитает список с сервера и потеряет их.',
+    okText: 'Потерять правки',
+    danger: true,
+  });
+}
+
 async function mgmReload(){
   let res; try{ res = await fetch('/admin/games'); }catch(e){ notify('Ошибка запроса: '+e); return; }
   if(!res.ok){ notify('HTTP '+res.status+' '+res.statusText); return; }
@@ -1141,6 +1681,7 @@ async function mgmReload(){
   const tb = document.querySelector('#mgm-table tbody'); if(!tb) return;
   tb.innerHTML = '';
   (j.items||[]).forEach(it=> mgmAppendRow(tb, it));
+  mgmSetDirty(false);
   // restore selection according to current gid input
   const curGid = (document.getElementById('gid')?.value||'').trim().toLowerCase();
   if(curGid){
@@ -1184,6 +1725,9 @@ function mgmAppendRow(tb, it){
       '</div>'+
       '<button type="button" class="btn btn-sm btn-outline-danger mgm-del" title="Удалить игру">Удалить</button>'+
     '</td>';
+  // Любая правка в строке помечает таблицу грязной: иначе о потере узнаёшь
+  // только по тому, что введённое пропало.
+  tr.querySelectorAll('input').forEach(inp=> inp.addEventListener('input', ()=> mgmSetDirty(true)));
   // clicking row selects game in the upload panel
   tr.addEventListener('click', (ev)=>{
     const id = tr.querySelectorAll('td')[0].querySelector('input').value.trim();
@@ -1247,12 +1791,21 @@ function mgmAppendRow(tb, it){
     if(!id){
       // empty row: remove silently
       tr.remove();
+      mgmSetDirty(true);
       return;
     }
-    if(confirm('Удалить игру «'+id+'» из списка?\nФайлы манифестов НЕ удаляются. Изменения применятся после нажатия «Сохранить».')){
+    (async ()=>{
+      const ok = await askConfirm({
+        title: 'Убрать игру «'+id+'» из списка?',
+        body: 'Файлы манифестов и сборки НЕ удаляются — пропадёт только запись в реестре. Изменение применится после нажатия «Сохранить».',
+        okText: 'Убрать из списка',
+        danger: true,
+      });
+      if(!ok) return;
       tr.remove();
+      mgmSetDirty(true);
       notify('Игра '+id+' помечена на удаление. Нажмите «Сохранить» для применения.');
-    }
+    })();
   });
   tb.appendChild(tr);
 
@@ -1263,19 +1816,20 @@ function mgmAppendRow(tb, it){
     ev.stopPropagation();
     const row = tr;
     const prev = row.previousElementSibling;
-    if(prev){ row.parentNode.insertBefore(row, prev); }
+    if(prev){ row.parentNode.insertBefore(row, prev); mgmSetDirty(true); }
   });
   downBtn?.addEventListener('click', (ev)=>{
     ev.stopPropagation();
     const row = tr;
     const next = row.nextElementSibling;
-    if(next){ row.parentNode.insertBefore(next, row); }
+    if(next){ row.parentNode.insertBefore(next, row); mgmSetDirty(true); }
   });
 }
 
 function mgmAddRow(){
   const tb = document.querySelector('#mgm-table tbody'); if(!tb) return;
   mgmAppendRow(tb, {gameId:'', title:'', exeRelativePath:'', iconUrl:''});
+  mgmSetDirty(true);
 }
 
 async function mgmSave(){
@@ -1292,30 +1846,19 @@ async function mgmSave(){
   // basic validation
   const ids = new Set();
   for(const it of items){ if(!it.gameId){ notify('Пустой gameId'); return; } if(ids.has(it.gameId)){ notify('Дубликат gameId: '+it.gameId); return; } ids.add(it.gameId); }
-  let res; try{ res = await fetch('/admin/games/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({items}) }); }catch(e){ notify('Ошибка сохранения: '+e); return; }
-  if(!res.ok){ notify('HTTP '+res.status+' '+res.statusText); return; }
-  notify(await res.text());
+  let res; try{ res = await fetch('/admin/games/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({items}) }); }catch(e){ notifyLevel('Ошибка сохранения: '+e, 'error'); return; }
+  if(!res.ok){ await notifyHttp(res, 'Сохранение списка игр'); return; }
+  notifyLevel(await res.text(), 'success');
+  mgmSetDirty(false);
   mgmReload();
-}
-
-async function mgmScanMissing(){
-  notify('Сканирование директорий манифестов...');
-  let res; try{ res = await fetch('/admin/games/scan'); }catch(e){ notify('Ошибка запроса: '+e); return; }
-  if(!res.ok){ notify('HTTP '+res.status+' '+res.statusText); return; }
-  const j = await res.json();
-  const tb = document.querySelector('#mgm-table tbody'); if(!tb){ notify('Таблица игр не найдена'); return; }
-  const before = Array.from(tb.querySelectorAll('tr')).length;
-  const existing = new Set(Array.from(tb.querySelectorAll('tr')).map(tr=> tr.querySelectorAll('td')[0].querySelector('input').value.trim()));
-  (j.items||[]).forEach(it=>{ if(existing.has(it.gameId)) return; mgmAppendRow(tb, it); });
-  const after = Array.from(tb.querySelectorAll('tr')).length;
-  notify('Сканирование завершено. Добавлено: '+(after-before));
-  // Перечитываем список с сервера, чтобы отобразить каноническое состояние реестра
-  await mgmReload();
 }
 
 // Combined resync: scan -> save -> reload from server
 async function mgmResync(){
-  notify('Обновление списка игр: добавление недостающих...');
+  // Кнопка перечитывает реестр с сервера — с несохранёнными правками в
+  // таблице это молчаливая их потеря.
+  if(!await mgmConfirmDiscard('«Найти новые»')) return;
+  notifyQuiet('Обновление списка игр: добавление недостающих...', 'info');
   // fetch current registry
   let curRes; try{ curRes = await fetch('/admin/games'); }catch(e){ notify('Ошибка запроса текущего реестра: '+e); return; }
   if(!curRes.ok){ notify('HTTP '+curRes.status+' '+curRes.statusText); return; }
@@ -1341,14 +1884,26 @@ async function mgmResync(){
   await mgmReload();
 }
 
-window.addEventListener('error', function(e){ var o=document.getElementById('out'); o.textContent += ('\n[JS] Ошибка: '+e.message); });
+// Необработанное исключение раньше только дописывалось в невидимый #out.
+// Теперь оно ещё и попадает в журнал с отметкой времени и всплывает тостом:
+// «панель молча перестала работать» — худший из возможных отчётов об ошибке.
+window.addEventListener('error', function(e){
+  var o=document.getElementById('out'); if(o) o.textContent += ('\n[JS] Ошибка: '+e.message);
+  try{ journalAdd('[JS] '+e.message, 'error'); showToast('Сбой в интерфейсе: '+e.message, 'error'); }catch(_){ /* журнал мог не подняться */ }
+});
 
 // Current cover URL (tracked separately; not shown as a comment inside editor)
 let currentCoverUrl = '';
 // Current published state kept in memory when checkbox is absent
 let currentPublished = false;
 
-function notify(msg){ var o=document.getElementById('out'); if(o) o.textContent = msg; }
+// notify остаётся точкой входа для всего старого кода: #out по-прежнему
+// получает последнее сообщение (на него смотрят тесты и window.onerror), но
+// теперь то же самое уходит в журнал с отметкой времени и всплывает тостом.
+function notify(msg){
+  var o=document.getElementById('out'); if(o) o.textContent = msg;
+  try{ journalAdd(msg); showToast(msg); }catch(_){ /* журнал — не критичный путь */ }
+}
 
 // ===== Games: Preview and EXE picker (global) =====
 async function gmPrevEnsureVersionsAndRender(gameId){
@@ -1365,19 +1920,27 @@ async function gmPrevEnsureVersionsAndRender(gameId){
       const opt = document.createElement('option'); opt.value = it.version; opt.textContent = it.version; sel.appendChild(opt);
     });
     if(latest){ sel.value = latest; }
+    fillDiffSelect('gm_diff_ver', items.map(it=> it.version), sel.value||'');
     await gmPrevRender(gameId, sel.value||'');
   }catch(e){ const tree=document.getElementById('gm_prev_tree'); if(tree) tree.textContent='Ошибка: '+e; }
 }
 
 async function gmPrevRender(gameId, version){
   const tree = document.getElementById('gm_prev_tree'); if(!tree) return;
-  if(!gameId || !version){ tree.textContent = 'Выберите игру и версию'; return; }
+  const sum = document.getElementById('gm_diff_summary');
+  if(!gameId || !version){ tree.textContent = 'Выберите игру и версию'; if(sum) sum.innerHTML=''; return; }
   tree.innerHTML = '<span class="text-body-secondary">Загрузка манифеста...</span>';
   try{
-    const r = await fetch('/manifests/'+encodeURIComponent(gameId)+'/'+encodeURIComponent(version)+'.json');
-    if(!r.ok){ tree.textContent = 'HTTP '+r.status; return; }
+    const base = '/manifests/'+encodeURIComponent(gameId)+'/';
+    const r = await fetch(base+encodeURIComponent(version)+'.json');
+    if(!r.ok){ tree.textContent = await httpErrText(r, 'Манифест '+version); return; }
     const manifest = await r.json();
-    lnRenderTree(tree, manifest);
+    const baseVer = document.getElementById('gm_diff_ver')?.value || '';
+    const baseManifest = baseVer ? await fetchManifest(base+encodeURIComponent(baseVer)+'.json') : null;
+    const diff = lnRenderTree(tree, manifest, baseManifest);
+    if(sum) sum.innerHTML = baseVer && !baseManifest
+      ? '<span class="text-danger">Манифест '+escapeHtml(baseVer)+' не прочитан</span>'
+      : treeDiffSummaryHtml(diff, baseVer);
   }catch(e){ tree.textContent = 'Ошибка: '+e; }
 }
 
@@ -1398,20 +1961,28 @@ document.addEventListener('DOMContentLoaded', function(){
     } catch { /* ignore */ }
   })();
   // Начальную загрузку вкладки «Лаунчер» уже сделал showSection() при разборе
-  // файла — повторять её здесь значит удваивать запросы. Остаётся только карточка
-  // «Версии лаунчера»: её нет в разметке, она добавляется скриптом, поэтому
-  // список версий заполняем после инъекции и только если вкладка открыта.
-  try{ ensureLauncherVersionsCard(); }catch(_){}
+  // файла — повторять её здесь значит удваивать запросы. Список версий
+  // заполняем только если вкладка открыта.
   try{
     const sec = document.getElementById('secLauncher');
     if(sec && !sec.classList.contains('hidden')) lnManifestsReload();
   }catch(_){}
   // Launcher tab controls are bound later in guarded wiring section
 
-  const btn = document.getElementById('gm_prev_refresh');
-  if(btn){ btn.addEventListener('click', ()=>{ const gid=(document.getElementById('gid')?.value||'').trim(); if(!gid){ notify('Укажите игру'); return; } gmPrevEnsureVersionsAndRender(gid); }); }
   const sel = document.getElementById('gm_prev_ver');
-  if(sel){ sel.addEventListener('change', ()=>{ const gid=(document.getElementById('gid')?.value||'').trim(); const ver = document.getElementById('gm_prev_ver').value; if(!gid||!ver) return; gmPrevRender(gid, ver); }); }
+  const gmRerender = ()=>{ const gid=(document.getElementById('gid')?.value||'').trim(); const ver = document.getElementById('gm_prev_ver')?.value; if(!gid||!ver) return; gmPrevRender(gid, ver); };
+  if(sel){ sel.addEventListener('change', ()=>{
+    // Смена показываемой версии меняет и набор доступных баз сравнения.
+    const versions = Array.from(sel.options).map(o=> o.value);
+    fillDiffSelect('gm_diff_ver', versions, sel.value||'');
+    gmRerender();
+  }); }
+  const gmDiff = document.getElementById('gm_diff_ver');
+  if(gmDiff){ gmDiff.addEventListener('change', gmRerender); }
+  wireTreeControls('gm', 'gm_prev_tree');
+  wireTreeControls('ln', 'ln_tree');
+  const lnDiff = document.getElementById('ln_diff_ver');
+  if(lnDiff){ lnDiff.addEventListener('change', ()=>{ const v = document.getElementById('ln_prev_ver')?.value||''; if(v) lnPrevRender(v); }); }
   // refresh versions and preview when game id changed manually
   const gidInput = document.getElementById('gid');
   if(gidInput){
@@ -1488,7 +2059,7 @@ function openDynamicModal(el, onDispose){
   };
   if(!window.bootstrap || !window.bootstrap.Modal){
     dispose();
-    alert('Диалог не открылся: не загрузилась библиотека Bootstrap (CDN недоступен?). Обновите страницу.');
+    notifyLevel('Диалог не открылся: не загрузилась библиотека Bootstrap. Обновите страницу.', 'error');
     return null;
   }
   // Доступность: role/aria-modal bootstrap проставляет сам при показе, но
@@ -1577,16 +2148,16 @@ function openUrlUploadDialog(mode){
   if(!modal) return;
   const sel = el.querySelector('#url_target'); if(sel){ sel.value = (mode==='cover') ? 'cover' : 'inline'; }
   el.querySelector('#url_ok').addEventListener('click', async ()=>{
-    const url = (el.querySelector('#url_input').value||'').trim(); if(!url){ alert('Укажите URL'); return; }
+    const url = (el.querySelector('#url_input').value||'').trim(); if(!url){ notify('Укажите URL'); return; }
     const path = (el.querySelector('#url_path').value||'').replace(/^\/+|\/+$/g,'');
     const name = el.querySelector('#url_name').value || 'image';
     const modeSel = el.querySelector('#url_overwrite')?.value || 'rename';
     const ext = guessOutExtFromUrl(url);
     const finalName = await resolveNameWithMode(path, name, ext, modeSel);
     const fd = new URLSearchParams(); fd.set('path', path); fd.set('filename', finalName); fd.set('url', url);
-    let res; try{ res = await fetch('/admin/news/assets/uploadByUrl', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: fd.toString()}); }catch(e){ alert('Ошибка: '+e); return; }
-    if(!res.ok){ alert('HTTP '+res.status); return; }
-    const j = await res.json(); if(!j || !j.url){ alert('Не удалось сохранить'); return; }
+    let res; try{ res = await fetch('/admin/news/assets/uploadByUrl', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: fd.toString()}); }catch(e){ notifyLevel('Не удалось сохранить по URL: '+e, 'error'); return; }
+    if(!res.ok){ await notifyHttp(res, 'Сохранение по URL'); return; }
+    const j = await res.json(); if(!j || !j.url){ notifyLevel('Сервер не вернул адрес сохранённого файла', 'error'); return; }
     const target = sel.value || 'inline';
     if(target==='inline'){
       const ta = document.getElementById('ns_md'); insertAtCursor(ta, '![image]('+j.url+')'); autosizeTextArea(ta); updateCoverPreview(); newsPreview(); editorDirty=true; if(ta) ta.dispatchEvent(new Event('input'));
@@ -1668,7 +2239,7 @@ function openPickUploadDialog(mode){
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
 </svg>';
-        del.onclick=async()=>{ if(!confirm('Удалить папку '+it.name+'?')) return; if(!await assetsMutate('/admin/news/assets/delete', {path: pickPath||'', name: it.name})) return; fetchPickList(); };
+        del.onclick=async()=>{ if(!await askConfirm({title:'Удалить папку?', body:'Папка «'+it.name+'» и всё её содержимое будут удалены с диска. Ссылки на эти картинки в уже опубликованных новостях перестанут работать.', okText:'Удалить папку', danger:true})) return; if(!await assetsMutate('/admin/news/assets/delete', {path: pickPath||'', name: it.name})) return; fetchPickList(); };
         actions.appendChild(rn); actions.appendChild(del);
         body.appendChild(cap); body.appendChild(actions); card.appendChild(body);
         // Make the whole folder card clickable (except action buttons)
@@ -1688,7 +2259,7 @@ function openPickUploadDialog(mode){
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
 </svg>';
-        del.onclick=async()=>{ if(!confirm('Удалить файл '+it.name+'?')) return; if(!await assetsMutate('/admin/news/assets/delete', {path: pickPath||'', name: it.name})) return; fetchPickList(); };
+        del.onclick=async()=>{ if(!await askConfirm({title:'Удалить файл?', body:'Файл «'+it.name+'» будет удалён с диска. Если он вставлен в опубликованную новость, картинка там пропадёт.', okText:'Удалить файл', danger:true})) return; if(!await assetsMutate('/admin/news/assets/delete', {path: pickPath||'', name: it.name})) return; fetchPickList(); };
         actions.appendChild(rn); actions.appendChild(del);
         body.appendChild(cap); body.appendChild(actions); card.appendChild(body);
       }
@@ -1707,7 +2278,7 @@ function openPickUploadDialog(mode){
   fetchPickList();
   // upload action
   el.querySelector('#pick_ok').addEventListener('click', async ()=>{
-    if(!chosenFile){ alert('Выберите файл'); return; }
+    if(!chosenFile){ notify('Выберите файл'); return; }
     const path = (el.querySelector('#pick_path').value || '').replace(/^\/+|\/+$/g,'');
     const name = el.querySelector('#pick_name').value || 'image';
     const target = el.querySelector('#pick_target')?.value || 'inline';
@@ -1723,21 +2294,6 @@ function openPickUploadDialog(mode){
     }
     modal.hide(); // узел удалит обработчик hidden.bs.modal в openDynamicModal
   });
-}
-
-// ===== Insert cover image from file (new flow via assets upload) =====
-async function newsInsertCoverFromFile(){
-  const f = document.getElementById('ns_cover')?.files?.[0];
-  if(!f){ alert('Выберите изображение'); return; }
-  const inName = f.name || 'cover';
-  const suggested = inName.replace(/\.[^.]+$/, '');
-  const dest = await chooseAssetDestination(galleryPath||'', suggested);
-  if(!dest) return;
-  const j = await uploadAssetFile(f, dest); if(!j){ return; }
-  const url = j.url || '';
-  if(!url){ notify('Не удалось получить URL изображения'); return; }
-  setCoverInMarkdown(url);
-  const ta = document.getElementById('ns_md'); autosizeTextArea(ta); updateCoverPreview(); newsPreview(); editorDirty = true; if(ta) ta.dispatchEvent(new Event('input'));
 }
 
 // ===== Paste handler with preview modal for inline/cover =====
@@ -1814,7 +2370,7 @@ function openPasteUploadDialog(file, mode){
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
 </svg>';
-        del.onclick=async()=>{ if(!confirm('Удалить папку '+it.name+'?')) return; if(!await assetsMutate('/admin/news/assets/delete', {path: pastePath||'', name: it.name})) return; fetchPasteList(); };
+        del.onclick=async()=>{ if(!await askConfirm({title:'Удалить папку?', body:'Папка «'+it.name+'» и всё её содержимое будут удалены с диска. Ссылки на эти картинки в уже опубликованных новостях перестанут работать.', okText:'Удалить папку', danger:true})) return; if(!await assetsMutate('/admin/news/assets/delete', {path: pastePath||'', name: it.name})) return; fetchPasteList(); };
         actions.appendChild(rn); actions.appendChild(del);
         body.appendChild(cap); body.appendChild(actions); card.appendChild(body);
         card.addEventListener('click', (e)=>{ if(e.target!==rn && e.target!==del){ pastePath = pastePath? (pastePath+'/'+it.name): it.name; pathInput.value=pastePath; fetchPasteList(); } });
@@ -1833,7 +2389,7 @@ function openPasteUploadDialog(file, mode){
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
 </svg>';
-        del.onclick=async()=>{ if(!confirm('Удалить файл '+it.name+'?')) return; if(!await assetsMutate('/admin/news/assets/delete', {path: pastePath||'', name: it.name})) return; fetchPasteList(); };
+        del.onclick=async()=>{ if(!await askConfirm({title:'Удалить файл?', body:'Файл «'+it.name+'» будет удалён с диска. Если он вставлен в опубликованную новость, картинка там пропадёт.', okText:'Удалить файл', danger:true})) return; if(!await assetsMutate('/admin/news/assets/delete', {path: pastePath||'', name: it.name})) return; fetchPasteList(); };
         actions.appendChild(rn); actions.appendChild(del);
         body.appendChild(cap); body.appendChild(actions); card.appendChild(body);
       }
@@ -1882,11 +2438,11 @@ async function assetsMutate(url, params){
       headers:{'Content-Type':'application/x-www-form-urlencoded'},
       body: new URLSearchParams(params).toString()
     });
-  }catch(e){ alert('Не удалось выполнить операцию: '+e); return false; }
+  }catch(e){ notifyLevel('Не удалось выполнить операцию: '+e, 'error'); return false; }
   if(!r.ok){
     let detail = '';
     try{ detail = (await r.text()||'').trim(); }catch{ /* тело не обязательно */ }
-    alert('Не удалось выполнить операцию — HTTP '+r.status+' '+r.statusText+(detail? ('\n'+detail) : ''));
+    notifyLevel('Не удалось выполнить операцию — HTTP '+r.status+' '+r.statusText+(detail? (': '+detail) : ''), 'error');
     return false;
   }
   return true;
@@ -1980,8 +2536,61 @@ function updateCoverPreview(){
 // Unsaved changes warning 
 let editorDirty = false;
 window.addEventListener('beforeunload', function(e){
-  if(editorDirty){ e.preventDefault(); e.returnValue = 'Есть несохранённые изменения.'; }
+  if(editorDirty || __mgmDirty){ e.preventDefault(); e.returnValue = 'Есть несохранённые изменения.'; }
 });
+
+// ==== Черновики новостей ====
+//
+// В файле честно написано «drafts removed», и единственной страховкой
+// оставался beforeunload. Для поля, в которое пишут руками, этого мало:
+// перезагрузка вкладки, обрыв сессии или случайный «Новая» — и текст пропал.
+// Черновик живёт в localStorage этого браузера, ключ — раздел+игра+slug,
+// и предлагается к восстановлению, только если отличается от серверного.
+const NEWS_DRAFT_PREFIX = 'news_draft:';
+
+function newsDraftKey(){
+  const scope = document.getElementById('ns_scope')?.value || 'launcher';
+  const gid = scope==='game' ? (document.getElementById('ns_gid')?.value || '') : '';
+  const slug = document.getElementById('ns_slug')?.value || '';
+  return NEWS_DRAFT_PREFIX + scope + ':' + gid + ':' + slug;
+}
+
+function newsDraftSave(){
+  try{
+    const md = document.getElementById('ns_md')?.value || '';
+    const key = newsDraftKey();
+    if(!md.trim()){ localStorage.removeItem(key); newsDraftUpdateBadge(); return; }
+    localStorage.setItem(key, JSON.stringify({ md, cover: currentCoverUrl||'', at: Date.now() }));
+    newsDraftUpdateBadge();
+  }catch(e){ /* приватный режим/переполнение — черновик просто не сохранится */ }
+}
+
+function newsDraftLoad(){
+  try{
+    const raw = localStorage.getItem(newsDraftKey());
+    if(!raw) return null;
+    const j = JSON.parse(raw);
+    return (j && typeof j.md === 'string') ? j : null;
+  }catch(e){ return null; }
+}
+
+function newsDraftDrop(){
+  try{ localStorage.removeItem(newsDraftKey()); }catch(e){ /* no-op */ }
+  newsDraftUpdateBadge();
+}
+
+function newsDraftUpdateBadge(){
+  const badge = document.getElementById('ns_draft_badge');
+  const btn = document.getElementById('ns_btnRestoreDraft');
+  const d = newsDraftLoad();
+  const ta = document.getElementById('ns_md');
+  const differs = !!d && !!ta && d.md !== ta.value;
+  if(btn) btn.style.display = differs ? '' : 'none';
+  if(badge){
+    if(!d){ badge.textContent = ''; return; }
+    badge.textContent = 'черновик сохранён ' + new Date(d.at||Date.now()).toLocaleTimeString('ru-RU');
+  }
+}
 
 // ===== News editor helpers =====
 function clearNewsEditorAndPreviews(){
@@ -2011,8 +2620,17 @@ const TAB_MAP = [
 function showSection(id){
   // sections (guarded: check element exists before toggling)
   TAB_MAP.forEach(t=>{ const el = document.getElementById(t.sec); if(el){ el.classList.toggle('hidden', t.sec !== id); } });
-  // nav active state
-  TAB_MAP.forEach(t=>{ const el = document.getElementById(t.btn); if(el) el.classList.toggle('active', t.sec === id); });
+  // nav active state. Кроме класса переключаем aria-selected и tabindex:
+  // вкладки — это role="tab", и вспомогательные технологии читают состояние
+  // именно оттуда, а roving tabindex оставляет в табуляции ровно одну вкладку,
+  // как того требует шаблон tablist.
+  TAB_MAP.forEach(t=>{
+    const el = document.getElementById(t.btn); if(!el) return;
+    const active = t.sec === id;
+    el.classList.toggle('active', active);
+    el.setAttribute('aria-selected', active ? 'true' : 'false');
+    if(active) el.removeAttribute('tabindex'); else el.setAttribute('tabindex', '-1');
+  });
   // auto actions per section — ровно один раз на переключение
   if(id==='secNews') {
     try{ newsList(); }catch(_){}
@@ -2027,18 +2645,44 @@ function showSection(id){
   }
   if(id==='secManifests'){
     try{ manifestsReload(); }catch(_){ /* no-op */ }
-    try{ mgmReload(); }catch(_){ /* no-op */ }
+    // Возврат на вкладку не должен затирать несохранённую правку таблицы:
+    // переключение вкладок — это не команда «выбросить введённое».
+    try{ if(!__mgmDirty) mgmReload(); }catch(_){ /* no-op */ }
   }
   if(id==='secInbox'){ try{ fbReload(true); }catch(_){ /* no-op */ } }
   if(id==='secMaint'){ try{ mtLoad(); }catch(_){ /* no-op */ } }
   if(id==='secMetrics'){ try{ mxOnTabOpen(); }catch(_){ /* no-op */ } }
   try{ localStorage.setItem('admin_tab', id); }catch(e){}
+  // Адресная строка должна показывать открытую вкладку: ссылку на «Метрики»
+  // иначе не скопировать. replaceState, а не hash: переключение вкладок не
+  // должно засорять историю браузера и ломать «Назад».
+  try{
+    const hash = Object.keys(HASH_TAB_MAP).find(k=> HASH_TAB_MAP[k] === id);
+    if(hash && location.hash.replace(/^#/,'') !== hash){
+      history.replaceState(null, '', '#'+hash);
+    }
+  }catch(e){ /* history может быть недоступна */ }
 }
 // Guarded wiring to avoid null errors: по одному обработчику на вкладку.
-TAB_MAP.forEach(t=>{
+TAB_MAP.forEach((t, i)=>{
   const btn = document.getElementById(t.btn);
   if(!btn) return;
   btn.addEventListener('click', (e)=>{ e.preventDefault(); showSection(t.sec); });
+  // Стрелки, Home/End — обязательная часть шаблона tablist: без них вкладки
+  // остаются шестью ссылками, по которым можно только табать поочерёдно.
+  btn.addEventListener('keydown', (e)=>{
+    const last = TAB_MAP.length - 1;
+    let next = null;
+    if(e.key === 'ArrowRight') next = i >= last ? 0 : i+1;
+    else if(e.key === 'ArrowLeft') next = i <= 0 ? last : i-1;
+    else if(e.key === 'Home') next = 0;
+    else if(e.key === 'End') next = last;
+    else return;
+    e.preventDefault();
+    const target = TAB_MAP[next];
+    showSection(target.sec);
+    document.getElementById(target.btn)?.focus();
+  });
 });
 
 // #launcher, #manifests, ... открывают нужную вкладку сразу при загрузке —
@@ -2080,7 +2724,18 @@ async function upload(){
   const latest = document.getElementById('up_latest').checked;
   if(!file){ notify('Выберите ZIP-файл'); return; }
   if(!ver){ notify('Укажите версию'); return; }
+  if(!uploadVersionValid(ver)){ notifyLevel('Версия должна быть вида 1.2.3 — введено «'+ver+'»', 'error'); return; }
+  if(!uploadSpaceCheck('up', file)){
+    const go = await askConfirm({
+      title: 'Места может не хватить',
+      body: 'Архив '+formatBytes(file.size)+', при распаковке потребуется примерно '+formatBytes(Math.round(file.size*UPLOAD_SPACE_FACTOR))+', а свободно '+formatBytes(__sysFreeBytes||0)+'. Заливка, скорее всего, оборвётся на распаковке.',
+      okText: 'Всё равно загрузить',
+      danger: true,
+    });
+    if(!go) return;
+  }
   const ok = await runChunkedUpload('up', 'launcher', 'launcher', ver, file);
+  uploadFinished('up');
   window.__upDroppedFile = null;
   if(!ok) return;
   try{ lnRefresh(); }catch(_){ }
@@ -2129,43 +2784,36 @@ bindBusyClick('bench_run', runUploadBench, 'Тестирование...');
 // Show live value for concurrency slider
 (()=>{ const s = document.getElementById('man_conc'); const v = document.getElementById('man_conc_val'); if(s&&v){ v.textContent = String(s.value||'6'); s.addEventListener('input', ()=>{ v.textContent = String(s.value||'6'); }); }})();
 (()=>{ const s = document.getElementById('up_conc'); const v = document.getElementById('up_conc_val'); if(s&&v){ v.textContent = String(s.value||'6'); s.addEventListener('input', ()=>{ v.textContent = String(s.value||'6'); }); }})();
-// Cleanup button
-(()=>{ const btn = document.getElementById('man_cleanup'); if(!btn) return; btn.addEventListener('click', async ()=>{
-  if(!confirm('Очистить старые/битые временные загрузки?')) return;
-  try{ const r = await fetch('/admin/api/upload/cleanup', { method:'POST' }); if(!r.ok){ notify('HTTP '+r.status+' cleanup'); return; } const j = await r.json(); notify('Удалено: '+(j.removed||0)); }catch(e){ notify('Ошибка cleanup: '+e); }
-}); })();
-(()=>{ const btn = document.getElementById('up_cleanup'); if(!btn) return; btn.addEventListener('click', async ()=>{
-  if(!confirm('Очистить старые/битые временные загрузки?')) return;
-  try{ const r = await fetch('/admin/api/upload/cleanup', { method:'POST' }); if(!r.ok){ notify('HTTP '+r.status+' cleanup'); return; } const j = await r.json(); notify('Удалено: '+(j.removed||0)); }catch(e){ notify('Ошибка cleanup: '+e); }
-}); })();
+// Очистка временных загрузок — одна и та же операция на обеих вкладках.
+async function uploadCleanup(){
+  const ok = await askConfirm({
+    title: 'Очистить временные загрузки?',
+    body: 'Удаляются незавершённые и повреждённые куски заливок. Опубликованные версии и манифесты не трогаются.',
+    okText: 'Очистить',
+  });
+  if(!ok) return;
+  try{
+    const r = await fetch('/admin/api/upload/cleanup', { method:'POST' });
+    if(!r.ok){ await notifyHttp(r, 'Очистка временных загрузок'); return; }
+    const j = await r.json();
+    notify('Удалено: '+(j.removed||0));
+    sysFreeRefresh();
+  }catch(e){ notifyLevel('Ошибка cleanup: '+e, 'error'); }
+}
+['man_cleanup','up_cleanup'].forEach(id=>{
+  const btn = document.getElementById(id); if(!btn) return;
+  btn.addEventListener('click', uploadCleanup);
+});
 if (document.getElementById('btnList')) document.getElementById('btnList').addEventListener('click', manifestsReload);
 // Launcher versions list refresh
 if (document.getElementById('ln_list_btn')) document.getElementById('ln_list_btn').addEventListener('click', lnManifestsReload);
 // Launcher preview selector wiring
-if (document.getElementById('ln_prev_refresh')) document.getElementById('ln_prev_refresh').addEventListener('click', lnPrevEnsureVersionsAndRender);
-if (document.getElementById('ln_prev_ver')) document.getElementById('ln_prev_ver').addEventListener('change', ()=>{ const sel=document.getElementById('ln_prev_ver'); if(!sel) return; lnPrevRender(sel.value||''); });
+if (document.getElementById('ln_prev_ver')) document.getElementById('ln_prev_ver').addEventListener('change', ()=>{
+  const sel=document.getElementById('ln_prev_ver'); if(!sel) return;
+  fillDiffSelect('ln_diff_ver', Array.from(sel.options).map(o=> o.value), sel.value||'');
+  lnPrevRender(sel.value||'');
+});
 
-// Fallback: dynamically inject 'Версии лаунчера' card if admin.html is older
-function ensureLauncherVersionsCard(){
-  if(document.getElementById('ln_ver_list')) return;
-  const sec = document.getElementById('secLauncher'); if(!sec) return;
-  // find right column (the one with upload card)
-  const cols = sec.querySelectorAll('.row .col-lg-6');
-  const rightCol = cols.length>=2 ? cols[1] : null;
-  if(!rightCol) return;
-  const wrap = document.createElement('div');
-  wrap.className = 'card mt-3';
-  wrap.innerHTML = '<div class="card-header d-flex align-items-center justify-content-between">\
-    <span>Версии лаунчера</span>\
-    <button type="button" id="ln_list_btn" class="btn btn-sm btn-outline-secondary">Обновить список</button>\
-  </div>\
-  <div class="card-body">\
-    <div id="ln_ver_list" class="mt-1"></div>\
-  </div>';
-  rightCol.appendChild(wrap);
-  // bind refresh after injection
-  const b = document.getElementById('ln_list_btn'); if(b){ b.addEventListener('click', lnManifestsReload); }
-}
 // Manifests page: Games editor buttons
 if (document.getElementById('mgm_add')) document.getElementById('mgm_add').addEventListener('click', mgmAddRow);
 bindBusyClick('mgm_save', mgmSave, 'Сохранение...');
@@ -2174,12 +2822,37 @@ bindBusyClick('mgm_resync', mgmResync, 'Обновление...');
 if (document.getElementById('ln_refresh')) document.getElementById('ln_refresh').addEventListener('click', lnRefresh);
 
 // News wiring (guarded)
-if (document.getElementById('ns_btnList')) document.getElementById('ns_btnList').addEventListener('click', newsList);
-if (document.getElementById('ns_btnNew')) document.getElementById('ns_btnNew').addEventListener('click', ()=>{ if(document.getElementById('ns_slug')) document.getElementById('ns_slug').value=''; if(document.getElementById('ns_md')){ const ta=document.getElementById('ns_md'); ta.value=''; autosizeTextArea(ta);} if(document.getElementById('ns_preview')) document.getElementById('ns_preview').innerHTML=''; });
+if (document.getElementById('ns_btnNew')) document.getElementById('ns_btnNew').addEventListener('click', async ()=>{
+  const ta = document.getElementById('ns_md');
+  // «Новая» стирала набранный текст без вопросов — при том, что кнопка стоит
+  // вплотную к «Сохранить».
+  if(editorDirty && ta && ta.value.trim()){
+    const ok = await askConfirm({
+      title: 'Начать новую новость?',
+      body: 'Текущий текст не сохранён на сервере. Он останется в черновике этого браузера, но поле будет очищено.',
+      okText: 'Очистить',
+    });
+    if(!ok) return;
+    newsDraftSave();
+  }
+  if(document.getElementById('ns_slug')) document.getElementById('ns_slug').value='';
+  if(ta){ ta.value=''; autosizeTextArea(ta); }
+  if(document.getElementById('ns_preview')) document.getElementById('ns_preview').innerHTML='';
+  editorDirty = false;
+  newsDraftUpdateBadge();
+});
+if (document.getElementById('ns_btnRestoreDraft')) document.getElementById('ns_btnRestoreDraft').addEventListener('click', ()=>{
+  const d = newsDraftLoad(); if(!d) return;
+  const ta = document.getElementById('ns_md'); if(!ta) return;
+  ta.value = d.md;
+  if(d.cover) currentCoverUrl = d.cover;
+  autosizeTextArea(ta); updateCoverPreview(); newsPreview();
+  editorDirty = true;
+  newsDraftUpdateBadge();
+  notifyLevel('Черновик восстановлен', 'success');
+});
 bindBusyClick('ns_btnSave', newsSave, 'Сохранение...');
 if (document.getElementById('ns_btnDelete')) document.getElementById('ns_btnDelete').addEventListener('click', newsDelete);
-if (document.getElementById('ns_btnPreview')) document.getElementById('ns_btnPreview').addEventListener('click', newsPreview);
-if (document.getElementById('ns_btnCover')) document.getElementById('ns_btnCover').addEventListener('click', ()=>openPickUploadDialog('cover'));
 // Image insert wiring
 // New toolbar buttons
 if (document.getElementById('ns_btnUploadDisk')) document.getElementById('ns_btnUploadDisk').addEventListener('click', ()=>openPickUploadDialog('inline'));
@@ -2195,7 +2868,7 @@ document.addEventListener('click', function(e){
   const us = e.target && (e.target.id==='ns_gallery_url_save' || e.target.closest && e.target.closest('#ns_gallery_url_save'));
   if(us){ e.preventDefault(); (async()=>{
     const urlEl = document.getElementById('ns_gallery_url'); const nameEl=document.getElementById('ns_gallery_url_name'); const modeEl=document.getElementById('ns_gallery_overwrite');
-    const url = (urlEl?.value||'').trim(); if(!url){ alert('Укажите URL'); return; }
+    const url = (urlEl?.value||'').trim(); if(!url){ notify('Укажите URL'); return; }
     const base = (nameEl?.value||'image'); const mode = (modeEl?.value||'rename');
     const finalName = await resolveNameWithMode(galleryPath||'', base, guessOutExtFromUrl(url), mode);
     const fd = new URLSearchParams(); fd.set('path', galleryPath||''); fd.set('filename', finalName); fd.set('url', url);
@@ -2217,6 +2890,7 @@ if (document.getElementById('ns_md')){
   const ta = document.getElementById('ns_md');
   ta.addEventListener('input', debounce(newsPreview, 250));
   ta.addEventListener('input', ()=>{ autosizeTextArea(ta); updateCoverPreview(); editorDirty = true; });
+  ta.addEventListener('input', debounce(newsDraftSave, 800));
   // initial
   setTimeout(()=>{ autosizeTextArea(ta); updateCoverPreview(); newsPreview(); }, 0);
 }
@@ -2247,71 +2921,6 @@ async function loadGamesInto(sel){
   });
   // auto-select first item
   if (sel.options.length > 0) sel.selectedIndex = 0;
-}
-
-async function gamesReload(){
-  let res; try{ res = await fetch('/admin/games'); }catch(e){ return; }
-  if(!res.ok){ return; }
-  let j = await res.json();
-  const items = j.items||[];
-  // update table
-  const tb = document.querySelector('#gm_table tbody');
-  if (tb){
-    tb.innerHTML = '';
-    items.forEach(it=> gamesAppendRow(tb, it));
-  }
-  // update News dropdown if scope is game (without extra fetch)
-  const sel = document.getElementById('ns_gid');
-  const scopeEl = document.getElementById('ns_scope');
-  if (sel && scopeEl && scopeEl.value==='game'){
-    sel.innerHTML = '';
-    const opt0 = document.createElement('option'); opt0.value=''; opt0.textContent='— Выбрать игру —'; sel.appendChild(opt0);
-    items.forEach(it=>{
-      const o = document.createElement('option'); o.value = it.gameId || it.gameid || ''; o.textContent = it.title || it.gameId || ''; sel.appendChild(o);
-    });
-    if (sel.options.length > 0) sel.selectedIndex = 0;
-  }
-}
-
-function gamesAppendRow(tb, it){
-  const tr = document.createElement('tr');
-  // Те же серверные данные, что и в mgmAppendRow: экранируем перед вставкой в value.
-  tr.innerHTML = '<td><input class="form-control form-control-sm" value="'+escapeHtml(it.gameId||'')+'"/></td>'+
-                 '<td><input class="form-control form-control-sm" value="'+escapeHtml(it.title||'')+'"/></td>'+
-                 '<td><input class="form-control form-control-sm" value="'+escapeHtml(it.exeRelativePath||'')+'"/></td>'+
-                 '<td><button class="btn btn-sm btn-outline-danger">Del</button></td>';
-  tr.querySelector('button').addEventListener('click', ()=> tr.remove());
-  tb.appendChild(tr);
-}
-
-
-async function gamesSave(){
-  const rows = Array.from(document.querySelectorAll('#gm_table tbody tr'));
-  const items = rows.map(tr=>{
-    const tds = tr.querySelectorAll('td');
-    return { gameId: tds[0].querySelector('input').value.trim(), title: tds[1].querySelector('input').value.trim(), exeRelativePath: tds[2].querySelector('input').value.trim() };
-  }).filter(it=>it.gameId);
-  // validate
-  const ids = new Set();
-  for(const it of items){ if(!it.gameId){ notify('Пустой gameId'); return; } if(ids.has(it.gameId)){ notify('Дубликат gameId: '+it.gameId); return; } ids.add(it.gameId); }
-  let res; try{ res = await fetch('/admin/games/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({items}) }); }catch(e){ document.getElementById('out').textContent='Save error: '+e; return; }
-  if(!res.ok){ document.getElementById('out').textContent='HTTP '+res.status+' '+res.statusText; return; }
-  document.getElementById('out').textContent = await res.text();
-  // refresh table and dropdown (single fetch handled inside gamesReload)
-  await gamesReload();
-}
-
-// add missing games from server scan (directories)
-async function gamesScanMissing(){
-  let res; try{ res = await fetch('/admin/games/scan'); }catch(e){ notify('Ошибка запроса: '+e); return; }
-  if(!res.ok){ notify('HTTP '+res.status+' '+res.statusText); return; }
-  const j = await res.json();
-  const tb = document.querySelector('#gm_table tbody');
-  const existing = new Set(Array.from(tb.querySelectorAll('tr')).map(tr=> tr.querySelectorAll('td')[0].querySelector('input').value.trim()));
-  (j.items||[]).forEach(it=>{
-    if(existing.has(it.gameId)) return;
-    gamesAppendRow(tb, it);
-  });
 }
 
 async function newsList(){
@@ -2357,7 +2966,11 @@ async function newsList(){
       const scope=document.getElementById('ns_scope').value; const gidEl=document.getElementById('ns_gid'); const gid= gidEl? gidEl.value: '';
       const fd = new URLSearchParams(); fd.set('scope', scope); if(scope==='game') fd.set('gameId', gid); fd.set('slug', it.slug); fd.set('published', cb.checked ? 'true' : 'false');
       let res; try{ res = await fetch('/admin/news/publish', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: fd.toString()}); }catch(e){ notify('Ошибка: '+e); cb.checked = !cb.checked; return; }
-      if(!res.ok){ notify('HTTP '+res.status+' '+res.statusText); cb.checked = !cb.checked; return; }
+      if(!res.ok){ await notifyHttp(res, 'Публикация новости'); cb.checked = !cb.checked; return; }
+      // Если переключили ту новость, что открыта в редакторе, состояние надо
+      // подтянуть и сюда — иначе следующее «Сохранить» вернёт прежний флаг.
+      const openSlug = document.getElementById('ns_slug')?.value || '';
+      if(openSlug && openSlug === it.slug) currentPublished = cb.checked;
       // optional: update without full reload; for simplicity refresh list to reflect state/order
       newsList();
     });
@@ -2373,7 +2986,7 @@ async function newsList(){
 
 async function newsLoad(){
   const scope=document.getElementById('ns_scope').value; const gid=document.getElementById('ns_gid').value; const slug=document.getElementById('ns_slug').value;
-  if(!slug){ alert('Укажите идентификатор новости'); return; }
+  if(!slug){ notify('Укажите идентификатор новости'); return; }
   let url='/admin/news/get?scope='+encodeURIComponent(scope)+'&slug='+encodeURIComponent(slug);
   if(scope==='game') url += '&gameId='+encodeURIComponent(gid);
   let res; try{ res=await fetch(url); }catch(e){ notify('Ошибка запроса: '+e); return; }
@@ -2384,7 +2997,6 @@ async function newsLoad(){
   // Take cover and published directly from server meta (not from markdown)
   currentCoverUrl = (j.coverUrl||'');
   currentPublished = !!j.published;
-  const pubEl = document.getElementById('ns_published'); if(pubEl){ pubEl.checked = currentPublished; }
   // keep server text by default until user restores; strip legacy comment directives
   const serverMdClean = (serverMd||'')
     .replace(/<!--\s*published\s*:[^>]*-->\s*\n?/ig, '')
@@ -2394,17 +3006,11 @@ async function newsLoad(){
   updateCoverPreview();
   newsPreview();
   editorDirty = false;
+  // Черновик предлагается, только если он расходится с тем, что на сервере.
+  newsDraftUpdateBadge();
 }
 
 // ===== Shared helpers for assets upload =====
-async function chooseAssetDestination(defaultPath, suggestedBase){
-  const path = prompt('Папка (относительно /news/assets):', (defaultPath===undefined?'':(defaultPath||'')));
-  if(path===null) return null;
-  const filename = prompt('Имя файла (без расширения):', suggestedBase||'image');
-  if(filename===null) return null;
-  return { path: path||'', filename: filename||suggestedBase||'image' };
-}
-
 async function uploadAssetFile(file, dest){
   const fd = new FormData();
   fd.append('path', dest.path||'');
@@ -2422,32 +3028,15 @@ function setCoverInMarkdown(url){
   updateCoverPreview();
 }
 
-// ===== Insert image into article body from file =====
-async function newsInsertImageFromFile(){
-  const f = document.getElementById('ns_img')?.files?.[0];
-  if(!f){ alert('Выберите файл изображения'); return; }
-  const inName = f.name || 'image';
-  const suggested = inName.replace(/\.[^.]+$/, '');
-  const dest = await chooseAssetDestination(galleryPath||'', suggested);
-  if(!dest) return;
-  const j = await uploadAssetFile(f, dest); if(!j){ return; }
-  const url = j.url || '';
-  if(!url){ notify('Не удалось получить URL изображения'); return; }
-  const ta = document.getElementById('ns_md');
-  insertAtCursor(ta, '![image](' + url + ')');
-  if(document.getElementById('ns_img')) document.getElementById('ns_img').value='';
-  autosizeTextArea(ta);
-  updateCoverPreview();
-  newsPreview();
-  editorDirty = true; ta.dispatchEvent(new Event('input'));
-}
-
-
 async function newsSave(){
   const scope=document.getElementById('ns_scope').value; const gid=document.getElementById('ns_gid').value; const slug=document.getElementById('ns_slug').value; const md=document.getElementById('ns_md').value;
-  if(!slug){ alert('slug required'); return; }
-  const pub = !!(document.getElementById('ns_published') && document.getElementById('ns_published').checked);
-  currentPublished = pub;
+  if(!slug){ notify('Укажите идентификатор новости — без него сохранять некуда'); return; }
+  // Флаг публикации берём из состояния, прочитанного с сервера, а не из
+  // чекбокса #ns_published: этого элемента в разметке нет с тех пор, как
+  // публикацией управляет переключатель в списке новостей. Выражение всегда
+  // давало false, а сервер (news.Save) применяет присланное поле — то есть
+  // сохранение текста молча снимало новость с публикации.
+  const pub = currentPublished;
   const fd = new FormData();
   fd.append('scope', scope);
   if(scope==='game') fd.append('gameId', gid);
@@ -2456,18 +3045,15 @@ async function newsSave(){
   // send meta fields explicitly
   fd.append('published', pub ? 'true' : 'false');
   fd.append('coverUrl', currentCoverUrl || '');
-  let res; try{ res=await fetch('/admin/news/save', {method:'POST', body: fd}); }catch(e){ notify('Ошибка запроса: '+e); return; }
-  if(!res.ok){ notify('HTTP '+res.status+' '+res.statusText); return; }
-  notify(await res.text());
+  let res; try{ res=await fetch('/admin/news/save', {method:'POST', body: fd}); }catch(e){ notifyLevel('Не удалось сохранить новость: '+e, 'error'); return; }
+  if(!res.ok){ await notifyHttp(res, 'Сохранение новости'); return; }
+  notifyLevel(await res.text(), 'success');
   newsList();
   newsPreview();
   editorDirty = false;
+  // Сохранённое на сервере больше не нуждается в локальной копии.
+  newsDraftDrop();
 }
-
-function slugify(s){
-  return (s||'').toLowerCase().replace(/[^a-z0-9а-яё\-\s_]/g,'').replace(/[\s_]+/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');
-}
-
 
 function excerptFromMarkdown(md){
   md = md || '';
@@ -2587,39 +3173,20 @@ function titleFromMarkdown(md){
   return m? m[1].trim(): '';
 }
 
-async function newsCreateOpen(){
-  const scope=document.getElementById('ns_scope').value; const gid=document.getElementById('ns_gid').value;
-  let md = document.getElementById('ns_md').value;
-  if(!md){ md = '# Новость\n\nКраткое описание...\n\nТекст...'; document.getElementById('ns_md').value = md; autosizeTextArea(document.getElementById('ns_md')); }
-  let slug = document.getElementById('ns_slug').value.trim();
-  if(!slug){ slug = slugify(titleFromMarkdown(md)) || ('news-'+Date.now()); document.getElementById('ns_slug').value = slug; }
-  const fd = new FormData();
-  fd.append('scope', scope);
-  if(scope==='game') fd.append('gameId', gid);
-  fd.append('slug', slug);
-  fd.append('markdown', md);
-  // send meta on create
-  const pubEl = document.getElementById('ns_published');
-  const pub = !!(pubEl && pubEl.checked);
-  currentPublished = pub;
-  fd.append('published', pub ? 'true' : 'false');
-  fd.append('coverUrl', currentCoverUrl || '');
-  let res; try{ res=await fetch('/admin/news/save', {method:'POST', body: fd}); }catch(e){ notify('Ошибка запроса: '+e); return; }
-  if(!res.ok){ notify('HTTP '+res.status+' '+res.statusText); return; }
-  notify('Создано');
-  await newsLoad();
-  newsList();
-  newsPreview();
-  editorDirty = false;
-}
-
 async function newsDelete(){
   const scope=document.getElementById('ns_scope').value; const gid=document.getElementById('ns_gid').value; const slug=document.getElementById('ns_slug').value;
-  if(!slug){ alert('Укажите идентификатор новости'); return; }
-  if(!confirm('Удалить новость «'+slug+'»?')) return;
-  let res; try{ res=await fetch('/admin/news/delete?scope='+encodeURIComponent(scope)+'&slug='+encodeURIComponent(slug)+(scope==='game'?'&gameId='+encodeURIComponent(gid):''), {method:'POST'}); }catch(e){ notify('Ошибка запроса: '+e); return; }
-  if(!res.ok){ notify('HTTP '+res.status+' '+res.statusText); return; }
-  notify(await res.text());
+  if(!slug){ notify('Укажите идентификатор новости'); return; }
+  const ok = await askConfirm({
+    title: 'Удалить новость?',
+    body: 'Статья «'+slug+'» будет удалена вместе с метаданными и убрана из индекса. Загруженные картинки останутся в галерее.',
+    okText: 'Удалить',
+    danger: true,
+  });
+  if(!ok) return;
+  let res; try{ res=await fetch('/admin/news/delete?scope='+encodeURIComponent(scope)+'&slug='+encodeURIComponent(slug)+(scope==='game'?'&gameId='+encodeURIComponent(gid):''), {method:'POST'}); }catch(e){ notifyLevel('Не удалось удалить новость: '+e, 'error'); return; }
+  if(!res.ok){ await notifyHttp(res, 'Удаление новости'); return; }
+  notifyLevel(await res.text(), 'success');
+  newsDraftDrop();
   newsList();
 }
 
@@ -2681,19 +3248,6 @@ function renderListPreviewFromMarkdown(md){
   }catch(e){ return '<div class="text-body-secondary">(предпросмотр недоступен)</div>'; }
 }
 
-async function newsUploadCover(){
-  const scope=document.getElementById('ns_scope').value; const gid=document.getElementById('ns_gid').value; const slug=document.getElementById('ns_slug').value; const f=document.getElementById('ns_cover').files[0];
-  if(!f){ alert('Выберите изображение'); return; }
-  const fd = new FormData(); fd.append('scope', scope); if(scope==='game') fd.append('gameId', gid); if(slug) fd.append('slug', slug); fd.append('file', f);
-  let res; try{ res=await fetch('/admin/news/uploadCover', {method:'POST', body: fd}); }catch(e){ notify('Ошибка загрузки: '+e); return; }
-  if(!res.ok){ notify('HTTP '+res.status+' '+res.statusText); return; }
-  const j = await res.json();
-  notify('Обложка загружена: '+(j.coverUrl||''));
-  setCoverInMarkdown(j.coverUrl||'');
-  const ta = document.getElementById('ns_md'); autosizeTextArea(ta);
-  newsPreview();
-  editorDirty = true; if(ta) ta.dispatchEvent(new Event('input'));
-}
 // ===== Gallery UI =====
 function openGalleryModal(){
   try{ gallerySetPath(''); galleryFetchAndRender(); }catch(e){}
@@ -2740,6 +3294,27 @@ function renderGalleryError(msg){
   grid.innerHTML = '<div class="text-danger">'+escapeHtml(msg||'Ошибка')+'</div>';
 }
 
+// Расширения, которые браузер действительно покажет как картинку.
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg|ico)(\?|#|$)/i;
+function isImageName(name){ return IMAGE_EXT_RE.test(String(name||'')); }
+
+// fileThumb — плашка вместо превью для файла, который картинкой не является.
+function fileThumb(name){
+  const ext = (String(name||'').match(/\.([^.]+)$/)||[])[1] || 'file';
+  const thumb = document.createElement('div');
+  thumb.className = 'card-img-top d-flex flex-column align-items-center justify-content-center text-body-secondary';
+  thumb.style.height = '120px';
+  thumb.style.background = '#212529';
+  const icon = document.createElement('div');
+  icon.style.fontSize = '28px';
+  icon.textContent = '📄';
+  const label = document.createElement('div');
+  label.className = 'small text-uppercase';
+  label.textContent = ext.slice(0, 6);
+  thumb.appendChild(icon); thumb.appendChild(label);
+  return thumb;
+}
+
 function renderGalleryGrid(items){
   const grid = document.getElementById('ns_gallery_grid'); if(!grid) return;
   if(!items || items.length===0){ grid.innerHTML = '<div class="text-body-secondary">Пусто</div>'; return; }
@@ -2767,13 +3342,18 @@ function renderGalleryGrid(items){
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
 </svg>';
-      del.onclick=async()=>{ if(!confirm('Удалить папку '+it.name+'?')) return; if(!await assetsMutate('/admin/news/assets/delete', {path: galleryPath||'', name: it.name})) return; galleryFetchAndRender(); };
+      del.onclick=async()=>{ if(!await askConfirm({title:'Удалить папку?', body:'Папка «'+it.name+'» и всё её содержимое будут удалены с диска. Ссылки на эти картинки в уже опубликованных новостях перестанут работать.', okText:'Удалить папку', danger:true})) return; if(!await assetsMutate('/admin/news/assets/delete', {path: galleryPath||'', name: it.name})) return; galleryFetchAndRender(); };
       actions.appendChild(rn); actions.appendChild(del);
       body.appendChild(cap); body.appendChild(actions); card.appendChild(body);
       // Make the whole folder card clickable (except action buttons)
       card.addEventListener('click', (ev)=>{ if(ev.target.closest && ev.target.closest('button')) return; gallerySetPath(galleryPath? (galleryPath+'/'+it.name): it.name); galleryFetchAndRender(); });
     } else {
-      const img = document.createElement('img'); img.className='card-img-top'; img.src = it.url; img.alt = it.name||''; img.loading='lazy'; img.style.height='120px'; img.style.objectFit='cover';
+      // В галерее лежат не только картинки (например, ping.txt), и <img> на
+      // такой файл давал битую превьюшку с иконкой «сломанное изображение».
+      // Не-картинке рисуем понятную иконку файла с расширением.
+      const img = isImageName(it.name) || isImageName(it.url)
+        ? (()=>{ const i = document.createElement('img'); i.className='card-img-top'; i.src = it.url; i.alt = it.name||''; i.loading='lazy'; i.style.height='120px'; i.style.objectFit='cover'; return i; })()
+        : fileThumb(it.name);
       const body = document.createElement('div'); body.className='card-body p-2 mt-auto';
       const cap = document.createElement('div'); cap.className='small text-truncate'; cap.textContent = it.name||'';
       const actions = document.createElement('div'); actions.className='mt-1';
@@ -2787,15 +3367,36 @@ function renderGalleryGrid(items){
   <path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7zm3 3a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v7a1 1 0 1 0 2 0v-7a1 1 0 0 0-1-1z"/>\
   <path d="M9 3h6l1 1h4a1 1 0 1 1 0 2H4a1 1 0 1 1 0-2h4l1-1z"/>\
 </svg>';
-      del.onclick=async()=>{ if(!confirm('Удалить файл '+it.name+'?')) return; if(!await assetsMutate('/admin/news/assets/delete', {path: galleryPath||'', name: it.name})) return; galleryFetchAndRender(); };
+      del.onclick=async()=>{ if(!await askConfirm({title:'Удалить файл?', body:'Файл «'+it.name+'» будет удалён с диска. Если он вставлен в опубликованную новость, картинка там пропадёт.', okText:'Удалить файл', danger:true})) return; if(!await assetsMutate('/admin/news/assets/delete', {path: galleryPath||'', name: it.name})) return; galleryFetchAndRender(); };
       actions.appendChild(rn); actions.appendChild(del);
       body.appendChild(cap); body.appendChild(actions);
       card.appendChild(img); card.appendChild(body);
-      card.addEventListener('click', (ev)=>{ if(ev.target.closest && ev.target.closest('button')) return; const tgt = document.getElementById('ns_gallery_target')?.value || 'inline'; if(tgt==='cover'){ setCoverInMarkdown(it.url); updateCoverPreview(); newsPreview(); } else { insertImageFromGallery(it.url); } const el = document.getElementById('ns_gallery'); if(window.bootstrap && el){ const m = window.bootstrap.Modal.getInstance(el) || new window.bootstrap.Modal(el); m.hide(); } });
+      card.addEventListener('click', (ev)=>{
+        if(ev.target.closest && ev.target.closest('button')) return;
+        const tgt = document.getElementById('ns_gallery_target')?.value || 'inline';
+        const image = isImageName(it.name) || isImageName(it.url);
+        if(tgt==='cover'){
+          if(!image){ notify('Обложкой можно сделать только изображение'); return; }
+          setCoverInMarkdown(it.url); updateCoverPreview(); newsPreview();
+        } else if(image){
+          insertImageFromGallery(it.url);
+        } else {
+          // Не картинка — вставляем ссылку, а не ![image](...): иначе в статье
+          // получается заведомо битое изображение.
+          insertLinkFromGallery(it.url, it.name||'файл');
+        }
+        const el = document.getElementById('ns_gallery'); if(window.bootstrap && el){ const m = window.bootstrap.Modal.getInstance(el) || new window.bootstrap.Modal(el); m.hide(); }
+      });
     }
     col.appendChild(card);
     grid.appendChild(col);
   });
+}
+
+function insertLinkFromGallery(url, name){
+  const ta = document.getElementById('ns_md'); if(!ta) return;
+  insertAtCursor(ta, '['+name+']('+url+')');
+  autosizeTextArea(ta); newsPreview(); editorDirty = true; ta.dispatchEvent(new Event('input'));
 }
 
 function insertImageFromGallery(url){
@@ -3068,7 +3669,13 @@ async function mtSave(){
 }
 
 async function mtClear(){
-  if(!confirm('Снять режим технических работ и удалить файл состояния?')) return;
+  const ok = await askConfirm({
+    title: 'Снять режим и удалить состояние?',
+    body: 'Файл состояния будет удалён целиком: причина, расписание и набор блокировок пропадут, и ввести их придётся заново. Пользователи сразу перестанут видеть баннер.',
+    okText: 'Выключить и удалить',
+    danger: true,
+  });
+  if(!ok) return;
   let res;
   try{ res = await fetch('/admin/api/maintenance/clear', { method: 'POST' }); }
   catch(e){ notify('Ошибка сети при снятии режима: '+e); return; }
@@ -3158,6 +3765,17 @@ function mxEmptyRow(cols, text){
   return '<tr><td colspan="'+cols+'" class="text-body-secondary">'+escapeHtml(text)+'</td></tr>';
 }
 
+// mxOutcomeNote расписывает исход операций так, чтобы числа сходились.
+// Раньше под «Установок 19» стояло «успешно 4, с ошибкой 8», и оставшиеся
+// семь событий пользователю приходилось угадывать: это установки, у которых
+// результат не сообщён (прерванные или ещё идущие на момент отчёта).
+function mxOutcomeNote(total, ok, fail){
+  const rest = Math.max(0, Number(total||0) - Number(ok||0) - Number(fail||0));
+  const parts = ['успешно '+mxNum(ok), 'с ошибкой '+mxNum(fail)];
+  if(rest > 0) parts.push('без результата '+mxNum(rest));
+  return parts.join(', ');
+}
+
 function mxRenderTotals(t){
   const root = mxEl('mx_totals'); if(!root) return;
   const tiles = [
@@ -3165,8 +3783,8 @@ function mxRenderTotals(t){
     ['Запусков лаунчера', mxNum(t.launcherStarts), ''],
     ['Уникальных установок', mxNum(t.uniqueInstalls), 'по installId, не по людям'],
     ['Запусков игр', mxNum(t.gameLaunches), ''],
-    ['Установок', mxNum(t.installs), 'успешно '+mxNum(t.installOk)+', с ошибкой '+mxNum(t.installFail)],
-    ['Обновлений', mxNum(t.updates), 'успешно '+mxNum(t.updateOk)+', с ошибкой '+mxNum(t.updateFail)],
+    ['Установок', mxNum(t.installs), mxOutcomeNote(t.installs, t.installOk, t.installFail)],
+    ['Обновлений', mxNum(t.updates), mxOutcomeNote(t.updates, t.updateOk, t.updateFail)],
     ['Ошибок', mxNum(t.errors), 'события вида error'],
     ['Скачано', formatBytes(Number(t.bytesDownloaded||0)), 'сумма поля bytes'],
     ['Среднее время установки', mxFmtMs(t.avgInstallMs), 'только успешные'],
@@ -3263,6 +3881,84 @@ function mxRenderCounts(bodyId, items, emptyText, withShare){
   ).join('');
 }
 
+// ==== Топ ошибок: код -> конкретные события ====
+//
+// «sync_failed — 8» и всё: ни версии, ни игры, ни времени. Дальше этой
+// строки расследование не шло, потому что ручки, отдающей сами события, не
+// существовало — теперь есть /admin/api/metrics/errors.
+function mxRenderErrors(items){
+  const tb = mxEl('mx_errors_body'); if(!tb) return;
+  const list = Array.isArray(items) ? items : [];
+  if(list.length===0){ tb.innerHTML = mxEmptyRow(2, 'Ошибок за период не было.'); return; }
+  tb.innerHTML = list.map(x=>
+    '<tr><td><a href="#" class="mx-err" data-code="'+escapeHtml(x.key||'')+'">'+escapeHtml(x.key||'—')+'</a></td>'
+    + '<td class="text-end">'+mxNum(x.count)+'</td></tr>'
+  ).join('');
+  tb.querySelectorAll('a.mx-err').forEach(a=>{
+    a.addEventListener('click', (e)=>{ e.preventDefault(); mxShowErrorEvents(a.getAttribute('data-code')||''); });
+  });
+}
+
+async function mxShowErrorEvents(code){
+  if(!code) return;
+  const p = new URLSearchParams();
+  p.set('code', code);
+  const from = mtLocalToUtc(mxEl('mx_from')?.value || '');
+  const to = mxLocalToUtcEnd(mxEl('mx_to')?.value || '');
+  if(from) p.set('from', from);
+  if(to) p.set('to', to);
+  const gid = mxEl('mx_game')?.value || '';
+  if(gid) p.set('gameId', gid);
+
+  let res;
+  try{ res = await fetch('/admin/api/metrics/errors?'+p.toString()); }
+  catch(e){ notifyLevel('Не удалось получить события ошибки: '+e, 'error'); return; }
+  if(!res.ok){ await notifyHttp(res, 'События ошибки '+code); return; }
+  let j; try{ j = await res.json(); }catch(e){ notifyLevel('События ошибки: сервер вернул не JSON', 'error'); return; }
+
+  const items = Array.isArray(j.items) ? j.items : [];
+  const rows = items.length
+    ? items.map(ev=>
+        '<tr><td class="text-nowrap">'+escapeHtml(String(ev.ts||'').replace('T',' ').replace('Z',''))+'</td>'
+        + '<td><code>'+escapeHtml(ev.gameId||'—')+'</code></td>'
+        + '<td>'+escapeHtml(ev.version||'—')+'</td>'
+        + '<td>'+escapeHtml(ev.appVersion||'—')+'</td>'
+        + '<td>'+escapeHtml(ev.os||'—')+'</td>'
+        + '<td class="text-end">'+escapeHtml(ev.installId ? String(ev.installId).slice(0,8) : '—')+'</td></tr>'
+      ).join('')
+    : '<tr><td colspan="6" class="text-body-secondary">Событий с этим кодом в периоде нет.</td></tr>';
+
+  const capped = j.capped
+    ? '<div class="small text-body-secondary mt-2">Показаны последние '+escapeHtml(String(j.limit||items.length))+' событий — в периоде их может быть больше.</div>'
+    : '';
+
+  const el = document.createElement('div');
+  el.className = 'modal fade';
+  el.setAttribute('tabindex','-1');
+  el.innerHTML = ''+
+    '<div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content">'+
+    '  <div class="modal-header"><h5 class="modal-title">Ошибка <code>'+escapeHtml(code)+'</code> — последние события</h5>'+
+    '    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button></div>'+
+    '  <div class="modal-body">'+
+    '    <div class="table-responsive"><table class="table table-sm table-admin table-striped align-middle mb-0">'+
+    '      <thead><tr><th>Когда (UTC)</th><th>Игра</th><th>Версия сборки</th><th>Версия лаунчера</th><th>ОС</th><th class="text-end">installId</th></tr></thead>'+
+    '      <tbody>'+rows+'</tbody></table></div>'+ capped +
+    '  </div>'+
+    '  <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Закрыть</button></div>'+
+    '</div></div>';
+  document.body.appendChild(el);
+  if(!window.bootstrap || !window.bootstrap.Modal){
+    // Без bootstrap показать модалку нечем — уводим данные в журнал, чтобы
+    // клик всё-таки чем-то заканчивался.
+    el.remove();
+    notify('Ошибка '+code+': событий '+items.length+' (диалог недоступен — не загрузился bootstrap)');
+    return;
+  }
+  const modal = new window.bootstrap.Modal(el);
+  el.addEventListener('hidden.bs.modal', ()=> el.remove());
+  modal.show();
+}
+
 function mxRender(sum){
   const totals = sum.totals || {};
   const byDay = Array.isArray(sum.byDay) ? sum.byDay : [];
@@ -3279,7 +3975,7 @@ function mxRender(sum){
   mxRenderDaysTable(byDay);
   mxRenderChart(byDay);
   mxRenderGames(sum.byGame);
-  mxRenderCounts('mx_errors_body', sum.topErrors, 'Ошибок за период не было.', false);
+  mxRenderErrors(sum.topErrors);
   mxRenderCounts('mx_versions_body', sum.appVersions, 'Версии не сообщались.', true);
   mxRenderCounts('mx_os_body', sum.os, 'ОС не сообщались.', true);
 }
@@ -3308,7 +4004,7 @@ async function mxLoad(){
   try{ sum = await res.json(); }
   catch(e){ notify('Сервер вернул не JSON: '+e); return; }
   mxRender(sum);
-  notify('Метрики обновлены: событий '+mxNum((sum.totals||{}).events)+'.');
+  notifyQuiet('Метрики обновлены: событий '+mxNum((sum.totals||{}).events)+'.', 'info');
 }
 
 async function mxLoadGames(){
@@ -3341,12 +4037,19 @@ function mxSetPreset(days){
 }
 
 async function mxClear(){
-  if(!confirm('Удалить все накопленные метрики? Действие необратимо.')) return;
+  const ok = await askConfirm({
+    title: 'Удалить все метрики?',
+    body: 'Удаляются обе генерации файла событий — вся накопленная история запусков, установок и ошибок. Восстановить её неоткуда, фильтр периода на удаление не влияет.',
+    okText: 'Удалить всё',
+    danger: true,
+    requireText: 'удалить метрики',
+  });
+  if(!ok) return;
   let res;
   try{ res = await fetch('/admin/api/metrics/clear', { method: 'POST' }); }
-  catch(e){ notify('Ошибка сети при очистке метрик: '+e); return; }
-  if(!res.ok){ notify('Не удалось очистить метрики — '+(await mtErrText(res))); return; }
-  notify('Метрики удалены.');
+  catch(e){ notifyLevel('Ошибка сети при очистке метрик: '+e, 'error'); return; }
+  if(!res.ok){ notifyLevel('Не удалось очистить метрики — '+(await mtErrText(res)), 'error'); return; }
+  notifyLevel('Метрики удалены.', 'success');
   await mxLoad();
 }
 

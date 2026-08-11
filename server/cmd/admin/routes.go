@@ -98,6 +98,9 @@ func (s *server) apiRoutes() []route {
 
 		// Launcher metrics (the public ingest endpoint is registered separately).
 		{path: "/admin/api/metrics/summary", handler: mx.Summary},
+		// Раскрытие кода ошибки в конкретные события: сводка говорит «sync_failed — 8»,
+		// а на какой версии и в какой игре — видно только здесь.
+		{path: "/admin/api/metrics/errors", handler: mx.ErrorEvents},
 		{path: "/admin/api/metrics/clear", handler: mx.Clear},
 
 		// News management.

@@ -4,13 +4,18 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Админ-панель ChillHub</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+  <!-- Bootstrap раздаётся с этого же сервера, а не с jsdelivr: панель внутренняя,
+       и её работоспособность не должна зависеть от доступности чужого CDN.
+       Отказ уже случался — в admin.js до сих пор есть ветка «диалог не открылся,
+       не загрузилась библиотека». Файлы в vendor/ побайтово совпадают с
+       bootstrap@5.3.3 (те же SRI-хеши, что стояли в этих тегах). -->
+  <link href="/admin/ui/vendor/bootstrap.min.css" rel="stylesheet">
   <link href="/admin/ui/admin.css" rel="stylesheet">
   <link rel="icon" href="/admin/ui/app.ico" type="image/x-icon">
 </head>
 <body class="bg-body">
   <div class="container-fluid py-3">
-    <div class="news-wrap">
+    <div class="admin-wrap">
       <div class="d-flex align-items-center mb-2">
         <img src="/admin/ui/app.ico" alt="ChillHub" class="brand-logo me-2">
         <h1 class="h5 mb-0">Админ-панель ChillHub</h1>
@@ -25,166 +30,154 @@
           </button>
         </div>
       </div>
-      <ul class="nav nav-tabs mb-3">
-        <li class="nav-item"><a class="nav-link active" id="tabLauncher" href="#">Лаунчер</a></li>
-        <li class="nav-item"><a class="nav-link" id="tabManifests" href="#">Игры</a></li>
-        <li class="nav-item"><a class="nav-link" id="tabNews" href="#">Новости</a></li>
-        <li class="nav-item">
-          <a class="nav-link" id="tabInbox" href="#">Обращения
+      <!-- role="tablist" и стрелки: вкладки — это <a href="#">, и без ролей
+           скринридер их вкладками не считал, а с клавиатуры они не листались. -->
+      <ul class="nav nav-tabs mb-3" role="tablist">
+        <li class="nav-item" role="presentation"><a class="nav-link active" id="tabLauncher" href="#launcher" role="tab" aria-selected="true" aria-controls="secLauncher">Лаунчер</a></li>
+        <li class="nav-item" role="presentation"><a class="nav-link" id="tabManifests" href="#manifests" role="tab" aria-selected="false" aria-controls="secManifests" tabindex="-1">Игры</a></li>
+        <li class="nav-item" role="presentation"><a class="nav-link" id="tabNews" href="#news" role="tab" aria-selected="false" aria-controls="secNews" tabindex="-1">Новости</a></li>
+        <li class="nav-item" role="presentation">
+          <a class="nav-link" id="tabInbox" href="#inbox" role="tab" aria-selected="false" aria-controls="secInbox" tabindex="-1">Обращения
             <span id="fb_unread_badge" class="badge text-bg-secondary ms-2" style="display:none">0</span>
           </a>
         </li>
-        <li class="nav-item">
-          <a class="nav-link" id="tabMaint" href="#">Технические работы
+        <li class="nav-item" role="presentation">
+          <a class="nav-link" id="tabMaint" href="#maint" role="tab" aria-selected="false" aria-controls="secMaint" tabindex="-1">Технические работы
             <span id="mt_state_badge" class="badge text-bg-secondary ms-2">—</span>
           </a>
         </li>
-        <li class="nav-item"><a class="nav-link" id="tabMetrics" href="#">Метрики</a></li>
+        <li class="nav-item" role="presentation"><a class="nav-link" id="tabMetrics" href="#metrics" role="tab" aria-selected="false" aria-controls="secMetrics" tabindex="-1">Метрики</a></li>
       </ul>
 
-      <section id="secLauncher">
-        <h2>Лаунчер</h2>
+      <section id="secLauncher" role="tabpanel" aria-labelledby="tabLauncher">
+        <h2 class="h4">Лаунчер</h2>
         <div class="row g-3">
-          <div class="col-lg-6">
-            <div class="card">
-              <div class="card-header d-flex align-items-center justify-content-between">
-                <span>Текущий манифест лаунчера</span>
-                <span class="badge text-bg-secondary" id="ln_latest_badge">—</span>
-              </div>
-              <div class="card-body">
-                <div class="d-flex align-items-end gap-2 mb-2 flex-wrap">
-                  <button type="button" id="ln_refresh" class="btn btn-sm btn-secondary">Обновить</button>
-                  <div class="d-flex align-items-center gap-2 ms-auto">
-                    <label class="small" for="ln_prev_ver">Версия:</label>
-                    <select id="ln_prev_ver" class="form-select form-select-sm" style="width:200px"></select>
-                    <button id="ln_prev_refresh" type="button" class="btn btn-sm btn-outline-secondary">Обновить</button>
-                  </div>
-                  <div class="small text-body-secondary w-100">Источник: manifests/launcher/<code>latest.json</code></div>
+          <div class="col-xxl-5 col-lg-6">
+            <div class="sticky-col">
+              <div class="card">
+                <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+                  <span>Текущий манифест лаунчера</span>
+                  <span class="badge text-bg-secondary" id="ln_latest_badge">—</span>
                 </div>
-                <div id="ln_tree" class="border rounded p-2 bg-body-tertiary" style="min-height:200px"></div>
+                <div class="card-body">
+                  <div class="d-flex align-items-end gap-2 mb-2 flex-wrap">
+                    <button type="button" id="ln_refresh" class="btn btn-sm btn-secondary">Обновить</button>
+                    <div class="d-flex align-items-center gap-2 ms-auto">
+                      <label class="small" for="ln_prev_ver">Версия:</label>
+                      <select id="ln_prev_ver" class="form-select form-select-sm" style="width:160px"></select>
+                      <label class="small" for="ln_diff_ver">Сравнить с:</label>
+                      <select id="ln_diff_ver" class="form-select form-select-sm" style="width:160px" title="Показать, что изменилось относительно выбранной версии">
+                        <option value="">— без сравнения —</option>
+                      </select>
+                    </div>
+                    <div class="d-flex align-items-center gap-2 w-100">
+                      <input id="ln_tree_q" class="form-control form-control-sm" style="max-width:280px" placeholder="Фильтр по имени файла...">
+                      <button id="ln_tree_expand" type="button" class="btn btn-sm btn-outline-secondary">Развернуть всё</button>
+                      <button id="ln_tree_collapse" type="button" class="btn btn-sm btn-outline-secondary">Свернуть всё</button>
+                      <span id="ln_diff_summary" class="small ms-auto"></span>
+                    </div>
+                    <div class="small text-body-secondary w-100">Источник: manifests/launcher/<code>latest.json</code></div>
+                  </div>
+                  <div id="ln_tree" class="border rounded p-2 bg-body-tertiary panel-scroll panel-scroll-lg"></div>
+                </div>
               </div>
             </div>
           </div>
-          <div class="col-lg-6">
-            <div class="card">
-              <div class="card-header">Загрузка новой версии лаунчера (ZIP)</div>
-              <div class="card-body d-flex flex-column gap-2">
-                <div class="d-flex flex-wrap align-items-end gap-2">
-                  <label class="me-2">Версия: <input id="up_ver" value="1.0.0" placeholder="например 1.0.0"></label>
-                  <label class="me-2">ZIP: <input id="up_zip" type="file" accept=".zip"></label>
-                  <label class="me-2"><input type="checkbox" id="up_latest" checked> Обновить latest</label>
-                  <button type="button" id="btnUpload" class="btn btn-sm btn-primary">Загрузить</button>
-                </div>
-                <div class="d-flex flex-wrap align-items-end gap-3 small">
-                  <div>
-                    <label class="form-label mb-1" for="up_chunk_size">Размер чанка</label>
-                    <select id="up_chunk_size" class="form-select form-select-sm" style="min-width:200px">
-                      <option value="65536">64 КБ</option>
-                      <option value="131072">128 КБ</option>
-                      <option value="262144">256 КБ</option>
-                      <option value="524288">512 КБ</option>
-                      <option value="1048576">1 МБ</option>
-                      <option value="2097152">2 МБ</option>
-                      <option value="4194304">4 МБ</option>
-                      <option value="8388608" selected>8 МБ</option>
-                      <option value="16777216">16 МБ</option>
-                      <option value="33554432">32 МБ</option>
-                      <option value="67108864">64 МБ</option>
-                      <option value="134217728">128 МБ</option>
-                      <option value="268435456">256 МБ</option>
-                      <option value="536870912">512 МБ</option>
-                    </select>
-                  </div>
-                  <div class="flex-grow-1" style="min-width:240px; max-width:520px">
-                    <label for="up_conc" class="form-label mb-1 d-flex justify-content-between"><span>Параллельность</span><span><code id="up_conc_val">6</code> поток(ов) <span class="ms-2 text-body-secondary">активно <code id="up_active_now">0</code>/<code id="up_active_cap">0</code></span></span></label>
-                    <input id="up_conc" type="range" class="form-range" min="1" max="100" value="6">
-                  </div>
-                  <div class="ms-auto d-flex align-items-end">
-                    <button id="up_cleanup" type="button" class="btn btn-sm btn-outline-warning">Очистить старые/битые</button>
-                  </div>
-                </div>
-                <div id="up_drop" class="border rounded d-flex align-items-center justify-content-center text-body-secondary" style="height:100px; border-style:dashed !important;">Перетащите ZIP сюда</div>
-                <div class="mt-1" id="up_prog_wrap" style="max-width:520px; display:none;">
-                  <div class="progress" style="height:12px"><div id="up_pb" class="progress-bar" role="progressbar" style="width:0%"></div></div>
-                  <div class="small text-body-secondary mt-1" id="up_prog_stats" style="display:flex; gap:.75rem; flex-wrap:wrap; align-items:baseline">
-                    <span id="up_prog_pct"></span>
-                    <span id="up_prog_bytes" class="text-body-secondary"></span>
-                    <span id="up_prog_speed"></span>
-                    <span id="up_prog_median" class="text-body-secondary"></span>
-                    <span id="up_prog_peak" class="text-body-secondary"></span>
-                    <span id="up_prog_eta" class="text-body-secondary"></span>
-                  </div>
-                  <div class="small mt-1" id="up_prog_text"></div>
-                </div>
-                <div id="up_speed_wrap" class="mt-1" style="display:none; width:100%; margin-bottom: 8px;">
-                  <canvas id="up_speed" height="60" style="width:100%; background:rgba(255,255,255,0.04); border-radius:4px"></canvas>
-                </div>
-                <div class="small text-body-secondary">Загружает в <code>content/content/launcher/&lt;version&gt;/files/</code> и создаёт манифест в <code>content/manifests/launcher/</code>.</div>
+          <div class="col-xxl-7 col-lg-6">
+            <div data-upload-card="up"></div>
+            <div class="card mt-3">
+              <div class="card-header d-flex align-items-center justify-content-between">
+                <span>Версии лаунчера</span>
+                <button type="button" id="ln_list_btn" class="btn btn-sm btn-outline-secondary">Обновить список</button>
+              </div>
+              <div class="card-body">
+                <div id="ln_ver_list" class="mt-1"></div>
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      <section id="secInbox" class="hidden">
-        <h2>Обращения</h2>
+      <section id="secInbox" class="hidden" role="tabpanel" aria-labelledby="tabInbox">
+        <h2 class="h4">Обращения</h2>
         <div class="row g-3">
-          <div class="col-lg-4">
-            <div class="card">
-              <div class="card-header">Фильтры</div>
-              <div class="card-body d-flex flex-column gap-2">
-                <div class="d-flex gap-2 flex-wrap">
-                  <select id="fb_type" class="form-select form-select-sm" style="max-width:160px">
-                    <option value="">Тип: любой</option>
-                    <option value="bug">Баг</option>
-                    <option value="bug_auto">Баг (авто)</option>
-                    <option value="idea">Идея</option>
-                    <option value="question">Вопрос</option>
-                    <option value="other">Другое</option>
-                  </select>
-                  <select id="fb_status" class="form-select form-select-sm" style="max-width:160px">
-                    <option value="">Статус: любой</option>
-                    <option value="new">Новый</option>
-                    <option value="read">Прочитан</option>
-                  </select>
-                  <select id="fb_important" class="form-select form-select-sm" style="max-width:160px">
-                    <option value="">Все</option>
-                    <option value="1">Только важные</option>
-                    <option value="0">Без важных</option>
-                  </select>
+          <div class="col-xxl-3 col-lg-4">
+            <div class="sticky-col">
+              <div class="card">
+                <div class="card-header">Фильтры</div>
+                <div class="card-body d-flex flex-column gap-2">
+                  <div class="d-flex gap-2 flex-wrap">
+                    <select id="fb_type" class="form-select form-select-sm" style="max-width:160px">
+                      <option value="">Тип: любой</option>
+                      <option value="bug">Баг</option>
+                      <option value="bug_auto">Баг (авто)</option>
+                      <option value="idea">Идея</option>
+                      <option value="question">Вопрос</option>
+                      <option value="other">Другое</option>
+                    </select>
+                    <select id="fb_status" class="form-select form-select-sm" style="max-width:160px">
+                      <option value="">Статус: любой</option>
+                      <option value="new">Новый</option>
+                      <option value="read">Прочитан</option>
+                    </select>
+                    <select id="fb_important" class="form-select form-select-sm" style="max-width:160px">
+                      <option value="">Все</option>
+                      <option value="1">Только важные</option>
+                      <option value="0">Без важных</option>
+                    </select>
+                  </div>
+                  <input id="fb_q" class="form-control form-control-sm" placeholder="Поиск по тексту/контакту..." />
+                  <!-- Тот же тип поля, что на вкладках «Метрики» и «Технические
+                       работы»: раньше здесь был текстовый input, в подсказке
+                       которого перечислялись три допустимых формата даты. -->
+                  <div class="row g-2">
+                    <div class="col-6">
+                      <label class="form-label mb-1 small" for="fb_from">С (местное время)</label>
+                      <input id="fb_from" type="datetime-local" class="form-control form-control-sm">
+                    </div>
+                    <div class="col-6">
+                      <label class="form-label mb-1 small" for="fb_to">По (местное время)</label>
+                      <input id="fb_to" type="datetime-local" class="form-control form-control-sm">
+                    </div>
+                  </div>
+                  <div class="d-flex gap-2">
+                    <button id="fb_refresh" class="btn btn-sm btn-outline-secondary">Обновить</button>
+                    <button id="fb_reset_dates" class="btn btn-sm btn-outline-secondary">Сбросить даты</button>
+                  </div>
+                  <div class="small text-body-secondary">Подсказка: Delete удаляет текущую запись и переходит к следующей.</div>
+                  <div class="danger-zone mt-1">
+                    <div class="small text-body-secondary mb-2">Необратимо: удаляет все обращения без возможности восстановления.</div>
+                    <button id="fb_clear" class="btn btn-sm btn-outline-danger">Очистить всё</button>
+                  </div>
                 </div>
-                <input id="fb_q" class="form-control form-control-sm" placeholder="Поиск по тексту/контакту..." />
-                <div class="d-flex gap-2">
-                  <input id="fb_from" class="form-control form-control-sm" placeholder="с: 2025-09-22 или 22.09.2025 или 2025-09-22 00:00" title="Допустимые форматы: YYYY-MM-DD, DD.MM.YYYY, с временем: YYYY-MM-DD HH:MM или DD.MM.YYYY HH:MM. Будет преобразовано в RFC3339." />
-                  <input id="fb_to" class="form-control form-control-sm" placeholder="по: 2025-09-23 или 23.09.2025 или 2025-09-23 23:59" title="Допустимые форматы: YYYY-MM-DD, DD.MM.YYYY, с временем: YYYY-MM-DD HH:MM или DD.MM.YYYY HH:MM. Будет преобразовано в RFC3339 (для даты без времени — конец суток)." />
-                </div>
-                <div class="d-flex gap-2">
-                  <button id="fb_refresh" class="btn btn-sm btn-outline-secondary">Обновить</button>
-                  <button id="fb_clear" class="btn btn-sm btn-outline-danger">Очистить всё</button>
-                </div>
-                <div class="small text-body-secondary">Подсказка: Delete удаляет текущую запись и переходит к следующей.</div>
               </div>
-            </div>
-            <div class="card mt-3">
-              <div class="card-header d-flex align-items-center justify-content-between">
-                <span>Список обращений</span>
-                <span id="fb_count" class="badge text-bg-secondary">—</span>
-              </div>
-              <div class="card-body">
-                <div id="fb_list" class="list-group small"></div>
+              <div class="card mt-3">
+                <div class="card-header d-flex align-items-center justify-content-between">
+                  <span>Список обращений</span>
+                  <span id="fb_count" class="badge text-bg-secondary">—</span>
+                </div>
+                <div class="card-body">
+                  <div id="fb_list" class="list-group small panel-scroll panel-scroll-md"></div>
+                </div>
               </div>
             </div>
           </div>
-          <div class="col-lg-8">
+          <div class="col-xxl-9 col-lg-8">
             <div class="card">
-              <div class="card-header d-flex align-items-center justify-content-between">
+              <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
                 <span>Просмотр</span>
                 <div class="d-flex align-items-center gap-2 flex-wrap">
-                  <button id="fb_mark_read" class="btn btn-sm btn-outline-secondary">Прочитано</button>
-                  <button id="fb_mark_unread" class="btn btn-sm btn-outline-secondary">Пометить непрочитанным</button>
+                  <!-- «Прочитано» и «Пометить непрочитанным» были двумя равновесными
+                       кнопками для одного состояния — стал переключатель. -->
+                  <div class="form-check form-switch mb-0 me-2">
+                    <input class="form-check-input" type="checkbox" id="fb_read_switch">
+                    <label class="form-check-label small" for="fb_read_switch">Прочитано</label>
+                  </div>
                   <button id="fb_toggle_imp" class="btn btn-sm btn-outline-warning">Важное</button>
-                  <button id="fb_close_view" class="btn btn-sm btn-outline-secondary">Закрыть просмотр</button>
-                  <button id="fb_delete" class="btn btn-sm btn-outline-danger">Удалить</button>
+                  <button id="fb_reply" class="btn btn-sm btn-outline-info" title="Открыть почтовый клиент с ответом на контакт">Ответить</button>
+                  <button id="fb_copy_debug" class="btn btn-sm btn-outline-secondary" title="Скопировать диагностику в буфер обмена">Копировать дебаг</button>
+                  <button id="fb_close_view" class="btn btn-sm btn-outline-secondary">Закрыть</button>
+                  <button id="fb_delete" class="btn btn-sm btn-outline-danger ms-2">Удалить</button>
                 </div>
               </div>
               <div class="card-body">
@@ -195,94 +188,99 @@
         </div>
       </section>
 
-      
-
-      <section id="secMaint" class="hidden">
-        <h2>Технические работы</h2>
-        <div class="row g-3">
-          <div class="col-lg-6">
-            <div class="card">
-              <div class="card-header d-flex align-items-center justify-content-between">
-                <span>Текущее состояние</span>
-                <button id="mt_refresh" type="button" class="btn btn-sm btn-outline-secondary">Обновить</button>
-              </div>
-              <div class="card-body">
-                <div id="mt_status">
-                  <div class="text-body-secondary">Загрузка…</div>
+      <section id="secMaint" class="hidden" role="tabpanel" aria-labelledby="tabMaint">
+        <div class="admin-wrap-text">
+          <h2 class="h4">Технические работы</h2>
+          <div class="row g-3">
+            <div class="col-lg-5">
+              <div class="sticky-col">
+                <div class="card">
+                  <div class="card-header d-flex align-items-center justify-content-between">
+                    <span>Текущее состояние</span>
+                    <button id="mt_refresh" type="button" class="btn btn-sm btn-outline-secondary">Обновить</button>
+                  </div>
+                  <div class="card-body">
+                    <div id="mt_status">
+                      <div class="text-body-secondary">Загрузка…</div>
+                    </div>
+                    <div class="small text-body-secondary mt-3">
+                      Файл состояния: <code id="mt_path">—</code>
+                    </div>
+                  </div>
                 </div>
-                <div class="small text-body-secondary mt-3">
-                  Файл состояния: <code id="mt_path">—</code>
+                <div class="card mt-3">
+                  <div class="card-header">Что увидит пользователь</div>
+                  <div class="card-body">
+                    <div id="mt_preview"></div>
+                    <div class="small text-body-secondary mt-2">
+                      Предпросмотр строится по полю <code>effective</code>: сервер сам гасит режим
+                      вне окна, поэтому запланированное окно до его начала клиенты не увидят.
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
-            <div class="card mt-3">
-              <div class="card-header">Что увидит пользователь</div>
-              <div class="card-body">
-                <div id="mt_preview"></div>
-                <div class="small text-body-secondary mt-2">
-                  Предпросмотр строится по полю <code>effective</code>: сервер сам гасит режим
-                  вне окна, поэтому запланированное окно до его начала клиенты не увидят.
+            <div class="col-lg-7">
+              <div class="card">
+                <div class="card-header d-flex align-items-center justify-content-between">
+                  <span>Настройка режима</span>
+                  <span id="mt_dirty" class="badge text-bg-warning" style="display:none">не сохранено</span>
                 </div>
-              </div>
-            </div>
-          </div>
-          <div class="col-lg-6">
-            <div class="card">
-              <div class="card-header d-flex align-items-center justify-content-between">
-                <span>Настройка режима</span>
-                <span id="mt_dirty" class="badge text-bg-warning" style="display:none">не сохранено</span>
-              </div>
-              <div class="card-body d-flex flex-column gap-3">
-                <div class="form-check form-switch">
-                  <input class="form-check-input" type="checkbox" id="mt_enabled">
-                  <label class="form-check-label" for="mt_enabled">Режим технических работ включён</label>
-                </div>
-                <div>
-                  <label class="form-label mb-1" for="mt_reason">Причина (показывается пользователю)</label>
-                  <textarea id="mt_reason" class="form-control" style="height:90px" placeholder="Например: обновляем серверы раздачи, установка и обновление временно недоступны"></textarea>
-                  <div class="small text-body-secondary mt-1">Осталось байт: <code id="mt_reason_left">500</code> из 500</div>
-                </div>
-                <div class="row g-2">
-                  <div class="col-sm-6">
-                    <label class="form-label mb-1" for="mt_starts">Начало (местное время)</label>
-                    <input id="mt_starts" type="datetime-local" class="form-control form-control-sm">
-                    <div class="small text-body-secondary mt-1">Пусто — «с этого момента»</div>
+                <div class="card-body d-flex flex-column gap-3">
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="mt_enabled">
+                    <label class="form-check-label" for="mt_enabled">Режим технических работ включён</label>
                   </div>
-                  <div class="col-sm-6">
-                    <label class="form-label mb-1" for="mt_ends">Окончание (местное время)</label>
-                    <input id="mt_ends" type="datetime-local" class="form-control form-control-sm">
-                    <div class="small text-body-secondary mt-1">Пусто — «пока не выключат»</div>
+                  <div>
+                    <label class="form-label mb-1" for="mt_reason">Причина (показывается пользователю)</label>
+                    <textarea id="mt_reason" class="form-control" style="height:90px" placeholder="Например: обновляем серверы раздачи, установка и обновление временно недоступны"></textarea>
+                    <div class="small text-body-secondary mt-1">Осталось байт: <code id="mt_reason_left">500</code> из 500</div>
                   </div>
-                  <div class="col-12">
-                    <div class="small text-body-secondary">
-                      В UTC уйдёт: <code id="mt_utc_hint">—</code>
+                  <div class="row g-2">
+                    <div class="col-sm-6">
+                      <label class="form-label mb-1" for="mt_starts">Начало (местное время)</label>
+                      <input id="mt_starts" type="datetime-local" class="form-control form-control-sm">
+                      <div class="small text-body-secondary mt-1">Пусто — «с этого момента»</div>
+                    </div>
+                    <div class="col-sm-6">
+                      <label class="form-label mb-1" for="mt_ends">Окончание (местное время)</label>
+                      <input id="mt_ends" type="datetime-local" class="form-control form-control-sm">
+                      <div class="small text-body-secondary mt-1">Пусто — «пока не выключат»</div>
+                    </div>
+                    <div class="col-12">
+                      <div class="small text-body-secondary">
+                        В UTC уйдёт: <code id="mt_utc_hint">—</code>
+                      </div>
                     </div>
                   </div>
-                </div>
-                <div>
-                  <div class="form-label mb-1">Что заблокировать</div>
-                  <div class="d-flex gap-3 flex-wrap">
-                    <div class="form-check">
-                      <input class="form-check-input" type="checkbox" id="mt_block_install">
-                      <label class="form-check-label" for="mt_block_install">Установку</label>
+                  <div>
+                    <div class="form-label mb-1">Что заблокировать</div>
+                    <div class="d-flex gap-3 flex-wrap">
+                      <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="mt_block_install">
+                        <label class="form-check-label" for="mt_block_install">Установку</label>
+                      </div>
+                      <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="mt_block_update">
+                        <label class="form-check-label" for="mt_block_update">Обновление</label>
+                      </div>
+                      <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="mt_block_launch">
+                        <label class="form-check-label" for="mt_block_launch">Запуск игр</label>
+                      </div>
                     </div>
-                    <div class="form-check">
-                      <input class="form-check-input" type="checkbox" id="mt_block_update">
-                      <label class="form-check-label" for="mt_block_update">Обновление</label>
-                    </div>
-                    <div class="form-check">
-                      <input class="form-check-input" type="checkbox" id="mt_block_launch">
-                      <label class="form-check-label" for="mt_block_launch">Запуск игр</label>
+                    <div class="small text-body-secondary mt-1">
+                      Ни одной галочки — информационный баннер без блокировок.
                     </div>
                   </div>
-                  <div class="small text-body-secondary mt-1">
-                    Ни одной галочки — информационный баннер без блокировок.
+                  <div class="d-flex gap-2 flex-wrap">
+                    <button id="mt_save" type="button" class="btn btn-sm btn-primary">Сохранить</button>
+                    <button id="mt_reset_form" type="button" class="btn btn-sm btn-outline-secondary">Вернуть сохранённое</button>
                   </div>
-                </div>
-                <div class="d-flex gap-2 flex-wrap">
-                  <button id="mt_save" type="button" class="btn btn-sm btn-primary">Сохранить</button>
-                  <button id="mt_reset_form" type="button" class="btn btn-sm btn-outline-secondary">Вернуть сохранённое</button>
-                  <button id="mt_clear" type="button" class="btn btn-sm btn-outline-danger ms-auto">Выключить и удалить состояние</button>
+                  <div class="danger-zone">
+                    <div class="small text-body-secondary mb-2">Удаляет файл состояния целиком: расписание и причину придётся вводить заново.</div>
+                    <button id="mt_clear" type="button" class="btn btn-sm btn-outline-danger">Выключить и удалить состояние</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -290,8 +288,8 @@
         </div>
       </section>
 
-      <section id="secMetrics" class="hidden">
-        <h2>Метрики</h2>
+      <section id="secMetrics" class="hidden" role="tabpanel" aria-labelledby="tabMetrics">
+        <h2 class="h4">Метрики</h2>
         <div class="card mb-3">
           <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
             <span>Период и фильтр</span>
@@ -319,7 +317,6 @@
                 <button id="mx_last30" type="button" class="btn btn-outline-secondary">30 дней</button>
                 <button id="mx_last90" type="button" class="btn btn-outline-secondary">90 дней</button>
               </div>
-              <button id="mx_clear" type="button" class="btn btn-sm btn-outline-danger ms-auto">Удалить все метрики</button>
             </div>
             <div class="small text-body-secondary">
               Пустые поля — период по умолчанию (последние 30 дней). Даты уходят на сервер в UTC (RFC3339);
@@ -350,7 +347,7 @@
             <details id="mx_days_details" class="mt-2">
               <summary class="small text-body-secondary">Те же числа таблицей</summary>
               <div class="table-responsive mt-2">
-                <table class="table table-sm table-dark table-striped align-middle mb-0">
+                <table class="table table-sm table-admin table-striped align-middle mb-0">
                   <thead>
                     <tr>
                       <th>Дата (UTC)</th>
@@ -369,12 +366,12 @@
         </div>
 
         <div class="row g-3">
-          <div class="col-lg-6">
-            <div class="card">
+          <div class="col-xxl-3 col-lg-6">
+            <div class="card h-100">
               <div class="card-header">По играм</div>
               <div class="card-body">
                 <div class="table-responsive">
-                  <table class="table table-sm table-dark table-striped align-middle mb-0">
+                  <table class="table table-sm table-admin table-striped align-middle mb-0">
                     <thead>
                       <tr>
                         <th>Игра</th>
@@ -390,12 +387,13 @@
               </div>
             </div>
           </div>
-          <div class="col-lg-6">
-            <div class="card">
+          <div class="col-xxl-3 col-lg-6">
+            <div class="card h-100">
               <div class="card-header">Топ ошибок</div>
               <div class="card-body">
+                <div class="small text-body-secondary mb-2">Клик по коду открывает последние события с этой ошибкой.</div>
                 <div class="table-responsive">
-                  <table class="table table-sm table-dark table-striped align-middle mb-0">
+                  <table class="table table-sm table-admin table-striped align-middle mb-0">
                     <thead><tr><th>Код ошибки</th><th class="text-end">Событий</th></tr></thead>
                     <tbody id="mx_errors_body"></tbody>
                   </table>
@@ -403,12 +401,12 @@
               </div>
             </div>
           </div>
-          <div class="col-lg-6">
-            <div class="card">
+          <div class="col-xxl-3 col-lg-6">
+            <div class="card h-100">
               <div class="card-header">Версии приложения</div>
               <div class="card-body">
                 <div class="table-responsive">
-                  <table class="table table-sm table-dark table-striped align-middle mb-0">
+                  <table class="table table-sm table-admin table-striped align-middle mb-0">
                     <thead><tr><th>Версия</th><th class="text-end">Событий</th><th class="text-end">Доля</th></tr></thead>
                     <tbody id="mx_versions_body"></tbody>
                   </table>
@@ -416,12 +414,12 @@
               </div>
             </div>
           </div>
-          <div class="col-lg-6">
-            <div class="card">
+          <div class="col-xxl-3 col-lg-6">
+            <div class="card h-100">
               <div class="card-header">Операционные системы</div>
               <div class="card-body">
                 <div class="table-responsive">
-                  <table class="table table-sm table-dark table-striped align-middle mb-0">
+                  <table class="table table-sm table-admin table-striped align-middle mb-0">
                     <thead><tr><th>ОС</th><th class="text-end">Событий</th><th class="text-end">Доля</th></tr></thead>
                     <tbody id="mx_os_body"></tbody>
                   </table>
@@ -430,101 +428,94 @@
             </div>
           </div>
         </div>
+
+        <div class="danger-zone mt-3 d-flex align-items-center gap-3 flex-wrap">
+          <div class="small text-body-secondary flex-grow-1">
+            Удаление метрик необратимо: накопленная история событий пропадёт целиком,
+            восстановить её неоткуда.
+          </div>
+          <button id="mx_clear" type="button" class="btn btn-sm btn-outline-danger">Удалить все метрики</button>
+        </div>
       </section>
 
-      <section id="secManifests" class="hidden">
-        <h2>Игры</h2>
+      <section id="secManifests" class="hidden" role="tabpanel" aria-labelledby="tabManifests">
+        <h2 class="h4">Игры</h2>
         <div class="row g-3">
           <!-- Left column: game selector + preview -->
-          <div class="col-lg-5">
-            <div class="card">
-              <div class="card-header d-flex align-items-center gap-2 flex-wrap">
-                <span>Выбор игры</span>
-                <div class="ms-auto d-flex align-items-center gap-2">
-                  <select id="gm_select" class="form-select form-select-sm" style="width:260px"></select>
-                  <button id="gm_select_refresh" type="button" class="btn btn-sm btn-outline-secondary">Обновить</button>
-                </div>
-              </div>
-              <div class="card-body">
-                <div class="small text-body-secondary mb-2">Текущая: <code id="gm_current_id">—</code></div>
-                <div class="d-none">
-                  <!-- hidden mirror input to keep backward compatibility with existing JS -->
-                  <input id="gid" />
-                </div>
-                <div class="card mt-2">
-                  <div class="card-header d-flex align-items-center gap-2 flex-wrap">
-                    <span>Предпросмотр файлов игры</span>
-                    <div class="ms-auto d-flex align-items-center gap-2">
-                      <label class="small" for="gm_prev_ver">Версия:</label>
-                      <select id="gm_prev_ver" class="form-select form-select-sm" style="width:200px"></select>
-                      <button id="gm_prev_refresh" type="button" class="btn btn-sm btn-outline-secondary">Обновить</button>
-                    </div>
+          <div class="col-xxl-4 col-lg-5">
+            <div class="sticky-col">
+              <div class="card">
+                <div class="card-header d-flex align-items-center gap-2 flex-wrap">
+                  <span>Выбор игры</span>
+                  <div class="ms-auto d-flex align-items-center gap-2">
+                    <select id="gm_select" class="form-select form-select-sm" style="width:220px"></select>
+                    <button id="gm_select_refresh" type="button" class="btn btn-sm btn-outline-secondary">Обновить</button>
                   </div>
-                  <div class="card-body">
-                    <div id="gm_prev_tree" class="border rounded p-2 bg-body-tertiary" style="min-height:200px"></div>
+                </div>
+                <div class="card-body">
+                  <div class="small text-body-secondary mb-2">Текущая: <code id="gm_current_id">—</code></div>
+                  <div class="d-none">
+                    <!-- hidden mirror input to keep backward compatibility with existing JS -->
+                    <input id="gid" />
+                  </div>
+                  <div class="card mt-2">
+                    <div class="card-header d-flex align-items-center gap-2 flex-wrap">
+                      <span>Предпросмотр файлов игры</span>
+                      <div class="ms-auto d-flex align-items-center gap-2">
+                        <label class="small" for="gm_prev_ver">Версия:</label>
+                        <select id="gm_prev_ver" class="form-select form-select-sm" style="width:140px"></select>
+                        <label class="small" for="gm_diff_ver">Сравнить с:</label>
+                        <select id="gm_diff_ver" class="form-select form-select-sm" style="width:140px" title="Показать, что изменилось относительно выбранной версии">
+                          <option value="">— без сравнения —</option>
+                        </select>
+                      </div>
+                      <div class="d-flex align-items-center gap-2 w-100">
+                        <input id="gm_tree_q" class="form-control form-control-sm" style="max-width:240px" placeholder="Фильтр по имени файла...">
+                        <button id="gm_tree_expand" type="button" class="btn btn-sm btn-outline-secondary">Развернуть всё</button>
+                        <button id="gm_tree_collapse" type="button" class="btn btn-sm btn-outline-secondary">Свернуть всё</button>
+                        <span id="gm_diff_summary" class="small ms-auto"></span>
+                      </div>
+                    </div>
+                    <div class="card-body">
+                      <div id="gm_prev_tree" class="border rounded p-2 bg-body-tertiary panel-scroll panel-scroll-lg"></div>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
           </div>
           <!-- Right column: upload + versions list + games management -->
-          <div class="col-lg-7">
-            <div class="card">
-              <div class="card-header">Загрузка версии (ZIP)</div>
-              <div class="card-body d-flex flex-column gap-2">
-                <div class="d-flex flex-wrap align-items-end gap-2">
-                  <label class="me-2">Версия: <input id="ver" value="1.0.0" placeholder="например 1.0.1"></label>
-                  <label class="me-2">ZIP: <input id="man_zip" type="file" accept=".zip"></label>
-                  <label class="me-2"><input type="checkbox" id="man_latest" checked> Обновить latest</label>
-                  <button type="button" id="man_upload" class="btn btn-sm btn-primary">Загрузить</button>
-                </div>
-                <div class="d-flex flex-wrap align-items-end gap-3 small">
-                  <div>
-                    <label class="form-label mb-1" for="man_chunk_size">Размер чанка</label>
-                    <select id="man_chunk_size" class="form-select form-select-sm" style="min-width:200px">
-                      <option value="65536">64 КБ</option>
-                      <option value="131072">128 КБ</option>
-                      <option value="262144">256 КБ</option>
-                      <option value="524288">512 КБ</option>
-                      <option value="1048576">1 МБ</option>
-                      <option value="2097152">2 МБ</option>
-                      <option value="4194304">4 МБ</option>
-                      <option value="8388608" selected>8 МБ</option>
-                      <option value="16777216">16 МБ</option>
-                      <option value="33554432">32 МБ</option>
-                      <option value="67108864">64 МБ</option>
-                      <option value="134217728">128 МБ</option>
-                      <option value="268435456">256 МБ</option>
-                      <option value="536870912">512 МБ</option>
-                    </select>
-                  </div>
-                  <div class="flex-grow-1" style="min-width:240px; max-width:520px">
-                    <label for="man_conc" class="form-label mb-1 d-flex justify-content-between"><span>Параллельность</span><span><code id="man_conc_val">6</code> поток(ов) <span class="ms-2 text-body-secondary">активно <code id="man_active_now">0</code>/<code id="man_active_cap">0</code></span></span></label>
-                    <input id="man_conc" type="range" class="form-range" min="1" max="100" value="6">
-                  </div>
-                  <div class="ms-auto d-flex align-items-end">
-                    <button id="man_cleanup" type="button" class="btn btn-sm btn-outline-warning">Очистить старые/битые</button>
+          <div class="col-xxl-8 col-lg-7">
+            <div data-upload-card="man"></div>
+            <div class="card mt-3">
+              <div class="card-header d-flex align-items-center justify-content-between">
+                <span>Версии игры</span>
+                <button type="button" id="btnList" class="btn btn-sm btn-outline-secondary">Обновить список</button>
+              </div>
+              <div class="card-body">
+                <div id="ver_list" class="mt-1"></div>
+              </div>
+            </div>
+            <div class="card mt-3">
+              <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <span>Игры (редактирование)</span>
+                <div class="d-flex align-items-center gap-2">
+                  <span id="mgm_dirty" class="badge text-bg-warning" style="display:none">не сохранено</span>
+                  <div class="btn-group btn-group-sm">
+                    <button id="mgm_add" class="btn btn-outline-primary">Добавить</button>
+                    <button id="mgm_resync" class="btn btn-outline-secondary" title="Добавить в реестр игры, у которых есть папка манифестов, но нет записи">Найти новые</button>
+                    <button id="mgm_save" class="btn btn-success">Сохранить</button>
                   </div>
                 </div>
-                <div id="man_drop" class="border rounded d-flex align-items-center justify-content-center text-body-secondary" style="height:100px; border-style:dashed !important;">
-                  Перетащите ZIP сюда
+              </div>
+              <div class="card-body">
+                <div class="table-responsive">
+                  <table id="mgm-table" class="table table-admin table-striped align-middle">
+                    <thead><tr><th style="width:200px">Игра (ID)</th><th style="width:240px">Название</th><th style="width:280px">Иконка (URL)</th><th>Путь к EXE</th><th style="width:110px" class="text-end">Действия</th></tr></thead>
+                    <tbody></tbody>
+                  </table>
                 </div>
-                <div class="mt-1" id="man_prog_wrap" style="max-width:520px; display:none;">
-                  <div class="progress" style="height:12px"><div id="man_pb" class="progress-bar" role="progressbar" style="width:0%"></div></div>
-                  <div class="small text-body-secondary mt-1" id="man_prog_stats" style="display:flex; gap:.75rem; flex-wrap:wrap; align-items:baseline">
-                    <span id="man_prog_pct"></span>
-                    <span id="man_prog_bytes" class="text-body-secondary"></span>
-                    <span id="man_prog_speed"></span>
-                    <span id="man_prog_median" class="text-body-secondary"></span>
-                    <span id="man_prog_peak" class="text-body-secondary"></span>
-                    <span id="man_prog_eta" class="text-body-secondary"></span>
-                  </div>
-                  <div class="small mt-1" id="man_prog_text"></div>
-                </div>
-                <div id="man_speed_wrap" class="mt-1" style="display:none; width:100%; margin-bottom: 8px;">
-                  <canvas id="man_speed" height="60" style="width:100%; background:rgba(255,255,255,0.04); border-radius:4px"></canvas>
-                </div>
-                <div class="small text-body-secondary">Загружает в <code>content/content/&lt;gameId&gt;/&lt;version&gt;/files/</code> и создаёт манифест в <code>content/manifests/&lt;gameId&gt;/</code>.</div>
+                <div class="small text-body-secondary">Клик по строке выбирает игру слева.</div>
               </div>
             </div>
             <div class="card mt-3">
@@ -545,7 +536,7 @@
                 </div>
                 <div class="small text-body-secondary" id="bench_status"></div>
                 <div class="table-responsive">
-                  <table class="table table-dark table-striped align-middle table-sm" id="bench_table" style="display:none">
+                  <table class="table table-admin table-striped align-middle table-sm" id="bench_table" style="display:none">
                     <thead><tr><th>Чанк</th><th>Параллельность</th><th>Скорость</th><th>Время</th></tr></thead>
                     <tbody id="bench_tbody"></tbody>
                   </table>
@@ -556,67 +547,41 @@
                 </div>
               </div>
             </div>
-            <div class="card mt-3">
-              <div class="card-header d-flex align-items-center justify-content-between">
-                <span>Версии игры</span>
-                <button type="button" id="btnList" class="btn btn-sm btn-outline-secondary">Обновить список</button>
-              </div>
-              <div class="card-body">
-                <div id="ver_list" class="mt-1"></div>
-              </div>
-            </div>
-            <div class="card mt-3">
-              <div class="card-header d-flex align-items-center justify-content-between">
-                <span>Игры (редактирование)</span>
-                <div class="btn-group btn-group-sm">
-                  <button id="mgm_resync" class="btn btn-warning">Обновить</button>
-                  <button id="mgm_add" class="btn btn-outline-primary">Добавить</button>
-                  <button id="mgm_save" class="btn btn-success">Сохранить</button>
-                </div>
-              </div>
-              <div class="card-body">
-                <div class="table-responsive">
-                  <table id="mgm-table" class="table table-dark table-striped align-middle">
-                    <thead><tr><th style="width:200px">Игра (ID)</th><th style="width:240px">Название</th><th style="width:280px">Иконка (URL)</th><th>Путь к EXE</th><th style="width:110px" class="text-end">Действия</th></tr></thead>
-                    <tbody></tbody>
-                  </table>
-                </div>
-                <div class="small text-body-secondary">Клик по строке выбирает игру слева.</div>
-              </div>
-            </div>
           </div>
         </div>
       </section>
 
-      <section id="secNews" class="hidden">
-        <h2>Новости</h2>
-        <div class="row g-2 justify-content-center">
-          <div class="col-xl-3 col-lg-4">
-            <div class="card mb-3">
-              <div class="card-header">Фильтр</div>
-              <div class="card-body d-flex align-items-end gap-2 flex-wrap">
-                <div><label class="form-label mb-0 small" for="ns_scope">Раздел</label><select id="ns_scope" class="form-select form-select-sm"><option value="launcher">Лаунчер</option><option value="game">Игра</option></select></div>
-                <div id="ns_gid_wrap"><label class="form-label mb-0 small" for="ns_gid">Игра</label><select id="ns_gid" class="form-select form-select-sm" style="width:220px"><option value="">— Выбрать игру —</option></select></div>
-                <div class="ms-auto"><button id="ns_btnRebuild" class="btn btn-sm btn-outline-warning">Пересобрать индекс</button></div>
+      <section id="secNews" class="hidden" role="tabpanel" aria-labelledby="tabNews">
+        <h2 class="h4">Новости</h2>
+        <div class="row g-3">
+          <div class="col-xxl-3 col-lg-4">
+            <div class="sticky-col">
+              <div class="card mb-3">
+                <div class="card-header">Фильтр</div>
+                <div class="card-body d-flex align-items-end gap-2 flex-wrap">
+                  <div><label class="form-label mb-0 small" for="ns_scope">Раздел</label><select id="ns_scope" class="form-select form-select-sm"><option value="launcher">Лаунчер</option><option value="game">Игра</option></select></div>
+                  <div id="ns_gid_wrap"><label class="form-label mb-0 small" for="ns_gid">Игра</label><select id="ns_gid" class="form-select form-select-sm" style="width:180px"><option value="">— Выбрать игру —</option></select></div>
+                  <div class="ms-auto"><button id="ns_btnRebuild" class="btn btn-sm btn-outline-warning">Пересобрать индекс</button></div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-header">Список новостей</div>
+                <div class="card-body"><div id="ns-list" class="news-grid panel-scroll panel-scroll-lg"></div></div>
               </div>
             </div>
-            <div class="card">
-              <div class="card-header">Список новостей</div>
-              <div class="card-body"><div id="ns-list" class="news-grid"></div></div>
-            </div>
           </div>
-          <div class="col-xl-5 col-lg-5">
+          <div class="col-xxl-6 col-lg-8">
             <div class="card mb-3">
-              <div class="card-header">Идентификатор и действия</div>
+              <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <span>Идентификатор и действия</span>
+                <span id="ns_draft_badge" class="small text-body-secondary"></span>
+              </div>
               <div class="card-body d-flex align-items-center gap-2 flex-wrap">
                 <label>Идентификатор: <input id="ns_slug" class="form-control form-control-sm" style="width:260px" placeholder="novost-1"></label>
-                <div class="btn-group" role="group">
-                  <button id="ns_btnNew" class="btn btn-sm btn-primary">Новая</button>
-                </div>
-                <div class="btn-group" role="group">
-                  <button id="ns_btnSave" class="btn btn-sm btn-success">Сохранить</button>
-                  <button id="ns_btnDelete" class="btn btn-sm btn-danger">Удалить</button>
-                </div>
+                <button id="ns_btnNew" class="btn btn-sm btn-primary">Новая</button>
+                <button id="ns_btnSave" class="btn btn-sm btn-success">Сохранить</button>
+                <button id="ns_btnRestoreDraft" class="btn btn-sm btn-outline-info" style="display:none" title="Вернуть текст, сохранённый в этом браузере">Восстановить черновик</button>
+                <button id="ns_btnDelete" class="btn btn-sm btn-outline-danger ms-auto">Удалить</button>
               </div>
             </div>
             <div class="card mb-3">
@@ -624,10 +589,8 @@
               <div class="card-body">
                 <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
                   <button id="ns_gallery_btn" class="btn btn-sm btn-outline-info">Галерея</button>
-                  <div class="d-flex align-items-center gap-2 flex-wrap">
-                    <button id="ns_btnUploadDisk" class="btn btn-sm btn-outline-primary">Загрузить картинку/обложку с диска</button>
-                    <button id="ns_btnUploadUrl" class="btn btn-sm btn-outline-secondary">Загрузить картинку/обложку по URL</button>
-                  </div>
+                  <button id="ns_btnUploadDisk" class="btn btn-sm btn-outline-primary">Загрузить картинку/обложку с диска</button>
+                  <button id="ns_btnUploadUrl" class="btn btn-sm btn-outline-secondary">Загрузить картинку/обложку по URL</button>
                 </div>
                 <textarea id="ns_md" class="form-control" placeholder="# Заголовок
 
@@ -637,28 +600,49 @@
               </div>
             </div>
           </div>
-          <div class="col-xl-4 col-lg-4">
-            <div class="card mb-3">
-              <div class="card-header">Предпросмотр обложки</div>
-              <div id="ns_cover_prev" class="card-img-top" style="height:160px; overflow:hidden"></div>
-            </div>
-            <div class="card mb-3">
-              <div class="card-header">Предпросмотр новости в списке</div>
-              <div class="card-body"><div id="ns_preview_list" style="min-height:140px"></div></div>
-            </div>
-            <div class="card">
-              <div class="card-header">Предпросмотр внутреннего содержимого</div>
-              <div class="card-body"><div id="ns_preview_content" style="min-height:260px"></div></div>
+          <div class="col-xxl-3 col-lg-12">
+            <div class="sticky-col">
+              <div class="card mb-3">
+                <div class="card-header">Предпросмотр обложки</div>
+                <div id="ns_cover_prev" class="card-img-top" style="height:160px; overflow:hidden"></div>
+              </div>
+              <div class="card mb-3">
+                <div class="card-header">Предпросмотр новости в списке</div>
+                <div class="card-body"><div id="ns_preview_list" style="min-height:140px"></div></div>
+              </div>
+              <div class="card">
+                <div class="card-header">Предпросмотр внутреннего содержимого</div>
+                <div class="card-body"><div id="ns_preview_content" class="panel-scroll panel-scroll-md" style="min-height:260px"></div></div>
+              </div>
             </div>
           </div>
         </div>
       </section>
 
-      <div class="mt-3"><pre id="out" class="p-2 bg-body-secondary border" style="min-height:140px"></pre></div>
+      <!-- Журнал. #out остаётся приёмником последнего сообщения (на него
+           смотрят и тесты, и обработчик window.onerror), но теперь он свёрнут:
+           видимым каналом стали тосты в правом верхнем углу, потому что низ
+           страницы на длинных вкладках находится в двух экранах от места,
+           где идёт работа. -->
+      <details class="mt-3">
+        <summary class="small text-body-secondary">
+          Журнал <span id="journal_count" class="badge text-bg-secondary ms-1">0</span>
+          <span id="journal_last" class="ms-2"></span>
+        </summary>
+        <div class="border rounded p-2 mt-2 bg-body-tertiary">
+          <div class="d-flex justify-content-end mb-1">
+            <button id="journal_clear" type="button" class="btn btn-sm btn-outline-secondary">Очистить журнал</button>
+          </div>
+          <div id="journal_log" class="journal-log"></div>
+          <pre id="out" class="hidden"></pre>
+        </div>
+      </details>
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
+  <div id="toast_host" class="toast-host" aria-live="polite" aria-atomic="false"></div>
+
+  <script src="/admin/ui/vendor/bootstrap.bundle.min.js"></script>
   <script src="/admin/ui/ui-throttle.js"></script>
   <script src="/admin/ui/upload-bench.js"></script>
   <script src="/admin/ui/speed-chart.js"></script>
@@ -666,6 +650,7 @@
   <script src="/admin/ui/chunk-upload.js"></script>
   <script src="/admin/ui/rate-estimator.js"></script>
   <script src="/admin/ui/ui-status.js"></script>
+  <script src="/admin/ui/upload-card.js"></script>
   <script src="/admin/ui/admin.js"></script>
   <!-- Gallery Modal -->
   <div class="modal fade" id="ns_gallery" tabindex="-1" aria-hidden="true">
@@ -694,7 +679,7 @@
             <button id="ns_gallery_refresh" class="btn btn-outline-secondary" type="button">Обновить</button>
           </div>
           <div class="row g-2 align-items-end mb-2">
-            <div class="col-12 col-md-6">
+            <div class="col-12 col-md-5">
               <div class="input-group input-group-sm">
                 <span class="input-group-text">URL</span>
                 <input id="ns_gallery_url" type="text" class="form-control" placeholder="https://...">
@@ -706,12 +691,15 @@
                 <input id="ns_gallery_url_name" type="text" class="form-control" placeholder="image">
               </div>
             </div>
-            <div class="col-6 col-md-3 d-flex gap-2">
-              <select id="ns_gallery_overwrite" class="form-select form-select-sm" title="Режим при совпадении имени">
-                <option value="rename">Переименовать</option>
-                <option value="overwrite">Перезаписать</option>
-              </select>
-              <button id="ns_gallery_url_save" type="button" class="btn btn-sm btn-primary">Сохранить по URL</button>
+            <div class="col-6 col-md-4">
+              <div class="input-group input-group-sm">
+                <span class="input-group-text">Если имя занято</span>
+                <select id="ns_gallery_overwrite" class="form-select form-select-sm">
+                  <option value="rename">Переименовать</option>
+                  <option value="overwrite">Перезаписать</option>
+                </select>
+                <button id="ns_gallery_url_save" type="button" class="btn btn-primary">Сохранить по URL</button>
+              </div>
             </div>
           </div>
           <div id="ns_gallery_grid" class="row g-2"></div>
