@@ -483,3 +483,42 @@ test('bench: без файла и без комбинаций прогон не 
   assert.strictEqual(probeCalls(), 0);
   assert.match(journal(), /хотя бы один размер чанка/);
 });
+
+test('bench: упавшая комбинация не роняет прогон и объясняет причину', async (t) => {
+  const chunkSize = 1024 * 1024;
+  let inits = 0;
+  // Первой комбинации сервер отказывает на init, вторая проходит: сетка из
+  // 25 ячеек не должна обрываться из-за одной неудачной, а причина отказа
+  // обязана остаться в таблице — иначе строка просто пустая.
+  const fetchStub = makeFetchStub([
+    {
+      test: (u) => u.includes('/admin/api/upload/init'),
+      respond: (u, init) => {
+        inits++;
+        if (inits === 1) return jsonResponse({ error: 'нет места' }, 500);
+        const body = JSON.parse(init.body);
+        return jsonResponse({
+          uploadId: 'probe-' + inits,
+          chunkSize,
+          totalChunks: Math.ceil(body.totalSize / chunkSize),
+        });
+      },
+    },
+    { test: (u) => u.includes('/admin/api/upload/chunk'), respond: () => jsonResponse({}) },
+    { test: (u) => u.includes('/admin/api/upload/abort'), respond: () => jsonResponse({ status: 'ok' }) },
+  ]);
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
+
+  setBenchFile(window, document, 32 * 1024 * 1024);
+  fillBenchForm(document, { probe: '4', chunks: '1,2', concs: '1' });
+
+  await window.runUploadBench();
+
+  const rows = [...document.querySelectorAll('#bench_tbody tr')];
+  assert.strictEqual(rows.length, 2, 'обе комбинации должны попасть в таблицу');
+  assert.match(rows[0].textContent, /HTTP 500/, 'причина отказа: ' + rows[0].textContent);
+  assert.ok(rows[0].querySelector('.text-danger'), 'ошибка выделена, а не спрятана в общий текст');
+  assert.match(document.getElementById('bench_status').textContent, /Проверено комбинаций: 2, успешно: 1/);
+  // Успешный замер всё равно можно применить — ради него прогон и продолжали.
+  assert.notStrictEqual(document.getElementById('bench_apply_wrap').style.display, 'none');
+});
