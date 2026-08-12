@@ -533,8 +533,28 @@
                   <label class="me-2">Чанки, МБ (через запятую): <input id="bench_chunks_mb" value="16,32,64,128,256" style="width:180px"></label>
                   <label class="me-2">Параллельность (через запятую): <input id="bench_concs" value="4,8,16,32,64" style="width:160px"></label>
                   <button type="button" id="bench_run" class="btn btn-sm btn-primary">Запустить тест</button>
+                  <button type="button" id="bench_stop" class="btn btn-sm btn-outline-danger" style="display:none">Остановить</button>
                 </div>
+                <!-- Сколько это будет стоить — видно ДО запуска: сетка из 25
+                     ячеек по 512 МБ уезжает на сервер двенадцатью гигабайтами
+                     и занимает часы. -->
+                <div class="small" id="bench_plan"></div>
                 <div class="small text-body-secondary" id="bench_status"></div>
+                <div id="bench_progress" style="display:none">
+                  <div class="progress" style="height:14px">
+                    <div id="bench_pb" class="progress-bar" role="progressbar" style="width:0%">0%</div>
+                  </div>
+                  <div class="d-flex flex-wrap gap-3 small mt-1 align-items-baseline">
+                    <span id="bench_step"></span>
+                    <span id="bench_step_bytes" class="text-body-secondary"></span>
+                    <span id="bench_speed"></span>
+                    <span id="bench_elapsed" class="text-body-secondary"></span>
+                    <span id="bench_eta" class="text-body-secondary"></span>
+                  </div>
+                  <div class="progress mt-1" style="height:6px">
+                    <div id="bench_step_pb" class="progress-bar bg-info" role="progressbar" style="width:0%"></div>
+                  </div>
+                </div>
                 <div class="table-responsive">
                   <table class="table table-admin table-striped align-middle table-sm" id="bench_table" style="display:none">
                     <thead><tr><th>Чанк</th><th>Параллельность</th><th>Скорость</th><th>Время</th></tr></thead>

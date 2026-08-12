@@ -16,6 +16,9 @@ const {
   benchCombos,
   pickClosestChunkOption,
   benchUploadOnce,
+  benchProbeBytes,
+  benchPlan,
+  benchProgress,
 } = require(path.join('..', '..', 'server', 'admin_ui', 'upload-bench.js'));
 
 test('parseBenchList разбирает список и масштабирует', () => {
@@ -159,4 +162,122 @@ test('benchUploadOnce ограничивает пробу probeBytes, не за�
   assert.strictEqual(r.ok, true);
   assert.strictEqual(r.bytes, probeBytes, 'должна залиться только проба, а не весь 100-чанковый файл');
   assert.strictEqual(calls.chunk.length, totalChunks);
+});
+
+// ---- Сколько прогон стоит: объём и оценка времени ----
+//
+// Раньше единственным индикатором была строка «Тест 1/25», которая не менялась
+// минутами: ни объёма, ни времени, ни скорости. Эти три функции — арифметика
+// нового статуса, и ошибка в них врёт пользователю ровно там, где он и так не
+// понимает, сколько ещё ждать.
+
+test('benchProbeBytes: чанк крупнее пробы заливается целиком', () => {
+  const MB = 1024 * 1024;
+  // Проба 512 МБ, чанк 256 МБ — уедет 512 МБ.
+  assert.strictEqual(benchProbeBytes(256, 512 * MB, 10000 * MB), 512 * MB);
+  // Проба 100 МБ, чанк 256 МБ — меньше одного чанка залить нельзя, уедет 256 МБ.
+  assert.strictEqual(benchProbeBytes(256, 100 * MB, 10000 * MB), 256 * MB);
+  // Файл меньше пробы — ограничение по файлу.
+  assert.strictEqual(benchProbeBytes(1, 512 * MB, 7 * MB), 7 * MB);
+});
+
+test('benchPlan считает сетку и суммарный объём прогона', () => {
+  const MB = 1024 * 1024;
+  const plan = benchPlan([16, 32], [4, 8], 512 * MB, 10000 * MB);
+  assert.strictEqual(plan.combos.length, 4);
+  // Все четыре ячейки заливают ровно пробу: чанки меньше неё.
+  assert.strictEqual(plan.totalBytes, 4 * 512 * MB);
+  assert.deepStrictEqual(plan.combos[0], { cs: 16, c: 4, bytes: 512 * MB });
+});
+
+test('benchPlan учитывает, что крупный чанк раздувает ячейку', () => {
+  const MB = 1024 * 1024;
+  // Чанк 256 МБ при пробе 64 МБ: ячейка зальёт 256 МБ, а не 64.
+  const plan = benchPlan([16, 256], [1], 64 * MB, 10000 * MB);
+  assert.strictEqual(plan.totalBytes, 64 * MB + 256 * MB);
+});
+
+test('benchPlan на пустых списках даёт пустой прогон, а не исключение', () => {
+  const plan = benchPlan([], [4], 1024, 1024);
+  assert.deepStrictEqual(plan, { combos: [], totalBytes: 0 });
+});
+
+test('benchProgress считает долю, среднюю скорость и остаток', () => {
+  const p = benchProgress({ doneBytes: 250, totalBytes: 1000, elapsedSec: 10, liveSpeed: 0 });
+  assert.strictEqual(p.pct, 25);
+  assert.strictEqual(p.avgSpeed, 25);        // 250 байт за 10 с
+  assert.strictEqual(p.etaSec, 30);          // осталось 750 байт при 25 Б/с
+});
+
+test('benchProgress предпочитает живую скорость средней', () => {
+  // Канал просел вдвое прямо сейчас: остаток обязан вырасти, а не остаться
+  // оптимистичным по средней за весь прогон.
+  const p = benchProgress({ doneBytes: 500, totalBytes: 1000, elapsedSec: 10, liveSpeed: 25 });
+  assert.strictEqual(p.etaSec, 20);
+  assert.strictEqual(p.avgSpeed, 50);
+});
+
+test('benchProgress отдаёт null вместо выдуманного остатка', () => {
+  // На старте скорости ещё нет: «осталось 0 с» врёт убедительнее прочерка.
+  const p = benchProgress({ doneBytes: 0, totalBytes: 1000, elapsedSec: 0 });
+  assert.strictEqual(p.etaSec, null);
+  assert.strictEqual(p.pct, 0);
+  assert.strictEqual(benchProgress({}).etaSec, null);
+});
+
+test('benchProgress не даёт доле уйти выше 100 и остатку в минус', () => {
+  const p = benchProgress({ doneBytes: 1500, totalBytes: 1000, elapsedSec: 10 });
+  assert.strictEqual(p.pct, 100);
+  assert.strictEqual(p.etaSec, 0);
+});
+
+// ---- Прогресс и остановка внутри одной комбинации ----
+
+test('benchUploadOnce репортит прогресс по мере подтверждения чанков', async () => {
+  const chunkSize = 1024 * 1024;
+  const totalChunks = 4;
+  const { fetch } = fakeFetch({ chunkSize, totalChunks });
+  const seen = [];
+  const r = await benchUploadOnce(fakeFile(chunkSize * totalChunks), 1, 2, chunkSize * totalChunks, {
+    fetch,
+    onProgress: (p) => seen.push(p),
+  });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(seen.length, totalChunks, 'по событию на каждый чанк');
+  // Счётчик обязан только расти — на нём держится расчёт скорости.
+  for (let i = 1; i < seen.length; i++) {
+    assert.ok(seen[i].uploadedBytes > seen[i - 1].uploadedBytes, 'байты должны расти');
+  }
+  const last = seen[seen.length - 1];
+  assert.strictEqual(last.uploadedBytes, chunkSize * totalChunks);
+  assert.strictEqual(last.totalSize, chunkSize * totalChunks);
+  assert.strictEqual(last.chunksDone, totalChunks);
+  assert.strictEqual(last.totalChunks, totalChunks);
+});
+
+test('benchUploadOnce останавливается по signal и всё равно отбрасывает пробу', async () => {
+  const chunkSize = 1024 * 1024;
+  const totalChunks = 8;
+  const { fetch, calls } = fakeFetch({ chunkSize, totalChunks });
+  const signal = { aborted: false };
+  // Останавливаем после первого же подтверждённого чанка.
+  const r = await benchUploadOnce(fakeFile(chunkSize * totalChunks), 1, 1, chunkSize * totalChunks, {
+    fetch, signal,
+    onProgress: () => { signal.aborted = true; },
+  });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.aborted, true);
+  assert.ok(calls.chunk.length < totalChunks, 'остаток сетки заливаться не должен');
+  // Незавершённая проба — это гигабайты на диске: abort обязателен и здесь.
+  assert.strictEqual(calls.abort, 1);
+});
+
+test('benchUploadOnce с уже поднятым signal не заливает ни одного чанка', async () => {
+  const chunkSize = 1024;
+  const { fetch, calls } = fakeFetch({ chunkSize, totalChunks: 4 });
+  const r = await benchUploadOnce(fakeFile(chunkSize * 4), 1, 2, chunkSize * 4, {
+    fetch, signal: { aborted: true },
+  });
+  assert.strictEqual(r.aborted, true);
+  assert.strictEqual(calls.chunk.length, 0);
 });

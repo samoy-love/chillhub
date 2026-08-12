@@ -96,3 +96,36 @@ test('монотонный рост даёт ровно ту скорость, �
   for (let t = 0; t <= 20000; t += 200) rate = est.push(t, (bps * t) / 1000);
   assert.strictEqual(Math.round(rate), bps);
 });
+
+test('spanMs показывает, сколько времени покрывает окно', () => {
+  const est = makeRateEstimator(4000);
+  // Меньше двух точек — окна нет, и доверять нечему.
+  assert.strictEqual(est.spanMs(), 0);
+  est.push(1000, 0);
+  assert.strictEqual(est.spanMs(), 0);
+  est.push(1200, 5_000_000);
+  assert.strictEqual(est.spanMs(), 200);
+  est.push(4000, 9_000_000);
+  assert.strictEqual(est.spanMs(), 3000);
+});
+
+test('spanMs не считает точки, выпавшие из окна', () => {
+  // Окно 1 с: старые точки выбрасываются push-ем, и span обязан это отражать —
+  // иначе вызывающий код решит, что накопил длинную историю.
+  const est = makeRateEstimator(1000);
+  est.push(0, 0);
+  est.push(500, 1000);
+  est.push(5000, 2000);
+  assert.ok(est.spanMs() <= 1000, 'span = ' + est.spanMs());
+});
+
+test('короткое окно выдаёт скорость, которой на канале не было', () => {
+  // Ровно тот случай, ради которого появился spanMs: два подтверждения чанка
+  // с разницей в 10 мс дают сотни МБ/с. Сама rate() честно считает, что ей
+  // дали, — отсеивать такие замеры обязан вызывающий, по span.
+  const est = makeRateEstimator(30000);
+  est.push(0, 0);
+  const bogus = est.push(10, 8 * 1024 * 1024);
+  assert.ok(bogus > 500 * 1024 * 1024, 'ожидался всплеск, получено ' + bogus);
+  assert.strictEqual(est.spanMs(), 10);
+});

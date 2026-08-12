@@ -50,6 +50,53 @@
     return best;
   }
 
+  // benchProbeBytes — сколько байт реально заливает одна комбинация. Это не
+  // просто «проба»: чанк меньше пробы не делают, поэтому при чанке крупнее
+  // probeBytes ячейка заливает целый чанк. Формула одна и та же здесь и в
+  // benchUploadOnce — иначе обещанный объём разошёлся бы с фактическим.
+  function benchProbeBytes(chunkSizeMB, probeBytes, fileSize) {
+    const desiredChunk = Math.max(1, Math.round(chunkSizeMB * 1024 * 1024));
+    return Math.max(desiredChunk, Math.min(probeBytes, fileSize));
+  }
+
+  // benchPlan считает, во что обойдётся прогон, ДО его запуска: сколько
+  // комбинаций и сколько гигабайт уедет на сервер. 25 ячеек по 512 МБ — это
+  // 12,5 ГБ и часы времени, и узнавать об этом по факту, глядя на замерший
+  // «Тест 1/25», — худший способ.
+  function benchPlan(chunkSizesMB, concs, probeBytes, fileSize) {
+    const combos = [];
+    let totalBytes = 0;
+    for (const cs of chunkSizesMB) {
+      for (const c of concs) {
+        const bytes = benchProbeBytes(cs, probeBytes, fileSize);
+        combos.push({ cs, c, bytes });
+        totalBytes += bytes;
+      }
+    }
+    return { combos, totalBytes };
+  }
+
+  // benchProgress — арифметика строки состояния: доля выполненного, средняя
+  // скорость за прогон и оценка остатка. ETA считается по живой скорости,
+  // когда она известна, и по средней в остальных случаях: средняя за час
+  // прогона перестаёт замечать, что канал просел прямо сейчас.
+  //
+  // Неизвестное — это null, а не ноль и не Infinity: «осталось 0 с» на старте
+  // врёт убедительнее, чем прочерк.
+  function benchProgress(state) {
+    const s = state || {};
+    const done = Math.max(0, Number(s.doneBytes || 0));
+    const total = Math.max(0, Number(s.totalBytes || 0));
+    const elapsed = Math.max(0, Number(s.elapsedSec || 0));
+    const live = Number(s.liveSpeed || 0);
+    const pct = total > 0 ? Math.min(100, (done * 100) / total) : 0;
+    const avgSpeed = elapsed > 0 && done > 0 ? done / elapsed : 0;
+    const speed = live > 0 ? live : avgSpeed;
+    const left = Math.max(0, total - done);
+    const etaSec = speed > 0 && total > 0 ? left / speed : null;
+    return { pct, avgSpeed, etaSec };
+  }
+
   // benchUploadOnce измеряет реальную скорость заливки чанков для одной пары
   // (chunkSizeMB, conc) на пробном куске файла (не на всём файле — сетка
   // комбинаций иначе перезаливала бы весь архив на каждую ячейку). complete и
@@ -59,12 +106,23 @@
   //
   // deps позволяет тестам подменить fetch/now без обращения к сети и часам —
   // в браузере оба параметра не передаются и берутся из window.fetch/
-  // performance.now.
+  // performance.now. Там же:
+  //   onProgress({uploadedBytes, totalSize, chunksDone, totalChunks})
+  //     вызывается по мере подтверждения чанков. Гранулярность — чанк, а не
+  //     байт: тело fetch-запроса событий отправки не даёт (см. шапку
+  //     chunk-upload.js), поэтому на пробе из двух чанков по 256 МБ шаг
+  //     двигается дважды. Прошедшее время и средняя скорость от этого не
+  //     зависят и тикают ровно — их считает вызывающий.
+  //   signal — объект с полем aborted: прогон на два часа обязан
+  //     останавливаться, не дожидаясь конца сетки.
   async function benchUploadOnce(file, chunkSizeMB, conc, probeBytes, deps) {
     const doFetch = (deps && deps.fetch) || fetch;
     const now = (deps && deps.now) || (() => performance.now());
+    const onProgress = (deps && deps.onProgress) || null;
+    const signal = (deps && deps.signal) || null;
+    const stopped = () => !!(signal && signal.aborted);
     const desiredChunk = Math.max(1, Math.round(chunkSizeMB * 1024 * 1024));
-    const totalSize = Math.max(desiredChunk, Math.min(probeBytes, file.size));
+    const totalSize = benchProbeBytes(chunkSizeMB, probeBytes, file.size);
     const probeName = 'bench-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
     let initRes;
     try {
@@ -80,28 +138,43 @@
     const chunkSize = init.chunkSize || desiredChunk;
     const totalChunks = init.totalChunks || Math.ceil(totalSize / chunkSize);
     const idxs = []; for (let i = 0; i < totalChunks; i++) idxs.push(i);
-    let ptr = 0, active = 0, uploadedBytes = 0, failed = false;
+    let ptr = 0, active = 0, uploadedBytes = 0, chunksDone = 0, failed = false;
     const t0 = now();
     await new Promise((resolve) => {
       function next() {
-        if (failed) { if (active === 0) resolve(); return; }
+        if (failed || stopped()) { if (active === 0) resolve(); return; }
         if (ptr >= idxs.length) { if (active === 0) resolve(); return; }
         const i = idxs[ptr++];
         active++;
         const start = i * chunkSize; const end = Math.min(start + chunkSize, totalSize);
         const blob = file.slice(start, end);
         doFetch('/admin/api/upload/chunk?uploadId=' + encodeURIComponent(uploadId) + '&index=' + i, { method: 'PUT', body: blob })
-          .then(r => { if (r.ok) { uploadedBytes += (end - start); } else { failed = true; } })
+          .then(r => {
+            if (r.ok) {
+              uploadedBytes += (end - start);
+              chunksDone++;
+              if (onProgress) onProgress({ uploadedBytes, totalSize, chunksDone, totalChunks });
+            } else { failed = true; }
+          })
           .catch(() => { failed = true; })
-          .finally(() => { active--; if (!failed && ptr < idxs.length) next(); else if (active === 0) resolve(); });
+          .finally(() => { active--; if (!failed && !stopped() && ptr < idxs.length) next(); else if (active === 0) resolve(); });
       }
       for (let j = 0; j < Math.min(conc, idxs.length); j++) next();
     });
     const elapsedSec = Math.max(0.001, (now() - t0) / 1000);
+    // Пробу отбрасываем в любом случае, включая остановку на полпути: иначе
+    // прерванный прогон оставит на диске гигабайты мусора.
     try { await doFetch('/admin/api/upload/abort?uploadId=' + encodeURIComponent(uploadId), { method: 'POST' }); } catch (_) { }
+    if (stopped()) { return { ok: false, aborted: true, error: 'остановлено' }; }
     if (failed || uploadedBytes <= 0) { return { ok: false, error: 'upload failed' }; }
-    return { ok: true, chunkSize, concurrency: conc, bytes: uploadedBytes, seconds: elapsedSec, speed: uploadedBytes / elapsedSec };
+    return {
+      ok: true, chunkSize, concurrency: conc, bytes: uploadedBytes,
+      seconds: elapsedSec, speed: uploadedBytes / elapsedSec, totalSize, totalChunks,
+    };
   }
 
-  return { parseBenchList, benchCombos, pickClosestChunkOption, benchUploadOnce };
+  return {
+    parseBenchList, benchCombos, pickClosestChunkOption, benchUploadOnce,
+    benchProbeBytes, benchPlan, benchProgress,
+  };
 });
