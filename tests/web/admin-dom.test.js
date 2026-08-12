@@ -323,8 +323,15 @@ test('up_cleanup бьёт по /admin/api/upload/cleanup и пишет резу�
 
 // setBenchFile подкладывает файл в <input type=file>: в jsdom нет DataTransfer,
 // а присвоить .files напрямую нельзя — свойство только для чтения.
+//
+// Размер подменяется, а не выделяется: бенчмарку от файла нужны только
+// file.size и file.slice(), а честная аллокация под сценарий «сборка на
+// 64 ГБ» — это 64 ГБ памяти в тесте. Первая версия так и делала, и на
+// раннере CI прогон растягивался настолько, что фоновый поллинг страницы
+// успевал выстрелить уже после её закрытия.
 function setBenchFile(window, document, size) {
-  const file = new window.File([new Uint8Array(size)], 'bench.zip', { type: 'application/zip' });
+  const file = new window.File([new Uint8Array(8)], 'bench.zip', { type: 'application/zip' });
+  Object.defineProperty(file, 'size', { value: size, configurable: true });
   const input = document.getElementById('bench_zip');
   Object.defineProperty(input, 'files', { value: [file], configurable: true });
   return file;
