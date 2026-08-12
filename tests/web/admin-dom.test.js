@@ -314,3 +314,165 @@ test('up_cleanup бьёт по /admin/api/upload/cleanup и пишет резу�
   await new Promise((res) => setTimeout(res, 0));
   assert.strictEqual(document.getElementById('out').textContent, 'Удалено: 3');
 });
+
+// ---- (d) «Тест параметров загрузки»: план, ход прогона и остановка ----
+//
+// Здесь проверяется не арифметика (она в upload-bench.test.js), а обвязка,
+// из-за которой карточка и выглядела зависшей: план до запуска, строка хода,
+// прогресс-бары и остановка. Дефект «408 МБ/с и осталось 0:00» жил ровно тут.
+
+// setBenchFile подкладывает файл в <input type=file>: в jsdom нет DataTransfer,
+// а присвоить .files напрямую нельзя — свойство только для чтения.
+function setBenchFile(window, document, size) {
+  const file = new window.File([new Uint8Array(size)], 'bench.zip', { type: 'application/zip' });
+  const input = document.getElementById('bench_zip');
+  Object.defineProperty(input, 'files', { value: [file], configurable: true });
+  return file;
+}
+
+// benchFetchStub отвечает на init/chunk/abort пробы. onChunk вызывается перед
+// ответом — через него тест вмешивается в середину прогона (например, жмёт
+// «Остановить»).
+function benchFetchStub(chunkSize, onChunk) {
+  let uploads = 0;
+  return makeFetchStub([
+    {
+      test: (u) => u.includes('/admin/api/upload/init'),
+      respond: (u, init) => {
+        uploads++;
+        const body = JSON.parse(init.body);
+        return jsonResponse({
+          uploadId: 'probe-' + uploads,
+          chunkSize,
+          totalChunks: Math.ceil(body.totalSize / chunkSize),
+        });
+      },
+    },
+    {
+      test: (u) => u.includes('/admin/api/upload/chunk'),
+      respond: () => { if (onChunk) onChunk(); return jsonResponse({}); },
+    },
+    { test: (u) => u.includes('/admin/api/upload/abort'), respond: () => jsonResponse({ status: 'ok' }) },
+  ]);
+}
+
+function fillBenchForm(document, opts) {
+  setValue(document, 'bench_probe_mb', opts.probe);
+  setValue(document, 'bench_chunks_mb', opts.chunks);
+  setValue(document, 'bench_concs', opts.concs);
+}
+
+test('bench: план прогона считается до запуска и обновляется при правке полей', (t) => {
+  const { window, document } = loadAdminPage(t);
+  const plan = document.getElementById('bench_plan');
+
+  // Без файла считать нечего — и молчать правильнее, чем показывать ноль.
+  fillBenchForm(document, { probe: '4', chunks: '1,2', concs: '2' });
+  document.getElementById('bench_chunks_mb').dispatchEvent(new window.Event('input'));
+  assert.strictEqual(plan.textContent, '');
+
+  setBenchFile(window, document, 16 * 1024 * 1024);
+  document.getElementById('bench_zip').dispatchEvent(new window.Event('change'));
+  // 2 комбинации по 4 МБ пробы = 8 МБ.
+  assert.match(plan.textContent, /Прогон: 2 комбинаций/);
+  assert.match(plan.textContent, /8\.0 МБ/);
+  assert.ok(!/text-warning/.test(plan.className), 'восемь мегабайт — не повод пугать');
+});
+
+test('bench: тяжёлый прогон помечается предупреждением, а не прячется в цифрах', (t) => {
+  const { window, document } = loadAdminPage(t);
+  setBenchFile(window, document, 64 * 1024 * 1024 * 1024);
+  // 25 комбинаций по 512 МБ — те самые 12,5 ГБ, ради которых план и появился.
+  fillBenchForm(document, { probe: '512', chunks: '16,32,64,128,256', concs: '4,8,16,32,64' });
+  document.getElementById('bench_zip').dispatchEvent(new window.Event('change'));
+  const plan = document.getElementById('bench_plan');
+  assert.match(plan.textContent, /Прогон: 25 комбинаций/);
+  assert.match(plan.textContent, /это много/);
+  assert.match(plan.className, /text-warning/);
+});
+
+test('bench: прогон доходит до конца и показывает ход, а не одну строку', async (t) => {
+  const chunkSize = 1024 * 1024;
+  const fetchStub = benchFetchStub(chunkSize);
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
+
+  setBenchFile(window, document, 32 * 1024 * 1024);
+  fillBenchForm(document, { probe: '4', chunks: '1,2', concs: '2' });
+
+  await window.runUploadBench();
+
+  // Общий прогресс дошёл до конца, а шаговый бар не остался позади.
+  // jsdom нормализует значение style.width, поэтому сравниваем по смыслу,
+  // а не по строке: '100.0%' у него превращается в '100%'.
+  assert.strictEqual(parseFloat(document.getElementById('bench_pb').style.width), 100);
+  assert.strictEqual(document.getElementById('bench_pb').textContent, '100%');
+  assert.strictEqual(parseFloat(document.getElementById('bench_step_pb').style.width), 100);
+  // Статус называет и время, и число проверенных комбинаций.
+  assert.match(document.getElementById('bench_status').textContent, /Готово за \d+:\d\d\./);
+  assert.match(document.getElementById('bench_status').textContent, /Проверено комбинаций: 2, успешно: 2/);
+  // Строка хода после прогона пустеет: комбинация больше не выполняется.
+  assert.strictEqual(document.getElementById('bench_step').textContent, '');
+  assert.match(document.getElementById('bench_elapsed').textContent, /прошло \d+:\d\d/);
+
+  const rows = [...document.querySelectorAll('#bench_tbody tr')];
+  assert.strictEqual(rows.length, 2);
+  // Лучшая комбинация предложена к применению.
+  assert.notStrictEqual(document.getElementById('bench_apply_wrap').style.display, 'none');
+  assert.match(document.getElementById('bench_best').textContent, /поток/);
+  // Кнопка остановки видна только во время прогона.
+  assert.strictEqual(document.getElementById('bench_stop').style.display, 'none');
+});
+
+test('bench: «Остановить» прерывает сетку и оставляет уже снятые замеры', async (t) => {
+  const chunkSize = 1024 * 1024;
+  let chunks = 0;
+  let stopBtn = null;
+  let win = null;
+  // Жмём «Остановить» в середине второй комбинации.
+  const fetchStub = benchFetchStub(chunkSize, () => {
+    chunks++;
+    if (chunks === 5 && stopBtn) stopBtn.dispatchEvent(new win.Event('click'));
+  });
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
+  win = window;
+  stopBtn = document.getElementById('bench_stop');
+
+  setBenchFile(window, document, 64 * 1024 * 1024);
+  fillBenchForm(document, { probe: '4', chunks: '1,2,4', concs: '1' });
+
+  await window.runUploadBench();
+
+  const status = document.getElementById('bench_status').textContent;
+  assert.match(status, /Остановлено на \d+-й комбинации из 3/);
+  assert.match(status, /Потрачено \d+:\d\d/);
+  // Первая комбинация успела замериться — её результат не должен пропасть.
+  assert.match(status, /Успешных замеров: 1/);
+  const rows = [...document.querySelectorAll('#bench_tbody tr')].map((r) => r.textContent);
+  assert.ok(rows.some((r) => /остановлено/.test(r)), 'прерванная комбинация помечена: ' + rows.join(' | '));
+  assert.ok(rows.length < 3, 'оставшиеся комбинации не запускались: ' + rows.length);
+  // Проба прерванного шага всё равно отброшена — иначе на диске остаются гигабайты.
+  const aborts = fetchStub.calls.filter((c) => c.url.includes('/upload/abort')).length;
+  assert.strictEqual(aborts, rows.length);
+  assert.strictEqual(document.getElementById('bench_stop').style.display, 'none');
+});
+
+test('bench: без файла и без комбинаций прогон не стартует', async (t) => {
+  const fetchStub = benchFetchStub(1024 * 1024);
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
+
+  const probeCalls = () => fetchStub.calls.filter((c) => c.url.includes('/upload/')).length;
+  // Смотрим в журнал, а не в #out: страница на старте сама дёргает несколько
+  // ручек, и последняя из них перетирает в #out наше сообщение. В журнале
+  // остаётся вся история — ровно ради этого он и появился.
+  const journal = () => document.getElementById('journal_log').textContent;
+
+  await window.runUploadBench();
+  assert.strictEqual(probeCalls(), 0, 'без файла пробу заливать некуда');
+  assert.match(journal(), /Выберите файл/);
+
+  setBenchFile(window, document, 1024 * 1024);
+  fillBenchForm(document, { probe: '1', chunks: '', concs: '' });
+  await window.runUploadBench();
+  assert.strictEqual(probeCalls(), 0);
+  assert.match(journal(), /хотя бы один размер чанка/);
+});
