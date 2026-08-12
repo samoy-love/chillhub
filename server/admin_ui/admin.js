@@ -1232,35 +1232,170 @@ async function manifestsReload(){
 // pickClosestChunkOption) — that file is loaded as a separate <script> before
 // this one specifically so it can be covered by tests/web/*.test.js as an
 // ordinary required module, see the comment at its top.
-async function runUploadBench(){
+// benchInputs собирает и проверяет поля теста. Возвращает null и сообщает
+// причину, если вводом пользоваться нельзя.
+function benchInputs(quiet){
   const file = document.getElementById('bench_zip')?.files?.[0];
-  if(!file){ notify('Выберите файл для теста'); return; }
   const probeMB = Number(document.getElementById('bench_probe_mb')?.value||256)||256;
   const probeBytes = Math.max(1, probeMB)*1024*1024;
   const chunkSizesMB = parseBenchList(document.getElementById('bench_chunks_mb')?.value, 1);
   const concs = parseBenchList(document.getElementById('bench_concs')?.value, 1).map(n=> Math.max(1, Math.min(100, Math.round(n))));
-  if(!chunkSizesMB.length || !concs.length){ notify('Укажите хотя бы один размер чанка и одну параллельность'); return; }
+  if(!file){ if(!quiet) notify('Выберите файл для теста'); return null; }
+  if(!chunkSizesMB.length || !concs.length){
+    if(!quiet) notify('Укажите хотя бы один размер чанка и одну параллельность');
+    return null;
+  }
+  return { file, probeBytes, chunkSizesMB, concs };
+}
+
+// benchShowPlan пишет под формой, во что обойдётся прогон: сколько ячеек,
+// сколько байт уедет на сервер и сколько это займёт при последней измеренной
+// скорости. Пересчитывается при каждой правке полей — до нажатия кнопки.
+function benchShowPlan(){
+  const el = document.getElementById('bench_plan'); if(!el) return;
+  const inp = benchInputs(true);
+  if(!inp){ el.textContent = ''; return; }
+  const plan = benchPlan(inp.chunkSizesMB, inp.concs, inp.probeBytes, inp.file.size);
+  const known = Number(window.__benchLastSpeed||0);
+  const eta = known > 0 ? (' · при последней измеренной скорости '+formatSpeed(known)+' это ≈ '+formatEta(plan.totalBytes/known)) : '';
+  // Больше десяти гигабайт пробы — это уже полноценная заливка сборки,
+  // о которой стоит сказать заранее, а не после часа ожидания.
+  const heavy = plan.totalBytes > 10*1024*1024*1024;
+  el.className = 'small ' + (heavy ? 'text-warning' : 'text-body-secondary');
+  el.textContent = 'Прогон: ' + plan.combos.length + ' комбинаций, будет залито и отброшено '
+    + formatBytes(plan.totalBytes) + eta
+    + (heavy ? ' — это много: уменьшите пробу или число комбинаций.' : '');
+}
+
+// Флаг остановки: прогон на два часа обязан прерываться, а не «дождитесь
+// конца сетки». Объект, а не булево, чтобы benchUploadOnce видела изменение.
+let __benchAbort = { aborted: false };
+
+async function runUploadBench(){
+  const inp = benchInputs(); if(!inp) return;
+  const { file, probeBytes, chunkSizesMB, concs } = inp;
+
   const statusEl = document.getElementById('bench_status');
   const table = document.getElementById('bench_table'); const tbody = document.getElementById('bench_tbody');
   const applyWrap = document.getElementById('bench_apply_wrap'); const bestEl = document.getElementById('bench_best');
-  if(table) table.style.display='table'; if(applyWrap) applyWrap.style.display='none';
+  const progWrap = document.getElementById('bench_progress');
+  const pb = document.getElementById('bench_pb');
+  const stepPb = document.getElementById('bench_step_pb');
+  const stepEl = document.getElementById('bench_step');
+  const stepBytesEl = document.getElementById('bench_step_bytes');
+  const speedEl = document.getElementById('bench_speed');
+  const elapsedEl = document.getElementById('bench_elapsed');
+  const etaEl = document.getElementById('bench_eta');
+  const stopBtn = document.getElementById('bench_stop');
+
+  if(table) table.style.display='table';
+  if(applyWrap) applyWrap.style.display='none';
   if(tbody) tbody.innerHTML='';
-  const combos = benchCombos(chunkSizesMB, concs);
+  if(progWrap) progWrap.style.display='';
+  if(stopBtn) stopBtn.style.display='';
+
+  const plan = benchPlan(chunkSizesMB, concs, probeBytes, file.size);
+  const combos = plan.combos;
   const results = [];
-  for(let i=0;i<combos.length;i++){
-    const {cs, c} = combos[i];
-    if(statusEl) statusEl.textContent = 'Тест '+(i+1)+'/'+combos.length+': чанк '+cs+' МБ, параллельность '+c+'...';
-    const r = await benchUploadOnce(file, cs, c, probeBytes);
-    const row = document.createElement('tr');
-    if(r.ok){
-      results.push(r);
-      row.innerHTML = '<td>'+formatBytes(r.chunkSize)+'</td><td>'+r.concurrency+'</td><td>'+formatSpeed(r.speed)+'</td><td>'+r.seconds.toFixed(2)+' c</td>';
-    } else {
-      row.innerHTML = '<td>'+cs+' МБ</td><td>'+c+'</td><td colspan="2" class="text-danger">'+(r.error||'ошибка')+'</td>';
+  __benchAbort = { aborted: false };
+
+  // Скорость по скользящему окну — тем же способом, что и на заливке сборки
+  // (см. rate-estimator.js). Окно шире, чем там: прогресс приходит целыми
+  // чанками, и на 256 МБ это событие раз в несколько секунд.
+  const est = makeRateEstimator(30000);
+  const t0 = performance.now();
+  let doneBytes = 0;        // подтверждено за весь прогон
+  let stepDone = 0;         // подтверждено в текущей комбинации
+  let stepTotal = 0;
+  let stepIdx = 0;
+
+  // Живой скорости верим только после того, как окно наберёт несколько секунд:
+  // подтверждения чанков в начале прилетают пачкой (все потоки стартуют разом),
+  // и разница «байты / доли секунды» давала на экране сотни МБ/с и «осталось
+  // 0:00» при готовности в одну восьмую. До этого показываем среднюю.
+  const LIVE_SPEED_MIN_SPAN_MS = 3000;
+
+  const paint = ()=>{
+    const elapsedSec = (performance.now() - t0)/1000;
+    const live = est.spanMs() >= LIVE_SPEED_MIN_SPAN_MS ? est.rate() : 0;
+    const p = benchProgress({ doneBytes, totalBytes: plan.totalBytes, elapsedSec, liveSpeed: live });
+    if(pb){
+      const w = p.pct.toFixed(1)+'%';
+      pb.style.width = w;
+      pb.textContent = Math.round(p.pct)+'%';
+      pb.setAttribute('aria-valuenow', String(Math.round(p.pct)));
     }
-    if(tbody) tbody.appendChild(row);
+    if(stepPb) stepPb.style.width = (stepTotal>0 ? Math.min(100, stepDone*100/stepTotal) : 0)+'%';
+    if(stepBytesEl) stepBytesEl.textContent = stepTotal>0
+      ? ('шаг: '+formatBytes(stepDone)+' из '+formatBytes(stepTotal))
+      : '';
+    if(speedEl){
+      speedEl.textContent = live>0
+        ? ('скорость '+formatSpeed(live))
+        : (p.avgSpeed>0 ? ('средняя '+formatSpeed(p.avgSpeed)) : 'скорость —');
+    }
+    if(elapsedEl) elapsedEl.textContent = 'прошло '+formatEta(elapsedSec);
+    if(etaEl) etaEl.textContent = p.etaSec !== null
+      ? ('осталось ≈ '+formatEta(p.etaSec)+' · всего '+formatBytes(plan.totalBytes))
+      : ('всего '+formatBytes(plan.totalBytes));
+  };
+
+  // Тик раз в секунду: время и остаток обязаны идти даже тогда, когда внутри
+  // шага ещё ни один чанк не подтверждён. Именно это и выглядело как
+  // «зависло» — строка не менялась минутами.
+  paint();
+  const ticker = setInterval(paint, 1000);
+
+  try{
+    for(let i=0;i<combos.length;i++){
+      if(__benchAbort.aborted) break;
+      const {cs, c, bytes} = combos[i];
+      stepIdx = i+1; stepDone = 0; stepTotal = bytes;
+      if(stepEl) stepEl.textContent = 'комбинация '+stepIdx+'/'+combos.length+': чанк '+cs+' МБ, '+c+' потоков';
+      if(statusEl) statusEl.textContent = '';
+      paint();
+
+      const base = doneBytes;
+      const r = await benchUploadOnce(file, cs, c, probeBytes, {
+        signal: __benchAbort,
+        onProgress: (pr)=>{
+          stepDone = pr.uploadedBytes;
+          stepTotal = pr.totalSize;
+          doneBytes = base + pr.uploadedBytes;
+          est.push(performance.now(), doneBytes);
+          paint();
+        },
+      });
+
+      // Байты незавершённого шага в общий зачёт не идут: он будет отброшен.
+      if(r.ok){ doneBytes = base + r.bytes; } else { doneBytes = base; }
+
+      const row = document.createElement('tr');
+      if(r.ok){
+        results.push(r);
+        window.__benchLastSpeed = r.speed;
+        row.innerHTML = '<td>'+formatBytes(r.chunkSize)+'</td><td>'+r.concurrency+'</td><td>'+formatSpeed(r.speed)+'</td><td>'+formatEta(r.seconds)+'</td>';
+      } else if(r.aborted){
+        row.innerHTML = '<td>'+cs+' МБ</td><td>'+c+'</td><td colspan="2" class="text-body-secondary">остановлено</td>';
+      } else {
+        row.innerHTML = '<td>'+cs+' МБ</td><td>'+c+'</td><td colspan="2" class="text-danger">'+escapeHtml(r.error||'ошибка')+'</td>';
+      }
+      if(tbody) tbody.appendChild(row);
+      paint();
+    }
+  } finally {
+    clearInterval(ticker);
+    if(stopBtn) stopBtn.style.display='none';
+    if(stepEl) stepEl.textContent = '';
+    paint();
   }
-  if(statusEl) statusEl.textContent = 'Готово. Проверено комбинаций: '+combos.length+', успешно: '+results.length+'.';
+
+  const spent = formatEta((performance.now()-t0)/1000);
+  if(statusEl){
+    statusEl.textContent = __benchAbort.aborted
+      ? ('Остановлено на '+stepIdx+'-й комбинации из '+combos.length+'. Успешных замеров: '+results.length+'. Потрачено '+spent+'.')
+      : ('Готово за '+spent+'. Проверено комбинаций: '+combos.length+', успешно: '+results.length+'.');
+  }
   if(results.length){
     results.sort((a,b)=> b.speed - a.speed);
     const best = results[0];
@@ -1268,6 +1403,7 @@ async function runUploadBench(){
     if(bestEl) bestEl.textContent = formatBytes(best.chunkSize)+' / '+best.concurrency+' поток(ов) — '+formatSpeed(best.speed);
     if(applyWrap) applyWrap.style.display='flex';
   }
+  benchShowPlan();
 }
 
 function applyBenchBest(chunkSelId, concSliderId, concValId){
@@ -2781,6 +2917,30 @@ bindBusyClick('btnUpload', upload, 'Загрузка...');
 bindBusyClick('man_upload', manifestsUpload, 'Загрузка...');
 bindBusyClick('bench_run', runUploadBench, 'Тестирование...');
 (()=>{ const b = document.getElementById('bench_apply_game'); if(b) b.addEventListener('click', ()=> applyBenchBest('man_chunk_size','man_conc','man_conc_val')); })();
+// Остановка прогона. Текущая комбинация дольливает уже отправленные чанки и
+// отбрасывает пробу — обрывать её посреди PUT незачем, счёт идёт на секунды.
+(()=>{
+  const stop = document.getElementById('bench_stop'); if(!stop) return;
+  stop.addEventListener('click', (e)=>{
+    e.preventDefault();
+    __benchAbort.aborted = true;
+    stop.disabled = true;
+    stop.textContent = 'Останавливаю...';
+    const st = document.getElementById('bench_status');
+    if(st) st.textContent = 'Останавливаю после текущих чанков...';
+    setTimeout(()=>{ stop.disabled = false; stop.textContent = 'Остановить'; }, 3000);
+  });
+})();
+// План прогона пересчитывается при правке полей: сколько ячеек и сколько
+// гигабайт уедет, видно до нажатия кнопки, а не после часа ожидания.
+(()=>{
+  ['bench_zip','bench_probe_mb','bench_chunks_mb','bench_concs'].forEach(id=>{
+    const el = document.getElementById(id); if(!el) return;
+    el.addEventListener('input', benchShowPlan);
+    el.addEventListener('change', benchShowPlan);
+  });
+  benchShowPlan();
+})();
 // Show live value for concurrency slider
 (()=>{ const s = document.getElementById('man_conc'); const v = document.getElementById('man_conc_val'); if(s&&v){ v.textContent = String(s.value||'6'); s.addEventListener('input', ()=>{ v.textContent = String(s.value||'6'); }); }})();
 (()=>{ const s = document.getElementById('up_conc'); const v = document.getElementById('up_conc_val'); if(s&&v){ v.textContent = String(s.value||'6'); s.addEventListener('input', ()=>{ v.textContent = String(s.value||'6'); }); }})();
