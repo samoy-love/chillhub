@@ -522,3 +522,105 @@ test('bench: упавшая комбинация не роняет прогон 
   // Успешный замер всё равно можно применить — ради него прогон и продолжали.
   assert.notStrictEqual(document.getElementById('bench_apply_wrap').style.display, 'none');
 });
+
+// ---- (e) Иконки действий над ассетами ----
+//
+// Карандаш и корзина рисовались инлайном в шести местах, копии разошлись, и в
+// двух диалогах корзина стала чёрной на тёмной кнопке. Тесты держат ровно то,
+// что тогда не сошлось: разметка одна на всех, а цвет не прибит числом.
+
+// Заглушка bootstrap.Modal: диалоги загрузки/вставки без неё отказываются
+// открываться (и правильно делают — в браузере это значит, что не загрузилась
+// библиотека). Тесту нужна не анимация, а построенный диалогом DOM.
+function stubBootstrapModal(window) {
+  const shown = [];
+  class FakeModal {
+    constructor(el) { this.el = el; shown.push(el); }
+    show() { this.el.dispatchEvent(new window.Event('shown.bs.modal')); }
+    hide() { this.el.dispatchEvent(new window.Event('hidden.bs.modal')); }
+    static getInstance() { return null; }
+  }
+  window.bootstrap = { Modal: FakeModal };
+  return shown;
+}
+
+test('assetIconBtn: одна разметка, цвет не прибит к иконке', (t) => {
+  const { window, document } = loadAdminPage(t);
+  let clicked = 0;
+  const del = window.assetIconBtn('delete', () => { clicked++; }, 'ms-1');
+
+  assert.strictEqual(del.tagName, 'BUTTON');
+  assert.strictEqual(del.type, 'button', 'внутри формы кнопка не должна её отправлять');
+  assert.match(del.className, /asset-icon-btn/);
+  assert.match(del.className, /ms-1/);
+  assert.strictEqual(del.title, 'Удалить');
+  assert.strictEqual(del.getAttribute('aria-label'), 'Удалить');
+  assert.ok(del.querySelector('svg path'), 'иконка на месте');
+  // Ровно то, из-за чего копии разъехались: цвет задаёт CSS, а не атрибут.
+  assert.ok(!/fill="#/.test(del.innerHTML), 'цвет не должен быть прибит в разметке: ' + del.innerHTML);
+  // Иконка декоративная — подпись уже в aria-label, дублировать её не надо.
+  assert.strictEqual(del.querySelector('svg').getAttribute('aria-hidden'), 'true');
+
+  del.dispatchEvent(new window.Event('click'));
+  assert.strictEqual(clicked, 1);
+
+  const rn = window.assetIconBtn('rename');
+  assert.strictEqual(rn.title, 'Переименовать');
+  assert.ok(!/ms-1/.test(rn.className), 'отступ ставится только там, где просили');
+  // Обе иконки берутся из одного места и потому не могут разойтись.
+  assert.notStrictEqual(rn.innerHTML, del.innerHTML);
+  assert.ok(rn.innerHTML.includes('<svg') && del.innerHTML.includes('<svg'));
+
+  assert.strictEqual(window.assetIconBtn('нет такой').innerHTML, '', 'неизвестный вид — пустая кнопка, а не исключение');
+  assert.ok(document.body);
+});
+
+test('галерея рисует кнопки действий той же функцией', (t) => {
+  const { window, document } = loadAdminPage(t);
+  window.renderGalleryGrid([
+    { name: 'launcher', isDir: true },
+    { name: 'cover.png', url: '/news/assets/cover.png' },
+    { name: 'ping.txt', url: '/news/assets/ping.txt' },
+  ]);
+  const grid = document.getElementById('ns_gallery_grid');
+  const btns = grid.querySelectorAll('.asset-icon-btn');
+  // По паре «переименовать/удалить» на каждый из трёх элементов.
+  assert.strictEqual(btns.length, 6);
+  for (const b of btns) {
+    assert.ok(!/fill="#/.test(b.innerHTML), 'цвет прибит в галерее: ' + b.innerHTML);
+  }
+  // Не-картинка показывается плашкой с расширением, а не битым <img>.
+  // В тексте расширение как есть — в верхний регистр его переводит CSS.
+  assert.match(grid.textContent, /txt/i);
+  assert.strictEqual(grid.querySelectorAll('img[src$="ping.txt"]').length, 0);
+});
+
+test('диалог загрузки с диска рисует те же кнопки, что и галерея', async (t) => {
+  const fetchStub = makeFetchStub([
+    {
+      // Шим admin.js переписывает /admin/... в /admin/api/..., поэтому
+      // матчим по хвосту пути, а не по исходному адресу из кода.
+      test: (u) => u.includes('/news/assets'),
+      respond: () => jsonResponse({
+        path: '',
+        items: [{ name: 'game-night', isDir: true }, { name: 'cover.png', url: '/news/assets/cover.png' }],
+      }),
+    },
+  ]);
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
+  stubBootstrapModal(window);
+
+  window.openPickUploadDialog('inline');
+  // fetchPickList уходит в сеть — даём микротаскам прогнаться.
+  for (let i = 0; i < 5; i++) await new Promise((res) => setTimeout(res, 0));
+
+  const btns = document.querySelectorAll('#pick_grid .asset-icon-btn');
+  assert.strictEqual(btns.length, 4, 'по паре кнопок на папку и файл');
+  for (const b of btns) {
+    // Ровно тот дефект: здесь корзина была чёрной, потому что fill забыли.
+    assert.ok(!/fill="#/.test(b.innerHTML), 'цвет прибит в диалоге: ' + b.innerHTML);
+    assert.match(b.className, /asset-icon-btn/);
+  }
+  const titles = [...btns].map((b) => b.title);
+  assert.deepStrictEqual(titles, ['Переименовать', 'Удалить', 'Переименовать', 'Удалить']);
+});
