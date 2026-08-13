@@ -85,9 +85,12 @@ namespace ChillHub.Core.Game {
         /// <returns>true, если запись удалась.</returns>
         public static bool Save(string gameId, ModProfileFile file) {
             try {
-                Directory.CreateDirectory(ProfilesDir);
                 var json = JsonSerializer.Serialize(file, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(ProfilePath(gameId), json);
+                // Атомарная запись — тот же ChillHub.Update.AtomicFile, на который уже переехали
+                // PlaytimeStore и FileHashCache: без неё процесс, убитый посреди записи, оставляет
+                // обрезанный JSON, Load() ловит ошибку парсинга и тихо подставляет профиль
+                // «Vanilla» — выбранные пользователем модпак-профили пропадают бесследно.
+                ChillHub.Update.AtomicFile.WriteAllText(ProfilePath(gameId), json, Core.SelfUpdate.SelfUpdateRules.Utf8NoBom);
                 return true;
             }
             catch (Exception ex) {
