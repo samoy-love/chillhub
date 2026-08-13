@@ -24,6 +24,12 @@ namespace ChillHub.Core.Settings {
         /// <summary>Число потоков подписью рядом с ползунком.</summary>
         internal required string DownloadThreadsText { get; init; }
 
+        /// <summary>Положение ползунка ограничения скорости, МБ/с (0 — без лимита).</summary>
+        internal required int SpeedLimitMbps { get; init; }
+
+        /// <summary>Подпись рядом с ползунком ограничения скорости.</summary>
+        internal required string SpeedLimitText { get; init; }
+
         /// <summary>Отправлять обезличенную статистику.</summary>
         internal required bool SendUsageMetrics { get; init; }
 
@@ -32,6 +38,9 @@ namespace ChillHub.Core.Settings {
 
         /// <summary>Показывать статус в Discord.</summary>
         internal required bool DiscordRichPresence { get; init; }
+
+        /// <summary>Сворачивать окно в трей вместо закрытия.</summary>
+        internal required bool MinimizeToTray { get; init; }
 
         /// <summary>Показывать ли предупреждение о ненастроенной интеграции с Discord.</summary>
         internal required bool DiscordHintVisible { get; init; }
@@ -67,9 +76,12 @@ namespace ChillHub.Core.Settings {
                 GamesPath = HomeFormat.NormalizeWindowsPath(p),
                 DownloadThreads = cfg.DownloadThreads,
                 DownloadThreadsText = cfg.DownloadThreads.ToString(),
+                SpeedLimitMbps = cfg.SpeedLimitMbps,
+                SpeedLimitText = FormatSpeedLimit(cfg.SpeedLimitMbps),
                 SendUsageMetrics = cfg.SendUsageMetrics,
                 AutoErrorReports = cfg.AutoErrorReports,
                 DiscordRichPresence = cfg.DiscordRichPresence,
+                MinimizeToTray = cfg.MinimizeToTray,
                 DiscordHintVisible = !configured,
                 DiscordHintText = configured
                     ? string.Empty
@@ -78,6 +90,13 @@ namespace ChillHub.Core.Settings {
                 VersionText = GetLauncherVersion(),
             };
         }
+
+        /// <summary>
+        /// Подпись рядом с ползунком ограничения скорости: «без лимита» при 0, иначе «N МБ/с».
+        /// </summary>
+        /// <param name="mbps">Значение из конфига.</param>
+        /// <returns>Текст подписи.</returns>
+        internal static string FormatSpeedLimit(int mbps) => mbps <= 0 ? "без лимита" : $"{mbps} МБ/с";
 
         /// <summary>
         /// Версия лаунчера: сначала маркер launcher.version рядом с exe (его пишет апдейтер),

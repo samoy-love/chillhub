@@ -20,6 +20,9 @@ namespace ChillHub.Core {
 
         public int DownloadThreads { get; set; } = 8; // 2..16
 
+        // Ограничение скорости скачивания, МБ/с. 0 — без лимита.
+        public int SpeedLimitMbps { get; set; } = 0; // 0..10
+
         public string ApiBaseUrl { get; set; } = DefaultApiBaseUrl; // base URL for server API/content
 
         public string LastGameId { get; set; } = string.Empty; // last launched game id
@@ -38,6 +41,10 @@ namespace ChillHub.Core {
         // По умолчанию true. Фактически интеграция работает только если владелец лаунчера
         // подставил Application ID в Core/DiscordRichPresence.cs — см. DiscordRichPresence.IsConfigured.
         public bool DiscordRichPresence { get; set; } = true;
+
+        // Сворачивать окно в трей вместо закрытия по крестику/Alt+F4. По умолчанию true —
+        // полностью выйти можно через пункт «Выйти полностью» в меню значка в трее.
+        public bool MinimizeToTray { get; set; } = true;
 
         public static string DefaultGamesPath() {
             if (Directory.Exists(@"D:\")) {
@@ -371,6 +378,14 @@ namespace ChillHub.Core {
 
             if (cfg.DownloadThreads > 16) {
                 cfg.DownloadThreads = 16;
+            }
+
+            if (cfg.SpeedLimitMbps < 0) {
+                cfg.SpeedLimitMbps = 0;
+            }
+
+            if (cfg.SpeedLimitMbps > 10) {
+                cfg.SpeedLimitMbps = 10;
             }
 
             if (string.IsNullOrWhiteSpace(cfg.GamesPath)) {

@@ -78,6 +78,14 @@ namespace ChillHub.Pages {
                 this.ThreadsValueText.Text = view.DownloadThreadsText;
             }
 
+            if (this.SpeedLimitSlider != null) {
+                this.SpeedLimitSlider.Value = view.SpeedLimitMbps;
+            }
+
+            if (this.SpeedLimitValueText != null) {
+                this.SpeedLimitValueText.Text = view.SpeedLimitText;
+            }
+
             if (this.UsageMetricsCheck != null) {
                 this.UsageMetricsCheck.IsChecked = view.SendUsageMetrics;
             }
@@ -88,6 +96,10 @@ namespace ChillHub.Pages {
 
             if (this.DiscordRpcCheck != null) {
                 this.DiscordRpcCheck.IsChecked = view.DiscordRichPresence;
+            }
+
+            if (this.MinimizeToTrayCheck != null) {
+                this.MinimizeToTrayCheck.IsChecked = view.MinimizeToTray;
             }
 
             if (this.DiscordRpcHintText != null) {
@@ -193,13 +205,21 @@ namespace ChillHub.Pages {
             }
         }
 
+        private void SpeedLimitSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) {
+            if (this.SpeedLimitValueText != null) {
+                this.SpeedLimitValueText.Text = SettingsView.FormatSpeedLimit((int)this.SpeedLimitSlider.Value);
+            }
+        }
+
         private void SaveBtn_Click(object sender, RoutedEventArgs e) {
             var saved = SettingsActions.Save(new SettingsInput {
                 GamesPathText = this.GamesPathBox.Text,
                 DownloadThreads = this.ThreadsSlider.Value,
+                SpeedLimitMbps = this.SpeedLimitSlider.Value,
                 AutoErrorReports = this.AutoErrorReportsCheck == null ? null : this.AutoErrorReportsCheck.IsChecked == true,
                 SendUsageMetrics = this.UsageMetricsCheck == null ? null : this.UsageMetricsCheck.IsChecked == true,
                 DiscordRichPresence = this.DiscordRpcCheck == null ? null : this.DiscordRpcCheck.IsChecked == true,
+                MinimizeToTray = this.MinimizeToTrayCheck == null ? null : this.MinimizeToTrayCheck.IsChecked == true,
             });
             if (!saved) {
                 return;
