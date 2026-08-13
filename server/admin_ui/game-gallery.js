@@ -9,21 +9,18 @@
 //     проставляет gallery.json.cover через SetCover и подсвечивает текущую
 //     обложку бейджем.
 //
-// Эндпоинты — контракт трека H (server/internal/adminapi/gamegallery). На
-// момент написания этого файла пакет уже появился в репозитории
-// (server/internal/adminapi/gamegallery/gamegallery.go), но роуты для него ещё
-// не зарегистрированы в server/cmd/api/main.go, поэтому точные URL — предположение
-// по аналогии с server/internal/adminapi/news/assets.go:
+// Эндпоинты — реальные роуты трека H, зарегистрированные в
+// server/cmd/admin/routes.go поверх server/internal/adminapi/gamegallery:
 //
-//   GET  /admin/games/gallery/list?gameId=..&path=..&q=..  -> Handlers.List
+//   GET  /admin/api/games/gallery?gameId=..&path=..&q=..        -> Handlers.List
 //        {path, items:[{name,url,size,modTime,isDir}]}
-//   POST /admin/games/gallery/mkdir        {gameId, path, name}       -> Handlers.Mkdir
-//   POST /admin/games/gallery/upload       multipart {gameId, path, filename, file} -> Handlers.Upload
-//   POST /admin/games/gallery/uploadByUrl  {gameId, path, filename, url} -> Handlers.UploadByURL
-//   POST /admin/games/gallery/delete       {gameId, path, name}       -> Handlers.Delete
-//   POST /admin/games/gallery/rename       {gameId, path, from, to}   -> Handlers.Rename
-//   POST /admin/games/gallery/setCaption   {gameId, file, caption}    -> Handlers.SetCaptionHandler
-//   POST /admin/games/gallery/setCover     {gameId, file}             -> Handlers.SetCoverHandler
+//   POST /admin/api/games/gallery/mkdir        {gameId, path, name}       -> Handlers.Mkdir
+//   POST /admin/api/games/gallery/upload       multipart {gameId, path, filename, file} -> Handlers.Upload
+//   POST /admin/api/games/gallery/uploadByUrl  {gameId, path, filename, url} -> Handlers.UploadByURL
+//   POST /admin/api/games/gallery/delete       {gameId, path, name}       -> Handlers.Delete
+//   POST /admin/api/games/gallery/rename       {gameId, path, from, to}   -> Handlers.Rename
+//   POST /admin/api/games/gallery/setCaption   {gameId, file, caption}    -> Handlers.SetCaptionHandler
+//   POST /admin/api/games/gallery/setCover     {gameId, file}             -> Handlers.SetCoverHandler
 //
 // Важно: Handlers.List (см. gamegallery.go) отдаёт только name/url/size/
 // modTime/isDir — caption и cover в ответе списка НЕТ, они живут отдельно в
@@ -31,21 +28,18 @@
 // /content/<gameId>/gallery/gallery.json (h.contentBase() врастает в
 // PathPrefix("/content/")). Поэтому этот файл сам подтягивает gallery.json и
 // сводит caption/cover с списком файлов на клиенте — см. fetchGalleryMeta().
-//
-// Если трек I вкатит роуты под другими путями — поменять константы EP ниже,
-// остальная логика от точных путей не зависит.
 (function () {
   'use strict';
 
   const EP = {
-    list: '/admin/games/gallery/list',
-    mkdir: '/admin/games/gallery/mkdir',
-    upload: '/admin/games/gallery/upload',
-    uploadByUrl: '/admin/games/gallery/uploadByUrl',
-    delete: '/admin/games/gallery/delete',
-    rename: '/admin/games/gallery/rename',
-    setCaption: '/admin/games/gallery/setCaption',
-    setCover: '/admin/games/gallery/setCover',
+    list: '/admin/api/games/gallery',
+    mkdir: '/admin/api/games/gallery/mkdir',
+    upload: '/admin/api/games/gallery/upload',
+    uploadByUrl: '/admin/api/games/gallery/uploadByUrl',
+    delete: '/admin/api/games/gallery/delete',
+    rename: '/admin/api/games/gallery/rename',
+    setCaption: '/admin/api/games/gallery/setCaption',
+    setCover: '/admin/api/games/gallery/setCover',
   };
 
   // Небольшие копии общих хелперов admin.js: файл должен работать
