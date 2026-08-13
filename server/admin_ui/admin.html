@@ -441,81 +441,157 @@
       <section id="secManifests" class="hidden" role="tabpanel" aria-labelledby="tabManifests">
         <h2 class="h4">Игры</h2>
         <div class="row g-3">
-          <!-- Left column: game selector + preview -->
+          <!-- Left column: searchable game list (drag to reorder = order,
+               звёздочка = pinned) -->
           <div class="col-xxl-4 col-lg-5">
             <div class="sticky-col">
               <div class="card">
                 <div class="card-header d-flex align-items-center gap-2 flex-wrap">
-                  <span>Выбор игры</span>
-                  <div class="ms-auto d-flex align-items-center gap-2">
-                    <select id="gm_select" class="form-select form-select-sm" style="width:220px"></select>
-                    <button id="gm_select_refresh" type="button" class="btn btn-sm btn-outline-secondary">Обновить</button>
-                  </div>
+                  <span>Игры</span>
+                  <span id="mgm_dirty" class="badge text-bg-warning ms-1" style="display:none">не сохранено</span>
                 </div>
                 <div class="card-body">
-                  <div class="small text-body-secondary mb-2">Текущая: <code id="gm_current_id">—</code></div>
-                  <div class="d-none">
-                    <!-- hidden mirror input to keep backward compatibility with existing JS -->
-                    <input id="gid" />
+                  <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+                    <input id="gm_search" class="form-control form-control-sm" style="max-width:220px" placeholder="Поиск по названию или ID...">
+                    <div class="btn-group btn-group-sm ms-auto">
+                      <button id="mgm_add" class="btn btn-outline-primary">Добавить</button>
+                      <button id="mgm_resync" class="btn btn-outline-secondary" title="Добавить в реестр игры, у которых есть папка манифестов, но нет записи">Найти новые</button>
+                      <button id="mgm_save" class="btn btn-success">Сохранить</button>
+                    </div>
                   </div>
-                  <div class="card mt-2">
-                    <div class="card-header d-flex align-items-center gap-2 flex-wrap">
-                      <span>Предпросмотр файлов игры</span>
-                      <div class="ms-auto d-flex align-items-center gap-2">
-                        <label class="small" for="gm_prev_ver">Версия:</label>
-                        <select id="gm_prev_ver" class="form-select form-select-sm" style="width:140px"></select>
-                        <label class="small" for="gm_diff_ver">Сравнить с:</label>
-                        <select id="gm_diff_ver" class="form-select form-select-sm" style="width:140px" title="Показать, что изменилось относительно выбранной версии">
-                          <option value="">— без сравнения —</option>
-                        </select>
-                      </div>
-                      <div class="d-flex align-items-center gap-2 w-100">
-                        <input id="gm_tree_q" class="form-control form-control-sm" style="max-width:240px" placeholder="Фильтр по имени файла...">
-                        <button id="gm_tree_expand" type="button" class="btn btn-sm btn-outline-secondary">Развернуть всё</button>
-                        <button id="gm_tree_collapse" type="button" class="btn btn-sm btn-outline-secondary">Свернуть всё</button>
-                        <span id="gm_diff_summary" class="small ms-auto"></span>
-                      </div>
-                    </div>
-                    <div class="card-body">
-                      <div id="gm_prev_tree" class="border rounded p-2 bg-body-tertiary panel-scroll panel-scroll-lg"></div>
-                    </div>
+                  <div id="gm_list" class="list-group panel-scroll panel-scroll-lg"></div>
+                  <div class="small text-body-secondary mt-2">
+                    Перетащите строку за <code>⋮⋮</code>, чтобы изменить порядок (поле <code>order</code>).
+                    Звёздочка закрепляет игру вверху списка (<code>pinned</code>). Оба действия сохраняются сразу.
+                  </div>
+                  <div class="d-none">
+                    <!-- hidden data model: mgm* functions in admin.js still read/write
+                         these rows unchanged, game-list.js только рисует их поверх. -->
+                    <select id="gm_select"></select>
+                    <button id="gm_select_refresh" type="button"></button>
+                    <input id="gid" />
+                    <table id="mgm-table"><tbody></tbody></table>
                   </div>
                 </div>
               </div>
             </div>
           </div>
-          <!-- Right column: upload + versions list + games management -->
+          <!-- Right column: tabbed card for the selected game -->
           <div class="col-xxl-8 col-lg-7">
-            <div data-upload-card="man"></div>
-            <div class="card mt-3">
-              <div class="card-header d-flex align-items-center justify-content-between">
-                <span>Версии игры</span>
-                <button type="button" id="btnList" class="btn btn-sm btn-outline-secondary">Обновить список</button>
+            <div class="card">
+              <div class="card-header">
+                <span>Игра: <code id="gm_current_id">—</code></span>
               </div>
               <div class="card-body">
-                <div id="ver_list" class="mt-1"></div>
-              </div>
-            </div>
-            <div class="card mt-3">
-              <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
-                <span>Игры (редактирование)</span>
-                <div class="d-flex align-items-center gap-2">
-                  <span id="mgm_dirty" class="badge text-bg-warning" style="display:none">не сохранено</span>
-                  <div class="btn-group btn-group-sm">
-                    <button id="mgm_add" class="btn btn-outline-primary">Добавить</button>
-                    <button id="mgm_resync" class="btn btn-outline-secondary" title="Добавить в реестр игры, у которых есть папка манифестов, но нет записи">Найти новые</button>
-                    <button id="mgm_save" class="btn btn-success">Сохранить</button>
+                <ul class="nav nav-tabs" id="gmTabs" role="tablist">
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="gmtab-overview" data-bs-toggle="tab" data-bs-target="#gmpane-overview" type="button" role="tab" aria-controls="gmpane-overview" aria-selected="true">Обзор</button>
+                  </li>
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="gmtab-versions" data-bs-toggle="tab" data-bs-target="#gmpane-versions" type="button" role="tab" aria-controls="gmpane-versions" aria-selected="false">Версии</button>
+                  </li>
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="gmtab-gallery" data-bs-toggle="tab" data-bs-target="#gmpane-gallery" type="button" role="tab" aria-controls="gmpane-gallery" aria-selected="false">Галерея</button>
+                  </li>
+                  <li class="nav-item" role="presentation" id="gmtab-modpacks-item" style="display:none">
+                    <button class="nav-link" id="gmtab-modpacks" data-bs-toggle="tab" data-bs-target="#gmpane-modpacks" type="button" role="tab" aria-controls="gmpane-modpacks" aria-selected="false">Модпаки</button>
+                  </li>
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="gmtab-danger" data-bs-toggle="tab" data-bs-target="#gmpane-danger" type="button" role="tab" aria-controls="gmpane-danger" aria-selected="false">Опасная зона</button>
+                  </li>
+                </ul>
+                <div class="tab-content pt-3">
+                  <div class="tab-pane fade show active" id="gmpane-overview" role="tabpanel" aria-labelledby="gmtab-overview">
+                    <div class="row g-2 mb-3">
+                      <div class="col-md-4">
+                        <label class="form-label mb-1 small" for="gm_ov_gid">Идентификатор (ID)</label>
+                        <input id="gm_ov_gid" class="form-control form-control-sm" disabled>
+                      </div>
+                      <div class="col-md-8">
+                        <label class="form-label mb-1 small" for="gm_ov_title">Название</label>
+                        <input id="gm_ov_title" class="form-control form-control-sm">
+                      </div>
+                      <div class="col-12">
+                        <label class="form-label mb-1 small" for="gm_ov_icon">Иконка (URL)</label>
+                        <div class="input-group input-group-sm">
+                          <input id="gm_ov_icon" class="form-control mgm-icon" placeholder="/manifests/<gameId>/icon.png">
+                          <button type="button" id="gm_ov_icon_upload" class="btn btn-outline-secondary">Загрузить...</button>
+                          <button type="button" id="gm_ov_icon_default" class="btn btn-outline-secondary">По умолчанию</button>
+                        </div>
+                      </div>
+                      <div class="col-12">
+                        <label class="form-label mb-1 small" for="gm_ov_exe">Путь к EXE</label>
+                        <div class="input-group input-group-sm">
+                          <input id="gm_ov_exe" class="form-control mgm-exe" placeholder="relative\path\to\game.exe">
+                          <button type="button" id="gm_ov_exe_pick" class="btn btn-outline-secondary">Выбрать...</button>
+                        </div>
+                      </div>
+                    </div>
+                    <div data-upload-card="man"></div>
+                    <div class="card mt-3">
+                      <div class="card-header d-flex align-items-center gap-2 flex-wrap">
+                        <span>Предпросмотр файлов игры</span>
+                        <div class="ms-auto d-flex align-items-center gap-2">
+                          <label class="small" for="gm_prev_ver">Версия:</label>
+                          <select id="gm_prev_ver" class="form-select form-select-sm" style="width:140px"></select>
+                          <label class="small" for="gm_diff_ver">Сравнить с:</label>
+                          <select id="gm_diff_ver" class="form-select form-select-sm" style="width:140px" title="Показать, что изменилось относительно выбранной версии">
+                            <option value="">— без сравнения —</option>
+                          </select>
+                        </div>
+                        <div class="d-flex align-items-center gap-2 w-100">
+                          <input id="gm_tree_q" class="form-control form-control-sm" style="max-width:240px" placeholder="Фильтр по имени файла...">
+                          <button id="gm_tree_expand" type="button" class="btn btn-sm btn-outline-secondary">Развернуть всё</button>
+                          <button id="gm_tree_collapse" type="button" class="btn btn-sm btn-outline-secondary">Свернуть всё</button>
+                          <span id="gm_diff_summary" class="small ms-auto"></span>
+                        </div>
+                      </div>
+                      <div class="card-body">
+                        <div id="gm_prev_tree" class="border rounded p-2 bg-body-tertiary panel-scroll panel-scroll-lg"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="tab-pane fade" id="gmpane-versions" role="tabpanel" aria-labelledby="gmtab-versions">
+                    <div class="card">
+                      <div class="card-header d-flex align-items-center justify-content-between">
+                        <span>Версии игры</span>
+                        <button type="button" id="btnList" class="btn btn-sm btn-outline-secondary">Обновить список</button>
+                      </div>
+                      <div class="card-body">
+                        <div id="ver_list" class="mt-1"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="tab-pane fade" id="gmpane-gallery" role="tabpanel" aria-labelledby="gmtab-gallery">
+                    <div class="card">
+                      <div class="card-body">Открывается тем же интерфейсом — см. Трек J</div>
+                    </div>
+                  </div>
+                  <div class="tab-pane fade" id="gmpane-modpacks" role="tabpanel" aria-labelledby="gmtab-modpacks">
+                    <div class="row g-2 mb-3">
+                      <div class="col-12">
+                        <label class="form-label mb-1 small" for="gm_ov_thunderstore">Сообщество Thunderstore</label>
+                        <input id="gm_ov_thunderstore" class="form-control form-control-sm" placeholder="lethal-company">
+                        <div class="small text-body-secondary mt-1">Пусто — вкладка «Модпаки» скрыта для этой игры.</div>
+                      </div>
+                    </div>
+                    <div class="card">
+                      <div class="card-header">Модпаки (Thunderstore)</div>
+                      <div class="card-body" id="mp_root"></div>
+                    </div>
+                  </div>
+                  <div class="tab-pane fade" id="gmpane-danger" role="tabpanel" aria-labelledby="gmtab-danger">
+                    <div class="danger-zone">
+                      <div class="small text-body-secondary mb-2">
+                        Необратимо: снятие с публикации скрывает игру из лаунчера, удаление стирает запись из реестра.
+                      </div>
+                      <div class="d-flex gap-2 flex-wrap">
+                        <button type="button" id="gm_dz_unpublish" class="btn btn-sm btn-outline-danger">Снять с публикации</button>
+                        <button type="button" id="gm_dz_delete" class="btn btn-sm btn-outline-danger">Удалить игру и все версии</button>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div class="card-body">
-                <div class="table-responsive">
-                  <table id="mgm-table" class="table table-admin table-striped align-middle">
-                    <thead><tr><th style="width:200px">Игра (ID)</th><th style="width:240px">Название</th><th style="width:280px">Иконка (URL)</th><th>Путь к EXE</th><th style="width:110px" class="text-end">Действия</th></tr></thead>
-                    <tbody></tbody>
-                  </table>
-                </div>
-                <div class="small text-body-secondary">Клик по строке выбирает игру слева.</div>
               </div>
             </div>
             <div class="card mt-3">
@@ -723,6 +799,8 @@
   <script src="/admin/ui/ui-status.js"></script>
   <script src="/admin/ui/upload-card.js"></script>
   <script src="/admin/ui/game-gallery.js"></script>
+  <script src="/admin/ui/game-list.js"></script>
+  <script src="/admin/ui/modpacks.js"></script>
   <script src="/admin/ui/admin.js"></script>
   <!-- Gallery Modal -->
   <div class="modal fade" id="ns_gallery" tabindex="-1" aria-hidden="true">

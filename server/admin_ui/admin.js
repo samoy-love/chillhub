@@ -1827,10 +1827,18 @@ async function mgmReload(){
       if(id===curGid){ r.classList.add('mgm-selected'); break; }
     }
   }
+  // game-list.js рисует поверх этой (скрытой) таблицы searchable-список и
+  // карточку «Обзор» — оба перечитываются из тех же строк.
+  if(window.gmListRender) window.gmListRender();
+  if(window.gmSyncOverviewFromRow) window.gmSyncOverviewFromRow(curGid);
 }
 
 function mgmAppendRow(tb, it){
   const tr = document.createElement('tr');
+  // pinned хранится на самой строке: до трека H сервер это поле не отдаёт и
+  // не сохраняет, но game-list.js уже пишет его в payload /admin/games/save
+  // по контракту из PLAN.md, раздел 1.
+  tr.dataset.pinned = it && it.pinned ? '1' : '0';
   // Значения приходят с сервера (/admin/games и /admin/games/scan — по сути
   // имена каталогов на диске), поэтому в атрибут их можно класть только
   // экранированными.
@@ -1878,6 +1886,8 @@ function mgmAppendRow(tb, it){
     gmPrevEnsureVersionsAndRender(id);
     // also refresh versions list to avoid stale list from previous game
     manifestsReload();
+    if(window.gmSyncOverviewFromRow) window.gmSyncOverviewFromRow(id);
+    if(window.gmListRender) window.gmListRender();
   });
   // bind picker button
   const btnPick = tr.querySelector('button.mgm-pick');
@@ -1964,19 +1974,24 @@ function mgmAppendRow(tb, it){
 
 function mgmAddRow(){
   const tb = document.querySelector('#mgm-table tbody'); if(!tb) return;
-  mgmAppendRow(tb, {gameId:'', title:'', exeRelativePath:'', iconUrl:''});
+  mgmAppendRow(tb, {gameId:'', title:'', exeRelativePath:'', iconUrl:'', pinned:false});
   mgmSetDirty(true);
+  if(window.gmListRender) window.gmListRender();
 }
 
 async function mgmSave(){
   const rows = Array.from(document.querySelectorAll('#mgm-table tbody tr'));
-  const items = rows.map(tr=>{
+  const items = rows.map((tr, idx)=>{
     const tds = tr.querySelectorAll('td');
     return {
       gameId: tds[0].querySelector('input').value.trim(),
       title: tds[1].querySelector('input').value.trim(),
       iconUrl: tds[2].querySelector('input').value.trim(),
-      exeRelativePath: tds[3].querySelector('input').value.trim()
+      exeRelativePath: tds[3].querySelector('input').value.trim(),
+      // order/pinned — контракт PLAN.md §1 (трек H): order — позиция в списке
+      // (её же меняет drag-reorder в game-list.js), pinned — звёздочка там же.
+      order: idx,
+      pinned: tr.dataset.pinned === '1',
     };
   }).filter(it=>it.gameId);
   // basic validation
@@ -2156,6 +2171,8 @@ document.addEventListener('DOMContentLoaded', function(){
     const lab = document.getElementById('gm_current_id'); if(lab) lab.textContent = chosen || '—';
     if(chosen){ manifestsReload(); gmPrevEnsureVersionsAndRender(chosen); }
     if(__gameGallery) __gameGallery.fetchAndRender();
+    if(window.gmSyncOverviewFromRow) window.gmSyncOverviewFromRow(chosen);
+    if(window.gmListRender) window.gmListRender();
   }
   // Галерея выбранной игры (трек J). Живёт своей карточкой на этой же
   // вкладке (см. #gg_root в admin.html) пока трек I не завёл отдельную
@@ -2165,6 +2182,16 @@ document.addEventListener('DOMContentLoaded', function(){
     __gameGallery = window.createGameGallery({
       root: '#gg_root',
       getGameId: () => (document.getElementById('gm_select')?.value || document.getElementById('gid')?.value || '').trim(),
+    });
+  }
+  // Модпаки выбранной игры (трек K). Живёт в собственной вкладке «Модпаки»
+  // (#gmpane-modpacks/#mp_root), которую game-list.js прячет/показывает по
+  // заполненности thunderstoreCommunity — см. updateModpacksTabVisibility там.
+  if (window.createModpacksPanel && document.getElementById('mp_root')) {
+    window.__modpacksPanel = window.createModpacksPanel({
+      root: '#mp_root',
+      getGameId: () => (document.getElementById('gm_select')?.value || document.getElementById('gid')?.value || '').trim(),
+      getCommunity: () => (document.getElementById('gm_ov_thunderstore')?.value || '').trim(),
     });
   }
   // initial load
@@ -2180,6 +2207,8 @@ document.addEventListener('DOMContentLoaded', function(){
     const lab = document.getElementById('gm_current_id'); if(lab) lab.textContent = chosen || '—';
     if(chosen){ manifestsReload(); gmPrevEnsureVersionsAndRender(chosen); }
     if(__gameGallery) __gameGallery.fetchAndRender();
+    if(window.gmSyncOverviewFromRow) window.gmSyncOverviewFromRow(chosen);
+    if(window.gmListRender) window.gmListRender();
     const rows = Array.from(document.querySelectorAll('#mgm-table tbody tr'));
     rows.forEach(r=> r.classList.remove('mgm-selected'));
     for(const r of rows){
