@@ -209,6 +209,63 @@ func TestDownloadModpack_GraphTooLarge(t *testing.T) {
 	}
 }
 
+// evilZip builds a zip whose single entry tries to escape the extraction
+// directory, the same crafted payload TestExtractZip_ZipSlip uses directly —
+// here it's fed through DownloadModpack as a DEPENDENCY node instead, to
+// check the whole resolve's temp-directory cleanup, not just extractZip.
+func evilZip(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create("../../evil.txt")
+	if err != nil {
+		t.Fatalf("create evil entry: %v", err)
+	}
+	if _, err := w.Write([]byte("pwned")); err != nil {
+		t.Fatalf("write evil entry: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// TestDownloadModpack_CleansUpTempDirsOnPartialFailure checks that a node
+// which fails AFTER its temp directory is created (here: the root succeeds,
+// its dependency fails extraction with a zip-slip entry) doesn't leak that
+// directory — a node only reaches `resolver.nodes` once fully resolved, so
+// cleanup has to track every MkdirTemp call, not just the successful ones.
+func TestDownloadModpack_CleansUpTempDirsOnPartialFailure(t *testing.T) {
+	fc := newFakeClient()
+	fc.detail["owner-a"] = &tsPackageDetail{}
+	fc.detail["owner-a"].Latest.VersionNumber = "1.0.0"
+	fc.detail["owner-a"].Latest.Dependencies = []string{"owner-b-1.0.0"}
+	fc.zips["owner-a-1.0.0"] = buildZip(t, nil, map[string]string{"BepInEx/plugins/a.dll": "a"})
+	fc.zips["owner-b-1.0.0"] = evilZip(t)
+
+	before, err := filepath.Glob(filepath.Join(os.TempDir(), "chillhub-modpack-*"))
+	if err != nil {
+		t.Fatalf("glob before: %v", err)
+	}
+
+	h, _ := newTestHandlers(t, fc)
+	err = h.DownloadModpack(context.Background(), "mygame", "owner", "a", "1.0.0", nil)
+	if err == nil {
+		t.Fatal("expected the zip-slip dependency to fail DownloadModpack")
+	}
+	if !errors.Is(err, ErrZipSlip) {
+		t.Fatalf("expected ErrZipSlip, got %v", err)
+	}
+
+	after, err := filepath.Glob(filepath.Join(os.TempDir(), "chillhub-modpack-*"))
+	if err != nil {
+		t.Fatalf("glob after: %v", err)
+	}
+	if len(after) > len(before) {
+		t.Fatalf("temp dirs leaked: before=%v after=%v", before, after)
+	}
+}
+
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

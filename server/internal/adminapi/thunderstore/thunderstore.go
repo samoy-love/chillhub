@@ -426,6 +426,13 @@ type resolver struct {
 	// in this resolve — see extractBudget's doc comment for why a per-node
 	// budget isn't enough.
 	extractBudget *extractBudget
+	// tempDirs records EVERY temp directory this resolve has created, the
+	// moment it's created — not just the ones for nodes that made it all the
+	// way into `nodes`. A node that fails partway (extraction, manifest read,
+	// service-file cleanup) after MkdirTemp but before being appended to
+	// `nodes` would otherwise never reach cleanupTempDirs, leaking one orphan
+	// directory on disk per failed attempt.
+	tempDirs []string
 }
 
 // visit downloads and extracts one node (if not already visited), then
@@ -462,6 +469,9 @@ func (rs *resolver) visit(ctx context.Context, ref PackageRef, depsHint []string
 	if err != nil {
 		return err
 	}
+	// Recorded immediately, before anything that can fail — see the tempDirs
+	// field doc comment on why this can't wait until the node is fully resolved.
+	rs.tempDirs = append(rs.tempDirs, tempDir)
 	if err := extractZip(zipBytes, tempDir, rs.extractBudget); err != nil {
 		return fmt.Errorf("распаковка %s: %w", key, err)
 	}
@@ -505,8 +515,11 @@ func (rs *resolver) progress(msg string) {
 }
 
 func (rs *resolver) cleanupTempDirs() {
-	for _, n := range rs.nodes {
-		_ = os.RemoveAll(n.tempDir)
+	// rs.tempDirs, not rs.nodes: a node that failed partway through never
+	// reaches rs.nodes, but its temp directory still exists on disk and still
+	// needs removing.
+	for _, dir := range rs.tempDirs {
+		_ = os.RemoveAll(dir)
 	}
 }
 
@@ -572,28 +585,13 @@ func cleanupServiceFiles(dir string) ([]string, error) {
 // still total under MaxGraphBytes compressed across the whole graph — a
 // decompression-bomb style disk fill this budget is what actually closes, by
 // being shared across the whole resolve (see resolver.extractBudget), not
-// reset per node. Mirrors adminapi/builds/zip.go's extractBudget, which this
-// package can't import directly (unexported), but the shape and the "never
-// trust the declared size, count real bytes written" rule are the same.
-type extractBudget struct {
-	limit     int64
-	remaining int64
-}
+// reset per node. The counting itself is shared with adminapi/builds' own
+// zip-bomb guard via adminutil.ExtractBudget — this package used to carry a
+// byte-for-byte duplicate of that type before both were consolidated there.
+type extractBudget = adminutil.ExtractBudget
 
 func newExtractBudget(limit int64) *extractBudget {
-	return &extractBudget{limit: limit, remaining: limit}
-}
-
-func (b *extractBudget) copy(dst io.Writer, src io.Reader) error {
-	n, err := io.Copy(dst, io.LimitReader(src, b.remaining+1))
-	b.remaining -= n
-	if err != nil {
-		return err
-	}
-	if b.remaining < 0 {
-		return fmt.Errorf("архив распаковывается в больше чем %d байт суммарно на весь граф зависимостей", b.limit)
-	}
-	return nil
+	return adminutil.NewExtractBudget(limit)
 }
 
 // extractZip extracts zip bytes into dir, refusing any entry that would
@@ -647,10 +645,14 @@ func extractOneEntry(f *zip.File, dir string, budget *extractBudget) error {
 	}
 	defer func() { _ = out.Close() }()
 	// The zip's own uncompressed-size header is not trusted for the loop
-	// bound; budget.copy counts real bytes written and is shared across every
-	// entry in the archive, so a crafted archive can't zip-bomb this into
-	// filling the disk one entry at a time either.
-	if err := budget.copy(out, rc); err != nil {
+	// bound; budget.Copy counts real bytes written and is shared across every
+	// entry in the archive (and across every node of the graph — see
+	// extractBudget's doc comment), so a crafted archive can't zip-bomb this
+	// into filling the disk one entry, or one node, at a time either.
+	if err := budget.Copy(out, rc); err != nil {
+		if errors.Is(err, adminutil.ErrExtractBudgetExceeded) {
+			return fmt.Errorf("архив распаковывается в больше чем %d байт суммарно на весь граф зависимостей: %w", MaxGraphExtractedBytes, err)
+		}
 		return err
 	}
 	return nil
