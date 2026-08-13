@@ -377,6 +377,11 @@ namespace ChillHub.Core.Sync {
 
             var degree = Math.Clamp(ConfigService.Current.DownloadThreads, 2, 16);
 
+            // Общий на все параллельные загрузки лимитер: один и тот же экземпляр
+            // делят все потоки скачивания, поэтому ограничивается суммарная скорость,
+            // а не скорость каждого потока по отдельности. null — лимита нет.
+            var speedLimiter = SpeedLimiter.Create(ConfigService.Current.SpeedLimitMbps);
+
             // Проверка свободного места (без запаса) на КАЖДОМ задействованном диске.
             // Скачиваем в LocalRoot, а применяем в ApplyRoot — при самообновлении это
             // разные тома (%TEMP% и каталог установки), и проверка только по одному
@@ -514,6 +519,13 @@ namespace ChillHub.Core.Sync {
                                                     while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), attemptCt).ConfigureAwait(false)) > 0) {
                                                         await dst.WriteAsync(buffer.AsMemory(0, read), attemptCt).ConfigureAwait(false);
                                                         Interlocked.Add(ref downloaded, read);
+
+                                                        // Ограничение скорости: список токенов общий на все потоки загрузки,
+                                                        // поэтому ждём здесь, а не после записи — иначе сверхлимитные байты
+                                                        // уже осели бы на диске до того, как поток притормозил.
+                                                        if (speedLimiter != null) {
+                                                            await speedLimiter.ThrottleAsync(read, attemptCt).ConfigureAwait(false);
+                                                        }
 
                                                         // Данные пришли — отодвигаем дедлайн простоя
                                                         stallCts.CancelAfter(StallTimeoutMs);
