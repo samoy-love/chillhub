@@ -40,8 +40,9 @@ func aliasOf(path string) string {
 // apiRoutes lists every canonical admin endpoint. Adding one here registers
 // both prefixes; there is no second list to keep in sync.
 func (s *server) apiRoutes() []route {
-	b, n, g, f := s.builds, s.news, s.games, s.feedback
+	b, n, g, f, gg := s.builds, s.news, s.games, s.feedback, s.gamegallery
 	mt, mx := s.maintenance, s.metrics
+	ts := s.thunderstore
 	return []route{
 		// Health probe (allowlisted in the auth middleware).
 		{path: "/admin/api/health", handler: func(w http.ResponseWriter, _ *http.Request) { _, _ = fmt.Fprintln(w, "ok") }},
@@ -126,6 +127,16 @@ func (s *server) apiRoutes() []route {
 		{path: "/admin/api/games/save", handler: g.Save},
 		{path: "/admin/api/games/icon/upload", handler: g.IconUpload},
 		{path: "/admin/api/games/scan", handler: g.Scan},
+
+		// Per-game screenshot gallery.
+		{path: "/admin/api/games/gallery", handler: gg.List},
+		{path: "/admin/api/games/gallery/mkdir", handler: gg.Mkdir},
+		{path: "/admin/api/games/gallery/upload", handler: gg.Upload},
+		{path: "/admin/api/games/gallery/uploadByUrl", handler: gg.UploadByURL},
+		{path: "/admin/api/games/gallery/delete", handler: gg.Delete},
+		{path: "/admin/api/games/gallery/rename", handler: gg.Rename},
+		{path: "/admin/api/games/gallery/setCover", handler: gg.SetCoverHandler},
+		{path: "/admin/api/games/gallery/setCaption", handler: gg.SetCaptionHandler},
 	}
 }
 

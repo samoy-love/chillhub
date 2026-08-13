@@ -195,6 +195,31 @@ func TestEmptyRegistryIsStorable(t *testing.T) {
 	}
 }
 
+// Get must order the gallery: pinned games first, then by the operator's
+// Order, then by GameID for anything left tied — never the order the JSON
+// file happened to list entries in.
+func TestGetSortsPinnedThenOrderThenGameID(t *testing.T) {
+	h := New(t.TempDir())
+	saveRegistry(t, h, []Entry{
+		{GameID: "z-unpinned", Order: 0},
+		{GameID: "b-pinned-2", Pinned: true, Order: 2},
+		{GameID: "a-pinned-2", Pinned: true, Order: 2},
+		{GameID: "pinned-1", Pinned: true, Order: 1},
+		{GameID: "a-unpinned", Order: 0},
+	})
+
+	got := decodeItems(t, h.Get, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/games", nil))
+	want := []string{"pinned-1", "a-pinned-2", "b-pinned-2", "a-unpinned", "z-unpinned"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d entries, want %d: %+v", len(got), len(want), got)
+	}
+	for i, gid := range want {
+		if got[i].GameID != gid {
+			t.Fatalf("position %d = %q, want %q (full order: %+v)", i, got[i].GameID, gid, got)
+		}
+	}
+}
+
 // saveRegistry posts a list and fails the test if it is not stored.
 func saveRegistry(t *testing.T, h *Handlers, items []Entry) {
 	t.Helper()
