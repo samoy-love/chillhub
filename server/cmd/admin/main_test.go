@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -238,6 +240,53 @@ func TestAliasOf(t *testing.T) {
 		if got := aliasOf(in); got != want {
 			t.Errorf("aliasOf(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestGalleryOnlyScopesContentMount checks that the /content/ mount (added so
+// the admin UI can display gallery images without an external nginx) serves
+// gallery files but refuses everything else under content/ — directory
+// listings and, in particular, content/<gameId>/modpacks/, which this
+// unauthenticated mount was never meant to expose.
+func TestGalleryOnlyScopesContentMount(t *testing.T) {
+	dir := t.TempDir()
+	galleryFile := filepath.Join(dir, "lethal-company", "gallery", "cover.png")
+	if err := os.MkdirAll(filepath.Dir(galleryFile), 0o755); err != nil {
+		t.Fatalf("mkdir gallery: %v", err)
+	}
+	if err := os.WriteFile(galleryFile, []byte("png bytes"), 0o644); err != nil {
+		t.Fatalf("write gallery file: %v", err)
+	}
+	modpackFile := filepath.Join(dir, "lethal-company", "modpacks", "lethal_coder-pack", "meta.json")
+	if err := os.MkdirAll(filepath.Dir(modpackFile), 0o755); err != nil {
+		t.Fatalf("mkdir modpacks: %v", err)
+	}
+	if err := os.WriteFile(modpackFile, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write modpack file: %v", err)
+	}
+
+	handler := http.StripPrefix("/content/", galleryOnly(http.Dir(dir)))
+
+	cases := []struct {
+		name       string
+		path       string
+		wantStatus int
+	}{
+		{"gallery file served", "/content/lethal-company/gallery/cover.png", http.StatusOK},
+		{"modpack file blocked", "/content/lethal-company/modpacks/lethal_coder-pack/meta.json", http.StatusNotFound},
+		{"gallery directory listing blocked", "/content/lethal-company/gallery/", http.StatusNotFound},
+		{"content root listing blocked", "/content/", http.StatusNotFound},
+		{"game root listing blocked", "/content/lethal-company/", http.StatusNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://example.com"+tc.path, nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != tc.wantStatus {
+				t.Errorf("%s: got status %d, want %d", tc.path, w.Code, tc.wantStatus)
+			}
+		})
 	}
 }
 
