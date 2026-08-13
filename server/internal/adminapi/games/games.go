@@ -225,6 +225,7 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 	// vanish from the launcher while the panel still reported "saved". Refusing
 	// the save is the honest answer: the operator learns immediately which entry
 	// is wrong instead of hunting for a game that no longer appears.
+	seen := make(map[string]int, len(items))
 	for i, it := range items {
 		if !adminutil.IsSafeGameID(it.GameID) {
 			http.Error(w,
@@ -232,6 +233,18 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 				http.StatusBadRequest)
 			return
 		}
+		// Two rows for the same id (e.g. after merging a manual add with a
+		// "Найти новые" scan) is the same silent-cure risk as an unsafe id: the
+		// launcher and every gameId-keyed lookup (icon upload, gallery, latest
+		// version) would have to pick one arbitrarily, with no error telling
+		// the operator two rows are now fighting over the same game.
+		if first, dup := seen[it.GameID]; dup {
+			http.Error(w,
+				fmt.Sprintf("entry %d: gameId %q duplicates entry %d", i+1, it.GameID, first+1),
+				http.StatusBadRequest)
+			return
+		}
+		seen[it.GameID] = i
 	}
 	b, err := json.MarshalIndent(struct {
 		Items []Entry `json:"items"`
