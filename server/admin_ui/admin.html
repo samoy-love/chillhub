@@ -519,6 +519,57 @@
               </div>
             </div>
             <div class="card mt-3">
+              <!-- Галерея игры (трек J). Пока трек I не добавил вкладку
+                   «Галерея» в карточку игры, живёт самостоятельной карточкой
+                   здесь же, на «Игры», и следит за выбором в #gm_select.
+                   Трек I: смонтировать createGameGallery() (game-gallery.js)
+                   в свою вкладку вместо дублирования этой разметки — достаточно
+                   перенести блок ниже и вызвать mountGameGallery() после того,
+                   как в DOM появится #gg_root. -->
+              <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <span>Галерея игры</span>
+                <div class="btn-group btn-group-sm">
+                  <button type="button" data-gg="mkdir" class="btn btn-outline-success">Новая папка</button>
+                  <button type="button" data-gg="refresh" class="btn btn-outline-secondary">Обновить</button>
+                </div>
+              </div>
+              <div class="card-body" id="gg_root">
+                <nav data-gg="breadcrumbs" class="small text-body-secondary mb-2"></nav>
+                <div class="input-group input-group-sm mb-2">
+                  <input data-gg="search" type="text" class="form-control" placeholder="Поиск...">
+                </div>
+                <div class="row g-2 align-items-end mb-2">
+                  <div class="col-12 col-md-5">
+                    <div class="input-group input-group-sm">
+                      <span class="input-group-text">URL</span>
+                      <input data-gg="url" type="text" class="form-control" placeholder="https://...">
+                    </div>
+                  </div>
+                  <div class="col-6 col-md-3">
+                    <div class="input-group input-group-sm">
+                      <span class="input-group-text">Имя</span>
+                      <input data-gg="url-name" type="text" class="form-control" placeholder="image">
+                    </div>
+                  </div>
+                  <div class="col-6 col-md-4">
+                    <div class="input-group input-group-sm">
+                      <span class="input-group-text">Если имя занято</span>
+                      <select data-gg="overwrite" class="form-select form-select-sm">
+                        <option value="rename">Переименовать</option>
+                        <option value="overwrite">Перезаписать</option>
+                      </select>
+                      <button type="button" data-gg="url-save" class="btn btn-primary">Сохранить по URL</button>
+                    </div>
+                  </div>
+                </div>
+                <label class="btn btn-sm btn-outline-primary mb-2">
+                  Загрузить с диска
+                  <input data-gg="upload-file" type="file" accept="image/*" class="d-none">
+                </label>
+                <div data-gg="grid" class="row g-2"></div>
+              </div>
+            </div>
+            <div class="card mt-3">
               <div class="card-header">Тест параметров загрузки (подбор размера чанка и параллельности)</div>
               <div class="card-body d-flex flex-column gap-2">
                 <div class="small text-body-secondary">
@@ -671,6 +722,7 @@
   <script src="/admin/ui/rate-estimator.js"></script>
   <script src="/admin/ui/ui-status.js"></script>
   <script src="/admin/ui/upload-card.js"></script>
+  <script src="/admin/ui/game-gallery.js"></script>
   <script src="/admin/ui/admin.js"></script>
   <!-- Gallery Modal -->
   <div class="modal fade" id="ns_gallery" tabindex="-1" aria-hidden="true">

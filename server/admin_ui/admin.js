@@ -2155,6 +2155,17 @@ document.addEventListener('DOMContentLoaded', function(){
     const gidEl = document.getElementById('gid'); if(gidEl) gidEl.value = chosen;
     const lab = document.getElementById('gm_current_id'); if(lab) lab.textContent = chosen || '—';
     if(chosen){ manifestsReload(); gmPrevEnsureVersionsAndRender(chosen); }
+    if(__gameGallery) __gameGallery.fetchAndRender();
+  }
+  // Галерея выбранной игры (трек J). Живёт своей карточкой на этой же
+  // вкладке (см. #gg_root в admin.html) пока трек I не завёл отдельную
+  // вкладку «Галерея» в карточке игры.
+  let __gameGallery = null;
+  if (window.createGameGallery && document.getElementById('gg_root')) {
+    __gameGallery = window.createGameGallery({
+      root: '#gg_root',
+      getGameId: () => (document.getElementById('gm_select')?.value || document.getElementById('gid')?.value || '').trim(),
+    });
   }
   // initial load
   gmSelectReload(true);
@@ -2168,6 +2179,7 @@ document.addEventListener('DOMContentLoaded', function(){
     const gidEl = document.getElementById('gid'); if(gidEl) gidEl.value = chosen;
     const lab = document.getElementById('gm_current_id'); if(lab) lab.textContent = chosen || '—';
     if(chosen){ manifestsReload(); gmPrevEnsureVersionsAndRender(chosen); }
+    if(__gameGallery) __gameGallery.fetchAndRender();
     const rows = Array.from(document.querySelectorAll('#mgm-table tbody tr'));
     rows.forEach(r=> r.classList.remove('mgm-selected'));
     for(const r of rows){
