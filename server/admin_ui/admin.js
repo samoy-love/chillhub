@@ -1846,6 +1846,7 @@ function mgmAppendRow(tb, it){
   const titleVal = escapeHtml(it.title||'');
   const exeVal = escapeHtml(it.exeRelativePath||'');
   const iconVal = escapeHtml(it.iconUrl||'');
+  const tsVal = escapeHtml(it.thunderstoreCommunity||'');
   tr.innerHTML = ''+
     '<td><input class="form-control form-control-sm" value="'+gidVal+'"/></td>'+
     '<td><input class="form-control form-control-sm" value="'+titleVal+'"/></td>'+
@@ -1862,6 +1863,7 @@ function mgmAppendRow(tb, it){
         '<button type="button" class="btn btn-outline-secondary mgm-pick">Выбрать...</button>'+
       '</div>'+
     '</td>'+
+    '<td class="d-none"><input class="form-control form-control-sm mgm-thunderstore" value="'+tsVal+'"/></td>'+
     '<td class="text-end">'+
       '<div class="btn-group btn-group-sm me-2" role="group">'+
         '<button type="button" class="btn btn-outline-secondary mgm-up" title="Вверх">▲</button>'+
@@ -1974,7 +1976,7 @@ function mgmAppendRow(tb, it){
 
 function mgmAddRow(){
   const tb = document.querySelector('#mgm-table tbody'); if(!tb) return;
-  mgmAppendRow(tb, {gameId:'', title:'', exeRelativePath:'', iconUrl:'', pinned:false});
+  mgmAppendRow(tb, {gameId:'', title:'', exeRelativePath:'', iconUrl:'', thunderstoreCommunity:'', pinned:false});
   mgmSetDirty(true);
   if(window.gmListRender) window.gmListRender();
 }
@@ -1988,6 +1990,7 @@ async function mgmSave(){
       title: tds[1].querySelector('input').value.trim(),
       iconUrl: tds[2].querySelector('input').value.trim(),
       exeRelativePath: tds[3].querySelector('input').value.trim(),
+      thunderstoreCommunity: tds[4].querySelector('input').value.trim(),
       // order/pinned — контракт PLAN.md §1 (трек H): order — позиция в списке
       // (её же меняет drag-reorder в game-list.js), pinned — звёздочка там же.
       order: idx,

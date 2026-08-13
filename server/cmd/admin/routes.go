@@ -137,6 +137,12 @@ func (s *server) apiRoutes() []route {
 		{path: "/admin/api/games/gallery/rename", handler: gg.Rename},
 		{path: "/admin/api/games/gallery/setCover", handler: gg.SetCoverHandler},
 		{path: "/admin/api/games/gallery/setCaption", handler: gg.SetCaptionHandler},
+
+		// Thunderstore modpack downloads (Трек K).
+		{path: "/admin/api/thunderstore/search", handler: ts.Search},
+		{path: "/admin/api/thunderstore/list", handler: ts.List},
+		{path: "/admin/api/thunderstore/download", handler: ts.Download},
+		{path: "/admin/api/thunderstore/delete", handler: ts.Delete},
 	}
 }
 
