@@ -376,3 +376,56 @@ func TestGetSkipsOneMalformedEntryAndKeepsTheRest(t *testing.T) {
 		t.Fatalf("expected only the well-formed entry to survive, got %+v", items)
 	}
 }
+
+// The registry file itself must already be canonically ordered after Save() —
+// not just Get()'s response. server/cmd/api reads games.json directly (a
+// separate binary, can't share Go structs/handlers with this package) and
+// trusts its on-disk order for what real players see; if Save() only ever
+// echoed back a sorted response without writing sorted bytes, the file on
+// disk would stay in raw POST order and the public API would show it that
+// way regardless of what the admin panel displayed.
+func TestSaveWritesCanonicallyOrderedFile(t *testing.T) {
+	h := New(t.TempDir())
+	// Posted in a deliberately wrong order: alphabetical, no pin.
+	body, err := json.Marshal(struct {
+		Items []Entry `json:"items"`
+	}{Items: []Entry{
+		{GameID: "alpha", Order: 1},
+		{GameID: "beta", Order: 0},
+		{GameID: "gamma", Pinned: true},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	h.Save(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/games/save", strings.NewReader(string(body))))
+	if w.Code != http.StatusOK {
+		t.Fatalf("Save rejected a valid payload: %d %s", w.Code, w.Body.String())
+	}
+
+	raw, err := os.ReadFile(filepath.Join(h.root, "manifests", "_registry", "games.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var onDisk struct {
+		Items []Entry `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &onDisk); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"gamma", "beta", "alpha"} // pinned first, then order 0/1
+	for i, gid := range want {
+		if i >= len(onDisk.Items) || onDisk.Items[i].GameID != gid {
+			t.Fatalf("on-disk order = %v, want %v (pinned-first/order-then, not POST order)", diskGameIDs(onDisk.Items), want)
+		}
+	}
+}
+
+func diskGameIDs(items []Entry) []string {
+	out := make([]string, len(items))
+	for i, it := range items {
+		out[i] = it.GameID
+	}
+	return out
+}

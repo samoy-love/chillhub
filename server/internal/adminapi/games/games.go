@@ -73,10 +73,20 @@ func (h *Handlers) FromManifests() []Entry {
 	return items
 }
 
-// sortEntries orders the registry the way the launcher's gallery expects it:
+// SortEntries orders the registry the way the launcher's gallery expects it:
 // pinned games first, then by the operator-assigned Order, then by GameID so
 // that entries tied on both stay in a stable, predictable order instead of
 // whatever order the JSON file happened to list them in.
+//
+// Exported so server/cmd/api (a separate binary that also reads games.json,
+// for the public /api/games the launcher actually calls) can reuse this exact
+// comparator instead of carrying its own copy — two independent
+// implementations of "pinned/order/id" is exactly how the registry's ordering
+// silently drifted between what the admin panel showed and what players saw.
+func SortEntries(items []Entry) {
+	sortEntries(items)
+}
+
 func sortEntries(items []Entry) {
 	sort.Slice(items, func(i, j int) bool {
 		a, b := items[i], items[j]
@@ -246,6 +256,14 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 		}
 		seen[it.GameID] = i
 	}
+	// Sorted HERE, once, at write time — not left for every reader to
+	// re-derive independently. Get() used to be the only place that computed
+	// Pinned/Order/GameID order, then server/cmd/api needed the exact same
+	// comparator for the public API real players hit, and duplicating it there
+	// was exactly how "pin looks like it works in the panel" and "pin actually
+	// reaches players" could drift apart again. With the file itself always
+	// canonically ordered, every reader can just trust file order.
+	sortEntries(items)
 	b, err := json.MarshalIndent(struct {
 		Items []Entry `json:"items"`
 	}{Items: items}, "", "  ")

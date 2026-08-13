@@ -10,11 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"ChillHub/server/internal/adminapi/games"
 	"ChillHub/server/internal/adminutil"
 	"ChillHub/server/internal/httpx"
 	"ChillHub/server/internal/maintenance"
@@ -67,6 +67,13 @@ type GameInfo struct {
 
 // (moved to server/internal/httpx)
 
+// GamesResponse.Items order is significant and MUST be preserved end to end:
+// the launcher has no order/pinned fields of its own, it just remembers each
+// game's array index (Core/Home/GameCatalog.cs: RememberApiOrder/apiOrder).
+// loadGamesFromRegistry already returns this slice canonically sorted
+// (games.SortEntries) — do not reorder, filter-then-reorder, or paginate it
+// downstream without re-sorting, or a player's pinned/ordered games silently
+// go back to raw file order for them specifically.
 type GamesResponse struct {
 	Items []GameInfo `json:"items"`
 }
@@ -225,16 +232,8 @@ func muxRoute(r *http.Request) string {
 //
 // It returns a slice of GameInfo without latest/manifest fields populated.
 func loadGamesFromRegistry() ([]GameInfo, bool) {
-	type regItem struct {
-		GameID          string `json:"gameId"`
-		Title           string `json:"title"`
-		ExeRelativePath string `json:"exeRelativePath"`
-		IconURL         string `json:"iconUrl"`
-		Order           int    `json:"order"`
-		Pinned          bool   `json:"pinned"`
-	}
 	var reg struct {
-		Items []regItem `json:"items"`
+		Items []games.Entry `json:"items"`
 	}
 	p := filepath.Join(contentRoot, "manifests", "_registry", "games.json")
 	// #nosec G304 -- p is the content root plus three constant path components.
@@ -253,7 +252,7 @@ func loadGamesFromRegistry() ([]GameInfo, bool) {
 	// player unless the order they imply is baked into the array we return
 	// here, not just into how the admin panel happens to display its own copy
 	// of the same data after re-fetching it.
-	items := make([]regItem, 0, len(reg.Items))
+	items := make([]games.Entry, 0, len(reg.Items))
 	for _, it := range reg.Items {
 		// The stored registry is not a trusted source of path components: every
 		// handler below joins an id onto the manifests directory. An id that is
@@ -266,16 +265,12 @@ func loadGamesFromRegistry() ([]GameInfo, bool) {
 		}
 		items = append(items, it)
 	}
-	sort.Slice(items, func(i, j int) bool {
-		a, b := items[i], items[j]
-		if a.Pinned != b.Pinned {
-			return a.Pinned && !b.Pinned
-		}
-		if a.Order != b.Order {
-			return a.Order < b.Order
-		}
-		return a.GameID < b.GameID
-	})
+	// games.Save() already writes the file in this exact order — this re-sort
+	// is defensive (a registry saved by an older build, or hand-edited, may not
+	// be canonically ordered yet) and, by calling the SAME exported comparator
+	// games.Get() uses for the admin panel, guarantees this can never drift
+	// into its own, second copy of "pinned/order/id" logic again.
+	games.SortEntries(items)
 	out := make([]GameInfo, 0, len(items))
 	for _, it := range items {
 		out = append(out, GameInfo{GameID: it.GameID, Title: it.Title, ExeRelativePath: it.ExeRelativePath, IconURL: it.IconURL})
