@@ -287,23 +287,17 @@ namespace ChillHub.Core.Game {
 
         private static void SaveAllLocked(Dictionary<string, PlaytimeEntry> data) {
             try {
-                Directory.CreateDirectory(AppDir);
                 var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
-                WriteAllTextAtomic(PlaytimePath, json);
+                // Атомарная запись — тот же ChillHub.Update.AtomicFile, которым уже пользуется
+                // самообновление для launcher.version (и теперь FileHashCache.PruneAndSave). Без
+                // неё убитый посреди записи процесс (закрытие игры — частое событие) оставляет
+                // обрезанный JSON; LoadAllLocked ловит ошибку парсинга и тихо возвращает пустой
+                // словарь — вся история наигранного времени пропадала бы бесследно.
+                ChillHub.Update.AtomicFile.WriteAllText(PlaytimePath, json, Core.SelfUpdate.SelfUpdateRules.Utf8NoBom);
             }
             catch (Exception ex) {
                 Logging.Logger.Warn($"PlaytimeStore.SaveAll: {ex.Message}");
             }
-        }
-
-        // Пишем через временный файл + File.Move — тот же приём, что FileHashCache.PruneAndSave.
-        // Без него убитый посреди File.WriteAllText процесс (закрытие игры — частое событие)
-        // оставляет обрезанный JSON; LoadAllLocked ловит ошибку парсинга и тихо возвращает
-        // пустой словарь — вся история наигранного времени пропадала бы бесследно.
-        private static void WriteAllTextAtomic(string path, string content) {
-            var tmp = path + ".tmp";
-            File.WriteAllText(tmp, content);
-            File.Move(tmp, path, overwrite: true);
         }
 
         private static Dictionary<string, PendingSession> LoadPendingLocked() {
@@ -324,9 +318,8 @@ namespace ChillHub.Core.Game {
 
         private static void SavePendingLocked(Dictionary<string, PendingSession> data) {
             try {
-                Directory.CreateDirectory(AppDir);
                 var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
-                WriteAllTextAtomic(PendingPath, json);
+                ChillHub.Update.AtomicFile.WriteAllText(PendingPath, json, Core.SelfUpdate.SelfUpdateRules.Utf8NoBom);
             }
             catch (Exception ex) {
                 Logging.Logger.Warn($"PlaytimeStore.SavePending: {ex.Message}");

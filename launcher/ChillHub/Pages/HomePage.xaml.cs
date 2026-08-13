@@ -971,18 +971,20 @@ namespace ChillHub.Pages {
             // задерживать/блокировать основную (новости/версии/сборки). Но предыдущий запрос
             // всё равно отменяем тем же приёмом, что и above для selectionCts — иначе прокрутка
             // стрелками по списку игр запускает по HTTP-запросу на каждый шаг, и все они доходят
-            // до конца впустую (применяется только последний).
+            // до конца впустую (применяется только последний). Диспоз — забота самого
+            // LoadHeroGalleryAsync (в своём finally, после await), а не этого места: диспозить
+            // предыдущий CTS сразу после Cancel() рискует ObjectDisposedException, если внутренний
+            // HttpClient ещё регистрирует колбэк на токене в момент отмены.
             var galleryCtsLocal = new CancellationTokenSource();
             var previousGalleryCts = Interlocked.Exchange(ref this.galleryCts, galleryCtsLocal);
             try {
                 previousGalleryCts?.Cancel();
-                previousGalleryCts?.Dispose();
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Warn($"GameCombo_SelectionChanged: отмена предыдущей загрузки галереи: {ex.Message}");
             }
 
-            _ = this.LoadHeroGalleryAsync(gid, galleryCtsLocal.Token);
+            _ = this.LoadHeroGalleryAsync(gid, galleryCtsLocal);
         }
 
         private async Task HandleGameSelectionAsync(string? gidRaw, CancellationToken token) {
@@ -1916,38 +1918,49 @@ namespace ChillHub.Pages {
 
         // --- Галерея игры (Трек G) --------------------------------------------------------
 
-        private async Task LoadHeroGalleryAsync(string? gameId, CancellationToken ct) {
-            if (string.IsNullOrWhiteSpace(gameId)) {
-                return;
-            }
-
-            IReadOnlyList<Core.Game.GalleryImage> images;
+        // Владеет переданным cts целиком — сама диспозит его в finally, после того как
+        // её собственная работа (успешно или нет) завершилась. Так у ЛЮБОГО экземпляра,
+        // включая самый последний за время жизни страницы, гарантированно есть момент
+        // диспоза (раньше это было заботой вызывающего кода, который диспозил только
+        // «предыдущий» CTS при следующем выборе — последний созданный экземпляр не
+        // диспозился никогда).
+        private async Task LoadHeroGalleryAsync(string? gameId, CancellationTokenSource cts) {
             try {
-                images = await this.galleryClient.GetGalleryAsync(this.BaseApi, gameId!, ct).ConfigureAwait(true);
-            }
-            catch (OperationCanceledException) {
-                return;
-            }
+                if (string.IsNullOrWhiteSpace(gameId)) {
+                    return;
+                }
 
-            if (ct.IsCancellationRequested || !string.Equals(this.GetSelectedGameId(), gameId, StringComparison.OrdinalIgnoreCase)) {
-                // Выбор уже сменился, пока грузилась галерея прошлой игры — не перетираем витрину.
-                return;
-            }
+                IReadOnlyList<Core.Game.GalleryImage> images;
+                try {
+                    images = await this.galleryClient.GetGalleryAsync(this.BaseApi, gameId!, cts.Token).ConfigureAwait(true);
+                }
+                catch (OperationCanceledException) {
+                    return;
+                }
 
-            var cover = images.FirstOrDefault();
-            if (cover == null) {
-                this.HeroCoverImg.Visibility = Visibility.Collapsed;
-                this.HeroCoverImg.Source = null;
-                return;
-            }
+                if (cts.Token.IsCancellationRequested || !string.Equals(this.GetSelectedGameId(), gameId, StringComparison.OrdinalIgnoreCase)) {
+                    // Выбор уже сменился, пока грузилась галерея прошлой игры — не перетираем витрину.
+                    return;
+                }
 
-            try {
-                this.HeroCoverImg.Source = new BitmapImage(new Uri(cover.ImageUrl, UriKind.Absolute));
-                this.HeroCoverImg.Visibility = Visibility.Visible;
+                var cover = images.FirstOrDefault();
+                if (cover == null) {
+                    this.HeroCoverImg.Visibility = Visibility.Collapsed;
+                    this.HeroCoverImg.Source = null;
+                    return;
+                }
+
+                try {
+                    this.HeroCoverImg.Source = new BitmapImage(new Uri(cover.ImageUrl, UriKind.Absolute));
+                    this.HeroCoverImg.Visibility = Visibility.Visible;
+                }
+                catch (Exception ex) {
+                    Core.Logging.Logger.Warn($"LoadHeroGalleryAsync: не удалось загрузить обложку {gameId}: {ex.Message}");
+                    this.HeroCoverImg.Visibility = Visibility.Collapsed;
+                }
             }
-            catch (Exception ex) {
-                Core.Logging.Logger.Warn($"LoadHeroGalleryAsync: не удалось загрузить обложку {gameId}: {ex.Message}");
-                this.HeroCoverImg.Visibility = Visibility.Collapsed;
+            finally {
+                cts.Dispose();
             }
         }
 
