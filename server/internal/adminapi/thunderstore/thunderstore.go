@@ -519,7 +519,13 @@ func (rs *resolver) cleanupTempDirs() {
 	// reaches rs.nodes, but its temp directory still exists on disk and still
 	// needs removing.
 	for _, dir := range rs.tempDirs {
-		_ = os.RemoveAll(dir)
+		// A failed removal (disk full, a file locked by AV scanning, a
+		// permissions hiccup) used to vanish silently here — exactly when disk
+		// pressure makes an operator most likely to need to know a temp dir
+		// was left behind, not least.
+		if err := os.RemoveAll(dir); err != nil {
+			log.Printf("[thunderstore] cleanup temp dir %s: %v", dir, err)
+		}
 	}
 }
 
