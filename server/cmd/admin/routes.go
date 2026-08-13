@@ -233,6 +233,9 @@ func galleryOnly(root http.FileSystem) http.Handler {
 	fs := http.FileServer(root)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		segments := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		// Order is load-bearing here, not just style: len(segments) < 3 must
+		// short-circuit before segments[1]/segments[len-1] are indexed, or a
+		// 0-1 segment path (e.g. GET /content/x) panics with index out of range.
 		if len(segments) < 3 || segments[1] != "gallery" || segments[len(segments)-1] == "" {
 			http.NotFound(w, r)
 			return

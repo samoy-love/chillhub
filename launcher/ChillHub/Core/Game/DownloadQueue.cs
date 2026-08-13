@@ -199,32 +199,37 @@ namespace ChillHub.Core.Game {
             }
 
             // State и Cts уже выставлены в RunWorkerAsync под gate — см. комментарий там.
-            this.RaiseProgress(entry, "Ожидание в очереди завершено, начинаем…");
-
-            var ui = new GameSyncUi {
-                SetStatus = text => this.RaiseProgress(entry, text),
-                ReportProgress = (p, _) => this.RaiseProgress(entry, entry.StatusText, p.BytesDownloaded, p.TotalBytes),
-            };
-
-            var runner = new GameSyncRunner(this.syncServiceFactory(), ui);
-            var localRoot = GameLocalState.GameLocalRoot(entry.GameId);
-            var request = new GameSyncRequest(
-                entry.GameId,
-                game.LatestVersion,
-                this.baseApiProvider(),
-                localRoot,
-                game.ExeRelativePath,
-                IsVersionSwitch: false,
-                ConfirmDeletions: false);
-
+            // Всё, что может бросить исключение — включая сборку request/runner ниже, не только
+            // сам RunAsync — идёт под этим try: если что-то из этого упадёт до входа в try,
+            // позиция навсегда останется висеть в очереди как Running — Remove() для Running-
+            // позиции не удаляет её из items сама, ждёт именно Finish().
             try {
+                this.RaiseProgress(entry, "Ожидание в очереди завершено, начинаем…");
+
+                var ui = new GameSyncUi {
+                    SetStatus = text => this.RaiseProgress(entry, text),
+                    ReportProgress = (p, _) => this.RaiseProgress(entry, entry.StatusText, p.BytesDownloaded, p.TotalBytes),
+                };
+
+                var runner = new GameSyncRunner(this.syncServiceFactory(), ui);
+                var localRoot = GameLocalState.GameLocalRoot(entry.GameId);
+                var request = new GameSyncRequest(
+                    entry.GameId,
+                    game.LatestVersion,
+                    this.baseApiProvider(),
+                    localRoot,
+                    game.ExeRelativePath,
+                    IsVersionSwitch: false,
+                    ConfirmDeletions: false);
+
                 // entry.Cts всегда назначен в RunWorkerAsync до вызова ProcessAsync — см. gate там.
                 await runner.RunAsync(request, entry.Cts!.Token).ConfigureAwait(false);
                 this.Finish(entry, entry.CancelRequested ? QueueItemState.Cancelled : QueueItemState.Completed, entry.CancelRequested ? "Снята из очереди." : "Готово.");
             }
             catch (Exception ex) {
-                // GameSyncRunner.RunAsync сам не выпускает исключения наружу — сюда попадём
-                // только если что-то пошло не так уже в самой очереди (например, отмена).
+                // GameSyncRunner.RunAsync сам не выпускает исключения наружу — сюда попадём,
+                // если что-то пошло не так уже в самой очереди (например, отмена), либо если
+                // упала сборка запроса выше.
                 Logging.Logger.Error(ex, $"DownloadQueue.ProcessAsync gid={entry.GameId}");
                 this.Finish(entry, QueueItemState.Failed, "Не удалось завершить операцию.");
             }
@@ -258,12 +263,13 @@ namespace ChillHub.Core.Game {
                 entry.StatusText = status;
             }
 
-            if (stillPresent) {
-                this.ItemCompleted?.Invoke(entry.ToItem());
+            if (!stillPresent) {
+                // Remove() уже убрал позицию и разослал ItemRemoved сам — не дублируем и не
+                // переопределяем то, что UI уже увидел.
+                return;
             }
 
-            // !stillPresent значит Remove() уже убрал позицию и разослал ItemRemoved сам —
-            // не дублируем и не переопределяем то, что UI уже увидел.
+            this.ItemCompleted?.Invoke(entry.ToItem());
         }
 
         /// <summary>Внутреннее изменяемое состояние позиции — наружу отдаём только снимки <see cref="QueueItem"/>.</summary>
