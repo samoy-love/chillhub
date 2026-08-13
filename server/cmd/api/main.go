@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -229,6 +230,8 @@ func loadGamesFromRegistry() ([]GameInfo, bool) {
 		Title           string `json:"title"`
 		ExeRelativePath string `json:"exeRelativePath"`
 		IconURL         string `json:"iconUrl"`
+		Order           int    `json:"order"`
+		Pinned          bool   `json:"pinned"`
 	}
 	var reg struct {
 		Items []regItem `json:"items"`
@@ -243,7 +246,14 @@ func loadGamesFromRegistry() ([]GameInfo, bool) {
 	if json.Unmarshal(b, &reg) != nil || len(reg.Items) == 0 {
 		return nil, false
 	}
-	out := make([]GameInfo, 0, len(reg.Items))
+	// The launcher trusts THIS array's order as the display order — it has no
+	// order/pinned fields of its own in the response, it just remembers each
+	// game's index (Core/Home/GameCatalog.cs: RememberApiOrder/apiOrder). The
+	// admin panel's own Pinned/Order fields are therefore meaningless to a real
+	// player unless the order they imply is baked into the array we return
+	// here, not just into how the admin panel happens to display its own copy
+	// of the same data after re-fetching it.
+	items := make([]regItem, 0, len(reg.Items))
 	for _, it := range reg.Items {
 		// The stored registry is not a trusted source of path components: every
 		// handler below joins an id onto the manifests directory. An id that is
@@ -254,6 +264,20 @@ func loadGamesFromRegistry() ([]GameInfo, bool) {
 			log.Printf("registry: skipping entry with unusable gameId %q", filepath.Base(it.GameID))
 			continue
 		}
+		items = append(items, it)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		a, b := items[i], items[j]
+		if a.Pinned != b.Pinned {
+			return a.Pinned && !b.Pinned
+		}
+		if a.Order != b.Order {
+			return a.Order < b.Order
+		}
+		return a.GameID < b.GameID
+	})
+	out := make([]GameInfo, 0, len(items))
+	for _, it := range items {
 		out = append(out, GameInfo{GameID: it.GameID, Title: it.Title, ExeRelativePath: it.ExeRelativePath, IconURL: it.IconURL})
 	}
 	// An existing registry stays authoritative even when everything in it was
