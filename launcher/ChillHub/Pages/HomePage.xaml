@@ -549,10 +549,9 @@
       <Grid.ColumnDefinitions>
         <!-- Левая колонка (сайдбар) слегка ужата по ширине -->
         <ColumnDefinition Width="310"/>
-        <!-- Пробел между сайдбаром и новостями (уменьшен) -->
+        <!-- Пробел между сайдбаром и витриной (уменьшен) -->
         <ColumnDefinition Width="8"/>
-        <!-- Две колонки новостей -->
-        <ColumnDefinition Width="*"/>
+        <!-- Витрина выбранной игры + вкладки новостей -->
         <ColumnDefinition Width="*"/>
       </Grid.ColumnDefinitions>
 
@@ -860,13 +859,83 @@
         </Grid>
       </Border>
 
-      <Border Grid.Column="2" Margin="0,0,8,0" Style="{DynamicResource Style.Section}" VerticalAlignment="Stretch">
-        <Grid>
+      <Grid Grid.Column="2" Margin="0,0,8,0">
+        <Grid.RowDefinitions>
+          <!-- Витрина-герой выбранной игры -->
+          <RowDefinition Height="Auto"/>
+          <!-- Вкладки «Новости игры / Новости лаунчера» -->
+          <RowDefinition Height="Auto"/>
+          <!-- Заглушка под очередь загрузок (Трек C подключит позже) -->
+          <RowDefinition Height="Auto"/>
+          <!-- Лента новостей выбранной вкладки -->
+          <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Витрина-герой: обложка/градиент, заголовок, статус, «Играть», кнопка сведений -->
+        <Border Grid.Row="0" Margin="0,0,0,8" CornerRadius="12" MinHeight="220"
+                Background="{DynamicResource Brush.HeroGradient}" ClipToBounds="True">
+          <Grid Margin="20">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="*"/>
+              <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- TODO(Track G): gallery carousel goes here (фон/стрелки/точки по gallery.json) -->
+
+            <!-- Иконка игры крупным планом (заглушка обложки до подключения галереи) -->
+            <Grid Grid.Row="0" Grid.RowSpan="2" HorizontalAlignment="Right" VerticalAlignment="Top" Width="120" Height="120"
+                  Margin="0,0,0,0" Opacity="0.9">
+              <Image x:Name="HeroIconImg" Source="{Binding SelectedItem.IconUrl, ElementName=GameList}"
+                     Stretch="Uniform" Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
+            </Grid>
+
+            <StackPanel Grid.Row="1" VerticalAlignment="Bottom">
+              <!-- Бейдж статуса выбранной игры -->
+              <Border x:Name="HeroStatusBadge" CornerRadius="10" Padding="10,4" HorizontalAlignment="Left" Margin="0,0,0,10"
+                      Background="{DynamicResource Brush.HeroBadge.Bg}" BorderBrush="{DynamicResource Brush.HeroBadge.Border}" BorderThickness="1">
+                <TextBlock x:Name="HeroStatusText" Text="Проверка…" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Text}"/>
+              </Border>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="HeroTitleText" Grid.Column="0" Text="Выберите игру" FontSize="28" FontWeight="Bold"
+                           Foreground="{DynamicResource Brush.Title}" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"/>
+                <!-- «Играть» — зеркалит состояние единой кнопки действия внизу экрана (SetActionMode) -->
+                <Button x:Name="HeroPlayBtn" Grid.Column="1" Content="Играть" Click="ActionBtn_Click"
+                        Style="{DynamicResource Style.ActionButton.Play}"
+                        Width="160" Height="44" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                <!-- Единственная кнопка сведений об игре: иконка ⓘ, ведёт на GamePage -->
+                <Button x:Name="HeroInfoBtn" Grid.Column="2" Click="GameDetails_Click"
+                        Style="{DynamicResource Style.Button.HeroInfo}"
+                        Margin="8,0,0,0" VerticalAlignment="Center" ToolTip="Подробнее об игре">
+                  <TextBlock FontFamily="Segoe UI Symbol" Text="&#x24D8;" FontSize="18"/>
+                </Button>
+              </Grid>
+            </StackPanel>
+          </Grid>
+        </Border>
+
+        <!-- Вкладки под витриной: переключают ленту без перезагрузки страницы -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="4,0,0,8">
+          <ToggleButton x:Name="NewsTabGame" Content="Новости игры" IsChecked="True"
+                        Style="{DynamicResource Style.Button.HeroTab}" Click="NewsTabGame_Click" Margin="0,0,6,0"/>
+          <ToggleButton x:Name="NewsTabLauncher" Content="Новости лаунчера" IsChecked="False"
+                        Style="{DynamicResource Style.Button.HeroTab}" Click="NewsTabLauncher_Click"/>
+        </StackPanel>
+
+        <!-- Заглушка: сюда Трек C подключит очередь загрузок -->
+        <ItemsControl x:Name="QueueDock" Grid.Row="2" Margin="0,0,0,8"/>
+
+        <Grid x:Name="GameNewsPanel" Grid.Row="3" Visibility="Visible">
         <Grid.RowDefinitions>
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
-        <Grid Grid.Row="0" Margin="0,0,0,8">
+        <Grid x:Name="GameNewsHeaderRow" Grid.Row="0" Margin="0,0,0,8">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="Auto"/>
@@ -951,10 +1020,8 @@
         </ListBox>
         </Grid>
         </Grid>
-      </Border>
 
-      <Border Grid.Column="3" Style="{DynamicResource Style.Section}" VerticalAlignment="Stretch">
-        <Grid>
+        <Grid x:Name="LauncherNewsPanel" Grid.Row="3" Visibility="Collapsed">
         <Grid.RowDefinitions>
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="*"/>
@@ -1044,7 +1111,7 @@
         </ListBox>
         </Grid>
         </Grid>
-      </Border>
+      </Grid>
     </Grid>
 
     <!-- Нижняя панель: статус обновления (редизайн, кнопка справа) -->

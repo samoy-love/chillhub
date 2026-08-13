@@ -1626,10 +1626,68 @@ namespace ChillHub.Pages {
                 this.ActionBtn.Content = look.Content;
                 this.ActionBtn.IsEnabled = look.IsEnabled;
                 this.ApplyActionButtonStyle(look.StyleKey);
+
+                // «Играть» на витрине — тот же режим, что и нижняя кнопка действия (одно состояние, два места)
+                if (this.HeroPlayBtn != null) {
+                    this.HeroPlayBtn.Content = look.Content;
+                    this.HeroPlayBtn.IsEnabled = look.IsEnabled;
+                    if (this.TryFindResource(look.StyleKey) is Style heroStyle) {
+                        this.HeroPlayBtn.Style = heroStyle;
+                    }
+                }
             }
             catch (Exception ex) {
                 // Кнопка действия — центральный элемент экрана: не даём сбою оформления уронить страницу
                 Core.Logging.Logger.Error(ex, $"SetActionMode({mode})");
+            }
+        }
+
+        // --- Вкладки под витриной: «Новости игры» / «Новости лаунчера» ---
+        private void NewsTabGame_Click(object sender, RoutedEventArgs e) => this.SelectNewsTab(showGameNews: true);
+
+        private void NewsTabLauncher_Click(object sender, RoutedEventArgs e) => this.SelectNewsTab(showGameNews: false);
+
+        private void SelectNewsTab(bool showGameNews) {
+            try {
+                this.NewsTabGame.IsChecked = showGameNews;
+                this.NewsTabLauncher.IsChecked = !showGameNews;
+                this.GameNewsPanel.Visibility = showGameNews ? Visibility.Visible : Visibility.Collapsed;
+                this.LauncherNewsPanel.Visibility = showGameNews ? Visibility.Collapsed : Visibility.Visible;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"SelectNewsTab: {ex.Message}");
+            }
+        }
+
+        // Заголовок, обложка и бейдж статуса витрины-героя — под выбранную игру
+        private void UpdateHero() {
+            try {
+                var g = this.GetSelectedGame();
+                this.HeroTitleText.Text = g?.Title is string t && !string.IsNullOrWhiteSpace(t) ? t : "Выберите игру";
+
+                string status;
+                if (g == null) {
+                    status = string.Empty;
+                }
+                else if (!this.verified.IsKnown(g.GameId)) {
+                    status = "Проверка…";
+                }
+                else if (g.NeedsUpdate) {
+                    status = "Требуется обновление";
+                }
+                else if (g.IsInstalled) {
+                    status = "Установлена последняя версия";
+                }
+                else {
+                    status = "Не установлена";
+                }
+
+                this.HeroStatusText.Text = status;
+                this.HeroStatusBadge.Visibility = string.IsNullOrEmpty(status) ? Visibility.Collapsed : Visibility.Visible;
+            }
+            catch (Exception ex) {
+                // Витрина — украшение поверх основной логики: сбой обновления заголовка не должен мешать остальному
+                Core.Logging.Logger.Warn($"UpdateHero: {ex.Message}");
             }
         }
 
@@ -1645,6 +1703,7 @@ namespace ChillHub.Pages {
 
         private void UpdateActionButtonState() {
             try {
+                this.UpdateHero();
                 var g = this.GetSelectedGame();
                 var isInstalled = g?.IsInstalled == true;
                 var needsUpdate = g?.NeedsUpdate == true;

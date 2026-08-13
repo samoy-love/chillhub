@@ -686,4 +686,71 @@
 
 
   <!-- Window/Page background fallback -->
+
+  <!-- HomePage hero showcase (Трек A) -->
+  <LinearGradientBrush x:Key="Brush.HeroGradient" StartPoint="0,0" EndPoint="1,1">
+    <GradientStop Offset="0" Color="#1A122B"/>
+    <GradientStop Offset="0.55" Color="#2B1F4A"/>
+    <GradientStop Offset="1" Color="#3A2966"/>
+  </LinearGradientBrush>
+  <SolidColorBrush x:Key="Brush.HeroBadge.Bg" Color="#2B1F4A"/>
+  <SolidColorBrush x:Key="Brush.HeroBadge.Border" Color="#8C6AFF"/>
+
+  <!-- Круглая кнопка сведений об игре (ⓘ) на витрине -->
+  <Style x:Key="Style.Button.HeroInfo" TargetType="Button">
+    <Setter Property="Width" Value="36"/>
+    <Setter Property="Height" Value="36"/>
+    <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+    <Setter Property="Background" Value="#332B1F4A"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="bd" CornerRadius="18" Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
+              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.SecondaryAccent}"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Opacity" Value="0.5"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- Кнопки-вкладки под витриной: «Новости игры / Новости лаунчера» -->
+  <Style x:Key="Style.Button.HeroTab" TargetType="ToggleButton">
+    <Setter Property="Padding" Value="14,7"/>
+    <Setter Property="FontSize" Value="13"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ToggleButton">
+          <Border x:Name="bd" CornerRadius="8" Background="{TemplateBinding Background}" BorderThickness="0">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
+            </Trigger>
+            <Trigger Property="IsChecked" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.AccentGradientPrimary}"/>
+              <Setter Property="Foreground" Value="{DynamicResource Brush.Title}"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
 </ResourceDictionary>
