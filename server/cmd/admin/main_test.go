@@ -248,16 +248,26 @@ func TestAliasOf(t *testing.T) {
 // gallery files but refuses everything else under content/ — directory
 // listings and, in particular, content/<gameId>/modpacks/, which this
 // unauthenticated mount was never meant to expose.
+//
+// Goes through s.register(mux) + a real HTTP round-trip (httptest.NewServer),
+// not galleryOnly called in isolation: calling the handler function directly
+// would miss whether it's actually wired the way routes.go wires it (right
+// prefix, httpx.NoStore, the isDir(contentDir) gate) — a prior version of this
+// test made exactly that mistake, and also missed that a client which DOES
+// follow redirects (the normal case) gets ".." canonicalized away by
+// net/http's own ServeMux before galleryOnly ever sees it, which the
+// isolated-handler version couldn't exercise either way.
 func TestGalleryOnlyScopesContentMount(t *testing.T) {
-	dir := t.TempDir()
-	galleryFile := filepath.Join(dir, "lethal-company", "gallery", "cover.png")
+	root := t.TempDir()
+	contentDir := filepath.Join(root, "content")
+	galleryFile := filepath.Join(contentDir, "lethal-company", "gallery", "cover.png")
 	if err := os.MkdirAll(filepath.Dir(galleryFile), 0o755); err != nil {
 		t.Fatalf("mkdir gallery: %v", err)
 	}
 	if err := os.WriteFile(galleryFile, []byte("png bytes"), 0o644); err != nil {
 		t.Fatalf("write gallery file: %v", err)
 	}
-	modpackFile := filepath.Join(dir, "lethal-company", "modpacks", "lethal_coder-pack", "meta.json")
+	modpackFile := filepath.Join(contentDir, "lethal-company", "modpacks", "lethal_coder-pack", "meta.json")
 	if err := os.MkdirAll(filepath.Dir(modpackFile), 0o755); err != nil {
 		t.Fatalf("mkdir modpacks: %v", err)
 	}
@@ -265,7 +275,12 @@ func TestGalleryOnlyScopesContentMount(t *testing.T) {
 		t.Fatalf("write modpack file: %v", err)
 	}
 
-	handler := http.StripPrefix("/content/", galleryOnly(http.Dir(dir)))
+	s := newServer(root)
+	mux := http.NewServeMux()
+	s.register(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	client := srv.Client() // default: follows redirects, like a real browser
 
 	cases := []struct {
 		name       string
@@ -277,14 +292,17 @@ func TestGalleryOnlyScopesContentMount(t *testing.T) {
 		{"gallery directory listing blocked", "/content/lethal-company/gallery/", http.StatusNotFound},
 		{"content root listing blocked", "/content/", http.StatusNotFound},
 		{"game root listing blocked", "/content/lethal-company/", http.StatusNotFound},
+		{"dot-dot traversal to modpacks blocked", "/content/lethal-company/gallery/../modpacks/lethal_coder-pack/meta.json", http.StatusNotFound},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "http://example.com"+tc.path, nil)
-			w := httptest.NewRecorder()
-			handler.ServeHTTP(w, req)
-			if w.Code != tc.wantStatus {
-				t.Errorf("%s: got status %d, want %d", tc.path, w.Code, tc.wantStatus)
+			resp, err := client.Get(srv.URL + tc.path)
+			if err != nil {
+				t.Fatalf("GET %s: %v", tc.path, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != tc.wantStatus {
+				t.Errorf("%s: got status %d, want %d (final URL %s)", tc.path, resp.StatusCode, tc.wantStatus, resp.Request.URL)
 			}
 		})
 	}
