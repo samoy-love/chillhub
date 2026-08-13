@@ -90,6 +90,57 @@ func sortEntries(items []Entry) {
 	})
 }
 
+// decodeRegistryItems parses a `{"items": [...]}` payload (from disk or from a
+// Save() request body) into entries, defaulting Order to each item's original
+// position for any item whose raw JSON has no "order" key at all — Order's zero
+// value is otherwise indistinguishable from "explicitly pinned at position 0",
+// which used to collapse every legacy entry to alphabetical-by-GameID.
+//
+// ok is false whenever the payload isn't recognizable as `{"items": [...]}` at
+// all (parse failure, or the "items" key missing entirely — including a bare
+// top-level array, which unmarshals into a zero-value wrapper without error and
+// would otherwise silently become an empty registry).
+//
+// strict controls what happens to an item that IS present but doesn't unmarshal
+// into Entry: Get() (reading already-stored data) passes false and skips+logs
+// the one bad item rather than failing the whole response; Save() (accepting a
+// fresh write) passes true and rejects the whole request, matching how it
+// already rejects an unsafe GameID two lines below — dropping a bad entry on
+// write is the same silent-cure anti-pattern that check exists to prevent.
+func decodeRegistryItems(b []byte, strict bool) (items []Entry, ok bool) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(b, &top); err != nil {
+		return nil, false
+	}
+	itemsRaw, hasItems := top["items"]
+	if !hasItems {
+		return nil, false
+	}
+	var rawItems []json.RawMessage
+	if err := json.Unmarshal(itemsRaw, &rawItems); err != nil {
+		return nil, false
+	}
+	items = make([]Entry, 0, len(rawItems))
+	for i, item := range rawItems {
+		var e Entry
+		if err := json.Unmarshal(item, &e); err != nil {
+			if strict {
+				return nil, false
+			}
+			log.Printf("[games] skipping malformed registry entry %d: %v", i, err)
+			continue
+		}
+		var probe map[string]json.RawMessage
+		if err := json.Unmarshal(item, &probe); err == nil {
+			if _, hasOrder := probe["order"]; !hasOrder {
+				e.Order = i
+			}
+		}
+		items = append(items, e)
+	}
+	return items, true
+}
+
 // Get returns the registry, autogenerating it from the manifests on first use.
 func (h *Handlers) Get(w http.ResponseWriter, _ *http.Request) {
 	p := h.registryPath()
@@ -104,35 +155,14 @@ func (h *Handlers) Get(w http.ResponseWriter, _ *http.Request) {
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to read the registry", "games", err)
 		return
 	}
-	var raw struct {
-		Items []json.RawMessage `json:"items"`
-	}
-	if err := json.Unmarshal(b, &raw); err != nil {
-		// The stored registry is malformed; hand it back as-is rather than
-		// failing the request outright, matching the previous behaviour.
+	items, ok := decodeRegistryItems(b, false)
+	if !ok {
+		// The stored registry isn't recognizable {"items":[...]} JSON at all;
+		// hand it back as-is rather than failing the request outright, matching
+		// the previous behaviour.
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(b)
 		return
-	}
-	items := make([]Entry, 0, len(raw.Items))
-	for i, item := range raw.Items {
-		var e Entry
-		if err := json.Unmarshal(item, &e); err != nil {
-			continue
-		}
-		// Registries saved before Order/Pinned existed have neither key, and
-		// both zero-value to Order=0 — indistinguishable from an entry that
-		// explicitly wants position 0. Defaulting every legacy entry's Order
-		// to its original position in the file (instead of leaving it at 0)
-		// preserves whatever curated order was already on disk, rather than
-		// every Get() silently collapsing it to alphabetical-by-GameID.
-		var probe map[string]json.RawMessage
-		if err := json.Unmarshal(item, &probe); err == nil {
-			if _, hasOrder := probe["order"]; !hasOrder {
-				e.Order = i
-			}
-		}
-		items = append(items, e)
 	}
 	sortEntries(items)
 	adminutil.WriteJSON(w, struct {
@@ -170,10 +200,20 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 	if !adminutil.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	var payload struct {
-		Items []Entry `json:"items"`
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	// strict=true: any single entry that doesn't parse rejects the whole save
+	// (see decodeRegistryItems doc) — same reasoning as the GameID check below,
+	// just applied one step earlier. This also gives entries missing "order"
+	// (e.g. freshly scanned-in games) the same position-based default Get()
+	// computes, instead of a literal order:0 that Save() used to bake onto
+	// disk permanently — Get()'s own "missing key" detection can only work
+	// for as long as the key is actually still missing on disk.
+	items, ok := decodeRegistryItems(body, true)
+	if !ok {
 		http.Error(w, "invalid json body", http.StatusBadRequest)
 		return
 	}
@@ -185,7 +225,7 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 	// vanish from the launcher while the panel still reported "saved". Refusing
 	// the save is the honest answer: the operator learns immediately which entry
 	// is wrong instead of hunting for a game that no longer appears.
-	for i, it := range payload.Items {
+	for i, it := range items {
 		if !adminutil.IsSafeGameID(it.GameID) {
 			http.Error(w,
 				fmt.Sprintf("entry %d: gameId must be non-empty and contain only letters, digits, '-' or '_'", i+1),
@@ -193,7 +233,9 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	b, err := json.MarshalIndent(payload, "", "  ")
+	b, err := json.MarshalIndent(struct {
+		Items []Entry `json:"items"`
+	}{Items: items}, "", "  ")
 	if err != nil {
 		adminutil.Fail(w, http.StatusBadRequest, "failed to encode the registry", "games", err)
 		return
