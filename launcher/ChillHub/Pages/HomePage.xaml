@@ -667,6 +667,7 @@
                     <Border.ContextMenu>
                       <ContextMenu>
                         <MenuItem Header="Подробнее об игре" Click="GameDetails_Click" CommandParameter="{Binding}"/>
+                        <MenuItem Header="Добавить в очередь загрузок" Click="EnqueueGame_Click" CommandParameter="{Binding}"/>
                         <MenuItem Header="Открыть расположение игры" Click="OpenGameFolder_Click" CommandParameter="{Binding}"/>
                         <MenuItem Header="Удалить локальные файлы" Click="DeleteGame_Click" CommandParameter="{Binding}"/>
                       </ContextMenu>
@@ -880,7 +881,10 @@
               <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <!-- TODO(Track G): gallery carousel goes here (фон/стрелки/точки по gallery.json) -->
+            <!-- Обложка из галереи игры (Трек G, GalleryClient): показывается, когда gallery.json
+                 отдал хотя бы одну картинку, иначе остаётся Collapsed и виден только градиент фона. -->
+            <Image x:Name="HeroCoverImg" Grid.Row="0" Grid.RowSpan="2" Stretch="UniformToFill"
+                   Opacity="0.35" Visibility="Collapsed" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
 
             <!-- Иконка игры крупным планом (заглушка обложки до подключения галереи) -->
             <Grid Grid.Row="0" Grid.RowSpan="2" HorizontalAlignment="Right" VerticalAlignment="Top" Width="120" Height="120"
@@ -927,8 +931,27 @@
                         Style="{DynamicResource Style.Button.HeroTab}" Click="NewsTabLauncher_Click"/>
         </StackPanel>
 
-        <!-- Заглушка: сюда Трек C подключит очередь загрузок -->
-        <ItemsControl x:Name="QueueDock" Grid.Row="2" Margin="0,0,0,8"/>
+        <!-- Очередь загрузок (фаза 1, Трек C): «Добавить в очередь загрузок» в контекстном меню игры -->
+        <ItemsControl x:Name="QueueDock" Grid.Row="2" Margin="0,0,0,8">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Border Style="{DynamicResource Style.Card}" Padding="10,6" Margin="0,0,0,4">
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Grid.Column="0">
+                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="12"/>
+                    <TextBlock Text="{Binding StatusText}" FontSize="11" Foreground="{DynamicResource Brush.TextSecondary}"/>
+                  </StackPanel>
+                  <TextBlock Grid.Column="1" Text="{Binding State}" FontSize="11" VerticalAlignment="Center"
+                             Foreground="{DynamicResource Brush.TextSecondary}"/>
+                </Grid>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
 
         <Grid x:Name="GameNewsPanel" Grid.Row="3" Visibility="Visible">
         <Grid.RowDefinitions>

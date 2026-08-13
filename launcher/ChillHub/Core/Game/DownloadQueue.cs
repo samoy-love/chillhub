@@ -162,13 +162,22 @@ namespace ChillHub.Core.Game {
                 Entry? next;
                 lock (this.gate) {
                     next = this.items.FirstOrDefault(e => e.State == QueueItemState.Waiting);
+                    if (next != null) {
+                        // State/Cts flip atomically with picking the entry, under the same
+                        // lock Remove() reads them through — otherwise Remove() could see a
+                        // stale Waiting state (and remove+notify the UI) for an entry
+                        // ProcessAsync was already about to run, or catch the entry between
+                        // "Running" and "Cts assigned" and call Cancel() on a still-null Cts.
+                        next.State = QueueItemState.Running;
+                        next.Cts = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
+                    }
                 }
 
                 if (next == null) {
                     continue;
                 }
 
-                await this.ProcessAsync(next, lifetime).ConfigureAwait(false);
+                await this.ProcessAsync(next).ConfigureAwait(false);
 
                 // Могло остаться больше одной позиции, а сигнал был съеден одним Release() на Enqueue —
                 // будим себя снова, чтобы не ждать нового Enqueue ради уже стоящих в очереди игр.
@@ -180,15 +189,14 @@ namespace ChillHub.Core.Game {
             }
         }
 
-        private async Task ProcessAsync(Entry entry, CancellationToken lifetime) {
+        private async Task ProcessAsync(Entry entry) {
             var game = this.gameLookup(entry.GameId);
             if (game == null) {
                 this.Finish(entry, QueueItemState.Failed, "Игра больше не найдена в списке.");
                 return;
             }
 
-            entry.State = QueueItemState.Running;
-            entry.Cts = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
+            // State и Cts уже выставлены в RunWorkerAsync под gate — см. комментарий там.
             this.RaiseProgress(entry, "Ожидание в очереди завершено, начинаем…");
 
             var ui = new GameSyncUi {
@@ -208,7 +216,8 @@ namespace ChillHub.Core.Game {
                 ConfirmDeletions: false);
 
             try {
-                await runner.RunAsync(request, entry.Cts.Token).ConfigureAwait(false);
+                // entry.Cts всегда назначен в RunWorkerAsync до вызова ProcessAsync — см. gate там.
+                await runner.RunAsync(request, entry.Cts!.Token).ConfigureAwait(false);
                 this.Finish(entry, entry.CancelRequested ? QueueItemState.Cancelled : QueueItemState.Completed, entry.CancelRequested ? "Снята из очереди." : "Готово.");
             }
             catch (Exception ex) {
