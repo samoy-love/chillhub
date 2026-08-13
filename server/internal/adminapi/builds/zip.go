@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"path"
@@ -35,7 +34,11 @@ const maxUncompressedBytesDefault int64 = 128 << 30 // 128 GiB
 // hand them to the operator verbatim and the tests match on them; wrapping adds
 // the offending entry or the limit.
 var (
-	errArchiveTooLarge = errors.New("archive expands beyond the allowed size")
+	// errArchiveTooLarge aliases the shared adminutil sentinel: extraction-size
+	// budgeting is not specific to builds — thunderstore.go shares the same
+	// adminutil.ExtractBudget type — but callers/tests here still match on
+	// errArchiveTooLarge by its established local name.
+	errArchiveTooLarge = adminutil.ErrExtractBudgetExceeded
 	errZipSlip         = errors.New("zip entry outside target")
 )
 
@@ -49,29 +52,12 @@ func maxUncompressedBytes() int64 {
 }
 
 // extractBudget bounds the total number of bytes an extraction may write.
-type extractBudget struct {
-	limit     int64
-	remaining int64
-}
+// Shared implementation — see adminutil.ExtractBudget's doc comment; this
+// alias just keeps the established local name at every call site in this file.
+type extractBudget = adminutil.ExtractBudget
 
 func newExtractBudget() *extractBudget {
-	n := maxUncompressedBytes()
-	return &extractBudget{limit: n, remaining: n}
-}
-
-// copy writes src into dst, counting the bytes actually produced and failing
-// as soon as the budget is exhausted — the declared entry size is not consulted
-// at all, so a lying header cannot get past it.
-func (b *extractBudget) copy(dst io.Writer, src io.Reader) error {
-	n, err := io.Copy(dst, io.LimitReader(src, b.remaining+1))
-	b.remaining -= n
-	if err != nil {
-		return err
-	}
-	if b.remaining < 0 {
-		return fmt.Errorf("%w (%d bytes)", errArchiveTooLarge, b.limit)
-	}
-	return nil
+	return adminutil.NewExtractBudget(maxUncompressedBytes())
 }
 
 // estimateZipUncompressedSize sums UncompressedSize64 of all regular files in
@@ -321,7 +307,7 @@ func extractZipEntry(f *zip.File, rel, full string, budget *extractBudget) error
 	if err != nil {
 		return fmt.Errorf("create file failed for entry %q -> %s: %w", rel, full, err)
 	}
-	if err := budget.copy(out, rc); err != nil {
+	if err := budget.Copy(out, rc); err != nil {
 		_ = out.Close()
 		return fmt.Errorf("write file failed for entry %q -> %s: %w", rel, full, err)
 	}

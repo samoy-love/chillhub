@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"ChillHub/server/internal/adminutil"
 )
 
 // Extraction must stop at the ceiling instead of writing until the volume is
@@ -43,14 +45,14 @@ func TestUnzipAllowsArchivesUnderTheCeiling(t *testing.T) {
 }
 
 func TestExtractBudgetCountsAcrossEntries(t *testing.T) {
-	b := &extractBudget{limit: 10, remaining: 10}
-	if err := b.copy(discard{}, strings.NewReader("12345")); err != nil {
+	b := adminutil.NewExtractBudget(10)
+	if err := b.Copy(discard{}, strings.NewReader("12345")); err != nil {
 		t.Fatalf("first entry: %v", err)
 	}
-	if err := b.copy(discard{}, strings.NewReader("12345")); err != nil {
+	if err := b.Copy(discard{}, strings.NewReader("12345")); err != nil {
 		t.Fatalf("second entry: %v", err)
 	}
-	if err := b.copy(discard{}, strings.NewReader("x")); err == nil {
+	if err := b.Copy(discard{}, strings.NewReader("x")); err == nil {
 		t.Fatal("the byte past the budget must be rejected")
 	}
 }
