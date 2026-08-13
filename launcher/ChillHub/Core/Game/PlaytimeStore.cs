@@ -92,7 +92,12 @@ namespace ChillHub.Core.Game {
             try {
                 lock (FileLock) {
                     var pending = LoadPendingLocked();
-                    pending[gameId] = new PendingSession {
+                    // Keyed by process id, not gameId: launching the same game twice
+                    // (a second instance while the first is still running) must not
+                    // let the second BeginSession overwrite the first session's entry
+                    // — that silently corrupted/dropped playtime for whichever
+                    // process exited first.
+                    pending[PendingKey(process.Id)] = new PendingSession {
                         GameId = gameId,
                         ProcessId = process.Id,
                         ProcessStartTimeTicks = SafeStartTimeTicks(process),
@@ -105,7 +110,7 @@ namespace ChillHub.Core.Game {
                 Logging.Logger.Warn($"PlaytimeStore.BeginSession({gameId}): {ex.Message}");
             }
 
-            WatchAsync(gameId, process);
+            WatchAsync(process.Id, process);
         }
 
         /// <summary>«142 ч» — суммарное время, округлённое вниз до часа.</summary>
@@ -170,17 +175,16 @@ namespace ChillHub.Core.Game {
                 }
 
                 foreach (var kv in new List<KeyValuePair<string, PendingSession>>(pending)) {
-                    var gameId = kv.Key;
                     var session = kv.Value;
 
                     Process? proc = TryGetSameProcess(session);
                     if (proc != null && !SafeHasExited(proc)) {
                         // Игра всё ещё бежит — досмотрим до конца в этом запуске лаунчера.
-                        WatchAsync(gameId, proc);
+                        WatchAsync(session.ProcessId, proc);
                         continue;
                     }
 
-                    FinishSession(gameId, DateTime.UtcNow);
+                    FinishSession(session.ProcessId, DateTime.UtcNow);
                 }
             }
             catch (Exception ex) {
@@ -199,36 +203,37 @@ namespace ChillHub.Core.Game {
             }
         }
 
-        private static void WatchAsync(string gameId, Process process) {
+        private static void WatchAsync(int processId, Process process) {
             _ = Task.Run(() => {
                 try {
                     process.WaitForExit();
                 }
                 catch (Exception ex) {
-                    Logging.Logger.Warn($"PlaytimeStore.WatchAsync({gameId}): {ex.Message}");
+                    Logging.Logger.Warn($"PlaytimeStore.WatchAsync(pid={processId}): {ex.Message}");
                 }
                 finally {
-                    FinishSession(gameId, DateTime.UtcNow);
+                    FinishSession(processId, DateTime.UtcNow);
                 }
             });
         }
 
-        private static void FinishSession(string gameId, DateTime endUtc) {
+        private static void FinishSession(int processId, DateTime endUtc) {
             lock (FileLock) {
                 var pending = LoadPendingLocked();
-                if (!pending.TryGetValue(gameId, out var session)) {
+                var key = PendingKey(processId);
+                if (!pending.TryGetValue(key, out var session)) {
                     return; // уже закрыта другим потоком/запуском
                 }
 
-                pending.Remove(gameId);
+                pending.Remove(key);
                 SavePendingLocked(pending);
 
                 var elapsed = Math.Max(0, (long)(endUtc - session.SessionStartUtc).TotalSeconds);
 
                 var all = LoadAllLocked();
-                if (!all.TryGetValue(gameId, out var entry)) {
+                if (!all.TryGetValue(session.GameId, out var entry)) {
                     entry = new PlaytimeEntry();
-                    all[gameId] = entry;
+                    all[session.GameId] = entry;
                 }
 
                 entry.TotalSeconds += elapsed;
@@ -237,6 +242,8 @@ namespace ChillHub.Core.Game {
                 SaveAllLocked(all);
             }
         }
+
+        private static string PendingKey(int processId) => processId.ToString();
 
         private static long SafeStartTimeTicks(Process p) {
             try {

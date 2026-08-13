@@ -61,9 +61,11 @@ namespace ChillHub.Core.Home {
     internal static class GameLaunch {
         /// <summary>
         /// Запускает процесс. Отдельным швом — чтобы проверять сборку пути и проверки запрета,
-        /// не запуская в прогоне тестов посторонних программ.
+        /// не запуская в прогоне тестов посторонних программ. gameId идёт вторым параметром
+        /// (а не через общее состояние), чтобы конкурентные вызовы <see cref="Play"/> для
+        /// разных игр не могли перепутать, чьё наигранное время считать.
         /// </summary>
-        internal static Action<ProcessStartInfo> StartProcess { get; set; } = DefaultStartProcess;
+        internal static Action<ProcessStartInfo, string> StartProcess { get; set; } = DefaultStartProcess;
 
         /// <summary>
         /// Запоминает последнюю запущенную игру в настройках. Шов того же назначения:
@@ -145,12 +147,7 @@ namespace ChillHub.Core.Home {
                 };
                 ApplyModProfile(psi, localRoot, profile);
 
-                // DefaultStartProcess нужен gameId, чтобы завести отсчёт наигранного времени,
-                // но публичный шов StartProcess остаётся Action<ProcessStartInfo> — его сигнатуру
-                // используют существующие тесты. Передаём id через поле, читаемое только внутри
-                // настоящей (не тестовой) реализации запуска.
-                pendingPlaytimeGameId = selected;
-                StartProcess(psi);
+                StartProcess(psi, selected);
                 AfterStarted(game);
 
                 return new LaunchResult(LaunchOutcome.Started, string.Empty);
@@ -187,20 +184,15 @@ namespace ChillHub.Core.Home {
             psi.Arguments = string.Join(' ', parts);
         }
 
-        /// <summary>gameId последнего запуска — читается только <see cref="DefaultStartProcess"/>, см. её вызов в <see cref="Play"/>.</summary>
-        private static string? pendingPlaytimeGameId;
-
-        private static void DefaultStartProcess(ProcessStartInfo psi) {
+        private static void DefaultStartProcess(ProcessStartInfo psi, string gameId) {
             var proc = Process.Start(psi);
-            var gameId = pendingPlaytimeGameId;
-            pendingPlaytimeGameId = null;
 
             // Наигранное время считается на выходе процесса ИГРЫ, не лаунчера (трек E):
             // PlaytimeStore сам переживёт закрытие лаунчера раньше игры — сессия закрывается
             // либо тем же лаунчером в фоне, либо следующим его запуском (см. EnsureReconciled).
             if (proc != null && !string.IsNullOrWhiteSpace(gameId)) {
                 try {
-                    PlaytimeStore.BeginSession(gameId!, proc);
+                    PlaytimeStore.BeginSession(gameId, proc);
                 }
                 catch (Exception ex) {
                     Logging.Logger.Warn($"GameLaunch.DefaultStartProcess: не удалось завести отсчёт времени: {ex.Message}");

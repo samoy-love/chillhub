@@ -33,7 +33,7 @@ namespace ChillHub.Tests {
 
         public GameLaunchTests() {
             // Настоящие реализации запускают процесс, пишут config.json пользователя и ходят в сеть
-            GameLaunch.StartProcess = psi => this.started.Add(psi);
+            GameLaunch.StartProcess = (psi, gameId) => this.started.Add(psi);
             GameLaunch.RememberLastGame = gid => this.remembered.Add(gid);
             GameLaunch.AfterStarted = game => this.reported.Add(game);
         }
@@ -218,7 +218,7 @@ namespace ChillHub.Tests {
         public void СбойЗапускаНеБросаетИсключение() {
             using var games = new GamesPathScope();
             WriteExeFile(games.Root, "game", "bin/game.exe");
-            GameLaunch.StartProcess = _ => throw new InvalidOperationException("процесс не создан");
+            GameLaunch.StartProcess = (_, _) => throw new InvalidOperationException("процесс не создан");
             var list = new List<GameInfo> { new GameInfo { GameId = "game", ExeRelativePath = "bin/game.exe" } };
 
             var result = GameLaunch.Play("game", list, MaintenanceState.Off);
