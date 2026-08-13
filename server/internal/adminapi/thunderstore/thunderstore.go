@@ -550,22 +550,52 @@ func cleanupServiceFiles(dir string) ([]string, error) {
 	return removed, nil
 }
 
+// extractBudget bounds the total number of uncompressed bytes one archive may
+// write across ALL of its entries — MaxZipBytes on its own only caps the
+// downloaded (compressed) bytes and, per-entry, only that one entry's own
+// output, so a small compressed archive with many entries could otherwise
+// still write far more than MaxZipBytes to disk in total (decompression-bomb
+// style disk fill). Mirrors adminapi/builds/zip.go's extractBudget, which
+// this package can't import directly (unexported), but the shape and the
+// "never trust the declared size, count real bytes written" rule are the same.
+type extractBudget struct {
+	remaining int64
+}
+
+func newExtractBudget() *extractBudget {
+	return &extractBudget{remaining: MaxZipBytes}
+}
+
+func (b *extractBudget) copy(dst io.Writer, src io.Reader) error {
+	n, err := io.Copy(dst, io.LimitReader(src, b.remaining+1))
+	b.remaining -= n
+	if err != nil {
+		return err
+	}
+	if b.remaining < 0 {
+		return fmt.Errorf("архив распаковывается в больше чем %d байт суммарно", MaxZipBytes)
+	}
+	return nil
+}
+
 // extractZip extracts zip bytes into dir, refusing any entry that would
-// resolve outside dir (zip-slip) or that is an absolute path or a symlink.
+// resolve outside dir (zip-slip) or that is an absolute path or a symlink,
+// and capping the total bytes written across all entries via extractBudget.
 func extractZip(zipBytes []byte, dir string) error {
 	r, err := zip.NewReader(bytesReaderAt(zipBytes), int64(len(zipBytes)))
 	if err != nil {
 		return err
 	}
+	budget := newExtractBudget()
 	for _, f := range r.File {
-		if err := extractOneEntry(f, dir); err != nil {
+		if err := extractOneEntry(f, dir, budget); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func extractOneEntry(f *zip.File, dir string) error {
+func extractOneEntry(f *zip.File, dir string, budget *extractBudget) error {
 	name := f.Name
 	if filepath.IsAbs(name) || strings.HasPrefix(name, "/") || strings.HasPrefix(name, "\\") {
 		return fmt.Errorf("%w: %q", ErrZipSlip, name)
@@ -597,9 +627,10 @@ func extractOneEntry(f *zip.File, dir string) error {
 	}
 	defer func() { _ = out.Close() }()
 	// The zip's own uncompressed-size header is not trusted for the loop
-	// bound; the copy is capped independently so a crafted entry cannot
-	// zip-bomb this into filling the disk.
-	if _, err := io.Copy(out, io.LimitReader(rc, MaxZipBytes)); err != nil {
+	// bound; budget.copy counts real bytes written and is shared across every
+	// entry in the archive, so a crafted archive can't zip-bomb this into
+	// filling the disk one entry at a time either.
+	if err := budget.copy(out, rc); err != nil {
 		return err
 	}
 	return nil
@@ -710,7 +741,11 @@ func (h *Handlers) DownloadModpack(ctx context.Context, gameID, namespace, name,
 
 	onProgress(fmt.Sprintf("граф зависимостей разрешён: %d пакет(ов), начинаю объединение...", len(rs.nodes)))
 
-	profileDir := filepath.Join(h.modpacksDir(gameID), namespace+"-"+name)
+	base := h.modpacksDir(gameID)
+	profileDir := filepath.Join(base, namespace+"-"+name)
+	if !adminutil.EnsureWithin(base, profileDir) {
+		return fmt.Errorf("invalid modpack id")
+	}
 	if err := os.MkdirAll(profileDir, 0o755); err != nil { // #nosec G301 -- served by nginx like the rest of content/.
 		return err
 	}
