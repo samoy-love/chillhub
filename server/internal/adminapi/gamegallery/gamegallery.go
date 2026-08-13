@@ -441,8 +441,8 @@ func writeGalleryFile(p string, gf galleryFile) error {
 // be listed in items: the cover is picked from the same directory but is a
 // separate concept, and requiring an items entry first would make the admin
 // UI set the caption before the cover for no reason.
-func (h *Handlers) SetCover(gameId, file string) error {
-	if !adminutil.IsSafeGameID(gameId) {
+func (h *Handlers) SetCover(gameID, file string) error {
+	if !adminutil.IsSafeGameID(gameID) {
 		return errInvalidGameID
 	}
 	// Checked BEFORE sanitising: SanitizeFilename never returns "" (an empty
@@ -452,7 +452,7 @@ func (h *Handlers) SetCover(gameId, file string) error {
 		return errEmptyFile
 	}
 	file = adminutil.SanitizeFilename(strings.TrimSpace(file))
-	p, err := h.galleryJSONPath(gameId)
+	p, err := h.galleryJSONPath(gameID)
 	if err != nil {
 		return err
 	}
@@ -477,8 +477,8 @@ func (h *Handlers) SetCover(gameId, file string) error {
 // setting a caption is always enough to make an item exist. New items always
 // land at the end of the carousel order, matching upload order until an
 // explicit reorder request is added.
-func (h *Handlers) SetCaption(gameId, file, caption string) error {
-	if !adminutil.IsSafeGameID(gameId) {
+func (h *Handlers) SetCaption(gameID, file, caption string) error {
+	if !adminutil.IsSafeGameID(gameID) {
 		return errInvalidGameID
 	}
 	// Checked BEFORE sanitising: SanitizeFilename never returns "" (an empty
@@ -488,7 +488,7 @@ func (h *Handlers) SetCaption(gameId, file, caption string) error {
 		return errEmptyFile
 	}
 	file = adminutil.SanitizeFilename(strings.TrimSpace(file))
-	p, err := h.galleryJSONPath(gameId)
+	p, err := h.galleryJSONPath(gameID)
 	if err != nil {
 		return err
 	}

@@ -300,7 +300,7 @@ func TestGalleryOnlyScopesContentMount(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GET %s: %v", tc.path, err)
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			if resp.StatusCode != tc.wantStatus {
 				t.Errorf("%s: got status %d, want %d (final URL %s)", tc.path, resp.StatusCode, tc.wantStatus, resp.Request.URL)
 			}

@@ -33,14 +33,7 @@ const maxUncompressedBytesDefault int64 = 128 << 30 // 128 GiB
 // Reasons an archive is refused. They are sentinels because the publish paths
 // hand them to the operator verbatim and the tests match on them; wrapping adds
 // the offending entry or the limit.
-var (
-	// errArchiveTooLarge aliases the shared adminutil sentinel: extraction-size
-	// budgeting is not specific to builds — thunderstore.go shares the same
-	// adminutil.ExtractBudget type — but callers/tests here still match on
-	// errArchiveTooLarge by its established local name.
-	errArchiveTooLarge = adminutil.ErrExtractBudgetExceeded
-	errZipSlip         = errors.New("zip entry outside target")
-)
+var errZipSlip = errors.New("zip entry outside target")
 
 func maxUncompressedBytes() int64 {
 	if v := strings.TrimSpace(os.Getenv("BUILD_MAX_UNCOMPRESSED_BYTES")); v != "" {

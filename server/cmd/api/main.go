@@ -67,13 +67,14 @@ type GameInfo struct {
 
 // (moved to server/internal/httpx)
 
-// GamesResponse.Items order is significant and MUST be preserved end to end:
-// the launcher has no order/pinned fields of its own, it just remembers each
-// game's array index (Core/Home/GameCatalog.cs: RememberApiOrder/apiOrder).
-// loadGamesFromRegistry already returns this slice canonically sorted
-// (games.SortEntries) — do not reorder, filter-then-reorder, or paginate it
-// downstream without re-sorting, or a player's pinned/ordered games silently
-// go back to raw file order for them specifically.
+// GamesResponse holds the /games list. Items order is significant and MUST be
+// preserved end to end: the launcher has no order/pinned fields of its own,
+// it just remembers each game's array index (Core/Home/GameCatalog.cs:
+// RememberApiOrder/apiOrder). loadGamesFromRegistry already returns this
+// slice canonically sorted (games.SortEntries) — do not reorder,
+// filter-then-reorder, or paginate it downstream without re-sorting, or a
+// player's pinned/ordered games silently go back to raw file order for them
+// specifically.
 type GamesResponse struct {
 	Items []GameInfo `json:"items"`
 }

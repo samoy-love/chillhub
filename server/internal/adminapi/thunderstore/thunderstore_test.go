@@ -11,14 +11,6 @@ import (
 	"testing"
 )
 
-// fakePackage describes one node the fakeClient can serve: its own
-// dependencies and the bytes of a zip carrying manifest.json plus whatever
-// BepInEx files the test wants merged.
-type fakePackage struct {
-	deps    []string
-	zipData []byte
-}
-
 // fakeClient is the test double for the network. It never touches a socket:
 // ListCommunityPackages/PackageDetail/DownloadZip all read from an in-memory
 // map keyed by "namespace-name-version" (or "namespace-name" for detail,
@@ -194,7 +186,7 @@ func TestDownloadModpack_GraphTooLarge(t *testing.T) {
 	fc := newFakeClient()
 	fc.detail["owner-a"] = &tsPackageDetail{}
 	var deps []string
-	for i := 0; i < MaxGraphNodes+5; i++ {
+	for i := range MaxGraphNodes + 5 {
 		v := "owner-dep" + itoa(i) + "-1.0.0"
 		deps = append(deps, v)
 		fc.zips["owner-dep"+itoa(i)+"-1.0.0"] = buildZip(t, nil, nil)

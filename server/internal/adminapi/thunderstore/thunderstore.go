@@ -93,6 +93,8 @@ var (
 	ErrNotFound      = errors.New("modpack not found")
 	ErrUnreachable   = errors.New("thunderstore.io unreachable")
 	ErrBadDependency = errors.New("malformed dependency reference")
+
+	errInvalidModpackID = errors.New("invalid modpack id")
 )
 
 // cleanupNames are the service files stripped from a package's own temp
@@ -150,6 +152,7 @@ type ModpackMeta struct {
 
 // tsListItemVersion is one entry of a package's "versions" array in the
 // community package-list API.
+//nolint:tagliatelle // mirrors Thunderstore's own snake_case API shape, not ours to rename
 type tsListItemVersion struct {
 	VersionNumber string `json:"version_number"`
 	Description   string `json:"description"`
@@ -159,6 +162,8 @@ type tsListItemVersion struct {
 
 // tsListItem is one package in the community package-list API
 // (GET /c/<community>/api/v1/package/).
+//
+//nolint:tagliatelle // mirrors Thunderstore's own snake_case API shape, not ours to rename
 type tsListItem struct {
 	Name     string              `json:"name"`
 	FullName string              `json:"full_name"`
@@ -170,6 +175,7 @@ type tsListItem struct {
 // (GET /api/experimental/package/<namespace>/<name>/) that this package
 // actually reads from: the latest version's number and its dependency list.
 type tsPackageDetail struct {
+	//nolint:tagliatelle // mirrors Thunderstore's own snake_case API shape, not ours to rename
 	Latest struct {
 		VersionNumber string   `json:"version_number"`
 		Dependencies  []string `json:"dependencies"`
@@ -178,6 +184,8 @@ type tsPackageDetail struct {
 
 // tsManifest is manifest.json inside a downloaded package zip. Confirmed (per
 // PLAN.md) to carry the same "dependencies" shape as the experimental API.
+//
+//nolint:tagliatelle // mirrors Thunderstore's own snake_case manifest.json shape, not ours to rename
 type tsManifest struct {
 	Name          string   `json:"name"`
 	VersionNumber string   `json:"version_number"`
@@ -224,7 +232,7 @@ func (c *httpClient) getJSON(ctx context.Context, url string, maxBytes int64, ou
 	req.Header.Set("User-Agent", "ChillHub-Admin/1.0")
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrUnreachable, err)
+		return fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusNotFound {
@@ -235,7 +243,7 @@ func (c *httpClient) getJSON(ctx context.Context, url string, maxBytes int64, ou
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrUnreachable, err)
+		return fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	if int64(len(b)) > maxBytes {
 		return fmt.Errorf("response exceeds %d bytes", maxBytes)
@@ -270,7 +278,7 @@ func (c *httpClient) DownloadZip(ctx context.Context, namespace, name, version s
 	req.Header.Set("User-Agent", "ChillHub-Admin/1.0")
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrUnreachable, err)
+		return nil, fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusNotFound {
@@ -281,7 +289,7 @@ func (c *httpClient) DownloadZip(ctx context.Context, namespace, name, version s
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, MaxZipBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrUnreachable, err)
+		return nil, fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	if int64(len(b)) > MaxZipBytes {
 		return nil, ErrZipTooLarge
@@ -718,7 +726,7 @@ func mergeGraph(profileDir string, nodes []resolvedNode, onProgress func(string)
 				if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil { // #nosec G301
 					return err
 				}
-				data, err := os.ReadFile(p) // #nosec G304 -- p comes from filepath.Walk over a temp dir this package extracted.
+				data, err := os.ReadFile(p) // #nosec G304 G122 -- p comes from filepath.Walk over a temp dir this package extracted, not attacker-controlled input.
 				if err != nil {
 					return err
 				}
@@ -775,7 +783,7 @@ func (h *Handlers) DownloadModpack(ctx context.Context, gameID, namespace, name,
 	base := h.modpacksDir(gameID)
 	profileDir := filepath.Join(base, namespace+"-"+name)
 	if !adminutil.EnsureWithin(base, profileDir) {
-		return fmt.Errorf("invalid modpack id")
+		return errInvalidModpackID
 	}
 	if err := os.MkdirAll(profileDir, 0o755); err != nil { // #nosec G301 -- served by nginx like the rest of content/.
 		return err
@@ -871,11 +879,11 @@ func (h *Handlers) DeleteModpack(gameID, namespace, name string) ([]string, erro
 	base := h.modpacksDir(gameID)
 	dir := filepath.Join(base, namespace+"-"+name)
 	if !adminutil.EnsureWithin(base, dir) {
-		return nil, fmt.Errorf("invalid modpack id")
+		return nil, errInvalidModpackID
 	}
 	meta, err := readModpackMeta(dir)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrNotFound, err)
+		return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
 	}
 	removed := make([]string, 0, len(meta.Files))
 	for _, f := range meta.Files {
@@ -996,13 +1004,19 @@ func (h *Handlers) Download(w http.ResponseWriter, r *http.Request) {
 		fl.Flush()
 	}
 	onProgress := func(msg string) {
-		b, _ := json.Marshal(msg)
+		b, mErr := json.Marshal(msg)
+		if mErr != nil {
+			return
+		}
 		emit("{\"type\":\"progress\",\"message\":%s}\n", string(b))
 	}
 
 	err := h.DownloadModpack(r.Context(), body.GameID, body.Namespace, body.Name, body.Version, onProgress)
 	if err != nil {
-		b, _ := json.Marshal(err.Error())
+		b, mErr := json.Marshal(err.Error())
+		if mErr != nil {
+			return
+		}
 		emit("{\"type\":\"error\",\"message\":%s}\n", string(b))
 		return
 	}
