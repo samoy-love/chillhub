@@ -199,6 +199,15 @@ func (s *server) register(mux *http.ServeMux) []string {
 	if isDir(manifestsDir) {
 		add("/manifests/", httpx.NoStore(http.StripPrefix("/manifests/", http.FileServer(http.Dir(manifestsDir)))))
 	}
+	// content/<gameId>/gallery and content/<gameId>/modpacks live here too —
+	// gamegallery.go builds preview URLs as /content/<gid>/gallery/<file>
+	// assuming the public API's PathPrefix("/content/") mount, which this
+	// admin process never had; without this the admin UI's own gallery tab
+	// 404s on every uploaded screenshot.
+	contentDir := filepath.Join(s.contentRoot, "content")
+	if isDir(contentDir) {
+		add("/content/", httpx.NoStore(http.StripPrefix("/content/", http.FileServer(http.Dir(contentDir)))))
+	}
 	// Static Admin UI assets from server/admin_ui
 	uiDir := detectAdminUIDir()
 	if isDir(uiDir) {

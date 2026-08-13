@@ -197,6 +197,7 @@ var wantPaths = []string{
 var staticPaths = map[string]bool{
 	"/admin/ui/":  true,
 	"/assets/":    true,
+	"/content/":   true,
 	"/manifests/": true,
 	"/news/":      true,
 }
