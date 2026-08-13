@@ -249,7 +249,7 @@ func TestExtractZip_ZipSlip(t *testing.T) {
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	err = extractZip(buf.Bytes(), target)
+	err = extractZip(buf.Bytes(), target, newExtractBudget(MaxZipBytes))
 	if err == nil {
 		t.Fatal("expected zip-slip to be rejected")
 	}
@@ -262,6 +262,48 @@ func TestExtractZip_ZipSlip(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(filepath.Dir(dir), "evil.txt")); statErr == nil {
 		t.Fatal("zip-slip entry escaped even further than the immediate parent")
+	}
+}
+
+// TestExtractZip_BudgetIsCumulativeAcrossCalls checks that a shared
+// extractBudget instance actually enforces a cap across MULTIPLE extractZip
+// calls (as resolver does across every node of one graph), not just within a
+// single archive — the bug this guards against: a per-node budget lets many
+// small archives each stay under the cap while their sum on disk blows past it.
+func TestExtractZip_BudgetIsCumulativeAcrossCalls(t *testing.T) {
+	makeZip := func(payload []byte) []byte {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		w, err := zw.Create("file.bin")
+		if err != nil {
+			t.Fatalf("create entry: %v", err)
+		}
+		if _, err := w.Write(payload); err != nil {
+			t.Fatalf("write entry: %v", err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+		return buf.Bytes()
+	}
+
+	const budgetLimit = 10
+	budget := newExtractBudget(budgetLimit)
+	dir := t.TempDir()
+
+	// First call: 6 bytes, well within the shared budget on its own.
+	// extractOneEntry creates the target directory itself, no pre-mkdir needed.
+	if err := extractZip(makeZip([]byte("abcdef")), filepath.Join(dir, "a"), budget); err != nil {
+		t.Fatalf("first extractZip: %v", err)
+	}
+
+	// Second call: another 6 bytes into a DIFFERENT directory — 6 is also
+	// within budgetLimit on its own, but 6+6=12 exceeds the shared 10-byte cap.
+	// A per-call/per-node budget (the bug) would let this succeed; a shared one
+	// must reject it.
+	err := extractZip(makeZip([]byte("ghijkl")), filepath.Join(dir, "b"), budget)
+	if err == nil {
+		t.Fatal("expected the second extractZip to fail once the shared budget is exceeded")
 	}
 }
 

@@ -67,6 +67,15 @@ const (
 	// resolving one graph.
 	MaxGraphBytes = 3 << 30 // 3 GiB
 
+	// MaxGraphExtractedBytes caps the cumulative UNCOMPRESSED bytes written to
+	// disk across every node's extractZip in one resolve — separate from and
+	// larger than MaxGraphBytes, since legitimate archives routinely decompress
+	// to several times their compressed size (text/config files especially).
+	// Without this cap, MaxGraphBytes/MaxZipBytes only bound what gets
+	// downloaded, never what a small, highly-compressible archive can expand
+	// to on disk once extracted — see extractBudget's doc comment.
+	MaxGraphExtractedBytes = 10 << 30 // 10 GiB
+
 	// listCacheTTL is how long a community's package list is cached in memory.
 	listCacheTTL = 5 * time.Minute
 
@@ -413,6 +422,10 @@ type resolver struct {
 	visited    map[string]bool
 	nodes      []resolvedNode
 	totalBytes int64
+	// extractBudget is ONE instance shared across every node's extractZip call
+	// in this resolve — see extractBudget's doc comment for why a per-node
+	// budget isn't enough.
+	extractBudget *extractBudget
 }
 
 // visit downloads and extracts one node (if not already visited), then
@@ -449,7 +462,7 @@ func (rs *resolver) visit(ctx context.Context, ref PackageRef, depsHint []string
 	if err != nil {
 		return err
 	}
-	if err := extractZip(zipBytes, tempDir); err != nil {
+	if err := extractZip(zipBytes, tempDir, rs.extractBudget); err != nil {
 		return fmt.Errorf("распаковка %s: %w", key, err)
 	}
 
@@ -550,20 +563,25 @@ func cleanupServiceFiles(dir string) ([]string, error) {
 	return removed, nil
 }
 
-// extractBudget bounds the total number of uncompressed bytes one archive may
-// write across ALL of its entries — MaxZipBytes on its own only caps the
-// downloaded (compressed) bytes and, per-entry, only that one entry's own
-// output, so a small compressed archive with many entries could otherwise
-// still write far more than MaxZipBytes to disk in total (decompression-bomb
-// style disk fill). Mirrors adminapi/builds/zip.go's extractBudget, which
-// this package can't import directly (unexported), but the shape and the
-// "never trust the declared size, count real bytes written" rule are the same.
+// extractBudget bounds the total number of uncompressed bytes MAY be written
+// across every entry of every archive it is shared over — MaxZipBytes/
+// MaxGraphBytes on their own only cap the downloaded (compressed) bytes, once
+// per node and once cumulatively; neither ever counted decompressed output.
+// A graph of MaxGraphNodes small, highly-compressible archives could each stay
+// under MaxZipBytes compressed while writing far more than that to disk, and
+// still total under MaxGraphBytes compressed across the whole graph — a
+// decompression-bomb style disk fill this budget is what actually closes, by
+// being shared across the whole resolve (see resolver.extractBudget), not
+// reset per node. Mirrors adminapi/builds/zip.go's extractBudget, which this
+// package can't import directly (unexported), but the shape and the "never
+// trust the declared size, count real bytes written" rule are the same.
 type extractBudget struct {
+	limit     int64
 	remaining int64
 }
 
-func newExtractBudget() *extractBudget {
-	return &extractBudget{remaining: MaxZipBytes}
+func newExtractBudget(limit int64) *extractBudget {
+	return &extractBudget{limit: limit, remaining: limit}
 }
 
 func (b *extractBudget) copy(dst io.Writer, src io.Reader) error {
@@ -573,20 +591,22 @@ func (b *extractBudget) copy(dst io.Writer, src io.Reader) error {
 		return err
 	}
 	if b.remaining < 0 {
-		return fmt.Errorf("архив распаковывается в больше чем %d байт суммарно", MaxZipBytes)
+		return fmt.Errorf("архив распаковывается в больше чем %d байт суммарно на весь граф зависимостей", b.limit)
 	}
 	return nil
 }
 
 // extractZip extracts zip bytes into dir, refusing any entry that would
 // resolve outside dir (zip-slip) or that is an absolute path or a symlink,
-// and capping the total bytes written across all entries via extractBudget.
-func extractZip(zipBytes []byte, dir string) error {
+// and capping the total bytes written across every entry against budget —
+// the SAME budget instance the caller shares across every node of one
+// dependency-graph resolve, so the cap is cumulative for the whole graph,
+// not reset per archive.
+func extractZip(zipBytes []byte, dir string, budget *extractBudget) error {
 	r, err := zip.NewReader(bytesReaderAt(zipBytes), int64(len(zipBytes)))
 	if err != nil {
 		return err
 	}
-	budget := newExtractBudget()
 	for _, f := range r.File {
 		if err := extractOneEntry(f, dir, budget); err != nil {
 			return err
@@ -732,7 +752,10 @@ func (h *Handlers) DownloadModpack(ctx context.Context, gameID, namespace, name,
 		return fmt.Errorf("получение сведений о %s: %w", root.key(), err)
 	}
 
-	rs := &resolver{h: h, onProgress: onProgress, visited: map[string]bool{}}
+	rs := &resolver{
+		h: h, onProgress: onProgress, visited: map[string]bool{},
+		extractBudget: newExtractBudget(MaxGraphExtractedBytes),
+	}
 	if err := rs.visit(ctx, root, detail.Latest.Dependencies); err != nil {
 		rs.cleanupTempDirs()
 		return err
