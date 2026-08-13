@@ -17,8 +17,10 @@ import (
 	"ChillHub/server/internal/adminapi/auth"
 	"ChillHub/server/internal/adminapi/builds"
 	"ChillHub/server/internal/adminapi/feedback"
+	"ChillHub/server/internal/adminapi/gamegallery"
 	"ChillHub/server/internal/adminapi/games"
 	"ChillHub/server/internal/adminapi/news"
+	"ChillHub/server/internal/adminapi/thunderstore"
 	"ChillHub/server/internal/adminutil"
 	"ChillHub/server/internal/httpx"
 	"ChillHub/server/internal/maintenance"
@@ -58,15 +60,17 @@ const (
 // package-level state: the handlers receive the root explicitly, which is what
 // lets the tests point them at a temporary directory.
 type server struct {
-	contentRoot string
-	auth        *auth.Auth
-	builds      *builds.Handlers
-	news        *news.Handlers
-	games       *games.Handlers
-	feedback    *feedback.Handlers
-	maintenance *maintenance.Store
-	metrics     *metrics.Handlers
-	prom        *adminMetrics
+	contentRoot  string
+	auth         *auth.Auth
+	builds       *builds.Handlers
+	news         *news.Handlers
+	games        *games.Handlers
+	gamegallery  *gamegallery.Handlers
+	thunderstore *thunderstore.Handlers
+	feedback     *feedback.Handlers
+	maintenance  *maintenance.Store
+	metrics      *metrics.Handlers
+	prom         *adminMetrics
 
 	feedbackLimiter *ratelimit.Limiter
 	metricsLimiter  *ratelimit.Limiter
@@ -95,6 +99,8 @@ func newServer(contentRoot string) *server {
 		builds:          b,
 		news:            news.New(contentRoot),
 		games:           games.New(contentRoot),
+		gamegallery:     gamegallery.New(contentRoot),
+		thunderstore:    thunderstore.New(contentRoot),
 		feedback:        f,
 		maintenance:     mt,
 		metrics:         mx,

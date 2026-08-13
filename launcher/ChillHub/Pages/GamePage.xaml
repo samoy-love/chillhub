@@ -250,6 +250,41 @@
             </StackPanel>
           </Border>
 
+          <!-- Модпак-профиль: первая итерация — только папка модов и доп. аргументы запуска -->
+          <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
+            <StackPanel>
+              <TextBlock Text="Модпак-профиль" Style="{StaticResource Style.SectionHeader}"/>
+              <TextBlock Text="Выбранный профиль применяется при следующем запуске игры с главной страницы."
+                         FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"
+                         Foreground="{DynamicResource Brush.TextSecondary}"/>
+              <ComboBox Name="ModProfileCombo" Width="260" Height="30" HorizontalAlignment="Left"
+                        VerticalContentAlignment="Center"
+                        DisplayMemberPath="Name"
+                        SelectionChanged="ModProfileCombo_SelectionChanged"/>
+            </StackPanel>
+          </Border>
+
+          <!-- Наигранное время -->
+          <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
+            <StackPanel>
+              <TextBlock Text="Наигранное время" Style="{StaticResource Style.SectionHeader}"/>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                  <TextBlock Text="Всего" Style="{StaticResource Style.FieldLabel}"/>
+                  <TextBlock Name="TotalPlaytimeText" Text="—" Style="{StaticResource Style.FieldValue}"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1">
+                  <TextBlock Text="Последняя сессия" Style="{StaticResource Style.FieldLabel}"/>
+                  <TextBlock Name="LastSessionText" Text="—" Style="{StaticResource Style.FieldValue}"/>
+                </StackPanel>
+              </Grid>
+            </StackPanel>
+          </Border>
+
           <!-- Версии сборки: установка конкретной версии / откат -->
           <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
             <StackPanel>

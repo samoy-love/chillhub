@@ -152,9 +152,11 @@ namespace ChillHub.Tests {
         public void PruneAndSave_ОставшийсяОтСбояTmpНеЛоматКеш() {
             using var scope = new HashCacheScope();
 
-            // Имитируем обрыв на предыдущей записи: рядом лежит мусорный .tmp.
+            // Имитируем обрыв на предыдущей записи: рядом лежит мусорный временный файл
+            // (суффикс ChillHub.Update.AtomicFile.TempSuffix — тем же приёмом, которым уже
+            // пользуется самообновление, PruneAndSave теперь пишет тоже).
             Directory.CreateDirectory(HashCacheScope.CacheDir);
-            File.WriteAllText(scope.CacheFile + ".tmp", "полузаписанный мусор");
+            File.WriteAllText(scope.CacheFile + ChillHub.Update.AtomicFile.TempSuffix, "полузаписанный мусор");
 
             var cache = FileHashCache.Load(scope.GameId);
             cache.Set("Game/data.pak", 1024, 1, Sha, B3);
@@ -162,7 +164,7 @@ namespace ChillHub.Tests {
 
             var reloaded = FileHashCache.Load(scope.GameId);
             Assert.True(reloaded.TryGet("Game/data.pak", 1024, 1, out _, out _));
-            Assert.False(File.Exists(scope.CacheFile + ".tmp"));
+            Assert.False(File.Exists(scope.CacheFile + ChillHub.Update.AtomicFile.TempSuffix));
         }
 
         [Fact]

@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -92,6 +94,14 @@ var wantPaths = []string{
 	"/admin/api/feedback/markUnread",
 	"/admin/api/feedback/toggleImportant",
 	"/admin/api/games",
+	"/admin/api/games/gallery",
+	"/admin/api/games/gallery/delete",
+	"/admin/api/games/gallery/mkdir",
+	"/admin/api/games/gallery/rename",
+	"/admin/api/games/gallery/setCaption",
+	"/admin/api/games/gallery/setCover",
+	"/admin/api/games/gallery/upload",
+	"/admin/api/games/gallery/uploadByUrl",
 	"/admin/api/games/icon/upload",
 	"/admin/api/games/save",
 	"/admin/api/games/scan",
@@ -118,6 +128,10 @@ var wantPaths = []string{
 	"/admin/api/news/save",
 	"/admin/api/news/uploadCover",
 	"/admin/api/system/free",
+	"/admin/api/thunderstore/delete",
+	"/admin/api/thunderstore/download",
+	"/admin/api/thunderstore/list",
+	"/admin/api/thunderstore/search",
 	"/admin/api/upload",
 	"/admin/api/upload/abort",
 	"/admin/api/upload/chunk",
@@ -136,6 +150,14 @@ var wantPaths = []string{
 	"/admin/feedback/markUnread",
 	"/admin/feedback/toggleImportant",
 	"/admin/games",
+	"/admin/games/gallery",
+	"/admin/games/gallery/delete",
+	"/admin/games/gallery/mkdir",
+	"/admin/games/gallery/rename",
+	"/admin/games/gallery/setCaption",
+	"/admin/games/gallery/setCover",
+	"/admin/games/gallery/upload",
+	"/admin/games/gallery/uploadByUrl",
 	"/admin/games/icon/upload",
 	"/admin/games/save",
 	"/admin/games/scan",
@@ -162,6 +184,10 @@ var wantPaths = []string{
 	"/admin/news/save",
 	"/admin/news/uploadCover",
 	"/admin/system/free",
+	"/admin/thunderstore/delete",
+	"/admin/thunderstore/download",
+	"/admin/thunderstore/list",
+	"/admin/thunderstore/search",
 	"/admin/upload",
 	"/admin/uploadStream",
 	"/feedback/submit",
@@ -173,6 +199,7 @@ var wantPaths = []string{
 var staticPaths = map[string]bool{
 	"/admin/ui/":  true,
 	"/assets/":    true,
+	"/content/":   true,
 	"/manifests/": true,
 	"/news/":      true,
 }
@@ -213,6 +240,71 @@ func TestAliasOf(t *testing.T) {
 		if got := aliasOf(in); got != want {
 			t.Errorf("aliasOf(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestGalleryOnlyScopesContentMount checks that the /content/ mount (added so
+// the admin UI can display gallery images without an external nginx) serves
+// gallery files but refuses everything else under content/ — directory
+// listings and, in particular, content/<gameId>/modpacks/, which this
+// unauthenticated mount was never meant to expose.
+//
+// Goes through s.register(mux) + a real HTTP round-trip (httptest.NewServer),
+// not galleryOnly called in isolation: calling the handler function directly
+// would miss whether it's actually wired the way routes.go wires it (right
+// prefix, httpx.NoStore, the isDir(contentDir) gate) — a prior version of this
+// test made exactly that mistake, and also missed that a client which DOES
+// follow redirects (the normal case) gets ".." canonicalized away by
+// net/http's own ServeMux before galleryOnly ever sees it, which the
+// isolated-handler version couldn't exercise either way.
+func TestGalleryOnlyScopesContentMount(t *testing.T) {
+	root := t.TempDir()
+	contentDir := filepath.Join(root, "content")
+	galleryFile := filepath.Join(contentDir, "lethal-company", "gallery", "cover.png")
+	if err := os.MkdirAll(filepath.Dir(galleryFile), 0o755); err != nil {
+		t.Fatalf("mkdir gallery: %v", err)
+	}
+	if err := os.WriteFile(galleryFile, []byte("png bytes"), 0o644); err != nil {
+		t.Fatalf("write gallery file: %v", err)
+	}
+	modpackFile := filepath.Join(contentDir, "lethal-company", "modpacks", "lethal_coder-pack", "meta.json")
+	if err := os.MkdirAll(filepath.Dir(modpackFile), 0o755); err != nil {
+		t.Fatalf("mkdir modpacks: %v", err)
+	}
+	if err := os.WriteFile(modpackFile, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write modpack file: %v", err)
+	}
+
+	s := newServer(root)
+	mux := http.NewServeMux()
+	s.register(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	client := srv.Client() // default: follows redirects, like a real browser
+
+	cases := []struct {
+		name       string
+		path       string
+		wantStatus int
+	}{
+		{"gallery file served", "/content/lethal-company/gallery/cover.png", http.StatusOK},
+		{"modpack file blocked", "/content/lethal-company/modpacks/lethal_coder-pack/meta.json", http.StatusNotFound},
+		{"gallery directory listing blocked", "/content/lethal-company/gallery/", http.StatusNotFound},
+		{"content root listing blocked", "/content/", http.StatusNotFound},
+		{"game root listing blocked", "/content/lethal-company/", http.StatusNotFound},
+		{"dot-dot traversal to modpacks blocked", "/content/lethal-company/gallery/../modpacks/lethal_coder-pack/meta.json", http.StatusNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := client.Get(srv.URL + tc.path)
+			if err != nil {
+				t.Fatalf("GET %s: %v", tc.path, err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != tc.wantStatus {
+				t.Errorf("%s: got status %d, want %d (final URL %s)", tc.path, resp.StatusCode, tc.wantStatus, resp.Request.URL)
+			}
+		})
 	}
 }
 

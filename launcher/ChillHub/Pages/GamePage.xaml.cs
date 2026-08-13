@@ -68,7 +68,39 @@ namespace ChillHub.Pages {
             this.SubscribeMaintenance();
             this.Loaded += (s, e) => this.SubscribeMaintenance();
 
+            this.LoadModProfiles();
+
             _ = this.InitAsync();
+        }
+
+        // Первая итерация модпак-профилей (трек F): без реальной установки модов —
+        // только выбор из списка, хранящегося в ModProfileStore. Выбор сохраняется сразу,
+        // подхватывает его GameLaunch.Play на главной странице при следующем запуске.
+        private void LoadModProfiles() {
+            try {
+                var file = Core.Game.ModProfileStore.Load(this.game.GameId);
+                this.ModProfileCombo.ItemsSource = file.Profiles;
+                var selected = Core.Game.ModProfileStore.SelectedProfile(file);
+                this.ModProfileCombo.SelectedItem = selected;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"GamePage.LoadModProfiles: {ex.Message}");
+            }
+        }
+
+        private void ModProfileCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) {
+            try {
+                if (this.ModProfileCombo.SelectedItem is not Core.Game.ModProfile profile) {
+                    return;
+                }
+
+                var file = Core.Game.ModProfileStore.Load(this.game.GameId);
+                file.Selected = profile.Id;
+                Core.Game.ModProfileStore.Save(this.game.GameId, file);
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"GamePage.ModProfileCombo_SelectionChanged: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -88,10 +120,23 @@ namespace ChillHub.Pages {
                 await this.RefreshStateAsync().ConfigureAwait(true);
                 await this.LoadBuildsAsync().ConfigureAwait(true);
                 await this.LoadChangelogAsync().ConfigureAwait(true);
+                this.LoadPlaytime();
             }
             catch (Exception ex) {
                 // Страница уже показана: пользователь увидит пустые поля, но не падение лаунчера
                 Core.Logging.Logger.Error(ex, "GamePage.InitAsync");
+            }
+        }
+
+        /// <summary>Наигранное время (трек E): читает playtime.json, реконсилируя незакрытые сессии.</summary>
+        private void LoadPlaytime() {
+            try {
+                var entry = Core.Game.PlaytimeStore.Get(this.game.GameId);
+                this.TotalPlaytimeText.Text = Core.Game.PlaytimeStore.FormatTotal(entry.TotalSeconds);
+                this.LastSessionText.Text = Core.Game.PlaytimeStore.FormatLastSession(entry.LastSessionAt, entry.LastSessionSeconds);
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"GamePage.LoadPlaytime: {ex.Message}");
             }
         }
 

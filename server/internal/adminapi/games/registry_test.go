@@ -195,6 +195,31 @@ func TestEmptyRegistryIsStorable(t *testing.T) {
 	}
 }
 
+// Get must order the gallery: pinned games first, then by the operator's
+// Order, then by GameID for anything left tied — never the order the JSON
+// file happened to list entries in.
+func TestGetSortsPinnedThenOrderThenGameID(t *testing.T) {
+	h := New(t.TempDir())
+	saveRegistry(t, h, []Entry{
+		{GameID: "z-unpinned", Order: 0},
+		{GameID: "b-pinned-2", Pinned: true, Order: 2},
+		{GameID: "a-pinned-2", Pinned: true, Order: 2},
+		{GameID: "pinned-1", Pinned: true, Order: 1},
+		{GameID: "a-unpinned", Order: 0},
+	})
+
+	got := decodeItems(t, h.Get, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/games", nil))
+	want := []string{"pinned-1", "a-pinned-2", "b-pinned-2", "a-unpinned", "z-unpinned"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d entries, want %d: %+v", len(got), len(want), got)
+	}
+	for i, gid := range want {
+		if got[i].GameID != gid {
+			t.Fatalf("position %d = %q, want %q (full order: %+v)", i, got[i].GameID, gid, got)
+		}
+	}
+}
+
 // saveRegistry posts a list and fails the test if it is not stored.
 func saveRegistry(t *testing.T, h *Handlers, items []Entry) {
 	t.Helper()
@@ -262,4 +287,145 @@ func TestSaveRefusalPointsAtTheEntry(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "3") {
 		t.Fatalf("the refusal does not say which entry failed: %q", w.Body.String())
 	}
+}
+
+// Two rows for the same gameId is the same silent-cure risk an unsafe id is:
+// nothing downstream (icon upload, gallery, latest-version lookup) can tell
+// which of the two rows is "the" game.
+func TestSaveRejectsDuplicateGameID(t *testing.T) {
+	h := New(t.TempDir())
+	body, err := json.Marshal(struct {
+		Items []Entry `json:"items"`
+	}{Items: []Entry{{GameID: "fine"}, {GameID: "dup"}, {GameID: "dup"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	h.Save(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/games/save", strings.NewReader(string(body))))
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("Save accepted a duplicate gameId with status %d: %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(h.root, "manifests", "_registry", "games.json")); err == nil {
+		t.Error("duplicate gameId was refused but the registry was written anyway")
+	}
+}
+
+// This is the round-2 fix (commit 4bf426b) exercised end to end through Save,
+// not just Get: an entry posted WITHOUT an explicit "order" key must not be
+// written to disk as a literal order:0 — that would make the next Get() call
+// (which can only tell "missing key" from "explicit 0" by probing the raw
+// JSON) treat it as if the operator had explicitly pinned it to position 0,
+// permanently baking in the exact bug this fix exists to prevent.
+func TestSaveDefaultsMissingOrderToPosition(t *testing.T) {
+	h := New(t.TempDir())
+	// Raw JSON, not marshaled Entry structs: Go's json.Marshal always emits
+	// "order":0 for a zero-value Entry (no omitempty), which would silently
+	// exercise the WRONG code path (explicit order:0) and prove nothing about
+	// the missing-key path this test targets.
+	body := `{"items":[{"gameId":"first"},{"gameId":"second"}]}`
+
+	w := httptest.NewRecorder()
+	h.Save(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/games/save", strings.NewReader(body)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("Save rejected a valid payload: %d %s", w.Code, w.Body.String())
+	}
+
+	raw, err := os.ReadFile(filepath.Join(h.root, "manifests", "_registry", "games.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var onDisk struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &onDisk); err != nil {
+		t.Fatal(err)
+	}
+	if len(onDisk.Items) != 2 {
+		t.Fatalf("expected 2 entries on disk, got %d", len(onDisk.Items))
+	}
+	firstOrder, _ := onDisk.Items[0]["order"].(float64)
+	secondOrder, _ := onDisk.Items[1]["order"].(float64)
+	if firstOrder != 0 || secondOrder != 1 {
+		t.Fatalf("expected order 0/1 by posted position, got %v/%v — a future Get() can no longer tell these apart from an explicit pin at 0",
+			onDisk.Items[0]["order"], onDisk.Items[1]["order"])
+	}
+}
+
+// A single malformed entry stored on disk (e.g. from a hand edit) must not
+// take the whole games list down with it — Get() logs and skips just that
+// entry, matching how Save() rejects unsafe/duplicate ids one entry at a time
+// rather than failing opaquely.
+func TestGetSkipsOneMalformedEntryAndKeepsTheRest(t *testing.T) {
+	root := t.TempDir()
+	regDir := filepath.Join(root, "manifests", "_registry")
+	if err := os.MkdirAll(regDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// "order" has the wrong JSON type for the second entry — Entry.Order is an
+	// int, so this fails to unmarshal into Entry while still being valid JSON.
+	body := `{"items":[{"gameId":"good"},{"gameId":"bad","order":"not-a-number"}]}`
+	if err := os.WriteFile(filepath.Join(regDir, "games.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	h := New(root)
+	items := decodeItems(t, h.Get, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/games", nil))
+	if len(items) != 1 || items[0].GameID != "good" {
+		t.Fatalf("expected only the well-formed entry to survive, got %+v", items)
+	}
+}
+
+// The registry file itself must already be canonically ordered after Save() —
+// not just Get()'s response. server/cmd/api reads games.json directly (a
+// separate binary, can't share Go structs/handlers with this package) and
+// trusts its on-disk order for what real players see; if Save() only ever
+// echoed back a sorted response without writing sorted bytes, the file on
+// disk would stay in raw POST order and the public API would show it that
+// way regardless of what the admin panel displayed.
+func TestSaveWritesCanonicallyOrderedFile(t *testing.T) {
+	h := New(t.TempDir())
+	// Posted in a deliberately wrong order: alphabetical, no pin.
+	body, err := json.Marshal(struct {
+		Items []Entry `json:"items"`
+	}{Items: []Entry{
+		{GameID: "alpha", Order: 1},
+		{GameID: "beta", Order: 0},
+		{GameID: "gamma", Pinned: true},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	h.Save(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/api/games/save", strings.NewReader(string(body))))
+	if w.Code != http.StatusOK {
+		t.Fatalf("Save rejected a valid payload: %d %s", w.Code, w.Body.String())
+	}
+
+	raw, err := os.ReadFile(filepath.Join(h.root, "manifests", "_registry", "games.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var onDisk struct {
+		Items []Entry `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &onDisk); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"gamma", "beta", "alpha"} // pinned first, then order 0/1
+	for i, gid := range want {
+		if i >= len(onDisk.Items) || onDisk.Items[i].GameID != gid {
+			t.Fatalf("on-disk order = %v, want %v (pinned-first/order-then, not POST order)", diskGameIDs(onDisk.Items), want)
+		}
+	}
+}
+
+func diskGameIDs(items []Entry) []string {
+	out := make([]string, len(items))
+	for i, it := range items {
+		out[i] = it.GameID
+	}
+	return out
 }

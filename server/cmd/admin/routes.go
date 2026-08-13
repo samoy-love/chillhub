@@ -40,8 +40,9 @@ func aliasOf(path string) string {
 // apiRoutes lists every canonical admin endpoint. Adding one here registers
 // both prefixes; there is no second list to keep in sync.
 func (s *server) apiRoutes() []route {
-	b, n, g, f := s.builds, s.news, s.games, s.feedback
+	b, n, g, f, gg := s.builds, s.news, s.games, s.feedback, s.gamegallery
 	mt, mx := s.maintenance, s.metrics
+	ts := s.thunderstore
 	return []route{
 		// Health probe (allowlisted in the auth middleware).
 		{path: "/admin/api/health", handler: func(w http.ResponseWriter, _ *http.Request) { _, _ = fmt.Fprintln(w, "ok") }},
@@ -126,6 +127,22 @@ func (s *server) apiRoutes() []route {
 		{path: "/admin/api/games/save", handler: g.Save},
 		{path: "/admin/api/games/icon/upload", handler: g.IconUpload},
 		{path: "/admin/api/games/scan", handler: g.Scan},
+
+		// Per-game screenshot gallery.
+		{path: "/admin/api/games/gallery", handler: gg.List},
+		{path: "/admin/api/games/gallery/mkdir", handler: gg.Mkdir},
+		{path: "/admin/api/games/gallery/upload", handler: gg.Upload},
+		{path: "/admin/api/games/gallery/uploadByUrl", handler: gg.UploadByURL},
+		{path: "/admin/api/games/gallery/delete", handler: gg.Delete},
+		{path: "/admin/api/games/gallery/rename", handler: gg.Rename},
+		{path: "/admin/api/games/gallery/setCover", handler: gg.SetCoverHandler},
+		{path: "/admin/api/games/gallery/setCaption", handler: gg.SetCaptionHandler},
+
+		// Thunderstore modpack downloads (Трек K).
+		{path: "/admin/api/thunderstore/search", handler: ts.Search},
+		{path: "/admin/api/thunderstore/list", handler: ts.List},
+		{path: "/admin/api/thunderstore/download", handler: ts.Download},
+		{path: "/admin/api/thunderstore/delete", handler: ts.Delete},
 	}
 }
 
@@ -182,6 +199,21 @@ func (s *server) register(mux *http.ServeMux) []string {
 	if isDir(manifestsDir) {
 		add("/manifests/", httpx.NoStore(http.StripPrefix("/manifests/", http.FileServer(http.Dir(manifestsDir)))))
 	}
+	// content/<gameId>/gallery/... — gamegallery.go builds preview URLs as
+	// /content/<gid>/gallery/<file> assuming the public API's
+	// PathPrefix("/content/") mount, which this admin process never had;
+	// without this the admin UI's own gallery tab 404s on every uploaded
+	// screenshot. Deliberately scoped to just that subtree, not the whole
+	// content/ root: content/<gid>/modpacks/ also lives under here (downloaded
+	// Thunderstore mod files), and the admin auth middleware only gates paths
+	// under /admin/ — mounting all of content/ here would make every modpack
+	// ever downloaded, plus a raw directory listing, reachable from this
+	// origin with no login. The public API process still serves all of
+	// content/ (including modpacks) on its own, separate, origin.
+	contentDir := filepath.Join(s.contentRoot, "content")
+	if isDir(contentDir) {
+		add("/content/", httpx.NoStore(http.StripPrefix("/content/", galleryOnly(http.Dir(contentDir)))))
+	}
 	// Static Admin UI assets from server/admin_ui
 	uiDir := detectAdminUIDir()
 	if isDir(uiDir) {
@@ -190,6 +222,26 @@ func (s *server) register(mux *http.ServeMux) []string {
 
 	sort.Strings(paths)
 	return paths
+}
+
+// galleryOnly wraps a content/ file server so it only ever serves paths of the
+// shape "<gameId>/gallery/<...>/<file>" — never a bare directory (which
+// http.FileServer would otherwise list) and never anything outside gallery/
+// (in particular, never content/<gameId>/modpacks/, which this unauthenticated
+// mount was never meant to expose — see the comment at its call site).
+func galleryOnly(root http.FileSystem) http.Handler {
+	fs := http.FileServer(root)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		segments := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		// Order is load-bearing here, not just style: len(segments) < 3 must
+		// short-circuit before segments[1]/segments[len-1] are indexed, or a
+		// 0-1 segment path (e.g. GET /content/x) panics with index out of range.
+		if len(segments) < 3 || segments[1] != "gallery" || segments[len(segments)-1] == "" {
+			http.NotFound(w, r)
+			return
+		}
+		fs.ServeHTTP(w, r)
+	})
 }
 
 func isDir(p string) bool {

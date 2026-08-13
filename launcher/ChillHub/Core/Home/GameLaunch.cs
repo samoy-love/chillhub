@@ -10,6 +10,7 @@ namespace ChillHub.Core.Home {
     using System.IO;
     using System.Linq;
 
+    using ChillHub.Core.Game;
     using ChillHub.Core.Maintenance;
 
     using static ChillHub.Core.Home.GameLocalState;
@@ -60,9 +61,11 @@ namespace ChillHub.Core.Home {
     internal static class GameLaunch {
         /// <summary>
         /// Запускает процесс. Отдельным швом — чтобы проверять сборку пути и проверки запрета,
-        /// не запуская в прогоне тестов посторонних программ.
+        /// не запуская в прогоне тестов посторонних программ. gameId идёт вторым параметром
+        /// (а не через общее состояние), чтобы конкурентные вызовы <see cref="Play"/> для
+        /// разных игр не могли перепутать, чьё наигранное время считать.
         /// </summary>
-        internal static Action<ProcessStartInfo> StartProcess { get; set; } = DefaultStartProcess;
+        internal static Action<ProcessStartInfo, string> StartProcess { get; set; } = DefaultStartProcess;
 
         /// <summary>
         /// Запоминает последнюю запущенную игру в настройках. Шов того же назначения:
@@ -89,8 +92,13 @@ namespace ChillHub.Core.Home {
         /// <param name="gid">Идентификатор выбранной игры.</param>
         /// <param name="games">Список игр главного экрана.</param>
         /// <param name="maintenance">Текущее состояние режима технических работ.</param>
+        /// <param name="profile">
+        /// Выбранный модпак-профиль (первая итерация трека F — без реальной установки
+        /// модов): даёт путь к папке модов и доп. аргументы командной строки. Null — как
+        /// если бы профилей не было вовсе.
+        /// </param>
         /// <returns>Что показать пользователю.</returns>
-        internal static LaunchResult Play(string? gid, IEnumerable<GameInfo>? games, MaintenanceState maintenance) {
+        internal static LaunchResult Play(string? gid, IEnumerable<GameInfo>? games, MaintenanceState maintenance, ModProfile? profile = null) {
             try {
                 if (gid is not string selected || string.IsNullOrWhiteSpace(selected)) {
                     return new LaunchResult(LaunchOutcome.NoGameSelected, "Не выбрана игра");
@@ -137,7 +145,9 @@ namespace ChillHub.Core.Home {
                     WorkingDirectory = Path.GetDirectoryName(exePath) ?? localRoot,
                     UseShellExecute = true,
                 };
-                StartProcess(psi);
+                ApplyModProfile(psi, localRoot, profile);
+
+                StartProcess(psi, selected);
                 AfterStarted(game);
 
                 return new LaunchResult(LaunchOutcome.Started, string.Empty);
@@ -147,7 +157,48 @@ namespace ChillHub.Core.Home {
             }
         }
 
-        private static void DefaultStartProcess(ProcessStartInfo psi) => Process.Start(psi);
+        /// <summary>
+        /// Первая итерация модпак-профилей (трек F): реальной установки модов нет — только
+        /// доп. аргументы командной строки и путь к папке модов (сообщается игре через
+        /// аргумент, а не подкладыванием файлов — этим займётся трек K).
+        /// </summary>
+        private static void ApplyModProfile(ProcessStartInfo psi, string localRoot, ModProfile? profile) {
+            if (profile == null) {
+                return;
+            }
+
+            var parts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(psi.Arguments)) {
+                parts.Add(psi.Arguments);
+            }
+
+            if (!string.IsNullOrWhiteSpace(profile.ModFolder)) {
+                var modPath = Path.Combine(localRoot, profile.ModFolder!.Replace('/', Path.DirectorySeparatorChar));
+                parts.Add($"--mods \"{modPath}\"");
+            }
+
+            if (!string.IsNullOrWhiteSpace(profile.ExtraArgs)) {
+                parts.Add(profile.ExtraArgs!);
+            }
+
+            psi.Arguments = string.Join(' ', parts);
+        }
+
+        private static void DefaultStartProcess(ProcessStartInfo psi, string gameId) {
+            var proc = Process.Start(psi);
+
+            // Наигранное время считается на выходе процесса ИГРЫ, не лаунчера (трек E):
+            // PlaytimeStore сам переживёт закрытие лаунчера раньше игры — сессия закрывается
+            // либо тем же лаунчером в фоне, либо следующим его запуском (см. EnsureReconciled).
+            if (proc != null && !string.IsNullOrWhiteSpace(gameId)) {
+                try {
+                    PlaytimeStore.BeginSession(gameId, proc);
+                }
+                catch (Exception ex) {
+                    Logging.Logger.Warn($"GameLaunch.DefaultStartProcess: не удалось завести отсчёт времени: {ex.Message}");
+                }
+            }
+        }
 
         private static void DefaultAfterStarted(GameInfo game) {
             Metrics.MetricsService.GameLaunch(game.GameId, game.LatestVersion);

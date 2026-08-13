@@ -25,6 +25,9 @@ namespace ChillHub.Core.Settings {
         /// <summary>Положение ползунка числа потоков.</summary>
         internal double DownloadThreads { get; init; }
 
+        /// <summary>Положение ползунка ограничения скорости, МБ/с (0 — без лимита).</summary>
+        internal double SpeedLimitMbps { get; init; }
+
         /// <summary>Автоматическая отправка отчётов об ошибках.</summary>
         internal bool? AutoErrorReports { get; init; }
 
@@ -33,6 +36,9 @@ namespace ChillHub.Core.Settings {
 
         /// <summary>Статус «сейчас играет …» в Discord.</summary>
         internal bool? DiscordRichPresence { get; init; }
+
+        /// <summary>Сворачивать окно в трей вместо закрытия.</summary>
+        internal bool? MinimizeToTray { get; init; }
     }
 
     /// <summary>
@@ -69,6 +75,7 @@ namespace ChillHub.Core.Settings {
 
                 cfg.GamesPath = newPath;
                 cfg.DownloadThreads = (int)input.DownloadThreads;
+                cfg.SpeedLimitMbps = (int)input.SpeedLimitMbps;
                 if (input.AutoErrorReports != null) {
                     cfg.AutoErrorReports = input.AutoErrorReports == true;
                 }
@@ -90,6 +97,10 @@ namespace ChillHub.Core.Settings {
                             ChillHub.Core.Logging.Logger.Warn($"SettingsPage: снять статус Discord не удалось: {ex.Message}");
                         }
                     }
+                }
+
+                if (input.MinimizeToTray != null) {
+                    cfg.MinimizeToTray = input.MinimizeToTray == true;
                 }
 
                 // Запись может не удаться (нет прав на %APPDATA%, диск заполнен, файл занят).

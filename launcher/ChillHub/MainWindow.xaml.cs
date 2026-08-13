@@ -39,11 +39,22 @@ namespace ChillHub {
         /// </summary>
         private Pages.HomePage? homePage;
 
+        /// <summary>
+        /// Значок в трее. Создаётся лениво, только когда впервые понадобился (первое
+        /// сворачивание в трей), чтобы не заводить NotifyIcon для пользователей,
+        /// у которых MinimizeToTray выключен.
+        /// </summary>
+        private TrayService? tray;
+
+        /// <summary>Настоящий выход запрошен из трея — Closing больше не должен его перехватывать.</summary>
+        private bool exitRequested;
+
         public MainWindow() {
             this.karaoke = new KaraokeTicker(this.k);
             this.InitializeComponent();
             Console.WriteLine("[BOOT] Showing MainWindow");
             this.NavigateToHome();
+            this.Closing += this.MainWindow_Closing;
 
             // Karaoke setup
             // Используем собранные настройки выше
@@ -62,6 +73,7 @@ namespace ChillHub {
                 this.Closed += (s, e) => {
                     Core.Maintenance.MaintenanceService.Changed -= this.OnMaintenanceChanged;
                     Core.Maintenance.MaintenanceService.Stop();
+                    this.tray?.Dispose();
                 };
                 this.ApplyMaintenanceState(Core.Maintenance.MaintenanceService.Current);
                 Core.Maintenance.MaintenanceService.Start();
@@ -89,6 +101,54 @@ namespace ChillHub {
                 Core.Logging.Logger.Error(ex, "MainWindow.NavigateToHome");
                 MessageBox.Show($"Не удалось открыть каталог: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
             }
+        }
+
+        /// <summary>
+        /// Крестик/Alt+F4: при включённом MinimizeToTray прячем окно в трей вместо закрытия.
+        /// Единственный способ по-настоящему выйти в этом режиме — пункт «Выйти полностью»
+        /// в меню значка (см. <see cref="EnsureTray"/>), который сам ставит <see cref="exitRequested"/>.
+        /// </summary>
+        private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e) {
+            try {
+                if (this.exitRequested || !Core.ConfigService.Current.MinimizeToTray) {
+                    return;
+                }
+
+                e.Cancel = true;
+                this.EnsureTray().Show();
+                this.Hide();
+            }
+            catch (Exception ex) {
+                // Сбой сворачивания в трей не должен помешать пользователю закрыть окно
+                Core.Logging.Logger.Error(ex, "MainWindow.MainWindow_Closing");
+            }
+        }
+
+        /// <summary>Создаёт значок в трее при первой необходимости и подключает его меню к окну.</summary>
+        private TrayService EnsureTray() {
+            if (this.tray != null) {
+                return this.tray;
+            }
+
+            var t = new TrayService();
+            t.OpenRequested += (s, e) => this.RestoreFromTray();
+            t.PlayRequested += (s, e) => this.RestoreFromTray(); // TODO: запуск текущей игры напрямую, минуя открытие окна
+            t.CheckUpdatesRequested += (s, e) => this.RestoreFromTray(); // TODO: реальная проверка обновлений из трея
+            t.ExitRequested += (s, e) => {
+                this.exitRequested = true;
+                t.Hide();
+                Application.Current.Shutdown();
+            };
+            this.tray = t;
+            return t;
+        }
+
+        /// <summary>Возвращает окно из трея на экран.</summary>
+        private void RestoreFromTray() {
+            this.tray?.Hide();
+            this.Show();
+            this.WindowState = WindowState.Normal;
+            this.Activate();
         }
 
         private void OnMaintenanceChanged(Core.Maintenance.MaintenanceState state) => this.ApplyMaintenanceState(state);

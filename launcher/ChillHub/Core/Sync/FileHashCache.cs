@@ -161,15 +161,9 @@ namespace ChillHub.Core.Sync {
 
                     var model = new CacheFile { Version = CurrentVersion, Entries = this.entries };
                     var json = JsonSerializer.Serialize(model, JsonOptions);
-                    var dir = Path.GetDirectoryName(this.filePath);
-                    if (!string.IsNullOrEmpty(dir)) {
-                        Directory.CreateDirectory(dir);
-                    }
-
-                    // Пишем через временный файл, чтобы не оставить полузаписанный кеш при сбое
-                    var tmp = this.filePath + ".tmp";
-                    File.WriteAllText(tmp, json);
-                    File.Move(tmp, this.filePath, overwrite: true);
+                    // ChillHub.Update.AtomicFile — тот же приём временный-файл-и-подмена, которым
+                    // уже пользуется самообновление для launcher.version, включая создание каталога.
+                    ChillHub.Update.AtomicFile.WriteAllText(this.filePath, json, Core.SelfUpdate.SelfUpdateRules.Utf8NoBom);
                     this.dirty = false;
                 }
             }

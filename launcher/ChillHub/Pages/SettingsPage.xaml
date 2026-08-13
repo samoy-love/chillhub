@@ -79,6 +79,28 @@
         </Grid>
       </Border>
 
+      <!-- Speed limit section -->
+      <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,0,0,6">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <TextBlock Text="Ограничение скорости" FontWeight="SemiBold"/>
+          <Grid Grid.Row="1" Margin="0,8,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="160"/>
+              <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="Скорость загрузки" Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center"/>
+            <Slider Grid.Column="1" Name="SpeedLimitSlider" Minimum="0" Maximum="10" Width="260" Margin="12,0,10,0"
+                    TickFrequency="1" IsSnapToTickEnabled="true" ValueChanged="SpeedLimitSlider_ValueChanged"/>
+            <TextBlock Grid.Column="2" Name="SpeedLimitValueText" Text="без лимита" VerticalAlignment="Center" Margin="8,0,0,0"/>
+          </Grid>
+        </Grid>
+      </Border>
+
       <!-- Integrity section -->
       <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,14,0,0">
         <Grid>
@@ -142,6 +164,22 @@
                        Foreground="{DynamicResource Brush.TextSecondary}" TextWrapping="Wrap" Margin="0,6,0,0"/>
             <CheckBox Name="UsageMetricsCheck" Content="Отправлять обезличенную статистику использования" Margin="0,12,0,0"/>
             <TextBlock Text="Запуски лаунчера, установки и обновления игр, коды ошибок. Без имени пользователя, имени компьютера и путей."
+                       Foreground="{DynamicResource Brush.TextSecondary}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <!-- Tray section -->
+      <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,0,0,14">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <TextBlock Text="Трей" FontWeight="SemiBold"/>
+          <StackPanel Grid.Row="1" Orientation="Vertical" Margin="0,8,0,0">
+            <CheckBox Name="MinimizeToTrayCheck" Content="Сворачивать в трей вместо закрытия"/>
+            <TextBlock Text="Крестик и Alt+F4 будут прятать окно в трей вместо выхода. Полностью завершить работу лаунчера можно из меню значка в трее."
                        Foreground="{DynamicResource Brush.TextSecondary}" TextWrapping="Wrap" Margin="0,6,0,0"/>
           </StackPanel>
         </Grid>

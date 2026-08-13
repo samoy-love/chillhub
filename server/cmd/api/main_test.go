@@ -258,6 +258,61 @@ func TestRegistryEntriesWithUnsafeIDsAreDropped(t *testing.T) {
 	}
 }
 
+// TestGamesResponseHonoursPinnedAndOrder locks in that the public /api/games
+// array — the ONLY ordering signal the launcher trusts (it just remembers each
+// game's index, see Core/Home/GameCatalog.cs RememberApiOrder) — actually
+// reflects the admin panel's Pinned/Order fields, not raw on-disk array order.
+// Before this fix the admin panel's own re-sorted view made pinning LOOK like
+// it worked while the real launcher kept showing the old, unpinned order.
+func TestGamesResponseHonoursPinnedAndOrder(t *testing.T) {
+	root := withContentRoot(t)
+	regDir := filepath.Join(root, "manifests", "_registry")
+	if err := os.MkdirAll(regDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// On-disk order is alphabetical (alpha, beta, gamma); pinned+order should
+	// override that: gamma is pinned (goes first), then beta (order:0) before
+	// alpha (order:1, tie-broken by GameID only if order were equal).
+	body := `{"items":[
+		{"gameId":"alpha","title":"Alpha","order":1},
+		{"gameId":"beta","title":"Beta","order":0},
+		{"gameId":"gamma","title":"Gamma","pinned":true}
+	]}`
+	if err := os.WriteFile(filepath.Join(regDir, "games.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, gid := range []string{"alpha", "beta", "gamma"} {
+		dir := filepath.Join(root, "manifests", gid)
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	testRouter().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/games", nil))
+	var got GamesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("bad json %q: %v", rec.Body.String(), err)
+	}
+	if len(got.Items) != 3 {
+		t.Fatalf("expected 3 games, got %+v", got.Items)
+	}
+	want := []string{"gamma", "beta", "alpha"}
+	for i, gid := range want {
+		if got.Items[i].GameID != gid {
+			t.Fatalf("games response order = %v, want pinned-first/order-then: %v", gameIDs(got.Items), want)
+		}
+	}
+}
+
+func gameIDs(items []GameInfo) []string {
+	out := make([]string, len(items))
+	for i, it := range items {
+		out[i] = it.GameID
+	}
+	return out
+}
+
 // writeJSON must never emit 200 plus a truncated body: a value that cannot be
 // encoded is a server error, and the client has to be able to tell.
 func TestWriteJSONReportsEncodingFailure(t *testing.T) {

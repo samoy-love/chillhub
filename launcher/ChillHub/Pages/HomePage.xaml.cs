@@ -78,6 +78,17 @@ namespace ChillHub.Pages {
         private GameStatusVerifier Verifier => this.statusVerifier ??=
             new GameStatusVerifier(this.sync, () => this.BaseApi, this.spaceHint, this.verified);
 
+        // Очередь загрузок (фаза 1, Трек C): один экземпляр на всё время жизни страницы —
+        // HomePage кешируется приложением, поэтому очередь переживает переходы на GamePage
+        // и обратно, и уже стоящие в ней закачки не обрываются при уходе со страницы.
+        private readonly Core.Game.DownloadQueue downloadQueue;
+        private readonly System.Collections.ObjectModel.ObservableCollection<Core.Game.QueueItem> queueDockItems = new();
+
+        // Галерея игры (Трек G): тот же приём кеша в памяти, что и у остальных
+        // content-загрузчиков страницы — не перезапрашивать gallery.json на каждый выбор игры.
+        private readonly Core.Game.GalleryClient galleryClient = new();
+        private CancellationTokenSource? galleryCts;
+
         // Технические подробности последней ошибки: в статусе показываем короткий текст,
         // детали уходят в лог и в подсказку к строке статуса (C5).
         private string lastErrorDetails = string.Empty;
@@ -225,6 +236,15 @@ namespace ChillHub.Pages {
 
             // Самообновление обрабатывается отдельным окном UpdateWindow до показа MainWindow
             _ = this.StartupAsync();
+
+            this.downloadQueue = new Core.Game.DownloadQueue(
+                gid => this.games.FirstOrDefault(g => string.Equals(g.GameId, gid, StringComparison.OrdinalIgnoreCase)),
+                () => this.BaseApi);
+            this.QueueDock.ItemsSource = this.queueDockItems;
+            this.downloadQueue.ItemAdded += this.OnQueueItemChanged;
+            this.downloadQueue.ItemProgress += this.OnQueueItemChanged;
+            this.downloadQueue.ItemCompleted += this.OnQueueItemRemoved;
+            this.downloadQueue.ItemRemoved += this.OnQueueItemRemoved;
 
             // Ни одна из инициализаций ниже не должна ронять конструктор страницы:
             // при сбое любой из них лаунчер обязан открыться, пусть и без части удобств.
@@ -946,6 +966,25 @@ namespace ChillHub.Pages {
                 Interlocked.CompareExchange(ref this.selectionCts, null, cts);
                 cts.Dispose();
             }
+
+            // Галерея — своя, независимая от гонки за selectionGate загрузка: не должна
+            // задерживать/блокировать основную (новости/версии/сборки). Но предыдущий запрос
+            // всё равно отменяем тем же приёмом, что и above для selectionCts — иначе прокрутка
+            // стрелками по списку игр запускает по HTTP-запросу на каждый шаг, и все они доходят
+            // до конца впустую (применяется только последний). Диспоз — забота самого
+            // LoadHeroGalleryAsync (в своём finally, после await), а не этого места: диспозить
+            // предыдущий CTS сразу после Cancel() рискует ObjectDisposedException, если внутренний
+            // HttpClient ещё регистрирует колбэк на токене в момент отмены.
+            var galleryCtsLocal = new CancellationTokenSource();
+            var previousGalleryCts = Interlocked.Exchange(ref this.galleryCts, galleryCtsLocal);
+            try {
+                previousGalleryCts?.Cancel();
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"GameCombo_SelectionChanged: отмена предыдущей загрузки галереи: {ex.Message}");
+            }
+
+            _ = this.LoadHeroGalleryAsync(gid, galleryCtsLocal);
         }
 
         private async Task HandleGameSelectionAsync(string? gidRaw, CancellationToken token) {
@@ -1626,10 +1665,68 @@ namespace ChillHub.Pages {
                 this.ActionBtn.Content = look.Content;
                 this.ActionBtn.IsEnabled = look.IsEnabled;
                 this.ApplyActionButtonStyle(look.StyleKey);
+
+                // «Играть» на витрине — тот же режим, что и нижняя кнопка действия (одно состояние, два места)
+                if (this.HeroPlayBtn != null) {
+                    this.HeroPlayBtn.Content = look.Content;
+                    this.HeroPlayBtn.IsEnabled = look.IsEnabled;
+                    if (this.TryFindResource(look.StyleKey) is Style heroStyle) {
+                        this.HeroPlayBtn.Style = heroStyle;
+                    }
+                }
             }
             catch (Exception ex) {
                 // Кнопка действия — центральный элемент экрана: не даём сбою оформления уронить страницу
                 Core.Logging.Logger.Error(ex, $"SetActionMode({mode})");
+            }
+        }
+
+        // --- Вкладки под витриной: «Новости игры» / «Новости лаунчера» ---
+        private void NewsTabGame_Click(object sender, RoutedEventArgs e) => this.SelectNewsTab(showGameNews: true);
+
+        private void NewsTabLauncher_Click(object sender, RoutedEventArgs e) => this.SelectNewsTab(showGameNews: false);
+
+        private void SelectNewsTab(bool showGameNews) {
+            try {
+                this.NewsTabGame.IsChecked = showGameNews;
+                this.NewsTabLauncher.IsChecked = !showGameNews;
+                this.GameNewsPanel.Visibility = showGameNews ? Visibility.Visible : Visibility.Collapsed;
+                this.LauncherNewsPanel.Visibility = showGameNews ? Visibility.Collapsed : Visibility.Visible;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"SelectNewsTab: {ex.Message}");
+            }
+        }
+
+        // Заголовок, обложка и бейдж статуса витрины-героя — под выбранную игру
+        private void UpdateHero() {
+            try {
+                var g = this.GetSelectedGame();
+                this.HeroTitleText.Text = g?.Title is string t && !string.IsNullOrWhiteSpace(t) ? t : "Выберите игру";
+
+                string status;
+                if (g == null) {
+                    status = string.Empty;
+                }
+                else if (!this.verified.IsKnown(g.GameId)) {
+                    status = "Проверка…";
+                }
+                else if (g.NeedsUpdate) {
+                    status = "Требуется обновление";
+                }
+                else if (g.IsInstalled) {
+                    status = "Установлена последняя версия";
+                }
+                else {
+                    status = "Не установлена";
+                }
+
+                this.HeroStatusText.Text = status;
+                this.HeroStatusBadge.Visibility = string.IsNullOrEmpty(status) ? Visibility.Collapsed : Visibility.Visible;
+            }
+            catch (Exception ex) {
+                // Витрина — украшение поверх основной логики: сбой обновления заголовка не должен мешать остальному
+                Core.Logging.Logger.Warn($"UpdateHero: {ex.Message}");
             }
         }
 
@@ -1645,6 +1742,7 @@ namespace ChillHub.Pages {
 
         private void UpdateActionButtonState() {
             try {
+                this.UpdateHero();
                 var g = this.GetSelectedGame();
                 var isInstalled = g?.IsInstalled == true;
                 var needsUpdate = g?.NeedsUpdate == true;
@@ -1757,9 +1855,131 @@ namespace ChillHub.Pages {
             }
         }
 
+        // --- Очередь загрузок (Трек C) ---------------------------------------------------
+
+        private void EnqueueGame_Click(object sender, RoutedEventArgs e) {
+            try {
+                // Тот же порядок разрешения, что у остальных пунктов этого контекстного меню
+                // (GameDetails_Click/OpenGameFolder_Click/DeleteGame_Click) — CommandParameter
+                // сперва, DataContext вторым.
+                var game = (sender as FrameworkElement)?.GetValue(MenuItem.CommandParameterProperty) as GameInfo
+                           ?? (sender as FrameworkElement)?.DataContext as GameInfo;
+                if (game == null) {
+                    return;
+                }
+
+                if (!this.downloadQueue.Enqueue(game.GameId)) {
+                    this.StatusText.Text = $"«{game.Title}» уже установлена или уже в очереди.";
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "HomePage.EnqueueGame_Click");
+            }
+        }
+
+        // ItemAdded/ItemProgress несут актуальный снимок позиции — заменяем её в коллекции
+        // целиком (QueueItem неизменяем), а не пытаемся мутировать старую запись на месте.
+        //
+        // BeginInvoke, а не синхронный Invoke: события летят из фонового воркера DownloadQueue
+        // (RunWorkerAsync await-ит ProcessAsync перед тем, как взять следующую позицию), и
+        // синхронное ожидание UI-потока здесь придерживало бы воркер на каждое обновление
+        // прогресса/каждое завершение позиции. BeginInvoke сохраняет порядок событий одного
+        // потока-источника (Dispatcher — FIFO-очередь), просто не ждёт их обработки.
+        private void OnQueueItemChanged(Core.Game.QueueItem item) {
+            this.Dispatcher.BeginInvoke(() => {
+                var idx = IndexOfQueueItem(this.queueDockItems, item.GameId);
+                if (idx >= 0) {
+                    this.queueDockItems[idx] = item;
+                }
+                else {
+                    this.queueDockItems.Add(item);
+                }
+            });
+        }
+
+        private void OnQueueItemRemoved(Core.Game.QueueItem item) {
+            this.Dispatcher.BeginInvoke(() => {
+                var idx = IndexOfQueueItem(this.queueDockItems, item.GameId);
+                if (idx >= 0) {
+                    this.queueDockItems.RemoveAt(idx);
+                }
+            });
+        }
+
+        private static int IndexOfQueueItem(System.Collections.ObjectModel.ObservableCollection<Core.Game.QueueItem> items, string gameId) {
+            for (var i = 0; i < items.Count; i++) {
+                if (string.Equals(items[i].GameId, gameId, StringComparison.OrdinalIgnoreCase)) {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        // --- Галерея игры (Трек G) --------------------------------------------------------
+
+        // Владеет переданным cts целиком — сама диспозит его в finally, после того как
+        // её собственная работа (успешно или нет) завершилась. Так у ЛЮБОГО экземпляра,
+        // включая самый последний за время жизни страницы, гарантированно есть момент
+        // диспоза (раньше это было заботой вызывающего кода, который диспозил только
+        // «предыдущий» CTS при следующем выборе — последний созданный экземпляр не
+        // диспозился никогда).
+        private async Task LoadHeroGalleryAsync(string? gameId, CancellationTokenSource cts) {
+            try {
+                if (string.IsNullOrWhiteSpace(gameId)) {
+                    return;
+                }
+
+                IReadOnlyList<Core.Game.GalleryImage> images;
+                try {
+                    images = await this.galleryClient.GetGalleryAsync(this.BaseApi, gameId!, cts.Token).ConfigureAwait(true);
+                }
+                catch (OperationCanceledException) {
+                    return;
+                }
+
+                if (cts.Token.IsCancellationRequested || !string.Equals(this.GetSelectedGameId(), gameId, StringComparison.OrdinalIgnoreCase)) {
+                    // Выбор уже сменился, пока грузилась галерея прошлой игры — не перетираем витрину.
+                    return;
+                }
+
+                var cover = images.FirstOrDefault();
+                if (cover == null) {
+                    this.HeroCoverImg.Visibility = Visibility.Collapsed;
+                    this.HeroCoverImg.Source = null;
+                    return;
+                }
+
+                try {
+                    this.HeroCoverImg.Source = new BitmapImage(new Uri(cover.ImageUrl, UriKind.Absolute));
+                    this.HeroCoverImg.Visibility = Visibility.Visible;
+                }
+                catch (Exception ex) {
+                    Core.Logging.Logger.Warn($"LoadHeroGalleryAsync: не удалось загрузить обложку {gameId}: {ex.Message}");
+                    this.HeroCoverImg.Visibility = Visibility.Collapsed;
+                }
+            }
+            finally {
+                cts.Dispose();
+            }
+        }
+
         // Сам запуск живёт в Core/Home/GameLaunch: здесь только показ того, чем он кончился.
         private void PlaySelectedGame() {
-            var result = GameLaunch.Play(this.GetSelectedGameId(), this.games, Core.Maintenance.MaintenanceService.Current);
+            var gid = this.GetSelectedGameId();
+            Core.Game.ModProfile? profile = null;
+            if (!string.IsNullOrWhiteSpace(gid)) {
+                try {
+                    var file = Core.Game.ModProfileStore.Load(gid!);
+                    profile = Core.Game.ModProfileStore.SelectedProfile(file);
+                }
+                catch (Exception ex) {
+                    // Выбор профиля — не повод срывать запуск: играем как если бы профилей не было.
+                    Core.Logging.Logger.Warn($"PlaySelectedGame: не удалось прочитать модпак-профиль: {ex.Message}");
+                }
+            }
+
+            var result = GameLaunch.Play(gid, this.games, Core.Maintenance.MaintenanceService.Current, profile);
             switch (result.Outcome) {
                 case LaunchOutcome.ExeMissing:
                 case LaunchOutcome.Failed:
