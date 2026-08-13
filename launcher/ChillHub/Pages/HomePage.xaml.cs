@@ -87,6 +87,7 @@ namespace ChillHub.Pages {
         // Галерея игры (Трек G): тот же приём кеша в памяти, что и у остальных
         // content-загрузчиков страницы — не перезапрашивать gallery.json на каждый выбор игры.
         private readonly Core.Game.GalleryClient galleryClient = new();
+        private CancellationTokenSource? galleryCts;
 
         // Технические подробности последней ошибки: в статусе показываем короткий текст,
         // детали уходят в лог и в подсказку к строке статуса (C5).
@@ -967,8 +968,21 @@ namespace ChillHub.Pages {
             }
 
             // Галерея — своя, независимая от гонки за selectionGate загрузка: не должна
-            // задерживать/блокировать основную (новости/версии/сборки).
-            _ = this.LoadHeroGalleryAsync(gid, CancellationToken.None);
+            // задерживать/блокировать основную (новости/версии/сборки). Но предыдущий запрос
+            // всё равно отменяем тем же приёмом, что и above для selectionCts — иначе прокрутка
+            // стрелками по списку игр запускает по HTTP-запросу на каждый шаг, и все они доходят
+            // до конца впустую (применяется только последний).
+            var galleryCtsLocal = new CancellationTokenSource();
+            var previousGalleryCts = Interlocked.Exchange(ref this.galleryCts, galleryCtsLocal);
+            try {
+                previousGalleryCts?.Cancel();
+                previousGalleryCts?.Dispose();
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"GameCombo_SelectionChanged: отмена предыдущей загрузки галереи: {ex.Message}");
+            }
+
+            _ = this.LoadHeroGalleryAsync(gid, galleryCtsLocal.Token);
         }
 
         private async Task HandleGameSelectionAsync(string? gidRaw, CancellationToken token) {
@@ -1843,7 +1857,12 @@ namespace ChillHub.Pages {
 
         private void EnqueueGame_Click(object sender, RoutedEventArgs e) {
             try {
-                if ((sender as FrameworkElement)?.DataContext is not GameInfo game) {
+                // Тот же порядок разрешения, что у остальных пунктов этого контекстного меню
+                // (GameDetails_Click/OpenGameFolder_Click/DeleteGame_Click) — CommandParameter
+                // сперва, DataContext вторым.
+                var game = (sender as FrameworkElement)?.GetValue(MenuItem.CommandParameterProperty) as GameInfo
+                           ?? (sender as FrameworkElement)?.DataContext as GameInfo;
+                if (game == null) {
                     return;
                 }
 
@@ -1858,8 +1877,14 @@ namespace ChillHub.Pages {
 
         // ItemAdded/ItemProgress несут актуальный снимок позиции — заменяем её в коллекции
         // целиком (QueueItem неизменяем), а не пытаемся мутировать старую запись на месте.
+        //
+        // BeginInvoke, а не синхронный Invoke: события летят из фонового воркера DownloadQueue
+        // (RunWorkerAsync await-ит ProcessAsync перед тем, как взять следующую позицию), и
+        // синхронное ожидание UI-потока здесь придерживало бы воркер на каждое обновление
+        // прогресса/каждое завершение позиции. BeginInvoke сохраняет порядок событий одного
+        // потока-источника (Dispatcher — FIFO-очередь), просто не ждёт их обработки.
         private void OnQueueItemChanged(Core.Game.QueueItem item) {
-            this.Dispatcher.Invoke(() => {
+            this.Dispatcher.BeginInvoke(() => {
                 var idx = IndexOfQueueItem(this.queueDockItems, item.GameId);
                 if (idx >= 0) {
                     this.queueDockItems[idx] = item;
@@ -1871,7 +1896,7 @@ namespace ChillHub.Pages {
         }
 
         private void OnQueueItemRemoved(Core.Game.QueueItem item) {
-            this.Dispatcher.Invoke(() => {
+            this.Dispatcher.BeginInvoke(() => {
                 var idx = IndexOfQueueItem(this.queueDockItems, item.GameId);
                 if (idx >= 0) {
                     this.queueDockItems.RemoveAt(idx);

@@ -108,27 +108,29 @@ namespace ChillHub.Core.Game {
             }
 
             Entry? entry;
+            var removedNow = false;
             lock (this.gate) {
                 entry = this.items.FirstOrDefault(e => string.Equals(e.GameId, gameId, StringComparison.OrdinalIgnoreCase));
                 if (entry == null) {
                     return false;
                 }
 
-                if (entry.State == QueueItemState.Waiting) {
-                    this.items.Remove(entry);
-                }
-                else if (entry.State == QueueItemState.Running) {
-                    // Убираем из списка позже — когда воркер заметит отмену и сам выйдет из RunAsync.
+                if (entry.State == QueueItemState.Running) {
+                    // Не трогаем items/State здесь: Finish() (под тем же gate) снимет позицию и
+                    // пришлёт ровно одно событие, когда ProcessAsync реально остановится по токену
+                    // отмены — иначе Remove() и Finish() могли гонять State/items друг у друга из-под
+                    // ног и породить два противоречащих события для одной и той же позиции.
                     entry.CancelRequested = true;
                     entry.Cts?.Cancel();
                 }
                 else {
                     this.items.Remove(entry);
+                    entry.State = QueueItemState.Cancelled;
+                    removedNow = true;
                 }
             }
 
-            if (entry.State != QueueItemState.Running) {
-                entry.State = QueueItemState.Cancelled;
+            if (removedNow) {
                 this.ItemRemoved?.Invoke(entry.ToItem());
             }
 
@@ -246,13 +248,22 @@ namespace ChillHub.Core.Game {
         }
 
         private void Finish(Entry entry, QueueItemState state, string status) {
-            entry.State = state;
-            entry.StatusText = status;
+            // State/StatusText мутируются под тем же gate, что читает Remove() — без этого
+            // Remove() мог застать позицию ещё Waiting/Running и сообщить об отмене только что
+            // успешно завершённой закачки, пока Finish() параллельно ставил ей Completed.
+            bool stillPresent;
             lock (this.gate) {
-                this.items.Remove(entry);
+                stillPresent = this.items.Remove(entry);
+                entry.State = state;
+                entry.StatusText = status;
             }
 
-            this.ItemCompleted?.Invoke(entry.ToItem());
+            if (stillPresent) {
+                this.ItemCompleted?.Invoke(entry.ToItem());
+            }
+
+            // !stillPresent значит Remove() уже убрал позицию и разослал ItemRemoved сам —
+            // не дублируем и не переопределяем то, что UI уже увидел.
         }
 
         /// <summary>Внутреннее изменяемое состояние позиции — наружу отдаём только снимки <see cref="QueueItem"/>.</summary>
