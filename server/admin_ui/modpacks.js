@@ -151,7 +151,7 @@
       let ok = true;
       if (res.body && typeof res.body.getReader === 'function') {
         const reader = res.body.getReader();
-        const decoder = new TextDecoder();
+        const decoder = new window.TextDecoder();
         let buf = '';
         for (;;) {
           const { value, done } = await reader.read();
