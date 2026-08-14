@@ -18,6 +18,7 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -338,6 +339,14 @@ func (h *Handlers) Delete(w http.ResponseWriter, r *http.Request) {
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to delete", "gamegallery", err)
 		return
 	}
+	// The manifest has to follow the disk. Without this, deleting the cover
+	// left gallery.json pointing at a file that is gone: the request answered
+	// 200, the admin saw the picture disappear, and the launcher went on
+	// fetching a 404 for the витрина.
+	if err := h.forgetRef(r.FormValue("gameId"), joinRef(rel, name)); err != nil {
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to update the gallery", "gamegallery", err)
+		return
+	}
 	adminutil.WriteJSON(w, map[string]string{"status": "ok"})
 }
 
@@ -377,6 +386,12 @@ func (h *Handlers) Rename(w http.ResponseWriter, r *http.Request) {
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to rename", "gamegallery", err)
 		return
 	}
+	// Same reason as in Delete: a renamed cover that keeps its old name in
+	// gallery.json is a cover pointing at nothing.
+	if err := h.moveRef(r.FormValue("gameId"), joinRef(rel, from), joinRef(rel, to)); err != nil {
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to update the gallery", "gamegallery", err)
+		return
+	}
 	adminutil.WriteJSON(w, map[string]string{"status": "ok"})
 }
 
@@ -392,6 +407,42 @@ type galleryFile struct {
 type galleryFileItem struct {
 	File    string `json:"file"`
 	Caption string `json:"caption"`
+}
+
+// galleryRef normalises a gallery.json "file" reference: a path relative to
+// the gallery root, with forward slashes, that stays inside it.
+//
+// It is NOT adminutil.SanitizeFilename. That one folds '/' into '_', so a
+// picture the browser had navigated into ("shots/moon.png") was recorded as
+// the non-existent "shots_moon.png" — the request answered 200 and the cover
+// silently pointed at nothing. The gallery browser can create and enter
+// subdirectories, so references have to survive them.
+//
+// The directory part goes through SanitizeAssetPath (which strips "..") and
+// only the last segment through SanitizeFilename, then the joined path is
+// checked against the root the same way every other path in this package is.
+func galleryRef(base, ref string) (string, error) {
+	ref = strings.ReplaceAll(strings.TrimSpace(ref), "\\", "/")
+	if ref == "" {
+		return "", errEmptyFile
+	}
+	dir, name := path.Split(strings.Trim(ref, "/"))
+	// Checked BEFORE sanitising: SanitizeFilename never returns "" (an empty
+	// name comes back as "file"), so an empty request would otherwise silently
+	// address a real, unintended entry — see news.AssetsMkdir.
+	if strings.TrimSpace(name) == "" {
+		return "", errEmptyFile
+	}
+	dir = adminutil.SanitizeAssetPath(dir)
+	name = adminutil.SanitizeFilename(strings.TrimSpace(name))
+	rel := name
+	if dir != "" {
+		rel = dir + "/" + name
+	}
+	if !adminutil.EnsureWithin(base, filepath.Join(base, filepath.FromSlash(rel))) {
+		return "", errInvalidGameID
+	}
+	return rel, nil
 }
 
 // galleryJSONPath returns the path of gallery.json for gid, without touching
@@ -437,21 +488,26 @@ func writeGalleryFile(p string, gf galleryFile) error {
 }
 
 // SetCover sets the cover picture of gid's gallery to file, creating
-// gallery.json if it does not exist yet. It does not require file to already
-// be listed in items: the cover is picked from the same directory but is a
-// separate concept, and requiring an items entry first would make the admin
-// UI set the caption before the cover for no reason.
+// gallery.json if it does not exist yet, and REGISTERS file in items when it
+// is not listed there yet.
+//
+// The registration is the whole point. The launcher builds its carousel from
+// items and reads cover only to decide which of those entries comes first
+// (see GalleryClient.ParseManifest): a gallery.json carrying a cover and an
+// empty items list is an empty gallery to it. While SetCover wrote cover
+// alone, the admin flow "upload a picture, press «Сделать обложкой»" produced
+// exactly that file, answered 200, lit the «Обложка» badge — and the launcher
+// showed no cover at all. Setting a caption first happened to fix it, because
+// SetCaption appends; nothing said so anywhere.
 func (h *Handlers) SetCover(gameID, file string) error {
-	if !adminutil.IsSafeGameID(gameID) {
-		return errInvalidGameID
+	base, err := h.galleryRoot(gameID)
+	if err != nil {
+		return err
 	}
-	// Checked BEFORE sanitising: SanitizeFilename never returns "" (an empty
-	// name comes back as "file"), so this must run first or an empty request
-	// silently addresses a real, unintended entry — see news.AssetsMkdir.
-	if strings.TrimSpace(file) == "" {
-		return errEmptyFile
+	file, err = galleryRef(base, file)
+	if err != nil {
+		return err
 	}
-	file = adminutil.SanitizeFilename(strings.TrimSpace(file))
 	p, err := h.galleryJSONPath(gameID)
 	if err != nil {
 		return err
@@ -463,7 +519,101 @@ func (h *Handlers) SetCover(gameID, file string) error {
 		return err
 	}
 	gf.Cover = file
+	if !hasItem(gf.Items, file) {
+		gf.Items = append(gf.Items, galleryFileItem{File: file})
+	}
 	return writeGalleryFile(p, gf)
+}
+
+// joinRef builds the gallery.json reference of name inside directory rel, in
+// the slash form the manifest and the launcher's URLs both use.
+func joinRef(rel, name string) string {
+	if rel == "" {
+		return name
+	}
+	return strings.Trim(filepath.ToSlash(filepath.Join(rel, name)), "/")
+}
+
+// underRef reports whether item is ref itself or lives beneath it. Deleting or
+// renaming a directory has to carry every picture inside it, not just an entry
+// that happens to equal the directory name.
+func underRef(item, ref string) bool {
+	return item == ref || strings.HasPrefix(item, ref+"/")
+}
+
+// forgetRef drops ref (and anything beneath it, when ref is a directory) from
+// gallery.json, clearing cover if it pointed at a dropped entry. A gallery
+// without a manifest yet is left alone rather than written empty: there is
+// nothing to forget.
+func (h *Handlers) forgetRef(gameID, ref string) error {
+	return h.editGallery(gameID, func(gf *galleryFile) {
+		kept := gf.Items[:0]
+		for _, it := range gf.Items {
+			if !underRef(it.File, ref) {
+				kept = append(kept, it)
+			}
+		}
+		gf.Items = kept
+		if underRef(gf.Cover, ref) {
+			gf.Cover = ""
+		}
+	})
+}
+
+// moveRef rewrites references from oldRef to newRef, keeping captions and
+// carousel position. Entries beneath a renamed directory move with it.
+func (h *Handlers) moveRef(gameID, oldRef, newRef string) error {
+	return h.editGallery(gameID, func(gf *galleryFile) {
+		rewrite := func(s string) string {
+			switch {
+			case s == oldRef:
+				return newRef
+			case strings.HasPrefix(s, oldRef+"/"):
+				return newRef + strings.TrimPrefix(s, oldRef)
+			default:
+				return s
+			}
+		}
+		for i := range gf.Items {
+			gf.Items[i].File = rewrite(gf.Items[i].File)
+		}
+		gf.Cover = rewrite(gf.Cover)
+	})
+}
+
+// editGallery runs edit against gid's manifest under the same lock every other
+// writer takes, and writes the result back only when the manifest already
+// exists — a game whose gallery was never captioned has no gallery.json, and
+// deleting a picture from it must not create one.
+func (h *Handlers) editGallery(gameID string, edit func(*galleryFile)) error {
+	p, err := h.galleryJSONPath(gameID)
+	if err != nil {
+		return err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, err := os.Stat(p); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	gf, err := readGalleryFile(p)
+	if err != nil {
+		return err
+	}
+	edit(&gf)
+	return writeGalleryFile(p, gf)
+}
+
+// hasItem reports whether items already lists file.
+func hasItem(items []galleryFileItem, file string) bool {
+	for i := range items {
+		if items[i].File == file {
+			return true
+		}
+	}
+	return false
 }
 
 // SetCaption sets the caption of file in gid's gallery, creating gallery.json
@@ -478,16 +628,14 @@ func (h *Handlers) SetCover(gameID, file string) error {
 // land at the end of the carousel order, matching upload order until an
 // explicit reorder request is added.
 func (h *Handlers) SetCaption(gameID, file, caption string) error {
-	if !adminutil.IsSafeGameID(gameID) {
-		return errInvalidGameID
+	base, err := h.galleryRoot(gameID)
+	if err != nil {
+		return err
 	}
-	// Checked BEFORE sanitising: SanitizeFilename never returns "" (an empty
-	// name comes back as "file"), so this must run first or an empty request
-	// silently addresses a real, unintended entry — see news.AssetsMkdir.
-	if strings.TrimSpace(file) == "" {
-		return errEmptyFile
+	file, err = galleryRef(base, file)
+	if err != nil {
+		return err
 	}
-	file = adminutil.SanitizeFilename(strings.TrimSpace(file))
 	p, err := h.galleryJSONPath(gameID)
 	if err != nil {
 		return err
