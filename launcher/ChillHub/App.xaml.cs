@@ -118,8 +118,21 @@ namespace ChillHub {
             mw.SourceInitialized += (_, __) => ApplyWindowChrome(mw);
             this.MainWindow = mw;
             this.ShutdownMode = ShutdownMode.OnMainWindowClose; // возвращаем обычный режим
+
+            // Повторный запуск лаунчера (ярлык, вторая копия), пока этот экземпляр уже жив,
+            // сигналит сюда через именованное событие (см. SingleInstance) — без этого второй
+            // клик по ярлыку, пока лаунчер свёрнут в трей, никак не поднимал его окно.
+            Core.SingleInstance.StartListeningForShowRequests(() =>
+                mw.Dispatcher.Invoke(mw.ShowAndActivate));
+
+            // Окно всегда открывается развёрнутым на экран, а не в трей — WindowState тут
+            // не персистится между запусками, но выставляем явно: значение по умолчанию из
+            // XAML не должно зависеть от того, как ОС запустила процесс (например, ярлык
+            // с «Запуск: свёрнутым»).
+            mw.WindowState = WindowState.Normal;
             BootConsole.Trace("Showing MainWindow");
             mw.Show();
+            mw.Activate();
         }
 
         /// <summary>Оформление заголовка окна и иконка — украшение, окно должно открыться и без них.</summary>

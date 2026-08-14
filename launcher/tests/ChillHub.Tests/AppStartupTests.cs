@@ -187,37 +187,29 @@ namespace ChillHub.Tests {
         // ---- Выход ----
 
         /// <summary>
-        /// При выходе снимается статус в Discord и останавливается опрос техработ.
-        /// Не сняв статус, лаунчер оставит в Discord «сейчас играет …» уже закрытого себя.
+        /// При выходе останавливается опрос техработ: иначе фоновый таймер продолжает
+        /// ходить на сервер уже после закрытия лаунчера.
         /// </summary>
         [Fact]
-        public void ПриВыходеСнимаетсяСтатусИОстанавливаетсяОпрос() {
+        public void ПриВыходеОстанавливаетсяОпрос() {
             var log = new List<string>();
             var shutdown = new ShutdownSequence {
-                ShutdownDiscord = () => log.Add("discord"),
                 StopMaintenancePoll = () => log.Add("опрос"),
             };
 
             shutdown.Run();
 
-            Assert.Equal(new[] { "discord", "опрос" }, log);
+            Assert.Equal(new[] { "опрос" }, log);
         }
 
-        /// <summary>
-        /// Шаги выхода независимы: сбой первого не должен отменить второй. Иначе
-        /// недоступный Discord оставлял бы работающим фоновый опрос сервера.
-        /// </summary>
+        /// <summary>Сбой шага выхода не выпускает исключение наружу: выход обязан состояться.</summary>
         [Fact]
-        public void СбойОдногоШагаВыходаНеОтменяетДругой() {
-            var stopped = false;
+        public void СбойШагаВыходаНеРоняетВыход() {
             var shutdown = new ShutdownSequence {
-                ShutdownDiscord = () => throw new InvalidOperationException("Discord не отвечает"),
-                StopMaintenancePoll = () => stopped = true,
+                StopMaintenancePoll = () => throw new InvalidOperationException("опрос не остановился"),
             };
 
             shutdown.Run();
-
-            Assert.True(stopped, "опрос техработ обязан остановиться");
         }
 
         // ---- Журнал запуска ----

@@ -34,10 +34,23 @@ namespace ChillHub.Core {
         private const string MutexName = @"Local\ChillHub.SingleInstance";
 
         /// <summary>
+        /// Имя именованного события «покажи окно». Второй запуск сигналит по нему вместо
+        /// (или в дополнение к) поиска окна по хендлу — хендл ищется через
+        /// <see cref="Process.MainWindowHandle"/>, а он не находит окно, свёрнутое в трей
+        /// через <c>Window.Hide()</c>: с точки зрения этого API у процесса тогда нет
+        /// главного окна вовсе, и второй экземпляр раньше просто стартовал бы поверх
+        /// первого, а не поднимал его из трея.
+        /// </summary>
+        private const string ShowEventName = @"Local\ChillHub.ShowRequested";
+
+        /// <summary>
         /// Держится всё время жизни процесса: собери его сборщик мусора — замок отпустится
         /// и второй экземпляр запустится как ни в чём не бывало.
         /// </summary>
         private static Mutex? mutex;
+
+        /// <summary>Держит поток-слушатель <see cref="ShowEventName"/> живым, пока жив процесс.</summary>
+        private static EventWaitHandle? showEvent;
 
         /// <summary>
         /// Пытается занять замок. Если его держит другой экземпляр — выводит его окно
@@ -85,6 +98,58 @@ namespace ChillHub.Core {
         }
 
         /// <summary>
+        /// Запускает фоновый поток, который ждёт сигнала «покажи окно» от следующего запуска
+        /// лаунчера, и на каждый сигнал вызывает <paramref name="onShowRequested"/>.
+        /// <para>
+        /// Вызывается победителем замка один раз, сразу после <see cref="TryAcquire()"/> —
+        /// без этого слушателя <see cref="TryFocusRunningInstance"/> у второго экземпляра
+        /// сигналит в пустоту, и окно, свёрнутое в трей, никто не поднимает.
+        /// Колбэк вызывается из потока-слушателя, не из UI-потока — маршалить в
+        /// Dispatcher обязан вызывающий.
+        /// </para>
+        /// </summary>
+        /// <param name="onShowRequested">Что сделать при получении сигнала.</param>
+        internal static void StartListeningForShowRequests(Action onShowRequested) {
+            try {
+                showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
+            }
+            catch (Exception ex) {
+                // Без слушателя лаунчер работоспособен — просто повторный запуск не поднимет
+                // окно из трея, а стартует поверх (см. существующий handle-based fallback).
+                ChillHub.Core.Logging.Logger.Warn($"SingleInstance: не удалось создать событие показа: {ex.Message}");
+                return;
+            }
+
+            var thread = new Thread(() => {
+                while (true) {
+                    try {
+                        if (!showEvent.WaitOne()) {
+                            continue;
+                        }
+                    }
+                    catch (ObjectDisposedException) {
+                        return;
+                    }
+                    catch (Exception ex) {
+                        ChillHub.Core.Logging.Logger.Warn($"SingleInstance: ожидание сигнала показа не удалось: {ex.Message}");
+                        return;
+                    }
+
+                    try {
+                        onShowRequested();
+                    }
+                    catch (Exception ex) {
+                        ChillHub.Core.Logging.Logger.Warn($"SingleInstance: обработчик сигнала показа упал: {ex.Message}");
+                    }
+                }
+            }) {
+                IsBackground = true,
+                Name = "ChillHub.ShowRequestListener",
+            };
+            thread.Start();
+        }
+
+        /// <summary>
         /// Отпускает замок. Нужно только тестам: у живого лаунчера замок держится всё
         /// время работы и снимается вместе с процессом. Вызывать из того же потока,
         /// который его занял, — владение мьютексом принадлежит потоку.
@@ -124,19 +189,42 @@ namespace ChillHub.Core {
             }
         }
 
-        /// <summary>Выводит окно уже запущенного экземпляра на передний план.</summary>
-        /// <returns>true, если такое окно нашлось.</returns>
+        /// <summary>
+        /// Выводит окно уже запущенного экземпляра на передний план.
+        /// <para>
+        /// Сигнал именованным событием <see cref="ShowEventName"/> — побочный эффект,
+        /// отправляется независимо от исхода: это единственный способ достучаться до окна,
+        /// свёрнутого в трей через <c>Window.Hide()</c>, у которого нет хендла с точки зрения
+        /// <see cref="Process.MainWindowHandle"/>. Но сам факт, что
+        /// <see cref="EventWaitHandle"/> создался и <c>Set()</c> не бросил исключение, НЕ
+        /// значит, что другой экземпляр действительно есть и слушает — это создаёт/открывает
+        /// Win32-объект вне зависимости от того, слушает ли его кто-то, и раньше это ложно
+        /// приводило к <see cref="TryAcquire(int)"/>, отдающему false немедленно, даже когда
+        /// занятый замок вот-вот освободится (сценарий самообновления: апдейтер ждёт выхода
+        /// старой копии и полагается на настоящее ожидание в <see cref="WaitFor"/>).
+        /// Возвращаемое значение поэтому основано только на том, нашёлся ли другой процесс
+        /// с тем же именем — через хендл окна или просто по факту существования процесса.
+        /// </para>
+        /// </summary>
+        /// <returns>true, если другой процесс лаунчера действительно найден.</returns>
         private static bool TryFocusRunningInstance() {
+            SignalShowRequested();
+
             try {
                 var self = Process.GetCurrentProcess();
+                var otherFound = false;
                 foreach (var other in Process.GetProcessesByName(self.ProcessName)) {
                     try {
                         if (other.Id == self.Id) {
                             continue;
                         }
 
+                        otherFound = true;
+
                         var handle = other.MainWindowHandle;
                         if (handle == IntPtr.Zero) {
+                            // Хендла нет — скорее всего окно свёрнуто в трей (Window.Hide()).
+                            // Показать его тут нечем, но сигнал events выше уже ушёл слушателю.
                             continue;
                         }
 
@@ -151,12 +239,32 @@ namespace ChillHub.Core {
                         other.Dispose();
                     }
                 }
+
+                return otherFound;
             }
             catch (Exception ex) {
                 ChillHub.Core.Logging.Logger.Warn($"SingleInstance: не удалось показать окно запущенного экземпляра: {ex.Message}");
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Сигналит именованным событием <see cref="ShowEventName"/> запущенному экземпляру:
+        /// поднимет его окно, только если тот действительно слушает (см.
+        /// <see cref="StartListeningForShowRequests"/>) — событие создаётся с
+        /// <see cref="EventResetMode.AutoReset"/>, поэтому сигнал без слушателя просто
+        /// теряется, а не копится. Чисто побочный эффект: успех/неудача не говорит, есть ли
+        /// реально другой экземпляр — см. <see cref="TryFocusRunningInstance"/>.
+        /// </summary>
+        private static void SignalShowRequested() {
+            try {
+                using var ev = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
+                ev.Set();
+            }
+            catch (Exception ex) {
+                ChillHub.Core.Logging.Logger.Warn($"SingleInstance: не удалось отправить сигнал показа: {ex.Message}");
+            }
         }
 
         private static class NativeMethods {
