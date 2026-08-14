@@ -51,6 +51,7 @@
             <span id="mt_state_badge" class="badge text-bg-secondary ms-2">—</span>
           </a>
         </li>
+        <li class="nav-item" role="presentation"><a class="nav-link" id="tabBench" href="#bench" role="tab" aria-selected="false" aria-controls="secBench" tabindex="-1">Бенчмарки</a></li>
         <li class="nav-item" role="presentation"><a class="nav-link" id="tabMetrics" href="#metrics" role="tab" aria-selected="false" aria-controls="secMetrics" tabindex="-1">Метрики</a></li>
       </ul>
 
@@ -293,6 +294,62 @@
         </div>
       </section>
 
+      <section id="secBench" role="tabpanel" aria-labelledby="tabBench" style="display:none">
+        <h2 class="h4">Бенчмарки</h2>
+        <div class="small text-body-secondary mb-3">
+          Инструмент для подбора параметров заливки. К играм и новостям отношения не имеет,
+          поэтому живёт отдельно, а не карточкой в самом низу вкладки «Игры».
+        </div>
+        <div class="card mt-3">
+          <div class="card-header">Тест параметров загрузки (подбор размера чанка и параллельности)</div>
+          <div class="card-body d-flex flex-column gap-2">
+            <div class="small text-body-secondary">
+              Загружает пробный кусок выбранного файла с каждой комбинацией «размер чанка × параллельность» на сервер и
+              сразу отбрасывает загруженное (<code>/admin/api/upload/abort</code>), не создавая версию и не трогая манифесты.
+              Значения по умолчанию рассчитаны на архивы порядка 10–15 ГБ — для более мелких сборок пробу и чанки стоит
+              уменьшить, иначе сама проба займёт заметную долю времени полной заливки.
+            </div>
+            <div class="d-flex flex-wrap align-items-end gap-2">
+              <label class="me-2">Файл: <input id="bench_zip" type="file"></label>
+              <label class="me-2">Проба, МБ: <input id="bench_probe_mb" type="number" min="1" value="512" style="width:90px"></label>
+              <label class="me-2">Чанки, МБ (через запятую): <input id="bench_chunks_mb" value="16,32,64,128,256" style="width:180px"></label>
+              <label class="me-2">Параллельность (через запятую): <input id="bench_concs" value="4,8,16,32,64" style="width:160px"></label>
+              <button type="button" id="bench_run" class="btn btn-sm btn-primary">Запустить тест</button>
+              <button type="button" id="bench_stop" class="btn btn-sm btn-outline-danger" style="display:none">Остановить</button>
+            </div>
+            <!-- Сколько это будет стоить — видно ДО запуска: сетка из 25
+                 ячеек по 512 МБ уезжает на сервер двенадцатью гигабайтами
+                 и занимает часы. -->
+            <div class="small" id="bench_plan"></div>
+            <div class="small text-body-secondary" id="bench_status"></div>
+            <div id="bench_progress" style="display:none">
+              <div class="progress" style="height:14px">
+                <div id="bench_pb" class="progress-bar" role="progressbar" style="width:0%">0%</div>
+              </div>
+              <div class="d-flex flex-wrap gap-3 small mt-1 align-items-baseline">
+                <span id="bench_step"></span>
+                <span id="bench_step_bytes" class="text-body-secondary"></span>
+                <span id="bench_speed"></span>
+                <span id="bench_elapsed" class="text-body-secondary"></span>
+                <span id="bench_eta" class="text-body-secondary"></span>
+              </div>
+              <div class="progress mt-1" style="height:6px">
+                <div id="bench_step_pb" class="progress-bar bg-info" role="progressbar" style="width:0%"></div>
+              </div>
+            </div>
+            <div class="table-responsive">
+              <table class="table table-admin table-striped align-middle table-sm" id="bench_table" style="display:none">
+                <thead><tr><th>Чанк</th><th>Параллельность</th><th>Скорость</th><th>Время</th></tr></thead>
+                <tbody id="bench_tbody"></tbody>
+              </table>
+            </div>
+            <div class="d-flex gap-2" id="bench_apply_wrap" style="display:none">
+              <span class="small text-body-secondary align-self-center">Лучшая комбинация: <b id="bench_best"></b></span>
+              <button type="button" id="bench_apply_game" class="btn btn-sm btn-outline-primary">Применить к загрузке игры</button>
+            </div>
+          </div>
+        </div>
+      </section>
       <section id="secMetrics" class="hidden" role="tabpanel" aria-labelledby="tabMetrics">
         <h2 class="h4">Метрики</h2>
         <div class="card mb-3">
@@ -499,7 +556,7 @@
                     <button class="nav-link" id="gmtab-gallery" data-bs-toggle="tab" data-bs-target="#gmpane-gallery" type="button" role="tab" aria-controls="gmpane-gallery" aria-selected="false">Галерея</button>
                   </li>
                   <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="gmtab-danger" data-bs-toggle="tab" data-bs-target="#gmpane-danger" type="button" role="tab" aria-controls="gmpane-danger" aria-selected="false">Опасная зона</button>
+                    <button class="nav-link" id="gmtab-danger" data-bs-toggle="tab" data-bs-target="#gmpane-danger" type="button" role="tab" aria-controls="gmpane-danger" aria-selected="false">Публикация и удаление</button>
                   </li>
                 </ul>
                 <div class="tab-content pt-3">
@@ -578,8 +635,12 @@
                       </div>
                       <div class="card-body" id="gg_root">
                         <div class="small text-body-secondary mb-2">
-                          Обложка игры — то, что лаунчер рисует за названием на витрине. Полоса широкая:
-                          цель — 1920&nbsp;×&nbsp;640, важное держите по центру по вертикали.
+                          Обложка игры — то, что лаунчер рисует за названием на витрине.
+                          Формат тот же, что у Steam Library Hero: <strong>1920&nbsp;×&nbsp;620</strong>
+                          (подойдёт и 3840&nbsp;×&nbsp;1240). На
+                          <a href="https://www.steamgriddb.com/" target="_blank" rel="noopener">SteamGridDB</a>
+                          это раздел <strong>Heroes</strong> — картинку оттуда можно ставить как есть.
+                          На узком окне лаунчер подрезает её по краям, поэтому главное держите ближе к центру.
                         </div>
                         <nav data-gg="breadcrumbs" class="small text-body-secondary mb-2"></nav>
                         <div class="input-group input-group-sm mb-2">
@@ -630,55 +691,6 @@
                       </div>
                     </div>
                   </div>
-                </div>
-              </div>
-            </div>
-            <div class="card mt-3">
-              <div class="card-header">Тест параметров загрузки (подбор размера чанка и параллельности)</div>
-              <div class="card-body d-flex flex-column gap-2">
-                <div class="small text-body-secondary">
-                  Загружает пробный кусок выбранного файла с каждой комбинацией «размер чанка × параллельность» на сервер и
-                  сразу отбрасывает загруженное (<code>/admin/api/upload/abort</code>), не создавая версию и не трогая манифесты.
-                  Значения по умолчанию рассчитаны на архивы порядка 10–15 ГБ — для более мелких сборок пробу и чанки стоит
-                  уменьшить, иначе сама проба займёт заметную долю времени полной заливки.
-                </div>
-                <div class="d-flex flex-wrap align-items-end gap-2">
-                  <label class="me-2">Файл: <input id="bench_zip" type="file"></label>
-                  <label class="me-2">Проба, МБ: <input id="bench_probe_mb" type="number" min="1" value="512" style="width:90px"></label>
-                  <label class="me-2">Чанки, МБ (через запятую): <input id="bench_chunks_mb" value="16,32,64,128,256" style="width:180px"></label>
-                  <label class="me-2">Параллельность (через запятую): <input id="bench_concs" value="4,8,16,32,64" style="width:160px"></label>
-                  <button type="button" id="bench_run" class="btn btn-sm btn-primary">Запустить тест</button>
-                  <button type="button" id="bench_stop" class="btn btn-sm btn-outline-danger" style="display:none">Остановить</button>
-                </div>
-                <!-- Сколько это будет стоить — видно ДО запуска: сетка из 25
-                     ячеек по 512 МБ уезжает на сервер двенадцатью гигабайтами
-                     и занимает часы. -->
-                <div class="small" id="bench_plan"></div>
-                <div class="small text-body-secondary" id="bench_status"></div>
-                <div id="bench_progress" style="display:none">
-                  <div class="progress" style="height:14px">
-                    <div id="bench_pb" class="progress-bar" role="progressbar" style="width:0%">0%</div>
-                  </div>
-                  <div class="d-flex flex-wrap gap-3 small mt-1 align-items-baseline">
-                    <span id="bench_step"></span>
-                    <span id="bench_step_bytes" class="text-body-secondary"></span>
-                    <span id="bench_speed"></span>
-                    <span id="bench_elapsed" class="text-body-secondary"></span>
-                    <span id="bench_eta" class="text-body-secondary"></span>
-                  </div>
-                  <div class="progress mt-1" style="height:6px">
-                    <div id="bench_step_pb" class="progress-bar bg-info" role="progressbar" style="width:0%"></div>
-                  </div>
-                </div>
-                <div class="table-responsive">
-                  <table class="table table-admin table-striped align-middle table-sm" id="bench_table" style="display:none">
-                    <thead><tr><th>Чанк</th><th>Параллельность</th><th>Скорость</th><th>Время</th></tr></thead>
-                    <tbody id="bench_tbody"></tbody>
-                  </table>
-                </div>
-                <div class="d-flex gap-2" id="bench_apply_wrap" style="display:none">
-                  <span class="small text-body-secondary align-self-center">Лучшая комбинация: <b id="bench_best"></b></span>
-                  <button type="button" id="bench_apply_game" class="btn btn-sm btn-outline-primary">Применить к загрузке игры</button>
                 </div>
               </div>
             </div>

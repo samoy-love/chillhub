@@ -9,8 +9,8 @@
 //     проставляет gallery.json.cover через SetCover и подсвечивает текущую
 //     обложку бейджем.
 //
-// Эндпоинты — реальные роуты трека H, зарегистрированные в
-// server/cmd/admin/routes.go поверх server/internal/adminapi/gamegallery:
+// Эндпоинты зарегистрированы в server/cmd/admin/routes.go поверх
+// server/internal/adminapi/gamegallery:
 //
 //   GET  /admin/api/games/gallery?gameId=..&path=..&q=..        -> Handlers.List
 //        {path, items:[{name,url,size,modTime,isDir}]}
@@ -43,8 +43,7 @@
   };
 
   // Небольшие копии общих хелперов admin.js: файл должен работать
-  // самостоятельно (Track I может смонтировать его в другую вкладку, где
-  // admin.js уже загружен, но полагаться на порядок загрузки не стоит), а
+  // самостоятельно, не полагаясь на порядок загрузки скриптов, а
   // window.escapeHtml/notifyLevel/askConfirm переиспользуются, если уже есть —
   // одинаковое поведение с остальной админкой лучше, чем дублирующий тост.
   function esc(s) {
@@ -65,7 +64,7 @@
   const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg|ico)(\?|#|$)/i;
   function isImageName(name) { return IMAGE_EXT_RE.test(String(name || '')); }
 
-  // Состояние держим на инстанс, чтобы Track I мог смонтировать несколько
+  // Состояние держим на инстанс, чтобы можно было смонтировать несколько
   // галерей на странице (или ту же — на разных играх) без глобальных коллизий.
   function createGameGallery(opts) {
     const o = opts || {};
@@ -105,6 +104,25 @@
       });
     }
 
+    // httpReason превращает ответ сервера в фразу, которую можно показать человеку.
+    // Раньше в панель уходило «HTTP 404» — код, по которому оператору непонятно ни
+    // что случилось, ни что делать, и который выглядит как сбой даже там, где всё
+    // исправно (у новой игры просто ещё нет папки галереи).
+    function httpReason(res, fallback) {
+      switch (res.status) {
+        case 400: return 'Панель отправила неверный запрос. Обновите страницу и попробуйте снова.';
+        case 401:
+        case 403: return 'Сессия истекла. Войдите заново.';
+        case 404: return 'Папка галереи не найдена — возможно, её удалили. Нажмите «Обновить».';
+        case 413: return 'Файл слишком большой. Ограничение — 32 МБ.';
+        case 415: return 'Такой формат картинки не поддерживается.';
+        case 500:
+        case 502:
+        case 503: return 'Сервер не смог выполнить операцию. Попробуйте ещё раз через минуту.';
+        default: return (fallback || 'Не удалось выполнить операцию') + ' (код ' + res.status + ').';
+      }
+    }
+
     function renderError(msg) {
       if (!els.grid) return;
       els.grid.innerHTML = '<div class="text-danger">' + esc(msg || 'Ошибка') + '</div>';
@@ -131,9 +149,9 @@
       if (q.trim() !== '') url += '&q=' + encodeURIComponent(q.trim());
       let res;
       try { res = await fetch(url); } catch (e) { renderError('Ошибка загрузки: ' + e); return; }
-      if (!res.ok) { renderError('HTTP ' + res.status + ' ' + res.statusText); return; }
+      if (!res.ok) { renderError(httpReason(res, 'Не удалось открыть галерею')); return; }
       let j;
-      try { j = await res.json(); } catch (e) { renderError('Bad JSON'); return; }
+      try { j = await res.json(); } catch (e) { renderError('Сервер вернул не то, что ожидалось. Обновите страницу.'); return; }
       setPath(j.path || path);
       const items = j.items || [];
       // Подписи и обложка в gallery.json ключуются по голому имени файла
@@ -188,7 +206,16 @@
 
     function renderGrid(items) {
       if (!els.grid) return;
-      if (!items || items.length === 0) { els.grid.innerHTML = '<div class="text-body-secondary">Пусто</div>'; return; }
+      if (!items || items.length === 0) {
+        // Пустая галерея — обычное состояние новой игры, а не сбой: подсказываем,
+        // что делать дальше, вместо односложного «Пусто».
+        els.grid.innerHTML = '<div class="text-body-secondary py-3">'
+          + (path
+            ? 'В этой папке пока пусто.'
+            : 'У игры ещё нет ни одной картинки. Загрузите обложку с диска или по ссылке — кнопки выше.')
+          + '</div>';
+        return;
+      }
       els.grid.innerHTML = '';
       const gameId = getGameId();
       items.forEach(function (it) {
@@ -355,7 +382,7 @@
       fd.append('file', file);
       let res;
       try { res = await fetch(EP.upload, { method: 'POST', body: fd }); } catch (e) { toast('Ошибка загрузки: ' + e, 'error'); return; }
-      if (!res.ok) { toast('HTTP ' + res.status + ' ' + res.statusText, 'error'); return; }
+      if (!res.ok) { toast(httpReason(res, 'Не удалось загрузить картинку'), 'error'); return; }
       fetchAndRender();
     }
 
@@ -381,7 +408,7 @@
       fd.set('gameId', gameId); fd.set('path', path || ''); fd.set('filename', name); fd.set('url', url);
       let res;
       try { res = await fetch(EP.uploadByUrl, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: fd.toString() }); } catch (e2) { renderError('Ошибка: ' + e2); return; }
-      if (!res.ok) { renderError('HTTP ' + res.status + ' ' + res.statusText); return; }
+      if (!res.ok) { toast(httpReason(res, 'Не удалось сохранить картинку'), 'error'); return; }
       fetchAndRender();
     });
     if (els.uploadFile) els.uploadFile.addEventListener('change', function () {

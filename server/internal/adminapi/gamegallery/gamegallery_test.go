@@ -600,3 +600,28 @@ func TestDeleteWithoutManifestWritesNothing(t *testing.T) {
 		t.Fatal("delete created a gallery.json for a gallery that had none")
 	}
 }
+
+// У новой игры папки галереи ещё нет — её заводит первая загрузка. Это пустая
+// галерея, а не ошибка: панель показывала «HTTP 404» на совершенно исправной
+// игре, и оператору это читалось как сбой.
+func TestListOfNeverUsedGalleryIsEmptyNotFound(t *testing.T) {
+	h, _ := newHandlers(t)
+
+	code, listing := list(t, h, "brand-new-game", "")
+	if code != http.StatusOK {
+		t.Fatalf("list of a fresh gallery returned %d, want 200", code)
+	}
+	if got := names(listing); len(got) != 0 {
+		t.Fatalf("fresh gallery is not empty: %v", got)
+	}
+}
+
+// А вот подпапка, которой нет, — это устаревший список, и про неё честнее
+// ответить 404, чем показать пустоту.
+func TestListOfMissingSubdirectoryStays404(t *testing.T) {
+	h, _ := newHandlers(t)
+
+	if code, _ := list(t, h, "brand-new-game", "shots"); code != http.StatusNotFound {
+		t.Fatalf("missing subdirectory returned %d, want 404", code)
+	}
+}
