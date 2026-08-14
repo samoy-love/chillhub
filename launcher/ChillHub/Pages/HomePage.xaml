@@ -7,46 +7,43 @@
       Background="{DynamicResource Brush.Background}">
   <Page.Resources>
     <!-- Progress visuals shared brushes -->
-    <SolidColorBrush x:Key="Brush.ProgressBorder" Color="#2B1F4A"/>
-    <SolidColorBrush x:Key="Brush.ProgressTrack" Color="#1A122B"/>
-    <!-- Base dim colors -->
-    <!-- Play state uses logo's purple (secondary accent family) -->
-    <!-- ... rest of the code remains the same ... -->
-    <SolidColorBrush x:Key="Btn.Play.Bg" Color="#6F3AFF"/>
-    <SolidColorBrush x:Key="Btn.Play.Bg.Hover" Color="#7C3AED"/>
-    <SolidColorBrush x:Key="Btn.Play.Bg.Disabled" Color="#3E2A77"/>
-    <SolidColorBrush x:Key="Btn.Play.Fg" Color="#F2EDFF"/>
-    <SolidColorBrush x:Key="Btn.Play.Border" Color="#8C6AFF"/>
+    <SolidColorBrush x:Key="Brush.ProgressBorder" Color="{DynamicResource Color.Border}"/>
+    <SolidColorBrush x:Key="Brush.ProgressTrack" Color="{DynamicResource Color.Track}"/>
 
-    <!-- Variant C: softly filled accents for Update -->
-    <SolidColorBrush x:Key="Btn.Update.Bg" Color="#2B1F4A"/>
-    <SolidColorBrush x:Key="Btn.Update.Bg.Hover" Color="#3A2966"/>
-    <SolidColorBrush x:Key="Btn.Update.Bg.Disabled" Color="#20183A"/>
-    <SolidColorBrush x:Key="Btn.Update.Fg" Color="#F2EDFF"/>
-    <SolidColorBrush x:Key="Btn.Update.Border" Color="#8C6AFF"/>
+    <!-- Кнопка действия. Главные состояния («Играть», «Обновить», «Установить») красятся
+         ОДНИМ акцентом: раньше у каждого был свой цвет — сиреневый, тёмно-лиловый и
+         розовый градиент — и по цвету нельзя было понять, что все они означают одно и то
+         же «сделай главное». Отличаются они текстом, а не окраской. Опасные состояния
+         («Отмена», «Повторить») остаются приглушённо-красными. -->
+    <SolidColorBrush x:Key="Btn.Play.Bg" Color="{DynamicResource Color.Accent}"/>
+    <SolidColorBrush x:Key="Btn.Play.Bg.Hover" Color="{DynamicResource Color.AccentHover}"/>
+    <SolidColorBrush x:Key="Btn.Play.Bg.Disabled" Color="#3A3550"/>
+    <SolidColorBrush x:Key="Btn.Play.Fg" Color="#0C0C10"/>
+    <SolidColorBrush x:Key="Btn.Play.Border" Color="Transparent"/>
 
-    <!-- Install uses dark vibrant gradient like UpdateWindow primary -->
-    <LinearGradientBrush x:Key="Btn.Install.Bg" StartPoint="0,0" EndPoint="1,1">
-      <GradientStop Offset="0" Color="#3A2966"/>
-      <GradientStop Offset="1" Color="#8A2A4A"/>
-    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Btn.Update.Bg" Color="{DynamicResource Color.Accent}"/>
+    <SolidColorBrush x:Key="Btn.Update.Bg.Hover" Color="{DynamicResource Color.AccentHover}"/>
+    <SolidColorBrush x:Key="Btn.Update.Bg.Disabled" Color="#3A3550"/>
+    <SolidColorBrush x:Key="Btn.Update.Fg" Color="#0C0C10"/>
+    <SolidColorBrush x:Key="Btn.Update.Border" Color="Transparent"/>
+
+    <SolidColorBrush x:Key="Btn.Install.Bg" Color="{DynamicResource Color.Accent}"/>
     <SolidColorBrush x:Key="Btn.Install.Bg.Hover" Color="{DynamicResource Color.AccentHover}"/>
-    <SolidColorBrush x:Key="Btn.Install.Bg.Disabled" Color="#7A2748"/>
-    <SolidColorBrush x:Key="Btn.Install.Fg" Color="#FFEAF1"/>
+    <SolidColorBrush x:Key="Btn.Install.Bg.Disabled" Color="#3A3550"/>
+    <SolidColorBrush x:Key="Btn.Install.Fg" Color="#0C0C10"/>
 
-    <!-- Variant C: softly filled danger for Retry -->
-    <SolidColorBrush x:Key="Btn.Retry.Bg" Color="#3A2222"/>
-    <SolidColorBrush x:Key="Btn.Retry.Bg.Hover" Color="#4A2929"/>
-    <SolidColorBrush x:Key="Btn.Retry.Bg.Disabled" Color="#2A1A1A"/>
-    <SolidColorBrush x:Key="Btn.Retry.Fg" Color="#F8ECEC"/>
-    <SolidColorBrush x:Key="Btn.Retry.Border" Color="#FF6B6B"/>
+    <!-- Повторить: приглушённый красный, заметный, но не спорящий с акцентом -->
+    <SolidColorBrush x:Key="Btn.Retry.Bg" Color="#2A1E22"/>
+    <SolidColorBrush x:Key="Btn.Retry.Bg.Hover" Color="#3A2A2E"/>
+    <SolidColorBrush x:Key="Btn.Retry.Bg.Disabled" Color="#221A1C"/>
+    <SolidColorBrush x:Key="Btn.Retry.Fg" Color="#F0D9D9"/>
+    <SolidColorBrush x:Key="Btn.Retry.Border" Color="{DynamicResource Color.Danger}"/>
 
-    <!-- Variant C: softly filled danger for Cancel -->
-    <SolidColorBrush x:Key="Btn.Cancel.Bg" Color="#3A2222"/>
-    <SolidColorBrush x:Key="Btn.Cancel.Bg.Hover" Color="#4A2929"/>
-    <SolidColorBrush x:Key="Btn.Cancel.Bg.Disabled" Color="#2A1A1A"/>
-    <SolidColorBrush x:Key="Btn.Cancel.Fg" Color="#F8ECEC"/>
-    <SolidColorBrush x:Key="Btn.Cancel.Border" Color="#FF6B6B"/>
+    <SolidColorBrush x:Key="Btn.Cancel.Bg" Color="#2A1E22"/>
+    <SolidColorBrush x:Key="Btn.Cancel.Bg.Hover" Color="#3A2A2E"/>
+    <SolidColorBrush x:Key="Btn.Cancel.Bg.Disabled" Color="#221A1C"/>
+    <SolidColorBrush x:Key="Btn.Cancel.Fg" Color="#F0D9D9"/>
+    <SolidColorBrush x:Key="Btn.Cancel.Border" Color="{DynamicResource Color.Danger}"/>
 
     <SolidColorBrush x:Key="Btn.Check.Bg" Color="{DynamicResource Color.Surface}"/>
     <SolidColorBrush x:Key="Btn.Check.Bg.Hover" Color="{DynamicResource Color.Hover}"/>
@@ -54,20 +51,12 @@
     <SolidColorBrush x:Key="Btn.Check.Fg" Color="{DynamicResource Color.TextSecondary}"/>
     <SolidColorBrush x:Key="Btn.Check.Border" Color="{DynamicResource Color.Border}"/>
 
-    <!-- Local bright pink gradient just for checkmarks (legend + installed status) -->
-    <LinearGradientBrush x:Key="Brush.CheckmarkGradientPink" StartPoint="0,0" EndPoint="1,1">
-      <GradientStop Offset="0" Color="#8C6AFF"/>
-      <GradientStop Offset="1" Color="#FF3A75"/>
-    </LinearGradientBrush>
-
-    <!-- New: Hover border color for cards (purple, much darker) -->
-    <SolidColorBrush x:Key="Brush.CardHoverBorder" Color="#3E2CC4"/>
-
-    <!-- Verify indicator: rounded, purple shades -->
-    <LinearGradientBrush x:Key="Brush.VerifyGradient" StartPoint="0,0" EndPoint="1,0">
-      <GradientStop Offset="0" Color="#6F3AFF"/>
-      <GradientStop Offset="1" Color="#A78BFA"/>
-    </LinearGradientBrush>
+    <!-- Рамка выбранной карточки: тот же акцент, что и у кнопки действия. Раньше здесь был
+         розово-фиолетовый градиент — третий акцентный цвет на экране, не значивший ничего,
+         кроме «выбрано». -->
+    <SolidColorBrush x:Key="Brush.CheckmarkGradientPink" Color="{DynamicResource Color.Accent}"/>
+    <SolidColorBrush x:Key="Brush.CardHoverBorder" Color="{DynamicResource Color.BorderHover}"/>
+    <SolidColorBrush x:Key="Brush.VerifyGradient" Color="{DynamicResource Color.Accent}"/>
     <Style x:Key="Style.ProgressBar.Verify" TargetType="ProgressBar">
       <Setter Property="Height" Value="6"/>
       <Setter Property="Template">
@@ -99,19 +88,42 @@
     </Style>
 
     <!-- Rounded dark progress bar style -->
+    <!-- Тонкая полоса с настоящим прогрессом: PART_Track/PART_Indicator — имена, по которым
+         WPF сам считает ширину заполнения из Value. Style.ProgressBar.Verify этих частей не
+         имеет вовсе — он умеет только бежать туда-сюда, и привязанный к нему Value в карточке
+         очереди не показывал ничего: полоса «дышала» независимо от того, сколько скачано. -->
     <Style x:Key="Style.ProgressBar.Rounded" TargetType="ProgressBar">
-      <Setter Property="Height" Value="20"/>
+      <Setter Property="Height" Value="4"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ProgressBar">
             <Grid ClipToBounds="True">
-              <!-- Track with thick dark border and dark background; named PART_Track so WPF wires it -->
-              <Border x:Name="PART_Track" CornerRadius="6" BorderThickness="2.5"
-                      Background="{DynamicResource Brush.ProgressTrack}" BorderBrush="{DynamicResource Brush.ProgressBorder}"/>
-              <!-- Indicator; named PART_Indicator so WPF sets width automatically for determinate mode -->
-              <Border x:Name="PART_Indicator" CornerRadius="6" Background="{DynamicResource Brush.AccentGradientPrimary}"
+              <Border x:Name="PART_Track" CornerRadius="2" BorderThickness="0"
+                      Background="{DynamicResource Brush.Track}"/>
+              <Border x:Name="PART_Indicator" CornerRadius="2" Background="{DynamicResource Brush.Accent}"
                       HorizontalAlignment="Left"/>
             </Grid>
+            <ControlTemplate.Triggers>
+              <!-- План ещё не посчитан: доли нет, но работа идёт — показываем бегунок,
+                   а не пустую полосу, которая читалась бы как «ничего не происходит». -->
+              <Trigger Property="IsIndeterminate" Value="True">
+                <Setter TargetName="PART_Indicator" Property="Width" Value="90"/>
+                <Setter TargetName="PART_Indicator" Property="RenderTransform">
+                  <Setter.Value>
+                    <TranslateTransform X="-100"/>
+                  </Setter.Value>
+                </Setter>
+                <Trigger.EnterActions>
+                  <BeginStoryboard>
+                    <Storyboard RepeatBehavior="Forever">
+                      <DoubleAnimation Storyboard.TargetName="PART_Indicator"
+                                       Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)"
+                                       From="-100" To="600" Duration="0:0:1.8"/>
+                    </Storyboard>
+                  </BeginStoryboard>
+                </Trigger.EnterActions>
+              </Trigger>
+            </ControlTemplate.Triggers>
           </ControlTemplate>
         </Setter.Value>
       </Setter>
@@ -125,7 +137,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ListBoxItem">
-            <Border x:Name="bd" CornerRadius="10" BorderThickness="1"
+            <Border x:Name="bd" CornerRadius="12" BorderThickness="1"
                     Background="{DynamicResource Brush.Surface}"
                     BorderBrush="{DynamicResource Brush.Border}">
               <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
@@ -138,7 +150,7 @@
                   <Condition Property="IsSelected" Value="False"/>
                 </MultiTrigger.Conditions>
                 <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.CardHoverBorder}"/>
-                <Setter TargetName="bd" Property="BorderThickness" Value="1.2"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
               </MultiTrigger>
               <!-- Selected without focus -->
               <MultiTrigger>
@@ -147,7 +159,7 @@
                   <Condition Property="IsKeyboardFocusWithin" Value="False"/>
                 </MultiTrigger.Conditions>
                 <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
-                <Setter TargetName="bd" Property="BorderThickness" Value="1.5"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
               </MultiTrigger>
               <!-- Selected with focus -->
               <MultiTrigger>
@@ -156,7 +168,7 @@
                   <Condition Property="IsKeyboardFocusWithin" Value="True"/>
                 </MultiTrigger.Conditions>
                 <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
-                <Setter TargetName="bd" Property="BorderThickness" Value="2"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
               </MultiTrigger>
               <!-- Selected + Hover: emphasize slightly more -->
               <MultiTrigger>
@@ -165,7 +177,7 @@
                   <Condition Property="IsMouseOver" Value="True"/>
                 </MultiTrigger.Conditions>
                 <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
-                <Setter TargetName="bd" Property="BorderThickness" Value="1.6"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
               </MultiTrigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter TargetName="bd" Property="Opacity" Value="0.6"/>
@@ -370,38 +382,6 @@
       </Setter>
     </Style>
 
-    <Style x:Key="Style.Button.GhostNeutral" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-      <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
-      <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
-      <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="Padding" Value="12,6"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" CornerRadius="6" Background="{TemplateBinding Background}"
-                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
-                <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
-                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
-              </Trigger>
-              <Trigger Property="IsPressed" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Pressed}"/>
-                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderPressed}"/>
-              </Trigger>
-              <Trigger Property="IsEnabled" Value="False">
-                <Setter Property="Opacity" Value="0.6"/>
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
     <!-- Rounded bright selectable item style (used for games and news) -->
     <Style x:Key="Style.ListBoxItem.SelectableCard" TargetType="ListBoxItem">
       <Setter Property="Padding" Value="0"/>
@@ -410,7 +390,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ListBoxItem">
-            <Border x:Name="bd" CornerRadius="10" BorderThickness="1"
+            <Border x:Name="bd" CornerRadius="12" BorderThickness="1"
                     Background="{DynamicResource Brush.Surface}"
                     BorderBrush="{DynamicResource Brush.Border}">
               <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
@@ -419,7 +399,7 @@
               <!-- Hover (brighter) -->
               <Trigger Property="IsMouseOver" Value="True">
                 <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.CardHoverBorder}"/>
-                <Setter TargetName="bd" Property="BorderThickness" Value="1.2"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
               </Trigger>
               <!-- Selected without focus: bright but a bit thinner -->
               <MultiTrigger>
@@ -428,7 +408,7 @@
                   <Condition Property="IsKeyboardFocusWithin" Value="False"/>
                 </MultiTrigger.Conditions>
                 <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
-                <Setter TargetName="bd" Property="BorderThickness" Value="1.5"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
               </MultiTrigger>
               <!-- Selected with focus: brightest and thicker -->
               <MultiTrigger>
@@ -437,7 +417,7 @@
                   <Condition Property="IsKeyboardFocusWithin" Value="True"/>
                 </MultiTrigger.Conditions>
                 <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
-                <Setter TargetName="bd" Property="BorderThickness" Value="2"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
               </MultiTrigger>
               <!-- Disabled dim -->
               <Trigger Property="IsEnabled" Value="False">
@@ -547,9 +527,9 @@
     <!-- Центральная область: слева выбор игры/сборки, справа две ленты новостей -->
     <Grid Grid.Row="2">
       <Grid.ColumnDefinitions>
-        <!-- Левая колонка (сайдбар) слегка ужата по ширине -->
-        <ColumnDefinition Width="310"/>
-        <!-- Пробел между сайдбаром и витриной (уменьшен) -->
+        <!-- Сайдбар. Стало уже прежних 310: статус переехал из иконки в подпись под
+             названием, поэтому строке больше не нужны две колонки под значки справа. -->
+        <ColumnDefinition Width="248"/>
         <ColumnDefinition Width="8"/>
         <!-- Витрина выбранной игры + вкладки новостей -->
         <ColumnDefinition Width="*"/>
@@ -559,35 +539,58 @@
       <Border Grid.Column="0" Style="{DynamicResource Style.Card}" Margin="0,0,0,0" Padding="12" VerticalAlignment="Stretch">
         <Grid>
           <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
+            <!-- Заголовок, поиск, список, подвал. Разделителей и легенды больше нет:
+                 первые ничего не отделяли (сайдбар и так карточка), вторая объясняла
+                 иконки, которых теперь нет. -->
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
           </Grid.RowDefinitions>
           <!-- Header with refresh button -->
-          <Grid Grid.Row="0" Margin="0,0,0,12">
+          <Grid Grid.Row="0" Margin="0,0,0,10">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="*"/>
               <ColumnDefinition Width="Auto"/>
               <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <TextBlock Grid.Column="0" Text="Игры" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Title}"/>
+            <TextBlock Grid.Column="0" Text="Игры" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Title}"/>
             <!-- Compact verify indicator: small indeterminate bar between title and refresh button -->
-            <ProgressBar Grid.Column="1" Name="GamesVerifyIndicator" Width="100" Height="6" VerticalAlignment="Center"
+            <ProgressBar Grid.Column="1" Name="GamesVerifyIndicator" Width="80" Height="4" VerticalAlignment="Center"
                          IsIndeterminate="True" Visibility="Collapsed"
                          Style="{StaticResource Style.ProgressBar.Verify}" Margin="8,0,8,0"/>
-            <Button Grid.Column="2" Name="RefreshGamesBtn" Width="32" Height="32" ToolTip="Обновить список и статусы" Click="RefreshGames_Click" Margin="8,0,0,0">
-              <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="14" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+            <Button Grid.Column="2" Name="RefreshGamesBtn" Width="28" Height="28" ToolTip="Обновить список и статусы" Click="RefreshGames_Click" Margin="8,0,0,0" Padding="0">
+              <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Center"/>
             </Button>
           </Grid>
-          <!-- Separator under header -->
-          <Border Grid.Row="1" Height="1" Background="{DynamicResource Brush.Border}"/>
-          <!-- removed old verification indicator under header -->
+
+          <!-- Поиск по списку. Появился здесь, потому что список игр — единственная навигация
+               в приложении, и до сих пор её нельзя было ни отфильтровать, ни сузить. -->
+          <Grid Grid.Row="1" Margin="0,0,0,8">
+            <TextBox x:Name="GameSearchBox" TextChanged="GameSearch_TextChanged" Margin="0"
+                     Background="{DynamicResource Brush.Surface2}" BorderBrush="{DynamicResource Brush.Border}"
+                     Padding="26,6,8,6" FontSize="12" Foreground="{DynamicResource Brush.Text}"/>
+            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE721;" FontSize="12" IsHitTestVisible="False"
+                       Margin="8,0,0,0" VerticalAlignment="Center" HorizontalAlignment="Left"
+                       Foreground="{DynamicResource Brush.TextMuted}"/>
+            <TextBlock Text="Поиск" IsHitTestVisible="False" FontSize="12"
+                       Margin="26,0,0,0" VerticalAlignment="Center" HorizontalAlignment="Left"
+                       Foreground="{DynamicResource Brush.TextMuted}">
+              <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                  <Setter Property="Visibility" Value="Collapsed"/>
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding Text.Length, ElementName=GameSearchBox}" Value="0">
+                      <Setter Property="Visibility" Value="Visible"/>
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </TextBlock.Style>
+            </TextBlock>
+          </Grid>
+
           <!-- Контейнер строки списка/скелетона с тёмным фоном -->
-          <Grid Grid.Row="3" Background="{DynamicResource Brush.Surface}">
+          <Grid Grid.Row="2" Background="{DynamicResource Brush.Surface}">
             <!-- Skeleton loader для списка игр -->
             <StackPanel Name="GamesSkeleton" Margin="{StaticResource Skeleton.GameTopOffsetThickness}">
               <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.GameRowHeight}"/>
@@ -686,18 +689,19 @@
                     </Border.Style>
                     <Grid>
                       <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="36"/>
+                        <!-- Две колонки вместо четырёх: значок статуса стал подписью под
+                             названием, а кнопка ⓘ убрана — то же самое делают двойной клик,
+                             контекстное меню и «Подробнее» в витрине. -->
+                        <ColumnDefinition Width="32"/>
                         <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
                       </Grid.ColumnDefinitions>
                       <!-- Per-row shimmer overlay -->
                       <!-- Spacer to enforce taller layout when skeleton is shown -->
-                      <Border x:Name="GameRowSkeletonSpacer" Grid.ColumnSpan="4"
+                      <Border x:Name="GameRowSkeletonSpacer" Grid.ColumnSpan="2"
                               Height="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=ActualHeight}"
                               Margin="{StaticResource Skeleton.GameTopOffsetThickness}" Background="Transparent"
                               Visibility="{Binding ElementName=GameRowSkeleton, Path=Visibility}"/>
-                      <ContentControl x:Name="GameRowSkeleton" Grid.ColumnSpan="4" Panel.ZIndex="1"
+                      <ContentControl x:Name="GameRowSkeleton" Grid.ColumnSpan="2" Panel.ZIndex="1"
                                       HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="{StaticResource Skeleton.GameTopOffsetThickness}"
                                       IsHitTestVisible="False"
                                       Height="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=ActualHeight}">
@@ -717,7 +721,7 @@
                         </ContentControl.Style>
                       </ContentControl>
                       <!-- Иконка игры -->
-                      <Grid Grid.Column="0" Width="36" Height="36" VerticalAlignment="Center">
+                      <Grid Grid.Column="0" Width="32" Height="32" VerticalAlignment="Center">
                         <!-- Default icon (visible under image or when no image) -->
                         <TextBlock x:Name="DefaultGameIcon" FontFamily="Segoe MDL2 Assets" Text="&#xE7C3;" FontSize="18"
                                    Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center" HorizontalAlignment="Center"
@@ -726,107 +730,17 @@
                                Stretch="UniformToFill" Visibility="Visible"
                                Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
                       </Grid>
-                      <!-- Название -->
-                      <StackPanel Grid.Column="1" Margin="10,0,8,0" VerticalAlignment="Center">
-                        <!-- Длинное название теперь не может распирать строку: горизонтальной
-                             прокрутки нет, поэтому обрезаем многоточием, а полное показываем
-                             в подсказке. -->
-                        <TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="16"
+                      <!-- Название и статус словом. Статус занимает вторую строку той же
+                           колонки — раньше он был иконкой справа, а расшифровка иконок жила
+                           в легенде внизу сайдбара. -->
+                      <StackPanel Grid.Column="1" Margin="10,0,4,0" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13"
                                    TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
                                    ToolTip="{Binding Title}"/>
+                        <TextBlock Text="{Binding Converter={StaticResource GameStatusTextConv}, Mode=OneWay}"
+                                   Foreground="{Binding Converter={StaticResource GameStatusBrushConv}, Mode=OneWay}"
+                                   FontSize="11" Margin="0,2,0,0" TextWrapping="NoWrap"/>
                       </StackPanel>
-                      <!-- Переход на страницу игры (то же делает двойной клик по строке) -->
-                      <Button Grid.Column="2" Width="26" Height="26" Margin="0,0,6,0" VerticalAlignment="Center"
-                              Padding="0" ToolTip="Подробнее об игре"
-                              Click="GameDetails_Click" CommandParameter="{Binding}"
-                              Background="Transparent" BorderThickness="0"
-                              Foreground="{DynamicResource Brush.TextSecondary}">
-                        <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE946;" FontSize="14"
-                                   VerticalAlignment="Center" HorizontalAlignment="Center"/>
-                      </Button>
-                      <!-- Флаг статуса (векторные иконки) -->
-                      <Grid Grid.Column="3" Width="22" Height="22" VerticalAlignment="Center" SnapsToDevicePixels="True">
-                        <!-- Иконка "требуется обновление": SVG-путь, масштабируемый -->
-                        <Grid x:Name="IconNeedsUpdate">
-                          <Grid.Style>
-                            <Style TargetType="Grid">
-                              <Setter Property="Visibility" Value="Collapsed"/>
-                              <Style.Triggers>
-                                <DataTrigger Binding="{Binding NeedsUpdate}" Value="True">
-                                  <Setter Property="Visibility" Value="Visible"/>
-                                </DataTrigger>
-                              </Style.Triggers>
-                            </Style>
-                          </Grid.Style>
-                          <Viewbox Stretch="Uniform" Width="16" Height="16" HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <Path Stroke="{DynamicResource Brush.Title}" StrokeThickness="0.8" Fill="{DynamicResource Brush.Title}"
-                                  Data="M16.08,59.26A8,8,0,0,1,0,59.26a59,59,0,0,1,97.13-45V8a8,8,0,1,1,16.08,0V33.35a8,8,0,0,1-8,8L80.82,43.62a8,8,0,1,1-1.44-15.95l8-.73A43,43,0,0,0,16.08,59.26Zm22.77,19.6a8,8,0,0,1,1.44,16l-10.08.91A42.95,42.95,0,0,0,102,63.86a8,8,0,0,1,16.08,0A59,59,0,0,1,22.3,110v4.18a8,8,0,0,1-16.08,0V89.14h0a8,8,0,0,1,7.29-8l25.31-2.3Z"/>
-                          </Viewbox>
-                        </Grid>
-                        <!-- Толстая галочка (Установлена последняя версия) -->
-                        <Path x:Name="IconInstalled" StrokeThickness="2.6" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                              Stroke="{DynamicResource Brush.CheckmarkGradientPink}" Fill="Transparent"
-                              Data="M 3 11 L 9 17 L 19 5">
-                          <Path.Style>
-                            <Style TargetType="Path">
-                              <Setter Property="Visibility" Value="Collapsed"/>
-                              <Style.Triggers>
-                                <MultiDataTrigger>
-                                  <MultiDataTrigger.Conditions>
-                                    <Condition Binding="{Binding IsInstalled}" Value="True"/>
-                                    <Condition Binding="{Binding NeedsUpdate}" Value="False"/>
-                                  </MultiDataTrigger.Conditions>
-                                  <Setter Property="Visibility" Value="Visible"/>
-                                </MultiDataTrigger>
-                              </Style.Triggers>
-                            </Style>
-                          </Path.Style>
-                        </Path>
-                        <!-- Пустой статус (не установлено) — используем такую же иконку, как в легенде -->
-                        <TextBlock x:Name="IconNotInstalled" FontFamily="Segoe MDL2 Assets" Text="&#xE896;"
-                                   Foreground="{DynamicResource Brush.TextSecondary}" FontSize="20" VerticalAlignment="Center">
-                          <TextBlock.Style>
-                            <Style TargetType="TextBlock">
-                              <Setter Property="Visibility" Value="Visible"/>
-                              <Style.Triggers>
-                                <DataTrigger Binding="{Binding NeedsUpdate}" Value="True">
-                                  <Setter Property="Visibility" Value="Collapsed"/>
-                                </DataTrigger>
-                                <MultiDataTrigger>
-                                  <MultiDataTrigger.Conditions>
-                                    <Condition Binding="{Binding IsInstalled}" Value="True"/>
-                                    <Condition Binding="{Binding NeedsUpdate}" Value="False"/>
-                                  </MultiDataTrigger.Conditions>
-                                  <Setter Property="Visibility" Value="Collapsed"/>
-                                </MultiDataTrigger>
-                              </Style.Triggers>
-                            </Style>
-                          </TextBlock.Style>
-                        </TextBlock>
-                        <ToolTipService.ToolTip>
-                          <ToolTip>
-                            <TextBlock>
-                              <TextBlock.Style>
-                                <Style TargetType="TextBlock">
-                                  <Setter Property="Text" Value="Не установлена"/>
-                                  <Style.Triggers>
-                                    <DataTrigger Binding="{Binding NeedsUpdate}" Value="True">
-                                      <Setter Property="Text" Value="Требуется обновление"/>
-                                    </DataTrigger>
-                                    <MultiDataTrigger>
-                                      <MultiDataTrigger.Conditions>
-                                        <Condition Binding="{Binding IsInstalled}" Value="True"/>
-                                        <Condition Binding="{Binding NeedsUpdate}" Value="False"/>
-                                      </MultiDataTrigger.Conditions>
-                                      <Setter Property="Text" Value="Установлена последняя версия"/>
-                                    </MultiDataTrigger>
-                                  </Style.Triggers>
-                                </Style>
-                              </TextBlock.Style>
-                            </TextBlock>
-                          </ToolTip>
-                        </ToolTipService.ToolTip>
-                      </Grid>
                     </Grid>
                   </Border>
                 </DataTemplate>
@@ -834,28 +748,22 @@
             </ListBox>
           </Grid>
 
-          <!-- Separator between list and legend -->
-          <Border Grid.Row="5" Height="1" Background="{DynamicResource Brush.Border}" Margin="0,4,0,0"/>
-
-          <!-- Легенда иконок статусов игр -->
-          <StackPanel Grid.Row="6" Orientation="Vertical" Margin="8,8,0,0" HorizontalAlignment="Left">
-            <StackPanel Orientation="Horizontal" Margin="0,0,4,6" VerticalAlignment="Center">
-              <Path StrokeThickness="2.2" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                    Stroke="{DynamicResource Brush.CheckmarkGradientPink}" Fill="Transparent"
-                    Data="M 2 7 L 6 11 L 12 2" Width="12" Height="12" Stretch="Uniform" Margin="0,1,8,0" VerticalAlignment="Center"/>
-              <TextBlock Text="Установлена последняя версия" FontSize="11" Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center"/>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Margin="0,0,4,6" VerticalAlignment="Center">
-              <Viewbox Stretch="Uniform" Width="12" Height="12" Margin="0,1,8,0" VerticalAlignment="Center">
-                <Path Stroke="{DynamicResource Brush.Title}" StrokeThickness="0.8" Fill="{DynamicResource Brush.Title}"
-                      Data="M16.08,59.26A8,8,0,0,1,0,59.26a59,59,0,0,1,97.13-45V8a8,8,0,1,1,16.08,0V33.35a8,8,0,0,1-8,8L80.82,43.62a8,8,0,1,1-1.44-15.95l8-.73A43,43,0,0,0,16.08,59.26Zm22.77,19.6a8,8,0,0,1,1.44,16l-10.08.91A42.95,42.95,0,0,0,102,63.86a8,8,0,0,1,16.08,0A59,59,0,0,1,22.3,110v4.18a8,8,0,0,1-16.08,0V89.14h0a8,8,0,0,1,7.29-8l25.31-2.3Z"/>
-              </Viewbox>
-              <TextBlock Text="Требуется обновление" FontSize="11" Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center"/>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Margin="0,0,4,0" VerticalAlignment="Center">
-              <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="12" Text="&#xE896;" Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,1,8,0" VerticalAlignment="Center"/>
-              <TextBlock Text="Не установлена" FontSize="11" Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center"/>
-            </StackPanel>
+          <!-- Подвал сайдбара: свободное место и кнопка обратной связи. Место на диске здесь,
+               а не под прогрессом: это свойство машины, а не текущей закачки. -->
+          <StackPanel Grid.Row="3" Margin="0,10,0,0">
+            <Border Height="1" Background="{DynamicResource Brush.Border}" Margin="0,0,0,8"/>
+            <TextBlock x:Name="DiskFreeText" Text="" FontSize="11" TextWrapping="NoWrap"
+                       TextTrimming="CharacterEllipsis"
+                       Foreground="{DynamicResource Brush.TextMuted}"/>
+            <Button Name="FeedbackBtn" Click="FeedbackBtn_Click" Height="28" Margin="0,8,0,0"
+                    HorizontalAlignment="Stretch"
+                    Background="Transparent"
+                    BorderBrush="{DynamicResource Brush.Border}"
+                    BorderThickness="1"
+                    Foreground="{DynamicResource Brush.TextSecondary}"
+                    ToolTip="Поделиться идеей или сообщить о проблеме">
+              <TextBlock Text="Поделиться идеей" FontSize="12" HorizontalAlignment="Center"/>
+            </Button>
           </StackPanel>
         </Grid>
       </Border>
@@ -866,28 +774,34 @@
           <RowDefinition Height="Auto"/>
           <!-- Вкладки «Новости игры / Новости лаунчера» -->
           <RowDefinition Height="Auto"/>
-          <!-- Заглушка под очередь загрузок (Трек C подключит позже) -->
-          <RowDefinition Height="Auto"/>
-          <!-- Лента новостей выбранной вкладки -->
+          <!-- Лента новостей выбранной вкладки. Очередь загрузок раньше стояла отдельной
+               строкой ЗДЕСЬ, между вкладками и лентой, и разрывала пару «вкладка → её
+               содержимое», забирая у ленты высоту. Теперь очередь живёт в нижней панели
+               (см. QueueDock ниже) — там же, где показывался её дубликат. -->
           <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
         <!-- Витрина-герой: обложка/градиент, заголовок, статус, «Играть», кнопка сведений -->
-        <Border Grid.Row="0" Margin="0,0,0,8" CornerRadius="12" MinHeight="220"
+        <Border Grid.Row="0" Margin="0,0,0,8" CornerRadius="12" MinHeight="150"
                 Background="{DynamicResource Brush.HeroGradient}" ClipToBounds="True">
-          <Grid Margin="20">
+          <Grid Margin="16">
             <Grid.RowDefinitions>
               <RowDefinition Height="*"/>
               <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <!-- Обложка из галереи игры (Трек G, GalleryClient): показывается, когда gallery.json
+            <!-- Обложка из галереи игры (GalleryClient): показывается, когда gallery.json
                  отдал хотя бы одну картинку, иначе остаётся Collapsed и виден только градиент фона. -->
             <Image x:Name="HeroCoverImg" Grid.Row="0" Grid.RowSpan="2" Stretch="UniformToFill"
-                   Opacity="0.35" Visibility="Collapsed" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+                   Opacity="0.5" Visibility="Collapsed" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+
+            <!-- Затемнение под текстом: белый заголовок обязан читаться на любой обложке,
+                 а не только на тёмной. -->
+            <Border Grid.Row="0" Grid.RowSpan="2" Background="{DynamicResource Brush.HeroScrim}"
+                    Margin="-16" IsHitTestVisible="False"/>
 
             <!-- Иконка игры крупным планом (заглушка обложки до подключения галереи) -->
-            <Grid Grid.Row="0" Grid.RowSpan="2" HorizontalAlignment="Right" VerticalAlignment="Top" Width="120" Height="120"
+            <Grid Grid.Row="0" Grid.RowSpan="2" HorizontalAlignment="Right" VerticalAlignment="Top" Width="104" Height="104"
                   Margin="0,0,0,0" Opacity="0.9">
               <Image x:Name="HeroIconImg" Source="{Binding SelectedItem.IconUrl, ElementName=GameList}"
                      Stretch="Uniform" Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
@@ -895,77 +809,54 @@
 
             <StackPanel Grid.Row="1" VerticalAlignment="Bottom">
               <!-- Бейдж статуса выбранной игры -->
-              <Border x:Name="HeroStatusBadge" CornerRadius="10" Padding="10,4" HorizontalAlignment="Left" Margin="0,0,0,10"
+              <Border x:Name="HeroStatusBadge" CornerRadius="{StaticResource Radius.S}" Padding="8,3" HorizontalAlignment="Left" Margin="0,0,0,8"
                       Background="{DynamicResource Brush.HeroBadge.Bg}" BorderBrush="{DynamicResource Brush.HeroBadge.Border}" BorderThickness="1">
-                <TextBlock x:Name="HeroStatusText" Text="Проверка…" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Text}"/>
+                <TextBlock x:Name="HeroStatusText" Text="Проверка…" FontSize="11" Foreground="{DynamicResource Brush.TextSecondary}"/>
               </Border>
-              <Grid>
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="*"/>
-                  <ColumnDefinition Width="Auto"/>
-                  <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock x:Name="HeroTitleText" Grid.Column="0" Text="Выберите игру" FontSize="28" FontWeight="Bold"
-                           Foreground="{DynamicResource Brush.Title}" VerticalAlignment="Center"
-                           TextTrimming="CharacterEllipsis"/>
-                <!-- «Играть» — зеркалит состояние единой кнопки действия внизу экрана (SetActionMode) -->
-                <Button x:Name="HeroPlayBtn" Grid.Column="1" Content="Играть" Click="ActionBtn_Click"
+              <TextBlock x:Name="HeroTitleText" Text="Выберите игру" FontSize="26" FontWeight="Bold"
+                         Foreground="{DynamicResource Brush.Title}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+              <!-- Версия, объём и наигранное. Витрина занимала полтораста пикселей под одно
+                   название — всё, что игрок хотел о ней знать, лежало на других экранах. -->
+              <TextBlock x:Name="HeroMetaText" Text="" FontSize="12" Margin="0,4,0,0"
+                         Foreground="{DynamicResource Brush.TextSecondary}"
+                         TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+              <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                <!-- ЕДИНСТВЕННАЯ кнопка действия в приложении. Раньше их было две — здесь и
+                     внизу окна — одинакового вида и с одинаковым текстом. -->
+                <Button x:Name="ActionBtn" Content="Играть" Click="ActionBtn_Click"
                         Style="{DynamicResource Style.ActionButton.Play}"
-                        Width="160" Height="44" Margin="12,0,0,0" VerticalAlignment="Center"/>
-                <!-- Единственная кнопка сведений об игре: иконка ⓘ, ведёт на GamePage -->
-                <Button x:Name="HeroInfoBtn" Grid.Column="2" Click="GameDetails_Click"
+                        Width="180" Height="42" VerticalAlignment="Center"/>
+                <Button x:Name="HeroInfoBtn" Click="GameDetails_Click"
                         Style="{DynamicResource Style.Button.HeroInfo}"
                         Margin="8,0,0,0" VerticalAlignment="Center" ToolTip="Подробнее об игре">
-                  <TextBlock FontFamily="Segoe UI Symbol" Text="&#x24D8;" FontSize="18"/>
+                  <TextBlock FontFamily="Segoe UI Symbol" Text="&#x24D8;" FontSize="16"/>
                 </Button>
-              </Grid>
+              </StackPanel>
             </StackPanel>
           </Grid>
         </Border>
 
         <!-- Вкладки под витриной: переключают ленту без перезагрузки страницы -->
-        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="4,0,0,8">
-          <ToggleButton x:Name="NewsTabGame" Content="Новости игры" IsChecked="True"
-                        Style="{DynamicResource Style.Button.HeroTab}" Click="NewsTabGame_Click" Margin="0,0,6,0"/>
-          <ToggleButton x:Name="NewsTabLauncher" Content="Новости лаунчера" IsChecked="False"
-                        Style="{DynamicResource Style.Button.HeroTab}" Click="NewsTabLauncher_Click"/>
-        </StackPanel>
+        <Border Grid.Row="1" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1" Margin="2,4,0,8">
+          <StackPanel Orientation="Horizontal">
+            <ToggleButton x:Name="NewsTabGame" Content="Новости игры" IsChecked="True"
+                          Style="{DynamicResource Style.Button.HeroTab}" Click="NewsTabGame_Click" Margin="0,0,18,0"/>
+            <ToggleButton x:Name="NewsTabLauncher" Content="Новости лаунчера" IsChecked="False"
+                          Style="{DynamicResource Style.Button.HeroTab}" Click="NewsTabLauncher_Click"/>
+          </StackPanel>
+        </Border>
 
-        <!-- Очередь загрузок (фаза 1, Трек C): «Добавить в очередь загрузок» в контекстном меню игры -->
-        <ItemsControl x:Name="QueueDock" Grid.Row="2" Margin="0,0,0,8">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate>
-              <Border Style="{DynamicResource Style.Card}" Padding="10,6" Margin="0,0,0,4">
-                <Grid>
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                  </Grid.ColumnDefinitions>
-                  <StackPanel Grid.Column="0">
-                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="12"/>
-                    <TextBlock Text="{Binding StatusText}" FontSize="11" Foreground="{DynamicResource Brush.TextSecondary}"/>
-                  </StackPanel>
-                  <TextBlock Grid.Column="1" Text="{Binding State}" FontSize="11" VerticalAlignment="Center"
-                             Foreground="{DynamicResource Brush.TextSecondary}"/>
-                </Grid>
-              </Border>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
-
-        <Grid x:Name="GameNewsPanel" Grid.Row="3" Visibility="Visible">
+        <Grid x:Name="GameNewsPanel" Grid.Row="2" Visibility="Visible">
         <Grid.RowDefinitions>
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
-        <Grid x:Name="GameNewsHeaderRow" Grid.Row="0" Margin="0,0,0,8">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="Auto"/>
-          </Grid.ColumnDefinitions>
-          <TextBlock x:Name="GameNewsHeader" Text="Новости игры" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Title}" Margin="8,8,0,0"/>
-          <Button Grid.Column="1" Width="32" Height="32" ToolTip="Обновить новости игры" Click="RefreshGameNews_Click" Margin="8,8,8,0">
-            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="14" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+        <!-- Заголовка «Новости <игра>» здесь больше нет: название игры стоит строкой выше в
+             витрине, а слово «Новости» — на активной вкладке. Осталась кнопка обновления. -->
+        <Grid x:Name="GameNewsHeaderRow" Grid.Row="0" Margin="0,0,0,4">
+          <Button Width="28" Height="28" Padding="0" HorizontalAlignment="Right"
+                  ToolTip="Обновить новости игры" Click="RefreshGameNews_Click" Margin="0,0,8,0">
+            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Center"/>
           </Button>
         </Grid>
         <Grid Grid.Row="1">
@@ -974,6 +865,17 @@
             <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
             <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
             <Border Style="{DynamicResource Style.Skeleton}" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
+          </StackPanel>
+          <!-- Пустое состояние: у игры пока нет новостей. Без него под заголовком
+               «Новости <игра>» оставалась голая дыра в половину экрана — у списка игр
+               пустое состояние было, у ленты новостей нет. -->
+          <StackPanel Name="GameNewsEmptyState" Visibility="Collapsed" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="12">
+            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE7BA;" FontSize="24" HorizontalAlignment="Center"
+                       Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,0,0,8"/>
+            <TextBlock Text="Пока новостей нет" TextWrapping="Wrap" TextAlignment="Center"
+                       FontWeight="SemiBold" Foreground="{DynamicResource Brush.Text}"/>
+            <TextBlock Text="Здесь появятся объявления и события этой игры." TextWrapping="Wrap" TextAlignment="Center"
+                       FontSize="12" Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,4,0,0"/>
           </StackPanel>
           <ListBox Name="GameNewsList" SelectionChanged="GameNewsList_SelectionChanged" Visibility="Collapsed" Padding="0,0,6,0"
                  ScrollViewer.VerticalScrollBarVisibility="Visible"
@@ -1044,19 +946,15 @@
         </Grid>
         </Grid>
 
-        <Grid x:Name="LauncherNewsPanel" Grid.Row="3" Visibility="Collapsed">
+        <Grid x:Name="LauncherNewsPanel" Grid.Row="2" Visibility="Collapsed">
         <Grid.RowDefinitions>
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
-        <Grid Grid.Row="0" Margin="0,0,0,8">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="Auto"/>
-          </Grid.ColumnDefinitions>
-          <TextBlock Text="Новости лаунчера" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Title}" Margin="8,8,0,0"/>
-          <Button Grid.Column="1" Width="32" Height="32" ToolTip="Обновить новости лаунчера" Click="RefreshLauncherNews_Click" Margin="8,8,8,0">
-            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="14" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+        <Grid Grid.Row="0" Margin="0,0,0,4">
+          <Button Width="28" Height="28" Padding="0" HorizontalAlignment="Right"
+                  ToolTip="Обновить новости лаунчера" Click="RefreshLauncherNews_Click" Margin="0,0,8,0">
+            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Center"/>
           </Button>
         </Grid>
         <Grid Grid.Row="1">
@@ -1137,50 +1035,141 @@
       </Grid>
     </Grid>
 
-    <!-- Нижняя панель: статус обновления (редизайн, кнопка справа) -->
-    <Border Grid.Row="3" Margin="0,12,0,0" Style="{DynamicResource Style.ProgressPanel}" Padding="12">
+    <!-- Нижняя панель: только ход работы. Кнопка действия уехала в витрину, а сама панель
+         скрывается в покое (см. SyncBottomBarVisibility) — пустая полоса прогресса под
+         надписью «Готово» сообщала о процессе, которого нет. -->
+    <Border x:Name="BottomBar" Grid.Row="3" Margin="0,10,0,0" Style="{DynamicResource Style.ProgressPanel}" Padding="12"
+            Visibility="Collapsed">
       <Grid>
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*"/>
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
 
-        <!-- Левая колонка: фиксированные по высоте элементы статуса -->
+        <!-- Левая колонка. Два взаимоисключающих вида на одном месте:
+             очередь не пуста  → список карточек (по карточке на игру);
+             очередь пуста     → статус выбранной игры («Готово», объём, свободное место).
+             Раньше показывались ОБА сразу, в разных концах экрана, про одну и ту же
+             позицию: «Ждёт очереди…» стояло и в карточке, и здесь. -->
         <Grid Grid.Column="0" Margin="0,0,12,0">
-          <Grid.RowDefinitions>
-            <RowDefinition Height="24"/>
-            <RowDefinition Height="28"/>
-            <RowDefinition Height="20"/>
-            <RowDefinition Height="20"/>
-          </Grid.RowDefinitions>
-          <!-- Основной статус -->
-          <TextBlock Grid.Row="0" Name="StatusText" Text="Готово" FontWeight="SemiBold" FontSize="16" VerticalAlignment="Center"/>
-          <!-- Прогрессбар -->
-          <ProgressBar Grid.Row="1" Name="UpdateProgress" Height="20" Minimum="0" Maximum="100" Value="0" Margin="0,4,0,0"
-                       Style="{StaticResource Style.ProgressBar.Rounded}" VerticalAlignment="Center"/>
-          <!-- Скорость/ETA -->
-          <TextBlock Grid.Row="2" Name="SpeedEtaText" Text="" Foreground="{DynamicResource Brush.TextSecondary}" FontSize="12" VerticalAlignment="Center"/>
-          <!-- Размеры/оценка места -->
-          <TextBlock Grid.Row="3" Name="FilesSizeText" Text="" Foreground="{DynamicResource Brush.TextSecondary}" FontSize="12" VerticalAlignment="Center"/>
-        </Grid>
+          <!-- Очередь загрузок: карточка на каждую игру — ждёт, качается, снимается по ✕,
+               ожидающие можно поднять/опустить стрелками (порядок среди Waiting, качающаяся
+               позиция всегда первая и не переставляется). -->
+          <StackPanel x:Name="QueuePanel" Visibility="Collapsed">
+            <TextBlock x:Name="QueueSummaryText" Text="Очередь загрузок" FontWeight="SemiBold" FontSize="14"
+                       Margin="0,0,0,6" Foreground="{DynamicResource Brush.Title}"/>
+            <ItemsControl x:Name="QueueDock" MaxHeight="180">
+              <ItemsControl.Template>
+                <ControlTemplate TargetType="ItemsControl">
+                  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <ItemsPresenter/>
+                  </ScrollViewer>
+                </ControlTemplate>
+              </ItemsControl.Template>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Border Style="{DynamicResource Style.Card}" Padding="10" Margin="0,0,0,6">
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <!-- Иконка игры — та же, что в списке слева: карточка очереди
+                             отличалась от строки списка только её отсутствием, и одну и ту же
+                             игру в двух местах экрана приходилось сверять по названию. -->
+                        <ColumnDefinition Width="28"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                      </Grid.ColumnDefinitions>
+                      <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                      </Grid.RowDefinitions>
 
-        <!-- Правая колонка: кнопка действия и под ней — тонкая кнопка обратной связи -->
-        <StackPanel Grid.Column="1" VerticalAlignment="Center" Orientation="Vertical" HorizontalAlignment="Right">
-          <Button Name="ActionBtn" Content="Обновить" Click="ActionBtn_Click"
-                  Style="{DynamicResource Style.ActionButton.Update}"
-                  Width="180" Height="52" Margin="0"
-                  VerticalAlignment="Center" VerticalContentAlignment="Center"/>
-          <!-- Subtle feedback button -->
-          <Button Name="FeedbackBtn" Click="FeedbackBtn_Click" Width="180" Height="28" Margin="0,8,0,0"
-                  Background="{DynamicResource Brush.Background}"
-                  BorderBrush="{DynamicResource Brush.Border}"
-                  BorderThickness="1"
-                  Foreground="{DynamicResource Brush.TextSecondary}"
-                  Opacity="0.75"
-                  ToolTip="Поделиться идеей или сообщить о проблеме">
-            <TextBlock Text="Поделиться идеей ✨" FontSize="12" HorizontalAlignment="Center"/>
-          </Button>
-        </StackPanel>
+                      <Image Grid.Row="0" Grid.RowSpan="3" Grid.Column="0" Width="28" Height="28"
+                             VerticalAlignment="Top" Margin="0,1,10,0" Stretch="UniformToFill"
+                             Source="{Binding IconUrl}" Tag="{Binding IconUrl}"
+                             Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
+
+                      <!-- Название и проценты в одной строке: доля читается сразу, а не
+                           вычисляется в уме делением «647,1 МБ» на «6,5 ГБ». -->
+                      <Grid Grid.Row="0" Grid.Column="1" Margin="0,0,8,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="*"/>
+                          <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="12"
+                                   TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
+                                   Margin="8,0,0,0" Foreground="{DynamicResource Brush.Accent}"
+                                   Text="{Binding Converter={StaticResource QueueItemPercentTextConv}, Mode=OneWay}"/>
+                      </Grid>
+
+                      <!-- У качающейся позиции — её статус, у ожидающей — место в очереди. -->
+                      <TextBlock Grid.Row="1" Grid.Column="1" FontSize="11"
+                                 Margin="0,3,8,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                                 Text="{Binding Converter={StaticResource QueueItemStatusConv}, Mode=OneWay}"
+                                 Foreground="{DynamicResource Brush.TextSecondary}"/>
+
+                      <!-- Полоса и цифры — только у КАЧАЮЩЕЙСЯ позиции: у ожидающей ничего не
+                           происходит, и бегущая полоса выдавала бы ожидание за работу. -->
+                      <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,8,8,0"
+                                  Visibility="{Binding State, Converter={StaticResource QueueItemStateVisibilityConv}, ConverterParameter=Running}">
+                        <ProgressBar Height="4"
+                                     Style="{StaticResource Style.ProgressBar.Rounded}"
+                                     Value="{Binding Converter={StaticResource QueueItemPercentConv}, Mode=OneWay}"
+                                     IsIndeterminate="{Binding Converter={StaticResource QueueItemIndeterminateConv}, Mode=OneWay}"/>
+                        <!-- «6,2 ГБ / 16,5 ГБ · 12,4 МБ/с · осталось 14 мин»: на больших сборках
+                             это единственный признак, что закачка жива. -->
+                        <TextBlock FontSize="11" Margin="0,5,0,0"
+                                   Text="{Binding Converter={StaticResource QueueItemDetailConv}, Mode=OneWay}"
+                                   TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                                   Foreground="{DynamicResource Brush.TextSecondary}"/>
+                      </StackPanel>
+
+                      <!-- Стрелки порядка — только для ожидающих позиций. IsEnabled привязан к
+                           признакам из очереди: стрелка, которую видно и можно нажать, но которая
+                           ничего не делает, читается как сломанная. -->
+                      <StackPanel Grid.Row="0" Grid.RowSpan="3" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
+                                  Visibility="{Binding State, Converter={StaticResource QueueItemStateVisibilityConv}, ConverterParameter=Waiting}">
+                        <Button Width="24" Height="24" Padding="0" Margin="0,0,2,0"
+                                ToolTip="Поднять в очереди. Если выше идёт закачка — начать эту вместо неё"
+                                IsEnabled="{Binding CanMoveUp}"
+                                Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Brush.TextSecondary}"
+                                Click="MoveQueueItemUp_Click" CommandParameter="{Binding}">
+                          <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE70E;" FontSize="12" HorizontalAlignment="Center"/>
+                        </Button>
+                        <Button Width="24" Height="24" Padding="0" ToolTip="Опустить в очереди"
+                                IsEnabled="{Binding CanMoveDown}"
+                                Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Brush.TextSecondary}"
+                                Click="MoveQueueItemDown_Click" CommandParameter="{Binding}">
+                          <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE70D;" FontSize="12" HorizontalAlignment="Center"/>
+                        </Button>
+                      </StackPanel>
+
+                      <Button Grid.Row="0" Grid.RowSpan="3" Grid.Column="3" Width="24" Height="24" Padding="0"
+                              Margin="6,0,0,0" VerticalAlignment="Center" ToolTip="Снять с очереди"
+                              Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Brush.TextSecondary}"
+                              Click="CancelQueueItem_Click" CommandParameter="{Binding}">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE711;" FontSize="12" HorizontalAlignment="Center"/>
+                      </Button>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+
+          <!-- Покой: очередь пуста, показываем ход работы по выбранной игре. Строки не
+               держат фиксированную высоту: пустая строка теперь не занимает места, а
+               полоса появляется только когда есть чему идти. -->
+          <StackPanel x:Name="IdleStatusPanel" VerticalAlignment="Center">
+            <TextBlock Name="StatusText" Text="Готово" FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis"/>
+            <ProgressBar Name="UpdateProgress" Height="4" Minimum="0" Maximum="100" Value="0" Margin="0,8,0,0"
+                         Style="{StaticResource Style.ProgressBar.Rounded}"/>
+            <TextBlock Name="SpeedEtaText" Text="" Foreground="{DynamicResource Brush.TextSecondary}" FontSize="11" Margin="0,6,0,0"/>
+            <TextBlock Name="FilesSizeText" Text="" Foreground="{DynamicResource Brush.TextSecondary}" FontSize="11" Margin="0,2,0,0"/>
+          </StackPanel>
+        </Grid>
       </Grid>
     </Border>
 

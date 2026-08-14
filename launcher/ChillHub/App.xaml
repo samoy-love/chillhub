@@ -10,6 +10,14 @@
                 <ResourceDictionary Source="/ChillHub;component/Themes/Theme.Dark.xaml" />
             </ResourceDictionary.MergedDictionaries>
             <ui:RuDateConverter x:Key="RuDateConv" />
+            <ui:QueueItemPercentConverter x:Key="QueueItemPercentConv" />
+            <ui:QueueItemIndeterminateConverter x:Key="QueueItemIndeterminateConv" />
+            <ui:QueueItemStateVisibilityConverter x:Key="QueueItemStateVisibilityConv" />
+            <ui:QueueItemDetailConverter x:Key="QueueItemDetailConv" />
+            <ui:QueueItemStatusConverter x:Key="QueueItemStatusConv" />
+            <ui:QueueItemPercentTextConverter x:Key="QueueItemPercentTextConv" />
+            <ui:GameStatusTextConverter x:Key="GameStatusTextConv" />
+            <ui:GameStatusBrushConverter x:Key="GameStatusBrushConv" />
         </ResourceDictionary>
     </Application.Resources>
 </Application>

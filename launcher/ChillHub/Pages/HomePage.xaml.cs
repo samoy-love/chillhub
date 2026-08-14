@@ -6,6 +6,7 @@
 namespace ChillHub.Pages {
     using System;
     using System.Collections.Generic;
+    using System.ComponentModel;
     using System.Diagnostics;
     using System.IO;
     using System.Linq;
@@ -18,6 +19,7 @@ namespace ChillHub.Pages {
     using System.Threading.Tasks;
     using System.Windows;
     using System.Windows.Controls;
+    using System.Windows.Controls.Primitives;
     using System.Windows.Input;
     using System.Windows.Media;
     using System.Windows.Media.Imaging;
@@ -38,10 +40,12 @@ namespace ChillHub.Pages {
 
         private readonly HttpClient http = HttpClientProvider.Shared;
         private List<GameInfo> games = new();
-        private List<string> builds = new();
-        private CancellationTokenSource? cts;
-        private bool isUpdating = false;
 
+        // Держим дескриптор, чтобы отписаться при выгрузке: AddValueChanged заводит сильную
+        // ссылку на TextBlock, и без снятия страница не собиралась бы сборщиком мусора.
+        private DependencyPropertyDescriptor? statusTextWatcher;
+        private DependencyPropertyDescriptor? progressValueWatcher;
+        private List<string> builds = new();
         // Идёт удаление локальных файлов игры: блокирует повторный запуск и установку
         private bool isDeleting = false;
 
@@ -56,8 +60,6 @@ namespace ChillHub.Pages {
         // Порядок игр от API и единое правило сортировки — в Core/Home/GameCatalog.
         private readonly GameCatalog catalog = new();
         private readonly ISyncService sync = new SimpleSyncService();
-        private double emaSpeedMBs = 0.0; // сглаженная скорость
-        private const double EmaAlpha = 0.2; // чувствительность EMA
 
         // Кэш оценок требуемого объёма скачивания по игре (обновляется при VerifyGameStatusAsync)
         private readonly SpaceHint spaceHint = new();
@@ -78,13 +80,13 @@ namespace ChillHub.Pages {
         private GameStatusVerifier Verifier => this.statusVerifier ??=
             new GameStatusVerifier(this.sync, () => this.BaseApi, this.spaceHint, this.verified);
 
-        // Очередь загрузок (фаза 1, Трек C): один экземпляр на всё время жизни страницы —
+        // Очередь загрузок: один экземпляр на всё время жизни страницы —
         // HomePage кешируется приложением, поэтому очередь переживает переходы на GamePage
         // и обратно, и уже стоящие в ней закачки не обрываются при уходе со страницы.
         private readonly Core.Game.DownloadQueue downloadQueue;
         private readonly System.Collections.ObjectModel.ObservableCollection<Core.Game.QueueItem> queueDockItems = new();
 
-        // Галерея игры (Трек G): тот же приём кеша в памяти, что и у остальных
+        // Галерея игры: тот же приём кеша в памяти, что и у остальных
         // content-загрузчиков страницы — не перезапрашивать gallery.json на каждый выбор игры.
         private readonly Core.Game.GalleryClient galleryClient = new();
         private CancellationTokenSource? galleryCts;
@@ -243,8 +245,9 @@ namespace ChillHub.Pages {
             this.QueueDock.ItemsSource = this.queueDockItems;
             this.downloadQueue.ItemAdded += this.OnQueueItemChanged;
             this.downloadQueue.ItemProgress += this.OnQueueItemChanged;
-            this.downloadQueue.ItemCompleted += this.OnQueueItemRemoved;
+            this.downloadQueue.ItemCompleted += this.OnQueueItemCompleted;
             this.downloadQueue.ItemRemoved += this.OnQueueItemRemoved;
+            this.downloadQueue.Reordered += this.OnQueueReordered;
 
             // Ни одна из инициализаций ниже не должна ронять конструктор страницы:
             // при сбое любой из них лаунчер обязан открыться, пусть и без части удобств.
@@ -283,6 +286,19 @@ namespace ChillHub.Pages {
                 this.SubscribeErrorReporter();
                 this.Loaded += (s, e) => this.SubscribeErrorReporter();
                 this.Unloaded += (s, e) => this.UnsubscribeErrorReporter();
+
+                // Статус пишут два десятка мест по всему файлу; вместо того чтобы обходить
+                // каждое, слушаем само свойство — панель прячется и показывается там, где
+                // текст действительно меняется.
+                this.statusTextWatcher = DependencyPropertyDescriptor.FromProperty(TextBlock.TextProperty, typeof(TextBlock));
+                this.statusTextWatcher.AddValueChanged(this.StatusText, this.OnStatusTextChanged);
+                this.progressValueWatcher = DependencyPropertyDescriptor.FromProperty(RangeBase.ValueProperty, typeof(ProgressBar));
+                this.progressValueWatcher.AddValueChanged(this.UpdateProgress, this.OnStatusTextChanged);
+                this.Unloaded += (s, e) => {
+                    this.statusTextWatcher?.RemoveValueChanged(this.StatusText, this.OnStatusTextChanged);
+                    this.progressValueWatcher?.RemoveValueChanged(this.UpdateProgress, this.OnStatusTextChanged);
+                };
+                this.SyncBottomBarVisibility();
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Error(ex, "HomePage.ctor");
@@ -386,12 +402,12 @@ namespace ChillHub.Pages {
                 await this.DispatcherInvokeAsync(() => {
                     try {
                         this.games = ordered;
-                        this.GameList.ItemsSource = this.games;
+                        this.SetGamesSource();
 
                         // Выбор при старте: последняя запущенная, иначе первая установленная, иначе первая
                         var idx = GameCatalog.SelectStartupIndex(this.games, ChillHub.Core.ConfigService.Current.LastGameId);
                         if (idx >= 0) {
-                            this.GameList.SelectedIndex = idx;
+                            this.GameList.SelectedItem = this.games[idx];
                         }
 
                         // Скелетоны -> список
@@ -468,7 +484,7 @@ namespace ChillHub.Pages {
         private void ShowServerUnavailableState(Exception? ex) {
             try {
                 this.games = new List<GameInfo>();
-                this.GameList.ItemsSource = this.games;
+                this.SetGamesSource();
                 this.GamesSkeleton.Visibility = System.Windows.Visibility.Collapsed;
                 this.GameList.Visibility = System.Windows.Visibility.Collapsed;
                 this.GamesEmptyState.Visibility = System.Windows.Visibility.Visible;
@@ -620,12 +636,12 @@ namespace ChillHub.Pages {
                     // Порядок из ответа API сохраняем, установленные держим сверху
                     this.games = this.catalog.Sort(this.games);
                     await this.DispatcherInvokeAsync(() => {
-                        this.GameList.ItemsSource = this.games;
+                        this.SetGamesSource();
                         this.GameList.Items.Refresh();
                         if (!string.IsNullOrWhiteSpace(selectedId)) {
                             var idx = GameCatalog.IndexOf(this.games, selectedId);
                             if (idx >= 0) {
-                                this.GameList.SelectedIndex = idx;
+                                this.GameList.SelectedItem = this.games[idx];
                             }
                         }
                     });
@@ -771,33 +787,13 @@ namespace ChillHub.Pages {
             }
         }
 
-        // Обновляет заголовок секции новостей игры: "Новости (название игры)"
-        private void UpdateGameNewsHeader() {
-            try {
-                var title = "Новости игры";
-                var gid = this.GetSelectedGameId();
-                if (!string.IsNullOrWhiteSpace(gid)) {
-                    var game = this.games?.FirstOrDefault(x => string.Equals(x.GameId, gid, StringComparison.OrdinalIgnoreCase));
-                    var gtitle = game?.Title;
-                    if (!string.IsNullOrWhiteSpace(gtitle)) {
-                        title = $"Новости {gtitle}";
-                    }
-                }
-
-                this.GameNewsHeader.Text = title;
-            }
-            catch (Exception ex) {
-                // Заголовок секции новостей — косметика, оставляем прежний текст
-                Core.Logging.Logger.Warn($"UpdateGameNewsHeader: {ex.Message}");
-            }
-        }
-
         private async Task LoadBuildsAndGameNewsAsync(string gameId, CancellationToken token = default) {
             try {
                 // Очистим новости игры сразу, чтобы не мигали новости другой игры
                 this.GameNewsList.ItemsSource = Array.Empty<NewsItem>();
                 this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Visible;
                 this.GameNewsList.Visibility = System.Windows.Visibility.Collapsed;
+                this.GameNewsEmptyState.Visibility = System.Windows.Visibility.Collapsed;
 
                 // Сборки
                 var buildsUrl = HomeFeed.BuildsUrl(this.BaseApi, gameId);
@@ -825,12 +821,9 @@ namespace ChillHub.Pages {
                 token.ThrowIfCancellationRequested();
                 var items = gameNews?.Items ?? new List<NewsItem>();
                 this.NormalizeCoverUrls(items);
-                this.GameNewsList.ItemsSource = items;
-                this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
-                this.GameNewsList.Visibility = System.Windows.Visibility.Visible;
+                this.ShowGameNews(items);
 
                 // После загрузки — обновим заголовок (на случай, если он ещё не обновлён)
-                this.UpdateGameNewsHeader();
             }
             catch (OperationCanceledException) {
                 // Пользователь выбрал другую игру: результат этой загрузки больше не нужен,
@@ -845,12 +838,9 @@ namespace ChillHub.Pages {
                     $"HomePage.LoadBuildsAndGameNewsAsync: GET {this.BaseApi}/api/games/{gameId}/builds, /news/games/{gameId}/index.json");
 
                 // В случае ошибки не оставляем старые новости от предыдущей игры
-                this.GameNewsList.ItemsSource = Array.Empty<NewsItem>();
-                this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
-                this.GameNewsList.Visibility = System.Windows.Visibility.Visible;
+                this.ShowGameNews(Array.Empty<NewsItem>());
 
                 // Обновим заголовок до дефолтного/актуального
-                this.UpdateGameNewsHeader();
             }
         }
 
@@ -892,19 +882,31 @@ namespace ChillHub.Pages {
             try {
                 this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Visible;
                 this.GameNewsList.Visibility = System.Windows.Visibility.Collapsed;
+                this.GameNewsEmptyState.Visibility = System.Windows.Visibility.Collapsed;
                 var gameNewsUrl = HomeFeed.GameNewsUrl(this.BaseApi, gid);
                 var gameNews = await this.http.GetFromJsonAsync<NewsIndex>(gameNewsUrl);
                 var items = gameNews?.Items ?? new List<NewsItem>();
                 this.NormalizeCoverUrls(items);
-                this.GameNewsList.ItemsSource = items;
+                this.ShowGameNews(items);
             }
             catch (Exception ex) {
                 this.ShowUserError("Не удалось обновить новости игры.", ex, "HomePage.ReloadGameNewsAsync");
+                this.ShowGameNews(Array.Empty<NewsItem>());
             }
-            finally {
-                this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
-                this.GameNewsList.Visibility = System.Windows.Visibility.Visible;
-            }
+        }
+
+        /// <summary>
+        /// Показывает ленту новостей игры либо пустое состояние — ровно одно из двух.
+        /// До появления пустого состояния список показывался всегда, и при нуле новостей
+        /// под заголовком оставалась пустая область в пол-экрана.
+        /// </summary>
+        private void ShowGameNews(IReadOnlyList<NewsItem> items) {
+            this.GameNewsList.ItemsSource = items;
+            this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
+
+            var empty = items.Count == 0;
+            this.GameNewsList.Visibility = empty ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;
+            this.GameNewsEmptyState.Visibility = empty ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
         }
 
         /// <summary>
@@ -912,7 +914,7 @@ namespace ChillHub.Pages {
         /// Ошибка обновления относится к конкретной игре, а не ко всей странице.
         /// </summary>
         private void ResetUpdateErrorIfGameChanged(string? gid) {
-            if (!this.hasUpdateError || this.isUpdating) {
+            if (!this.hasUpdateError || this.IsQueued(gid)) {
                 return;
             }
 
@@ -934,6 +936,7 @@ namespace ChillHub.Pages {
         /// </summary>
         private async void GameCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) {
             var gid = this.GetSelectedGameId();
+            this.UpdateDiskFreeText(gid);
             var cts = new CancellationTokenSource();
             var previous = Interlocked.Exchange(ref this.selectionCts, cts);
             try {
@@ -991,8 +994,10 @@ namespace ChillHub.Pages {
             if (gidRaw is string gid && !string.IsNullOrWhiteSpace(gid)) {
                 this.ResetUpdateErrorIfGameChanged(gid);
 
-                // Если сейчас не выполняется обновление, сбросим состояние прогресса и статусы
-                if (!this.isUpdating) {
+                // Статус выбранной игры сбрасываем, только когда очередь пуста: при непустой
+                // очереди этот блок вообще скрыт (вместо него — карточки, см.
+                // SyncQueuePanelVisibility), и прогресс позиции живёт в её собственной карточке.
+                if (this.queueDockItems.Count == 0) {
                     this.StatusText.Text = "Готово";
                     this.UpdateProgress.IsIndeterminate = false;
                     this.UpdateProgress.Value = 0;
@@ -1009,7 +1014,6 @@ namespace ChillHub.Pages {
                 this.GameList.Items.Refresh();
 
                 // Обновим заголовок новостей игры под выбранную игру
-                this.UpdateGameNewsHeader();
 
                 // Показать имеющийся кэш сразу (мгновенно), затем уточнить расчётом
                 this.UpdateSpaceHintFromCache(gid);
@@ -1025,16 +1029,13 @@ namespace ChillHub.Pages {
                 this.UpdateActionButtonState();
             }
             else {
-                if (!this.isUpdating) {
-                    this.StatusText.Text = "Готово";
-                    this.UpdateProgress.IsIndeterminate = false;
-                    this.UpdateProgress.Value = 0;
-                    this.SpeedEtaText.Text = string.Empty;
-                    this.FilesSizeText.Text = string.Empty;
-                }
+                this.StatusText.Text = "Готово";
+                this.UpdateProgress.IsIndeterminate = false;
+                this.UpdateProgress.Value = 0;
+                this.SpeedEtaText.Text = string.Empty;
+                this.FilesSizeText.Text = string.Empty;
 
                 // Сброс заголовка при отсутствии выбранной игры
-                this.UpdateGameNewsHeader();
             }
         }
 
@@ -1115,9 +1116,11 @@ namespace ChillHub.Pages {
         /// посчитать размер.
         /// </summary>
         private bool TryShowTrivialSpaceHint(string gid) {
-            // Во время установки список даже не смотрим: он пересобирается фоновой проверкой
-            var g = this.isUpdating ? null : this.games?.FirstOrDefault(x => string.Equals(x.GameId, gid, StringComparison.OrdinalIgnoreCase));
-            switch (SpaceHint.Decide(this.isUpdating, g, gid)) {
+            // Пока ЭТА игра стоит в очереди, её статус даже не смотрим: он пересобирается
+            // фоновой проверкой после завершения закачки.
+            var queued = this.IsQueued(gid);
+            var g = queued ? null : this.games?.FirstOrDefault(x => string.Equals(x.GameId, gid, StringComparison.OrdinalIgnoreCase));
+            switch (SpaceHint.Decide(queued, g, gid)) {
                 case SpaceHintAction.ShowUpToDate:
                     this.FilesSizeText.Text = SpaceHint.UpToDateText;
                     return false;
@@ -1164,6 +1167,68 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Отдаёт список игр в UI и заново вешает фильтр поиска.
+        /// <para>
+        /// Фильтр живёт на представлении списка (<see cref="ItemCollection.Filter"/>), а не
+        /// подменяет ItemsSource: восстановление выбранной игры считает индекс по
+        /// <c>this.games</c>, и подменённый источник разъехался бы с этим индексом.
+        /// Представление создаётся заново при каждой смене ItemsSource, поэтому фильтр
+        /// приходится ставить после каждой такой смены — иначе набранный запрос молча
+        /// слетал бы на любом обновлении списка.
+        /// </para>
+        /// </summary>
+        private void SetGamesSource() {
+            this.GameList.ItemsSource = this.games;
+            this.ApplyGameFilter();
+        }
+
+        private void ApplyGameFilter() {
+            try {
+                var query = this.GameSearchBox?.Text?.Trim() ?? string.Empty;
+                if (query.Length == 0) {
+                    this.GameList.Items.Filter = null;
+                    return;
+                }
+
+                this.GameList.Items.Filter = o =>
+                    o is GameInfo g
+                    && (g.Title ?? string.Empty).Contains(query, StringComparison.CurrentCultureIgnoreCase);
+            }
+            catch (Exception ex) {
+                // Фильтр — удобство, а не функция: список должен остаться показанным целиком
+                Core.Logging.Logger.Warn($"ApplyGameFilter: {ex.Message}");
+            }
+        }
+
+        private void GameSearch_TextChanged(object sender, TextChangedEventArgs e) {
+            var selected = this.GameList?.SelectedItem;
+            this.ApplyGameFilter();
+
+            // Выбор сбрасывается сменой фильтра. Если игра всё ещё видна — возвращаем её,
+            // чтобы витрина не мигала при наборе каждой буквы.
+            if (selected != null && this.GameList != null && this.GameList.Items.Contains(selected)) {
+                this.GameList.SelectedItem = selected;
+            }
+        }
+
+        /// <summary>
+        /// Свободное место на диске игр — в подвале сайдбара. Это свойство машины, а не
+        /// текущей закачки, поэтому оно живёт отдельно от строки прогресса.
+        /// </summary>
+        private void UpdateDiskFreeText(string? gid) {
+            try {
+                var free = GetAvailableFreeSpaceFor(gid);
+                this.DiskFreeText.Text = free > 0
+                    ? $"Свободно на диске: {FormatSize(free)}"
+                    : string.Empty;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"UpdateDiskFreeText gid={gid}: {ex.Message}");
+                this.DiskFreeText.Text = string.Empty;
+            }
+        }
+
         // Обновление списка игр по кнопке в заголовке секции
         private async void RefreshGames_Click(object sender, RoutedEventArgs e) {
             // Сохраним текущее выделение, чтобы не потерять контекст страницы игры
@@ -1185,13 +1250,13 @@ namespace ChillHub.Pages {
                 // Сортировка: установленные сначала, затем порядок, полученный от API
                 this.catalog.RememberApiOrder(this.games);
                 this.games = this.catalog.Sort(this.games);
-                this.GameList.ItemsSource = this.games;
+                this.SetGamesSource();
 
                 // Восстановим выбранную игру, если она осталась в списке
                 if (!string.IsNullOrWhiteSpace(prevSelectedId)) {
                     var idxSel = GameCatalog.IndexOfIgnoreCase(this.games, prevSelectedId);
                     if (idxSel >= 0) {
-                        this.GameList.SelectedIndex = idxSel;
+                        this.GameList.SelectedItem = this.games[idxSel];
                     }
                 }
             }
@@ -1232,7 +1297,7 @@ namespace ChillHub.Pages {
                 if (string.IsNullOrWhiteSpace(gid) && !string.IsNullOrWhiteSpace(prevSelectedId)) {
                     var idxSel2 = GameCatalog.IndexOfIgnoreCase(this.games, prevSelectedId);
                     if (idxSel2 >= 0) {
-                        this.GameList.SelectedIndex = idxSel2;
+                        this.GameList.SelectedItem = this.games[idxSel2];
                         gid = prevSelectedId;
                     }
                 }
@@ -1258,9 +1323,11 @@ namespace ChillHub.Pages {
                 return;
             }
 
+            var gid = this.GetSelectedGameId();
+
             // Блокируем действия только пока не известен статус ВЫБРАННОЙ игры.
             // Проверка остальных игр в фоне работе не мешает (C4).
-            if (!this.isUpdating && !this.verified.IsKnown(this.GetSelectedGameId())) {
+            if (!this.IsQueued(gid) && !this.verified.IsKnown(gid)) {
                 try {
                     this.StatusText.Text = "Проверяем файлы игры…";
                     this.UpdateProgress.IsIndeterminate = true;
@@ -1272,9 +1339,13 @@ namespace ChillHub.Pages {
                 }
                 return;
             }
-            if (this.isUpdating) {
-                // В режиме обновления кнопка всегда работает как Отмена
-                this.cts?.Cancel();
+
+            // Выбранная игра уже стоит в очереди (ждёт или качается прямо сейчас) — кнопка
+            // работает как «Отмена» этой конкретной позиции, а не глобальный переключатель:
+            // до перехода на очередь один флаг isUpdating красил кнопку в «Отмена» для ЛЮБОЙ
+            // выбранной игры, даже когда качалась совсем другая — снять можно было только её.
+            if (!string.IsNullOrWhiteSpace(gid) && this.IsQueued(gid)) {
+                this.downloadQueue.Remove(gid!);
                 return;
             }
 
@@ -1286,362 +1357,34 @@ namespace ChillHub.Pages {
                 case ActionMode.Update:
                 case ActionMode.Retry:
                 default:
-                    // Источник от прошлой установки уже отработал (сюда попадаем только
-                    // при isUpdating == false) — освобождаем его, а не теряем.
-                    var previous = this.cts;
-                    this.cts = new CancellationTokenSource();
-                    previous?.Dispose();
-                    _ = this.StartUpdateAsync(this.cts.Token);
+                    if (!string.IsNullOrWhiteSpace(gid)) {
+                        // Единственная точка запуска закачки — дальше игра либо сразу качается
+                        // (очередь была пуста), либо ждёт своей позиции: ровно то же самое
+                        // "Добавить в очередь загрузок" контекстного меню, см. EnqueueGame_Click.
+                        // Список игр при этом никогда не блокируется — переключаться на другие
+                        // экраны можно свободно, пока эта позиция стоит в очереди или качается.
+                        if (!this.downloadQueue.Enqueue(gid!)) {
+                            this.StatusText.Text = "Игра уже установлена или уже в очереди.";
+                        }
+                    }
+
                     break;
             }
         }
 
-        /// <summary>
-        /// Одна точка отправки метрики установки/обновления: и успех, и отмена,
-        /// и сбой уходят одинаково, отличаясь только полем result. Сама отправка
-        /// не блокирует и не бросает, но обёртка стоит на случай, если однажды
-        /// начнёт.
-        /// </summary>
-        private void ReportSyncMetric(
-            string? gameId,
-            string? version,
-            bool isInstall,
-            string result,
-            System.Diagnostics.Stopwatch watch,
-            long bytes,
-            long filesDownloaded = 0,
-            long filesTotal = 0,
-            long fullBytes = 0) {
-            try {
-                var ms = (long)watch.Elapsed.TotalMilliseconds;
-                if (isInstall) {
-                    Core.Metrics.MetricsService.GameInstall(
-                        gameId, version, result, ms, bytes, filesDownloaded, filesTotal, fullBytes);
-                }
-                else {
-                    Core.Metrics.MetricsService.GameUpdate(
-                        gameId, version, result, ms, bytes, filesDownloaded, filesTotal, fullBytes);
-                }
+        /// <summary>Выбранная игра прямо сейчас стоит в очереди — ждёт или качается.</summary>
+        private bool IsQueued(string? gid)
+            => !string.IsNullOrWhiteSpace(gid)
+               && this.downloadQueue.Snapshot().Any(i => string.Equals(i.GameId, gid, StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>Снимок позиции выбранной игры в очереди — null, если её там нет.</summary>
+        private Core.Game.QueueItem? SelectedQueueItem() {
+            var gid = this.GetSelectedGameId();
+            if (string.IsNullOrWhiteSpace(gid)) {
+                return null;
             }
-            catch (Exception ex) {
-                Core.Logging.Logger.Warn($"Метрика синхронизации не отправлена: {ex.Message}");
-            }
-        }
 
-        private async Task StartUpdateAsync(CancellationToken token) {
-            // Нужен и в catch: по нему запоминаем, к какой игре относится «Повторить»
-            string? currentGid = null;
-
-            // Для метрики: нужна и в catch, чтобы отличить отмену от сбоя.
-            var metricsWatch = System.Diagnostics.Stopwatch.StartNew();
-            var metricsIsInstall = false;
-            string? metricsVersion = null;
-            long metricsBytes = 0;
-
-            // Экономия трафика видна только парой чисел: сколько скачали и
-            // сколько весила бы сборка целиком. Держим их рядом со счётчиком
-            // байт, чтобы отчёт об отмене и об ошибке уходил с теми же цифрами,
-            // что и отчёт об успехе.
-            long metricsFiles = 0;
-            long metricsFilesTotal = 0;
-            long metricsFullBytes = 0;
-            try {
-                if (this.GetSelectedGameId() is not string gid || string.IsNullOrWhiteSpace(gid)) {
-                    this.StatusText.Text = "Не выбрана игра";
-                    return;
-                }
-
-                currentGid = gid;
-
-                // Всегда используем latest; список версий доступен только для просмотра
-                var game = this.games.FirstOrDefault(g => g.GameId == gid);
-                var version = HomeFeed.SelectVersion(game, this.builds);
-
-                if (string.IsNullOrWhiteSpace(version)) {
-                    this.StatusText.Text = "Нет доступных сборок для установки";
-                    return;
-                }
-
-                // Подстраховка на случай, если работы начались уже после отрисовки кнопки
-                var isInstall = game?.IsInstalled != true;
-                metricsIsInstall = isInstall;
-                metricsVersion = version;
-                var maintenance = Core.Maintenance.MaintenanceService.Current;
-                if (isInstall ? maintenance.BlocksInstall : maintenance.BlocksUpdate) {
-                    this.StatusText.Text = maintenance.BuildBannerText();
-                    this.UpdateActionButtonState();
-                    return;
-                }
-
-                Core.Logging.Logger.Info($"StartUpdateAsync gid={gid} version={version}");
-
-                this.isUpdating = true;
-                this.hasUpdateError = false;
-                this.updateErrorGameId = null;
-                this.SetActionMode(ActionMode.Cancel);
-                this.GameList.IsEnabled = false;
-                this.UpdateProgress.Value = 0;
-                this.FilesSizeText.Text = string.Empty;
-                this.SpeedEtaText.Text = string.Empty;
-                this.emaSpeedMBs = 0.0;
-
-                var manifestUrl = IntegrityChecker.ManifestUrl(this.BaseApi, gid, version);
-                var contentBase = IntegrityChecker.ContentBaseUrl(this.BaseApi, gid, version);
-
-                this.StatusText.Text = "Загрузка манифеста...";
-                this.UpdateProgress.IsIndeterminate = true;
-                this.UpdateProgress.Value = 0;
-                this.SpeedEtaText.Text = string.Empty;
-                this.FilesSizeText.Text = string.Empty;
-                Core.Logging.Logger.Info($"StartUpdateAsync fetching manifest {manifestUrl}");
-                var manifest = await this.sync.GetManifestAsync(manifestUrl, token);
-                this.StatusText.Text = "Проверка...";
-                this.UpdateProgress.IsIndeterminate = true;
-                var localRoot = GameLocalRoot(gid);
-                var plan = await this.PlanOffUiThreadAsync(manifest, localRoot, contentBase, token);
-                Core.Logging.Logger.Info($"StartUpdateAsync plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
-                LogPlanDownloads(gid, "update", plan, localRoot);
-
-                // Оценка требуемого места и проверка доступного до скачивания
-                try {
-                    var root = Path.GetPathRoot(Path.GetFullPath(localRoot)) ?? localRoot;
-                    var drive = new DriveInfo(root);
-                    var need = plan.TotalDownloadBytes;
-                    var have = drive.AvailableFreeSpace;
-
-                    // Показываем оценку места только если требуется скачать что-то
-                    if (need > 0) {
-                        this.FilesSizeText.Text = $"Нужно: {FormatSize(need)} ({FormatSize(have)} доступно)";
-                    }
-                    else {
-                        this.FilesSizeText.Text = string.Empty; // последняя версия — ничего не показываем
-                    }
-
-                    if (need > 0 && have < need) {
-                        this.StatusText.Text = "Недостаточно свободного места для обновления.";
-
-                        // Оставляем строку с числами для ясности
-                        this.isUpdating = false;
-                        this.GameList.IsEnabled = true;
-                        this.UpdateProgress.IsIndeterminate = false;
-                        this.UpdateProgress.Value = 0;
-
-                        // Обновим подписи/видимость кнопок согласно текущему состоянию
-                        this.UpdateActionButtonState();
-                        return;
-                    }
-                }
-                catch (Exception ex) {
-                    // Не смогли оценить свободное место (сетевой диск, необычный путь).
-                    // Это не повод отменять установку: пойдём дальше, ошибку записи поймает сам sync.
-                    Core.Logging.Logger.Warn($"StartUpdateAsync: оценка свободного места не удалась: {ex.Message}");
-                }
-
-                // Guard: если игра запущена — блокируем обновление
-                game = this.games.FirstOrDefault(g => g.GameId == gid);
-                if (game != null && !string.IsNullOrWhiteSpace(game.ExeRelativePath)) {
-                    var exeName = System.IO.Path.GetFileNameWithoutExtension(game.ExeRelativePath);
-                    if (!string.IsNullOrWhiteSpace(exeName)) {
-                        var running = Process.GetProcessesByName(exeName);
-                        if (running?.Length > 0) {
-                            this.StatusText.Text = $"Игра запущена ({exeName}). Закройте игру перед обновлением.";
-
-                            // Сбросим состояние обновления, чтобы не завис случай отмены
-                            this.isUpdating = false;
-                            this.GameList.IsEnabled = true;
-                            this.UpdateProgress.IsIndeterminate = false;
-                            this.UpdateProgress.Value = 0;
-                            this.SpeedEtaText.Text = string.Empty;
-                            this.FilesSizeText.Text = string.Empty;
-
-                            // Обновим подписи/видимость кнопок согласно текущему состоянию
-                            this.UpdateActionButtonState();
-                            return;
-                        }
-                    }
-                }
-
-                var start = DateTime.UtcNow;
-                var prog = new Progress<SyncProgress>(p => {
-                    // Обновляем статус и режим прогресс-бара в зависимости от стадии
-                    switch (p.Stage) {
-                        case "Checking":
-                            this.StatusText.Text = "Проверка...";
-                            this.UpdateProgress.IsIndeterminate = true;
-                            this.SpeedEtaText.Text = string.Empty;
-                            this.FilesSizeText.Text = string.Empty;
-                            break;
-                        case "Downloading":
-                            this.StatusText.Text = "Скачивание обновления...";
-                            this.UpdateProgress.IsIndeterminate = false;
-                            if (p.TotalBytes > 0) {
-                                this.UpdateProgress.Value = Math.Min(100, Math.Max(0, (p.BytesDownloaded * 100.0) / p.TotalBytes));
-                                var elapsed = (DateTime.UtcNow - start).TotalSeconds;
-                                var instantSpeed = elapsed > 0 ? (p.BytesDownloaded / 1024.0 / 1024.0) / elapsed : 0; // МБ/с по всем потокам
-                                this.emaSpeedMBs = (this.emaSpeedMBs <= 0) ? instantSpeed : ((EmaAlpha * instantSpeed) + ((1 - EmaAlpha) * this.emaSpeedMBs));
-                                var remainBytes = p.TotalBytes - p.BytesDownloaded;
-                                var etaSec = this.emaSpeedMBs > 0 ? (remainBytes / 1024.0 / 1024.0) / this.emaSpeedMBs : 0;
-                                this.SpeedEtaText.Text = $"Скорость: {this.emaSpeedMBs:0.0} МБ/с • Осталось: {FormatEta(etaSec)}";
-                                this.FilesSizeText.Text = $"{p.FilesDownloaded}/{p.TotalFiles} • {FormatSize(p.BytesDownloaded)}/{FormatSize(p.TotalBytes)}";
-                            }
-
-                            break;
-                        case "Verifying":
-                            // Явно показываем стадию проверки файлов после скачивания
-                            this.StatusText.Text = "Проверка файлов...";
-
-                            // Отразим, что скачивание завершено
-                            this.UpdateProgress.Value = 100;
-                            this.UpdateProgress.IsIndeterminate = true;
-                            this.SpeedEtaText.Text = string.Empty;
-
-                            // После скачивания проценты больше не релевантны
-                            break;
-                        case "Activating":
-                            this.StatusText.Text = "Применение обновления...";
-
-                            // Отразим, что скачивание завершено
-                            this.UpdateProgress.Value = 100;
-                            this.UpdateProgress.IsIndeterminate = true;
-                            this.SpeedEtaText.Text = string.Empty;
-                            break;
-                        case "Completed":
-                            // Финальное уведомление от службы синхронизации
-                            this.UpdateProgress.IsIndeterminate = false;
-                            this.UpdateProgress.Value = 100;
-                            this.StatusText.Text = "Готово";
-                            this.SpeedEtaText.Text = string.Empty;
-                            this.FilesSizeText.Text = "Последняя версия игры уже установлена";
-                            break;
-                        default:
-                            this.StatusText.Text = p.Stage;
-                            break;
-                    }
-                });
-
-                metricsBytes = plan.TotalDownloadBytes;
-                metricsFiles = plan.TotalFilesToDownload;
-                metricsFilesTotal = plan.TotalManifestFiles;
-                metricsFullBytes = plan.TotalManifestBytes;
-                await this.sync.ExecuteAsync(plan, prog, token);
-                Core.Logging.Logger.Info($"StartUpdateAsync execute done gid={gid} version={version}");
-
-                this.ReportSyncMetric(gid, metricsVersion, metricsIsInstall, "ok", metricsWatch, metricsBytes, metricsFiles, metricsFilesTotal, metricsFullBytes);
-
-                this.StatusText.Text = "Готово";
-                this.SpeedEtaText.Text = string.Empty;
-                this.FilesSizeText.Text = "Последняя версия игры уже установлена"; // показываем итоговый статус
-
-                // Сохраним версию в локальный маркер и отметим игру установленной
-                WriteLocalVersion(gid, version);
-                this.MarkInstalled(gid, version);
-
-                // Обновим кэш: для установленной последней версии скачивание не требуется
-                this.spaceHint.Remember(gid, 0);
-                this.GameList.Items.Refresh();
-
-                // Зафиксируем текущий выбор на UI-потоке
-                var selectedIdAfterUpdate = this.GetSelectedGameId();
-
-                // Дополнительно перепроверим статус игры по манифесту и обновим список в фоне,
-                // чтобы не блокировать UI-поток сразу после завершения обновления
-                _ = Task.Run(async () => {
-                    try {
-                        await this.Verifier.VerifyAsync(this.games.FirstOrDefault(x => x.GameId == gid) ?? new GameInfo { GameId = gid, LatestVersion = version ?? string.Empty });
-                        var reordered = this.catalog.Sort(this.games);
-                        await this.DispatcherInvokeAsync(() => {
-                            this.games = reordered;
-                            this.GameList.ItemsSource = this.games;
-                            this.GameList.Items.Refresh();
-                            if (!string.IsNullOrWhiteSpace(selectedIdAfterUpdate)) {
-                                var idx = GameCatalog.IndexOf(this.games, selectedIdAfterUpdate);
-                                if (idx >= 0) {
-                                    this.GameList.SelectedIndex = idx;
-                                }
-                            }
-
-                            // После изменения источника данных — обновим состояние кнопки
-                            this.UpdateActionButtonState();
-                        });
-                    }
-                    catch (Exception ex) {
-                        // Игра уже установлена и версия записана: это лишь фоновая пересортировка списка
-                        Core.Logging.Logger.Error(ex, "StartUpdateAsync.PostInstallRefresh");
-                    }
-                });
-
-                // Создание ярлыка: параметры считаем на UI-потоке, а COM-вызов делаем в STA-потоке
-                try {
-                    string? shortcutTitle = null;
-                    string? shortcutExe = null;
-                    var gLocal = this.games.FirstOrDefault(g => g.GameId == gid);
-                    if (gLocal != null && !string.IsNullOrWhiteSpace(gLocal.ExeRelativePath)) {
-                        var rel = gLocal.ExeRelativePath.Replace('/', System.IO.Path.DirectorySeparatorChar).Replace('\\', System.IO.Path.DirectorySeparatorChar);
-                        shortcutExe = System.IO.Path.Combine(localRoot, rel);
-                        shortcutTitle = string.IsNullOrWhiteSpace(gLocal.Title) ? gid : gLocal.Title;
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(shortcutExe) && File.Exists(shortcutExe)) {
-                        // TryCreateDesktopShortcut гасит собственные ошибки: ярлык не критичен для установки
-                        var t = new System.Threading.Thread(() => TryCreateDesktopShortcut(shortcutTitle!, shortcutExe!));
-                        t.IsBackground = true;
-                        try {
-                            t.SetApartmentState(System.Threading.ApartmentState.STA);
-                        }
-                        catch (Exception exSta) {
-                            // Поток уже запущен/состояние занято — попробуем создать ярлык как есть
-                            Core.Logging.Logger.Warn($"StartUpdateAsync: не удалось выставить STA для потока ярлыка: {exSta.Message}");
-                        }
-
-                        t.Start();
-                    }
-                }
-                catch (Exception ex) {
-                    // Ярлык на рабочем столе — приятная мелочь, установка уже завершена успешно
-                    Core.Logging.Logger.Warn($"StartUpdateAsync: ярлык не создан: {ex.Message}");
-                }
-            }
-            catch (OperationCanceledException) {
-                this.StatusText.Text = "Операция отменена пользователем.";
-                this.SpeedEtaText.Text = string.Empty;
-                this.UpdateProgress.IsIndeterminate = false;
-                this.UpdateProgress.Value = 0;
-                this.ReportSyncMetric(currentGid, metricsVersion, metricsIsInstall, "cancel", metricsWatch, metricsBytes, metricsFiles, metricsFilesTotal, metricsFullBytes);
-            }
-            catch (ManifestValidationException ex) {
-                // Манифест отклонён проверкой структуры — это не сетевой сбой.
-                // Ни одного файла игры мы ещё не тронули, и не тронем: показываем отдельный текст.
-                this.hasUpdateError = true;
-                this.updateErrorGameId = currentGid;
-                this.ShowUserError(ManifestValidator.UserMessage, ex, "HomePage.StartUpdateAsync.ManifestValidation");
-                this.ReportSyncMetric(currentGid, metricsVersion, metricsIsInstall, "fail", metricsWatch, metricsBytes, metricsFiles, metricsFilesTotal, metricsFullBytes);
-                Core.Metrics.MetricsService.Error("manifest_invalid", currentGid);
-            }
-            catch (Exception ex) {
-                this.hasUpdateError = true;
-                this.updateErrorGameId = currentGid;
-                var userMessage = ex is IOException
-                    ? "Не удалось записать файлы игры. Проверьте свободное место и права доступа."
-                    : "Не удалось завершить обновление. Попробуйте ещё раз.";
-                this.ShowUserError(userMessage, ex, "HomePage.StartUpdateAsync");
-                this.ReportSyncMetric(currentGid, metricsVersion, metricsIsInstall, "fail", metricsWatch, metricsBytes, metricsFiles, metricsFilesTotal, metricsFullBytes);
-
-                // Код классифицирует сбой по типу исключения. Текст исключения НЕ отправляем:
-                // в нём регулярно встречаются пути с именем пользователя.
-                Core.Metrics.MetricsService.Error(ex is IOException ? "sync_io" : "sync_failed", currentGid);
-            }
-            finally {
-                this.isUpdating = false;
-                this.GameList.IsEnabled = true;
-                this.UpdateProgress.IsIndeterminate = false;
-                this.UpdateProgress.Value = 0;
-
-                // Не очищаем нижний статус при успешном завершении, чтобы показать "Последняя версия игры уже установлена"
-                if (this.hasUpdateError) {
-                    this.FilesSizeText.Text = string.Empty;
-                }
-                this.UpdateActionButtonState();
-            }
+            return this.downloadQueue.Snapshot().FirstOrDefault(i => string.Equals(i.GameId, gid, StringComparison.OrdinalIgnoreCase));
         }
 
         // --- Управление видимостью кнопок действий (Обновить/Играть) ---
@@ -1665,15 +1408,6 @@ namespace ChillHub.Pages {
                 this.ActionBtn.Content = look.Content;
                 this.ActionBtn.IsEnabled = look.IsEnabled;
                 this.ApplyActionButtonStyle(look.StyleKey);
-
-                // «Играть» на витрине — тот же режим, что и нижняя кнопка действия (одно состояние, два места)
-                if (this.HeroPlayBtn != null) {
-                    this.HeroPlayBtn.Content = look.Content;
-                    this.HeroPlayBtn.IsEnabled = look.IsEnabled;
-                    if (this.TryFindResource(look.StyleKey) is Style heroStyle) {
-                        this.HeroPlayBtn.Style = heroStyle;
-                    }
-                }
             }
             catch (Exception ex) {
                 // Кнопка действия — центральный элемент экрана: не даём сбою оформления уронить страницу
@@ -1723,12 +1457,106 @@ namespace ChillHub.Pages {
 
                 this.HeroStatusText.Text = status;
                 this.HeroStatusBadge.Visibility = string.IsNullOrEmpty(status) ? Visibility.Collapsed : Visibility.Visible;
+                this.HeroMetaText.Text = BuildHeroMeta(g);
             }
             catch (Exception ex) {
                 // Витрина — украшение поверх основной логики: сбой обновления заголовка не должен мешать остальному
                 Core.Logging.Logger.Warn($"UpdateHero: {ex.Message}");
             }
         }
+
+        /// <summary>
+        /// Название выбранной игры — для пункта «Играть» в меню трея. Пусто, если игра не
+        /// выбрана: меню обязано это показать, а не предлагать запуск в никуда.
+        /// </summary>
+        internal string? SelectedGameTitle => this.GetSelectedGame()?.Title;
+
+        /// <summary>
+        /// Выбранная игра установлена и готова к запуску — трей может стартовать её, не
+        /// поднимая окно. В любом другом состоянии (установка, обновление, проверка) окно
+        /// придётся показать: пользователю нужно видеть, что происходит.
+        /// </summary>
+        internal bool CanPlaySelectedGame => this.actionMode == ActionMode.Play;
+
+        /// <summary>Делает то же, что кнопка действия на витрине — вызов из меню трея.</summary>
+        internal void InvokeSelectedAction() => this.ActionBtn_Click(this, new RoutedEventArgs());
+
+        /// <summary>Перечитывает список игр и заново проверяет их статусы — пункт «Проверить обновления».</summary>
+        internal void RefreshGamesAndStatuses() => this.RefreshGames_Click(this, new RoutedEventArgs());
+
+        /// <summary>
+        /// Строка под названием в витрине: версия, куда обновляемся, и сколько наиграно.
+        /// Пустая, если про игру нечего сказать — пустых разделителей в ней не остаётся.
+        /// </summary>
+        private static string BuildHeroMeta(GameInfo? g) {
+            if (g == null) {
+                return string.Empty;
+            }
+
+            var parts = new List<string>();
+            var installed = (g.InstalledVersion ?? string.Empty).Trim();
+            var latest = (g.LatestVersion ?? string.Empty).Trim();
+
+            if (g.IsInstalled && installed.Length > 0) {
+                parts.Add(g.NeedsUpdate && latest.Length > 0 && latest != installed
+                    ? $"{installed} → {latest}"
+                    : installed);
+            }
+            else if (latest.Length > 0) {
+                parts.Add(latest);
+            }
+
+            try {
+                var playtime = Core.Game.PlaytimeStore.Get(g.GameId);
+                if (playtime.TotalSeconds > 0) {
+                    parts.Add(Core.Game.PlaytimeStore.FormatTotal(playtime.TotalSeconds) + " в игре");
+                }
+            }
+            catch (Exception ex) {
+                // Наигранное — приятная мелочь, а не причина оставить витрину без строки
+                Core.Logging.Logger.Warn($"BuildHeroMeta playtime gid={g.GameId}: {ex.Message}");
+            }
+
+            return string.Join(" · ", parts);
+        }
+
+        /// <summary>
+        /// Нижняя панель видна, только пока что-то происходит: есть очередь, идёт полоса или
+        /// статус сообщает не «Готово». В покое она забирала полтораста пикселей под пустой
+        /// прогрессбар — полоса в нуле читается как остановившийся процесс, а не как его
+        /// отсутствие.
+        /// </summary>
+        private void OnStatusTextChanged(object? sender, EventArgs e) => this.SyncBottomBarVisibility();
+
+        private void SyncBottomBarVisibility() {
+            try {
+                if (this.BottomBar == null) {
+                    return;
+                }
+
+                var running = this.UpdateProgress.IsIndeterminate || this.UpdateProgress.Value > 0;
+                var busy = this.QueuePanel.Visibility == Visibility.Visible
+                    || running
+                    || !IsIdleStatus(this.StatusText.Text);
+
+                this.BottomBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+
+                // Полоса — только когда ей есть что показывать. Пустая полоса под сообщением
+                // «Обновление не завершено» читается как зависший процесс, а процесса нет.
+                this.UpdateProgress.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+                this.SpeedEtaText.Visibility = HideIfEmpty(this.SpeedEtaText.Text);
+                this.FilesSizeText.Visibility = HideIfEmpty(this.FilesSizeText.Text);
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"SyncBottomBarVisibility: {ex.Message}");
+            }
+        }
+
+        private static Visibility HideIfEmpty(string? text)
+            => string.IsNullOrWhiteSpace(text) ? Visibility.Collapsed : Visibility.Visible;
+
+        private static bool IsIdleStatus(string? text)
+            => string.IsNullOrWhiteSpace(text) || string.Equals(text.Trim(), "Готово", StringComparison.Ordinal);
 
         // Стиль кнопки берём из темы; если ресурс не найден, оставляем оформление по умолчанию
         private void ApplyActionButtonStyle(string styleKey) {
@@ -1747,7 +1575,10 @@ namespace ChillHub.Pages {
                 var isInstalled = g?.IsInstalled == true;
                 var needsUpdate = g?.NeedsUpdate == true;
 
-                if (this.isUpdating) {
+                // Выбранная игра стоит в очереди (ждёт или качается) — кнопка отменяет ЭТУ
+                // позицию. Прогресс при этом рисует её собственная карточка в очереди и
+                // только она: дублировать его строкой статуса больше не нужно.
+                if (this.SelectedQueueItem() != null) {
                     this.SetActionMode(ActionMode.Cancel);
                     return;
                 }
@@ -1761,7 +1592,7 @@ namespace ChillHub.Pages {
                 // Статус стал известен — снимаем «бегущую» полосу, которую включает клик по
                 // кнопке во время проверки. Раньше её никто не выключал, и прогресс-бар
                 // бежал до конца сессии, изображая несуществующую работу.
-                if (!this.isUpdating && !this.isDeleting) {
+                if (!this.isDeleting) {
                     this.UpdateProgress.IsIndeterminate = false;
                 }
 
@@ -1777,7 +1608,7 @@ namespace ChillHub.Pages {
                 }
 
                 this.SetActionMode(intended);
-                if (intended == ActionMode.Update && unfinished && !this.isUpdating) {
+                if (intended == ActionMode.Update && unfinished) {
                     this.StatusText.Text = "Обновление не завершено. Нажмите «Обновить», чтобы восстановить игру.";
                 }
             }
@@ -1846,7 +1677,7 @@ namespace ChillHub.Pages {
         private void OnMaintenanceChanged(Core.Maintenance.MaintenanceState state) {
             try {
                 this.UpdateActionButtonState();
-                if (!state.Enabled && !this.isUpdating && string.IsNullOrWhiteSpace(this.lastErrorDetails)) {
+                if (!state.Enabled && !this.IsQueued(this.GetSelectedGameId()) && string.IsNullOrWhiteSpace(this.lastErrorDetails)) {
                     this.StatusText.Text = "Готово";
                 }
             }
@@ -1855,7 +1686,7 @@ namespace ChillHub.Pages {
             }
         }
 
-        // --- Очередь загрузок (Трек C) ---------------------------------------------------
+        // --- Очередь загрузок -------------------------------------------------------------
 
         private void EnqueueGame_Click(object sender, RoutedEventArgs e) {
             try {
@@ -1877,6 +1708,24 @@ namespace ChillHub.Pages {
             }
         }
 
+        private void MoveQueueItemUp_Click(object sender, RoutedEventArgs e) {
+            if ((sender as FrameworkElement)?.DataContext is Core.Game.QueueItem item) {
+                this.downloadQueue.MoveUp(item.GameId);
+            }
+        }
+
+        private void MoveQueueItemDown_Click(object sender, RoutedEventArgs e) {
+            if ((sender as FrameworkElement)?.DataContext is Core.Game.QueueItem item) {
+                this.downloadQueue.MoveDown(item.GameId);
+            }
+        }
+
+        private void CancelQueueItem_Click(object sender, RoutedEventArgs e) {
+            if ((sender as FrameworkElement)?.DataContext is Core.Game.QueueItem item) {
+                this.downloadQueue.Remove(item.GameId);
+            }
+        }
+
         // ItemAdded/ItemProgress несут актуальный снимок позиции — заменяем её в коллекции
         // целиком (QueueItem неизменяем), а не пытаемся мутировать старую запись на месте.
         //
@@ -1894,7 +1743,70 @@ namespace ChillHub.Pages {
                 else {
                     this.queueDockItems.Add(item);
                 }
+
+                this.SyncQueuePanelVisibility();
+
+                // Витрина/нижняя панель отражают позицию ВЫБРАННОЙ игры — если это она,
+                // перерисовываем сразу, а не ждём следующего клика/смены выбора.
+                if (string.Equals(this.GetSelectedGameId(), item.GameId, StringComparison.OrdinalIgnoreCase)) {
+                    this.UpdateActionButtonState();
+                }
             });
+        }
+
+        /// <summary>
+        /// Нижняя панель показывает ЛИБО очередь, либо статус выбранной игры — но не оба
+        /// сразу: до объединения блоков одна и та же позиция описывалась дважды, карточкой
+        /// в середине экрана и строкой внизу.
+        /// </summary>
+        private void SyncQueuePanelVisibility() {
+            var count = this.queueDockItems.Count;
+            this.QueuePanel.Visibility = count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            this.IdleStatusPanel.Visibility = count > 0 ? Visibility.Collapsed : Visibility.Visible;
+            if (count > 0) {
+                var running = this.queueDockItems.Count(i => i.State == Core.Game.QueueItemState.Running);
+                this.QueueSummaryText.Text = running > 0
+                    ? $"Очередь загрузок · качается {running} из {count}"
+                    : $"Очередь загрузок · {count} в ожидании";
+            }
+
+            this.SyncBottomBarVisibility();
+        }
+
+        /// <summary>
+        /// Позиция очереди завершилась — успехом, ошибкой или отменой. Устанавливает то, что
+        /// раньше делал завершающий блок StartUpdateAsync (без прямой закачки эта логика
+        /// переехала сюда — единственное место, где ЛЮБАЯ закачка на самом деле кончается),
+        /// а затем убирает карточку из очереди тем же путём, что и OnQueueItemRemoved.
+        /// </summary>
+        private void OnQueueItemCompleted(Core.Game.QueueItem item) {
+            this.Dispatcher.BeginInvoke(() => {
+                switch (item.State) {
+                    case Core.Game.QueueItemState.Completed:
+                        this.hasUpdateError = false;
+                        if (string.Equals(this.updateErrorGameId, item.GameId, StringComparison.OrdinalIgnoreCase)) {
+                            this.updateErrorGameId = null;
+                        }
+
+                        var g = this.games.FirstOrDefault(x => string.Equals(x.GameId, item.GameId, StringComparison.OrdinalIgnoreCase));
+                        this.MarkInstalled(item.GameId, g?.LatestVersion);
+                        break;
+                    case Core.Game.QueueItemState.Failed:
+                        this.hasUpdateError = true;
+                        this.updateErrorGameId = item.GameId;
+                        break;
+                    case Core.Game.QueueItemState.Cancelled:
+                    default:
+                        break;
+                }
+
+                if (string.Equals(this.GetSelectedGameId(), item.GameId, StringComparison.OrdinalIgnoreCase)) {
+                    this.StatusText.Text = item.StatusText;
+                    this.UpdateActionButtonState();
+                }
+            });
+
+            this.OnQueueItemRemoved(item);
         }
 
         private void OnQueueItemRemoved(Core.Game.QueueItem item) {
@@ -1903,6 +1815,20 @@ namespace ChillHub.Pages {
                 if (idx >= 0) {
                     this.queueDockItems.RemoveAt(idx);
                 }
+
+                this.SyncQueuePanelVisibility();
+            });
+        }
+
+        /// <summary>Порядок ожидающих позиций поменялся — перестраиваем список целиком в новом порядке.</summary>
+        private void OnQueueReordered(IReadOnlyList<Core.Game.QueueItem> snapshot) {
+            this.Dispatcher.BeginInvoke(() => {
+                this.queueDockItems.Clear();
+                foreach (var item in snapshot) {
+                    this.queueDockItems.Add(item);
+                }
+
+                this.SyncQueuePanelVisibility();
             });
         }
 
@@ -1916,7 +1842,7 @@ namespace ChillHub.Pages {
             return -1;
         }
 
-        // --- Галерея игры (Трек G) --------------------------------------------------------
+        // --- Галерея игры -----------------------------------------------------------------
 
         // Владеет переданным cts целиком — сама диспозит его в finally, после того как
         // её собственная работа (успешно или нет) завершилась. Так у ЛЮБОГО экземпляра,
@@ -1967,19 +1893,7 @@ namespace ChillHub.Pages {
         // Сам запуск живёт в Core/Home/GameLaunch: здесь только показ того, чем он кончился.
         private void PlaySelectedGame() {
             var gid = this.GetSelectedGameId();
-            Core.Game.ModProfile? profile = null;
-            if (!string.IsNullOrWhiteSpace(gid)) {
-                try {
-                    var file = Core.Game.ModProfileStore.Load(gid!);
-                    profile = Core.Game.ModProfileStore.SelectedProfile(file);
-                }
-                catch (Exception ex) {
-                    // Выбор профиля — не повод срывать запуск: играем как если бы профилей не было.
-                    Core.Logging.Logger.Warn($"PlaySelectedGame: не удалось прочитать модпак-профиль: {ex.Message}");
-                }
-            }
-
-            var result = GameLaunch.Play(gid, this.games, Core.Maintenance.MaintenanceService.Current, profile);
+            var result = GameLaunch.Play(gid, this.games, Core.Maintenance.MaintenanceService.Current);
             switch (result.Outcome) {
                 case LaunchOutcome.ExeMissing:
                 case LaunchOutcome.Failed:
@@ -2227,13 +2141,6 @@ namespace ChillHub.Pages {
 
         private async void DeleteGame_Click(object sender, RoutedEventArgs e) {
             try {
-                // Установка идёт прямо сейчас: Directory.Delete снёс бы файлы из-под
-                // работающей закачки, а сама закачка продолжила бы писать в удаляемую папку.
-                if (this.isUpdating) {
-                    this.ShowToast("Идёт установка или обновление. Дождитесь завершения или нажмите «Отмена».");
-                    return;
-                }
-
                 if (this.isDeleting) {
                     return; // удаление уже запущено — второй проход не нужен
                 }
@@ -2245,6 +2152,16 @@ namespace ChillHub.Pages {
                     this.StatusText.Text = "Не удалось определить игру";
                     return;
                 }
+
+                // Установка ИМЕННО этой игры идёт прямо сейчас: Directory.Delete снёс бы файлы
+                // из-под работающей закачки, а сама закачка продолжила бы писать в удаляемую
+                // папку. Другая игра, качающаяся параллельно в очереди, тут не мешает —
+                // список игр больше не блокируется целиком на время любой закачки.
+                if (this.IsQueued(gid)) {
+                    this.ShowToast("Идёт установка или обновление этой игры. Дождитесь завершения или снимите её с очереди.");
+                    return;
+                }
+
                 var localRoot = GameLocalRoot(gid);
 
                 // Переключаем текущий выбор на удаляемую игру, чтобы область действий и статусы относились к ней
