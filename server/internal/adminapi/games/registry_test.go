@@ -429,3 +429,93 @@ func diskGameIDs(items []Entry) []string {
 	}
 	return out
 }
+
+// Purge is the button labelled «Удалить игру и все версии»: it has to take the
+// manifests and the unpacked builds with it, not just the registry row.
+func TestPurgeRemovesTheGameAndItsFiles(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	saveRegistry(t, h, []Entry{
+		{GameID: "raft", Title: "Рафт"},
+		{GameID: "keeper", Title: "Keeper"},
+	})
+	manDir := filepath.Join(root, "manifests", "raft")
+	conDir := filepath.Join(root, "content", "raft", "1.0.0")
+	for _, d := range []string{manDir, conDir} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "file.bin"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	w := httptest.NewRecorder()
+	h.Purge(w, formPost(t, "/admin/api/games/purge", "gameId=raft"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("purge returned %d: %s", w.Code, w.Body.String())
+	}
+
+	got := decodeItems(t, h.Get, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/games", nil))
+	if len(got) != 1 || got[0].GameID != "keeper" {
+		t.Fatalf("registry after purge: %+v", got)
+	}
+	if _, err := os.Stat(manDir); !os.IsNotExist(err) {
+		t.Error("manifests survived the purge")
+	}
+	if _, err := os.Stat(filepath.Join(root, "content", "raft")); !os.IsNotExist(err) {
+		t.Error("builds survived the purge")
+	}
+}
+
+// The id becomes two path components, so a traversal attempt must be refused
+// before anything is removed.
+func TestPurgeRejectsUnsafeGameID(t *testing.T) {
+	h := New(t.TempDir())
+	for _, gid := range []string{"", "../evil", "a/b"} {
+		w := httptest.NewRecorder()
+		h.Purge(w, formPost(t, "/admin/api/games/purge", "gameId="+gid))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("purge accepted gameId %q: %d", gid, w.Code)
+		}
+	}
+}
+
+// Purge mutates the disk, so GET must not reach it.
+func TestPurgeRejectsGet(t *testing.T) {
+	h := New(t.TempDir())
+	w := httptest.NewRecorder()
+	h.Purge(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/games/purge?gameId=raft", nil))
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET purge returned %d, want 405", w.Code)
+	}
+}
+
+// Unpublished round-trips through the registry: the panel toggles it with the
+// same save every other field goes through.
+func TestUnpublishedRoundTrips(t *testing.T) {
+	h := New(t.TempDir())
+	saveRegistry(t, h, []Entry{
+		{GameID: "raft", Title: "Рафт", Unpublished: true},
+		{GameID: "keeper", Title: "Keeper"},
+	})
+	got := decodeItems(t, h.Get, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/games", nil))
+	byID := map[string]Entry{}
+	for _, it := range got {
+		byID[it.GameID] = it
+	}
+	if !byID["raft"].Unpublished {
+		t.Error("unpublished lost on the way through the registry")
+	}
+	if byID["keeper"].Unpublished {
+		t.Error("keeper came back unpublished")
+	}
+}
+
+// formPost builds the urlencoded POST the purge endpoint expects.
+func formPost(t *testing.T, path, body string) *http.Request {
+	t.Helper()
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return r
+}
