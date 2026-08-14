@@ -37,11 +37,6 @@ namespace ChillHub.Core {
         // см. Core/Metrics/MetricsService.cs. По умолчанию true, как и у отчётов об ошибках.
         public bool SendUsageMetrics { get; set; } = true;
 
-        // Показывать в Discord статус «сейчас играет …» (Rich Presence).
-        // По умолчанию true. Фактически интеграция работает только если владелец лаунчера
-        // подставил Application ID в Core/DiscordRichPresence.cs — см. DiscordRichPresence.IsConfigured.
-        public bool DiscordRichPresence { get; set; } = true;
-
         // Сворачивать окно в трей вместо закрытия по крестику/Alt+F4. По умолчанию true —
         // полностью выйти можно через пункт «Выйти полностью» в меню значка в трее.
         public bool MinimizeToTray { get; set; } = true;

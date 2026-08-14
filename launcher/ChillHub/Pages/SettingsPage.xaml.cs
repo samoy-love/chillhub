@@ -94,17 +94,8 @@ namespace ChillHub.Pages {
                 this.AutoErrorReportsCheck.IsChecked = view.AutoErrorReports;
             }
 
-            if (this.DiscordRpcCheck != null) {
-                this.DiscordRpcCheck.IsChecked = view.DiscordRichPresence;
-            }
-
             if (this.MinimizeToTrayCheck != null) {
                 this.MinimizeToTrayCheck.IsChecked = view.MinimizeToTray;
-            }
-
-            if (this.DiscordRpcHintText != null) {
-                this.DiscordRpcHintText.Visibility = view.DiscordHintVisible ? Visibility.Visible : Visibility.Collapsed;
-                this.DiscordRpcHintText.Text = view.DiscordHintText;
             }
 
             if (this.VersionText != null) {
@@ -218,7 +209,6 @@ namespace ChillHub.Pages {
                 SpeedLimitMbps = this.SpeedLimitSlider.Value,
                 AutoErrorReports = this.AutoErrorReportsCheck == null ? null : this.AutoErrorReportsCheck.IsChecked == true,
                 SendUsageMetrics = this.UsageMetricsCheck == null ? null : this.UsageMetricsCheck.IsChecked == true,
-                DiscordRichPresence = this.DiscordRpcCheck == null ? null : this.DiscordRpcCheck.IsChecked == true,
                 MinimizeToTray = this.MinimizeToTrayCheck == null ? null : this.MinimizeToTrayCheck.IsChecked == true,
             });
             if (!saved) {

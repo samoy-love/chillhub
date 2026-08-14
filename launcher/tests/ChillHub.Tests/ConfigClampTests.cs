@@ -102,13 +102,12 @@ namespace ChillHub.Tests {
         /// <summary>Тумблеры приватности нормализация не трогает — их значение задаёт только пользователь.</summary>
         [Fact]
         public void ТумблерыПриватностиНеСбрасываются() {
-            var cfg = new AppConfig { AutoErrorReports = false, SendUsageMetrics = false, DiscordRichPresence = false };
+            var cfg = new AppConfig { AutoErrorReports = false, SendUsageMetrics = false };
 
             ConfigService.Clamp(cfg);
 
             Assert.False(cfg.AutoErrorReports);
             Assert.False(cfg.SendUsageMetrics);
-            Assert.False(cfg.DiscordRichPresence);
         }
 
         /// <summary>
@@ -124,7 +123,7 @@ namespace ChillHub.Tests {
                 LastGameId = "lethal-company",
                 AutoErrorReports = false,
                 SendUsageMetrics = false,
-                DiscordRichPresence = false,
+
             };
 
             var back = JsonSerializer.Deserialize<AppConfig>(JsonSerializer.Serialize(cfg))!;
@@ -135,7 +134,6 @@ namespace ChillHub.Tests {
             Assert.Equal(cfg.LastGameId, back.LastGameId);
             Assert.False(back.AutoErrorReports);
             Assert.False(back.SendUsageMetrics);
-            Assert.False(back.DiscordRichPresence);
         }
 
         /// <summary>

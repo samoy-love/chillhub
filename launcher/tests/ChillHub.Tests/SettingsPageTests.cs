@@ -229,13 +229,12 @@ namespace ChillHub.Tests {
                 DownloadThreads = 8,
                 AutoErrorReports = false,
                 SendUsageMetrics = false,
-                DiscordRichPresence = false,
+
             }));
 
             var saved = cfgDir.ReadConfigFromDisk();
             Assert.False(saved.AutoErrorReports);
             Assert.False(saved.SendUsageMetrics);
-            Assert.False(saved.DiscordRichPresence);
         }
 
         /// <summary>Обратное включение работает так же — иначе отказ был бы необратим.</summary>
@@ -247,20 +246,19 @@ namespace ChillHub.Tests {
                 DownloadThreads = 8,
                 AutoErrorReports = false,
                 SendUsageMetrics = false,
-                DiscordRichPresence = false,
+
             }));
 
             Assert.True(SettingsActions.Save(new SettingsInput {
                 DownloadThreads = 8,
                 AutoErrorReports = true,
                 SendUsageMetrics = true,
-                DiscordRichPresence = true,
+
             }));
 
             var saved = cfgDir.ReadConfigFromDisk();
             Assert.True(saved.AutoErrorReports);
             Assert.True(saved.SendUsageMetrics);
-            Assert.True(saved.DiscordRichPresence);
         }
 
         /// <summary>
@@ -276,7 +274,7 @@ namespace ChillHub.Tests {
                 DownloadThreads = 8,
                 AutoErrorReports = true,
                 SendUsageMetrics = true,
-                DiscordRichPresence = true,
+
             }));
 
             // Ни одного тумблера в input — как если бы контролов на странице не оказалось
@@ -285,7 +283,6 @@ namespace ChillHub.Tests {
             var saved = cfgDir.ReadConfigFromDisk();
             Assert.True(saved.AutoErrorReports);
             Assert.True(saved.SendUsageMetrics);
-            Assert.True(saved.DiscordRichPresence);
         }
 
         // ---- Выбор папки диалогом ----
@@ -344,7 +341,7 @@ namespace ChillHub.Tests {
                 DownloadThreads = 12,
                 AutoErrorReports = false,
                 SendUsageMetrics = false,
-                DiscordRichPresence = false,
+
             });
 
             Assert.Equal(@"E:\Мои игры", view.GamesPath);
@@ -352,7 +349,6 @@ namespace ChillHub.Tests {
             Assert.Equal("12", view.DownloadThreadsText);
             Assert.False(view.AutoErrorReports);
             Assert.False(view.SendUsageMetrics);
-            Assert.False(view.DiscordRichPresence);
         }
 
         /// <summary>
@@ -374,19 +370,6 @@ namespace ChillHub.Tests {
 
             Assert.Equal(new AppConfig().DownloadThreads, view.DownloadThreads);
             Assert.False(string.IsNullOrWhiteSpace(view.VersionText));
-        }
-
-        /// <summary>
-        /// Пока владелец лаунчера не указал Application ID, переключатель Discord ничего
-        /// не включает. Об этом обязано быть сказано прямо: иначе он создаёт иллюзию
-        /// работающей интеграции, а статуса в Discord нет.
-        /// </summary>
-        [Fact]
-        public void ПодсказкаПроDiscordПоявляетсяТолькоКогдаИнтеграцияНеНастроена() {
-            var view = SettingsView.Build(new AppConfig());
-
-            Assert.Equal(!DiscordRichPresence.IsConfigured, view.DiscordHintVisible);
-            Assert.Equal(view.DiscordHintVisible, !string.IsNullOrEmpty(view.DiscordHintText));
         }
 
         // ---- Открытие логов ----

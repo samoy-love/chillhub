@@ -44,7 +44,7 @@ namespace ChillHub.Tests {
                 LastGameId = "lethal-company",
                 AutoErrorReports = false,
                 SendUsageMetrics = false,
-                DiscordRichPresence = false,
+
             };
             Assert.True(ConfigService.Save(saved));
             Assert.True(File.Exists(cfgDir.ConfigPath), "config.json не появился на диске");
@@ -56,7 +56,6 @@ namespace ChillHub.Tests {
             Assert.Equal("lethal-company", back.LastGameId);
             Assert.False(back.AutoErrorReports);
             Assert.False(back.SendUsageMetrics);
-            Assert.False(back.DiscordRichPresence);
         }
 
         /// <summary>
