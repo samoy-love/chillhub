@@ -74,8 +74,8 @@ namespace ChillHub.Core.Home {
         internal static Action<string> RememberLastGame { get; set; } = DefaultRememberLastGame;
 
         /// <summary>
-        /// Побочные действия после успешного старта: метрика и статус в Discord.
-        /// Шов того же назначения — обе уходят в сеть, а прогон тестов в сеть не ходит.
+        /// Побочные действия после успешного старта: отправка метрики. Шов того же
+        /// назначения — она уходит в сеть, а прогон тестов в сеть не ходит.
         /// </summary>
         internal static Action<GameInfo> AfterStarted { get; set; } = DefaultAfterStarted;
 
@@ -92,13 +92,8 @@ namespace ChillHub.Core.Home {
         /// <param name="gid">Идентификатор выбранной игры.</param>
         /// <param name="games">Список игр главного экрана.</param>
         /// <param name="maintenance">Текущее состояние режима технических работ.</param>
-        /// <param name="profile">
-        /// Выбранный модпак-профиль (первая итерация трека F — без реальной установки
-        /// модов): даёт путь к папке модов и доп. аргументы командной строки. Null — как
-        /// если бы профилей не было вовсе.
-        /// </param>
         /// <returns>Что показать пользователю.</returns>
-        internal static LaunchResult Play(string? gid, IEnumerable<GameInfo>? games, MaintenanceState maintenance, ModProfile? profile = null) {
+        internal static LaunchResult Play(string? gid, IEnumerable<GameInfo>? games, MaintenanceState maintenance) {
             try {
                 if (gid is not string selected || string.IsNullOrWhiteSpace(selected)) {
                     return new LaunchResult(LaunchOutcome.NoGameSelected, "Не выбрана игра");
@@ -145,7 +140,6 @@ namespace ChillHub.Core.Home {
                     WorkingDirectory = Path.GetDirectoryName(exePath) ?? localRoot,
                     UseShellExecute = true,
                 };
-                ApplyModProfile(psi, localRoot, profile);
 
                 StartProcess(psi, selected);
                 AfterStarted(game);
@@ -157,37 +151,10 @@ namespace ChillHub.Core.Home {
             }
         }
 
-        /// <summary>
-        /// Первая итерация модпак-профилей (трек F): реальной установки модов нет — только
-        /// доп. аргументы командной строки и путь к папке модов (сообщается игре через
-        /// аргумент, а не подкладыванием файлов — этим займётся трек K).
-        /// </summary>
-        private static void ApplyModProfile(ProcessStartInfo psi, string localRoot, ModProfile? profile) {
-            if (profile == null) {
-                return;
-            }
-
-            var parts = new List<string>();
-            if (!string.IsNullOrWhiteSpace(psi.Arguments)) {
-                parts.Add(psi.Arguments);
-            }
-
-            if (!string.IsNullOrWhiteSpace(profile.ModFolder)) {
-                var modPath = Path.Combine(localRoot, profile.ModFolder!.Replace('/', Path.DirectorySeparatorChar));
-                parts.Add($"--mods \"{modPath}\"");
-            }
-
-            if (!string.IsNullOrWhiteSpace(profile.ExtraArgs)) {
-                parts.Add(profile.ExtraArgs!);
-            }
-
-            psi.Arguments = string.Join(' ', parts);
-        }
-
         private static void DefaultStartProcess(ProcessStartInfo psi, string gameId) {
             var proc = Process.Start(psi);
 
-            // Наигранное время считается на выходе процесса ИГРЫ, не лаунчера (трек E):
+            // Наигранное время считается на выходе процесса ИГРЫ, не лаунчера:
             // PlaytimeStore сам переживёт закрытие лаунчера раньше игры — сессия закрывается
             // либо тем же лаунчером в фоне, либо следующим его запуском (см. EnsureReconciled).
             if (proc != null && !string.IsNullOrWhiteSpace(gameId)) {
@@ -202,10 +169,6 @@ namespace ChillHub.Core.Home {
 
         private static void DefaultAfterStarted(GameInfo game) {
             Metrics.MetricsService.GameLaunch(game.GameId, game.LatestVersion);
-
-            // Discord Rich Presence: полностью опционален и не должен влиять на запуск.
-            // Пока Application ID не задан владельцем — вызов сразу выходит.
-            DiscordRichPresence.SetPlaying(game.Title, game.LatestVersion);
         }
 
         private static void DefaultRememberLastGame(string gameId) {

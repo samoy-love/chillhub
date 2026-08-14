@@ -891,6 +891,24 @@ document.addEventListener('DOMContentLoaded', ()=>{
   try{ sysFreeRefresh(); }catch{}
 });
 
+// Выход из панели. Сессию гасит сервер (кука HttpOnly, из JS её не стереть),
+// поэтому после ответа просто уходим на форму входа — независимо от того,
+// ответил сервер успехом или нет: держать оператора в панели, из которой он
+// попросил выйти, хуже, чем лишний раз показать логин.
+document.addEventListener('DOMContentLoaded', ()=>{
+  const btn = document.getElementById('auth_logout');
+  if(!btn) return;
+  btn.addEventListener('click', async (e)=>{
+    e.preventDefault();
+    btn.disabled = true;
+    try{ await fetch('/admin/api/auth/logout', { method:'POST' }); }
+    catch{ /* сеть отвалилась — всё равно уводим на вход */ }
+    // Отдельной страницы логина нет: /admin/ сам отдаёт login.html анониму
+    // (см. handleAdminUI в cmd/admin/main.go).
+    window.location.href = '/admin/';
+  });
+});
+
 // ==== Feedback Inbox ====
 let __fbItems = [];
 let __fbSel = '';
@@ -1837,8 +1855,11 @@ function mgmAppendRow(tb, it){
   const tr = document.createElement('tr');
   // pinned хранится на самой строке: до трека H сервер это поле не отдаёт и
   // не сохраняет, но game-list.js уже пишет его в payload /admin/games/save
-  // по контракту из PLAN.md, раздел 1.
+  // как и остальные поля реестра.
   tr.dataset.pinned = it && it.pinned ? '1' : '0';
+  // unpublished — как pinned, состояние строки, а не поле ввода: игра остаётся
+  // в реестре со всеми файлами, но публичный /api/games её не отдаёт.
+  tr.dataset.unpublished = it && it.unpublished ? '1' : '0';
   // Значения приходят с сервера (/admin/games и /admin/games/scan — по сути
   // имена каталогов на диске), поэтому в атрибут их можно класть только
   // экранированными.
@@ -1846,7 +1867,6 @@ function mgmAppendRow(tb, it){
   const titleVal = escapeHtml(it.title||'');
   const exeVal = escapeHtml(it.exeRelativePath||'');
   const iconVal = escapeHtml(it.iconUrl||'');
-  const tsVal = escapeHtml(it.thunderstoreCommunity||'');
   tr.innerHTML = ''+
     '<td><input class="form-control form-control-sm" value="'+gidVal+'"/></td>'+
     '<td><input class="form-control form-control-sm" value="'+titleVal+'"/></td>'+
@@ -1863,7 +1883,6 @@ function mgmAppendRow(tb, it){
         '<button type="button" class="btn btn-outline-secondary mgm-pick">Выбрать...</button>'+
       '</div>'+
     '</td>'+
-    '<td class="d-none"><input class="form-control form-control-sm mgm-thunderstore" value="'+tsVal+'"/></td>'+
     '<td class="text-end">'+
       '<div class="btn-group btn-group-sm me-2" role="group">'+
         '<button type="button" class="btn btn-outline-secondary mgm-up" title="Вверх">▲</button>'+
@@ -1976,7 +1995,7 @@ function mgmAppendRow(tb, it){
 
 function mgmAddRow(){
   const tb = document.querySelector('#mgm-table tbody'); if(!tb) return;
-  mgmAppendRow(tb, {gameId:'', title:'', exeRelativePath:'', iconUrl:'', thunderstoreCommunity:'', pinned:false});
+  mgmAppendRow(tb, {gameId:'', title:'', exeRelativePath:'', iconUrl:'', pinned:false});
   mgmSetDirty(true);
   if(window.gmListRender) window.gmListRender();
 }
@@ -1990,11 +2009,11 @@ async function mgmSave(){
       title: tds[1].querySelector('input').value.trim(),
       iconUrl: tds[2].querySelector('input').value.trim(),
       exeRelativePath: tds[3].querySelector('input').value.trim(),
-      thunderstoreCommunity: tds[4].querySelector('input').value.trim(),
-      // order/pinned — контракт PLAN.md §1 (трек H): order — позиция в списке
+      // order/pinned: order — позиция в списке
       // (её же меняет drag-reorder в game-list.js), pinned — звёздочка там же.
       order: idx,
       pinned: tr.dataset.pinned === '1',
+      unpublished: tr.dataset.unpublished === '1',
     };
   }).filter(it=>it.gameId);
   // basic validation
@@ -2177,24 +2196,14 @@ document.addEventListener('DOMContentLoaded', function(){
     if(window.gmSyncOverviewFromRow) window.gmSyncOverviewFromRow(chosen);
     if(window.gmListRender) window.gmListRender();
   }
-  // Галерея выбранной игры (трек J). Живёт своей карточкой на этой же
-  // вкладке (см. #gg_root в admin.html) пока трек I не завёл отдельную
-  // вкладку «Галерея» в карточке игры.
+  // Галерея выбранной игры: вкладка «Галерея» в карточке игры (#gg_root в
+  // admin.html). Разметка есть в DOM с самого начала — Bootstrap только
+  // переключает видимость вкладок, поэтому монтировать при показе не нужно.
   let __gameGallery = null;
   if (window.createGameGallery && document.getElementById('gg_root')) {
     __gameGallery = window.createGameGallery({
       root: '#gg_root',
       getGameId: () => (document.getElementById('gm_select')?.value || document.getElementById('gid')?.value || '').trim(),
-    });
-  }
-  // Модпаки выбранной игры (трек K). Живёт в собственной вкладке «Модпаки»
-  // (#gmpane-modpacks/#mp_root), которую game-list.js прячет/показывает по
-  // заполненности thunderstoreCommunity — см. updateModpacksTabVisibility там.
-  if (window.createModpacksPanel && document.getElementById('mp_root')) {
-    window.__modpacksPanel = window.createModpacksPanel({
-      root: '#mp_root',
-      getGameId: () => (document.getElementById('gm_select')?.value || document.getElementById('gid')?.value || '').trim(),
-      getCommunity: () => (document.getElementById('gm_ov_thunderstore')?.value || '').trim(),
     });
   }
   // initial load
