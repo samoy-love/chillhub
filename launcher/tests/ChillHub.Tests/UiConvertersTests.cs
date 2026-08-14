@@ -105,6 +105,43 @@ namespace ChillHub.Tests {
             Assert.Equal(string.Empty, Convert(new QueueItemPercentTextConverter(), 42));
         }
 
+        /// <summary>
+        /// Высота витрины считается из ширины по пропорции Steam Library Hero: именно
+        /// поэтому обложку можно брать на SteamGridDB как есть.
+        /// </summary>
+        [Theory]
+        [InlineData(1920.0, 620.0)]
+        [InlineData(960.0, 310.0)]
+        [InlineData(890.0, 287.4)]
+        public void ВысотаВитриныДержитПропорциюSteam(double width, double expected) {
+            var height = (double)new AspectHeightConverter().Convert(width, typeof(double), null!, CultureInfo.InvariantCulture);
+
+            Assert.Equal(expected, height, 1);
+        }
+
+        /// <summary>
+        /// Ширины ещё нет — высота Auto, а не ноль: иначе витрина схлопывалась бы
+        /// в полоску и мигала на первом проходе разметки.
+        /// </summary>
+        [Theory]
+        [InlineData(0.0)]
+        [InlineData(-5.0)]
+        [InlineData(double.NaN)]
+        [InlineData(double.PositiveInfinity)]
+        public void БезВнятнойШириныВысотаAuto(double width) {
+            var height = (double)new AspectHeightConverter().Convert(width, typeof(double), null!, CultureInfo.InvariantCulture);
+
+            Assert.True(double.IsNaN(height));
+        }
+
+        /// <summary>Пропорцию можно задать из разметки — параметром.</summary>
+        [Fact]
+        public void ПропорциюМожноЗадатьПараметром() {
+            var height = (double)new AspectHeightConverter().Convert(1000.0, typeof(double), "0.5", CultureInfo.InvariantCulture);
+
+            Assert.Equal(500.0, height, 1);
+        }
+
         private static QueueItem Item(
             QueueItemState state,
             long done = 0,

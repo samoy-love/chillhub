@@ -1763,7 +1763,10 @@ namespace ChillHub.Pages {
             var count = this.queueDockItems.Count;
             this.QueuePanel.Visibility = count > 0 ? Visibility.Visible : Visibility.Collapsed;
             this.IdleStatusPanel.Visibility = count > 0 ? Visibility.Collapsed : Visibility.Visible;
-            if (count > 0) {
+            // Заголовок нужен, только когда позиций несколько: над единственной карточкой
+            // «Очередь загрузок · качается 1 из 1» пересказывает саму карточку.
+            this.QueueSummaryText.Visibility = count > 1 ? Visibility.Visible : Visibility.Collapsed;
+            if (count > 1) {
                 var running = this.queueDockItems.Count(i => i.State == Core.Game.QueueItemState.Running);
                 this.QueueSummaryText.Text = running > 0
                     ? $"Очередь загрузок · качается {running} из {count}"
