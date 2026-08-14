@@ -144,6 +144,20 @@ func (h *Handlers) List(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		// Корня галереи ещё нет — у игры просто ни одной картинки. Это пустая
+		// галерея, а не ошибка: папку заводит первая загрузка, а до неё панель
+		// показывала «HTTP 404» на совершенно исправной новой игре.
+		//
+		// Подпапка — другое дело: туда переходят осознанно, и если её нет, то
+		// список устарел, о чём честнее сказать 404, чем показать пустоту.
+		if os.IsNotExist(err) && rel == "" {
+			adminutil.WriteJSON(w, struct {
+				Path  string        `json:"path"`
+				Items []galleryItem `json:"items"`
+			}{Path: "", Items: []galleryItem{}})
+			return
+		}
+
 		// %q, not %s: SanitizeAssetPath leaves control characters alone, and the
 		// error text embeds the absolute content root — see news.AssetsList.
 		log.Printf("[gamegallery] list %q: %v", dir, err)
