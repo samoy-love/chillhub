@@ -230,5 +230,39 @@ namespace ChillHub.Tests {
                 return Task.FromResult(this.reply(request));
             }
         }
+
+        /// <summary>
+        /// Название новости лаунчер уже показал в шапке экрана — тот же заголовок первой
+        /// строкой текста стоял под ним вторым, вплотную.
+        /// </summary>
+        [Fact]
+        public void ПовторЗаголовкаИзШапкиУбираетсяИзТекста() {
+            var page = NewsPageRenderer.RenderPage(
+                "# Лаунчер стартовал\n\nПолный подбор игр", "https://example.test/n.md", Palette(), "Лаунчер стартовал");
+
+            Assert.DoesNotContain("<h1", page, StringComparison.Ordinal);
+            Assert.Contains("Полный подбор игр", page, StringComparison.Ordinal);
+        }
+
+        /// <summary>Заголовок, отличающийся от названия, — выбор автора, его не трогаем.</summary>
+        [Fact]
+        public void ДругойЗаголовокОстаётсяВТексте() {
+            var page = NewsPageRenderer.RenderPage(
+                "# Что нового\n\nтекст", "https://example.test/n.md", Palette(), "Лаунчер стартовал");
+
+            Assert.Contains("Что нового", page, StringComparison.Ordinal);
+            Assert.Contains("<h1", page, StringComparison.Ordinal);
+        }
+
+        /// <summary>Убирается ровно первый заголовок, а не все совпадающие ниже по тексту.</summary>
+        [Fact]
+        public void УбираетсяТолькоПервыйЗаголовок() {
+            var page = NewsPageRenderer.RenderPage(
+                "# Итоги\n\nтекст\n\n# Итоги\n\nещё", "https://example.test/n.md", Palette(), "Итоги");
+
+            Assert.Contains("<h1", page, StringComparison.Ordinal);
+            Assert.Contains("ещё", page, StringComparison.Ordinal);
+        }
+
     }
 }

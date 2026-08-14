@@ -391,3 +391,212 @@ func TestSetCoverAndSetCaptionHandlers(t *testing.T) {
 		t.Fatalf("setCaption with an unsafe gameId: got %d, want 400", w.Code)
 	}
 }
+
+// readGallery loads the manifest a test just made the handlers write.
+func readGallery(t *testing.T, root, gid string) galleryFile {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(root, "content", gid, "gallery", "gallery.json"))
+	if err != nil {
+		t.Fatalf("gallery.json not readable: %v", err)
+	}
+	var gf galleryFile
+	if err := json.Unmarshal(b, &gf); err != nil {
+		t.Fatal(err)
+	}
+	return gf
+}
+
+// The admin flow is "upload a picture, press «Сделать обложкой»" — no caption
+// anywhere. That has to be enough for the launcher, which builds its carousel
+// from items and would treat a cover-only manifest as an empty gallery.
+func TestSetCoverRegistersTheItem(t *testing.T) {
+	h, root := newHandlers(t)
+
+	if err := h.SetCover("my-game", "shot.png"); err != nil {
+		t.Fatalf("SetCover: %v", err)
+	}
+	gf := readGallery(t, root, "my-game")
+	if gf.Cover != "shot.png" {
+		t.Fatalf("cover = %q, want shot.png", gf.Cover)
+	}
+	if len(gf.Items) != 1 || gf.Items[0].File != "shot.png" {
+		t.Fatalf("cover was not registered in items: %+v", gf.Items)
+	}
+
+	// Making the same picture the cover twice must not duplicate its entry, and
+	// must not wipe a caption it already had.
+	if err := h.SetCaption("my-game", "shot.png", "подпись"); err != nil {
+		t.Fatalf("SetCaption: %v", err)
+	}
+	if err := h.SetCover("my-game", "shot.png"); err != nil {
+		t.Fatalf("SetCover (again): %v", err)
+	}
+	gf = readGallery(t, root, "my-game")
+	if len(gf.Items) != 1 {
+		t.Fatalf("repeat SetCover duplicated the item: %+v", gf.Items)
+	}
+	if gf.Items[0].Caption != "подпись" {
+		t.Fatalf("repeat SetCover dropped the caption: %+v", gf.Items[0])
+	}
+}
+
+// The gallery browser can create and enter subdirectories, so a picture inside
+// one must be usable as a cover. SanitizeFilename alone folded the separator
+// into '_' and recorded a name that does not exist.
+func TestSetCoverKeepsSubdirectoryPath(t *testing.T) {
+	h, root := newHandlers(t)
+
+	if err := h.SetCover("my-game", "shots/moon.png"); err != nil {
+		t.Fatalf("SetCover: %v", err)
+	}
+	if err := h.SetCaption("my-game", "shots/moon.png", "луна"); err != nil {
+		t.Fatalf("SetCaption: %v", err)
+	}
+	gf := readGallery(t, root, "my-game")
+	if gf.Cover != "shots/moon.png" {
+		t.Fatalf("cover = %q, want shots/moon.png", gf.Cover)
+	}
+	if len(gf.Items) != 1 || gf.Items[0].File != "shots/moon.png" || gf.Items[0].Caption != "луна" {
+		t.Fatalf("subdirectory item mangled: %+v", gf.Items)
+	}
+}
+
+// A reference must not climb out of the gallery even when it arrives as a path.
+func TestSetCoverRejectsTraversalPath(t *testing.T) {
+	h, root := newHandlers(t)
+	if err := h.SetCover("my-game", "../../secrets.png"); err != nil {
+		t.Fatalf("SetCover: %v", err)
+	}
+	gf := readGallery(t, root, "my-game")
+	if strings.Contains(gf.Cover, "..") {
+		t.Fatalf("traversal survived sanitising: cover = %q", gf.Cover)
+	}
+}
+
+// Deleting a picture has to take its manifest entry with it: a cover left
+// pointing at a deleted file is a 404 on the launcher's витрина.
+func TestDeleteForgetsTheManifestEntry(t *testing.T) {
+	h, root := newHandlers(t)
+	dir := filepath.Join(root, "content", "my-game", "gallery")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "shot.png"), smallPNG(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.SetCover("my-game", "shot.png"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Delete(rec, urlencodedForm(t, "http://example.com/admin/api/games/gallery/delete", url.Values{
+		"gameId": {"my-game"}, "path": {""}, "name": {"shot.png"},
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+
+	gf := readGallery(t, root, "my-game")
+	if gf.Cover != "" {
+		t.Fatalf("cover still points at the deleted file: %q", gf.Cover)
+	}
+	if len(gf.Items) != 0 {
+		t.Fatalf("items still list the deleted file: %+v", gf.Items)
+	}
+}
+
+// Renaming has to carry the manifest entry over, caption and all.
+func TestRenameMovesTheManifestEntry(t *testing.T) {
+	h, root := newHandlers(t)
+	dir := filepath.Join(root, "content", "my-game", "gallery")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "old.png"), smallPNG(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.SetCover("my-game", "old.png"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.SetCaption("my-game", "old.png", "кадр"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Rename(rec, urlencodedForm(t, "http://example.com/admin/api/games/gallery/rename", url.Values{
+		"gameId": {"my-game"}, "path": {""}, "from": {"old.png"}, "to": {"new.png"},
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rename: %d %s", rec.Code, rec.Body.String())
+	}
+
+	gf := readGallery(t, root, "my-game")
+	if gf.Cover != "new.png" {
+		t.Fatalf("cover = %q, want new.png", gf.Cover)
+	}
+	if len(gf.Items) != 1 || gf.Items[0].File != "new.png" || gf.Items[0].Caption != "кадр" {
+		t.Fatalf("item did not follow the rename: %+v", gf.Items)
+	}
+}
+
+// A directory carries every picture under it through delete and rename.
+func TestDirectoryDeleteAndRenameCarryTheirPictures(t *testing.T) {
+	h, root := newHandlers(t)
+	dir := filepath.Join(root, "content", "my-game", "gallery", "shots")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "moon.png"), smallPNG(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.SetCover("my-game", "shots/moon.png"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Rename(rec, urlencodedForm(t, "http://example.com/admin/api/games/gallery/rename", url.Values{
+		"gameId": {"my-game"}, "path": {""}, "from": {"shots"}, "to": {"screens"},
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rename dir: %d %s", rec.Code, rec.Body.String())
+	}
+	if gf := readGallery(t, root, "my-game"); gf.Cover != "screens/moon.png" {
+		t.Fatalf("cover = %q, want screens/moon.png", gf.Cover)
+	}
+
+	rec = httptest.NewRecorder()
+	h.Delete(rec, urlencodedForm(t, "http://example.com/admin/api/games/gallery/delete", url.Values{
+		"gameId": {"my-game"}, "path": {""}, "name": {"screens"},
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete dir: %d %s", rec.Code, rec.Body.String())
+	}
+	gf := readGallery(t, root, "my-game")
+	if gf.Cover != "" || len(gf.Items) != 0 {
+		t.Fatalf("directory delete left orphans: %+v", gf)
+	}
+}
+
+// A game whose gallery was never captioned has no gallery.json. Deleting a
+// picture from it must not conjure an empty manifest into existence.
+func TestDeleteWithoutManifestWritesNothing(t *testing.T) {
+	h, root := newHandlers(t)
+	dir := filepath.Join(root, "content", "my-game", "gallery")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "shot.png"), smallPNG(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Delete(rec, urlencodedForm(t, "http://example.com/admin/api/games/gallery/delete", url.Values{
+		"gameId": {"my-game"}, "path": {""}, "name": {"shot.png"},
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "gallery.json")); !os.IsNotExist(err) {
+		t.Fatal("delete created a gallery.json for a gallery that had none")
+	}
+}

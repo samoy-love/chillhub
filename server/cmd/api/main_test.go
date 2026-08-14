@@ -358,3 +358,53 @@ func TestFullyUnusableRegistryDoesNotFallBackToScanning(t *testing.T) {
 		t.Fatalf("a corrupt registry fell back to a directory scan: %+v", got.Items)
 	}
 }
+
+// A game unpublished in the admin panel must disappear from the list the
+// launcher reads, while its registry row and files stay untouched.
+func TestUnpublishedGamesAreHiddenFromTheLauncher(t *testing.T) {
+	root := withContentRoot(t)
+	regDir := filepath.Join(root, "manifests", "_registry")
+	if err := os.MkdirAll(regDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	reg := `{"items":[
+		{"gameId":"raft","title":"Рафт","unpublished":true},
+		{"gameId":"keeper","title":"Keeper"}
+	]}`
+	if err := os.WriteFile(filepath.Join(regDir, "games.json"), []byte(reg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := loadGamesFromRegistry()
+	if !ok {
+		t.Fatal("registry was not loaded")
+	}
+	for _, g := range got {
+		if g.GameID == "raft" {
+			t.Fatal("unpublished game reached the launcher list")
+		}
+	}
+	if len(got) != 1 || got[0].GameID != "keeper" {
+		t.Fatalf("list = %+v, want only keeper", got)
+	}
+}
+
+// An entry written before the flag existed carries no "unpublished" key at all.
+// Its zero value has to mean "visible", or every game on an older server would
+// vanish the moment the server was updated.
+func TestRegistryWithoutTheFlagStaysPublished(t *testing.T) {
+	root := withContentRoot(t)
+	regDir := filepath.Join(root, "manifests", "_registry")
+	if err := os.MkdirAll(regDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(regDir, "games.json"),
+		[]byte(`{"items":[{"gameId":"raft","title":"Рафт"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := loadGamesFromRegistry()
+	if !ok || len(got) != 1 || got[0].GameID != "raft" {
+		t.Fatalf("legacy registry entry was dropped: ok=%v list=%+v", ok, got)
+	}
+}

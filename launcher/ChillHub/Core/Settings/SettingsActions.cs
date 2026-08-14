@@ -14,8 +14,8 @@ namespace ChillHub.Core.Settings {
     /// <para>
     /// null у тумблера означает «контрола на странице нет», а не «не отмечен»: страница
     /// проверяет каждый контрол на null перед чтением, и молча записать в конфиг false
-    /// вместо отсутствующего тумблера — это отключить пользователю телеметрию или
-    /// статус Discord без его ведома.
+    /// вместо отсутствующего тумблера — это отключить пользователю телеметрию без его
+    /// ведома.
     /// </para>
     /// </summary>
     internal sealed class SettingsInput {
@@ -33,9 +33,6 @@ namespace ChillHub.Core.Settings {
 
         /// <summary>Обезличенная статистика использования.</summary>
         internal bool? SendUsageMetrics { get; init; }
-
-        /// <summary>Статус «сейчас играет …» в Discord.</summary>
-        internal bool? DiscordRichPresence { get; init; }
 
         /// <summary>Сворачивать окно в трей вместо закрытия.</summary>
         internal bool? MinimizeToTray { get; init; }
@@ -82,21 +79,6 @@ namespace ChillHub.Core.Settings {
 
                 if (input.SendUsageMetrics != null) {
                     cfg.SendUsageMetrics = input.SendUsageMetrics == true;
-                }
-
-                if (input.DiscordRichPresence != null) {
-                    var wasEnabled = cfg.DiscordRichPresence;
-                    cfg.DiscordRichPresence = input.DiscordRichPresence == true;
-
-                    // Выключили при запущенной игре — статус надо снять сразу, а не при выходе из лаунчера
-                    if (wasEnabled && !cfg.DiscordRichPresence) {
-                        try {
-                            ChillHub.Core.DiscordRichPresence.Shutdown();
-                        }
-                        catch (Exception ex) {
-                            ChillHub.Core.Logging.Logger.Warn($"SettingsPage: снять статус Discord не удалось: {ex.Message}");
-                        }
-                    }
                 }
 
                 if (input.MinimizeToTray != null) {

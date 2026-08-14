@@ -1,4 +1,4 @@
-// Список игр — вкладка «Игры» (трек I).
+// Список игр — вкладка «Игры».
 //
 // Реальные данные и вся логика сохранения по-прежнему живут в скрытой
 // #mgm-table (см. admin.js: mgmReload/mgmAppendRow/mgmSave/mgmResync) — этот
@@ -6,9 +6,8 @@
 // drag-reorder (order) и пином (pinned), и карточку «Обзор» выбранной игры
 // (#gm_ov_*), которая читает/пишет значения той же скрытой строки.
 //
-// Контракт order/pinned — PLAN.md, раздел 1: сохраняются через тот же
-// /admin/games/save, что и раньше (см. mgmSave в admin.js), без нового
-// эндпоинта.
+// order/pinned/unpublished сохраняются тем же /admin/games/save, что и остальные
+// поля реестра (см. mgmSave в admin.js), без отдельных эндпоинтов.
 (function () {
   'use strict';
 
@@ -74,7 +73,10 @@
       item.innerHTML = ''
         + '<span class="text-body-secondary" style="cursor:grab" title="Перетащить">⋮⋮</span>'
         + '<button type="button" class="btn btn-sm ' + (pinned ? 'btn-warning' : 'btn-outline-secondary') + ' gm-pin" title="Закрепить вверху списка">' + (pinned ? '★' : '☆') + '</button>'
-        + '<span class="flex-grow-1 text-truncate">' + esc(title) + ' <span class="text-body-secondary small">(' + esc(gid) + ')</span></span>';
+        + '<span class="flex-grow-1 text-truncate">' + esc(title) + ' <span class="text-body-secondary small">(' + esc(gid) + ')</span></span>'
+        // Снятую с публикации игру видно прямо в списке: иначе единственный
+        // признак того, что её нет в лаунчере, лежит на вкладке «Опасная зона».
+        + (tr.dataset.unpublished === '1' ? '<span class="badge text-bg-secondary" title="Не публикуется в лаунчере">скрыта</span>' : '');
 
       item.addEventListener('click', function (ev) {
         if (ev.target.closest('.gm-pin')) return;
@@ -118,44 +120,29 @@
   }
 
   // ===== "Обзор" tab: mirrors the selected hidden row =====
-  // updateModpacksTabVisibility показывает/прячет вкладку «Модпаки» (трек K)
-  // по наличию thunderstoreCommunity у выбранной игры, и обновляет список
-  // скачанных модпаков панели (window.createModpacksPanel, modpacks.js), если
-  // она уже смонтирована.
-  function updateModpacksTabVisibility(community) {
-    const item = document.getElementById('gmtab-modpacks-item');
-    if (item) item.style.display = community ? '' : 'none';
-    if (community && window.__modpacksPanel && window.__modpacksPanel.refresh) window.__modpacksPanel.refresh();
-  }
-
   function gmSyncOverviewFromRow(gid) {
     const idEl = document.getElementById('gm_ov_gid');
     const titleEl = document.getElementById('gm_ov_title');
     const iconEl = document.getElementById('gm_ov_icon');
     const exeEl = document.getElementById('gm_ov_exe');
-    const tsEl = document.getElementById('gm_ov_thunderstore');
     if (idEl) idEl.value = gid || '';
     const tr = getHiddenRowFor(gid);
     if (!tr) {
       if (titleEl) titleEl.value = '';
       if (iconEl) iconEl.value = '';
       if (exeEl) exeEl.value = '';
-      if (tsEl) tsEl.value = '';
-      updateModpacksTabVisibility('');
+      updateDangerZone(gid);
       return;
     }
     const tds = tr.querySelectorAll('td');
     if (titleEl) titleEl.value = tds[1].querySelector('input').value;
     if (iconEl) iconEl.value = tds[2].querySelector('input').value;
     if (exeEl) exeEl.value = tds[3].querySelector('input').value;
-    const tsInput = tds[4] && tds[4].querySelector('input.mgm-thunderstore');
-    const community = tsInput ? tsInput.value.trim() : '';
-    if (tsEl) tsEl.value = community;
-    updateModpacksTabVisibility(community);
+    updateDangerZone(gid);
   }
 
   function bindOverviewWriteback() {
-    [['gm_ov_title', 1], ['gm_ov_icon', 2], ['gm_ov_exe', 3], ['gm_ov_thunderstore', 4]].forEach(function (pair) {
+    [['gm_ov_title', 1], ['gm_ov_icon', 2], ['gm_ov_exe', 3]].forEach(function (pair) {
       const id = pair[0], tdIdx = pair[1];
       const el = document.getElementById(id);
       if (!el) return;
@@ -221,20 +208,31 @@
     const unpub = document.getElementById('gm_dz_unpublish');
     const del = document.getElementById('gm_dz_delete');
 
+    // Снятие с публикации — переключатель, а не односторонняя дверь: та же
+    // кнопка возвращает игру в лаунчер. Состояние живёт в реестре
+    // (games.Entry.Unpublished) и уезжает обычным сохранением списка.
     if (unpub) unpub.addEventListener('click', async function () {
       const gid = getSelectedGid();
       if (!gid) { say('Сначала выберите игру'); return; }
-      const ok = await confirmDialog({
-        title: 'Снять «' + gid + '» с публикации?',
-        body: 'Игра должна пропасть из лаунчера, а файлы манифестов и сборок — остаться на диске.',
-        okText: 'Снять с публикации',
-        danger: true,
-      });
-      if (!ok) return;
-      // TODO(Трек H): в реестре (server/internal/adminapi/games/games.go,
-      // Entry) нет флага published/unpublished и нет отдельного эндпоинта —
-      // пока подтверждение диалога ни к чему не приводит на сервере.
-      say('Эндпоинт «снять с публикации» ещё не реализован на сервере (см. TODO(Трек H) в game-list.js).');
+      const row = getHiddenRowFor(gid);
+      if (!row) { say('Игра «' + gid + '» не найдена в списке'); return; }
+      const hidden = row.dataset.unpublished === '1';
+      if (!hidden) {
+        const ok = await confirmDialog({
+          title: 'Снять «' + gid + '» с публикации?',
+          body: 'Игра пропадёт из лаунчера. Записи в реестре, манифесты и сборки останутся на месте — вернуть можно этой же кнопкой.',
+          okText: 'Снять с публикации',
+          danger: true,
+        });
+        if (!ok) return;
+      }
+      row.dataset.unpublished = hidden ? '0' : '1';
+      if (window.mgmSetDirty) window.mgmSetDirty(true);
+      if (window.mgmSave) await window.mgmSave();
+      updateDangerZone(gid);
+      say(hidden
+        ? 'Игра «' + gid + '» снова публикуется в лаунчере.'
+        : 'Игра «' + gid + '» снята с публикации.');
     });
 
     if (del) del.addEventListener('click', async function () {
@@ -242,20 +240,50 @@
       if (!gid) { say('Сначала выберите игру'); return; }
       const ok = await confirmDialog({
         title: 'Удалить игру «' + gid + '» и все версии?',
-        body: 'Запись будет убрана из реестра сразу после подтверждения. Файлы манифестов и сборок на диске НЕ удаляются — массового удаления версий на сервере пока нет.',
-        okText: 'Удалить из списка',
+        body: 'С диска будут стёрты манифесты и все распакованные сборки этой игры, запись уйдёт из реестра. Отменить нельзя.',
+        okText: 'Удалить безвозвратно',
         danger: true,
       });
       if (!ok) return;
+      const body = new URLSearchParams({ gameId: gid });
+      let res;
+      try {
+        res = await fetch('/admin/games/purge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: body.toString(),
+        });
+      } catch (e) {
+        say('Не удалось удалить игру: ' + e);
+        return;
+      }
+      if (!res.ok) { say('Не удалось удалить игру: ' + res.status + ' ' + (await res.text())); return; }
+      // Реестр уже переписан сервером — перечитываем его вместо того, чтобы
+      // угадывать новое состояние по локальным строкам таблицы.
       const row = getHiddenRowFor(gid);
       if (row) row.remove();
-      // TODO(Трек H): нет эндпоинта массового удаления версий/файлов игры —
-      // удаляется только запись в реестре через games.Save. В
-      // server/internal/adminapi/builds/builds.go есть только DeleteVersion
-      // по одной версии (дергается из admin.js по кнопке в списке версий).
-      if (window.mgmSave) await window.mgmSave();
-      say('Игра «' + gid + '» удалена из реестра. Файлы версий на диске нужно убрать вручную (см. TODO(Трек H) в game-list.js).');
+      if (window.mgmReload) await window.mgmReload();
+      say('Игра «' + gid + '» удалена вместе с манифестами и сборками.');
     });
+  }
+
+  // updateDangerZone приводит подписи «Опасной зоны» в соответствие с тем, что
+  // кнопки сделают сейчас: у снятой с публикации игры та же кнопка возвращает
+  // её обратно, и надпись «Снять с публикации» на ней читалась бы как ошибка.
+  function updateDangerZone(gid) {
+    const unpub = document.getElementById('gm_dz_unpublish');
+    if (!unpub) return;
+    const row = getHiddenRowFor(gid);
+    const hidden = !!row && row.dataset.unpublished === '1';
+    unpub.textContent = hidden ? 'Вернуть в лаунчер' : 'Снять с публикации';
+    unpub.classList.toggle('btn-outline-danger', !hidden);
+    unpub.classList.toggle('btn-outline-success', hidden);
+    const state = document.getElementById('gm_dz_state');
+    if (state) {
+      state.textContent = hidden
+        ? 'Игра снята с публикации: в лаунчере её нет, файлы на месте.'
+        : 'Игра публикуется в лаунчере.';
+    }
   }
 
   document.addEventListener('DOMContentLoaded', function () {

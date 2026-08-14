@@ -3,11 +3,10 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       Title="Настройки"
       Background="{DynamicResource Brush.Background}">
+  <!-- Локальной подмены Brush.Accent здесь больше нет: страница перекрашивала акцент
+       в другой оттенок, и слайдеры с чекбоксами настроек отличались по цвету от всего
+       остального приложения. -->
   <Grid Margin="16">
-    <Grid.Resources>
-      <!-- Make page-local accent purple (same as Play secondary accent) so Slider uses it -->
-      <SolidColorBrush x:Key="Brush.Accent" Color="{DynamicResource Color.SecondaryAccent}"/>
-    </Grid.Resources>
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="*"/>
@@ -15,18 +14,15 @@
     </Grid.RowDefinitions>
 
     <!-- Header -->
-    <Grid Grid.Row="0" Margin="0,0,0,20">
+    <!-- «Назад» слева, заголовок следом — как на странице игры и в новости. Раньше
+         кнопка стояла справа, и на трёх экранах возврат был в трёх разных местах. -->
+    <Grid Grid.Row="0" Margin="0,0,0,16">
       <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="*"/>
         <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="*"/>
       </Grid.ColumnDefinitions>
-      <TextBlock Text="Настройки" FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Title}" VerticalAlignment="Center"/>
-      <Button Grid.Column="1" Name="BackBtn" Click="BackBtn_Click" Width="120" HorizontalAlignment="Right" Padding="12,8" MinHeight="36" Margin="12,0,0,0">
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-          <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72B;" Margin="0,0,6,0"/>
-          <TextBlock Text="Назад"/>
-        </StackPanel>
-      </Button>
+      <Button Grid.Column="0" Name="BackBtn" Style="{DynamicResource Style.Button.Back}" Click="BackBtn_Click"/>
+      <TextBlock Grid.Column="1" Text="Настройки" Style="{DynamicResource Style.PageTitle}" Margin="16,0,0,0"/>
     </Grid>
 
     <!-- Content. Обёрнуто в ScrollViewer: карточек шесть, и на невысоком окне
@@ -185,25 +181,6 @@
         </Grid>
       </Border>
 
-      <!-- Integrations section -->
-      <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,0,0,14">
-        <Grid>
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-          </Grid.RowDefinitions>
-          <TextBlock Text="Интеграции" FontWeight="SemiBold"/>
-          <StackPanel Grid.Row="1" Orientation="Vertical" Margin="0,8,0,0">
-            <CheckBox Name="DiscordRpcCheck" Content="Показывать в Discord, во что вы играете"/>
-            <TextBlock Text="Discord будет показывать название игры, версию сборки и время сессии в вашем статусе. Работает, только если Discord запущен на этом компьютере."
-                       Foreground="{DynamicResource Brush.TextSecondary}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-            <!-- Текст задаётся в коде: пока владелец не подставил Application ID, интеграция не активируется -->
-            <TextBlock Name="DiscordRpcHintText" Foreground="{DynamicResource Brush.TextSecondary}"
-                       TextWrapping="Wrap" Margin="0,6,0,0" Visibility="Collapsed"/>
-          </StackPanel>
-        </Grid>
-      </Border>
-
       <!-- About / diagnostics section -->
       <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,0,0,6">
         <Grid>
@@ -228,15 +205,13 @@
     </StackPanel>
     </ScrollViewer>
 
-    <!-- Footer actions -->
-    <Grid Grid.Row="2" Margin="0,16,0,0">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="*"/>
-        <ColumnDefinition Width="Auto"/>
-      </Grid.ColumnDefinitions>
-      <StackPanel Orientation="Horizontal" Grid.Column="1">
-        <Button Name="SaveBtn" Content="Сохранить" Style="{DynamicResource Style.Button.Primary}" Click="SaveBtn_Click"/>
-      </StackPanel>
-    </Grid>
+    <!-- Панель действия. Отделена линией и залита фоном страницы: без них список
+         настроек проезжал прямо под кнопкой «Сохранить», и та висела поверх текста. -->
+    <Border Grid.Row="2" Margin="0,12,0,0" Padding="0,12,0,0"
+            Background="{DynamicResource Brush.Background}"
+            BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,1,0,0">
+      <Button Name="SaveBtn" Content="Сохранить" HorizontalAlignment="Right"
+              Style="{DynamicResource Style.Button.Primary}" Click="SaveBtn_Click"/>
+    </Border>
   </Grid>
 </Page>

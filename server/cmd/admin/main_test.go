@@ -104,6 +104,7 @@ var wantPaths = []string{
 	"/admin/api/games/gallery/uploadByUrl",
 	"/admin/api/games/icon/upload",
 	"/admin/api/games/save",
+	"/admin/api/games/purge",
 	"/admin/api/games/scan",
 	"/admin/api/health",
 	"/admin/api/list",
@@ -128,10 +129,6 @@ var wantPaths = []string{
 	"/admin/api/news/save",
 	"/admin/api/news/uploadCover",
 	"/admin/api/system/free",
-	"/admin/api/thunderstore/delete",
-	"/admin/api/thunderstore/download",
-	"/admin/api/thunderstore/list",
-	"/admin/api/thunderstore/search",
 	"/admin/api/upload",
 	"/admin/api/upload/abort",
 	"/admin/api/upload/chunk",
@@ -160,6 +157,7 @@ var wantPaths = []string{
 	"/admin/games/gallery/uploadByUrl",
 	"/admin/games/icon/upload",
 	"/admin/games/save",
+	"/admin/games/purge",
 	"/admin/games/scan",
 	"/admin/health",
 	"/admin/list",
@@ -184,10 +182,6 @@ var wantPaths = []string{
 	"/admin/news/save",
 	"/admin/news/uploadCover",
 	"/admin/system/free",
-	"/admin/thunderstore/delete",
-	"/admin/thunderstore/download",
-	"/admin/thunderstore/list",
-	"/admin/thunderstore/search",
 	"/admin/upload",
 	"/admin/uploadStream",
 	"/feedback/submit",
@@ -246,8 +240,8 @@ func TestAliasOf(t *testing.T) {
 // TestGalleryOnlyScopesContentMount checks that the /content/ mount (added so
 // the admin UI can display gallery images without an external nginx) serves
 // gallery files but refuses everything else under content/ — directory
-// listings and, in particular, content/<gameId>/modpacks/, which this
-// unauthenticated mount was never meant to expose.
+// listings and, in particular, the unpacked builds in content/<gameId>/<version>/,
+// which this unauthenticated mount was never meant to expose.
 //
 // Goes through s.register(mux) + a real HTTP round-trip (httptest.NewServer),
 // not galleryOnly called in isolation: calling the handler function directly
@@ -267,12 +261,12 @@ func TestGalleryOnlyScopesContentMount(t *testing.T) {
 	if err := os.WriteFile(galleryFile, []byte("png bytes"), 0o644); err != nil {
 		t.Fatalf("write gallery file: %v", err)
 	}
-	modpackFile := filepath.Join(contentDir, "lethal-company", "modpacks", "lethal_coder-pack", "meta.json")
-	if err := os.MkdirAll(filepath.Dir(modpackFile), 0o755); err != nil {
-		t.Fatalf("mkdir modpacks: %v", err)
+	buildFile := filepath.Join(contentDir, "lethal-company", "1.0.0", "game.exe")
+	if err := os.MkdirAll(filepath.Dir(buildFile), 0o755); err != nil {
+		t.Fatalf("mkdir build: %v", err)
 	}
-	if err := os.WriteFile(modpackFile, []byte("{}"), 0o644); err != nil {
-		t.Fatalf("write modpack file: %v", err)
+	if err := os.WriteFile(buildFile, []byte("mz"), 0o644); err != nil {
+		t.Fatalf("write build file: %v", err)
 	}
 
 	s := newServer(root)
@@ -288,11 +282,11 @@ func TestGalleryOnlyScopesContentMount(t *testing.T) {
 		wantStatus int
 	}{
 		{"gallery file served", "/content/lethal-company/gallery/cover.png", http.StatusOK},
-		{"modpack file blocked", "/content/lethal-company/modpacks/lethal_coder-pack/meta.json", http.StatusNotFound},
+		{"build file blocked", "/content/lethal-company/1.0.0/game.exe", http.StatusNotFound},
 		{"gallery directory listing blocked", "/content/lethal-company/gallery/", http.StatusNotFound},
 		{"content root listing blocked", "/content/", http.StatusNotFound},
 		{"game root listing blocked", "/content/lethal-company/", http.StatusNotFound},
-		{"dot-dot traversal to modpacks blocked", "/content/lethal-company/gallery/../modpacks/lethal_coder-pack/meta.json", http.StatusNotFound},
+		{"dot-dot traversal to builds blocked", "/content/lethal-company/gallery/../1.0.0/game.exe", http.StatusNotFound},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

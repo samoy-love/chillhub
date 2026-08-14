@@ -36,17 +36,8 @@ namespace ChillHub.Core.Settings {
         /// <summary>Отправлять отчёты об ошибках автоматически.</summary>
         internal required bool AutoErrorReports { get; init; }
 
-        /// <summary>Показывать статус в Discord.</summary>
-        internal required bool DiscordRichPresence { get; init; }
-
         /// <summary>Сворачивать окно в трей вместо закрытия.</summary>
         internal required bool MinimizeToTray { get; init; }
-
-        /// <summary>Показывать ли предупреждение о ненастроенной интеграции с Discord.</summary>
-        internal required bool DiscordHintVisible { get; init; }
-
-        /// <summary>Текст этого предупреждения; пусто, когда интеграция настроена.</summary>
-        internal required string DiscordHintText { get; init; }
 
         /// <summary>Версия лаунчера в подвале страницы.</summary>
         internal required string VersionText { get; init; }
@@ -64,10 +55,6 @@ namespace ChillHub.Core.Settings {
         internal static SettingsDisplay Build(AppConfig? cfg) {
             cfg ??= new AppConfig();
 
-            // Честно предупреждаем: без Application ID переключатель ничего не включает.
-            // Иначе он создаёт иллюзию работающей интеграции, а статуса в Discord нет.
-            var configured = ChillHub.Core.DiscordRichPresence.IsConfigured;
-
             // Отображаем путь с одинарными обратными слешами для читаемости.
             // Ведущий \\ сетевого пути при этом обязан уцелеть — см. NormalizeWindowsPath.
             var p = cfg.GamesPath ?? string.Empty;
@@ -80,13 +67,7 @@ namespace ChillHub.Core.Settings {
                 SpeedLimitText = FormatSpeedLimit(cfg.SpeedLimitMbps),
                 SendUsageMetrics = cfg.SendUsageMetrics,
                 AutoErrorReports = cfg.AutoErrorReports,
-                DiscordRichPresence = cfg.DiscordRichPresence,
                 MinimizeToTray = cfg.MinimizeToTray,
-                DiscordHintVisible = !configured,
-                DiscordHintText = configured
-                    ? string.Empty
-                    : "Интеграция пока не настроена владельцем лаунчера (не указан Application ID приложения Discord), "
-                      + "поэтому статус не появится даже при включённом переключателе. Настройка сохранится и заработает после обновления лаунчера.",
                 VersionText = GetLauncherVersion(),
             };
         }

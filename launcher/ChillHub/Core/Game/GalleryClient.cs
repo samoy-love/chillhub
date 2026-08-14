@@ -23,7 +23,7 @@ namespace ChillHub.Core.Game {
     /// <param name="IsCover">true, если это обложка галереи (`cover` из gallery.json).</param>
     public sealed record GalleryImage(string Caption, string ImageUrl, bool IsCover);
 
-    /// <summary>Сырой контракт `gallery.json` — раздел 1 PLAN.md.</summary>
+    /// <summary>Сырой контракт `gallery.json`: пишет его админка (server/internal/adminapi/gamegallery).</summary>
     internal sealed class GalleryManifest {
         [JsonPropertyName("cover")]
         public string? Cover { get; set; }
@@ -116,12 +116,22 @@ namespace ChillHub.Core.Game {
         /// <param name="gameId">Идентификатор игры.</param>
         /// <returns>Упорядоченный список картинок; обложка — первым элементом.</returns>
         internal static IReadOnlyList<GalleryImage> ParseManifest(GalleryManifest? manifest, string baseApi, string gameId) {
-            if (manifest is null || manifest.Items is null || manifest.Items.Count == 0) {
+            if (manifest is null) {
                 return Array.Empty<GalleryImage>();
             }
 
             var galleryBase = GalleryBaseUrl(baseApi, gameId);
             var cover = manifest.Cover?.Trim();
+
+            // Обложка без `items` — это галерея из одной картинки, а не пустая галерея.
+            // Так выглядят все манифесты, записанные админкой до того, как SetCover
+            // научился регистрировать файл в `items`: витрина у таких игр молча
+            // оставалась пустой, хотя в админке обложка была выбрана и подсвечена.
+            if (manifest.Items is null || manifest.Items.Count == 0) {
+                return string.IsNullOrWhiteSpace(cover)
+                    ? Array.Empty<GalleryImage>()
+                    : new[] { new GalleryImage(Caption: string.Empty, ImageUrl: galleryBase + cover!.TrimStart('/'), IsCover: true) };
+            }
 
             var images = manifest.Items
                 .Where(i => !string.IsNullOrWhiteSpace(i.File))
@@ -135,6 +145,14 @@ namespace ChillHub.Core.Game {
             // это то, что игрок видит сразу при открытии витрины/страницы игры.
             if (images.Any(i => i.IsCover)) {
                 images = images.OrderByDescending(i => i.IsCover).ToList();
+            }
+            else if (!string.IsNullOrWhiteSpace(cover)) {
+                // Обложка названа, но её нет среди items — витрина всё равно обязана
+                // показать именно её: это выбор администратора, а не первый попавшийся кадр.
+                images.Insert(0, new GalleryImage(
+                    Caption: string.Empty,
+                    ImageUrl: galleryBase + cover!.TrimStart('/'),
+                    IsCover: true));
             }
 
             return images;

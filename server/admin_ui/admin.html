@@ -11,6 +11,7 @@
        bootstrap@5.3.3 (те же SRI-хеши, что стояли в этих тегах). -->
   <link href="/admin/ui/vendor/bootstrap.min.css" rel="stylesheet">
   <link href="/admin/ui/admin.css" rel="stylesheet">
+  <link rel="icon" href="/admin/ui/favicon.svg" type="image/svg+xml">
   <link rel="icon" href="/admin/ui/app.ico" type="image/x-icon">
 </head>
 <body class="bg-body">
@@ -28,6 +29,10 @@
               <path d="M3 3v6h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
+          <!-- Выход. Эндпоинт /admin/api/auth/logout был с самого начала, кнопки
+               к нему не было: выйти из панели можно было только руками, вычистив
+               куки. -->
+          <button id="auth_logout" type="button" class="btn btn-sm btn-outline-secondary ms-2">Выйти</button>
         </div>
       </div>
       <!-- role="tablist" и стрелки: вкладки — это <a href="#">, и без ролей
@@ -493,9 +498,6 @@
                   <li class="nav-item" role="presentation">
                     <button class="nav-link" id="gmtab-gallery" data-bs-toggle="tab" data-bs-target="#gmpane-gallery" type="button" role="tab" aria-controls="gmpane-gallery" aria-selected="false">Галерея</button>
                   </li>
-                  <li class="nav-item" role="presentation" id="gmtab-modpacks-item" style="display:none">
-                    <button class="nav-link" id="gmtab-modpacks" data-bs-toggle="tab" data-bs-target="#gmpane-modpacks" type="button" role="tab" aria-controls="gmpane-modpacks" aria-selected="false">Модпаки</button>
-                  </li>
                   <li class="nav-item" role="presentation">
                     <button class="nav-link" id="gmtab-danger" data-bs-toggle="tab" data-bs-target="#gmpane-danger" type="button" role="tab" aria-controls="gmpane-danger" aria-selected="false">Опасная зона</button>
                   </li>
@@ -563,27 +565,64 @@
                     </div>
                   </div>
                   <div class="tab-pane fade" id="gmpane-gallery" role="tabpanel" aria-labelledby="gmtab-gallery">
+                    <!-- Галерея игры. Раньше вкладка была заглушкой, а настоящая галерея жила
+                         отдельной карточкой ниже по странице: задуманный перенос так и не
+                         довели, и разметка стояла в двух местах. -->
                     <div class="card">
-                      <div class="card-body">Открывается тем же интерфейсом — см. Трек J</div>
-                    </div>
-                  </div>
-                  <div class="tab-pane fade" id="gmpane-modpacks" role="tabpanel" aria-labelledby="gmtab-modpacks">
-                    <div class="row g-2 mb-3">
-                      <div class="col-12">
-                        <label class="form-label mb-1 small" for="gm_ov_thunderstore">Сообщество Thunderstore</label>
-                        <input id="gm_ov_thunderstore" class="form-control form-control-sm" placeholder="lethal-company">
-                        <div class="small text-body-secondary mt-1">Пусто — вкладка «Модпаки» скрыта для этой игры.</div>
+                      <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+                        <span>Галерея игры</span>
+                        <div class="btn-group btn-group-sm">
+                          <button type="button" data-gg="mkdir" class="btn btn-outline-success">Новая папка</button>
+                          <button type="button" data-gg="refresh" class="btn btn-outline-secondary">Обновить</button>
+                        </div>
                       </div>
-                    </div>
-                    <div class="card">
-                      <div class="card-header">Модпаки (Thunderstore)</div>
-                      <div class="card-body" id="mp_root"></div>
+                      <div class="card-body" id="gg_root">
+                        <div class="small text-body-secondary mb-2">
+                          Обложка игры — то, что лаунчер рисует за названием на витрине. Полоса широкая:
+                          цель — 1920&nbsp;×&nbsp;640, важное держите по центру по вертикали.
+                        </div>
+                        <nav data-gg="breadcrumbs" class="small text-body-secondary mb-2"></nav>
+                        <div class="input-group input-group-sm mb-2">
+                          <input data-gg="search" type="text" class="form-control" placeholder="Поиск...">
+                        </div>
+                        <div class="row g-2 align-items-end mb-2">
+                          <div class="col-12 col-md-5">
+                            <div class="input-group input-group-sm">
+                              <span class="input-group-text">URL</span>
+                              <input data-gg="url" type="text" class="form-control" placeholder="https://...">
+                            </div>
+                          </div>
+                          <div class="col-6 col-md-3">
+                            <div class="input-group input-group-sm">
+                              <span class="input-group-text">Имя</span>
+                              <input data-gg="url-name" type="text" class="form-control" placeholder="image">
+                            </div>
+                          </div>
+                          <div class="col-6 col-md-4">
+                            <div class="input-group input-group-sm">
+                              <span class="input-group-text">Если имя занято</span>
+                              <select data-gg="overwrite" class="form-select form-select-sm">
+                                <option value="rename">Переименовать</option>
+                                <option value="overwrite">Перезаписать</option>
+                              </select>
+                              <button type="button" data-gg="url-save" class="btn btn-primary">Сохранить по URL</button>
+                            </div>
+                          </div>
+                        </div>
+                        <label class="btn btn-sm btn-outline-primary mb-2">
+                          Загрузить с диска
+                          <input data-gg="upload-file" type="file" accept="image/*" class="d-none">
+                        </label>
+                        <div data-gg="grid" class="row g-2"></div>
+                      </div>
                     </div>
                   </div>
                   <div class="tab-pane fade" id="gmpane-danger" role="tabpanel" aria-labelledby="gmtab-danger">
                     <div class="danger-zone">
+                      <div class="small text-body-secondary mb-1" id="gm_dz_state">Игра публикуется в лаунчере.</div>
                       <div class="small text-body-secondary mb-2">
-                        Необратимо: снятие с публикации скрывает игру из лаунчера, удаление стирает запись из реестра.
+                        Снятие с публикации обратимо: игра пропадает из лаунчера, файлы остаются.
+                        Удаление стирает манифесты и все распакованные сборки — отменить нельзя.
                       </div>
                       <div class="d-flex gap-2 flex-wrap">
                         <button type="button" id="gm_dz_unpublish" class="btn btn-sm btn-outline-danger">Снять с публикации</button>
@@ -592,57 +631,6 @@
                     </div>
                   </div>
                 </div>
-              </div>
-            </div>
-            <div class="card mt-3">
-              <!-- Галерея игры (трек J). Пока трек I не добавил вкладку
-                   «Галерея» в карточку игры, живёт самостоятельной карточкой
-                   здесь же, на «Игры», и следит за выбором в #gm_select.
-                   Трек I: смонтировать createGameGallery() (game-gallery.js)
-                   в свою вкладку вместо дублирования этой разметки — достаточно
-                   перенести блок ниже и вызвать mountGameGallery() после того,
-                   как в DOM появится #gg_root. -->
-              <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
-                <span>Галерея игры</span>
-                <div class="btn-group btn-group-sm">
-                  <button type="button" data-gg="mkdir" class="btn btn-outline-success">Новая папка</button>
-                  <button type="button" data-gg="refresh" class="btn btn-outline-secondary">Обновить</button>
-                </div>
-              </div>
-              <div class="card-body" id="gg_root">
-                <nav data-gg="breadcrumbs" class="small text-body-secondary mb-2"></nav>
-                <div class="input-group input-group-sm mb-2">
-                  <input data-gg="search" type="text" class="form-control" placeholder="Поиск...">
-                </div>
-                <div class="row g-2 align-items-end mb-2">
-                  <div class="col-12 col-md-5">
-                    <div class="input-group input-group-sm">
-                      <span class="input-group-text">URL</span>
-                      <input data-gg="url" type="text" class="form-control" placeholder="https://...">
-                    </div>
-                  </div>
-                  <div class="col-6 col-md-3">
-                    <div class="input-group input-group-sm">
-                      <span class="input-group-text">Имя</span>
-                      <input data-gg="url-name" type="text" class="form-control" placeholder="image">
-                    </div>
-                  </div>
-                  <div class="col-6 col-md-4">
-                    <div class="input-group input-group-sm">
-                      <span class="input-group-text">Если имя занято</span>
-                      <select data-gg="overwrite" class="form-select form-select-sm">
-                        <option value="rename">Переименовать</option>
-                        <option value="overwrite">Перезаписать</option>
-                      </select>
-                      <button type="button" data-gg="url-save" class="btn btn-primary">Сохранить по URL</button>
-                    </div>
-                  </div>
-                </div>
-                <label class="btn btn-sm btn-outline-primary mb-2">
-                  Загрузить с диска
-                  <input data-gg="upload-file" type="file" accept="image/*" class="d-none">
-                </label>
-                <div data-gg="grid" class="row g-2"></div>
               </div>
             </div>
             <div class="card mt-3">
@@ -800,7 +788,6 @@
   <script src="/admin/ui/upload-card.js"></script>
   <script src="/admin/ui/game-gallery.js"></script>
   <script src="/admin/ui/game-list.js"></script>
-  <script src="/admin/ui/modpacks.js"></script>
   <script src="/admin/ui/admin.js"></script>
   <!-- Gallery Modal -->
   <div class="modal fade" id="ns_gallery" tabindex="-1" aria-hidden="true">

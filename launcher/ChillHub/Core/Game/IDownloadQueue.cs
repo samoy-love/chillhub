@@ -35,13 +35,38 @@ namespace ChillHub.Core.Game {
     /// <param name="BytesDownloaded">Скачано байт (на момент последнего отчёта).</param>
     /// <param name="TotalBytes">Всего байт по плану (0, пока план не построен).</param>
     /// <param name="StatusText">Короткая строка состояния — то же, что видит одиночная страница игры.</param>
+    /// <param name="BytesPerSecond">
+    /// Сглаженная скорость закачки. Нужна не для красоты: на сборке в 16 ГБ полоса прогресса
+    /// шевелится незаметно, и без чисел работающая закачка неотличима от зависшей.
+    /// 0 — скорость ещё не измерена.
+    /// </param>
+    /// <param name="CanMoveUp">
+    /// Позицию есть куда поднять. Кнопке нужен именно признак, а не догадка по состоянию:
+    /// стрелки, которые нарисованы и нажимаются, но ничего не делают, читаются как
+    /// сломанные — ровно это и было, пока перестановка шла только среди ожидающих.
+    /// </param>
+    /// <param name="CanMoveDown">Позицию есть куда опустить (ниже стоит другая ожидающая).</param>
+    /// <param name="IconUrl">
+    /// Иконка игры — та же, что в списке слева. Карточка очереди отличалась от строки
+    /// списка только отсутствием картинки, и одну и ту же игру в двух местах экрана
+    /// приходилось сопоставлять по названию.
+    /// </param>
+    /// <param name="QueuePosition">
+    /// Номер позиции в очереди, начиная с 1. Ожидающая карточка сообщала только «Ждёт
+    /// очереди…» — из трёх одинаковых надписей нельзя было понять, какая пойдёт следующей.
+    /// </param>
     internal sealed record QueueItem(
         string GameId,
         string Title,
         QueueItemState State,
         long BytesDownloaded,
         long TotalBytes,
-        string StatusText);
+        string StatusText,
+        double BytesPerSecond = 0,
+        bool CanMoveUp = false,
+        bool CanMoveDown = false,
+        string IconUrl = "",
+        int QueuePosition = 0);
 
     /// <summary>
     /// Очередь загрузок игр: то, с чем говорит UI. Реализация — деталь (фаза 1 держит всё
@@ -60,6 +85,13 @@ namespace ChillHub.Core.Game {
 
         /// <summary>Позицию убрали из очереди (снята вручную или завершилась/отменилась).</summary>
         event Action<QueueItem>? ItemRemoved;
+
+        /// <summary>
+        /// Порядок ожидающих позиций изменился (см. <see cref="MoveUp"/>/<see cref="MoveDown"/>) —
+        /// несёт полный новый снимок, а не одну позицию: перестановка меняет относительный
+        /// порядок сразу двух записей.
+        /// </summary>
+        event Action<IReadOnlyList<QueueItem>>? Reordered;
 
         /// <summary>Текущее содержимое очереди — для первичной отрисовки списком/панелью.</summary>
         /// <returns>Снимок очереди на момент вызова.</returns>
@@ -80,5 +112,19 @@ namespace ChillHub.Core.Game {
         /// <param name="gameId">Идентификатор игры.</param>
         /// <returns>True, если такая позиция была найдена.</returns>
         bool Remove(string gameId);
+
+        /// <summary>
+        /// Сдвигает ожидающую позицию на один шаг раньше в очереди — меняет местами с
+        /// предыдущей ожидающей позицией. Позицию, которая уже качается, не трогает: её
+        /// место всегда первое.
+        /// </summary>
+        /// <param name="gameId">Идентификатор игры.</param>
+        /// <returns>True, если позицию удалось сдвинуть.</returns>
+        bool MoveUp(string gameId);
+
+        /// <summary>Сдвигает ожидающую позицию на один шаг позже — см. <see cref="MoveUp"/>.</summary>
+        /// <param name="gameId">Идентификатор игры.</param>
+        /// <returns>True, если позицию удалось сдвинуть.</returns>
+        bool MoveDown(string gameId);
     }
 }

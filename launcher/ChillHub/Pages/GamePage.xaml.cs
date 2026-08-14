@@ -23,9 +23,9 @@ namespace ChillHub.Pages {
     using static ChillHub.Core.Home.HomeFormat;
 
     /// <summary>
-    /// Страница отдельной игры: сведения об установке, состояние, прогресс установки/обновления,
-    /// выбор версии сборки (в том числе откат), changelog из новостей игры и раздел «Игра по сети».
-    /// Кнопки «Играть» здесь нет намеренно — запуск остаётся на главной странице (см. Backlog.md).
+    /// Страница отдельной игры: сведения об установке, состояние, прогресс установки или
+    /// обновления, наигранное время и changelog из новостей игры.
+    /// Кнопки «Играть» здесь нет намеренно — запуск остаётся на главной странице.
     /// </summary>
     public partial class GamePage : Page {
         private readonly GameInfo game;
@@ -68,39 +68,7 @@ namespace ChillHub.Pages {
             this.SubscribeMaintenance();
             this.Loaded += (s, e) => this.SubscribeMaintenance();
 
-            this.LoadModProfiles();
-
             _ = this.InitAsync();
-        }
-
-        // Первая итерация модпак-профилей (трек F): без реальной установки модов —
-        // только выбор из списка, хранящегося в ModProfileStore. Выбор сохраняется сразу,
-        // подхватывает его GameLaunch.Play на главной странице при следующем запуске.
-        private void LoadModProfiles() {
-            try {
-                var file = Core.Game.ModProfileStore.Load(this.game.GameId);
-                this.ModProfileCombo.ItemsSource = file.Profiles;
-                var selected = Core.Game.ModProfileStore.SelectedProfile(file);
-                this.ModProfileCombo.SelectedItem = selected;
-            }
-            catch (Exception ex) {
-                Core.Logging.Logger.Warn($"GamePage.LoadModProfiles: {ex.Message}");
-            }
-        }
-
-        private void ModProfileCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) {
-            try {
-                if (this.ModProfileCombo.SelectedItem is not Core.Game.ModProfile profile) {
-                    return;
-                }
-
-                var file = Core.Game.ModProfileStore.Load(this.game.GameId);
-                file.Selected = profile.Id;
-                Core.Game.ModProfileStore.Save(this.game.GameId, file);
-            }
-            catch (Exception ex) {
-                Core.Logging.Logger.Warn($"GamePage.ModProfileCombo_SelectionChanged: {ex.Message}");
-            }
         }
 
         /// <summary>
@@ -128,7 +96,7 @@ namespace ChillHub.Pages {
             }
         }
 
-        /// <summary>Наигранное время (трек E): читает playtime.json, реконсилируя незакрытые сессии.</summary>
+        /// <summary>Наигранное время: читает playtime.json, реконсилируя незакрытые сессии.</summary>
         private void LoadPlaytime() {
             try {
                 var entry = Core.Game.PlaytimeStore.Get(this.game.GameId);
@@ -169,7 +137,6 @@ namespace ChillHub.Pages {
 
             var state = GameStateResolver.Compute(unfinished, hasFiles, this.localVersion, this.game.LatestVersion, this.game.NeedsUpdate);
             this.ApplyState(state);
-            this.UpdateVersionSwitchAvailability();
         }
 
         private void ApplyState(GameState state) {
@@ -205,19 +172,11 @@ namespace ChillHub.Pages {
             var gid = this.game.GameId;
             try {
                 this.builds = await this.buildsLoader.LoadAsync(this.BaseApi, gid).ConfigureAwait(true);
-                this.BuildsCombo.ItemsSource = this.builds;
-
-                // По умолчанию подставляем установленную версию, иначе последнюю
-                var preselect = !string.IsNullOrWhiteSpace(this.localVersion) ? this.localVersion : this.game.LatestVersion;
-                this.BuildsCombo.SelectedIndex = GameBuildsLoader.SelectIndex(this.builds, preselect);
-                this.UpdateVersionSwitchAvailability();
             }
             catch (Exception ex) {
                 // Без списка сборок страница остаётся рабочей, просто нельзя переключить версию
                 Core.Logging.Logger.ErrorNoReport(ex, $"GamePage.LoadBuildsAsync(gid={gid})");
                 this.builds = new List<string>();
-                this.BuildsCombo.ItemsSource = this.builds;
-                this.VersionHintText.Text = "Не удалось получить список версий. Проверьте подключение к интернету.";
             }
         }
 
@@ -296,31 +255,7 @@ namespace ChillHub.Pages {
             // В состоянии «Установлена» кнопка означает «Проверить файлы»: это сверка с
             // манифестом, после которой всё лишнее удаляется. Такое удаление требует
             // подтверждения — как и при переключении версии.
-            _ = this.StartSyncAsync(version, isVersionSwitch: false, confirmDeletions: this.currentState == GameState.Installed);
-        }
-
-        private void BuildsCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) {
-            this.UpdateVersionSwitchAvailability();
-        }
-
-        private void SwitchVersionBtn_Click(object sender, RoutedEventArgs e) {
-            if (this.isBusy) {
-                return;
-            }
-
-            var selected = (this.BuildsCombo.SelectedItem as string)?.Trim() ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(selected)) {
-                return;
-            }
-
-            var prompt = VersionSwitch.BuildPrompt(selected, this.game.LatestVersion);
-
-            var answer = MessageBox.Show(prompt.Text, prompt.Title, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
-            if (answer != MessageBoxResult.Yes) {
-                return;
-            }
-
-            _ = this.StartSyncAsync(selected, isVersionSwitch: true);
+            _ = this.StartSyncAsync(version, confirmDeletions: this.currentState == GameState.Installed);
         }
 
         private void OpenFolderBtn_Click(object sender, RoutedEventArgs e) {
@@ -435,7 +370,6 @@ namespace ChillHub.Pages {
                 // сам применяет режим работ, поэтому одинаково верно отрабатывает и начало
                 // работ, и их окончание.
                 this.ApplyState(this.currentState);
-                this.UpdateVersionSwitchAvailability();
                 if (state.Enabled) {
                     this.StatusText.Text = state.BuildBannerText();
                 }
@@ -461,7 +395,6 @@ namespace ChillHub.Pages {
                 if (this.IsSyncBlockedByMaintenance()) {
                     this.ActionBtn.Content = "Технические работы";
                     this.ActionBtn.IsEnabled = false;
-                    this.SwitchVersionBtn.IsEnabled = false;
                 }
             }
             catch (Exception ex) {
@@ -479,37 +412,6 @@ namespace ChillHub.Pages {
             return this.game.IsInstalled ? state.BlocksUpdate : state.BlocksInstall;
         }
 
-        // --- Установка / обновление / переключение версии ---
-        private void UpdateVersionSwitchAvailability() {
-            try {
-                var selected = (this.BuildsCombo.SelectedItem as string)?.Trim() ?? string.Empty;
-                if (string.IsNullOrWhiteSpace(selected)) {
-                    this.SwitchVersionBtn.IsEnabled = false;
-                    return;
-                }
-
-                // Маркер незавершённого обновления означает, что версия на диске «смешанная»:
-                // повторная установка той же версии в этом случае осмысленна.
-                var unfinished = GameLocalState.HasUnfinishedUpdate(this.game.GameId);
-
-                var view = VersionSwitch.Compute(
-                    selected,
-                    this.localVersion,
-                    this.game.LatestVersion,
-                    unfinished,
-                    this.isBusy,
-                    this.IsSyncBlockedByMaintenance());
-
-                this.SwitchVersionBtn.IsEnabled = view.CanSwitch;
-                if (view.Hint != null) {
-                    this.VersionHintText.Text = view.Hint;
-                }
-            }
-            catch (Exception ex) {
-                Core.Logging.Logger.Error(ex, "GamePage.UpdateVersionSwitchAvailability");
-            }
-        }
-
         /// <summary>Связывает установку с контролами страницы: вынесенный сценарий сам про них не знает.</summary>
         private GameSyncUi BuildSyncUi() => new GameSyncUi {
             SetStatus = text => this.StatusText.Text = text,
@@ -523,7 +425,7 @@ namespace ChillHub.Pages {
             ShowUserError = this.ShowUserError,
         };
 
-        private async Task StartSyncAsync(string version, bool isVersionSwitch, bool confirmDeletions = false) {
+        private async Task StartSyncAsync(string version, bool confirmDeletions = false) {
             var gid = this.game.GameId;
 
             // Подстраховка: работы могли начаться уже после отрисовки кнопок
@@ -552,7 +454,6 @@ namespace ChillHub.Pages {
                     this.BaseApi,
                     localRoot,
                     this.game.ExeRelativePath,
-                    isVersionSwitch,
                     confirmDeletions);
                 await this.syncRunner.RunAsync(request, token).ConfigureAwait(true);
             }
@@ -633,26 +534,6 @@ namespace ChillHub.Pages {
                 this.ActionBtn.Content = busy ? "Отмена" : this.ActionBtn.Content;
                 this.ActionBtn.IsEnabled = true;
 
-                // Доступность кнопки смены версии считает ТОЛЬКО UpdateVersionSwitchAvailability:
-                // там сходятся выбранная версия, версия на диске, маркер незавершённого обновления
-                // и режим техработ. Здесь решается лишь занятость.
-                //
-                // Раньше стояло `!busy && this.SwitchVersionBtn.IsEnabled`, то есть состояние
-                // читалось из самого контрола. При busy: true второй множитель становился false
-                // навсегда, и снятие занятости кнопку уже не возвращало: она оставалась мёртвой
-                // до ухода со страницы, если пересчёт в finally успевал бросить.
-                //
-                // Кэшировать доперационное разрешение и возвращать его тоже нельзя: пересчёт идёт
-                // после пяти чтений диска, и в этом окне кнопка была бы жива с устаревшим
-                // разрешением — предлагала бы переустановить только что установленное.
-                if (busy) {
-                    this.SwitchVersionBtn.IsEnabled = false;
-                }
-                else {
-                    this.UpdateVersionSwitchAvailability();
-                }
-
-                this.BuildsCombo.IsEnabled = !busy;
                 if (busy) {
                     this.StatusText.ToolTip = null;
                 }

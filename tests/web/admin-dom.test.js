@@ -624,3 +624,57 @@ test('диалог загрузки с диска рисует те же кно�
   const titles = [...btns].map((b) => b.title);
   assert.deepStrictEqual(titles, ['Переименовать', 'Удалить', 'Переименовать', 'Удалить']);
 });
+
+// ---- Галерея игры живёт во вкладке «Галерея», а не отдельной карточкой ----
+
+test('галерея смонтирована во вкладке карточки игры, заглушки не осталось', (t) => {
+  const { document } = loadAdminPage(t);
+
+  const root = document.getElementById('gg_root');
+  assert.ok(root, 'корень галереи есть в разметке');
+  assert.ok(
+    root.closest('#gmpane-gallery'),
+    'корень галереи должен лежать внутри вкладки «Галерея», а не отдельной карточкой на странице',
+  );
+  // Ровно тот дефект: вкладка была заглушкой «Открывается тем же интерфейсом».
+  assert.ok(
+    !/Открывается тем же интерфейсом/.test(document.getElementById('gmpane-gallery').innerHTML),
+    'во вкладке не должно остаться текста-заглушки',
+  );
+  assert.strictEqual(
+    document.querySelectorAll('[id="gg_root"]').length,
+    1,
+    'разметка галереи не должна дублироваться',
+  );
+});
+
+// ---- Выход из панели ----
+
+test('кнопка «Выйти» гасит сессию запросом на /auth/logout', async (t) => {
+  const calls = [];
+  const fetchStub = async (url, opts) => {
+    calls.push({ url: String(url), method: (opts && opts.method) || 'GET' });
+    return jsonResponse({ status: 'ok' });
+  };
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
+
+  // Скрипты исполняются уже после разбора документа (см. loadAdminPage), так
+  // что DOMContentLoaded к этому моменту прошёл и обработчики, навешенные на
+  // него, сами не сработают — в браузере они регистрируются до события.
+  document.dispatchEvent(new window.Event('DOMContentLoaded', { bubbles: true }));
+
+  const btn = document.getElementById('auth_logout');
+  assert.ok(btn, 'кнопка выхода есть в шапке');
+  btn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  for (let i = 0; i < 5; i++) await new Promise((res) => setTimeout(res, 0));
+
+  // Ровно тот дефект: эндпоинт был, кнопки к нему не было — выйти из панели
+  // можно было только вычистив куки руками.
+  const logout = calls.find((c) => c.url.includes('/auth/logout'));
+  assert.ok(logout, 'выход должен дёрнуть /admin/api/auth/logout');
+  assert.strictEqual(logout.method, 'POST', 'logout принимает только POST');
+  // Уход на форму входа проверить в jsdom нечем (location не подменяется, а
+  // навигация не реализована), но повторный клик по уже нажатой кнопке не
+  // должен слать второй запрос.
+  assert.strictEqual(btn.disabled, true, 'кнопка блокируется на время выхода');
+});

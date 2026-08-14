@@ -21,7 +21,11 @@ namespace ChillHub.Core.Shell {
     /// </para>
     /// </summary>
     internal sealed class TrayService : IDisposable {
+        /// <summary>Подпись пункта запуска, когда играть не во что.</summary>
+        internal const string NoGamePlayText = "Игра не выбрана";
+
         private readonly Forms.NotifyIcon icon;
+        private readonly Forms.ToolStripMenuItem playItem;
         private bool disposed;
 
         internal TrayService() {
@@ -37,14 +41,13 @@ namespace ChillHub.Core.Shell {
             openItem.Click += (s, e) => this.OpenRequested?.Invoke(this, EventArgs.Empty);
             menu.Items.Add(openItem);
 
-            // TODO(Трек A/E): подключить реальное имя текущей выбранной игры и запуск,
-            // когда появится единая точка доступа к «текущей игре» (см. Core/Home).
-            var playItem = new Forms.ToolStripMenuItem("Играть в текущую игру");
-            playItem.Click += (s, e) => this.PlayRequested?.Invoke(this, EventArgs.Empty);
-            menu.Items.Add(playItem);
+            // Название подставляет окно через SetCurrentGame: пункт «Играть в текущую
+            // игру» не говорил, в какую именно, и одинаково выглядел даже когда играть
+            // было не во что.
+            this.playItem = new Forms.ToolStripMenuItem(NoGamePlayText) { Enabled = false };
+            this.playItem.Click += (s, e) => this.PlayRequested?.Invoke(this, EventArgs.Empty);
+            menu.Items.Add(this.playItem);
 
-            // TODO: связать с реальной проверкой обновлений (UpdateWindow.PrecheckAsync),
-            // когда появится безопасный способ вызвать её вне стартовой последовательности.
             var updatesItem = new Forms.ToolStripMenuItem("Проверить обновления");
             updatesItem.Click += (s, e) => this.CheckUpdatesRequested?.Invoke(this, EventArgs.Empty);
             menu.Items.Add(updatesItem);
@@ -62,14 +65,31 @@ namespace ChillHub.Core.Shell {
         /// <summary>Пункт «Открыть лаунчер» либо двойной клик по значку.</summary>
         internal event EventHandler? OpenRequested;
 
-        /// <summary>Пункт «Играть в текущую игру» (заглушка, см. TODO в конструкторе).</summary>
+        /// <summary>Пункт запуска выбранной игры.</summary>
         internal event EventHandler? PlayRequested;
 
-        /// <summary>Пункт «Проверить обновления» (заглушка, см. TODO в конструкторе).</summary>
+        /// <summary>Пункт «Проверить обновления».</summary>
         internal event EventHandler? CheckUpdatesRequested;
 
         /// <summary>Пункт «Выйти полностью» — единственный способ завершить процесс из трея.</summary>
         internal event EventHandler? ExitRequested;
+
+        /// <summary>Подпись пункта запуска — шов для теста: само меню в прогоне не открыть.</summary>
+        internal string PlayItemText => this.playItem.Text ?? string.Empty;
+
+        /// <summary>Доступность пункта запуска — тот же шов.</summary>
+        internal bool PlayItemEnabled => this.playItem.Enabled;
+
+        /// <summary>
+        /// Подписывает пункт запуска именем выбранной игры. Пустое имя выключает пункт:
+        /// нажатие, которое ничего не делает, читается как сломанное меню.
+        /// </summary>
+        /// <param name="title">Название выбранной игры или <c>null</c>, если её нет.</param>
+        internal void SetCurrentGame(string? title) {
+            var name = (title ?? string.Empty).Trim();
+            this.playItem.Enabled = name.Length > 0;
+            this.playItem.Text = name.Length > 0 ? $"Играть: {name}" : NoGamePlayText;
+        }
 
         /// <summary>Показывает значок в трее.</summary>
         internal void Show() => this.icon.Visible = true;

@@ -2,56 +2,62 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:sys="clr-namespace:System;assembly=mscorlib">
   <!-- Palette -->
-  <!-- Core palette aligned with landing (landing/styles.css :root) -->
-  <Color x:Key="Color.Background">#060606</Color>        <!-- neutral near-black -->
-  <Color x:Key="Color.Surface">#0B0B0B</Color>           <!-- neutral dark surface -->
-  <Color x:Key="Color.Border">#1E1E38</Color>            <!-- stroke (darker) -->
-  <Color x:Key="Color.Text">#E8E8FB</Color>              <!-- text -->
-  <Color x:Key="Color.TextSecondary">#B0B3C8</Color>      <!-- muted (slightly brighter for readability) -->
-  <!-- Accents from landing logo gradient: bright = pink, duller = purple -->
-  <Color x:Key="Color.Accent">#FF3A75</Color>           <!-- bright pink for checkmarks and primary accent -->
-  <Color x:Key="Color.AccentHover">#8A2A4A</Color>       <!-- darker wine hover to match UpdateWindow -->
-  <Color x:Key="Color.SecondaryAccent">#A78BFA</Color>   <!-- brighter/lighter purple for secondary accent -->
-  <!-- Semantic colors (grayscale variants) -->
-  <Color x:Key="Color.Success">#4CAF50</Color>
-  <Color x:Key="Color.Danger">#FF6B6B</Color>
-  <Color x:Key="Color.Selection">#262626</Color>
-  <!-- Extended palette for states and components (derived from landing card tones) -->
-  <Color x:Key="Color.HeaderStart">#0B0812</Color>       <!-- deeper top -->
-  <Color x:Key="Color.HeaderMid">#07060E</Color>         <!-- deeper mid -->
-  <Color x:Key="Color.HeaderEnd">#020205</Color>         <!-- matches darkest background -->
-  <Color x:Key="Color.Hover">#1D1D36</Color>             <!-- card-2 -->
-  <Color x:Key="Color.Pressed">#141428</Color>
-  <Color x:Key="Color.BorderHover">#2A2A50</Color>
-  <Color x:Key="Color.BorderPressed">#2A2A50</Color>
-  <Color x:Key="Color.ListHover">#1B1B34</Color>
-  <Color x:Key="Color.ListHoverAlt">#141428</Color>
-  <Color x:Key="Color.Skeleton">#1A1A3A</Color>
-  <!-- Slider / controls palette per spec -->
-  <Color x:Key="Color.Track">#1B1B34</Color>
-  <Color x:Key="Color.TrackFill">#3A2966</Color>
-  <!-- Slider thumb colors tuned to be distinct from TrackFill but still dark -->
-  <Color x:Key="Color.Thumb">#4A3A7A</Color>
-  <Color x:Key="Color.ThumbHover">#8A2A4A</Color>
-  <Color x:Key="Color.ThumbActive">#A78BFA</Color>
+  <!-- Одна акцентная краска (#7C5CFF) и три статусных цвета. Раньше акцентов было три —
+       розовый, фиолетовый и градиент между ними — и ни один из них не значил «главное». -->
+  <Color x:Key="Color.Background">#0C0C10</Color>        <!-- фон окна -->
+  <Color x:Key="Color.Surface">#14141B</Color>           <!-- карточка на фоне -->
+  <Color x:Key="Color.Surface2">#1B1B24</Color>          <!-- карточка на карточке -->
+  <Color x:Key="Color.Border">#24242F</Color>
+  <Color x:Key="Color.Text">#E9E9F0</Color>
+  <Color x:Key="Color.TextSecondary">#9A9AAB</Color>
+  <Color x:Key="Color.TextMuted">#6E6E80</Color>          <!-- подписи, «не установлена» -->
+  <!-- Единственный акцент -->
+  <Color x:Key="Color.Accent">#7C5CFF</Color>
+  <Color x:Key="Color.AccentHover">#8F73FF</Color>
+  <Color x:Key="Color.SecondaryAccent">#6949E0</Color>   <!-- нажатое состояние акцента -->
+  <!-- Статусы игр: готова / нужно обновление / проблема -->
+  <Color x:Key="Color.Success">#57C98A</Color>
+  <Color x:Key="Color.Warning">#E0A64B</Color>
+  <Color x:Key="Color.Danger">#E06B6B</Color>
+  <Color x:Key="Color.Selection">#1B1B26</Color>
+  <!-- Состояния -->
+  <Color x:Key="Color.HeaderStart">#101017</Color>
+  <Color x:Key="Color.HeaderMid">#101017</Color>
+  <Color x:Key="Color.HeaderEnd">#101017</Color>
+  <Color x:Key="Color.Hover">#1B1B24</Color>
+  <Color x:Key="Color.Pressed">#22222E</Color>
+  <Color x:Key="Color.BorderHover">#35354A</Color>
+  <Color x:Key="Color.BorderPressed">#35354A</Color>
+  <Color x:Key="Color.ListHover">#16161E</Color>
+  <Color x:Key="Color.ListHoverAlt">#1B1B24</Color>
+  <Color x:Key="Color.Skeleton">#1B1B24</Color>
+  <!-- Слайдеры и полосы -->
+  <Color x:Key="Color.Track">#22222E</Color>
+  <Color x:Key="Color.TrackFill">#7C5CFF</Color>
+  <Color x:Key="Color.Thumb">#4A4458</Color>
+  <Color x:Key="Color.ThumbHover">#7C5CFF</Color>
+  <Color x:Key="Color.ThumbActive">#8F73FF</Color>
+  <!-- Три радиуса на всё приложение: мелкое, контролы, карточки -->
+  <CornerRadius x:Key="Radius.S">6</CornerRadius>
   <CornerRadius x:Key="Radius.M">8</CornerRadius>
+  <CornerRadius x:Key="Radius.L">12</CornerRadius>
 
   <!-- Brushes mapped to new Palette -->
   <SolidColorBrush x:Key="Brush.Background" Color="{StaticResource Color.Background}"/>
   <SolidColorBrush x:Key="Brush.Surface" Color="{StaticResource Color.Surface}"/>
+  <SolidColorBrush x:Key="Brush.Surface2" Color="{StaticResource Color.Surface2}"/>
   <SolidColorBrush x:Key="Brush.Border" Color="{StaticResource Color.Border}"/>
   <SolidColorBrush x:Key="Brush.Text" Color="{StaticResource Color.Text}"/>
   <SolidColorBrush x:Key="Brush.TextSecondary" Color="{StaticResource Color.TextSecondary}"/>
+  <SolidColorBrush x:Key="Brush.TextMuted" Color="{StaticResource Color.TextMuted}"/>
   <!-- Title/headline text color -->
   <SolidColorBrush x:Key="Brush.Title" Color="#FFFFFF"/>
   <SolidColorBrush x:Key="Brush.Accent" Color="{StaticResource Color.Accent}"/>
   <SolidColorBrush x:Key="Brush.AccentHover" Color="{StaticResource Color.AccentHover}"/>
   <SolidColorBrush x:Key="Brush.SecondaryAccent" Color="{StaticResource Color.SecondaryAccent}"/>
-  <!-- Gradient accent brush for primary buttons (grad-a -> grad-b) -->
-  <LinearGradientBrush x:Key="Brush.AccentGradientPrimary" StartPoint="0,0" EndPoint="1,1">
-    <GradientStop Offset="0" Color="#3A2966"/>
-    <GradientStop Offset="1" Color="#8A2A4A"/>
-  </LinearGradientBrush>
+  <!-- Заливка главной кнопки. Ключ остался с градиентных времён, но краска теперь одна:
+       градиент на тёмном фоне всё равно читался как грязное пятно. -->
+  <SolidColorBrush x:Key="Brush.AccentGradientPrimary" Color="{StaticResource Color.Accent}"/>
   <!-- State brushes -->
   <SolidColorBrush x:Key="Brush.Hover" Color="{StaticResource Color.Hover}"/>
   <SolidColorBrush x:Key="Brush.Pressed" Color="{StaticResource Color.Pressed}"/>
@@ -67,17 +73,14 @@
   <SolidColorBrush x:Key="Brush.ThumbActive" Color="{StaticResource Color.ThumbActive}"/>
   <!-- Semantic colors -->
   <SolidColorBrush x:Key="Brush.Success" Color="{StaticResource Color.Success}"/>
+  <SolidColorBrush x:Key="Brush.Warning" Color="{StaticResource Color.Warning}"/>
   <SolidColorBrush x:Key="Brush.Danger" Color="{StaticResource Color.Danger}"/>
   <SolidColorBrush x:Key="Brush.Selection" Color="{StaticResource Color.Selection}"/>
 
   <!-- Header background (solid per spec) -->
 
-  <!-- Header gradient using project colors (3-stop, tuned for darker base) -->
-  <LinearGradientBrush x:Key="Brush.HeaderGradient" StartPoint="0,0" EndPoint="0,1">
-    <GradientStop Offset="0.0" Color="{StaticResource Color.HeaderStart}"/>
-    <GradientStop Offset="0.42" Color="{StaticResource Color.HeaderMid}"/>
-    <GradientStop Offset="1.0" Color="{StaticResource Color.HeaderEnd}"/>
-  </LinearGradientBrush>
+  <!-- Шапка — ровная заливка. Ключ сохранён ради ссылок из MainWindow. -->
+  <SolidColorBrush x:Key="Brush.HeaderGradient" Color="{StaticResource Color.HeaderStart}"/>
 
   <!-- TextBlock default -->
   <Style TargetType="TextBlock">
@@ -258,7 +261,9 @@
   <!-- Primary button (e.g., Play) -->
   <Style x:Key="Style.Button.Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
     <Setter Property="Background" Value="{DynamicResource Brush.AccentGradientPrimary}"/>
-    <Setter Property="Foreground" Value="#0A0A0A"/>
+    <!-- Тёмный текст на акценте даёт ~6:1, белый — ~3.5:1. Раньше стояло #0A0A0A поверх
+         тёмного градиента, то есть тёмное на тёмном. -->
+    <Setter Property="Foreground" Value="#0C0C10"/>
     <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="BorderBrush" Value="Transparent"/>
     <Setter Property="Padding" Value="12,6"/>
@@ -276,7 +281,6 @@
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="bd" Property="Background" Value="{StaticResource Brush.AccentHover}"/>
-              <Setter Property="Foreground" Value="#FFFFFF"/>
             </Trigger>
             <Trigger Property="IsPressed" Value="True">
               <Setter TargetName="bd" Property="Background" Value="{StaticResource Brush.SecondaryAccent}"/>
@@ -288,6 +292,69 @@
         </ControlTemplate>
       </Setter.Value>
     </Setter>
+  </Style>
+
+  <!-- Вторичная кнопка. Жила тремя одинаковыми копиями — в HomePage, в GamePage под
+       именем Style.Button.GameGhost и в UpdateWindow, — и расходилась в мелочах от
+       копии к копии. Теперь одна на всё приложение. -->
+  <Style x:Key="Style.Button.GhostNeutral" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="Padding" Value="12,6"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}" Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
+              <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Pressed}"/>
+              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderPressed}"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Opacity" Value="0.6"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- «Назад» на всех вложенных экранах: одна кнопка, слева, со стрелкой. Раньше их
+       было три разных — на странице игры без стрелки слева, в новости другой ширины
+       слева, в настройках со стрелкой и СПРАВА, — и возврат каждый раз искали заново. -->
+  <Style x:Key="Style.Button.Back" TargetType="Button" BasedOn="{StaticResource Style.Button.GhostNeutral}">
+    <Setter Property="Height" Value="32"/>
+    <Setter Property="MinWidth" Value="96"/>
+    <Setter Property="FontSize" Value="13"/>
+    <Setter Property="HorizontalAlignment" Value="Left"/>
+    <Setter Property="Content">
+      <Setter.Value>
+        <StackPanel Orientation="Horizontal">
+          <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72B;" FontSize="12" Margin="0,0,8,0" VerticalAlignment="Center"/>
+          <TextBlock Text="Назад" VerticalAlignment="Center"/>
+        </StackPanel>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- Заголовок вложенного экрана -->
+  <Style x:Key="Style.PageTitle" TargetType="TextBlock">
+    <Setter Property="FontSize" Value="20"/>
+    <Setter Property="FontWeight" Value="Bold"/>
+    <Setter Property="Foreground" Value="{DynamicResource Brush.Title}"/>
+    <Setter Property="VerticalAlignment" Value="Center"/>
+    <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+    <Setter Property="TextWrapping" Value="NoWrap"/>
   </Style>
 
   <!-- TextBox / ComboBox / ListBox -->
@@ -407,7 +474,7 @@
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Accent}"/>
-              <Setter Property="Foreground" Value="#0A0A0A"/>
+              <Setter Property="Foreground" Value="#0C0C10"/>
             </Trigger>
             <Trigger Property="IsSelected" Value="True">
               <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.AccentHover}"/>
@@ -416,7 +483,7 @@
             <!-- Некоторые системные шаблоны подсвечивают IsHighlighted для текущего элемента -->
             <Trigger Property="IsHighlighted" Value="True">
               <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Accent}"/>
-              <Setter Property="Foreground" Value="#0A0A0A"/>
+              <Setter Property="Foreground" Value="#0C0C10"/>
             </Trigger>
             <MultiTrigger>
               <MultiTrigger.Conditions>
@@ -482,32 +549,33 @@
     </Setter>
   </Style>
 
-  <!-- Card/Section styles per spec: background #121212, border #282828 -->
+  <!-- Карточки: радиус 12, рамка ровно 1px. Полуторапиксельная рамка на дробном DPI
+       давала то одну, то две линии — отсюда «разная толщина» соседних карточек. -->
   <Style x:Key="Style.Card" TargetType="Border">
-    <Setter Property="CornerRadius" Value="8"/>
+    <Setter Property="CornerRadius" Value="{StaticResource Radius.L}"/>
     <Setter Property="BorderBrush" Value="{StaticResource Brush.Border}"/>
-    <Setter Property="BorderThickness" Value="1.5"/>
+    <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Background" Value="{StaticResource Brush.Surface}"/>
     <Setter Property="SnapsToDevicePixels" Value="True"/>
   </Style>
   <Style x:Key="Style.Section" TargetType="Border">
-    <Setter Property="CornerRadius" Value="8"/>
+    <Setter Property="CornerRadius" Value="{StaticResource Radius.L}"/>
     <Setter Property="BorderBrush" Value="{StaticResource Brush.Border}"/>
-    <Setter Property="BorderThickness" Value="1.5"/>
+    <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Padding" Value="4"/>
     <Setter Property="Background" Value="{StaticResource Brush.Surface}"/>
   </Style>
   <!-- Bordered panel for progress bar + caption -->
   <Style x:Key="Style.ProgressPanel" TargetType="Border">
-    <Setter Property="CornerRadius" Value="8"/>
+    <Setter Property="CornerRadius" Value="{StaticResource Radius.L}"/>
     <Setter Property="BorderBrush" Value="{StaticResource Brush.Border}"/>
-    <Setter Property="BorderThickness" Value="1.5"/>
+    <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Padding" Value="8"/>
     <Setter Property="Background" Value="{StaticResource Brush.Surface}"/>
   </Style>
   <Style TargetType="ProgressBar">
-    <Setter Property="Height" Value="18"/>
-    <Setter Property="Foreground" Value="{StaticResource Brush.AccentGradientPrimary}"/>
+    <Setter Property="Height" Value="4"/>
+    <Setter Property="Foreground" Value="{StaticResource Brush.Accent}"/>
     <Setter Property="Background" Value="{StaticResource Brush.Track}"/>
   </Style>
 
@@ -586,7 +654,7 @@
                       BorderBrush="{StaticResource Brush.Border}"
                       BorderThickness="1"/>
               <Path x:Name="CheckMark" Data="M 3 9 L 7 13 L 15 5"
-                      StrokeThickness="2" Stroke="#0A0A0A" Visibility="Collapsed"
+                      StrokeThickness="2" Stroke="#0C0C10" Visibility="Collapsed"
                       StrokeEndLineCap="Square" StrokeLineJoin="Round"/>
             </Grid>
             <ContentPresenter VerticalAlignment="Center"/>
@@ -620,9 +688,9 @@
 
   <!-- Scrollbar theming per request: track = Background, thumb = #1A122B, hover = slightly lighter, border = #2B1F4A -->
   <SolidColorBrush x:Key="Brush.ScrollbarTrack" Color="{StaticResource Color.Surface}"/>
-  <SolidColorBrush x:Key="Brush.ScrollbarThumb" Color="#2A2A50"/>
-  <SolidColorBrush x:Key="Brush.ScrollbarThumbHover" Color="#3A3A66"/>
-  <SolidColorBrush x:Key="Brush.ScrollbarThumbBorder" Color="#2B1F4A"/>
+  <SolidColorBrush x:Key="Brush.ScrollbarThumb" Color="#2E2E3C"/>
+  <SolidColorBrush x:Key="Brush.ScrollbarThumbHover" Color="#3F3F52"/>
+  <SolidColorBrush x:Key="Brush.ScrollbarThumbBorder" Color="{StaticResource Color.Border}"/>
   <Style TargetType="ScrollBar">
     <Setter Property="Background" Value="{StaticResource Brush.ScrollbarTrack}"/>
     <Setter Property="Width" Value="8"/>
@@ -687,21 +755,24 @@
 
   <!-- Window/Page background fallback -->
 
-  <!-- HomePage hero showcase (Трек A) -->
-  <LinearGradientBrush x:Key="Brush.HeroGradient" StartPoint="0,0" EndPoint="1,1">
-    <GradientStop Offset="0" Color="#1A122B"/>
-    <GradientStop Offset="0.55" Color="#2B1F4A"/>
-    <GradientStop Offset="1" Color="#3A2966"/>
+  <!-- Витрина: ровная подложка под обложкой игры. Пока обложки нет, это единственный фон,
+       и он не должен спорить с ней цветом, когда она появится. -->
+  <SolidColorBrush x:Key="Brush.HeroGradient" Color="#1E1B2B"/>
+  <!-- Затемнение поверх обложки, чтобы белый заголовок читался на любой картинке -->
+  <LinearGradientBrush x:Key="Brush.HeroScrim" StartPoint="0,0" EndPoint="0,1">
+    <GradientStop Offset="0" Color="#00000000"/>
+    <GradientStop Offset="0.45" Color="#66000000"/>
+    <GradientStop Offset="1" Color="#E60C0C10"/>
   </LinearGradientBrush>
-  <SolidColorBrush x:Key="Brush.HeroBadge.Bg" Color="#2B1F4A"/>
-  <SolidColorBrush x:Key="Brush.HeroBadge.Border" Color="#8C6AFF"/>
+  <SolidColorBrush x:Key="Brush.HeroBadge.Bg" Color="#1B1B24"/>
+  <SolidColorBrush x:Key="Brush.HeroBadge.Border" Color="{StaticResource Color.Border}"/>
 
   <!-- Круглая кнопка сведений об игре (ⓘ) на витрине -->
   <Style x:Key="Style.Button.HeroInfo" TargetType="Button">
     <Setter Property="Width" Value="36"/>
     <Setter Property="Height" Value="36"/>
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
-    <Setter Property="Background" Value="#332B1F4A"/>
+    <Setter Property="Background" Value="#3314141B"/>
     <Setter Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
     <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Cursor" Value="Hand"/>
@@ -726,26 +797,28 @@
     </Setter>
   </Style>
 
-  <!-- Кнопки-вкладки под витриной: «Новости игры / Новости лаунчера» -->
+  <!-- Вкладки под витриной: подчёркивание, а не залитая пилюля. Пилюля весом спорила с
+       главной кнопкой действия — две крашенные акцентом плашки рядом, и обе «главные». -->
   <Style x:Key="Style.Button.HeroTab" TargetType="ToggleButton">
-    <Setter Property="Padding" Value="14,7"/>
+    <Setter Property="Padding" Value="2,0,2,8"/>
+    <Setter Property="MinHeight" Value="30"/>
     <Setter Property="FontSize" Value="13"/>
-    <Setter Property="FontWeight" Value="SemiBold"/>
     <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="ToggleButton">
-          <Border x:Name="bd" CornerRadius="8" Background="{TemplateBinding Background}" BorderThickness="0">
+          <Border x:Name="bd" Background="Transparent" BorderThickness="0,0,0,2"
+                  BorderBrush="Transparent" Padding="{TemplateBinding Padding}">
             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
+              <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
             </Trigger>
             <Trigger Property="IsChecked" Value="True">
-              <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.AccentGradientPrimary}"/>
+              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Accent}"/>
               <Setter Property="Foreground" Value="{DynamicResource Brush.Title}"/>
             </Trigger>
           </ControlTemplate.Triggers>

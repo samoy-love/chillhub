@@ -264,6 +264,11 @@ func loadGamesFromRegistry() ([]GameInfo, bool) {
 			log.Printf("registry: skipping entry with unusable gameId %q", filepath.Base(it.GameID))
 			continue
 		}
+		// Снятая с публикации игра не попадает в список лаунчера, но остаётся в
+		// реестре со всеми файлами: это витрина, а не удаление.
+		if it.Unpublished {
+			continue
+		}
 		items = append(items, it)
 	}
 	// games.Save() already writes the file in this exact order — this re-sort

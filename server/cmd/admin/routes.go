@@ -42,7 +42,6 @@ func aliasOf(path string) string {
 func (s *server) apiRoutes() []route {
 	b, n, g, f, gg := s.builds, s.news, s.games, s.feedback, s.gamegallery
 	mt, mx := s.maintenance, s.metrics
-	ts := s.thunderstore
 	return []route{
 		// Health probe (allowlisted in the auth middleware).
 		{path: "/admin/api/health", handler: func(w http.ResponseWriter, _ *http.Request) { _, _ = fmt.Fprintln(w, "ok") }},
@@ -127,6 +126,7 @@ func (s *server) apiRoutes() []route {
 		{path: "/admin/api/games/save", handler: g.Save},
 		{path: "/admin/api/games/icon/upload", handler: g.IconUpload},
 		{path: "/admin/api/games/scan", handler: g.Scan},
+		{path: "/admin/api/games/purge", handler: g.Purge},
 
 		// Per-game screenshot gallery.
 		{path: "/admin/api/games/gallery", handler: gg.List},
@@ -137,12 +137,6 @@ func (s *server) apiRoutes() []route {
 		{path: "/admin/api/games/gallery/rename", handler: gg.Rename},
 		{path: "/admin/api/games/gallery/setCover", handler: gg.SetCoverHandler},
 		{path: "/admin/api/games/gallery/setCaption", handler: gg.SetCaptionHandler},
-
-		// Thunderstore modpack downloads (Трек K).
-		{path: "/admin/api/thunderstore/search", handler: ts.Search},
-		{path: "/admin/api/thunderstore/list", handler: ts.List},
-		{path: "/admin/api/thunderstore/download", handler: ts.Download},
-		{path: "/admin/api/thunderstore/delete", handler: ts.Delete},
 	}
 }
 
@@ -204,12 +198,11 @@ func (s *server) register(mux *http.ServeMux) []string {
 	// PathPrefix("/content/") mount, which this admin process never had;
 	// without this the admin UI's own gallery tab 404s on every uploaded
 	// screenshot. Deliberately scoped to just that subtree, not the whole
-	// content/ root: content/<gid>/modpacks/ also lives under here (downloaded
-	// Thunderstore mod files), and the admin auth middleware only gates paths
-	// under /admin/ — mounting all of content/ here would make every modpack
-	// ever downloaded, plus a raw directory listing, reachable from this
-	// origin with no login. The public API process still serves all of
-	// content/ (including modpacks) on its own, separate, origin.
+	// content/ root: the admin auth middleware only gates paths under /admin/,
+	// so mounting all of content/ here would make every game's unpacked build,
+	// plus a raw directory listing, reachable from this origin with no login.
+	// The public API process still serves all of content/ on its own, separate,
+	// origin.
 	contentDir := filepath.Join(s.contentRoot, "content")
 	if isDir(contentDir) {
 		add("/content/", httpx.NoStore(http.StripPrefix("/content/", galleryOnly(http.Dir(contentDir)))))
@@ -227,8 +220,9 @@ func (s *server) register(mux *http.ServeMux) []string {
 // galleryOnly wraps a content/ file server so it only ever serves paths of the
 // shape "<gameId>/gallery/<...>/<file>" — never a bare directory (which
 // http.FileServer would otherwise list) and never anything outside gallery/
-// (in particular, never content/<gameId>/modpacks/, which this unauthenticated
-// mount was never meant to expose — see the comment at its call site).
+// (in particular, never the unpacked builds in content/<gameId>/<version>/,
+// which this unauthenticated mount was never meant to expose — see the comment
+// at its call site).
 func galleryOnly(root http.FileSystem) http.Handler {
 	fs := http.FileServer(root)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

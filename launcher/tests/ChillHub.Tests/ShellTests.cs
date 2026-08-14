@@ -155,6 +155,32 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// Пункт запуска в трее называет игру, а без выбранной игры выключен: нажатие,
+        /// которое ничего не делает, читается как сломанное меню.
+        /// </summary>
+        [Fact]
+        public void ПунктТреяНазываетВыбраннуюИгру() {
+            UiThread.Run(() => {
+                using var tray = new TrayService();
+
+                tray.SetCurrentGame("Lethal Company");
+                Assert.Equal("Играть: Lethal Company", tray.PlayItemText);
+                Assert.True(tray.PlayItemEnabled);
+
+                tray.SetCurrentGame(null);
+                Assert.Equal(TrayService.NoGamePlayText, tray.PlayItemText);
+                Assert.False(tray.PlayItemEnabled);
+
+                // Пробелы — это тоже «имени нет»: подпись «Играть:  » выглядела бы сбоем.
+                tray.SetCurrentGame("   ");
+                Assert.Equal(TrayService.NoGamePlayText, tray.PlayItemText);
+                Assert.False(tray.PlayItemEnabled);
+
+                return System.Threading.Tasks.Task.CompletedTask;
+            });
+        }
+
+        /// <summary>
         /// Страницы изображают заглушки: настоящие требуют STA-потока и лезут в сеть
         /// за списком игр, а решение о переходе от их содержимого не зависит.
         /// </summary>

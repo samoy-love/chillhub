@@ -18,11 +18,10 @@ namespace ChillHub.Tests {
     using Xunit;
 
     /// <summary>
-    /// Разбор `gallery.json` (контракт — раздел 1 PLAN.md) и построение абсолютных
-    /// адресов картинок карусели на витрине (трек G).
+    /// Разбор `gallery.json` и построение абсолютных адресов картинок для витрины.
     /// </summary>
     public class GalleryClientTests {
-        /// <summary>Локальная фикстура с тремя картинками — тот же вид, что отдаст трек H.</summary>
+        /// <summary>Локальная фикстура с тремя картинками — тот же вид, что пишет админка.</summary>
         private const string Fixture = @"{
             ""cover"": ""moon-titan.jpg"",
             ""items"": [
@@ -46,6 +45,58 @@ namespace ChillHub.Tests {
             Assert.False(images[1].IsCover);
             Assert.Equal("https://example.test/content/moon-lander/gallery/foggy-landing.jpg", images[1].ImageUrl);
             Assert.Equal(string.Empty, images[2].Caption);
+        }
+
+        /// <summary>
+        /// Обложка без `items` — галерея из одной картинки. Так выглядят манифесты,
+        /// записанные админкой до того, как SetCover стал регистрировать файл в
+        /// `items`: раньше витрина у таких игр оставалась пустой.
+        /// </summary>
+        [Fact]
+        public async Task ОбложкаБезItemsВсёРавноПоказывается() {
+            var client = new GalleryClient(Json(@"{""cover"": ""hero.jpg"", ""items"": []}"));
+
+            var images = await client.GetGalleryAsync("https://example.test", "moon-lander");
+
+            var image = Assert.Single(images);
+            Assert.True(image.IsCover);
+            Assert.Equal("https://example.test/content/moon-lander/gallery/hero.jpg", image.ImageUrl);
+        }
+
+        /// <summary>Обложка в подпапке даёт адрес с подпапкой, а не склеенное имя.</summary>
+        [Fact]
+        public async Task ОбложкаИзПодпапкиДаётВерныйАдрес() {
+            var client = new GalleryClient(Json(@"{""cover"": ""shots/moon.jpg"", ""items"": []}"));
+
+            var images = await client.GetGalleryAsync("https://example.test", "moon-lander");
+
+            Assert.Equal(
+                "https://example.test/content/moon-lander/gallery/shots/moon.jpg",
+                Assert.Single(images).ImageUrl);
+        }
+
+        /// <summary>Названной обложки нет среди `items` — она всё равно идёт первой.</summary>
+        [Fact]
+        public async Task ОбложкаВнеItemsСтановитсяПервой() {
+            var client = new GalleryClient(Json(@"{
+                ""cover"": ""hero.jpg"",
+                ""items"": [{""file"": ""other.jpg"", ""caption"": ""другой кадр""}]
+            }"));
+
+            var images = await client.GetGalleryAsync("https://example.test", "moon-lander");
+
+            Assert.Equal(2, images.Count);
+            Assert.True(images[0].IsCover);
+            Assert.Equal("https://example.test/content/moon-lander/gallery/hero.jpg", images[0].ImageUrl);
+            Assert.Equal("другой кадр", images[1].Caption);
+        }
+
+        /// <summary>Ни обложки, ни картинок — пустая галерея, а не выдуманный адрес.</summary>
+        [Fact]
+        public async Task ПустойМанифестДаётПустуюГалерею() {
+            var client = new GalleryClient(Json(@"{""cover"": """", ""items"": []}"));
+
+            Assert.Empty(await client.GetGalleryAsync("https://example.test", "moon-lander"));
         }
 
         /// <summary>Запрос идёт ровно по контракту: `<baseApi>/content/<gameId>/gallery/gallery.json`.</summary>
