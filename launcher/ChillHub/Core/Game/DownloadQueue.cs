@@ -16,7 +16,7 @@ namespace ChillHub.Core.Game {
     /// <summary>
     /// Фаза 1 очереди загрузок: всё в памяти, качает по одной игре за раз, воркер — один
     /// фоновый цикл на весь процесс лаунчера. Ни на диск, ни в общий лимитер скорости не
-    /// смотрит — это фаза 2 (см. PLAN.md, трек C), и переезд на неё не должен требовать
+    /// смотрит — это следующая фаза, и переезд на неё не должен требовать
     /// правок в коде, который держит только <see cref="IDownloadQueue"/>.
     /// <para>
     /// Установку/обновление одной игры не переизобретает — вызывает тот же
@@ -25,6 +25,9 @@ namespace ChillHub.Core.Game {
     /// </para>
     /// </summary>
     internal sealed class DownloadQueue : IDownloadQueue, IDisposable {
+        /// <summary>Чувствительность сглаживания скорости — как у прежнего счётчика на странице игры.</summary>
+        private const double SpeedEmaAlpha = 0.2;
+
         private readonly object gate = new();
         private readonly List<Entry> items = new();
         private readonly Func<string, GameInfo?> gameLookup;
@@ -64,9 +67,12 @@ namespace ChillHub.Core.Game {
         public event Action<QueueItem>? ItemRemoved;
 
         /// <inheritdoc/>
+        public event Action<IReadOnlyList<QueueItem>>? Reordered;
+
+        /// <inheritdoc/>
         public IReadOnlyList<QueueItem> Snapshot() {
             lock (this.gate) {
-                return this.items.Select(e => e.ToItem()).ToList();
+                return this.SnapshotLocked();
             }
         }
 
@@ -87,16 +93,22 @@ namespace ChillHub.Core.Game {
             }
 
             Entry entry;
+            IReadOnlyList<QueueItem> snapshot;
             lock (this.gate) {
                 if (this.items.Any(e => string.Equals(e.GameId, gameId, StringComparison.OrdinalIgnoreCase))) {
                     return false;
                 }
 
-                entry = new Entry(gameId, string.IsNullOrWhiteSpace(game.Title) ? gameId : game.Title);
+                entry = new Entry(gameId, string.IsNullOrWhiteSpace(game.Title) ? gameId : game.Title, game.IconUrl);
                 this.items.Add(entry);
+                snapshot = this.SnapshotLocked();
             }
 
             this.ItemAdded?.Invoke(entry.ToItem());
+
+            // Появление соседа меняет «можно сдвинуть» и у тех, кто уже стоял в очереди:
+            // у последней позиции появляется сосед снизу. Рассылаем весь порядок целиком.
+            this.Reordered?.Invoke(snapshot);
             this.workSignal.Release();
             return true;
         }
@@ -109,6 +121,7 @@ namespace ChillHub.Core.Game {
 
             Entry? entry;
             var removedNow = false;
+            IReadOnlyList<QueueItem> snapshot;
             lock (this.gate) {
                 entry = this.items.FirstOrDefault(e => string.Equals(e.GameId, gameId, StringComparison.OrdinalIgnoreCase));
                 if (entry == null) {
@@ -120,6 +133,8 @@ namespace ChillHub.Core.Game {
                     // пришлёт ровно одно событие, когда ProcessAsync реально остановится по токену
                     // отмены — иначе Remove() и Finish() могли гонять State/items друг у друга из-под
                     // ног и породить два противоречащих события для одной и той же позиции.
+                    // Снятие важнее возврата в очередь: пользователь просил убрать, а не пропустить.
+                    entry.RequeueRequested = false;
                     entry.CancelRequested = true;
                     entry.Cts?.Cancel();
                 }
@@ -128,13 +143,129 @@ namespace ChillHub.Core.Game {
                     entry.State = QueueItemState.Cancelled;
                     removedNow = true;
                 }
+
+                snapshot = this.SnapshotLocked();
             }
 
             if (removedNow) {
                 this.ItemRemoved?.Invoke(entry.ToItem());
+                this.Reordered?.Invoke(snapshot);
             }
 
             return true;
+        }
+
+        /// <inheritdoc/>
+        public bool MoveUp(string gameId) => this.Swap(gameId, -1);
+
+        /// <inheritdoc/>
+        public bool MoveDown(string gameId) => this.Swap(gameId, 1);
+
+        /// <summary>
+        /// Двигает ожидающую позицию на шаг по очереди.
+        /// <para>
+        /// Соседом считается позиция в СПИСКЕ, а не «следующая ожидающая». Пока перестановка
+        /// шла только среди ожидающих, при обычном раскладе «одна качается, одна ждёт»
+        /// ожидающая была единственной, и обе стрелки не делали ровно ничего, оставаясь при
+        /// этом нарисованными и нажимаемыми.
+        /// </para>
+        /// <para>
+        /// Шаг вверх через КАЧАЮЩУЮСЯ позицию — это «начать эту вместо текущей»: текущая
+        /// закачка прерывается и возвращается в очередь следом (см. <see cref="Requeue"/>).
+        /// Прогресс прерванной не теряется — движок докачивает по Range из уцелевших
+        /// .part-файлов.
+        /// </para>
+        /// </summary>
+        /// <param name="gameId">Идентификатор игры.</param>
+        /// <param name="delta">-1 — раньше в очереди, +1 — позже.</param>
+        /// <returns>True, если позиция действительно сдвинулась.</returns>
+        private bool Swap(string gameId, int delta) {
+            IReadOnlyList<QueueItem> snapshot;
+            Entry? interrupted = null;
+            lock (this.gate) {
+                var idx = this.items.FindIndex(e => string.Equals(e.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+                if (idx < 0 || this.items[idx].State != QueueItemState.Waiting) {
+                    // Двигать можно только ожидающую позицию: у качающейся место определяется
+                    // тем, что она уже качается, а не порядком в списке.
+                    return false;
+                }
+
+                var target = idx + delta;
+                if (target < 0 || target >= this.items.Count) {
+                    return false;
+                }
+
+                var neighbour = this.items[target];
+                if (neighbour.State == QueueItemState.Running) {
+                    if (delta > 0) {
+                        // Уйти НИЖЕ качающейся нельзя: она и так впереди — двигать нечего.
+                        return false;
+                    }
+
+                    interrupted = neighbour;
+                }
+                else if (neighbour.State != QueueItemState.Waiting) {
+                    return false;
+                }
+
+                (this.items[idx], this.items[target]) = (this.items[target], this.items[idx]);
+
+                if (interrupted != null) {
+                    // Помечаем ДО отмены: ProcessAsync прочтёт флаг, когда RunAsync вернётся
+                    // по токену, и вернёт позицию в очередь вместо снятия.
+                    interrupted.RequeueRequested = true;
+                    interrupted.Cts?.Cancel();
+                }
+
+                snapshot = this.SnapshotLocked();
+            }
+
+            this.Reordered?.Invoke(snapshot);
+            return true;
+        }
+
+        /// <summary>
+        /// Снимок очереди. Вызывать под <see cref="gate"/>: считает признаки «можно сдвинуть»,
+        /// а они зависят от соседей, то есть от всего списка целиком.
+        /// </summary>
+        /// <returns>Снимок всех позиций в текущем порядке.</returns>
+        private IReadOnlyList<QueueItem> SnapshotLocked() {
+            var result = new List<QueueItem>(this.items.Count);
+            for (var i = 0; i < this.items.Count; i++) {
+                var e = this.items[i];
+                var waiting = e.State == QueueItemState.Waiting;
+
+                // Вверх — если есть кто-то выше (в т.ч. качающаяся: это «начать вместо неё»).
+                var canUp = waiting && i > 0;
+
+                // Вниз — только если ниже стоит такая же ожидающая позиция.
+                var canDown = waiting && i + 1 < this.items.Count && this.items[i + 1].State == QueueItemState.Waiting;
+
+                result.Add(e.ToItem(canUp, canDown, i + 1));
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Возвращает прерванную позицию в очередь: состояние снова «ждёт», счётчик скорости
+        /// сброшен (докачка начнётся с новой оценкой), воркер разбужен — он возьмёт ту
+        /// позицию, которая теперь стоит первой.
+        /// </summary>
+        /// <param name="entry">Прерванная позиция.</param>
+        private void Requeue(Entry entry) {
+            IReadOnlyList<QueueItem> snapshot;
+            lock (this.gate) {
+                entry.RequeueRequested = false;
+                entry.CancelRequested = false;
+                entry.State = QueueItemState.Waiting;
+                entry.StatusText = "Ждёт очереди…";
+                entry.ResetSpeed();
+                snapshot = this.SnapshotLocked();
+            }
+
+            this.Reordered?.Invoke(snapshot);
+            this.workSignal.Release();
         }
 
         /// <summary>Останавливает фоновый воркер. Позиции, которые не успели стартовать, просто пропадают.</summary>
@@ -208,7 +339,12 @@ namespace ChillHub.Core.Game {
 
                 var ui = new GameSyncUi {
                     SetStatus = text => this.RaiseProgress(entry, text),
-                    ReportProgress = (p, _) => this.RaiseProgress(entry, entry.StatusText, p.BytesDownloaded, p.TotalBytes),
+                    // GameSyncRunner зовёт SetStatus только на границах шагов ("Загрузка манифеста…",
+                    // "Сравнение файлов…"), а весь ExecuteAsync — самую долгую часть — отражает
+                    // только через сюда, отчётами с полем Stage. Раньше здесь текст не менялся
+                    // (оставался entry.StatusText как есть), и статус на карточке замирал на
+                    // "Сравнение файлов…" на всё время реального скачивания, пока байты росли.
+                    ReportProgress = (p, _) => this.RaiseProgress(entry, StageText(p.Stage), p.BytesDownloaded, p.TotalBytes),
                 };
 
                 var runner = new GameSyncRunner(this.syncServiceFactory(), ui);
@@ -219,11 +355,19 @@ namespace ChillHub.Core.Game {
                     this.baseApiProvider(),
                     localRoot,
                     game.ExeRelativePath,
-                    IsVersionSwitch: false,
                     ConfirmDeletions: false);
 
                 // entry.Cts всегда назначен в RunWorkerAsync до вызова ProcessAsync — см. gate там.
                 await runner.RunAsync(request, entry.Cts!.Token).ConfigureAwait(false);
+
+                // Прервали, чтобы пропустить вперёд другую позицию — эта возвращается в
+                // очередь, а не снимается: проверяем ДО CancelRequested, потому что
+                // пропуск вперёд тоже отменяет токен.
+                if (entry.RequeueRequested) {
+                    this.Requeue(entry);
+                    return;
+                }
+
                 this.Finish(entry, entry.CancelRequested ? QueueItemState.Cancelled : QueueItemState.Completed, entry.CancelRequested ? "Снята из очереди." : "Готово.");
             }
             catch (Exception ex) {
@@ -231,6 +375,11 @@ namespace ChillHub.Core.Game {
                 // если что-то пошло не так уже в самой очереди (например, отмена), либо если
                 // упала сборка запроса выше.
                 Logging.Logger.Error(ex, $"DownloadQueue.ProcessAsync gid={entry.GameId}");
+                if (entry.RequeueRequested) {
+                    this.Requeue(entry);
+                    return;
+                }
+
                 this.Finish(entry, QueueItemState.Failed, "Не удалось завершить операцию.");
             }
             finally {
@@ -239,10 +388,25 @@ namespace ChillHub.Core.Game {
             }
         }
 
+        /// <summary>
+        /// Переводит <see cref="SyncProgress.Stage"/> (см. значения в SimpleSyncService) в
+        /// текст карточки очереди — тот же набор фраз, что раньше показывал прямой путь через
+        /// StartUpdateAsync у выбранной игры.
+        /// </summary>
+        private static string StageText(string stage) => stage switch {
+            "Checking" => "Проверка…",
+            "Downloading" => "Скачивание обновления…",
+            "Verifying" => "Проверка файлов…",
+            "Activating" => "Применение обновления…",
+            "Completed" => "Готово",
+            _ => stage,
+        };
+
         private void RaiseProgress(Entry entry, string status, long bytesDownloaded = -1, long totalBytes = -1) {
             entry.StatusText = status;
             if (bytesDownloaded >= 0) {
                 entry.BytesDownloaded = bytesDownloaded;
+                entry.UpdateSpeed(bytesDownloaded);
             }
 
             if (totalBytes >= 0) {
@@ -257,10 +421,12 @@ namespace ChillHub.Core.Game {
             // Remove() мог застать позицию ещё Waiting/Running и сообщить об отмене только что
             // успешно завершённой закачки, пока Finish() параллельно ставил ей Completed.
             bool stillPresent;
+            IReadOnlyList<QueueItem> snapshot;
             lock (this.gate) {
                 stillPresent = this.items.Remove(entry);
                 entry.State = state;
                 entry.StatusText = status;
+                snapshot = this.SnapshotLocked();
             }
 
             if (!stillPresent) {
@@ -270,18 +436,25 @@ namespace ChillHub.Core.Game {
             }
 
             this.ItemCompleted?.Invoke(entry.ToItem());
+
+            // Уход позиции меняет «можно сдвинуть» у оставшихся: та, что была под ней,
+            // становится верхней и теряет стрелку вверх.
+            this.Reordered?.Invoke(snapshot);
         }
 
         /// <summary>Внутреннее изменяемое состояние позиции — наружу отдаём только снимки <see cref="QueueItem"/>.</summary>
         private sealed class Entry {
-            internal Entry(string gameId, string title) {
+            internal Entry(string gameId, string title, string iconUrl) {
                 this.GameId = gameId;
                 this.Title = title;
+                this.IconUrl = iconUrl ?? string.Empty;
             }
 
             internal string GameId { get; }
 
             internal string Title { get; }
+
+            internal string IconUrl { get; }
 
             internal QueueItemState State { get; set; } = QueueItemState.Waiting;
 
@@ -293,9 +466,76 @@ namespace ChillHub.Core.Game {
 
             internal bool CancelRequested { get; set; }
 
+            /// <summary>
+            /// Позицию прервали не для снятия, а чтобы пропустить вперёд другую: по возврату
+            /// из RunAsync она обязана вернуться в очередь, а не исчезнуть из неё.
+            /// </summary>
+            internal bool RequeueRequested { get; set; }
+
             internal CancellationTokenSource? Cts { get; set; }
 
-            internal QueueItem ToItem() => new(this.GameId, this.Title, this.State, this.BytesDownloaded, this.TotalBytes, this.StatusText);
+            /// <summary>Сглаженная скорость, Б/с. 0 — ещё не измеряли.</summary>
+            internal double BytesPerSecond { get; private set; }
+
+            /// <summary>Показания предыдущего замера — база для расчёта скорости.</summary>
+            private long lastBytes;
+
+            private long lastTicks;
+
+            /// <summary>
+            /// Пересчитывает скорость по приросту байт с прошлого отчёта, сглаживая
+            /// экспоненциальным средним: мгновенная скорость скачет от чанка к чанку и в
+            /// строке «12,4 МБ/с» дёргалась бы на каждом кадре.
+            /// </summary>
+            /// <param name="bytes">Сколько скачано всего на этот момент.</param>
+            internal void UpdateSpeed(long bytes) {
+                var now = Environment.TickCount64;
+                if (this.lastTicks == 0) {
+                    this.lastTicks = now;
+                    this.lastBytes = bytes;
+                    return;
+                }
+
+                var elapsedMs = now - this.lastTicks;
+                if (elapsedMs < 500) {
+                    // Слишком короткий интервал: деление даёт шум, а не скорость.
+                    return;
+                }
+
+                var delta = bytes - this.lastBytes;
+                this.lastTicks = now;
+                this.lastBytes = bytes;
+                if (delta < 0) {
+                    // Счётчик поехал назад (перезапуск файла) — прежнюю оценку не портим.
+                    return;
+                }
+
+                var instant = delta * 1000.0 / elapsedMs;
+                this.BytesPerSecond = this.BytesPerSecond <= 0
+                    ? instant
+                    : (SpeedEmaAlpha * instant) + ((1 - SpeedEmaAlpha) * this.BytesPerSecond);
+            }
+
+            /// <summary>Сбрасывает измерение скорости: после паузы прежняя оценка не про эту закачку.</summary>
+            internal void ResetSpeed() {
+                this.BytesPerSecond = 0;
+                this.lastTicks = 0;
+                this.lastBytes = 0;
+            }
+
+            internal QueueItem ToItem(bool canMoveUp = false, bool canMoveDown = false, int position = 0)
+                => new(
+                    this.GameId,
+                    this.Title,
+                    this.State,
+                    this.BytesDownloaded,
+                    this.TotalBytes,
+                    this.StatusText,
+                    this.BytesPerSecond,
+                    canMoveUp,
+                    canMoveDown,
+                    this.IconUrl,
+                    position);
         }
     }
 }

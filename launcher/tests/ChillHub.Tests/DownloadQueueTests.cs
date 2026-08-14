@@ -7,6 +7,7 @@ namespace ChillHub.Tests {
     using System;
     using System.Collections.Concurrent;
     using System.Collections.Generic;
+    using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
 
@@ -120,6 +121,110 @@ namespace ChillHub.Tests {
             Assert.Equal(0, removedCount);
             Assert.Equal(1, completedCount);
             Assert.Equal(QueueItemState.Cancelled, lastCompleted!.State);
+        }
+
+        /// <summary>Соседние ожидающие позиции меняются местами и присылают новый порядок целиком.</summary>
+        [Fact]
+        public void MoveUpМеняетМестамиССоседнейОжидающейПозицией() {
+            using var pathScope = new GamesPathScope();
+            var sync = new FakeSync { ExecuteGate = new SemaphoreSlim(0) }; // 'a' держит воркер занятым
+            using var queue = NewQueue(sync, new Dictionary<string, GameInfo> { ["a"] = Game("a"), ["b"] = Game("b"), ["c"] = Game("c") });
+            IReadOnlyList<QueueItem>? lastOrder = null;
+            queue.Reordered += order => lastOrder = order;
+
+            queue.Enqueue("a"); // тут же становится Running
+            queue.Enqueue("b"); // Waiting
+            queue.Enqueue("c"); // Waiting
+
+            Assert.True(queue.MoveUp("c"));
+
+            Assert.NotNull(lastOrder);
+            Assert.Equal(new[] { "a", "c", "b" }, lastOrder!.Select(i => i.GameId));
+
+            sync.ExecuteGate!.Release(10);
+        }
+
+        /// <summary>Саму качающуюся позицию двигать нельзя: её место определяет то, что она уже качается.</summary>
+        [Fact]
+        public async Task КачающуюсяПозициюДвигатьНельзя() {
+            using var pathScope = new GamesPathScope();
+            var sync = new FakeSync { ExecuteGate = new SemaphoreSlim(0) };
+            using var queue = NewQueue(sync, new Dictionary<string, GameInfo> { ["a"] = Game("a"), ["b"] = Game("b") });
+
+            queue.Enqueue("a"); // тут же становится Running
+            await WaitUntil(() => sync.ExecuteStarted, "воркер не начал качать 'a'");
+            queue.Enqueue("b"); // Waiting
+
+            Assert.False(queue.MoveUp("a"));
+            Assert.False(queue.MoveDown("a"));
+
+            // Ниже качающейся уходить некуда: она и так впереди
+            Assert.False(queue.MoveDown("b"));
+
+            sync.ExecuteGate!.Release(10);
+        }
+
+        /// <summary>
+        /// Шаг вверх через качающуюся позицию заменяет текущую закачку: ожидающая встаёт
+        /// первой и стартует, а прерванная возвращается в очередь ожидающей — не снимается.
+        /// <para>
+        /// Прежняя перестановка ходила только среди ожидающих, поэтому при раскладе
+        /// «одна качается, одна ждёт» обе стрелки не делали ничего вообще.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public async Task ШагВверхЧерезКачающуюсяЗаменяетТекущуюЗакачку() {
+            using var pathScope = new GamesPathScope();
+            var sync = new FakeSync { RespectCancellation = true };
+            using var queue = NewQueue(sync, new Dictionary<string, GameInfo> { ["a"] = Game("a"), ["b"] = Game("b") });
+
+            queue.Enqueue("a");
+            await WaitUntil(() => sync.ExecuteStarted, "воркер не начал качать 'a'");
+            queue.Enqueue("b");
+
+            Assert.True(queue.MoveUp("b"), "ожидающую позицию обязано пускать вперёд качающейся");
+
+            // 'b' встала первой и пошла качаться, 'a' вернулась в очередь — но НЕ исчезла
+            await WaitUntil(
+                () => queue.Snapshot().FirstOrDefault(i => i.GameId == "b")?.State == QueueItemState.Running,
+                "'b' должна была начать качаться после замены");
+
+            var snapshot = queue.Snapshot();
+            Assert.Equal(new[] { "b", "a" }, snapshot.Select(i => i.GameId));
+            Assert.Equal(QueueItemState.Waiting, snapshot.Single(i => i.GameId == "a").State);
+        }
+
+        /// <summary>
+        /// Признаки «можно сдвинуть» описывают реальную возможность: верхняя позиция не
+        /// поднимается, нижняя не опускается. Кнопка, которая нажимается и молчит, читается
+        /// как сломанная — а именно так вели себя обе стрелки до правки.
+        /// </summary>
+        [Fact]
+        public async Task ПризнакиСдвигаСоответствуютРеальнойВозможности() {
+            using var pathScope = new GamesPathScope();
+            var sync = new FakeSync { ExecuteGate = new SemaphoreSlim(0) };
+            using var queue = NewQueue(sync, new Dictionary<string, GameInfo> { ["a"] = Game("a"), ["b"] = Game("b"), ["c"] = Game("c") });
+
+            queue.Enqueue("a"); // Running
+            await WaitUntil(() => sync.ExecuteStarted, "воркер не начал качать 'a'");
+            queue.Enqueue("b"); // Waiting
+            queue.Enqueue("c"); // Waiting
+
+            var byId = queue.Snapshot().ToDictionary(i => i.GameId);
+
+            // Качающаяся не двигается вообще
+            Assert.False(byId["a"].CanMoveUp);
+            Assert.False(byId["a"].CanMoveDown);
+
+            // 'b' можно и вверх (заменить текущую), и вниз (под 'c')
+            Assert.True(byId["b"].CanMoveUp);
+            Assert.True(byId["b"].CanMoveDown);
+
+            // 'c' — последняя: вниз некуда
+            Assert.True(byId["c"].CanMoveUp);
+            Assert.False(byId["c"].CanMoveDown);
+
+            sync.ExecuteGate!.Release(10);
         }
 
         /// <summary>Snapshot() отдаёт то, что реально стоит в очереди, а не устаревший кеш.</summary>
