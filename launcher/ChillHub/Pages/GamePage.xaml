@@ -4,23 +4,22 @@
       Title="Игра"
       Background="{DynamicResource Brush.Background}">
   <Page.Resources>
-    <!-- Прогресс-бар в стиле главной страницы -->
-    <SolidColorBrush x:Key="Brush.ProgressBorder" Color="#2B1F4A"/>
-    <SolidColorBrush x:Key="Brush.ProgressTrack" Color="#1A122B"/>
-    <LinearGradientBrush x:Key="Brush.GameAccentGradient" StartPoint="0,0" EndPoint="1,1">
-      <GradientStop Offset="0" Color="#3A2966"/>
-      <GradientStop Offset="1" Color="#8A2A4A"/>
-    </LinearGradientBrush>
+    <!-- Цвета берём из темы, а не из локальных копий. Здесь лежал собственный набор
+         старой палитры — розово-фиолетовый градиент кнопки и толстая полоса прогресса,
+         из-за которых страница игры выглядела приложением из другого проекта. -->
+    <SolidColorBrush x:Key="Brush.ProgressBorder" Color="{DynamicResource Color.Border}"/>
+    <SolidColorBrush x:Key="Brush.ProgressTrack" Color="{DynamicResource Color.Track}"/>
+    <SolidColorBrush x:Key="Brush.GameAccentGradient" Color="{DynamicResource Color.Accent}"/>
 
     <Style x:Key="Style.ProgressBar.Game" TargetType="ProgressBar">
-      <Setter Property="Height" Value="18"/>
+      <Setter Property="Height" Value="4"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ProgressBar">
             <Grid ClipToBounds="True">
-              <Border x:Name="PART_Track" CornerRadius="6" BorderThickness="2.5"
-                      Background="{DynamicResource Brush.ProgressTrack}" BorderBrush="{DynamicResource Brush.ProgressBorder}"/>
-              <Border x:Name="PART_Indicator" CornerRadius="6" Background="{StaticResource Brush.GameAccentGradient}"
+              <Border x:Name="PART_Track" CornerRadius="2" BorderThickness="0"
+                      Background="{DynamicResource Brush.ProgressTrack}"/>
+              <Border x:Name="PART_Indicator" CornerRadius="2" Background="{DynamicResource Brush.Accent}"
                       HorizontalAlignment="Left"/>
             </Grid>
           </ControlTemplate>
@@ -28,40 +27,12 @@
       </Setter>
     </Style>
 
-    <!-- Нейтральная кнопка (быстрые действия, «Назад») -->
-    <Style x:Key="Style.Button.GameGhost" TargetType="Button">
-      <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
-      <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
-      <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="Padding" Value="12,6"/>
-      <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" CornerRadius="6" Background="{TemplateBinding Background}"
-                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
-                <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
-                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
-              </Trigger>
-              <Trigger Property="IsEnabled" Value="False">
-                <Setter Property="Opacity" Value="0.55"/>
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
     <!-- Основная кнопка действия (Установить/Обновить/Отмена) -->
     <Style x:Key="Style.Button.GamePrimary" TargetType="Button">
-      <Setter Property="Background" Value="{StaticResource Brush.GameAccentGradient}"/>
-      <Setter Property="Foreground" Value="#FFEAF1"/>
+      <Setter Property="Background" Value="{DynamicResource Brush.Accent}"/>
+      <!-- Тёмный текст на акценте — как у кнопки действия на витрине. Светло-розовый
+           на градиенте давал контраст ниже читаемого. -->
+      <Setter Property="Foreground" Value="#0C0C10"/>
       <Setter Property="BorderThickness" Value="0"/>
       <Setter Property="BorderBrush" Value="Transparent"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
@@ -70,14 +41,13 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" CornerRadius="6" Background="{TemplateBinding Background}"
+            <Border x:Name="bd" CornerRadius="8" Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.AccentHover}"/>
-                <Setter Property="Foreground" Value="#FFFFFF"/>
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter Property="Opacity" Value="0.55"/>
@@ -115,7 +85,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ListBoxItem">
-            <Border x:Name="bd" CornerRadius="10" BorderThickness="1"
+            <Border x:Name="bd" CornerRadius="12" BorderThickness="1"
                     Background="{DynamicResource Brush.Surface}"
                     BorderBrush="{DynamicResource Brush.Border}">
               <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
@@ -123,7 +93,7 @@
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
                 <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
-                <Setter TargetName="bd" Property="BorderThickness" Value="1.2"/>
+                
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -131,12 +101,6 @@
       </Setter>
     </Style>
 
-    <Style x:Key="Style.NetStep" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
-      <Setter Property="FontSize" Value="13"/>
-      <Setter Property="TextWrapping" Value="Wrap"/>
-      <Setter Property="Margin" Value="0,0,0,6"/>
-    </Style>
   </Page.Resources>
 
   <Grid Margin="16">
@@ -152,8 +116,8 @@
         <ColumnDefinition Width="Auto"/>
         <ColumnDefinition Width="*"/>
       </Grid.ColumnDefinitions>
-      <Button Grid.Column="0" Name="BackBtn" Content="Назад" Width="100" Height="32"
-              Style="{StaticResource Style.Button.GameGhost}" Click="BackBtn_Click" VerticalAlignment="Top"/>
+      <Button Grid.Column="0" Name="BackBtn" Style="{DynamicResource Style.Button.Back}"
+              Click="BackBtn_Click" VerticalAlignment="Top"/>
       <Border Grid.Column="1" Width="64" Height="64" Margin="16,0,0,0" CornerRadius="8"
               Background="{DynamicResource Brush.Surface}" ClipToBounds="True">
         <Grid>
@@ -167,7 +131,7 @@
       <StackPanel Grid.Column="2" Margin="16,0,0,0" VerticalAlignment="Center">
         <TextBlock Name="TitleText" Text="Игра" FontSize="24" FontWeight="Bold"
                    Foreground="{DynamicResource Brush.Title}" TextTrimming="CharacterEllipsis"/>
-        <Border Name="StateBadge" CornerRadius="10" Padding="10,3" Margin="0,6,0,0"
+        <Border Name="StateBadge" CornerRadius="6" Padding="8,3" Margin="0,6,0,0"
                 HorizontalAlignment="Left"
                 Background="{DynamicResource Brush.Surface}"
                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
@@ -235,32 +199,35 @@
                 <Button Name="ActionBtn" Content="Установить" MinWidth="180" Height="40" Margin="0,0,8,8"
                         Style="{StaticResource Style.Button.GamePrimary}" Click="ActionBtn_Click"/>
                 <Button Name="OpenFolderBtn" Content="Открыть папку игры" MinWidth="170" Height="40" Margin="0,0,8,8"
-                        Style="{StaticResource Style.Button.GameGhost}" Click="OpenFolderBtn_Click"/>
+                        Style="{DynamicResource Style.Button.GhostNeutral}" Click="OpenFolderBtn_Click"/>
                 <Button Name="OpenLogsBtn" Content="Открыть логи" MinWidth="140" Height="40" Margin="0,0,0,8"
-                        Style="{StaticResource Style.Button.GameGhost}" Click="OpenLogsBtn_Click"/>
+                        Style="{DynamicResource Style.Button.GhostNeutral}" Click="OpenLogsBtn_Click"/>
               </WrapPanel>
               <TextBlock Name="StatusText" Text="Готов" FontWeight="SemiBold" FontSize="14" Margin="0,4,0,0"
                          TextWrapping="Wrap" Foreground="{DynamicResource Brush.Text}"/>
-              <ProgressBar Name="SyncProgressBar" Minimum="0" Maximum="100" Value="0" Margin="0,8,0,0"
-                           Style="{StaticResource Style.ProgressBar.Game}"/>
+              <!-- Полосу видно, только пока что-то идёт: в покое она стояла в нуле под
+                   надписью «Готов» и читалась как остановившийся процесс — ровно та же
+                   правка, что и в нижней панели главного экрана. -->
+              <ProgressBar Name="SyncProgressBar" Minimum="0" Maximum="100" Value="0" Margin="0,8,0,0">
+                <ProgressBar.Style>
+                  <Style TargetType="ProgressBar" BasedOn="{StaticResource Style.ProgressBar.Game}">
+                    <Setter Property="Visibility" Value="Visible"/>
+                    <Style.Triggers>
+                      <MultiDataTrigger>
+                        <MultiDataTrigger.Conditions>
+                          <Condition Binding="{Binding Value, RelativeSource={RelativeSource Self}}" Value="0"/>
+                          <Condition Binding="{Binding IsIndeterminate, RelativeSource={RelativeSource Self}}" Value="False"/>
+                        </MultiDataTrigger.Conditions>
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                      </MultiDataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </ProgressBar.Style>
+              </ProgressBar>
               <TextBlock Name="SpeedEtaText" Text="" FontSize="12" Margin="0,6,0,0"
                          Foreground="{DynamicResource Brush.TextSecondary}"/>
               <TextBlock Name="FilesSizeText" Text="" FontSize="12"
                          Foreground="{DynamicResource Brush.TextSecondary}"/>
-            </StackPanel>
-          </Border>
-
-          <!-- Модпак-профиль: первая итерация — только папка модов и доп. аргументы запуска -->
-          <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
-            <StackPanel>
-              <TextBlock Text="Модпак-профиль" Style="{StaticResource Style.SectionHeader}"/>
-              <TextBlock Text="Выбранный профиль применяется при следующем запуске игры с главной страницы."
-                         FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"
-                         Foreground="{DynamicResource Brush.TextSecondary}"/>
-              <ComboBox Name="ModProfileCombo" Width="260" Height="30" HorizontalAlignment="Left"
-                        VerticalContentAlignment="Center"
-                        DisplayMemberPath="Name"
-                        SelectionChanged="ModProfileCombo_SelectionChanged"/>
             </StackPanel>
           </Border>
 
@@ -285,49 +252,6 @@
             </StackPanel>
           </Border>
 
-          <!-- Версии сборки: установка конкретной версии / откат -->
-          <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
-            <StackPanel>
-              <TextBlock Text="Версии сборки" Style="{StaticResource Style.SectionHeader}"/>
-              <TextBlock Text="Здесь можно вернуться на предыдущую сборку. Это не обновление, а переключение версии: файлы будут приведены к состоянию выбранной сборки, часть контента может пропасть."
-                         FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"
-                         Foreground="{DynamicResource Brush.TextSecondary}"/>
-              <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                <ComboBox Name="BuildsCombo" Width="220" Height="30" VerticalContentAlignment="Center"
-                          SelectionChanged="BuildsCombo_SelectionChanged"/>
-                <Button Name="SwitchVersionBtn" Content="Установить выбранную версию" MinWidth="220" Height="30"
-                        Margin="8,0,0,0" IsEnabled="False"
-                        Style="{StaticResource Style.Button.GameGhost}" Click="SwitchVersionBtn_Click"/>
-              </StackPanel>
-              <TextBlock Name="VersionHintText" Text="" FontSize="12" TextWrapping="Wrap"
-                         Foreground="{DynamicResource Brush.TextSecondary}"/>
-            </StackPanel>
-          </Border>
-
-          <!-- Игра по сети -->
-          <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
-            <StackPanel>
-              <TextBlock Text="Игра по сети" Style="{StaticResource Style.SectionHeader}" Margin="0,0,0,10"/>
-
-              <TextBlock Text="Как подключиться" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,6"
-                         Foreground="{DynamicResource Brush.Text}"/>
-              <TextBlock Style="{StaticResource Style.NetStep}" Text="1. Убедитесь, что у вас и у остальных игроков установлена одна и та же версия сборки — номер видно выше в разделе «Сведения»."/>
-              <TextBlock Style="{StaticResource Style.NetStep}" Text="2. Запустите игру с главной страницы лаунчера и дождитесь главного меню."/>
-              <TextBlock Style="{StaticResource Style.NetStep}" Text="3. Откройте раздел сетевой игры и выберите подключение к серверу по адресу, который дал хост (формат «адрес:порт»)."/>
-              <TextBlock Style="{StaticResource Style.NetStep}" Text="4. Если играете по локальной сети — используйте локальный адрес хоста; если через интернет — внешний адрес и проброшенный порт."/>
-              <TextBlock Style="{StaticResource Style.NetStep}" Text="5. Хосту нужно один раз разрешить игру в брандмауэре Windows (сети «Частная» и «Публичная»)."/>
-
-              <TextBlock Text="Если не подключается — проверьте по порядку" FontWeight="SemiBold" FontSize="13"
-                         Margin="0,10,0,6" Foreground="{DynamicResource Brush.Text}"/>
-              <TextBlock Style="{StaticResource Style.NetStep}" Text="• Версия сборки. Разные версии у клиента и хоста — самая частая причина отказа подключения. Сверьте номера и при необходимости выровняйте версию в разделе «Версии сборки»."/>
-              <TextBlock Style="{StaticResource Style.NetStep}" Text="• Порт. Порт по умолчанию должен быть открыт на роутере хоста (проброс портов, TCP и/или UDP — зависит от игры) и не занят другой программой."/>
-              <TextBlock Style="{StaticResource Style.NetStep}" Text="• Брандмауэр и антивирус. Правило для исполняемого файла игры должно разрешать входящие и исходящие соединения. Сторонний антивирус иногда блокирует игру молча."/>
-              <TextBlock Style="{StaticResource Style.NetStep}" Text="• Целостность файлов. Нажмите «Обновить» на этой странице: лаунчер сверит файлы с сервером и докачает повреждённые."/>
-              <TextBlock Style="{StaticResource Style.NetStep}" Text="• Незавершённое обновление. Если сверху написано «Обновление не завершено» — сначала доведите обновление до конца, по сети такая сборка работать не будет."/>
-              <TextBlock Style="{StaticResource Style.NetStep}" Text="• VPN и прокси. Отключите их на время проверки: они часто ломают обнаружение серверов в локальной сети."/>
-              <TextBlock Style="{StaticResource Style.NetStep}" Text="• Логи. Кнопка «Открыть логи» — оттуда удобно приложить файл к сообщению в обратной связи."/>
-            </StackPanel>
-          </Border>
         </StackPanel>
 
         <!-- ПРАВАЯ КОЛОНКА: changelog (новости игры) -->
@@ -348,7 +272,7 @@
                            Foreground="{DynamicResource Brush.TextSecondary}"/>
               </StackPanel>
               <Button Grid.Column="1" Name="RefreshChangelogBtn" Width="32" Height="32"
-                      Style="{StaticResource Style.Button.GameGhost}" Padding="0"
+                      Style="{DynamicResource Style.Button.GhostNeutral}" Padding="0"
                       ToolTip="Обновить историю изменений" Click="RefreshChangelog_Click">
                 <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="13"
                            HorizontalAlignment="Center" VerticalAlignment="Center"/>

@@ -26,6 +26,9 @@ namespace ChillHub.Pages {
 
         private readonly string markdownUrl;
 
+        /// <summary>Название из шапки: им же отсекается дублирующий заголовок в тексте.</summary>
+        private readonly string newsTitle;
+
         // Общий клиент вместо своего на каждую страницу: свой не диспозился и держал сокеты
         private readonly NewsContentClient content = new NewsContentClient(ChillHub.Core.Net.HttpClientProvider.Shared);
 
@@ -35,6 +38,7 @@ namespace ChillHub.Pages {
         public NewsDetailPage(string title, string markdownUrl) {
             this.InitializeComponent();
             this.TitleText.Text = title;
+            this.newsTitle = title;
             this.markdownUrl = markdownUrl;
 
             // WebView2 держит собственный процесс msedgewebview2.exe. Без освобождения
@@ -141,7 +145,7 @@ namespace ChillHub.Pages {
                     return; // страница закрыта, пока грузился markdown
                 }
 
-                var page = NewsPageRenderer.RenderPage(md, this.markdownUrl, palette);
+                var page = NewsPageRenderer.RenderPage(md, this.markdownUrl, palette, this.newsTitle);
 
                 // Ensure runtime background and wire events
                 try {

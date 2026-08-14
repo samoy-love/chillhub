@@ -59,8 +59,9 @@ namespace ChillHub.Core.News {
         /// <param name="markdownUrl">Адрес, откуда он взят: из него берётся база для картинок.</param>
         /// <param name="palette">Цвета темы.</param>
         /// <returns>Готовый html для NavigateToString.</returns>
-        internal static string RenderPage(string markdown, string markdownUrl, NewsPalette palette) {
-            var html = ToHtml(markdown);
+        /// <param name="title">Заголовок, который лаунчер уже показал в шапке страницы (может быть пустым).</param>
+        internal static string RenderPage(string markdown, string markdownUrl, NewsPalette palette, string? title = null) {
+            var html = ToHtml(StripLeadingTitle(markdown, title));
 
             // Ensure absolute URLs like "/assets/..." resolve correctly in WebView2 when using NavigateToString
             // We inject a <base> tag with the origin derived from the markdown URL.
@@ -93,6 +94,39 @@ namespace ChillHub.Core.News {
   }});
 </script>
 </body></html>";
+        }
+
+        /// <summary>
+        /// Убирает первый заголовок первого уровня, если он дословно повторяет название,
+        /// уже показанное в шапке экрана.
+        /// <para>
+        /// Название новости лаунчер рисует сам, а редакторы почти всегда начинают текст
+        /// тем же заголовком — и в открытой новости он стоял дважды подряд. Убираем
+        /// ровно совпадающий и ровно первый: заголовок, отличающийся от названия, — это
+        /// осознанный выбор автора, и трогать его нельзя.
+        /// </para>
+        /// </summary>
+        /// <param name="markdown">Исходный текст новости.</param>
+        /// <param name="title">Название из шапки.</param>
+        /// <returns>Текст без дублирующего заголовка.</returns>
+        internal static string StripLeadingTitle(string markdown, string? title) {
+            if (string.IsNullOrWhiteSpace(markdown) || string.IsNullOrWhiteSpace(title)) {
+                return markdown;
+            }
+
+            var text = markdown.TrimStart('﻿', ' ', '\t', '\r', '\n');
+            if (!text.StartsWith("# ", StringComparison.Ordinal)) {
+                return markdown;
+            }
+
+            var lineEnd = text.IndexOf('\n');
+            var firstLine = lineEnd < 0 ? text : text[..lineEnd];
+            var heading = firstLine[2..].Trim().TrimEnd('#').Trim();
+            if (!string.Equals(heading, title!.Trim(), StringComparison.OrdinalIgnoreCase)) {
+                return markdown;
+            }
+
+            return lineEnd < 0 ? string.Empty : text[(lineEnd + 1)..].TrimStart('\r', '\n');
         }
 
         /// <summary>

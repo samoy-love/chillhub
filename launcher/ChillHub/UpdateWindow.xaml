@@ -53,38 +53,6 @@
         </Setter>
       </Style>
       <!-- Neutral ghost button style (outline) -->
-      <Style x:Key="Style.Button.GhostNeutral" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-        <Setter Property="Background" Value="Transparent"/>
-        <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
-        <Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="Padding" Value="12,6"/>
-        <Setter Property="Template">
-          <Setter.Value>
-            <ControlTemplate TargetType="Button">
-              <Border x:Name="bd" CornerRadius="6" Background="{TemplateBinding Background}"
-                      BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
-                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-              </Border>
-              <ControlTemplate.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                  <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
-                  <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
-                  <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
-                </Trigger>
-                <Trigger Property="IsPressed" Value="True">
-                  <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Pressed}"/>
-                  <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderPressed}"/>
-                </Trigger>
-                <Trigger Property="IsEnabled" Value="False">
-                  <Setter Property="Opacity" Value="0.6"/>
-                </Trigger>
-              </ControlTemplate.Triggers>
-            </ControlTemplate>
-          </Setter.Value>
-        </Setter>
-      </Style>
-
       <!-- ProgressBar styles copied from HomePage (sizes removed) -->
       <Style x:Key="Style.ProgressBar.Verify" TargetType="ProgressBar">
         <Setter Property="Template">
