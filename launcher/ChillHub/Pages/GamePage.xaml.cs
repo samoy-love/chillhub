@@ -370,7 +370,7 @@ namespace ChillHub.Pages {
                 // сам применяет режим работ, поэтому одинаково верно отрабатывает и начало
                 // работ, и их окончание.
                 this.ApplyState(this.currentState);
-                    if (state.Enabled) {
+                if (state.Enabled) {
                     this.StatusText.Text = state.BuildBannerText();
                 }
                 else if (!this.isBusy) {
