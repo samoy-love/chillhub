@@ -75,7 +75,7 @@
         + '<button type="button" class="btn btn-sm ' + (pinned ? 'btn-warning' : 'btn-outline-secondary') + ' gm-pin" title="Закрепить вверху списка">' + (pinned ? '★' : '☆') + '</button>'
         + '<span class="flex-grow-1 text-truncate">' + esc(title) + ' <span class="text-body-secondary small">(' + esc(gid) + ')</span></span>'
         // Снятую с публикации игру видно прямо в списке: иначе единственный
-        // признак того, что её нет в лаунчере, лежит на вкладке «Опасная зона».
+        // признак того, что её нет в лаунчере, лежит на вкладке «Публикация и удаление».
         + (tr.dataset.unpublished === '1' ? '<span class="badge text-bg-secondary" title="Не публикуется в лаунчере">скрыта</span>' : '');
 
       item.addEventListener('click', function (ev) {
@@ -198,7 +198,7 @@
     });
   }
 
-  // ===== "Опасная зона" tab =====
+  // ===== Вкладка «Публикация и удаление» =====
   async function confirmDialog(opts) {
     if (window.askConfirm) return window.askConfirm(opts);
     return Promise.resolve(window.confirm((opts.title || '') + '\n\n' + (opts.body || '')));

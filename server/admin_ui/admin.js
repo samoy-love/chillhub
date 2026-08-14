@@ -2775,6 +2775,7 @@ const TAB_MAP = [
   { btn: 'tabNews',      sec: 'secNews' },
   { btn: 'tabInbox',     sec: 'secInbox' },
   { btn: 'tabMaint',     sec: 'secMaint' },
+  { btn: 'tabBench',     sec: 'secBench' },
   { btn: 'tabMetrics',   sec: 'secMetrics' },
 ];
 
@@ -2851,7 +2852,7 @@ TAB_MAP.forEach((t, i)=>{
 // прошлый раз. Нужно для ссылок из уведомлений о выкатке: "версия
 // опубликована" должно вести прямо на вкладку "Лаунчер", а не на то, что
 // было открыто в последний визит.
-const HASH_TAB_MAP = { launcher:'secLauncher', manifests:'secManifests', news:'secNews', inbox:'secInbox', maint:'secMaint', metrics:'secMetrics' };
+const HASH_TAB_MAP = { launcher:'secLauncher', manifests:'secManifests', news:'secNews', inbox:'secInbox', maint:'secMaint', bench:'secBench', metrics:'secMetrics' };
 function sectionFromHash(){
   const raw = (location.hash || '').replace(/^#/, '').trim().toLowerCase();
   return HASH_TAB_MAP[raw] || null;
