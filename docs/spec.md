@@ -29,7 +29,6 @@
   - [9.2. Проверка целостности игры](#92-проверка-целостности-игры)
   - [9.3. Страница игры и откат на другую версию сборки](#93-страница-игры-и-откат-на-другую-версию-сборки)
   - [9.4. Режим технических работ в клиенте](#94-режим-технических-работ-в-клиенте)
-  - [9.5. Discord Rich Presence](#95-discord-rich-presence)
 - [10. Содержимое контента (content/)](#10-содержимое-контента-content)
 - [11. Инсталлятор (NSIS)](#11-инсталлятор-nsis)
 - [12. Nginx (общее)](#12-nginx-общее)
@@ -363,9 +362,18 @@ Rate limit Public API (`server/cmd/api/main.go`): по умолчанию **600 
 - Предпросмотр файлов версии в UI: чтение `GET /manifests/{gameId}/{version}.json` и древовидный показ.
 - Редактор реестра игр (динамический список):
   - `GET /admin/api/games` — читает/создает `content/manifests/_registry/games.json`.
-  - `POST /admin/api/games/save` — сохраняет `{ items: [{ gameId, title, exeRelativePath, iconUrl }] }`.
+  - `POST /admin/api/games/save` — сохраняет `{ items: [{ gameId, title, exeRelativePath, iconUrl, order, pinned, unpublished }] }`.
   - `GET /admin/api/games/scan` — ищет новые игры по папкам манифестов (исключая `_registry`, `launcher`, `repo`).
+  - `POST /admin/api/games/purge` (форма: `gameId`) — удаляет игру целиком: запись реестра, `content/manifests/{gameId}/` и все распакованные сборки `content/content/{gameId}/`. Необратимо.
   - Загрузка иконки игры: `POST /admin/api/games/icon/upload` (multipart: `gameId`, `file`) → сохраняет `content/manifests/{gameId}/icon.png` и возвращает URL.
+  - `unpublished: true` скрывает игру из публичного `GET /api/games`, оставляя запись и файлы на месте. Значение по умолчанию — `false`: реестры, записанные до появления флага, продолжают публиковаться.
+
+Галерея игры (`server/internal/adminapi/gamegallery`, вкладка «Галерея» в карточке игры):
+- Картинки лежат в `content/content/{gameId}/gallery/`, порядок, подписи и обложка — в `gallery.json` рядом с ними.
+- `POST /admin/api/games/gallery/setCover` (форма: `gameId`, `file`) — ставит обложку **и регистрирует файл в `items`**: лаунчер строит витрину по `items`, и обложка, которой там нет, до него не доезжает.
+- `POST /admin/api/games/gallery/setCaption` (форма: `gameId`, `file`, `caption`) — подпись; отсутствующий файл дописывается в конец `items`.
+- `file` — путь относительно корня галереи, подпапки разрешены (`shots/moon.png`).
+- `delete` и `rename` правят `gallery.json` вместе с диском: удалённая картинка уходит из `items`, а обложка, указывавшая на неё, сбрасывается.
 
 Аутентификация (cookie + JWT, `server/internal/adminapi/auth/auth.go`):
 - `POST /admin/api/auth/login` — тело: `{ username, password }` или `application/x-www-form-urlencoded`.
@@ -550,7 +558,7 @@ UI админки: `server/admin_ui/admin.html` + `admin.js` (Bootstrap 5, те�
 
 [↑ к оглавлению](#оглавление) • [↑ наверх](#техническое-задание-тз--chillhub-mvp)
 - Технологии: C# WPF (.NET 8), NSIS инсталлятор.
-- Конфигурация: `ConfigService.Current` (`launcher/ChillHub/Core/Config.cs`) — `ApiBaseUrl`, `GamesPath`, `DownloadThreads` (2–16), `LastGameId`, `AutoErrorReports`, `DiscordRichPresence`. Путь к файлу — только через `ConfigService.ConfigFilePath`, см. [9.1](#91-данные-клиента-конфиг-и-логи).
+- Конфигурация: `ConfigService.Current` (`launcher/ChillHub/Core/Config.cs`) — `ApiBaseUrl`, `GamesPath`, `DownloadThreads` (2–16), `LastGameId`, `AutoErrorReports`. Путь к файлу — только через `ConfigService.ConfigFilePath`, см. [9.1](#91-данные-клиента-конфиг-и-логи).
 - Self-update:
   - При старте открывается окно `UpdateWindow.xaml.cs`, которое:
     - Читает `GET {ApiBase}/manifests/launcher/latest.json`.
@@ -638,25 +646,6 @@ UI — `Pages/SettingsPage.xaml(.cs)`; та же логика доступна �
   `Current` и поднимает событие `Changed` (в UI‑потоке).
 - Выход из режима автоматический: как только сервер ответил `enabled: false`,
   UI разблокируется без перезапуска клиента.
-
-### 9.5. Discord Rich Presence
-
-`Core/DiscordRichPresence.cs` — минимальный клиент Discord IPC без внешних
-зависимостей (именованный канал `\\.\pipe\discord-ipc-N`, N = 0..9).
-
-- Показывает в статусе Discord название игры, версию сборки и время сессии.
-- **Требуется Application ID владельца лаунчера.** Заведите приложение на
-  <https://discord.com/developers/applications>, скопируйте «Application ID» и
-  подставьте его в константу `ApplicationId` в `Core/DiscordRichPresence.cs`.
-  Пока значение пустое (или не состоит из цифр), `IsConfigured` = false и
-  интеграция просто не активируется — ни ошибок, ни задержек это не вызывает.
-  Картинку для статуса можно загрузить там же (Rich Presence → Art Assets) с ключом
-  `chillhub` (константа `LargeImageKey`).
-- Пользовательский переключатель: «Настройки» → «Интеграции»
-  (`AppConfig.DiscordRichPresence`, по умолчанию `true`).
-- Всё строго опционально и неблокирующе: Discord не запущен, канал недоступен или
-  протокол изменился — молча пишем в лог. Таймауты: 300 мс на подключение к одному
-  каналу, 3 с на операцию целиком.
 
 ## 10. Содержимое контента (content/)
 - Манифесты: `content/manifests/{gameId}/{version}.json`, `latest.json`.
@@ -838,7 +827,6 @@ Secrets для CI/CD: `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`.
   - Проверка целостности игры: `launcher/ChillHub/Core/Sync/IntegrityChecker.cs`
   - Конфиг и логи: `launcher/ChillHub/Core/Config.cs`, `launcher/ChillHub/Core/Logging/Logger.cs`
   - Режим техработ: `launcher/ChillHub/Core/Maintenance/MaintenanceService.cs`
-  - Discord Rich Presence: `launcher/ChillHub/Core/DiscordRichPresence.cs`
   - Главная страница: `launcher/ChillHub/Pages/HomePage.xaml.cs`; страница игры: `launcher/ChillHub/Pages/GamePage.xaml.cs`; настройки: `launcher/ChillHub/Pages/SettingsPage.xaml.cs`
 - Апдейтер и preserve‑правила: `updater/Program.cs`, `updater/UpdatePreserve.cs`, тест `updater/tests/ManifestPreserveCheck`
 - Инсталлятор: `scripts/installer.nsi`
