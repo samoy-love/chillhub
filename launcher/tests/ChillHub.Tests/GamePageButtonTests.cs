@@ -22,7 +22,7 @@ namespace ChillHub.Tests {
     /// Кнопки страницы игры: доступность после закачки и подпись после техработ.
     /// <para>
     /// Оба сценария живут в code-behind <c>GamePage.xaml.cs</c>, а не в вынесенной чистой
-    /// логике (<see cref="ChillHub.Core.Game.VersionSwitch"/>/<c>GameStateResolver</c>),
+    /// логике (<c>GameStateResolver</c>),
     /// поэтому чистыми юнит-тестами их не закрыть — баг был именно в том, КАК страница
     /// вызывает уже корректную логику. Страница поднимается по-настоящему на выделенном
     /// STA-потоке с диспетчером (<see cref="UiThread"/>), сеть отрезана заведомо мёртвым
@@ -48,39 +48,6 @@ namespace ChillHub.Tests {
             // в тест не уходит.
             ConfigService.TrySave(new AppConfig { ApiBaseUrl = "http://127.0.0.1:1/", GamesPath = ConfigService.Current.GamesPath }, out _);
             return new GamePage(game);
-        }
-
-        /// <summary>
-        /// B1: кнопка смены версии не должна залипать после конца закачки.
-        /// <para>
-        /// Раньше доступность считалась как <c>!busy &amp;&amp; SwitchVersionBtn.IsEnabled</c> —
-        /// второй операнд читал текущее значение контрола. Пока шла закачка, оно уже было
-        /// false (первый вызов SetBusy(true) его туда и поставил), поэтому SetBusy(false)
-        /// получал <c>true &amp;&amp; false</c> и кнопка не оживала никогда, до ухода со страницы.
-        /// </para>
-        /// </summary>
-        [Fact]
-        public void КнопкаСменыВерсииОживаетПослеЗакачки() {
-            using var cfgDir = new ConfigDirsScope();
-            UiThread.Run(() => {
-                var game = new GameInfo { GameId = "probe-game", LatestVersion = "1.2.0", IsInstalled = true, InstalledVersion = "1.1.0" };
-                var page = NewPage(game);
-
-                SetPrivateField(page, "localVersion", "1.1.0");
-                var combo = (ComboBox)typeof(GamePage).GetField("BuildsCombo", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(page)!;
-                combo.ItemsSource = new List<string> { "1.2.0", "1.1.0" };
-                combo.SelectedItem = "1.2.0";
-                InvokePrivate(page, "UpdateVersionSwitchAvailability");
-
-                var switchBtn = (Button)typeof(GamePage).GetField("SwitchVersionBtn", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(page)!;
-                Assert.True(switchBtn.IsEnabled, "предусловие: выбрана не установленная версия — кнопка обязана быть живой до закачки");
-
-                InvokePrivate(page, "SetBusy", true);
-                Assert.False(switchBtn.IsEnabled, "во время закачки кнопка обязана быть недоступна");
-
-                InvokePrivate(page, "SetBusy", false);
-                Assert.True(switchBtn.IsEnabled, "после закачки кнопка обязана снова стать доступной, а не залипать");
-            });
         }
 
         /// <summary>

@@ -20,7 +20,6 @@ namespace ChillHub.Core.Game {
     /// <param name="BaseApi">База API из конфига.</param>
     /// <param name="LocalRoot">Папка игры на диске.</param>
     /// <param name="ExeRelativePath">Путь к exe игры внутри папки — по нему проверяется, не запущена ли игра.</param>
-    /// <param name="IsVersionSwitch">Операция начата из блока переключения версии.</param>
     /// <param name="ConfirmDeletions">Спросить перед удалением файлов, которых нет в версии.</param>
     internal sealed record GameSyncRequest(
         string GameId,
@@ -28,7 +27,6 @@ namespace ChillHub.Core.Game {
         string BaseApi,
         string LocalRoot,
         string? ExeRelativePath,
-        bool IsVersionSwitch,
         bool ConfirmDeletions);
 
     /// <summary>
@@ -117,7 +115,7 @@ namespace ChillHub.Core.Game {
                     return;
                 }
 
-                Logging.Logger.Info($"GamePage.StartSync gid={gid} version={version} switch={request.IsVersionSwitch}");
+                Logging.Logger.Info($"GamePage.StartSync gid={gid} version={version}");
                 this.ui.SetStatus("Загрузка манифеста…");
                 this.ui.SetIndeterminate(true);
 
@@ -161,7 +159,7 @@ namespace ChillHub.Core.Game {
                 this.WriteLocalVersion(gid, version);
                 GameLocalStateChanges.MarkChanged();
 
-                this.ui.SetStatus(request.IsVersionSwitch ? $"Готово. Установлена версия {version}." : "Готово.");
+                this.ui.SetStatus("Готово.");
                 this.ui.SetSpeedEta(string.Empty);
                 Logging.Logger.Info($"GamePage.StartSync done gid={gid} version={version}");
             }

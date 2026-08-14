@@ -39,17 +39,6 @@ namespace ChillHub.Tests {
             Assert.Equal("Готово.", probe.LastStatus);
         }
 
-        /// <summary>Переключение версии называет версию в итоговом сообщении — иначе непонятно, что встало.</summary>
-        [Fact]
-        public async Task ПереключениеВерсииНазываетУстановленнуюВерсию() {
-            var probe = new UiProbe();
-            var runner = NewRunner(new FakeSync(), probe, out _);
-
-            await runner.RunAsync(Request(isVersionSwitch: true), CancellationToken.None);
-
-            Assert.Equal("Готово. Установлена версия 1.2.0.", probe.LastStatus);
-        }
-
         /// <summary>
         /// Успешная операция помечает локальное состояние изменённым: по этому признаку
         /// главная страница перечитывает статусы игр, иначе после возврата она показывает
@@ -370,7 +359,6 @@ namespace ChillHub.Tests {
         }
 
         private static GameSyncRequest Request(
-            bool isVersionSwitch = false,
             bool confirmDeletions = false,
             string? exeRelativePath = null)
             => new GameSyncRequest(
@@ -379,7 +367,6 @@ namespace ChillHub.Tests {
                 "https://example.test",
                 @"C:\games\game",
                 exeRelativePath,
-                isVersionSwitch,
                 confirmDeletions);
 
         private static DiffPlan PlanWith(long totalBytes = 0, List<string>? toDelete = null)
