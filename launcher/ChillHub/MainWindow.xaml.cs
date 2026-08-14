@@ -115,7 +115,11 @@ namespace ChillHub {
                 }
 
                 e.Cancel = true;
-                this.EnsureTray().Show();
+                var trayIcon = this.EnsureTray();
+                // Имя подставляем в момент ухода в трей: пока окно на экране, меню
+                // никто не видит, а выбранная игра до этого могла смениться.
+                trayIcon.SetCurrentGame(this.CurrentHome?.SelectedGameTitle);
+                trayIcon.Show();
                 this.Hide();
             }
             catch (Exception ex) {
@@ -132,8 +136,8 @@ namespace ChillHub {
 
             var t = new TrayService();
             t.OpenRequested += (s, e) => this.RestoreFromTray();
-            t.PlayRequested += (s, e) => this.RestoreFromTray(); // TODO: запуск текущей игры напрямую, минуя открытие окна
-            t.CheckUpdatesRequested += (s, e) => this.RestoreFromTray(); // TODO: реальная проверка обновлений из трея
+            t.PlayRequested += (s, e) => this.PlayFromTray();
+            t.CheckUpdatesRequested += (s, e) => this.CheckUpdatesFromTray();
             t.ExitRequested += (s, e) => {
                 this.exitRequested = true;
                 t.Hide();
@@ -143,11 +147,62 @@ namespace ChillHub {
             return t;
         }
 
+        /// <summary>Главная страница, если она сейчас в кадре: меню трея работает через неё.</summary>
+        private Pages.HomePage? CurrentHome => this.ContentFrame?.Content as Pages.HomePage;
+
+        /// <summary>
+        /// Пункт «Играть» из трея. Готовую игру запускает, не поднимая окно — ровно за этим
+        /// пункт и нужен. Если играть пока нельзя (идёт установка, требуется обновление,
+        /// статус ещё проверяется), окно показываем: действие всё равно потребует внимания.
+        /// </summary>
+        private void PlayFromTray() {
+            var home = this.CurrentHome;
+            if (home == null) {
+                this.RestoreFromTray();
+                return;
+            }
+
+            if (!home.CanPlaySelectedGame) {
+                this.RestoreFromTray();
+            }
+
+            home.InvokeSelectedAction();
+        }
+
+        /// <summary>
+        /// Пункт «Проверить обновления» из трея: перечитывает список игр и заново сверяет их
+        /// статусы. Окно поднимаем — проверка идёт с индикатором и может закончиться
+        /// предложением обновиться, а сообщать об этом некуда, пока окно спрятано.
+        /// </summary>
+        private void CheckUpdatesFromTray() {
+            this.RestoreFromTray();
+            this.CurrentHome?.RefreshGamesAndStatuses();
+        }
+
         /// <summary>Возвращает окно из трея на экран.</summary>
         private void RestoreFromTray() {
             this.tray?.Hide();
             this.Show();
             this.WindowState = WindowState.Normal;
+            this.Activate();
+        }
+
+        /// <summary>
+        /// Реакция на повторный запуск лаунчера (ярлык, вторая копия), пока этот экземпляр уже
+        /// жив — см. <see cref="Core.SingleInstance.StartListeningForShowRequests"/>. Если окно
+        /// сейчас в трее — поднимает его оттуда; если уже на экране — просто выводит на передний
+        /// план, чтобы повторный клик по ярлыку не выглядел так, будто ничего не произошло.
+        /// </summary>
+        internal void ShowAndActivate() {
+            if (!this.IsVisible) {
+                this.RestoreFromTray();
+                return;
+            }
+
+            if (this.WindowState == WindowState.Minimized) {
+                this.WindowState = WindowState.Normal;
+            }
+
             this.Activate();
         }
 
