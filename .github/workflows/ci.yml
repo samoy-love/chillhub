@@ -483,21 +483,45 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project:
-          - launcher/ChillHub
-          - launcher/tests/ChillHub.Tests
-          - updater
-          - updater/tests/ManifestPreserveCheck
+        # cache задаётся ПОПРОЕКТНО, а не одним `cache: true` на всю матрицу.
+        #
+        # У updater и его теста НОЛЬ PackageReference. Восстанавливать им
+        # нечего, поэтому C:\Users\runneradmin\.nuget\packages не создаётся
+        # никогда — а post-шаг setup-dotnet идёт сохранять кеш этой папки и
+        # падает: «Cache folder path is retrieved for .NET CLI but doesn't
+        # exist on disk». Проверка при этом зелёная, красный — уже уборка
+        # после неё.
+        #
+        # Почему это вылезало не всегда: ключ кеша считается по
+        # cache-dependency-path, то есть по всем *.csproj репозитория. Пока
+        # csproj не менялись, кеш попадал, папку создавало восстановление, и
+        # post-шаг проходил. Любая правка csproj — прежде всего ПОДЪЁМ ВЕРСИИ
+        # ЛАУНЧЕРА — сбрасывает ключ, восстанавливать становится нечего, и обе
+        # updater-задачи краснеют. Отсюда закономерность: релизные PR (#90,
+        # #93) валились, а те, что csproj не трогали (#91, #92), были зелёными.
+        include:
+          - project: launcher/ChillHub
+            cache: true
+          - project: launcher/tests/ChillHub.Tests
+            cache: true
+          - project: updater
+            cache: false
+          - project: updater/tests/ManifestPreserveCheck
+            cache: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '8.0.x'
-          cache: true
-          cache-dependency-path: |
-            **/*.csproj
-            **/packages.lock.json
+          cache: ${{ matrix.cache }}
+          # Путь задаётся только там, где кеш включён: с cache: false он не
+          # нужен, а лишний вход у выключенной функции — приглашение к
+          # рассинхрону, когда кеш когда-нибудь вернут.
+          #
+          # packages.lock.json в шаблоне не осталось: в репозитории нет ни
+          # одного такого файла, и он лишь размывал ключ.
+          cache-dependency-path: ${{ matrix.cache && '**/*.csproj' || '' }}
       - name: Code style check (dotnet format)
         working-directory: ${{ matrix.project }}
         # Blocking as of the launcher/** formatting cleanup: the tree is fully
