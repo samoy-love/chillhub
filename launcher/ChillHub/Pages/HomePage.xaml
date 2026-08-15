@@ -608,8 +608,16 @@
           <!-- Контейнер строки списка/скелетона с тёмным фоном -->
           <!-- MaxHeight — потолок, за которым список начинает прокручиваться сам.
                Без него строка «Auto» растила бы сайдбар под любое число игр и
-               выдавливала подвал за пределы окна. -->
-          <Grid Grid.Row="2" MaxHeight="560" Background="{DynamicResource Brush.Surface}">
+               выдавливала подвал за пределы окна. Фиксированные 560px не давали
+               списку сжаться на невысоком окне: подвал с кнопкой «Поделиться
+               идеей» вылезал за пределы карточки и пряталась за очередью загрузок
+               снизу. Доля высоты окна, как у витрины и очереди, — на невысоком
+               окне список сам уступает место шапке, поиску и подвалу и включает
+               собственный скролл. -->
+          <Grid Grid.Row="2"
+                MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=Page},
+                                    Converter={StaticResource HeightShareConv}, ConverterParameter=0.45}"
+                Background="{DynamicResource Brush.Surface}">
             <!-- Skeleton loader для списка игр -->
             <StackPanel Name="GamesSkeleton" Margin="{StaticResource Skeleton.GameTopOffsetThickness}">
               <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.GameRowHeight}"/>
