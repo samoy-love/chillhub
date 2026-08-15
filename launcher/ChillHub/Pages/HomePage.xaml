@@ -518,8 +518,13 @@
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="Auto"/>
-      <RowDefinition Height="*"/>
-      <RowDefinition Height="Auto"/>
+      <!-- MinHeight держит ленту новостей видимой, даже когда очередь загрузок снизу
+           разрослась: без него Auto-строка BottomBar забирала себе сколько хотела (до
+           своего MaxHeight), а этой строке доставался остаток вплоть до нуля. -->
+      <RowDefinition Height="*" MinHeight="260"/>
+      <!-- MaxHeight не даёт очереди загрузок вытеснить новости целиком: дальше него
+           QueueDock уходит во внутренний скролл (см. ScrollViewer там же). -->
+      <RowDefinition Height="Auto" MaxHeight="240"/>
     </Grid.RowDefinitions>
 
     <!-- Селекторы игры и сборки перенесены в левую колонку центральной области -->
@@ -824,7 +829,8 @@
             <!-- Обложка из галереи игры (GalleryClient): показывается, когда gallery.json
                  отдал хотя бы одну картинку, иначе остаётся Collapsed и виден только градиент фона. -->
             <Image x:Name="HeroCoverImg" Grid.Row="0" Grid.RowSpan="2" Stretch="UniformToFill"
-                   Opacity="0.5" Visibility="Collapsed" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+                   Opacity="0.5" Visibility="Collapsed" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                   Margin="-16"/>
 
             <!-- Затемнение под текстом: белый заголовок обязан читаться на любой обложке,
                  а не только на тёмной. -->
@@ -909,7 +915,6 @@
                        FontSize="12" Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,4,0,0"/>
           </StackPanel>
           <ListBox Name="GameNewsList" SelectionChanged="GameNewsList_SelectionChanged" Visibility="Collapsed" Padding="0,0,6,0"
-                   MaxWidth="1000" HorizontalAlignment="Left"
                  ScrollViewer.VerticalScrollBarVisibility="Visible"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                  ScrollViewer.CanContentScroll="False"
@@ -997,7 +1002,6 @@
             <Border Style="{DynamicResource Style.Skeleton}" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
           </StackPanel>
           <ListBox Grid.Row="0" Name="LauncherNewsList" SelectionChanged="LauncherNewsList_SelectionChanged" Visibility="Collapsed" Padding="0,0,6,0"
-                   MaxWidth="1000" HorizontalAlignment="Left"
                  ScrollViewer.VerticalScrollBarVisibility="Visible"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                  ScrollViewer.CanContentScroll="False"
