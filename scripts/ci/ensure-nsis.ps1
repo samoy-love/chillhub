@@ -31,9 +31,21 @@
 # пакета: у Chocolatey старые версии со временем перестают отдаваться.
 # Если это начнёт повторяться, следующий шаг — тянуть NSIS с постоянного
 # адреса (SourceForge) и проверять контрольную сумму, а не через choco.
+#
+# 15.08.2026: начало повторяться — четыре падения за один день (504, 499,
+# «package not found»), каждый раз без единой правки в репозитории. Постоянный
+# источник с проверкой суммы остаётся правильным следующим шагом, но пока не
+# сделан: SourceForge отдаёт ботам 403 через Cloudflare, а прописать в CI
+# контрольную сумму, которую не удалось честно проверить самому — риск хуже
+# исходной проблемы (один неверный хеш навсегда ломает сборку установщика).
+# Пока вместо постоянного источника — несколько попыток choco с паузой:
+# сегодняшние сбои были похожи на окно нестабильности в несколько минут, а
+# не на постоянную недоступность (соседние прогоны в тот же день проходили).
 $ErrorActionPreference = 'Stop'
 $NsisVersion = '3.12.0'
 $NsisDir = 'C:\Program Files (x86)\NSIS'
+$ChocoMaxAttempts = 4
+$ChocoRetryDelaySeconds = 45
 
 # PATH правится ДВАЖДЫ, и обе правки нужны:
 #   * $env:PATH — для текущего процесса: вызывающий может собрать установщик
@@ -52,10 +64,30 @@ if (Get-Command makensis -ErrorAction SilentlyContinue) {
     Add-NsisToPath
 } else {
     Write-Host "makensis not found, installing NSIS $NsisVersion via Chocolatey"
-    choco install nsis --version=$NsisVersion --no-progress -y
-    if ($LASTEXITCODE -ne 0) {
-        throw "choco install nsis --version=$NsisVersion failed. Если версия больше не публикуется, обновите `$NsisVersion в этом скрипте (choco list nsis --all-versions)."
+
+    # Сам choco при недоступности фида отдаёт финальную ошибку сразу, без
+    # собственных повторов — а виденные сегодня сбои (504, 499, «not found»)
+    # исчезали за минуты. Несколько попыток с паузой обходятся дёшево:
+    # успешная установка со второй-третьей попытки не отличается от успеха
+    # с первой, а вот падение всей сборки установщика — заметно дороже.
+    $installed = $false
+    for ($attempt = 1; $attempt -le $ChocoMaxAttempts; $attempt++) {
+        choco install nsis --version=$NsisVersion --no-progress -y
+        if ($LASTEXITCODE -eq 0) {
+            $installed = $true
+            break
+        }
+
+        if ($attempt -lt $ChocoMaxAttempts) {
+            Write-Host "choco install nsis не удался (попытка $attempt из $ChocoMaxAttempts, exit $LASTEXITCODE), повтор через $ChocoRetryDelaySeconds с..."
+            Start-Sleep -Seconds $ChocoRetryDelaySeconds
+        }
     }
+
+    if (-not $installed) {
+        throw "choco install nsis --version=$NsisVersion failed after $ChocoMaxAttempts attempts. Если версия больше не публикуется, обновите `$NsisVersion в этом скрипте (choco list nsis --all-versions); если фид просто лежит дольше обычного — см. комментарий вверху файла про постоянный источник (SourceForge)."
+    }
+
     Add-NsisToPath
 }
 
