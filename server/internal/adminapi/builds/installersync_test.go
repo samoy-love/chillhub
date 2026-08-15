@@ -68,6 +68,56 @@ func TestPackagingScriptPreserveFilesMatchServer(t *testing.T) {
 	}
 }
 
+// TestInstallerCleanupKeepsExactlyThePreserveFiles guards the third copy of the
+// list inside installer.nsi itself. Installing over an existing installation now
+// wipes the directory first (File /r never deletes, so files dropped between
+// versions used to pile up forever), and the wipe skips the preserve files by
+// name.
+//
+// Miss one and the wipe eats state the updater is contractually forbidden to
+// rewrite: launcher.version disappears and the launcher no longer knows what it
+// is running. Keep one too many and a stale build file survives every upgrade —
+// exactly the problem the wipe was added to solve.
+func TestInstallerCleanupKeepsExactlyThePreserveFiles(t *testing.T) {
+	got := lowerSorted(nsisCleanupKeptFiles(t))
+	want := lowerSorted(LauncherStateFiles)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("cleanup skip-list in installer.nsi and the preserve list have diverged:\n"+
+			"  scripts/installer.nsi (CleanPreviousInstall) = %v\n"+
+			"  server (LauncherStateFiles)                  = %v\n"+
+			"Missing entries are deleted on every upgrade; extra ones survive it forever.",
+			got, want)
+	}
+}
+
+var (
+	nsisCleanupFnRe = regexp.MustCompile(`(?s)Function CleanPreviousInstall(.*?)FunctionEnd`)
+	nsisStrCmpRe    = regexp.MustCompile(`StrCmp\s+\$1\s+"([^"]+)"`)
+)
+
+// nsisCleanupKeptFiles extracts the file names CleanPreviousInstall refuses to
+// delete, minus the two directory entries every FindFirst loop has to skip.
+func nsisCleanupKeptFiles(t *testing.T) []string {
+	t.Helper()
+	src := repoFile(t, "scripts", "installer.nsi")
+	m := nsisCleanupFnRe.FindStringSubmatch(src)
+	if m == nil {
+		t.Fatal("cannot find Function CleanPreviousInstall in scripts/installer.nsi; the guard is broken, fix it rather than deleting it")
+	}
+	var out []string
+	for _, item := range nsisStrCmpRe.FindAllStringSubmatch(m[1], -1) {
+		switch item[1] {
+		case ".", "..":
+			continue
+		}
+		out = append(out, item[1])
+	}
+	if len(out) == 0 {
+		t.Fatal("parsed zero preserved names from CleanPreviousInstall; the guard would then pass against an empty list too")
+	}
+	return out
+}
+
 // repoFile reads a file addressed from the repository root. The package sits a
 // few directories down, and the test binary's working directory is the package
 // directory.

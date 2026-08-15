@@ -290,7 +290,7 @@ function New-LauncherPayload {
     }
 }
 
-# ПОДПИСЬ УСТАНОВЩИКА (docs/installer-signing.md).
+# ПОДПИСЬ УСТАНОВЩИКА (docs/installer.md).
 #
 # Установщик не подписан, и это самая заметная для пользователя проблема
 # дистрибутива: SmartScreen встречает каждого скачавшего экраном «Windows
@@ -342,7 +342,7 @@ function Invoke-SignArtifact {
     param([Parameter(Mandatory = $true)][string]$Path)
 
     if ($env:CHILLHUB_SIGN -ne '1') {
-        Write-Warning "Артефакт НЕ ПОДПИСАН: CHILLHUB_SIGN не выставлен. У пользователя SmartScreen покажет «Издатель: неизвестен» (см. docs/installer-signing.md)."
+        Write-Warning "Артефакт НЕ ПОДПИСАН: CHILLHUB_SIGN не выставлен. У пользователя SmartScreen покажет «Издатель: неизвестен» (см. docs/installer.md)."
         return
     }
 
@@ -642,7 +642,22 @@ if ($SkipInstaller) {
 # на каждой сборке, чем держать в репозитории. Если сети нет — не валимся:
 # установщик соберётся без него, ровно как раньше, но об этом будет сказано вслух.
 function Ensure-WebView2Bootstrapper {
-    param([Parameter(Mandatory = $true)][string]$RedistDir)
+    param(
+        [Parameter(Mandatory = $true)][string]$RedistDir,
+        # ОТСУТСТВИЕ ЗАВИСИМОСТИ В РЕЛИЗЕ — ОШИБКА, А НЕ ПРЕДУПРЕЖДЕНИЕ.
+        #
+        # Здесь был только Write-Warning, а в installer.nsi — `File /nonfatal`.
+        # Вдвоём это ровно та комбинация, из-за которой однажды уже выложили
+        # установщик без зависимостей вообще: сеть моргнула на раннере, сборка
+        # прошла зелёной, файл уехал на сайт, и у тех, у кого WebView2 нет,
+        # молча не открываются новости. Предупреждение в логе УСПЕШНОЙ сборки
+        # не читает никто — на то оно и успешная.
+        #
+        # Для нерелизных сборок (0.0.0-ci, локальная проверка «собирается ли»)
+        # остаётся предупреждение: там артефакт никуда не публикуется, и ронять
+        # проверку из-за сети незачем.
+        [switch]$Required
+    )
 
     $target = Join-Path $RedistDir 'MicrosoftEdgeWebview2Setup.exe'
     if (Test-Path -LiteralPath $target) {
@@ -670,16 +685,31 @@ function Ensure-WebView2Bootstrapper {
         Write-Host "WebView2 bootstrapper: готов ($mb МБ)" -ForegroundColor Green
     }
     catch {
+        if ($Required) {
+            throw @"
+WebView2 bootstrapper не скачан: $($_.Exception.Message)
+
+Это РЕЛИЗНАЯ сборка, а без bootstrapper'а установщик выложится без
+зависимости: у всех, у кого нет WebView2 Runtime (в основном Windows 10 без
+свежего Edge), в лаунчере молча не откроются новости.
+
+Как чинить: повторить сборку, когда сеть доступна, либо положить файл руками в
+$RedistDir (официальная ссылка: https://go.microsoft.com/fwlink/p/?LinkId=2124703).
+"@
+        }
         Write-Warning "WebView2 bootstrapper не скачан: $($_.Exception.Message)"
-        Write-Warning "Установщик соберётся без него — на машине без WebView2 не откроются новости."
+        Write-Warning "Сборка нерелизная — продолжаю без него. На машине без WebView2 не откроются новости."
     }
 }
 
-Ensure-WebView2Bootstrapper -RedistDir (Join-Path (Split-Path $Installer -Parent) 'Redist')
-
-# Резолвим версию ДО поиска makensis: если версии нет, падать надо сразу, а не
-# после того, как найден компилятор и созданы выходные каталоги.
+# Резолвим версию ДО поиска makensis и до подготовки зависимостей: если версии
+# нет, падать надо сразу, а не после того, как найден компилятор и созданы
+# выходные каталоги. Заодно версия отвечает на вопрос, релиз это или проверка
+# сборки, — от этого зависит, ошибка или предупреждение отсутствующий WebView2.
 $resolvedVersion = Resolve-AppVersion -Explicit $AppVersion -BuildOutputDir $BuildOutputDir
+$isReleaseBuild = -not ($resolvedVersion -like '0.0.0*')
+
+Ensure-WebView2Bootstrapper -RedistDir (Join-Path (Split-Path $Installer -Parent) 'Redist') -Required:$isReleaseBuild
 
 $makensis = Find-Makensis -ExplicitPath $MakensisPath
 # Resolve to full path and ensure string type

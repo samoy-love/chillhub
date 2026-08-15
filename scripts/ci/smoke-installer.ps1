@@ -51,11 +51,15 @@ function Test-Assert {
 # аргумент с пробелом сам, молча ломая ключ, поэтому путь с пробелом сюда
 # передавать нельзя — лучше отказаться сразу и внятно.
 function Invoke-SilentInstall {
-    param([string]$SetupExe, [string]$Dir)
+    param([string]$SetupExe, [string]$Dir, [string]$GamesDir)
     if ($Dir -match '\s') {
         throw "Каталог установки '$Dir' содержит пробел: ключ NSIS /D= таким путём пользоваться не умеет. Передайте -InstallDir без пробелов."
     }
-    $p = Start-Process -FilePath $SetupExe -ArgumentList '/S', "/D=$Dir" -PassThru -Wait
+    # /D= обязан быть последним — всё, что после него, NSIS считает путём.
+    $args = @('/S')
+    if ($GamesDir) { $args += "/GAMESDIR=$GamesDir" }
+    $args += "/D=$Dir"
+    $p = Start-Process -FilePath $SetupExe -ArgumentList $args -PassThru -Wait
     return $p.ExitCode
 }
 
@@ -144,10 +148,12 @@ $hadAppKey = Test-Path -LiteralPath $AppKey
 if ($hadUninstKey) { reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\ChillHub" (Join-Path $snapshotDir 'uninst.reg') /y | Out-Null }
 if ($hadAppKey) { reg export "HKCU\Software\ChillHub\Install" (Join-Path $snapshotDir 'app.reg') /y | Out-Null }
 
+$gamesDir = Join-Path ([IO.Path]::GetTempPath().TrimEnd('\')) ("chillhub-smoke-games-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+
 try {
     # ---------------------------------------------------------------- установка
     Write-Host "[smoke] тихая установка в $InstallDir" -ForegroundColor Cyan
-    $code = Invoke-SilentInstall -SetupExe $setupPath -Dir $InstallDir
+    $code = Invoke-SilentInstall -SetupExe $setupPath -Dir $InstallDir -GamesDir $gamesDir
     Test-Assert -What "установщик завершился успешно" -Condition ($code -eq 0) -Detail "код возврата $code"
 
     Test-Assert -What "ChillHub.exe на месте" -Condition (Test-Path -LiteralPath (Join-Path $InstallDir 'ChillHub.exe'))
@@ -191,23 +197,68 @@ try {
     $startMenu = Join-Path ([Environment]::GetFolderPath('Programs')) 'ChillHub\ChillHub.lnk'
     Test-Assert -What "ярлык в меню «Пуск» создан" -Condition (Test-Path -LiteralPath $startMenu)
 
+    if ($reg) {
+        Test-Assert -What "ссылка на сайт есть в записи списка программ" -Condition ($reg.URLInfoAbout -like 'http*') -Detail "'$($reg.URLInfoAbout)'"
+    }
+
+    $desktopShortcutMade = Join-Path ([Environment]::GetFolderPath('Desktop')) 'ChillHub.lnk'
+    Test-Assert -What "ярлык на рабочем столе создан (в тихом режиме — по умолчанию)" -Condition (Test-Path -LiteralPath $desktopShortcutMade)
+
     # Папка для игр доезжает до конфига через внешний PowerShell — шаг, у
-    # которого раньше не проверялся даже код возврата.
+    # которого раньше не проверялся даже код возврата. Заодно проверяется ключ
+    # /GAMESDIR: до него тихая установка не умела задать папку вообще и молча
+    # писала в конфиг то, что осталось в реестре от прошлой установки.
     if (Test-Path -LiteralPath $configPath) {
         $cfg = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
-        Test-Assert -What "GamesPath записан в config.json" -Condition (-not [string]::IsNullOrWhiteSpace($cfg.GamesPath)) -Detail "'$($cfg.GamesPath)'"
+        Test-Assert -What "GamesPath из /GAMESDIR записан в config.json" -Condition ($cfg.GamesPath -ieq $gamesDir) -Detail "в конфиге '$($cfg.GamesPath)', ожидалось '$gamesDir'"
     }
     else {
         Test-Assert -What "config.json создан установщиком" -Condition $false -Detail "нет файла $configPath"
     }
+    $appReg = $null
+    try { $appReg = Get-ItemProperty -LiteralPath $AppKey -ErrorAction Stop } catch { }
+    Test-Assert -What "папка для игр сохранена в реестре" -Condition ($appReg -and $appReg.GamesDir -ieq $gamesDir) -Detail "'$($appReg.GamesDir)'"
+    Test-Assert -What "папка для игр создана" -Condition (Test-Path -LiteralPath $gamesDir)
 
     # ------------------------------------------------- повторная установка
     # Установка поверх уже установленного — самый частый способ обновиться, и
     # раньше он не проверялся ничем. Здесь же проверяется, что перезапись
     # файлов не спотыкается о них самих.
+    #
+    # Заодно проверяется чистка устаревших файлов: `File /r` никогда ничего не
+    # удаляет, поэтому файл, исчезнувший в новой версии, оставался в каталоге
+    # навсегда. Подкладываем такой файл (и такой каталог) руками и требуем,
+    # чтобы установка поверх их убрала — а preserve-файлы сохранила.
     Write-Host "[smoke] повторная установка в тот же каталог" -ForegroundColor Cyan
-    $code2 = Invoke-SilentInstall -SetupExe $setupPath -Dir $InstallDir
+    $staleFile = Join-Path $InstallDir 'stale-from-previous-version.dll'
+    $staleDir = Join-Path $InstallDir 'runtimes-old'
+    Set-Content -LiteralPath $staleFile -Value 'мусор от прошлой версии'
+    New-Item -ItemType Directory -Path $staleDir -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $staleDir 'x.dll') -Value 'мусор'
+    $statusFile = Join-Path $InstallDir 'launcher.update-status'
+    Set-Content -LiteralPath $statusFile -Value 'ok' -NoNewline
+
+    $code2 = Invoke-SilentInstall -SetupExe $setupPath -Dir $InstallDir -GamesDir $gamesDir
     Test-Assert -What "установка поверх существующей завершилась успешно" -Condition ($code2 -eq 0) -Detail "код возврата $code2"
+    Test-Assert -What "устаревший файл прошлой версии удалён" -Condition (-not (Test-Path -LiteralPath $staleFile))
+    Test-Assert -What "устаревший каталог прошлой версии удалён" -Condition (-not (Test-Path -LiteralPath $staleDir))
+    Test-Assert -What "preserve-файл пережил установку поверх" -Condition (Test-Path -LiteralPath $statusFile)
+    Test-Assert -What "ChillHub.exe на месте после установки поверх" -Condition (Test-Path -LiteralPath (Join-Path $InstallDir 'ChillHub.exe'))
+
+    # ------------------------------------------------- откат версии
+    #
+    # Установщик обязан спросить, прежде чем ставить версию СТАРШЕ установленной,
+    # а в тихом режиме — отказаться: скриптовый откат почти наверняка ошибка.
+    # Второй артефакт для этого не нужен: достаточно объявить в реестре версию
+    # заведомо новее — установщик читает именно её.
+    Write-Host "[smoke] установка поверх более новой версии" -ForegroundColor Cyan
+    $realVersion = (Get-ItemProperty -LiteralPath $UninstKey).DisplayVersion
+    Set-ItemProperty -Path $UninstKey -Name 'DisplayVersion' -Value '99.0.0'
+    try {
+        $downgradeCode = Invoke-SilentInstall -SetupExe $setupPath -Dir $InstallDir -GamesDir $gamesDir
+        Test-Assert -What "тихий откат версии отклонён" -Condition ($downgradeCode -ne 0) -Detail "код возврата $downgradeCode (ожидался ненулевой)"
+    }
+    finally { Set-ItemProperty -Path $UninstKey -Name 'DisplayVersion' -Value $realVersion }
 
     # ------------------------------------------------- установка на занятых файлах
     #
@@ -263,6 +314,7 @@ finally {
     elseif (-not $configExistedBefore -and (Test-Path -LiteralPath $appDataDir)) {
         Remove-Item -LiteralPath $appDataDir -Recurse -Force -ErrorAction SilentlyContinue
     }
+    if (Test-Path -LiteralPath $gamesDir) { Remove-Item -LiteralPath $gamesDir -Recurse -Force -ErrorAction SilentlyContinue }
     Restore-Snapshot -Path $desktopLnk -Name 'ChillHub.lnk' -Existed $hadDesktopLnk
     Restore-Snapshot -Path $startMenuDir -Name 'StartMenu' -Existed $hadStartMenu
 

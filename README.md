@@ -89,7 +89,7 @@ cd ..\launcher; dotnet test
 | `content/` | Манифесты, файлы версий, новости, состояние техработ |
 | `scripts/` | Запуск для разработки, сборка установщика, NSIS-скрипт |
 | `.deploy-kit/` | Описания целей выкатки |
-| `docs/` | [Спецификация](docs/spec.md), [конфигурация](docs/configuration.md), [подпись установщика](docs/installer-signing.md), [политика безопасности](docs/SECURITY.md) |
+| `docs/` | [Спецификация](docs/spec.md), [конфигурация](docs/configuration.md), [установщик](docs/installer.md), [политика безопасности](docs/SECURITY.md) |
 
 ## Тесты
 
