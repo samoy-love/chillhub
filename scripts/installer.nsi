@@ -23,8 +23,15 @@ Unicode true
 ; константа осталась ровно там, где ей место: в InstallDir как значение по
 ; умолчанию.
 !define INSTALL_DIR "$LOCALAPPDATA\ChillHub"
-!define UNINST_KEY "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ChillHub"
-!define APP_REG "Software\\ChillHub\\Install"
+; Пути в реестре — с ОДИНАРНЫМ разделителем.
+;
+; Здесь стояло "Software\\Microsoft\\..." по привычке к языкам, где обратный
+; слэш — escape. В NSIS он им не является, поэтому в API уезжала строка с
+; задвоенными разделителями. Работало это лишь потому, что реестр их
+; схлопывает, — но ровно та же привычка уже испортила UninstallString, где
+; схлопывать было некому (см. комментарий в секции Install).
+!define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\ChillHub"
+!define APP_REG "Software\ChillHub\Install"
 
 ; APP_VERSION — версия, которая будет записана в launcher.version (см. секцию
 ; Install ниже). Значение приходит СНАРУЖИ: scripts/build-installer.ps1 передаёт
@@ -41,8 +48,35 @@ Unicode true
 ; Молчаливый дефолт здесь опаснее ошибки сборки: он выпускает НЕПРАВИЛЬНО
 ; помеченный инсталлятор, и узнают об этом пользователи. Поэтому — !error.
 !ifndef APP_VERSION
-  !error "APP_VERSION is not defined. Build through scripts/build-installer.ps1 (it passes /DAPP_VERSION=...), or pass it by hand: makensis /DAPP_VERSION=1.2.3 /DPAYLOAD_DIR=... installer.nsi"
+  !error "APP_VERSION is not defined. Build through scripts/build-installer.ps1 (it passes /DAPP_VERSION=...), or pass it by hand: makensis /DAPP_VERSION=1.2.3 /DAPP_VERSION_NUMERIC=1.2.3.0 /DPAYLOAD_DIR=... installer.nsi"
 !endif
+
+; APP_VERSION_NUMERIC — та же версия в виде, который требует ресурс версии
+; Windows: ровно четыре числовых компонента. ${APP_VERSION} для этого не
+; годится — релиз-кандидат вида "1.2.3-rc1" ресурс версии не принимает, а
+; сборка проверки в CI и вовсе называется "0.0.0-ci".
+;
+; Приводит к нужному виду scripts/build-installer.ps1 (там же, где считается
+; -p:FileVersion для самой сборки), и передаёт сюда. Дефолта нет по той же
+; причине, что и у APP_VERSION: молчаливая заглушка означала бы установщик,
+; который в свойствах файла показывает не свою версию.
+!ifndef APP_VERSION_NUMERIC
+  !error "APP_VERSION_NUMERIC is not defined (ожидается вид 1.2.3.0). Собирайте через scripts/build-installer.ps1 — он передаёт /DAPP_VERSION_NUMERIC=..."
+!endif
+
+; Ресурс версии самого ChillHub-Setup.exe.
+;
+; Его не было вовсе: в свойствах скачанного файла все поля пустые, и понять,
+; какой это установщик, не запуская его, было нельзя. Отдельно это важно для
+; подписи — репутационные механизмы Windows (SmartScreen) и антивирусы читают
+; издателя и версию именно отсюда.
+VIProductVersion "${APP_VERSION_NUMERIC}"
+VIAddVersionKey "ProductName" "${APP_NAME}"
+VIAddVersionKey "ProductVersion" "${APP_VERSION}"
+VIAddVersionKey "FileVersion" "${APP_VERSION}"
+VIAddVersionKey "CompanyName" "${COMPANY_NAME}"
+VIAddVersionKey "LegalCopyright" "${COMPANY_NAME}"
+VIAddVersionKey "FileDescription" "Установщик ${APP_NAME}"
 
 ; Branding icons (paths relative to this .nsi file in scripts/)
 !define MUI_ICON "app.ico"
@@ -99,9 +133,21 @@ OutFile "generated_downloads\ChillHub-Setup.exe"
 RequestExecutionLevel user
 
 ; Compression
+;
+; SOLID: полезная нагрузка — self-contained сборка .NET, то есть несколько тысяч
+; файлов, из которых сотни библиотек рантайма похожи друг на друга. Без /SOLID
+; NSIS жмёт каждый файл ОТДЕЛЬНЫМ потоком LZMA: словарь сбрасывается на каждом
+; файле, и повторы между файлами не находятся вовсе. Solid-режим жмёт всё одним
+; потоком — на этой нагрузке это единственная настройка сжатия, которая
+; действительно что-то меняет.
+;
+; Словарь поднят с 16 до 64 МБ: смысл solid-потока в том, чтобы совпадения
+; находились НА РАССТОЯНИИ, а маленький словарь ровно это и обрезает. Память
+; нужна только машине, которая собирает (примерно десятикратно от словаря);
+; распаковка у пользователя от размера словаря не зависит.
 SetCompress auto
-SetCompressor lzma
-SetCompressorDictSize 16
+SetCompressor /SOLID lzma
+SetCompressorDictSize 64
 SetDatablockOptimize on
 
 ; MUI options (simple modern touches)
@@ -119,9 +165,17 @@ SetDatablockOptimize on
 
 ; Page sequence
 !insertmacro MUI_PAGE_WELCOME
+; Каталог установки проверяется на запись ДО того, как начнётся распаковка
+; (см. DirectoryLeave). Определение стоит вплотную к своей странице намеренно:
+; MUI применяет MUI_PAGE_CUSTOMFUNCTION_* к БЛИЖАЙШЕЙ следующей странице и тут
+; же их снимает.
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE DirectoryLeave
 !insertmacro MUI_PAGE_DIRECTORY
 Page Custom SelectGamesDir_Create SelectGamesDir_Leave
 !insertmacro MUI_PAGE_INSTFILES
+; Показ финальной страницы — момент, когда галочку WebView2 можно спрятать
+; (см. FinishPageShow): страница уже создана, но ещё не показана.
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishPageShow
 !insertmacro MUI_PAGE_FINISH
 
 ; Uninstall pages
@@ -130,16 +184,94 @@ UninstPage Custom un.SelectDeleteGames_Create un.SelectDeleteGames_Leave
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_UNPAGE_FINISH
 
+; ЯЗЫК ОДИН — РУССКИЙ.
+;
+; Здесь подключались оба, Russian и English, и это давало не выбор, а мешанину:
+; языкового диалога нет (MUI_LANGDLL_DISPLAY не вставлен), поэтому NSIS сам
+; выбирает язык по локали системы. На английской Windows пользователь получал
+; английские кнопки MUI — и русские тексты на страницах выбора папки для игр и
+; удаления, потому что все они здесь захардкожены по-русски. Сам лаунчер тоже
+; русскоязычный.
+;
+; Один язык честнее двух с половиной. Если появится настоящая локализация,
+; строки кастомных страниц надо будет вынести в LangString, а сюда вернуть
+; вторую MUI_LANGUAGE — вместе, а не по отдельности.
 !insertmacro MUI_LANGUAGE "Russian"
-!insertmacro MUI_LANGUAGE "English"
 
 ; Default installation directory
 InstallDir "${INSTALL_DIR}"
+
+; ПОВТОРНАЯ УСТАНОВКА ПРОДОЛЖАЕТ ПРЕДЫДУЩУЮ, А НЕ НАЧИНАЕТ ВТОРУЮ.
+;
+; Подхвата предыдущего каталога не было: и при обновлении предлагался
+; $LOCALAPPDATA\ChillHub, как при первой установке. Кто ставил в D:\ChillHub,
+; при обновлении получал ВТОРУЮ копию — а запись в списке программ одна, и она
+; перезаписывалась на новый путь. Старая установка оставалась на диске
+; навсегда, удалить её штатно было уже нечем.
+;
+; Именно InstallDirRegKey, а не чтение реестра в .onInit: ключ командной строки
+; /D=<путь> (тихая установка) отменяет InstallDirRegKey сам, тогда как StrCpy в
+; .onInit выполняется ПОСЛЕ разбора /D и молча его затирает. Так и вышло с
+; первой версией этой правки — тихая установка ставила куда угодно, только не
+; туда, куда просили; поймала это smoke-проверка (scripts/ci/smoke-installer.ps1).
+InstallDirRegKey HKCU "${UNINST_KEY}" "InstallLocation"
+
+; ============================================================================
+; УСТАНОВКА И УДАЛЕНИЕ ПОВЕРХ ЗАПУЩЕННОГО ЛАУНЧЕРА
+; ============================================================================
+; Проверки не было вообще. Установка поверх работающего ChillHub упиралась в
+; занятый ChillHub.exe уже на середине распаковки, и NSIS показывал системный
+; диалог «не удаётся записать файл» — посреди процесса, без объяснения причины
+; и с половиной новых файлов на диске. Сценарий не экзотический, а самый
+; частый: человек скачивает свежую сборку с сайта, не закрывая лаунчер.
+; Отдельно коварно то, что лаунчер умеет сворачиваться в трей (MinimizeToTray),
+; то есть «закрытым» он выглядит и будучи запущенным.
+;
+; То же самое верно для удаления: RMDir /r по каталогу с работающим процессом
+; молча оставляет .exe и всё, что рядом с ним занято, — запись в списке
+; программ при этом исчезает, а каталог на диске остаётся.
+;
+; Проверяем не список процессов, а ровно то, что нам мешает: возможность
+; открыть файл на запись в монопольном режиме. Так ловится и сам лаунчер, и
+; любой другой держатель файла. Плагинов это не требует: System.dll входит в
+; поставку NSIS.
+;
+; Макрос порождает две копии функции — для установщика и для деинсталлятора: в
+; NSIS у них раздельные пространства кода, и вызывать одну и ту же функцию из
+; обоих нельзя.
+!define _CH_GENERIC_WRITE 0x40000000
+!define _CH_OPEN_EXISTING 3
+!macro _ENSURE_APP_CLOSED_FN UN
+Function ${UN}EnsureAppClosed
+  Push $0
+retry:
+  IfFileExists "$INSTDIR\${APP_EXE}" 0 done
+  ; CreateFileW(путь, GENERIC_WRITE, dwShareMode=0, NULL, OPEN_EXISTING, 0, NULL)
+  System::Call 'kernel32::CreateFileW(w "$INSTDIR\${APP_EXE}", i ${_CH_GENERIC_WRITE}, i 0, p 0, i ${_CH_OPEN_EXISTING}, i 0, p 0) p .r0'
+  ${If} $0 = -1
+    ; /SD IDCANCEL — тихий режим не имеет права ЖДАТЬ человека у диалога. Без
+    ; /SD NSIS показывает окно даже установщику, запущенному с /S: тихая
+    ; установка на занятых файлах не падала бы, а висела до конца таймаута.
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
+      "Файлы ${APP_NAME} сейчас заняты — похоже, лаунчер запущен.$\r$\n$\r$\nЗакройте ${APP_NAME} (проверьте значок в области уведомлений рядом с часами) и нажмите «Повторить»." \
+      /SD IDCANCEL IDRETRY retry
+    Abort "Прервано: ${APP_NAME} не был закрыт."
+  ${EndIf}
+  System::Call 'kernel32::CloseHandle(p r0)'
+done:
+  Pop $0
+FunctionEnd
+!macroend
+!insertmacro _ENSURE_APP_CLOSED_FN ""
+!insertmacro _ENSURE_APP_CLOSED_FN "un."
 
 ; ------------------------
 ; Sections
 ; ------------------------
 Section "Install"
+  ; Занятые файлы — до первой записи на диск, а не посреди распаковки.
+  Call EnsureAppClosed
+
   ; Ensure install dir
   CreateDirectory "$INSTDIR"
   SetOutPath "$INSTDIR"
@@ -244,7 +376,36 @@ Section "Install"
   FileWrite $3 "$${json} = ($${data} | ConvertTo-Json -Depth 5)$\r$\n"
   FileWrite $3 "[IO.File]::WriteAllText($${cfg}, $${json}, [Text.UTF8Encoding]::new($${false}))$\r$\n"
   FileClose $3
-  ExecWait '"powershell" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\write-config.ps1" -GamesDir "$GAMES_DIR"'
+
+  ; PowerShell зовётся ПО ПОЛНОМУ ПУТИ из $SYSDIR, а не по имени.
+  ;
+  ; Было '"powershell" ...', то есть поиск по PATH. Установщик запускал то, что
+  ; первым попадётся в пользовательском PATH, — а PATH пользователя правится
+  ; без каких-либо прав. Для процесса, который пишет файлы в профиль, это
+  ; лишний и ничем не оправданный способ подсунуть свой исполняемый файл.
+  StrCpy $6 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+  IfFileExists "$6" +2 0
+    StrCpy $6 "powershell"
+
+  ; РЕЗУЛЬТАТ ПРОВЕРЯЕТСЯ.
+  ;
+  ; Код возврата не смотрели вовсе. Если PowerShell не запустился (политика,
+  ; вырезанный компонент, антивирус), выбранная пользователем папка для игр
+  ; просто НЕ СОХРАНЯЛАСЬ, а установка рапортовала об успехе: лаунчер потом
+  ; молча качал игры в путь по умолчанию, и виноватым выглядел он.
+  ;
+  ; Записать конфиг напрямую из NSIS нельзя, и это осознанно: config.json несёт
+  ; и остальные настройки пользователя (тема, лимит скорости, число потоков), а
+  ; переустановка не должна их стирать. Слияние требует разбора JSON — отсюда и
+  ; внешний процесс. Раз уж он есть, его исход обязан быть проверен.
+  ClearErrors
+  ExecWait '"$6" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\write-config.ps1" -GamesDir "$GAMES_DIR"' $7
+  ${If} ${Errors}
+  ${OrIf} $7 != 0
+    MessageBox MB_ICONEXCLAMATION \
+      "Не удалось сохранить папку для игр в настройках (код: $7).$\r$\n$\r$\nСам ${APP_NAME} установлен и работает — укажите папку вручную при первом запуске, в настройках.$\r$\nВыбранный путь: $GAMES_DIR" \
+      /SD IDOK
+  ${EndIf}
 
   ; Write launcher.version with exact content (no newline)
   FileOpen $4 "$INSTDIR\launcher.version" w
@@ -365,30 +526,46 @@ FunctionEnd
 
 ; Macro to optionally delete games folder on uninstall
 !macro _DELETE_GAMES_IF_CHECKED
+  ; У ВСЕХ окон здесь есть /SD.
+  ;
+  ; Без него тихое удаление (uninstaller /S) ВИСЛО: NSIS показывает MessageBox и
+  ; в тихом режиме, если ему не сказали, что отвечать. А последняя ветка ниже
+  ; срабатывает как раз всегда, когда галочку не ставили, — то есть при любом
+  ; тихом удалении. Ловится это только автоматической проверкой (её и не было),
+  ; потому что руками удаление всегда запускают из окна.
+  ;
+  ; Ответы выбраны так, чтобы тихий режим НИЧЕГО НЕ УДАЛЯЛ сверх каталога
+  ; установки: папка с играми — пользовательские данные, и решение о ней
+  ; принимает человек, а не отсутствие ответа.
+  ;
   ; Use cached state from un.SelectDeleteGames_Leave, because the page controls are destroyed before this section runs
   ${If} $DeleteGames_State == 1
     ${If} $Un_GamesDir == ""
-      MessageBox MB_ICONSTOP "Путь к папке с играми пуст. Удаление отменено."
+      MessageBox MB_ICONSTOP "Путь к папке с играми пуст. Удаление отменено." /SD IDOK
     ${Else}
       ; И18: проверяем путь ДО рекурсивного удаления.
       Push "$Un_GamesDir"
       Call un.SafeRmDir
       Pop $R0
       ${If} $R1 != "ok"
-        MessageBox MB_ICONSTOP "Папка с играми НЕ удалена: $R1.$\r$\nПуть: $Un_GamesDir$\r$\nЕсли этот путь действительно нужно удалить, сделайте это вручную."
+        MessageBox MB_ICONSTOP "Папка с играми НЕ удалена: $R1.$\r$\nПуть: $Un_GamesDir$\r$\nЕсли этот путь действительно нужно удалить, сделайте это вручную." /SD IDOK
       ${Else}
         IfFileExists "$Un_GamesDir\*.*" 0 +3
           RMDir /r "$Un_GamesDir"
           Goto +2
-        MessageBox MB_ICONINFORMATION "Папка с играми не найдена: $Un_GamesDir"
+        MessageBox MB_ICONINFORMATION "Папка с играми не найдена: $Un_GamesDir" /SD IDOK
       ${EndIf}
     ${EndIf}
   ${Else}
-    MessageBox MB_ICONINFORMATION "Папка с играми не была удалена. Вы можете удалить её вручную: $Un_GamesDir"
+    MessageBox MB_ICONINFORMATION "Папка с играми не была удалена. Вы можете удалить её вручную: $Un_GamesDir" /SD IDOK
   ${EndIf}
 !macroend
 
 Section "Uninstall"
+  ; Работающий лаунчер не даст удалить свой .exe: без этой проверки удаление
+  ; «проходило» с занятыми файлами.
+  Call un.EnsureAppClosed
+
   ; Remove Start Menu shortcuts (per-user)
   Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk"
@@ -430,9 +607,58 @@ SectionEnd
 Function .onInit
   ; Ensure per-user shell variables context
   SetShellVarContext current
-  StrCpy $GAMES_DIR "C:\Games\ChillHub"
-  IfFileExists "D:\*.*" 0 +2
-    StrCpy $GAMES_DIR "D:\Games\ChillHub"
+
+  ; Папка для игр — от предыдущей установки (каталог установки подхватывает
+  ; InstallDirRegKey выше). Подставлялся C:\Games\ChillHub, и если пользователь
+  ; не замечал подмены на странице выбора, установщик записывал этот путь в
+  ; config.json поверх настоящего. Лаунчер после переустановки переставал видеть
+  ; уже скачанные игры — они лежали там, куда он больше не смотрит.
+  ReadRegStr $0 HKCU "${APP_REG}" "GamesDir"
+  ${If} $0 != ""
+    StrCpy $GAMES_DIR $0
+  ${Else}
+    StrCpy $GAMES_DIR "C:\Games\ChillHub"
+    IfFileExists "D:\*.*" 0 +2
+      StrCpy $GAMES_DIR "D:\Games\ChillHub"
+  ${EndIf}
+
+  ; Наличие WebView2 выясняется ЗДЕСЬ, а не в обработчике галочки на финальной
+  ; странице: раньше проверка жила внутри InstallPrereqs, то есть срабатывала
+  ; уже ПОСЛЕ клика. Пользователю Windows 11, где рантайм предустановлен,
+  ; предлагали доустановить то, что у него есть, — и он либо тратил время, либо
+  ; снимал галочку, гадая, не сломает ли этим новости.
+  Call DetectWebView2
+FunctionEnd
+
+; Каталог установки проверяется на запись до начала распаковки.
+;
+; RequestExecutionLevel user + страница выбора каталога — сочетание, в котором
+; пользователь свободно вписывает C:\Program Files\ChillHub, а прав на запись
+; туда у процесса нет. Проверки не было, и установка падала на первом же файле:
+; NSIS показывал системную ошибку записи, уже создав каталог и пройдя половину
+; мастера.
+Function DirectoryLeave
+  ClearErrors
+  CreateDirectory "$INSTDIR"
+  IfErrors notwritable
+
+  ; Создать каталог мало: право на создание подкаталога и право на запись
+  ; файлов в него — разные вещи. Проверяем тем же действием, которое предстоит
+  ; делать установке.
+  FileOpen $0 "$INSTDIR\chillhub-write-test.tmp" w
+  ${If} $0 == ""
+    Goto notwritable
+  ${EndIf}
+  FileWrite $0 "chillhub"
+  FileClose $0
+  Delete "$INSTDIR\chillhub-write-test.tmp"
+  Return
+
+notwritable:
+  MessageBox MB_ICONSTOP \
+    "В каталог «$INSTDIR» нельзя записывать.$\r$\n$\r$\n${APP_NAME} устанавливается только для текущего пользователя и без прав администратора, поэтому системные каталоги (Program Files, Windows) не подойдут.$\r$\nВыберите каталог в своём профиле — например, $LOCALAPPDATA\${APP_NAME}." \
+    /SD IDOK
+  Abort
 FunctionEnd
 
 ; =========================
@@ -470,7 +696,7 @@ FunctionEnd
 Function SelectGamesDir_Leave
   ${NSD_GetText} $GamesDir_Edit $GAMES_DIR
   ${If} $GAMES_DIR == ""
-    MessageBox MB_ICONEXCLAMATION "Укажите папку для установки игр."
+    MessageBox MB_ICONEXCLAMATION "Укажите папку для установки игр." /SD IDOK
     Abort
   ${EndIf}
   ; Create if missing
@@ -481,6 +707,23 @@ FunctionEnd
 ; =========================
 ; Finish page actions
 ; =========================
+; Галочка «Доустановить WebView2» показывается только тем, кому он нужен.
+;
+; WebView2 предустановлен в Windows 11 и приезжает с Edge на Windows 10, то
+; есть у подавляющего большинства он уже есть. Предлагать таким людям
+; доустановку — предлагать сделать бессмысленную работу, а снятая галочка ещё и
+; выглядит как отказ от новостей в лаунчере.
+;
+; $WebView2Present заполняется в .onInit. Контрол не просто прячется, но и
+; снимается: скрытая, но отмеченная галочка всё равно вызвала бы InstallPrereqs
+; по кнопке «Готово».
+Function FinishPageShow
+  ${If} $WebView2Present == 1
+    SendMessage $mui.FinishPage.ShowReadme ${BM_SETCHECK} ${BST_UNCHECKED} 0
+    ShowWindow $mui.FinishPage.ShowReadme ${SW_HIDE}
+  ${EndIf}
+FunctionEnd
+
 Function RunAppAfterInstall
   ; If user ticked "Запустить ChillHub", set a flag; actual launch may be deferred
   StrCpy $LaunchAfterFlag 1
