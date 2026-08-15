@@ -6,6 +6,8 @@ Unicode true
 !include "nsDialogs.nsh"
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
+; ${VersionCompare} — сравнение версий для защиты от отката (см. .onInit).
+!include "WordFunc.nsh"
 
 !define APP_NAME "ChillHub"
 !define COMPANY_NAME "ChillHub"
@@ -124,6 +126,14 @@ Var DeleteGames_State
 Var LaunchAfterFlag
 Var PrereqsRan
 Var WebView2Present
+Var DesktopShortcut_Check
+Var DesktopShortcut_State
+Var DeleteSettings_Check
+Var DeleteSettings_State
+
+; Адрес проекта: он же уезжает в «Установку и удаление программ» (URLInfoAbout,
+; HelpLink) — из списка программ должно быть куда пойти за помощью.
+!define APP_URL "https://launcher.samoy.love"
 
 ; Output installer
 Name "${APP_NAME}"
@@ -268,12 +278,20 @@ FunctionEnd
 ; ------------------------
 ; Sections
 ; ------------------------
-Section "Install"
+Section "Install" SecInstall
   ; Занятые файлы — до первой записи на диск, а не посреди распаковки.
   Call EnsureAppClosed
 
+  ; Место на диске — тоже до первой записи. Тихая установка страницу выбора
+  ; каталога не проходит, поэтому проверка нужна и здесь, а не только там.
+  Call CheckDiskSpace
+
   ; Ensure install dir
   CreateDirectory "$INSTDIR"
+
+  ; Устаревшие файлы прошлой версии убираются ДО распаковки.
+  Call CleanPreviousInstall
+
   SetOutPath "$INSTDIR"
 
   ; Files from build output (default: Release)
@@ -304,7 +322,14 @@ Section "Install"
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
   CreateShortCut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
   CreateShortCut "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
-  CreateShortCut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
+
+  ; Ярлык на рабочем столе — ПО ВЫБОРУ. Раньше он создавался всегда и никого
+  ; не спрашивал; рабочий стол — не место, куда программа въезжает молча.
+  ; В тихом режиме галочка считается отмеченной: поведение по умолчанию не
+  ; меняется для тех, кто ставит скриптом.
+  ${If} $DesktopShortcut_State == 1
+    CreateShortCut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
+  ${EndIf}
 
   ; Uninstall registry (per-user)
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${APP_NAME}"
@@ -314,6 +339,10 @@ Section "Install"
   WriteRegStr HKCU "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\${APP_EXE}"
   WriteRegStr HKCU "${UNINST_KEY}" "Publisher" "${COMPANY_NAME}"
+  ; Из списка программ должно быть куда пойти: без этих двух полей у записи
+  ; нет ни ссылки на сайт, ни ссылки на поддержку.
+  WriteRegStr HKCU "${UNINST_KEY}" "URLInfoAbout" "${APP_URL}"
+  WriteRegStr HKCU "${UNINST_KEY}" "HelpLink" "${APP_URL}"
 
   ; И28: поля, которые «Установка и удаление программ» ожидает увидеть.
   ;
@@ -596,6 +625,12 @@ Section "Uninstall"
   DeleteRegKey HKCU "${UNINST_KEY}"
   DeleteRegKey HKCU "${APP_REG}"
 
+  ; Настройки удаляются только по явной галочке (см. страницу удаления).
+  ; Тихое удаление сюда не попадает: $DeleteSettings_State там остаётся нулём.
+  ${If} $DeleteSettings_State == 1
+    RMDir /r "$APPDATA\${APP_NAME}"
+  ${EndIf}
+
   ; Ask-delete games folder per user's choice (from custom page)
   !insertmacro _DELETE_GAMES_IF_CHECKED
 
@@ -622,12 +657,148 @@ Function .onInit
       StrCpy $GAMES_DIR "D:\Games\ChillHub"
   ${EndIf}
 
+  ; Ключ командной строки перекрывает и реестр, и значение по умолчанию.
+  ;
+  ; Тихая установка умела задавать только каталог программы (/D=), а папку для
+  ; игр брала из реестра или подставляла C:\Games\ChillHub — и молча писала её
+  ; в config.json. То есть скриптом поставить лаунчер С НУЖНОЙ папкой для игр
+  ; было нельзя вообще, а результат ещё и зависел от того, что осталось в
+  ; реестре от прошлой установки.
+  ;
+  ;   ChillHub-Setup.exe /S /GAMESDIR=D:\Games /D=C:\ChillHub
+  ;
+  ; (/D=, как требует NSIS, остаётся последним и без кавычек.)
+  ${GetParameters} $R0
+  ${GetOptions} $R0 "/GAMESDIR=" $R1
+  ${If} $R1 != ""
+    StrCpy $GAMES_DIR $R1
+  ${EndIf}
+
+  ; Ярлык на рабочем столе по умолчанию создаётся — в тихом режиме страницы с
+  ; галочкой никто не увидит, а менять поведение тихой установки этой правкой
+  ; не хотелось.
+  StrCpy $DesktopShortcut_State 1
+
+  ; УСТАНОВКА СТАРОЙ ВЕРСИИ ПОВЕРХ НОВОЙ — С ПОДТВЕРЖДЕНИЕМ.
+  ;
+  ; Версии не сравнивались нигде. Запуск установщика полугодовой давности из
+  ; папки «Загрузки» откатывал лаунчер молча: файлы старее, launcher.version
+  ; перезаписан меньшим номером. Самообновление потом это вылечит, но человек
+  ; какое-то время работает не с той сборкой и не знает об этом.
+  ;
+  ; Тихому режиму отвечаем «нет»: скриптовый откат версии почти наверняка
+  ; ошибка, и совершать её молча — худший из вариантов.
+  ReadRegStr $0 HKCU "${UNINST_KEY}" "DisplayVersion"
+  ${If} $0 != ""
+    ; 0 — равны, 1 — установленная новее, 2 — устанавливаемая новее.
+    ${VersionCompare} "$0" "${APP_VERSION}" $1
+    ${If} $1 == 1
+      MessageBox MB_YESNO|MB_ICONEXCLAMATION \
+        "Установлена версия $0, а этот установщик ставит ${APP_VERSION} — более старую.$\r$\n$\r$\nПродолжить и откатить ${APP_NAME} до ${APP_VERSION}?" \
+        /SD IDNO IDYES continue
+      Abort
+    ${EndIf}
+  ${EndIf}
+continue:
+
   ; Наличие WebView2 выясняется ЗДЕСЬ, а не в обработчике галочки на финальной
   ; странице: раньше проверка жила внутри InstallPrereqs, то есть срабатывала
   ; уже ПОСЛЕ клика. Пользователю Windows 11, где рантайм предустановлен,
   ; предлагали доустановить то, что у него есть, — и он либо тратил время, либо
   ; снимал галочку, гадая, не сломает ли этим новости.
   Call DetectWebView2
+FunctionEnd
+
+; ============================================================================
+; МЕСТО НА ДИСКЕ
+; ============================================================================
+; Не проверялось. Страница выбора каталога у MUI показывает «требуется/
+; доступно», но продолжить не мешает, а тихая установка эту страницу вообще не
+; видит. На забитом диске распаковка 170 МБ падала на середине — уже без
+; всяких диалогов, просто ошибкой записи, оставляя половину файлов.
+;
+; Размер берётся у самой секции (SectionGetSize, КиБ) — это ровно то, что
+; посчитал компилятор по её File-командам, а не отдельно поддерживаемое число,
+; которое разъедется с содержимым при первой же правке.
+!define CH_INSTALL_SPARE_MB 30
+Function CheckDiskSpace
+  Push $0
+  Push $1
+  Push $2
+
+  SectionGetSize ${SecInstall} $0
+  ; КиБ -> МиБ, с запасом на временные файлы установки.
+  IntOp $0 $0 / 1024
+  IntOp $0 $0 + ${CH_INSTALL_SPARE_MB}
+
+  ${GetRoot} "$INSTDIR" $1
+  ${DriveSpace} "$1\" "/D=F /S=M" $2
+
+  ; Пустой ответ = диск не опрошен (сетевой путь, съёмный носитель без
+  ; носителя). Это не повод отказывать: пусть решает сама распаковка.
+  ${If} $2 != ""
+  ${AndIf} $2 < $0
+    MessageBox MB_ICONSTOP \
+      "На диске $1 недостаточно места.$\r$\n$\r$\nНужно примерно $0 МБ, свободно $2 МБ.$\r$\nОсвободите место или выберите другой диск." \
+      /SD IDOK
+    Pop $2
+    Pop $1
+    Pop $0
+    Abort
+  ${EndIf}
+
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; ============================================================================
+; ЧИСТКА ПРЕДЫДУЩЕЙ УСТАНОВКИ
+; ============================================================================
+; `File /r` перезаписывает и добавляет, но НИКОГДА не удаляет. Файл, исчезнувший
+; в новой версии, оставался в каталоге навсегда: при смене патча рантайма .NET
+; часть библиотек в runtimes\ меняет имена, и рядом с новыми копились старые.
+; Самообновление так не делает — у него манифест со списком удаления, — а
+; установщик делал.
+;
+; Чистка включается ТОЛЬКО при наличии launcher.version: этот файл пишет сюда
+; сам установщик, и он же доказывает, что каталог наш. Без такого доказательства
+; рекурсивно удалять содержимое каталога, который пользователь выбрал руками,
+; нельзя ни при каких обстоятельствах — он мог указать существующую папку.
+;
+; Список сохраняемых файлов обязан совпадать со списком /x у File выше; это
+; сверяется тестом (server/internal/adminapi/builds/installersync_test.go),
+; поэтому имена здесь написаны в открытую, а не собраны в макрос.
+Function CleanPreviousInstall
+  Push $0
+  Push $1
+
+  IfFileExists "$INSTDIR\launcher.version" 0 finish
+
+  FindFirst $0 $1 "$INSTDIR\*.*"
+loop:
+  StrCmp $1 "" close
+  StrCmp $1 "." next
+  StrCmp $1 ".." next
+  StrCmp $1 "config.json" next
+  StrCmp $1 "launcher.version" next
+  StrCmp $1 "launcher.update-status" next
+  StrCmp $1 "Uninstall.exe" next
+
+  IfFileExists "$INSTDIR\$1\*.*" 0 removefile
+    RMDir /r "$INSTDIR\$1"
+    Goto next
+removefile:
+    Delete "$INSTDIR\$1"
+next:
+  FindNext $0 $1
+  Goto loop
+close:
+  FindClose $0
+
+finish:
+  Pop $1
+  Pop $0
 FunctionEnd
 
 ; Каталог установки проверяется на запись до начала распаковки.
@@ -652,6 +823,10 @@ Function DirectoryLeave
   FileWrite $0 "chillhub"
   FileClose $0
   Delete "$INSTDIR\chillhub-write-test.tmp"
+
+  ; Место на выбранном диске — здесь же: сказать «не поместится» на странице
+  ; выбора каталога полезнее, чем на середине распаковки.
+  Call CheckDiskSpace
   Return
 
 notwritable:
@@ -680,7 +855,16 @@ Function SelectGamesDir_Create
   ${NSD_CreateBrowseButton} 82% 26 18% 26 "Обзор..."
   Pop $GamesDir_Browse
   ${NSD_OnClick} $GamesDir_Browse SelectGamesDir_Browse
- 
+
+  ; Ярлык на рабочем столе раньше создавался молча. Галочка стоит здесь, а не
+  ; отдельной страницей: лишний шаг мастера ради одного чекбокса — плохая
+  ; плата за возможность его не ставить.
+  ${NSD_CreateCheckbox} 0 70 100% 18 "Создать ярлык на рабочем столе"
+  Pop $DesktopShortcut_Check
+  ${If} $DesktopShortcut_State == 1
+    ${NSD_Check} $DesktopShortcut_Check
+  ${EndIf}
+
   nsDialogs::Show
 FunctionEnd
 
@@ -694,6 +878,15 @@ Function SelectGamesDir_Browse
 FunctionEnd
 
 Function SelectGamesDir_Leave
+  ; Состояние галочки снимается до того, как контролы страницы будут
+  ; уничтожены: в секции установки читать их уже нечем.
+  ${NSD_GetState} $DesktopShortcut_Check $0
+  ${If} $0 == ${BST_CHECKED}
+    StrCpy $DesktopShortcut_State 1
+  ${Else}
+    StrCpy $DesktopShortcut_State 0
+  ${EndIf}
+
   ${NSD_GetText} $GamesDir_Edit $GAMES_DIR
   ${If} $GAMES_DIR == ""
     MessageBox MB_ICONEXCLAMATION "Укажите папку для установки игр." /SD IDOK
@@ -800,6 +993,14 @@ Function un.SelectDeleteGames_Create
   Pop $1
   ${NSD_CreateCheckbox} 0 46 100% 18 "Удалить папку с играми (безвозвратно)"
   Pop $DeleteGames_Check
+
+  ; Настройки лаунчера (%APPDATA%\ChillHub) удаление не трогает намеренно: они
+  ; переживают переустановку, и это ожидаемое поведение. Но выбора «снести всё»
+  ; не было вовсе — оставался каталог, о котором пользователь уже не помнит.
+  ; Галочка снята по умолчанию: молчание значит «сохранить».
+  ${NSD_CreateCheckbox} 0 68 100% 18 "Удалить настройки лаунчера (тема, папки, лимиты)"
+  Pop $DeleteSettings_Check
+
   nsDialogs::Show
 FunctionEnd
 
@@ -810,5 +1011,12 @@ Function un.SelectDeleteGames_Leave
     StrCpy $DeleteGames_State 1
   ${Else}
     StrCpy $DeleteGames_State 0
+  ${EndIf}
+
+  ${NSD_GetState} $DeleteSettings_Check $2
+  ${If} $2 == ${BST_CHECKED}
+    StrCpy $DeleteSettings_State 1
+  ${Else}
+    StrCpy $DeleteSettings_State 0
   ${EndIf}
 FunctionEnd
