@@ -182,6 +182,46 @@ namespace ChillHub.Tests {
             Assert.Equal(expected, PlaytimeStore.FormatTotal(seconds));
         }
 
+        /// <summary>
+        /// Метка очереди в строке списка игр: качающаяся — с целым процентом, ждущая —
+        /// «В очереди», остальные и отсутствующие — пусто (тогда показывается статус на диске).
+        /// </summary>
+        [Fact]
+        public void МеткаОчередиДляСтрокиСписка() {
+            Assert.Equal("Скачивание · 38%", QueueRowLabel.For(Item(QueueItemState.Running, done: 38, total: 100)));
+            Assert.Equal("Скачивание", QueueRowLabel.For(Item(QueueItemState.Running)));
+            Assert.Equal("В очереди", QueueRowLabel.For(Item(QueueItemState.Waiting, position: 2)));
+            Assert.Equal(string.Empty, QueueRowLabel.For(Item(QueueItemState.Completed)));
+            Assert.Equal(string.Empty, QueueRowLabel.For(null));
+        }
+
+        /// <summary>Метка очереди важнее статуса на диске и красится акцентом; без метки — как раньше.</summary>
+        [Fact]
+        public void СтрокаСпискаПредпочитаетМеткуОчереди() {
+            var game = new GameInfo { IsInstalled = true, NeedsUpdate = true };
+            var text = new GameRowStatusTextConverter();
+            var brush = new GameRowStatusBrushConverter();
+
+            Assert.Equal("Обновление", text.Convert(new object[] { game, string.Empty }, typeof(string), null!, CultureInfo.InvariantCulture));
+            Assert.Equal("Скачивание · 38%", text.Convert(new object[] { game, "Скачивание · 38%" }, typeof(string), null!, CultureInfo.InvariantCulture));
+
+            var idle = (SolidColorBrush)brush.Convert(new object[] { game, string.Empty }, typeof(Brush), null!, CultureInfo.InvariantCulture);
+            var busy = (SolidColorBrush)brush.Convert(new object[] { game, "В очереди" }, typeof(Brush), null!, CultureInfo.InvariantCulture);
+            Assert.Equal((Color)ColorConverter.ConvertFromString("#E0A64B"), idle.Color);
+            Assert.Equal((Color)ColorConverter.ConvertFromString("#7C5CFF"), busy.Color);
+        }
+
+        /// <summary>Лента новостей: две колонки только на широком окне.</summary>
+        [Theory]
+        [InlineData(900.0, 1)]
+        [InlineData(1199.0, 1)]
+        [InlineData(1200.0, 2)]
+        [InlineData(1700.0, 2)]
+        [InlineData(double.NaN, 1)]
+        public void КолонкиЛентыПоШирине(double width, int expected) {
+            Assert.Equal(expected, NewsColumnsConverter.ColumnsFor(width));
+        }
+
         private static QueueItem Item(
             QueueItemState state,
             long done = 0,

@@ -1179,6 +1179,17 @@ namespace ChillHub.Pages {
         /// </para>
         /// </summary>
         private void SetGamesSource() {
+            // Список пересобран из свежих объектов — метки очереди на них ещё не стоят,
+            // а закачка тем временем идёт. Переносим их из снимка очереди.
+            try {
+                foreach (var item in this.downloadQueue.Snapshot()) {
+                    this.SetQueueLabel(item.GameId, Core.UI.QueueRowLabel.For(item));
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"SetGamesSource queue labels: {ex.Message}");
+            }
+
             this.GameList.ItemsSource = this.games;
             this.ApplyGameFilter();
         }
@@ -1762,6 +1773,7 @@ namespace ChillHub.Pages {
                     this.queueDockItems.Add(item);
                 }
 
+                this.SetQueueLabel(item.GameId, Core.UI.QueueRowLabel.For(item));
                 this.SyncQueuePanelVisibility();
 
                 // Витрина/нижняя панель отражают позицию ВЫБРАННОЙ игры — если это она,
@@ -1837,8 +1849,26 @@ namespace ChillHub.Pages {
                     this.queueDockItems.RemoveAt(idx);
                 }
 
+                this.SetQueueLabel(item.GameId, string.Empty);
                 this.SyncQueuePanelVisibility();
             });
+        }
+
+        /// <summary>
+        /// Подпись очереди в строке списка игр. Строка сама перерисовывается через
+        /// PropertyChanged — без Items.Refresh(), который на каждый тик прогресса
+        /// пересобирал бы все карточки.
+        /// </summary>
+        private void SetQueueLabel(string gameId, string label) {
+            try {
+                var g = this.games.FirstOrDefault(x => string.Equals(x.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+                if (g != null) {
+                    g.QueueLabel = label;
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"SetQueueLabel({gameId}): {ex.Message}");
+            }
         }
 
         /// <summary>Порядок ожидающих позиций поменялся — перестраиваем список целиком в новом порядке.</summary>
@@ -1847,6 +1877,7 @@ namespace ChillHub.Pages {
                 this.queueDockItems.Clear();
                 foreach (var item in snapshot) {
                     this.queueDockItems.Add(item);
+                    this.SetQueueLabel(item.GameId, Core.UI.QueueRowLabel.For(item));
                 }
 
                 this.SyncQueuePanelVisibility();

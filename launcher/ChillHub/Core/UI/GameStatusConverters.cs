@@ -68,10 +68,55 @@ namespace ChillHub.Core.UI {
         public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
             => throw new NotImplementedException();
 
+        /// <summary>Акцент — игра прямо сейчас в очереди загрузок.</summary>
+        internal static SolidColorBrush Queued { get; } = Freeze("#7C5CFF");
+
         private static SolidColorBrush Freeze(string hex) {
             var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
             brush.Freeze();
             return brush;
         }
+    }
+
+    /// <summary>
+    /// Подпись строки списка с учётом очереди: входы — <see cref="GameInfo"/> и его
+    /// <see cref="GameInfo.QueueLabel"/>. Метка очереди важнее статуса на диске: пока игра
+    /// качается, «Обновление» рядом с ней — вчерашняя новость.
+    /// <para>
+    /// MultiBinding, а не обычный конвертер по объекту: привязка к объекту целиком не
+    /// узнаёт об изменении его свойства, а перерисовывать весь список на каждый тик
+    /// прогресса — дорого и мигает.
+    /// </para>
+    /// </summary>
+    public class GameRowStatusTextConverter : IMultiValueConverter {
+        /// <inheritdoc/>
+        public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture) {
+            var game = values.Length > 0 ? values[0] as GameInfo : null;
+            var label = values.Length > 1 ? values[1] as string : null;
+            return !string.IsNullOrEmpty(label) ? label! : GameStatusTextConverter.TextFor(game);
+        }
+
+        /// <inheritdoc/>
+        public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture)
+            => throw new NotImplementedException();
+    }
+
+    /// <summary>Цвет подписи строки списка: акцент, пока игра в очереди, иначе — по статусу на диске.</summary>
+    public class GameRowStatusBrushConverter : IMultiValueConverter {
+        private static readonly GameStatusBrushConverter ByStatus = new();
+
+        /// <inheritdoc/>
+        public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture) {
+            var label = values.Length > 1 ? values[1] as string : null;
+            if (!string.IsNullOrEmpty(label)) {
+                return GameStatusBrushConverter.Queued;
+            }
+
+            return ByStatus.Convert(values.Length > 0 ? values[0] : null!, targetType, parameter, culture);
+        }
+
+        /// <inheritdoc/>
+        public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture)
+            => throw new NotImplementedException();
     }
 }
