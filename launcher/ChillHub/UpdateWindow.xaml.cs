@@ -301,6 +301,15 @@ namespace ChillHub {
 
                 // Завершаем приложение: освобождаем файлы и даём апдейтеру применить обновление.
                 try {
+                    // Иначе при включённом MinimizeToTray главное окно (если оно уже есть —
+                    // окно самообновления может быть показано и не только при старте, см.
+                    // периодическую проверку) перехватывает Shutdown() в MainWindow_Closing и
+                    // просто прячется в трей вместо настоящего выхода — апдейтер тогда
+                    // работает над файлами лаунчера, пока старый процесс всё ещё жив.
+                    if (Application.Current.MainWindow is ChillHub.MainWindow mw) {
+                        mw.PrepareForForcedExit();
+                    }
+
                     Application.Current.Shutdown();
                 }
                 catch (Exception ex) {

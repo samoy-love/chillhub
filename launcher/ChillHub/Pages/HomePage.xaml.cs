@@ -1487,6 +1487,14 @@ namespace ChillHub.Pages {
         /// <summary>Делает то же, что кнопка действия на витрине — вызов из меню трея.</summary>
         internal void InvokeSelectedAction() => this.ActionBtn_Click(this, new RoutedEventArgs());
 
+        /// <summary>
+        /// В очереди загрузок есть хоть одна карточка — идущая или ждущая своей очереди.
+        /// Периодическая проверка самообновления (см. <see cref="ChillHub.MainWindow"/>)
+        /// откладывает показ диалога, пока это true: прерывать загрузку игры вопросом про
+        /// обновление лаунчера — не то, ради чего пользователь его открыл.
+        /// </summary>
+        internal bool HasActiveDownloads => this.queueDockItems.Count > 0;
+
         /// <summary>Перечитывает список игр и заново проверяет их статусы — пункт «Проверить обновления».</summary>
         internal void RefreshGamesAndStatuses() => this.RefreshGames_Click(this, new RoutedEventArgs());
 
