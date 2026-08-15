@@ -625,3 +625,50 @@ func TestListOfMissingSubdirectoryStays404(t *testing.T) {
 		t.Fatalf("missing subdirectory returned %d, want 404", code)
 	}
 }
+
+// gallery.json описывает галерею, а не входит в неё. Пока он попадал в
+// листинг, браузер рисовал его такой же плашкой, как картинку: без превью,
+// с кнопкой «Сделать обложкой» и полем подписи. После первого же назначения
+// обложки файл возникал в сетке и выглядел как сбой.
+func TestListHidesTheGalleryManifest(t *testing.T) {
+	h, root := newHandlers(t)
+	dir := filepath.Join(root, "content", "my-game", "gallery")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "shot.png"), smallPNG(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.SetCover("my-game", "shot.png"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, listing := list(t, h, "my-game", "")
+	got := names(listing)
+	for _, n := range got {
+		if n == "gallery.json" {
+			t.Fatalf("манифест галереи попал в листинг: %v", got)
+		}
+	}
+	if len(got) != 1 || got[0] != "shot.png" {
+		t.Fatalf("листинг = %v, ожидалась одна картинка", got)
+	}
+}
+
+// Файл с таким же именем в ПОДПАПКЕ манифестом не является: манифест только
+// один и только в корне галереи.
+func TestListKeepsSameNameInSubdirectory(t *testing.T) {
+	h, root := newHandlers(t)
+	dir := filepath.Join(root, "content", "my-game", "gallery", "shots")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "gallery.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, listing := list(t, h, "my-game", "shots")
+	if got := names(listing); len(got) != 1 || got[0] != "gallery.json" {
+		t.Fatalf("листинг подпапки = %v, файл не должен был скрыться", got)
+	}
+}
