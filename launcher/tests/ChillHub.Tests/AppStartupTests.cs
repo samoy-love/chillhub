@@ -7,7 +7,9 @@ namespace ChillHub.Tests {
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Runtime.CompilerServices;
     using System.Text;
+    using System.Windows;
 
     using ChillHub.Core.Shell;
 
@@ -165,6 +167,39 @@ namespace ChillHub.Tests {
 
             Assert.True(startup.Run());
         }
+
+        // ---- Инициализация типа приложения ----
+
+        /// <summary>
+        /// Тип <c>App</c> обязан инициализироваться без исключения.
+        /// <para>
+        /// Статический конструктор выполняется раньше <c>Main</c>, раньше любого нашего
+        /// перехватчика ошибок и раньше первой записи в boot.log: упавший здесь лаунчер
+        /// не оставляет о себе вообще ничего, кроме APPCRASH в журнале Windows. Так
+        /// умерла версия 1.5.11 — попытка отключить прямоугольник фокуса через
+        /// <c>FrameworkElement.FocusVisualStyleProperty.OverrideMetadata</c> падала с
+        /// ArgumentException: свойство объявлено самим FrameworkElement, и метаданные
+        /// для типа-владельца уже зарегистрированы.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void ТипПриложенияИнициализируетсяБезОшибки()
+            => UiThread.Run(() => RuntimeHelpers.RunClassConstructor(typeof(ChillHub.App).TypeHandle));
+
+        /// <summary>
+        /// Прямоугольник фокуса снимается стилем по ключу
+        /// <see cref="SystemParameters.FocusVisualStyleKey"/> — единственный способ достать
+        /// элементы без собственного стиля, не трогая метаданные FrameworkElement.
+        /// </summary>
+        [Fact]
+        public void ТемаОтключаетПрямоугольникФокусаГлобально() => UiThread.Run(() => {
+            var theme = (ResourceDictionary)Application.LoadComponent(
+                new Uri("/ChillHub;component/Themes/Theme.Dark.xaml", UriKind.Relative));
+
+            Assert.True(
+                theme.Contains(SystemParameters.FocusVisualStyleKey),
+                "в теме нет стиля фокуса по системному ключу — рамка вернётся на элементы без своего стиля");
+        });
 
         // ---- Окно обновления ----
 

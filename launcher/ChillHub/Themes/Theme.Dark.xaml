@@ -82,6 +82,23 @@
   <!-- Шапка — ровная заливка. Ключ сохранён ради ссылок из MainWindow. -->
   <SolidColorBrush x:Key="Brush.HeaderGradient" Color="{StaticResource Color.HeaderStart}"/>
 
+  <!-- Пунктирный прямоугольник фокуса Windows: выключен разом для всех элементов.
+
+       Значение FocusVisualStyle по умолчанию — ссылка на ресурс с этим ключом, поэтому
+       пустой шаблон здесь снимает рамку и с тех элементов, у которых своего стиля нет
+       (например Border с Focusable="True" на карточке игры). Точечные сеттеры
+       FocusVisualStyle="{x:Null}" в стилях ниже остаются: они дешевле, чем разбирать,
+       какой из них теперь лишний.
+
+       Через FrameworkElement.FocusVisualStyleProperty.OverrideMetadata это не делается:
+       свойство объявлено самим FrameworkElement, метаданные для типа-владельца уже
+       зарегистрированы, и вызов падает с ArgumentException. В статическом конструкторе
+       App это роняло лаунчер до первой строки boot.log — версия 1.5.11 не запускалась
+       вовсе. -->
+  <Style x:Key="{x:Static SystemParameters.FocusVisualStyleKey}" TargetType="Control">
+    <Setter Property="Template" Value="{x:Null}"/>
+  </Style>
+
   <!-- TextBlock default -->
   <Style TargetType="TextBlock">
     <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
