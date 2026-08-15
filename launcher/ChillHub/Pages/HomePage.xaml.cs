@@ -1924,12 +1924,12 @@ namespace ChillHub.Pages {
                 var cover = images.FirstOrDefault();
                 if (cover == null) {
                     this.HeroCoverImg.Visibility = Visibility.Collapsed;
-                    this.HeroCoverImg.Source = null;
+                    this.HeroCoverBrush.ImageSource = null;
                     return;
                 }
 
                 try {
-                    this.HeroCoverImg.Source = new BitmapImage(new Uri(cover.ImageUrl, UriKind.Absolute));
+                    this.HeroCoverBrush.ImageSource = new BitmapImage(new Uri(cover.ImageUrl, UriKind.Absolute));
                     this.HeroCoverImg.Visibility = Visibility.Visible;
                 }
                 catch (Exception ex) {
