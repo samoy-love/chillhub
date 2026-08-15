@@ -220,6 +220,26 @@ namespace ChillHub.Tests {
                 new RuDateConverter().Convert(value!, typeof(string), null!, CultureInfo.InvariantCulture));
         }
 
+        /// <summary>Сегодняшняя и вчерашняя даты показываются словом, остальные — числом.</summary>
+        [Theory]
+        [InlineData(0, "сегодня")]
+        [InlineData(-1, "вчера")]
+        [InlineData(-2, "13 августа 2026")]
+        [InlineData(1, "16 августа 2026")]
+        public void СвежаяДатаПоказываетсяОтносительно(int offsetDays, string expected) {
+            var today = new DateTime(2026, 8, 15);
+            var prev = RuDateConverter.Today;
+            RuDateConverter.Today = () => today;
+            try {
+                var text = (string)new RuDateConverter().Convert(
+                    today.AddDays(offsetDays), typeof(string), null!, CultureInfo.InvariantCulture);
+                Assert.Equal(expected, text);
+            }
+            finally {
+                RuDateConverter.Today = prev;
+            }
+        }
+
         /// <summary>DateTimeOffset тоже разбирается — так дата приходит из System.Text.Json.</summary>
         [Fact]
         public void СмещениеВремениРазбирается() {

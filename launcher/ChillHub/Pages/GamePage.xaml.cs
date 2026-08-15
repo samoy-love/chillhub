@@ -121,10 +121,15 @@ namespace ChillHub.Pages {
             var hasFiles = await Task.Run(() => GameLocalState.HasAnyLocalGameFiles(root)).ConfigureAwait(true);
 
             this.localVersion = (localVer ?? string.Empty).Trim();
+            var state = GameStateResolver.Compute(unfinished, hasFiles, this.localVersion, this.game.LatestVersion, this.game.NeedsUpdate);
 
             try {
                 var latest = (this.game.LatestVersion ?? string.Empty).Trim();
-                this.InstalledVersionText.Text = string.IsNullOrWhiteSpace(this.localVersion) ? "не установлена" : this.localVersion;
+                // Без версии, но с файлами на диске игра не «не установлена»: рядом стоят
+                // размер на диске и чип «Обновление не завершено», и такое соседство путало.
+                this.InstalledVersionText.Text = !string.IsNullOrWhiteSpace(this.localVersion)
+                    ? this.localVersion
+                    : state == GameState.Unfinished ? "установка не завершена" : "не установлена";
                 this.LatestVersionText.Text = string.IsNullOrWhiteSpace(latest) ? "неизвестна" : latest;
                 this.SizeOnDiskText.Text = sizeOnDisk > 0 ? FormatSize(sizeOnDisk) : "—";
                 this.FreeSpaceText.Text = freeSpace > 0 ? FormatSize(freeSpace) : "—";
@@ -135,7 +140,6 @@ namespace ChillHub.Pages {
                 Core.Logging.Logger.Error(ex, "GamePage.RefreshStateAsync.Fields");
             }
 
-            var state = GameStateResolver.Compute(unfinished, hasFiles, this.localVersion, this.game.LatestVersion, this.game.NeedsUpdate);
             this.ApplyState(state);
         }
 
