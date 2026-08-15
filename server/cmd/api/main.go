@@ -197,6 +197,13 @@ func newRouter(limiter *ratelimit.Limiter, reg *promexp.Registry) *mux.Router {
 	// doc) and shares the same generous JSON budget as the rest.
 	maint := maintenance.New(contentRoot)
 	r.HandleFunc("/api/maintenance", limiter.Wrap(maint.PublicHandler)).Methods("GET", "HEAD")
+	// Какая сборка работает: version.json, который deploy-kit кладёт рядом с
+	// бинарём при выкатке. По нему выкатка сверяет «выкатилось» с «выглядит
+	// выкаченным» и отсчитывает список изменений от того, что РЕАЛЬНО стоит на
+	// проде, а не от диапазона пуша — тот теряет коммиты прогонов, отменённых
+	// очередью concurrency. Без этого маршрута цель молчала (WRITE_VERSION_FILE=0)
+	// и каждая выкатка предупреждала об этом в логе.
+	r.HandleFunc("/api/version.json", limiter.Wrap(handleVersion)).Methods("GET", "HEAD")
 	r.HandleFunc("/news/index.json", limiter.Wrap(handleNewsIndex)).Methods("GET", "HEAD")
 	r.HandleFunc("/news/games/{gameId}/index.json", limiter.Wrap(handleGameNewsIndex)).Methods("GET", "HEAD")
 
@@ -212,6 +219,48 @@ func newRouter(limiter *ratelimit.Limiter, reg *promexp.Registry) *mux.Router {
 }
 
 var contentRoot string
+
+// versionFile — путь к version.json релиза. По умолчанию рядом с исполняемым
+// файлом: deploy-kit пишет его в корень артефакта, а артефакт целиком
+// становится каталогом релиза. os.Executable даёт уже разыменованный путь,
+// поэтому симлинк current не мешает.
+var versionFile = defaultVersionFile()
+
+func defaultVersionFile() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "version.json"
+	}
+	return filepath.Join(filepath.Dir(exe), "version.json")
+}
+
+// handleVersion отдаёт version.json релиза как есть: писатель у файла один
+// (deploy-kit), читателей трое (выкатка, бот, статус-страница), и все
+// договорились об «отдай дословно». Файла нет — 404: до первой выкатки с
+// WRITE_VERSION_FILE=1 его и не бывает, и это не ошибка сервиса.
+func handleVersion(w http.ResponseWriter, _ *http.Request) {
+	// #nosec G304 -- путь фиксирован при старте процесса и не зависит от запроса.
+	b, err := os.ReadFile(versionFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "version.json is not deployed", http.StatusNotFound)
+			return
+		}
+		log.Printf("read %s: %v", versionFile, err)
+		http.Error(w, "failed to read version", http.StatusInternalServerError)
+		return
+	}
+	if !json.Valid(b) {
+		log.Printf("read %s: not valid JSON", versionFile)
+		http.Error(w, "version file is corrupt", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+	_, _ = w.Write(b)
+}
 
 // muxRoute names the matched route by its path TEMPLATE ("/api/games/{gameId}"),
 // not by the requested path. The template is a closed set defined in this file,

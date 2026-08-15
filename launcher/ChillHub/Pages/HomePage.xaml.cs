@@ -1596,6 +1596,14 @@ namespace ChillHub.Pages {
         private void UpdateActionButtonState() {
             try {
                 this.UpdateHero();
+
+                // Пока файлы удаляются, любое событие очереди или проверки не должно
+                // вернуть на кнопку «Обновить» поверх наполовину снесённой игры.
+                if (this.isDeleting) {
+                    this.SetActionMode(ActionMode.Deleting);
+                    return;
+                }
+
                 var g = this.GetSelectedGame();
                 var isInstalled = g?.IsInstalled == true;
                 var needsUpdate = g?.NeedsUpdate == true;
@@ -1851,6 +1859,13 @@ namespace ChillHub.Pages {
 
                 this.SetQueueLabel(item.GameId, string.Empty);
                 this.SyncQueuePanelVisibility();
+
+                // Снятая с очереди игра — та, что выбрана: кнопка обязана вернуться из
+                // «Убрать из очереди» к «Установить», иначе она врёт до следующего клика
+                // по списку — карточки внизу уже нет, а кнопка всё ещё предлагает снять её.
+                if (string.Equals(this.GetSelectedGameId(), item.GameId, StringComparison.OrdinalIgnoreCase)) {
+                    this.UpdateActionButtonState();
+                }
             });
         }
 
@@ -1924,12 +1939,12 @@ namespace ChillHub.Pages {
                 var cover = images.FirstOrDefault();
                 if (cover == null) {
                     this.HeroCoverImg.Visibility = Visibility.Collapsed;
-                    this.HeroCoverImg.Source = null;
+                    this.HeroCoverBrush.ImageSource = null;
                     return;
                 }
 
                 try {
-                    this.HeroCoverImg.Source = new BitmapImage(new Uri(cover.ImageUrl, UriKind.Absolute));
+                    this.HeroCoverBrush.ImageSource = new BitmapImage(new Uri(cover.ImageUrl, UriKind.Absolute));
                     this.HeroCoverImg.Visibility = Visibility.Visible;
                 }
                 catch (Exception ex) {
@@ -2248,9 +2263,18 @@ namespace ChillHub.Pages {
                 // поэтому сама операция уходит в фон, а окно показывает индикатор.
                 this.isDeleting = true;
                 this.GameList.IsEnabled = false;
-                this.ActionBtn.IsEnabled = false;
-                this.StatusText.Text = $"Удаление файлов {title}…";
+                this.SetActionMode(ActionMode.Deleting);
+
+                // Подсказка «Нужно: N ГБ (M доступно)» — про установку, которой сейчас
+                // нет; под строкой «Удаление файлов…» она читалась как её часть.
+                // Полоса включается ДО текста статуса: смена текста перерисовывает
+                // панель (OnStatusTextChanged), и бегунок, включённый после неё,
+                // оставался скрытым до следующего события.
+                this.FilesSizeText.Text = string.Empty;
+                this.SpeedEtaText.Text = string.Empty;
                 this.UpdateProgress.IsIndeterminate = true;
+                this.StatusText.Text = $"Удаление файлов {title}…";
+                this.SyncBottomBarVisibility();
                 try {
                     // Directory.Delete(recursive) обрывается на ПЕРВОМ занятом файле, когда
                     // остальное уже снесено. Пользователь при этом видел «не удалось удалить»,

@@ -859,10 +859,17 @@
                  отдал хотя бы одну картинку, иначе остаётся Collapsed и виден только градиент фона. -->
             <!-- Кадрируется с упором вниз, а не по центру: когда витрина ниже пропорции
                  обложки, срезается верх — небо и пустой фон, — а сюжетная часть, где обычно
-                 логотип и персонажи, остаётся в кадре. -->
-            <Image x:Name="HeroCoverImg" Grid.Row="0" Grid.RowSpan="2" Stretch="UniformToFill"
-                   Opacity="0.5" Visibility="Collapsed" HorizontalAlignment="Stretch" VerticalAlignment="Bottom"
-                   Margin="-16"/>
+                 логотип и персонажи, остаётся в кадре.
+                 Кисть на прямоугольнике, а не <Image VerticalAlignment=Bottom>: у Image с
+                 не-Stretch выравниванием и отрицательным Margin разметка ужимала картинку в
+                 поле Grid без учёта Margin — на маленьком окне обложка стояла в рамке 16px
+                 внутри витрины. Прямоугольник тянется по слоту, а кадрирование делает кисть. -->
+            <Rectangle x:Name="HeroCoverImg" Grid.Row="0" Grid.RowSpan="2" Opacity="0.5" Visibility="Collapsed"
+                       HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="-16">
+              <Rectangle.Fill>
+                <ImageBrush x:Name="HeroCoverBrush" Stretch="UniformToFill" AlignmentX="Center" AlignmentY="Bottom"/>
+              </Rectangle.Fill>
+            </Rectangle>
 
             <!-- Затемнение под текстом: белый заголовок обязан читаться на любой обложке,
                  а не только на тёмной. -->
@@ -956,7 +963,9 @@
                «Новости <игра>» оставалась голая дыра в половину экрана — у списка игр
                пустое состояние было, у ленты новостей нет. -->
           <StackPanel Name="GameNewsEmptyState" Visibility="Collapsed" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="12">
-            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE7BA;" FontSize="24" HorizontalAlignment="Center"
+            <!-- Нейтральный значок, а не треугольник предупреждения: «новостей нет» —
+                 обычное состояние молодой игры, а не ошибка. -->
+            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE946;" FontSize="24" HorizontalAlignment="Center"
                        Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,0,0,8"/>
             <TextBlock Text="Пока новостей нет" TextWrapping="Wrap" TextAlignment="Center"
                        FontWeight="SemiBold" Foreground="{DynamicResource Brush.Text}"/>

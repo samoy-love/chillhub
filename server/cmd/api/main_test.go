@@ -408,3 +408,56 @@ func TestRegistryWithoutTheFlagStaysPublished(t *testing.T) {
 		t.Fatalf("legacy registry entry was dropped: ok=%v list=%+v", ok, got)
 	}
 }
+
+// withVersionFile points the package-level versionFile at a temp path.
+func withVersionFile(t *testing.T) string {
+	t.Helper()
+	old := versionFile
+	path := filepath.Join(t.TempDir(), "version.json")
+	versionFile = path
+	t.Cleanup(func() { versionFile = old })
+	return path
+}
+
+// The deploy gate reads /api/version.json to learn what is really live and to
+// verify the release it just shipped, so the file has to come back verbatim.
+func TestVersionIsServedVerbatim(t *testing.T) {
+	path := withVersionFile(t)
+	body := `{"version":"release-20260815-abc1234","commit":"abc1234","changelog":"x"}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rr := httptest.NewRecorder()
+	testRouter().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/version.json", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if got := rr.Body.String(); got != body {
+		t.Fatalf("body = %q, want %q", got, body)
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	if cc := rr.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", cc)
+	}
+}
+
+// Before the first deploy that writes the file there is nothing to report;
+// that is a 404, not a server error, so the gate can tell "not yet" from "broken".
+func TestVersionMissingIs404AndCorruptIs500(t *testing.T) {
+	path := withVersionFile(t)
+	rr := httptest.NewRecorder()
+	testRouter().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/version.json", nil))
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("missing: status = %d, want 404", rr.Code)
+	}
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rr = httptest.NewRecorder()
+	testRouter().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/version.json", nil))
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("corrupt: status = %d, want 500", rr.Code)
+	}
+}
