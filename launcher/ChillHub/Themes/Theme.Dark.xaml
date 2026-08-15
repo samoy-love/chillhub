@@ -337,12 +337,18 @@
     <Setter Property="MinWidth" Value="96"/>
     <Setter Property="FontSize" Value="13"/>
     <Setter Property="HorizontalAlignment" Value="Left"/>
-    <Setter Property="Content">
+    <!-- Содержимое — через шаблон, а не готовый StackPanel в Setter Content: элемент
+         в сеттере один на весь стиль, его получает первая кнопка, а на остальных
+         страницах (игра, новость) кнопка оставалась пустой рамкой. -->
+    <Setter Property="Content" Value="Назад"/>
+    <Setter Property="ContentTemplate">
       <Setter.Value>
-        <StackPanel Orientation="Horizontal">
-          <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72B;" FontSize="12" Margin="0,0,8,0" VerticalAlignment="Center"/>
-          <TextBlock Text="Назад" VerticalAlignment="Center"/>
-        </StackPanel>
+        <DataTemplate>
+          <StackPanel Orientation="Horizontal">
+            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72B;" FontSize="12" Margin="0,0,8,0" VerticalAlignment="Center"/>
+            <TextBlock Text="{Binding}" VerticalAlignment="Center"/>
+          </StackPanel>
+        </DataTemplate>
       </Setter.Value>
     </Setter>
   </Style>

@@ -116,8 +116,10 @@
         <ColumnDefinition Width="Auto"/>
         <ColumnDefinition Width="*"/>
       </Grid.ColumnDefinitions>
+      <!-- Всё в шапке центрируется по вертикали относительно обложки: раньше «Назад»
+           висел по верху, а заголовок с чипом — по центру, и шапка выглядела рыхлой. -->
       <Button Grid.Column="0" Name="BackBtn" Style="{DynamicResource Style.Button.Back}"
-              Click="BackBtn_Click" VerticalAlignment="Top"/>
+              Click="BackBtn_Click" VerticalAlignment="Center"/>
       <Border Grid.Column="1" Width="64" Height="64" Margin="16,0,0,0" CornerRadius="8"
               Background="{DynamicResource Brush.Surface}" ClipToBounds="True">
         <Grid>
@@ -184,7 +186,12 @@
                 </StackPanel>
                 <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2">
                   <TextBlock Text="Место установки" Style="{StaticResource Style.FieldLabel}"/>
-                  <TextBlock Name="InstallPathText" Text="—" Style="{StaticResource Style.FieldValue}"/>
+                  <!-- Путь — моноширинный, в одну строку с многоточием; полный путь во
+                       всплывающей подсказке. На два ряда он ложился и ломал сетку карточки. -->
+                  <TextBlock Name="InstallPathText" Text="—" Style="{StaticResource Style.FieldValue}"
+                             FontFamily="Consolas" FontSize="13" TextWrapping="NoWrap"
+                             TextTrimming="CharacterEllipsis" Margin="0"
+                             ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
                 </StackPanel>
               </Grid>
             </StackPanel>
@@ -195,16 +202,37 @@
             <StackPanel>
               <TextBlock Text="Действия" Style="{StaticResource Style.SectionHeader}"/>
               <!-- Кнопки «Играть» здесь нет намеренно: запуск игры остаётся на главной странице -->
-              <WrapPanel>
-                <Button Name="ActionBtn" Content="Установить" MinWidth="180" Height="40" Margin="0,0,8,8"
-                        Style="{StaticResource Style.Button.GamePrimary}" Click="ActionBtn_Click"/>
-                <Button Name="OpenFolderBtn" Content="Открыть папку игры" MinWidth="170" Height="40" Margin="0,0,8,8"
+              <!-- Основное действие — во всю ширину, вспомогательные — парой одинаковой ширины
+                   под ним. WrapPanel с разными MinWidth раскладывал три кнопки как попало:
+                   две в ряд и одна сиротой на второй строке. -->
+              <Button Name="ActionBtn" Content="Установить" Height="40" Margin="0,0,0,8"
+                      HorizontalAlignment="Stretch"
+                      Style="{StaticResource Style.Button.GamePrimary}" Click="ActionBtn_Click"/>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="8"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0" Name="OpenFolderBtn" Content="Открыть папку игры" Height="36"
+                        HorizontalAlignment="Stretch"
                         Style="{DynamicResource Style.Button.GhostNeutral}" Click="OpenFolderBtn_Click"/>
-                <Button Name="OpenLogsBtn" Content="Открыть логи" MinWidth="140" Height="40" Margin="0,0,0,8"
+                <Button Grid.Column="2" Name="OpenLogsBtn" Content="Открыть логи" Height="36"
+                        HorizontalAlignment="Stretch"
                         Style="{DynamicResource Style.Button.GhostNeutral}" Click="OpenLogsBtn_Click"/>
-              </WrapPanel>
-              <TextBlock Name="StatusText" Text="Готов" FontWeight="SemiBold" FontSize="14" Margin="0,4,0,0"
-                         TextWrapping="Wrap" Foreground="{DynamicResource Brush.Text}"/>
+              </Grid>
+              <!-- Строка статуса подписана: одинокое «Готов» под кнопками не читалось как
+                   состояние операции. -->
+              <Grid Margin="0,12,0,0">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="Статус" Style="{StaticResource Style.FieldLabel}"
+                           Margin="0,0,8,0" VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="1" Name="StatusText" Text="Готов" FontWeight="SemiBold" FontSize="14"
+                           TextWrapping="Wrap" Foreground="{DynamicResource Brush.Text}"/>
+              </Grid>
               <!-- Полосу видно, только пока что-то идёт: в покое она стояла в нуле под
                    надписью «Готов» и читалась как остановившийся процесс — ровно та же
                    правка, что и в нижней панели главного экрана. -->
@@ -255,7 +283,9 @@
         </StackPanel>
 
         <!-- ПРАВАЯ КОЛОНКА: changelog (новости игры) -->
-        <Border Grid.Column="2" Style="{DynamicResource Style.Card}" Padding="16" VerticalAlignment="Stretch">
+        <!-- Карточка по высоте содержимого, а не растянута до низа: растянутая упиралась в
+             край окна, пока левая колонка заканчивалась раньше, и низ страницы выглядел рваным. -->
+        <Border Grid.Column="2" Style="{DynamicResource Style.Card}" Padding="16" VerticalAlignment="Top">
           <Grid>
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/>
@@ -271,10 +301,11 @@
                 <TextBlock Text="Новости и списки изменений этой игры" FontSize="11"
                            Foreground="{DynamicResource Brush.TextSecondary}"/>
               </StackPanel>
-              <Button Grid.Column="1" Name="RefreshChangelogBtn" Width="32" Height="32"
+              <Button Grid.Column="1" Name="RefreshChangelogBtn" Width="28" Height="28"
+                      VerticalAlignment="Top"
                       Style="{DynamicResource Style.Button.GhostNeutral}" Padding="0"
                       ToolTip="Обновить историю изменений" Click="RefreshChangelog_Click">
-                <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="13"
+                <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="12"
                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
               </Button>
             </Grid>
