@@ -5,45 +5,20 @@
 
 namespace ChillHub.Pages {
     using System;
-    using System.Collections.Generic;
-    using System.Net.Http;
-    using System.Net.Http.Json;
-    using System.Threading.Tasks;
     using System.Windows;
     using System.Windows.Controls;
 
     using ChillHub.Core;
     using ChillHub.Core.Settings;
     using ChillHub.Core.Shell;
-    using ChillHub.Core.Sync;
 
     public partial class SettingsPage : Page {
-        private readonly HttpClient http = ChillHub.Core.Net.HttpClientProvider.Shared;
-        private readonly IntegrityPanel integrity = new IntegrityPanel(new SimpleSyncService());
-
         public SettingsPage() {
             this.InitializeComponent();
 
-            // Панель проверки целостности про контролы не знает — связываем её с ними здесь
-            this.integrity.ShowStatus = this.SetIntegrityStatus;
-            this.integrity.ShowBusy = this.SetIntegrityBusy;
-            this.integrity.ShowRepairButton = visible =>
-                this.IntegrityRepairBtn.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
-            this.integrity.ShowProgress = (percent, text) => {
-                if (this.IntegrityProgress == null) {
-                    return;
-                }
-
-                this.IntegrityProgress.Value = percent;
-                this.SetIntegrityStatus(text);
-            };
-
             // Defer UI population until the page is fully loaded to avoid template/resource init races (seen in dark theme)
             this.Loaded += this.SettingsPage_Loaded;
-            this.Unloaded += this.SettingsPage_Unloaded;
         }
-
-        private string BaseApi => ConfigService.Current.ApiBaseUrl;
 
         private void SettingsPage_Loaded(object sender, RoutedEventArgs e) {
             // Ensure templates/resources are fully applied (especially in dark theme)
@@ -57,12 +32,8 @@ namespace ChillHub.Pages {
                         // зайти в настройки повторно, а причина будет видна в логе.
                         ChillHub.Core.Logging.Logger.Error(ex, "SettingsPage.LoadConfigToUi");
                     }
-
-                    _ = this.LoadGamesForIntegrityAsync();
                 }), System.Windows.Threading.DispatcherPriority.Loaded);
         }
-
-        private void SettingsPage_Unloaded(object sender, RoutedEventArgs e) => this.integrity.LeavePage();
 
         private void LoadConfigToUi() {
             var view = SettingsView.Build(ConfigService.Current);
@@ -106,70 +77,6 @@ namespace ChillHub.Pages {
         }
 
         private void OpenLogsBtn_Click(object sender, RoutedEventArgs e) => SettingsActions.OpenLogsFolder();
-
-        // ---- Проверка целостности игры (задача 18) ----
-
-        /// <summary>
-        /// Заполняет список игр для проверки. Сервер может быть недоступен —
-        /// тогда просто говорим об этом, страница настроек остаётся рабочей.
-        /// </summary>
-        /// <returns>Задача заполнения списка.</returns>
-        private async Task LoadGamesForIntegrityAsync() {
-            try {
-                var resp = await this.http.GetFromJsonAsync<GamesResponse>($"{this.BaseApi.TrimEnd('/')}/api/games").ConfigureAwait(true);
-                var games = resp?.Items ?? new List<GameInfo>();
-                if (this.IntegrityGameBox == null) {
-                    return;
-                }
-
-                this.IntegrityGameBox.ItemsSource = games;
-                if (games.Count == 0) {
-                    this.SetIntegrityStatus("Список игр пуст.");
-                    return;
-                }
-
-                // Подставим последнюю запускавшуюся игру, иначе первую установленную, иначе первую в списке
-                this.IntegrityGameBox.SelectedItem = IntegrityPanel.Preselect(
-                    games, ConfigService.Current.GamesPath, ConfigService.Current.LastGameId);
-            }
-            catch (Exception ex) {
-                // Logger сам гасит свои ошибки — дополнительная обёртка не нужна
-                ChillHub.Core.Logging.Logger.Error(ex, "SettingsPage.LoadGamesForIntegrityAsync");
-                this.SetIntegrityStatus("Не удалось получить список игр — проверьте подключение к серверу.");
-            }
-        }
-
-        private async void IntegrityCheckBtn_Click(object sender, RoutedEventArgs e)
-            => await this.integrity.CheckAsync(this.IntegrityGameBox?.SelectedItem as GameInfo);
-
-        private async void IntegrityRepairBtn_Click(object sender, RoutedEventArgs e)
-            => await this.integrity.RepairAsync();
-
-        private void IntegrityCancelBtn_Click(object sender, RoutedEventArgs e) => this.integrity.Cancel();
-
-        private void SetIntegrityBusy(bool busy) {
-            if (this.IntegrityProgressPanel != null) {
-                this.IntegrityProgressPanel.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
-            }
-
-            if (this.IntegrityProgress != null && !busy) {
-                this.IntegrityProgress.Value = 0;
-            }
-
-            if (this.IntegrityCheckBtn != null) {
-                this.IntegrityCheckBtn.IsEnabled = !busy;
-            }
-
-            if (this.IntegrityGameBox != null) {
-                this.IntegrityGameBox.IsEnabled = !busy;
-            }
-        }
-
-        private void SetIntegrityStatus(string text) {
-            if (this.IntegrityStatusText != null) {
-                this.IntegrityStatusText.Text = text;
-            }
-        }
 
         private void BackBtn_Click(object sender, RoutedEventArgs e) {
             if (ShellNavigation.ShouldGoBack(this.NavigationService != null, this.NavigationService?.CanGoBack == true)) {
