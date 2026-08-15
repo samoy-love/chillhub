@@ -200,6 +200,62 @@ namespace ChillHub.Tests {
                 NewsWebViewStorage.LegacyFolderNames(exeName));
         }
 
+        /// <summary>
+        /// Подпись из markdown видна под картинкой. Редакторы пишут «![Было](/assets/old.jpg)»
+        /// и ждут подпись на экране, а она уезжала в alt и не показывалась никогда.
+        /// </summary>
+        [Fact]
+        public void ПодписьКартинкиВиднаПодНей() {
+            var html = NewsPageRenderer.ToHtml("![Было](/assets/old_launcher.jpg)");
+
+            Assert.Contains("<figcaption>Было</figcaption>", html, StringComparison.Ordinal);
+            Assert.Contains("<figure><img", html, StringComparison.Ordinal);
+        }
+
+        /// <summary>Две картинки подряд — две подписи, а не одна на обе.</summary>
+        [Fact]
+        public void КаждаяКартинкаПолучаетСвоюПодпись() {
+            var html = NewsPageRenderer.ToHtml("![Было](/a.jpg)\n\n![Стало](/b.jpg)");
+
+            Assert.Contains("<figcaption>Было</figcaption>", html, StringComparison.Ordinal);
+            Assert.Contains("<figcaption>Стало</figcaption>", html, StringComparison.Ordinal);
+        }
+
+        /// <summary>Картинка без подписи остаётся картинкой, а не пустой полосой под ней.</summary>
+        [Fact]
+        public void БезПодписиНичегоНеДобавляется() {
+            var html = NewsPageRenderer.ToHtml("![](/a.jpg)");
+
+            Assert.DoesNotContain("<figcaption", html, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Картинка внутри строки текста — иконка или бейдж, а не иллюстрация:
+        /// подпись под ней разорвала бы фразу.
+        /// </summary>
+        [Fact]
+        public void КартинкаВнутриТекстаПодписьНеПолучает() {
+            var html = NewsPageRenderer.ToHtml("Смотрите ![значок](/i.png) вот тут");
+
+            Assert.DoesNotContain("<figcaption", html, StringComparison.Ordinal);
+        }
+
+        /// <summary>Подпись экранируется: текст новости приходит из админки.</summary>
+        [Fact]
+        public void ПодписьЭкранируется() {
+            var html = NewsPageRenderer.ToHtml("![<script>alert(1)</script>](/a.jpg)");
+
+            Assert.DoesNotContain("<script>", html, StringComparison.Ordinal);
+        }
+
+        /// <summary>Стили подписи едут вместе со страницей, иначе figcaption останется без оформления.</summary>
+        [Fact]
+        public void СтраницаНесётСтилиПодписи() {
+            var page = NewsPageRenderer.RenderPage("![Было](/a.jpg)", "https://example.test/n.md", Palette());
+
+            Assert.Contains("figcaption{", page, StringComparison.Ordinal);
+        }
+
         private static NewsPalette Palette() => new NewsPalette(
             Background: "#0F1116",
             Text: "#E5E5E5",
