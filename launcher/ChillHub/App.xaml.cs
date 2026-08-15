@@ -13,6 +13,23 @@ namespace ChillHub {
     using ChillHub.Core.Shell;
 
     public partial class App : Application {
+        /// <summary>
+        /// Initializes static members of the <see cref="App"/> class.
+        /// <para>
+        /// Отключает стандартный пунктирный прямоугольник фокуса Windows на уровне
+        /// метаданных <see cref="FrameworkElement"/> — раньше это делалось точечно, отдельным
+        /// сеттером в стиле каждого контрола (см. Themes/Theme.Dark.xaml), и любой элемент без
+        /// своего стиля — например Border с Focusable="True" на карточке игры — получал его по
+        /// умолчанию. Переопределение метаданных здесь ловит вообще всё, включая такие блоки,
+        /// и делает это до создания первого окна.
+        /// </para>
+        /// </summary>
+        static App() {
+            FrameworkElement.FocusVisualStyleProperty.OverrideMetadata(
+                typeof(FrameworkElement),
+                new FrameworkPropertyMetadata(null));
+        }
+
         /// <inheritdoc/>
         protected override void OnStartup(StartupEventArgs e) {
             // Порядок шагов — в StartupSequence: он и есть поведение, и проверяется тестом.

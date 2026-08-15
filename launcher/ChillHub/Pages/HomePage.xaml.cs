@@ -86,6 +86,13 @@ namespace ChillHub.Pages {
         private readonly Core.Game.DownloadQueue downloadQueue;
         private readonly System.Collections.ObjectModel.ObservableCollection<Core.Game.QueueItem> queueDockItems = new();
 
+        /// <summary>
+        /// Та же очередь — наружу для GamePage: установка/обновление со страницы игры идёт через
+        /// неё, а не через отдельный локальный запуск (см. GamePage.StartQueuedSync), иначе
+        /// закачка обрывалась при уходе с этой страницы на главную.
+        /// </summary>
+        internal Core.Game.IDownloadQueue DownloadQueue => this.downloadQueue;
+
         // Галерея игры: тот же приём кеша в памяти, что и у остальных
         // content-загрузчиков страницы — не перезапрашивать gallery.json на каждый выбор игры.
         private readonly Core.Game.GalleryClient galleryClient = new();
@@ -2091,7 +2098,7 @@ namespace ChillHub.Pages {
                 }
 
                 var win = Window.GetWindow(this) as ChillHub.MainWindow;
-                win?.ContentFrame.Navigate(new GamePage(game));
+                win?.ContentFrame.Navigate(new GamePage(game, this.downloadQueue));
             }
             catch (Exception ex) {
                 this.ShowUserError("Не удалось открыть страницу игры.", ex, "HomePage.OpenGamePage");

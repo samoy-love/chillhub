@@ -8,6 +8,7 @@ namespace ChillHub.Pages {
     using System.Collections.Generic;
     using System.Diagnostics;
     using System.IO;
+    using System.Linq;
     using System.Net.Http;
     using System.Threading;
     using System.Threading.Tasks;
@@ -36,6 +37,20 @@ namespace ChillHub.Pages {
         private readonly GameSyncRunner syncRunner;
         private readonly SyncProgressView progressView = new();
 
+        // Подтверждение копирования пути установки — тот же неинвазивный тост, что и на
+        // главной странице (см. Core/Home/ToastHost.cs), но со своим экземпляром элементов.
+        private ToastHost? toastHost;
+
+        /// <summary>
+        /// Очередь загрузок главной страницы (см. Core/Game/DownloadQueue.cs) — null у страницы,
+        /// поднятой без неё (тесты). Установка/обновление идёт через неё, а не через локальный
+        /// <see cref="syncRunner"/>: страница может закрыться, а закачка — нет.
+        /// </summary>
+        private readonly Core.Game.IDownloadQueue? downloadQueue;
+
+        /// <summary>Текущая операция идёт через <see cref="downloadQueue"/>, а не через локальный <see cref="cts"/>.</summary>
+        private bool viaQueue;
+
         private CancellationTokenSource? cts;
         private bool isBusy;
         private List<string> builds = new();
@@ -44,9 +59,14 @@ namespace ChillHub.Pages {
 
         /// <summary>Initializes a new instance of the <see cref="GamePage"/> class — страницу для конкретной игры.</summary>
         /// <param name="game">Описание игры из списка главной страницы (объект переиспользуется, чтобы статусы совпадали).</param>
-        public GamePage(GameInfo game) {
+        /// <param name="downloadQueue">
+        /// Очередь загрузок главной страницы. Опциональна: тесты поднимают страницу без неё,
+        /// и тогда установка/обновление идёт старым локальным путём.
+        /// </param>
+        internal GamePage(GameInfo game, Core.Game.IDownloadQueue? downloadQueue = null) {
             this.InitializeComponent();
             this.game = game ?? new GameInfo();
+            this.downloadQueue = downloadQueue;
             this.buildsLoader = new GameBuildsLoader(this.http);
             this.changelogLoader = new GameChangelogLoader(this.http);
             this.syncRunner = new GameSyncRunner(this.sync, this.BuildSyncUi());
@@ -67,6 +87,17 @@ namespace ChillHub.Pages {
             // а отписка уже произошла в Unloaded — иначе режим работ до неё больше не доходит.
             this.SubscribeMaintenance();
             this.Loaded += (s, e) => this.SubscribeMaintenance();
+
+            if (this.downloadQueue != null) {
+                this.downloadQueue.ItemAdded += this.OnQueueItemChanged;
+                this.downloadQueue.ItemProgress += this.OnQueueItemChanged;
+                this.downloadQueue.ItemCompleted += this.OnQueueItemFinished;
+                this.downloadQueue.ItemRemoved += this.OnQueueItemFinished;
+
+                // Страницу могли открыть, пока эта игра уже качается (поставлена в очередь с
+                // главной), — подхватываем её состояние сразу, а не ждём следующего события.
+                this.SyncFromQueueSnapshot();
+            }
 
             _ = this.InitAsync();
         }
@@ -141,6 +172,23 @@ namespace ChillHub.Pages {
             }
 
             this.ApplyState(state);
+        }
+
+        /// <summary>Клик по пути установки — копирует его в буфер обмена. Пустого/дефолтного «—» не копируем.</summary>
+        private void InstallPathText_MouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e) {
+            try {
+                var path = this.InstallPathText.Text;
+                if (string.IsNullOrWhiteSpace(path) || path == "—") {
+                    return;
+                }
+
+                Clipboard.SetText(path);
+                (this.toastHost ??= new ToastHost(this.Toast, this.ToastText)).Show("Путь скопирован в буфер обмена");
+            }
+            catch (Exception ex) {
+                // Буфер обмена может быть занят другим процессом — не критично, просто не скопировалось
+                Core.Logging.Logger.Warn($"GamePage.InstallPathText_MouseLeftButtonUp: {ex.Message}");
+            }
         }
 
         private void ApplyState(GameState state) {
@@ -235,7 +283,12 @@ namespace ChillHub.Pages {
         private void ActionBtn_Click(object sender, RoutedEventArgs e) {
             if (this.isBusy) {
                 try {
-                    this.cts?.Cancel();
+                    if (this.viaQueue) {
+                        this.downloadQueue?.Remove(this.game.GameId);
+                    }
+                    else {
+                        this.cts?.Cancel();
+                    }
                 }
                 catch (Exception ex) {
                     Core.Logging.Logger.Warn($"GamePage: отмена операции не выполнилась: {ex.Message}");
@@ -256,10 +309,112 @@ namespace ChillHub.Pages {
                 return;
             }
 
-            // В состоянии «Установлена» кнопка означает «Проверить файлы»: это сверка с
-            // манифестом, после которой всё лишнее удаляется. Такое удаление требует
-            // подтверждения — как и при переключении версии.
+            // Установка/обновление/докачка незавершённого — через общую очередь загрузок: страницу
+            // можно закрыть или уйти на главную, не обрывая закачку (см. StartQueuedSync). Только
+            // «Проверить файлы» (уже установлена) остаётся локальным — это быстрая сверка с
+            // манифестом с подтверждением удаления лишнего, ставить её в очередь незачем.
+            if (this.currentState != GameState.Installed && this.downloadQueue != null) {
+                this.StartQueuedSync();
+                return;
+            }
+
             _ = this.StartSyncAsync(version, confirmDeletions: this.currentState == GameState.Installed);
+        }
+
+        /// <summary>
+        /// Ставит установку/обновление в общую очередь загрузок вместо отдельного локального
+        /// запуска. Раньше закачка жила только в <see cref="cts"/> этой страницы и обрывалась в
+        /// <see cref="GamePage_Unloaded"/>, стоило уйти на главную — а в самой очереди её было не
+        /// видно вовсе, потому что страница никогда её не пополняла.
+        /// </summary>
+        private void StartQueuedSync() {
+            var gid = this.game.GameId;
+            if (!this.downloadQueue!.Enqueue(gid)) {
+                // Уже стоит в очереди (например, добавили с главной страницы) — просто подхватываем её.
+                this.SyncFromQueueSnapshot();
+                return;
+            }
+
+            this.viaQueue = true;
+            this.SetBusy(true);
+            this.progressView.Reset();
+            this.SyncProgressBar.Value = 0;
+            this.SpeedEtaText.Text = string.Empty;
+            this.FilesSizeText.Text = string.Empty;
+            this.StatusText.Text = "Ждёт очереди…";
+        }
+
+        /// <summary>Подхватывает текущее состояние этой игры из очереди, если она там уже есть.</summary>
+        private void SyncFromQueueSnapshot() {
+            if (this.downloadQueue == null) {
+                return;
+            }
+
+            var item = this.downloadQueue.Snapshot()
+                .FirstOrDefault(i => string.Equals(i.GameId, this.game.GameId, StringComparison.OrdinalIgnoreCase));
+            if (item != null) {
+                this.ApplyQueueItem(item);
+            }
+        }
+
+        /// <summary>Событие очереди про эту игру: обновляем прогресс, если страница ещё показана.</summary>
+        private void OnQueueItemChanged(Core.Game.QueueItem item) {
+            if (!string.Equals(item.GameId, this.game.GameId, StringComparison.OrdinalIgnoreCase)) {
+                return;
+            }
+
+            this.Dispatcher.BeginInvoke(() => this.ApplyQueueItem(item));
+        }
+
+        /// <summary>Позиция этой игры ушла из очереди — успехом, ошибкой или снятием вручную.</summary>
+        private void OnQueueItemFinished(Core.Game.QueueItem item) {
+            if (!string.Equals(item.GameId, this.game.GameId, StringComparison.OrdinalIgnoreCase)) {
+                return;
+            }
+
+            this.Dispatcher.BeginInvoke(async () => {
+                this.viaQueue = false;
+                this.SetBusy(false);
+                this.SyncProgressBar.IsIndeterminate = false;
+                this.StatusText.Text = item.StatusText;
+                try {
+                    await this.RefreshStateAsync().ConfigureAwait(true);
+                }
+                catch (Exception ex) {
+                    Core.Logging.Logger.Error(ex, "GamePage.OnQueueItemFinished.RefreshState");
+                }
+            });
+        }
+
+        /// <summary>Отражает снимок позиции очереди в тех же контролах, что и локальная закачка.</summary>
+        private void ApplyQueueItem(Core.Game.QueueItem item) {
+            try {
+                this.viaQueue = true;
+                if (!this.isBusy) {
+                    this.SetBusy(true);
+                }
+
+                this.StatusText.Text = item.State == Core.Game.QueueItemState.Waiting
+                    ? (item.QueuePosition > 1 ? $"В очереди · {item.QueuePosition}-я" : "Следующая в очереди")
+                    : item.StatusText;
+
+                this.SyncProgressBar.IsIndeterminate = item.TotalBytes <= 0 && item.State == Core.Game.QueueItemState.Running;
+
+                if (item.TotalBytes > 0) {
+                    this.SyncProgressBar.Value = Math.Min(100.0, Math.Max(0.0, item.BytesDownloaded * 100.0 / item.TotalBytes));
+                    this.FilesSizeText.Text = $"{FormatSize(item.BytesDownloaded)} / {FormatSize(item.TotalBytes)}";
+
+                    if (item.BytesPerSecond > 0) {
+                        var remaining = item.TotalBytes - item.BytesDownloaded;
+                        this.SpeedEtaText.Text = remaining > 0
+                            ? $"{item.BytesPerSecond / 1024.0 / 1024.0:0.0} МБ/с · осталось {FormatEta(remaining / item.BytesPerSecond)}"
+                            : $"{item.BytesPerSecond / 1024.0 / 1024.0:0.0} МБ/с";
+                    }
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"GamePage.ApplyQueueItem: {ex.Message}");
+            }
         }
 
         private void OpenFolderBtn_Click(object sender, RoutedEventArgs e) {
@@ -313,14 +468,23 @@ namespace ChillHub.Pages {
         }
 
         private void GamePage_Unloaded(object sender, RoutedEventArgs e) {
-            // Уходим со страницы во время закачки — операцию не бросаем «висеть» без владельца
+            // Уходим со страницы во время локальной операции («Проверить файлы») — её не бросаем
+            // «висеть» без владельца, отменяем. Операцию через downloadQueue (viaQueue) НЕ трогаем:
+            // она принадлежит очереди, а не странице, и обязана продолжаться после ухода на главную.
             try {
-                if (this.isBusy) {
+                if (this.isBusy && !this.viaQueue) {
                     this.cts?.Cancel();
                 }
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Warn($"GamePage.Unloaded: отмена не выполнилась: {ex.Message}");
+            }
+
+            if (this.downloadQueue != null) {
+                this.downloadQueue.ItemAdded -= this.OnQueueItemChanged;
+                this.downloadQueue.ItemProgress -= this.OnQueueItemChanged;
+                this.downloadQueue.ItemCompleted -= this.OnQueueItemFinished;
+                this.downloadQueue.ItemRemoved -= this.OnQueueItemFinished;
             }
 
             // Статическое событие переживёт страницу — отписываемся, иначе утечёт ссылка
