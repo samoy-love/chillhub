@@ -129,6 +129,34 @@ namespace ChillHub.Core.UI {
     }
 
     /// <summary>
+    /// Метка очереди для строки списка игр (см. <see cref="GameInfo.QueueLabel"/>):
+    /// качается — «Скачивание · 38%», ждёт — «В очереди»; для позиции вне очереди — пусто.
+    /// Процент — целый, чтобы строка списка менялась сотню раз за закачку, а не тысячи.
+    /// </summary>
+    internal static class QueueRowLabel {
+        /// <summary>Подпись для позиции очереди; null-позиция — пустая строка.</summary>
+        internal static string For(QueueItem? item) {
+            if (item is null) {
+                return string.Empty;
+            }
+
+            switch (item.State) {
+                case QueueItemState.Running:
+                    if (item.TotalBytes > 0) {
+                        var percent = Math.Clamp(item.BytesDownloaded * 100.0 / item.TotalBytes, 0, 100);
+                        return $"Скачивание · {percent:0}%";
+                    }
+
+                    return "Скачивание";
+                case QueueItemState.Waiting:
+                    return "В очереди";
+                default:
+                    return string.Empty;
+            }
+        }
+    }
+
+    /// <summary>
     /// Видимость по состоянию позиции очереди: вход — <see cref="QueueItemState"/>,
     /// параметр — его имя (например, "Waiting"). Совпало — Visible, иначе Collapsed.
     /// </summary>

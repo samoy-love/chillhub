@@ -20,6 +20,9 @@
             <ui:QueueItemPercentTextConverter x:Key="QueueItemPercentTextConv" />
             <ui:GameStatusTextConverter x:Key="GameStatusTextConv" />
             <ui:GameStatusBrushConverter x:Key="GameStatusBrushConv" />
+            <ui:GameRowStatusTextConverter x:Key="GameRowStatusTextConv" />
+            <ui:GameRowStatusBrushConverter x:Key="GameRowStatusBrushConv" />
+            <ui:NewsColumnsConverter x:Key="NewsColumnsConv" />
         </ResourceDictionary>
     </Application.Resources>
 </Application>
