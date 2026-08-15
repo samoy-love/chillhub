@@ -83,6 +83,24 @@ function Assert-NativeSuccess {
     }
 }
 
+# "1.2.3" / "0.0.0-ci" / "1.2.3+sha" -> "1.2.3.0": вид, который требует ресурс
+# версии Windows (VIProductVersion в installer.nsi) — ровно четыре числа.
+# Суффикс предрелиза в ресурс не попадает: там ему места нет. Полная строка
+# версии уезжает в текстовые поля ресурса и в launcher.version как есть.
+function ConvertTo-FileVersionQuad {
+    param([Parameter(Mandatory = $true)][string]$Version)
+
+    $numeric = ($Version -split '[-+]')[0]
+    $parts = @($numeric -split '\.' | Where-Object { $_ -ne '' })
+    foreach ($p in $parts) {
+        if ($p -notmatch '^\d+$') {
+            throw "Не удалось привести версию '$Version' к виду 1.2.3.0: компонент '$p' не число."
+        }
+    }
+    while ($parts.Count -lt 4) { $parts += '0' }
+    return ($parts[0..3] -join '.')
+}
+
 # Версия установки (Б8).
 #
 # Порядок источников — явный параметр, затем метаданные собранного ChillHub.exe.
@@ -270,6 +288,83 @@ function New-LauncherPayload {
     finally {
         try { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction Stop } catch {}
     }
+}
+
+# ПОДПИСЬ УСТАНОВЩИКА (docs/installer-signing.md).
+#
+# Установщик не подписан, и это самая заметная для пользователя проблема
+# дистрибутива: SmartScreen встречает каждого скачавшего экраном «Windows
+# защитила ваш компьютер» с «Издатель: неизвестен», а часть антивирусов
+# относится к неподписанному NSIS-файлу заведомо хуже.
+#
+# Починить это одним кодом нельзя — нужен сертификат, то есть деньги и
+# проверка организации. Поэтому здесь ровно то, что можно сделать заранее:
+# шаг подписи, который включается переменными окружения. Пока их нет, сборка
+# идёт как раньше и ГОВОРИТ ВСЛУХ, что артефакт не подписан, — чтобы «а мы
+# думали, оно подписывается» не выяснилось на релизе.
+#
+#   CHILLHUB_SIGN=1                     — включить подпись (без неё шаг пропущен)
+#   CHILLHUB_SIGN_THUMBPRINT=<отпечаток> — сертификат в хранилище машины/пользователя
+#   CHILLHUB_SIGN_TIMESTAMP_URL=<url>    — сервер меток времени (есть значение по умолчанию)
+#   CHILLHUB_SIGNTOOL=<путь>             — signtool.exe, если он не находится сам
+#
+# Метка времени обязательна и не отключается: без неё подпись перестаёт быть
+# действительной в день истечения сертификата, и уже скачанные установщики
+# в этот день превращаются в «неизвестного издателя».
+function Find-SignTool {
+    param([string]$Explicit)
+
+    if ($Explicit) {
+        if (Test-Path -LiteralPath $Explicit) { return (Resolve-Path -LiteralPath $Explicit).Path }
+        throw "CHILLHUB_SIGNTOOL указывает на '$Explicit', но такого файла нет."
+    }
+
+    $fromPath = (Get-Command signtool -ErrorAction SilentlyContinue | Select-Object -First 1).Path
+    if ($fromPath) { return $fromPath }
+
+    # Windows SDK кладёт signtool в каталог с версией; берём самый свежий x64.
+    $sdkRoots = @("${env:ProgramFiles(x86)}\Windows Kits\10\bin", "$env:ProgramFiles\Windows Kits\10\bin")
+    $candidates = foreach ($root in $sdkRoots) {
+        if (Test-Path -LiteralPath $root) {
+            Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+                Sort-Object Name -Descending |
+                ForEach-Object { Join-Path $_.FullName 'x64\signtool.exe' } |
+                Where-Object { Test-Path -LiteralPath $_ }
+        }
+    }
+    $found = $candidates | Select-Object -First 1
+    if ($found) { return $found }
+
+    throw "signtool.exe не найден (PATH и Windows Kits\10\bin просмотрены). Укажите путь через CHILLHUB_SIGNTOOL."
+}
+
+function Invoke-SignArtifact {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if ($env:CHILLHUB_SIGN -ne '1') {
+        Write-Warning "Артефакт НЕ ПОДПИСАН: CHILLHUB_SIGN не выставлен. У пользователя SmartScreen покажет «Издатель: неизвестен» (см. docs/installer-signing.md)."
+        return
+    }
+
+    $thumb = $env:CHILLHUB_SIGN_THUMBPRINT
+    if ([string]::IsNullOrWhiteSpace($thumb)) {
+        # Молча не подписать при CHILLHUB_SIGN=1 — худший вариант: выкатка
+        # решит, что подпись есть.
+        throw "CHILLHUB_SIGN=1, но CHILLHUB_SIGN_THUMBPRINT пуст: подписывать нечем."
+    }
+
+    $timestampUrl = if ($env:CHILLHUB_SIGN_TIMESTAMP_URL) { $env:CHILLHUB_SIGN_TIMESTAMP_URL } else { 'http://timestamp.digicert.com' }
+    $signtool = Find-SignTool -Explicit $env:CHILLHUB_SIGNTOOL
+
+    Write-Host "Signing: $Path" -ForegroundColor Cyan
+    & $signtool sign /sha1 $thumb /fd SHA256 /tr $timestampUrl /td SHA256 /v $Path
+    Assert-NativeSuccess "signtool sign" $LASTEXITCODE
+
+    # Постусловие: подпись проверяется отдельным вызовом, а не выводится из
+    # кода возврата подписи. /pa — политика проверки для обычных программ.
+    & $signtool verify /pa /v $Path
+    Assert-NativeSuccess "signtool verify" $LASTEXITCODE
+    Write-Host "Signed and verified: $Path" -ForegroundColor Green
 }
 
 function Publish-UpdaterAot {
@@ -622,6 +717,11 @@ $nsisArgs += @("/DPAYLOAD_DIR=$payloadDirFull")
 # Версия установки (Б8). installer.nsi без /DAPP_VERSION не компилируется —
 # см. !ifndef APP_VERSION там и Resolve-AppVersion выше.
 $nsisArgs += @("/DAPP_VERSION=$resolvedVersion")
+# Та же версия в формате ресурса версии Windows: ровно четыре числовых
+# компонента. Ресурсу нельзя отдать ни "1.2.3", ни "0.0.0-ci" — makensis такое
+# не примет, поэтому приведение живёт здесь, а не в .nsi (в NSIS нет средств
+# разобрать строку версии на этапе компиляции).
+$nsisArgs += @("/DAPP_VERSION_NUMERIC=$(ConvertTo-FileVersionQuad $resolvedVersion)")
 $nsisArgs += @("$installerPath")
 
 & "$makensis" @nsisArgs
@@ -633,6 +733,8 @@ $setupExe = Join-Path $outDir "ChillHub-Setup.exe"
 if (-not (Test-Path -LiteralPath $setupExe)) {
     throw "makensis reported success but '$setupExe' does not exist."
 }
+Invoke-SignArtifact -Path $setupExe
+
 $setupSize = (Get-Item -LiteralPath $setupExe).Length
 Write-Host "Done. Installer: $setupExe ($([math]::Round($setupSize / 1MB, 1)) MB)" -ForegroundColor Green
 
