@@ -32,6 +32,23 @@ namespace ChillHub {
         private readonly KaraokeTicker karaoke;
 
         /// <summary>
+        /// Периодическая проверка самообновления, пока лаунчер уже работает: раньше
+        /// <see cref="Core.SelfUpdate.SelfUpdateChecker"/> вызывался ровно один раз, до
+        /// показа этого окна (см. <c>App.Application_Startup</c>) — тот, кто оставил лаунчер
+        /// открытым надолго, новую версию не видел никогда. Тикает раз в
+        /// <see cref="SelfUpdateCheckInterval"/> и переиспользует тот же
+        /// <see cref="UpdateWindow"/>, что и стартовая проверка — значит, и то же правило
+        /// «применяется только по явному клику», см. <see cref="SelfUpdateCheckTimer_Tick"/>.
+        /// </summary>
+        private readonly DispatcherTimer selfUpdateCheckTimer = new DispatcherTimer(DispatcherPriority.Background);
+
+        /// <summary>Как часто дёргать сервер за номером версии, пока лаунчер открыт.</summary>
+        private static readonly TimeSpan SelfUpdateCheckInterval = TimeSpan.FromMinutes(10);
+
+        /// <summary>Не даёт двум проверкам обновления (тик таймера и разворачивание из трея) столкнуться.</summary>
+        private bool selfUpdateCheckRunning;
+
+        /// <summary>
         /// Единственный экземпляр главной страницы. Раньше каждый клик по «Каталогу» создавал
         /// новый HomePage, а вместе с ним — ещё один FeedbackService со своей копией очереди и
         /// своим 10-секундным таймером, который никто не останавливал: таймер старой страницы
@@ -49,12 +66,39 @@ namespace ChillHub {
         /// <summary>Настоящий выход запрошен из трея — Closing больше не должен его перехватывать.</summary>
         private bool exitRequested;
 
+        /// <summary>
+        /// Настоящий выход запрошен самообновлением: апдейтеру нужен полностью завершённый
+        /// процесс, а не окно, спрятанное в трей. Без этого флага
+        /// <see cref="Application.Shutdown()"/>, вызванный из <c>UpdateWindow</c> после
+        /// запуска апдейтера, натыкался на <see cref="MainWindow_Closing"/> — при включённом
+        /// <see cref="Core.ConfigService.MinimizeToTray"/> тот отменял закрытие и просто
+        /// прятал окно, а Shutdown() при отменённом закрытии окна процесс не завершает.
+        /// Апдейтер в это время уже переписывал файлы лаунчера, соревнуясь за них с живым
+        /// (просто невидимым) старым процессом.
+        /// </summary>
+        internal void PrepareForForcedExit() => this.exitRequested = true;
+
         public MainWindow() {
             this.karaoke = new KaraokeTicker(this.k);
             this.InitializeComponent();
             Console.WriteLine("[BOOT] Showing MainWindow");
             this.NavigateToHome();
             this.Closing += this.MainWindow_Closing;
+
+            // Значок в трее живёт всё время работы приложения, а не только пока окно
+            // спрятано: раньше он появлялся исключительно в MainWindow_Closing (уход в
+            // трей) и пропадал в RestoreFromTray, поэтому у развёрнутого или обычного
+            // окна значка в трее не было вовсе — «Открыть/Играть/Выйти» из трея были
+            // недоступны, пока пользователь ни разу не сворачивал окно.
+            this.EnsureTray().Show();
+
+            // См. описание selfUpdateCheckTimer: первая проверка уже сделана при старте
+            // (App.Application_Startup), поэтому таймер просто ждёт свой первый интервал,
+            // а не бьёт по серверу сразу же вслед за стартовой проверкой.
+            this.selfUpdateCheckTimer.Interval = SelfUpdateCheckInterval;
+            this.selfUpdateCheckTimer.Tick += this.SelfUpdateCheckTimer_Tick;
+            this.selfUpdateCheckTimer.Start();
+            this.Closed += (s, e) => this.selfUpdateCheckTimer.Stop();
 
             // Karaoke setup
             // Используем собранные настройки выше
@@ -118,8 +162,9 @@ namespace ChillHub {
                 var trayIcon = this.EnsureTray();
                 // Имя подставляем в момент ухода в трей: пока окно на экране, меню
                 // никто не видит, а выбранная игра до этого могла смениться.
+                // Сам значок уже показан (см. конструктор) — трей живёт независимо
+                // от видимости окна, прятать/показывать его заново не нужно.
                 trayIcon.SetCurrentGame(this.CurrentHome?.SelectedGameTitle);
-                trayIcon.Show();
                 this.Hide();
             }
             catch (Exception ex) {
@@ -179,12 +224,16 @@ namespace ChillHub {
             this.CurrentHome?.RefreshGamesAndStatuses();
         }
 
-        /// <summary>Возвращает окно из трея на экран.</summary>
+        /// <summary>Возвращает окно из трея на экран. Значок в трее остаётся — см. конструктор.</summary>
         private void RestoreFromTray() {
-            this.tray?.Hide();
             this.Show();
             this.WindowState = WindowState.Normal;
             this.Activate();
+
+            // Именно в момент разворачивания — свежая проверка, а не то, что успело натикать
+            // в трее: лаунчер мог простоять свёрнутым дольше интервала таймера, и пользователь
+            // не должен ждать следующего тика, чтобы узнать об обновлении.
+            _ = this.RunSelfUpdateCheckAsync();
         }
 
         /// <summary>
@@ -204,6 +253,75 @@ namespace ChillHub {
             }
 
             this.Activate();
+        }
+
+        /// <summary>Тик <see cref="selfUpdateCheckTimer"/> — то же самое, что и разворачивание из трея.</summary>
+        private async void SelfUpdateCheckTimer_Tick(object? sender, EventArgs e) => await this.RunSelfUpdateCheckAsync();
+
+        /// <summary>
+        /// Спрашивает сервер о версии и, если есть что показать, показывает диалог (или
+        /// откладывает его — см. <see cref="TryShowSelfUpdateDialog"/>). Вызывается и по
+        /// расписанию (<see cref="selfUpdateCheckTimer"/> — версия проверяется независимо от
+        /// того, видно ли окно, иначе лаунчер, оставленный в трее, никогда не узнал бы об
+        /// обновлении), и сразу при разворачивании окна (<see cref="RestoreFromTray"/>).
+        /// <para>
+        /// Флаг <see cref="selfUpdateCheckRunning"/> не даёт этим двум вызовам столкнуться —
+        /// если проверка уже идёт (например, только что начал тик), повторный запрос из
+        /// RestoreFromTray просто ничего не делает: результат тика и так вот-вот появится.
+        /// </para>
+        /// </summary>
+        private async Task RunSelfUpdateCheckAsync() {
+            if (this.selfUpdateCheckRunning) {
+                return;
+            }
+
+            this.selfUpdateCheckRunning = true;
+            try {
+                var precheck = await UpdateWindow.PrecheckAsync();
+
+                // Актуальная версия — рассказывать нечего, тикаем дальше молча, как и при
+                // старте (см. SelfUpdatePrecheck.NeedsWindow).
+                if (!precheck.NeedsWindow) {
+                    return;
+                }
+
+                this.TryShowSelfUpdateDialog(precheck);
+            }
+            catch (Exception ex) {
+                // Фоновая проверка не должна ронять лаунчер — просто попробуем в следующий раз.
+                Core.Logging.Logger.Error(ex, "MainWindow.RunSelfUpdateCheckAsync");
+            }
+            finally {
+                this.selfUpdateCheckRunning = false;
+            }
+        }
+
+        /// <summary>
+        /// Показывает диалог самообновления, если для этого подходящий момент, иначе просто
+        /// молчит — следующий шанс спросить и показать будет либо по расписанию, либо сразу
+        /// же при разворачивании окна (см. <see cref="RestoreFromTray"/>, которая гоняет
+        /// свежую проверку сама, а не полагается на то, что могло устареть за это время).
+        /// <para>
+        /// Диалог тот же модальный <see cref="UpdateWindow"/>, что и при старте —
+        /// применение обновления по-прежнему происходит исключительно по клику «Обновить и
+        /// перезапустить» (см. <see cref="UpdateWindow.PrimaryBtn_Click"/>), значит лаунчер
+        /// не может закрыться и начать обновление без ввода пользователя ни отсюда, ни оттуда.
+        /// В отличие от старта: отказ или закрытие этого диалога НЕ завершает лаунчер —
+        /// сюда не подшита никакая реакция на DialogResult.
+        /// </para>
+        /// </summary>
+        private void TryShowSelfUpdateDialog(SelfUpdatePrecheck precheck) {
+            // Окно спрятано в трее/свёрнуто или идёт загрузка игры — не время лезть с диалогом
+            // обновления.
+            if (!this.IsVisible || this.WindowState == WindowState.Minimized || this.CurrentHome?.HasActiveDownloads == true) {
+                return;
+            }
+
+            var upd = new UpdateWindow(precheck) {
+                Owner = this,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            };
+            upd.ShowDialog();
         }
 
         private void OnMaintenanceChanged(Core.Maintenance.MaintenanceState state) => this.ApplyMaintenanceState(state);
