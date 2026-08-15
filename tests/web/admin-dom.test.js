@@ -42,6 +42,12 @@ const SCRIPT_ORDER = [
   // в разметке на их месте остаются пустые <div data-upload-card>, и ни один
   // из up_*/man_* элементов не существует.
   'upload-card.js',
+  // Эти два в admin.html были, а здесь — нет: список «повторяет <script>
+  // построчно» разошёлся с разметкой. Молча: тесты проходили, а весь код
+  // галереи игры и списка игр (включая «Опасную зону» с удалением игры
+  // целиком) не исполнялся ни разу и висел в отчёте нулём.
+  'game-gallery.js',
+  'game-list.js',
   'admin.js',
 ];
 
@@ -720,4 +726,284 @@ test('askConfirm: отказ пользователя возвращает false
 
   const ok = await window.askConfirm({ title: 'Удалить всё?', body: 'Восстановить неоткуда.', danger: true });
   assert.strictEqual(ok, false);
+});
+
+// ---- Модальное подтверждение (путь с bootstrap) ----
+
+// В jsdom bootstrap нет (CDN-тег вырезан), поэтому askConfirm по умолчанию
+// уходит в запасной confirm. Настоящий путь — модалка — до сих пор не
+// исполнялся ни разу: именно в нём живут и красная кнопка, и экранирование
+// текста, и список последствий. Подменяем ровно тот кусок API bootstrap,
+// который askConfirm использует: конструктор Modal, show/hide и события
+// shown/hidden.
+function installFakeBootstrap(window) {
+  const shown = [];
+  class Modal {
+    constructor(el) { this.el = el; shown.push(el); }
+    show() { this.el.dispatchEvent(new window.Event('shown.bs.modal')); }
+    hide() { this.el.dispatchEvent(new window.Event('hidden.bs.modal')); }
+  }
+  window.bootstrap = { Modal };
+  return shown;
+}
+
+test('askConfirm (модалка): последствия списком, красная кнопка, никакого поля ввода', async (t) => {
+  const { window, document } = loadAdminPage(t);
+  const opened = installFakeBootstrap(window);
+
+  const answer = window.askConfirm({
+    title: 'Удалить версию 1.2.3?',
+    body: 'Версия 1.2.3 исчезнет с сервера.',
+    bullets: ['Файлы сборки удаляются безвозвратно.', 'Вернуть можно только повторной заливкой.'],
+    okText: 'Удалить версию',
+    danger: true,
+  });
+
+  // Именно последняя добавленная: в admin.html есть и свои .modal, поэтому
+  // querySelector('.modal') нашёл бы чужую разметку.
+  const modal = opened[opened.length - 1];
+  assert.ok(document.body.contains(modal), 'модалка добавлена в документ');
+
+  // Главное требование правки: подтверждают кнопкой, а не перепечатыванием
+  // номера версии.
+  assert.strictEqual(modal.querySelector('input'), null, 'в диалоге не должно быть поля ввода');
+
+  const items = [...modal.querySelectorAll('li')].map((li) => li.textContent);
+  assert.deepStrictEqual(items, [
+    'Файлы сборки удаляются безвозвратно.',
+    'Вернуть можно только повторной заливкой.',
+  ], 'каждое последствие — отдельным пунктом');
+
+  const ok = modal.querySelector('#__ask_ok');
+  assert.ok(ok.className.includes('btn-danger'), 'опасное действие красное');
+  assert.strictEqual(ok.disabled, false, 'кнопка сразу активна: ждать нечего');
+
+  ok.dispatchEvent(new window.Event('click'));
+  assert.strictEqual(await answer, true, 'нажатие на кнопку подтверждает действие');
+  assert.strictEqual(document.body.contains(modal), false, 'модалка убирается из документа');
+});
+
+test('askConfirm (модалка): закрытие без нажатия — это отказ, разметка экранируется', async (t) => {
+  const { window, document } = loadAdminPage(t);
+  const opened = installFakeBootstrap(window);
+
+  const answer = window.askConfirm({
+    title: '<img src=x onerror=alert(1)>',
+    body: 'Папка «<b>logs</b>» будет удалена.',
+    bullets: ['<script>alert(2)</script>'],
+    okText: 'Удалить',
+    danger: true,
+  });
+
+  const modal = opened[opened.length - 1];
+  assert.ok(document.body.contains(modal));
+  assert.strictEqual(modal.querySelector('img'), null, 'разметка из заголовка не должна исполняться');
+  assert.strictEqual(modal.querySelector('script'), null, 'разметка из списка последствий — тоже');
+  assert.match(modal.querySelector('.modal-title').textContent, /<img src=x onerror=alert\(1\)>/);
+
+  // Крестик и «Отмена» в настоящем bootstrap закрывают модалку сами
+  // (data-bs-dismiss), поэтому отказ приходит событием hidden, а не кликом.
+  modal.dispatchEvent(new window.Event('hidden.bs.modal'));
+  assert.strictEqual(await answer, false, 'закрытая без подтверждения модалка = отказ');
+});
+
+// ---- Удаление версии игры ----
+
+test('удаление версии: подтверждение, POST на /admin/deleteVersion и обновление вида', async (t) => {
+  const calls = [];
+  const fetchStub = async (url, opts) => {
+    calls.push({ url: String(url), method: (opts && opts.method) || 'GET' });
+    return jsonResponse({ status: 'ok' });
+  };
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
+  const opened = installFakeBootstrap(window);
+
+  const root = document.createElement('div');
+  root.innerHTML = '<button class="vr-delete" data-ver="1.4.2">Удалить</button>';
+  document.body.appendChild(root);
+
+  let refreshed = 0;
+  window.bindVersionActions(root, 'vr', 'lethal-company', async () => { refreshed++; });
+
+  root.querySelector('.vr-delete').dispatchEvent(new window.Event('click', { bubbles: true }));
+  await new Promise((res) => setTimeout(res, 0));
+
+  const modal = opened[opened.length - 1];
+  assert.match(modal.querySelector('.modal-title').textContent, /Удалить версию 1\.4\.2\?/);
+  assert.ok(
+    [...modal.querySelectorAll('li')].some((li) => /повторной заливкой/.test(li.textContent)),
+    'администратору сказано, чем это отменяется',
+  );
+
+  modal.querySelector('#__ask_ok').dispatchEvent(new window.Event('click'));
+  for (let i = 0; i < 5; i++) await new Promise((res) => setTimeout(res, 0));
+
+  // Путь с /admin/api — admin.js разворачивает относительные адреса сам.
+  const del = calls.find((c) => c.url.includes('deleteVersion'));
+  assert.ok(del, 'удаление уходит на сервер');
+  assert.strictEqual(del.method, 'POST');
+  assert.match(del.url, /gameId=lethal-company/);
+  assert.match(del.url, /version=1\.4\.2/);
+  assert.strictEqual(refreshed, 1, 'список версий перечитывается после удаления');
+});
+
+test('удаление версии: отказ в диалоге не шлёт ни одного запроса', async (t) => {
+  const calls = [];
+  const fetchStub = async (url) => { calls.push(String(url)); return jsonResponse({}); };
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
+  const opened = installFakeBootstrap(window);
+
+  const root = document.createElement('div');
+  root.innerHTML = '<button class="vr-delete" data-ver="1.4.2">Удалить</button>';
+  document.body.appendChild(root);
+  window.bindVersionActions(root, 'vr', 'lethal-company', async () => {});
+
+  root.querySelector('.vr-delete').dispatchEvent(new window.Event('click', { bubbles: true }));
+  await new Promise((res) => setTimeout(res, 0));
+  opened[opened.length - 1].dispatchEvent(new window.Event('hidden.bs.modal'));
+  for (let i = 0; i < 5; i++) await new Promise((res) => setTimeout(res, 0));
+
+  assert.strictEqual(calls.filter((u) => u.includes('deleteVersion')).length, 0);
+});
+
+// ---- Остальные удаления: обращения, метрики, игра целиком, галерея ----
+
+test('очистка обращений: диалог перечисляет последствия и шлёт POST', async (t) => {
+  const calls = [];
+  const fetchStub = async (url, opts) => {
+    calls.push({ url: String(url), method: (opts && opts.method) || 'GET' });
+    if (String(url).includes('/feedback/list')) return jsonResponse({ items: [] });
+    return jsonResponse({ status: 'ok' });
+  };
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
+  const opened = installFakeBootstrap(window);
+
+  // Кнопки вкладки обращений привязываются на DOMContentLoaded, а он к моменту
+  // исполнения скриптов уже прошёл (см. loadAdminPage).
+  document.dispatchEvent(new window.Event('DOMContentLoaded', { bubbles: true }));
+  document.getElementById('fb_clear').dispatchEvent(new window.Event('click', { bubbles: true }));
+  await new Promise((res) => setTimeout(res, 0));
+
+  const modal = opened[opened.length - 1];
+  assert.match(modal.querySelector('.modal-title').textContent, /Удалить все обращения\?/);
+  assert.strictEqual(modal.querySelector('input'), null, 'подтверждение без ввода текста');
+  assert.ok(
+    [...modal.querySelectorAll('li')].some((li) => /восстановить обращения неоткуда/i.test(li.textContent)),
+    'сказано, что копии нет',
+  );
+
+  modal.querySelector('#__ask_ok').dispatchEvent(new window.Event('click'));
+  for (let i = 0; i < 6; i++) await new Promise((res) => setTimeout(res, 0));
+  const clear = calls.find((c) => c.url.includes('/feedback/clear'));
+  assert.ok(clear && clear.method === 'POST', 'очистка уходит POST-ом');
+});
+
+test('очистка метрик: диалог перечисляет последствия и шлёт POST', async (t) => {
+  const calls = [];
+  const fetchStub = async (url, opts) => {
+    calls.push({ url: String(url), method: (opts && opts.method) || 'GET' });
+    return jsonResponse({ events: [], items: [] });
+  };
+  const { window } = loadAdminPage(t, { fetchImpl: fetchStub });
+  const opened = installFakeBootstrap(window);
+
+  const done = window.mxClear();
+  await new Promise((res) => setTimeout(res, 0));
+
+  const modal = opened[opened.length - 1];
+  assert.match(modal.querySelector('.modal-title').textContent, /Удалить все метрики\?/);
+  assert.strictEqual(modal.querySelector('input'), null, 'подтверждение без ввода текста');
+  assert.ok(
+    [...modal.querySelectorAll('li')].some((li) => /историю неоткуда/i.test(li.textContent)),
+    'сказано, что историю не вернуть',
+  );
+
+  modal.querySelector('#__ask_ok').dispatchEvent(new window.Event('click'));
+  await done;
+  const clear = calls.find((c) => c.url.includes('/metrics/clear'));
+  assert.ok(clear && clear.method === 'POST', 'очистка метрик уходит POST-ом');
+});
+
+test('удаление игры целиком: предупреждение про всех пользователей и POST на purge', async (t) => {
+  const calls = [];
+  const fetchStub = async (url, opts) => {
+    calls.push({ url: String(url), method: (opts && opts.method) || 'GET', body: opts && opts.body });
+    if (String(url).includes('/admin/games')) return jsonResponse({ games: [] });
+    return jsonResponse({ status: 'ok' });
+  };
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
+  const opened = installFakeBootstrap(window);
+
+  // Обработчики «Опасной зоны» вешаются на DOMContentLoaded (скрипты здесь
+  // исполняются уже после разбора документа — см. loadAdminPage).
+  document.dispatchEvent(new window.Event('DOMContentLoaded', { bubbles: true }));
+  setValue(document, 'gid', 'lethal-company');
+
+  document.getElementById('gm_dz_delete').dispatchEvent(new window.Event('click', { bubbles: true }));
+  await new Promise((res) => setTimeout(res, 0));
+
+  const modal = opened[opened.length - 1];
+  assert.match(modal.querySelector('.modal-title').textContent, /Удалить игру «lethal-company» и все версии\?/);
+  assert.strictEqual(modal.querySelector('input'), null, 'подтверждение без ввода текста');
+  const bullets = [...modal.querySelectorAll('li')].map((li) => li.textContent).join(' | ');
+  assert.match(bullets, /пропадает у всех пользователей/i, 'сказано, что игра исчезнет у всех');
+  assert.match(bullets, /Отменить нельзя/i, 'сказано, что отменить нельзя');
+
+  modal.querySelector('#__ask_ok').dispatchEvent(new window.Event('click'));
+  for (let i = 0; i < 6; i++) await new Promise((res) => setTimeout(res, 0));
+  // Путь с /admin/api — admin.js разворачивает относительные адреса сам.
+  const purge = calls.find((c) => c.url.includes('games/purge'));
+  assert.ok(purge, 'удаление игры уходит на сервер');
+  assert.strictEqual(purge.method, 'POST');
+  assert.match(String(purge.body), /gameId=lethal-company/);
+});
+
+test('галерея игры: удаление файла и папки предупреждает о битых ссылках', async (t) => {
+  const calls = [];
+  const fetchStub = async (url, opts) => {
+    calls.push({ url: String(url), method: (opts && opts.method) || 'GET', body: opts && opts.body });
+    if (String(url).includes('/games/gallery/meta')) return jsonResponse({ items: [], cover: '' });
+    if (String(url).includes('/games/gallery?')) {
+      return jsonResponse({ path: '', items: [{ name: 'screens', isDir: true }, { name: 'cover.png', isDir: false, size: 10, url: '/x.png' }] });
+    }
+    return jsonResponse({ status: 'ok' });
+  };
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
+  const opened = installFakeBootstrap(window);
+
+  const gallery = window.createGameGallery({ root: '#gg_root', gameId: 'lethal-company' });
+  assert.ok(gallery, 'галерея монтируется в разметку админки');
+  await gallery.fetchAndRender();
+  for (let i = 0; i < 5; i++) await new Promise((res) => setTimeout(res, 0));
+
+  const deleteButtons = [...document.querySelectorAll('#gg_root [aria-label="Удалить"]')];
+  assert.strictEqual(deleteButtons.length, 2, 'кнопка удаления есть и у папки, и у файла');
+
+  // Папка идёт первой: у неё предупреждение про ссылки в карточке и новостях.
+  deleteButtons[0].dispatchEvent(new window.Event('click', { bubbles: true }));
+  await new Promise((res) => setTimeout(res, 0));
+  let modal = opened[opened.length - 1];
+  assert.match(modal.querySelector('.modal-title').textContent, /Удалить папку\?/);
+  assert.match(
+    [...modal.querySelectorAll('li')].map((li) => li.textContent).join(' | '),
+    /в карточке игры и в новостях/i,
+  );
+  modal.querySelector('#__ask_ok').dispatchEvent(new window.Event('click'));
+  for (let i = 0; i < 6; i++) await new Promise((res) => setTimeout(res, 0));
+
+  const del = calls.find((c) => c.url.includes('/games/gallery/delete'));
+  assert.ok(del && del.method === 'POST', 'удаление папки уходит POST-ом');
+  assert.match(String(del.body), /name=screens/);
+
+  // И то же самое для файла.
+  const fileBtn = [...document.querySelectorAll('#gg_root [aria-label="Удалить"]')].pop();
+  fileBtn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await new Promise((res) => setTimeout(res, 0));
+  modal = opened[opened.length - 1];
+  assert.match(modal.querySelector('.modal-title').textContent, /Удалить файл\?/);
+  modal.querySelector('#__ask_ok').dispatchEvent(new window.Event('click'));
+  for (let i = 0; i < 6; i++) await new Promise((res) => setTimeout(res, 0));
+
+  const fileDel = calls.filter((c) => c.url.includes('/games/gallery/delete')).pop();
+  assert.match(String(fileDel.body), /name=cover\.png/);
 });
