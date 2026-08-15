@@ -167,6 +167,7 @@
                   <RowDefinition Height="Auto"/>
                   <RowDefinition Height="Auto"/>
                   <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <StackPanel Grid.Row="0" Grid.Column="0">
                   <TextBlock Text="Установленная версия" Style="{StaticResource Style.FieldLabel}"/>
@@ -187,11 +188,27 @@
                 <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2">
                   <TextBlock Text="Место установки" Style="{StaticResource Style.FieldLabel}"/>
                   <!-- Путь — моноширинный, в одну строку с многоточием; полный путь во
-                       всплывающей подсказке. На два ряда он ложился и ломал сетку карточки. -->
+                       всплывающей подсказке. На два ряда он ложился и ломал сетку карточки.
+                       Кликабелен: копирует путь в буфер обмена — набирать его руками, чтобы
+                       вставить в проводник, неудобно. -->
                   <TextBlock Name="InstallPathText" Text="—" Style="{StaticResource Style.FieldValue}"
                              FontFamily="Consolas" FontSize="13" TextWrapping="NoWrap"
                              TextTrimming="CharacterEllipsis" Margin="0"
+                             Cursor="Hand"
+                             MouseLeftButtonUp="InstallPathText_MouseLeftButtonUp"
                              ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                </StackPanel>
+                <!-- Наигранное время переехало сюда из отдельной карточки в самом низу
+                     страницы: на минимальном размере окна та карточка уходила ниже видимой
+                     части ScrollViewer вместе с прокруткой и оставалась незамеченной. Здесь,
+                     в первой (самой верхней) карточке страницы, она видна сразу. -->
+                <StackPanel Grid.Row="3" Grid.Column="0" Margin="0,12,0,0">
+                  <TextBlock Text="Наиграно всего" Style="{StaticResource Style.FieldLabel}"/>
+                  <TextBlock Name="TotalPlaytimeText" Text="—" Style="{StaticResource Style.FieldValue}"/>
+                </StackPanel>
+                <StackPanel Grid.Row="3" Grid.Column="1" Margin="0,12,0,0">
+                  <TextBlock Text="Последняя сессия" Style="{StaticResource Style.FieldLabel}"/>
+                  <TextBlock Name="LastSessionText" Text="—" Style="{StaticResource Style.FieldValue}"/>
                 </StackPanel>
               </Grid>
             </StackPanel>
@@ -259,27 +276,6 @@
             </StackPanel>
           </Border>
 
-          <!-- Наигранное время -->
-          <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
-            <StackPanel>
-              <TextBlock Text="Наигранное время" Style="{StaticResource Style.SectionHeader}"/>
-              <Grid>
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="*"/>
-                  <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0">
-                  <TextBlock Text="Всего" Style="{StaticResource Style.FieldLabel}"/>
-                  <TextBlock Name="TotalPlaytimeText" Text="—" Style="{StaticResource Style.FieldValue}"/>
-                </StackPanel>
-                <StackPanel Grid.Column="1">
-                  <TextBlock Text="Последняя сессия" Style="{StaticResource Style.FieldLabel}"/>
-                  <TextBlock Name="LastSessionText" Text="—" Style="{StaticResource Style.FieldValue}"/>
-                </StackPanel>
-              </Grid>
-            </StackPanel>
-          </Border>
-
         </StackPanel>
 
         <!-- ПРАВАЯ КОЛОНКА: changelog (новости игры) -->
@@ -341,5 +337,20 @@
         </Border>
       </Grid>
     </ScrollViewer>
+
+    <!-- Toast overlay: подтверждение копирования пути установки -->
+    <Grid Grid.RowSpan="2" x:Name="ToastHost" IsHitTestVisible="False"
+          HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="16">
+      <Border x:Name="Toast"
+              Visibility="Collapsed"
+              Background="{DynamicResource Brush.Surface}"
+              BorderBrush="{DynamicResource Brush.Border}"
+              BorderThickness="1.5"
+              CornerRadius="8"
+              Padding="12"
+              Effect="{x:Null}">
+        <TextBlock x:Name="ToastText" Foreground="{DynamicResource Brush.Text}"/>
+      </Border>
+    </Grid>
   </Grid>
 </Page>
