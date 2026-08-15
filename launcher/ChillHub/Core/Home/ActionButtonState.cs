@@ -23,6 +23,13 @@ namespace ChillHub.Core.Home {
         /// <summary>Идёт установка или обновление.</summary>
         Cancel,
 
+        /// <summary>
+        /// Игра стоит в очереди и ждёт: закачки ещё нет, кнопка лишь снимает позицию.
+        /// Отдельный режим, а не «Отмена»: красная «Отмена» под игрой, которая ничего не
+        /// делает, читалась как «остановить процесс», которого нет.
+        /// </summary>
+        Dequeue,
+
         /// <summary>Предыдущая попытка сорвалась.</summary>
         Retry,
 
@@ -85,6 +92,7 @@ namespace ChillHub.Core.Home {
         /// <returns>Оформление кнопки.</returns>
         internal static ActionButtonAppearance Appearance(ActionMode mode) => mode switch {
             ActionMode.Cancel => new ActionButtonAppearance("Отмена", true, "Style.ActionButton.Cancel"),
+            ActionMode.Dequeue => new ActionButtonAppearance("Убрать из очереди", true, "Style.ActionButton.Checking"),
             ActionMode.Checking => new ActionButtonAppearance("Проверка…", false, "Style.ActionButton.Checking"),
             ActionMode.Play => new ActionButtonAppearance("Играть", true, "Style.ActionButton.Play"),
             ActionMode.Retry => new ActionButtonAppearance("Повторить", true, "Style.ActionButton.Retry"),

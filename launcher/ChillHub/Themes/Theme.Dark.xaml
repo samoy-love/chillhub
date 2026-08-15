@@ -764,6 +764,13 @@
     <GradientStop Offset="0.45" Color="#66000000"/>
     <GradientStop Offset="1" Color="#E60C0C10"/>
   </LinearGradientBrush>
+  <!-- Второй слой затемнения — слева направо, под заголовок и кнопку в левом нижнем углу.
+       Правая половина обложки остаётся почти нетронутой: там обычно логотип игры. -->
+  <LinearGradientBrush x:Key="Brush.HeroScrimSide" StartPoint="0,0" EndPoint="1,0">
+    <GradientStop Offset="0" Color="#8C0C0C10"/>
+    <GradientStop Offset="0.45" Color="#330C0C10"/>
+    <GradientStop Offset="1" Color="#000C0C10"/>
+  </LinearGradientBrush>
   <SolidColorBrush x:Key="Brush.HeroBadge.Bg" Color="#1B1B24"/>
   <SolidColorBrush x:Key="Brush.HeroBadge.Border" Color="{StaticResource Color.Border}"/>
 
