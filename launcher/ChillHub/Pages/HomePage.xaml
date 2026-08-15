@@ -830,7 +830,13 @@
              с очередью загрузок витрина выдавливала новости в ноль. Доля 0.30: на 2K
              треть окна под витриной оказалась 350px почти пустого фона — обложка,
              обрезанная до 5:1, теряла и логотип, и силуэты, а текст занимал угол. -->
-        <Border Grid.Row="0" Margin="0,0,0,8" CornerRadius="12" MinHeight="150"
+        <!-- MinHeight не меньше содержимого (бейдж, заголовок, строка сведений, кнопка —
+             ~140px плюс поля 16 с двух сторон). На минимальном окне доля высоты давала
+             витрине меньше, чем нужно её содержимому: Grid переставал помещаться,
+             WPF накладывал на него layout-clip по внутреннему полю — обложка и
+             затемнение обрезались рамкой в 16px, а низ кнопки срезался. MinHeight
+             сильнее MaxHeight, поэтому доля здесь просто перестаёт работать. -->
+        <Border Grid.Row="0" Margin="0,0,0,8" CornerRadius="12" MinHeight="184"
                 MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=Page},
                                     Converter={StaticResource HeightShareConv}, ConverterParameter=0.30}"
                 Background="{DynamicResource Brush.HeroGradient}" ClipToBounds="True">
