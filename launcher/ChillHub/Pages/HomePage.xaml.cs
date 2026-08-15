@@ -1247,6 +1247,12 @@ namespace ChillHub.Pages {
                 this.HideServerUnavailableState();
                 this.NormalizeGameIconsAndLocalState(this.games);
 
+                // Явное обновление списка — подходящий момент сбросить кеш обложек: сервер
+                // часто отдаёт новую картинку по тому же адресу (см. Core.Home.ImageLoader),
+                // и без сброса «Обновить список игр» не менял бы обложки, даже если они
+                // реально сменились.
+                Core.Home.ImageLoader.InvalidateAll();
+
                 // Сортировка: установленные сначала, затем порядок, полученный от API
                 this.catalog.RememberApiOrder(this.games);
                 this.games = this.catalog.Sort(this.games);
