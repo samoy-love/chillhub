@@ -245,25 +245,39 @@ async function notifyHttp(res, prefix){
 // ==== Диалоги подтверждения ====
 //
 // Нативный confirm() одинаково защищал и «очистить временные файлы», и
-// «удалить версию вместе с файлами сборки»: одна и та же кнопка OK под
-// Enter. Здесь у опасного действия своя модалка с красной кнопкой, которая
-// не в фокусе, а у необратимого — ещё и ввод подтверждающего слова.
+// «удалить версию вместе с файлами сборки»: одна и та же кнопка OK под Enter.
+// Поэтому у опасного действия здесь своя модалка с красной кнопкой, которая не
+// в фокусе.
+//
+// ВВОД ПОДТВЕРЖДАЮЩЕГО СЛОВА УБРАН.
+//
+// У трёх самых разрушительных действий (удалить версию, очистить обращения,
+// удалить метрики) требовалось напечатать номер версии или слово «удалить».
+// Защиты это не давало: администратор здесь один, он же и набирает эту строку,
+// причём номер версии прямо перед глазами — переписать его можно не читая
+// вообще ничего. А цена была настоящей: у каждого действия свой ритуал (где-то
+// «удалить», где-то «удалить метрики», где-то номер), и рутинная операция вроде
+// чистки старых версий превращалась в перепечатывание строк по одной.
+//
+// Осторожность даёт не барьер, а понимание последствий, поэтому вместо поля
+// ввода — явный список того, что исчезнет, и можно ли это вернуть. Кнопка
+// по-прежнему красная и не в фокусе: случайный Enter ничего не удалит.
+//
+// bullets — список последствий, по строке на пункт; читается быстрее сплошного
+// абзаца, когда пунктов больше одного.
 //
 // Без bootstrap (тесты в jsdom, недоступный CDN раньше) откатываемся на
-// нативные confirm/prompt: поведение сохраняется, теряется только оформление.
+// нативный confirm: текст тот же, теряется только оформление.
 function askConfirm(opts){
   const o = opts || {};
   const title = o.title || 'Подтверждение';
   const body = o.body || '';
+  const bullets = Array.isArray(o.bullets) ? o.bullets.filter(Boolean) : [];
   const okText = o.okText || 'Продолжить';
   const danger = !!o.danger;
-  const requireText = o.requireText || '';
   if(!window.bootstrap || !window.bootstrap.Modal){
-    if(requireText){
-      const v = window.prompt(title+'\n'+body+'\n\nВведите «'+requireText+'» для подтверждения:');
-      return Promise.resolve(String(v||'').trim() === requireText);
-    }
-    return Promise.resolve(!!window.confirm(title + (body ? '\n\n'+body : '')));
+    const text = [title, body, ...bullets.map(b=>'• '+b)].filter(Boolean).join('\n\n');
+    return Promise.resolve(!!window.confirm(text));
   }
   return new Promise((resolve)=>{
     const el = document.createElement('div');
@@ -275,28 +289,21 @@ function askConfirm(opts){
       '    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button></div>'+
       '  <div class="modal-body">'+
       '    <div class="preserve-ws">'+escapeHtml(body)+'</div>'+
-      (requireText
-        ? '    <div class="mt-3"><label class="form-label small" for="__ask_input">Введите <code>'+escapeHtml(requireText)+'</code> для подтверждения:</label>'+
-          '    <input id="__ask_input" class="form-control form-control-sm" autocomplete="off"></div>'
+      (bullets.length
+        ? '    <ul class="mt-2 mb-0 small">'+bullets.map(b=>'<li>'+escapeHtml(b)+'</li>').join('')+'</ul>'
         : '')+
       '  </div>'+
       '  <div class="modal-footer">'+
       '    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" id="__ask_cancel">Отмена</button>'+
-      '    <button type="button" class="btn '+(danger?'btn-danger':'btn-primary')+'" id="__ask_ok"'+(requireText?' disabled':'')+'>'+escapeHtml(okText)+'</button>'+
+      '    <button type="button" class="btn '+(danger?'btn-danger':'btn-primary')+'" id="__ask_ok">'+escapeHtml(okText)+'</button>'+
       '  </div>'+
       '</div></div>';
     document.body.appendChild(el);
     const modal = new window.bootstrap.Modal(el);
     let answer = false;
     const okBtn = el.querySelector('#__ask_ok');
-    const input = el.querySelector('#__ask_input');
-    if(input){
-      input.addEventListener('input', ()=>{ okBtn.disabled = input.value.trim() !== requireText; });
-      el.addEventListener('shown.bs.modal', ()=> input.focus());
-    } else {
-      // Фокус остаётся на «Отмена»: Enter не должен подтверждать удаление.
-      el.addEventListener('shown.bs.modal', ()=> el.querySelector('#__ask_cancel')?.focus());
-    }
+    // Фокус остаётся на «Отмена»: Enter не должен подтверждать удаление.
+    el.addEventListener('shown.bs.modal', ()=> el.querySelector('#__ask_cancel')?.focus());
     okBtn.addEventListener('click', ()=>{ answer = true; modal.hide(); });
     el.addEventListener('hidden.bs.modal', ()=>{ el.remove(); resolve(answer); });
     modal.show();
@@ -485,10 +492,14 @@ function bindVersionActions(root, cls, gameId, afterChange){
       const ver = ev.currentTarget.getAttribute('data-ver'); if(!ver) return;
       const ok = await askConfirm({
         title: 'Удалить версию '+ver+'?',
-        body: 'Будут безвозвратно удалены манифест и все файлы сборки. Восстановить их можно только повторной заливкой ZIP.',
+        body: 'Версия '+ver+' исчезнет с сервера.',
+        bullets: [
+          'Манифест и все файлы сборки удаляются с диска безвозвратно.',
+          'Вернуть версию можно только повторной заливкой того же ZIP.',
+          'Если версия сейчас активна (latest), обновляться станет не на что, пока вы не назначите активной другую.',
+        ],
         okText: 'Удалить версию',
         danger: true,
-        requireText: ver,
       });
       if(!ok) return;
       let r;
@@ -1102,11 +1113,14 @@ document.addEventListener('DOMContentLoaded', ()=>{
   bind('fb_clear', async ()=>{
     const n = __fbItems.length;
     const ok = await askConfirm({
-      title: 'Очистить все обращения?',
-      body: 'Будут удалены ВСЕ обращения ('+n+' в текущей выдаче, на сервере может быть больше — фильтр на удаление не влияет). Восстановить их неоткуда.',
+      title: 'Удалить все обращения?',
+      body: 'Сейчас в выдаче '+n+', но удаляются все — фильтры и период на удаление не влияют.',
+      bullets: [
+        'Тексты обращений, контакты и приложенная диагностика стираются целиком.',
+        'Копии нет: восстановить обращения неоткуда.',
+      ],
       okText: 'Удалить всё',
       danger: true,
-      requireText: 'удалить',
     });
     if(!ok) return;
     let r;
@@ -4247,10 +4261,14 @@ function mxSetPreset(days){
 async function mxClear(){
   const ok = await askConfirm({
     title: 'Удалить все метрики?',
-    body: 'Удаляются обе генерации файла событий — вся накопленная история запусков, установок и ошибок. Восстановить её неоткуда, фильтр периода на удаление не влияет.',
+    body: 'Удаляются обе генерации файла событий — выбранный период на удаление не влияет.',
+    bullets: [
+      'Пропадёт вся накопленная история запусков, установок и ошибок.',
+      'Графики и сводки начнутся с нуля: сравнить «до и после» будет не с чем.',
+      'Копии нет: восстановить историю неоткуда.',
+    ],
     okText: 'Удалить всё',
     danger: true,
-    requireText: 'удалить метрики',
   });
   if(!ok) return;
   let res;
