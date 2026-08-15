@@ -107,7 +107,16 @@ namespace ChillHub {
             this.Loaded += this.MainWindow_Loaded;
             this.IsVisibleChanged += this.MainWindow_IsVisibleChanged;
             this.StateChanged += this.MainWindow_StateChanged;
-            this.Activated += (s, e) => this.ResumeKaraoke();
+            this.Activated += (s, e) => {
+                this.ResumeKaraoke();
+
+                // Проверка версии не только при разворачивании из трея (RestoreFromTray),
+                // но и при обычном возврате фокуса на окно: пользователь мог оставить
+                // лаунчер открытым, но не активным, дольше интервала selfUpdateCheckTimer
+                // — переключение назад не должно ждать следующего тика. selfUpdateCheckRunning
+                // не даёт столкнуться с уже идущей проверкой (тиком или тем же RestoreFromTray).
+                _ = this.RunSelfUpdateCheckAsync();
+            };
             this.Deactivated += (s, e) => this.PauseKaraoke();
 
             // Режим технических работ (задача 25): баннер в шапке появляется и исчезает сам,
@@ -263,7 +272,8 @@ namespace ChillHub {
         /// откладывает его — см. <see cref="TryShowSelfUpdateDialog"/>). Вызывается и по
         /// расписанию (<see cref="selfUpdateCheckTimer"/> — версия проверяется независимо от
         /// того, видно ли окно, иначе лаунчер, оставленный в трее, никогда не узнал бы об
-        /// обновлении), и сразу при разворачивании окна (<see cref="RestoreFromTray"/>).
+        /// обновлении), и сразу при разворачивании окна (<see cref="RestoreFromTray"/>), и
+        /// при каждом возврате фокуса на окно (<see cref="Activated"/>).
         /// <para>
         /// Флаг <see cref="selfUpdateCheckRunning"/> не даёт этим двум вызовам столкнуться —
         /// если проверка уже идёт (например, только что начал тик), повторный запрос из
