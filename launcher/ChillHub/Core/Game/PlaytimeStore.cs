@@ -113,10 +113,19 @@ namespace ChillHub.Core.Game {
             WatchAsync(process.Id, process);
         }
 
-        /// <summary>«142 ч» — суммарное время, округлённое вниз до часа.</summary>
+        /// <summary>
+        /// «142 ч» — суммарное время, округлённое вниз до часа; меньше часа — «25 мин».
+        /// Раньше первые запуски давали «0 ч в игре» — цифра, которая выглядит как отсутствие
+        /// данных, а не как двадцать минут игры.
+        /// </summary>
         internal static string FormatTotal(long totalSeconds) {
             var hours = totalSeconds / 3600;
-            return $"{hours} ч";
+            if (hours > 0) {
+                return $"{hours} ч";
+            }
+
+            var minutes = Math.Max(1, totalSeconds / 60);
+            return $"{minutes} мин";
         }
 
         /// <summary>«вчера, 2ч 10м» / «сегодня, 45м» / «3 дня назад, 1ч 05м» / «нет данных».</summary>

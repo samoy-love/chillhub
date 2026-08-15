@@ -142,6 +142,46 @@ namespace ChillHub.Tests {
             Assert.Equal(500.0, height, 1);
         }
 
+        /// <summary>
+        /// Предел блока — доля высоты окна: витрина и очередь загрузок делят экран
+        /// пропорционально, а не фиксированными пикселями, которые на невысоком окне
+        /// вдвоём выдавливали ленту новостей в ноль.
+        /// </summary>
+        [Fact]
+        public void ДоляВысотыОкнаСчитаетсяИзПараметра() {
+            var conv = new HeightShareConverter();
+
+            Assert.Equal(272.0, (double)conv.Convert(800.0, typeof(double), "0.34", CultureInfo.InvariantCulture), 1);
+        }
+
+        /// <summary>
+        /// Пока высота неизвестна, предела нет вовсе: MaxHeight=NaN разметка не принимает,
+        /// а PositiveInfinity — штатное «без ограничения».
+        /// </summary>
+        [Theory]
+        [InlineData(0.0)]
+        [InlineData(double.NaN)]
+        [InlineData(double.PositiveInfinity)]
+        public void БезВысотыДоляНеОграничивает(double height) {
+            var conv = new HeightShareConverter();
+
+            Assert.Equal(double.PositiveInfinity, (double)conv.Convert(height, typeof(double), "0.34", CultureInfo.InvariantCulture));
+        }
+
+        /// <summary>
+        /// Наигранное меньше часа — в минутах: «0 ч в игре» после первого запуска
+        /// выглядело как отсутствие данных.
+        /// </summary>
+        [Theory]
+        [InlineData(0L, "1 мин")]
+        [InlineData(59L, "1 мин")]
+        [InlineData(25 * 60L, "25 мин")]
+        [InlineData(3600L, "1 ч")]
+        [InlineData(142 * 3600L + 1800, "142 ч")]
+        public void НаигранноеФорматируетсяЧитаемо(long seconds, string expected) {
+            Assert.Equal(expected, PlaytimeStore.FormatTotal(seconds));
+        }
+
         private static QueueItem Item(
             QueueItemState state,
             long done = 0,

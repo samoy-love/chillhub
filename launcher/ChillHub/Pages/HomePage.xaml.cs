@@ -844,9 +844,14 @@ namespace ChillHub.Pages {
             }
         }
 
-        // Обновление новостей лаунчера по кнопке
-        private async void RefreshLauncherNews_Click(object sender, RoutedEventArgs e) {
-            await this.ReloadLauncherNewsAsync();
+        // Одна кнопка обновления на обе вкладки: перечитывает ту ленту, что открыта.
+        private async void RefreshActiveNews_Click(object sender, RoutedEventArgs e) {
+            if (this.NewsTabGame.IsChecked == true) {
+                await this.ReloadGameNewsAsync();
+            }
+            else {
+                await this.ReloadLauncherNewsAsync();
+            }
         }
 
         private async Task ReloadLauncherNewsAsync() {
@@ -866,11 +871,6 @@ namespace ChillHub.Pages {
                 this.LauncherNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
                 this.LauncherNewsList.Visibility = System.Windows.Visibility.Visible;
             }
-        }
-
-        // Обновление новостей игры по кнопке
-        private async void RefreshGameNews_Click(object sender, RoutedEventArgs e) {
-            await this.ReloadGameNewsAsync();
         }
 
         private async Task ReloadGameNewsAsync() {
@@ -1592,8 +1592,12 @@ namespace ChillHub.Pages {
                 // Выбранная игра стоит в очереди (ждёт или качается) — кнопка отменяет ЭТУ
                 // позицию. Прогресс при этом рисует её собственная карточка в очереди и
                 // только она: дублировать его строкой статуса больше не нужно.
-                if (this.SelectedQueueItem() != null) {
-                    this.SetActionMode(ActionMode.Cancel);
+                if (this.SelectedQueueItem() is Core.Game.QueueItem queued) {
+                    // Ждущая позиция — не «Отмена»: останавливать нечего, можно только
+                    // снять с очереди. Красная кнопка остаётся за идущей закачкой.
+                    this.SetActionMode(queued.State == Core.Game.QueueItemState.Waiting
+                        ? ActionMode.Dequeue
+                        : ActionMode.Cancel);
                     return;
                 }
 

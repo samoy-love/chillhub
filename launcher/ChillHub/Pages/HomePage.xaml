@@ -197,8 +197,10 @@
       <Setter Property="BorderBrush" Value="{DynamicResource Btn.Update.Border}"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="Padding" Value="10,6"/>
-      <Setter Property="FontWeight" Value="Bold"/>
-      <Setter Property="FontSize" Value="18"/>
+      <!-- 15, а не 18: остальной экран набран 11–14, и кнопка кричала громче заголовка
+           витрины. Главной её делает акцентная заливка, а не кегль. -->
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="FontSize" Value="15"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
@@ -518,13 +520,14 @@
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="Auto"/>
-      <!-- MinHeight держит ленту новостей видимой, даже когда очередь загрузок снизу
-           разрослась: без него Auto-строка BottomBar забирала себе сколько хотела (до
-           своего MaxHeight), а этой строке доставался остаток вплоть до нуля. -->
-      <RowDefinition Height="*" MinHeight="260"/>
-      <!-- MaxHeight не даёт очереди загрузок вытеснить новости целиком: дальше него
-           QueueDock уходит во внутренний скролл (см. ScrollViewer там же). -->
-      <RowDefinition Height="Auto" MaxHeight="240"/>
+      <!-- Ленте новостей достаётся всё, что не забрали витрина и очередь. Оба соседа
+           ограничены ДОЛЕЙ высоты окна (HeightShareConv), а не числом пикселей: прежние
+           MinHeight=260 здесь и MaxHeight=240 у очереди на окне по умолчанию (760)
+           складывались с витриной в 340 так, что новостям не оставалось ни строки —
+           MinHeight защищал строку сетки, а не ленту внутри неё, и витрина съедала его
+           целиком. -->
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
 
     <!-- Селекторы игры и сборки перенесены в левую колонку центральной области -->
@@ -782,7 +785,10 @@
         </Grid>
       </Border>
 
-      <Grid Grid.Column="2" Margin="0,0,8,0">
+      <!-- Без правого отступа: витрина, лента и очередь внизу кончаются на одной
+           вертикали. Раньше витрина заканчивалась на 8px раньше очереди, кнопка
+           обновления новостей — ещё на 8px раньше витрины: три правых края в столбце. -->
+      <Grid Grid.Column="2">
         <Grid.RowDefinitions>
           <!-- Витрина-герой выбранной игры -->
           <RowDefinition Height="Auto"/>
@@ -801,9 +807,13 @@
              витрина тянулась по ширине окна при почти постоянной высоте, от 5:1 до
              13:1, и обложка обрезалась по-разному при каждом размере окна: назвать
              художнику требуемый размер было невозможно.
-             MaxHeight не даёт витрине съесть ленту новостей на широких окнах: дальше
-             него обложка кадрируется по центру, как это делает и сам Steam. -->
-        <Border Grid.Row="0" Margin="0,0,0,8" CornerRadius="12" MinHeight="150" MaxHeight="340"
+             MaxHeight не даёт витрине съесть ленту новостей: дальше него обложка
+             кадрируется по центру, как это делает и сам Steam. Предел — доля высоты
+             окна, а не число: 340px на окне в 760 были почти половиной экрана, и вместе
+             с очередью загрузок витрина выдавливала новости в ноль. -->
+        <Border Grid.Row="0" Margin="0,0,0,8" CornerRadius="12" MinHeight="150"
+                MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=Page},
+                                    Converter={StaticResource HeightShareConv}, ConverterParameter=0.34}"
                 Background="{DynamicResource Brush.HeroGradient}" ClipToBounds="True">
           <Border.Style>
             <Style TargetType="Border">
@@ -836,10 +846,25 @@
                  а не только на тёмной. -->
             <Border Grid.Row="0" Grid.RowSpan="2" Background="{DynamicResource Brush.HeroScrim}"
                     Margin="-16" IsHitTestVisible="False"/>
+            <!-- Второй слой — слева направо: текст стоит в левом нижнем углу, а логотип
+                 обложки обычно по центру. Одно вертикальное затемнение либо не спасало
+                 заголовок от логотипа, либо гасило всю картинку. -->
+            <Border Grid.Row="0" Grid.RowSpan="2" Background="{DynamicResource Brush.HeroScrimSide}"
+                    Margin="-16" IsHitTestVisible="False"/>
 
-            <!-- Иконка игры крупным планом (заглушка обложки до подключения галереи) -->
+            <!-- Иконка игры крупным планом — заглушка, пока обложки нет. Поверх обложки
+                 не рисуется: маленький квадрат в углу спорил с картинкой во всю витрину. -->
             <Grid Grid.Row="0" Grid.RowSpan="2" HorizontalAlignment="Right" VerticalAlignment="Top" Width="104" Height="104"
                   Margin="0,0,0,0" Opacity="0.9">
+              <Grid.Style>
+                <Style TargetType="Grid">
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding Visibility, ElementName=HeroCoverImg}" Value="Visible">
+                      <Setter Property="Visibility" Value="Collapsed"/>
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </Grid.Style>
               <Image x:Name="HeroIconImg" Source="{Binding SelectedItem.IconUrl, ElementName=GameList}"
                      Stretch="Uniform" Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
             </Grid>
@@ -866,7 +891,9 @@
                 <Button x:Name="HeroInfoBtn" Click="GameDetails_Click"
                         Style="{DynamicResource Style.Button.HeroInfo}"
                         Margin="8,0,0,0" VerticalAlignment="Center" ToolTip="Подробнее об игре">
-                  <TextBlock FontFamily="Segoe UI Symbol" Text="&#x24D8;" FontSize="16"/>
+                  <!-- Тот же набор MDL2, что и у остальных значков: символ ⓘ из Segoe UI
+                       Symbol был тоньше и меньше соседей и выглядел чужим. -->
+                  <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE946;" FontSize="16"/>
                 </Button>
               </StackPanel>
             </StackPanel>
@@ -875,28 +902,28 @@
 
         <!-- Вкладки под витриной: переключают ленту без перезагрузки страницы -->
         <Border Grid.Row="1" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1" Margin="2,4,0,8">
-          <StackPanel Orientation="Horizontal">
-            <ToggleButton x:Name="NewsTabGame" Content="Новости игры" IsChecked="True"
-                          Style="{DynamicResource Style.Button.HeroTab}" Click="NewsTabGame_Click" Margin="0,0,18,0"/>
-            <ToggleButton x:Name="NewsTabLauncher" Content="Новости лаунчера" IsChecked="False"
-                          Style="{DynamicResource Style.Button.HeroTab}" Click="NewsTabLauncher_Click"/>
-          </StackPanel>
+          <Grid>
+            <StackPanel Orientation="Horizontal">
+              <ToggleButton x:Name="NewsTabGame" Content="Новости игры" IsChecked="True"
+                            Style="{DynamicResource Style.Button.HeroTab}" Click="NewsTabGame_Click" Margin="0,0,18,0"/>
+              <ToggleButton x:Name="NewsTabLauncher" Content="Новости лаунчера" IsChecked="False"
+                            Style="{DynamicResource Style.Button.HeroTab}" Click="NewsTabLauncher_Click"/>
+            </StackPanel>
+            <!-- Одна кнопка обновления на обе вкладки, в их же строке. Раньше у каждой
+                 ленты была своя, на отдельной строке под вкладками: 32px высоты уходили
+                 на одинокий значок в правом углу, оторванный от ленты пустотой. -->
+            <Button Width="28" Height="28" Padding="0" HorizontalAlignment="Right" VerticalAlignment="Top"
+                    ToolTip="Обновить ленту" Click="RefreshActiveNews_Click">
+              <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+            </Button>
+          </Grid>
         </Border>
 
         <Grid x:Name="GameNewsPanel" Grid.Row="2" Visibility="Visible">
-        <Grid.RowDefinitions>
-          <RowDefinition Height="Auto"/>
-          <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
-        <!-- Заголовка «Новости <игра>» здесь больше нет: название игры стоит строкой выше в
-             витрине, а слово «Новости» — на активной вкладке. Осталась кнопка обновления. -->
-        <Grid x:Name="GameNewsHeaderRow" Grid.Row="0" Margin="0,0,0,4">
-          <Button Width="28" Height="28" Padding="0" HorizontalAlignment="Right"
-                  ToolTip="Обновить новости игры" Click="RefreshGameNews_Click" Margin="0,0,8,0">
-            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Center"/>
-          </Button>
-        </Grid>
-        <Grid Grid.Row="1">
+        <!-- Заголовка «Новости <игра>» здесь нет: название игры стоит строкой выше в
+             витрине, слово «Новости» — на активной вкладке, кнопка обновления — в строке
+             вкладок. -->
+        <Grid>
           <!-- Skeleton loader -->
           <StackPanel Name="GameNewsSkeleton" Margin="{StaticResource Skeleton.NewsTopOffsetThickness}">
             <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
@@ -914,7 +941,7 @@
             <TextBlock Text="Здесь появятся объявления и события этой игры." TextWrapping="Wrap" TextAlignment="Center"
                        FontSize="12" Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,4,0,0"/>
           </StackPanel>
-          <ListBox Name="GameNewsList" SelectionChanged="GameNewsList_SelectionChanged" Visibility="Collapsed" Padding="0,0,6,0"
+          <ListBox Name="GameNewsList" SelectionChanged="GameNewsList_SelectionChanged" Visibility="Collapsed" Padding="0"
                  ScrollViewer.VerticalScrollBarVisibility="Visible"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                  ScrollViewer.CanContentScroll="False"
@@ -984,24 +1011,14 @@
         </Grid>
 
         <Grid x:Name="LauncherNewsPanel" Grid.Row="2" Visibility="Collapsed">
-        <Grid.RowDefinitions>
-          <RowDefinition Height="Auto"/>
-          <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
-        <Grid Grid.Row="0" Margin="0,0,0,4">
-          <Button Width="28" Height="28" Padding="0" HorizontalAlignment="Right"
-                  ToolTip="Обновить новости лаунчера" Click="RefreshLauncherNews_Click" Margin="0,0,8,0">
-            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Center"/>
-          </Button>
-        </Grid>
-        <Grid Grid.Row="1">
+        <Grid>
           <!-- Skeleton loader -->
           <StackPanel Name="LauncherNewsSkeleton" Margin="{StaticResource Skeleton.NewsTopOffsetThickness}">
             <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
             <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
             <Border Style="{DynamicResource Style.Skeleton}" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
           </StackPanel>
-          <ListBox Grid.Row="0" Name="LauncherNewsList" SelectionChanged="LauncherNewsList_SelectionChanged" Visibility="Collapsed" Padding="0,0,6,0"
+          <ListBox Grid.Row="0" Name="LauncherNewsList" SelectionChanged="LauncherNewsList_SelectionChanged" Visibility="Collapsed" Padding="0"
                  ScrollViewer.VerticalScrollBarVisibility="Visible"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                  ScrollViewer.CanContentScroll="False"
@@ -1077,25 +1094,29 @@
          надписью «Готово» сообщала о процессе, которого нет. -->
     <Border x:Name="BottomBar" Grid.Row="3" Margin="0,10,0,0" Style="{DynamicResource Style.ProgressPanel}" Padding="12"
             Visibility="Collapsed">
+      <!-- Одна колонка: правая (Auto) осталась пустой после переезда кнопки действия
+           в витрину и лишь съедала 12px отступа справа — очередь кончалась раньше ленты
+           новостей над ней. -->
       <Grid>
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="*"/>
-          <ColumnDefinition Width="Auto"/>
-        </Grid.ColumnDefinitions>
-
-        <!-- Левая колонка. Два взаимоисключающих вида на одном месте:
-             очередь не пуста  → список карточек (по карточке на игру);
-             очередь пуста     → статус выбранной игры («Готово», объём, свободное место).
-             Раньше показывались ОБА сразу, в разных концах экрана, про одну и ту же
-             позицию: «Ждёт очереди…» стояло и в карточке, и здесь. -->
-        <Grid Grid.Column="0" Margin="0,0,12,0">
+        <Grid>
+          <!-- Два взаимоисключающих вида на одном месте:
+               очередь не пуста  → список карточек (по карточке на игру);
+               очередь пуста     → статус выбранной игры («Готово», объём, свободное место).
+               Раньше показывались ОБА сразу, в разных концах экрана, про одну и ту же
+               позицию: «Ждёт очереди…» стояло и в карточке, и здесь. -->
           <!-- Очередь загрузок: карточка на каждую игру — ждёт, качается, снимается по ✕,
                ожидающие можно поднять/опустить стрелками (порядок среди Waiting, качающаяся
                позиция всегда первая и не переставляется). -->
           <StackPanel x:Name="QueuePanel" Visibility="Collapsed">
             <TextBlock x:Name="QueueSummaryText" Text="Очередь загрузок" FontWeight="SemiBold" FontSize="14"
                        Margin="0,0,0,6" Foreground="{DynamicResource Brush.Title}"/>
-            <ItemsControl x:Name="QueueDock" MaxHeight="180">
+            <!-- Потолок — доля высоты окна, дальше внутренний скролл. Фиксированные 180px
+                 на невысоком окне были четвертью экрана и вместе с витриной не оставляли
+                 места ленте новостей; на высоком — резали третью карточку пополам, хотя
+                 места под неё было вдоволь. -->
+            <ItemsControl x:Name="QueueDock"
+                          MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=Page},
+                                              Converter={StaticResource HeightShareConv}, ConverterParameter=0.28}">
               <ItemsControl.Template>
                 <ControlTemplate TargetType="ItemsControl">
                   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -1105,12 +1126,24 @@
               </ItemsControl.Template>
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
-                  <Border Style="{DynamicResource Style.Card}" Padding="12,10" Margin="0,0,0,6">
+                  <!-- Ожидающая позиция — строка, а не карточка в полный рост: у неё нет ни
+                       полосы, ни цифр, и три одинаковых по высоте карточки не влезали даже
+                       в окно по умолчанию — третья всегда была срезана. -->
+                  <Border Margin="0,0,0,6">
+                    <Border.Style>
+                      <Style TargetType="Border" BasedOn="{StaticResource Style.Card}">
+                        <Setter Property="Padding" Value="12,10"/>
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding State}" Value="Waiting">
+                            <Setter Property="Padding" Value="12,6"/>
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Border.Style>
                     <Grid>
                       <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                       </Grid.ColumnDefinitions>
@@ -1123,11 +1156,23 @@
                       <!-- Иконка в рамке фиксированного размера и Uniform, а не UniformToFill:
                            заполнение по большей стороне вылезало за колонку и срезало картинку
                            по краю карточки. Uniform вписывает целиком, ClipToBounds страхует
-                           от нестандартных пропорций. -->
+                           от нестандартных пропорций. У ожидающей строки — меньше. -->
                       <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="0"
-                              Width="36" Height="36" Margin="0,0,12,0" CornerRadius="6"
+                              Margin="0,0,12,0" CornerRadius="6"
                               VerticalAlignment="Center" ClipToBounds="True"
                               Background="{DynamicResource Brush.Surface2}">
+                        <Border.Style>
+                          <Style TargetType="Border">
+                            <Setter Property="Width" Value="36"/>
+                            <Setter Property="Height" Value="36"/>
+                            <Style.Triggers>
+                              <DataTrigger Binding="{Binding State}" Value="Waiting">
+                                <Setter Property="Width" Value="28"/>
+                                <Setter Property="Height" Value="28"/>
+                              </DataTrigger>
+                            </Style.Triggers>
+                          </Style>
+                        </Border.Style>
                         <Image Stretch="Uniform" Source="{Binding IconUrl}" Tag="{Binding IconUrl}"
                                Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
                       </Border>
@@ -1144,24 +1189,27 @@
                                    Text="{Binding Converter={StaticResource QueueItemPercentTextConv}, Mode=OneWay}"/>
                       </StackPanel>
 
-                      <!-- У качающейся позиции — её статус, у ожидающей — место в очереди. -->
-                      <TextBlock Grid.Row="1" Grid.Column="1" FontSize="11" Margin="0,3,0,0"
-                                 TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
-                                 Text="{Binding Converter={StaticResource QueueItemStatusConv}, Mode=OneWay}"
-                                 Foreground="{DynamicResource Brush.TextSecondary}"/>
-
-                      <!-- Цифры прижаты к элементам управления, а не растянуты по всей
-                           карточке: «сколько осталось» читают вместе с кнопкой отмены. -->
-                      <TextBlock Grid.Row="0" Grid.RowSpan="2" Grid.Column="2" FontSize="11"
-                                 VerticalAlignment="Center" Margin="16,0,12,0" TextWrapping="NoWrap"
-                                 Text="{Binding Converter={StaticResource QueueItemDetailConv}, Mode=OneWay}"
-                                 Foreground="{DynamicResource Brush.TextSecondary}"
-                                 Visibility="{Binding State, Converter={StaticResource QueueItemStateVisibilityConv}, ConverterParameter=Running}"/>
+                      <!-- Вторая строка: у качающейся — статус и цифры (объём, скорость,
+                           остаток) в одну строку, у ожидающей — место в очереди. Цифры
+                           раньше стояли у правого края карточки: на широком окне между
+                           «43%» и «3,4 ГБ / 8,0 ГБ» лежали полторы тысячи пикселей. -->
+                      <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,3,0,0">
+                        <TextBlock FontSize="11" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                                   Text="{Binding Converter={StaticResource QueueItemStatusConv}, Mode=OneWay}"
+                                   Foreground="{DynamicResource Brush.TextSecondary}"/>
+                        <TextBlock FontSize="11" TextWrapping="NoWrap" Margin="6,0,6,0" Text="·"
+                                   Foreground="{DynamicResource Brush.TextSecondary}"
+                                   Visibility="{Binding State, Converter={StaticResource QueueItemStateVisibilityConv}, ConverterParameter=Running}"/>
+                        <TextBlock FontSize="11" TextWrapping="NoWrap"
+                                   Foreground="{DynamicResource Brush.TextSecondary}"
+                                   Text="{Binding Converter={StaticResource QueueItemDetailConv}, Mode=OneWay}"
+                                   Visibility="{Binding State, Converter={StaticResource QueueItemStateVisibilityConv}, ConverterParameter=Running}"/>
+                      </StackPanel>
 
                       <!-- Стрелки порядка — только для ожидающих позиций. IsEnabled привязан к
                            признакам из очереди: стрелка, которую видно и можно нажать, но которая
                            ничего не делает, читается как сломанная. -->
-                      <StackPanel Grid.Row="0" Grid.RowSpan="2" Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center"
+                      <StackPanel Grid.Row="0" Grid.RowSpan="2" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
                                   Visibility="{Binding State, Converter={StaticResource QueueItemStateVisibilityConv}, ConverterParameter=Waiting}">
                         <Button Width="26" Height="26" Padding="0" Margin="0,0,2,0"
                                 ToolTip="Поднять в очереди. Если выше идёт закачка — начать эту вместо неё"
@@ -1178,7 +1226,7 @@
                         </Button>
                       </StackPanel>
 
-                      <Button Grid.Row="0" Grid.RowSpan="2" Grid.Column="4" Width="26" Height="26" Padding="0"
+                      <Button Grid.Row="0" Grid.RowSpan="2" Grid.Column="3" Width="26" Height="26" Padding="0"
                               Margin="6,0,0,0" VerticalAlignment="Center" ToolTip="Снять с очереди"
                               Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Brush.TextSecondary}"
                               Click="CancelQueueItem_Click" CommandParameter="{Binding}">
@@ -1187,7 +1235,7 @@
 
                       <!-- Полоса — во всю ширину карточки под всем остальным: здесь ширина
                            работает на точность, а не разносит связанные подписи по углам. -->
-                      <ProgressBar Grid.Row="2" Grid.ColumnSpan="5" Height="4" Margin="0,10,0,0"
+                      <ProgressBar Grid.Row="2" Grid.ColumnSpan="4" Height="4" Margin="0,10,0,0"
                                    Style="{StaticResource Style.ProgressBar.Rounded}"
                                    Value="{Binding Converter={StaticResource QueueItemPercentConv}, Mode=OneWay}"
                                    IsIndeterminate="{Binding Converter={StaticResource QueueItemIndeterminateConv}, Mode=OneWay}"

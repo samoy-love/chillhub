@@ -15,6 +15,7 @@
             <ui:QueueItemStateVisibilityConverter x:Key="QueueItemStateVisibilityConv" />
             <ui:QueueItemDetailConverter x:Key="QueueItemDetailConv" />
             <ui:AspectHeightConverter x:Key="AspectHeightConv" />
+            <ui:HeightShareConverter x:Key="HeightShareConv" />
             <ui:QueueItemStatusConverter x:Key="QueueItemStatusConv" />
             <ui:QueueItemPercentTextConverter x:Key="QueueItemPercentTextConv" />
             <ui:GameStatusTextConverter x:Key="GameStatusTextConv" />
