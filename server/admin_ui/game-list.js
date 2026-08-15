@@ -82,6 +82,11 @@
         if (ev.target.closest('.gm-pin')) return;
         tr.click(); // reuses the existing row-selection logic in admin.js (mgmAppendRow)
         if (window.gmSyncOverviewFromRow) window.gmSyncOverviewFromRow(gid);
+        // Галерею надо позвать явно: tr.click() присваивает #gm_select.value
+        // напрямую, а программное присваивание не порождает change, на котором
+        // висит обновление галереи в admin.js. Без этой строки панель
+        // показывала галерею предыдущей игры.
+        if (window.__gameGallery && window.__gameGallery.fetchAndRender) window.__gameGallery.fetchAndRender();
         gmListRender();
       });
 

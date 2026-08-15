@@ -36,6 +36,11 @@ var errInvalidGameID = errors.New("invalid gameId")
 // errEmptyFile reports a SetCaption/SetCover call with no file name.
 var errEmptyFile = errors.New("empty file name")
 
+// galleryManifestName is the file that describes the gallery: cover, captions
+// and carousel order. It lives in the gallery root next to the pictures, so
+// every reader of that directory has to know it is metadata, not an entry.
+const galleryManifestName = "gallery.json"
+
 // Image upload bounds, same as news assets: a screenshot is a picture like
 // any other, so the same ceiling applies.
 const (
@@ -172,6 +177,14 @@ func (h *Handlers) List(w http.ResponseWriter, r *http.Request) {
 	}{Path: filepath.ToSlash(rel), Items: []galleryItem{}}
 	for _, e := range entries {
 		if dirsOnly && !e.IsDir() {
+			continue
+		}
+		// gallery.json — описание галереи, а не её содержимое. В корне он лежит
+		// рядом с картинками, и браузер показывал его такой же плашкой: у неё
+		// нет превью, её можно «сделать обложкой», а подпись к ней уходит в
+		// items и ссылается на сам манифест. После первого же нажатия
+		// «Сделать обложкой» файл появлялся в сетке и выглядел как сбой.
+		if rel == "" && !e.IsDir() && e.Name() == galleryManifestName {
 			continue
 		}
 		if q != "" && !strings.Contains(strings.ToLower(e.Name()), q) {
@@ -466,7 +479,7 @@ func (h *Handlers) galleryJSONPath(gid string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "gallery.json"), nil
+	return filepath.Join(dir, galleryManifestName), nil
 }
 
 // readGalleryFile loads gallery.json, treating "does not exist yet" as an

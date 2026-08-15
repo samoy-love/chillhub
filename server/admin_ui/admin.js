@@ -2201,10 +2201,17 @@ document.addEventListener('DOMContentLoaded', function(){
   // переключает видимость вкладок, поэтому монтировать при показе не нужно.
   let __gameGallery = null;
   if (window.createGameGallery && document.getElementById('gg_root')) {
+    // Наружу — чтобы game-list.js мог обновить галерею при выборе игры из
+    // левого списка. Там выбор идёт через tr.click(), который присваивает
+    // #gm_select.value напрямую, а программное присваивание НЕ порождает
+    // событие change — единственное, на котором висело обновление галереи.
+    // Из-за этого панель показывала галерею той игры, что была выбрана до
+    // перезагрузки, а не выбранной сейчас.
     __gameGallery = window.createGameGallery({
       root: '#gg_root',
       getGameId: () => (document.getElementById('gm_select')?.value || document.getElementById('gid')?.value || '').trim(),
     });
+    window.__gameGallery = __gameGallery;
   }
   // initial load
   gmSelectReload(true);
