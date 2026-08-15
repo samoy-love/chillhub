@@ -963,7 +963,9 @@
                «Новости <игра>» оставалась голая дыра в половину экрана — у списка игр
                пустое состояние было, у ленты новостей нет. -->
           <StackPanel Name="GameNewsEmptyState" Visibility="Collapsed" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="12">
-            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE7BA;" FontSize="24" HorizontalAlignment="Center"
+            <!-- Нейтральный значок, а не треугольник предупреждения: «новостей нет» —
+                 обычное состояние молодой игры, а не ошибка. -->
+            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE946;" FontSize="24" HorizontalAlignment="Center"
                        Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,0,0,8"/>
             <TextBlock Text="Пока новостей нет" TextWrapping="Wrap" TextAlignment="Center"
                        FontWeight="SemiBold" Foreground="{DynamicResource Brush.Text}"/>

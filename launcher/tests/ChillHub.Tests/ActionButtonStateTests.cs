@@ -138,6 +138,7 @@ namespace ChillHub.Tests {
             // Ждущая позиция — нейтральная кнопка: красная «Отмена» обещает остановить
             // процесс, а процесса ещё нет.
             AssertLook(ActionMode.Dequeue, "Убрать из очереди", true, "Style.ActionButton.Checking");
+            AssertLook(ActionMode.Deleting, "Удаление…", false, "Style.ActionButton.Checking");
             AssertLook(ActionMode.Checking, "Проверка…", false, "Style.ActionButton.Checking");
             AssertLook(ActionMode.Maintenance, "Технические работы", false, "Style.ActionButton.Checking");
         }
@@ -150,6 +151,7 @@ namespace ChillHub.Tests {
         public void ЗапрещающиеРежимыНеНажимаются() {
             Assert.False(ActionButtonState.Appearance(ActionMode.Checking).IsEnabled);
             Assert.False(ActionButtonState.Appearance(ActionMode.Maintenance).IsEnabled);
+            Assert.False(ActionButtonState.Appearance(ActionMode.Deleting).IsEnabled);
         }
 
         private static void AssertLook(ActionMode mode, string content, bool enabled, string styleKey) {

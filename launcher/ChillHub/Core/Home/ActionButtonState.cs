@@ -33,6 +33,12 @@ namespace ChillHub.Core.Home {
         /// <summary>Предыдущая попытка сорвалась.</summary>
         Retry,
 
+        /// <summary>
+        /// Идёт удаление локальных файлов. Пока оно не кончилось, ни «Играть», ни
+        /// «Обновить» предлагать нельзя: файлы вырываются из-под ног прямо сейчас.
+        /// </summary>
+        Deleting,
+
         /// <summary>Действие запрещено режимом технических работ на сервере (задача 25).</summary>
         Maintenance,
     }
@@ -94,6 +100,7 @@ namespace ChillHub.Core.Home {
             ActionMode.Cancel => new ActionButtonAppearance("Отмена", true, "Style.ActionButton.Cancel"),
             ActionMode.Dequeue => new ActionButtonAppearance("Убрать из очереди", true, "Style.ActionButton.Checking"),
             ActionMode.Checking => new ActionButtonAppearance("Проверка…", false, "Style.ActionButton.Checking"),
+            ActionMode.Deleting => new ActionButtonAppearance("Удаление…", false, "Style.ActionButton.Checking"),
             ActionMode.Play => new ActionButtonAppearance("Играть", true, "Style.ActionButton.Play"),
             ActionMode.Retry => new ActionButtonAppearance("Повторить", true, "Style.ActionButton.Retry"),
 
