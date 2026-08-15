@@ -5,6 +5,7 @@
 
 namespace ChillHub.Core.News {
     using System;
+    using System.Text.RegularExpressions;
 
     using Markdig;
 
@@ -42,6 +43,20 @@ namespace ChillHub.Core.News {
         private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
 
         /// <summary>
+        /// Абзац, целиком состоящий из одной картинки, — именно так markdown записывает
+        /// иллюстрацию с подписью. Разбирается уже готовый вывод Markdig, а не текст
+        /// новости: разметка предсказуема, потому что её только что собрала библиотека.
+        /// </summary>
+        private static readonly Regex LoneImageParagraph = new Regex(
+            @"^<p>(?<img><img\s[^>]*?/>)</p>$",
+            RegexOptions.Multiline | RegexOptions.CultureInvariant);
+
+        /// <summary>Подпись картинки: markdown кладёт её в <c>alt</c>, уже экранированной.</summary>
+        private static readonly Regex AltAttribute = new Regex(
+            @"\salt=""(?<alt>[^""]*)""",
+            RegexOptions.CultureInvariant);
+
+        /// <summary>
         /// Происхождение адреса новости — то, что подставляется в <c>&lt;base&gt;</c>.
         /// Без него абсолютные пути картинок вида «/assets/…» в NavigateToString никуда не ведут.
         /// </summary>
@@ -52,7 +67,33 @@ namespace ChillHub.Core.News {
         /// <summary>Превращает markdown в html тем же конвейером, что и страница новости.</summary>
         /// <param name="markdown">Текст новости.</param>
         /// <returns>Html-фрагмент.</returns>
-        internal static string ToHtml(string markdown) => Markdown.ToHtml(markdown, Pipeline);
+        internal static string ToHtml(string markdown) => WithCaptions(Markdown.ToHtml(markdown, Pipeline));
+
+        /// <summary>
+        /// Делает подписи к картинкам видимыми.
+        /// <para>
+        /// В markdown подпись пишется как <c>![Было](/assets/old.jpg)</c>, и редакторы
+        /// рассчитывают увидеть её под иллюстрацией. Markdig же честно кладёт текст в
+        /// <c>alt</c> — атрибут для скринридеров и для случая, когда картинка не
+        /// загрузилась, — поэтому в лаунчере подпись просто пропадала. Одинокая картинка
+        /// в абзаце — это иллюстрация, и абзац вокруг неё заменяется на
+        /// <c>&lt;figure&gt;</c> с <c>&lt;figcaption&gt;</c>.
+        /// </para>
+        /// <para>
+        /// Картинка внутри строки текста (иконка, бейдж) остаётся как есть: подпись под
+        /// ней разорвала бы фразу.
+        /// </para>
+        /// </summary>
+        /// <param name="html">Вывод Markdig.</param>
+        /// <returns>Тот же html, но с подписями под иллюстрациями.</returns>
+        internal static string WithCaptions(string html) => LoneImageParagraph.Replace(html, match => {
+            var img = match.Groups["img"].Value;
+            var alt = AltAttribute.Match(img).Groups["alt"].Value;
+
+            return string.IsNullOrWhiteSpace(alt)
+                ? match.Value
+                : $"<figure>{img}<figcaption>{alt}</figcaption></figure>";
+        });
 
         /// <summary>Собирает страницу новости целиком.</summary>
         /// <param name="markdown">Текст новости с сервера.</param>
@@ -73,6 +114,9 @@ namespace ChillHub.Core.News {
   body{{font-family:Segoe UI,Segoe UI Emoji,Arial; margin:0; color:{palette.Text}; background:{palette.Background}; overflow-x:hidden;}}
   .wrap{{width:min(100vw - 24px, 860px); margin:16px auto 28px auto; padding:16px; font-size:17px; line-height:1.7; background:{palette.Surface}; border-radius:8px;}}
   img{{max-width:100%; height:auto; max-height:360px; display:inline-block; margin:16px 0; border-radius:8px;}}
+  figure{{margin:16px 0;}}
+  figure img{{margin:0; display:block;}}
+  figcaption{{margin-top:6px; font-size:14px; line-height:1.5; opacity:0.65;}}
   pre,code{{background:{palette.CodeBackground}; border-radius:6px;}}
   pre{{padding:12px; overflow:auto;}}
   a{{color:{palette.Link}; text-decoration:none;}}
