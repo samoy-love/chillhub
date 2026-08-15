@@ -206,7 +206,12 @@
   // ===== Вкладка «Публикация и удаление» =====
   async function confirmDialog(opts) {
     if (window.askConfirm) return window.askConfirm(opts);
-    return Promise.resolve(window.confirm((opts.title || '') + '\n\n' + (opts.body || '')));
+    // Запасной путь без admin.js: последствия (bullets) обязаны доехать и
+    // сюда — иначе подтверждать придётся вслепую.
+    const bullets = Array.isArray(opts.bullets) ? opts.bullets.filter(Boolean) : [];
+    const text = [opts.title || '', opts.body || '', ...bullets.map(function (b) { return '• ' + b; })]
+      .filter(Boolean).join('\n\n');
+    return Promise.resolve(window.confirm(text));
   }
 
   function bindDangerZone() {
@@ -245,7 +250,13 @@
       if (!gid) { say('Сначала выберите игру'); return; }
       const ok = await confirmDialog({
         title: 'Удалить игру «' + gid + '» и все версии?',
-        body: 'С диска будут стёрты манифесты и все распакованные сборки этой игры, запись уйдёт из реестра. Отменить нельзя.',
+        body: 'Игра исчезнет и из лаунчера, и с диска.',
+        bullets: [
+          'Манифесты и все распакованные сборки этой игры стираются с диска.',
+          'Запись уходит из реестра — игра пропадает у всех пользователей.',
+          'Отменить нельзя: вернуть можно только повторной заливкой каждой версии.',
+          'Уже скачанные пользователями файлы останутся у них на дисках.',
+        ],
         okText: 'Удалить безвозвратно',
         danger: true,
       });

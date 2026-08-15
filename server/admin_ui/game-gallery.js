@@ -58,7 +58,12 @@
   }
   function confirmDialog(opts) {
     if (window.askConfirm) return window.askConfirm(opts);
-    return Promise.resolve(window.confirm((opts.title || '') + '\n\n' + (opts.body || '')));
+    // Запасной путь без admin.js: последствия (bullets) обязаны доехать и
+    // сюда — иначе подтверждать придётся вслепую.
+    const bullets = Array.isArray(opts.bullets) ? opts.bullets.filter(Boolean) : [];
+    const text = [opts.title || '', opts.body || '', ...bullets.map(function (b) { return '• ' + b; })]
+      .filter(Boolean).join('\n\n');
+    return Promise.resolve(window.confirm(text));
   }
 
   const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg|ico)(\?|#|$)/i;
@@ -250,7 +255,16 @@
           const del = iconBtn('delete', 'ms-1');
           del.onclick = async function (e) {
             e.stopPropagation();
-            if (!await confirmDialog({ title: 'Удалить папку?', body: 'Папка «' + it.name + '» и всё её содержимое будут удалены с диска.', okText: 'Удалить папку', danger: true })) return;
+            if (!await confirmDialog({
+              title: 'Удалить папку?',
+              body: 'Папка «' + it.name + '» и всё её содержимое будут удалены с диска.',
+              bullets: [
+                'Картинки из неё пропадут везде, где на них уже стоят ссылки — в карточке игры и в новостях.',
+                'Отменить нельзя: файлы придётся загружать заново.',
+              ],
+              okText: 'Удалить папку',
+              danger: true,
+            })) return;
             if (!await mutate(EP.delete, { gameId: gameId, path: path || '', name: it.name })) return;
             fetchAndRender();
           };
@@ -354,7 +368,16 @@
           const del = iconBtn('delete', 'ms-1');
           del.onclick = async function (e) {
             e.stopPropagation();
-            if (!await confirmDialog({ title: 'Удалить файл?', body: 'Файл «' + it.name + '» будет удалён с диска.', okText: 'Удалить файл', danger: true })) return;
+            if (!await confirmDialog({
+              title: 'Удалить файл?',
+              body: 'Файл «' + it.name + '» будет удалён с диска.',
+              bullets: [
+                'Если он уже вставлен в карточку игры или в новость, картинка там пропадёт.',
+                'Отменить нельзя: файл придётся загружать заново.',
+              ],
+              okText: 'Удалить файл',
+              danger: true,
+            })) return;
             if (!await mutate(EP.delete, { gameId: gameId, path: path || '', name: it.name })) return;
             fetchAndRender();
           };
