@@ -14,7 +14,7 @@ namespace ChillHub.Tests {
     /// <summary>
     /// Апдейтер обязан запускаться в ПОЛНОЙ изоляции — ровно так, как его копирует
     /// <c>PrepareUpdaterPayload</c> при самообновлении: только файлы, совпавшие с
-    /// глобом <c>"YourLauncher.Updater*"</c>, без self-contained-рантайма ChillHub
+    /// глобом <c>"ChillHub.Updater*"</c>, без self-contained-рантайма ChillHub
     /// (hostfxr.dll и т.п.), с которым апдейтер делит общую папку установки.
     /// <para>
     /// Баг ровно в этом месте оставлял пользователей с непрерывно предлагающим
@@ -57,7 +57,7 @@ namespace ChillHub.Tests {
         [Fact]
         public void СтараяСборкаПадаетВИзоляции() {
             var repoRoot = FindRepoRoot();
-            var csproj = Path.Combine(repoRoot, "updater", "YourLauncher.Updater.csproj");
+            var csproj = Path.Combine(repoRoot, "updater", "ChillHub.Updater.csproj");
             Assert.True(File.Exists(csproj), $"не нашли {csproj} — проверь FindRepoRoot");
 
             // -p:SelfContained=true -p:RuntimeIdentifier=win-x64 на КОМАНДНОЙ СТРОКЕ —
@@ -77,7 +77,7 @@ namespace ChillHub.Tests {
             using var oldIsolated = new TempDir();
             CopyUpdaterArtifactGlob(oldBuildOut.Root, oldIsolated.Root);
 
-            var oldExe = Path.Combine(oldIsolated.Root, "YourLauncher.Updater.exe");
+            var oldExe = Path.Combine(oldIsolated.Root, "ChillHub.Updater.exe");
             Assert.True(File.Exists(oldExe), $"{oldExe} не появился после копирования по глобу PrepareUpdaterPayload");
 
             var (oldExitCode, oldOutput) = Run(oldExe, string.Empty, oldIsolated.Root, TimeSpan.FromSeconds(15));
@@ -95,12 +95,12 @@ namespace ChillHub.Tests {
 
         /// <summary>
         /// Копирует только то, что реально копирует PrepareUpdaterPayload —
-        /// файлы, совпавшие с глобом "YourLauncher.Updater*". Раздельная папка
+        /// файлы, совпавшие с глобом "ChillHub.Updater*". Раздельная папка
         /// сборки (а не общая с ChillHub) без этого фильтра сама по себе ничего
         /// не воспроизводит: в ней и так лежит только апдейтер.
         /// </summary>
         private static void CopyUpdaterArtifactGlob(string sourceDir, string destDir) {
-            foreach (var f in Directory.EnumerateFiles(sourceDir, "YourLauncher.Updater*", SearchOption.TopDirectoryOnly)) {
+            foreach (var f in Directory.EnumerateFiles(sourceDir, "ChillHub.Updater*", SearchOption.TopDirectoryOnly)) {
                 File.Copy(f, Path.Combine(destDir, Path.GetFileName(f)));
             }
         }

@@ -33,7 +33,7 @@ param(
     # Апдейтер публикуется отдельно от ChillHub (см. Publish-UpdaterAot) —
     # ему нужен собственный self-contained набор, а не то, что достаётся
     # транзитивно через ProjectReference.
-    [string]$UpdaterCsproj = "updater/YourLauncher.Updater.csproj",
+    [string]$UpdaterCsproj = "updater/ChillHub.Updater.csproj",
     [string]$Installer = "scripts/installer.nsi",
     [string]$MakensisPath,
     [string]$Runtime = "win-x64",
@@ -387,7 +387,7 @@ function Publish-UpdaterAot {
       падение происходит до того, как управление вообще доходит до Main.
 
       AOT публикуется отдельно и явно (`dotnet publish` с PublishAot=true
-      именно для updater/YourLauncher.Updater.csproj), потому что PublishAot
+      именно для updater/ChillHub.Updater.csproj), потому что PublishAot
       действует только на этапе Publish ТОГО проекта, для которого он
       указан — транзитивная сборка через ProjectReference её не подхватывает
       ни при каких обстоятельствах, поэтому нельзя просто прописать
@@ -411,7 +411,7 @@ function Publish-UpdaterAot {
         & dotnet publish $UpdaterCsproj -c $Configuration -r $Runtime -p:PublishAot=true -o $aotOut
         Assert-NativeSuccess "dotnet publish (updater, Native AOT)" $LASTEXITCODE
 
-        $aotExe = Join-Path $aotOut "YourLauncher.Updater.exe"
+        $aotExe = Join-Path $aotOut "ChillHub.Updater.exe"
         if (-not (Test-Path -LiteralPath $aotExe)) {
             throw "AOT publish reported success but '$aotExe' does not exist."
         }
@@ -433,7 +433,7 @@ function Publish-UpdaterAot {
         $isolated = Join-Path ([IO.Path]::GetTempPath()) ("chillhub-updater-isolation-check-" + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $isolated -Force | Out-Null
         try {
-            $isolatedExe = Join-Path $isolated "YourLauncher.Updater.exe"
+            $isolatedExe = Join-Path $isolated "ChillHub.Updater.exe"
             Copy-Item -LiteralPath $aotExe -Destination $isolatedExe -Force
             $proc = Start-Process -FilePath $isolatedExe -NoNewWindow -PassThru -WorkingDirectory $isolated
             if (-not $proc.WaitForExit(15000)) {
@@ -614,7 +614,7 @@ if (-not (Test-Path -LiteralPath $BuildOutputDir)) {
 # режиме и так требуется).
 if ($Publish -and $SelfContained) {
     Write-Host "[2c/3] Publishing updater as Native AOT..." -ForegroundColor Cyan
-    $updaterTargetExe = Join-Path $BuildOutputDir "YourLauncher.Updater.exe"
+    $updaterTargetExe = Join-Path $BuildOutputDir "ChillHub.Updater.exe"
     Publish-UpdaterAot -UpdaterCsproj $UpdaterCsproj -Configuration $Configuration -Runtime $Runtime -TargetExePath $updaterTargetExe
 }
 

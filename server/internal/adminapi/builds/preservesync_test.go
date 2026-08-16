@@ -58,7 +58,7 @@ func TestLauncherNonPayloadMatchesExactTopLevelPathOnly(t *testing.T) {
 	dropped := []string{
 		"config.json", "launcher.version", "launcher.update-status", "Uninstall.exe",
 		"filelist.txt", "apply-update.cmd",
-		"updater/YourLauncher.Updater.exe", "updater/nested/x.dll",
+		"updater/ChillHub.Updater.exe", "updater/nested/x.dll",
 	}
 	kept := []string{
 		"ChillHub.exe", "data/config.json", "data/filelist.txt", "data/Uninstall.exe",
@@ -92,7 +92,7 @@ func TestPublishingLauncherBuildNeverManifestsClientSkippedFiles(t *testing.T) {
 		"launcher.update-status":           "ok",
 		"Uninstall.exe":                    "nsis",
 		"filelist.txt":                     "junk",
-		"updater/YourLauncher.Updater.exe": "junk",
+		"updater/ChillHub.Updater.exe": "junk",
 		"data/config.json":                 "legit",
 	})))
 	if w.Code != http.StatusOK {
@@ -101,7 +101,7 @@ func TestPublishingLauncherBuildNeverManifestsClientSkippedFiles(t *testing.T) {
 	paths := manifestPaths(t, w.Body.Bytes())
 	for _, bad := range []string{
 		"config.json", "launcher.version", "launcher.update-status", "Uninstall.exe",
-		"filelist.txt", "updater/YourLauncher.Updater.exe",
+		"filelist.txt", "updater/ChillHub.Updater.exe",
 	} {
 		if paths[bad] {
 			t.Errorf("published launcher manifest lists %q; the client will never write it and will offer the update forever", bad)

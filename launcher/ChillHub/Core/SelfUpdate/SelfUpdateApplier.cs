@@ -105,7 +105,7 @@ namespace ChillHub.Core.SelfUpdate {
                 catch {
                 }
 
-                var updaterPath = Path.Combine(tempUpdaterDir, "YourLauncher.Updater.exe");
+                var updaterPath = Path.Combine(tempUpdaterDir, "ChillHub.Updater.exe");
                 var missing = PrepareUpdaterPayload(targetDir, tempUpdaterDir);
 
                 if (missing.Count > 0) {
@@ -217,7 +217,7 @@ namespace ChillHub.Core.SelfUpdate {
         /// <summary>
         /// A10. Кладёт комплект апдейтера в %TEMP% и проверяет его целиком, а не только .exe.
         /// <para>
-        /// YourLauncher.Updater.exe публикуется как Native AOT (см. Publish-UpdaterAot в
+        /// ChillHub.Updater.exe публикуется как Native AOT (см. Publish-UpdaterAot в
         /// scripts/build-installer.ps1) и для запуска сам по себе ничего рядом не требует —
         /// ни .dll, ни .deps.json, ни .runtimeconfig.json, ни рантайма .NET. Раньше апдейтер
         /// наследовал self-contained-настройки ChillHub транзитивно (через ProjectReference),
@@ -241,12 +241,12 @@ namespace ChillHub.Core.SelfUpdate {
         /// <param name="tempUpdaterDir">Куда кладём копию.</param>
         /// <returns>Список того, чего не хватает; пустой список — комплект полон.</returns>
         internal static List<string> PrepareUpdaterPayload(string targetDir, string tempUpdaterDir) {
-            var updaterPath = Path.Combine(tempUpdaterDir, "YourLauncher.Updater.exe");
+            var updaterPath = Path.Combine(tempUpdaterDir, "ChillHub.Updater.exe");
             var missing = new List<string>();
             try {
-                var sources = Directory.EnumerateFiles(targetDir, "YourLauncher.Updater*", SearchOption.TopDirectoryOnly).ToList();
+                var sources = Directory.EnumerateFiles(targetDir, "ChillHub.Updater*", SearchOption.TopDirectoryOnly).ToList();
                 if (sources.Count == 0) {
-                    missing.Add("YourLauncher.Updater.* (в папке установки нет ни одного файла модуля обновления)");
+                    missing.Add("ChillHub.Updater.* (в папке установки нет ни одного файла модуля обновления)");
                 }
 
                 foreach (var f in sources) {
@@ -273,7 +273,7 @@ namespace ChillHub.Core.SelfUpdate {
             }
 
             if (!File.Exists(updaterPath)) {
-                missing.Add("YourLauncher.Updater.exe");
+                missing.Add("ChillHub.Updater.exe");
             }
 
             return missing;
