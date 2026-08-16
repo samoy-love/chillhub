@@ -1,4 +1,4 @@
-# ChillHub Landing
+# Chill Hub Landing
 
 Статический сайт-лендинг лаунчера с параллаксом, анимациями и фоном
 «лавовая лампа». Раздаётся nginx с корня `launcher.samoy.love`.

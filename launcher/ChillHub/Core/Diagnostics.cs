@@ -61,7 +61,7 @@ namespace ChillHub.Core {
             var sb = new StringBuilder(32 * 1024);
             var hints = new Dictionary<string, string>();
             try {
-                sb.AppendLine("# ChillHub Diagnostics Bundle");
+                sb.AppendLine("# Chill Hub Diagnostics Bundle");
                 sb.AppendLine($"Generated: {DateTime.UtcNow:O} (UTC)");
                 sb.AppendLine();
 

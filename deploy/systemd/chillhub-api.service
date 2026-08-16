@@ -1,5 +1,5 @@
 [Unit]
-Description=ChillHub Public API
+Description=Chill Hub Public API
 After=network-online.target
 Wants=network-online.target
 

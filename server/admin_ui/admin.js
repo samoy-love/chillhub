@@ -1156,7 +1156,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
   bind('fb_reply', ()=>{
     const c = String(__fbCur?.contact||'').trim();
     if(!c){ notify('В обращении нет контакта'); return; }
-    const subject = 'ChillHub: ответ на ваше обращение';
+    const subject = 'Chill Hub: ответ на ваше обращение';
     const quoted = String(__fbCur?.comment||'').split(/\r?\n/).map(l=> '> '+l).join('\n');
     const body = '\n\n---\nВаше обращение от '+String(__fbCur?.createdAt||'').replace('T',' ').replace('Z','')+':\n'+quoted+'\n';
     location.href = 'mailto:'+encodeURIComponent(c)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);

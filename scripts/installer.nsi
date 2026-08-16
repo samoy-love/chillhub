@@ -1,4 +1,4 @@
-; NSIS installer script for ChillHub (per-user install)
+; NSIS installer script for Chill Hub (per-user install)
 ; Encoding: UTF-8
 
 Unicode true
@@ -9,9 +9,20 @@ Unicode true
 ; ${VersionCompare} — сравнение версий для защиты от отката (см. .onInit).
 !include "WordFunc.nsh"
 
+; ИМЯ ДЛЯ ГЛАЗ и ИМЯ ДЛЯ ПУТЕЙ — это разные вещи.
+;
+; APP_TITLE видит пользователь: заголовок установщика, ярлыки, строка в списке
+; установленных программ, тексты сообщений. APP_NAME остаётся без пробела и
+; ходит по файловой системе и реестру ($APPDATA\ChillHub, ключи установки).
+; Разделены они не для красоты: переименование каталога данных отрезало бы
+; конфиг и логи у всех, кто уже установил лаунчер.
+!define APP_TITLE "Chill Hub"
 !define APP_NAME "ChillHub"
-!define COMPANY_NAME "ChillHub"
+!define COMPANY_NAME "Chill Hub"
 !define APP_EXE "ChillHub.exe"
+; Ярлыки прежних версий назывались по APP_NAME. Если их не убрать при
+; установке, на рабочем столе и в «Пуске» останется вторая, устаревшая пара.
+!define LEGACY_SHORTCUT_NAME "ChillHub"
 ; ЗНАЧЕНИЕ ПО УМОЛЧАНИЮ для страницы выбора каталога — и только оно.
 ;
 ; И5: раньше эта константа подставлялась ПОВСЮДУ — в секции установки, в
@@ -73,12 +84,12 @@ Unicode true
 ; подписи — репутационные механизмы Windows (SmartScreen) и антивирусы читают
 ; издателя и версию именно отсюда.
 VIProductVersion "${APP_VERSION_NUMERIC}"
-VIAddVersionKey "ProductName" "${APP_NAME}"
+VIAddVersionKey "ProductName" "${APP_TITLE}"
 VIAddVersionKey "ProductVersion" "${APP_VERSION}"
 VIAddVersionKey "FileVersion" "${APP_VERSION}"
 VIAddVersionKey "CompanyName" "${COMPANY_NAME}"
 VIAddVersionKey "LegalCopyright" "${COMPANY_NAME}"
-VIAddVersionKey "FileDescription" "Установщик ${APP_NAME}"
+VIAddVersionKey "FileDescription" "Установщик ${APP_TITLE}"
 
 ; Branding icons (paths relative to this .nsi file in scripts/)
 !define MUI_ICON "app.ico"
@@ -136,7 +147,7 @@ Var DeleteSettings_State
 !define APP_URL "https://launcher.samoy.love"
 
 ; Output installer
-Name "${APP_NAME}"
+Name "${APP_TITLE}"
 OutFile "generated_downloads\ChillHub-Setup.exe"
 
 ; Per-user installation (no admin)
@@ -170,7 +181,7 @@ SetDatablockOptimize on
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "Доустановить WebView2 (нужен для показа новостей)"
 !define MUI_FINISHPAGE_SHOWREADME_FUNCTION InstallPrereqs
 !define MUI_FINISHPAGE_RUN
-!define MUI_FINISHPAGE_RUN_TEXT "Запустить ${APP_NAME}"
+!define MUI_FINISHPAGE_RUN_TEXT "Запустить ${APP_TITLE}"
 !define MUI_FINISHPAGE_RUN_FUNCTION RunAppAfterInstall
 
 ; Page sequence
@@ -263,9 +274,9 @@ retry:
     ; /SD NSIS показывает окно даже установщику, запущенному с /S: тихая
     ; установка на занятых файлах не падала бы, а висела до конца таймаута.
     MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
-      "Файлы ${APP_NAME} сейчас заняты — похоже, лаунчер запущен.$\r$\n$\r$\nЗакройте ${APP_NAME} (проверьте значок в области уведомлений рядом с часами) и нажмите «Повторить»." \
+      "Файлы ${APP_TITLE} сейчас заняты — похоже, лаунчер запущен.$\r$\n$\r$\nЗакройте ${APP_TITLE} (проверьте значок в области уведомлений рядом с часами) и нажмите «Повторить»." \
       /SD IDCANCEL IDRETRY retry
-    Abort "Прервано: ${APP_NAME} не был закрыт."
+    Abort "Прервано: ${APP_TITLE} не был закрыт."
   ${EndIf}
   System::Call 'kernel32::CloseHandle(p r0)'
 done:
@@ -319,20 +330,26 @@ Section "Install" SecInstall
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   ; Shortcuts
-  CreateDirectory "$SMPROGRAMS\${APP_NAME}"
-  CreateShortCut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
-  CreateShortCut "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
+  ; Ярлыки прежнего имени убираем до создания новых: иначе в «Пуске» и на
+  ; рабочем столе останется по два ярлыка на один и тот же лаунчер.
+  Delete "$SMPROGRAMS\${LEGACY_SHORTCUT_NAME}\${LEGACY_SHORTCUT_NAME}.lnk"
+  Delete "$SMPROGRAMS\${LEGACY_SHORTCUT_NAME}\Uninstall ${LEGACY_SHORTCUT_NAME}.lnk"
+  RMDir  "$SMPROGRAMS\${LEGACY_SHORTCUT_NAME}"
+  CreateDirectory "$SMPROGRAMS\${APP_TITLE}"
+  CreateShortCut "$SMPROGRAMS\${APP_TITLE}\${APP_TITLE}.lnk" "$INSTDIR\${APP_EXE}"
+  CreateShortCut "$SMPROGRAMS\${APP_TITLE}\Uninstall ${APP_TITLE}.lnk" "$INSTDIR\Uninstall.exe"
 
   ; Ярлык на рабочем столе — ПО ВЫБОРУ. Раньше он создавался всегда и никого
   ; не спрашивал; рабочий стол — не место, куда программа въезжает молча.
   ; В тихом режиме галочка считается отмеченной: поведение по умолчанию не
   ; меняется для тех, кто ставит скриптом.
   ${If} $DesktopShortcut_State == 1
-    CreateShortCut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
+    Delete "$DESKTOP\${LEGACY_SHORTCUT_NAME}.lnk"
+    CreateShortCut "$DESKTOP\${APP_TITLE}.lnk" "$INSTDIR\${APP_EXE}"
   ${EndIf}
 
   ; Uninstall registry (per-user)
-  WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${APP_NAME}"
+  WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${APP_TITLE}"
   ; Один слэш, а не два: NSIS не обрабатывает \\ как escape, и в реестр
   ; уезжала строка с задвоенным разделителем.
   WriteRegStr HKCU "${UNINST_KEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
@@ -432,7 +449,7 @@ Section "Install" SecInstall
   ${If} ${Errors}
   ${OrIf} $7 != 0
     MessageBox MB_ICONEXCLAMATION \
-      "Не удалось сохранить папку для игр в настройках (код: $7).$\r$\n$\r$\nСам ${APP_NAME} установлен и работает — укажите папку вручную при первом запуске, в настройках.$\r$\nВыбранный путь: $GAMES_DIR" \
+      "Не удалось сохранить папку для игр в настройках (код: $7).$\r$\n$\r$\nСам ${APP_TITLE} установлен и работает — укажите папку вручную при первом запуске, в настройках.$\r$\nВыбранный путь: $GAMES_DIR" \
       /SD IDOK
   ${EndIf}
 
@@ -596,12 +613,18 @@ Section "Uninstall"
   Call un.EnsureAppClosed
 
   ; Remove Start Menu shortcuts (per-user)
-  Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
-  Delete "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk"
-  RMDir  "$SMPROGRAMS\${APP_NAME}"
+  Delete "$SMPROGRAMS\${APP_TITLE}\${APP_TITLE}.lnk"
+  Delete "$SMPROGRAMS\${APP_TITLE}\Uninstall ${APP_TITLE}.lnk"
+  RMDir  "$SMPROGRAMS\${APP_TITLE}"
+  ; Ярлыки версий до переименования: кто ставил старый билд и с тех пор не
+  ; переустанавливался, тому удаление обязано убрать и их.
+  Delete "$SMPROGRAMS\${LEGACY_SHORTCUT_NAME}\${LEGACY_SHORTCUT_NAME}.lnk"
+  Delete "$SMPROGRAMS\${LEGACY_SHORTCUT_NAME}\Uninstall ${LEGACY_SHORTCUT_NAME}.lnk"
+  RMDir  "$SMPROGRAMS\${LEGACY_SHORTCUT_NAME}"
 
   ; Remove Desktop shortcut
-  Delete "$DESKTOP\${APP_NAME}.lnk"
+  Delete "$DESKTOP\${APP_TITLE}.lnk"
+  Delete "$DESKTOP\${LEGACY_SHORTCUT_NAME}.lnk"
 
   ; И19: удаление действительно УДАЛЯЕТ каталог установки.
   ;
@@ -694,7 +717,7 @@ Function .onInit
     ${VersionCompare} "$0" "${APP_VERSION}" $1
     ${If} $1 == 1
       MessageBox MB_YESNO|MB_ICONEXCLAMATION \
-        "Установлена версия $0, а этот установщик ставит ${APP_VERSION} — более старую.$\r$\n$\r$\nПродолжить и откатить ${APP_NAME} до ${APP_VERSION}?" \
+        "Установлена версия $0, а этот установщик ставит ${APP_VERSION} — более старую.$\r$\n$\r$\nПродолжить и откатить ${APP_TITLE} до ${APP_VERSION}?" \
         /SD IDNO IDYES continue
       Abort
     ${EndIf}
@@ -831,7 +854,7 @@ Function DirectoryLeave
 
 notwritable:
   MessageBox MB_ICONSTOP \
-    "В каталог «$INSTDIR» нельзя записывать.$\r$\n$\r$\n${APP_NAME} устанавливается только для текущего пользователя и без прав администратора, поэтому системные каталоги (Program Files, Windows) не подойдут.$\r$\nВыберите каталог в своём профиле — например, $LOCALAPPDATA\${APP_NAME}." \
+    "В каталог «$INSTDIR» нельзя записывать.$\r$\n$\r$\n${APP_TITLE} устанавливается только для текущего пользователя и без прав администратора, поэтому системные каталоги (Program Files, Windows) не подойдут.$\r$\nВыберите каталог в своём профиле — например, $LOCALAPPDATA\${APP_NAME}." \
     /SD IDOK
   Abort
 FunctionEnd
@@ -846,7 +869,7 @@ Function SelectGamesDir_Create
     Abort
   ${EndIf}
 
-  ${NSD_CreateLabel} 0 0 100% 24 "Выберите папку для хранения игр, загруженных в лаунчере ChillHub"
+  ${NSD_CreateLabel} 0 0 100% 24 "Выберите папку для хранения игр, загруженных в лаунчере Chill Hub"
   Pop $GamesDir_Label
 
   ${NSD_CreateText} 0 28 80% 26 "$GAMES_DIR"
@@ -918,7 +941,7 @@ Function FinishPageShow
 FunctionEnd
 
 Function RunAppAfterInstall
-  ; If user ticked "Запустить ChillHub", set a flag; actual launch may be deferred
+  ; If user ticked "Запустить Chill Hub", set a flag; actual launch may be deferred
   StrCpy $LaunchAfterFlag 1
 FunctionEnd
 

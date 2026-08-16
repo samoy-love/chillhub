@@ -1,4 +1,4 @@
-# ChillHub
+# Chill Hub
 
 Русский · [English](README.en.md)
 
@@ -16,7 +16,7 @@
 шаг в этой цепочке кто-нибудь однажды сделает не так, а сломанная установка
 неотличима от сломанной сборки, пока в этом не разберутся руками.
 
-ChillHub вырос из приватного апдейтера модов для Lethal Company (C#, WinForms,
+Chill Hub вырос из приватного апдейтера модов для Lethal Company (C#, WinForms,
 2023–2024): одна игра, зашитый список файлов, обновление лилось поверх того,
 что лежало. Та же задача, пересобранная под много игр — с диффами, хешами
 и откатами.
@@ -143,7 +143,7 @@ dk rollback chillhub-admin
 | [metro.samoy.love](https://metro.samoy.love) | Офлайн-PWA со схемой московского метро — [tr0llex/metro-map](https://github.com/tr0llex/metro-map) |
 | [status.samoy.love](https://status.samoy.love) | Статус сервисов: агент на хосте, бот в Telegram и внешний сторож — [tr0llex/status.samoy.love](https://github.com/tr0llex/status.samoy.love) |
 | [samoy.love](https://samoy.love) | Личная страница — [tr0llex/samoy.love](https://github.com/tr0llex/samoy.love) |
-| Мониторинг | [tr0llex/metrics.samoy.love](https://github.com/tr0llex/metrics.samoy.love) — мониторинг всей экосистемы; оба бинаря ChillHub отдают ему метрики в формате Prometheus на loopback |
+| Мониторинг | [tr0llex/metrics.samoy.love](https://github.com/tr0llex/metrics.samoy.love) — мониторинг всей экосистемы; оба бинаря Chill Hub отдают ему метрики в формате Prometheus на loopback |
 | Пайплайн | [tr0llex/deploy-kit](https://github.com/tr0llex/deploy-kit) — общий релизный пайплайн для всех перечисленных |
 
 ## Контакты и лицензия

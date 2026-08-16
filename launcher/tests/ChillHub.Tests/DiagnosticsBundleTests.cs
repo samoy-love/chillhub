@@ -46,7 +46,7 @@ namespace ChillHub.Tests {
             using (Logger.OverrideForTests(logs.Root)) {
                 var text = Diagnostics.Build().LogsMarkdown;
 
-                Assert.Contains("# ChillHub Diagnostics Bundle", text);
+                Assert.Contains("# Chill Hub Diagnostics Bundle", text);
                 Assert.Contains("## Config", text);
                 Assert.Contains("## Launcher Files (SHA-256)", text);
                 Assert.Contains("## Games Root Listing", text);

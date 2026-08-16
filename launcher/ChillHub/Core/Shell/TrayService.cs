@@ -32,7 +32,7 @@ namespace ChillHub.Core.Shell {
         internal const string NoGamePlayText = "Игра не выбрана";
 
         /// <summary>Имя приложения — начало подсказки над значком.</summary>
-        internal const string AppTitle = "ChillHub";
+        internal const string AppTitle = "Chill Hub";
 
         /// <summary>
         /// Потолок подсказки NotifyIcon: у Windows он 63 символа, при превышении

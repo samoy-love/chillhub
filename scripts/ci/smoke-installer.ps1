@@ -13,7 +13,7 @@
 # может ни поставить лаунчер, ни удалить его.
 #
 # ЧТО ЭТО НЕ ПРОВЕРЯЕТ. Лаунчер здесь не запускается: раннер CI — машина без
-# графической сессии, а ChillHub — WPF-приложение. Проверяется установка, а не
+# графической сессии, а Chill Hub — WPF-приложение. Проверяется установка, а не
 # работоспособность самой программы.
 # =============================================================================
 [CmdletBinding()]
@@ -102,10 +102,10 @@ if ($configExistedBefore) {
 
 # ОКРУЖЕНИЕ ВОЗВРАЩАЕТСЯ РОВНО В ИСХОДНОЕ СОСТОЯНИЕ.
 #
-# Проверка ставит и удаляет НАСТОЯЩИЙ ChillHub, а установщик — пользовательский:
+# Проверка ставит и удаляет НАСТОЯЩИЙ Chill Hub, а установщик — пользовательский:
 # он пишет в HKCU, кладёт ярлык на рабочий стол и в меню «Пуск» по фиксированным
 # путям, не зависящим от каталога установки. На чистом раннере это неважно, а на
-# машине разработчика, где ChillHub стоит по-настоящему, тихое удаление в конце
+# машине разработчика, где Chill Hub стоит по-настоящему, тихое удаление в конце
 # снесло бы его ярлыки и запись в списке программ — то есть проверка сломала бы
 # ровно то, что проверяет.
 #
@@ -114,8 +114,9 @@ if ($configExistedBefore) {
 $snapshotDir = Join-Path ([IO.Path]::GetTempPath().TrimEnd('\')) ("chillhub-smoke-backup-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $snapshotDir -Force | Out-Null
 
-$desktopLnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'ChillHub.lnk'
-$startMenuDir = Join-Path ([Environment]::GetFolderPath('Programs')) 'ChillHub'
+# Ярлыки называются по видимому имени продукта — «Chill Hub», а не по имени exe.
+$desktopLnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Chill Hub.lnk'
+$startMenuDir = Join-Path ([Environment]::GetFolderPath('Programs')) 'Chill Hub'
 
 function Save-Snapshot {
     param([string]$Path, [string]$Name)
@@ -138,7 +139,7 @@ function Restore-Snapshot {
     }
 }
 
-$hadDesktopLnk = Save-Snapshot -Path $desktopLnk -Name 'ChillHub.lnk'
+$hadDesktopLnk = Save-Snapshot -Path $desktopLnk -Name 'Chill Hub.lnk'
 $hadStartMenu = Save-Snapshot -Path $startMenuDir -Name 'StartMenu'
 
 # Ключи реестра сохраняются целиком (reg export), а не по одному значению:
@@ -194,14 +195,14 @@ try {
         Test-Assert -What "EstimatedSize посчитан" -Condition ($reg.EstimatedSize -gt 0) -Detail "$($reg.EstimatedSize)"
     }
 
-    $startMenu = Join-Path ([Environment]::GetFolderPath('Programs')) 'ChillHub\ChillHub.lnk'
+    $startMenu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Chill Hub\Chill Hub.lnk'
     Test-Assert -What "ярлык в меню «Пуск» создан" -Condition (Test-Path -LiteralPath $startMenu)
 
     if ($reg) {
         Test-Assert -What "ссылка на сайт есть в записи списка программ" -Condition ($reg.URLInfoAbout -like 'http*') -Detail "'$($reg.URLInfoAbout)'"
     }
 
-    $desktopShortcutMade = Join-Path ([Environment]::GetFolderPath('Desktop')) 'ChillHub.lnk'
+    $desktopShortcutMade = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Chill Hub.lnk'
     Test-Assert -What "ярлык на рабочем столе создан (в тихом режиме — по умолчанию)" -Condition (Test-Path -LiteralPath $desktopShortcutMade)
 
     # Папка для игр доезжает до конфига через внешний PowerShell — шаг, у
@@ -315,7 +316,7 @@ finally {
         Remove-Item -LiteralPath $appDataDir -Recurse -Force -ErrorAction SilentlyContinue
     }
     if (Test-Path -LiteralPath $gamesDir) { Remove-Item -LiteralPath $gamesDir -Recurse -Force -ErrorAction SilentlyContinue }
-    Restore-Snapshot -Path $desktopLnk -Name 'ChillHub.lnk' -Existed $hadDesktopLnk
+    Restore-Snapshot -Path $desktopLnk -Name 'Chill Hub.lnk' -Existed $hadDesktopLnk
     Restore-Snapshot -Path $startMenuDir -Name 'StartMenu' -Existed $hadStartMenu
 
     if (Test-Path -LiteralPath $UninstKey) { Remove-Item -LiteralPath $UninstKey -Recurse -Force -ErrorAction SilentlyContinue }
