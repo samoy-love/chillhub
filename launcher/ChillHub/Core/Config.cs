@@ -5,6 +5,7 @@
 
 namespace ChillHub.Core {
     using System;
+    using System.Collections.Generic;
     using System.Diagnostics;
     using System.IO;
     using System.Text.Json;
@@ -181,6 +182,39 @@ namespace ChillHub.Core {
             }
         }
 
+        /// <summary>Путь словаря темы внутри сборки; тема одна — тёмная.</summary>
+        public const string ThemePath = "Themes/Theme.Dark.xaml";
+
+        /// <summary>
+        /// Решает, что сделать со списком подключённых словарей ресурсов: какие убрать
+        /// (чужие темы, индексы по убыванию — чтобы удалять с конца) и нужно ли добавлять
+        /// нашу.
+        /// <para>
+        /// Тема одна и та же, а <see cref="ApplyTheme"/> вызывается на каждом сохранении
+        /// конфига — в том числе на каждом шаге ползунка в настройках. Пересборка словаря
+        /// ресурсов перестраивает шаблоны всех элементов окна: у ползунка это создаёт новый
+        /// бегунок посреди перетаскивания, и мышь его теряет. Поэтому уже подключённый
+        /// словарь не трогаем.
+        /// </para>
+        /// </summary>
+        /// <param name="sources">Адреса подключённых словарей в их порядке.</param>
+        /// <returns>Индексы словарей на удаление и признак, что тему нужно добавить.</returns>
+        public static (IReadOnlyList<int> Remove, bool Add) PlanThemeMerge(IReadOnlyList<string> sources) {
+            var remove = new List<int>();
+            bool applied = false;
+            for (int i = sources.Count - 1; i >= 0; i--) {
+                var src = sources[i] ?? string.Empty;
+                if (src.IndexOf(ThemePath, StringComparison.OrdinalIgnoreCase) >= 0) {
+                    applied = true;
+                }
+                else if (src.IndexOf("Themes/", StringComparison.OrdinalIgnoreCase) >= 0) {
+                    remove.Add(i);
+                }
+            }
+
+            return (remove, !applied);
+        }
+
         /// <summary>
         /// Применяет единственную тёмную тему. Выбор темы из конфига убран — тема одна.
         /// </summary>
@@ -191,27 +225,20 @@ namespace ChillHub.Core {
                     return;
                 }
 
-                // Тема одна и та же, а вызывают нас на каждом сохранении конфига — в том
-                // числе на каждом шаге ползунка в настройках. Пересборка словаря ресурсов
-                // перестраивает шаблоны всех элементов окна: у ползунка это создаёт новый
-                // бегунок посреди перетаскивания, и мышь его теряет. Поэтому уже
-                // подключённый словарь не трогаем.
-                const string themePath = "Themes/Theme.Dark.xaml";
-                bool applied = false;
-                for (int i = app.Resources.MergedDictionaries.Count - 1; i >= 0; i--) {
-                    var md = app.Resources.MergedDictionaries[i];
-                    var src = md.Source?.OriginalString ?? string.Empty;
-                    if (src.IndexOf(themePath, StringComparison.OrdinalIgnoreCase) >= 0) {
-                        applied = true;
-                    }
-                    else if (src.IndexOf("Themes/", StringComparison.OrdinalIgnoreCase) >= 0) {
-                        app.Resources.MergedDictionaries.RemoveAt(i);
-                    }
+                var merged = app.Resources.MergedDictionaries;
+                var sources = new List<string>(merged.Count);
+                foreach (var md in merged) {
+                    sources.Add(md.Source?.OriginalString ?? string.Empty);
                 }
 
-                if (!applied) {
-                    var uri = new Uri("/ChillHub;component/" + themePath, UriKind.Relative);
-                    app.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = uri });
+                var (remove, add) = PlanThemeMerge(sources);
+                foreach (var i in remove) {
+                    merged.RemoveAt(i);
+                }
+
+                if (add) {
+                    var uri = new Uri("/ChillHub;component/" + ThemePath, UriKind.Relative);
+                    merged.Add(new ResourceDictionary { Source = uri });
                 }
 
                 if (app.MainWindow != null) {

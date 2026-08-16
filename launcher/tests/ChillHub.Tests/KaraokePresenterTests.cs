@@ -58,6 +58,58 @@ namespace ChillHub.Tests {
             });
         }
 
+        /// <summary>
+        /// Повторный старт во время перехода между строками: старый переход, дождавшись
+        /// своей паузы, не должен сдвигать новую песню на строку вперёд.
+        /// </summary>
+        [Fact]
+        public void ПереходСтарогоЗапускаНеСдвигаетНовыйЗапуск() {
+            OnUi(async () => {
+                var current = new TextBlock();
+                var next = new TextBlock();
+                var config = new KaraokeConfig {
+                    CharIntervalMs = 5,
+                    PauseAfterLineMs = 200,
+                    PauseAfterEmptyLineMs = 200,
+                    FadeOutMs = 10,
+                };
+                var presenter = new KaraokePresenter(new Border(), current, next, new Border(), config);
+
+                // Короткая строка дописывается почти сразу, и презентер уходит в паузу перед переходом
+                presenter.Start("ab\nвторая");
+                await Task.Delay(100);
+                Assert.Equal("ab", current.Text);
+
+                presenter.Start(Lyrics);
+                await Task.Delay(400);
+
+                Assert.StartsWith(current.Text, FirstLine, StringComparison.Ordinal);
+                Assert.Equal(string.Empty, next.Text);
+            });
+        }
+
+        /// <summary>Пауза после старта останавливает печать, возобновление продолжает её с того же места.</summary>
+        [Fact]
+        public void ПаузаОстанавливаетПечать() {
+            OnUi(async () => {
+                var current = new TextBlock();
+                var presenter = new KaraokePresenter(new Border(), current, new TextBlock(), new Border(), new KaraokeConfig { CharIntervalMs = 20 });
+
+                presenter.Start(Lyrics);
+                await Task.Delay(150);
+                presenter.Pause();
+                var typed = current.Text;
+                Assert.NotEmpty(typed);
+
+                await Task.Delay(150);
+                Assert.Equal(typed, current.Text);
+
+                presenter.Resume();
+                await Task.Delay(150);
+                Assert.True(current.Text.Length > typed.Length, "после возобновления печать должна продолжиться");
+            });
+        }
+
         private static void OnUi(Func<Task> body) {
             ExceptionDispatchInfo? failure = null;
             var thread = new Thread(() => {
