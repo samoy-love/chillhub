@@ -725,53 +725,69 @@
     <Setter Property="Background" Value="{StaticResource Brush.Track}"/>
   </Style>
 
-  <!-- Slider neutral style (avoid system template quirks on dark theme) -->
+  <!-- Ползунок: дорожка 4px, заполненная часть — акцент, бегунок — светлый круг с
+       акцентным кольцом, под курсором и при перетаскивании кольцо ярче и бегунок чуть
+       больше. Прежний бегунок был тёмно-серым (#4A4458) кругом на тёмной же дорожке —
+       его приходилось искать, а заполнение уезжало под бегунок отрицательным отступом. -->
   <Style TargetType="Slider">
-    <Setter Property="Foreground" Value="{StaticResource Brush.TextSecondary}"/>
+    <Setter Property="Foreground" Value="{StaticResource Brush.Accent}"/>
     <Setter Property="Background" Value="{StaticResource Brush.Track}"/>
+    <Setter Property="MinHeight" Value="28"/>
     <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Slider">
-          <Grid Margin="6,10">
-            <!-- Rounded track base: thinner -->
-            <Border CornerRadius="2" Height="4" VerticalAlignment="Center" Background="{StaticResource Brush.Track}"/>
-            <!-- Use Track with repeat buttons filling left/right portions -->
-            <Track x:Name="PART_Track"
+          <Grid VerticalAlignment="Center" MinHeight="{TemplateBinding MinHeight}">
+            <!-- Дорожка на всю ширину, с полями под половину бегунка -->
+            <Border Height="4" CornerRadius="2" Margin="10,0" VerticalAlignment="Center"
+                    Background="{TemplateBinding Background}"/>
+            <Track x:Name="PART_Track" Margin="10,0"
                    Minimum="{TemplateBinding Minimum}"
                    Maximum="{TemplateBinding Maximum}"
                    Value="{TemplateBinding Value}"
                    IsDirectionReversed="False">
               <Track.DecreaseRepeatButton>
-                <!-- Extend selected zone under half of the thumb (thumb is 16px, so -8 margin) -->
-                <RepeatButton Background="{StaticResource Brush.TrackFill}" BorderBrush="{x:Null}" Margin="0,0,-8,0">
+                <RepeatButton Focusable="False" Cursor="Hand" Command="Slider.DecreaseLarge">
                   <RepeatButton.Template>
                     <ControlTemplate TargetType="RepeatButton">
-                      <Border CornerRadius="2" Background="{TemplateBinding Background}"/>
+                      <!-- Заполненная часть; -10 справа заводит её под центр бегунка -->
+                      <Grid Background="Transparent">
+                        <Border Height="4" CornerRadius="2" VerticalAlignment="Center" Margin="-10,0,-10,0"
+                                Background="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}"/>
+                      </Grid>
                     </ControlTemplate>
                   </RepeatButton.Template>
                 </RepeatButton>
               </Track.DecreaseRepeatButton>
               <Track.IncreaseRepeatButton>
-                <RepeatButton Background="{StaticResource Brush.Track}" BorderBrush="{x:Null}">
+                <RepeatButton Focusable="False" Cursor="Hand" Command="Slider.IncreaseLarge">
                   <RepeatButton.Template>
                     <ControlTemplate TargetType="RepeatButton">
-                      <Border CornerRadius="2" Background="{TemplateBinding Background}"/>
+                      <Grid Background="Transparent"/>
                     </ControlTemplate>
                   </RepeatButton.Template>
                 </RepeatButton>
               </Track.IncreaseRepeatButton>
               <Track.Thumb>
-                <Thumb Width="16" Height="16" FocusVisualStyle="{x:Null}">
+                <Thumb Width="20" Height="20" FocusVisualStyle="{x:Null}" Cursor="Hand">
                   <Thumb.Template>
                     <ControlTemplate TargetType="Thumb">
-                      <Ellipse x:Name="th" Fill="{StaticResource Brush.Thumb}" StrokeThickness="0"/>
+                      <Grid Background="Transparent">
+                        <Ellipse x:Name="ring" Width="16" Height="16"
+                                 Fill="{StaticResource Brush.Text}"
+                                 Stroke="{StaticResource Brush.Accent}" StrokeThickness="3"/>
+                      </Grid>
                       <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                          <Setter TargetName="th" Property="Fill" Value="{StaticResource Brush.ThumbHover}"/>
+                          <Setter TargetName="ring" Property="Width" Value="18"/>
+                          <Setter TargetName="ring" Property="Height" Value="18"/>
+                          <Setter TargetName="ring" Property="Stroke" Value="{StaticResource Brush.AccentHover}"/>
                         </Trigger>
                         <Trigger Property="IsDragging" Value="True">
-                          <Setter TargetName="th" Property="Fill" Value="{StaticResource Brush.ThumbActive}"/>
+                          <Setter TargetName="ring" Property="Width" Value="20"/>
+                          <Setter TargetName="ring" Property="Height" Value="20"/>
+                          <Setter TargetName="ring" Property="Stroke" Value="{StaticResource Brush.AccentHover}"/>
+                          <Setter TargetName="ring" Property="Fill" Value="#FFFFFF"/>
                         </Trigger>
                       </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -780,12 +796,15 @@
               </Track.Thumb>
             </Track>
           </Grid>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Opacity" Value="0.5"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
         </ControlTemplate>
       </Setter.Value>
     </Setter>
   </Style>
-
-
   <!-- CheckBox (dark theme) -->
   <Style TargetType="CheckBox">
     <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>

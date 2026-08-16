@@ -13,17 +13,12 @@ namespace ChillHub.Core.Shell {
         // Интервал печати одного символа (мс): меньше -> быстрее
         internal int CharIntervalMs { get; init; } = 60;
 
-        // Пауза после завершения строки перед переходом (мс)
-        internal int PauseAfterLineMs { get; init; } = 380;
+        // Пауза после завершения строки перед переходом (мс): строку нужно успеть
+        // дочитать, 380 мс на это не хватало
+        internal int PauseAfterLineMs { get; init; } = 700;
 
-        // Длительность затухания текущей строки (мс)
-        internal int FadeOutMs { get; init; } = 50;
-
-        // Длительность появления следующей строки (мс)
-        internal int FadeInMs { get; init; } = 70;
-
-        // Доп. задержка после анимации (мс)
-        internal int AfterTransitionDelayMs { get; init; } = 0;
+        // Длительность угасания дописанной строки (мс)
+        internal int FadeOutMs { get; init; } = 180;
 
         // Ограничение на макс. число символов, добавляемых за один тик (чтобы не "перескакивало" строку)
         internal int MaxAdvanceCharsPerTick { get; init; } = 1;
