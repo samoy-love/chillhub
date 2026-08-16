@@ -202,8 +202,9 @@ namespace ChillHub.Core.Shell {
         }
 
         /// <summary>
-        /// Строка дописана: короткая пауза, плавное угасание, следующая строка становится
-        /// текущей и печатается с нуля. Пока идёт переход, тики ничего не делают.
+        /// Строка дописана: пауза (короткая после строки, длинная на пустой — между куплетами),
+        /// плавное угасание, следующая строка становится текущей и печатается с нуля. Пока идёт
+        /// переход, тики ничего не делают.
         /// </summary>
         private async Task MoveToNextLineAsync() {
             if (this.transitionRunning) {
@@ -212,7 +213,8 @@ namespace ChillHub.Core.Shell {
 
             this.transitionRunning = true;
             try {
-                await Task.Delay(this.config.PauseAfterLineMs);
+                // Пустая строка — граница куплета: стоит долго, как проигрыш в записи
+                await Task.Delay(this.ticker.CurrentLine.Length == 0 ? this.config.PauseAfterEmptyLineMs : this.config.PauseAfterLineMs);
                 if (this.paused) {
                     return;
                 }
