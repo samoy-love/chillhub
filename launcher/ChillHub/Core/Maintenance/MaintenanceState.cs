@@ -104,12 +104,24 @@ namespace ChillHub.Core.Maintenance {
         /// <summary>Текст баннера: причина плюс ожидаемое время окончания.</summary>
         /// <returns>Готовая строка для показа в шапке.</returns>
         public string BuildBannerText() {
-            var reason = string.IsNullOrWhiteSpace(this.Reason)
-                ? "На сервере идут технические работы."
-                : this.Reason.Trim();
-
+            var reason = this.BuildReasonText();
             var eta = this.BuildEtaText();
             return string.IsNullOrEmpty(eta) ? reason : $"{reason} {eta}";
+        }
+
+        /// <summary>
+        /// Причина работ как законченное предложение. Администратор пишет её в админке
+        /// без точки («Меняем диск на сервере раздачи»), а следом баннер приписывает срок —
+        /// без знака на стыке два предложения склеивались в одно: «…раздачи Ожидаемое окончание…».
+        /// </summary>
+        /// <returns>Причина с завершающим знаком препинания; общий текст, если причины нет.</returns>
+        public string BuildReasonText() {
+            if (string.IsNullOrWhiteSpace(this.Reason)) {
+                return "На сервере идут технические работы.";
+            }
+
+            var reason = this.Reason.Trim();
+            return reason[^1] is '.' or '!' or '?' or '…' ? reason : reason + ".";
         }
 
         /// <summary>Человекочитаемое «до …» по <see cref="EndsAt"/>. Пусто, если срок не назван или уже прошёл.</summary>

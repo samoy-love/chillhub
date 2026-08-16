@@ -52,6 +52,9 @@ namespace ChillHub.Core.Maintenance {
 
         private static CancellationTokenSource? loopCts;
 
+        /// <summary>Идущий сейчас внеочередной опрос — чтобы параллельные <see cref="RefreshNowAsync"/> делили один запрос.</summary>
+        private static Task<MaintenanceState>? refreshInFlight;
+
         /// <summary>Сколько раз подряд опрос не удался — чтобы не засорять лог одинаковыми записями.</summary>
         private static int consecutiveFailures;
 
@@ -118,16 +121,33 @@ namespace ChillHub.Core.Maintenance {
         }
 
         /// <summary>
-        /// Разовый внеочередной опрос: пригодится, когда пользователь сам жмёт «Повторить».
+        /// Разовый внеочередной опрос — при разворачивании окна из трея и возврате фокуса
+        /// (см. <c>MainWindow</c>): человек, вернувшийся к лаунчеру, должен увидеть актуальное
+        /// состояние сразу, а не через остаток интервала фонового цикла.
+        /// <para>
+        /// Параллельные вызовы схлопываются в один запрос: разворачивание из трея поднимает
+        /// и <c>RestoreFromTray</c>, и <c>Activated</c>, а бить по серверу дважды за одно
+        /// действие незачем. Ошибок наружу не выпускает — вызывающие зовут его без await.
+        /// </para>
         /// </summary>
         /// <returns>Актуальное состояние (или прежнее, если опрос не удался).</returns>
-        public static async Task<MaintenanceState> RefreshNowAsync() {
-            var state = await FetchAsync(CancellationToken.None).ConfigureAwait(false);
-            if (state != null) {
-                Apply(state);
+        public static Task<MaintenanceState> RefreshNowAsync() {
+            TaskCompletionSource<MaintenanceState> mine;
+            lock (StartLock) {
+                if (refreshInFlight is { IsCompleted: false } running) {
+                    return running;
+                }
+
+                mine = new TaskCompletionSource<MaintenanceState>(TaskCreationOptions.RunContinuationsAsynchronously);
+                refreshInFlight = mine.Task;
             }
 
-            return Current;
+            // Сам запрос — уже вне замка: синхронная часть HttpClient не должна держать
+            // его, иначе второй вызов ждал бы не результата, а начала первого запроса.
+            _ = RefreshCoreAsync().ContinueWith(
+                t => mine.TrySetResult(t.IsCompletedSuccessfully ? t.Result : Current),
+                TaskContinuationOptions.ExecuteSynchronously);
+            return mine.Task;
         }
 
         /// <summary>
@@ -147,10 +167,27 @@ namespace ChillHub.Core.Maintenance {
         internal static void ResetForTests() {
             Stop();
             Changed = null;
+            refreshInFlight = null;
             Current = MaintenanceState.Off;
             Volatile.Write(ref consecutiveFailures, 0);
             HttpOverride = null;
             PollInterval = DefaultPollInterval;
+        }
+
+        private static async Task<MaintenanceState> RefreshCoreAsync() {
+            try {
+                var state = await FetchAsync(CancellationToken.None).ConfigureAwait(false);
+                if (state != null) {
+                    Apply(state);
+                }
+            }
+            catch (Exception ex) {
+                // FetchAsync сам глотает сетевые ошибки; сюда долетает разве что сбой
+                // подписчика или отмена — и то и другое не повод ронять вызывающего.
+                Logging.Logger.Warn($"MaintenanceService.RefreshNow: {ex.Message}");
+            }
+
+            return Current;
         }
 
         private static async Task PollLoopAsync(CancellationToken token) {

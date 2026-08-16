@@ -126,21 +126,30 @@
             </Grid>
         </Border>
 
-        <!-- Баннер режима технических работ (задача 25). Скрыт, пока сервер не сообщил о работах. -->
+        <!-- Баннер режима технических работ. Скрыт, пока сервер не сообщил о работах.
+             Полоса под шапкой, той же ширины и с тем же отступом слева (14), чтобы значок
+             стоял в одной колонке с приветствием, а не на два пикселя правее. Значок —
+             Warning, а не Danger: работы — временное ограничение, как «нужно обновление»
+             у игры, а красным в лаунчере отмечены сбои и разрушительные действия.
+             Причина набрана основным весом, срок — вторичным цветом: сообщение читается
+             как заголовок и подпись, а не как абзац одинаковых слов. -->
         <Border x:Name="MaintenanceBanner" Grid.Row="1" Visibility="Collapsed"
                 Background="{DynamicResource Brush.Surface}"
                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1"
-                Padding="16,10">
+                Padding="14,8">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" FontFamily="Segoe MDL2 Assets" Text="&#xE7BA;" FontSize="16"
-                           VerticalAlignment="Center" Margin="0,0,10,0"
-                           Foreground="{DynamicResource Brush.Danger}"/>
-                <TextBlock Grid.Column="1" x:Name="MaintenanceBannerText" TextWrapping="Wrap"
-                           VerticalAlignment="Center" Foreground="{DynamicResource Brush.Text}"/>
+                <TextBlock Grid.Column="0" FontFamily="Segoe MDL2 Assets" Text="&#xE7BA;" FontSize="14"
+                           VerticalAlignment="Center" Margin="0,0,12,0"
+                           Foreground="{DynamicResource Brush.Warning}"/>
+                <TextBlock Grid.Column="1" TextWrapping="Wrap" FontSize="13" VerticalAlignment="Center"
+                           Foreground="{DynamicResource Brush.Text}">
+                    <Run x:Name="MaintenanceBannerReason" FontWeight="SemiBold"/>
+                    <Run x:Name="MaintenanceBannerEta" Foreground="{DynamicResource Brush.TextSecondary}"/>
+                </TextBlock>
             </Grid>
         </Border>
 

@@ -112,6 +112,11 @@ namespace ChillHub {
                 // — переключение назад не должно ждать следующего тика. selfUpdateCheckRunning
                 // не даёт столкнуться с уже идущей проверкой (тиком или тем же RestoreFromTray).
                 _ = this.RunSelfUpdateCheckAsync();
+
+                // Режим работ — по той же причине: пока окно лежало без фокуса, работы могли
+                // начаться или кончиться, и человек, вернувшийся к лаунчеру, должен увидеть
+                // актуальную картину сразу, а не через остаток минутного интервала опроса.
+                _ = Core.Maintenance.MaintenanceService.RefreshNowAsync();
             };
             this.Deactivated += (s, e) => this.karaoke.Pause();
 
@@ -268,6 +273,12 @@ namespace ChillHub {
             // в трее: лаунчер мог простоять свёрнутым дольше интервала таймера, и пользователь
             // не должен ждать следующего тика, чтобы узнать об обновлении.
             _ = this.RunSelfUpdateCheckAsync();
+
+            // И свежее состояние технических работ — баннер и кнопки должны отражать то,
+            // что на сервере сейчас, а не то, что было на последнем тике фонового опроса.
+            // Activated после Show() тоже дёрнет опрос, но сервис схлопывает параллельные
+            // запросы в один — см. MaintenanceService.RefreshNowAsync.
+            _ = Core.Maintenance.MaintenanceService.RefreshNowAsync();
         }
 
         /// <summary>
@@ -398,12 +409,13 @@ namespace ChillHub {
         /// </summary>
         private void ApplyMaintenanceState(Core.Maintenance.MaintenanceState? state) {
             try {
-                if (this.MaintenanceBanner == null || this.MaintenanceBannerText == null) {
+                if (this.MaintenanceBanner == null || this.MaintenanceBannerReason == null || this.MaintenanceBannerEta == null) {
                     return;
                 }
 
                 var view = MaintenanceBannerView.For(state);
-                this.MaintenanceBannerText.Text = view.Text;
+                this.MaintenanceBannerReason.Text = view.Reason;
+                this.MaintenanceBannerEta.Text = view.Eta;
                 this.MaintenanceBanner.Visibility = view.Visible ? Visibility.Visible : Visibility.Collapsed;
             }
             catch (Exception ex) {
