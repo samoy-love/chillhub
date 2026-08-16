@@ -1520,9 +1520,6 @@ namespace ChillHub.Pages {
         /// </summary>
         internal bool HasActiveDownloads => this.queueDockItems.Count > 0;
 
-        /// <summary>Перечитывает список игр и заново проверяет их статусы — пункт «Проверить обновления».</summary>
-        internal void RefreshGamesAndStatuses() => this.RefreshGames_Click(this, new RoutedEventArgs());
-
         /// <summary>
         /// Строка под названием в витрине: версия, куда обновляемся, и сколько наиграно.
         /// Пустая, если про игру нечего сказать — пустых разделителей в ней не остаётся.

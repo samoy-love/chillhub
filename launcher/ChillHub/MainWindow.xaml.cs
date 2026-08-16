@@ -148,8 +148,9 @@ namespace ChillHub {
 
         /// <summary>
         /// Крестик/Alt+F4: при включённом MinimizeToTray прячем окно в трей вместо закрытия.
-        /// Единственный способ по-настоящему выйти в этом режиме — пункт «Выйти полностью»
+        /// Единственный способ по-настоящему выйти в этом режиме — пункт «Выход»
         /// в меню значка (см. <see cref="EnsureTray"/>), который сам ставит <see cref="exitRequested"/>.
+        /// Значок уже показан (см. конструктор) — трей живёт независимо от видимости окна.
         /// </summary>
         private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e) {
             try {
@@ -158,18 +159,29 @@ namespace ChillHub {
                 }
 
                 e.Cancel = true;
-                var trayIcon = this.EnsureTray();
-                // Имя подставляем в момент ухода в трей: пока окно на экране, меню
-                // никто не видит, а выбранная игра до этого могла смениться.
-                // Сам значок уже показан (см. конструктор) — трей живёт независимо
-                // от видимости окна, прятать/показывать его заново не нужно.
-                trayIcon.SetCurrentGame(this.CurrentHome?.SelectedGameTitle);
                 this.Hide();
+                this.ShowTrayHintOnce();
             }
             catch (Exception ex) {
                 // Сбой сворачивания в трей не должен помешать пользователю закрыть окно
                 Core.Logging.Logger.Error(ex, "MainWindow.MainWindow_Closing");
             }
+        }
+
+        /// <summary>
+        /// Первое в жизни сворачивание в трей: окно исчезло по крестику, и без подсказки
+        /// это выглядит как закрытие. Говорим один раз и запоминаем в конфиге — тот, кто
+        /// прочитал, второй раз читать не хочет. Сбой сохранения флага не страшен: покажем ещё раз.
+        /// </summary>
+        private void ShowTrayHintOnce() {
+            var cfg = Core.ConfigService.Current;
+            if (cfg.TrayHintShown || this.tray == null) {
+                return;
+            }
+
+            this.tray.Notify("Лаунчер продолжает работать в трее", "Закачки идут дальше. Открыть — клик по значку, выйти — «Выход» в его меню.");
+            cfg.TrayHintShown = true;
+            Core.ConfigService.Save(cfg);
         }
 
         /// <summary>Создаёт значок в трее при первой необходимости и подключает его меню к окну.</summary>
@@ -181,7 +193,10 @@ namespace ChillHub {
             var t = new TrayService();
             t.OpenRequested += (s, e) => this.RestoreFromTray();
             t.PlayRequested += (s, e) => this.PlayFromTray();
-            t.CheckUpdatesRequested += (s, e) => this.CheckUpdatesFromTray();
+
+            // Имя игры — в момент открытия меню, а не при уходе в трей: значок виден
+            // всегда, и выбор мог смениться, пока окно оставалось на экране.
+            t.MenuOpening += (s, e) => t.SetCurrentGame(this.CurrentHome?.SelectedGameTitle);
             t.ExitRequested += (s, e) => {
                 this.exitRequested = true;
                 t.Hide();
@@ -211,16 +226,6 @@ namespace ChillHub {
             }
 
             home.InvokeSelectedAction();
-        }
-
-        /// <summary>
-        /// Пункт «Проверить обновления» из трея: перечитывает список игр и заново сверяет их
-        /// статусы. Окно поднимаем — проверка идёт с индикатором и может закончиться
-        /// предложением обновиться, а сообщать об этом некуда, пока окно спрятано.
-        /// </summary>
-        private void CheckUpdatesFromTray() {
-            this.RestoreFromTray();
-            this.CurrentHome?.RefreshGamesAndStatuses();
         }
 
         /// <summary>Возвращает окно из трея на экран. Значок в трее остаётся — см. конструктор.</summary>
@@ -384,10 +389,32 @@ namespace ChillHub {
             void Refresh(Core.Game.QueueItem item) => this.Dispatcher.BeginInvoke(() => this.RefreshDownloadsIndicator(queue));
             queue.ItemAdded += Refresh;
             queue.ItemProgress += Refresh;
-            queue.ItemCompleted += Refresh;
+            queue.ItemCompleted += item => this.Dispatcher.BeginInvoke(() => {
+                this.RefreshDownloadsIndicator(queue);
+                this.NotifyDownloadFinished(item);
+            });
             queue.ItemRemoved += Refresh;
             queue.Reordered += _ => this.Dispatcher.BeginInvoke(() => this.RefreshDownloadsIndicator(queue));
             this.RefreshDownloadsIndicator(queue);
+        }
+
+        /// <summary>
+        /// Закачка закончилась, а окно спрятано в трей — единственное место сказать об этом
+        /// пользователю — уведомление у значка. При видимом окне молчим: результат и так на экране.
+        /// </summary>
+        private void NotifyDownloadFinished(Core.Game.QueueItem item) {
+            if (this.IsVisible || this.tray == null) {
+                return;
+            }
+
+            switch (item.State) {
+                case Core.Game.QueueItemState.Completed:
+                    this.tray.Notify(item.Title, "Игра готова к запуску");
+                    break;
+                case Core.Game.QueueItemState.Failed:
+                    this.tray.Notify(item.Title, "Не удалось скачать — откройте лаунчер");
+                    break;
+            }
         }
 
         private void RefreshDownloadsIndicator(Core.Game.IDownloadQueue queue) {
@@ -395,6 +422,7 @@ namespace ChillHub {
                 var text = Core.UI.DownloadsChip.Text(queue.Snapshot());
                 this.HeaderDownloadsText.Text = text;
                 this.HeaderDownloadsBtn.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+                this.tray?.SetStatus(text);
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Warn($"MainWindow.RefreshDownloadsIndicator: {ex.Message}");

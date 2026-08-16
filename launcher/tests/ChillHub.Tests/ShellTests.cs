@@ -181,6 +181,30 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// Подсказка над значком показывает ход загрузок и не превышает потолок NotifyIcon:
+        /// слишком длинный текст там не «обрезается», а бросает исключение.
+        /// </summary>
+        [Fact]
+        public void ПодсказкаТреяПоказываетЗагрузкиИНеПревышаетЛимит() {
+            Assert.Equal("ChillHub", TrayService.BuildTip(null));
+            Assert.Equal("ChillHub", TrayService.BuildTip("  "));
+            Assert.Equal("ChillHub — 38% · ещё 2", TrayService.BuildTip("38% · ещё 2"));
+
+            var longTip = TrayService.BuildTip(new string('x', 200));
+            Assert.True(longTip.Length <= 63);
+            Assert.EndsWith("…", longTip, StringComparison.Ordinal);
+
+            UiThread.Run(() => {
+                using var tray = new TrayService();
+                tray.SetStatus("38%");
+                Assert.Equal("ChillHub — 38%", tray.TipText);
+                tray.SetStatus(string.Empty);
+                Assert.Equal("ChillHub", tray.TipText);
+                return System.Threading.Tasks.Task.CompletedTask;
+            });
+        }
+
+        /// <summary>
         /// Страницы изображают заглушки: настоящие требуют STA-потока и лезут в сеть
         /// за списком игр, а решение о переходе от их содержимого не зависит.
         /// </summary>
