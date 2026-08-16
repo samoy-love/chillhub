@@ -996,6 +996,55 @@ test('метрики: время в играх рисует тайлы, дни �
   assert.ok(document.getElementById('mx_pt_chart_host').querySelector('canvas'));
 });
 
+// Ради этой пары чисел лаунчер и написан: «скачано 500 Б» само по себе не
+// значит ничего, смысл появляется только рядом с полным весом сборки. Поля
+// приходили с клиента давно, а сводка их выбрасывала — панель показывала
+// голое «Скачано» и ни слова о том, сколько качать НЕ пришлось.
+test('метрики: сводка показывает сэкономленный трафик и проверки целостности', async (t) => {
+  const summary = {
+    from: '2026-08-01T00:00:00Z',
+    to: '2026-08-02T00:00:00Z',
+    totals: {
+      events: 4, launcherStarts: 1, installs: 1, installOk: 1, installFail: 0,
+      updates: 1, updateOk: 1, updateFail: 0, gameLaunches: 0, errors: 0,
+      uniqueInstalls: 1, bytesDownloaded: 500, fullBytes: 5000,
+      filesDownloaded: 5, filesTotal: 100,
+      avgInstallMs: 1000, avgUpdateMs: 500,
+      integrityChecks: 3, integrityFailed: 2, hashMismatches: 4,
+    },
+    byDay: [{ date: '2026-08-01', launcherStarts: 1, installs: 1, updates: 1, gameLaunches: 0, errors: 0 }],
+    byGame: [
+      {
+        gameId: 'g1', installs: 1, updates: 1, errors: 0, bytes: 500, fullBytes: 5000,
+        integrityChecks: 3, integrityFailed: 2, hashMismatches: 4,
+        sessions: 0, playtimeMs: 0, avgSessionMs: 0, medianSessionMs: 0, uniquePlayers: 0,
+      },
+    ],
+    topErrors: [], appVersions: [], os: [],
+  };
+  const fetchStub = makeFetchStub([
+    { test: (u) => u.includes('/metrics/summary'), respond: () => jsonResponse(summary) },
+  ]);
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
+  window.ResizeObserver = class { observe() {} disconnect() {} };
+
+  await window.mxLoad();
+
+  const totalsText = document.getElementById('mx_totals').textContent;
+  // 500 из 5000 — девять десятых сборки качать не пришлось.
+  assert.match(totalsText, /вместо/, 'под «Скачано» назван полный вес сборки');
+  assert.match(totalsText, /90,0 %/, 'доля сэкономленного посчитана');
+
+  // Проверку целостности запускает сам пользователь, когда игра уже ведёт
+  // себя странно: голое число проверок ничего не стоит без числа расхождений.
+  assert.match(totalsText, /Проверок целостности/);
+  assert.match(totalsText, /с расхождением 2/);
+  assert.match(totalsText, /файлов не сошлось 4/);
+
+  const gamesRow = document.getElementById('mx_games_body').textContent;
+  assert.match(gamesRow, /g1/);
+});
+
 test('метрики: время в играх без сессий не рисует график, тайлы — прочерки', async (t) => {
   const summary = {
     from: '2026-08-01T00:00:00Z',

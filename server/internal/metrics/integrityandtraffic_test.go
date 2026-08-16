@@ -49,6 +49,31 @@ func TestSummaryCountsIntegrityChecks(t *testing.T) {
 	}
 }
 
+// An integrity_check without a gameId has no per-game bucket to fold into. The
+// launcher never sends one, but /metrics/report is public and unauthenticated
+// and an empty gameId is explicitly allowed there, so a stranger can post
+// exactly this — and before the nil guard existed it would have been a panic in
+// the admin's summary rather than a row nobody wanted.
+func TestSummaryHandlesIntegrityCheckWithoutGame(t *testing.T) {
+	h := New(t.TempDir())
+	body := `{"installId":"aaa","event":"integrity_check","result":"fail","filesTotal":10,"hashMismatches":2}`
+	if w := submit(t, h, body); w.Code != 200 {
+		t.Fatalf("submit -> %d %s", w.Code, w.Body.String())
+	}
+
+	s := summary(t, h, "")
+	if s.Totals.IntegrityChecks != 1 || s.Totals.IntegrityFailed != 1 {
+		t.Errorf("totals = %d/%d, want 1/1", s.Totals.IntegrityChecks, s.Totals.IntegrityFailed)
+	}
+	if s.Totals.HashMismatches != 2 {
+		t.Errorf("hashMismatches = %d, want 2", s.Totals.HashMismatches)
+	}
+	// No gameId means no per-game row: the event is still counted overall.
+	if len(s.ByGame) != 0 {
+		t.Errorf("byGame = %+v, want empty", s.ByGame)
+	}
+}
+
 // Bytes alone cannot answer the question the launcher exists to answer. The
 // store has carried fullBytes since the client learned to send it, and until now
 // the summary threw it away — leaving "downloaded 40 MiB" with no "instead of
