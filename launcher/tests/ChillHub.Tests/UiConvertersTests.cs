@@ -4,6 +4,7 @@
 // </copyright>
 
 namespace ChillHub.Tests {
+    using System;
     using System.Globalization;
     using System.Windows.Media;
 
@@ -17,7 +18,7 @@ namespace ChillHub.Tests {
     /// Конвертеры, из которых собраны подписи в списке игр и в очереди загрузок.
     /// <para>
     /// Это единственное место, где решается, что игрок прочитает под названием игры:
-    /// «Готова» или «Обновление», «Следующая в очереди» или «В очереди · 3-я». Разметка
+    /// «Установлена» или «Обновление», «Следующая в очереди» или «В очереди · 3-я». Разметка
     /// их только показывает, поэтому проверять смысл надо здесь.
     /// </para>
     /// </summary>
@@ -25,7 +26,7 @@ namespace ChillHub.Tests {
         /// <summary>Статус игры словом: обновление важнее факта установки.</summary>
         [Theory]
         [InlineData(false, false, "Не установлена")]
-        [InlineData(true, false, "Готова")]
+        [InlineData(true, false, "Установлена")]
         [InlineData(true, true, "Обновление")]
         [InlineData(false, true, "Обновление")]
         public void СтатусИгрыНазываетсяСловом(bool installed, bool needsUpdate, string expected) {
@@ -193,6 +194,38 @@ namespace ChillHub.Tests {
             Assert.Equal("В очереди", QueueRowLabel.For(Item(QueueItemState.Waiting, position: 2)));
             Assert.Equal(string.Empty, QueueRowLabel.For(Item(QueueItemState.Completed)));
             Assert.Equal(string.Empty, QueueRowLabel.For(null));
+        }
+
+        /// <summary>
+        /// Чип загрузок в шапке окна: процент качающейся плюс число ждущих; без качающейся —
+        /// только ждущие; пустая очередь — пустая строка, чип прячется.
+        /// </summary>
+        [Fact]
+        public void ЧипЗагрузокВШапке() {
+            Assert.Equal(string.Empty, DownloadsChip.Text(Array.Empty<QueueItem>()));
+            Assert.Equal("38%", DownloadsChip.Text(new[] { Item(QueueItemState.Running, done: 38, total: 100) }));
+            Assert.Equal("38% · ещё 2", DownloadsChip.Text(new[] {
+                Item(QueueItemState.Running, done: 38, total: 100),
+                Item(QueueItemState.Waiting, position: 2),
+                Item(QueueItemState.Waiting, position: 3),
+            }));
+            Assert.Equal("загрузка", DownloadsChip.Text(new[] { Item(QueueItemState.Running) }));
+            Assert.Equal("в очереди 1", DownloadsChip.Text(new[] { Item(QueueItemState.Waiting, position: 1) }));
+        }
+
+        /// <summary>
+        /// Оставшееся время — словами, а не «13:22»: минуты и часы читаются без догадок,
+        /// секунды показываются только когда счёт идёт на секунды.
+        /// </summary>
+        [Theory]
+        [InlineData(40, "40 с")]
+        [InlineData(61, "2 мин")]
+        [InlineData(13 * 60 + 22, "14 мин")]
+        [InlineData(3600 + 5 * 60, "1 ч 05 мин")]
+        [InlineData(2 * 86400 + 3 * 3600, "2 дня 3 ч")]
+        [InlineData(86400, "1 день")]
+        public void ОставшеесяВремяСловами(double seconds, string expected) {
+            Assert.Equal(expected, ChillHub.Core.Home.HomeFormat.FormatEta(seconds));
         }
 
         /// <summary>Метка очереди важнее статуса на диске и красится акцентом; без метки — как раньше.</summary>

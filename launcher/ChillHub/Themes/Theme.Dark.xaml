@@ -10,7 +10,9 @@
   <Color x:Key="Color.Border">#24242F</Color>
   <Color x:Key="Color.Text">#E9E9F0</Color>
   <Color x:Key="Color.TextSecondary">#9A9AAB</Color>
-  <Color x:Key="Color.TextMuted">#6E6E80</Color>          <!-- подписи, «не установлена» -->
+  <!-- #80809A, а не #6E6E80: на карточке (#14141B) старый давал контраст 3.7:1 —
+       ниже порога AA 4.5:1 для мелкого текста, а именно им набраны все подписи. -->
+  <Color x:Key="Color.TextMuted">#80809A</Color>          <!-- подписи, «не установлена» -->
   <!-- Единственный акцент -->
   <Color x:Key="Color.Accent">#7C5CFF</Color>
   <Color x:Key="Color.AccentHover">#8F73FF</Color>
@@ -106,11 +108,16 @@
   </Style>
 
   <!-- ContextMenu and MenuItem dark theme -->
+  <!-- Меню — скруглённая карточка с внутренним полем, пункты внутри тоже со скруглением:
+       прямоугольник без полей с пунктами впритык к рамке был единственным «системным»
+       элементом на экране среди карточек с радиусом 12. HasDropShadow выключен вместе с
+       AllowsTransparency: системная тень рисуется квадратной и вылезает из-под углов. -->
   <Style TargetType="ContextMenu">
-    <Setter Property="Background" Value="{DynamicResource Brush.Surface}"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
+    <Setter Property="Background" Value="{DynamicResource Brush.Surface2}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
     <Setter Property="BorderThickness" Value="1"/>
-    <Setter Property="Padding" Value="0"/>
+    <Setter Property="Padding" Value="4"/>
+    <Setter Property="HasDropShadow" Value="False"/>
     <Setter Property="SnapsToDevicePixels" Value="True"/>
     <Setter Property="UseLayoutRounding" Value="True"/>
     <Setter Property="Template">
@@ -120,9 +127,10 @@
                   BorderBrush="{TemplateBinding BorderBrush}"
                   BorderThickness="{TemplateBinding BorderThickness}"
                   Padding="{TemplateBinding Padding}"
+                  CornerRadius="{StaticResource Radius.M}"
+                  Margin="0,2,0,0"
                   SnapsToDevicePixels="True"
-                  UseLayoutRounding="True"
-                  RenderOptions.EdgeMode="Aliased">
+                  UseLayoutRounding="True">
             <ItemsPresenter Margin="0"/>
           </Border>
         </ControlTemplate>
@@ -131,7 +139,7 @@
   </Style>
 
   <Style TargetType="Separator">
-    <Setter Property="Margin" Value="4,4,4,4"/>
+    <Setter Property="Margin" Value="6,4,6,4"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Separator">
@@ -143,9 +151,10 @@
 
   <Style TargetType="MenuItem">
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
-    <Setter Property="Background" Value="{DynamicResource Brush.Surface}"/>
-    <Setter Property="Padding" Value="10,6"/>
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="Padding" Value="10,7"/>
     <Setter Property="Margin" Value="0"/>
+    <Setter Property="MinWidth" Value="200"/>
     <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="BorderThickness" Value="0"/>
@@ -161,6 +170,7 @@
                   BorderBrush="{TemplateBinding BorderBrush}"
                   BorderThickness="{TemplateBinding BorderThickness}"
                   Padding="{TemplateBinding Padding}"
+                  CornerRadius="{StaticResource Radius.S}"
                   SnapsToDevicePixels="True"
                   UseLayoutRounding="True">
             <Grid>
@@ -174,7 +184,7 @@
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsHighlighted" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.ListHover}"/>
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
               <Setter Property="Foreground" Value="#FFFFFF"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
@@ -186,13 +196,35 @@
     </Setter>
   </Style>
 
+  <!-- Разрушительный пункт меню («Удалить локальные файлы»): красный текст, чтобы его
+       нельзя было принять за соседнее безобидное действие в списке одинаковых строк. -->
+  <Style x:Key="Style.MenuItem.Danger" TargetType="MenuItem" BasedOn="{StaticResource {x:Type MenuItem}}">
+    <Setter Property="Foreground" Value="{DynamicResource Brush.Danger}"/>
+  </Style>
+
   <!-- ToolTip dark theme: ensure readable white text on dark background -->
   <Style TargetType="ToolTip">
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
-    <Setter Property="Background" Value="{DynamicResource Brush.Surface}"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
+    <Setter Property="Background" Value="{DynamicResource Brush.Surface2}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
     <Setter Property="BorderThickness" Value="1"/>
-    <Setter Property="Padding" Value="6,4"/>
+    <Setter Property="Padding" Value="8,5"/>
+    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="HasDropShadow" Value="False"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ToolTip">
+          <Border Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}"
+                  Padding="{TemplateBinding Padding}"
+                  CornerRadius="{StaticResource Radius.S}"
+                  SnapsToDevicePixels="True">
+            <ContentPresenter/>
+          </Border>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
   </Style>
 
   <!-- Removed glass brushes to avoid transparency -->
@@ -346,6 +378,92 @@
     </Setter>
   </Style>
 
+  <!-- Опасная кнопка («Отмена» закачки): приглушённая красная заливка с красной рамкой.
+       Одна на всё приложение — раньше главная красила отмену так, а страница игры
+       показывала её ТОЙ ЖЕ фиолетовой заливкой, что и «Установить»: остановить закачку
+       и начать её выглядели одинаково. -->
+  <SolidColorBrush x:Key="Brush.DangerFill" Color="#2A1E22"/>
+  <SolidColorBrush x:Key="Brush.DangerFillHover" Color="#3A2A2E"/>
+  <SolidColorBrush x:Key="Brush.DangerText" Color="#F0D9D9"/>
+  <Style x:Key="Style.Button.Danger" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+    <Setter Property="Background" Value="{StaticResource Brush.DangerFill}"/>
+    <Setter Property="Foreground" Value="{StaticResource Brush.DangerText}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource Brush.Danger}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="FontSize" Value="15"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}" Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource Brush.DangerFillHover}"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Opacity" Value="0.6"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- Кнопка-значок без рамки (стрелки и крестик в очереди, «обновить» у лент): в покое
+       только серый глиф, под курсором — мягкая подложка и белый глиф. Опасный вариант
+       (снять с очереди) под курсором краснеет, чтобы отличаться от перестановки рядом. -->
+  <Style x:Key="Style.Button.QueueIcon" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
+    <Setter Property="Margin" Value="0"/>
+    <Setter Property="Padding" Value="0"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}" Background="{TemplateBinding Background}">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
+              <Setter Property="Foreground" Value="#FFFFFF"/>
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Pressed}"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Opacity" Value="0.35"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <Style x:Key="Style.Button.QueueIcon.Danger" TargetType="Button" BasedOn="{StaticResource Style.Button.QueueIcon}">
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}" Background="{TemplateBinding Background}">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource Brush.DangerFill}"/>
+              <Setter Property="Foreground" Value="{DynamicResource Brush.Danger}"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Opacity" Value="0.35"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <!-- «Назад» на всех вложенных экранах: одна кнопка, слева, со стрелкой. Раньше их
        было три разных — на странице игры без стрелки слева, в новости другой ширины
        слева, в настройках со стрелкой и СПРАВА, — и возврат каждый раз искали заново. -->
@@ -397,6 +515,7 @@
     <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Padding" Value="6,4"/>
     <Setter Property="Margin" Value="0,0,8,0"/>
+    <Setter Property="MinHeight" Value="34"/>
     <Setter Property="HorizontalContentAlignment" Value="Left"/>
     <Setter Property="ScrollViewer.Background" Value="{StaticResource Brush.Surface}"/>
     <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
@@ -404,7 +523,8 @@
       <Setter.Value>
         <ControlTemplate TargetType="ComboBox">
           <Grid SnapsToDevicePixels="True">
-            <Border x:Name="Bd" CornerRadius="4"
+            <!-- Тот же радиус, что у кнопок и полей ввода: 4px рядом с ними читался как чужой -->
+            <Border x:Name="Bd" CornerRadius="{StaticResource Radius.M}"
                     Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}"
                     BorderThickness="{TemplateBinding BorderThickness}"/>
@@ -458,9 +578,9 @@
             </ToggleButton>
             <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True" Focusable="False"
                    IsOpen="{TemplateBinding IsDropDownOpen}" PopupAnimation="Slide">
-              <Grid MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}" MaxHeight="320">
-                <Border Background="{StaticResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" CornerRadius="4">
-                  <ScrollViewer CanContentScroll="True" Background="{StaticResource Brush.Surface}">
+              <Grid MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}" MaxHeight="320" Margin="0,4,0,0">
+                <Border Background="{StaticResource Brush.Surface2}" BorderBrush="{DynamicResource Brush.BorderHover}" BorderThickness="1" CornerRadius="{StaticResource Radius.M}" Padding="4">
+                  <ScrollViewer CanContentScroll="True" Background="Transparent">
                     <ItemsPresenter/>
                   </ScrollViewer>
                 </Border>
@@ -485,26 +605,29 @@
   <Style TargetType="ComboBoxItem">
     <Setter Property="OverridesDefaultStyle" Value="True"/>
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
-    <Setter Property="Background" Value="{StaticResource Brush.Surface}"/>
+    <Setter Property="Background" Value="Transparent"/>
     <Setter Property="Padding" Value="8,6"/>
     <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <!-- Наведение — нейтральная подсветка, как у пунктов меню; акцентом отмечен только
+         выбранный пункт. Раньше и наведение, и выбор красились одним фиолетовым, и в
+         списке из четырёх строк две выглядели «выбранными». -->
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="ComboBoxItem">
-          <Border x:Name="Bd" Background="{TemplateBinding Background}">
+          <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="{StaticResource Radius.S}">
             <ContentPresenter Margin="6,2" VerticalAlignment="Center"/>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Accent}"/>
-              <Setter Property="Foreground" Value="#0C0C10"/>
-            </Trigger>
-            <Trigger Property="IsSelected" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.AccentHover}"/>
+              <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Hover}"/>
               <Setter Property="Foreground" Value="#FFFFFF"/>
             </Trigger>
             <!-- Некоторые системные шаблоны подсвечивают IsHighlighted для текущего элемента -->
             <Trigger Property="IsHighlighted" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Hover}"/>
+              <Setter Property="Foreground" Value="#FFFFFF"/>
+            </Trigger>
+            <Trigger Property="IsSelected" Value="True">
               <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Accent}"/>
               <Setter Property="Foreground" Value="#0C0C10"/>
             </Trigger>
@@ -514,7 +637,7 @@
                 <Condition Property="IsMouseOver" Value="True"/>
               </MultiTrigger.Conditions>
               <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.AccentHover}"/>
-              <Setter Property="Foreground" Value="#FFFFFF"/>
+              <Setter Property="Foreground" Value="#0C0C10"/>
             </MultiTrigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
@@ -709,10 +832,12 @@
     </Setter>
   </Style>
 
-  <!-- Scrollbar theming per request: track = Background, thumb = #1A122B, hover = slightly lighter, border = #2B1F4A -->
-  <SolidColorBrush x:Key="Brush.ScrollbarTrack" Color="{StaticResource Color.Surface}"/>
-  <SolidColorBrush x:Key="Brush.ScrollbarThumb" Color="#2E2E3C"/>
-  <SolidColorBrush x:Key="Brush.ScrollbarThumbHover" Color="#3F3F52"/>
+  <!-- Полоса прокрутки в духе overlay-скроллбаров: дорожка прозрачная, бегунок — тонкая
+       полупрозрачная пилюля, которая наливается цветом только под курсором. Прежняя
+       серая дорожка во всю высоту ленты читалась как отдельная колонка интерфейса. -->
+  <SolidColorBrush x:Key="Brush.ScrollbarTrack" Color="Transparent"/>
+  <SolidColorBrush x:Key="Brush.ScrollbarThumb" Color="#3A3A4C"/>
+  <SolidColorBrush x:Key="Brush.ScrollbarThumbHover" Color="#5A5A72"/>
   <SolidColorBrush x:Key="Brush.ScrollbarThumbBorder" Color="{StaticResource Color.Border}"/>
   <Style TargetType="ScrollBar">
     <Setter Property="Background" Value="{StaticResource Brush.ScrollbarTrack}"/>
@@ -737,14 +862,17 @@
                        Background="{StaticResource Brush.ScrollbarThumb}"
                        BorderBrush="{StaticResource Brush.ScrollbarThumbBorder}"
                        BorderThickness="0"
-                       Opacity="0.75">
+                       Opacity="0.55">
                   <Thumb.Template>
                     <ControlTemplate TargetType="Thumb">
+                      <!-- Отступ по 2px с боков: бегунок 4px внутри дорожки 8px, а под
+                           курсором дорожка целиком остаётся зоной захвата -->
                       <Border x:Name="ThBase"
                               Background="{TemplateBinding Background}"
                               BorderBrush="{TemplateBinding BorderBrush}"
                               BorderThickness="{TemplateBinding BorderThickness}"
-                              CornerRadius="4"/>
+                              Margin="2"
+                              CornerRadius="3"/>
                     </ControlTemplate>
                   </Thumb.Template>
                 </Thumb>
@@ -757,9 +885,7 @@
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="PART_Thumb" Property="Background" Value="{StaticResource Brush.ScrollbarThumbHover}"/>
-              <Setter TargetName="PART_Thumb" Property="Opacity" Value="0.9"/>
-              <Setter TargetName="PART_Thumb" Property="BorderThickness" Value="1"/>
-              <Setter TargetName="PART_Thumb" Property="BorderBrush" Value="{StaticResource Brush.ScrollbarThumbBorder}"/>
+              <Setter TargetName="PART_Thumb" Property="Opacity" Value="1"/>
             </Trigger>
             <Trigger Property="Orientation" Value="Horizontal">
               <Setter Property="Height" Value="8"/>
@@ -782,35 +908,43 @@
        и он не должен спорить с ней цветом, когда она появится. -->
   <SolidColorBrush x:Key="Brush.HeroGradient" Color="#1E1B2B"/>
   <!-- Затемнение поверх обложки, чтобы белый заголовок читался на любой картинке -->
+  <!-- Затемнение легче прежнего (0.45 → #66, низ #E6): вместе с Opacity=0.5 самой обложки
+       картинка гасла почти целиком, и витрина превращалась в тёмно-серую плашку с
+       текстом. Теперь читаемость текста держит нижняя половина и левый край, а верх и
+       правая часть отдают обложку как есть. -->
   <LinearGradientBrush x:Key="Brush.HeroScrim" StartPoint="0,0" EndPoint="0,1">
     <GradientStop Offset="0" Color="#00000000"/>
-    <GradientStop Offset="0.45" Color="#66000000"/>
-    <GradientStop Offset="1" Color="#E60C0C10"/>
+    <GradientStop Offset="0.5" Color="#33000000"/>
+    <GradientStop Offset="1" Color="#CC0C0C10"/>
   </LinearGradientBrush>
   <!-- Второй слой затемнения — слева направо, под заголовок и кнопку в левом нижнем углу.
        Правая половина обложки остаётся почти нетронутой: там обычно логотип игры. -->
   <LinearGradientBrush x:Key="Brush.HeroScrimSide" StartPoint="0,0" EndPoint="1,0">
-    <GradientStop Offset="0" Color="#8C0C0C10"/>
-    <GradientStop Offset="0.45" Color="#330C0C10"/>
+    <GradientStop Offset="0" Color="#990C0C10"/>
+    <GradientStop Offset="0.5" Color="#260C0C10"/>
     <GradientStop Offset="1" Color="#000C0C10"/>
   </LinearGradientBrush>
   <SolidColorBrush x:Key="Brush.HeroBadge.Bg" Color="#1B1B24"/>
   <SolidColorBrush x:Key="Brush.HeroBadge.Border" Color="{StaticResource Color.Border}"/>
 
-  <!-- Круглая кнопка сведений об игре (ⓘ) на витрине -->
+  <!-- Кнопка сведений об игре на витрине: полупрозрачная «стеклянная» кнопка с текстом.
+       Круглая ⓘ без подписи читалась как подсказка, а не как переход на страницу игры. -->
   <Style x:Key="Style.Button.HeroInfo" TargetType="Button">
-    <Setter Property="Width" Value="36"/>
-    <Setter Property="Height" Value="36"/>
+    <Setter Property="Height" Value="42"/>
+    <Setter Property="Padding" Value="16,0"/>
+    <Setter Property="FontSize" Value="14"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
-    <Setter Property="Background" Value="#3314141B"/>
+    <Setter Property="Background" Value="#66101017"/>
     <Setter Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
     <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Button">
-          <Border x:Name="bd" CornerRadius="18" Background="{TemplateBinding Background}"
-                  BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+          <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}" Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                  Padding="{TemplateBinding Padding}">
             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
           </Border>
           <ControlTemplate.Triggers>
