@@ -111,6 +111,8 @@ var eventKinds = map[string]bool{
 	"game_update": true,
 	// a game process was started
 	"game_launch": true,
+	// a game process exited; durationMs carries how long the session lasted
+	"game_session": true,
 	// something failed; errorCode carries the classification
 	"error": true,
 	// the user asked to verify an installed game against the manifest;
@@ -359,6 +361,9 @@ type DayBucket struct {
 	Updates        int    `json:"updates"`
 	GameLaunches   int    `json:"gameLaunches"`
 	Errors         int    `json:"errors"`
+	// Sessions/PlaytimeMs come from game_session events finished that day.
+	Sessions   int   `json:"sessions"`
+	PlaytimeMs int64 `json:"playtimeMs"`
 }
 
 // GameBucket is per-game activity within the requested period.
@@ -368,6 +373,14 @@ type GameBucket struct {
 	Updates  int    `json:"updates"`
 	Errors   int    `json:"errors"`
 	Bytes    int64  `json:"bytes"`
+	// Sessions/PlaytimeMs/AvgSessionMs/MedianSessionMs come from game_session
+	// events; UniquePlayers is len(distinct installId) among them, so it counts
+	// installations that actually played, not merely installed or launched.
+	Sessions        int   `json:"sessions"`
+	PlaytimeMs      int64 `json:"playtimeMs"`
+	AvgSessionMs    int64 `json:"avgSessionMs"`
+	MedianSessionMs int64 `json:"medianSessionMs"`
+	UniquePlayers   int   `json:"uniquePlayers"`
 }
 
 // CountBucket is a generic name/count pair (error codes, versions, OS strings).
@@ -394,6 +407,16 @@ type Totals struct {
 	// reported duration; a cancelled download would otherwise drag them down.
 	AvgInstallMs int64 `json:"avgInstallMs"`
 	AvgUpdateMs  int64 `json:"avgUpdateMs"`
+	// GameSessions/PlaytimeMs/AvgSessionMs/MedianSessionMs summarise game_session
+	// events across every game. UniquePlayers counts distinct installId among
+	// them — installations that actually played, a stricter number than
+	// UniqueInstalls, which also counts an install that only ever launched or
+	// failed to install.
+	GameSessions    int   `json:"gameSessions"`
+	PlaytimeMs      int64 `json:"playtimeMs"`
+	AvgSessionMs    int64 `json:"avgSessionMs"`
+	MedianSessionMs int64 `json:"medianSessionMs"`
+	UniquePlayers   int   `json:"uniquePlayers"`
 }
 
 // Summary is the response of /admin/api/metrics/summary.
@@ -460,9 +483,19 @@ type summaryAgg struct {
 	appVers  map[string]int
 	oses     map[string]int
 	uniq     map[string]struct{}
+	// players is the installId set of everyone with at least one game_session,
+	// overall and per game. It is kept separate from uniq (every event kind)
+	// because "installed once" and "actually played" answer different
+	// questions.
+	players     map[string]struct{}
+	gamePlayers map[string]map[string]struct{}
 
 	installMsSum, installMsN int64
 	updateMsSum, updateMsN   int64
+	// sessionMs holds every game_session duration seen so far, so finish can
+	// sort it once for the median. gameSessionMs does the same per game.
+	sessionMs     []int64
+	gameSessionMs map[string][]int64
 }
 
 func newSummaryAgg(from, to time.Time, gameFilter string, gameOK func(string) bool) *summaryAgg {
@@ -481,12 +514,15 @@ func newSummaryAgg(from, to time.Time, gameFilter string, gameOK func(string) bo
 			ByGame:    []GameBucket{},
 			TopErrors: []CountBucket{},
 		},
-		days:     map[string]*DayBucket{},
-		gamesAgg: map[string]*GameBucket{},
-		errs:     map[string]int{},
-		appVers:  map[string]int{},
-		oses:     map[string]int{},
-		uniq:     map[string]struct{}{},
+		days:          map[string]*DayBucket{},
+		gamesAgg:      map[string]*GameBucket{},
+		errs:          map[string]int{},
+		appVers:       map[string]int{},
+		oses:          map[string]int{},
+		uniq:          map[string]struct{}{},
+		players:       map[string]struct{}{},
+		gamePlayers:   map[string]map[string]struct{}{},
+		gameSessionMs: map[string][]int64{},
 	}
 }
 
@@ -583,6 +619,8 @@ func (a *summaryAgg) addKind(ev Event, d *DayBucket, g *GameBucket) {
 	case "game_launch":
 		a.out.Totals.GameLaunches++
 		d.GameLaunches++
+	case "game_session":
+		a.addSession(ev, d, g)
 	case "error":
 		a.out.Totals.Errors++
 		d.Errors++
@@ -617,6 +655,55 @@ func (a *summaryAgg) addInstall(ev Event, d *DayBucket, g *GameBucket) {
 	}
 }
 
+// addSession folds one game_session event: how long a play session lasted, and
+// who played. A session with no reported duration still counts toward
+// GameSessions (the launcher did see the process exit) but is excluded from
+// the duration sums and the median — a zero would understate both.
+func (a *summaryAgg) addSession(ev Event, d *DayBucket, g *GameBucket) {
+	a.out.Totals.GameSessions++
+	d.Sessions++
+	if ev.InstallID != "" {
+		a.players[ev.InstallID] = struct{}{}
+	}
+	if ev.DurationMs > 0 {
+		a.out.Totals.PlaytimeMs += ev.DurationMs
+		d.PlaytimeMs += ev.DurationMs
+		a.sessionMs = append(a.sessionMs, ev.DurationMs)
+	}
+	if g == nil {
+		return
+	}
+	g.Sessions++
+	if ev.InstallID != "" {
+		set := a.gamePlayers[ev.GameID]
+		if set == nil {
+			set = map[string]struct{}{}
+			a.gamePlayers[ev.GameID] = set
+		}
+		set[ev.InstallID] = struct{}{}
+	}
+	if ev.DurationMs > 0 {
+		g.PlaytimeMs += ev.DurationMs
+		a.gameSessionMs[ev.GameID] = append(a.gameSessionMs[ev.GameID], ev.DurationMs)
+	}
+}
+
+// median returns the middle value of a sorted-in-place copy of xs, or 0 for an
+// empty slice. For an even count it averages the two middle values, same as
+// the usual statistical definition.
+func median(xs []int64) int64 {
+	n := len(xs)
+	if n == 0 {
+		return 0
+	}
+	sorted := append([]int64(nil), xs...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	if n%2 == 1 {
+		return sorted[n/2]
+	}
+	return (sorted[n/2-1] + sorted[n/2]) / 2
+}
+
 // addUpdate is addInstall for the update counters.
 func (a *summaryAgg) addUpdate(ev Event, d *DayBucket, g *GameBucket) {
 	a.out.Totals.Updates++
@@ -645,11 +732,29 @@ func (a *summaryAgg) finish() Summary {
 	if a.updateMsN > 0 {
 		a.out.Totals.AvgUpdateMs = a.updateMsSum / a.updateMsN
 	}
+	a.out.Totals.UniquePlayers = len(a.players)
+	if n := int64(len(a.sessionMs)); n > 0 {
+		var sum int64
+		for _, v := range a.sessionMs {
+			sum += v
+		}
+		a.out.Totals.AvgSessionMs = sum / n
+		a.out.Totals.MedianSessionMs = median(a.sessionMs)
+	}
 	for _, d := range a.days {
 		a.out.ByDay = append(a.out.ByDay, *d)
 	}
 	sort.Slice(a.out.ByDay, func(i, j int) bool { return a.out.ByDay[i].Date < a.out.ByDay[j].Date })
-	for _, g := range a.gamesAgg {
+	for id, g := range a.gamesAgg {
+		g.UniquePlayers = len(a.gamePlayers[id])
+		if durs := a.gameSessionMs[id]; len(durs) > 0 {
+			var sum int64
+			for _, v := range durs {
+				sum += v
+			}
+			g.AvgSessionMs = sum / int64(len(durs))
+			g.MedianSessionMs = median(durs)
+		}
 		a.out.ByGame = append(a.out.ByGame, *g)
 	}
 	sort.Slice(a.out.ByGame, func(i, j int) bool {
