@@ -427,8 +427,31 @@
           </div>
         </div>
 
+        <div class="card mb-3">
+          <div class="card-header">Время в играх</div>
+          <div class="card-body">
+            <div id="mx_pt_totals" class="row g-2 mb-3"></div>
+            <div id="mx_pt_chart_host" style="width:100%"></div>
+            <details id="mx_pt_details" class="mt-2">
+              <summary class="small text-body-secondary">Те же числа таблицей</summary>
+              <div class="table-responsive mt-2">
+                <table class="table table-sm table-admin table-striped align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th>Дата (UTC)</th>
+                      <th class="text-end">Сессий</th>
+                      <th class="text-end">Время в играх</th>
+                    </tr>
+                  </thead>
+                  <tbody id="mx_pt_days_body"></tbody>
+                </table>
+              </div>
+            </details>
+          </div>
+        </div>
+
         <div class="row g-3">
-          <div class="col-xxl-3 col-lg-6">
+          <div class="col-xxl-4 col-lg-6">
             <div class="card h-100">
               <div class="card-header">По играм</div>
               <div class="card-body">
@@ -441,6 +464,11 @@
                         <th class="text-end">Обновления</th>
                         <th class="text-end">Ошибки</th>
                         <th class="text-end">Скачано</th>
+                        <th class="text-end">Игроков</th>
+                        <th class="text-end">Сессий</th>
+                        <th class="text-end">Время в игре</th>
+                        <th class="text-end">Среднее</th>
+                        <th class="text-end">Медиана</th>
                       </tr>
                     </thead>
                     <tbody id="mx_games_body"></tbody>

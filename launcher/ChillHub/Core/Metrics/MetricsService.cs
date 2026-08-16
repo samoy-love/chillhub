@@ -147,6 +147,17 @@ namespace ChillHub.Core.Metrics {
             => Report("game_launch", gameId, version, "ok");
 
         /// <summary>
+        /// Завершение игровой сессии: игра была запущена и её процесс закрылся.
+        /// Уходит одним событием с итоговой длительностью, а не тиками по ходу
+        /// сессии — так же, как <see cref="Game.PlaytimeStore"/> считает наигранное
+        /// время локально.
+        /// </summary>
+        /// <param name="gameId">Идентификатор игры.</param>
+        /// <param name="durationMs">Длительность сессии в миллисекундах.</param>
+        public static void GameSession(string? gameId, long durationMs)
+            => Report("game_session", gameId, null, "ok", durationMs);
+
+        /// <summary>
         /// Ошибка. Код классифицирует проблему и не должен содержать текста
         /// исключения: там встречаются пути и имена файлов пользователя.
         /// </summary>

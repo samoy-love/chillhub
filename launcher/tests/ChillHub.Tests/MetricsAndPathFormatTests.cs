@@ -105,6 +105,7 @@ namespace ChillHub.Tests {
 
             MetricsService.LauncherStart();
             MetricsService.GameLaunch("game", "1.0.0");
+            MetricsService.GameSession("game", 60000);
             MetricsService.GameInstall("game", "1.0.0", "ok", 100, 200);
             MetricsService.GameUpdate("game", "1.0.0", "ok", 100, 200);
             MetricsService.IntegrityCheck("game", "1.0.0", ok: true, filesTotal: 10, hashMismatches: 0);

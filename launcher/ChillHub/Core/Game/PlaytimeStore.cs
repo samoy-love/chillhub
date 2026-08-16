@@ -13,6 +13,7 @@ namespace ChillHub.Core.Game {
     using System.Threading.Tasks;
 
     using ChillHub.Core.Home;
+    using ChillHub.Core.Metrics;
 
     /// <summary>Накопленное время игры в одну игру и сведения о последней сессии.</summary>
     public sealed class PlaytimeEntry {
@@ -249,6 +250,10 @@ namespace ChillHub.Core.Game {
                 entry.LastSessionAt = endUtc;
                 entry.LastSessionSeconds = elapsed;
                 SaveAllLocked(all);
+
+                // Метрика не участвует в блокировке файла: MetricsService.Report сам
+                // уходит в фоновую задачу и ничего не бросает при недоступном сервере.
+                MetricsService.GameSession(session.GameId, elapsed * 1000);
             }
         }
 

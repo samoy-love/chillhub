@@ -924,6 +924,69 @@ test('очистка метрик: диалог перечисляет посл�
   assert.ok(clear && clear.method === 'POST', 'очистка метрик уходит POST-ом');
 });
 
+test('метрики: время в играх рисует тайлы, дни и таблицу по играм', async (t) => {
+  const summary = {
+    from: '2026-08-01T00:00:00Z',
+    to: '2026-08-02T00:00:00Z',
+    totals: {
+      events: 5, gameSessions: 5, playtimeMs: 15000,
+      avgSessionMs: 3000, medianSessionMs: 3000, uniquePlayers: 2,
+    },
+    byDay: [
+      { date: '2026-08-01', sessions: 5, playtimeMs: 15000 },
+    ],
+    byGame: [
+      {
+        gameId: 'g1', installs: 0, updates: 0, errors: 0, bytes: 0,
+        sessions: 3, playtimeMs: 9000, avgSessionMs: 3000, medianSessionMs: 3000, uniquePlayers: 2,
+      },
+    ],
+    topErrors: [], appVersions: [], os: [],
+  };
+  const fetchStub = makeFetchStub([
+    { test: (u) => u.includes('/metrics/summary'), respond: () => jsonResponse(summary) },
+  ]);
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
+  // jsdom не реализует ResizeObserver; в браузере он есть всегда, и
+  // mxRenderChart/mxRenderPtChart полагаются на него без проверки.
+  window.ResizeObserver = class { observe() {} disconnect() {} };
+
+  await window.mxLoad();
+
+  const totalsText = document.getElementById('mx_pt_totals').textContent;
+  assert.match(totalsText, /Уникальных игроков/);
+  assert.match(totalsText, /2/, 'значение uniquePlayers попало в тайл');
+
+  const daysRow = document.getElementById('mx_pt_days_body').textContent;
+  assert.match(daysRow, /2026-08-01/);
+
+  const gamesRow = document.getElementById('mx_games_body').textContent;
+  assert.match(gamesRow, /g1/);
+
+  // Хост графика не пуст — drawMultiLineChart отработал без исключений на
+  // тестовых данных, а не молчаливо оставил заглушку «нечего рисовать».
+  assert.ok(document.getElementById('mx_pt_chart_host').querySelector('canvas'));
+});
+
+test('метрики: время в играх без сессий не рисует график, тайлы — прочерки', async (t) => {
+  const summary = {
+    from: '2026-08-01T00:00:00Z',
+    to: '2026-08-02T00:00:00Z',
+    totals: { events: 0, gameSessions: 0, playtimeMs: 0, avgSessionMs: 0, medianSessionMs: 0, uniquePlayers: 0 },
+    byDay: [], byGame: [], topErrors: [], appVersions: [], os: [],
+  };
+  const fetchStub = makeFetchStub([
+    { test: (u) => u.includes('/metrics/summary'), respond: () => jsonResponse(summary) },
+  ]);
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
+  window.ResizeObserver = class { observe() {} disconnect() {} };
+
+  await window.mxLoad();
+
+  assert.strictEqual(document.getElementById('mx_pt_chart_host').querySelector('canvas'), null);
+  assert.match(document.getElementById('mx_pt_totals').textContent, /—/, 'нулевые метрики показаны прочерком');
+});
+
 test('удаление игры целиком: предупреждение про всех пользователей и POST на purge', async (t) => {
   const calls = [];
   const fetchStub = async (url, opts) => {

@@ -3958,6 +3958,17 @@ function mxFmtMs(ms){
   return m+' мин '+(s<10?'0':'')+s+' с';
 }
 
+// Миллисекунды -> «12 ч 34 мин» / «34 мин» для сумм, где mxFmtMs (секунды)
+// был бы нечитаем: «741 мин 00 с» вместо «12 ч 21 мин».
+function mxFmtHours(ms){
+  const v = Number(ms||0);
+  if(!(v > 0)) return '—';
+  const totalMin = Math.round(v/60000);
+  const h = Math.floor(totalMin/60);
+  const m = totalMin%60;
+  return h > 0 ? (h+' ч '+m+' мин') : (m+' мин');
+}
+
 function mxPct(part, total){
   const t = Number(total||0);
   if(!(t > 0)) return '—';
@@ -4079,14 +4090,86 @@ function mxRenderChart(byDay){
 
 function mxRenderGames(byGame){
   const tb = mxEl('mx_games_body'); if(!tb) return;
-  if(!byGame || byGame.length===0){ tb.innerHTML = mxEmptyRow(5, 'Событий, привязанных к играм, нет.'); return; }
+  if(!byGame || byGame.length===0){ tb.innerHTML = mxEmptyRow(10, 'Событий, привязанных к играм, нет.'); return; }
   tb.innerHTML = byGame.map(g=>
     '<tr><td><code>'+escapeHtml(g.gameId||'—')+'</code></td>'
     + '<td class="text-end">'+mxNum(g.installs)+'</td>'
     + '<td class="text-end">'+mxNum(g.updates)+'</td>'
     + '<td class="text-end">'+mxNum(g.errors)+'</td>'
-    + '<td class="text-end">'+escapeHtml(formatBytes(Number(g.bytes||0)))+'</td></tr>'
+    + '<td class="text-end">'+escapeHtml(formatBytes(Number(g.bytes||0)))+'</td>'
+    + '<td class="text-end">'+mxNum(g.uniquePlayers)+'</td>'
+    + '<td class="text-end">'+mxNum(g.sessions)+'</td>'
+    + '<td class="text-end">'+escapeHtml(mxFmtHours(Number(g.playtimeMs||0)))+'</td>'
+    + '<td class="text-end">'+escapeHtml(mxFmtMs(g.avgSessionMs))+'</td>'
+    + '<td class="text-end">'+escapeHtml(mxFmtMs(g.medianSessionMs))+'</td></tr>'
   ).join('');
+}
+
+// ==== Время в играх: своя карточка, но те же byDay/totals из /metrics/summary —
+// период и фильтр по игре у неё общие с остальными разделами метрик. ====
+
+function mxRenderPtTotals(t){
+  const root = mxEl('mx_pt_totals'); if(!root) return;
+  const tiles = [
+    ['Уникальных игроков', mxNum(t.uniquePlayers), 'по installId, у кого была хоть одна сессия'],
+    ['Игровых сессий', mxNum(t.gameSessions), ''],
+    ['Время в играх', mxFmtHours(t.playtimeMs), 'сумма длительностей сессий'],
+    ['Среднее время сессии', mxFmtMs(t.avgSessionMs), ''],
+    ['Медианное время сессии', mxFmtMs(t.medianSessionMs), 'меньше подвержено выбросам, чем среднее'],
+  ];
+  root.innerHTML = tiles.map(x=>
+    '<div class="col-6 col-md-4 col-xl-3">'
+    + '<div class="border rounded p-2 bg-body-tertiary h-100">'
+    + '<div class="small text-body-secondary">'+escapeHtml(x[0])+'</div>'
+    + '<div class="fs-5">'+escapeHtml(String(x[1]))+'</div>'
+    + (x[2] ? '<div class="small text-body-secondary">'+escapeHtml(x[2])+'</div>' : '')
+    + '</div></div>'
+  ).join('');
+}
+
+function mxRenderPtDaysTable(byDay){
+  const tb = mxEl('mx_pt_days_body'); if(!tb) return;
+  if(!byDay || byDay.length===0){ tb.innerHTML = mxEmptyRow(3, 'Нет данных за период.'); return; }
+  tb.innerHTML = byDay.map(d=>
+    '<tr><td>'+escapeHtml(d.date||'')+'</td>'
+    + '<td class="text-end">'+mxNum(d.sessions)+'</td>'
+    + '<td class="text-end">'+escapeHtml(mxFmtHours(Number(d.playtimeMs||0)))+'</td></tr>'
+  ).join('');
+}
+
+let __mxPtRO = null;
+
+function mxRenderPtChart(byDay){
+  const host = mxEl('mx_pt_chart_host'); if(!host) return;
+  if(__mxPtRO){ try{ __mxPtRO.disconnect(); }catch{ /* no-op */ } __mxPtRO = null; }
+  host.replaceChildren();
+
+  const hasPlaytime = (byDay||[]).some(d=> Number(d.sessions||0) > 0);
+  if(!byDay || byDay.length===0 || !hasPlaytime){
+    host.innerHTML = '<div class="text-body-secondary">Игровых сессий за период нет — рисовать нечего.</div>';
+    return;
+  }
+
+  const legendHost = document.createElement('div');
+  legendHost.className = 'small mb-2';
+  const canvas = document.createElement('canvas');
+  canvas.style.width = '100%';
+  canvas.style.height = '220px';
+  host.appendChild(legendHost);
+  host.appendChild(canvas);
+
+  const xs = byDay.map((_, i)=> i);
+  // Минуты, а не миллисекунды: та же шкала, что и Сессии, читается вменяемо
+  // на одном графике, вместо шестизначных чисел рядом с единицами.
+  const series = [
+    { label: 'Сессии', color: '#ffc107', values: byDay.map(d=> Number(d.sessions||0)) },
+    { label: 'Минут в играх', color: '#0d6efd', values: byDay.map(d=> Math.round(Number(d.playtimeMs||0)/60000)) },
+  ];
+  const xLabelFor = (i)=>{ const d = byDay[i]; return d ? String(d.date||'').slice(5) : ''; };
+  const render = ()=> drawMultiLineChart(canvas, xs, series, { xLabelFor, formatY: mxNum, legendHost });
+  render();
+  __mxPtRO = new window.ResizeObserver(render);
+  __mxPtRO.observe(host);
 }
 
 function mxRenderCounts(bodyId, items, emptyText, withShare){
@@ -4196,6 +4279,9 @@ function mxRender(sum){
   mxRenderTotals(totals);
   mxRenderDaysTable(byDay);
   mxRenderChart(byDay);
+  mxRenderPtTotals(totals);
+  mxRenderPtDaysTable(byDay);
+  mxRenderPtChart(byDay);
   mxRenderGames(sum.byGame);
   mxRenderErrors(sum.topErrors);
   mxRenderCounts('mx_versions_body', sum.appVersions, 'Версии не сообщались.', true);

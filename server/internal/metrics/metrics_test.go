@@ -219,6 +219,94 @@ func TestSubmitClampsNumericFields(t *testing.T) {
 	}
 }
 
+// sessionFixture submits five game_session events across two games and two
+// installs, shared by the assertions below so each stays a small function on
+// its own (golangci-lint's cyclop check counts branches per function, and one
+// test asserting every field at once tripped its ceiling).
+func sessionFixture(t *testing.T) Summary {
+	t.Helper()
+	h := New(t.TempDir())
+	bodies := []string{
+		`{"installId":"aaa","event":"game_session","gameId":"g1","durationMs":1000}`,
+		`{"installId":"aaa","event":"game_session","gameId":"g1","durationMs":3000}`,
+		`{"installId":"bbb","event":"game_session","gameId":"g1","durationMs":5000}`,
+		`{"installId":"bbb","event":"game_session","gameId":"g2","durationMs":2000}`,
+		// installId repeated across games must not inflate the per-game count.
+		`{"installId":"bbb","event":"game_session","gameId":"g2","durationMs":4000}`,
+	}
+	for _, b := range bodies {
+		if w := submit(t, h, b); w.Code != http.StatusOK {
+			t.Fatalf("submit %s -> %d %s", b, w.Code, w.Body.String())
+		}
+	}
+	return summary(t, h, "")
+}
+
+func TestSessionAggregatesPlaytime(t *testing.T) {
+	t.Run("totals", func(t *testing.T) {
+		s := sessionFixture(t)
+		if s.Totals.GameSessions != 5 {
+			t.Errorf("gameSessions = %d, want 5", s.Totals.GameSessions)
+		}
+		if s.Totals.PlaytimeMs != 15000 {
+			t.Errorf("playtimeMs = %d, want 15000", s.Totals.PlaytimeMs)
+		}
+		if s.Totals.AvgSessionMs != 3000 {
+			t.Errorf("avgSessionMs = %d, want 3000", s.Totals.AvgSessionMs)
+		}
+		if s.Totals.MedianSessionMs != 3000 {
+			t.Errorf("medianSessionMs = %d, want 3000", s.Totals.MedianSessionMs)
+		}
+		if s.Totals.UniquePlayers != 2 {
+			t.Errorf("uniquePlayers = %d, want 2", s.Totals.UniquePlayers)
+		}
+	})
+
+	t.Run("byDay", func(t *testing.T) {
+		s := sessionFixture(t)
+		if len(s.ByDay) != 1 || s.ByDay[0].Sessions != 5 || s.ByDay[0].PlaytimeMs != 15000 {
+			t.Fatalf("byDay = %+v", s.ByDay)
+		}
+	})
+
+	t.Run("byGame", func(t *testing.T) {
+		s := sessionFixture(t)
+		byGame := map[string]GameBucket{}
+		for _, g := range s.ByGame {
+			byGame[g.GameID] = g
+		}
+		g1, g2 := byGame["g1"], byGame["g2"]
+		if g1.Sessions != 3 || g1.PlaytimeMs != 9000 || g1.AvgSessionMs != 3000 || g1.MedianSessionMs != 3000 {
+			t.Fatalf("g1 = %+v", g1)
+		}
+		if g1.UniquePlayers != 2 {
+			t.Errorf("g1.uniquePlayers = %d, want 2", g1.UniquePlayers)
+		}
+		if g2.Sessions != 2 || g2.PlaytimeMs != 6000 || g2.AvgSessionMs != 3000 || g2.MedianSessionMs != 3000 {
+			t.Fatalf("g2 = %+v", g2)
+		}
+		if g2.UniquePlayers != 1 {
+			t.Errorf("g2.uniquePlayers = %d, want 1", g2.UniquePlayers)
+		}
+	})
+}
+
+// A session with no reported duration still counts toward GameSessions but
+// must not pull the average/median down to a fake zero.
+func TestSessionWithoutDurationDoesNotSkewAverage(t *testing.T) {
+	h := New(t.TempDir())
+	submit(t, h, `{"installId":"aaa","event":"game_session","gameId":"g1","durationMs":4000}`)
+	submit(t, h, `{"installId":"bbb","event":"game_session","gameId":"g1"}`)
+
+	s := summary(t, h, "")
+	if s.Totals.GameSessions != 2 {
+		t.Errorf("gameSessions = %d, want 2", s.Totals.GameSessions)
+	}
+	if s.Totals.AvgSessionMs != 4000 || s.Totals.MedianSessionMs != 4000 {
+		t.Errorf("avg/median = %d/%d, want 4000/4000", s.Totals.AvgSessionMs, s.Totals.MedianSessionMs)
+	}
+}
+
 func TestClearDropsBothGenerations(t *testing.T) {
 	h := New(t.TempDir())
 	submit(t, h, `{"event":"launcher_start"}`)
