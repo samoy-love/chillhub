@@ -88,6 +88,30 @@ namespace ChillHub.Tests {
             });
         }
 
+        /// <summary>Дописанная строка после паузы и угасания уступает место следующей, а та печатается с нуля.</summary>
+        [Fact]
+        public void ДописаннаяСтрокаСменяетсяСледующей() {
+            OnUi(async () => {
+                var current = new TextBlock();
+                var next = new TextBlock();
+                var config = new KaraokeConfig {
+                    CharIntervalMs = 5,
+                    PauseAfterLineMs = 30,
+                    PauseAfterEmptyLineMs = 30,
+                    FadeOutMs = 10,
+                };
+                var presenter = new KaraokePresenter(new Border(), current, next, new Border(), config);
+
+                presenter.Start("ab\n" + FirstLine + "\n" + SecondLine);
+                await Task.Delay(400);
+
+                Assert.NotEmpty(current.Text);
+                Assert.StartsWith(current.Text, FirstLine, StringComparison.Ordinal);
+                Assert.Equal(SecondLine, next.Text);
+                Assert.Equal(1.0, current.Opacity);
+            });
+        }
+
         /// <summary>Пауза после старта останавливает печать, возобновление продолжает её с того же места.</summary>
         [Fact]
         public void ПаузаОстанавливаетПечать() {
