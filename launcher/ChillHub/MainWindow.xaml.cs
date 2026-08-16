@@ -147,7 +147,11 @@ namespace ChillHub {
                     return;
                 }
 
-                this.homePage ??= new Pages.HomePage();
+                if (this.homePage == null) {
+                    this.homePage = new Pages.HomePage();
+                    this.AttachDownloadsIndicator(this.homePage.DownloadQueue);
+                }
+
                 this.ContentFrame.Navigate(this.homePage);
             }
             catch (Exception ex) {
@@ -334,6 +338,37 @@ namespace ChillHub {
             upd.ShowDialog();
         }
 
+        /// <summary>
+        /// Проверка обновления лаунчера по явной просьбе пользователя (кнопка в настройках).
+        /// В отличие от фоновой (<see cref="RunSelfUpdateCheckAsync"/>) не молчит, когда
+        /// версия актуальна: возвращает false, и вызывающий говорит об этом сам. Активная
+        /// закачка игры её не откладывает — человек нажал кнопку и ждёт ответа сейчас.
+        /// </summary>
+        /// <returns>True — обновление есть и диалог показан; false — установлена последняя версия.</returns>
+        internal async Task<bool> CheckForLauncherUpdateAsync() {
+            if (this.selfUpdateCheckRunning) {
+                return false;
+            }
+
+            this.selfUpdateCheckRunning = true;
+            try {
+                var precheck = await UpdateWindow.PrecheckAsync();
+                if (!precheck.NeedsWindow) {
+                    return false;
+                }
+
+                var upd = new UpdateWindow(precheck) {
+                    Owner = this,
+                    WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                };
+                upd.ShowDialog();
+                return true;
+            }
+            finally {
+                this.selfUpdateCheckRunning = false;
+            }
+        }
+
         private void OnMaintenanceChanged(Core.Maintenance.MaintenanceState state) => this.ApplyMaintenanceState(state);
 
         /// <summary>
@@ -354,6 +389,33 @@ namespace ChillHub {
                 Core.Logging.Logger.Error(ex, "MainWindow.ApplyMaintenanceState");
             }
         }
+
+        /// <summary>
+        /// Подписывает чип загрузок в шапке на очередь главной страницы. События летят из
+        /// фонового воркера — на Dispatcher, как и в самой HomePage.
+        /// </summary>
+        private void AttachDownloadsIndicator(Core.Game.IDownloadQueue queue) {
+            void Refresh(Core.Game.QueueItem item) => this.Dispatcher.BeginInvoke(() => this.RefreshDownloadsIndicator(queue));
+            queue.ItemAdded += Refresh;
+            queue.ItemProgress += Refresh;
+            queue.ItemCompleted += Refresh;
+            queue.ItemRemoved += Refresh;
+            queue.Reordered += _ => this.Dispatcher.BeginInvoke(() => this.RefreshDownloadsIndicator(queue));
+            this.RefreshDownloadsIndicator(queue);
+        }
+
+        private void RefreshDownloadsIndicator(Core.Game.IDownloadQueue queue) {
+            try {
+                var text = Core.UI.DownloadsChip.Text(queue.Snapshot());
+                this.HeaderDownloadsText.Text = text;
+                this.HeaderDownloadsBtn.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"MainWindow.RefreshDownloadsIndicator: {ex.Message}");
+            }
+        }
+
+        private void HeaderDownloads_Click(object sender, RoutedEventArgs e) => this.NavigateToHome();
 
         private void SettingsBtn_Click(object sender, RoutedEventArgs e) {
             try {
