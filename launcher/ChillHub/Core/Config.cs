@@ -8,6 +8,7 @@ namespace ChillHub.Core {
     using System.Collections.Generic;
     using System.Diagnostics;
     using System.IO;
+    using System.Linq;
     using System.Text.Json;
     using System.Threading;
     using System.Windows;
@@ -226,19 +227,13 @@ namespace ChillHub.Core {
                 }
 
                 var merged = app.Resources.MergedDictionaries;
-                var sources = new List<string>(merged.Count);
-                foreach (var md in merged) {
-                    sources.Add(md.Source?.OriginalString ?? string.Empty);
-                }
-
-                var (remove, add) = PlanThemeMerge(sources);
+                var (remove, add) = PlanThemeMerge(merged.Select(md => md.Source?.OriginalString ?? string.Empty).ToList());
                 foreach (var i in remove) {
                     merged.RemoveAt(i);
                 }
 
                 if (add) {
-                    var uri = new Uri("/ChillHub;component/" + ThemePath, UriKind.Relative);
-                    merged.Add(new ResourceDictionary { Source = uri });
+                    merged.Add(new ResourceDictionary { Source = new Uri("/ChillHub;component/" + ThemePath, UriKind.Relative) });
                 }
 
                 if (app.MainWindow != null) {
