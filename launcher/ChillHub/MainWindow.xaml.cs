@@ -68,6 +68,16 @@ namespace ChillHub {
 
         public MainWindow() {
             this.InitializeComponent();
+
+            // Размер окна: минимальный по умолчанию, свой — если пользователь его менял
+            // (см. WindowSizeMemory). Ставится до показа, чтобы окно не прыгало на старте.
+            var size = WindowSizeMemory.Restore(Core.ConfigService.Current, this.MinWidth, this.MinHeight);
+            this.Width = size.Width;
+            this.Height = size.Height;
+            if (size.Maximized) {
+                this.WindowState = WindowState.Maximized;
+            }
+
             this.karaoke = new KaraokePresenter(this.KaraokeHost, this.KaraokeCurrentText, this.KaraokeNextText, this.KaraokeCaret);
             Console.WriteLine("[BOOT] Showing MainWindow");
             this.NavigateToHome();
@@ -153,6 +163,7 @@ namespace ChillHub {
         /// Значок уже показан (см. конструктор) — трей живёт независимо от видимости окна.
         /// </summary>
         private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e) {
+            this.RememberWindowSize();
             try {
                 if (this.exitRequested || !Core.ConfigService.Current.MinimizeToTray) {
                     return;
@@ -182,6 +193,25 @@ namespace ChillHub {
             this.tray.Notify("Лаунчер продолжает работать в трее", "Закачки идут дальше. Открыть — клик по значку, выйти — «Выход» в его меню.");
             cfg.TrayHintShown = true;
             Core.ConfigService.Save(cfg);
+        }
+
+        /// <summary>
+        /// Запоминает размер окна перед уходом (закрытие или в трей). RestoreBounds — размер
+        /// в нормальном состоянии даже у развёрнутого окна. Сбой записи не мешает закрыться.
+        /// </summary>
+        private void RememberWindowSize() {
+            try {
+                var cfg = Core.ConfigService.Current;
+                var bounds = this.RestoreBounds;
+                var w = bounds.IsEmpty ? this.Width : bounds.Width;
+                var h = bounds.IsEmpty ? this.Height : bounds.Height;
+                if (WindowSizeMemory.Remember(cfg, w, h, this.WindowState == WindowState.Maximized)) {
+                    Core.ConfigService.Save(cfg);
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"MainWindow.RememberWindowSize: {ex.Message}");
+            }
         }
 
         /// <summary>Создаёт значок в трее при первой необходимости и подключает его меню к окну.</summary>

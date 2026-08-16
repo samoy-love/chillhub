@@ -27,6 +27,44 @@ namespace ChillHub.Tests {
     /// </summary>
     public class ShellTests {
         /// <summary>
+        /// Свежий конфиг — окно минимального размера: 1180×760 по умолчанию на ноутбуке с
+        /// масштабом 125–150 % уходили за край экрана. Мусор в конфиге (меньше минимума,
+        /// NaN) — тоже минимальный размер.
+        /// </summary>
+        [Theory]
+        [InlineData(0, 0, 980, 640)]
+        [InlineData(500, 400, 980, 640)]
+        [InlineData(double.NaN, 700, 980, 640)]
+        [InlineData(1400, 900, 1400, 900)]
+        public void ОкноОткрываетсяМинимальнымПокаЕгоНеМеняли(double savedW, double savedH, double expectW, double expectH) {
+            var cfg = new ChillHub.Core.AppConfig { WindowWidth = savedW, WindowHeight = savedH };
+
+            var size = WindowSizeMemory.Restore(cfg, 980, 640);
+
+            Assert.Equal(expectW, size.Width);
+            Assert.Equal(expectH, size.Height);
+            Assert.False(size.Maximized);
+        }
+
+        /// <summary>
+        /// Растянутое пользователем окно запоминается, развёрнутое — флагом плюс размером
+        /// нормального состояния; тот же размер повторно конфиг не трогает.
+        /// </summary>
+        [Fact]
+        public void РазмерОкнаЗапоминаетсяТолькоКогдаМенялся() {
+            var cfg = new ChillHub.Core.AppConfig();
+
+            Assert.True(WindowSizeMemory.Remember(cfg, 1400, 900, maximized: false));
+            Assert.Equal(1400, cfg.WindowWidth);
+            Assert.False(WindowSizeMemory.Remember(cfg, 1400.4, 900, maximized: false));
+
+            Assert.True(WindowSizeMemory.Remember(cfg, 1400, 900, maximized: true));
+            Assert.True(cfg.WindowMaximized);
+            Assert.True(WindowSizeMemory.Restore(cfg, 980, 640).Maximized);
+            Assert.Equal(1400, WindowSizeMemory.Restore(cfg, 980, 640).Width);
+        }
+
+        /// <summary>
         /// Пустая область содержимого — переход нужен. Иначе окно осталось бы белым.
         /// </summary>
         [Fact]

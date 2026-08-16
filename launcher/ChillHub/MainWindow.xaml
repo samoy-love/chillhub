@@ -1,7 +1,7 @@
 <Window x:Class="ChillHub.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Лаунчер ChillHub" Height="760" Width="1180" WindowStartupLocation="CenterScreen"
+        Title="Лаунчер ChillHub" WindowStartupLocation="CenterScreen"
         MinHeight="640" MinWidth="980"
         ResizeMode="CanResize" SizeToContent="Manual"
         Icon="/ChillHub;component/Assets/app.ico"
