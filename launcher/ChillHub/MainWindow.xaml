@@ -101,18 +101,22 @@
                 <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                     <!-- Чип загрузок виден, пока очередь не пуста, с любого экрана: со
                          страницы игры и из настроек ход закачки иначе не виден вовсе.
-                         Клик ведёт на главную, где стоит сама очередь. -->
-                    <Button x:Name="HeaderDownloadsBtn" Style="{StaticResource Style.SettingsButton}" Height="32"
-                            Padding="10,0" Margin="0,0,8,0" Visibility="Collapsed"
-                            Click="HeaderDownloads_Click" ToolTip="Очередь загрузок — открыть главную"
-                            ToolTipService.Placement="Bottom">
+                         Это индикатор, а не кнопка: подсвечиваться и нажиматься ему нечего,
+                         очередь и так стоит на главной. Отступы задаются здесь явно — шаблон
+                         Style.SettingsButton свой Padding не пробрасывает. -->
+                    <Border x:Name="HeaderDownloadsBtn" Height="32" Padding="12,0" Margin="0,0,8,0"
+                            Visibility="Collapsed" CornerRadius="{StaticResource Radius.M}"
+                            Background="{DynamicResource Brush.Surface}"
+                            BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                            ToolTip="Очередь загрузок" ToolTipService.Placement="Bottom">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE896;" FontSize="14"
                                        Foreground="{DynamicResource Brush.Accent}" VerticalAlignment="Center"/>
                             <TextBlock x:Name="HeaderDownloadsText" Text="" FontSize="12" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource Brush.Text}"
                                        Margin="8,0,0,0" VerticalAlignment="Center" TextWrapping="NoWrap"/>
                         </StackPanel>
-                    </Button>
+                    </Border>
                     <!-- Размер фиксированный, а не «сколько получилось у караоке»: высота
                          декоративной строки зависит от шрифта и не должна задавать размер кнопки. -->
                     <!-- Подсказка снизу, а не у курсора: у правого края экрана всплывашка
