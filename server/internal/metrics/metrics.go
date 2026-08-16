@@ -52,6 +52,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -697,7 +698,7 @@ func median(xs []int64) int64 {
 		return 0
 	}
 	sorted := append([]int64(nil), xs...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	slices.Sort(sorted)
 	if n%2 == 1 {
 		return sorted[n/2]
 	}
