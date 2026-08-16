@@ -191,18 +191,29 @@ namespace ChillHub.Core {
                     return;
                 }
 
-                // remove previous theme dictionaries
+                // Тема одна и та же, а вызывают нас на каждом сохранении конфига — в том
+                // числе на каждом шаге ползунка в настройках. Пересборка словаря ресурсов
+                // перестраивает шаблоны всех элементов окна: у ползунка это создаёт новый
+                // бегунок посреди перетаскивания, и мышь его теряет. Поэтому уже
+                // подключённый словарь не трогаем.
+                const string themePath = "Themes/Theme.Dark.xaml";
+                bool applied = false;
                 for (int i = app.Resources.MergedDictionaries.Count - 1; i >= 0; i--) {
                     var md = app.Resources.MergedDictionaries[i];
                     var src = md.Source?.OriginalString ?? string.Empty;
-                    if (src.IndexOf("Themes/", StringComparison.OrdinalIgnoreCase) >= 0) {
+                    if (src.IndexOf(themePath, StringComparison.OrdinalIgnoreCase) >= 0) {
+                        applied = true;
+                    }
+                    else if (src.IndexOf("Themes/", StringComparison.OrdinalIgnoreCase) >= 0) {
                         app.Resources.MergedDictionaries.RemoveAt(i);
                     }
                 }
 
-                // Always use dark theme
-                var uri = new Uri("/ChillHub;component/Themes/Theme.Dark.xaml", UriKind.Relative);
-                app.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = uri });
+                if (!applied) {
+                    var uri = new Uri("/ChillHub;component/" + themePath, UriKind.Relative);
+                    app.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = uri });
+                }
+
                 if (app.MainWindow != null) {
                     app.MainWindow.SetResourceReference(Window.BackgroundProperty, "Brush.Background");
                 }
