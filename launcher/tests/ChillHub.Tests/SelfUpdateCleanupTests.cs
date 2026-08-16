@@ -52,7 +52,7 @@ namespace ChillHub.Tests {
             var newLayout = Path.Combine(fresh, "work", PreserveMatcher.UpdaterArtifactDir);
             Directory.CreateDirectory(oldLayout);
             Directory.CreateDirectory(newLayout);
-            File.WriteAllText(Path.Combine(newLayout, "YourLauncher.Updater.exe"), "apphost");
+            File.WriteAllText(Path.Combine(newLayout, "ChillHub.Updater.exe"), "apphost");
 
             SelfUpdateCleanup.TryCleanupTempSelfUpdateDirs(root.Root);
 
@@ -161,7 +161,7 @@ namespace ChillHub.Tests {
                 install.WriteFile(name, "мусор");
             }
 
-            install.WriteFile(PreserveMatcher.UpdaterArtifactDir + "/YourLauncher.Updater.exe", "apphost");
+            install.WriteFile(PreserveMatcher.UpdaterArtifactDir + "/ChillHub.Updater.exe", "apphost");
             install.WriteFile("ChillHub.exe", "лаунчер");
 
             SelfUpdateCleanup.TryCleanupInstalledUpdaterArtifacts(install.Root);

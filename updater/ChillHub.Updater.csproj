@@ -4,7 +4,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>YourLauncher.Updater</AssemblyName>
+    <AssemblyName>ChillHub.Updater</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
     <!-- tests/ — отдельный проект (ManifestPreserveCheck), в апдейтер не компилируется -->

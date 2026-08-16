@@ -64,7 +64,7 @@ internal static class Program {
 
         // Мусор апдейтера в корне установки.
         ("filelist.txt", true),
-        ("updater/YourLauncher.Updater.exe", true),
+        ("updater/ChillHub.Updater.exe", true),
 
         // A11. Те же имена в подкаталоге — обычные файлы пакета: сервер их публикует,
         // значит клиент обязан их копировать и сверять.

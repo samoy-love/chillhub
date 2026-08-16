@@ -26,7 +26,7 @@
       Релиз по-прежнему штампует версию явно (-p:Version), а расхождение с этим
       числом валит сборку установщика — тихо протухнуть оно не может.
     -->
-    <Version>1.5.14</Version>
+    <Version>1.5.15</Version>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Markdig" Version="1.3.2" />
@@ -37,14 +37,14 @@
     <PackageReference Include="StyleCop.Analyzers" Version="1.2.0-beta.556" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\updater\YourLauncher.Updater.csproj" />
+    <ProjectReference Include="..\..\updater\ChillHub.Updater.csproj" />
   </ItemGroup>
   <Target Name="CopyUpdater" AfterTargets="Build">
     <PropertyGroup>
-      <UpdaterExeSrc>$(MSBuildProjectDirectory)\..\..\updater\bin\$(Configuration)\net8.0\YourLauncher.Updater.exe</UpdaterExeSrc>
-      <UpdaterExeDst>$(OutDir)YourLauncher.Updater.exe</UpdaterExeDst>
+      <UpdaterExeSrc>$(MSBuildProjectDirectory)\..\..\updater\bin\$(Configuration)\net8.0\ChillHub.Updater.exe</UpdaterExeSrc>
+      <UpdaterExeDst>$(OutDir)ChillHub.Updater.exe</UpdaterExeDst>
     </PropertyGroup>
-    <Message Text="Copying YourLauncher.Updater.exe from '$(UpdaterExeSrc)' to '$(UpdaterExeDst)'" Importance="low" />
+    <Message Text="Copying ChillHub.Updater.exe from '$(UpdaterExeSrc)' to '$(UpdaterExeDst)'" Importance="low" />
     <Copy SourceFiles="$(UpdaterExeSrc)" DestinationFiles="$(UpdaterExeDst)" SkipUnchangedFiles="true" Condition="Exists('$(UpdaterExeSrc)')" />
   </Target>
   <ItemGroup>
