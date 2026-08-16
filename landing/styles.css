@@ -1170,6 +1170,174 @@ body.modal-open { overflow: hidden; }
   transition: none;
 }
 
+/* Before/after: старый лаунчер слева, нынешний справа */
+.screenshot-win.compare {
+  /* Рамка и тень переезжают на сцену: подпись должна остаться вне окна. */
+  background: none;
+  border: 0;
+  box-shadow: none;
+  border-radius: 0;
+  overflow: visible;
+}
+
+.compare__stage {
+  position: relative;
+  display: block;
+  width: max-content;               /* по картинке, иначе подпись растягивает окно */
+  max-width: 100%;
+  margin: 0 auto;
+  border-radius: clamp(6px, 1.2vh, 18px);
+  border: 1px solid rgb(255 255 255 / 10%);
+  background: linear-gradient(180deg, #17172e, #111126);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  touch-action: pan-y;              /* вертикальный скролл страницы не отбираем */
+}
+
+.compare__stage:has(.compare__range:focus-visible) {
+  outline: 2px solid rgb(124 58 237 / 65%);
+  outline-offset: 2px;
+}
+
+.compare__clip {
+  position: absolute;
+  inset: 0;
+  width: var(--compare-pos, 3%);
+  overflow: hidden;
+  z-index: 1;
+  border-radius: inherit;
+}
+
+/* Обе картинки одного размера, поэтому обрезанная копия просто тянется
+   по высоте сцены — шов совпадает пиксель в пиксель. */
+.compare__clip .compare__img {
+  position: absolute;
+  inset: 0 auto auto 0;
+  height: 100%;
+  width: auto;
+  max-width: none;
+  max-height: none;
+}
+
+.compare__handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--compare-pos, 3%);
+  width: 2px;
+  margin-left: -1px;
+  z-index: 2;
+  background: rgb(255 255 255 / 85%);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 30%);
+  pointer-events: none;             /* тянет сам range, лежащий сверху */
+}
+
+.compare__grip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: rgb(17 17 38 / 92%);
+  border: 1px solid rgb(255 255 255 / 45%);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 45%);
+}
+
+.compare__grip::before,
+.compare__grip::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  transform: translateY(-50%);
+}
+
+.compare__grip::before {
+  left: 8px;
+  border-right: 7px solid rgb(255 255 255 / 85%);
+}
+
+.compare__grip::after {
+  right: 8px;
+  border-left: 7px solid rgb(255 255 255 / 85%);
+}
+
+.compare__tag {
+  position: absolute;
+  top: 10px;
+  z-index: 2;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  background: rgb(10 10 24 / 78%);
+  border: 1px solid rgb(255 255 255 / 16%);
+  pointer-events: none;
+  transition: opacity .15s ease;
+}
+
+.compare__tag--before { left: 10px; }
+.compare__tag--after { right: 10px; }
+
+.compare--narrow .compare__tag--before { opacity: 0%; }
+
+.compare__range {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  background: transparent;
+  opacity: 0%;                      /* видимый бегунок нарисован в .compare__handle */
+  cursor: ew-resize;
+}
+
+.compare__range::-webkit-slider-thumb {
+  appearance: none;
+  width: 44px;
+  height: 100%;
+}
+
+.compare__range::-moz-range-thumb {
+  width: 44px;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+}
+
+.compare__caption {
+  margin: 12px auto 0;
+  max-width: 620px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.compare__zoom {
+  display: inline;
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #b39cff;
+  font: inherit;
+  cursor: zoom-in;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.compare__zoom:hover { color: #cdbcff; }
+
 /* (removed) Caption under screenshot */
 
 /* Ensure consistent centering without forcing full width */
@@ -1677,4 +1845,7 @@ img:not(.skeleton)::after { display: none; }
 @media (width <= 640px) {
   .screenshot-win { border-radius: 4px; }
   .screenshot-win img { border-radius: 4px; }
+  .compare__stage { border-radius: 4px; }
+  .compare__tag { font-size: 11px; padding: 3px 8px; }
+  .compare__grip { width: 32px; height: 32px; }
 }
