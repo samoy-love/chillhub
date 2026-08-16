@@ -39,8 +39,13 @@ namespace ChillHub.Core.Shell {
         private readonly UIElement caret;
         private readonly DispatcherTimer timer;
 
+        private bool started;
         private bool paused;
         private bool transitionRunning;
+
+        // Номер запуска: переход между строками, начатый до очередного Start, после него
+        // ничего не трогает — иначе он сдвинул бы новую песню на строку вперёд.
+        private int generation;
 
         /// <summary>Initializes a new instance of the <see cref="KaraokePresenter"/> class.</summary>
         /// <param name="host">Контейнер строки — ему подбирается ширина под самую длинную строку.</param>
@@ -71,6 +76,9 @@ namespace ChillHub.Core.Shell {
         /// <param name="lyrics">Текст песни построчно.</param>
         internal void Start(string lyrics) {
             try {
+                this.generation++;
+                this.transitionRunning = false;
+                this.started = true;
                 this.ticker.SetLyrics(lyrics);
                 this.FitHostWidth();
                 this.ticker.ResetToStart(DateTime.UtcNow);
@@ -85,13 +93,26 @@ namespace ChillHub.Core.Shell {
 
         /// <summary>Останавливает печать (окно свёрнуто или неактивно) — время паузы не засчитывается.</summary>
         internal void Pause() {
+            if (!this.started) {
+                return;
+            }
+
             this.paused = true;
             this.timer.Stop();
             this.ticker.BeginPause(DateTime.UtcNow);
         }
 
-        /// <summary>Возобновляет печать с того же символа, не «догоняя» пропущенное.</summary>
+        /// <summary>
+        /// Возобновляет печать с того же символа, не «догоняя» пропущенное. До
+        /// <see cref="Start"/> ничего не делает: окно активируется и показывается раньше,
+        /// чем загружается, и без этой проверки пустой текст успевал «дописаться» и уйти
+        /// в переход — песня начиналась со второй, пустой строки.
+        /// </summary>
         internal void Resume() {
+            if (!this.started) {
+                return;
+            }
+
             this.paused = false;
             try {
                 this.ticker.EndPause(DateTime.UtcNow);
@@ -212,16 +233,20 @@ namespace ChillHub.Core.Shell {
             }
 
             this.transitionRunning = true;
+            var gen = this.generation;
             try {
                 // Пустая строка — граница куплета: стоит долго, как проигрыш в записи
                 await Task.Delay(this.ticker.CurrentLine.Length == 0 ? this.config.PauseAfterEmptyLineMs : this.config.PauseAfterLineMs);
-                if (this.paused) {
+                if (this.paused || gen != this.generation) {
                     return;
                 }
 
                 var fadeOut = new DoubleAnimation(1.0, 0.0, TimeSpan.FromMilliseconds(this.config.FadeOutMs));
                 this.current.BeginAnimation(UIElement.OpacityProperty, fadeOut);
                 await Task.Delay(this.config.FadeOutMs);
+                if (gen != this.generation) {
+                    return;
+                }
 
                 this.ticker.MoveToNextLine(DateTime.UtcNow);
                 this.ResetOpacity();
@@ -231,7 +256,10 @@ namespace ChillHub.Core.Shell {
                 LogFailure("переход к следующей строке", ex);
             }
             finally {
-                this.transitionRunning = false;
+                // Переход из прошлого запуска не должен снимать флаг у нынешнего
+                if (gen == this.generation) {
+                    this.transitionRunning = false;
+                }
             }
         }
     }

@@ -733,6 +733,8 @@
     <Setter Property="Foreground" Value="{StaticResource Brush.Accent}"/>
     <Setter Property="Background" Value="{StaticResource Brush.Track}"/>
     <Setter Property="MinHeight" Value="28"/>
+    <!-- Щелчок по дорожке ставит бегунок под курсор, а не сдвигает его на одно деление -->
+    <Setter Property="IsMoveToPointEnabled" Value="True"/>
     <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
     <Setter Property="Template">
       <Setter.Value>
