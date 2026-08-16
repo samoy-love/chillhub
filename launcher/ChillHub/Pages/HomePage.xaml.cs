@@ -1651,9 +1651,11 @@ namespace ChillHub.Pages {
                 var unfinished = HasUnfinishedUpdate(g?.GameId);
                 var intended = ActionButtonState.Decide(this.hasUpdateError, unfinished, isInstalled, needsUpdate);
 
+                // Причину и срок не дублируем в строку статуса: они уже висят баннером в
+                // шапке, а строка статуса раскрывала нижнюю панель с тем же текстом и
+                // застрявшей подписью прошлой проверки — одно сообщение стояло дважды.
                 if (ActionButtonState.IsBlockedByMaintenance(intended, Core.Maintenance.MaintenanceService.Current)) {
                     this.SetActionMode(ActionMode.Maintenance);
-                    this.StatusText.Text = Core.Maintenance.MaintenanceService.Current.BuildBannerText();
                     return;
                 }
 
@@ -1723,13 +1725,12 @@ namespace ChillHub.Pages {
         }
 
         // Сервер сообщил о смене режима: работы начались или закончились.
-        // Перезапуск клиента не нужен — просто пересчитываем кнопку.
+        // Перезапуск клиента не нужен — просто пересчитываем кнопку. Строку статуса не
+        // трогаем: режим работ в неё не пишет, а сбрасывать в «Готово» чужое сообщение
+        // («Обновление не завершено…») из-за окончания работ было бы неверно.
         private void OnMaintenanceChanged(Core.Maintenance.MaintenanceState state) {
             try {
                 this.UpdateActionButtonState();
-                if (!state.Enabled && !this.IsQueued(this.GetSelectedGameId()) && string.IsNullOrWhiteSpace(this.lastErrorDetails)) {
-                    this.StatusText.Text = "Готово";
-                }
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Error(ex, "HomePage.OnMaintenanceChanged");

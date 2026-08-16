@@ -529,13 +529,12 @@ namespace ChillHub.Pages {
                 // ApplyState заново берёт подписи из текущего состояния игры и последним шагом
                 // сам применяет режим работ, поэтому одинаково верно отрабатывает и начало
                 // работ, и их окончание.
+                //
+                // Строку «Статус» текстом баннера не заполняем: страница, открытая уже во время
+                // работ, её и не заполняла — текст появлялся только у того, кто застал начало
+                // работ на странице. Причина и срок висят баннером в шапке, кнопка объясняет
+                // запрет подписью; одного этого достаточно и одинаково в обоих случаях.
                 this.ApplyState(this.currentState);
-                if (state.Enabled) {
-                    this.StatusText.Text = state.BuildBannerText();
-                }
-                else if (!this.isBusy) {
-                    this.StatusText.Text = string.Empty;
-                }
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Error(ex, "GamePage.OnMaintenanceChanged");

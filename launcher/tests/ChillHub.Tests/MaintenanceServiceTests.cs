@@ -22,10 +22,15 @@ namespace ChillHub.Tests {
     /// Без него опрос техработ проверить нечем — сервис ходит в сеть.
     /// </summary>
     internal sealed class FakeMaintenanceHandler : HttpMessageHandler {
-        private readonly Func<int, HttpResponseMessage> respond;
+        private readonly Func<int, Task<HttpResponseMessage>> respond;
         private int calls;
 
-        public FakeMaintenanceHandler(Func<int, HttpResponseMessage> respond) {
+        public FakeMaintenanceHandler(Func<int, HttpResponseMessage> respond)
+            : this(n => Task.FromResult(respond(n))) {
+        }
+
+        /// <summary>Асинхронный ответ — чтобы тест мог подержать запрос «в полёте».</summary>
+        public FakeMaintenanceHandler(Func<int, Task<HttpResponseMessage>> respond) {
             this.respond = respond;
         }
 
@@ -38,7 +43,7 @@ namespace ChillHub.Tests {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) {
             var n = Interlocked.Increment(ref this.calls);
             this.LastUrl = request.RequestUri?.ToString() ?? string.Empty;
-            return Task.FromResult(this.respond(n));
+            return this.respond(n);
         }
     }
 
@@ -184,6 +189,41 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// Разворачивание окна из трея дёргает внеочередной опрос дважды подряд —
+        /// из RestoreFromTray и из Activated. Пока первый запрос в полёте, второй вызов
+        /// присоединяется к нему, а не бьёт по серверу ещё раз.
+        /// </summary>
+        [Fact]
+        public async Task ПараллельныеВнеочередныеОпросыДелятОдинЗапрос() {
+            var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var handler = this.UseHandler(async _ => {
+                await gate.Task;
+                return Json("{\"enabled\":true,\"reason\":\"Работы\"}");
+            });
+
+            var first = MaintenanceService.RefreshNowAsync();
+            var second = MaintenanceService.RefreshNowAsync();
+            var third = MaintenanceService.RefreshNowAsync();
+            gate.SetResult(true);
+            await Task.WhenAll(first, second, third);
+
+            Assert.Equal(1, handler.Calls);
+            Assert.True(MaintenanceService.Current.Enabled);
+        }
+
+        /// <summary>После завершения опроса следующий вызов делает новый запрос, а не отдаёт устаревший результат.</summary>
+        [Fact]
+        public async Task ПослеЗавершенияОпросаСледующийВызовИдётВСеть() {
+            var handler = this.UseHandler(n => Json(n == 1 ? "{\"enabled\":true,\"reason\":\"Работы\"}" : "{\"enabled\":false}"));
+
+            await MaintenanceService.RefreshNowAsync();
+            var state = await MaintenanceService.RefreshNowAsync();
+
+            Assert.Equal(2, handler.Calls);
+            Assert.False(state.Enabled);
+        }
+
+        /// <summary>
         /// Адрес собирается из базового без задвоенного слеша: сервер на такой путь
         /// отвечает 404, и режим работ молча перестал бы приходить вовсе.
         /// </summary>
@@ -326,8 +366,13 @@ namespace ChillHub.Tests {
             return condition();
         }
 
-        private FakeMaintenanceHandler UseHandler(Func<int, HttpResponseMessage> respond) {
-            var handler = new FakeMaintenanceHandler(respond);
+        private FakeMaintenanceHandler UseHandler(Func<int, HttpResponseMessage> respond)
+            => this.UseHandler(new FakeMaintenanceHandler(respond));
+
+        private FakeMaintenanceHandler UseHandler(Func<int, Task<HttpResponseMessage>> respond)
+            => this.UseHandler(new FakeMaintenanceHandler(respond));
+
+        private FakeMaintenanceHandler UseHandler(FakeMaintenanceHandler handler) {
             var client = new HttpClient(handler, disposeHandler: true);
             this.clients.Add(client);
             MaintenanceService.HttpOverride = client;

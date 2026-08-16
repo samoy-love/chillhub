@@ -81,6 +81,35 @@ namespace ChillHub.Tests {
             Assert.Contains("Переезд базы", s.BuildBannerText(), StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// Причину администратор пишет без точки, а баннер приписывает к ней срок. Без знака
+        /// на стыке получалось «…раздачи Ожидаемое окончание…» — два предложения одним.
+        /// </summary>
+        [Fact]
+        public void ПричинаБезТочкиПолучаетТочкуПередСроком() {
+            var serverNow = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+            var s = new MaintenanceState {
+                Enabled = true,
+                Reason = "Меняем диск на сервере раздачи",
+                ServerTime = serverNow,
+                EndsAt = serverNow.AddHours(1),
+            };
+
+            Assert.Equal("Меняем диск на сервере раздачи.", s.BuildReasonText());
+            Assert.Contains("раздачи. Ожидаемое окончание", s.BuildBannerText(), StringComparison.Ordinal);
+        }
+
+        /// <summary>Свой знак в конце причины не удваивается: «Скоро вернёмся!» остаётся как есть.</summary>
+        /// <param name="reason">Причина с завершающим знаком.</param>
+        [Theory]
+        [InlineData("Скоро вернёмся!")]
+        [InlineData("Переезд базы.")]
+        [InlineData("Что-то пошло не так?")]
+        [InlineData("Работы затянулись…")]
+        public void СвойЗнакВКонцеПричиныСохраняется(string reason) {
+            Assert.Equal(reason, new MaintenanceState { Enabled = true, Reason = reason }.BuildReasonText());
+        }
+
         /// <summary>Без срока окончания обещаний о времени быть не должно.</summary>
         [Fact]
         public void БезСрокаНетОбещанийОВремени() {

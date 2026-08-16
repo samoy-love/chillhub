@@ -193,6 +193,30 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// Причина и срок отдаются порознь: баннер набирает их разным весом, чтобы главное
+        /// (что случилось) читалось раньше второстепенного (когда кончится). Без срока
+        /// вторая строка пуста, а не «null» и не общий текст.
+        /// </summary>
+        [Fact]
+        public void БаннерОтдаётПричинуИСрокПорознь() {
+            var now = DateTimeOffset.Now;
+            var withEta = MaintenanceBannerView.For(new MaintenanceState {
+                Enabled = true,
+                Reason = "Обновляем раздачу",
+                ServerTime = now,
+                EndsAt = now.AddMinutes(30),
+            });
+            Assert.Equal("Обновляем раздачу.", withEta.Reason);
+            Assert.StartsWith("Ожидаемое окончание", withEta.Eta, StringComparison.Ordinal);
+            Assert.Equal($"{withEta.Reason} {withEta.Eta}", withEta.Text);
+
+            var noEta = MaintenanceBannerView.For(new MaintenanceState { Enabled = true, Reason = "Обновляем раздачу" });
+            Assert.Equal("Обновляем раздачу.", noEta.Reason);
+            Assert.Equal(string.Empty, noEta.Eta);
+            Assert.Equal(noEta.Reason, noEta.Text);
+        }
+
+        /// <summary>
         /// Пункт запуска в трее называет игру, а без выбранной игры выключен: нажатие,
         /// которое ничего не делает, читается как сломанное меню.
         /// </summary>
