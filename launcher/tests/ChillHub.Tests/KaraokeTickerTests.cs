@@ -80,8 +80,9 @@ namespace ChillHub.Tests {
             var ticker = Ticker("привет");
             ticker.ResetToStart(Start);
 
-            Assert.Equal(0, ticker.PlanAdvance(Start.AddMilliseconds(59)));
-            Assert.Equal(1, ticker.PlanAdvance(Start.AddMilliseconds(60)));
+            var interval = ticker.Config.CharIntervalMs;
+            Assert.Equal(0, ticker.PlanAdvance(Start.AddMilliseconds(interval - 1)));
+            Assert.Equal(1, ticker.PlanAdvance(Start.AddMilliseconds(interval)));
         }
 
         /// <summary>
