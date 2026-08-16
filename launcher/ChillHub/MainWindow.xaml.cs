@@ -331,6 +331,17 @@ namespace ChillHub {
                     return;
                 }
 
+                // Ошибки и прочие неоднозначные исходы проверки (нет сети, битый манифест,
+                // блокировка петли, итог прошлого обновления) пользователю показываем только
+                // при старте лаунчера — см. App.Application_Startup. Пока лаунчер уже работает,
+                // фоновая проверка молчит о них и просто попробует ещё раз по расписанию;
+                // единственное, ради чего стоит прерывать пользователя на лету — реальная
+                // доступная новая версия.
+                if (precheck.Decision.State != Core.SelfUpdate.SelfUpdateState.UpdateAvailable) {
+                    Core.Logging.Logger.Info($"Background self-update check: state={precheck.Decision.State}, dialog suppressed outside startup");
+                    return;
+                }
+
                 this.TryShowSelfUpdateDialog(precheck);
             }
             catch (Exception ex) {
