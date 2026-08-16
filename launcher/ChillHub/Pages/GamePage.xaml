@@ -70,6 +70,13 @@
       <Setter Property="TextWrapping" Value="Wrap"/>
       <Setter Property="Margin" Value="0,0,16,12"/>
     </Style>
+    <Style x:Key="Style.HideWhenEmpty" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+      <Style.Triggers>
+        <Trigger Property="Text" Value="">
+          <Setter Property="Visibility" Value="Collapsed"/>
+        </Trigger>
+      </Style.Triggers>
+    </Style>
     <Style x:Key="Style.SectionHeader" TargetType="TextBlock">
       <Setter Property="Foreground" Value="{DynamicResource Brush.Title}"/>
       <Setter Property="FontSize" Value="16"/>
@@ -225,22 +232,12 @@
               <Button Name="ActionBtn" Content="Установить" Height="40" Margin="0,0,0,8"
                       HorizontalAlignment="Stretch"
                       Style="{StaticResource Style.Button.GamePrimary}" Click="ActionBtn_Click"/>
-              <Grid>
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="*"/>
-                  <ColumnDefinition Width="8"/>
-                  <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <Button Grid.Column="0" Name="OpenFolderBtn" Content="Открыть папку игры" Height="36"
-                        HorizontalAlignment="Stretch"
-                        Style="{DynamicResource Style.Button.GhostNeutral}" Click="OpenFolderBtn_Click"/>
-                <Button Grid.Column="2" Name="OpenLogsBtn" Content="Открыть логи" Height="36"
-                        HorizontalAlignment="Stretch"
-                        Style="{DynamicResource Style.Button.GhostNeutral}" Click="OpenLogsBtn_Click"/>
-              </Grid>
+              <!-- Статус и полоса — сразу ПОД кнопкой, которой они принадлежат: «Отмена»
+                   наверху и «5% · осталось 14 мин» в самом низу карточки, через ряд
+                   посторонних кнопок, читались как две разные истории. -->
               <!-- Строка статуса подписана: одинокое «Готов» под кнопками не читалось как
                    состояние операции. -->
-              <Grid Margin="0,12,0,0">
+              <Grid Margin="0,4,0,0">
                 <Grid.ColumnDefinitions>
                   <ColumnDefinition Width="Auto"/>
                   <ColumnDefinition Width="*"/>
@@ -269,10 +266,20 @@
                   </Style>
                 </ProgressBar.Style>
               </ProgressBar>
+              <!-- Пустые строки прячутся целиком: две пустые TextBlock с отступами держали
+                   ~40px пустоты между статусом и кнопкой папки, пока ничего не качалось. -->
               <TextBlock Name="SpeedEtaText" Text="" FontSize="12" Margin="0,6,0,0"
-                         Foreground="{DynamicResource Brush.TextSecondary}"/>
+                         Foreground="{DynamicResource Brush.TextSecondary}"
+                         Style="{StaticResource Style.HideWhenEmpty}"/>
               <TextBlock Name="FilesSizeText" Text="" FontSize="12"
-                         Foreground="{DynamicResource Brush.TextSecondary}"/>
+                         Foreground="{DynamicResource Brush.TextSecondary}"
+                         Style="{StaticResource Style.HideWhenEmpty}"/>
+              <!-- Одна вспомогательная кнопка. «Открыть логи» отсюда убрана: журналы
+                   лаунчера — не свойство игры, они открываются из настроек («О программе»),
+                   а здесь эта кнопка выглядела инструментом разработчика на игровом экране. -->
+              <Button Name="OpenFolderBtn" Content="Открыть папку игры" Height="36" Margin="0,12,0,0"
+                      HorizontalAlignment="Stretch"
+                      Style="{DynamicResource Style.Button.GhostNeutral}" Click="OpenFolderBtn_Click"/>
             </StackPanel>
           </Border>
 
@@ -345,7 +352,7 @@
               Visibility="Collapsed"
               Background="{DynamicResource Brush.Surface}"
               BorderBrush="{DynamicResource Brush.Border}"
-              BorderThickness="1.5"
+              BorderThickness="1"
               CornerRadius="8"
               Padding="12"
               Effect="{x:Null}">

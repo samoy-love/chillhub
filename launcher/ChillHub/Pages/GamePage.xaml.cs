@@ -202,8 +202,7 @@ namespace ChillHub.Pages {
                 this.game.NeedsUpdate = state is GameState.UpdateAvailable or GameState.Unfinished;
 
                 if (this.isBusy) {
-                    this.ActionBtn.Content = "Отмена";
-                    this.ActionBtn.IsEnabled = true;
+                    this.ApplyBusyLook();
                     return;
                 }
 
@@ -211,6 +210,7 @@ namespace ChillHub.Pages {
                 this.StateText.Text = labels.StateText;
                 this.ActionBtn.Content = labels.ActionText;
                 this.ActionBtn.IsEnabled = true;
+                this.ActionBtn.Style = this.TryFindResource("Style.Button.GamePrimary") as Style ?? this.ActionBtn.Style;
 
                 // Последним словом остаётся режим технических работ: он может запретить действие
                 this.ApplyMaintenanceToButtons();
@@ -394,6 +394,10 @@ namespace ChillHub.Pages {
                     this.SetBusy(true);
                 }
 
+                // Чип состояния следует за позицией: «Ждёт очереди» → «Обновляется», как
+                // только очередь до неё дошла, а не до следующего открытия страницы.
+                this.ApplyBusyLook(item.State == Core.Game.QueueItemState.Waiting);
+
                 this.StatusText.Text = item.State == Core.Game.QueueItemState.Waiting
                     ? (item.QueuePosition > 1 ? $"В очереди · {item.QueuePosition}-я" : "Следующая в очереди")
                     : item.StatusText;
@@ -430,18 +434,6 @@ namespace ChillHub.Pages {
             catch (Exception ex) {
                 this.StatusText.Text = "Не удалось открыть папку игры.";
                 Core.Logging.Logger.Error(ex, "GamePage.OpenFolderBtn_Click");
-            }
-        }
-
-        private void OpenLogsBtn_Click(object sender, RoutedEventArgs e) {
-            try {
-                var dir = Core.Logging.Logger.LogDirectory;
-                Directory.CreateDirectory(dir);
-                Process.Start(new ProcessStartInfo { FileName = dir, UseShellExecute = true });
-            }
-            catch (Exception ex) {
-                this.StatusText.Text = "Не удалось открыть папку с логами.";
-                Core.Logging.Logger.Error(ex, "GamePage.OpenLogsBtn_Click");
             }
         }
 
@@ -699,16 +691,38 @@ namespace ChillHub.Pages {
         private void SetBusy(bool busy) {
             this.isBusy = busy;
             try {
-                this.ActionBtn.Content = busy ? "Отмена" : this.ActionBtn.Content;
-                this.ActionBtn.IsEnabled = true;
-
                 if (busy) {
+                    this.ApplyBusyLook();
                     this.StatusText.ToolTip = null;
+                }
+                else {
+                    this.ActionBtn.IsEnabled = true;
                 }
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Error(ex, $"GamePage.SetBusy({busy})");
             }
+        }
+
+        /// <summary>
+        /// Вид страницы, пока игра ставится или обновляется: кнопка — красная «Отмена»
+        /// (а не та же фиолетовая заливка, что и «Установить»), чип состояния — «Устанавливается»/«Обновляется»
+        /// или «Ждёт очереди», а не «Состояние неизвестно», которым он встречал открытие
+        /// страницы посреди закачки: <see cref="ApplyState"/> выходил до записи чипа.
+        /// </summary>
+        private void ApplyBusyLook(bool? waitingInQueue = null) {
+            this.ActionBtn.Content = "Отмена";
+            this.ActionBtn.IsEnabled = true;
+            if (this.TryFindResource("Style.Button.Danger") is Style danger) {
+                this.ActionBtn.Style = danger;
+            }
+
+            var waiting = waitingInQueue ?? (this.viaQueue && this.downloadQueue?.Snapshot()
+                .FirstOrDefault(i => string.Equals(i.GameId, this.game.GameId, StringComparison.OrdinalIgnoreCase))
+                ?.State == Core.Game.QueueItemState.Waiting);
+            this.StateText.Text = waiting
+                ? "Ждёт очереди"
+                : this.currentState == GameState.NotInstalled ? "Устанавливается" : "Обновляется";
         }
     }
 }
