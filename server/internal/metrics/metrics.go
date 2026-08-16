@@ -374,6 +374,15 @@ type GameBucket struct {
 	Updates  int    `json:"updates"`
 	Errors   int    `json:"errors"`
 	Bytes    int64  `json:"bytes"`
+	// FullBytes is what the same installs and updates would have weighed as full
+	// downloads. Next to Bytes it is the only number that says what the
+	// differential sync actually saved this game's players.
+	FullBytes int64 `json:"fullBytes"`
+	// IntegrityChecks/IntegrityFailed/HashMismatches summarise the verify runs the
+	// user started themselves.
+	IntegrityChecks int   `json:"integrityChecks"`
+	IntegrityFailed int   `json:"integrityFailed"`
+	HashMismatches  int64 `json:"hashMismatches"`
 	// Sessions/PlaytimeMs/AvgSessionMs/MedianSessionMs come from game_session
 	// events; UniquePlayers is len(distinct installId) among them, so it counts
 	// installations that actually played, not merely installed or launched.
@@ -404,10 +413,27 @@ type Totals struct {
 	Errors          int   `json:"errors"`
 	UniqueInstalls  int   `json:"uniqueInstalls"`
 	BytesDownloaded int64 `json:"bytesDownloaded"`
+	// FullBytes/FilesDownloaded/FilesTotal come from install and update events
+	// only. They are the whole point of a differential launcher and the store has
+	// carried them since the client learned to send them, but nothing aggregated
+	// them: BytesDownloaded alone says "40 MiB moved" without the "instead of 12
+	// GiB" that makes the number mean anything. Deliberately not fed by
+	// integrity_check, which reports a filesTotal of its own about a different
+	// operation and would silently inflate the ratio.
+	FullBytes       int64 `json:"fullBytes"`
+	FilesDownloaded int64 `json:"filesDownloaded"`
+	FilesTotal      int64 `json:"filesTotal"`
 	// AvgInstallMs / AvgUpdateMs average only successful operations with a
 	// reported duration; a cancelled download would otherwise drag them down.
 	AvgInstallMs int64 `json:"avgInstallMs"`
 	AvgUpdateMs  int64 `json:"avgUpdateMs"`
+	// IntegrityChecks/IntegrityFailed/HashMismatches summarise integrity_check
+	// events. The launcher has been sending them all along; the fold had no case
+	// for the kind, so they landed in Events and nowhere else — a user verifying
+	// their files was invisible in the panel that exists to notice exactly that.
+	IntegrityChecks int   `json:"integrityChecks"`
+	IntegrityFailed int   `json:"integrityFailed"`
+	HashMismatches  int64 `json:"hashMismatches"`
 	// GameSessions/PlaytimeMs/AvgSessionMs/MedianSessionMs summarise game_session
 	// events across every game. UniquePlayers counts distinct installId among
 	// them — installations that actually played, a stricter number than
@@ -558,6 +584,10 @@ func (a *summaryAgg) add(ev Event) {
 	// here: one bogus value must not poison the totals.
 	ev.DurationMs = clampInt64(ev.DurationMs, maxDurationMs)
 	ev.Bytes = clampInt64(ev.Bytes, maxEventBytes)
+	ev.FullBytes = clampInt64(ev.FullBytes, maxEventBytes)
+	ev.FilesDownloaded = clampInt64(ev.FilesDownloaded, maxEventFiles)
+	ev.FilesTotal = clampInt64(ev.FilesTotal, maxEventFiles)
+	ev.HashMismatches = clampInt64(ev.HashMismatches, maxEventFiles)
 	a.out.Totals.Events++
 	if ev.InstallID != "" {
 		a.uniq[ev.InstallID] = struct{}{}
@@ -622,6 +652,8 @@ func (a *summaryAgg) addKind(ev Event, d *DayBucket, g *GameBucket) {
 		d.GameLaunches++
 	case "game_session":
 		a.addSession(ev, d, g)
+	case "integrity_check":
+		a.addIntegrity(ev, g)
 	case "error":
 		a.out.Totals.Errors++
 		d.Errors++
@@ -636,6 +668,38 @@ func (a *summaryAgg) addKind(ev Event, d *DayBucket, g *GameBucket) {
 	}
 }
 
+// addTransfer folds the download-volume fields shared by installs and updates.
+// It is the only place they are summed: integrity_check reports a filesTotal
+// about a different operation entirely, and mixing the two would make the
+// saved-traffic ratio quietly wrong rather than visibly missing.
+func (a *summaryAgg) addTransfer(ev Event, g *GameBucket) {
+	a.out.Totals.FullBytes += ev.FullBytes
+	a.out.Totals.FilesDownloaded += ev.FilesDownloaded
+	a.out.Totals.FilesTotal += ev.FilesTotal
+	if g != nil {
+		g.FullBytes += ev.FullBytes
+	}
+}
+
+// addIntegrity folds one integrity_check. It touches no day bucket: the daily
+// table tracks the volume of ordinary use, and a verify run is something the
+// user does once, by hand, when a game already misbehaves.
+func (a *summaryAgg) addIntegrity(ev Event, g *GameBucket) {
+	a.out.Totals.IntegrityChecks++
+	a.out.Totals.HashMismatches += ev.HashMismatches
+	if ev.Result == "fail" {
+		a.out.Totals.IntegrityFailed++
+	}
+	if g == nil {
+		return
+	}
+	g.IntegrityChecks++
+	g.HashMismatches += ev.HashMismatches
+	if ev.Result == "fail" {
+		g.IntegrityFailed++
+	}
+}
+
 // addInstall also feeds the average duration, which counts successful installs
 // only: a cancelled download would otherwise drag the average down.
 func (a *summaryAgg) addInstall(ev Event, d *DayBucket, g *GameBucket) {
@@ -644,6 +708,7 @@ func (a *summaryAgg) addInstall(ev Event, d *DayBucket, g *GameBucket) {
 	if g != nil {
 		g.Installs++
 	}
+	a.addTransfer(ev, g)
 	switch ev.Result {
 	case "ok":
 		a.out.Totals.InstallOK++
@@ -712,6 +777,7 @@ func (a *summaryAgg) addUpdate(ev Event, d *DayBucket, g *GameBucket) {
 	if g != nil {
 		g.Updates++
 	}
+	a.addTransfer(ev, g)
 	switch ev.Result {
 	case "ok":
 		a.out.Totals.UpdateOK++
