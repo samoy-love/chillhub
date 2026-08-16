@@ -60,6 +60,63 @@ namespace ChillHub.Tests {
             Assert.Equal(before, File.GetLastWriteTimeUtc(cfgDir.ConfigPath));
         }
 
+        /// <summary>
+        /// Правка контрола уезжает на диск сама: ползунок потоков, тумблер лимита с числом,
+        /// число потоков из поля (с обрезкой до диапазона), Enter в поле пути. Именно это и
+        /// значит «без кнопки Сохранить».
+        /// </summary>
+        [Fact]
+        public void ПравкаКонтролаСохраняетсяСразу() {
+            using var cfgDir = new ConfigDirsScope();
+            using var games = new TempDir();
+            _ = new DialogLog();
+            var cfg = ConfigService.Current;
+            cfg.GamesPath = games.Root;
+            cfg.DownloadThreads = 16;
+            Assert.True(ConfigService.TrySave(cfg, out _));
+
+            UiThread.Run(() => {
+                var page = new ChillHub.Pages.SettingsPage();
+                Call(page, "LoadConfigToUi");
+
+                Field<System.Windows.Controls.Slider>(page, "ThreadsSlider").Value = 4;
+                Assert.Equal(4, cfgDir.ReadConfigFromDisk().DownloadThreads);
+                Assert.Equal("4", Field<System.Windows.Controls.TextBox>(page, "ThreadsBox").Text);
+
+                Field<System.Windows.Controls.TextBox>(page, "ThreadsBox").Text = "99";
+                Call(page, "ThreadsBox_LostKeyboardFocus", null!, null!);
+                Assert.Equal(16, cfgDir.ReadConfigFromDisk().DownloadThreads);
+
+                Field<System.Windows.Controls.CheckBox>(page, "SpeedLimitCheck").IsChecked = true;
+                Field<System.Windows.Controls.TextBox>(page, "SpeedLimitBox").Text = "42";
+                Call(page, "SpeedLimitBox_LostKeyboardFocus", null!, null!);
+                Assert.Equal(10, cfgDir.ReadConfigFromDisk().SpeedLimitMbps);
+                Assert.Equal("10 МБ/с", Field<System.Windows.Controls.TextBlock>(page, "SpeedLimitValueText").Text);
+
+                Field<System.Windows.Controls.CheckBox>(page, "SpeedLimitCheck").IsChecked = false;
+                Call(page, "SpeedLimitCheck_Click", null!, null!);
+                Assert.Equal(0, cfgDir.ReadConfigFromDisk().SpeedLimitMbps);
+
+                Field<System.Windows.Controls.CheckBox>(page, "MinimizeToTrayCheck").IsChecked = false;
+                Call(page, "Toggle_Click", null!, null!);
+                Assert.False(cfgDir.ReadConfigFromDisk().MinimizeToTray);
+
+                var sub = Path.Combine(games.Root, "sub");
+                Field<System.Windows.Controls.TextBox>(page, "GamesPathBox").Text = sub;
+                Call(page, "GamesPathBox_LostKeyboardFocus", null!, null!);
+                Assert.Equal(sub, cfgDir.ReadConfigFromDisk().GamesPath);
+
+                Assert.Equal("Сохранено", Field<System.Windows.Controls.TextBlock>(page, "SaveStatusText").Text);
+            });
+        }
+
+        private static void Call(object target, string method, params object[] args)
+            => target.GetType().GetMethod(method, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(target, args.Length == 0 ? null : args);
+
+        private static T Field<T>(object target, string name)
+            => (T)target.GetType().GetField(name, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(target)!;
+
         // ---- Папка для игр ----
 
         /// <summary>
