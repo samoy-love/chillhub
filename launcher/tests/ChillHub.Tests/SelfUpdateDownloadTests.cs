@@ -70,7 +70,7 @@ namespace ChillHub.Tests {
         [InlineData("launcher.version")]
         [InlineData("Uninstall.exe")]
         [InlineData("apply-update.log")]
-        [InlineData("updater/YourLauncher.Updater.exe")]
+        [InlineData("updater/ChillHub.Updater.exe")]
         public void PreserveФайлыВЗагрузкуНеПопадают(string rel) {
             using var stand = new SelfUpdateStand();
             var manifest = SelfUpdateManifest.Of(SelfUpdateManifest.Different(rel));

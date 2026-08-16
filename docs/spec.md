@@ -99,7 +99,7 @@ ChillHub избавляет от рутинной и хрупкой ручной
   - Public API (`/api/*`) + статика `/manifests/*`, `/content/*`, `/news/*` для dev — `server/cmd/api`.
   - Admin API (`/admin/api/*`, с алиасами `/admin/*`) и статика админки `server/admin_ui/*` — `server/cmd/admin`.
 - `launcher/` — C# WPF лаунчер.
-- `updater/` — отдельный exe самообновления (`YourLauncher.Updater`) и общие preserve-правила (`updater/UpdatePreserve.cs`).
+- `updater/` — отдельный exe самообновления (`ChillHub.Updater`) и общие preserve-правила (`updater/UpdatePreserve.cs`).
 - `landing/` — статический лендинг (отдается по корню `https://launcher.samoy.love/`).
 - `deploy/` — конфиги деплоя: `deploy/launcher.conf` (nginx; на сервере кладётся как `chillhub-launcher.conf`), `deploy/nginx-check.sh`, systemd unit-файлы.
 - `content/` — статика (манифесты, бинарное содержимое версий, новости и ассеты, состояние режима техработ, метрики, инбокс обратной связи).

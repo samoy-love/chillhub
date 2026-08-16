@@ -94,17 +94,17 @@ namespace ChillHub.Tests {
         public void ПолныйКомплектАпдейтераКопируетсяЦеликом() {
             using var src = new TempDir();
             using var dst = new TempDir();
-            src.WriteFile("YourLauncher.Updater.exe", "apphost");
-            src.WriteFile("YourLauncher.Updater.dll", "код");
-            src.WriteFile("YourLauncher.Updater.runtimeconfig.json", "{}");
+            src.WriteFile("ChillHub.Updater.exe", "apphost");
+            src.WriteFile("ChillHub.Updater.dll", "код");
+            src.WriteFile("ChillHub.Updater.runtimeconfig.json", "{}");
             src.WriteFile("ChillHub.exe", "не апдейтер");
 
             var missing = SelfUpdateApplier.PrepareUpdaterPayload(src.Root, dst.Root);
 
             Assert.Empty(missing);
-            Assert.True(File.Exists(dst.PathTo("YourLauncher.Updater.exe")));
-            Assert.True(File.Exists(dst.PathTo("YourLauncher.Updater.dll")));
-            Assert.True(File.Exists(dst.PathTo("YourLauncher.Updater.runtimeconfig.json")));
+            Assert.True(File.Exists(dst.PathTo("ChillHub.Updater.exe")));
+            Assert.True(File.Exists(dst.PathTo("ChillHub.Updater.dll")));
+            Assert.True(File.Exists(dst.PathTo("ChillHub.Updater.runtimeconfig.json")));
 
             // Посторонние файлы установки в копию не едут.
             Assert.False(File.Exists(dst.PathTo("ChillHub.exe")));
@@ -118,16 +118,16 @@ namespace ChillHub.Tests {
         public void ЗанятыйФайлАпдейтераПопадаетВСписокНедостающего() {
             using var src = new TempDir();
             using var dst = new TempDir();
-            src.WriteFile("YourLauncher.Updater.exe", "apphost");
-            src.WriteFile("YourLauncher.Updater.dll", "код");
+            src.WriteFile("ChillHub.Updater.exe", "apphost");
+            src.WriteFile("ChillHub.Updater.dll", "код");
 
             // Держим цель копирования открытой на запись: File.Copy туда не сможет.
             using var busy = new FileStream(
-                dst.PathTo("YourLauncher.Updater.dll"), FileMode.Create, FileAccess.Write, FileShare.None);
+                dst.PathTo("ChillHub.Updater.dll"), FileMode.Create, FileAccess.Write, FileShare.None);
 
             var missing = SelfUpdateApplier.PrepareUpdaterPayload(src.Root, dst.Root);
 
-            Assert.Contains(missing, m => m.StartsWith("YourLauncher.Updater.dll", StringComparison.Ordinal));
+            Assert.Contains(missing, m => m.StartsWith("ChillHub.Updater.dll", StringComparison.Ordinal));
         }
 
         /// <summary>
@@ -293,7 +293,7 @@ namespace ChillHub.Tests {
         [Fact]
         public void ПутьСЗавершающимСлешемНеСклеиваетАргументы() {
             var psi = SelfUpdateApplier.BuildStartInfo(
-                @"C:\temp\work\updater\YourLauncher.Updater.exe",
+                @"C:\temp\work\updater\ChillHub.Updater.exe",
                 @"C:\temp\work\updater",
                 @"C:\temp\payload",
                 @"C:\Program Files\Chill Hub\",
@@ -312,7 +312,7 @@ namespace ChillHub.Tests {
         [Fact]
         public void АпдейтерЗапускаетсяСкрытымИзСвоегоКаталога() {
             var psi = SelfUpdateApplier.BuildStartInfo(
-                @"C:\temp\work\updater\YourLauncher.Updater.exe",
+                @"C:\temp\work\updater\ChillHub.Updater.exe",
                 @"C:\temp\work\updater",
                 @"C:\temp\payload",
                 @"C:\app",
@@ -324,7 +324,7 @@ namespace ChillHub.Tests {
                 "1.2.4",
                 string.Empty);
 
-            Assert.Equal(@"C:\temp\work\updater\YourLauncher.Updater.exe", psi.FileName);
+            Assert.Equal(@"C:\temp\work\updater\ChillHub.Updater.exe", psi.FileName);
             Assert.Equal(@"C:\temp\work\updater", psi.WorkingDirectory);
             Assert.False(psi.UseShellExecute);
             Assert.True(psi.CreateNoWindow);
@@ -357,7 +357,7 @@ namespace ChillHub.Tests {
 
         private static List<string> Args(string? version, string stripPrefix, string exeArgsPath)
             => SelfUpdateApplier.BuildStartInfo(
-                @"C:\temp\work\updater\YourLauncher.Updater.exe",
+                @"C:\temp\work\updater\ChillHub.Updater.exe",
                 @"C:\temp\work\updater",
                 @"C:\temp\payload",
                 @"C:\app",
@@ -381,9 +381,9 @@ namespace ChillHub.Tests {
             Directory.CreateDirectory(payload);
             File.WriteAllText(Path.Combine(payload, "ChillHub.dll"), "новая версия");
             if (withUpdater) {
-                stand.Install.WriteFile("YourLauncher.Updater.exe", "apphost");
-                stand.Install.WriteFile("YourLauncher.Updater.dll", "код");
-                stand.Install.WriteFile("YourLauncher.Updater.runtimeconfig.json", "{}");
+                stand.Install.WriteFile("ChillHub.Updater.exe", "apphost");
+                stand.Install.WriteFile("ChillHub.Updater.dll", "код");
+                stand.Install.WriteFile("ChillHub.Updater.runtimeconfig.json", "{}");
             }
 
             return payload;

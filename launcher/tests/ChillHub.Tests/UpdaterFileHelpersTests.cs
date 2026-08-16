@@ -310,7 +310,7 @@ namespace ChillHub.Tests {
         [Fact]
         public void ПодпапкаАпдейтераУдаляетсяРекурсивно() {
             using var dir = new TempDir();
-            dir.WriteFile(PreserveMatcher.UpdaterArtifactDir + "/YourLauncher.Updater.exe", "x");
+            dir.WriteFile(PreserveMatcher.UpdaterArtifactDir + "/ChillHub.Updater.exe", "x");
             dir.WriteFile(PreserveMatcher.UpdaterArtifactDir + "/sub/deep.dll", "y");
 
             global::Program.CleanupUpdaterArtifacts(dir.Root, _ => { });
@@ -374,7 +374,7 @@ namespace ChillHub.Tests {
         [Fact]
         public void АртефактТолькоДляЧтенияВнутриПапкиНеМешаетУборке() {
             using var dir = new TempDir();
-            var inner = dir.WriteFile(PreserveMatcher.UpdaterArtifactDir + "/sub/YourLauncher.Updater.exe", "x");
+            var inner = dir.WriteFile(PreserveMatcher.UpdaterArtifactDir + "/sub/ChillHub.Updater.exe", "x");
             dir.WriteFile(PreserveMatcher.UpdaterArtifactDir + "/обычный.dll", "y");
             File.SetAttributes(inner, FileAttributes.ReadOnly);
 
