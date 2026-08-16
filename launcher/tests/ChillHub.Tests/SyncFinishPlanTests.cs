@@ -110,6 +110,27 @@ namespace ChillHub.Tests {
             Assert.True(Directory.Exists(dir.PathTo("FreeTP")), "папка FreeTP удалена уборкой");
         }
 
+        /// <summary>
+        /// FreeTP/.hash не удаляется, даже если он каким-то образом попал в ToDelete.
+        /// <para>
+        /// Планировщик его отфильтровывает, но здесь стоит вторая проверка: без этого
+        /// файла пиратская сборка открывает сайт FreeTP.Org при каждом запуске игры,
+        /// а удаление необратимо. Тест закрепляет именно рубеж на удалении.
+        /// </para>
+        /// </summary>
+        [Theory]
+        [InlineData("FreeTP/.hash")]
+        [InlineData("freetp/.hash")]
+        [InlineData("FreeTP\\.hash")]
+        public void ХешFreeTpНеУдаляетсяДажеИзПлана(string rel) {
+            using var dir = new TempDir();
+            dir.WriteFile("FreeTP/.hash", "не трогать");
+
+            Finish(NewPlan(dir.Root, toDelete: new[] { rel }));
+
+            Assert.True(File.Exists(dir.PathTo("FreeTP/.hash")), "FreeTP/.hash удалён при обновлении");
+        }
+
         /// <summary>Пустые каталоги из манифеста создаются, даже если их не было.</summary>
         [Fact]
         public void ПустыеКаталогиИзМанифестаСоздаются() {
