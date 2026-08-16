@@ -10,7 +10,7 @@ namespace ChillHub.Core.UI {
     using System.Windows.Media;
 
     /// <summary>
-    /// Статус игры словом: «Готова», «Обновление», «Не установлена» — вход: сам <see cref="GameInfo"/>.
+    /// Статус игры словом: «Установлена», «Обновление», «Не установлена» — вход: сам <see cref="GameInfo"/>.
     /// <para>
     /// Раньше статус в строке списка рисовался иконкой, а расшифровка иконок стояла отдельной
     /// легендой из трёх строк, прибитой к низу сайдбара навсегда. Слово читается сразу и
@@ -30,7 +30,7 @@ namespace ChillHub.Core.UI {
                 return "Обновление";
             }
 
-            return game.IsInstalled ? "Готова" : "Не установлена";
+            return game.IsInstalled ? "Установлена" : "Не установлена";
         }
 
         /// <inheritdoc/>
@@ -49,7 +49,7 @@ namespace ChillHub.Core.UI {
     public class GameStatusBrushConverter : IValueConverter {
         private static readonly SolidColorBrush Ready = Freeze("#57C98A");
         private static readonly SolidColorBrush Update = Freeze("#E0A64B");
-        private static readonly SolidColorBrush Absent = Freeze("#6E6E80");
+        private static readonly SolidColorBrush Absent = Freeze("#80809A");
 
         /// <inheritdoc/>
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture) {

@@ -32,7 +32,15 @@ namespace ChillHub.Core.Home {
             return $"{bytes} Б";
         }
 
-        /// <summary>Формат оставшегося времени: «[N дней ][HH:]MM:SS».</summary>
+        /// <summary>
+        /// Формат оставшегося времени словами: «40 с», «13 мин», «1 ч 05 мин», «2 дня 3 ч».
+        /// <para>
+        /// Раньше было «13:22» — часы это или минуты, читатель угадывал по контексту, а
+        /// секунды в оценке, которая и так прыгает на ±минуту, только дёргались. Точность
+        /// шага: до минуты — секунды, до часа — минуты, до суток — часы и минуты, дальше — дни
+        /// и часы; такую оценку читают, а не сверяют с часами.
+        /// </para>
+        /// </summary>
         internal static string FormatEta(double seconds) {
             // Единственный источник исключений здесь — переполнение TimeSpan на абсурдных значениях;
             // в этом случае показываем прочерк, а не ломаем строку прогресса.
@@ -44,19 +52,22 @@ namespace ChillHub.Core.Home {
                 var total = Math.Max(0, (long)Math.Ceiling(seconds));
                 var ts = TimeSpan.FromSeconds(total);
 
-                // С префиксом дней, если >= 1 суток
                 if (ts.TotalDays >= 1) {
                     int days = ts.Days;
-                    string dayWord = PluralizeDayRu(days);
-                    return $"{days} {dayWord} {ts.Hours:00}:{ts.Minutes:00}:{ts.Seconds:00}";
+                    return ts.Hours > 0
+                        ? $"{days} {PluralizeDayRu(days)} {ts.Hours} ч"
+                        : $"{days} {PluralizeDayRu(days)}";
                 }
 
-                // Если часов 1+ — HH:MM:SS, иначе MM:SS
                 if (ts.TotalHours >= 1) {
-                    return $"{(int)ts.TotalHours:00}:{ts.Minutes:00}:{ts.Seconds:00}";
+                    return $"{(int)ts.TotalHours} ч {ts.Minutes:00} мин";
                 }
 
-                return $"{ts.Minutes:00}:{ts.Seconds:00}";
+                if (ts.TotalMinutes >= 1) {
+                    return $"{(int)Math.Ceiling(ts.TotalMinutes)} мин";
+                }
+
+                return $"{ts.Seconds} с";
             }
             catch (Exception ex) {
                 Logging.Logger.Warn($"HomeFormat.FormatEta: не удалось отформатировать {seconds} с: {ex.Message}");

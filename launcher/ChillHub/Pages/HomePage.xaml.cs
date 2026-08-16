@@ -1466,14 +1466,21 @@ namespace ChillHub.Pages {
                 if (g == null) {
                     status = string.Empty;
                 }
+                else if (!string.IsNullOrEmpty(g.QueueLabel)) {
+                    // Игра в очереди: бейдж говорит «Скачивание · 5%» / «В очереди», а не
+                    // «Требуется обновление» — иначе на одном экране про одну игру стояли
+                    // три разных состояния: в списке качается, в витрине требует, кнопка отменяет.
+                    status = g.QueueLabel;
+                }
                 else if (!this.verified.IsKnown(g.GameId)) {
                     status = "Проверка…";
                 }
                 else if (g.NeedsUpdate) {
-                    status = "Требуется обновление";
+                    // Те же слова, что на странице игры: одно состояние — одно имя
+                    status = "Доступно обновление";
                 }
                 else if (g.IsInstalled) {
-                    status = "Установлена последняя версия";
+                    status = "Установлена";
                 }
                 else {
                     status = "Не установлена";
@@ -1513,9 +1520,6 @@ namespace ChillHub.Pages {
         /// </summary>
         internal bool HasActiveDownloads => this.queueDockItems.Count > 0;
 
-        /// <summary>Перечитывает список игр и заново проверяет их статусы — пункт «Проверить обновления».</summary>
-        internal void RefreshGamesAndStatuses() => this.RefreshGames_Click(this, new RoutedEventArgs());
-
         /// <summary>
         /// Строка под названием в витрине: версия, куда обновляемся, и сколько наиграно.
         /// Пустая, если про игру нечего сказать — пустых разделителей в ней не остаётся.
@@ -1529,15 +1533,8 @@ namespace ChillHub.Pages {
             var installed = (g.InstalledVersion ?? string.Empty).Trim();
             var latest = (g.LatestVersion ?? string.Empty).Trim();
 
-            if (g.IsInstalled && installed.Length > 0) {
-                parts.Add(g.NeedsUpdate && latest.Length > 0 && latest != installed
-                    ? $"{installed} → {latest}"
-                    : installed);
-            }
-            else if (latest.Length > 0) {
-                parts.Add(latest);
-            }
-
+            // Сначала наигранное, потом версия: игроку интересно первое, номер сборки —
+            // справочная мелочь, и на первом месте он читался как главное о игре.
             try {
                 var playtime = Core.Game.PlaytimeStore.Get(g.GameId);
                 if (playtime.TotalSeconds > 0) {
@@ -1547,6 +1544,15 @@ namespace ChillHub.Pages {
             catch (Exception ex) {
                 // Наигранное — приятная мелочь, а не причина оставить витрину без строки
                 Core.Logging.Logger.Warn($"BuildHeroMeta playtime gid={g.GameId}: {ex.Message}");
+            }
+
+            if (g.IsInstalled && installed.Length > 0) {
+                parts.Add(g.NeedsUpdate && latest.Length > 0 && latest != installed
+                    ? $"версия {installed} → {latest}"
+                    : $"версия {installed}");
+            }
+            else if (latest.Length > 0) {
+                parts.Add($"версия {latest}");
             }
 
             return string.Join(" · ", parts);

@@ -38,8 +38,22 @@ namespace ChillHub.Core {
         public bool SendUsageMetrics { get; set; } = true;
 
         // Сворачивать окно в трей вместо закрытия по крестику/Alt+F4. По умолчанию true —
-        // полностью выйти можно через пункт «Выйти полностью» в меню значка в трее.
+        // полностью выйти можно через пункт «Выход» в меню значка в трее.
         public bool MinimizeToTray { get; set; } = true;
+
+        // Подсказка «лаунчер продолжает работать в трее» уже показана. Показываем её один
+        // раз за всё время, а не за сессию: тот, кто раз прочитал, второй раз не хочет.
+        public bool TrayHintShown { get; set; }
+
+        // Размер окна, который пользователь выставил сам. 0 — не трогал: тогда окно
+        // открывается минимального размера (см. MainWindow.MinWidth/MinHeight), а не
+        // произвольными 1180×760, которые на ноутбуке уходили за край экрана.
+        // Развёрнутое окно запоминается как WindowMaximized, а не размерами.
+        public double WindowWidth { get; set; }
+
+        public double WindowHeight { get; set; }
+
+        public bool WindowMaximized { get; set; }
 
         public static string DefaultGamesPath() {
             if (Directory.Exists(@"D:\")) {

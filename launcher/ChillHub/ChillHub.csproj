@@ -26,7 +26,7 @@
       Релиз по-прежнему штампует версию явно (-p:Version), а расхождение с этим
       числом валит сборку установщика — тихо протухнуть оно не может.
     -->
-    <Version>1.5.15</Version>
+    <Version>1.5.16</Version>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Markdig" Version="1.3.2" />

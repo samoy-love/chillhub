@@ -51,6 +51,34 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// Пока игра ставится, страница показывает это и чипом состояния, и кнопкой:
+        /// «Устанавливается» + «Отмена». Раньше чип держал «Состояние неизвестно», если
+        /// страницу открыли посреди закачки, а кнопка была той же заливкой, что «Установить».
+        /// </summary>
+        [Fact]
+        public void ЗанятаяСтраницаПоказываетСостояниеИКраснуюОтмену() {
+            using var cfgDir = new ConfigDirsScope();
+            UiThread.Run(() => {
+                var page = NewPage(new GameInfo { GameId = "probe-game", LatestVersion = "1.2.0", IsInstalled = false });
+                var actionBtn = (Button)typeof(GamePage).GetField("ActionBtn", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(page)!;
+                var stateText = (TextBlock)typeof(GamePage).GetField("StateText", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(page)!;
+                var setBusy = typeof(GamePage).GetMethod("SetBusy", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+                setBusy.Invoke(page, new object[] { true });
+                Assert.Equal("Отмена", actionBtn.Content);
+                Assert.Equal("Устанавливается", stateText.Text);
+                Assert.True(actionBtn.IsEnabled);
+
+                var busyLook = typeof(GamePage).GetMethod("ApplyBusyLook", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                busyLook.Invoke(page, new object[] { true });
+                Assert.Equal("Ждёт очереди", stateText.Text);
+
+                setBusy.Invoke(page, new object[] { false });
+                Assert.True(actionBtn.IsEnabled);
+            });
+        }
+
+        /// <summary>
         /// B2: кнопка действия должна вернуться в норму по окончании техработ.
         /// <para>
         /// Раньше на изменение режима работ звался только <c>ApplyMaintenanceToButtons</c>,

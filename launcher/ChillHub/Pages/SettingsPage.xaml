@@ -6,11 +6,40 @@
   <!-- Локальной подмены Brush.Accent здесь больше нет: страница перекрашивала акцент
        в другой оттенок, и слайдеры с чекбоксами настроек отличались по цвету от всего
        остального приложения. -->
+  <Page.Resources>
+    <!-- Заголовок раздела: 14/SemiBold, чуть крупнее подписи, ощутимо мельче заголовка страницы -->
+    <Style x:Key="Style.SettingsSection" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="14"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Foreground" Value="{DynamicResource Brush.Title}"/>
+      <Setter Property="Margin" Value="0,0,0,10"/>
+    </Style>
+    <Style x:Key="Style.SettingsLabel" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="FontSize" Value="13"/>
+    </Style>
+    <Style x:Key="Style.SettingsHint" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Margin" Value="26,4,0,0"/>
+    </Style>
+    <!-- Узкое числовое поле рядом с ползунком: точное значение проще набрать, чем поймать
+         бегунком; ползунок остаётся для «примерно». -->
+    <Style x:Key="Style.SettingsNumberBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+      <Setter Property="Width" Value="64"/>
+      <Setter Property="MinHeight" Value="32"/>
+      <Setter Property="Margin" Value="12,0,0,0"/>
+      <Setter Property="TextAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+  </Page.Resources>
+
   <Grid Margin="16">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="*"/>
-      <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
 
     <!-- Header -->
@@ -20,141 +49,137 @@
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="Auto"/>
         <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
       </Grid.ColumnDefinitions>
       <Button Grid.Column="0" Name="BackBtn" Style="{DynamicResource Style.Button.Back}" Click="BackBtn_Click"/>
-      <TextBlock Grid.Column="1" Text="Настройки" Style="{DynamicResource Style.PageTitle}" Margin="16,0,0,0"/>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+        <TextBlock Text="Настройки" Style="{DynamicResource Style.PageTitle}" Margin="16,0,0,0"/>
+        <!-- Настройки применяются сразу, кнопки «Сохранить» нет. Подтверждение записи —
+             короткая подпись рядом с заголовком, которая сама гаснет. Модель «поменял →
+             не забудь нажать Сохранить» теряла правки тем, кто уходил кнопкой «Назад». -->
+        <TextBlock Name="SaveStatusText" Text="" FontSize="12" VerticalAlignment="Center"
+                   Foreground="{DynamicResource Brush.Success}" Opacity="0" Margin="14,2,0,0"/>
+      </StackPanel>
     </Grid>
 
     <!-- Content. Обёрнуто в ScrollViewer: на невысоком окне карточки не влезают
          по вертикали — без прокрутки «Конфиденциальность» и всё, что ниже,
          просто обрезалось по низу страницы. -->
     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-    <StackPanel Orientation="Vertical" VerticalAlignment="Top">
-      <!-- Thin divider under header -->
-      <Border Height="1" Background="{DynamicResource Brush.Border}" Margin="0,0,0,14"/>
+    <StackPanel Orientation="Vertical" VerticalAlignment="Top" Margin="0,0,8,0">
       <!-- Storage section -->
-      <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,0,0,14">
-        <Grid>
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-          </Grid.RowDefinitions>
-          <TextBlock Text="Папка для установки игр" FontWeight="SemiBold"/>
-          <Grid Grid.Row="1" Margin="0,8,0,0">
+      <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
+        <StackPanel>
+          <TextBlock Text="Папка для установки игр" Style="{StaticResource Style.SettingsSection}"/>
+          <Grid>
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="160"/>
               <ColumnDefinition Width="*"/>
               <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <TextBlock Text="Путь" Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center"/>
-            <TextBox Grid.Column="1" Name="GamesPathBox" Margin="12,0,12,0" MinHeight="32"/>
-            <Button Grid.Column="2" Name="ChooseBtn" Content="Выбрать" Click="ChooseBtn_Click" Padding="12,8" MinHeight="36" MinWidth="110"/>
+            <TextBlock Text="Путь" Style="{StaticResource Style.SettingsLabel}"/>
+            <!-- Путь применяется по уходу фокуса или Enter, а не на каждую букву:
+                 сохранение создаёт папку, и набор пути посимвольно наплодил бы каталогов. -->
+            <TextBox Grid.Column="1" Name="GamesPathBox" Margin="12,0,12,0" MinHeight="32" VerticalContentAlignment="Center"
+                     LostKeyboardFocus="GamesPathBox_LostKeyboardFocus" KeyDown="GamesPathBox_KeyDown"/>
+            <Button Grid.Column="2" Name="ChooseBtn" Content="Выбрать" Click="ChooseBtn_Click" Padding="12,0" MinHeight="32" MinWidth="110" Margin="0"/>
           </Grid>
-        </Grid>
+        </StackPanel>
       </Border>
 
       <!-- Download section. Потоки и лимит скорости живут в одной карточке: обе
            настройки правят одну и ту же закачку, и разносить их по двум блокам
            значило заставлять читателя искать вторую половину одного решения. -->
-      <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,0,0,14">
-        <Grid>
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-          </Grid.RowDefinitions>
-          <TextBlock Text="Скачивание" FontWeight="SemiBold"/>
-          <Grid Grid.Row="1" Margin="0,8,0,0">
+      <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
+        <StackPanel>
+          <TextBlock Text="Скачивание" Style="{StaticResource Style.SettingsSection}"/>
+          <Grid>
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="160"/>
               <ColumnDefinition Width="Auto"/>
               <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
-            <TextBlock Text="Потоки" Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center"/>
-            <Slider Grid.Column="1" Name="ThreadsSlider" Minimum="2" Maximum="16" Width="260" Margin="12,0,10,0"
+            <TextBlock Text="Потоки" Style="{StaticResource Style.SettingsLabel}"/>
+            <Slider Grid.Column="1" Name="ThreadsSlider" Minimum="2" Maximum="16" Width="260" Margin="12,0,0,0"
                     TickFrequency="1" IsSnapToTickEnabled="true" ValueChanged="ThreadsSlider_ValueChanged"/>
-            <TextBlock Grid.Column="2" Name="ThreadsValueText" Text="8" VerticalAlignment="Center" Margin="8,0,0,0"/>
+            <TextBox Grid.Column="2" Name="ThreadsBox" Style="{StaticResource Style.SettingsNumberBox}"
+                     LostKeyboardFocus="ThreadsBox_LostKeyboardFocus" KeyDown="NumberBox_KeyDown"/>
+            <TextBlock Grid.Column="3" Text="от 2 до 16" Style="{StaticResource Style.SettingsLabel}" Margin="12,0,0,0"
+                       Foreground="{DynamicResource Brush.TextMuted}"/>
           </Grid>
-          <Grid Grid.Row="2" Margin="0,10,0,0">
+          <!-- Лимит скорости — тумблер плюс значение, а не ползунок с нулём в роли
+               «без лимита»: ноль слева, означающий «максимум», читался наоборот. -->
+          <Grid Margin="0,14,0,0">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="160"/>
               <ColumnDefinition Width="Auto"/>
               <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
-            <TextBlock Text="Скорость загрузки" Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center"/>
-            <Slider Grid.Column="1" Name="SpeedLimitSlider" Minimum="0" Maximum="10" Width="260" Margin="12,0,10,0"
-                    TickFrequency="1" IsSnapToTickEnabled="true" ValueChanged="SpeedLimitSlider_ValueChanged"/>
-            <TextBlock Grid.Column="2" Name="SpeedLimitValueText" Text="без лимита" VerticalAlignment="Center" Margin="8,0,0,0"/>
+            <TextBlock Text="Скорость загрузки" Style="{StaticResource Style.SettingsLabel}"/>
+            <CheckBox Grid.Column="1" Name="SpeedLimitCheck" Content="Ограничить" Margin="12,0,0,0" VerticalAlignment="Center"
+                      Click="SpeedLimitCheck_Click"/>
+            <TextBox Grid.Column="2" Name="SpeedLimitBox" Style="{StaticResource Style.SettingsNumberBox}"
+                     IsEnabled="{Binding IsChecked, ElementName=SpeedLimitCheck}"
+                     LostKeyboardFocus="SpeedLimitBox_LostKeyboardFocus" KeyDown="NumberBox_KeyDown"/>
+            <TextBlock Grid.Column="3" Text="МБ/с, от 1 до 10" Style="{StaticResource Style.SettingsLabel}" Margin="8,0,0,0"/>
+            <TextBlock Grid.Column="4" Name="SpeedLimitValueText" Text="без лимита" Style="{StaticResource Style.SettingsLabel}" Margin="16,0,0,0"
+                       Foreground="{DynamicResource Brush.TextMuted}"/>
           </Grid>
-        </Grid>
+        </StackPanel>
       </Border>
 
       <!-- Privacy section -->
-      <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,0,0,14">
-        <Grid>
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-          </Grid.RowDefinitions>
-          <TextBlock Text="Конфиденциальность" FontWeight="SemiBold"/>
-          <StackPanel Grid.Row="1" Orientation="Vertical" Margin="0,8,0,0">
-            <CheckBox Name="AutoErrorReportsCheck" Content="Отправлять автоматические отчёты об ошибках"/>
-            <TextBlock Text="Включает отправку необработанных исключений вместе с логами и конфигурацией. Пути сокращаются, имя пользователя и имя компьютера не передаются. Ручная отправка обратной связи работает всегда."
-                       Foreground="{DynamicResource Brush.TextSecondary}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-            <CheckBox Name="UsageMetricsCheck" Content="Отправлять обезличенную статистику использования" Margin="0,12,0,0"/>
-            <TextBlock Text="Запуски лаунчера, установки и обновления игр, коды ошибок. Без имени пользователя, имени компьютера и путей."
-                       Foreground="{DynamicResource Brush.TextSecondary}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-          </StackPanel>
-        </Grid>
+      <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
+        <StackPanel>
+          <TextBlock Text="Конфиденциальность" Style="{StaticResource Style.SettingsSection}"/>
+          <CheckBox Name="AutoErrorReportsCheck" Content="Отправлять автоматические отчёты об ошибках" Click="Toggle_Click"/>
+          <TextBlock Text="Включает отправку необработанных исключений вместе с логами и конфигурацией. Пути сокращаются, имя пользователя и имя компьютера не передаются. Ручная отправка обратной связи работает всегда."
+                     Style="{StaticResource Style.SettingsHint}"/>
+          <CheckBox Name="UsageMetricsCheck" Content="Отправлять обезличенную статистику использования" Margin="0,14,0,0" Click="Toggle_Click"/>
+          <TextBlock Text="Запуски лаунчера, установки и обновления игр, коды ошибок. Без имени пользователя, имени компьютера и путей."
+                     Style="{StaticResource Style.SettingsHint}"/>
+        </StackPanel>
       </Border>
 
       <!-- Tray section -->
-      <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,0,0,14">
-        <Grid>
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-          </Grid.RowDefinitions>
-          <TextBlock Text="Трей" FontWeight="SemiBold"/>
-          <StackPanel Grid.Row="1" Orientation="Vertical" Margin="0,8,0,0">
-            <CheckBox Name="MinimizeToTrayCheck" Content="Сворачивать в трей вместо закрытия"/>
-            <TextBlock Text="Крестик и Alt+F4 будут прятать окно в трей вместо выхода. Полностью завершить работу лаунчера можно из меню значка в трее."
-                       Foreground="{DynamicResource Brush.TextSecondary}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-          </StackPanel>
-        </Grid>
+      <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
+        <StackPanel>
+          <TextBlock Text="Окно" Style="{StaticResource Style.SettingsSection}"/>
+          <CheckBox Name="MinimizeToTrayCheck" Content="Сворачивать в трей вместо закрытия" Click="Toggle_Click"/>
+          <TextBlock Text="Крестик и Alt+F4 будут прятать окно в трей вместо выхода. Полностью завершить работу лаунчера можно из меню значка в трее."
+                     Style="{StaticResource Style.SettingsHint}"/>
+        </StackPanel>
       </Border>
 
       <!-- About / diagnostics section -->
-      <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,0,0,6">
-        <Grid>
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-          </Grid.RowDefinitions>
-          <TextBlock Text="О программе" FontWeight="SemiBold"/>
-          <Grid Grid.Row="1" Margin="0,8,0,0">
+      <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,6">
+        <StackPanel>
+          <TextBlock Text="О программе" Style="{StaticResource Style.SettingsSection}"/>
+          <Grid>
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="160"/>
+              <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="Auto"/>
               <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
-            <TextBlock Text="Версия лаунчера" Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center"/>
+            <TextBlock Text="Версия лаунчера" Style="{StaticResource Style.SettingsLabel}"/>
             <TextBlock Grid.Column="1" Name="VersionText" Text="—" Margin="12,0,0,0" VerticalAlignment="Center"/>
+            <!-- Номер версии сам по себе ничего не предлагает; рядом с ним ждут кнопку
+                 «проверить». Фоновая проверка молчит, когда всё актуально, — эта отвечает. -->
+            <Button Grid.Column="2" Name="CheckUpdateBtn" Content="Проверить обновления" Click="CheckUpdateBtn_Click"
+                    Style="{DynamicResource Style.Button.GhostNeutral}" MinHeight="32" MinWidth="180" Margin="16,0,0,0"/>
+            <TextBlock Grid.Column="3" Name="CheckUpdateStatus" Text="" Style="{StaticResource Style.SettingsLabel}" Margin="12,0,0,0"
+                       TextTrimming="CharacterEllipsis"/>
           </Grid>
-          <Button Grid.Row="2" Name="OpenLogsBtn" Content="Открыть папку с логами" Click="OpenLogsBtn_Click"
-                  HorizontalAlignment="Left" Padding="12,8" MinHeight="36" MinWidth="200" Margin="0,10,0,0"/>
-        </Grid>
+          <Button Name="OpenLogsBtn" Content="Открыть папку с логами" Click="OpenLogsBtn_Click"
+                  Style="{DynamicResource Style.Button.GhostNeutral}"
+                  HorizontalAlignment="Left" MinHeight="32" MinWidth="200" Margin="0,12,0,0"/>
+        </StackPanel>
       </Border>
     </StackPanel>
     </ScrollViewer>
-
-    <!-- Панель действия. Отделена линией и залита фоном страницы: без них список
-         настроек проезжал прямо под кнопкой «Сохранить», и та висела поверх текста. -->
-    <Border Grid.Row="2" Margin="0,12,0,0" Padding="0,12,0,0"
-            Background="{DynamicResource Brush.Background}"
-            BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,1,0,0">
-      <Button Name="SaveBtn" Content="Сохранить" HorizontalAlignment="Right"
-              Style="{DynamicResource Style.Button.Primary}" Click="SaveBtn_Click"/>
-    </Border>
   </Grid>
 </Page>

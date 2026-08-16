@@ -554,12 +554,13 @@
                  иконки, которых теперь нет. -->
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
-            <!-- Список занимает ровно столько, сколько нужно играм; когда их много,
-                 упирается в MaxHeight и прокручивается сам. Свободное место — распорка
-                 МЕЖДУ списком и подвалом: подвал (диск, обратная связь) прижат к низу
-                 карточки. Вариант «распорка под подвалом» пробовали — подвал повисал
-                 посередине сайдбара, а под ним тянулась пустая карточка. -->
-            <RowDefinition Height="Auto"/>
+            <!-- Список живёт в звёздочной строке и прижат к её верху: занимает ровно
+                 столько, сколько нужно играм, а когда высоты не хватает — сжимается и
+                 прокручивается сам. Подвал (диск, обратная связь) в строке Auto ниже
+                 получает своё место ВСЕГДА. Прежняя пара «Auto с MaxHeight + распорка *»
+                 при появлении очереди загрузок снизу давала строкам Auto больше, чем
+                 есть у сетки, и подвал уезжал за нижний край карточки: «Поделиться
+                 идеей» пряталась под панелью очереди. -->
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
           </Grid.RowDefinitions>
@@ -605,19 +606,10 @@
             </TextBlock>
           </Grid>
 
-          <!-- Контейнер строки списка/скелетона с тёмным фоном -->
-          <!-- MaxHeight — потолок, за которым список начинает прокручиваться сам.
-               Без него строка «Auto» растила бы сайдбар под любое число игр и
-               выдавливала подвал за пределы окна. Фиксированные 560px не давали
-               списку сжаться на невысоком окне: подвал с кнопкой «Поделиться
-               идеей» вылезал за пределы карточки и пряталась за очередью загрузок
-               снизу. Доля высоты окна, как у витрины и очереди, — на невысоком
-               окне список сам уступает место шапке, поиску и подвалу и включает
-               собственный скролл. -->
-          <Grid Grid.Row="2"
-                MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=Page},
-                                    Converter={StaticResource HeightShareConv}, ConverterParameter=0.45}"
-                Background="{DynamicResource Brush.Surface}">
+          <!-- Контейнер строки списка/скелетона с тёмным фоном. VerticalAlignment=Top:
+               строка сетки звёздочная, а список — по содержимому, чтобы при трёх играх
+               не растягивать пустой ListBox до подвала. -->
+          <Grid Grid.Row="2" VerticalAlignment="Top" Background="{DynamicResource Brush.Surface}">
             <!-- Skeleton loader для списка игр -->
             <StackPanel Name="GamesSkeleton" Margin="{StaticResource Skeleton.GameTopOffsetThickness}">
               <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.GameRowHeight}"/>
@@ -699,7 +691,11 @@
                         <MenuItem Header="Подробнее об игре" Click="GameDetails_Click" CommandParameter="{Binding}"/>
                         <MenuItem Header="Добавить в очередь загрузок" Click="EnqueueGame_Click" CommandParameter="{Binding}"/>
                         <MenuItem Header="Открыть расположение игры" Click="OpenGameFolder_Click" CommandParameter="{Binding}"/>
-                        <MenuItem Header="Удалить локальные файлы" Click="DeleteGame_Click" CommandParameter="{Binding}"/>
+                        <!-- Удаление отделено чертой и покрашено: в столбце одинаковых строк
+                             оно стояло сразу под «Открыть расположение» и ловило промахи. -->
+                        <Separator/>
+                        <MenuItem Header="Удалить локальные файлы" Click="DeleteGame_Click" CommandParameter="{Binding}"
+                                  Style="{DynamicResource Style.MenuItem.Danger}"/>
                       </ContextMenu>
                     </Border.ContextMenu>
                     <!-- Grow row height while skeleton is visible -->
@@ -792,7 +788,7 @@
 
           <!-- Подвал сайдбара: свободное место и кнопка обратной связи. Место на диске здесь,
                а не под прогрессом: это свойство машины, а не текущей закачки. -->
-          <StackPanel Grid.Row="4" Margin="0,10,0,0">
+          <StackPanel Grid.Row="3" Margin="0,10,0,0">
             <Border Height="1" Background="{DynamicResource Brush.Border}" Margin="0,0,0,8"/>
             <TextBlock x:Name="DiskFreeText" Text="" FontSize="11" TextWrapping="NoWrap"
                        TextTrimming="CharacterEllipsis"
@@ -878,7 +874,10 @@
                  не-Stretch выравниванием и отрицательным Margin разметка ужимала картинку в
                  поле Grid без учёта Margin — на маленьком окне обложка стояла в рамке 16px
                  внутри витрины. Прямоугольник тянется по слоту, а кадрирование делает кисть. -->
-            <Rectangle x:Name="HeroCoverImg" Grid.Row="0" Grid.RowSpan="2" Opacity="0.5" Visibility="Collapsed"
+            <!-- Opacity 0.75, а не 0.5: половинная прозрачность плюс два слоя затемнения
+                 сверху гасили обложку до серого пятна. Читаемость текста держат сами
+                 затемнения (Brush.HeroScrim/HeroScrimSide), а не глушение всей картинки. -->
+            <Rectangle x:Name="HeroCoverImg" Grid.Row="0" Grid.RowSpan="2" Opacity="0.75" Visibility="Collapsed"
                        HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="-16">
               <Rectangle.Fill>
                 <ImageBrush x:Name="HeroCoverBrush" Stretch="UniformToFill" AlignmentX="Center" AlignmentY="Bottom"/>
@@ -933,13 +932,13 @@
                         Width="180" Height="42" VerticalAlignment="Center"/>
                 <Button x:Name="HeroInfoBtn" Click="GameDetails_Click"
                         Style="{DynamicResource Style.Button.HeroInfo}"
-                        Margin="8,0,0,0" VerticalAlignment="Center" ToolTip="Подробнее об игре">
-                  <!-- Тот же набор MDL2, что и у остальных значков: символ ⓘ из Segoe UI
-                       Symbol был тоньше и меньше соседей и выглядел чужим. -->
-                  <!-- Отступ сверху и слева — компенсация боковых свесов глифа: рисунок
-                       занимает 15 из 16 пикселей кегля и прижат к левому верхнему углу,
-                       поэтому по центру круга встаёт не он, а его знакоместо. -->
-                  <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE946;" FontSize="16" Margin="1,1,0,0"/>
+                        Margin="8,0,0,0" VerticalAlignment="Center" ToolTip="Сведения, история изменений, папка игры">
+                  <!-- Подпись, а не одинокая ⓘ: кнопка ведёт на отдельный экран, и слово
+                       говорит об этом, а значок в кружке читался как всплывающая подсказка. -->
+                  <StackPanel Orientation="Horizontal">
+                    <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE946;" FontSize="14" Margin="0,1,8,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="Об игре" VerticalAlignment="Center"/>
+                  </StackPanel>
                 </Button>
               </StackPanel>
             </StackPanel>
@@ -957,8 +956,8 @@
                  стояла в полутора тысячах пикселей от вкладок и читалась как «обновить всё»,
                  а не как действие над лентой. Раньше у каждой ленты была своя кнопка на
                  отдельной строке под вкладками — 32px высоты на одинокий значок. -->
-            <Button Width="24" Height="24" Padding="0" Margin="14,0,0,8" VerticalAlignment="Center"
-                    Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Brush.TextSecondary}"
+            <Button Width="28" Height="28" Margin="10,0,0,6" VerticalAlignment="Center"
+                    Style="{DynamicResource Style.Button.QueueIcon}"
                     ToolTip="Обновить ленту" Click="RefreshActiveNews_Click">
               <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Center"/>
             </Button>
@@ -990,7 +989,7 @@
                        FontSize="12" Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,4,0,0"/>
           </StackPanel>
           <ListBox Name="GameNewsList" SelectionChanged="GameNewsList_SelectionChanged" Visibility="Collapsed" Padding="0" Margin="-4,-4,0,0"
-                 ScrollViewer.VerticalScrollBarVisibility="Visible"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                  ScrollViewer.CanContentScroll="False"
                  HorizontalContentAlignment="Stretch" VerticalAlignment="Stretch">
@@ -1082,7 +1081,7 @@
             <Border Style="{DynamicResource Style.Skeleton}" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
           </StackPanel>
           <ListBox Grid.Row="0" Name="LauncherNewsList" SelectionChanged="LauncherNewsList_SelectionChanged" Visibility="Collapsed" Padding="0" Margin="-4,-4,0,0"
-                 ScrollViewer.VerticalScrollBarVisibility="Visible"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                  ScrollViewer.CanContentScroll="False"
                  HorizontalContentAlignment="Stretch" VerticalAlignment="Stretch">
@@ -1289,24 +1288,26 @@
                            ничего не делает, читается как сломанная. -->
                       <StackPanel Grid.Row="0" Grid.RowSpan="2" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
                                   Visibility="{Binding State, Converter={StaticResource QueueItemStateVisibilityConv}, ConverterParameter=Waiting}">
-                        <Button Width="26" Height="26" Padding="0" Margin="0,0,2,0"
+                        <!-- 32px, а не 26: кнопки в очереди — самые мелкие цели в приложении,
+                             и в них промахивались. Значок остался мелким, выросла зона клика. -->
+                        <Button Width="32" Height="32" Padding="0" Margin="0,0,2,0"
                                 ToolTip="Поднять в очереди. Если выше идёт закачка — начать эту вместо неё"
                                 IsEnabled="{Binding CanMoveUp}"
-                                Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Brush.TextSecondary}"
+                                Style="{StaticResource Style.Button.QueueIcon}"
                                 Click="MoveQueueItemUp_Click" CommandParameter="{Binding}">
                           <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE70E;" FontSize="12" HorizontalAlignment="Center"/>
                         </Button>
-                        <Button Width="26" Height="26" Padding="0" ToolTip="Опустить в очереди"
+                        <Button Width="32" Height="32" Padding="0" ToolTip="Опустить в очереди"
                                 IsEnabled="{Binding CanMoveDown}"
-                                Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Brush.TextSecondary}"
+                                Style="{StaticResource Style.Button.QueueIcon}"
                                 Click="MoveQueueItemDown_Click" CommandParameter="{Binding}">
                           <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE70D;" FontSize="12" HorizontalAlignment="Center"/>
                         </Button>
                       </StackPanel>
 
-                      <Button Grid.Row="0" Grid.RowSpan="2" Grid.Column="3" Width="26" Height="26" Padding="0"
+                      <Button Grid.Row="0" Grid.RowSpan="2" Grid.Column="3" Width="32" Height="32" Padding="0"
                               Margin="6,0,0,0" VerticalAlignment="Center" ToolTip="Снять с очереди"
-                              Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Brush.TextSecondary}"
+                              Style="{StaticResource Style.Button.QueueIcon.Danger}"
                               Click="CancelQueueItem_Click" CommandParameter="{Binding}">
                         <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE711;" FontSize="12" HorizontalAlignment="Center"/>
                       </Button>
@@ -1346,7 +1347,7 @@
               Visibility="Collapsed"
               Background="{DynamicResource Brush.Surface}"
               BorderBrush="{DynamicResource Brush.Border}"
-              BorderThickness="1.5"
+              BorderThickness="1"
               CornerRadius="8"
               Padding="12"
               Effect="{x:Null}">
@@ -1364,7 +1365,7 @@
       <!-- Content card (sharp text). VerticalAlignment=Stretch + Margin caps the card to the
            window height instead of Center's unbounded height, which is what let the message
            field run off the bottom of the screen on smaller windows. -->
-      <Border Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderHover}" BorderThickness="1.5" CornerRadius="10"
+      <Border Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderHover}" BorderThickness="1" CornerRadius="10"
               Padding="20" Width="720" HorizontalAlignment="Center" VerticalAlignment="Stretch" Margin="0,40,0,40"
               SnapsToDevicePixels="True" UseLayoutRounding="True"
               TextOptions.TextRenderingMode="ClearType" TextOptions.TextFormattingMode="Display"
@@ -1449,9 +1450,11 @@
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
-            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12" VerticalAlignment="Center">
-              <TextBlock Text="Тип:" Margin="0,0,8,0" VerticalAlignment="Center"/>
-              <ComboBox x:Name="FbType" Width="160">
+            <!-- Подпись над полем, как у «Имя» и «Контакт» выше: строка «Тип: [▾]» была
+                 единственным полем формы с подписью слева и ломала ритм колонки. -->
+            <StackPanel Grid.Row="0" Margin="0,0,0,12">
+              <TextBlock Text="Тип" FontSize="13" Foreground="{DynamicResource Brush.TextSecondary}"/>
+              <ComboBox x:Name="FbType" Width="220" HorizontalAlignment="Left" Margin="0">
                 <ComboBoxItem Content="Баг"/>
                 <ComboBoxItem Content="Идея"/>
                 <ComboBoxItem Content="Вопрос"/>
@@ -1516,18 +1519,46 @@
               </TextBlock>
             </Grid>
           </Grid>
-          <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0" >
-            <TextBlock x:Name="FbStatus" Margin="0,0,12,0" VerticalAlignment="Center" Foreground="{DynamicResource Brush.TextSecondary}"/>
-            <Button x:Name="FbSendBtn" Content="Отправить" Click="FbSend_Click" Margin="0,0,8,0" Style="{DynamicResource Style.Button.Primary}"/>
-            <Button Content="Отмена" Width="120" Height="36" FontSize="13" FontWeight="SemiBold" Padding="12,6" Click="FbCancel_Click" Style="{DynamicResource Style.Button.GhostNeutral}"/>
-          </StackPanel>
-          <!-- Что уходит вместе с сообщением: показываем честно и даём выключить -->
-          <StackPanel Grid.Row="4" Grid.ColumnSpan="2" Margin="0,12,0,0">
+          <!-- Что уходит вместе с сообщением: показываем честно и даём выключить. Стоит
+               ВЫШЕ кнопок — решение «прикладывать ли» принимается до «Отправить», а не
+               после. Подробный перечень свёрнут за ссылкой: абзац на шесть строк
+               мелким серым под каждой формой читали единицы, а форму он удлинял всем. -->
+          <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Margin="0,14,0,0">
             <CheckBox x:Name="FbAttachDiagnostics" IsChecked="True" Click="FbAttachDiagnostics_Click"
                       Content="Приложить техническую информацию (помогает найти причину)"
                       Foreground="{DynamicResource Brush.Text}" FontSize="13"/>
-            <TextBlock x:Name="FbDiagnosticsInfo" Margin="24,6,0,0" TextWrapping="Wrap" FontSize="12"
-                       Foreground="{DynamicResource Brush.TextSecondary}"/>
+            <ToggleButton x:Name="FbDiagnosticsToggle" Margin="26,4,0,0" HorizontalAlignment="Left"
+                          Background="Transparent" BorderThickness="0" Padding="0" Cursor="Hand"
+                          Foreground="{DynamicResource Brush.TextSecondary}" FontSize="12">
+              <ToggleButton.Template>
+                <ControlTemplate TargetType="ToggleButton">
+                  <StackPanel Orientation="Horizontal" Background="Transparent">
+                    <TextBlock x:Name="chev" FontFamily="Segoe MDL2 Assets" Text="&#xE76C;" FontSize="9"
+                               VerticalAlignment="Center" Margin="0,1,6,0"
+                               Foreground="{TemplateBinding Foreground}"/>
+                    <TextBlock Text="Что именно отправится" VerticalAlignment="Center"
+                               Foreground="{TemplateBinding Foreground}"/>
+                  </StackPanel>
+                  <ControlTemplate.Triggers>
+                    <Trigger Property="IsChecked" Value="True">
+                      <Setter TargetName="chev" Property="Text" Value="&#xE70D;"/>
+                    </Trigger>
+                    <Trigger Property="IsMouseOver" Value="True">
+                      <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+                    </Trigger>
+                  </ControlTemplate.Triggers>
+                </ControlTemplate>
+              </ToggleButton.Template>
+            </ToggleButton>
+            <TextBlock x:Name="FbDiagnosticsInfo" Margin="26,6,0,0" TextWrapping="Wrap" FontSize="12"
+                       Foreground="{DynamicResource Brush.TextSecondary}"
+                       Visibility="{Binding IsChecked, ElementName=FbDiagnosticsToggle, Converter={StaticResource BoolToVisibilityConv}}"/>
+          </StackPanel>
+          <StackPanel Grid.Row="4" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0" >
+            <TextBlock x:Name="FbStatus" Margin="0,0,12,0" VerticalAlignment="Center" Foreground="{DynamicResource Brush.TextSecondary}"/>
+            <Button Content="Отмена" Width="120" Height="36" FontSize="13" FontWeight="SemiBold" Padding="12,6" Margin="0,0,8,0" Click="FbCancel_Click" Style="{DynamicResource Style.Button.GhostNeutral}"/>
+            <!-- Главная кнопка — правая, крайняя: так стоят кнопки во всех диалогах Windows -->
+            <Button x:Name="FbSendBtn" Content="Отправить" Click="FbSend_Click" Margin="0" Style="{DynamicResource Style.Button.Primary}"/>
           </StackPanel>
         </Grid>
       </Border>
