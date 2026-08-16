@@ -248,9 +248,9 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void ПодсказкаТреяПоказываетЗагрузкиИНеПревышаетЛимит() {
-            Assert.Equal("ChillHub", TrayService.BuildTip(null));
-            Assert.Equal("ChillHub", TrayService.BuildTip("  "));
-            Assert.Equal("ChillHub — 38% · ещё 2", TrayService.BuildTip("38% · ещё 2"));
+            Assert.Equal("Chill Hub", TrayService.BuildTip(null));
+            Assert.Equal("Chill Hub", TrayService.BuildTip("  "));
+            Assert.Equal("Chill Hub — 38% · ещё 2", TrayService.BuildTip("38% · ещё 2"));
 
             var longTip = TrayService.BuildTip(new string('x', 200));
             Assert.True(longTip.Length <= 63);
@@ -259,9 +259,9 @@ namespace ChillHub.Tests {
             UiThread.Run(() => {
                 using var tray = new TrayService();
                 tray.SetStatus("38%");
-                Assert.Equal("ChillHub — 38%", tray.TipText);
+                Assert.Equal("Chill Hub — 38%", tray.TipText);
                 tray.SetStatus(string.Empty);
-                Assert.Equal("ChillHub", tray.TipText);
+                Assert.Equal("Chill Hub", tray.TipText);
                 return System.Threading.Tasks.Task.CompletedTask;
             });
         }

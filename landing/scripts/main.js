@@ -1043,6 +1043,13 @@
       }
     });
 
+    // Bind for the before/after screenshot
+    const zoomBtn = document.querySelector('.compare__zoom');
+    const currentShot = document.querySelector('.compare__stage > .compare__img');
+    if(zoomBtn && currentShot){
+      zoomBtn.addEventListener('click', ()=> open(currentShot.currentSrc || currentShot.src));
+    }
+
     // Bind for the single screenshot window
     const single = document.querySelector('.screenshot-win .win-body img');
     const triggerBtn = document.querySelector('.screenshot-win .win-body');
@@ -1061,6 +1068,21 @@
         }
       });
     }
+  })();
+
+  // Before/after: бегунок двигает шов между старым и нынешним скриншотом
+  (function setupCompare(){
+    const fig = document.querySelector('.screenshot-win.compare');
+    const range = fig && fig.querySelector('.compare__range');
+    if(!fig || !range) return;
+    const apply = ()=>{
+      fig.style.setProperty('--compare-pos', range.value + '%');
+      // В узкой полосе метка «Было» не помещается и наезжает на новый кадр.
+      fig.classList.toggle('compare--narrow', Number(range.value) < 12);
+    };
+    range.addEventListener('input', apply);
+    // На старте показываем «до» узкой полосой: сравнение важнее ностальгии.
+    apply();
   })();
 
   // (removed) Gallery-specific behaviors

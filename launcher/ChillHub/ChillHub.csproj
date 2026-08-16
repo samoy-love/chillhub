@@ -7,6 +7,12 @@
     <Nullable>enable</Nullable>
     <RootNamespace>ChillHub</RootNamespace>
     <AssemblyName>ChillHub</AssemblyName>
+    <!-- Имя сборки (и exe) остаётся без пробела: по нему ходят манифесты
+         обновления и установщик. Пользователю же и в свойствах файла, и в
+         диспетчере задач показывается название продукта — оно с пробелом. -->
+    <Product>Chill Hub</Product>
+    <AssemblyTitle>Chill Hub</AssemblyTitle>
+    <Company>Chill Hub</Company>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
     <!-- Манифест приложения: longPathAware (пути длиннее 260 символов) и asInvoker. -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -26,7 +32,7 @@
       Релиз по-прежнему штампует версию явно (-p:Version), а расхождение с этим
       числом валит сборку установщика — тихо протухнуть оно не может.
     -->
-    <Version>1.5.22</Version>
+    <Version>1.5.23</Version>
 
     <!--
       ЯЗЫКИ РЕСУРСНЫХ СБОРОК РАНТАЙМА. Self-contained публикация WPF без этого

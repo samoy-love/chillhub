@@ -318,7 +318,7 @@ namespace ChillHub.Pages {
                 return;
             }
 
-            _ = this.StartSyncAsync(version, confirmDeletions: this.currentState == GameState.Installed);
+            _ = this.StartSyncAsync(version, SyncKindFor(this.currentState));
         }
 
         /// <summary>
@@ -584,8 +584,25 @@ namespace ChillHub.Pages {
             ShowUserError = this.ShowUserError,
         };
 
-        private async Task StartSyncAsync(string version, bool confirmDeletions = false) {
+        /// <summary>
+        /// Чем нажатие кнопки действия является для пользователя. У установленной и свежей
+        /// игры кнопка называется «Проверить файлы» — та же сверка с манифестом, но не
+        /// установка и не обновление, и в статистике она проходит проверкой целостности.
+        /// </summary>
+        /// <param name="state">Текущее состояние игры на диске.</param>
+        /// <returns>Вид операции для <see cref="GameSyncRequest"/>.</returns>
+        private static SyncKind SyncKindFor(GameState state) => state switch {
+            GameState.NotInstalled => SyncKind.Install,
+            GameState.Installed => SyncKind.Repair,
+            _ => SyncKind.Update,
+        };
+
+        private async Task StartSyncAsync(string version, SyncKind kind) {
             var gid = this.game.GameId;
+
+            // Спрашиваем перед удалением лишнего ровно там, где пользователь просил
+            // проверку: при установке и обновлении удалять нечего или незачем спрашивать.
+            var confirmDeletions = kind == SyncKind.Repair;
 
             // Подстраховка: работы могли начаться уже после отрисовки кнопок
             if (!this.syncRunner.TryBegin(gid, this.game.IsInstalled)) {
@@ -613,7 +630,8 @@ namespace ChillHub.Pages {
                     this.BaseApi,
                     localRoot,
                     this.game.ExeRelativePath,
-                    confirmDeletions);
+                    confirmDeletions,
+                    kind);
                 await this.syncRunner.RunAsync(request, token).ConfigureAwait(true);
             }
             finally {

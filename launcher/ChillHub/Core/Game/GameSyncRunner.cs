@@ -14,6 +14,55 @@ namespace ChillHub.Core.Game {
 
     using static ChillHub.Core.Home.HomeFormat;
 
+    /// <summary>
+    /// Чем операция является для пользователя. Технически все три случая — это один
+    /// и тот же проход «сравнить с манифестом и докачать разницу», но в статистике
+    /// они отвечают на разные вопросы, и складывать их в один счётчик нельзя:
+    /// «Проверить файлы» у давно установленной игры не событие установки.
+    /// </summary>
+    internal enum SyncKind {
+        /// <summary>Игры на диске не было.</summary>
+        Install,
+
+        /// <summary>Игра есть, но отличается от эталона (в том числе после обрыва).</summary>
+        Update,
+
+        /// <summary>Игра установлена и свежая: пользователь сам попросил сверить файлы.</summary>
+        Repair,
+    }
+
+    /// <summary>
+    /// Чем кончилась операция — всё, что об этом уходит в статистику.
+    /// <para>
+    /// Отдельный тип, а не восемь аргументов подряд: половина из них — числа одного
+    /// типа, и перепутанные местами «скачано» и «весило бы целиком» дали бы не ошибку
+    /// сборки, а тихо перевёрнутую экономию трафика в отчёте.
+    /// </para>
+    /// </summary>
+    /// <param name="Kind">Установка, обновление или проверка файлов.</param>
+    /// <param name="GameId">Идентификатор игры.</param>
+    /// <param name="Version">Версия сборки.</param>
+    /// <param name="Result">ok, fail или cancel.</param>
+    /// <param name="DurationMs">Сколько ждал пользователь — от нажатия кнопки, а не от начала закачки.</param>
+    /// <param name="Bytes">Сколько байт операция собиралась скачать.</param>
+    /// <param name="FilesDownloaded">Сколько файлов операция собиралась скачать.</param>
+    /// <param name="FilesTotal">Сколько файлов в сборке целиком.</param>
+    /// <param name="FullBytes">Сколько весила бы та же операция полной загрузкой.</param>
+    /// <param name="HashMismatches">Сколько файлов не сошлись по хешу.</param>
+    /// <param name="ErrorCode">Код ошибки или null.</param>
+    internal readonly record struct SyncOutcome(
+        SyncKind Kind,
+        string GameId,
+        string Version,
+        string Result,
+        long DurationMs,
+        long Bytes,
+        long FilesDownloaded,
+        long FilesTotal,
+        long FullBytes,
+        long HashMismatches,
+        string? ErrorCode);
+
     /// <summary>Что именно нужно установить.</summary>
     /// <param name="GameId">Идентификатор игры.</param>
     /// <param name="Version">Версия, к которой приводим файлы.</param>
@@ -21,13 +70,19 @@ namespace ChillHub.Core.Game {
     /// <param name="LocalRoot">Папка игры на диске.</param>
     /// <param name="ExeRelativePath">Путь к exe игры внутри папки — по нему проверяется, не запущена ли игра.</param>
     /// <param name="ConfirmDeletions">Спросить перед удалением файлов, которых нет в версии.</param>
+    /// <param name="Kind">
+    /// Чем операция является для пользователя. Знает об этом только вызывающий: сам
+    /// проход одинаков для установки, обновления и проверки, а различить их по плану
+    /// нельзя — у свежеустановленной игры и у нетронутой он одинаково пуст.
+    /// </param>
     internal sealed record GameSyncRequest(
         string GameId,
         string Version,
         string BaseApi,
         string LocalRoot,
         string? ExeRelativePath,
-        bool ConfirmDeletions);
+        bool ConfirmDeletions,
+        SyncKind Kind = SyncKind.Install);
 
     /// <summary>
     /// Связь установки с экраном: только колбэки, никаких контролов. По умолчанию всё
@@ -87,6 +142,14 @@ namespace ChillHub.Core.Game {
         internal Action<string?, string?> WriteLocalVersion { get; set; } = (gid, version) => GameLocalState.WriteLocalVersion(gid, version);
 
         /// <summary>
+        /// Gets or sets отправку исхода операции в статистику. Подставляется по той же
+        /// причине, что и <see cref="WriteLocalVersion"/>: настоящая уходит в сеть, и без
+        /// шва проверить, что отмена не считается провалом, можно было бы только
+        /// поднятым сервером.
+        /// </summary>
+        internal Action<SyncOutcome> ReportOutcome { get; set; } = DefaultReportOutcome;
+
+        /// <summary>
         /// Текст вопроса перед удалением файлов, которых нет в версии. Проверка целостности
         /// удаляет всё, чего нет в манифесте: моды, скриншоты, сохранения, положенные в папку
         /// игры. Число файлов называется прямо — как в диалоге переключения версии.
@@ -108,8 +171,19 @@ namespace ChillHub.Core.Game {
         internal async Task RunAsync(GameSyncRequest request, CancellationToken token) {
             var gid = request.GameId;
             var version = request.Version;
+
+            // Отсчёт идёт от нажатия кнопки, а не от начала закачки: пользователь ждёт
+            // и загрузку манифеста, и обход папки с пересчётом хешей — на большой игре
+            // это половина времени операции.
+            var opStart = DateTime.UtcNow;
+
+            // План нужен и в catch: он единственный знает, сколько байт и файлов
+            // операция собиралась тронуть, а без этого сорвавшаяся установка уходит
+            // в статистику голым фактом «не получилось».
+            DiffPlan? plan = null;
             try {
-                // Игра запущена — файлы менять нельзя
+                // Игра запущена — файлы менять нельзя. Метрики нет намеренно: операция
+                // не начиналась и не срывалась, лаунчер даже не ходил на сервер.
                 if (GameDiskInfo.IsGameRunning(request.ExeRelativePath, out var exeName)) {
                     this.ui.SetStatus($"Игра запущена ({exeName}). Закройте игру и повторите.");
                     return;
@@ -128,7 +202,7 @@ namespace ChillHub.Core.Game {
                 // PlanAsync только выглядит асинхронным: внутри полный обход папки игры с пересчётом
                 // хешей, а Task возвращается уже завершённым. С UI-потока это подвешивает окно
                 // на всё время обхода — уводим в пул потоков (как в IntegrityChecker).
-                var plan = await Task.Run(() => this.sync.PlanAsync(manifest, request.LocalRoot, contentBase, token), token).ConfigureAwait(true);
+                plan = await Task.Run(() => this.sync.PlanAsync(manifest, request.LocalRoot, contentBase, token), token).ConfigureAwait(true);
                 Logging.Logger.Info($"GamePage plan gid={gid} downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count}");
 
                 // Проверка целостности удаляет всё, чего нет в манифесте: моды, скриншоты,
@@ -137,6 +211,7 @@ namespace ChillHub.Core.Game {
                 if (request.ConfirmDeletions && plan.ToDelete.Count > 0) {
                     if (!this.ui.Confirm(DeletionConfirmText(version, plan.ToDelete.Count), "Проверка файлов")) {
                         this.ui.SetStatus("Проверка отменена.");
+                        Report(request, plan, "cancel", opStart);
                         return;
                     }
                 }
@@ -147,6 +222,11 @@ namespace ChillHub.Core.Game {
                     this.ui.SetFilesSize($"Нужно: {FormatSize(plan.TotalDownloadBytes)} ({FormatSize(free)} доступно)");
                     if (free > 0 && free < plan.TotalDownloadBytes) {
                         this.ui.SetStatus("Недостаточно свободного места.");
+
+                        // Именно та ошибка, о которой пишут в обратную связь словами
+                        // «ничего не качается»: без кода в статистике её видно только
+                        // по чужому скриншоту.
+                        Report(request, plan, "fail", opStart, "no_disk_space");
                         return;
                     }
                 }
@@ -162,23 +242,109 @@ namespace ChillHub.Core.Game {
                 this.ui.SetStatus("Готово.");
                 this.ui.SetSpeedEta(string.Empty);
                 Logging.Logger.Info($"GamePage.StartSync done gid={gid} version={version}");
+                Report(request, plan, "ok", opStart);
             }
             catch (OperationCanceledException) {
                 this.ui.SetStatus("Операция отменена.");
                 this.ui.SetSpeedEta(string.Empty);
                 Logging.Logger.Info($"GamePage.StartSync cancelled gid={gid} version={version}");
+
+                // Отмена — не ошибка: отдельный результат как раз затем и существует,
+                // чтобы брошенные закачки не портили ни долю неудач, ни среднее время.
+                Report(request, plan, "cancel", opStart);
             }
             catch (ManifestValidationException ex) {
                 // Манифест отклонён проверкой структуры: опасный путь, дубликат или
                 // запись без хешей. Файлы игры не тронуты — говорим об этом прямо,
                 // а не общей фразой «попробуйте ещё раз».
                 this.ui.ShowUserError(ManifestValidator.UserMessage, ex, $"GamePage.StartSyncAsync.ManifestValidation(gid={gid}, version={version})");
+                Report(request, plan, "fail", opStart, "manifest_invalid");
             }
             catch (Exception ex) {
                 var message = ex is IOException
                     ? "Не удалось записать файлы игры. Проверьте свободное место и права доступа."
                     : "Не удалось завершить операцию. Попробуйте ещё раз.";
                 this.ui.ShowUserError(message, ex, $"GamePage.StartSyncAsync(gid={gid}, version={version})");
+
+                // Код классифицирует проблему и только её: текст исключения содержит
+                // пути и имена файлов пользователя, а метрика — публичная сводка.
+                Report(request, plan, "fail", opStart, ex is IOException ? "sync_io" : "sync_failed");
+            }
+        }
+
+        /// <summary>
+        /// Отправляет исход операции в статистику.
+        /// <para>
+        /// Живёт здесь, а не у вызывающих, ровно потому, что вызывающих двое: страница
+        /// игры и очередь загрузок. Пока метрики не было вовсе, админка показывала ноль
+        /// установок при живых установках — и починить это в одном из двух мест значило
+        /// бы получить половину правды.
+        /// </para>
+        /// <para>
+        /// Ничего не бросает: <see cref="Metrics.MetricsService.Report"/> и так глушит
+        /// свои ошибки, но зовут этот метод в том числе из catch — исключение отсюда
+        /// подменило бы собой настоящую причину сбоя.
+        /// </para>
+        /// </summary>
+        /// <param name="request">Операция, о которой отчитываемся.</param>
+        /// <param name="plan">План: null, если сорвались до его построения.</param>
+        /// <param name="result">ok, fail или cancel.</param>
+        /// <param name="opStart">Момент нажатия кнопки (UTC).</param>
+        /// <param name="errorCode">Код ошибки — только для result=fail.</param>
+        private void Report(
+            GameSyncRequest request, DiffPlan? plan, string result, DateTime opStart, string? errorCode = null) {
+            try {
+                // Объём берём из плана, а не из отчётов о прогрессе: при отмене и при
+                // ошибке последний отчёт мог не прийти вовсе, а размер работы всё равно
+                // известен — и «сорвалось на 12 ГБ» отличается от «сорвалось на 12 МБ».
+                this.ReportOutcome(new SyncOutcome(
+                    request.Kind,
+                    request.GameId,
+                    request.Version,
+                    result,
+                    DurationMs: (long)(DateTime.UtcNow - opStart).TotalMilliseconds,
+                    Bytes: plan?.TotalDownloadBytes ?? 0,
+                    FilesDownloaded: plan?.TotalFilesToDownload ?? 0,
+                    FilesTotal: plan?.TotalManifestFiles ?? 0,
+                    FullBytes: plan?.TotalManifestBytes ?? 0,
+                    HashMismatches: plan?.HashMismatches ?? 0,
+                    ErrorCode: errorCode));
+            }
+            catch (Exception ex) {
+                Logging.Logger.Warn($"GameSyncRunner: метрика операции не отправлена: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Раскладывает исход по видам событий сервера. Отдельный метод, потому что это
+        /// единственное место, где вид операции превращается в вид события: «Проверить
+        /// файлы» — не установка, и складывать их в один счётчик значило бы вписать в
+        /// отчёт установки, которых не было.
+        /// </summary>
+        /// <param name="o">Исход операции.</param>
+        private static void DefaultReportOutcome(SyncOutcome o) {
+            switch (o.Kind) {
+                case SyncKind.Repair:
+                    Metrics.MetricsService.IntegrityCheck(
+                        o.GameId, o.Version, o.Result == "ok", o.FilesTotal, o.HashMismatches);
+                    break;
+                case SyncKind.Update:
+                    Metrics.MetricsService.GameUpdate(
+                        o.GameId, o.Version, o.Result, o.DurationMs, o.Bytes,
+                        o.FilesDownloaded, o.FilesTotal, o.FullBytes);
+                    break;
+                default:
+                    Metrics.MetricsService.GameInstall(
+                        o.GameId, o.Version, o.Result, o.DurationMs, o.Bytes,
+                        o.FilesDownloaded, o.FilesTotal, o.FullBytes);
+                    break;
+            }
+
+            if (!string.IsNullOrEmpty(o.ErrorCode)) {
+                // Отдельным событием, а не полем внутри предыдущего: «Топ ошибок» и
+                // раскрытие кода в конкретные события сервер собирает только по событиям
+                // вида error, а поле errorCode внутри установки не читает никто.
+                Metrics.MetricsService.Error(o.ErrorCode, o.GameId);
             }
         }
 

@@ -2,7 +2,7 @@
 # И3: резервное копирование серверного контента (/var/www/launcher/{content,
 # manifests,news}). До появления этого юнита резервировался только конфиг
 # nginx, а весь опубликованный контент существовал ровно в одном экземпляре.
-Description=ChillHub content backup (rsync hardlink snapshot)
+Description=Chill Hub content backup (rsync hardlink snapshot)
 Documentation=file:/usr/local/sbin/chillhub-backup-content.sh
 # Смысла запускаться без файловой системы нет; сеть не нужна — копия локальная.
 After=local-fs.target

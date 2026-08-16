@@ -1,5 +1,5 @@
 [Unit]
-Description=ChillHub Admin API & UI backend
+Description=Chill Hub Admin API & UI backend
 After=network-online.target
 Wants=network-online.target
 

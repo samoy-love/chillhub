@@ -1,4 +1,4 @@
-# ChillHub
+# Chill Hub
 
 [Русский](README.md) · English
 
@@ -15,7 +15,7 @@ unpack it here, delete those three files, and don't lose your config". Every
 manual step in that sequence is a step someone performs wrong, and a broken
 install is indistinguishable from a broken build until somebody debugs it.
 
-ChillHub grew out of a private mod updater for Lethal Company (C#, WinForms,
+Chill Hub grew out of a private mod updater for Lethal Company (C#, WinForms,
 2023–2024): one game, a hardcoded file list, updates poured over whatever was
 there. Same problem, rebuilt for many games — with diffs, hashes and rollbacks.
 
@@ -144,7 +144,7 @@ one host and ships through one pipeline.
 | [metro.samoy.love](https://metro.samoy.love) | Offline PWA of the Moscow metro map — [tr0llex/metro-map](https://github.com/tr0llex/metro-map) |
 | [status.samoy.love](https://status.samoy.love) | Service status: an on-host agent, a Telegram bot and an external watchdog — [tr0llex/status.samoy.love](https://github.com/tr0llex/status.samoy.love) |
 | [samoy.love](https://samoy.love) | Personal site — [tr0llex/samoy.love](https://github.com/tr0llex/samoy.love) |
-| Monitoring | [tr0llex/metrics.samoy.love](https://github.com/tr0llex/metrics.samoy.love) — monitoring for the whole ecosystem; both ChillHub binaries expose a Prometheus endpoint on loopback for it to scrape |
+| Monitoring | [tr0llex/metrics.samoy.love](https://github.com/tr0llex/metrics.samoy.love) — monitoring for the whole ecosystem; both Chill Hub binaries expose a Prometheus endpoint on loopback for it to scrape |
 | Pipeline | [tr0llex/deploy-kit](https://github.com/tr0llex/deploy-kit) — the shared release pipeline behind all of the above |
 
 ## Contacts and license

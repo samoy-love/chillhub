@@ -1156,7 +1156,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
   bind('fb_reply', ()=>{
     const c = String(__fbCur?.contact||'').trim();
     if(!c){ notify('В обращении нет контакта'); return; }
-    const subject = 'ChillHub: ответ на ваше обращение';
+    const subject = 'Chill Hub: ответ на ваше обращение';
     const quoted = String(__fbCur?.comment||'').split(/\r?\n/).map(l=> '> '+l).join('\n');
     const body = '\n\n---\nВаше обращение от '+String(__fbCur?.createdAt||'').replace('T',' ').replace('Z','')+':\n'+quoted+'\n';
     location.href = 'mailto:'+encodeURIComponent(c)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
@@ -4005,7 +4005,34 @@ function mxEmptyRow(cols, text){
 function mxOutcomeNote(total, ok, fail){
   const rest = Math.max(0, Number(total||0) - Number(ok||0) - Number(fail||0));
   const parts = ['успешно '+mxNum(ok), 'с ошибкой '+mxNum(fail)];
-  if(rest > 0) parts.push('без результата '+mxNum(rest));
+  // Отменённые сюда же: лаунчер шлёт им результат cancel, а сводка считает
+  // отдельно только ok и fail — намеренно, чтобы брошенная закачка не попадала
+  // в долю неудач. Называем остаток тем, чем он в основном и является.
+  if(rest > 0) parts.push('отменено или без результата '+mxNum(rest));
+  return parts.join(', ');
+}
+
+// mxSavedNote — ради этой строки лаунчер и написан. «Скачано 40 МБ» само по себе
+// не говорит ничего; смысл появляется рядом с полным весом тех же сборок.
+// Пустая строка, когда сравнивать не с чем: события старых лаунчеров полного
+// веса не сообщали, и выдавать их за стопроцентную экономию нельзя.
+function mxSavedNote(bytes, fullBytes){
+  const b = Number(bytes||0);
+  const full = Number(fullBytes||0);
+  if(full <= 0 || full < b) return 'сумма поля bytes';
+  return 'вместо '+formatBytes(full)+' целиком — сэкономлено '+mxPct(full - b, full);
+}
+
+// mxIntegrityNote — проверку целостности запускает сам пользователь, и запускает
+// её тогда, когда игра уже ведёт себя странно. Голое число проверок ничего не
+// стоит: важно, сколько из них нашли расхождение.
+function mxIntegrityNote(t){
+  const checks = Number(t.integrityChecks||0);
+  if(checks === 0) return 'запускает сам пользователь';
+  const failed = Number(t.integrityFailed||0);
+  const files = Number(t.hashMismatches||0);
+  const parts = ['с расхождением '+mxNum(failed)];
+  if(files > 0) parts.push('файлов не сошлось '+mxNum(files));
   return parts.join(', ');
 }
 
@@ -4019,9 +4046,10 @@ function mxRenderTotals(t){
     ['Установок', mxNum(t.installs), mxOutcomeNote(t.installs, t.installOk, t.installFail)],
     ['Обновлений', mxNum(t.updates), mxOutcomeNote(t.updates, t.updateOk, t.updateFail)],
     ['Ошибок', mxNum(t.errors), 'события вида error'],
-    ['Скачано', formatBytes(Number(t.bytesDownloaded||0)), 'сумма поля bytes'],
+    ['Скачано', formatBytes(Number(t.bytesDownloaded||0)), mxSavedNote(t.bytesDownloaded, t.fullBytes)],
     ['Среднее время установки', mxFmtMs(t.avgInstallMs), 'только успешные'],
     ['Среднее время обновления', mxFmtMs(t.avgUpdateMs), 'только успешные'],
+    ['Проверок целостности', mxNum(t.integrityChecks), mxIntegrityNote(t)],
   ];
   root.innerHTML = tiles.map(x=>
     '<div class="col-6 col-md-4 col-xl-3">'
@@ -4090,13 +4118,14 @@ function mxRenderChart(byDay){
 
 function mxRenderGames(byGame){
   const tb = mxEl('mx_games_body'); if(!tb) return;
-  if(!byGame || byGame.length===0){ tb.innerHTML = mxEmptyRow(10, 'Событий, привязанных к играм, нет.'); return; }
+  if(!byGame || byGame.length===0){ tb.innerHTML = mxEmptyRow(11, 'Событий, привязанных к играм, нет.'); return; }
   tb.innerHTML = byGame.map(g=>
     '<tr><td><code>'+escapeHtml(g.gameId||'—')+'</code></td>'
     + '<td class="text-end">'+mxNum(g.installs)+'</td>'
     + '<td class="text-end">'+mxNum(g.updates)+'</td>'
     + '<td class="text-end">'+mxNum(g.errors)+'</td>'
-    + '<td class="text-end">'+escapeHtml(formatBytes(Number(g.bytes||0)))+'</td>'
+    + '<td class="text-end" title="'+escapeHtml(mxSavedNote(g.bytes, g.fullBytes))+'">'+escapeHtml(formatBytes(Number(g.bytes||0)))+'</td>'
+    + '<td class="text-end" title="'+escapeHtml('файлов не сошлось: '+mxNum(g.hashMismatches))+'">'+mxNum(g.integrityChecks)+'</td>'
     + '<td class="text-end">'+mxNum(g.uniquePlayers)+'</td>'
     + '<td class="text-end">'+mxNum(g.sessions)+'</td>'
     + '<td class="text-end">'+escapeHtml(mxFmtHours(Number(g.playtimeMs||0)))+'</td>'

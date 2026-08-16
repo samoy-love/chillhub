@@ -349,13 +349,17 @@ namespace ChillHub.Core.Game {
 
                 var runner = new GameSyncRunner(this.syncServiceFactory(), ui);
                 var localRoot = GameLocalState.GameLocalRoot(entry.GameId);
+                // Третьего вида здесь не бывает: Enqueue не принимает игру, которая
+                // установлена и совпадает с последней версией, — «Проверить файлы» через
+                // очередь не проходит.
                 var request = new GameSyncRequest(
                     entry.GameId,
                     game.LatestVersion,
                     this.baseApiProvider(),
                     localRoot,
                     game.ExeRelativePath,
-                    ConfirmDeletions: false);
+                    ConfirmDeletions: false,
+                    Kind: game.IsInstalled ? SyncKind.Update : SyncKind.Install);
 
                 // entry.Cts всегда назначен в RunWorkerAsync до вызова ProcessAsync — см. gate там.
                 await runner.RunAsync(request, entry.Cts!.Token).ConfigureAwait(false);

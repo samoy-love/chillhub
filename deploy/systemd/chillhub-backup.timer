@@ -1,5 +1,5 @@
 [Unit]
-Description=Ежедневный снимок контента ChillHub
+Description=Ежедневный снимок контента Chill Hub
 Documentation=file:/usr/local/sbin/chillhub-backup-content.sh
 
 [Timer]
