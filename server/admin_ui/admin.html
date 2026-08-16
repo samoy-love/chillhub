@@ -37,7 +37,7 @@
       </div>
       <!-- role="tablist" и стрелки: вкладки — это <a href="#">, и без ролей
            скринридер их вкладками не считал, а с клавиатуры они не листались. -->
-      <ul class="nav nav-tabs mb-3" role="tablist">
+      <ul class="nav nav-tabs mb-3" id="mainTabs" role="tablist">
         <li class="nav-item" role="presentation"><a class="nav-link active" id="tabLauncher" href="#launcher" role="tab" aria-selected="true" aria-controls="secLauncher">Лаунчер</a></li>
         <li class="nav-item" role="presentation"><a class="nav-link" id="tabManifests" href="#manifests" role="tab" aria-selected="false" aria-controls="secManifests" tabindex="-1">Игры</a></li>
         <li class="nav-item" role="presentation"><a class="nav-link" id="tabNews" href="#news" role="tab" aria-selected="false" aria-controls="secNews" tabindex="-1">Новости</a></li>
@@ -294,7 +294,7 @@
         </div>
       </section>
 
-      <section id="secBench" role="tabpanel" aria-labelledby="tabBench" style="display:none">
+      <section id="secBench" class="hidden" role="tabpanel" aria-labelledby="tabBench">
         <h2 class="h4">Бенчмарки</h2>
         <div class="small text-body-secondary mb-3">
           Инструмент для подбора параметров заливки. К играм и новостям отношения не имеет,

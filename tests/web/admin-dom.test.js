@@ -308,6 +308,34 @@ test('man_conc слайдер параллельности обновляет п
   assert.strictEqual(label.textContent, '17');
 });
 
+// showSection() прячет секции классом hidden. Секция с инлайновым
+// style="display:none" остаётся невидимой навсегда — класс инлайновый стиль
+// не перебивает. Так «Бенчмарки» открывались пустой страницей.
+test('вкладки: клик по каждой показывает её секцию и прячет остальные', async (t) => {
+  const { window, document } = loadAdminPage(t);
+  // jsdom не грузит <link rel="stylesheet">, а видимость секции определяется
+  // именно правилом .hidden из admin.css — подставляем настоящий файл инлайном.
+  const style = document.createElement('style');
+  style.textContent = fs.readFileSync(path.join(ADMIN_DIR, 'admin.css'), 'utf8');
+  document.head.appendChild(style);
+  // Только верхняя навигация: у карточки игры есть свои вложенные вкладки.
+  const tabs = Array.from(document.querySelectorAll('#mainTabs [role="tab"]'));
+  assert.ok(tabs.length >= 7);
+  const panels = tabs.map(tab => document.getElementById(tab.getAttribute('aria-controls')));
+  for (const tab of tabs) {
+    tab.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+    const secId = tab.getAttribute('aria-controls');
+    for (const panel of panels) {
+      const visible = window.getComputedStyle(panel).display !== 'none';
+      assert.strictEqual(visible, panel.id === secId, `после клика по ${tab.id}: ${panel.id}`);
+    }
+    assert.strictEqual(tab.getAttribute('aria-selected'), 'true');
+  }
+  // Переключение запускает загрузчики вкладок (newsList, mtLoad, ...) — их
+  // промисы должны отработать до того, как t.after() закроет окно.
+  await new Promise(r => setTimeout(r, 0));
+});
+
 test('up_cleanup бьёт по /admin/api/upload/cleanup и пишет результат в #out', async (t) => {
   const fetchStub = makeFetchStub([
     { test: (u) => u.includes('/admin/api/upload/cleanup'), respond: () => jsonResponse({ removed: 3 }) },
