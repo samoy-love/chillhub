@@ -30,6 +30,36 @@ namespace ChillHub.Tests {
     public class SettingsPageTests : IDisposable {
         public void Dispose() => SettingsDialogs.ResetDialogsForTests();
 
+        // ---- Страница применяет настройки сразу ----
+
+        /// <summary>
+        /// Открытие страницы не переписывает конфиг. Настройки применяются по каждой правке
+        /// (кнопки «Сохранить» больше нет), а ползунок потоков стреляет ValueChanged уже
+        /// внутри InitializeComponent, когда Minimum=2 подтягивает Value с нуля до двух, — без
+        /// защиты это записывало «2 потока» поверх настоящих 16 ещё до показа страницы.
+        /// </summary>
+        [Fact]
+        public void ОткрытиеСтраницыНеПереписываетКонфиг() {
+            using var cfgDir = new ConfigDirsScope();
+            _ = new DialogLog();
+            var cfg = ConfigService.Current;
+            cfg.DownloadThreads = 16;
+            cfg.SpeedLimitMbps = 7;
+            Assert.True(ConfigService.TrySave(cfg, out _));
+            var before = File.GetLastWriteTimeUtc(cfgDir.ConfigPath);
+
+            UiThread.Run(() => {
+                var page = new ChillHub.Pages.SettingsPage();
+                typeof(ChillHub.Pages.SettingsPage)
+                    .GetMethod("LoadConfigToUi", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                    .Invoke(page, null);
+            });
+
+            Assert.Equal(16, cfgDir.ReadConfigFromDisk().DownloadThreads);
+            Assert.Equal(7, cfgDir.ReadConfigFromDisk().SpeedLimitMbps);
+            Assert.Equal(before, File.GetLastWriteTimeUtc(cfgDir.ConfigPath));
+        }
+
         // ---- Папка для игр ----
 
         /// <summary>
