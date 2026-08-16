@@ -183,6 +183,23 @@ namespace ChillHub.Tests {
         }
 
         [Fact]
+        public async Task ХешFreeTpНеПопадаетВУдалениеКогдаЕгоНетВМанифесте() {
+            // Обычный случай для сборок с FreeTP.Org: файла нет в манифесте вовсе,
+            // то есть он подходит под определение «лишний» — и без исключения уехал
+            // бы в ToDelete на первом же обновлении.
+            using var dir = new TempDir();
+            dir.WriteFile("FreeTP/.hash", "не трогать");
+            var path = dir.WriteFile("game.exe", "игра");
+
+            var manifest = PlanTestData.Manifest(
+                PlanTestData.File("game.exe", new FileInfo(path).Length, TestHash.Sha256OfFile(path)));
+
+            var plan = await PlanTestData.PlanAsync(manifest, dir.Root);
+
+            Assert.Empty(plan.ToDelete);
+        }
+
+        [Fact]
         public async Task ФайлВПланеПолучаетКорректныйUrlИМетаданные() {
             using var dir = new TempDir();
             var mf = PlanTestData.File("data/sub dir/pack.bin", 7, "aabb", blake3: "ccdd");
