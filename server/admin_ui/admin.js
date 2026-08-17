@@ -970,6 +970,26 @@ function toRfc3339(date){
   return `${Y}-${M}-${D}T${h}:${m}:${s}Z`;
 }
 
+// Обращения хранятся в UTC, а разбирает их человек в Москве: раньше время
+// показывалось «как в файле», и обращение, отправленное в 21:35, выглядело
+// пришедшим в 18:35 — при разборе инцидента это расходится с логами и памятью
+// пользователя. Зона прибита к Europe/Moscow, а не к зоне браузера: админку
+// открывают и в дороге, а договариваться о времени надо в одной шкале.
+const FB_TZ = 'Europe/Moscow';
+function fbFmtTime(v){
+  const s = String(v||'').trim();
+  if(!s) return '';
+  const d = new Date(s);
+  if(isNaN(d.getTime())) return s;
+  const p = {};
+  new Intl.DateTimeFormat('ru-RU', {
+    timeZone: FB_TZ,
+    year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23',
+  }).formatToParts(d).forEach(x=>{ p[x.type] = x.value; });
+  return p.year+'-'+p.month+'-'+p.day+' '+p.hour+':'+p.minute+':'+p.second+' МСК';
+}
+
 function fbRenderList(){
   const root = document.getElementById('fb_list'); if(!root) return;
   const cnt = document.getElementById('fb_count'); if(cnt) cnt.textContent = String(__fbItems.length||0);
@@ -987,7 +1007,7 @@ function fbRenderList(){
     const name = escapeHtml(it.name||'—');
     const contact = escapeHtml(it.contact||'');
     const cmt = escapeHtml((it.comment||'').slice(0,160));
-    const dt = escapeHtml((it.createdAt||'').replace('T',' ').replace('Z',''));
+    const dt = escapeHtml(fbFmtTime(it.createdAt));
     const active = (it.id===__fbSel) ? ' active' : '';
     return '<a href="#" class="list-group-item list-group-item-action'+active+'" data-id="'+it.id+'">'
          +   '<div class="d-flex w-100 justify-content-between"><strong>'+name+'</strong><small class="text-body-secondary">'+dt+type+imp+st+'</small></div>'
@@ -1074,7 +1094,7 @@ async function fbSelect(id){
   view.innerHTML = ''+
     '<div class="d-flex align-items-center justify-content-between">'
     +  '<div><strong>'+escapeHtml(it.name||'—')+'</strong> <span class="text-body-secondary">'+escapeHtml(it.contact||'')+'</span></div>'
-    +  '<div class="small text-body-secondary">'+escapeHtml((it.createdAt||'').replace('T',' ').replace('Z',''))+'</div>'
+    +  '<div class="small text-body-secondary">'+escapeHtml(fbFmtTime(it.createdAt))+'</div>'
     +'</div>'
     +'<div class="mt-2"><span class="badge text-bg-info">'+escapeHtml(tlabel)+'</span>'+(it.important?'<span class="badge text-bg-warning ms-2">важное</span>':'')+(it.status==='read'?'<span class="badge text-bg-secondary ms-2">проч.</span>':'')+'</div>'
     +'<div class="mt-3 preserve-ws">'+escapeHtml(it.comment||'')+'</div>'
@@ -1158,7 +1178,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
     if(!c){ notify('В обращении нет контакта'); return; }
     const subject = 'Chill Hub: ответ на ваше обращение';
     const quoted = String(__fbCur?.comment||'').split(/\r?\n/).map(l=> '> '+l).join('\n');
-    const body = '\n\n---\nВаше обращение от '+String(__fbCur?.createdAt||'').replace('T',' ').replace('Z','')+':\n'+quoted+'\n';
+    const body = '\n\n---\nВаше обращение от '+fbFmtTime(__fbCur?.createdAt)+':\n'+quoted+'\n';
     location.href = 'mailto:'+encodeURIComponent(c)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
   });
   bind('fb_copy_debug', async ()=>{
