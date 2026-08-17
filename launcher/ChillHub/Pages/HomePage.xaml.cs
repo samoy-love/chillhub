@@ -814,9 +814,10 @@ namespace ChillHub.Pages {
                 this.GameNewsList.Visibility = System.Windows.Visibility.Collapsed;
                 this.GameNewsEmptyState.Visibility = System.Windows.Visibility.Collapsed;
 
-                // Сборки
+                // Сборки. Ни сборок, ни новостей у игры на сервере может не быть —
+                // это пустой раздел, а не сбой связи (HomeFeed.GetOptionalAsync).
                 var buildsUrl = HomeFeed.BuildsUrl(this.BaseApi, gameId);
-                var buildsResp = await this.http.GetFromJsonAsync<BuildsResponse>(buildsUrl, token);
+                var buildsResp = await HomeFeed.GetOptionalAsync<BuildsResponse>(this.http, buildsUrl, token);
 
                 // Выбор уже сменили: писать this.builds нельзя — они относились бы к другой игре
                 token.ThrowIfCancellationRequested();
@@ -836,7 +837,7 @@ namespace ChillHub.Pages {
 
                 // Новости игры
                 var gameNewsUrl = HomeFeed.GameNewsUrl(this.BaseApi, gameId);
-                var gameNews = await this.http.GetFromJsonAsync<NewsIndex>(gameNewsUrl, token);
+                var gameNews = await HomeFeed.GetOptionalAsync<NewsIndex>(this.http, gameNewsUrl, token);
                 token.ThrowIfCancellationRequested();
                 var items = gameNews?.Items ?? new List<NewsItem>();
                 this.NormalizeCoverUrls(items);
@@ -902,8 +903,10 @@ namespace ChillHub.Pages {
                 this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Visible;
                 this.GameNewsList.Visibility = System.Windows.Visibility.Collapsed;
                 this.GameNewsEmptyState.Visibility = System.Windows.Visibility.Collapsed;
+                // Ленты у игры может не быть вовсе — тогда раздел просто пустой,
+                // см. HomeFeed.GetOptionalAsync.
                 var gameNewsUrl = HomeFeed.GameNewsUrl(this.BaseApi, gid);
-                var gameNews = await this.http.GetFromJsonAsync<NewsIndex>(gameNewsUrl);
+                var gameNews = await HomeFeed.GetOptionalAsync<NewsIndex>(this.http, gameNewsUrl);
                 var items = gameNews?.Items ?? new List<NewsItem>();
                 this.NormalizeCoverUrls(items);
                 this.ShowGameNews(items);
@@ -1001,6 +1004,11 @@ namespace ChillHub.Pages {
             var previousGalleryCts = Interlocked.Exchange(ref this.galleryCts, galleryCtsLocal);
             try {
                 previousGalleryCts?.Cancel();
+            }
+            catch (ObjectDisposedException) {
+                // Прошлая загрузка уже закончилась и освободила свой источник — отменять
+                // нечего. Это обычный ход событий при перещёлкивании списка игр, а не сбой:
+                // на нём набегала тысяча строк WARN за сеанс, вытеснявших из лога всё остальное.
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Warn($"GameCombo_SelectionChanged: отмена предыдущей загрузки галереи: {ex.Message}");

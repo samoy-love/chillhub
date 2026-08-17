@@ -6,6 +6,11 @@
 namespace ChillHub.Tests {
     using System.Collections.Generic;
     using System.Linq;
+    using System.Net;
+    using System.Net.Http;
+    using System.Text;
+    using System.Threading;
+    using System.Threading.Tasks;
 
     using ChillHub.Core;
     using ChillHub.Core.Home;
@@ -32,6 +37,67 @@ namespace ChillHub.Tests {
             Assert.Equal("https://chillhub.test/news/games/lethal/index.json", HomeFeed.GameNewsUrl(api, "lethal"));
             Assert.Equal("https://chillhub.test/news/patch-1.md", HomeFeed.LauncherNewsItemUrl(api, "patch-1"));
             Assert.Equal("https://chillhub.test/news/games/lethal/patch-1.md", HomeFeed.GameNewsItemUrl(api, "lethal", "patch-1"));
+        }
+
+        /// <summary>
+        /// Необязательный раздел, которого нет на сервере, приходит пустым: страница
+        /// показывает пустую ленту, а не «Проверьте подключение к интернету» с
+        /// авто-отчётом на каждое открытие такой игры.
+        /// </summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task РаздельОтвечающийЧетырестаЧетыреПриходитПустым() {
+            using var http = new HttpClient(new StubHandler(System.Net.HttpStatusCode.NotFound, string.Empty));
+
+            var index = await HomeFeed.GetOptionalAsync<NewsIndex>(http, "https://chillhub.test/news/games/lethal/index.json");
+
+            Assert.Null(index);
+        }
+
+        /// <summary>Обычный ответ разбирается как раньше — молчание только про 404.</summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task ОбычныйОтветРазбираетсяКакПрежде() {
+            using var http = new HttpClient(new StubHandler(
+                System.Net.HttpStatusCode.OK,
+                @"{""items"":[{""slug"":""patch-1"",""title"":""Патч""}]}"));
+
+            var index = await HomeFeed.GetOptionalAsync<NewsIndex>(http, "https://chillhub.test/news/index.json");
+
+            Assert.NotNull(index);
+            Assert.Single(index!.Items);
+            Assert.Equal("patch-1", index.Items[0].Slug);
+        }
+
+        /// <summary>
+        /// Всё, кроме 404, — настоящий сбой: 500 и обрыв связи обязаны долететь до
+        /// вызывающего, иначе «сервер лежит» покажется пустой лентой.
+        /// </summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task СбойСервераДолетаетДоВызывающего() {
+            using var http = new HttpClient(new StubHandler(System.Net.HttpStatusCode.InternalServerError, string.Empty));
+
+            await Assert.ThrowsAsync<HttpRequestException>(
+                () => HomeFeed.GetOptionalAsync<NewsIndex>(http, "https://chillhub.test/news/index.json"));
+        }
+
+        /// <summary>
+        /// «Нет ленты» и «сервер недоступен» — разные вещи. 404 у новостей или сборок
+        /// означает, что у игры их просто нет: раздел должен остаться пустым молча, без
+        /// красной строки пользователю и без авто-отчёта на сервер. Всё остальное —
+        /// настоящий сбой загрузки.
+        /// </summary>
+        [Fact]
+        public void ОтветНетТакогоНеСчитаетсяСбоемЗагрузки() {
+            var notFound = new System.Net.Http.HttpRequestException("нет", null, System.Net.HttpStatusCode.NotFound);
+            var serverError = new System.Net.Http.HttpRequestException("ой", null, System.Net.HttpStatusCode.InternalServerError);
+
+            Assert.True(HomeFeed.IsNotFound(notFound));
+            Assert.True(HomeFeed.IsNotFound(new System.InvalidOperationException("обёртка", notFound)));
+            Assert.False(HomeFeed.IsNotFound(serverError));
+            Assert.False(HomeFeed.IsNotFound(new System.Net.Http.HttpRequestException("нет сети")));
+            Assert.False(HomeFeed.IsNotFound(null));
         }
 
         /// <summary>
@@ -100,6 +166,22 @@ namespace ChillHub.Tests {
         [Fact]
         public void БезИгрыИСборокВерсииНет() {
             Assert.True(string.IsNullOrWhiteSpace(HomeFeed.SelectVersion(null, new List<string>())));
+        }
+
+        /// <summary>Ответ сервера, заданный тестом: проверяемому коду важен только он.</summary>
+        private sealed class StubHandler : HttpMessageHandler {
+            private readonly HttpStatusCode code;
+            private readonly string body;
+
+            internal StubHandler(HttpStatusCode code, string body) {
+                this.code = code;
+                this.body = body;
+            }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+                => Task.FromResult(new HttpResponseMessage(this.code) {
+                    Content = new StringContent(this.body, Encoding.UTF8, "application/json"),
+                });
         }
     }
 

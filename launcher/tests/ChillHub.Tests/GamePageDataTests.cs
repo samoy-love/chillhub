@@ -176,10 +176,25 @@ namespace ChillHub.Tests {
             Assert.Empty(await loader.LoadAsync("https://example.test", "game"));
         }
 
-        /// <summary>Отсутствующий changelog (404) — отказ, а не «записей нет».</summary>
+        /// <summary>
+        /// Отсутствующий changelog (404) — это «записей нет», а не отказ. Раньше здесь
+        /// ждали исключение, и страница игры честно показывала «Не удалось загрузить
+        /// changelog. Проверьте подключение к интернету» с авто-отчётом на сервер —
+        /// при каждом открытии игры, которой ленту ещё не завели. В обращениях с прода
+        /// такие отчёты и накопились. Настоящий отказ ловят два соседних теста:
+        /// ответ сервера с ошибкой и обрыв связи по-прежнему бросают исключение.
+        /// </summary>
         [Fact]
-        public async Task ОтсутствующийChangelogПадаетИсключением() {
+        public async Task ОтсутствующийChangelogДаётПустойСписок() {
             var loader = new GameChangelogLoader(Status(HttpStatusCode.NotFound));
+
+            Assert.Empty(await loader.LoadAsync("https://example.test", "game"));
+        }
+
+        /// <summary>Сервер ответил ошибкой — это отказ, и страница обязана про него сказать.</summary>
+        [Fact]
+        public async Task ОшибкаСервераВChangelogПадаетИсключением() {
+            var loader = new GameChangelogLoader(Status(HttpStatusCode.InternalServerError));
 
             await Assert.ThrowsAsync<HttpRequestException>(() => loader.LoadAsync("https://example.test", "game"));
         }
