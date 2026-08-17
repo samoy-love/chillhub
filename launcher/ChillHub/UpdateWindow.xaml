@@ -63,7 +63,7 @@
                 <!-- Animated indicator for indeterminate state -->
                 <Border x:Name="IndBar" CornerRadius="3" Width="160" HorizontalAlignment="Left" Background="{StaticResource Brush.VerifyGradient}">
                   <Border.RenderTransform>
-                    <TranslateTransform x:Name="tt" X="-180"/>
+                    <TranslateTransform X="-180"/>
                   </Border.RenderTransform>
                 </Border>
               </Grid>
@@ -72,7 +72,7 @@
                   <Trigger.EnterActions>
                     <BeginStoryboard>
                       <Storyboard RepeatBehavior="Forever">
-                        <DoubleAnimation Storyboard.TargetName="tt" Storyboard.TargetProperty="X" From="-180" To="300" Duration="0:0:1.8"/>
+                        <DoubleAnimation Storyboard.TargetName="IndBar" Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)" From="-180" To="300" Duration="0:0:1.8"/>
                       </Storyboard>
                     </BeginStoryboard>
                   </Trigger.EnterActions>
