@@ -7,12 +7,32 @@ namespace ChillHub.Core.Home {
     using System;
     using System.Collections.Generic;
     using System.Linq;
+    using System.Net;
+    using System.Net.Http;
 
     /// <summary>
     /// Адреса данных главного экрана и приведение полученного к пригодному для показа виду.
     /// Сети здесь нет: запрос выполняет вызывающий код, здесь — только строки и списки.
     /// </summary>
     internal static class HomeFeed {
+        /// <summary>
+        /// Ответ «такого нет» — это не сбой. У игры может не быть ни ленты новостей, ни
+        /// списка сборок: сервер отвечает 404, и правильная реакция — пустой раздел, а не
+        /// красная строка «не удалось загрузить» с отчётом на сервер. До этой проверки
+        /// каждое открытие игры без новостей писало ошибку в лог и слало авто-отчёт.
+        /// </summary>
+        /// <param name="ex">Пойманное исключение.</param>
+        /// <returns>true, если сервер ответил 404.</returns>
+        internal static bool IsNotFound(Exception? ex) {
+            for (var current = ex; current != null; current = current.InnerException) {
+                if (current is HttpRequestException http && http.StatusCode == HttpStatusCode.NotFound) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         /// <summary>Адрес списка игр.</summary>
         /// <param name="baseApi">База адреса сервера.</param>
         /// <returns>Полный адрес.</returns>

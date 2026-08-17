@@ -35,6 +35,24 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// «Нет ленты» и «сервер недоступен» — разные вещи. 404 у новостей или сборок
+        /// означает, что у игры их просто нет: раздел должен остаться пустым молча, без
+        /// красной строки пользователю и без авто-отчёта на сервер. Всё остальное —
+        /// настоящий сбой загрузки.
+        /// </summary>
+        [Fact]
+        public void ОтветНетТакогоНеСчитаетсяСбоемЗагрузки() {
+            var notFound = new System.Net.Http.HttpRequestException("нет", null, System.Net.HttpStatusCode.NotFound);
+            var serverError = new System.Net.Http.HttpRequestException("ой", null, System.Net.HttpStatusCode.InternalServerError);
+
+            Assert.True(HomeFeed.IsNotFound(notFound));
+            Assert.True(HomeFeed.IsNotFound(new System.InvalidOperationException("обёртка", notFound)));
+            Assert.False(HomeFeed.IsNotFound(serverError));
+            Assert.False(HomeFeed.IsNotFound(new System.Net.Http.HttpRequestException("нет сети")));
+            Assert.False(HomeFeed.IsNotFound(null));
+        }
+
+        /// <summary>
         /// Корнеотносительная обложка достраивается до полного адреса, абсолютную не трогаем:
         /// иначе к чужому https приклеился бы наш адрес и картинка не загрузилась бы.
         /// </summary>

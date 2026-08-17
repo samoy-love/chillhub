@@ -241,6 +241,13 @@ namespace ChillHub.Pages {
                 this.ChangelogEmptyText.Text = "Записей пока нет";
                 this.ChangelogEmptyText.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
             }
+            catch (Exception ex) when (Core.Home.HomeFeed.IsNotFound(ex)) {
+                // У игры нет ленты изменений — это пустой раздел, а не сбой загрузки
+                Core.Logging.Logger.Info($"GamePage.LoadChangelogAsync(gid={gid}): ленты изменений у игры нет (404)");
+                this.ChangelogList.ItemsSource = Array.Empty<NewsItem>();
+                this.ChangelogEmptyText.Text = "Записей пока нет";
+                this.ChangelogEmptyText.Visibility = Visibility.Visible;
+            }
             catch (Exception ex) {
                 // Changelog второстепенен: установка и обновление работают без него
                 Core.Logging.Logger.ErrorNoReport(ex, $"GamePage.LoadChangelogAsync(gid={gid})");
