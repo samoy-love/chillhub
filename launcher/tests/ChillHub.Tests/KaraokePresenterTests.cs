@@ -134,6 +134,30 @@ namespace ChillHub.Tests {
             });
         }
 
+        /// <summary>
+        /// Пауза гасит и мигание курсора. Раньше она останавливала только таймер печати,
+        /// а бесконечная анимация курсора продолжала тикать на UI-потоке — спрятанный
+        /// в трей лаунчер мигал курсором, которого никто не видит, круглые сутки.
+        /// </summary>
+        [Fact]
+        public void ПаузаГаситМиганиеКурсора() {
+            OnUi(async () => {
+                var caret = new Border();
+                var presenter = new KaraokePresenter(new Border(), new TextBlock(), new TextBlock(), caret, new KaraokeConfig { CharIntervalMs = 20 });
+
+                presenter.Start(Lyrics);
+                await Task.Delay(50);
+                Assert.True(caret.HasAnimatedProperties, "у идущего караоке курсор должен мигать");
+
+                presenter.Pause();
+                Assert.False(caret.HasAnimatedProperties, "на паузе анимация курсора должна быть снята");
+                Assert.Equal(1.0, caret.Opacity);
+
+                presenter.Resume();
+                Assert.True(caret.HasAnimatedProperties, "после возобновления курсор должен мигать снова");
+            });
+        }
+
         private static void OnUi(Func<Task> body) {
             ExceptionDispatchInfo? failure = null;
             var thread = new Thread(() => {

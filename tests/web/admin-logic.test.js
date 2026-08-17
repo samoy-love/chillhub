@@ -266,3 +266,27 @@ test('isImageName отличает картинку от прочего файл
     assert.ok(!isImageName(bad), bad);
   }
 });
+
+// ---- Время обращений ----
+// Зона зашита в саму функцию, поэтому тест проверяет её и на машине с TZ=UTC,
+// и на машине в другом поясе: ответ должен быть один и тот же.
+const { fbFmtTime } = new Function(
+  src.match(/const FB_TZ = '[^']*';/)[0] + '\n' + extract('fbFmtTime') +
+  '\nreturn {fbFmtTime};')();
+
+test('fbFmtTime показывает время обращения по Москве, а не по UTC', () => {
+  // Летом Москва — UTC+3 круглый год: перевода часов нет с 2014-го.
+  assert.strictEqual(fbFmtTime('2026-08-17T18:35:29Z'), '2026-08-17 21:35:29 МСК');
+  // Переход через полночь: дата тоже должна съехать на сутки вперёд.
+  assert.strictEqual(fbFmtTime('2026-08-17T22:10:00Z'), '2026-08-18 01:10:00 МСК');
+  // Зимой смещение то же самое — проверяем, что не приехал переход на зимнее время.
+  assert.strictEqual(fbFmtTime('2026-01-05T09:00:00Z'), '2026-01-05 12:00:00 МСК');
+});
+
+test('fbFmtTime не превращает пустое и битое значение в Invalid Date', () => {
+  assert.strictEqual(fbFmtTime(''), '');
+  assert.strictEqual(fbFmtTime(null), '');
+  assert.strictEqual(fbFmtTime(undefined), '');
+  // Нераспознанную строку показываем как есть — это честнее прочерка.
+  assert.strictEqual(fbFmtTime('когда-то'), 'когда-то');
+});
