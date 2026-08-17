@@ -3,7 +3,6 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:sys="clr-namespace:System;assembly=mscorlib"
       xmlns:pr="clr-namespace:System.Windows.Controls.Primitives;assembly=PresentationFramework"
-      xmlns:ui="clr-namespace:ChillHub.Core.UI"
       Title="Главная"
       Background="{DynamicResource Brush.Background}">
   <Page.Resources>
@@ -455,112 +454,6 @@
 
     <!-- Removed global ScrollBar styling to avoid StaticExtension resolution issues on some environments -->
     
-    <!-- Shimmer skeletons (dark, subtle) -->
-    <Style x:Key="Style.Skeleton.NewsCard" TargetType="ContentControl">
-      <Setter Property="SnapsToDevicePixels" Value="True"/>
-      <Setter Property="Focusable" Value="False"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="ContentControl">
-            <Grid ClipToBounds="True">
-              <Border CornerRadius="10" Background="{DynamicResource Brush.Surface}" Opacity="0.35"/>
-              <Rectangle>
-                <Rectangle.Fill>
-                  <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                    <GradientStop Color="#00FFFFFF" Offset="0"/>
-                    <GradientStop Color="#22FFFFFF" Offset="0.35"/>
-                    <GradientStop Color="#00FFFFFF" Offset="0.7"/>
-                  </LinearGradientBrush>
-                </Rectangle.Fill>
-                <Rectangle.RenderTransform>
-                  <TranslateTransform X="-300"/>
-                </Rectangle.RenderTransform>
-                <!-- Анимация идёт по пути в RenderTransform самого прямоугольника: имя на
-                     TranslateTransform (это Freezable) в namescope шаблона не попадает, и
-                     Storyboard.TargetName на нём валит приложение. Поэтому и триггер живёт
-                     в стиле прямоугольника — цель по умолчанию — он сам, TargetName не нужен.
-                     Loaded/Unloaded здесь не годятся: карточку с пришедшей обложкой прячет
-                     Visibility.Collapsed, а Unloaded при этом не наступает — шиммер каждой
-                     новости и каждой строки списка крутился до выхода из лаунчера.
-                     Так же сделан Style.Skeleton.GameRow. -->
-                <Rectangle.Style>
-                  <Style TargetType="Rectangle">
-                    <Style.Triggers>
-                      <MultiDataTrigger>
-                        <MultiDataTrigger.Conditions>
-                          <Condition Binding="{Binding IsVisible, RelativeSource={RelativeSource Self}}" Value="True"/>
-                          <Condition Binding="{Binding Source={x:Static ui:UiAnimations.Instance}, Path=Enabled}" Value="True"/>
-                        </MultiDataTrigger.Conditions>
-                        <MultiDataTrigger.EnterActions>
-                          <BeginStoryboard x:Name="NewsCardShimmer">
-                            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
-                              <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)" From="-300" To="300" Duration="0:0:1.6"/>
-                            </Storyboard>
-                          </BeginStoryboard>
-                        </MultiDataTrigger.EnterActions>
-                        <MultiDataTrigger.ExitActions>
-                          <RemoveStoryboard BeginStoryboardName="NewsCardShimmer"/>
-                        </MultiDataTrigger.ExitActions>
-                      </MultiDataTrigger>
-                    </Style.Triggers>
-                  </Style>
-                </Rectangle.Style>
-              </Rectangle>
-            </Grid>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-    <Style x:Key="Style.Skeleton.GameRow" TargetType="ContentControl">
-      <Setter Property="SnapsToDevicePixels" Value="True"/>
-      <Setter Property="Focusable" Value="False"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="ContentControl">
-            <Grid ClipToBounds="True">
-              <Border CornerRadius="6" Background="{DynamicResource Brush.Surface}" Opacity="0.35"/>
-              <Rectangle x:Name="SkRect2">
-                <Rectangle.Fill>
-                  <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                    <GradientStop Color="#00FFFFFF" Offset="0"/>
-                    <GradientStop Color="#22FFFFFF" Offset="0.35"/>
-                    <GradientStop Color="#00FFFFFF" Offset="0.7"/>
-                  </LinearGradientBrush>
-                </Rectangle.Fill>
-                <Rectangle.RenderTransform>
-                  <TranslateTransform X="-300"/>
-                </Rectangle.RenderTransform>
-                <!-- Условия и причина — см. Style.Skeleton.NewsCard выше. -->
-                <Rectangle.Style>
-                  <Style TargetType="Rectangle">
-                    <Style.Triggers>
-                      <MultiDataTrigger>
-                        <MultiDataTrigger.Conditions>
-                          <Condition Binding="{Binding IsVisible, RelativeSource={RelativeSource Self}}" Value="True"/>
-                          <Condition Binding="{Binding Source={x:Static ui:UiAnimations.Instance}, Path=Enabled}" Value="True"/>
-                        </MultiDataTrigger.Conditions>
-                        <MultiDataTrigger.EnterActions>
-                          <BeginStoryboard x:Name="GameRowShimmer">
-                            <Storyboard RepeatBehavior="Forever">
-                              <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)" From="-300" To="300" Duration="0:0:1.6"/>
-                            </Storyboard>
-                          </BeginStoryboard>
-                        </MultiDataTrigger.EnterActions>
-                        <MultiDataTrigger.ExitActions>
-                          <RemoveStoryboard BeginStoryboardName="GameRowShimmer"/>
-                        </MultiDataTrigger.ExitActions>
-                      </MultiDataTrigger>
-                    </Style.Triggers>
-                  </Style>
-                </Rectangle.Style>
-              </Rectangle>
-            </Grid>
-            <ControlTemplate.Triggers>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
     <!-- Shared skeleton sizing resources -->
     <sys:Double x:Key="Skeleton.GameRowHeight">60</sys:Double>
     <sys:Double x:Key="Skeleton.NewsPreloadHeight">120</sys:Double>

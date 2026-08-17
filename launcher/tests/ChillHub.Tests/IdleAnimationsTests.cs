@@ -79,9 +79,78 @@ namespace ChillHub.Tests {
             await UiThread.WaitUntil(() => skeleton.HasAnimatedProperties, "возврат пульса после разворачивания окна");
         });
 
+        /// <summary>
+        /// Шиммер карточки и строки списка не только идёт, но и вообще заводится. Анимация
+        /// сдвигает <c>RenderTransform.X</c>, а Freezable внутри шаблона запечатывается
+        /// вместе с ним: на замороженном преобразовании WPF отвечает «не удается анимировать
+        /// в постоянном экземпляре объекта» — и это не тихий сбой, а необработанное
+        /// исключение прямо на раскладке главной страницы.
+        /// </summary>
+        /// <param name="styleKey">Ключ проверяемого стиля скелетона.</param>
+        [Theory]
+        [InlineData("Style.Skeleton.NewsCard")]
+        [InlineData("Style.Skeleton.GameRow")]
+        public void ШиммерЗаводитсяИОстанавливается(string styleKey) => UiThread.Run(async () => {
+            Exception? unhandled = null;
+            void OnUnhandled(object s, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e) {
+                unhandled = e.Exception;
+                e.Handled = true;
+            }
+
+            var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+            dispatcher.UnhandledException += OnUnhandled;
+            try {
+                using var root = new OffscreenVisualRoot();
+                var card = root.Add(new ContentControl {
+                    Width = 200,
+                    Height = 60,
+                    Style = (Style)Theme()[styleKey],
+                });
+                card.UpdateLayout();
+
+                var shimmer = FindChild<System.Windows.Shapes.Rectangle>(card);
+                Assert.NotNull(shimmer);
+
+                // Анимируется не сам прямоугольник, а его преобразование, поэтому и
+                // спрашиваем про анимацию именно у него. Заодно это прямая проверка, что
+                // преобразование не заморожено: замороженное анимировать нельзя.
+                var move = shimmer!.RenderTransform;
+                Assert.False(move.IsFrozen, "преобразование шиммера запечатано шаблоном — анимировать его WPF откажется");
+                await UiThread.WaitUntil(() => move.HasAnimatedProperties || unhandled != null, "запуск шиммера");
+                Assert.Null(unhandled);
+
+                card.Visibility = Visibility.Collapsed;
+                await UiThread.WaitUntil(() => !move.HasAnimatedProperties, "остановка шиммера у спрятанной карточки");
+                Assert.Null(unhandled);
+            }
+            finally {
+                dispatcher.UnhandledException -= OnUnhandled;
+            }
+        });
+
+        private static T? FindChild<T>(DependencyObject parent)
+            where T : DependencyObject {
+            var count = System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent);
+            for (var i = 0; i < count; i++) {
+                var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
+                if (child is T hit) {
+                    return hit;
+                }
+
+                var deeper = FindChild<T>(child);
+                if (deeper != null) {
+                    return deeper;
+                }
+            }
+
+            return null;
+        }
+
+        private static ResourceDictionary Theme() => (ResourceDictionary)Application.LoadComponent(
+            new Uri("/ChillHub;component/Themes/Theme.Dark.xaml", UriKind.Relative));
+
         private static Border NewSkeleton() {
-            var theme = (ResourceDictionary)Application.LoadComponent(
-                new Uri("/ChillHub;component/Themes/Theme.Dark.xaml", UriKind.Relative));
+            var theme = Theme();
 
             return new Border {
                 Width = 120,
