@@ -849,6 +849,13 @@ namespace ChillHub.Pages {
                 // и показывать по нему ошибку тем более нельзя.
                 throw;
             }
+            catch (Exception ex) when (HomeFeed.IsNotFound(ex)) {
+                // Ни сборок, ни новостей у игры на сервере нет — показываем пустой раздел
+                // и молчим: это обычное состояние новой игры, а не сбой (HomeFeed.IsNotFound).
+                Core.Logging.Logger.Info($"LoadBuildsAndGameNewsAsync gid={gameId}: сборок или новостей на сервере нет (404)");
+                this.builds = HomeFeed.SortBuilds(null);
+                this.ShowGameNews(Array.Empty<NewsItem>());
+            }
             catch (Exception ex) {
                 // Пользователю — суть, URL и текст исключения уходят в лог и в подсказку
                 this.ShowUserError(
@@ -907,6 +914,11 @@ namespace ChillHub.Pages {
                 var items = gameNews?.Items ?? new List<NewsItem>();
                 this.NormalizeCoverUrls(items);
                 this.ShowGameNews(items);
+            }
+            catch (Exception ex) when (HomeFeed.IsNotFound(ex)) {
+                // У игры просто нет ленты — это пустой раздел, а не ошибка (см. HomeFeed.IsNotFound)
+                Core.Logging.Logger.Info($"ReloadGameNewsAsync gid={gid}: ленты новостей у игры нет (404)");
+                this.ShowGameNews(Array.Empty<NewsItem>());
             }
             catch (Exception ex) {
                 this.ShowUserError("Не удалось обновить новости игры.", ex, "HomePage.ReloadGameNewsAsync");
@@ -1001,6 +1013,11 @@ namespace ChillHub.Pages {
             var previousGalleryCts = Interlocked.Exchange(ref this.galleryCts, galleryCtsLocal);
             try {
                 previousGalleryCts?.Cancel();
+            }
+            catch (ObjectDisposedException) {
+                // Прошлая загрузка уже закончилась и освободила свой источник — отменять
+                // нечего. Это обычный ход событий при перещёлкивании списка игр, а не сбой:
+                // на нём набегала тысяча строк WARN за сеанс, вытеснявших из лога всё остальное.
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Warn($"GameCombo_SelectionChanged: отмена предыдущей загрузки галереи: {ex.Message}");
