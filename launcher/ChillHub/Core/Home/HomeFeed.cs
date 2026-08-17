@@ -9,12 +9,36 @@ namespace ChillHub.Core.Home {
     using System.Linq;
     using System.Net;
     using System.Net.Http;
+    using System.Net.Http.Json;
+    using System.Threading;
+    using System.Threading.Tasks;
 
     /// <summary>
     /// Адреса данных главного экрана и приведение полученного к пригодному для показа виду.
     /// Сети здесь нет: запрос выполняет вызывающий код, здесь — только строки и списки.
     /// </summary>
     internal static class HomeFeed {
+        /// <summary>
+        /// Запрашивает необязательный раздел: 404 превращается в <c>null</c>, всё
+        /// остальное летит вызывающему как обычная ошибка загрузки. Разбор живёт здесь,
+        /// а не в обработчиках страниц: там он повторялся трижды и не проверялся ничем.
+        /// </summary>
+        /// <typeparam name="T">Тип разбираемого ответа.</typeparam>
+        /// <param name="http">Клиент, которым ходим на сервер.</param>
+        /// <param name="url">Полный адрес раздела.</param>
+        /// <param name="token">Отмена (пользователь мог выбрать другую игру).</param>
+        /// <returns>Разобранный ответ или <c>null</c>, если раздела на сервере нет.</returns>
+        internal static async Task<T?> GetOptionalAsync<T>(HttpClient http, string url, CancellationToken token = default)
+            where T : class {
+            try {
+                return await http.GetFromJsonAsync<T>(url, token).ConfigureAwait(true);
+            }
+            catch (Exception ex) when (IsNotFound(ex)) {
+                Logging.Logger.Info($"Раздела нет на сервере (404), показываем пустым: {url}");
+                return null;
+            }
+        }
+
         /// <summary>
         /// Ответ «такого нет» — это не сбой. У игры может не быть ни ленты новостей, ни
         /// списка сборок: сервер отвечает 404, и правильная реакция — пустой раздел, а не

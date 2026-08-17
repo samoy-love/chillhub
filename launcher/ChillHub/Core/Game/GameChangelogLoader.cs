@@ -54,10 +54,14 @@ namespace ChillHub.Core.Game {
         /// <summary>Забирает changelog игры и приводит адреса обложек к абсолютным.</summary>
         /// <param name="baseApi">База API из конфига.</param>
         /// <param name="gameId">Идентификатор игры.</param>
-        /// <returns>Записи changelog; пустой список, если сервер прислал пусто.</returns>
+        /// <returns>Записи changelog; пустой список, если сервер прислал пусто или ленты у игры нет.</returns>
         internal async Task<List<NewsItem>> LoadAsync(string baseApi, string gameId) {
             var url = IndexUrl(baseApi, gameId);
-            var index = await this.http.GetFromJsonAsync<NewsIndex>(url).ConfigureAwait(true);
+
+            // Ленты у игры может не быть вовсе: сервер отвечает 404, и это пустой раздел,
+            // а не сбой загрузки — страница показывала на нём «Проверьте подключение
+            // к интернету» и слала авто-отчёт (см. Home.HomeFeed.GetOptionalAsync).
+            var index = await Home.HomeFeed.GetOptionalAsync<NewsIndex>(this.http, url).ConfigureAwait(true);
             var items = index?.Items ?? new List<NewsItem>();
             return AbsolutizeCovers(baseApi, items);
         }
