@@ -2009,9 +2009,17 @@ function mgmAppendRow(tb, it){
 
 function mgmAddRow(){
   const tb = document.querySelector('#mgm-table tbody'); if(!tb) return;
-  mgmAppendRow(tb, {gameId:'', title:'', exeRelativePath:'', iconUrl:'', pinned:false});
+  const gameId = (prompt('ID новой игры (латиница, цифры, дефис, подчёркивание):') || '').trim();
+  if(!gameId) return;
+  const dup = Array.from(tb.querySelectorAll('tr')).some(tr=>{
+    const inp = tr.querySelectorAll('td')[0].querySelector('input');
+    return inp && inp.value.trim().toLowerCase() === gameId.toLowerCase();
+  });
+  if(dup){ notify('Игра с ID «'+gameId+'» уже есть в списке'); return; }
+  mgmAppendRow(tb, {gameId, title:'', exeRelativePath:'', iconUrl:'', pinned:false});
   mgmSetDirty(true);
-  if(window.gmListRender) window.gmListRender();
+  const newRow = tb.querySelector('tr:last-child');
+  if(newRow) newRow.click();
 }
 
 async function mgmSave(){
