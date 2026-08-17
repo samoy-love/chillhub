@@ -1,6 +1,7 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib"
+                    xmlns:ui="clr-namespace:ChillHub.Core.UI">
   <!-- Palette -->
   <!-- Одна акцентная краска (#7C5CFF) и три статусных цвета. Раньше акцентов было три —
        розовый, фиолетовый и градиент между ними — и ни один из них не значил «главное». -->
@@ -237,16 +238,28 @@
     <Setter Property="Opacity" Value="0.55"/>
     <Setter Property="SnapsToDevicePixels" Value="True"/>
     <Style.Triggers>
-      <EventTrigger RoutedEvent="Loaded">
-        <BeginStoryboard x:Name="SkeletonPulse">
-          <Storyboard RepeatBehavior="Forever" AutoReverse="True">
-            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.35" To="0.7" Duration="0:0:1.1"/>
-          </Storyboard>
-        </BeginStoryboard>
-      </EventTrigger>
-      <EventTrigger RoutedEvent="Unloaded">
-        <StopStoryboard BeginStoryboardName="SkeletonPulse"/>
-      </EventTrigger>
+      <!-- Пульс идёт, только пока скелетон в самом деле на экране. По Loaded/Unloaded он
+           не выключался никогда: секции скелетонов прячут Visibility.Collapsed у родителя,
+           а Unloaded при этом не наступает — десяток невидимых Border'ов крутил вечный
+           клок анимации на UI-потоке всё время работы лаунчера, включая жизнь в трее.
+           IsVisible снимает и скрытые секции, и спрятанное окно; UiAnimations.Enabled —
+           свёрнутое в панель задач окно, у которого IsVisible остаётся истинной. -->
+      <MultiDataTrigger>
+        <MultiDataTrigger.Conditions>
+          <Condition Binding="{Binding IsVisible, RelativeSource={RelativeSource Self}}" Value="True"/>
+          <Condition Binding="{Binding Source={x:Static ui:UiAnimations.Instance}, Path=Enabled}" Value="True"/>
+        </MultiDataTrigger.Conditions>
+        <MultiDataTrigger.EnterActions>
+          <BeginStoryboard x:Name="SkeletonPulse">
+            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+              <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.35" To="0.7" Duration="0:0:1.1"/>
+            </Storyboard>
+          </BeginStoryboard>
+        </MultiDataTrigger.EnterActions>
+        <MultiDataTrigger.ExitActions>
+          <RemoveStoryboard BeginStoryboardName="SkeletonPulse"/>
+        </MultiDataTrigger.ExitActions>
+      </MultiDataTrigger>
     </Style.Triggers>
   </Style>
 

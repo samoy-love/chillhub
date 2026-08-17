@@ -68,15 +68,24 @@
                 </Border>
               </Grid>
               <ControlTemplate.Triggers>
-                <Trigger Property="IsIndeterminate" Value="True">
-                  <Trigger.EnterActions>
-                    <BeginStoryboard>
+                <!-- Остановка обязательна: EnterActions без ExitActions оставляют бегунок
+                     крутиться и после того, как полоса стала определённой. -->
+                <MultiTrigger>
+                  <MultiTrigger.Conditions>
+                    <Condition Property="IsIndeterminate" Value="True"/>
+                    <Condition Property="IsVisible" Value="True"/>
+                  </MultiTrigger.Conditions>
+                  <MultiTrigger.EnterActions>
+                    <BeginStoryboard x:Name="UpdateVerifyRun">
                       <Storyboard RepeatBehavior="Forever">
                         <DoubleAnimation Storyboard.TargetName="IndBar" Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)" From="-180" To="300" Duration="0:0:1.8"/>
                       </Storyboard>
                     </BeginStoryboard>
-                  </Trigger.EnterActions>
-                </Trigger>
+                  </MultiTrigger.EnterActions>
+                  <MultiTrigger.ExitActions>
+                    <RemoveStoryboard BeginStoryboardName="UpdateVerifyRun"/>
+                  </MultiTrigger.ExitActions>
+                </MultiTrigger>
               </ControlTemplate.Triggers>
             </ControlTemplate>
           </Setter.Value>

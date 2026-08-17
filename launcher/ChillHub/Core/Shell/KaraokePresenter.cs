@@ -83,7 +83,9 @@ namespace ChillHub.Core.Shell {
                 this.FitHostWidth();
                 this.ticker.ResetToStart(DateTime.UtcNow);
                 this.SetTexts(string.Empty, this.ticker.NextLine);
-                this.StartCaretBlink();
+
+                // Мигание курсора заводит Resume вместе с печатью — двух заводов подряд
+                // на старте не нужно.
                 this.Resume();
             }
             catch (Exception ex) {
@@ -91,7 +93,10 @@ namespace ChillHub.Core.Shell {
             }
         }
 
-        /// <summary>Останавливает печать (окно свёрнуто или неактивно) — время паузы не засчитывается.</summary>
+        /// <summary>
+        /// Останавливает печать и мигание курсора (окно свёрнуто или неактивно) — время
+        /// паузы не засчитывается.
+        /// </summary>
         internal void Pause() {
             if (!this.started) {
                 return;
@@ -99,6 +104,7 @@ namespace ChillHub.Core.Shell {
 
             this.paused = true;
             this.timer.Stop();
+            this.StopCaretBlink();
             this.ticker.BeginPause(DateTime.UtcNow);
         }
 
@@ -123,6 +129,7 @@ namespace ChillHub.Core.Shell {
                 LogFailure("возобновление", ex);
             }
 
+            this.StartCaretBlink();
             if (!this.timer.IsEnabled) {
                 this.timer.Start();
             }
@@ -198,6 +205,21 @@ namespace ChillHub.Core.Shell {
                 RepeatBehavior = RepeatBehavior.Forever,
             };
             this.caret.BeginAnimation(UIElement.OpacityProperty, blink);
+        }
+
+        /// <summary>
+        /// Гасит мигание вместе с паузой печати. Раньше <see cref="Pause"/> останавливал
+        /// только таймер, а бесконечная анимация курсора продолжала тикать на UI-потоке —
+        /// свёрнутый в трей лаунчер мигал курсором, которого никто не видел, все сутки.
+        /// </summary>
+        private void StopCaretBlink() {
+            try {
+                this.caret.BeginAnimation(UIElement.OpacityProperty, null);
+                this.caret.Opacity = 1.0;
+            }
+            catch (Exception ex) {
+                LogFailure("остановка курсора", ex);
+            }
         }
 
         private void OnTick(object? sender, EventArgs e) {

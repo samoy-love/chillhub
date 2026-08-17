@@ -3,6 +3,7 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:sys="clr-namespace:System;assembly=mscorlib"
       xmlns:pr="clr-namespace:System.Windows.Controls.Primitives;assembly=PresentationFramework"
+      xmlns:ui="clr-namespace:ChillHub.Core.UI"
       Title="Главная"
       Background="{DynamicResource Brush.Background}">
   <Page.Resources>
@@ -72,15 +73,25 @@
               </Border>
             </Grid>
             <ControlTemplate.Triggers>
-              <Trigger Property="IsIndeterminate" Value="True">
-                <Trigger.EnterActions>
-                  <BeginStoryboard>
+              <!-- Условие на IsVisible и обязательное снятие анимации: раньше у триггера были
+                   одни EnterActions, и запущенный бегунок не останавливался уже никогда —
+                   ни когда полоса становилась определённой, ни когда её прятали. -->
+              <MultiTrigger>
+                <MultiTrigger.Conditions>
+                  <Condition Property="IsIndeterminate" Value="True"/>
+                  <Condition Property="IsVisible" Value="True"/>
+                </MultiTrigger.Conditions>
+                <MultiTrigger.EnterActions>
+                  <BeginStoryboard x:Name="VerifyRun">
                     <Storyboard RepeatBehavior="Forever">
                       <DoubleAnimation Storyboard.TargetName="IndBar" Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)" From="-180" To="300" Duration="0:0:1.8"/>
                     </Storyboard>
                   </BeginStoryboard>
-                </Trigger.EnterActions>
-              </Trigger>
+                </MultiTrigger.EnterActions>
+                <MultiTrigger.ExitActions>
+                  <RemoveStoryboard BeginStoryboardName="VerifyRun"/>
+                </MultiTrigger.ExitActions>
+              </MultiTrigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
         </Setter.Value>
@@ -106,23 +117,32 @@
             <ControlTemplate.Triggers>
               <!-- План ещё не посчитан: доли нет, но работа идёт — показываем бегунок,
                    а не пустую полосу, которая читалась бы как «ничего не происходит». -->
-              <Trigger Property="IsIndeterminate" Value="True">
+              <MultiTrigger>
+                <MultiTrigger.Conditions>
+                  <Condition Property="IsIndeterminate" Value="True"/>
+                  <Condition Property="IsVisible" Value="True"/>
+                </MultiTrigger.Conditions>
                 <Setter TargetName="PART_Indicator" Property="Width" Value="90"/>
                 <Setter TargetName="PART_Indicator" Property="RenderTransform">
                   <Setter.Value>
                     <TranslateTransform X="-100"/>
                   </Setter.Value>
                 </Setter>
-                <Trigger.EnterActions>
-                  <BeginStoryboard>
+                <MultiTrigger.EnterActions>
+                  <BeginStoryboard x:Name="RoundedRun">
                     <Storyboard RepeatBehavior="Forever">
                       <DoubleAnimation Storyboard.TargetName="PART_Indicator"
                                        Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)"
                                        From="-100" To="600" Duration="0:0:1.8"/>
                     </Storyboard>
                   </BeginStoryboard>
-                </Trigger.EnterActions>
-              </Trigger>
+                </MultiTrigger.EnterActions>
+                <!-- Без остановки бегунок карточки очереди продолжал крутиться и после
+                     того, как план посчитан и полоса показывает настоящую долю. -->
+                <MultiTrigger.ExitActions>
+                  <RemoveStoryboard BeginStoryboardName="RoundedRun"/>
+                </MultiTrigger.ExitActions>
+              </MultiTrigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
         </Setter.Value>
@@ -455,22 +475,36 @@
                 <Rectangle.RenderTransform>
                   <TranslateTransform X="-300"/>
                 </Rectangle.RenderTransform>
-                <!-- Триггер живёт на самом Rectangle, а анимация идёт по пути в
-                     RenderTransform: имя на TranslateTransform (это Freezable) в
-                     namescope шаблона не попадает, и Storyboard.TargetName на нём
-                     валит приложение на Loaded. Так же сделан Style.Skeleton.GameRow. -->
-                <Rectangle.Triggers>
-                  <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                    <BeginStoryboard x:Name="NewsCardShimmer">
-                      <Storyboard RepeatBehavior="Forever" AutoReverse="True">
-                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)" From="-300" To="300" Duration="0:0:1.6"/>
-                      </Storyboard>
-                    </BeginStoryboard>
-                  </EventTrigger>
-                  <EventTrigger RoutedEvent="FrameworkElement.Unloaded">
-                    <StopStoryboard BeginStoryboardName="NewsCardShimmer"/>
-                  </EventTrigger>
-                </Rectangle.Triggers>
+                <!-- Анимация идёт по пути в RenderTransform самого прямоугольника: имя на
+                     TranslateTransform (это Freezable) в namescope шаблона не попадает, и
+                     Storyboard.TargetName на нём валит приложение. Поэтому и триггер живёт
+                     в стиле прямоугольника — цель по умолчанию — он сам, TargetName не нужен.
+                     Loaded/Unloaded здесь не годятся: карточку с пришедшей обложкой прячет
+                     Visibility.Collapsed, а Unloaded при этом не наступает — шиммер каждой
+                     новости и каждой строки списка крутился до выхода из лаунчера.
+                     Так же сделан Style.Skeleton.GameRow. -->
+                <Rectangle.Style>
+                  <Style TargetType="Rectangle">
+                    <Style.Triggers>
+                      <MultiDataTrigger>
+                        <MultiDataTrigger.Conditions>
+                          <Condition Binding="{Binding IsVisible, RelativeSource={RelativeSource Self}}" Value="True"/>
+                          <Condition Binding="{Binding Source={x:Static ui:UiAnimations.Instance}, Path=Enabled}" Value="True"/>
+                        </MultiDataTrigger.Conditions>
+                        <MultiDataTrigger.EnterActions>
+                          <BeginStoryboard x:Name="NewsCardShimmer">
+                            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                              <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)" From="-300" To="300" Duration="0:0:1.6"/>
+                            </Storyboard>
+                          </BeginStoryboard>
+                        </MultiDataTrigger.EnterActions>
+                        <MultiDataTrigger.ExitActions>
+                          <RemoveStoryboard BeginStoryboardName="NewsCardShimmer"/>
+                        </MultiDataTrigger.ExitActions>
+                      </MultiDataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </Rectangle.Style>
               </Rectangle>
             </Grid>
           </ControlTemplate>
@@ -496,18 +530,29 @@
                 <Rectangle.RenderTransform>
                   <TranslateTransform X="-300"/>
                 </Rectangle.RenderTransform>
-                <Rectangle.Triggers>
-                  <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                    <BeginStoryboard x:Name="GameRowShimmer">
-                      <Storyboard RepeatBehavior="Forever">
-                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)" From="-300" To="300" Duration="0:0:1.6"/>
-                      </Storyboard>
-                    </BeginStoryboard>
-                  </EventTrigger>
-                  <EventTrigger RoutedEvent="FrameworkElement.Unloaded">
-                    <StopStoryboard BeginStoryboardName="GameRowShimmer"/>
-                  </EventTrigger>
-                </Rectangle.Triggers>
+                <!-- Условия и причина — см. Style.Skeleton.NewsCard выше. -->
+                <Rectangle.Style>
+                  <Style TargetType="Rectangle">
+                    <Style.Triggers>
+                      <MultiDataTrigger>
+                        <MultiDataTrigger.Conditions>
+                          <Condition Binding="{Binding IsVisible, RelativeSource={RelativeSource Self}}" Value="True"/>
+                          <Condition Binding="{Binding Source={x:Static ui:UiAnimations.Instance}, Path=Enabled}" Value="True"/>
+                        </MultiDataTrigger.Conditions>
+                        <MultiDataTrigger.EnterActions>
+                          <BeginStoryboard x:Name="GameRowShimmer">
+                            <Storyboard RepeatBehavior="Forever">
+                              <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)" From="-300" To="300" Duration="0:0:1.6"/>
+                            </Storyboard>
+                          </BeginStoryboard>
+                        </MultiDataTrigger.EnterActions>
+                        <MultiDataTrigger.ExitActions>
+                          <RemoveStoryboard BeginStoryboardName="GameRowShimmer"/>
+                        </MultiDataTrigger.ExitActions>
+                      </MultiDataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </Rectangle.Style>
               </Rectangle>
             </Grid>
             <ControlTemplate.Triggers>
@@ -577,8 +622,11 @@
             </Grid.ColumnDefinitions>
             <TextBlock Grid.Column="0" Text="Игры" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Title}"/>
             <!-- Compact verify indicator: small indeterminate bar between title and refresh button -->
+            <!-- IsIndeterminate ставится из кода вместе с видимостью, а не здесь: прибитый
+                 в разметке, он запускал бесконечный бегунок при загрузке страницы, и тот
+                 крутился всё время работы лаунчера под невидимой полосой. -->
             <ProgressBar Grid.Column="1" Name="GamesVerifyIndicator" Width="80" Height="4" VerticalAlignment="Center"
-                         IsIndeterminate="True" Visibility="Collapsed"
+                         Visibility="Collapsed"
                          Style="{StaticResource Style.ProgressBar.Verify}" Margin="8,0,8,0"/>
             <Button Grid.Column="2" Name="RefreshGamesBtn" Width="28" Height="28" ToolTip="Обновить список и статусы" Click="RefreshGames_Click" Margin="8,0,0,0" Padding="0">
               <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Center"/>

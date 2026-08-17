@@ -534,6 +534,18 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Показывает или прячет бегунок проверки игр. Видимость и <c>IsIndeterminate</c>
+        /// ставятся вместе: бесконечная анимация полосы должна жить ровно столько, сколько
+        /// идёт проверка. Раньше <c>IsIndeterminate</c> стоял в разметке, бегунок стартовал
+        /// вместе со страницей и крутился под невидимой полосой до самого выхода.
+        /// </summary>
+        /// <param name="running">Проверка идёт.</param>
+        private void ShowGamesVerifyIndicator(bool running) {
+            this.GamesVerifyIndicator.IsIndeterminate = running;
+            this.GamesVerifyIndicator.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+        }
+
         // --- Фактическая проверка статуса игры по манифесту (полное сравнение) ---
         // priorityGameId: игру с этим id проверяем первой и сразу разблокируем для неё кнопку действия,
         // остальные догоняются в фоне и лишь обновляют свои бейджи (C4).
@@ -552,7 +564,7 @@ namespace ChillHub.Pages {
 
             try {
                 await this.DispatcherInvokeAsync(() => {
-                    this.GamesVerifyIndicator.Visibility = Visibility.Visible;
+                    this.ShowGamesVerifyIndicator(true);
                     this.RefreshGamesBtn.IsEnabled = false;
                 });
 
@@ -676,7 +688,7 @@ namespace ChillHub.Pages {
 
                 Interlocked.Exchange(ref this.verifyRunning, 0);
                 await this.DispatcherInvokeAsync(() => {
-                    this.GamesVerifyIndicator.Visibility = Visibility.Collapsed;
+                    this.ShowGamesVerifyIndicator(false);
                     this.RefreshGamesBtn.IsEnabled = true;
 
                     // После завершения всегда выставляем финальный статус, чтобы не зависало "Проверка игр X/Y".
@@ -1311,7 +1323,7 @@ namespace ChillHub.Pages {
             }
 
             // Запустить асинхронную проверку статусов по манифесту
-            this.GamesVerifyIndicator.Visibility = Visibility.Visible;
+            this.ShowGamesVerifyIndicator(true);
             await this.VerifyAllGamesStatusesAsync(this.GetSelectedGameId());
 
             // После обновления статусов — освежим подсказку по текущей игре из кэша

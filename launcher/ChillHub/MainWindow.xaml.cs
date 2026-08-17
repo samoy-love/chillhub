@@ -498,8 +498,22 @@ namespace ChillHub {
 
         // Theme toggle removed: single dark theme is used
 
+        /// <summary>
+        /// Окно на экране — печатаем и анимируем, ушло в трей или в панель задач — молчим.
+        /// <para>
+        /// Кроме караоке тем же переключателем гасятся бесконечные анимации разметки
+        /// (см. <see cref="Core.UI.UiAnimations"/>): скелетоны и бегунки прячутся
+        /// <c>Visibility.Collapsed</c>, но их клоки продолжали тикать на UI-потоке каждый
+        /// кадр — спрятанный лаунчер жёг на этом около 2% ядра, свёрнутый в панель задач —
+        /// ещё и видеокарту. Условия в разметке ловят скрытое окно и сами по
+        /// <c>IsVisible</c>, а вот у свёрнутого окна <c>IsVisible</c> остаётся истинной —
+        /// ради этого случая переключатель и нужен.
+        /// </para>
+        /// </summary>
         private void SyncKaraokeWithWindowState() {
-            if (this.IsVisible && this.WindowState != WindowState.Minimized) {
+            var onScreen = this.IsVisible && this.WindowState != WindowState.Minimized;
+            Core.UI.UiAnimations.Instance.Enabled = onScreen;
+            if (onScreen) {
                 this.karaoke.Resume();
             }
             else {
