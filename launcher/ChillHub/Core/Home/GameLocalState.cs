@@ -138,6 +138,64 @@ namespace ChillHub.Core.Home {
             string desktopDirectory, string? shellProgId = null)
             => new ShortcutEnvironmentOverride(desktopDirectory, shellProgId ?? ShellProgId);
 
+        /// <summary>
+        /// Полный путь к exe игры внутри её папки. Пустая строка — путь к exe не задан
+        /// (в карточке игры его может не быть) и запускать нечего.
+        /// </summary>
+        /// <param name="gameId">Идентификатор игры.</param>
+        /// <param name="exeRelativePath">Путь к exe относительно папки игры.</param>
+        /// <returns>Полный путь к exe или пустая строка.</returns>
+        internal static string GameExePath(string? gameId, string? exeRelativePath) {
+            if (string.IsNullOrWhiteSpace(gameId) || string.IsNullOrWhiteSpace(exeRelativePath)) {
+                return string.Empty;
+            }
+
+            // Разделитель в карточке приходит с сервера любой: и '/', и '\\'. Ведущий
+            // разделитель снимаем: Path.Combine считает такой путь абсолютным и выкинул бы
+            // папку игры целиком, уведя ярлык в корень диска.
+            var rel = exeRelativePath.Replace('/', Path.DirectorySeparatorChar)
+                                     .Replace('\\', Path.DirectorySeparatorChar)
+                                     .TrimStart(Path.DirectorySeparatorChar);
+            return Path.Combine(GameLocalRoot(gameId), rel);
+        }
+
+        /// <summary>
+        /// Заводит создание ярлыка установленной игры в отдельном потоке.
+        /// <para>
+        /// Оболочка Windows — COM, и создание ярлыка требует STA-потока: из потока пула
+        /// (а установка заканчивается именно там) вызов падал бы. Поток фоновый: ярлык
+        /// не должен держать закрытие лаунчера.
+        /// </para>
+        /// </summary>
+        /// <param name="title">Название игры для имени ярлыка.</param>
+        /// <param name="gameId">Идентификатор игры.</param>
+        /// <param name="exeRelativePath">Путь к exe относительно папки игры.</param>
+        internal static void StartDesktopShortcutCreation(string? title, string? gameId, string? exeRelativePath) {
+            try {
+                var exePath = GameExePath(gameId, exeRelativePath);
+                if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath)) {
+                    return;
+                }
+
+                var name = string.IsNullOrWhiteSpace(title) ? gameId! : title!;
+                var thread = new Thread(() => TryCreateDesktopShortcut(name, exePath)) { IsBackground = true };
+                try {
+                    thread.SetApartmentState(ApartmentState.STA);
+                }
+                catch (Exception ex) {
+                    // Состояние потока занять не удалось — пробуем создать ярлык как есть:
+                    // хуже, чем сейчас, уже не будет, а ошибку внутри гасит сам вызов.
+                    Logging.Logger.Warn($"StartDesktopShortcutCreation: STA не выставлен: {ex.Message}");
+                }
+
+                thread.Start();
+            }
+            catch (Exception ex) {
+                // Ярлык — приятная мелочь в конце установки, а не её часть: игра уже установлена.
+                Logging.Logger.Warn($"StartDesktopShortcutCreation('{title}'): {ex.Message}");
+            }
+        }
+
         /// <summary>Создаёт ярлык игры на рабочем столе. Ошибки не критичны для сценария установки.</summary>
         internal static void TryCreateDesktopShortcut(string title, string exePath) {
             try {

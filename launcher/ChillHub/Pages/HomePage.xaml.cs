@@ -1865,6 +1865,10 @@ namespace ChillHub.Pages {
 
                         var g = this.games.FirstOrDefault(x => string.Equals(x.GameId, item.GameId, StringComparison.OrdinalIgnoreCase));
                         this.MarkInstalled(item.GameId, g?.LatestVersion);
+
+                        // Ярлык на рабочем столе: игра уже распакована и запускается, так что
+                        // ошибки здесь установку не портят — их гасит сам вызов.
+                        GameLocalState.StartDesktopShortcutCreation(g?.Title, item.GameId, g?.ExeRelativePath);
                         break;
                     case Core.Game.QueueItemState.Failed:
                         this.hasUpdateError = true;
