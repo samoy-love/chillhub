@@ -694,7 +694,13 @@ jobs:
           # Список ниже обязан быть НАДМНОЖЕСТВОМ путей из `changes` в
           # deploy.yml — при правке синхронизировать оба места.
           FILES="$(git diff --name-only "$BASE" "$HEAD")"
-          if ! echo "$FILES" | grep -qE '^(launcher/|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|installer\.nsi|app\.ico|ci/ensure-nsis\.ps1)$|\.github/workflows/deploy\.yml|\.deploy-kit/)'; then
+          #
+          # launcher/ разобран на ChillHub/ и файлы прямо в каталоге, а не взят
+          # целиком: build-installer.ps1 собирает ровно
+          # launcher/ChillHub/ChillHub.csproj, launcher/tests/ в установщик не
+          # входит и ни одного раздаваемого байта не меняет. Взятый целиком, он
+          # требовал релиза клиента ради обновления тестового пакета.
+          if ! echo "$FILES" | grep -qE '^(launcher/(ChillHub/|[^/]+$)|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|installer\.nsi|app\.ico|ci/ensure-nsis\.ps1)$|\.github/workflows/deploy\.yml|\.deploy-kit/)'; then
             echo "PR не трогает ни launcher/updater, ни триггеры полной выкатки — версия клиента ни при чём"
             exit 0
           fi
