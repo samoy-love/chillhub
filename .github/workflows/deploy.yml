@@ -51,11 +51,19 @@ permissions:
 #                 разбор, кого из троих задело, делает `changes`, и дублировать
 #                 его здесь значило бы завести второй список, который однажды
 #                 разойдётся с первым.
-#   launcher/**, updater/**, Directory.Build.props,
+#   launcher/ChillHub/**, launcher/*, updater/**, Directory.Build.props,
 #   scripts/build-installer.ps1, scripts/installer.nsi, scripts/app.ico,
 #   scripts/ci/ensure-nsis.ps1
 #                 client: всё, из чего build-installer.ps1 собирает
-#                 установщик. Апдейтер входит ProjectReference'ом, props —
+#                 установщик. Каталог launcher/ разобран на два глоба, а не
+#                 взят целиком: build-installer.ps1 собирает ровно
+#                 launcher/ChillHub/ChillHub.csproj, а launcher/tests/ в
+#                 артефакт не входит и ни одного раздаваемого байта не меняет.
+#                 Взятый целиком, он требовал релиза клиента ради обновления
+#                 тестового пакета — гейт версии видит правку launcher/ и
+#                 требует роста <Version>. `launcher/*` оставляет файлы прямо
+#                 в каталоге (сейчас .gitattributes): они общие для обоих
+#                 проектов. Апдейтер входит ProjectReference'ом, props —
 #                 общие свойства компиляции, четыре файла в scripts/ — сам
 #                 сценарий сборки, сценарий NSIS, иконка и установка NSIS
 #                 (закреплённая там версия компилятора — тоже вход сборки).
@@ -90,7 +98,8 @@ permissions:
 #   ^server/(cmd/admin/|internal/|[^/]+$) → server/**
 #   ^server/(cmd/api/|[^/]+$)            → server/**
 #   ^server/internal/                    → server/**
-#   ^(launcher/|updater/|…)              → launcher/**, updater/**,
+#   ^(launcher/(ChillHub/|[^/]+$)|updater/|…) → launcher/ChillHub/**,
+#                                          launcher/*, updater/**,
 #                                          Directory.Build.props и четыре файла
 #                                          сборки установщика в scripts/
 #
@@ -108,7 +117,8 @@ on:
     paths:
       - 'landing/**'
       - 'server/**'
-      - 'launcher/**'
+      - 'launcher/ChillHub/**'
+      - 'launcher/*'
       - 'updater/**'
       - 'Directory.Build.props'
       - 'scripts/build-installer.ps1'
@@ -349,8 +359,10 @@ jobs:
 
           # Установщик: всё, из чего build-installer.ps1 собирает артефакт
           # (см. раскладку в комментарии job'ы). Один греп без разбора на
-          # части: установщик один, точнее делить нечего.
-          echo "$FILES" | grep -qE '^(launcher/|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|installer\.nsi|app\.ico|ci/ensure-nsis\.ps1)$)' \
+          # части: установщик один, точнее делить нечего. launcher/ разобран
+          # на ChillHub/ и файлы прямо в каталоге: launcher/tests/ в артефакт
+          # не входит (см. тот же комментарий).
+          echo "$FILES" | grep -qE '^(launcher/(ChillHub/|[^/]+$)|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|installer\.nsi|app\.ico|ci/ensure-nsis\.ps1)$)' \
             && CLIENT=true || CLIENT=false
 
           printf 'site=%s\napi=%s\nadmin=%s\nadmin_ui=%s\nclient=%s\n' \
