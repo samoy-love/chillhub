@@ -2317,6 +2317,10 @@ namespace ChillHub.Pages {
                     // конца: занятые собираем в список и потом честно называем.
                     var blocked = await Task.Run(() => GameFiles.DeleteGameFiles(localRoot));
 
+                    // Ярлык уносим вместе с файлами: иначе на рабочем столе остаётся иконка,
+                    // которая по клику ругается «не найден элемент».
+                    await Task.Run(() => GameLocalState.TryRemoveDesktopShortcuts(localRoot));
+
                     ChillHub.Core.Sync.FileHashCache.Remove(gid);
                     this.spaceHint.Remember(gid, 0);
                     this.FilesSizeText.Text = string.Empty;
