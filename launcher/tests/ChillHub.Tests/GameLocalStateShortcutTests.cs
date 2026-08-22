@@ -175,7 +175,7 @@ namespace ChillHub.Tests {
         /// ли он на диск. Результат считается один раз на прогон.
         /// </para>
         /// </summary>
-        private static bool ShellAvailable => ShellCanCreateShortcuts.Value;
+        internal static bool ShellAvailable => ShellCanCreateShortcuts.Value;
 
         private static readonly Lazy<bool> ShellCanCreateShortcuts = new Lazy<bool>(ProbeShortcutCreation);
 

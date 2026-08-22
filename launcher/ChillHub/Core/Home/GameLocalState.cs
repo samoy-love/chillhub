@@ -6,6 +6,7 @@
 namespace ChillHub.Core.Home {
     using System;
     using System.IO;
+    using System.Text;
     using System.Threading;
 
     /// <summary>
@@ -19,6 +20,9 @@ namespace ChillHub.Core.Home {
 
         /// <summary>ProgID оболочки Windows, через которую создаётся файл ярлыка.</summary>
         private const string ShellProgId = "WScript.Shell";
+
+        /// <summary>Потолок размера `.lnk`, который мы вообще разбираем (обычный ярлык — единицы килобайт).</summary>
+        private const long MaxLinkBytes = 512 * 1024;
 
         /// <summary>
         /// Подмена окружения ярлыка на время теста; null — работает настоящее окружение.
@@ -134,6 +138,64 @@ namespace ChillHub.Core.Home {
             string desktopDirectory, string? shellProgId = null)
             => new ShortcutEnvironmentOverride(desktopDirectory, shellProgId ?? ShellProgId);
 
+        /// <summary>
+        /// Полный путь к exe игры внутри её папки. Пустая строка — путь к exe не задан
+        /// (в карточке игры его может не быть) и запускать нечего.
+        /// </summary>
+        /// <param name="gameId">Идентификатор игры.</param>
+        /// <param name="exeRelativePath">Путь к exe относительно папки игры.</param>
+        /// <returns>Полный путь к exe или пустая строка.</returns>
+        internal static string GameExePath(string? gameId, string? exeRelativePath) {
+            if (string.IsNullOrWhiteSpace(gameId) || string.IsNullOrWhiteSpace(exeRelativePath)) {
+                return string.Empty;
+            }
+
+            // Разделитель в карточке приходит с сервера любой: и '/', и '\\'. Ведущий
+            // разделитель снимаем: Path.Combine считает такой путь абсолютным и выкинул бы
+            // папку игры целиком, уведя ярлык в корень диска.
+            var rel = exeRelativePath.Replace('/', Path.DirectorySeparatorChar)
+                                     .Replace('\\', Path.DirectorySeparatorChar)
+                                     .TrimStart(Path.DirectorySeparatorChar);
+            return Path.Combine(GameLocalRoot(gameId), rel);
+        }
+
+        /// <summary>
+        /// Заводит создание ярлыка установленной игры в отдельном потоке.
+        /// <para>
+        /// Оболочка Windows — COM, и создание ярлыка требует STA-потока: из потока пула
+        /// (а установка заканчивается именно там) вызов падал бы. Поток фоновый: ярлык
+        /// не должен держать закрытие лаунчера.
+        /// </para>
+        /// </summary>
+        /// <param name="title">Название игры для имени ярлыка.</param>
+        /// <param name="gameId">Идентификатор игры.</param>
+        /// <param name="exeRelativePath">Путь к exe относительно папки игры.</param>
+        internal static void StartDesktopShortcutCreation(string? title, string? gameId, string? exeRelativePath) {
+            try {
+                var exePath = GameExePath(gameId, exeRelativePath);
+                if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath)) {
+                    return;
+                }
+
+                var name = string.IsNullOrWhiteSpace(title) ? gameId! : title!;
+                var thread = new Thread(() => TryCreateDesktopShortcut(name, exePath)) { IsBackground = true };
+                try {
+                    thread.SetApartmentState(ApartmentState.STA);
+                }
+                catch (Exception ex) {
+                    // Состояние потока занять не удалось — пробуем создать ярлык как есть:
+                    // хуже, чем сейчас, уже не будет, а ошибку внутри гасит сам вызов.
+                    Logging.Logger.Warn($"StartDesktopShortcutCreation: STA не выставлен: {ex.Message}");
+                }
+
+                thread.Start();
+            }
+            catch (Exception ex) {
+                // Ярлык — приятная мелочь в конце установки, а не её часть: игра уже установлена.
+                Logging.Logger.Warn($"StartDesktopShortcutCreation('{title}'): {ex.Message}");
+            }
+        }
+
         /// <summary>Создаёт ярлык игры на рабочем столе. Ошибки не критичны для сценария установки.</summary>
         internal static void TryCreateDesktopShortcut(string title, string exePath) {
             try {
@@ -166,6 +228,116 @@ namespace ChillHub.Core.Home {
                 Logging.Logger.Warn($"TryCreateDesktopShortcut('{title}'): {ex.Message}");
             }
         }
+
+        /// <summary>
+        /// Убирает с рабочего стола ярлыки удалённой игры.
+        /// <para>
+        /// Ярлык переживал удаление игры: пользователь сносил файлы, а на рабочем столе
+        /// оставалась иконка, которая по клику ругалась «не найден элемент». Поэтому
+        /// удаление игры уносит и её ярлыки.
+        /// </para>
+        /// <para>
+        /// Ярлык опознаётся по цели, а не по названию: название игры на сервере могло
+        /// поменяться после установки, а на рабочем столе у пользователя вполне может
+        /// лежать чужой ярлык с таким же именем. Цель читается из самого файла `.lnk`,
+        /// без обращения к оболочке Windows: удаление идёт в фоновом потоке, где COM
+        /// недоступен так же свободно, как при установке, а не опознанный ярлык мы
+        /// оставляем на месте — лишний ярлык лучше стёртого чужого.
+        /// </para>
+        /// </summary>
+        /// <param name="localRoot">Корень папки удаляемой игры.</param>
+        /// <returns>Сколько ярлыков удалено.</returns>
+        internal static int TryRemoveDesktopShortcuts(string localRoot) {
+            var removed = 0;
+            try {
+                if (string.IsNullOrWhiteSpace(localRoot)) {
+                    return 0;
+                }
+
+                var desktop = ScopedShortcutEnv.Value?.DesktopDirectory
+                    ?? Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                if (string.IsNullOrWhiteSpace(desktop) || !Directory.Exists(desktop)) {
+                    return 0;
+                }
+
+                var target = Path.GetFullPath(localRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                foreach (var link in Directory.EnumerateFiles(desktop, "*.lnk", SearchOption.TopDirectoryOnly)) {
+                    try {
+                        if (!PointsInto(link, target)) {
+                            continue;
+                        }
+
+                        File.Delete(link);
+                        removed++;
+                        Logging.Logger.Info($"TryRemoveDesktopShortcuts: удалён ярлык '{Path.GetFileName(link)}'");
+                    }
+                    catch (Exception ex) {
+                        // Занятый или защищённый ярлык не повод обрывать проход по остальным.
+                        Logging.Logger.Warn($"TryRemoveDesktopShortcuts('{Path.GetFileName(link)}'): {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex) {
+                // Ярлык — приятная мелочь, а не часть удаления: файлы игры уже снесены.
+                Logging.Logger.Warn($"TryRemoveDesktopShortcuts('{localRoot}'): {ex.Message}");
+            }
+
+            return removed;
+        }
+
+        /// <summary>
+        /// Ведёт ли ярлык внутрь папки игры.
+        /// <para>
+        /// Путь к цели лежит в `.lnk` открытым текстом — и в однобайтовой кодировке
+        /// (блок LinkInfo), и в UTF-16 (строки ярлыка), в зависимости от того, чем он
+        /// создан. Ищем обе записи: достаточно одной, чтобы ярлык был опознан.
+        /// </para>
+        /// </summary>
+        /// <param name="linkPath">Путь к файлу ярлыка.</param>
+        /// <param name="gameRoot">Полный путь к папке игры без хвостового разделителя.</param>
+        /// <returns>true, если ярлык указывает внутрь папки игры.</returns>
+        private static bool PointsInto(string linkPath, string gameRoot) {
+            var info = new FileInfo(linkPath);
+            if (info.Length > MaxLinkBytes) {
+                return false;
+            }
+
+            var bytes = File.ReadAllBytes(linkPath);
+            var needle = gameRoot + Path.DirectorySeparatorChar;
+            return Contains(bytes, Encoding.Unicode.GetBytes(needle))
+                || Contains(bytes, Encoding.UTF8.GetBytes(needle));
+        }
+
+        /// <summary>Ищет последовательность байт в буфере без учёта регистра ASCII.</summary>
+        /// <param name="haystack">Где ищем.</param>
+        /// <param name="needle">Что ищем.</param>
+        /// <returns>true, если последовательность найдена.</returns>
+        private static bool Contains(byte[] haystack, byte[] needle) {
+            if (needle.Length == 0 || haystack.Length < needle.Length) {
+                return false;
+            }
+
+            for (var i = 0; i <= haystack.Length - needle.Length; i++) {
+                var match = true;
+                for (var j = 0; j < needle.Length; j++) {
+                    if (ToLowerAscii(haystack[i + j]) != ToLowerAscii(needle[j])) {
+                        match = false;
+                        break;
+                    }
+                }
+
+                if (match) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>Приводит букву диска к нижнему регистру: `C:\` и `c:\` — один и тот же путь.</summary>
+        /// <param name="b">Байт.</param>
+        /// <returns>Байт в нижнем регистре, если это латинская буква.</returns>
+        private static byte ToLowerAscii(byte b) => b is >= (byte)'A' and <= (byte)'Z' ? (byte)(b + 32) : b;
 
         /// <summary>Куда кладётся ярлык и через какую оболочку он создаётся.</summary>
         /// <param name="DesktopDirectory">Каталог рабочего стола.</param>
