@@ -397,17 +397,16 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
-        /// Подставляет папку игр и глушит автоотчёты об ошибках.
+        /// Подставляет папку игр.
         /// <para>
-        /// Второе обязательно: под <see cref="ConfigDirsScope"/> конфиг разворачивается заново,
-        /// со значениями по умолчанию, а отправка отчётов там включена. Тест, дошедший до
-        /// <c>Logger.Error</c>, полез бы в сеть и в файл квоты отчётов в настоящем %APPDATA%.
+        /// Автоотчёты глушить здесь больше нечем и незачем: тумблера в настройках нет,
+        /// а рубильник CHILLHUB_ERROR_REPORTS=0 выставлен на весь прогон в
+        /// <see cref="TestEnvironment"/> — раньше он терялся, потому что жил в конфиге,
+        /// который <see cref="ConfigDirsScope"/> разворачивает заново.
         /// </para>
         /// </summary>
         private static void UseGamesPath(string path) {
-            var cfg = ConfigService.Current;
-            cfg.GamesPath = path;
-            cfg.AutoErrorReports = false;
+            ConfigService.Current.GamesPath = path;
         }
 
         /// <summary>

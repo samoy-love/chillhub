@@ -46,12 +46,17 @@ namespace ChillHub.Tests {
     /// </summary>
     public class ErrorReporterAutoReportTests {
         /// <summary>
-        /// Выключенный тумблер запрещает отправку целиком: ни одного запроса, ни одного
-        /// события, и даже квота не тратится. Это обещание приватности, данное человеку
-        /// в настройках, — самый дорогой отказ во всём файле.
+        /// Рубильник CHILLHUB_ERROR_REPORTS=0 запрещает отправку целиком: ни одного
+        /// запроса, ни одного события, и даже квота не тратится.
+        /// <para>
+        /// Тумблера в настройках больше нет — автоотчёты всегда включены, — но сам
+        /// отказ обязан работать: им глушат отправку тесты и отладочные прогоны, и
+        /// молча уехавший отчёт с машины, где его выключили, ровно та поломка,
+        /// которую эта проверка и держит.
+        /// </para>
         /// </summary>
         [Fact]
-        public async Task ВыключенныйТумблерЗапрещаетОтправку() {
+        public async Task РубильникОкруженияЗапрещаетОтправку() {
             using var scope = new ReportScope(_ => Ok());
             scope.AutoErrorReports = false;
 
@@ -64,11 +69,11 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
-        /// Тумблер спрашивают на каждой отправке, а не один раз при запуске: человек может
-        /// выключить автоотчёты прямо посреди сеанса — с этого момента не должно уйти ничего.
+        /// Рубильник спрашивают на каждой отправке, а не один раз при запуске: его
+        /// выставляют посреди сеанса — с этого момента не должно уйти ничего.
         /// </summary>
         [Fact]
-        public async Task ТумблерПеречитываетсяПередКаждойОтправкой() {
+        public async Task РубильникПеречитываетсяПередКаждойОтправкой() {
             using var scope = new ReportScope(_ => Ok());
 
             await ErrorReporter.ReportForTestsAsync(new InvalidOperationException("первое"), "Тест");
@@ -579,7 +584,7 @@ namespace ChillHub.Tests {
             private readonly FakeHandler handler;
             private readonly ConcurrentQueue<string> reported = new();
             private readonly ConcurrentQueue<TimeSpan> suppressed = new();
-            private readonly bool savedAutoErrorReports;
+            private readonly string? savedReportsEnv;
             private readonly string? savedApiBaseUrl;
             private readonly string? savedGlobalQuota;
             private readonly string? savedManualQuota;
@@ -589,9 +594,11 @@ namespace ChillHub.Tests {
                 this.savedManualQuota = ReadFile(ManualQuotaPath);
                 this.WriteGlobalQuota(count: 0, windowStart: DateTime.UtcNow);
 
-                this.savedAutoErrorReports = ConfigService.Current.AutoErrorReports;
+                this.savedReportsEnv = Environment.GetEnvironmentVariable(ErrorReporter.EnvVar);
                 this.savedApiBaseUrl = ConfigService.Current.ApiBaseUrl;
-                ConfigService.Current.AutoErrorReports = true;
+                // Общий инициализатор тестов глушит отправку на весь прогон; здесь она
+                // как раз и проверяется, поэтому рубильник на время области снимается.
+                Environment.SetEnvironmentVariable(ErrorReporter.EnvVar, null);
                 ConfigService.Current.ApiBaseUrl = apiBaseUrl!;
 
                 ErrorReporter.ResetThrottleForTests();
@@ -619,10 +626,10 @@ namespace ChillHub.Tests {
             /// <summary>Сроки повтора, названные при исчерпанной квоте.</summary>
             internal IReadOnlyList<TimeSpan> Suppressed => this.suppressed.ToArray();
 
-            /// <summary>Тумблер автоотчётов; правится только в памяти.</summary>
+            /// <summary>Рубильник автоотчётов; живёт только в окружении процесса.</summary>
             internal bool AutoErrorReports {
-                get => ConfigService.Current.AutoErrorReports;
-                set => ConfigService.Current.AutoErrorReports = value;
+                get => Environment.GetEnvironmentVariable(ErrorReporter.EnvVar)?.Trim() != "0";
+                set => Environment.SetEnvironmentVariable(ErrorReporter.EnvVar, value ? null : "0");
             }
 
             /// <summary>Адрес сервера; правится только в памяти.</summary>
@@ -664,7 +671,7 @@ namespace ChillHub.Tests {
                 this.client.Dispose();
                 ErrorReporter.ResetThrottleForTests();
 
-                ConfigService.Current.AutoErrorReports = this.savedAutoErrorReports;
+                Environment.SetEnvironmentVariable(ErrorReporter.EnvVar, this.savedReportsEnv);
                 ConfigService.Current.ApiBaseUrl = this.savedApiBaseUrl!;
 
                 RestoreFile(GlobalQuotaPath, this.savedGlobalQuota);
