@@ -174,8 +174,12 @@
       if (status) status.textContent = text || '';
     }
 
+    // setBusy без текста НЕ трогает строку состояния: она чаще всего несёт
+    // итог только что закончившейся операции — «мало места», ошибку сборки,
+    // число собранных файлов, — и разблокировка кнопок не повод его стирать.
+    // Чтобы очистить строку намеренно, передают пустую строку.
     function setBusy(busy, text) {
-      setStatus(text);
+      if (text !== undefined) setStatus(text);
       root.querySelectorAll('button[data-md-busy]').forEach(function (b) { b.disabled = !!busy; });
     }
 
@@ -316,9 +320,22 @@
       }
     }
 
+    // startTicker показывает, что запрос жив. Обычный JSON-ответ /mods/resolve
+    // приходит целиком в конце, а разбор большого модпака занимает пару минут —
+    // без счётчика панель неотличима от зависшей.
+    function startTicker(prefix) {
+      const started = Date.now();
+      setStatus(prefix + ' 0 с');
+      const id = setInterval(function () {
+        setStatus(prefix + ' ' + Math.round((Date.now() - started) / 1000) + ' с');
+      }, 1000);
+      return function () { clearInterval(id); };
+    }
+
     async function resolvePack(full, version) {
       const parts = full.split('/');
       setBusy(true, 'Разбираем состав…');
+      const stop = startTicker('Разбираем состав, это пара минут для большого модпака…');
       try {
         const body = new URLSearchParams({ gameId: gameId(), namespace: parts[0], name: parts[1] });
         if (version) body.set('version', version);
@@ -331,9 +348,9 @@
           + (plan.missing && plan.missing.length ? ' · НЕДОСТУПНО: ' + plan.missing.length : '')
           + (plan.spaceOk ? '' : ' · МАЛО МЕСТА: ' + plan.spaceNote);
         say(note, plan.spaceOk && !(plan.missing || []).length ? 'info' : 'error');
-        // Строку состояния ставим ПОСЛЕ разблокировки кнопок: setBusy(false)
-        // без текста затирает её, и итог разбора исчезал в том же тике, в
-        // котором появлялся, — вместе с предупреждением о нехватке места.
+        // Итог разбора обязан пережить разблокировку кнопок: когда-то
+        // setBusy(false) стирал строку, и предупреждение о нехватке места
+        // исчезало в том же тике, в котором появлялось.
         setBusy(false);
         setStatus(note);
         return plan;
@@ -341,6 +358,8 @@
         say('Ошибка: ' + e, 'error');
         setBusy(false);
         return null;
+      } finally {
+        stop();
       }
     }
 
@@ -383,6 +402,13 @@
             const pct = Math.round((ev.step / ev.total) * 100);
             if (bar) bar.style.width = pct + '%';
             if (status) status.textContent = 'Скачивание ' + ev.step + '/' + ev.total + ': ' + (ev.message || '');
+          } else if (ev.type === 'resolving') {
+            // Обход дерева идёт около минуты и не знает своего размера заранее:
+            // показываем растущий счётчик найденных модов, иначе первая минута
+            // сборки выглядит зависанием.
+            if (status) status.textContent = 'Разбор состава: найдено модов ' + ev.step + ' · ' + (ev.message || '');
+          } else if (ev.type === 'sizing' && ev.total) {
+            if (status) status.textContent = 'Оценка размера ' + ev.step + '/' + ev.total + ': ' + (ev.message || '');
           } else if (ev.type === 'error') {
             failed = true;
             // Сервер перечисляет пропавшие пакеты в тексте ошибки: это

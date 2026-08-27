@@ -198,6 +198,17 @@ func (b *Builder) roots(req Request) ([]string, error) {
 
 // Resolve walks the tree and measures it without downloading anything.
 func (b *Builder) Resolve(ctx context.Context, req Request) (*Plan, error) {
+	return b.ResolveWith(ctx, req, nil)
+}
+
+// ResolveWith is Resolve that reports progress as it goes.
+//
+// Resolving a big pack costs about two minutes: a minute to walk 151 packages
+// and another to ask the CDN how large each archive is, both paced to stay
+// under Thunderstore's rate limit. A build spends that time before its first
+// downloaded byte, so it has to say what it is doing — silence there was
+// reported as the admin panel hanging on «разбор состава модпака».
+func (b *Builder) ResolveWith(ctx context.Context, req Request, emit Emit) (*Plan, error) {
 	if !adminutil.IsSafeVersion(req.VersionName()) {
 		return nil, fmt.Errorf("mods: %q is not a usable version name", req.VersionName())
 	}
@@ -210,7 +221,13 @@ func (b *Builder) Resolve(ctx context.Context, req Request) (*Plan, error) {
 		return nil, err
 	}
 
-	res, err := b.Client.ResolveList(ctx, eco, roots)
+	var prog ResolveProgress
+	if emit != nil {
+		prog = func(n int, dep string) {
+			emit.send(Event{Type: "resolving", Step: n, Message: dep})
+		}
+	}
+	res, err := b.Client.ResolveListWith(ctx, eco, roots, prog)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +240,10 @@ func (b *Builder) Resolve(ctx context.Context, req Request) (*Plan, error) {
 		Loader:      res.Loader,
 	}
 
-	for _, p := range res.Packages {
+	for i, p := range res.Packages {
+		emit.send(Event{
+			Type: "sizing", Step: i + 1, Total: len(res.Packages), Message: p.FullName,
+		})
 		if path, err := b.Cache.path(p.FullName); err == nil {
 			if st, err := os.Stat(path); err == nil {
 				plan.CachedBytes += st.Size()
@@ -275,7 +295,7 @@ func (b *Builder) Build(ctx context.Context, req Request, allowMissing bool, emi
 	version := req.VersionName()
 	emit.send(Event{Type: "start", Message: "разбор состава модпака", Version: version})
 
-	plan, err := b.Resolve(ctx, req)
+	plan, err := b.ResolveWith(ctx, req, emit)
 	if err != nil {
 		return nil, err
 	}
