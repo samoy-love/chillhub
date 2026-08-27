@@ -208,3 +208,79 @@ func mustEco(t *testing.T, b *Builder) *Ecosystem {
 	}
 	return eco
 }
+
+// TestBuildKeepsModSubfoldersAndCollapsesCaseClashes воспроизводит пакет, на
+// котором сборка падала целиком.
+//
+// x753-More_Suits кладёт в архив moresuits/Glow.png и
+// moresuits/advanced/glow.png. Прежняя раскладка оставляла от пути только имя
+// файла — оба превращались в один путь в двух написаниях, и публикация
+// отвечала: duplicate path "BepInEx/plugins/…/glow.png". Диск игрока такие два
+// имени не различает, поэтому дерево, где они лежат рядом, доставить нельзя.
+func TestBuildKeepsModSubfoldersAndCollapsesCaseClashes(t *testing.T) {
+	fs := newFakeStore(t)
+	fs.add("Team-Pack-1.0.0", []string{"x753-More_Suits-1.5.4"}, map[string]string{
+		"manifest.json": `{"name":"Pack"}`,
+	})
+	fs.add("x753-More_Suits-1.5.4", nil, map[string]string{
+		"BepInEx/plugins/MoreSuits.dll":               "код",
+		"BepInEx/plugins/moresuits/Glow.png":          "картинка",
+		"BepInEx/plugins/moresuits/advanced/glow.png": "другая картинка",
+		// Настоящее столкновение по регистру: два имени, один файл на диске игрока.
+		"BepInEx/plugins/moresuits/Kirby.png": "раз",
+		"BepInEx/plugins/moresuits/kirby.png": "два",
+	})
+
+	b, root := testBuilder(t, fs)
+	if _, err := b.Build(context.Background(), thunderstoreRequest(), false, nil); err != nil {
+		t.Fatalf("сборка не пережила пакет со своими подпапками: %v", err)
+	}
+
+	// Структура под названным маршрутом сохраняется — мод на неё рассчитывает.
+	for _, rel := range []string{
+		"BepInEx/plugins/x753-More_Suits/MoreSuits.dll",
+		"BepInEx/plugins/x753-More_Suits/moresuits/Glow.png",
+		"BepInEx/plugins/x753-More_Suits/moresuits/advanced/glow.png",
+	} {
+		assertFileExists(t, root, rel)
+	}
+
+	// А вот два написания одного имени в одной папке обязаны схлопнуться в одно.
+	dir := filepath.Join(root, "content", "_mods", "lethal-company", "Team-Pack-1.0.0",
+		"files", "BepInEx", "plugins", "x753-More_Suits", "moresuits")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kirby := 0
+	for _, e := range entries {
+		if strings.EqualFold(e.Name(), "kirby.png") {
+			kirby++
+		}
+	}
+	if kirby != 1 {
+		t.Errorf("в дереве %d файлов kirby.png, а диск игрока удержит один", kirby)
+	}
+}
+
+// TestLayoutCollapsesCaseOnlyClashes проверяет схлопывание НА УРОВНЕ ПУТИ, а
+// не по содержимому каталога.
+//
+// Проверка через файловую систему не годится: на Windows разработчика два
+// написания и так лягут в один файл, и тест был бы зелёным даже без правки —
+// а ловить он должен ровно то, что происходит на сервере, где регистр значим.
+func TestLayoutCollapsesCaseOnlyClashes(t *testing.T) {
+	l, err := NewLayout(bepinexRules())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := l.sameCasing("BepInEx/plugins/Author-Mod/Kirby.png")
+	second := l.sameCasing("BepInEx/plugins/Author-Mod/kirby.png")
+	if second != first {
+		t.Errorf("два написания одного имени дали разные пути: %q и %q", first, second)
+	}
+	other := l.sameCasing("BepInEx/plugins/Author-Mod/Luigi.png")
+	if other != "BepInEx/plugins/Author-Mod/Luigi.png" {
+		t.Errorf("непохожий путь переписан: %q", other)
+	}
+}
