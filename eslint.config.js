@@ -56,6 +56,10 @@ export default [
         prompt: 'readonly',
         FormData: 'readonly',
         XMLHttpRequest: 'readonly',
+        // TextDecoder/TextEncoder — часть веб-платформы и есть в Node: поток
+        // NDJSON приходит байтами, и склеивать их иначе нечем.
+        TextDecoder: 'readonly',
+        TextEncoder: 'readonly',
       }
     },
     rules: {
@@ -125,7 +129,9 @@ export default [
         setStatusError: 'readonly',
         clearStatusError: 'readonly',
         mountUploadCards: 'readonly',
-        uploadCardHtml: 'readonly'
+        uploadCardHtml: 'readonly',
+        createModsPanel: 'readonly',
+        readNdjsonStream: 'readonly'
       }
     }
   },
@@ -146,7 +152,9 @@ export default [
       'server/admin_ui/chunk-upload.js',
       'server/admin_ui/rate-estimator.js',
       'server/admin_ui/ui-status.js',
-      'server/admin_ui/upload-card.js'
+      'server/admin_ui/upload-card.js',
+      'server/admin_ui/ndjson.js',
+      'server/admin_ui/mods-panel.js'
     ],
     languageOptions: {
       globals: {

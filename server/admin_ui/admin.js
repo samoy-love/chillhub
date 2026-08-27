@@ -2822,6 +2822,7 @@ const TAB_MAP = [
   { btn: 'tabLauncher',  sec: 'secLauncher' },
   { btn: 'tabManifests', sec: 'secManifests' },
   { btn: 'tabNews',      sec: 'secNews' },
+  { btn: 'tabMods',      sec: 'secMods' },
   { btn: 'tabInbox',     sec: 'secInbox' },
   { btn: 'tabMaint',     sec: 'secMaint' },
   { btn: 'tabBench',     sec: 'secBench' },
@@ -2860,6 +2861,7 @@ function showSection(id){
     // переключение вкладок — это не команда «выбросить введённое».
     try{ if(!__mgmDirty) mgmReload(); }catch(_){ /* no-op */ }
   }
+  if(id==='secMods'){ try{ modsPanel && modsPanel.reload(); }catch(_){ /* no-op */ } }
   if(id==='secInbox'){ try{ fbReload(true); }catch(_){ /* no-op */ } }
   if(id==='secMaint'){ try{ mtLoad(); }catch(_){ /* no-op */ } }
   if(id==='secMetrics'){ try{ mxOnTabOpen(); }catch(_){ /* no-op */ } }
@@ -2901,7 +2903,13 @@ TAB_MAP.forEach((t, i)=>{
 // прошлый раз. Нужно для ссылок из уведомлений о выкатке: "версия
 // опубликована" должно вести прямо на вкладку "Лаунчер", а не на то, что
 // было открыто в последний визит.
-const HASH_TAB_MAP = { launcher:'secLauncher', manifests:'secManifests', news:'secNews', inbox:'secInbox', maint:'secMaint', bench:'secBench', metrics:'secMetrics' };
+// Панель вкладки «Моды». Создаётся один раз; данные тянет showSection при
+// первом открытии вкладки, а не при загрузке страницы.
+const modsPanel = (typeof createModsPanel === 'function')
+  ? createModsPanel({ root: '#md_root' })
+  : null;
+
+const HASH_TAB_MAP = { launcher:'secLauncher', manifests:'secManifests', news:'secNews', mods:'secMods', inbox:'secInbox', maint:'secMaint', bench:'secBench', metrics:'secMetrics' };
 function sectionFromHash(){
   const raw = (location.hash || '').replace(/^#/, '').trim().toLowerCase();
   return HASH_TAB_MAP[raw] || null;

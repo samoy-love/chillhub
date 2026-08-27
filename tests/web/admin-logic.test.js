@@ -121,7 +121,7 @@ function withHash(hash, fn) {
 test('sectionFromHash понимает каждый известный слаг', () => {
   const cases = {
     launcher: 'secLauncher', manifests: 'secManifests', news: 'secNews',
-    inbox: 'secInbox', maint: 'secMaint', metrics: 'secMetrics',
+    mods: 'secMods', inbox: 'secInbox', maint: 'secMaint', metrics: 'secMetrics',
   };
   for (const [slug, sec] of Object.entries(cases)) {
     assert.strictEqual(withHash('#' + slug, sectionFromHash), sec, slug);
