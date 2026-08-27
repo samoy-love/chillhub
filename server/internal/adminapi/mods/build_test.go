@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,9 +27,27 @@ import (
 type fakeStore struct {
 	*httptest.Server
 
+	// baseURL повторяет URL сервера: обработчики читают его при сборке
+	// download_url, а поле httptest.Server к этому моменту ещё не заполнено.
+	baseURL string
+
 	deps    map[string][]string
 	entries map[string]map[string]string
 	hits    map[string]int
+
+	// cdnDenied повторяет настоящую поломку: имя объекта в хранилище не всегда
+	// выводится из полного имени пакета, и угаданный адрес отвечает 403.
+	cdnDenied map[string]bool
+
+	// failCDNTimes роняет первые N обращений к архиву — так проверяются
+	// повторы, не трогая настоящую сеть.
+	failCDNTimes map[string]int
+
+	// apiHits считает запросы метаданных: по ним видно, работает ли дисковый
+	// кеш версий.
+	mu      sync.Mutex
+	apiHits map[string]int
+	dlHits  map[string]int
 
 	lastListing string
 }
@@ -36,9 +55,13 @@ type fakeStore struct {
 func newFakeStore(t *testing.T) *fakeStore {
 	t.Helper()
 	fs := &fakeStore{
-		deps:    map[string][]string{},
-		entries: map[string]map[string]string{},
-		hits:    map[string]int{},
+		deps:         map[string][]string{},
+		entries:      map[string]map[string]string{},
+		hits:         map[string]int{},
+		cdnDenied:    map[string]bool{},
+		failCDNTimes: map[string]int{},
+		apiHits:      map[string]int{},
+		dlHits:       map[string]int{},
 	}
 	mux := http.NewServeMux()
 
@@ -66,10 +89,27 @@ func newFakeStore(t *testing.T) *fakeStore {
 			http.NotFound(w, r)
 			return
 		}
+		fs.count(fs.apiHits, full)
 		_ = json.NewEncoder(w).Encode(PackageVersion{
 			Namespace: parts[0], Name: parts[1], VersionNumber: parts[2],
 			FullName: full, Dependencies: deps, IsActive: true,
+			// Настоящий Thunderstore отдаёт этот адрес у каждой версии, и он
+			// авторитетнее угаданного имени в хранилище.
+			DownloadURL: fmt.Sprintf("%s/package/download/%s/%s/%s/", fs.baseURL, parts[0], parts[1], parts[2]),
 		})
+	})
+
+	// Собственная ссылка пакета: она обязана работать даже там, где угаданное
+	// имя объекта в хранилище отвечает 403.
+	mux.HandleFunc("/package/download/", func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/package/download/"), "/"), "/")
+		if len(parts) < 3 {
+			http.NotFound(w, r)
+			return
+		}
+		full := fmt.Sprintf("%s-%s-%s", parts[0], parts[1], parts[2])
+		fs.count(fs.dlHits, full)
+		fs.serveArchive(t, w, r, full)
 	})
 
 	// README, разделы сообщества и каталог: их читают эндпоинты панели.
@@ -88,41 +128,87 @@ func newFakeStore(t *testing.T) *fakeStore {
 
 	mux.HandleFunc("/cdn/", func(w http.ResponseWriter, r *http.Request) {
 		full := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/cdn/"), ".zip")
-		entries, ok := fs.entries[full]
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		fs.hits[full]++
-		var buf bytes.Buffer
-		zw := zip.NewWriter(&buf)
-		names := make([]string, 0, len(entries))
-		for n := range entries {
-			names = append(names, n)
-		}
-		sort.Strings(names)
-		for _, n := range names {
-			f, err := zw.Create(n)
-			if err != nil {
-				t.Error(err)
-				return
-			}
-			if _, err := f.Write([]byte(entries[n])); err != nil {
-				t.Error(err)
-				return
+		fs.mu.Lock()
+		denied := fs.cdnDenied[full]
+		// Обрыв считается только на скачивании: HEAD оценки размера ходит по
+		// тем же адресам, и общий счётчик съедал бы попытки чужого шага.
+		left := 0
+		if r.Method == http.MethodGet {
+			if left = fs.failCDNTimes[full]; left > 0 {
+				fs.failCDNTimes[full] = left - 1
 			}
 		}
-		if err := zw.Close(); err != nil {
-			t.Error(err)
+		fs.mu.Unlock()
+		if denied {
+			// Ровно то, что отдаёт настоящее хранилище на угаданное мимо имя:
+			// 403 AccessDenied, а не 404.
+			http.Error(w, "AccessDenied", http.StatusForbidden)
 			return
 		}
-		w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
-		_, _ = w.Write(buf.Bytes())
+		if left > 0 {
+			http.Error(w, "boom", http.StatusBadGateway)
+			return
+		}
+		fs.count(fs.hits, full)
+		fs.serveArchive(t, w, r, full)
 	})
 
 	fs.Server = httptest.NewServer(mux)
+	fs.baseURL = fs.URL
 	t.Cleanup(fs.Close)
 	return fs
+}
+
+// count увеличивает счётчик под замком: скачивание идёт в несколько потоков.
+func (fs *fakeStore) count(m map[string]int, key string) {
+	fs.mu.Lock()
+	m[key]++
+	fs.mu.Unlock()
+}
+
+// total суммирует счётчик.
+func (fs *fakeStore) total(m map[string]int) int {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	n := 0
+	for _, v := range m {
+		n += v
+	}
+	return n
+}
+
+// serveArchive собирает zip пакета на лету.
+func (fs *fakeStore) serveArchive(t *testing.T, w http.ResponseWriter, _ *http.Request, full string) {
+	t.Helper()
+	entries, ok := fs.entries[full]
+	if !ok {
+		http.NotFound(w, nil)
+		return
+	}
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	names := make([]string, 0, len(entries))
+	for n := range entries {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		f, err := zw.Create(n)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err := f.Write([]byte(entries[n])); err != nil {
+			t.Error(err)
+			return
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Error(err)
+		return
+	}
+	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	_, _ = w.Write(buf.Bytes())
 }
 
 // add registers a package with its dependencies and archive contents.
@@ -136,9 +222,14 @@ func testBuilder(t *testing.T, fs *fakeStore) (*Builder, string) {
 	t.Helper()
 	root := t.TempDir()
 
+	archives := NewArchiveCache(root)
+	// Лестница повторов в тесте — миллисекунды: боевая занимает шесть секунд
+	// на один провалившийся архив.
+	archives.retryBase = 2 * time.Millisecond
 	client := NewClient(fs.Client()).
 		WithBases(fs.URL, fs.URL+"/cdn").
-		WithInterval(time.Millisecond)
+		WithInterval(time.Millisecond).
+		WithMetaCache(archives.MetaDir())
 
 	eco := &Ecosystem{
 		SchemaVersion: "test",
@@ -159,7 +250,7 @@ func testBuilder(t *testing.T, fs *fakeStore) (*Builder, string) {
 	return &Builder{
 		Client: client,
 		Eco:    cache,
-		Cache:  NewArchiveCache(root),
+		Cache:  archives,
 		Builds: builds.New(root),
 		Root:   root,
 	}, root

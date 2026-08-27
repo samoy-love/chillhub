@@ -131,7 +131,7 @@ func buildLiveTree(t *testing.T, ctx context.Context, client *Client, layout *La
 		if err != nil {
 			t.Fatal(err)
 		}
-		n, err := client.Download(ctx, p.FullName, f)
+		n, err := client.Download(ctx, p.Ref(), f)
 		_ = f.Close()
 		if err != nil {
 			t.Fatalf("скачивание %s: %v", p.FullName, err)

@@ -39,29 +39,49 @@ const (
 	cacheTmpPrefix = ".partial-"
 
 	// maxDownloadAttempts counts the first try plus retries of one archive.
-	maxDownloadAttempts = 4
+	//
+	// Five rather than four, and every attempt is now reported to the build
+	// stream instead of only to the server log: a retry that nobody sees is
+	// indistinguishable from a stall, and a build that gives up is worth one
+	// more try when the alternative is redoing 1.8 GB by hand.
+	maxDownloadAttempts = 5
 
 	// downloadRetryBase is the first backoff step; it grows with the attempt.
 	downloadRetryBase = 2 * time.Second
 )
 
+// RetryNotice reports one failed attempt at an archive. It is called from the
+// download worker, so implementations must be safe to call concurrently.
+type RetryNotice func(fullName string, attempt, of int, err error)
+
 // ArchiveCache stores downloaded package archives.
 type ArchiveCache struct {
 	dir string
 	ttl time.Duration
+
+	// retryBase is the first backoff step between download attempts. It is a
+	// field only so a test can sit through the ladder in milliseconds instead
+	// of the six seconds the production one takes.
+	retryBase time.Duration
 }
 
 // NewArchiveCache places the cache under the content root's tmp directory,
 // which is already excluded from everything the public API serves.
 func NewArchiveCache(contentRoot string) *ArchiveCache {
 	return &ArchiveCache{
-		dir: filepath.Join(contentRoot, "tmp", "ts-cache"),
-		ttl: CacheTTL,
+		dir:       filepath.Join(contentRoot, "tmp", "ts-cache"),
+		ttl:       CacheTTL,
+		retryBase: downloadRetryBase,
 	}
 }
 
 // Dir is the cache directory.
 func (c *ArchiveCache) Dir() string { return c.dir }
+
+// MetaDir holds cached version documents. It is a SUBDIRECTORY of the archive
+// cache so that one «очистить кеш» empties both: two caches over the same
+// immutable facts, cleared by two different buttons, is a trap.
+func (c *ArchiveCache) MetaDir() string { return filepath.Join(c.dir, "meta") }
 
 // path returns the cache location of one package. fullName comes from
 // Thunderstore metadata, so it is validated before it becomes a file name.
@@ -92,8 +112,10 @@ func safeFullName(s string) bool {
 }
 
 // Fetch returns the local path of a package archive, downloading it if needed.
-// hit reports whether the cache already had it.
-func (c *ArchiveCache) Fetch(ctx context.Context, client *Client, fullName string) (path string, hit bool, err error) {
+// hit reports whether the cache already had it. onRetry, if set, is told about
+// every failed attempt.
+func (c *ArchiveCache) Fetch(ctx context.Context, client *Client, ref ArchiveRef, onRetry RetryNotice) (path string, hit bool, err error) {
+	fullName := ref.FullName
 	p, err := c.path(fullName)
 	if err != nil {
 		return "", false, err
@@ -111,7 +133,7 @@ func (c *ArchiveCache) Fetch(ctx context.Context, client *Client, fullName strin
 		return "", false, err
 	}
 
-	if err := downloadWithRetry(ctx, client, fullName, c.dir, p); err != nil {
+	if err := downloadWithRetry(ctx, client, ref, c.dir, p, c.backoff(), onRetry); err != nil {
 		return "", false, err
 	}
 	return p, false, nil
@@ -129,29 +151,41 @@ func (c *ArchiveCache) Fetch(ctx context.Context, client *Client, fullName strin
 // throws away every byte downloaded so far — while the small metadata requests
 // beside it retry four times with backoff. The expensive half of the pipeline
 // had no resilience at all.
-func downloadWithRetry(ctx context.Context, client *Client, fullName, dir, dest string) error {
+// backoff is the configured first retry step, or the production default.
+func (c *ArchiveCache) backoff() time.Duration {
+	if c.retryBase > 0 {
+		return c.retryBase
+	}
+	return downloadRetryBase
+}
+
+func downloadWithRetry(ctx context.Context, client *Client, ref ArchiveRef, dir, dest string, retryBase time.Duration, onRetry RetryNotice) error {
+	fullName := ref.FullName
 	var lastErr error
 	for attempt := 1; attempt <= maxDownloadAttempts; attempt++ {
 		tmp := filepath.Join(dir, cacheTmpPrefix+adminutil.GenID())
-		err := downloadOnce(ctx, client, fullName, tmp, dest)
+		err := downloadOnce(ctx, client, ref, tmp, dest)
 		if err == nil {
 			return nil
 		}
 		_ = os.Remove(tmp)
 
 		// A package Thunderstore no longer serves will still be gone on the
-		// fourth attempt; only transport failures are worth repeating.
+		// fifth attempt; only transport failures are worth repeating.
 		if errors.Is(err, ErrNotFound) || ctx.Err() != nil {
 			return err
 		}
 		lastErr = err
 		log.Printf("[mods] download %s failed (attempt %d/%d): %v", fullName, attempt, maxDownloadAttempts, err)
+		if onRetry != nil {
+			onRetry(fullName, attempt, maxDownloadAttempts, err)
+		}
 
 		if attempt < maxDownloadAttempts {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(time.Duration(attempt) * downloadRetryBase):
+			case <-time.After(time.Duration(attempt) * retryBase):
 			}
 		}
 	}
@@ -159,12 +193,13 @@ func downloadWithRetry(ctx context.Context, client *Client, fullName, dir, dest 
 }
 
 // downloadOnce streams the archive into tmp and renames it onto dest.
-func downloadOnce(ctx context.Context, client *Client, fullName, tmp, dest string) error {
+func downloadOnce(ctx context.Context, client *Client, ref ArchiveRef, tmp, dest string) error {
+	fullName := ref.FullName
 	f, err := os.Create(tmp) // #nosec G304 -- tmp is cacheDir plus a generated id
 	if err != nil {
 		return err
 	}
-	n, dlErr := client.Download(ctx, fullName, f)
+	n, dlErr := client.Download(ctx, ref, f)
 	closeErr := f.Close()
 	if dlErr != nil {
 		return dlErr
@@ -212,9 +247,13 @@ func (c *ArchiveCache) Clear() (removed int, freed int64) {
 }
 
 func (c *ArchiveCache) sweepOlderThan(cutoff time.Time) (removed int, freed int64) {
+	// Metadata lives in a subdirectory and ages by the same rule; sweeping it
+	// separately keeps the archive loop below reading only archives.
+	removed, freed = sweepDir(c.MetaDir(), cutoff)
+
 	entries, err := os.ReadDir(c.dir)
 	if err != nil {
-		return 0, 0
+		return removed, freed
 	}
 	for _, e := range entries {
 		if e.IsDir() {
@@ -243,6 +282,30 @@ func (c *ArchiveCache) sweepOlderThan(cutoff time.Time) (removed int, freed int6
 	}
 	if removed > 0 {
 		log.Printf("[mods] cache sweep removed %d files, freed %.1f MB", removed, float64(freed)/(1<<20))
+	}
+	return removed, freed
+}
+
+// sweepDir removes every file in dir last touched before cutoff.
+func sweepDir(dir string, cutoff time.Time) (removed int, freed int64) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, 0
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
+			log.Printf("[mods] sweep %s: %v", e.Name(), err)
+			continue
+		}
+		removed++
+		freed += info.Size()
 	}
 	return removed, freed
 }

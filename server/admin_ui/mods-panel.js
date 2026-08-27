@@ -377,12 +377,107 @@
     // Пропавшие моды и нехватку места проверяет сама сборка и отказывается
     // молча их проглотить; сюда это приезжает событием error, и тогда — и
     // только тогда — спрашиваем оператора и повторяем с allowMissing.
+    // buildProgress копит состояние потока и рисует его целиком.
+    //
+    // Скачивание идёт в несколько потоков, установка — по очереди, и это две
+    // РАЗНЫЕ величины: пакет 40 из 151 скачан, а установлен — 12-й. Одна
+    // строка, переписываемая каждым событием подряд, показывала бы то одно,
+    // то другое и прыгала бы назад.
+    function buildProgress() {
+      const bar = el('progress');
+      const status = el('status');
+      const detail = el('detail');
+      const st = { phase: '', done: 0, total: 0, bytes: 0, parallel: 0, installed: 0, retries: [] };
+
+      function pct() {
+        if (!st.total) return 0;
+        // Полоса считает установленное: это единственная величина, которая
+        // доходит до 100% ровно тогда, когда дерево готово.
+        return Math.round((st.installed / st.total) * 100);
+      }
+
+      function render() {
+        if (bar) bar.style.width = pct() + '%';
+        if (status) status.textContent = st.phase;
+        if (!detail) return;
+        const bits = [];
+        if (st.total) {
+          bits.push('скачано ' + st.done + ' из ' + st.total);
+          bits.push('установлено ' + st.installed);
+        }
+        if (st.parallel) bits.push(st.parallel + ' в работе');
+        if (st.bytes) bits.push(bytes(st.bytes));
+        detail.textContent = bits.join(' · ');
+      }
+
+      function noteRetry(ev) {
+        st.retries.push(ev.message || '');
+        const box = el('retriesBox');
+        const list = el('retries');
+        const count = el('retriesCount');
+        if (box) box.classList.remove('hidden');
+        if (count) count.textContent = String(st.retries.length);
+        if (list) {
+          const li = document.createElement('li');
+          li.textContent = ev.message || '';
+          list.appendChild(li);
+        }
+      }
+
+      return {
+        apply(ev) {
+          switch (ev.type) {
+            case 'resolving':
+              st.phase = 'Разбор состава: найдено модов ' + ev.step + ' · ' + (ev.message || '');
+              break;
+            case 'sizing':
+              st.phase = 'Оценка размера ' + ev.step + '/' + ev.total;
+              break;
+            case 'resolved':
+              st.total = ev.total || 0;
+              st.phase = ev.message || 'Состав разобран';
+              break;
+            case 'downloading':
+              st.done = ev.step || st.done;
+              st.total = ev.total || st.total;
+              st.bytes = ev.bytes || st.bytes;
+              st.parallel = ev.parallel || 0;
+              st.phase = 'Скачивание: ' + (ev.message || '');
+              break;
+            case 'package':
+              st.installed = ev.step || st.installed;
+              st.total = ev.total || st.total;
+              break;
+            case 'retry':
+              noteRetry(ev);
+              break;
+            default:
+              st.phase = ev.message || ev.type;
+          }
+          render();
+        },
+        finish() {
+          st.installed = st.total;
+          st.parallel = 0;
+          render();
+        },
+      };
+    }
+
     async function buildPack(full, version, allowMissing) {
       const parts = full.split('/');
       const bar = el('progress');
       const status = el('status');
+      const detail = el('detail');
+      const retriesBox = el('retriesBox');
+      const retriesList = el('retries');
       setBusy(true, 'Сборка…');
       if (bar) bar.style.width = '0%';
+      if (detail) detail.textContent = '';
+      // Повторы прошлой сборки к новой отношения не имеют.
+      if (retriesBox) retriesBox.classList.add('hidden');
+      if (retriesList) retriesList.innerHTML = '';
+      const progress = buildProgress();
 
       try {
         const body = new URLSearchParams({ gameId: gameId(), namespace: parts[0], name: parts[1] });
@@ -398,18 +493,7 @@
         let failed = false;
         let missing = null;
         const seen = await window.readNdjsonStream(res, function (ev) {
-          if (ev.type === 'package' && ev.total) {
-            const pct = Math.round((ev.step / ev.total) * 100);
-            if (bar) bar.style.width = pct + '%';
-            if (status) status.textContent = 'Скачивание ' + ev.step + '/' + ev.total + ': ' + (ev.message || '');
-          } else if (ev.type === 'resolving') {
-            // Обход дерева идёт около минуты и не знает своего размера заранее:
-            // показываем растущий счётчик найденных модов, иначе первая минута
-            // сборки выглядит зависанием.
-            if (status) status.textContent = 'Разбор состава: найдено модов ' + ev.step + ' · ' + (ev.message || '');
-          } else if (ev.type === 'sizing' && ev.total) {
-            if (status) status.textContent = 'Оценка размера ' + ev.step + '/' + ev.total + ': ' + (ev.message || '');
-          } else if (ev.type === 'error') {
+          if (ev.type === 'error') {
             failed = true;
             // Сервер перечисляет пропавшие пакеты в тексте ошибки: это
             // единственный случай, который оператор может разрешить сам.
@@ -417,9 +501,9 @@
             if (window.setStatusError) window.setStatusError(status, 'Ошибка сборки: ' + (ev.message || ''));
             else if (status) status.textContent = 'Ошибка сборки: ' + (ev.message || '');
             say('Ошибка сборки: ' + (ev.message || ''), 'error');
-          } else if (status) {
-            status.textContent = ev.message || ev.type;
+            return;
           }
+          progress.apply(ev);
         });
         if (!seen) {
           say('Сервер не прислал ни одного события — вероятно, ответ буферизуется прокси', 'error');
@@ -435,7 +519,7 @@
           return;
         }
         if (!failed) {
-          if (bar) bar.style.width = '100%';
+          progress.finish();
           say('Модпак собран. Чтобы игроки его получили, нажмите «Активировать».');
           reloadVersions();
         }
