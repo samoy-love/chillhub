@@ -21,7 +21,14 @@ namespace ChillHub.Core.Home {
     /// Класс не знает про конкретные контролы — с UI связан только через два колбэка.
     /// </summary>
     internal sealed class FeedbackService {
-        /// <summary>Одно сообщение обратной связи. Сериализуется в очередь — имена полей менять нельзя.</summary>
+        /// <summary>
+        /// Одно сообщение обратной связи. Сериализуется в очередь — имена полей менять нельзя.
+        /// <para>
+        /// <c>AttachLogs</c> остался в формате ради уже лежащих на диске очередей: форма
+        /// больше не спрашивает про диагностику, она уходит всегда. Поле читается при
+        /// разборе старого файла очереди, но на состав отправки не влияет.
+        /// </para>
+        /// </summary>
         internal sealed record FeedbackDraft(string Name, string Contact, string Type, string Comment, bool AttachLogs, Dictionary<string, string>? System);
 
         /// <summary>Порт админки в локальной разработке: туда уходит fallback при недоступном API.</summary>
@@ -149,7 +156,11 @@ namespace ChillHub.Core.Home {
                             contact = d.Contact,
                             type = d.Type,
                             comment = d.Comment,
-                            attachLogs = d.AttachLogs,
+
+                            // Всегда true, в том числе для сообщений из старой очереди:
+                            // логи в теле есть, и флаг обязан это отражать — иначе сервер
+                            // покажет оператору отчёт как «без диагностики».
+                            attachLogs = true,
                             logs = logsPayload,
                             system = extraSystem,
                         }),
@@ -291,12 +302,15 @@ namespace ChillHub.Core.Home {
         /// <returns>Объект, возвращающий очередь на настоящее место.</returns>
         internal static IDisposable OverrideQueuePathForTests(string path) => new QueuePathOverride(path);
 
+        /// <summary>
+        /// Собирает бандл диагностики. Собирается ВСЕГДА: обращение без логов почти всегда
+        /// заканчивалось перепиской «повторите, но с диагностикой», а до второго письма
+        /// доходил один человек из нескольких.
+        /// </summary>
+        /// <param name="d">Сообщение.</param>
+        /// <returns>Текст бандла и дополненные подсказки о системе.</returns>
         private async Task<(string Logs, Dictionary<string, string>? System)> BuildDiagnosticsAsync(FeedbackDraft d) {
             Dictionary<string, string>? extraSystem = d.System;
-            if (!d.AttachLogs) {
-                return (string.Empty, extraSystem);
-            }
-
             try {
                 var bundle = await Task.Run(() => Diagnostics.Build()).ConfigureAwait(true);
                 extraSystem ??= new Dictionary<string, string>();
