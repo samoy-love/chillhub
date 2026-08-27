@@ -536,6 +536,23 @@ func (out *uploadParts) spoolZip(part *multipart.Part, tmpDir string, onProgress
 // and costs a couple of dozen lines on a 68 MB upload.
 var receivingEvery = 5 * time.Second
 
+// receivingReporter makes the «архив идёт» reporter for one request.
+//
+// Отдельной функцией, а не замыканием на месте: UploadStream и без того
+// упирается в потолок ветвлений, который держит golangci-lint, а состояние
+// у отчёта своё — время последней строки.
+func receivingReporter(nw *ndjsonWriter, fl adminutil.Flusher) uploadProgress {
+	last := time.Now()
+	return func(received int64) {
+		if time.Since(last) < receivingEvery {
+			return
+		}
+		last = time.Now()
+		emitEventf(nw, "{\"type\":\"receiving\",\"bytes\":%d}\n", received)
+		fl.Flush()
+	}
+}
+
 // countingReader reports progress as the body is read.
 type countingReader struct {
 	r    io.Reader
@@ -600,15 +617,7 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 	//
 	// Событие уходит не чаще, чем раз в receivingEvery: NDJSON на каждый
 	// буфер — это мегабайты служебного трафика на ровном месте.
-	lastBeat := time.Now()
-	parts, code, err := readUploadParts(r, h.tmpDir(), func(received int64) {
-		if time.Since(lastBeat) < receivingEvery {
-			return
-		}
-		lastBeat = time.Now()
-		emitEventf(nw, "{\"type\":\"receiving\",\"bytes\":%d}\n", received)
-		fl.Flush()
-	}, func(filename string, n int64) {
+	parts, code, err := readUploadParts(r, h.tmpDir(), receivingReporter(nw, fl), func(filename string, n int64) {
 		emitEventf(nw, "{\"type\":\"zipSaved\",\"filename\":%q,\"bytes\":%d}\n", filename, n)
 		fl.Flush()
 	})

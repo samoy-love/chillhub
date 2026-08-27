@@ -601,7 +601,7 @@ func (c *Client) ArchiveSize(ctx context.Context, ref ArchiveRef) (int64, error)
 			return 0, err
 		}
 	}
-	return 0, fmt.Errorf("%w: %s (%v)", ErrNotFound, ref.FullName, lastErr)
+	return 0, fmt.Errorf("%w: %s (%w)", ErrNotFound, ref.FullName, lastErr)
 }
 
 func (c *Client) sizeFrom(ctx context.Context, fullName, url string) (int64, error) {

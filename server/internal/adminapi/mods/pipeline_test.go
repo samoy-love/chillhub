@@ -97,7 +97,7 @@ func TestBuildInstallsInPlanOrder(t *testing.T) {
 	seedPack(fs)
 	// Ещё десяток пакетов, чтобы работникам было где обогнать друг друга.
 	deps := []string{"Author-CoolMod-1.0.0"}
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		full := "Filler-Mod" + string(rune('A'+i)) + "-1.0.0"
 		fs.add(full, nil, map[string]string{"Mod.dll": "code " + full})
 		deps = append(deps, full)

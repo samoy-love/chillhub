@@ -481,10 +481,8 @@ func (b *Builder) fetchAndInstall(
 
 	jobs := make(chan int)
 	var wg sync.WaitGroup
-	for w := 0; w < maxCDNParallel; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range maxCDNParallel {
+		wg.Go(func() {
 			for i := range jobs {
 				p := plan.Packages[i]
 				inflight.Add(1)
@@ -511,11 +509,11 @@ func (b *Builder) fetchAndInstall(
 					Message:  p.FullName,
 				})
 			}
-		}()
+		})
 	}
 	go func() {
 		defer close(jobs)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			select {
 			case jobs <- i:
 			case <-dlCtx.Done():
@@ -526,7 +524,7 @@ func (b *Builder) fetchAndInstall(
 
 	hits := 0
 	var failure error
-	for i := 0; i < n; i++ {
+	for i := range n {
 		select {
 		case <-ready[i]:
 		case <-ctx.Done():
