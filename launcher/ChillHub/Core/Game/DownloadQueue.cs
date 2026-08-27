@@ -359,7 +359,10 @@ namespace ChillHub.Core.Game {
                     localRoot,
                     game.ExeRelativePath,
                     ConfirmDeletions: false,
-                    Kind: game.IsInstalled ? SyncKind.Update : SyncKind.Install);
+                    Kind: game.IsInstalled ? SyncKind.Update : SyncKind.Install,
+                    // Игра целиком, а не только её идентификатор: у записи есть настройки
+                    // модов, и без них обновление поставило бы сборку без модпака.
+                    Game: game);
 
                 // entry.Cts всегда назначен в RunWorkerAsync до вызова ProcessAsync — см. gate там.
                 await runner.RunAsync(request, entry.Cts!.Token).ConfigureAwait(false);

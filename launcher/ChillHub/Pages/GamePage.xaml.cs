@@ -631,7 +631,8 @@ namespace ChillHub.Pages {
                     localRoot,
                     this.game.ExeRelativePath,
                     confirmDeletions,
-                    kind);
+                    kind,
+                    Game: this.game);
                 await this.syncRunner.RunAsync(request, token).ConfigureAwait(true);
             }
             finally {
