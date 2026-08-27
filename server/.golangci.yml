@@ -117,6 +117,28 @@ linters:
       - ".*_generated\\.go"
       - admin_ui/*
     rules:
+      # Структуры в mods/ раскладывают ОТВЕТЫ Thunderstore, а не наш формат.
+      # Имена полей там заданы чужим API (version_number, download_url,
+      # is_deprecated); переименовать их в camelCase — сломать разбор, а не
+      # улучшить стиль. На НАШИ структуры (ResolvedPackage, Resolution,
+      # ProfileMod и всё, что уезжает в манифест) правило продолжает
+      # действовать: они лежат в других файлах пакета.
+      # gosec отслеживает поток данных и не видит валидаторов, поэтому здесь
+      # то же исключение, что уже сделано для G703/G706 в общем списке.
+      # G704 (SSRF): URL архива строится из имени пакета, которое перед этим
+      # прошло safeFullName — тот же самый guard, что решает, можно ли делать
+      # из имени путь на диске. Хост берётся из константы, не из запроса.
+      # G120 (разбор формы): каждый обработчик в mods/handlers.go оборачивает
+      # тело в http.MaxBytesReader строкой ВЫШЕ вызова ParseForm /
+      # ParseMultipartForm — анализатор эту связь не прослеживает.
+      - path: internal/adminapi/mods/(client|handlers)\.go
+        linters:
+          - gosec
+
+      - path: internal/adminapi/mods/(client|catalog)\.go
+        linters:
+          - tagliatelle
+
       # Тесты давали 361 замечание из 702, и ни одно не про дефект.
       - path: _test\.go
         linters:

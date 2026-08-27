@@ -63,6 +63,84 @@ type GameInfo struct {
 	ManifestURL     string `json:"manifestUrl,omitempty"`
 	ExeRelativePath string `json:"exeRelativePath,omitempty"`
 	IconURL         string `json:"iconUrl,omitempty"`
+
+	// Mods describes the game's active modpack, or is absent when the game has
+	// none. The launcher gets everything it needs in this one response and
+	// never picks anything: there is exactly one active pack per game, and
+	// which one it is, is decided in the admin panel.
+	Mods *ModsInfo `json:"mods,omitempty"`
+}
+
+// ModsInfo is the active modpack of one game, as the launcher sees it.
+type ModsInfo struct {
+	HasLatest bool   `json:"hasLatest"`
+	Version   string `json:"version,omitempty"`
+	// DisplayName/DisplayVersion are what the player is shown on the game card
+	// ("Lethal Reloaded 2.2.12"). They exist so a support report can name the
+	// pack instead of "моды сломались".
+	DisplayName    string `json:"displayName,omitempty"`
+	DisplayVersion string `json:"displayVersion,omitempty"`
+
+	ManifestURL    string `json:"manifestUrl,omitempty"`
+	ContentBaseURL string `json:"contentBaseUrl,omitempty"`
+
+	// Loader and the Steam fields let the launcher find the player's own copy
+	// of the game and decide which of the four launch modes it can offer.
+	Loader      string   `json:"loader,omitempty"`
+	SteamAppID  string   `json:"steamAppId,omitempty"`
+	SteamFolder string   `json:"steamFolder,omitempty"`
+	ExeNames    []string `json:"exeNames,omitempty"`
+}
+
+// modsInfoFor builds the modpack half of a game entry.
+//
+// A game with mods configured but nothing built yet returns HasLatest=false
+// rather than nothing at all: the launcher still needs the Steam metadata to
+// offer "запустить свою копию без модов".
+func modsInfoFor(it games.Entry) *ModsInfo {
+	cfg := it.Mods
+	if cfg == nil || !cfg.Enabled {
+		return nil
+	}
+	info := &ModsInfo{
+		Loader:      cfg.Loader,
+		SteamAppID:  cfg.SteamAppID,
+		SteamFolder: cfg.SteamFolder,
+		ExeNames:    cfg.ExeNames,
+	}
+	dir := filepath.Join(contentRoot, "manifests", "_mods", it.GameID)
+	meta, ok := readLatest(filepath.Join(dir, "latest.json"))
+	if !ok || strings.TrimSpace(meta.Version) == "" {
+		return info
+	}
+	info.HasLatest = true
+	info.Version = meta.Version
+	info.ManifestURL = "/manifests/_mods/" + it.GameID + "/" + meta.Version + ".json"
+	info.ContentBaseURL = "/content/_mods/" + it.GameID + "/" + meta.Version + "/files"
+	info.DisplayName, info.DisplayVersion = modsDisplay(dir, meta.Version)
+	return info
+}
+
+// modsDisplay reads the human-readable name of a built version from its source
+// record, falling back to the version name itself.
+func modsDisplay(dir, version string) (name, ver string) {
+	// #nosec G304 -- dir is the content root plus validated components and
+	// version came from latest.json written by this project.
+	b, err := os.ReadFile(filepath.Join(dir, "sources", version+".json"))
+	if err != nil {
+		return version, ""
+	}
+	var src struct {
+		DisplayName string `json:"displayName"`
+	}
+	if json.Unmarshal(b, &src) != nil || src.DisplayName == "" {
+		return version, ""
+	}
+	// "ASTeam-LethalReloaded-2.2.12" -> ("Lethal Reloaded", "2.2.12")
+	if i := strings.LastIndex(version, "-"); i > 0 {
+		return src.DisplayName, version[i+1:]
+	}
+	return src.DisplayName, ""
 }
 
 // (moved to server/internal/httpx)
@@ -328,7 +406,11 @@ func loadGamesFromRegistry() ([]GameInfo, bool) {
 	games.SortEntries(items)
 	out := make([]GameInfo, 0, len(items))
 	for _, it := range items {
-		out = append(out, GameInfo{GameID: it.GameID, Title: it.Title, ExeRelativePath: it.ExeRelativePath, IconURL: it.IconURL})
+		out = append(out, GameInfo{
+			GameID: it.GameID, Title: it.Title,
+			ExeRelativePath: it.ExeRelativePath, IconURL: it.IconURL,
+			Mods: modsInfoFor(it),
+		})
 	}
 	// An existing registry stays authoritative even when everything in it was
 	// dropped. Falling back to a directory scan here would look like a repair
@@ -352,8 +434,9 @@ func loadGamesByScanning() []GameInfo {
 			continue
 		}
 		name := e.Name()
-		// skip internal registry folder
-		if strings.EqualFold(name, "_registry") {
+		// Skip the internal subtrees: the registry and the modpack namespace
+		// are directories under manifests/ that are not games.
+		if strings.EqualFold(name, "_registry") || strings.EqualFold(name, "_mods") {
 			continue
 		}
 		items = append(items, GameInfo{GameID: name, Title: name})

@@ -5,6 +5,7 @@ package games
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -37,6 +38,61 @@ type Entry struct {
 	// scan adds — would silently vanish from the launcher the moment the server
 	// was updated.
 	Unpublished bool `json:"unpublished,omitempty"`
+
+	// Mods holds the Thunderstore configuration of a game that has a modpack.
+	//
+	// A POINTER with omitempty, so every registry written before this field
+	// existed round-trips byte for byte: the panel saves the whole registry on
+	// every edit, and a nil here must not start appending an empty object to
+	// three hundred entries that have nothing to do with mods.
+	Mods *ModsConfig `json:"mods,omitempty"`
+}
+
+// ModsConfig describes where a game's mods come from and where the game itself
+// is installed.
+//
+// Most of it is not typed in by hand: the panel fills it from the Thunderstore
+// ecosystem schema, which publishes the Steam app id, the executable names and
+// the install folder for 326 games. Only Enabled and Community are decisions;
+// the rest is copied, with the fields left editable because the schema is
+// occasionally wrong for a specific build.
+type ModsConfig struct {
+	// Enabled turns the whole feature on for this game.
+	Enabled bool `json:"enabled"`
+
+	// Community is the Thunderstore community slug ("lethal-company").
+	Community string `json:"community,omitempty"`
+
+	// EcosystemGame is the game's key in the ecosystem schema. Usually equal to
+	// Community, but they are separate keys and do diverge.
+	EcosystemGame string `json:"ecosystemGame,omitempty"`
+
+	// SectionUUID is the id of the community's "Modpacks" section. Cached here
+	// because it differs per game and the catalogue filter silently does
+	// nothing when addressed by slug instead.
+	SectionUUID string `json:"sectionUuid,omitempty"`
+
+	// Loader is the mod loader ("bepinex").
+	Loader string `json:"loader,omitempty"`
+
+	// SteamAppID identifies the game to Steam, for locating and launching the
+	// player's own copy.
+	SteamAppID string `json:"steamAppId,omitempty"`
+
+	// SteamFolder is the folder under steamapps/common. It is not always the
+	// same as the Steam install dir: How to Fish nests one level deeper
+	// ("How to Fish/How to Fish"), and a launcher that assumes otherwise lands
+	// in a directory with no executable in it.
+	SteamFolder string `json:"steamFolder,omitempty"`
+
+	// ExeNames are the game's executables, in preference order.
+	ExeNames []string `json:"exeNames,omitempty"`
+}
+
+// reservedGameIDs are directory names under manifests/ that are not games.
+var reservedGameIDs = map[string]bool{
+	"_registry": true,
+	"_mods":     true,
 }
 
 // Handlers serves the games endpoints for one content root.
@@ -67,7 +123,7 @@ func (h *Handlers) FromManifests() []Entry {
 		gid := e.Name()
 		name := strings.ToLower(gid)
 		// Skip special/system folders that are not games
-		if name == "repo" || name == "_registry" || name == "launcher" {
+		if name == "repo" || name == "launcher" || reservedGameIDs[name] {
 			continue
 		}
 		items = append(items, Entry{GameID: gid, Title: gid, ExeRelativePath: "", IconURL: ""})
@@ -181,6 +237,70 @@ func (h *Handlers) Get(w http.ResponseWriter, _ *http.Request) {
 	adminutil.WriteJSON(w, struct {
 		Items []Entry `json:"items"`
 	}{Items: items})
+}
+
+// Entry returns one registry row by game id.
+//
+// Exported so the modpack endpoints can read a game's ModsConfig without a
+// second parser for games.json: the registry has exactly one reader per
+// process today, and that is the only reason its "order" defaulting and its
+// unsafe-id dropping behave identically everywhere.
+func (h *Handlers) Entry(gid string) (Entry, bool) {
+	// #nosec G304 -- registryPath() is the content root plus three constants.
+	b, err := os.ReadFile(h.registryPath())
+	if err != nil {
+		return Entry{}, false
+	}
+	items, ok := decodeRegistryItems(b, false)
+	if !ok {
+		return Entry{}, false
+	}
+	for _, it := range items {
+		if strings.EqualFold(it.GameID, gid) {
+			return it, true
+		}
+	}
+	return Entry{}, false
+}
+
+// SaveEntry updates one registry row in place, leaving the rest untouched.
+//
+// The panel always posts the whole registry, which is fine when a human is
+// editing it. The modpack endpoints change one field of one game (the metadata
+// pulled from Thunderstore), and rewriting three hundred rows to do it would
+// make every such call a chance to clobber a concurrent edit.
+func (h *Handlers) SaveEntry(e Entry) error {
+	if !adminutil.IsSafeGameID(e.GameID) || reservedGameIDs[strings.ToLower(e.GameID)] {
+		return fmt.Errorf("games: unusable gameId %q", e.GameID)
+	}
+	// #nosec G304 -- see Entry.
+	b, err := os.ReadFile(h.registryPath())
+	if err != nil {
+		return err
+	}
+	items, ok := decodeRegistryItems(b, false)
+	if !ok {
+		return errors.New("games: registry is not readable as {\"items\":[...]}")
+	}
+	found := false
+	for i := range items {
+		if strings.EqualFold(items[i].GameID, e.GameID) {
+			items[i] = e
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("games: %q is not in the registry", e.GameID)
+	}
+	sortEntries(items)
+	out, err := json.MarshalIndent(struct {
+		Items []Entry `json:"items"`
+	}{Items: items}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return adminutil.WriteFileAtomic(h.registryPath(), out, 0o644)
 }
 
 // Purge deletes a game outright: its registry row, its manifests and every
@@ -327,6 +447,17 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 	// is wrong instead of hunting for a game that no longer appears.
 	seen := make(map[string]int, len(items))
 	for i, it := range items {
+		// Reserved ids. These are directory names under manifests/ that hold
+		// something other than a game: the registry itself and the modpack
+		// subtree. IsSafeGameID accepts both (an underscore is a legal
+		// character), so a game saved under one of them would publish its
+		// builds straight over that tree.
+		if reservedGameIDs[strings.ToLower(strings.TrimSpace(it.GameID))] {
+			http.Error(w,
+				fmt.Sprintf("entry %d: gameId %q is reserved for internal use", i+1, it.GameID),
+				http.StatusBadRequest)
+			return
+		}
 		if !adminutil.IsSafeGameID(it.GameID) {
 			http.Error(w,
 				fmt.Sprintf("entry %d: gameId must be non-empty and contain only letters, digits, '-' or '_'", i+1),
