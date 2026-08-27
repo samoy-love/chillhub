@@ -335,8 +335,8 @@ func (c *Client) ArchiveURL(fullName string) string {
 // Download streams one package archive into w and returns the byte count.
 //
 // It does NOT retry: a partial body already written to w cannot be un-written,
-// and the caller (which owns the destination file) is the only party that can
-// truncate and start over. downloadWithRetry in build.go does exactly that.
+// and the caller — which owns the destination file — is the only party that can
+// truncate and start over. downloadWithRetry in cache.go does exactly that.
 func (c *Client) Download(ctx context.Context, fullName string, w io.Writer) (int64, error) {
 	archiveURL := c.ArchiveURL(fullName)
 	if archiveURL == "" {

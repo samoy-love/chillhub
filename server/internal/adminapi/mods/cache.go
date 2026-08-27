@@ -2,6 +2,7 @@ package mods
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -36,6 +37,12 @@ const (
 	// must not leave behind a truncated file under the real name, because the
 	// existence check above would then treat it as a valid package forever.
 	cacheTmpPrefix = ".partial-"
+
+	// maxDownloadAttempts counts the first try plus retries of one archive.
+	maxDownloadAttempts = 4
+
+	// downloadRetryBase is the first backoff step; it grows with the attempt.
+	downloadRetryBase = 2 * time.Second
 )
 
 // ArchiveCache stores downloaded package archives.
@@ -104,32 +111,71 @@ func (c *ArchiveCache) Fetch(ctx context.Context, client *Client, fullName strin
 		return "", false, err
 	}
 
-	// Download to a temporary name and rename into place, so a killed build
-	// never leaves a truncated archive that later looks complete.
-	tmp := filepath.Join(c.dir, cacheTmpPrefix+adminutil.GenID())
+	if err := downloadWithRetry(ctx, client, fullName, c.dir, p); err != nil {
+		return "", false, err
+	}
+	return p, false, nil
+}
+
+// downloadWithRetry writes one package archive to dest, restarting from scratch
+// on failure.
+//
+// The retry lives HERE and not in Client.Download because only this side owns
+// the destination file: a body that died halfway has already been written, and
+// resuming would silently produce a corrupt archive. Truncating and starting
+// over is the only correct repair, and only the owner of the file may do it.
+//
+// Without this, one dropped connection anywhere in a 151-package, 1.8 GB build
+// throws away every byte downloaded so far — while the small metadata requests
+// beside it retry four times with backoff. The expensive half of the pipeline
+// had no resilience at all.
+func downloadWithRetry(ctx context.Context, client *Client, fullName, dir, dest string) error {
+	var lastErr error
+	for attempt := 1; attempt <= maxDownloadAttempts; attempt++ {
+		tmp := filepath.Join(dir, cacheTmpPrefix+adminutil.GenID())
+		err := downloadOnce(ctx, client, fullName, tmp, dest)
+		if err == nil {
+			return nil
+		}
+		_ = os.Remove(tmp)
+
+		// A package Thunderstore no longer serves will still be gone on the
+		// fourth attempt; only transport failures are worth repeating.
+		if errors.Is(err, ErrNotFound) || ctx.Err() != nil {
+			return err
+		}
+		lastErr = err
+		log.Printf("[mods] download %s failed (attempt %d/%d): %v", fullName, attempt, maxDownloadAttempts, err)
+
+		if attempt < maxDownloadAttempts {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt) * downloadRetryBase):
+			}
+		}
+	}
+	return fmt.Errorf("mods: downloading %s: %w", fullName, lastErr)
+}
+
+// downloadOnce streams the archive into tmp and renames it onto dest.
+func downloadOnce(ctx context.Context, client *Client, fullName, tmp, dest string) error {
 	f, err := os.Create(tmp) // #nosec G304 -- tmp is cacheDir plus a generated id
 	if err != nil {
-		return "", false, err
+		return err
 	}
 	n, dlErr := client.Download(ctx, fullName, f)
 	closeErr := f.Close()
 	if dlErr != nil {
-		_ = os.Remove(tmp)
-		return "", false, dlErr
+		return dlErr
 	}
 	if closeErr != nil {
-		_ = os.Remove(tmp)
-		return "", false, closeErr
+		return closeErr
 	}
 	if n == 0 {
-		_ = os.Remove(tmp)
-		return "", false, fmt.Errorf("mods: %s downloaded as an empty file", fullName)
+		return fmt.Errorf("mods: %s downloaded as an empty file", fullName)
 	}
-	if err := os.Rename(tmp, p); err != nil {
-		_ = os.Remove(tmp)
-		return "", false, err
-	}
-	return p, false, nil
+	return os.Rename(tmp, dest)
 }
 
 // Stats reports how much the cache holds.

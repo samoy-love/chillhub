@@ -126,6 +126,11 @@ namespace ChillHub.Core.Sync {
             // первое же обновление игры вынесло бы все моды как «лишние файлы».
             var foreignPaths = NormalizeRelSet(options.ForeignPaths);
 
+            // Файлы, которые правит сам лаунчер: ставим, если их нет, и больше не
+            // сверяем. Иначе переключение «с модами / без модов», меняющее значение
+            // в doorstop_config.ini, читалось бы как повреждение файла.
+            var preservePaths = NormalizeRelSet(options.PreservePaths);
+
             var plan = new DiffPlan {
                 GameId = manifest.GameId,
                 Version = manifest.Version,
@@ -225,6 +230,16 @@ namespace ChillHub.Core.Sync {
                 bool needDownload = true;
                 string reason = "missing";
                 long localSize = 0;
+
+                // Файл из preserve-списка уже на месте — он наш, его правит лаунчер,
+                // и содержимое манифеста для него не эталон. Отсутствующий ставим как
+                // обычно: без него моды не запустятся вовсе.
+                if (preservePaths.Contains(rel) && File.Exists(localPath)) {
+                    checkedFiles++;
+                    checkedBytes += mf.Size;
+                    continue;
+                }
+
                 if (File.Exists(localPath)) {
                     try {
                         var info = new FileInfo(localPath);

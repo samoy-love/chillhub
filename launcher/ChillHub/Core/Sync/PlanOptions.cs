@@ -93,6 +93,22 @@ namespace ChillHub.Core.Sync {
         public IReadOnlyCollection<string>? ForeignPaths { get; set; }
 
         /// <summary>
+        /// Gets or sets пути, которые ставятся один раз и дальше не сверяются:
+        /// отсутствующий файл скачивается, существующий не трогают ни при каком
+        /// расхождении хеша.
+        /// <para>
+        /// Нужно ровно для тех файлов манифеста, которые ПРАВИТ САМ ЛАУНЧЕР.
+        /// У модпака такой один — <c>doorstop_config.ini</c>: переключение
+        /// «с модами / без модов» меняет в нём значение ключа, а файл при этом
+        /// перечислен в манифесте. Без исключения «Проверить файлы» после каждой
+        /// ванильной сессии сообщала бы о повреждённом файле, а очередное
+        /// «Обновить» возвращало бы моды во включённое состояние молча, за
+        /// спиной у игрока.
+        /// </para>
+        /// </summary>
+        public IReadOnlyCollection<string>? PreservePaths { get; set; }
+
+        /// <summary>
         /// Настройки для синхронизации ИГРЫ в корне, где может стоять модпак.
         /// Читает установленный манифест модпака с диска, поэтому вызывать её стоит
         /// оттуда же, откуда строится план, — не с UI-потока.
@@ -113,6 +129,17 @@ namespace ChillHub.Core.Sync {
         public static PlanOptions ForModPack(string localRoot) => new PlanOptions {
             Scope = ManifestScope.OwnFilesOnly,
             PreviousOwnedPaths = Home.GameLocalState.ReadInstalledModPackPaths(localRoot),
+            PreservePaths = ModPackPreservePaths,
+        };
+
+        /// <summary>
+        /// Файлы модпака, которые правит сам лаунчер и потому не сверяются после
+        /// установки. Имя берётся из <see cref="Mods.DoorstopConfig.FileName"/>, а не
+        /// пишется строкой: разъехавшись, эти два места дали бы вечно «повреждённый»
+        /// файл, и заметить это можно было бы только по жалобе.
+        /// </summary>
+        private static readonly string[] ModPackPreservePaths = {
+            Mods.DoorstopConfig.FileName,
         };
     }
 }

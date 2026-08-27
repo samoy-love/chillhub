@@ -162,13 +162,20 @@
     if (!root) return null;
 
     const el = function (name) { return root.querySelector('[data-md="' + name + '"]'); };
-    const state = { gameId: '', page: 1, mods: null };
+    // games держим в состоянии, чтобы смена выбора не требовала перезапроса
+    // списка: перерисовка <select> сбрасывает выделение на первый пункт, и
+    // выбранная игра молча подменялась бы первой в списке.
+    const state = { gameId: '', page: 1, mods: null, games: [] };
 
     function gameId() { return state.gameId; }
 
-    function setBusy(busy, text) {
+    function setStatus(text) {
       const status = el('status');
       if (status) status.textContent = text || '';
+    }
+
+    function setBusy(busy, text) {
+      setStatus(text);
       root.querySelectorAll('button[data-md-busy]').forEach(function (b) { b.disabled = !!busy; });
     }
 
@@ -181,18 +188,30 @@
         const res = await fetch('/admin/games');
         const data = await res.json();
         const items = (data && data.items) || [];
+        state.games = items;
         sel.innerHTML = items.map(function (g) {
           const flag = g.mods && g.mods.enabled ? ' ✓' : '';
           return '<option value="' + esc(g.gameId) + '">' + esc(g.title || g.gameId) + flag + '</option>';
         }).join('');
-        if (items.length) {
-          state.gameId = sel.value || items[0].gameId;
-          sel.value = state.gameId;
-          applyGame(items.find(function (g) { return g.gameId === state.gameId; }));
-        }
+        if (!items.length) return;
+
+        // Ранее выбранная игра должна пережить перезапрос: sel.value читать
+        // нельзя — после перезаписи innerHTML он показывает первый пункт.
+        const keep = items.some(function (g) { return g.gameId === state.gameId; });
+        state.gameId = keep ? state.gameId : items[0].gameId;
+        sel.value = state.gameId;
+        selectGame(state.gameId);
       } catch (e) {
         say('Не удалось получить список игр: ' + e, 'error');
       }
+    }
+
+    // selectGame переключает панель на игру из уже загруженного списка, без
+    // перезапроса: перерисовка <select> сбросила бы выбор на первый пункт.
+    function selectGame(gameId) {
+      state.gameId = gameId;
+      state.page = 1;
+      applyGame(state.games.find(function (g) { return g.gameId === gameId; }));
     }
 
     // applyGame показывает настройки модов выбранной игры.
@@ -311,14 +330,17 @@
           + (plan.cachedBytes ? ' (в кеше ' + bytes(plan.cachedBytes) + ')' : '')
           + (plan.missing && plan.missing.length ? ' · НЕДОСТУПНО: ' + plan.missing.length : '')
           + (plan.spaceOk ? '' : ' · МАЛО МЕСТА: ' + plan.spaceNote);
-        setBusy(false, note);
         say(note, plan.spaceOk && !(plan.missing || []).length ? 'info' : 'error');
+        // Строку состояния ставим ПОСЛЕ разблокировки кнопок: setBusy(false)
+        // без текста затирает её, и итог разбора исчезал в том же тике, в
+        // котором появлялся, — вместе с предупреждением о нехватке места.
+        setBusy(false);
+        setStatus(note);
         return plan;
       } catch (e) {
         say('Ошибка: ' + e, 'error');
-        return null;
-      } finally {
         setBusy(false);
+        return null;
       }
     }
 
@@ -355,6 +377,7 @@
         if (!res.ok) { say(await res.text(), 'error'); return; }
 
         let failed = false;
+        let missing = null;
         const seen = await window.readNdjsonStream(res, function (ev) {
           if (ev.type === 'package' && ev.total) {
             const pct = Math.round((ev.step / ev.total) * 100);
@@ -362,6 +385,9 @@
             if (status) status.textContent = 'Скачивание ' + ev.step + '/' + ev.total + ': ' + (ev.message || '');
           } else if (ev.type === 'error') {
             failed = true;
+            // Сервер перечисляет пропавшие пакеты в тексте ошибки: это
+            // единственный случай, который оператор может разрешить сам.
+            if (/больше нет на Thunderstore/.test(ev.message || '')) missing = ev.message;
             if (window.setStatusError) window.setStatusError(status, 'Ошибка сборки: ' + (ev.message || ''));
             else if (status) status.textContent = 'Ошибка сборки: ' + (ev.message || '');
             say('Ошибка сборки: ' + (ev.message || ''), 'error');
@@ -371,6 +397,15 @@
         });
         if (!seen) {
           say('Сервер не прислал ни одного события — вероятно, ответ буферизуется прокси', 'error');
+          return;
+        }
+        if (missing && !allowMissing) {
+          const agreed = typeof confirm === 'function'
+            && confirm(missing + '\n\nСобрать модпак без них?');
+          if (agreed) {
+            setBusy(false);
+            return buildPack(full, version, true);
+          }
           return;
         }
         if (!failed) {
@@ -472,7 +507,7 @@
     });
 
     root.addEventListener('change', function (e) {
-      if (e.target === el('game')) { state.gameId = e.target.value; state.page = 1; loadGames(); }
+      if (e.target === el('game')) { selectGame(e.target.value); }
       if (e.target === el('ordering')) { state.page = 1; reloadCatalog(); }
     });
 

@@ -209,6 +209,12 @@ namespace ChillHub.Core.Game {
                         .ConfigureAwait(true);
                     if (!mods.Ok) {
                         this.ui.SetStatus(mods.Message);
+
+                        // Об исходе отчитываемся: в отличие от ветки «игра запущена»,
+                        // здесь лаунчер уже сходил на сервер и операция именно
+                        // сорвалась. Без этой строки неудачное обновление исчезает из
+                        // метрик целиком — ни успеха, ни ошибки.
+                        this.Report(request, null, "fail", opStart, "mods_sync_failed");
                         return;
                     }
                 }

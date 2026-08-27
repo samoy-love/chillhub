@@ -36,6 +36,7 @@ namespace ChillHub.Tests {
         private const string ModDll = "BepInEx/plugins/Author-Mod/Mod.dll";
         private const string Preloader = "BepInEx/core/BepInEx.Preloader.dll";
         private const string Winhttp = "winhttp.dll";
+        private const string DoorstopIni = "doorstop_config.ini";
 
         // ---------------------------------------------------------------
         // 1. Ограниченное удаление для модпака
@@ -539,5 +540,85 @@ namespace ChillHub.Tests {
             GameLocalState.WriteModsVersionAt(root, version);
             GameLocalState.WriteInstalledModPackManifest(root, manifest);
         }
+
+        // ---------------------------------------------------------------
+        // Файлы, которые правит сам лаунчер
+        // ---------------------------------------------------------------
+
+        /// <summary>
+        /// Файл из preserve-списка, который уже лежит на диске, не перекачивается —
+        /// даже когда его содержимое разошлось с манифестом.
+        /// <para>
+        /// Это ровно случай <c>doorstop_config.ini</c>. Он перечислен в манифесте
+        /// модпака, но значение ключа в нём меняет сам лаунчер, переключая
+        /// «с модами / без модов». Без исключения каждая ванильная сессия оставляла
+        /// бы после себя «повреждённый» файл: проверка целостности предлагала бы
+        /// починку исправной установки, а очередное обновление возвращало бы моды
+        /// во включённое состояние молча, за спиной у игрока.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public async Task ФайлИзPreserveСпискаНеПерекачиваетсяПриРасхождении() {
+            using var dir = new TempDir();
+            dir.WriteFile(DoorstopIni, "enabled = false");
+
+            // Манифест описывает ДРУГОЕ содержимое того же пути.
+            var manifest = PlanTestData.Manifest(
+                PlanTestData.File(DoorstopIni, 64, HashOf(dir, "эталонный ini")));
+
+            var plan = await PlanTestData.PlanAsync(manifest, dir.Root, PlanOptions.ForModPack(dir.Root));
+
+            Assert.Empty(plan.Downloads);
+            Assert.Empty(plan.ToDelete);
+        }
+
+        /// <summary>
+        /// Отсутствующий preserve-файл всё-таки ставится: без doorstop_config.ini
+        /// моды не запустятся вовсе, и «не трогать» тут значило бы «не установить».
+        /// </summary>
+        [Fact]
+        public async Task ОтсутствующийФайлИзPreserveСпискаВсёЖеСтавится() {
+            using var dir = new TempDir();
+            dir.WriteFile(ModDll, "мод");
+
+            var manifest = PlanTestData.Manifest(
+                PlanTestData.File(DoorstopIni, 64, HashOf(dir, "эталонный ini")));
+
+            var plan = await PlanTestData.PlanAsync(manifest, dir.Root, PlanOptions.ForModPack(dir.Root));
+
+            Assert.Single(plan.Downloads);
+            Assert.Equal(DoorstopIni, plan.Downloads[0].RelativePath);
+        }
+
+        /// <summary>
+        /// Для синхронизации ИГРЫ preserve-списка нет: обычный файл сборки, разошедшийся
+        /// с манифестом, обязан скачаться заново, как и раньше.
+        /// </summary>
+        [Fact]
+        public async Task ДляСборкиИгрыPreserveСписокНеДействует() {
+            using var dir = new TempDir();
+            dir.WriteFile(DoorstopIni, "испорчено");
+
+            var manifest = PlanTestData.Manifest(
+                PlanTestData.File(DoorstopIni, 64, HashOf(dir, "эталон сборки")));
+
+            var plan = await PlanTestData.PlanAsync(manifest, dir.Root, PlanOptions.ForGame(dir.Root));
+
+            Assert.Single(plan.Downloads);
+        }
+
+
+        /// <summary>Хеш содержимого, которого на диске нет: эталон для расхождения.</summary>
+        /// <param name="dir">Временный каталог теста.</param>
+        /// <param name="content">Эталонное содержимое.</param>
+        /// <returns>SHA-256 в шестнадцатеричном виде.</returns>
+        private static string HashOf(TempDir dir, string content) {
+            var probe = System.IO.Path.Combine(dir.Root, ".probe");
+            System.IO.File.WriteAllText(probe, content);
+            var hash = TestHash.Sha256OfFile(probe);
+            System.IO.File.Delete(probe);
+            return hash;
+        }
+
     }
 }
