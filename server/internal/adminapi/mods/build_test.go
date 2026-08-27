@@ -29,6 +29,8 @@ type fakeStore struct {
 	deps    map[string][]string
 	entries map[string]map[string]string
 	hits    map[string]int
+
+	lastListing string
 }
 
 func newFakeStore(t *testing.T) *fakeStore {
@@ -42,8 +44,20 @@ func newFakeStore(t *testing.T) *fakeStore {
 
 	mux.HandleFunc("/api/experimental/package/", func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/experimental/package/"), "/"), "/")
-		if len(parts) != 3 {
+		if len(parts) < 3 {
 			http.NotFound(w, r)
+			return
+		}
+		if len(parts) == 4 && parts[3] == "readme" {
+			// README есть только у существующего пакета: иначе тест на
+			// отсутствующий пакет проходил бы на подделке, а не на поведении.
+			if _, ok := fs.deps[fmt.Sprintf("%s-%s-%s", parts[0], parts[1], parts[2])]; !ok {
+				http.NotFound(w, r)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"markdown": "# " + parts[1] + "\n\nописание пакета",
+			})
 			return
 		}
 		full := fmt.Sprintf("%s-%s-%s", parts[0], parts[1], parts[2])
@@ -55,6 +69,20 @@ func newFakeStore(t *testing.T) *fakeStore {
 		_ = json.NewEncoder(w).Encode(PackageVersion{
 			Namespace: parts[0], Name: parts[1], VersionNumber: parts[2],
 			FullName: full, Dependencies: deps, IsActive: true,
+		})
+	})
+
+	// README, разделы сообщества и каталог: их читают эндпоинты панели.
+	mux.HandleFunc("/api/cyberstorm/community/", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(filtersDoc{Sections: []Section{
+			{UUID: "018bb887-fa52-7236-0344-e714696ee5d5", Name: "Modpacks", Slug: "modpacks"},
+		}})
+	})
+	mux.HandleFunc("/api/cyberstorm/listing/", func(w http.ResponseWriter, r *http.Request) {
+		fs.lastListing = r.URL.Query().Encode()
+		_ = json.NewEncoder(w).Encode(CatalogPage{
+			Count:   1,
+			Results: []CatalogEntry{{Namespace: "Team", Name: "Pack", Downloads: 100}},
 		})
 	})
 
