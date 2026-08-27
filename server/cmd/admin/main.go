@@ -19,6 +19,7 @@ import (
 	"ChillHub/server/internal/adminapi/feedback"
 	"ChillHub/server/internal/adminapi/gamegallery"
 	"ChillHub/server/internal/adminapi/games"
+	"ChillHub/server/internal/adminapi/mods"
 	"ChillHub/server/internal/adminapi/news"
 	"ChillHub/server/internal/adminutil"
 	"ChillHub/server/internal/httpx"
@@ -65,6 +66,7 @@ type server struct {
 	news        *news.Handlers
 	games       *games.Handlers
 	gamegallery *gamegallery.Handlers
+	mods        *mods.Handlers
 	feedback    *feedback.Handlers
 	maintenance *maintenance.Store
 	metrics     *metrics.Handlers
@@ -91,12 +93,15 @@ func newServer(contentRoot string) *server {
 	reg := promexp.New()
 	mx.Prom = metrics.NewProduct(reg)
 
+	g := games.New(contentRoot)
+
 	return &server{
 		contentRoot:     contentRoot,
 		auth:            a,
 		builds:          b,
 		news:            news.New(contentRoot),
-		games:           games.New(contentRoot),
+		games:           g,
+		mods:            mods.New(contentRoot, b, g),
 		gamegallery:     gamegallery.New(contentRoot),
 		feedback:        f,
 		maintenance:     mt,

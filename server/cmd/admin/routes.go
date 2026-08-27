@@ -41,6 +41,7 @@ func aliasOf(path string) string {
 // both prefixes; there is no second list to keep in sync.
 func (s *server) apiRoutes() []route {
 	b, n, g, f, gg := s.builds, s.news, s.games, s.feedback, s.gamegallery
+	md := s.mods
 	mt, mx := s.maintenance, s.metrics
 	return []route{
 		// Health probe (allowlisted in the auth middleware).
@@ -127,6 +128,25 @@ func (s *server) apiRoutes() []route {
 		{path: "/admin/api/games/icon/upload", handler: g.IconUpload},
 		{path: "/admin/api/games/scan", handler: g.Scan},
 		{path: "/admin/api/games/purge", handler: g.Purge},
+
+		// Modpacks. Every one of these talks to Thunderstore from THIS process,
+		// never from the panel's browser: the panel's fetch wrapper rewrites
+		// paths and attaches a CSRF token, and pointing it at a third-party
+		// host would trip CORS and leak panel traffic there at the same time.
+		{path: "/admin/api/games/ecosystem", handler: md.Ecosystem},
+		{path: "/admin/api/mods/catalog", handler: md.Catalog},
+		{path: "/admin/api/mods/readme", handler: md.Readme},
+		{path: "/admin/api/mods/resolve", handler: md.Resolve},
+		{path: "/admin/api/mods/list", handler: md.List},
+		{path: "/admin/api/mods/activate", handler: md.Activate},
+		{path: "/admin/api/mods/deleteVersion", handler: md.DeleteVersion},
+		{path: "/admin/api/mods/diff", handler: md.Diff},
+		{path: "/admin/api/mods/cache", handler: md.Cache},
+		// The two streaming endpoints keep the /admin/api form only: nginx
+		// proxies them verbatim and their NDJSON bodies must not be buffered
+		// by an alias route nobody configured.
+		{path: "/admin/api/mods/build", handler: md.Build, noAlias: true},
+		{path: "/admin/api/mods/import", handler: md.Import, noAlias: true},
 
 		// Per-game screenshot gallery.
 		{path: "/admin/api/games/gallery", handler: gg.List},

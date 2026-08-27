@@ -373,6 +373,17 @@ func stripLauncherStateDirs(gameID string, dirs []string) []string {
 // Validation happens here rather than at the call sites so that no publication
 // path can accidentally emit a manifest the client will refuse.
 func (h *Handlers) writeManifest(m manifest, updateLatest bool) (string, []byte, error) {
+	return h.writeManifestTo(h.manifestsDir(m.GameID), m, updateLatest)
+}
+
+// writeManifestTo is writeManifest with the destination directory supplied.
+//
+// A game's own builds always land in manifests/{gameId}; modpacks land in
+// manifests/_mods/{gameId}. The destination is the ONLY difference between the
+// two, so it is a parameter rather than a second copy of the validation, the
+// state-file stripping and the atomic write — the three things that must never
+// diverge between publication paths.
+func (h *Handlers) writeManifestTo(outDir string, m manifest, updateLatest bool) (string, []byte, error) {
 	m.Files = stripLauncherStateFiles(m.GameID, m.Files)
 	m.EmptyDirs = stripLauncherStateDirs(m.GameID, m.EmptyDirs)
 
@@ -384,7 +395,6 @@ func (h *Handlers) writeManifest(m manifest, updateLatest bool) (string, []byte,
 		return "", nil, err
 	}
 
-	outDir := h.manifestsDir(m.GameID)
 	if err := os.MkdirAll(outDir, contentDirPerm); err != nil {
 		return "", nil, err
 	}

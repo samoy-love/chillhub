@@ -5,9 +5,13 @@
 
 namespace ChillHub.Core.Home {
     using System;
+    using System.Collections.Generic;
     using System.IO;
     using System.Text;
+    using System.Text.Json;
     using System.Threading;
+
+    using ChillHub.Core.Sync;
 
     /// <summary>
     /// Локальное состояние установленной игры на диске: путь к папке, маркер версии `.version`,
@@ -18,11 +22,29 @@ namespace ChillHub.Core.Home {
         /// <summary>Имя файла-маркера с установленной версией.</summary>
         internal const string VersionMarkerFileName = Sync.IntegrityChecker.VersionMarkerFileName;
 
+        /// <summary>Имя файла-маркера с версией установленного модпака.</summary>
+        internal const string ModsVersionMarkerFileName = Sync.IntegrityChecker.ModsVersionMarkerFileName;
+
+        /// <summary>Имя файла с копией установленного манифеста модпака.</summary>
+        internal const string ModsManifestFileName = Sync.IntegrityChecker.ModsManifestFileName;
+
         /// <summary>ProgID оболочки Windows, через которую создаётся файл ярлыка.</summary>
         private const string ShellProgId = "WScript.Shell";
 
         /// <summary>Потолок размера `.lnk`, который мы вообще разбираем (обычный ярлык — единицы килобайт).</summary>
         private const long MaxLinkBytes = 512 * 1024;
+
+        /// <summary>
+        /// Настройки JSON для копии манифеста модпака.
+        /// <para>
+        /// Файл читает только лаунчер, поэтому он компактный — но пишется он в папку
+        /// игры, куда пользователь заглядывает руками, и при разборе жалоб его открывают
+        /// глазами. Отступы стоят пары килобайт на полторы тысячи файлов.
+        /// </para>
+        /// </summary>
+        private static readonly JsonSerializerOptions ModsManifestJson = new JsonSerializerOptions {
+            WriteIndented = true,
+        };
 
         /// <summary>
         /// Подмена окружения ярлыка на время теста; null — работает настоящее окружение.
@@ -103,6 +125,170 @@ namespace ChillHub.Core.Home {
                 Logging.Logger.Error(ex, $"WriteLocalVersion gid={gameId}");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Читает версию установленного модпака. Пустая строка = модов нет.
+        /// <para>
+        /// Отдельный маркер рядом с <see cref="VersionMarkerFileName"/>, а не поле в нём:
+        /// сборка игры и модпак обновляются независимо, и одна общая строка версии
+        /// заставляла бы переустанавливать моды при каждом обновлении игры.
+        /// </para>
+        /// </summary>
+        /// <param name="gameId">Идентификатор игры.</param>
+        /// <returns>Версия модпака или пустая строка.</returns>
+        internal static string ReadLocalModsVersion(string? gameId)
+            => string.IsNullOrWhiteSpace(gameId) ? string.Empty : ReadModsVersionAt(GameLocalRoot(gameId));
+
+        /// <summary>Пишет маркер версии модпака. Возвращает false, если записать не удалось.</summary>
+        /// <param name="gameId">Идентификатор игры.</param>
+        /// <param name="version">Версия модпака.</param>
+        /// <returns>true, если маркер записан.</returns>
+        internal static bool WriteLocalModsVersion(string? gameId, string? version)
+            => !string.IsNullOrWhiteSpace(gameId) && WriteModsVersionAt(GameLocalRoot(gameId), version);
+
+        /// <summary>
+        /// То же по корню, а не по идентификатору игры.
+        /// <para>
+        /// Второй вход нужен потому, что модпак ставится не только в папку лаунчера:
+        /// его кладут и в найденную Steam-копию, у которой никакого gameId в пути нет.
+        /// Старые методы с gameId остаются как есть — их зовут отовсюду.
+        /// </para>
+        /// </summary>
+        /// <param name="localRoot">Корень папки игры.</param>
+        /// <returns>Версия модпака или пустая строка.</returns>
+        internal static string ReadModsVersionAt(string? localRoot) {
+            try {
+                if (string.IsNullOrWhiteSpace(localRoot)) {
+                    return string.Empty;
+                }
+
+                var marker = Path.Combine(localRoot, ModsVersionMarkerFileName);
+                if (File.Exists(marker)) {
+                    return File.ReadAllText(marker).Trim();
+                }
+            }
+            catch (Exception ex) {
+                // Нечитаемый маркер трактуем как «модов нет»: безопасный дефолт, при
+                // котором лаунчер предложит поставить модпак заново.
+                Logging.Logger.Warn($"ReadModsVersionAt('{localRoot}'): {ex.Message}");
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>Пишет маркер версии модпака в указанный корень.</summary>
+        /// <param name="localRoot">Корень папки игры.</param>
+        /// <param name="version">Версия модпака.</param>
+        /// <returns>true, если маркер записан.</returns>
+        internal static bool WriteModsVersionAt(string? localRoot, string? version) {
+            try {
+                if (string.IsNullOrWhiteSpace(localRoot)) {
+                    return false;
+                }
+
+                Directory.CreateDirectory(localRoot);
+                var toWrite = (version ?? string.Empty).Trim();
+                Update.AtomicFile.WriteAllText(
+                    Path.Combine(localRoot, ModsVersionMarkerFileName), toWrite, SelfUpdate.SelfUpdateRules.Utf8NoBom);
+                Logging.Logger.Info($"WriteModsVersion root='{localRoot}' value='{toWrite}'");
+                return true;
+            }
+            catch (Exception ex) {
+                Logging.Logger.Error(ex, $"WriteModsVersionAt({localRoot})");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Сохраняет копию установленного манифеста модпака рядом с маркером версии.
+        /// <para>
+        /// Это единственная память о том, какими путями в общей папке владеет модпак.
+        /// Пишется атомарно и ПОСЛЕ успешной синхронизации: оборванная запись оставила бы
+        /// список файлов, которых на диске нет, и следующее обновление модов сочло бы
+        /// удалёнными файлы, которые никто не устанавливал.
+        /// </para>
+        /// </summary>
+        /// <param name="localRoot">Корень папки игры.</param>
+        /// <param name="manifest">Установленный манифест модпака.</param>
+        /// <returns>true, если копия записана.</returns>
+        internal static bool WriteInstalledModPackManifest(string? localRoot, Manifest? manifest) {
+            try {
+                if (string.IsNullOrWhiteSpace(localRoot) || manifest == null) {
+                    return false;
+                }
+
+                Directory.CreateDirectory(localRoot);
+                var json = JsonSerializer.Serialize(manifest, ModsManifestJson);
+                Update.AtomicFile.WriteAllText(
+                    Path.Combine(localRoot, ModsManifestFileName), json, SelfUpdate.SelfUpdateRules.Utf8NoBom);
+                Logging.Logger.Info(
+                    $"WriteInstalledModPackManifest root='{localRoot}' ver='{manifest.Version}' files={manifest.Files?.Count ?? 0}");
+                return true;
+            }
+            catch (Exception ex) {
+                Logging.Logger.Error(ex, $"WriteInstalledModPackManifest({localRoot})");
+                return false;
+            }
+        }
+
+        /// <summary>Читает сохранённую копию манифеста модпака. null — модпак не установлен.</summary>
+        /// <param name="localRoot">Корень папки игры.</param>
+        /// <returns>Манифест модпака или null.</returns>
+        internal static Manifest? ReadInstalledModPackManifest(string? localRoot) {
+            try {
+                if (string.IsNullOrWhiteSpace(localRoot)) {
+                    return null;
+                }
+
+                var path = Path.Combine(localRoot, ModsManifestFileName);
+                if (!File.Exists(path)) {
+                    return null;
+                }
+
+                return JsonSerializer.Deserialize<Manifest>(File.ReadAllText(path), ModsManifestJson);
+            }
+            catch (Exception ex) {
+                // Битую копию трактуем как «модпака нет». Для синхронизации ИГРЫ это
+                // означает, что моды перестанут считаться чужими файлами, поэтому
+                // уровень Error: тихо потерять этот файл нельзя.
+                Logging.Logger.Error(ex, $"ReadInstalledModPackManifest({localRoot})");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Пути, которыми в этой папке владеет установленный модпак — в форме манифеста
+        /// ('/', без ведущего разделителя). Пустой список, если модпака нет.
+        /// <para>
+        /// Именно этот список едет в <see cref="PlanOptions.ForeignPaths"/> синхронизации
+        /// игры и в <see cref="PlanOptions.PreviousOwnedPaths"/> синхронизации модов.
+        /// </para>
+        /// </summary>
+        /// <param name="localRoot">Корень папки игры.</param>
+        /// <returns>Относительные пути файлов модпака.</returns>
+        internal static IReadOnlyList<string> ReadInstalledModPackPaths(string? localRoot) {
+            var manifest = ReadInstalledModPackManifest(localRoot);
+            if (manifest?.Files == null || manifest.Files.Count == 0) {
+                return Array.Empty<string>();
+            }
+
+            var list = new List<string>(manifest.Files.Count);
+            foreach (var f in manifest.Files) {
+                if (f == null || string.IsNullOrWhiteSpace(f.Path)) {
+                    continue;
+                }
+
+                // Нормализуем ровно тем же кодом, что и планировщик: списки владения
+                // сходятся только если "BepInEx\core\x.dll" и "BepInEx/core/x.dll" —
+                // это одна и та же строка.
+                var rel = SimpleSyncService.NormalizeRel(f.Path);
+                if (rel.Length > 0) {
+                    list.Add(rel);
+                }
+            }
+
+            return list;
         }
 
         /// <summary>

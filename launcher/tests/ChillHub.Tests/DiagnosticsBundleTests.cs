@@ -50,6 +50,7 @@ namespace ChillHub.Tests {
                 Assert.Contains("## Config", text);
                 Assert.Contains("## Launcher Files (SHA-256)", text);
                 Assert.Contains("## Games Root Listing", text);
+                Assert.Contains("## Mods", text);
                 Assert.Contains("## Logs", text);
                 Assert.Contains("## SelfUpdate Logs", text);
             }
@@ -194,9 +195,9 @@ namespace ChillHub.Tests {
             using var logs = new TempDir();
 
             using (Logger.OverrideForTests(logs.Root)) {
-                // Бюджет на все логи — 160 КиБ, хвост одного файла — 48 КиБ.
-                // Пять файлов по 60 КиБ гарантированно упираются и в тот, и в другой.
-                var noise = new string('x', 60 * 1024);
+                // Бюджет на все логи — 512 КиБ, хвост одного файла — 128 КиБ.
+                // Пять файлов по 200 КиБ гарантированно упираются и в тот, и в другой.
+                var noise = new string('x', 200 * 1024);
                 foreach (var name in new[] { "client.1.log", "client.2.log", "client.3.log", "client.4.log", "boot.log" }) {
                     File.WriteAllText(Path.Combine(logs.Root, name), noise, new UTF8Encoding(false));
                 }
@@ -267,16 +268,68 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
-        /// Перечень содержимого бандла показывается пользователю перед отправкой:
-        /// молча приложить к жалобе конфиг и пути — нечестно, а пустой перечень
-        /// выглядит как «ничего не отправляем».
+        /// Состояние модов попадает в бандл целиком: метка версии набора, размер манифеста,
+        /// конфиг доорстопа, дерево BepInEx и хвост его журнала.
+        /// <para>
+        /// «Игра не запускается после модов» — самая частая жалоба, которую невозможно
+        /// разобрать по одному тексту обращения: причина всегда в одном из этих пяти мест,
+        /// и пропавшая секция означает переписку на несколько дней вместо ответа сразу.
+        /// </para>
         /// </summary>
         [Fact]
-        public void ПереченьСодержимогоБандлаНепуст() {
-            var contents = Diagnostics.BundleContents;
+        public void СостояниеМодовПопадаетВБандл() {
+            using var games = new GamesPathScope();
+            using var logs = new TempDir();
 
-            Assert.NotEmpty(contents);
-            Assert.All(contents, s => Assert.False(string.IsNullOrWhiteSpace(s)));
+            var gameDir = Path.Combine(games.Root, "играСМодами");
+            var plugins = Path.Combine(gameDir, "BepInEx", "plugins");
+            Directory.CreateDirectory(plugins);
+            File.WriteAllText(Path.Combine(gameDir, ".mods.version"), "маркер-версии-модов");
+            File.WriteAllText(Path.Combine(gameDir, ".mods.manifest.json"), "{\"files\":[]}");
+            File.WriteAllText(Path.Combine(gameDir, "doorstop_config.ini"), "enabled=маркер-доорстопа");
+            File.WriteAllText(Path.Combine(plugins, "МойПлагин.dll"), "не-настоящая-dll");
+            File.WriteAllText(
+                Path.Combine(gameDir, "BepInEx", "LogOutput.log"), "маркер-журнала-модов");
+
+            using (Logger.OverrideForTests(logs.Root)) {
+                var text = Diagnostics.Build().LogsMarkdown;
+
+                Assert.Contains("## Mods", text);
+                Assert.Contains("играСМодами", text);
+                Assert.Contains("маркер-версии-модов", text);
+                Assert.Contains("маркер-доорстопа", text);
+                Assert.Contains("маркер-журнала-модов", text);
+
+                // Плагины видно по дереву: задвоенный или чужой dll ищут именно здесь.
+                Assert.Contains("МойПлагин.dll", text);
+
+                // Манифест — только имя и размер: внутри перечень всех файлов набора,
+                // он не помещается в бандл и для разбора не нужен.
+                Assert.Contains(".mods.manifest.json [size=", text);
+                Assert.DoesNotContain("{\"files\":[]}", text);
+            }
+        }
+
+        /// <summary>
+        /// Ванильные игры секцию модов не раздувают: их папки уже перечислены в дереве
+        /// выше, а бюджет бандла общий — то, что уйдёт на пересказ библиотеки, отнимется
+        /// у журналов.
+        /// </summary>
+        [Fact]
+        public void ИгрыБезМодовВСекциюМодовНеПопадают() {
+            using var games = new GamesPathScope();
+            using var logs = new TempDir();
+            Directory.CreateDirectory(Path.Combine(games.Root, "ванильнаяИгра"));
+
+            using (Logger.OverrideForTests(logs.Root)) {
+                var text = Diagnostics.Build().LogsMarkdown;
+                var start = text.IndexOf("## Mods", StringComparison.Ordinal);
+                Assert.True(start >= 0, "секция модов пропала из бандла");
+
+                var section = text[start..text.IndexOf("## Logs", StringComparison.Ordinal)];
+                Assert.Contains("(no modded games found)", section);
+                Assert.DoesNotContain("ванильнаяИгра", section);
+            }
         }
     }
 }

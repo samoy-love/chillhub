@@ -10,6 +10,8 @@ namespace ChillHub.Core.Home {
     using System.Windows.Controls;
     using System.Windows.Media;
 
+    using ChillHub.Core.Mods;
+
     /// <summary>
     /// Модальные диалоги главной страницы: подтверждение удаления локальных файлов
     /// в стиле темы и проверка доступности папки для игр с выбором новой.
@@ -345,6 +347,148 @@ namespace ChillHub.Core.Home {
             }
             else {
                 Logging.Logger.Warn($"HomeDialogs: стиль '{key}' не найден, используется оформление по умолчанию");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Каким показать пункт меню «Поставить моды в Steam-копию».
+    /// </summary>
+    /// <param name="Visible">Показывать ли пункт вообще.</param>
+    /// <param name="Enabled">Можно ли по нему нажать.</param>
+    /// <param name="Header">Готовая подпись пункта: с причиной, если он выключен.</param>
+    /// <param name="Reason">Почему пункт выключен или скрыт; пусто, если он доступен.</param>
+    internal sealed record SteamModsMenu(bool Visible, bool Enabled, string Header, string Reason);
+
+    /// <summary>
+    /// Тексты и решения для установки модпака в копию игры из Steam.
+    /// <para>
+    /// Отдельно от страницы, потому что проверять тут есть что: пункт меню, показанный
+    /// не тем играм, ведёт в тупик, а подтверждение без имени найденной папки просит
+    /// согласиться неизвестно на что — модпак пишется прямо в чужую установку Steam.
+    /// Ни то ни другое не проверить через живое окно.
+    /// </para>
+    /// </summary>
+    internal static class SteamModsInstall {
+        /// <summary>Подпись пункта меню. Одна на разметку, обработчик и тесты.</summary>
+        internal const string MenuTitle = "Поставить моды в Steam-копию";
+
+        /// <summary>Заголовок окна подтверждения.</summary>
+        internal const string ConfirmCaption = "Установка модов в Steam-копию";
+
+        /// <summary>
+        /// Значение <c>Tag</c> у пункта меню: по нему обработчик открытия меню находит
+        /// пункт среди остальных. По подписи искать нельзя — она меняется вместе с причиной.
+        /// </summary>
+        internal const string MenuTag = "steam-mods";
+
+        /// <summary>
+        /// Решает, показывать ли пункт и активен ли он.
+        /// <para>
+        /// Игре без Steam AppID пункт не нужен вовсе: ставить моды некуда, и объяснять
+        /// тут нечего. А вот игра со Steam-копией, но без опубликованного модпака —
+        /// случай временный, и выключенный пункт с причиной честнее исчезнувшего:
+        /// пользователь видит, что путь есть, просто ставить пока нечего.
+        /// </para>
+        /// </summary>
+        /// <param name="mods">Настройки модов игры с сервера.</param>
+        /// <returns>Что сделать с пунктом меню.</returns>
+        internal static SteamModsMenu DecideMenuItem(ModsInfo? mods) {
+            if (mods == null || string.IsNullOrWhiteSpace(mods.SteamAppId)) {
+                return new SteamModsMenu(false, false, MenuTitle, "у игры нет модов для копии из Steam");
+            }
+
+            if (!mods.HasLatest) {
+                const string reason = "модпак ещё не опубликован";
+                return new SteamModsMenu(true, false, $"{MenuTitle} — {reason}", reason);
+            }
+
+            return new SteamModsMenu(true, true, MenuTitle, string.Empty);
+        }
+
+        /// <summary>
+        /// Составляет вопрос перед установкой.
+        /// <para>
+        /// Папка называется полностью и намеренно: библиотек Steam бывает несколько, и
+        /// человек должен увидеть, в какую именно копию сейчас запишут полтора гигабайта.
+        /// Предупреждение про обновление игры в Steam — не формальность: Steam
+        /// восстанавливает свои файлы поверх модов, и после его обновления игра с модами
+        /// перестаёт запускаться до повторной установки модпака.
+        /// </para>
+        /// </summary>
+        /// <param name="gameTitle">Название игры.</param>
+        /// <param name="mods">Настройки модов игры.</param>
+        /// <param name="steamDir">Найденная папка копии из Steam.</param>
+        /// <returns>Текст вопроса.</returns>
+        internal static string BuildConfirmText(string? gameTitle, ModsInfo? mods, string? steamDir) {
+            var title = string.IsNullOrWhiteSpace(gameTitle) ? "игры" : $"«{gameTitle}»";
+            var pack = mods?.Describe() ?? string.Empty;
+            var packLine = string.IsNullOrWhiteSpace(pack) ? string.Empty : $"Модпак: {pack}\n";
+
+            return $"Поставить моды в копию {title} из Steam?\n\n" +
+                   $"Папка: {HomeFormat.NormalizeDisplayPath(steamDir ?? string.Empty)}\n" +
+                   packLine +
+                   "\nМоды будут записаны прямо в установку Steam. Обновление игры в Steam " +
+                   "может сломать их — после такого обновления поставьте моды заново.";
+        }
+
+        /// <summary>
+        /// Объясняет по-человечески, почему копию в Steam не нашли.
+        /// <para>
+        /// Каждая ступень поиска — своя причина и свой следующий шаг. «Ошибка» здесь
+        /// бесполезна: не установлен Steam, не установлена игра и «папку унесли с диска»
+        /// лечатся совершенно по-разному.
+        /// </para>
+        /// </summary>
+        /// <param name="outcome">Чем закончился поиск.</param>
+        /// <param name="gameTitle">Название игры для текста.</param>
+        /// <returns>Текст для пользователя; пусто, если папка всё-таки нашлась.</returns>
+        internal static string DescribeLookupFailure(SteamLookup outcome, string? gameTitle) {
+            var title = string.IsNullOrWhiteSpace(gameTitle) ? "Игра" : $"«{gameTitle}»";
+            return outcome switch {
+                SteamLookup.Found => string.Empty,
+                SteamLookup.SteamNotInstalled =>
+                    "Steam на этом компьютере не найден: в реестре нет пути к нему. " +
+                    "Установите Steam или запустите его хотя бы один раз.",
+                SteamLookup.NoLibraries =>
+                    "Библиотеки Steam не найдены — похоже, в эту установку Steam ещё ничего не скачано.",
+                SteamLookup.GameNotInstalled =>
+                    $"{title} не установлена в Steam. Установите её в Steam и повторите.",
+                SteamLookup.FolderMissing =>
+                    $"Steam считает, что {title} установлена, но папки игры на диске нет. " +
+                    "Проверьте целостность файлов игры в Steam.",
+                SteamLookup.NoAppId =>
+                    "Для этой игры не задан Steam AppID — искать копию в Steam не по чему.",
+                _ => "Копию игры в Steam найти не удалось. Подробности — в журнале.",
+            };
+        }
+
+        /// <summary>
+        /// Переводит итог установки в строку для пользователя.
+        /// </summary>
+        /// <param name="result">Что вернул <see cref="ModsService.EnsureAsync"/>.</param>
+        /// <param name="gameTitle">Название игры.</param>
+        /// <returns>Текст для тоста или для сообщения об ошибке.</returns>
+        internal static string DescribeResult(ModsSyncResult result, string? gameTitle) {
+            var title = string.IsNullOrWhiteSpace(gameTitle) ? "игры" : $"«{gameTitle}»";
+            if (result == null) {
+                return "Не удалось установить моды. Попробуйте ещё раз.";
+            }
+
+            switch (result.Outcome) {
+                case ModsSyncOutcome.NoModpack:
+                    return $"У {title} нет активного модпака — устанавливать нечего.";
+                case ModsSyncOutcome.UpToDate:
+                    return $"Моды в копии {title} из Steam уже актуальны.";
+                case ModsSyncOutcome.Installed:
+                    // Объём скачанного называется, потому что установка «мгновенно и
+                    // молча» после полутора гигабайт трафика выглядит как отказ.
+                    var size = result.Downloaded > 0 ? $", скачано {HomeFormat.FormatSize(result.Downloaded)}" : string.Empty;
+                    return $"Моды установлены в копию {title} из Steam: {result.Version}{size}.";
+                default:
+                    return string.IsNullOrWhiteSpace(result.Message)
+                        ? "Не удалось установить моды. Попробуйте ещё раз."
+                        : result.Message;
             }
         }
     }
