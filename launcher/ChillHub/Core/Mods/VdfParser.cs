@@ -124,7 +124,8 @@ namespace ChillHub.Core.Mods {
 
                 if (pendingKey == null) {
                     pendingKey = token;
-                } else {
+                }
+                else {
                     stack.Peek().Children[pendingKey] = new VdfNode { Value = token };
                     pendingKey = null;
                 }
@@ -157,7 +158,8 @@ namespace ChillHub.Core.Mods {
                             't' => '\t',
                             _ => text[i],
                         });
-                    } else {
+                    }
+                    else {
                         sb.Append(text[i]);
                     }
 
@@ -192,7 +194,8 @@ namespace ChillHub.Core.Mods {
 
                 if (text[i] == '{') {
                     depth++;
-                } else if (text[i] == '}') {
+                }
+                else if (text[i] == '}') {
                     depth--;
                 }
 

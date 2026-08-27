@@ -122,7 +122,8 @@ namespace ChillHub.Core.Mods {
                     // в UTF-8 с BOM — лишний повод для расхождения по хешу.
                     File.WriteAllLines(path, lines, new UTF8Encoding(false));
                     Logging.Logger.Info($"[mods] doorstop: enabled={enabled} в '{path}'");
-                } else {
+                }
+                else {
                     Logging.Logger.Info($"[mods] doorstop: enabled уже {enabled} в '{path}'");
                 }
 

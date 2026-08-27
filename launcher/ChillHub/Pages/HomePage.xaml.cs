@@ -1,4 +1,4 @@
-﻿// <copyright file="HomePage.xaml.cs" company="PlaceholderCompany">
+// <copyright file="HomePage.xaml.cs" company="PlaceholderCompany">
 // Copyright (c) 2025 ChillHub
 // Licensed under the MIT License.
 // </copyright>
@@ -2085,9 +2085,11 @@ namespace ChillHub.Pages {
                     // Steam.exe завершается сразу, отдав команду; отсутствие процесса тут
                     // не ошибка. Настоящий отказ уже записан в журнал внутри ModsLaunch.
                     this.StatusText.Text = "Запуск через Steam…";
-                } else if (proc == null) {
+                }
+                else if (proc == null) {
                     this.StatusText.Text = "Не удалось запустить игру. Подробности в журнале.";
-                } else {
+                }
+                else {
                     this.StatusText.Text = string.Empty;
                     Core.Metrics.MetricsService.GameLaunch(game.GameId, game.Mods.Version);
                 }
