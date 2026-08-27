@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"ChillHub/server/internal/adminapi/builds"
@@ -140,10 +142,28 @@ type Event struct {
 	Bytes   int64  `json:"bytes,omitempty"`
 	Version string `json:"version,omitempty"`
 	Files   int    `json:"files,omitempty"`
+
+	// Parallel is how many archives were in flight at the moment of the event.
+	// Progress that only counts finished items looks stalled while six large
+	// packages are halfway through; this is what says «работа идёт».
+	Parallel int `json:"parallel,omitempty"`
 }
 
 // Emit reports progress. A nil emitter is fine.
 type Emit func(Event)
+
+// serialized returns an emitter safe to call from several goroutines.
+func (e Emit) serialized() Emit {
+	if e == nil {
+		return nil
+	}
+	var mu sync.Mutex
+	return func(ev Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		e(ev)
+	}
+}
 
 func (e Emit) send(ev Event) {
 	if e != nil {
@@ -164,10 +184,12 @@ type Builder struct {
 // NewBuilder wires a builder for one content root.
 func NewBuilder(root string, b *builds.Handlers) *Builder {
 	c := NewClient(nil)
+	cache := NewArchiveCache(root)
+	c.WithMetaCache(cache.MetaDir())
 	return &Builder{
 		Client: c,
 		Eco:    NewEcosystemCache(c, root),
-		Cache:  NewArchiveCache(root),
+		Cache:  cache,
 		Builds: b,
 		Root:   root,
 	}
@@ -240,26 +262,48 @@ func (b *Builder) ResolveWith(ctx context.Context, req Request, emit Emit) (*Pla
 		Loader:      res.Loader,
 	}
 
+	// ОЦЕНКА РАЗМЕРОВ ИДЁТ ПАРАЛЛЕЛЬНО.
+	//
+	// Это 151 запрос HEAD к хранилищу архивов — не к API, у которого свой
+	// лимит. Последовательно, с паузой API между запросами, пасс занимал около
+	// минуты и был ровно половиной той тишины, за которую сборку и назвали
+	// зависшей. Число одновременных запросов ограничивает сам клиент.
+	sizes := make([]int64, len(res.Packages))
+	cached := make([]int64, len(res.Packages))
+	var sizeWG sync.WaitGroup
+	var sized atomic.Int64
 	for i, p := range res.Packages {
-		emit.send(Event{
-			Type: "sizing", Step: i + 1, Total: len(res.Packages), Message: p.FullName,
-		})
 		if path, err := b.Cache.path(p.FullName); err == nil {
 			if st, err := os.Stat(path); err == nil {
-				plan.CachedBytes += st.Size()
-				plan.TotalBytes += st.Size()
+				cached[i] = st.Size()
+				sized.Add(1)
 				continue
 			}
 		}
-		n, err := b.Client.ArchiveSize(ctx, p.FullName)
-		if err != nil {
-			// A size that cannot be read is not a reason to refuse the build;
-			// it only makes the estimate less exact, and the extraction budget
-			// below still bounds what lands on disk.
-			log.Printf("[mods] size of %s unknown: %v", p.FullName, err)
-			continue
-		}
-		plan.TotalBytes += n
+		sizeWG.Add(1)
+		go func(i int, p ResolvedPackage) {
+			defer sizeWG.Done()
+			n, err := b.Client.ArchiveSize(ctx, p.Ref())
+			if err != nil {
+				// A size that cannot be read is not a reason to refuse the
+				// build; it only makes the estimate less exact, and the
+				// extraction budget below still bounds what lands on disk.
+				log.Printf("[mods] size of %s unknown: %v", p.FullName, err)
+			}
+			sizes[i] = n
+			emit.send(Event{
+				Type: "sizing", Step: int(sized.Add(1)), Total: len(res.Packages),
+				Message: p.FullName,
+			})
+		}(i, p)
+	}
+	sizeWG.Wait()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	for i := range res.Packages {
+		plan.CachedBytes += cached[i]
+		plan.TotalBytes += cached[i] + sizes[i]
 	}
 
 	free, measured := builds.SpaceBudgetFor(b.Root)
@@ -292,6 +336,15 @@ func (b *Builder) ResolveWith(ctx context.Context, req Request, emit Emit) (*Pla
 // three of its mods is a broken game that nobody knows is broken, and the
 // operator is right there to make the call.
 func (b *Builder) Build(ctx context.Context, req Request, allowMissing bool, emit Emit) (*Source, error) {
+	// СОБЫТИЯ ТЕПЕРЬ ПРИХОДЯТ ИЗ НЕСКОЛЬКИХ ГОРУТИН.
+	//
+	// Скачивание идёт параллельно, и каждый работник отчитывается о своём
+	// пакете. Получатель на том конце — один http.ResponseWriter, писать в
+	// который одновременно нельзя: это не «перепутается порядок строк», это
+	// битый NDJSON и гонка, которую находит -race. Замок здесь, у источника,
+	// а не у каждого вызывающего.
+	emit = emit.serialized()
+
 	version := req.VersionName()
 	emit.send(Event{Type: "start", Message: "разбор состава модпака", Version: version})
 
@@ -334,25 +387,9 @@ func (b *Builder) Build(ctx context.Context, req Request, allowMissing bool, emi
 
 	budget := adminutil.NewExtractBudget(max(plan.TotalBytes*extractBudgetHeadroom, minExtractBudget))
 
-	var hits int
-	for i, p := range plan.Packages {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		path, hit, err := b.Cache.Fetch(ctx, b.Client, p.FullName)
-		if err != nil {
-			return nil, fmt.Errorf("mods: скачивание %s: %w", p.FullName, err)
-		}
-		if hit {
-			hits++
-		}
-		if _, err := layout.InstallPackage(staged.FilesRoot, p, path, budget); err != nil {
-			return nil, err
-		}
-		emit.send(Event{
-			Type: "package", Step: i + 1, Total: len(plan.Packages),
-			Message: p.FullName,
-		})
+	hits, err := b.fetchAndInstall(ctx, plan, layout, staged.FilesRoot, budget, emit)
+	if err != nil {
+		return nil, err
 	}
 	emit.send(Event{Type: "downloaded", Message: fmt.Sprintf("из кеша взято %d пакетов из %d", hits, len(plan.Packages))})
 
@@ -396,6 +433,131 @@ func (b *Builder) Build(ctx context.Context, req Request, allowMissing bool, emi
 		Message: fmt.Sprintf("собрано: %d файлов, %.1f МБ", pub.Files, float64(pub.Bytes)/(1<<20)),
 	})
 	return src, nil
+}
+
+// fetchAndInstall downloads every package in parallel and installs them in
+// plan order. Returns how many came from the cache.
+//
+// РАЗДЕЛЕНИЕ РОЛЕЙ ЗДЕСЬ — ЭТО НЕ УКРАШЕНИЕ.
+//
+// Скачивание — сеть, и его можно вести в несколько потоков: архивы лежат в
+// хранилище, у которого нет того лимита, что у API. Раньше 1.8 ГБ уезжали по
+// одному файлу с паузой между ними, и это была самая долгая часть сборки.
+//
+// Установка при этом ОСТАЁТСЯ ПОСЛЕДОВАТЕЛЬНОЙ и строго в порядке плана. Два
+// пакета могут положить файл по одному и тому же пути (загрузчик и мод,
+// правящий его конфиг, — обычное дело), и кто из них останется, обязано
+// решать место в дереве зависимостей, а не то, чей распаковщик успел первым.
+// Гонка здесь дала бы сборку, которая собирается по-разному из одного и того
+// же плана.
+func (b *Builder) fetchAndInstall(
+	ctx context.Context,
+	plan *Plan,
+	layout *Layout,
+	filesRoot string,
+	budget *adminutil.ExtractBudget,
+	emit Emit,
+) (int, error) {
+	n := len(plan.Packages)
+	type slot struct {
+		path string
+		hit  bool
+		err  error
+	}
+	got := make([]slot, n)
+	ready := make([]chan struct{}, n)
+	for i := range ready {
+		ready[i] = make(chan struct{})
+	}
+
+	// Скачивание отменяется вместе с установкой: пакет, упавший в середине
+	// плана, не повод тянуть оставшийся гигабайт.
+	dlCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var inflight atomic.Int64
+	var doneCount atomic.Int64
+	var doneBytes atomic.Int64
+
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < maxCDNParallel; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				p := plan.Packages[i]
+				inflight.Add(1)
+				path, hit, err := b.Cache.Fetch(dlCtx, b.Client, p.Ref(),
+					func(name string, attempt, of int, cause error) {
+						emit.send(Event{
+							Type: "retry", Step: attempt, Total: of,
+							Message: fmt.Sprintf("%s — попытка %d из %d: %v", name, attempt, of, cause),
+						})
+					})
+				inflight.Add(-1)
+				got[i] = slot{path: path, hit: hit, err: err}
+				close(ready[i])
+
+				if err == nil {
+					if st, statErr := os.Stat(path); statErr == nil {
+						doneBytes.Add(st.Size())
+					}
+				}
+				emit.send(Event{
+					Type: "downloading", Step: int(doneCount.Add(1)), Total: n,
+					Bytes:    doneBytes.Load(),
+					Parallel: int(inflight.Load()),
+					Message:  p.FullName,
+				})
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for i := 0; i < n; i++ {
+			select {
+			case jobs <- i:
+			case <-dlCtx.Done():
+				return
+			}
+		}
+	}()
+
+	hits := 0
+	var failure error
+	for i := 0; i < n; i++ {
+		select {
+		case <-ready[i]:
+		case <-ctx.Done():
+			failure = ctx.Err()
+		}
+		if failure != nil {
+			break
+		}
+		if got[i].err != nil {
+			failure = fmt.Errorf("mods: скачивание %s: %w", plan.Packages[i].FullName, got[i].err)
+			break
+		}
+		if got[i].hit {
+			hits++
+		}
+		if _, err := layout.InstallPackage(filesRoot, plan.Packages[i], got[i].path, budget); err != nil {
+			failure = err
+			break
+		}
+		emit.send(Event{
+			Type: "package", Step: i + 1, Total: n,
+			Message: plan.Packages[i].FullName,
+		})
+	}
+
+	// Отменяем очередь и ДОЖИДАЕМСЯ работников в любом исходе: горутина,
+	// пишущая в кеш после возврата сборки, — это временный файл, который никто
+	// не уберёт, и запись в staged-дерево, которое вот-вот удалят.
+	cancel()
+	wg.Wait()
+	return hits, failure
 }
 
 func packageNames(ps []ResolvedPackage) []string {
