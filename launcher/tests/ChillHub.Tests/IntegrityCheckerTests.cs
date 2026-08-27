@@ -5,11 +5,14 @@
 
 namespace ChillHub.Tests {
     using System;
+    using System.Collections.Generic;
     using System.IO;
     using System.Net.Http;
     using System.Threading;
     using System.Threading.Tasks;
 
+    using ChillHub.Core;
+    using ChillHub.Core.Home;
     using ChillHub.Core.Sync;
 
     using Xunit;
@@ -316,6 +319,210 @@ namespace ChillHub.Tests {
             Assert.Equal(string.Empty, IntegrityChecker.Describe(null!));
         }
 
+        /// <summary>
+        /// У игры нет модпака — второго прохода не происходит, и отчёт остаётся ровно
+        /// тем же, что был до модов: ни лишнего поля, ни лишней строки в тексте.
+        /// </summary>
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task ИграБезМодпакаПроверяетсяКакРаньше(bool emptyCard) {
+            using var dir = new TempDir();
+            var sync = new StubSync();
+            var before = new IntegrityReport { TotalFiles = 10, Version = "1.0.0" };
+
+            var after = await IntegrityChecker.CheckModsAsync(
+                sync, "https://x.invalid", emptyCard ? new ModsInfo() : null, dir.Root, before, null, CancellationToken.None);
+
+            Assert.Same(before, after);
+            Assert.False(after.HasMods);
+            Assert.Null(after.ModsPlan);
+            Assert.Equal(0, sync.ManifestRequests);
+            Assert.Contains("Всё в порядке", IntegrityChecker.Describe(after), StringComparison.Ordinal);
+            Assert.DoesNotContain("Моды", IntegrityChecker.Describe(after), StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Модпак объявлен, но на диск не ставился: второго прохода нет и манифест модов
+        /// даже не запрашивается. Это не ошибка — моды ставятся по желанию.
+        /// </summary>
+        [Fact]
+        public async Task НеустановленныйМодпакВторогоПроходаНеДелает() {
+            using var dir = new TempDir();
+            dir.WriteFile("game.exe", "содержимое");
+
+            var sync = new StubSync { ModsManifest = PlanTestData.Manifest() };
+            var before = new IntegrityReport { TotalFiles = 1, Version = "1.0.0" };
+
+            var after = await IntegrityChecker.CheckModsAsync(
+                sync, "https://x.invalid", ModsCard(), dir.Root, before, null, CancellationToken.None);
+
+            Assert.Same(before, after);
+            Assert.False(after.HasMods);
+            Assert.Equal(0, sync.ManifestRequests);
+        }
+
+        /// <summary>
+        /// Игра с целыми модами: обе части исправны, а файлы модов не попадают в «лишние»
+        /// у игры — иначе «Проверить файлы» предлагало бы удалить пару тысяч файлов BepInEx.
+        /// </summary>
+        [Fact]
+        public async Task ЦелыеФайлыМодовПризнаютсяИсправными() {
+            using var dir = new TempDir();
+            var game = dir.WriteFile("game.exe", "содержимое игры");
+            var mod = dir.WriteFile("BepInEx/core/BepInEx.Preloader.dll", "тело мода");
+
+            var modsManifest = PlanTestData.Manifest(
+                PlanTestData.File("BepInEx/core/BepInEx.Preloader.dll", new FileInfo(mod).Length, TestHash.Sha256OfFile(mod)));
+            InstallMods(dir.Root, modsManifest);
+
+            var gameManifest = PlanTestData.Manifest(
+                PlanTestData.File("game.exe", new FileInfo(game).Length, TestHash.Sha256OfFile(game)));
+
+            var report = await CheckWithModsAsync(gameManifest, modsManifest, dir.Root);
+
+            Assert.True(report.HasMods);
+            Assert.Equal(1, report.ModsTotalFiles);
+            Assert.Equal(0, report.ModsMissingFiles);
+            Assert.Equal(0, report.ModsCorruptedFiles);
+            Assert.Equal(1, report.TotalFiles);
+            Assert.Equal(0, report.ExtraFiles);
+            Assert.True(report.IsOk);
+            Assert.False(report.NeedsRepair);
+        }
+
+        /// <summary>
+        /// Испорченный файл мода виден в части «моды» и делает установку неисправной,
+        /// не портя счётчиков игры: чинить надо модпак, а не переустанавливать сборку.
+        /// </summary>
+        [Fact]
+        public async Task ИспорченныйФайлМодаВиденВЧастиМодов() {
+            using var dir = new TempDir();
+            var game = dir.WriteFile("game.exe", "содержимое игры");
+            var mod = dir.WriteFile("BepInEx/plugins/mod.dll", "оригинал мода");
+            var expected = TestHash.Sha256OfFile(mod);
+            var size = new FileInfo(mod).Length;
+            dir.WriteFile("BepInEx/plugins/mod.dll", "испорчено ааа");
+
+            var modsManifest = PlanTestData.Manifest(
+                PlanTestData.File("BepInEx/plugins/mod.dll", size, expected),
+                PlanTestData.File("BepInEx/core/BepInEx.Preloader.dll", 10, "00"));
+            InstallMods(dir.Root, modsManifest);
+
+            var gameManifest = PlanTestData.Manifest(
+                PlanTestData.File("game.exe", new FileInfo(game).Length, TestHash.Sha256OfFile(game)));
+
+            var report = await CheckWithModsAsync(gameManifest, modsManifest, dir.Root);
+
+            Assert.Equal(1, report.ModsCorruptedFiles);
+            Assert.Equal(1, report.ModsMissingFiles);
+            Assert.Equal(2, report.ModsTotalFiles);
+            Assert.Equal(0, report.MissingFiles);
+            Assert.Equal(0, report.CorruptedFiles);
+            Assert.False(report.IsOk);
+            Assert.True(report.NeedsRepair);
+
+            var text = IntegrityChecker.Describe(report);
+            Assert.Contains("Игра:", text, StringComparison.Ordinal);
+            Assert.Contains("Моды:", text, StringComparison.Ordinal);
+            Assert.Contains("повреждено — 1", text, StringComparison.Ordinal);
+            Assert.Contains("отсутствует — 1", text, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// ПОРЯДОК ПОЧИНКИ: сначала модпак, потом игра. В обратном порядке игра сперва
+        /// удалила бы несколько гигабайт файлов модов, а модпак тут же скачал бы их
+        /// заново — оплаченный игроком трафик за ничью.
+        /// </summary>
+        [Fact]
+        public async Task ПочинкаИдётСначалаПоМодамПотомПоИгре() {
+            using var dir = new TempDir();
+            var sync = new RepairRecordingSync();
+
+            await IntegrityChecker.RepairAsync(sync, RepairReport(dir.Root), null, CancellationToken.None);
+
+            Assert.Equal(new[] { "mods-2.2.12", "1.0.0" }, sync.Executed);
+
+            // Починка модов обязана переписать принадлежность: без этого следующая
+            // синхронизация игры сочтёт свежие файлы модов мусором.
+            Assert.Equal("ASTeam-LethalReloaded-2.2.12", GameLocalState.ReadModsVersionAt(dir.Root));
+            Assert.Contains("BepInEx/core/x.dll", GameLocalState.ReadInstalledModPackPaths(dir.Root));
+        }
+
+        /// <summary>
+        /// План игры строился до починки модов, поэтому свежий файл мода в нём — «лишний».
+        /// Починка обязана вывести файлы модпака из-под плана игры, иначе она чинит моды
+        /// и тут же их сносит.
+        /// </summary>
+        [Fact]
+        public async Task ПочинкаИгрыНеТрогаетТолькоЧтоПочиненныеМоды() {
+            using var dir = new TempDir();
+            var report = RepairReport(dir.Root);
+            report.Plan.ToDelete.Add("BepInEx/core/x.dll");
+
+            var sync = new RepairRecordingSync();
+            await IntegrityChecker.RepairAsync(sync, report, null, CancellationToken.None);
+
+            Assert.DoesNotContain("BepInEx/core/x.dll", report.Plan.ToDelete);
+            Assert.Contains("BepInEx/core/x.dll", report.Plan.ForeignPaths);
+        }
+
+        /// <summary>Карточка модпака в том виде, в каком её присылает сервер: адреса относительные.</summary>
+        private static ModsInfo ModsCard() => new ModsInfo {
+            HasLatest = true,
+            Version = "ASTeam-LethalReloaded-2.2.12",
+            ManifestUrl = "/manifests/_mods/lethal-company/ASTeam-LethalReloaded-2.2.12.json",
+            ContentBaseUrl = "/content/_mods/lethal-company/ASTeam-LethalReloaded-2.2.12/files",
+        };
+
+        // Отмечает модпак установленным: маркер версии и копия манифеста. Ровно это
+        // пишет ModsService после установки, и ровно по этим двум файлам проверка
+        // понимает, что второй проход имеет смысл.
+        private static void InstallMods(string root, Manifest manifest) {
+            GameLocalState.WriteInstalledModPackManifest(root, manifest);
+            GameLocalState.WriteModsVersionAt(root, ModsCard().Version);
+        }
+
+        // Отчёт с обоими планами: оба непустые, чтобы порядок выполнения был виден.
+        private static IntegrityReport RepairReport(string root) {
+            var gamePlan = new DiffPlan { GameId = "lethal-company", Version = "1.0.0", LocalRoot = root };
+            gamePlan.Downloads.Add(new FileTask { RelativePath = "game.exe" });
+
+            var modsPlan = new DiffPlan { GameId = "lethal-company", Version = "mods-2.2.12", LocalRoot = root };
+            modsPlan.Downloads.Add(new FileTask { RelativePath = "BepInEx/core/x.dll" });
+
+            return new IntegrityReport {
+                Plan = gamePlan,
+                Version = "1.0.0",
+                ModsPlan = modsPlan,
+                ModsManifest = PlanTestData.Manifest(PlanTestData.File("BepInEx/core/x.dll", 10, "00")),
+                ModsVersion = ModsCard().Version,
+            };
+        }
+
+        // Прогоняет оба прохода подряд — так же, как это делает страница игры.
+        private static async Task<IntegrityReport> CheckWithModsAsync(Manifest game, Manifest mods, string localRoot) {
+            var trimmed = localRoot.TrimEnd(Path.DirectorySeparatorChar);
+            var sync = new StubSync { Manifest = game, ModsManifest = mods };
+            try {
+                var report = await IntegrityChecker.CheckAsync(
+                    sync,
+                    "https://x.invalid",
+                    Path.GetFileName(trimmed),
+                    "1.0.0",
+                    Path.GetDirectoryName(trimmed)!,
+                    null,
+                    CancellationToken.None);
+
+                return await IntegrityChecker.CheckModsAsync(
+                    sync, "https://x.invalid", ModsCard(), localRoot, report, null, CancellationToken.None);
+            }
+            finally {
+                FileHashCache.Remove(game.GameId);
+                FileHashCache.Remove(mods.GameId);
+            }
+        }
+
         // Прогоняет проверку по локальной папке с подставленным манифестом.
         // CheckAsync складывает путь сам, как GamesPath + gameId, поэтому идентификатор
         // берём из имени временной папки — тогда сложенный путь совпадёт с ней.
@@ -343,11 +550,22 @@ namespace ChillHub.Tests {
         private sealed class StubSync : ISyncService {
             public Manifest Manifest { get; init; } = new Manifest();
 
+            /// <summary>Манифест модпака: отдаётся на адреса модов, чтобы проходы не путались.</summary>
+            public Manifest? ModsManifest { get; init; }
+
             public Exception? ManifestError { get; init; }
 
+            /// <summary>Сколько раз спрашивали манифест: «второго прохода не было» — это ноль запросов.</summary>
+            public int ManifestRequests { get; private set; }
+
             public Task<Manifest> GetManifestAsync(string manifestUrl, CancellationToken ct) {
+                this.ManifestRequests++;
                 if (this.ManifestError != null) {
                     return Task.FromException<Manifest>(this.ManifestError);
+                }
+
+                if (this.ModsManifest != null && manifestUrl.Contains("_mods", StringComparison.Ordinal)) {
+                    return Task.FromResult(this.ModsManifest);
                 }
 
                 return Task.FromResult(this.Manifest);
@@ -361,6 +579,29 @@ namespace ChillHub.Tests {
 
             public Task ExecuteAsync(DiffPlan plan, IProgress<SyncProgress> progress, CancellationToken ct)
                 => throw new NotSupportedException("проверка целостности ничего не скачивает");
+        }
+
+        /// <summary>
+        /// Запоминает, в каком порядке чинили. Ничего не качает: проверяется решение
+        /// «сначала моды», а не работа движка синхронизации — у него свои тесты.
+        /// </summary>
+        private sealed class RepairRecordingSync : ISyncService {
+            /// <summary>Версии планов в порядке их выполнения.</summary>
+            public List<string> Executed { get; } = new List<string>();
+
+            public Task<Manifest> GetManifestAsync(string manifestUrl, CancellationToken ct)
+                => throw new NotSupportedException("починка работает по уже построенному плану");
+
+            public Task<DiffPlan> PlanAsync(Manifest manifest, string localRoot, string contentBaseUrl, CancellationToken ct)
+                => throw new NotSupportedException("починка работает по уже построенному плану");
+
+            public Task<DiffPlan> PlanAsync(Manifest manifest, string localRoot, string contentBaseUrl, PlanOptions options, CancellationToken ct)
+                => throw new NotSupportedException("починка работает по уже построенному плану");
+
+            public Task ExecuteAsync(DiffPlan plan, IProgress<SyncProgress> progress, CancellationToken ct) {
+                this.Executed.Add(plan.Version);
+                return Task.CompletedTask;
+            }
         }
     }
 }

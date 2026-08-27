@@ -73,6 +73,22 @@ namespace ChillHub.Core.Sync {
 
         public List<string> ToDelete { get; set; } = new();
 
+        /// <summary>
+        /// Gets or sets пути, которыми в этом же корне владеет ЧУЖОЙ манифест.
+        /// <para>
+        /// Заполняется из <see cref="PlanOptions.ForeignPaths"/> и едет вместе с планом
+        /// только ради фазы завершения: <c>FinishPlan</c> статичен и до настроек плана
+        /// не дотягивается, а удаление необратимо. Планировщик такие пути в
+        /// <see cref="ToDelete"/> и не кладёт — это второй рубеж на случай, если список
+        /// приехал не от него (подменённый или устаревший план).
+        /// </para>
+        /// <para>
+        /// Для синхронизации игры здесь лежат файлы установленного модпака: стереть их
+        /// значит убить моды, которые лаунчер сам же и поставил.
+        /// </para>
+        /// </summary>
+        public List<string> ForeignPaths { get; set; } = new();
+
         public List<string> EmptyDirsToCreate { get; set; } = new();
     }
 }

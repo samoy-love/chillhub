@@ -120,14 +120,25 @@ namespace ChillHub.Core.Sync {
             // GetManifestAsync. Проверка идемпотентна и стоит копейки.
             ManifestValidator.Validate(manifest, $"план для '{localRoot}'");
 
+            // Пути, которыми в этом же корне владеет ЧУЖОЙ манифест: для синхронизации
+            // игры это файлы установленного модпака. Модпак ставится в папку игры, а не
+            // в отдельный профиль (иначе BepInEx не заработает), поэтому без этого списка
+            // первое же обновление игры вынесло бы все моды как «лишние файлы».
+            var foreignPaths = NormalizeRelSet(options.ForeignPaths);
+
             var plan = new DiffPlan {
                 GameId = manifest.GameId,
                 Version = manifest.Version,
                 LocalRoot = localRoot,
+
+                // Едет вместе с планом ради второго рубежа в FinishPlan: тот статичен
+                // и настроек плана не видит, а удаление необратимо.
+                ForeignPaths = new List<string>(foreignPaths),
             };
 
             // Соберём множество файлов из манифеста
             var manifestFiles = new Dictionary<string, ManifestFile>(StringComparer.OrdinalIgnoreCase);
+            var foreignInManifest = 0;
             foreach (var mf in manifest.Files) {
                 var relNorm = mf.Path.Replace('\\', '/');
                 if (IsServiceRelFile(relNorm)) {
@@ -142,11 +153,28 @@ namespace ChillHub.Core.Sync {
                     continue;
                 }
 
+                if (foreignPaths.Contains(relNorm)) {
+                    // Тот же путь есть и в чужом манифесте. Так выглядит миграция: старые
+                    // сборки игры содержат BepInEx внутри себя, а модпак теперь владеет
+                    // теми же файлами. Хозяин один, и это НЕ мы: скачаем — затрём моды
+                    // содержимым из сборки, удалим — уроним моды вовсе.
+                    foreignInManifest++;
+                    continue;
+                }
+
                 manifestFiles[relNorm] = mf;
             }
 
-            // Локальные файлы относительно корня
-            var localExisting = ListLocalFiles(localRoot);
+            if (foreignInManifest > 0) {
+                ChillHub.Core.Logging.Logger.Info(
+                    $"Plan gid={manifest.GameId} ver={manifest.Version}: {foreignInManifest} файл(ов) манифеста отдано чужому манифесту в том же корне");
+            }
+
+            // Локальные файлы относительно корня. Чужие пути сюда не попадают — значит
+            // и в ToDelete они не попадут, — но остаются в отдельном списке: они живы,
+            // и кеш хешей не должен считать их исчезнувшими.
+            var foreignExisting = new List<string>();
+            var localExisting = ListLocalFiles(localRoot, foreignPaths, foreignExisting);
 
             // Кеш хешей: при неизменных размере и времени модификации файл не перечитывается
             var hashCache = FileHashCache.Load(manifest.GameId);
@@ -308,8 +336,17 @@ namespace ChillHub.Core.Sync {
                 }
             }
 
-            // Чистим кеш от записей об исчезнувших файлах и сохраняем, если что-то поменялось
-            hashCache.PruneAndSave(localExisting);
+            // Чистим кеш от записей об исчезнувших файлах и сохраняем, если что-то поменялось.
+            //
+            // Живыми считаем И чужие файлы тоже. Кеш ключуется относительным путём и
+            // лежит один на корень, то есть записи обоих манифестов в нём вперемешку.
+            // Отдай мы сюда только свой список — прополка выбросила бы записи соседа,
+            // и следующая синхронизация модпака перечитала бы с диска все свои гигабайты
+            // заново. Не ошибка, а молчаливая потеря минут на ровном месте.
+            var aliveForCache = new List<string>(localExisting.Count + foreignExisting.Count);
+            aliveForCache.AddRange(localExisting);
+            aliveForCache.AddRange(foreignExisting);
+            hashCache.PruneAndSave(aliveForCache);
 
             // Пустые директории для создания.
             //
@@ -322,7 +359,30 @@ namespace ChillHub.Core.Sync {
                 plan.EmptyDirsToCreate.Add(ManifestPath.Canonicalize(d));
             }
 
-            // Файлы к удалению (есть локально, нет в манифесте)
+            // Файлы к удалению. Что именно считается лишним, зависит от того, чем этот
+            // манифест владеет в корне: сборка игры владеет всем, модпак — только тем,
+            // что сам когда-то положил.
+            if (options.Scope == ManifestScope.OwnFilesOnly) {
+                AddDeletionsForOwnedManifest(plan, options, manifestFiles, localExisting, foreignPaths);
+            }
+            else {
+                AddDeletionsForWholeRoot(plan, manifestFiles, localExisting);
+            }
+
+            return Task.FromResult(plan);
+        }
+
+        /// <summary>
+        /// Список на удаление для манифеста, который владеет всем корнем (сборка игры):
+        /// лишнее — это всё, что лежит локально и чего нет в манифесте.
+        /// </summary>
+        /// <param name="plan">План, который дополняем.</param>
+        /// <param name="manifestFiles">Файлы манифеста по относительному пути.</param>
+        /// <param name="localExisting">Файлы, найденные в корне (без служебных и чужих).</param>
+        private static void AddDeletionsForWholeRoot(
+            DiffPlan plan,
+            Dictionary<string, ManifestFile> manifestFiles,
+            List<string> localExisting) {
             foreach (var relLocal in localExisting) {
                 var norm = relLocal.Replace('\\', '/');
                 if (IsIgnoredRelFile(norm)) {
@@ -351,8 +411,63 @@ namespace ChillHub.Core.Sync {
                     plan.ToDelete.Add(norm);
                 }
             }
+        }
 
-            return Task.FromResult(plan);
+        /// <summary>
+        /// Список на удаление для манифеста, который делит корень с чужим (модпак).
+        /// <para>
+        /// Правило одно: <c>удалить = пути ПРЕДЫДУЩЕЙ версии этого манифеста − пути НОВОЙ</c>.
+        /// Обычное «всё, чего нет в манифесте» здесь означало бы снести игру целиком —
+        /// десять гигабайт, о которых манифест модов ничего не знает и знать не должен.
+        /// </para>
+        /// <para>
+        /// Предыдущего списка нет (первая установка модпака или потерянный
+        /// <c>.mods.manifest.json</c>) — не удаляем НИЧЕГО. Это осознанный перекос в
+        /// сторону мусора: пара забытых файлов мода безобиднее стёртой сборки.
+        /// </para>
+        /// </summary>
+        /// <param name="plan">План, который дополняем.</param>
+        /// <param name="options">Настройки плана — источник путей предыдущей установки.</param>
+        /// <param name="manifestFiles">Файлы НОВОГО манифеста по относительному пути.</param>
+        /// <param name="localExisting">Файлы, найденные в корне (без служебных и чужих).</param>
+        /// <param name="foreignPaths">Пути чужого манифеста в этом же корне.</param>
+        private static void AddDeletionsForOwnedManifest(
+            DiffPlan plan,
+            PlanOptions options,
+            Dictionary<string, ManifestFile> manifestFiles,
+            List<string> localExisting,
+            HashSet<string> foreignPaths) {
+            if (options.PreviousOwnedPaths == null || options.PreviousOwnedPaths.Count == 0) {
+                return;
+            }
+
+            // Сверяемся с тем, что реально лежит на диске: путь из прошлой установки мог
+            // исчезнуть и сам (игрок удалил файл руками), а лишняя запись в ToDelete
+            // раздувает и вопрос пользователю «будет удалено файлов: N», и метрику.
+            var onDisk = new HashSet<string>(localExisting, StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var previous in options.PreviousOwnedPaths) {
+                if (string.IsNullOrWhiteSpace(previous)) {
+                    continue;
+                }
+
+                var norm = NormalizeRel(previous);
+                if (manifestFiles.ContainsKey(norm)) {
+                    continue; // файл остаётся в новой версии модпака
+                }
+
+                if (IsServiceRelFile(norm) || IsIgnoredRelFile(norm) || foreignPaths.Contains(norm)) {
+                    continue;
+                }
+
+                if (!onDisk.Contains(norm)) {
+                    continue;
+                }
+
+                if (seen.Add(norm)) {
+                    plan.ToDelete.Add(norm);
+                }
+            }
         }
 
         /// <inheritdoc/>
@@ -794,6 +909,11 @@ namespace ChillHub.Core.Sync {
             ChillHub.Core.Logging.Logger.Info(
                 $"Applied gid={plan.GameId} ver={plan.Version} files={plan.Downloads.Count} deferred={deferred.Count} toDelete={plan.ToDelete.Count}");
 
+            // Пути чужого манифеста (для синхронизации игры — файлы установленного
+            // модпака). Планировщик их в ToDelete не кладёт, но список сюда мог приехать
+            // и не от него: FinishPlan статичен, план — обычный объект с полями.
+            var foreignPaths = NormalizeRelSet(plan.ForeignPaths);
+
             // Удаление лишних файлов (с устойчивостью к блокировкам сторонними процессами)
             var deletedRel = new List<string>();
             foreach (var rel in plan.ToDelete) {
@@ -803,6 +923,22 @@ namespace ChillHub.Core.Sync {
                 // сайт FreeTP.Org при каждом запуске игры. Один if дешевле, чем
                 // надеяться, что список к нам приехал именно от PlanAsync.
                 if (IsIgnoredRelFile(rel)) {
+                    continue;
+                }
+
+                // Служебные файлы лаунчера — по той же логике второго рубежа. Стереть
+                // `.mods.version` или `.mods.manifest.json` значит потерять память о том,
+                // какой модпак стоит и какими файлами он владеет: следующая синхронизация
+                // игры сочтёт все моды лишними и вынесет их.
+                if (IsServiceRelFile(rel)) {
+                    continue;
+                }
+
+                // Файл чужого манифеста в общем корне. Для сборки игры это моды: они
+                // лежат в её папке, но принадлежат не ей.
+                if (foreignPaths.Contains(NormalizeRel(rel))) {
+                    ChillHub.Core.Logging.Logger.Warn(
+                        $"FinishPlan gid={plan.GameId}: '{rel}' принадлежит другому манифесту в том же корне, не удаляем");
                     continue;
                 }
 
@@ -902,7 +1038,23 @@ namespace ChillHub.Core.Sync {
             return baseUrl + relativePath;
         }
 
-        private static List<string> ListLocalFiles(string root) {
+        private static List<string> ListLocalFiles(string root) => ListLocalFiles(root, null, null);
+
+        /// <summary>
+        /// Файлы в корне, которые эта синхронизация считает своими.
+        /// </summary>
+        /// <param name="root">Корень локальной папки игры.</param>
+        /// <param name="foreignPaths">
+        /// Пути чужого манифеста в этом же корне: их сюда не кладём — значит, они
+        /// не попадут ни в список на удаление, ни в счётчик лишних файлов.
+        /// </param>
+        /// <param name="foreignFound">
+        /// Куда сложить найденные на диске ЧУЖИЕ файлы. Нужны ровно для кеша хешей:
+        /// он лежит один на корень, и если объявить чужие файлы исчезнувшими, прополка
+        /// выбросит их записи, а соседняя синхронизация пересчитает их с диска заново.
+        /// </param>
+        /// <returns>Свои файлы относительно корня, разделитель '/'.</returns>
+        private static List<string> ListLocalFiles(string root, HashSet<string>? foreignPaths, List<string>? foreignFound) {
             var list = new List<string>();
             if (!Directory.Exists(root)) {
                 return list;
@@ -923,10 +1075,53 @@ namespace ChillHub.Core.Sync {
                     continue; // не учитываем FreeTP/.hash
                 }
 
+                if (foreignPaths != null && foreignPaths.Contains(rel)) {
+                    // Файл принадлежит чужому манифесту в том же корне (моды рядом с игрой):
+                    // для нас его как будто нет вовсе.
+                    foreignFound?.Add(rel);
+                    continue;
+                }
+
                 list.Add(rel);
             }
 
             return list;
+        }
+
+        /// <summary>
+        /// Приводит относительный путь к той же форме, в которой лежат ключи манифеста:
+        /// прямые слеши, без ведущего разделителя и краевых пробелов.
+        /// Формы «BepInEx/core/x.dll», «BepInEx\core\x.dll» и «/BepInEx/core/x.dll» —
+        /// это один и тот же файл, и списки владения обязаны сходиться на всех трёх.
+        /// </summary>
+        /// <param name="rel">Относительный путь в любой из форм.</param>
+        /// <returns>Канонический относительный путь.</returns>
+        internal static string NormalizeRel(string? rel) => ManifestPath.Canonicalize(rel);
+
+        /// <summary>
+        /// Собирает набор относительных путей для быстрой проверки принадлежности:
+        /// регистронезависимый (как файловая система Windows) и канонизированный.
+        /// </summary>
+        /// <param name="paths">Исходные пути; null и пустые записи пропускаются.</param>
+        /// <returns>Набор канонических путей.</returns>
+        internal static HashSet<string> NormalizeRelSet(IEnumerable<string>? paths) {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (paths == null) {
+                return set;
+            }
+
+            foreach (var p in paths) {
+                if (string.IsNullOrWhiteSpace(p)) {
+                    continue;
+                }
+
+                var norm = NormalizeRel(p);
+                if (norm.Length > 0) {
+                    set.Add(norm);
+                }
+            }
+
+            return set;
         }
 
         // ВАЖНО: игнорируем специальный файл FreeTP/.hash для всех игр.
@@ -1043,8 +1238,17 @@ namespace ChillHub.Core.Sync {
             // ExecuteAsync вызывается WriteLocalVersion. Но «проверка целостности» из
             // настроек делает ExecuteAsync БЕЗ последующей записи маркера, и после
             // успешного ремонта игра показывалась как неустановленная.
+            //
+            // .mods.version и .mods.manifest.json — то же самое для модпака, который
+            // живёт в ТОМ ЖЕ корне. Их в корне игры не ждёт ни один из двух манифестов,
+            // поэтому без этой проверки каждая из двух синхронизаций записала бы их себе
+            // в ToDelete. Потеря `.mods.manifest.json` особенно дорога: из него берётся
+            // список файлов модпака, и без него синхронизация игры перестаёт понимать,
+            // что моды — не мусор.
             return r.Equals(UpdateMarkerFileName, StringComparison.OrdinalIgnoreCase)
-                || r.Equals(IntegrityChecker.VersionMarkerFileName, StringComparison.OrdinalIgnoreCase);
+                || r.Equals(IntegrityChecker.VersionMarkerFileName, StringComparison.OrdinalIgnoreCase)
+                || r.Equals(IntegrityChecker.ModsVersionMarkerFileName, StringComparison.OrdinalIgnoreCase)
+                || r.Equals(IntegrityChecker.ModsManifestFileName, StringComparison.OrdinalIgnoreCase);
         }
 
         // Ставит маркер незавершённого обновления перед фазой активации.

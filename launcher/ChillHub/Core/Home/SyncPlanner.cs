@@ -27,6 +27,30 @@ namespace ChillHub.Core.Home {
         /// <returns>План различий.</returns>
         internal static Task<DiffPlan> PlanOffUiThreadAsync(
             ISyncService sync, Manifest manifest, string localRoot, string contentBaseUrl, CancellationToken token) =>
-            Task.Run(() => sync.PlanAsync(manifest, localRoot, contentBaseUrl, token), token);
+
+            // PlanOptions.ForGame читает с диска копию манифеста модпака, поэтому строится
+            // ВНУТРИ Task.Run — на UI-потоке здесь не должно происходить ничего, включая
+            // открытие файла на сетевом диске.
+            Task.Run(() => sync.PlanAsync(manifest, localRoot, contentBaseUrl, PlanOptions.ForGame(localRoot), token), token);
+
+        /// <summary>
+        /// То же с готовыми настройками — для синхронизации, которая владеет не всем
+        /// корнем (модпак): её настройки строит вызывающий, а не мы.
+        /// </summary>
+        /// <param name="sync">Служба синхронизации.</param>
+        /// <param name="manifest">Манифест эталонной версии.</param>
+        /// <param name="localRoot">Корень локальной папки игры.</param>
+        /// <param name="contentBaseUrl">База URL для скачивания файлов.</param>
+        /// <param name="options">Настройки построения плана.</param>
+        /// <param name="token">Токен отмены.</param>
+        /// <returns>План различий.</returns>
+        internal static Task<DiffPlan> PlanOffUiThreadAsync(
+            ISyncService sync,
+            Manifest manifest,
+            string localRoot,
+            string contentBaseUrl,
+            PlanOptions options,
+            CancellationToken token) =>
+            Task.Run(() => sync.PlanAsync(manifest, localRoot, contentBaseUrl, options, token), token);
     }
 }
