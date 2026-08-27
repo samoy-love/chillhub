@@ -37,8 +37,13 @@ function mountPanel(fetchImpl) {
   window.confirm = () => true;
 
   const ctx = dom.getInternalVMContext();
-  vm.runInContext(fs.readFileSync(path.join(ADMIN_DIR, 'ndjson.js'), 'utf8'), ctx, { filename: 'ndjson.js' });
-  vm.runInContext(fs.readFileSync(path.join(ADMIN_DIR, 'mods-panel.js'), 'utf8'), ctx, { filename: 'mods-panel.js' });
+  // filename — АБСОЛЮТНЫЙ путь: c8 привязывает покрытие к исходному файлу
+  // только по нему, и с относительным именем весь исполненный код панели
+  // остаётся в отчёте нулём (та же причина описана в umd-browser-global.test.js).
+  for (const file of ['ndjson.js', 'mods-panel.js']) {
+    const abs = path.join(ADMIN_DIR, file);
+    vm.runInContext(fs.readFileSync(abs, 'utf8'), ctx, { filename: abs });
+  }
 
   const panel = window.createModsPanel({ root: '#md_root' });
   assert.ok(panel, 'панель не создалась');

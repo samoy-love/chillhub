@@ -346,19 +346,19 @@
 
     // ---- сборка -----------------------------------------------------------
 
-    async function buildPack(full, version) {
-      const plan = await resolvePack(full, version);
-      if (!plan) return;
-
-      let allowMissing = false;
-      if (plan.missing && plan.missing.length) {
-        allowMissing = typeof confirm === 'function' && confirm(
-          plan.missing.length + ' модов больше нет на Thunderstore:\n\n'
-          + plan.missing.slice(0, 10).join('\n')
-          + '\n\nСобрать модпак без них?');
-        if (!allowMissing) return;
-      }
-
+    // buildPack идёт сразу в сборку, БЕЗ предварительного разбора состава.
+    //
+    // Разбор дерева — не бесплатная проверка: сервер ограничивает себя примерно
+    // тремя запросами в секунду к Thunderstore, и обход 151 пакета занимает
+    // около 48 секунд. Сборка делает ровно тот же обход внутри себя, поэтому
+    // пара «сначала resolve, потом build» стоила полутора минут ожидания до
+    // первого скачанного байта, причём вторая половина шла вообще без
+    // признаков жизни на экране.
+    //
+    // Пропавшие моды и нехватку места проверяет сама сборка и отказывается
+    // молча их проглотить; сюда это приезжает событием error, и тогда — и
+    // только тогда — спрашиваем оператора и повторяем с allowMissing.
+    async function buildPack(full, version, allowMissing) {
       const parts = full.split('/');
       const bar = el('progress');
       const status = el('status');
