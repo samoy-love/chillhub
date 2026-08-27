@@ -26,6 +26,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -35,15 +37,39 @@ const (
 	// DefaultAPIBase is Thunderstore's API host.
 	DefaultAPIBase = "https://thunderstore.io"
 
-	// DefaultCDNBase serves the package archives. Their URLs are fully
-	// predictable — {namespace}-{name}-{version}.zip — so a build never needs
-	// the redirect from /package/download/.
+	// DefaultCDNBase serves the package archives. Their URLs are USUALLY
+	// predictable — {namespace}-{name}-{version}.zip — which is why a build
+	// tries this first and never pays for a redirect.
+	//
+	// «Usually» is not «always», and the exception cost a build. Thunderstore
+	// stores the object under a name its storage layer chose, and for a long
+	// package name that name is TRUNCATED with a random suffix appended:
+	// MelanieMelicious_2_sToRy_ShIp__works_w_Wider_Ship_Mod-2.2.14 lives as
+	// …_Wider_Ship_M_xvy048L.zip. The guessed URL then gets 403 AccessDenied
+	// from the bucket — not 404 — and the whole build stopped on it. The
+	// package's own download_url from the API is authoritative and is used as
+	// the fallback; see archiveURLs.
 	DefaultCDNBase = "https://gcdn.thunderstore.io/live/repository/packages"
 
-	// maxParallel bounds concurrent connections. Throughput is decided by the
-	// limiter below, not by this number; it only keeps the connection pool and
-	// the number of half-finished requests small.
+	// maxParallel bounds concurrent METADATA connections. Throughput is decided
+	// by the limiter below, not by this number; it only keeps the connection
+	// pool and the number of half-finished requests small.
 	maxParallel = 3
+
+	// maxCDNParallel bounds concurrent ARCHIVE transfers.
+	//
+	// Archives come from gcdn.thunderstore.io — object storage, a different
+	// host from the API and not the surface that answers a burst with 429.
+	// Pacing them at the API's three requests a second was pure loss: 151
+	// packages and 1.8 GB went out one at a time behind a 320 ms gap, and the
+	// download — the only part of a build that is actually big — ran slower
+	// than the metadata walk in front of it.
+	maxCDNParallel = 6
+
+	// cdnInterval keeps even the CDN from being hit as a burst. It is a
+	// politeness floor, not a rate limit: six transfers in flight, each new one
+	// starting at least this long after the previous.
+	cdnInterval = 40 * time.Millisecond
 
 	// baseInterval is the minimum gap between the START of two requests,
 	// across every goroutine sharing the client.
@@ -94,11 +120,22 @@ type Client struct {
 	cdnBase string
 	http    *http.Client
 
-	// sem bounds in-flight requests across every goroutine sharing the client.
-	sem chan struct{}
+	// sem bounds in-flight METADATA requests across every goroutine sharing
+	// the client; cdnSem does the same for archive transfers. They are separate
+	// because the two hosts have nothing to do with each other: a download
+	// queued behind three package lookups is waiting for no reason.
+	sem    chan struct{}
+	cdnSem chan struct{}
 
-	// lim paces every request and absorbs rate limiting.
-	lim *limiter
+	// lim paces API requests and absorbs rate limiting; cdnLim does the same,
+	// far more loosely, for the CDN. Separate state for the same reason: a
+	// cooldown earned on the API must not throttle transfers that never
+	// touched it.
+	lim    *limiter
+	cdnLim *limiter
+
+	// metaDir caches version metadata on disk; empty disables it.
+	metaDir string
 }
 
 // limiter spaces requests out and slows the whole client down when
@@ -213,8 +250,8 @@ func NewClient(hc *http.Client) *Client {
 		hc = &http.Client{
 			Timeout: 0, // per-request deadlines come from the context
 			Transport: &http.Transport{
-				MaxIdleConns:        maxParallel * 2,
-				MaxIdleConnsPerHost: maxParallel * 2,
+				MaxIdleConns:        (maxParallel + maxCDNParallel) * 2,
+				MaxIdleConnsPerHost: (maxParallel + maxCDNParallel) * 2,
 				IdleConnTimeout:     90 * time.Second,
 			},
 		}
@@ -224,8 +261,22 @@ func NewClient(hc *http.Client) *Client {
 		cdnBase: DefaultCDNBase,
 		http:    hc,
 		sem:     make(chan struct{}, maxParallel),
+		cdnSem:  make(chan struct{}, maxCDNParallel),
 		lim:     newLimiter(),
+		cdnLim:  &limiter{interval: cdnInterval, minCool: minCooldown, maxCool: maxCooldown},
 	}
+}
+
+// WithMetaCache stores version metadata under dir.
+//
+// A published Thunderstore version is immutable — that is the same fact the
+// archive cache rests on — so the document describing it can be kept forever
+// and the second build of a pack skips the entire dependency walk. Without it
+// rebuilding LethalReloaded after one mod updated costs 151 API requests and
+// the minute of pacing that goes with them, every time.
+func (c *Client) WithMetaCache(dir string) *Client {
+	c.metaDir = dir
+	return c
 }
 
 // WithBases points the client at different hosts. Used by tests against an
@@ -246,6 +297,12 @@ func (c *Client) WithBases(apiBase, cdnBase string) *Client {
 // against Thunderstore's actual rate limit and lowering it there is how a
 // build starts losing packages to 429s.
 func (c *Client) WithInterval(d time.Duration) *Client {
+	c.cdnLim.mu.Lock()
+	c.cdnLim.interval = d
+	c.cdnLim.minCool = d * 4
+	c.cdnLim.maxCool = d * 40
+	c.cdnLim.mu.Unlock()
+
 	c.lim.mu.Lock()
 	c.lim.interval = d
 	// Scale the penalty ladder with the spacing, or a test that provokes a 503
@@ -286,12 +343,77 @@ type Package struct {
 // GetVersion fetches one exact version. A modpack pins every dependency, so
 // this is the call the resolver makes for all but the root package.
 func (c *Client) GetVersion(ctx context.Context, ns, name, version string) (*PackageVersion, error) {
+	full := ns + "-" + name + "-" + version
+	if v := c.metaRead(full); v != nil {
+		return v, nil
+	}
 	var v PackageVersion
 	url := fmt.Sprintf("%s/api/experimental/package/%s/%s/%s/", c.apiBase, ns, name, version)
 	if err := c.getJSON(ctx, url, &v); err != nil {
 		return nil, err
 	}
+	c.metaWrite(full, &v)
 	return &v, nil
+}
+
+// metaRead returns a cached version document, or nil.
+//
+// A corrupt or unreadable entry is silently a miss: the network answer is
+// authoritative and cheap enough that failing the build over a bad cache file
+// would be the wrong trade.
+func (c *Client) metaRead(fullName string) *PackageVersion {
+	p := c.metaPath(fullName)
+	if p == "" {
+		return nil
+	}
+	b, err := os.ReadFile(p) // #nosec G304 -- metaPath validates the name
+	if err != nil {
+		return nil
+	}
+	var v PackageVersion
+	if err := json.Unmarshal(b, &v); err != nil || v.FullName == "" {
+		return nil
+	}
+	// Touch so the cache sweeper measures time since last use, exactly as it
+	// does for archives.
+	now := time.Now()
+	if err := os.Chtimes(p, now, now); err != nil {
+		log.Printf("[mods] touch cached metadata %s: %v", fullName, err)
+	}
+	return &v
+}
+
+func (c *Client) metaWrite(fullName string, v *PackageVersion) {
+	p := c.metaPath(fullName)
+	if p == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil { // #nosec G301 -- tmp tree
+		log.Printf("[mods] metadata cache dir: %v", err)
+		return
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	// Write-then-rename: a half-written document read by a parallel build would
+	// come back as a miss at best, and the point of the cache is to be boring.
+	tmp := p + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil { // #nosec G306 -- tmp tree
+		log.Printf("[mods] cache metadata %s: %v", fullName, err)
+		return
+	}
+	if err := os.Rename(tmp, p); err != nil {
+		_ = os.Remove(tmp)
+		log.Printf("[mods] cache metadata %s: %v", fullName, err)
+	}
+}
+
+func (c *Client) metaPath(fullName string) string {
+	if c.metaDir == "" || !safeFullName(fullName) {
+		return ""
+	}
+	return filepath.Join(c.metaDir, fullName+".json")
 }
 
 // GetPackage fetches a package and its newest version. Used when the operator
@@ -332,23 +454,103 @@ func (c *Client) ArchiveURL(fullName string) string {
 	return c.cdnBase + "/" + fullName + ".zip"
 }
 
+// ArchiveRef names one archive to transfer: the immutable full name the CDN
+// URL is guessed from, and the package's own download link from the API, used
+// when that guess turns out to be wrong.
+type ArchiveRef struct {
+	FullName    string
+	DownloadURL string
+}
+
+// Ref is the archive reference of a resolved package.
+func (p ResolvedPackage) Ref() ArchiveRef {
+	return ArchiveRef{FullName: p.FullName, DownloadURL: p.DownloadURL}
+}
+
+// errWrongURL marks «this address does not serve the archive» — as opposed to
+// «the transfer broke». Only the first is worth trying another address for.
+var errWrongURL = errors.New("mods: archive is not at this url")
+
+// archiveURLs lists where one archive may be fetched from, best first.
+//
+// The guessed CDN name goes first: it skips the API host entirely and so is
+// neither rate limited nor redirected. The package's own download_url is the
+// fallback, and it is the authoritative answer — Thunderstore truncates long
+// object names and appends a random suffix, and no amount of guessing finds
+// those.
+//
+// The fallback is checked against this client's own hosts before it becomes an
+// outbound request. It arrives inside API metadata rather than from an
+// operator, but «came from JSON we fetched» is not the same as «safe to fetch».
+func (c *Client) archiveURLs(ref ArchiveRef) ([]string, error) {
+	var urls []string
+	if u := c.ArchiveURL(ref.FullName); u != "" {
+		urls = append(urls, u)
+	}
+	if u := ref.DownloadURL; u != "" && u != urls0(urls) &&
+		(strings.HasPrefix(u, c.apiBase+"/") || strings.HasPrefix(u, c.cdnBase+"/")) {
+		urls = append(urls, u)
+	}
+	if len(urls) == 0 {
+		return nil, fmt.Errorf("mods: no usable download url for %q", ref.FullName)
+	}
+	return urls, nil
+}
+
+func urls0(u []string) string {
+	if len(u) == 0 {
+		return ""
+	}
+	return u[0]
+}
+
+// acquireForURL takes a slot on whichever queue the host belongs to.
+func (c *Client) acquireForURL(ctx context.Context, url string) (func(), error) {
+	if strings.HasPrefix(url, c.cdnBase) {
+		return c.acquireCDN(ctx)
+	}
+	return c.acquire(ctx)
+}
+
 // Download streams one package archive into w and returns the byte count.
 //
-// It does NOT retry: a partial body already written to w cannot be un-written,
-// and the caller — which owns the destination file — is the only party that can
-// truncate and start over. downloadWithRetry in cache.go does exactly that.
-func (c *Client) Download(ctx context.Context, fullName string, w io.Writer) (int64, error) {
-	archiveURL := c.ArchiveURL(fullName)
-	if archiveURL == "" {
-		return 0, fmt.Errorf("mods: unsafe package name %q", fullName)
+// It does NOT retry a broken transfer: a partial body already written to w
+// cannot be un-written, and the caller — which owns the destination file — is
+// the only party that can truncate and start over. downloadWithRetry in
+// cache.go does exactly that.
+//
+// Trying the SECOND address after the first answered with a wrong status is a
+// different thing and does happen here: nothing was written, so nothing is at
+// risk, and the alternative is a build that stops on a package whose only sin
+// is a long name.
+func (c *Client) Download(ctx context.Context, ref ArchiveRef, w io.Writer) (int64, error) {
+	urls, err := c.archiveURLs(ref)
+	if err != nil {
+		return 0, err
 	}
-	release, err := c.acquire(ctx)
+	var lastErr error
+	for _, u := range urls {
+		n, err := c.downloadFrom(ctx, ref.FullName, u, w)
+		if err == nil {
+			return n, nil
+		}
+		lastErr = err
+		// A body already started cannot be replaced by another address.
+		if !errors.Is(err, errWrongURL) || n > 0 {
+			return n, err
+		}
+	}
+	return 0, lastErr
+}
+
+func (c *Client) downloadFrom(ctx context.Context, fullName, url string, w io.Writer) (int64, error) {
+	release, err := c.acquireForURL(ctx, url)
 	if err != nil {
 		return 0, err
 	}
 	defer release()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, archiveURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -360,24 +562,50 @@ func (c *Client) Download(ctx context.Context, fullName string, w io.Writer) (in
 	}
 	defer func() { _ = res.Body.Close() }()
 
-	if res.StatusCode == http.StatusNotFound {
-		return 0, fmt.Errorf("%w: %s", ErrNotFound, fullName)
-	}
 	if res.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("mods: download %s: unexpected status %d", fullName, res.StatusCode)
+		return 0, statusProblem("download", fullName, url, res.StatusCode)
 	}
 	return io.Copy(w, res.Body)
+}
+
+// statusProblem turns a status into the right kind of failure.
+//
+// 404 and 403 both mean «not here»: the CDN answers a guessed-wrong object
+// name with 403 AccessDenied from the bucket, not with 404. Both therefore
+// send the caller to the next address, and only when the LAST address says so
+// is the package really gone. Everything else is a transport-shaped failure
+// and is worth repeating at the same address.
+func statusProblem(what, fullName, url string, code int) error {
+	if code == http.StatusNotFound || code == http.StatusForbidden {
+		return fmt.Errorf("%w (%s %s: %d)", errWrongURL, what, url, code)
+	}
+	return fmt.Errorf("mods: %s %s: unexpected status %d", what, fullName, code)
 }
 
 // ArchiveSize asks the CDN how big a package is without downloading it. The
 // estimate is what lets a build refuse to start when the disk cannot hold the
 // result — 1.8 GB is a bad thing to discover halfway through.
-func (c *Client) ArchiveSize(ctx context.Context, fullName string) (int64, error) {
-	archiveURL := c.ArchiveURL(fullName)
-	if archiveURL == "" {
-		return 0, fmt.Errorf("mods: unsafe package name %q", fullName)
+func (c *Client) ArchiveSize(ctx context.Context, ref ArchiveRef) (int64, error) {
+	urls, err := c.archiveURLs(ref)
+	if err != nil {
+		return 0, err
 	}
-	release, err := c.acquire(ctx)
+	var lastErr error
+	for _, u := range urls {
+		n, err := c.sizeFrom(ctx, ref.FullName, u)
+		if err == nil {
+			return n, nil
+		}
+		lastErr = err
+		if !errors.Is(err, errWrongURL) {
+			return 0, err
+		}
+	}
+	return 0, fmt.Errorf("%w: %s (%w)", ErrNotFound, ref.FullName, lastErr)
+}
+
+func (c *Client) sizeFrom(ctx context.Context, fullName, url string) (int64, error) {
+	release, err := c.acquireForURL(ctx, url)
 	if err != nil {
 		return 0, err
 	}
@@ -386,7 +614,7 @@ func (c *Client) ArchiveSize(ctx context.Context, fullName string) (int64, error
 	reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodHead, archiveURL, nil)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodHead, url, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -398,11 +626,8 @@ func (c *Client) ArchiveSize(ctx context.Context, fullName string) (int64, error
 	}
 	defer func() { _ = res.Body.Close() }()
 
-	if res.StatusCode == http.StatusNotFound {
-		return 0, fmt.Errorf("%w: %s", ErrNotFound, fullName)
-	}
 	if res.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("mods: size %s: unexpected status %d", fullName, res.StatusCode)
+		return 0, statusProblem("size", fullName, url, res.StatusCode)
 	}
 	return res.ContentLength, nil
 }
@@ -534,6 +759,20 @@ func (c *Client) acquire(ctx context.Context) (func(), error) {
 		return nil, err
 	}
 	return func() { <-c.sem }, nil
+}
+
+// acquireCDN is acquire for archive transfers: its own slots, its own pacing.
+func (c *Client) acquireCDN(ctx context.Context) (func(), error) {
+	select {
+	case c.cdnSem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if err := c.cdnLim.wait(ctx); err != nil {
+		<-c.cdnSem
+		return nil, err
+	}
+	return func() { <-c.cdnSem }, nil
 }
 
 // isRateLimited reports whether a status means "you are going too fast".

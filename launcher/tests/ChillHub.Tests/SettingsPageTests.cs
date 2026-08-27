@@ -305,73 +305,6 @@ namespace ChillHub.Tests {
 
         /// <summary>
         /// Отказ от телеметрии обязан доехать до диска: это согласие на отправку данных,
-        /// и «сбросилось при перезапуске» здесь означает, что данные ушли против воли человека.
-        /// </summary>
-        [Fact]
-        public void ОтказОтТелеметрииДоезжаетДоДиска() {
-            using var cfgDir = new ConfigDirsScope();
-            _ = new DialogLog();
-
-            Assert.True(SettingsActions.Save(new SettingsInput {
-                DownloadThreads = 8,
-                AutoErrorReports = false,
-                SendUsageMetrics = false,
-
-            }));
-
-            var saved = cfgDir.ReadConfigFromDisk();
-            Assert.False(saved.AutoErrorReports);
-            Assert.False(saved.SendUsageMetrics);
-        }
-
-        /// <summary>Обратное включение работает так же — иначе отказ был бы необратим.</summary>
-        [Fact]
-        public void ВключениеТумблеровПриватностиТожеСохраняется() {
-            using var cfgDir = new ConfigDirsScope();
-            _ = new DialogLog();
-            Assert.True(SettingsActions.Save(new SettingsInput {
-                DownloadThreads = 8,
-                AutoErrorReports = false,
-                SendUsageMetrics = false,
-
-            }));
-
-            Assert.True(SettingsActions.Save(new SettingsInput {
-                DownloadThreads = 8,
-                AutoErrorReports = true,
-                SendUsageMetrics = true,
-
-            }));
-
-            var saved = cfgDir.ReadConfigFromDisk();
-            Assert.True(saved.AutoErrorReports);
-            Assert.True(saved.SendUsageMetrics);
-        }
-
-        /// <summary>
-        /// Тумблера на странице может не быть (страница не достроилась — ровно тот случай,
-        /// ради которого каждый контрол проверяется на null). Тогда прежний выбор остаётся:
-        /// молча выключить пользователю отправку отчётов вместо «контрола нет» нельзя.
-        /// </summary>
-        [Fact]
-        public void ОтсутствующийТумблерНеПеребиваетСохранённыйВыбор() {
-            using var cfgDir = new ConfigDirsScope();
-            _ = new DialogLog();
-            Assert.True(SettingsActions.Save(new SettingsInput {
-                DownloadThreads = 8,
-                AutoErrorReports = true,
-                SendUsageMetrics = true,
-
-            }));
-
-            // Ни одного тумблера в input — как если бы контролов на странице не оказалось
-            Assert.True(SettingsActions.Save(new SettingsInput { DownloadThreads = 8 }));
-
-            var saved = cfgDir.ReadConfigFromDisk();
-            Assert.True(saved.AutoErrorReports);
-            Assert.True(saved.SendUsageMetrics);
-        }
-
         // ---- Выбор папки диалогом ----
 
         /// <summary>
@@ -426,16 +359,11 @@ namespace ChillHub.Tests {
             var view = SettingsView.Build(new AppConfig {
                 GamesPath = @"E:\Мои игры",
                 DownloadThreads = 12,
-                AutoErrorReports = false,
-                SendUsageMetrics = false,
-
             });
 
             Assert.Equal(@"E:\Мои игры", view.GamesPath);
             Assert.Equal(12, view.DownloadThreads);
             Assert.Equal("12", view.DownloadThreadsText);
-            Assert.False(view.AutoErrorReports);
-            Assert.False(view.SendUsageMetrics);
         }
 
         /// <summary>

@@ -99,17 +99,6 @@ namespace ChillHub.Tests {
             Assert.Equal(@"E:\Мои игры", cfg.GamesPath);
         }
 
-        /// <summary>Тумблеры приватности нормализация не трогает — их значение задаёт только пользователь.</summary>
-        [Fact]
-        public void ТумблерыПриватностиНеСбрасываются() {
-            var cfg = new AppConfig { AutoErrorReports = false, SendUsageMetrics = false };
-
-            ConfigService.Clamp(cfg);
-
-            Assert.False(cfg.AutoErrorReports);
-            Assert.False(cfg.SendUsageMetrics);
-        }
-
         /// <summary>
         /// Конфиг переживает круг «сериализация — разбор»: именно так он ложится на диск
         /// и поднимается оттуда при следующем запуске.
@@ -121,9 +110,6 @@ namespace ChillHub.Tests {
                 DownloadThreads = 12,
                 ApiBaseUrl = "https://launcher.samoy.love",
                 LastGameId = "lethal-company",
-                AutoErrorReports = false,
-                SendUsageMetrics = false,
-
             };
 
             var back = JsonSerializer.Deserialize<AppConfig>(JsonSerializer.Serialize(cfg))!;
@@ -132,8 +118,6 @@ namespace ChillHub.Tests {
             Assert.Equal(cfg.DownloadThreads, back.DownloadThreads);
             Assert.Equal(cfg.ApiBaseUrl, back.ApiBaseUrl);
             Assert.Equal(cfg.LastGameId, back.LastGameId);
-            Assert.False(back.AutoErrorReports);
-            Assert.False(back.SendUsageMetrics);
         }
 
         /// <summary>

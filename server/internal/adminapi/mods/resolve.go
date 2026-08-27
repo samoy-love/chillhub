@@ -16,6 +16,13 @@ type ResolvedPackage struct {
 	Version      string   `json:"version"`
 	Dependencies []string `json:"-"`
 
+	// DownloadURL is the package's own archive link, straight from the API.
+	//
+	// It is kept because the CDN name is only USUALLY derivable from the full
+	// name: Thunderstore truncates a long object name and appends a random
+	// suffix, and the guessed URL then answers 403. See Client.archiveURLs.
+	DownloadURL string `json:"downloadUrl,omitempty"`
+
 	// LoaderRoot is the folder inside the archive whose contents belong at the
 	// root of the game, set only for mod-loader packages. An empty string on a
 	// loader means "the archive root itself".
@@ -110,6 +117,7 @@ func (c *Client) resolveFrom(ctx context.Context, eco *Ecosystem, roots []string
 				Name:         v.Name,
 				Version:      v.VersionNumber,
 				Dependencies: v.Dependencies,
+				DownloadURL:  v.DownloadURL,
 			}
 			if rootFolder, ok := eco.LoaderRoot(v.Namespace, v.Name); ok {
 				rp.IsLoader = true

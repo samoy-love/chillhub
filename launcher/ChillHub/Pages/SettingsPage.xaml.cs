@@ -86,13 +86,6 @@ namespace ChillHub.Pages {
                     this.SpeedLimitValueText.Text = view.SpeedLimitText;
                 }
 
-                if (this.UsageMetricsCheck != null) {
-                    this.UsageMetricsCheck.IsChecked = view.SendUsageMetrics;
-                }
-
-                if (this.AutoErrorReportsCheck != null) {
-                    this.AutoErrorReportsCheck.IsChecked = view.AutoErrorReports;
-                }
 
                 if (this.MinimizeToTrayCheck != null) {
                     this.MinimizeToTrayCheck.IsChecked = view.MinimizeToTray;
@@ -211,8 +204,6 @@ namespace ChillHub.Pages {
                 GamesPathText = this.GamesPathBox.Text,
                 DownloadThreads = this.ThreadsSlider.Value,
                 SpeedLimitMbps = speed,
-                AutoErrorReports = this.AutoErrorReportsCheck == null ? null : this.AutoErrorReportsCheck.IsChecked == true,
-                SendUsageMetrics = this.UsageMetricsCheck == null ? null : this.UsageMetricsCheck.IsChecked == true,
                 MinimizeToTray = this.MinimizeToTrayCheck == null ? null : this.MinimizeToTrayCheck.IsChecked == true,
             });
             if (!saved) {

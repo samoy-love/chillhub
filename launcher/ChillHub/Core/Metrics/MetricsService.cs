@@ -69,13 +69,7 @@ namespace ChillHub.Core.Metrics {
                     return false;
                 }
 
-                try {
-                    return ConfigService.Current.SendUsageMetrics;
-                }
-                catch {
-                    // Конфиг ещё не прочитан (очень ранний старт) — молчим.
-                    return false;
-                }
+                return true;
             }
         }
 

@@ -41,7 +41,7 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 			_ = os.Remove(tmpName)
 		}
 	}()
-	parts, code, err := readUploadParts(r, h.tmpDir(), nil)
+	parts, code, err := readUploadParts(r, h.tmpDir(), nil, nil)
 	if parts != nil {
 		tmpName = parts.tmpName
 	}
@@ -442,7 +442,11 @@ func spaceBudget(dir string) (uint64, bool) {
 // It returns the HTTP status to answer with alongside the error. On failure the
 // temp file is left in parts.tmpName for the caller's cleanup defer, which is
 // already armed before this is called.
-func readUploadParts(r *http.Request, tmpDir string, onZipSaved func(filename string, n int64)) (*uploadParts, int, error) {
+// uploadProgress is told how many bytes of the archive have arrived. It is
+// called from the spool loop, on the handler's own goroutine.
+type uploadProgress func(received int64)
+
+func readUploadParts(r *http.Request, tmpDir string, onZipProgress uploadProgress, onZipSaved func(filename string, n int64)) (*uploadParts, int, error) {
 	out := &uploadParts{}
 	mr, err := r.MultipartReader()
 	if err != nil {
@@ -470,7 +474,7 @@ func readUploadParts(r *http.Request, tmpDir string, onZipSaved func(filename st
 		case "updateLatest":
 			out.updateLatest = field(part) == "1"
 		case "zip":
-			code, zerr := out.spoolZip(part, tmpDir)
+			code, zerr := out.spoolZip(part, tmpDir, onZipProgress)
 			if zerr != nil {
 				_ = part.Close()
 				return out, code, zerr
@@ -490,7 +494,7 @@ func readUploadParts(r *http.Request, tmpDir string, onZipSaved func(filename st
 
 // spoolZip writes the "zip" part of a publish request to a temp file in tmpDir
 // and records it on out. It returns the HTTP status to answer with.
-func (out *uploadParts) spoolZip(part *multipart.Part, tmpDir string) (int, error) {
+func (out *uploadParts) spoolZip(part *multipart.Part, tmpDir string, onProgress uploadProgress) (int, error) {
 	// A second "zip" part is refused rather than silently replacing the first.
 	// The caller's cleanup defer only ever learns one temp name, so overwriting
 	// out.tmpName orphaned the first spool file in tmpDir permanently — a leak
@@ -510,7 +514,11 @@ func (out *uploadParts) spoolZip(part *multipart.Part, tmpDir string) (int, erro
 	// failure path below, including 413 and 507.
 	out.tmpName = tmpZip.Name()
 	out.filename = part.FileName()
-	n, code, cerr := spoolZipPart(tmpZip, part, tmpDir)
+	var src io.Reader = part
+	if onProgress != nil {
+		src = &countingReader{r: part, on: onProgress}
+	}
+	n, code, cerr := spoolZipPart(tmpZip, src, tmpDir)
 	// Closed before returning: on Windows an open handle would make the caller's
 	// os.Remove fail and leave the partial archive behind.
 	_ = tmpZip.Close()
@@ -519,6 +527,46 @@ func (out *uploadParts) spoolZip(part *multipart.Part, tmpDir string) (int, erro
 	}
 	out.saved = n
 	return http.StatusOK, nil
+}
+
+// receivingEvery bounds how often the «архив идёт» event is repeated.
+//
+// Cloudflare wants to see the origin alive; it does not want a line per 32 KB
+// buffer. Five seconds is twenty times faster than the hundred-second limit
+// and costs a couple of dozen lines on a 68 MB upload.
+var receivingEvery = 5 * time.Second
+
+// receivingReporter makes the «архив идёт» reporter for one request.
+//
+// Отдельной функцией, а не замыканием на месте: UploadStream и без того
+// упирается в потолок ветвлений, который держит golangci-lint, а состояние
+// у отчёта своё — время последней строки.
+func receivingReporter(nw *ndjsonWriter, fl adminutil.Flusher) uploadProgress {
+	last := time.Now()
+	return func(received int64) {
+		if time.Since(last) < receivingEvery {
+			return
+		}
+		last = time.Now()
+		emitEventf(nw, "{\"type\":\"receiving\",\"bytes\":%d}\n", received)
+		fl.Flush()
+	}
+}
+
+// countingReader reports progress as the body is read.
+type countingReader struct {
+	r    io.Reader
+	on   uploadProgress
+	seen int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	if n > 0 {
+		c.seen += int64(n)
+		c.on(c.seen)
+	}
+	return n, err
 }
 
 // UploadStream uploads a ZIP and streams progress (NDJSON): start, unzip
@@ -558,7 +606,18 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	parts, code, err := readUploadParts(r, h.tmpDir(), func(filename string, n int64) {
+	// ОТВЕЧАТЬ НАДО СРАЗУ, А НЕ КОГДА ПРИЕДЕТ АРХИВ.
+	//
+	// Перед доменом стоит Cloudflare, и у него на ответ origin'а сто секунд.
+	// Раньше первый байт ответа уходил только после того, как весь ZIP лёг во
+	// временный файл: 68 МБ с раннера GitHub идут дольше, и выкатка получала
+	// 524 — шесть раз подряд, по два с лишним гигабайта впустую. Здесь
+	// отчёт о приёме идёт ПОКА тело читается, так что поток жив с первых
+	// килобайт.
+	//
+	// Событие уходит не чаще, чем раз в receivingEvery: NDJSON на каждый
+	// буфер — это мегабайты служебного трафика на ровном месте.
+	parts, code, err := readUploadParts(r, h.tmpDir(), receivingReporter(nw, fl), func(filename string, n int64) {
 		emitEventf(nw, "{\"type\":\"zipSaved\",\"filename\":%q,\"bytes\":%d}\n", filename, n)
 		fl.Flush()
 	})

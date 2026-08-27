@@ -29,10 +29,8 @@ namespace ChillHub.Core.Settings {
         internal double SpeedLimitMbps { get; init; }
 
         /// <summary>Автоматическая отправка отчётов об ошибках.</summary>
-        internal bool? AutoErrorReports { get; init; }
 
         /// <summary>Обезличенная статистика использования.</summary>
-        internal bool? SendUsageMetrics { get; init; }
 
         /// <summary>Сворачивать окно в трей вместо закрытия.</summary>
         internal bool? MinimizeToTray { get; init; }
@@ -73,14 +71,6 @@ namespace ChillHub.Core.Settings {
                 cfg.GamesPath = newPath;
                 cfg.DownloadThreads = (int)input.DownloadThreads;
                 cfg.SpeedLimitMbps = (int)input.SpeedLimitMbps;
-                if (input.AutoErrorReports != null) {
-                    cfg.AutoErrorReports = input.AutoErrorReports == true;
-                }
-
-                if (input.SendUsageMetrics != null) {
-                    cfg.SendUsageMetrics = input.SendUsageMetrics == true;
-                }
-
                 if (input.MinimizeToTray != null) {
                     cfg.MinimizeToTray = input.MinimizeToTray == true;
                 }

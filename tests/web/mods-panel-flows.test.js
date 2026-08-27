@@ -251,6 +251,34 @@ test('фаза разбора состава показывает счётчик
   'счётчик найденных модов не появлялся: ' + JSON.stringify(seen));
 });
 
+test('параллельное скачивание показывает обе величины и повторы', async () => {
+  // Скачано и установлено — РАЗНЫЕ числа, пока работают шесть потоков.
+  // Одна строка на оба показателя прыгала бы назад на каждом событии.
+  const events = [
+    { type: 'resolved', total: 4, message: 'пакетов: 4' },
+    { type: 'downloading', step: 3, total: 4, bytes: 700, parallel: 2, message: 'A-Mod-1.0.0' },
+    { type: 'retry', step: 1, total: 5, message: 'B-Mod-1.0.0 — попытка 1 из 5: обрыв' },
+    { type: 'package', step: 1, total: 4, message: 'A-Mod-1.0.0' },
+  ];
+  const { document } = await mount(function (url) {
+    if (!url.startsWith('/admin/api/mods/build')) return null;
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(events.map((e) => JSON.stringify(e)).join('\n') + '\n'),
+    });
+  });
+
+  await clickCatalogButton(document, 'data-mc-build', 'Team/Pack');
+
+  const detail = document.querySelector('[data-md="detail"]').textContent;
+  assert.match(detail, /скачано 3 из 4/);
+  assert.match(detail, /установлено 4/, 'после успешной сборки установлены все: ' + detail);
+  const retries = document.querySelector('[data-md="retries"]').textContent;
+  assert.match(retries, /B-Mod-1\.0\.0 — попытка 1 из 5/);
+  assert.ok(!document.querySelector('[data-md="retriesBox"]').classList.contains('hidden'),
+    'блок повторов остался скрытым');
+});
+
 test('сборка без единого события сообщает о буферизации', async () => {
   const { document, calls } = await mount(function (url) {
     if (!url.startsWith('/admin/api/mods/build')) return null;
