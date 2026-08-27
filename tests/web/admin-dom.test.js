@@ -48,6 +48,10 @@ const SCRIPT_ORDER = [
   // целиком) не исполнялся ни разу и висел в отчёте нулём.
   'game-gallery.js',
   'game-list.js',
+  // Вкладка «Моды» и разбор её потока сборки. Порядок тот же, что в разметке:
+  // mods-panel.js читает window.readNdjsonStream, а admin.js — window.createModsPanel.
+  'ndjson.js',
+  'mods-panel.js',
   'admin.js',
 ];
 

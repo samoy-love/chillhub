@@ -27,6 +27,16 @@ namespace ChillHub.Core {
 
         public string IconUrl { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Активный модпак игры или null, если модов у неё нет.
+        /// <para>
+        /// Приходит вложенным объектом в том же ответе <c>/api/games</c>: лаунчер
+        /// узнаёт про моды одним запросом и ничего не выбирает — активный модпак на
+        /// игру ровно один, и назначается он в админке.
+        /// </para>
+        /// </summary>
+        public ModsInfo? Mods { get; set; }
+
         // UI state (client-side only)
         public bool IsInstalled { get; set; } = false;
 

@@ -23,7 +23,6 @@
             <ui:GameRowStatusTextConverter x:Key="GameRowStatusTextConv" />
             <ui:GameRowStatusBrushConverter x:Key="GameRowStatusBrushConv" />
             <ui:NewsColumnsConverter x:Key="NewsColumnsConv" />
-            <BooleanToVisibilityConverter x:Key="BoolToVisibilityConv" />
         </ResourceDictionary>
     </Application.Resources>
 </Application>

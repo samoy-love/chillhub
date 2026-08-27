@@ -10,6 +10,7 @@ namespace ChillHub.Core.Game {
     using System.Threading.Tasks;
 
     using ChillHub.Core.Home;
+    using ChillHub.Core.Mods;
     using ChillHub.Core.Sync;
 
     using static ChillHub.Core.Home.HomeFormat;
@@ -82,7 +83,8 @@ namespace ChillHub.Core.Game {
         string LocalRoot,
         string? ExeRelativePath,
         bool ConfirmDeletions,
-        SyncKind Kind = SyncKind.Install);
+        SyncKind Kind = SyncKind.Install,
+        GameInfo? Game = null);
 
     /// <summary>
     /// Связь установки с экраном: только колбэки, никаких контролов. По умолчанию всё
@@ -189,6 +191,34 @@ namespace ChillHub.Core.Game {
                     return;
                 }
 
+                // МОДПАК ИДЁТ ПЕРВЫМ, и это не косметика.
+                //
+                // При переходе со старых сборок, где моды лежали внутри ZIP игры, файлы
+                // BepInEx уже на диске с теми же хешами: модпак засчитает их, скачает ноль
+                // байт и запишет, что они принадлежат ему. Синхронизация игры следом их не
+                // тронет. В обратном порядке игрок сначала скачал бы удаление почти шести
+                // гигабайт, а сразу за ним — их же обратно.
+                if (request.Game?.Mods is { HasLatest: true }) {
+                    this.ui.SetStatus("Установка модов…");
+                    var mods = await ModsService.EnsureAsync(
+                        request.Game, request.LocalRoot, request.BaseApi, this.sync, null, token,
+                        // «Проверить файлы» обязана пересчитать хеши и у модов: битая
+                        // DLL мода почти всегда сохраняет размер, и без пересчёта
+                        // проверка объявит её целой.
+                        forceRehash: request.Kind == SyncKind.Repair)
+                        .ConfigureAwait(true);
+                    if (!mods.Ok) {
+                        this.ui.SetStatus(mods.Message);
+
+                        // Об исходе отчитываемся: в отличие от ветки «игра запущена»,
+                        // здесь лаунчер уже сходил на сервер и операция именно
+                        // сорвалась. Без этой строки неудачное обновление исчезает из
+                        // метрик целиком — ни успеха, ни ошибки.
+                        this.Report(request, null, "fail", opStart, "mods_sync_failed");
+                        return;
+                    }
+                }
+
                 Logging.Logger.Info($"GamePage.StartSync gid={gid} version={version}");
                 this.ui.SetStatus("Загрузка манифеста…");
                 this.ui.SetIndeterminate(true);
@@ -202,7 +232,13 @@ namespace ChillHub.Core.Game {
                 // PlanAsync только выглядит асинхронным: внутри полный обход папки игры с пересчётом
                 // хешей, а Task возвращается уже завершённым. С UI-потока это подвешивает окно
                 // на всё время обхода — уводим в пул потоков (как в IntegrityChecker).
-                plan = await Task.Run(() => this.sync.PlanAsync(manifest, request.LocalRoot, contentBase, token), token).ConfigureAwait(true);
+                //
+                // Через SyncPlanner, а не голым Task.Run: там же строятся настройки плана
+                // для ИГРЫ, а в них — список файлов установленного модпака. Он лежит в той
+                // же папке, и без этого списка обновление игры вынесло бы все моды как
+                // «лишние файлы».
+                plan = await SyncPlanner.PlanOffUiThreadAsync(this.sync, manifest, request.LocalRoot, contentBase, token)
+                    .ConfigureAwait(true);
                 Logging.Logger.Info($"GamePage plan gid={gid} downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count}");
 
                 // Проверка целостности удаляет всё, чего нет в манифесте: моды, скриншоты,

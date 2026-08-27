@@ -49,6 +49,11 @@ namespace ChillHub.Pages {
         // Идёт удаление локальных файлов игры: блокирует повторный запуск и установку
         private bool isDeleting = false;
 
+        // Идёт установка модпака в копию из Steam. Второй такой же запуск писал бы в ту
+        // же папку теми же файлами параллельно с первым — отсюда флаг, а не просто
+        // выключенный пункт меню: меню строится заново на каждое открытие.
+        private bool steamModsInstalling;
+
         // 1, пока идёт проход VerifyAllGamesStatusesAsync. Взводится через Interlocked:
         // метод зовут и из UI-потока, и из фоновых задач.
         private int verifyRunning;
@@ -124,7 +129,6 @@ namespace ChillHub.Pages {
                 this.FbComment.Text = string.Empty;
                 this.FbStatus.Text = string.Empty;
                 this.FbType.SelectedIndex = 0;
-                this.UpdateFeedbackDiagnosticsInfo();
                 this.FeedbackOverlay.Visibility = Visibility.Visible;
 
                 // Валидация только по нажатию «Отправить»: на открытии ничего не подсвечиваем
@@ -139,33 +143,6 @@ namespace ChillHub.Pages {
             this.FeedbackOverlay.Visibility = Visibility.Collapsed;
         }
 
-        // Пользователь передумал прикладывать диагностику (или наоборот) — обновим пояснение
-        private void FbAttachDiagnostics_Click(object sender, RoutedEventArgs e) => this.UpdateFeedbackDiagnosticsInfo();
-
-        /// <summary>
-        /// Показывает, что именно уйдёт вместе с сообщением. Раньше конфиг, пути установки
-        /// и дерево папки игр прикладывались молча и без возможности отказаться.
-        /// </summary>
-        private void UpdateFeedbackDiagnosticsInfo() {
-            try {
-                if (this.FbDiagnosticsInfo == null) {
-                    return;
-                }
-
-                if (this.FbAttachDiagnostics?.IsChecked != true) {
-                    this.FbDiagnosticsInfo.Text = "Будут отправлены только ваше сообщение и указанные контакты.";
-                    return;
-                }
-
-                this.FbDiagnosticsInfo.Text = "Вместе с сообщением уйдёт: "
-                    + string.Join("; ", Core.Diagnostics.BundleContents)
-                    + ". Имя пользователя Windows в путях заменяется на %USER%.";
-            }
-            catch (Exception ex) {
-                Core.Logging.Logger.Warn($"Feedback.UpdateDiagnosticsInfo: {ex.Message}");
-            }
-        }
-
         private async void FbSend_Click(object sender, RoutedEventArgs e) {
             try {
                 var comment = this.FbComment.Text?.Trim() ?? string.Empty;
@@ -174,16 +151,18 @@ namespace ChillHub.Pages {
                     return;
                 }
 
-                // Диагностику прикладываем только с явного согласия: галочка стоит по умолчанию,
-                // но её видно и её можно снять (см. форму под кнопками).
-                var attachDiagnostics = this.FbAttachDiagnostics?.IsChecked == true;
+                // Диагностика уходит ВСЕГДА и безусловно. Отключаемая галочка не сработала:
+                // её снимали именно в тех обращениях, где без логов ответить нечего, и
+                // разбор упирался в переписку «пришлите ещё раз, но с галочкой». Приватность
+                // держится не выбором пользователя, а составом бандла: имя пользователя
+                // Windows в путях заменяется на %USER% (см. Diagnostics.Redact).
                 var draft = new FeedbackService.FeedbackDraft(
                     this.FbName.Text?.Trim() ?? string.Empty,
                     this.FbContact.Text?.Trim() ?? string.Empty,
                     this.GetFeedbackTypeString(),
                     comment,
-                    attachDiagnostics,
-                    attachDiagnostics ? FeedbackService.CollectSystemInfo() : null);
+                    true,
+                    FeedbackService.CollectSystemInfo());
 
                 this.FbStatus.Text = "Отправка...";
                 var ok = await this.Feedback.TrySendAsync(draft, silent: false).ConfigureAwait(true);
@@ -1575,6 +1554,15 @@ namespace ChillHub.Pages {
                 parts.Add($"версия {latest}");
             }
 
+            // Модпак называется здесь же, отдельным куском строки. Выбирать игроку
+            // нечего — активный модпак на игру ровно один и назначается в админке, —
+            // но знать, ЧТО у него стоит, он должен: без этого в жалобе «моды
+            // сломались» нет ни имени сборки, ни её версии.
+            var pack = g.Mods?.Describe() ?? string.Empty;
+            if (pack.Length > 0) {
+                parts.Add("моды: " + pack);
+            }
+
             return string.Join(" · ", parts);
         }
 
@@ -1998,6 +1986,17 @@ namespace ChillHub.Pages {
         // Сам запуск живёт в Core/Home/GameLaunch: здесь только показ того, чем он кончился.
         private void PlaySelectedGame() {
             var gid = this.GetSelectedGameId();
+
+            // У игры с модами запусков четыре: своя копия из Steam или сборка с сервера,
+            // каждая с модами или без. Выбор показывается меню на кнопке «Играть», а не
+            // отдельным экраном: выбирать тут нечего кроме этих четырёх, и лишний экран
+            // между «хочу играть» и игрой никому не нужен.
+            var selected = this.games?.FirstOrDefault(g => g.GameId == gid);
+            if (selected?.Mods is { } modsCfg && !string.IsNullOrWhiteSpace(modsCfg.SteamAppId)) {
+                this.ShowModsLaunchMenu(selected);
+                return;
+            }
+
             var result = GameLaunch.Play(gid, this.games, Core.Maintenance.MaintenanceService.Current);
             switch (result.Outcome) {
                 case LaunchOutcome.ExeMissing:
@@ -2015,6 +2014,88 @@ namespace ChillHub.Pages {
                 default:
                     this.StatusText.Text = result.Message;
                     break;
+            }
+        }
+
+        /// <summary>
+        /// Показывает меню с вариантами запуска игры с модами.
+        /// <para>
+        /// Недоступные пункты остаются в меню, но выключены и подписаны причиной:
+        /// исчезнувший пункт не объясняет игроку ничего, а «Steam не установлен» —
+        /// объясняет. Поиск копии в Steam делается здесь же, при открытии меню, а не
+        /// заранее: игру могли поставить или удалить, пока лаунчер был открыт.
+        /// </para>
+        /// </summary>
+        /// <param name="game">Выбранная игра.</param>
+        private void ShowModsLaunchMenu(GameInfo game) {
+            try {
+                var mods = game.Mods!;
+                var localRoot = Core.Home.GameLocalState.GameLocalRoot(game.GameId);
+                var localInstalled = Core.Home.GameLocalState.HasAnyLocalGameFiles(localRoot);
+                var steam = Core.Mods.SteamLocator.Locate(mods.SteamAppId, mods.SteamFolder);
+
+                foreach (var line in steam.Trace) {
+                    Core.Logging.Logger.Info($"[mods] поиск Steam: {line}");
+                }
+
+                var options = Core.Mods.ModsLaunch.Options(mods, localRoot, localInstalled, steam);
+                var menu = new ContextMenu { PlacementTarget = this.ActionBtn, Placement = PlacementMode.Top };
+
+                foreach (var option in options) {
+                    var item = new MenuItem {
+                        Header = option.Available ? option.Title : $"{option.Title} — {option.Reason}",
+                        IsEnabled = option.Available,
+                        Tag = option,
+                    };
+                    item.Click += this.ModsLaunchItem_Click;
+                    menu.Items.Add(item);
+                }
+
+                menu.IsOpen = true;
+            }
+            catch (Exception ex) {
+                this.ShowUserError("Не удалось составить список вариантов запуска.", ex, "HomePage.ShowModsLaunchMenu");
+            }
+        }
+
+        /// <summary>Запускает выбранный в меню вариант.</summary>
+        /// <param name="sender">Пункт меню.</param>
+        /// <param name="e">Аргументы события.</param>
+        private void ModsLaunchItem_Click(object sender, RoutedEventArgs e) {
+            try {
+                if (sender is not MenuItem { Tag: Core.Mods.LaunchOption option }) {
+                    return;
+                }
+
+                var maintenance = Core.Maintenance.MaintenanceService.Current;
+                if (maintenance.BlocksPlay) {
+                    this.StatusText.Text = maintenance.BuildBannerText();
+                    return;
+                }
+
+                var gid = this.GetSelectedGameId();
+                var game = this.games?.FirstOrDefault(g => g.GameId == gid);
+                if (game?.Mods == null) {
+                    return;
+                }
+
+                var steam = Core.Mods.SteamLocator.Locate(game.Mods.SteamAppId, game.Mods.SteamFolder);
+                var proc = Core.Mods.ModsLaunch.Start(option, game.Mods, game.ExeRelativePath, steam);
+                if (proc == null && option.ViaSteam) {
+                    // Steam.exe завершается сразу, отдав команду; отсутствие процесса тут
+                    // не ошибка. Настоящий отказ уже записан в журнал внутри ModsLaunch.
+                    this.StatusText.Text = "Запуск через Steam…";
+                }
+                else if (proc == null) {
+                    this.StatusText.Text = "Не удалось запустить игру. Подробности в журнале.";
+                }
+                else {
+                    this.StatusText.Text = string.Empty;
+                    Core.Metrics.MetricsService.GameLaunch(game.GameId, game.Mods.Version);
+                }
+            }
+            catch (Exception ex) {
+                this.ShowUserError("Не удалось запустить игру.", ex, "HomePage.ModsLaunchItem_Click");
             }
         }
 
@@ -2069,11 +2150,25 @@ namespace ChillHub.Pages {
                 var hasFiles = Directory.Exists(localRoot) && HasAnyLocalGameFiles(localRoot);
 
                 if (fe?.ContextMenu != null) {
+                    // Моды в копию Steam ставятся именно тогда, когда локальных файлов нет:
+                    // игры может не быть на сервере вовсе. Общее правило «доступно только
+                    // установленным» этот пункт выключило бы ровно в его сценарии.
+                    var steamMods = FindMenuItemByTag(fe.ContextMenu, Core.Home.SteamModsInstall.MenuTag);
+
                     foreach (var raw in fe.ContextMenu.Items) {
                         // Первый пункт («Подробнее об игре») оставляем активным всегда
-                        if (raw is MenuItem mi && !ReferenceEquals(mi, fe.ContextMenu.Items.Count > 0 ? fe.ContextMenu.Items[0] : null)) {
+                        if (raw is MenuItem mi
+                            && !ReferenceEquals(mi, steamMods)
+                            && !ReferenceEquals(mi, fe.ContextMenu.Items.Count > 0 ? fe.ContextMenu.Items[0] : null)) {
                             mi.IsEnabled = hasFiles;
                         }
+                    }
+
+                    if (steamMods != null) {
+                        var state = Core.Home.SteamModsInstall.DecideMenuItem(gi?.Mods);
+                        steamMods.Visibility = state.Visible ? Visibility.Visible : Visibility.Collapsed;
+                        steamMods.IsEnabled = state.Enabled;
+                        steamMods.Header = state.Header;
                     }
                 }
             }
@@ -2081,6 +2176,162 @@ namespace ChillHub.Pages {
                 // Не смогли подготовить меню — лучше его не показывать вовсе
                 Core.Logging.Logger.Warn($"GameItem_ContextMenuOpening: {ex.Message}");
                 e.Handled = true;
+            }
+        }
+
+        /// <summary>
+        /// Ищет пункт меню по его <c>Tag</c>. Не по подписи: у пункта установки модов
+        /// подпись меняется вместе с причиной недоступности.
+        /// </summary>
+        /// <param name="menu">Меню игры.</param>
+        /// <param name="tag">Метка искомого пункта.</param>
+        /// <returns>Пункт или null.</returns>
+        private static MenuItem? FindMenuItemByTag(ContextMenu menu, string tag) {
+            foreach (var raw in menu.Items) {
+                if (raw is MenuItem mi && string.Equals(mi.Tag as string, tag, StringComparison.Ordinal)) {
+                    return mi;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Ставит модпак в копию игры из Steam.
+        /// <para>
+        /// Единственный путь для игры, которой на сервере нет: общий конвейер обновления
+        /// кладёт моды только в сборку Chill Hub, а её тут не существует. Папка ищется
+        /// прямо сейчас, а не заранее: игру могли поставить или снести, пока лаунчер открыт.
+        /// </para>
+        /// </summary>
+        /// <param name="sender">Пункт меню.</param>
+        /// <param name="e">Аргументы события.</param>
+        private async void InstallModsToSteam_Click(object sender, RoutedEventArgs e) {
+            try {
+                if (this.steamModsInstalling) {
+                    this.ShowToast("Моды уже устанавливаются. Дождитесь завершения.");
+                    return;
+                }
+
+                var gi = (sender as FrameworkElement)?.GetValue(MenuItem.CommandParameterProperty) as GameInfo
+                         ?? (sender as FrameworkElement)?.DataContext as GameInfo;
+                var mods = gi?.Mods;
+                var title = string.IsNullOrWhiteSpace(gi?.Title) ? gi?.GameId ?? string.Empty : gi!.Title;
+
+                if (gi == null || mods is not { HasLatest: true } || string.IsNullOrWhiteSpace(mods.SteamAppId)) {
+                    // Сюда попадают только через гонку: пункт для такой игры выключен.
+                    this.StatusText.Text = "Для этой игры нет модпака, который можно поставить в Steam";
+                    return;
+                }
+
+                var steam = Core.Mods.SteamLocator.Locate(mods.SteamAppId, mods.SteamFolder);
+                foreach (var line in steam.Trace) {
+                    Core.Logging.Logger.Info($"[mods] поиск Steam: {line}");
+                }
+
+                if (!steam.Ok) {
+                    // Не ошибка лаунчера, а состояние машины пользователя: показываем
+                    // причину и следующий шаг, без «отправьте отчёт».
+                    var reason = Core.Home.SteamModsInstall.DescribeLookupFailure(steam.Outcome, title);
+                    this.StatusText.Text = reason;
+                    this.ShowToast(reason);
+                    return;
+                }
+
+                if (!Core.Home.HomeDialogs.AskYesNo(
+                        Core.Home.SteamModsInstall.BuildConfirmText(title, mods, steam.GameDir),
+                        Core.Home.SteamModsInstall.ConfirmCaption)) {
+                    return;
+                }
+
+                await this.InstallModsToSteamAsync(gi, title, steam.GameDir).ConfigureAwait(true);
+            }
+            catch (Exception ex) {
+                this.ShowUserError("Не удалось установить моды в копию из Steam.", ex, "HomePage.InstallModsToSteam_Click");
+            }
+        }
+
+        /// <summary>
+        /// Сама установка: качает модпак в папку Steam, не занимая UI-поток.
+        /// </summary>
+        /// <param name="game">Игра из каталога.</param>
+        /// <param name="title">Название игры для подписей.</param>
+        /// <param name="steamDir">Найденная папка копии из Steam.</param>
+        /// <returns>Задача установки.</returns>
+        private async Task InstallModsToSteamAsync(GameInfo game, string title, string steamDir) {
+            var view = new Core.Game.SyncProgressView();
+            var started = DateTime.UtcNow;
+
+            // Progress создаётся на UI-потоке и поэтому сам возвращает отчёты сюда же:
+            // служба синхронизации репортит из фоновых задач.
+            var progress = new Progress<SyncProgress>(
+                p => this.ApplySyncDisplay(view.Describe(p, (DateTime.UtcNow - started).TotalSeconds)));
+
+            this.steamModsInstalling = true;
+
+            // Полоса включается ДО текста: смена текста перерисовывает нижнюю панель,
+            // и включённый после неё бегунок остаётся скрытым до следующего события.
+            this.UpdateProgress.IsIndeterminate = true;
+            this.SpeedEtaText.Text = string.Empty;
+            this.FilesSizeText.Text = string.Empty;
+            this.StatusText.Text = $"Установка модов в копию {title} из Steam…";
+            this.SyncBottomBarVisibility();
+
+            try {
+                // Отмены у этой операции нет намеренно: прервать её на середине означает
+                // оставить в чужой установке Steam половину модпака.
+                var result = await Core.Mods.ModsService.EnsureAsync(
+                    game, steamDir, this.BaseApi, this.sync, progress, CancellationToken.None).ConfigureAwait(true);
+
+                var message = Core.Home.SteamModsInstall.DescribeResult(result, title);
+                if (result.Ok) {
+                    this.StatusText.Text = "Готово";
+                    this.ShowToast(message);
+                }
+                else {
+                    this.ShowUserError(message, null, "HomePage.InstallModsToSteamAsync");
+                }
+            }
+            finally {
+                this.steamModsInstalling = false;
+                this.UpdateProgress.IsIndeterminate = false;
+                this.UpdateProgress.Value = 0;
+                this.SpeedEtaText.Text = string.Empty;
+                this.FilesSizeText.Text = string.Empty;
+                this.UpdateActionButtonState();
+            }
+        }
+
+        /// <summary>
+        /// Раскладывает отчёт о прогрессе по подписям нижней панели. Null в поле —
+        /// «этой строки стадия не касается», её прежнее значение остаётся.
+        /// </summary>
+        /// <param name="display">Что показать.</param>
+        private void ApplySyncDisplay(Core.Game.SyncProgressDisplay display) {
+            try {
+                if (display.Indeterminate is { } indeterminate) {
+                    this.UpdateProgress.IsIndeterminate = indeterminate;
+                }
+
+                if (display.Value is { } value) {
+                    this.UpdateProgress.Value = value;
+                }
+
+                if (display.Status is { } status) {
+                    this.StatusText.Text = status;
+                }
+
+                if (display.SpeedEta is { } speedEta) {
+                    this.SpeedEtaText.Text = speedEta;
+                }
+
+                if (display.FilesSize is { } filesSize) {
+                    this.FilesSizeText.Text = filesSize;
+                }
+            }
+            catch (Exception ex) {
+                // Подписи — не повод ронять установку, которая идёт нормально.
+                Core.Logging.Logger.Warn($"HomePage.ApplySyncDisplay: {ex.Message}");
             }
         }
 

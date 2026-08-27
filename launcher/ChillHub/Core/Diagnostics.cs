@@ -22,11 +22,64 @@ namespace ChillHub.Core {
         /// </summary>
         private const int BundleMaxBytes = 1024 * 1024;
 
-        /// <summary>Суммарный бюджет на содержимое логов внутри бандла.</summary>
-        private const int LogsTotalBudgetBytes = 160 * 1024;
+        /// <summary>
+        /// Суммарный бюджет на содержимое логов внутри бандла.
+        /// <para>
+        /// Поднят со 160 КиБ: к журналам лаунчера добавился журнал загрузчика модов, а он
+        /// один разговорчивее всего остального вместе взятого. При прежнем бюджете хвост
+        /// BepInEx вытеснял из отчёта записи самого лаунчера — то есть ровно тот кусок, по
+        /// которому видно, что лаунчер вообще делал перед падением.
+        /// </para>
+        /// </summary>
+        private const int LogsTotalBudgetBytes = 512 * 1024;
 
-        /// <summary>Потолок хвоста одного файла лога.</summary>
-        private const int LogTailBytes = 48 * 1024;
+        /// <summary>
+        /// Потолок хвоста одного файла лога. Поднят с 48 КиБ: 48 КиБ — это меньше минуты
+        /// работы BepInEx с полусотней плагинов, и стек падения оказывался выше отрезанной
+        /// границы.
+        /// </summary>
+        private const int LogTailBytes = 128 * 1024;
+
+        /// <summary>
+        /// Имя файла с версией установленного набора модов (лежит в папке игры).
+        /// Совпадает с меткой, которую бережёт синхронизация (<c>IntegrityChecker</c>):
+        /// диагностика читает ровно те файлы, что кладёт установка модов.
+        /// </summary>
+        private const string ModsVersionFileName = ".mods.version";
+
+        /// <summary>Имя манифеста набора модов. В бандл идут только имя и размер: внутри перечень всех файлов набора.</summary>
+        private const string ModsManifestFileName = ".mods.manifest.json";
+
+        /// <summary>Конфиг доорстопа: им игра подхватывает загрузчик модов. Мал и целиком идёт в бандл.</summary>
+        private const string DoorstopConfigFileName = "doorstop_config.ini";
+
+        /// <summary>Папка загрузчика модов внутри папки игры.</summary>
+        private const string BepInExDirName = "BepInEx";
+
+        /// <summary>Главный журнал загрузчика модов: без него разбирать вылеты нечем.</summary>
+        private const string BepInExLogFileName = "LogOutput.log";
+
+        /// <summary>
+        /// Потолок хвоста журнала модов. Меньше общего <see cref="LogTailBytes"/> намеренно:
+        /// бюджет у секций общий, а модифицированных игр у пользователя может быть несколько,
+        /// и одна из них не должна забрать весь бандл у остальных и у логов лаунчера.
+        /// </summary>
+        private const int ModsLogTailBytes = 48 * 1024;
+
+        /// <summary>Сколько модифицированных игр разбираем: дальше начинается пересказ всей библиотеки.</summary>
+        private const int ModsMaxGames = 6;
+
+        /// <summary>Потолок мелкого файла модов (версия, doorstop_config.ini), который идёт целиком.</summary>
+        private const int ModsSmallFileMaxBytes = 8 * 1024;
+
+        /// <summary>
+        /// Глубина обхода папки BepInEx. Двух уровней хватает, чтобы увидеть и разделы
+        /// (plugins, patchers, config), и что в них лежит; глубже начинаются ресурсы модов.
+        /// </summary>
+        private const int ModsTreeMaxDepth = 2;
+
+        /// <summary>Сколько строк дерева BepInEx максимум попадает в бандл.</summary>
+        private const int ModsTreeMaxEntries = 120;
 
         /// <summary>
         /// Глубина обхода папки игр. Для разбора достаточно увидеть, какие игры установлены
@@ -37,18 +90,6 @@ namespace ChillHub.Core {
 
         /// <summary>Сколько строк дерева папки игр максимум попадает в бандл.</summary>
         private const int GamesTreeMaxEntries = 200;
-
-        /// <summary>
-        /// Человекочитаемый перечень того, что уходит в бандл. Показывается пользователю
-        /// в форме обратной связи: молча прикладывать конфиг и пути — нечестно.
-        /// </summary>
-        public static string[] BundleContents => new[] {
-            "настройки лаунчера (config.json): адрес сервера, папка для игр, параметры загрузки",
-            "версия лаунчера, версия Windows и .NET",
-            "список установленных игр (имена папок, без содержимого файлов)",
-            "последние записи журналов лаунчера и обновления",
-            "контрольные суммы файлов самого лаунчера",
-        };
 
         /// <summary>Общий бюджет на все секции логов: чтобы один болтливый файл не съел весь бандл.</summary>
         private sealed class LogBudget {
@@ -106,9 +147,25 @@ namespace ChillHub.Core {
                 catch (Exception ex) { sb.AppendLine($"(games listing error: {ex.Message})"); }
                 sb.AppendLine();
 
+                // Общий бюджет на всё, что читается с диска как текст. Секции тратят его по
+                // порядку следования, поэтому порядок здесь — это порядок важности.
+                var budget = new LogBudget();
+
+                // Моды живут ВНУТРИ папки игры: лаунчер их только раскладывает, дальше игру
+                // грузит doorstop, а плагины — BepInEx. Когда игра падает на старте, разбирать
+                // нечего без четырёх вещей: какой набор модов стоит (.mods.version), из чего он
+                // собран (манифест), чем его грузят (doorstop_config.ini) и что сказал сам
+                // загрузчик (LogOutput.log). Секция стоит ВЫШЕ логов лаунчера намеренно: логи
+                // лаунчера объёмнее и при общем бюджете вытеснили бы её целиком.
+                sb.AppendLine("## Mods");
+                try {
+                    AppendModsSections(sb, ChillHub.Core.ConfigService.Current.GamesPath, budget);
+                }
+                catch (Exception ex) { sb.AppendLine($"(mods error: {ex.Message})"); }
+                sb.AppendLine();
+
                 // Логи клиента: одна секция вместо прежних «Logs» + «Temp Logs».
                 // Путь берём у Logger, чтобы не разъезжаться с ним при переездах каталога.
-                var budget = new LogBudget();
                 sb.AppendLine("## Logs");
                 try {
                     var logsDir = ChillHub.Core.Logging.Logger.LogDirectory;
@@ -333,6 +390,202 @@ namespace ChillHub.Core {
             }
         }
 
+        /// <summary>
+        /// Пишет секцию «## Mods»: по одной подсекции на каждую игру со следами модов.
+        /// Ванильные игры пропускаются — их папки уже перечислены в дереве выше, и повторять
+        /// их здесь значит выкладывать наружу лишнее и тратить бюджет впустую.
+        /// </summary>
+        /// <param name="sb">Текст бандла.</param>
+        /// <param name="gamesRoot">Папка игр из конфига.</param>
+        /// <param name="budget">Общий бюджет на содержимое файлов.</param>
+        private static void AppendModsSections(StringBuilder sb, string gamesRoot, LogBudget budget) {
+            if (string.IsNullOrWhiteSpace(gamesRoot) || !Directory.Exists(gamesRoot)) {
+                sb.AppendLine("(games root not found)");
+                return;
+            }
+
+            string[] gameDirs;
+            try {
+                gameDirs = Directory.GetDirectories(gamesRoot);
+            }
+            catch (Exception ex) {
+                sb.AppendLine($"(games listing error: {ex.Message})");
+                return;
+            }
+
+            // Порядок обхода файловой системы не гарантирован, а бандлы разных запусков
+            // сравнивают глазами: стабильная сортировка экономит время при разборе.
+            Array.Sort(gameDirs, StringComparer.OrdinalIgnoreCase);
+
+            var reported = 0;
+            foreach (var gameDir in gameDirs) {
+                if (!HasModTraces(gameDir)) {
+                    continue;
+                }
+
+                if (reported >= ModsMaxGames) {
+                    sb.AppendLine($"(limit reached: {ModsMaxGames} modded games)");
+                    break;
+                }
+
+                reported++;
+                AppendGameMods(sb, gameDir, budget);
+            }
+
+            if (reported == 0) {
+                sb.AppendLine("(no modded games found)");
+            }
+        }
+
+        /// <summary>
+        /// Есть ли в папке игры хоть один след модов. Достаточно одного: набор бывает
+        /// снесён наполовину — например, файлы BepInEx остались, а метка версии пропала, —
+        /// и именно такие половинчатые установки и приходят в жалобах.
+        /// </summary>
+        /// <param name="gameDir">Папка игры.</param>
+        /// <returns><see langword="true"/>, если моды ставились.</returns>
+        private static bool HasModTraces(string gameDir) {
+            try {
+                return File.Exists(Path.Combine(gameDir, ModsVersionFileName))
+                    || File.Exists(Path.Combine(gameDir, ModsManifestFileName))
+                    || File.Exists(Path.Combine(gameDir, DoorstopConfigFileName))
+                    || Directory.Exists(Path.Combine(gameDir, BepInExDirName));
+            }
+            catch {
+                return false;
+            }
+        }
+
+        /// <summary>Пишет состояние модов одной игры.</summary>
+        /// <param name="sb">Текст бандла.</param>
+        /// <param name="gameDir">Папка игры.</param>
+        /// <param name="budget">Общий бюджет на содержимое файлов.</param>
+        private static void AppendGameMods(StringBuilder sb, string gameDir, LogBudget budget) {
+            var name = Path.GetFileName(gameDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            sb.AppendLine($"### {name}");
+
+            // Метка версии набора: одна строка, идёт целиком.
+            AppendModsSmallFile(sb, Path.Combine(gameDir, ModsVersionFileName), ModsVersionFileName, "text", budget);
+
+            // Манифест — только имя и размер. Внутри перечень всех файлов набора с хешами:
+            // он не помещается в бандл и для разбора не нужен, а вот его отсутствие или
+            // подозрительный размер — уже симптом.
+            sb.AppendLine($"#### {ModsManifestFileName}");
+            try {
+                var manifest = Path.Combine(gameDir, ModsManifestFileName);
+                if (File.Exists(manifest)) {
+                    sb.AppendLine($"- {ModsManifestFileName} [size={new FileInfo(manifest).Length} bytes]");
+                }
+                else {
+                    sb.AppendLine("(not found)");
+                }
+            }
+            catch (Exception ex) { sb.AppendLine($"(manifest error: {ex.Message})"); }
+
+            // doorstop_config.ini: правится руками чаще всего остального, и «моды не
+            // подхватываются» обычно объясняется именно им (enabled=false, чужой путь).
+            AppendModsSmallFile(sb, Path.Combine(gameDir, DoorstopConfigFileName), DoorstopConfigFileName, "ini", budget);
+
+            var bepInEx = Path.Combine(gameDir, BepInExDirName);
+            sb.AppendLine($"#### {BepInExDirName} (tree, depth={ModsTreeMaxDepth})");
+            if (Directory.Exists(bepInEx)) {
+                AppendModsTree(sb, bepInEx);
+            }
+            else {
+                sb.AppendLine("(not found)");
+            }
+
+            sb.AppendLine($"#### {BepInExDirName}/{BepInExLogFileName}");
+            var modsLog = Path.Combine(bepInEx, BepInExLogFileName);
+            if (File.Exists(modsLog)) {
+                AppendFileTail(sb, modsLog, ModsLogTailBytes, budget);
+            }
+            else {
+                sb.AppendLine("(not found)");
+            }
+        }
+
+        /// <summary>Пишет мелкий файл модов целиком (при неожиданном размере — его хвост).</summary>
+        /// <param name="sb">Текст бандла.</param>
+        /// <param name="path">Путь к файлу.</param>
+        /// <param name="title">Заголовок подсекции.</param>
+        /// <param name="fence">Язык блока кода в markdown.</param>
+        /// <param name="budget">Общий бюджет на содержимое файлов.</param>
+        private static void AppendModsSmallFile(StringBuilder sb, string path, string title, string fence, LogBudget budget) {
+            sb.AppendLine($"#### {title}");
+            if (!File.Exists(path)) {
+                sb.AppendLine("(not found)");
+                return;
+            }
+
+            AppendFileTail(sb, path, ModsSmallFileMaxBytes, budget, fence);
+        }
+
+        /// <summary>
+        /// Дерево папки BepInEx: и папки, и файлы. Файлы здесь важнее папок — по именам
+        /// dll видно, какие плагины стоят и не задвоился ли один из них.
+        /// </summary>
+        /// <param name="sb">Текст бандла.</param>
+        /// <param name="root">Папка BepInEx.</param>
+        private static void AppendModsTree(StringBuilder sb, string root) {
+            var emitted = 0;
+            var stopped = false;
+
+            void Walk(string dir, int depth) {
+                // Ровно ModsTreeMaxDepth уровней имён: BepInEx/plugins и BepInEx/plugins/*.dll.
+                if (depth >= ModsTreeMaxDepth || stopped) {
+                    return;
+                }
+
+                var indent = "  " + new string(' ', depth * 2);
+                foreach (var d in SafeGetDirs(dir)) {
+                    if (Stop()) {
+                        return;
+                    }
+
+                    sb.AppendLine(indent + "- " + Path.GetFileName(d.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) + "/");
+                    emitted++;
+                    Walk(d, depth + 1);
+                    if (stopped) {
+                        return;
+                    }
+                }
+
+                foreach (var f in SafeGetFiles(dir)) {
+                    if (Stop()) {
+                        return;
+                    }
+
+                    long size;
+                    try { size = new FileInfo(f).Length; }
+                    catch { size = -1; }
+                    sb.AppendLine(indent + "- " + Path.GetFileName(f) + (size >= 0 ? $" [{size} bytes]" : string.Empty));
+                    emitted++;
+                }
+            }
+
+            Walk(root, 0);
+            if (emitted == 0) {
+                sb.AppendLine("(empty)");
+            }
+
+            bool Stop() {
+                if (emitted < ModsTreeMaxEntries) {
+                    return false;
+                }
+
+                if (!stopped) {
+                    stopped = true;
+                    sb.AppendLine($"(limit reached: {ModsTreeMaxEntries} entries)");
+                }
+
+                return true;
+            }
+
+            static IEnumerable<string> SafeGetDirs(string p) { try { return Directory.GetDirectories(p); } catch { return Array.Empty<string>(); } }
+            static IEnumerable<string> SafeGetFiles(string p) { try { return Directory.GetFiles(p); } catch { return Array.Empty<string>(); } }
+        }
+
         private static void AppendDirHashes(StringBuilder sb, string root, int maxFiles, int maxBytesPerFile) {
             try {
                 if (!Directory.Exists(root)) { sb.AppendLine($"(not found: {root})"); return; }
@@ -428,37 +681,69 @@ namespace ChillHub.Core {
                     if (used >= maxFiles) { sb.AppendLine($"(limit reached: {maxFiles} files)"); break; }
                     if (budget.Remaining <= 0) { sb.AppendLine("(log budget exhausted; remaining files omitted)"); break; }
 
-                    // Не даём одному болтливому файлу съесть весь бандл: сервер режет всё,
-                    // что больше feedbackMaxLogBytes, и обрезка была бы молчаливой.
-                    var allowance = Math.Min(maxTailBytes, budget.Remaining);
                     sb.AppendLine($"### {f}");
-                    try {
-                        byte[] bytes;
-                        using (var fs = OpenShared(f)) {
-                            bytes = new byte[fs.Length];
-                            fs.ReadExactly(bytes);
-                        }
-
-                        if (bytes.Length > allowance) {
-                            var tail = new byte[allowance];
-                            Buffer.BlockCopy(bytes, bytes.Length - allowance, tail, 0, allowance);
-                            sb.AppendLine("```log");
-                            sb.AppendLine(Encoding.UTF8.GetString(tail));
-                            sb.AppendLine("```\n(tail only)");
-                            budget.Remaining -= allowance;
-                        }
-                        else {
-                            sb.AppendLine("```log");
-                            sb.AppendLine(Encoding.UTF8.GetString(bytes));
-                            sb.AppendLine("```");
-                            budget.Remaining -= bytes.Length;
-                        }
-                    }
-                    catch (Exception ex) { sb.AppendLine($"(read error: {ex.Message})"); }
+                    AppendFileTail(sb, f, maxTailBytes, budget);
                     used++;
                 }
             }
             catch (Exception ex) { sb.AppendLine($"(specific logs error: {ex.Message})"); }
+        }
+
+        /// <summary>
+        /// Дописывает содержимое файла (при превышении бюджета — только его хвост) и
+        /// списывает потраченное с общего бюджета.
+        /// <para>
+        /// Не даём одному болтливому файлу съесть весь бандл: сервер режет всё, что больше
+        /// feedbackMaxLogBytes, и обрезка была бы молчаливой. Хвост, а не начало: момент
+        /// отказа всегда в конце файла.
+        /// </para>
+        /// <para>
+        /// Заголовок пишет вызывающий: у журналов лаунчера это полный путь, у секции модов —
+        /// имя файла внутри игры.
+        /// </para>
+        /// </summary>
+        /// <param name="sb">Текст бандла.</param>
+        /// <param name="file">Путь к файлу.</param>
+        /// <param name="maxTailBytes">Потолок на этот файл.</param>
+        /// <param name="budget">Общий бюджет на содержимое файлов.</param>
+        /// <param name="fence">Язык блока кода в markdown.</param>
+        private static void AppendFileTail(StringBuilder sb, string file, int maxTailBytes, LogBudget budget, string fence = "log") {
+            if (budget.Remaining <= 0) {
+                sb.AppendLine("(log budget exhausted; file omitted)");
+                return;
+            }
+
+            var allowance = Math.Min(maxTailBytes, budget.Remaining);
+            try {
+                byte[] bytes;
+                bool trimmed;
+                using (var fs = OpenShared(file)) {
+                    // Читаем сразу хвост, а не файл целиком: журнал загрузчика модов у
+                    // игрока с полусотней плагинов бывает в десятки мегабайт, и прежнее
+                    // чтение целиком поднимало их в память ради 48 КиБ.
+                    var length = fs.Length;
+                    var take = (int)Math.Min(length, allowance);
+                    trimmed = length > take;
+                    if (trimmed) {
+                        fs.Seek(length - take, SeekOrigin.Begin);
+                    }
+
+                    bytes = new byte[take];
+                    fs.ReadExactly(bytes);
+                }
+
+                sb.AppendLine("```" + fence);
+                sb.AppendLine(Encoding.UTF8.GetString(bytes));
+                if (trimmed) {
+                    sb.AppendLine("```\n(tail only)");
+                }
+                else {
+                    sb.AppendLine("```");
+                }
+
+                budget.Remaining -= bytes.Length;
+            }
+            catch (Exception ex) { sb.AppendLine($"(read error: {ex.Message})"); }
         }
     }
 }

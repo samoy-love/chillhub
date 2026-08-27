@@ -1,4 +1,4 @@
-<Page x:Class="ChillHub.Pages.HomePage"
+﻿<Page x:Class="ChillHub.Pages.HomePage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:sys="clr-namespace:System;assembly=mscorlib"
@@ -636,6 +636,12 @@
                         <MenuItem Header="Подробнее об игре" Click="GameDetails_Click" CommandParameter="{Binding}"/>
                         <MenuItem Header="Добавить в очередь загрузок" Click="EnqueueGame_Click" CommandParameter="{Binding}"/>
                         <MenuItem Header="Открыть расположение игры" Click="OpenGameFolder_Click" CommandParameter="{Binding}"/>
+                        <!-- Единственный способ поставить модпак игре, которой на сервере нет:
+                             она есть только в Steam, и общий конвейер обновления её не касается.
+                             Подпись и доступность выставляются в GameItem_ContextMenuOpening,
+                             Tag — чтобы найти пункт там, не завися от текста подписи. -->
+                        <MenuItem Header="Поставить моды в Steam-копию" Click="InstallModsToSteam_Click"
+                                  CommandParameter="{Binding}" Tag="steam-mods"/>
                         <!-- Удаление отделено чертой и покрашено: в столбце одинаковых строк
                              оно стояло сразу под «Открыть расположение» и ловило промахи. -->
                         <Separator/>
@@ -1300,16 +1306,100 @@
       </Border>
     </Grid>
 
-    <!-- Feedback modal overlay -->
+    <!-- Модальная форма обратной связи. RowSpan на все четыре строки корневого Grid:
+         затемнение обязано накрыть и шапку, и ленту, иначе сквозь «модальное» окно
+         остаются нажимаемыми кнопки под ним. -->
     <Grid x:Name="FeedbackOverlay" Visibility="Collapsed" Background="#C0000000"
           HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Grid.RowSpan="4">
-      <!-- Shadow layer (no effects on content to keep text crisp) -->
+      <Grid.Resources>
+        <!-- Один шаблон на все поля формы. Штатный TextBox рисует прямой угол и ничем не
+             отмечает фокус: рядом со скруглёнными кнопками и ComboBox (Radius.M) он читался
+             как поле из чужого приложения. Общий шаблон нужен ещё и затем, чтобы рамка,
+             скругление и подсветка фокуса не разъезжались между однострочными полями и
+             полем сообщения. -->
+        <ControlTemplate x:Key="Template.Fb.Field" TargetType="TextBox">
+          <Border x:Name="bd"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}"
+                  CornerRadius="{StaticResource Radius.M}"
+                  SnapsToDevicePixels="True">
+            <ScrollViewer x:Name="PART_ContentHost"
+                          Margin="{TemplateBinding Padding}"
+                          Focusable="False"
+                          VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                          HorizontalScrollBarVisibility="Hidden"
+                          VerticalScrollBarVisibility="Auto"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
+            </Trigger>
+            <!-- Фокус — акцентом: в форме четыре поля подряд, и без подсветки непонятно,
+                 куда именно попадёт набранный текст. -->
+            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Accent}"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+
+        <!-- Подпись над полем. Одна на все четыре: раньше каждая несла свои FontSize и
+             Foreground, и «Тип» отличался от соседей отступом. -->
+        <Style x:Key="Style.Fb.Label" TargetType="TextBlock">
+          <Setter Property="FontSize" Value="13"/>
+          <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
+          <Setter Property="Margin" Value="0,0,0,6"/>
+        </Style>
+
+        <!-- Однострочное поле. Margin="0" обязателен: тема задаёт полям Margin="0,0,8,0",
+             и без сброса правая колонка формы уезжала на эти 8px от края карточки.
+             Padding="8,0" + рамка = 9px до текста — ровно столько же отступает ContentSite
+             в шаблоне ComboBox, поэтому «Имя», «Контакт» и «Тип» начинаются по одной линии. -->
+        <Style x:Key="Style.Fb.Field" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+          <Setter Property="Template" Value="{StaticResource Template.Fb.Field}"/>
+          <Setter Property="Margin" Value="0"/>
+          <Setter Property="Height" Value="36"/>
+          <Setter Property="Padding" Value="8,0"/>
+          <Setter Property="FontSize" Value="14"/>
+          <Setter Property="VerticalContentAlignment" Value="Center"/>
+          <Setter Property="CaretBrush" Value="{DynamicResource Brush.Text}"/>
+        </Style>
+
+        <!-- Поле сообщения: та же рамка, но текст с верхнего края и перенос по словам. -->
+        <Style x:Key="Style.Fb.Field.Multiline" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+          <Setter Property="Template" Value="{StaticResource Template.Fb.Field}"/>
+          <Setter Property="Margin" Value="0"/>
+          <Setter Property="Padding" Value="8,8"/>
+          <Setter Property="FontSize" Value="14"/>
+          <Setter Property="MinHeight" Value="120"/>
+          <Setter Property="AcceptsReturn" Value="True"/>
+          <Setter Property="TextWrapping" Value="Wrap"/>
+          <Setter Property="VerticalContentAlignment" Value="Top"/>
+          <Setter Property="CaretBrush" Value="{DynamicResource Brush.Text}"/>
+        </Style>
+
+        <!-- Подсказка внутри пустого поля. По умолчанию СКРЫТА и показывается только на
+             пустом поле: прежний вариант оставлял её видимой поверх набранного текста,
+             стоило увести фокус из поля. Отступ 9px повторяет отступ текста в поле —
+             подсказка стоит ровно там, где появится первый символ. -->
+        <Style x:Key="Style.Fb.Hint" TargetType="TextBlock">
+          <Setter Property="Visibility" Value="Collapsed"/>
+          <Setter Property="IsHitTestVisible" Value="False"/>
+          <Setter Property="FontSize" Value="14"/>
+          <Setter Property="Foreground" Value="{DynamicResource Brush.TextMuted}"/>
+          <Setter Property="VerticalAlignment" Value="Center"/>
+          <Setter Property="Margin" Value="9,0,9,0"/>
+        </Style>
+      </Grid.Resources>
+
+      <!-- Тень: отдельный слой на 6px ниже карточки, а не Effect на ней. Размытие поверх
+           содержимого делает текст мыльным, поэтому карточка остаётся без эффектов. -->
       <Border Width="720" HorizontalAlignment="Center" VerticalAlignment="Stretch" Margin="0,40,0,34"
               CornerRadius="12" Background="#000000" Opacity="0.22"
               SnapsToDevicePixels="True" UseLayoutRounding="True"/>
-      <!-- Content card (sharp text). VerticalAlignment=Stretch + Margin caps the card to the
-           window height instead of Center's unbounded height, which is what let the message
-           field run off the bottom of the screen on smaller windows. -->
+
+      <!-- Карточка. VerticalAlignment=Stretch + Margin ограничивают её высотой окна: при
+           Center высота не ограничена ничем, и поле сообщения убегало за нижний край экрана. -->
       <Border Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderHover}" BorderThickness="1" CornerRadius="10"
               Padding="20" Width="720" HorizontalAlignment="Center" VerticalAlignment="Stretch" Margin="0,40,0,40"
               SnapsToDevicePixels="True" UseLayoutRounding="True"
@@ -1319,192 +1409,135 @@
         <Grid SnapsToDevicePixels="True" UseLayoutRounding="True"
               TextOptions.TextRenderingMode="ClearType" TextOptions.TextFormattingMode="Display" TextOptions.TextHintingMode="Fixed">
           <Grid.RowDefinitions>
+            <!-- шапка -->
             <RowDefinition Height="Auto"/>
+            <!-- имя, контакт, тип -->
             <RowDefinition Height="Auto"/>
+            <!-- подпись «Сообщение» -->
+            <RowDefinition Height="Auto"/>
+            <!-- поле сообщения — единственное, что растёт вместе с окном -->
             <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
+            <!-- статус и кнопки -->
             <RowDefinition Height="Auto"/>
           </Grid.RowDefinitions>
+          <!-- Три равные колонки под короткие поля и два промежутка по 16px между ними.
+               Промежуток — отдельной колонкой, а не отступом у полей: с отступами крайнее
+               поле получалось на 16px шире соседей, потому что справа от него отступа нет.
+               Форма при этом не растягивается на пол-экрана из-за трёх строк по одному
+               полю, а ширина карточки фиксирована (720 при MinWidth окна 980), так что
+               колонки не схлопываются. -->
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="16"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="16"/>
             <ColumnDefinition Width="*"/>
           </Grid.ColumnDefinitions>
-          <!-- Header with title and close (X) -->
-          <TextBlock Grid.Row="0" Grid.Column="0" Text="Обратная связь" FontSize="20" FontWeight="SemiBold"/>
-          <Button Grid.Row="0" Grid.Column="1" Content="✕" Width="28" Height="28" HorizontalAlignment="Right" VerticalAlignment="Top"
-                  Style="{StaticResource Style.Button.GhostNeutral}" Padding="0"
+
+          <!-- Шапка: заголовок и крестик. Оба занимают всю ширину строки, поэтому у
+               заголовка правый отступ — иначе длинный заголовок уехал бы под крестик. -->
+          <TextBlock Grid.Row="0" Grid.ColumnSpan="5" Text="Обратная связь"
+                     Style="{DynamicResource Style.PageTitle}" Margin="0,0,36,0"/>
+          <Button Grid.Row="0" Grid.ColumnSpan="5" Content="✕" Width="28" Height="28"
+                  HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0" Padding="0"
+                  Style="{DynamicResource Style.Button.GhostNeutral}"
                   ToolTip="Закрыть" Click="FbCancel_Click"/>
-          <!-- Name field with watermark -->
-          <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,12,12,12">
-            <TextBlock Text="Имя" FontSize="13" Foreground="{DynamicResource Brush.TextSecondary}"/>
+
+          <!-- Имя -->
+          <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,20,0,0">
+            <TextBlock Text="Имя" Style="{StaticResource Style.Fb.Label}"/>
             <Grid>
-              <TextBox x:Name="FbName" Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" Padding="10,8" TextChanged="FbField_Changed"
-                       Foreground="{DynamicResource Brush.Text}" FontSize="14"/>
-              <TextBlock Text="Ваше имя" IsHitTestVisible="False" Margin="12,8,8,8"
-                         Foreground="{DynamicResource Brush.TextSecondary}">
+              <TextBox x:Name="FbName" Style="{StaticResource Style.Fb.Field}" TextChanged="FbField_Changed"/>
+              <TextBlock Text="Ваше имя">
                 <TextBlock.Style>
-                  <Style TargetType="TextBlock">
-                    <Setter Property="Visibility" Value="Visible"/>
+                  <Style TargetType="TextBlock" BasedOn="{StaticResource Style.Fb.Hint}">
                     <Style.Triggers>
                       <DataTrigger Binding="{Binding Text, ElementName=FbName}" Value="">
                         <Setter Property="Visibility" Value="Visible"/>
                       </DataTrigger>
-                      <DataTrigger Binding="{Binding IsKeyboardFocused, ElementName=FbName}" Value="True">
-                        <Setter Property="Visibility" Value="Collapsed"/>
-                      </DataTrigger>
-                      <DataTrigger Binding="{Binding Text.Length, ElementName=FbName}" Value="0">
-                        <Setter Property="Visibility" Value="Visible"/>
-                      </DataTrigger>
-                      <!-- Removed problematic x:Static comparison which could break StaticExtension resolution on some targets -->
                     </Style.Triggers>
                   </Style>
                 </TextBlock.Style>
               </TextBlock>
             </Grid>
           </StackPanel>
-          <!-- Contact field with watermark -->
-          <StackPanel Grid.Row="1" Grid.Column="1" Margin="12,12,0,12">
-            <TextBlock Text="Контакт" FontSize="13" Foreground="{DynamicResource Brush.TextSecondary}"/>
+
+          <!-- Контакт -->
+          <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,20,0,0">
+            <TextBlock Text="Контакт" Style="{StaticResource Style.Fb.Label}"/>
             <Grid>
-              <TextBox x:Name="FbContact" Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" Padding="10,8" TextChanged="FbField_Changed"
-                       Foreground="{DynamicResource Brush.Text}" FontSize="14"/>
-              <TextBlock Text="Telegram или email" IsHitTestVisible="False" Margin="12,8,8,8"
-                         Foreground="{DynamicResource Brush.TextSecondary}">
+              <TextBox x:Name="FbContact" Style="{StaticResource Style.Fb.Field}" TextChanged="FbField_Changed"/>
+              <TextBlock Text="Telegram или email">
                 <TextBlock.Style>
-                  <Style TargetType="TextBlock">
-                    <Setter Property="Visibility" Value="Visible"/>
+                  <Style TargetType="TextBlock" BasedOn="{StaticResource Style.Fb.Hint}">
                     <Style.Triggers>
                       <DataTrigger Binding="{Binding Text, ElementName=FbContact}" Value="">
                         <Setter Property="Visibility" Value="Visible"/>
                       </DataTrigger>
-                      <DataTrigger Binding="{Binding IsKeyboardFocused, ElementName=FbContact}" Value="True">
-                        <Setter Property="Visibility" Value="Collapsed"/>
-                      </DataTrigger>
-                      <DataTrigger Binding="{Binding Text.Length, ElementName=FbContact}" Value="0">
-                        <Setter Property="Visibility" Value="Visible"/>
-                      </DataTrigger>
                     </Style.Triggers>
                   </Style>
                 </TextBlock.Style>
               </TextBlock>
             </Grid>
           </StackPanel>
-          <Grid Grid.Row="2" Grid.ColumnSpan="2" Margin="0,0,0,4">
-            <Grid.RowDefinitions>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="*"/>
-            </Grid.RowDefinitions>
-            <!-- Подпись над полем, как у «Имя» и «Контакт» выше: строка «Тип: [▾]» была
-                 единственным полем формы с подписью слева и ломала ритм колонки. -->
-            <StackPanel Grid.Row="0" Margin="0,0,0,12">
-              <TextBlock Text="Тип" FontSize="13" Foreground="{DynamicResource Brush.TextSecondary}"/>
-              <ComboBox x:Name="FbType" Width="220" HorizontalAlignment="Left" Margin="0">
-                <ComboBoxItem Content="Баг"/>
-                <ComboBoxItem Content="Идея"/>
-                <ComboBoxItem Content="Вопрос"/>
-                <ComboBoxItem Content="Другое"/>
-              </ComboBox>
-            </StackPanel>
-            <TextBlock Grid.Row="1" Text="Сообщение" FontSize="13" Foreground="{DynamicResource Brush.TextSecondary}"/>
-            <!-- Row is "*", а не Auto: карточка теперь ограничена высотой окна (см. VerticalAlignment=Stretch
-                 у Border выше), и поле обязано СЖИМАТЬСЯ вместе с ней, а не тащить фиксированные 260px за
-                 собой — раньше это и обрезало поле снизу на невысоких окнах. Прокрутка внутри поля (атрибут
-                 ниже) при этом остаётся: длинный текст скроллится, а не растягивает карточку дальше. -->
-            <Grid Grid.Row="2">
-              <TextBox x:Name="FbComment" AcceptsReturn="True" MinHeight="100" VerticalAlignment="Stretch" TextWrapping="Wrap" TextChanged="FbField_Changed"
-                       Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" Padding="10,8"
-                       Foreground="{DynamicResource Brush.Text}" FontSize="14"
-                       ScrollViewer.VerticalScrollBarVisibility="Auto">
-                <TextBox.Resources>
-                  <!-- Thin rounded scrollbar (applies within this TextBox) -->
-                  <Style TargetType="ScrollBar">
-                    <Setter Property="Width" Value="8"/>
-                    <Setter Property="Template">
-                      <Setter.Value>
-                        <ControlTemplate TargetType="ScrollBar">
-                          <Grid Width="8" Background="Transparent">
-                            <Border CornerRadius="4" Background="#202020"/>
-                            <Track Name="PART_Track" IsDirectionReversed="true">
-                              <Track.Thumb>
-                                <Thumb Background="#606060">
-                                  <Thumb.Template>
-                                    <ControlTemplate TargetType="Thumb">
-                                      <Border Background="{TemplateBinding Background}" CornerRadius="4"/>
-                                    </ControlTemplate>
-                                  </Thumb.Template>
-                                </Thumb>
-                              </Track.Thumb>
-                            </Track>
-                          </Grid>
-                        </ControlTemplate>
-                      </Setter.Value>
-                    </Setter>
-                  </Style>
-                </TextBox.Resources>
-              </TextBox>
-              <TextBlock Text="Опишите сообщение или идею" IsHitTestVisible="False" Margin="12,10,8,8"
-                         Foreground="{DynamicResource Brush.TextSecondary}">
-                <TextBlock.Style>
-                  <Style TargetType="TextBlock">
-                    <Setter Property="Visibility" Value="Visible"/>
-                    <Style.Triggers>
-                      <DataTrigger Binding="{Binding Text, ElementName=FbComment}" Value="">
-                        <Setter Property="Visibility" Value="Visible"/>
-                      </DataTrigger>
-                      <DataTrigger Binding="{Binding IsKeyboardFocused, ElementName=FbComment}" Value="True">
-                        <Setter Property="Visibility" Value="Collapsed"/>
-                      </DataTrigger>
-                      <DataTrigger Binding="{Binding Text.Length, ElementName=FbComment}" Value="0">
-                        <Setter Property="Visibility" Value="Visible"/>
-                      </DataTrigger>
-                    </Style.Triggers>
-                  </Style>
-                </TextBlock.Style>
-              </TextBlock>
-            </Grid>
+
+          <!-- Тип. Подпись сверху, как у соседей: строка «Тип: [v]» с подписью слева была
+               единственным полем формы с другим устройством и ломала ритм ряда.
+               Height=36 повторяет высоту полей — иначе ComboBox (MinHeight 34) стоял бы
+               на два пикселя ниже соседей по ряду. -->
+          <StackPanel Grid.Row="1" Grid.Column="4" Margin="0,20,0,0">
+            <TextBlock Text="Тип" Style="{StaticResource Style.Fb.Label}"/>
+            <ComboBox x:Name="FbType" Margin="0" Height="36">
+              <ComboBoxItem Content="Баг"/>
+              <ComboBoxItem Content="Идея"/>
+              <ComboBoxItem Content="Вопрос"/>
+              <ComboBoxItem Content="Другое"/>
+            </ComboBox>
+          </StackPanel>
+
+          <TextBlock Grid.Row="2" Grid.ColumnSpan="5" Text="Сообщение"
+                     Style="{StaticResource Style.Fb.Label}" Margin="0,20,0,6"/>
+
+          <!-- Строка "*": карточка ограничена высотой окна, и поле обязано СЖИМАТЬСЯ вместе
+               с ней, а не тащить за собой фиксированную высоту — именно это обрезало поле
+               снизу на невысоких окнах. Длинный текст прокручивается внутри поля. -->
+          <Grid Grid.Row="3" Grid.ColumnSpan="5">
+            <TextBox x:Name="FbComment" Style="{StaticResource Style.Fb.Field.Multiline}" TextChanged="FbField_Changed"/>
+            <TextBlock Text="Опишите проблему или идею">
+              <TextBlock.Style>
+                <Style TargetType="TextBlock" BasedOn="{StaticResource Style.Fb.Hint}">
+                  <!-- Многострочное поле: подсказка стоит у верхнего края, где и каретка -->
+                  <Setter Property="VerticalAlignment" Value="Top"/>
+                  <Setter Property="Margin" Value="9,9,9,0"/>
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding Text, ElementName=FbComment}" Value="">
+                      <Setter Property="Visibility" Value="Visible"/>
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </TextBlock.Style>
+            </TextBlock>
           </Grid>
-          <!-- Что уходит вместе с сообщением: показываем честно и даём выключить. Стоит
-               ВЫШЕ кнопок — решение «прикладывать ли» принимается до «Отправить», а не
-               после. Подробный перечень свёрнут за ссылкой: абзац на шесть строк
-               мелким серым под каждой формой читали единицы, а форму он удлинял всем. -->
-          <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Margin="0,14,0,0">
-            <CheckBox x:Name="FbAttachDiagnostics" IsChecked="True" Click="FbAttachDiagnostics_Click"
-                      Content="Приложить техническую информацию (помогает найти причину)"
-                      Foreground="{DynamicResource Brush.Text}" FontSize="13"/>
-            <ToggleButton x:Name="FbDiagnosticsToggle" Margin="26,4,0,0" HorizontalAlignment="Left"
-                          Background="Transparent" BorderThickness="0" Padding="0" Cursor="Hand"
-                          Foreground="{DynamicResource Brush.TextSecondary}" FontSize="12">
-              <ToggleButton.Template>
-                <ControlTemplate TargetType="ToggleButton">
-                  <StackPanel Orientation="Horizontal" Background="Transparent">
-                    <TextBlock x:Name="chev" FontFamily="Segoe MDL2 Assets" Text="&#xE76C;" FontSize="9"
-                               VerticalAlignment="Center" Margin="0,1,6,0"
-                               Foreground="{TemplateBinding Foreground}"/>
-                    <TextBlock Text="Что именно отправится" VerticalAlignment="Center"
-                               Foreground="{TemplateBinding Foreground}"/>
-                  </StackPanel>
-                  <ControlTemplate.Triggers>
-                    <Trigger Property="IsChecked" Value="True">
-                      <Setter TargetName="chev" Property="Text" Value="&#xE70D;"/>
-                    </Trigger>
-                    <Trigger Property="IsMouseOver" Value="True">
-                      <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
-                    </Trigger>
-                  </ControlTemplate.Triggers>
-                </ControlTemplate>
-              </ToggleButton.Template>
-            </ToggleButton>
-            <TextBlock x:Name="FbDiagnosticsInfo" Margin="26,6,0,0" TextWrapping="Wrap" FontSize="12"
-                       Foreground="{DynamicResource Brush.TextSecondary}"
-                       Visibility="{Binding IsChecked, ElementName=FbDiagnosticsToggle, Converter={StaticResource BoolToVisibilityConv}}"/>
-          </StackPanel>
-          <StackPanel Grid.Row="4" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0" >
-            <TextBlock x:Name="FbStatus" Margin="0,0,12,0" VerticalAlignment="Center" Foreground="{DynamicResource Brush.TextSecondary}"/>
-            <Button Content="Отмена" Width="120" Height="36" FontSize="13" FontWeight="SemiBold" Padding="12,6" Margin="0,0,8,0" Click="FbCancel_Click" Style="{DynamicResource Style.Button.GhostNeutral}"/>
-            <!-- Главная кнопка — правая, крайняя: так стоят кнопки во всех диалогах Windows -->
-            <Button x:Name="FbSendBtn" Content="Отправить" Click="FbSend_Click" Margin="0" Style="{DynamicResource Style.Button.Primary}"/>
-          </StackPanel>
+
+          <Grid Grid.Row="4" Grid.ColumnSpan="5" Margin="0,20,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <!-- Статус — в своей колонке, а не в одном ряду с кнопками: длинная строка
+                 («Лимит ручных отправок исчерпан. Повторите через ~N мин.») сдвигала
+                 кнопки влево, и «Отправить» переставала быть крайней правой. -->
+            <TextBlock x:Name="FbStatus" Grid.Column="0" VerticalAlignment="Center"
+                       Margin="0,0,12,0" TextTrimming="CharacterEllipsis"
+                       Foreground="{DynamicResource Brush.TextSecondary}"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+              <Button Content="Отмена" Width="120" Height="36" FontSize="13" FontWeight="SemiBold"
+                      Margin="0,0,8,0" Click="FbCancel_Click" Style="{DynamicResource Style.Button.GhostNeutral}"/>
+              <!-- Главная кнопка — правая, крайняя: так стоят кнопки во всех диалогах Windows -->
+              <Button x:Name="FbSendBtn" Content="Отправить" Margin="0" Click="FbSend_Click"
+                      Style="{DynamicResource Style.Button.Primary}"/>
+            </StackPanel>
+          </Grid>
         </Grid>
       </Border>
     </Grid>
