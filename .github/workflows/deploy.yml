@@ -298,40 +298,77 @@ jobs:
           # изменений»): точка отсчёта — коммит, который РЕАЛЬНО стоит на проде, а
           # не то, что было до этого пуша.
           #
-          # У `changes` диапазон один на все пять целей, а живой коммит есть не у
-          # каждой (WRITE_VERSION_FILE=0 — version.json не раздаётся, это законная
-          # норма, а не поломка). Поэтому берём САМЫЙ СТАРЫЙ живой коммит среди
-          # целей, у которых VERSION_URL вообще есть: это надмножество диапазона,
-          # который нужен любой отдельной цели, а цена ошибки в эту сторону —
-          # лишний прогон гейтов, не недокат. Цели без VERSION_URL остаются на
-          # диапазоне пуша — не тихо, см. warning ниже.
-          LIVE_BASE=""
-          for ENV in .deploy-kit/site.env .deploy-kit/api.env .deploy-kit/admin.env .deploy-kit/admin-ui.env; do
-            [ -f "$ENV" ] || continue
-            VURL=$(sed -n 's/^VERSION_URL=//p' "$ENV" | head -1)
-            [ -n "$VURL" ] || continue
+          # ТОЧКА ОТСЧЁТА У КАЖДОЙ ЦЕЛИ СВОЯ, И ЭТО ВАЖНО.
+          #
+          # Живой коммит есть не у каждой цели (WRITE_VERSION_FILE=0 —
+          # version.json не раздаётся, это законная норма, а не поломка).
+          # Раньше отсюда брался САМЫЙ СТАРЫЙ живой коммит среди всех целей —
+          # как надмножество: «лишний прогон гейтов дешевле недоката».
+          #
+          # Для клиента это неверно, и стоило красной выкатки на каждом пуше.
+          # Сайт катится только когда меняется landing/, то есть его
+          # version.json ЗАКОННО отстаёт месяцами — и именно он становился
+          # общей точкой отсчёта. Диапазон растягивался назад до последней
+          # правки лаунчера, client=true, установщик пересобирался при
+          # неизменном <Version>; сборка .NET не побайтово повторима, и
+          # админка отвечает на такую публикацию 409 «версия уже
+          # опубликована». Шесть повторов по пятнадцать минут, job в timeout,
+          # красный деплой — и так до следующей правки landing/.
+          #
+          # Поэтому сайт считается от своего живого коммита, серверная тройка —
+          # от самого старого среди серверных целей с VERSION_URL (они
+          # собираются из одного модуля и катятся вместе), а клиент — строго по
+          # диапазону пуша. Расширять диапазон клиенту НЕЛЬЗЯ: лишняя
+          # пересборка установщика не безвредна, она обязана падать.
+          #
+          # live_commit печатает живой коммит цели или пусто.
+          live_commit() {
+            [ -f "$1" ] || return 0
+            VURL=$(sed -n 's/^VERSION_URL=//p' "$1" | head -1)
+            [ -n "$VURL" ] || return 0
             VJ=$(curl -fsS --max-time 10 "$VURL" 2>/dev/null | tr ',' '\n')
             COMMIT=$(printf '%s\n' "$VJ" | sed -n 's/.*"commit"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
             if [ -z "$COMMIT" ] || ! git cat-file -e "$COMMIT^{commit}" 2>/dev/null; then
-              echo "::warning::$ENV — прод не сказал, что на нём стоит (нет ответа или version.json без commit) — эта цель подстрахована только диапазоном пуша"
-              continue
+              echo "::warning::$1 — прод не сказал, что на нём стоит (нет ответа или version.json без commit) — эта цель подстрахована только диапазоном пуша" >&2
+              return 0
             fi
-            if [ -z "$LIVE_BASE" ] || git merge-base --is-ancestor "$COMMIT" "$LIVE_BASE" 2>/dev/null; then
-              LIVE_BASE="$COMMIT"
+            printf '%s' "$COMMIT"
+          }
+
+          # older_of печатает более старый из двух коммитов; пустой первый
+          # аргумент значит «живого коммита нет» — остаётся второй.
+          older_of() {
+            [ -n "$1" ] || { printf '%s' "$2"; return 0; }
+            if git merge-base --is-ancestor "$1" "$2" 2>/dev/null; then
+              printf '%s' "$1"
+            else
+              printf '%s' "$2"
             fi
+          }
+
+          BASE_SITE=$(older_of "$(live_commit .deploy-kit/site.env)" "$BASE")
+
+          BASE_SERVER="$BASE"
+          for ENV in .deploy-kit/api.env .deploy-kit/admin.env .deploy-kit/admin-ui.env; do
+            BASE_SERVER=$(older_of "$(live_commit "$ENV")" "$BASE_SERVER")
           done
-          if [ -n "$LIVE_BASE" ] && git merge-base --is-ancestor "$LIVE_BASE" "$BASE" 2>/dev/null; then
-            echo "живой прод старше диапазона пуша ($LIVE_BASE) — беру его точкой отсчёта"
-            BASE="$LIVE_BASE"
-          fi
+
+          BASE_CLIENT="$BASE"
 
           # Первый коммит в истории (или ветка без родителя после force-push):
           # сравнивать не с чем. Не «ничего не менялось», а «менялось всё» —
           # пустой вывод здесь означал бы тихий пропуск всех четырёх целей.
-          git rev-parse -q --verify "$BASE" >/dev/null || all 'не с чем сравнивать — катим всё'
+          for B in "$BASE_SITE" "$BASE_SERVER" "$BASE_CLIENT"; do
+            git rev-parse -q --verify "$B" >/dev/null || all 'не с чем сравнивать — катим всё'
+          done
 
-          echo "диапазон: $BASE..HEAD"
-          FILES=$(git diff --name-only "$BASE" HEAD)
+          echo "диапазоны: сайт $BASE_SITE..HEAD, сервер $BASE_SERVER..HEAD, клиент $BASE_CLIENT..HEAD"
+          FILES_SITE=$(git diff --name-only "$BASE_SITE" HEAD)
+          FILES_SERVER=$(git diff --name-only "$BASE_SERVER" HEAD)
+          FILES_CLIENT=$(git diff --name-only "$BASE_CLIENT" HEAD)
+          # FILES — объединение: по нему решается «катим всё», и там надмножество
+          # как раз то, что нужно.
+          FILES=$(printf '%s\n%s\n%s\n' "$FILES_SITE" "$FILES_SERVER" "$FILES_CLIENT" | grep -v '^$' | sort -u)
           echo "изменилось:"; echo "$FILES" | sed 's/^/  /'
 
           echo "$FILES" | grep -qE '^(\.github/workflows/deploy\.yml|\.deploy-kit/)' \
@@ -340,20 +377,20 @@ jobs:
           # Конфиги линтеров — часть гейта обеих статических целей.
           LINT='\.htmlhintrc|\.stylelintrc\.json|\.stylelintignore'
 
-          echo "$FILES" | grep -qE "^(landing/|$LINT)"          && SITE=true  || SITE=false
-          echo "$FILES" | grep -qE "^(server/admin_ui/|$LINT)"  && UI=true    || UI=false
+          echo "$FILES_SITE"   | grep -qE "^(landing/|$LINT)"         && SITE=true  || SITE=false
+          echo "$FILES_SERVER" | grep -qE "^(server/admin_ui/|$LINT)" && UI=true    || UI=false
 
           # Админка тянет весь internal, поэтому здесь достаточно одного грепа.
-          echo "$FILES" | grep -qE '^server/(cmd/admin/|internal/|[^/]+$)' && ADMIN=true || ADMIN=false
+          echo "$FILES_SERVER" | grep -qE '^server/(cmd/admin/|internal/|[^/]+$)' && ADMIN=true || ADMIN=false
 
           # API: своя команда и корень модуля — сразу.
-          echo "$FILES" | grep -qE '^server/(cmd/api/|[^/]+$)' && API=true || API=false
+          echo "$FILES_SERVER" | grep -qE '^server/(cmd/api/|[^/]+$)' && API=true || API=false
           # …и любой пакет internal, кроме adminapi/ и metrics/ — их в api нет.
           # `if` вокруг конвейера, а не `&&`: шаг идёт под `bash -e`, и цепочка,
           # закончившаяся ненулевым кодом, уронила бы весь расчёт.
           if [ "$API" = false ] \
-             && echo "$FILES" | grep -E '^server/internal/' \
-                              | grep -qvE '^server/internal/(adminapi|metrics)/'; then
+             && echo "$FILES_SERVER" | grep -E '^server/internal/' \
+                                     | grep -qvE '^server/internal/(adminapi|metrics)/'; then
             API=true
           fi
 
@@ -362,7 +399,7 @@ jobs:
           # части: установщик один, точнее делить нечего. launcher/ разобран
           # на ChillHub/ и файлы прямо в каталоге: launcher/tests/ в артефакт
           # не входит (см. тот же комментарий).
-          echo "$FILES" | grep -qE '^(launcher/(ChillHub/|[^/]+$)|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|installer\.nsi|app\.ico|ci/ensure-nsis\.ps1)$)' \
+          echo "$FILES_CLIENT" | grep -qE '^(launcher/(ChillHub/|[^/]+$)|updater/|Directory\.Build\.props$|scripts/(build-installer\.ps1|installer\.nsi|app\.ico|ci/ensure-nsis\.ps1)$)' \
             && CLIENT=true || CLIENT=false
 
           printf 'site=%s\napi=%s\nadmin=%s\nadmin_ui=%s\nclient=%s\n' \
