@@ -22,13 +22,9 @@ namespace ChillHub.Tests {
             Environment.SetEnvironmentVariable("CHILLHUB_CLIENT_LOG", "0");
 
             // Logger.Error(Exception) дополнительно дёргает ErrorReporter, а тот уходит в сеть.
-            // Тесты в сеть не ходят, поэтому автоотчёты выключаем в памяти (конфиг на диск не пишем).
-            try {
-                ChillHub.Core.ConfigService.Current.AutoErrorReports = false;
-            }
-            catch {
-                // Конфиг может быть недоступен — тестам это не мешает.
-            }
+            // Тесты в сеть не ходят, поэтому глушим отправку переменной окружения:
+            // тумблера в настройках у автоотчётов больше нет, они всегда включены.
+            Environment.SetEnvironmentVariable(ChillHub.Core.ErrorReporter.EnvVar, "0");
         }
     }
 

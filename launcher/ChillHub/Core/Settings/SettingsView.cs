@@ -31,10 +31,8 @@ namespace ChillHub.Core.Settings {
         internal required string SpeedLimitText { get; init; }
 
         /// <summary>Отправлять обезличенную статистику.</summary>
-        internal required bool SendUsageMetrics { get; init; }
 
         /// <summary>Отправлять отчёты об ошибках автоматически.</summary>
-        internal required bool AutoErrorReports { get; init; }
 
         /// <summary>Сворачивать окно в трей вместо закрытия.</summary>
         internal required bool MinimizeToTray { get; init; }
@@ -65,8 +63,6 @@ namespace ChillHub.Core.Settings {
                 DownloadThreadsText = cfg.DownloadThreads.ToString(),
                 SpeedLimitMbps = cfg.SpeedLimitMbps,
                 SpeedLimitText = FormatSpeedLimit(cfg.SpeedLimitMbps),
-                SendUsageMetrics = cfg.SendUsageMetrics,
-                AutoErrorReports = cfg.AutoErrorReports,
                 MinimizeToTray = cfg.MinimizeToTray,
                 VersionText = GetLauncherVersion(),
             };

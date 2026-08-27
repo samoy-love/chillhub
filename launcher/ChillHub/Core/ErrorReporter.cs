@@ -18,6 +18,13 @@ namespace ChillHub.Core {
     /// Non-blocking: reports are sent fire-and-forget.
     /// </summary>
     public static class ErrorReporter {
+        /// <summary>
+        /// Переменная окружения, глушащая автоотчёты: CHILLHUB_ERROR_REPORTS=0.
+        /// Это не настройка пользователя, а рубильник для тестов и отладочных
+        /// прогонов — парный к CHILLHUB_METRICS у статистики.
+        /// </summary>
+        internal const string EnvVar = "CHILLHUB_ERROR_REPORTS";
+
         private static readonly object rlLock = new object();
         private static readonly Dictionary<string, (int Count, DateTime WindowStart, DateTime LastSent)> rate = new();
         private const int RL_WindowSeconds = 180;  // signature throttle window (3 minutes)
@@ -215,9 +222,11 @@ namespace ChillHub.Core {
         /// </summary>
         private static async Task ReportCoreAsync(Exception ex, string context, bool includeDiagnostics = true) {
             try {
-                // Автоотчёты отправляем только с согласия пользователя (тумблер в настройках).
-                // На ручную отправку обратной связи (TryConsumeManual / формы фидбэка) это не влияет.
-                if (!ChillHub.Core.ConfigService.Current.AutoErrorReports) {
+                // Тумблера в настройках у автоотчётов больше нет: они всегда включены.
+                // Осталась переменная окружения — тем же приёмом, что у метрик
+                // (CHILLHUB_METRICS): ею глушат отправку тесты и отладочные прогоны,
+                // которым в сеть ходить нечего. Пользователю она не показывается.
+                if (Environment.GetEnvironmentVariable(EnvVar)?.Trim() == "0") {
                     return;
                 }
 

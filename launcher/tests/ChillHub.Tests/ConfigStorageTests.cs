@@ -42,9 +42,6 @@ namespace ChillHub.Tests {
                 GamesPath = @"E:\Мои игры",
                 DownloadThreads = 12,
                 LastGameId = "lethal-company",
-                AutoErrorReports = false,
-                SendUsageMetrics = false,
-
             };
             Assert.True(ConfigService.Save(saved));
             Assert.True(File.Exists(cfgDir.ConfigPath), "config.json не появился на диске");
@@ -54,8 +51,6 @@ namespace ChillHub.Tests {
             Assert.Equal(@"E:\Мои игры", back.GamesPath);
             Assert.Equal(12, back.DownloadThreads);
             Assert.Equal("lethal-company", back.LastGameId);
-            Assert.False(back.AutoErrorReports);
-            Assert.False(back.SendUsageMetrics);
         }
 
         /// <summary>

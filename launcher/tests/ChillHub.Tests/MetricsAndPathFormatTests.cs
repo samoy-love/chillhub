@@ -156,19 +156,21 @@ namespace ChillHub.Tests {
         /// </summary>
         private sealed class MetricsScope : IDisposable {
             private readonly string? previousEnv;
-            private readonly bool previousSetting;
 
+            /// <param name="env">Значение CHILLHUB_METRICS на время области.</param>
+            /// <param name="sendUsageMetrics">
+            /// Оставлен ради читаемости вызовов: тумблера в настройках больше нет,
+            /// статистика включена всегда, и «выключено» теперь выражается только
+            /// переменной окружения.
+            /// </param>
             internal MetricsScope(string? env, bool sendUsageMetrics) {
                 this.previousEnv = Environment.GetEnvironmentVariable(MetricsService.EnvVar);
-                this.previousSetting = ConfigService.Current.SendUsageMetrics;
-
-                Environment.SetEnvironmentVariable(MetricsService.EnvVar, env);
-                ConfigService.Current.SendUsageMetrics = sendUsageMetrics;
+                Environment.SetEnvironmentVariable(
+                    MetricsService.EnvVar, sendUsageMetrics ? env : "0");
             }
 
             public void Dispose() {
                 Environment.SetEnvironmentVariable(MetricsService.EnvVar, this.previousEnv);
-                ConfigService.Current.SendUsageMetrics = this.previousSetting;
             }
         }
     }

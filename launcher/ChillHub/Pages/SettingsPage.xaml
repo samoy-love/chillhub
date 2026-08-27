@@ -63,8 +63,8 @@
     </Grid>
 
     <!-- Content. Обёрнуто в ScrollViewer: на невысоком окне карточки не влезают
-         по вертикали — без прокрутки «Конфиденциальность» и всё, что ниже,
-         просто обрезалось по низу страницы. -->
+         по вертикали — без прокрутки нижние секции просто обрезались по низу
+         страницы. -->
     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
     <StackPanel Orientation="Vertical" VerticalAlignment="Top" Margin="0,0,8,0">
       <!-- Storage section -->
@@ -128,19 +128,6 @@
             <TextBlock Grid.Column="4" Name="SpeedLimitValueText" Text="без лимита" Style="{StaticResource Style.SettingsLabel}" Margin="16,0,0,0"
                        Foreground="{DynamicResource Brush.TextMuted}"/>
           </Grid>
-        </StackPanel>
-      </Border>
-
-      <!-- Privacy section -->
-      <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
-        <StackPanel>
-          <TextBlock Text="Конфиденциальность" Style="{StaticResource Style.SettingsSection}"/>
-          <CheckBox Name="AutoErrorReportsCheck" Content="Отправлять автоматические отчёты об ошибках" Click="Toggle_Click"/>
-          <TextBlock Text="Включает отправку необработанных исключений вместе с логами и конфигурацией. Пути сокращаются, имя пользователя и имя компьютера не передаются. Ручная отправка обратной связи работает всегда."
-                     Style="{StaticResource Style.SettingsHint}"/>
-          <CheckBox Name="UsageMetricsCheck" Content="Отправлять обезличенную статистику использования" Margin="0,14,0,0" Click="Toggle_Click"/>
-          <TextBlock Text="Запуски лаунчера, установки и обновления игр, коды ошибок. Без имени пользователя, имени компьютера и путей."
-                     Style="{StaticResource Style.SettingsHint}"/>
         </StackPanel>
       </Border>
 
