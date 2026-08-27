@@ -72,10 +72,25 @@ func TestLayoutDestination(t *testing.T) {
 		keep bool
 	}{
 		{"плоский dll в plugins", mod, "CoolMod.dll", "BepInEx/plugins/Author-CoolMod/CoolMod.dll", true},
-		// subdir flattens: a package that ships assets/ inside plugins/ ends up
-		// with the file directly in its own folder, which is what BepInEx and
-		// r2modman both expect.
-		{"вложенная папка схлопывается", mod, "plugins/assets/deep/thing.dll", "BepInEx/plugins/Author-CoolMod/thing.dll", true},
+
+		// СХЛОПЫВАЕТСЯ МАРШРУТ, А НЕ ВЛОЖЕННОСТЬ ПОД НИМ.
+		//
+		// Раньше от пути оставалось только имя файла, и это ломало моды,
+		// рассчитывающие на свои подпапки: у More_Suits есть и
+		// moresuits/Glow.png, и moresuits/advanced/glow.png — после
+		// схлопывания они превращались в один путь в двух написаниях, и
+		// публикация падала на «duplicate path».
+		//
+		// Правило сверено с живой сборкой lethal-company, разложенной
+		// настоящим r2modman: 60 пакетов подряд, 60 совпадений.
+		{"вложенность под названным маршрутом сохраняется", mod, "plugins/assets/deep/thing.dll", "BepInEx/plugins/Author-CoolMod/assets/deep/thing.dll", true},
+		{"маршрут полным путём тоже узнаётся", mod, "BepInEx/plugins/mymod/Glow.png", "BepInEx/plugins/Author-CoolMod/mymod/Glow.png", true},
+
+		// Маршрут не назван — файлы лежат россыпью по папкам автора
+		// (DLL/, SfDesat/, TolianMoons/ у Tolian_Moons), и вот их r2modman
+		// действительно схлопывает в папку мода.
+		{"россыпь без маршрута схлопывается", mod, "DLL/AmbientToggle.dll", "BepInEx/plugins/Author-CoolMod/AmbientToggle.dll", true},
+
 		{"явный маршрут patchers", mod, "patchers/Patch.dll", "BepInEx/patchers/Author-CoolMod/Patch.dll", true},
 		{"config без подкаталога мода", mod, "config/Author.CoolMod.cfg", "BepInEx/config/Author.CoolMod.cfg", true},
 		{"config сохраняет вложенность", mod, "config/controls/keys.json", "BepInEx/config/controls/keys.json", true},
@@ -86,6 +101,7 @@ func TestLayoutDestination(t *testing.T) {
 		// A file that merely looks like a base package file but sits deeper is
 		// content, not clutter, at layout time; SweepJunk deals with it later.
 		{"вложенный manifest.json не отбрасывается на раскладке", mod, "data/manifest.json", "BepInEx/plugins/Author-CoolMod/manifest.json", true},
+		{"config полным путём", mod, "BepInEx/config/mymod/keys.json", "BepInEx/config/mymod/keys.json", true},
 
 		{"загрузчик: содержимое rootFolder в корень", loader, "BepInExPack/winhttp.dll", "winhttp.dll", true},
 		{"загрузчик: вложенность сохраняется", loader, "BepInExPack/BepInEx/core/BepInEx.Preloader.dll", "BepInEx/core/BepInEx.Preloader.dll", true},

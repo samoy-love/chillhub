@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -76,6 +77,20 @@ type Layout struct {
 	// rule, which is how a folder named "config" inside an archive is
 	// recognised as "this is the config route" rather than mod content.
 	byLeaf map[string]InstallRule
+
+	// casing remembers, per build, which spelling of each path already exists:
+	// lower-cased path -> the path actually written.
+	//
+	// The server's filesystem is case-sensitive and the player's is not, so an
+	// archive holding both moresuits/Glow.png and moresuits/advanced/glow.png
+	// produced two files here and one file there — and the manifest, which is
+	// validated case-insensitively, was rejected outright:
+	//
+	//	duplicate path "BepInEx/plugins/x753-More_Suits/glow.png"
+	//
+	// Collapsing them the way the player's disk would is the only outcome that
+	// can actually be delivered.
+	casing map[string]string
 }
 
 // NewLayout prepares the rules of one game for repeated use.
@@ -83,7 +98,11 @@ func NewLayout(def R2modmanDef) (*Layout, error) {
 	if len(def.InstallRules) == 0 {
 		return nil, errors.New("mods: game has no install rules in the ecosystem schema")
 	}
-	l := &Layout{rules: def.InstallRules, byLeaf: make(map[string]InstallRule, len(def.InstallRules))}
+	l := &Layout{
+		rules:  def.InstallRules,
+		byLeaf: make(map[string]InstallRule, len(def.InstallRules)),
+		casing: make(map[string]string),
+	}
 	for _, r := range def.InstallRules {
 		leaf := routeLeaf(r.Route)
 		if leaf != "" {
@@ -144,6 +163,8 @@ func (l *Layout) InstallPackage(root string, pkg ResolvedPackage, zipPath string
 			continue
 		}
 
+		dest = l.sameCasing(dest)
+
 		full := filepath.Join(root, filepath.FromSlash(dest))
 		if !adminutil.EnsureWithin(root, full) {
 			return written, fmt.Errorf("mods: %s: entry %q escapes the target directory", pkg.FullName, rel)
@@ -154,6 +175,25 @@ func (l *Layout) InstallPackage(root string, pkg ResolvedPackage, zipPath string
 		written++
 	}
 	return written, nil
+}
+
+// sameCasing returns the spelling already used for this path, if the tree
+// holds one that differs only in case.
+//
+// The player's disk cannot tell "Glow.png" from "glow.png"; the server's can.
+// Writing both produces a tree that no client can reproduce and a manifest the
+// publisher refuses. Keeping the first spelling and letting the later entry
+// overwrite it is exactly what installing on the player's machine would do.
+func (l *Layout) sameCasing(dest string) string {
+	key := strings.ToLower(dest)
+	if kept, ok := l.casing[key]; ok {
+		if kept != dest {
+			log.Printf("[mods] path %q collides with %q by case only; keeping the first spelling", dest, kept)
+		}
+		return kept
+	}
+	l.casing[key] = dest
+	return dest
 }
 
 // destination maps one archive-relative path to a path inside the game folder.
@@ -182,16 +222,14 @@ func (l *Layout) destination(pkg ResolvedPackage, rel, subdir string) (dest stri
 		return "", false
 	}
 
-	// A top-level folder whose name matches a route ("plugins", "config", ...)
-	// selects that route and is consumed; everything else keeps its full path
-	// and goes to the default location.
+	// The archive may name its route itself — either by the full path
+	// ("BepInEx/plugins/...") or by the leaf alone ("plugins/..."). Those
+	// segments are consumed; everything else goes to the default location.
 	rule := l.defaultRule
 	tail := parts
-	if len(parts) > 1 {
-		if r, ok := l.byLeaf[strings.ToLower(parts[0])]; ok {
-			rule = r
-			tail = parts[1:]
-		}
+	named := false
+	if r, n, ok := l.matchRoute(parts); ok {
+		rule, tail, named = r, parts[n:], true
 	}
 	// A .mm.dll is MonoMod's, wherever it sits — but only when the path did
 	// not already name a route explicitly.
@@ -212,10 +250,64 @@ func (l *Layout) destination(pkg ResolvedPackage, rel, subdir string) (dest stri
 	case "subdir-no-flatten", "state", "package-zip":
 		return path.Join(route, subdir, path.Join(tail...)), true
 	default: // "subdir" and anything unknown
-		// Flattened: only the file name survives, nested folders inside the
-		// package are collapsed into the mod's own directory.
+		// ЧТО ИМЕННО СХЛОПЫВАЕТСЯ — не «все вложенные папки», а сам маршрут.
+		//
+		// Когда архив назвал маршрут, всё, что лежит НИЖЕ него, — это структура,
+		// на которую мод рассчитывает: у More_Suits есть и moresuits/Glow.png, и
+		// moresuits/advanced/glow.png, и это разные вещи. Схлопывание до имени
+		// файла делало из них один путь в двух написаниях и роняло публикацию.
+		//
+		// Когда маршрут не назван, файлы лежат россыпью (DLL/, SfDesat/,
+		// TolianMoons/ у Tolian_Moons) — вот их r2modman и схлопывает.
+		//
+		// Правило выведено не из документации, а из сверки с живой сборкой
+		// lethal-company, которую разложил настоящий r2modman: на 60 пакетах
+		// подряд прежнее правило совпало 41 раз, это — 60 из 60.
+		if named {
+			return path.Join(route, subdir, path.Join(tail...)), true
+		}
 		return path.Join(route, subdir, tail[len(tail)-1]), true
 	}
+}
+
+// matchRoute finds the route an archive path names itself, and how many of its
+// leading segments that took. Full paths are tried before bare leaves, and
+// longer routes before shorter ones, so "BepInEx/plugins" wins over "plugins".
+// At least one segment must remain: a path that is nothing but the route names
+// a directory, not a file.
+func (l *Layout) matchRoute(parts []string) (InstallRule, int, bool) {
+	best := InstallRule{}
+	bestN := 0
+	for _, r := range l.rules {
+		seg := strings.Split(strings.Trim(strings.ReplaceAll(r.Route, "\\", "/"), "/"), "/")
+		if len(seg) == 0 || seg[0] == "" || len(parts) <= len(seg) {
+			continue
+		}
+		if !equalFoldSegments(parts[:len(seg)], seg) {
+			continue
+		}
+		if len(seg) > bestN {
+			best, bestN = r, len(seg)
+		}
+	}
+	if bestN > 0 {
+		return best, bestN, true
+	}
+	if len(parts) > 1 {
+		if r, ok := l.byLeaf[strings.ToLower(parts[0])]; ok {
+			return r, 1, true
+		}
+	}
+	return InstallRule{}, 0, false
+}
+
+func equalFoldSegments(a, b []string) bool {
+	for i := range a {
+		if !strings.EqualFold(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // writeEntry extracts one zip entry to full.
