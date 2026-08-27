@@ -26,6 +26,11 @@ function mountPanel(fetchImpl) {
   window.notifyLevel = () => {};
   window.formatBytes = (n) => String(n) + ' B';
   window.confirm = () => true;
+  // jsdom не даёт странице TextEncoder/TextDecoder, а браузер даёт. Без них
+  // потоковая ветка readNdjsonStream падает на первом же чанке, и любой тест
+  // на живой поток событий проверял бы обработку исключения вместо прогресса.
+  window.TextEncoder = TextEncoder;
+  window.TextDecoder = TextDecoder;
 
   const ctx = dom.getInternalVMContext();
   // Абсолютный путь обязателен: c8 привязывает покрытие к исходнику только по
@@ -195,6 +200,55 @@ test('сборка ведёт прогресс по потоку событий'
   // Полоса доходит до конца: сборка идёт минутами, и молчащий экран
   // неотличим от зависшей.
   assert.strictEqual(document.querySelector('[data-md="progress"]').style.width, '100%');
+});
+
+test('фаза разбора состава показывает счётчик, а не молчит', async () => {
+  // Разбор дерева и опрос размеров архивов — первые две минуты сборки, и до
+  // них не приходит ни одного события package. Именно эта тишина приехала как
+  // «админка зависла на этапе разбор состава модпака».
+  const events = [
+    { type: 'start', message: 'разбор состава модпака' },
+    { type: 'resolving', step: 1, message: 'BepInEx-BepInExPack-5.4.2305' },
+    { type: 'resolving', step: 2, message: 'Team-Mod-1.0.0' },
+    { type: 'sizing', step: 2, total: 2, message: 'Team-Mod-1.0.0' },
+  ];
+  const seen = [];
+  let win = null;
+  const mounted = await mount(function (url) {
+    if (!url.startsWith('/admin/api/mods/build')) return null;
+    return Promise.resolve({
+      ok: true,
+      body: {
+        getReader() {
+          let i = 0;
+          // Кодировщик берём из окна jsdom, а не из Node: TextDecoder внутри
+          // страницы не принимает Uint8Array из чужого realm и роняет чтение
+          // потока — тест проверял бы не то, что нужно.
+          const enc = new win.TextEncoder();
+          return {
+            read() {
+              if (i >= events.length) return Promise.resolve({ done: true });
+              const line = JSON.stringify(events[i++]) + '\n';
+              // Снимаем строку состояния перед каждым событием: важно, что она
+              // меняется по ходу, а не только в конце.
+              seen.push(win.document.querySelector('[data-md="status"]').textContent);
+              return Promise.resolve({ done: false, value: enc.encode(line) });
+            },
+          };
+        },
+      },
+    });
+  });
+  win = mounted.window;
+  const { document } = mounted;
+
+  await clickCatalogButton(document, 'data-mc-build', 'Team/Pack');
+
+  const status = document.querySelector('[data-md="status"]').textContent;
+  assert.match(status, /Оценка размера 2\/2/);
+  assert.ok(seen.some((t) => /Разбор состава: найдено модов 1/.test(t))
+    || /Разбор состава: найдено модов/.test(seen.join('|')),
+  'счётчик найденных модов не появлялся: ' + JSON.stringify(seen));
 });
 
 test('сборка без единого события сообщает о буферизации', async () => {

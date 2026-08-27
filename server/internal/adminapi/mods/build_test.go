@@ -414,6 +414,67 @@ func TestBuildEmitsProgress(t *testing.T) {
 	}
 }
 
+// TestBuildReportsResolvePhase охраняет самую длинную немую паузу сборки.
+//
+// Разбор состава и опрос размеров архивов занимают у большого модпака около
+// двух минут — до них не доходит ни одного события "package". Ровно это и было
+// прислано как «админка зависла на этапе разбор состава модпака», поэтому оба
+// события обязаны идти в поток, причём с растущим счётчиком: одно событие на
+// всю фазу вернуло бы ту же тишину.
+func TestBuildReportsResolvePhase(t *testing.T) {
+	fs := newFakeStore(t)
+	seedPack(fs)
+	b, _ := testBuilder(t, fs)
+
+	var resolving, sizing []Event
+	_, err := b.Build(context.Background(), thunderstoreRequest(), false, func(e Event) {
+		switch e.Type {
+		case "resolving":
+			resolving = append(resolving, e)
+		case "sizing":
+			sizing = append(sizing, e)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resolving) < 2 {
+		t.Fatalf("обход дерева отчитался %d раз, ожидался счётчик по пакетам", len(resolving))
+	}
+	for i, e := range resolving {
+		if e.Step != i+1 {
+			t.Errorf("счётчик найденных модов идёт не по порядку: %d-е событие со Step=%d", i+1, e.Step)
+		}
+		if e.Message == "" {
+			t.Errorf("событие %d не называет пакет", i+1)
+		}
+	}
+	if len(sizing) != len(resolving) {
+		t.Errorf("оценка размера отчиталась по %d пакетам из %d", len(sizing), len(resolving))
+	}
+	for i, e := range sizing {
+		if e.Step != i+1 || e.Total != len(sizing) {
+			t.Errorf("оценка размера: %d-е событие %d/%d", i+1, e.Step, e.Total)
+		}
+	}
+}
+
+// TestResolveWithoutEmitterStaysSilent: Resolve без потока событий обязан
+// работать так же, как раньше, — его зовёт обычный JSON-обработчик.
+func TestResolveWithoutEmitterStaysSilent(t *testing.T) {
+	fs := newFakeStore(t)
+	seedPack(fs)
+	b, _ := testBuilder(t, fs)
+
+	plan, err := b.Resolve(context.Background(), thunderstoreRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Packages) == 0 {
+		t.Fatal("разбор без прогресса вернул пустой состав")
+	}
+}
+
 func TestSourceRecordAndDiff(t *testing.T) {
 	fs := newFakeStore(t)
 	seedPack(fs)
