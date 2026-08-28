@@ -3,6 +3,7 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:sys="clr-namespace:System;assembly=mscorlib"
       xmlns:pr="clr-namespace:System.Windows.Controls.Primitives;assembly=PresentationFramework"
+      xmlns:ui="clr-namespace:ChillHub.Core.UI"
       Title="Главная"
       Background="{DynamicResource Brush.Background}">
   <Page.Resources>
@@ -396,6 +397,36 @@
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Check.Bg.Disabled}"/>
                 <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
                 <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- «Убрать из очереди»: единственное состояние, где в главном слоте стоит не главное
+         действие. Отдельный стиль, а не серый «Проверка…»: тот набран вторичным цветом и
+         рядом с «Об игре» проигрывал ей по весу — соседняя кнопка выглядела главной,
+         хотя ведёт всего лишь на справочный экран. -->
+    <Style x:Key="Style.ActionButton.Dequeue" TargetType="Button" BasedOn="{StaticResource Style.Button.Dim.Base}">
+      <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+      <Setter Property="Background" Value="{DynamicResource Brush.Surface2}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Accent}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Check.Bg.Disabled}"/>
+                <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -956,9 +987,9 @@
                самого списка, чтобы края лент совпали с витриной. -->
           <ListBox.ItemsPanel>
             <ItemsPanelTemplate>
-              <UniformGrid Columns="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=ListBox},
-                                             Converter={StaticResource NewsColumnsConv}}"
-                           VerticalAlignment="Top"/>
+              <ui:NewsFlowPanel Columns="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=ListBox},
+                                                  Converter={StaticResource NewsColumnsConv}}"
+                                VerticalAlignment="Top"/>
             </ItemsPanelTemplate>
           </ListBox.ItemsPanel>
           <ListBox.ItemContainerStyle>
@@ -1010,8 +1041,21 @@
                       </ContentControl.Style>
                     </ContentControl>
                     <!-- Removed skeleton placeholder for cover images per request -->
-                    <Image x:Name="CoverImg" Source="{Binding CoverUrl}" Tag="{Binding CoverUrl}" Stretch="Uniform" Height="108" HorizontalAlignment="Stretch"
-                           Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
+                    <!-- Обложка — рамка 16:9 фиксированного размера, картинка вписывается
+                         заполнением. Прежние Uniform + Height=108 отдавали размер обложки
+                         на откуп пропорциям картинки: широкая новость получала 168x95,
+                         квадратная — 108x108, и соседние карточки расходились и по высоте
+                         обложки, и по левому краю текста. -->
+                    <Border Width="168" Height="94" CornerRadius="{StaticResource Radius.S}"
+                            HorizontalAlignment="Left" VerticalAlignment="Top" ClipToBounds="True"
+                            Background="{DynamicResource Brush.Surface2}">
+                      <!-- Height дублирует высоту рамки не ради разметки, а ради раскодирования:
+                           ImageLoader берёт из него размер, под который распаковывать картинку
+                           (см. ApplyBitmap), и без него каждая обложка новости разворачивалась
+                           бы в память в полный рост. -->
+                      <Image x:Name="CoverImg" Source="{Binding CoverUrl}" Tag="{Binding CoverUrl}" Stretch="UniformToFill" Height="94"
+                             Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
+                    </Border>
                   </Grid>
                   <!-- Правая колонка: текст -->
                   <StackPanel Grid.Column="2">
@@ -1048,9 +1092,9 @@
                самого списка, чтобы края лент совпали с витриной. -->
           <ListBox.ItemsPanel>
             <ItemsPanelTemplate>
-              <UniformGrid Columns="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=ListBox},
-                                             Converter={StaticResource NewsColumnsConv}}"
-                           VerticalAlignment="Top"/>
+              <ui:NewsFlowPanel Columns="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=ListBox},
+                                                  Converter={StaticResource NewsColumnsConv}}"
+                                VerticalAlignment="Top"/>
             </ItemsPanelTemplate>
           </ListBox.ItemsPanel>
           <ListBox.ItemContainerStyle>
@@ -1101,9 +1145,22 @@
                         </Style>
                       </ContentControl.Style>
                     </ContentControl>
-                    <Border x:Name="ImgSkeleton" Style="{DynamicResource Style.Skeleton}" Height="88"/>
-                    <Image x:Name="CoverImg" Source="{Binding CoverUrl}" Tag="{Binding CoverUrl}" Stretch="Uniform" Height="108" HorizontalAlignment="Stretch"
-                           Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
+                    <Border x:Name="ImgSkeleton" Style="{DynamicResource Style.Skeleton}" Width="168" Height="94" HorizontalAlignment="Left" VerticalAlignment="Top"/>
+                    <!-- Обложка — рамка 16:9 фиксированного размера, картинка вписывается
+                         заполнением. Прежние Uniform + Height=108 отдавали размер обложки
+                         на откуп пропорциям картинки: широкая новость получала 168x95,
+                         квадратная — 108x108, и соседние карточки расходились и по высоте
+                         обложки, и по левому краю текста. -->
+                    <Border Width="168" Height="94" CornerRadius="{StaticResource Radius.S}"
+                            HorizontalAlignment="Left" VerticalAlignment="Top" ClipToBounds="True"
+                            Background="{DynamicResource Brush.Surface2}">
+                      <!-- Height дублирует высоту рамки не ради разметки, а ради раскодирования:
+                           ImageLoader берёт из него размер, под который распаковывать картинку
+                           (см. ApplyBitmap), и без него каждая обложка новости разворачивалась
+                           бы в память в полный рост. -->
+                      <Image x:Name="CoverImg" Source="{Binding CoverUrl}" Tag="{Binding CoverUrl}" Stretch="UniformToFill" Height="94"
+                             Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
+                    </Border>
                   </Grid>
                   <!-- Правая колонка: текст -->
                   <StackPanel Grid.Column="2">
@@ -1144,13 +1201,15 @@
           <StackPanel x:Name="QueuePanel" Visibility="Collapsed">
             <TextBlock x:Name="QueueSummaryText" Text="Очередь загрузок" FontWeight="SemiBold" FontSize="14"
                        Margin="0,0,0,6" Foreground="{DynamicResource Brush.Title}"/>
-            <!-- Потолок — доля высоты окна, дальше внутренний скролл. Фиксированные 180px
-                 на невысоком окне были четвертью экрана и вместе с витриной не оставляли
-                 места ленте новостей; на высоком — резали третью карточку пополам, хотя
-                 места под неё было вдоволь. -->
+            <!-- Высоту задаёт содержимое, а не доля окна: в доке ровно столько строк,
+                 сколько разрешил QueueDockLayout (см. SyncQueueDockRows), остальные ждут
+                 за строкой «Показать ещё N». Прежний потолок в 28% высоты окна на низком
+                 окне забирал четверть экрана ради двух с половиной строк со скроллом —
+                 и ленте новостей над ним оставалось полторы карточки, тоже со скроллом.
+                 Скролл остаётся только для раскрытой длинной очереди. -->
             <ItemsControl x:Name="QueueDock"
                           MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=Page},
-                                              Converter={StaticResource HeightShareConv}, ConverterParameter=0.28}">
+                                              Converter={StaticResource HeightShareConv}, ConverterParameter=0.45}">
               <ItemsControl.Template>
                 <ControlTemplate TargetType="ItemsControl">
                   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -1162,8 +1221,12 @@
                 <DataTemplate>
                   <!-- Ожидающая позиция — строка, а не карточка в полный рост: у неё нет ни
                        полосы, ни цифр, и три одинаковых по высоте карточки не влезали даже
-                       в окно по умолчанию — третья всегда была срезана. -->
-                  <Border Margin="0,0,0,6">
+                       в окно по умолчанию — третья всегда была срезана.
+                       MaxWidth — чтобы связанное осталось в одном взгляде: на широком окне
+                       карточка растягивалась на всю ширину, и крестик «снять с очереди»
+                       уезжал от названия своей игры на полтора метра. Подписи внутри уже
+                       сведены к левому краю по той же причине. -->
+                  <Border Margin="0,0,0,6" MaxWidth="1100" HorizontalAlignment="Left">
                     <Border.Style>
                       <Style TargetType="Border" BasedOn="{StaticResource Style.Card}">
                         <Setter Property="Padding" Value="12,10"/>
@@ -1281,6 +1344,12 @@
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
+            <!-- Раскрывашка: очередь длиннее, чем помещается в свёрнутый док. Кнопка-ссылка,
+                 а не скролл: скролл внутри дока не виден, пока в него не ткнуть, и очередь
+                 из четырёх позиций выглядела как очередь из двух с половиной. -->
+            <Button x:Name="QueueMoreBtn" Click="QueueMoreBtn_Click" Visibility="Collapsed"
+                    HorizontalAlignment="Left" Margin="0,2,0,0" Padding="0"
+                    Style="{DynamicResource Style.Button.Link}"/>
           </StackPanel>
 
           <!-- Покой: очередь пуста, показываем ход работы по выбранной игре. Строки не

@@ -92,6 +92,17 @@ namespace ChillHub.Pages {
         private readonly System.Collections.ObjectModel.ObservableCollection<Core.Game.QueueItem> queueDockItems = new();
 
         /// <summary>
+        /// Что из очереди реально показано внизу экрана: первые несколько позиций, сколько
+        /// разрешил <see cref="Core.UI.QueueDockLayout"/>. Отдельный список, а не потолок
+        /// высоты у дока: прежний потолок в долю окна оставлял на низком окне полторы
+        /// строки со скроллом, и очередь из четырёх позиций выглядела как очередь из двух.
+        /// </summary>
+        private readonly System.Collections.ObjectModel.ObservableCollection<Core.Game.QueueItem> queueDockVisibleItems = new();
+
+        /// <summary>Док раскрыт кликом по «Показать ещё N» — видны все позиции очереди.</summary>
+        private bool queueDockExpanded;
+
+        /// <summary>
         /// Та же очередь — наружу для GamePage: установка/обновление со страницы игры идёт через
         /// неё, а не через отдельный локальный запуск (см. GamePage.StartQueuedSync), иначе
         /// закачка обрывалась при уходе с этой страницы на главную.
@@ -228,7 +239,12 @@ namespace ChillHub.Pages {
             this.downloadQueue = new Core.Game.DownloadQueue(
                 gid => this.games.FirstOrDefault(g => string.Equals(g.GameId, gid, StringComparison.OrdinalIgnoreCase)),
                 () => this.BaseApi);
-            this.QueueDock.ItemsSource = this.queueDockItems;
+            this.QueueDock.ItemsSource = this.queueDockVisibleItems;
+
+            // Сколько строк очереди влезает, зависит от высоты окна: на низком остаётся
+            // только качающаяся. Пересчитываем на каждое изменение размера — иначе окно,
+            // растянутое мышью, продолжало бы показывать одну строку из четырёх.
+            this.SizeChanged += (s, e) => this.SyncQueueDockRows();
             this.downloadQueue.ItemAdded += this.OnQueueItemChanged;
             this.downloadQueue.ItemProgress += this.OnQueueItemChanged;
             this.downloadQueue.ItemCompleted += this.OnQueueItemCompleted;
@@ -1852,6 +1868,7 @@ namespace ChillHub.Pages {
         /// </summary>
         private void SyncQueuePanelVisibility() {
             var count = this.queueDockItems.Count;
+            this.SyncQueueDockRows();
             this.QueuePanel.Visibility = count > 0 ? Visibility.Visible : Visibility.Collapsed;
             this.IdleStatusPanel.Visibility = count > 0 ? Visibility.Collapsed : Visibility.Visible;
             // Заголовок нужен, только когда позиций несколько: над единственной карточкой
@@ -1865,6 +1882,48 @@ namespace ChillHub.Pages {
             }
 
             this.SyncBottomBarVisibility();
+        }
+
+        /// <summary>
+        /// Приводит видимые строки дока в соответствие с очередью и высотой окна. Список
+        /// правится по месту, а не пересобирается: карточки перерисовываются на каждый тик
+        /// прогресса, и полная пересборка гасила бы наведение и подсказки под курсором.
+        /// </summary>
+        private void SyncQueueDockRows() {
+            try {
+                var view = Core.UI.QueueDockLayout.Compute(this.queueDockItems.Count, this.ActualHeight, this.queueDockExpanded);
+
+                while (this.queueDockVisibleItems.Count > view.VisibleRows) {
+                    this.queueDockVisibleItems.RemoveAt(this.queueDockVisibleItems.Count - 1);
+                }
+
+                for (var i = 0; i < view.VisibleRows; i++) {
+                    if (i >= this.queueDockVisibleItems.Count) {
+                        this.queueDockVisibleItems.Add(this.queueDockItems[i]);
+                    }
+                    else if (!ReferenceEquals(this.queueDockVisibleItems[i], this.queueDockItems[i])) {
+                        this.queueDockVisibleItems[i] = this.queueDockItems[i];
+                    }
+                }
+
+                this.QueueMoreBtn.Content = view.ToggleText;
+                this.QueueMoreBtn.Visibility = view.ToggleText.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+                // Очередь укоротилась до размеров свёрнутого дока — раскрытым его больше
+                // держать нечем: иначе следующая закачка появилась бы сразу раскрытой.
+                if (view.ToggleText.Length == 0) {
+                    this.queueDockExpanded = false;
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"SyncQueueDockRows: {ex.Message}");
+            }
+        }
+
+        /// <summary>«Показать ещё N» / «Свернуть очередь» под доком.</summary>
+        private void QueueMoreBtn_Click(object sender, RoutedEventArgs e) {
+            this.queueDockExpanded = !this.queueDockExpanded;
+            this.SyncQueueDockRows();
         }
 
         /// <summary>

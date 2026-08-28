@@ -1,4 +1,4 @@
-// <copyright file="MainWindow.xaml.cs" company="PlaceholderCompany">
+﻿// <copyright file="MainWindow.xaml.cs" company="PlaceholderCompany">
 // Copyright (c) 2025 ChillHub
 // Licensed under the MIT License.
 // </copyright>
@@ -439,6 +439,12 @@ namespace ChillHub {
         /// фонового воркера — на Dispatcher, как и в самой HomePage.
         /// </summary>
         private void AttachDownloadsIndicator(Core.Game.IDownloadQueue queue) {
+            // Смена экрана меняет и судьбу чипа: на главной очередь стоит внизу целиком,
+            // на остальных её не видно вовсе. Без этой подписки чип обновлялся только по
+            // событиям очереди — уход в «Настройки» при молчащей закачке оставлял человека
+            // вообще без индикатора.
+            this.ContentFrame.Navigated += (s, e) => this.RefreshDownloadsIndicator(queue, e.Content is Pages.HomePage);
+
             void Refresh(Core.Game.QueueItem item) => this.Dispatcher.BeginInvoke(() => this.RefreshDownloadsIndicator(queue));
             queue.ItemAdded += Refresh;
             queue.ItemProgress += Refresh;
@@ -470,11 +476,25 @@ namespace ChillHub {
             }
         }
 
-        private void RefreshDownloadsIndicator(Core.Game.IDownloadQueue queue) {
+        /// <summary>
+        /// Чип загрузок в шапке — замена очереди на тех экранах, где её не видно. На главной
+        /// он молчит: там очередь стоит внизу целиком, и чип пересказывал её же цифры в
+        /// полуметре выше — «31% · ещё 3» в шапке и та же закачка в доке одновременно.
+        /// Подсказка трея живёт своей жизнью и обновляется всегда: окна может не быть на
+        /// экране вовсе.
+        /// </summary>
+        /// <param name="queue">Очередь, по которой считается подпись.</param>
+        /// <param name="onHome">
+        /// Главная ли страница в кадре. Передаётся из события Navigated: там о новой
+        /// странице знает сам аргумент события, а <see cref="CurrentHome"/> в этот момент
+        /// может ещё отвечать про предыдущую.
+        /// </param>
+        private void RefreshDownloadsIndicator(Core.Game.IDownloadQueue queue, bool? onHome = null) {
             try {
                 var text = Core.UI.DownloadsChip.Text(queue.Snapshot());
+                var duplicatesDock = onHome ?? this.CurrentHome != null;
                 this.HeaderDownloadsText.Text = text;
-                this.HeaderDownloadsBtn.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+                this.HeaderDownloadsBtn.Visibility = text.Length > 0 && !duplicatesDock ? Visibility.Visible : Visibility.Collapsed;
                 this.tray?.SetStatus(text);
             }
             catch (Exception ex) {

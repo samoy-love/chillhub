@@ -1,4 +1,4 @@
-// <copyright file="UiConvertersTests.cs" company="PlaceholderCompany">
+﻿// <copyright file="UiConvertersTests.cs" company="PlaceholderCompany">
 // Copyright (c) 2025 ChillHub
 // Licensed under the MIT License.
 // </copyright>
@@ -253,6 +253,47 @@ namespace ChillHub.Tests {
         [InlineData(double.NaN, 1)]
         public void КолонкиЛентыПоШирине(double width, int expected) {
             Assert.Equal(expected, NewsColumnsConverter.ColumnsFor(width));
+        }
+
+        /// <summary>Неполный последний ряд ленты делит ширину между своими карточками.</summary>
+        [Theory]
+        [InlineData(3, 2, 0, 2)]
+        [InlineData(3, 2, 1, 1)]
+        [InlineData(4, 2, 1, 2)]
+        [InlineData(5, 3, 1, 2)]
+        [InlineData(1, 2, 0, 1)]
+        public void ПоследнийРядЛентыЗаполняетШирину(int count, int columns, int row, int expected) {
+            Assert.Equal(expected, NewsFlowPanel.ItemsInRow(count, columns, row));
+        }
+
+        /// <summary>За последним рядом рядов нет — ноль карточек, а не отрицательное число.</summary>
+        [Fact]
+        public void ЗаПоследнимРядомЛентыПусто() {
+            Assert.Equal(0, NewsFlowPanel.ItemsInRow(3, 2, 2));
+            Assert.Equal(0, NewsFlowPanel.ItemsInRow(0, 2, 0));
+        }
+
+        /// <summary>Док очереди: сколько строк видно на странице такой высоты.</summary>
+        [Theory]
+        [InlineData(4, 900.0, false, 3)]
+        [InlineData(4, 700.0, false, 1)]
+        [InlineData(4, 900.0, true, 4)]
+        [InlineData(2, 900.0, false, 2)]
+        [InlineData(0, 900.0, false, 0)]
+        [InlineData(4, double.NaN, false, 3)]
+        public void СтрокДокаПоВысотеОкна(int count, double height, bool expanded, int expected) {
+            Assert.Equal(expected, QueueDockLayout.Compute(count, height, expanded).VisibleRows);
+        }
+
+        /// <summary>Раскрывашка называет, сколько позиций спрятано, и умеет свернуть обратно.</summary>
+        [Theory]
+        [InlineData(4, 900.0, false, "Показать ещё 1")]
+        [InlineData(4, 700.0, false, "Показать ещё 3")]
+        [InlineData(4, 900.0, true, "Свернуть очередь")]
+        [InlineData(3, 900.0, false, "")]
+        [InlineData(1, 700.0, false, "")]
+        public void РаскрывашкаДокаНазываетСпрятанное(int count, double height, bool expanded, string expected) {
+            Assert.Equal(expected, QueueDockLayout.Compute(count, height, expanded).ToggleText);
         }
 
         private static QueueItem Item(
