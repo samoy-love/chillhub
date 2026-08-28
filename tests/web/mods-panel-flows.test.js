@@ -179,6 +179,40 @@ test('README показывается текстом, а не разметкой
   assert.ok(box.classList.contains('hidden'), 'README не закрылся');
 });
 
+test('слаг подставляется значением, а не подсказкой', async () => {
+  // Серый placeholder читался как заполненное поле, и «Подтянуть» отвечал
+  // «Укажите слаг игры на Thunderstore» на то, что оператор уже видел.
+  const { document } = await mount();
+
+  const slug = document.querySelector('[data-md="slug"]');
+  assert.strictEqual(slug.value, 'lethal-company');
+  assert.strictEqual(slug.getAttribute('placeholder'), null);
+});
+
+test('у игры без модов экран объясняет, что даст подключение', async () => {
+  const { document } = await mount(function (url) {
+    if (!url.startsWith('/admin/games')) return null;
+    return jsonResponse({ items: [{ gameId: 'peak', title: 'PEAK' }] });
+  });
+
+  const meta = document.querySelector('[data-md="meta"]').textContent;
+  assert.match(meta, /PEAK/);
+  assert.match(meta, /Подтянуть из Thunderstore/);
+  // Слаг всё равно готов к нажатию: он берётся из идентификатора игры.
+  assert.strictEqual(document.querySelector('[data-md="slug"]').value, 'peak');
+});
+
+test('ссылка на каталог сайта работает и до подключения модов', async () => {
+  const { document } = await mount(function (url) {
+    if (!url.startsWith('/admin/games')) return null;
+    return jsonResponse({ items: [{ gameId: 'peak', title: 'PEAK' }] });
+  });
+
+  const browse = document.querySelector('[data-md="browse"]');
+  assert.match(browse.getAttribute('href'), /thunderstore\.io\/c\/peak\//);
+  assert.ok(!browse.classList.contains('disabled'), 'ссылка выключена, хотя слаг известен');
+});
+
 test('сборка ведёт прогресс по потоку событий', async () => {
   const events = [
     { type: 'start', message: 'разбор состава' },
@@ -277,6 +311,25 @@ test('параллельное скачивание показывает обе 
   assert.match(retries, /B-Mod-1\.0\.0 — попытка 1 из 5/);
   assert.ok(!document.querySelector('[data-md="retriesBox"]').classList.contains('hidden'),
     'блок повторов остался скрытым');
+});
+
+test('карточка сборки прячется, пока сборки нет, и сворачивается после неё', async () => {
+  // Полная синяя полоса «скачано 22 из 22» посреди экрана — состояние из
+  // прошлого: занимает место, ничем не убирается и врёт, что что-то идёт.
+  const { document } = await mount(function (url) {
+    if (!url.startsWith('/admin/api/mods/build')) return null;
+    return Promise.resolve({ ok: true, text: () => Promise.resolve('{"type":"done"}\n') });
+  });
+
+  const card = document.querySelector('[data-md="buildCard"]');
+  assert.ok(card.classList.contains('hidden'), 'карточка сборки видна до всякой сборки');
+
+  await clickCatalogButton(document, 'data-mc-build', 'Team/Pack');
+
+  assert.ok(!card.classList.contains('hidden'), 'карточка не показалась при сборке');
+  assert.ok(
+    document.querySelector('[data-md="progressBox"]').classList.contains('hidden'),
+    'полоса прогресса осталась висеть после завершения');
 });
 
 test('сборка без единого события сообщает о буферизации', async () => {

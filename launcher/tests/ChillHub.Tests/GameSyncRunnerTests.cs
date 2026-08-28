@@ -7,6 +7,7 @@ namespace ChillHub.Tests {
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
 
@@ -409,8 +410,11 @@ namespace ChillHub.Tests {
 
             await runner.RunAsync(request, CancellationToken.None);
 
-            Assert.Contains(probe.Progress, p => p.Scope == ModsService.ScopeName);
-            Assert.Contains(probe.Progress, p => string.IsNullOrEmpty(p.Scope));
+            var reports = await probe.WaitForProgress(all =>
+                all.Any(p => p.Scope == ModsService.ScopeName) && all.Any(p => string.IsNullOrEmpty(p.Scope)));
+
+            Assert.Contains(reports, p => p.Scope == ModsService.ScopeName);
+            Assert.Contains(reports, p => string.IsNullOrEmpty(p.Scope));
         }
 
         /// <summary>
@@ -501,7 +505,46 @@ namespace ChillHub.Tests {
 
             internal List<AskedQuestion> Questions { get; } = new();
 
-            internal List<SyncProgress> Progress { get; } = new();
+            /// <summary>
+            /// Отчёты о прогрессе. Читать только через <see cref="ProgressSnapshot"/>.
+            /// <para>
+            /// ОТЧЁТЫ ПРИХОДЯТ НЕ ИЗ ТОГО ПОТОКА, ГДЕ ИДЁТ ТЕСТ. Прогресс модпака
+            /// доставляет <see cref="System.Progress{T}"/>, а он вызывает обработчик
+            /// через контекст синхронизации; в тестовом прогоне контекста нет, и
+            /// вызов уходит в пул потоков — то есть может случиться уже после того,
+            /// как RunAsync вернул управление. Перебор этого списка прямо в
+            /// утверждении падал с «Collection was modified» — не всегда, а когда
+            /// повезёт с расписанием, отчего на машине разработчика тест проходил, а
+            /// на CI нет.
+            /// </para>
+            /// </summary>
+            private List<SyncProgress> Progress { get; } = new();
+
+            /// <summary>Копия отчётов на текущий момент.</summary>
+            internal SyncProgress[] ProgressSnapshot() {
+                lock (this.Progress) {
+                    return this.Progress.ToArray();
+                }
+            }
+
+            /// <summary>
+            /// Ждёт, пока в отчётах не появится нужное, и возвращает их копию.
+            /// Срок — на случай, если не появится вовсе: тест обязан падать
+            /// утверждением, а не зависанием.
+            /// </summary>
+            /// <param name="ready">Условие на накопленные отчёты.</param>
+            /// <returns>Отчёты на момент выполнения условия или истечения срока.</returns>
+            internal async Task<SyncProgress[]> WaitForProgress(Func<SyncProgress[], bool> ready) {
+                var deadline = DateTime.UtcNow.AddSeconds(5);
+                while (true) {
+                    var snapshot = this.ProgressSnapshot();
+                    if (ready(snapshot) || DateTime.UtcNow > deadline) {
+                        return snapshot;
+                    }
+
+                    await Task.Delay(10).ConfigureAwait(false);
+                }
+            }
 
             internal int MaintenanceApplied { get; private set; }
 
@@ -518,7 +561,11 @@ namespace ChillHub.Tests {
                 SetSpeedEta = text => this.LastSpeedEta = text,
                 SetFilesSize = text => this.LastFilesSize = text,
                 ApplyMaintenanceToButtons = () => this.MaintenanceApplied++,
-                ReportProgress = (p, _) => this.Progress.Add(p),
+                ReportProgress = (p, _) => {
+                    lock (this.Progress) {
+                        this.Progress.Add(p);
+                    }
+                },
                 Confirm = (text, title) => {
                     this.Questions.Add(new AskedQuestion(text, title));
                     return this.ConfirmAnswer;

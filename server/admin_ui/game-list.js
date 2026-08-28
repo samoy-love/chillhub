@@ -76,9 +76,22 @@
         + '<span class="flex-grow-1 text-truncate">' + esc(title) + ' <span class="text-body-secondary small">(' + esc(gid) + ')</span></span>'
         // Снятую с публикации игру видно прямо в списке: иначе единственный
         // признак того, что её нет в лаунчере, лежит на вкладке «Публикация и удаление».
-        + (tr.dataset.unpublished === '1' ? '<span class="badge text-bg-secondary" title="Не публикуется в лаунчере">скрыта</span>' : '');
+        + (tr.dataset.unpublished === '1' ? '<span class="badge text-bg-secondary" title="Не публикуется в лаунчере">скрыта</span>' : '')
+        // У каких игр есть модпак, было видно только на вкладке «Моды», где
+        // список игр приходилось перебирать заново. Метка ведёт туда же и
+        // сразу выбирает игру: выбор игры на двух вкладках больше не живёт
+        // двумя независимыми состояниями.
+        + (tr.dataset.mods === '1'
+          ? '<button type="button" class="badge text-bg-info border-0 gm-mods" title="Открыть моды этой игры">моды</button>'
+          : '');
 
       item.addEventListener('click', function (ev) {
+        if (ev.target.closest('.gm-mods')) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (window.openModsForGame) window.openModsForGame(gid);
+          return;
+        }
         if (ev.target.closest('.gm-pin')) return;
         tr.click(); // reuses the existing row-selection logic in admin.js (mgmAppendRow)
         if (window.gmSyncOverviewFromRow) window.gmSyncOverviewFromRow(gid);

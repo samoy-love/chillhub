@@ -1249,6 +1249,9 @@ document.addEventListener('DOMContentLoaded', ()=>{
     if(document.visibilityState === 'visible'){
       try{ await fbUnreadUpdateBadge(); }catch{}
       try{ await sysFreeRefresh(); }catch{}
+      // «Здесь ждут действия» на вкладках «Лаунчер» и «Моды». Сводку сервер
+      // держит десять минут, поэтому минутный опрос ему ничего не стоит.
+      try{ await window.refreshPendingBadges(); }catch{}
     }
   }
   setInterval(periodicVisibleTick, 60000);
@@ -1792,6 +1795,16 @@ function uploadFinished(prefix){
   if(wrap) wrap.style.display = 'none';
   const fit = document.getElementById(prefix+'_fit');
   if(fit){ fit.textContent = ''; fit.className = 'small text-body-secondary'; }
+
+  // ГРАФИК СКОРОСТИ ЖИВЁТ РОВНО СТОЛЬКО, СКОЛЬКО ЗАЛИВКА.
+  //
+  // После «Готово» он занимал 180 пикселей высоты под карточкой «Обзор» —
+  // ради кривой, которая уже ничего не измеряет. Итог при этом остаётся:
+  // строкой над ним написаны объём, средняя, медианная и пиковая скорость,
+  // и это всё, что от него нужно постфактум.
+  const speedWrap = document.getElementById(prefix+'_speed_wrap');
+  if(speedWrap) speedWrap.style.display = 'none';
+
   try{ sysFreeRefresh(); }catch(_){ /* индикатор места не критичен */ }
 }
 
@@ -1851,10 +1864,45 @@ async function manifestsUpload(){
 // выглядела опаснее зелёного «Сохранить», хотя предупреждения не давала.
 let __mgmDirty = false;
 
+// Снимок списка на момент загрузки с сервера. Всё, что «правки», считается
+// относительно него — иначе число не умеет возвращаться к нулю, когда
+// напечатанную букву стёрли обратно.
+let __mgmSnapshot = [];
+
 function mgmSetDirty(v){
-  __mgmDirty = !!v;
+  // false означает «мы только что синхронизировались с сервером»: пересняли
+  // список, и правок стало ноль по определению.
+  if(v === false){
+    try{ __mgmSnapshot = mgmCollectItems(); }catch(_){ __mgmSnapshot = []; }
+  }
+
+  let diff = { changed:0, added:0, removed:0, total: v ? 1 : 0 };
+  try{
+    if(typeof window.countRegistryChanges === 'function'){
+      diff = window.countRegistryChanges(__mgmSnapshot, mgmCollectItems());
+    }
+  }catch(_){ /* остаёмся с грубой оценкой выше */ }
+
+  __mgmDirty = diff.total > 0;
   const b = document.getElementById('mgm_dirty');
   if(b) b.style.display = __mgmDirty ? '' : 'none';
+
+  // СОСТОЯНИЕ ЧИТАЕТСЯ С САМОЙ КНОПКИ, А НЕ С СОСЕДНЕЙ МЕТКИ.
+  //
+  // Кнопка была всегда зелёной и всегда активной: нажать её без правок можно
+  // было в любой момент, и что при этом произойдёт — непонятно. Метка «не
+  // сохранено» рядом отвечала на этот вопрос, но её надо было заметить.
+  const save = document.getElementById('mgm_save');
+  if(save){
+    // Подпись кнопки — не повод уронить вкладку: не загрузился модуль счёта —
+    // остаёмся с прежними двумя состояниями.
+    const look = (typeof window.describeSaveButton === 'function')
+      ? window.describeSaveButton(diff)
+      : { enabled: __mgmDirty, label: __mgmDirty ? 'Сохранить' : 'Сохранено', title: '' };
+    save.disabled = !look.enabled;
+    save.textContent = look.label;
+    save.title = look.title;
+  }
 }
 
 // mgmConfirmDiscard спрашивает, можно ли выбросить правки таблицы.
@@ -1900,6 +1948,9 @@ function mgmAppendRow(tb, it){
   // unpublished — как pinned, состояние строки, а не поле ввода: игра остаётся
   // в реестре со всеми файлами, но публичный /api/games её не отдаёт.
   tr.dataset.unpublished = it && it.unpublished ? '1' : '0';
+  // mods — тоже состояние строки: сами настройки живут на вкладке «Моды», а
+  // здесь нужен один бит, чтобы в списке игр было видно, у каких игр модпак.
+  tr.dataset.mods = it && it.mods && it.mods.enabled ? '1' : '0';
   // Значения приходят с сервера (/admin/games и /admin/games/scan — по сути
   // имена каталогов на диске), поэтому в атрибут их можно класть только
   // экранированными.
@@ -2048,9 +2099,15 @@ function mgmAddRow(){
   if(newRow) newRow.click();
 }
 
-async function mgmSave(){
+// mgmCollectItems читает скрытую таблицу в то, что уедет на сервер.
+//
+// Одна функция на сохранение и на счётчик правок намеренно: счётчик обещает
+// «столько игр уедет изменёнными», и считать он обязан ровно по тем полям и в
+// том же виде, в каком они отправляются. Две копии этого преобразования
+// разошлись бы на первой же правке, и кнопка начала бы врать.
+function mgmCollectItems(){
   const rows = Array.from(document.querySelectorAll('#mgm-table tbody tr'));
-  const items = rows.map((tr, idx)=>{
+  return rows.map((tr, idx)=>{
     const tds = tr.querySelectorAll('td');
     return {
       gameId: tds[0].querySelector('input').value.trim(),
@@ -2064,6 +2121,10 @@ async function mgmSave(){
       unpublished: tr.dataset.unpublished === '1',
     };
   }).filter(it=>it.gameId);
+}
+
+async function mgmSave(){
+  const items = mgmCollectItems();
   // basic validation
   const ids = new Set();
   for(const it of items){ if(!it.gameId){ notify('Пустой gameId'); return; } if(ids.has(it.gameId)){ notify('Дубликат gameId: '+it.gameId); return; } ids.add(it.gameId); }
@@ -2867,7 +2928,7 @@ function showSection(id){
     // переключение вкладок — это не команда «выбросить введённое».
     try{ if(!__mgmDirty) mgmReload(); }catch(_){ /* no-op */ }
   }
-  if(id==='secMods'){ try{ modsPanel && modsPanel.reload(); }catch(_){ /* no-op */ } }
+  if(id==='secMods'){ try{ modsPanel && modsPanel.reload(window.__modsWantGame || ''); }catch(_){ /* no-op */ } }
   if(id==='secInbox'){ try{ fbReload(true); }catch(_){ /* no-op */ } }
   if(id==='secMaint'){ try{ mtLoad(); }catch(_){ /* no-op */ } }
   if(id==='secMetrics'){ try{ mxOnTabOpen(); }catch(_){ /* no-op */ } }
@@ -2911,6 +2972,17 @@ TAB_MAP.forEach((t, i)=>{
 // было открыто в последний визит.
 // Панель вкладки «Моды». Создаётся один раз; данные тянет showSection при
 // первом открытии вкладки, а не при загрузке страницы.
+// openModsForGame переводит на вкладку «Моды» с уже выбранной игрой.
+//
+// Метка «моды» в списке игр ведёт сюда: раньше переход означал «открой другую
+// вкладку и найди ту же игру в другом списке», и выбор игры жил двумя
+// независимыми состояниями.
+window.openModsForGame = function(gid){
+  window.__modsWantGame = gid || '';
+  try{ location.hash = '#mods'; }catch(_){ /* адресная строка не критична */ }
+  showSection('secMods');
+};
+
 const modsPanel = (typeof createModsPanel === 'function')
   ? createModsPanel({ root: '#md_root' })
   : null;

@@ -175,6 +175,50 @@ test('таблица версий отмечает активную, обнов�
   assert.match(html, /data-md-rebuild="ASTeam\/LethalReloaded"/);
 });
 
+test('«Дифф» у единственной версии выключен и говорит почему', () => {
+  // Кнопка, которая на нажатие отвечает тостом «сравнивать не с чем», просит
+  // нажать себя ради отказа. Выключенная — обязана объяснить себя подписью.
+  const one = versionsTableHtml({
+    items: [{ version: 'Team-Pack-1.0.0', displayName: 'Pack', active: true, createdAt: '2026-08-27T10:00:00' }],
+  });
+  assert.match(one, /data-md-diff="Team-Pack-1\.0\.0" disabled title="Собрана одна версия/);
+
+  const two = versionsTableHtml({
+    items: [
+      { version: 'Team-Pack-1.0.0', displayName: 'Pack', active: true, createdAt: '2026-08-27T10:00:00' },
+      { version: 'Team-Pack-0.9.0', displayName: 'Pack', active: false, createdAt: '2026-08-20T10:00:00' },
+    ],
+  });
+  assert.doesNotMatch(two, /data-md-diff="Team-Pack-1\.0\.0" disabled/);
+  assert.match(two, /title="Сравнить состав/);
+});
+
+test('до четырёх версий показываются карточками, дальше таблицей', () => {
+  // Семь заголовков на одну строку занимают ровно столько же места, сколько
+  // данные, и читатель ищет в них то, что и так написано в первой ячейке.
+  const one = (n) => ({
+    items: Array.from({ length: n }, (_, i) => ({
+      version: 'Team-Pack-1.0.' + i,
+      displayName: 'Pack',
+      active: i === 0,
+      packages: 3, files: 7, bytes: 1024, missing: 0,
+      createdAt: '2026-08-27T10:00:00',
+    })),
+  });
+
+  assert.doesNotMatch(versionsTableHtml(one(1)), /<table/);
+  assert.doesNotMatch(versionsTableHtml(one(3)), /<table/);
+  assert.match(versionsTableHtml(one(4)), /<table/);
+
+  // Действия и метки одинаковы в обеих разметках: иначе они разъедутся на
+  // первой же правке.
+  for (const html of [versionsTableHtml(one(2)), versionsTableHtml(one(5))]) {
+    assert.match(html, /data-md-activate="Team-Pack-1\.0\.1"/);
+    assert.match(html, /активен/);
+    assert.match(html, /title="Сравнить состав/);
+  }
+});
+
 test('пустой список версий объясняется словами', () => {
   assert.match(versionsTableHtml({ items: [] }), /Ни одного модпака ещё не собрано/);
   assert.match(versionsTableHtml(null), /Ни одного модпака/);

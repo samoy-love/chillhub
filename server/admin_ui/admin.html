@@ -38,10 +38,14 @@
       <!-- role="tablist" и стрелки: вкладки — это <a href="#">, и без ролей
            скринридер их вкладками не считал, а с клавиатуры они не листались. -->
       <ul class="nav nav-tabs mb-3" id="mainTabs" role="tablist">
-        <li class="nav-item" role="presentation"><a class="nav-link active" id="tabLauncher" href="#launcher" role="tab" aria-selected="true" aria-controls="secLauncher">Лаунчер</a></li>
+        <li class="nav-item" role="presentation"><a class="nav-link active" id="tabLauncher" href="#launcher" role="tab" aria-selected="true" aria-controls="secLauncher">Лаунчер
+            <span id="launcher_pending_badge" class="badge text-bg-warning ms-2" style="display:none"></span>
+          </a></li>
         <li class="nav-item" role="presentation"><a class="nav-link" id="tabManifests" href="#manifests" role="tab" aria-selected="false" aria-controls="secManifests" tabindex="-1">Игры</a></li>
         <li class="nav-item" role="presentation"><a class="nav-link" id="tabNews" href="#news" role="tab" aria-selected="false" aria-controls="secNews" tabindex="-1">Новости</a></li>
-        <li class="nav-item" role="presentation"><a class="nav-link" id="tabMods" href="#mods" role="tab" aria-selected="false" aria-controls="secMods" tabindex="-1">Моды</a></li>
+        <li class="nav-item" role="presentation"><a class="nav-link" id="tabMods" href="#mods" role="tab" aria-selected="false" aria-controls="secMods" tabindex="-1">Моды
+            <span id="mods_pending_badge" class="badge text-bg-warning ms-2" style="display:none"></span>
+          </a></li>
         <li class="nav-item" role="presentation">
           <a class="nav-link" id="tabInbox" href="#inbox" role="tab" aria-selected="false" aria-controls="secInbox" tabindex="-1">Обращения
             <span id="fb_unread_badge" class="badge text-bg-secondary ms-2" style="display:none">0</span>
@@ -390,10 +394,10 @@
               </div>
             </div>
 
-            <div class="card mb-3">
+            <div class="card mb-3 hidden" data-md="buildCard">
               <div class="card-body">
                 <h3 class="h6">Сборка</h3>
-                <div class="progress mb-2" style="height:8px">
+                <div class="progress mb-2" data-md="progressBox" style="height:8px">
                   <div class="progress-bar" data-md="progress" style="width:0%"></div>
                 </div>
                 <div class="small" data-md="status"></div>
@@ -924,6 +928,8 @@
   <script src="/admin/ui/game-list.js"></script>
   <script src="/admin/ui/ndjson.js"></script>
   <script src="/admin/ui/feedback-logs.js"></script>
+  <script src="/admin/ui/pending-badges.js"></script>
+  <script src="/admin/ui/registry-diff.js"></script>
   <script src="/admin/ui/mods-panel.js"></script>
   <script src="/admin/ui/admin.js"></script>
   <!-- Gallery Modal -->

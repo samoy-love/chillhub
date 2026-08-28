@@ -239,6 +239,28 @@ func (h *Handlers) Get(w http.ResponseWriter, _ *http.Request) {
 	}{Items: items})
 }
 
+// All returns every registry row.
+//
+// Exported for the same reason as Entry: the summary endpoint needs to know
+// which games have modpacks, and a second parser for games.json would be a
+// second place where "order" defaulting and unsafe-id dropping could drift.
+func (h *Handlers) All() ([]Entry, error) {
+	// #nosec G304 -- registryPath() is the content root plus three constants.
+	b, err := os.ReadFile(h.registryPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	items, ok := decodeRegistryItems(b, false)
+	if !ok {
+		return nil, errors.New("games: registry is not readable as {\"items\":[...]}")
+	}
+	sortEntries(items)
+	return items, nil
+}
+
 // Entry returns one registry row by game id.
 //
 // Exported so the modpack endpoints can read a game's ModsConfig without a
@@ -484,6 +506,21 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 	// was exactly how "pin looks like it works in the panel" and "pin actually
 	// reaches players" could drift apart again. With the file itself always
 	// canonically ordered, every reader can just trust file order.
+	// ЧЕГО НЕТ В ПОСЫЛКЕ, ТО НЕ СТИРАЕТСЯ.
+	//
+	// Панель шлёт строку игры из шести полей — id, название, иконка, путь к
+	// exe, порядок, закрепление, — а запись в реестре шире: там же лежит
+	// настройка модов, которую пишут совсем другие обработчики. Полная замена
+	// реестра присланным стирала её у ВСЕХ игр при каждом «Сохранить», включая
+	// перетаскивание строки мышью. Со стороны оператора это выглядело как
+	// «Моды для этой игры не настроены» назавтра после того, как он их
+	// настроил.
+	//
+	// Чинится на сервере, а не в панели, намеренно: тогда никакой клиент — ни
+	// нынешний, ни будущий, ни curl из консоли — не сможет снести поле, о
+	// котором не знает.
+	items = mergeWithStored(items, body, h.storedByID())
+
 	sortEntries(items)
 	b, err := json.MarshalIndent(struct {
 		Items []Entry `json:"items"`
@@ -506,6 +543,66 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(b)
+}
+
+// storedByID reads the registry as it is on disk, keyed by game id.
+//
+// An unreadable or absent registry gives an empty map: the save then behaves
+// exactly as it did before there was anything to preserve.
+func (h *Handlers) storedByID() map[string]Entry {
+	// #nosec G304 -- registryPath() is the content root plus three constants.
+	b, err := os.ReadFile(h.registryPath())
+	if err != nil {
+		return nil
+	}
+	items, ok := decodeRegistryItems(b, false)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]Entry, len(items))
+	for _, it := range items {
+		out[strings.ToLower(it.GameID)] = it
+	}
+	return out
+}
+
+// mergeWithStored fills in, for every incoming entry, the fields its sender did
+// not mention.
+//
+// Реализовано разбором ПОВЕРХ сохранённой записи, а не списком «полей, которые
+// надо сберечь». Список пришлось бы дополнять при каждом новом поле, и забытое
+// дополнение — это ровно та же тихая потеря данных, только в следующий раз.
+// json.Unmarshal поверх готовой структуры трогает только те ключи, что есть в
+// теле запроса, и потому сберегает всё остальное само.
+func mergeWithStored(items []Entry, body []byte, stored map[string]Entry) []Entry {
+	if len(stored) == 0 {
+		return items
+	}
+	var raw struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil || len(raw.Items) != len(items) {
+		// Разбор тела уже прошёл выше; сюда попадаем, только если форма
+		// оказалась другой (например, элементы отфильтровались). Тогда лучше
+		// сохранить как есть, чем сопоставить строки не с теми записями.
+		return items
+	}
+	for i := range items {
+		old, ok := stored[strings.ToLower(items[i].GameID)]
+		if !ok {
+			continue
+		}
+		merged := old
+		if err := json.Unmarshal(raw.Items[i], &merged); err != nil {
+			continue
+		}
+		// Порядок и нормализация посчитаны при разборе выше (в том числе
+		// подстановка позиции для записи без "order"), поэтому берём их оттуда,
+		// а не из сырого тела.
+		merged.Order = items[i].Order
+		items[i] = merged
+	}
+	return items
 }
 
 // Scan returns the registry list derived from the manifests directory without

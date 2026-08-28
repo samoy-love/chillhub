@@ -95,10 +95,52 @@
       + '</div></div></div></div>';
   }
 
+  // Порог, после которого список версий становится таблицей.
+  //
+  // Таблица оправдана, когда есть что сравнивать глазами по колонке. На одной
+  // строке семь заголовков занимают ровно столько же места, сколько данные, и
+  // читатель ищет в них то, что и так написано в первой ячейке.
+  const VERSIONS_TABLE_FROM = 4;
+
+  // versionBits собирает то, что описывает одну собранную версию, — общее для
+  // карточек и таблицы. Иначе две разметки разъезжаются на первой же правке:
+  // в одной кнопка «Дифф» объясняет, почему выключена, в другой нет.
+  function versionBits(it, upd, many) {
+    const badges = [];
+    if (it.active) badges.push('<span class="badge text-bg-success">активен</span>');
+    if (it.missing > 0) badges.push('<span class="badge text-bg-warning" title="Столько модов не нашлось на Thunderstore">пропущено ' + it.missing + '</span>');
+    if (upd && upd.latest) badges.push('<span class="badge text-bg-info">доступна ' + esc(upd.latest) + '</span>');
+    if (upd && upd.deprecated) badges.push('<span class="badge text-bg-warning">автор пометил устаревшим</span>');
+
+    const actions = ''
+      + (it.active ? '' : '<button type="button" class="btn btn-sm btn-success me-1" data-md-activate="' + esc(it.version) + '">Активировать</button>')
+      + (upd && upd.latest ? '<button type="button" class="btn btn-sm btn-outline-primary me-1" data-md-rebuild="' + esc(upd.namespace + '/' + upd.name) + '" data-md-rebuild-version="' + esc(upd.latest) + '">Пересобрать</button>' : '')
+      + '<button type="button" class="btn btn-sm btn-outline-secondary me-1" data-md-diff="' + esc(it.version) + '"'
+      + (many
+        ? ' title="Сравнить состав с другой собранной версией"'
+        : ' disabled title="Собрана одна версия — сравнивать не с чем"')
+      + '>Дифф</button>'
+      + (it.active ? '' : '<button type="button" class="btn btn-sm btn-outline-danger" data-md-delete="' + esc(it.version) + '">Удалить</button>');
+
+    return {
+      name: esc(it.displayName || it.version),
+      version: esc(it.version),
+      link: it.packageUrl
+        ? '<a class="small" href="' + esc(it.packageUrl) + '" target="_blank" rel="noopener">страница на Thunderstore</a>'
+        : '',
+      built: esc((it.createdAt || '').replace('T', ' ').replace('Z', '')),
+      packages: it.packages || 0,
+      files: it.files || 0,
+      size: bytes(it.bytes || 0),
+      badges: badges.join(' '),
+      actions: actions,
+    };
+  }
+
   // versionsTableHtml — список собранных версий модпака.
   //
-  // Своя таблица, а не versionsTableHtml из admin.js: у версии модпака другие
-  // колонки (пакет, ссылка на Thunderstore, число модов, метка «доступно
+  // Своя разметка, а не versionsTableHtml из admin.js: у версии модпака другие
+  // поля (пакет, ссылка на Thunderstore, число модов, метка «доступно
   // обновление»), и натягивать их на таблицу сборок игры значило бы переписать
   // её так, что она перестала бы описывать сборки.
   function versionsTableHtml(data) {
@@ -108,32 +150,37 @@
     }
     const updates = {};
     ((data && data.updates) || []).forEach(function (u) { updates[u.version] = u; });
+    const many = items.length > 1;
+
+    if (items.length < VERSIONS_TABLE_FROM) {
+      return '<div class="d-grid gap-2">' + items.map(function (it) {
+        const b = versionBits(it, updates[it.version], many);
+        return ''
+          + '<div class="border rounded p-3 d-flex flex-wrap gap-3 align-items-center">'
+          + '<div class="flex-grow-1 min-w-0">'
+          + '<div class="fw-semibold">' + b.name + ' ' + b.badges + '</div>'
+          + '<div class="small text-body-secondary">' + b.version + ' · собран ' + b.built
+          + ' · ' + b.packages + ' модов · ' + b.files + ' файлов · ' + b.size + '</div>'
+          + b.link
+          + '</div>'
+          + '<div class="text-nowrap">' + b.actions + '</div>'
+          + '</div>';
+      }).join('') + '</div>';
+    }
 
     const rows = items.map(function (it) {
-      const upd = updates[it.version];
-      const name = it.displayName || it.version;
-      const badges = [];
-      if (it.active) badges.push('<span class="badge text-bg-success">активен</span>');
-      if (it.missing > 0) badges.push('<span class="badge text-bg-warning" title="Столько модов не нашлось на Thunderstore">пропущено ' + it.missing + '</span>');
-      if (upd && upd.latest) badges.push('<span class="badge text-bg-info">доступна ' + esc(upd.latest) + '</span>');
-      if (upd && upd.deprecated) badges.push('<span class="badge text-bg-warning">автор пометил устаревшим</span>');
-
+      const b = versionBits(it, updates[it.version], many);
       return '<tr>'
-        + '<td><div class="fw-semibold">' + esc(name) + '</div>'
-        + '<div class="small text-body-secondary">' + esc(it.version) + '</div>'
-        + (it.packageUrl ? '<a class="small" href="' + esc(it.packageUrl) + '" target="_blank" rel="noopener">страница на Thunderstore</a>' : '')
+        + '<td><div class="fw-semibold">' + b.name + '</div>'
+        + '<div class="small text-body-secondary">' + b.version + '</div>'
+        + b.link
         + '</td>'
-        + '<td>' + badges.join(' ') + '</td>'
-        + '<td class="text-nowrap">' + esc((it.createdAt || '').replace('T', ' ').replace('Z', '')) + '</td>'
-        + '<td class="text-end">' + (it.packages || 0) + '</td>'
-        + '<td class="text-end">' + (it.files || 0) + '</td>'
-        + '<td class="text-end text-nowrap">' + bytes(it.bytes || 0) + '</td>'
-        + '<td class="text-end text-nowrap">'
-        + (it.active ? '' : '<button type="button" class="btn btn-sm btn-success me-1" data-md-activate="' + esc(it.version) + '">Активировать</button>')
-        + (upd && upd.latest ? '<button type="button" class="btn btn-sm btn-outline-primary me-1" data-md-rebuild="' + esc(upd.namespace + '/' + upd.name) + '" data-md-rebuild-version="' + esc(upd.latest) + '">Пересобрать</button>' : '')
-        + '<button type="button" class="btn btn-sm btn-outline-secondary me-1" data-md-diff="' + esc(it.version) + '">Дифф</button>'
-        + (it.active ? '' : '<button type="button" class="btn btn-sm btn-outline-danger" data-md-delete="' + esc(it.version) + '">Удалить</button>')
-        + '</td>'
+        + '<td>' + b.badges + '</td>'
+        + '<td class="text-nowrap">' + b.built + '</td>'
+        + '<td class="text-end">' + b.packages + '</td>'
+        + '<td class="text-end">' + b.files + '</td>'
+        + '<td class="text-end text-nowrap">' + b.size + '</td>'
+        + '<td class="text-end text-nowrap">' + b.actions + '</td>'
         + '</tr>';
     }).join('');
 
@@ -154,6 +201,25 @@
       return '<li><span class="' + (cls[d.change] || '') + '">' + (label[d.change] || d.change) + '</span> '
         + esc(d.package) + ' <span class="text-body-secondary">' + ver + '</span></li>';
     }).join('') + '</ul>';
+  }
+
+  // notConfiguredHtml — экран игры, у которой модов ещё нет.
+  //
+  // Раньше здесь стояла одна строка «Моды для этой игры не настроены», под
+  // которой оставалось пустым четыре пятых экрана: панель выглядела сломанной,
+  // хотя просто ждала нажатия. Текст должен говорить, что произойдёт после
+  // нажатия и почему это безопасно.
+  function notConfiguredHtml(game) {
+    const title = (game && (game.title || game.gameId)) || 'этой игры';
+    return ''
+      + '<div class="border rounded p-3 bg-body-tertiary">'
+      + '<div class="fw-semibold mb-1">Моды для «' + esc(title) + '» ещё не подключены</div>'
+      + '<div class="small text-body-secondary mb-2">'
+      + 'Нажмите «Подтянуть из Thunderstore» — панель прочитает правила установки модов для этой игры '
+      + '(Steam AppID, папку, загрузчик) и откроет каталог модпаков. Файлы игроков это не трогает: '
+      + 'модпак попадёт к ним только после сборки и активации.'
+      + '</div>'
+      + '</div>';
   }
 
   // createModsPanel собирает панель над одним корневым элементом.
@@ -178,9 +244,34 @@
     // итог только что закончившейся операции — «мало места», ошибку сборки,
     // число собранных файлов, — и разблокировка кнопок не повод его стирать.
     // Чтобы очистить строку намеренно, передают пустую строку.
+    // showBuildCard прячет карточку сборки целиком и показывает её на время
+    // работы.
+    //
+    // Раньше карточка висела всегда, и после закончившейся сборки в середине
+    // экрана оставалась полная синяя полоса с надписью «скачано 22 из 22» —
+    // состояние из прошлого, которое ничем не убиралось и занимало место,
+    // нужное списку версий и каталогу.
+    function showBuildCard(on) {
+      const card = el('buildCard');
+      if (card) card.classList.toggle('hidden', !on);
+    }
+
+    // finishBuildCard сворачивает карточку в одну строку итога: полоса
+    // прогресса после завершения не несёт ничего, кроме воспоминания.
+    function finishBuildCard() {
+      const box = el('progressBox');
+      if (box) box.classList.add('hidden');
+    }
+
     function setBusy(busy, text) {
       if (text !== undefined) setStatus(text);
-      root.querySelectorAll('button[data-md-busy]').forEach(function (b) { b.disabled = !!busy; });
+      root.querySelectorAll('button[data-md-busy]').forEach(function (b) {
+        b.disabled = !!busy;
+        // Выключенная кнопка обязана сказать, почему она выключена: серая
+        // кнопка без объяснения читается как поломка панели.
+        if (busy) b.title = 'Идёт работа с Thunderstore — дождитесь окончания';
+        else b.removeAttribute('title');
+      });
     }
 
     // ---- список игр -------------------------------------------------------
@@ -222,11 +313,22 @@
     function applyGame(game) {
       state.mods = (game && game.mods) || null;
       const on = !!(state.mods && state.mods.enabled);
+      const gid = (game && game.gameId) || state.gameId || '';
 
       const toggle = el('enabled');
       if (toggle) toggle.checked = on;
+
+      // СЛАГ — ЗНАЧЕНИЕ, А НЕ ПОДСКАЗКА.
+      //
+      // Серый placeholder «lethal-company» читался как заполненное поле, и
+      // «Подтянуть» отвечал «Укажите слаг игры на Thunderstore» на то, что
+      // оператор уже видел перед собой. Идентификатор игры и есть слаг у всех
+      // наших игр; если он не совпадёт — поле правится руками.
       const slug = el('slug');
-      if (slug && state.mods) slug.value = state.mods.community || '';
+      if (slug) {
+        slug.value = (state.mods && state.mods.community) || gid;
+        slug.removeAttribute('placeholder');
+      }
 
       const info = el('meta');
       if (info) {
@@ -236,12 +338,14 @@
             + 'папка: <code>' + esc(state.mods.steamFolder || '—') + '</code> · '
             + 'загрузчик: <code>' + esc(state.mods.loader || '—') + '</code>'
             + '</div>'
-          : '<div class="small text-body-secondary">Моды для этой игры не настроены.</div>';
+          : notConfiguredHtml(game);
       }
 
       const browse = el('browse');
       if (browse) {
-        const community = (state.mods && state.mods.community) || '';
+        // Ссылка на сайт не требует сохранённых настроек: слаг известен и до
+        // «Подтянуть». Выключенная кнопка без объяснения — худший из вариантов.
+        const community = (state.mods && state.mods.community) || gid;
         const uuid = (state.mods && state.mods.sectionUuid) || '';
         // Ссылка на каталог сайта требует UUID раздела, а не слаг: с
         // ?section=modpacks Thunderstore молча не применяет фильтр.
@@ -254,6 +358,10 @@
 
       const panels = el('panels');
       if (panels) panels.classList.toggle('hidden', !on);
+
+      // Смена игры обнуляет карточку сборки: её итог относился к прошлой.
+      showBuildCard(false);
+      setStatus('');
       if (on) { reloadVersions(); reloadCatalog(); }
     }
 
@@ -267,7 +375,11 @@
         if (!res.ok) { say(await res.text(), 'error'); return; }
         const data = await res.json();
         state.mods = data.mods;
-        applyGame({ mods: data.mods });
+        // Игру передаём целиком: applyGame читает из неё gameId и название, и
+        // без них слаг с пустым состоянием остались бы ни с чем.
+        const game = state.games.find(function (g) { return g.gameId === gameId(); }) || {};
+        game.mods = data.mods;
+        applyGame(game);
         say('Метаданные подтянуты из Thunderstore');
       } catch (e) {
         say('Ошибка: ' + e, 'error');
@@ -320,6 +432,8 @@
       }
     }
 
+    // Разбор состава — тоже работа, о которой стоит отчитаться в той же
+    // карточке: без неё «Состав» выглядел как нажатие в пустоту.
     // startTicker показывает, что запрос жив. Обычный JSON-ответ /mods/resolve
     // приходит целиком в конце, а разбор большого модпака занимает пару минут —
     // без счётчика панель неотличима от зависшей.
@@ -335,6 +449,7 @@
     async function resolvePack(full, version) {
       const parts = full.split('/');
       setBusy(true, 'Разбираем состав…');
+      showBuildCard(true);
       const stop = startTicker('Разбираем состав, это пара минут для большого модпака…');
       try {
         const body = new URLSearchParams({ gameId: gameId(), namespace: parts[0], name: parts[1] });
@@ -360,6 +475,7 @@
         return null;
       } finally {
         stop();
+        finishBuildCard();
       }
     }
 
@@ -472,6 +588,9 @@
       const retriesBox = el('retriesBox');
       const retriesList = el('retries');
       setBusy(true, 'Сборка…');
+      showBuildCard(true);
+      const box = el('progressBox');
+      if (box) box.classList.remove('hidden');
       if (bar) bar.style.width = '0%';
       if (detail) detail.textContent = '';
       // Повторы прошлой сборки к новой отношения не имеют.
@@ -527,6 +646,7 @@
         say('Ошибка сборки: ' + e, 'error');
       } finally {
         setBusy(false);
+        finishBuildCard();
       }
     }
 
@@ -639,7 +759,13 @@
     }
 
     return {
-      reload: function () { loadGames(); refreshCache(); },
+      // reload принимает игру, которую нужно выбрать: на вкладку приходят не
+      // только через саму вкладку, но и по метке «моды» из списка игр.
+      reload: function (wantGameId) {
+        if (wantGameId) state.gameId = wantGameId;
+        loadGames();
+        refreshCache();
+      },
       reloadVersions,
       reloadCatalog,
     };
