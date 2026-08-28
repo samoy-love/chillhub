@@ -156,31 +156,5 @@ namespace ChillHub.Core.Mods {
                         : new LaunchDecision(LaunchStep.Play, string.Empty);
             }
         }
-
-        /// <summary>
-        /// Показывать ли стрелку выбора рядом с «Играть» и что написать на подсказке
-        /// самой кнопки.
-        /// <para>
-        /// Стрелка нужна только у игры с модами и только в режиме «Играть»: на
-        /// «Обновить» и «Установить» она обещала бы выбор, которого в этот момент нет.
-        /// Подсказка называет запомненный вариант словами — без неё единственный
-        /// способ узнать, что запустится, это нажать и посмотреть.
-        /// </para>
-        /// </summary>
-        /// <param name="mods">Настройки модов игры; null — игра без модов.</param>
-        /// <param name="playMode">Кнопка действия сейчас в режиме «Играть».</param>
-        /// <param name="remembered">Запомненный вариант запуска или null.</param>
-        /// <returns>Видимость стрелки и текст подсказки.</returns>
-        internal static (bool Visible, string Tooltip) MenuButton(
-            ModsInfo? mods, bool playMode, LaunchTarget? remembered) {
-            var modded = playMode && mods != null && !string.IsNullOrWhiteSpace(mods.SteamAppId);
-            if (!modded) {
-                return (false, string.Empty);
-            }
-
-            return remembered is { } target
-                ? (true, "Запустится: " + ModsLaunch.TitleOf(target, mods))
-                : (true, "Выбрать, что запускать: своя копия из Steam или сборка Chill Hub, с модами или без");
-        }
     }
 }
