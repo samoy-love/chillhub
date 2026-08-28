@@ -313,6 +313,25 @@ test('параллельное скачивание показывает обе 
     'блок повторов остался скрытым');
 });
 
+test('карточка сборки прячется, пока сборки нет, и сворачивается после неё', async () => {
+  // Полная синяя полоса «скачано 22 из 22» посреди экрана — состояние из
+  // прошлого: занимает место, ничем не убирается и врёт, что что-то идёт.
+  const { document } = await mount(function (url) {
+    if (!url.startsWith('/admin/api/mods/build')) return null;
+    return Promise.resolve({ ok: true, text: () => Promise.resolve('{"type":"done"}\n') });
+  });
+
+  const card = document.querySelector('[data-md="buildCard"]');
+  assert.ok(card.classList.contains('hidden'), 'карточка сборки видна до всякой сборки');
+
+  await clickCatalogButton(document, 'data-mc-build', 'Team/Pack');
+
+  assert.ok(!card.classList.contains('hidden'), 'карточка не показалась при сборке');
+  assert.ok(
+    document.querySelector('[data-md="progressBox"]').classList.contains('hidden'),
+    'полоса прогресса осталась висеть после завершения');
+});
+
 test('сборка без единого события сообщает о буферизации', async () => {
   const { document, calls } = await mount(function (url) {
     if (!url.startsWith('/admin/api/mods/build')) return null;

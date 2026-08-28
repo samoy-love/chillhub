@@ -1795,6 +1795,16 @@ function uploadFinished(prefix){
   if(wrap) wrap.style.display = 'none';
   const fit = document.getElementById(prefix+'_fit');
   if(fit){ fit.textContent = ''; fit.className = 'small text-body-secondary'; }
+
+  // ГРАФИК СКОРОСТИ ЖИВЁТ РОВНО СТОЛЬКО, СКОЛЬКО ЗАЛИВКА.
+  //
+  // После «Готово» он занимал 180 пикселей высоты под карточкой «Обзор» —
+  // ради кривой, которая уже ничего не измеряет. Итог при этом остаётся:
+  // строкой над ним написаны объём, средняя, медианная и пиковая скорость,
+  // и это всё, что от него нужно постфактум.
+  const speedWrap = document.getElementById(prefix+'_speed_wrap');
+  if(speedWrap) speedWrap.style.display = 'none';
+
   try{ sysFreeRefresh(); }catch(_){ /* индикатор места не критичен */ }
 }
 

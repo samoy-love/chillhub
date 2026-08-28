@@ -197,6 +197,25 @@
     // итог только что закончившейся операции — «мало места», ошибку сборки,
     // число собранных файлов, — и разблокировка кнопок не повод его стирать.
     // Чтобы очистить строку намеренно, передают пустую строку.
+    // showBuildCard прячет карточку сборки целиком и показывает её на время
+    // работы.
+    //
+    // Раньше карточка висела всегда, и после закончившейся сборки в середине
+    // экрана оставалась полная синяя полоса с надписью «скачано 22 из 22» —
+    // состояние из прошлого, которое ничем не убиралось и занимало место,
+    // нужное списку версий и каталогу.
+    function showBuildCard(on) {
+      const card = el('buildCard');
+      if (card) card.classList.toggle('hidden', !on);
+    }
+
+    // finishBuildCard сворачивает карточку в одну строку итога: полоса
+    // прогресса после завершения не несёт ничего, кроме воспоминания.
+    function finishBuildCard() {
+      const box = el('progressBox');
+      if (box) box.classList.add('hidden');
+    }
+
     function setBusy(busy, text) {
       if (text !== undefined) setStatus(text);
       root.querySelectorAll('button[data-md-busy]').forEach(function (b) { b.disabled = !!busy; });
@@ -286,6 +305,10 @@
 
       const panels = el('panels');
       if (panels) panels.classList.toggle('hidden', !on);
+
+      // Смена игры обнуляет карточку сборки: её итог относился к прошлой.
+      showBuildCard(false);
+      setStatus('');
       if (on) { reloadVersions(); reloadCatalog(); }
     }
 
@@ -356,6 +379,8 @@
       }
     }
 
+    // Разбор состава — тоже работа, о которой стоит отчитаться в той же
+    // карточке: без неё «Состав» выглядел как нажатие в пустоту.
     // startTicker показывает, что запрос жив. Обычный JSON-ответ /mods/resolve
     // приходит целиком в конце, а разбор большого модпака занимает пару минут —
     // без счётчика панель неотличима от зависшей.
@@ -371,6 +396,7 @@
     async function resolvePack(full, version) {
       const parts = full.split('/');
       setBusy(true, 'Разбираем состав…');
+      showBuildCard(true);
       const stop = startTicker('Разбираем состав, это пара минут для большого модпака…');
       try {
         const body = new URLSearchParams({ gameId: gameId(), namespace: parts[0], name: parts[1] });
@@ -396,6 +422,7 @@
         return null;
       } finally {
         stop();
+        finishBuildCard();
       }
     }
 
@@ -508,6 +535,9 @@
       const retriesBox = el('retriesBox');
       const retriesList = el('retries');
       setBusy(true, 'Сборка…');
+      showBuildCard(true);
+      const box = el('progressBox');
+      if (box) box.classList.remove('hidden');
       if (bar) bar.style.width = '0%';
       if (detail) detail.textContent = '';
       // Повторы прошлой сборки к новой отношения не имеют.
@@ -563,6 +593,7 @@
         say('Ошибка сборки: ' + e, 'error');
       } finally {
         setBusy(false);
+        finishBuildCard();
       }
     }
 
