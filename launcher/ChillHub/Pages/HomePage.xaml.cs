@@ -199,6 +199,23 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Что сейчас нарисовано в строке действий витрины: по нему меню под стрелкой
+        /// знает, какие варианты уже стоят кнопками и повторять их не нужно.
+        /// </summary>
+        private Core.Mods.LaunchBarView? launchBar;
+
+        /// <summary>
+        /// Последний посчитанный набор вариантов запуска и когда он посчитан.
+        /// <para>
+        /// Считать его — значит сходить в реестр Windows и прочитать несколько файлов,
+        /// а строка действий пересобирается на каждое событие очереди и проверки.
+        /// Живёт снимок секунду: за это время игру из Steam не удалят, а щелчок по
+        /// кнопке всё равно пересчитывает варианты заново.
+        /// </para>
+        /// </summary>
+        private (string Key, long Stamp, IReadOnlyList<Core.Mods.LaunchOption> Options)? launchOptionsCache;
+
         private ActionMode actionMode = ActionMode.Checking;
         private bool hasUpdateError = false;
 
@@ -1431,7 +1448,7 @@ namespace ChillHub.Pages {
                 this.ActionBtn.Content = look.Content;
                 this.ActionBtn.IsEnabled = look.IsEnabled;
                 this.ApplyActionButtonStyle(look.StyleKey);
-                this.SyncLaunchMenuButton(mode);
+                this.SyncLaunchBar(mode);
             }
             catch (Exception ex) {
                 // Кнопка действия — центральный элемент экрана: не даём сбою оформления уронить страницу
@@ -1440,32 +1457,139 @@ namespace ChillHub.Pages {
         }
 
         /// <summary>
-        /// Показывает или прячет стрелку выбора варианта запуска.
+        /// Пересобирает строку действий витрины: «Играть» или две кнопки запуска.
         /// <para>
-        /// Только у игры с модами и только в режиме «Играть»: у остальных выбирать
-        /// нечего, а на «Обновить» и «Установить» стрелка обещала бы выбор, которого
-        /// в этот момент нет.
+        /// Кнопки появляются только у игры с модами и только в режиме «Играть»: пока
+        /// игра качается, обновляется или проверяется, запускать нечего, а обещать
+        /// выбор, которого в этот момент нет, — врать.
         /// </para>
         /// </summary>
         /// <param name="mode">Текущий режим кнопки действия.</param>
-        private void SyncLaunchMenuButton(ActionMode mode) {
+        private void SyncLaunchBar(ActionMode mode) {
             try {
                 var game = this.GetSelectedGame();
-                var view = Core.Mods.LaunchPlan.MenuButton(
-                    game?.Mods, mode == ActionMode.Play, Core.Mods.LaunchChoice.Remembered(game?.GameId));
+                var playMode = mode == ActionMode.Play;
+                var options = playMode && game?.Mods != null
+                    ? this.CachedLaunchOptions(game)
+                    : null;
 
-                this.LaunchMenuBtn.Visibility = view.Visible ? Visibility.Visible : Visibility.Collapsed;
-                this.ActionBtn.ToolTip = view.Visible ? view.Tooltip : null;
+                var view = Core.Mods.LaunchButtons.Compute(
+                    game?.Mods, playMode, options, Core.Mods.LaunchChoice.Remembered(game?.GameId));
+
+                this.launchBar = view;
+                this.ActionBtn.Visibility = view.ActionVisible ? Visibility.Visible : Visibility.Collapsed;
+                this.ApplyLaunchButton(this.LaunchBtn1, this.LaunchBtn1Title, this.LaunchBtn1Note, view, 0);
+                this.ApplyLaunchButton(this.LaunchBtn2, this.LaunchBtn2Title, this.LaunchBtn2Note, view, 1);
+                this.LaunchMenuBtn.Visibility = view.MenuVisible ? Visibility.Visible : Visibility.Collapsed;
+                this.LaunchMenuBtn.ToolTip = view.MenuVisible ? view.MenuTooltip : null;
+
+                // Подсказка «что запустится» нужна только оставшейся «Играть»: у кнопок
+                // запуска ответ написан прямо на них.
+                this.ActionBtn.ToolTip = view.ActionVisible && view.MenuVisible
+                    ? "Выбрать, что запускать"
+                    : null;
             }
             catch (Exception ex) {
-                Core.Logging.Logger.Warn($"SyncLaunchMenuButton: {ex.Message}");
+                Core.Logging.Logger.Warn($"SyncLaunchBar: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Выставляет одну кнопку запуска по счёту или прячет её, если варианта нет.
+        /// <para>
+        /// Стиль назначается здесь же: акцент носит тот вариант, которым играли в
+        /// прошлый раз, и он может оказаться как первой кнопкой, так и второй.
+        /// </para>
+        /// </summary>
+        /// <param name="button">Сама кнопка.</param>
+        /// <param name="title">Крупная строка.</param>
+        /// <param name="note">Мелкая строка.</param>
+        /// <param name="view">Посчитанная строка действий.</param>
+        /// <param name="index">Место кнопки в строке.</param>
+        private void ApplyLaunchButton(
+            Button button, TextBlock title, TextBlock note, Core.Mods.LaunchBarView view, int index) {
+            if (index >= view.Buttons.Count) {
+                button.Visibility = Visibility.Collapsed;
+                button.Tag = null;
+                return;
+            }
+
+            var model = view.Buttons[index];
+            title.Text = model.Title;
+            note.Text = model.Subtitle;
+            button.ToolTip = model.Tooltip;
+            button.Tag = model.Target;
+            button.Visibility = Visibility.Visible;
+
+            var styleKey = model.Accent ? "Style.LaunchButton.Accent" : "Style.LaunchButton.Ghost";
+            if (this.TryFindResource(styleKey) is Style style) {
+                button.Style = style;
+            }
+        }
+
+        /// <summary>
+        /// Варианты запуска для строки действий — со снимком на секунду.
+        /// <para>
+        /// Метод дёргается на каждое событие очереди и проверки, а за ним стоят реестр
+        /// и файловая система. Щелчок по кнопке варианты всё равно пересчитывает, так
+        /// что устареть снимку негде.
+        /// </para>
+        /// </summary>
+        /// <param name="game">Выбранная игра.</param>
+        /// <returns>Варианты запуска.</returns>
+        private IReadOnlyList<Core.Mods.LaunchOption> CachedLaunchOptions(GameInfo game) {
+            // В ключе — всё, от чего варианты зависят на нашей стороне: другая игра или
+            // сменившееся «установлена/требует обновления» обязаны считаться заново, не
+            // дожидаясь, пока истечёт секунда.
+            var key = $"{game.GameId}|{game.IsInstalled}|{game.NeedsUpdate}";
+            var now = Environment.TickCount64;
+            if (this.launchOptionsCache is { } cached
+                && string.Equals(cached.Key, key, StringComparison.OrdinalIgnoreCase)
+                && now - cached.Stamp < 1000) {
+                return cached.Options;
+            }
+
+            var options = this.LaunchOptionsFor(game, logSteam: false);
+            this.launchOptionsCache = (key, now, options);
+            return options;
+        }
+
+        /// <summary>Забывает снимок вариантов: состояние копий только что менялось.</summary>
+        private void InvalidateLaunchOptions() => this.launchOptionsCache = null;
+
+        /// <summary>Запускает вариант, вынесенный кнопкой на витрину.</summary>
+        /// <param name="sender">Нажатая кнопка.</param>
+        /// <param name="e">Аргументы события.</param>
+        private void LaunchBtn_Click(object sender, RoutedEventArgs e) {
+            if (sender is not Button { Tag: Core.Mods.LaunchTarget target }) {
+                return;
+            }
+
+            var game = this.GetSelectedGame();
+            if (game?.Mods == null) {
+                return;
+            }
+
+            // Варианты пересчитываются заново: между отрисовкой кнопки и щелчком игру
+            // могли удалить из Steam, а запустить не то, что написано на кнопке, —
+            // худший из возможных исходов.
+            this.InvalidateLaunchOptions();
+            var option = this.LaunchOptionsFor(game, logSteam: true).FirstOrDefault(o => o.Target == target);
+            if (option == null || !option.Available) {
+                this.StatusText.Text = option?.Note is { Length: > 0 } note
+                    ? note
+                    : "Этот вариант запуска сейчас недоступен.";
+                this.SyncLaunchBar(this.actionMode);
+                return;
+            }
+
+            this.StartLaunchOption(game, option);
         }
 
         private void LaunchMenuBtn_Click(object sender, RoutedEventArgs e) {
             var game = this.GetSelectedGame();
             if (game?.Mods is not null) {
-                this.ShowModsLaunchMenu(game);
+                this.ShowModsLaunchMenu(game, onlyHidden: true);
             }
         }
 
@@ -2067,13 +2191,29 @@ namespace ChillHub.Pages {
         /// </para>
         /// </summary>
         /// <param name="game">Выбранная игра.</param>
-        private void ShowModsLaunchMenu(GameInfo game) {
+        /// <param name="onlyHidden">
+        /// Показать только то, чего нет кнопками на витрине. Стрелка на то и стрелка,
+        /// что под ней лежит остальное: повторять в ней «Steam · с модами», когда он
+        /// стоит кнопкой в сантиметре левее, значит спрашивать дважды об одном.
+        /// </param>
+        private void ShowModsLaunchMenu(GameInfo game, bool onlyHidden = false) {
             try {
+                this.InvalidateLaunchOptions();
                 var options = this.LaunchOptionsFor(game, logSteam: true);
-                var menu = new ContextMenu { PlacementTarget = this.ActionBtn, Placement = PlacementMode.Top };
+                var shown = onlyHidden
+                    ? Core.Mods.LaunchButtons.MenuOptions(options, this.launchBar?.Buttons)
+                    : options;
+
+                // Меню цепляется к тому, что сейчас на экране: «Играть» может быть
+                // спрятана кнопками запуска, а всплывашка у невидимой кнопки уезжает
+                // в угол окна.
+                var anchor = onlyHidden || this.ActionBtn.Visibility != Visibility.Visible
+                    ? (FrameworkElement)this.LaunchMenuBtn
+                    : this.ActionBtn;
+                var menu = new ContextMenu { PlacementTarget = anchor, Placement = PlacementMode.Top };
 
                 var remembered = Core.Mods.LaunchChoice.Remembered(game.GameId);
-                foreach (var option in options) {
+                foreach (var option in shown) {
                     var item = new MenuItem {
                         Header = option.MenuText,
                         IsEnabled = option.Available,
@@ -2182,7 +2322,10 @@ namespace ChillHub.Pages {
                     Toast = text => this.ShowToast(text),
                     Confirm = Core.Home.HomeDialogs.AskYesNo,
                     Enqueue = gid => this.downloadQueue.Enqueue(gid),
-                    RefreshChoice = () => this.SyncLaunchMenuButton(this.actionMode),
+                    RefreshChoice = () => {
+                        this.InvalidateLaunchOptions();
+                        this.SyncLaunchBar(this.actionMode);
+                    },
                     InstallMods = (g, title, dir) => this.InstallModsToSteamAsync(g, title, dir),
                     Launch = this.LaunchNow,
                 }) {
@@ -2334,6 +2477,10 @@ namespace ChillHub.Pages {
                 this.UpdateProgress.Value = 0;
                 this.SpeedEtaText.Text = string.Empty;
                 this.FilesSizeText.Text = string.Empty;
+
+                // Модпак только что лёг в чужую папку Steam: снимок вариантов, снятый до
+                // установки, всё ещё утверждает «установить моды».
+                this.InvalidateLaunchOptions();
                 this.UpdateActionButtonState();
             }
         }

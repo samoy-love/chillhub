@@ -325,6 +325,77 @@
       </Setter>
     </Style>
 
+    <!-- Кнопки запуска на витрине: «Steam · с модами» и «Пиратка · с модами».
+         Две строки, а не одна: крупная говорит, ЧЬЯ копия запустится, мелкая — что
+         произойдёт по нажатию («с модами», «установить моды»). Одной строкой это не
+         помещалось, а подсказка по наведению — не то место, где игрок узнаёт, что
+         делает кнопка. -->
+    <Style x:Key="Style.LaunchButton.Base" TargetType="Button">
+      <Setter Property="Height" Value="46"/>
+      <Setter Property="MinWidth" Value="168"/>
+      <Setter Property="Padding" Value="16,0"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <!-- Вариант, которым играли в прошлый раз: тот же акцент, что у «Играть». -->
+    <Style x:Key="Style.LaunchButton.Accent" TargetType="Button" BasedOn="{StaticResource Style.LaunchButton.Base}">
+      <Setter Property="Foreground" Value="{DynamicResource Btn.Play.Fg}"/>
+      <Setter Property="Background" Value="{DynamicResource Btn.Play.Bg}"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="bd" CornerRadius="6" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                    Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Play.Bg.Hover}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Play.Bg.Disabled}"/>
+                <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Второй вариант: та же кнопка, но «стеклянная». Два залитых акцентом
+         прямоугольника рядом спорили бы друг с другом, и ни один не читался бы как
+         главный. Наведение поднимает фон и красит рамку акцентом — заливка целиком
+         сделала бы светлый текст нечитаемым. -->
+    <Style x:Key="Style.LaunchButton.Ghost" TargetType="Button" BasedOn="{StaticResource Style.LaunchButton.Base}">
+      <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+      <Setter Property="Background" Value="#66101017"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="bd" CornerRadius="6" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                    Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Accent}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.5"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <Style x:Key="Style.ActionButton.Retry" TargetType="Button" BasedOn="{StaticResource Style.Button.Dim.Base}">
       <Setter Property="Foreground" Value="{DynamicResource Btn.Retry.Fg}"/>
       <Setter Property="Background" Value="{DynamicResource Btn.Retry.Bg}"/>
@@ -871,25 +942,43 @@
                          TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
               <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                 <!-- ЕДИНСТВЕННАЯ кнопка действия в приложении. Раньше их было две — здесь и
-                     внизу окна — одинакового вида и с одинаковым текстом. -->
+                     внизу окна — одинакового вида и с одинаковым текстом. У игры с модами,
+                     готовой к запуску, её место занимают кнопки запуска ниже: «Играть» там
+                     не отвечала на вопрос, ЧТО именно запустится. -->
                 <Button x:Name="ActionBtn" Content="Играть" Click="ActionBtn_Click"
                         Style="{DynamicResource Style.ActionButton.Play}"
-                        Width="180" Height="42" VerticalAlignment="Center"/>
-                <!-- Стрелка выбора варианта запуска. Видна только у игры с модами: у
-                     остальных выбирать нечего, и пустая кнопка рядом с «Играть» только
-                     сбивала бы с толку. Сама «Играть» при этом запускает запомненный
-                     вариант — меню на каждый запуск брало по два клика и ничем не
-                     показывало, что оно вообще откроется. -->
+                        Width="180" Height="46" VerticalAlignment="Center"/>
+                <!-- Два способа играть с модами — своей копией из Steam и сборкой с сервера —
+                     вынесены кнопками. Выбор, спрятанный в меню, — не выбор: чем запустит
+                     «Играть», можно было узнать, только открыв стрелку. Кнопки нет, если её
+                     вариант сейчас недоступен: тогда он ждёт под стрелкой вместе с причиной. -->
+                <Button x:Name="LaunchBtn1" Click="LaunchBtn_Click" Visibility="Collapsed"
+                        Style="{DynamicResource Style.LaunchButton.Accent}">
+                  <StackPanel>
+                    <TextBlock x:Name="LaunchBtn1Title" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                    <TextBlock x:Name="LaunchBtn1Note" FontSize="11" Opacity="0.75" Margin="0,1,0,0" HorizontalAlignment="Center"/>
+                  </StackPanel>
+                </Button>
+                <Button x:Name="LaunchBtn2" Click="LaunchBtn_Click" Visibility="Collapsed" Margin="8,0,0,0"
+                        Style="{DynamicResource Style.LaunchButton.Ghost}">
+                  <StackPanel>
+                    <TextBlock x:Name="LaunchBtn2Title" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                    <TextBlock x:Name="LaunchBtn2Note" FontSize="11" Opacity="0.75" Margin="0,1,0,0" HorizontalAlignment="Center"/>
+                  </StackPanel>
+                </Button>
+                <!-- Стрелка с остальными вариантами: «без модов» и то, что сейчас
+                     недоступно. Видна только у игры с модами: у остальных выбирать нечего,
+                     и пустая кнопка рядом только сбивала бы с толку. -->
                 <Button x:Name="LaunchMenuBtn" Click="LaunchMenuBtn_Click"
-                        Style="{DynamicResource Style.ActionButton.Play}"
-                        Width="42" Height="42" Margin="6,0,0,0" VerticalAlignment="Center"
-                        Visibility="Collapsed" ToolTip="Выбрать, что запускать">
+                        Style="{DynamicResource Style.LaunchButton.Ghost}"
+                        Width="46" MinWidth="46" Padding="0" Margin="8,0,0,0"
+                        Visibility="Collapsed" ToolTip="Другие варианты запуска">
                   <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE70D;" FontSize="12"
                              VerticalAlignment="Center" HorizontalAlignment="Center"/>
                 </Button>
                 <Button x:Name="HeroInfoBtn" Click="GameDetails_Click"
                         Style="{DynamicResource Style.Button.HeroInfo}"
-                        Margin="8,0,0,0" VerticalAlignment="Center" ToolTip="Сведения, история изменений, папка игры">
+                        Height="46" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip="Сведения, история изменений, папка игры">
                   <!-- Подпись, а не одинокая ⓘ: кнопка ведёт на отдельный экран, и слово
                        говорит об этом, а значок в кружке читался как всплывающая подсказка. -->
                   <StackPanel Orientation="Horizontal">

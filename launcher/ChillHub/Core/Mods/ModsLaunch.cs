@@ -146,8 +146,8 @@ namespace ChillHub.Core.Mods {
             return target switch {
                 LaunchTarget.SteamModded => $"Steam · {modded}",
                 LaunchTarget.SteamVanilla => "Steam · без модов",
-                LaunchTarget.LocalModded => $"Сборка Chill Hub · {modded}",
-                _ => "Сборка Chill Hub · без модов",
+                LaunchTarget.LocalModded => $"Пиратка · {modded}",
+                _ => "Пиратка · без модов",
             };
         }
 
