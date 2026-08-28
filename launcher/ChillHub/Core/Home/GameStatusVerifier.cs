@@ -87,6 +87,35 @@ namespace ChillHub.Core.Home {
                     return;
                 }
 
+                // БЫСТРЫЙ ПУТЬ: версии сошлись и папку с прошлой проверки не трогали.
+                //
+                // Длинный путь ниже качает манифест и строит полный план различий — обходит
+                // все его файлы, сверяет размеры и время, при промахе кеша считает хеши. Для
+                // сборки в пятнадцать тысяч файлов это секунды дисковой работы на КАЖДУЮ игру
+                // при КАЖДОМ запуске лаунчера, притом что ответ почти всегда один: ничего не
+                // изменилось.
+                //
+                // Здесь тот же ответ собирается из трёх дешёвых: версия сборки на диске равна
+                // серверной, модпак не отстал, а слепок папки совпадает с тем, каким мы его
+                // запомнили после прошлой успешной проверки. Слепок снимается обходом
+                // каталогов без чтения содержимого и расходится от любого практического
+                // повреждения — удалённого файла, подменённого, оборванного обновления.
+                // Разошёлся или его нет вовсе — идём длинным путём, как раньше.
+                if (hasLocalFiles
+                    && string.Equals(GameLocalState.ReadLocalVersion(gid).Trim(), latest!.Trim(), StringComparison.OrdinalIgnoreCase)
+                    && !GameStatus.ModsOutOfDate(game)
+                    && InstallFingerprint.Matches(localRoot)) {
+                    game.IsInstalled = true;
+                    game.NeedsUpdate = false;
+
+                    // Качать нечего — подсказка о требуемом месте должна об этом знать,
+                    // иначе она осталась бы от прошлого обновления.
+                    this.spaceHint.Remember(gid, 0);
+                    Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} слепок папки совпал — полная сверка не нужна");
+
+                    return;
+                }
+
                 // Получаем манифест latest и план сравнения
                 var manifestUrl = IntegrityChecker.ManifestUrl(this.baseApi(), gid, latest);
                 Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} fetching manifest {manifestUrl}");
@@ -110,6 +139,11 @@ namespace ChillHub.Core.Home {
                 else if (upToDate) {
                     game.IsInstalled = true;
                     game.NeedsUpdate = false;
+
+                    // Файлы только что сверены с манифестом — запоминаем слепок папки, чтобы
+                    // следующий запуск обошёлся без этого прохода. Игры, поставленные до
+                    // появления слепков, получают его здесь же, на первой проверке.
+                    InstallFingerprint.Save(localRoot);
                 }
                 else {
                     game.IsInstalled = true;
