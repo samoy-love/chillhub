@@ -64,6 +64,11 @@ namespace ChillHub.Core.Mods {
             LaunchTarget.LocalModded,
         };
 
+        /// <summary>То же, когда сборки с сервера на витрине быть не может.</summary>
+        private static readonly LaunchTarget[] SteamOnly = {
+            LaunchTarget.SteamModded,
+        };
+
         /// <summary>
         /// Короткая подпись копии — на кнопку, где длинной строке не поместиться.
         /// Название модпака при этом не теряется: оно уходит в подсказку.
@@ -78,41 +83,55 @@ namespace ChillHub.Core.Mods {
         /// <summary>
         /// Считает строку действий витрины.
         /// <para>
-        /// Кнопки запуска показываются только в режиме «Играть»: пока игра качается,
-        /// обновляется или проверяется, запускать нечего, и предложение выбрать копию
-        /// в этот момент — обещание, которого лаунчер не выполнит.
+        /// Пока игра качается, удаляется или проверяется, кнопок запуска нет вовсе:
+        /// запускать нечего, и предложение выбрать копию в этот момент — обещание,
+        /// которого лаунчер не выполнит.
+        /// </para>
+        /// <para>
+        /// А вот «сборка с сервера ещё не скачана» запуску копии из Steam не помеха:
+        /// это разные папки и разные файлы. Поэтому «Steam · с модами» стоит рядом с
+        /// «Установить» и ставит моды в копию Steam, не трогая сборку.
         /// </para>
         /// </summary>
         /// <param name="mods">Настройки модов игры; null — игра без модов.</param>
         /// <param name="playMode">Кнопка действия сейчас в режиме «Играть».</param>
+        /// <param name="steamAllowed">
+        /// Можно ли предлагать запуск копии из Steam, когда «Играть» на витрине нет.
+        /// Копия из Steam НЕ ЗАВИСИТ от сборки с сервера: моды ставятся в чужую папку,
+        /// и требовать ради них скачать десять гигабайт сборки, которую игрок не
+        /// просил, — плата ни за что. Отсюда «Установить» и «Steam · с модами» стоят
+        /// рядом: первая ставит сборку, вторая ставит моды в Steam и запускает.
+        /// </param>
         /// <param name="options">Варианты запуска, посчитанные на этот момент.</param>
         /// <param name="remembered">Запомненный вариант запуска или null.</param>
         /// <returns>Что показать в строке действий.</returns>
         internal static LaunchBarView Compute(
             ModsInfo? mods,
             bool playMode,
+            bool steamAllowed,
             IReadOnlyList<LaunchOption>? options,
             LaunchTarget? remembered) {
-            var modded = playMode && mods != null && !string.IsNullOrWhiteSpace(mods.SteamAppId);
+            var modded = (playMode || steamAllowed) && mods != null && !string.IsNullOrWhiteSpace(mods.SteamAppId);
             if (!modded || options == null || options.Count == 0) {
                 return new LaunchBarView(Array.Empty<LaunchButtonView>(), true, false, string.Empty);
             }
 
-            var buttons = Primary
+            // Вне режима «Играть» сборки с сервера на витрине нет: её кнопка — это
+            // «Установить»/«Обновить» слева, и второй такой же рядом быть не должно.
+            var wanted = playMode ? Primary : SteamOnly;
+            var buttons = wanted
                 .Select(t => options.FirstOrDefault(o => o.Target == t && o.Available))
                 .Where(o => o != null)
                 .Select(o => Button(o!, mods, remembered))
                 .ToList();
 
-            if (buttons.Count == 0) {
-                // Ни одного способа сыграть с модами прямо сейчас: ни Steam-копии, ни
-                // сборки с сервера. Витрина возвращается к обычной «Играть» со стрелкой —
-                // там остались варианты без модов и объяснения, почему модов нет.
-                return new LaunchBarView(
-                    Array.Empty<LaunchButtonView>(), true, true, "Выбрать, что запускать");
-            }
+            // «Играть» остаётся, пока кнопки запуска её не заменили: вне режима «Играть»
+            // она вообще про другое — про установку и обновление сборки.
+            var actionVisible = !playMode || buttons.Count == 0;
+            var rest = MenuOptions(options, buttons);
+            var tooltip = buttons.Count == 0 ? "Выбрать, что запускать" : MenuTooltip(rest);
 
-            return new LaunchBarView(buttons, false, true, MenuTooltip(options, buttons));
+            return new LaunchBarView(buttons, actionVisible, rest.Count > 0, tooltip);
         }
 
         /// <summary>
@@ -160,12 +179,9 @@ namespace ChillHub.Core.Mods {
         /// перечисления не говорит ничего — открывать меню, чтобы узнать, что в меню,
         /// игрок не обязан.
         /// </summary>
-        /// <param name="options">Все варианты.</param>
-        /// <param name="shown">Кнопки витрины.</param>
+        /// <param name="rest">Варианты, оставшиеся под стрелкой.</param>
         /// <returns>Текст подсказки.</returns>
-        private static string MenuTooltip(
-            IReadOnlyList<LaunchOption> options, IReadOnlyList<LaunchButtonView> shown) {
-            var rest = MenuOptions(options, shown);
+        private static string MenuTooltip(IReadOnlyList<LaunchOption> rest) {
             return rest.Count == 0
                 ? "Другие варианты запуска"
                 : "Ещё: " + string.Join(", ", rest.Select(o => o.Title));

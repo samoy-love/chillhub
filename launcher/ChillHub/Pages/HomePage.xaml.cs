@@ -1469,12 +1469,18 @@ namespace ChillHub.Pages {
             try {
                 var game = this.GetSelectedGame();
                 var playMode = mode == ActionMode.Play;
-                var options = playMode && game?.Mods != null
+
+                // Копия из Steam живёт своей жизнью: моды ставятся в чужую папку, и
+                // ждать ради них закачки сборки с сервера незачем. Не предлагаем её
+                // только там, где игре сейчас не до запуска: идёт закачка, удаление,
+                // проверка или технические работы.
+                var steamAllowed = mode is ActionMode.Install or ActionMode.Update or ActionMode.Retry;
+                var options = (playMode || steamAllowed) && game?.Mods != null
                     ? this.CachedLaunchOptions(game)
                     : null;
 
                 var view = Core.Mods.LaunchButtons.Compute(
-                    game?.Mods, playMode, options, Core.Mods.LaunchChoice.Remembered(game?.GameId));
+                    game?.Mods, playMode, steamAllowed, options, Core.Mods.LaunchChoice.Remembered(game?.GameId));
 
                 this.launchBar = view;
                 this.ActionBtn.Visibility = view.ActionVisible ? Visibility.Visible : Visibility.Collapsed;
@@ -1483,9 +1489,10 @@ namespace ChillHub.Pages {
                 this.LaunchMenuBtn.Visibility = view.MenuVisible ? Visibility.Visible : Visibility.Collapsed;
                 this.LaunchMenuBtn.ToolTip = view.MenuVisible ? view.MenuTooltip : null;
 
-                // Подсказка «что запустится» нужна только оставшейся «Играть»: у кнопок
-                // запуска ответ написан прямо на них.
-                this.ActionBtn.ToolTip = view.ActionVisible && view.MenuVisible
+                // Подсказка «что запустится» нужна только той «Играть», которая
+                // открывает меню: у кнопок запуска ответ написан прямо на них, а
+                // «Установить» и «Обновить» и так называют своё действие.
+                this.ActionBtn.ToolTip = playMode && view.ActionVisible && view.MenuVisible
                     ? "Выбрать, что запускать"
                     : null;
             }

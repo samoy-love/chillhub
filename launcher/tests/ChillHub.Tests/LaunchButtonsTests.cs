@@ -25,7 +25,7 @@ namespace ChillHub.Tests {
         /// <summary>Обе копии готовы — на витрине две кнопки, обычной «Играть» нет.</summary>
         [Fact]
         public void ДвеГотовыеКопииДаютДвеКнопки() {
-            var view = LaunchButtons.Compute(Pack(), playMode: true, All(), remembered: null);
+            var view = LaunchButtons.Compute(Pack(), playMode: true, steamAllowed: false, All(), remembered: null);
 
             Assert.False(view.ActionVisible);
             Assert.True(view.MenuVisible);
@@ -50,7 +50,7 @@ namespace ChillHub.Tests {
                 Option(LaunchTarget.LocalVanilla, LaunchAction.Play),
             };
 
-            var view = LaunchButtons.Compute(Pack(), playMode: true, options, remembered: null);
+            var view = LaunchButtons.Compute(Pack(), playMode: true, steamAllowed: false, options, remembered: null);
 
             Assert.Equal(LaunchTarget.LocalModded, Assert.Single(view.Buttons).Target);
 
@@ -70,7 +70,7 @@ namespace ChillHub.Tests {
                 Option(LaunchTarget.SteamVanilla, LaunchAction.Play),
             };
 
-            var view = LaunchButtons.Compute(Pack(), playMode: true, options, remembered: null);
+            var view = LaunchButtons.Compute(Pack(), playMode: true, steamAllowed: false, options, remembered: null);
 
             Assert.Equal(LaunchTarget.SteamModded, Assert.Single(view.Buttons).Target);
             Assert.Single(LaunchButtons.MenuOptions(options, view.Buttons));
@@ -86,7 +86,7 @@ namespace ChillHub.Tests {
                 Option(LaunchTarget.SteamModded, LaunchAction.InstallMods, "установить моды"),
             };
 
-            var button = Assert.Single(LaunchButtons.Compute(Pack(), playMode: true, options, null).Buttons);
+            var button = Assert.Single(LaunchButtons.Compute(Pack(), playMode: true, steamAllowed: false, options, null).Buttons);
 
             Assert.Equal("установить моды", button.Subtitle);
             Assert.Contains("установить моды", button.Tooltip, System.StringComparison.Ordinal);
@@ -95,7 +95,7 @@ namespace ChillHub.Tests {
         /// <summary>Последний запущенный вариант красится акцентом — и только он.</summary>
         [Fact]
         public void АкцентТолькоУПрошлогоЗапуска() {
-            var view = LaunchButtons.Compute(Pack(), playMode: true, All(), LaunchTarget.LocalModded);
+            var view = LaunchButtons.Compute(Pack(), playMode: true, steamAllowed: false, All(), LaunchTarget.LocalModded);
 
             Assert.Equal(LaunchTarget.LocalModded, Assert.Single(view.Buttons, b => b.Accent).Target);
         }
@@ -107,29 +107,16 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void ЗапомненныйВариантБезМодовАкцентаНеДаёт() {
-            var view = LaunchButtons.Compute(Pack(), playMode: true, All(), LaunchTarget.SteamVanilla);
+            var view = LaunchButtons.Compute(Pack(), playMode: true, steamAllowed: false, All(), LaunchTarget.SteamVanilla);
 
             Assert.DoesNotContain(view.Buttons, b => b.Accent);
-        }
-
-        /// <summary>
-        /// Вне режима «Играть» кнопок запуска нет: пока игра качается или
-        /// проверяется, запускать нечего.
-        /// </summary>
-        [Fact]
-        public void ВнеРежимаИгратьКнопокЗапускаНет() {
-            var view = LaunchButtons.Compute(Pack(), playMode: false, All(), remembered: null);
-
-            Assert.Empty(view.Buttons);
-            Assert.True(view.ActionVisible);
-            Assert.False(view.MenuVisible);
         }
 
         /// <summary>У игры без модов витрина остаётся прежней: одна кнопка действия.</summary>
         [Fact]
         public void БезМодовВитринаПрежняя() {
-            Assert.True(LaunchButtons.Compute(null, playMode: true, All(), null).ActionVisible);
-            Assert.False(LaunchButtons.Compute(new ModsInfo(), playMode: true, All(), null).MenuVisible);
+            Assert.True(LaunchButtons.Compute(null, playMode: true, steamAllowed: false, All(), null).ActionVisible);
+            Assert.False(LaunchButtons.Compute(new ModsInfo(), playMode: true, steamAllowed: false, All(), null).MenuVisible);
         }
 
         /// <summary>
@@ -143,7 +130,7 @@ namespace ChillHub.Tests {
                 Option(LaunchTarget.SteamVanilla, LaunchAction.Play),
             };
 
-            var view = LaunchButtons.Compute(Pack(), playMode: true, options, remembered: null);
+            var view = LaunchButtons.Compute(Pack(), playMode: true, steamAllowed: false, options, remembered: null);
 
             Assert.Empty(view.Buttons);
             Assert.True(view.ActionVisible);
@@ -154,10 +141,81 @@ namespace ChillHub.Tests {
         /// <summary>Подсказка стрелки перечисляет то, что под ней лежит.</summary>
         [Fact]
         public void ПодсказкаСтрелкиПеречисляетСпрятанное() {
-            var view = LaunchButtons.Compute(Pack(), playMode: true, All(), remembered: null);
+            var view = LaunchButtons.Compute(Pack(), playMode: true, steamAllowed: false, All(), remembered: null);
 
             Assert.Contains("Steam · без модов", view.MenuTooltip, System.StringComparison.Ordinal);
             Assert.Contains("Пиратка · без модов", view.MenuTooltip, System.StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// СБОРКА С СЕРВЕРА НЕ УСЛОВИЕ ДЛЯ МОДОВ В STEAM. Игра ещё не скачана, на
+        /// витрине «Установить» — и рядом с ней стоит «Steam · с модами»: моды лягут
+        /// в чужую папку Steam, десять гигабайт сборки для этого не нужны.
+        /// </summary>
+        [Fact]
+        public void БезСборкиНаДискеSteamВсёРавноПредлагается() {
+            var options = new List<LaunchOption> {
+                Option(LaunchTarget.SteamModded, LaunchAction.InstallMods, "установить моды"),
+                Option(LaunchTarget.SteamVanilla, LaunchAction.Play),
+                Option(LaunchTarget.LocalModded, LaunchAction.InstallGame, "установить игру с модами"),
+                Option(LaunchTarget.LocalVanilla, LaunchAction.InstallGame, "установить игру"),
+            };
+
+            var view = LaunchButtons.Compute(Pack(), playMode: false, steamAllowed: true, options, null);
+
+            var button = Assert.Single(view.Buttons);
+            Assert.Equal(LaunchTarget.SteamModded, button.Target);
+            Assert.Equal("установить моды", button.Subtitle);
+
+            // «Установить» остаётся на месте: она про сборку, а не про моды.
+            Assert.True(view.ActionVisible);
+            Assert.True(view.MenuVisible);
+        }
+
+        /// <summary>
+        /// Вне режима «Играть» сборки с сервера на витрине нет: её кнопка — это
+        /// «Установить»/«Обновить» слева, и второй такой же рядом быть не должно.
+        /// </summary>
+        [Fact]
+        public void ВнеРежимаИгратьПираткаКнопкойНеСтановится() {
+            var view = LaunchButtons.Compute(Pack(), playMode: false, steamAllowed: true, All(), null);
+
+            Assert.Equal(LaunchTarget.SteamModded, Assert.Single(view.Buttons).Target);
+            Assert.Contains(
+                LaunchButtons.MenuOptions(All(), view.Buttons),
+                o => o.Target == LaunchTarget.LocalModded);
+        }
+
+        /// <summary>
+        /// Копии в Steam нет — вне режима «Играть» витрина не меняется вовсе: одна
+        /// кнопка действия, и никаких обещаний.
+        /// </summary>
+        [Fact]
+        public void БезКопииВSteamВнеИгрыВитринаНеМеняется() {
+            var options = new List<LaunchOption> {
+                Option(LaunchTarget.SteamModded, LaunchAction.Unavailable, "Steam не установлен"),
+                Option(LaunchTarget.SteamVanilla, LaunchAction.Unavailable, "Steam не установлен"),
+                Option(LaunchTarget.LocalModded, LaunchAction.InstallGame, "установить игру с модами"),
+                Option(LaunchTarget.LocalVanilla, LaunchAction.InstallGame, "установить игру"),
+            };
+
+            var view = LaunchButtons.Compute(Pack(), playMode: false, steamAllowed: true, options, null);
+
+            Assert.Empty(view.Buttons);
+            Assert.True(view.ActionVisible);
+        }
+
+        /// <summary>
+        /// Идёт закачка, удаление или проверка — кнопок запуска нет ни одной, даже
+        /// Steam: в этот момент лаунчер занят игрой, а не её запуском.
+        /// </summary>
+        [Fact]
+        public void ПокаИдётРаботаКнопокЗапускаНет() {
+            var view = LaunchButtons.Compute(Pack(), playMode: false, steamAllowed: false, All(), null);
+
+            Assert.Empty(view.Buttons);
+            Assert.True(view.ActionVisible);
+            Assert.False(view.MenuVisible);
         }
 
         private static List<LaunchOption> All() => new() {
