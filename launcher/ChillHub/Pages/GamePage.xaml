@@ -29,10 +29,10 @@
 
     <!-- Основная кнопка действия (Установить/Обновить/Отмена) -->
     <Style x:Key="Style.Button.GamePrimary" TargetType="Button">
-      <Setter Property="Background" Value="{DynamicResource Brush.Accent}"/>
-      <!-- Тёмный текст на акценте — как у кнопки действия на витрине. Светло-розовый
-           на градиенте давал контраст ниже читаемого. -->
-      <Setter Property="Foreground" Value="#0C0C10"/>
+      <Setter Property="Background" Value="{DynamicResource Brush.AccentFill}"/>
+      <!-- Белая подпись на заливке кнопок — как у кнопки действия на витрине: на самом
+           акценте не проходили обе, и белая, и тёмная (см. Color.AccentFill в теме). -->
+      <Setter Property="Foreground" Value="#FFFFFF"/>
       <Setter Property="BorderThickness" Value="0"/>
       <Setter Property="BorderBrush" Value="Transparent"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
@@ -47,7 +47,10 @@
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.AccentHover}"/>
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.AccentFillHover}"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.AccentFillPressed}"/>
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter Property="Opacity" Value="0.55"/>

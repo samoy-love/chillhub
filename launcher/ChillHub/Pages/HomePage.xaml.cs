@@ -657,7 +657,9 @@ namespace ChillHub.Pages {
 
                     // Порядок из ответа API сохраняем, установленные держим сверху
                     var sorted = this.catalog.Sort(this.games);
-                    var reordered = !GameCatalog.SameOrder(this.games, sorted);
+                    object? bound = null;
+                    await this.DispatcherInvokeAsync(() => bound = this.GameList.ItemsSource);
+                    var reordered = GameCatalog.NeedsRebind(bound, sorted);
                     this.games = sorted;
 
                     // Проверка статусов почти всегда оставляет порядок прежним, и вот
@@ -1237,6 +1239,19 @@ namespace ChillHub.Pages {
         /// слетал бы на любом обновлении списка.
         /// </para>
         /// </summary>
+        /// <summary>
+        /// Возвращает выделение на прежнюю игру после подмены источника. Если её больше
+        /// нет — на первую в списке: без выделения витрина и кнопка действия остаются от
+        /// игры, которой уже не существует.
+        /// </summary>
+        /// <param name="gameId">Игра, выделенная до подмены.</param>
+        private void RestoreSelection(string? gameId) {
+            var idx = GameCatalog.SelectionIndexAfterRefresh(this.games, gameId);
+            if (idx >= 0) {
+                this.GameList.SelectedItem = this.games[idx];
+            }
+        }
+
         private void SetGamesSource() {
             // Список пересобран из свежих объектов — метки очереди на них ещё не стоят,
             // а закачка тем временем идёт. Переносим их из снимка очереди.
@@ -1338,22 +1353,22 @@ namespace ChillHub.Pages {
                 this.catalog.RememberApiOrder(this.games);
                 var sorted = this.catalog.Sort(this.games);
 
-                // Порядок не изменился — источник не трогаем: его подмена пересоздаёт
+                // Ничего не изменилось — источник не трогаем: его подмена пересоздаёт
                 // строки, а вместе с ними сбрасывает выделение и грузит значки заново.
-                if (!GameCatalog.SameOrder(this.games, sorted)) {
-                    this.games = sorted;
+                // Сравнение идёт с ПОКАЗАННЫМ списком, а не с this.games: слияние ответа
+                // сервера уже подменило поле новым списком, и сравнение поля с самим собой
+                // всегда говорило «то же самое» — игра, удалённая в админке, оставалась в
+                // списке (см. GameCatalog.NeedsRebind).
+                var rebind = GameCatalog.NeedsRebind(this.GameList.ItemsSource, sorted);
+                this.games = sorted;
+                if (rebind) {
                     this.SetGamesSource();
 
-                    // Восстановим выбранную игру, если она осталась в списке
-                    if (!string.IsNullOrWhiteSpace(prevSelectedId)) {
-                        var idxSel = GameCatalog.IndexOfIgnoreCase(this.games, prevSelectedId);
-                        if (idxSel >= 0) {
-                            this.GameList.SelectedItem = this.games[idxSel];
-                        }
-                    }
-                }
-                else {
-                    this.games = sorted;
+                    // Восстановим выбранную игру, если она осталась в списке. Если её
+                    // удалили — выделяем первую: пустая витрина после обновления списка
+                    // выглядит как поломка, а кнопка действия осталась бы от игры,
+                    // которой больше нет.
+                    this.RestoreSelection(prevSelectedId);
                 }
             }
             catch (Exception ex) {
@@ -2738,13 +2753,12 @@ namespace ChillHub.Pages {
                 GameStatus.MarkUninstalled(this.games.FirstOrDefault(x => x.GameId == gameId));
 
                 this.games = this.catalog.Sort(this.games);
-                this.GameList.ItemsSource = this.games;
-                if (!string.IsNullOrWhiteSpace(selectedId)) {
-                    var idx = GameCatalog.IndexOf(this.games, selectedId);
-                    if (idx >= 0) {
-                        this.GameList.SelectedIndex = idx;
-                    }
-                }
+
+                // SetGamesSource, а не голое присваивание ItemsSource: смена источника
+                // пересоздаёт представление списка вместе с фильтром поиска, и набранный
+                // запрос молча слетал после удаления файлов игры.
+                this.SetGamesSource();
+                this.RestoreSelection(selectedId);
             }
             catch (Exception ex) {
                 // Файлы уже удалены; здесь только пересборка списка — ошибку показываем в статусе

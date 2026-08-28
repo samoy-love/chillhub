@@ -22,6 +22,29 @@
   <Color x:Key="Color.Accent">#7C5CFF</Color>
   <Color x:Key="Color.AccentHover">#8F73FF</Color>
   <Color x:Key="Color.SecondaryAccent">#6949E0</Color>   <!-- нажатое состояние акцента -->
+  <!--
+    ЗАЛИВКА ГЛАВНЫХ КНОПОК. Отдельная от Color.Accent, и вот почему.
+
+    Акцент #7C5CFF стоит ровно посередине по светлоте: на нём не читается ни белая
+    подпись (4.35:1), ни тёмная (4.49:1) — обе не дотягивают до порога AA 4.5:1 для
+    мелкого текста, а именно им набраны кнопки. Прежний комментарий обещал тёмному
+    тексту 6:1; счёт этого не подтверждает.
+
+    Эта краска темнее ровно настолько, чтобы белая подпись давала 5.8:1, а наведение
+    и нажатие оставались различимыми и тоже проходили порог (4.9:1 и 7.0:1). Сам
+    акцент при этом не трогаем: полосы прогресса, рамка выбранной карточки и проценты
+    стоят на тёмном фоне, где он читается прекрасно.
+  -->
+  <Color x:Key="Color.AccentFill">#6949E0</Color>
+  <Color x:Key="Color.AccentFillHover">#7457E6</Color>
+  <Color x:Key="Color.AccentFillPressed">#5A3FCC</Color>
+  <!-- Пункт меню и выпадающего списка под курсором и в нажатии. Отдельные краски, а не
+       Brush.Hover: тот совпадает с фоном самого меню (Surface2 #1B1B24), и наведение на
+       пункт не было видно вовсе — список выглядел нерабочим. Взяты с запасом по светлоте
+       (1.55 и 1.85 к фону меню): подсветка на грани различимости в списке из четырёх
+       строк не отвечает на вопрос «на чём я сейчас». -->
+  <Color x:Key="Color.MenuHover">#3F3175</Color>
+  <Color x:Key="Color.MenuPressed">#4A3A8C</Color>
   <!-- Статусы игр: готова / нужно обновление / проблема -->
   <Color x:Key="Color.Success">#57C98A</Color>
   <Color x:Key="Color.Warning">#E0A64B</Color>
@@ -62,6 +85,11 @@
   <SolidColorBrush x:Key="Brush.Accent" Color="{StaticResource Color.Accent}"/>
   <SolidColorBrush x:Key="Brush.AccentHover" Color="{StaticResource Color.AccentHover}"/>
   <SolidColorBrush x:Key="Brush.SecondaryAccent" Color="{StaticResource Color.SecondaryAccent}"/>
+  <SolidColorBrush x:Key="Brush.AccentFill" Color="{StaticResource Color.AccentFill}"/>
+  <SolidColorBrush x:Key="Brush.AccentFillHover" Color="{StaticResource Color.AccentFillHover}"/>
+  <SolidColorBrush x:Key="Brush.AccentFillPressed" Color="{StaticResource Color.AccentFillPressed}"/>
+  <SolidColorBrush x:Key="Brush.MenuHover" Color="{StaticResource Color.MenuHover}"/>
+  <SolidColorBrush x:Key="Brush.MenuPressed" Color="{StaticResource Color.MenuPressed}"/>
   <!-- Заливка главной кнопки. Ключ остался с градиентных времён, но краска теперь одна:
        градиент на тёмном фоне всё равно читался как грязное пятно. -->
   <SolidColorBrush x:Key="Brush.AccentGradientPrimary" Color="{StaticResource Color.Accent}"/>
@@ -188,8 +216,16 @@
             </Grid>
           </Border>
           <ControlTemplate.Triggers>
+            <!-- Подсветка — Brush.MenuHover, а не Brush.Hover: у второго ровно тот же
+                 цвет, что у фона меню (Surface2), и наведение не было видно вообще —
+                 список вариантов запуска выглядел неживым. Нажатие — ещё на ступень
+                 светлее, иначе клик ничем не отзывается. -->
             <Trigger Property="IsHighlighted" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.MenuHover}"/>
+              <Setter Property="Foreground" Value="#FFFFFF"/>
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.MenuPressed}"/>
               <Setter Property="Foreground" Value="#FFFFFF"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
@@ -468,10 +504,10 @@
 
   <!-- Primary button (e.g., Play) -->
   <Style x:Key="Style.Button.Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-    <Setter Property="Background" Value="{DynamicResource Brush.AccentGradientPrimary}"/>
-    <!-- Тёмный текст на акценте даёт ~6:1, белый — ~3.5:1. Раньше стояло #0A0A0A поверх
-         тёмного градиента, то есть тёмное на тёмном. -->
-    <Setter Property="Foreground" Value="#0C0C10"/>
+    <Setter Property="Background" Value="{DynamicResource Brush.AccentFill}"/>
+    <!-- Белый по Brush.AccentFill — 5.8:1. На самом акценте (#7C5CFF) не проходили обе
+         подписи: белая 4.35:1, тёмная 4.49:1 при пороге 4.5:1 — см. Color.AccentFill. -->
+    <Setter Property="Foreground" Value="#FFFFFF"/>
     <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="BorderBrush" Value="Transparent"/>
     <Setter Property="Padding" Value="12,6"/>
@@ -488,10 +524,10 @@
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="bd" Property="Background" Value="{StaticResource Brush.AccentHover}"/>
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource Brush.AccentFillHover}"/>
             </Trigger>
             <Trigger Property="IsPressed" Value="True">
-              <Setter TargetName="bd" Property="Background" Value="{StaticResource Brush.SecondaryAccent}"/>
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource Brush.AccentFillPressed}"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Opacity" Value="0.6"/>
@@ -525,6 +561,9 @@
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
               <Setter Property="Foreground" Value="{DynamicResource Brush.Accent}"/>
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter Property="Foreground" Value="{DynamicResource Brush.AccentHover}"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Opacity" Value="0.6"/>
@@ -573,6 +612,7 @@
        и начать её выглядели одинаково. -->
   <SolidColorBrush x:Key="Brush.DangerFill" Color="#2A1E22"/>
   <SolidColorBrush x:Key="Brush.DangerFillHover" Color="#3A2A2E"/>
+  <SolidColorBrush x:Key="Brush.DangerFillPressed" Color="#48343A"/>
   <SolidColorBrush x:Key="Brush.DangerText" Color="#F0D9D9"/>
   <Style x:Key="Style.Button.Danger" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
     <Setter Property="Background" Value="{StaticResource Brush.DangerFill}"/>
@@ -591,6 +631,9 @@
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="bd" Property="Background" Value="{StaticResource Brush.DangerFillHover}"/>
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource Brush.DangerFillPressed}"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Opacity" Value="0.6"/>
@@ -642,6 +685,10 @@
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="bd" Property="Background" Value="{StaticResource Brush.DangerFill}"/>
+              <Setter Property="Foreground" Value="{DynamicResource Brush.Danger}"/>
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource Brush.DangerFillHover}"/>
               <Setter Property="Foreground" Value="{DynamicResource Brush.Danger}"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
@@ -696,6 +743,86 @@
     <Setter Property="Padding" Value="8,6"/>
     <Setter Property="Margin" Value="0,0,8,0"/>
     <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+  </Style>
+
+  <!-- Поле формы: рамка, подсветка фокуса и подсказка ВНУТРИ шаблона.
+       Подсказка стояла отдельной надписью поверх поля, в соседней ячейке той же сетки, и
+       её отступы подбирались руками под отступы поля. Совпадение держалось на честном
+       слове и не держалось: подсказку сетка ставила по своему краю, а текст поля живёт
+       внутри рамки и Padding, — после клика каретка появлялась не там, где стояла
+       подсказка. Здесь у обеих одна рамка, один Padding, один шрифт и одно выравнивание,
+       так что промахнуться нечем. Текст подсказки — в Placeholder.Text у самого поля. -->
+  <ui:CaretInsetConverter x:Key="CaretInsetConv"/>
+  <ControlTemplate x:Key="Template.TextBox.Field" TargetType="TextBox">
+    <Border x:Name="bd"
+            Background="{TemplateBinding Background}"
+            BorderBrush="{TemplateBinding BorderBrush}"
+            BorderThickness="{TemplateBinding BorderThickness}"
+            CornerRadius="{StaticResource Radius.M}"
+            SnapsToDevicePixels="True">
+      <Grid>
+        <!-- Отступы подсказки — Padding поля плюс отступ каретки: WPF держит внутри
+             области содержимого TextBoxView со своими 2px по бокам, и подсказка, набитая
+             ровно по Padding, вставала левее первого символа. -->
+        <TextBlock x:Name="Hint" Visibility="Collapsed" IsHitTestVisible="False"
+                   Text="{Binding Path=(ui:Placeholder.Text), RelativeSource={RelativeSource TemplatedParent}}"
+                   Margin="{Binding Padding, RelativeSource={RelativeSource TemplatedParent},
+                                    Converter={StaticResource CaretInsetConv}}"
+                   VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                   Foreground="{DynamicResource Brush.TextMuted}"/>
+        <!-- Padding сюда НЕ пробрасываем: TextBoxBase сам ставит его области содержимого,
+             и связка Margin="{TemplateBinding Padding}" применяла отступ дважды — текст
+             начинался на 8px правее подсказки, ровно на ширину отступа. -->
+        <ScrollViewer x:Name="PART_ContentHost"
+                      Focusable="False"
+                      VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                      HorizontalScrollBarVisibility="Hidden"
+                      VerticalScrollBarVisibility="Auto"/>
+      </Grid>
+    </Border>
+    <ControlTemplate.Triggers>
+      <!-- Подсказка видна ТОЛЬКО у пустого поля: иначе она оставалась поверх набранного
+           текста, стоило увести фокус. -->
+      <Trigger Property="Text" Value="">
+        <Setter TargetName="Hint" Property="Visibility" Value="Visible"/>
+      </Trigger>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
+      </Trigger>
+      <!-- Фокус — акцентом: в форме четыре поля подряд, и без подсветки непонятно,
+           куда именно попадёт набранный текст. -->
+      <Trigger Property="IsKeyboardFocusWithin" Value="True">
+        <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Accent}"/>
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Opacity" Value="0.6"/>
+      </Trigger>
+    </ControlTemplate.Triggers>
+  </ControlTemplate>
+
+  <!-- Однострочное поле формы. Margin="0" обязателен: базовый стиль задаёт полям
+       Margin="0,0,8,0", и без сброса правая колонка формы уезжала на эти 8px от края
+       карточки. Padding="8,0" + рамка = 9px до текста — ровно столько же отступает
+       ContentSite в шаблоне ComboBox, поэтому «Имя», «Контакт» и «Тип» начинаются по
+       одной линии. -->
+  <Style x:Key="Style.TextBox.Field" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+    <Setter Property="Template" Value="{StaticResource Template.TextBox.Field}"/>
+    <Setter Property="Margin" Value="0"/>
+    <Setter Property="Height" Value="36"/>
+    <Setter Property="Padding" Value="8,0"/>
+    <Setter Property="FontSize" Value="14"/>
+    <Setter Property="VerticalContentAlignment" Value="Center"/>
+    <Setter Property="CaretBrush" Value="{DynamicResource Brush.Text}"/>
+  </Style>
+
+  <!-- Многострочное поле: та же рамка, но текст с верхнего края и перенос по словам. -->
+  <Style x:Key="Style.TextBox.Field.Multiline" TargetType="TextBox" BasedOn="{StaticResource Style.TextBox.Field}">
+    <Setter Property="Height" Value="Auto"/>
+    <Setter Property="Padding" Value="8,8"/>
+    <Setter Property="MinHeight" Value="120"/>
+    <Setter Property="AcceptsReturn" Value="True"/>
+    <Setter Property="TextWrapping" Value="Wrap"/>
+    <Setter Property="VerticalContentAlignment" Value="Top"/>
   </Style>
   <Style TargetType="ComboBox">
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
@@ -807,26 +934,29 @@
             <ContentPresenter Margin="6,2" VerticalAlignment="Center"/>
           </Border>
           <ControlTemplate.Triggers>
+            <!-- Brush.MenuHover, а не Brush.Hover: выпадающий список стоит на Surface2, и
+                 подсветка того же цвета была невидима — ровно та же беда, что и у пунктов
+                 меню вариантов запуска. -->
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Hover}"/>
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.MenuHover}"/>
               <Setter Property="Foreground" Value="#FFFFFF"/>
             </Trigger>
             <!-- Некоторые системные шаблоны подсвечивают IsHighlighted для текущего элемента -->
             <Trigger Property="IsHighlighted" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Hover}"/>
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.MenuHover}"/>
               <Setter Property="Foreground" Value="#FFFFFF"/>
             </Trigger>
             <Trigger Property="IsSelected" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Accent}"/>
-              <Setter Property="Foreground" Value="#0C0C10"/>
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.AccentFill}"/>
+              <Setter Property="Foreground" Value="#FFFFFF"/>
             </Trigger>
             <MultiTrigger>
               <MultiTrigger.Conditions>
                 <Condition Property="IsSelected" Value="True"/>
                 <Condition Property="IsMouseOver" Value="True"/>
               </MultiTrigger.Conditions>
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.AccentHover}"/>
-              <Setter Property="Foreground" Value="#0C0C10"/>
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.AccentFillHover}"/>
+              <Setter Property="Foreground" Value="#FFFFFF"/>
             </MultiTrigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
@@ -1146,14 +1276,18 @@
   <!-- «Об игре» — спутник кнопки действия, а не её ровня: обычное начертание, вторичный
        цвет и рамка потише. Прежние SemiBold, светлая рамка и заливка давали ей тот же вес,
        что и главной кнопке, а в состояниях без заливки («Убрать из очереди», «Проверка…»)
-       она перевешивала — глаз выбирал справочный экран вместо действия. -->
+       она перевешивала — глаз выбирал справочный экран вместо действия.
+       Заливка при этом ОБЯЗАНА быть: кнопка стоит на обложке игры, и полностью прозрачной
+       она разваливалась на светлых картинках — рамка и подпись висели прямо на песке и
+       небе, без подложки под текстом. Та же полупрозрачная подложка, что у «стеклянной»
+       кнопки запуска рядом. -->
   <Style x:Key="Style.Button.HeroInfo" TargetType="Button">
     <Setter Property="Height" Value="42"/>
     <Setter Property="Padding" Value="16,0"/>
     <Setter Property="FontSize" Value="14"/>
     <Setter Property="FontWeight" Value="Normal"/>
     <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
-    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="Background" Value="#99101017"/>
     <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
     <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Cursor" Value="Hand"/>
@@ -1169,6 +1303,11 @@
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
               <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
+              <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Pressed}"/>
+              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderPressed}"/>
               <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
@@ -1199,10 +1338,18 @@
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
               <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter Property="Foreground" Value="{DynamicResource Brush.Title}"/>
+              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
             </Trigger>
             <Trigger Property="IsChecked" Value="True">
               <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Accent}"/>
               <Setter Property="Foreground" Value="{DynamicResource Brush.Title}"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Opacity" Value="0.5"/>
             </Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>

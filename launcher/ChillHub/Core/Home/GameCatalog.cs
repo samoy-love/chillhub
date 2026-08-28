@@ -127,6 +127,23 @@ namespace ChillHub.Core.Home {
         }
 
         /// <summary>
+        /// Пора ли отдать списку новый источник.
+        /// <para>
+        /// Сравнивать нужно именно с тем, что СЕЙЧАС ПОКАЗАНО (<c>ItemsSource</c>), а не с
+        /// полем страницы: слияние ответа сервера создаёт новый список, и поле уже
+        /// указывает на него, пока на экране висит прежний. Сравнение поля с самим собой
+        /// всегда говорило «порядок тот же», источник не менялся — и игра, удалённая в
+        /// админке, оставалась в списке после обновления. Пропадали только её значки: их
+        /// перезагружали отдельно, и сервер их больше не отдавал.
+        /// </para>
+        /// </summary>
+        /// <param name="bound">Что сейчас привязано к списку (<c>ItemsSource</c>).</param>
+        /// <param name="next">Что должно быть показано.</param>
+        /// <returns>true, если источник нужно подменить.</returns>
+        internal static bool NeedsRebind(object? bound, IReadOnlyList<GameInfo>? next)
+            => !SameOrder(bound as IReadOnlyList<GameInfo>, next);
+
+        /// <summary>
         /// Какую игру выделить при первом показе списка: последнюю запущенную, иначе первую
         /// установленную, иначе первую в списке. Возвращает -1 для пустого списка — выделять нечего.
         /// <para>
@@ -188,6 +205,26 @@ namespace ChillHub.Core.Home {
             }
 
             return games.FindIndex(g => string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Кого выделить после обновления списка: прежнюю игру, если она осталась, иначе
+        /// первую. Пустой список выделять нечем.
+        /// <para>
+        /// Возврат к первой игре — не мелочь: игру могли удалить на сервере, и без
+        /// выделения витрина пустеет, а кнопка действия остаётся от игры, которой уже нет.
+        /// </para>
+        /// </summary>
+        /// <param name="games">Список после обновления.</param>
+        /// <param name="previousId">Игра, выделенная до обновления.</param>
+        /// <returns>Индекс выделяемой игры или -1, если список пуст.</returns>
+        internal static int SelectionIndexAfterRefresh(List<GameInfo>? games, string? previousId) {
+            if (games == null || games.Count == 0) {
+                return -1;
+            }
+
+            var idx = string.IsNullOrWhiteSpace(previousId) ? -1 : IndexOfIgnoreCase(games, previousId);
+            return idx >= 0 ? idx : 0;
         }
     }
 }

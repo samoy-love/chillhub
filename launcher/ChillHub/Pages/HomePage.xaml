@@ -12,42 +12,50 @@
     <SolidColorBrush x:Key="Brush.ProgressTrack" Color="{DynamicResource Color.Track}"/>
 
     <!-- Кнопка действия. Главные состояния («Играть», «Обновить», «Установить») красятся
-         ОДНИМ акцентом: раньше у каждого был свой цвет — сиреневый, тёмно-лиловый и
+         ОДНОЙ заливкой: раньше у каждого был свой цвет — сиреневый, тёмно-лиловый и
          розовый градиент — и по цвету нельзя было понять, что все они означают одно и то
          же «сделай главное». Отличаются они текстом, а не окраской. Опасные состояния
-         («Отмена», «Повторить») остаются приглушённо-красными. -->
-    <SolidColorBrush x:Key="Btn.Play.Bg" Color="{DynamicResource Color.Accent}"/>
-    <SolidColorBrush x:Key="Btn.Play.Bg.Hover" Color="{DynamicResource Color.AccentHover}"/>
+         («Отмена», «Повторить») остаются приглушённо-красными.
+         Заливка — Color.AccentFill, а не сам акцент: на акценте не читалась ни белая
+         подпись, ни тёмная, обе не дотягивали до порога AA (см. палитру темы). -->
+    <SolidColorBrush x:Key="Btn.Play.Bg" Color="{DynamicResource Color.AccentFill}"/>
+    <SolidColorBrush x:Key="Btn.Play.Bg.Hover" Color="{DynamicResource Color.AccentFillHover}"/>
+    <SolidColorBrush x:Key="Btn.Play.Bg.Pressed" Color="{DynamicResource Color.AccentFillPressed}"/>
     <SolidColorBrush x:Key="Btn.Play.Bg.Disabled" Color="#3A3550"/>
-    <SolidColorBrush x:Key="Btn.Play.Fg" Color="#0C0C10"/>
+    <SolidColorBrush x:Key="Btn.Play.Fg" Color="#FFFFFF"/>
     <SolidColorBrush x:Key="Btn.Play.Border" Color="Transparent"/>
 
-    <SolidColorBrush x:Key="Btn.Update.Bg" Color="{DynamicResource Color.Accent}"/>
-    <SolidColorBrush x:Key="Btn.Update.Bg.Hover" Color="{DynamicResource Color.AccentHover}"/>
+    <SolidColorBrush x:Key="Btn.Update.Bg" Color="{DynamicResource Color.AccentFill}"/>
+    <SolidColorBrush x:Key="Btn.Update.Bg.Hover" Color="{DynamicResource Color.AccentFillHover}"/>
+    <SolidColorBrush x:Key="Btn.Update.Bg.Pressed" Color="{DynamicResource Color.AccentFillPressed}"/>
     <SolidColorBrush x:Key="Btn.Update.Bg.Disabled" Color="#3A3550"/>
-    <SolidColorBrush x:Key="Btn.Update.Fg" Color="#0C0C10"/>
+    <SolidColorBrush x:Key="Btn.Update.Fg" Color="#FFFFFF"/>
     <SolidColorBrush x:Key="Btn.Update.Border" Color="Transparent"/>
 
-    <SolidColorBrush x:Key="Btn.Install.Bg" Color="{DynamicResource Color.Accent}"/>
-    <SolidColorBrush x:Key="Btn.Install.Bg.Hover" Color="{DynamicResource Color.AccentHover}"/>
+    <SolidColorBrush x:Key="Btn.Install.Bg" Color="{DynamicResource Color.AccentFill}"/>
+    <SolidColorBrush x:Key="Btn.Install.Bg.Hover" Color="{DynamicResource Color.AccentFillHover}"/>
+    <SolidColorBrush x:Key="Btn.Install.Bg.Pressed" Color="{DynamicResource Color.AccentFillPressed}"/>
     <SolidColorBrush x:Key="Btn.Install.Bg.Disabled" Color="#3A3550"/>
-    <SolidColorBrush x:Key="Btn.Install.Fg" Color="#0C0C10"/>
+    <SolidColorBrush x:Key="Btn.Install.Fg" Color="#FFFFFF"/>
 
     <!-- Повторить: приглушённый красный, заметный, но не спорящий с акцентом -->
     <SolidColorBrush x:Key="Btn.Retry.Bg" Color="#2A1E22"/>
     <SolidColorBrush x:Key="Btn.Retry.Bg.Hover" Color="#3A2A2E"/>
+    <SolidColorBrush x:Key="Btn.Retry.Bg.Pressed" Color="#48343A"/>
     <SolidColorBrush x:Key="Btn.Retry.Bg.Disabled" Color="#221A1C"/>
     <SolidColorBrush x:Key="Btn.Retry.Fg" Color="#F0D9D9"/>
     <SolidColorBrush x:Key="Btn.Retry.Border" Color="{DynamicResource Color.Danger}"/>
 
     <SolidColorBrush x:Key="Btn.Cancel.Bg" Color="#2A1E22"/>
     <SolidColorBrush x:Key="Btn.Cancel.Bg.Hover" Color="#3A2A2E"/>
+    <SolidColorBrush x:Key="Btn.Cancel.Bg.Pressed" Color="#48343A"/>
     <SolidColorBrush x:Key="Btn.Cancel.Bg.Disabled" Color="#221A1C"/>
     <SolidColorBrush x:Key="Btn.Cancel.Fg" Color="#F0D9D9"/>
     <SolidColorBrush x:Key="Btn.Cancel.Border" Color="{DynamicResource Color.Danger}"/>
 
     <SolidColorBrush x:Key="Btn.Check.Bg" Color="{DynamicResource Color.Surface}"/>
     <SolidColorBrush x:Key="Btn.Check.Bg.Hover" Color="{DynamicResource Color.Hover}"/>
+    <SolidColorBrush x:Key="Btn.Check.Bg.Pressed" Color="{DynamicResource Color.Pressed}"/>
     <SolidColorBrush x:Key="Btn.Check.Bg.Disabled" Color="{DynamicResource Color.Pressed}"/>
     <SolidColorBrush x:Key="Btn.Check.Fg" Color="{DynamicResource Color.TextSecondary}"/>
     <SolidColorBrush x:Key="Btn.Check.Border" Color="{DynamicResource Color.Border}"/>
@@ -233,6 +241,10 @@
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Update.Bg.Hover}"/>
                 <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Btn.Update.Border}"/>
               </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Update.Bg.Pressed}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Btn.Update.Border}"/>
+              </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Update.Bg.Disabled}"/>
                 <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
@@ -258,6 +270,9 @@
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Update.Bg.Hover}"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Update.Bg.Pressed}"/>
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Update.Bg.Disabled}"/>
@@ -289,6 +304,9 @@
                 <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
                 <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
               </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Install.Bg.Pressed}"/>
+              </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Install.Bg.Disabled}"/>
                 <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
@@ -313,6 +331,10 @@
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Play.Bg.Hover}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Btn.Play.Border}"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Play.Bg.Pressed}"/>
                 <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Btn.Play.Border}"/>
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
@@ -357,6 +379,9 @@
               <Trigger Property="IsMouseOver" Value="True">
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Play.Bg.Hover}"/>
               </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Play.Bg.Pressed}"/>
+              </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Play.Bg.Disabled}"/>
                 <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
@@ -388,6 +413,10 @@
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
                 <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Accent}"/>
               </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Pressed}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Accent}"/>
+              </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter Property="Opacity" Value="0.5"/>
               </Trigger>
@@ -410,6 +439,10 @@
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Retry.Bg.Hover}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Btn.Retry.Border}"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Retry.Bg.Pressed}"/>
                 <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Btn.Retry.Border}"/>
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
@@ -438,6 +471,10 @@
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Cancel.Bg.Hover}"/>
                 <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Btn.Cancel.Border}"/>
               </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Cancel.Bg.Pressed}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Btn.Cancel.Border}"/>
+              </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Cancel.Bg.Disabled}"/>
                 <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
@@ -462,6 +499,10 @@
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Check.Bg.Hover}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Btn.Check.Border}"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Check.Bg.Pressed}"/>
                 <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Btn.Check.Border}"/>
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
@@ -492,6 +533,10 @@
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Accent}"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Pressed}"/>
                 <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Accent}"/>
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
@@ -630,27 +675,20 @@
 
           <!-- Поиск по списку. Появился здесь, потому что список игр — единственная навигация
                в приложении, и до сих пор её нельзя было ни отфильтровать, ни сузить. -->
+          <!-- Подсказка «Поиск» — свойством поля, а не надписью поверх него: своя надпись
+               стояла по краю сетки, а текст поля начинается внутри рамки и Padding, и после
+               клика каретка появлялась правее подсказки. Значок лупы остаётся отдельным
+               слоем: он не текст и с кареткой не спорит. -->
           <Grid Grid.Row="1" Margin="0,0,0,8">
             <TextBox x:Name="GameSearchBox" TextChanged="GameSearch_TextChanged" Margin="0"
+                     ui:Placeholder.Text="Поиск"
+                     Template="{DynamicResource Template.TextBox.Field}"
+                     VerticalContentAlignment="Center"
                      Background="{DynamicResource Brush.Surface2}" BorderBrush="{DynamicResource Brush.Border}"
                      Padding="26,6,8,6" FontSize="12" Foreground="{DynamicResource Brush.Text}"/>
             <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE721;" FontSize="12" IsHitTestVisible="False"
                        Margin="8,0,0,0" VerticalAlignment="Center" HorizontalAlignment="Left"
                        Foreground="{DynamicResource Brush.TextMuted}"/>
-            <TextBlock Text="Поиск" IsHitTestVisible="False" FontSize="12"
-                       Margin="26,0,0,0" VerticalAlignment="Center" HorizontalAlignment="Left"
-                       Foreground="{DynamicResource Brush.TextMuted}">
-              <TextBlock.Style>
-                <Style TargetType="TextBlock">
-                  <Setter Property="Visibility" Value="Collapsed"/>
-                  <Style.Triggers>
-                    <DataTrigger Binding="{Binding Text.Length, ElementName=GameSearchBox}" Value="0">
-                      <Setter Property="Visibility" Value="Visible"/>
-                    </DataTrigger>
-                  </Style.Triggers>
-                </Style>
-              </TextBlock.Style>
-            </TextBlock>
           </Grid>
 
           <!-- Контейнер строки списка/скелетона с тёмным фоном. VerticalAlignment=Top:
@@ -995,14 +1033,16 @@
                         Style="{DynamicResource Style.LaunchButton.Accent}">
                   <StackPanel>
                     <TextBlock x:Name="LaunchBtn1Title" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center"/>
-                    <TextBlock x:Name="LaunchBtn1Note" FontSize="11" Opacity="0.75" Margin="0,1,0,0" HorizontalAlignment="Center"/>
+                    <!-- 0.85, а не 0.75: подпись набрана 11-м кеглем, и на заливке кнопки более
+                         бледная давала 3,4:1 при пороге 4,5:1. -->
+                    <TextBlock x:Name="LaunchBtn1Note" FontSize="11" Opacity="0.85" Margin="0,1,0,0" HorizontalAlignment="Center"/>
                   </StackPanel>
                 </Button>
                 <Button x:Name="LaunchBtn2" Click="LaunchBtn_Click" Visibility="Collapsed" Margin="8,0,0,0"
                         Style="{DynamicResource Style.LaunchButton.Ghost}">
                   <StackPanel>
                     <TextBlock x:Name="LaunchBtn2Title" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center"/>
-                    <TextBlock x:Name="LaunchBtn2Note" FontSize="11" Opacity="0.75" Margin="0,1,0,0" HorizontalAlignment="Center"/>
+                    <TextBlock x:Name="LaunchBtn2Note" FontSize="11" Opacity="0.85" Margin="0,1,0,0" HorizontalAlignment="Center"/>
                   </StackPanel>
                 </Button>
                 <!-- Стрелка с остальными вариантами: «без модов» и то, что сейчас
@@ -1010,14 +1050,18 @@
                      и пустая кнопка рядом только сбивала бы с толку. -->
                 <Button x:Name="LaunchMenuBtn" Click="LaunchMenuBtn_Click"
                         Style="{DynamicResource Style.LaunchButton.Ghost}"
-                        Width="46" MinWidth="46" Padding="0" Margin="8,0,0,0"
+                        Width="46" MinWidth="46" Padding="0" Margin="4,0,0,0"
                         Visibility="Collapsed" ToolTip="Другие варианты запуска">
                   <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE70D;" FontSize="12"
                              VerticalAlignment="Center" HorizontalAlignment="Center"/>
                 </Button>
+                <!-- Отступ 24, а не 8: «Об игре» — не третий вариант запуска, а переход на
+                     другой экран. При равных зазорах стрелка «другие варианты» стояла ровно
+                     посередине между кнопкой запуска и этой, и было не понять, к чему из
+                     двух она относится. Расстояние и делит ряд на группы. -->
                 <Button x:Name="HeroInfoBtn" Click="GameDetails_Click"
                         Style="{DynamicResource Style.Button.HeroInfo}"
-                        Height="46" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip="Сведения, история изменений, папка игры">
+                        Height="46" Margin="24,0,0,0" VerticalAlignment="Center" ToolTip="Сведения, история изменений, папка игры">
                   <!-- Подпись, а не одинокая ⓘ: кнопка ведёт на отдельный экран, и слово
                        говорит об этом, а значок в кружке читался как всплывающая подсказка. -->
                   <StackPanel Orientation="Horizontal">
@@ -1304,7 +1348,12 @@
                  окне забирал четверть экрана ради двух с половиной строк со скроллом —
                  и ленте новостей над ним оставалось полторы карточки, тоже со скроллом.
                  Скролл остаётся только для раскрытой длинной очереди. -->
-            <ItemsControl x:Name="QueueDock"
+            <!-- Потолок ширины — на всём доке, а не на карточке: с ним на карточке ширина
+                 строки садилась на длину её текста, и три строки очереди расходились по
+                 правому краю. Хуже: строка качающейся игры росла вместе с цифрами
+                 («0 Б / 4,1 ГБ» → «451,5 МБ / 4,1 ГБ»), и крестик «снять с очереди» ездил
+                 из-под курсора на каждом обновлении. -->
+            <ItemsControl x:Name="QueueDock" MaxWidth="1100" HorizontalAlignment="Left"
                           MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=Page},
                                               Converter={StaticResource HeightShareConv}, ConverterParameter=0.45}">
               <ItemsControl.Template>
@@ -1319,11 +1368,10 @@
                   <!-- Ожидающая позиция — строка, а не карточка в полный рост: у неё нет ни
                        полосы, ни цифр, и три одинаковых по высоте карточки не влезали даже
                        в окно по умолчанию — третья всегда была срезана.
-                       MaxWidth — чтобы связанное осталось в одном взгляде: на широком окне
-                       карточка растягивалась на всю ширину, и крестик «снять с очереди»
-                       уезжал от названия своей игры на полтора метра. Подписи внутри уже
-                       сведены к левому краю по той же причине. -->
-                  <Border Margin="0,0,0,6" MaxWidth="1100" HorizontalAlignment="Left">
+                       Ширину задаёт док (MaxWidth выше), а карточка тянется на неё целиком:
+                       у всех строк общий правый край, и крестик стоит на месте, как бы ни
+                       менялись цифры внутри. -->
+                  <Border Margin="0,0,0,6" HorizontalAlignment="Stretch">
                     <Border.Style>
                       <Style TargetType="Border" BasedOn="{StaticResource Style.Card}">
                         <Setter Property="Padding" Value="12,10"/>
@@ -1484,83 +1532,13 @@
     <Grid x:Name="FeedbackOverlay" Visibility="Collapsed" Background="#C0000000"
           HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Grid.RowSpan="4">
       <Grid.Resources>
-        <!-- Один шаблон на все поля формы. Штатный TextBox рисует прямой угол и ничем не
-             отмечает фокус: рядом со скруглёнными кнопками и ComboBox (Radius.M) он читался
-             как поле из чужого приложения. Общий шаблон нужен ещё и затем, чтобы рамка,
-             скругление и подсветка фокуса не разъезжались между однострочными полями и
-             полем сообщения. -->
-        <ControlTemplate x:Key="Template.Fb.Field" TargetType="TextBox">
-          <Border x:Name="bd"
-                  Background="{TemplateBinding Background}"
-                  BorderBrush="{TemplateBinding BorderBrush}"
-                  BorderThickness="{TemplateBinding BorderThickness}"
-                  CornerRadius="{StaticResource Radius.M}"
-                  SnapsToDevicePixels="True">
-            <ScrollViewer x:Name="PART_ContentHost"
-                          Margin="{TemplateBinding Padding}"
-                          Focusable="False"
-                          VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
-                          HorizontalScrollBarVisibility="Hidden"
-                          VerticalScrollBarVisibility="Auto"/>
-          </Border>
-          <ControlTemplate.Triggers>
-            <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
-            </Trigger>
-            <!-- Фокус — акцентом: в форме четыре поля подряд, и без подсветки непонятно,
-                 куда именно попадёт набранный текст. -->
-            <Trigger Property="IsKeyboardFocusWithin" Value="True">
-              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Accent}"/>
-            </Trigger>
-          </ControlTemplate.Triggers>
-        </ControlTemplate>
-
-        <!-- Подпись над полем. Одна на все четыре: раньше каждая несла свои FontSize и
-             Foreground, и «Тип» отличался от соседей отступом. -->
+        <!-- Сами поля формы одеты общим стилем из темы (Style.TextBox.Field): штатный
+             TextBox рисует прямой угол, ничем не отмечает фокус и не умеет подсказки.
+             Здесь остаётся только подпись над полем. -->
         <Style x:Key="Style.Fb.Label" TargetType="TextBlock">
           <Setter Property="FontSize" Value="13"/>
           <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
           <Setter Property="Margin" Value="0,0,0,6"/>
-        </Style>
-
-        <!-- Однострочное поле. Margin="0" обязателен: тема задаёт полям Margin="0,0,8,0",
-             и без сброса правая колонка формы уезжала на эти 8px от края карточки.
-             Padding="8,0" + рамка = 9px до текста — ровно столько же отступает ContentSite
-             в шаблоне ComboBox, поэтому «Имя», «Контакт» и «Тип» начинаются по одной линии. -->
-        <Style x:Key="Style.Fb.Field" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
-          <Setter Property="Template" Value="{StaticResource Template.Fb.Field}"/>
-          <Setter Property="Margin" Value="0"/>
-          <Setter Property="Height" Value="36"/>
-          <Setter Property="Padding" Value="8,0"/>
-          <Setter Property="FontSize" Value="14"/>
-          <Setter Property="VerticalContentAlignment" Value="Center"/>
-          <Setter Property="CaretBrush" Value="{DynamicResource Brush.Text}"/>
-        </Style>
-
-        <!-- Поле сообщения: та же рамка, но текст с верхнего края и перенос по словам. -->
-        <Style x:Key="Style.Fb.Field.Multiline" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
-          <Setter Property="Template" Value="{StaticResource Template.Fb.Field}"/>
-          <Setter Property="Margin" Value="0"/>
-          <Setter Property="Padding" Value="8,8"/>
-          <Setter Property="FontSize" Value="14"/>
-          <Setter Property="MinHeight" Value="120"/>
-          <Setter Property="AcceptsReturn" Value="True"/>
-          <Setter Property="TextWrapping" Value="Wrap"/>
-          <Setter Property="VerticalContentAlignment" Value="Top"/>
-          <Setter Property="CaretBrush" Value="{DynamicResource Brush.Text}"/>
-        </Style>
-
-        <!-- Подсказка внутри пустого поля. По умолчанию СКРЫТА и показывается только на
-             пустом поле: прежний вариант оставлял её видимой поверх набранного текста,
-             стоило увести фокус из поля. Отступ 9px повторяет отступ текста в поле —
-             подсказка стоит ровно там, где появится первый символ. -->
-        <Style x:Key="Style.Fb.Hint" TargetType="TextBlock">
-          <Setter Property="Visibility" Value="Collapsed"/>
-          <Setter Property="IsHitTestVisible" Value="False"/>
-          <Setter Property="FontSize" Value="14"/>
-          <Setter Property="Foreground" Value="{DynamicResource Brush.TextMuted}"/>
-          <Setter Property="VerticalAlignment" Value="Center"/>
-          <Setter Property="Margin" Value="9,0,9,0"/>
         </Style>
       </Grid.Resources>
 
@@ -1618,39 +1596,15 @@
           <!-- Имя -->
           <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,20,0,0">
             <TextBlock Text="Имя" Style="{StaticResource Style.Fb.Label}"/>
-            <Grid>
-              <TextBox x:Name="FbName" Style="{StaticResource Style.Fb.Field}" TextChanged="FbField_Changed"/>
-              <TextBlock Text="Ваше имя">
-                <TextBlock.Style>
-                  <Style TargetType="TextBlock" BasedOn="{StaticResource Style.Fb.Hint}">
-                    <Style.Triggers>
-                      <DataTrigger Binding="{Binding Text, ElementName=FbName}" Value="">
-                        <Setter Property="Visibility" Value="Visible"/>
-                      </DataTrigger>
-                    </Style.Triggers>
-                  </Style>
-                </TextBlock.Style>
-              </TextBlock>
-            </Grid>
+            <TextBox x:Name="FbName" ui:Placeholder.Text="Ваше имя"
+                     Style="{DynamicResource Style.TextBox.Field}" TextChanged="FbField_Changed"/>
           </StackPanel>
 
           <!-- Контакт -->
           <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,20,0,0">
             <TextBlock Text="Контакт" Style="{StaticResource Style.Fb.Label}"/>
-            <Grid>
-              <TextBox x:Name="FbContact" Style="{StaticResource Style.Fb.Field}" TextChanged="FbField_Changed"/>
-              <TextBlock Text="Telegram или email">
-                <TextBlock.Style>
-                  <Style TargetType="TextBlock" BasedOn="{StaticResource Style.Fb.Hint}">
-                    <Style.Triggers>
-                      <DataTrigger Binding="{Binding Text, ElementName=FbContact}" Value="">
-                        <Setter Property="Visibility" Value="Visible"/>
-                      </DataTrigger>
-                    </Style.Triggers>
-                  </Style>
-                </TextBlock.Style>
-              </TextBlock>
-            </Grid>
+            <TextBox x:Name="FbContact" ui:Placeholder.Text="Telegram или email"
+                     Style="{DynamicResource Style.TextBox.Field}" TextChanged="FbField_Changed"/>
           </StackPanel>
 
           <!-- Тип. Подпись сверху, как у соседей: строка «Тип: [v]» с подписью слева была
@@ -1673,23 +1627,9 @@
           <!-- Строка "*": карточка ограничена высотой окна, и поле обязано СЖИМАТЬСЯ вместе
                с ней, а не тащить за собой фиксированную высоту — именно это обрезало поле
                снизу на невысоких окнах. Длинный текст прокручивается внутри поля. -->
-          <Grid Grid.Row="3" Grid.ColumnSpan="5">
-            <TextBox x:Name="FbComment" Style="{StaticResource Style.Fb.Field.Multiline}" TextChanged="FbField_Changed"/>
-            <TextBlock Text="Опишите проблему или идею">
-              <TextBlock.Style>
-                <Style TargetType="TextBlock" BasedOn="{StaticResource Style.Fb.Hint}">
-                  <!-- Многострочное поле: подсказка стоит у верхнего края, где и каретка -->
-                  <Setter Property="VerticalAlignment" Value="Top"/>
-                  <Setter Property="Margin" Value="9,9,9,0"/>
-                  <Style.Triggers>
-                    <DataTrigger Binding="{Binding Text, ElementName=FbComment}" Value="">
-                      <Setter Property="Visibility" Value="Visible"/>
-                    </DataTrigger>
-                  </Style.Triggers>
-                </Style>
-              </TextBlock.Style>
-            </TextBlock>
-          </Grid>
+          <TextBox x:Name="FbComment" Grid.Row="3" Grid.ColumnSpan="5"
+                   ui:Placeholder.Text="Опишите проблему или идею"
+                   Style="{DynamicResource Style.TextBox.Field.Multiline}" TextChanged="FbField_Changed"/>
 
           <Grid Grid.Row="4" Grid.ColumnSpan="5" Margin="0,20,0,0">
             <Grid.ColumnDefinitions>
