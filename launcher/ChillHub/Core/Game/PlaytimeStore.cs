@@ -40,6 +40,21 @@ namespace ChillHub.Core.Game {
         public long ProcessStartTimeTicks { get; set; }
 
         public DateTime SessionStartUtc { get; set; }
+
+        /// <summary>
+        /// Папка, в которой на время этой сессии включены моды; null — запуск без модов.
+        /// <para>
+        /// Срок жизни включённого загрузчика — это и есть срок сессии: пока игра идёт, моды
+        /// нужны, а как только она закрылась, папку возвращают в состояние без модов. Иначе
+        /// следующий запуск ИЗ STEAM, мимо лаунчера, молча поднял бы моды: игре всё равно,
+        /// кто её стартовал, — winhttp.dll грузится сам (см. Mods.DoorstopConfig).
+        /// </para>
+        /// <para>
+        /// Поле переживает закрытие лаунчера вместе с самой записью: если он умер раньше
+        /// игры, папку вернёт реконсиляция при следующем запуске.
+        /// </para>
+        /// </summary>
+        public string? ModdedDir { get; set; }
     }
 
     /// <summary>
@@ -72,6 +87,18 @@ namespace ChillHub.Core.Game {
 
         private static string PendingPath => Path.Combine(AppDir, "playtime.sessions.json");
 
+        /// <summary>
+        /// Подбирает незакрытые сессии прошлого запуска: досматривает те игры, что ещё
+        /// бегут, и закрывает остальные — а вместе с ними выключает моды в папках, где их
+        /// включал прошлый запуск лаунчера.
+        /// <para>
+        /// Вызывается на старте главной страницы явно, а не по первому обращению за
+        /// цифрами: возврат чужой папки в состояние без модов не должен зависеть от того,
+        /// открыл ли кто-то витрину с игрой.
+        /// </para>
+        /// </summary>
+        internal static void EnsureStarted() => EnsureReconciled();
+
         /// <summary>Сводка по одной игре. Реконсилирует незакрытые сессии перед чтением.</summary>
         internal static PlaytimeEntry Get(string gameId) {
             EnsureReconciled();
@@ -83,7 +110,13 @@ namespace ChillHub.Core.Game {
         /// Запоминает старт сессии игры и заводит фоновое ожидание её выхода.
         /// Вызывается сразу после успешного <c>Process.Start</c>.
         /// </summary>
-        internal static void BeginSession(string gameId, Process process) {
+        /// <param name="gameId">Игра.</param>
+        /// <param name="process">Процесс игры — именно игры, а не Steam (см. GameProcessFinder).</param>
+        /// <param name="moddedDir">
+        /// Папка, в которой перед запуском включили моды; null — запуск без модов. По
+        /// окончании сессии моды в ней выключаются обратно.
+        /// </param>
+        internal static void BeginSession(string gameId, Process process, string? moddedDir = null) {
             if (string.IsNullOrWhiteSpace(gameId) || process == null) {
                 return;
             }
@@ -103,6 +136,7 @@ namespace ChillHub.Core.Game {
                         ProcessId = process.Id,
                         ProcessStartTimeTicks = SafeStartTimeTicks(process),
                         SessionStartUtc = DateTime.UtcNow,
+                        ModdedDir = string.IsNullOrWhiteSpace(moddedDir) ? null : moddedDir,
                     };
                     SavePendingLocked(pending);
                 }
@@ -228,10 +262,11 @@ namespace ChillHub.Core.Game {
         }
 
         private static void FinishSession(int processId, DateTime endUtc) {
+            PendingSession session;
             lock (FileLock) {
                 var pending = LoadPendingLocked();
                 var key = PendingKey(processId);
-                if (!pending.TryGetValue(key, out var session)) {
+                if (!pending.TryGetValue(key, out session!)) {
                     return; // уже закрыта другим потоком/запуском
                 }
 
@@ -254,6 +289,13 @@ namespace ChillHub.Core.Game {
                 // Метрика не участвует в блокировке файла: MetricsService.Report сам
                 // уходит в фоновую задачу и ничего не бросает при недоступном сервере.
                 MetricsService.GameSession(session.GameId, elapsed * 1000);
+            }
+
+            // Моды выключаются ПОСЛЕ снятия блокировки файлов: это запись в чужую папку
+            // игры, и держать ради неё замок над playtime.json незачем.
+            if (!string.IsNullOrWhiteSpace(session.ModdedDir)) {
+                Mods.DoorstopConfig.SetEnabled(session.ModdedDir, false);
+                Logging.Logger.Info($"[mods] сессия окончена, моды в '{session.ModdedDir}' выключены");
             }
         }
 

@@ -250,6 +250,11 @@ namespace ChillHub.Pages {
                 () => this.BaseApi);
             this.QueueDock.ItemsSource = this.queueDockVisibleItems;
 
+            // Незакрытые сессии прошлого запуска: досмотреть те игры, что ещё бегут, и
+            // закрыть остальные. Заодно возвращает в состояние без модов папки, в которых
+            // их включал прошлый запуск, — покой чужой папки в Steam всегда ванильный.
+            Core.Game.PlaytimeStore.EnsureStarted();
+
             // Сколько строк очереди влезает, зависит от высоты окна: на низком остаётся
             // только качающаяся. Пересчитываем на каждое изменение размера — иначе окно,
             // растянутое мышью, продолжало бы показывать одну строку из четырёх.
@@ -2484,7 +2489,20 @@ namespace ChillHub.Pages {
             }
             else {
                 this.StatusText.Text = string.Empty;
+            }
+
+            if (proc != null || option.ViaSteam) {
                 Core.Metrics.MetricsService.GameLaunch(game.GameId, game.Mods.Version);
+
+                // Отсчёт наигранного времени и срок жизни включённых модов. Через Steam
+                // процесс игры ещё предстоит дождаться, поэтому вызов ничего не ждёт.
+                Core.Game.GameSession.Begin(
+                    game.GameId,
+                    option.GameDir,
+                    Core.Mods.ModsLaunch.ResolveExe(option.GameDir, game.ExeRelativePath),
+                    proc,
+                    option.ViaSteam,
+                    option.Modded ? option.GameDir : null);
             }
         }
 
