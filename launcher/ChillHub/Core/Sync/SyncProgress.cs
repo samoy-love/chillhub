@@ -14,5 +14,15 @@ namespace ChillHub.Core.Sync {
         public long TotalBytes { get; set; }
 
         public string Stage { get; set; } = string.Empty; // Checking, Downloading, Verifying, Activating
+
+        /// <summary>
+        /// Что именно синхронизируется: пусто — сама игра, «Моды» — модпак.
+        /// <para>
+        /// Проход по файлам один и тот же, а вот «Скачивание… 1.8 ГБ» без пометки
+        /// читается как «качается игра» — и это ровно то, что видел игрок, пока
+        /// установка модов шла молча.
+        /// </para>
+        /// </summary>
+        public string Scope { get; set; } = string.Empty;
     }
 }

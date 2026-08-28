@@ -10,8 +10,10 @@ namespace ChillHub.Tests {
     using System.Threading;
     using System.Threading.Tasks;
 
+    using ChillHub.Core;
     using ChillHub.Core.Game;
     using ChillHub.Core.Home;
+    using ChillHub.Core.Mods;
     using ChillHub.Core.Sync;
 
     using Xunit;
@@ -369,6 +371,75 @@ namespace ChillHub.Tests {
                 exeRelativePath,
                 confirmDeletions);
 
+        /// <summary>
+        /// Установка модпака обязана отчитываться о прогрессе тем же путём, что и игра.
+        /// <para>
+        /// Раньше в <c>ModsService.EnsureAsync</c> уходил <c>null</c>: полтора гигабайта
+        /// модов уезжали при неподвижной полосе и одной строке «Установка модов…». Со
+        /// стороны игрока это неотличимо от зависшего лаунчера — с чем он и пришёл.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public async Task ПрогрессМодпакаДоходитДоЭкранаИПомеченКакМоды() {
+            using var dir = new TempDir();
+            var probe = new UiProbe();
+            var plan = new DiffPlan { TotalDownloadBytes = 4096 };
+            plan.Downloads.Add(new FileTask { RelativePath = "winhttp.dll" });
+            var sync = new FakeSync { Plan = plan };
+            sync.OnProgress = p => p.Report(new SyncProgress {
+                Stage = "Downloading",
+                BytesDownloaded = 2048,
+                TotalBytes = 4096,
+                FilesDownloaded = 1,
+                TotalFiles = 2,
+            });
+
+            var runner = NewRunner(sync, probe, out _);
+            var game = new GameInfo {
+                GameId = "game",
+                Mods = new ModsInfo {
+                    HasLatest = true,
+                    Version = "ASTeam-LethalReloaded-2.2.12",
+                    ManifestUrl = "/manifests/_mods/game/v.json",
+                    ContentBaseUrl = "/content/_mods/game/v/files",
+                },
+            };
+            var request = new GameSyncRequest(
+                "game", "1.2.0", "https://example.test", dir.Root, null, false, SyncKind.Update, game);
+
+            await runner.RunAsync(request, CancellationToken.None);
+
+            Assert.Contains(probe.Progress, p => p.Scope == ModsService.ScopeName);
+            Assert.Contains(probe.Progress, p => string.IsNullOrEmpty(p.Scope));
+        }
+
+        /// <summary>
+        /// Строки «Скорость» и «файлов • байт» от закончившегося модпака не должны
+        /// висеть над начавшейся закачкой игры: объём в них уже не тот.
+        /// </summary>
+        [Fact]
+        public async Task ПослеМодпакаСтрокиОбъёмаОчищаются() {
+            using var dir = new TempDir();
+            var probe = new UiProbe();
+            var sync = new FakeSync { Plan = new DiffPlan() };
+            var runner = NewRunner(sync, probe, out _);
+            var game = new GameInfo {
+                GameId = "game",
+                Mods = new ModsInfo {
+                    HasLatest = true,
+                    Version = "v1",
+                    ManifestUrl = "/m.json",
+                    ContentBaseUrl = "/c",
+                },
+            };
+            var request = new GameSyncRequest(
+                "game", "1.2.0", "https://example.test", dir.Root, null, false, SyncKind.Update, game);
+
+            await runner.RunAsync(request, CancellationToken.None);
+
+            Assert.Equal(string.Empty, probe.LastSpeedEta);
+        }
+
         private static DiffPlan PlanWith(long totalBytes = 0, List<string>? toDelete = null)
             => new DiffPlan { TotalDownloadBytes = totalBytes, ToDelete = toDelete ?? new List<string>() };
 
@@ -399,6 +470,8 @@ namespace ChillHub.Tests {
 
             internal Action? OnExecute { get; set; }
 
+            internal Action<IProgress<SyncProgress>>? OnProgress { get; set; }
+
             internal bool Executed { get; private set; }
 
             public Task<Manifest> GetManifestAsync(string manifestUrl, CancellationToken ct) {
@@ -414,6 +487,7 @@ namespace ChillHub.Tests {
 
             public Task ExecuteAsync(DiffPlan plan, IProgress<SyncProgress> progress, CancellationToken ct) {
                 this.OnExecute?.Invoke();
+                this.OnProgress?.Invoke(progress);
                 this.Executed = true;
                 return Task.CompletedTask;
             }
@@ -426,6 +500,8 @@ namespace ChillHub.Tests {
             internal List<ShownError> Errors { get; } = new();
 
             internal List<AskedQuestion> Questions { get; } = new();
+
+            internal List<SyncProgress> Progress { get; } = new();
 
             internal int MaintenanceApplied { get; private set; }
 
@@ -442,6 +518,7 @@ namespace ChillHub.Tests {
                 SetSpeedEta = text => this.LastSpeedEta = text,
                 SetFilesSize = text => this.LastFilesSize = text,
                 ApplyMaintenanceToButtons = () => this.MaintenanceApplied++,
+                ReportProgress = (p, _) => this.Progress.Add(p),
                 Confirm = (text, title) => {
                     this.Questions.Add(new AskedQuestion(text, title));
                     return this.ConfirmAnswer;

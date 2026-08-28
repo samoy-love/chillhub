@@ -22,6 +22,35 @@ namespace ChillHub.Tests {
     /// </para>
     /// </summary>
     public class SyncProgressViewTests {
+        /// <summary>
+        /// Отчёт модпака подписывается его именем. «Скачивание… 1.8 ГБ» без пометки
+        /// читается как «качается игра», а качается модпак.
+        /// </summary>
+        [Theory]
+        [InlineData("Checking")]
+        [InlineData("Downloading")]
+        [InlineData("Verifying")]
+        [InlineData("Activating")]
+        [InlineData("Completed")]
+        public void ОтчётМодпакаПодписанЕгоИменем(string stage) {
+            var view = new SyncProgressView();
+
+            var display = view.Describe(
+                new SyncProgress { Stage = stage, Scope = "Моды", TotalBytes = 100, BytesDownloaded = 50 }, 1.0);
+
+            Assert.StartsWith("Моды · ", display.Status);
+        }
+
+        /// <summary>Отчёт самой игры остаётся без приписки.</summary>
+        [Fact]
+        public void ОтчётИгрыБезПриписки() {
+            var view = new SyncProgressView();
+
+            var display = view.Describe(new SyncProgress { Stage = "Checking" }, 1.0);
+
+            Assert.Equal("Проверка файлов…", display.Status);
+        }
+
         /// <summary>Проверка файлов идёт неизвестно сколько — бар обязан быть «бегущим».</summary>
         [Fact]
         public void ПроверкаФайловДаётБегущийИндикатор() {
