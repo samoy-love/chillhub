@@ -46,6 +46,9 @@ type Handlers struct {
 	builder *Builder
 	games   *games.Handlers
 	builds  *builds.Handlers
+
+	// sum кеширует сводку «что ждёт действия» — см. summary.go.
+	sum summaryCache
 }
 
 // New returns handlers for one content root.

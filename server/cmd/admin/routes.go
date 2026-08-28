@@ -135,6 +135,7 @@ func (s *server) apiRoutes() []route {
 		// paths and attaches a CSRF token, and pointing it at a third-party
 		// host would trip CORS and leak panel traffic there at the same time.
 		{path: "/admin/api/games/ecosystem", handler: md.Ecosystem},
+		{path: "/admin/api/summary", handler: md.SummaryHandler},
 		{path: "/admin/api/mods/catalog", handler: md.Catalog},
 		{path: "/admin/api/mods/readme", handler: md.Readme},
 		{path: "/admin/api/mods/resolve", handler: md.Resolve},

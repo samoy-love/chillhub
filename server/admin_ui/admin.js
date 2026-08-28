@@ -1249,6 +1249,9 @@ document.addEventListener('DOMContentLoaded', ()=>{
     if(document.visibilityState === 'visible'){
       try{ await fbUnreadUpdateBadge(); }catch{}
       try{ await sysFreeRefresh(); }catch{}
+      // «Здесь ждут действия» на вкладках «Лаунчер» и «Моды». Сводку сервер
+      // держит десять минут, поэтому минутный опрос ему ничего не стоит.
+      try{ await window.refreshPendingBadges(); }catch{}
     }
   }
   setInterval(periodicVisibleTick, 60000);

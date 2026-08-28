@@ -239,6 +239,28 @@ func (h *Handlers) Get(w http.ResponseWriter, _ *http.Request) {
 	}{Items: items})
 }
 
+// All returns every registry row.
+//
+// Exported for the same reason as Entry: the summary endpoint needs to know
+// which games have modpacks, and a second parser for games.json would be a
+// second place where "order" defaulting and unsafe-id dropping could drift.
+func (h *Handlers) All() ([]Entry, error) {
+	// #nosec G304 -- registryPath() is the content root plus three constants.
+	b, err := os.ReadFile(h.registryPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	items, ok := decodeRegistryItems(b, false)
+	if !ok {
+		return nil, errors.New("games: registry is not readable as {\"items\":[...]}")
+	}
+	sortEntries(items)
+	return items, nil
+}
+
 // Entry returns one registry row by game id.
 //
 // Exported so the modpack endpoints can read a game's ModsConfig without a
