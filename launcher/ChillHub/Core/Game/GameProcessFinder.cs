@@ -31,10 +31,10 @@ namespace ChillHub.Core.Game {
     /// </summary>
     internal static class GameProcessFinder {
         /// <summary>Сколько ждать появления процесса игры по умолчанию.</summary>
-        internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(3);
+        internal static TimeSpan DefaultTimeout { get; set; } = TimeSpan.FromMinutes(3);
 
         /// <summary>Как часто опрашивать систему, пока игра не появилась.</summary>
-        internal static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
+        internal static TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(1);
 
         /// <summary>
         /// Шов для тестов: список процессов с таким именем. Настоящая реализация ходит в
@@ -42,8 +42,12 @@ namespace ChillHub.Core.Game {
         /// </summary>
         internal static Func<string, IReadOnlyList<RunningProcess>> ByName { get; set; } = DefaultByName;
 
-        /// <summary>Возвращает поиск к настоящим процессам системы.</summary>
-        internal static void ResetForTests() => ByName = DefaultByName;
+        /// <summary>Возвращает поиск к настоящим процессам системы и обычным срокам.</summary>
+        internal static void ResetForTests() {
+            ByName = DefaultByName;
+            DefaultTimeout = TimeSpan.FromMinutes(3);
+            PollInterval = TimeSpan.FromSeconds(1);
+        }
 
         /// <summary>Лежит ли исполняемый файл процесса в этой папке игры.</summary>
         /// <param name="exePath">Путь к exe процесса; null — процесс не наш.</param>

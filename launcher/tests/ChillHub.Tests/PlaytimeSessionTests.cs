@@ -189,6 +189,40 @@ namespace ChillHub.Tests {
             Assert.Equal("{}", File.ReadAllText(Path.Combine(this.dir, "playtime.sessions.json")).Trim());
         }
 
+        /// <summary>
+        /// Игра так и не появилась (Steam не смог её запустить) — сессии нет вовсе.
+        /// Пустая запись хуже отсутствующей: её потом закроют «задним числом» и припишут
+        /// игре время, которого не было.
+        /// </summary>
+        [Fact]
+        public async Task НеНайденнаяИграСессииНеЗаводит() {
+            GameProcessFinder.ByName = _ => Array.Empty<RunningProcess>();
+            GameProcessFinder.DefaultTimeout = TimeSpan.Zero;
+            GameProcessFinder.PollInterval = TimeSpan.FromMilliseconds(1);
+
+            try {
+                GameSession.Begin("repo", this.dir, Path.Combine(this.dir, "REPO.exe"), null, viaSteam: true, moddedDir: null);
+
+                // Ждём, пока фоновая задача точно отработает: файла сессий не появится.
+                await Task.Delay(200);
+            }
+            finally {
+                GameProcessFinder.ResetForTests();
+            }
+
+            Assert.Equal(0, PlaytimeStore.Get("repo").TotalSeconds);
+        }
+
+        /// <summary>Без игры отсчёт не заводится: имя пустое — записывать нечего.</summary>
+        [Fact]
+        public void БезИдентификатораИгрыОтсчётаНет() {
+            using var game = Process.GetCurrentProcess();
+
+            GameSession.Begin(null, this.dir, null, game, viaSteam: false, moddedDir: null);
+
+            Assert.False(File.Exists(Path.Combine(this.dir, "playtime.sessions.json")));
+        }
+
         /// <summary>Закрывать нечего — второй вызов ничего не портит и не удваивает время.</summary>
         [Fact]
         public void ПовторноеЗакрытиеНичегоНеМеняет() {
