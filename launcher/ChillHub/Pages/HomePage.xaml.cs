@@ -655,11 +655,11 @@ namespace ChillHub.Pages {
                     string? selectedId = null;
                     await this.DispatcherInvokeAsync(() => selectedId = this.GetSelectedGameId());
 
-                    // Порядок из ответа API сохраняем, установленные держим сверху
+                    // Порядок из ответа API сохраняем, установленные держим сверху.
+                    // Здесь достаточно сравнить с this.games: этот путь ничего не вливает
+                    // с сервера, состав списка тот же, и поле указывает на показанное.
                     var sorted = this.catalog.Sort(this.games);
-                    object? bound = null;
-                    await this.DispatcherInvokeAsync(() => bound = this.GameList.ItemsSource);
-                    var reordered = GameCatalog.NeedsRebind(bound, sorted);
+                    var reordered = !GameCatalog.SameOrder(this.games, sorted);
                     this.games = sorted;
 
                     // Проверка статусов почти всегда оставляет порядок прежним, и вот
