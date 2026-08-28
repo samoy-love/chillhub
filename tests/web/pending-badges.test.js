@@ -37,8 +37,8 @@ test('лаунчер: пустая история — не повод для з�
 
 test('моды: значок считает игры, а подсказка называет их', () => {
   const view = describeMods([
-    { gameId: 'lethal-company', title: 'Lethal Company', latest: '2.2.13' },
-    { gameId: 'peak', title: '', latest: '1.4.0' },
+    { gameId: 'lethal-company', title: 'Lethal Company', latest: '2.2.13', behind: true },
+    { gameId: 'peak', title: '', latest: '1.4.0', behind: true },
   ]);
 
   assert.strictEqual(view.show, true);
@@ -46,6 +46,51 @@ test('моды: значок считает игры, а подсказка на
   assert.match(view.title, /Lethal Company: 2\.2\.13/);
   // Без названия в подсказку идёт идентификатор — пустая строка не помогла бы.
   assert.match(view.title, /peak: 1\.4\.0/);
+});
+
+// СВОДКА ТЕПЕРЬ ПРИСЫЛАЕТ СТРОКУ НА КАЖДУЮ ИГРУ С МОДАМИ, включая свежие.
+// Считай значок по длине списка — он горел бы всегда и перестал бы что-либо
+// значить; считать надо те строки, с которыми надо что-то делать.
+test('моды: свежие игры значок не зажигают', () => {
+  const view = describeMods([
+    { gameId: 'lethal-company', title: 'Lethal Company', active: '2.2.12', latest: '2.2.12', behind: false },
+    { gameId: 'peak', title: 'PEAK', active: '1.8.13', latest: '1.8.13', behind: false },
+  ]);
+
+  assert.strictEqual(view.show, false);
+});
+
+test('моды: среди свежих считается только отставшая', () => {
+  const view = describeMods([
+    { gameId: 'peak', title: 'PEAK', latest: '1.8.13', behind: false },
+    { gameId: 'lethal-company', title: 'Lethal Company', latest: '2.2.13', behind: true },
+  ]);
+
+  assert.strictEqual(view.text, '1');
+  assert.match(view.title, /Lethal Company: 2\.2\.13/);
+  assert.ok(!/PEAK/.test(view.title), 'свежая игра не должна попадать в подсказку');
+});
+
+// Устаревший пакет той же версии — тоже повод, но повод ДРУГОЙ: пересобирать
+// нечего, надо решать, чем его заменить.
+test('моды: устаревший пакет зажигает значок и говорит об этом словами', () => {
+  const view = describeMods([
+    { gameId: 'repo', title: 'REPO', active: '1.9.9', latest: '1.9.9', behind: false, deprecated: true },
+  ]);
+
+  assert.strictEqual(view.show, true);
+  assert.strictEqual(view.text, '1');
+  assert.match(view.title, /устаревш/i);
+});
+
+test('моды: строка с ошибкой проверки значка не зажигает', () => {
+  // Состояние неизвестно — это не задача для человека, а повод посмотреть лог:
+  // значок «здесь ждут действия» врал бы о том, что действие есть.
+  const view = describeMods([
+    { gameId: 'peak', title: 'PEAK', active: '1.8.13', error: 'Thunderstore не ответил' },
+  ]);
+
+  assert.strictEqual(view.show, false);
 });
 
 test('моды: обновлений нет — значка нет', () => {
@@ -74,7 +119,7 @@ test('значок раскладывается по вкладкам из от�
     ok: true,
     json: () => Promise.resolve({
       launcher: { active: '1.6.3', newest: '1.6.5', pending: true },
-      mods: [{ gameId: 'lethal-company', title: 'Lethal Company', latest: '2.2.13' }],
+      mods: [{ gameId: 'lethal-company', title: 'Lethal Company', latest: '2.2.13', behind: true }],
       pending: 2,
     }),
   }));
