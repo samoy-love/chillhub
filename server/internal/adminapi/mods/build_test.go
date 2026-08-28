@@ -49,6 +49,9 @@ type fakeStore struct {
 	apiHits map[string]int
 	dlHits  map[string]int
 
+	// indexOff изображает недоступный список сообщества.
+	indexOff bool
+
 	lastListing string
 }
 
@@ -110,6 +113,28 @@ func newFakeStore(t *testing.T) *fakeStore {
 		full := fmt.Sprintf("%s-%s-%s", parts[0], parts[1], parts[2])
 		fs.count(fs.dlHits, full)
 		fs.serveArchive(t, w, r, full)
+	})
+
+	// Список всех пакетов сообщества — то, из чего строится индекс. Отдаётся
+	// в том же виде, что у Thunderstore: пакеты, внутри версии, у версии
+	// зависимости, адрес архива и размер.
+	//
+	// indexOff выключает его на время теста: так проверяется, что сборка
+	// переживает недоступный индекс и просто идёт медленнее.
+	mux.HandleFunc("/c/", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/api/v1/package/") {
+			http.NotFound(w, r)
+			return
+		}
+		fs.mu.Lock()
+		off := fs.indexOff
+		fs.mu.Unlock()
+		if off {
+			http.Error(w, "недоступно", http.StatusBadGateway)
+			return
+		}
+		fs.count(fs.apiHits, "community-index")
+		_, _ = w.Write([]byte(fs.communityListing()))
 	})
 
 	// README, разделы сообщества и каталог: их читают эндпоинты панели.
@@ -218,6 +243,61 @@ func (fs *fakeStore) add(full string, deps []string, entries map[string]string) 
 }
 
 // testBuilder wires a Builder against the fake store and a temp content root.
+// communityListing собирает список сообщества из тех же данных, что раздаёт
+// поштучный эндпоинт: две выдачи об одних и тех же пакетах не должны
+// расходиться, иначе тест на индекс проверял бы выдуманный мир.
+func (f *fakeStore) communityListing() string {
+	type ver struct {
+		Namespace    string   `json:"namespace"`
+		Name         string   `json:"name"`
+		FullName     string   `json:"full_name"`
+		VersionNum   string   `json:"version_number"`
+		Dependencies []string `json:"dependencies"`
+		DownloadURL  string   `json:"download_url"`
+		FileSize     int64    `json:"file_size"`
+	}
+	type pkg struct {
+		Owner    string `json:"owner"`
+		Name     string `json:"name"`
+		FullName string `json:"full_name"`
+		Versions []ver  `json:"versions"`
+	}
+
+	out := make([]pkg, 0, len(f.deps))
+	for _, full := range slices.Sorted(maps.Keys(f.deps)) {
+		ns, name, version, ok := SplitDependency(full)
+		if !ok {
+			continue
+		}
+		out = append(out, pkg{
+			Owner:    ns,
+			Name:     name,
+			FullName: ns + "-" + name,
+			Versions: []ver{{
+				Namespace:    ns,
+				Name:         name,
+				FullName:     full,
+				VersionNum:   version,
+				Dependencies: f.deps[full],
+				DownloadURL:  f.baseURL + "/package/download/" + ns + "/" + name + "/" + version + "/",
+				FileSize:     int64(len(f.entries[full]) * 64),
+			}},
+		})
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+// disableIndex делает список сообщества недоступным.
+func (f *fakeStore) disableIndex() {
+	f.mu.Lock()
+	f.indexOff = true
+	f.mu.Unlock()
+}
+
 func testBuilder(t *testing.T, fs *fakeStore) (*Builder, string) {
 	t.Helper()
 	root := t.TempDir()

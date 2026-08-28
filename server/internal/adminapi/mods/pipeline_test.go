@@ -35,13 +35,39 @@ func TestBuildFallsBackToPackageDownloadURL(t *testing.T) {
 	assertFileExists(t, root, "BepInEx/plugins/Author-CoolMod/CoolMod.dll")
 }
 
-// TestArchiveSizeFallsBackToo: оценка размера ходит по тем же адресам. Если бы
-// запасной путь был только у скачивания, сборка большого пака сначала
-// недосчиталась бы гигабайта в прогнозе места.
+// TestArchiveSizeFallsBackToo: оценка размера ходит по тем же адресам, что и
+// скачивание. Если бы запасной путь был только у скачивания, сборка большого
+// пака сначала недосчиталась бы гигабайта в прогнозе места.
 func TestArchiveSizeFallsBackToo(t *testing.T) {
 	fs := newFakeStore(t)
 	seedPack(fs)
 	fs.cdnDenied["Author-CoolMod-1.0.0"] = true
+
+	b, _ := testBuilder(t, fs)
+	ref := ArchiveRef{
+		FullName:    "Author-CoolMod-1.0.0",
+		DownloadURL: fs.URL + "/package/download/Author/CoolMod/1.0.0/",
+	}
+
+	n, err := b.Client.ArchiveSize(context.Background(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n <= 0 {
+		t.Fatalf("размер посчитан как %d", n)
+	}
+	if fs.dlHits["Author-CoolMod-1.0.0"] == 0 {
+		t.Error("оценка размера не пошла на запасной адрес")
+	}
+}
+
+// TestResolveMeasuresSizesWithoutIndex: когда списка сообщества нет, размеры
+// по-прежнему опрашиваются у хранилища — иначе прогноз места молча обнулился бы
+// на каждой сборке, где индекс недоступен.
+func TestResolveMeasuresSizesWithoutIndex(t *testing.T) {
+	fs := newFakeStore(t)
+	seedPack(fs)
+	fs.disableIndex()
 
 	b, _ := testBuilder(t, fs)
 	plan, err := b.Resolve(context.Background(), thunderstoreRequest())
@@ -50,9 +76,6 @@ func TestArchiveSizeFallsBackToo(t *testing.T) {
 	}
 	if plan.TotalBytes == 0 {
 		t.Fatal("размер пака посчитан нулевым")
-	}
-	if fs.dlHits["Author-CoolMod-1.0.0"] == 0 {
-		t.Error("оценка размера не пошла на запасной адрес")
 	}
 }
 
