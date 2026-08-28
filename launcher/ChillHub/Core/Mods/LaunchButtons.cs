@@ -145,7 +145,14 @@ namespace ChillHub.Core.Mods {
             // «Steam · с модами» рядом — два фиолетовых прямоугольника, и ни один не
             // читался как главный. Когда на витрине стоит «Установить», главная — она:
             // запуск чужой копии из Steam здесь запасной путь, а не основной.
-            var buttons = picked.Select(o => Button(o!, mods, actionVisible ? null : remembered)).ToList();
+            // ЕДИНСТВЕННОЕ ДЕЙСТВИЕ НА ЭКРАНЕ — ГЛАВНОЕ. Пока акцент значил только
+            // «запускали в прошлый раз», у нового игрока витрина оставалась вовсе без
+            // залитой кнопки: одна «стеклянная» кнопка запуска посреди пустого ряда
+            // читается как запасной путь, а идти больше некуда.
+            var soleAction = !actionVisible && picked.Count == 1;
+            var buttons = picked
+                .Select(o => Button(o!, mods, actionVisible ? null : remembered, soleAction))
+                .ToList();
             var rest = MenuOptions(options, buttons);
             var tooltip = buttons.Count == 0 ? "Выбрать, что запускать" : MenuTooltip(rest);
 
@@ -199,16 +206,25 @@ namespace ChillHub.Core.Mods {
         /// <param name="option">Вариант.</param>
         /// <param name="mods">Настройки модов игры.</param>
         /// <param name="remembered">Запомненный вариант или null.</param>
+        /// <param name="soleAction">
+        /// Эта кнопка — единственное действие витрины: рядом нет ни второй кнопки
+        /// запуска, ни «Установить». Тогда она главная просто потому, что других нет.
+        /// </param>
         /// <returns>Кнопка.</returns>
-        private static LaunchButtonView Button(LaunchOption option, ModsInfo? mods, LaunchTarget? remembered) {
+        private static LaunchButtonView Button(
+            LaunchOption option, ModsInfo? mods, LaunchTarget? remembered, bool soleAction = false) {
             // Подпись говорит о ДЕЙСТВИИ, а не о состоянии: «установить моды» вместо
             // «моды не установлены». Кнопка на то и кнопка, что называет своё нажатие.
             var subtitle = option.ReadyToPlay ? "с модами" : option.Note;
             var full = ModsLaunch.TitleOf(option.Target, mods);
-            var accent = remembered == option.Target;
+            var wasLast = remembered == option.Target;
+            var accent = wasLast || soleAction;
 
             var tooltip = option.ReadyToPlay ? full : $"{full} — {option.Note}";
-            if (accent) {
+            if (wasLast) {
+                // Приписка идёт за ПАМЯТЬЮ, а не за цветом: единственная кнопка красится
+                // акцентом и тогда, когда игрок ещё ничего не запускал, и обещать ему
+                // прошлый раз, которого не было, нельзя.
                 tooltip += " · запускали в прошлый раз";
             }
 
