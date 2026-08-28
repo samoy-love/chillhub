@@ -119,8 +119,8 @@ namespace ChillHub {
                 _ = Core.Maintenance.MaintenanceService.RefreshNowAsync();
 
                 // И состояние модов в папке Steam: из Steam в лаунчер возвращаются именно
-                // так, а Steam умеет снести загрузчик модов, обновив игру или проверив её
-                // файлы (см. HomePage.RefreshLaunchOptionsFromDisk).
+                // так, а за время отсутствия игру могли поставить, удалить или перенести
+                // (см. HomePage.RefreshLaunchOptionsFromDisk).
                 this.CurrentHome?.RefreshLaunchOptionsFromDisk();
             };
             this.Deactivated += (s, e) => this.karaoke.Pause();
