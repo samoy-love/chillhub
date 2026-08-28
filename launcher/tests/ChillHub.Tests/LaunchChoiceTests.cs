@@ -94,8 +94,8 @@ namespace ChillHub.Tests {
         public void НедоступныйЗапомненныйВариантНеПодставляется() {
             LaunchChoice.Remember("game", LaunchTarget.SteamModded);
             var options = new List<LaunchOption> {
-                new(LaunchTarget.SteamModded, "Steam · с модами", @"C:\s", true, false, "копия в Steam не найдена"),
-                new(LaunchTarget.LocalVanilla, "Сборка · без модов", @"C:\l", false, true, string.Empty),
+                new(LaunchTarget.SteamModded, "Steam · с модами", @"C:\s", true, LaunchAction.Unavailable, "копия в Steam не найдена"),
+                new(LaunchTarget.LocalVanilla, "Сборка · без модов", @"C:\l", false, LaunchAction.Play, string.Empty),
             };
 
             Assert.Null(LaunchChoice.Preferred("game", options));
@@ -106,8 +106,8 @@ namespace ChillHub.Tests {
         public void ДоступныйЗапомненныйВариантВозвращается() {
             LaunchChoice.Remember("game", LaunchTarget.LocalVanilla);
             var options = new List<LaunchOption> {
-                new(LaunchTarget.SteamModded, "Steam · с модами", @"C:\s", true, true, string.Empty),
-                new(LaunchTarget.LocalVanilla, "Сборка · без модов", @"C:\l", false, true, string.Empty),
+                new(LaunchTarget.SteamModded, "Steam · с модами", @"C:\s", true, LaunchAction.Play, string.Empty),
+                new(LaunchTarget.LocalVanilla, "Сборка · без модов", @"C:\l", false, LaunchAction.Play, string.Empty),
             };
 
             var chosen = LaunchChoice.Preferred("game", options);

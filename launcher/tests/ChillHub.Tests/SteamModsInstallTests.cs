@@ -32,58 +32,9 @@ namespace ChillHub.Tests {
             SteamFolder = "How to Fish/How to Fish",
         };
 
-        // ---- Пункт меню ----
-
-        /// <summary>
-        /// Игре без настроек модов пункт не нужен вовсе: ставить нечего и некуда.
-        /// </summary>
-        [Fact]
-        public void БезНастроекМодовПунктСкрыт() {
-            var state = SteamModsInstall.DecideMenuItem(null);
-
-            Assert.False(state.Visible);
-            Assert.False(state.Enabled);
-        }
-
-        /// <summary>
-        /// Моды есть, а Steam AppID нет: искать копию не по чему, и пункт бессмыслен.
-        /// </summary>
-        [Fact]
-        public void БезSteamAppIdПунктСкрыт() {
-            var mods = Ready();
-            mods.SteamAppId = string.Empty;
-
-            Assert.False(SteamModsInstall.DecideMenuItem(mods).Visible);
-        }
-
-        /// <summary>
-        /// AppID есть, модпак ещё не собран. Это состояние временное, поэтому пункт
-        /// остаётся на месте, но выключен и подписан причиной: исчезнувший пункт не
-        /// объясняет ничего.
-        /// </summary>
-        [Fact]
-        public void БезМодпакаПунктВиденНоВыключенСПричиной() {
-            var mods = Ready();
-            mods.HasLatest = false;
-
-            var state = SteamModsInstall.DecideMenuItem(mods);
-
-            Assert.True(state.Visible);
-            Assert.False(state.Enabled);
-            Assert.NotEmpty(state.Reason);
-            Assert.Contains(state.Reason, state.Header, System.StringComparison.Ordinal);
-        }
-
-        /// <summary>AppID и активный модпак — единственный случай, когда пункт работает.</summary>
-        [Fact]
-        public void СМодпакомИAppIdПунктДоступен() {
-            var state = SteamModsInstall.DecideMenuItem(Ready());
-
-            Assert.True(state.Visible);
-            Assert.True(state.Enabled);
-            Assert.Equal(SteamModsInstall.MenuTitle, state.Header);
-            Assert.Empty(state.Reason);
-        }
+        // Тестов пункта контекстного меню здесь больше нет: пункт убран.
+        // Установка модов в копию Steam теперь живёт строкой «Steam · с модами» в
+        // меню кнопки «Играть», и её состояния проверяет ModsLaunchTests.
 
         // ---- Вопрос перед установкой ----
 

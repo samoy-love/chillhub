@@ -636,12 +636,6 @@
                         <MenuItem Header="Подробнее об игре" Click="GameDetails_Click" CommandParameter="{Binding}"/>
                         <MenuItem Header="Добавить в очередь загрузок" Click="EnqueueGame_Click" CommandParameter="{Binding}"/>
                         <MenuItem Header="Открыть расположение игры" Click="OpenGameFolder_Click" CommandParameter="{Binding}"/>
-                        <!-- Единственный способ поставить модпак игре, которой на сервере нет:
-                             она есть только в Steam, и общий конвейер обновления её не касается.
-                             Подпись и доступность выставляются в GameItem_ContextMenuOpening,
-                             Tag — чтобы найти пункт там, не завися от текста подписи. -->
-                        <MenuItem Header="Поставить моды в Steam-копию" Click="InstallModsToSteam_Click"
-                                  CommandParameter="{Binding}" Tag="steam-mods"/>
                         <!-- Удаление отделено чертой и покрашено: в столбце одинаковых строк
                              оно стояло сразу под «Открыть расположение» и ловило промахи. -->
                         <Separator/>
