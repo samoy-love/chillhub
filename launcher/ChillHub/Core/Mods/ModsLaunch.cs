@@ -67,6 +67,27 @@ namespace ChillHub.Core.Mods {
         internal static void ResetForTests() => StartProcess = psi => Process.Start(psi);
 
         /// <summary>
+        /// Короткая подпись варианта — для подсказки на кнопке «Играть».
+        /// <para>
+        /// Отдельно от <see cref="Options"/>: там подпись строится вместе с
+        /// доступностью и требует поиска копии в Steam, а подсказке нужно только имя.
+        /// </para>
+        /// </summary>
+        /// <param name="target">Вариант запуска.</param>
+        /// <param name="mods">Настройки модов игры; null допустим.</param>
+        /// <returns>Подпись варианта.</returns>
+        internal static string TitleOf(LaunchTarget target, ModsInfo? mods) {
+            var packName = mods?.Describe() ?? string.Empty;
+            var modded = string.IsNullOrEmpty(packName) ? "с модами" : $"с модами ({packName})";
+            return target switch {
+                LaunchTarget.SteamModded => $"Steam · {modded}",
+                LaunchTarget.SteamVanilla => "Steam · без модов",
+                LaunchTarget.LocalModded => $"Сборка Chill Hub · {modded}",
+                _ => "Сборка Chill Hub · без модов",
+            };
+        }
+
+        /// <summary>
         /// Составляет список вариантов запуска для игры.
         /// <para>
         /// Недоступные пункты не выбрасываются, а возвращаются с причиной: «Steam-копия

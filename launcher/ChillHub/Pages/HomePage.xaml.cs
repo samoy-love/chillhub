@@ -1431,10 +1431,52 @@ namespace ChillHub.Pages {
                 this.ActionBtn.Content = look.Content;
                 this.ActionBtn.IsEnabled = look.IsEnabled;
                 this.ApplyActionButtonStyle(look.StyleKey);
+                this.SyncLaunchMenuButton(mode);
             }
             catch (Exception ex) {
                 // Кнопка действия — центральный элемент экрана: не даём сбою оформления уронить страницу
                 Core.Logging.Logger.Error(ex, $"SetActionMode({mode})");
+            }
+        }
+
+        /// <summary>
+        /// Показывает или прячет стрелку выбора варианта запуска.
+        /// <para>
+        /// Только у игры с модами и только в режиме «Играть»: у остальных выбирать
+        /// нечего, а на «Обновить» и «Установить» стрелка обещала бы выбор, которого
+        /// в этот момент нет.
+        /// </para>
+        /// </summary>
+        /// <param name="mode">Текущий режим кнопки действия.</param>
+        private void SyncLaunchMenuButton(ActionMode mode) {
+            try {
+                var game = this.GetSelectedGame();
+                var modded = mode == ActionMode.Play
+                    && game?.Mods is { } mods
+                    && !string.IsNullOrWhiteSpace(mods.SteamAppId);
+
+                this.LaunchMenuBtn.Visibility = modded ? Visibility.Visible : Visibility.Collapsed;
+                if (!modded) {
+                    this.ActionBtn.ToolTip = null;
+                    return;
+                }
+
+                // Что именно запустится по «Играть» — на подсказке кнопки. Без этого
+                // единственный способ узнать — нажать и посмотреть, что откроется.
+                var remembered = Core.Mods.LaunchChoice.Remembered(game!.GameId);
+                this.ActionBtn.ToolTip = remembered is { } target
+                    ? "Запустится: " + Core.Mods.ModsLaunch.TitleOf(target, game.Mods)
+                    : "Выбрать, что запускать: своя копия из Steam или сборка Chill Hub, с модами или без";
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"SyncLaunchMenuButton: {ex.Message}");
+            }
+        }
+
+        private void LaunchMenuBtn_Click(object sender, RoutedEventArgs e) {
+            var game = this.GetSelectedGame();
+            if (game?.Mods is not null) {
+                this.ShowModsLaunchMenu(game);
             }
         }
 
@@ -1993,7 +2035,16 @@ namespace ChillHub.Pages {
             // между «хочу играть» и игрой никому не нужен.
             var selected = this.games?.FirstOrDefault(g => g.GameId == gid);
             if (selected?.Mods is { } modsCfg && !string.IsNullOrWhiteSpace(modsCfg.SteamAppId)) {
-                this.ShowModsLaunchMenu(selected);
+                // Запомненный вариант стартует сразу, остальные — под стрелкой рядом.
+                // Меню на каждый запуск брало по два клика и ничем не показывало, что
+                // оно вообще откроется вместо игры.
+                if (this.PreferredLaunch(selected) is { } preferred) {
+                    this.StartLaunchOption(selected, preferred);
+                }
+                else {
+                    this.ShowModsLaunchMenu(selected);
+                }
+
                 return;
             }
 
@@ -2041,11 +2092,17 @@ namespace ChillHub.Pages {
                 var options = Core.Mods.ModsLaunch.Options(mods, localRoot, localInstalled, steam);
                 var menu = new ContextMenu { PlacementTarget = this.ActionBtn, Placement = PlacementMode.Top };
 
+                var remembered = Core.Mods.LaunchChoice.Remembered(game.GameId);
                 foreach (var option in options) {
                     var item = new MenuItem {
                         Header = option.Available ? option.Title : $"{option.Title} — {option.Reason}",
                         IsEnabled = option.Available,
                         Tag = option,
+
+                        // Галочка у текущего выбора: меню из четырёх строк без неё не
+                        // отвечает на вопрос «а что запускается сейчас».
+                        IsChecked = option.Target == remembered,
+                        IsCheckable = false,
                     };
                     item.Click += this.ModsLaunchItem_Click;
                     menu.Items.Add(item);
@@ -2058,26 +2115,74 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Какой вариант запустится по «Играть»: запомненный, если он сейчас доступен.
+        /// <para>
+        /// Доступность пересчитывается здесь же, а не берётся из памяти: игру могли
+        /// удалить из Steam с прошлого запуска, и молча подставить вместо неё другую
+        /// копию — худший из возможных исходов.
+        /// </para>
+        /// </summary>
+        /// <param name="game">Выбранная игра.</param>
+        /// <returns>Вариант запуска или null, если спрашивать всё-таки надо.</returns>
+        private Core.Mods.LaunchOption? PreferredLaunch(GameInfo game) {
+            try {
+                var mods = game.Mods!;
+                var localRoot = Core.Home.GameLocalState.GameLocalRoot(game.GameId);
+                var localInstalled = Core.Home.GameLocalState.HasAnyLocalGameFiles(localRoot);
+                var steam = Core.Mods.SteamLocator.Locate(mods.SteamAppId, mods.SteamFolder);
+                var options = Core.Mods.ModsLaunch.Options(mods, localRoot, localInstalled, steam);
+                return Core.Mods.LaunchChoice.Preferred(game.GameId, options);
+            }
+            catch (Exception ex) {
+                // Не смогли посчитать — покажем меню. Это хуже на один клик и лучше
+                // на одну неверную догадку.
+                Core.Logging.Logger.Warn($"PreferredLaunch({game.GameId}): {ex.Message}");
+                return null;
+            }
+        }
+
         /// <summary>Запускает выбранный в меню вариант.</summary>
         /// <param name="sender">Пункт меню.</param>
         /// <param name="e">Аргументы события.</param>
         private void ModsLaunchItem_Click(object sender, RoutedEventArgs e) {
-            try {
-                if (sender is not MenuItem { Tag: Core.Mods.LaunchOption option }) {
-                    return;
-                }
+            if (sender is not MenuItem { Tag: Core.Mods.LaunchOption option }) {
+                return;
+            }
 
+            var gid = this.GetSelectedGameId();
+            var game = this.games?.FirstOrDefault(g => g.GameId == gid);
+            if (game?.Mods != null) {
+                this.StartLaunchOption(game, option);
+            }
+        }
+
+        /// <summary>
+        /// Запускает выбранный вариант и запоминает его.
+        /// <para>
+        /// Общий для двух путей: пункта меню и кнопки «Играть», которая стартует
+        /// запомненное без меню. Две копии этого кода разошлись бы на первой же
+        /// правке — например, одна запоминала бы выбор, а другая нет.
+        /// </para>
+        /// </summary>
+        /// <param name="game">Игра.</param>
+        /// <param name="option">Что запускаем.</param>
+        private void StartLaunchOption(GameInfo game, Core.Mods.LaunchOption option) {
+            try {
                 var maintenance = Core.Maintenance.MaintenanceService.Current;
                 if (maintenance.BlocksPlay) {
                     this.StatusText.Text = maintenance.BuildBannerText();
                     return;
                 }
 
-                var gid = this.GetSelectedGameId();
-                var game = this.games?.FirstOrDefault(g => g.GameId == gid);
-                if (game?.Mods == null) {
+                if (game.Mods == null) {
                     return;
                 }
+
+                // Запоминаем ДО запуска: игра может занять экран целиком, и до строки
+                // после Start дело дойдёт уже без пользователя перед лаунчером.
+                Core.Mods.LaunchChoice.Remember(game.GameId, option.Target);
+                this.SyncLaunchMenuButton(this.actionMode);
 
                 var steam = Core.Mods.SteamLocator.Locate(game.Mods.SteamAppId, game.Mods.SteamFolder);
                 var proc = Core.Mods.ModsLaunch.Start(option, game.Mods, game.ExeRelativePath, steam);
@@ -2095,7 +2200,7 @@ namespace ChillHub.Pages {
                 }
             }
             catch (Exception ex) {
-                this.ShowUserError("Не удалось запустить игру.", ex, "HomePage.ModsLaunchItem_Click");
+                this.ShowUserError("Не удалось запустить игру.", ex, "HomePage.StartLaunchOption");
             }
         }
 
