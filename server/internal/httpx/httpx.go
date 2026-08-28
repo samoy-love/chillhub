@@ -68,6 +68,25 @@ func logLine(label string, r *http.Request, status int, dur time.Duration) strin
 	return b.String()
 }
 
+// Revalidate marks a response as cacheable but always checked with the origin.
+//
+// Static pictures — game icons, news covers, hero art — change rarely and weigh
+// tens of kilobytes each. Under NoStore a client had to download every one of
+// them on every launch, because "no-store" forbids keeping the bytes at all.
+// With this header the client keeps the bytes and asks a conditional question
+// instead: http.FileServer answers 304 Not Modified from Last-Modified, so an
+// unchanged picture crosses the wire once and never again — while a replaced
+// one still arrives immediately, since every request is revalidated.
+//
+// This is deliberately NOT used for manifests: those decide which version a
+// client installs, and there a stale answer costs a wrong installation.
+func Revalidate(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=0, must-revalidate")
+		h.ServeHTTP(w, r)
+	})
+}
+
 // NoStore adds headers to disable caching.
 func NoStore(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

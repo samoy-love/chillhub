@@ -286,12 +286,20 @@ func newRouter(limiter *ratelimit.Limiter, reg *promexp.Registry) *mux.Router {
 	r.HandleFunc("/news/games/{gameId}/index.json", limiter.Wrap(handleGameNewsIndex)).Methods("GET", "HEAD")
 
 	// Serve manifests, content and news statically for local dev (no indirection)
+	//
+	// Manifests stay uncacheable: they decide which version a client installs, and
+	// a stale answer there costs a wrong installation.
 	r.PathPrefix("/manifests/").Handler(httpx.NoStore(http.StripPrefix("/manifests/", http.FileServer(http.Dir(filepath.Join(contentRoot, "manifests"))))))
-	r.PathPrefix("/content/").Handler(httpx.NoStore(http.StripPrefix("/content/", http.FileServer(http.Dir(filepath.Join(contentRoot, "content"))))))
+	// Everything else here is bytes a client shows or installs: game content, news
+	// pages and pictures. Under no-store the launcher re-downloaded every icon and
+	// cover on every start, because the header forbids keeping them at all. With
+	// revalidation FileServer answers 304 from Last-Modified, so unchanged pictures
+	// cross the wire once — and replaced ones still arrive at once.
+	r.PathPrefix("/content/").Handler(httpx.Revalidate(http.StripPrefix("/content/", http.FileServer(http.Dir(filepath.Join(contentRoot, "content"))))))
 	// /news/ already covers /news/games/... — a second, later PathPrefix for it
 	// would never be reached, so there is none.
-	r.PathPrefix("/news/").Handler(httpx.NoStore(http.StripPrefix("/news/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news"))))))
-	r.PathPrefix("/assets/").Handler(httpx.NoStore(http.StripPrefix("/assets/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news", "assets"))))))
+	r.PathPrefix("/news/").Handler(httpx.Revalidate(http.StripPrefix("/news/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news"))))))
+	r.PathPrefix("/assets/").Handler(httpx.Revalidate(http.StripPrefix("/assets/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news", "assets"))))))
 
 	return r
 }
