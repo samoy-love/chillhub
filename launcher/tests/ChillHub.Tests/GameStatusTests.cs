@@ -199,5 +199,110 @@ namespace ChillHub.Tests {
             Assert.Equal(expected, g.InstalledVersion);
             Assert.Equal(installed, g.IsInstalled);
         }
+
+        /// <summary>
+        /// Активация модпака в админке обязана дойти до карточки игры.
+        /// <para>
+        /// Сборка игры при этом не меняется, поэтому сравнение одних только версий
+        /// игры давало «свежая» и оставляло на кнопке «Играть». Обновление до
+        /// игрока не доезжало вовсе: заметить его можно было только вручную,
+        /// из «Об игре».
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void НовыйМодпакТребуетОбновленияПриТойЖеВерсииИгры() {
+            using var games = new GamesPathScope();
+            GameLocalState.WriteLocalVersion("game", "1.0.0");
+            GameLocalState.WriteLocalModsVersion("game", "ASTeam-LethalReloaded-2.2.11");
+            var list = new List<GameInfo> {
+                new GameInfo {
+                    GameId = "game",
+                    LatestVersion = "1.0.0",
+                    Mods = new ModsInfo { HasLatest = true, Version = "ASTeam-LethalReloaded-2.2.12" },
+                },
+            };
+
+            GameStatus.NormalizeIconsAndLocalState(list, "https://example.test");
+
+            Assert.True(list[0].IsInstalled);
+            Assert.True(list[0].NeedsUpdate);
+        }
+
+        /// <summary>Первая установка модов поверх уже стоящей игры — тоже обновление.</summary>
+        [Fact]
+        public void МодпакБезМаркераНаДискеТребуетОбновления() {
+            using var games = new GamesPathScope();
+            GameLocalState.WriteLocalVersion("game", "1.0.0");
+            var list = new List<GameInfo> {
+                new GameInfo {
+                    GameId = "game",
+                    LatestVersion = "1.0.0",
+                    Mods = new ModsInfo { HasLatest = true, Version = "ASTeam-LethalReloaded-2.2.12" },
+                },
+            };
+
+            GameStatus.NormalizeIconsAndLocalState(list, "https://example.test");
+
+            Assert.True(list[0].NeedsUpdate);
+        }
+
+        /// <summary>Совпавший модпак ничего не требует — иначе кнопка звала бы обновляться вечно.</summary>
+        [Fact]
+        public void СовпавшийМодпакНеТребуетОбновления() {
+            using var games = new GamesPathScope();
+            GameLocalState.WriteLocalVersion("game", "1.0.0");
+            GameLocalState.WriteLocalModsVersion("game", "ASTeam-LethalReloaded-2.2.12");
+            var list = new List<GameInfo> {
+                new GameInfo {
+                    GameId = "game",
+                    LatestVersion = "1.0.0",
+                    Mods = new ModsInfo { HasLatest = true, Version = "ASTeam-LethalReloaded-2.2.12" },
+                },
+            };
+
+            GameStatus.NormalizeIconsAndLocalState(list, "https://example.test");
+
+            Assert.False(list[0].NeedsUpdate);
+        }
+
+        /// <summary>
+        /// Модпак настроен, но не собран: hasLatest=false — сравнивать не с чем, и
+        /// звать на обновление не за чем.
+        /// </summary>
+        [Fact]
+        public void НесобранныйМодпакНеТребуетОбновления() {
+            using var games = new GamesPathScope();
+            GameLocalState.WriteLocalVersion("game", "1.0.0");
+            var list = new List<GameInfo> {
+                new GameInfo {
+                    GameId = "game",
+                    LatestVersion = "1.0.0",
+                    Mods = new ModsInfo { HasLatest = false, Version = string.Empty },
+                },
+            };
+
+            GameStatus.NormalizeIconsAndLocalState(list, "https://example.test");
+
+            Assert.False(list[0].NeedsUpdate);
+        }
+
+        /// <summary>
+        /// MarkInstalled вызывается сразу после установки игры и пересчитывает статус.
+        /// Модпак в этот момент ещё не поставлен — значит работа не закончена.
+        /// </summary>
+        [Fact]
+        public void ПослеУстановкиИгрыНедостающийМодпакОставляетОбновление() {
+            using var games = new GamesPathScope();
+            var g = new GameInfo {
+                GameId = "game",
+                LatestVersion = "1.0.0",
+                Mods = new ModsInfo { HasLatest = true, Version = "ASTeam-LethalReloaded-2.2.12" },
+            };
+
+            GameStatus.MarkInstalled(g, "1.0.0");
+
+            Assert.True(g.IsInstalled);
+            Assert.True(g.NeedsUpdate);
+        }
     }
 }
