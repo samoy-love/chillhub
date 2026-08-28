@@ -590,7 +590,6 @@ namespace ChillHub.Pages {
 
                         Interlocked.Increment(ref processed);
                         await this.DispatcherInvokeAsync(() => {
-                            this.GameList.Items.Refresh();
                             this.UpdateActionButtonState();
                             this.StatusText.Text = $"Проверка игр: {processed}/{total}";
                         });
@@ -612,9 +611,9 @@ namespace ChillHub.Pages {
                             try {
                                 // Бейдж проверенной игры обновляем сразу, чтобы статусы появлялись по мере готовности
                                 await this.DispatcherInvokeAsync(() => {
-                                    this.GameList.Items.Refresh();
-
-                                    // Если это выбранная игра — кнопка действия должна разблокироваться немедленно
+                                    // Строка списка перерисуется сама: статусы игры —
+                                    // свойства с уведомлением. Если это выбранная игра —
+                                    // кнопка действия должна разблокироваться немедленно.
                                     if (string.Equals(this.GetSelectedGameId(), g.GameId, StringComparison.OrdinalIgnoreCase)) {
                                         this.UpdateActionButtonState();
                                     }
@@ -649,17 +648,24 @@ namespace ChillHub.Pages {
                     await this.DispatcherInvokeAsync(() => selectedId = this.GetSelectedGameId());
 
                     // Порядок из ответа API сохраняем, установленные держим сверху
-                    this.games = this.catalog.Sort(this.games);
-                    await this.DispatcherInvokeAsync(() => {
-                        this.SetGamesSource();
-                        this.GameList.Items.Refresh();
-                        if (!string.IsNullOrWhiteSpace(selectedId)) {
-                            var idx = GameCatalog.IndexOf(this.games, selectedId);
-                            if (idx >= 0) {
-                                this.GameList.SelectedItem = this.games[idx];
+                    var sorted = this.catalog.Sort(this.games);
+                    var reordered = !GameCatalog.SameOrder(this.games, sorted);
+                    this.games = sorted;
+
+                    // Проверка статусов почти всегда оставляет порядок прежним, и вот
+                    // тогда список трогать нельзя вовсе: смена источника пересоздаёт все
+                    // строки и перезагружает значки — то самое мерцание после запуска.
+                    if (reordered) {
+                        await this.DispatcherInvokeAsync(() => {
+                            this.SetGamesSource();
+                            if (!string.IsNullOrWhiteSpace(selectedId)) {
+                                var idx = GameCatalog.IndexOf(this.games, selectedId);
+                                if (idx >= 0) {
+                                    this.GameList.SelectedItem = this.games[idx];
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
                 }
                 catch (Exception ex) {
                     // Пересортировка — косметика: статусы уже проверены и показаны
@@ -804,11 +810,7 @@ namespace ChillHub.Pages {
 
         private async Task LoadBuildsAndGameNewsAsync(string gameId, CancellationToken token = default) {
             try {
-                // Очистим новости игры сразу, чтобы не мигали новости другой игры
-                this.GameNewsList.ItemsSource = Array.Empty<NewsItem>();
-                this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Visible;
-                this.GameNewsList.Visibility = System.Windows.Visibility.Collapsed;
-                this.GameNewsEmptyState.Visibility = System.Windows.Visibility.Collapsed;
+                this.BeginGameNewsLoading();
 
                 // Сборки. Ни сборок, ни новостей у игры на сервере может не быть —
                 // это пустой раздел, а не сбой связи (HomeFeed.GetOptionalAsync).
@@ -828,8 +830,6 @@ namespace ChillHub.Pages {
                 token.ThrowIfCancellationRequested();
                 var localTrimmed = GameStatus.ApplyLocalVersion(game, localVer);
                 Core.Logging.Logger.Info($"LoadBuildsAndGameNewsAsync gid={gameId} local='{localTrimmed}'");
-
-                this.GameList.Items.Refresh();
 
                 // Новости игры
                 var gameNewsUrl = HomeFeed.GameNewsUrl(this.BaseApi, gameId);
@@ -857,6 +857,27 @@ namespace ChillHub.Pages {
                 this.ShowGameNews(Array.Empty<NewsItem>());
 
                 // Обновим заголовок до дефолтного/актуального
+            }
+        }
+
+        /// <summary>
+        /// Ставит ленту новостей в состояние «гружусь»: старые новости убираем сразу.
+        /// <para>
+        /// Зовётся дважды — по клику в списке и в самой загрузке. Клик первым: между
+        /// ним и запросом стоит очередь на загрузку сведений, и во время закачки эта
+        /// пауза тянется секундами. Всё это время под названием новой игры висели
+        /// новости прошлой.
+        /// </para>
+        /// </summary>
+        private void BeginGameNewsLoading() {
+            try {
+                this.GameNewsList.ItemsSource = Array.Empty<NewsItem>();
+                this.GameNewsSkeleton.Visibility = Visibility.Visible;
+                this.GameNewsList.Visibility = Visibility.Collapsed;
+                this.GameNewsEmptyState.Visibility = Visibility.Collapsed;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"BeginGameNewsLoading: {ex.Message}");
             }
         }
 
@@ -955,6 +976,15 @@ namespace ChillHub.Pages {
         private async void GameCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) {
             var gid = this.GetSelectedGameId();
             this.UpdateDiskFreeText(gid);
+
+            // Витрина перерисовывается ПЕРЕД сетью, а не после неё. Раньше название,
+            // бейдж и кнопки ставились в самом конце загрузки сведений об игре, и во
+            // время закачки — когда канал занят, а запросы идут секундами — клик по
+            // соседней игре выделял строку, но правая половина экрана оставалась от
+            // прошлой. Выглядело это как «нажми ещё раз».
+            this.ResetUpdateErrorIfGameChanged(gid);
+            this.UpdateActionButtonState();
+            this.BeginGameNewsLoading();
             var cts = new CancellationTokenSource();
             var previous = Interlocked.Exchange(ref this.selectionCts, cts);
             try {
@@ -1033,8 +1063,6 @@ namespace ChillHub.Pages {
                 var localVer = await Task.Run(() => ReadLocalVersion(gid), token);
                 token.ThrowIfCancellationRequested();
                 GameStatus.ApplyLocalVersion(g, localVer);
-
-                this.GameList.Items.Refresh();
 
                 // Обновим заголовок новостей игры под выбранную игру
 
@@ -1272,12 +1300,22 @@ namespace ChillHub.Pages {
             this.verified.Reset();
             this.ClearErrorDetails();
             try {
-                this.GamesSkeleton.Visibility = Visibility.Visible;
-                this.GameList.Visibility = Visibility.Collapsed;
+                // Скелет — только когда показывать нечего. Список, который уже на экране,
+                // не прячем: обновление занимает секунды, и всё это время экран стоял
+                // пустым, хотя данные на нём были верные.
+                var firstFill = this.games == null || this.games.Count == 0;
+                if (firstFill) {
+                    this.GamesSkeleton.Visibility = Visibility.Visible;
+                    this.GameList.Visibility = Visibility.Collapsed;
+                }
 
                 var gamesUrl = HomeFeed.GamesUrl(this.BaseApi);
                 var gamesResp = await this.http.GetFromJsonAsync<GamesResponse>(gamesUrl);
-                this.games = gamesResp?.Items ?? new List<GameInfo>();
+
+                // Вливаем ответ в уже показанные игры, а не подменяем их новыми объектами:
+                // для WPF новый объект — это новая строка со всеми её значками, и список
+                // дёргался целиком даже тогда, когда сервер не сказал ничего нового.
+                this.games = GameCatalog.Merge(this.games, gamesResp?.Items);
                 this.HideServerUnavailableState();
                 this.NormalizeGameIconsAndLocalState(this.games);
 
@@ -1289,15 +1327,24 @@ namespace ChillHub.Pages {
 
                 // Сортировка: установленные сначала, затем порядок, полученный от API
                 this.catalog.RememberApiOrder(this.games);
-                this.games = this.catalog.Sort(this.games);
-                this.SetGamesSource();
+                var sorted = this.catalog.Sort(this.games);
 
-                // Восстановим выбранную игру, если она осталась в списке
-                if (!string.IsNullOrWhiteSpace(prevSelectedId)) {
-                    var idxSel = GameCatalog.IndexOfIgnoreCase(this.games, prevSelectedId);
-                    if (idxSel >= 0) {
-                        this.GameList.SelectedItem = this.games[idxSel];
+                // Порядок не изменился — источник не трогаем: его подмена пересоздаёт
+                // строки, а вместе с ними сбрасывает выделение и грузит значки заново.
+                if (!GameCatalog.SameOrder(this.games, sorted)) {
+                    this.games = sorted;
+                    this.SetGamesSource();
+
+                    // Восстановим выбранную игру, если она осталась в списке
+                    if (!string.IsNullOrWhiteSpace(prevSelectedId)) {
+                        var idxSel = GameCatalog.IndexOfIgnoreCase(this.games, prevSelectedId);
+                        if (idxSel >= 0) {
+                            this.GameList.SelectedItem = this.games[idxSel];
+                        }
                     }
+                }
+                else {
+                    this.games = sorted;
                 }
             }
             catch (Exception ex) {
@@ -2603,7 +2650,6 @@ namespace ChillHub.Pages {
             try {
                 var snapshot = this.games?.ToList() ?? new List<GameInfo>();
                 await Task.Run(() => this.NormalizeGameIconsAndLocalState(snapshot));
-                this.GameList.Items.Refresh();
                 this.UpdateActionButtonState();
 
                 if (gamesPathChanged && this.allowFileChecks) {
@@ -2627,10 +2673,9 @@ namespace ChillHub.Pages {
 
         private void MarkInstalled(string gameId, string? version) {
             try {
+                // Строка списка перерисуется сама: «установлена» — свойство с
+                // уведомлением. Пересортировку сделает фоновой шаг.
                 GameStatus.MarkInstalled(this.games.FirstOrDefault(x => x.GameId == gameId), version);
-
-                // Лёгкое обновление UI без пересортировки и смены ItemsSource — это сделает фоновой шаг
-                this.GameList.Items.Refresh();
             }
             catch (Exception ex) {
                 // Версия на диске уже записана; здесь только обновление отображения
@@ -2645,7 +2690,6 @@ namespace ChillHub.Pages {
 
                 this.games = this.catalog.Sort(this.games);
                 this.GameList.ItemsSource = this.games;
-                this.GameList.Items.Refresh();
                 if (!string.IsNullOrWhiteSpace(selectedId)) {
                     var idx = GameCatalog.IndexOf(this.games, selectedId);
                     if (idx >= 0) {

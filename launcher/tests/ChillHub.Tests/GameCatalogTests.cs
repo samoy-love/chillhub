@@ -168,6 +168,87 @@ namespace ChillHub.Tests {
             Assert.Equal(-1, GameCatalog.IndexOfIgnoreCase(games, "нет-такой"));
         }
 
+        /// <summary>
+        /// ОБНОВЛЕНИЕ СПИСКА НЕ ПОДМЕНЯЕТ ОБЪЕКТЫ ИГР. Объект игры — это её строка на
+        /// экране: замени его новым, и WPF пересоздаст строку со значком, потеряет
+        /// выделение и заново загрузит всю правую половину экрана. Ради данных, которые
+        /// обычно те же самые.
+        /// </summary>
+        [Fact]
+        public void ОбновлениеСпискаСохраняетПрежниеОбъекты() {
+            var shown = new List<GameInfo> { Game("a", "А"), Game("b", "Б") };
+            var fromServer = new List<GameInfo> { Game("a", "А — новое имя"), Game("b", "Б") };
+
+            var merged = GameCatalog.Merge(shown, fromServer);
+
+            Assert.Same(shown[0], merged[0]);
+            Assert.Same(shown[1], merged[1]);
+            Assert.Equal("А — новое имя", merged[0].Title);
+        }
+
+        /// <summary>
+        /// Состояние диска сервер не знает и знать не может: «установлена», версия на
+        /// диске и метка очереди переживают обновление списка. Иначе качающаяся игра на
+        /// секунду становилась бы неустановленной.
+        /// </summary>
+        [Fact]
+        public void ОбновлениеСпискаНеСтираетСостояниеНаДиске() {
+            var shown = new List<GameInfo> {
+                new GameInfo {
+                    GameId = "a",
+                    Title = "А",
+                    IsInstalled = true,
+                    InstalledVersion = "1.0.9",
+                    NeedsUpdate = true,
+                    QueueLabel = "Скачивание · 38%",
+                },
+            };
+
+            var merged = GameCatalog.Merge(shown, new List<GameInfo> { Game("a", "А") });
+
+            Assert.True(merged[0].IsInstalled);
+            Assert.Equal("1.0.9", merged[0].InstalledVersion);
+            Assert.True(merged[0].NeedsUpdate);
+            Assert.Equal("Скачивание · 38%", merged[0].QueueLabel);
+        }
+
+        /// <summary>Новая игра приходит как есть, исчезнувшая — уходит из списка.</summary>
+        [Fact]
+        public void ПоявившиесяИИсчезнувшиеИгрыУчитываются() {
+            var shown = new List<GameInfo> { Game("a", "А"), Game("b", "Б") };
+            var fromServer = new List<GameInfo> { Game("b", "Б"), Game("c", "В") };
+
+            var merged = GameCatalog.Merge(shown, fromServer);
+
+            Assert.Equal(new[] { "b", "c" }, merged.Select(g => g.GameId));
+            Assert.Same(shown[1], merged[0]);
+        }
+
+        /// <summary>Первое заполнение списка сливать не с чем.</summary>
+        [Fact]
+        public void ПервоеЗаполнениеБерётСписокКакЕсть() {
+            var fromServer = new List<GameInfo> { Game("a", "А") };
+
+            Assert.Same(fromServer[0], GameCatalog.Merge(null, fromServer)[0]);
+            Assert.Empty(GameCatalog.Merge(new List<GameInfo>(), null));
+        }
+
+        /// <summary>
+        /// Порядок сравнивается по составу и последовательности: только его смена
+        /// оправдывает подмену источника списка со всеми её последствиями.
+        /// </summary>
+        [Fact]
+        public void ОдинаковыйПорядокУзнаётся() {
+            var a = new List<GameInfo> { Game("a", "А"), Game("b", "Б") };
+            var same = new List<GameInfo> { Game("A", "другое имя"), Game("b", "Б") };
+            var other = new List<GameInfo> { Game("b", "Б"), Game("a", "А") };
+
+            Assert.True(GameCatalog.SameOrder(a, same));
+            Assert.False(GameCatalog.SameOrder(a, other));
+            Assert.False(GameCatalog.SameOrder(a, new List<GameInfo> { Game("a", "А") }));
+            Assert.False(GameCatalog.SameOrder(a, null));
+        }
+
         private static GameInfo Game(string id, string title, bool installed = false) =>
             new GameInfo { GameId = id, Title = title, IsInstalled = installed };
     }
