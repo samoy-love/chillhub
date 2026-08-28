@@ -29,6 +29,29 @@ namespace ChillHub.Core.Home {
         private static readonly ConcurrentDictionary<string, Task<byte[]>> Inflight = new(StringComparer.OrdinalIgnoreCase);
         private static readonly ConcurrentDictionary<string, BitmapImage> Cache = new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// Порядок попадания адресов в кеш — чтобы знать, кого вытеснять первым.
+        /// <para>
+        /// Очередь, а не «настоящий» LRU по обращениям: разница между «давно положили» и
+        /// «давно не смотрели» для обложек невелика, а список игр и ленты новостей всё
+        /// равно перечитывают одни и те же адреса подряд.
+        /// </para>
+        /// </summary>
+        private static readonly ConcurrentQueue<string> CacheOrder = new();
+
+        /// <summary>
+        /// Потолок кеша картинок в штуках.
+        /// <para>
+        /// До него кеш рос без границы и жил весь сеанс: каждая новость с обложкой,
+        /// каждая иконка игры оставались в памяти навсегда. Полсотни игр и лента новостей
+        /// за вечер — это сотни распакованных картинок, и заметить их можно было только
+        /// по растущему потреблению памяти лаунчера, который «ничего не делает».
+        /// Двести обложек с запасом покрывают всё, что можно увидеть за сеанс, не
+        /// перекачивая их заново.
+        /// </para>
+        /// </summary>
+        internal const int MaxCachedImages = 200;
+
         /// <summary>Высота декодирования по умолчанию, если у элемента не задан размер.</summary>
         private const int DefaultDecodeHeight = 88;
 
@@ -73,9 +96,37 @@ namespace ChillHub.Core.Home {
         /// теста подменял бы сеть в следующем.
         /// </summary>
         internal static void ResetForTests() {
-            Cache.Clear();
+            ClearCache();
             Inflight.Clear();
             http = CreateDefaultClient();
+        }
+
+        /// <summary>Сколько картинок сейчас лежит в кеше — для тестов и диагностики.</summary>
+        internal static int CachedCount => Cache.Count;
+
+        /// <summary>
+        /// Кладёт готовую картинку в кеш, вытесняя самые старые, если их стало больше
+        /// <see cref="MaxCachedImages"/>.
+        /// </summary>
+        /// <param name="url">Адрес картинки.</param>
+        /// <param name="image">Замороженная картинка.</param>
+        internal static void Remember(string url, BitmapImage image) {
+            if (string.IsNullOrEmpty(url) || image == null) {
+                return;
+            }
+
+            if (Cache.TryAdd(url, image)) {
+                CacheOrder.Enqueue(url);
+            }
+            else {
+                Cache[url] = image;
+            }
+
+            // Вытесняем по одной, пока не уложимся: очередь могла запомнить адрес, который
+            // уже вытеснили или переписали, поэтому счётчик сверяем с самим кешем.
+            while (Cache.Count > MaxCachedImages && CacheOrder.TryDequeue(out var oldest)) {
+                Cache.TryRemove(oldest, out _);
+            }
         }
 
         /// <summary>Есть ли готовая картинка для этого URL — проверяется без обращения к сети.</summary>
@@ -92,7 +143,15 @@ namespace ChillHub.Core.Home {
         /// списка заново качала бы все иконки.
         /// </para>
         /// </summary>
-        internal static void InvalidateAll() => Cache.Clear();
+        internal static void InvalidateAll() => ClearCache();
+
+        private static void ClearCache() {
+            Cache.Clear();
+            while (CacheOrder.TryDequeue(out _)) {
+                // Очередь идёт следом за кешем: оставленные в ней адреса вытесняли бы
+                // картинки, положенные уже после очистки.
+            }
+        }
 
         /// <summary>
         /// Полный сценарий обработчика Loaded у картинки: достать URL (Tag → DataContext → текущий Source),
@@ -303,7 +362,7 @@ namespace ChillHub.Core.Home {
                 bi.EndInit();
                 bi.Freeze();
 
-                Cache[url] = bi; // заморожен — безопасно переиспользовать между потоками
+                Remember(url, bi); // заморожен — безопасно переиспользовать между потоками
                 img.Source = bi;
                 img.Visibility = Visibility.Visible;
                 DebugLog($"[ImgLoad] image applied url='{url}'");
@@ -351,13 +410,25 @@ namespace ChillHub.Core.Home {
             return string.Empty;
         }
 
-        /// <summary>Клиент по умолчанию: много мелких параллельных запросов за картинками.</summary>
-        private static HttpClient CreateDefaultClient() => new HttpClient(new HttpClientHandler {
-            AllowAutoRedirect = true,
-            AutomaticDecompression = DecompressionMethods.All,
-            UseCookies = true,
-            MaxConnectionsPerServer = 16,
-        });
+        /// <summary>
+        /// Клиент по умолчанию: много мелких параллельных запросов за картинками.
+        /// <para>
+        /// Клиент свой, а не общий из <see cref="Net.HttpClientProvider"/> — у картинок другой
+        /// профиль нагрузки и свой таймаут. Но представляться серверу он обязан так же:
+        /// без User-Agent запросы уходят в Cloudflare и молча повисают, поэтому обложки
+        /// пропадали в ленте через раз.
+        /// </para>
+        /// </summary>
+        private static HttpClient CreateDefaultClient() {
+            var http = new HttpClient(new HttpClientHandler {
+                AllowAutoRedirect = true,
+                AutomaticDecompression = DecompressionMethods.All,
+                UseCookies = true,
+                MaxConnectionsPerServer = 16,
+            });
+            Net.HttpClientProvider.ApplyIdentity(http);
+            return http;
+        }
 
         /// <summary>Одна HTTP-загрузка картинки в память; результат разделяют все ждущие элементы.</summary>
         private static async Task<byte[]> DownloadAsync(string url) {

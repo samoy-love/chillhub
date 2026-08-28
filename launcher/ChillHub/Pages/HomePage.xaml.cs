@@ -103,6 +103,13 @@ namespace ChillHub.Pages {
         private bool queueDockExpanded;
 
         /// <summary>
+        /// Когда строку очереди последний раз перерисовывали, по идентификатору игры.
+        /// Нужен, чтобы отчёты о ходе закачки не пересобирали строку десять раз в секунду
+        /// (см. <see cref="Core.UI.QueueDockLayout.ShouldRefreshRow"/>).
+        /// </summary>
+        private readonly Dictionary<string, long> rowRefreshedAt = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
         /// Та же очередь — наружу для GamePage: установка/обновление со страницы игры идёт через
         /// неё, а не через отдельный локальный запуск (см. GamePage.StartQueuedSync), иначе
         /// закачка обрывалась при уходе с этой страницы на главную.
@@ -2054,9 +2061,21 @@ namespace ChillHub.Pages {
             this.Dispatcher.BeginInvoke(() => {
                 var idx = IndexOfQueueItem(this.queueDockItems, item.GameId);
                 if (idx >= 0) {
+                    // Замена позиции пересобирает строку в доке целиком, а отчёты о ходе
+                    // закачки приходят десять раз в секунду. Цифры от четырёх обновлений
+                    // в секунду не отстают, а смена состояния проходит сразу — см.
+                    // QueueDockLayout.ShouldRefreshRow.
+                    var sameState = this.queueDockItems[idx].State == item.State;
+                    if (!Core.UI.QueueDockLayout.ShouldRefreshRow(sameState, this.SinceLastRowRefresh(item.GameId))) {
+                        this.SetQueueLabel(item.GameId, Core.UI.QueueRowLabel.For(item));
+                        return;
+                    }
+
+                    this.MarkRowRefreshed(item.GameId);
                     this.queueDockItems[idx] = item;
                 }
                 else {
+                    this.MarkRowRefreshed(item.GameId);
                     this.queueDockItems.Add(item);
                 }
 
@@ -2118,6 +2137,19 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>Сколько миллисекунд прошло с прошлой перерисовки строки этой игры.</summary>
+        /// <param name="gameId">Игра.</param>
+        /// <returns>Миллисекунды; для строки, которой ещё не было, — бесконечность.</returns>
+        private double SinceLastRowRefresh(string gameId)
+            => this.rowRefreshedAt.TryGetValue(gameId ?? string.Empty, out var at)
+                ? Environment.TickCount64 - at
+                : double.PositiveInfinity;
+
+        /// <summary>Запоминает момент перерисовки строки.</summary>
+        /// <param name="gameId">Игра.</param>
+        private void MarkRowRefreshed(string gameId)
+            => this.rowRefreshedAt[gameId ?? string.Empty] = Environment.TickCount64;
+
         /// <summary>«Показать ещё N» / «Свернуть очередь» под доком.</summary>
         private void QueueMoreBtn_Click(object sender, RoutedEventArgs e) {
             this.queueDockExpanded = !this.queueDockExpanded;
@@ -2172,6 +2204,7 @@ namespace ChillHub.Pages {
                 }
 
                 this.SetQueueLabel(item.GameId, string.Empty);
+                this.rowRefreshedAt.Remove(item.GameId ?? string.Empty);
                 this.SyncQueuePanelVisibility();
 
                 // Снятая с очереди игра — та, что выбрана: кнопка обязана вернуться из
