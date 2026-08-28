@@ -655,11 +655,11 @@ namespace ChillHub.Pages {
                     string? selectedId = null;
                     await this.DispatcherInvokeAsync(() => selectedId = this.GetSelectedGameId());
 
-                    // Порядок из ответа API сохраняем, установленные держим сверху
+                    // Порядок из ответа API сохраняем, установленные держим сверху.
+                    // Здесь достаточно сравнить с this.games: этот путь ничего не вливает
+                    // с сервера, состав списка тот же, и поле указывает на показанное.
                     var sorted = this.catalog.Sort(this.games);
-                    object? bound = null;
-                    await this.DispatcherInvokeAsync(() => bound = this.GameList.ItemsSource);
-                    var reordered = GameCatalog.NeedsRebind(bound, sorted);
+                    var reordered = !GameCatalog.SameOrder(this.games, sorted);
                     this.games = sorted;
 
                     // Проверка статусов почти всегда оставляет порядок прежним, и вот
@@ -1598,6 +1598,16 @@ namespace ChillHub.Pages {
             if (this.TryFindResource(model.StyleKey) is Style style) {
                 button.Style = style;
             }
+
+            // Вес подписи — здесь, а не в стиле: обе строки кнопки живут именованными
+            // TextBlock'ами, в которые пишет этот же метод, и стиль до них не дотягивается.
+            // Контурная кнопка должна отличаться от залитой не только фоном: на витрине
+            // они стоят вплотную, и одинаковый жирный текст делал их близнецами.
+            title.FontWeight = model.Accent ? FontWeights.SemiBold : FontWeights.Normal;
+            note.Foreground = (Brush)(model.Accent
+                ? title.Foreground
+                : this.TryFindResource("Brush.TextSecondary") ?? title.Foreground);
+            note.Opacity = model.Accent ? 0.85 : 1.0;
         }
 
         /// <summary>
@@ -1622,6 +1632,32 @@ namespace ChillHub.Pages {
 
         /// <summary>Забывает снимок вариантов: состояние копий только что менялось.</summary>
         private void InvalidateLaunchOptions() => this.launchOptionsCache.Invalidate();
+
+        /// <summary>
+        /// Перечитывает состояние копий игры на диске и пересобирает строку действий.
+        /// <para>
+        /// Моды живут в ЧУЖОЙ папке — в копии игры из Steam, — и лаунчер ими не владеет.
+        /// Пока его окно стояло в стороне, Steam мог обновить игру или проверить целостность
+        /// файлов и снести загрузчик модов; игрок мог удалить саму игру из Steam или,
+        /// наоборот, поставить её. Кнопка «Steam · с модами» после этого обещала бы запуск с
+        /// модами, которых там уже нет.
+        /// </para>
+        /// <para>
+        /// Возврат фокуса на окно — ровно тот момент, когда человек пришёл из Steam, и
+        /// перечитать папку дешевле всего: это несколько файлов, а не обход дерева.
+        /// Следить за папкой постоянно незачем — между возвратами фокуса её состояние
+        /// никого не интересует.
+        /// </para>
+        /// </summary>
+        internal void RefreshLaunchOptionsFromDisk() {
+            try {
+                this.InvalidateLaunchOptions();
+                this.SyncLaunchBar(this.actionMode);
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"RefreshLaunchOptionsFromDisk: {ex.Message}");
+            }
+        }
 
         /// <summary>Запускает вариант, вынесенный кнопкой на витрину.</summary>
         /// <param name="sender">Нажатая кнопка.</param>

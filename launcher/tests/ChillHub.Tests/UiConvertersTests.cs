@@ -338,13 +338,47 @@ namespace ChillHub.Tests {
             Assert.Empty(visible);
         }
 
+        /// <summary>
+        /// Объём и скорость — разными строками: в карточке очереди они стоят одна под
+        /// другой в правой колонке, и склеивать их в одну строку больше нечем.
+        /// </summary>
+        [Fact]
+        public void ЦифрыЗакачкиРазложеныПоДвумСтрокам() {
+            var item = Item(QueueItemState.Running, done: 5L * 1024 * 1024, total: 20L * 1024 * 1024, speed: 1024 * 1024);
+
+            Assert.Equal("5,0 МБ / 20,0 МБ", Convert(new QueueItemSizeConverter(), item));
+            Assert.Equal("1,0 МБ/с · осталось 15 с", Convert(new QueueItemSpeedConverter(), item));
+        }
+
+        /// <summary>
+        /// Пока скорость неизвестна, второй строки нет вовсе: «0,0 МБ/с» на первых
+        /// секундах — не сведения, а шум, и остаток по такой скорости бесконечен.
+        /// </summary>
+        [Fact]
+        public void БезИзвестнойСкоростиВтораяСтрокаПустая() {
+            var item = Item(QueueItemState.Running, done: 0, total: 1024);
+
+            Assert.Equal(string.Empty, Convert(new QueueItemSpeedConverter(), item));
+            Assert.Equal("0 Б / 1,0 КБ", Convert(new QueueItemSizeConverter(), item));
+        }
+
+        /// <summary>Объём неизвестен — цифр нет ни в одной строке, а не «0 / 0».</summary>
+        [Fact]
+        public void БезИзвестногоОбъёмаЦифрНет() {
+            var item = Item(QueueItemState.Running, done: 100, total: 0, speed: 512);
+
+            Assert.Equal(string.Empty, Convert(new QueueItemSizeConverter(), item));
+            Assert.Equal(string.Empty, Convert(new QueueItemSpeedConverter(), item));
+        }
+
         private static QueueItem Item(
             QueueItemState state,
             long done = 0,
             long total = 0,
             string status = "",
-            int position = 0)
-            => new("game", "Игра", state, done, total, status, QueuePosition: position);
+            int position = 0,
+            double speed = 0)
+            => new("game", "Игра", state, done, total, status, speed, QueuePosition: position);
 
         private static string Convert(System.Windows.Data.IValueConverter conv, object? value)
             => (string)conv.Convert(value!, typeof(string), null!, CultureInfo.InvariantCulture);
