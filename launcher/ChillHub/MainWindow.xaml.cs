@@ -559,6 +559,12 @@ namespace ChillHub {
         private void SyncKaraokeWithWindowState() {
             var onScreen = this.IsVisible && this.WindowState != WindowState.Minimized;
             Core.UI.UiAnimations.Instance.Enabled = onScreen;
+
+            // Спрятанному окну незачем и опрашивать сервер о режиме работ: баннер
+            // показывать некому, а вернувшись на экран, окно спросит само (Activated).
+            // Лаунчер живёт в трее часами, и всё это время уходил запрос в минуту.
+            Core.Maintenance.MaintenanceService.Suspended = !onScreen;
+
             if (onScreen) {
                 this.karaoke.Resume();
             }

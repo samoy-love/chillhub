@@ -93,6 +93,18 @@ namespace ChillHub.Core.Maintenance {
         /// Запускает фоновый опрос. Повторные вызовы игнорируются, поэтому метод можно
         /// звать из любого места старта приложения.
         /// </summary>
+        /// <summary>
+        /// Gets or sets a value indicating whether опрос приостановлен: окно спрятано, и
+        /// показывать баннер режима работ некому.
+        /// <para>
+        /// Лаунчер живёт в трее часами, и всё это время опрос уходил в сеть раз в минуту —
+        /// шестьдесят запросов в час ради баннера, которого никто не видит. Возврат окна
+        /// на экран сам дёргает <see cref="RefreshNowAsync"/>, так что свежесть при этом
+        /// не теряется: она восстанавливается ровно тогда, когда становится нужна.
+        /// </para>
+        /// </summary>
+        public static bool Suspended { get; set; }
+
         public static void Start() {
             lock (StartLock) {
                 if (loopCts != null) {
@@ -195,7 +207,9 @@ namespace ChillHub.Core.Maintenance {
             try {
                 while (!token.IsCancellationRequested) {
                     try {
-                        var state = await FetchAsync(token).ConfigureAwait(false);
+                        // Спрятанному окну свежий режим работ не нужен: баннер показывать
+                        // некому, а окно, вернувшееся на экран, спрашивает само.
+                        var state = Suspended ? null : await FetchAsync(token).ConfigureAwait(false);
                         if (state != null) {
                             Apply(state);
                         }
