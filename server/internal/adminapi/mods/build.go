@@ -249,7 +249,26 @@ func (b *Builder) ResolveWith(ctx context.Context, req Request, emit Emit) (*Pla
 			emit.send(Event{Type: "resolving", Step: n, Message: dep})
 		}
 	}
-	res, err := b.Client.ResolveListWith(ctx, eco, roots, prog)
+
+	// ИНДЕКС СООБЩЕСТВА — ОДИН ЗАПРОС ВМЕСТО ПОЛУТОРА СОТЕН.
+	//
+	// В нём лежат зависимости, адреса архивов и их размеры всех пакетов
+	// сообщества сразу: и обход дерева, и оценка объёма перестают ходить в сеть
+	// по одному пакету. Его неудача — не отказ сборки: без индекса всё работает
+	// как раньше, только медленнее, и говорить об этом оператору нечего.
+	var idx *CommunityIndex
+	if req.EcosystemGame != "" {
+		emit.send(Event{Type: "start", Message: "список модов сообщества"})
+		got, ierr := b.Client.FetchCommunityIndex(ctx, req.EcosystemGame)
+		if ierr != nil {
+			log.Printf("[mods] индекс сообщества %s недоступен, разбор пойдёт по одному пакету: %v",
+				req.EcosystemGame, ierr)
+		} else {
+			idx = got
+		}
+	}
+
+	res, err := b.Client.ResolveListWithIndex(ctx, eco, roots, prog, idx)
 	if err != nil {
 		return nil, err
 	}
@@ -280,6 +299,17 @@ func (b *Builder) ResolveWith(ctx context.Context, req Request, emit Emit) (*Pla
 				continue
 			}
 		}
+		// Размер архива индекс тоже знает. Это второй пасс по всему дереву,
+		// который целиком перестаёт ходить в сеть.
+		if v, hit := idx.Lookup(p.FullName); hit && v.FileSize > 0 {
+			sizes[i] = v.FileSize
+			emit.send(Event{
+				Type: "sizing", Step: int(sized.Add(1)), Total: len(res.Packages), Message: p.FullName,
+			})
+
+			continue
+		}
+
 		sizeWG.Add(1)
 		go func(i int, p ResolvedPackage) {
 			defer sizeWG.Done()

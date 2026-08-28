@@ -135,7 +135,9 @@ linters:
         linters:
           - gosec
 
-      - path: internal/adminapi/mods/(client|catalog)\.go
+      # Имена полей задаёт Thunderstore, а не мы: это разбор ЕГО ответов, и
+      # переименовать snake_case в camelCase значит перестать их читать.
+      - path: internal/adminapi/mods/(client|catalog|community)\.go
         linters:
           - tagliatelle
 

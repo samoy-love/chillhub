@@ -60,14 +60,14 @@ func (r *Resolution) TotalPackages() int { return len(r.Packages) }
 // does, and it is not a shortcut — Thunderstore publishes no constraint
 // information a solver could use, only pinned versions.
 func (c *Client) Resolve(ctx context.Context, eco *Ecosystem, root string) (*Resolution, error) {
-	return c.resolveFrom(ctx, eco, []string{root}, nil)
+	return c.resolveFrom(ctx, eco, []string{root}, nil, nil)
 }
 
 // ResolveList walks the tree of an explicit list of pinned packages. This is
 // how an imported r2modman profile is turned into a modpack: the profile names
 // every mod it installed, but not the libraries those mods pull in.
 func (c *Client) ResolveList(ctx context.Context, eco *Ecosystem, roots []string) (*Resolution, error) {
-	return c.resolveFrom(ctx, eco, roots, nil)
+	return c.resolveFrom(ctx, eco, roots, nil, nil)
 }
 
 // ResolveProgress is called once per package version read, with the running
@@ -83,10 +83,21 @@ type ResolveProgress func(fetched int, dependency string)
 // progress callback that minute reaches the operator as a frozen panel — which
 // is exactly how the first version of this was reported as a hang.
 func (c *Client) ResolveListWith(ctx context.Context, eco *Ecosystem, roots []string, prog ResolveProgress) (*Resolution, error) {
-	return c.resolveFrom(ctx, eco, roots, prog)
+	return c.resolveFrom(ctx, eco, roots, prog, nil)
 }
 
-func (c *Client) resolveFrom(ctx context.Context, eco *Ecosystem, roots []string, prog ResolveProgress) (*Resolution, error) {
+// ResolveListWithIndex is ResolveListWith that answers from a community index
+// first. Anything the index does not hold — a dependency published in another
+// community — is still fetched one by one.
+func (c *Client) ResolveListWithIndex(
+	ctx context.Context, eco *Ecosystem, roots []string, prog ResolveProgress, idx *CommunityIndex,
+) (*Resolution, error) {
+	return c.resolveFrom(ctx, eco, roots, prog, idx)
+}
+
+func (c *Client) resolveFrom(
+	ctx context.Context, eco *Ecosystem, roots []string, prog ResolveProgress, idx *CommunityIndex,
+) (*Resolution, error) {
 	if len(roots) == 0 {
 		return nil, errors.New("mods: nothing to resolve")
 	}
@@ -100,7 +111,7 @@ func (c *Client) resolveFrom(ctx context.Context, eco *Ecosystem, roots []string
 
 	var walked int
 	for len(frontier) > 0 {
-		fetched, missing, err := c.fetchLevel(ctx, frontier, prog, &walked)
+		fetched, missing, err := c.fetchLevel(ctx, frontier, prog, &walked, idx)
 		if err != nil {
 			return nil, err
 		}
@@ -169,7 +180,9 @@ func dedupeDeps(deps []string, seen map[string]bool) []string {
 // exists" is how a build succeeds while quietly dropping a third of the pack.
 // Measured, not hypothetical: resolving LethalReloaded without pacing lost 59
 // of 151 packages to transient errors.
-func (c *Client) fetchLevel(ctx context.Context, deps []string, prog ResolveProgress, walked *int) ([]*PackageVersion, []string, error) {
+func (c *Client) fetchLevel(
+	ctx context.Context, deps []string, prog ResolveProgress, walked *int, idx *CommunityIndex,
+) ([]*PackageVersion, []string, error) {
 	type slot struct {
 		v   *PackageVersion
 		dep string
@@ -183,15 +196,30 @@ func (c *Client) fetchLevel(ctx context.Context, deps []string, prog ResolveProg
 
 	var wg sync.WaitGroup
 	for i, dep := range deps {
-		ns, name, version, ok := SplitDependency(dep)
-		if !ok {
+		if _, _, _, ok := SplitDependency(dep); !ok {
 			results[i] = slot{dep: dep, err: fmt.Errorf("malformed dependency %q", dep)}
 			continue
 		}
+
+		// Индекс сообщества отвечает без сети — и без догадки о том, где в
+		// имени кончается пространство имён. Это и есть та секунда вместо
+		// пятидесяти, ради которой он скачивается.
+		if v, hit := idx.Lookup(dep); hit {
+			results[i] = slot{v: v.AsPackageVersion(), dep: dep}
+			if prog != nil {
+				mu.Lock()
+				*walked++
+				prog(*walked, dep)
+				mu.Unlock()
+			}
+
+			continue
+		}
+
 		wg.Add(1)
-		go func(i int, dep, ns, name, version string) {
+		go func(i int, dep string) {
 			defer wg.Done()
-			v, err := c.GetVersion(ctx, ns, name, version)
+			v, err := c.GetDependency(ctx, dep)
 			results[i] = slot{v: v, dep: dep, err: err}
 			if prog == nil {
 				return
@@ -201,7 +229,7 @@ func (c *Client) fetchLevel(ctx context.Context, deps []string, prog ResolveProg
 			n := *walked
 			prog(n, dep)
 			mu.Unlock()
-		}(i, dep, ns, name, version)
+		}(i, dep)
 	}
 	wg.Wait()
 
