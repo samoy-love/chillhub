@@ -5,6 +5,7 @@
 
 namespace ChillHub.Core.UI {
     using System;
+    using System.Collections.Generic;
 
     /// <summary>
     /// Сколько строк очереди показывать внизу главного экрана и что написать на
@@ -46,6 +47,37 @@ namespace ChillHub.Core.UI {
                 : count > collapsed ? "Свернуть очередь" : string.Empty;
 
             return new QueueDockView(visible, toggle);
+        }
+
+        /// <summary>
+        /// Оставляет в <paramref name="visible"/> первые <paramref name="rows"/> позиций
+        /// очереди, правя список по месту.
+        /// <para>
+        /// Именно по месту, а не пересборкой: карточка в доке перерисовывается на каждый тик
+        /// прогресса, и полная замена списка гасила бы наведение и подсказку под курсором.
+        /// Позиция трогается, только если на этом месте стоит другой объект — <c>QueueItem</c>
+        /// неизменяем, и обновление приезжает новым экземпляром.
+        /// </para>
+        /// </summary>
+        /// <typeparam name="T">Тип позиции очереди.</typeparam>
+        /// <param name="source">Очередь целиком.</param>
+        /// <param name="visible">Список, привязанный к доку.</param>
+        /// <param name="rows">Сколько первых позиций показать.</param>
+        public static void ApplyVisible<T>(IList<T> source, IList<T> visible, int rows) {
+            var take = Math.Min(Math.Max(0, rows), source.Count);
+
+            while (visible.Count > take) {
+                visible.RemoveAt(visible.Count - 1);
+            }
+
+            for (var i = 0; i < take; i++) {
+                if (i >= visible.Count) {
+                    visible.Add(source[i]);
+                }
+                else if (!ReferenceEquals(visible[i], source[i])) {
+                    visible[i] = source[i];
+                }
+            }
         }
 
         /// <summary>Сколько строк помещается в свёрнутый док при такой высоте страницы.</summary>

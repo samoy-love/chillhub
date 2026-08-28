@@ -1885,26 +1885,14 @@ namespace ChillHub.Pages {
         }
 
         /// <summary>
-        /// Приводит видимые строки дока в соответствие с очередью и высотой окна. Список
-        /// правится по месту, а не пересобирается: карточки перерисовываются на каждый тик
-        /// прогресса, и полная пересборка гасила бы наведение и подсказки под курсором.
+        /// Приводит видимые строки дока в соответствие с очередью и высотой окна. Сколько
+        /// строк показать и как поправить список — в Core.UI.QueueDockLayout, здесь остаётся
+        /// только разметка.
         /// </summary>
         private void SyncQueueDockRows() {
             try {
                 var view = Core.UI.QueueDockLayout.Compute(this.queueDockItems.Count, this.ActualHeight, this.queueDockExpanded);
-
-                while (this.queueDockVisibleItems.Count > view.VisibleRows) {
-                    this.queueDockVisibleItems.RemoveAt(this.queueDockVisibleItems.Count - 1);
-                }
-
-                for (var i = 0; i < view.VisibleRows; i++) {
-                    if (i >= this.queueDockVisibleItems.Count) {
-                        this.queueDockVisibleItems.Add(this.queueDockItems[i]);
-                    }
-                    else if (!ReferenceEquals(this.queueDockVisibleItems[i], this.queueDockItems[i])) {
-                        this.queueDockVisibleItems[i] = this.queueDockItems[i];
-                    }
-                }
+                Core.UI.QueueDockLayout.ApplyVisible(this.queueDockItems, this.queueDockVisibleItems, view.VisibleRows);
 
                 this.QueueMoreBtn.Content = view.ToggleText;
                 this.QueueMoreBtn.Visibility = view.ToggleText.Length > 0 ? Visibility.Visible : Visibility.Collapsed;

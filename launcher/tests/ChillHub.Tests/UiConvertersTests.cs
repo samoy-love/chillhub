@@ -5,6 +5,7 @@
 
 namespace ChillHub.Tests {
     using System;
+    using System.Collections.Generic;
     using System.Globalization;
     using System.Windows.Media;
 
@@ -294,6 +295,47 @@ namespace ChillHub.Tests {
         [InlineData(1, 700.0, false, "")]
         public void РаскрывашкаДокаНазываетСпрятанное(int count, double height, bool expanded, string expected) {
             Assert.Equal(expected, QueueDockLayout.Compute(count, height, expanded).ToggleText);
+        }
+
+        /// <summary>
+        /// Док показывает первые строки очереди, а обновление позиции не пересобирает
+        /// список: меняется ровно та строка, за которой приехал новый экземпляр.
+        /// </summary>
+        [Fact]
+        public void ДокПравитВидимыеСтрокиПоМесту() {
+            var a = Item(QueueItemState.Running);
+            var b = Item(QueueItemState.Waiting, position: 2);
+            var c = Item(QueueItemState.Waiting, position: 3);
+            var source = new List<QueueItem> { a, b, c };
+            var visible = new List<QueueItem>();
+
+            QueueDockLayout.ApplyVisible(source, visible, 2);
+            Assert.Equal(new[] { a, b }, visible);
+
+            // Тик прогресса: качающаяся позиция приезжает новым объектом, соседка — та же.
+            var a2 = Item(QueueItemState.Running, done: 5, total: 10);
+            source[0] = a2;
+            QueueDockLayout.ApplyVisible(source, visible, 2);
+            Assert.Same(a2, visible[0]);
+            Assert.Same(b, visible[1]);
+
+            // Очередь укоротилась — лишние строки уходят, оставшиеся не трогаются.
+            source.RemoveAt(2);
+            QueueDockLayout.ApplyVisible(source, visible, 1);
+            Assert.Same(a2, Assert.Single(visible));
+        }
+
+        /// <summary>Просить больше строк, чем есть позиций, безопасно: покажем сколько есть.</summary>
+        [Fact]
+        public void ДокНеПросачиваетсяЗаКонецОчереди() {
+            var source = new List<QueueItem> { Item(QueueItemState.Running) };
+            var visible = new List<QueueItem>();
+
+            QueueDockLayout.ApplyVisible(source, visible, 5);
+            Assert.Single(visible);
+
+            QueueDockLayout.ApplyVisible(source, visible, 0);
+            Assert.Empty(visible);
         }
 
         private static QueueItem Item(
