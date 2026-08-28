@@ -126,8 +126,14 @@ namespace ChillHub.Core.Game {
 
         private static IReadOnlyList<RunningProcess> DefaultByName(string name) {
             var found = new List<RunningProcess>();
+
+            // Каждый Process держит системный хендл, и опрос идёт раз в секунду до трёх
+            // минут: неосвобождённые хендлы копились бы всё это время. Нам нужны только
+            // номер и путь — сам объект не переживает этот цикл.
             foreach (var p in Process.GetProcessesByName(name)) {
-                found.Add(new RunningProcess(p.Id, SafeExePath(p)));
+                using (p) {
+                    found.Add(new RunningProcess(p.Id, SafeExePath(p)));
+                }
             }
 
             return found;

@@ -126,6 +126,15 @@ namespace ChillHub.Core.Game {
             try {
                 lock (FileLock) {
                     var pending = LoadPendingLocked();
+
+                    // Один и тот же процесс могли найти дважды: через Steam игру ищут
+                    // ожиданием, и два подряд нажатия «Играть» дают два поиска на одну
+                    // игру. Перезапись сдвинула бы начало сессии вперёд и потеряла первые
+                    // минуты, поэтому побеждает та запись, что появилась раньше.
+                    if (pending.ContainsKey(PendingKey(process.Id))) {
+                        return;
+                    }
+
                     // Keyed by process id, not gameId: launching the same game twice
                     // (a second instance while the first is still running) must not
                     // let the second BeginSession overwrite the first session's entry
