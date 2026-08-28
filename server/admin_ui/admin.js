@@ -326,6 +326,7 @@ function askConfirm(opts){
     if(bar){ bar.style.width='0%'; }
     if(txt){ txt.textContent = 'Выбран файл: '+f.name+' ('+formatBytes(f.size)+')'; }
     uploadSpaceCheck('up', f);
+    uploadAutoTune('up', f);
   });
 })();
 
@@ -643,6 +644,95 @@ function uploadSpaceCheck(prefix, file){
   return enough;
 }
 
+// ==== Автоподбор параметров заливки ====
+//
+// Раньше в карточке всегда стояло «8 МБ / 6 потоков» независимо от файла, а
+// слайдер уезжал до 100 потоков без единого намёка, что выше десятка это
+// вредит. Арифметика подбора и объяснение, почему числа именно такие, лежат
+// в upload-tuning.js; здесь — только связывание её с полями формы.
+
+// uploadChunkOptions — значения <select> размера чанка. Подбор округляет свой
+// ответ к ним, потому что выставить в форму произвольное число всё равно
+// нельзя.
+function uploadChunkOptions(prefix){
+  const sel = document.getElementById(prefix+'_chunk_size');
+  if(!sel) return [];
+  return Array.from(sel.options).map(o=> Number(o.value)|0).filter(v=> v>0);
+}
+
+// uploadNextHopProtocol — по какому протоколу браузер реально говорит с этим
+// origin: 'http/1.1', 'h2', 'h3'. От этого зависит потолок параллельности
+// (см. connectionCap), и гадать тут незачем — Resource Timing знает ответ.
+// Пустая строка означает «неизвестно», и подбор берёт консервативный потолок.
+function uploadNextHopProtocol(){
+  try{
+    const entries = performance.getEntriesByType('resource');
+    for(let i=entries.length-1;i>=0;i--){
+      const proto = entries[i] && entries[i].nextHopProtocol;
+      if(proto) return proto;
+    }
+  }catch(_){ /* Resource Timing может быть недоступен — это не повод падать */ }
+  return '';
+}
+
+// uploadConcNote предупреждает, что выставленная руками параллельность выше
+// того, что браузер вообще способен открыть одновременно. Молчать здесь
+// нельзя: лишние потоки не ускоряют ничего, но выглядят как работающие —
+// счётчик «активно» их честно считает, хотя они стоят в очереди и не шлют ни
+// байта.
+function uploadConcNote(prefix){
+  const el = document.getElementById(prefix+'_conc_note');
+  const slider = document.getElementById(prefix+'_conc');
+  if(!el || !slider) return;
+  const cap = connectionCap(uploadNextHopProtocol());
+  const v = Number(slider.value)|0;
+  const over = v > cap;
+  el.textContent = over ? ('Браузер откроет не больше '+cap+' запросов сразу — остальные встанут в очередь') : '';
+  el.className = over ? 'text-warning' : 'text-body-secondary';
+}
+
+// uploadAutoTune выставляет размер чанка и параллельность под конкретный файл.
+// Возвращает подобранное (или null, если автоподбор выключен либо файла нет) —
+// вызывающему коду это нужно только для логов.
+function uploadAutoTune(prefix, file){
+  const note = document.getElementById(prefix+'_tune_note');
+  const auto = document.getElementById(prefix+'_auto_tune');
+  if(note) note.textContent = '';
+  if(!auto || !auto.checked || !file){ uploadConcNote(prefix); return null; }
+
+  const params = pickUploadParams(file.size, {
+    protocol: uploadNextHopProtocol(),
+    chunkOptions: uploadChunkOptions(prefix),
+  });
+  const sel = document.getElementById(prefix+'_chunk_size');
+  if(sel) sel.value = String(params.chunkSize);
+  const slider = document.getElementById(prefix+'_conc');
+  if(slider) slider.value = String(params.concurrency);
+  const val = document.getElementById(prefix+'_conc_val');
+  if(val) val.textContent = String(params.concurrency);
+  const cap = document.getElementById(prefix+'_active_cap');
+  if(cap) cap.textContent = String(params.concurrency);
+  if(note) note.textContent = formatBytes(params.chunkSize)+' x '+params.concurrency+' пот., '+params.chunks+' чанк(ов)';
+  uploadConcNote(prefix);
+  return params;
+}
+
+// Ручная правка чанка или слайдера снимает галочку автоподбора: иначе
+// выставленное руками молча затиралось бы при следующем выборе файла, и это
+// выглядело бы как «поле не сохраняет значение».
+function uploadTuningBindManual(prefix){
+  const auto = document.getElementById(prefix+'_auto_tune');
+  const off = ()=>{ if(auto) auto.checked = false; const n = document.getElementById(prefix+'_tune_note'); if(n) n.textContent = ''; };
+  const sel = document.getElementById(prefix+'_chunk_size');
+  if(sel) sel.addEventListener('change', off);
+  const slider = document.getElementById(prefix+'_conc');
+  if(slider) slider.addEventListener('input', ()=>{ off(); uploadConcNote(prefix); });
+  if(auto) auto.addEventListener('change', ()=>{
+    const file = window['__'+prefix+'DroppedFile'] || document.getElementById(prefix==='up'?'up_zip':'man_zip')?.files?.[0];
+    if(auto.checked) uploadAutoTune(prefix, file); else uploadConcNote(prefix);
+  });
+}
+
 // Валидация версии до отправки: поле принимало «1.39» и «1.2.3 » молча, а
 // ошибка всплывала уже на сервере — после того, как ZIP уехал целиком.
 function uploadVersionValid(ver){
@@ -869,6 +959,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
         if(bar) bar.style.width='0%';
         if(txt) txt.textContent = 'Выбран файл: '+file.name+' ('+formatBytes(file.size)+')';
         uploadSpaceCheck('up', file);
+        uploadAutoTune('up', file);
       }
     });
   }
@@ -876,7 +967,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
   if(manZip){
     manZip.addEventListener('change', (ev)=>{
       const file = ev.currentTarget.files && ev.currentTarget.files[0];
-      if(file) uploadSpaceCheck('man', file);
+      if(file){ uploadSpaceCheck('man', file); uploadAutoTune('man', file); }
     });
   }
   // Ручная правка версии отключает автоподстановку следующего патча: иначе
@@ -1503,6 +1594,12 @@ async function runChunkedUpload(prefix, kind, gameId, version, file){
   if(pctEl) pctEl.textContent='Подготовка к загрузке...';
   clearStatusError(txt, '');
 
+  // Автоподбор — последнее слово перед стартом, а не только момент выбора
+  // файла: файл могли выбрать до того, как карточка узнала протокол
+  // соединения, а версию и файл между выбором и нажатием «Загрузить» успевают
+  // поменять. Если галочка снята, функция не трогает поля.
+  try{ uploadAutoTune(prefix, file); }catch(_){ /* подбор не критичен для заливки */ }
+
   // UI controls: chunk size and concurrency
   const chunkSel = id('chunk_size');
   let desiredChunk = Number(chunkSel?.value||0)|0; if(desiredChunk<=0) desiredChunk = 8*1024*1024;
@@ -1577,7 +1674,17 @@ async function runChunkedUpload(prefix, kind, gameId, version, file){
   // перекрываются почти целиком, так что усреднения EMA уже не добавляет —
   // только задержку, из-за которой скорость и ETA отставали от реальности на
   // старте и на финише заливки.
-  const rateEstimator = makeRateEstimator(5000);
+  //
+  // Ширина окна при этом не константа: 5 секунд хороши, пока чанки долетают
+  // за доли секунды, но на крупных чанках в окно попадает один-два рывка
+  // вместо усреднения многих. Поэтому окно подстраивается под фактическую
+  // частоту подтверждений — см. rateWindowMs и noteChunkDone ниже.
+  //
+  // minSpanMs — отдельная защита от того самого «>100 МБ/с в первую секунду»:
+  // пока окно уже двух с половиной секунд, оно целиком лежит внутри момента,
+  // когда браузер и ядро просто набивают свои буферы, и меряет не канал.
+  const SPEED_MIN_SPAN_MS = 2500;
+  const rateEstimator = makeRateEstimator(rateWindowMs([]), { minSpanMs: SPEED_MIN_SPAN_MS });
   let shownSpeed = 0;
   function updateUI(now){
     const displayed = Math.min(totalBytes, uploadedBytes + pendingBytes(inFlight));
@@ -1622,6 +1729,23 @@ async function runChunkedUpload(prefix, kind, gameId, version, file){
   const win = []; // recent writeMs per chunk
   const WIN_MAX = 50;
 
+  // noteChunkDone запоминает, как часто приходят подтверждения чанков, и
+  // подгоняет под это окно расчёта скорости. Интервал считается между
+  // подтверждениями любых потоков — именно он задаёт период «зуба» на
+  // графике: каждый новый чанк мгновенно набивает буфер сокета, и окно должно
+  // накрывать несколько таких всплесков, иначе оно показывает их, а не канал.
+  let lastDoneTs = 0;
+  const doneIntervals = [];
+  function noteChunkDone(){
+    const now = performance.now();
+    if(lastDoneTs > 0){
+      doneIntervals.push(now - lastDoneTs);
+      if(doneIntervals.length > 20) doneIntervals.shift();
+      rateEstimator.setWindow(rateWindowMs(doneIntervals));
+    }
+    lastDoneTs = now;
+  }
+
   async function uploadOne(i){
     const start = i*chunkSize; const end = Math.min(start+chunkSize, file.size);
     const blob = file.slice(start, end);
@@ -1639,7 +1763,7 @@ async function runChunkedUpload(prefix, kind, gameId, version, file){
       // месте, а без прибавки прогресс-бар недосчитывал бы его до самого
       // конца и не доходил до 100%.
       if(r.exists){ console.log('[chunk skip:exists]', { index:i }); } else if(r.attempts>1){ console.log('[chunk ok after retry]', { index:i, attempts:r.attempts, bytes:b, writeMs:r.writeMs }); } else { console.log('[chunk ok]', { index:i, bytes:b, writeMs:r.writeMs, par:curPar }); }
-      uploadedBytes += b; scheduleUI();
+      uploadedBytes += b; noteChunkDone(); scheduleUI();
     }
     return r.ok;
   }
@@ -1670,7 +1794,7 @@ async function runChunkedUpload(prefix, kind, gameId, version, file){
       onAttemptFailed: (info)=> console.warn('[retry chunk fail]', info),
     });
     inFlight.delete(idx);
-    if(r.ok){ uploadedBytes += (e-s); scheduleUI(); if(r.attempts>1){ console.log('[retry ok]', { index:idx, attempts:r.attempts }); } }
+    if(r.ok){ uploadedBytes += (e-s); noteChunkDone(); scheduleUI(); if(r.attempts>1){ console.log('[retry ok]', { index:idx, attempts:r.attempts }); } }
     return r.ok;
   }
 
@@ -1712,7 +1836,7 @@ async function runChunkedUpload(prefix, kind, gameId, version, file){
           onProgress: (loaded)=>{ inFlight.set(i, loaded); scheduleUI(); },
         });
         inFlight.delete(i);
-        if(r.ok){ uploadedBytes += (end-start); scheduleUI(); }
+        if(r.ok){ uploadedBytes += (end-start); noteChunkDone(); scheduleUI(); }
         return r.ok;
       }
       const missingFailed = await runWorkerPool(missing, ()=> curPar, runMissing, (active)=>{ if(activeNowEl) activeNowEl.textContent = String(active); });
@@ -1853,6 +1977,7 @@ async function manifestsUpload(){
     const wrap=document.getElementById('man_prog_wrap'); const bar=document.getElementById('man_pb'); const txt=document.getElementById('man_prog_text');
     if(wrap) wrap.style.display='block'; if(bar) bar.style.width='0%'; if(txt) txt.textContent = 'Выбран файл: '+f.name+' ('+formatBytes(f.size)+')';
     uploadSpaceCheck('man', f);
+    uploadAutoTune('man', f);
   });
 })();
 
@@ -3105,6 +3230,8 @@ bindBusyClick('bench_run', runUploadBench, 'Тестирование...');
 // Show live value for concurrency slider
 (()=>{ const s = document.getElementById('man_conc'); const v = document.getElementById('man_conc_val'); if(s&&v){ v.textContent = String(s.value||'6'); s.addEventListener('input', ()=>{ v.textContent = String(s.value||'6'); }); }})();
 (()=>{ const s = document.getElementById('up_conc'); const v = document.getElementById('up_conc_val'); if(s&&v){ v.textContent = String(s.value||'6'); s.addEventListener('input', ()=>{ v.textContent = String(s.value||'6'); }); }})();
+// Автоподбор: ручная правка полей его снимает, галочка — возвращает.
+(()=>{ try{ uploadTuningBindManual('man'); uploadTuningBindManual('up'); }catch(_){ /* карточка может быть не смонтирована */ } })();
 // Очистка временных загрузок — одна и та же операция на обеих вкладках.
 async function uploadCleanup(){
   const ok = await askConfirm({

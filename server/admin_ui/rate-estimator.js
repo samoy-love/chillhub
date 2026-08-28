@@ -33,9 +33,25 @@
   //   const est = makeRateEstimator(4000);
   //   const bps = est.push(performance.now(), bytesSoFar);
   //
-  function makeRateEstimator(windowMs) {
-    const samples = []; // [{t, bytes}], всегда в пределах windowMs от последней
+  function makeRateEstimator(windowMs, opts) {
+    const samples = []; // [{t, bytes}], всегда в пределах windowSpan от последней
     let lastBytes = null;
+    let windowSpan = Math.max(1, Number(windowMs) || 0);
+
+    // minSpanMs — сколько времени окно обязано покрывать, прежде чем его
+    // показанию вообще можно верить.
+    //
+    // ПОЧЕМУ ЭТО НЕ ПАРАНОЙЯ, А ЛЕЧЕНИЕ КОНКРЕТНОГО СИМПТОМА. В первые
+    // мгновения заливки байты, посчитанные по upload.onprogress, — это не
+    // переданное, а принятое буферами: браузер и ядро мгновенно забирают у
+    // нас несколько мегабайт на поток и только потом начинают отдавать их в
+    // сеть с реальной скоростью канала. Окно шириной в один-два тика,
+    // целиком попавшее в этот момент, честно делит мегабайты на миллисекунды
+    // и выдаёт «>100 МБ/с» на канале, где столько не бывает. Хуже, что это
+    // число мгновенно защёлкивалось как «пик» и висело до конца заливки.
+    // Пока окно уже, чем minSpanMs, скорость считается неизвестной (0) —
+    // вызывающий код в это время не рисует ни цифру, ни точку на графике.
+    const minSpanMs = Math.max(0, Number((opts || {}).minSpanMs) || 0);
 
     // push добавляет точку, выбрасывает всё, что старше windowMs от неё, и
     // возвращает текущую скорость — «обновить и прочитать» тут всегда одна
@@ -52,7 +68,7 @@
       if (lastBytes !== null && bytes < lastBytes) bytes = lastBytes;
       lastBytes = bytes;
       samples.push({ t, bytes });
-      const cutoff = t - windowMs;
+      const cutoff = t - windowSpan;
       while (samples.length > 1 && samples[0].t < cutoff) samples.shift();
       return rate();
     }
@@ -62,6 +78,7 @@
     // вызывающий код отличает «нет данных» проверкой > 0.
     function rate() {
       if (samples.length < 2) return 0;
+      if (spanMs() < minSpanMs) return 0;
       const first = samples[0];
       const last = samples[samples.length - 1];
       const dt = (last.t - first.t) / 1000;
@@ -82,7 +99,19 @@
       return samples[samples.length - 1].t - samples[0].t;
     }
 
-    return { push, rate, spanMs };
+    // setWindow меняет ширину окна на лету. Нужна, потому что подходящая
+    // ширина зависит от того, как часто приходят подтверждения чанков, а это
+    // выясняется только по ходу заливки (см. rateWindowMs в upload-tuning.js).
+    // Сужение применяется не к уже накопленным точкам, а к следующему push:
+    // выбрасывать историю здесь незачем, cutoff всё равно считается от новой
+    // ширины.
+    function setWindow(ms) {
+      const v = Math.max(1, Number(ms) || 0);
+      if (v > 0) windowSpan = v;
+      return windowSpan;
+    }
+
+    return { push, rate, spanMs, setWindow };
   }
 
   return { makeRateEstimator };

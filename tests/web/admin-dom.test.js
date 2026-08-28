@@ -37,6 +37,7 @@ const SCRIPT_ORDER = [
   'line-chart.js',
   'chunk-upload.js',
   'rate-estimator.js',
+  'upload-tuning.js',
   'ui-status.js',
   // upload-card.js собирает обе карточки заливки из общего шаблона; без него
   // в разметке на их месте остаются пустые <div data-upload-card>, и ни один
@@ -1202,4 +1203,77 @@ test('mgmAddRow: отклоняет дубликат gameId и предупре�
   assert.strictEqual(notified.length, 1, 'notify вызван ровно один раз');
   assert.match(notified[0], /lethal-company/i);
   assert.match(notified[0], /уже есть/);
+});
+
+// ---- (h) автоподбор параметров заливки в карточке ----
+//
+// Симптом, из-за которого это появилось: на «16 потоков / 16 МБ» заливка
+// замирала и рисовала пилу. Оба числа выставлялись руками и ни с чем не были
+// связаны — ни с размером файла, ни с тем, сколько запросов браузер вообще
+// откроет одновременно. Сама арифметика проверена в upload-tuning.test.js;
+// здесь — что она действительно доезжает до полей формы.
+
+// Автоподбору от файла нужен только size, поэтому тесту не нужен настоящий
+// File на полтора гигабайта в памяти jsdom.
+const GIB = 1024 * 1024 * 1024;
+
+test('uploadAutoTune: файл на 1.3 ГБ выставляет 16 МБ на 6 потоков и подписывает выбор', (t) => {
+  const { window, document } = loadAdminPage(t);
+
+  const params = window.uploadAutoTune('man', { size: 1.3 * GIB });
+
+  assert.strictEqual(params.chunkSize, 16 * 1024 * 1024);
+  assert.strictEqual(params.concurrency, 6);
+  assert.strictEqual(document.getElementById('man_chunk_size').value, String(16 * 1024 * 1024));
+  assert.strictEqual(document.getElementById('man_conc').value, '6');
+  assert.strictEqual(document.getElementById('man_conc_val').textContent, '6');
+  // Подпись объясняет, откуда взялись числа: без неё «поля сами поменялись»
+  // читается как баг.
+  assert.match(document.getElementById('man_tune_note').textContent, /16(\.0)? МБ/);
+  assert.match(document.getElementById('man_tune_note').textContent, /6 пот/);
+});
+
+test('uploadAutoTune: мелкий файл не получает шесть потоков на три чанка', (t) => {
+  const { window, document } = loadAdminPage(t);
+  const params = window.uploadAutoTune('up', { size: 3 * 1024 * 1024 });
+  assert.ok(params.concurrency <= 2, 'потоков ' + params.concurrency + ' на ' + params.chunks + ' чанков');
+  assert.strictEqual(document.getElementById('up_conc').value, String(params.concurrency));
+});
+
+test('uploadAutoTune: снятая галочка оставляет выставленное руками нетронутым', (t) => {
+  const { window, document } = loadAdminPage(t);
+  document.getElementById('man_auto_tune').checked = false;
+  setValue(document, 'man_chunk_size', String(512 * 1024 * 1024));
+  setValue(document, 'man_conc', '32');
+
+  assert.strictEqual(window.uploadAutoTune('man', { size: 1.3 * GIB }), null);
+  assert.strictEqual(document.getElementById('man_chunk_size').value, String(512 * 1024 * 1024));
+  assert.strictEqual(document.getElementById('man_conc').value, '32');
+});
+
+test('ручная правка слайдера снимает автоподбор — иначе выбранное молча затрётся', (t) => {
+  const { window, document } = loadAdminPage(t);
+  window.uploadAutoTune('man', { size: 1.3 * GIB });
+  assert.strictEqual(document.getElementById('man_auto_tune').checked, true);
+
+  const slider = document.getElementById('man_conc');
+  slider.value = '20';
+  slider.dispatchEvent(new window.Event('input'));
+
+  assert.strictEqual(document.getElementById('man_auto_tune').checked, false);
+});
+
+test('параллельность выше потолка соединений браузера сопровождается предупреждением', (t) => {
+  const { window, document } = loadAdminPage(t);
+  const slider = document.getElementById('man_conc');
+  slider.value = '20';
+  slider.dispatchEvent(new window.Event('input'));
+
+  // 20 потоков на HTTP/1.1 — это 6 работающих и 14 в очереди: они считаются
+  // «активными», но не шлют ни байта, и именно так выглядел фриз.
+  assert.match(document.getElementById('man_conc_note').textContent, /не больше 6/);
+
+  slider.value = '4';
+  slider.dispatchEvent(new window.Event('input'));
+  assert.strictEqual(document.getElementById('man_conc_note').textContent, '');
 });

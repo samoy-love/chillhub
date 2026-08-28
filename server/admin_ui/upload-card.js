@@ -88,11 +88,16 @@
       '    <div id="' + p + 'speed_wrap" class="mt-1" style="display:none; width:100%; margin-bottom: 8px;">' +
       '      <canvas id="' + p + 'speed" height="60" style="width:100%; background:rgba(255,255,255,0.04); border-radius:4px"></canvas>' +
       '    </div>' +
-      // Параметры заливки подбираются один раз бенчмарком и потом не меняются —
-      // в развёрнутом виде они занимали больше места, чем сама форма загрузки.
+      // Параметры заливки подбираются автоматически по размеру файла (см.
+      // upload-tuning.js), поэтому свёрнуты: разворачивать их нужно только
+      // чтобы переопределить подобранное руками или прогнать бенчмарк.
       '    <details class="tuning">' +
       '      <summary>Параметры заливки (чанк, параллельность, очистка)</summary>' +
       '      <div class="d-flex flex-wrap align-items-end gap-3 small">' +
+      '        <div>' +
+      '          <label class="form-label mb-1 d-block"><input type="checkbox" id="' + p + 'auto_tune" checked> Подбирать автоматически</label>' +
+      '          <span id="' + p + 'tune_note" class="text-body-secondary"></span>' +
+      '        </div>' +
       '        <div>' +
       '          <label class="form-label mb-1" for="' + p + 'chunk_size">Размер чанка</label>' +
       '          <select id="' + p + 'chunk_size" class="form-select form-select-sm" style="min-width:200px">' + chunkOptionsHtml() + '</select>' +
@@ -100,6 +105,7 @@
       '        <div class="flex-grow-1" style="min-width:240px; max-width:520px">' +
       '          <label for="' + p + 'conc" class="form-label mb-1 d-flex justify-content-between"><span>Параллельность</span><span><code id="' + p + 'conc_val">6</code> поток(ов) <span class="ms-2 text-body-secondary" id="' + p + 'active_wrap" style="display:none">активно <code id="' + p + 'active_now">0</code>/<code id="' + p + 'active_cap">0</code></span></span></label>' +
       '          <input id="' + p + 'conc" type="range" class="form-range" min="1" max="100" value="6">' +
+      '          <span id="' + p + 'conc_note" class="text-body-secondary"></span>' +
       '        </div>' +
       '        <div class="ms-auto d-flex align-items-end">' +
       '          <button id="' + p + 'cleanup" type="button" class="btn btn-sm btn-outline-warning">Очистить старые/битые</button>' +
