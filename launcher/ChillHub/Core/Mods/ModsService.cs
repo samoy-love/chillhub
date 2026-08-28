@@ -61,6 +61,42 @@ namespace ChillHub.Core.Mods {
     /// </para>
     /// </summary>
     internal static class ModsService {
+        /// <summary>Имя, под которым отчёты модпака показываются игроку.</summary>
+        internal const string ScopeName = "Моды";
+
+        /// <summary>
+        /// Пересылает отчёты синхронизации дальше, пометив их как «Моды».
+        /// <para>
+        /// Не <see cref="Progress{T}"/>: тот доставляет отчёт через контекст
+        /// синхронизации, а внешний получатель обычно и есть <see cref="Progress{T}"/>,
+        /// созданный на UI-потоке. Второй такой же хоп добавил бы задержку и порядок
+        /// доставки, которого никто не просил.
+        /// </para>
+        /// </summary>
+        private sealed class ScopedProgress : IProgress<SyncProgress> {
+            private readonly IProgress<SyncProgress> inner;
+
+            internal ScopedProgress(IProgress<SyncProgress> inner) => this.inner = inner;
+
+            /// <inheritdoc/>
+            public void Report(SyncProgress value) {
+                if (value == null) {
+                    return;
+                }
+
+                // Копия, а не правка на месте: объект принадлежит службе
+                // синхронизации и переиспользуется между отчётами.
+                this.inner.Report(new SyncProgress {
+                    FilesDownloaded = value.FilesDownloaded,
+                    TotalFiles = value.TotalFiles,
+                    BytesDownloaded = value.BytesDownloaded,
+                    TotalBytes = value.TotalBytes,
+                    Stage = value.Stage,
+                    Scope = ScopeName,
+                });
+            }
+        }
+
         /// <summary>
         /// Устанавливает или обновляет модпак в указанной папке.
         /// </summary>
@@ -107,8 +143,13 @@ namespace ChillHub.Core.Mods {
             try {
                 var manifest = await sync.GetManifestAsync(manifestUrl, ct).ConfigureAwait(false);
 
+                // Отчёты помечаются здесь, а не у вызывающих: их трое — очередь
+                // загрузок, страница игры и установка в копию Steam, — и каждый
+                // показывал бы «Скачивание…» без единого намёка, что качается модпак.
+                var scoped = progress == null ? null : new ScopedProgress(progress);
+
                 var options = PlanOptions.ForModPack(targetDir);
-                options.Progress = progress;
+                options.Progress = scoped;
                 options.ForceRehash = forceRehash;
 
                 var plan = await sync.PlanAsync(manifest, targetDir, contentUrl, options, ct).ConfigureAwait(false);
@@ -129,7 +170,7 @@ namespace ChillHub.Core.Mods {
                 // ExecuteAsync объявляет progress без «?», хотя работает и с пустым:
                 // подставляем заглушку, чтобы не спорить с анализатором и не менять
                 // подпись общего интерфейса ради одного вызывающего.
-                await sync.ExecuteAsync(plan, progress ?? new Progress<SyncProgress>(), ct).ConfigureAwait(false);
+                await sync.ExecuteAsync(plan, scoped ?? (IProgress<SyncProgress>)new Progress<SyncProgress>(), ct).ConfigureAwait(false);
                 RecordInstallation(targetDir, manifest, mods.Version);
 
                 Logging.Logger.Info(

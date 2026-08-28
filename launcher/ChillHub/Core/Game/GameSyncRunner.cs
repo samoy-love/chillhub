@@ -199,9 +199,19 @@ namespace ChillHub.Core.Game {
                 // тронет. В обратном порядке игрок сначала скачал бы удаление почти шести
                 // гигабайт, а сразу за ним — их же обратно.
                 if (request.Game?.Mods is { HasLatest: true }) {
+                    // Прогресс модпака идёт ТЕМ ЖЕ путём, что и прогресс игры.
+                    //
+                    // Раньше сюда передавался null, и полтора гигабайта модов уезжали
+                    // при неподвижной полосе и одной строке «Установка модов…»: со
+                    // стороны — зависший лаунчер. Установка тех же модов в копию Steam
+                    // при этом прогресс показывала, и два пути расходились на ровном
+                    // месте.
                     this.ui.SetStatus("Установка модов…");
+                    this.ui.SetIndeterminate(true);
+                    var modsStart = DateTime.UtcNow;
+                    var modsProgress = new Progress<SyncProgress>(p => this.ui.ReportProgress(p, modsStart));
                     var mods = await ModsService.EnsureAsync(
-                        request.Game, request.LocalRoot, request.BaseApi, this.sync, null, token,
+                        request.Game, request.LocalRoot, request.BaseApi, this.sync, modsProgress, token,
                         // «Проверить файлы» обязана пересчитать хеши и у модов: битая
                         // DLL мода почти всегда сохраняет размер, и без пересчёта
                         // проверка объявит её целой.
@@ -217,6 +227,11 @@ namespace ChillHub.Core.Game {
                         this.Report(request, null, "fail", opStart, "mods_sync_failed");
                         return;
                     }
+
+                    // Строки модпака стираются перед игрой: «Скорость» и «файлов • байт»
+                    // от закончившегося шага, висящие над начавшимся, врут об объёме.
+                    this.ui.SetSpeedEta(string.Empty);
+                    this.ui.SetFilesSize(string.Empty);
                 }
 
                 Logging.Logger.Info($"GamePage.StartSync gid={gid} version={version}");

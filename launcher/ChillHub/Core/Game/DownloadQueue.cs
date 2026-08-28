@@ -344,7 +344,7 @@ namespace ChillHub.Core.Game {
                     // только через сюда, отчётами с полем Stage. Раньше здесь текст не менялся
                     // (оставался entry.StatusText как есть), и статус на карточке замирал на
                     // "Сравнение файлов…" на всё время реального скачивания, пока байты росли.
-                    ReportProgress = (p, _) => this.RaiseProgress(entry, StageText(p.Stage), p.BytesDownloaded, p.TotalBytes),
+                    ReportProgress = (p, _) => this.RaiseProgress(entry, StageText(p), p.BytesDownloaded, p.TotalBytes),
                 };
 
                 var runner = new GameSyncRunner(this.syncServiceFactory(), ui);
@@ -400,14 +400,20 @@ namespace ChillHub.Core.Game {
         /// текст карточки очереди — тот же набор фраз, что раньше показывал прямой путь через
         /// StartUpdateAsync у выбранной игры.
         /// </summary>
-        private static string StageText(string stage) => stage switch {
-            "Checking" => "Проверка…",
-            "Downloading" => "Скачивание обновления…",
-            "Verifying" => "Проверка файлов…",
-            "Activating" => "Применение обновления…",
-            "Completed" => "Готово",
-            _ => stage,
-        };
+        private static string StageText(SyncProgress p) {
+            var text = p.Stage switch {
+                "Checking" => "Проверка…",
+                "Downloading" => "Скачивание обновления…",
+                "Verifying" => "Проверка файлов…",
+                "Activating" => "Применение обновления…",
+                "Completed" => "Готово",
+                _ => p.Stage,
+            };
+
+            // «Скачивание обновления…» на полутора гигабайтах модов — правда, но не
+            // вся: игрок ждёт обновления ИГРЫ и не понимает, почему её столько.
+            return string.IsNullOrEmpty(p.Scope) ? text : p.Scope + " · " + text;
+        }
 
         private void RaiseProgress(Entry entry, string status, long bytesDownloaded = -1, long totalBytes = -1) {
             entry.StatusText = status;
