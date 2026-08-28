@@ -129,3 +129,62 @@ test('короткое окно выдаёт скорость, которой н
   assert.ok(bogus > 500 * 1024 * 1024, 'ожидался всплеск, получено ' + bogus);
   assert.strictEqual(est.spanMs(), 10);
 });
+
+// ==== minSpanMs: защита от «>100 МБ/с» в первую секунду заливки ====
+//
+// Байты в push() приходят из upload.onprogress, то есть считают принятое
+// буферами браузера и ядра, а не переданное по сети. На старте эти буферы
+// набиваются мгновенно — несколько мегабайт на поток за десятки миллисекунд.
+// Окно, целиком лежащее внутри этого момента, делит мегабайты на миллисекунды
+// и выдаёт скорость, которой на канале не было; хуже, что она тут же
+// защёлкивалась как «пик» и висела до конца заливки.
+
+test('пока окно уже minSpanMs, скорость неизвестна (0), а не всплеск буфера', () => {
+  const est = makeRateEstimator(5000, { minSpanMs: 2500 });
+  est.push(0, 0);
+  // 16 МБ «улетело» за 120мс — это буфер, а не канал: 133 МБ/с.
+  assert.strictEqual(est.push(120, 16 * 1024 * 1024), 0);
+  assert.strictEqual(est.push(2000, 40 * 1024 * 1024), 0);
+});
+
+test('как только окно набрало minSpanMs, скорость считается как обычно', () => {
+  const est = makeRateEstimator(5000, { minSpanMs: 2500 });
+  est.push(0, 0);
+  assert.strictEqual(est.push(3000, 30_000_000), 10_000_000);
+});
+
+test('без minSpanMs поведение прежнее — окно отвечает с двух точек', () => {
+  const est = makeRateEstimator(5000);
+  est.push(0, 0);
+  assert.strictEqual(est.push(100, 1_000_000), 10_000_000);
+});
+
+// ==== setWindow: ширина окна подстраивается под частоту подтверждений ====
+
+test('setWindow расширяет окно, и старые точки перестают выпадать из него', () => {
+  const est = makeRateEstimator(1000);
+  est.push(0, 0);
+  est.setWindow(10000);
+  est.push(4000, 40_000_000);
+  // Точка t=0 осталась в окне: 40 МБ за 4с — 10 МБ/с. При старом окне в 1с
+  // она бы выпала, и скорость посчиталась бы по одной точке, то есть никак.
+  assert.strictEqual(est.spanMs(), 4000);
+  assert.strictEqual(est.rate(), 10_000_000);
+});
+
+test('setWindow сужает окно — точки старше новой ширины выбрасываются', () => {
+  const est = makeRateEstimator(10000);
+  est.push(0, 0);
+  est.push(4000, 40_000_000);
+  est.setWindow(1000);
+  est.push(5000, 45_000_000);
+  assert.strictEqual(est.spanMs(), 1000);
+  assert.strictEqual(est.rate(), 5_000_000);
+});
+
+test('setWindow игнорирует мусор и возвращает действующую ширину', () => {
+  const est = makeRateEstimator(5000);
+  assert.strictEqual(est.setWindow(8000), 8000);
+  assert.strictEqual(est.setWindow(0), 1);
+  assert.strictEqual(est.setWindow(NaN), 1);
+});

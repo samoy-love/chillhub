@@ -94,3 +94,14 @@ test('ui-status.js в браузерном режиме кладёт setStatusEr
   // window тут — тот самый sandbox.window из vm-контекста, а не наш process.
   assert.doesNotThrow(() => w.setStatusError(null, 'x'));
 });
+
+test('upload-tuning.js в браузерном режиме кладёт автоподбор в window', () => {
+  const w = loadAsBrowserScript('server/admin_ui/upload-tuning.js');
+  assert.strictEqual(typeof w.pickUploadParams, 'function');
+  assert.strictEqual(typeof w.connectionCap, 'function');
+  assert.strictEqual(typeof w.rateWindowMs, 'function');
+  // Функция действительно работает в этом окружении, а не просто присвоена:
+  // admin.js зовёт её как глобальную ровно так же.
+  const p = w.pickUploadParams(1.3 * 1024 * 1024 * 1024, { protocol: 'http/1.1' });
+  assert.strictEqual(p.concurrency, 6);
+});
