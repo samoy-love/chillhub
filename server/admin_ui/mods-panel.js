@@ -95,10 +95,52 @@
       + '</div></div></div></div>';
   }
 
+  // Порог, после которого список версий становится таблицей.
+  //
+  // Таблица оправдана, когда есть что сравнивать глазами по колонке. На одной
+  // строке семь заголовков занимают ровно столько же места, сколько данные, и
+  // читатель ищет в них то, что и так написано в первой ячейке.
+  const VERSIONS_TABLE_FROM = 4;
+
+  // versionBits собирает то, что описывает одну собранную версию, — общее для
+  // карточек и таблицы. Иначе две разметки разъезжаются на первой же правке:
+  // в одной кнопка «Дифф» объясняет, почему выключена, в другой нет.
+  function versionBits(it, upd, many) {
+    const badges = [];
+    if (it.active) badges.push('<span class="badge text-bg-success">активен</span>');
+    if (it.missing > 0) badges.push('<span class="badge text-bg-warning" title="Столько модов не нашлось на Thunderstore">пропущено ' + it.missing + '</span>');
+    if (upd && upd.latest) badges.push('<span class="badge text-bg-info">доступна ' + esc(upd.latest) + '</span>');
+    if (upd && upd.deprecated) badges.push('<span class="badge text-bg-warning">автор пометил устаревшим</span>');
+
+    const actions = ''
+      + (it.active ? '' : '<button type="button" class="btn btn-sm btn-success me-1" data-md-activate="' + esc(it.version) + '">Активировать</button>')
+      + (upd && upd.latest ? '<button type="button" class="btn btn-sm btn-outline-primary me-1" data-md-rebuild="' + esc(upd.namespace + '/' + upd.name) + '" data-md-rebuild-version="' + esc(upd.latest) + '">Пересобрать</button>' : '')
+      + '<button type="button" class="btn btn-sm btn-outline-secondary me-1" data-md-diff="' + esc(it.version) + '"'
+      + (many
+        ? ' title="Сравнить состав с другой собранной версией"'
+        : ' disabled title="Собрана одна версия — сравнивать не с чем"')
+      + '>Дифф</button>'
+      + (it.active ? '' : '<button type="button" class="btn btn-sm btn-outline-danger" data-md-delete="' + esc(it.version) + '">Удалить</button>');
+
+    return {
+      name: esc(it.displayName || it.version),
+      version: esc(it.version),
+      link: it.packageUrl
+        ? '<a class="small" href="' + esc(it.packageUrl) + '" target="_blank" rel="noopener">страница на Thunderstore</a>'
+        : '',
+      built: esc((it.createdAt || '').replace('T', ' ').replace('Z', '')),
+      packages: it.packages || 0,
+      files: it.files || 0,
+      size: bytes(it.bytes || 0),
+      badges: badges.join(' '),
+      actions: actions,
+    };
+  }
+
   // versionsTableHtml — список собранных версий модпака.
   //
-  // Своя таблица, а не versionsTableHtml из admin.js: у версии модпака другие
-  // колонки (пакет, ссылка на Thunderstore, число модов, метка «доступно
+  // Своя разметка, а не versionsTableHtml из admin.js: у версии модпака другие
+  // поля (пакет, ссылка на Thunderstore, число модов, метка «доступно
   // обновление»), и натягивать их на таблицу сборок игры значило бы переписать
   // её так, что она перестала бы описывать сборки.
   function versionsTableHtml(data) {
@@ -108,36 +150,37 @@
     }
     const updates = {};
     ((data && data.updates) || []).forEach(function (u) { updates[u.version] = u; });
+    const many = items.length > 1;
+
+    if (items.length < VERSIONS_TABLE_FROM) {
+      return '<div class="d-grid gap-2">' + items.map(function (it) {
+        const b = versionBits(it, updates[it.version], many);
+        return ''
+          + '<div class="border rounded p-3 d-flex flex-wrap gap-3 align-items-center">'
+          + '<div class="flex-grow-1 min-w-0">'
+          + '<div class="fw-semibold">' + b.name + ' ' + b.badges + '</div>'
+          + '<div class="small text-body-secondary">' + b.version + ' · собран ' + b.built
+          + ' · ' + b.packages + ' модов · ' + b.files + ' файлов · ' + b.size + '</div>'
+          + b.link
+          + '</div>'
+          + '<div class="text-nowrap">' + b.actions + '</div>'
+          + '</div>';
+      }).join('') + '</div>';
+    }
 
     const rows = items.map(function (it) {
-      const upd = updates[it.version];
-      const name = it.displayName || it.version;
-      const badges = [];
-      if (it.active) badges.push('<span class="badge text-bg-success">активен</span>');
-      if (it.missing > 0) badges.push('<span class="badge text-bg-warning" title="Столько модов не нашлось на Thunderstore">пропущено ' + it.missing + '</span>');
-      if (upd && upd.latest) badges.push('<span class="badge text-bg-info">доступна ' + esc(upd.latest) + '</span>');
-      if (upd && upd.deprecated) badges.push('<span class="badge text-bg-warning">автор пометил устаревшим</span>');
-
+      const b = versionBits(it, updates[it.version], many);
       return '<tr>'
-        + '<td><div class="fw-semibold">' + esc(name) + '</div>'
-        + '<div class="small text-body-secondary">' + esc(it.version) + '</div>'
-        + (it.packageUrl ? '<a class="small" href="' + esc(it.packageUrl) + '" target="_blank" rel="noopener">страница на Thunderstore</a>' : '')
+        + '<td><div class="fw-semibold">' + b.name + '</div>'
+        + '<div class="small text-body-secondary">' + b.version + '</div>'
+        + b.link
         + '</td>'
-        + '<td>' + badges.join(' ') + '</td>'
-        + '<td class="text-nowrap">' + esc((it.createdAt || '').replace('T', ' ').replace('Z', '')) + '</td>'
-        + '<td class="text-end">' + (it.packages || 0) + '</td>'
-        + '<td class="text-end">' + (it.files || 0) + '</td>'
-        + '<td class="text-end text-nowrap">' + bytes(it.bytes || 0) + '</td>'
-        + '<td class="text-end text-nowrap">'
-        + (it.active ? '' : '<button type="button" class="btn btn-sm btn-success me-1" data-md-activate="' + esc(it.version) + '">Активировать</button>')
-        + (upd && upd.latest ? '<button type="button" class="btn btn-sm btn-outline-primary me-1" data-md-rebuild="' + esc(upd.namespace + '/' + upd.name) + '" data-md-rebuild-version="' + esc(upd.latest) + '">Пересобрать</button>' : '')
-        + '<button type="button" class="btn btn-sm btn-outline-secondary me-1" data-md-diff="' + esc(it.version) + '"'
-        + (items.length < 2
-          ? ' disabled title="Собрана одна версия — сравнивать не с чем"'
-          : ' title="Сравнить состав с другой собранной версией"')
-        + '>Дифф</button>'
-        + (it.active ? '' : '<button type="button" class="btn btn-sm btn-outline-danger" data-md-delete="' + esc(it.version) + '">Удалить</button>')
-        + '</td>'
+        + '<td>' + b.badges + '</td>'
+        + '<td class="text-nowrap">' + b.built + '</td>'
+        + '<td class="text-end">' + b.packages + '</td>'
+        + '<td class="text-end">' + b.files + '</td>'
+        + '<td class="text-end text-nowrap">' + b.size + '</td>'
+        + '<td class="text-end text-nowrap">' + b.actions + '</td>'
         + '</tr>';
     }).join('');
 
@@ -716,7 +759,13 @@
     }
 
     return {
-      reload: function () { loadGames(); refreshCache(); },
+      // reload принимает игру, которую нужно выбрать: на вкладку приходят не
+      // только через саму вкладку, но и по метке «моды» из списка игр.
+      reload: function (wantGameId) {
+        if (wantGameId) state.gameId = wantGameId;
+        loadGames();
+        refreshCache();
+      },
       reloadVersions,
       reloadCatalog,
     };

@@ -1927,6 +1927,9 @@ function mgmAppendRow(tb, it){
   // unpublished — как pinned, состояние строки, а не поле ввода: игра остаётся
   // в реестре со всеми файлами, но публичный /api/games её не отдаёт.
   tr.dataset.unpublished = it && it.unpublished ? '1' : '0';
+  // mods — тоже состояние строки: сами настройки живут на вкладке «Моды», а
+  // здесь нужен один бит, чтобы в списке игр было видно, у каких игр модпак.
+  tr.dataset.mods = it && it.mods && it.mods.enabled ? '1' : '0';
   // Значения приходят с сервера (/admin/games и /admin/games/scan — по сути
   // имена каталогов на диске), поэтому в атрибут их можно класть только
   // экранированными.
@@ -2894,7 +2897,7 @@ function showSection(id){
     // переключение вкладок — это не команда «выбросить введённое».
     try{ if(!__mgmDirty) mgmReload(); }catch(_){ /* no-op */ }
   }
-  if(id==='secMods'){ try{ modsPanel && modsPanel.reload(); }catch(_){ /* no-op */ } }
+  if(id==='secMods'){ try{ modsPanel && modsPanel.reload(window.__modsWantGame || ''); }catch(_){ /* no-op */ } }
   if(id==='secInbox'){ try{ fbReload(true); }catch(_){ /* no-op */ } }
   if(id==='secMaint'){ try{ mtLoad(); }catch(_){ /* no-op */ } }
   if(id==='secMetrics'){ try{ mxOnTabOpen(); }catch(_){ /* no-op */ } }
@@ -2938,6 +2941,17 @@ TAB_MAP.forEach((t, i)=>{
 // было открыто в последний визит.
 // Панель вкладки «Моды». Создаётся один раз; данные тянет showSection при
 // первом открытии вкладки, а не при загрузке страницы.
+// openModsForGame переводит на вкладку «Моды» с уже выбранной игрой.
+//
+// Метка «моды» в списке игр ведёт сюда: раньше переход означал «открой другую
+// вкладку и найди ту же игру в другом списке», и выбор игры жил двумя
+// независимыми состояниями.
+window.openModsForGame = function(gid){
+  window.__modsWantGame = gid || '';
+  try{ location.hash = '#mods'; }catch(_){ /* адресная строка не критична */ }
+  showSection('secMods');
+};
+
 const modsPanel = (typeof createModsPanel === 'function')
   ? createModsPanel({ root: '#md_root' })
   : null;
