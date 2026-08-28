@@ -30,6 +30,16 @@ resuming after any drop. The game folder ends up an exact copy of the
 published version, and switching to any version, rollback included, costs the
 same diff rather than a full re-download.
 
+**Modpacks are assembled by the server, not by the player.** A Thunderstore
+modpack is an almost empty package holding a list of dependencies: downloading
+it whole gives you nine megabytes containing no mods at all. The real set is a
+walk of the dependency tree — a hundred and fifty packages and gigabytes of
+files, laid out by the rules of that particular game. The server does that work
+once for everyone and publishes the result as an ordinary version, with the
+same manifest, diff and rollback as a game build. All the player picks is what
+to launch: their own Steam copy or the Chill Hub build, with mods or without.
+Details are in [docs/modpacks.md](docs/modpacks.md).
+
 **The launcher updates itself from a separate executable** (`updater/`),
 because a running process can't overwrite its own files. That's also why user
 data lives in `%APPDATA%\ChillHub` rather than next to the binaries.
@@ -48,9 +58,9 @@ be present on the user's machine. Distributed as a single NSIS installer built
 in CI.
 
 **Server** — Go, two independent binaries: the public API (games, versions,
-manifests, news) and the admin one (ZIP build uploads, game registry, news,
-maintenance mode, metrics, feedback). Both listen on loopback only. The admin
-UI is vanilla JS with no bundler.
+manifests, news) and the admin one (ZIP build uploads, game registry,
+Thunderstore modpack builds, news, maintenance mode, metrics, feedback). Both
+listen on loopback only. The admin UI is vanilla JS with no bundler.
 
 **Production** — systemd units behind the system nginx, atomic releases with
 rollback via [deploy-kit](https://github.com/tr0llex/deploy-kit). One host
@@ -82,18 +92,19 @@ cd ..\launcher; dotnet test
 | `launcher/` | Client: updates, launching games, news, integrity checks |
 | `updater/` | Self-update executable and the rules for preserving user files |
 | `server/cmd/api` | Public API |
-| `server/cmd/admin` | Admin API: build uploads, `latest` promotion, registry, news, maintenance |
+| `server/cmd/admin` | Admin API: build uploads, `latest` promotion, registry, modpacks, news, maintenance |
 | `server/admin_ui/` | Admin web UI |
 | `landing/` | Landing page at the domain root |
 | `content/` | Manifests, version files, news, maintenance state |
 | `scripts/` | Dev runners, installer build, NSIS script |
 | `.deploy-kit/` | Deployment target definitions |
-| `docs/` | [Specification](docs/spec.md), [configuration](docs/configuration.md), [installer](docs/installer.md), [security policy](docs/SECURITY.md) |
+| `docs/` | [Specification](docs/spec.md), [modpacks](docs/modpacks.md), [configuration](docs/configuration.md), [installer](docs/installer.md), [security policy](docs/SECURITY.md) |
 
 ## Tests
 
-Over a thousand tests on the client (xUnit) and several hundred on the server
-(`go test -race`); current coverage is on the codecov badge above. A red run
+Close to two thousand tests on the client (xUnit), several hundred on the
+server (`go test -race`) and a couple of hundred on the web side
+(`node --test`); current coverage is on the codecov badge above. A red run
 stops the deployment.
 
 CI gates more than the test suites: golangci-lint and `go vet` on both Linux
@@ -123,8 +134,15 @@ dk rollback chillhub-admin
 
 From CI: Actions → Deploy → Run workflow, with the target selectable there.
 `all` ships the four targets above but does NOT build the installer — that
-needs either a separate run with `target=installer` or a `v*` tag, which does
-both.
+needs a separate run with `target=installer`. Tags trigger nothing: the only
+automatic entry point is a merge into `main`, and which targets it touches is
+worked out by the `changes` job, per target, from its own baseline.
+
+Touching `launcher/**`, `updater/**` or the pipeline itself requires bumping
+`<Version>` in `launcher/ChillHub/ChillHub.csproj`: a .NET build is not
+byte-reproducible, and the admin server refuses to publish a different set of
+files under a number that is already taken. The `Launcher version bump` gate
+checks this before the merge.
 
 The admin password is stored as a hash in a systemd drop-in and set separately
 from deployment: it changes rarely, and carrying a secret through every deploy
