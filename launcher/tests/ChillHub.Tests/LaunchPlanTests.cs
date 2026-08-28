@@ -99,40 +99,6 @@ namespace ChillHub.Tests {
             Assert.NotEmpty(decision.Message);
         }
 
-        /// <summary>У игры без модов стрелки выбора нет: выбирать нечего.</summary>
-        [Fact]
-        public void БезМодовСтрелкиНет() {
-            Assert.False(LaunchPlan.MenuButton(null, playMode: true, remembered: null).Visible);
-            Assert.False(LaunchPlan.MenuButton(new ModsInfo(), playMode: true, remembered: null).Visible);
-        }
-
-        /// <summary>
-        /// Не в режиме «Играть» стрелки тоже нет: на «Обновить» она обещала бы выбор,
-        /// которого в этот момент не существует.
-        /// </summary>
-        [Fact]
-        public void ВнеРежимаИгратьСтрелкиНет() {
-            Assert.False(LaunchPlan.MenuButton(Pack(), playMode: false, remembered: null).Visible);
-        }
-
-        /// <summary>Без запомненного выбора подсказка объясняет, что кнопка спросит.</summary>
-        [Fact]
-        public void БезВыбораПодсказкаОбъясняетВыбор() {
-            var view = LaunchPlan.MenuButton(Pack(), playMode: true, remembered: null);
-
-            Assert.True(view.Visible);
-            Assert.Contains("Выбрать", view.Tooltip, System.StringComparison.Ordinal);
-        }
-
-        /// <summary>С запомненным выбором подсказка называет его словами.</summary>
-        [Fact]
-        public void СВыборомПодсказкаНазываетЕго() {
-            var view = LaunchPlan.MenuButton(Pack(), playMode: true, remembered: LaunchTarget.SteamModded);
-
-            Assert.True(view.Visible);
-            Assert.Equal("Запустится: Steam · с модами (Lethal Reloaded 2.2.12)", view.Tooltip);
-        }
-
         /// <summary>У игры без настроек модов вариантов запуска нет вовсе.</summary>
         [Fact]
         public void БезНастроекМодовВариантовНет() {

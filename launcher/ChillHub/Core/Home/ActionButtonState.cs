@@ -98,7 +98,7 @@ namespace ChillHub.Core.Home {
         /// <returns>Оформление кнопки.</returns>
         internal static ActionButtonAppearance Appearance(ActionMode mode) => mode switch {
             ActionMode.Cancel => new ActionButtonAppearance("Отмена", true, "Style.ActionButton.Cancel"),
-            ActionMode.Dequeue => new ActionButtonAppearance("Убрать из очереди", true, "Style.ActionButton.Checking"),
+            ActionMode.Dequeue => new ActionButtonAppearance("Убрать из очереди", true, "Style.ActionButton.Dequeue"),
             ActionMode.Checking => new ActionButtonAppearance("Проверка…", false, "Style.ActionButton.Checking"),
             ActionMode.Deleting => new ActionButtonAppearance("Удаление…", false, "Style.ActionButton.Checking"),
             ActionMode.Play => new ActionButtonAppearance("Играть", true, "Style.ActionButton.Play"),

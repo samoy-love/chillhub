@@ -99,11 +99,12 @@
 
                 <!-- Right: индикатор загрузок + настройки -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <!-- Чип загрузок виден, пока очередь не пуста, с любого экрана: со
-                         страницы игры и из настроек ход закачки иначе не виден вовсе.
-                         Это индикатор, а не кнопка: подсвечиваться и нажиматься ему нечего,
-                         очередь и так стоит на главной. Отступы задаются здесь явно — шаблон
-                         Style.SettingsButton свой Padding не пробрасывает. -->
+                    <!-- Чип загрузок виден, пока очередь не пуста и мы НЕ на главной: со
+                         страницы игры и из настроек ход закачки иначе не виден вовсе, а на
+                         главной он повторял бы очередь, стоящую внизу того же экрана
+                         (см. RefreshDownloadsIndicator). Это индикатор, а не кнопка:
+                         подсвечиваться и нажиматься ему нечего. Отступы задаются здесь
+                         явно — шаблон Style.SettingsButton свой Padding не пробрасывает. -->
                     <Border x:Name="HeaderDownloadsBtn" Height="32" Padding="12,0" Margin="0,0,8,0"
                             Visibility="Collapsed" CornerRadius="{StaticResource Radius.M}"
                             Background="{DynamicResource Brush.Surface}"

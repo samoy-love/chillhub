@@ -181,8 +181,10 @@ namespace ChillHub.Core.Sync {
             var foreignExisting = new List<string>();
             var localExisting = ListLocalFiles(localRoot, foreignPaths, foreignExisting);
 
-            // Кеш хешей: при неизменных размере и времени модификации файл не перечитывается
-            var hashCache = FileHashCache.Load(manifest.GameId);
+            // Кеш хешей: при неизменных размере и времени модификации файл не перечитывается.
+            // Кеш свой на КАЖДУЮ папку: одна и та же игра живёт и в копии из Steam, и в
+            // сборке с сервера, а записи ключуются относительным путём.
+            var hashCache = FileHashCache.Load(manifest.GameId, localRoot);
 
             // Счётчики для отчёта о прогрессе: считаем «проверенные» файлы манифеста и их байты
             var checkedFiles = 0;
@@ -299,14 +301,25 @@ namespace ChillHub.Core.Sync {
                 }
 
                 if (needDownload) {
-                    plan.Downloads.Add(new FileTask {
+                    var task = new FileTask {
                         RelativePath = rel,
                         Size = mf.Size,
                         Url = CombineUrl(contentBaseUrl, rel),
                         Blake3 = mf.Blake3,
                         Sha256 = mf.Sha256,
                         Executable = mf.Executable,
-                    });
+                    };
+
+                    // Такой же файл уже лежит в другой копии этой игры — возьмём оттуда.
+                    // Сверку он пройдёт ту же, что и скачанный, поэтому ошибиться здесь
+                    // можно разве что лишним копированием.
+                    task.LocalSource = LocalDonors.Find(options.Donors, task) ?? string.Empty;
+                    if (task.LocalSource.Length > 0) {
+                        plan.ReusedFiles++;
+                        plan.ReusedBytes += mf.Size;
+                    }
+
+                    plan.Downloads.Add(task);
                     plan.TotalDownloadBytes += mf.Size;
 
                     // Место, которое освободит этот файл, когда новая версия встанет на
@@ -545,6 +558,10 @@ namespace ChillHub.Core.Sync {
             // НЕ завершено, сколько бы удачно ни прошло остальное.
             var deferred = new System.Collections.Concurrent.ConcurrentBag<string>();
 
+            // Файлы, вставшие на место, вместе со сверенными хешами: из них пополняется
+            // кеш хешей, чтобы следующая проверка не перечитывала только что скачанное.
+            var applied = new System.Collections.Concurrent.ConcurrentBag<(FileTask Task, string Path)>();
+
             // Пустые директории будем создавать в самом конце (после очистки),
             // чтобы их не удалить во время Cleanup
 
@@ -593,10 +610,21 @@ namespace ChillHub.Core.Sync {
                                     var dstPath = ManifestPath.Combine(plan.LocalRoot, t.RelativePath);
                                     Directory.CreateDirectory(Path.GetDirectoryName(dstPath)!);
 
+                                    var partPath = dstPath + ".part";
+
+                                    // Такой же файл уже лежит в другой копии этой игры:
+                                    // копия с диска вместо загрузки по сети. Сверку он
+                                    // проходит ту же самую, а не прошедший её просто
+                                    // качается дальше обычным путём.
+                                    var reused = TryCopyFromDisk(t, partPath);
+                                    if (reused) {
+                                        Interlocked.Add(ref downloaded, t.Size);
+                                        ReportDownloadProgress();
+                                    }
+
                                     // Скачивание в .part. Уцелевший от прерванной попытки
                                     // докачивается по Range — это и есть возобновление.
-                                    var partPath = dstPath + ".part";
-                                    {
+                                    if (!reused) {
                                         long existing = 0;
                                         if (File.Exists(partPath)) {
                                             try {
@@ -706,7 +734,13 @@ namespace ChillHub.Core.Sync {
 
                                     // Содержимое сверено — ставим файл на место. С этого
                                     // момента сборка на диске смешанная, о чём и говорит маркер.
-                                    if (!ApplyDownloadedFile(partPath, dstPath, t.RelativePath)) {
+                                    if (ApplyDownloadedFile(partPath, dstPath, t.RelativePath)) {
+                                        // Хеши этого файла только что сверены — грех не
+                                        // запомнить: иначе первая же проверка после
+                                        // установки перечитает с диска всё, что скачано.
+                                        applied.Add((t, dstPath));
+                                    }
+                                    else {
                                         deferred.Add(t.RelativePath);
                                     }
                                 }
@@ -736,6 +770,8 @@ namespace ChillHub.Core.Sync {
                     throw;
                 }
             }
+
+            RememberHashes(plan, applied);
 
             // Итоговые цифры скачивания — уже без троттлинга, иначе счётчик файлов
             // может замереть на предпоследнем значении
@@ -793,6 +829,87 @@ namespace ChillHub.Core.Sync {
                 .Sum();
 
             return growth + inFlight;
+        }
+
+        /// <summary>
+        /// Берёт файл из другой копии игры вместо загрузки по сети.
+        /// <para>
+        /// Копия кладётся в тот же «.part» и проходит ту же сверку хешей, что и
+        /// скачанное. Не сошлось или не скопировалось — молча возвращаемся к загрузке:
+        /// донор это удобство, а не источник истины.
+        /// </para>
+        /// </summary>
+        /// <param name="t">Задача загрузки.</param>
+        /// <param name="partPath">Куда положить содержимое.</param>
+        /// <returns>true, если файл готов к постановке на место.</returns>
+        private static bool TryCopyFromDisk(FileTask t, string partPath) {
+            if (string.IsNullOrEmpty(t.LocalSource)) {
+                return false;
+            }
+
+            try {
+                SafeDeleteFile(partPath);
+                File.Copy(t.LocalSource, partPath, overwrite: true);
+                VerifyDownloadedFile(partPath, t);
+                ChillHub.Core.Logging.Logger.Info($"Файл '{t.RelativePath}' взят с диска: '{t.LocalSource}'");
+                return true;
+            }
+            catch (Exception ex) {
+                ChillHub.Core.Logging.Logger.Warn(
+                    $"Не вышло взять '{t.RelativePath}' из '{t.LocalSource}' ({ex.Message}) — качаем из сети");
+                SafeDeleteFile(partPath);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Складывает хеши только что поставленных файлов в кеш этой папки.
+        /// <para>
+        /// Хеши уже сверены при загрузке, а кеш о них не знал: он пополнялся только на
+        /// этапе плана, при ЧТЕНИИ файлов с диска. Из-за этого первая же проверка после
+        /// установки перечитывала гигабайты, содержимое которых лаунчер только что
+        /// посчитал сам.
+        /// </para>
+        /// </summary>
+        /// <param name="plan">План, который применяли.</param>
+        /// <param name="applied">Файлы, вставшие на место, и их пути.</param>
+        private static void RememberHashes(
+            DiffPlan plan, System.Collections.Concurrent.ConcurrentBag<(FileTask Task, string Path)> applied) {
+            if (applied.IsEmpty || string.IsNullOrWhiteSpace(plan.GameId)) {
+                return;
+            }
+
+            try {
+                var cache = FileHashCache.Load(plan.GameId, plan.LocalRoot);
+                var stored = 0;
+                foreach (var (task, path) in applied) {
+                    if (string.IsNullOrWhiteSpace(task.Sha256) || string.IsNullOrWhiteSpace(task.Blake3)) {
+                        // Неполные хеши кеш не принимает: TryGet требует оба, и запись
+                        // без одного из них была бы вечным промахом.
+                        continue;
+                    }
+
+                    var info = new FileInfo(path);
+                    if (!info.Exists) {
+                        continue;
+                    }
+
+                    cache.Set(task.RelativePath, info.Length, info.LastWriteTimeUtc.Ticks, task.Sha256!, task.Blake3);
+                    stored++;
+                }
+
+                if (stored > 0) {
+                    // Без прополки: живые файлы этой папки уже посчитаны планом, а
+                    // выбрасывать по неполному списку значит выбросить лишнее.
+                    cache.SaveOnly();
+                    ChillHub.Core.Logging.Logger.Info($"Кеш хешей пополнен: {stored} файл(ов) в '{plan.LocalRoot}'");
+                }
+            }
+            catch (Exception ex) {
+                // Кеш — ускорение, а не условие работы: его потеря стоит одного
+                // пересчёта, а не сорванного обновления.
+                ChillHub.Core.Logging.Logger.Warn($"RememberHashes: {ex.Message}");
+            }
         }
 
         /// <summary>

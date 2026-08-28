@@ -50,6 +50,83 @@ namespace ChillHub.Core.Home {
                  .ToList();
 
         /// <summary>
+        /// Вливает свежий ответ сервера в уже показанный список, сохраняя сами объекты игр.
+        /// <para>
+        /// ОБЪЕКТ ИГРЫ — ЭТО ЕЁ СТРОКА НА ЭКРАНЕ. Обновление списка целиком заменяло его
+        /// новыми объектами, и для WPF это был другой список: строки пересоздавались,
+        /// значки перезагружались, выделение слетало и восстанавливалось вручную — а
+        /// вместе с ним заново грузилась вся правая половина экрана. Выглядело это как
+        /// рывок на ровном месте, при том что в списке обычно ничего не менялось.
+        /// </para>
+        /// <para>
+        /// Поэтому от сервера берутся только его поля. Состояние диска — установлена,
+        /// какая версия лежит, нужно ли обновление, что с очередью — остаётся тем,
+        /// которое лаунчер уже посчитал: сервер о нём ничего не знает и обнулил бы его.
+        /// </para>
+        /// </summary>
+        /// <param name="current">Список, который сейчас на экране.</param>
+        /// <param name="incoming">Что вернул сервер.</param>
+        /// <returns>Список в порядке ответа сервера, из прежних объектов, где они были.</returns>
+        internal static List<GameInfo> Merge(IEnumerable<GameInfo>? current, IEnumerable<GameInfo>? incoming) {
+            var fresh = incoming?.Where(g => g != null).ToList() ?? new List<GameInfo>();
+            if (current == null) {
+                return fresh;
+            }
+
+            var known = new Dictionary<string, GameInfo>(StringComparer.OrdinalIgnoreCase);
+            foreach (var g in current) {
+                if (g != null && !string.IsNullOrWhiteSpace(g.GameId)) {
+                    known[g.GameId] = g;
+                }
+            }
+
+            var result = new List<GameInfo>(fresh.Count);
+            foreach (var g in fresh) {
+                if (string.IsNullOrWhiteSpace(g.GameId) || !known.TryGetValue(g.GameId, out var existing)) {
+                    result.Add(g);
+                    continue;
+                }
+
+                existing.Title = g.Title;
+                existing.HasLatest = g.HasLatest;
+                existing.LatestVersion = g.LatestVersion;
+                existing.ManifestUrl = g.ManifestUrl;
+                existing.ExeRelativePath = g.ExeRelativePath;
+                existing.IconUrl = g.IconUrl;
+                existing.Mods = g.Mods;
+                result.Add(existing);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Идут ли игры в том же порядке. Нужно, чтобы не подменять источник списка
+        /// впустую: смена источника пересоздаёт строки со всеми их значками, а порядок
+        /// после обычной проверки статусов чаще всего прежний.
+        /// </summary>
+        /// <param name="left">Один список.</param>
+        /// <param name="right">Другой.</param>
+        /// <returns>true, если это те же игры в том же порядке.</returns>
+        internal static bool SameOrder(IReadOnlyList<GameInfo>? left, IReadOnlyList<GameInfo>? right) {
+            if (ReferenceEquals(left, right)) {
+                return true;
+            }
+
+            if (left == null || right == null || left.Count != right.Count) {
+                return false;
+            }
+
+            for (var i = 0; i < left.Count; i++) {
+                if (!string.Equals(left[i]?.GameId, right[i]?.GameId, StringComparison.OrdinalIgnoreCase)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
         /// Какую игру выделить при первом показе списка: последнюю запущенную, иначе первую
         /// установленную, иначе первую в списке. Возвращает -1 для пустого списка — выделять нечего.
         /// <para>

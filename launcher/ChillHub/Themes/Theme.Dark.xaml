@@ -11,9 +11,13 @@
   <Color x:Key="Color.Border">#24242F</Color>
   <Color x:Key="Color.Text">#E9E9F0</Color>
   <Color x:Key="Color.TextSecondary">#9A9AAB</Color>
-  <!-- #80809A, а не #6E6E80: на карточке (#14141B) старый давал контраст 3.7:1 —
-       ниже порога AA 4.5:1 для мелкого текста, а именно им набраны все подписи. -->
-  <Color x:Key="Color.TextMuted">#80809A</Color>          <!-- подписи, «не установлена» -->
+  <!-- #86869F, а не #6E6E80: на карточке (#14141B) старый давал контраст 3.7:1 —
+       ниже порога AA 4.5:1 для мелкого текста, а именно им набраны все подписи.
+       Промежуточный #80809A порог на #14141B проходил (4.8:1), но не на карточке
+       поверх карточки (#1B1B24) и на выделенной строке списка (#1B1B26) — там
+       выходило 4.45:1, а подписи игр стоят именно на них. #86869F даёт 4.8:1
+       на самом светлом из фонов, на которых он встречается. -->
+  <Color x:Key="Color.TextMuted">#86869F</Color>          <!-- подписи, «не установлена» -->
   <!-- Единственный акцент -->
   <Color x:Key="Color.Accent">#7C5CFF</Color>
   <Color x:Key="Color.AccentHover">#8F73FF</Color>
@@ -501,6 +505,36 @@
   <!-- Вторичная кнопка. Жила тремя одинаковыми копиями — в HomePage, в GamePage под
        именем Style.Button.GameGhost и в UpdateWindow, — и расходилась в мелочах от
        копии к копии. Теперь одна на всё приложение. -->
+  <!-- Кнопка-ссылка: только текст, без рамки и заливки. Для действий, которые лишь
+       разворачивают уже показанное («Показать ещё N» под очередью) — рамка и фон делали
+       бы из них ещё одну кнопку в ряду настоящих. -->
+  <Style x:Key="Style.Button.Link" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
+    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="HorizontalContentAlignment" Value="Left"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border Background="Transparent" Padding="{TemplateBinding Padding}">
+            <TextBlock Text="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}"
+                       FontSize="{TemplateBinding FontSize}" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter Property="Foreground" Value="{DynamicResource Brush.Accent}"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Opacity" Value="0.6"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <Style x:Key="Style.Button.GhostNeutral" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
@@ -1034,11 +1068,15 @@
                 <RepeatButton Visibility="Collapsed"/>
               </Track.DecreaseRepeatButton>
               <Track.Thumb>
+                <!-- В покое бегунок почти не виден (0.35): на главной вертикальных полос
+                     сразу три — список игр, лента новостей, очередь, — и в прежней
+                     четверти яркости они рисовали три светлые черты поперёк экрана.
+                     Под курсором полоса проявляется целиком. -->
                 <Thumb x:Name="PART_Thumb"
                        Background="{StaticResource Brush.ScrollbarThumb}"
                        BorderBrush="{StaticResource Brush.ScrollbarThumbBorder}"
                        BorderThickness="0"
-                       Opacity="0.55">
+                       Opacity="0.35">
                   <Thumb.Template>
                     <ControlTemplate TargetType="Thumb">
                       <!-- Отступ по 2px с боков: бегунок 4px внутри дорожки 8px, а под
@@ -1105,14 +1143,18 @@
 
   <!-- Кнопка сведений об игре на витрине: полупрозрачная «стеклянная» кнопка с текстом.
        Круглая ⓘ без подписи читалась как подсказка, а не как переход на страницу игры. -->
+  <!-- «Об игре» — спутник кнопки действия, а не её ровня: обычное начертание, вторичный
+       цвет и рамка потише. Прежние SemiBold, светлая рамка и заливка давали ей тот же вес,
+       что и главной кнопке, а в состояниях без заливки («Убрать из очереди», «Проверка…»)
+       она перевешивала — глаз выбирал справочный экран вместо действия. -->
   <Style x:Key="Style.Button.HeroInfo" TargetType="Button">
     <Setter Property="Height" Value="42"/>
     <Setter Property="Padding" Value="16,0"/>
     <Setter Property="FontSize" Value="14"/>
-    <Setter Property="FontWeight" Value="SemiBold"/>
-    <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
-    <Setter Property="Background" Value="#66101017"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
+    <Setter Property="FontWeight" Value="Normal"/>
+    <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
     <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="Template">
@@ -1126,7 +1168,8 @@
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
-              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.SecondaryAccent}"/>
+              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
+              <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Opacity" Value="0.5"/>

@@ -5,6 +5,7 @@
 
 namespace ChillHub.Tests {
     using System;
+    using System.Collections.Generic;
     using System.Globalization;
     using System.Windows.Media;
 
@@ -253,6 +254,88 @@ namespace ChillHub.Tests {
         [InlineData(double.NaN, 1)]
         public void КолонкиЛентыПоШирине(double width, int expected) {
             Assert.Equal(expected, NewsColumnsConverter.ColumnsFor(width));
+        }
+
+        /// <summary>Неполный последний ряд ленты делит ширину между своими карточками.</summary>
+        [Theory]
+        [InlineData(3, 2, 0, 2)]
+        [InlineData(3, 2, 1, 1)]
+        [InlineData(4, 2, 1, 2)]
+        [InlineData(5, 3, 1, 2)]
+        [InlineData(1, 2, 0, 1)]
+        public void ПоследнийРядЛентыЗаполняетШирину(int count, int columns, int row, int expected) {
+            Assert.Equal(expected, NewsFlowPanel.ItemsInRow(count, columns, row));
+        }
+
+        /// <summary>За последним рядом рядов нет — ноль карточек, а не отрицательное число.</summary>
+        [Fact]
+        public void ЗаПоследнимРядомЛентыПусто() {
+            Assert.Equal(0, NewsFlowPanel.ItemsInRow(3, 2, 2));
+            Assert.Equal(0, NewsFlowPanel.ItemsInRow(0, 2, 0));
+        }
+
+        /// <summary>Док очереди: сколько строк видно на странице такой высоты.</summary>
+        [Theory]
+        [InlineData(4, 900.0, false, 3)]
+        [InlineData(4, 700.0, false, 1)]
+        [InlineData(4, 900.0, true, 4)]
+        [InlineData(2, 900.0, false, 2)]
+        [InlineData(0, 900.0, false, 0)]
+        [InlineData(4, double.NaN, false, 3)]
+        public void СтрокДокаПоВысотеОкна(int count, double height, bool expanded, int expected) {
+            Assert.Equal(expected, QueueDockLayout.Compute(count, height, expanded).VisibleRows);
+        }
+
+        /// <summary>Раскрывашка называет, сколько позиций спрятано, и умеет свернуть обратно.</summary>
+        [Theory]
+        [InlineData(4, 900.0, false, "Показать ещё 1")]
+        [InlineData(4, 700.0, false, "Показать ещё 3")]
+        [InlineData(4, 900.0, true, "Свернуть очередь")]
+        [InlineData(3, 900.0, false, "")]
+        [InlineData(1, 700.0, false, "")]
+        public void РаскрывашкаДокаНазываетСпрятанное(int count, double height, bool expanded, string expected) {
+            Assert.Equal(expected, QueueDockLayout.Compute(count, height, expanded).ToggleText);
+        }
+
+        /// <summary>
+        /// Док показывает первые строки очереди, а обновление позиции не пересобирает
+        /// список: меняется ровно та строка, за которой приехал новый экземпляр.
+        /// </summary>
+        [Fact]
+        public void ДокПравитВидимыеСтрокиПоМесту() {
+            var a = Item(QueueItemState.Running);
+            var b = Item(QueueItemState.Waiting, position: 2);
+            var c = Item(QueueItemState.Waiting, position: 3);
+            var source = new List<QueueItem> { a, b, c };
+            var visible = new List<QueueItem>();
+
+            QueueDockLayout.ApplyVisible(source, visible, 2);
+            Assert.Equal(new[] { a, b }, visible);
+
+            // Тик прогресса: качающаяся позиция приезжает новым объектом, соседка — та же.
+            var a2 = Item(QueueItemState.Running, done: 5, total: 10);
+            source[0] = a2;
+            QueueDockLayout.ApplyVisible(source, visible, 2);
+            Assert.Same(a2, visible[0]);
+            Assert.Same(b, visible[1]);
+
+            // Очередь укоротилась — лишние строки уходят, оставшиеся не трогаются.
+            source.RemoveAt(2);
+            QueueDockLayout.ApplyVisible(source, visible, 1);
+            Assert.Same(a2, Assert.Single(visible));
+        }
+
+        /// <summary>Просить больше строк, чем есть позиций, безопасно: покажем сколько есть.</summary>
+        [Fact]
+        public void ДокНеПросачиваетсяЗаКонецОчереди() {
+            var source = new List<QueueItem> { Item(QueueItemState.Running) };
+            var visible = new List<QueueItem>();
+
+            QueueDockLayout.ApplyVisible(source, visible, 5);
+            Assert.Single(visible);
+
+            QueueDockLayout.ApplyVisible(source, visible, 0);
+            Assert.Empty(visible);
         }
 
         private static QueueItem Item(

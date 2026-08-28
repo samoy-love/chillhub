@@ -92,6 +92,17 @@ namespace ChillHub.Pages {
         private readonly System.Collections.ObjectModel.ObservableCollection<Core.Game.QueueItem> queueDockItems = new();
 
         /// <summary>
+        /// Что из очереди реально показано внизу экрана: первые несколько позиций, сколько
+        /// разрешил <see cref="Core.UI.QueueDockLayout"/>. Отдельный список, а не потолок
+        /// высоты у дока: прежний потолок в долю окна оставлял на низком окне полторы
+        /// строки со скроллом, и очередь из четырёх позиций выглядела как очередь из двух.
+        /// </summary>
+        private readonly System.Collections.ObjectModel.ObservableCollection<Core.Game.QueueItem> queueDockVisibleItems = new();
+
+        /// <summary>Док раскрыт кликом по «Показать ещё N» — видны все позиции очереди.</summary>
+        private bool queueDockExpanded;
+
+        /// <summary>
         /// Та же очередь — наружу для GamePage: установка/обновление со страницы игры идёт через
         /// неё, а не через отдельный локальный запуск (см. GamePage.StartQueuedSync), иначе
         /// закачка обрывалась при уходе с этой страницы на главную.
@@ -199,6 +210,15 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Что сейчас нарисовано в строке действий витрины: по нему меню под стрелкой
+        /// знает, какие варианты уже стоят кнопками и повторять их не нужно.
+        /// </summary>
+        private Core.Mods.LaunchBarView? launchBar;
+
+        /// <summary>Снимок вариантов запуска: за ним реестр и файловая система.</summary>
+        private readonly Core.Mods.LaunchOptionsCache launchOptionsCache = new();
+
         private ActionMode actionMode = ActionMode.Checking;
         private bool hasUpdateError = false;
 
@@ -228,7 +248,12 @@ namespace ChillHub.Pages {
             this.downloadQueue = new Core.Game.DownloadQueue(
                 gid => this.games.FirstOrDefault(g => string.Equals(g.GameId, gid, StringComparison.OrdinalIgnoreCase)),
                 () => this.BaseApi);
-            this.QueueDock.ItemsSource = this.queueDockItems;
+            this.QueueDock.ItemsSource = this.queueDockVisibleItems;
+
+            // Сколько строк очереди влезает, зависит от высоты окна: на низком остаётся
+            // только качающаяся. Пересчитываем на каждое изменение размера — иначе окно,
+            // растянутое мышью, продолжало бы показывать одну строку из четырёх.
+            this.SizeChanged += (s, e) => this.SyncQueueDockRows();
             this.downloadQueue.ItemAdded += this.OnQueueItemChanged;
             this.downloadQueue.ItemProgress += this.OnQueueItemChanged;
             this.downloadQueue.ItemCompleted += this.OnQueueItemCompleted;
@@ -573,7 +598,6 @@ namespace ChillHub.Pages {
 
                         Interlocked.Increment(ref processed);
                         await this.DispatcherInvokeAsync(() => {
-                            this.GameList.Items.Refresh();
                             this.UpdateActionButtonState();
                             this.StatusText.Text = $"Проверка игр: {processed}/{total}";
                         });
@@ -595,9 +619,9 @@ namespace ChillHub.Pages {
                             try {
                                 // Бейдж проверенной игры обновляем сразу, чтобы статусы появлялись по мере готовности
                                 await this.DispatcherInvokeAsync(() => {
-                                    this.GameList.Items.Refresh();
-
-                                    // Если это выбранная игра — кнопка действия должна разблокироваться немедленно
+                                    // Строка списка перерисуется сама: статусы игры —
+                                    // свойства с уведомлением. Если это выбранная игра —
+                                    // кнопка действия должна разблокироваться немедленно.
                                     if (string.Equals(this.GetSelectedGameId(), g.GameId, StringComparison.OrdinalIgnoreCase)) {
                                         this.UpdateActionButtonState();
                                     }
@@ -632,17 +656,24 @@ namespace ChillHub.Pages {
                     await this.DispatcherInvokeAsync(() => selectedId = this.GetSelectedGameId());
 
                     // Порядок из ответа API сохраняем, установленные держим сверху
-                    this.games = this.catalog.Sort(this.games);
-                    await this.DispatcherInvokeAsync(() => {
-                        this.SetGamesSource();
-                        this.GameList.Items.Refresh();
-                        if (!string.IsNullOrWhiteSpace(selectedId)) {
-                            var idx = GameCatalog.IndexOf(this.games, selectedId);
-                            if (idx >= 0) {
-                                this.GameList.SelectedItem = this.games[idx];
+                    var sorted = this.catalog.Sort(this.games);
+                    var reordered = !GameCatalog.SameOrder(this.games, sorted);
+                    this.games = sorted;
+
+                    // Проверка статусов почти всегда оставляет порядок прежним, и вот
+                    // тогда список трогать нельзя вовсе: смена источника пересоздаёт все
+                    // строки и перезагружает значки — то самое мерцание после запуска.
+                    if (reordered) {
+                        await this.DispatcherInvokeAsync(() => {
+                            this.SetGamesSource();
+                            if (!string.IsNullOrWhiteSpace(selectedId)) {
+                                var idx = GameCatalog.IndexOf(this.games, selectedId);
+                                if (idx >= 0) {
+                                    this.GameList.SelectedItem = this.games[idx];
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
                 }
                 catch (Exception ex) {
                     // Пересортировка — косметика: статусы уже проверены и показаны
@@ -787,11 +818,7 @@ namespace ChillHub.Pages {
 
         private async Task LoadBuildsAndGameNewsAsync(string gameId, CancellationToken token = default) {
             try {
-                // Очистим новости игры сразу, чтобы не мигали новости другой игры
-                this.GameNewsList.ItemsSource = Array.Empty<NewsItem>();
-                this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Visible;
-                this.GameNewsList.Visibility = System.Windows.Visibility.Collapsed;
-                this.GameNewsEmptyState.Visibility = System.Windows.Visibility.Collapsed;
+                this.BeginGameNewsLoading();
 
                 // Сборки. Ни сборок, ни новостей у игры на сервере может не быть —
                 // это пустой раздел, а не сбой связи (HomeFeed.GetOptionalAsync).
@@ -811,8 +838,6 @@ namespace ChillHub.Pages {
                 token.ThrowIfCancellationRequested();
                 var localTrimmed = GameStatus.ApplyLocalVersion(game, localVer);
                 Core.Logging.Logger.Info($"LoadBuildsAndGameNewsAsync gid={gameId} local='{localTrimmed}'");
-
-                this.GameList.Items.Refresh();
 
                 // Новости игры
                 var gameNewsUrl = HomeFeed.GameNewsUrl(this.BaseApi, gameId);
@@ -840,6 +865,27 @@ namespace ChillHub.Pages {
                 this.ShowGameNews(Array.Empty<NewsItem>());
 
                 // Обновим заголовок до дефолтного/актуального
+            }
+        }
+
+        /// <summary>
+        /// Ставит ленту новостей в состояние «гружусь»: старые новости убираем сразу.
+        /// <para>
+        /// Зовётся дважды — по клику в списке и в самой загрузке. Клик первым: между
+        /// ним и запросом стоит очередь на загрузку сведений, и во время закачки эта
+        /// пауза тянется секундами. Всё это время под названием новой игры висели
+        /// новости прошлой.
+        /// </para>
+        /// </summary>
+        private void BeginGameNewsLoading() {
+            try {
+                this.GameNewsList.ItemsSource = Array.Empty<NewsItem>();
+                this.GameNewsSkeleton.Visibility = Visibility.Visible;
+                this.GameNewsList.Visibility = Visibility.Collapsed;
+                this.GameNewsEmptyState.Visibility = Visibility.Collapsed;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"BeginGameNewsLoading: {ex.Message}");
             }
         }
 
@@ -938,6 +984,15 @@ namespace ChillHub.Pages {
         private async void GameCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) {
             var gid = this.GetSelectedGameId();
             this.UpdateDiskFreeText(gid);
+
+            // Витрина перерисовывается ПЕРЕД сетью, а не после неё. Раньше название,
+            // бейдж и кнопки ставились в самом конце загрузки сведений об игре, и во
+            // время закачки — когда канал занят, а запросы идут секундами — клик по
+            // соседней игре выделял строку, но правая половина экрана оставалась от
+            // прошлой. Выглядело это как «нажми ещё раз».
+            this.ResetUpdateErrorIfGameChanged(gid);
+            this.UpdateActionButtonState();
+            this.BeginGameNewsLoading();
             var cts = new CancellationTokenSource();
             var previous = Interlocked.Exchange(ref this.selectionCts, cts);
             try {
@@ -1016,8 +1071,6 @@ namespace ChillHub.Pages {
                 var localVer = await Task.Run(() => ReadLocalVersion(gid), token);
                 token.ThrowIfCancellationRequested();
                 GameStatus.ApplyLocalVersion(g, localVer);
-
-                this.GameList.Items.Refresh();
 
                 // Обновим заголовок новостей игры под выбранную игру
 
@@ -1255,12 +1308,22 @@ namespace ChillHub.Pages {
             this.verified.Reset();
             this.ClearErrorDetails();
             try {
-                this.GamesSkeleton.Visibility = Visibility.Visible;
-                this.GameList.Visibility = Visibility.Collapsed;
+                // Скелет — только когда показывать нечего. Список, который уже на экране,
+                // не прячем: обновление занимает секунды, и всё это время экран стоял
+                // пустым, хотя данные на нём были верные.
+                var firstFill = this.games == null || this.games.Count == 0;
+                if (firstFill) {
+                    this.GamesSkeleton.Visibility = Visibility.Visible;
+                    this.GameList.Visibility = Visibility.Collapsed;
+                }
 
                 var gamesUrl = HomeFeed.GamesUrl(this.BaseApi);
                 var gamesResp = await this.http.GetFromJsonAsync<GamesResponse>(gamesUrl);
-                this.games = gamesResp?.Items ?? new List<GameInfo>();
+
+                // Вливаем ответ в уже показанные игры, а не подменяем их новыми объектами:
+                // для WPF новый объект — это новая строка со всеми её значками, и список
+                // дёргался целиком даже тогда, когда сервер не сказал ничего нового.
+                this.games = GameCatalog.Merge(this.games, gamesResp?.Items);
                 this.HideServerUnavailableState();
                 this.NormalizeGameIconsAndLocalState(this.games);
 
@@ -1269,18 +1332,28 @@ namespace ChillHub.Pages {
                 // и без сброса «Обновить список игр» не менял бы обложки, даже если они
                 // реально сменились.
                 Core.Home.ImageLoader.InvalidateAll();
+                this.ReloadGameIcons();
 
                 // Сортировка: установленные сначала, затем порядок, полученный от API
                 this.catalog.RememberApiOrder(this.games);
-                this.games = this.catalog.Sort(this.games);
-                this.SetGamesSource();
+                var sorted = this.catalog.Sort(this.games);
 
-                // Восстановим выбранную игру, если она осталась в списке
-                if (!string.IsNullOrWhiteSpace(prevSelectedId)) {
-                    var idxSel = GameCatalog.IndexOfIgnoreCase(this.games, prevSelectedId);
-                    if (idxSel >= 0) {
-                        this.GameList.SelectedItem = this.games[idxSel];
+                // Порядок не изменился — источник не трогаем: его подмена пересоздаёт
+                // строки, а вместе с ними сбрасывает выделение и грузит значки заново.
+                if (!GameCatalog.SameOrder(this.games, sorted)) {
+                    this.games = sorted;
+                    this.SetGamesSource();
+
+                    // Восстановим выбранную игру, если она осталась в списке
+                    if (!string.IsNullOrWhiteSpace(prevSelectedId)) {
+                        var idxSel = GameCatalog.IndexOfIgnoreCase(this.games, prevSelectedId);
+                        if (idxSel >= 0) {
+                            this.GameList.SelectedItem = this.games[idxSel];
+                        }
                     }
+                }
+                else {
+                    this.games = sorted;
                 }
             }
             catch (Exception ex) {
@@ -1431,7 +1504,7 @@ namespace ChillHub.Pages {
                 this.ActionBtn.Content = look.Content;
                 this.ActionBtn.IsEnabled = look.IsEnabled;
                 this.ApplyActionButtonStyle(look.StyleKey);
-                this.SyncLaunchMenuButton(mode);
+                this.SyncLaunchBar(mode);
             }
             catch (Exception ex) {
                 // Кнопка действия — центральный элемент экрана: не даём сбою оформления уронить страницу
@@ -1440,32 +1513,132 @@ namespace ChillHub.Pages {
         }
 
         /// <summary>
-        /// Показывает или прячет стрелку выбора варианта запуска.
+        /// Пересобирает строку действий витрины: «Играть» или две кнопки запуска.
         /// <para>
-        /// Только у игры с модами и только в режиме «Играть»: у остальных выбирать
-        /// нечего, а на «Обновить» и «Установить» стрелка обещала бы выбор, которого
-        /// в этот момент нет.
+        /// Кнопки появляются только у игры с модами и только в режиме «Играть»: пока
+        /// игра качается, обновляется или проверяется, запускать нечего, а обещать
+        /// выбор, которого в этот момент нет, — врать.
         /// </para>
         /// </summary>
         /// <param name="mode">Текущий режим кнопки действия.</param>
-        private void SyncLaunchMenuButton(ActionMode mode) {
+        private void SyncLaunchBar(ActionMode mode) {
             try {
                 var game = this.GetSelectedGame();
-                var view = Core.Mods.LaunchPlan.MenuButton(
-                    game?.Mods, mode == ActionMode.Play, Core.Mods.LaunchChoice.Remembered(game?.GameId));
+                var playMode = mode == ActionMode.Play;
 
-                this.LaunchMenuBtn.Visibility = view.Visible ? Visibility.Visible : Visibility.Collapsed;
-                this.ActionBtn.ToolTip = view.Visible ? view.Tooltip : null;
+                // Копия из Steam живёт своей жизнью: моды ставятся в чужую папку, и
+                // ждать ради них закачки сборки с сервера незачем. Не предлагаем её
+                // только там, где игре сейчас не до запуска: идёт закачка, удаление,
+                // проверка или технические работы.
+                var steamAllowed = mode is ActionMode.Install or ActionMode.Update or ActionMode.Retry;
+                var options = (playMode || steamAllowed) && game?.Mods != null
+                    ? this.CachedLaunchOptions(game)
+                    : null;
+
+                var view = Core.Mods.LaunchButtons.Compute(
+                    game?.Mods, playMode, steamAllowed, options, Core.Mods.LaunchChoice.Remembered(game?.GameId));
+
+                this.launchBar = view;
+                this.ActionBtn.Visibility = view.ActionVisible ? Visibility.Visible : Visibility.Collapsed;
+                this.ApplyLaunchButton(this.LaunchBtn1, this.LaunchBtn1Title, this.LaunchBtn1Note, view, 0);
+                this.ApplyLaunchButton(this.LaunchBtn2, this.LaunchBtn2Title, this.LaunchBtn2Note, view, 1);
+                this.LaunchMenuBtn.Visibility = view.MenuVisible ? Visibility.Visible : Visibility.Collapsed;
+                this.LaunchMenuBtn.ToolTip = view.MenuVisible ? view.MenuTooltip : null;
+
+                // Подсказка «что запустится» нужна только той «Играть», которая
+                // открывает меню: у кнопок запуска ответ написан прямо на них, а
+                // «Установить» и «Обновить» и так называют своё действие.
+                this.ActionBtn.ToolTip = playMode && view.ActionVisible && view.MenuVisible
+                    ? "Выбрать, что запускать"
+                    : null;
             }
             catch (Exception ex) {
-                Core.Logging.Logger.Warn($"SyncLaunchMenuButton: {ex.Message}");
+                Core.Logging.Logger.Warn($"SyncLaunchBar: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Выставляет одну кнопку запуска по счёту или прячет её, если варианта нет.
+        /// </summary>
+        /// <param name="button">Сама кнопка.</param>
+        /// <param name="title">Крупная строка.</param>
+        /// <param name="note">Мелкая строка.</param>
+        /// <param name="view">Посчитанная строка действий.</param>
+        /// <param name="index">Место кнопки в строке.</param>
+        private void ApplyLaunchButton(
+            Button button, TextBlock title, TextBlock note, Core.Mods.LaunchBarView view, int index) {
+            if (index >= view.Buttons.Count) {
+                button.Visibility = Visibility.Collapsed;
+                button.Tag = null;
+                return;
+            }
+
+            var model = view.Buttons[index];
+            title.Text = model.Title;
+            note.Text = model.Subtitle;
+            button.ToolTip = model.Tooltip;
+            button.Tag = model.Target;
+            button.Visibility = Visibility.Visible;
+
+            if (this.TryFindResource(model.StyleKey) is Style style) {
+                button.Style = style;
+            }
+        }
+
+        /// <summary>
+        /// Варианты запуска для строки действий — со снимком на секунду.
+        /// <para>
+        /// Метод дёргается на каждое событие очереди и проверки, а за ним стоят реестр
+        /// и файловая система. Щелчок по кнопке варианты всё равно пересчитывает, так
+        /// что устареть снимку негде.
+        /// </para>
+        /// </summary>
+        /// <param name="game">Выбранная игра.</param>
+        /// <returns>Варианты запуска.</returns>
+        private IReadOnlyList<Core.Mods.LaunchOption> CachedLaunchOptions(GameInfo game) {
+            if (this.launchOptionsCache.Get(game) is { } cached) {
+                return cached;
+            }
+
+            var options = this.LaunchOptionsFor(game, logSteam: false);
+            this.launchOptionsCache.Put(game, options);
+            return options;
+        }
+
+        /// <summary>Забывает снимок вариантов: состояние копий только что менялось.</summary>
+        private void InvalidateLaunchOptions() => this.launchOptionsCache.Invalidate();
+
+        /// <summary>Запускает вариант, вынесенный кнопкой на витрину.</summary>
+        /// <param name="sender">Нажатая кнопка.</param>
+        /// <param name="e">Аргументы события.</param>
+        private void LaunchBtn_Click(object sender, RoutedEventArgs e) {
+            if (sender is not Button { Tag: Core.Mods.LaunchTarget target }) {
+                return;
+            }
+
+            var game = this.GetSelectedGame();
+            if (game?.Mods == null) {
+                return;
+            }
+
+            // Варианты пересчитываются заново: между отрисовкой кнопки и щелчком игру
+            // могли удалить из Steam, а запустить не то, что написано на кнопке, —
+            // худший из возможных исходов.
+            this.InvalidateLaunchOptions();
+            var chosen = Core.Mods.LaunchButtons.Chosen(this.LaunchOptionsFor(game, logSteam: true), target);
+            if (chosen.Option == null) {
+                this.StatusText.Text = chosen.Message;
+                this.SyncLaunchBar(this.actionMode);
+                return;
+            }
+
+            this.StartLaunchOption(game, chosen.Option);
         }
 
         private void LaunchMenuBtn_Click(object sender, RoutedEventArgs e) {
             var game = this.GetSelectedGame();
             if (game?.Mods is not null) {
-                this.ShowModsLaunchMenu(game);
+                this.ShowModsLaunchMenu(game, onlyHidden: true);
             }
         }
 
@@ -1852,6 +2025,7 @@ namespace ChillHub.Pages {
         /// </summary>
         private void SyncQueuePanelVisibility() {
             var count = this.queueDockItems.Count;
+            this.SyncQueueDockRows();
             this.QueuePanel.Visibility = count > 0 ? Visibility.Visible : Visibility.Collapsed;
             this.IdleStatusPanel.Visibility = count > 0 ? Visibility.Collapsed : Visibility.Visible;
             // Заголовок нужен, только когда позиций несколько: над единственной карточкой
@@ -1865,6 +2039,36 @@ namespace ChillHub.Pages {
             }
 
             this.SyncBottomBarVisibility();
+        }
+
+        /// <summary>
+        /// Приводит видимые строки дока в соответствие с очередью и высотой окна. Сколько
+        /// строк показать и как поправить список — в Core.UI.QueueDockLayout, здесь остаётся
+        /// только разметка.
+        /// </summary>
+        private void SyncQueueDockRows() {
+            try {
+                var view = Core.UI.QueueDockLayout.Compute(this.queueDockItems.Count, this.ActualHeight, this.queueDockExpanded);
+                Core.UI.QueueDockLayout.ApplyVisible(this.queueDockItems, this.queueDockVisibleItems, view.VisibleRows);
+
+                this.QueueMoreBtn.Content = view.ToggleText;
+                this.QueueMoreBtn.Visibility = view.ToggleText.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+                // Очередь укоротилась до размеров свёрнутого дока — раскрытым его больше
+                // держать нечем: иначе следующая закачка появилась бы сразу раскрытой.
+                if (view.ToggleText.Length == 0) {
+                    this.queueDockExpanded = false;
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"SyncQueueDockRows: {ex.Message}");
+            }
+        }
+
+        /// <summary>«Показать ещё N» / «Свернуть очередь» под доком.</summary>
+        private void QueueMoreBtn_Click(object sender, RoutedEventArgs e) {
+            this.queueDockExpanded = !this.queueDockExpanded;
+            this.SyncQueueDockRows();
         }
 
         /// <summary>
@@ -2067,13 +2271,29 @@ namespace ChillHub.Pages {
         /// </para>
         /// </summary>
         /// <param name="game">Выбранная игра.</param>
-        private void ShowModsLaunchMenu(GameInfo game) {
+        /// <param name="onlyHidden">
+        /// Показать только то, чего нет кнопками на витрине. Стрелка на то и стрелка,
+        /// что под ней лежит остальное: повторять в ней «Steam · с модами», когда он
+        /// стоит кнопкой в сантиметре левее, значит спрашивать дважды об одном.
+        /// </param>
+        private void ShowModsLaunchMenu(GameInfo game, bool onlyHidden = false) {
             try {
+                this.InvalidateLaunchOptions();
                 var options = this.LaunchOptionsFor(game, logSteam: true);
-                var menu = new ContextMenu { PlacementTarget = this.ActionBtn, Placement = PlacementMode.Top };
+                var shown = onlyHidden
+                    ? Core.Mods.LaunchButtons.MenuOptions(options, this.launchBar?.Buttons)
+                    : options;
+
+                // Меню цепляется к тому, что сейчас на экране: «Играть» может быть
+                // спрятана кнопками запуска, а всплывашка у невидимой кнопки уезжает
+                // в угол окна.
+                var anchor = onlyHidden || this.ActionBtn.Visibility != Visibility.Visible
+                    ? (FrameworkElement)this.LaunchMenuBtn
+                    : this.ActionBtn;
+                var menu = new ContextMenu { PlacementTarget = anchor, Placement = PlacementMode.Top };
 
                 var remembered = Core.Mods.LaunchChoice.Remembered(game.GameId);
-                foreach (var option in options) {
+                foreach (var option in shown) {
                     var item = new MenuItem {
                         Header = option.MenuText,
                         IsEnabled = option.Available,
@@ -2182,7 +2402,10 @@ namespace ChillHub.Pages {
                     Toast = text => this.ShowToast(text),
                     Confirm = Core.Home.HomeDialogs.AskYesNo,
                     Enqueue = gid => this.downloadQueue.Enqueue(gid),
-                    RefreshChoice = () => this.SyncLaunchMenuButton(this.actionMode),
+                    RefreshChoice = () => {
+                        this.InvalidateLaunchOptions();
+                        this.SyncLaunchBar(this.actionMode);
+                    },
                     InstallMods = (g, title, dir) => this.InstallModsToSteamAsync(g, title, dir),
                     Launch = this.LaunchNow,
                 }) {
@@ -2236,6 +2459,29 @@ namespace ChillHub.Pages {
         }
 
         // Обработчики остаются здесь: на их имена ссылается XAML. Вся логика — в Core/Home/ImageLoader.
+
+        /// <summary>
+        /// Перезагружает значки уже показанных строк списка.
+        /// <para>
+        /// Значок грузится обработчиком <c>Loaded</c>, то есть в момент, когда строку
+        /// создают. Раньше строки пересоздавались на каждом обновлении списка — заодно
+        /// перечитывались и значки. Теперь строки живут, и сброшенный кеш обложек сам по
+        /// себе ничего бы не изменил: «Обновить список игр» перестал бы обновлять
+        /// картинки, ради которых кеш и сбрасывают.
+        /// </para>
+        /// </summary>
+        private void ReloadGameIcons() {
+            try {
+                foreach (var img in Core.UI.VisualTreeSearch.Descendants<Image>(this.GameList)) {
+                    Core.Home.ImageLoader.AttachAndLoad(img, this.BaseApi);
+                }
+            }
+            catch (Exception ex) {
+                // Картинки — украшение: не обновились, значит останутся прежними.
+                Core.Logging.Logger.Warn($"ReloadGameIcons: {ex.Message}");
+            }
+        }
+
         private void CoverImg_Loaded(object sender, RoutedEventArgs e) {
             if (sender is not Image img) {
                 return;
@@ -2334,6 +2580,10 @@ namespace ChillHub.Pages {
                 this.UpdateProgress.Value = 0;
                 this.SpeedEtaText.Text = string.Empty;
                 this.FilesSizeText.Text = string.Empty;
+
+                // Модпак только что лёг в чужую папку Steam: снимок вариантов, снятый до
+                // установки, всё ещё утверждает «установить моды».
+                this.InvalidateLaunchOptions();
                 this.UpdateActionButtonState();
             }
         }
@@ -2449,7 +2699,6 @@ namespace ChillHub.Pages {
             try {
                 var snapshot = this.games?.ToList() ?? new List<GameInfo>();
                 await Task.Run(() => this.NormalizeGameIconsAndLocalState(snapshot));
-                this.GameList.Items.Refresh();
                 this.UpdateActionButtonState();
 
                 if (gamesPathChanged && this.allowFileChecks) {
@@ -2473,10 +2722,9 @@ namespace ChillHub.Pages {
 
         private void MarkInstalled(string gameId, string? version) {
             try {
+                // Строка списка перерисуется сама: «установлена» — свойство с
+                // уведомлением. Пересортировку сделает фоновой шаг.
                 GameStatus.MarkInstalled(this.games.FirstOrDefault(x => x.GameId == gameId), version);
-
-                // Лёгкое обновление UI без пересортировки и смены ItemsSource — это сделает фоновой шаг
-                this.GameList.Items.Refresh();
             }
             catch (Exception ex) {
                 // Версия на диске уже записана; здесь только обновление отображения
@@ -2491,7 +2739,6 @@ namespace ChillHub.Pages {
 
                 this.games = this.catalog.Sort(this.games);
                 this.GameList.ItemsSource = this.games;
-                this.GameList.Items.Refresh();
                 if (!string.IsNullOrWhiteSpace(selectedId)) {
                     var idx = GameCatalog.IndexOf(this.games, selectedId);
                     if (idx >= 0) {

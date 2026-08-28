@@ -151,7 +151,7 @@ namespace ChillHub.Tests {
 
             Assert.Equal("Steam · с модами (Lethal Reloaded 2.2.12)", ModsLaunch.TitleOf(LaunchTarget.SteamModded, mods));
             Assert.Equal("Steam · без модов", ModsLaunch.TitleOf(LaunchTarget.SteamVanilla, mods));
-            Assert.Equal("Сборка Chill Hub · без модов", ModsLaunch.TitleOf(LaunchTarget.LocalVanilla, null));
+            Assert.Equal("Пиратка · без модов", ModsLaunch.TitleOf(LaunchTarget.LocalVanilla, null));
         }
     }
 }

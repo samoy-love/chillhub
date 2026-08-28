@@ -137,7 +137,7 @@ namespace ChillHub.Tests {
 
             // Ждущая позиция — нейтральная кнопка: красная «Отмена» обещает остановить
             // процесс, а процесса ещё нет.
-            AssertLook(ActionMode.Dequeue, "Убрать из очереди", true, "Style.ActionButton.Checking");
+            AssertLook(ActionMode.Dequeue, "Убрать из очереди", true, "Style.ActionButton.Dequeue");
             AssertLook(ActionMode.Deleting, "Удаление…", false, "Style.ActionButton.Checking");
             AssertLook(ActionMode.Checking, "Проверка…", false, "Style.ActionButton.Checking");
             AssertLook(ActionMode.Maintenance, "Технические работы", false, "Style.ActionButton.Checking");

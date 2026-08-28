@@ -3,6 +3,7 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:sys="clr-namespace:System;assembly=mscorlib"
       xmlns:pr="clr-namespace:System.Windows.Controls.Primitives;assembly=PresentationFramework"
+      xmlns:ui="clr-namespace:ChillHub.Core.UI"
       Title="Главная"
       Background="{DynamicResource Brush.Background}">
   <Page.Resources>
@@ -325,6 +326,77 @@
       </Setter>
     </Style>
 
+    <!-- Кнопки запуска на витрине: «Steam · с модами» и «Пиратка · с модами».
+         Две строки, а не одна: крупная говорит, ЧЬЯ копия запустится, мелкая — что
+         произойдёт по нажатию («с модами», «установить моды»). Одной строкой это не
+         помещалось, а подсказка по наведению — не то место, где игрок узнаёт, что
+         делает кнопка. -->
+    <Style x:Key="Style.LaunchButton.Base" TargetType="Button">
+      <Setter Property="Height" Value="46"/>
+      <Setter Property="MinWidth" Value="168"/>
+      <Setter Property="Padding" Value="16,0"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <!-- Вариант, которым играли в прошлый раз: тот же акцент, что у «Играть». -->
+    <Style x:Key="Style.LaunchButton.Accent" TargetType="Button" BasedOn="{StaticResource Style.LaunchButton.Base}">
+      <Setter Property="Foreground" Value="{DynamicResource Btn.Play.Fg}"/>
+      <Setter Property="Background" Value="{DynamicResource Btn.Play.Bg}"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="bd" CornerRadius="6" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                    Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Play.Bg.Hover}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Play.Bg.Disabled}"/>
+                <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Второй вариант: та же кнопка, но «стеклянная». Два залитых акцентом
+         прямоугольника рядом спорили бы друг с другом, и ни один не читался бы как
+         главный. Наведение поднимает фон и красит рамку акцентом — заливка целиком
+         сделала бы светлый текст нечитаемым. -->
+    <Style x:Key="Style.LaunchButton.Ghost" TargetType="Button" BasedOn="{StaticResource Style.LaunchButton.Base}">
+      <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+      <Setter Property="Background" Value="#66101017"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="bd" CornerRadius="6" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                    Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Accent}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.5"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <Style x:Key="Style.ActionButton.Retry" TargetType="Button" BasedOn="{StaticResource Style.Button.Dim.Base}">
       <Setter Property="Foreground" Value="{DynamicResource Btn.Retry.Fg}"/>
       <Setter Property="Background" Value="{DynamicResource Btn.Retry.Bg}"/>
@@ -396,6 +468,36 @@
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Check.Bg.Disabled}"/>
                 <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
                 <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- «Убрать из очереди»: единственное состояние, где в главном слоте стоит не главное
+         действие. Отдельный стиль, а не серый «Проверка…»: тот набран вторичным цветом и
+         рядом с «Об игре» проигрывал ей по весу — соседняя кнопка выглядела главной,
+         хотя ведёт всего лишь на справочный экран. -->
+    <Style x:Key="Style.ActionButton.Dequeue" TargetType="Button" BasedOn="{StaticResource Style.Button.Dim.Base}">
+      <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+      <Setter Property="Background" Value="{DynamicResource Brush.Surface2}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Accent}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Btn.Check.Bg.Disabled}"/>
+                <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -714,12 +816,20 @@
                             <MultiBinding Converter="{StaticResource GameRowStatusTextConv}" Mode="OneWay">
                               <Binding/>
                               <Binding Path="QueueLabel"/>
+                              <!-- Конвертеру эти значения не нужны: они здесь, чтобы подпись
+                                   пересчиталась, когда игру установили или ей потребовалось
+                                   обновление. Без них строка молчала до пересборки всего
+                                   списка, а пересборка мигала значками. -->
+                              <Binding Path="IsInstalled"/>
+                              <Binding Path="NeedsUpdate"/>
                             </MultiBinding>
                           </TextBlock.Text>
                           <TextBlock.Foreground>
                             <MultiBinding Converter="{StaticResource GameRowStatusBrushConv}" Mode="OneWay">
                               <Binding/>
                               <Binding Path="QueueLabel"/>
+                              <Binding Path="IsInstalled"/>
+                              <Binding Path="NeedsUpdate"/>
                             </MultiBinding>
                           </TextBlock.Foreground>
                         </TextBlock>
@@ -871,25 +981,43 @@
                          TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
               <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                 <!-- ЕДИНСТВЕННАЯ кнопка действия в приложении. Раньше их было две — здесь и
-                     внизу окна — одинакового вида и с одинаковым текстом. -->
+                     внизу окна — одинакового вида и с одинаковым текстом. У игры с модами,
+                     готовой к запуску, её место занимают кнопки запуска ниже: «Играть» там
+                     не отвечала на вопрос, ЧТО именно запустится. -->
                 <Button x:Name="ActionBtn" Content="Играть" Click="ActionBtn_Click"
                         Style="{DynamicResource Style.ActionButton.Play}"
-                        Width="180" Height="42" VerticalAlignment="Center"/>
-                <!-- Стрелка выбора варианта запуска. Видна только у игры с модами: у
-                     остальных выбирать нечего, и пустая кнопка рядом с «Играть» только
-                     сбивала бы с толку. Сама «Играть» при этом запускает запомненный
-                     вариант — меню на каждый запуск брало по два клика и ничем не
-                     показывало, что оно вообще откроется. -->
+                        Width="180" Height="46" VerticalAlignment="Center"/>
+                <!-- Два способа играть с модами — своей копией из Steam и сборкой с сервера —
+                     вынесены кнопками. Выбор, спрятанный в меню, — не выбор: чем запустит
+                     «Играть», можно было узнать, только открыв стрелку. Кнопки нет, если её
+                     вариант сейчас недоступен: тогда он ждёт под стрелкой вместе с причиной. -->
+                <Button x:Name="LaunchBtn1" Click="LaunchBtn_Click" Visibility="Collapsed"
+                        Style="{DynamicResource Style.LaunchButton.Accent}">
+                  <StackPanel>
+                    <TextBlock x:Name="LaunchBtn1Title" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                    <TextBlock x:Name="LaunchBtn1Note" FontSize="11" Opacity="0.75" Margin="0,1,0,0" HorizontalAlignment="Center"/>
+                  </StackPanel>
+                </Button>
+                <Button x:Name="LaunchBtn2" Click="LaunchBtn_Click" Visibility="Collapsed" Margin="8,0,0,0"
+                        Style="{DynamicResource Style.LaunchButton.Ghost}">
+                  <StackPanel>
+                    <TextBlock x:Name="LaunchBtn2Title" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                    <TextBlock x:Name="LaunchBtn2Note" FontSize="11" Opacity="0.75" Margin="0,1,0,0" HorizontalAlignment="Center"/>
+                  </StackPanel>
+                </Button>
+                <!-- Стрелка с остальными вариантами: «без модов» и то, что сейчас
+                     недоступно. Видна только у игры с модами: у остальных выбирать нечего,
+                     и пустая кнопка рядом только сбивала бы с толку. -->
                 <Button x:Name="LaunchMenuBtn" Click="LaunchMenuBtn_Click"
-                        Style="{DynamicResource Style.ActionButton.Play}"
-                        Width="42" Height="42" Margin="6,0,0,0" VerticalAlignment="Center"
-                        Visibility="Collapsed" ToolTip="Выбрать, что запускать">
+                        Style="{DynamicResource Style.LaunchButton.Ghost}"
+                        Width="46" MinWidth="46" Padding="0" Margin="8,0,0,0"
+                        Visibility="Collapsed" ToolTip="Другие варианты запуска">
                   <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE70D;" FontSize="12"
                              VerticalAlignment="Center" HorizontalAlignment="Center"/>
                 </Button>
                 <Button x:Name="HeroInfoBtn" Click="GameDetails_Click"
                         Style="{DynamicResource Style.Button.HeroInfo}"
-                        Margin="8,0,0,0" VerticalAlignment="Center" ToolTip="Сведения, история изменений, папка игры">
+                        Height="46" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip="Сведения, история изменений, папка игры">
                   <!-- Подпись, а не одинокая ⓘ: кнопка ведёт на отдельный экран, и слово
                        говорит об этом, а значок в кружке читался как всплывающая подсказка. -->
                   <StackPanel Orientation="Horizontal">
@@ -956,9 +1084,9 @@
                самого списка, чтобы края лент совпали с витриной. -->
           <ListBox.ItemsPanel>
             <ItemsPanelTemplate>
-              <UniformGrid Columns="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=ListBox},
-                                             Converter={StaticResource NewsColumnsConv}}"
-                           VerticalAlignment="Top"/>
+              <ui:NewsFlowPanel Columns="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=ListBox},
+                                                  Converter={StaticResource NewsColumnsConv}}"
+                                VerticalAlignment="Top"/>
             </ItemsPanelTemplate>
           </ListBox.ItemsPanel>
           <ListBox.ItemContainerStyle>
@@ -1010,8 +1138,21 @@
                       </ContentControl.Style>
                     </ContentControl>
                     <!-- Removed skeleton placeholder for cover images per request -->
-                    <Image x:Name="CoverImg" Source="{Binding CoverUrl}" Tag="{Binding CoverUrl}" Stretch="Uniform" Height="108" HorizontalAlignment="Stretch"
-                           Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
+                    <!-- Обложка — рамка 16:9 фиксированного размера, картинка вписывается
+                         заполнением. Прежние Uniform + Height=108 отдавали размер обложки
+                         на откуп пропорциям картинки: широкая новость получала 168x95,
+                         квадратная — 108x108, и соседние карточки расходились и по высоте
+                         обложки, и по левому краю текста. -->
+                    <Border Width="168" Height="94" CornerRadius="{StaticResource Radius.S}"
+                            HorizontalAlignment="Left" VerticalAlignment="Top" ClipToBounds="True"
+                            Background="{DynamicResource Brush.Surface2}">
+                      <!-- Height дублирует высоту рамки не ради разметки, а ради раскодирования:
+                           ImageLoader берёт из него размер, под который распаковывать картинку
+                           (см. ApplyBitmap), и без него каждая обложка новости разворачивалась
+                           бы в память в полный рост. -->
+                      <Image x:Name="CoverImg" Source="{Binding CoverUrl}" Tag="{Binding CoverUrl}" Stretch="UniformToFill" Height="94"
+                             Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
+                    </Border>
                   </Grid>
                   <!-- Правая колонка: текст -->
                   <StackPanel Grid.Column="2">
@@ -1048,9 +1189,9 @@
                самого списка, чтобы края лент совпали с витриной. -->
           <ListBox.ItemsPanel>
             <ItemsPanelTemplate>
-              <UniformGrid Columns="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=ListBox},
-                                             Converter={StaticResource NewsColumnsConv}}"
-                           VerticalAlignment="Top"/>
+              <ui:NewsFlowPanel Columns="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=ListBox},
+                                                  Converter={StaticResource NewsColumnsConv}}"
+                                VerticalAlignment="Top"/>
             </ItemsPanelTemplate>
           </ListBox.ItemsPanel>
           <ListBox.ItemContainerStyle>
@@ -1101,9 +1242,22 @@
                         </Style>
                       </ContentControl.Style>
                     </ContentControl>
-                    <Border x:Name="ImgSkeleton" Style="{DynamicResource Style.Skeleton}" Height="88"/>
-                    <Image x:Name="CoverImg" Source="{Binding CoverUrl}" Tag="{Binding CoverUrl}" Stretch="Uniform" Height="108" HorizontalAlignment="Stretch"
-                           Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
+                    <Border x:Name="ImgSkeleton" Style="{DynamicResource Style.Skeleton}" Width="168" Height="94" HorizontalAlignment="Left" VerticalAlignment="Top"/>
+                    <!-- Обложка — рамка 16:9 фиксированного размера, картинка вписывается
+                         заполнением. Прежние Uniform + Height=108 отдавали размер обложки
+                         на откуп пропорциям картинки: широкая новость получала 168x95,
+                         квадратная — 108x108, и соседние карточки расходились и по высоте
+                         обложки, и по левому краю текста. -->
+                    <Border Width="168" Height="94" CornerRadius="{StaticResource Radius.S}"
+                            HorizontalAlignment="Left" VerticalAlignment="Top" ClipToBounds="True"
+                            Background="{DynamicResource Brush.Surface2}">
+                      <!-- Height дублирует высоту рамки не ради разметки, а ради раскодирования:
+                           ImageLoader берёт из него размер, под который распаковывать картинку
+                           (см. ApplyBitmap), и без него каждая обложка новости разворачивалась
+                           бы в память в полный рост. -->
+                      <Image x:Name="CoverImg" Source="{Binding CoverUrl}" Tag="{Binding CoverUrl}" Stretch="UniformToFill" Height="94"
+                             Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
+                    </Border>
                   </Grid>
                   <!-- Правая колонка: текст -->
                   <StackPanel Grid.Column="2">
@@ -1144,13 +1298,15 @@
           <StackPanel x:Name="QueuePanel" Visibility="Collapsed">
             <TextBlock x:Name="QueueSummaryText" Text="Очередь загрузок" FontWeight="SemiBold" FontSize="14"
                        Margin="0,0,0,6" Foreground="{DynamicResource Brush.Title}"/>
-            <!-- Потолок — доля высоты окна, дальше внутренний скролл. Фиксированные 180px
-                 на невысоком окне были четвертью экрана и вместе с витриной не оставляли
-                 места ленте новостей; на высоком — резали третью карточку пополам, хотя
-                 места под неё было вдоволь. -->
+            <!-- Высоту задаёт содержимое, а не доля окна: в доке ровно столько строк,
+                 сколько разрешил QueueDockLayout (см. SyncQueueDockRows), остальные ждут
+                 за строкой «Показать ещё N». Прежний потолок в 28% высоты окна на низком
+                 окне забирал четверть экрана ради двух с половиной строк со скроллом —
+                 и ленте новостей над ним оставалось полторы карточки, тоже со скроллом.
+                 Скролл остаётся только для раскрытой длинной очереди. -->
             <ItemsControl x:Name="QueueDock"
                           MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=Page},
-                                              Converter={StaticResource HeightShareConv}, ConverterParameter=0.28}">
+                                              Converter={StaticResource HeightShareConv}, ConverterParameter=0.45}">
               <ItemsControl.Template>
                 <ControlTemplate TargetType="ItemsControl">
                   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -1162,8 +1318,12 @@
                 <DataTemplate>
                   <!-- Ожидающая позиция — строка, а не карточка в полный рост: у неё нет ни
                        полосы, ни цифр, и три одинаковых по высоте карточки не влезали даже
-                       в окно по умолчанию — третья всегда была срезана. -->
-                  <Border Margin="0,0,0,6">
+                       в окно по умолчанию — третья всегда была срезана.
+                       MaxWidth — чтобы связанное осталось в одном взгляде: на широком окне
+                       карточка растягивалась на всю ширину, и крестик «снять с очереди»
+                       уезжал от названия своей игры на полтора метра. Подписи внутри уже
+                       сведены к левому краю по той же причине. -->
+                  <Border Margin="0,0,0,6" MaxWidth="1100" HorizontalAlignment="Left">
                     <Border.Style>
                       <Style TargetType="Border" BasedOn="{StaticResource Style.Card}">
                         <Setter Property="Padding" Value="12,10"/>
@@ -1281,6 +1441,12 @@
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
+            <!-- Раскрывашка: очередь длиннее, чем помещается в свёрнутый док. Кнопка-ссылка,
+                 а не скролл: скролл внутри дока не виден, пока в него не ткнуть, и очередь
+                 из четырёх позиций выглядела как очередь из двух с половиной. -->
+            <Button x:Name="QueueMoreBtn" Click="QueueMoreBtn_Click" Visibility="Collapsed"
+                    HorizontalAlignment="Left" Margin="0,2,0,0" Padding="0"
+                    Style="{DynamicResource Style.Button.Link}"/>
           </StackPanel>
 
           <!-- Покой: очередь пуста, показываем ход работы по выбранной игре. Строки не
