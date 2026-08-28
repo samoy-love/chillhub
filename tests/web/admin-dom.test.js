@@ -52,6 +52,9 @@ const SCRIPT_ORDER = [
   // mods-panel.js читает window.readNdjsonStream, а admin.js — window.createModsPanel.
   'ndjson.js',
   'mods-panel.js',
+  // Счётчик правок списка игр: admin.js читает из него countRegistryChanges и
+  // describeSaveButton, чтобы подписать кнопку «Сохранить».
+  'registry-diff.js',
   'admin.js',
 ];
 

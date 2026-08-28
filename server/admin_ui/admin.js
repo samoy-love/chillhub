@@ -1864,8 +1864,26 @@ async function manifestsUpload(){
 // выглядела опаснее зелёного «Сохранить», хотя предупреждения не давала.
 let __mgmDirty = false;
 
+// Снимок списка на момент загрузки с сервера. Всё, что «правки», считается
+// относительно него — иначе число не умеет возвращаться к нулю, когда
+// напечатанную букву стёрли обратно.
+let __mgmSnapshot = [];
+
 function mgmSetDirty(v){
-  __mgmDirty = !!v;
+  // false означает «мы только что синхронизировались с сервером»: пересняли
+  // список, и правок стало ноль по определению.
+  if(v === false){
+    try{ __mgmSnapshot = mgmCollectItems(); }catch(_){ __mgmSnapshot = []; }
+  }
+
+  let diff = { changed:0, added:0, removed:0, total: v ? 1 : 0 };
+  try{
+    if(typeof window.countRegistryChanges === 'function'){
+      diff = window.countRegistryChanges(__mgmSnapshot, mgmCollectItems());
+    }
+  }catch(_){ /* остаёмся с грубой оценкой выше */ }
+
+  __mgmDirty = diff.total > 0;
   const b = document.getElementById('mgm_dirty');
   if(b) b.style.display = __mgmDirty ? '' : 'none';
 
@@ -1876,11 +1894,14 @@ function mgmSetDirty(v){
   // сохранено» рядом отвечала на этот вопрос, но её надо было заметить.
   const save = document.getElementById('mgm_save');
   if(save){
-    save.disabled = !__mgmDirty;
-    save.textContent = __mgmDirty ? 'Сохранить' : 'Сохранено';
-    save.title = __mgmDirty
-      ? 'Записать список игр на сервер'
-      : 'Список игр совпадает с сохранённым — сохранять нечего';
+    // Подпись кнопки — не повод уронить вкладку: не загрузился модуль счёта —
+    // остаёмся с прежними двумя состояниями.
+    const look = (typeof window.describeSaveButton === 'function')
+      ? window.describeSaveButton(diff)
+      : { enabled: __mgmDirty, label: __mgmDirty ? 'Сохранить' : 'Сохранено', title: '' };
+    save.disabled = !look.enabled;
+    save.textContent = look.label;
+    save.title = look.title;
   }
 }
 
@@ -2078,9 +2099,15 @@ function mgmAddRow(){
   if(newRow) newRow.click();
 }
 
-async function mgmSave(){
+// mgmCollectItems читает скрытую таблицу в то, что уедет на сервер.
+//
+// Одна функция на сохранение и на счётчик правок намеренно: счётчик обещает
+// «столько игр уедет изменёнными», и считать он обязан ровно по тем полям и в
+// том же виде, в каком они отправляются. Две копии этого преобразования
+// разошлись бы на первой же правке, и кнопка начала бы врать.
+function mgmCollectItems(){
   const rows = Array.from(document.querySelectorAll('#mgm-table tbody tr'));
-  const items = rows.map((tr, idx)=>{
+  return rows.map((tr, idx)=>{
     const tds = tr.querySelectorAll('td');
     return {
       gameId: tds[0].querySelector('input').value.trim(),
@@ -2094,6 +2121,10 @@ async function mgmSave(){
       unpublished: tr.dataset.unpublished === '1',
     };
   }).filter(it=>it.gameId);
+}
+
+async function mgmSave(){
+  const items = mgmCollectItems();
   // basic validation
   const ids = new Set();
   for(const it of items){ if(!it.gameId){ notify('Пустой gameId'); return; } if(ids.has(it.gameId)){ notify('Дубликат gameId: '+it.gameId); return; } ids.add(it.gameId); }
