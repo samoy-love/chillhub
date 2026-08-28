@@ -29,6 +29,13 @@ namespace ChillHub.Core {
 
         public string LastGameId { get; set; } = string.Empty; // last launched game id
 
+        /// <summary>
+        /// Чем игрок в последний раз запускал игру с модами: идентификатор игры →
+        /// имя значения <c>LaunchTarget</c>. Вариантов запуска четыре, играют почти
+        /// всегда одним, и без памяти выбор стоил бы двух кликов каждый раз.
+        /// </summary>
+        public Dictionary<string, string> LaunchTargets { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
         // Автоотчёты об ошибках и обезличенная статистика ТУМБЛЕРА БОЛЬШЕ НЕ ИМЕЮТ
         // и работают всегда. Оба и так были включены по умолчанию, ни то ни другое
         // не передаёт ни имени пользователя, ни имени машины, ни путей целиком
