@@ -51,6 +51,11 @@ namespace ChillHub.Core.Home {
                     g.NeedsUpdate = g.IsInstalled && !string.IsNullOrWhiteSpace(g.LatestVersion) &&
                                      !string.Equals(g.InstalledVersion?.Trim(), g.LatestVersion?.Trim(), StringComparison.OrdinalIgnoreCase);
 
+                    // Модпак — вторая версия у той же игры, и обновляется он отдельно
+                    if (g.IsInstalled && ModsOutOfDate(g)) {
+                        g.NeedsUpdate = true;
+                    }
+
                     // Прерванное обновление: игра гарантированно требует восстановления (C2)
                     if (HasUnfinishedUpdate(g.GameId)) {
                         g.NeedsUpdate = true;
@@ -81,7 +86,35 @@ namespace ChillHub.Core.Home {
 
                 g.NeedsUpdate = !string.IsNullOrWhiteSpace(g.LatestVersion) &&
                                  !string.Equals(g.InstalledVersion?.Trim(), g.LatestVersion?.Trim(), StringComparison.OrdinalIgnoreCase);
+                if (ModsOutOfDate(g)) {
+                    g.NeedsUpdate = true;
+                }
             }
+        }
+
+        /// <summary>
+        /// Отличается ли модпак на диске от того, что сервер объявил активным.
+        /// <para>
+        /// У игры с модами ДВЕ версии: сборка игры и модпак. Раньше «нужно ли
+        /// обновление» считалось только по первой, и активация модпака в админке
+        /// не доходила до игрока вовсе: карточка так и показывала «Играть»,
+        /// потому что сама сборка игры не менялась.
+        /// </para>
+        /// <para>
+        /// Пустой маркер при объявленном модпаке — тоже расхождение: это первая
+        /// установка модов поверх уже стоящей игры.
+        /// </para>
+        /// </summary>
+        /// <param name="g">Игра из списка.</param>
+        /// <returns>True, если модпак нужно доставить или обновить.</returns>
+        internal static bool ModsOutOfDate(GameInfo? g) {
+            var wanted = g?.Mods is { HasLatest: true } mods ? (mods.Version ?? string.Empty).Trim() : string.Empty;
+            if (wanted.Length == 0) {
+                return false;
+            }
+
+            var installed = GameLocalState.ReadLocalModsVersion(g!.GameId).Trim();
+            return !string.Equals(installed, wanted, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>Отмечает игру удалённой.</summary>

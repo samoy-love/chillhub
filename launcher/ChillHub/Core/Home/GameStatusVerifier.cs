@@ -76,7 +76,11 @@ namespace ChillHub.Core.Home {
                 if (!hasLatest) {
                     // Нет эталона для сравнения — считаем не установленной, если нет локальных файлов; иначе установленной без статуса обновления
                     game.IsInstalled = hasLocalFiles;
-                    game.NeedsUpdate = false; // нет способа сравнить
+
+                    // Сборки игры на сервере нет, а модпак может быть: это игра,
+                    // которую игрок держит своей копией из Steam. Сравнить нечего —
+                    // кроме модпака, и вот его сравнить можно.
+                    game.NeedsUpdate = hasLocalFiles && GameStatus.ModsOutOfDate(game);
                     Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} latest=<none> hasLocalFiles={hasLocalFiles} -> IsInstalled={game.IsInstalled} NeedsUpdate={game.NeedsUpdate}");
 
                     // Отложим Refresh до завершения всех проверок, чтобы не трясти UI на каждую игру
@@ -110,6 +114,18 @@ namespace ChillHub.Core.Home {
                 else {
                     game.IsInstalled = true;
                     game.NeedsUpdate = true;
+                }
+
+                // У ИГРЫ С МОДАМИ ДВЕ ВЕРСИИ, И СРАВНИВАТЬ НАДО ОБЕ.
+                //
+                // План выше построен по манифесту СБОРКИ ИГРЫ. Активация модпака в
+                // админке её не трогает, поэтому план выходил пустым, статус —
+                // «свежая», и на карточке оставалось «Играть»: обновление до игрока
+                // не доезжало вовсе. Заметить его можно было только вручную, из
+                // «Об игре», и это ровно то, о чём пришла жалоба.
+                if (game.IsInstalled && GameStatus.ModsOutOfDate(game)) {
+                    game.NeedsUpdate = true;
+                    Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} модпак на диске отличается от активного на сервере — нужно обновление");
                 }
 
                 Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} result: IsInstalled={game.IsInstalled} NeedsUpdate={game.NeedsUpdate}");
