@@ -1084,9 +1084,15 @@ async function fbSelect(id){
   // Высоты в vh, а не 240px: на 1440 под этими блоками оставалось пол-экрана
   // пустоты, а сама диагностика читалась в щели на восемь строк.
   const sysBlock = hasSys ? '<pre class="bg-body-tertiary p-2 border rounded panel-scroll panel-scroll-sm">'+escapeHtml(JSON.stringify(sys,null,2))+'</pre>' : '';
-  const hasLogs = !!(it.attachLogs && it.logs);
-  const logsBlock = hasLogs ? '<pre class="bg-body-tertiary p-2 border rounded panel-scroll panel-scroll-md">'+escapeHtml(String(it.logs))+'</pre>' : '';
-  const debugBlock = (hasLogs || hasSys)
+  const logs = window.feedbackLogsView(it);
+  const logsBlock = logs.has
+    ? '<div class="d-flex align-items-center gap-2 mb-2">'
+      +  '<a class="btn btn-sm btn-outline-primary" download href="/admin/api/feedback/logs?id='+encodeURIComponent(it.id||'')+'">Скачать журнал</a>'
+      +  '<span class="small text-body-secondary">'+escapeHtml(logs.note)+'</span>'
+      +'</div>'
+      + '<pre class="bg-body-tertiary p-2 border rounded panel-scroll panel-scroll-md">'+escapeHtml(logs.text)+'</pre>'
+    : '';
+  const debugBlock = (logs.has || hasSys)
     ? '<details class="mt-3" open><summary>Дебаг-информация</summary>' + logsBlock + sysBlock + '</details>'
     : '';
   const isAuto = !!(sys && (sys.auto==='1' || String(sys.auto).toLowerCase()==='true'));

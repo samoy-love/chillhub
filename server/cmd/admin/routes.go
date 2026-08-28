@@ -85,6 +85,7 @@ func (s *server) apiRoutes() []route {
 		// Feedback inbox (the public submit endpoint is registered separately).
 		{path: "/admin/api/feedback/list", handler: f.List},
 		{path: "/admin/api/feedback/get", handler: f.Get},
+		{path: "/admin/api/feedback/logs", handler: f.Logs},
 		{path: "/admin/api/feedback/delete", handler: f.Delete},
 		{path: "/admin/api/feedback/toggleImportant", handler: f.ToggleImportant},
 		{path: "/admin/api/feedback/markRead", handler: f.MarkRead},
