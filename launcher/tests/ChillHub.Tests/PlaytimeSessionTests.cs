@@ -24,6 +24,10 @@ namespace ChillHub.Tests {
     /// </para>
     /// </summary>
     public class PlaytimeSessionTests : IDisposable {
+        /// <summary>Настройки Doorstop с включёнными модами — как их кладёт установка модпака.</summary>
+        private static readonly string Ini = string.Join(
+            "\n", "[General]", "enabled=true", string.Empty);
+
         private static readonly TimeSpan WaitLimit = TimeSpan.FromSeconds(20);
 
         private readonly string dir = Path.Combine(Path.GetTempPath(), "chillhub-playtime-" + Guid.NewGuid().ToString("N"));
@@ -158,6 +162,31 @@ namespace ChillHub.Tests {
 
             PlaytimeStore.FinishForTests(game.Id, DateTime.UtcNow.AddMinutes(5));
             Assert.InRange(PlaytimeStore.Get("repo").TotalSeconds, 250, 350);
+        }
+
+        /// <summary>
+        /// Лаунчер умер раньше игры: незакрытую сессию подбирает его следующий запуск —
+        /// время дописывается, а папка возвращается к ванили. Без этого моды остались бы
+        /// включёнными навсегда, и Play в Steam поднимал бы игру с ними.
+        /// </summary>
+        [Fact]
+        public void СледующийЗапускЗакрываетСессиюУмершегоЛаунчера() {
+            var gameDir = Path.Combine(this.dir, "steamapps", "ORPHAN");
+            Directory.CreateDirectory(gameDir);
+            File.WriteAllText(Path.Combine(gameDir, "doorstop_config.ini"), Ini);
+
+            // Процесс с таким номером в системе не живёт — игра закрылась, пока лаунчера не было.
+            var pending = "{\"424242\":{\"GameId\":\"repo\",\"ProcessId\":424242,\"ProcessStartTimeTicks\":123," +
+                          "\"SessionStartUtc\":\"" + DateTime.UtcNow.AddMinutes(-45).ToString("O") + "\"," +
+                          "\"ModdedDir\":" + System.Text.Json.JsonSerializer.Serialize(gameDir) + "}}";
+            File.WriteAllText(Path.Combine(this.dir, "playtime.sessions.json"), pending);
+
+            PlaytimeStore.ResetForTests();
+            PlaytimeStore.EnsureStarted();
+
+            Assert.False(DoorstopConfig.ReadEnabled(gameDir));
+            Assert.InRange(PlaytimeStore.Get("repo").TotalSeconds, 2600, 2800);
+            Assert.Equal("{}", File.ReadAllText(Path.Combine(this.dir, "playtime.sessions.json")).Trim());
         }
 
         /// <summary>Закрывать нечего — второй вызов ничего не портит и не удваивает время.</summary>
