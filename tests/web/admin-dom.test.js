@@ -1277,3 +1277,150 @@ test('параллельность выше потолка соединений 
   slider.dispatchEvent(new window.Event('input'));
   assert.strictEqual(document.getElementById('man_conc_note').textContent, '');
 });
+
+test('uploadNextHopProtocol: по HTTP/2 потолок параллельности выше, чем по HTTP/1.1', (t) => {
+  const { window, document } = loadAdminPage(t);
+  // jsdom не ведёт Resource Timing, поэтому протокол подставляем сами — это
+  // ровно то, что отдаёт браузер на настоящей странице админки.
+  window.performance.getEntriesByType = () => ([
+    { nextHopProtocol: '' }, // пустые записи пропускаются, а не считаются ответом
+    { nextHopProtocol: 'h2' },
+  ]);
+  assert.strictEqual(window.uploadNextHopProtocol(), 'h2');
+
+  // Потолок соединений только ограничивает подбор сверху, поднять его выше
+  // своей корзины он не может: шесть потоков — это уже столько, сколько канал
+  // способен занять, и мультиплексирование HTTP/2 тут ничего не добавляет.
+  const params = window.uploadAutoTune('man', { size: 8 * GIB });
+  assert.strictEqual(params.concurrency, 6);
+  assert.strictEqual(document.getElementById('man_conc_note').textContent, '',
+    'предупреждение о потолке не должно появляться на значении, которое подобрали сами');
+
+  // А вот выставленное руками сверяется уже с настоящим потолком протокола:
+  // по HTTP/2 в очередь встают не после шестого запроса, а после двенадцатого.
+  const slider = document.getElementById('man_conc');
+  slider.value = '40';
+  slider.dispatchEvent(new window.Event('input'));
+  assert.match(document.getElementById('man_conc_note').textContent, /не больше 12/);
+});
+
+test('галочка автоподбора возвращает подобранное для уже выбранного файла', (t) => {
+  const { window, document } = loadAdminPage(t);
+  const auto = document.getElementById('man_auto_tune');
+
+  // Сняли галочку и выкрутили руками — так делает тот, кто не доверяет подбору.
+  auto.checked = false;
+  auto.dispatchEvent(new window.Event('change'));
+  const slider = document.getElementById('man_conc');
+  slider.value = '40';
+  slider.dispatchEvent(new window.Event('input'));
+  assert.match(document.getElementById('man_conc_note').textContent, /не больше 6/);
+
+  // Файл выбран заранее: вернув галочку, админ ждёт, что параметры пересчитаются
+  // немедленно, а не после повторного выбора того же файла.
+  window.__manDroppedFile = { size: 1.3 * GIB };
+  auto.checked = true;
+  auto.dispatchEvent(new window.Event('change'));
+
+  assert.strictEqual(document.getElementById('man_conc').value, '6');
+  assert.strictEqual(document.getElementById('man_chunk_size').value, String(16 * 1024 * 1024));
+  assert.strictEqual(document.getElementById('man_conc_note').textContent, '', 'предупреждение снялось вместе с перебором');
+});
+
+test('выбор файла через input подбирает параметры на обеих вкладках', (t) => {
+  const { window, document } = loadAdminPage(t);
+  // Обработчики обоих полей вешаются на DOMContentLoaded, а к моменту, когда
+  // харнесс исполняет скрипты, jsdom это событие уже разослал — без ручной
+  // рассылки слушателей просто нет, и change никуда не приходит.
+  document.dispatchEvent(new window.Event('DOMContentLoaded'));
+
+  for (const pair of [['up_zip', 'up'], ['man_zip', 'man']]) {
+    const input = document.getElementById(pair[0]);
+    const file = new window.File(['z'.repeat(64)], 'build.zip', { type: 'application/zip' });
+    // jsdom не даёт присвоить input.files напрямую — подменяем геттер, как это
+    // делает настоящий выбор файла в диалоге.
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    input.dispatchEvent(new window.Event('change'));
+    assert.match(document.getElementById(pair[1] + '_tune_note').textContent, /чанк/,
+      pair[1] + ': подбор не сработал на change');
+  }
+});
+
+test('перетаскивание ZIP в зону загрузки подбирает параметры на обеих вкладках', (t) => {
+  const { window, document } = loadAdminPage(t);
+
+  for (const pair of [['up_drop', 'up'], ['man_drop', 'man']]) {
+    const file = new window.File(['z'.repeat(64)], 'build.zip', { type: 'application/zip' });
+    const ev = new window.Event('drop', { bubbles: true, cancelable: true });
+    // DragEvent.dataTransfer в jsdom не конструируется — событию хватает поля
+    // с тем же именем, admin.js читает только .files.
+    ev.dataTransfer = { files: [file] };
+    document.getElementById(pair[0]).dispatchEvent(ev);
+
+    assert.strictEqual(window['__' + pair[1] + 'DroppedFile'], file);
+    assert.match(document.getElementById(pair[1] + '_tune_note').textContent, /чанк/,
+      pair[1] + ': подбор не сработал на drop');
+  }
+});
+
+test('runChunkedUpload: подтверждения нескольких чанков подстраивают окно расчёта скорости', async (t) => {
+  // Одного чанка для этого мало: окно подстраивается по интервалу МЕЖДУ
+  // подтверждениями, а первый чанк интервала ещё не образует.
+  const fetchStub = makeFetchStub([
+    { test: (u) => u.includes('/admin/api/upload/init'), respond: () => jsonResponse({ uploadId: 'u-multi', chunkSize: 4, totalChunks: 3 }) },
+    { test: (u) => u.includes('/admin/api/upload/status'), respond: () => jsonResponse({ received: [] }) },
+    { test: (u) => u.includes('/admin/api/upload/complete'), respond: () => jsonResponse({}) },
+    { test: (u) => u.includes('/admin/api/upload/process'), respond: () => ndjsonResponse([JSON.stringify({ type: 'done', outPath: '/x' })]) },
+  ]);
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
+  const file = new window.File(['x'.repeat(12)], 'g.zip', { type: 'application/zip' });
+
+  const ok = await window.runChunkedUpload('man', 'game', 'g', '1.0.0', file);
+
+  assert.strictEqual(ok, true);
+  assert.strictEqual(document.getElementById('man_pb').style.width, '100%');
+});
+
+test('runChunkedUpload: чанк со второй попытки засчитывается — прогресс доходит до 100%', async (t) => {
+  const fetchStub = makeFetchStub([
+    { test: (u) => u.includes('/admin/api/upload/init'), respond: () => jsonResponse({ uploadId: 'u-retry', chunkSize: 4, totalChunks: 2 }) },
+    { test: (u) => u.includes('/admin/api/upload/status'), respond: () => jsonResponse({ received: [] }) },
+    { test: (u) => u.includes('/admin/api/upload/complete'), respond: () => jsonResponse({}) },
+    { test: (u) => u.includes('/admin/api/upload/process'), respond: () => ndjsonResponse([JSON.stringify({ type: 'done', outPath: '/x' })]) },
+  ]);
+  // Первый PUT каждого чанка падает по сети, второй проходит: путь ретрая
+  // должен досчитывать байты, иначе полоса застревает, не дойдя до конца.
+  const failedOnce = new Set();
+  const xhrScript = (xhr) => {
+    const idx = String(xhr.url).match(/index=(\d+)/)[1];
+    if (!failedOnce.has(idx)) { failedOnce.add(idx); xhr.onerror(); return; }
+    defaultXHRScript(xhr);
+  };
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub, xhrScript });
+  const file = new window.File(['x'.repeat(8)], 'g.zip', { type: 'application/zip' });
+
+  const ok = await window.runChunkedUpload('man', 'game', 'g', '1.0.0', file);
+
+  assert.strictEqual(ok, true);
+  assert.strictEqual(document.getElementById('man_pb').style.width, '100%');
+}, 20000);
+
+test('runChunkedUpload: complete сообщает о недостающем чанке — он дозаливается', async (t) => {
+  let completeCalls = 0;
+  const fetchStub = makeFetchStub([
+    { test: (u) => u.includes('/admin/api/upload/init'), respond: () => jsonResponse({ uploadId: 'u-missing', chunkSize: 4, totalChunks: 2 }) },
+    // Первый /status — до заливки, второй — разбор неудачного complete: сервер
+    // говорит, что чанк 1 до него не доехал.
+    { test: (u) => u.includes('/admin/api/upload/status'), respond: () => jsonResponse({ received: completeCalls === 0 ? [] : [0] }) },
+    { test: (u) => u.includes('/admin/api/upload/complete'), respond: () => { completeCalls++; return jsonResponse({}, completeCalls === 1 ? 409 : 200); } },
+    { test: (u) => u.includes('/admin/api/upload/process'), respond: () => ndjsonResponse([JSON.stringify({ type: 'done', outPath: '/x' })]) },
+  ]);
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
+  const file = new window.File(['x'.repeat(8)], 'g.zip', { type: 'application/zip' });
+
+  const ok = await window.runChunkedUpload('man', 'game', 'g', '1.0.0', file);
+
+  assert.strictEqual(ok, true);
+  assert.strictEqual(completeCalls, 2, 'после дозаливки недостающего чанка complete повторяется');
+  assert.strictEqual(document.getElementById('man_pb').style.width, '100%');
+}, 20000);
