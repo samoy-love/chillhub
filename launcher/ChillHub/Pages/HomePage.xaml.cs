@@ -2096,16 +2096,15 @@ namespace ChillHub.Pages {
         }
 
         /// <summary>
-        /// Считает четыре (или два) варианта запуска на текущий момент.
+        /// Чем узнавать состояние копий игры: реестр Windows и файловая система.
         /// <para>
-        /// Поиск копии в Steam делается здесь, а не заранее: игру могли поставить или
-        /// удалить, пока лаунчер был открыт. Двух вариантов вместо четырёх — когда у
-        /// игры нет сборки на сервере: такая живёт только копией из Steam.
+        /// Настоящие обращения к машине собраны здесь, чтобы всё остальное —
+        /// «какие варианты предложить» и «что сделает нажатие» — оставалось
+        /// проверяемым кодом в Core.Mods.
         /// </para>
         /// </summary>
-        /// <param name="game">Выбранная игра.</param>
         /// <param name="logSteam">Писать ли в журнал ход поиска копии в Steam.</param>
-        /// <returns>Варианты запуска.</returns>
+        /// <returns>Набор проб.</returns>
         private Core.Mods.LaunchProbes LaunchProbes(bool logSteam)
             => new(
                 Core.Home.GameLocalState.GameLocalRoot,
@@ -2114,6 +2113,18 @@ namespace ChillHub.Pages {
                 Core.Home.GameLocalState.ReadModsVersionAt,
                 logSteam ? Core.Logging.Logger.Info : null);
 
+        /// <summary>
+        /// Считает четыре (или два) варианта запуска на текущий момент.
+        /// <para>
+        /// Поиск копии в Steam делается при каждом вызове, а не заранее: игру могли
+        /// поставить или удалить, пока лаунчер был открыт. Двух вариантов вместо
+        /// четырёх — когда у игры нет сборки на сервере: такая живёт только копией
+        /// из Steam.
+        /// </para>
+        /// </summary>
+        /// <param name="game">Выбранная игра.</param>
+        /// <param name="logSteam">Писать ли в журнал ход поиска копии в Steam.</param>
+        /// <returns>Варианты запуска.</returns>
         private IReadOnlyList<Core.Mods.LaunchOption> LaunchOptionsFor(GameInfo game, bool logSteam)
             => Core.Mods.LaunchPlan.OptionsFor(game, this.LaunchProbes(logSteam));
 
