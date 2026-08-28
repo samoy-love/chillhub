@@ -1868,6 +1868,20 @@ function mgmSetDirty(v){
   __mgmDirty = !!v;
   const b = document.getElementById('mgm_dirty');
   if(b) b.style.display = __mgmDirty ? '' : 'none';
+
+  // СОСТОЯНИЕ ЧИТАЕТСЯ С САМОЙ КНОПКИ, А НЕ С СОСЕДНЕЙ МЕТКИ.
+  //
+  // Кнопка была всегда зелёной и всегда активной: нажать её без правок можно
+  // было в любой момент, и что при этом произойдёт — непонятно. Метка «не
+  // сохранено» рядом отвечала на этот вопрос, но её надо было заметить.
+  const save = document.getElementById('mgm_save');
+  if(save){
+    save.disabled = !__mgmDirty;
+    save.textContent = __mgmDirty ? 'Сохранить' : 'Сохранено';
+    save.title = __mgmDirty
+      ? 'Записать список игр на сервер'
+      : 'Список игр совпадает с сохранённым — сохранять нечего';
+  }
 }
 
 // mgmConfirmDiscard спрашивает, можно ли выбросить правки таблицы.

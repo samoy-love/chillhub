@@ -131,7 +131,11 @@
         + '<td class="text-end text-nowrap">'
         + (it.active ? '' : '<button type="button" class="btn btn-sm btn-success me-1" data-md-activate="' + esc(it.version) + '">Активировать</button>')
         + (upd && upd.latest ? '<button type="button" class="btn btn-sm btn-outline-primary me-1" data-md-rebuild="' + esc(upd.namespace + '/' + upd.name) + '" data-md-rebuild-version="' + esc(upd.latest) + '">Пересобрать</button>' : '')
-        + '<button type="button" class="btn btn-sm btn-outline-secondary me-1" data-md-diff="' + esc(it.version) + '">Дифф</button>'
+        + '<button type="button" class="btn btn-sm btn-outline-secondary me-1" data-md-diff="' + esc(it.version) + '"'
+        + (items.length < 2
+          ? ' disabled title="Собрана одна версия — сравнивать не с чем"'
+          : ' title="Сравнить состав с другой собранной версией"')
+        + '>Дифф</button>'
         + (it.active ? '' : '<button type="button" class="btn btn-sm btn-outline-danger" data-md-delete="' + esc(it.version) + '">Удалить</button>')
         + '</td>'
         + '</tr>';
@@ -218,7 +222,13 @@
 
     function setBusy(busy, text) {
       if (text !== undefined) setStatus(text);
-      root.querySelectorAll('button[data-md-busy]').forEach(function (b) { b.disabled = !!busy; });
+      root.querySelectorAll('button[data-md-busy]').forEach(function (b) {
+        b.disabled = !!busy;
+        // Выключенная кнопка обязана сказать, почему она выключена: серая
+        // кнопка без объяснения читается как поломка панели.
+        if (busy) b.title = 'Идёт работа с Thunderstore — дождитесь окончания';
+        else b.removeAttribute('title');
+      });
     }
 
     // ---- список игр -------------------------------------------------------

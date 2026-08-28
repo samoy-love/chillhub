@@ -175,6 +175,24 @@ test('таблица версий отмечает активную, обнов�
   assert.match(html, /data-md-rebuild="ASTeam\/LethalReloaded"/);
 });
 
+test('«Дифф» у единственной версии выключен и говорит почему', () => {
+  // Кнопка, которая на нажатие отвечает тостом «сравнивать не с чем», просит
+  // нажать себя ради отказа. Выключенная — обязана объяснить себя подписью.
+  const one = versionsTableHtml({
+    items: [{ version: 'Team-Pack-1.0.0', displayName: 'Pack', active: true, createdAt: '2026-08-27T10:00:00' }],
+  });
+  assert.match(one, /data-md-diff="Team-Pack-1\.0\.0" disabled title="Собрана одна версия/);
+
+  const two = versionsTableHtml({
+    items: [
+      { version: 'Team-Pack-1.0.0', displayName: 'Pack', active: true, createdAt: '2026-08-27T10:00:00' },
+      { version: 'Team-Pack-0.9.0', displayName: 'Pack', active: false, createdAt: '2026-08-20T10:00:00' },
+    ],
+  });
+  assert.doesNotMatch(two, /data-md-diff="Team-Pack-1\.0\.0" disabled/);
+  assert.match(two, /title="Сравнить состав/);
+});
+
 test('пустой список версий объясняется словами', () => {
   assert.match(versionsTableHtml({ items: [] }), /Ни одного модпака ещё не собрано/);
   assert.match(versionsTableHtml(null), /Ни одного модпака/);
