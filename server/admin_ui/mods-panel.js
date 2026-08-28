@@ -156,6 +156,25 @@
     }).join('') + '</ul>';
   }
 
+  // notConfiguredHtml — экран игры, у которой модов ещё нет.
+  //
+  // Раньше здесь стояла одна строка «Моды для этой игры не настроены», под
+  // которой оставалось пустым четыре пятых экрана: панель выглядела сломанной,
+  // хотя просто ждала нажатия. Текст должен говорить, что произойдёт после
+  // нажатия и почему это безопасно.
+  function notConfiguredHtml(game) {
+    const title = (game && (game.title || game.gameId)) || 'этой игры';
+    return ''
+      + '<div class="border rounded p-3 bg-body-tertiary">'
+      + '<div class="fw-semibold mb-1">Моды для «' + esc(title) + '» ещё не подключены</div>'
+      + '<div class="small text-body-secondary mb-2">'
+      + 'Нажмите «Подтянуть из Thunderstore» — панель прочитает правила установки модов для этой игры '
+      + '(Steam AppID, папку, загрузчик) и откроет каталог модпаков. Файлы игроков это не трогает: '
+      + 'модпак попадёт к ним только после сборки и активации.'
+      + '</div>'
+      + '</div>';
+  }
+
   // createModsPanel собирает панель над одним корневым элементом.
   function createModsPanel(opts) {
     const root = typeof document !== 'undefined' ? document.querySelector(opts.root) : null;
@@ -222,11 +241,22 @@
     function applyGame(game) {
       state.mods = (game && game.mods) || null;
       const on = !!(state.mods && state.mods.enabled);
+      const gid = (game && game.gameId) || state.gameId || '';
 
       const toggle = el('enabled');
       if (toggle) toggle.checked = on;
+
+      // СЛАГ — ЗНАЧЕНИЕ, А НЕ ПОДСКАЗКА.
+      //
+      // Серый placeholder «lethal-company» читался как заполненное поле, и
+      // «Подтянуть» отвечал «Укажите слаг игры на Thunderstore» на то, что
+      // оператор уже видел перед собой. Идентификатор игры и есть слаг у всех
+      // наших игр; если он не совпадёт — поле правится руками.
       const slug = el('slug');
-      if (slug && state.mods) slug.value = state.mods.community || '';
+      if (slug) {
+        slug.value = (state.mods && state.mods.community) || gid;
+        slug.removeAttribute('placeholder');
+      }
 
       const info = el('meta');
       if (info) {
@@ -236,12 +266,14 @@
             + 'папка: <code>' + esc(state.mods.steamFolder || '—') + '</code> · '
             + 'загрузчик: <code>' + esc(state.mods.loader || '—') + '</code>'
             + '</div>'
-          : '<div class="small text-body-secondary">Моды для этой игры не настроены.</div>';
+          : notConfiguredHtml(game);
       }
 
       const browse = el('browse');
       if (browse) {
-        const community = (state.mods && state.mods.community) || '';
+        // Ссылка на сайт не требует сохранённых настроек: слаг известен и до
+        // «Подтянуть». Выключенная кнопка без объяснения — худший из вариантов.
+        const community = (state.mods && state.mods.community) || gid;
         const uuid = (state.mods && state.mods.sectionUuid) || '';
         // Ссылка на каталог сайта требует UUID раздела, а не слаг: с
         // ?section=modpacks Thunderstore молча не применяет фильтр.
@@ -267,7 +299,11 @@
         if (!res.ok) { say(await res.text(), 'error'); return; }
         const data = await res.json();
         state.mods = data.mods;
-        applyGame({ mods: data.mods });
+        // Игру передаём целиком: applyGame читает из неё gameId и название, и
+        // без них слаг с пустым состоянием остались бы ни с чем.
+        const game = state.games.find(function (g) { return g.gameId === gameId(); }) || {};
+        game.mods = data.mods;
+        applyGame(game);
         say('Метаданные подтянуты из Thunderstore');
       } catch (e) {
         say('Ошибка: ' + e, 'error');

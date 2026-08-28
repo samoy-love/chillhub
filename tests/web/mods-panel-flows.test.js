@@ -179,6 +179,40 @@ test('README показывается текстом, а не разметкой
   assert.ok(box.classList.contains('hidden'), 'README не закрылся');
 });
 
+test('слаг подставляется значением, а не подсказкой', async () => {
+  // Серый placeholder читался как заполненное поле, и «Подтянуть» отвечал
+  // «Укажите слаг игры на Thunderstore» на то, что оператор уже видел.
+  const { document } = await mount();
+
+  const slug = document.querySelector('[data-md="slug"]');
+  assert.strictEqual(slug.value, 'lethal-company');
+  assert.strictEqual(slug.getAttribute('placeholder'), null);
+});
+
+test('у игры без модов экран объясняет, что даст подключение', async () => {
+  const { document } = await mount(function (url) {
+    if (!url.startsWith('/admin/games')) return null;
+    return jsonResponse({ items: [{ gameId: 'peak', title: 'PEAK' }] });
+  });
+
+  const meta = document.querySelector('[data-md="meta"]').textContent;
+  assert.match(meta, /PEAK/);
+  assert.match(meta, /Подтянуть из Thunderstore/);
+  // Слаг всё равно готов к нажатию: он берётся из идентификатора игры.
+  assert.strictEqual(document.querySelector('[data-md="slug"]').value, 'peak');
+});
+
+test('ссылка на каталог сайта работает и до подключения модов', async () => {
+  const { document } = await mount(function (url) {
+    if (!url.startsWith('/admin/games')) return null;
+    return jsonResponse({ items: [{ gameId: 'peak', title: 'PEAK' }] });
+  });
+
+  const browse = document.querySelector('[data-md="browse"]');
+  assert.match(browse.getAttribute('href'), /thunderstore\.io\/c\/peak\//);
+  assert.ok(!browse.classList.contains('disabled'), 'ссылка выключена, хотя слаг известен');
+});
+
 test('сборка ведёт прогресс по потоку событий', async () => {
   const events = [
     { type: 'start', message: 'разбор состава' },
