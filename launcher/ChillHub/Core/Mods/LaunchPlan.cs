@@ -95,7 +95,8 @@ namespace ChillHub.Core.Mods {
                 game.NeedsUpdate,
                 !string.IsNullOrWhiteSpace(game.LatestVersion),
                 steam,
-                probes.ReadModsVersion(steam.GameDir)));
+                probes.ReadModsVersion(steam.GameDir),
+                game.Title ?? string.Empty));
         }
 
         /// <summary>

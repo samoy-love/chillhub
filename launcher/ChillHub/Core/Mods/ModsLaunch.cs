@@ -66,13 +66,20 @@ namespace ChillHub.Core.Mods {
     /// <param name="Modded">Включать ли моды.</param>
     /// <param name="Action">Что произойдёт по нажатию.</param>
     /// <param name="Note">Что именно сделает пункт или почему не может; пусто, если просто запустит.</param>
+    /// <param name="Hint">
+    /// Тот же отказ словами и с выходом: «Steam на этом компьютере не найден: в реестре
+    /// нет пути к нему. Установите Steam или запустите его хотя бы один раз». В строку
+    /// меню такое не влезает, поэтому короткая пометка остаётся на месте, а это едет в
+    /// подсказку. Пусто, если объяснять нечего.
+    /// </param>
     internal sealed record LaunchOption(
         LaunchTarget Target,
         string Title,
         string GameDir,
         bool Modded,
         LaunchAction Action,
-        string Note) {
+        string Note,
+        string Hint = "") {
         /// <summary>Запускается ли эта копия через Steam.</summary>
         internal bool ViaSteam => this.Target is LaunchTarget.SteamModded or LaunchTarget.SteamVanilla;
 
@@ -101,6 +108,10 @@ namespace ChillHub.Core.Mods {
     /// <param name="HasServerBuild">Есть ли у игры сборка на сервере вообще.</param>
     /// <param name="Steam">Результат поиска копии в Steam.</param>
     /// <param name="SteamModsVersion">Версия модпака, стоящего в копии из Steam; пусто — не стоит.</param>
+    /// <param name="GameTitle">
+    /// Название игры — только для объяснений: «PEAK не установлена в Steam» понятнее,
+    /// чем «Игра не установлена в Steam», а больше это имя ни на что не влияет.
+    /// </param>
     internal sealed record LaunchContext(
         ModsInfo? Mods,
         string LocalRoot,
@@ -108,7 +119,8 @@ namespace ChillHub.Core.Mods {
         bool LocalNeedsUpdate,
         bool HasServerBuild,
         SteamGame Steam,
-        string SteamModsVersion);
+        string SteamModsVersion,
+        string GameTitle = "");
 
     /// <summary>
     /// Четыре способа запустить игру с модпаком: копия из Steam или сборка с сервера,
@@ -175,8 +187,17 @@ namespace ChillHub.Core.Mods {
             var steamOk = ctx.Steam.Ok;
             var steamReason = DescribeSteam(ctx.Steam);
 
-            LaunchOption Make(LaunchTarget target, string dir, bool modded, LaunchAction action, string note)
-                => new(target, TitleOf(target, mods), dir, modded, action, note);
+            // Объяснение считается один раз: оно одинаково для обеих строк Steam —
+            // недоступны они по одной и той же причине.
+            var steamHint = steamOk
+                ? string.Empty
+                : Home.SteamModsInstall.DescribeLookupFailure(ctx.Steam.Outcome, ctx.GameTitle);
+
+            LaunchOption Make(LaunchTarget target, string dir, bool modded, LaunchAction action, string note) {
+                var viaSteam = target is LaunchTarget.SteamModded or LaunchTarget.SteamVanilla;
+                var hint = action == LaunchAction.Unavailable && viaSteam ? steamHint : string.Empty;
+                return new LaunchOption(target, TitleOf(target, mods), dir, modded, action, note, hint);
+            }
 
             // --- копия из Steam, с модами -------------------------------------
             if (!steamOk) {

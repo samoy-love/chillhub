@@ -165,12 +165,55 @@ namespace ChillHub.Tests {
             Assert.Null(LaunchPlan.ReadyAfterInstall(null, LaunchTarget.SteamModded));
         }
 
+        /// <summary>
+        /// БЕЗ STEAM ЛАУНЧЕР ОБЪЯСНЯЕТ, А НЕ ОТМАЛЧИВАЕТСЯ. Короткая пометка в строке
+        /// меню говорит, ЧТО не так; подсказка — что с этим делать. Раньше длинные
+        /// объяснения были написаны, но не показывались нигде.
+        /// </summary>
+        [Fact]
+        public void БезSteamВариантыОбъясняютПричинуИВыход() {
+            var game = new GameInfo { GameId = "peak", Title = "PEAK", LatestVersion = string.Empty, Mods = Pack() };
+
+            var options = LaunchPlan.OptionsFor(game, Probes(steam: NoSteam()));
+
+            Assert.All(options, o => Assert.False(o.Available));
+            Assert.All(options, o => Assert.Equal("Steam не установлен", o.Note));
+            Assert.All(options, o => Assert.Contains("Установите Steam", o.Hint, System.StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// Игра, которой нет в Steam, названа по имени: «Игра не установлена в Steam»
+        /// не отвечает на вопрос, какая именно из пяти.
+        /// </summary>
+        [Fact]
+        public void ОтсутствующаяВSteamИграНазванаПоИмени() {
+            var game = new GameInfo { GameId = "peak", Title = "PEAK", LatestVersion = string.Empty, Mods = Pack() };
+            var steam = new SteamGame(SteamLookup.GameNotInstalled, string.Empty, @"C:\steam\steam.exe", System.Array.Empty<string>());
+
+            var options = LaunchPlan.OptionsFor(game, Probes(steam: steam));
+
+            Assert.All(options, o => Assert.Contains("PEAK", o.Hint, System.StringComparison.Ordinal));
+        }
+
+        /// <summary>Доступному варианту объяснять нечего: подсказка пуста.</summary>
+        [Fact]
+        public void ДоступныйВариантОбходитсяБезОбъяснений() {
+            var game = new GameInfo { GameId = "lethal-company", LatestVersion = "1.0.9", Mods = Pack() };
+
+            var options = LaunchPlan.OptionsFor(game, Probes(modsInSteam: "ASTeam-LethalReloaded-2.2.12"));
+
+            Assert.All(options, o => Assert.Empty(o.Hint));
+        }
+
+        private static SteamGame NoSteam()
+            => new SteamGame(SteamLookup.SteamNotInstalled, string.Empty, string.Empty, System.Array.Empty<string>());
+
         private static LaunchProbes Probes(
-            string modsInSteam = "", string[]? trace = null, System.Action<string>? log = null)
+            string modsInSteam = "", string[]? trace = null, System.Action<string>? log = null, SteamGame? steam = null)
             => new(
                 gid => @"C:\games\" + gid,
                 _ => true,
-                (_, _) => new SteamGame(SteamLookup.Found, @"C:\steam\game", @"C:\steam\steam.exe", trace ?? System.Array.Empty<string>()),
+                (_, _) => steam ?? new SteamGame(SteamLookup.Found, @"C:\steam\game", @"C:\steam\steam.exe", trace ?? System.Array.Empty<string>()),
                 _ => modsInSteam,
                 log);
 
