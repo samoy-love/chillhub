@@ -230,7 +230,7 @@ func (h *Handlers) packStatus(ctx context.Context, gid, version string) (packSta
 
 	p, err := h.builder.Client.GetPackage(ctx, ns, name)
 	if err != nil {
-		return packState{}, fmt.Errorf("Thunderstore не ответил про %s-%s: %w", ns, name, err)
+		return packState{}, fmt.Errorf("не удалось спросить Thunderstore про %s-%s: %w", ns, name, err)
 	}
 
 	return packState{
