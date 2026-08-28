@@ -76,16 +76,44 @@ namespace ChillHub.Core.Game {
     /// </para>
     /// </summary>
     internal static class PlaytimeStore {
-        private static readonly string AppDir =
+        private static readonly string DefaultAppDir =
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ChillHub");
+
+        /// <summary>
+        /// Подменённый на время теста каталог. AsyncLocal, а не обычное поле: прогон идёт
+        /// параллельными классами, и подмена в одном не должна уводить файлы у другого —
+        /// тот же приём, что у очереди обратной связи.
+        /// </summary>
+        private static readonly AsyncLocal<string?> ScopedAppDir = new AsyncLocal<string?>();
 
         private static readonly object FileLock = new object();
 
         private static int reconciled;
 
+        private static string AppDir => ScopedAppDir.Value ?? DefaultAppDir;
+
         private static string PlaytimePath => Path.Combine(AppDir, "playtime.json");
 
         private static string PendingPath => Path.Combine(AppDir, "playtime.sessions.json");
+
+        /// <summary>
+        /// Уводит файлы наигранного времени в отдельный каталог — для тестов.
+        /// <para>
+        /// Без шва проверить нечего: и подсчёт времени, и выключение модов после сессии
+        /// живут в файлах, а трогать в прогоне настоящий %APPDATA% пользователя нельзя.
+        /// </para>
+        /// </summary>
+        /// <param name="dir">Каталог, играющий роль %APPDATA%\ChillHub.</param>
+        /// <returns>Объект, возвращающий файлы на настоящее место.</returns>
+        internal static IDisposable OverrideDirForTests(string dir) => new AppDirOverride(dir);
+
+        /// <summary>Закрывает сессию так же, как это делает выход процесса игры, — для тестов.</summary>
+        /// <param name="processId">Номер процесса, под которым сессия заводилась.</param>
+        /// <param name="endUtc">Момент окончания.</param>
+        internal static void FinishForTests(int processId, DateTime endUtc) => FinishSession(processId, endUtc);
+
+        /// <summary>Забывает отметку о проделанной реконсиляции — для тестов.</summary>
+        internal static void ResetForTests() => Interlocked.Exchange(ref reconciled, 0);
 
         /// <summary>
         /// Подбирает незакрытые сессии прошлого запуска: досматривает те игры, что ещё
@@ -309,6 +337,18 @@ namespace ChillHub.Core.Game {
         }
 
         private static string PendingKey(int processId) => processId.ToString();
+
+        /// <summary>Возвращает файлы на настоящее место после <see cref="OverrideDirForTests"/>.</summary>
+        private sealed class AppDirOverride : IDisposable {
+            private readonly string? previous;
+
+            internal AppDirOverride(string dir) {
+                this.previous = ScopedAppDir.Value;
+                ScopedAppDir.Value = dir;
+            }
+
+            public void Dispose() => ScopedAppDir.Value = this.previous;
+        }
 
         private static long SafeStartTimeTicks(Process p) {
             try {
