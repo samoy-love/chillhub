@@ -69,6 +69,16 @@ namespace ChillHub.Core.Sync {
         /// </summary>
         public int HashMismatches { get; set; }
 
+        /// <summary>
+        /// Gets or sets сколько файлов возьмётся с диска, из другой копии этой же игры,
+        /// вместо загрузки. Считается на этапе плана: в <see cref="Downloads"/> такие
+        /// файлы остаются — меняется только то, откуда придёт содержимое.
+        /// </summary>
+        public int ReusedFiles { get; set; }
+
+        /// <summary>Gets or sets сколько байт не поедет по сети благодаря соседней копии.</summary>
+        public long ReusedBytes { get; set; }
+
         public List<FileTask> Downloads { get; set; } = new();
 
         public List<string> ToDelete { get; set; } = new();

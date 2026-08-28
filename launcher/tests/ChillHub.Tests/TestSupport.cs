@@ -10,6 +10,8 @@ namespace ChillHub.Tests {
     using System.Security.Cryptography;
     using System.Text;
 
+    using ChillHub.Core.Sync;
+
     /// <summary>
     /// Глобальная настройка тестового прогона.
     /// Выполняется один раз при загрузке сборки тестов, до первого теста.
@@ -86,14 +88,25 @@ namespace ChillHub.Tests {
         /// <summary>Уникальный идентификатор игры — гарантирует, что тесты не пересекаются.</summary>
         public string GameId { get; }
 
+        /// <summary>
+        /// Папка, для которой берётся кеш: он свой у каждой копии игры. Существовать на
+        /// диске ей не обязательно — в имя файла едет только отметка пути.
+        /// </summary>
+        public string Root { get; set; } = @"C:\chillhub-tests\root";
+
+        /// <summary>Кеш этой игры в этой папке.</summary>
+        /// <param name="root">Другая папка, если нужна именно она.</param>
+        /// <returns>Кеш хешей.</returns>
+        public FileHashCache Load(string? root = null) => FileHashCache.Load(this.GameId, root ?? this.Root);
+
         /// <summary>Каталог, в котором лаунчер держит кеши хешей.</summary>
         public static string CacheDir => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "ChillHub",
             "hashcache");
 
-        /// <summary>Файл кеша текущей игры.</summary>
-        public string CacheFile => Path.Combine(CacheDir, this.GameId + ".json");
+        /// <summary>Файл кеша текущей игры в её папке.</summary>
+        public string CacheFile => FileHashCache.PathFor(this.GameId, this.Root)!;
 
         /// <summary>Кладёт на место файла кеша произвольное (в т.ч. заведомо битое) содержимое.</summary>
         public void WriteRawCache(string content) {
@@ -102,6 +115,8 @@ namespace ChillHub.Tests {
         }
 
         public void Dispose() {
+            // Кеши игры во ВСЕХ папках: тест мог просить кеш и для соседней копии.
+            FileHashCache.Remove(this.GameId);
             foreach (var path in new[] { this.CacheFile, this.CacheFile + ".tmp" }) {
                 try {
                     if (File.Exists(path)) {

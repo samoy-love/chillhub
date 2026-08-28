@@ -109,6 +109,16 @@ namespace ChillHub.Core.Sync {
         public IReadOnlyCollection<string>? PreservePaths { get; set; }
 
         /// <summary>
+        /// Gets or sets папки, из которых можно брать готовые файлы вместо загрузки.
+        /// <para>
+        /// Модпак принадлежит папке: играть и в копию из Steam, и в сборку с сервера
+        /// значит поставить его дважды. Побайтово это одни и те же файлы, и качать их
+        /// повторно — плата ни за что.
+        /// </para>
+        /// </summary>
+        public IReadOnlyList<DonorRoot>? Donors { get; set; }
+
+        /// <summary>
         /// Настройки для синхронизации ИГРЫ в корне, где может стоять модпак.
         /// Читает установленный манифест модпака с диска, поэтому вызывать её стоит
         /// оттуда же, откуда строится план, — не с UI-потока.
@@ -126,10 +136,15 @@ namespace ChillHub.Core.Sync {
         /// </summary>
         /// <param name="localRoot">Корень локальной папки игры.</param>
         /// <returns>Настройки плана.</returns>
-        public static PlanOptions ForModPack(string localRoot) => new PlanOptions {
+        /// <param name="donorRoots">
+        /// Другие папки этой же игры, где модпак уже может стоять: оттуда файлы
+        /// копируются вместо загрузки.
+        /// </param>
+        public static PlanOptions ForModPack(string localRoot, IEnumerable<string?>? donorRoots = null) => new PlanOptions {
             Scope = ManifestScope.OwnFilesOnly,
             PreviousOwnedPaths = Home.GameLocalState.ReadInstalledModPackPaths(localRoot),
             PreservePaths = ModPackPreservePaths,
+            Donors = LocalDonors.FromModPacks(donorRoots, localRoot),
         };
 
         /// <summary>

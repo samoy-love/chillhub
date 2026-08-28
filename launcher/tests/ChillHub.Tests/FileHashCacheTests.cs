@@ -23,12 +23,12 @@ namespace ChillHub.Tests {
         [Fact]
         public void TryGet_ПопаданиеПриСовпаденииРазмераИВремени() {
             using var scope = new HashCacheScope();
-            var cache = FileHashCache.Load(scope.GameId);
+            var cache = scope.Load();
             cache.Set("Game/data.pak", 1024, 638000000000000000L, Sha, B3);
             cache.PruneAndSave(new List<string> { "Game/data.pak" });
 
             // Перечитываем кеш с диска — так же, как это делает следующий запуск лаунчера.
-            var reloaded = FileHashCache.Load(scope.GameId);
+            var reloaded = scope.Load();
             var hit = reloaded.TryGet("Game/data.pak", 1024, 638000000000000000L, out var sha, out var b3);
 
             Assert.True(hit);
@@ -39,7 +39,7 @@ namespace ChillHub.Tests {
         [Fact]
         public void TryGet_ПромахПриИзменившемсяРазмере() {
             using var scope = new HashCacheScope();
-            var cache = FileHashCache.Load(scope.GameId);
+            var cache = scope.Load();
             cache.Set("Game/data.pak", 1024, 638000000000000000L, Sha, B3);
 
             Assert.False(cache.TryGet("Game/data.pak", 2048, 638000000000000000L, out var sha, out var b3));
@@ -52,7 +52,7 @@ namespace ChillHub.Tests {
             // Самый опасный случай: размер тот же, а содержимое другое.
             // Если кеш проигнорирует mtime, испорченный файл будет считаться исправным.
             using var scope = new HashCacheScope();
-            var cache = FileHashCache.Load(scope.GameId);
+            var cache = scope.Load();
             cache.Set("Game/data.pak", 1024, 638000000000000000L, Sha, B3);
 
             Assert.False(cache.TryGet("Game/data.pak", 1024, 638000000000000001L, out _, out _));
@@ -61,7 +61,7 @@ namespace ChillHub.Tests {
         [Fact]
         public void TryGet_ПромахДляНеизвестногоФайла() {
             using var scope = new HashCacheScope();
-            var cache = FileHashCache.Load(scope.GameId);
+            var cache = scope.Load();
             cache.Set("Game/data.pak", 1024, 1, Sha, B3);
 
             Assert.False(cache.TryGet("Game/other.pak", 1024, 1, out _, out _));
@@ -70,7 +70,7 @@ namespace ChillHub.Tests {
         [Fact]
         public void TryGet_КлючНечувствителенКРегистру() {
             using var scope = new HashCacheScope();
-            var cache = FileHashCache.Load(scope.GameId);
+            var cache = scope.Load();
             cache.Set("Game/Data.pak", 1024, 1, Sha, B3);
 
             // Пути на Windows регистронезависимы; иначе один и тот же файл перечитывался бы каждый раз.
@@ -82,7 +82,7 @@ namespace ChillHub.Tests {
             using var scope = new HashCacheScope();
             scope.WriteRawCache("{ это вообще не json ");
 
-            var cache = FileHashCache.Load(scope.GameId);
+            var cache = scope.Load();
 
             Assert.False(cache.TryGet("Game/data.pak", 1024, 1, out _, out _));
         }
@@ -94,7 +94,7 @@ namespace ChillHub.Tests {
             // Типичный результат обрыва записи: файл оборван на середине.
             scope.WriteRawCache("{\"version\":1,\"entries\":{\"Game/data.pak\":{\"size\":1024,\"mti");
 
-            var cache = FileHashCache.Load(scope.GameId);
+            var cache = scope.Load();
 
             Assert.False(cache.TryGet("Game/data.pak", 1024, 1, out _, out _));
         }
@@ -104,7 +104,7 @@ namespace ChillHub.Tests {
             using var scope = new HashCacheScope();
             scope.WriteRawCache("{\"version\":99,\"entries\":{\"Game/data.pak\":{\"size\":1024,\"mtime\":1,\"sha256\":\"" + Sha + "\",\"blake3\":\"" + B3 + "\"}}}");
 
-            var cache = FileHashCache.Load(scope.GameId);
+            var cache = scope.Load();
 
             Assert.False(cache.TryGet("Game/data.pak", 1024, 1, out _, out _));
         }
@@ -114,7 +114,7 @@ namespace ChillHub.Tests {
             using var scope = new HashCacheScope();
             scope.WriteRawCache(string.Empty);
 
-            var cache = FileHashCache.Load(scope.GameId);
+            var cache = scope.Load();
 
             Assert.False(cache.TryGet("Game/data.pak", 1024, 1, out _, out _));
         }
@@ -124,7 +124,7 @@ namespace ChillHub.Tests {
             using var scope = new HashCacheScope();
             scope.WriteRawCache("{\"version\":1,\"entries\":{\"Game/data.pak\":{\"size\":1024,\"mtime\":1}}}");
 
-            var cache = FileHashCache.Load(scope.GameId);
+            var cache = scope.Load();
 
             // Размер и время совпали, но хешей нет — брать из кеша нечего.
             Assert.False(cache.TryGet("Game/data.pak", 1024, 1, out _, out _));
@@ -133,7 +133,7 @@ namespace ChillHub.Tests {
         [Fact]
         public void PruneAndSave_ПишетКорректныйJsonИНеОставляетВременныйФайл() {
             using var scope = new HashCacheScope();
-            var cache = FileHashCache.Load(scope.GameId);
+            var cache = scope.Load();
             cache.Set("Game/data.pak", 1024, 1, Sha, B3);
             cache.PruneAndSave(new List<string> { "Game/data.pak" });
 
@@ -158,11 +158,11 @@ namespace ChillHub.Tests {
             Directory.CreateDirectory(HashCacheScope.CacheDir);
             File.WriteAllText(scope.CacheFile + ChillHub.Update.AtomicFile.TempSuffix, "полузаписанный мусор");
 
-            var cache = FileHashCache.Load(scope.GameId);
+            var cache = scope.Load();
             cache.Set("Game/data.pak", 1024, 1, Sha, B3);
             cache.PruneAndSave(new List<string> { "Game/data.pak" });
 
-            var reloaded = FileHashCache.Load(scope.GameId);
+            var reloaded = scope.Load();
             Assert.True(reloaded.TryGet("Game/data.pak", 1024, 1, out _, out _));
             Assert.False(File.Exists(scope.CacheFile + ChillHub.Update.AtomicFile.TempSuffix));
         }
@@ -170,7 +170,7 @@ namespace ChillHub.Tests {
         [Fact]
         public void PruneAndSave_ВыбрасываетЗаписиОбИсчезнувшихФайлах() {
             using var scope = new HashCacheScope();
-            var cache = FileHashCache.Load(scope.GameId);
+            var cache = scope.Load();
             cache.Set("Game/alive.pak", 1, 1, Sha, B3);
             cache.Set("Game/gone.pak", 2, 2, Sha, B3);
 
@@ -179,7 +179,7 @@ namespace ChillHub.Tests {
 
             Assert.False(cache.TryGet("Game/gone.pak", 2, 2, out _, out _));
 
-            var reloaded = FileHashCache.Load(scope.GameId);
+            var reloaded = scope.Load();
             Assert.True(reloaded.TryGet("Game/alive.pak", 1, 1, out _, out _));
             Assert.False(reloaded.TryGet("Game/gone.pak", 2, 2, out _, out _));
         }
@@ -187,12 +187,12 @@ namespace ChillHub.Tests {
         [Fact]
         public void PruneAndSave_ПустойСписокЖивыхФайловОчищаетКешПолностью() {
             using var scope = new HashCacheScope();
-            var cache = FileHashCache.Load(scope.GameId);
+            var cache = scope.Load();
             cache.Set("Game/a.pak", 1, 1, Sha, B3);
             cache.Set("Game/b.pak", 2, 2, Sha, B3);
             cache.PruneAndSave(new List<string>());
 
-            var reloaded = FileHashCache.Load(scope.GameId);
+            var reloaded = scope.Load();
             Assert.False(reloaded.TryGet("Game/a.pak", 1, 1, out _, out _));
             Assert.False(reloaded.TryGet("Game/b.pak", 2, 2, out _, out _));
         }
@@ -202,11 +202,11 @@ namespace ChillHub.Tests {
             using var one = new HashCacheScope("one");
             using var two = new HashCacheScope("two");
 
-            var c1 = FileHashCache.Load(one.GameId);
+            var c1 = one.Load();
             c1.Set("a.pak", 1, 1, Sha, B3);
             c1.PruneAndSave(new List<string> { "a.pak" });
 
-            var c2 = FileHashCache.Load(two.GameId);
+            var c2 = two.Load();
             c2.Set("a.pak", 1, 1, Sha, B3);
             c2.PruneAndSave(new List<string> { "a.pak" });
 
@@ -214,7 +214,7 @@ namespace ChillHub.Tests {
 
             Assert.False(File.Exists(one.CacheFile));
             Assert.True(File.Exists(two.CacheFile));
-            Assert.True(FileHashCache.Load(two.GameId).TryGet("a.pak", 1, 1, out _, out _));
+            Assert.True(two.Load().TryGet("a.pak", 1, 1, out _, out _));
         }
 
         [Fact]
@@ -228,7 +228,7 @@ namespace ChillHub.Tests {
 
         [Fact]
         public void Load_ПустойИдентификаторИгрыДаётКешВПамятиБезФайла() {
-            var cache = FileHashCache.Load(string.Empty);
+            var cache = FileHashCache.Load(string.Empty, @"C:\games\none");
             cache.Set("a.pak", 1, 1, Sha, B3);
 
             // Запись на диск невозможна (пути нет), но падать не должно, а память работает.
@@ -240,11 +240,11 @@ namespace ChillHub.Tests {
         public void Load_ИдентификаторСНедопустимымиСимволамиСохраняетсяВБезопасныйФайл() {
             var gameId = "game/id:with*bad?chars-" + System.Guid.NewGuid().ToString("N");
             try {
-                var cache = FileHashCache.Load(gameId);
+                var cache = FileHashCache.Load(gameId, @"C:\games\bad");
                 cache.Set("a.pak", 1, 1, Sha, B3);
                 cache.PruneAndSave(new List<string> { "a.pak" });
 
-                Assert.True(FileHashCache.Load(gameId).TryGet("a.pak", 1, 1, out _, out _));
+                Assert.True(FileHashCache.Load(gameId, @"C:\games\bad").TryGet("a.pak", 1, 1, out _, out _));
             }
             finally {
                 FileHashCache.Remove(gameId);

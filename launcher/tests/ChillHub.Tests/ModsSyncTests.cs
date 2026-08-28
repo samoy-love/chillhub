@@ -483,7 +483,7 @@ namespace ChillHub.Tests {
             var modB3 = TestHash.Blake3OfFile(mod);
 
             // Так выглядит кеш после синхронизации МОДПАКА: в нём есть запись о его файле.
-            var before = FileHashCache.Load(scope.GameId);
+            var before = FileHashCache.Load(scope.GameId, dir.Root);
             before.Set(ModDll, modInfo.Length, modInfo.LastWriteTimeUtc.Ticks, modSha, modB3);
             before.PruneAndSave(new List<string> { ModDll });
 
@@ -493,7 +493,7 @@ namespace ChillHub.Tests {
 
             await PlanTestData.PlanAsync(manifest, dir.Root, PlanOptions.ForGame(dir.Root), keepCache: true);
 
-            var after = FileHashCache.Load(scope.GameId);
+            var after = FileHashCache.Load(scope.GameId, dir.Root);
             Assert.True(
                 after.TryGet(ModDll, modInfo.Length, modInfo.LastWriteTimeUtc.Ticks, out var sha, out _),
                 "синхронизация игры выбросила из кеша записи модпака");
@@ -512,7 +512,7 @@ namespace ChillHub.Tests {
             var exe = dir.WriteFile("game.exe", "игра");
             WriteModPackState(dir.Root, "2.2.12", ModDll);
 
-            var stale = FileHashCache.Load(scope.GameId);
+            var stale = FileHashCache.Load(scope.GameId, dir.Root);
             stale.Set("исчез.dll", 10, 20, new string('a', 64), new string('b', 64));
             stale.PruneAndSave(new List<string> { "исчез.dll" });
 
@@ -522,7 +522,7 @@ namespace ChillHub.Tests {
 
             await PlanTestData.PlanAsync(manifest, dir.Root, PlanOptions.ForGame(dir.Root), keepCache: true);
 
-            Assert.False(FileHashCache.Load(scope.GameId).TryGet("исчез.dll", 10, 20, out _, out _));
+            Assert.False(FileHashCache.Load(scope.GameId, dir.Root).TryGet("исчез.dll", 10, 20, out _, out _));
         }
 
         /// <summary>
