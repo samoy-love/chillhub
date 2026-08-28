@@ -136,6 +136,12 @@ type Client struct {
 
 	// metaDir caches version metadata on disk; empty disables it.
 	metaDir string
+
+	// idx is the last community listing, kept for communityIndexTTL. Guarded by
+	// idxMu: builds can run side by side.
+	idxMu sync.Mutex
+	idx   *CommunityIndex
+	idxAt time.Time
 }
 
 // limiter spaces requests out and slows the whole client down when
@@ -326,6 +332,11 @@ type PackageVersion struct {
 	DownloadURL   string   `json:"download_url"`
 	WebsiteURL    string   `json:"website_url"`
 	IsActive      bool     `json:"is_active"`
+
+	// FileSize is the archive size in bytes. The per-package endpoint does not
+	// return it — only the community listing does — so zero means "unknown",
+	// not "empty", and the caller falls back to asking the CDN.
+	FileSize int64 `json:"file_size,omitempty"`
 }
 
 // Package is a Thunderstore package with its newest version inlined.
@@ -354,6 +365,32 @@ func (c *Client) GetVersion(ctx context.Context, ns, name, version string) (*Pac
 	}
 	c.metaWrite(full, &v)
 	return &v, nil
+}
+
+// GetDependency fetches one version named the way dependencies name it.
+//
+// Unlike GetVersion it does not trust a single reading of the string: a 404 on
+// the likeliest split is tried again on the next one, and only when EVERY
+// reading is a 404 is the package really gone. Everything else — a timeout, a
+// 500 — comes back as-is on the first attempt, because a broken network says
+// nothing about how the name should be split.
+func (c *Client) GetDependency(ctx context.Context, dep string) (*PackageVersion, error) {
+	candidates := SplitCandidates(dep)
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("mods: malformed dependency %q", dep)
+	}
+	var lastErr error
+	for _, c2 := range candidates {
+		v, err := c.GetVersion(ctx, c2.Namespace, c2.Name, c2.Version)
+		if err == nil {
+			return v, nil
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return nil, err
+		}
+		lastErr = err
+	}
+	return nil, lastErr
 }
 
 // metaRead returns a cached version document, or nil.
@@ -791,18 +828,58 @@ func isRateLimited(status int) bool {
 // contain hyphens, so only the FIRST and LAST segments are fixed. Splitting on
 // the first two hyphens — the obvious reading — corrupts every package whose
 // name contains one, and there are plenty.
+//
+// The FIRST segment is the usual namespace and the right first guess — but not
+// a guarantee. See SplitCandidates.
 func SplitDependency(dep string) (ns, name, version string, ok bool) {
+	all := SplitCandidates(dep)
+	if len(all) == 0 {
+		return "", "", "", false
+	}
+	c := all[0]
+	return c.Namespace, c.Name, c.Version, true
+}
+
+// DependencySplit is one way to read a dependency string.
+type DependencySplit struct {
+	Namespace string
+	Name      string
+	Version   string
+}
+
+// SplitCandidates lists every possible reading of a dependency string, most
+// likely first.
+//
+// ДЕФИСЫ БЫВАЮТ И В ПРОСТРАНСТВЕ ИМЁН. «swuff-star-ConfigurableCrafting-1.0.0»
+// принадлежит команде swuff-star, а не команде swuff — и запрос по первому
+// сегменту получает 404. Прежний код на этом останавливался и объявлял пакет
+// исчезнувшим с Thunderstore, то есть предлагал оператору собрать модпак без
+// двух модов, которые никуда не девались.
+//
+// Угадать нечем, поэтому перебираются все точки разреза: сначала самое частое
+// (пространство имён — первый сегмент), затем всё более длинные. Версия при
+// этом всегда последний сегмент — вот она в формате однозначна.
+func SplitCandidates(dep string) []DependencySplit {
 	parts := strings.Split(strings.TrimSpace(dep), "-")
 	if len(parts) < 3 {
-		return "", "", "", false
+		return nil
 	}
-	ns = parts[0]
-	version = parts[len(parts)-1]
-	name = strings.Join(parts[1:len(parts)-1], "-")
-	if ns == "" || name == "" || version == "" {
-		return "", "", "", false
+	version := parts[len(parts)-1]
+	rest := parts[:len(parts)-1]
+	if version == "" {
+		return nil
 	}
-	return ns, name, version, true
+
+	out := make([]DependencySplit, 0, len(rest)-1)
+	for cut := 1; cut < len(rest); cut++ {
+		ns := strings.Join(rest[:cut], "-")
+		name := strings.Join(rest[cut:], "-")
+		if ns == "" || name == "" {
+			continue
+		}
+		out = append(out, DependencySplit{Namespace: ns, Name: name, Version: version})
+	}
+	return out
 }
 
 // PackageKey is the identity of a package without its version. The resolver
