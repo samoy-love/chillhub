@@ -34,18 +34,28 @@
   }
 
   // describeMods решает, что показать на вкладке «Моды».
+  //
+  // В сводке теперь строка на КАЖДУЮ игру с модами, включая свежие: значок
+  // считает не длину списка, а те строки, с которыми надо что-то делать. Считай
+  // он по-прежнему все, — горел бы всегда и не значил бы ничего.
   function describeMods(games) {
     const list = Array.isArray(games) ? games : [];
-    if (list.length === 0) {
+    const behind = list.filter(function (g) { return g && (g.behind || g.deprecated); });
+    if (behind.length === 0) {
       return { show: false, text: '', title: '' };
     }
-    const lines = list.map(function (g) {
-      return (g.title || g.gameId) + ': ' + (g.latest || '?');
+    const lines = behind.map(function (g) {
+      const name = (g.title || g.gameId);
+      // Устаревший пакет той же версии — это не «вышло обновление», и звать
+      // пересобирать его бесполезно: решать, чем его заменить, придётся человеку.
+      return g.behind
+        ? name + ': ' + (g.latest || '?')
+        : name + ': пакет объявлен устаревшим';
     });
     return {
       show: true,
-      text: String(list.length),
-      title: 'Вышли обновления модпаков — ' + lines.join('; ')
+      text: String(behind.length),
+      title: 'Модпаки требуют внимания — ' + lines.join('; ')
         + '. Пересоберите пакет и активируйте новую версию.',
     };
   }

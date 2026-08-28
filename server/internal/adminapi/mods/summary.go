@@ -2,6 +2,8 @@ package mods
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -45,13 +47,30 @@ type LauncherSummary struct {
 	Pending bool   `json:"pending"`
 }
 
-// ModsGameSummary is one game whose active modpack fell behind Thunderstore.
+// ModsGameSummary is the state of one game's active modpack against Thunderstore.
+//
+// СТРОКА ЕСТЬ У КАЖДОЙ ИГРЫ С МОДАМИ, а не только у отставшей. Пока сюда
+// попадали одни отставшие, «всё свежо» и «проверка не сработала» выглядели
+// одинаково — пустым списком, — и отличить их можно было только чтением логов
+// сервера. Теперь молчание значит ровно одно: игр с модами нет вовсе.
 type ModsGameSummary struct {
 	GameID string `json:"gameId"`
 	Title  string `json:"title"`
 	Pack   string `json:"pack"`
 	Active string `json:"active"`
 	Latest string `json:"latest"`
+
+	// Behind — активная сборка отстала от Thunderstore. Только по нему считается
+	// «здесь ждут действия»: остальные поля описывают состояние, а не задачу.
+	Behind bool `json:"behind"`
+
+	// Deprecated — пакет помечен автором как устаревший. Версия при этом может
+	// совпадать: делать с такой игрой что-то надо, но не «пересобрать пакет».
+	Deprecated bool `json:"deprecated"`
+
+	// Error — почему состояние неизвестно: сеть, отказ Thunderstore, источник не
+	// с Thunderstore. Пустая строка — проверка прошла.
+	Error string `json:"error,omitempty"`
 }
 
 // Summary is the whole answer.
@@ -61,11 +80,11 @@ type Summary struct {
 	Pending  int               `json:"pending"`
 }
 
-// summaryCache keeps the last answer for summaryTTL.
+// summaryCache keeps the Thunderstore half of the answer for summaryTTL.
 type summaryCache struct {
 	mu   sync.Mutex
 	at   time.Time
-	last *Summary
+	last []ModsGameSummary
 }
 
 // SummaryHandler answers GET /admin/api/summary.
@@ -82,6 +101,27 @@ func (h *Handlers) SummaryHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) summary(ctx context.Context, force bool) *Summary {
+	// КЕШИРУЕТСЯ ТОЛЬКО ТО, ЧТО ХОДИТ В СЕТЬ.
+	//
+	// Половина про лаунчер — это два чтения с диска, и держать её десять минут
+	// значит врать ровно там, где ответ дешевле всего: сборку загрузили, а
+	// панель ещё треть часа показывает прежнюю самую свежую версию. Раньше
+	// кешировался весь ответ целиком, и «загрузил — не вижу» было штатным
+	// поведением.
+	out := &Summary{Launcher: h.launcherSummary(), Mods: h.modsSummaryCached(ctx, force)}
+	if out.Launcher.Pending {
+		out.Pending++
+	}
+	for _, m := range out.Mods {
+		if m.Behind || m.Deprecated {
+			out.Pending++
+		}
+	}
+	return out
+}
+
+// modsSummaryCached keeps the Thunderstore half for summaryTTL.
+func (h *Handlers) modsSummaryCached(ctx context.Context, force bool) []ModsGameSummary {
 	if !force {
 		h.sum.mu.Lock()
 		fresh := h.sum.last != nil && time.Since(h.sum.at) < summaryTTL
@@ -94,18 +134,13 @@ func (h *Handlers) summary(ctx context.Context, force bool) *Summary {
 
 	ctx, cancel := context.WithTimeout(ctx, summaryTimeout)
 	defer cancel()
-
-	out := &Summary{Launcher: h.launcherSummary(), Mods: h.modsSummary(ctx)}
-	if out.Launcher.Pending {
-		out.Pending++
-	}
-	out.Pending += len(out.Mods)
+	mods := h.modsSummary(ctx)
 
 	h.sum.mu.Lock()
-	h.sum.last = out
+	h.sum.last = mods
 	h.sum.at = time.Now()
 	h.sum.mu.Unlock()
-	return out
+	return mods
 }
 
 // launcherSummary compares the active launcher build with the newest uploaded
@@ -125,14 +160,18 @@ func (h *Handlers) launcherSummary() LauncherSummary {
 	}
 }
 
-// modsSummary lists games whose active modpack is behind Thunderstore.
+// modsSummary reports every game with a built modpack: what is installed, what
+// Thunderstore has now, and whether that is a reason to do something.
+//
+// Пустой срез, а не nil: в JSON это [] вместо null, и читающему не приходится
+// гадать, «моды не проверялись» или «игр с модами нет».
 func (h *Handlers) modsSummary(ctx context.Context) []ModsGameSummary {
+	out := []ModsGameSummary{}
 	entries, err := h.games.All()
 	if err != nil {
 		log.Printf("[summary] реестр игр: %v", err)
-		return nil
+		return out
 	}
-	var out []ModsGameSummary
 	for _, g := range entries {
 		if g.Mods == nil || !g.Mods.Enabled {
 			continue
@@ -141,20 +180,66 @@ func (h *Handlers) modsSummary(ctx context.Context) []ModsGameSummary {
 		if active == "" {
 			continue
 		}
-		checks := h.updateChecks(ctx, g.GameID, []VersionInfo{{Version: active}})
-		if len(checks) == 0 {
+
+		row := ModsGameSummary{GameID: g.GameID, Title: g.Title, Active: active}
+		st, err := h.packStatus(ctx, g.GameID, active)
+		if err != nil {
+			// Причина едет игроку панели, а не только в лог: «состояние
+			// неизвестно» и «всё свежо» — разные новости.
+			row.Error = err.Error()
+			out = append(out, row)
 			continue
 		}
-		c := checks[0]
-		out = append(out, ModsGameSummary{
-			GameID: g.GameID,
-			Title:  g.Title,
-			Pack:   c.Namespace + "/" + c.Name,
-			Active: active,
-			Latest: c.Latest,
-		})
+
+		row.Pack = st.Namespace + "/" + st.Name
+		row.Latest = st.Latest
+		row.Behind = st.Latest != "" && st.Latest != st.Installed
+		row.Deprecated = st.Deprecated
+		out = append(out, row)
 	}
 	return out
+}
+
+// packState is what Thunderstore says about one built modpack version.
+type packState struct {
+	Namespace  string
+	Name       string
+	Installed  string
+	Latest     string
+	Deprecated bool
+}
+
+// packStatus asks Thunderstore about one built version.
+//
+// Отдельно от updateChecks: та отвечает на вопрос «что в таблице версий стоит
+// пересобрать» и молчит про свежее, а сводке нужно состояние КАЖДОЙ игры,
+// включая «всё в порядке».
+func (h *Handlers) packStatus(ctx context.Context, gid, version string) (packState, error) {
+	src, err := h.builder.ReadSource(gid, version)
+	if err != nil {
+		return packState{}, fmt.Errorf("нет записи об источнике сборки: %w", err)
+	}
+	if src.Kind != SourceThunderstore {
+		return packState{}, errors.New("сборка собрана не из пакета Thunderstore")
+	}
+
+	ns, name, installed, ok := SplitDependency(version)
+	if !ok {
+		return packState{}, fmt.Errorf("имя версии %q не разбирается на пакет и номер", version)
+	}
+
+	p, err := h.builder.Client.GetPackage(ctx, ns, name)
+	if err != nil {
+		return packState{}, fmt.Errorf("не удалось спросить Thunderstore про %s-%s: %w", ns, name, err)
+	}
+
+	return packState{
+		Namespace:  ns,
+		Name:       name,
+		Installed:  installed,
+		Latest:     p.Latest.VersionNumber,
+		Deprecated: p.IsDeprecated,
+	}, nil
 }
 
 // newestVersion picks the highest version of a launcher build list.

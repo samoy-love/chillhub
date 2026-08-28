@@ -35,6 +35,11 @@ type fakeStore struct {
 	entries map[string]map[string]string
 	hits    map[string]int
 
+	// latest и deprecated — что Thunderstore отвечает про сам ПАКЕТ, без
+	// версии: этим ответом живёт проверка обновлений модпаков.
+	latest     map[string]string
+	deprecated map[string]bool
+
 	// cdnDenied повторяет настоящую поломку: имя объекта в хранилище не всегда
 	// выводится из полного имени пакета, и угаданный адрес отвечает 403.
 	cdnDenied map[string]bool
@@ -55,6 +60,8 @@ type fakeStore struct {
 func newFakeStore(t *testing.T) *fakeStore {
 	t.Helper()
 	fs := &fakeStore{
+		latest:       map[string]string{},
+		deprecated:   map[string]bool{},
 		deps:         map[string][]string{},
 		entries:      map[string]map[string]string{},
 		hits:         map[string]int{},
@@ -67,6 +74,29 @@ func newFakeStore(t *testing.T) *fakeStore {
 
 	mux.HandleFunc("/api/experimental/package/", func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/experimental/package/"), "/"), "/")
+
+		// Две части — сам пакет, без версии: так спрашивают «а что там сейчас
+		// самое свежее». Раньше фейк на такой запрос отвечал 404, и проверка
+		// обновлений в тестах не проверялась вовсе — она молча пропускала пакет.
+		if len(parts) == 2 {
+			key := parts[0] + "/" + parts[1]
+			latest, ok := fs.latest[key]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(Package{
+				Namespace:    parts[0],
+				Name:         parts[1],
+				FullName:     parts[0] + "-" + parts[1],
+				IsDeprecated: fs.deprecated[key],
+				Latest: PackageVersion{
+					Namespace: parts[0], Name: parts[1], VersionNumber: latest,
+					FullName: fmt.Sprintf("%s-%s-%s", parts[0], parts[1], latest), IsActive: true,
+				},
+			})
+			return
+		}
 		if len(parts) < 3 {
 			http.NotFound(w, r)
 			return
@@ -212,6 +242,12 @@ func (fs *fakeStore) serveArchive(t *testing.T, w http.ResponseWriter, _ *http.R
 }
 
 // add registers a package with its dependencies and archive contents.
+// setLatest говорит фейку, что Thunderstore считает свежей версией пакета.
+func (fs *fakeStore) setLatest(ns, name, version string, deprecated bool) {
+	fs.latest[ns+"/"+name] = version
+	fs.deprecated[ns+"/"+name] = deprecated
+}
+
 func (fs *fakeStore) add(full string, deps []string, entries map[string]string) {
 	fs.deps[full] = deps
 	fs.entries[full] = entries
