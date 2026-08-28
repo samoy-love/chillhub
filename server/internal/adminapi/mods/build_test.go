@@ -246,7 +246,7 @@ func (fs *fakeStore) add(full string, deps []string, entries map[string]string) 
 // communityListing собирает список сообщества из тех же данных, что раздаёт
 // поштучный эндпоинт: две выдачи об одних и тех же пакетах не должны
 // расходиться, иначе тест на индекс проверял бы выдуманный мир.
-func (f *fakeStore) communityListing() string {
+func (fs *fakeStore) communityListing() string {
 	type ver struct {
 		Namespace    string   `json:"namespace"`
 		Name         string   `json:"name"`
@@ -263,8 +263,8 @@ func (f *fakeStore) communityListing() string {
 		Versions []ver  `json:"versions"`
 	}
 
-	out := make([]pkg, 0, len(f.deps))
-	for _, full := range slices.Sorted(maps.Keys(f.deps)) {
+	out := make([]pkg, 0, len(fs.deps))
+	for _, full := range slices.Sorted(maps.Keys(fs.deps)) {
 		ns, name, version, ok := SplitDependency(full)
 		if !ok {
 			continue
@@ -278,9 +278,9 @@ func (f *fakeStore) communityListing() string {
 				Name:         name,
 				FullName:     full,
 				VersionNum:   version,
-				Dependencies: f.deps[full],
-				DownloadURL:  f.baseURL + "/package/download/" + ns + "/" + name + "/" + version + "/",
-				FileSize:     int64(len(f.entries[full]) * 64),
+				Dependencies: fs.deps[full],
+				DownloadURL:  fs.baseURL + "/package/download/" + ns + "/" + name + "/" + version + "/",
+				FileSize:     int64(len(fs.entries[full]) * 64),
 			}},
 		})
 	}
@@ -292,10 +292,10 @@ func (f *fakeStore) communityListing() string {
 }
 
 // disableIndex делает список сообщества недоступным.
-func (f *fakeStore) disableIndex() {
-	f.mu.Lock()
-	f.indexOff = true
-	f.mu.Unlock()
+func (fs *fakeStore) disableIndex() {
+	fs.mu.Lock()
+	fs.indexOff = true
+	fs.mu.Unlock()
 }
 
 func testBuilder(t *testing.T, fs *fakeStore) (*Builder, string) {

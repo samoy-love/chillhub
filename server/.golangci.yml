@@ -144,6 +144,7 @@ linters:
       # Тесты давали 361 замечание из 702, и ни одно не про дефект.
       - path: _test\.go
         linters:
+          - tagliatelle    # подделки ответов Thunderstore повторяют его snake_case
           - gosec          # права 0755 внутри t.TempDir()
           - noctx          # httptest.NewRequest без контекста
           - forcetypeassert # непроверенное приведение типа роняет тест внятно
