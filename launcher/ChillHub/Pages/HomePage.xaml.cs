@@ -1246,15 +1246,10 @@ namespace ChillHub.Pages {
         /// </summary>
         /// <param name="gameId">Игра, выделенная до подмены.</param>
         private void RestoreSelection(string? gameId) {
-            if (this.games == null || this.games.Count == 0) {
-                return;
+            var idx = GameCatalog.SelectionIndexAfterRefresh(this.games, gameId);
+            if (idx >= 0) {
+                this.GameList.SelectedItem = this.games[idx];
             }
-
-            var idx = string.IsNullOrWhiteSpace(gameId)
-                ? -1
-                : GameCatalog.IndexOfIgnoreCase(this.games, gameId);
-
-            this.GameList.SelectedItem = this.games[idx >= 0 ? idx : 0];
         }
 
         private void SetGamesSource() {

@@ -206,5 +206,25 @@ namespace ChillHub.Core.Home {
 
             return games.FindIndex(g => string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
         }
+
+        /// <summary>
+        /// Кого выделить после обновления списка: прежнюю игру, если она осталась, иначе
+        /// первую. Пустой список выделять нечем.
+        /// <para>
+        /// Возврат к первой игре — не мелочь: игру могли удалить на сервере, и без
+        /// выделения витрина пустеет, а кнопка действия остаётся от игры, которой уже нет.
+        /// </para>
+        /// </summary>
+        /// <param name="games">Список после обновления.</param>
+        /// <param name="previousId">Игра, выделенная до обновления.</param>
+        /// <returns>Индекс выделяемой игры или -1, если список пуст.</returns>
+        internal static int SelectionIndexAfterRefresh(List<GameInfo>? games, string? previousId) {
+            if (games == null || games.Count == 0) {
+                return -1;
+            }
+
+            var idx = string.IsNullOrWhiteSpace(previousId) ? -1 : IndexOfIgnoreCase(games, previousId);
+            return idx >= 0 ? idx : 0;
+        }
     }
 }

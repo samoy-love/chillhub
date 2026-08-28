@@ -280,6 +280,22 @@ namespace ChillHub.Tests {
             Assert.True(GameCatalog.NeedsRebind("не список", shown));
         }
 
+        /// <summary>
+        /// После обновления выделение возвращается на прежнюю игру, а если её удалили —
+        /// на первую: иначе витрина и кнопка действия остаются от игры, которой нет.
+        /// </summary>
+        [Fact]
+        public void ВыделениеПослеОбновленияВозвращаетсяИлиСъезжаетНаПервую() {
+            var games = new List<GameInfo> { Game("a", "А"), Game("b", "Б") };
+
+            Assert.Equal(1, GameCatalog.SelectionIndexAfterRefresh(games, "b"));
+            Assert.Equal(1, GameCatalog.SelectionIndexAfterRefresh(games, "B"));
+            Assert.Equal(0, GameCatalog.SelectionIndexAfterRefresh(games, "удалённая"));
+            Assert.Equal(0, GameCatalog.SelectionIndexAfterRefresh(games, null));
+            Assert.Equal(-1, GameCatalog.SelectionIndexAfterRefresh(new List<GameInfo>(), "a"));
+            Assert.Equal(-1, GameCatalog.SelectionIndexAfterRefresh(null, "a"));
+        }
+
         private static GameInfo Game(string id, string title, bool installed = false) =>
             new GameInfo { GameId = id, Title = title, IsInstalled = installed };
     }
