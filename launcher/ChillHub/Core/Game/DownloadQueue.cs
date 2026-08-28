@@ -400,7 +400,9 @@ namespace ChillHub.Core.Game {
         /// текст карточки очереди — тот же набор фраз, что раньше показывал прямой путь через
         /// StartUpdateAsync у выбранной игры.
         /// </summary>
-        private static string StageText(SyncProgress p) {
+        /// <param name="p">Отчёт синхронизации.</param>
+        /// <returns>Текст для карточки очереди.</returns>
+        internal static string StageText(SyncProgress p) {
             var text = p.Stage switch {
                 "Checking" => "Проверка…",
                 "Downloading" => "Скачивание обновления…",

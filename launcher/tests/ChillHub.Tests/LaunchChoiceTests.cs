@@ -116,6 +116,34 @@ namespace ChillHub.Tests {
             Assert.Equal(LaunchTarget.LocalVanilla, chosen!.Target);
         }
 
+        /// <summary>Без идентификатора игры запоминать нечего — и падать не за что.</summary>
+        [Fact]
+        public void БезИдентификатораВыборНеЗапоминается() {
+            LaunchChoice.Remember(null, LaunchTarget.SteamModded);
+            LaunchChoice.Remember("   ", LaunchTarget.SteamModded);
+
+            Assert.Null(LaunchChoice.Remembered(null));
+        }
+
+        /// <summary>Пустой список вариантов — спрашивать нечего.</summary>
+        [Fact]
+        public void ПустойСписокВариантовДаётNull() {
+            LaunchChoice.Remember("game", LaunchTarget.SteamModded);
+
+            Assert.Null(LaunchChoice.Preferred("game", System.Array.Empty<LaunchOption>()));
+            Assert.Null(LaunchChoice.Preferred("game", null!));
+        }
+
+        /// <summary>Выбора не было — «Играть» обязана спросить, а не угадать.</summary>
+        [Fact]
+        public void БезЗапомненногоВыбораPreferredМолчит() {
+            var options = new List<LaunchOption> {
+                new(LaunchTarget.SteamModded, "Steam", @"C:\\s", true, LaunchAction.Play, string.Empty),
+            };
+
+            Assert.Null(LaunchChoice.Preferred("никогда-не-выбирали", options));
+        }
+
         /// <summary>Подпись варианта называет и копию, и модпак — она идёт на подсказку кнопки.</summary>
         [Fact]
         public void ПодписьВариантаНазываетМодпак() {

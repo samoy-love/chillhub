@@ -1451,22 +1451,11 @@ namespace ChillHub.Pages {
         private void SyncLaunchMenuButton(ActionMode mode) {
             try {
                 var game = this.GetSelectedGame();
-                var modded = mode == ActionMode.Play
-                    && game?.Mods is { } mods
-                    && !string.IsNullOrWhiteSpace(mods.SteamAppId);
+                var view = Core.Mods.LaunchPlan.MenuButton(
+                    game?.Mods, mode == ActionMode.Play, Core.Mods.LaunchChoice.Remembered(game?.GameId));
 
-                this.LaunchMenuBtn.Visibility = modded ? Visibility.Visible : Visibility.Collapsed;
-                if (!modded) {
-                    this.ActionBtn.ToolTip = null;
-                    return;
-                }
-
-                // Что именно запустится по «Играть» — на подсказке кнопки. Без этого
-                // единственный способ узнать — нажать и посмотреть, что откроется.
-                var remembered = Core.Mods.LaunchChoice.Remembered(game!.GameId);
-                this.ActionBtn.ToolTip = remembered is { } target
-                    ? "Запустится: " + Core.Mods.ModsLaunch.TitleOf(target, game.Mods)
-                    : "Выбрать, что запускать: своя копия из Steam или сборка Chill Hub, с модами или без";
+                this.LaunchMenuBtn.Visibility = view.Visible ? Visibility.Visible : Visibility.Collapsed;
+                this.ActionBtn.ToolTip = view.Visible ? view.Tooltip : null;
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Warn($"SyncLaunchMenuButton: {ex.Message}");
@@ -2117,26 +2106,16 @@ namespace ChillHub.Pages {
         /// <param name="game">Выбранная игра.</param>
         /// <param name="logSteam">Писать ли в журнал ход поиска копии в Steam.</param>
         /// <returns>Варианты запуска.</returns>
-        private IReadOnlyList<Core.Mods.LaunchOption> LaunchOptionsFor(GameInfo game, bool logSteam) {
-            var mods = game.Mods!;
-            var localRoot = Core.Home.GameLocalState.GameLocalRoot(game.GameId);
-            var steam = Core.Mods.SteamLocator.Locate(mods.SteamAppId, mods.SteamFolder);
+        private Core.Mods.LaunchProbes LaunchProbes(bool logSteam)
+            => new(
+                Core.Home.GameLocalState.GameLocalRoot,
+                Core.Home.GameLocalState.HasAnyLocalGameFiles,
+                Core.Mods.SteamLocator.Locate,
+                Core.Home.GameLocalState.ReadModsVersionAt,
+                logSteam ? Core.Logging.Logger.Info : null);
 
-            if (logSteam) {
-                foreach (var line in steam.Trace) {
-                    Core.Logging.Logger.Info($"[mods] поиск Steam: {line}");
-                }
-            }
-
-            return Core.Mods.ModsLaunch.Options(new Core.Mods.LaunchContext(
-                mods,
-                localRoot,
-                Core.Home.GameLocalState.HasAnyLocalGameFiles(localRoot),
-                game.NeedsUpdate,
-                !string.IsNullOrWhiteSpace(game.LatestVersion),
-                steam,
-                Core.Home.GameLocalState.ReadModsVersionAt(steam.GameDir)));
-        }
+        private IReadOnlyList<Core.Mods.LaunchOption> LaunchOptionsFor(GameInfo game, bool logSteam)
+            => Core.Mods.LaunchPlan.OptionsFor(game, this.LaunchProbes(logSteam));
 
         /// <summary>
         /// Какой вариант запустится по «Играть»: запомненный, если он сейчас доступен.
@@ -2176,70 +2155,54 @@ namespace ChillHub.Pages {
         }
 
         /// <summary>
-        /// Запускает выбранный вариант и запоминает его.
+        /// Доводит выбранную строку меню до игры: решение, память, установка, запуск.
         /// <para>
-        /// Общий для двух путей: пункта меню и кнопки «Играть», которая стартует
-        /// запомненное без меню. Две копии этого кода разошлись бы на первой же
-        /// правке — например, одна запоминала бы выбор, а другая нет.
+        /// Вся цепочка живёт в <see cref="Core.Mods.LaunchRunner"/>: здесь остаются
+        /// только настоящие обращения к окну — строка состояния, всплывашка, вопрос,
+        /// очередь загрузок и сам старт процесса.
         /// </para>
         /// </summary>
         /// <param name="game">Игра.</param>
         /// <param name="option">Что запускаем.</param>
         private void StartLaunchOption(GameInfo game, Core.Mods.LaunchOption option) {
             try {
-                if (game.Mods == null || !option.Available) {
-                    return;
-                }
+                var runner = new Core.Mods.LaunchRunner(new Core.Mods.LaunchUi {
+                    SetStatus = text => this.StatusText.Text = text,
+                    Toast = text => this.ShowToast(text),
+                    Confirm = Core.Home.HomeDialogs.AskYesNo,
+                    Enqueue = gid => this.downloadQueue.Enqueue(gid),
+                    RefreshChoice = () => this.SyncLaunchMenuButton(this.actionMode),
+                    InstallMods = (g, title, dir) => this.InstallModsToSteamAsync(g, title, dir),
+                    Launch = this.LaunchNow,
+                }) {
+                    ModsBusy = () => this.steamModsInstalling,
+                };
 
-                // ПУНКТ ДОВОДИТ ДЕЛО ДО КОНЦА САМ.
-                //
-                // Установка модов в копию Steam, скачивание сборки, обновление
-                // устаревшей — всё это раньше жило в других местах экрана, и пункт лишь
-                // выключался с припиской. Теперь один щелчок делает то, что написано.
-                switch (option.Action) {
-                    case Core.Mods.LaunchAction.InstallMods:
-                        _ = this.InstallModsThenPlayAsync(game, option);
-                        return;
-                    case Core.Mods.LaunchAction.InstallGame:
-                    case Core.Mods.LaunchAction.Update:
-                        // Запоминаем выбор до закачки: когда она кончится, кнопка
-                        // «Играть» уже будет знать, чем запускать.
-                        Core.Mods.LaunchChoice.Remember(game.GameId, option.Target);
-                        if (!this.downloadQueue.Enqueue(game.GameId)) {
-                            this.StatusText.Text = "Игра уже установлена или уже в очереди.";
-                        }
-
-                        return;
-                }
-
-                var maintenance = Core.Maintenance.MaintenanceService.Current;
-                if (maintenance.BlocksPlay) {
-                    this.StatusText.Text = maintenance.BuildBannerText();
-                    return;
-                }
-
-                // Запоминаем ДО запуска: игра может занять экран целиком, и до строки
-                // после Start дело дойдёт уже без пользователя перед лаунчером.
-                Core.Mods.LaunchChoice.Remember(game.GameId, option.Target);
-                this.SyncLaunchMenuButton(this.actionMode);
-
-                var steam = Core.Mods.SteamLocator.Locate(game.Mods.SteamAppId, game.Mods.SteamFolder);
-                var proc = Core.Mods.ModsLaunch.Start(option, game.Mods, game.ExeRelativePath, steam);
-                if (proc == null && option.ViaSteam) {
-                    // Steam.exe завершается сразу, отдав команду; отсутствие процесса тут
-                    // не ошибка. Настоящий отказ уже записан в журнал внутри ModsLaunch.
-                    this.StatusText.Text = "Запуск через Steam…";
-                }
-                else if (proc == null) {
-                    this.StatusText.Text = "Не удалось запустить игру. Подробности в журнале.";
-                }
-                else {
-                    this.StatusText.Text = string.Empty;
-                    Core.Metrics.MetricsService.GameLaunch(game.GameId, game.Mods.Version);
-                }
+                _ = runner.RunAsync(
+                    game, option, Core.Maintenance.MaintenanceService.Current, this.LaunchProbes(logSteam: false));
             }
             catch (Exception ex) {
                 this.ShowUserError("Не удалось запустить игру.", ex, "HomePage.StartLaunchOption");
+            }
+        }
+
+        /// <summary>Собственно старт процесса игры и отметка в статистике.</summary>
+        /// <param name="game">Игра.</param>
+        /// <param name="option">Готовый к запуску вариант.</param>
+        private void LaunchNow(GameInfo game, Core.Mods.LaunchOption option) {
+            var steam = Core.Mods.SteamLocator.Locate(game.Mods!.SteamAppId, game.Mods.SteamFolder);
+            var proc = Core.Mods.ModsLaunch.Start(option, game.Mods, game.ExeRelativePath, steam);
+            if (proc == null && option.ViaSteam) {
+                // Steam.exe завершается сразу, отдав команду; отсутствие процесса тут
+                // не ошибка. Настоящий отказ уже записан в журнал внутри ModsLaunch.
+                this.StatusText.Text = "Запуск через Steam…";
+            }
+            else if (proc == null) {
+                this.StatusText.Text = "Не удалось запустить игру. Подробности в журнале.";
+            }
+            else {
+                this.StatusText.Text = string.Empty;
+                Core.Metrics.MetricsService.GameLaunch(game.GameId, game.Mods.Version);
             }
         }
 
@@ -2310,59 +2273,6 @@ namespace ChillHub.Pages {
             }
         }
 
-
-        /// <summary>
-        /// Ставит модпак в копию из Steam и, если получилось, сразу запускает игру.
-        /// <para>
-        /// ОДИН ЩЕЛЧОК НА ВЕСЬ ПУТЬ. Игрок выбрал «Steam · с модами» — он хочет играть
-        /// с модами, а не «выполнить установку» и потом искать, чем запустить.
-        /// Установка модпака идёт минуты, а не часы: это единственный шаг, после
-        /// которого запуск без спроса уместен.
-        /// </para>
-        /// <para>
-        /// Вопрос перед записью остаётся: полтора гигабайта уезжают в ЧУЖУЮ установку
-        /// Steam, и человек должен увидеть, в какую именно папку.
-        /// </para>
-        /// </summary>
-        /// <param name="game">Игра.</param>
-        /// <param name="option">Выбранный вариант запуска.</param>
-        /// <returns>Задача установки и запуска.</returns>
-        private async Task InstallModsThenPlayAsync(GameInfo game, Core.Mods.LaunchOption option) {
-            try {
-                if (this.steamModsInstalling) {
-                    this.ShowToast("Моды уже устанавливаются. Дождитесь завершения.");
-                    return;
-                }
-
-                var mods = game.Mods;
-                var title = string.IsNullOrWhiteSpace(game.Title) ? game.GameId ?? string.Empty : game.Title;
-                if (mods is not { HasLatest: true } || string.IsNullOrWhiteSpace(option.GameDir)) {
-                    this.StatusText.Text = "Для этой игры нет модпака, который можно поставить в Steam";
-                    return;
-                }
-
-                if (!Core.Home.HomeDialogs.AskYesNo(
-                        Core.Home.SteamModsInstall.BuildConfirmText(title, mods, option.GameDir),
-                        Core.Home.SteamModsInstall.ConfirmCaption)) {
-                    return;
-                }
-
-                var installed = await this.InstallModsToSteamAsync(game, title, option.GameDir).ConfigureAwait(true);
-                if (!installed) {
-                    return;
-                }
-
-                // Пересчитываем варианты: тот, что был «установить моды», стал «играть».
-                var ready = this.LaunchOptionsFor(game, logSteam: false)
-                    .FirstOrDefault(o => o.Target == option.Target && o.ReadyToPlay);
-                if (ready != null) {
-                    this.StartLaunchOption(game, ready);
-                }
-            }
-            catch (Exception ex) {
-                this.ShowUserError("Не удалось установить моды в копию из Steam.", ex, "HomePage.InstallModsThenPlayAsync");
-            }
-        }
 
         /// <summary>
         /// Сама установка: качает модпак в папку Steam, не занимая UI-поток.

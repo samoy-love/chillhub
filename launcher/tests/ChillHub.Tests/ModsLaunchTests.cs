@@ -328,6 +328,49 @@ namespace ChillHub.Tests {
             string steamModsVersion = "ASTeam-LethalReloaded-2.2.12")
             => new(mods, localRoot, localInstalled, localNeedsUpdate, hasServerBuild, steam, steamModsVersion);
 
+        /// <summary>Строка меню склеивается из подписи и пояснения.</summary>
+        [Fact]
+        public void СтрокаМенюСклеиваетсяИзПодписиИПояснения() {
+            var plain = new LaunchOption(LaunchTarget.SteamVanilla, "Steam · без модов", "d", false, LaunchAction.Play, string.Empty);
+            var noted = new LaunchOption(LaunchTarget.SteamModded, "Steam · с модами", "d", true, LaunchAction.InstallMods, "установить моды");
+
+            Assert.Equal("Steam · без модов", plain.MenuText);
+            Assert.Equal("Steam · с модами — установить моды", noted.MenuText);
+        }
+
+        /// <summary>
+        /// Копия в Steam есть, а модпака на сервере ещё нет: ставить нечего, и строка
+        /// честно выключается.
+        /// </summary>
+        [Fact]
+        public void БезСобранногоМодпакаSteamСтрокаВыключена() {
+            var steamDir = this.MakeGameDir("[General]" + "\n" + "enabled = true" + "\n");
+            var steam = new SteamGame(SteamLookup.Found, steamDir, "steam.exe", Array.Empty<string>());
+
+            var options = ModsLaunch.Options(Ctx(null, steamDir, steam));
+
+            var modded = options.Single(o => o.Target == LaunchTarget.SteamModded);
+            Assert.Equal(LaunchAction.Unavailable, modded.Action);
+            Assert.Equal("модпак ещё не опубликован", modded.Note);
+        }
+
+        /// <summary>
+        /// Версия модпака записана, а загрузчика в папке нет — так бывает после того,
+        /// как Steam восстановил свои файлы поверх модов.
+        /// </summary>
+        [Fact]
+        public void ЗатёртыйSteamЗагрузчикПредлагаетсяКВосстановлению() {
+            var steamDir = Path.Combine(this.root, "SteamNoDoorstop");
+            Directory.CreateDirectory(steamDir);
+            var steam = new SteamGame(SteamLookup.Found, steamDir, "steam.exe", Array.Empty<string>());
+
+            var options = ModsLaunch.Options(Ctx(Pack(), steamDir, steam));
+
+            var modded = options.Single(o => o.Target == LaunchTarget.SteamModded);
+            Assert.Equal(LaunchAction.InstallMods, modded.Action);
+            Assert.Equal("восстановить моды", modded.Note);
+        }
+
         /// <summary>Все четыре варианта доступны, когда есть и Steam-копия, и сборка, и модпак.</summary>
         [Fact]
         public void ВсеЧетыреВариантаДоступныПриПолномНаборе() {
