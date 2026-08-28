@@ -395,6 +395,22 @@ namespace ChillHub.Tests {
             Assert.Equal(string.Empty, Convert(new QueueItemSpeedConverter(), item));
         }
 
+        /// <summary>
+        /// Строка качающейся игры перерисовывается не чаще четырёх раз в секунду: замена
+        /// позиции пересобирает её целиком, а отчёты приходят десять раз в секунду.
+        /// Смена состояния при этом проходит сразу — это событие, а не цифра.
+        /// </summary>
+        [Theory]
+        [InlineData(true, 0.0, false)]
+        [InlineData(true, 100.0, false)]
+        [InlineData(true, 250.0, true)]
+        [InlineData(true, 900.0, true)]
+        [InlineData(false, 0.0, true)]
+        public void СтрокаЗакачкиПерерисовываетсяНеЧащеЧетырёхРазВСекунду(
+            bool sameState, double sinceMs, bool expected) {
+            Assert.Equal(expected, QueueDockLayout.ShouldRefreshRow(sameState, sinceMs));
+        }
+
         private static QueueItem Item(
             QueueItemState state,
             long done = 0,
