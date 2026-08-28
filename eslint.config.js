@@ -154,7 +154,8 @@ export default [
       'server/admin_ui/ui-status.js',
       'server/admin_ui/upload-card.js',
       'server/admin_ui/ndjson.js',
-      'server/admin_ui/mods-panel.js'
+      'server/admin_ui/mods-panel.js',
+      'server/admin_ui/feedback-logs.js'
     ],
     languageOptions: {
       globals: {

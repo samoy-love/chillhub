@@ -12,6 +12,7 @@ package feedback
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +41,12 @@ type Item struct {
 	AttachLogs bool              `json:"attachLogs"`
 	Logs       string            `json:"logs,omitempty"`
 	System     map[string]string `json:"system,omitempty"`
+
+	// LogBytes is the size of Logs, filled in for responses that deliberately
+	// omit the bundle itself. Without it the panel cannot tell "no logs
+	// attached" from "logs are not in THIS response", and the download button
+	// has nothing to show a size for.
+	LogBytes int `json:"logBytes,omitempty"`
 }
 
 // Storage limits. The inbox is a single JSON file that is read and rewritten
@@ -466,9 +474,21 @@ func (h *Handlers) List(w http.ResponseWriter, r *http.Request) {
 	f := parseListFilters(r)
 	out := make([]Item, 0, len(items))
 	for _, it := range items {
-		if f.matches(it) {
-			out = append(out, it)
+		if !f.matches(it) {
+			continue
 		}
+
+		// СПИСОК БЕЗ ЖУРНАЛОВ, И ЭТО НЕ ЭКОНОМИЯ РАДИ ЭКОНОМИИ.
+		//
+		// В списке до сотни обращений, у каждого до мегабайта диагностики, и
+		// панель перезапрашивает список на каждое действие — прочитать,
+		// пометить важным, удалить. Отдавать при этом сто мегабайт, из которых
+		// UI показывает только имя и первую строку комментария, значит платить
+		// временем оператора за данные, которые он не просил. Сам журнал
+		// приходит по отдельному адресу, когда обращение открыли.
+		it.LogBytes = len(it.Logs)
+		it.Logs = ""
+		out = append(out, it)
 	}
 	// Sort by CreatedAt desc
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
@@ -578,6 +598,74 @@ func (h *Handlers) Get(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	http.Error(w, "not found", http.StatusNotFound)
+}
+
+// Logs returns the diagnostics bundle of one report as a plain text file.
+//
+// ОТДЕЛЬНЫМ АДРЕСОМ, А НЕ ПОЛЕМ В JSON. Бандл — до мегабайта текста, и внутри
+// JSON он приезжает вместе со всем остальным: панель не может ни показать его
+// частями, ни дать сохранить файлом, ни не тянуть его вовсе, пока оператор
+// читает список. Здесь же он отдаётся ровно тем, чем является, — текстом, —
+// и браузер сам предлагает его сохранить.
+//
+// Content-Disposition обязателен. Без него браузер показывает мегабайт лога
+// прямо во вкладке, и «скачать» превращается в «выделить всё и скопировать».
+func (h *Handlers) Logs(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		http.Error(w, "missing id", http.StatusBadRequest)
+		return
+	}
+	h.mu.Lock()
+	items, _ := h.readAll()
+	h.mu.Unlock()
+
+	for _, it := range items {
+		if it.ID != id {
+			continue
+		}
+		if it.Logs == "" {
+			// Не 404: обращение существует, журнала у него нет. Разные ответы
+			// на «нет такого обращения» и «журнал не прикладывали» — это
+			// разница между «ошиблись ссылкой» и «смотреть нечего».
+			http.Error(w, "no logs attached", http.StatusNoContent)
+			return
+		}
+
+		// Имя файла собирается из идентификатора, а он проверен при приёме и
+		// состоит из шестнадцатеричных цифр; всё равно экранируем — заголовок
+		// уезжает в браузер, и одна кавычка в нём стоит дороже одной строки кода.
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote("feedback-"+safeFileID(id)+".log"))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Cache-Control", "no-store")
+		if _, err := io.WriteString(w, it.Logs); err != nil {
+			log.Printf("[feedback] logs id=%q: %v", id, err)
+		}
+
+		return
+	}
+
+	http.Error(w, "not found", http.StatusNotFound)
+}
+
+// safeFileID keeps only what a file name may contain. The id comes from our own
+// generator, so this is a guard against a future change there rather than
+// against the caller.
+func safeFileID(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "report"
+	}
+	return b.String()
 }
 
 // Delete hard-deletes a report.
