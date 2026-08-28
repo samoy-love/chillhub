@@ -11,6 +11,7 @@ namespace ChillHub.Tests {
 
     using ChillHub.Core;
     using ChillHub.Core.Game;
+    using ChillHub.Core.Home;
     using ChillHub.Core.UI;
 
     using Xunit;
@@ -344,10 +345,18 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void ЦифрыЗакачкиРазложеныПоДвумСтрокам() {
-            var item = Item(QueueItemState.Running, done: 5L * 1024 * 1024, total: 20L * 1024 * 1024, speed: 1024 * 1024);
+            const long mb = 1024 * 1024;
+            var item = Item(QueueItemState.Running, done: 5 * mb, total: 20 * mb, speed: mb);
 
-            Assert.Equal("5,0 МБ / 20,0 МБ", Convert(new QueueItemSizeConverter(), item));
-            Assert.Equal("1,0 МБ/с · осталось 15 с", Convert(new QueueItemSpeedConverter(), item));
+            // Ожидание собирается теми же форматтерами, что и сама подпись: разделитель
+            // дробной части зависит от языка машины, и «5,0» в ожидании валило бы прогон
+            // на англоязычном раннере CI, ничего не говоря о поведении.
+            Assert.Equal(
+                $"{HomeFormat.FormatSize(5 * mb)} / {HomeFormat.FormatSize(20 * mb)}",
+                Convert(new QueueItemSizeConverter(), item));
+            Assert.Equal(
+                $"{1.0:0.0} МБ/с · осталось {HomeFormat.FormatEta(15)}",
+                Convert(new QueueItemSpeedConverter(), item));
         }
 
         /// <summary>
@@ -359,7 +368,9 @@ namespace ChillHub.Tests {
             var item = Item(QueueItemState.Running, done: 0, total: 1024);
 
             Assert.Equal(string.Empty, Convert(new QueueItemSpeedConverter(), item));
-            Assert.Equal("0 Б / 1,0 КБ", Convert(new QueueItemSizeConverter(), item));
+            Assert.Equal(
+                $"{HomeFormat.FormatSize(0)} / {HomeFormat.FormatSize(1024)}",
+                Convert(new QueueItemSizeConverter(), item));
         }
 
         /// <summary>Объём неизвестен — цифр нет ни в одной строке, а не «0 / 0».</summary>
