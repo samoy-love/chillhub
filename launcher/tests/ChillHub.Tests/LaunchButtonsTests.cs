@@ -112,6 +112,26 @@ namespace ChillHub.Tests {
             Assert.DoesNotContain(view.Buttons, b => b.Accent);
         }
 
+        /// <summary>
+        /// Рядом с «Установить» кнопка запуска акцента не носит: залитых кнопок в ряду
+        /// должно быть не больше одной, иначе неясно, какая из них главная.
+        /// </summary>
+        [Fact]
+        public void РядомСКнопкойДействияАкцентаНет() {
+            var options = new List<LaunchOption> {
+                Option(LaunchTarget.SteamModded, LaunchAction.Play),
+                Option(LaunchTarget.SteamVanilla, LaunchAction.Play),
+                Option(LaunchTarget.LocalModded, LaunchAction.InstallGame, "установить игру с модами"),
+            };
+
+            var view = LaunchButtons.Compute(
+                Pack(), playMode: false, steamAllowed: true, options, LaunchTarget.SteamModded);
+
+            Assert.True(view.ActionVisible);
+            Assert.DoesNotContain(view.Buttons, b => b.Accent);
+            Assert.Equal("Style.LaunchButton.Ghost", Assert.Single(view.Buttons).StyleKey);
+        }
+
         /// <summary>У игры без модов витрина остаётся прежней: одна кнопка действия.</summary>
         [Fact]
         public void БезМодовВитринаПрежняя() {

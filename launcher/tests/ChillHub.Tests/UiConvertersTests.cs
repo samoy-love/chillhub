@@ -11,6 +11,7 @@ namespace ChillHub.Tests {
 
     using ChillHub.Core;
     using ChillHub.Core.Game;
+    using ChillHub.Core.Home;
     using ChillHub.Core.UI;
 
     using Xunit;
@@ -338,13 +339,86 @@ namespace ChillHub.Tests {
             Assert.Empty(visible);
         }
 
+        /// <summary>
+        /// Объём и скорость — разными строками: в карточке очереди они стоят одна под
+        /// другой в правой колонке, и склеивать их в одну строку больше нечем.
+        /// </summary>
+        [Fact]
+        public void ЦифрыЗакачкиРазложеныПоДвумСтрокам() {
+            const long mb = 1024 * 1024;
+            var item = Item(QueueItemState.Running, done: 5 * mb, total: 20 * mb, speed: mb);
+
+            // Ожидание собирается теми же форматтерами, что и сама подпись: разделитель
+            // дробной части зависит от языка машины, и «5,0» в ожидании валило бы прогон
+            // на англоязычном раннере CI, ничего не говоря о поведении.
+            Assert.Equal(
+                $"{HomeFormat.FormatSize(5 * mb)} / {HomeFormat.FormatSize(20 * mb)}",
+                Convert(new QueueItemSizeConverter(), item));
+            Assert.Equal(
+                $"{1.0:0.0} МБ/с · осталось {HomeFormat.FormatEta(15)}",
+                Convert(new QueueItemSpeedConverter(), item));
+        }
+
+        /// <summary>
+        /// Пока скорость неизвестна, второй строки нет вовсе: «0,0 МБ/с» на первых
+        /// секундах — не сведения, а шум, и остаток по такой скорости бесконечен.
+        /// </summary>
+        [Fact]
+        public void БезИзвестнойСкоростиВтораяСтрокаПустая() {
+            var item = Item(QueueItemState.Running, done: 0, total: 1024);
+
+            Assert.Equal(string.Empty, Convert(new QueueItemSpeedConverter(), item));
+            Assert.Equal(
+                $"{HomeFormat.FormatSize(0)} / {HomeFormat.FormatSize(1024)}",
+                Convert(new QueueItemSizeConverter(), item));
+        }
+
+        /// <summary>
+        /// Обратное преобразование этим подписям не нужно и не поддерживается: молчаливое
+        /// «ничего не делаю» здесь опаснее исключения — привязка в обе стороны означала бы,
+        /// что кто-то собрался записывать текст подписи обратно в позицию очереди.
+        /// </summary>
+        [Fact]
+        public void ЦифрыЗакачкиНеПреобразуютсяОбратно() {
+            Assert.Throws<NotImplementedException>(
+                () => new QueueItemSizeConverter().ConvertBack("5 МБ", typeof(QueueItem), null!, CultureInfo.InvariantCulture));
+            Assert.Throws<NotImplementedException>(
+                () => new QueueItemSpeedConverter().ConvertBack("5 МБ/с", typeof(QueueItem), null!, CultureInfo.InvariantCulture));
+        }
+
+        /// <summary>Объём неизвестен — цифр нет ни в одной строке, а не «0 / 0».</summary>
+        [Fact]
+        public void БезИзвестногоОбъёмаЦифрНет() {
+            var item = Item(QueueItemState.Running, done: 100, total: 0, speed: 512);
+
+            Assert.Equal(string.Empty, Convert(new QueueItemSizeConverter(), item));
+            Assert.Equal(string.Empty, Convert(new QueueItemSpeedConverter(), item));
+        }
+
+        /// <summary>
+        /// Строка качающейся игры перерисовывается не чаще четырёх раз в секунду: замена
+        /// позиции пересобирает её целиком, а отчёты приходят десять раз в секунду.
+        /// Смена состояния при этом проходит сразу — это событие, а не цифра.
+        /// </summary>
+        [Theory]
+        [InlineData(true, 0.0, false)]
+        [InlineData(true, 100.0, false)]
+        [InlineData(true, 250.0, true)]
+        [InlineData(true, 900.0, true)]
+        [InlineData(false, 0.0, true)]
+        public void СтрокаЗакачкиПерерисовываетсяНеЧащеЧетырёхРазВСекунду(
+            bool sameState, double sinceMs, bool expected) {
+            Assert.Equal(expected, QueueDockLayout.ShouldRefreshRow(sameState, sinceMs));
+        }
+
         private static QueueItem Item(
             QueueItemState state,
             long done = 0,
             long total = 0,
             string status = "",
-            int position = 0)
-            => new("game", "Игра", state, done, total, status, QueuePosition: position);
+            int position = 0,
+            double speed = 0)
+            => new("game", "Игра", state, done, total, status, speed, QueuePosition: position);
 
         private static string Convert(System.Windows.Data.IValueConverter conv, object? value)
             => (string)conv.Convert(value!, typeof(string), null!, CultureInfo.InvariantCulture);

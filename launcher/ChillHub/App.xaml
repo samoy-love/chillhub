@@ -13,7 +13,8 @@
             <ui:QueueItemPercentConverter x:Key="QueueItemPercentConv" />
             <ui:QueueItemIndeterminateConverter x:Key="QueueItemIndeterminateConv" />
             <ui:QueueItemStateVisibilityConverter x:Key="QueueItemStateVisibilityConv" />
-            <ui:QueueItemDetailConverter x:Key="QueueItemDetailConv" />
+            <ui:QueueItemSizeConverter x:Key="QueueItemSizeConv" />
+            <ui:QueueItemSpeedConverter x:Key="QueueItemSpeedConv" />
             <ui:AspectHeightConverter x:Key="AspectHeightConv" />
             <ui:HeightShareConverter x:Key="HeightShareConv" />
             <ui:QueueItemStatusConverter x:Key="QueueItemStatusConv" />

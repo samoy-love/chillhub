@@ -355,15 +355,16 @@
          делает кнопка. -->
     <Style x:Key="Style.LaunchButton.Base" TargetType="Button">
       <Setter Property="Height" Value="46"/>
-      <Setter Property="MinWidth" Value="168"/>
       <Setter Property="Padding" Value="16,0"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
     </Style>
 
-    <!-- Вариант, которым играли в прошлый раз: тот же акцент, что у «Играть». -->
+    <!-- Вариант, которым играли в прошлый раз: та же заливка, что у «Играть», и шире
+         соседней — глазу нужен якорь, с которого начинать читать ряд. -->
     <Style x:Key="Style.LaunchButton.Accent" TargetType="Button" BasedOn="{StaticResource Style.LaunchButton.Base}">
+      <Setter Property="MinWidth" Value="176"/>
       <Setter Property="Foreground" Value="{DynamicResource Btn.Play.Fg}"/>
       <Setter Property="Background" Value="{DynamicResource Btn.Play.Bg}"/>
       <Setter Property="BorderBrush" Value="Transparent"/>
@@ -392,14 +393,17 @@
       </Setter>
     </Style>
 
-    <!-- Второй вариант: та же кнопка, но «стеклянная». Два залитых акцентом
-         прямоугольника рядом спорили бы друг с другом, и ни один не читался бы как
-         главный. Наведение поднимает фон и красит рамку акцентом — заливка целиком
-         сделала бы светлый текст нечитаемым. -->
+    <!-- Второй вариант: контурная кнопка. Раньше она отличалась от акцентной только
+         оттенком заливки — два прямоугольника одного размера, одного веса и почти
+         одного цвета, и какой из них главный, приходилось угадывать. Теперь разница
+         тройная: нет заливки, тоньше подпись, уже сама кнопка. Наведение поднимает фон
+         и красит рамку акцентом — заливка целиком сделала бы светлый текст нечитаемым. -->
     <Style x:Key="Style.LaunchButton.Ghost" TargetType="Button" BasedOn="{StaticResource Style.LaunchButton.Base}">
+      <Setter Property="MinWidth" Value="140"/>
+      <Setter Property="Padding" Value="14,0"/>
       <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
       <Setter Property="Background" Value="#66101017"/>
-      <Setter Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
@@ -1024,7 +1028,7 @@
                      не отвечала на вопрос, ЧТО именно запустится. -->
                 <Button x:Name="ActionBtn" Content="Играть" Click="ActionBtn_Click"
                         Style="{DynamicResource Style.ActionButton.Play}"
-                        Width="180" Height="46" VerticalAlignment="Center"/>
+                        Width="180" Height="46" Margin="0,0,8,0" VerticalAlignment="Center"/>
                 <!-- Два способа играть с модами — своей копией из Steam и сборкой с сервера —
                      вынесены кнопками. Выбор, спрятанный в меню, — не выбор: чем запустит
                      «Играть», можно было узнать, только открыв стрелку. Кнопки нет, если её
@@ -1348,12 +1352,12 @@
                  окне забирал четверть экрана ради двух с половиной строк со скроллом —
                  и ленте новостей над ним оставалось полторы карточки, тоже со скроллом.
                  Скролл остаётся только для раскрытой длинной очереди. -->
-            <!-- Потолок ширины — на всём доке, а не на карточке: с ним на карточке ширина
-                 строки садилась на длину её текста, и три строки очереди расходились по
-                 правому краю. Хуже: строка качающейся игры росла вместе с цифрами
-                 («0 Б / 4,1 ГБ» → «451,5 МБ / 4,1 ГБ»), и крестик «снять с очереди» ездил
-                 из-под курсора на каждом обновлении. -->
-            <ItemsControl x:Name="QueueDock" MaxWidth="1100" HorizontalAlignment="Left"
+            <!-- Строки занимают всю ширину панели. Потолок в 1100px оставлял правую
+                 половину пустой — панель во весь экран, а в ней узкие карточки у левого
+                 края. Ширина при этом не разносит связанное по углам: название и процент
+                 стоят слева вместе, цифры собраны в свою колонку справа, кнопки — за
+                 ними, и у всех строк общий правый край. -->
+            <ItemsControl x:Name="QueueDock"
                           MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=Page},
                                               Converter={StaticResource HeightShareConv}, ConverterParameter=0.45}">
               <ItemsControl.Template>
@@ -1368,9 +1372,8 @@
                   <!-- Ожидающая позиция — строка, а не карточка в полный рост: у неё нет ни
                        полосы, ни цифр, и три одинаковых по высоте карточки не влезали даже
                        в окно по умолчанию — третья всегда была срезана.
-                       Ширину задаёт док (MaxWidth выше), а карточка тянется на неё целиком:
-                       у всех строк общий правый край, и крестик стоит на месте, как бы ни
-                       менялись цифры внутри. -->
+                       Карточка тянется во всю ширину дока: у всех строк общий правый край,
+                       и крестик стоит на месте, как бы ни менялись цифры внутри. -->
                   <Border Margin="0,0,0,6" HorizontalAlignment="Stretch">
                     <Border.Style>
                       <Style TargetType="Border" BasedOn="{StaticResource Style.Card}">
@@ -1386,6 +1389,7 @@
                       <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                       </Grid.ColumnDefinitions>
@@ -1431,27 +1435,33 @@
                                    Text="{Binding Converter={StaticResource QueueItemPercentTextConv}, Mode=OneWay}"/>
                       </StackPanel>
 
-                      <!-- Вторая строка: у качающейся — статус и цифры (объём, скорость,
-                           остаток) в одну строку, у ожидающей — место в очереди. Цифры
-                           раньше стояли у правого края карточки: на широком окне между
-                           «43%» и «3,4 ГБ / 8,0 ГБ» лежали полторы тысячи пикселей. -->
-                      <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,3,0,0">
-                        <TextBlock FontSize="11" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
-                                   Text="{Binding Converter={StaticResource QueueItemStatusConv}, Mode=OneWay}"
-                                   Foreground="{DynamicResource Brush.TextSecondary}"/>
-                        <TextBlock FontSize="11" TextWrapping="NoWrap" Margin="4,0,4,0" Text="·"
+                      <!-- Вторая строка слева — стадия: «Моды · Скачивание обновления…» у
+                           качающейся, место в очереди у ожидающей. -->
+                      <TextBlock Grid.Row="1" Grid.Column="1" Margin="0,3,12,0" FontSize="11"
+                                 TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                                 Text="{Binding Converter={StaticResource QueueItemStatusConv}, Mode=OneWay}"
+                                 Foreground="{DynamicResource Brush.TextSecondary}"/>
+
+                      <!-- Цифры — своей колонкой у правого края: объём сверху, скорость и
+                           остаток под ним. Строка занимает всю ширину панели, и держать их
+                           в хвосте стадии значило оставить всю правую половину карточки
+                           пустой. Здесь они дают вторую точку опоры взгляду: слева — что
+                           качается, справа — сколько осталось. -->
+                      <StackPanel Grid.Row="0" Grid.RowSpan="2" Grid.Column="2" Margin="0,0,12,0"
+                                  VerticalAlignment="Center" HorizontalAlignment="Right"
+                                  Visibility="{Binding State, Converter={StaticResource QueueItemStateVisibilityConv}, ConverterParameter=Running}">
+                        <TextBlock FontSize="12" TextWrapping="NoWrap" HorizontalAlignment="Right"
+                                   Foreground="{DynamicResource Brush.Text}"
+                                   Text="{Binding Converter={StaticResource QueueItemSizeConv}, Mode=OneWay}"/>
+                        <TextBlock FontSize="11" TextWrapping="NoWrap" HorizontalAlignment="Right" Margin="0,3,0,0"
                                    Foreground="{DynamicResource Brush.TextSecondary}"
-                                   Visibility="{Binding State, Converter={StaticResource QueueItemStateVisibilityConv}, ConverterParameter=Running}"/>
-                        <TextBlock FontSize="11" TextWrapping="NoWrap"
-                                   Foreground="{DynamicResource Brush.TextSecondary}"
-                                   Text="{Binding Converter={StaticResource QueueItemDetailConv}, Mode=OneWay}"
-                                   Visibility="{Binding State, Converter={StaticResource QueueItemStateVisibilityConv}, ConverterParameter=Running}"/>
+                                   Text="{Binding Converter={StaticResource QueueItemSpeedConv}, Mode=OneWay}"/>
                       </StackPanel>
 
                       <!-- Стрелки порядка — только для ожидающих позиций. IsEnabled привязан к
                            признакам из очереди: стрелка, которую видно и можно нажать, но которая
                            ничего не делает, читается как сломанная. -->
-                      <StackPanel Grid.Row="0" Grid.RowSpan="2" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
+                      <StackPanel Grid.Row="0" Grid.RowSpan="2" Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center"
                                   Visibility="{Binding State, Converter={StaticResource QueueItemStateVisibilityConv}, ConverterParameter=Waiting}">
                         <!-- 32px, а не 26: кнопки в очереди — самые мелкие цели в приложении,
                              и в них промахивались. Значок остался мелким, выросла зона клика. -->
@@ -1470,7 +1480,7 @@
                         </Button>
                       </StackPanel>
 
-                      <Button Grid.Row="0" Grid.RowSpan="2" Grid.Column="3" Width="32" Height="32" Padding="0"
+                      <Button Grid.Row="0" Grid.RowSpan="2" Grid.Column="4" Width="32" Height="32" Padding="0"
                               Margin="6,0,0,0" VerticalAlignment="Center" ToolTip="Снять с очереди"
                               Style="{StaticResource Style.Button.QueueIcon.Danger}"
                               Click="CancelQueueItem_Click" CommandParameter="{Binding}">
@@ -1479,7 +1489,7 @@
 
                       <!-- Полоса — во всю ширину карточки под всем остальным: здесь ширина
                            работает на точность, а не разносит связанные подписи по углам. -->
-                      <ProgressBar Grid.Row="2" Grid.ColumnSpan="4" Height="4" Margin="0,10,0,0"
+                      <ProgressBar Grid.Row="2" Grid.ColumnSpan="5" Height="4" Margin="0,10,0,0"
                                    Style="{StaticResource Style.ProgressBar.Rounded}"
                                    Value="{Binding Converter={StaticResource QueueItemPercentConv}, Mode=OneWay}"
                                    IsIndeterminate="{Binding Converter={StaticResource QueueItemIndeterminateConv}, Mode=OneWay}"

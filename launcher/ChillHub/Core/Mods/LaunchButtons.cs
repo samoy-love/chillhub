@@ -126,15 +126,21 @@ namespace ChillHub.Core.Mods {
             // Вне режима «Играть» сборки с сервера на витрине нет: её кнопка — это
             // «Установить»/«Обновить» слева, и второй такой же рядом быть не должно.
             var wanted = playMode ? Primary : SteamOnly;
-            var buttons = wanted
+            var picked = wanted
                 .Select(t => options.FirstOrDefault(o => o.Target == t && o.Available))
                 .Where(o => o != null)
-                .Select(o => Button(o!, mods, remembered))
                 .ToList();
 
             // «Играть» остаётся, пока кнопки запуска её не заменили: вне режима «Играть»
             // она вообще про другое — про установку и обновление сборки.
-            var actionVisible = !playMode || buttons.Count == 0;
+            var actionVisible = !playMode || picked.Count == 0;
+
+            // ЗАЛИТАЯ КНОПКА В РЯДУ РОВНО ОДНА. Пока акцент носил просто «запускали в
+            // прошлый раз», у неустановленной игры их выходило две: «Установить» слева и
+            // «Steam · с модами» рядом — два фиолетовых прямоугольника, и ни один не
+            // читался как главный. Когда на витрине стоит «Установить», главная — она:
+            // запуск чужой копии из Steam здесь запасной путь, а не основной.
+            var buttons = picked.Select(o => Button(o!, mods, actionVisible ? null : remembered)).ToList();
             var rest = MenuOptions(options, buttons);
             var tooltip = buttons.Count == 0 ? "Выбрать, что запускать" : MenuTooltip(rest);
 

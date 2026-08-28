@@ -192,8 +192,9 @@ namespace ChillHub.Core.Mods {
                 options.Add(Make(LaunchTarget.SteamModded, ctx.Steam.GameDir, true, LaunchAction.InstallMods, "обновить моды"));
             }
             else if (!DoorstopConfig.IsInstalled(ctx.Steam.GameDir)) {
-                // Версия записана, а загрузчика нет: обычное дело после того, как Steam
-                // восстановил свои файлы поверх модов.
+                // Версия записана, а загрузчика нет. Проверка целостности в Steam тут ни при
+                // чём — добавленные файлы она не удаляет; winhttp.dll уносят антивирус,
+                // ручная чистка папки или обновление игры, положившее свой файл поверх.
                 options.Add(Make(LaunchTarget.SteamModded, ctx.Steam.GameDir, true, LaunchAction.InstallMods, "восстановить моды"));
             }
             else {

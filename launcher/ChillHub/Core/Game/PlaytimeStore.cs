@@ -40,6 +40,21 @@ namespace ChillHub.Core.Game {
         public long ProcessStartTimeTicks { get; set; }
 
         public DateTime SessionStartUtc { get; set; }
+
+        /// <summary>
+        /// Папка, в которой на время этой сессии включены моды; null — запуск без модов.
+        /// <para>
+        /// Срок жизни включённого загрузчика — это и есть срок сессии: пока игра идёт, моды
+        /// нужны, а как только она закрылась, папку возвращают в состояние без модов. Иначе
+        /// следующий запуск ИЗ STEAM, мимо лаунчера, молча поднял бы моды: игре всё равно,
+        /// кто её стартовал, — winhttp.dll грузится сам (см. Mods.DoorstopConfig).
+        /// </para>
+        /// <para>
+        /// Поле переживает закрытие лаунчера вместе с самой записью: если он умер раньше
+        /// игры, папку вернёт реконсиляция при следующем запуске.
+        /// </para>
+        /// </summary>
+        public string? ModdedDir { get; set; }
     }
 
     /// <summary>
@@ -61,16 +76,56 @@ namespace ChillHub.Core.Game {
     /// </para>
     /// </summary>
     internal static class PlaytimeStore {
-        private static readonly string AppDir =
+        private static readonly string DefaultAppDir =
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ChillHub");
+
+        /// <summary>
+        /// Подменённый на время теста каталог. AsyncLocal, а не обычное поле: прогон идёт
+        /// параллельными классами, и подмена в одном не должна уводить файлы у другого —
+        /// тот же приём, что у очереди обратной связи.
+        /// </summary>
+        private static readonly AsyncLocal<string?> ScopedAppDir = new AsyncLocal<string?>();
 
         private static readonly object FileLock = new object();
 
         private static int reconciled;
 
+        private static string AppDir => ScopedAppDir.Value ?? DefaultAppDir;
+
         private static string PlaytimePath => Path.Combine(AppDir, "playtime.json");
 
         private static string PendingPath => Path.Combine(AppDir, "playtime.sessions.json");
+
+        /// <summary>
+        /// Уводит файлы наигранного времени в отдельный каталог — для тестов.
+        /// <para>
+        /// Без шва проверить нечего: и подсчёт времени, и выключение модов после сессии
+        /// живут в файлах, а трогать в прогоне настоящий %APPDATA% пользователя нельзя.
+        /// </para>
+        /// </summary>
+        /// <param name="dir">Каталог, играющий роль %APPDATA%\ChillHub.</param>
+        /// <returns>Объект, возвращающий файлы на настоящее место.</returns>
+        internal static IDisposable OverrideDirForTests(string dir) => new AppDirOverride(dir);
+
+        /// <summary>Закрывает сессию так же, как это делает выход процесса игры, — для тестов.</summary>
+        /// <param name="processId">Номер процесса, под которым сессия заводилась.</param>
+        /// <param name="endUtc">Момент окончания.</param>
+        internal static void FinishForTests(int processId, DateTime endUtc) => FinishSession(processId, endUtc);
+
+        /// <summary>Забывает отметку о проделанной реконсиляции — для тестов.</summary>
+        internal static void ResetForTests() => Interlocked.Exchange(ref reconciled, 0);
+
+        /// <summary>
+        /// Подбирает незакрытые сессии прошлого запуска: досматривает те игры, что ещё
+        /// бегут, и закрывает остальные — а вместе с ними выключает моды в папках, где их
+        /// включал прошлый запуск лаунчера.
+        /// <para>
+        /// Вызывается на старте главной страницы явно, а не по первому обращению за
+        /// цифрами: возврат чужой папки в состояние без модов не должен зависеть от того,
+        /// открыл ли кто-то витрину с игрой.
+        /// </para>
+        /// </summary>
+        internal static void EnsureStarted() => EnsureReconciled();
 
         /// <summary>Сводка по одной игре. Реконсилирует незакрытые сессии перед чтением.</summary>
         internal static PlaytimeEntry Get(string gameId) {
@@ -83,7 +138,13 @@ namespace ChillHub.Core.Game {
         /// Запоминает старт сессии игры и заводит фоновое ожидание её выхода.
         /// Вызывается сразу после успешного <c>Process.Start</c>.
         /// </summary>
-        internal static void BeginSession(string gameId, Process process) {
+        /// <param name="gameId">Игра.</param>
+        /// <param name="process">Процесс игры — именно игры, а не Steam (см. GameProcessFinder).</param>
+        /// <param name="moddedDir">
+        /// Папка, в которой перед запуском включили моды; null — запуск без модов. По
+        /// окончании сессии моды в ней выключаются обратно.
+        /// </param>
+        internal static void BeginSession(string gameId, Process process, string? moddedDir = null) {
             if (string.IsNullOrWhiteSpace(gameId) || process == null) {
                 return;
             }
@@ -93,6 +154,15 @@ namespace ChillHub.Core.Game {
             try {
                 lock (FileLock) {
                     var pending = LoadPendingLocked();
+
+                    // Один и тот же процесс могли найти дважды: через Steam игру ищут
+                    // ожиданием, и два подряд нажатия «Играть» дают два поиска на одну
+                    // игру. Перезапись сдвинула бы начало сессии вперёд и потеряла первые
+                    // минуты, поэтому побеждает та запись, что появилась раньше.
+                    if (pending.ContainsKey(PendingKey(process.Id))) {
+                        return;
+                    }
+
                     // Keyed by process id, not gameId: launching the same game twice
                     // (a second instance while the first is still running) must not
                     // let the second BeginSession overwrite the first session's entry
@@ -103,6 +173,7 @@ namespace ChillHub.Core.Game {
                         ProcessId = process.Id,
                         ProcessStartTimeTicks = SafeStartTimeTicks(process),
                         SessionStartUtc = DateTime.UtcNow,
+                        ModdedDir = string.IsNullOrWhiteSpace(moddedDir) ? null : moddedDir,
                     };
                     SavePendingLocked(pending);
                 }
@@ -228,10 +299,11 @@ namespace ChillHub.Core.Game {
         }
 
         private static void FinishSession(int processId, DateTime endUtc) {
+            PendingSession session;
             lock (FileLock) {
                 var pending = LoadPendingLocked();
                 var key = PendingKey(processId);
-                if (!pending.TryGetValue(key, out var session)) {
+                if (!pending.TryGetValue(key, out session!)) {
                     return; // уже закрыта другим потоком/запуском
                 }
 
@@ -255,9 +327,28 @@ namespace ChillHub.Core.Game {
                 // уходит в фоновую задачу и ничего не бросает при недоступном сервере.
                 MetricsService.GameSession(session.GameId, elapsed * 1000);
             }
+
+            // Моды выключаются ПОСЛЕ снятия блокировки файлов: это запись в чужую папку
+            // игры, и держать ради неё замок над playtime.json незачем.
+            if (!string.IsNullOrWhiteSpace(session.ModdedDir)) {
+                Mods.DoorstopConfig.SetEnabled(session.ModdedDir, false);
+                Logging.Logger.Info($"[mods] сессия окончена, моды в '{session.ModdedDir}' выключены");
+            }
         }
 
         private static string PendingKey(int processId) => processId.ToString();
+
+        /// <summary>Возвращает файлы на настоящее место после <see cref="OverrideDirForTests"/>.</summary>
+        private sealed class AppDirOverride : IDisposable {
+            private readonly string? previous;
+
+            internal AppDirOverride(string dir) {
+                this.previous = ScopedAppDir.Value;
+                ScopedAppDir.Value = dir;
+            }
+
+            public void Dispose() => ScopedAppDir.Value = this.previous;
+        }
 
         private static long SafeStartTimeTicks(Process p) {
             try {

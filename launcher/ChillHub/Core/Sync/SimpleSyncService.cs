@@ -5,6 +5,7 @@
 
 namespace ChillHub.Core.Sync {
     using System;
+    using System.Buffers;
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
@@ -32,6 +33,9 @@ namespace ChillHub.Core.Sync {
 
         /// <summary>Минимальный интервал между отчётами о прогрессе скачивания, мс.</summary>
         private const int ProgressThrottleMs = 100;
+
+        /// <summary>Размер буфера чтения сети при скачивании файла.</summary>
+        private const int DownloadBufferBytes = 256 * 1024;
 
         /// <summary>Сколько файлов из плана показать в логе поимённо; остальные — только в сводке.</summary>
         private const int PlanLogSamples = 20;
@@ -636,99 +640,110 @@ namespace ChillHub.Core.Sync {
 
                                         var attempt = 0;
                                         var maxAttempts = 3;
-                                        var buffer = new byte[256 * 1024];
-                                        while (true) {
-                                            ct.ThrowIfCancellationRequested();
 
-                                            // Дедлайн на попытку — по ПРОСТОЮ, а не по общему времени: таймер
-                                            // переводится после каждой порции данных, поэтому длинная честная
-                                            // загрузка доживает до конца, а зависшее соединение обрывается.
-                                            using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                                            stallCts.CancelAfter(StallTimeoutMs);
-                                            var attemptCt = stallCts.Token;
-                                            try {
-                                                using var req = new HttpRequestMessage(HttpMethod.Get, t.Url);
-                                                if (existing > 0 && existing < t.Size) {
-                                                    req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(existing, null);
+                                        // Буфер БЕРЁТСЯ ИЗ ПУЛА, а не заводится на каждый файл.
+                                        // 256 КиБ живут в большой куче объектов (всё, что крупнее
+                                        // 85 КиБ), а сборка игры — это тысячи файлов: на каждый
+                                        // приходилась своя такая аллокация, и куча дробилась там,
+                                        // где хватает одного буфера на поток загрузки.
+                                        var buffer = ArrayPool<byte>.Shared.Rent(DownloadBufferBytes);
+                                        try {
+                                            while (true) {
+                                                ct.ThrowIfCancellationRequested();
+
+                                                // Дедлайн на попытку — по ПРОСТОЮ, а не по общему времени: таймер
+                                                // переводится после каждой порции данных, поэтому длинная честная
+                                                // загрузка доживает до конца, а зависшее соединение обрывается.
+                                                using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                                                stallCts.CancelAfter(StallTimeoutMs);
+                                                var attemptCt = stallCts.Token;
+                                                try {
+                                                    using var req = new HttpRequestMessage(HttpMethod.Get, t.Url);
+                                                    if (existing > 0 && existing < t.Size) {
+                                                        req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(existing, null);
+                                                    }
+
+                                                    using var resp = await this.downloadHttp.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, attemptCt).ConfigureAwait(false);
+                                                    resp.EnsureSuccessStatusCode();
+
+                                                    // Если сервер вернул 200 OK, несмотря на Range — перезаписываем файл заново
+                                                    if (existing > 0 && resp.StatusCode == HttpStatusCode.OK) {
+                                                        existing = 0;
+                                                        try {
+                                                            File.Delete(partPath);
+                                                        }
+                                                        catch {
+                                                        }
+                                                    }
+
+                                                    // Блок обязателен: поток записи должен быть ЗАКРЫТ до проверки.
+                                                    // `using var` живёт до конца try, а файл открыт с FileShare.None —
+                                                    // то есть любой другой доступ к нему запрещён. Проверка,
+                                                    // вызванная при живом дескрипторе, падала с «файл занят другим
+                                                    // процессом», хотя процесс был наш собственный. Три повтора
+                                                    // упирались в то же самое, и обновление обрывалось.
+                                                    using (var src = await resp.Content.ReadAsStreamAsync(attemptCt).ConfigureAwait(false))
+                                                    using (var dst = new FileStream(partPath, FileMode.Append, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true)) {
+                                                        int read;
+                                                        while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), attemptCt).ConfigureAwait(false)) > 0) {
+                                                            await dst.WriteAsync(buffer.AsMemory(0, read), attemptCt).ConfigureAwait(false);
+                                                            Interlocked.Add(ref downloaded, read);
+
+                                                            // Ограничение скорости: список токенов общий на все потоки загрузки,
+                                                            // поэтому ждём здесь, а не после записи — иначе сверхлимитные байты
+                                                            // уже осели бы на диске до того, как поток притормозил.
+                                                            if (speedLimiter != null) {
+                                                                await speedLimiter.ThrottleAsync(read, attemptCt).ConfigureAwait(false);
+                                                            }
+
+                                                            // Данные пришли — отодвигаем дедлайн простоя
+                                                            stallCts.CancelAfter(StallTimeoutMs);
+                                                            ReportDownloadProgress();
+                                                        }
+                                                    }
+
+                                                    // Проверка хешей — ВНУТРИ цикла ретраев. Раньше она стояла
+                                                    // за ним, и «протухший» .part (докачанный поверх обрывка от
+                                                    // другой версии) валил всё обновление целиком, хотя лечится
+                                                    // одной перезакачкой с нуля.
+                                                    VerifyDownloadedFile(partPath, t);
+
+                                                    break; // success
                                                 }
+                                                catch (Exception ex) {
+                                                    // Отмену пользователя не превращаем в «ошибку загрузки» и не тратим
+                                                    // на неё попытки: с появлением связанного CTS обрыв по простою и
+                                                    // настоящая отмена приходят одним и тем же типом исключения.
+                                                    ct.ThrowIfCancellationRequested();
 
-                                                using var resp = await this.downloadHttp.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, attemptCt).ConfigureAwait(false);
-                                                resp.EnsureSuccessStatusCode();
+                                                    attempt++;
+                                                    if (attempt >= maxAttempts) {
+                                                        throw ex is InvalidDataException
+                                                            ? new InvalidDataException($"Файл {t.RelativePath} не прошёл проверку хеша после {maxAttempts} попыток", ex)
+                                                            : new IOException($"Ошибка загрузки {t.RelativePath}: {ex.Message}", ex);
+                                                    }
 
-                                                // Если сервер вернул 200 OK, несмотря на Range — перезаписываем файл заново
-                                                if (existing > 0 && resp.StatusCode == HttpStatusCode.OK) {
-                                                    existing = 0;
+                                                    if (ex is InvalidDataException) {
+                                                        // Докачивать битый файл бессмысленно: начинаем с нуля
+                                                        SafeDeleteFile(partPath);
+                                                        existing = 0;
+                                                        ChillHub.Core.Logging.Logger.Warn($"Скачанный файл '{t.RelativePath}' не прошёл проверку хеша, качаем заново (попытка {attempt + 1} из {maxAttempts})");
+                                                    }
+
+                                                    var delayMs = (int)Math.Min(5000, 500 * Math.Pow(2, attempt - 1));
+                                                    await Task.Delay(delayMs, ct).ConfigureAwait(false);
+
+                                                    // обновить existing на случай частичного дозаписи
                                                     try {
-                                                        File.Delete(partPath);
+                                                        existing = new FileInfo(partPath).Length;
                                                     }
                                                     catch {
                                                     }
                                                 }
-
-                                                // Блок обязателен: поток записи должен быть ЗАКРЫТ до проверки.
-                                                // `using var` живёт до конца try, а файл открыт с FileShare.None —
-                                                // то есть любой другой доступ к нему запрещён. Проверка,
-                                                // вызванная при живом дескрипторе, падала с «файл занят другим
-                                                // процессом», хотя процесс был наш собственный. Три повтора
-                                                // упирались в то же самое, и обновление обрывалось.
-                                                using (var src = await resp.Content.ReadAsStreamAsync(attemptCt).ConfigureAwait(false))
-                                                using (var dst = new FileStream(partPath, FileMode.Append, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true)) {
-                                                    int read;
-                                                    while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), attemptCt).ConfigureAwait(false)) > 0) {
-                                                        await dst.WriteAsync(buffer.AsMemory(0, read), attemptCt).ConfigureAwait(false);
-                                                        Interlocked.Add(ref downloaded, read);
-
-                                                        // Ограничение скорости: список токенов общий на все потоки загрузки,
-                                                        // поэтому ждём здесь, а не после записи — иначе сверхлимитные байты
-                                                        // уже осели бы на диске до того, как поток притормозил.
-                                                        if (speedLimiter != null) {
-                                                            await speedLimiter.ThrottleAsync(read, attemptCt).ConfigureAwait(false);
-                                                        }
-
-                                                        // Данные пришли — отодвигаем дедлайн простоя
-                                                        stallCts.CancelAfter(StallTimeoutMs);
-                                                        ReportDownloadProgress();
-                                                    }
-                                                }
-
-                                                // Проверка хешей — ВНУТРИ цикла ретраев. Раньше она стояла
-                                                // за ним, и «протухший» .part (докачанный поверх обрывка от
-                                                // другой версии) валил всё обновление целиком, хотя лечится
-                                                // одной перезакачкой с нуля.
-                                                VerifyDownloadedFile(partPath, t);
-
-                                                break; // success
                                             }
-                                            catch (Exception ex) {
-                                                // Отмену пользователя не превращаем в «ошибку загрузки» и не тратим
-                                                // на неё попытки: с появлением связанного CTS обрыв по простою и
-                                                // настоящая отмена приходят одним и тем же типом исключения.
-                                                ct.ThrowIfCancellationRequested();
-
-                                                attempt++;
-                                                if (attempt >= maxAttempts) {
-                                                    throw ex is InvalidDataException
-                                                        ? new InvalidDataException($"Файл {t.RelativePath} не прошёл проверку хеша после {maxAttempts} попыток", ex)
-                                                        : new IOException($"Ошибка загрузки {t.RelativePath}: {ex.Message}", ex);
-                                                }
-
-                                                if (ex is InvalidDataException) {
-                                                    // Докачивать битый файл бессмысленно: начинаем с нуля
-                                                    SafeDeleteFile(partPath);
-                                                    existing = 0;
-                                                    ChillHub.Core.Logging.Logger.Warn($"Скачанный файл '{t.RelativePath}' не прошёл проверку хеша, качаем заново (попытка {attempt + 1} из {maxAttempts})");
-                                                }
-
-                                                var delayMs = (int)Math.Min(5000, 500 * Math.Pow(2, attempt - 1));
-                                                await Task.Delay(delayMs, ct).ConfigureAwait(false);
-
-                                                // обновить existing на случай частичного дозаписи
-                                                try {
-                                                    existing = new FileInfo(partPath).Length;
-                                                }
-                                                catch {
-                                                }
-                                            }
+                                        }
+                                        finally {
+                                            ArrayPool<byte>.Shared.Return(buffer);
                                         }
                                     }
 

@@ -37,6 +37,23 @@ namespace ChillHub {
         private bool selfUpdateCheckRunning;
 
         /// <summary>
+        /// Не чаще раза в <see cref="SelfUpdateCheckInterval"/> ходим за версией по возврату
+        /// фокуса. Alt+Tab между окнами даёт десятки активаций в минуту, и на каждой уходил
+        /// запрос к серверу — при том что таймер и так спрашивает раз в десять минут.
+        /// </summary>
+        private readonly Core.Shell.ActivationThrottle selfUpdateOnActivate =
+            new Core.Shell.ActivationThrottle(SelfUpdateCheckInterval);
+
+        /// <summary>
+        /// То же для состояния модов в папке Steam: перечитывание лезет в реестр и обходит
+        /// папку игры на диске, причём на UI-потоке. Пять секунд — вернувшийся из Steam
+        /// человек разницы не заметит, а перещёлкивание окон перестаёт стоить дисковых
+        /// обходов.
+        /// </summary>
+        private readonly Core.Shell.ActivationThrottle modsStateOnActivate =
+            new Core.Shell.ActivationThrottle(TimeSpan.FromSeconds(5));
+
+        /// <summary>
         /// Единственный экземпляр главной страницы. Раньше каждый клик по «Каталогу» создавал
         /// новый HomePage, а вместе с ним — ещё один FeedbackService со своей копией очереди и
         /// своим 10-секундным таймером, который никто не останавливал: таймер старой страницы
@@ -111,12 +128,21 @@ namespace ChillHub {
                 // лаунчер открытым, но не активным, дольше интервала selfUpdateCheckTimer
                 // — переключение назад не должно ждать следующего тика. selfUpdateCheckRunning
                 // не даёт столкнуться с уже идущей проверкой (тиком или тем же RestoreFromTray).
-                _ = this.RunSelfUpdateCheckAsync();
+                if (this.selfUpdateOnActivate.Allow()) {
+                    _ = this.RunSelfUpdateCheckAsync();
+                }
 
                 // Режим работ — по той же причине: пока окно лежало без фокуса, работы могли
                 // начаться или кончиться, и человек, вернувшийся к лаунчеру, должен увидеть
                 // актуальную картину сразу, а не через остаток минутного интервала опроса.
                 _ = Core.Maintenance.MaintenanceService.RefreshNowAsync();
+
+                // И состояние модов в папке Steam: из Steam в лаунчер возвращаются именно
+                // так, а за время отсутствия игру могли поставить, удалить или перенести
+                // (см. HomePage.RefreshLaunchOptionsFromDisk).
+                if (this.modsStateOnActivate.Allow()) {
+                    this.CurrentHome?.RefreshLaunchOptionsFromDisk();
+                }
             };
             this.Deactivated += (s, e) => this.karaoke.Pause();
 
@@ -533,6 +559,12 @@ namespace ChillHub {
         private void SyncKaraokeWithWindowState() {
             var onScreen = this.IsVisible && this.WindowState != WindowState.Minimized;
             Core.UI.UiAnimations.Instance.Enabled = onScreen;
+
+            // Спрятанному окну незачем и опрашивать сервер о режиме работ: баннер
+            // показывать некому, а вернувшись на экран, окно спросит само (Activated).
+            // Лаунчер живёт в трее часами, и всё это время уходил запрос в минуту.
+            Core.Maintenance.MaintenanceService.Suspended = !onScreen;
+
             if (onScreen) {
                 this.karaoke.Resume();
             }

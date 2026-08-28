@@ -103,6 +103,13 @@ namespace ChillHub.Pages {
         private bool queueDockExpanded;
 
         /// <summary>
+        /// Когда строку очереди последний раз перерисовывали, по идентификатору игры.
+        /// Нужен, чтобы отчёты о ходе закачки не пересобирали строку десять раз в секунду
+        /// (см. <see cref="Core.UI.QueueDockLayout.ShouldRefreshRow"/>).
+        /// </summary>
+        private readonly Dictionary<string, long> rowRefreshedAt = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
         /// Та же очередь — наружу для GamePage: установка/обновление со страницы игры идёт через
         /// неё, а не через отдельный локальный запуск (см. GamePage.StartQueuedSync), иначе
         /// закачка обрывалась при уходе с этой страницы на главную.
@@ -249,6 +256,11 @@ namespace ChillHub.Pages {
                 gid => this.games.FirstOrDefault(g => string.Equals(g.GameId, gid, StringComparison.OrdinalIgnoreCase)),
                 () => this.BaseApi);
             this.QueueDock.ItemsSource = this.queueDockVisibleItems;
+
+            // Незакрытые сессии прошлого запуска: досмотреть те игры, что ещё бегут, и
+            // закрыть остальные. Заодно возвращает в состояние без модов папки, в которых
+            // их включал прошлый запуск, — покой чужой папки в Steam всегда ванильный.
+            Core.Game.PlaytimeStore.EnsureStarted();
 
             // Сколько строк очереди влезает, зависит от высоты окна: на низком остаётся
             // только качающаяся. Пересчитываем на каждое изменение размера — иначе окно,
@@ -655,27 +667,28 @@ namespace ChillHub.Pages {
                     string? selectedId = null;
                     await this.DispatcherInvokeAsync(() => selectedId = this.GetSelectedGameId());
 
-                    // Порядок из ответа API сохраняем, установленные держим сверху
+                    // Порядок из ответа API сохраняем, установленные держим сверху.
+                    // Здесь достаточно сравнить с this.games: этот путь ничего не вливает
+                    // с сервера, состав списка тот же, и поле указывает на показанное.
                     var sorted = this.catalog.Sort(this.games);
-                    object? bound = null;
-                    await this.DispatcherInvokeAsync(() => bound = this.GameList.ItemsSource);
-                    var reordered = GameCatalog.NeedsRebind(bound, sorted);
-                    this.games = sorted;
 
-                    // Проверка статусов почти всегда оставляет порядок прежним, и вот
-                    // тогда список трогать нельзя вовсе: смена источника пересоздаёт все
-                    // строки и перезагружает значки — то самое мерцание после запуска.
-                    if (reordered) {
-                        await this.DispatcherInvokeAsync(() => {
+                    // СПИСОК ПОДМЕНЯЕТСЯ ТОЛЬКО НА UI-ПОТОКЕ. Сюда мы приходим из Task.Run,
+                    // а this.games в то же время читает и переписывает обработчик «Обновить
+                    // список» на UI-потоке. Пока присвоение шло из фона, две правки могли
+                    // разъехаться: поле указывало на один список, ListBox — на другой, и
+                    // выделение с восстановлением индекса считались уже по разным.
+                    await this.DispatcherInvokeAsync(() => {
+                        var reordered = !GameCatalog.SameOrder(this.games, sorted);
+                        this.games = sorted;
+
+                        // Проверка статусов почти всегда оставляет порядок прежним, и вот
+                        // тогда список трогать нельзя вовсе: смена источника пересоздаёт все
+                        // строки и перезагружает значки — то самое мерцание после запуска.
+                        if (reordered) {
                             this.SetGamesSource();
-                            if (!string.IsNullOrWhiteSpace(selectedId)) {
-                                var idx = GameCatalog.IndexOf(this.games, selectedId);
-                                if (idx >= 0) {
-                                    this.GameList.SelectedItem = this.games[idx];
-                                }
-                            }
-                        });
-                    }
+                            this.RestoreSelection(selectedId);
+                        }
+                    });
                 }
                 catch (Exception ex) {
                     // Пересортировка — косметика: статусы уже проверены и показаны
@@ -1598,6 +1611,12 @@ namespace ChillHub.Pages {
             if (this.TryFindResource(model.StyleKey) is Style style) {
                 button.Style = style;
             }
+
+            // Надписи одевает Core.UI.LaunchButtonLook: стиль кнопки до них не дотягивается
+            // (обе живут именованными TextBlock'ами внутри содержимого), а различаться
+            // залитая и контурная кнопки обязаны не только фоном.
+            Core.UI.LaunchButtonLook.Apply(
+                title, note, model.Accent, (Brush)(this.TryFindResource("Brush.TextSecondary") ?? title.Foreground));
         }
 
         /// <summary>
@@ -1622,6 +1641,33 @@ namespace ChillHub.Pages {
 
         /// <summary>Забывает снимок вариантов: состояние копий только что менялось.</summary>
         private void InvalidateLaunchOptions() => this.launchOptionsCache.Invalidate();
+
+        /// <summary>
+        /// Перечитывает состояние копий игры на диске и пересобирает строку действий.
+        /// <para>
+        /// Моды живут в ЧУЖОЙ папке — в копии игры из Steam, — и лаунчер ею не владеет.
+        /// Пока его окно стояло в стороне, игру могли удалить из Steam или, наоборот,
+        /// поставить; библиотеку могли перенести на другой диск; загрузчик мог унести
+        /// антивирус или сам игрок. Кнопка «Steam · с модами» после этого обещала бы то,
+        /// чего в папке уже нет.
+        /// </para>
+        /// <para>
+        /// А вот на проверку целостности файлов средствами Steam рассчитывать не стоит:
+        /// добавленные файлы она не трогает, и модпак после неё остаётся на месте.
+        /// </para>
+        /// <para>
+        /// Возврат фокуса на окно — ровно тот момент, когда человек пришёл из Steam, и
+        /// перечитать папку дешевле всего: это несколько файлов, а не обход дерева.
+        /// Следить за папкой постоянно незачем — между возвратами фокуса её состояние
+        /// никого не интересует.
+        /// </para>
+        /// </summary>
+        internal void RefreshLaunchOptionsFromDisk() {
+            // Без своего try/catch: сбрасывать снимок нечему, а SyncLaunchBar ловит своё
+            // сам — второй перехват поверх него ничего не добавлял бы, кроме строк.
+            this.InvalidateLaunchOptions();
+            this.SyncLaunchBar(this.actionMode);
+        }
 
         /// <summary>Запускает вариант, вынесенный кнопкой на витрину.</summary>
         /// <param name="sender">Нажатая кнопка.</param>
@@ -2016,9 +2062,21 @@ namespace ChillHub.Pages {
             this.Dispatcher.BeginInvoke(() => {
                 var idx = IndexOfQueueItem(this.queueDockItems, item.GameId);
                 if (idx >= 0) {
+                    // Замена позиции пересобирает строку в доке целиком, а отчёты о ходе
+                    // закачки приходят десять раз в секунду. Цифры от четырёх обновлений
+                    // в секунду не отстают, а смена состояния проходит сразу — см.
+                    // QueueDockLayout.ShouldRefreshRow.
+                    var sameState = this.queueDockItems[idx].State == item.State;
+                    if (!Core.UI.QueueDockLayout.ShouldRefreshRow(sameState, this.SinceLastRowRefresh(item.GameId))) {
+                        this.SetQueueLabel(item.GameId, Core.UI.QueueRowLabel.For(item));
+                        return;
+                    }
+
+                    this.MarkRowRefreshed(item.GameId);
                     this.queueDockItems[idx] = item;
                 }
                 else {
+                    this.MarkRowRefreshed(item.GameId);
                     this.queueDockItems.Add(item);
                 }
 
@@ -2080,6 +2138,19 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>Сколько миллисекунд прошло с прошлой перерисовки строки этой игры.</summary>
+        /// <param name="gameId">Игра.</param>
+        /// <returns>Миллисекунды; для строки, которой ещё не было, — бесконечность.</returns>
+        private double SinceLastRowRefresh(string gameId)
+            => this.rowRefreshedAt.TryGetValue(gameId ?? string.Empty, out var at)
+                ? Environment.TickCount64 - at
+                : double.PositiveInfinity;
+
+        /// <summary>Запоминает момент перерисовки строки.</summary>
+        /// <param name="gameId">Игра.</param>
+        private void MarkRowRefreshed(string gameId)
+            => this.rowRefreshedAt[gameId ?? string.Empty] = Environment.TickCount64;
+
         /// <summary>«Показать ещё N» / «Свернуть очередь» под доком.</summary>
         private void QueueMoreBtn_Click(object sender, RoutedEventArgs e) {
             this.queueDockExpanded = !this.queueDockExpanded;
@@ -2134,6 +2205,7 @@ namespace ChillHub.Pages {
                 }
 
                 this.SetQueueLabel(item.GameId, string.Empty);
+                this.rowRefreshedAt.Remove(item.GameId ?? string.Empty);
                 this.SyncQueuePanelVisibility();
 
                 // Снятая с очереди игра — та, что выбрана: кнопка обязана вернуться из
@@ -2451,7 +2523,20 @@ namespace ChillHub.Pages {
             }
             else {
                 this.StatusText.Text = string.Empty;
+            }
+
+            if (proc != null || option.ViaSteam) {
                 Core.Metrics.MetricsService.GameLaunch(game.GameId, game.Mods.Version);
+
+                // Отсчёт наигранного времени и срок жизни включённых модов. Через Steam
+                // процесс игры ещё предстоит дождаться, поэтому вызов ничего не ждёт.
+                Core.Game.GameSession.Begin(
+                    game.GameId,
+                    option.GameDir,
+                    Core.Mods.ModsLaunch.ResolveExe(option.GameDir, game.ExeRelativePath),
+                    proc,
+                    option.ViaSteam,
+                    option.Modded ? option.GameDir : null);
             }
         }
 

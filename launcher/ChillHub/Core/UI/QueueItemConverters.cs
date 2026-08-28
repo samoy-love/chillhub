@@ -44,35 +44,39 @@ namespace ChillHub.Core.UI {
     }
 
     /// <summary>
-    /// Строка с числами под статусом карточки: сколько скачано из скольки, с какой
-    /// скоростью и сколько осталось.
-    /// <para>
-    /// Без неё карточка показывала только название и полосу, а на сборке в 16 ГБ полоса
-    /// за минуту сдвигается на волосок — работающая закачка выглядела зависшей. Прежняя
-    /// нижняя панель эти числа показывала, и при переносе очереди вниз они потерялись.
-    /// </para>
+    /// Объём закачки: скачано из общего. Отдельно от скорости и остатка
+    /// (<see cref="QueueItemSpeedConverter"/>), потому что в карточке очереди они стоят
+    /// двумя строками друг под другом: сверху — сколько всего, снизу — как быстро идёт.
+    /// Одной строкой они занимали ширину, которой у правой колонки нет.
     /// </summary>
-    public class QueueItemDetailConverter : IValueConverter {
+    public class QueueItemSizeConverter : IValueConverter {
+        /// <inheritdoc/>
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+            => value is not QueueItem item || item.TotalBytes <= 0
+                ? string.Empty
+                : $"{HomeFormat.FormatSize(item.BytesDownloaded)} / {HomeFormat.FormatSize(item.TotalBytes)}";
+
+        /// <inheritdoc/>
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+            => throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// Скорость и остаток времени. Пусто, пока скорость неизвестна: «0,0 МБ/с» на первых
+    /// секундах закачки — не сведения, а шум, и остаток по такой скорости бесконечен.
+    /// </summary>
+    public class QueueItemSpeedConverter : IValueConverter {
         /// <inheritdoc/>
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture) {
-            if (value is not QueueItem item || item.TotalBytes <= 0) {
+            if (value is not QueueItem item || item.TotalBytes <= 0 || item.BytesPerSecond <= 0) {
                 return string.Empty;
             }
 
-            var parts = new List<string> {
-                $"{HomeFormat.FormatSize(item.BytesDownloaded)} / {HomeFormat.FormatSize(item.TotalBytes)}",
-            };
-
-            if (item.BytesPerSecond > 0) {
-                parts.Add($"{item.BytesPerSecond / 1024.0 / 1024.0:0.0} МБ/с");
-
-                var remaining = item.TotalBytes - item.BytesDownloaded;
-                if (remaining > 0) {
-                    parts.Add("осталось " + HomeFormat.FormatEta(remaining / item.BytesPerSecond));
-                }
-            }
-
-            return string.Join(" · ", parts);
+            var speed = $"{item.BytesPerSecond / 1024.0 / 1024.0:0.0} МБ/с";
+            var remaining = item.TotalBytes - item.BytesDownloaded;
+            return remaining > 0
+                ? $"{speed} · осталось {HomeFormat.FormatEta(remaining / item.BytesPerSecond)}"
+                : speed;
         }
 
         /// <inheritdoc/>

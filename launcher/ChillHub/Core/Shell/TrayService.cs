@@ -139,7 +139,19 @@ namespace ChillHub.Core.Shell {
         /// у спрятанного окна нет другого места сказать, что закачка идёт и докуда дошла.
         /// </summary>
         /// <param name="status">Подпись чипа загрузок или пустая строка, если очередь пуста.</param>
-        internal void SetStatus(string? status) => this.icon.Text = BuildTip(status);
+        internal void SetStatus(string? status) {
+            var tip = BuildTip(status);
+
+            // Присваивание Text у значка — обращение к оболочке Windows (Shell_NotifyIcon),
+            // а отчёты о ходе закачки приходят десять раз в секунду. Подсказка при этом
+            // меняется в лучшем случае раз в секунду: процент округлён до целых. Сверяем
+            // строку и не тревожим оболочку впустую.
+            if (string.Equals(tip, this.icon.Text, StringComparison.Ordinal)) {
+                return;
+            }
+
+            this.icon.Text = tip;
+        }
 
         /// <summary>
         /// Всплывающее уведомление у значка. Используется, когда окно спрятано и сообщить

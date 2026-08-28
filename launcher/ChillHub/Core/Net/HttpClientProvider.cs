@@ -11,6 +11,17 @@ namespace ChillHub.Core.Net {
     using System.Threading;
 
     public static class HttpClientProvider {
+        /// <summary>
+        /// Как лаунчер представляется серверу.
+        /// <para>
+        /// Заголовок обязателен для каждого клиента, а не только для этого: сайт стоит за
+        /// Cloudflare, и запросы без User-Agent тот молча роняет — соединение просто
+        /// повисает до таймаута. Клиент картинок ходил без заголовка, и обложки в ленте
+        /// пропадали примерно на трети запросов.
+        /// </para>
+        /// </summary>
+        public const string UserAgent = "ChillHub/1.0 (+https://chillhub.local)";
+
         private static readonly Lazy<HttpClient> shared = new Lazy<HttpClient>(() => Create(TimeSpan.FromSeconds(100)));
         private static readonly Lazy<HttpClient> downloads = new Lazy<HttpClient>(() => Create(Timeout.InfiniteTimeSpan));
 
@@ -29,6 +40,28 @@ namespace ChillHub.Core.Net {
         /// </summary>
         public static HttpClient Downloads => downloads.Value;
 
+        /// <summary>
+        /// Проставляет клиенту опознавательные заголовки лаунчера.
+        /// Вынесено наружу, чтобы клиент, заведённый в обход этого провайдера
+        /// (например, отдельный клиент под картинки), не остался безымянным.
+        /// </summary>
+        /// <param name="http">Клиент, которому нужны заголовки.</param>
+        public static void ApplyIdentity(HttpClient http) {
+            if (http == null) {
+                return;
+            }
+
+            http.DefaultRequestHeaders.UserAgent.Clear();
+
+            // Строка с комментарием по RFC 7231; если разбор не удался — минимальный вариант.
+            try {
+                http.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
+            }
+            catch (FormatException) {
+                http.DefaultRequestHeaders.UserAgent.ParseAdd("ChillHub/1.0");
+            }
+        }
+
         private static HttpClient Create(TimeSpan timeout) {
             var handler = new HttpClientHandler {
                 AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
@@ -38,18 +71,7 @@ namespace ChillHub.Core.Net {
             var http = new HttpClient(handler, disposeHandler: true) {
                 Timeout = timeout,
             };
-            http.DefaultRequestHeaders.UserAgent.Clear();
-
-            // Set a single well-formed UA string, including a comment per RFC 7231
-            // Example: "ChillHub/1.0 (+https://chillhub.local)"
-            try {
-                http.DefaultRequestHeaders.UserAgent.ParseAdd("ChillHub/1.0 (+https://chillhub.local)");
-            }
-            catch {
-                // Fallback to minimal UA if parsing fails
-                http.DefaultRequestHeaders.UserAgent.ParseAdd("ChillHub/1.0");
-            }
-
+            ApplyIdentity(http);
             http.DefaultRequestHeaders.AcceptEncoding.ParseAdd("gzip, deflate");
             return http;
         }

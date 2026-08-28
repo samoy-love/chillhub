@@ -88,16 +88,13 @@ namespace ChillHub.Pages {
             this.SubscribeMaintenance();
             this.Loaded += (s, e) => this.SubscribeMaintenance();
 
-            if (this.downloadQueue != null) {
-                this.downloadQueue.ItemAdded += this.OnQueueItemChanged;
-                this.downloadQueue.ItemProgress += this.OnQueueItemChanged;
-                this.downloadQueue.ItemCompleted += this.OnQueueItemFinished;
-                this.downloadQueue.ItemRemoved += this.OnQueueItemFinished;
-
-                // Страницу могли открыть, пока эта игра уже качается (поставлена в очередь с
-                // главной), — подхватываем её состояние сразу, а не ждём следующего события.
-                this.SyncFromQueueSnapshot();
-            }
+            // Подписка на очередь — на КАЖДЫЙ показ, по той же причине, что и режим работ.
+            // Пока она стояла только в конструкторе, страница глохла после возврата назад:
+            // из неё открывают новость, Unloaded отписывает, а журнал навигации возвращает
+            // ТОТ ЖЕ объект страницы — конструктор второй раз не выполняется. Полоса и
+            // подписи после этого стояли неподвижно, пока игра качалась.
+            this.SubscribeQueue();
+            this.Loaded += (s, e) => this.SubscribeQueue();
 
             _ = this.InitAsync();
         }
@@ -472,12 +469,7 @@ namespace ChillHub.Pages {
                 Core.Logging.Logger.Warn($"GamePage.Unloaded: отмена не выполнилась: {ex.Message}");
             }
 
-            if (this.downloadQueue != null) {
-                this.downloadQueue.ItemAdded -= this.OnQueueItemChanged;
-                this.downloadQueue.ItemProgress -= this.OnQueueItemChanged;
-                this.downloadQueue.ItemCompleted -= this.OnQueueItemFinished;
-                this.downloadQueue.ItemRemoved -= this.OnQueueItemFinished;
-            }
+            this.UnsubscribeQueue();
 
             // Статическое событие переживёт страницу — отписываемся, иначе утечёт ссылка
             this.UnsubscribeMaintenance();
@@ -485,6 +477,40 @@ namespace ChillHub.Pages {
 
         // Подписка на статическое событие живёт ровно столько, сколько страница показана.
         private bool maintenanceSubscribed;
+
+        // То же для очереди: журнал навигации возвращает ту же страницу, и подписку,
+        // снятую при уходе, надо восстанавливать при возврате.
+        private bool queueSubscribed;
+
+        /// <summary>Страница слушает очередь, пока показана; повторный вызов ничего не ломает.</summary>
+        private void SubscribeQueue() {
+            if (this.queueSubscribed || this.downloadQueue == null) {
+                return;
+            }
+
+            this.downloadQueue.ItemAdded += this.OnQueueItemChanged;
+            this.downloadQueue.ItemProgress += this.OnQueueItemChanged;
+            this.downloadQueue.ItemCompleted += this.OnQueueItemFinished;
+            this.downloadQueue.ItemRemoved += this.OnQueueItemFinished;
+            this.queueSubscribed = true;
+
+            // Страницу могли открыть (или вернуться на неё), пока эта игра уже качается, —
+            // подхватываем состояние сразу, а не ждём следующего события.
+            this.SyncFromQueueSnapshot();
+        }
+
+        /// <summary>Снимает подписку на очередь: страница ушла с экрана.</summary>
+        private void UnsubscribeQueue() {
+            if (!this.queueSubscribed || this.downloadQueue == null) {
+                return;
+            }
+
+            this.downloadQueue.ItemAdded -= this.OnQueueItemChanged;
+            this.downloadQueue.ItemProgress -= this.OnQueueItemChanged;
+            this.downloadQueue.ItemCompleted -= this.OnQueueItemFinished;
+            this.downloadQueue.ItemRemoved -= this.OnQueueItemFinished;
+            this.queueSubscribed = false;
+        }
 
         private void SubscribeMaintenance() {
             if (this.maintenanceSubscribed) {

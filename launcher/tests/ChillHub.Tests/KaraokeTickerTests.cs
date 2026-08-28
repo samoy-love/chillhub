@@ -91,10 +91,14 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void ЗастрявшийТикНеВыплёвываетСтрокуЦеликом() {
+            var config = new KaraokeConfig();
             var ticker = Ticker("очень длинная строка");
             ticker.ResetToStart(Start);
 
-            Assert.Equal(1, ticker.PlanAdvance(Start.AddSeconds(30)));
+            // Полминуты простоя — это сотни символов по темпу печати. Наружу выходит
+            // потолок и ни символом больше, каким бы он ни был.
+            Assert.Equal(config.MaxAdvanceCharsPerTick, ticker.PlanAdvance(Start.AddSeconds(30)));
+            Assert.InRange(config.MaxAdvanceCharsPerTick, 1, 3);
         }
 
         /// <summary>Нулевой интервал печати не должен давать деления на ноль.</summary>
@@ -157,13 +161,14 @@ namespace ChillHub.Tests {
             var ticker = Ticker("абвг");
             ticker.ResetToStart(Start);
 
-            // Прошло три интервала, напечатали один символ — долг в два интервала остаётся
+            // Прошло четыре интервала, напечатали один символ — долг в три интервала остаётся,
+            // и следующий тик берёт из него ровно столько, сколько разрешает потолок.
             ticker.Type(1);
             ticker.CommitProgress(1);
 
-            Assert.Equal(1, ticker.PlanAdvance(Start.AddMilliseconds(180)));
-            ticker.Type(1);
-            ticker.CommitProgress(1);
+            Assert.Equal(2, ticker.PlanAdvance(Start.AddMilliseconds(180)));
+            ticker.Type(2);
+            ticker.CommitProgress(2);
             Assert.Equal(1, ticker.PlanAdvance(Start.AddMilliseconds(180)));
         }
 
