@@ -205,16 +205,8 @@ namespace ChillHub.Pages {
         /// </summary>
         private Core.Mods.LaunchBarView? launchBar;
 
-        /// <summary>
-        /// Последний посчитанный набор вариантов запуска и когда он посчитан.
-        /// <para>
-        /// Считать его — значит сходить в реестр Windows и прочитать несколько файлов,
-        /// а строка действий пересобирается на каждое событие очереди и проверки.
-        /// Живёт снимок секунду: за это время игру из Steam не удалят, а щелчок по
-        /// кнопке всё равно пересчитывает варианты заново.
-        /// </para>
-        /// </summary>
-        private (string Key, long Stamp, IReadOnlyList<Core.Mods.LaunchOption> Options)? launchOptionsCache;
+        /// <summary>Снимок вариантов запуска: за ним реестр и файловая система.</summary>
+        private readonly Core.Mods.LaunchOptionsCache launchOptionsCache = new();
 
         private ActionMode actionMode = ActionMode.Checking;
         private bool hasUpdateError = false;
@@ -1496,10 +1488,6 @@ namespace ChillHub.Pages {
 
         /// <summary>
         /// Выставляет одну кнопку запуска по счёту или прячет её, если варианта нет.
-        /// <para>
-        /// Стиль назначается здесь же: акцент носит тот вариант, которым играли в
-        /// прошлый раз, и он может оказаться как первой кнопкой, так и второй.
-        /// </para>
         /// </summary>
         /// <param name="button">Сама кнопка.</param>
         /// <param name="title">Крупная строка.</param>
@@ -1521,8 +1509,7 @@ namespace ChillHub.Pages {
             button.Tag = model.Target;
             button.Visibility = Visibility.Visible;
 
-            var styleKey = model.Accent ? "Style.LaunchButton.Accent" : "Style.LaunchButton.Ghost";
-            if (this.TryFindResource(styleKey) is Style style) {
+            if (this.TryFindResource(model.StyleKey) is Style style) {
                 button.Style = style;
             }
         }
@@ -1538,24 +1525,17 @@ namespace ChillHub.Pages {
         /// <param name="game">Выбранная игра.</param>
         /// <returns>Варианты запуска.</returns>
         private IReadOnlyList<Core.Mods.LaunchOption> CachedLaunchOptions(GameInfo game) {
-            // В ключе — всё, от чего варианты зависят на нашей стороне: другая игра или
-            // сменившееся «установлена/требует обновления» обязаны считаться заново, не
-            // дожидаясь, пока истечёт секунда.
-            var key = $"{game.GameId}|{game.IsInstalled}|{game.NeedsUpdate}";
-            var now = Environment.TickCount64;
-            if (this.launchOptionsCache is { } cached
-                && string.Equals(cached.Key, key, StringComparison.OrdinalIgnoreCase)
-                && now - cached.Stamp < 1000) {
-                return cached.Options;
+            if (this.launchOptionsCache.Get(game) is { } cached) {
+                return cached;
             }
 
             var options = this.LaunchOptionsFor(game, logSteam: false);
-            this.launchOptionsCache = (key, now, options);
+            this.launchOptionsCache.Put(game, options);
             return options;
         }
 
         /// <summary>Забывает снимок вариантов: состояние копий только что менялось.</summary>
-        private void InvalidateLaunchOptions() => this.launchOptionsCache = null;
+        private void InvalidateLaunchOptions() => this.launchOptionsCache.Invalidate();
 
         /// <summary>Запускает вариант, вынесенный кнопкой на витрину.</summary>
         /// <param name="sender">Нажатая кнопка.</param>
@@ -1574,16 +1554,14 @@ namespace ChillHub.Pages {
             // могли удалить из Steam, а запустить не то, что написано на кнопке, —
             // худший из возможных исходов.
             this.InvalidateLaunchOptions();
-            var option = this.LaunchOptionsFor(game, logSteam: true).FirstOrDefault(o => o.Target == target);
-            if (option == null || !option.Available) {
-                this.StatusText.Text = option?.Note is { Length: > 0 } note
-                    ? note
-                    : "Этот вариант запуска сейчас недоступен.";
+            var chosen = Core.Mods.LaunchButtons.Chosen(this.LaunchOptionsFor(game, logSteam: true), target);
+            if (chosen.Option == null) {
+                this.StatusText.Text = chosen.Message;
                 this.SyncLaunchBar(this.actionMode);
                 return;
             }
 
-            this.StartLaunchOption(game, option);
+            this.StartLaunchOption(game, chosen.Option);
         }
 
         private void LaunchMenuBtn_Click(object sender, RoutedEventArgs e) {

@@ -21,7 +21,14 @@ namespace ChillHub.Core.Mods {
         string Title,
         string Subtitle,
         string Tooltip,
-        bool Accent);
+        bool Accent) {
+        /// <summary>
+        /// Ключ стиля кнопки в ресурсах темы. Акцент носит вариант, которым играли в
+        /// прошлый раз, и он может оказаться как первой кнопкой, так и второй — поэтому
+        /// стиль считается здесь, а не задаётся в разметке по месту.
+        /// </summary>
+        internal string StyleKey => this.Accent ? "Style.LaunchButton.Accent" : "Style.LaunchButton.Ghost";
+    }
 
     /// <summary>
     /// Что показать в строке действий витрины.
@@ -133,6 +140,29 @@ namespace ChillHub.Core.Mods {
 
             var onScreen = shown?.Select(b => b.Target).ToHashSet() ?? new HashSet<LaunchTarget>();
             return options.Where(o => !onScreen.Contains(o.Target)).ToList();
+        }
+
+        /// <summary>
+        /// Что делать по нажатию на кнопку витрины.
+        /// <para>
+        /// Варианты пересчитываются между отрисовкой кнопки и щелчком по ней, и это не
+        /// перестраховка: игру могли удалить из Steam, а запустить не то, что написано на
+        /// кнопке, — худший из возможных исходов. Пропавший вариант объясняется словами,
+        /// а не превращается в ничего не делающее нажатие.
+        /// </para>
+        /// </summary>
+        /// <param name="options">Варианты, посчитанные заново.</param>
+        /// <param name="target">Что было написано на кнопке.</param>
+        /// <returns>Вариант к запуску либо причина отказа.</returns>
+        internal static (LaunchOption? Option, string Message) Chosen(
+            IReadOnlyList<LaunchOption>? options, LaunchTarget target) {
+            var option = options?.FirstOrDefault(o => o.Target == target);
+            if (option is { Available: true }) {
+                return (option, string.Empty);
+            }
+
+            var note = option?.Note ?? string.Empty;
+            return (null, note.Length > 0 ? note : "Этот вариант запуска сейчас недоступен.");
         }
 
         /// <summary>Собирает одну кнопку витрины из варианта запуска.</summary>
