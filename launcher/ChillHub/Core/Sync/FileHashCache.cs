@@ -21,6 +21,9 @@ namespace ChillHub.Core.Sync {
     public sealed class FileHashCache {
         private const int CurrentVersion = 1;
 
+        /// <summary>Что отделяет идентификатор игры от отметки папки в имени файла.</summary>
+        private const string RootSeparator = "__";
+
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions {
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         };
@@ -36,13 +39,23 @@ namespace ChillHub.Core.Sync {
         }
 
         /// <summary>
-        /// Загружает кеш игры. Битый или отсутствующий файл — это не ошибка:
-        /// возвращается пустой кеш, хеши будут пересчитаны заново.
+        /// Загружает кеш игры в конкретной папке. Битый или отсутствующий файл — это не
+        /// ошибка: возвращается пустой кеш, хеши будут пересчитаны заново.
+        /// <para>
+        /// КЕШ ПРИНАДЛЕЖИТ ПАПКЕ, А НЕ ИГРЕ. Записи ключуются относительным путём, а одна
+        /// и та же игра теперь живёт в двух корнях сразу: своя копия из Steam и сборка с
+        /// сервера. С одним файлом на игру они делили пространство имён — «Lethal
+        /// Company.exe» в двух папках с разным содержимым был одной записью, — а прополка
+        /// после синхронизации одного корня выбрасывала записи другого. Модпак на полтора
+        /// гигабайта после этого перехешировался целиком, и увидеть это можно было только
+        /// по минутам ожидания.
+        /// </para>
         /// </summary>
         /// <param name="gameId">Идентификатор игры.</param>
+        /// <param name="localRoot">Папка, для которой считается кеш.</param>
         /// <returns>Кеш хешей (возможно пустой).</returns>
-        public static FileHashCache Load(string gameId) {
-            var path = GetCachePath(gameId);
+        public static FileHashCache Load(string gameId, string? localRoot) {
+            var path = GetCachePath(gameId, localRoot);
             if (path == null) {
                 return new FileHashCache(null, new Dictionary<string, CacheEntry>(StringComparer.OrdinalIgnoreCase));
             }
@@ -67,14 +80,30 @@ namespace ChillHub.Core.Sync {
         }
 
         /// <summary>
-        /// Удаляет кеш игры (например, после удаления локальных файлов).
+        /// Удаляет кеши игры — все её папки сразу (например, после удаления локальных
+        /// файлов). Заодно убирает файл старой схемы, где кеш был один на игру.
         /// </summary>
         /// <param name="gameId">Идентификатор игры.</param>
         public static void Remove(string gameId) {
             try {
-                var path = GetCachePath(gameId);
-                if (path != null && File.Exists(path)) {
-                    File.Delete(path);
+                if (string.IsNullOrWhiteSpace(gameId)) {
+                    return;
+                }
+
+                var dir = CacheDir();
+                if (dir == null || !Directory.Exists(dir)) {
+                    return;
+                }
+
+                var safe = SanitizeId(gameId);
+                foreach (var path in Directory.EnumerateFiles(dir, safe + "*.json")) {
+                    var name = Path.GetFileNameWithoutExtension(path);
+
+                    // Только свои: 'lethal' не должен уносить кеши 'lethal-company'.
+                    if (string.Equals(name, safe, StringComparison.OrdinalIgnoreCase)
+                        || name.StartsWith(safe + RootSeparator, StringComparison.OrdinalIgnoreCase)) {
+                        File.Delete(path);
+                    }
                 }
             }
             catch (Exception ex) {
@@ -134,9 +163,19 @@ namespace ChillHub.Core.Sync {
         }
 
         /// <summary>
+        /// Сохраняет кеш как есть, ничего не выбрасывая.
+        /// <para>
+        /// Прополка требует ПОЛНОГО списка живых файлов папки, а он есть только у
+        /// планировщика. Тому, кто дописывает в кеш хеши скачанного, полоть нечего:
+        /// он знает про свои файлы и ничего — про остальные.
+        /// </para>
+        /// </summary>
+        public void SaveOnly() => this.PruneAndSave(null!);
+
+        /// <summary>
         /// Выбрасывает записи о файлах, которых больше нет, и сохраняет кеш на диск при наличии изменений.
         /// </summary>
-        /// <param name="alivePaths">Относительные пути существующих сейчас файлов.</param>
+        /// <param name="alivePaths">Относительные пути существующих сейчас файлов; null — не полоть.</param>
         public void PruneAndSave(ICollection<string> alivePaths) {
             try {
                 lock (this.gate) {
@@ -172,23 +211,62 @@ namespace ChillHub.Core.Sync {
             }
         }
 
-        private static string? GetCachePath(string gameId) {
+        /// <summary>
+        /// Где лежит кеш этой папки. Наружу — ради тестов и диагностики: имя файла
+        /// складывается из идентификатора игры и отметки папки, и повторять эту сборку
+        /// на чужой стороне значит однажды разъехаться с ней.
+        /// </summary>
+        /// <param name="gameId">Идентификатор игры.</param>
+        /// <param name="localRoot">Папка игры.</param>
+        /// <returns>Полный путь или null, если его не удалось построить.</returns>
+        public static string? PathFor(string gameId, string? localRoot) => GetCachePath(gameId, localRoot);
+
+        private static string? GetCachePath(string gameId, string? localRoot) {
             try {
                 if (string.IsNullOrWhiteSpace(gameId)) {
                     return null;
                 }
 
-                var safe = SanitizeId(gameId);
-                var dir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "ChillHub",
-                    "hashcache");
-                return Path.Combine(dir, safe + ".json");
+                var dir = CacheDir();
+                if (dir == null) {
+                    return null;
+                }
+
+                var name = SanitizeId(gameId) + RootSeparator + RootKey(localRoot);
+                return Path.Combine(dir, name + ".json");
             }
             catch (Exception ex) {
                 ChillHub.Core.Logging.Logger.Error(ex, $"FileHashCache.GetCachePath({gameId})");
                 return null;
             }
+        }
+
+        /// <summary>Папка со всеми кешами хешей.</summary>
+        /// <returns>Путь или null, если его не удалось получить.</returns>
+        private static string? CacheDir() {
+            try {
+                return Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "ChillHub",
+                    "hashcache");
+            }
+            catch (Exception ex) {
+                ChillHub.Core.Logging.Logger.Error(ex, "FileHashCache.CacheDir");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Короткое имя папки в имени файла кеша: путь целиком в имя не положить, а
+        /// узнавать по нему папку никому не нужно — нужно лишь, чтобы разные папки не
+        /// сходились в один файл.
+        /// </summary>
+        /// <param name="localRoot">Папка игры.</param>
+        /// <returns>Восемь шестнадцатеричных цифр.</returns>
+        private static string RootKey(string? localRoot) {
+            var normalized = (localRoot ?? string.Empty).Trim().TrimEnd('\\', '/').ToLowerInvariant();
+            var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(normalized));
+            return Convert.ToHexString(hash, 0, 4).ToLowerInvariant();
         }
 
         private static string SanitizeId(string id) {

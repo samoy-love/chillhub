@@ -5,6 +5,7 @@
 
 namespace ChillHub.Core.Mods {
     using System;
+    using System.Collections.Generic;
     using System.Threading;
     using System.Threading.Tasks;
 
@@ -148,7 +149,7 @@ namespace ChillHub.Core.Mods {
                 // показывал бы «Скачивание…» без единого намёка, что качается модпак.
                 var scoped = progress == null ? null : new ScopedProgress(progress);
 
-                var options = PlanOptions.ForModPack(targetDir);
+                var options = PlanOptions.ForModPack(targetDir, SiblingRoots(game, targetDir));
                 options.Progress = scoped;
                 options.ForceRehash = forceRehash;
 
@@ -197,6 +198,41 @@ namespace ChillHub.Core.Mods {
                     ModsSyncOutcome.Failed, mods.Version, 0, 0,
                     "Не удалось установить моды. Попробуйте ещё раз.");
             }
+        }
+
+        /// <summary>
+        /// Другие папки этой же игры, где модпак уже может стоять.
+        /// <para>
+        /// Копий у игры две: своя из Steam и сборка с сервера. Модпак принадлежит папке,
+        /// поэтому играть в обе — значит поставить его дважды; побайтово это одни и те же
+        /// файлы, и качать их по второму разу незачем. Поиск копии в Steam делается здесь
+        /// же, при установке: её могли поставить или удалить, пока лаунчер был открыт.
+        /// </para>
+        /// </summary>
+        /// <param name="game">Игра вместе с настройками модов.</param>
+        /// <param name="targetDir">Папка, в которую идёт установка.</param>
+        /// <returns>Папки-кандидаты; сама целевая в список не попадает.</returns>
+        private static IReadOnlyList<string> SiblingRoots(GameInfo game, string targetDir) {
+            var roots = new List<string>();
+            try {
+                var local = GameLocalState.GameLocalRoot(game.GameId);
+                if (!string.IsNullOrWhiteSpace(local)) {
+                    roots.Add(local);
+                }
+
+                var steam = SteamLocator.Locate(game.Mods?.SteamAppId, game.Mods?.SteamFolder);
+                if (steam.Ok) {
+                    roots.Add(steam.GameDir);
+                }
+            }
+            catch (Exception ex) {
+                // Не нашли соседей — просто скачаем всё из сети, как раньше.
+                Logging.Logger.Warn($"[mods] соседние папки для '{game.GameId}' не собраны: {ex.Message}");
+            }
+
+            roots.RemoveAll(r => string.Equals(
+                r.TrimEnd('\\', '/'), targetDir.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase));
+            return roots;
         }
 
         /// <summary>

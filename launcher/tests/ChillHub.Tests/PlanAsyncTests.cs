@@ -316,7 +316,7 @@ namespace ChillHub.Tests {
                 await PlanTestData.PlanAsync(manifest, dir.Root, keepCache: true);
 
                 var info = new FileInfo(path);
-                var cache = FileHashCache.Load(manifest.GameId);
+                var cache = FileHashCache.Load(manifest.GameId, dir.Root);
                 Assert.True(cache.TryGet("game.exe", info.Length, info.LastWriteTimeUtc.Ticks, out var sha, out _));
                 Assert.Equal(TestHash.Sha256OfFile(path), sha);
             }
@@ -386,7 +386,7 @@ namespace ChillHub.Tests {
 
                 // После пересчёта в кеше должен лежать хеш того, что реально лежит на диске,
                 // иначе следующая обычная синхронизация снова поверит устаревшей записи.
-                var cache = FileHashCache.Load(manifest.GameId);
+                var cache = FileHashCache.Load(manifest.GameId, dir.Root);
                 Assert.True(cache.TryGet("game.exe", 10, mtime.Ticks, out var sha, out _));
                 Assert.Equal(corruptedSha, sha);
                 Assert.NotEqual(goodSha, sha);
@@ -417,7 +417,7 @@ namespace ChillHub.Tests {
                 // Второй проход: b.bin исчез с диска, запись о нём должна уйти из кеша.
                 await PlanTestData.PlanAsync(manifest, dir.Root, keepCache: true);
 
-                var cache = FileHashCache.Load(manifest.GameId);
+                var cache = FileHashCache.Load(manifest.GameId, dir.Root);
                 Assert.False(cache.TryGet("b.bin", bSize, bTicks, out _, out _));
             }
             finally {
