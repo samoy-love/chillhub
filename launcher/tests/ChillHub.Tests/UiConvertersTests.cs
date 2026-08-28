@@ -373,6 +373,19 @@ namespace ChillHub.Tests {
                 Convert(new QueueItemSizeConverter(), item));
         }
 
+        /// <summary>
+        /// Обратное преобразование этим подписям не нужно и не поддерживается: молчаливое
+        /// «ничего не делаю» здесь опаснее исключения — привязка в обе стороны означала бы,
+        /// что кто-то собрался записывать текст подписи обратно в позицию очереди.
+        /// </summary>
+        [Fact]
+        public void ЦифрыЗакачкиНеПреобразуютсяОбратно() {
+            Assert.Throws<NotImplementedException>(
+                () => new QueueItemSizeConverter().ConvertBack("5 МБ", typeof(QueueItem), null!, CultureInfo.InvariantCulture));
+            Assert.Throws<NotImplementedException>(
+                () => new QueueItemSpeedConverter().ConvertBack("5 МБ/с", typeof(QueueItem), null!, CultureInfo.InvariantCulture));
+        }
+
         /// <summary>Объём неизвестен — цифр нет ни в одной строке, а не «0 / 0».</summary>
         [Fact]
         public void БезИзвестногоОбъёмаЦифрНет() {

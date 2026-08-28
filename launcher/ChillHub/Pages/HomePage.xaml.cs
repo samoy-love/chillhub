@@ -1599,15 +1599,11 @@ namespace ChillHub.Pages {
                 button.Style = style;
             }
 
-            // Вес подписи — здесь, а не в стиле: обе строки кнопки живут именованными
-            // TextBlock'ами, в которые пишет этот же метод, и стиль до них не дотягивается.
-            // Контурная кнопка должна отличаться от залитой не только фоном: на витрине
-            // они стоят вплотную, и одинаковый жирный текст делал их близнецами.
-            title.FontWeight = model.Accent ? FontWeights.SemiBold : FontWeights.Normal;
-            note.Foreground = (Brush)(model.Accent
-                ? title.Foreground
-                : this.TryFindResource("Brush.TextSecondary") ?? title.Foreground);
-            note.Opacity = model.Accent ? 0.85 : 1.0;
+            // Надписи одевает Core.UI.LaunchButtonLook: стиль кнопки до них не дотягивается
+            // (обе живут именованными TextBlock'ами внутри содержимого), а различаться
+            // залитая и контурная кнопки обязаны не только фоном.
+            Core.UI.LaunchButtonLook.Apply(
+                title, note, model.Accent, (Brush)(this.TryFindResource("Brush.TextSecondary") ?? title.Foreground));
         }
 
         /// <summary>
@@ -1654,13 +1650,10 @@ namespace ChillHub.Pages {
         /// </para>
         /// </summary>
         internal void RefreshLaunchOptionsFromDisk() {
-            try {
-                this.InvalidateLaunchOptions();
-                this.SyncLaunchBar(this.actionMode);
-            }
-            catch (Exception ex) {
-                Core.Logging.Logger.Warn($"RefreshLaunchOptionsFromDisk: {ex.Message}");
-            }
+            // Без своего try/catch: сбрасывать снимок нечему, а SyncLaunchBar ловит своё
+            // сам — второй перехват поверх него ничего не добавлял бы, кроме строк.
+            this.InvalidateLaunchOptions();
+            this.SyncLaunchBar(this.actionMode);
         }
 
         /// <summary>Запускает вариант, вынесенный кнопкой на витрину.</summary>
