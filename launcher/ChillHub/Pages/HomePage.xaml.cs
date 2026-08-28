@@ -2425,34 +2425,13 @@ namespace ChillHub.Pages {
         /// </summary>
         private void ReloadGameIcons() {
             try {
-                foreach (var img in FindImages(this.GameList)) {
+                foreach (var img in Core.UI.VisualTreeSearch.Descendants<Image>(this.GameList)) {
                     Core.Home.ImageLoader.AttachAndLoad(img, this.BaseApi);
                 }
             }
             catch (Exception ex) {
                 // Картинки — украшение: не обновились, значит останутся прежними.
                 Core.Logging.Logger.Warn($"ReloadGameIcons: {ex.Message}");
-            }
-        }
-
-        /// <summary>Все картинки в поддереве элемента.</summary>
-        /// <param name="root">Откуда искать.</param>
-        /// <returns>Найденные картинки.</returns>
-        private static IEnumerable<Image> FindImages(DependencyObject? root) {
-            if (root == null) {
-                yield break;
-            }
-
-            var count = System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);
-            for (var i = 0; i < count; i++) {
-                var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i);
-                if (child is Image img) {
-                    yield return img;
-                }
-
-                foreach (var nested in FindImages(child)) {
-                    yield return nested;
-                }
             }
         }
 
