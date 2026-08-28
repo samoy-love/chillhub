@@ -249,6 +249,37 @@ namespace ChillHub.Tests {
             Assert.False(GameCatalog.SameOrder(a, null));
         }
 
+        /// <summary>
+        /// Подмена источника решается по ПОКАЗАННОМУ списку, а не по полю страницы.
+        /// <para>
+        /// Ровно здесь пряталась игра, удалённая в админке: слияние ответа сервера отдаёт
+        /// НОВЫЙ список, поле страницы уже указывает на него, а на экране висит прежний.
+        /// Сравнение поля с самим собой всегда отвечало «то же самое», источник не менялся,
+        /// и удалённая игра оставалась строкой в списке — пропадал только её значок.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void ПодменаИсточникаРешаетсяПоПоказанномуСписку() {
+            var a = Game("a", "А");
+            var b = Game("b", "Б");
+            var shown = new List<GameInfo> { a, b };
+
+            // Тот же состав в том же порядке — трогать список незачем, даже если это
+            // другой объект: именно на этом держится отсутствие мерцания.
+            Assert.False(GameCatalog.NeedsRebind(shown, new List<GameInfo> { a, b }));
+
+            // Игру удалили в админке — показанный список обязан смениться.
+            Assert.True(GameCatalog.NeedsRebind(shown, new List<GameInfo> { a }));
+
+            // Появилась новая, поменялся порядок — тоже смена.
+            Assert.True(GameCatalog.NeedsRebind(shown, new List<GameInfo> { a, b, Game("c", "В") }));
+            Assert.True(GameCatalog.NeedsRebind(shown, new List<GameInfo> { b, a }));
+
+            // Списку ещё ничего не привязано, либо привязано чужое — показывать нечего.
+            Assert.True(GameCatalog.NeedsRebind(null, shown));
+            Assert.True(GameCatalog.NeedsRebind("не список", shown));
+        }
+
         private static GameInfo Game(string id, string title, bool installed = false) =>
             new GameInfo { GameId = id, Title = title, IsInstalled = installed };
     }
