@@ -53,9 +53,11 @@ namespace ChillHub.Tests {
             });
 
         /// <summary>
-        /// Подсветка пункта отличима от фона списка. Проверяется отношением светлот: пока
+        /// Подсветка пункта заметна на фоне списка. Проверяется отношением светлот: пока
         /// подсветкой служил Brush.Hover, она совпадала с фоном меню в точности, и
-        /// наведение не показывало ровно ничего.
+        /// наведение не показывало ровно ничего. Порог 1.4 — не «различимо при
+        /// внимательном взгляде», а «видно сразу»: подсветка отвечает на вопрос, на каком
+        /// пункте курсор.
         /// </summary>
         [Theory]
         [InlineData("Brush.MenuHover")]
@@ -64,7 +66,27 @@ namespace ChillHub.Tests {
             => UiThread.Run(() => {
                 var ratio = Contrast(Color(hoverKey), Color("Brush.Surface2"));
 
-                Assert.True(ratio >= 1.15, $"{hoverKey} против фона меню — всего {ratio:0.000}:1, наведения не видно");
+                Assert.True(ratio >= 1.4, $"{hoverKey} против фона меню — всего {ratio:0.000}:1, наведения не видно");
+            });
+
+        /// <summary>Нажатие отличается от наведения: иначе клик по пункту ничем не отзывается.</summary>
+        [Fact]
+        public void НажатыйПунктОтличаетсяОтПодсвеченного()
+            => UiThread.Run(() => {
+                var ratio = Contrast(Color("Brush.MenuPressed"), Color("Brush.MenuHover"));
+
+                Assert.True(ratio >= 1.1, $"нажатие против наведения — всего {ratio:0.000}:1");
+            });
+
+        /// <summary>Белая подпись читается на подсвеченном и нажатом пункте.</summary>
+        [Theory]
+        [InlineData("Brush.MenuHover")]
+        [InlineData("Brush.MenuPressed")]
+        public void ПодписьПунктаЧитаетсяНаПодсветке(string key)
+            => UiThread.Run(() => {
+                var ratio = Contrast(Colors.White, Color(key));
+
+                Assert.True(ratio >= 4.5, $"белая подпись на {key} даёт {ratio:0.00}:1 при пороге 4.5:1");
             });
 
         private static Color Color(string key) {

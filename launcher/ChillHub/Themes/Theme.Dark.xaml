@@ -38,11 +38,13 @@
   <Color x:Key="Color.AccentFill">#6949E0</Color>
   <Color x:Key="Color.AccentFillHover">#7457E6</Color>
   <Color x:Key="Color.AccentFillPressed">#5A3FCC</Color>
-  <!-- Пункт меню под курсором и в нажатии. Отдельные краски, а не Brush.Hover: тот
-       совпадает с фоном самого меню (Surface2 #1B1B24), и наведение на пункт не было
-       видно вовсе — меню выглядело нерабочим списком. -->
-  <Color x:Key="Color.MenuHover">#2C2440</Color>
-  <Color x:Key="Color.MenuPressed">#372C55</Color>
+  <!-- Пункт меню и выпадающего списка под курсором и в нажатии. Отдельные краски, а не
+       Brush.Hover: тот совпадает с фоном самого меню (Surface2 #1B1B24), и наведение на
+       пункт не было видно вовсе — список выглядел нерабочим. Взяты с запасом по светлоте
+       (1.55 и 1.85 к фону меню): подсветка на грани различимости в списке из четырёх
+       строк не отвечает на вопрос «на чём я сейчас». -->
+  <Color x:Key="Color.MenuHover">#3F3175</Color>
+  <Color x:Key="Color.MenuPressed">#4A3A8C</Color>
   <!-- Статусы игр: готова / нужно обновление / проблема -->
   <Color x:Key="Color.Success">#57C98A</Color>
   <Color x:Key="Color.Warning">#E0A64B</Color>
@@ -741,6 +743,86 @@
     <Setter Property="Padding" Value="8,6"/>
     <Setter Property="Margin" Value="0,0,8,0"/>
     <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+  </Style>
+
+  <!-- Поле формы: рамка, подсветка фокуса и подсказка ВНУТРИ шаблона.
+       Подсказка стояла отдельной надписью поверх поля, в соседней ячейке той же сетки, и
+       её отступы подбирались руками под отступы поля. Совпадение держалось на честном
+       слове и не держалось: подсказку сетка ставила по своему краю, а текст поля живёт
+       внутри рамки и Padding, — после клика каретка появлялась не там, где стояла
+       подсказка. Здесь у обеих одна рамка, один Padding, один шрифт и одно выравнивание,
+       так что промахнуться нечем. Текст подсказки — в Placeholder.Text у самого поля. -->
+  <ui:CaretInsetConverter x:Key="CaretInsetConv"/>
+  <ControlTemplate x:Key="Template.TextBox.Field" TargetType="TextBox">
+    <Border x:Name="bd"
+            Background="{TemplateBinding Background}"
+            BorderBrush="{TemplateBinding BorderBrush}"
+            BorderThickness="{TemplateBinding BorderThickness}"
+            CornerRadius="{StaticResource Radius.M}"
+            SnapsToDevicePixels="True">
+      <Grid>
+        <!-- Отступы подсказки — Padding поля плюс отступ каретки: WPF держит внутри
+             области содержимого TextBoxView со своими 2px по бокам, и подсказка, набитая
+             ровно по Padding, вставала левее первого символа. -->
+        <TextBlock x:Name="Hint" Visibility="Collapsed" IsHitTestVisible="False"
+                   Text="{Binding Path=(ui:Placeholder.Text), RelativeSource={RelativeSource TemplatedParent}}"
+                   Margin="{Binding Padding, RelativeSource={RelativeSource TemplatedParent},
+                                    Converter={StaticResource CaretInsetConv}}"
+                   VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                   Foreground="{DynamicResource Brush.TextMuted}"/>
+        <!-- Padding сюда НЕ пробрасываем: TextBoxBase сам ставит его области содержимого,
+             и связка Margin="{TemplateBinding Padding}" применяла отступ дважды — текст
+             начинался на 8px правее подсказки, ровно на ширину отступа. -->
+        <ScrollViewer x:Name="PART_ContentHost"
+                      Focusable="False"
+                      VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                      HorizontalScrollBarVisibility="Hidden"
+                      VerticalScrollBarVisibility="Auto"/>
+      </Grid>
+    </Border>
+    <ControlTemplate.Triggers>
+      <!-- Подсказка видна ТОЛЬКО у пустого поля: иначе она оставалась поверх набранного
+           текста, стоило увести фокус. -->
+      <Trigger Property="Text" Value="">
+        <Setter TargetName="Hint" Property="Visibility" Value="Visible"/>
+      </Trigger>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
+      </Trigger>
+      <!-- Фокус — акцентом: в форме четыре поля подряд, и без подсветки непонятно,
+           куда именно попадёт набранный текст. -->
+      <Trigger Property="IsKeyboardFocusWithin" Value="True">
+        <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Accent}"/>
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Opacity" Value="0.6"/>
+      </Trigger>
+    </ControlTemplate.Triggers>
+  </ControlTemplate>
+
+  <!-- Однострочное поле формы. Margin="0" обязателен: базовый стиль задаёт полям
+       Margin="0,0,8,0", и без сброса правая колонка формы уезжала на эти 8px от края
+       карточки. Padding="8,0" + рамка = 9px до текста — ровно столько же отступает
+       ContentSite в шаблоне ComboBox, поэтому «Имя», «Контакт» и «Тип» начинаются по
+       одной линии. -->
+  <Style x:Key="Style.TextBox.Field" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+    <Setter Property="Template" Value="{StaticResource Template.TextBox.Field}"/>
+    <Setter Property="Margin" Value="0"/>
+    <Setter Property="Height" Value="36"/>
+    <Setter Property="Padding" Value="8,0"/>
+    <Setter Property="FontSize" Value="14"/>
+    <Setter Property="VerticalContentAlignment" Value="Center"/>
+    <Setter Property="CaretBrush" Value="{DynamicResource Brush.Text}"/>
+  </Style>
+
+  <!-- Многострочное поле: та же рамка, но текст с верхнего края и перенос по словам. -->
+  <Style x:Key="Style.TextBox.Field.Multiline" TargetType="TextBox" BasedOn="{StaticResource Style.TextBox.Field}">
+    <Setter Property="Height" Value="Auto"/>
+    <Setter Property="Padding" Value="8,8"/>
+    <Setter Property="MinHeight" Value="120"/>
+    <Setter Property="AcceptsReturn" Value="True"/>
+    <Setter Property="TextWrapping" Value="Wrap"/>
+    <Setter Property="VerticalContentAlignment" Value="Top"/>
   </Style>
   <Style TargetType="ComboBox">
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>

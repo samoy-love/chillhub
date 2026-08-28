@@ -675,27 +675,20 @@
 
           <!-- Поиск по списку. Появился здесь, потому что список игр — единственная навигация
                в приложении, и до сих пор её нельзя было ни отфильтровать, ни сузить. -->
+          <!-- Подсказка «Поиск» — свойством поля, а не надписью поверх него: своя надпись
+               стояла по краю сетки, а текст поля начинается внутри рамки и Padding, и после
+               клика каретка появлялась правее подсказки. Значок лупы остаётся отдельным
+               слоем: он не текст и с кареткой не спорит. -->
           <Grid Grid.Row="1" Margin="0,0,0,8">
             <TextBox x:Name="GameSearchBox" TextChanged="GameSearch_TextChanged" Margin="0"
+                     ui:Placeholder.Text="Поиск"
+                     Template="{DynamicResource Template.TextBox.Field}"
+                     VerticalContentAlignment="Center"
                      Background="{DynamicResource Brush.Surface2}" BorderBrush="{DynamicResource Brush.Border}"
                      Padding="26,6,8,6" FontSize="12" Foreground="{DynamicResource Brush.Text}"/>
             <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE721;" FontSize="12" IsHitTestVisible="False"
                        Margin="8,0,0,0" VerticalAlignment="Center" HorizontalAlignment="Left"
                        Foreground="{DynamicResource Brush.TextMuted}"/>
-            <TextBlock Text="Поиск" IsHitTestVisible="False" FontSize="12"
-                       Margin="26,0,0,0" VerticalAlignment="Center" HorizontalAlignment="Left"
-                       Foreground="{DynamicResource Brush.TextMuted}">
-              <TextBlock.Style>
-                <Style TargetType="TextBlock">
-                  <Setter Property="Visibility" Value="Collapsed"/>
-                  <Style.Triggers>
-                    <DataTrigger Binding="{Binding Text.Length, ElementName=GameSearchBox}" Value="0">
-                      <Setter Property="Visibility" Value="Visible"/>
-                    </DataTrigger>
-                  </Style.Triggers>
-                </Style>
-              </TextBlock.Style>
-            </TextBlock>
           </Grid>
 
           <!-- Контейнер строки списка/скелетона с тёмным фоном. VerticalAlignment=Top:
@@ -1539,83 +1532,13 @@
     <Grid x:Name="FeedbackOverlay" Visibility="Collapsed" Background="#C0000000"
           HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Grid.RowSpan="4">
       <Grid.Resources>
-        <!-- Один шаблон на все поля формы. Штатный TextBox рисует прямой угол и ничем не
-             отмечает фокус: рядом со скруглёнными кнопками и ComboBox (Radius.M) он читался
-             как поле из чужого приложения. Общий шаблон нужен ещё и затем, чтобы рамка,
-             скругление и подсветка фокуса не разъезжались между однострочными полями и
-             полем сообщения. -->
-        <ControlTemplate x:Key="Template.Fb.Field" TargetType="TextBox">
-          <Border x:Name="bd"
-                  Background="{TemplateBinding Background}"
-                  BorderBrush="{TemplateBinding BorderBrush}"
-                  BorderThickness="{TemplateBinding BorderThickness}"
-                  CornerRadius="{StaticResource Radius.M}"
-                  SnapsToDevicePixels="True">
-            <ScrollViewer x:Name="PART_ContentHost"
-                          Margin="{TemplateBinding Padding}"
-                          Focusable="False"
-                          VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
-                          HorizontalScrollBarVisibility="Hidden"
-                          VerticalScrollBarVisibility="Auto"/>
-          </Border>
-          <ControlTemplate.Triggers>
-            <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
-            </Trigger>
-            <!-- Фокус — акцентом: в форме четыре поля подряд, и без подсветки непонятно,
-                 куда именно попадёт набранный текст. -->
-            <Trigger Property="IsKeyboardFocusWithin" Value="True">
-              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.Accent}"/>
-            </Trigger>
-          </ControlTemplate.Triggers>
-        </ControlTemplate>
-
-        <!-- Подпись над полем. Одна на все четыре: раньше каждая несла свои FontSize и
-             Foreground, и «Тип» отличался от соседей отступом. -->
+        <!-- Сами поля формы одеты общим стилем из темы (Style.TextBox.Field): штатный
+             TextBox рисует прямой угол, ничем не отмечает фокус и не умеет подсказки.
+             Здесь остаётся только подпись над полем. -->
         <Style x:Key="Style.Fb.Label" TargetType="TextBlock">
           <Setter Property="FontSize" Value="13"/>
           <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
           <Setter Property="Margin" Value="0,0,0,6"/>
-        </Style>
-
-        <!-- Однострочное поле. Margin="0" обязателен: тема задаёт полям Margin="0,0,8,0",
-             и без сброса правая колонка формы уезжала на эти 8px от края карточки.
-             Padding="8,0" + рамка = 9px до текста — ровно столько же отступает ContentSite
-             в шаблоне ComboBox, поэтому «Имя», «Контакт» и «Тип» начинаются по одной линии. -->
-        <Style x:Key="Style.Fb.Field" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
-          <Setter Property="Template" Value="{StaticResource Template.Fb.Field}"/>
-          <Setter Property="Margin" Value="0"/>
-          <Setter Property="Height" Value="36"/>
-          <Setter Property="Padding" Value="8,0"/>
-          <Setter Property="FontSize" Value="14"/>
-          <Setter Property="VerticalContentAlignment" Value="Center"/>
-          <Setter Property="CaretBrush" Value="{DynamicResource Brush.Text}"/>
-        </Style>
-
-        <!-- Поле сообщения: та же рамка, но текст с верхнего края и перенос по словам. -->
-        <Style x:Key="Style.Fb.Field.Multiline" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
-          <Setter Property="Template" Value="{StaticResource Template.Fb.Field}"/>
-          <Setter Property="Margin" Value="0"/>
-          <Setter Property="Padding" Value="8,8"/>
-          <Setter Property="FontSize" Value="14"/>
-          <Setter Property="MinHeight" Value="120"/>
-          <Setter Property="AcceptsReturn" Value="True"/>
-          <Setter Property="TextWrapping" Value="Wrap"/>
-          <Setter Property="VerticalContentAlignment" Value="Top"/>
-          <Setter Property="CaretBrush" Value="{DynamicResource Brush.Text}"/>
-        </Style>
-
-        <!-- Подсказка внутри пустого поля. По умолчанию СКРЫТА и показывается только на
-             пустом поле: прежний вариант оставлял её видимой поверх набранного текста,
-             стоило увести фокус из поля. Отступ 9px повторяет отступ текста в поле —
-             подсказка стоит ровно там, где появится первый символ. -->
-        <Style x:Key="Style.Fb.Hint" TargetType="TextBlock">
-          <Setter Property="Visibility" Value="Collapsed"/>
-          <Setter Property="IsHitTestVisible" Value="False"/>
-          <Setter Property="FontSize" Value="14"/>
-          <Setter Property="Foreground" Value="{DynamicResource Brush.TextMuted}"/>
-          <Setter Property="VerticalAlignment" Value="Center"/>
-          <Setter Property="Margin" Value="9,0,9,0"/>
         </Style>
       </Grid.Resources>
 
@@ -1673,39 +1596,15 @@
           <!-- Имя -->
           <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,20,0,0">
             <TextBlock Text="Имя" Style="{StaticResource Style.Fb.Label}"/>
-            <Grid>
-              <TextBox x:Name="FbName" Style="{StaticResource Style.Fb.Field}" TextChanged="FbField_Changed"/>
-              <TextBlock Text="Ваше имя">
-                <TextBlock.Style>
-                  <Style TargetType="TextBlock" BasedOn="{StaticResource Style.Fb.Hint}">
-                    <Style.Triggers>
-                      <DataTrigger Binding="{Binding Text, ElementName=FbName}" Value="">
-                        <Setter Property="Visibility" Value="Visible"/>
-                      </DataTrigger>
-                    </Style.Triggers>
-                  </Style>
-                </TextBlock.Style>
-              </TextBlock>
-            </Grid>
+            <TextBox x:Name="FbName" ui:Placeholder.Text="Ваше имя"
+                     Style="{DynamicResource Style.TextBox.Field}" TextChanged="FbField_Changed"/>
           </StackPanel>
 
           <!-- Контакт -->
           <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,20,0,0">
             <TextBlock Text="Контакт" Style="{StaticResource Style.Fb.Label}"/>
-            <Grid>
-              <TextBox x:Name="FbContact" Style="{StaticResource Style.Fb.Field}" TextChanged="FbField_Changed"/>
-              <TextBlock Text="Telegram или email">
-                <TextBlock.Style>
-                  <Style TargetType="TextBlock" BasedOn="{StaticResource Style.Fb.Hint}">
-                    <Style.Triggers>
-                      <DataTrigger Binding="{Binding Text, ElementName=FbContact}" Value="">
-                        <Setter Property="Visibility" Value="Visible"/>
-                      </DataTrigger>
-                    </Style.Triggers>
-                  </Style>
-                </TextBlock.Style>
-              </TextBlock>
-            </Grid>
+            <TextBox x:Name="FbContact" ui:Placeholder.Text="Telegram или email"
+                     Style="{DynamicResource Style.TextBox.Field}" TextChanged="FbField_Changed"/>
           </StackPanel>
 
           <!-- Тип. Подпись сверху, как у соседей: строка «Тип: [v]» с подписью слева была
@@ -1728,23 +1627,9 @@
           <!-- Строка "*": карточка ограничена высотой окна, и поле обязано СЖИМАТЬСЯ вместе
                с ней, а не тащить за собой фиксированную высоту — именно это обрезало поле
                снизу на невысоких окнах. Длинный текст прокручивается внутри поля. -->
-          <Grid Grid.Row="3" Grid.ColumnSpan="5">
-            <TextBox x:Name="FbComment" Style="{StaticResource Style.Fb.Field.Multiline}" TextChanged="FbField_Changed"/>
-            <TextBlock Text="Опишите проблему или идею">
-              <TextBlock.Style>
-                <Style TargetType="TextBlock" BasedOn="{StaticResource Style.Fb.Hint}">
-                  <!-- Многострочное поле: подсказка стоит у верхнего края, где и каретка -->
-                  <Setter Property="VerticalAlignment" Value="Top"/>
-                  <Setter Property="Margin" Value="9,9,9,0"/>
-                  <Style.Triggers>
-                    <DataTrigger Binding="{Binding Text, ElementName=FbComment}" Value="">
-                      <Setter Property="Visibility" Value="Visible"/>
-                    </DataTrigger>
-                  </Style.Triggers>
-                </Style>
-              </TextBlock.Style>
-            </TextBlock>
-          </Grid>
+          <TextBox x:Name="FbComment" Grid.Row="3" Grid.ColumnSpan="5"
+                   ui:Placeholder.Text="Опишите проблему или идею"
+                   Style="{DynamicResource Style.TextBox.Field.Multiline}" TextChanged="FbField_Changed"/>
 
           <Grid Grid.Row="4" Grid.ColumnSpan="5" Margin="0,20,0,0">
             <Grid.ColumnDefinitions>
