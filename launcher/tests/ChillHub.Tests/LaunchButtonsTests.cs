@@ -218,6 +218,51 @@ namespace ChillHub.Tests {
             Assert.False(view.MenuVisible);
         }
 
+        /// <summary>Акцент и «стекло» — разные стили; решает это модель, а не разметка.</summary>
+        [Fact]
+        public void СтильКнопкиИдётЗаАкцентом() {
+            var view = LaunchButtons.Compute(Pack(), playMode: true, steamAllowed: false, All(), LaunchTarget.SteamModded);
+
+            Assert.Equal("Style.LaunchButton.Accent", view.Buttons[0].StyleKey);
+            Assert.Equal("Style.LaunchButton.Ghost", view.Buttons[1].StyleKey);
+        }
+
+        /// <summary>Нажали кнопку, вариант всё ещё доступен — запускаем его.</summary>
+        [Fact]
+        public void ДоступныйВариантЗапускаетсяПоНажатию() {
+            var chosen = LaunchButtons.Chosen(All(), LaunchTarget.LocalModded);
+
+            Assert.NotNull(chosen.Option);
+            Assert.Equal(LaunchTarget.LocalModded, chosen.Option!.Target);
+            Assert.Empty(chosen.Message);
+        }
+
+        /// <summary>
+        /// ИГРУ УДАЛИЛИ ИЗ STEAM МЕЖДУ ОТРИСОВКОЙ КНОПКИ И ЩЕЛЧКОМ. Запускать вместо неё
+        /// что-то другое нельзя, молчать — тоже: нажатие обязано объясниться словами.
+        /// </summary>
+        [Fact]
+        public void ПропавшийВариантОбъясняетсяСловами() {
+            var options = new List<LaunchOption> {
+                Option(LaunchTarget.SteamModded, LaunchAction.Unavailable, "Steam не установлен"),
+            };
+
+            var chosen = LaunchButtons.Chosen(options, LaunchTarget.SteamModded);
+
+            Assert.Null(chosen.Option);
+            Assert.Equal("Steam не установлен", chosen.Message);
+        }
+
+        /// <summary>Причины нет — сообщение всё равно есть: пустая строка ничего не объясняет.</summary>
+        [Fact]
+        public void ИсчезнувшийВовсеВариантТожеОбъясняется() {
+            var chosen = LaunchButtons.Chosen(new List<LaunchOption>(), LaunchTarget.SteamModded);
+
+            Assert.Null(chosen.Option);
+            Assert.NotEmpty(chosen.Message);
+            Assert.NotEmpty(LaunchButtons.Chosen(null, LaunchTarget.SteamModded).Message);
+        }
+
         private static List<LaunchOption> All() => new() {
             Option(LaunchTarget.SteamModded, LaunchAction.Play),
             Option(LaunchTarget.SteamVanilla, LaunchAction.Play),
