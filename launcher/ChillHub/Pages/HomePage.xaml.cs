@@ -1324,6 +1324,7 @@ namespace ChillHub.Pages {
                 // и без сброса «Обновить список игр» не менял бы обложки, даже если они
                 // реально сменились.
                 Core.Home.ImageLoader.InvalidateAll();
+                this.ReloadGameIcons();
 
                 // Сортировка: установленные сначала, затем порядок, полученный от API
                 this.catalog.RememberApiOrder(this.games);
@@ -2433,6 +2434,49 @@ namespace ChillHub.Pages {
         }
 
         // Обработчики остаются здесь: на их имена ссылается XAML. Вся логика — в Core/Home/ImageLoader.
+        /// <summary>
+        /// Перезагружает значки уже показанных строк списка.
+        /// <para>
+        /// Значок грузится обработчиком <c>Loaded</c>, то есть в момент, когда строку
+        /// создают. Раньше строки пересоздавались на каждом обновлении списка — заодно
+        /// перечитывались и значки. Теперь строки живут, и сброшенный кеш обложек сам по
+        /// себе ничего бы не изменил: «Обновить список игр» перестал бы обновлять
+        /// картинки, ради которых кеш и сбрасывают.
+        /// </para>
+        /// </summary>
+        private void ReloadGameIcons() {
+            try {
+                foreach (var img in FindImages(this.GameList)) {
+                    Core.Home.ImageLoader.AttachAndLoad(img, this.BaseApi);
+                }
+            }
+            catch (Exception ex) {
+                // Картинки — украшение: не обновились, значит останутся прежними.
+                Core.Logging.Logger.Warn($"ReloadGameIcons: {ex.Message}");
+            }
+        }
+
+        /// <summary>Все картинки в поддереве элемента.</summary>
+        /// <param name="root">Откуда искать.</param>
+        /// <returns>Найденные картинки.</returns>
+        private static IEnumerable<Image> FindImages(DependencyObject? root) {
+            if (root == null) {
+                yield break;
+            }
+
+            var count = System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);
+            for (var i = 0; i < count; i++) {
+                var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i);
+                if (child is Image img) {
+                    yield return img;
+                }
+
+                foreach (var nested in FindImages(child)) {
+                    yield return nested;
+                }
+            }
+        }
+
         private void CoverImg_Loaded(object sender, RoutedEventArgs e) {
             if (sender is not Image img) {
                 return;
