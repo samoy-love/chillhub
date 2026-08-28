@@ -351,14 +351,6 @@ namespace ChillHub.Core.Home {
         }
     }
 
-    /// <summary>
-    /// Каким показать пункт меню «Поставить моды в Steam-копию».
-    /// </summary>
-    /// <param name="Visible">Показывать ли пункт вообще.</param>
-    /// <param name="Enabled">Можно ли по нему нажать.</param>
-    /// <param name="Header">Готовая подпись пункта: с причиной, если он выключен.</param>
-    /// <param name="Reason">Почему пункт выключен или скрыт; пусто, если он доступен.</param>
-    internal sealed record SteamModsMenu(bool Visible, bool Enabled, string Header, string Reason);
 
     /// <summary>
     /// Тексты и решения для установки модпака в копию игры из Steam.
@@ -370,41 +362,8 @@ namespace ChillHub.Core.Home {
     /// </para>
     /// </summary>
     internal static class SteamModsInstall {
-        /// <summary>Подпись пункта меню. Одна на разметку, обработчик и тесты.</summary>
-        internal const string MenuTitle = "Поставить моды в Steam-копию";
-
         /// <summary>Заголовок окна подтверждения.</summary>
         internal const string ConfirmCaption = "Установка модов в Steam-копию";
-
-        /// <summary>
-        /// Значение <c>Tag</c> у пункта меню: по нему обработчик открытия меню находит
-        /// пункт среди остальных. По подписи искать нельзя — она меняется вместе с причиной.
-        /// </summary>
-        internal const string MenuTag = "steam-mods";
-
-        /// <summary>
-        /// Решает, показывать ли пункт и активен ли он.
-        /// <para>
-        /// Игре без Steam AppID пункт не нужен вовсе: ставить моды некуда, и объяснять
-        /// тут нечего. А вот игра со Steam-копией, но без опубликованного модпака —
-        /// случай временный, и выключенный пункт с причиной честнее исчезнувшего:
-        /// пользователь видит, что путь есть, просто ставить пока нечего.
-        /// </para>
-        /// </summary>
-        /// <param name="mods">Настройки модов игры с сервера.</param>
-        /// <returns>Что сделать с пунктом меню.</returns>
-        internal static SteamModsMenu DecideMenuItem(ModsInfo? mods) {
-            if (mods == null || string.IsNullOrWhiteSpace(mods.SteamAppId)) {
-                return new SteamModsMenu(false, false, MenuTitle, "у игры нет модов для копии из Steam");
-            }
-
-            if (!mods.HasLatest) {
-                const string reason = "модпак ещё не опубликован";
-                return new SteamModsMenu(true, false, $"{MenuTitle} — {reason}", reason);
-            }
-
-            return new SteamModsMenu(true, true, MenuTitle, string.Empty);
-        }
 
         /// <summary>
         /// Составляет вопрос перед установкой.

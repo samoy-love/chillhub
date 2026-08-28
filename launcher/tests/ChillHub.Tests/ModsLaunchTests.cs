@@ -317,6 +317,60 @@ namespace ChillHub.Tests {
         private static SteamGame NoSteam()
             => new(SteamLookup.SteamNotInstalled, string.Empty, string.Empty, Array.Empty<string>());
 
+        /// <summary>Обстановка «всё на месте», от которой отличаются остальные случаи.</summary>
+        private static LaunchContext Ctx(
+            ModsInfo? mods,
+            string localRoot,
+            SteamGame steam,
+            bool localInstalled = true,
+            bool localNeedsUpdate = false,
+            bool hasServerBuild = true,
+            string steamModsVersion = "ASTeam-LethalReloaded-2.2.12")
+            => new(mods, localRoot, localInstalled, localNeedsUpdate, hasServerBuild, steam, steamModsVersion);
+
+        /// <summary>Строка меню склеивается из подписи и пояснения.</summary>
+        [Fact]
+        public void СтрокаМенюСклеиваетсяИзПодписиИПояснения() {
+            var plain = new LaunchOption(LaunchTarget.SteamVanilla, "Steam · без модов", "d", false, LaunchAction.Play, string.Empty);
+            var noted = new LaunchOption(LaunchTarget.SteamModded, "Steam · с модами", "d", true, LaunchAction.InstallMods, "установить моды");
+
+            Assert.Equal("Steam · без модов", plain.MenuText);
+            Assert.Equal("Steam · с модами — установить моды", noted.MenuText);
+        }
+
+        /// <summary>
+        /// Копия в Steam есть, а модпака на сервере ещё нет: ставить нечего, и строка
+        /// честно выключается.
+        /// </summary>
+        [Fact]
+        public void БезСобранногоМодпакаSteamСтрокаВыключена() {
+            var steamDir = this.MakeGameDir("[General]" + "\n" + "enabled = true" + "\n");
+            var steam = new SteamGame(SteamLookup.Found, steamDir, "steam.exe", Array.Empty<string>());
+
+            var options = ModsLaunch.Options(Ctx(null, steamDir, steam));
+
+            var modded = options.Single(o => o.Target == LaunchTarget.SteamModded);
+            Assert.Equal(LaunchAction.Unavailable, modded.Action);
+            Assert.Equal("модпак ещё не опубликован", modded.Note);
+        }
+
+        /// <summary>
+        /// Версия модпака записана, а загрузчика в папке нет — так бывает после того,
+        /// как Steam восстановил свои файлы поверх модов.
+        /// </summary>
+        [Fact]
+        public void ЗатёртыйSteamЗагрузчикПредлагаетсяКВосстановлению() {
+            var steamDir = Path.Combine(this.root, "SteamNoDoorstop");
+            Directory.CreateDirectory(steamDir);
+            var steam = new SteamGame(SteamLookup.Found, steamDir, "steam.exe", Array.Empty<string>());
+
+            var options = ModsLaunch.Options(Ctx(Pack(), steamDir, steam));
+
+            var modded = options.Single(o => o.Target == LaunchTarget.SteamModded);
+            Assert.Equal(LaunchAction.InstallMods, modded.Action);
+            Assert.Equal("восстановить моды", modded.Note);
+        }
+
         /// <summary>Все четыре варианта доступны, когда есть и Steam-копия, и сборка, и модпак.</summary>
         [Fact]
         public void ВсеЧетыреВариантаДоступныПриПолномНаборе() {
@@ -324,11 +378,81 @@ namespace ChillHub.Tests {
             var localDir = this.MakeGameDir("[General]\nenabled = true\n");
             var steam = new SteamGame(SteamLookup.Found, steamDir, "steam.exe", Array.Empty<string>());
 
-            var options = ModsLaunch.Options(Pack(), localDir, localInstalled: true, steam);
+            var options = ModsLaunch.Options(Ctx(Pack(), localDir, steam));
 
             Assert.Equal(4, options.Count);
-            Assert.All(options, o => Assert.True(o.Available, $"{o.Target}: {o.Reason}"));
+            Assert.All(options, o => Assert.True(o.ReadyToPlay, $"{o.Target}: {o.Note}"));
             Assert.Contains(options, o => o.Title.Contains("Lethal Reloaded 2.2.12", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// У игры без сборки на сервере вариантов ДВА, а не четыре: она живёт только
+        /// копией из Steam, и «Сборке Chill Hub» взяться неоткуда.
+        /// </summary>
+        [Fact]
+        public void БезСборкиНаСервереОстаютсяТолькоДваВарианта() {
+            var steamDir = this.MakeGameDir("[General]\nenabled = true\n");
+            var steam = new SteamGame(SteamLookup.Found, steamDir, "steam.exe", Array.Empty<string>());
+
+            var options = ModsLaunch.Options(Ctx(Pack(), string.Empty, steam, localInstalled: false, hasServerBuild: false));
+
+            Assert.Equal(2, options.Count);
+            Assert.All(options, o => Assert.True(o.ViaSteam));
+        }
+
+        /// <summary>
+        /// Модов в копии Steam нет — пункт не выключается, а предлагает их поставить.
+        /// Выключенный пункт с припиской «нажмите „Обновить“» отправлял игрока к кнопке,
+        /// которая обновляет совсем другую копию игры.
+        /// </summary>
+        [Fact]
+        public void БезМодовВSteamПунктПредлагаетИхПоставить() {
+            var steamDir = this.MakeGameDir("[General]\nenabled = true\n");
+            var steam = new SteamGame(SteamLookup.Found, steamDir, "steam.exe", Array.Empty<string>());
+
+            var options = ModsLaunch.Options(Ctx(Pack(), steamDir, steam, steamModsVersion: string.Empty));
+
+            var modded = options.Single(o => o.Target == LaunchTarget.SteamModded);
+            Assert.True(modded.Available);
+            Assert.Equal(LaunchAction.InstallMods, modded.Action);
+            Assert.Equal("установить моды", modded.Note);
+        }
+
+        /// <summary>Старая версия модов в копии Steam — тот же пункт, но «обновить».</summary>
+        [Fact]
+        public void УстаревшиеМодыВSteamПредлагаютсяКОбновлению() {
+            var steamDir = this.MakeGameDir("[General]\nenabled = true\n");
+            var steam = new SteamGame(SteamLookup.Found, steamDir, "steam.exe", Array.Empty<string>());
+
+            var options = ModsLaunch.Options(Ctx(Pack(), steamDir, steam, steamModsVersion: "ASTeam-LethalReloaded-2.2.11"));
+
+            var modded = options.Single(o => o.Target == LaunchTarget.SteamModded);
+            Assert.Equal(LaunchAction.InstallMods, modded.Action);
+            Assert.Equal("обновить моды", modded.Note);
+        }
+
+        /// <summary>Сборки нет на диске — оба локальных пункта предлагают её установить.</summary>
+        [Fact]
+        public void НеустановленнаяСборкаПредлагаетсяКУстановке() {
+            var options = ModsLaunch.Options(Ctx(Pack(), this.root, NoSteam(), localInstalled: false));
+
+            var modded = options.Single(o => o.Target == LaunchTarget.LocalModded);
+            var vanilla = options.Single(o => o.Target == LaunchTarget.LocalVanilla);
+            Assert.Equal(LaunchAction.InstallGame, modded.Action);
+            Assert.Equal("установить игру с модами", modded.Note);
+            Assert.Equal(LaunchAction.InstallGame, vanilla.Action);
+        }
+
+        /// <summary>Устаревшая сборка — оба локальных пункта предлагают её обновить.</summary>
+        [Fact]
+        public void УстаревшаяСборкаПредлагаетсяКОбновлению() {
+            var localDir = this.MakeGameDir("[General]\nenabled = true\n");
+
+            var options = ModsLaunch.Options(Ctx(Pack(), localDir, NoSteam(), localNeedsUpdate: true));
+
+            Assert.All(
+                options.Where(o => !o.ViaSteam),
+                o => Assert.Equal(LaunchAction.Update, o.Action));
         }
 
         /// <summary>
@@ -339,12 +463,12 @@ namespace ChillHub.Tests {
         public void БезSteamОстаютсяТолькоЛокальныеВарианты() {
             var localDir = this.MakeGameDir("[General]\nenabled = true\n");
 
-            var options = ModsLaunch.Options(Pack(), localDir, localInstalled: true, NoSteam());
+            var options = ModsLaunch.Options(Ctx(Pack(), localDir, NoSteam()));
 
             var steamOptions = options.Where(o => o.ViaSteam).ToList();
             Assert.Equal(2, steamOptions.Count);
             Assert.All(steamOptions, o => Assert.False(o.Available));
-            Assert.All(steamOptions, o => Assert.Equal("Steam не установлен", o.Reason));
+            Assert.All(steamOptions, o => Assert.Equal("Steam не установлен", o.Note));
             Assert.All(options.Where(o => !o.ViaSteam), o => Assert.True(o.Available));
         }
 
@@ -353,26 +477,27 @@ namespace ChillHub.Tests {
         public void БезМодпакаОстаютсяТолькоВанильныеВарианты() {
             var localDir = this.MakeGameDir("[General]\nenabled = true\n");
 
-            var options = ModsLaunch.Options(null, localDir, localInstalled: true, NoSteam());
+            var options = ModsLaunch.Options(Ctx(null, localDir, NoSteam()));
 
             Assert.False(options.Single(o => o.Target == LaunchTarget.LocalModded).Available);
             Assert.True(options.Single(o => o.Target == LaunchTarget.LocalVanilla).Available);
         }
 
         /// <summary>
-        /// Модпак опубликован, но в папку ещё не установлен — вариант «с модами» недоступен
-        /// и прямо говорит, что делать.
+        /// Сборка на месте и свежая, а загрузчика модов в ней нет — так бывает, когда
+        /// файлы затёрли снаружи. Пункт не выключается: он предлагает восстановить.
         /// </summary>
         [Fact]
-        public void БезФайловМодовВариантСМодамиНедоступен() {
+        public void БезФайловМодовПунктПредлагаетВосстановление() {
             var localDir = Path.Combine(this.root, "NoMods");
             Directory.CreateDirectory(localDir);
 
-            var options = ModsLaunch.Options(Pack(), localDir, localInstalled: true, NoSteam());
+            var options = ModsLaunch.Options(Ctx(Pack(), localDir, NoSteam()));
 
             var modded = options.Single(o => o.Target == LaunchTarget.LocalModded);
-            Assert.False(modded.Available);
-            Assert.Contains("Обновить", modded.Reason, StringComparison.Ordinal);
+            Assert.True(modded.Available);
+            Assert.Equal(LaunchAction.Update, modded.Action);
+            Assert.Equal("восстановить моды", modded.Note);
         }
 
         /// <summary>
@@ -389,7 +514,7 @@ namespace ChillHub.Tests {
                 return null;
             };
 
-            var options = ModsLaunch.Options(Pack(), localDir, localInstalled: true, NoSteam());
+            var options = ModsLaunch.Options(Ctx(Pack(), localDir, NoSteam()));
 
             ModsLaunch.Start(options.Single(o => o.Target == LaunchTarget.LocalModded), Pack(), "Game.exe", NoSteam());
             Assert.True(DoorstopConfig.ReadEnabled(localDir));
@@ -412,7 +537,7 @@ namespace ChillHub.Tests {
                 return null;
             };
 
-            var options = ModsLaunch.Options(Pack(), steamDir, localInstalled: false, steam);
+            var options = ModsLaunch.Options(Ctx(Pack(), steamDir, steam, localInstalled: false));
             ModsLaunch.Start(options.Single(o => o.Target == LaunchTarget.SteamModded), Pack(), string.Empty, steam);
 
             Assert.Equal(steamExe, captured!.FileName);
@@ -429,7 +554,7 @@ namespace ChillHub.Tests {
                 return null;
             };
 
-            var blocked = new LaunchOption(LaunchTarget.SteamModded, "x", this.root, true, false, "нет");
+            var blocked = new LaunchOption(LaunchTarget.SteamModded, "x", this.root, true, LaunchAction.Unavailable, "нет");
             Assert.Null(ModsLaunch.Start(blocked, Pack(), string.Empty, NoSteam()));
             Assert.False(called);
         }

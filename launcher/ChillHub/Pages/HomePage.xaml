@@ -636,12 +636,6 @@
                         <MenuItem Header="Подробнее об игре" Click="GameDetails_Click" CommandParameter="{Binding}"/>
                         <MenuItem Header="Добавить в очередь загрузок" Click="EnqueueGame_Click" CommandParameter="{Binding}"/>
                         <MenuItem Header="Открыть расположение игры" Click="OpenGameFolder_Click" CommandParameter="{Binding}"/>
-                        <!-- Единственный способ поставить модпак игре, которой на сервере нет:
-                             она есть только в Steam, и общий конвейер обновления её не касается.
-                             Подпись и доступность выставляются в GameItem_ContextMenuOpening,
-                             Tag — чтобы найти пункт там, не завися от текста подписи. -->
-                        <MenuItem Header="Поставить моды в Steam-копию" Click="InstallModsToSteam_Click"
-                                  CommandParameter="{Binding}" Tag="steam-mods"/>
                         <!-- Удаление отделено чертой и покрашено: в столбце одинаковых строк
                              оно стояло сразу под «Открыть расположение» и ловило промахи. -->
                         <Separator/>
@@ -881,6 +875,18 @@
                 <Button x:Name="ActionBtn" Content="Играть" Click="ActionBtn_Click"
                         Style="{DynamicResource Style.ActionButton.Play}"
                         Width="180" Height="42" VerticalAlignment="Center"/>
+                <!-- Стрелка выбора варианта запуска. Видна только у игры с модами: у
+                     остальных выбирать нечего, и пустая кнопка рядом с «Играть» только
+                     сбивала бы с толку. Сама «Играть» при этом запускает запомненный
+                     вариант — меню на каждый запуск брало по два клика и ничем не
+                     показывало, что оно вообще откроется. -->
+                <Button x:Name="LaunchMenuBtn" Click="LaunchMenuBtn_Click"
+                        Style="{DynamicResource Style.ActionButton.Play}"
+                        Width="42" Height="42" Margin="6,0,0,0" VerticalAlignment="Center"
+                        Visibility="Collapsed" ToolTip="Выбрать, что запускать">
+                  <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE70D;" FontSize="12"
+                             VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                </Button>
                 <Button x:Name="HeroInfoBtn" Click="GameDetails_Click"
                         Style="{DynamicResource Style.Button.HeroInfo}"
                         Margin="8,0,0,0" VerticalAlignment="Center" ToolTip="Сведения, история изменений, папка игры">
