@@ -671,23 +671,24 @@ namespace ChillHub.Pages {
                     // Здесь достаточно сравнить с this.games: этот путь ничего не вливает
                     // с сервера, состав списка тот же, и поле указывает на показанное.
                     var sorted = this.catalog.Sort(this.games);
-                    var reordered = !GameCatalog.SameOrder(this.games, sorted);
-                    this.games = sorted;
 
-                    // Проверка статусов почти всегда оставляет порядок прежним, и вот
-                    // тогда список трогать нельзя вовсе: смена источника пересоздаёт все
-                    // строки и перезагружает значки — то самое мерцание после запуска.
-                    if (reordered) {
-                        await this.DispatcherInvokeAsync(() => {
+                    // СПИСОК ПОДМЕНЯЕТСЯ ТОЛЬКО НА UI-ПОТОКЕ. Сюда мы приходим из Task.Run,
+                    // а this.games в то же время читает и переписывает обработчик «Обновить
+                    // список» на UI-потоке. Пока присвоение шло из фона, две правки могли
+                    // разъехаться: поле указывало на один список, ListBox — на другой, и
+                    // выделение с восстановлением индекса считались уже по разным.
+                    await this.DispatcherInvokeAsync(() => {
+                        var reordered = !GameCatalog.SameOrder(this.games, sorted);
+                        this.games = sorted;
+
+                        // Проверка статусов почти всегда оставляет порядок прежним, и вот
+                        // тогда список трогать нельзя вовсе: смена источника пересоздаёт все
+                        // строки и перезагружает значки — то самое мерцание после запуска.
+                        if (reordered) {
                             this.SetGamesSource();
-                            if (!string.IsNullOrWhiteSpace(selectedId)) {
-                                var idx = GameCatalog.IndexOf(this.games, selectedId);
-                                if (idx >= 0) {
-                                    this.GameList.SelectedItem = this.games[idx];
-                                }
-                            }
-                        });
-                    }
+                            this.RestoreSelection(selectedId);
+                        }
+                    });
                 }
                 catch (Exception ex) {
                     // Пересортировка — косметика: статусы уже проверены и показаны
