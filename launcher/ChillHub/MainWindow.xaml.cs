@@ -45,6 +45,19 @@ namespace ChillHub {
             new Core.Shell.ActivationThrottle(SelfUpdateCheckInterval);
 
         /// <summary>
+        /// Найденное обновление, которое пока некому показать: окно свёрнуто, спрятано
+        /// в трей или занято закачкой.
+        /// <para>
+        /// БЕЗ ЭТОГО РЕЗУЛЬТАТ ПРОВЕРКИ ПРОСТО ВЫБРАСЫВАЛСЯ. Таймер ходит за версией
+        /// независимо от того, видно ли окно; найдя обновление у свёрнутого окна, он
+        /// молча уходил ни с чем, а возврат фокуса за новой проверкой не шёл —
+        /// ограничитель пропускает её не чаще раза в десять минут. Человек возвращался
+        /// к лаунчеру, и тот молчал.
+        /// </para>
+        /// </summary>
+        private SelfUpdatePrecheck? pendingSelfUpdate;
+
+        /// <summary>
         /// То же для состояния модов в папке Steam: перечитывание лезет в реестр и обходит
         /// папку игры на диске, причём на UI-потоке. Пять секунд — вернувшийся из Steam
         /// человек разницы не заметит, а перещёлкивание окон перестаёт стоить дисковых
@@ -128,7 +141,11 @@ namespace ChillHub {
                 // лаунчер открытым, но не активным, дольше интервала selfUpdateCheckTimer
                 // — переключение назад не должно ждать следующего тика. selfUpdateCheckRunning
                 // не даёт столкнуться с уже идущей проверкой (тиком или тем же RestoreFromTray).
-                if (this.selfUpdateOnActivate.Allow()) {
+                // Ограничитель молчит, когда обновление уже найдено и ждёт показа:
+                // показать известное ничего не стоит, а ждать с ним десять минут — это
+                // ровно то, из-за чего окно не появлялось при возврате к лаунчеру.
+                if (Core.SelfUpdate.SelfUpdatePrompt.ShouldCheckOnActivate(
+                        this.pendingSelfUpdate != null, this.selfUpdateOnActivate.Allow())) {
                     _ = this.RunSelfUpdateCheckAsync();
                 }
 
@@ -365,6 +382,10 @@ namespace ChillHub {
                 // доступная новая версия.
                 if (precheck.Decision.State != Core.SelfUpdate.SelfUpdateState.UpdateAvailable) {
                     Core.Logging.Logger.Info($"Background self-update check: state={precheck.Decision.State}, dialog suppressed outside startup");
+
+                    // Обновления больше нет (уже поставили, откатили на сервере) —
+                    // отложенному показывать нечего.
+                    this.pendingSelfUpdate = null;
                     return;
                 }
 
@@ -394,12 +415,20 @@ namespace ChillHub {
         /// </para>
         /// </summary>
         private void TryShowSelfUpdateDialog(SelfUpdatePrecheck precheck) {
-            // Окно спрятано в трее/свёрнуто или идёт загрузка игры — не время лезть с диалогом
-            // обновления.
-            if (!this.IsVisible || this.WindowState == WindowState.Minimized || this.CurrentHome?.HasActiveDownloads == true) {
+            // Окно спрятано в трее/свёрнуто или идёт работа в очереди — не время лезть с
+            // диалогом. Но и забывать найденное нельзя: покажем, как только человек
+            // вернётся к окну (см. pendingSelfUpdate и обработчик Activated).
+            if (!Core.SelfUpdate.SelfUpdatePrompt.CanShowNow(
+                    this.IsVisible,
+                    this.WindowState == WindowState.Minimized,
+                    this.CurrentHome?.HasActiveDownloads == true)) {
+                this.pendingSelfUpdate = precheck;
+                Core.Logging.Logger.Info(
+                    $"Self-update {precheck.Decision.RemoteVersion} найдено, но показывать сейчас некому — отложено до возврата к окну");
                 return;
             }
 
+            this.pendingSelfUpdate = null;
             var upd = new UpdateWindow(precheck) {
                 Owner = this,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
