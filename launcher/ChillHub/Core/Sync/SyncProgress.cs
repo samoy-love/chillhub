@@ -13,6 +13,23 @@ namespace ChillHub.Core.Sync {
 
         public long TotalBytes { get; set; }
 
+        /// <summary>
+        /// Сколько байт пришло ПО СЕТИ с начала операции.
+        /// <para>
+        /// СКОРОСТЬ СЧИТАЕТСЯ ПО НЕЙ, А НЕ ПО <see cref="BytesDownloaded"/>. Тот меряет
+        /// сделанное: в него идут и файлы, взятые из соседней копии игры на диске, и
+        /// уцелевший от прошлого запуска кусок .part. Копирование с диска быстрее сети
+        /// в разы — и «скорость скачивания» показывала 100+ МБ/с на канале, где больше
+        /// шестидесяти не бывает.
+        /// </para>
+        /// <para>
+        /// Перезакачанные байты здесь остаются: по проводу они прошли, и для скорости
+        /// это правда. Разница с <see cref="BytesDownloaded"/> — это ровно та работа,
+        /// которую пришлось делать дважды.
+        /// </para>
+        /// </summary>
+        public long NetworkBytes { get; set; }
+
         public string Stage { get; set; } = string.Empty; // Checking, Downloading, Verifying, Activating
 
         /// <summary>

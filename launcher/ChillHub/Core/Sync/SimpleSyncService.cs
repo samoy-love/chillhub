@@ -505,6 +505,10 @@ namespace ChillHub.Core.Sync {
         /// <inheritdoc/>
         public async Task ExecuteAsync(DiffPlan plan, IProgress<SyncProgress> progress, CancellationToken ct) {
             long downloaded = 0;
+
+            // Отдельно от downloaded: тот меряет сделанное (включая взятое с диска), а
+            // это — то, что реально прошло по проводу. По нему считается скорость.
+            long fromNetwork = 0;
             int filesDone = 0;
             var total = plan.TotalDownloadBytes;
             var totalFiles = plan.TotalFilesToDownload;
@@ -591,6 +595,7 @@ namespace ChillHub.Core.Sync {
                 progress.Report(new SyncProgress {
                     Stage = "Downloading",
                     BytesDownloaded = Interlocked.Read(ref downloaded),
+                    NetworkBytes = Interlocked.Read(ref fromNetwork),
                     TotalBytes = total,
                     FilesDownloaded = Volatile.Read(ref filesDone),
                     TotalFiles = totalFiles,
@@ -724,6 +729,10 @@ namespace ChillHub.Core.Sync {
                                                             await dst.WriteAsync(buffer.AsMemory(0, read), attemptCt).ConfigureAwait(false);
                                                             Credit(credited + read);
 
+                                                            // Сюда идёт всё вычитанное из сети, включая
+                                                            // перезакачанное: по проводу оно прошло.
+                                                            Interlocked.Add(ref fromNetwork, read);
+
                                                             // Ограничение скорости: список токенов общий на все потоки загрузки,
                                                             // поэтому ждём здесь, а не после записи — иначе сверхлимитные байты
                                                             // уже осели бы на диске до того, как поток притормозил.
@@ -851,21 +860,21 @@ namespace ChillHub.Core.Sync {
 
             // Итоговые цифры скачивания — уже без троттлинга, иначе счётчик файлов
             // может замереть на предпоследнем значении
-            progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+            progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
 
             // Верификация (хеши пропустим на моках)
-            progress.Report(new SyncProgress { Stage = "Verifying", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+            progress.Report(new SyncProgress { Stage = "Verifying", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
 
             // Завершение: убрать лишние файлы, опустевшие каталоги и снять маркер. Сами
             // файлы игры уже на своих местах — их поставили потоки загрузки. Фаза синхронная
             // и блокирующая (SafeDeleteFile с ожиданиями, обход дерева каталогов), а
             // вызывающие стартуют ExecuteAsync с UI-потока — уводим её в пул, иначе окно
             // замирает и «Отмена» физически не нажимается.
-            progress.Report(new SyncProgress { Stage = "Activating", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+            progress.Report(new SyncProgress { Stage = "Activating", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
             await Task.Run(() => FinishPlan(plan, deferred, changesDisk, ct), ct).ConfigureAwait(false);
 
             // Финальный сигнал о завершении
-            progress.Report(new SyncProgress { Stage = "Completed", BytesDownloaded = downloaded, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+            progress.Report(new SyncProgress { Stage = "Completed", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
         }
 
         /// <summary>

@@ -47,11 +47,29 @@ namespace ChillHub.Core.Game {
             var what = string.IsNullOrEmpty(p.Scope) ? string.Empty : p.Scope + " · ";
             switch (p.Stage) {
                 case "Checking":
+                    // СВЕРКА ИДЁТ МИНУТАМИ, И У НЕЁ ЕСТЬ ЧТО ПОКАЗАТЬ. Она читает и
+                    // хеширует всю папку игры, отчитываясь о каждом файле, — а полоса
+                    // всё это время просто бегала туда-сюда, ничего не обещая.
+                    //
+                    // Скорости здесь нет и быть не может: по сети в эту фазу ничего не
+                    // идёт, а «скорость чтения с диска» игроку не про что.
+                    if (p.TotalBytes > 0) {
+                        return new SyncProgressDisplay(
+                            what + "Проверка файлов…",
+                            false,
+                            Math.Min(100, Math.Max(0, p.BytesDownloaded * 100.0 / p.TotalBytes)),
+                            string.Empty,
+                            $"{p.FilesDownloaded}/{p.TotalFiles} • {FormatSize(p.BytesDownloaded)}/{FormatSize(p.TotalBytes)}");
+                    }
+
                     return new SyncProgressDisplay(what + "Проверка файлов…", true, null, null, null);
                 case "Downloading":
                     if (p.TotalBytes > 0) {
                         var value = Math.Min(100, Math.Max(0, p.BytesDownloaded * 100.0 / p.TotalBytes));
-                        var instant = elapsedSeconds > 0 ? (p.BytesDownloaded / 1024.0 / 1024.0) / elapsedSeconds : 0;
+
+                        // Скорость — по пришедшему из сети: в BytesDownloaded идут и файлы,
+                        // взятые из соседней копии на диске, а копирование быстрее сети в разы.
+                        var instant = elapsedSeconds > 0 ? (p.NetworkBytes / 1024.0 / 1024.0) / elapsedSeconds : 0;
                         this.emaSpeedMBs = this.emaSpeedMBs <= 0 ? instant : ((EmaAlpha * instant) + ((1 - EmaAlpha) * this.emaSpeedMBs));
                         var remain = p.TotalBytes - p.BytesDownloaded;
                         var eta = this.emaSpeedMBs > 0 ? (remain / 1024.0 / 1024.0) / this.emaSpeedMBs : 0;
