@@ -71,6 +71,13 @@ namespace ChillHub.Core.UI {
         /// <summary>Акцент — игра прямо сейчас в очереди загрузок.</summary>
         internal static SolidColorBrush Queued { get; } = Freeze("#7C5CFF");
 
+        /// <summary>
+        /// Игра открыта прямо сейчас. Тот же зелёный, что у готовой к запуску: это
+        /// её же состояние, доведённое до конца, — и лишний цвет в списке из трёх
+        /// подписей делит внимание, а не направляет его.
+        /// </summary>
+        internal static SolidColorBrush Playing { get; } = Freeze("#57C98A");
+
         private static SolidColorBrush Freeze(string hex) {
             var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
             brush.Freeze();
@@ -79,9 +86,10 @@ namespace ChillHub.Core.UI {
     }
 
     /// <summary>
-    /// Подпись строки списка с учётом очереди: входы — <see cref="GameInfo"/> и его
-    /// <see cref="GameInfo.QueueLabel"/>. Метка очереди важнее статуса на диске: пока игра
-    /// качается, «Обновление» рядом с ней — вчерашняя новость.
+    /// Подпись строки списка с учётом очереди и запущенной игры: входы — <see cref="GameInfo"/>,
+    /// его <see cref="GameInfo.QueueLabel"/> и <see cref="GameInfo.RunLabel"/>. Метка очереди
+    /// важнее статуса на диске: пока игра качается, «Обновление» рядом с ней — вчерашняя
+    /// новость. «Играет» — важнее статуса, но не важнее процентов закачки.
     /// <para>
     /// MultiBinding, а не обычный конвертер по объекту: привязка к объекту целиком не
     /// узнаёт об изменении его свойства, а перерисовывать весь список на каждый тик
@@ -93,7 +101,14 @@ namespace ChillHub.Core.UI {
         public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture) {
             var game = values.Length > 0 ? values[0] as GameInfo : null;
             var label = values.Length > 1 ? values[1] as string : null;
-            return !string.IsNullOrEmpty(label) ? label! : GameStatusTextConverter.TextFor(game);
+            if (!string.IsNullOrEmpty(label)) {
+                return label!;
+            }
+
+            // «Играет» — после очереди, но раньше статуса на диске: у качающейся игры
+            // важнее проценты, а «Установлена» под открытой игрой — вчерашняя новость.
+            var run = values.Length > 2 ? values[2] as string : null;
+            return !string.IsNullOrEmpty(run) ? run! : GameStatusTextConverter.TextFor(game);
         }
 
         /// <inheritdoc/>
@@ -110,6 +125,11 @@ namespace ChillHub.Core.UI {
             var label = values.Length > 1 ? values[1] as string : null;
             if (!string.IsNullOrEmpty(label)) {
                 return GameStatusBrushConverter.Queued;
+            }
+
+            var run = values.Length > 2 ? values[2] as string : null;
+            if (!string.IsNullOrEmpty(run)) {
+                return GameStatusBrushConverter.Playing;
             }
 
             return ByStatus.Convert(values.Length > 0 ? values[0] : null!, targetType, parameter, culture);

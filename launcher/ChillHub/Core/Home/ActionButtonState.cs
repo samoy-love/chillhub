@@ -116,10 +116,32 @@ namespace ChillHub.Core.Home {
             };
         }
 
-        /// <summary>Надпись, доступность и ключ стиля для режима кнопки.</summary>
+        /// <summary>
+        /// Надпись, доступность и ключ стиля для режима кнопки.
+        /// <para>
+        /// Запущенная игра перебивает «Играть»: пока она идёт, кнопка называет
+        /// происходящее, а не предлагает поднять вторую копию. Остальные режимы —
+        /// установку, обновление, отмену — она не трогает: эти действия к тому, что
+        /// игра открыта, отношения не имеют, а запрет на них живёт отдельно.
+        /// </para>
+        /// </summary>
+        /// <param name="mode">Режим кнопки.</param>
+        /// <param name="run">Запущена ли выбранная игра прямо сейчас.</param>
+        /// <returns>Оформление кнопки.</returns>
+        internal static ActionButtonAppearance Appearance(
+            ActionMode mode, Game.GameRunState run = Game.GameRunState.None) {
+            if (mode == ActionMode.Play && run != Game.GameRunState.None) {
+                return new ActionButtonAppearance(
+                    Game.RunningGameLook.Headline(run), false, "Style.ActionButton.Checking");
+            }
+
+            return Look(mode);
+        }
+
+        /// <summary>Оформление режима как такового, без оглядки на запущенную игру.</summary>
         /// <param name="mode">Режим кнопки.</param>
         /// <returns>Оформление кнопки.</returns>
-        internal static ActionButtonAppearance Appearance(ActionMode mode) => mode switch {
+        private static ActionButtonAppearance Look(ActionMode mode) => mode switch {
             ActionMode.Cancel => new ActionButtonAppearance("Отмена", true, "Style.ActionButton.Cancel"),
             ActionMode.Dequeue => new ActionButtonAppearance("Убрать из очереди", true, "Style.ActionButton.Dequeue"),
             ActionMode.Checking => new ActionButtonAppearance("Проверка…", false, "Style.ActionButton.Checking"),

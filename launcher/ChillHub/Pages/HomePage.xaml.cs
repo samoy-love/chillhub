@@ -310,6 +310,17 @@ namespace ChillHub.Pages {
                 this.Loaded += (s, e) => this.SubscribeErrorReporter();
                 this.Unloaded += (s, e) => this.UnsubscribeErrorReporter();
 
+                // Запущенные игры: то же статическое событие, та же продолжительность
+                // подписки. Отметки в списке ставим сразу — незакрытые сессии прошлого
+                // запуска уже разобраны EnsureStarted выше, и игра, пережившая лаунчер,
+                // должна значиться запущенной с первого кадра.
+                this.SubscribeRunningGames();
+                this.Loaded += (s, e) => {
+                    this.SubscribeRunningGames();
+                    this.SyncRunLabels();
+                };
+                this.Unloaded += (s, e) => this.UnsubscribeRunningGames();
+
                 // Статус пишут два десятка мест по всему файлу; вместо того чтобы обходить
                 // каждое, слушаем само свойство — панель прячется и показывается там, где
                 // текст действительно меняется.
@@ -436,6 +447,10 @@ namespace ChillHub.Pages {
                         // Скелетоны -> список
                         this.GamesSkeleton.Visibility = System.Windows.Visibility.Collapsed;
                         this.GameList.Visibility = System.Windows.Visibility.Visible;
+
+                        // Отметки «Играет» — на новых объектах списка: подпись живёт в
+                        // самой строке, а строки только что созданы заново.
+                        this.SyncRunLabels();
                         this.UpdateActionButtonState();
                     }
                     catch (Exception ex) {
@@ -1374,6 +1389,7 @@ namespace ChillHub.Pages {
                 // списке (см. GameCatalog.NeedsRebind).
                 var rebind = GameCatalog.NeedsRebind(this.GameList.ItemsSource, sorted);
                 this.games = sorted;
+                this.SyncRunLabels();
                 if (rebind) {
                     this.SetGamesSource();
 
@@ -1541,7 +1557,7 @@ namespace ChillHub.Pages {
         private void SetActionMode(ActionMode mode) {
             this.actionMode = mode;
             try {
-                var look = ActionButtonState.Appearance(mode);
+                var look = ActionButtonState.Appearance(mode, this.SelectedRunState());
                 this.ActionBtn.Content = look.Content;
                 this.ActionBtn.IsEnabled = look.IsEnabled;
                 this.ApplyActionButtonStyle(look.StyleKey);
@@ -1578,7 +1594,8 @@ namespace ChillHub.Pages {
                     : null;
 
                 var view = Core.Mods.LaunchButtons.Compute(
-                    game?.Mods, playMode, steamAllowed, options, Core.Mods.LaunchChoice.Remembered(game?.GameId));
+                    game?.Mods, playMode, steamAllowed, options,
+                    Core.Mods.LaunchChoice.Remembered(game?.GameId), this.SelectedRunState());
 
                 this.launchBar = view;
                 this.ActionBtn.Visibility = view.ActionVisible ? Visibility.Visible : Visibility.Collapsed;
@@ -1586,6 +1603,10 @@ namespace ChillHub.Pages {
                 this.ApplyLaunchButton(this.LaunchBtn2, this.LaunchBtn2Title, this.LaunchBtn2Note, view, 1);
                 this.LaunchMenuBtn.Visibility = view.MenuVisible ? Visibility.Visible : Visibility.Collapsed;
                 this.LaunchMenuBtn.ToolTip = view.MenuVisible ? view.MenuTooltip : null;
+
+                // Под стрелкой лежат те же запуски. Пока игра идёт, живая стрелка была бы
+                // обходом вокруг только что выключенных кнопок.
+                this.LaunchMenuBtn.IsEnabled = view.Run == Core.Game.GameRunState.None;
 
                 // Подсказка «что запустится» нужна только той «Играть», которая
                 // открывает меню: у кнопок запуска ответ написан прямо на них, а
@@ -1621,6 +1642,7 @@ namespace ChillHub.Pages {
             button.ToolTip = model.Tooltip;
             button.Tag = model.Target;
             button.Visibility = Visibility.Visible;
+            button.IsEnabled = model.Enabled;
 
             if (this.TryFindResource(model.StyleKey) is Style style) {
                 button.Style = style;
@@ -1744,6 +1766,11 @@ namespace ChillHub.Pages {
                 if (g == null) {
                     status = string.Empty;
                 }
+                else if (Core.Game.RunningGameLook.Headline(Core.Game.RunningGames.StateOf(g.GameId)) is { Length: > 0 } open) {
+                    // Впереди всего остального: «Установлена» под открытой игрой отвечает
+                    // на вопрос, которого игрок в этот момент не задавал.
+                    status = open;
+                }
                 else if (!string.IsNullOrEmpty(g.QueueLabel)) {
                     // Игра в очереди: бейдж говорит «Скачивание · 5%» / «В очереди», а не
                     // «Требуется обновление» — иначе на одном экране про одну игру стояли
@@ -1785,7 +1812,9 @@ namespace ChillHub.Pages {
         /// поднимая окно. В любом другом состоянии (установка, обновление, проверка) окно
         /// придётся показать: пользователю нужно видеть, что происходит.
         /// </summary>
-        internal bool CanPlaySelectedGame => this.actionMode == ActionMode.Play;
+        internal bool CanPlaySelectedGame =>
+            this.actionMode == ActionMode.Play
+            && this.SelectedRunState() == Core.Game.GameRunState.None;
 
         /// <summary>Делает то же, что кнопка действия на витрине — вызов из меню трея.</summary>
         internal void InvokeSelectedAction() => this.ActionBtn_Click(this, new RoutedEventArgs());
@@ -1993,6 +2022,61 @@ namespace ChillHub.Pages {
             var mins = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalMinutes));
             _ = this.DispatcherInvokeAsync(() => this.ShowToast($"Лимит авто-репортов исчерпан. Доступно через ~{mins} мин."));
         }
+
+        /// <summary>Что сейчас с выбранной игрой: запущена, запускается или ни то ни другое.</summary>
+        /// <returns>Состояние запуска.</returns>
+        private Core.Game.GameRunState SelectedRunState() {
+            try {
+                return Core.Game.RunningGames.StateOf(this.GetSelectedGameId());
+            }
+            catch (Exception ex) {
+                // Не смогли узнать — считаем, что игра не запущена: запертая витрина хуже
+                // лишнего запуска, а лишний запуск отсюда и так не следует.
+                Core.Logging.Logger.Warn($"SelectedRunState: {ex.Message}");
+                return Core.Game.GameRunState.None;
+            }
+        }
+
+        // Игра запускается и закрывается, пока страница открыта: подписка живёт ровно
+        // столько же, сколько подписки на техработы и авто-отчёты, и по той же причине —
+        // событие статическое, а страница пересоздаётся.
+        private bool runningGamesSubscribed;
+
+        private void SubscribeRunningGames() {
+            if (this.runningGamesSubscribed) {
+                return;
+            }
+
+            Core.Game.RunningGames.Changed += this.OnRunningGamesChanged;
+            this.runningGamesSubscribed = true;
+        }
+
+        private void UnsubscribeRunningGames() {
+            if (!this.runningGamesSubscribed) {
+                return;
+            }
+
+            Core.Game.RunningGames.Changed -= this.OnRunningGamesChanged;
+            this.runningGamesSubscribed = false;
+        }
+
+        /// <summary>
+        /// Игру запустили или закрыли. Событие приходит из фоновой задачи — той, что
+        /// дожидается выхода процесса, — поэтому всё, что трогает окно, уходит в диспетчер.
+        /// </summary>
+        private void OnRunningGamesChanged() =>
+            _ = this.DispatcherInvokeAsync(() => {
+                try {
+                    this.SyncRunLabels();
+                    this.UpdateActionButtonState();
+                }
+                catch (Exception ex) {
+                    Core.Logging.Logger.Error(ex, "HomePage.OnRunningGamesChanged");
+                }
+            });
+
+        /// <summary>Переписывает подписи «Играет» в списке игр.</summary>
+        private void SyncRunLabels() => Core.Game.RunningGameLook.ApplyLabels(this.games);
 
         private void SubscribeMaintenance() {
             if (this.maintenanceSubscribed) {
@@ -2324,6 +2408,14 @@ namespace ChillHub.Pages {
         private void PlaySelectedGame() {
             var gid = this.GetSelectedGameId();
 
+            // Игра без модов идёт мимо StartLaunchOption с его проверкой, а «Играть» из
+            // трея не смотрит на выключенную кнопку витрины: без этой ветки вторая копия
+            // поднималась бы именно отсюда.
+            if (Core.Game.RunningGameLook.Refusal(Core.Game.RunningGames.StateOf(gid)) is { Length: > 0 } busy) {
+                this.ShowToast(busy);
+                return;
+            }
+
             // У игры с модами запусков четыре: своя копия из Steam или сборка с сервера,
             // каждая с модами или без. Выбор показывается меню на кнопке «Играть», а не
             // отдельным экраном: выбирать тут нечего кроме этих четырёх, и лишний экран
@@ -2504,6 +2596,14 @@ namespace ChillHub.Pages {
         /// <param name="option">Что запускаем.</param>
         private void StartLaunchOption(GameInfo game, Core.Mods.LaunchOption option) {
             try {
+                // ПОСЛЕДНИЙ РУБЕЖ ПРОТИВ ВТОРОЙ КОПИИ ИГРЫ. Выключенных кнопок мало:
+                // сюда ведут ещё меню под стрелкой, «Играть» из трея и горячий клик,
+                // успевший пройти до перерисовки витрины. Проверка одна на все входы.
+                if (Core.Game.RunningGameLook.Refusal(Core.Game.RunningGames.StateOf(game.GameId)) is { Length: > 0 } busy) {
+                    this.ShowToast(busy);
+                    return;
+                }
+
                 var runner = new Core.Mods.LaunchRunner(new Core.Mods.LaunchUi {
                     SetStatus = text => this.StatusText.Text = text,
                     Toast = text => this.ShowToast(text),
