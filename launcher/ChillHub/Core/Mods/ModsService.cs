@@ -91,6 +91,7 @@ namespace ChillHub.Core.Mods {
                     FilesDownloaded = value.FilesDownloaded,
                     TotalFiles = value.TotalFiles,
                     BytesDownloaded = value.BytesDownloaded,
+                    NetworkBytes = value.NetworkBytes,
                     TotalBytes = value.TotalBytes,
                     Stage = value.Stage,
                     Scope = ScopeName,
