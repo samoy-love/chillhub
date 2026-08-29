@@ -101,6 +101,52 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// ЕДИНСТВЕННАЯ КНОПКА ЗАПУСКА КРАСИТСЯ АКЦЕНТОМ, даже когда игрок ещё ничего не
+        /// запускал. Пока акцент значил только «запускали в прошлый раз», у нового игрока
+        /// витрина оставалась без единой залитой кнопки: одна «стеклянная» кнопка посреди
+        /// пустого ряда читается как запасной путь, а идти больше некуда.
+        /// </summary>
+        [Fact]
+        public void ЕдинственнаяКнопкаЗапускаНоситАкцент() {
+            var options = new List<LaunchOption> {
+                Option(LaunchTarget.SteamModded, LaunchAction.Play),
+                Option(LaunchTarget.SteamVanilla, LaunchAction.Play),
+            };
+
+            var view = LaunchButtons.Compute(Pack(), playMode: true, steamAllowed: false, options, remembered: null);
+
+            var only = Assert.Single(view.Buttons);
+            Assert.True(only.Accent, "единственное действие витрины обязано выглядеть главным");
+            Assert.Equal("Style.LaunchButton.Accent", only.StyleKey);
+        }
+
+        /// <summary>
+        /// Но обещать прошлый раз, которого не было, нельзя: приписка в подсказке идёт
+        /// за памятью, а не за цветом.
+        /// </summary>
+        [Fact]
+        public void ЕдинственнаяКнопкаНеВыдумываетПрошлыйЗапуск() {
+            var options = new List<LaunchOption> { Option(LaunchTarget.SteamModded, LaunchAction.Play) };
+
+            var view = LaunchButtons.Compute(Pack(), playMode: true, steamAllowed: false, options, remembered: null);
+
+            Assert.DoesNotContain(
+                "прошлый раз", Assert.Single(view.Buttons).Tooltip, System.StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Кнопок две — акцент по-прежнему только у запомненной: залитых кнопок в ряду
+        /// не должно быть две, а без памяти выбирать за игрока не за что.
+        /// </summary>
+        [Fact]
+        public void ДвеКнопкиБезПамятиАкцентаНеПолучают() {
+            var view = LaunchButtons.Compute(Pack(), playMode: true, steamAllowed: false, All(), remembered: null);
+
+            Assert.Equal(2, view.Buttons.Count);
+            Assert.DoesNotContain(view.Buttons, b => b.Accent);
+        }
+
+        /// <summary>
         /// Запомнили запуск без модов — акцента на витрине нет: обе кнопки запускают
         /// не то, что игрок выбирал в прошлый раз, и подсвечивать одну из них значило
         /// бы соврать.
