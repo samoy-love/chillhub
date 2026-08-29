@@ -489,7 +489,7 @@ namespace ChillHub.Tests {
             Assert.Equal(25.0, percent);
         }
 
-        private static SelfUpdateDownloader NewDownloader(
+        internal static SelfUpdateDownloader NewDownloader(
             SelfUpdateStand stand, FakeSync sync, out UiRecorder ui, UpdateAttemptsStore? attempts = null) {
             ui = new UiRecorder();
             return new SelfUpdateDownloader(

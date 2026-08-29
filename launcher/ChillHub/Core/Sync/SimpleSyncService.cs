@@ -765,7 +765,7 @@ namespace ChillHub.Core.Sync {
                                                     // тому же отказу, который был очевиден на первом файле.
                                                     if (IsUnrecoverable(ex)) {
                                                         throw new IOException(
-                                                            $"Не удалось проверить {t.RelativePath}: {Describe(ex)}. " +
+                                                            $"Не удалось проверить {t.RelativePath}: {ExceptionText.Describe(ex)}. " +
                                                             "Файлы лаунчера неполные — переустановите его.",
                                                             ex);
                                                     }
@@ -774,7 +774,7 @@ namespace ChillHub.Core.Sync {
                                                     if (attempt >= maxAttempts) {
                                                         throw ex is InvalidDataException
                                                             ? new InvalidDataException($"Файл {t.RelativePath} не прошёл проверку хеша после {maxAttempts} попыток", ex)
-                                                            : new IOException($"Ошибка загрузки {t.RelativePath}: {Describe(ex)}", ex);
+                                                            : new IOException($"Ошибка загрузки {t.RelativePath}: {ExceptionText.Describe(ex)}", ex);
                                                     }
 
                                                     if (ex is InvalidDataException) {
@@ -1096,27 +1096,6 @@ namespace ChillHub.Core.Sync {
             TypeLoadException => true,
             _ => false,
         };
-
-        /// <summary>
-        /// Текст исключения для журнала и для игрока.
-        /// <para>
-        /// У FileNotFoundException по сборке Message пуст, и отказ уезжал в обращение
-        /// строкой «Ошибка загрузки .doorstop_version: » — с двоеточием и пустотой за
-        /// ним. Название типа — не подарок, но оно хотя бы называет случившееся.
-        /// </para>
-        /// </summary>
-        /// <param name="ex">Исключение.</param>
-        /// <returns>Непустое описание.</returns>
-        internal static string Describe(Exception ex) {
-            var message = (ex.Message ?? string.Empty).Trim();
-            if (message.Length > 0) {
-                return message;
-            }
-
-            return ex is FileNotFoundException { FileName.Length: > 0 } f
-                ? $"{ex.GetType().Name}: {f.FileName}"
-                : ex.GetType().Name;
-        }
 
         /// <summary>
         /// Сверяет скачанный .part с хешами из манифеста (SHA-256 и Blake3 за один проход).

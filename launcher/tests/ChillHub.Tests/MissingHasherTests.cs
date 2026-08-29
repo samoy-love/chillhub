@@ -7,12 +7,14 @@ namespace ChillHub.Tests {
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
     using System.Net;
     using System.Net.Http;
     using System.Security.Cryptography;
     using System.Threading;
     using System.Threading.Tasks;
 
+    using ChillHub.Core.SelfUpdate;
     using ChillHub.Core.Sync;
 
     using Xunit;
@@ -143,11 +145,77 @@ namespace ChillHub.Tests {
             var assemblyGone = new FileNotFoundException(
                 string.Empty, "Blake3, Version=2.0.0.0, Culture=neutral, PublicKeyToken=null");
 
-            var text = SimpleSyncService.Describe(assemblyGone);
+            var text = ExceptionText.Describe(assemblyGone);
 
             Assert.NotEmpty(text);
             Assert.Contains("Blake3", text, StringComparison.Ordinal);
-            Assert.Equal("сеть недоступна", SimpleSyncService.Describe(new HttpRequestException("сеть недоступна")));
+            Assert.Equal("сеть недоступна", ExceptionText.Describe(new HttpRequestException("сеть недоступна")));
+
+            // Пустое исключение без имени файла: остаётся хотя бы тип — строка,
+            // по которой видно, что искать, вместо пустоты после двоеточия.
+            Assert.Equal(
+                nameof(InvalidOperationException),
+                ExceptionText.Describe(new InvalidOperationException(string.Empty)));
+
+            // Отказа не было вовсе — и приписывать его нечему.
+            Assert.Empty(ExceptionText.Describe(null));
+        }
+
+        /// <summary>
+        /// Сверка файла установки тоже не остаётся без текста: у неё свой перехват,
+        /// и в журнале стояло «reason=io_error » — двести семьдесят четыре строки,
+        /// не называющие ни причины, ни места, где смотреть.
+        /// </summary>
+        [Fact]
+        public void ПричинаРасхожденияНеОстаётсяБезТекста() {
+            using var stand = new SelfUpdateStand();
+            var locked = Path.Combine(stand.Install.Root, "busy.dll");
+            File.WriteAllBytes(locked, new byte[] { 1, 2, 3 });
+
+            // Держим файл открытым монопольно — сверка на него наткнётся.
+            using var hold = new FileStream(locked, FileMode.Open, FileAccess.Read, FileShare.None);
+
+            var f = new ManifestFile {
+                Path = "busy.dll",
+                Size = 3,
+                Sha256 = new string('a', 64),
+            };
+
+            Assert.False(SelfUpdateVersions.LocalFileMatches(stand.Install.Root, string.Empty, f, out var reason));
+            Assert.StartsWith("io_error ", reason, StringComparison.Ordinal);
+            Assert.True(reason.Trim().Length > "io_error".Length, $"причина пуста: «{reason}»");
+        }
+
+        /// <summary>
+        /// САМООБНОВЛЕНИЕ ЛЕЧИТ ТУ САМУЮ ПОЛОМКУ, ИЗ-ЗА КОТОРОЙ ПАДАЛО.
+        /// <para>
+        /// Пропавшая сборка ломала и обновление лаунчера: 274 файла из 274
+        /// скачивались, а потом всё упиралось в «Ошибка загрузки Accessibility.dll: »
+        /// — первый по алфавиту файл, на котором споткнулась сверка. Обновление —
+        /// ровно то, что кладёт пропавшую сборку обратно, и оно обязано доезжать.
+        /// </para>
+        /// <para>
+        /// Диффу тоже нечем считать Blake3: файл, уже лежащий на диске, обязан
+        /// признаваться своим по SHA-256 — иначе обновление каждый раз тянет весь
+        /// пакет целиком.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void СамообновлениеДоезжаетБезBlake3() {
+            using var stand = new SelfUpdateStand();
+            stand.Install.WriteFile("same.dll", "не менялось");
+            var manifest = SelfUpdateManifest.Of(
+                SelfUpdateManifest.Matching(stand.Install.Root, "same.dll"),
+                SelfUpdateManifest.Different("Accessibility.dll", size: 20776));
+
+            // Хеши посчитаны, пока Blake3 был жив; дальше его как будто нет.
+            FileHasher.Blake3AvailableForTests = false;
+
+            var plan = SelfUpdateDownloadTests.NewDownloader(stand, new FakeSync(), out _)
+                .BuildSelfUpdatePlan(manifest, string.Empty, stand.Temp.Root, "https://example.test/content");
+
+            // Совпавший файл остался совпавшим: качать заново нечего.
+            Assert.Equal(new[] { "Accessibility.dll" }, plan.Downloads.Select(d => d.RelativePath).ToArray());
         }
 
         /// <summary>Какие хеши манифест обещает по файлу.</summary>

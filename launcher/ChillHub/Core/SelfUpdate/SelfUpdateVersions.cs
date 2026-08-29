@@ -147,7 +147,10 @@ namespace ChillHub.Core.SelfUpdate {
                 throw;
             }
             catch (Exception ex) {
-                reason = $"io_error {ex.Message}";
+                // Через Describe, а не по Message: у пропавшей СБОРКИ он пуст, и в
+                // журнале стояло «reason=io_error » — двести семьдесят четыре строки,
+                // не называющие ни причины, ни места, где смотреть.
+                reason = $"io_error {Sync.ExceptionText.Describe(ex)}";
                 return false;
             }
         }
