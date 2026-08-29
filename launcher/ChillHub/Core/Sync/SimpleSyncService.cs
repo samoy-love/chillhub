@@ -757,11 +757,24 @@ namespace ChillHub.Core.Sync {
                                                     // настоящая отмена приходят одним и тем же типом исключения.
                                                     ct.ThrowIfCancellationRequested();
 
+                                                    // ЧТО НЕ ЧИНИТСЯ ПОВТОРОМ — НЕ ПОВТОРЯЕМ. Пропавшая рядом с
+                                                    // лаунчером сборка (Blake3) роняла КАЖДУЮ сверку скачанного
+                                                    // файла, а загрузчик принимал это за сбой сети: три попытки
+                                                    // на каждый из без малого тысячи файлов модпака — три с
+                                                    // половиной минуты и 2,4 ГБ трафика впустую, чтобы прийти к
+                                                    // тому же отказу, который был очевиден на первом файле.
+                                                    if (IsUnrecoverable(ex)) {
+                                                        throw new IOException(
+                                                            $"Не удалось проверить {t.RelativePath}: {Describe(ex)}. " +
+                                                            "Файлы лаунчера неполные — переустановите его.",
+                                                            ex);
+                                                    }
+
                                                     attempt++;
                                                     if (attempt >= maxAttempts) {
                                                         throw ex is InvalidDataException
                                                             ? new InvalidDataException($"Файл {t.RelativePath} не прошёл проверку хеша после {maxAttempts} попыток", ex)
-                                                            : new IOException($"Ошибка загрузки {t.RelativePath}: {ex.Message}", ex);
+                                                            : new IOException($"Ошибка загрузки {t.RelativePath}: {Describe(ex)}", ex);
                                                     }
 
                                                     if (ex is InvalidDataException) {
@@ -1068,6 +1081,50 @@ namespace ChillHub.Core.Sync {
         /// <param name="partPath">Путь к скачанному файлу.</param>
         /// <param name="t">Задание из плана с ожидаемыми хешами.</param>
         /// <exception cref="InvalidDataException">Содержимое не совпало с манифестом.</exception>
+        /// <summary>
+        /// Сбой, который повтором не лечится: не хватает самих файлов лаунчера.
+        /// <para>
+        /// Такое приходит из сверки хешей, а не из сети: нет сборки Blake3, нет её
+        /// нативной части, не та разрядность. Сколько ни качай файл заново, посчитать
+        /// его хеш будет всё так же нечем.
+        /// </para>
+        /// </summary>
+        /// <param name="ex">Пойманное исключение.</param>
+        /// <returns>true, если повторять бессмысленно.</returns>
+        internal static bool IsUnrecoverable(Exception ex) => ex switch {
+            // Проверять файл нечем — сколько его ни качай, хеш считать не на чем.
+            VerificationUnavailableException => true,
+
+            // FileNotFoundException бросает и файловая система, и загрузчик сборок.
+            // Разница — в FileName: у сборки там её имя, а не путь к файлу игры.
+            FileNotFoundException f => !string.IsNullOrEmpty(f.FileName) && !Path.IsPathRooted(f.FileName),
+            DllNotFoundException => true,
+            BadImageFormatException => true,
+            TypeLoadException => true,
+            _ => false,
+        };
+
+        /// <summary>
+        /// Текст исключения для журнала и для игрока.
+        /// <para>
+        /// У FileNotFoundException по сборке Message пуст, и отказ уезжал в обращение
+        /// строкой «Ошибка загрузки .doorstop_version: » — с двоеточием и пустотой за
+        /// ним. Название типа — не подарок, но оно хотя бы называет случившееся.
+        /// </para>
+        /// </summary>
+        /// <param name="ex">Исключение.</param>
+        /// <returns>Непустое описание.</returns>
+        internal static string Describe(Exception ex) {
+            var message = (ex.Message ?? string.Empty).Trim();
+            if (message.Length > 0) {
+                return message;
+            }
+
+            return ex is FileNotFoundException { FileName.Length: > 0 } f
+                ? $"{ex.GetType().Name}: {f.FileName}"
+                : ex.GetType().Name;
+        }
+
         private static void VerifyDownloadedFile(string partPath, FileTask t) {
             if (string.IsNullOrWhiteSpace(t.Sha256) && string.IsNullOrWhiteSpace(t.Blake3)) {
                 return;
@@ -1081,8 +1138,19 @@ namespace ChillHub.Core.Sync {
                 throw new InvalidDataException($"Хеш SHA-256 не совпадает: {t.RelativePath}");
             }
 
-            if (!string.IsNullOrWhiteSpace(t.Blake3) && !string.Equals(b3Hex, t.Blake3, StringComparison.OrdinalIgnoreCase)) {
+            // Пустой посчитанный Blake3 — «нечем считать», а не «не совпал»: на такой
+            // машине вердикт выносит SHA-256, и он уже вынесен выше.
+            if (!string.IsNullOrWhiteSpace(t.Blake3) && !string.IsNullOrWhiteSpace(b3Hex)
+                && !string.Equals(b3Hex, t.Blake3, StringComparison.OrdinalIgnoreCase)) {
                 throw new InvalidDataException($"Хеш Blake3 не совпадает: {t.RelativePath}");
+            }
+
+            // Манифест дал только Blake3, а посчитать его нечем: проверять файл не по
+            // чему. Установить непроверенное молча — хуже, чем отказать словами.
+            if (string.IsNullOrWhiteSpace(t.Sha256) && string.IsNullOrWhiteSpace(b3Hex)) {
+                throw new VerificationUnavailableException(
+                    $"Не удалось проверить {t.RelativePath}: на этой машине не считается Blake3, " +
+                    "а других хешей у файла нет. Файлы лаунчера неполные — переустановите его.");
             }
         }
 
