@@ -144,15 +144,13 @@ $hadStartMenu = Save-Snapshot -Path $startMenuDir -Name 'StartMenu'
 
 # КАТАЛОГИ ДАННЫХ УВОДЯТСЯ В СТОРОНУ ПЕРЕИМЕНОВАНИЕМ, А НЕ КОПИРОВАНИЕМ.
 #
-# Ниже проверяется удаление с галочкой «удалить настройки», а она делает
-# RMDir /r по %APPDATA%\ChillHub и %LOCALAPPDATA%\ChillHub. На раннере CI там
-# пусто, а на машине разработчика в %LOCALAPPDATA%\ChillHub лежит его
-# НАСТОЯЩАЯ установка лаунчера: проверка снесла бы её вместе с играми.
+# Ниже прогоняется настоящее удаление, а оно делает RMDir /r по
+# %APPDATA%\ChillHub и %LOCALAPPDATA%\ChillHub. На раннере CI там пусто, а на
+# машине разработчика в %LOCALAPPDATA%\ChillHub лежит его НАСТОЯЩАЯ установка
+# лаунчера: проверка снесла бы её вместе с играми.
 #
 # Переименование, а не копия: каталог установки весит сотни мегабайт, и копией
-# на каждом прогоне платил бы каждый. Переименование не удастся, если лаунчер
-# запущен, — тогда разрушающая часть проверки честно пропускается с
-# предупреждением, а не идёт по живому каталогу.
+# на каждом прогоне платил бы каждый.
 $localAppDataDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'ChillHub'
 $stashed = @{}
 
@@ -169,6 +167,17 @@ function Move-Aside {
         Write-Warning "не удалось увести '$Path' в сторону: $($_.Exception.Message)"
         return $false
     }
+}
+
+# Уводим ДО первой установки, а не перед разрушающей веткой: удаление сносит
+# служебные каталоги ВСЕГДА, без всяких галочек, — то есть по живым каталогам
+# пошло бы уже первое тихое удаление.
+#
+# Не получилось — прогона не будет. «Пропустить часть проверок» здесь означало
+# бы пойти по настоящему каталогу разработчика.
+if (-not ((Move-Aside -Path $appDataDir -Name 'AppDataRoaming') -and
+          (Move-Aside -Path $localAppDataDir -Name 'AppDataLocal'))) {
+    throw "Каталоги данных заняты — увести их в сторону не удалось. Закройте Chill Hub (проверьте значок в области уведомлений) и повторите."
 }
 
 # Ключи реестра сохраняются целиком (reg export), а не по одному значению:
@@ -330,41 +339,37 @@ try {
     Test-Assert -What "ключ настроек установки удалён" -Condition (-not (Test-Path -LiteralPath $AppKey))
     Test-Assert -What "ярлык в меню «Пуск» удалён" -Condition (-not (Test-Path -LiteralPath $startMenu))
 
-    # Настройки пользователя переживают удаление намеренно (см. комментарий в
-    # секции Uninstall у installer.nsi) — проверяем именно это, а не обратное.
-    Test-Assert -What "настройки пользователя не тронуты удалением" -Condition (Test-Path -LiteralPath $configPath)
+    # Служебные каталоги лаунчера уходят ВСЕГДА, без всяких галочек: удаление
+    # программы значит удаление программы (см. секцию Uninstall у installer.nsi).
+    Test-Assert -What "%APPDATA%\ChillHub удалён вместе с лаунчером" -Condition (-not (Test-Path -LiteralPath $appDataDir)) -Detail $appDataDir
+    Test-Assert -What "%LOCALAPPDATA%\ChillHub удалён вместе с лаунчером" -Condition (-not (Test-Path -LiteralPath $localAppDataDir)) -Detail $localAppDataDir
 
+    # А вот папка с играми — пользовательские данные, и без явной галочки она
+    # обязана пережить удаление.
     Test-Assert -What "папка с играми пережила удаление без галочки" -Condition (Test-Path -LiteralPath $gamesDir)
 
-    # ------------------------------------------- удаление С ГАЛОЧКАМИ
+    # ------------------------------------------- удаление С ГАЛОЧКОЙ «И ИГРЫ»
     #
-    # Вторая ветка удаления — та, где человек попросил убрать за собой всё.
-    # Она делает RMDir /r по трём каталогам, один из которых берётся из
-    # свободного текстового поля, и до появления ключей /DELETEGAMES и
-    # /DELETESETTINGS не проверялась ни разу: тихое удаление всегда шло по
-    # ветке «ничего лишнего не трогаем».
-    $stashOk = (Move-Aside -Path $appDataDir -Name 'AppDataRoaming') -and
-               (Move-Aside -Path $localAppDataDir -Name 'AppDataLocal')
-    if (-not $stashOk) {
-        Write-Warning "[smoke] удаление с галочками ПРОПУЩЕНО: каталоги данных заняты (закройте Chill Hub)"
-    }
-    else {
-        Write-Host "[smoke] установка заново ради проверки удаления с галочками" -ForegroundColor Cyan
-        $code3 = Invoke-SilentInstall -SetupExe $setupPath -Dir $InstallDir -GamesDir $gamesDir
-        Test-Assert -What "установка перед проверкой удаления с галочками прошла" -Condition ($code3 -eq 0) -Detail "код возврата $code3"
+    # Вторая ветка удаления — та, где человек попросил унести и игры. Она делает
+    # RMDir /r по пути из СВОБОДНОГО ТЕКСТОВОГО ПОЛЯ и до появления ключа
+    # /DELETEGAMES не прогонялась ни разу: тихое удаление всегда шло по ветке
+    # «игры не трогаем».
+    Write-Host "[smoke] установка заново ради проверки удаления с галочкой «и игры»" -ForegroundColor Cyan
+    $code3 = Invoke-SilentInstall -SetupExe $setupPath -Dir $InstallDir -GamesDir $gamesDir
+    Test-Assert -What "установка перед проверкой удаления с галочкой прошла" -Condition ($code3 -eq 0) -Detail "код возврата $code3"
 
-        # Файлы-маркеры: пустой каталог мог бы исчезнуть и сам по себе, а эти
-        # файлы исчезают только вместе с ним.
-        Set-Content -LiteralPath (Join-Path $gamesDir 'игра.bin') -Value 'данные игры'
-        New-Item -ItemType Directory -Path $localAppDataDir -Force | Out-Null
-        Set-Content -LiteralPath (Join-Path $localAppDataDir 'legacy-config.json') -Value '{}'
+    # Файлы-маркеры: пустой каталог мог бы исчезнуть и сам по себе, а эти файлы
+    # исчезают только вместе с ним. legacy-config.json — след прежней установки
+    # в %LOCALAPPDATA% у тех, кто ставил лаунчер своим путём.
+    Set-Content -LiteralPath (Join-Path $gamesDir 'игра.bin') -Value 'данные игры'
+    New-Item -ItemType Directory -Path $localAppDataDir -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $localAppDataDir 'legacy-config.json') -Value '{}'
 
-        $up2 = Start-Process -FilePath $uninstaller -ArgumentList '/S', '/DELETEGAMES', '/DELETESETTINGS', "_?=$InstallDir" -PassThru -Wait
-        Test-Assert -What "деинсталлятор с галочками завершился успешно" -Condition ($up2.ExitCode -eq 0) -Detail "код возврата $($up2.ExitCode)"
-        Test-Assert -What "папка с играми удалена по галочке" -Condition (-not (Test-Path -LiteralPath $gamesDir)) -Detail $gamesDir
-        Test-Assert -What "%APPDATA%\ChillHub удалён по галочке" -Condition (-not (Test-Path -LiteralPath $appDataDir)) -Detail $appDataDir
-        Test-Assert -What "%LOCALAPPDATA%\ChillHub удалён по галочке" -Condition (-not (Test-Path -LiteralPath $localAppDataDir)) -Detail $localAppDataDir
-    }
+    $up2 = Start-Process -FilePath $uninstaller -ArgumentList '/S', '/DELETEGAMES', "_?=$InstallDir" -PassThru -Wait
+    Test-Assert -What "деинсталлятор с галочкой завершился успешно" -Condition ($up2.ExitCode -eq 0) -Detail "код возврата $($up2.ExitCode)"
+    Test-Assert -What "папка с играми удалена по галочке" -Condition (-not (Test-Path -LiteralPath $gamesDir)) -Detail $gamesDir
+    Test-Assert -What "%APPDATA%\ChillHub удалён и во второй раз" -Condition (-not (Test-Path -LiteralPath $appDataDir)) -Detail $appDataDir
+    Test-Assert -What "каталог прежней установки в %LOCALAPPDATA% удалён" -Condition (-not (Test-Path -LiteralPath $localAppDataDir)) -Detail $localAppDataDir
 }
 finally {
     # Возвращаем окружение как было — проверка не должна оставлять следов ни на
