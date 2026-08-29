@@ -6,6 +6,7 @@
 namespace ChillHub.Tests {
     using System;
     using System.Collections.Generic;
+    using System.Linq;
 
     using ChillHub.Core;
     using ChillHub.Core.Game;
@@ -38,7 +39,7 @@ namespace ChillHub.Tests {
         /// <summary>Найденный процесс делает игру запущенной, его выход — снимает отметку.</summary>
         [Fact]
         public void ПроцессПоднимаетИСнимаетОтметку() {
-            RunningGames.MarkRunning("repo", 4242);
+            RunningGames.MarkRunning("repo", LaunchTarget.LocalModded, 4242);
             Assert.Equal(GameRunState.Running, RunningGames.StateOf("repo"));
 
             RunningGames.ClearRunning(4242);
@@ -51,10 +52,10 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void ОжиданиеПроцессаЭтоЗапускается() {
-            RunningGames.BeginStarting("repo");
+            RunningGames.BeginStarting("repo", LaunchTarget.LocalModded);
             Assert.Equal(GameRunState.Starting, RunningGames.StateOf("repo"));
 
-            RunningGames.EndStarting("repo");
+            RunningGames.EndStarting("repo", LaunchTarget.LocalModded);
             Assert.Equal(GameRunState.None, RunningGames.StateOf("repo"));
         }
 
@@ -64,9 +65,9 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void НайденныйПроцессВажнееОжидания() {
-            RunningGames.BeginStarting("repo");
-            RunningGames.MarkRunning("repo", 4242);
-            RunningGames.EndStarting("repo");
+            RunningGames.BeginStarting("repo", LaunchTarget.LocalModded);
+            RunningGames.MarkRunning("repo", LaunchTarget.LocalModded, 4242);
+            RunningGames.EndStarting("repo", LaunchTarget.LocalModded);
 
             Assert.Equal(GameRunState.Running, RunningGames.StateOf("repo"));
         }
@@ -77,13 +78,13 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void ДваОжиданияСнимаютсяПоОдному() {
-            RunningGames.BeginStarting("repo");
-            RunningGames.BeginStarting("repo");
+            RunningGames.BeginStarting("repo", LaunchTarget.LocalModded);
+            RunningGames.BeginStarting("repo", LaunchTarget.LocalModded);
 
-            RunningGames.EndStarting("repo");
+            RunningGames.EndStarting("repo", LaunchTarget.LocalModded);
             Assert.Equal(GameRunState.Starting, RunningGames.StateOf("repo"));
 
-            RunningGames.EndStarting("repo");
+            RunningGames.EndStarting("repo", LaunchTarget.LocalModded);
             Assert.Equal(GameRunState.None, RunningGames.StateOf("repo"));
         }
 
@@ -93,18 +94,73 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void ВыходОднойКопииНеГаситВторую() {
-            RunningGames.MarkRunning("repo", 1);
-            RunningGames.MarkRunning("repo", 2);
+            RunningGames.MarkRunning("repo", LaunchTarget.LocalModded, 1);
+            RunningGames.MarkRunning("repo", LaunchTarget.LocalModded, 2);
 
             RunningGames.ClearRunning(1);
 
             Assert.Equal(GameRunState.Running, RunningGames.StateOf("repo"));
         }
 
+        /// <summary>
+        /// ГЛАВНАЯ ПРОВЕРКА. Запустили копию из Steam — «запускается…» подписана
+        /// ТОЛЬКО она. Пока состояние считалось на игру целиком, обе кнопки разом
+        /// уходили в «запускается…»: и Steam, и Пиратка.
+        /// </summary>
+        [Fact]
+        public void ЗапускОднойВерсииНеПодписываетСоседнюю() {
+            RunningGames.BeginStarting("repo", LaunchTarget.SteamModded);
+
+            Assert.Equal(GameRunState.Starting, RunningGames.StateOf("repo", LaunchTarget.SteamModded));
+            Assert.Equal(GameRunState.None, RunningGames.StateOf("repo", LaunchTarget.LocalModded));
+            Assert.Equal(GameRunState.None, RunningGames.StateOf("repo", LaunchTarget.SteamVanilla));
+
+            // А игра в целом — запускается: это для строки списка и бейджа витрины.
+            Assert.Equal(GameRunState.Starting, RunningGames.StateOf("repo"));
+        }
+
+        /// <summary>
+        /// Две версии одной игры идут разом — обе видны каждая своей. Копия из Steam и
+        /// сборка с сервера лежат в разных папках, и запуск одной другой не мешает.
+        /// </summary>
+        [Fact]
+        public void ДвеВерсииОднойИгрыВиднаКаждаяСвоей() {
+            RunningGames.MarkRunning("repo", LaunchTarget.SteamModded, 1);
+            RunningGames.MarkRunning("repo", LaunchTarget.LocalModded, 2);
+
+            Assert.Equal(GameRunState.Running, RunningGames.StateOf("repo", LaunchTarget.SteamModded));
+            Assert.Equal(GameRunState.Running, RunningGames.StateOf("repo", LaunchTarget.LocalModded));
+
+            // Закрыли пиратку — Steam остаётся запущенным.
+            RunningGames.ClearRunning(2);
+            Assert.Equal(GameRunState.Running, RunningGames.StateOf("repo", LaunchTarget.SteamModded));
+            Assert.Equal(GameRunState.None, RunningGames.StateOf("repo", LaunchTarget.LocalModded));
+        }
+
+        /// <summary>
+        /// Витрина: выключается кнопка запущенной версии, соседняя остаётся живой.
+        /// Ровно то, что на скриншоте выглядело как «запускаются обе».
+        /// </summary>
+        [Fact]
+        public void ВыключаетсяКнопкаТолькоЗапущеннойВерсии() {
+            var view = LaunchButtons.Compute(
+                Pack(), playMode: true, steamAllowed: false, All(), remembered: null,
+                runOf: t => t == LaunchTarget.SteamModded ? GameRunState.Starting : GameRunState.None);
+
+            var steam = view.Buttons.Single(b => b.Target == LaunchTarget.SteamModded);
+            var local = view.Buttons.Single(b => b.Target == LaunchTarget.LocalModded);
+
+            Assert.False(steam.Enabled);
+            Assert.Equal("запускается…", steam.Subtitle);
+
+            Assert.True(local.Enabled);
+            Assert.Equal("с модами", local.Subtitle);
+        }
+
         /// <summary>Состояние — про свою игру: соседняя от него не меняется.</summary>
         [Fact]
         public void СостояниеНеПротекаетНаСоседнююИгру() {
-            RunningGames.MarkRunning("repo", 4242);
+            RunningGames.MarkRunning("repo", LaunchTarget.LocalModded, 4242);
 
             Assert.Equal(GameRunState.None, RunningGames.StateOf("peak"));
         }
@@ -116,10 +172,10 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void БезымяннаяИграНичегоНеОтмечает() {
-            RunningGames.BeginStarting(null);
-            RunningGames.BeginStarting("   ");
-            RunningGames.MarkRunning(null, 4242);
-            RunningGames.EndStarting(null);
+            RunningGames.BeginStarting(null, LaunchTarget.LocalModded);
+            RunningGames.BeginStarting("   ", LaunchTarget.LocalModded);
+            RunningGames.MarkRunning(null, LaunchTarget.LocalModded, 4242);
+            RunningGames.EndStarting(null, LaunchTarget.LocalModded);
 
             Assert.Equal(GameRunState.None, RunningGames.StateOf("repo"));
             Assert.Equal(GameRunState.None, RunningGames.StateOf("   "));
@@ -131,7 +187,7 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void СнятиеНесуществующегоОжиданияНичегоНеЛомает() {
-            RunningGames.EndStarting("repo");
+            RunningGames.EndStarting("repo", LaunchTarget.LocalModded);
 
             Assert.Equal(GameRunState.None, RunningGames.StateOf("repo"));
         }
@@ -147,7 +203,7 @@ namespace ChillHub.Tests {
 
             RunningGames.Changed += Broken;
             try {
-                RunningGames.MarkRunning("repo", 4242);
+                RunningGames.MarkRunning("repo", LaunchTarget.LocalModded, 4242);
                 Assert.Equal(GameRunState.Running, RunningGames.StateOf("repo"));
 
                 RunningGames.ClearRunning(4242);
@@ -166,7 +222,7 @@ namespace ChillHub.Tests {
 
             RunningGames.Changed += Handler;
             try {
-                RunningGames.MarkRunning("repo", 4242);
+                RunningGames.MarkRunning("repo", LaunchTarget.LocalModded, 4242);
                 RunningGames.ClearRunning(4242);
             }
             finally {
@@ -179,14 +235,14 @@ namespace ChillHub.Tests {
         /// <summary>Повторная отметка того же процесса тишину не нарушает.</summary>
         [Fact]
         public void ПовторнаяОтметкаНеБудитПодписчиков() {
-            RunningGames.MarkRunning("repo", 4242);
+            RunningGames.MarkRunning("repo", LaunchTarget.LocalModded, 4242);
 
             var calls = 0;
             void Handler() => calls++;
 
             RunningGames.Changed += Handler;
             try {
-                RunningGames.MarkRunning("repo", 4242);
+                RunningGames.MarkRunning("repo", LaunchTarget.LocalModded, 4242);
                 RunningGames.ClearRunning(777);
             }
             finally {
@@ -204,19 +260,18 @@ namespace ChillHub.Tests {
         [Fact]
         public void УЗапущеннойИгрыКнопкиВыключеныИОбъясняют() {
             var view = LaunchButtons.Compute(
-                Pack(), playMode: true, steamAllowed: false, All(), remembered: null, run: GameRunState.Running);
+                Pack(), playMode: true, steamAllowed: false, All(), remembered: null, runOf: _ => GameRunState.Running);
 
             Assert.Equal(2, view.Buttons.Count);
             Assert.All(view.Buttons, b => Assert.False(b.Enabled));
             Assert.All(view.Buttons, b => Assert.Equal("игра запущена", b.Subtitle));
-            Assert.Equal(GameRunState.Running, view.Run);
         }
 
         /// <summary>Пока игра только запускается — то же самое, другими словами.</summary>
         [Fact]
         public void ПокаИграЗапускаетсяКнопкиТожеЖдут() {
             var view = LaunchButtons.Compute(
-                Pack(), playMode: true, steamAllowed: false, All(), remembered: null, run: GameRunState.Starting);
+                Pack(), playMode: true, steamAllowed: false, All(), remembered: null, runOf: _ => GameRunState.Starting);
 
             Assert.All(view.Buttons, b => Assert.False(b.Enabled));
             Assert.All(view.Buttons, b => Assert.Equal("запускается…", b.Subtitle));
@@ -227,7 +282,6 @@ namespace ChillHub.Tests {
         public void БезЗапускаКнопкиОстаютсяПрежними() {
             var view = LaunchButtons.Compute(Pack(), playMode: true, steamAllowed: false, All(), remembered: null);
 
-            Assert.Equal(GameRunState.None, view.Run);
             Assert.True(view.MenuVisible);
             Assert.All(view.Buttons, b => Assert.True(b.Enabled));
             Assert.All(view.Buttons, b => Assert.Equal("с модами", b.Subtitle));
@@ -297,7 +351,7 @@ namespace ChillHub.Tests {
         public void ПодписиРасставляютсяПоСтрокамСписка() {
             var open = new GameInfo { GameId = "repo" };
             var idle = new GameInfo { GameId = "peak" };
-            RunningGames.MarkRunning("repo", 4242);
+            RunningGames.MarkRunning("repo", LaunchTarget.LocalModded, 4242);
 
             RunningGameLook.ApplyLabels(new[] { open, idle });
 

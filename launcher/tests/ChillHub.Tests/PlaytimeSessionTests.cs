@@ -73,7 +73,7 @@ namespace ChillHub.Tests {
         [Fact]
         public void СессияДелаетИгруЗапущеннойДляВитрины() {
             using var game = Process.GetCurrentProcess();
-            PlaytimeStore.BeginSession("repo", game);
+            PlaytimeStore.BeginSession("repo", LaunchTarget.LocalModded, game);
             Assert.Equal(GameRunState.Running, RunningGames.StateOf("repo"));
 
             PlaytimeStore.FinishForTests(game.Id, DateTime.UtcNow.AddMinutes(1));
@@ -87,22 +87,119 @@ namespace ChillHub.Tests {
         [Fact]
         public void ПодобраннаяСессияЖивойИгрыСразуЗначитсяЗапущенной() {
             using var game = Process.GetCurrentProcess();
-            var pending = "{\"" + game.Id + "\":{\"GameId\":\"repo\",\"ProcessId\":" + game.Id +
-                          ",\"ProcessStartTimeTicks\":" + game.StartTime.Ticks +
-                          ",\"SessionStartUtc\":\"" + DateTime.UtcNow.AddMinutes(-5).ToString("O") + "\"}}";
-            File.WriteAllText(Path.Combine(this.dir, "playtime.sessions.json"), pending);
+            WritePending(game, target: "SteamModded");
 
             PlaytimeStore.ResetForTests();
             PlaytimeStore.EnsureStarted();
 
+            // И игра в целом, и та самая её версия — обе значатся запущенными.
             Assert.Equal(GameRunState.Running, RunningGames.StateOf("repo"));
+            Assert.Equal(GameRunState.Running, RunningGames.StateOf("repo", LaunchTarget.SteamModded));
+
+            // А соседняя версия — нет: это другая папка и другой процесс.
+            Assert.Equal(GameRunState.None, RunningGames.StateOf("repo", LaunchTarget.LocalModded));
+        }
+
+        /// <summary>
+        /// Сессия, заведённая сборкой, которая ещё не различала версии: версии в записи
+        /// нет. Время такой сессии не пропадает — оно уходит в общий счёт игры, а не
+        /// приписывается наугад одной из четырёх копий.
+        /// </summary>
+        [Fact]
+        public void СессияБезВерсииЗакрываетсяВОбщийСчётИгры() {
+            using var game = Process.GetCurrentProcess();
+            WritePending(game, target: null);
+
+            PlaytimeStore.ResetForTests();
+            PlaytimeStore.EnsureStarted();
+            PlaytimeStore.FinishForTests(game.Id, DateTime.UtcNow);
+
+            Assert.InRange(PlaytimeStore.Get("repo").TotalSeconds, 250, 350);
+        }
+
+        /// <summary>Кладёт незакрытую сессию живого процесса — с версией или без неё.</summary>
+        /// <param name="game">Процесс, играющий роль игры.</param>
+        /// <param name="target">Имя варианта запуска; null — запись старой сборки.</param>
+        private void WritePending(Process game, string? target) {
+            var withTarget = target == null ? string.Empty : ",\"Target\":\"" + target + "\"";
+            var pending = "{\"" + game.Id + "\":{\"GameId\":\"repo\"" + withTarget +
+                          ",\"ProcessId\":" + game.Id +
+                          ",\"ProcessStartTimeTicks\":" + game.StartTime.Ticks +
+                          ",\"SessionStartUtc\":\"" + DateTime.UtcNow.AddMinutes(-5).ToString("O") + "\"}}";
+            File.WriteAllText(Path.Combine(this.dir, "playtime.sessions.json"), pending);
+        }
+
+        /// <summary>
+        /// ВНУТРИ — ПО ВЕРСИЯМ, НАРУЖУ — ОДНОЙ ЦИФРОЙ. Игроку важно, сколько он провёл
+        /// в игре, а не в какой из папок она лежала; раздельный счёт нужен, чтобы одна
+        /// копия не приписывала себе часы другой.
+        /// </summary>
+        [Fact]
+        public void ВремяКопитсяПоВерсиямАПоказываетсяСуммой() {
+            using var game = Process.GetCurrentProcess();
+
+            PlaytimeStore.BeginSession("repo", LaunchTarget.SteamModded, game);
+            PlaytimeStore.FinishForTests(game.Id, DateTime.UtcNow.AddMinutes(30));
+
+            PlaytimeStore.BeginSession("repo", LaunchTarget.LocalModded, game);
+            PlaytimeStore.FinishForTests(game.Id, DateTime.UtcNow.AddMinutes(10));
+
+            // Каждая версия помнит своё.
+            Assert.InRange(PlaytimeStore.Get("repo", LaunchTarget.SteamModded).TotalSeconds, 1700, 1900);
+            Assert.InRange(PlaytimeStore.Get("repo", LaunchTarget.LocalModded).TotalSeconds, 500, 700);
+
+            // Соседняя, в которую не играли, — ноль, а не чужие часы.
+            Assert.Equal(0, PlaytimeStore.Get("repo", LaunchTarget.SteamVanilla).TotalSeconds);
+
+            // А витрина показывает сорок минут одной строкой.
+            Assert.InRange(PlaytimeStore.Get("repo").TotalSeconds, 2300, 2500);
+        }
+
+        /// <summary>
+        /// Последняя сессия в сумме — самая поздняя из всех версий: игрок спрашивает
+        /// «когда я играл в неё в прошлый раз», а не «в какую из копий».
+        /// </summary>
+        [Fact]
+        public void ПоследняяСессияБерётсяСамаяПоздняяИзВерсий() {
+            using var game = Process.GetCurrentProcess();
+            var early = DateTime.UtcNow.AddHours(-5);
+            var late = DateTime.UtcNow.AddMinutes(-1);
+
+            PlaytimeStore.BeginSession("repo", LaunchTarget.LocalVanilla, game);
+            PlaytimeStore.FinishForTests(game.Id, early);
+
+            PlaytimeStore.BeginSession("repo", LaunchTarget.SteamModded, game);
+            PlaytimeStore.FinishForTests(game.Id, late);
+
+            var total = PlaytimeStore.Get("repo");
+            Assert.NotNull(total.LastSessionAt);
+            Assert.Equal(late, total.LastSessionAt!.Value, TimeSpan.FromSeconds(1));
+        }
+
+        /// <summary>
+        /// Время, накопленное сборками до разделения по версиям, лежит под голым
+        /// идентификатором игры — и остаётся в сумме. Месяцы наигранного не должны
+        /// исчезнуть из-за того, что мы научились считать точнее.
+        /// </summary>
+        [Fact]
+        public void СтароеВремяБезВерсииОстаётсяВСумме() {
+            File.WriteAllText(
+                Path.Combine(this.dir, "playtime.json"),
+                "{\"repo\":{\"TotalSeconds\":3600,\"LastSessionSeconds\":600}}");
+
+            using var game = Process.GetCurrentProcess();
+            PlaytimeStore.BeginSession("repo", LaunchTarget.SteamModded, game);
+            PlaytimeStore.FinishForTests(game.Id, DateTime.UtcNow.AddMinutes(10));
+
+            // Час старого плюс десять минут новой версии.
+            Assert.InRange(PlaytimeStore.Get("repo").TotalSeconds, 4100, 4300);
         }
 
         /// <summary>Сессия закрывается — время игры прибавляется к сумме.</summary>
         [Fact]
         public void ЗакрытаяСессияПрибавляетВремя() {
             using var game = Process.GetCurrentProcess();
-            PlaytimeStore.BeginSession("repo", game);
+            PlaytimeStore.BeginSession("repo", LaunchTarget.LocalModded, game);
 
             PlaytimeStore.FinishForTests(game.Id, DateTime.UtcNow.AddMinutes(30));
 
@@ -118,8 +215,8 @@ namespace ChillHub.Tests {
         [Fact]
         public void ПовторныйЗаходНеСдвигаетНачалоСессии() {
             using var game = Process.GetCurrentProcess();
-            PlaytimeStore.BeginSession("repo", game);
-            PlaytimeStore.BeginSession("repo", game);
+            PlaytimeStore.BeginSession("repo", LaunchTarget.LocalModded, game);
+            PlaytimeStore.BeginSession("repo", LaunchTarget.LocalModded, game);
 
             PlaytimeStore.FinishForTests(game.Id, DateTime.UtcNow.AddMinutes(10));
 
@@ -137,7 +234,7 @@ namespace ChillHub.Tests {
             File.WriteAllText(Path.Combine(gameDir, "doorstop_config.ini"), "[General]\nenabled=true\n");
 
             using var game = Process.GetCurrentProcess();
-            PlaytimeStore.BeginSession("repo", game, gameDir);
+            PlaytimeStore.BeginSession("repo", LaunchTarget.LocalModded, game, gameDir);
             Assert.True(DoorstopConfig.ReadEnabled(gameDir));
 
             PlaytimeStore.FinishForTests(game.Id, DateTime.UtcNow.AddMinutes(5));
@@ -153,7 +250,7 @@ namespace ChillHub.Tests {
             File.WriteAllText(Path.Combine(gameDir, "doorstop_config.ini"), "[General]\nenabled=true\n");
 
             using var game = Process.GetCurrentProcess();
-            PlaytimeStore.BeginSession("vanilla", game);
+            PlaytimeStore.BeginSession("vanilla", LaunchTarget.LocalModded, game);
             PlaytimeStore.FinishForTests(game.Id, DateTime.UtcNow.AddMinutes(1));
 
             // Никто не просил её менять — значение осталось прежним.
@@ -168,7 +265,7 @@ namespace ChillHub.Tests {
         public void ПрямойЗапускЗаводитОтсчётСразу() {
             using var game = Process.GetCurrentProcess();
 
-            GameSession.Begin("repo", this.dir, null, game, viaSteam: false, moddedDir: null);
+            GameSession.Begin("repo", this.dir, null, game, viaSteam: false, moddedDir: null, target: LaunchTarget.LocalModded);
             PlaytimeStore.FinishForTests(game.Id, DateTime.UtcNow.AddMinutes(15));
 
             Assert.InRange(PlaytimeStore.Get("repo").TotalSeconds, 800, 1000);
@@ -185,7 +282,7 @@ namespace ChillHub.Tests {
             GameProcessFinder.ByName = _ => new[] { new RunningProcess(game.Id, game.MainModule!.FileName) };
 
             try {
-                GameSession.Begin("repo", gameDir, game.MainModule!.FileName, null, viaSteam: true, moddedDir: null);
+                GameSession.Begin("repo", gameDir, game.MainModule!.FileName, null, viaSteam: true, moddedDir: null, target: LaunchTarget.LocalModded);
 
                 await WaitUntilAsync(() => File.Exists(Path.Combine(this.dir, "playtime.sessions.json"))
                                            && File.ReadAllText(Path.Combine(this.dir, "playtime.sessions.json")).Contains("repo", StringComparison.Ordinal));
@@ -235,7 +332,7 @@ namespace ChillHub.Tests {
             GameProcessFinder.PollInterval = TimeSpan.FromMilliseconds(1);
 
             try {
-                GameSession.Begin("repo", this.dir, Path.Combine(this.dir, "REPO.exe"), null, viaSteam: true, moddedDir: null);
+                GameSession.Begin("repo", this.dir, Path.Combine(this.dir, "REPO.exe"), null, viaSteam: true, moddedDir: null, target: LaunchTarget.LocalModded);
 
                 // Ждём, пока фоновая задача точно отработает: файла сессий не появится.
                 await Task.Delay(200);
@@ -255,7 +352,7 @@ namespace ChillHub.Tests {
         public void БезИдентификатораИгрыОтсчётаНет() {
             using var game = Process.GetCurrentProcess();
 
-            GameSession.Begin(null, this.dir, null, game, viaSteam: false, moddedDir: null);
+            GameSession.Begin(null, this.dir, null, game, viaSteam: false, moddedDir: null, target: LaunchTarget.LocalModded);
 
             Assert.False(File.Exists(Path.Combine(this.dir, "playtime.sessions.json")));
         }
@@ -264,7 +361,7 @@ namespace ChillHub.Tests {
         [Fact]
         public void ПовторноеЗакрытиеНичегоНеМеняет() {
             using var game = Process.GetCurrentProcess();
-            PlaytimeStore.BeginSession("repo", game);
+            PlaytimeStore.BeginSession("repo", LaunchTarget.LocalModded, game);
             PlaytimeStore.FinishForTests(game.Id, DateTime.UtcNow.AddMinutes(20));
             var after = PlaytimeStore.Get("repo").TotalSeconds;
 

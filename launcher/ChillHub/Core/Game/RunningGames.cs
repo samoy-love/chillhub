@@ -7,6 +7,8 @@ namespace ChillHub.Core.Game {
     using System;
     using System.Collections.Generic;
 
+    using ChillHub.Core.Mods;
+
     /// <summary>В каком состоянии игра прямо сейчас с точки зрения запуска.</summary>
     internal enum GameRunState {
         /// <summary>Игра не запущена и не запускается.</summary>
@@ -46,17 +48,23 @@ namespace ChillHub.Core.Game {
     internal static class RunningGames {
         private static readonly object Gate = new object();
 
-        /// <summary>Сколько запусков этой игры ждут появления процесса.</summary>
+        /// <summary>Сколько запусков ЭТОЙ ВЕРСИИ игры ждут появления процесса.</summary>
         private static readonly Dictionary<string, int> StartingCounts =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-        /// <summary>Номер процесса — игра, которой он принадлежит.</summary>
-        private static readonly Dictionary<int, string> RunningByPid = new Dictionary<int, string>();
+        /// <summary>Номер процесса — версия игры, которой он принадлежит.</summary>
+        private static readonly Dictionary<int, GameVariant> RunningByPid = new Dictionary<int, GameVariant>();
 
         /// <summary>Состояние любой из игр изменилось.</summary>
         internal static event Action? Changed;
 
-        /// <summary>Что сейчас с игрой.</summary>
+        /// <summary>
+        /// Что сейчас с игрой в целом — в любой из её версий.
+        /// <para>
+        /// Для строки списка, бейджа витрины и кнопки действия: там речь про игру, а не
+        /// про то, из какой папки она поднята.
+        /// </para>
+        /// </summary>
         /// <param name="gameId">Игра; пусто — <see cref="GameRunState.None"/>.</param>
         /// <returns>Состояние запуска.</returns>
         internal static GameRunState StateOf(string? gameId) {
@@ -66,25 +74,61 @@ namespace ChillHub.Core.Game {
 
             lock (Gate) {
                 foreach (var kv in RunningByPid) {
-                    if (string.Equals(kv.Value, gameId, StringComparison.OrdinalIgnoreCase)) {
+                    if (string.Equals(kv.Value.GameId, gameId, StringComparison.OrdinalIgnoreCase)) {
                         return GameRunState.Running;
                     }
                 }
 
-                return StartingCounts.ContainsKey(gameId) ? GameRunState.Starting : GameRunState.None;
+                foreach (var key in StartingCounts.Keys) {
+                    if (GameVariant.BelongsTo(key, gameId)) {
+                        return GameRunState.Starting;
+                    }
+                }
+
+                return GameRunState.None;
+            }
+        }
+
+        /// <summary>
+        /// Что сейчас с КОНКРЕТНОЙ версией игры.
+        /// <para>
+        /// Для кнопок запуска: копия из Steam и сборка с сервера — разные папки и
+        /// разные процессы. Пока состояние считалось на игру целиком, запуск одной
+        /// подписывал «запускается…» обе кнопки сразу.
+        /// </para>
+        /// </summary>
+        /// <param name="gameId">Игра.</param>
+        /// <param name="target">Откуда её запускают.</param>
+        /// <returns>Состояние запуска этой версии.</returns>
+        internal static GameRunState StateOf(string? gameId, LaunchTarget target) {
+            if (string.IsNullOrWhiteSpace(gameId)) {
+                return GameRunState.None;
+            }
+
+            var variant = new GameVariant(gameId!, target);
+            lock (Gate) {
+                foreach (var kv in RunningByPid) {
+                    if (kv.Value == variant) {
+                        return GameRunState.Running;
+                    }
+                }
+
+                return StartingCounts.ContainsKey(variant.Key) ? GameRunState.Starting : GameRunState.None;
             }
         }
 
         /// <summary>Отмечает начатый запуск, процесса которого ещё не видно.</summary>
         /// <param name="gameId">Игра.</param>
-        internal static void BeginStarting(string? gameId) {
+        /// <param name="target">Откуда её запускают.</param>
+        internal static void BeginStarting(string? gameId, LaunchTarget target) {
             if (string.IsNullOrWhiteSpace(gameId)) {
                 return;
             }
 
+            var key = GameVariant.KeyOf(gameId!, target);
             lock (Gate) {
-                StartingCounts.TryGetValue(gameId!, out var count);
-                StartingCounts[gameId!] = count + 1;
+                StartingCounts.TryGetValue(key, out var count);
+                StartingCounts[key] = count + 1;
             }
 
             Raise();
@@ -92,46 +136,49 @@ namespace ChillHub.Core.Game {
 
         /// <summary>
         /// Снимает отметку о начатом запуске: процесс нашёлся либо ждать его больше
-        /// незачем. Счётчик, а не флаг: параллельных ожиданий на одну игру может быть
+        /// незачем. Счётчик, а не флаг: параллельных ожиданий на одну версию может быть
         /// несколько, и первое закончившееся не должно отменять остальные.
         /// </summary>
         /// <param name="gameId">Игра.</param>
-        internal static void EndStarting(string? gameId) {
+        /// <param name="target">Откуда её запускают.</param>
+        internal static void EndStarting(string? gameId, LaunchTarget target) {
             if (string.IsNullOrWhiteSpace(gameId)) {
                 return;
             }
 
+            var key = GameVariant.KeyOf(gameId!, target);
             lock (Gate) {
-                if (!StartingCounts.TryGetValue(gameId!, out var count)) {
+                if (!StartingCounts.TryGetValue(key, out var count)) {
                     return;
                 }
 
                 if (count <= 1) {
-                    StartingCounts.Remove(gameId!);
+                    StartingCounts.Remove(key);
                 }
                 else {
-                    StartingCounts[gameId!] = count - 1;
+                    StartingCounts[key] = count - 1;
                 }
             }
 
             Raise();
         }
 
-        /// <summary>Отмечает игру запущенной: процесс найден.</summary>
+        /// <summary>Отмечает версию игры запущенной: процесс найден.</summary>
         /// <param name="gameId">Игра.</param>
+        /// <param name="target">Откуда её запустили.</param>
         /// <param name="processId">Номер процесса игры.</param>
-        internal static void MarkRunning(string? gameId, int processId) {
+        internal static void MarkRunning(string? gameId, LaunchTarget target, int processId) {
             if (string.IsNullOrWhiteSpace(gameId)) {
                 return;
             }
 
+            var variant = new GameVariant(gameId!, target);
             lock (Gate) {
-                if (RunningByPid.TryGetValue(processId, out var known)
-                    && string.Equals(known, gameId, StringComparison.OrdinalIgnoreCase)) {
+                if (RunningByPid.TryGetValue(processId, out var known) && known == variant) {
                     return;
                 }
 
-                RunningByPid[processId] = gameId!;
+                RunningByPid[processId] = variant;
             }
 
             Raise();

@@ -159,7 +159,9 @@ namespace ChillHub.Core.Home {
             // либо тем же лаунчером в фоне, либо следующим его запуском (см. EnsureReconciled).
             if (proc != null && !string.IsNullOrWhiteSpace(gameId)) {
                 try {
-                    PlaytimeStore.BeginSession(gameId, proc);
+                    // Этот путь ведёт только к сборке с сервера и только без модов:
+                    // игру с модпаком запускает Mods.ModsLaunch, а не он.
+                    PlaytimeStore.BeginSession(gameId, Mods.LaunchTarget.LocalVanilla, proc);
                 }
                 catch (Exception ex) {
                     Logging.Logger.Warn($"GameLaunch.DefaultStartProcess: не удалось завести отсчёт времени: {ex.Message}");
