@@ -119,6 +119,57 @@ namespace ChillHub.Tests {
             Assert.True(IntegrityChecker.HasAnyLocalGameFiles(dir.Root));
         }
 
+        /// <summary>
+        /// В корне лежат только модпак и служебные файлы, а игра — в подпапке. Быстрый
+        /// путь (взгляд на корень) здесь не срабатывает, и ответ обязан прийти из полного
+        /// обхода: иначе установленная игра выглядела бы неустановленной.
+        /// </summary>
+        [Fact]
+        public void ИграВПодпапкеПодМодпакомВсёРавноНаходится() {
+            using var dir = new TempDir();
+            dir.WriteFile(IntegrityChecker.VersionMarkerFileName, "1.0.0");
+            dir.WriteFile("winhttp.dll", "загрузчик модов");
+            dir.WriteFile("BepInEx/core/BepInEx.Preloader.dll", "мод");
+            dir.WriteFile("Game/Binaries/game.exe", "MZ");
+
+            var mods = new Manifest {
+                GameId = "g",
+                Version = "1.0.0",
+                Files = new List<ManifestFile> {
+                    new() { Path = "winhttp.dll" },
+                    new() { Path = "BepInEx/core/BepInEx.Preloader.dll" },
+                },
+            };
+            GameLocalState.WriteInstalledModPackManifest(dir.Root, mods);
+
+            Assert.True(IntegrityChecker.HasAnyLocalGameFiles(dir.Root));
+        }
+
+        /// <summary>
+        /// Обратный случай: в папке только модпак и служебные файлы. Ни быстрый путь, ни
+        /// полный обход не должны выдать её за установленную игру — «поставить моды, не
+        /// ставя игру» законно, и полторы тысячи файлов BepInEx игрой не являются.
+        /// </summary>
+        [Fact]
+        public void ОдинМодпакИгройНеСчитается() {
+            using var dir = new TempDir();
+            dir.WriteFile(IntegrityChecker.VersionMarkerFileName, "1.0.0");
+            dir.WriteFile("winhttp.dll", "загрузчик модов");
+            dir.WriteFile("BepInEx/core/BepInEx.Preloader.dll", "мод");
+
+            var mods = new Manifest {
+                GameId = "g",
+                Version = "1.0.0",
+                Files = new List<ManifestFile> {
+                    new() { Path = "winhttp.dll" },
+                    new() { Path = "BepInEx/core/BepInEx.Preloader.dll" },
+                },
+            };
+            GameLocalState.WriteInstalledModPackManifest(dir.Root, mods);
+
+            Assert.False(IntegrityChecker.HasAnyLocalGameFiles(dir.Root));
+        }
+
         /// <summary>Игра без идентификатора — понятное сообщение, а не NullReference.</summary>
         [Theory]
         [InlineData(null)]

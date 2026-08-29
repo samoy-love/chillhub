@@ -1392,10 +1392,15 @@ namespace ChillHub.Core.Sync {
             // в ToDelete. Потеря `.mods.manifest.json` особенно дорога: из него берётся
             // список файлов модпака, и без него синхронизация игры перестаёт понимать,
             // что моды — не мусор.
+            // .integrity.json — слепок папки, которым проверка статуса отвечает «файлы не
+            // трогали» без полного плана. Он тоже наш и тоже не значится ни в одном
+            // манифесте, так что без этой строки первая же синхронизация внесла бы его
+            // в ToDelete — и ускорение исчезало бы ровно тогда, когда игру обновили.
             return r.Equals(UpdateMarkerFileName, StringComparison.OrdinalIgnoreCase)
                 || r.Equals(IntegrityChecker.VersionMarkerFileName, StringComparison.OrdinalIgnoreCase)
                 || r.Equals(IntegrityChecker.ModsVersionMarkerFileName, StringComparison.OrdinalIgnoreCase)
-                || r.Equals(IntegrityChecker.ModsManifestFileName, StringComparison.OrdinalIgnoreCase);
+                || r.Equals(IntegrityChecker.ModsManifestFileName, StringComparison.OrdinalIgnoreCase)
+                || r.Equals(InstallFingerprint.FileName, StringComparison.OrdinalIgnoreCase);
         }
 
         // Ставит маркер незавершённого обновления перед фазой активации.
