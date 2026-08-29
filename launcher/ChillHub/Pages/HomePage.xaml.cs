@@ -1766,10 +1766,10 @@ namespace ChillHub.Pages {
                 if (g == null) {
                     status = string.Empty;
                 }
-                else if (Core.Game.RunningGames.StateOf(g.GameId) is var run && run != Core.Game.GameRunState.None) {
+                else if (Core.Game.RunningGameLook.Headline(Core.Game.RunningGames.StateOf(g.GameId)) is { Length: > 0 } open) {
                     // Впереди всего остального: «Установлена» под открытой игрой отвечает
                     // на вопрос, которого игрок в этот момент не задавал.
-                    status = run == Core.Game.GameRunState.Running ? "Игра запущена" : "Запускается…";
+                    status = open;
                 }
                 else if (!string.IsNullOrEmpty(g.QueueLabel)) {
                     // Игра в очереди: бейдж говорит «Скачивание · 5%» / «В очереди», а не
@@ -2075,28 +2075,8 @@ namespace ChillHub.Pages {
                 }
             });
 
-        /// <summary>
-        /// Переписывает подписи «Играет» в списке игр.
-        /// <para>
-        /// В списке, а не только на витрине: запущенная игра — единственное состояние,
-        /// которое игрок создаёт сам и о котором лаунчер молчал. Свернув окно на время
-        /// партии и вернувшись, он видел список, ничем не отличающийся от вчерашнего.
-        /// </para>
-        /// </summary>
-        private void SyncRunLabels() {
-            foreach (var g in this.games) {
-                try {
-                    g.RunLabel = Core.Game.RunningGames.StateOf(g.GameId) switch {
-                        Core.Game.GameRunState.Running => "Играет",
-                        Core.Game.GameRunState.Starting => "Запускается…",
-                        _ => string.Empty,
-                    };
-                }
-                catch (Exception ex) {
-                    Core.Logging.Logger.Warn($"SyncRunLabels({g.GameId}): {ex.Message}");
-                }
-            }
-        }
+        /// <summary>Переписывает подписи «Играет» в списке игр.</summary>
+        private void SyncRunLabels() => Core.Game.RunningGameLook.ApplyLabels(this.games);
 
         private void SubscribeMaintenance() {
             if (this.maintenanceSubscribed) {
@@ -2431,10 +2411,8 @@ namespace ChillHub.Pages {
             // Игра без модов идёт мимо StartLaunchOption с его проверкой, а «Играть» из
             // трея не смотрит на выключенную кнопку витрины: без этой ветки вторая копия
             // поднималась бы именно отсюда.
-            if (Core.Game.RunningGames.StateOf(gid) is var running && running != Core.Game.GameRunState.None) {
-                this.ShowToast(running == Core.Game.GameRunState.Running
-                    ? "Игра уже запущена."
-                    : "Игра уже запускается. Подождите — это может занять до минуты.");
+            if (Core.Game.RunningGameLook.Refusal(Core.Game.RunningGames.StateOf(gid)) is { Length: > 0 } busy) {
+                this.ShowToast(busy);
                 return;
             }
 
@@ -2621,11 +2599,8 @@ namespace ChillHub.Pages {
                 // ПОСЛЕДНИЙ РУБЕЖ ПРОТИВ ВТОРОЙ КОПИИ ИГРЫ. Выключенных кнопок мало:
                 // сюда ведут ещё меню под стрелкой, «Играть» из трея и горячий клик,
                 // успевший пройти до перерисовки витрины. Проверка одна на все входы.
-                var run = Core.Game.RunningGames.StateOf(game.GameId);
-                if (run != Core.Game.GameRunState.None) {
-                    this.ShowToast(run == Core.Game.GameRunState.Running
-                        ? "Игра уже запущена."
-                        : "Игра уже запускается. Подождите — это может занять до минуты.");
+                if (Core.Game.RunningGameLook.Refusal(Core.Game.RunningGames.StateOf(game.GameId)) is { Length: > 0 } busy) {
+                    this.ShowToast(busy);
                     return;
                 }
 

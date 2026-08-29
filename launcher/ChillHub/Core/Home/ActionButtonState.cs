@@ -132,9 +132,7 @@ namespace ChillHub.Core.Home {
             ActionMode mode, Game.GameRunState run = Game.GameRunState.None) {
             if (mode == ActionMode.Play && run != Game.GameRunState.None) {
                 return new ActionButtonAppearance(
-                    run == Game.GameRunState.Running ? "Игра запущена" : "Запускается…",
-                    false,
-                    "Style.ActionButton.Checking");
+                    Game.RunningGameLook.Headline(run), false, "Style.ActionButton.Checking");
             }
 
             return Look(mode);

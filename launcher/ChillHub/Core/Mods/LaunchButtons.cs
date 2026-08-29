@@ -175,7 +175,7 @@ namespace ChillHub.Core.Mods {
             // Пропади они — витрина запущенной игры выглядела бы сломанной, а
             // останься живыми — второе нажатие подняло бы вторую копию игры.
             if (run != Game.GameRunState.None) {
-                var note = RunNote(run);
+                var note = Game.RunningGameLook.ButtonNote(run);
                 buttons = buttons
                     .Select(b => b with { Subtitle = note, Tooltip = $"{b.Tooltip} · {note}", Enabled = false })
                     .ToList();
@@ -185,17 +185,6 @@ namespace ChillHub.Core.Mods {
             return new LaunchBarView(buttons, actionVisible, rest.Count > 0, tooltip, run);
         }
 
-        /// <summary>
-        /// Подпись состояния запуска — одна на кнопку, подсказку и бейдж витрины,
-        /// чтобы одно и то же состояние нигде не называлось двумя разными словами.
-        /// </summary>
-        /// <param name="run">Состояние запуска.</param>
-        /// <returns>Слова для игрока; пусто, если игра не запущена.</returns>
-        internal static string RunNote(Game.GameRunState run) => run switch {
-            Game.GameRunState.Running => "игра запущена",
-            Game.GameRunState.Starting => "запускается…",
-            _ => string.Empty,
-        };
 
         /// <summary>
         /// Что положить под стрелку: всё, что не попало на витрину.

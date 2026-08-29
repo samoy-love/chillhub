@@ -109,6 +109,55 @@ namespace ChillHub.Tests {
             Assert.Equal(GameRunState.None, RunningGames.StateOf("peak"));
         }
 
+        /// <summary>
+        /// Игра без имени ничего не отмечает: запуск бывает и без выбранной игры
+        /// («Играть» из трея на пустом списке), и заводить под него безымянную
+        /// запись значило бы запереть кнопки неизвестно чьей игры.
+        /// </summary>
+        [Fact]
+        public void БезымяннаяИграНичегоНеОтмечает() {
+            RunningGames.BeginStarting(null);
+            RunningGames.BeginStarting("   ");
+            RunningGames.MarkRunning(null, 4242);
+            RunningGames.EndStarting(null);
+
+            Assert.Equal(GameRunState.None, RunningGames.StateOf("repo"));
+            Assert.Equal(GameRunState.None, RunningGames.StateOf("   "));
+        }
+
+        /// <summary>
+        /// Снять ожидание, которого не заводили, — не ошибка: поиск процесса мог
+        /// сорваться и после того, как его уже сняли по таймауту.
+        /// </summary>
+        [Fact]
+        public void СнятиеНесуществующегоОжиданияНичегоНеЛомает() {
+            RunningGames.EndStarting("repo");
+
+            Assert.Equal(GameRunState.None, RunningGames.StateOf("repo"));
+        }
+
+        /// <summary>
+        /// Упавший подписчик не уносит с собой сам учёт: событие приходит из фоновой
+        /// задачи, ждущей выхода процесса, и её падение оставило бы игру навсегда
+        /// «запущенной» — то есть витрину без кнопок запуска.
+        /// </summary>
+        [Fact]
+        public void УпавшийПодписчикНеЛомаетУчёт() {
+            void Broken() => throw new InvalidOperationException("страница уже закрыта");
+
+            RunningGames.Changed += Broken;
+            try {
+                RunningGames.MarkRunning("repo", 4242);
+                Assert.Equal(GameRunState.Running, RunningGames.StateOf("repo"));
+
+                RunningGames.ClearRunning(4242);
+                Assert.Equal(GameRunState.None, RunningGames.StateOf("repo"));
+            }
+            finally {
+                RunningGames.Changed -= Broken;
+            }
+        }
+
         /// <summary>О каждой перемене подписчик узнаёт событием, а не опросом.</summary>
         [Fact]
         public void ПеременаПриходитСобытием() {
@@ -206,6 +255,101 @@ namespace ChillHub.Tests {
             Assert.Equal("Установить", ActionButtonState.Appearance(ActionMode.Install, GameRunState.Running).Content);
             Assert.Equal("Отмена", ActionButtonState.Appearance(ActionMode.Cancel, GameRunState.Running).Content);
         }
+
+        /// <summary>
+        /// Одно состояние — одно имя во всех четырёх местах экрана. Разойдись слова,
+        /// и «Играет» в списке против «Запущена» на витрине читались бы как разные
+        /// состояния одной игры.
+        /// </summary>
+        [Fact]
+        public void УСостоянияОдноИмяВоВсехМестахЭкрана() {
+            Assert.Equal("игра запущена", RunningGameLook.ButtonNote(GameRunState.Running));
+            Assert.Equal("Игра запущена", RunningGameLook.Headline(GameRunState.Running));
+            Assert.Equal("Играет", RunningGameLook.RowLabel(GameRunState.Running));
+            Assert.Equal("Игра уже запущена.", RunningGameLook.Refusal(GameRunState.Running));
+
+            Assert.Equal("запускается…", RunningGameLook.ButtonNote(GameRunState.Starting));
+            Assert.Equal("Запускается…", RunningGameLook.Headline(GameRunState.Starting));
+            Assert.Equal("Запускается…", RunningGameLook.RowLabel(GameRunState.Starting));
+            Assert.Equal(
+                "Игра уже запускается. Подождите — это может занять до минуты.",
+                RunningGameLook.Refusal(GameRunState.Starting));
+        }
+
+        /// <summary>
+        /// О незапущенной игре сказать нечего — пустая строка, а не слово. По ней
+        /// витрина и решает, показывать ли бейдж и отказывать ли в запуске.
+        /// </summary>
+        [Fact]
+        public void ПроНезапущеннуюИгруСловНет() {
+            Assert.Empty(RunningGameLook.ButtonNote(GameRunState.None));
+            Assert.Empty(RunningGameLook.Headline(GameRunState.None));
+            Assert.Empty(RunningGameLook.RowLabel(GameRunState.None));
+            Assert.Empty(RunningGameLook.Refusal(GameRunState.None));
+        }
+
+        /// <summary>
+        /// Подписи расставляются по строкам списка: запущенной — «Играет», соседним —
+        /// ничего. Список пересобирается со своими строками, и подпись обязана
+        /// приезжать на новые объекты.
+        /// </summary>
+        [Fact]
+        public void ПодписиРасставляютсяПоСтрокамСписка() {
+            var open = new GameInfo { GameId = "repo" };
+            var idle = new GameInfo { GameId = "peak" };
+            RunningGames.MarkRunning("repo", 4242);
+
+            RunningGameLook.ApplyLabels(new[] { open, idle });
+
+            Assert.Equal("Играет", open.RunLabel);
+            Assert.Empty(idle.RunLabel);
+        }
+
+        /// <summary>Закрытая игра теряет подпись при следующей расстановке.</summary>
+        [Fact]
+        public void ЗакрытаяИграТеряетПодпись() {
+            var game = new GameInfo { GameId = "repo", RunLabel = "Играет" };
+
+            RunningGameLook.ApplyLabels(new[] { game });
+
+            Assert.Empty(game.RunLabel);
+        }
+
+        /// <summary>Списка ещё нет — расставлять нечего, и падать не из-за чего.</summary>
+        [Fact]
+        public void БезСпискаРасстановкаМолчит() {
+            RunningGameLook.ApplyLabels(null);
+        }
+
+        /// <summary>
+        /// Строка списка предпочитает «Играет» статусу на диске, но уступает очереди:
+        /// у качающейся игры важнее проценты, а «Установлена» под открытой игрой —
+        /// вчерашняя новость.
+        /// </summary>
+        [Fact]
+        public void СтрокаСпискаСтавитИграетПослеОчередиНоПередСтатусом() {
+            var game = new GameInfo { IsInstalled = true, NeedsUpdate = false };
+            var text = new Core.UI.GameRowStatusTextConverter();
+            var brush = new Core.UI.GameRowStatusBrushConverter();
+
+            Assert.Equal(
+                "Играет",
+                text.Convert(new object[] { game, string.Empty, "Играет" }, typeof(string), null!, Culture));
+            Assert.Equal(
+                "Скачивание · 38%",
+                text.Convert(new object[] { game, "Скачивание · 38%", "Играет" }, typeof(string), null!, Culture));
+            Assert.Equal(
+                "Установлена",
+                text.Convert(new object[] { game, string.Empty, string.Empty }, typeof(string), null!, Culture));
+
+            var playing = (System.Windows.Media.SolidColorBrush)brush.Convert(
+                new object[] { game, string.Empty, "Играет" }, typeof(System.Windows.Media.Brush), null!, Culture);
+            Assert.Equal(
+                (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#57C98A"),
+                playing.Color);
+        }
+
+        private static System.Globalization.CultureInfo Culture => System.Globalization.CultureInfo.InvariantCulture;
 
         private static ModsInfo Pack() => new ModsInfo { SteamAppId = "3527290", Version = "1.0" };
 
