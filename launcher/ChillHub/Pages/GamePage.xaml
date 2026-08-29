@@ -178,6 +178,7 @@
                   <RowDefinition Height="Auto"/>
                   <RowDefinition Height="Auto"/>
                   <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <StackPanel Grid.Row="0" Grid.Column="0">
                   <TextBlock Text="Установленная версия" Style="{StaticResource Style.FieldLabel}"/>
@@ -208,15 +209,26 @@
                              MouseLeftButtonUp="InstallPathText_MouseLeftButtonUp"
                              ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
                 </StackPanel>
+                <!-- Установленный модпак: имя со ссылкой на его страницу. Игрок видел
+                     только имя сборки, а что в неё входит, кто её собрал и что менялось в
+                     последней версии, искал сам. Строки нет вовсе, когда модпака нет: пустое
+                     поле «Модпак: —» рассказывает о игре без модов ровно ничего. -->
+                <StackPanel x:Name="ModpackRow" Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
+                            Margin="0,12,0,0" Visibility="Collapsed">
+                  <TextBlock Text="Модпак" Style="{StaticResource Style.FieldLabel}"/>
+                  <TextBlock Name="ModpackText" Text="—" Style="{StaticResource Style.FieldValue}"
+                             TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="0"/>
+                </StackPanel>
+
                 <!-- Наигранное время переехало сюда из отдельной карточки в самом низу
                      страницы: на минимальном размере окна та карточка уходила ниже видимой
                      части ScrollViewer вместе с прокруткой и оставалась незамеченной. Здесь,
                      в первой (самой верхней) карточке страницы, она видна сразу. -->
-                <StackPanel Grid.Row="3" Grid.Column="0" Margin="0,12,0,0">
+                <StackPanel Grid.Row="4" Grid.Column="0" Margin="0,12,0,0">
                   <TextBlock Text="Наиграно всего" Style="{StaticResource Style.FieldLabel}"/>
                   <TextBlock Name="TotalPlaytimeText" Text="—" Style="{StaticResource Style.FieldValue}"/>
                 </StackPanel>
-                <StackPanel Grid.Row="3" Grid.Column="1" Margin="0,12,0,0">
+                <StackPanel Grid.Row="4" Grid.Column="1" Margin="0,12,0,0">
                   <TextBlock Text="Последняя сессия" Style="{StaticResource Style.FieldLabel}"/>
                   <TextBlock Name="LastSessionText" Text="—" Style="{StaticResource Style.FieldValue}"/>
                 </StackPanel>

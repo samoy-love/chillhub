@@ -84,6 +84,12 @@ type ModsInfo struct {
 	ManifestURL    string `json:"manifestUrl,omitempty"`
 	ContentBaseURL string `json:"contentBaseUrl,omitempty"`
 
+	// Community is the Thunderstore community slug ("lethal-company"). The
+	// launcher builds the modpack page link from it: the slug is not derivable
+	// from our own game id ("risk-of-rain-2" is "riskofrain2" over there), and a
+	// guessed link is worse than none.
+	Community string `json:"community,omitempty"`
+
 	// Loader and the Steam fields let the launcher find the player's own copy
 	// of the game and decide which of the four launch modes it can offer.
 	Loader      string   `json:"loader,omitempty"`
@@ -103,6 +109,7 @@ func modsInfoFor(it games.Entry) *ModsInfo {
 		return nil
 	}
 	info := &ModsInfo{
+		Community:   cfg.Community,
 		Loader:      cfg.Loader,
 		SteamAppID:  cfg.SteamAppID,
 		SteamFolder: cfg.SteamFolder,

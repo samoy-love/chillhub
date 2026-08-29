@@ -31,6 +31,14 @@ namespace ChillHub.Core {
         /// <summary>Номер версии модпака для карточки игры.</summary>
         public string DisplayVersion { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Слаг сообщества Thunderstore («lethal-company»). Из него собирается ссылка
+        /// на страницу модпака: по нашему идентификатору игры его не вывести —
+        /// «risk-of-rain-2» там зовётся «riskofrain2», — а угаданная ссылка хуже, чем
+        /// её отсутствие.
+        /// </summary>
+        public string Community { get; set; } = string.Empty;
+
         /// <summary>Адрес манифеста модпака.</summary>
         public string ManifestUrl { get; set; } = string.Empty;
 
