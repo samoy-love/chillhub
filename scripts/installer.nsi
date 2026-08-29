@@ -9,7 +9,7 @@ Unicode true
 ; Разбор командной строки в ДЕИНСТАЛЛЯТОРЕ. У NSIS раздельные пространства кода
 ; для установщика и деинсталлятора, поэтому функции FileFunc нужно отдельно
 ; попросить сгенерировать un.-копии — иначе ${un.GetOptions} просто не
-; существует (см. un.onInit: ключи /DELETEGAMES и /DELETESETTINGS).
+; существует (см. un.onInit: ключ /DELETEGAMES).
 !insertmacro un.GetParameters
 !insertmacro un.GetOptions
 ; ${VersionCompare} — сравнение версий для защиты от отката (см. .onInit).
@@ -145,8 +145,6 @@ Var PrereqsRan
 Var WebView2Present
 Var DesktopShortcut_Check
 Var DesktopShortcut_State
-Var DeleteSettings_Check
-Var DeleteSettings_State
 
 ; Адрес проекта: он же уезжает в «Установку и удаление программ» (URLInfoAbout,
 ; HelpLink) — из списка программ должно быть куда пойти за помощью.
@@ -684,24 +682,33 @@ Section "Uninstall"
   DeleteRegKey HKCU "${UNINST_KEY}"
   DeleteRegKey HKCU "${APP_REG}"
 
-  ; Настройки удаляются только по явной галочке (см. страницу удаления).
-  ; Тихое удаление сюда не попадает: $DeleteSettings_State там остаётся нулём.
-  ${If} $DeleteSettings_State == 1
-    ; %APPDATA%\ChillHub — конфиг, очередь отчётов, каталог данных WebView2
-    ; (Core/News/NewsWebViewStorage.cs кладёт его именно сюда, чтобы его не
-    ; сносило самообновление).
-    RMDir /r "$APPDATA\${APP_NAME}"
+  ; СЛУЖЕБНЫЕ КАТАЛОГИ ЛАУНЧЕРА УХОДЯТ ВСЕГДА, БЕЗ ВОПРОСОВ.
+  ;
+  ; Раньше здесь стояла галочка «удалить настройки», снятая по умолчанию, и
+  ; удаление по умолчанию оставляло на диске два каталога. Спрашивать об этом
+  ; было не о чем: удаление программы значит удаление программы, а не «программы,
+  ; кроме её служебных папок». Человек, нажавший «Удалить», не обязан ещё и
+  ; догадываться, что без галочки в профиле останется след.
+  ;
+  ; Пользовательские данные это не затрагивает: единственное, что представляет
+  ; ценность само по себе, — папка с играми, и вот про неё галочка осталась.
+  ;
+  ; ПЕРЕУСТАНОВКА НАСТРОЙКИ НЕ ТЕРЯЕТ: она идёт установкой поверх (см.
+  ; CleanPreviousInstall) и деинсталлятор не запускает. Сюда попадает только
+  ; настоящее удаление.
+  ;
+  ; %APPDATA%\ChillHub — конфиг, очередь отчётов, каталог данных WebView2
+  ; (Core/News/NewsWebViewStorage.cs кладёт его именно сюда, чтобы его не
+  ; сносило самообновление).
+  RMDir /r "$APPDATA\${APP_NAME}"
 
-    ; %LOCALAPPDATA%\ChillHub — каталог установки ПО УМОЛЧАНИЮ, и при обычной
-    ; установке его уже снёс RMDir /r "$INSTDIR" выше. Но кто указал свой путь
-    ; (D:\ChillHub), у того здесь остаётся каталог прежней установки вместе со
-    ; старым config.json, откуда лаунчер когда-то мигрировал настройки
-    ; (Core/Config.cs: второй каталог ConfigStore). «Удалить настройки» обязано
-    ; убирать и его — иначе после полного удаления на диске остаётся папка,
-    ; о которой человек уже не помнит.
-    ${If} "$INSTDIR" != "$LOCALAPPDATA\${APP_NAME}"
-      RMDir /r "$LOCALAPPDATA\${APP_NAME}"
-    ${EndIf}
+  ; %LOCALAPPDATA%\ChillHub — каталог установки ПО УМОЛЧАНИЮ, и при обычной
+  ; установке его уже снёс RMDir /r "$INSTDIR" выше. Но кто указал свой путь
+  ; (D:\ChillHub), у того здесь остаётся каталог прежней установки вместе со
+  ; старым config.json, откуда лаунчер когда-то мигрировал настройки
+  ; (Core/Config.cs: второй каталог ConfigStore).
+  ${If} "$INSTDIR" != "$LOCALAPPDATA\${APP_NAME}"
+    RMDir /r "$LOCALAPPDATA\${APP_NAME}"
   ${EndIf}
 
   ; Ask-delete games folder per user's choice (from custom page)
@@ -1061,24 +1068,17 @@ Function un.onInit
   ; стоит» жила без единого прогона — при том, что она делает RMDir /r по пути
   ; из свободного текстового поля.
   ;
-  ;   Uninstall.exe /S /DELETEGAMES /DELETESETTINGS
+  ;   Uninstall.exe /S /DELETEGAMES
   ;
-  ; Умолчание не меняется: без ключей тихое удаление, как и раньше, не трогает
-  ; ни игры, ни настройки. Решение об удалении пользовательских данных
-  ; принимает человек, а не отсутствие ответа.
+  ; Умолчание не меняется: без ключа тихое удаление, как и раньше, не трогает
+  ; папку с играми. Решение об удалении пользовательских данных принимает
+  ; человек, а не отсутствие ответа.
   StrCpy $DeleteGames_State 0
-  StrCpy $DeleteSettings_State 0
   ${un.GetParameters} $R0
   ClearErrors
   ${un.GetOptions} $R0 "/DELETEGAMES" $R1
   ${IfNot} ${Errors}
     StrCpy $DeleteGames_State 1
-  ${EndIf}
-
-  ClearErrors
-  ${un.GetOptions} $R0 "/DELETESETTINGS" $R1
-  ${IfNot} ${Errors}
-    StrCpy $DeleteSettings_State 1
   ${EndIf}
 
   ClearErrors
@@ -1098,12 +1098,12 @@ Function un.SelectDeleteGames_Create
   ${NSD_CreateCheckbox} 0 46 100% 18 "Удалить папку с играми (безвозвратно)"
   Pop $DeleteGames_Check
 
-  ; Настройки лаунчера (%APPDATA%\ChillHub) удаление не трогает намеренно: они
-  ; переживают переустановку, и это ожидаемое поведение. Но выбора «снести всё»
-  ; не было вовсе — оставался каталог, о котором пользователь уже не помнит.
-  ; Галочка снята по умолчанию: молчание значит «сохранить».
-  ${NSD_CreateCheckbox} 0 68 100% 18 "Удалить настройки лаунчера (тема, папки, лимиты)"
-  Pop $DeleteSettings_Check
+  ; Настройки лаунчера уходят всегда (см. секцию Uninstall) — выбора здесь нет,
+  ; поэтому нет и галочки. Но и молчать об этом нельзя: человек должен узнать,
+  ; что тема, лимиты и список папок исчезнут, ДО того как нажмёт «Удалить», а не
+  ; при следующей установке.
+  ${NSD_CreateLabel} 0 70 100% 28 "Настройки лаунчера (тема, лимиты, папки) будут удалены вместе с ним."
+  Pop $2
 
   nsDialogs::Show
 FunctionEnd
@@ -1115,12 +1115,5 @@ Function un.SelectDeleteGames_Leave
     StrCpy $DeleteGames_State 1
   ${Else}
     StrCpy $DeleteGames_State 0
-  ${EndIf}
-
-  ${NSD_GetState} $DeleteSettings_Check $2
-  ${If} $2 == ${BST_CHECKED}
-    StrCpy $DeleteSettings_State 1
-  ${Else}
-    StrCpy $DeleteSettings_State 0
   ${EndIf}
 FunctionEnd
