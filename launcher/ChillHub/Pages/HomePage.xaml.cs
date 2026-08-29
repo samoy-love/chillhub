@@ -254,8 +254,15 @@ namespace ChillHub.Pages {
 
             this.downloadQueue = new Core.Game.DownloadQueue(
                 gid => this.games.FirstOrDefault(g => string.Equals(g.GameId, gid, StringComparison.OrdinalIgnoreCase)),
-                () => this.BaseApi);
+                () => this.BaseApi,
+                syncServiceFactory: null,
+                confirm: AskFromQueue);
             this.QueueDock.ItemsSource = this.queueDockVisibleItems;
+
+            // Очередь работает в фоне, а спрашивать можно только с UI-потока: Invoke
+            // блокирует её до ответа — этого и надо, решение принимает человек.
+            bool AskFromQueue(string text, string caption) =>
+                this.Dispatcher.Invoke(() => Core.Home.HomeDialogs.AskYesNo(text, caption));
 
             // Незакрытые сессии прошлого запуска: досмотреть те игры, что ещё бегут, и
             // закрыть остальные. Заодно возвращает в состояние без модов папки, в которых
@@ -2109,6 +2116,33 @@ namespace ChillHub.Pages {
 
         // --- Очередь загрузок -------------------------------------------------------------
 
+        /// <summary>
+        /// Ставит в очередь проверку файлов игры.
+        /// <para>
+        /// Через очередь, а не отдельным прогоном: проверка читает и хеширует десятки
+        /// гигабайт, и раньше она обрывалась уходом со страницы игры, а в панели
+        /// загрузок её не было видно вовсе.
+        /// </para>
+        /// </summary>
+        /// <param name="sender">Пункт меню.</param>
+        /// <param name="e">Аргументы события.</param>
+        private void VerifyGame_Click(object sender, RoutedEventArgs e) {
+            try {
+                var game = (sender as FrameworkElement)?.GetValue(MenuItem.CommandParameterProperty) as GameInfo
+                           ?? (sender as FrameworkElement)?.DataContext as GameInfo;
+                if (game == null) {
+                    return;
+                }
+
+                if (!this.downloadQueue.Enqueue(game.GameId, Core.Game.QueueTaskKind.Verify)) {
+                    this.StatusText.Text = $"«{game.Title}» уже проверяется или ещё не установлена.";
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "HomePage.VerifyGame_Click");
+            }
+        }
+
         private void EnqueueGame_Click(object sender, RoutedEventArgs e) {
             try {
                 // Тот же порядок разрешения, что у остальных пунктов этого контекстного меню
@@ -2726,6 +2760,23 @@ namespace ChillHub.Pages {
 
                 var localRoot = GameLocalRoot(gid);
                 var hasFiles = Directory.Exists(localRoot) && HasAnyLocalGameFiles(localRoot);
+
+                // Установленной и свежей игре качать нечего — ей предлагаем проверку.
+                // Пункт, который ничего не сделает, хуже отсутствующего: «Добавить в
+                // очередь» у такой игры молча отвечал отказом.
+                var settled = gi is { IsInstalled: true, NeedsUpdate: false };
+                if (fe?.ContextMenu != null) {
+                    foreach (var raw in fe.ContextMenu.Items) {
+                        if (raw is MenuItem named) {
+                            if (named.Name == "EnqueueMenuItem") {
+                                named.Visibility = settled ? Visibility.Collapsed : Visibility.Visible;
+                            }
+                            else if (named.Name == "VerifyMenuItem") {
+                                named.Visibility = settled ? Visibility.Visible : Visibility.Collapsed;
+                            }
+                        }
+                    }
+                }
 
                 if (fe?.ContextMenu != null) {
                     foreach (var raw in fe.ContextMenu.Items) {

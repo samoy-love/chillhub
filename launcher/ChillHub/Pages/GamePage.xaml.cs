@@ -299,12 +299,15 @@ namespace ChillHub.Pages {
                 return;
             }
 
-            // Установка/обновление/докачка незавершённого — через общую очередь загрузок: страницу
-            // можно закрыть или уйти на главную, не обрывая закачку (см. StartQueuedSync). Только
-            // «Проверить файлы» (уже установлена) остаётся локальным — это быстрая сверка с
-            // манифестом с подтверждением удаления лишнего, ставить её в очередь незачем.
-            if (this.currentState != GameState.Installed && this.downloadQueue != null) {
-                this.StartQueuedSync();
+            // ВСЁ ДОЛГОЕ — ЧЕРЕЗ ОБЩУЮ ОЧЕРЕДЬ, включая проверку файлов. Страницу можно
+            // закрыть или уйти на главную, не обрывая работу, и видно её в панели
+            // загрузок наравне с остальным. Проверка казалась «быстрой сверкой», но она
+            // читает и хеширует всю папку игры — десятки гигабайт: уход со страницы
+            // обрывал её на середине, а в очереди её не было видно вовсе.
+            if (this.downloadQueue != null) {
+                this.StartQueuedSync(this.currentState == GameState.Installed
+                    ? Core.Game.QueueTaskKind.Verify
+                    : Core.Game.QueueTaskKind.Download);
                 return;
             }
 
@@ -317,10 +320,13 @@ namespace ChillHub.Pages {
         /// <see cref="GamePage_Unloaded"/>, стоило уйти на главную — а в самой очереди её было не
         /// видно вовсе, потому что страница никогда её не пополняла.
         /// </summary>
-        private void StartQueuedSync() {
+        /// <param name="kind">Качать или проверять.</param>
+        private void StartQueuedSync(Core.Game.QueueTaskKind kind = Core.Game.QueueTaskKind.Download) {
             var gid = this.game.GameId;
-            if (!this.downloadQueue!.Enqueue(gid)) {
-                // Уже стоит в очереди (например, добавили с главной страницы) — просто подхватываем её.
+            if (!this.downloadQueue!.Enqueue(gid, kind)) {
+                // Уже стоит в очереди (например, добавили с главной страницы или из
+                // контекстного меню списка) — подхватываем ту работу, а не заводим вторую
+                // по тем же файлам.
                 this.SyncFromQueueSnapshot();
                 return;
             }

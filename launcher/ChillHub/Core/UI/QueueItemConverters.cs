@@ -144,14 +144,19 @@ namespace ChillHub.Core.UI {
                 return string.Empty;
             }
 
+            // Проверка занимает ту же строку и тот же прогресс, но называется своим
+            // именем: «Скачивание» у игры, которая уже установлена, читается как
+            // «мне опять что-то катят», хотя игрок просил сверить файлы.
+            var work = item.Kind == QueueTaskKind.Verify ? "Проверка" : "Скачивание";
+
             switch (item.State) {
                 case QueueItemState.Running:
                     if (item.TotalBytes > 0) {
                         var percent = Math.Clamp(item.BytesDownloaded * 100.0 / item.TotalBytes, 0, 100);
-                        return $"Скачивание · {percent:0}%";
+                        return $"{work} · {percent:0}%";
                     }
 
-                    return "Скачивание";
+                    return work;
                 case QueueItemState.Waiting:
                     return "В очереди";
                 default:

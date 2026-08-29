@@ -778,7 +778,13 @@
                     <Border.ContextMenu>
                       <ContextMenu>
                         <MenuItem Header="Подробнее об игре" Click="GameDetails_Click" CommandParameter="{Binding}"/>
-                        <MenuItem Header="Добавить в очередь загрузок" Click="EnqueueGame_Click" CommandParameter="{Binding}"/>
+                        <!-- Два пункта на одном месте: качать нечего у свежей установленной
+                             игры, а проверять — наоборот, только её и есть смысл. Показывается
+                             всегда ровно один (см. GameItem_ContextMenuOpening). -->
+                        <MenuItem x:Name="EnqueueMenuItem" Header="Добавить в очередь загрузок"
+                                  Click="EnqueueGame_Click" CommandParameter="{Binding}"/>
+                        <MenuItem x:Name="VerifyMenuItem" Header="Проверить файлы игры"
+                                  Click="VerifyGame_Click" CommandParameter="{Binding}"/>
                         <MenuItem Header="Открыть расположение игры" Click="OpenGameFolder_Click" CommandParameter="{Binding}"/>
                         <!-- Удаление отделено чертой и покрашено: в столбце одинаковых строк
                              оно стояло сразу под «Открыть расположение» и ловило промахи. -->
