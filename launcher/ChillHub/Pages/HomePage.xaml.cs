@@ -254,8 +254,15 @@ namespace ChillHub.Pages {
 
             this.downloadQueue = new Core.Game.DownloadQueue(
                 gid => this.games.FirstOrDefault(g => string.Equals(g.GameId, gid, StringComparison.OrdinalIgnoreCase)),
-                () => this.BaseApi);
+                () => this.BaseApi,
+                syncServiceFactory: null,
+                confirm: AskFromQueue);
             this.QueueDock.ItemsSource = this.queueDockVisibleItems;
+
+            // Очередь работает в фоне, а спрашивать можно только с UI-потока: Invoke
+            // блокирует её до ответа — этого и надо, решение принимает человек.
+            bool AskFromQueue(string text, string caption) =>
+                this.Dispatcher.Invoke(() => Core.Home.HomeDialogs.AskYesNo(text, caption));
 
             // Незакрытые сессии прошлого запуска: досмотреть те игры, что ещё бегут, и
             // закрыть остальные. Заодно возвращает в состояние без модов папки, в которых
@@ -1593,9 +1600,11 @@ namespace ChillHub.Pages {
                     ? this.CachedLaunchOptions(game)
                     : null;
 
+                var gid = game?.GameId;
                 var view = Core.Mods.LaunchButtons.Compute(
                     game?.Mods, playMode, steamAllowed, options,
-                    Core.Mods.LaunchChoice.Remembered(game?.GameId), this.SelectedRunState());
+                    Core.Mods.LaunchChoice.Remembered(gid),
+                    target => Core.Game.RunningGames.StateOf(gid, target));
 
                 this.launchBar = view;
                 this.ActionBtn.Visibility = view.ActionVisible ? Visibility.Visible : Visibility.Collapsed;
@@ -1603,10 +1612,6 @@ namespace ChillHub.Pages {
                 this.ApplyLaunchButton(this.LaunchBtn2, this.LaunchBtn2Title, this.LaunchBtn2Note, view, 1);
                 this.LaunchMenuBtn.Visibility = view.MenuVisible ? Visibility.Visible : Visibility.Collapsed;
                 this.LaunchMenuBtn.ToolTip = view.MenuVisible ? view.MenuTooltip : null;
-
-                // Под стрелкой лежат те же запуски. Пока игра идёт, живая стрелка была бы
-                // обходом вокруг только что выключенных кнопок.
-                this.LaunchMenuBtn.IsEnabled = view.Run == Core.Game.GameRunState.None;
 
                 // Подсказка «что запустится» нужна только той «Играть», которая
                 // открывает меню: у кнопок запуска ответ написан прямо на них, а
@@ -2111,6 +2116,32 @@ namespace ChillHub.Pages {
 
         // --- Очередь загрузок -------------------------------------------------------------
 
+        /// <summary>
+        /// Ставит в очередь проверку файлов игры.
+        /// <para>
+        /// Через очередь, а не отдельным прогоном: проверка читает и хеширует десятки
+        /// гигабайт, и раньше она обрывалась уходом со страницы игры, а в панели
+        /// загрузок её не было видно вовсе.
+        /// </para>
+        /// </summary>
+        /// <param name="sender">Пункт меню.</param>
+        /// <param name="e">Аргументы события.</param>
+        private void VerifyGame_Click(object sender, RoutedEventArgs e) {
+            try {
+                if (Core.UI.GameMenuItems.GameOf(sender) is not GameInfo game) {
+                    return;
+                }
+
+                var kind = Core.Game.QueueTaskKind.Verify;
+                if (!this.downloadQueue.Enqueue(game.GameId, kind)) {
+                    this.StatusText.Text = Core.Game.QueueRefusal.For(kind, game.Title);
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "HomePage.VerifyGame_Click");
+            }
+        }
+
         private void EnqueueGame_Click(object sender, RoutedEventArgs e) {
             try {
                 // Тот же порядок разрешения, что у остальных пунктов этого контекстного меню
@@ -2411,7 +2442,9 @@ namespace ChillHub.Pages {
             // Игра без модов идёт мимо StartLaunchOption с его проверкой, а «Играть» из
             // трея не смотрит на выключенную кнопку витрины: без этой ветки вторая копия
             // поднималась бы именно отсюда.
-            if (Core.Game.RunningGameLook.Refusal(Core.Game.RunningGames.StateOf(gid)) is { Length: > 0 } busy) {
+            // Игра без модпака живёт одной версией — сборкой с сервера без модов.
+            var soleVariant = Core.Game.RunningGames.StateOf(gid, Core.Mods.LaunchTarget.LocalVanilla);
+            if (Core.Game.RunningGameLook.Refusal(soleVariant) is { Length: > 0 } busy) {
                 this.ShowToast(busy);
                 return;
             }
@@ -2599,7 +2632,8 @@ namespace ChillHub.Pages {
                 // ПОСЛЕДНИЙ РУБЕЖ ПРОТИВ ВТОРОЙ КОПИИ ИГРЫ. Выключенных кнопок мало:
                 // сюда ведут ещё меню под стрелкой, «Играть» из трея и горячий клик,
                 // успевший пройти до перерисовки витрины. Проверка одна на все входы.
-                if (Core.Game.RunningGameLook.Refusal(Core.Game.RunningGames.StateOf(game.GameId)) is { Length: > 0 } busy) {
+                var running = Core.Game.RunningGames.StateOf(game.GameId, option.Target);
+                if (Core.Game.RunningGameLook.Refusal(running) is { Length: > 0 } busy) {
                     this.ShowToast(busy);
                     return;
                 }
@@ -2656,7 +2690,8 @@ namespace ChillHub.Pages {
                     Core.Mods.ModsLaunch.ResolveExe(option.GameDir, game.ExeRelativePath),
                     proc,
                     option.ViaSteam,
-                    option.Modded ? option.GameDir : null);
+                    option.Modded ? option.GameDir : null,
+                    option.Target);
             }
         }
 
@@ -2725,15 +2760,9 @@ namespace ChillHub.Pages {
                 var localRoot = GameLocalRoot(gid);
                 var hasFiles = Directory.Exists(localRoot) && HasAnyLocalGameFiles(localRoot);
 
-                if (fe?.ContextMenu != null) {
-                    foreach (var raw in fe.ContextMenu.Items) {
-                        // Первый пункт («Подробнее об игре») оставляем активным всегда
-                        if (raw is MenuItem mi
-                            && !ReferenceEquals(mi, fe.ContextMenu.Items.Count > 0 ? fe.ContextMenu.Items[0] : null)) {
-                            mi.IsEnabled = hasFiles;
-                        }
-                    }
-                }
+                // Правило и проход — в Core.UI.GameMenuItems: внутри WPF-меню их никто не
+                // проверит, а ошибка в них выглядит как пункт, который не работает.
+                Core.UI.GameMenuItems.Apply(fe?.ContextMenu?.Items, gi, hasFiles);
             }
             catch (Exception ex) {
                 // Не смогли подготовить меню — лучше его не показывать вовсе

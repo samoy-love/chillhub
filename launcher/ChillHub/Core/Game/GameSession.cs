@@ -37,20 +37,22 @@ namespace ChillHub.Core.Game {
         /// <param name="started">Процесс, который вернул старт: игра при прямом запуске, Steam — при запуске через него.</param>
         /// <param name="viaSteam">Запуск шёл через Steam.</param>
         /// <param name="moddedDir">Папка с включёнными на время сессии модами; null — запуск без модов.</param>
+        /// <param name="target">Какая из четырёх версий игры запущена.</param>
         internal static void Begin(
             string? gameId,
             string? gameDir,
             string? exePath,
             Process? started,
             bool viaSteam,
-            string? moddedDir) {
+            string? moddedDir,
+            Mods.LaunchTarget target) {
             if (string.IsNullOrWhiteSpace(gameId)) {
                 return;
             }
 
             if (!viaSteam) {
                 if (started != null) {
-                    Track(gameId, started, moddedDir);
+                    Track(gameId, target, started, moddedDir);
                 }
 
                 return;
@@ -59,7 +61,7 @@ namespace ChillHub.Core.Game {
             // Между командой Steam и окном игры проходят десятки секунд. Пока они идут,
             // витрина обязана говорить «Запускается…»: молчащая кнопка читается как
             // несработавшая, и её жмут снова, поднимая вторую копию игры.
-            RunningGames.BeginStarting(gameId);
+            RunningGames.BeginStarting(gameId, target);
 
             _ = Task.Run(async () => {
                 try {
@@ -71,7 +73,7 @@ namespace ChillHub.Core.Game {
                         return;
                     }
 
-                    Track(gameId, Process.GetProcessById(found), moddedDir);
+                    Track(gameId, target, Process.GetProcessById(found), moddedDir);
                 }
                 catch (Exception ex) {
                     Logging.Logger.Warn($"GameSession.Begin({gameId}): {ex.Message}");
@@ -79,14 +81,14 @@ namespace ChillHub.Core.Game {
                 finally {
                     // Ожидание кончилось в любом случае — процесс нашёлся, не нашёлся или
                     // поиск сорвался. Оставленное «Запускается…» заперло бы кнопки навсегда.
-                    RunningGames.EndStarting(gameId);
+                    RunningGames.EndStarting(gameId, target);
                 }
             });
         }
 
-        private static void Track(string gameId, Process process, string? moddedDir) {
+        private static void Track(string gameId, Mods.LaunchTarget target, Process process, string? moddedDir) {
             try {
-                PlaytimeStore.BeginSession(gameId, process, moddedDir);
+                PlaytimeStore.BeginSession(gameId, target, process, moddedDir);
             }
             catch (Exception ex) {
                 Logging.Logger.Warn($"GameSession.Track({gameId}): {ex.Message}");

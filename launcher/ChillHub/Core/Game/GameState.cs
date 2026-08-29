@@ -21,6 +21,22 @@ namespace ChillHub.Core.Game {
         Unfinished,
     }
 
+    /// <summary>
+    /// Что очередь должна сделать с игрой в этом состоянии.
+    /// <para>
+    /// Установленной и свежей качать нечего — ей место на проверке файлов; остальным
+    /// наоборот. Правило живёт рядом с самим состоянием, а не в обработчике кнопки:
+    /// нажимают её из двух мест, и разойтись им негде.
+    /// </para>
+    /// </summary>
+    internal static class GameStateWork {
+        /// <summary>Какую работу ставить в очередь.</summary>
+        /// <param name="state">Состояние игры на диске.</param>
+        /// <returns>Проверка для установленной, закачка для остальных.</returns>
+        internal static QueueTaskKind QueueKindFor(GameState state) =>
+            state == GameState.Installed ? QueueTaskKind.Verify : QueueTaskKind.Download;
+    }
+
     /// <summary>Подписи страницы для одного состояния игры.</summary>
     /// <param name="StateText">Текст в строке состояния.</param>
     /// <param name="ActionText">Надпись на кнопке действия.</param>
