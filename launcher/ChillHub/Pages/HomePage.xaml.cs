@@ -2986,6 +2986,11 @@ namespace ChillHub.Pages {
                     // запустится, и показывать её установленной — врать пользователю.
                     this.MarkUninstalled(gid);
 
+                    // Освободившиеся гигабайты обязаны отразиться и в «Установка и
+                    // удаление программ»: размер там считается вместе с папкой игр
+                    // (Core/Shell/InstalledAppsEntry.cs). Обход папки уходит в фон.
+                    Core.Shell.InstalledAppsEntry.RefreshInBackground();
+
                     if (blocked.Count > 0) {
                         this.ShowUserError(
                             GameFiles.BuildBlockedFilesMessage(blocked),

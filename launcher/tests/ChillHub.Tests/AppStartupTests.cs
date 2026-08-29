@@ -46,7 +46,7 @@ namespace ChillHub.Tests {
             Assert.True(startup.Run());
 
             Assert.Equal(
-                new[] { "замок", "тема", "обработчики", "уборка", "метрика" },
+                new[] { "замок", "тема", "обработчики", "уборка", "метрика", "список программ" },
                 log);
         }
 
@@ -68,6 +68,7 @@ namespace ChillHub.Tests {
             Assert.True(lockAt < log.IndexOf("обработчики"));
             Assert.True(lockAt < log.IndexOf("уборка"));
             Assert.True(lockAt < log.IndexOf("метрика"));
+            Assert.True(lockAt < log.IndexOf("список программ"));
         }
 
         /// <summary>
@@ -98,6 +99,7 @@ namespace ChillHub.Tests {
                 InstallGlobalHandlers = () => { },
                 CleanupLegacyWebViewFolder = () => { },
                 SendStartMetric = () => { },
+                RefreshInstalledAppsEntry = () => { },
             };
 
             Assert.True(startup.Run());
@@ -153,6 +155,21 @@ namespace ChillHub.Tests {
             Assert.True(startup.Run());
 
             Assert.Contains("метрика", log);
+        }
+
+        /// <summary>
+        /// Обновление записи в списке программ лезет в реестр и в файловую систему.
+        /// Ни то ни другое не обязано получиться: реестр закрывают политиками, а папка
+        /// с играми может лежать на отключённом диске. Лаунчер из-за строки в списке
+        /// установленных программ не открываться не должен.
+        /// </summary>
+        [Fact]
+        public void СбойЗаписиВСписокПрограммНеМешаетЗапуску() {
+            var log = new List<string>();
+            var startup = Recording(log, lockTaken: true);
+            startup.RefreshInstalledAppsEntry = () => throw new UnauthorizedAccessException("реестр закрыт политикой");
+
+            Assert.True(startup.Run());
         }
 
         /// <summary>
@@ -386,6 +403,7 @@ namespace ChillHub.Tests {
             InstallGlobalHandlers = () => log.Add("обработчики"),
             CleanupLegacyWebViewFolder = () => log.Add("уборка"),
             SendStartMetric = () => log.Add("метрика"),
+            RefreshInstalledAppsEntry = () => log.Add("список программ"),
         };
     }
 }
