@@ -16,12 +16,18 @@ namespace ChillHub.Core.Mods {
     /// <param name="Subtitle">Мелкая строка: что произойдёт по нажатию.</param>
     /// <param name="Tooltip">Подсказка целиком — с названием модпака и пояснением.</param>
     /// <param name="Accent">Красить ли акцентом: это последний запущенный вариант.</param>
+    /// <param name="Enabled">
+    /// Можно ли нажать. Ложь бывает у единственного состояния — игра уже запущена или
+    /// запускается: кнопка остаётся на месте и подписью объясняет, что происходит,
+    /// вместо того чтобы исчезнуть или поднять вторую копию игры.
+    /// </param>
     internal sealed record LaunchButtonView(
         LaunchTarget Target,
         string Title,
         string Subtitle,
         string Tooltip,
-        bool Accent) {
+        bool Accent,
+        bool Enabled = true) {
         /// <summary>
         /// Ключ стиля кнопки в ресурсах темы. Акцент носит вариант, которым играли в
         /// прошлый раз, и он может оказаться как первой кнопкой, так и второй — поэтому
@@ -37,11 +43,17 @@ namespace ChillHub.Core.Mods {
     /// <param name="ActionVisible">Показывать ли обычную кнопку действия («Играть», «Обновить»…).</param>
     /// <param name="MenuVisible">Показывать ли стрелку с остальными вариантами.</param>
     /// <param name="MenuTooltip">Подсказка стрелки.</param>
+    /// <param name="Run">
+    /// Что сейчас с игрой: запущена, запускается или ни то ни другое. От этого зависит
+    /// не только вид кнопок запуска, но и стрелка рядом — под ней лежат такие же
+    /// запуски, и оставить её живой значило бы оставить обход только что закрытой двери.
+    /// </param>
     internal sealed record LaunchBarView(
         IReadOnlyList<LaunchButtonView> Buttons,
         bool ActionVisible,
         bool MenuVisible,
-        string MenuTooltip);
+        string MenuTooltip,
+        Game.GameRunState Run = Game.GameRunState.None);
 
     /// <summary>
     /// Строка действий витрины для игры с модами: два способа играть — кнопками,
@@ -111,16 +123,18 @@ namespace ChillHub.Core.Mods {
         /// </param>
         /// <param name="options">Варианты запуска, посчитанные на этот момент.</param>
         /// <param name="remembered">Запомненный вариант запуска или null.</param>
+        /// <param name="run">Запущена ли игра прямо сейчас.</param>
         /// <returns>Что показать в строке действий.</returns>
         internal static LaunchBarView Compute(
             ModsInfo? mods,
             bool playMode,
             bool steamAllowed,
             IReadOnlyList<LaunchOption>? options,
-            LaunchTarget? remembered) {
+            LaunchTarget? remembered,
+            Game.GameRunState run = Game.GameRunState.None) {
             var modded = (playMode || steamAllowed) && mods != null && !string.IsNullOrWhiteSpace(mods.SteamAppId);
             if (!modded || options == null || options.Count == 0) {
-                return new LaunchBarView(Array.Empty<LaunchButtonView>(), true, false, string.Empty);
+                return new LaunchBarView(Array.Empty<LaunchButtonView>(), true, false, string.Empty, run);
             }
 
             // Вне режима «Играть» сборки с сервера на витрине нет: её кнопка — это
@@ -156,8 +170,32 @@ namespace ChillHub.Core.Mods {
             var rest = MenuOptions(options, buttons);
             var tooltip = buttons.Count == 0 ? "Выбрать, что запускать" : MenuTooltip(rest);
 
-            return new LaunchBarView(buttons, actionVisible, rest.Count > 0, tooltip);
+            // ИГРА УЖЕ ИДЁТ — НАЖИМАТЬ НЕЧЕГО. Кнопки не исчезают и не меняют
+            // назначения: они остаются на своих местах и говорят, что происходит.
+            // Пропади они — витрина запущенной игры выглядела бы сломанной, а
+            // останься живыми — второе нажатие подняло бы вторую копию игры.
+            if (run != Game.GameRunState.None) {
+                var note = RunNote(run);
+                buttons = buttons
+                    .Select(b => b with { Subtitle = note, Tooltip = $"{b.Tooltip} · {note}", Enabled = false })
+                    .ToList();
+                tooltip = note;
+            }
+
+            return new LaunchBarView(buttons, actionVisible, rest.Count > 0, tooltip, run);
         }
+
+        /// <summary>
+        /// Подпись состояния запуска — одна на кнопку, подсказку и бейдж витрины,
+        /// чтобы одно и то же состояние нигде не называлось двумя разными словами.
+        /// </summary>
+        /// <param name="run">Состояние запуска.</param>
+        /// <returns>Слова для игрока; пусто, если игра не запущена.</returns>
+        internal static string RunNote(Game.GameRunState run) => run switch {
+            Game.GameRunState.Running => "игра запущена",
+            Game.GameRunState.Starting => "запускается…",
+            _ => string.Empty,
+        };
 
         /// <summary>
         /// Что положить под стрелку: всё, что не попало на витрину.

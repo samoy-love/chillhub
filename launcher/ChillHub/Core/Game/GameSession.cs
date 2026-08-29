@@ -56,6 +56,11 @@ namespace ChillHub.Core.Game {
                 return;
             }
 
+            // Между командой Steam и окном игры проходят десятки секунд. Пока они идут,
+            // витрина обязана говорить «Запускается…»: молчащая кнопка читается как
+            // несработавшая, и её жмут снова, поднимая вторую копию игры.
+            RunningGames.BeginStarting(gameId);
+
             _ = Task.Run(async () => {
                 try {
                     var pid = await GameProcessFinder.WaitAsync(gameDir, exePath);
@@ -70,6 +75,11 @@ namespace ChillHub.Core.Game {
                 }
                 catch (Exception ex) {
                     Logging.Logger.Warn($"GameSession.Begin({gameId}): {ex.Message}");
+                }
+                finally {
+                    // Ожидание кончилось в любом случае — процесс нашёлся, не нашёлся или
+                    // поиск сорвался. Оставленное «Запускается…» заперло бы кнопки навсегда.
+                    RunningGames.EndStarting(gameId);
                 }
             });
         }

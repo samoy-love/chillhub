@@ -182,6 +182,9 @@ namespace ChillHub.Core.Game {
                 Logging.Logger.Warn($"PlaytimeStore.BeginSession({gameId}): {ex.Message}");
             }
 
+            // Витрина узнаёт о запущенной игре отсюда же: сессия и «игра идёт» — одно
+            // и то же событие, и второго места, где это отслеживалось бы, быть не должно.
+            RunningGames.MarkRunning(gameId, process.Id);
             WatchAsync(process.Id, process);
         }
 
@@ -261,6 +264,9 @@ namespace ChillHub.Core.Game {
                     Process? proc = TryGetSameProcess(session);
                     if (proc != null && !SafeHasExited(proc)) {
                         // Игра всё ещё бежит — досмотрим до конца в этом запуске лаунчера.
+                        // И покажем её запущенной: лаунчер могли закрыть и открыть заново,
+                        // не выходя из игры, и витрина обязана знать об этом с первой секунды.
+                        RunningGames.MarkRunning(session.GameId, session.ProcessId);
                         WatchAsync(session.ProcessId, proc);
                         continue;
                     }
@@ -299,6 +305,10 @@ namespace ChillHub.Core.Game {
         }
 
         private static void FinishSession(int processId, DateTime endUtc) {
+            // Первым делом: игра закрылась, и витрина должна вернуть кнопки запуска
+            // независимо от того, нашлась ли для процесса незакрытая сессия.
+            RunningGames.ClearRunning(processId);
+
             PendingSession session;
             lock (FileLock) {
                 var pending = LoadPendingLocked();
