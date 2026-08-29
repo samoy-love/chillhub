@@ -33,31 +33,8 @@ namespace ChillHub {
         /// <summary>Как часто дёргать сервер за номером версии, пока лаунчер открыт.</summary>
         private static readonly TimeSpan SelfUpdateCheckInterval = TimeSpan.FromMinutes(10);
 
-        /// <summary>
-        /// Как часто возврат фокуса на окно может стоить запроса к серверу.
-        /// <para>
-        /// Отдельно от <see cref="SelfUpdateCheckInterval"/>: у таймера задача другая —
-        /// не жечь сеть, пока лаунчер часами стоит в трее. Возврат к окну, наоборот,
-        /// заслуживает свежего ответа, и придерживать его десятью минутами незачем.
-        /// </para>
-        /// </summary>
-        private static readonly TimeSpan SelfUpdateActivationInterval = TimeSpan.FromSeconds(10);
-
         /// <summary>Не даёт двум проверкам обновления (тик таймера и разворачивание из трея) столкнуться.</summary>
         private bool selfUpdateCheckRunning;
-
-        /// <summary>
-        /// Не чаще раза в <see cref="SelfUpdateActivationInterval"/> ходим за версией по
-        /// возврату фокуса.
-        /// <para>
-        /// Ограничитель здесь только против штормов: Alt+Tab между окнами даёт десятки
-        /// активаций в минуту, и на каждой уходил бы запрос к серверу. Десяти секунд для
-        /// этого хватает, а вот прежние десять минут запирали и обычный возврат к
-        /// лаунчеру — человек приходил за обновлением и не получал даже проверки.
-        /// </para>
-        /// </summary>
-        private readonly Core.Shell.ActivationThrottle selfUpdateOnActivate =
-            new Core.Shell.ActivationThrottle(SelfUpdateActivationInterval);
 
         /// <summary>
         /// Найденное обновление, которое пока некому показать: окно свёрнуто, спрятано
@@ -145,17 +122,15 @@ namespace ChillHub {
             this.Activated += (s, e) => {
                 this.karaoke.Resume();
 
-                // Проверка версии не только при разворачивании из трея (RestoreFromTray),
-                // но и при обычном возврате фокуса на окно: пользователь мог оставить
-                // лаунчер открытым, но не активным, дольше интервала selfUpdateCheckTimer
-                // — переключение назад не должно ждать следующего тика. selfUpdateCheckRunning
-                // не даёт столкнуться с уже идущей проверкой (тиком или тем же RestoreFromTray).
-                // Ограничитель молчит, когда обновление уже найдено и ждёт показа:
-                // показать известное ничего не стоит, а ждать с ним десять минут — это
-                // ровно то, из-за чего окно не появлялось при возврате к лаунчеру.
-                if (this.selfUpdateGate.ShouldCheckOnActivate(this.selfUpdateOnActivate.Allow())) {
-                    _ = this.RunSelfUpdateCheckAsync();
-                }
+                // ПРОВЕРКА НА КАЖДЫЙ ВОЗВРАТ ФОКУСА, без ограничителя частоты. Человек
+                // пришёл к лаунчеру — самое время узнать, не появилось ли обновление;
+                // любой срок ожидания здесь оборачивается молчанием ровно в тот момент,
+                // когда на окно смотрят.
+                //
+                // Штормов активаций (Alt+Tab между окнами) бояться не нужно:
+                // selfUpdateCheckRunning не даёт запросам идти внахлёст, и пока один в
+                // пути, остальные просто ничего не делают.
+                _ = this.RunSelfUpdateCheckAsync();
 
                 // Режим работ — по той же причине: пока окно лежало без фокуса, работы могли
                 // начаться или кончиться, и человек, вернувшийся к лаунчеру, должен увидеть
@@ -377,8 +352,10 @@ namespace ChillHub {
                 var precheck = await UpdateWindow.PrecheckAsync();
 
                 // Актуальная версия — рассказывать нечего, тикаем дальше молча, как и при
-                // старте (см. SelfUpdatePrecheck.NeedsWindow).
+                // старте (см. SelfUpdatePrecheck.NeedsWindow). Отложенное при этом
+                // забываем: обновления больше нет, показывать его было бы враньём.
                 if (!precheck.NeedsWindow) {
+                    this.selfUpdateGate.Forget();
                     return;
                 }
 

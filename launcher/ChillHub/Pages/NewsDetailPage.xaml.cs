@@ -147,6 +147,19 @@ namespace ChillHub.Pages {
 
                 var page = NewsPageRenderer.RenderPage(md, this.markdownUrl, palette, this.newsTitle);
 
+                // Картинки вкладываются в страницу, а не подгружаются: у NavigateToString
+                // origin about:blank, и подгрузить по нему картинку такой странице не
+                // дают — на экране оставались пустые места. Байты берутся тем же
+                // загрузчиком, что и обложки новостей на главном экране: общий кеш на
+                // диске и содержимое с него, когда сети нет.
+                page = await NewsImages.InlineAsync(
+                    page,
+                    NewsPageRenderer.OriginOf(this.markdownUrl),
+                    Core.Home.ImageLoader.FetchBytesAsync);
+                if (this.browserReleased) {
+                    return; // страница закрыта, пока подтягивались картинки
+                }
+
                 // Ensure runtime background and wire events
                 try {
                     var bgCol = GetMediaColor("Brush.Background");

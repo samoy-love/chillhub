@@ -54,14 +54,5 @@ namespace ChillHub.Core.SelfUpdate {
             this.pending = null;
             return precheck;
         }
-
-        /// <summary>
-        /// Идти ли за версией по возврату фокуса на окно: обычно — как разрешит
-        /// ограничитель частоты, но с найденным обновлением он молчит.
-        /// </summary>
-        /// <param name="throttleAllows">Ограничитель частоты разрешает запрос.</param>
-        /// <returns>true, если проверку нужно запустить.</returns>
-        internal bool ShouldCheckOnActivate(bool throttleAllows)
-            => SelfUpdatePrompt.ShouldCheckOnActivate(this.Waiting, throttleAllows);
     }
 }

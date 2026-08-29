@@ -74,6 +74,7 @@ namespace ChillHub.Pages {
             try {
                 this.TitleText.Text = string.IsNullOrWhiteSpace(this.game.Title) ? this.game.GameId : this.game.Title;
                 Core.UI.CoverImage.SetUrl(this.GameIcon, this.game.IconUrl);
+                this.ShowModpack();
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Error(ex, "GamePage.ctor.Header");
@@ -261,6 +262,57 @@ namespace ChillHub.Pages {
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Error(ex, "GamePage.BackBtn_Click");
+            }
+        }
+
+        /// <summary>
+        /// Показывает установленный модпак со ссылкой на его страницу.
+        /// <para>
+        /// Строки нет вовсе у игры без модов: пустое «Модпак: —» не рассказывает о ней
+        /// ничего. Ссылки нет, когда сервер не прислал слаг сообщества, — имя пакета
+        /// остаётся, а вести в никуда мы не будем.
+        /// </para>
+        /// </summary>
+        private void ShowModpack() {
+            try {
+                // Само правило — в Core.Mods.ModsLink: внутри страницы его никто не
+                // проверит, а ошибка в нём выглядит как ссылка в никуда.
+                var row = Core.Mods.ModsLink.RowFor(this.game.Mods);
+                this.ModpackRow.Visibility = row.Visible ? Visibility.Visible : Visibility.Collapsed;
+                if (!row.Visible) {
+                    return;
+                }
+
+                this.ModpackText.Text = row.Name;
+                this.ModpackText.Tag = row.Url;
+                this.ModpackText.ToolTip = row.Url.Length > 0 ? row.Url : null;
+                this.ModpackText.Cursor = row.Url.Length > 0 ? System.Windows.Input.Cursors.Hand : null;
+                this.ModpackText.MouseLeftButtonUp -= this.ModpackText_MouseLeftButtonUp;
+                if (row.Url.Length > 0) {
+                    this.ModpackText.Foreground = (System.Windows.Media.Brush)this.FindResource("Brush.Accent");
+                    this.ModpackText.MouseLeftButtonUp += this.ModpackText_MouseLeftButtonUp;
+                }
+            }
+            catch (Exception ex) {
+                // Строка о модпаке — справка, а не причина не открыть страницу игры.
+                Core.Logging.Logger.Warn($"GamePage.ShowModpack: {ex.Message}");
+            }
+        }
+
+        /// <summary>Открывает страницу модпака во внешнем браузере.</summary>
+        /// <param name="sender">Строка с именем модпака.</param>
+        /// <param name="e">Аргументы события.</param>
+        private void ModpackText_MouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e) {
+            try {
+                if ((sender as FrameworkElement)?.Tag is string url && url.Length > 0) {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
+                        FileName = url,
+                        UseShellExecute = true,
+                    });
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"GamePage.ModpackText_MouseLeftButtonUp: {ex.Message}");
             }
         }
 

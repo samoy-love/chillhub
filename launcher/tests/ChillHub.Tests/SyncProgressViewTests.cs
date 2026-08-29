@@ -143,9 +143,11 @@ namespace ChillHub.Tests {
             p.TotalBytes = 100L * 1024 * 1024;
 
             p.BytesDownloaded = 10L * 1024 * 1024;
+            p.NetworkBytes = 10L * 1024 * 1024;
             var first = view.Describe(p, 1);
 
             p.BytesDownloaded = 90L * 1024 * 1024;
+            p.NetworkBytes = 90L * 1024 * 1024;
             var second = view.Describe(p, 2);
 
             // Мгновенная скорость выросла с 10 до 45 МБ/с — сглаженная обязана отстать.
@@ -160,11 +162,16 @@ namespace ChillHub.Tests {
             var view = new SyncProgressView();
             var p = Stage("Downloading");
             p.TotalBytes = 100L * 1024 * 1024;
+
+            // Скорость идёт от сетевого счётчика: BytesDownloaded меряет сделанное,
+            // включая взятое с диска, и накручивал бы цифру без единого байта из сети.
             p.BytesDownloaded = 90L * 1024 * 1024;
+            p.NetworkBytes = 90L * 1024 * 1024;
             var fast = view.Describe(p, 1);
 
             view.Reset();
             p.BytesDownloaded = 10L * 1024 * 1024;
+            p.NetworkBytes = 10L * 1024 * 1024;
             var afterReset = view.Describe(p, 1);
 
             Assert.NotEqual(fast.SpeedEta, afterReset.SpeedEta);
@@ -207,5 +214,65 @@ namespace ChillHub.Tests {
         }
 
         private static SyncProgress Stage(string stage) => new SyncProgress { Stage = stage };
+
+        /// <summary>
+        /// СВЕРКА ФАЙЛОВ ПОКАЗЫВАЕТ ПРОГРЕСС, НО НЕ СКОРОСТЬ. Она читает и хеширует всю
+        /// папку игры — минуты работы, — а полоса всё это время бегала туда-сюда, ничего
+        /// не обещая. Скорости же здесь нет и быть не может: по сети в эту фазу ничего
+        /// не идёт.
+        /// </summary>
+        [Fact]
+        public void СверкаПоказываетПрогрессБезСкорости() {
+            var view = new SyncProgressView();
+
+            var shown = view.Describe(
+                new SyncProgress {
+                    Stage = "Checking",
+                    BytesDownloaded = 250,
+                    TotalBytes = 1000,
+                    FilesDownloaded = 3,
+                    TotalFiles = 12,
+                },
+                elapsedSeconds: 10);
+
+            Assert.Equal(25.0, shown.Value);
+            Assert.False(shown.Indeterminate);
+            Assert.Empty(shown.SpeedEta!);
+            Assert.Contains("3/12", shown.FilesSize!);
+        }
+
+        /// <summary>
+        /// Пока объём сверки неизвестен, полоса честно бежит: обещать проценты, которых
+        /// не из чего посчитать, хуже, чем не обещать ничего.
+        /// </summary>
+        [Fact]
+        public void СверкаБезОбъёмаОстаётсяБегущей() {
+            var view = new SyncProgressView();
+
+            var shown = view.Describe(new SyncProgress { Stage = "Checking" }, elapsedSeconds: 1);
+
+            Assert.True(shown.Indeterminate);
+            Assert.Null(shown.Value);
+        }
+
+        /// <summary>
+        /// Скорость скачивания считается по пришедшему из сети, а не по сделанному:
+        /// файлы, взятые из соседней копии на диске, скорость не накручивают.
+        /// </summary>
+        [Fact]
+        public void СкоростьСчитаетсяПоСетиАНеПоСделанному() {
+            var view = new SyncProgressView();
+
+            var shown = view.Describe(
+                new SyncProgress {
+                    Stage = "Downloading",
+                    BytesDownloaded = 100L * 1024 * 1024,
+                    NetworkBytes = 0,
+                    TotalBytes = 200L * 1024 * 1024,
+                },
+                elapsedSeconds: 1);
+
+            Assert.Contains("0,0 МБ/с", shown.SpeedEta!.Replace(".", ","));
+        }
     }
 }

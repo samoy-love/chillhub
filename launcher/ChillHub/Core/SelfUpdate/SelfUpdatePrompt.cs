@@ -35,23 +35,5 @@ namespace ChillHub.Core.SelfUpdate {
         internal static bool CanShowNow(bool windowVisible, bool minimized, bool busy)
             => windowVisible && !minimized && !busy;
 
-        /// <summary>
-        /// Идти ли за версией по возврату фокуса на окно.
-        /// <para>
-        /// Обычно — не чаще, чем разрешит ограничитель: Alt+Tab между окнами даёт
-        /// десятки активаций в минуту, и на каждой уходил бы запрос к серверу.
-        /// </para>
-        /// <para>
-        /// Но если обновление УЖЕ найдено и ждёт подходящего момента, ограничитель
-        /// молчит: показать уже известное ничего не стоит, а ждать с ним десять минут
-        /// — это ровно то, из-за чего окно обновления не появлялось при возврате к
-        /// лаунчеру.
-        /// </para>
-        /// </summary>
-        /// <param name="updateWaiting">Обновление найдено и ждёт показа.</param>
-        /// <param name="throttleAllows">Ограничитель частоты разрешает запрос.</param>
-        /// <returns>true, если проверку нужно запустить.</returns>
-        internal static bool ShouldCheckOnActivate(bool updateWaiting, bool throttleAllows)
-            => updateWaiting || throttleAllows;
     }
 }

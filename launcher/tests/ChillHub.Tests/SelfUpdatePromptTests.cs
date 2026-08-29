@@ -4,10 +4,7 @@
 // </copyright>
 
 namespace ChillHub.Tests {
-    using System;
-
     using ChillHub.Core.SelfUpdate;
-    using ChillHub.Core.Shell;
 
     using Xunit;
 
@@ -18,7 +15,8 @@ namespace ChillHub.Tests {
     /// две, и они складывались. Фоновая проверка ходит по таймеру независимо от того,
     /// видно ли окно; найдя обновление у свёрнутого окна, она молча уходила ни с чем —
     /// результат выбрасывался. А возврат фокуса за новой проверкой не шёл: ограничитель
-    /// частоты пропускает её не чаще раза в десять минут, и обычно молчал.
+    /// частоты пропускал её не чаще раза в десять минут, и обычно молчал. Теперь
+    /// проверка идёт на каждый возврат фокуса, а найденное не теряется.
     /// </para>
     /// </summary>
     public class SelfUpdatePromptTests {
@@ -38,26 +36,6 @@ namespace ChillHub.Tests {
         [InlineData(true, false, true)]   // идёт работа в очереди
         public void НеподходящийМоментДиалогаНеДаёт(bool visible, bool minimized, bool busy) {
             Assert.False(SelfUpdatePrompt.CanShowNow(visible, minimized, busy));
-        }
-
-        /// <summary>
-        /// ГЛАВНОЕ. Обновление уже найдено и ждёт — возврат фокуса обязан его показать,
-        /// сколько бы ни оставалось до следующего разрешения ограничителя. Ровно здесь
-        /// человек и оставался без окна обновления.
-        /// </summary>
-        [Fact]
-        public void НайденноеОбновлениеПоказываетсяМимоОграничителя() {
-            Assert.True(SelfUpdatePrompt.ShouldCheckOnActivate(updateWaiting: true, throttleAllows: false));
-        }
-
-        /// <summary>
-        /// А без найденного обновления ограничитель работает как прежде: Alt+Tab между
-        /// окнами даёт десятки активаций в минуту, и на каждой уходил бы запрос к серверу.
-        /// </summary>
-        [Fact]
-        public void БезНайденногоОбновленияОграничительРаботает() {
-            Assert.False(SelfUpdatePrompt.ShouldCheckOnActivate(updateWaiting: false, throttleAllows: false));
-            Assert.True(SelfUpdatePrompt.ShouldCheckOnActivate(updateWaiting: false, throttleAllows: true));
         }
 
         /// <summary>
@@ -81,23 +59,6 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
-        /// Пока обновление ждёт, возврат фокуса идёт за проверкой мимо ограничителя —
-        /// а как только показали, ограничитель снова в силе.
-        /// </summary>
-        [Fact]
-        public void ОжидающееОбновлениеОткрываетПроверкуМимоОграничителя() {
-            var gate = new SelfUpdateGate();
-
-            Assert.False(gate.ShouldCheckOnActivate(throttleAllows: false));
-
-            gate.Offer(Precheck(), windowVisible: false, minimized: false, busy: false);
-            Assert.True(gate.ShouldCheckOnActivate(throttleAllows: false));
-
-            gate.Offer(Precheck(), windowVisible: true, minimized: false, busy: false);
-            Assert.False(gate.ShouldCheckOnActivate(throttleAllows: false));
-        }
-
-        /// <summary>
         /// Обновления больше нет — уже поставили или откатили на сервере. Отложенное
         /// забывается, иначе диалог всплыл бы с версией, которой уже не существует.
         /// </summary>
@@ -110,7 +71,6 @@ namespace ChillHub.Tests {
             gate.Forget();
 
             Assert.False(gate.Waiting);
-            Assert.False(gate.ShouldCheckOnActivate(throttleAllows: false));
         }
 
         /// <summary>
@@ -136,27 +96,5 @@ namespace ChillHub.Tests {
             },
         };
 
-        /// <summary>
-        /// Сам ограничитель: первый возврат фокуса пропускает всегда, следующий — только
-        /// когда срок вышел. Без этого правила проверка обновления при возврате к окну
-        /// не запускалась бы вовсе.
-        /// </summary>
-        [Fact]
-        public void ОграничительПропускаетПервыйВозвратИДальшеПоСроку() {
-            var now = 0L;
-            var throttle = new ActivationThrottle(TimeSpan.FromSeconds(10), () => now);
-
-            Assert.True(throttle.Allow(), "первый возврат фокуса обязан пропускаться");
-            Assert.False(throttle.Allow());
-
-            // Шторм активаций (Alt+Tab между окнами) сервер не дёргает.
-            now += (long)TimeSpan.FromSeconds(9).TotalMilliseconds;
-            Assert.False(throttle.Allow());
-
-            // А обычный возврат к лаунчеру — уже через десять секунд, а не через
-            // десять минут: человек приходит за обновлением и должен получить проверку.
-            now += (long)TimeSpan.FromSeconds(1).TotalMilliseconds;
-            Assert.True(throttle.Allow());
-        }
     }
 }

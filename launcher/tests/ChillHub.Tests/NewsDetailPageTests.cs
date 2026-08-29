@@ -29,7 +29,18 @@ namespace ChillHub.Tests {
     /// ошибки в исполняемую разметку.
     /// </para>
     /// </summary>
-    public class NewsDetailPageTests {
+    public class NewsDetailPageTests : IDisposable {
+        /// <summary>
+        /// Кеш новостей на время прогона молчит: иначе тесты писали бы в настоящий
+        /// %APPDATA% пользователя, а следующий тест находил бы там ответ вместо
+        /// подставленного ему — ровно так «отказ сервера» и переставал падать
+        /// исключением. Тот же приём, что у кеша картинок.
+        /// </summary>
+        public NewsDetailPageTests() => NewsContentCache.Enabled = false;
+
+        /// <inheritdoc/>
+        public void Dispose() => NewsContentCache.Enabled = true;
+
         /// <summary>
         /// В страницу подставляется база адресов, снятая с адреса самой новости: иначе
         /// «/assets/…» в NavigateToString никуда не ведёт и все картинки пропадают.

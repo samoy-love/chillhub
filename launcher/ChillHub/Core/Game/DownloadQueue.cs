@@ -371,7 +371,7 @@ namespace ChillHub.Core.Game {
                     // только через сюда, отчётами с полем Stage. Раньше здесь текст не менялся
                     // (оставался entry.StatusText как есть), и статус на карточке замирал на
                     // "Сравнение файлов…" на всё время реального скачивания, пока байты росли.
-                    ReportProgress = (p, _) => this.RaiseProgress(entry, entry.Stage(p), p.BytesDownloaded, p.TotalBytes),
+                    ReportProgress = (p, _) => this.RaiseProgress(entry, entry.Stage(p), p.BytesDownloaded, p.TotalBytes, p.NetworkBytes),
                     Confirm = this.confirm,
                 };
 
@@ -457,11 +457,17 @@ namespace ChillHub.Core.Game {
             return string.IsNullOrEmpty(p.Scope) ? text : p.Scope + " · " + text;
         }
 
-        private void RaiseProgress(Entry entry, string status, long bytesDownloaded = -1, long totalBytes = -1) {
+        private void RaiseProgress(
+            Entry entry, string status, long bytesDownloaded = -1, long totalBytes = -1, long networkBytes = -1) {
             entry.StatusText = status;
             if (bytesDownloaded >= 0) {
                 entry.BytesDownloaded = bytesDownloaded;
-                entry.UpdateSpeed(bytesDownloaded);
+            }
+
+            // Скорость — по пришедшему из сети, а не по сделанному: в сделанное идут и
+            // файлы, взятые из соседней копии на диске, а копирование быстрее сети в разы.
+            if (networkBytes >= 0) {
+                entry.UpdateSpeed(networkBytes);
             }
 
             if (totalBytes >= 0) {
