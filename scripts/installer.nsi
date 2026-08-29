@@ -269,11 +269,36 @@ InstallDirRegKey HKCU "${UNINST_KEY}" "InstallLocation"
 !macro _ENSURE_APP_CLOSED_FN UN
 Function ${UN}EnsureAppClosed
   Push $0
+  Push $R5
+
+  ; УДАЛЕНИЕ ЗАКРЫВАЕТ ЛАУНЧЕР САМО (см. un.CloseRunningApp).
+  ;
+  ; Просить об этом человека было нечестно вдвойне. Во-первых, лаунчер умеет
+  ; сворачиваться в трей: «закрытым» он выглядит и будучи запущенным, так что
+  ; диалог «закройте программу» показывался тому, кто её и так закрыл. Во-вторых,
+  ; он приезжал ПОСРЕДИ удаления — человек уже нажал «Удалить» и ушёл.
+  ;
+  ; Попытка ровно одна: если файл занят и после неё, его держит не лаунчер
+  ; (антивирус, индексатор, открытый проводником каталог), и второй заход
+  ; ничего не изменит — тогда остаётся прежний диалог.
+  ;
+  ; Установки это НЕ касается: там за файлами лаунчера может стоять живая
+  ; работа — качается игра, идёт синхронизация, — и обрывать её ради обновления
+  ; поверх мы не вправе. Удаление же тем и отличается, что его исход человек
+  ; уже выбрал.
+  StrCpy $R5 0
 retry:
   IfFileExists "$INSTDIR\${APP_EXE}" 0 done
   ; CreateFileW(путь, GENERIC_WRITE, dwShareMode=0, NULL, OPEN_EXISTING, 0, NULL)
   System::Call 'kernel32::CreateFileW(w "$INSTDIR\${APP_EXE}", i ${_CH_GENERIC_WRITE}, i 0, p 0, i ${_CH_OPEN_EXISTING}, i 0, p 0) p .r0'
   ${If} $0 = -1
+!if "${UN}" == "un."
+    ${If} $R5 == 0
+      StrCpy $R5 1
+      Call un.CloseRunningApp
+      Goto retry
+    ${EndIf}
+!endif
     ; /SD IDCANCEL — тихий режим не имеет права ЖДАТЬ человека у диалога. Без
     ; /SD NSIS показывает окно даже установщику, запущенному с /S: тихая
     ; установка на занятых файлах не падала бы, а висела до конца таймаута.
@@ -284,11 +309,93 @@ retry:
   ${EndIf}
   System::Call 'kernel32::CloseHandle(p r0)'
 done:
+  Pop $R5
   Pop $0
 FunctionEnd
 !macroend
 !insertmacro _ENSURE_APP_CLOSED_FN ""
 !insertmacro _ENSURE_APP_CLOSED_FN "un."
+
+; Закрывает запущенный лаунчер: сначала по-хорошему, затем принудительно.
+;
+; СНАЧАЛА WM_CLOSE, А НЕ СРАЗУ KILL. Лаунчер на закрытии дописывает config.json
+; и счётчик наигранного времени; убить его первым же действием — значит потерять
+; последнюю сессию у того, кто просто решил переставить лаунчер. Но и ждать
+; вечно нельзя: при включённом «сворачивать в трей» WM_CLOSE прячет окно вместо
+; выхода, и такой процесс не завершится никогда. Отсюда таймаут и Kill за ним.
+;
+; УБИВАЕМ ТОЛЬКО СВОЮ КОПИЮ — по полному пути, а не по имени процесса.
+; `taskkill /IM ChillHub.exe` снёс бы и вторую установку лаунчера, которую этот
+; деинсталлятор не трогает: удаление одной копии не повод закрывать другую.
+;
+; ОБА ПУТИ ПРИВОДЯТСЯ К ОДНОМУ ВИДУ, И ЭТО НЕ ПРИДИРКА. $INSTDIR приходит в
+; форме 8.3, когда деинсталлятор зовут скриптом (ключ /D= не умеет путей с
+; пробелом, а пробел в имени профиля — обычное дело), а .NET отдаёт у процесса
+; путь ровно в том виде, в каком его запустили, — то есть длинный. Сравнение
+; строк тогда не совпадает НИКОГДА, и функция молча никого не находит: удаление
+; выглядит сломанным ровно в том сценарии, ради которого писалось.
+;
+; Приводим через ShortPath у FileSystemObject: он отвечает про сам файл на
+; диске, поэтому одинаково сворачивает и длинную форму, и короткую. Обратное
+; преобразование (короткую в длинную) в PowerShell без вызовов WinAPI не
+; делается вовсе — Resolve-Path, GetFullPath и FullName короткую форму
+; сохраняют. Там, где 8.3-имена на томе отключены, ShortPath возвращает длинный
+; путь — обеим сторонам одинаково, то есть сравнение по-прежнему честное.
+;
+; ПУТЬ ПРОЦЕССА БЕРЁТСЯ ИЗ WMI, А НЕ ИЗ Get-Process.Path — ИЗ-ЗА РАЗРЯДНОСТИ.
+; NSIS собирает 32-битный деинсталлятор, тот запускает 32-битный PowerShell (в
+; $SYSDIR его видит как SysWOW64), а из 32-битного процесса свойство .Path у
+; 64-битного — а лаунчер именно такой — читается через MainModule и возвращает
+; ПУСТУЮ строку. Не ошибку, не исключение: пустую строку. С ней ни один процесс
+; не совпадал с целью, функция никого не находила, и удаление при запущенном
+; лаунчере обрывалось ровно так же, как до всей этой работы. Win32_Process
+; отвечает через службу WMI и от разрядности спрашивающего не зависит.
+; Завершать процесс это не мешает: CloseMainWindow и Kill работают и через
+; границу разрядности, им хватает PID.
+Function un.CloseRunningApp
+  Push $0
+  Push $6
+  Push $7
+
+  DetailPrint "Закрываем ${APP_TITLE}…"
+
+  InitPluginsDir
+  FileOpen $0 "$PLUGINSDIR\close-app.ps1" w
+  FileWrite $0 "param([string]$$Exe)$\r$\n"
+  FileWrite $0 "$$fso = $$null$\r$\n"
+  FileWrite $0 "try { $$fso = New-Object -ComObject Scripting.FileSystemObject } catch { }$\r$\n"
+  FileWrite $0 "function Norm($$p) { if (-not $$p) { return '' } if ($$fso) { try { return $$fso.GetFile($$p).ShortPath } catch { } } return $$p }$\r$\n"
+  FileWrite $0 "$$target = Norm $$Exe$\r$\n"
+  FileWrite $0 "$$name = [IO.Path]::GetFileName($$Exe)$\r$\n"
+  FileWrite $0 "$$ids = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $$_.Name -eq $$name -and (Norm $$_.ExecutablePath) -eq $$target } | ForEach-Object { $$_.ProcessId })$\r$\n"
+  FileWrite $0 "$$procs = @($$ids | ForEach-Object { Get-Process -Id $$_ -ErrorAction SilentlyContinue } | Where-Object { $$_ })$\r$\n"
+  FileWrite $0 "foreach ($$p in $$procs) { try { [void]$$p.CloseMainWindow() } catch { } }$\r$\n"
+  FileWrite $0 "foreach ($$p in $$procs) { try { if (-not $$p.WaitForExit(3000)) { $$p.Kill() } } catch { } }$\r$\n"
+  FileWrite $0 "foreach ($$p in $$procs) { try { [void]$$p.WaitForExit(5000) } catch { } }$\r$\n"
+  FileClose $0
+
+  ; PowerShell — по полному пути из $SYSDIR, а не по имени: PATH пользователя
+  ; правится без каких-либо прав, и подсунуть свой powershell.exe процессу,
+  ; который сейчас будет удалять каталоги, — слишком дешёвый способ.
+  StrCpy $6 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+  IfFileExists "$6" +2 0
+    StrCpy $6 "powershell"
+
+  ; Исход НЕ проверяем, и это осознанно: единственный ответ на «не получилось» —
+  ; прежний диалог, а его и так покажет вызывающая сторона, когда файл окажется
+  ; занят и после нас. Отдельное окно про PowerShell человеку ничего не даёт.
+  ClearErrors
+  ExecWait '"$6" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\close-app.ps1" -Exe "$INSTDIR\${APP_EXE}"' $7
+  ClearErrors
+
+  ; Процесс завершился — дескрипторы освобождаются чуть позже. Без этой паузы
+  ; проверка занятости сразу за Kill ловила бы файл ещё занятым.
+  Sleep 500
+
+  Pop $7
+  Pop $6
+  Pop $0
+FunctionEnd
 
 ; ------------------------
 ; Sections
