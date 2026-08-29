@@ -92,6 +92,14 @@ namespace ChillHub.Core.Game {
                 return false;
             }
 
+            // СБОРКИ НА СЕРВЕРЕ НЕТ — КАЧАТЬ НЕЧЕГО. Такая игра живёт только копией из
+            // Steam, а очередь принимала её и шла за манифестом, которого не существует:
+            // позиция появлялась в панели загрузок и через секунду падала с отказом.
+            // Проверка здесь, а не в кнопке: в очередь кладут ещё и из меню списка игр.
+            if (string.IsNullOrWhiteSpace(game.LatestVersion)) {
+                return false;
+            }
+
             Entry entry;
             IReadOnlyList<QueueItem> snapshot;
             lock (this.gate) {

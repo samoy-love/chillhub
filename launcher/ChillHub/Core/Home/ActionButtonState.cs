@@ -41,6 +41,15 @@ namespace ChillHub.Core.Home {
 
         /// <summary>Действие запрещено режимом технических работ на сервере (задача 25).</summary>
         Maintenance,
+
+        /// <summary>
+        /// У игры нет сборки на сервере: она живёт только копией из Steam.
+        /// <para>
+        /// Ставить нечего, и «Установить» здесь — обещание, которое некому выполнить:
+        /// закачка такой игры кончается отказом «сервер не прислал манифест».
+        /// </para>
+        /// </summary>
+        SteamOnly,
     }
 
     /// <summary>
@@ -58,10 +67,23 @@ namespace ChillHub.Core.Home {
         /// <param name="unfinishedUpdate">На диске остался маркер незавершённого обновления.</param>
         /// <param name="isInstalled">Игра установлена.</param>
         /// <param name="needsUpdate">Игра отличается от эталона.</param>
+        /// <param name="hasServerBuild">
+        /// У игры есть сборка на сервере. Ложь — игра живёт только копией из Steam, и
+        /// ставить с сервера нечего.
+        /// </param>
         /// <returns>Задуманный режим кнопки.</returns>
-        internal static ActionMode Decide(bool hasUpdateError, bool unfinishedUpdate, bool isInstalled, bool needsUpdate) {
+        internal static ActionMode Decide(
+            bool hasUpdateError, bool unfinishedUpdate, bool isInstalled, bool needsUpdate, bool hasServerBuild = true) {
             if (hasUpdateError) {
                 return ActionMode.Retry;
+            }
+
+            // СБОРКИ НЕТ — ЗНАЧИТ, НЕТ И «УСТАНОВИТЬ». Такая игра есть только в Steam, а
+            // кнопка предлагала её скачать: очередь принимала позицию, синхронизация шла
+            // за манифестом, которого не существует, и всё кончалось отказом. Уже
+            // установленную (осталась от прежних сборок) по-прежнему можно запустить.
+            if (!hasServerBuild && !isInstalled) {
+                return ActionMode.SteamOnly;
             }
 
             if (unfinishedUpdate) {
@@ -86,6 +108,7 @@ namespace ChillHub.Core.Home {
         /// <returns>True, если действие запрещено.</returns>
         internal static bool IsBlockedByMaintenance(ActionMode mode, MaintenanceState state) {
             return mode switch {
+                ActionMode.SteamOnly => false,
                 ActionMode.Install => state.BlocksInstall,
                 ActionMode.Update or ActionMode.Retry => state.BlocksUpdate,
                 ActionMode.Play => state.BlocksPlay,
@@ -107,6 +130,11 @@ namespace ChillHub.Core.Home {
             // Причина и сроки — в баннере шапки, на кнопке только суть запрета
             ActionMode.Maintenance => new ActionButtonAppearance("Технические работы", false, "Style.ActionButton.Checking"),
             ActionMode.Install => new ActionButtonAppearance("Установить", true, "Style.ActionButton.Install"),
+
+            // Кнопка остаётся видимой, но выключенной, и говорит, чего не хватает.
+            // Пропади она вовсе — витрина игры, в которую сейчас не сыграть, выглядела бы
+            // сломанной, а не объяснённой.
+            ActionMode.SteamOnly => new ActionButtonAppearance("Нужна копия в Steam", false, "Style.ActionButton.Checking"),
             _ => new ActionButtonAppearance("Обновить", true, "Style.ActionButton.Update"),
         };
     }

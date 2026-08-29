@@ -1496,6 +1496,19 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Есть ли у игры сборка на сервере.
+        /// <para>
+        /// Пустая версия — это игра, которая живёт только копией из Steam: сервер про неё
+        /// знает всё, кроме файлов. Ровно так же считает <see cref="Core.Mods.LaunchPlan"/>,
+        /// когда решает, предлагать ли «Пиратку».
+        /// </para>
+        /// </summary>
+        /// <param name="game">Игра из каталога.</param>
+        /// <returns>true, если сборку можно скачать.</returns>
+        private static bool HasServerBuild(GameInfo? game)
+            => !string.IsNullOrWhiteSpace(game?.LatestVersion);
+
         /// <summary>Выбранная игра прямо сейчас стоит в очереди — ждёт или качается.</summary>
         private bool IsQueued(string? gid)
             => !string.IsNullOrWhiteSpace(gid)
@@ -1558,7 +1571,8 @@ namespace ChillHub.Pages {
                 // ждать ради них закачки сборки с сервера незачем. Не предлагаем её
                 // только там, где игре сейчас не до запуска: идёт закачка, удаление,
                 // проверка или технические работы.
-                var steamAllowed = mode is ActionMode.Install or ActionMode.Update or ActionMode.Retry;
+                var steamAllowed = mode is ActionMode.Install or ActionMode.Update
+                    or ActionMode.Retry or ActionMode.SteamOnly;
                 var options = (playMode || steamAllowed) && game?.Mods != null
                     ? this.CachedLaunchOptions(game)
                     : null;
@@ -1922,7 +1936,8 @@ namespace ChillHub.Pages {
                 // Сначала решаем, что вообще предложить пользователю, и только потом сверяемся
                 // с режимом технических работ: так запрет не «съедает» логику состояний.
                 var unfinished = HasUnfinishedUpdate(g?.GameId);
-                var intended = ActionButtonState.Decide(this.hasUpdateError, unfinished, isInstalled, needsUpdate);
+                var intended = ActionButtonState.Decide(
+                    this.hasUpdateError, unfinished, isInstalled, needsUpdate, HasServerBuild(g));
 
                 // Причину и срок не дублируем в строку статуса: они уже висят баннером в
                 // шапке, а строка статуса раскрывала нижнюю панель с тем же текстом и
@@ -2385,6 +2400,11 @@ namespace ChillHub.Pages {
                         Header = option.MenuText,
                         IsEnabled = option.Available,
                         Tag = option,
+
+                        // Строка меню говорит «Steam не установлен», подсказка — что с
+                        // этим делать. Раньше длинные объяснения были написаны, но не
+                        // показывались нигде: игрок видел только короткую пометку.
+                        ToolTip = string.IsNullOrEmpty(option.Hint) ? null : option.Hint,
 
                         // Галочка у текущего выбора: меню из четырёх строк без неё не
                         // отвечает на вопрос «а что запускается сейчас».

@@ -222,5 +222,55 @@ namespace ChillHub.Tests {
             Assert.False(verified.IsKnown("a"));
             Assert.False(verified.IsKnown("b"));
         }
+
+        /// <summary>
+        /// У ИГРЫ БЕЗ СБОРКИ НА СЕРВЕРЕ НЕТ «УСТАНОВИТЬ». Она живёт только копией из
+        /// Steam: очередь принимала такую позицию, синхронизация шла за манифестом,
+        /// которого не существует, и всё кончалось отказом на глазах у игрока.
+        /// </summary>
+        [Fact]
+        public void БезСборкиНаСервереУстановкаНеПредлагается() {
+            Assert.Equal(
+                ActionMode.SteamOnly,
+                ActionButtonState.Decide(
+                    hasUpdateError: false, unfinishedUpdate: false,
+                    isInstalled: false, needsUpdate: false, hasServerBuild: false));
+        }
+
+        /// <summary>
+        /// Уже установленную такую игру по-прежнему можно запустить: файлы на диске
+        /// остались от прежних сборок, и отнимать у них «Играть» не за что.
+        /// </summary>
+        [Fact]
+        public void УстановленнаяИграБезСборкиЗапускается() {
+            Assert.Equal(
+                ActionMode.Play,
+                ActionButtonState.Decide(
+                    hasUpdateError: false, unfinishedUpdate: false,
+                    isInstalled: true, needsUpdate: false, hasServerBuild: false));
+        }
+
+        /// <summary>
+        /// Технические работы к такой игре не относятся: они запрещают установку и
+        /// обновление, а тут ни того, ни другого не предлагают.
+        /// </summary>
+        [Fact]
+        public void РежимРаботНеТрогаетИгруБезСборки() {
+            var state = new MaintenanceState {
+                Enabled = true,
+                Blocks = new MaintenanceBlocks { Install = true, Update = true, Launch = true },
+            };
+
+            Assert.False(ActionButtonState.IsBlockedByMaintenance(ActionMode.SteamOnly, state));
+        }
+
+        /// <summary>Кнопка выключена и называет, чего не хватает.</summary>
+        [Fact]
+        public void КнопкаБезСборкиВыключенаИОбъясняет() {
+            var look = ActionButtonState.Appearance(ActionMode.SteamOnly);
+
+            Assert.False(look.IsEnabled);
+            Assert.Contains("Steam", look.Content, System.StringComparison.Ordinal);
+        }
     }
 }

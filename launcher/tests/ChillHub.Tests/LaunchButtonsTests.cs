@@ -283,6 +283,67 @@ namespace ChillHub.Tests {
             Assert.NotEmpty(LaunchButtons.Chosen(null, LaunchTarget.SteamModded).Message);
         }
 
+        /// <summary>
+        /// ИГРА ТОЛЬКО ИЗ STEAM, И STEAM НА МЕСТЕ: витрину держит кнопка запуска, а
+        /// выключенная «Нужна копия в Steam» рядом объясняла бы то, что уже решено
+        /// соседом.
+        /// </summary>
+        [Fact]
+        public void УИгрыБезСборкиВитринуДержитКнопкаЗапуска() {
+            var options = new List<LaunchOption> {
+                Option(LaunchTarget.SteamModded, LaunchAction.InstallMods, "установить моды"),
+                Option(LaunchTarget.SteamVanilla, LaunchAction.Play),
+            };
+
+            var view = LaunchButtons.Compute(Pack(), playMode: false, steamAllowed: true, options, null);
+
+            Assert.Equal(LaunchTarget.SteamModded, Assert.Single(view.Buttons).Target);
+            Assert.False(view.ActionVisible);
+        }
+
+        /// <summary>
+        /// НИ STEAM, НИ СБОРКИ — ВИТРИНА ОБЯЗАНА ОБЪЯСНИТЬСЯ. Кнопок запуска нет, и
+        /// кнопка действия остаётся единственным местом, где сказано, чего не хватает:
+        /// пустой ряд читался бы как сломанный экран.
+        /// </summary>
+        [Fact]
+        public void БезSteamИБезСборкиОстаётсяКнопкаДействия() {
+            var options = new List<LaunchOption> {
+                Option(LaunchTarget.SteamModded, LaunchAction.Unavailable, "Steam не установлен"),
+                Option(LaunchTarget.SteamVanilla, LaunchAction.Unavailable, "Steam не установлен"),
+            };
+
+            var view = LaunchButtons.Compute(Pack(), playMode: false, steamAllowed: true, options, null);
+
+            Assert.Empty(view.Buttons);
+            Assert.True(view.ActionVisible);
+
+            // Причина не пропадает: она ждёт под стрелкой, а не только в журнале.
+            Assert.True(view.MenuVisible);
+            Assert.Contains(
+                LaunchButtons.MenuOptions(options, view.Buttons),
+                o => o.Note == "Steam не установлен");
+        }
+
+        /// <summary>
+        /// Сборка на сервере есть — «Установить» остаётся на месте: у неё своё дело, и
+        /// кнопка запуска Steam-копии его не заменяет.
+        /// </summary>
+        [Fact]
+        public void СоСборкойНаСервереКнопкаДействияОстаётся() {
+            var options = new List<LaunchOption> {
+                Option(LaunchTarget.SteamModded, LaunchAction.Play),
+                Option(LaunchTarget.SteamVanilla, LaunchAction.Play),
+                Option(LaunchTarget.LocalModded, LaunchAction.InstallGame, "установить игру с модами"),
+                Option(LaunchTarget.LocalVanilla, LaunchAction.InstallGame, "установить игру"),
+            };
+
+            var view = LaunchButtons.Compute(Pack(), playMode: false, steamAllowed: true, options, null);
+
+            Assert.Single(view.Buttons);
+            Assert.True(view.ActionVisible);
+        }
+
         private static List<LaunchOption> All() => new() {
             Option(LaunchTarget.SteamModded, LaunchAction.Play),
             Option(LaunchTarget.SteamVanilla, LaunchAction.Play),

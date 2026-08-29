@@ -45,6 +45,23 @@ namespace ChillHub.Tests {
             Assert.False(queue.Enqueue("a"));
         }
 
+        /// <summary>
+        /// ИГРА БЕЗ СБОРКИ НА СЕРВЕРЕ В ОЧЕРЕДЬ НЕ ПОПАДАЕТ. Она живёт только копией из
+        /// Steam: очередь принимала позицию, синхронизация шла за манифестом, которого
+        /// не существует, и через секунду карточка падала с отказом — на глазах у
+        /// игрока и без единого объяснения, что качать было нечего.
+        /// </summary>
+        [Fact]
+        public void EnqueueНеСтавитИгруБезСборкиНаСервере() {
+            var sync = new FakeSync();
+            var game = Game("steam-only");
+            game.LatestVersion = string.Empty;
+            using var queue = NewQueue(sync, new Dictionary<string, GameInfo> { ["steam-only"] = game });
+
+            Assert.False(queue.Enqueue("steam-only"));
+            Assert.Empty(queue.Snapshot());
+        }
+
         /// <summary>Неизвестная игра (пропала из списка) в очередь не попадает.</summary>
         [Fact]
         public void EnqueueНеСтавитНеизвестнуюИгру() {
