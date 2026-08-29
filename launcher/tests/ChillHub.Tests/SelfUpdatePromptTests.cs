@@ -68,12 +68,18 @@ namespace ChillHub.Tests {
         [Fact]
         public void ОграничительПропускаетПервыйВозвратИДальшеПоСроку() {
             var now = 0L;
-            var throttle = new ActivationThrottle(TimeSpan.FromMinutes(10), () => now);
+            var throttle = new ActivationThrottle(TimeSpan.FromSeconds(10), () => now);
 
             Assert.True(throttle.Allow(), "первый возврат фокуса обязан пропускаться");
             Assert.False(throttle.Allow());
 
-            now += (long)TimeSpan.FromMinutes(10).TotalMilliseconds;
+            // Шторм активаций (Alt+Tab между окнами) сервер не дёргает.
+            now += (long)TimeSpan.FromSeconds(9).TotalMilliseconds;
+            Assert.False(throttle.Allow());
+
+            // А обычный возврат к лаунчеру — уже через десять секунд, а не через
+            // десять минут: человек приходит за обновлением и должен получить проверку.
+            now += (long)TimeSpan.FromSeconds(1).TotalMilliseconds;
             Assert.True(throttle.Allow());
         }
     }

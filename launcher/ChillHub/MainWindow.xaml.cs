@@ -33,16 +33,31 @@ namespace ChillHub {
         /// <summary>Как часто дёргать сервер за номером версии, пока лаунчер открыт.</summary>
         private static readonly TimeSpan SelfUpdateCheckInterval = TimeSpan.FromMinutes(10);
 
+        /// <summary>
+        /// Как часто возврат фокуса на окно может стоить запроса к серверу.
+        /// <para>
+        /// Отдельно от <see cref="SelfUpdateCheckInterval"/>: у таймера задача другая —
+        /// не жечь сеть, пока лаунчер часами стоит в трее. Возврат к окну, наоборот,
+        /// заслуживает свежего ответа, и придерживать его десятью минутами незачем.
+        /// </para>
+        /// </summary>
+        private static readonly TimeSpan SelfUpdateActivationInterval = TimeSpan.FromSeconds(10);
+
         /// <summary>Не даёт двум проверкам обновления (тик таймера и разворачивание из трея) столкнуться.</summary>
         private bool selfUpdateCheckRunning;
 
         /// <summary>
-        /// Не чаще раза в <see cref="SelfUpdateCheckInterval"/> ходим за версией по возврату
-        /// фокуса. Alt+Tab между окнами даёт десятки активаций в минуту, и на каждой уходил
-        /// запрос к серверу — при том что таймер и так спрашивает раз в десять минут.
+        /// Не чаще раза в <see cref="SelfUpdateActivationInterval"/> ходим за версией по
+        /// возврату фокуса.
+        /// <para>
+        /// Ограничитель здесь только против штормов: Alt+Tab между окнами даёт десятки
+        /// активаций в минуту, и на каждой уходил бы запрос к серверу. Десяти секунд для
+        /// этого хватает, а вот прежние десять минут запирали и обычный возврат к
+        /// лаунчеру — человек приходил за обновлением и не получал даже проверки.
+        /// </para>
         /// </summary>
         private readonly Core.Shell.ActivationThrottle selfUpdateOnActivate =
-            new Core.Shell.ActivationThrottle(SelfUpdateCheckInterval);
+            new Core.Shell.ActivationThrottle(SelfUpdateActivationInterval);
 
         /// <summary>
         /// Найденное обновление, которое пока некому показать: окно свёрнуто, спрятано
