@@ -7,6 +7,11 @@ version: 2
 # open-pull-requests-limit держит очередь короткой намеренно. Двадцать
 # открытых PR от бота — это не двадцать обновлений, а ноль.
 #
+# Минор и патч собираются в ОДИН PR на экосистему: каждый мерж в main катит
+# прод и кладёт сообщение в чат, поэтому пять раздельных PR про сдвиг патч-
+# версий — это пять выкаток и пять сообщений об одном и том же. Мажорные
+# остаются по одному: их читают и ломают они по-разному.
+#
 # Сообщения на русском в повелительном наклонении, как везде в этих
 # репозиториях (CLAUDE.md). Префикс deps: отделяет машинные правки от
 # человеческих.
@@ -18,6 +23,9 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: ['minor', 'patch']
     commit-message:
       prefix: 'deps'
 
@@ -27,6 +35,9 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: ['minor', 'patch']
     commit-message:
       prefix: 'deps'
     ignore:
@@ -56,6 +67,9 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: ['minor', 'patch']
     commit-message:
       prefix: 'deps'
 
@@ -65,6 +79,9 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: ['minor', 'patch']
     commit-message:
       prefix: 'deps'
 
@@ -74,5 +91,8 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: ['minor', 'patch']
     commit-message:
       prefix: 'deps'
