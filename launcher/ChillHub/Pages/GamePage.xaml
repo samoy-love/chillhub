@@ -1,6 +1,7 @@
 <Page x:Class="ChillHub.Pages.GamePage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="clr-namespace:ChillHub.Core.UI"
       Title="Игра"
       Background="{DynamicResource Brush.Background}">
   <Page.Resources>
@@ -136,8 +137,7 @@
           <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE7C3;" FontSize="26"
                      Foreground="{DynamicResource Brush.TextSecondary}"
                      HorizontalAlignment="Center" VerticalAlignment="Center"/>
-          <Image Name="GameIcon" Stretch="UniformToFill"
-                 Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
+          <Image Name="GameIcon" Stretch="UniformToFill" ImageFailed="CoverImg_ImageFailed"/>
         </Grid>
       </Border>
       <StackPanel Grid.Column="2" Margin="16,0,0,0" VerticalAlignment="Center">
