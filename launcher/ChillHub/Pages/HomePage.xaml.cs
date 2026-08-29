@@ -2128,14 +2128,13 @@ namespace ChillHub.Pages {
         /// <param name="e">Аргументы события.</param>
         private void VerifyGame_Click(object sender, RoutedEventArgs e) {
             try {
-                var game = (sender as FrameworkElement)?.GetValue(MenuItem.CommandParameterProperty) as GameInfo
-                           ?? (sender as FrameworkElement)?.DataContext as GameInfo;
-                if (game == null) {
+                if (Core.UI.GameMenuItems.GameOf(sender) is not GameInfo game) {
                     return;
                 }
 
-                if (!this.downloadQueue.Enqueue(game.GameId, Core.Game.QueueTaskKind.Verify)) {
-                    this.StatusText.Text = $"«{game.Title}» уже проверяется или ещё не установлена.";
+                var kind = Core.Game.QueueTaskKind.Verify;
+                if (!this.downloadQueue.Enqueue(game.GameId, kind)) {
+                    this.StatusText.Text = Core.Game.QueueRefusal.For(kind, game.Title);
                 }
             }
             catch (Exception ex) {
@@ -2761,32 +2760,9 @@ namespace ChillHub.Pages {
                 var localRoot = GameLocalRoot(gid);
                 var hasFiles = Directory.Exists(localRoot) && HasAnyLocalGameFiles(localRoot);
 
-                // Установленной и свежей игре качать нечего — ей предлагаем проверку.
-                // Пункт, который ничего не сделает, хуже отсутствующего: «Добавить в
-                // очередь» у такой игры молча отвечал отказом.
-                var settled = gi is { IsInstalled: true, NeedsUpdate: false };
-                if (fe?.ContextMenu != null) {
-                    foreach (var raw in fe.ContextMenu.Items) {
-                        if (raw is MenuItem named) {
-                            if (named.Name == "EnqueueMenuItem") {
-                                named.Visibility = settled ? Visibility.Collapsed : Visibility.Visible;
-                            }
-                            else if (named.Name == "VerifyMenuItem") {
-                                named.Visibility = settled ? Visibility.Visible : Visibility.Collapsed;
-                            }
-                        }
-                    }
-                }
-
-                if (fe?.ContextMenu != null) {
-                    foreach (var raw in fe.ContextMenu.Items) {
-                        // Первый пункт («Подробнее об игре») оставляем активным всегда
-                        if (raw is MenuItem mi
-                            && !ReferenceEquals(mi, fe.ContextMenu.Items.Count > 0 ? fe.ContextMenu.Items[0] : null)) {
-                            mi.IsEnabled = hasFiles;
-                        }
-                    }
-                }
+                // Правило и проход — в Core.UI.GameMenuItems: внутри WPF-меню их никто не
+                // проверит, а ошибка в них выглядит как пункт, который не работает.
+                Core.UI.GameMenuItems.Apply(fe?.ContextMenu?.Items, gi, hasFiles);
             }
             catch (Exception ex) {
                 // Не смогли подготовить меню — лучше его не показывать вовсе

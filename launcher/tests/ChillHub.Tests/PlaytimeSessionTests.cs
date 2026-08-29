@@ -195,6 +195,24 @@ namespace ChillHub.Tests {
             Assert.InRange(PlaytimeStore.Get("repo").TotalSeconds, 4100, 4300);
         }
 
+        /// <summary>
+        /// В сумму по игре не попадает время соседней: файл общий на все игры, и
+        /// перепутанные записи приписали бы одной игре часы другой.
+        /// </summary>
+        [Fact]
+        public void ВремяСоседнейИгрыВСуммуНеПопадает() {
+            File.WriteAllText(
+                Path.Combine(this.dir, "playtime.json"),
+                "{\"peak#SteamModded\":{\"TotalSeconds\":7200}," +
+                "\"repo#SteamModded\":{\"TotalSeconds\":600}}");
+
+            Assert.Equal(600, PlaytimeStore.Get("repo").TotalSeconds);
+            Assert.Equal(7200, PlaytimeStore.Get("peak").TotalSeconds);
+
+            // И про игру, которой в файле нет, — ноль, а не чужие часы.
+            Assert.Equal(0, PlaytimeStore.Get("lethal-company").TotalSeconds);
+        }
+
         /// <summary>Сессия закрывается — время игры прибавляется к сумме.</summary>
         [Fact]
         public void ЗакрытаяСессияПрибавляетВремя() {

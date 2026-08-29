@@ -214,6 +214,47 @@ namespace ChillHub.Tests {
             }
         }
 
+        /// <summary>
+        /// Запуск соседней игры не делает эту запущенной — ни в целом, ни по версии.
+        /// Ветка «ничего не нашли» отвечает за то, что витрина чужой игры остаётся
+        /// живой.
+        /// </summary>
+        [Fact]
+        public void ЗапускСоседнейИгрыЭтойНеКасается() {
+            RunningGames.BeginStarting("peak", LaunchTarget.SteamModded);
+            RunningGames.MarkRunning("peak", LaunchTarget.LocalModded, 4242);
+
+            Assert.Equal(GameRunState.None, RunningGames.StateOf("repo"));
+            Assert.Equal(GameRunState.None, RunningGames.StateOf("repo", LaunchTarget.SteamModded));
+        }
+
+        /// <summary>Игра без имени не значится запущенной ни в какой версии.</summary>
+        [Fact]
+        public void БезымяннойИгреВерсийНет() {
+            RunningGames.MarkRunning("repo", LaunchTarget.SteamModded, 4242);
+
+            Assert.Equal(GameRunState.None, RunningGames.StateOf(null, LaunchTarget.SteamModded));
+            Assert.Equal(GameRunState.None, RunningGames.StateOf("   ", LaunchTarget.SteamModded));
+        }
+
+        /// <summary>
+        /// Ключ хранения: игра и версия через решётку — он уезжает в JSON и читается
+        /// там глазами. Записи без версии (от прежних сборок) относятся к своей игре.
+        /// </summary>
+        [Fact]
+        public void КлючВерсииУзнаётСвоюИгру() {
+            Assert.Equal("repo#SteamModded", GameVariant.KeyOf("repo", LaunchTarget.SteamModded));
+            Assert.Equal("repo#SteamModded", new GameVariant("repo", LaunchTarget.SteamModded).ToString());
+
+            Assert.True(GameVariant.BelongsTo("repo#SteamModded", "repo"));
+            Assert.True(GameVariant.BelongsTo("repo", "repo"), "запись прежних сборок — тоже про эту игру");
+            Assert.False(GameVariant.BelongsTo("peak#SteamModded", "repo"));
+
+            // Пустого ключа или пустой игры не бывает — но и падать на них незачем.
+            Assert.False(GameVariant.BelongsTo(null, "repo"));
+            Assert.False(GameVariant.BelongsTo("repo#SteamModded", null));
+        }
+
         /// <summary>О каждой перемене подписчик узнаёт событием, а не опросом.</summary>
         [Fact]
         public void ПеременаПриходитСобытием() {

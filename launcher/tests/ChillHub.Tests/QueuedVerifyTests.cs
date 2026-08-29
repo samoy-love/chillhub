@@ -128,6 +128,53 @@ namespace ChillHub.Tests {
             Assert.True(queue.Enqueue("a", QueueTaskKind.Verify));
         }
 
+        /// <summary>
+        /// Строка очереди во время работы называет стадию по своей работе, а не по
+        /// чужой: отчёты синхронизации доезжают до позиции через её вид.
+        /// </summary>
+        [Fact]
+        public async Task СтрокаПроверкиПоказываетСвоюСтадию() {
+            var games = Games(Game("a", installed: true, needsUpdate: false));
+            var sync = new ReportingSync();
+            using var queue = NewQueue(sync, games);
+
+            var seen = new List<string>();
+            queue.ItemProgress += item => {
+                lock (seen) {
+                    seen.Add(item.StatusText);
+                }
+            };
+
+            Assert.True(queue.Enqueue("a", QueueTaskKind.Verify));
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.Elapsed < TimeSpan.FromSeconds(20)) {
+                lock (seen) {
+                    if (seen.Contains("Восстановление файлов…")) {
+                        return;
+                    }
+                }
+
+                await Task.Delay(20);
+            }
+
+            lock (seen) {
+                Assert.Fail("строка проверки так и не назвала свою стадию: " + string.Join(" | ", seen));
+            }
+        }
+
+        /// <summary>
+        /// Кнопка страницы «Об игре» ставит проверку установленной игре и закачку —
+        /// остальным. Нажимают её из двух мест, и разойтись им негде.
+        /// </summary>
+        [Fact]
+        public void КнопкаСтраницыВыбираетРаботуПоСостоянию() {
+            Assert.Equal(QueueTaskKind.Verify, GameStateWork.QueueKindFor(GameState.Installed));
+            Assert.Equal(QueueTaskKind.Download, GameStateWork.QueueKindFor(GameState.NotInstalled));
+            Assert.Equal(QueueTaskKind.Download, GameStateWork.QueueKindFor(GameState.UpdateAvailable));
+            Assert.Equal(QueueTaskKind.Download, GameStateWork.QueueKindFor(GameState.Unfinished));
+        }
+
         private static GameInfo Game(string id, bool installed = false, bool needsUpdate = false) => new GameInfo {
             GameId = id,
             Title = id,
@@ -145,6 +192,24 @@ namespace ChillHub.Tests {
                 gid => games.TryGetValue(gid, out var g) ? g : null,
                 () => "https://example.test",
                 () => sync);
+
+        /// <summary>Синхронизация, которая отчитывается о ходе работы — как настоящая.</summary>
+        private sealed class ReportingSync : ISyncService {
+            public Task<Manifest> GetManifestAsync(string manifestUrl, CancellationToken ct)
+                => Task.FromResult(new Manifest());
+
+            public Task<DiffPlan> PlanAsync(Manifest manifest, string localRoot, string contentBaseUrl, CancellationToken ct)
+                => Task.FromResult(new DiffPlan());
+
+            public Task<DiffPlan> PlanAsync(
+                Manifest manifest, string localRoot, string contentBaseUrl, PlanOptions options, CancellationToken ct)
+                => Task.FromResult(new DiffPlan());
+
+            public Task ExecuteAsync(DiffPlan plan, IProgress<SyncProgress> progress, CancellationToken ct) {
+                progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = 1, TotalBytes = 2 });
+                return Task.CompletedTask;
+            }
+        }
 
         /// <summary>Синхронизация, которая ничего не делает: очередь проверяется без диска и сети.</summary>
         private sealed class FakeSyncStub : ISyncService {

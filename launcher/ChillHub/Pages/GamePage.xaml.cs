@@ -305,9 +305,7 @@ namespace ChillHub.Pages {
             // читает и хеширует всю папку игры — десятки гигабайт: уход со страницы
             // обрывал её на середине, а в очереди её не было видно вовсе.
             if (this.downloadQueue != null) {
-                this.StartQueuedSync(this.currentState == GameState.Installed
-                    ? Core.Game.QueueTaskKind.Verify
-                    : Core.Game.QueueTaskKind.Download);
+                this.StartQueuedSync(Core.Game.GameStateWork.QueueKindFor(this.currentState));
                 return;
             }
 
