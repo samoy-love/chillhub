@@ -58,10 +58,10 @@ namespace ChillHub.Tests {
         /// </summary>
         /// <param name="done">Условие.</param>
         /// <returns>Задача ожидания.</returns>
-        private static async Task WaitUntilAsync(Func<bool> done) {
+        private static async Task WaitUntilAsync(Func<bool> done, string what = "записи о начатой сессии") {
             var sw = Stopwatch.StartNew();
             while (!done()) {
-                Assert.True(sw.Elapsed < WaitLimit, "не дождались записи о начатой сессии");
+                Assert.True(sw.Elapsed < WaitLimit, "не дождались " + what);
                 await Task.Delay(20);
             }
         }
@@ -334,17 +334,21 @@ namespace ChillHub.Tests {
             try {
                 GameSession.Begin("repo", this.dir, Path.Combine(this.dir, "REPO.exe"), null, viaSteam: true, moddedDir: null, target: LaunchTarget.LocalModded);
 
-                // Ждём, пока фоновая задача точно отработает: файла сессий не появится.
-                await Task.Delay(200);
+                // Ждём ПРИЗНАК завершения фоновой задачи, а не «достаточную» паузу:
+                // «Запускается…» снимается в её finally. Сон на глазок делал прогон
+                // мигающим — на медленном раннере двухсот миллисекунд не хватало.
+                await WaitUntilAsync(
+                    () => RunningGames.StateOf("repo") == GameRunState.None,
+                    "снятия «Запускается…» после неудачного поиска процесса");
             }
             finally {
                 GameProcessFinder.ResetForTests();
             }
 
+            // Сессии не завелось: пустая запись хуже отсутствующей — её потом закроют
+            // «задним числом» и припишут игре время, которого не было.
+            Assert.False(File.Exists(Path.Combine(this.dir, "playtime.sessions.json")));
             Assert.Equal(0, PlaytimeStore.Get("repo").TotalSeconds);
-
-            // И «Запускается…» снято: оставленное, оно заперло бы кнопки навсегда.
-            Assert.Equal(GameRunState.None, RunningGames.StateOf("repo"));
         }
 
         /// <summary>Без игры отсчёт не заводится: имя пустое — записывать нечего.</summary>
