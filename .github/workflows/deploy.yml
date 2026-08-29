@@ -446,7 +446,14 @@ jobs:
     with:
       config: .deploy-kit/api.env
       workdir: server
-      gates: go vet ./... && go test ./... -race -coverprofile=coverage.out -covermode=atomic
+      # Полный `go test ./... -race` сюда не входит: тот же прогон с покрытием
+      # уже прошёл на этом дереве в ci.yml — pull_request считает проверки на
+      # результате слияния с main, а не на голой ветке (см. комментарий у его
+      # триггера), — и повторяется в coverage.yml после мержа. Гонять его
+      # третий раз в момент выкатки — не дополнительная надёжность, а то же
+      # ожидание ещё раз. Здесь остаётся дешёвая проверка, что дерево вообще
+      # собирается: go build — секунды, не минуты.
+      gates: go vet ./... && go build ./...
       dry-run: ${{ inputs.dry-run == true }}
     secrets: inherit
 
@@ -462,7 +469,14 @@ jobs:
     with:
       config: .deploy-kit/admin.env
       workdir: server
-      gates: go vet ./... && go test ./... -race -coverprofile=coverage.out -covermode=atomic
+      # Полный `go test ./... -race` сюда не входит: тот же прогон с покрытием
+      # уже прошёл на этом дереве в ci.yml — pull_request считает проверки на
+      # результате слияния с main, а не на голой ветке (см. комментарий у его
+      # триггера), — и повторяется в coverage.yml после мержа. Гонять его
+      # третий раз в момент выкатки — не дополнительная надёжность, а то же
+      # ожидание ещё раз. Здесь остаётся дешёвая проверка, что дерево вообще
+      # собирается: go build — секунды, не минуты.
+      gates: go vet ./... && go build ./...
       dry-run: ${{ inputs.dry-run == true }}
     secrets: inherit
 
