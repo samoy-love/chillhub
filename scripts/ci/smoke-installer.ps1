@@ -370,6 +370,44 @@ try {
     Test-Assert -What "папка с играми удалена по галочке" -Condition (-not (Test-Path -LiteralPath $gamesDir)) -Detail $gamesDir
     Test-Assert -What "%APPDATA%\ChillHub удалён и во второй раз" -Condition (-not (Test-Path -LiteralPath $appDataDir)) -Detail $appDataDir
     Test-Assert -What "каталог прежней установки в %LOCALAPPDATA% удалён" -Condition (-not (Test-Path -LiteralPath $localAppDataDir)) -Detail $localAppDataDir
+
+    # ------------------------------------- удаление ПРИ ЗАПУЩЕННОМ ЛАУНЧЕРЕ
+    #
+    # Деинсталлятор обязан закрыть лаунчер сам. Раньше он показывал диалог
+    # «закройте программу», а в тихом режиме просто отказывался работать — и то
+    # и другое доставалось человеку, который уже нажал «Удалить» и ушёл.
+    #
+    # ЛАУНЧЕР ЗДЕСЬ НЕ ЗАПУСКАЕТСЯ: это WPF-приложение, а раннер CI — машина без
+    # графической сессии. Вместо него на месте ChillHub.exe оказывается копия
+    # cmd.exe: для проверки важно ровно то, что процесс с таким ИМЕНЕМ и таким
+    # ПУТЁМ держит файл, — а держит его настоящий процесс, а не заглушка в коде.
+    # Заодно это проверяет ветку принудительного завершения: у копии cmd.exe нет
+    # окна, WM_CLOSE ей не поможет, и уйти она может только по таймауту.
+    Write-Host "[smoke] удаление при запущенном лаунчере" -ForegroundColor Cyan
+    $code4 = Invoke-SilentInstall -SetupExe $setupPath -Dir $InstallDir -GamesDir $gamesDir
+    Test-Assert -What "установка перед проверкой авто-закрытия прошла" -Condition ($code4 -eq 0) -Detail "код возврата $code4"
+
+    $fakeExe = Join-Path $InstallDir 'ChillHub.exe'
+    Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\cmd.exe') -Destination $fakeExe -Force
+    $fake = Start-Process -FilePath $fakeExe -ArgumentList '/c', 'ping -n 300 127.0.0.1 > nul' -PassThru -WindowStyle Hidden
+    try {
+        # Файл обязан быть занят ДО удаления — иначе проверка ничего не проверяет.
+        $lockedBefore = $false
+        try { $probe = [IO.File]::Open($fakeExe, 'Open', 'ReadWrite', 'None'); $probe.Dispose() }
+        catch { $lockedBefore = $true }
+        Test-Assert -What "подставной процесс действительно держит ChillHub.exe" -Condition $lockedBefore
+
+        $up3 = Start-Process -FilePath $uninstaller -ArgumentList '/S', "_?=$InstallDir" -PassThru -Wait
+        Test-Assert -What "тихое удаление при запущенном лаунчере прошло" -Condition ($up3.ExitCode -eq 0) -Detail "код возврата $($up3.ExitCode)"
+        Test-Assert -What "запущенный лаунчер закрыт деинсталлятором" -Condition $fake.HasExited
+        Test-Assert -What "ChillHub.exe удалён после авто-закрытия" -Condition (-not (Test-Path -LiteralPath $fakeExe))
+    }
+    finally {
+        if (-not $fake.HasExited) {
+            Write-Warning "[smoke] подставной процесс пришлось убирать вручную — авто-закрытие не сработало"
+            try { $fake.Kill() } catch { }
+        }
+    }
 }
 finally {
     # Возвращаем окружение как было — проверка не должна оставлять следов ни на
