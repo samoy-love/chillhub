@@ -1075,13 +1075,6 @@ namespace ChillHub.Core.Sync {
         }
 
         /// <summary>
-        /// Сверяет скачанный .part с хешами из манифеста (SHA-256 и Blake3 за один проход).
-        /// Файл не удаляет: решение о повторной попытке принимает цикл ретраев.
-        /// </summary>
-        /// <param name="partPath">Путь к скачанному файлу.</param>
-        /// <param name="t">Задание из плана с ожидаемыми хешами.</param>
-        /// <exception cref="InvalidDataException">Содержимое не совпало с манифестом.</exception>
-        /// <summary>
         /// Сбой, который повтором не лечится: не хватает самих файлов лаунчера.
         /// <para>
         /// Такое приходит из сверки хешей, а не из сети: нет сборки Blake3, нет её
@@ -1125,6 +1118,14 @@ namespace ChillHub.Core.Sync {
                 : ex.GetType().Name;
         }
 
+        /// <summary>
+        /// Сверяет скачанный .part с хешами из манифеста (SHA-256 и Blake3 за один проход).
+        /// Файл не удаляет: решение о повторной попытке принимает цикл ретраев.
+        /// </summary>
+        /// <param name="partPath">Путь к скачанному файлу.</param>
+        /// <param name="t">Задание из плана с ожидаемыми хешами.</param>
+        /// <exception cref="InvalidDataException">Содержимое не совпало с манифестом.</exception>
+        /// <exception cref="VerificationUnavailableException">Проверять файл не по чему.</exception>
         private static void VerifyDownloadedFile(string partPath, FileTask t) {
             if (string.IsNullOrWhiteSpace(t.Sha256) && string.IsNullOrWhiteSpace(t.Blake3)) {
                 return;
