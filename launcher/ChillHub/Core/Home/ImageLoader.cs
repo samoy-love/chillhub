@@ -8,6 +8,7 @@ namespace ChillHub.Core.Home {
     using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
     using System.Net;
     using System.Net.Http;
     using System.Threading.Tasks;
@@ -99,6 +100,11 @@ namespace ChillHub.Core.Home {
             ClearCache();
             Inflight.Clear();
             http = CreateDefaultClient();
+
+            // Кеш на диске в прогоне молчит: тесту, подставившему свой ответ сети, нельзя
+            // отдавать картинку, оставшуюся от соседнего теста, — и уж тем более нельзя
+            // писать что-либо в настоящий %APPDATA% пользователя.
+            ImageDiskCache.Enabled = false;
         }
 
         /// <summary>Сколько картинок сейчас лежит в кеше — для тестов и диагностики.</summary>
@@ -143,7 +149,14 @@ namespace ChillHub.Core.Home {
         /// списка заново качала бы все иконки.
         /// </para>
         /// </summary>
-        internal static void InvalidateAll() => ClearCache();
+        internal static void InvalidateAll() {
+            ClearCache();
+
+            // Кеш на диске не стираем: он и так сверяется с сервером условным запросом,
+            // и «обновить список» от этого не станет свежее — станет только медленнее,
+            // потому что все значки поедут по сети заново. Стирать его целиком нужно
+            // разве что при подозрении на порчу, и для этого есть ImageDiskCache.Clear.
+        }
 
         private static void ClearCache() {
             Cache.Clear();
@@ -431,13 +444,58 @@ namespace ChillHub.Core.Home {
         }
 
         /// <summary>Одна HTTP-загрузка картинки в память; результат разделяют все ждущие элементы.</summary>
+        /// <summary>
+        /// Достаёт картинку: из кеша на диске, если сервер подтвердил, что она не менялась,
+        /// иначе по сети.
+        /// <para>
+        /// ЗАПРОС УХОДИТ ВСЕГДА, НО ТЕЛО ПРИХОДИТ ОДИН РАЗ. К запросу подставляются метки
+        /// прошлого ответа (ETag и Last-Modified), и сервер на неизменившуюся картинку
+        /// отвечает «304 не менялось» — без тела, парой сотен байт. Так обложки и значки
+        /// переживают перезапуск лаунчера, оставаясь при этом свежими: заменили картинку на
+        /// сервере — придёт новая, а не та, что лежала в кеше.
+        /// </para>
+        /// <para>
+        /// Сети нет вовсе — показываем то, что лежит на диске: пустой список игр вместо
+        /// значков хуже, чем вчерашние значки. Отмена — исключение из этого правила: она
+        /// означает, что показывать уже некому, и подставлять картинку из кеша незачем.
+        /// </para>
+        /// </summary>
+        /// <param name="url">Адрес картинки.</param>
+        /// <returns>Байты картинки.</returns>
         private static async Task<byte[]> DownloadAsync(string url) {
+            var cached = ImageDiskCache.Read(url);
+            try {
+                return await FetchAsync(url, cached).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (cached != null && ex is not OperationCanceledException) {
+                DebugLog($"[ImgLoad] сеть недоступна ({ex.Message}), берём с диска url='{url}'");
+                return cached.Bytes;
+            }
+        }
+
+        private static async Task<byte[]> FetchAsync(string url, CachedImage? cached) {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             DebugLog($"[ImgLoad] HTTP GET start url='{url}'");
             // Таймаут ставится здесь, а не на клиенте: клиент общий и подменяемый тестами,
             // а ждать дольше положенного не должна ни одна картинка.
             using var cts = new System.Threading.CancellationTokenSource(DownloadTimeout);
-            using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            if (cached?.ETag is { Length: > 0 } etag) {
+                req.Headers.TryAddWithoutValidation("If-None-Match", etag);
+            }
+
+            if (cached?.LastModified is { Length: > 0 } modified) {
+                req.Headers.TryAddWithoutValidation("If-Modified-Since", modified);
+            }
+
+            using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+
+            if (resp.StatusCode == System.Net.HttpStatusCode.NotModified && cached != null) {
+                ImageDiskCache.Touch(url, Header(resp, "ETag") ?? cached.ETag, Header(resp, "Last-Modified") ?? cached.LastModified);
+                DebugLog($"[ImgLoad] 304, берём с диска bytes={cached.Bytes.Length} url='{url}'");
+                return cached.Bytes;
+            }
+
             if (!resp.IsSuccessStatusCode) {
                 var contentType = resp.Content?.Headers?.ContentType?.ToString() ?? string.Empty;
                 DebugLog($"[ImgLoad] HTTP non-200 status={(int)resp.StatusCode} contentType='{contentType}' url='{url}'");
@@ -467,9 +525,24 @@ namespace ChillHub.Core.Home {
             }
 
             var bytes = buffer.ToArray();
+            ImageDiskCache.Save(url, bytes, Header(resp, "ETag"), Header(resp, "Last-Modified"));
             sw.Stop();
             DebugLog($"[ImgLoad] HTTP ok bytes={bytes.Length} elapsedMs={sw.ElapsedMilliseconds} url='{url}'");
             return bytes;
+        }
+
+        /// <summary>Значение заголовка ответа или null, если его нет.</summary>
+        /// <param name="resp">Ответ сервера.</param>
+        /// <param name="name">Имя заголовка.</param>
+        /// <returns>Первое значение или null.</returns>
+        private static string? Header(HttpResponseMessage resp, string name) {
+            if (resp.Headers.TryGetValues(name, out var values)) {
+                return values.FirstOrDefault();
+            }
+
+            return resp.Content?.Headers?.TryGetValues(name, out var contentValues) == true
+                ? contentValues.FirstOrDefault()
+                : null;
         }
 
         /// <summary>

@@ -211,6 +211,19 @@ namespace ChillHub.Core.Sync {
         /// кнопке «Играть» или «Установить», а проверка целостности — отказывать ли
         /// со словами «игра не установлена».
         /// </para>
+        /// <para>
+        /// СНАЧАЛА СМОТРИМ КОРЕНЬ, И ТОЛЬКО ПОТОМ ЛЕЗЕМ ВГЛУБЬ. Ответ от этого не меняется —
+        /// он всё тот же «есть ли хоть один файл игры где угодно», — но у установленной
+        /// игры он находится с первого чтения каталога: исполняемый файл и библиотеки
+        /// движка лежат именно в корне. Полный обход остаётся запасным путём для редкого
+        /// случая, когда в корне одни служебные файлы и модпак.
+        /// </para>
+        /// <para>
+        /// Разница не теоретическая: вопрос задаётся при каждой проверке статусов (то есть
+        /// на каждом запуске лаунчера, по разу на игру) и при каждом пересчёте вариантов
+        /// запуска — а тот считается на UI-потоке. Обход дерева сборки в пятнадцать тысяч
+        /// файлов ради ответа «да» стоил заметно дороже самого ответа.
+        /// </para>
         /// </summary>
         /// <param name="localRoot">Корень локальной папки игры.</param>
         /// <returns>true, если игра выглядит установленной.</returns>
@@ -226,27 +239,39 @@ namespace ChillHub.Core.Sync {
                     Home.GameLocalState.ReadInstalledModPackPaths(localRoot),
                     StringComparer.OrdinalIgnoreCase);
 
-                foreach (var path in Directory.EnumerateFiles(localRoot, "*", SearchOption.AllDirectories)) {
-                    var rel = Path.GetRelativePath(localRoot, path).Replace('\\', '/');
-                    if (rel.StartsWith(".staging/", StringComparison.OrdinalIgnoreCase)) {
-                        continue;
-                    }
-
-                    // Один список служебных файлов на весь клиент: .updating, .version
-                    // и оба файла состояния модпака.
-                    if (SimpleSyncService.IsServiceRelFile(rel)) {
-                        continue;
-                    }
-
-                    if (modPack.Contains(rel)) {
-                        continue;
-                    }
-
-                    return true;
-                }
+                return HasGameFileIn(localRoot, modPack, SearchOption.TopDirectoryOnly)
+                    || HasGameFileIn(localRoot, modPack, SearchOption.AllDirectories);
             }
             catch (Exception ex) {
                 ChillHub.Core.Logging.Logger.Error(ex, $"IntegrityChecker.HasAnyLocalGameFiles({localRoot})");
+            }
+
+            return false;
+        }
+
+        /// <summary>Есть ли файл игры среди перечисленных этим обходом.</summary>
+        /// <param name="localRoot">Корень локальной папки игры.</param>
+        /// <param name="modPack">Пути установленного модпака — они за файлы игры не считаются.</param>
+        /// <param name="scope">Только корень или всё дерево.</param>
+        /// <returns>true, если нашёлся хоть один файл игры.</returns>
+        private static bool HasGameFileIn(string localRoot, HashSet<string> modPack, SearchOption scope) {
+            foreach (var path in Directory.EnumerateFiles(localRoot, "*", scope)) {
+                var rel = Path.GetRelativePath(localRoot, path).Replace('\\', '/');
+                if (rel.StartsWith(".staging/", StringComparison.OrdinalIgnoreCase)) {
+                    continue;
+                }
+
+                // Один список служебных файлов на весь клиент: .updating, .version
+                // и оба файла состояния модпака.
+                if (SimpleSyncService.IsServiceRelFile(rel)) {
+                    continue;
+                }
+
+                if (modPack.Contains(rel)) {
+                    continue;
+                }
+
+                return true;
             }
 
             return false;

@@ -6,52 +6,17 @@
         Loaded="Window_Loaded">
   <Grid Margin="16">
     <Grid.Resources>
-      <!-- Override accent within this window to secondary (purple) so CheckBox checked state is purple like 'Играть' -->
-      <SolidColorBrush x:Key="Brush.Accent" Color="{DynamicResource Color.SecondaryAccent}"/>
-      <!-- Make hover state pink (use the pink stop of the current gradient) -->
-      <SolidColorBrush x:Key="Brush.AccentHover" Color="#8A2A4A"/>
-      <!-- Darker primary gradient for 'Обновить и перезапустить' -->
-      <LinearGradientBrush x:Key="Brush.AccentGradientPrimary" StartPoint="0,0" EndPoint="1,1">
-        <GradientStop Offset="0" Color="#3A2966"/>
-        <GradientStop Offset="1" Color="#8A2A4A"/>
-      </LinearGradientBrush>
-      <!-- Progress visuals shared brushes (copied from HomePage) -->
-      <SolidColorBrush x:Key="Brush.ProgressBorder" Color="#2B1F4A"/>
-      <SolidColorBrush x:Key="Brush.ProgressTrack" Color="#1A122B"/>
-      <!-- Verify indicator gradient (copied from HomePage) -->
-      <LinearGradientBrush x:Key="Brush.VerifyGradient" StartPoint="0,0" EndPoint="1,0">
-        <GradientStop Offset="0" Color="#6F3AFF"/>
-        <GradientStop Offset="1" Color="#A78BFA"/>
-      </LinearGradientBrush>
-      <!-- Local Primary style to ensure hover uses our local AccentHover (avoids StaticResource capture in theme) -->
-      <Style x:Key="Style.Button.PrimaryLocal" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-        <Setter Property="Background" Value="{DynamicResource Brush.AccentGradientPrimary}"/>
-        <Setter Property="Foreground" Value="#0A0A0A"/>
-        <Setter Property="BorderThickness" Value="0"/>
-        <Setter Property="BorderBrush" Value="Transparent"/>
-        <Setter Property="Template">
-          <Setter.Value>
-            <ControlTemplate TargetType="Button">
-              <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}" Background="{TemplateBinding Background}"
-                      BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
-                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-              </Border>
-              <ControlTemplate.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                  <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.AccentHover}"/>
-                  <Setter Property="Foreground" Value="#FFFFFF"/>
-                </Trigger>
-                <Trigger Property="IsPressed" Value="True">
-                  <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Accent}"/>
-                </Trigger>
-                <Trigger Property="IsEnabled" Value="False">
-                  <Setter Property="Opacity" Value="0.6"/>
-                </Trigger>
-              </ControlTemplate.Triggers>
-            </ControlTemplate>
-          </Setter.Value>
-        </Setter>
-      </Style>
+      <!-- СВОЕЙ ПАЛИТРЫ У ЭТОГО ОКНА БОЛЬШЕ НЕТ.
+           Здесь жили розово-фиолетовый градиент кнопки, розовое наведение (#8A2A4A) и
+           отдельный градиент индикатора — осколки палитры, от которой лаунчер отказался:
+           в теме остался ОДИН акцент, и «Обновить и перезапустить» обязана выглядеть той
+           же главной кнопкой, что «Играть» и «Установить». Окно обновления — первое, что
+           видит человек при запуске, и оно же было единственным, где приложение выглядело
+           чужим самому себе.
+           Полосы прогресса берут краски из темы по тем же именам, что и главный экран. -->
+      <SolidColorBrush x:Key="Brush.ProgressBorder" Color="{DynamicResource Color.Border}"/>
+      <SolidColorBrush x:Key="Brush.ProgressTrack" Color="{DynamicResource Color.Track}"/>
+      <SolidColorBrush x:Key="Brush.VerifyGradient" Color="{DynamicResource Color.Accent}"/>
       <!-- Neutral ghost button style (outline) -->
       <!-- ProgressBar styles copied from HomePage (sizes removed) -->
       <Style x:Key="Style.ProgressBar.Verify" TargetType="ProgressBar">
@@ -101,7 +66,7 @@
                 <Border x:Name="PART_Track" CornerRadius="6" BorderThickness="2.5"
                         Background="{DynamicResource Brush.ProgressTrack}" BorderBrush="{DynamicResource Brush.ProgressBorder}"/>
                 <!-- Indicator; named PART_Indicator so WPF sets width automatically for determinate mode -->
-                <Border x:Name="PART_Indicator" CornerRadius="6" Background="{DynamicResource Brush.AccentGradientPrimary}"
+                <Border x:Name="PART_Indicator" CornerRadius="6" Background="{DynamicResource Brush.AccentFill}"
                         HorizontalAlignment="Left"/>
               </Grid>
             </ControlTemplate>
@@ -130,7 +95,7 @@
     </StackPanel>
 
     <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-      <Button x:Name="PrimaryBtn" Content="Обновить и перезапустить" MinWidth="200" Height="36" FontSize="13" FontWeight="SemiBold" Padding="12,6" Click="PrimaryBtn_Click" Margin="0,0,8,0" HorizontalAlignment="Right" Style="{DynamicResource Style.Button.PrimaryLocal}"/>
+      <Button x:Name="PrimaryBtn" Content="Обновить и перезапустить" MinWidth="200" Height="36" FontSize="13" FontWeight="SemiBold" Padding="12,6" Click="PrimaryBtn_Click" Margin="0,0,8,0" HorizontalAlignment="Right" Style="{DynamicResource Style.Button.Primary}"/>
       <Button Content="Выход" Width="120" Height="36" FontSize="13" FontWeight="SemiBold" Padding="12,6" Click="ExitBtn_Click" Style="{DynamicResource Style.Button.GhostNeutral}"/>
     </StackPanel>
   </Grid>

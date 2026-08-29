@@ -144,6 +144,12 @@ namespace ChillHub.Core.Game {
         internal Action<string?, string?> WriteLocalVersion { get; set; } = (gid, version) => GameLocalState.WriteLocalVersion(gid, version);
 
         /// <summary>
+        /// Запоминает слепок папки игры после успешной синхронизации. Шов тот же и по той
+        /// же причине, что у записи маркера версии: настоящая реализация пишет на диск.
+        /// </summary>
+        internal Action<string?> SaveFingerprint { get; set; } = root => Sync.InstallFingerprint.Save(root);
+
+        /// <summary>
         /// Gets or sets отправку исхода операции в статистику. Подставляется по той же
         /// причине, что и <see cref="WriteLocalVersion"/>: настоящая уходит в сеть, и без
         /// шва проверить, что отмена не считается провалом, можно было бы только
@@ -288,6 +294,11 @@ namespace ChillHub.Core.Game {
 
                 // Маркер версии обязан соответствовать тому, что реально установлено (в т.ч. после отката)
                 this.WriteLocalVersion(gid, version);
+
+                // Слепок папки — сразу за маркером: файлы только что приведены к манифесту,
+                // и с этого момента любое расхождение означает, что их трогали снаружи.
+                // Пока слепка нет, проверка статуса ходит длинным путём (см. InstallFingerprint).
+                this.SaveFingerprint(request.LocalRoot);
                 GameLocalStateChanges.MarkChanged();
 
                 this.ui.SetStatus("Готово.");
