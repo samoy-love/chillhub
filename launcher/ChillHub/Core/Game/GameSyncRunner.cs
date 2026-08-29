@@ -301,6 +301,12 @@ namespace ChillHub.Core.Game {
                 this.SaveFingerprint(request.LocalRoot);
                 GameLocalStateChanges.MarkChanged();
 
+                // Размер в «Установка и удаление программ» считается вместе с папкой игр
+                // (Core/Shell/InstalledAppsEntry.cs), а только что она изменилась на
+                // несколько гигабайт. Без этого число там осталось бы прежним до
+                // следующего запуска лаунчера. Обход папки уходит в фон.
+                Shell.InstalledAppsEntry.RefreshInBackground();
+
                 this.ui.SetStatus("Готово.");
                 this.ui.SetSpeedEta(string.Empty);
                 Logging.Logger.Info($"GamePage.StartSync done gid={gid} version={version}");

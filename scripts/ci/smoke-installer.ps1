@@ -142,6 +142,35 @@ function Restore-Snapshot {
 $hadDesktopLnk = Save-Snapshot -Path $desktopLnk -Name 'Chill Hub.lnk'
 $hadStartMenu = Save-Snapshot -Path $startMenuDir -Name 'StartMenu'
 
+# КАТАЛОГИ ДАННЫХ УВОДЯТСЯ В СТОРОНУ ПЕРЕИМЕНОВАНИЕМ, А НЕ КОПИРОВАНИЕМ.
+#
+# Ниже проверяется удаление с галочкой «удалить настройки», а она делает
+# RMDir /r по %APPDATA%\ChillHub и %LOCALAPPDATA%\ChillHub. На раннере CI там
+# пусто, а на машине разработчика в %LOCALAPPDATA%\ChillHub лежит его
+# НАСТОЯЩАЯ установка лаунчера: проверка снесла бы её вместе с играми.
+#
+# Переименование, а не копия: каталог установки весит сотни мегабайт, и копией
+# на каждом прогоне платил бы каждый. Переименование не удастся, если лаунчер
+# запущен, — тогда разрушающая часть проверки честно пропускается с
+# предупреждением, а не идёт по живому каталогу.
+$localAppDataDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'ChillHub'
+$stashed = @{}
+
+function Move-Aside {
+    param([string]$Path, [string]$Name)
+    if (-not (Test-Path -LiteralPath $Path)) { return $true }
+    $to = Join-Path $snapshotDir $Name
+    try {
+        Move-Item -LiteralPath $Path -Destination $to -Force -ErrorAction Stop
+        $stashed[$Path] = $to
+        return $true
+    }
+    catch {
+        Write-Warning "не удалось увести '$Path' в сторону: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 # Ключи реестра сохраняются целиком (reg export), а не по одному значению:
 # восстановить надо всё, что было, а не то, что вспомнили перечислить.
 $hadUninstKey = Test-Path -LiteralPath $UninstKey
@@ -304,11 +333,64 @@ try {
     # Настройки пользователя переживают удаление намеренно (см. комментарий в
     # секции Uninstall у installer.nsi) — проверяем именно это, а не обратное.
     Test-Assert -What "настройки пользователя не тронуты удалением" -Condition (Test-Path -LiteralPath $configPath)
+
+    Test-Assert -What "папка с играми пережила удаление без галочки" -Condition (Test-Path -LiteralPath $gamesDir)
+
+    # ------------------------------------------- удаление С ГАЛОЧКАМИ
+    #
+    # Вторая ветка удаления — та, где человек попросил убрать за собой всё.
+    # Она делает RMDir /r по трём каталогам, один из которых берётся из
+    # свободного текстового поля, и до появления ключей /DELETEGAMES и
+    # /DELETESETTINGS не проверялась ни разу: тихое удаление всегда шло по
+    # ветке «ничего лишнего не трогаем».
+    $stashOk = (Move-Aside -Path $appDataDir -Name 'AppDataRoaming') -and
+               (Move-Aside -Path $localAppDataDir -Name 'AppDataLocal')
+    if (-not $stashOk) {
+        Write-Warning "[smoke] удаление с галочками ПРОПУЩЕНО: каталоги данных заняты (закройте Chill Hub)"
+    }
+    else {
+        Write-Host "[smoke] установка заново ради проверки удаления с галочками" -ForegroundColor Cyan
+        $code3 = Invoke-SilentInstall -SetupExe $setupPath -Dir $InstallDir -GamesDir $gamesDir
+        Test-Assert -What "установка перед проверкой удаления с галочками прошла" -Condition ($code3 -eq 0) -Detail "код возврата $code3"
+
+        # Файлы-маркеры: пустой каталог мог бы исчезнуть и сам по себе, а эти
+        # файлы исчезают только вместе с ним.
+        Set-Content -LiteralPath (Join-Path $gamesDir 'игра.bin') -Value 'данные игры'
+        New-Item -ItemType Directory -Path $localAppDataDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $localAppDataDir 'legacy-config.json') -Value '{}'
+
+        $up2 = Start-Process -FilePath $uninstaller -ArgumentList '/S', '/DELETEGAMES', '/DELETESETTINGS', "_?=$InstallDir" -PassThru -Wait
+        Test-Assert -What "деинсталлятор с галочками завершился успешно" -Condition ($up2.ExitCode -eq 0) -Detail "код возврата $($up2.ExitCode)"
+        Test-Assert -What "папка с играми удалена по галочке" -Condition (-not (Test-Path -LiteralPath $gamesDir)) -Detail $gamesDir
+        Test-Assert -What "%APPDATA%\ChillHub удалён по галочке" -Condition (-not (Test-Path -LiteralPath $appDataDir)) -Detail $appDataDir
+        Test-Assert -What "%LOCALAPPDATA%\ChillHub удалён по галочке" -Condition (-not (Test-Path -LiteralPath $localAppDataDir)) -Detail $localAppDataDir
+    }
 }
 finally {
     # Возвращаем окружение как было — проверка не должна оставлять следов ни на
     # раннере, ни на машине разработчика.
-    if ($configBackup) {
+    #
+    # Уведённые в сторону каталоги данных возвращаются ПЕРВЫМИ: копия config.json
+    # лежит внутри %APPDATA%\ChillHub и уехала вместе с ним, поэтому возврат
+    # каталога целиком отменяет и делает ненужным восстановление конфига ниже.
+    # То, что успел создать сам прогон, сносится: восстанавливаем то, что было ДО.
+    $stashLost = $false
+    foreach ($original in @($stashed.Keys)) {
+        if (Test-Path -LiteralPath $original) { Remove-Item -LiteralPath $original -Recurse -Force -ErrorAction SilentlyContinue }
+        try { Move-Item -LiteralPath $stashed[$original] -Destination $original -Force -ErrorAction Stop }
+        catch {
+            $stashLost = $true
+            Write-Warning "НЕ УДАЛОСЬ вернуть '$original' из '$($stashed[$original])': $($_.Exception.Message)"
+        }
+    }
+
+    if ($stashed.ContainsKey($appDataDir)) {
+        # Каталог вернулся целиком, вместе с исходным config.json и копией рядом.
+        if ($configBackup -and (Test-Path -LiteralPath $configBackup)) {
+            Remove-Item -LiteralPath $configBackup -Force -ErrorAction SilentlyContinue
+        }
+    }
+    elseif ($configBackup) {
         Copy-Item -LiteralPath $configBackup -Destination $configPath -Force
         Remove-Item -LiteralPath $configBackup -Force -ErrorAction SilentlyContinue
     }
@@ -316,6 +398,7 @@ finally {
         Remove-Item -LiteralPath $appDataDir -Recurse -Force -ErrorAction SilentlyContinue
     }
     if (Test-Path -LiteralPath $gamesDir) { Remove-Item -LiteralPath $gamesDir -Recurse -Force -ErrorAction SilentlyContinue }
+
     Restore-Snapshot -Path $desktopLnk -Name 'Chill Hub.lnk' -Existed $hadDesktopLnk
     Restore-Snapshot -Path $startMenuDir -Name 'StartMenu' -Existed $hadStartMenu
 
@@ -323,7 +406,16 @@ finally {
     if (Test-Path -LiteralPath $AppKey) { Remove-Item -LiteralPath $AppKey -Recurse -Force -ErrorAction SilentlyContinue }
     if ($hadUninstKey) { reg import (Join-Path $snapshotDir 'uninst.reg') 2>&1 | Out-Null }
     if ($hadAppKey) { reg import (Join-Path $snapshotDir 'app.reg') 2>&1 | Out-Null }
-    Remove-Item -LiteralPath $snapshotDir -Recurse -Force -ErrorAction SilentlyContinue
+    # Каталог со снимками сносится, только если ВСЁ уведённое вернулось на место.
+    # Иначе внутри лежат единственные копии пользовательских данных, и убрать за
+    # собой мусор означало бы стереть их насовсем — пусть лучше останется след,
+    # который видно в предупреждении выше.
+    if ($stashLost) {
+        Write-Warning "каталог со снимками НЕ удалён, в нём остались невозвращённые данные: $snapshotDir"
+    }
+    else {
+        Remove-Item -LiteralPath $snapshotDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
 
     # Каталог освобождается не мгновенно: Uninstall.exe завершился, но ссылка
     # на файл может ещё жить у антивируса или индексатора.

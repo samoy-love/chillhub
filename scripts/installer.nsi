@@ -6,6 +6,12 @@ Unicode true
 !include "nsDialogs.nsh"
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
+; Разбор командной строки в ДЕИНСТАЛЛЯТОРЕ. У NSIS раздельные пространства кода
+; для установщика и деинсталлятора, поэтому функции FileFunc нужно отдельно
+; попросить сгенерировать un.-копии — иначе ${un.GetOptions} просто не
+; существует (см. un.onInit: ключи /DELETEGAMES и /DELETESETTINGS).
+!insertmacro un.GetParameters
+!insertmacro un.GetOptions
 ; ${VersionCompare} — сравнение версий для защиты от отката (см. .onInit).
 !include "WordFunc.nsh"
 
@@ -377,9 +383,39 @@ Section "Install" SecInstall
   WriteRegDWORD HKCU "${UNINST_KEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNINST_KEY}" "NoRepair" 1
 
+  ; Дата установки: без неё в списке программ пустая колонка «Дата установки»,
+  ; по которой этот список чаще всего и сортируют. Формат — YYYYMMDD, как ждёт
+  ; Windows. ${GetTime} отдаёт день/месяц/год отдельными значениями, и месяц с
+  ; днём приходят уже с ведущим нулём.
+  ${GetTime} "" "L" $1 $2 $3 $4 $5 $6 $7
+  WriteRegStr HKCU "${UNINST_KEY}" "InstallDate" "$3$2$1"
+
   ; EstimatedSize (в КиБ) считается ПОСЛЕ распаковки файлов — иначе считать
   ; было бы нечего. Без него Windows показывает пустой размер.
+  ;
+  ; Считается ЛАУНЧЕР ВМЕСТЕ С ПАПКОЙ ДЛЯ ИГР: ради этого числа в список
+  ; программ и заходят. Сам лаунчер весит пару сотен мегабайт и среди прочих
+  ; программ не выделяется ничем, а игры — десятки гигабайт; показав только
+  ; каталог установки, мы спрятали бы ровно тот объём, который человек ищет.
+  ; При первой установке игр ещё нет и слагаемое нулевое, при переустановке
+  ; поверх — уже нет. Дальше это число поддерживает сам лаунчер на каждом
+  ; запуске (Core/Shell/InstalledAppsEntry.cs): Windows EstimatedSize никогда
+  ; не пересчитывает, а игры приезжают и уезжают после установки.
+  ;
+  ; Папка для игр, указанная ВНУТРИ каталога установки, посчиталась бы дважды,
+  ; поэтому складываем только когда она лежит отдельно. Сравнение грубое (равен
+  ; ли префикс), и этого здесь достаточно: точность до вложенных путей —
+  ; в лаунчере, у которого для этого есть настоящая работа с путями.
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
+  StrLen $1 "$INSTDIR"
+  StrCpy $2 "$GAMES_DIR" $1
+  ${If} "$2" != "$INSTDIR"
+  ${AndIf} ${FileExists} "$GAMES_DIR\*.*"
+    ; Каталог обязан существовать: ${GetSize} по отсутствующему пути возвращает
+    ; не ноль, а пустую строку, и IntOp прибавил бы к размеру мусор.
+    ${GetSize} "$GAMES_DIR" "/S=0K" $1 $2 $3
+    IntOp $0 $0 + $1
+  ${EndIf}
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" "$0"
 
@@ -651,7 +687,21 @@ Section "Uninstall"
   ; Настройки удаляются только по явной галочке (см. страницу удаления).
   ; Тихое удаление сюда не попадает: $DeleteSettings_State там остаётся нулём.
   ${If} $DeleteSettings_State == 1
+    ; %APPDATA%\ChillHub — конфиг, очередь отчётов, каталог данных WebView2
+    ; (Core/News/NewsWebViewStorage.cs кладёт его именно сюда, чтобы его не
+    ; сносило самообновление).
     RMDir /r "$APPDATA\${APP_NAME}"
+
+    ; %LOCALAPPDATA%\ChillHub — каталог установки ПО УМОЛЧАНИЮ, и при обычной
+    ; установке его уже снёс RMDir /r "$INSTDIR" выше. Но кто указал свой путь
+    ; (D:\ChillHub), у того здесь остаётся каталог прежней установки вместе со
+    ; старым config.json, откуда лаунчер когда-то мигрировал настройки
+    ; (Core/Config.cs: второй каталог ConfigStore). «Удалить настройки» обязано
+    ; убирать и его — иначе после полного удаления на диске остаётся папка,
+    ; о которой человек уже не помнит.
+    ${If} "$INSTDIR" != "$LOCALAPPDATA\${APP_NAME}"
+      RMDir /r "$LOCALAPPDATA\${APP_NAME}"
+    ${EndIf}
   ${EndIf}
 
   ; Ask-delete games folder per user's choice (from custom page)
@@ -1001,6 +1051,37 @@ Function un.onInit
     IfFileExists "D:\*.*" 0 +2
       StrCpy $Un_GamesDir "D:\Games\ChillHub"
   ${EndIf}
+
+  ; ГАЛОЧКИ УДАЛЕНИЯ ДОСТУПНЫ И В ТИХОМ РЕЖИМЕ.
+  ;
+  ; Обе они — единственное, что отличает «удалить лаунчер» от «убрать за собой
+  ; всё»: папку с играми (десятки гигабайт) и настройки в %APPDATA%. Задать их
+  ; скриптом было нельзя, а значит и ПРОВЕРИТЬ автоматически было нечем: тихое
+  ; удаление всегда шло по ветке «ничего лишнего не трогаем», и ветка «галочка
+  ; стоит» жила без единого прогона — при том, что она делает RMDir /r по пути
+  ; из свободного текстового поля.
+  ;
+  ;   Uninstall.exe /S /DELETEGAMES /DELETESETTINGS
+  ;
+  ; Умолчание не меняется: без ключей тихое удаление, как и раньше, не трогает
+  ; ни игры, ни настройки. Решение об удалении пользовательских данных
+  ; принимает человек, а не отсутствие ответа.
+  StrCpy $DeleteGames_State 0
+  StrCpy $DeleteSettings_State 0
+  ${un.GetParameters} $R0
+  ClearErrors
+  ${un.GetOptions} $R0 "/DELETEGAMES" $R1
+  ${IfNot} ${Errors}
+    StrCpy $DeleteGames_State 1
+  ${EndIf}
+
+  ClearErrors
+  ${un.GetOptions} $R0 "/DELETESETTINGS" $R1
+  ${IfNot} ${Errors}
+    StrCpy $DeleteSettings_State 1
+  ${EndIf}
+
+  ClearErrors
 FunctionEnd
 
 Function un.SelectDeleteGames_Create

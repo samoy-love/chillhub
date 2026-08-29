@@ -45,6 +45,14 @@ namespace ChillHub.Core.Shell {
         internal Action SendStartMetric { get; set; } = ChillHub.Core.Metrics.MetricsService.LauncherStart;
 
         /// <summary>
+        /// Освежает запись в «Установка и удаление программ»: её мог стереть чужой
+        /// деинсталлятор, версию в ней двигает самообновление в обход установщика, а
+        /// размер там обязан считать и папку с играми (см. <see cref="InstalledAppsEntry"/>).
+        /// Сам обход каталогов уходит в фон — на пути запуска ему делать нечего.
+        /// </summary>
+        internal Action RefreshInstalledAppsEntry { get; set; } = InstalledAppsEntry.RefreshInBackground;
+
+        /// <summary>
         /// Проходит шаги запуска по порядку.
         /// </summary>
         /// <returns>false, если лаунчер обязан немедленно завершиться (замок занят).</returns>
@@ -88,6 +96,14 @@ namespace ChillHub.Core.Shell {
             }
             catch (Exception ex) {
                 Logger.Warn("Не удалось отправить метрику запуска: " + ex.Message);
+            }
+
+            try {
+                this.RefreshInstalledAppsEntry();
+            }
+            catch (Exception ex) {
+                // Строка в списке программ — удобство, а не работа лаунчера.
+                Logger.Warn("Не удалось обновить запись в списке программ: " + ex.Message);
             }
 
             return true;
