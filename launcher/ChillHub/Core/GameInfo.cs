@@ -21,6 +21,7 @@ namespace ChillHub.Core {
     /// </summary>
     public class GameInfo : INotifyPropertyChanged {
         private string queueLabel = string.Empty;
+        private string runLabel = string.Empty;
         private string title = string.Empty;
         private string iconUrl = string.Empty;
         private string installedVersion = string.Empty;
@@ -98,6 +99,21 @@ namespace ChillHub.Core {
         public string QueueLabel {
             get => this.queueLabel;
             set => this.SetField(ref this.queueLabel, value ?? string.Empty);
+        }
+
+        /// <summary>
+        /// Gets or sets подпись запущенной игры — «Играет», «Запускается…»; пусто, если
+        /// игра не запущена.
+        /// <para>
+        /// Свернуть лаунчер на время партии — обычное дело, и, вернувшись, игрок видел
+        /// список, ничем не отличающийся от вчерашнего: про открытую прямо сейчас игру в
+        /// нём не было ни слова.
+        /// </para>
+        /// </summary>
+        [JsonIgnore]
+        public string RunLabel {
+            get => this.runLabel;
+            set => this.SetField(ref this.runLabel, value ?? string.Empty);
         }
 
         /// <inheritdoc/>

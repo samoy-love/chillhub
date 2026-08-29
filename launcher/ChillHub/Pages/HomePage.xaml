@@ -858,6 +858,9 @@
                             <MultiBinding Converter="{StaticResource GameRowStatusTextConv}" Mode="OneWay">
                               <Binding/>
                               <Binding Path="QueueLabel"/>
+                              <!-- «Играет»: открытая прямо сейчас игра видна в списке, а не
+                                   только на витрине — за списком к ней и возвращаются. -->
+                              <Binding Path="RunLabel"/>
                               <!-- Конвертеру эти значения не нужны: они здесь, чтобы подпись
                                    пересчиталась, когда игру установили или ей потребовалось
                                    обновление. Без них строка молчала до пересборки всего
@@ -870,6 +873,7 @@
                             <MultiBinding Converter="{StaticResource GameRowStatusBrushConv}" Mode="OneWay">
                               <Binding/>
                               <Binding Path="QueueLabel"/>
+                              <Binding Path="RunLabel"/>
                               <Binding Path="IsInstalled"/>
                               <Binding Path="NeedsUpdate"/>
                             </MultiBinding>

@@ -37,11 +37,13 @@ namespace ChillHub.Tests {
             Directory.CreateDirectory(this.dir);
             this.scope = PlaytimeStore.OverrideDirForTests(this.dir);
             PlaytimeStore.ResetForTests();
+            RunningGames.ResetForTests();
         }
 
         public void Dispose() {
             this.scope.Dispose();
             PlaytimeStore.ResetForTests();
+            RunningGames.ResetForTests();
             try {
                 Directory.Delete(this.dir, recursive: true);
             }
@@ -62,6 +64,38 @@ namespace ChillHub.Tests {
                 Assert.True(sw.Elapsed < WaitLimit, "не дождались записи о начатой сессии");
                 await Task.Delay(20);
             }
+        }
+
+        /// <summary>
+        /// Заведённая сессия — это и есть «игра запущена» для витрины: второго места,
+        /// где бы это отслеживалось, нет, и разойтись им негде.
+        /// </summary>
+        [Fact]
+        public void СессияДелаетИгруЗапущеннойДляВитрины() {
+            using var game = Process.GetCurrentProcess();
+            PlaytimeStore.BeginSession("repo", game);
+            Assert.Equal(GameRunState.Running, RunningGames.StateOf("repo"));
+
+            PlaytimeStore.FinishForTests(game.Id, DateTime.UtcNow.AddMinutes(1));
+            Assert.Equal(GameRunState.None, RunningGames.StateOf("repo"));
+        }
+
+        /// <summary>
+        /// Лаунчер закрыли и открыли, не выходя из игры: подобранная сессия сразу
+        /// значится запущенной, иначе витрина предложила бы запустить игру второй раз.
+        /// </summary>
+        [Fact]
+        public void ПодобраннаяСессияЖивойИгрыСразуЗначитсяЗапущенной() {
+            using var game = Process.GetCurrentProcess();
+            var pending = "{\"" + game.Id + "\":{\"GameId\":\"repo\",\"ProcessId\":" + game.Id +
+                          ",\"ProcessStartTimeTicks\":" + game.StartTime.Ticks +
+                          ",\"SessionStartUtc\":\"" + DateTime.UtcNow.AddMinutes(-5).ToString("O") + "\"}}";
+            File.WriteAllText(Path.Combine(this.dir, "playtime.sessions.json"), pending);
+
+            PlaytimeStore.ResetForTests();
+            PlaytimeStore.EnsureStarted();
+
+            Assert.Equal(GameRunState.Running, RunningGames.StateOf("repo"));
         }
 
         /// <summary>Сессия закрывается — время игры прибавляется к сумме.</summary>
@@ -211,6 +245,9 @@ namespace ChillHub.Tests {
             }
 
             Assert.Equal(0, PlaytimeStore.Get("repo").TotalSeconds);
+
+            // И «Запускается…» снято: оставленное, оно заперло бы кнопки навсегда.
+            Assert.Equal(GameRunState.None, RunningGames.StateOf("repo"));
         }
 
         /// <summary>Без игры отсчёт не заводится: имя пустое — записывать нечего.</summary>
