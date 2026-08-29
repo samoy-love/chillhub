@@ -620,9 +620,35 @@ namespace ChillHub.Core.Sync {
                                     // копия с диска вместо загрузки по сети. Сверку он
                                     // проходит ту же самую, а не прошедший её просто
                                     // качается дальше обычным путём.
+                                    // СЧЁТЧИК МЕРЯЕТ СДЕЛАННОЕ, А НЕ ВЫКАЧАННОЕ.
+                                    //
+                                    // Раньше к нему прибавлялся каждый прочитанный из сети
+                                    // байт — и ничего не вычиталось, когда эти байты
+                                    // выбрасывали. А выбрасывают их регулярно: сервер
+                                    // ответил на Range целым файлом, .part не прошёл сверку
+                                    // хеша, соединение оборвалось на середине. Каждая такая
+                                    // перезакачка ложилась поверх первой, и модпак на
+                                    // 892 МБ показывал «2,4 ГБ из 892,3 МБ» — полосу,
+                                    // упёртую в 100%, при живой скорости рядом.
+                                    //
+                                    // credited — сколько байт ЭТОГО файла уже зачтено. Он
+                                    // равняется на длину .part, поэтому счётчик всегда
+                                    // говорит, сколько из плана лежит на диске: не обгоняет
+                                    // общий объём и приходит ровно к нему.
+                                    long credited = 0;
+                                    void Credit(long onDisk) {
+                                        var delta = onDisk - credited;
+                                        if (delta == 0) {
+                                            return;
+                                        }
+
+                                        credited = onDisk;
+                                        Interlocked.Add(ref downloaded, delta);
+                                    }
+
                                     var reused = TryCopyFromDisk(t, partPath);
                                     if (reused) {
-                                        Interlocked.Add(ref downloaded, t.Size);
+                                        Credit(t.Size);
                                         ReportDownloadProgress();
                                     }
 
@@ -637,6 +663,11 @@ namespace ChillHub.Core.Sync {
                                             catch {
                                             }
                                         }
+
+                                        // Уцелевший от прошлого запуска кусок — тоже
+                                        // сделанная работа: без этого докачка показывала
+                                        // меньше, чем на диске уже лежит.
+                                        Credit(Math.Min(existing, t.Size));
 
                                         var attempt = 0;
                                         var maxAttempts = 3;
@@ -674,6 +705,10 @@ namespace ChillHub.Core.Sync {
                                                         }
                                                         catch {
                                                         }
+
+                                                        // Начали файл заново — значит, зачтённое
+                                                        // по нему больше ничем не подкреплено.
+                                                        Credit(0);
                                                     }
 
                                                     // Блок обязателен: поток записи должен быть ЗАКРЫТ до проверки.
@@ -687,7 +722,7 @@ namespace ChillHub.Core.Sync {
                                                         int read;
                                                         while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), attemptCt).ConfigureAwait(false)) > 0) {
                                                             await dst.WriteAsync(buffer.AsMemory(0, read), attemptCt).ConfigureAwait(false);
-                                                            Interlocked.Add(ref downloaded, read);
+                                                            Credit(credited + read);
 
                                                             // Ограничение скорости: список токенов общий на все потоки загрузки,
                                                             // поэтому ждём здесь, а не после записи — иначе сверхлимитные байты
@@ -708,6 +743,12 @@ namespace ChillHub.Core.Sync {
                                                     // одной перезакачкой с нуля.
                                                     VerifyDownloadedFile(partPath, t);
 
+                                                    // Файл сверен: зачитываем ровно столько,
+                                                    // сколько обещал план. Мелкие расхождения
+                                                    // (недописанный буфер прошлой попытки)
+                                                    // здесь и сходятся.
+                                                    Credit(t.Size);
+
                                                     break; // success
                                                 }
                                                 catch (Exception ex) {
@@ -727,6 +768,7 @@ namespace ChillHub.Core.Sync {
                                                         // Докачивать битый файл бессмысленно: начинаем с нуля
                                                         SafeDeleteFile(partPath);
                                                         existing = 0;
+                                                        Credit(0);
                                                         ChillHub.Core.Logging.Logger.Warn($"Скачанный файл '{t.RelativePath}' не прошёл проверку хеша, качаем заново (попытка {attempt + 1} из {maxAttempts})");
                                                     }
 
@@ -738,7 +780,13 @@ namespace ChillHub.Core.Sync {
                                                         existing = new FileInfo(partPath).Length;
                                                     }
                                                     catch {
+                                                        existing = 0;
                                                     }
+
+                                                    // Оборванная попытка могла не дописать
+                                                    // последний буфер: равняемся на то, что
+                                                    // на диске, а не на то, что прочитали.
+                                                    Credit(Math.Min(existing, t.Size));
                                                 }
                                             }
                                         }
