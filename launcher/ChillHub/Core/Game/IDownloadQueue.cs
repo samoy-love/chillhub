@@ -55,6 +55,23 @@ namespace ChillHub.Core.Game {
     /// Номер позиции в очереди, начиная с 1. Ожидающая карточка сообщала только «Ждёт
     /// очереди…» — из трёх одинаковых надписей нельзя было понять, какая пойдёт следующей.
     /// </param>
+    /// <summary>
+    /// Что очередь делает с игрой.
+    /// <para>
+    /// ПРОВЕРКА ФАЙЛОВ — ТАКАЯ ЖЕ ДОЛГАЯ РАБОТА, КАК ЗАКАЧКА. Она читает и хеширует
+    /// десятки гигабайт, а потом докачивает недостающее. Пока она шла мимо очереди,
+    /// уход со страницы игры её обрывал, в панели загрузок её не было видно, а
+    /// запущенная второй раз она шла параллельно первой по тем же файлам.
+    /// </para>
+    /// </summary>
+    internal enum QueueTaskKind {
+        /// <summary>Установка или обновление: скачать то, чего не хватает.</summary>
+        Download,
+
+        /// <summary>Проверка файлов: пересчитать хеши и починить расхождения.</summary>
+        Verify,
+    }
+
     internal sealed record QueueItem(
         string GameId,
         string Title,
@@ -66,7 +83,8 @@ namespace ChillHub.Core.Game {
         bool CanMoveUp = false,
         bool CanMoveDown = false,
         string IconUrl = "",
-        int QueuePosition = 0);
+        int QueuePosition = 0,
+        QueueTaskKind Kind = QueueTaskKind.Download);
 
     /// <summary>
     /// Очередь загрузок игр: то, с чем говорит UI. Реализация — деталь (фаза 1 держит всё
@@ -103,7 +121,7 @@ namespace ChillHub.Core.Game {
         /// </summary>
         /// <param name="gameId">Идентификатор игры.</param>
         /// <returns>True, если игру действительно поставили в очередь.</returns>
-        bool Enqueue(string gameId);
+        bool Enqueue(string gameId, QueueTaskKind kind = QueueTaskKind.Download);
 
         /// <summary>
         /// Убирает игру из очереди. Позицию, которая уже качается, помечает отменённой —

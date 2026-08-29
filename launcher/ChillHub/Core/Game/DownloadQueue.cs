@@ -33,6 +33,9 @@ namespace ChillHub.Core.Game {
         private readonly Func<string, GameInfo?> gameLookup;
         private readonly Func<string> baseApiProvider;
         private readonly Func<ISyncService> syncServiceFactory;
+
+        /// <summary>Вопрос «да/нет» игроку: текст, заголовок. Задаётся с UI-потока.</summary>
+        private readonly Func<string, string, bool> confirm;
         private readonly SemaphoreSlim workSignal = new(0);
         private readonly CancellationTokenSource lifetimeCts = new();
         private readonly Task worker;
@@ -47,10 +50,19 @@ namespace ChillHub.Core.Game {
         /// Фабрика службы синхронизации файлов — новый экземпляр на каждую позицию, как это
         /// делает <c>GamePage</c>. По умолчанию — <see cref="SimpleSyncService"/>.
         /// </param>
-        internal DownloadQueue(Func<string, GameInfo?> gameLookup, Func<string> baseApiProvider, Func<ISyncService>? syncServiceFactory = null) {
+        internal DownloadQueue(
+            Func<string, GameInfo?> gameLookup,
+            Func<string> baseApiProvider,
+            Func<ISyncService>? syncServiceFactory = null,
+            Func<string, string, bool>? confirm = null) {
             this.gameLookup = gameLookup ?? throw new ArgumentNullException(nameof(gameLookup));
             this.baseApiProvider = baseApiProvider ?? throw new ArgumentNullException(nameof(baseApiProvider));
             this.syncServiceFactory = syncServiceFactory ?? (() => new SimpleSyncService());
+
+            // Без вопроса проверка молча сносила бы всё, чего нет в манифесте: моды,
+            // скриншоты, сохранения в папке игры. Некому спросить — значит, не удаляем:
+            // отказ от проверки дешевле удалённых чужих файлов.
+            this.confirm = confirm ?? ((_, _) => false);
             this.worker = Task.Run(() => this.RunWorkerAsync(this.lifetimeCts.Token));
         }
 
@@ -77,7 +89,7 @@ namespace ChillHub.Core.Game {
         }
 
         /// <inheritdoc/>
-        public bool Enqueue(string gameId) {
+        public bool Enqueue(string gameId, QueueTaskKind kind = QueueTaskKind.Download) {
             if (string.IsNullOrWhiteSpace(gameId)) {
                 return false;
             }
@@ -87,8 +99,15 @@ namespace ChillHub.Core.Game {
                 return false;
             }
 
-            // Уже установлена и совпадает с последней версией — ставить в очередь нечего.
-            if (game.IsInstalled && !game.NeedsUpdate) {
+            // Уже установлена и совпадает с последней версией — качать нечего. А вот
+            // проверять есть что: ради неё проверку и запускают.
+            if (kind == QueueTaskKind.Download && game.IsInstalled && !game.NeedsUpdate) {
+                return false;
+            }
+
+            // Проверять нечего, пока игры нет на диске: сверять с манифестом пустую папку —
+            // это установка, и называться она должна установкой.
+            if (kind == QueueTaskKind.Verify && !game.IsInstalled) {
                 return false;
             }
 
@@ -107,7 +126,7 @@ namespace ChillHub.Core.Game {
                     return false;
                 }
 
-                entry = new Entry(gameId, string.IsNullOrWhiteSpace(game.Title) ? gameId : game.Title, game.IconUrl);
+                entry = new Entry(gameId, string.IsNullOrWhiteSpace(game.Title) ? gameId : game.Title, game.IconUrl, kind);
                 this.items.Add(entry);
                 snapshot = this.SnapshotLocked();
             }
@@ -352,8 +371,17 @@ namespace ChillHub.Core.Game {
                     // только через сюда, отчётами с полем Stage. Раньше здесь текст не менялся
                     // (оставался entry.StatusText как есть), и статус на карточке замирал на
                     // "Сравнение файлов…" на всё время реального скачивания, пока байты росли.
-                    ReportProgress = (p, _) => this.RaiseProgress(entry, StageText(p), p.BytesDownloaded, p.TotalBytes),
+                    ReportProgress = (p, _) => this.RaiseProgress(entry, entry.Stage(p), p.BytesDownloaded, p.TotalBytes),
+                    Confirm = this.confirm,
                 };
+
+                // Проверка удаляет всё, чего нет в манифесте, — моды, скриншоты,
+                // сохранения в папке игры. Спрашиваем: у закачки такого шага нет, она
+                // лишнего не трогает.
+                var verifying = entry.Kind == QueueTaskKind.Verify;
+                var syncKind = verifying
+                    ? SyncKind.Repair
+                    : (game.IsInstalled ? SyncKind.Update : SyncKind.Install);
 
                 var runner = new GameSyncRunner(this.syncServiceFactory(), ui);
                 var localRoot = GameLocalState.GameLocalRoot(entry.GameId);
@@ -366,8 +394,8 @@ namespace ChillHub.Core.Game {
                     this.baseApiProvider(),
                     localRoot,
                     game.ExeRelativePath,
-                    ConfirmDeletions: false,
-                    Kind: game.IsInstalled ? SyncKind.Update : SyncKind.Install,
+                    ConfirmDeletions: verifying,
+                    Kind: syncKind,
                     // Игра целиком, а не только её идентификатор: у записи есть настройки
                     // модов, и без них обновление поставило бы сборку без модпака.
                     Game: game);
@@ -410,10 +438,14 @@ namespace ChillHub.Core.Game {
         /// </summary>
         /// <param name="p">Отчёт синхронизации.</param>
         /// <returns>Текст для карточки очереди.</returns>
-        internal static string StageText(SyncProgress p) {
+        internal static string StageText(SyncProgress p, QueueTaskKind kind = QueueTaskKind.Download) {
             var text = p.Stage switch {
                 "Checking" => "Проверка…",
-                "Downloading" => "Скачивание обновления…",
+
+                // У проверки та же фаза называется иначе: она докачивает только то, что
+                // разошлось с манифестом, и «Скачивание обновления…» на ней читалось бы
+                // как «мне опять катят обновление», хотя игрок просил сверить файлы.
+                "Downloading" => kind == QueueTaskKind.Verify ? "Восстановление файлов…" : "Скачивание обновления…",
                 "Verifying" => "Проверка файлов…",
                 "Activating" => "Применение обновления…",
                 "Completed" => "Готово",
@@ -467,10 +499,11 @@ namespace ChillHub.Core.Game {
 
         /// <summary>Внутреннее изменяемое состояние позиции — наружу отдаём только снимки <see cref="QueueItem"/>.</summary>
         private sealed class Entry {
-            internal Entry(string gameId, string title, string iconUrl) {
+            internal Entry(string gameId, string title, string iconUrl, QueueTaskKind kind) {
                 this.GameId = gameId;
                 this.Title = title;
                 this.IconUrl = iconUrl ?? string.Empty;
+                this.Kind = kind;
             }
 
             internal string GameId { get; }
@@ -479,6 +512,9 @@ namespace ChillHub.Core.Game {
 
             internal string IconUrl { get; }
 
+            /// <summary>Что делаем с игрой: качаем или проверяем.</summary>
+            internal QueueTaskKind Kind { get; }
+
             internal QueueItemState State { get; set; } = QueueItemState.Waiting;
 
             internal long BytesDownloaded { get; set; }
@@ -486,6 +522,11 @@ namespace ChillHub.Core.Game {
             internal long TotalBytes { get; set; }
 
             internal string StatusText { get; set; } = "Ждёт очереди…";
+
+            /// <summary>Подпись стадии с учётом того, что именно делает позиция.</summary>
+            /// <param name="p">Отчёт синхронизации.</param>
+            /// <returns>Текст для строки очереди.</returns>
+            internal string Stage(SyncProgress p) => StageText(p, this.Kind);
 
             internal bool CancelRequested { get; set; }
 
@@ -558,7 +599,8 @@ namespace ChillHub.Core.Game {
                     canMoveUp,
                     canMoveDown,
                     this.IconUrl,
-                    position);
+                    position,
+                    this.Kind);
         }
     }
 }
