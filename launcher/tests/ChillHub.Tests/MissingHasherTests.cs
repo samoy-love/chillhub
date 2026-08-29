@@ -14,6 +14,7 @@ namespace ChillHub.Tests {
     using System.Threading;
     using System.Threading.Tasks;
 
+    using ChillHub.Core.SelfUpdate;
     using ChillHub.Core.Sync;
 
     using Xunit;
@@ -144,11 +145,36 @@ namespace ChillHub.Tests {
             var assemblyGone = new FileNotFoundException(
                 string.Empty, "Blake3, Version=2.0.0.0, Culture=neutral, PublicKeyToken=null");
 
-            var text = SimpleSyncService.Describe(assemblyGone);
+            var text = ExceptionText.Describe(assemblyGone);
 
             Assert.NotEmpty(text);
             Assert.Contains("Blake3", text, StringComparison.Ordinal);
-            Assert.Equal("сеть недоступна", SimpleSyncService.Describe(new HttpRequestException("сеть недоступна")));
+            Assert.Equal("сеть недоступна", ExceptionText.Describe(new HttpRequestException("сеть недоступна")));
+        }
+
+        /// <summary>
+        /// Сверка файла установки тоже не остаётся без текста: у неё свой перехват,
+        /// и в журнале стояло «reason=io_error » — двести семьдесят четыре строки,
+        /// не называющие ни причины, ни места, где смотреть.
+        /// </summary>
+        [Fact]
+        public void ПричинаРасхожденияНеОстаётсяБезТекста() {
+            using var stand = new SelfUpdateStand();
+            var locked = Path.Combine(stand.Install.Root, "busy.dll");
+            File.WriteAllBytes(locked, new byte[] { 1, 2, 3 });
+
+            // Держим файл открытым монопольно — сверка на него наткнётся.
+            using var hold = new FileStream(locked, FileMode.Open, FileAccess.Read, FileShare.None);
+
+            var f = new ManifestFile {
+                Path = "busy.dll",
+                Size = 3,
+                Sha256 = new string('a', 64),
+            };
+
+            Assert.False(SelfUpdateVersions.LocalFileMatches(stand.Install.Root, string.Empty, f, out var reason));
+            Assert.StartsWith("io_error ", reason, StringComparison.Ordinal);
+            Assert.True(reason.Trim().Length > "io_error".Length, $"причина пуста: «{reason}»");
         }
 
         /// <summary>
