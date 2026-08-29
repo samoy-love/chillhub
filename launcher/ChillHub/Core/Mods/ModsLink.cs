@@ -20,7 +20,30 @@ namespace ChillHub.Core.Mods {
     /// «riskofrain2», и угаданная ссылка ведёт в никуда — это хуже, чем её отсутствие.
     /// </para>
     /// </summary>
+    /// <summary>Что показать в строке «Модпак» на странице игры.</summary>
+    /// <param name="Visible">Показывать ли строку вообще.</param>
+    /// <param name="Name">Имя сборки для игрока.</param>
+    /// <param name="Url">Адрес страницы пакета; пусто — вести некуда.</param>
+    internal readonly record struct ModsRow(bool Visible, string Name, string Url);
+
     internal static class ModsLink {
+        /// <summary>
+        /// Строка «Модпак» целиком.
+        /// <para>
+        /// Строки нет вовсе у игры без модпака: пустое «Модпак: —» не рассказывает о
+        /// ней ничего. Ссылки нет, когда сервер не прислал слаг сообщества, — имя
+        /// пакета остаётся, а вести в никуда мы не будем.
+        /// </para>
+        /// </summary>
+        /// <param name="mods">Настройки модов игры.</param>
+        /// <returns>Что показать в строке.</returns>
+        internal static ModsRow RowFor(ModsInfo? mods) {
+            var name = mods is { HasLatest: true } ? mods.Describe() : string.Empty;
+            return string.IsNullOrWhiteSpace(name)
+                ? new ModsRow(false, string.Empty, string.Empty)
+                : new ModsRow(true, name, PackagePage(mods));
+        }
+
         /// <summary>
         /// Страница модпака на Thunderstore; пусто, если собрать адрес не из чего.
         /// </summary>

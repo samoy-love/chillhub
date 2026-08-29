@@ -275,30 +275,23 @@ namespace ChillHub.Pages {
         /// </summary>
         private void ShowModpack() {
             try {
-                var mods = this.game.Mods;
-                var name = mods is { HasLatest: true } ? mods.Describe() : string.Empty;
-                if (string.IsNullOrWhiteSpace(name)) {
-                    this.ModpackRow.Visibility = Visibility.Collapsed;
+                // Само правило — в Core.Mods.ModsLink: внутри страницы его никто не
+                // проверит, а ошибка в нём выглядит как ссылка в никуда.
+                var row = Core.Mods.ModsLink.RowFor(this.game.Mods);
+                this.ModpackRow.Visibility = row.Visible ? Visibility.Visible : Visibility.Collapsed;
+                if (!row.Visible) {
                     return;
                 }
 
-                this.ModpackRow.Visibility = Visibility.Visible;
-                var url = Core.Mods.ModsLink.PackagePage(mods);
-                if (string.IsNullOrEmpty(url)) {
-                    this.ModpackText.Text = name;
-                    this.ModpackText.ToolTip = null;
-                    this.ModpackText.Cursor = null;
-                    this.ModpackText.MouseLeftButtonUp -= this.ModpackText_MouseLeftButtonUp;
-                    return;
-                }
-
-                this.ModpackText.Text = name;
-                this.ModpackText.Foreground = (System.Windows.Media.Brush)this.FindResource("Brush.Accent");
-                this.ModpackText.Cursor = System.Windows.Input.Cursors.Hand;
-                this.ModpackText.ToolTip = url;
-                this.ModpackText.Tag = url;
+                this.ModpackText.Text = row.Name;
+                this.ModpackText.Tag = row.Url;
+                this.ModpackText.ToolTip = row.Url.Length > 0 ? row.Url : null;
+                this.ModpackText.Cursor = row.Url.Length > 0 ? System.Windows.Input.Cursors.Hand : null;
                 this.ModpackText.MouseLeftButtonUp -= this.ModpackText_MouseLeftButtonUp;
-                this.ModpackText.MouseLeftButtonUp += this.ModpackText_MouseLeftButtonUp;
+                if (row.Url.Length > 0) {
+                    this.ModpackText.Foreground = (System.Windows.Media.Brush)this.FindResource("Brush.Accent");
+                    this.ModpackText.MouseLeftButtonUp += this.ModpackText_MouseLeftButtonUp;
+                }
             }
             catch (Exception ex) {
                 // Строка о модпаке — справка, а не причина не открыть страницу игры.

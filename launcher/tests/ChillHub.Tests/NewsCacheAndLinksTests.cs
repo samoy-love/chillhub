@@ -7,10 +7,14 @@ namespace ChillHub.Tests {
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Net;
+    using System.Net.Http;
     using System.Text;
+    using System.Threading;
     using System.Threading.Tasks;
 
     using ChillHub.Core;
+
     using ChillHub.Core.Mods;
     using ChillHub.Core.News;
 
@@ -20,6 +24,8 @@ namespace ChillHub.Tests {
     /// Новости: картинки внутри страницы, текст на диске — и ссылка на модпак.
     /// </summary>
     public class NewsCacheAndLinksTests : IDisposable {
+        private const string Url = "https://news.invalid/story.md";
+
         private readonly string dir = Path.Combine(Path.GetTempPath(), "chillhub-news-" + Guid.NewGuid().ToString("N"));
         private readonly IDisposable scope;
 
@@ -169,6 +175,205 @@ namespace ChillHub.Tests {
         [InlineData("Team-1.0.0")]
         public void НепонятноеИмяВерсииСсылкиНеДаёт(string version) {
             Assert.Empty(ModsLink.PackagePage(Mods("repo", version)));
+        }
+
+        /// <summary>Строка «Модпак» на странице игры: имя и ссылка.</summary>
+        [Fact]
+        public void СтрокаМодпакаНесётИмяИСсылку() {
+            var row = ModsLink.RowFor(Mods("repo", "vcMoo-Moo_Modpack-1.9.9"));
+
+            Assert.True(row.Visible);
+            Assert.Equal("https://thunderstore.io/c/repo/p/vcMoo/Moo_Modpack/", row.Url);
+            Assert.NotEmpty(row.Name);
+        }
+
+        /// <summary>
+        /// У игры без модпака строки нет вовсе: пустое «Модпак: —» не рассказывает о
+        /// ней ничего.
+        /// </summary>
+        [Fact]
+        public void БезМодпакаСтрокиНет() {
+            Assert.False(ModsLink.RowFor(null).Visible);
+            Assert.False(ModsLink.RowFor(new ModsInfo { HasLatest = false }).Visible);
+        }
+
+        /// <summary>Нет слага — имя остаётся, ссылки нет: вести в никуда мы не будем.</summary>
+        [Fact]
+        public void БезСлагаИмяОстаётсяБезСсылки() {
+            var row = ModsLink.RowFor(Mods(string.Empty, "vcMoo-Moo_Modpack-1.9.9"));
+
+            Assert.True(row.Visible);
+            Assert.NotEmpty(row.Name);
+            Assert.Empty(row.Url);
+        }
+
+        /// <summary>Тип картинки берётся из расширения — он нужен браузеру в самой строке.</summary>
+        [Theory]
+        [InlineData("/a.png", "image/png")]
+        [InlineData("/a.gif", "image/gif")]
+        [InlineData("/a.webp", "image/webp")]
+        [InlineData("/a.svg", "image/svg+xml")]
+        [InlineData("/a.jpg", "image/jpeg")]
+        [InlineData("/a.png?v=2", "image/png")]
+        public async Task ТипКартинкиБерётсяИзРасширения(string src, string mime) {
+            var inlined = await NewsImages.InlineAsync(
+                $"<img src=\"{src}\"/>", "https://news.invalid", _ => Task.FromResult(new byte[] { 1 }));
+
+            Assert.Contains("data:" + mime + ";base64,", inlined, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Слишком тяжёлая картинка остаётся ссылкой: страница уезжает в WebView2 одной
+        /// строкой, и вложенная в неё громадина сделала бы неподъёмной всю страницу.
+        /// </summary>
+        [Fact]
+        public async Task СлишкомТяжёлаяКартинкаОстаётсяСсылкой() {
+            var html = "<img src=\"/big.png\"/>";
+            var heavy = new byte[NewsImages.MaxInlineBytes + 1];
+
+            var inlined = await NewsImages.InlineAsync(html, "https://news.invalid", _ => Task.FromResult(heavy));
+
+            Assert.Equal(html, inlined);
+        }
+
+        /// <summary>Пустой странице и странице без картинок подстановка не вредит.</summary>
+        [Fact]
+        public async Task СтраницаБезКартинокОстаётсяПрежней() {
+            Assert.Equal(string.Empty, await NewsImages.InlineAsync(string.Empty, "https://news.invalid", _ => Task.FromResult(new byte[] { 1 })));
+
+            var plain = "<p>текст без картинок</p>";
+            Assert.Equal(plain, await NewsImages.InlineAsync(plain, "https://news.invalid", _ => Task.FromResult(new byte[] { 1 })));
+        }
+
+        /// <summary>Выключенный кеш новостей ничего не пишет и ничего не отдаёт.</summary>
+        [Fact]
+        public void ВыключенныйКешМолчит() {
+            NewsContentCache.Enabled = false;
+            try {
+                NewsContentCache.Save("https://news.invalid/off.md", "текст", null, null);
+                Assert.Null(NewsContentCache.Read("https://news.invalid/off.md"));
+            }
+            finally {
+                NewsContentCache.Enabled = true;
+            }
+        }
+
+        /// <summary>
+        /// Старые новости вытесняются: столько никто не открывает, а каталог рос бы без
+        /// границы.
+        /// </summary>
+        [Fact]
+        public void СтарыеНовостиВытесняются() {
+            for (var i = 0; i < NewsContentCache.MaxEntries + 5; i++) {
+                NewsContentCache.Save($"https://news.invalid/{i}.md", "текст " + i, null, null);
+            }
+
+            Assert.True(
+                Directory.GetFiles(this.dir, "*.json").Length <= NewsContentCache.MaxEntries,
+                "в кеше осталось больше записей, чем разрешено");
+        }
+
+        /// <summary>Продлевать метки нечему, если новости в кеше нет.</summary>
+        [Fact]
+        public void ПродлениеМетокБезЗаписиНичегоНеСоздаёт() {
+            NewsContentCache.Touch("https://news.invalid/absent.md", "\"tag\"", null);
+
+            Assert.Null(NewsContentCache.Read("https://news.invalid/absent.md"));
+        }
+
+        /// <summary>
+        /// ГЛАВНОЕ ПРО СЕТЬ. Второй заход спрашивает сервер условным запросом, а на
+        /// ответ «не менялось» отдаёт сохранённое: тела у такого ответа нет.
+        /// </summary>
+        [Fact]
+        public async Task ВторойЗаходСпрашиваетУсловноИБерётСохранённое() {
+            var asked = new List<HttpRequestMessage>();
+            var net = new ScriptedNews(asked, req =>
+                asked.Count == 1
+                    ? Ok("# первый", "\"tag-1\"")
+                    : new HttpResponseMessage(HttpStatusCode.NotModified));
+            var client = new NewsContentClient(new HttpClient(net));
+
+            Assert.Equal("# первый", await client.FetchAsync(Url));
+            Assert.Equal("# первый", await client.FetchAsync(Url));
+
+            Assert.Equal(2, asked.Count);
+            Assert.Contains("\"tag-1\"", asked[1].Headers.IfNoneMatch.ToString(), StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Сети нет — открытая однажды новость всё равно открывается. Отказ вместо уже
+        /// сохранённого текста не даёт ничего.
+        /// </summary>
+        [Fact]
+        public async Task БезСетиНовостьБерётсяСДиска() {
+            var asked = new List<HttpRequestMessage>();
+            var fine = new NewsContentClient(new HttpClient(new ScriptedNews(asked, _ => Ok("# текст", null))));
+            Assert.Equal("# текст", await fine.FetchAsync(Url));
+
+            var broken = new NewsContentClient(new HttpClient(new DeadNews()));
+            Assert.Equal("# текст", await broken.FetchAsync(Url));
+        }
+
+        /// <summary>
+        /// Новости в кеше нет и сети нет — отказ выходит наружу: показать вместо текста
+        /// нечего, и молчать об этом нельзя.
+        /// </summary>
+        [Fact]
+        public async Task БезКешаИБезСетиОтказВыходитНаружу() {
+            var client = new NewsContentClient(new HttpClient(new DeadNews()));
+
+            await Assert.ThrowsAnyAsync<Exception>(() => client.FetchAsync(Url));
+        }
+
+        /// <summary>Сервер без ETag сверяется по дате изменения.</summary>
+        [Fact]
+        public async Task БезETagСверкаИдётПоДате() {
+            var asked = new List<HttpRequestMessage>();
+            var net = new ScriptedNews(asked, _ => {
+                var ok = Ok("# текст", null);
+                ok.Content.Headers.LastModified = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+                return ok;
+            });
+            var client = new NewsContentClient(new HttpClient(net));
+
+            await client.FetchAsync(Url);
+            await client.FetchAsync(Url);
+
+            Assert.NotNull(asked[1].Headers.IfModifiedSince);
+        }
+
+        private static HttpResponseMessage Ok(string text, string? etag) {
+            var response = new HttpResponseMessage(HttpStatusCode.OK) {
+                Content = new StringContent(text, Encoding.UTF8),
+            };
+            if (etag != null) {
+                response.Headers.TryAddWithoutValidation("ETag", etag);
+            }
+
+            return response;
+        }
+
+        /// <summary>Сеть, которая отвечает по сценарию и запоминает запросы.</summary>
+        private sealed class ScriptedNews : HttpMessageHandler {
+            private readonly List<HttpRequestMessage> asked;
+            private readonly Func<HttpRequestMessage, HttpResponseMessage> respond;
+
+            internal ScriptedNews(List<HttpRequestMessage> asked, Func<HttpRequestMessage, HttpResponseMessage> respond) {
+                this.asked = asked;
+                this.respond = respond;
+            }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) {
+                this.asked.Add(request);
+                return Task.FromResult(this.respond(request));
+            }
+        }
+
+        /// <summary>Сеть, которой нет.</summary>
+        private sealed class DeadNews : HttpMessageHandler {
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+                => Task.FromException<HttpResponseMessage>(new HttpRequestException("сеть недоступна"));
         }
 
         private static ModsInfo Mods(string community, string version) => new ModsInfo {
