@@ -150,6 +150,15 @@ namespace ChillHub.Tests {
             Assert.NotEmpty(text);
             Assert.Contains("Blake3", text, StringComparison.Ordinal);
             Assert.Equal("сеть недоступна", ExceptionText.Describe(new HttpRequestException("сеть недоступна")));
+
+            // Пустое исключение без имени файла: остаётся хотя бы тип — строка,
+            // по которой видно, что искать, вместо пустоты после двоеточия.
+            Assert.Equal(
+                nameof(InvalidOperationException),
+                ExceptionText.Describe(new InvalidOperationException(string.Empty)));
+
+            // Отказа не было вовсе — и приписывать его нечему.
+            Assert.Empty(ExceptionText.Describe(null));
         }
 
         /// <summary>
