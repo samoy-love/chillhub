@@ -61,16 +61,10 @@ namespace ChillHub {
 
         /// <summary>
         /// Найденное обновление, которое пока некому показать: окно свёрнуто, спрятано
-        /// в трей или занято закачкой.
-        /// <para>
-        /// БЕЗ ЭТОГО РЕЗУЛЬТАТ ПРОВЕРКИ ПРОСТО ВЫБРАСЫВАЛСЯ. Таймер ходит за версией
-        /// независимо от того, видно ли окно; найдя обновление у свёрнутого окна, он
-        /// молча уходил ни с чем, а возврат фокуса за новой проверкой не шёл —
-        /// ограничитель пропускает её не чаще раза в десять минут. Человек возвращался
-        /// к лаунчеру, и тот молчал.
-        /// </para>
+        /// в трей или занято работой в очереди. Сам автомат — в
+        /// <see cref="Core.SelfUpdate.SelfUpdateGate"/>, где его проверяют тесты.
         /// </summary>
-        private SelfUpdatePrecheck? pendingSelfUpdate;
+        private readonly Core.SelfUpdate.SelfUpdateGate selfUpdateGate = new Core.SelfUpdate.SelfUpdateGate();
 
         /// <summary>
         /// То же для состояния модов в папке Steam: перечитывание лезет в реестр и обходит
@@ -159,8 +153,7 @@ namespace ChillHub {
                 // Ограничитель молчит, когда обновление уже найдено и ждёт показа:
                 // показать известное ничего не стоит, а ждать с ним десять минут — это
                 // ровно то, из-за чего окно не появлялось при возврате к лаунчеру.
-                if (Core.SelfUpdate.SelfUpdatePrompt.ShouldCheckOnActivate(
-                        this.pendingSelfUpdate != null, this.selfUpdateOnActivate.Allow())) {
+                if (this.selfUpdateGate.ShouldCheckOnActivate(this.selfUpdateOnActivate.Allow())) {
                     _ = this.RunSelfUpdateCheckAsync();
                 }
 
@@ -400,7 +393,7 @@ namespace ChillHub {
 
                     // Обновления больше нет (уже поставили, откатили на сервере) —
                     // отложенному показывать нечего.
-                    this.pendingSelfUpdate = null;
+                    this.selfUpdateGate.Forget();
                     return;
                 }
 
@@ -433,18 +426,18 @@ namespace ChillHub {
             // Окно спрятано в трее/свёрнуто или идёт работа в очереди — не время лезть с
             // диалогом. Но и забывать найденное нельзя: покажем, как только человек
             // вернётся к окну (см. pendingSelfUpdate и обработчик Activated).
-            if (!Core.SelfUpdate.SelfUpdatePrompt.CanShowNow(
-                    this.IsVisible,
-                    this.WindowState == WindowState.Minimized,
-                    this.CurrentHome?.HasActiveDownloads == true)) {
-                this.pendingSelfUpdate = precheck;
+            var ready = this.selfUpdateGate.Offer(
+                precheck,
+                this.IsVisible,
+                this.WindowState == WindowState.Minimized,
+                this.CurrentHome?.HasActiveDownloads == true);
+            if (ready == null) {
                 Core.Logging.Logger.Info(
                     $"Self-update {precheck.Decision.RemoteVersion} найдено, но показывать сейчас некому — отложено до возврата к окну");
                 return;
             }
 
-            this.pendingSelfUpdate = null;
-            var upd = new UpdateWindow(precheck) {
+            var upd = new UpdateWindow(ready) {
                 Owner = this,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
             };

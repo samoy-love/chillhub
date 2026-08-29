@@ -61,6 +61,82 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// ГЛАВНОЕ ПРО АВТОМАТ. Обновление нашли, а показывать некому — оно ждёт, и
+        /// первый же подходящий момент его отдаёт. Ровно это и выбрасывалось.
+        /// </summary>
+        [Fact]
+        public void НайденноеПриСвёрнутомОкнеЖдётИДожидается() {
+            var gate = new SelfUpdateGate();
+            var found = Precheck("1.6.20");
+
+            // Окно свёрнуто — показывать некому.
+            Assert.Null(gate.Offer(found, windowVisible: true, minimized: true, busy: false));
+            Assert.True(gate.Waiting);
+
+            // Человек вернулся к окну — обновление отдаётся ему же, не потерявшись.
+            var ready = gate.Offer(found, windowVisible: true, minimized: false, busy: false);
+            Assert.NotNull(ready);
+            Assert.Equal("1.6.20", ready!.Value.Decision.RemoteVersion);
+            Assert.False(gate.Waiting);
+        }
+
+        /// <summary>
+        /// Пока обновление ждёт, возврат фокуса идёт за проверкой мимо ограничителя —
+        /// а как только показали, ограничитель снова в силе.
+        /// </summary>
+        [Fact]
+        public void ОжидающееОбновлениеОткрываетПроверкуМимоОграничителя() {
+            var gate = new SelfUpdateGate();
+
+            Assert.False(gate.ShouldCheckOnActivate(throttleAllows: false));
+
+            gate.Offer(Precheck(), windowVisible: false, minimized: false, busy: false);
+            Assert.True(gate.ShouldCheckOnActivate(throttleAllows: false));
+
+            gate.Offer(Precheck(), windowVisible: true, minimized: false, busy: false);
+            Assert.False(gate.ShouldCheckOnActivate(throttleAllows: false));
+        }
+
+        /// <summary>
+        /// Обновления больше нет — уже поставили или откатили на сервере. Отложенное
+        /// забывается, иначе диалог всплыл бы с версией, которой уже не существует.
+        /// </summary>
+        [Fact]
+        public void ИсчезнувшееОбновлениеЗабывается() {
+            var gate = new SelfUpdateGate();
+            gate.Offer(Precheck(), windowVisible: false, minimized: false, busy: false);
+            Assert.True(gate.Waiting);
+
+            gate.Forget();
+
+            Assert.False(gate.Waiting);
+            Assert.False(gate.ShouldCheckOnActivate(throttleAllows: false));
+        }
+
+        /// <summary>
+        /// Показанное не показывается второй раз: иначе следующий возврат фокуса открыл
+        /// бы диалог поверх только что закрытого.
+        /// </summary>
+        [Fact]
+        public void ПоказанноеВторойРазНеВсплывает() {
+            var gate = new SelfUpdateGate();
+
+            Assert.NotNull(gate.Offer(Precheck(), windowVisible: true, minimized: false, busy: false));
+
+            Assert.False(gate.Waiting);
+        }
+
+        /// <summary>Проверка нашла обновление указанной версии.</summary>
+        /// <param name="version">Версия на сервере.</param>
+        /// <returns>Решение проверки.</returns>
+        private static SelfUpdatePrecheck Precheck(string version = "1.6.20") => new SelfUpdatePrecheck {
+            Decision = new SelfUpdateDecision {
+                State = SelfUpdateState.UpdateAvailable,
+                RemoteVersion = version,
+            },
+        };
+
+        /// <summary>
         /// Сам ограничитель: первый возврат фокуса пропускает всегда, следующий — только
         /// когда срок вышел. Без этого правила проверка обновления при возврате к окну
         /// не запускалась бы вовсе.
