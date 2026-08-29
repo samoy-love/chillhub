@@ -2702,14 +2702,6 @@ namespace ChillHub.Pages {
             }
         }
 
-        private void CoverImg_Loaded(object sender, RoutedEventArgs e) {
-            if (sender is not Image img) {
-                return;
-            }
-
-            ImageLoader.AttachAndLoad(img, this.BaseApi);
-        }
-
         private void CoverImg_ImageFailed(object sender, ExceptionRoutedEventArgs e) {
             if (sender is not Image img) {
                 return;

@@ -6,6 +6,7 @@
 namespace ChillHub.Core.Sync {
     using System;
     using System.Collections.Generic;
+    using System.IO;
     using System.Text.Json.Serialization;
 
     public class Manifest {
@@ -47,5 +48,22 @@ namespace ChillHub.Core.Sync {
 
         [JsonPropertyName("executable")]
         public bool Executable { get; set; }
+    }
+
+    /// <summary>
+    /// Проверить скачанный файл нечем: манифест дал только Blake3, а посчитать его на
+    /// этой машине не на чем (нет сборки рядом с лаунчером).
+    /// <para>
+    /// Отдельный тип, а не просто <see cref="IOException"/>: загрузчик по нему отличает
+    /// «не починится повтором» от обычного сбоя сети. Без этого отличия пропавшая
+    /// сборка стоила игроку трёх попыток на каждый файл модпака.
+    /// </para>
+    /// </summary>
+    internal sealed class VerificationUnavailableException : IOException {
+        /// <summary>Initializes a new instance of the <see cref="VerificationUnavailableException"/> class.</summary>
+        /// <param name="message">Что именно проверить не удалось.</param>
+        internal VerificationUnavailableException(string message)
+            : base(message) {
+        }
     }
 }

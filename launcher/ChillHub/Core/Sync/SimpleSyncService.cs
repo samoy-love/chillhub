@@ -620,9 +620,35 @@ namespace ChillHub.Core.Sync {
                                     // копия с диска вместо загрузки по сети. Сверку он
                                     // проходит ту же самую, а не прошедший её просто
                                     // качается дальше обычным путём.
+                                    // СЧЁТЧИК МЕРЯЕТ СДЕЛАННОЕ, А НЕ ВЫКАЧАННОЕ.
+                                    //
+                                    // Раньше к нему прибавлялся каждый прочитанный из сети
+                                    // байт — и ничего не вычиталось, когда эти байты
+                                    // выбрасывали. А выбрасывают их регулярно: сервер
+                                    // ответил на Range целым файлом, .part не прошёл сверку
+                                    // хеша, соединение оборвалось на середине. Каждая такая
+                                    // перезакачка ложилась поверх первой, и модпак на
+                                    // 892 МБ показывал «2,4 ГБ из 892,3 МБ» — полосу,
+                                    // упёртую в 100%, при живой скорости рядом.
+                                    //
+                                    // credited — сколько байт ЭТОГО файла уже зачтено. Он
+                                    // равняется на длину .part, поэтому счётчик всегда
+                                    // говорит, сколько из плана лежит на диске: не обгоняет
+                                    // общий объём и приходит ровно к нему.
+                                    long credited = 0;
+                                    void Credit(long onDisk) {
+                                        var delta = onDisk - credited;
+                                        if (delta == 0) {
+                                            return;
+                                        }
+
+                                        credited = onDisk;
+                                        Interlocked.Add(ref downloaded, delta);
+                                    }
+
                                     var reused = TryCopyFromDisk(t, partPath);
                                     if (reused) {
-                                        Interlocked.Add(ref downloaded, t.Size);
+                                        Credit(t.Size);
                                         ReportDownloadProgress();
                                     }
 
@@ -637,6 +663,11 @@ namespace ChillHub.Core.Sync {
                                             catch {
                                             }
                                         }
+
+                                        // Уцелевший от прошлого запуска кусок — тоже
+                                        // сделанная работа: без этого докачка показывала
+                                        // меньше, чем на диске уже лежит.
+                                        Credit(Math.Min(existing, t.Size));
 
                                         var attempt = 0;
                                         var maxAttempts = 3;
@@ -674,6 +705,10 @@ namespace ChillHub.Core.Sync {
                                                         }
                                                         catch {
                                                         }
+
+                                                        // Начали файл заново — значит, зачтённое
+                                                        // по нему больше ничем не подкреплено.
+                                                        Credit(0);
                                                     }
 
                                                     // Блок обязателен: поток записи должен быть ЗАКРЫТ до проверки.
@@ -687,7 +722,7 @@ namespace ChillHub.Core.Sync {
                                                         int read;
                                                         while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), attemptCt).ConfigureAwait(false)) > 0) {
                                                             await dst.WriteAsync(buffer.AsMemory(0, read), attemptCt).ConfigureAwait(false);
-                                                            Interlocked.Add(ref downloaded, read);
+                                                            Credit(credited + read);
 
                                                             // Ограничение скорости: список токенов общий на все потоки загрузки,
                                                             // поэтому ждём здесь, а не после записи — иначе сверхлимитные байты
@@ -708,6 +743,12 @@ namespace ChillHub.Core.Sync {
                                                     // одной перезакачкой с нуля.
                                                     VerifyDownloadedFile(partPath, t);
 
+                                                    // Файл сверен: зачитываем ровно столько,
+                                                    // сколько обещал план. Мелкие расхождения
+                                                    // (недописанный буфер прошлой попытки)
+                                                    // здесь и сходятся.
+                                                    Credit(t.Size);
+
                                                     break; // success
                                                 }
                                                 catch (Exception ex) {
@@ -716,17 +757,31 @@ namespace ChillHub.Core.Sync {
                                                     // настоящая отмена приходят одним и тем же типом исключения.
                                                     ct.ThrowIfCancellationRequested();
 
+                                                    // ЧТО НЕ ЧИНИТСЯ ПОВТОРОМ — НЕ ПОВТОРЯЕМ. Пропавшая рядом с
+                                                    // лаунчером сборка (Blake3) роняла КАЖДУЮ сверку скачанного
+                                                    // файла, а загрузчик принимал это за сбой сети: три попытки
+                                                    // на каждый из без малого тысячи файлов модпака — три с
+                                                    // половиной минуты и 2,4 ГБ трафика впустую, чтобы прийти к
+                                                    // тому же отказу, который был очевиден на первом файле.
+                                                    if (IsUnrecoverable(ex)) {
+                                                        throw new IOException(
+                                                            $"Не удалось проверить {t.RelativePath}: {Describe(ex)}. " +
+                                                            "Файлы лаунчера неполные — переустановите его.",
+                                                            ex);
+                                                    }
+
                                                     attempt++;
                                                     if (attempt >= maxAttempts) {
                                                         throw ex is InvalidDataException
                                                             ? new InvalidDataException($"Файл {t.RelativePath} не прошёл проверку хеша после {maxAttempts} попыток", ex)
-                                                            : new IOException($"Ошибка загрузки {t.RelativePath}: {ex.Message}", ex);
+                                                            : new IOException($"Ошибка загрузки {t.RelativePath}: {Describe(ex)}", ex);
                                                     }
 
                                                     if (ex is InvalidDataException) {
                                                         // Докачивать битый файл бессмысленно: начинаем с нуля
                                                         SafeDeleteFile(partPath);
                                                         existing = 0;
+                                                        Credit(0);
                                                         ChillHub.Core.Logging.Logger.Warn($"Скачанный файл '{t.RelativePath}' не прошёл проверку хеша, качаем заново (попытка {attempt + 1} из {maxAttempts})");
                                                     }
 
@@ -738,7 +793,13 @@ namespace ChillHub.Core.Sync {
                                                         existing = new FileInfo(partPath).Length;
                                                     }
                                                     catch {
+                                                        existing = 0;
                                                     }
+
+                                                    // Оборванная попытка могла не дописать
+                                                    // последний буфер: равняемся на то, что
+                                                    // на диске, а не на то, что прочитали.
+                                                    Credit(Math.Min(existing, t.Size));
                                                 }
                                             }
                                         }
@@ -1014,12 +1075,57 @@ namespace ChillHub.Core.Sync {
         }
 
         /// <summary>
+        /// Сбой, который повтором не лечится: не хватает самих файлов лаунчера.
+        /// <para>
+        /// Такое приходит из сверки хешей, а не из сети: нет сборки Blake3, нет её
+        /// нативной части, не та разрядность. Сколько ни качай файл заново, посчитать
+        /// его хеш будет всё так же нечем.
+        /// </para>
+        /// </summary>
+        /// <param name="ex">Пойманное исключение.</param>
+        /// <returns>true, если повторять бессмысленно.</returns>
+        internal static bool IsUnrecoverable(Exception ex) => ex switch {
+            // Проверять файл нечем — сколько его ни качай, хеш считать не на чем.
+            VerificationUnavailableException => true,
+
+            // FileNotFoundException бросает и файловая система, и загрузчик сборок.
+            // Разница — в FileName: у сборки там её имя, а не путь к файлу игры.
+            FileNotFoundException f => !string.IsNullOrEmpty(f.FileName) && !Path.IsPathRooted(f.FileName),
+            DllNotFoundException => true,
+            BadImageFormatException => true,
+            TypeLoadException => true,
+            _ => false,
+        };
+
+        /// <summary>
+        /// Текст исключения для журнала и для игрока.
+        /// <para>
+        /// У FileNotFoundException по сборке Message пуст, и отказ уезжал в обращение
+        /// строкой «Ошибка загрузки .doorstop_version: » — с двоеточием и пустотой за
+        /// ним. Название типа — не подарок, но оно хотя бы называет случившееся.
+        /// </para>
+        /// </summary>
+        /// <param name="ex">Исключение.</param>
+        /// <returns>Непустое описание.</returns>
+        internal static string Describe(Exception ex) {
+            var message = (ex.Message ?? string.Empty).Trim();
+            if (message.Length > 0) {
+                return message;
+            }
+
+            return ex is FileNotFoundException { FileName.Length: > 0 } f
+                ? $"{ex.GetType().Name}: {f.FileName}"
+                : ex.GetType().Name;
+        }
+
+        /// <summary>
         /// Сверяет скачанный .part с хешами из манифеста (SHA-256 и Blake3 за один проход).
         /// Файл не удаляет: решение о повторной попытке принимает цикл ретраев.
         /// </summary>
         /// <param name="partPath">Путь к скачанному файлу.</param>
         /// <param name="t">Задание из плана с ожидаемыми хешами.</param>
         /// <exception cref="InvalidDataException">Содержимое не совпало с манифестом.</exception>
+        /// <exception cref="VerificationUnavailableException">Проверять файл не по чему.</exception>
         private static void VerifyDownloadedFile(string partPath, FileTask t) {
             if (string.IsNullOrWhiteSpace(t.Sha256) && string.IsNullOrWhiteSpace(t.Blake3)) {
                 return;
@@ -1033,8 +1139,19 @@ namespace ChillHub.Core.Sync {
                 throw new InvalidDataException($"Хеш SHA-256 не совпадает: {t.RelativePath}");
             }
 
-            if (!string.IsNullOrWhiteSpace(t.Blake3) && !string.Equals(b3Hex, t.Blake3, StringComparison.OrdinalIgnoreCase)) {
+            // Пустой посчитанный Blake3 — «нечем считать», а не «не совпал»: на такой
+            // машине вердикт выносит SHA-256, и он уже вынесен выше.
+            if (!string.IsNullOrWhiteSpace(t.Blake3) && !string.IsNullOrWhiteSpace(b3Hex)
+                && !string.Equals(b3Hex, t.Blake3, StringComparison.OrdinalIgnoreCase)) {
                 throw new InvalidDataException($"Хеш Blake3 не совпадает: {t.RelativePath}");
+            }
+
+            // Манифест дал только Blake3, а посчитать его нечем: проверять файл не по
+            // чему. Установить непроверенное молча — хуже, чем отказать словами.
+            if (string.IsNullOrWhiteSpace(t.Sha256) && string.IsNullOrWhiteSpace(b3Hex)) {
+                throw new VerificationUnavailableException(
+                    $"Не удалось проверить {t.RelativePath}: на этой машине не считается Blake3, " +
+                    "а других хешей у файла нет. Файлы лаунчера неполные — переустановите его.");
             }
         }
 

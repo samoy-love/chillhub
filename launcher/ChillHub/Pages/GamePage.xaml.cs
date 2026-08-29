@@ -73,8 +73,7 @@ namespace ChillHub.Pages {
 
             try {
                 this.TitleText.Text = string.IsNullOrWhiteSpace(this.game.Title) ? this.game.GameId : this.game.Title;
-                this.GameIcon.Tag = this.game.IconUrl;
-                this.GameIcon.Source = null;
+                Core.UI.CoverImage.SetUrl(this.GameIcon, this.game.IconUrl);
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Error(ex, "GamePage.ctor.Header");
@@ -262,12 +261,6 @@ namespace ChillHub.Pages {
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Error(ex, "GamePage.BackBtn_Click");
-            }
-        }
-
-        private void CoverImg_Loaded(object sender, RoutedEventArgs e) {
-            if (sender is System.Windows.Controls.Image img) {
-                ImageLoader.AttachAndLoad(img, this.BaseApi);
             }
         }
 

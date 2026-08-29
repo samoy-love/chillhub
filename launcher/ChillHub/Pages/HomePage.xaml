@@ -838,9 +838,9 @@
                         <TextBlock x:Name="DefaultGameIcon" FontFamily="Segoe MDL2 Assets" Text="&#xE7C3;" FontSize="18"
                                    Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center" HorizontalAlignment="Center"
                                    Visibility="Collapsed"/>
-                        <Image x:Name="IconImg" Source="{Binding IconUrl}" Tag="{Binding IconUrl}"
+                        <Image x:Name="IconImg" ui:CoverImage.Url="{Binding IconUrl}"
                                Stretch="UniformToFill" Visibility="Visible"
-                               Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
+                               ImageFailed="CoverImg_ImageFailed"/>
                       </Grid>
                       <!-- Название и статус словом. Статус занимает вторую строку той же
                            колонки — раньше он был иконкой справа, а расшифровка иконок жила
@@ -1008,8 +1008,8 @@
                   </Style.Triggers>
                 </Style>
               </Grid.Style>
-              <Image x:Name="HeroIconImg" Source="{Binding SelectedItem.IconUrl, ElementName=GameList}"
-                     Stretch="Uniform" Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
+              <Image x:Name="HeroIconImg" ui:CoverImage.Url="{Binding SelectedItem.IconUrl, ElementName=GameList}"
+                     Stretch="Uniform" ImageFailed="CoverImg_ImageFailed"/>
             </Grid>
 
             <StackPanel Grid.Row="1" VerticalAlignment="Bottom">
@@ -1202,8 +1202,8 @@
                            ImageLoader берёт из него размер, под который распаковывать картинку
                            (см. ApplyBitmap), и без него каждая обложка новости разворачивалась
                            бы в память в полный рост. -->
-                      <Image x:Name="CoverImg" Source="{Binding CoverUrl}" Tag="{Binding CoverUrl}" Stretch="UniformToFill" Height="94"
-                             Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
+                      <Image x:Name="CoverImg" ui:CoverImage.Url="{Binding CoverUrl}" Stretch="UniformToFill" Height="94"
+                             ImageFailed="CoverImg_ImageFailed"/>
                     </Border>
                   </Grid>
                   <!-- Правая колонка: текст -->
@@ -1307,8 +1307,8 @@
                            ImageLoader берёт из него размер, под который распаковывать картинку
                            (см. ApplyBitmap), и без него каждая обложка новости разворачивалась
                            бы в память в полный рост. -->
-                      <Image x:Name="CoverImg" Source="{Binding CoverUrl}" Tag="{Binding CoverUrl}" Stretch="UniformToFill" Height="94"
-                             Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
+                      <Image x:Name="CoverImg" ui:CoverImage.Url="{Binding CoverUrl}" Stretch="UniformToFill" Height="94"
+                             ImageFailed="CoverImg_ImageFailed"/>
                     </Border>
                   </Grid>
                   <!-- Правая колонка: текст -->
@@ -1423,8 +1423,8 @@
                             </Style.Triggers>
                           </Style>
                         </Border.Style>
-                        <Image Stretch="Uniform" Source="{Binding IconUrl}" Tag="{Binding IconUrl}"
-                               Loaded="CoverImg_Loaded" ImageFailed="CoverImg_ImageFailed"/>
+                        <Image Stretch="Uniform" ui:CoverImage.Url="{Binding IconUrl}"
+                               ImageFailed="CoverImg_ImageFailed"/>
                       </Border>
 
                       <!-- Название и процент вплотную друг к другу. Порознь — по краям

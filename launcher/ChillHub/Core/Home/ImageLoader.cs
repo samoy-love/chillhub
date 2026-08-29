@@ -53,6 +53,24 @@ namespace ChillHub.Core.Home {
         /// </summary>
         internal const int MaxCachedImages = 200;
 
+        /// <summary>
+        /// Какой адрес элемент ждёт прямо сейчас.
+        /// <para>
+        /// Загрузка идёт секунды, а строка списка за это время может достаться другой
+        /// игре — при смене порядка очереди WPF не пересоздаёт строку, а подставляет ей
+        /// новые данные в тот же самый <see cref="Image"/>. Без этой отметки приехавшая
+        /// картинка ложилась в элемент вслепую, и в очереди у одной игры оказывался
+        /// значок другой.
+        /// </para>
+        /// <para>
+        /// Отметки нет — значит, элемент ничего про себя не объявлял (так его зовут из
+        /// тестов и из старого пути через Loaded), и мешать некому: картинка кладётся.
+        /// </para>
+        /// </summary>
+        private static readonly DependencyProperty WantedUrlProperty =
+            DependencyProperty.RegisterAttached(
+                "WantedUrl", typeof(string), typeof(ImageLoader), new PropertyMetadata(null));
+
         /// <summary>Высота декодирования по умолчанию, если у элемента не задан размер.</summary>
         private const int DefaultDecodeHeight = 88;
 
@@ -167,7 +185,8 @@ namespace ChillHub.Core.Home {
         }
 
         /// <summary>
-        /// Полный сценарий обработчика Loaded у картинки: достать URL (Tag → DataContext → текущий Source),
+        /// Полный сценарий обработчика Loaded у картинки: достать URL
+        /// (<see cref="UI.CoverImage.UrlProperty"/> → Tag → DataContext → текущий Source),
         /// нормализовать относительно origin API и запустить загрузку.
         /// </summary>
         internal static void AttachAndLoad(Image img, string baseApi) {
@@ -175,7 +194,11 @@ namespace ChillHub.Core.Home {
                 return;
             }
 
-            string raw = (img.Tag as string) ?? string.Empty;
+            string raw = UI.CoverImage.GetUrl(img) ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(raw)) {
+                raw = (img.Tag as string) ?? string.Empty;
+            }
+
             if (string.IsNullOrWhiteSpace(raw)) {
                 raw = ExtractUrlFromDataContext(img.DataContext);
             }
@@ -184,7 +207,30 @@ namespace ChillHub.Core.Home {
                 raw = ExtractUrlFromSource(img.Source);
             }
 
+            Load(img, raw, baseApi);
+        }
+
+        /// <summary>
+        /// Загружает в элемент картинку по известному адресу.
+        /// <para>
+        /// Точка входа присоединённого свойства <see cref="UI.CoverImage.UrlProperty"/>:
+        /// адрес здесь уже известен, догадываться о нём не нужно. Заодно элемент
+        /// запоминает, ЧЕГО он ждёт, — по этой отметке уже неактуальная загрузка узнаёт,
+        /// что её результату здесь больше не место (см. <see cref="Stale"/>).
+        /// </para>
+        /// </summary>
+        /// <param name="img">Элемент с картинкой.</param>
+        /// <param name="rawUrl">Адрес как он пришёл с сервера; пусто — картинки нет.</param>
+        /// <param name="baseApi">База адреса сервера для корнеотносительных ссылок.</param>
+        internal static void Load(Image img, string? rawUrl, string baseApi) {
+            if (img == null) {
+                return;
+            }
+
+            var raw = rawUrl ?? string.Empty;
             if (string.IsNullOrWhiteSpace(raw)) {
+                img.SetValue(WantedUrlProperty, null);
+                img.Source = null;
                 img.Visibility = Visibility.Collapsed;
                 HideSkeleton(img);
                 return;
@@ -197,12 +243,18 @@ namespace ChillHub.Core.Home {
             catch (Exception ex) {
                 // Битый URL в манифесте/новости: картинку не показываем, но страница живёт дальше.
                 Logging.Logger.Warn($"[ImgLoad] не удалось разобрать URL raw='{raw}' baseApi='{baseApi}': {ex.Message}");
+                img.SetValue(WantedUrlProperty, null);
                 img.Visibility = Visibility.Collapsed;
                 HideSkeleton(img);
                 return;
             }
 
             DebugLog($"[ImgLoad] resolved url='{url}'");
+
+            // Элемент объявляет, чего он ждёт. Отметка ставится ДО загрузки: пока идёт
+            // эта, строке могут подставить другую игру, и вернувшаяся картинка должна
+            // узнать, что её уже никто не ждёт.
+            img.SetValue(WantedUrlProperty, url);
 
             // Если уже есть валидный источник с тем же URL — просто показать и скрыть скелетон
             if (img.Source is BitmapImage existing && existing.UriSource != null &&
@@ -217,6 +269,29 @@ namespace ChillHub.Core.Home {
 
             // Скелетон скрываем сразу: картинка появится по готовности
             HideSkeleton(img);
+        }
+
+        /// <summary>
+        /// Ждёт ли элемент до сих пор именно эту картинку.
+        /// <para>
+        /// Отвечает «нет», только когда элемент объявил ДРУГОЙ адрес: молчание — это не
+        /// отказ, а отсутствие мнения, и тогда картинка кладётся как прежде.
+        /// </para>
+        /// </summary>
+        /// <param name="img">Элемент.</param>
+        /// <param name="url">Адрес приехавшей картинки.</param>
+        /// <returns>true, если элемент за время загрузки достался другой игре.</returns>
+        private static bool Stale(Image img, string url) {
+            if (img.GetValue(WantedUrlProperty) is not string wanted || wanted.Length == 0) {
+                return false;
+            }
+
+            if (string.Equals(wanted, url, StringComparison.OrdinalIgnoreCase)) {
+                return false;
+            }
+
+            DebugLog($"[ImgLoad] картинка '{url}' уже не нужна: элемент ждёт '{wanted}'");
+            return true;
         }
 
         /// <summary>Реакция на событие ImageFailed: спрятать картинку и скелетон.</summary>
@@ -236,10 +311,7 @@ namespace ChillHub.Core.Home {
                 // Cache hit: apply immediately
                 if (Cache.TryGetValue(url, out var cached)) {
                     DebugLog($"[ImgLoad] cache hit url='{url}'");
-                    await img.Dispatcher.InvokeAsync(() => {
-                        img.Source = cached;
-                        img.Visibility = Visibility.Visible;
-                    });
+                    await img.Dispatcher.InvokeAsync(() => Show(img, cached, url));
                     return;
                 }
 
@@ -247,10 +319,7 @@ namespace ChillHub.Core.Home {
 
                 // Пока ждали, готовую картинку мог положить в кеш другой элемент
                 if (Cache.TryGetValue(url, out var ready)) {
-                    await img.Dispatcher.InvokeAsync(() => {
-                        img.Source = ready;
-                        img.Visibility = Visibility.Visible;
-                    });
+                    await img.Dispatcher.InvokeAsync(() => Show(img, ready, url));
                     return;
                 }
 
@@ -263,7 +332,13 @@ namespace ChillHub.Core.Home {
             catch (Exception ex) {
                 Logging.Logger.Warn($"[ImgLoad] error url='{url}': {ex.Message}");
                 try {
-                    await img.Dispatcher.InvokeAsync(() => img.Visibility = Visibility.Collapsed);
+                    await img.Dispatcher.InvokeAsync(() => {
+                        // Прячем только если элемент всё ещё ждёт именно эту картинку:
+                        // иначе неудача прошлой игры гасила бы значок новой.
+                        if (!Stale(img, url)) {
+                            img.Visibility = Visibility.Collapsed;
+                        }
+                    });
                 }
                 catch (Exception exUi) {
                     // Диспетчер уже завершён (окно закрывается) — прятать нечего.
@@ -353,6 +428,21 @@ namespace ChillHub.Core.Home {
         /// <summary>
         /// Раскодирует скачанные байты и показывает картинку. Вызывается только в UI-потоке.
         /// </summary>
+        /// <summary>
+        /// Показывает готовую картинку — но только той строке, которая её ещё ждёт.
+        /// </summary>
+        /// <param name="img">Элемент.</param>
+        /// <param name="image">Готовая замороженная картинка.</param>
+        /// <param name="url">Адрес, по которому её получили.</param>
+        private static void Show(Image img, BitmapImage image, string url) {
+            if (Stale(img, url)) {
+                return;
+            }
+
+            img.Source = image;
+            img.Visibility = Visibility.Visible;
+        }
+
         internal static void ApplyBitmap(Image img, MemoryStream ms, string url) {
             try {
                 var bi = new BitmapImage();
@@ -376,13 +466,19 @@ namespace ChillHub.Core.Home {
                 bi.Freeze();
 
                 Remember(url, bi); // заморожен — безопасно переиспользовать между потоками
-                img.Source = bi;
-                img.Visibility = Visibility.Visible;
+
+                // В кеш — всегда, на экран — только если строка всё ещё про эту игру:
+                // скачанное пригодится соседу, а вот показанное не в той строке уже не
+                // исправить (см. Stale).
+                Show(img, bi, url);
                 DebugLog($"[ImgLoad] image applied url='{url}'");
             }
             catch (Exception ex) {
                 // Битый/неподдерживаемый формат: показывать нечего, прячем элемент.
-                img.Visibility = Visibility.Collapsed;
+                if (!Stale(img, url)) {
+                    img.Visibility = Visibility.Collapsed;
+                }
+
                 Logging.Logger.Warn($"[ImgLoad] apply error url='{url}': {ex.Message}");
             }
         }
