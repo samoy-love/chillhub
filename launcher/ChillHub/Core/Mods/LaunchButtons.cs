@@ -43,17 +43,11 @@ namespace ChillHub.Core.Mods {
     /// <param name="ActionVisible">Показывать ли обычную кнопку действия («Играть», «Обновить»…).</param>
     /// <param name="MenuVisible">Показывать ли стрелку с остальными вариантами.</param>
     /// <param name="MenuTooltip">Подсказка стрелки.</param>
-    /// <param name="Run">
-    /// Что сейчас с игрой: запущена, запускается или ни то ни другое. От этого зависит
-    /// не только вид кнопок запуска, но и стрелка рядом — под ней лежат такие же
-    /// запуски, и оставить её живой значило бы оставить обход только что закрытой двери.
-    /// </param>
     internal sealed record LaunchBarView(
         IReadOnlyList<LaunchButtonView> Buttons,
         bool ActionVisible,
         bool MenuVisible,
-        string MenuTooltip,
-        Game.GameRunState Run = Game.GameRunState.None);
+        string MenuTooltip);
 
     /// <summary>
     /// Строка действий витрины для игры с модами: два способа играть — кнопками,
@@ -123,7 +117,11 @@ namespace ChillHub.Core.Mods {
         /// </param>
         /// <param name="options">Варианты запуска, посчитанные на этот момент.</param>
         /// <param name="remembered">Запомненный вариант запуска или null.</param>
-        /// <param name="run">Запущена ли игра прямо сейчас.</param>
+        /// <param name="runOf">
+        /// Состояние запуска КАЖДОГО варианта отдельно. Копия из Steam и сборка с
+        /// сервера — разные папки и разные процессы; пока состояние спрашивалось на игру
+        /// целиком, запуск одной подписывал «запускается…» обе кнопки сразу.
+        /// </param>
         /// <returns>Что показать в строке действий.</returns>
         internal static LaunchBarView Compute(
             ModsInfo? mods,
@@ -131,10 +129,12 @@ namespace ChillHub.Core.Mods {
             bool steamAllowed,
             IReadOnlyList<LaunchOption>? options,
             LaunchTarget? remembered,
-            Game.GameRunState run = Game.GameRunState.None) {
+            Func<LaunchTarget, Game.GameRunState>? runOf = null) {
+            Game.GameRunState State(LaunchTarget t) => runOf?.Invoke(t) ?? Game.GameRunState.None;
+
             var modded = (playMode || steamAllowed) && mods != null && !string.IsNullOrWhiteSpace(mods.SteamAppId);
             if (!modded || options == null || options.Count == 0) {
-                return new LaunchBarView(Array.Empty<LaunchButtonView>(), true, false, string.Empty, run);
+                return new LaunchBarView(Array.Empty<LaunchButtonView>(), true, false, string.Empty);
             }
 
             // Вне режима «Играть» сборки с сервера на витрине нет: её кнопка — это
@@ -170,19 +170,27 @@ namespace ChillHub.Core.Mods {
             var rest = MenuOptions(options, buttons);
             var tooltip = buttons.Count == 0 ? "Выбрать, что запускать" : MenuTooltip(rest);
 
-            // ИГРА УЖЕ ИДЁТ — НАЖИМАТЬ НЕЧЕГО. Кнопки не исчезают и не меняют
-            // назначения: они остаются на своих местах и говорят, что происходит.
-            // Пропади они — витрина запущенной игры выглядела бы сломанной, а
-            // останься живыми — второе нажатие подняло бы вторую копию игры.
-            if (run != Game.GameRunState.None) {
-                var note = Game.RunningGameLook.ButtonNote(run);
-                buttons = buttons
-                    .Select(b => b with { Subtitle = note, Tooltip = $"{b.Tooltip} · {note}", Enabled = false })
-                    .ToList();
-                tooltip = note;
-            }
+            // ЭТА ВЕРСИЯ УЖЕ ИДЁТ — НАЖИМАТЬ НЕЧЕГО. Кнопка не исчезает и не меняет
+            // назначения: остаётся на месте и говорит, что происходит. Пропади она —
+            // витрина запущенной игры выглядела бы сломанной, а останься живой —
+            // второе нажатие подняло бы вторую копию ТОЙ ЖЕ папки.
+            //
+            // Соседнюю кнопку это не трогает: другая копия лежит в другой папке и
+            // запускается отдельно. Ровно на этом и ловился баг — «Steam · с модами»
+            // подписывал «запускается…» и Пиратку заодно.
+            buttons = buttons
+                .Select(b => {
+                    var state = State(b.Target);
+                    if (state == Game.GameRunState.None) {
+                        return b;
+                    }
 
-            return new LaunchBarView(buttons, actionVisible, rest.Count > 0, tooltip, run);
+                    var note = Game.RunningGameLook.ButtonNote(state);
+                    return b with { Subtitle = note, Tooltip = $"{b.Tooltip} · {note}", Enabled = false };
+                })
+                .ToList();
+
+            return new LaunchBarView(buttons, actionVisible, rest.Count > 0, tooltip);
         }
 
 

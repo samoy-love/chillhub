@@ -31,6 +31,13 @@ namespace ChillHub.Core.Game {
     internal sealed class PendingSession {
         public string GameId { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Откуда игра запущена: имя <see cref="Mods.LaunchTarget"/>. Пусто — запись
+        /// от сборки, которая ещё не различала версии; такую сессию закрываем в общий
+        /// счёт игры, а не в счёт какой-то из четырёх копий наугад.
+        /// </summary>
+        public string? Target { get; set; }
+
         public int ProcessId { get; set; }
 
         /// <summary>
@@ -130,8 +137,51 @@ namespace ChillHub.Core.Game {
         /// <summary>Сводка по одной игре. Реконсилирует незакрытые сессии перед чтением.</summary>
         internal static PlaytimeEntry Get(string gameId) {
             EnsureReconciled();
+            return Total(LoadAll(), gameId);
+        }
+
+        /// <summary>Наигранное в одной конкретной версии игры.</summary>
+        /// <param name="gameId">Игра.</param>
+        /// <param name="target">Откуда запускалась.</param>
+        /// <returns>Сводка по этой версии.</returns>
+        internal static PlaytimeEntry Get(string gameId, Mods.LaunchTarget target) {
+            EnsureReconciled();
             var all = LoadAll();
-            return all.TryGetValue(gameId, out var entry) ? entry : new PlaytimeEntry();
+            return all.TryGetValue(GameVariant.KeyOf(gameId, target), out var entry) ? entry : new PlaytimeEntry();
+        }
+
+        /// <summary>
+        /// Складывает наигранное по всем версиям игры.
+        /// <para>
+        /// ВНУТРИ ВРЕМЯ ХРАНИТСЯ ПО ЧЕТЫРЁМ КОПИЯМ ОТДЕЛЬНО, А ПОКАЗЫВАЕТСЯ ОДНОЙ
+        /// ЦИФРОЙ. Игроку важно, сколько он провёл в игре, а не в какой из папок она
+        /// лежала; раздельный счёт нужен, чтобы одна копия не приписывала себе часы
+        /// другой. Сюда же попадают записи старых сборок — под голым идентификатором
+        /// игры, без версии.
+        /// </para>
+        /// </summary>
+        /// <param name="all">Все записи файла.</param>
+        /// <param name="gameId">Игра.</param>
+        /// <returns>Суммарная сводка.</returns>
+        private static PlaytimeEntry Total(Dictionary<string, PlaytimeEntry> all, string gameId) {
+            var total = new PlaytimeEntry();
+            foreach (var kv in all) {
+                if (!GameVariant.BelongsTo(kv.Key, gameId)) {
+                    continue;
+                }
+
+                total.TotalSeconds += kv.Value.TotalSeconds;
+
+                // Последняя сессия — самая поздняя из всех версий: игрок спрашивает
+                // «когда я играл в неё в прошлый раз», а не «в какую из копий».
+                if (kv.Value.LastSessionAt is DateTime at
+                    && (total.LastSessionAt is not DateTime known || at > known)) {
+                    total.LastSessionAt = at;
+                    total.LastSessionSeconds = kv.Value.LastSessionSeconds;
+                }
+            }
+
+            return total;
         }
 
         /// <summary>
@@ -139,12 +189,14 @@ namespace ChillHub.Core.Game {
         /// Вызывается сразу после успешного <c>Process.Start</c>.
         /// </summary>
         /// <param name="gameId">Игра.</param>
+        /// <param name="target">Какая из четырёх версий игры запущена.</param>
         /// <param name="process">Процесс игры — именно игры, а не Steam (см. GameProcessFinder).</param>
         /// <param name="moddedDir">
         /// Папка, в которой перед запуском включили моды; null — запуск без модов. По
         /// окончании сессии моды в ней выключаются обратно.
         /// </param>
-        internal static void BeginSession(string gameId, Process process, string? moddedDir = null) {
+        internal static void BeginSession(
+            string gameId, Mods.LaunchTarget target, Process process, string? moddedDir = null) {
             if (string.IsNullOrWhiteSpace(gameId) || process == null) {
                 return;
             }
@@ -170,6 +222,7 @@ namespace ChillHub.Core.Game {
                     // process exited first.
                     pending[PendingKey(process.Id)] = new PendingSession {
                         GameId = gameId,
+                        Target = target.ToString(),
                         ProcessId = process.Id,
                         ProcessStartTimeTicks = SafeStartTimeTicks(process),
                         SessionStartUtc = DateTime.UtcNow,
@@ -184,7 +237,7 @@ namespace ChillHub.Core.Game {
 
             // Витрина узнаёт о запущенной игре отсюда же: сессия и «игра идёт» — одно
             // и то же событие, и второго места, где это отслеживалось бы, быть не должно.
-            RunningGames.MarkRunning(gameId, process.Id);
+            RunningGames.MarkRunning(gameId, target, process.Id);
             WatchAsync(process.Id, process);
         }
 
@@ -266,7 +319,9 @@ namespace ChillHub.Core.Game {
                         // Игра всё ещё бежит — досмотрим до конца в этом запуске лаунчера.
                         // И покажем её запущенной: лаунчер могли закрыть и открыть заново,
                         // не выходя из игры, и витрина обязана знать об этом с первой секунды.
-                        RunningGames.MarkRunning(session.GameId, session.ProcessId);
+                        if (TargetOf(session) is Mods.LaunchTarget known) {
+                            RunningGames.MarkRunning(session.GameId, known, session.ProcessId);
+                        }
                         WatchAsync(session.ProcessId, proc);
                         continue;
                     }
@@ -323,9 +378,10 @@ namespace ChillHub.Core.Game {
                 var elapsed = Math.Max(0, (long)(endUtc - session.SessionStartUtc).TotalSeconds);
 
                 var all = LoadAllLocked();
-                if (!all.TryGetValue(session.GameId, out var entry)) {
+                var bucket = BucketOf(session);
+                if (!all.TryGetValue(bucket, out var entry)) {
                     entry = new PlaytimeEntry();
-                    all[session.GameId] = entry;
+                    all[bucket] = entry;
                 }
 
                 entry.TotalSeconds += elapsed;
@@ -347,6 +403,24 @@ namespace ChillHub.Core.Game {
         }
 
         private static string PendingKey(int processId) => processId.ToString();
+
+        /// <summary>Версия, к которой относится незакрытая сессия; null — сборка её не записала.</summary>
+        /// <param name="session">Незакрытая сессия.</param>
+        /// <returns>Вариант запуска или null.</returns>
+        private static Mods.LaunchTarget? TargetOf(PendingSession session) =>
+            Enum.TryParse<Mods.LaunchTarget>(session.Target, ignoreCase: true, out var target) ? target : null;
+
+        /// <summary>
+        /// Куда записать итог сессии: в счёт своей версии, а без неё — в общий счёт
+        /// игры. Приписать время наугад одной из четырёх копий было бы хуже, чем
+        /// оставить его неразнесённым: в сумме оно всё равно видно.
+        /// </summary>
+        /// <param name="session">Закрываемая сессия.</param>
+        /// <returns>Ключ записи в playtime.json.</returns>
+        private static string BucketOf(PendingSession session) =>
+            TargetOf(session) is Mods.LaunchTarget target
+                ? GameVariant.KeyOf(session.GameId, target)
+                : session.GameId;
 
         /// <summary>Возвращает файлы на настоящее место после <see cref="OverrideDirForTests"/>.</summary>
         private sealed class AppDirOverride : IDisposable {
