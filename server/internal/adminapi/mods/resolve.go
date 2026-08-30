@@ -45,8 +45,16 @@ type Resolution struct {
 	// may still proceed — the operator decides — but it must never be silent.
 	Missing []string `json:"missing"`
 
-	// Loader names the mod-loader package that was found in the tree.
+	// Loader names the mod-loader package the tree is laid out with.
 	Loader string `json:"loader,omitempty"`
+
+	// Foreign lists dependencies the game's own community does not publish.
+	// They are left out of the tree; resolveFrom says why.
+	Foreign []string `json:"foreign,omitempty"`
+
+	// ExtraLoaders lists further mod-loader packages the walk met after the
+	// first. They are left out of the tree; resolveFrom says why.
+	ExtraLoaders []string `json:"extraLoaders,omitempty"`
 }
 
 // TotalPackages is the number of packages that will actually be installed.
@@ -59,6 +67,9 @@ func (r *Resolution) TotalPackages() int { return len(r.Packages) }
 // want, the one discovered first is installed. That is exactly what r2modman
 // does, and it is not a shortcut — Thunderstore publishes no constraint
 // information a solver could use, only pinned versions.
+//
+// Two kinds of package are dropped from the tree on top of that; resolveFrom
+// explains both.
 func (c *Client) Resolve(ctx context.Context, eco *Ecosystem, root string) (*Resolution, error) {
 	return c.resolveFrom(ctx, eco, []string{root}, nil, nil)
 }
@@ -95,6 +106,29 @@ func (c *Client) ResolveListWithIndex(
 	return c.resolveFrom(ctx, eco, roots, prog, idx)
 }
 
+// ЧТО ИМЕННО НЕ ПОПАДАЕТ В ДЕРЕВО И ОТКУДА ЭТО ИЗВЕСТНО.
+//
+// Модпак Eclipsed_Shores для risk-of-rain-2 разложен дважды: этим конвейером и
+// настоящим r2modman, папки сверены пофайлово. Из 293 пакетов разошлись два, и
+// оба оказались лишними у нас:
+//
+//	BepInEx-BepInExPack-5.4.2304   второй загрузчик поверх bbepis-BepInExPack
+//	rob_gaming-Driver-1.6.4        мод, переехавший в public_ParticleSystem
+//
+// Их роднит одно: в списке пакетов сообщества riskofrain2 нет ни того, ни
+// другого — оба живут в других сообществах. r2modman разрешает зависимости
+// только по списку сообщества и такую строку просто не находит. У нас же
+// промах индекса означал запрос в общий API, а тот отдаёт любой пакет
+// Thunderstore.
+//
+// Стоило это дорого. Первый переписал BepInEx/core: ядро 5.4.21, под которое
+// собран RoR2BepInExPack, сменилось на 5.4.23, и моды перестали находить типы
+// в R2API. Второй лёг рядом с public_ParticleSystem-Driver — два плагина с
+// одним GUID.
+//
+// Отсюда два правила ниже. Молчать ни одно из них не имеет права: пакет,
+// выпавший из сборки без следа, — ровно тот случай, ради которого заведено
+// поле Missing.
 func (c *Client) resolveFrom(
 	ctx context.Context, eco *Ecosystem, roots []string, prog ResolveProgress, idx *CommunityIndex,
 ) (*Resolution, error) {
@@ -109,8 +143,34 @@ func (c *Client) resolveFrom(
 	seen := make(map[string]bool)
 	frontier := dedupeDeps(roots, seen)
 
+	// ПРАВИЛО ПЕРВОЕ: чего сообщество не издаёт, того в дереве нет.
+	//
+	// Спрашивается имя пакета без версии, а не полное имя. Пакет, у которого
+	// сообщество больше не отдаёт КОНКРЕТНУЮ версию, — это прежний случай
+	// Missing, и разбирается он по-прежнему общим API.
+	//
+	// Корни исключены: их назвал оператор. Правило целиком включается только
+	// когда индекс есть, — без него список сообщества неизвестен, и отбирать
+	// не по чему.
+	confine := idx != nil && idx.Len() > 0
+
 	var walked int
-	for len(frontier) > 0 {
+	for depth := 0; len(frontier) > 0; depth++ {
+		if confine && depth > 0 {
+			kept := frontier[:0]
+			for _, dep := range frontier {
+				if idx.Serves(dep) {
+					kept = append(kept, dep)
+					continue
+				}
+				res.Foreign = append(res.Foreign, dep)
+			}
+			frontier = kept
+			if len(frontier) == 0 {
+				break
+			}
+		}
+
 		fetched, missing, err := c.fetchLevel(ctx, frontier, prog, &walked, idx)
 		if err != nil {
 			return nil, err
@@ -131,11 +191,23 @@ func (c *Client) resolveFrom(
 				DownloadURL:  v.DownloadURL,
 			}
 			if rootFolder, ok := eco.LoaderRoot(v.Namespace, v.Name); ok {
+				// ПРАВИЛО ВТОРОЕ: загрузчик в сборке ровно один.
+				//
+				// Загрузчик распаковывается в КОРЕНЬ игры, а не в папку мода.
+				// Два загрузчика — это два набора BepInEx/core поверх друг
+				// друга, и остаётся тот, кто установлен позже, то есть решает
+				// порядок обхода дерева. Сборка из одного и того же плана
+				// переставала быть воспроизводимой.
+				//
+				// Остаётся первый найденный: обход идёт от корней вширь, так
+				// что это ближайший к модпаку, а не случайный.
+				if res.Loader != "" {
+					res.ExtraLoaders = append(res.ExtraLoaders, v.FullName)
+					continue
+				}
 				rp.IsLoader = true
 				rp.LoaderRoot = rootFolder
-				if res.Loader == "" {
-					res.Loader = v.FullName
-				}
+				res.Loader = v.FullName
 			}
 			res.Packages = append(res.Packages, rp)
 			next = append(next, v.Dependencies...)
@@ -144,6 +216,8 @@ func (c *Client) resolveFrom(
 	}
 
 	sort.Strings(res.Missing)
+	sort.Strings(res.Foreign)
+	sort.Strings(res.ExtraLoaders)
 	return res, nil
 }
 
