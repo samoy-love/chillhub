@@ -71,6 +71,13 @@ type Request struct {
 	ProfileContent string
 	// ProfileVersion is the version name to publish an import under.
 	ProfileVersion string
+
+	// Roots names the dependency strings to resolve from, instead of deriving
+	// them from the fields above. This is how a published version is rebuilt:
+	// the record kept beside its manifest already says what the build started
+	// from, and re-deriving it would quietly turn an imported profile into
+	// something else.
+	Roots []string
 }
 
 // VersionName is the version a build publishes under.
@@ -116,10 +123,15 @@ type Plan struct {
 	// without a mod its manifest names has to say so before it is published.
 	Foreign      []string `json:"foreign,omitempty"`
 	ExtraLoaders []string `json:"extraLoaders,omitempty"`
-	TotalBytes   int64    `json:"totalBytes"`
-	CachedBytes  int64    `json:"cachedBytes"`
-	SpaceOK      bool     `json:"spaceOk"`
-	SpaceNote    string   `json:"spaceNote,omitempty"`
+
+	// Roots are the dependency strings this plan was resolved from. Recorded
+	// with the version so it can be rebuilt later from the same starting
+	// point rather than from a guess about it.
+	Roots       []string `json:"roots,omitempty"`
+	TotalBytes  int64    `json:"totalBytes"`
+	CachedBytes int64    `json:"cachedBytes"`
+	SpaceOK     bool     `json:"spaceOk"`
+	SpaceNote   string   `json:"spaceNote,omitempty"`
 }
 
 // logSkips names every package the resolver left out of the tree. One line
@@ -157,8 +169,26 @@ type Source struct {
 	// the time somebody asks why a mod is not in the pack.
 	Foreign      []string `json:"foreign,omitempty"`
 	ExtraLoaders []string `json:"extraLoaders,omitempty"`
-	Files        int      `json:"files"`
-	Bytes        int64    `json:"bytes"`
+
+	// Roots is what the build was resolved from, and it is what «пересобрать»
+	// starts from. Without it a rebuild would have to guess, and for an
+	// imported profile the guess is not recoverable.
+	Roots []string `json:"roots,omitempty"`
+
+	// TreeDigest identifies what this version contains, independent of its
+	// name. The launcher compares it with what it has installed: a rebuild
+	// publishes a new tree under the SAME version name, and a launcher that
+	// only compares names would never notice.
+	TreeDigest string `json:"treeDigest,omitempty"`
+
+	// Collisions is where two packages of this build met: same file, or same
+	// assembly name in two folders. Never a reason to refuse a build — mod
+	// authors bundle what they like — but the operator has to be able to see
+	// it without unpacking the tree by hand.
+	Collisions []Collision `json:"collisions,omitempty"`
+
+	Files int   `json:"files"`
+	Bytes int64 `json:"bytes"`
 }
 
 // Event is one line of build progress.
@@ -225,6 +255,9 @@ func NewBuilder(root string, b *builds.Handlers) *Builder {
 
 // roots turns a request into the dependency strings the resolve starts from.
 func (b *Builder) roots(req Request) ([]string, error) {
+	if len(req.Roots) > 0 {
+		return append([]string(nil), req.Roots...), nil
+	}
 	switch req.Kind {
 	case SourceThunderstore:
 		if req.Namespace == "" || req.Name == "" || req.Version == "" {
@@ -309,6 +342,7 @@ func (b *Builder) ResolveWith(ctx context.Context, req Request, emit Emit) (*Pla
 		Loader:       res.Loader,
 		Foreign:      res.Foreign,
 		ExtraLoaders: res.ExtraLoaders,
+		Roots:        res.Roots,
 	}
 	plan.logSkips(req.EcosystemGame)
 
@@ -475,6 +509,9 @@ func (b *Builder) Build(ctx context.Context, req Request, allowMissing bool, emi
 	}
 	emit.send(Event{Type: "swept", Message: fmt.Sprintf("вычищено лишних файлов: %d", removed), Files: removed})
 
+	clashes := layout.Collisions()
+	reportCollisions(version, clashes, emit)
+
 	hashed := 0
 	pub, err := b.Builds.Publish(staged, false, func(_ string, _ int64) {
 		hashed++
@@ -499,6 +536,9 @@ func (b *Builder) Build(ctx context.Context, req Request, allowMissing bool, emi
 
 		Foreign:      plan.Foreign,
 		ExtraLoaders: plan.ExtraLoaders,
+		Roots:        plan.Roots,
+		Collisions:   clashes,
+		TreeDigest:   pub.TreeDigest,
 	}
 	if err := b.writeSource(req.GameID, version, src); err != nil {
 		// The version itself is published and correct; only the sidecar that
@@ -512,6 +552,30 @@ func (b *Builder) Build(ctx context.Context, req Request, allowMissing bool, emi
 		Message: fmt.Sprintf("собрано: %d файлов, %.1f МБ", pub.Files, float64(pub.Bytes)/(1<<20)),
 	})
 	return src, nil
+}
+
+// reportCollisions says where two packages of the build met.
+//
+// Not an error and not a refusal: a modpack that ships the same library twice
+// still runs, and only a person can tell a harmless duplicate from the one
+// that matters. Saying nothing, though, is how a 66 МБ старый Driver пролежал
+// рядом с новым, пока папку не сверили с r2modman руками.
+func reportCollisions(version string, clashes []Collision, emit Emit) {
+	for _, c := range clashes {
+		if c.Kind == "assembly" {
+			log.Printf("[mods] %s: %s принесли сразу %s", version, c.What, strings.Join(c.By, " и "))
+		} else {
+			log.Printf("[mods] %s: %s переписан, писали %s", version, c.What, strings.Join(c.By, " и "))
+		}
+	}
+	if len(clashes) == 0 {
+		return
+	}
+	emit.send(Event{
+		Type:    "collision",
+		Message: fmt.Sprintf("пересечений между пакетами: %d", len(clashes)),
+		Total:   len(clashes),
+	})
 }
 
 // fetchAndInstall downloads every package in parallel and installs them in

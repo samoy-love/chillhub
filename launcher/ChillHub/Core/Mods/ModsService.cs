@@ -256,6 +256,13 @@ namespace ChillHub.Core.Mods {
             if (!GameLocalState.WriteModsVersionAt(targetDir, version)) {
                 Logging.Logger.Warn($"[mods] не удалось записать маркер версии модпака в '{targetDir}'");
             }
+
+            // Отпечаток считается по тому же манифесту, который только что установлен,
+            // а не приходит отдельным полем: так он не может разъехаться с деревом на
+            // диске, чем бы установка ни кончилась.
+            if (!GameLocalState.WriteModsRevisionAt(targetDir, ModPackDigest.Of(manifest))) {
+                Logging.Logger.Warn($"[mods] не удалось записать отпечаток модпака в '{targetDir}'");
+            }
         }
 
         /// <summary>
