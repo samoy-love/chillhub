@@ -127,6 +127,24 @@ namespace ChillHub.Tests {
             Assert.Single(handler.Requests);
         }
 
+        /// <summary>
+        /// После сброса кеша тот же вызов снова идёт на сервер: обложку заменили в
+        /// админке по прежнему адресу, и «Обновить список игр» обязан её увидеть.
+        /// </summary>
+        [Fact]
+        public async Task СбросКешаЗаставляетПерезапроситьГалерею() {
+            var handler = new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) {
+                Content = new StringContent(Fixture, Encoding.UTF8, "application/json"),
+            });
+            var client = new GalleryClient(new HttpClient(handler));
+
+            await client.GetGalleryAsync("https://example.test", "moon-lander");
+            client.InvalidateAll();
+            await client.GetGalleryAsync("https://example.test", "moon-lander");
+
+            Assert.Equal(2, handler.Requests.Count);
+        }
+
         /// <summary>404 (галерея ещё не заведена) — пустой список, а не исключение.</summary>
         [Fact]
         public async Task ОтсутствиеГалереиДаётПустойСписок() {
