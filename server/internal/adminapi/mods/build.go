@@ -109,10 +109,32 @@ type Plan struct {
 	Packages    []ResolvedPackage `json:"packages"`
 	Missing     []string          `json:"missing"`
 	Loader      string            `json:"loader"`
-	TotalBytes  int64             `json:"totalBytes"`
-	CachedBytes int64             `json:"cachedBytes"`
-	SpaceOK     bool              `json:"spaceOk"`
-	SpaceNote   string            `json:"spaceNote,omitempty"`
+
+	// Foreign and ExtraLoaders are what the resolver refused to put in the
+	// tree. Neither refuses the build — both are normal for a modpack whose
+	// authors pinned a package that has since moved — but a pack laid out
+	// without a mod its manifest names has to say so before it is published.
+	Foreign      []string `json:"foreign,omitempty"`
+	ExtraLoaders []string `json:"extraLoaders,omitempty"`
+	TotalBytes   int64    `json:"totalBytes"`
+	CachedBytes  int64    `json:"cachedBytes"`
+	SpaceOK      bool     `json:"spaceOk"`
+	SpaceNote    string   `json:"spaceNote,omitempty"`
+}
+
+// logSkips names every package the resolver left out of the tree. One line
+// each, into the server log: the build events go to whoever is watching the
+// panel at that moment, and the question "почему этого мода нет в сборке"
+// arrives days later.
+func (p *Plan) logSkips(community string) {
+	for _, dep := range p.Foreign {
+		log.Printf("[mods] %s: %s не издаётся сообществом %s, в сборку не идёт",
+			p.Version, dep, community)
+	}
+	for _, dep := range p.ExtraLoaders {
+		log.Printf("[mods] %s: загрузчик уже есть (%s), %s в сборку не идёт",
+			p.Version, p.Loader, dep)
+	}
 }
 
 // Source records what a published version was built from. Stored next to the
@@ -129,8 +151,14 @@ type Source struct {
 	Loader      string     `json:"loader,omitempty"`
 	Tree        []string   `json:"tree"`
 	Missing     []string   `json:"missing,omitempty"`
-	Files       int        `json:"files"`
-	Bytes       int64      `json:"bytes"`
+
+	// Foreign and ExtraLoaders are the packages the resolver left out. Kept
+	// with the version rather than only in the build log: the log is gone by
+	// the time somebody asks why a mod is not in the pack.
+	Foreign      []string `json:"foreign,omitempty"`
+	ExtraLoaders []string `json:"extraLoaders,omitempty"`
+	Files        int      `json:"files"`
+	Bytes        int64    `json:"bytes"`
 }
 
 // Event is one line of build progress.
@@ -274,12 +302,15 @@ func (b *Builder) ResolveWith(ctx context.Context, req Request, emit Emit) (*Pla
 	}
 
 	plan := &Plan{
-		Version:     req.VersionName(),
-		DisplayName: req.DisplayName(),
-		Packages:    res.Packages,
-		Missing:     res.Missing,
-		Loader:      res.Loader,
+		Version:      req.VersionName(),
+		DisplayName:  req.DisplayName(),
+		Packages:     res.Packages,
+		Missing:      res.Missing,
+		Loader:       res.Loader,
+		Foreign:      res.Foreign,
+		ExtraLoaders: res.ExtraLoaders,
 	}
+	plan.logSkips(req.EcosystemGame)
 
 	// ОЦЕНКА РАЗМЕРОВ ИДЁТ ПАРАЛЛЕЛЬНО.
 	//
@@ -390,11 +421,26 @@ func (b *Builder) Build(ctx context.Context, req Request, allowMissing bool, emi
 		return nil, fmt.Errorf("mods: на диске мало места: %s", plan.SpaceNote)
 	}
 	emit.send(Event{
-		Type:    "resolved",
-		Message: fmt.Sprintf("пакетов: %d, недоступно: %d, скачать: %.1f МБ", len(plan.Packages), len(plan.Missing), float64(plan.TotalBytes)/(1<<20)),
-		Total:   len(plan.Packages),
-		Bytes:   plan.TotalBytes,
+		Type: "resolved",
+		Message: fmt.Sprintf("пакетов: %d, недоступно: %d, скачать: %.1f МБ",
+			len(plan.Packages), len(plan.Missing), float64(plan.TotalBytes)/(1<<20)),
+		Total: len(plan.Packages),
+		Bytes: plan.TotalBytes,
 	})
+	if len(plan.Foreign) > 0 {
+		emit.send(Event{
+			Type: "skipped",
+			Message: fmt.Sprintf("не издаётся сообществом %s, пропущено: %s",
+				req.EcosystemGame, strings.Join(plan.Foreign, ", ")),
+		})
+	}
+	if len(plan.ExtraLoaders) > 0 {
+		emit.send(Event{
+			Type: "skipped",
+			Message: fmt.Sprintf("загрузчик уже есть (%s), пропущено: %s",
+				plan.Loader, strings.Join(plan.ExtraLoaders, ", ")),
+		})
+	}
 
 	game, err := b.Eco.Game(ctx, req.EcosystemGame)
 	if err != nil {
@@ -450,6 +496,9 @@ func (b *Builder) Build(ctx context.Context, req Request, allowMissing bool, emi
 		Missing:     plan.Missing,
 		Files:       pub.Files,
 		Bytes:       pub.Bytes,
+
+		Foreign:      plan.Foreign,
+		ExtraLoaders: plan.ExtraLoaders,
 	}
 	if err := b.writeSource(req.GameID, version, src); err != nil {
 		// The version itself is published and correct; only the sidecar that
