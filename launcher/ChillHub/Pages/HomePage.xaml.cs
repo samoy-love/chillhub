@@ -1,4 +1,4 @@
-// <copyright file="HomePage.xaml.cs" company="PlaceholderCompany">
+﻿// <copyright file="HomePage.xaml.cs" company="PlaceholderCompany">
 // Copyright (c) 2025 ChillHub
 // Licensed under the MIT License.
 // </copyright>
@@ -2622,7 +2622,7 @@ namespace ChillHub.Pages {
         /// Доводит выбранную строку меню до игры: решение, память, установка, запуск.
         /// <para>
         /// Вся цепочка живёт в <see cref="Core.Mods.LaunchRunner"/>: здесь остаются
-        /// только настоящие обращения к окну — строка состояния, всплывашка, вопрос,
+        /// только настоящие обращения к окну — строка состояния, всплывашка,
         /// очередь загрузок и сам старт процесса.
         /// </para>
         /// </summary>
@@ -2642,7 +2642,6 @@ namespace ChillHub.Pages {
                 var runner = new Core.Mods.LaunchRunner(new Core.Mods.LaunchUi {
                     SetStatus = text => this.StatusText.Text = text,
                     Toast = text => this.ShowToast(text),
-                    Confirm = Core.Home.HomeDialogs.AskYesNo,
                     Enqueue = gid => this.downloadQueue.Enqueue(gid),
                     RefreshChoice = () => {
                         this.InvalidateLaunchOptions();
