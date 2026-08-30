@@ -342,6 +342,17 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Просит окно показать список обновлений, если лаунчер обновился. Разметка окна
+        /// «Что нового» живёт в <see cref="ChillHub.MainWindow"/>: открывать его умеют и
+        /// настройки. Отсюда идёт автоматический показ — он привязан к главному экрану.
+        /// </summary>
+        private void MaybeShowChangelog()
+            => (Window.GetWindow(this) as ChillHub.MainWindow)?.ShowChangelogAfterUpdate();
+
+        private void ChangelogBtn_Click(object sender, RoutedEventArgs e)
+            => (Window.GetWindow(this) as ChillHub.MainWindow)?.ShowChangelog();
+
         private void HomePage_PreviewKeyDown(object sender, KeyEventArgs e) {
             try {
                 if (e.Key == Key.Escape && this.FeedbackOverlay != null && this.FeedbackOverlay.Visibility == Visibility.Visible) {
@@ -373,6 +384,10 @@ namespace ChillHub.Pages {
             try {
                 // Дадим UI отрисоваться до тяжёлой асинхронной работы
                 await Task.Yield();
+
+                // Список обновлений — до загрузки данных: он ничего с сервера не ждёт,
+                // а после обновления это первое, что человеку стоит увидеть.
+                this.MaybeShowChangelog();
 
                 // Самообновление проверяется в UpdateWindow. Здесь не блокируем UI: запускаем загрузку в фоне
                 _ = this.LoadInitialAsync();
@@ -1755,6 +1770,9 @@ namespace ChillHub.Pages {
                 this.NewsTabLauncher.IsChecked = !showGameNews;
                 this.GameNewsPanel.Visibility = showGameNews ? Visibility.Visible : Visibility.Collapsed;
                 this.LauncherNewsPanel.Visibility = showGameNews ? Visibility.Collapsed : Visibility.Visible;
+
+                // «Что нового» — про лаунчер, и на вкладке новостей игры ему не место.
+                this.ChangelogBtn.Visibility = showGameNews ? Visibility.Collapsed : Visibility.Visible;
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Warn($"SelectNewsTab: {ex.Message}");

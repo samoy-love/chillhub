@@ -5,6 +5,7 @@
         MinHeight="640" MinWidth="980"
         ResizeMode="CanResize" SizeToContent="Manual"
         Icon="/ChillHub;component/Assets/app.ico"
+        PreviewKeyDown="MainWindow_PreviewKeyDown"
         Background="{DynamicResource Brush.Background}">
     <Grid>
         <Grid.RowDefinitions>
@@ -161,6 +162,121 @@
         <!-- Content -->
         <Grid Grid.Row="2" Background="{DynamicResource Brush.Background}">
             <Frame Name="ContentFrame" NavigationUIVisibility="Hidden" Background="Transparent"/>
+        </Grid>
+
+        <!-- Окно «Что нового». Открывается само один раз после обновления лаунчера
+             (см. Core/Changelog/ChangelogGate), а вручную — кнопкой в новостях лаунчера
+             и в настройках.
+             Живёт в окне, а не на главной странице: открывать его умеют и настройки,
+             а вторая копия той же разметки на второй странице разъехалась бы с первой.
+             RowSpan на все три строки — затемнение обязано накрыть и шапку, и баннер
+             работ, иначе кнопки под «модальным» окном остаются нажимаемыми. -->
+        <Grid x:Name="ChangelogOverlay" Visibility="Collapsed" Background="#C0000000"
+              HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Grid.RowSpan="3">
+          <Grid.Resources>
+            <!-- Один пункт списка: точка и текст. Точка отдельной колонкой, а не первым
+                 символом строки: иначе перенесённая строка выравнивалась бы под точкой,
+                 а не под текстом. -->
+            <DataTemplate x:Key="Template.Changelog.Line">
+              <Grid Margin="0,0,0,6">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="14"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="•" FontSize="14" VerticalAlignment="Top"
+                           Foreground="{DynamicResource Brush.Accent}"/>
+                <TextBlock Grid.Column="1" Text="{Binding}" TextWrapping="Wrap" FontSize="13.5"
+                           LineHeight="20" LineStackingStrategy="BlockLineHeight"
+                           Foreground="{DynamicResource Brush.Text}"/>
+              </Grid>
+            </DataTemplate>
+
+            <!-- Один выпуск: номер версии, дата и пункты. Слева — акцентная полоса:
+                 она делит длинный список на выпуски заметнее, чем отступ. -->
+            <DataTemplate x:Key="Template.Changelog.Release">
+              <Border Background="{DynamicResource Brush.Surface2}" CornerRadius="8"
+                      BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                      Margin="0,0,0,12" SnapsToDevicePixels="True" UseLayoutRounding="True">
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="3"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <Border Grid.Column="0" Background="{DynamicResource Brush.Accent}"
+                          CornerRadius="8,0,0,8"/>
+                  <StackPanel Grid.Column="1" Margin="16,14,16,14">
+                    <Grid Margin="0,0,0,10">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Grid.Column="0" Text="{Binding Version}" FontSize="17" FontWeight="SemiBold"
+                                 Foreground="{DynamicResource Brush.Title}"/>
+                      <TextBlock Grid.Column="1" Text="{Binding DateText}" FontSize="12.5"
+                                 HorizontalAlignment="Right" VerticalAlignment="Center"
+                                 Foreground="{DynamicResource Brush.TextMuted}"/>
+                    </Grid>
+                    <ItemsControl ItemsSource="{Binding Changes}"
+                                  ItemTemplate="{StaticResource Template.Changelog.Line}"/>
+                  </StackPanel>
+                </Grid>
+              </Border>
+            </DataTemplate>
+          </Grid.Resources>
+
+          <!-- Тень: отдельный слой под карточкой, а не Effect на ней — размытие поверх
+               содержимого делает текст мыльным. Тот же приём, что и у формы обратной связи
+               на главной. -->
+          <Border Width="720" HorizontalAlignment="Center" VerticalAlignment="Stretch" Margin="0,40,0,34"
+                  CornerRadius="12" Background="#000000" Opacity="0.22"
+                  SnapsToDevicePixels="True" UseLayoutRounding="True"/>
+
+          <!-- VerticalAlignment=Stretch + Margin держат карточку внутри окна: список длинный,
+               и при Center он ушёл бы за нижний край экрана вместо того, чтобы прокручиваться. -->
+          <Border Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderHover}"
+                  BorderThickness="1" CornerRadius="10" Width="720"
+                  HorizontalAlignment="Center" VerticalAlignment="Stretch" Margin="0,40,0,40"
+                  SnapsToDevicePixels="True" UseLayoutRounding="True"
+                  TextOptions.TextRenderingMode="ClearType" TextOptions.TextFormattingMode="Display"
+                  TextOptions.TextHintingMode="Fixed" RenderOptions.ClearTypeHint="Enabled">
+            <Grid>
+              <Grid.RowDefinitions>
+                <!-- шапка -->
+                <RowDefinition Height="Auto"/>
+                <!-- список выпусков — единственное, что растёт и прокручивается -->
+                <RowDefinition Height="*"/>
+                <!-- кнопка -->
+                <RowDefinition Height="Auto"/>
+              </Grid.RowDefinitions>
+
+              <Grid Grid.Row="0" Margin="20,20,20,12">
+                <StackPanel Margin="0,0,36,0">
+                  <TextBlock Text="Что нового" Style="{DynamicResource Style.PageTitle}"/>
+                  <TextBlock x:Name="ChangelogSubtitle" Margin="0,4,0,0" FontSize="13" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Brush.TextSecondary}"/>
+                </StackPanel>
+                <Button Content="✕" Width="28" Height="28"
+                        HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0" Padding="0"
+                        Style="{DynamicResource Style.Button.GhostNeutral}"
+                        ToolTip="Закрыть" Click="ChangelogClose_Click"/>
+              </Grid>
+
+              <!-- CanContentScroll=False: выпуски разной высоты, и прокрутка «по элементам»
+                   прыгала бы через целый выпуск за один щелчок колеса. -->
+              <ScrollViewer x:Name="ChangelogScroll" Grid.Row="1" Margin="20,0,14,0" Padding="0,0,6,0"
+                            VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                            CanContentScroll="False" Focusable="False">
+                <ItemsControl x:Name="ChangelogList"
+                              ItemTemplate="{StaticResource Template.Changelog.Release}"/>
+              </ScrollViewer>
+
+              <Border Grid.Row="2" Margin="20,12,20,20" BorderThickness="0,1,0,0"
+                      BorderBrush="{DynamicResource Brush.Border}" Padding="0,16,0,0">
+                <Button Content="Понятно" HorizontalAlignment="Right" MinWidth="140"
+                        Style="{DynamicResource Style.Button.Primary}" Click="ChangelogClose_Click"/>
+              </Border>
+            </Grid>
+          </Border>
         </Grid>
     </Grid>
 

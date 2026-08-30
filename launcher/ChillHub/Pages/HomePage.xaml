@@ -1090,7 +1090,12 @@
 
         <!-- Вкладки под витриной: переключают ленту без перезагрузки страницы -->
         <Border Grid.Row="1" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1" Margin="2,4,0,8">
-          <StackPanel Orientation="Horizontal">
+          <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <StackPanel Grid.Column="0" Orientation="Horizontal">
             <ToggleButton x:Name="NewsTabGame" Content="Новости игры" IsChecked="True"
                           Style="{DynamicResource Style.Button.HeroTab}" Click="NewsTabGame_Click" Margin="0,0,18,0"/>
             <ToggleButton x:Name="NewsTabLauncher" Content="Новости лаунчера" IsChecked="False"
@@ -1105,6 +1110,21 @@
               <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Center"/>
             </Button>
           </StackPanel>
+
+          <!-- «Что нового» — у правого края той же строки и только на вкладке новостей
+               лаунчера: список обновлений — это и есть новости о лаунчере, а на вкладке
+               новостей игры кнопка звала бы не туда. Рядом с вкладками её было бы не
+               отличить от третьей вкладки, поэтому она отодвинута вправо и набрана
+               ссылкой, а не кнопкой с рамкой: строка вкладок должна остаться строкой
+               вкладок. Подпись — строкой, без значка: шаблон Style.Button.Link кладёт
+               Content прямо в TextBlock, и любая разметка внутри вывелась бы именем
+               типа вместо картинки. -->
+          <Button x:Name="ChangelogBtn" Grid.Column="1" Visibility="Collapsed"
+                  Content="Что нового"
+                  HorizontalAlignment="Right" VerticalAlignment="Center" Margin="12,0,2,8" FontSize="13"
+                  Style="{DynamicResource Style.Button.Link}"
+                  ToolTip="История обновлений лаунчера" Click="ChangelogBtn_Click"/>
+          </Grid>
         </Border>
 
         <Grid x:Name="GameNewsPanel" Grid.Row="2" Visibility="Visible">
@@ -1675,4 +1695,3 @@
     </Grid>
   </Grid>
 </Page>
-

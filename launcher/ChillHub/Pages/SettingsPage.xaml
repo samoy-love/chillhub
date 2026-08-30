@@ -150,6 +150,7 @@
               <ColumnDefinition Width="160"/>
               <ColumnDefinition Width="Auto"/>
               <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="Auto"/>
               <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
             <TextBlock Text="Версия лаунчера" Style="{StaticResource Style.SettingsLabel}"/>
@@ -158,7 +159,12 @@
                  «проверить». Фоновая проверка молчит, когда всё актуально, — эта отвечает. -->
             <Button Grid.Column="2" Name="CheckUpdateBtn" Content="Проверить обновления" Click="CheckUpdateBtn_Click"
                     Style="{DynamicResource Style.Button.GhostNeutral}" MinHeight="32" MinWidth="180" Margin="16,0,0,0"/>
-            <TextBlock Grid.Column="3" Name="CheckUpdateStatus" Text="" Style="{StaticResource Style.SettingsLabel}" Margin="12,0,0,0"
+            <!-- «Что нового» стоит рядом с «Проверить обновления» и номером версии: это
+                 один разговор об обновлениях лаунчера. Оформлена скромнее соседки —
+                 проверка обновлений здесь главное действие, а список только читают. -->
+            <Button Grid.Column="3" Name="ChangelogBtn" Content="Что нового" Click="ChangelogBtn_Click"
+                    Style="{DynamicResource Style.Button.Link}" MinHeight="32" Margin="16,0,0,0"/>
+            <TextBlock Grid.Column="4" Name="CheckUpdateStatus" Text="" Style="{StaticResource Style.SettingsLabel}" Margin="12,0,0,0"
                        TextTrimming="CharacterEllipsis"/>
           </Grid>
           <Button Name="OpenLogsBtn" Content="Открыть папку с логами" Click="OpenLogsBtn_Click"
