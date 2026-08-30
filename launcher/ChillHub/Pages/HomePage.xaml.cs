@@ -2496,7 +2496,16 @@ namespace ChillHub.Pages {
                 }
 
                 try {
-                    this.HeroCoverBrush.ImageSource = LoadCoverBitmap(cover.ImageUrl);
+                    // Байты качаем сами (заодно с кешем на диске и условным запросом
+                    // к серверу), а картинку собираем уже из них: см. LoadCoverBitmapAsync.
+                    var bmp = await this.LoadCoverBitmapAsync(cover.ImageUrl).ConfigureAwait(true);
+                    if (cts.Token.IsCancellationRequested
+                        || !string.Equals(this.GetSelectedGameId(), gameId, StringComparison.OrdinalIgnoreCase)) {
+                        // Пока качалась обложка, выбрали другую игру — её витрину не трогаем.
+                        return;
+                    }
+
+                    this.HeroCoverBrush.ImageSource = bmp;
                     this.HeroCoverImg.Visibility = Visibility.Visible;
                 }
                 catch (Exception ex) {
@@ -2510,26 +2519,26 @@ namespace ChillHub.Pages {
         }
 
         /// <summary>
-        /// Читает обложку витрины по адресу, минуя кеш самого WPF.
+        /// Читает обложку витрины по адресу.
         /// <para>
-        /// У <see cref="BitmapImage"/> с одним лишь <c>UriSource</c> есть свой кеш на процесс,
-        /// ключуемый адресом: сервер отдаёт новую обложку по прежнему адресу, а на витрине
-        /// до перезапуска лаунчера остаётся старая картинка — «Обновить список игр» на неё
-        /// не действует. <c>IgnoreImageCache</c> отменяет этот кеш, <c>OnLoad</c> дочитывает
-        /// поток сразу, чтобы картинку можно было заморозить.
+        /// Раньше картинка собиралась прямо из адреса (<c>UriSource</c>), и на витрине
+        /// оставалась та, что скачалась первой: у <see cref="BitmapImage"/> свой кеш по
+        /// адресу на весь процесс, и заменённая в админке обложка появлялась только после
+        /// перезапуска лаунчера. Попытка обойти этот кеш заморозкой картинки кончилась хуже:
+        /// удалённый адрес докачивается уже после создания, замораживать такую картинку
+        /// нельзя — витрина ловила ошибку и пряталась, показывая вместо обложки значок игры.
+        /// </para>
+        /// <para>
+        /// Поэтому байты забираем тем же загрузчиком, что и значки игр: у него есть свой кеш
+        /// на диске со сверкой с сервером, потолок размера и таймаут, — а картинку собираем
+        /// уже из готовых байтов.
         /// </para>
         /// </summary>
         /// <param name="url">Абсолютный адрес обложки.</param>
         /// <returns>Готовая замороженная картинка.</returns>
-        private static BitmapImage LoadCoverBitmap(string url) {
-            var bmp = new BitmapImage();
-            bmp.BeginInit();
-            bmp.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
-            bmp.CacheOption = BitmapCacheOption.OnLoad;
-            bmp.UriSource = new Uri(url, UriKind.Absolute);
-            bmp.EndInit();
-            bmp.Freeze();
-            return bmp;
+        private async Task<BitmapImage> LoadCoverBitmapAsync(string url) {
+            var bytes = await Core.Home.ImageLoader.FetchBytesAsync(url).ConfigureAwait(true);
+            return Core.Home.ImageLoader.DecodeFrozen(bytes);
         }
 
         // Сам запуск живёт в Core/Home/GameLaunch: здесь только показ того, чем он кончился.

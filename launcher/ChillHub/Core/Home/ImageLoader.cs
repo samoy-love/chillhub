@@ -443,6 +443,35 @@ namespace ChillHub.Core.Home {
             img.Visibility = Visibility.Visible;
         }
 
+        /// <summary>
+        /// Собирает готовую замороженную картинку из уже скачанных байтов.
+        /// <para>
+        /// Тем, кому картинка нужна не в <see cref="Image"/>, а кистью (обложка витрины),
+        /// остаётся только этот путь. Свой <c>UriSource</c> у <see cref="BitmapImage"/> не
+        /// годится дважды: удалённый адрес он тянет асинхронно — заморозить такую картинку
+        /// нельзя, пока она не докачается, — и держит собственный кеш по адресу, из-за
+        /// которого заменённая на сервере картинка не появлялась до перезапуска лаунчера.
+        /// </para>
+        /// </summary>
+        /// <param name="bytes">Содержимое файла картинки.</param>
+        /// <param name="decodePixelHeight">Высота декодирования; 0 — как есть, без ужимания.</param>
+        /// <returns>Замороженная картинка, готовая к показу из любого потока.</returns>
+        internal static BitmapImage DecodeFrozen(byte[] bytes, int decodePixelHeight = 0) {
+            using var ms = new MemoryStream(bytes);
+            var bi = new BitmapImage();
+            bi.BeginInit();
+            bi.CacheOption = BitmapCacheOption.OnLoad;
+            bi.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
+            if (decodePixelHeight > 0) {
+                bi.DecodePixelHeight = decodePixelHeight;
+            }
+
+            bi.StreamSource = ms;
+            bi.EndInit();
+            bi.Freeze();
+            return bi;
+        }
+
         internal static void ApplyBitmap(Image img, MemoryStream ms, string url) {
             try {
                 var bi = new BitmapImage();
