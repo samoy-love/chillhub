@@ -15,6 +15,12 @@ namespace ChillHub {
     public partial class App : Application {
         /// <inheritdoc/>
         protected override void OnStartup(StartupEventArgs e) {
+            // Запрос ярлыка кладётся на диск ДО замка единственного экземпляра. Замок этот
+            // запуск может и не пустить (лаунчер уже работает) — тогда он лишь сигналит
+            // живой копии «покажи окно», а сигнал ничего не переносит, кроме самого факта.
+            // Игру, которую просит ярлык, живая копия забирает именно из этого файла.
+            Core.Shell.ShortcutRequestFile.Write(Core.Shell.ShortcutTarget.Parse(e?.Args));
+
             // Порядок шагов — в StartupSequence: он и есть поведение, и проверяется тестом.
             // Здесь остаётся только то, что без живого Application не работает.
             var startup = new StartupSequence {
@@ -123,7 +129,13 @@ namespace ChillHub {
             // сигналит сюда через именованное событие (см. SingleInstance) — без этого второй
             // клик по ярлыку, пока лаунчер свёрнут в трей, никак не поднимал его окно.
             Core.SingleInstance.StartListeningForShowRequests(() =>
-                mw.Dispatcher.Invoke(mw.ShowAndActivate));
+                mw.Dispatcher.Invoke(() => {
+                    mw.ShowAndActivate();
+
+                    // Повторный запуск мог прийти с ярлыка игры — тогда мало поднять окно,
+                    // надо открыть ту игру, на которую нажали.
+                    mw.HandleShortcutRequest(Core.Shell.ShortcutRequestFile.Consume());
+                }));
 
             // Окно всегда открывается развёрнутым на экран, а не в трей — WindowState тут
             // не персистится между запусками, но выставляем явно: значение по умолчанию из
@@ -133,6 +145,10 @@ namespace ChillHub {
             BootConsole.Trace("Showing MainWindow");
             mw.Show();
             mw.Activate();
+
+            // Запуск с ярлыка: игру просит эта же копия лаунчера, и запрос она забирает
+            // из того же файла, что и живая копия, — путь один на оба случая.
+            mw.HandleShortcutRequest(Core.Shell.ShortcutRequestFile.Consume());
         }
 
         /// <summary>Оформление заголовка окна и иконка — украшение, окно должно открыться и без них.</summary>
