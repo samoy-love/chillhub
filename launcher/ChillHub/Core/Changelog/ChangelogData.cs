@@ -31,8 +31,9 @@ namespace ChillHub.Core.Changelog {
     /// нельзя: сборка не пройдёт.
     /// </para>
     /// <para>
-    /// ВЫПУСК БЕЗ ИЗМЕНЕНИЙ В ЛАУНЧЕРЕ (поехал ради сервера, установщика или
-    /// сборки) заводится записью с <c>Technical = true</c> и пустым списком
+    /// ВЫПУСК, В КОТОРОМ ДЛЯ ИГРОКА НИЧЕГО НЕ ИЗМЕНИЛОСЬ (поехал ради сервера,
+    /// установщика, сборки или перекладки кода внутри лаунчера) заводится
+    /// записью с <c>Technical = true</c> и пустым списком
     /// пунктов. Запись обязана быть — иначе рухнет обещание «каждой выкатке своя
     /// строка», — но игроку она не показывается: читать в ней нечего.
     /// </para>
@@ -43,11 +44,24 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
-                Version = "1.6.29",
+                Version = "1.6.31",
                 Date = "2026-08-31",
                 Changes = new[] {
                     "Появилось окно «Что нового»: после обновления лаунчер сам показывает, что изменилось.",
                     "Список обновлений можно открыть в любой момент — в новостях лаунчера и в настройках.",
+                },
+            },
+            new ChangelogRelease {
+                Version = "1.6.30",
+                Date = "2026-08-31",
+                Changes = System.Array.Empty<string>(),
+                Technical = true,
+            },
+            new ChangelogRelease {
+                Version = "1.6.29",
+                Date = "2026-08-31",
+                Changes = new[] {
+                    "На витрине снова видна обложка игры, а не её значок в углу.",
                 },
             },
             new ChangelogRelease {
