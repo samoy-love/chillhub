@@ -323,6 +323,10 @@ function Start-All {
     Set-ChillHubClientConfig -ApiBaseUrl $ApiBase -GamesPath $gp
   }
   $env:ChillHub_GAMES_PATH = $gp
+  # Прогон из репозитория — это не игрок. Метрики при этом НЕ глушатся: так
+  # проверяется и приём событий, а сервер по префиксу installId сам не считает
+  # такой запуск ни установкой, ни игроком (server/internal/metrics/synthetic.go).
+  $env:CHILLHUB_METRICS = 'test'
   Write-Host "[CLIENT] WPF starting (GamesPath=$gp)" -ForegroundColor Yellow
   # Important: escape $ in child command so parent PowerShell doesn't expand it here (would turn into '=1')
   $msbuildAnalyzerProps = ""
