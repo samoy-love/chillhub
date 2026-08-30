@@ -11,76 +11,20 @@ namespace ChillHub.Tests {
     using Xunit;
 
     /// <summary>
-    /// Установка модпака в копию игры из Steam: решение о пункте меню, текст вопроса
-    /// и разбор итога.
+    /// Установка модпака в копию игры из Steam: почему копию не нашли и чем кончилась
+    /// установка.
     /// <para>
     /// Всё это — про чужую папку. Модпак пишется прямо в установку Steam, поэтому цена
-    /// ошибки здесь не «неудобно»: пункт, показанный не той игре, ведёт в тупик, вопрос
-    /// без имени найденной папки просит согласиться неизвестно на что, а «ошибка» вместо
-    /// причины поиска не даёт человеку сделать следующий шаг. Ни одну из этих строк не
-    /// проверить через живое окно — потому они и вынесены из страницы.
+    /// ошибки здесь не «неудобно»: «ошибка» вместо причины поиска не даёт человеку
+    /// сделать следующий шаг, а молчание по итогу оставляет его гадать, легли файлы
+    /// или нет. Ни одну из этих строк не проверить через живое окно — потому они и
+    /// вынесены из страницы.
     /// </para>
     /// </summary>
     public class SteamModsInstallTests {
-        /// <summary>Игра с опубликованным модпаком и известным AppID.</summary>
-        private static ModsInfo Ready() => new() {
-            HasLatest = true,
-            Version = "ASTeam-LethalReloaded-2.2.12",
-            DisplayName = "Lethal Reloaded",
-            DisplayVersion = "2.2.12",
-            SteamAppId = "1966720",
-            SteamFolder = "How to Fish/How to Fish",
-        };
-
-        // Тестов пункта контекстного меню здесь больше нет: пункт убран.
-        // Установка модов в копию Steam теперь живёт строкой «Steam · с модами» в
-        // меню кнопки «Играть», и её состояния проверяет ModsLaunchTests.
-
-        // ---- Вопрос перед установкой ----
-
-        /// <summary>
-        /// В вопросе обязана быть НАЙДЕННАЯ папка: библиотек Steam бывает несколько, и
-        /// без имени папки человек соглашается неизвестно на какую копию. Показывается
-        /// она в том же виде, что и остальные пути в интерфейсе — с прямыми слешами.
-        /// </summary>
-        [Fact]
-        public void ВопросНазываетНайденнуюПапку() {
-            var text = SteamModsInstall.BuildConfirmText("How to Fish", Ready(), @"D:\SteamLibrary\steamapps\common\How to Fish");
-
-            Assert.Contains("D:/SteamLibrary/steamapps/common/How to Fish", text, System.StringComparison.Ordinal);
-        }
-
-        /// <summary>
-        /// Предупреждение про обновление игры в Steam — обязательная часть вопроса:
-        /// Steam возвращает свои файлы поверх модов, и после его обновления игра
-        /// перестаёт запускаться до повторной установки модпака.
-        /// </summary>
-        [Fact]
-        public void ВопросПредупреждаетПроОбновлениеВSteam() {
-            var text = SteamModsInstall.BuildConfirmText("How to Fish", Ready(), @"D:\Games\How to Fish");
-
-            Assert.Contains("Обновление игры в Steam", text, System.StringComparison.Ordinal);
-        }
-
-        /// <summary>Название модпака в вопросе — чтобы было видно, что именно ставят.</summary>
-        [Fact]
-        public void ВопросНазываетМодпак() {
-            var text = SteamModsInstall.BuildConfirmText("How to Fish", Ready(), @"D:\Games\How to Fish");
-
-            Assert.Contains("Lethal Reloaded 2.2.12", text, System.StringComparison.Ordinal);
-        }
-
-        /// <summary>
-        /// Пустые название игры и папка приходят только из гонки, но вопрос всё равно
-        /// обязан остаться связным текстом, а не «Поставить моды в копию  из Steam?».
-        /// </summary>
-        [Fact]
-        public void ВопросБезНазванияИПапкиОстаётсяСвязным() {
-            var text = SteamModsInstall.BuildConfirmText(null, null, null);
-
-            Assert.Contains("Поставить моды в копию игры из Steam?", text, System.StringComparison.Ordinal);
-            Assert.Contains("Обновление игры в Steam", text, System.StringComparison.Ordinal);
-        }
+        // Тестов пункта контекстного меню и вопроса перед установкой здесь больше нет:
+        // пункт убран, а вопрос снят — установка идёт по щелчку строки «Steam · с модами»
+        // в меню кнопки «Играть». Состояния строки проверяет ModsLaunchTests.
 
         // ---- Почему копию не нашли ----
 

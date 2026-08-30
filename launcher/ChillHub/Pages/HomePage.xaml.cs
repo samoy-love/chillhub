@@ -45,6 +45,7 @@ namespace ChillHub.Pages {
         // ссылку на TextBlock, и без снятия страница не собиралась бы сборщиком мусора.
         private DependencyPropertyDescriptor? statusTextWatcher;
         private DependencyPropertyDescriptor? progressValueWatcher;
+        private DependencyPropertyDescriptor? progressRunningWatcher;
         private List<string> builds = new();
         // Идёт удаление локальных файлов игры: блокирует повторный запуск и установку
         private bool isDeleting = false;
@@ -335,9 +336,18 @@ namespace ChillHub.Pages {
                 this.statusTextWatcher.AddValueChanged(this.StatusText, this.OnStatusTextChanged);
                 this.progressValueWatcher = DependencyPropertyDescriptor.FromProperty(RangeBase.ValueProperty, typeof(ProgressBar));
                 this.progressValueWatcher.AddValueChanged(this.UpdateProgress, this.OnStatusTextChanged);
+
+                // Бегунок гасят из десятка мест, и почти всегда — в finally, где значение
+                // полосы остаётся нулём. Без этой подписки панель не перерисовывалась ни
+                // разу за всю операцию и оставалась висеть пустой строкой (или строкой
+                // «Готово») до следующей закачки.
+                this.progressRunningWatcher =
+                    DependencyPropertyDescriptor.FromProperty(ProgressBar.IsIndeterminateProperty, typeof(ProgressBar));
+                this.progressRunningWatcher.AddValueChanged(this.UpdateProgress, this.OnStatusTextChanged);
                 this.Unloaded += (s, e) => {
                     this.statusTextWatcher?.RemoveValueChanged(this.StatusText, this.OnStatusTextChanged);
                     this.progressValueWatcher?.RemoveValueChanged(this.UpdateProgress, this.OnStatusTextChanged);
+                    this.progressRunningWatcher?.RemoveValueChanged(this.UpdateProgress, this.OnStatusTextChanged);
                 };
                 this.SyncBottomBarVisibility();
             }
@@ -1893,29 +1903,28 @@ namespace ChillHub.Pages {
                     return;
                 }
 
-                var running = this.UpdateProgress.IsIndeterminate || this.UpdateProgress.Value > 0;
-                var busy = this.QueuePanel.Visibility == Visibility.Visible
-                    || running
-                    || !IsIdleStatus(this.StatusText.Text);
+                // Само решение — в Core.Home.BottomBarLook: здесь остаётся только
+                // расставить его по контролам.
+                var look = Core.Home.BottomBarLook.Decide(
+                    this.QueuePanel.Visibility == Visibility.Visible,
+                    this.UpdateProgress.IsIndeterminate,
+                    this.UpdateProgress.Value,
+                    this.StatusText.Text,
+                    this.SpeedEtaText.Text,
+                    this.FilesSizeText.Text);
 
-                this.BottomBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
-
-                // Полоса — только когда ей есть что показывать. Пустая полоса под сообщением
-                // «Обновление не завершено» читается как зависший процесс, а процесса нет.
-                this.UpdateProgress.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
-                this.SpeedEtaText.Visibility = HideIfEmpty(this.SpeedEtaText.Text);
-                this.FilesSizeText.Visibility = HideIfEmpty(this.FilesSizeText.Text);
+                this.BottomBar.Visibility = Shown(look.Panel);
+                this.UpdateProgress.Visibility = Shown(look.Progress);
+                this.StatusText.Visibility = Shown(look.Status);
+                this.SpeedEtaText.Visibility = Shown(look.SpeedEta);
+                this.FilesSizeText.Visibility = Shown(look.FilesSize);
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Warn($"SyncBottomBarVisibility: {ex.Message}");
             }
         }
 
-        private static Visibility HideIfEmpty(string? text)
-            => string.IsNullOrWhiteSpace(text) ? Visibility.Collapsed : Visibility.Visible;
-
-        private static bool IsIdleStatus(string? text)
-            => string.IsNullOrWhiteSpace(text) || string.Equals(text.Trim(), "Готово", StringComparison.Ordinal);
+        private static Visibility Shown(bool visible) => visible ? Visibility.Visible : Visibility.Collapsed;
 
         // Стиль кнопки берём из темы; если ресурс не найден, оставляем оформление по умолчанию
         private void ApplyActionButtonStyle(string styleKey) {
@@ -2622,7 +2631,7 @@ namespace ChillHub.Pages {
         /// Доводит выбранную строку меню до игры: решение, память, установка, запуск.
         /// <para>
         /// Вся цепочка живёт в <see cref="Core.Mods.LaunchRunner"/>: здесь остаются
-        /// только настоящие обращения к окну — строка состояния, всплывашка, вопрос,
+        /// только настоящие обращения к окну — строка состояния, всплывашка,
         /// очередь загрузок и сам старт процесса.
         /// </para>
         /// </summary>
@@ -2642,7 +2651,6 @@ namespace ChillHub.Pages {
                 var runner = new Core.Mods.LaunchRunner(new Core.Mods.LaunchUi {
                     SetStatus = text => this.StatusText.Text = text,
                     Toast = text => this.ShowToast(text),
-                    Confirm = Core.Home.HomeDialogs.AskYesNo,
                     Enqueue = gid => this.downloadQueue.Enqueue(gid),
                     RefreshChoice = () => {
                         this.InvalidateLaunchOptions();

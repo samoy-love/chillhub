@@ -124,7 +124,22 @@ namespace ChillHub.Core.News {
   h1{{font-size:24px; margin:20px 0 10px 0;}}
   h2{{font-size:21px; margin:18px 0 8px 0;}}
   h3{{font-size:19px; margin:16px 0 6px 0;}}
+  h4{{font-size:17px; margin:14px 0 6px 0;}}
   hr{{border:none; border-top:1px solid {palette.HorizontalRule}; margin:20px 0;}}
+  ul,ol{{padding-left:22px;}}
+  li{{margin:4px 0;}}
+  li>ul,li>ol{{margin:4px 0;}}
+  /* Цитата — врезка «главное в двух строках»: без полосы и отступа она сливается с текстом. */
+  blockquote{{margin:16px 0; padding:10px 16px; border-left:3px solid {palette.Link};
+    background:{palette.CodeBackground}; border-radius:0 8px 8px 0;}}
+  blockquote p{{margin:6px 0;}}
+  /* Таблицей набраны составы сборок и характеристики игр; без рамок это каша из слов. */
+  table{{border-collapse:collapse; width:100%; margin:16px 0; font-size:16px; display:block; overflow-x:auto;}}
+  th,td{{border-bottom:1px solid {palette.HorizontalRule}; padding:8px 10px; text-align:left; vertical-align:top;}}
+  th{{font-weight:600; white-space:nowrap;}}
+  tbody tr:nth-child(even){{background:{palette.CodeBackground};}}
+  code{{padding:1px 5px; font-size:15px;}}
+  pre code{{padding:0;}}
   /* Themed scrollbars for WebView2 (Chromium) */
   ::-webkit-scrollbar{{ width:8px; height:8px; }}
   ::-webkit-scrollbar-track{{ background: transparent; }}
