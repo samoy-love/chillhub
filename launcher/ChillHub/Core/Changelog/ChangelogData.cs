@@ -43,7 +43,7 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
-                Version = "1.6.28",
+                Version = "1.6.29",
                 Date = "2026-08-31",
                 Changes = new[] {
                     "Появилось окно «Что нового»: после обновления лаунчер сам показывает, что изменилось.",
