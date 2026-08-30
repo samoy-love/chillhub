@@ -34,11 +34,25 @@ namespace ChillHub.Core.Metrics {
         public const string EndpointPath = "/metrics/report";
 
         /// <summary>
-        /// Переменная окружения для принудительного отключения (значение "0").
-        /// Нужна для отладочных и автоматических запусков, чтобы они не пачкали
-        /// статистику.
+        /// Переменная окружения для отладочных и автоматических запусков, чтобы
+        /// они не пачкали статистику. Значение "0" глушит отправку целиком,
+        /// значение "test" оставляет её включённой, но помечает события
+        /// служебными: сервер принимает их как обычно и не считает игроками.
         /// </summary>
         public const string EnvVar = "CHILLHUB_METRICS";
+
+        /// <summary>
+        /// Префикс идентификатора служебной установки. Сервер узнаёт по нему
+        /// свой же прогон и не учитывает его ни в одной цифре админки
+        /// (server/internal/metrics/synthetic.go).
+        /// <para>
+        /// Признак живёт в самом событии, а не только в решении «слать или не
+        /// слать»: прогон, которому отправку заглушили, перестаёт проверять и
+        /// приём событий, а уже отправленные события задним числом не
+        /// перекрасишь.
+        /// </para>
+        /// </summary>
+        public const string TestInstallIdPrefix = "test-";
 
         // Метрика ценна в объёме, а не поштучно: ждать её дольше пары секунд
         // бессмысленно — событие уже устарело, а сокет держать незачем.
@@ -61,6 +75,22 @@ namespace ChillHub.Core.Metrics {
         /// с личностью пользователя не связан никак.
         /// </summary>
         public static string InstallId => InstallIdLazy.Value;
+
+        /// <summary>
+        /// Gets a value indicating whether прогон объявил себя служебным
+        /// (<c>CHILLHUB_METRICS=test</c>): автотест, отладочный или ручной
+        /// запуск, который не должен попадать в статистику как игрок.
+        /// </summary>
+        public static bool Synthetic
+            => Environment.GetEnvironmentVariable(EnvVar)?.Trim() == "test";
+
+        /// <summary>
+        /// Gets идентификатор, который действительно уходит на сервер: у
+        /// служебного прогона — с префиксом <see cref="TestInstallIdPrefix"/>,
+        /// у обычного запуска — <see cref="InstallId"/> как есть.
+        /// </summary>
+        public static string ReportedInstallId
+            => Synthetic ? TestInstallIdPrefix + InstallId : InstallId;
 
         /// <summary>Gets a value indicating whether отправка разрешена.</summary>
         public static bool Enabled {
@@ -202,7 +232,7 @@ namespace ChillHub.Core.Metrics {
 
                 url = baseUrl + EndpointPath;
                 json = JsonSerializer.Serialize(new {
-                    installId = InstallId,
+                    installId = ReportedInstallId,
                     @event = kind,
                     appVersion = AppVersion(),
                     os = Environment.OSVersion.VersionString,

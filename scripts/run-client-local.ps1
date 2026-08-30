@@ -61,6 +61,10 @@ try {
     # к локальному API, не найдёт манифеста и уйдёт в окно апдейтера вместо
     # того, ради чего его запускали.
     $env:YL_DEV_SKIP_SELF_UPDATE = '1'
+    # Прогон из репозитория — это не игрок. Метрики при этом НЕ глушатся: так
+    # проверяется и приём событий, а сервер по префиксу installId сам не считает
+    # такой запуск ни установкой, ни игроком (server/internal/metrics/synthetic.go).
+    $env:CHILLHUB_METRICS = 'test'
     dotnet run --project $project `
         -p:RunAnalyzersDuringBuild=false `
         -p:RunAnalyzersDuringLiveAnalysis=false `

@@ -98,6 +98,46 @@ namespace ChillHub.Tests {
             Assert.DoesNotContain(Environment.MachineName, id, StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>
+        /// CHILLHUB_METRICS=test отправку не глушит: прогон обязан проверять и приём
+        /// событий тоже, иначе сломавшийся эндпоинт заметит только пользователь.
+        /// </summary>
+        [Fact]
+        public void СлужебныйПрогонПродолжаетОтправлять() {
+            using var scope = new MetricsScope(env: "test", sendUsageMetrics: true);
+
+            Assert.True(MetricsService.Enabled);
+            Assert.True(MetricsService.Synthetic);
+        }
+
+        /// <summary>
+        /// Служебный прогон помечает СВОЙ ЖЕ идентификатор: по нему сервер и отличает
+        /// автотест от игрока, потому что больше отличить их нечем — эндпоинт
+        /// публичный, а версия сборки у своей сборки бывает какой угодно.
+        /// </summary>
+        [Fact]
+        public void СлужебныйПрогонПомечаетИдентификатор() {
+            using var scope = new MetricsScope(env: "test", sendUsageMetrics: true);
+
+            Assert.StartsWith(MetricsService.TestInstallIdPrefix, MetricsService.ReportedInstallId, StringComparison.Ordinal);
+            Assert.EndsWith(MetricsService.InstallId, MetricsService.ReportedInstallId, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Обычный запуск ничего не помечает: попади префикс к игроку — его перестала
+        /// бы считать вся статистика разом.
+        /// </summary>
+        [Theory]
+        [InlineData(null)]
+        [InlineData("1")]
+        [InlineData("testing")]
+        public void ОбычныйЗапускИдентификаторНеМетит(string? env) {
+            using var scope = new MetricsScope(env: env, sendUsageMetrics: true);
+
+            Assert.False(MetricsService.Synthetic);
+            Assert.Equal(MetricsService.InstallId, MetricsService.ReportedInstallId);
+        }
+
         /// <summary>Выключенная отправка не ходит в сеть и не бросает исключений.</summary>
         [Fact]
         public void ВыключеннаяОтправкаНичегоНеДелает() {

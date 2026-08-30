@@ -23,6 +23,10 @@ Push-Location (Join-Path $repoRoot 'launcher\ChillHub')
 try {
   # Pass GamesPath via environment for app to consume
   $env:ChillHub_GAMES_PATH = $GamesPath
+  # Прогон из репозитория — это не игрок. Метрики при этом НЕ глушатся: так
+  # проверяется и приём событий, а сервер по префиксу installId сам не считает
+  # такой запуск ни установкой, ни игроком (server/internal/metrics/synthetic.go).
+  $env:CHILLHUB_METRICS = 'test'
   Write-Host "Starting WPF client..." -ForegroundColor Green
   dotnet run --project .\ChillHub.csproj
 } finally {
