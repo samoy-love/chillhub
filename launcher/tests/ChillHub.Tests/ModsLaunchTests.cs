@@ -367,7 +367,10 @@ namespace ChillHub.Tests {
             var options = ModsLaunch.Options(Ctx(Pack(), steamDir, steam));
 
             var modded = options.Single(o => o.Target == LaunchTarget.SteamModded);
-            Assert.Equal(LaunchAction.InstallMods, modded.Action);
+
+            // Починка, а не установка: она возвращает пропавшее и на этом
+            // останавливается — игру запускает уже следующий щелчок.
+            Assert.Equal(LaunchAction.RepairMods, modded.Action);
             Assert.Equal("восстановить моды", modded.Note);
         }
 

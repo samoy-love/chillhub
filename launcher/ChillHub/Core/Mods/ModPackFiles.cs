@@ -18,15 +18,14 @@ namespace ChillHub.Core.Mods {
     /// </param>
     /// <param name="Total">Сколько файлов числится за модпаком.</param>
     /// <param name="Missing">Сколько из них пропало.</param>
-    /// <param name="Damaged">Сколько лежит, но другого размера, чем ставили.</param>
-    internal readonly record struct ModPackState(bool Known, int Total, int Missing, int Damaged) {
+    internal readonly record struct ModPackState(bool Known, int Total, int Missing) {
         /// <summary>Модпак заявлен установленным, но на диске он неполон.</summary>
-        internal bool Broken => this.Known && (this.Missing > 0 || this.Damaged > 0);
+        internal bool Broken => this.Known && this.Missing > 0;
 
         /// <summary>Строка для журнала: без неё в отчёте видно только «восстановить моды».</summary>
         /// <returns>Короткое описание находки.</returns>
         public override string ToString() =>
-            this.Known ? $"файлов={this.Total} пропало={this.Missing} не того размера={this.Damaged}" : "модпак не установлен";
+            this.Known ? $"файлов={this.Total} пропало={this.Missing}" : "модпак не установлен";
     }
 
     /// <summary>
@@ -39,17 +38,18 @@ namespace ChillHub.Core.Mods {
     /// Chill Hub.
     /// </para>
     /// <para>
-    /// Сверяются наличие и размер, а не хеши: это ответ на вопрос «модпак ещё цел?»,
-    /// который задаётся при каждом пересчёте вариантов запуска — то есть на UI-потоке
-    /// и часто. Пересчёт хешей полутора гигабайт там неуместен, а удалённый или
-    /// обрезанный файл виден и так. Настоящая сверка с хешами остаётся за «Проверить
-    /// файлы», которая от этого никуда не делась.
+    /// Спрашивается ТОЛЬКО наличие файла — ни хеши, ни размер. Хеши здесь неуместны:
+    /// вопрос задаётся при каждом пересчёте вариантов запуска, то есть на UI-потоке и
+    /// часто. А размер сравнивать нельзя вовсе: модпак приносит с собой свои
+    /// <c>BepInEx/config/*.cfg</c>, и BepInEx переписывает их при запуске игры,
+    /// дописывая настройки новых модов. По размеру такой файл «испорчен» сразу после
+    /// первой же сессии — и кнопка звала бы восстанавливать моды снова и снова, починяя
+    /// то, что не ломалось. Сверка с хешами осталась за «Проверить файлы».
     /// </para>
     /// <para>
-    /// Каталоги обходятся по одному разу, а не по файлу за раз: у модпака полторы
-    /// тысячи файлов на полсотни папок, и разница между пятьюдесятью обходами и
-    /// полутора тысячами обращений к диску заметна там, где вопрос задаётся раз в
-    /// секунду.
+    /// Каталоги обходятся по одному разу, а не по файлу за раз: у модпака под тысячу
+    /// файлов на восемь десятков папок, и разница между восемью десятками обходов и
+    /// тысячей обращений к диску заметна там, где вопрос задаётся раз в секунду.
     /// </para>
     /// </summary>
     internal static class ModPackFiles {
@@ -87,20 +87,19 @@ namespace ChillHub.Core.Mods {
         /// Раскладывает файлы манифеста по папкам: ключ — папка относительно корня.
         /// <para>
         /// <c>doorstop_config.ini</c> из списка выпадает: его правит сам лаунчер при
-        /// каждом переключении «с модами / без модов», и размер файла при этом меняется.
-        /// Список берётся оттуда же, откуда его берёт планировщик, — расходиться этим
-        /// двум местам нельзя.
+        /// каждом переключении «с модами / без модов». Список берётся оттуда же, откуда
+        /// его берёт планировщик, — расходиться этим двум местам нельзя.
         /// </para>
         /// </summary>
         /// <param name="manifest">Копия установленного манифеста модпака.</param>
         /// <returns>Файлы по папкам.</returns>
-        private static Dictionary<string, List<ManifestFile>> Wanted(Manifest manifest) {
+        private static Dictionary<string, List<string>> Wanted(Manifest manifest) {
             var preserve = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var p in PlanOptions.ModPackSelfManagedPaths) {
                 preserve.Add(SimpleSyncService.NormalizeRel(p));
             }
 
-            var byDir = new Dictionary<string, List<ManifestFile>>(StringComparer.OrdinalIgnoreCase);
+            var byDir = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             foreach (var f in manifest.Files) {
                 var rel = SimpleSyncService.NormalizeRel(f?.Path);
                 if (rel.Length == 0 || preserve.Contains(rel)) {
@@ -110,11 +109,11 @@ namespace ChillHub.Core.Mods {
                 var cut = rel.LastIndexOf('/');
                 var dir = cut < 0 ? string.Empty : rel.Substring(0, cut);
                 if (!byDir.TryGetValue(dir, out var list)) {
-                    list = new List<ManifestFile>();
+                    list = new List<string>();
                     byDir[dir] = list;
                 }
 
-                list.Add(f!);
+                list.Add(rel.Substring(cut + 1));
             }
 
             return byDir;
@@ -122,51 +121,45 @@ namespace ChillHub.Core.Mods {
 
         /// <summary>Сверяет ожидаемое с тем, что лежит в папках.</summary>
         /// <param name="root">Папка игры.</param>
-        /// <param name="byDir">Файлы модпака по папкам.</param>
+        /// <param name="byDir">Имена файлов модпака по папкам.</param>
         /// <returns>Что нашлось.</returns>
-        private static ModPackState Compare(string root, Dictionary<string, List<ManifestFile>> byDir) {
+        private static ModPackState Compare(string root, Dictionary<string, List<string>> byDir) {
             var total = 0;
             var missing = 0;
-            var damaged = 0;
 
-            foreach (var (dir, files) in byDir) {
-                total += files.Count;
-                var sizes = SizesIn(Path.Combine(root, dir.Replace('/', Path.DirectorySeparatorChar)));
-                if (sizes == null) {
+            foreach (var (dir, names) in byDir) {
+                total += names.Count;
+                var present = NamesIn(Path.Combine(root, dir.Replace('/', Path.DirectorySeparatorChar)));
+                if (present == null) {
                     // Папки нет вовсе — пропал весь её кусок модпака.
-                    missing += files.Count;
+                    missing += names.Count;
                     continue;
                 }
 
-                foreach (var f in files) {
-                    var name = f.Path.Substring(f.Path.LastIndexOfAny(new[] { '/', '\\' }) + 1);
-                    if (!sizes.TryGetValue(name, out var onDisk)) {
+                foreach (var name in names) {
+                    if (!present.Contains(name)) {
                         missing++;
-                    }
-                    else if (f.Size > 0 && onDisk != f.Size) {
-                        damaged++;
                     }
                 }
             }
 
-            return new ModPackState(true, total, missing, damaged);
+            return new ModPackState(true, total, missing);
         }
 
-        /// <summary>Размеры файлов папки по именам; null — папки нет.</summary>
+        /// <summary>Имена файлов папки; null — папки нет.</summary>
         /// <param name="dir">Полный путь к папке.</param>
-        /// <returns>Имя файла — его размер.</returns>
-        private static Dictionary<string, long>? SizesIn(string dir) {
-            var info = new DirectoryInfo(dir);
-            if (!info.Exists) {
+        /// <returns>Что лежит в папке.</returns>
+        private static HashSet<string>? NamesIn(string dir) {
+            if (!Directory.Exists(dir)) {
                 return null;
             }
 
-            var sizes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
-            foreach (var file in info.EnumerateFiles()) {
-                sizes[file.Name] = file.Length;
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in Directory.EnumerateFiles(dir)) {
+                names.Add(Path.GetFileName(path));
             }
 
-            return sizes;
+            return names;
         }
     }
 }

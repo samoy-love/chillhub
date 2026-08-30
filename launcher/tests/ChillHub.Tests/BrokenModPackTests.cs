@@ -63,7 +63,6 @@ namespace ChillHub.Tests {
 
             Assert.True(state.Broken);
             Assert.Equal(1, state.Missing);
-            Assert.Equal(0, state.Damaged);
         }
 
         /// <summary>Удалённая папка целиком — тоже поломка, а не «папки нет, значит и спроса нет».</summary>
@@ -80,19 +79,23 @@ namespace ChillHub.Tests {
             Assert.Equal(2, state.Missing);
         }
 
-        /// <summary>Файл обрезан антивирусом: он на месте, но не того размера.</summary>
+        /// <summary>
+        /// РАЗМЕР НЕ СВЕРЯЕТСЯ, И ЭТО НЕ НЕДОСМОТР. Модпак приносит с собой
+        /// <c>BepInEx/config/*.cfg</c>, а BepInEx переписывает их при запуске игры,
+        /// дописывая настройки новых модов. Сверяй мы размеры — кнопка звала бы
+        /// восстанавливать моды после каждой сессии, починяя то, что не ломалось.
+        /// Обрезанный файл ловит «Проверить файлы», которая считает хеши.
+        /// </summary>
         [Fact]
-        public void ОбрезанныйФайлСчитаетсяИспорченным() {
+        public void ПереписанныйИгройКонфигПоломкойНеСчитается() {
             using var dir = new TempDir();
             InstallPack(dir.Root);
 
-            File.WriteAllText(Path.Combine(dir.Root, "BepInEx", "plugins", "Mod.dll"), string.Empty);
+            File.WriteAllText(
+                Path.Combine(dir.Root, "BepInEx", "config", "BepInEx.cfg"),
+                "[Logging]\r\nEnabled = true\r\n; дописано игрой при запуске\r\n");
 
-            var state = ModPackFiles.Inspect(dir.Root);
-
-            Assert.True(state.Broken);
-            Assert.Equal(0, state.Missing);
-            Assert.Equal(1, state.Damaged);
+            Assert.False(ModPackFiles.Broken(dir.Root));
         }
 
         /// <summary>
@@ -142,7 +145,7 @@ namespace ChillHub.Tests {
 
             var modded = SteamOption(dir.Root);
 
-            Assert.Equal(LaunchAction.InstallMods, modded.Action);
+            Assert.Equal(LaunchAction.RepairMods, modded.Action);
             Assert.Equal("восстановить моды", modded.Note);
         }
 
@@ -332,6 +335,7 @@ namespace ChillHub.Tests {
             Add(DoorstopConfig.ProxyDllName, "MZ");
             Add(DoorstopConfig.FileName, "[General]\r\nenabled = true\r\n");
             Add("BepInEx/core/BepInEx.Preloader.dll", "preloader");
+            Add("BepInEx/config/BepInEx.cfg", "[Logging]\r\nEnabled = false\r\n");
             Add("BepInEx/plugins/Mod.dll", "мод, который удалят руками");
             Add("BepInEx/plugins/Other.dll", "мод, который останется");
 

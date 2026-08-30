@@ -2648,7 +2648,7 @@ namespace ChillHub.Pages {
                         this.InvalidateLaunchOptions();
                         this.SyncLaunchBar(this.actionMode);
                     },
-                    InstallMods = (g, title, dir) => this.InstallModsToSteamAsync(g, title, dir),
+                    InstallMods = (g, title, dir, repair) => this.InstallModsToSteamAsync(g, title, dir, repair),
                     Launch = this.LaunchNow,
                 }) {
                     ModsBusy = () => this.steamModsInstalling,
@@ -2779,8 +2779,14 @@ namespace ChillHub.Pages {
         /// <param name="game">Игра из каталога.</param>
         /// <param name="title">Название игры для подписей.</param>
         /// <param name="steamDir">Найденная папка копии из Steam.</param>
+        /// <param name="repair">
+        /// Моды уже стоят, и вернуть надо только пропавшее. Меняет одни подписи: работа
+        /// та же самая, а «Установка модов…» над починкой двух файлов вводит в
+        /// заблуждение ровно там, где игрок и так недоволен.
+        /// </param>
         /// <returns>Задача установки.</returns>
-        private async Task<bool> InstallModsToSteamAsync(GameInfo game, string title, string steamDir) {
+        private async Task<bool> InstallModsToSteamAsync(
+            GameInfo game, string title, string steamDir, bool repair = false) {
             var view = new Core.Game.SyncProgressView();
             var started = DateTime.UtcNow;
 
@@ -2796,7 +2802,9 @@ namespace ChillHub.Pages {
             this.UpdateProgress.IsIndeterminate = true;
             this.SpeedEtaText.Text = string.Empty;
             this.FilesSizeText.Text = string.Empty;
-            this.StatusText.Text = $"Установка модов в копию {title} из Steam…";
+            this.StatusText.Text = repair
+                ? $"Восстановление модов в копии {title} из Steam…"
+                : $"Установка модов в копию {title} из Steam…";
             this.SyncBottomBarVisibility();
 
             try {
@@ -2805,7 +2813,7 @@ namespace ChillHub.Pages {
                 var result = await Core.Mods.ModsService.EnsureAsync(
                     game, steamDir, this.BaseApi, this.sync, progress, CancellationToken.None).ConfigureAwait(true);
 
-                var message = Core.Home.SteamModsInstall.DescribeResult(result, title);
+                var message = Core.Home.SteamModsInstall.DescribeResult(result, title, repair);
                 if (result.Ok) {
                     this.StatusText.Text = "Готово";
                     this.ShowToast(message);
