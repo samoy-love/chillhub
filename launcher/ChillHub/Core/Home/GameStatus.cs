@@ -117,6 +117,37 @@ namespace ChillHub.Core.Home {
             return !string.Equals(installed, wanted, StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>
+        /// Недосчитались ли файлов установленного модпака в сборке Chill Hub.
+        /// <para>
+        /// <see cref="ModsOutOfDate"/> сравнивает версии, и удалённый руками мод для неё
+        /// неотличим от полного пака: маркер версии от удаления файла не меняется. Ни
+        /// манифест сборки игры, ни слепок папки на этот вопрос тоже не отвечают —
+        /// первый про модпак не знает, второй знает лишь, что папку трогали.
+        /// </para>
+        /// <para>
+        /// Спрашивается в фоновой проверке статуса, а не в
+        /// <see cref="NormalizeIconsAndLocalState"/>: та проходит по всему списку
+        /// разом и обязана оставаться чтением маркеров, без обхода папок.
+        /// </para>
+        /// </summary>
+        /// <param name="g">Игра из списка.</param>
+        /// <returns>true, если модпак заявлен установленным, но неполон.</returns>
+        internal static bool ModsBroken(GameInfo? g) {
+            if (g?.Mods is not { HasLatest: true } || string.IsNullOrWhiteSpace(g.GameId)) {
+                // Модпака на сервере нет — восстанавливать было бы не из чего, и
+                // объявлять игру требующей обновления значило бы звать в никуда.
+                return false;
+            }
+
+            var state = Mods.ModPackFiles.Inspect(GameLocalState.GameLocalRoot(g.GameId));
+            if (state.Broken) {
+                Logging.Logger.Warn($"[mods] модпак в сборке '{g.GameId}' неполон: {state}");
+            }
+
+            return state.Broken;
+        }
+
         /// <summary>Отмечает игру удалённой.</summary>
         /// <param name="g">Игра из списка; null — игры уже нет.</param>
         internal static void MarkUninstalled(GameInfo? g) {

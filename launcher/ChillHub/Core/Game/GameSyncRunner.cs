@@ -137,6 +137,13 @@ namespace ChillHub.Core.Game {
         /// <summary>Gets or sets текущее состояние режима технических работ.</summary>
         internal Func<MaintenanceStateView> Maintenance { get; set; } = DefaultMaintenance;
 
+        /// <summary>
+        /// Gets or sets поиск копии игры в Steam. Настоящая реализация ходит в реестр
+        /// Windows, поэтому без шва проверка «дошла ли проверка файлов до копии Steam»
+        /// требовала бы машины с установленным Steam.
+        /// </summary>
+        internal Func<string, string, SteamGame> LocateSteam { get; set; } = SteamLocator.Locate;
+
         /// <summary>Gets or sets опрос свободного места на диске игры.</summary>
         internal Func<string?, long> FreeSpaceFor { get; set; } = GameLocalState.GetAvailableFreeSpaceFor;
 
@@ -238,6 +245,10 @@ namespace ChillHub.Core.Game {
                     // от закончившегося шага, висящие над начавшимся, врут об объёме.
                     this.ui.SetSpeedEta(string.Empty);
                     this.ui.SetFilesSize(string.Empty);
+
+                    if (!await this.CheckSteamModsAsync(request, opStart, token).ConfigureAwait(true)) {
+                        return;
+                    }
                 }
 
                 Logging.Logger.Info($"GamePage.StartSync gid={gid} version={version}");
@@ -338,6 +349,71 @@ namespace ChillHub.Core.Game {
                 // пути и имена файлов пользователя, а метрика — публичная сводка.
                 Report(request, plan, "fail", opStart, ex is IOException ? "sync_io" : "sync_failed");
             }
+        }
+
+        /// <summary>
+        /// Доводит проверку файлов до копии игры в Steam.
+        /// <para>
+        /// ПРОВЕРКА ФАЙЛОВ ХОДИЛА ТОЛЬКО В СБОРКУ CHILL HUB. Модпак же лаунчер ставит и
+        /// в чужую папку — копию из Steam, — и удалённый оттуда руками мод не замечал
+        /// никто: ни список игр, ни эта самая проверка, ни кнопка «Steam · с модами».
+        /// Раз лаунчер туда положил, он туда и отвечает.
+        /// </para>
+        /// <para>
+        /// Только для «Проверить файлы»: установка и обновление сборки с сервера к
+        /// чужой папке отношения не имеют, и лезть в неё за компанию значило бы
+        /// молча качать полтора гигабайта в место, о котором игрок не просил.
+        /// Спрашивается сначала маркер: без него модпака в Steam нет, и обходить
+        /// нечего.
+        /// </para>
+        /// </summary>
+        /// <param name="request">Операция целиком.</param>
+        /// <param name="opStart">Момент нажатия кнопки — для метрики неудачи.</param>
+        /// <param name="token">Токен отмены.</param>
+        /// <returns>false, если проверка сорвалась и продолжать нельзя.</returns>
+        private async Task<bool> CheckSteamModsAsync(GameSyncRequest request, DateTime opStart, CancellationToken token) {
+            if (request.Kind != SyncKind.Repair || request.Game?.Mods is not { } mods) {
+                return true;
+            }
+
+            var steam = this.LocateSteam(mods.SteamAppId ?? string.Empty, mods.SteamFolder ?? string.Empty);
+            if (!steam.Ok || string.IsNullOrWhiteSpace(steam.GameDir)) {
+                return true;
+            }
+
+            if (string.Equals(
+                steam.GameDir.TrimEnd('\\', '/'),
+                (request.LocalRoot ?? string.Empty).TrimEnd('\\', '/'),
+                StringComparison.OrdinalIgnoreCase)) {
+                // Одна и та же папка: сборку уже проверили выше.
+                return true;
+            }
+
+            if (string.IsNullOrWhiteSpace(GameLocalState.ReadModsVersionAt(steam.GameDir))) {
+                Logging.Logger.Info($"[mods] в копии Steam '{steam.GameDir}' модпака нет — проверять нечего");
+                return true;
+            }
+
+            Logging.Logger.Info($"[mods] проверка модпака в копии Steam: '{steam.GameDir}'");
+            this.ui.SetStatus("Проверка модов в копии Steam…");
+            this.ui.SetIndeterminate(true);
+
+            var start = DateTime.UtcNow;
+            var progress = new Progress<SyncProgress>(p => this.ui.ReportProgress(p, start));
+            var result = await ModsService.EnsureAsync(
+                request.Game, steam.GameDir, request.BaseApi, this.sync, progress, token, forceRehash: true)
+                .ConfigureAwait(true);
+
+            this.ui.SetSpeedEta(string.Empty);
+            this.ui.SetFilesSize(string.Empty);
+
+            if (result.Ok) {
+                return true;
+            }
+
+            this.ui.SetStatus(result.Message);
+            this.Report(request, null, "fail", opStart, "mods_sync_failed");
+            return false;
         }
 
         /// <summary>

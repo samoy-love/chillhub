@@ -112,6 +112,12 @@ namespace ChillHub.Core.Mods {
     /// Название игры — только для объяснений: «PEAK не установлена в Steam» понятнее,
     /// чем «Игра не установлена в Steam», а больше это имя ни на что не влияет.
     /// </param>
+    /// <param name="SteamModsBroken">
+    /// Модпак в копии из Steam числится установленным, но файлов его на диске
+    /// недосчитались. Отдельно от версии: удалённый руками мод версию не меняет, и
+    /// пункт «Steam · с модами» после этого обещал запуск с тем, чего в папке нет.
+    /// </param>
+    /// <param name="LocalModsBroken">То же про сборку с сервера.</param>
     internal sealed record LaunchContext(
         ModsInfo? Mods,
         string LocalRoot,
@@ -120,7 +126,9 @@ namespace ChillHub.Core.Mods {
         bool HasServerBuild,
         SteamGame Steam,
         string SteamModsVersion,
-        string GameTitle = "");
+        string GameTitle = "",
+        bool SteamModsBroken = false,
+        bool LocalModsBroken = false);
 
     /// <summary>
     /// Четыре способа запустить игру с модпаком: копия из Steam или сборка с сервера,
@@ -212,10 +220,15 @@ namespace ChillHub.Core.Mods {
             else if (!string.Equals(ctx.SteamModsVersion.Trim(), (mods!.Version ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase)) {
                 options.Add(Make(LaunchTarget.SteamModded, ctx.Steam.GameDir, true, LaunchAction.InstallMods, "обновить моды"));
             }
-            else if (!DoorstopConfig.IsInstalled(ctx.Steam.GameDir)) {
-                // Версия записана, а загрузчика нет. Проверка целостности в Steam тут ни при
+            else if (!DoorstopConfig.IsInstalled(ctx.Steam.GameDir) || ctx.SteamModsBroken) {
+                // Версия записана, а файлов нет. Проверка целостности в Steam тут ни при
                 // чём — добавленные файлы она не удаляет; winhttp.dll уносят антивирус,
                 // ручная чистка папки или обновление игры, положившее свой файл поверх.
+                //
+                // Загрузчик — только самый заметный случай. Пропасть может любой файл
+                // модпака: игрок сам удаляет мод, который ему не нравится, и версия
+                // модпака от этого не меняется — потому пункт и обещал запуск с полным
+                // паком, пока в папке лежала его половина.
                 options.Add(Make(LaunchTarget.SteamModded, ctx.Steam.GameDir, true, LaunchAction.InstallMods, "восстановить моды"));
             }
             else {
@@ -242,7 +255,7 @@ namespace ChillHub.Core.Mods {
             else if (!hasPack) {
                 options.Add(Make(LaunchTarget.LocalModded, ctx.LocalRoot, true, LaunchAction.Unavailable, "модпак ещё не опубликован"));
             }
-            else if (!DoorstopConfig.IsInstalled(ctx.LocalRoot)) {
+            else if (!DoorstopConfig.IsInstalled(ctx.LocalRoot) || ctx.LocalModsBroken) {
                 options.Add(Make(LaunchTarget.LocalModded, ctx.LocalRoot, true, LaunchAction.Update, "восстановить моды"));
             }
             else {

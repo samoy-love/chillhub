@@ -73,6 +73,15 @@ namespace ChillHub.Core.Home {
                     return;
                 }
 
+                // У МОДПАКА СВОЯ ЖИЗНЬ В ЧУЖОЙ ПАПКЕ, И НИКТО ЗДЕСЬ О НЁМ НЕ СПРАШИВАЛ.
+                //
+                // Игрок удаляет надоевший мод из папки руками — маркер версии модпака
+                // остаётся прежним, манифест сборки игры про этот файл ничего не знает,
+                // а слепок папки лишь скажет «трогали», после чего длинная сверка с
+                // манифестом ИГРЫ ответит «всё в порядке». Игра так и оставалась
+                // «свежей» с половиной модов на диске.
+                var modsBroken = hasLocalFiles && GameStatus.ModsBroken(game);
+
                 if (!hasLatest) {
                     // Нет эталона для сравнения — считаем не установленной, если нет локальных файлов; иначе установленной без статуса обновления
                     game.IsInstalled = hasLocalFiles;
@@ -80,7 +89,7 @@ namespace ChillHub.Core.Home {
                     // Сборки игры на сервере нет, а модпак может быть: это игра,
                     // которую игрок держит своей копией из Steam. Сравнить нечего —
                     // кроме модпака, и вот его сравнить можно.
-                    game.NeedsUpdate = hasLocalFiles && GameStatus.ModsOutOfDate(game);
+                    game.NeedsUpdate = hasLocalFiles && (GameStatus.ModsOutOfDate(game) || modsBroken);
                     Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} latest=<none> hasLocalFiles={hasLocalFiles} -> IsInstalled={game.IsInstalled} NeedsUpdate={game.NeedsUpdate}");
 
                     // Отложим Refresh до завершения всех проверок, чтобы не трясти UI на каждую игру
@@ -104,6 +113,7 @@ namespace ChillHub.Core.Home {
                 if (hasLocalFiles
                     && string.Equals(GameLocalState.ReadLocalVersion(gid).Trim(), latest!.Trim(), StringComparison.OrdinalIgnoreCase)
                     && !GameStatus.ModsOutOfDate(game)
+                    && !modsBroken
                     && InstallFingerprint.Matches(localRoot)) {
                     game.IsInstalled = true;
                     game.NeedsUpdate = false;
@@ -160,6 +170,15 @@ namespace ChillHub.Core.Home {
                 if (game.IsInstalled && GameStatus.ModsOutOfDate(game)) {
                     game.NeedsUpdate = true;
                     Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} модпак на диске отличается от активного на сервере — нужно обновление");
+                }
+
+                // Отстал модпак или из него выпали файлы — для игрока это одно и то же:
+                // запускать его в таком виде нельзя, а чинится и то и другое одной
+                // кнопкой. План выше об этом молчит: файлы модов в манифест сборки
+                // игры не входят.
+                if (game.IsInstalled && modsBroken) {
+                    game.NeedsUpdate = true;
+                    Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} в модпаке на диске недостаёт файлов — нужно восстановление");
                 }
 
                 Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} result: IsInstalled={game.IsInstalled} NeedsUpdate={game.NeedsUpdate}");
