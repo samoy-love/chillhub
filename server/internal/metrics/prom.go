@@ -38,6 +38,7 @@ type Product struct {
 	errors    *promexp.Counter
 	events    *promexp.Counter
 	rejected  *promexp.Counter
+	synthetic *promexp.Counter
 	bytes     *promexp.Counter
 	fullBytes *promexp.Counter
 	files     *promexp.Counter
@@ -65,6 +66,8 @@ func NewProduct(reg *promexp.Registry) *Product {
 			"Принятые события телеметрии по типу", "event"),
 		rejected: reg.NewCounter("chillhub_telemetry_rejected_total",
 			"Отклонённые обращения к /metrics/report", "reason"),
+		synthetic: reg.NewCounter("chillhub_telemetry_synthetic_total",
+			"События служебных прогонов: приняты, но в продуктовые счётчики не идут", "event"),
 		bytes: reg.NewCounter("chillhub_downloaded_bytes_total",
 			"Фактически скачано клиентами байт", "game"),
 		fullBytes: reg.NewCounter("chillhub_build_full_bytes_total",
@@ -105,6 +108,14 @@ func (p *Product) Reject(reason string) {
 // а два счётчика складываются.
 func (p *Product) Record(ev Event) {
 	if p == nil {
+		return
+	}
+	// Событие своего же автотеста принято и лежит в файле, но продуктовым
+	// числом не становится: и сводка админки, и графики отвечают на вопрос
+	// «сколько играют люди». Отдельный счётчик оставлен, чтобы прогон,
+	// проверяющий приём событий, всё же было видно. См. synthetic.go.
+	if isSynthetic(ev.InstallID) {
+		p.synthetic.Inc(labelOr(ev.Event, "unknown"))
 		return
 	}
 	game := gameLabel(ev.GameID)

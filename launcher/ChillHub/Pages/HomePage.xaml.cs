@@ -41,10 +41,9 @@ namespace ChillHub.Pages {
         private readonly HttpClient http = HttpClientProvider.Shared;
         private List<GameInfo> games = new();
 
-        // Держим дескриптор, чтобы отписаться при выгрузке: AddValueChanged заводит сильную
-        // ссылку на TextBlock, и без снятия страница не собиралась бы сборщиком мусора.
-        private DependencyPropertyDescriptor? statusTextWatcher;
-        private DependencyPropertyDescriptor? progressValueWatcher;
+        // Держим подписку, чтобы снять её при выгрузке: AddValueChanged заводит сильную
+        // ссылку на контрол, и без снятия страница не собиралась бы сборщиком мусора.
+        private Core.Home.BottomBarWatch? bottomBarWatch;
         private List<string> builds = new();
         // Идёт удаление локальных файлов игры: блокирует повторный запуск и установку
         private bool isDeleting = false;
@@ -329,16 +328,13 @@ namespace ChillHub.Pages {
                 this.Unloaded += (s, e) => this.UnsubscribeRunningGames();
 
                 // Статус пишут два десятка мест по всему файлу; вместо того чтобы обходить
-                // каждое, слушаем само свойство — панель прячется и показывается там, где
-                // текст действительно меняется.
-                this.statusTextWatcher = DependencyPropertyDescriptor.FromProperty(TextBlock.TextProperty, typeof(TextBlock));
-                this.statusTextWatcher.AddValueChanged(this.StatusText, this.OnStatusTextChanged);
-                this.progressValueWatcher = DependencyPropertyDescriptor.FromProperty(RangeBase.ValueProperty, typeof(ProgressBar));
-                this.progressValueWatcher.AddValueChanged(this.UpdateProgress, this.OnStatusTextChanged);
-                this.Unloaded += (s, e) => {
-                    this.statusTextWatcher?.RemoveValueChanged(this.StatusText, this.OnStatusTextChanged);
-                    this.progressValueWatcher?.RemoveValueChanged(this.UpdateProgress, this.OnStatusTextChanged);
-                };
+                // каждое, слушаем сами свойства — панель прячется и показывается там, где
+                // текст и полоса действительно меняются. Список наблюдаемого — в
+                // Core.Home.BottomBarWatch: забытое свойство здесь не падает, а молча
+                // оставляет внизу экрана строку пустоты.
+                this.bottomBarWatch = Core.Home.BottomBarWatch.Attach(
+                    this.StatusText, this.UpdateProgress, this.OnStatusTextChanged);
+                this.Unloaded += (s, e) => this.bottomBarWatch?.Dispose();
                 this.SyncBottomBarVisibility();
             }
             catch (Exception ex) {
@@ -936,6 +932,24 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Перечитывает обе ленты сразу — и лаунчера, и выбранной игры.
+        /// В отличие от кнопки над лентой, обновляющей только открытую вкладку,
+        /// обновление списка игр относится ко всей витрине: закрытая вкладка иначе
+        /// осталась бы со старыми новостями и показала бы их при переключении.
+        /// </summary>
+        /// <returns>Задача, завершающаяся после обеих лент.</returns>
+        private async Task ReloadAllNewsAsync() {
+            await this.ReloadLauncherNewsAsync();
+
+            // Игра может быть не выбрана (пустой список, сервер недоступен) — тогда
+            // обновлять нечего, а ReloadGameNewsAsync написал бы в статус жалобу на
+            // невыбранную игру, хотя пользователь про новости игры не спрашивал.
+            if (!string.IsNullOrWhiteSpace(this.GetSelectedGameId())) {
+                await this.ReloadGameNewsAsync();
+            }
+        }
+
         private async Task ReloadLauncherNewsAsync() {
             try {
                 this.LauncherNewsSkeleton.Visibility = System.Windows.Visibility.Visible;
@@ -1063,29 +1077,7 @@ namespace ChillHub.Pages {
                 cts.Dispose();
             }
 
-            // Галерея — своя, независимая от гонки за selectionGate загрузка: не должна
-            // задерживать/блокировать основную (новости/версии/сборки). Но предыдущий запрос
-            // всё равно отменяем тем же приёмом, что и above для selectionCts — иначе прокрутка
-            // стрелками по списку игр запускает по HTTP-запросу на каждый шаг, и все они доходят
-            // до конца впустую (применяется только последний). Диспоз — забота самого
-            // LoadHeroGalleryAsync (в своём finally, после await), а не этого места: диспозить
-            // предыдущий CTS сразу после Cancel() рискует ObjectDisposedException, если внутренний
-            // HttpClient ещё регистрирует колбэк на токене в момент отмены.
-            var galleryCtsLocal = new CancellationTokenSource();
-            var previousGalleryCts = Interlocked.Exchange(ref this.galleryCts, galleryCtsLocal);
-            try {
-                previousGalleryCts?.Cancel();
-            }
-            catch (ObjectDisposedException) {
-                // Прошлая загрузка уже закончилась и освободила свой источник — отменять
-                // нечего. Это обычный ход событий при перещёлкивании списка игр, а не сбой:
-                // на нём набегала тысяча строк WARN за сеанс, вытеснявших из лога всё остальное.
-            }
-            catch (Exception ex) {
-                Core.Logging.Logger.Warn($"GameCombo_SelectionChanged: отмена предыдущей загрузки галереи: {ex.Message}");
-            }
-
-            _ = this.LoadHeroGalleryAsync(gid, galleryCtsLocal);
+            this.StartHeroGalleryLoad(gid);
         }
 
         private async Task HandleGameSelectionAsync(string? gidRaw, CancellationToken token) {
@@ -1432,6 +1424,14 @@ namespace ChillHub.Pages {
                     Core.Logging.Logger.Error(exUi, "RefreshGames_Click.finally");
                 }
             }
+
+            // Витрина и ленты живут своими запросами и своими кешами: без этого
+            // «Обновить список игр» приносил новый список, но оставлял на экране
+            // прежнюю обложку витрины и прежние новости — ровно то, за чем на кнопку
+            // и жмут после правок в админке.
+            this.galleryClient.InvalidateAll();
+            this.StartHeroGalleryLoad(this.GetSelectedGameId());
+            await this.ReloadAllNewsAsync();
 
             // Запустить асинхронную проверку статусов по манифесту
             this.ShowGamesVerifyIndicator(true);
@@ -1893,29 +1893,28 @@ namespace ChillHub.Pages {
                     return;
                 }
 
-                var running = this.UpdateProgress.IsIndeterminate || this.UpdateProgress.Value > 0;
-                var busy = this.QueuePanel.Visibility == Visibility.Visible
-                    || running
-                    || !IsIdleStatus(this.StatusText.Text);
+                // Само решение — в Core.Home.BottomBarLook: здесь остаётся только
+                // расставить его по контролам.
+                var look = Core.Home.BottomBarLook.Decide(
+                    this.QueuePanel.Visibility == Visibility.Visible,
+                    this.UpdateProgress.IsIndeterminate,
+                    this.UpdateProgress.Value,
+                    this.StatusText.Text,
+                    this.SpeedEtaText.Text,
+                    this.FilesSizeText.Text);
 
-                this.BottomBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
-
-                // Полоса — только когда ей есть что показывать. Пустая полоса под сообщением
-                // «Обновление не завершено» читается как зависший процесс, а процесса нет.
-                this.UpdateProgress.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
-                this.SpeedEtaText.Visibility = HideIfEmpty(this.SpeedEtaText.Text);
-                this.FilesSizeText.Visibility = HideIfEmpty(this.FilesSizeText.Text);
+                this.BottomBar.Visibility = Shown(look.Panel);
+                this.UpdateProgress.Visibility = Shown(look.Progress);
+                this.StatusText.Visibility = Shown(look.Status);
+                this.SpeedEtaText.Visibility = Shown(look.SpeedEta);
+                this.FilesSizeText.Visibility = Shown(look.FilesSize);
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Warn($"SyncBottomBarVisibility: {ex.Message}");
             }
         }
 
-        private static Visibility HideIfEmpty(string? text)
-            => string.IsNullOrWhiteSpace(text) ? Visibility.Collapsed : Visibility.Visible;
-
-        private static bool IsIdleStatus(string? text)
-            => string.IsNullOrWhiteSpace(text) || string.Equals(text.Trim(), "Готово", StringComparison.Ordinal);
+        private static Visibility Shown(bool visible) => visible ? Visibility.Visible : Visibility.Collapsed;
 
         // Стиль кнопки берём из темы; если ресурс не найден, оставляем оформление по умолчанию
         private void ApplyActionButtonStyle(string styleKey) {
@@ -2389,6 +2388,34 @@ namespace ChillHub.Pages {
 
         // --- Галерея игры -----------------------------------------------------------------
 
+        /// <summary>Запускает загрузку обложки витрины для игры, отменив предыдущую.</summary>
+        /// <param name="gid">Игра, чью обложку показываем; пустое значение — просто снять предыдущую загрузку.</param>
+        private void StartHeroGalleryLoad(string? gid) {
+            // Галерея — своя, независимая от гонки за selectionGate загрузка: не должна
+            // задерживать/блокировать основную (новости/версии/сборки). Но предыдущий запрос
+            // всё равно отменяем тем же приёмом, что и above для selectionCts — иначе прокрутка
+            // стрелками по списку игр запускает по HTTP-запросу на каждый шаг, и все они доходят
+            // до конца впустую (применяется только последний). Диспоз — забота самого
+            // LoadHeroGalleryAsync (в своём finally, после await), а не этого места: диспозить
+            // предыдущий CTS сразу после Cancel() рискует ObjectDisposedException, если внутренний
+            // HttpClient ещё регистрирует колбэк на токене в момент отмены.
+            var galleryCtsLocal = new CancellationTokenSource();
+            var previousGalleryCts = Interlocked.Exchange(ref this.galleryCts, galleryCtsLocal);
+            try {
+                previousGalleryCts?.Cancel();
+            }
+            catch (ObjectDisposedException) {
+                // Прошлая загрузка уже закончилась и освободила свой источник — отменять
+                // нечего. Это обычный ход событий при перещёлкивании списка игр, а не сбой:
+                // на нём набегала тысяча строк WARN за сеанс, вытеснявших из лога всё остальное.
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"StartHeroGalleryLoad: отмена предыдущей загрузки галереи: {ex.Message}");
+            }
+
+            _ = this.LoadHeroGalleryAsync(gid, galleryCtsLocal);
+        }
+
         // Владеет переданным cts целиком — сама диспозит его в finally, после того как
         // её собственная работа (успешно или нет) завершилась. Так у ЛЮБОГО экземпляра,
         // включая самый последний за время жизни страницы, гарантированно есть момент
@@ -2422,7 +2449,7 @@ namespace ChillHub.Pages {
                 }
 
                 try {
-                    this.HeroCoverBrush.ImageSource = new BitmapImage(new Uri(cover.ImageUrl, UriKind.Absolute));
+                    this.HeroCoverBrush.ImageSource = LoadCoverBitmap(cover.ImageUrl);
                     this.HeroCoverImg.Visibility = Visibility.Visible;
                 }
                 catch (Exception ex) {
@@ -2433,6 +2460,29 @@ namespace ChillHub.Pages {
             finally {
                 cts.Dispose();
             }
+        }
+
+        /// <summary>
+        /// Читает обложку витрины по адресу, минуя кеш самого WPF.
+        /// <para>
+        /// У <see cref="BitmapImage"/> с одним лишь <c>UriSource</c> есть свой кеш на процесс,
+        /// ключуемый адресом: сервер отдаёт новую обложку по прежнему адресу, а на витрине
+        /// до перезапуска лаунчера остаётся старая картинка — «Обновить список игр» на неё
+        /// не действует. <c>IgnoreImageCache</c> отменяет этот кеш, <c>OnLoad</c> дочитывает
+        /// поток сразу, чтобы картинку можно было заморозить.
+        /// </para>
+        /// </summary>
+        /// <param name="url">Абсолютный адрес обложки.</param>
+        /// <returns>Готовая замороженная картинка.</returns>
+        private static BitmapImage LoadCoverBitmap(string url) {
+            var bmp = new BitmapImage();
+            bmp.BeginInit();
+            bmp.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
+            bmp.CacheOption = BitmapCacheOption.OnLoad;
+            bmp.UriSource = new Uri(url, UriKind.Absolute);
+            bmp.EndInit();
+            bmp.Freeze();
+            return bmp;
         }
 
         // Сам запуск живёт в Core/Home/GameLaunch: здесь только показ того, чем он кончился.
@@ -2622,7 +2672,7 @@ namespace ChillHub.Pages {
         /// Доводит выбранную строку меню до игры: решение, память, установка, запуск.
         /// <para>
         /// Вся цепочка живёт в <see cref="Core.Mods.LaunchRunner"/>: здесь остаются
-        /// только настоящие обращения к окну — строка состояния, всплывашка, вопрос,
+        /// только настоящие обращения к окну — строка состояния, всплывашка,
         /// очередь загрузок и сам старт процесса.
         /// </para>
         /// </summary>
@@ -2642,7 +2692,6 @@ namespace ChillHub.Pages {
                 var runner = new Core.Mods.LaunchRunner(new Core.Mods.LaunchUi {
                     SetStatus = text => this.StatusText.Text = text,
                     Toast = text => this.ShowToast(text),
-                    Confirm = Core.Home.HomeDialogs.AskYesNo,
                     Enqueue = gid => this.downloadQueue.Enqueue(gid),
                     RefreshChoice = () => {
                         this.InvalidateLaunchOptions();

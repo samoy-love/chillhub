@@ -28,6 +28,12 @@
 // the JSON body is discarded by the decoder, so a future client cannot leak a
 // new field by accident.
 //
+// # Своё и чужое
+//
+// Событие, у которого installId начинается с "test-", принимается и хранится,
+// но ни в сводку админки, ни в продуктовые счётчики не идёт: это наш
+// собственный автотест, а не игрок. Правило и его цена описаны в synthetic.go.
+//
 // # Storage
 //
 // <contentRoot>/metrics/events.jsonl — one JSON object per line, appended.
@@ -565,6 +571,12 @@ func (a *summaryAgg) accept(ev Event) (time.Time, bool) {
 	if t.Before(a.from) || t.After(a.to) {
 		return time.Time{}, false
 	}
+	// Служебные прогоны отбрасываются целиком, а не только из счёта уникальных:
+	// установка автотестом — это и лишняя установка, и лишний трафик, и лишний
+	// день в графике. См. synthetic.go.
+	if isSynthetic(ev.InstallID) {
+		return time.Time{}, false
+	}
 	if a.gameFilter != "" && ev.GameID != a.gameFilter {
 		return time.Time{}, false
 	}
@@ -900,7 +912,7 @@ func (h *Handlers) ErrorEvents(w http.ResponseWriter, r *http.Request) {
 	// and the useful ones are the recent ones.
 	items := make([]Event, 0, maxErrorEvents)
 	collect := func(ev Event) {
-		if ev.Event != "error" {
+		if ev.Event != "error" || isSynthetic(ev.InstallID) {
 			return
 		}
 		c := ev.ErrorCode

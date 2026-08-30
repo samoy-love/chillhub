@@ -26,9 +26,6 @@ namespace ChillHub.Core.Mods {
         /// <summary>Gets or sets всплывающее сообщение.</summary>
         internal Action<string> Toast { get; set; } = _ => { };
 
-        /// <summary>Gets or sets вопрос «да/нет»: текст, заголовок.</summary>
-        internal Func<string, string, bool> Confirm { get; set; } = (_, _) => false;
-
         /// <summary>Gets or sets постановку игры в очередь загрузок; false — уже стоит.</summary>
         internal Func<string, bool> Enqueue { get; set; } = _ => true;
 
@@ -124,8 +121,9 @@ namespace ChillHub.Core.Mods {
         /// шаг, после которого запуск без отдельного спроса уместен.
         /// </para>
         /// <para>
-        /// Вопрос перед записью остаётся: полтора гигабайта уезжают в ЧУЖУЮ установку
-        /// Steam, и человек должен увидеть, в какую именно папку.
+        /// Вопроса перед записью нет: на строке меню и так написано, что моды поставят
+        /// в копию из Steam, а окно с той же мыслью стояло между «хочу играть с модами»
+        /// и игрой на каждом запуске. Куда именно легли файлы, говорит тост по итогу.
         /// </para>
         /// </summary>
         /// <param name="game">Игра.</param>
@@ -141,12 +139,6 @@ namespace ChillHub.Core.Mods {
             var title = string.IsNullOrWhiteSpace(game.Title) ? game.GameId ?? string.Empty : game.Title;
             if (string.IsNullOrWhiteSpace(option.GameDir)) {
                 this.ui.SetStatus("Для этой игры нет папки, куда поставить моды");
-                return;
-            }
-
-            if (!this.ui.Confirm(
-                    Home.SteamModsInstall.BuildConfirmText(title, game.Mods, option.GameDir),
-                    Home.SteamModsInstall.ConfirmCaption)) {
                 return;
             }
 
@@ -184,12 +176,6 @@ namespace ChillHub.Core.Mods {
             var title = string.IsNullOrWhiteSpace(game.Title) ? game.GameId ?? string.Empty : game.Title;
             if (string.IsNullOrWhiteSpace(option.GameDir)) {
                 this.ui.SetStatus("Для этой игры нет папки, где чинить моды");
-                return;
-            }
-
-            if (!this.ui.Confirm(
-                    Home.SteamModsInstall.BuildConfirmText(title, game.Mods, option.GameDir, repair: true),
-                    Home.SteamModsInstall.RepairCaption)) {
                 return;
             }
 

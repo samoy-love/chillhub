@@ -18,8 +18,8 @@ namespace ChillHub.Tests {
     /// Щелчок по строке меню запуска: от решения до игры.
     /// <para>
     /// Цепочка короткая, но каждое её звено дорого ошибается: не запомнить выбор —
-    /// вернуть игрока в меню на следующий запуск; поставить моды без вопроса —
-    /// записать полтора гигабайта в чужую установку Steam; запустить по старой
+    /// вернуть игрока в меню на следующий запуск; починить моды и уйти в игру —
+    /// запустить её там, где игрок просил одну лишь починку; запустить по старой
     /// строке — стартовать игру без модов, которых игрок ждал.
     /// </para>
     /// </summary>
@@ -119,17 +119,20 @@ namespace ChillHub.Tests {
             Assert.NotEmpty(probe.Statuses);
         }
 
-        /// <summary>Установка модов спрашивает разрешение и после согласия запускает игру.</summary>
+        /// <summary>
+        /// Установка модов идёт без вопросов и доводит до игры одним щелчком: на строке
+        /// меню и так написано, куда лягут файлы, а окно с тем же текстом стояло между
+        /// «хочу играть с модами» и игрой на каждом запуске.
+        /// </summary>
         /// <returns>Задача теста.</returns>
         [Fact]
-        public async Task УстановкаМодовСпрашиваетИЗатемЗапускает() {
-            var probe = new Probe { ConfirmAnswer = true, InstallResult = true };
+        public async Task УстановкаМодовСразуЗапускаетИгру() {
+            var probe = new Probe { InstallResult = true };
             this.ModdedDir();
 
             await probe.Runner().RunAsync(
                 Game(), this.Option(LaunchAction.InstallMods), Off, this.Probes(modsInSteam: "pack-1"));
 
-            Assert.Single(probe.Questions);
             Assert.Single(probe.Installed);
             Assert.Single(probe.Launched);
             Assert.True(probe.Launched[0].ReadyToPlay);
@@ -143,7 +146,7 @@ namespace ChillHub.Tests {
         /// <returns>Задача теста.</returns>
         [Fact]
         public async Task ПочинкаМодовИгруНеЗапускает() {
-            var probe = new Probe { ConfirmAnswer = true, InstallResult = true };
+            var probe = new Probe { InstallResult = true };
             this.ModdedDir();
 
             await probe.Runner().RunAsync(
@@ -158,7 +161,7 @@ namespace ChillHub.Tests {
         /// <returns>Задача теста.</returns>
         [Fact]
         public async Task ПочинкаНазываетсяПочинкой() {
-            var probe = new Probe { ConfirmAnswer = true, InstallResult = true };
+            var probe = new Probe { InstallResult = true };
             this.ModdedDir();
 
             await probe.Runner().RunAsync(Game(), this.Option(LaunchAction.RepairMods), Off, this.Probes());
@@ -167,23 +170,11 @@ namespace ChillHub.Tests {
             Assert.Equal(new[] { true, false }, probe.Repairs);
         }
 
-        /// <summary>Отказ игрока останавливает и починку: чужую папку не трогают.</summary>
-        /// <returns>Задача теста.</returns>
-        [Fact]
-        public async Task ОтказОстанавливаетПочинку() {
-            var probe = new Probe { ConfirmAnswer = false };
-
-            await probe.Runner().RunAsync(Game(), this.Option(LaunchAction.RepairMods), Off, this.Probes());
-
-            Assert.Empty(probe.Installed);
-            Assert.Empty(probe.Launched);
-        }
-
         /// <summary>Неудачная починка молчит о победе: строки «восстановлены» нет.</summary>
         /// <returns>Задача теста.</returns>
         [Fact]
         public async Task НеудачнаяПочинкаНеОтчитываетсяОбУспехе() {
-            var probe = new Probe { ConfirmAnswer = true, InstallResult = false };
+            var probe = new Probe { InstallResult = false };
 
             await probe.Runner().RunAsync(Game(), this.Option(LaunchAction.RepairMods), Off, this.Probes());
 
@@ -195,7 +186,7 @@ namespace ChillHub.Tests {
         /// <returns>Задача теста.</returns>
         [Fact]
         public async Task ПочинкаНеНачинаетсяПоверхУстановки() {
-            var probe = new Probe { ConfirmAnswer = true, Busy = true };
+            var probe = new Probe { Busy = true };
 
             await probe.Runner().RunAsync(Game(), this.Option(LaunchAction.RepairMods), Off, this.Probes());
 
@@ -207,7 +198,7 @@ namespace ChillHub.Tests {
         /// <returns>Задача теста.</returns>
         [Fact]
         public async Task РежимРаботОстанавливаетПочинку() {
-            var probe = new Probe { ConfirmAnswer = true, InstallResult = true };
+            var probe = new Probe { InstallResult = true };
             var state = new MaintenanceState { Enabled = true, Blocks = new MaintenanceBlocks { Update = true } };
 
             await probe.Runner().RunAsync(Game(), this.Option(LaunchAction.RepairMods), state, this.Probes());
@@ -216,23 +207,11 @@ namespace ChillHub.Tests {
             Assert.NotEmpty(probe.Statuses);
         }
 
-        /// <summary>Отказ игрока останавливает всё: чужую установку Steam не трогают.</summary>
-        /// <returns>Задача теста.</returns>
-        [Fact]
-        public async Task ОтказОстанавливаетУстановку() {
-            var probe = new Probe { ConfirmAnswer = false };
-
-            await probe.Runner().RunAsync(Game(), this.Option(LaunchAction.InstallMods), Off, this.Probes());
-
-            Assert.Empty(probe.Installed);
-            Assert.Empty(probe.Launched);
-        }
-
         /// <summary>Неудачная установка не ведёт к запуску игры без модов.</summary>
         /// <returns>Задача теста.</returns>
         [Fact]
         public async Task НеудачнаяУстановкаНеЗапускаетИгру() {
-            var probe = new Probe { ConfirmAnswer = true, InstallResult = false };
+            var probe = new Probe { InstallResult = false };
 
             await probe.Runner().RunAsync(Game(), this.Option(LaunchAction.InstallMods), Off, this.Probes());
 
@@ -247,7 +226,7 @@ namespace ChillHub.Tests {
         /// <returns>Задача теста.</returns>
         [Fact]
         public async Task БезГотовойСтрокиПослеУстановкиЗапускаНет() {
-            var probe = new Probe { ConfirmAnswer = true, InstallResult = true };
+            var probe = new Probe { InstallResult = true };
 
             await probe.Runner().RunAsync(
                 Game(), this.Option(LaunchAction.InstallMods), Off, this.Probes(modsInSteam: string.Empty));
@@ -260,7 +239,7 @@ namespace ChillHub.Tests {
         /// <returns>Задача теста.</returns>
         [Fact]
         public async Task ВтораяУстановкаНеНачинается() {
-            var probe = new Probe { ConfirmAnswer = true, Busy = true };
+            var probe = new Probe { Busy = true };
 
             await probe.Runner().RunAsync(Game(), this.Option(LaunchAction.InstallMods), Off, this.Probes());
 
@@ -311,8 +290,6 @@ namespace ChillHub.Tests {
 
             internal List<string> Toasts { get; } = new();
 
-            internal List<string> Questions { get; } = new();
-
             internal List<string> Enqueued { get; } = new();
 
             internal List<string> Installed { get; } = new();
@@ -326,8 +303,6 @@ namespace ChillHub.Tests {
 
             internal int Refreshed { get; private set; }
 
-            internal bool ConfirmAnswer { get; set; }
-
             internal bool InstallResult { get; set; }
 
             internal bool EnqueueResult { get; set; } = true;
@@ -337,10 +312,6 @@ namespace ChillHub.Tests {
             internal LaunchRunner Runner() => new(new LaunchUi {
                 SetStatus = t => this.Statuses.Add(t),
                 Toast = t => this.Toasts.Add(t),
-                Confirm = (text, _) => {
-                    this.Questions.Add(text);
-                    return this.ConfirmAnswer;
-                },
                 Enqueue = gid => {
                     this.Enqueued.Add(gid);
                     return this.EnqueueResult;
