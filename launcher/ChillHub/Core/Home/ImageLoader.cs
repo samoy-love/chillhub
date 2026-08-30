@@ -444,6 +444,18 @@ namespace ChillHub.Core.Home {
         }
 
         /// <summary>
+        /// Качает картинку по адресу и отдаёт её готовой — для тех, кому она нужна не в
+        /// <see cref="Image"/>, а кистью: так витрина показывает обложку игры.
+        /// Путь к сети тот же, что у значков, — с кешем на диске и сверкой с сервером.
+        /// </summary>
+        /// <param name="url">Абсолютный адрес картинки.</param>
+        /// <returns>Замороженная картинка.</returns>
+        internal static async Task<BitmapImage> LoadFrozenAsync(string url) {
+            var bytes = await FetchBytesAsync(url).ConfigureAwait(true);
+            return DecodeFrozen(bytes);
+        }
+
+        /// <summary>
         /// Собирает готовую замороженную картинку из уже скачанных байтов.
         /// <para>
         /// Тем, кому картинка нужна не в <see cref="Image"/>, а кистью (обложка витрины),

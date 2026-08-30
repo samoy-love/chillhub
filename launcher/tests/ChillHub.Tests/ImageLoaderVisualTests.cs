@@ -547,6 +547,32 @@ namespace ChillHub.Tests {
             });
         }
 
+        /// <summary>Обложка витрины приезжает по адресу готовой картинкой — её кладут в кисть.</summary>
+        [Fact]
+        public void ОбложкаПоАдресуПриходитГотовойКартинкой() {
+            OnUi(async () => {
+                ImageLoader.Http = FakeImageHandler.Ok(MakePng(200, 100)).Client();
+
+                var image = await ImageLoader.LoadFrozenAsync(Url);
+
+                Assert.True(image.IsFrozen);
+                Assert.Equal(200, image.PixelWidth);
+            });
+        }
+
+        /// <summary>
+        /// Недоступная сеть — это ошибка вызывающему, а не пустая картинка: витрина сама
+        /// решает, что показать вместо обложки.
+        /// </summary>
+        [Fact]
+        public void НедоступнаяСетьПриЗагрузкеОбложкиПробрасываетОшибку() {
+            OnUi(async () => {
+                ImageLoader.Http = FakeImageHandler.Broken().Client();
+
+                await Assert.ThrowsAsync<HttpRequestException>(() => ImageLoader.LoadFrozenAsync(Url));
+            });
+        }
+
         /// <summary>
         /// Картинка из байтов заморожена и годится на кисть: так витрина показывает обложку.
         /// Собранная из адреса, она замёрзнуть не может — удалённый файл докачивается уже
