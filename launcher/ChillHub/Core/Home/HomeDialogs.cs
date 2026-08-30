@@ -1,4 +1,4 @@
-﻿// <copyright file="HomeDialogs.cs" company="PlaceholderCompany">
+// <copyright file="HomeDialogs.cs" company="PlaceholderCompany">
 // Copyright (c) 2025 ChillHub
 // Licensed under the MIT License.
 // </copyright>
