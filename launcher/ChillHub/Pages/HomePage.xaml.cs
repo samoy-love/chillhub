@@ -1903,36 +1903,28 @@ namespace ChillHub.Pages {
                     return;
                 }
 
-                var running = this.UpdateProgress.IsIndeterminate || this.UpdateProgress.Value > 0;
-                var busy = this.QueuePanel.Visibility == Visibility.Visible
-                    || running
-                    || !IsIdleStatus(this.StatusText.Text);
+                // Само решение — в Core.Home.BottomBarLook: здесь остаётся только
+                // расставить его по контролам.
+                var look = Core.Home.BottomBarLook.Decide(
+                    this.QueuePanel.Visibility == Visibility.Visible,
+                    this.UpdateProgress.IsIndeterminate,
+                    this.UpdateProgress.Value,
+                    this.StatusText.Text,
+                    this.SpeedEtaText.Text,
+                    this.FilesSizeText.Text);
 
-                this.BottomBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
-
-                // Полоса — только когда ей есть что показывать. Пустая полоса под сообщением
-                // «Обновление не завершено» читается как зависший процесс, а процесса нет.
-                this.UpdateProgress.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
-
-                // Сама строка статуса тоже прячется, когда сказать нечего: под идущей
-                // полосой пустой TextBlock держал строку высоты, а «Готово» рядом с ней
-                // отчитывалось о конце работы, которая ещё идёт.
-                this.StatusText.Visibility = IsIdleStatus(this.StatusText.Text)
-                    ? Visibility.Collapsed
-                    : Visibility.Visible;
-                this.SpeedEtaText.Visibility = HideIfEmpty(this.SpeedEtaText.Text);
-                this.FilesSizeText.Visibility = HideIfEmpty(this.FilesSizeText.Text);
+                this.BottomBar.Visibility = Shown(look.Panel);
+                this.UpdateProgress.Visibility = Shown(look.Progress);
+                this.StatusText.Visibility = Shown(look.Status);
+                this.SpeedEtaText.Visibility = Shown(look.SpeedEta);
+                this.FilesSizeText.Visibility = Shown(look.FilesSize);
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Warn($"SyncBottomBarVisibility: {ex.Message}");
             }
         }
 
-        private static Visibility HideIfEmpty(string? text)
-            => string.IsNullOrWhiteSpace(text) ? Visibility.Collapsed : Visibility.Visible;
-
-        private static bool IsIdleStatus(string? text)
-            => string.IsNullOrWhiteSpace(text) || string.Equals(text.Trim(), "Готово", StringComparison.Ordinal);
+        private static Visibility Shown(bool visible) => visible ? Visibility.Visible : Visibility.Collapsed;
 
         // Стиль кнопки берём из темы; если ресурс не найден, оставляем оформление по умолчанию
         private void ApplyActionButtonStyle(string styleKey) {
