@@ -45,6 +45,7 @@ namespace ChillHub.Pages {
         // ссылку на TextBlock, и без снятия страница не собиралась бы сборщиком мусора.
         private DependencyPropertyDescriptor? statusTextWatcher;
         private DependencyPropertyDescriptor? progressValueWatcher;
+        private DependencyPropertyDescriptor? progressRunningWatcher;
         private List<string> builds = new();
         // Идёт удаление локальных файлов игры: блокирует повторный запуск и установку
         private bool isDeleting = false;
@@ -335,9 +336,18 @@ namespace ChillHub.Pages {
                 this.statusTextWatcher.AddValueChanged(this.StatusText, this.OnStatusTextChanged);
                 this.progressValueWatcher = DependencyPropertyDescriptor.FromProperty(RangeBase.ValueProperty, typeof(ProgressBar));
                 this.progressValueWatcher.AddValueChanged(this.UpdateProgress, this.OnStatusTextChanged);
+
+                // Бегунок гасят из десятка мест, и почти всегда — в finally, где значение
+                // полосы остаётся нулём. Без этой подписки панель не перерисовывалась ни
+                // разу за всю операцию и оставалась висеть пустой строкой (или строкой
+                // «Готово») до следующей закачки.
+                this.progressRunningWatcher =
+                    DependencyPropertyDescriptor.FromProperty(ProgressBar.IsIndeterminateProperty, typeof(ProgressBar));
+                this.progressRunningWatcher.AddValueChanged(this.UpdateProgress, this.OnStatusTextChanged);
                 this.Unloaded += (s, e) => {
                     this.statusTextWatcher?.RemoveValueChanged(this.StatusText, this.OnStatusTextChanged);
                     this.progressValueWatcher?.RemoveValueChanged(this.UpdateProgress, this.OnStatusTextChanged);
+                    this.progressRunningWatcher?.RemoveValueChanged(this.UpdateProgress, this.OnStatusTextChanged);
                 };
                 this.SyncBottomBarVisibility();
             }
@@ -1903,6 +1913,13 @@ namespace ChillHub.Pages {
                 // Полоса — только когда ей есть что показывать. Пустая полоса под сообщением
                 // «Обновление не завершено» читается как зависший процесс, а процесса нет.
                 this.UpdateProgress.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+
+                // Сама строка статуса тоже прячется, когда сказать нечего: под идущей
+                // полосой пустой TextBlock держал строку высоты, а «Готово» рядом с ней
+                // отчитывалось о конце работы, которая ещё идёт.
+                this.StatusText.Visibility = IsIdleStatus(this.StatusText.Text)
+                    ? Visibility.Collapsed
+                    : Visibility.Visible;
                 this.SpeedEtaText.Visibility = HideIfEmpty(this.SpeedEtaText.Text);
                 this.FilesSizeText.Visibility = HideIfEmpty(this.FilesSizeText.Text);
             }
