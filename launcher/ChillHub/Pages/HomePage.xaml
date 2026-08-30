@@ -1091,11 +1091,11 @@
         <!-- Вкладки под витриной: переключают ленту без перезагрузки страницы -->
         <Border Grid.Row="1" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1" Margin="2,4,0,8">
           <Grid>
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="Auto"/>
-            <ColumnDefinition Width="*"/>
-          </Grid.ColumnDefinitions>
-          <StackPanel Grid.Column="0" Orientation="Horizontal">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" Orientation="Horizontal">
             <ToggleButton x:Name="NewsTabGame" Content="Новости игры" IsChecked="True"
                           Style="{DynamicResource Style.Button.HeroTab}" Click="NewsTabGame_Click" Margin="0,0,18,0"/>
             <ToggleButton x:Name="NewsTabLauncher" Content="Новости лаунчера" IsChecked="False"
@@ -1695,3 +1695,4 @@
     </Grid>
   </Grid>
 </Page>
+
