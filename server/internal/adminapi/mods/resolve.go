@@ -166,9 +166,6 @@ func (c *Client) resolveFrom(
 				res.Foreign = append(res.Foreign, dep)
 			}
 			frontier = kept
-			if len(frontier) == 0 {
-				break
-			}
 		}
 
 		fetched, missing, err := c.fetchLevel(ctx, frontier, prog, &walked, idx)

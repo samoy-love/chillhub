@@ -40,6 +40,11 @@ type fakeStore struct {
 	latest     map[string]string
 	deprecated map[string]bool
 
+	// community — полные имена версий, которые издаёт сообщество игры. Пусто
+	// (обычный случай в этих тестах) — списка нет вовсе, и сборка идёт прежним
+	// путём, по одному пакету через общий API.
+	community map[string]bool
+
 	// cdnDenied повторяет настоящую поломку: имя объекта в хранилище не всегда
 	// выводится из полного имени пакета, и угаданный адрес отвечает 403.
 	cdnDenied map[string]bool
@@ -62,6 +67,7 @@ func newFakeStore(t *testing.T) *fakeStore {
 	fs := &fakeStore{
 		latest:       map[string]string{},
 		deprecated:   map[string]bool{},
+		community:    map[string]bool{},
 		deps:         map[string][]string{},
 		entries:      map[string]map[string]string{},
 		hits:         map[string]int{},
@@ -154,6 +160,34 @@ func newFakeStore(t *testing.T) *fakeStore {
 			Count:   1,
 			Results: []CatalogEntry{{Namespace: "Team", Name: "Pack", Downloads: 100}},
 		})
+	})
+
+	// Список пакетов сообщества: тот самый ответ, по которому резолвер решает,
+	// издаёт ли игра пакет вообще. Пока никто не назвал состав сообщества, его
+	// нет — и это ровно тот случай, когда правило «чужого не берём» выключено.
+	mux.HandleFunc("/c/", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/api/v1/package/") || len(fs.community) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		fulls := slices.Sorted(maps.Keys(fs.community))
+		docs := make([]map[string]any, 0, len(fulls))
+		for _, full := range fulls {
+			ns, name, ver, ok := SplitDependency(full)
+			if !ok {
+				continue
+			}
+			docs = append(docs, map[string]any{
+				"owner": ns, "name": name, "full_name": ns + "-" + name,
+				"versions": []map[string]any{{
+					"namespace": ns, "name": name, "full_name": full, "version_number": ver,
+					"dependencies": fs.deps[full],
+					"download_url": fmt.Sprintf("%s/package/download/%s/%s/%s/", fs.baseURL, ns, name, ver),
+					"file_size":    1,
+				}},
+			})
+		}
+		_ = json.NewEncoder(w).Encode(docs)
 	})
 
 	mux.HandleFunc("/cdn/", func(w http.ResponseWriter, r *http.Request) {
@@ -277,6 +311,7 @@ func testBuilder(t *testing.T, fs *fakeStore) (*Builder, string) {
 		},
 		ModloaderPackages: []ModloaderPackage{
 			{PackageID: "BepInEx-BepInExPack", RootFolder: "BepInExPack", Loader: "bepinex"},
+			{PackageID: "bbepis-BepInExPack", RootFolder: "BepInExPack", Loader: "bepinex"},
 		},
 	}
 	cache := NewEcosystemCache(client, root)

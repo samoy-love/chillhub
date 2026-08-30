@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -292,5 +294,90 @@ func TestCommunityIndexServes(t *testing.T) {
 	var nilIdx *CommunityIndex
 	if nilIdx.Serves("Team-Pack-1.0.0") {
 		t.Error("пустой индекс не издаёт ничего")
+	}
+}
+
+func TestBuildLaysOutOneLoaderAndNamesWhatItSkipped(t *testing.T) {
+	// Та же поломка, но целиком: от разбора дерева до файлов на диске и записи
+	// версии. Проверять только резолвер мало — цена ошибки была именно в том,
+	// что легло в BepInEx/core.
+	fs := newFakeStore(t)
+	fs.add("Team-Pack-1.0.0", []string{"bbepis-BepInExPack-5.4.2121", "Author-CoolMod-1.0.0"}, map[string]string{
+		"manifest.json": `{"name":"Pack"}`,
+	})
+	fs.add("Author-CoolMod-1.0.0", []string{"BepInEx-BepInExPack-5.4.2305", "Gone-Elsewhere-1.0.0"}, map[string]string{
+		"CoolMod.dll": "mod code",
+	})
+	// Загрузчик, который назвал сам модпак: он и должен остаться.
+	fs.add("bbepis-BepInExPack-5.4.2121", nil, map[string]string{
+		"BepInExPack/BepInEx/core/BepInEx.Preloader.dll": "ядро 5.4.21",
+	})
+	// Второй загрузчик: кладёт файл по тому же пути и рядом свой опознавательный.
+	fs.add("BepInEx-BepInExPack-5.4.2305", nil, map[string]string{
+		"BepInExPack/BepInEx/core/BepInEx.Preloader.dll": "ядро 5.4.23",
+		"BepInExPack/BepInEx/core/newer.dll":             "чужое ядро",
+	})
+	// Мод, которого сообщество игры не издаёт.
+	fs.add("Gone-Elsewhere-1.0.0", nil, map[string]string{"Elsewhere.dll": "чужой мод"})
+
+	for _, full := range []string{
+		"Team-Pack-1.0.0", "Author-CoolMod-1.0.0",
+		"bbepis-BepInExPack-5.4.2121", "BepInEx-BepInExPack-5.4.2305",
+	} {
+		fs.community[full] = true
+	}
+
+	b, root := testBuilder(t, fs)
+	var events []Event
+	src, err := b.Build(context.Background(), thunderstoreRequest(), false, func(e Event) {
+		events = append(events, e)
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if src.Loader != "bbepis-BepInExPack-5.4.2121" {
+		t.Errorf("Loader = %q, ожидался названный самим модпаком", src.Loader)
+	}
+	if !slices.Equal(src.ExtraLoaders, []string{"BepInEx-BepInExPack-5.4.2305"}) {
+		t.Errorf("ExtraLoaders = %v", src.ExtraLoaders)
+	}
+	if !slices.Equal(src.Foreign, []string{"Gone-Elsewhere-1.0.0"}) {
+		t.Errorf("Foreign = %v", src.Foreign)
+	}
+
+	files := filepath.Join(root, "content", "_mods", "lethal-company", src.Version, "files")
+	core := filepath.Join(files, "BepInEx", "core", "BepInEx.Preloader.dll")
+	got, err := os.ReadFile(core) // #nosec G304 -- путь собран тестом
+	if err != nil {
+		t.Fatalf("читаем ядро: %v", err)
+	}
+	if string(got) != "ядро 5.4.21" {
+		t.Errorf("в BepInEx/core легло %q: второй загрузчик переписал первый", got)
+	}
+	for _, gone := range []string{
+		filepath.Join(files, "BepInEx", "core", "newer.dll"),
+		filepath.Join(files, "BepInEx", "plugins", "Gone-Elsewhere", "Elsewhere.dll"),
+	} {
+		if _, err := os.Stat(gone); err == nil {
+			t.Errorf("%s не должно быть в сборке", gone)
+		}
+	}
+
+	// Пропущенное обязано быть названо тому, кто смотрит на сборку сейчас.
+	var skipped []string
+	for _, e := range events {
+		if e.Type == "skipped" {
+			skipped = append(skipped, e.Message)
+		}
+	}
+	if len(skipped) != 2 {
+		t.Fatalf("событий skipped %d, ожидалось два: чужой пакет и лишний загрузчик: %v", len(skipped), skipped)
+	}
+	if !strings.Contains(skipped[0], "Gone-Elsewhere-1.0.0") {
+		t.Errorf("первое сообщение о пропуске не называет чужой пакет: %q", skipped[0])
+	}
+	if !strings.Contains(skipped[1], "BepInEx-BepInExPack-5.4.2305") {
+		t.Errorf("второе сообщение о пропуске не называет лишний загрузчик: %q", skipped[1])
 	}
 }
