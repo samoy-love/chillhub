@@ -156,5 +156,12 @@ namespace ChillHub.Core.Sync {
         private static readonly string[] ModPackPreservePaths = {
             Mods.DoorstopConfig.FileName,
         };
+
+        /// <summary>
+        /// Gets тот же список наружу: его спрашивает быстрая проверка «модпак ещё на
+        /// месте?» (<see cref="Mods.ModPackFiles"/>). Свой список там означал бы, что
+        /// переключение «с модами / без модов» однажды начнёт читаться как порча файла.
+        /// </summary>
+        public static IReadOnlyList<string> ModPackSelfManagedPaths => ModPackPreservePaths;
     }
 }

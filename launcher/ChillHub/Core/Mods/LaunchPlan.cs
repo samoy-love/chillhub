@@ -46,12 +46,18 @@ namespace ChillHub.Core.Mods {
     /// <param name="LocateSteam">Поиск копии игры в Steam по AppID и имени папки.</param>
     /// <param name="ReadModsVersion">Версия модпака, установленного в указанную папку.</param>
     /// <param name="LogLine">Куда писать ход поиска Steam; null — не писать.</param>
+    /// <param name="ModsBroken">
+    /// Недосчитались ли файлов установленного в папку модпака. null — не спрашивать:
+    /// так ведут себя тесты, которым важны другие ветки, и ответ по умолчанию —
+    /// «претензий нет».
+    /// </param>
     internal sealed record LaunchProbes(
         Func<string?, string> LocalRoot,
         Func<string, bool> HasLocalFiles,
         Func<string, string, SteamGame> LocateSteam,
         Func<string, string> ReadModsVersion,
-        Action<string>? LogLine = null);
+        Action<string>? LogLine = null,
+        Func<string, bool>? ModsBroken = null);
 
     /// <summary>
     /// Решения меню запуска, отделённые от самого меню.
@@ -88,6 +94,8 @@ namespace ChillHub.Core.Mods {
                 }
             }
 
+            var steamModsVersion = probes.ReadModsVersion(steam.GameDir);
+
             return ModsLaunch.Options(new LaunchContext(
                 mods,
                 localRoot,
@@ -95,9 +103,28 @@ namespace ChillHub.Core.Mods {
                 game.NeedsUpdate,
                 !string.IsNullOrWhiteSpace(game.LatestVersion),
                 steam,
-                probes.ReadModsVersion(steam.GameDir),
-                game.Title ?? string.Empty));
+                steamModsVersion,
+                game.Title ?? string.Empty,
+                SteamModsBroken: Broken(probes, steam.GameDir, steamModsVersion),
+                LocalModsBroken: Broken(probes, localRoot, probes.ReadModsVersion(localRoot))));
         }
+
+        /// <summary>
+        /// Недосчитались ли файлов модпака в этой папке.
+        /// <para>
+        /// Спрашиваем только там, где модпак числится установленным: без маркера версии
+        /// сверять не с чем, а обход папок ради заведомого «нечего сказать» этот метод
+        /// зовут слишком часто, чтобы себе позволить.
+        /// </para>
+        /// </summary>
+        /// <param name="probes">Чем узнавать состояние копий.</param>
+        /// <param name="root">Папка игры.</param>
+        /// <param name="modsVersion">Версия модпака, записанная в этой папке.</param>
+        /// <returns>true, если модпак заявлен, но неполон.</returns>
+        private static bool Broken(LaunchProbes probes, string root, string modsVersion)
+            => probes.ModsBroken != null
+                && !string.IsNullOrWhiteSpace(modsVersion)
+                && probes.ModsBroken(root);
 
         /// <summary>
         /// Тот же вариант после установки — уже готовый к запуску.
