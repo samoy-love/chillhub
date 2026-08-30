@@ -41,11 +41,9 @@ namespace ChillHub.Pages {
         private readonly HttpClient http = HttpClientProvider.Shared;
         private List<GameInfo> games = new();
 
-        // Держим дескриптор, чтобы отписаться при выгрузке: AddValueChanged заводит сильную
-        // ссылку на TextBlock, и без снятия страница не собиралась бы сборщиком мусора.
-        private DependencyPropertyDescriptor? statusTextWatcher;
-        private DependencyPropertyDescriptor? progressValueWatcher;
-        private DependencyPropertyDescriptor? progressRunningWatcher;
+        // Держим подписку, чтобы снять её при выгрузке: AddValueChanged заводит сильную
+        // ссылку на контрол, и без снятия страница не собиралась бы сборщиком мусора.
+        private Core.Home.BottomBarWatch? bottomBarWatch;
         private List<string> builds = new();
         // Идёт удаление локальных файлов игры: блокирует повторный запуск и установку
         private bool isDeleting = false;
@@ -330,25 +328,13 @@ namespace ChillHub.Pages {
                 this.Unloaded += (s, e) => this.UnsubscribeRunningGames();
 
                 // Статус пишут два десятка мест по всему файлу; вместо того чтобы обходить
-                // каждое, слушаем само свойство — панель прячется и показывается там, где
-                // текст действительно меняется.
-                this.statusTextWatcher = DependencyPropertyDescriptor.FromProperty(TextBlock.TextProperty, typeof(TextBlock));
-                this.statusTextWatcher.AddValueChanged(this.StatusText, this.OnStatusTextChanged);
-                this.progressValueWatcher = DependencyPropertyDescriptor.FromProperty(RangeBase.ValueProperty, typeof(ProgressBar));
-                this.progressValueWatcher.AddValueChanged(this.UpdateProgress, this.OnStatusTextChanged);
-
-                // Бегунок гасят из десятка мест, и почти всегда — в finally, где значение
-                // полосы остаётся нулём. Без этой подписки панель не перерисовывалась ни
-                // разу за всю операцию и оставалась висеть пустой строкой (или строкой
-                // «Готово») до следующей закачки.
-                this.progressRunningWatcher =
-                    DependencyPropertyDescriptor.FromProperty(ProgressBar.IsIndeterminateProperty, typeof(ProgressBar));
-                this.progressRunningWatcher.AddValueChanged(this.UpdateProgress, this.OnStatusTextChanged);
-                this.Unloaded += (s, e) => {
-                    this.statusTextWatcher?.RemoveValueChanged(this.StatusText, this.OnStatusTextChanged);
-                    this.progressValueWatcher?.RemoveValueChanged(this.UpdateProgress, this.OnStatusTextChanged);
-                    this.progressRunningWatcher?.RemoveValueChanged(this.UpdateProgress, this.OnStatusTextChanged);
-                };
+                // каждое, слушаем сами свойства — панель прячется и показывается там, где
+                // текст и полоса действительно меняются. Список наблюдаемого — в
+                // Core.Home.BottomBarWatch: забытое свойство здесь не падает, а молча
+                // оставляет внизу экрана строку пустоты.
+                this.bottomBarWatch = Core.Home.BottomBarWatch.Attach(
+                    this.StatusText, this.UpdateProgress, this.OnStatusTextChanged);
+                this.Unloaded += (s, e) => this.bottomBarWatch?.Dispose();
                 this.SyncBottomBarVisibility();
             }
             catch (Exception ex) {
