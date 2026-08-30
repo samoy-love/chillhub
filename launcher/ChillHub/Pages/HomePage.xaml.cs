@@ -239,6 +239,9 @@ namespace ChillHub.Pages {
         // Первый раз пропускаем: там уже отрабатывает полная загрузка.
         private bool loadedOnce = false;
 
+        /// <summary>Список обновлений в этом запуске уже показывали (или решили не показывать).</summary>
+        private bool changelogChecked;
+
         /// <summary>
         /// Папка для игр, к которой относятся текущие статусы. Её могли сменить в настройках,
         /// и тогда всё показанное состояние относится к другому каталогу.
@@ -298,6 +301,12 @@ namespace ChillHub.Pages {
                 // Возврат со страницы игры: подхватываем изменившееся локальное состояние
                 this.Loaded += this.HomePage_Loaded;
 
+                // Список обновлений — по Loaded, а не из конструктора: окно ищется по
+                // визуальному дереву, а в конструкторе страница в него ещё не вставлена,
+                // и Window.GetWindow вернул бы null. Ничего с сервера этот показ не ждёт,
+                // поэтому идёт до загрузки данных.
+                this.Loaded += (s, e) => this.MaybeShowChangelog();
+
                 // Режим технических работ: следим за ним, только пока страница показана
                 this.SubscribeMaintenance();
                 this.Loaded += (s, e) => this.SubscribeMaintenance();
@@ -347,8 +356,17 @@ namespace ChillHub.Pages {
         /// «Что нового» живёт в <see cref="ChillHub.MainWindow"/>: открывать его умеют и
         /// настройки. Отсюда идёт автоматический показ — он привязан к главному экрану.
         /// </summary>
-        private void MaybeShowChangelog()
-            => (Window.GetWindow(this) as ChillHub.MainWindow)?.ShowChangelogAfterUpdate();
+        private void MaybeShowChangelog() {
+            // Loaded приходит на каждый возврат с другой страницы, а показ обещан один
+            // раз: отметка в конфиге закрыла бы повтор и сама, но только если её удалось
+            // записать. Флаг держит обещание и при неудачной записи.
+            if (this.changelogChecked) {
+                return;
+            }
+
+            this.changelogChecked = true;
+            (Window.GetWindow(this) as ChillHub.MainWindow)?.ShowChangelogAfterUpdate();
+        }
 
         private void ChangelogBtn_Click(object sender, RoutedEventArgs e)
             => (Window.GetWindow(this) as ChillHub.MainWindow)?.ShowChangelog();
@@ -384,10 +402,6 @@ namespace ChillHub.Pages {
             try {
                 // Дадим UI отрисоваться до тяжёлой асинхронной работы
                 await Task.Yield();
-
-                // Список обновлений — до загрузки данных: он ничего с сервера не ждёт,
-                // а после обновления это первое, что человеку стоит увидеть.
-                this.MaybeShowChangelog();
 
                 // Самообновление проверяется в UpdateWindow. Здесь не блокируем UI: запускаем загрузку в фоне
                 _ = this.LoadInitialAsync();
