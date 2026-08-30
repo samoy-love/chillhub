@@ -2496,7 +2496,20 @@ namespace ChillHub.Pages {
                 }
 
                 try {
-                    this.HeroCoverBrush.ImageSource = LoadCoverBitmap(cover.ImageUrl);
+                    // Обложку качаем и собираем тем же загрузчиком, что и значки игр:
+                    // у BitmapImage со своим UriSource удалённая картинка докачивается уже
+                    // после создания — заморозить её нельзя, а без заморозки не обойти её
+                    // же кеш адресов, из-за которого заменённая обложка не появлялась до
+                    // перезапуска лаунчера. Витрина на этом ловила ошибку и пряталась,
+                    // показывая вместо обложки значок игры.
+                    var bmp = await Core.Home.ImageLoader.LoadFrozenAsync(cover.ImageUrl).ConfigureAwait(true);
+                    if (cts.Token.IsCancellationRequested
+                        || !string.Equals(this.GetSelectedGameId(), gameId, StringComparison.OrdinalIgnoreCase)) {
+                        // Пока качалась обложка, выбрали другую игру — её витрину не трогаем.
+                        return;
+                    }
+
+                    this.HeroCoverBrush.ImageSource = bmp;
                     this.HeroCoverImg.Visibility = Visibility.Visible;
                 }
                 catch (Exception ex) {
@@ -2507,29 +2520,6 @@ namespace ChillHub.Pages {
             finally {
                 cts.Dispose();
             }
-        }
-
-        /// <summary>
-        /// Читает обложку витрины по адресу, минуя кеш самого WPF.
-        /// <para>
-        /// У <see cref="BitmapImage"/> с одним лишь <c>UriSource</c> есть свой кеш на процесс,
-        /// ключуемый адресом: сервер отдаёт новую обложку по прежнему адресу, а на витрине
-        /// до перезапуска лаунчера остаётся старая картинка — «Обновить список игр» на неё
-        /// не действует. <c>IgnoreImageCache</c> отменяет этот кеш, <c>OnLoad</c> дочитывает
-        /// поток сразу, чтобы картинку можно было заморозить.
-        /// </para>
-        /// </summary>
-        /// <param name="url">Абсолютный адрес обложки.</param>
-        /// <returns>Готовая замороженная картинка.</returns>
-        private static BitmapImage LoadCoverBitmap(string url) {
-            var bmp = new BitmapImage();
-            bmp.BeginInit();
-            bmp.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
-            bmp.CacheOption = BitmapCacheOption.OnLoad;
-            bmp.UriSource = new Uri(url, UriKind.Absolute);
-            bmp.EndInit();
-            bmp.Freeze();
-            return bmp;
         }
 
         // Сам запуск живёт в Core/Home/GameLaunch: здесь только показ того, чем он кончился.
