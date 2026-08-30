@@ -365,6 +365,9 @@ namespace ChillHub.Core.Home {
         /// <summary>Заголовок окна подтверждения.</summary>
         internal const string ConfirmCaption = "Установка модов в Steam-копию";
 
+        /// <summary>Тот же заголовок, когда моды не ставят с нуля, а возвращают на место.</summary>
+        internal const string RepairCaption = "Восстановление модов в Steam-копии";
+
         /// <summary>
         /// Составляет вопрос перед установкой.
         /// <para>
@@ -378,17 +381,30 @@ namespace ChillHub.Core.Home {
         /// <param name="gameTitle">Название игры.</param>
         /// <param name="mods">Настройки модов игры.</param>
         /// <param name="steamDir">Найденная папка копии из Steam.</param>
+        /// <param name="repair">
+        /// Моды уже стоят, и вернуть надо только пропавшее. Обещать в этом случае
+        /// полтора гигабайта незачем — скачается ровно недостающее, — а вот папку
+        /// назвать по-прежнему обязательно: пишем в чужую установку.
+        /// </param>
         /// <returns>Текст вопроса.</returns>
-        internal static string BuildConfirmText(string? gameTitle, ModsInfo? mods, string? steamDir) {
+        internal static string BuildConfirmText(
+            string? gameTitle, ModsInfo? mods, string? steamDir, bool repair = false) {
             var title = string.IsNullOrWhiteSpace(gameTitle) ? "игры" : $"«{gameTitle}»";
             var pack = mods?.Describe() ?? string.Empty;
             var packLine = string.IsNullOrWhiteSpace(pack) ? string.Empty : $"Модпак: {pack}\n";
+            var question = repair
+                ? $"В копии {title} из Steam недостаёт файлов модпака. Восстановить их?"
+                : $"Поставить моды в копию {title} из Steam?";
+            var tail = repair
+                ? "\nСкачается только недостающее. Обновление игры в Steam ломает моды — " +
+                  "если это повторяется, восстанавливайте их после каждого обновления."
+                : "\nМоды будут записаны прямо в установку Steam. Обновление игры в Steam " +
+                  "может сломать их — после такого обновления поставьте моды заново.";
 
-            return $"Поставить моды в копию {title} из Steam?\n\n" +
+            return $"{question}\n\n" +
                    $"Папка: {HomeFormat.NormalizeDisplayPath(steamDir ?? string.Empty)}\n" +
                    packLine +
-                   "\nМоды будут записаны прямо в установку Steam. Обновление игры в Steam " +
-                   "может сломать их — после такого обновления поставьте моды заново.";
+                   tail;
         }
 
         /// <summary>
@@ -427,27 +443,36 @@ namespace ChillHub.Core.Home {
         /// </summary>
         /// <param name="result">Что вернул <see cref="ModsService.EnsureAsync"/>.</param>
         /// <param name="gameTitle">Название игры.</param>
+        /// <param name="repair">Моды не ставили с нуля, а возвращали на место.</param>
         /// <returns>Текст для тоста или для сообщения об ошибке.</returns>
-        internal static string DescribeResult(ModsSyncResult result, string? gameTitle) {
+        internal static string DescribeResult(ModsSyncResult result, string? gameTitle, bool repair = false) {
             var title = string.IsNullOrWhiteSpace(gameTitle) ? "игры" : $"«{gameTitle}»";
+            var failure = repair
+                ? "Не удалось восстановить моды. Попробуйте ещё раз."
+                : "Не удалось установить моды. Попробуйте ещё раз.";
             if (result == null) {
-                return "Не удалось установить моды. Попробуйте ещё раз.";
+                return failure;
             }
 
             switch (result.Outcome) {
                 case ModsSyncOutcome.NoModpack:
                     return $"У {title} нет активного модпака — устанавливать нечего.";
                 case ModsSyncOutcome.UpToDate:
-                    return $"Моды в копии {title} из Steam уже актуальны.";
+                    // Починка, которой не нашлось работы, — не «уже актуальны»: игрок
+                    // пришёл сюда потому, что файлов недоставало, и ответ должен
+                    // говорить именно о них.
+                    return repair
+                        ? $"Файлы модпака в копии {title} из Steam на месте — восстанавливать нечего."
+                        : $"Моды в копии {title} из Steam уже актуальны.";
                 case ModsSyncOutcome.Installed:
                     // Объём скачанного называется, потому что установка «мгновенно и
                     // молча» после полутора гигабайт трафика выглядит как отказ.
                     var size = result.Downloaded > 0 ? $", скачано {HomeFormat.FormatSize(result.Downloaded)}" : string.Empty;
-                    return $"Моды установлены в копию {title} из Steam: {result.Version}{size}.";
+                    return repair
+                        ? $"Моды в копии {title} из Steam восстановлены: {result.Version}{size}."
+                        : $"Моды установлены в копию {title} из Steam: {result.Version}{size}.";
                 default:
-                    return string.IsNullOrWhiteSpace(result.Message)
-                        ? "Не удалось установить моды. Попробуйте ещё раз."
-                        : result.Message;
+                    return string.IsNullOrWhiteSpace(result.Message) ? failure : result.Message;
             }
         }
     }

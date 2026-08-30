@@ -135,6 +135,87 @@ namespace ChillHub.Tests {
             Assert.True(probe.Launched[0].ReadyToPlay);
         }
 
+        /// <summary>
+        /// ГЛАВНАЯ ПРОВЕРКА ПОЧИНКИ: она чинит и останавливается. Игрок нажимал
+        /// «восстановить моды» — ровно одно действие, — и начавшаяся следом игра
+        /// оказывалась неожиданностью. Запускает уже следующий щелчок.
+        /// </summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task ПочинкаМодовИгруНеЗапускает() {
+            var probe = new Probe { ConfirmAnswer = true, InstallResult = true };
+            this.ModdedDir();
+
+            await probe.Runner().RunAsync(
+                Game(), this.Option(LaunchAction.RepairMods), Off, this.Probes(modsInSteam: "pack-1"));
+
+            Assert.Single(probe.Installed);
+            Assert.Empty(probe.Launched);
+            Assert.Contains(probe.Statuses, t => t.Contains("восстановлены", StringComparison.Ordinal));
+        }
+
+        /// <summary>Починка и установка с нуля различаются в подписях, а не только внутри.</summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task ПочинкаНазываетсяПочинкой() {
+            var probe = new Probe { ConfirmAnswer = true, InstallResult = true };
+            this.ModdedDir();
+
+            await probe.Runner().RunAsync(Game(), this.Option(LaunchAction.RepairMods), Off, this.Probes());
+            await probe.Runner().RunAsync(Game(), this.Option(LaunchAction.InstallMods), Off, this.Probes());
+
+            Assert.Equal(new[] { true, false }, probe.Repairs);
+        }
+
+        /// <summary>Отказ игрока останавливает и починку: чужую папку не трогают.</summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task ОтказОстанавливаетПочинку() {
+            var probe = new Probe { ConfirmAnswer = false };
+
+            await probe.Runner().RunAsync(Game(), this.Option(LaunchAction.RepairMods), Off, this.Probes());
+
+            Assert.Empty(probe.Installed);
+            Assert.Empty(probe.Launched);
+        }
+
+        /// <summary>Неудачная починка молчит о победе: строки «восстановлены» нет.</summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task НеудачнаяПочинкаНеОтчитываетсяОбУспехе() {
+            var probe = new Probe { ConfirmAnswer = true, InstallResult = false };
+
+            await probe.Runner().RunAsync(Game(), this.Option(LaunchAction.RepairMods), Off, this.Probes());
+
+            Assert.Single(probe.Installed);
+            Assert.DoesNotContain(probe.Statuses, t => t.Contains("восстановлены", StringComparison.Ordinal));
+        }
+
+        /// <summary>Пока моды ставятся, починка не начинает вторую запись в ту же папку.</summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task ПочинкаНеНачинаетсяПоверхУстановки() {
+            var probe = new Probe { ConfirmAnswer = true, Busy = true };
+
+            await probe.Runner().RunAsync(Game(), this.Option(LaunchAction.RepairMods), Off, this.Probes());
+
+            Assert.Empty(probe.Installed);
+            Assert.NotEmpty(probe.Toasts);
+        }
+
+        /// <summary>Режим технических работ, закрывший обновление, закрывает и починку.</summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task РежимРаботОстанавливаетПочинку() {
+            var probe = new Probe { ConfirmAnswer = true, InstallResult = true };
+            var state = new MaintenanceState { Enabled = true, Blocks = new MaintenanceBlocks { Update = true } };
+
+            await probe.Runner().RunAsync(Game(), this.Option(LaunchAction.RepairMods), state, this.Probes());
+
+            Assert.Empty(probe.Installed);
+            Assert.NotEmpty(probe.Statuses);
+        }
+
         /// <summary>Отказ игрока останавливает всё: чужую установку Steam не трогают.</summary>
         /// <returns>Задача теста.</returns>
         [Fact]
@@ -236,6 +317,9 @@ namespace ChillHub.Tests {
 
             internal List<string> Installed { get; } = new();
 
+            /// <summary>Чем была каждая установка: починкой или установкой с нуля.</summary>
+            internal List<bool> Repairs { get; } = new();
+
             internal List<LaunchOption> Launched { get; } = new();
 
             internal LaunchTarget? Remembered { get; private set; }
@@ -262,8 +346,9 @@ namespace ChillHub.Tests {
                     return this.EnqueueResult;
                 },
                 RefreshChoice = () => this.Refreshed++,
-                InstallMods = (_, _, dir) => {
+                InstallMods = (_, _, dir, repair) => {
                     this.Installed.Add(dir);
+                    this.Repairs.Add(repair);
                     return Task.FromResult(this.InstallResult);
                 },
                 Launch = (_, option) => this.Launched.Add(option),

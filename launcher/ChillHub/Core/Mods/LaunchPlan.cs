@@ -21,6 +21,9 @@ namespace ChillHub.Core.Mods {
         /// <summary>Поставить модпак в эту папку и следом запустить.</summary>
         InstallModsThenPlay,
 
+        /// <summary>Вернуть на место пропавшие файлы модпака и остановиться.</summary>
+        RepairMods,
+
         /// <summary>Поставить сборку игры в очередь загрузок.</summary>
         Enqueue,
 
@@ -167,6 +170,12 @@ namespace ChillHub.Core.Mods {
                     return state?.BlocksUpdate == true
                         ? new LaunchDecision(LaunchStep.Blocked, banner)
                         : new LaunchDecision(LaunchStep.InstallModsThenPlay, string.Empty);
+
+                case LaunchAction.RepairMods:
+                    // Тоже запись в папку игры, и запрещает её тот же запрет обновления.
+                    return state?.BlocksUpdate == true
+                        ? new LaunchDecision(LaunchStep.Blocked, banner)
+                        : new LaunchDecision(LaunchStep.RepairMods, string.Empty);
 
                 case LaunchAction.InstallGame:
                     return state?.BlocksInstall == true

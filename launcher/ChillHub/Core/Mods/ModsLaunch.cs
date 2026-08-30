@@ -47,6 +47,18 @@ namespace ChillHub.Core.Mods {
         /// <summary>Поставить или обновить модпак в этой папке, потом запустить.</summary>
         InstallMods,
 
+        /// <summary>
+        /// Вернуть на место пропавшие файлы модпака — и остановиться.
+        /// <para>
+        /// От <see cref="InstallMods"/> отличается именно этим: тот доводит до игры за
+        /// один щелчок, потому что игрок нажимал «хочу играть с модами». А здесь он
+        /// нажимал «восстановить моды» — и запуск игры следом оказывался неожиданностью.
+        /// После починки строка снова становится обычным «с модами», и запускает уже
+        /// следующий щелчок.
+        /// </para>
+        /// </summary>
+        RepairMods,
+
         /// <summary>Скачать сборку с сервера; модпак приедет вместе с ней.</summary>
         InstallGame,
 
@@ -229,7 +241,7 @@ namespace ChillHub.Core.Mods {
                 // модпака: игрок сам удаляет мод, который ему не нравится, и версия
                 // модпака от этого не меняется — потому пункт и обещал запуск с полным
                 // паком, пока в папке лежала его половина.
-                options.Add(Make(LaunchTarget.SteamModded, ctx.Steam.GameDir, true, LaunchAction.InstallMods, "восстановить моды"));
+                options.Add(Make(LaunchTarget.SteamModded, ctx.Steam.GameDir, true, LaunchAction.RepairMods, "восстановить моды"));
             }
             else {
                 options.Add(Make(LaunchTarget.SteamModded, ctx.Steam.GameDir, true, LaunchAction.Play, string.Empty));
@@ -256,6 +268,14 @@ namespace ChillHub.Core.Mods {
                 options.Add(Make(LaunchTarget.LocalModded, ctx.LocalRoot, true, LaunchAction.Unavailable, "модпак ещё не опубликован"));
             }
             else if (!DoorstopConfig.IsInstalled(ctx.LocalRoot) || ctx.LocalModsBroken) {
+                // Своей папке лаунчер чинит моды не отдельной кнопкой, а той же
+                // закачкой: очередь и так начинает с модпака. Поэтому действие здесь
+                // Update, и надпись «восстановить моды» лишь честнее называет, что
+                // именно пропало.
+                //
+                // Часто до этой ветки не доходит: проверка статуса, увидев неполный
+                // модпак, помечает игру требующей обновления, и строка выше говорит
+                // «обновить». Обе ведут в одну и ту же очередь и чинят одно и то же.
                 options.Add(Make(LaunchTarget.LocalModded, ctx.LocalRoot, true, LaunchAction.Update, "восстановить моды"));
             }
             else {

@@ -35,9 +35,13 @@ namespace ChillHub.Core.Mods {
         /// <summary>Gets or sets пересчёт подписи кнопки «Играть» после смены выбора.</summary>
         internal Action RefreshChoice { get; set; } = () => { };
 
-        /// <summary>Gets or sets установку модпака в папку: игра, название, папка.</summary>
-        internal Func<GameInfo, string, string, Task<bool>> InstallMods { get; set; } =
-            (_, _, _) => Task.FromResult(false);
+        /// <summary>
+        /// Gets or sets установку модпака в папку: игра, название, папка, признак
+        /// починки. Последний нужен только подписям: «Моды установлены» после
+        /// восстановления пары пропавших файлов сбивает с толку сильнее, чем молчание.
+        /// </summary>
+        internal Func<GameInfo, string, string, bool, Task<bool>> InstallMods { get; set; } =
+            (_, _, _, _) => Task.FromResult(false);
 
         /// <summary>Gets or sets сам запуск игры.</summary>
         internal Action<GameInfo, LaunchOption> Launch { get; set; } = (_, _) => { };
@@ -102,6 +106,10 @@ namespace ChillHub.Core.Mods {
                     await this.InstallThenPlayAsync(game, option, probes).ConfigureAwait(true);
                     return;
 
+                case LaunchStep.RepairMods:
+                    await this.RepairAsync(game, option).ConfigureAwait(true);
+                    return;
+
                 default:
                     this.ui.Launch(game, option);
                     return;
@@ -142,7 +150,7 @@ namespace ChillHub.Core.Mods {
                 return;
             }
 
-            if (!await this.ui.InstallMods(game, title, option.GameDir).ConfigureAwait(true)) {
+            if (!await this.ui.InstallMods(game, title, option.GameDir, false).ConfigureAwait(true)) {
                 return;
             }
 
@@ -151,6 +159,44 @@ namespace ChillHub.Core.Mods {
             var ready = LaunchPlan.ReadyAfterInstall(LaunchPlan.OptionsFor(game, probes), option.Target);
             if (ready != null) {
                 this.ui.Launch(game, ready);
+            }
+        }
+
+        /// <summary>
+        /// Возвращает на место пропавшие файлы модпака — и останавливается.
+        /// <para>
+        /// ИГРУ ПОСЛЕ ПОЧИНКИ НЕ ЗАПУСКАЕМ. Соседний путь «установить моды» доводит до
+        /// игры за один щелчок, и это верно: там игрок нажимал «хочу играть с модами».
+        /// Здесь на кнопке написано «восстановить моды» — ровно одно действие, и
+        /// начавшаяся следом игра оказывалась неожиданностью. После починки строка
+        /// снова становится обычным «с модами», и запускает уже следующий щелчок.
+        /// </para>
+        /// </summary>
+        /// <param name="game">Игра.</param>
+        /// <param name="option">Выбранная строка меню.</param>
+        /// <returns>Задача починки.</returns>
+        private async Task RepairAsync(GameInfo game, LaunchOption option) {
+            if (this.ModsBusy()) {
+                this.ui.Toast("Моды уже устанавливаются. Дождитесь завершения.");
+                return;
+            }
+
+            var title = string.IsNullOrWhiteSpace(game.Title) ? game.GameId ?? string.Empty : game.Title;
+            if (string.IsNullOrWhiteSpace(option.GameDir)) {
+                this.ui.SetStatus("Для этой игры нет папки, где чинить моды");
+                return;
+            }
+
+            if (!this.ui.Confirm(
+                    Home.SteamModsInstall.BuildConfirmText(title, game.Mods, option.GameDir, repair: true),
+                    Home.SteamModsInstall.RepairCaption)) {
+                return;
+            }
+
+            if (await this.ui.InstallMods(game, title, option.GameDir, true).ConfigureAwait(true)) {
+                // Строка состояния договаривает то, чего не видно по кнопке: работа
+                // кончилась, и следующий щелчок — уже игра.
+                this.ui.SetStatus("Моды восстановлены. Нажмите ещё раз, чтобы запустить игру.");
             }
         }
     }
