@@ -82,6 +82,13 @@ type IndexedVersion struct {
 type CommunityIndex struct {
 	community string
 	versions  map[string]IndexedVersion
+
+	// packages is the same listing keyed by identity without the version:
+	// "rob_gaming-driver". The resolver needs to tell "this game does not
+	// serve this mod at all" apart from "this game does not serve THIS
+	// version of it", and only the first is a reason to leave a dependency
+	// out of the tree.
+	packages map[string]bool
 }
 
 // Community is the slug the index was built for.
@@ -98,6 +105,24 @@ func (i *CommunityIndex) Len() int {
 		return 0
 	}
 	return len(i.versions)
+}
+
+// Serves reports whether the community publishes the package a dependency
+// string names, at any version.
+//
+// The version is always the last segment, so cutting it off is the one split
+// of a dependency string that needs no guessing — which is what makes this
+// answerable when Lookup, keyed by the exact version, says no.
+func (i *CommunityIndex) Serves(dep string) bool {
+	if i == nil {
+		return false
+	}
+	d := strings.ToLower(strings.TrimSpace(dep))
+	cut := strings.LastIndex(d, "-")
+	if cut <= 0 {
+		return false
+	}
+	return i.packages[d[:cut]]
 }
 
 // Lookup finds one version by its dependency string ("Author-Mod-1.2.3").
@@ -182,7 +207,11 @@ func (c *Client) FetchCommunityIndex(ctx context.Context, community string) (*Co
 		return nil, fmt.Errorf("mods: community index %s: unexpected status %d", community, res.StatusCode)
 	}
 
-	idx := &CommunityIndex{community: community, versions: make(map[string]IndexedVersion, 1<<16)}
+	idx := &CommunityIndex{
+		community: community,
+		versions:  make(map[string]IndexedVersion, 1<<16),
+		packages:  make(map[string]bool, 1<<13),
+	}
 	dec := json.NewDecoder(io.LimitReader(res.Body, maxCommunityIndexBytes))
 
 	// Открывающая скобка массива читается отдельно, дальше пакеты идут по
@@ -217,10 +246,12 @@ func (c *Client) FetchCommunityIndex(ctx context.Context, community string) (*Co
 				DownloadURL:  v.DownloadURL,
 				FileSize:     v.FileSize,
 			}
+			idx.packages[PackageKey(ns, name)] = true
 		}
 	}
 
-	log.Printf("[mods] индекс сообщества %s: %d версий", community, len(idx.versions))
+	log.Printf("[mods] индекс сообщества %s: %d пакетов, %d версий",
+		community, len(idx.packages), len(idx.versions))
 	c.rememberIndex(idx)
 	return idx, nil
 }

@@ -31,6 +31,9 @@ namespace ChillHub.Core.Home {
         /// <summary>ProgID оболочки Windows, через которую создаётся файл ярлыка.</summary>
         private const string ShellProgId = "WScript.Shell";
 
+        /// <summary>Имя exe лаунчера: на него ведёт ярлык игры.</summary>
+        private const string LauncherFileName = "ChillHub.exe";
+
         /// <summary>Потолок размера `.lnk`, который мы вообще разбираем (обычный ярлык — единицы килобайт).</summary>
         private const long MaxLinkBytes = 512 * 1024;
 
@@ -319,10 +322,11 @@ namespace ChillHub.Core.Home {
         /// </summary>
         /// <param name="desktopDirectory">Каталог, играющий роль рабочего стола.</param>
         /// <param name="shellProgId">ProgID оболочки; несуществующий имитирует её отсутствие.</param>
+        /// <param name="launcherPath">Путь к exe лаунчера, на который ссылается ярлык.</param>
         /// <returns>Объект, возвращающий настоящее окружение.</returns>
         internal static IDisposable OverrideShortcutEnvironmentForTests(
-            string desktopDirectory, string? shellProgId = null)
-            => new ShortcutEnvironmentOverride(desktopDirectory, shellProgId ?? ShellProgId);
+            string desktopDirectory, string? shellProgId = null, string? launcherPath = null)
+            => new ShortcutEnvironmentOverride(desktopDirectory, shellProgId ?? ShellProgId, launcherPath);
 
         /// <summary>
         /// Полный путь к exe игры внутри её папки. Пустая строка — путь к exe не задан
@@ -364,7 +368,7 @@ namespace ChillHub.Core.Home {
                 }
 
                 var name = string.IsNullOrWhiteSpace(title) ? gameId! : title!;
-                var thread = new Thread(() => TryCreateDesktopShortcut(name, exePath)) { IsBackground = true };
+                var thread = new Thread(() => TryCreateDesktopShortcut(name, gameId!, exePath)) { IsBackground = true };
                 try {
                     thread.SetApartmentState(ApartmentState.STA);
                 }
@@ -382,8 +386,28 @@ namespace ChillHub.Core.Home {
             }
         }
 
-        /// <summary>Создаёт ярлык игры на рабочем столе. Ошибки не критичны для сценария установки.</summary>
-        internal static void TryCreateDesktopShortcut(string title, string exePath) {
+        /// <summary>
+        /// Создаёт ярлык игры на рабочем столе. Ошибки не критичны для сценария установки.
+        /// <para>
+        /// ЯРЛЫК ВЕДЁТ В ЛАУНЧЕР, А НЕ В ИГРУ: цель — ChillHub.exe с аргументами этой игры
+        /// (см. <see cref="Shell.ShortcutTarget"/>), и лаунчер открывает главную с выделенной
+        /// игрой. Прямой запуск exe обходил и вышедшее обновление, и модпак, и проверку
+        /// целостности — человек попадал в игру старой версии, ничего об этом не узнав.
+        /// </para>
+        /// <para>
+        /// Значок берётся у exe игры: ярлык обязан выглядеть как игра, а не как ещё одна
+        /// копия лаунчера — их на рабочем столе может оказаться десяток.
+        /// </para>
+        /// <para>
+        /// Путь к лаунчеру определяется не всегда (запуск из-под отладчика, необычная
+        /// установка) — тогда ярлык всё равно создаётся, но по-старому, прямо на exe игры:
+        /// работающий ярлык мимо лаунчера лучше, чем ярлык в никуда.
+        /// </para>
+        /// </summary>
+        /// <param name="title">Название игры для имени ярлыка.</param>
+        /// <param name="gameId">Идентификатор игры — по нему лаунчер её и выделит.</param>
+        /// <param name="exePath">Полный путь к exe игры.</param>
+        internal static void TryCreateDesktopShortcut(string title, string gameId, string exePath) {
             try {
                 if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath)) {
                     return;
@@ -401,10 +425,17 @@ namespace ChillHub.Core.Home {
                     return;
                 }
 
+                var launcher = env?.LauncherPath ?? LauncherPath();
+                var arguments = string.IsNullOrWhiteSpace(launcher)
+                    ? string.Empty
+                    : Shell.ShortcutTarget.BuildArguments(gameId, name, exePath);
+                var target = string.IsNullOrWhiteSpace(arguments) ? exePath : launcher;
+
                 dynamic shell = Activator.CreateInstance(shellType)!;
                 dynamic shortcut = shell.CreateShortcut(linkPath);
-                shortcut.TargetPath = exePath;
-                shortcut.WorkingDirectory = Path.GetDirectoryName(exePath);
+                shortcut.TargetPath = target;
+                shortcut.Arguments = arguments;
+                shortcut.WorkingDirectory = Path.GetDirectoryName(target);
                 shortcut.Description = name;
                 shortcut.IconLocation = exePath + ",0";
                 shortcut.Save();
@@ -416,6 +447,31 @@ namespace ChillHub.Core.Home {
         }
 
         /// <summary>
+        /// Путь к exe лаунчера, на который ссылается ярлык. Пустая строка — путь определить
+        /// не удалось, и ярлык придётся вести прямо на игру.
+        /// </summary>
+        /// <returns>Полный путь к ChillHub.exe или пустая строка.</returns>
+        private static string LauncherPath() {
+            try {
+                // ProcessPath — это ровно тот файл, которым запущен текущий процесс. Под
+                // отладчиком и в прогоне тестов это не лаунчер, поэтому имя проверяется:
+                // ярлыка, ведущего в testhost.exe, не должно существовать даже теоретически.
+                var self = Environment.ProcessPath;
+                if (!string.IsNullOrWhiteSpace(self)
+                    && string.Equals(Path.GetFileName(self), LauncherFileName, StringComparison.OrdinalIgnoreCase)) {
+                    return self;
+                }
+
+                var beside = Path.Combine(AppContext.BaseDirectory, LauncherFileName);
+                return File.Exists(beside) ? beside : string.Empty;
+            }
+            catch (Exception ex) {
+                Logging.Logger.Warn($"GameLocalState.LauncherPath: {ex.Message}");
+                return string.Empty;
+            }
+        }
+
+        /// <summary>
         /// Убирает с рабочего стола ярлыки удалённой игры.
         /// <para>
         /// Ярлык переживал удаление игры: пользователь сносил файлы, а на рабочем столе
@@ -423,9 +479,10 @@ namespace ChillHub.Core.Home {
         /// удаление игры уносит и её ярлыки.
         /// </para>
         /// <para>
-        /// Ярлык опознаётся по цели, а не по названию: название игры на сервере могло
-        /// поменяться после установки, а на рабочем столе у пользователя вполне может
-        /// лежать чужой ярлык с таким же именем. Цель читается из самого файла `.lnk`,
+        /// Ярлык опознаётся по пути к игре внутри файла, а не по названию: название игры на
+        /// сервере могло поменяться после установки, а на рабочем столе у пользователя вполне
+        /// может лежать чужой ярлык с таким же именем. Путь лежит в аргументах ярлыка (цель
+        /// у него — лаунчер) и читается из самого файла `.lnk`,
         /// без обращения к оболочке Windows: удаление идёт в фоновом потоке, где COM
         /// недоступен так же свободно, как при установке, а не опознанный ярлык мы
         /// оставляем на месте — лишний ярлык лучше стёртого чужого.
@@ -525,18 +582,19 @@ namespace ChillHub.Core.Home {
         /// <returns>Байт в нижнем регистре, если это латинская буква.</returns>
         private static byte ToLowerAscii(byte b) => b is >= (byte)'A' and <= (byte)'Z' ? (byte)(b + 32) : b;
 
-        /// <summary>Куда кладётся ярлык и через какую оболочку он создаётся.</summary>
+        /// <summary>Куда кладётся ярлык, через какую оболочку он создаётся и куда ведёт.</summary>
         /// <param name="DesktopDirectory">Каталог рабочего стола.</param>
         /// <param name="ShellProgId">ProgID оболочки Windows.</param>
-        private sealed record ShortcutEnvironment(string DesktopDirectory, string ShellProgId);
+        /// <param name="LauncherPath">Путь к exe лаунчера; null — определять самим.</param>
+        private sealed record ShortcutEnvironment(string DesktopDirectory, string ShellProgId, string? LauncherPath);
 
         /// <summary>Возвращает настоящее окружение ярлыка после <see cref="OverrideShortcutEnvironmentForTests"/>.</summary>
         private sealed class ShortcutEnvironmentOverride : IDisposable {
             private readonly ShortcutEnvironment? previous;
 
-            internal ShortcutEnvironmentOverride(string desktopDirectory, string shellProgId) {
+            internal ShortcutEnvironmentOverride(string desktopDirectory, string shellProgId, string? launcherPath) {
                 this.previous = ScopedShortcutEnv.Value;
-                ScopedShortcutEnv.Value = new ShortcutEnvironment(desktopDirectory, shellProgId);
+                ScopedShortcutEnv.Value = new ShortcutEnvironment(desktopDirectory, shellProgId, launcherPath);
             }
 
             public void Dispose() => ScopedShortcutEnv.Value = this.previous;

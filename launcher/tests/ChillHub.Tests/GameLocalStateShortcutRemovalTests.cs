@@ -171,7 +171,7 @@ namespace ChillHub.Tests {
             var root = Path.GetDirectoryName(exe)!;
 
             using (GameLocalState.OverrideShortcutEnvironmentForTests(desktop.Root)) {
-                GameLocalState.TryCreateDesktopShortcut("Игра", exe);
+                GameLocalState.TryCreateDesktopShortcut("Игра", "gid", exe);
                 if (!File.Exists(Path.Combine(desktop.Root, "Игра.lnk"))) {
                     // Оболочка ярлыков не создаёт (политика, урезанная система, агент сборки) —
                     // удалять нечего, и это не дефект проверяемого кода.

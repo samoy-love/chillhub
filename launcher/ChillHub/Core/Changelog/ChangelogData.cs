@@ -51,6 +51,14 @@ namespace ChillHub.Core.Changelog {
                 },
             },
             new ChangelogRelease {
+                Version = "1.6.28",
+                Date = "2026-08-31",
+                Changes = new[] {
+                    "Ярлык игры открывает лаунчер на этой игре, а не запускает её мимо обновлений и модов.",
+                    "Если игры нет в каталоге, лаунчер честно скажет об этом и предложит запустить то, что уже установлено.",
+                },
+            },
+            new ChangelogRelease {
                 Version = "1.6.27",
                 Date = "2026-08-31",
                 Changes = new[] {

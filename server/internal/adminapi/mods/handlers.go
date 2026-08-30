@@ -286,16 +286,18 @@ func (h *Handlers) Resolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	adminutil.WriteJSON(w, map[string]any{
-		"version":     plan.Version,
-		"displayName": plan.DisplayName,
-		"packages":    len(plan.Packages),
-		"missing":     plan.Missing,
-		"loader":      plan.Loader,
-		"totalBytes":  plan.TotalBytes,
-		"cachedBytes": plan.CachedBytes,
-		"spaceOk":     plan.SpaceOK,
-		"spaceNote":   plan.SpaceNote,
-		"packageUrl":  req.PackageURL(cfg.Community),
+		"version":      plan.Version,
+		"displayName":  plan.DisplayName,
+		"packages":     len(plan.Packages),
+		"missing":      plan.Missing,
+		"loader":       plan.Loader,
+		"foreign":      plan.Foreign,
+		"extraLoaders": plan.ExtraLoaders,
+		"totalBytes":   plan.TotalBytes,
+		"cachedBytes":  plan.CachedBytes,
+		"spaceOk":      plan.SpaceOK,
+		"spaceNote":    plan.SpaceNote,
+		"packageUrl":   req.PackageURL(cfg.Community),
 	})
 }
 

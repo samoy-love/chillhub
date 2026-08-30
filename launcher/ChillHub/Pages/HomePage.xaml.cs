@@ -44,6 +44,47 @@ namespace ChillHub.Pages {
         // Держим подписку, чтобы снять её при выгрузке: AddValueChanged заводит сильную
         // ссылку на контрол, и без снятия страница не собиралась бы сборщиком мусора.
         private Core.Home.BottomBarWatch? bottomBarWatch;
+
+        /// <summary>
+        /// Каталог игр загружен: список либо заполнен ответом сервера, либо остался пустым
+        /// (сервер недоступен). Ждёт этого ярлык с рабочего стола: он приходит выделить
+        /// конкретную игру сразу после запуска лаунчера, когда списка ещё нет, и без
+        /// ожидания любая игра выглядела бы для него пропавшей из каталога.
+        /// </summary>
+        private readonly TaskCompletionSource<bool> gamesLoaded =
+            new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Завершается, когда каталог игр загружен, — см. <see cref="gamesLoaded"/>.</summary>
+        internal Task GamesLoaded => this.gamesLoaded.Task;
+
+        /// <summary>Показанный список игр: ярлыку нужно знать, есть ли в нём его игра.</summary>
+        internal IReadOnlyList<GameInfo> Games => this.games;
+
+        /// <summary>
+        /// Выделяет игру в списке по идентификатору — так с рабочего стола приходит ярлык
+        /// (см. <see cref="Core.Shell.ShortcutTarget"/>). Дальше человек видит обычную
+        /// главную: витрину этой игры, её состояние и кнопку запуска.
+        /// </summary>
+        /// <param name="gameId">Идентификатор игры.</param>
+        /// <returns>false, если такой игры в каталоге нет.</returns>
+        internal bool SelectGameById(string? gameId) {
+            var game = this.games?.FirstOrDefault(g =>
+                g != null && string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+            if (game == null) {
+                return false;
+            }
+
+            // Набранный в поиске запрос мог отфильтровать эту игру из списка, а выделять
+            // скрытую строку бессмысленно: экран остался бы прежним, будто ярлык не нажимали.
+            // Фильтр переставит сам обработчик GameSearch_TextChanged.
+            if (!string.IsNullOrEmpty(this.GameSearchBox?.Text)) {
+                this.GameSearchBox.Text = string.Empty;
+            }
+
+            this.GameList.SelectedItem = game;
+            this.GameList.ScrollIntoView(game);
+            return true;
+        }
         private List<string> builds = new();
         // Идёт удаление локальных файлов игры: блокирует повторный запуск и установку
         private bool isDeleting = false;
@@ -547,6 +588,12 @@ namespace ChillHub.Pages {
             catch (Exception ex) {
                 await this.DispatcherInvokeAsync(() =>
                     this.ShowUserError("Не удалось загрузить данные. Проверьте подключение к интернету.", ex, "HomePage.LoadInitialAsync"));
+            }
+            finally {
+                // ЛЮБОЙ исход загрузки — это ответ ожидающему ярлыку: и полный список, и
+                // пустой после недоступного сервера. Иначе ярлык, нажатый при отсутствии
+                // сети, ждал бы список игр до закрытия лаунчера.
+                this.gamesLoaded.TrySetResult(true);
             }
         }
 
