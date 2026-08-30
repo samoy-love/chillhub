@@ -205,9 +205,15 @@ namespace ChillHub.Tests {
                 Manifest manifest, string localRoot, string contentBaseUrl, PlanOptions options, CancellationToken ct)
                 => Task.FromResult(new DiffPlan());
 
-            public Task ExecuteAsync(DiffPlan plan, IProgress<SyncProgress> progress, CancellationToken ct) {
+            public async Task ExecuteAsync(DiffPlan plan, IProgress<SyncProgress> progress, CancellationToken ct) {
                 progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = 1, TotalBytes = 2 });
-                return Task.CompletedTask;
+
+                // ОТЧЁТ ДОСТАВЛЯЕТСЯ НЕ ЭТИМ ПОТОКОМ. Его несёт Progress<T>, а в прогоне
+                // без контекста синхронизации доставка уходит в пул потоков — и успевает
+                // прийти уже после того, как позиция очереди закончилась и перестала
+                // принимать отчёты. Тогда стадия не показывалась вовсе, и тест падал на
+                // CI, оставаясь зелёным на машине разработчика.
+                await Task.Delay(300, ct).ConfigureAwait(false);
             }
         }
 
