@@ -31,7 +31,7 @@ namespace ChillHub.Tests {
         public void ЯрлыкНеСоздаётсяДляНесуществующегоExe() {
             using var desktop = new TempDir();
             using (GameLocalState.OverrideShortcutEnvironmentForTests(desktop.Root)) {
-                GameLocalState.TryCreateDesktopShortcut("Игра", Path.Combine(desktop.Root, "нет-такого.exe"));
+                GameLocalState.TryCreateDesktopShortcut("Игра", "gid", Path.Combine(desktop.Root, "нет-такого.exe"));
 
                 Assert.Empty(Directory.GetFiles(desktop.Root));
             }
@@ -48,7 +48,7 @@ namespace ChillHub.Tests {
         public void ЯрлыкНеСоздаётсяДляПустогоПути(string exePath) {
             using var desktop = new TempDir();
             using (GameLocalState.OverrideShortcutEnvironmentForTests(desktop.Root)) {
-                GameLocalState.TryCreateDesktopShortcut("Игра", exePath);
+                GameLocalState.TryCreateDesktopShortcut("Игра", "gid", exePath);
 
                 Assert.Empty(Directory.GetFiles(desktop.Root));
             }
@@ -68,7 +68,7 @@ namespace ChillHub.Tests {
             var exe = desktop.WriteFile("game.exe", "MZ");
 
             using (GameLocalState.OverrideShortcutEnvironmentForTests(desktop.Root, "ChillHub.НетТакогоProgID")) {
-                GameLocalState.TryCreateDesktopShortcut("Игра", exe);
+                GameLocalState.TryCreateDesktopShortcut("Игра", "gid", exe);
             }
 
             Assert.False(File.Exists(Path.Combine(desktop.Root, "Игра.lnk")));
@@ -94,7 +94,7 @@ namespace ChillHub.Tests {
             var exe = desktop.WriteFile("game.exe", "MZ");
 
             using (GameLocalState.OverrideShortcutEnvironmentForTests(desktop.Root)) {
-                GameLocalState.TryCreateDesktopShortcut(title, exe);
+                GameLocalState.TryCreateDesktopShortcut(title, "gid", exe);
             }
 
             if (!ShellAvailable) {
@@ -117,7 +117,7 @@ namespace ChillHub.Tests {
             var exe = desktop.WriteFile("lethal-company.exe", "MZ");
 
             using (GameLocalState.OverrideShortcutEnvironmentForTests(desktop.Root)) {
-                GameLocalState.TryCreateDesktopShortcut("   ", exe);
+                GameLocalState.TryCreateDesktopShortcut("   ", "gid", exe);
             }
 
             if (!ShellAvailable) {
@@ -135,7 +135,7 @@ namespace ChillHub.Tests {
             var exe = games.WriteFile("game/game.exe", "MZ");
 
             using (GameLocalState.OverrideShortcutEnvironmentForTests(desktop.Root)) {
-                GameLocalState.TryCreateDesktopShortcut("Игра", exe);
+                GameLocalState.TryCreateDesktopShortcut("Игра", "gid", exe);
             }
 
             Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(exe)!, "*.lnk"));
@@ -157,7 +157,7 @@ namespace ChillHub.Tests {
             var exe = desktop.WriteFile("game.exe", "MZ");
 
             using (GameLocalState.OverrideShortcutEnvironmentForTests(@"Q:\нет-такого-диска\desktop")) {
-                GameLocalState.TryCreateDesktopShortcut("Игра", exe);
+                GameLocalState.TryCreateDesktopShortcut("Игра", "gid", exe);
             }
         }
 

@@ -326,6 +326,55 @@ namespace ChillHub {
             this.Activate();
         }
 
+        /// <summary>
+        /// Открывает то, что просит ярлык с рабочего стола: главную с выделенной игрой, а
+        /// если игры в каталоге нет — окно с предложением запустить установленную копию.
+        /// <para>
+        /// Ждёт загрузки каталога: запрос приходит сразу после запуска лаунчера, когда
+        /// списка игр ещё нет, и без ожидания КАЖДАЯ игра выглядела бы пропавшей.
+        /// </para>
+        /// </summary>
+        /// <param name="request">Запрос ярлыка; null — обычный запуск, делать нечего.</param>
+        internal void HandleShortcutRequest(Core.Shell.ShortcutRequest? request) {
+            if (request == null || string.IsNullOrWhiteSpace(request.GameId)) {
+                return;
+            }
+
+            _ = this.OpenShortcutRequestAsync(request);
+        }
+
+        private async Task OpenShortcutRequestAsync(Core.Shell.ShortcutRequest request) {
+            try {
+                // Именно главная, а не страница игры: запуск, обновление и моды живут
+                // там же, где список, — ярлык обязан приводить туда, откуда в игру играют.
+                this.NavigateToHome();
+                var home = this.homePage;
+                if (home == null) {
+                    return;
+                }
+
+                await home.GamesLoaded;
+
+                var action = Core.Shell.ShortcutOpen.Decide(request, home.Games);
+                if (action == Core.Shell.ShortcutOpenAction.SelectGame && home.SelectGameById(request.GameId)) {
+                    return;
+                }
+
+                if (action == Core.Shell.ShortcutOpenAction.None) {
+                    return;
+                }
+
+                Core.Logging.Logger.Info($"Ярлык: игры '{request.GameId}' нет в каталоге ({action})");
+                var dialog = new ShortcutLaunchWindow(request, action) { Owner = this };
+                dialog.ShowDialog();
+            }
+            catch (Exception ex) {
+                // Ярлык не должен ронять уже открытый лаунчер: человек просто останется
+                // на каталоге, а не окажется без окна вовсе.
+                Core.Logging.Logger.Error(ex, "MainWindow.OpenShortcutRequest");
+            }
+        }
+
         /// <summary>Тик <see cref="selfUpdateCheckTimer"/> — то же самое, что и разворачивание из трея.</summary>
         private async void SelfUpdateCheckTimer_Tick(object? sender, EventArgs e) => await this.RunSelfUpdateCheckAsync();
 
