@@ -44,6 +44,14 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
+                Version = "1.6.37",
+                Date = "2026-08-31",
+                Changes = new[] {
+                    "Панель внизу главного экрана уходит, когда работа кончилась, и больше не висит с надписью «Готово».",
+                    "Об установленной игре лаунчер теперь сообщает всплывающей подсказкой, а не строкой внизу.",
+                },
+            },
+            new ChangelogRelease {
                 Version = "1.6.36",
                 Date = "2026-08-31",
                 Changes = new[] {
