@@ -238,12 +238,12 @@ namespace ChillHub.Pages {
         private readonly Core.Mods.LaunchOptionsCache launchOptionsCache = new();
 
         private ActionMode actionMode = ActionMode.Checking;
-        private bool hasUpdateError = false;
 
         /// <summary>
-        /// Игра, на которой сорвалось обновление. «Повторить» относится только к ней:
-        /// раньше флаг сбрасывался лишь в начале StartUpdateAsync, поэтому после неудачи
-        /// на игре A выбор игры B тоже показывал «Повторить» вместо «Играть».
+        /// Игра, на которой сорвалось обновление, — единственный след ошибки. «Повторить»
+        /// относится только к ней: рядом жил ещё и общий флаг страницы, и пока кнопка
+        /// смотрела на него, неудача на игре A ставила «Повторить» и свежей установленной
+        /// игре C (см. <see cref="Core.Game.UpdateErrorScope"/>).
         /// </summary>
         private string? updateErrorGameId;
 
@@ -1066,15 +1066,14 @@ namespace ChillHub.Pages {
         /// Ошибка обновления относится к конкретной игре, а не ко всей странице.
         /// </summary>
         private void ResetUpdateErrorIfGameChanged(string? gid) {
-            if (!this.hasUpdateError || this.IsQueued(gid)) {
+            if (this.updateErrorGameId == null || this.IsQueued(gid)) {
                 return;
             }
 
-            if (string.Equals(this.updateErrorGameId, gid, StringComparison.OrdinalIgnoreCase)) {
+            if (Core.Game.UpdateErrorScope.AppliesTo(this.updateErrorGameId, gid)) {
                 return; // та же игра — «Повторить» по-прежнему уместно
             }
 
-            this.hasUpdateError = false;
             this.updateErrorGameId = null;
             this.ClearErrorDetails();
         }
@@ -1878,6 +1877,13 @@ namespace ChillHub.Pages {
             this.actionMode == ActionMode.Play
             && this.SelectedRunState() == Core.Game.GameRunState.None;
 
+        /// <summary>
+        /// Кнопка действия сейчас не начинает работу, а снимает её: идёт закачка или
+        /// позиция ждёт очереди. Меню трея обязано это знать — «Играть» там не имеет
+        /// права отменить установку (см. <see cref="Core.UI.TrayPlayDecision"/>).
+        /// </summary>
+        internal bool SelectedActionCancels => this.actionMode is ActionMode.Cancel or ActionMode.Dequeue;
+
         /// <summary>Делает то же, что кнопка действия на витрине — вызов из меню трея.</summary>
         internal void InvokeSelectedAction() => this.ActionBtn_Click(this, new RoutedEventArgs());
 
@@ -2027,7 +2033,11 @@ namespace ChillHub.Pages {
                 // с режимом технических работ: так запрет не «съедает» логику состояний.
                 var unfinished = HasUnfinishedUpdate(g?.GameId);
                 var intended = ActionButtonState.Decide(
-                    this.hasUpdateError, unfinished, isInstalled, needsUpdate, HasServerBuild(g));
+                    Core.Game.UpdateErrorScope.AppliesTo(this.updateErrorGameId, g?.GameId),
+                    unfinished,
+                    isInstalled,
+                    needsUpdate,
+                    HasServerBuild(g));
 
                 // Причину и срок не дублируем в строку статуса: они уже висят баннером в
                 // шапке, а строка статуса раскрывала нижнюю панель с тем же текстом и
@@ -2353,8 +2363,7 @@ namespace ChillHub.Pages {
             this.Dispatcher.BeginInvoke(() => {
                 switch (item.State) {
                     case Core.Game.QueueItemState.Completed:
-                        this.hasUpdateError = false;
-                        if (string.Equals(this.updateErrorGameId, item.GameId, StringComparison.OrdinalIgnoreCase)) {
+                        if (Core.Game.UpdateErrorScope.AppliesTo(this.updateErrorGameId, item.GameId)) {
                             this.updateErrorGameId = null;
                         }
 
@@ -2366,7 +2375,6 @@ namespace ChillHub.Pages {
                         GameLocalState.StartDesktopShortcutCreation(g?.Title, item.GameId, g?.ExeRelativePath);
                         break;
                     case Core.Game.QueueItemState.Failed:
-                        this.hasUpdateError = true;
                         this.updateErrorGameId = item.GameId;
                         break;
                     case Core.Game.QueueItemState.Cancelled:
@@ -2894,7 +2902,8 @@ namespace ChillHub.Pages {
 
                 // Правило и проход — в Core.UI.GameMenuItems: внутри WPF-меню их никто не
                 // проверит, а ошибка в них выглядит как пункт, который не работает.
-                Core.UI.GameMenuItems.Apply(fe?.ContextMenu?.Items, gi, hasFiles);
+                Core.UI.GameMenuItems.Apply(
+                    fe?.ContextMenu?.Items, gi, hasFiles, Core.Maintenance.MaintenanceService.Current);
             }
             catch (Exception ex) {
                 // Не смогли подготовить меню — лучше его не показывать вовсе

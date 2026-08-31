@@ -90,7 +90,38 @@ namespace ChillHub {
                 Logger.Error(ex.Exception, "TaskScheduler.UnobservedTaskException");
         }
 
-        private async void Application_Startup(object sender, StartupEventArgs e) {
+        /// <summary>
+        /// Точка входа в запуск. Сами шаги — в <see cref="RunStartupAsync"/>, а здесь
+        /// только страховка: метод помечен async void, и без неё любое исключение после
+        /// первого await улетало в общий обработчик диспетчера. Тот обещает «лаунчер
+        /// продолжит работу» и гасит исключение — но продолжать было уже нечем.
+        /// </summary>
+        private async void Application_Startup(object sender, StartupEventArgs e)
+            => await StartupGuard.RunAsync(
+                this.RunStartupAsync,
+                () => this.MainWindow?.IsVisible == true,
+                ReportStartupFailure,
+                this.Shutdown);
+
+        /// <summary>
+        /// Пользователю — что случилось и что делать. Стектрейс уже в журнале: в окне он
+        /// нечитаем и содержит пути с именем пользователя.
+        /// </summary>
+        /// <param name="ex">Что помешало запуску.</param>
+        private static void ReportStartupFailure(Exception ex) {
+            BootLog.Append($"Application_Startup failed: {ex}");
+            BootConsole.ErrorLine($"[FATAL] Application_Startup: {ex}");
+            Logger.Error(ex, "Application_Startup");
+            MessageBox.Show(
+                "Не удалось открыть лаунчер.\n\n"
+                + "Попробуйте запустить его ещё раз. Если не поможет — перезагрузите компьютер.\n\n"
+                + "Подробности записаны в журнал.",
+                "Ошибка",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+
+        private async Task RunStartupAsync() {
             BootConsole.Trace("Starting Application_Startup");
 
             // Шаг 1. Проверка/обновление лаунчера. Окно показываем, только если
@@ -181,6 +212,49 @@ namespace ChillHub {
             catch (Exception ex) {
                 // Без иконки окно откроется с системной — не повод падать
                 Logger.Warn("Не удалось применить иконку окна: " + ex.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Страховка запуска: у аварии на старте должен быть исход, видимый пользователю.
+    /// <para>
+    /// ПРОЦЕСС БЕЗ ОКНА — ХУЖЕ ЧЕСТНОГО ВЫХОДА. Шаги запуска идут в async void, и до
+    /// появления окна режим завершения стоит «только явно»: исключение (самый близкий
+    /// источник — значок в трее, который не создаётся при перезапуске explorer.exe)
+    /// оставляло живой ChillHub.exe без окна и без значка. Снять его можно было только
+    /// диспетчером задач, а всё это время он держал замок единственного экземпляра, и
+    /// повторный запуск лаунчера молча не стартовал.
+    /// </para>
+    /// <para>
+    /// Окно уже на экране — авария относится к тому, что после него (например, к
+    /// открытию игры по ярлыку), и гасить лаунчер незачем: работать есть с чем.
+    /// </para>
+    /// </summary>
+    internal static class StartupGuard {
+        /// <summary>Выполняет шаги запуска, не давая аварии оставить процесс без исхода.</summary>
+        /// <param name="steps">Сами шаги запуска.</param>
+        /// <param name="windowIsUp">Главное окно уже показано пользователю.</param>
+        /// <param name="report">Рассказать пользователю и журналу, что случилось.</param>
+        /// <param name="shutdown">Завершить приложение (и отпустить замок единственного экземпляра).</param>
+        /// <returns>Задача, завершающаяся вместе с запуском.</returns>
+        internal static async Task RunAsync(
+            Func<Task> steps, Func<bool> windowIsUp, Action<Exception> report, Action shutdown) {
+            try {
+                await steps().ConfigureAwait(true);
+            }
+            catch (Exception ex) {
+                try {
+                    report(ex);
+                }
+                catch (Exception reportFailed) {
+                    // Даже рассказать не вышло — тем более нельзя остаться висеть без окна.
+                    BootLog.Append($"StartupGuard: сообщить об аварии не удалось: {reportFailed}");
+                }
+
+                if (!windowIsUp()) {
+                    shutdown();
+                }
             }
         }
     }
