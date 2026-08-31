@@ -362,6 +362,13 @@ namespace ChillHub.Core.Home {
     /// </summary>
     internal static class SteamModsInstall {
         /// <summary>
+        /// Что дальше после удачной починки. Установка доводит до игры сама, а починка
+        /// останавливается (см. <see cref="Mods.LaunchRunner"/>), и без этой фразы человек
+        /// остаётся перед кнопкой, не зная, что она уже запустит игру.
+        /// </summary>
+        private const string RepairNextStep = " Нажмите ещё раз, чтобы запустить игру.";
+
+        /// <summary>
         /// Объясняет по-человечески, почему копию в Steam не нашли.
         /// <para>
         /// Каждая ступень поиска — своя причина и свой следующий шаг. «Ошибка» здесь
@@ -394,6 +401,14 @@ namespace ChillHub.Core.Home {
 
         /// <summary>
         /// Переводит итог установки в строку для пользователя.
+        /// <para>
+        /// Строка идёт во всплывашку, а не в нижнюю панель: панель показывает ИДУЩУЮ
+        /// работу и уходит с экрана, когда её нет (см. <see cref="BottomBarLook"/> и
+        /// <see cref="QueueDone"/>). Отчёт о кончившейся починке, оставленный в панели,
+        /// держал бы её на экране до следующей закачки. Поэтому здесь же, одним
+        /// сообщением, говорится и что сделано, и что делать дальше: второй всплывашкой
+        /// сказать это нельзя — новая перебивает предыдущую.
+        /// </para>
         /// </summary>
         /// <param name="result">Что вернул <see cref="ModsService.EnsureAsync"/>.</param>
         /// <param name="gameTitle">Название игры.</param>
@@ -408,6 +423,7 @@ namespace ChillHub.Core.Home {
                 return failure;
             }
 
+            var next = repair ? RepairNextStep : string.Empty;
             switch (result.Outcome) {
                 case ModsSyncOutcome.NoModpack:
                     return $"У {title} нет активного модпака — устанавливать нечего.";
@@ -416,14 +432,14 @@ namespace ChillHub.Core.Home {
                     // пришёл сюда потому, что файлов недоставало, и ответ должен
                     // говорить именно о них.
                     return repair
-                        ? $"Файлы модпака в копии {title} из Steam на месте — восстанавливать нечего."
+                        ? $"Файлы модпака в копии {title} из Steam на месте — восстанавливать нечего.{next}"
                         : $"Моды в копии {title} из Steam уже актуальны.";
                 case ModsSyncOutcome.Installed:
                     // Объём скачанного называется, потому что установка «мгновенно и
                     // молча» после полутора гигабайт трафика выглядит как отказ.
                     var size = result.Downloaded > 0 ? $", скачано {HomeFormat.FormatSize(result.Downloaded)}" : string.Empty;
                     return repair
-                        ? $"Моды в копии {title} из Steam восстановлены: {result.Version}{size}."
+                        ? $"Моды в копии {title} из Steam восстановлены: {result.Version}{size}.{next}"
                         : $"Моды установлены в копию {title} из Steam: {result.Version}{size}.";
                 default:
                     return string.IsNullOrWhiteSpace(result.Message) ? failure : result.Message;

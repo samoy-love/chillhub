@@ -154,7 +154,24 @@ namespace ChillHub.Tests {
 
             Assert.Single(probe.Installed);
             Assert.Empty(probe.Launched);
-            Assert.Contains(probe.Statuses, t => t.Contains("восстановлены", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// Конец починки не остаётся в нижней панели: она показывает идущую работу и
+        /// уходит с экрана, когда работы нет, а отчёт о кончившейся держал её на экране
+        /// до следующей закачки. Рассказывает об исходе всплывашка — её пишет сама
+        /// установка (Home.SteamModsInstall.DescribeResult).
+        /// </summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task ПочинкаНеОставляетОтчётВНижнейПанели() {
+            var probe = new Probe { InstallResult = true };
+            this.ModdedDir();
+
+            await probe.Runner().RunAsync(
+                Game(), this.Option(LaunchAction.RepairMods), Off, this.Probes(modsInSteam: "pack-1"));
+
+            Assert.Empty(probe.Statuses);
         }
 
         /// <summary>Починка и установка с нуля различаются в подписях, а не только внутри.</summary>
@@ -170,16 +187,19 @@ namespace ChillHub.Tests {
             Assert.Equal(new[] { true, false }, probe.Repairs);
         }
 
-        /// <summary>Неудачная починка молчит о победе: строки «восстановлены» нет.</summary>
+        /// <summary>
+        /// Неудачная починка игру не запускает: следующий щелчок должен снова предложить
+        /// починку, а не игру с половиной модов.
+        /// </summary>
         /// <returns>Задача теста.</returns>
         [Fact]
-        public async Task НеудачнаяПочинкаНеОтчитываетсяОбУспехе() {
+        public async Task НеудачнаяПочинкаИгруНеЗапускает() {
             var probe = new Probe { InstallResult = false };
 
             await probe.Runner().RunAsync(Game(), this.Option(LaunchAction.RepairMods), Off, this.Probes());
 
             Assert.Single(probe.Installed);
-            Assert.DoesNotContain(probe.Statuses, t => t.Contains("восстановлены", StringComparison.Ordinal));
+            Assert.Empty(probe.Launched);
         }
 
         /// <summary>Пока моды ставятся, починка не начинает вторую запись в ту же папку.</summary>

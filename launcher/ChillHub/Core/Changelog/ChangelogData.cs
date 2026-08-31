@@ -44,6 +44,13 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
+                Version = "1.6.39",
+                Date = "2026-08-31",
+                Changes = new[] {
+                    "Восстановив моды, лаунчер говорит, что делать дальше, и не оставляет внизу экрана лишнюю строку.",
+                },
+            },
+            new ChangelogRelease {
                 Version = "1.6.38",
                 Date = "2026-08-31",
                 Changes = new[] {
