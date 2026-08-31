@@ -208,7 +208,10 @@ namespace ChillHub.Tests {
             var plan = await PlanTestData.PlanAsync(PlanTestData.Manifest(mf), dir.Root);
 
             var task = Assert.Single(plan.Downloads);
-            Assert.Equal(PlanTestData.ContentBase + "/data/sub dir/pack.bin", task.Url);
+
+            // Пробел уезжает закодированным: адрес собирается посегментно, чтобы имя
+            // с '#' не обрывалось на решётке (см. ContentUrlEncodingTests).
+            Assert.Equal(PlanTestData.ContentBase + "/data/sub%20dir/pack.bin", task.Url);
             Assert.Equal("aabb", task.Sha256);
             Assert.Equal("ccdd", task.Blake3);
             Assert.True(task.Executable);

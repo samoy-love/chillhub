@@ -316,7 +316,7 @@ namespace ChillHub.Core.SelfUpdate {
                 plan.Downloads.Add(new FileTask {
                     RelativePath = rel,
                     Size = f.Size,
-                    Url = contentBase.TrimEnd('/') + "/" + rel,
+                    Url = ContentUrl.Combine(contentBase, rel),
                     Blake3 = f.Blake3,
                     Sha256 = f.Sha256,
                     Executable = f.Executable,

@@ -183,7 +183,7 @@ namespace ChillHub.Tests {
             dir.WriteFile("old.dll", "мусор");
 
             var plan = NewPlan(dir.Root, toDelete: new[] { bad, "old.dll" }, emptyDirs: new[] { "mods" });
-            Finish(plan, changesDisk: true);
+            Finish(plan);
 
             Assert.False(File.Exists(dir.PathTo("old.dll")), "следующий за отклонённым файл не удалён");
             Assert.True(Directory.Exists(dir.PathTo("mods")), "каталог из манифеста не создан");
@@ -195,8 +195,9 @@ namespace ChillHub.Tests {
         public void МаркерСнимаетсяПослеПолногоПрименения() {
             using var dir = new TempDir();
             dir.WriteFile(SimpleSyncService.UpdateMarkerFileName, "version=1.0.0");
+            dir.WriteFile("old.dll", "мусор");
 
-            Finish(NewPlan(dir.Root), changesDisk: true);
+            Finish(NewPlan(dir.Root, toDelete: new[] { "old.dll" }));
 
             Assert.False(SimpleSyncService.HasUpdateMarker(dir.Root));
         }
@@ -211,7 +212,7 @@ namespace ChillHub.Tests {
             using var dir = new TempDir();
             dir.WriteFile(SimpleSyncService.UpdateMarkerFileName, "version=1.0.0");
 
-            Finish(NewPlan(dir.Root, version: "2.0.0"), changesDisk: true, deferred: new[] { "game.exe" });
+            Finish(NewPlan(dir.Root, version: "2.0.0"), deferred: new[] { "game.exe" });
 
             Assert.True(SimpleSyncService.HasUpdateMarker(dir.Root));
 
@@ -222,17 +223,33 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
-        /// Если фаза активации ничего не меняла, маркер не ставился — и снимать его нельзя:
-        /// он мог остаться от предыдущего, действительно оборвавшегося обновления.
+        /// Пустой план снимает маркер, оставшийся от прошлого прогона.
+        /// <para>
+        /// Прежде здесь было обратное правило: «ничего не меняли — значит, маркер чужой,
+        /// не трогаем». Оно и заводило игру в тупик. Занятый файл (запущенная игра,
+        /// античит) заменяется по перезагрузке через MoveFileEx, а маркер MoveFileEx не
+        /// трогает: после перезагрузки диск уже соответствует манифесту, но проверка
+        /// статуса видит маркер и требует обновиться. «Обновить» строит пустой план —
+        /// и уходил по тому самому «снимать нечего». Выхода из петли в интерфейсе не
+        /// было, помогало только удаление файла руками.
+        /// </para>
+        /// <para>
+        /// Пустой план и есть доказательство, что диск сошёлся с манифестом: это единственное,
+        /// что маркер утверждает. Незавершённое обновление пустого плана не даёт — недостающие
+        /// файлы попали бы в загрузки, а отложенные замены отслеживаются отдельно (см.
+        /// <see cref="ОтложенныеФайлыОставляютМаркерНаМесте"/>).
+        /// </para>
         /// </summary>
         [Fact]
-        public void БезИзмененийНаДискеЧужойМаркерНеСнимается() {
+        public void ПустойПланСнимаетМаркерОтПрошлогоПрогона() {
             using var dir = new TempDir();
-            dir.WriteFile(SimpleSyncService.UpdateMarkerFileName, "version=1.0.0");
+            dir.WriteFile(SimpleSyncService.UpdateMarkerFileName, "version=1.0.0\r\nstate=reboot-required\r\npendingFile=game.exe");
 
-            Finish(NewPlan(dir.Root), changesDisk: false);
+            Finish(NewPlan(dir.Root));
 
-            Assert.True(SimpleSyncService.HasUpdateMarker(dir.Root));
+            Assert.False(
+                SimpleSyncService.HasUpdateMarker(dir.Root),
+                "маркер пережил прогон с пустым планом — игра навсегда «требуется обновление»");
         }
 
         /// <summary>Отсутствующий файл из ToDelete — не ошибка: план мог устареть.</summary>
@@ -258,13 +275,13 @@ namespace ChillHub.Tests {
                 EmptyDirsToCreate = new List<string>(emptyDirs ?? System.Array.Empty<string>()),
             };
 
-        private static void Finish(DiffPlan plan, bool changesDisk = false, IEnumerable<string>? deferred = null) {
+        private static void Finish(DiffPlan plan, IEnumerable<string>? deferred = null) {
             var bag = new ConcurrentBag<string>();
             foreach (var d in deferred ?? System.Array.Empty<string>()) {
                 bag.Add(d);
             }
 
-            SimpleSyncService.FinishPlan(plan, bag, changesDisk, CancellationToken.None);
+            SimpleSyncService.FinishPlan(plan, bag, CancellationToken.None);
         }
     }
 }

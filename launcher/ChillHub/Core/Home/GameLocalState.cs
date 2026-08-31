@@ -121,7 +121,16 @@ namespace ChillHub.Core.Home {
                 Directory.CreateDirectory(root);
                 var marker = Path.Combine(root, VersionMarkerFileName);
                 var toWrite = (version ?? string.Empty).Trim();
-                File.WriteAllText(marker, toWrite);
+
+                // Атомарно, как и соседние маркеры. File.WriteAllText — это truncate +
+                // write, и обрыв между ними (выключили питание сразу после установки —
+                // а это как раз момент, когда только что записали гигабайты) оставлял
+                // ПУСТОЙ .version. Пустой он читается как «версия неизвестна», быстрый
+                // путь проверки статуса не совпадает уже никогда, и каждый запуск для
+                // этой игры заново обходит все файлы. Само по себе это не лечится:
+                // маркер переписывается только после синхронизации, а её не запускают —
+                // план пустой, игра выглядит свежей.
+                Update.AtomicFile.WriteAllText(marker, toWrite, SelfUpdate.SelfUpdateRules.Utf8NoBom);
                 Logging.Logger.Info($"WriteLocalVersion gid={gameId} value='{toWrite}'");
                 return true;
             }
