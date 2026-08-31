@@ -928,7 +928,9 @@ test('старые версии: кнопка появляется только 
   assert.match(html, /ln-prune/, 'кнопка чистки есть');
   assert.match(html, /Старых версий: 2/, 'сказано, сколько версий уйдёт');
   assert.match(html, /3\.0 КБ/, 'сказано, сколько места освободится');
-  assert.match(html, /data-vers="1\.0\.0 1\.0\.1"/, 'кнопка знает поимённо, что удаляет');
+  // Поимённый список в разметку не запекается: он был бы снимком на момент
+  // отрисовки, а обработчик перечитывает его в момент клика.
+  assert.doesNotMatch(html, /data-vers/, 'список удаляемого в кнопке не хранится');
 
   const nothing = window.versionsTableHtml(items, '1.0.1', 'ln');
   assert.doesNotMatch(nothing, /ln-prune/, 'удалять нечего — кнопки нет');
@@ -938,25 +940,30 @@ test('старые версии: диалог называет остающее�
   const calls = [];
   const fetchStub = async (url, opts) => {
     calls.push({ url: String(url), method: (opts && opts.method) || 'GET' });
-    return jsonResponse({ deleted: ['1.0.0', '1.0.1'], failed: [], active: '1.0.3' });
+    // Набор под удаление обработчик перечитывает с сервера перед диалогом.
+    // Шим admin.js переписывает /admin/list в /admin/api/list.
+    if (String(url).includes('/api/list?')) {
+      return jsonResponse({ latest: '1.0.4', items: ['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4'].map((v) => ({ version: v })) });
+    }
+    return jsonResponse({ deleted: ['1.0.0', '1.0.1'], failed: [], active: '1.0.4' });
   };
   const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
   const opened = installFakeBootstrap(window);
 
   const root = document.createElement('div');
-  root.innerHTML = '<button class="vr-prune" data-vers="1.0.0 1.0.1" data-latest="1.0.3">Удалить старые версии</button>';
+  root.innerHTML = '<button class="vr-prune">Удалить старые версии</button>';
   document.body.appendChild(root);
 
   let refreshed = 0;
   window.bindVersionActions(root, 'vr', 'launcher', async () => { refreshed++; });
 
   root.querySelector('.vr-prune').dispatchEvent(new window.Event('click', { bubbles: true }));
-  await new Promise((res) => setTimeout(res, 0));
+  for (let i = 0; i < 5; i++) await new Promise((res) => setTimeout(res, 0));
 
   const modal = opened[opened.length - 1];
   assert.match(modal.querySelector('.modal-title').textContent, /Удалить старые версии\?/);
   const body = modal.textContent;
-  assert.match(body, /Останутся активная 1\.0\.3, две версии перед ней и всё, что новее/, 'сначала — что остаётся');
+  assert.match(body, /Останутся активная 1\.0\.4, две версии перед ней и всё, что новее/, 'сначала — что остаётся');
   assert.match(body, /1\.0\.0, 1\.0\.1/, 'удаляемое перечислено поимённо');
 
   modal.querySelector('#__ask_ok').dispatchEvent(new window.Event('click'));
@@ -971,17 +978,20 @@ test('старые версии: диалог называет остающее�
 
 test('старые версии: отказ в диалоге не шлёт ни одного запроса', async (t) => {
   const calls = [];
-  const fetchStub = async (url) => { calls.push(String(url)); return jsonResponse({}); };
+  const fetchStub = async (url) => {
+    calls.push(String(url));
+    return jsonResponse({ latest: '1.0.4', items: ['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4'].map((v) => ({ version: v })) });
+  };
   const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
   const opened = installFakeBootstrap(window);
 
   const root = document.createElement('div');
-  root.innerHTML = '<button class="vr-prune" data-vers="1.0.0 1.0.1" data-latest="1.0.3"></button>';
+  root.innerHTML = '<button class="vr-prune"></button>';
   document.body.appendChild(root);
   window.bindVersionActions(root, 'vr', 'launcher', async () => {});
 
   root.querySelector('.vr-prune').dispatchEvent(new window.Event('click', { bubbles: true }));
-  await new Promise((res) => setTimeout(res, 0));
+  for (let i = 0; i < 5; i++) await new Promise((res) => setTimeout(res, 0));
   opened[opened.length - 1].dispatchEvent(new window.Event('hidden.bs.modal'));
   for (let i = 0; i < 5; i++) await new Promise((res) => setTimeout(res, 0));
 
@@ -990,18 +1000,24 @@ test('старые версии: отказ в диалоге не шлёт ни
 
 test('старые версии: застрявшую версию называют, а не выдают чистку за успешную', async (t) => {
   const notes = [];
-  const fetchStub = async () => jsonResponse({ deleted: ['1.0.0'], failed: ['1.0.1'], active: '1.0.3' });
+  const fetchStub = async (url) => {
+    // Шим admin.js переписывает /admin/list в /admin/api/list.
+    if (String(url).includes('/api/list?')) {
+      return jsonResponse({ latest: '1.0.4', items: ['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4'].map((v) => ({ version: v })) });
+    }
+    return jsonResponse({ deleted: ['1.0.0'], failed: ['1.0.1'], active: '1.0.4' });
+  };
   const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
   const opened = installFakeBootstrap(window);
   window.notifyLevel = (msg, level) => { notes.push({ msg: String(msg), level }); };
 
   const root = document.createElement('div');
-  root.innerHTML = '<button class="vr-prune" data-vers="1.0.0 1.0.1" data-latest="1.0.3"></button>';
+  root.innerHTML = '<button class="vr-prune"></button>';
   document.body.appendChild(root);
   window.bindVersionActions(root, 'vr', 'launcher', async () => {});
 
   root.querySelector('.vr-prune').dispatchEvent(new window.Event('click', { bubbles: true }));
-  await new Promise((res) => setTimeout(res, 0));
+  for (let i = 0; i < 5; i++) await new Promise((res) => setTimeout(res, 0));
   opened[opened.length - 1].querySelector('#__ask_ok').dispatchEvent(new window.Event('click'));
   for (let i = 0; i < 5; i++) await new Promise((res) => setTimeout(res, 0));
 
