@@ -192,7 +192,7 @@ func TestRecalcLatestReportsAFailedRepoint(t *testing.T) {
 	mustMkdirAll(t, blocked)
 	mustWriteFile(t, filepath.Join(blocked, "child"), "x")
 
-	recalcLatest(manDir)
+	recalcLatest(manDir, "1.1.0")
 
 	if !strings.Contains(logs.String(), "cannot repoint") {
 		t.Fatalf("a dangling latest.json was not reported: %q", logs.String())
@@ -210,9 +210,46 @@ func TestRecalcLatestPicksTheHighestRemainingVersion(t *testing.T) {
 		mustWriteFile(t, filepath.Join(manDir, v+".json"), "{}")
 	}
 
-	recalcLatest(manDir)
+	recalcLatest(manDir, "1.3.0")
 
 	if got := latestVersion(t, root, "game"); got != "1.2.0" {
 		t.Fatalf("latest = %q, want 1.2.0", got)
+	}
+}
+
+// Rolling back a bad release must not publish the build that was uploaded but
+// never activated. Deleting the active version used to repoint latest.json at
+// the highest manifest on disk, which is the staged one — every launcher then
+// "updated" to a release nobody had switched on.
+func TestRecalcLatestNeverPromotesAStagedVersion(t *testing.T) {
+	root := t.TempDir()
+	manDir := filepath.Join(root, "manifests", "game")
+	mustMkdirAll(t, manDir)
+	for _, v := range []string{"1.6.24", "1.6.25", "1.7.0"} {
+		mustWriteFile(t, filepath.Join(manDir, v+".json"), "{}")
+	}
+
+	// 1.6.25 was active; 1.7.0 is uploaded but not activated.
+	recalcLatest(manDir, "1.6.25")
+
+	if got := latestVersion(t, root, "game"); got != "1.6.24" {
+		t.Fatalf("latest = %q, want 1.6.24 (the previous release, not the staged 1.7.0)", got)
+	}
+}
+
+// When the deleted version was the oldest one, there is no published version
+// left. Removing the pointer is the honest answer: naming a staged build here
+// would publish it just as surely as picking the maximum did.
+func TestRecalcLatestDropsThePointerWhenNothingOlderRemains(t *testing.T) {
+	root := t.TempDir()
+	manDir := filepath.Join(root, "manifests", "game")
+	mustMkdirAll(t, manDir)
+	mustWriteFile(t, filepath.Join(manDir, "2.0.0.json"), "{}")
+	mustWriteFile(t, filepath.Join(manDir, "latest.json"), `{"version":"1.0.0"}`)
+
+	recalcLatest(manDir, "1.0.0")
+
+	if _, err := os.Stat(filepath.Join(manDir, "latest.json")); !os.IsNotExist(err) {
+		t.Fatalf("latest.json survived and now names a staged build: %v", err)
 	}
 }

@@ -760,7 +760,7 @@ func (h *Handlers) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 	}
 	// adjust latest.json if it pointed to deleted version
 	if readLatestVersion(manDir) == ver {
-		recalcLatest(manDir)
+		recalcLatest(manDir, ver)
 	}
 	adminutil.WriteJSON(w, map[string]string{"status": "ok"})
 }
@@ -914,20 +914,39 @@ func (h *Handlers) PruneVersions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// recalcLatest repoints latest.json at the highest remaining version, or
-// removes it when the game has none left.
-func recalcLatest(manDir string) {
+// recalcLatest repoints latest.json after the active version was deleted, or
+// removes the file when there is nothing left to point it at.
+//
+// The replacement is the highest version OLDER than the deleted one, never
+// simply the highest remaining. A version newer than the active one is a build
+// that was uploaded and deliberately NOT activated — that is the whole reason
+// upload and activate are two buttons, and both handleBuilds in the public API
+// and PruneVersions here treat everything above the active version as staged.
+// Picking the maximum turned deleting the active version — which is how a bad
+// release is rolled back — into publishing the next unreleased build to every
+// launcher, in one click, with no way back other than deleting that one too.
+//
+// When nothing older survives, latest.json goes away rather than naming a newer
+// build: a game with no published version is a state the clients already handle
+// (hasLatest=false), and it is the honest answer. Activating the staged build
+// stays an explicit action.
+func recalcLatest(manDir, deleted string) {
 	entries, _ := os.ReadDir(manDir)
-	vers := manifestVersions(entries)
 	latestPath := filepath.Join(manDir, "latest.json")
-	if len(vers) == 0 {
-		// no versions remain: remove latest.json
+	older := make([]string, 0)
+	for _, v := range manifestVersions(entries) {
+		// Same trap as in ListVersions: version order is not string order
+		// (1.1.9 sorts after 1.1.10 as text), so the comparison is semantic.
+		if adminutil.CompareVersions(v, deleted) < 0 {
+			older = append(older, v)
+		}
+	}
+	if len(older) == 0 {
+		// Nothing published remains: remove latest.json.
 		_ = os.Remove(latestPath)
 		return
 	}
-	// Same trap as in ListVersions: the highest version is not the last one in
-	// string order (1.1.9 > 1.1.10 lexicographically).
-	if err := writeLatestJSON(manDir, adminutil.MaxVersion(vers)); err != nil {
+	if err := writeLatestJSON(manDir, adminutil.MaxVersion(older)); err != nil {
 		log.Printf("[builds] cannot repoint %s: %v", latestPath, err)
 	}
 }
