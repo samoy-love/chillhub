@@ -176,6 +176,26 @@ namespace ChillHub.Tests {
             });
         }
 
+        /// <summary>
+        /// Повторный вход не плодит подписок: Loaded приходит не по одному разу, а вторая
+        /// подписка на то же свойство звала бы пересчёт панели дважды на каждое изменение.
+        /// </summary>
+        [Fact]
+        public void ПовторныйВходНеПлодитПодписок() {
+            UiThread.Run(() => {
+                var (page, status, _, calls, watch) = Follow();
+                using (watch) {
+                    Enter(page);
+                    Enter(page);
+                    calls.Clear();
+
+                    status.Text = "Проверяем файлы игры…";
+
+                    Assert.Single(calls);
+                }
+            });
+        }
+
         /// <summary>Повторный уход со страницы безопасен: Unloaded приходит не по одному разу.</summary>
         [Fact]
         public void ПовторныйУходСоСтраницыБезопасен() {
