@@ -44,6 +44,13 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
+                Version = "1.6.37",
+                Date = "2026-08-31",
+                Changes = new[] {
+                    "Кнопка «Обновить» у игры с модами больше не появляется снова сразу после обновления.",
+                },
+            },
+            new ChangelogRelease {
                 Version = "1.6.36",
                 Date = "2026-08-31",
                 Changes = new[] {
