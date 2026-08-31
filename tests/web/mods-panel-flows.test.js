@@ -69,10 +69,12 @@ const VERSIONS = {
     {
       version: 'Team-Pack-1.0.0', displayName: 'Pack', active: true,
       packages: 3, files: 7, bytes: 1024, missing: 0, createdAt: '2026-08-27T10:00:00',
+      rebuildable: true,
     },
     {
       version: 'Old-Pack-0.9.0', displayName: 'Old', active: false,
       packages: 2, files: 4, bytes: 512, missing: 1, createdAt: '2026-08-20T10:00:00',
+      rebuildable: true,
     },
   ],
   updates: [{ version: 'Team-Pack-1.0.0', namespace: 'Team', name: 'Pack', latest: '1.1.0', deprecated: false }],
@@ -234,6 +236,70 @@ test('сборка ведёт прогресс по потоку событий'
   // Полоса доходит до конца: сборка идёт минутами, и молчащий экран
   // неотличим от зависшей.
   assert.strictEqual(document.querySelector('[data-md="progress"]').style.width, '100%');
+});
+
+// clickVersionButton нажимает кнопку в списке собранных версий — ту самую,
+// которую видит оператор, а не подставную.
+async function clickVersionButton(document, attr, value) {
+  const btn = document.querySelector('[data-md="versions"] [' + attr + '="' + value + '"]');
+  assert.ok(btn, 'кнопка ' + attr + '="' + value + '" не отрисована');
+  btn.click();
+  await settle();
+  return btn;
+}
+
+test('пересборка версии уходит на свой эндпоинт и ведёт прогресс', async () => {
+  // Кнопка появилась ради починенной раскладки: состав тот же, правила новые.
+  // Если она уйдёт на /build, то соберёт СОСЕДНЮЮ версию пакета — не то, что
+  // обещает подпись, и оператор узнает об этом только по списку версий.
+  const events = [
+    { type: 'start', message: 'разбор состава' },
+    { type: 'resolved', total: 2, message: 'пакетов: 2' },
+    { type: 'package', step: 2, total: 2, message: 'Team-Pack-1.0.0' },
+    { type: 'done', message: 'собрано: 7 файлов' },
+  ];
+  const { document, calls } = await mount(function (url) {
+    if (!url.startsWith('/admin/api/mods/rebuild')) return null;
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(events.map((e) => JSON.stringify(e)).join('\n') + '\n'),
+    });
+  });
+
+  await clickVersionButton(document, 'data-md-again', 'Team-Pack-1.0.0');
+
+  const sent = calls.find((c) => c.url.startsWith('/admin/api/mods/rebuild'));
+  assert.ok(sent, 'запроса на пересборку не было');
+  assert.strictEqual(String(sent.opts.body), 'gameId=lethal-company&version=Team-Pack-1.0.0');
+  assert.ok(
+    !calls.some((c) => c.url.startsWith('/admin/api/mods/build')),
+    'пересборка ушла на сборку нового пакета');
+  assert.strictEqual(document.querySelector('[data-md="progress"]').style.width, '100%');
+});
+
+test('пересборка активной версии предупреждает, что заменит её у игроков', async () => {
+  // Активную версию пересборка заменяет БЕЗ отдельной активации: игроки
+  // получат новое дерево на следующей проверке. Спросить об этом обязаны.
+  const asked = [];
+  const ctx = await mount(function (url) {
+    if (!url.startsWith('/admin/api/mods/rebuild')) return null;
+    return Promise.resolve({ ok: true, text: () => Promise.resolve('') });
+  });
+  ctx.window.confirm = (text) => {
+    asked.push(text);
+    return false;
+  };
+
+  await clickVersionButton(ctx.document, 'data-md-again', 'Team-Pack-1.0.0');
+  assert.match(asked[0], /активна/);
+  assert.ok(
+    !ctx.calls.some((c) => c.url.startsWith('/admin/api/mods/rebuild')),
+    'отказались в диалоге, а запрос всё равно ушёл');
+
+  // У неактивной версии заменять у игроков нечего — и пугать незачем.
+  asked.length = 0;
+  await clickVersionButton(ctx.document, 'data-md-again', 'Old-Pack-0.9.0');
+  assert.doesNotMatch(asked[0], /активна/);
 });
 
 test('фаза разбора состава показывает счётчик, а не молчит', async () => {
