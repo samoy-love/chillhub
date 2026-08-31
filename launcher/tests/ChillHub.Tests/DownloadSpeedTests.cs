@@ -115,16 +115,17 @@ namespace ChillHub.Tests {
 
         /// <summary>
         /// Гоняет позицию очереди через два отчёта и собирает показанную скорость.
-        /// Между отчётами полсекунды: короче — счётчик считает интервал шумом.
         /// <para>
-        /// ЖДЁМ САМУ СКОРОСТЬ, А НЕ ЗАВЕРШЕНИЕ ЗАКАЧКИ. Отчёты о ходе работы едут
-        /// через <see cref="Progress{T}"/>, а он доставляет их НЕ сразу: обработчик
-        /// вызывается из пула потоков уже после того, как <c>ExecuteAsync</c> вернул
-        /// управление. Значит последний отчёт — тот единственный, в котором скорость
-        /// не ноль, — приходит уже ПОСЛЕ ItemCompleted. Тест, ждавший завершения,
-        /// успевал прочитать список до него и видел одни нули: на моей машине почти
-        /// никогда, на раннике CI — через раз, и виноватым каждый раз оказывался
-        /// посторонний PR.
+        /// Между отчётами секунда по часам, которые двигает сам тест: счётчик отбрасывает
+        /// интервалы короче полусекунды, и ждать их настоящими часами — значит гадать,
+        /// успеет ли загруженная машина отмерить паузу длиннее порога.
+        /// </para>
+        /// <para>
+        /// Второй отчёт уходит только после того, как очередь показала первый: отчёты едут
+        /// через <see cref="Progress{T}"/>, то есть асинхронно, и без этой отсечки оба
+        /// доезжают до счётчика разом — с нулевым интервалом между ними, а то и задом наперёд.
+        /// Ждём тоже второй отчёт, а не завершение позиции: скорость приходит именно в нём,
+        /// и он вполне может опоздать за <c>ItemCompleted</c>.
         /// </para>
         /// </summary>
         /// <param name="networkGrows">Растёт ли счётчик пришедшего по сети.</param>
@@ -137,37 +138,46 @@ namespace ChillHub.Tests {
                 ExeRelativePath = "game.exe",
             };
 
+            var clock = new TestClock();
+            var firstShown = Signal();
+            var secondShown = Signal();
+
             using var queue = new DownloadQueue(
                 gid => gid == "a" ? game : null,
                 () => "https://example.test",
-                () => new TwoReportSync(networkGrows));
+                () => new TwoReportSync(networkGrows, clock, firstShown.Task),
+                clock: clock.Now);
 
             var speeds = new List<double>();
-            var done = new TaskCompletionSource();
+            var done = Signal();
             queue.ItemProgress += item => {
                 lock (speeds) {
                     speeds.Add(item.BytesPerSecond);
                 }
 
-                // Дождались того, ради чего звали: считать дальше нечего.
-                if (item.BytesPerSecond > 0) {
-                    done.TrySetResult();
+                if (item.BytesDownloaded >= TwoReportSync.StepBytes * 2) {
+                    secondShown.TrySetResult();
+                }
+                else if (item.BytesDownloaded >= TwoReportSync.StepBytes) {
+                    firstShown.TrySetResult();
                 }
             };
-
-            // Запасной выход для случая, когда ненулевой скорости и не должно быть:
-            // проверка «с диска скорость не растёт» иначе ждала бы её до таймаута.
             queue.ItemCompleted += _ => done.TrySetResult();
             queue.ItemRemoved += _ => done.TrySetResult();
 
             Assert.True(queue.Enqueue("a"));
-            await done.Task.WaitAsync(TimeSpan.FromSeconds(20));
+            await Task.WhenAll(done.Task, secondShown.Task).WaitAsync(TimeSpan.FromSeconds(20));
 
             lock (speeds) {
                 Assert.NotEmpty(speeds);
                 return speeds.ToList();
             }
         }
+
+        /// <summary>Одноразовый сигнал между потоками. Продолжения — не на том, кто его подал.</summary>
+        /// <returns>Незавершённый источник задачи.</returns>
+        private static TaskCompletionSource Signal()
+            => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         private static SyncProgress Last(List<SyncProgress> reports) => reports[^1];
 
@@ -240,9 +250,18 @@ namespace ChillHub.Tests {
         /// только когда тест этого просит.
         /// </summary>
         private sealed class TwoReportSync : ISyncService {
-            private readonly bool networkGrows;
+            /// <summary>Сколько «скачивается» за один отчёт.</summary>
+            internal const long StepBytes = 5_000_000;
 
-            internal TwoReportSync(bool networkGrows) => this.networkGrows = networkGrows;
+            private readonly bool networkGrows;
+            private readonly TestClock clock;
+            private readonly Task firstShown;
+
+            internal TwoReportSync(bool networkGrows, TestClock clock, Task firstShown) {
+                this.networkGrows = networkGrows;
+                this.clock = clock;
+                this.firstShown = firstShown;
+            }
 
             public Task<Manifest> GetManifestAsync(string manifestUrl, CancellationToken ct)
                 => Task.FromResult(new Manifest());
@@ -255,19 +274,41 @@ namespace ChillHub.Tests {
                 => Task.FromResult(new DiffPlan());
 
             public async Task ExecuteAsync(DiffPlan plan, IProgress<SyncProgress> progress, CancellationToken ct) {
-                progress.Report(Step(1));
+                progress.Report(this.Step(1));
+
+                // Первый отчёт только засевает базу — второй шлём, когда он дошёл до счётчика.
+                await this.firstShown.WaitAsync(ct).ConfigureAwait(false);
 
                 // Счётчик скорости отбрасывает интервалы короче полусекунды как шум.
-                await Task.Delay(600, ct).ConfigureAwait(false);
-                progress.Report(Step(2));
+                this.clock.Advance(1000);
+                progress.Report(this.Step(2));
             }
 
             private SyncProgress Step(int n) => new SyncProgress {
                 Stage = "Downloading",
-                BytesDownloaded = 5_000_000L * n,
-                NetworkBytes = this.networkGrows ? 5_000_000L * n : 0,
-                TotalBytes = 10_000_000,
+                BytesDownloaded = StepBytes * n,
+                NetworkBytes = this.networkGrows ? StepBytes * n : 0,
+                TotalBytes = StepBytes * 2,
             };
+        }
+
+        /// <summary>
+        /// Часы, которые двигает тест. Скорость считается по интервалу между отчётами, и
+        /// интервал здесь задаётся, а не выжидается: настоящая пауза на загруженной машине
+        /// может оказаться и короче, и длиннее заказанной.
+        /// </summary>
+        private sealed class TestClock {
+            // Не с нуля: нулевое показание счётчик скорости считает «ещё не измеряли»
+            // и на таком отчёте только засевает базу.
+            private long ms = 1_000_000;
+
+            /// <summary>Текущее показание в миллисекундах — таким его видит счётчик скорости.</summary>
+            /// <returns>Миллисекунды.</returns>
+            internal long Now() => Interlocked.Read(ref this.ms);
+
+            /// <summary>Переводит часы вперёд.</summary>
+            /// <param name="delta">На сколько миллисекунд.</param>
+            internal void Advance(long delta) => Interlocked.Add(ref this.ms, delta);
         }
 
         /// <summary>Сеть, которая отвечает так, как велит тест.</summary>

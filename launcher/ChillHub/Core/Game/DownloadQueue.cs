@@ -34,6 +34,9 @@ namespace ChillHub.Core.Game {
         private readonly Func<string> baseApiProvider;
         private readonly Func<ISyncService> syncServiceFactory;
 
+        /// <summary>Часы счётчика скорости: миллисекунды, монотонно. Подменяются в тестах.</summary>
+        private readonly Func<long> clock;
+
         /// <summary>Вопрос «да/нет» игроку: текст, заголовок. Задаётся с UI-потока.</summary>
         private readonly Func<string, string, bool> confirm;
         private readonly SemaphoreSlim workSignal = new(0);
@@ -50,14 +53,21 @@ namespace ChillHub.Core.Game {
         /// Фабрика службы синхронизации файлов — новый экземпляр на каждую позицию, как это
         /// делает <c>GamePage</c>. По умолчанию — <see cref="SimpleSyncService"/>.
         /// </param>
+        /// <param name="confirm">Вопрос «да/нет» игроку: текст, заголовок. Задаётся с UI-потока.</param>
+        /// <param name="clock">
+        /// Часы счётчика скорости в миллисекундах. По умолчанию — <see cref="Environment.TickCount64"/>;
+        /// тест подставляет свои, чтобы задавать интервал между отчётами явно, а не выжидать его.
+        /// </param>
         internal DownloadQueue(
             Func<string, GameInfo?> gameLookup,
             Func<string> baseApiProvider,
             Func<ISyncService>? syncServiceFactory = null,
-            Func<string, string, bool>? confirm = null) {
+            Func<string, string, bool>? confirm = null,
+            Func<long>? clock = null) {
             this.gameLookup = gameLookup ?? throw new ArgumentNullException(nameof(gameLookup));
             this.baseApiProvider = baseApiProvider ?? throw new ArgumentNullException(nameof(baseApiProvider));
             this.syncServiceFactory = syncServiceFactory ?? (() => new SimpleSyncService());
+            this.clock = clock ?? (() => Environment.TickCount64);
 
             // Без вопроса проверка молча сносила бы всё, чего нет в манифесте: моды,
             // скриншоты, сохранения в папке игры. Некому спросить — значит, не удаляем:
@@ -126,7 +136,12 @@ namespace ChillHub.Core.Game {
                     return false;
                 }
 
-                entry = new Entry(gameId, string.IsNullOrWhiteSpace(game.Title) ? gameId : game.Title, game.IconUrl, kind);
+                entry = new Entry(
+                    gameId,
+                    string.IsNullOrWhiteSpace(game.Title) ? gameId : game.Title,
+                    game.IconUrl,
+                    kind,
+                    this.clock);
                 this.items.Add(entry);
                 snapshot = this.SnapshotLocked();
             }
@@ -505,11 +520,14 @@ namespace ChillHub.Core.Game {
 
         /// <summary>Внутреннее изменяемое состояние позиции — наружу отдаём только снимки <see cref="QueueItem"/>.</summary>
         private sealed class Entry {
-            internal Entry(string gameId, string title, string iconUrl, QueueTaskKind kind) {
+            private readonly Func<long> clock;
+
+            internal Entry(string gameId, string title, string iconUrl, QueueTaskKind kind, Func<long> clock) {
                 this.GameId = gameId;
                 this.Title = title;
                 this.IconUrl = iconUrl ?? string.Empty;
                 this.Kind = kind;
+                this.clock = clock;
             }
 
             internal string GameId { get; }
@@ -559,7 +577,7 @@ namespace ChillHub.Core.Game {
             /// </summary>
             /// <param name="bytes">Сколько скачано всего на этот момент.</param>
             internal void UpdateSpeed(long bytes) {
-                var now = Environment.TickCount64;
+                var now = this.clock();
                 if (this.lastTicks == 0) {
                     this.lastTicks = now;
                     this.lastBytes = bytes;
