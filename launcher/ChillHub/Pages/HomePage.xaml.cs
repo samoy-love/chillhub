@@ -41,10 +41,6 @@ namespace ChillHub.Pages {
         private readonly HttpClient http = HttpClientProvider.Shared;
         private List<GameInfo> games = new();
 
-        // Держим подписку, чтобы снять её при выгрузке: AddValueChanged заводит сильную
-        // ссылку на контрол, и без снятия страница не собиралась бы сборщиком мусора.
-        private Core.Home.BottomBarWatch? bottomBarWatch;
-
         /// <summary>
         /// Каталог игр загружен: список либо заполнен ответом сервера, либо остался пустым
         /// (сервер недоступен). Ждёт этого ярлык с рабочего стола: он приходит выделить
@@ -382,9 +378,14 @@ namespace ChillHub.Pages {
                 // текст и полоса действительно меняются. Список наблюдаемого — в
                 // Core.Home.BottomBarWatch: забытое свойство здесь не падает, а молча
                 // оставляет внизу экрана строку пустоты.
-                this.bottomBarWatch = Core.Home.BottomBarWatch.Attach(
-                    this.StatusText, this.UpdateProgress, this.OnStatusTextChanged);
-                this.Unloaded += (s, e) => this.bottomBarWatch?.Dispose();
+                // Подписка привязана к жизни страницы: со страницы уходят в игру и в
+                // новость и возвращаются обратно. Заведённая один раз и снятая по первому
+                // Unloaded, она умирала навсегда — панель замирала в том виде, в каком её
+                // застал уход, и после удаления игры внизу оставалось «Готово» под панелью,
+                // которой полагалось исчезнуть. Держать её в поле не нужно: страница
+                // держит подписку своими же событиями ровно столько, сколько живёт сама.
+                _ = Core.Home.BottomBarWatch.Follow(
+                    this, this.StatusText, this.UpdateProgress, this.OnStatusTextChanged);
                 this.SyncBottomBarVisibility();
             }
             catch (Exception ex) {
