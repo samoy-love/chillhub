@@ -66,6 +66,36 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// Хвостовая обратная косая черта в названии не съедает закрывающую кавычку.
+        /// Разбор командной строки Windows читает <c>\"</c> как саму кавычку, и значение,
+        /// кончающееся на <c>\</c>, склеилось бы со следующим ключом — путь к exe уехал бы
+        /// внутрь названия.
+        /// </summary>
+        [Fact]
+        public void ХвостоваяКосаяЧертаВНазванииНеЛомаетСтроку() {
+            var args = ShortcutTarget.BuildArguments("gid", @"Игра\", @"C:\game.exe");
+
+            Assert.DoesNotContain("\\\"", args, System.StringComparison.Ordinal);
+
+            var parsed = ShortcutTarget.Parse(Split(args));
+
+            Assert.Equal("Игра", parsed!.Title);
+            Assert.Equal(@"C:\game.exe", parsed.ExePath);
+        }
+
+        /// <summary>
+        /// Перевод строки из названия уходит: та же строка потом хранится построчно
+        /// (см. <see cref="ShortcutRequestFile"/>), и лишняя строка сдвинула бы путь к игре.
+        /// </summary>
+        [Fact]
+        public void ПереводСтрокиИзНазванияУходит() {
+            var args = ShortcutTarget.BuildArguments("gid", "Игра\nвторая строка", @"C:\game.exe");
+
+            Assert.DoesNotContain("\n", args, System.StringComparison.Ordinal);
+            Assert.Equal("Игравторая строка", ShortcutTarget.Parse(Split(args))!.Title);
+        }
+
+        /// <summary>
         /// Чужие ключи молча пропускаются: лаунчер запускают и установщик, и апдейтер, и
         /// человек из консоли — падать на незнакомом аргументе ярлыку незачем.
         /// </summary>

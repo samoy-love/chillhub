@@ -179,11 +179,12 @@ namespace ChillHub.Core.Mods {
                 return;
             }
 
-            if (await this.ui.InstallMods(game, title, option.GameDir, true).ConfigureAwait(true)) {
-                // Строка состояния договаривает то, чего не видно по кнопке: работа
-                // кончилась, и следующий щелчок — уже игра.
-                this.ui.SetStatus("Моды восстановлены. Нажмите ещё раз, чтобы запустить игру.");
-            }
+            // Об исходе рассказывает сама установка — всплывашкой, и в ней же сказано,
+            // что следующий щелчок запускает игру (Home.SteamModsInstall.DescribeResult).
+            // Своей строки состояния тут нет намеренно: нижняя панель показывает ИДУЩУЮ
+            // работу и уходит, когда её нет, а отчёт о кончившейся починке оставлял её
+            // висеть на экране до следующей закачки.
+            await this.ui.InstallMods(game, title, option.GameDir, true).ConfigureAwait(true);
         }
     }
 }

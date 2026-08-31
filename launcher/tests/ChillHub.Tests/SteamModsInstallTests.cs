@@ -142,5 +142,53 @@ namespace ChillHub.Tests {
 
             Assert.Contains("нечего", SteamModsInstall.DescribeResult(result, "How to Fish"), System.StringComparison.Ordinal);
         }
+
+        // ---- Итог починки ----
+
+        /// <summary>
+        /// ГЛАВНОЕ ПРО ПОЧИНКУ: она останавливается, не доходя до игры, и сказать об этом
+        /// больше негде. Отчёт уходит всплывашкой (нижняя панель показывает идущую работу),
+        /// а вторую всплывашку показать нельзя — новая перебивает предыдущую. Значит,
+        /// «что дальше» обязано ехать в этом же сообщении.
+        /// </summary>
+        [Fact]
+        public void ПочинкаГоворитЧтоДелатьДальше() {
+            var installed = new ModsSyncResult(ModsSyncOutcome.Installed, "v1", 0, 0, string.Empty);
+            var nothing = new ModsSyncResult(ModsSyncOutcome.UpToDate, "v1", 0, 0, string.Empty);
+
+            Assert.Contains(
+                "Нажмите ещё раз",
+                SteamModsInstall.DescribeResult(installed, "How to Fish", repair: true),
+                System.StringComparison.Ordinal);
+            Assert.Contains(
+                "Нажмите ещё раз",
+                SteamModsInstall.DescribeResult(nothing, "How to Fish", repair: true),
+                System.StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Обычная установка доводит до игры сама, и звать нажать ещё раз ей незачем:
+        /// игра к этому моменту уже запускается.
+        /// </summary>
+        [Fact]
+        public void УстановкаНеЗовётНажиматьЕщёРаз() {
+            var result = new ModsSyncResult(ModsSyncOutcome.Installed, "v1", 0, 0, string.Empty);
+
+            Assert.DoesNotContain(
+                "Нажмите ещё раз",
+                SteamModsInstall.DescribeResult(result, "How to Fish"),
+                System.StringComparison.Ordinal);
+        }
+
+        /// <summary>Неудачная починка зовёт повторить починку, а не запускать игру.</summary>
+        [Fact]
+        public void НеудачнаяПочинкаНеЗовётЗапускать() {
+            var result = new ModsSyncResult(ModsSyncOutcome.Failed, "v1", 0, 0, string.Empty);
+
+            var text = SteamModsInstall.DescribeResult(result, "How to Fish", repair: true);
+
+            Assert.Contains("восстановить", text, System.StringComparison.Ordinal);
+            Assert.DoesNotContain("Нажмите ещё раз", text, System.StringComparison.Ordinal);
+        }
     }
 }

@@ -21,6 +21,27 @@ namespace ChillHub.Tests {
     /// </para>
     /// </summary>
     public class ShortcutRequestFileTests {
+        /// <summary>
+        /// ГЛАВНАЯ ЗАЩИТА ЗАПИСИ: название игры приходит с сервера, а запись построчная.
+        /// Перевод строки внутри названия сдвинул бы все строки, и путём к exe для
+        /// лаунчера стал бы кусок названия — то есть кнопка «Запустить игру» звала бы
+        /// запускать не то, что установлено.
+        /// </summary>
+        [Fact]
+        public void ПереводСтрокиВНазванииНеСдвигаетПутьКИгре() {
+            using var dir = new TempDir();
+            using (ShortcutRequestFile.OverrideDirForTests(dir.Root)) {
+                var sneaky = "Игра\nC:\\Windows\\System32\\calc.exe";
+                ShortcutRequestFile.Write(new ShortcutRequest("gid", sneaky, @"C:\Games\gid\game.exe"));
+
+                var consumed = ShortcutRequestFile.Consume();
+
+                Assert.NotNull(consumed);
+                Assert.Equal(@"C:\Games\gid\game.exe", consumed!.ExePath);
+                Assert.DoesNotContain("\n", consumed.Title, StringComparison.Ordinal);
+            }
+        }
+
         /// <summary>Записали — забрали: обычный путь ярлыка при живом лаунчере.</summary>
         [Fact]
         public void ЗаписанныйЗапросЗабираетсяЦеликом() {

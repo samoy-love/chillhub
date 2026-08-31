@@ -38,6 +38,12 @@ namespace ChillHub.Pages {
     public partial class HomePage : Page {
         private string BaseApi => ChillHub.Core.ConfigService.Current.ApiBaseUrl;
 
+        /// <summary>Завершается, когда каталог игр загружен, — см. <see cref="gamesLoaded"/>.</summary>
+        internal Task GamesLoaded => this.gamesLoaded.Task;
+
+        /// <summary>Показанный список игр: ярлыку нужно знать, есть ли в нём его игра.</summary>
+        internal IReadOnlyList<GameInfo> Games => this.games;
+
         private readonly HttpClient http = HttpClientProvider.Shared;
         private List<GameInfo> games = new();
 
@@ -50,37 +56,6 @@ namespace ChillHub.Pages {
         private readonly TaskCompletionSource<bool> gamesLoaded =
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        /// <summary>Завершается, когда каталог игр загружен, — см. <see cref="gamesLoaded"/>.</summary>
-        internal Task GamesLoaded => this.gamesLoaded.Task;
-
-        /// <summary>Показанный список игр: ярлыку нужно знать, есть ли в нём его игра.</summary>
-        internal IReadOnlyList<GameInfo> Games => this.games;
-
-        /// <summary>
-        /// Выделяет игру в списке по идентификатору — так с рабочего стола приходит ярлык
-        /// (см. <see cref="Core.Shell.ShortcutTarget"/>). Дальше человек видит обычную
-        /// главную: витрину этой игры, её состояние и кнопку запуска.
-        /// </summary>
-        /// <param name="gameId">Идентификатор игры.</param>
-        /// <returns>false, если такой игры в каталоге нет.</returns>
-        internal bool SelectGameById(string? gameId) {
-            var game = this.games?.FirstOrDefault(g =>
-                g != null && string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
-            if (game == null) {
-                return false;
-            }
-
-            // Набранный в поиске запрос мог отфильтровать эту игру из списка, а выделять
-            // скрытую строку бессмысленно: экран остался бы прежним, будто ярлык не нажимали.
-            // Фильтр переставит сам обработчик GameSearch_TextChanged.
-            if (!string.IsNullOrEmpty(this.GameSearchBox?.Text)) {
-                this.GameSearchBox.Text = string.Empty;
-            }
-
-            this.GameList.SelectedItem = game;
-            this.GameList.ScrollIntoView(game);
-            return true;
-        }
         private List<string> builds = new();
         // Идёт удаление локальных файлов игры: блокирует повторный запуск и установку
         private bool isDeleting = false;
@@ -2824,6 +2799,32 @@ namespace ChillHub.Pages {
                     option.Modded ? option.GameDir : null,
                     option.Target);
             }
+        }
+
+        /// <summary>
+        /// Выделяет игру в списке по идентификатору — так с рабочего стола приходит ярлык
+        /// (см. <see cref="Core.Shell.ShortcutTarget"/>). Дальше человек видит обычную
+        /// главную: витрину этой игры, её состояние и кнопку запуска.
+        /// </summary>
+        /// <param name="gameId">Идентификатор игры.</param>
+        /// <returns>false, если такой игры в каталоге нет.</returns>
+        internal bool SelectGameById(string? gameId) {
+            var game = this.games?.FirstOrDefault(g =>
+                g != null && string.Equals(g.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+            if (game == null) {
+                return false;
+            }
+
+            // Набранный в поиске запрос мог отфильтровать эту игру из списка, а выделять
+            // скрытую строку бессмысленно: экран остался бы прежним, будто ярлык не нажимали.
+            // Фильтр переставит сам обработчик GameSearch_TextChanged.
+            if (!string.IsNullOrEmpty(this.GameSearchBox?.Text)) {
+                this.GameSearchBox.Text = string.Empty;
+            }
+
+            this.GameList.SelectedItem = game;
+            this.GameList.ScrollIntoView(game);
+            return true;
         }
 
         /// <summary>

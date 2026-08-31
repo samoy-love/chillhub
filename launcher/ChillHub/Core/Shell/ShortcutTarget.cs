@@ -123,12 +123,41 @@ namespace ChillHub.Core.Shell {
             return v.Length >= 2 && v[0] == '"' && v[^1] == '"' ? v[1..^1] : v;
         }
 
+        /// <summary>
+        /// Значение, пригодное для одной строки: без переводов строки и прочих
+        /// управляющих знаков.
+        /// <para>
+        /// Название игры приходит с сервера, а хранится и передаётся оно построчно
+        /// (см. <see cref="ShortcutRequestFile"/>). Перевод строки внутри названия
+        /// сдвинул бы все строки записи, и путь к exe лаунчер прочитал бы из середины
+        /// названия. Проще не пустить такой знак дальше сервера, чем потом гадать,
+        /// какая строка чему принадлежит.
+        /// </para>
+        /// </summary>
+        /// <param name="value">Значение.</param>
+        /// <returns>То же значение в одну строку.</returns>
+        internal static string OneLine(string? value) {
+            if (string.IsNullOrWhiteSpace(value)) {
+                return string.Empty;
+            }
+
+            var sb = new StringBuilder(value.Length);
+            foreach (var c in value) {
+                if (!char.IsControl(c)) {
+                    sb.Append(c);
+                }
+            }
+
+            return sb.ToString().Trim();
+        }
+
         /// <summary>Дописывает пару «ключ значение», пропуская пустое значение.</summary>
         /// <param name="sb">Куда дописываем.</param>
         /// <param name="option">Ключ.</param>
         /// <param name="value">Значение.</param>
         private static void Append(StringBuilder sb, string option, string? value) {
-            if (string.IsNullOrWhiteSpace(value)) {
+            var text = Escaped(value);
+            if (text.Length == 0) {
                 return;
             }
 
@@ -136,13 +165,27 @@ namespace ChillHub.Core.Shell {
                 sb.Append(' ');
             }
 
-            // Кавычки внутри значения выбрасываем: название игры приходит с сервера, а
-            // экранировать их в строке аргументов ярлыка нечем — оболочка разобрала бы
-            // такую строку не так, как мы её собирали, и путь к exe уехал бы по частям.
-            sb.Append(option)
-              .Append(" \"")
-              .Append(value.Trim().Replace("\"", string.Empty, StringComparison.Ordinal))
-              .Append('"');
+            sb.Append(option).Append(" \"").Append(text).Append('"');
         }
+
+        /// <summary>
+        /// Готовит значение к жизни внутри кавычек командной строки.
+        /// <para>
+        /// Кавычки внутри значения выбрасываем: название игры приходит с сервера, а
+        /// экранировать их в строке аргументов ярлыка нечем — оболочка разобрала бы
+        /// такую строку не так, как мы её собирали, и путь к exe уехал бы по частям.
+        /// </para>
+        /// <para>
+        /// Хвостовая обратная косая черта уходит по той же причине, хотя выглядит
+        /// безобидно: разбор командной строки Windows читает <c>\"</c> как саму кавычку,
+        /// то есть значение, кончающееся на <c>\</c>, съедает закрывающую кавычку и
+        /// склеивается со следующим ключом. У пути к exe такого хвоста не бывает, а
+        /// название игры пишет человек в админке.
+        /// </para>
+        /// </summary>
+        /// <param name="value">Значение.</param>
+        /// <returns>Значение, которое кавычки не сломает.</returns>
+        private static string Escaped(string? value)
+            => OneLine(value).Replace("\"", string.Empty, StringComparison.Ordinal).TrimEnd('\\');
     }
 }

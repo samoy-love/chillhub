@@ -63,17 +63,27 @@ namespace ChillHub.Core.Shell {
         /// <param name="request">Запрос ярлыка; null — обычный запуск, писать нечего.</param>
         /// <param name="nowUtc">Момент записи; по умолчанию — сейчас.</param>
         internal static void Write(ShortcutRequest? request, DateTime? nowUtc = null) {
-            if (request == null || string.IsNullOrWhiteSpace(request.GameId)) {
+            // Запись построчная, а название игры приходит с сервера: перевод строки внутри
+            // него сдвинул бы все строки, и путём к exe для лаунчера стал бы кусок названия.
+            // Чистим при записи, а не при чтении, — иначе правило пришлось бы повторять
+            // всюду, где эту запись читают.
+            var gameId = ShortcutTarget.OneLine(request?.GameId);
+            if (gameId.Length == 0) {
                 return;
             }
 
             try {
                 Directory.CreateDirectory(AppDir);
                 var stamp = (nowUtc ?? DateTime.UtcNow).Ticks.ToString(CultureInfo.InvariantCulture);
-                File.WriteAllLines(RequestPath, new[] { stamp, request.GameId, request.Title, request.ExePath });
+                File.WriteAllLines(RequestPath, new[] {
+                    stamp,
+                    gameId,
+                    ShortcutTarget.OneLine(request!.Title),
+                    ShortcutTarget.OneLine(request.ExePath),
+                });
             }
             catch (Exception ex) {
-                Logging.Logger.Warn($"ShortcutRequestFile.Write('{request.GameId}'): {ex.Message}");
+                Logging.Logger.Warn($"ShortcutRequestFile.Write('{gameId}'): {ex.Message}");
             }
         }
 
