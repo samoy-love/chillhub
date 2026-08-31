@@ -50,6 +50,10 @@ func TestDeleteVersionRejectsIncompleteAndUnsafeInput(t *testing.T) {
 		{"traversal in the game id", "gameId=../../etc&version=1.0.0"},
 		{"traversal in the version", "gameId=game&version=../../etc"},
 		{"separator in the version", "gameId=game&version=1.0.0/files"},
+		// Dots and nothing else: IsSafeVersion accepts this one, because
+		// versions are allowed to contain dots. See the test below for what it
+		// costs when the joined path is not re-checked.
+		{"the version is just dot-dot", "gameId=game&version=.."},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -111,6 +115,46 @@ func TestDeleteVersionKeepsTheContentWhenTheManifestCannotBeRemoved(t *testing.T
 	}
 }
 
+// version=".." passes adminutil.IsSafeVersion — it is dots and nothing else,
+// and versions are allowed dots. Joined onto the game directory it collapses to
+// the content root, and the os.RemoveAll that follows takes out every game on
+// the server while the endpoint answers "ok".
+func TestDeleteVersionCannotEscapeTheGameDirectory(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	seedManifest(t, h, "game", "1.0.0", true)
+	seedManifest(t, h, "other", "2.0.0", true)
+	victim := filepath.Join(root, "content", "other", "2.0.0", "files")
+	mustMkdirAll(t, victim)
+	mustWriteFile(t, filepath.Join(victim, "app.exe"), "payload")
+
+	w := deleteRequest(t, h, http.MethodPost, "gameId=game&version=..")
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("%d %s, want 400", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(victim, "app.exe")); err != nil {
+		t.Fatalf("another game's content was deleted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "content")); err != nil {
+		t.Fatalf("the content root itself was removed: %v", err)
+	}
+}
+
+// The mass cleanup shares removeVersion with the single-row delete, so the same
+// guard has to hold there. A manifest file named "...json" yields the version
+// "..", and nothing stops such a file from existing on disk.
+func TestPruneVersionsSkipsAManifestThatNamesNoDirectory(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	if err := h.removeVersion("game", ".."); err == nil {
+		t.Fatal("removeVersion accepted a version that escapes its game directory")
+	}
+	if _, err := os.Stat(filepath.Join(root, "content")); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("unexpected state of the content root: %v", err)
+	}
+}
+
 // The version directory must go even when it holds files marked read-only or a
 // deep tree — the disk-space report the panel shows is computed from what is
 // actually left behind.
@@ -148,7 +192,7 @@ func TestRecalcLatestReportsAFailedRepoint(t *testing.T) {
 	mustMkdirAll(t, blocked)
 	mustWriteFile(t, filepath.Join(blocked, "child"), "x")
 
-	recalcLatest(manDir)
+	recalcLatest(manDir, "1.1.0")
 
 	if !strings.Contains(logs.String(), "cannot repoint") {
 		t.Fatalf("a dangling latest.json was not reported: %q", logs.String())
@@ -166,9 +210,46 @@ func TestRecalcLatestPicksTheHighestRemainingVersion(t *testing.T) {
 		mustWriteFile(t, filepath.Join(manDir, v+".json"), "{}")
 	}
 
-	recalcLatest(manDir)
+	recalcLatest(manDir, "1.3.0")
 
 	if got := latestVersion(t, root, "game"); got != "1.2.0" {
 		t.Fatalf("latest = %q, want 1.2.0", got)
+	}
+}
+
+// Rolling back a bad release must not publish the build that was uploaded but
+// never activated. Deleting the active version used to repoint latest.json at
+// the highest manifest on disk, which is the staged one — every launcher then
+// "updated" to a release nobody had switched on.
+func TestRecalcLatestNeverPromotesAStagedVersion(t *testing.T) {
+	root := t.TempDir()
+	manDir := filepath.Join(root, "manifests", "game")
+	mustMkdirAll(t, manDir)
+	for _, v := range []string{"1.6.24", "1.6.25", "1.7.0"} {
+		mustWriteFile(t, filepath.Join(manDir, v+".json"), "{}")
+	}
+
+	// 1.6.25 was active; 1.7.0 is uploaded but not activated.
+	recalcLatest(manDir, "1.6.25")
+
+	if got := latestVersion(t, root, "game"); got != "1.6.24" {
+		t.Fatalf("latest = %q, want 1.6.24 (the previous release, not the staged 1.7.0)", got)
+	}
+}
+
+// When the deleted version was the oldest one, there is no published version
+// left. Removing the pointer is the honest answer: naming a staged build here
+// would publish it just as surely as picking the maximum did.
+func TestRecalcLatestDropsThePointerWhenNothingOlderRemains(t *testing.T) {
+	root := t.TempDir()
+	manDir := filepath.Join(root, "manifests", "game")
+	mustMkdirAll(t, manDir)
+	mustWriteFile(t, filepath.Join(manDir, "2.0.0.json"), "{}")
+	mustWriteFile(t, filepath.Join(manDir, "latest.json"), `{"version":"1.0.0"}`)
+
+	recalcLatest(manDir, "1.0.0")
+
+	if _, err := os.Stat(filepath.Join(manDir, "latest.json")); !os.IsNotExist(err) {
+		t.Fatalf("latest.json survived and now names a staged build: %v", err)
 	}
 }

@@ -10,6 +10,7 @@ package builds
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -94,8 +95,12 @@ func (h *Handlers) manifestsDir(gid string) string {
 // the same volume. Returns the staging dir and the files root inside it.
 func (h *Handlers) stageVersionDir(gid, ver string) (string, string, error) {
 	// gid and ver are proven safe by adminutil.IsSafeGameID/IsSafeVersion at
-	// every entry point before publication starts; neither can contain a
-	// separator or a "..".
+	// every entry point before publication starts, so neither can contain a
+	// separator. IsSafeVersion alone does NOT stop a ver of "..", but this
+	// function only ever CREATES a directory, so the worst a ".." would do here
+	// is make a staging directory one level up and fail on the manifest write.
+	// The destructive counterpart, removeVersion, does not get to rely on that
+	// and re-checks the joined paths itself.
 	parent := filepath.Join(h.root, "content", gid)
 	if err := os.MkdirAll(parent, contentDirPerm); err != nil {
 		return "", "", err
@@ -743,29 +748,56 @@ func (h *Handlers) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 	manDir := h.manifestsDir(gid)
 	if err := h.removeVersion(gid, ver); err != nil {
 		log.Printf("[builds] delete %s/%s: %v", gid, ver, err)
+		// A version that does not name a directory inside its game is a bad
+		// request, not a server fault: answering 500 would send the panel into
+		// a retry loop over something that can never succeed.
+		if errors.Is(err, errUnsafeVersionPath) {
+			http.Error(w, "invalid gameId or version", http.StatusBadRequest)
+			return
+		}
 		http.Error(w, "failed to delete version", http.StatusInternalServerError)
 		return
 	}
 	// adjust latest.json if it pointed to deleted version
 	if readLatestVersion(manDir) == ver {
-		recalcLatest(manDir)
+		recalcLatest(manDir, ver)
 	}
 	adminutil.WriteJSON(w, map[string]string{"status": "ok"})
 }
 
+// errUnsafeVersionPath means the version label, joined onto the content root,
+// pointed outside the directory it is supposed to name. Nothing this package
+// publishes can produce such a label; a request that carries one is either a
+// probe or a mistake, and either way it must not reach os.RemoveAll.
+var errUnsafeVersionPath = errors.New("builds: version path escapes its game directory")
+
 // removeVersion erases one published version: its manifest and its extracted
 // content directory. gid and ver must already have passed the safety checks.
+//
+// THE JOINED PATHS ARE RE-CHECKED HERE, and that is not belt-and-braces.
+// adminutil.IsSafeVersion accepts ".." — it allows dots because versions are
+// semver, and ".." is dots and nothing else; adminutil's own
+// TestVersionCheckAloneDoesNotStopDotDot exists to say so and to require the
+// second check from every caller that turns a version into a path. Without it
+// version=".." collapses content/{gid}/.. to the content root and this
+// function's os.RemoveAll takes out every game on the server, answering "ok".
 //
 // A manifest that is not there is not a failure: the panel retries a delete
 // that timed out, two admins can click the same row, and the mass cleanup below
 // walks a directory listing that may be a moment out of date.
 func (h *Handlers) removeVersion(gid, ver string) error {
-	if err := os.Remove(filepath.Join(h.manifestsDir(gid), ver+".json")); err != nil {
+	manDir := h.manifestsDir(gid)
+	manPath := filepath.Join(manDir, ver+".json")
+	contentDir := filepath.Join(h.root, "content", gid)
+	filesDir := filepath.Join(contentDir, ver)
+	if !adminutil.EnsureWithin(manDir, manPath) || !adminutil.EnsureWithin(contentDir, filesDir) {
+		return fmt.Errorf("%w: %s/%s", errUnsafeVersionPath, gid, ver)
+	}
+	if err := os.Remove(manPath); err != nil {
 		if !os.IsNotExist(err) {
 			return err
 		}
 	}
-	filesDir := filepath.Join(h.root, "content", gid, ver)
 	if err := os.RemoveAll(filesDir); err != nil {
 		// A locked file, a lost permission or a mount point under the version
 		// directory leaves gigabytes on disk while the panel counts the version as
@@ -882,20 +914,39 @@ func (h *Handlers) PruneVersions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// recalcLatest repoints latest.json at the highest remaining version, or
-// removes it when the game has none left.
-func recalcLatest(manDir string) {
+// recalcLatest repoints latest.json after the active version was deleted, or
+// removes the file when there is nothing left to point it at.
+//
+// The replacement is the highest version OLDER than the deleted one, never
+// simply the highest remaining. A version newer than the active one is a build
+// that was uploaded and deliberately NOT activated — that is the whole reason
+// upload and activate are two buttons, and both handleBuilds in the public API
+// and PruneVersions here treat everything above the active version as staged.
+// Picking the maximum turned deleting the active version — which is how a bad
+// release is rolled back — into publishing the next unreleased build to every
+// launcher, in one click, with no way back other than deleting that one too.
+//
+// When nothing older survives, latest.json goes away rather than naming a newer
+// build: a game with no published version is a state the clients already handle
+// (hasLatest=false), and it is the honest answer. Activating the staged build
+// stays an explicit action.
+func recalcLatest(manDir, deleted string) {
 	entries, _ := os.ReadDir(manDir)
-	vers := manifestVersions(entries)
 	latestPath := filepath.Join(manDir, "latest.json")
-	if len(vers) == 0 {
-		// no versions remain: remove latest.json
+	older := make([]string, 0)
+	for _, v := range manifestVersions(entries) {
+		// Same trap as in ListVersions: version order is not string order
+		// (1.1.9 sorts after 1.1.10 as text), so the comparison is semantic.
+		if adminutil.CompareVersions(v, deleted) < 0 {
+			older = append(older, v)
+		}
+	}
+	if len(older) == 0 {
+		// Nothing published remains: remove latest.json.
 		_ = os.Remove(latestPath)
 		return
 	}
-	// Same trap as in ListVersions: the highest version is not the last one in
-	// string order (1.1.9 > 1.1.10 lexicographically).
-	if err := writeLatestJSON(manDir, adminutil.MaxVersion(vers)); err != nil {
+	if err := writeLatestJSON(manDir, adminutil.MaxVersion(older)); err != nil {
 		log.Printf("[builds] cannot repoint %s: %v", latestPath, err)
 	}
 }
