@@ -204,19 +204,6 @@ func (h *Handlers) Publish(s *StagedTree, updateLatest bool, onFile func(path st
 		total += f.Size
 	}
 
-	// The lock covers promote + manifest write, exactly as the upload paths do:
-	// two publications of the same version otherwise destroy each other's
-	// backup, and the winner of the content rename is not necessarily the one
-	// that writes the manifest last.
-	unlock := lockPublish(string(s.ns)+"/"+s.gameID, s.version)
-	defer unlock()
-
-	finalDir := filepath.Join(h.ContentDirFor(s.ns, s.gameID), s.version)
-	if err := promoteVersionDir(s.Dir, finalDir); err != nil {
-		return res, fmt.Errorf("builds: promoting the version directory: %w", err)
-	}
-	s.Dir = "" // promoted; Discard must not delete the live version
-
 	m := manifest{
 		Version:   s.version,
 		BuildID:   s.version,
@@ -225,10 +212,32 @@ func (h *Handlers) Publish(s *StagedTree, updateLatest bool, onFile func(path st
 		Files:     files,
 		EmptyDirs: emptyDirs,
 	}
-	path, _, err := h.writeManifestTo(h.ManifestsDirFor(s.ns, s.gameID), m, updateLatest)
-	if err != nil {
+	// Before the promote, while the staged tree is still discardable.
+	if err := publishable(m); err != nil {
 		return res, err
 	}
+
+	// The lock covers promote + manifest write, exactly as the upload paths do:
+	// two publications of the same version otherwise destroy each other's
+	// backup, and the winner of the content rename is not necessarily the one
+	// that writes the manifest last.
+	unlock := lockPublish(string(s.ns)+"/"+s.gameID, s.version)
+	defer unlock()
+
+	finalDir := filepath.Join(h.ContentDirFor(s.ns, s.gameID), s.version)
+	prom, err := beginPromote(s.Dir, finalDir)
+	if err != nil {
+		return res, fmt.Errorf("builds: promoting the version directory: %w", err)
+	}
+	s.Dir = "" // promoted; Discard must not delete the live version
+
+	// See Upload: the replaced tree comes home if the manifest cannot be written.
+	path, _, err := h.writeManifestTo(h.ManifestsDirFor(s.ns, s.gameID), m, updateLatest)
+	if err != nil {
+		prom.Rollback(err)
+		return res, err
+	}
+	prom.Commit()
 
 	return PublishResult{
 		Version: s.version, Files: len(files), Bytes: total, ManifestPath: path,
@@ -286,13 +295,27 @@ func (h *Handlers) DeletePublished(ns Namespace, gid, version string) error {
 		return fmt.Errorf("builds: version %q is the active one; activate another version first", version)
 	}
 
-	manifestsRoot := filepath.Join(h.root, "manifests")
-	contentRoot := filepath.Join(h.root, "content")
-	manPath := filepath.Join(h.ManifestsDirFor(ns, gid), version+".json")
-	conDir := filepath.Join(h.ContentDirFor(ns, gid), version)
-	if !adminutil.EnsureWithin(manifestsRoot, manPath) || !adminutil.EnsureWithin(contentRoot, conDir) {
-		return errors.New("builds: refusing to delete outside the content root")
+	// ANCHORED ON THE VERSION'S OWN PARENT, not on the content root.
+	//
+	// A version of ".." collapses content/_mods/{gid}/.. to content/_mods, which
+	// is comfortably inside the content root: the check passed and os.RemoveAll
+	// took out every modpack of every game while the endpoint answered "ok". The
+	// only base that says anything useful here is the directory the version is
+	// supposed to be a child of — and it has to be a strict child, because a
+	// version of "." resolves to the parent itself.
+	manDir := h.ManifestsDirFor(ns, gid)
+	conParent := h.ContentDirFor(ns, gid)
+	manPath := filepath.Join(manDir, version+".json")
+	conDir := filepath.Join(conParent, version)
+	if !adminutil.EnsureStrictlyWithin(manDir, manPath) || !adminutil.EnsureStrictlyWithin(conParent, conDir) {
+		return errors.New("builds: refusing to delete outside the version directory")
 	}
+
+	// The same lock the publishing paths take. Without it a delete can land
+	// between a concurrent promote and its manifest write, leaving a published
+	// manifest whose files are gone — every client then 404s on every file.
+	unlock := lockPublish(string(ns)+"/"+gid, version)
+	defer unlock()
 
 	// The manifest goes first: once it is gone the version is invisible to
 	// every reader, and a failure to remove the tree leaves a stray directory

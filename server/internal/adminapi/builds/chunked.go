@@ -513,8 +513,19 @@ func (h *Handlers) UploadChunk(w http.ResponseWriter, r *http.Request) {
 		m.Received[idx] = true
 	}
 	m.Status = "uploading"
-	_ = h.writeUploadMeta(m)
+	metaErr := h.writeUploadMeta(m)
 	uploadMu.Unlock()
+	if metaErr != nil {
+		// ОТМЕТКА О ЧАНКЕ — ЭТО И ЕСТЬ ДОСТАВКА. Ошибка записи meta.json (том
+		// кончился ровно на том, чем занята многогигабайтная заливка)
+		// отбрасывалась, а ответ был «ok»: клиент к этому чанку больше не
+		// возвращался, а UploadComplete отвечал «missing chunk N» про чанк,
+		// который физически лежит в part-файле. Повторный complete это не чинит
+		// никогда, и связать отказ с той единственной строкой в журнале нечем.
+		log.Printf("[upload:chunk] meta not stored uploadId=%s index=%d: %v", id, idx, metaErr)
+		http.Error(w, "upload storage error", http.StatusInternalServerError)
+		return
+	}
 	adminutil.WriteJSON(w, map[string]any{"status": "ok", "bytes": int(n), "writeMs": time.Since(t0).Milliseconds()})
 }
 
@@ -782,22 +793,32 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 		Files:     files,
 		EmptyDirs: emptyDirs,
 	}
+	// Before the promote, while stageDir is still discardable: see
+	// prepareManifest.
+	if err := publishable(mOut); err != nil {
+		nw.fail(http.StatusBadRequest, "the build cannot be published: "+err.Error())
+		return
+	}
 	// Everything is extracted and hashed: publish the build in one rename.
 	// See lockPublish: promote and the manifest write must not interleave with
 	// another publication of the same version.
 	unlock := lockPublish(m.GameID, m.Version)
 	defer unlock()
-	if err := promoteVersionDir(stageDir, finalVerDir); err != nil {
+	prom, err := beginPromote(stageDir, finalVerDir)
+	if err != nil {
 		streamError(nw, fl, "activate failed: "+err.Error())
 		return
 	}
 	promoted = true
+	// See Upload: the backup goes only after the manifest is written.
 	// update latest.json is opted-in by client via existing API; here keep minimal
 	outPath, _, err := h.writeManifest(mOut, false)
 	if err != nil {
+		prom.Rollback(err)
 		streamError(nw, fl, err.Error())
 		return
 	}
+	prom.Commit()
 	// The archive has served its purpose. Dropping it here — rather than waiting
 	// out the janitor's 12 hours — is what keeps a 30 GB upload from occupying
 	// the volume long after the build is live.
