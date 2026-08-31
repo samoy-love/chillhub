@@ -1,11 +1,15 @@
 package builds
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"ChillHub/server/internal/adminutil"
@@ -127,6 +131,42 @@ type PublishResult struct {
 	Files        int
 	Bytes        int64
 	ManifestPath string
+
+	// TreeDigest identifies the CONTENT of the published tree, independent of
+	// its version name. See treeDigest.
+	TreeDigest string
+}
+
+// treeDigest fingerprints what a version actually contains.
+//
+// ИМЕНИ ВЕРСИИ НЕДОСТАТОЧНО, И ЭТО НЕ ТЕОРИЯ.
+//
+// Модпак публикуется под именем вида «Автор-Пак-9.5.0», и это имя пакета на
+// Thunderstore, а не номер нашей сборки. Пересобрав тот же пак изменившимся
+// конвейером, мы публикуем ДРУГОЕ дерево под ТЕМ ЖЕ именем — а лаунчер решал
+// «нужно ли обновиться», сравнивая ровно имена. Исправленная раскладка так и
+// осталась бы на сервере, а у игроков лежала бы прежняя.
+//
+// Считается по путям и хешам файлов, отсортированным: время сборки сюда не
+// входит намеренно. Пересборка, давшая тот же результат, обязана оставить
+// отпечаток прежним, иначе каждая пересборка звала бы всех игроков обновляться
+// впустую — и звала бы зря ровно столько раз, сколько нужно, чтобы на это
+// перестали обращать внимание.
+func treeDigest(files []manifestFile) string {
+	sorted := make([]manifestFile, len(files))
+	copy(sorted, files)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Path < sorted[j].Path })
+
+	h := sha256.New()
+	for _, f := range sorted {
+		_, _ = io.WriteString(h, f.Path)
+		_, _ = io.WriteString(h, "\n")
+		_, _ = io.WriteString(h, f.Blake3)
+		_, _ = io.WriteString(h, "\n")
+	}
+	// Половины хеша хватает: это метка «то же самое или другое», а не защита от
+	// подбора. Короткая метка ещё и читается в логе целиком.
+	return hex.EncodeToString(h.Sum(nil))[:32]
 }
 
 // Publish hashes the staged tree, promotes it over any previous copy of the
@@ -192,6 +232,7 @@ func (h *Handlers) Publish(s *StagedTree, updateLatest bool, onFile func(path st
 
 	return PublishResult{
 		Version: s.version, Files: len(files), Bytes: total, ManifestPath: path,
+		TreeDigest: treeDigest(files),
 	}, nil
 }
 

@@ -149,6 +149,7 @@ func (s *server) apiRoutes() []route {
 		// proxies them verbatim and their NDJSON bodies must not be buffered
 		// by an alias route nobody configured.
 		{path: "/admin/api/mods/build", handler: md.Build, noAlias: true},
+		{path: "/admin/api/mods/rebuild", handler: md.Rebuild, noAlias: true},
 		{path: "/admin/api/mods/import", handler: md.Import, noAlias: true},
 
 		// Per-game screenshot gallery.

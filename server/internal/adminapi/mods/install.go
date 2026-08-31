@@ -78,6 +78,13 @@ type Layout struct {
 	// recognised as "this is the config route" rather than mod content.
 	byLeaf map[string]InstallRule
 
+	// writers remembers which package wrote each path, and dlls which package
+	// shipped each assembly file name. Both exist for the same reason, and it
+	// is not bookkeeping for its own sake — see Collisions.
+	writers map[string]string
+	dlls    map[string][]string
+	clashes []Collision
+
 	// casing remembers, per build, which spelling of each path already exists:
 	// lower-cased path -> the path actually written.
 	//
@@ -99,9 +106,11 @@ func NewLayout(def R2modmanDef) (*Layout, error) {
 		return nil, errors.New("mods: game has no install rules in the ecosystem schema")
 	}
 	l := &Layout{
-		rules:  def.InstallRules,
-		byLeaf: make(map[string]InstallRule, len(def.InstallRules)),
-		casing: make(map[string]string),
+		rules:   def.InstallRules,
+		byLeaf:  make(map[string]InstallRule, len(def.InstallRules)),
+		casing:  make(map[string]string),
+		writers: make(map[string]string),
+		dlls:    make(map[string][]string),
 	}
 	for _, r := range def.InstallRules {
 		leaf := routeLeaf(r.Route)
@@ -135,6 +144,80 @@ func routeLeaf(route string) string {
 	return strings.ToLower(parts[len(parts)-1])
 }
 
+// Collision is one place where two packages of the same build met.
+type Collision struct {
+	// Kind is "path" — the second package overwrote the first one's file —
+	// or "assembly": two packages shipped a DLL under the same name into
+	// their own folders, which collide at load time instead of on disk.
+	Kind string `json:"kind"`
+	// What is the path in the game folder, or the assembly file name.
+	What string `json:"what"`
+	// By lists the packages involved, in install order.
+	By []string `json:"by"`
+}
+
+// Collisions reports where two packages of this build stepped on each other.
+//
+// ЗАЧЕМ ЭТО ВООБЩЕ СЧИТАЕТСЯ.
+//
+// Раскладка — единственное место, которое видит КАЖДЫЙ путь сборки, и до сих
+// пор она молча позволяла последнему писавшему победить. Так чужой BepInEx
+// переписал BepInEx/core, и заметили это только сверкой готовой папки с
+// r2modman вручную. Резолвер тот случай теперь не допускает, но правило,
+// закрывающее один случай, не закрывает класс: маршруты приходят из схемы
+// Thunderstore и могут измениться, а модпаки собирают живые люди.
+//
+// Считаются две разные встречи.
+//
+// "path" — второй пакет записал файл поверх первого. Общие по замыслу
+// маршруты (BepInEx/config, trackingMethod "none") сюда не идут: там перекрытие
+// и есть смысл — конфиги модпака заменяют настройки отдельных модов.
+//
+// "assembly" — два пакета принесли DLL с одним именем, каждый в свою папку. На
+// диске они не сталкиваются, зато сталкиваются в загрузчике: BepInEx возьмёт
+// один плагин из двух. Именно так выглядел rob_gaming-Driver рядом с
+// public_ParticleSystem-Driver — 66 МБ старой сборки и 403 КБ новой, обе
+// DriverMod.dll. Проверка на живом модпаке из 288 пакетов и 307 имён DLL дала
+// РОВНО ОДНО срабатывание — то самое. Ложных нет.
+func (l *Layout) Collisions() []Collision {
+	out := append([]Collision(nil), l.clashes...)
+	for name, by := range l.dlls {
+		if len(by) > 1 {
+			out = append(out, Collision{Kind: "assembly", What: name, By: by})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].What < out[j].What
+	})
+	return out
+}
+
+// note records one written file against the package that wrote it.
+func (l *Layout) note(pkg ResolvedPackage, dest string, shared bool) {
+	if shared {
+		return
+	}
+	key := strings.ToLower(dest)
+	if first, ok := l.writers[key]; ok && first != pkg.FullName {
+		l.clashes = append(l.clashes, Collision{Kind: "path", What: dest, By: []string{first, pkg.FullName}})
+	} else if !ok {
+		l.writers[key] = pkg.FullName
+	}
+
+	// Загрузчик сюда не идёт: его DLL — это ядро BepInEx, а не плагин, и оно
+	// в сборке заведомо одно.
+	if pkg.IsLoader || !strings.HasSuffix(key, ".dll") {
+		return
+	}
+	name := path.Base(key)
+	if by := l.dlls[name]; len(by) == 0 || by[len(by)-1] != pkg.FullName {
+		l.dlls[name] = append(by, pkg.FullName)
+	}
+}
+
 // InstallPackage extracts one package archive into root according to the
 // layout. budget caps the total bytes written across the whole build.
 //
@@ -158,12 +241,13 @@ func (l *Layout) InstallPackage(root string, pkg ResolvedPackage, zipPath string
 			return written, fmt.Errorf("mods: %s: %w", pkg.FullName, err)
 		}
 
-		dest, keep := l.destination(pkg, rel, subdir)
+		dest, shared, keep := l.destination(pkg, rel, subdir)
 		if !keep {
 			continue
 		}
 
 		dest = l.sameCasing(dest)
+		l.note(pkg, dest, shared)
 
 		full := filepath.Join(root, filepath.FromSlash(dest))
 		if !adminutil.EnsureWithin(root, full) {
@@ -197,8 +281,10 @@ func (l *Layout) sameCasing(dest string) string {
 }
 
 // destination maps one archive-relative path to a path inside the game folder.
-// keep is false for entries that are dropped outright.
-func (l *Layout) destination(pkg ResolvedPackage, rel, subdir string) (dest string, keep bool) {
+// keep is false for entries that are dropped outright; shared is true when the
+// route holds every mod's files together on purpose, so two packages writing
+// the same path there is the design and not a clash.
+func (l *Layout) destination(pkg ResolvedPackage, rel, subdir string) (dest string, shared, keep bool) {
 	parts := strings.Split(rel, "/")
 
 	if pkg.IsLoader {
@@ -208,18 +294,18 @@ func (l *Layout) destination(pkg ResolvedPackage, rel, subdir string) (dest stri
 		// package's own readme and icon — is left behind.
 		if pkg.LoaderRoot != "" {
 			if len(parts) < 2 || !strings.EqualFold(parts[0], pkg.LoaderRoot) {
-				return "", false
+				return "", false, false
 			}
 			parts = parts[1:]
 		}
 		if len(parts) == 1 && basePackageFiles[strings.ToLower(parts[0])] {
-			return "", false
+			return "", false, false
 		}
-		return path.Join(parts...), true
+		return path.Join(parts...), false, true
 	}
 
 	if len(parts) == 1 && basePackageFiles[strings.ToLower(parts[0])] {
-		return "", false
+		return "", false, false
 	}
 
 	// The archive may name its route itself — either by the full path
@@ -237,7 +323,7 @@ func (l *Layout) destination(pkg ResolvedPackage, rel, subdir string) (dest stri
 		rule = *l.monomodRule
 	}
 	if len(tail) == 0 {
-		return "", false
+		return "", false, false
 	}
 
 	route := strings.Trim(strings.ReplaceAll(rule.Route, "\\", "/"), "/")
@@ -246,9 +332,9 @@ func (l *Layout) destination(pkg ResolvedPackage, rel, subdir string) (dest stri
 		// No per-mod folder. This is what makes BepInEx/config a single shared
 		// directory, and it is also why one modpack's configs overwrite the
 		// defaults of the individual mods it bundles.
-		return path.Join(route, path.Join(tail...)), true
+		return path.Join(route, path.Join(tail...)), true, true
 	case "subdir-no-flatten", "state", "package-zip":
-		return path.Join(route, subdir, path.Join(tail...)), true
+		return path.Join(route, subdir, path.Join(tail...)), false, true
 	default: // "subdir" and anything unknown
 		// ЧТО ИМЕННО СХЛОПЫВАЕТСЯ — не «все вложенные папки», а сам маршрут.
 		//
@@ -264,9 +350,9 @@ func (l *Layout) destination(pkg ResolvedPackage, rel, subdir string) (dest stri
 		// lethal-company, которую разложил настоящий r2modman: на 60 пакетах
 		// подряд прежнее правило совпало 41 раз, это — 60 из 60.
 		if named {
-			return path.Join(route, subdir, path.Join(tail...)), true
+			return path.Join(route, subdir, path.Join(tail...)), false, true
 		}
-		return path.Join(route, subdir, tail[len(tail)-1]), true
+		return path.Join(route, subdir, tail[len(tail)-1]), false, true
 	}
 }
 

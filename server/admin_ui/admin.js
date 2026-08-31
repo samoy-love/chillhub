@@ -133,10 +133,9 @@ try{ mountUploadCards(document); }catch(e){ console.error('upload cards', e); }
 const JOURNAL_LIMIT = 200;
 const __journal = [];
 
+// Отметка строки журнала — по Москве, как и всё остальное в панели.
 function nowHms(){
-  const d = new Date();
-  const pad = (n)=> (n<10?'0':'')+n;
-  return pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+  return window.formatMoscowClock(Date.now());
 }
 
 // Уровень сообщения по его тексту: почти весь существующий код зовёт
@@ -422,13 +421,11 @@ async function lnPrevRender(version){
 // удалять. Данные для этого сервер теперь отдаёт вместе со списком
 // (ListVersions -> createdAt/files/bytes).
 
-// Дата сборки в местной зоне; пустое значение — прочерк, а не «Invalid Date».
+// Дата сборки по Москве; пустое значение — прочерк, а не «Invalid Date».
 function fmtDateTime(v){
   const s = String(v||'').trim();
   if(!s) return '—';
-  const d = new Date(s);
-  if(isNaN(d.getTime())) return s;
-  return d.toLocaleString('ru-RU', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+  return window.formatMoscow(s);
 }
 
 // «Активна» против «—» читалось как «нет данных». Версия, не помеченная
@@ -1145,20 +1142,9 @@ function toRfc3339(date){
 // пришедшим в 18:35 — при разборе инцидента это расходится с логами и памятью
 // пользователя. Зона прибита к Europe/Moscow, а не к зоне браузера: админку
 // открывают и в дороге, а договариваться о времени надо в одной шкале.
-const FB_TZ = 'Europe/Moscow';
-function fbFmtTime(v){
-  const s = String(v||'').trim();
-  if(!s) return '';
-  const d = new Date(s);
-  if(isNaN(d.getTime())) return s;
-  const p = {};
-  new Intl.DateTimeFormat('ru-RU', {
-    timeZone: FB_TZ,
-    year:'numeric', month:'2-digit', day:'2-digit',
-    hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23',
-  }).formatToParts(d).forEach(x=>{ p[x.type] = x.value; });
-  return p.year+'-'+p.month+'-'+p.day+' '+p.hour+':'+p.minute+':'+p.second+' МСК';
-}
+// Обращения были первым местом, где время привели к Москве; теперь по Москве
+// живёт вся панель, и формат один на всех — см. admin-time.js.
+const fbFmtTime = (v)=> window.formatMoscow(v);
 
 function fbRenderList(){
   const root = document.getElementById('fb_list'); if(!root) return;
@@ -3069,7 +3055,7 @@ function newsDraftUpdateBadge(){
   if(btn) btn.style.display = differs ? '' : 'none';
   if(badge){
     if(!d){ badge.textContent = ''; return; }
-    badge.textContent = 'черновик сохранён ' + new Date(d.at||Date.now()).toLocaleTimeString('ru-RU');
+    badge.textContent = 'черновик сохранён ' + window.formatMoscowTime(d.at||Date.now());
   }
 }
 
@@ -3981,13 +3967,10 @@ function mtUtcToLocalInput(v){
   return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());
 }
 
-// Человекочитаемая метка местного времени для RFC3339-значения.
+// Человекочитаемая метка времени для RFC3339-значения — по Москве, как и всё
+// остальное в панели.
 function mtFmtLocal(v){
-  const s = String(v||'').trim();
-  if(!s) return '';
-  const d = new Date(s);
-  if(isNaN(d.getTime())) return s;
-  return d.toLocaleString('ru-RU');
+  return window.formatMoscow(v);
 }
 
 function mtByteLen(s){
@@ -4573,7 +4556,7 @@ async function mxShowErrorEvents(code){
   const items = Array.isArray(j.items) ? j.items : [];
   const rows = items.length
     ? items.map(ev=>
-        '<tr><td class="text-nowrap">'+escapeHtml(String(ev.ts||'').replace('T',' ').replace('Z',''))+'</td>'
+        '<tr><td class="text-nowrap">'+escapeHtml(window.formatMoscow(ev.ts))+'</td>'
         + '<td><code>'+escapeHtml(ev.gameId||'—')+'</code></td>'
         + '<td>'+escapeHtml(ev.version||'—')+'</td>'
         + '<td>'+escapeHtml(ev.appVersion||'—')+'</td>'

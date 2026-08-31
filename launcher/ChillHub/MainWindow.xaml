@@ -174,6 +174,21 @@
         <Grid x:Name="ChangelogOverlay" Visibility="Collapsed" Background="#C0000000"
               HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Grid.RowSpan="3">
           <Grid.Resources>
+            <BooleanToVisibilityConverter x:Key="Changelog.BoolToVis"/>
+
+            <!-- Полоса слева. У непросмотренного выпуска она акцентная, у прочитанного —
+                 обычная рамка: пролистывая длинный список, новое видно по краю, не
+                 вчитываясь в номера. -->
+            <Style x:Key="Style.Changelog.Stripe" TargetType="Border">
+              <Setter Property="Background" Value="{DynamicResource Brush.Border}"/>
+              <Setter Property="CornerRadius" Value="8,0,0,8"/>
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding IsNew}" Value="True">
+                  <Setter Property="Background" Value="{DynamicResource Brush.Accent}"/>
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+
             <!-- Один пункт списка: точка и текст. Точка отдельной колонкой, а не первым
                  символом строки: иначе перенесённая строка выравнивалась бы под точкой,
                  а не под текстом. -->
@@ -202,17 +217,27 @@
                     <ColumnDefinition Width="3"/>
                     <ColumnDefinition Width="*"/>
                   </Grid.ColumnDefinitions>
-                  <Border Grid.Column="0" Background="{DynamicResource Brush.Accent}"
-                          CornerRadius="8,0,0,8"/>
+                  <Border Grid.Column="0" Style="{StaticResource Style.Changelog.Stripe}"/>
                   <StackPanel Grid.Column="1" Margin="16,14,16,14">
                     <Grid Margin="0,0,0,10">
                       <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                       </Grid.ColumnDefinitions>
                       <TextBlock Grid.Column="0" Text="{Binding Version}" FontSize="17" FontWeight="SemiBold"
                                  Foreground="{DynamicResource Brush.Title}"/>
-                      <TextBlock Grid.Column="1" Text="{Binding DateText}" FontSize="12.5"
+                      <!-- «Новое» — рядом с номером, а не у края: строку читают слева
+                           направо, и про выпуск надо узнать до того, как начнёшь его
+                           читать. На первом запуске отмечать нечем, и значка не будет
+                           ни у одного выпуска (см. ChangelogMarks). -->
+                      <Border Grid.Column="1" Margin="10,2,0,0" Padding="7,2" VerticalAlignment="Center"
+                              CornerRadius="{StaticResource Radius.S}"
+                              Background="{DynamicResource Brush.AccentFill}"
+                              Visibility="{Binding IsNew, Converter={StaticResource Changelog.BoolToVis}}">
+                        <TextBlock Text="Новое" FontSize="10.5" FontWeight="SemiBold" Foreground="#FFFFFF"/>
+                      </Border>
+                      <TextBlock Grid.Column="2" Text="{Binding DateText}" FontSize="12.5"
                                  HorizontalAlignment="Right" VerticalAlignment="Center"
                                  Foreground="{DynamicResource Brush.TextMuted}"/>
                     </Grid>

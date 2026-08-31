@@ -161,6 +161,16 @@ namespace ChillHub.Core.Sync {
         public const string ModsVersionMarkerFileName = ".mods.version";
 
         /// <summary>
+        /// Отпечаток содержимого установленного модпака.
+        /// <para>
+        /// Отдельно от версии, потому что отвечает на другой вопрос. Версия говорит,
+        /// КАКОЙ пакет стоит, отпечаток — КАКОЕ у него дерево: админка умеет
+        /// пересобрать тот же пакет и опубликовать другое дерево под тем же именем.
+        /// </para>
+        /// </summary>
+        public const string ModsRevisionMarkerFileName = ".mods.revision";
+
+        /// <summary>
         /// Имя файла с копией УСТАНОВЛЕННОГО манифеста модпака.
         /// <para>
         /// Он отвечает на единственный вопрос, ответа на который иначе нет: какими путями
@@ -621,6 +631,10 @@ namespace ChillHub.Core.Sync {
 
             if (!Home.GameLocalState.WriteModsVersionAt(root, report.ModsVersion)) {
                 ChillHub.Core.Logging.Logger.Warn("[mods] не удалось записать маркер версии модпака после починки");
+            }
+
+            if (!Home.GameLocalState.WriteModsRevisionAt(root, Mods.ModPackDigest.Of(report.ModsManifest))) {
+                ChillHub.Core.Logging.Logger.Warn("[mods] не удалось записать отпечаток модпака после починки");
             }
         }
 

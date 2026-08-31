@@ -32,6 +32,47 @@ namespace ChillHub.Tests {
             Assert.True(SimpleSyncService.IsServiceRelFile(rel));
         }
 
+        /// <summary>
+        /// КАЖДЫЙ маркер, который лаунчер кладёт в корень игры, обязан быть служебным —
+        /// перечислением, а не списком, набранным вручную.
+        /// <para>
+        /// Проверка написана после того, как забытый в списке `.mods.revision` дал вечную
+        /// кнопку «Обновить»: установка модов писала отпечаток, синхронизация игры тут же
+        /// стирала его как лишний файл, а проверка статуса, не найдя отпечатка, снова
+        /// звала обновляться. Следующий маркер, заведённый и не внесённый сюда, уронит
+        /// этот тест вместо того, чтобы уронить обновление у игрока.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void ВсеМаркерыВКорнеИгрыСлужебные() {
+            var markers = new[] {
+                IntegrityChecker.VersionMarkerFileName,
+                IntegrityChecker.ModsVersionMarkerFileName,
+                IntegrityChecker.ModsRevisionMarkerFileName,
+                IntegrityChecker.ModsManifestFileName,
+                InstallFingerprint.FileName,
+            };
+
+            foreach (var marker in markers) {
+                Assert.True(
+                    SimpleSyncService.IsServiceRelFile(marker),
+                    $"маркер '{marker}' не помечен служебным — синхронизация игры сотрёт его как лишний файл");
+            }
+        }
+
+        /// <summary>
+        /// Отпечаток модпака отдельным случаем: именно он сломал обновление, и именно на
+        /// него смотрит проверка «нужно ли обновляться».
+        /// </summary>
+        [Theory]
+        [InlineData(".mods.revision")]
+        [InlineData(".MODS.REVISION")]
+        [InlineData("/.mods.revision")]
+        [InlineData("\\.mods.revision")]
+        public void ОтпечатокМодпакаНеУдаляется(string rel) {
+            Assert.True(SimpleSyncService.IsServiceRelFile(rel));
+        }
+
         /// <summary>Обычные файлы игры служебными не считаются, иначе они перестанут обновляться.</summary>
         [Theory]
         [InlineData("game.exe")]

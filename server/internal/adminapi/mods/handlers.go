@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -327,6 +328,95 @@ func (h *Handlers) Build(w http.ResponseWriter, r *http.Request) {
 	h.runBuild(ctx, w, req, cfg, truthy(r.FormValue("allowMissing")))
 }
 
+// RebuildRequest reconstructs the build behind an already published version.
+//
+// ПОЧЕМУ ЭТО ЧИТАЕТСЯ ИЗ ЗАПИСИ, А НЕ СОБИРАЕТСЯ ЗАНОВО ИЗ ИМЕНИ ВЕРСИИ.
+//
+// Имя версии модпака с Thunderstore — это «пространство-имя-версия», из него
+// исходную посылку восстановить можно. У импортированного профиля имя своё,
+// какое назвал оператор, и что в него входило, знает только запись рядом с
+// манифестом. Собрать такую версию «по имени» нельзя вовсе, а собрать не то и
+// опубликовать под тем же номером — хуже, чем отказаться.
+func (h *Handlers) rebuildRequest(entry games.Entry, cfg *games.ModsConfig, version string) (Request, error) {
+	src, err := h.builder.ReadSource(entry.GameID, version)
+	if err != nil {
+		return Request{}, fmt.Errorf("нет записи о сборке версии %s: %w", version, err)
+	}
+
+	req := Request{
+		GameID:        entry.GameID,
+		EcosystemGame: orDefault(cfg.EcosystemGame, cfg.Community),
+		Kind:          src.Kind,
+		Roots:         src.Roots,
+	}
+	switch src.Kind {
+	case SourceThunderstore:
+		ns, name, ver, ok := SplitDependency(version)
+		if !ok {
+			return Request{}, fmt.Errorf("из имени версии %q не выделить пакет", version)
+		}
+		req.Namespace, req.Name, req.Version = ns, name, ver
+		// Записи, сделанные до появления Roots, всё равно пересобираются: у
+		// модпака с Thunderstore посылка — он сам, и она в имени версии.
+		if len(req.Roots) == 0 {
+			req.Roots = []string{version}
+		}
+	case SourceProfile:
+		req.ProfileVersion = version
+		if len(req.Roots) == 0 {
+			return Request{}, fmt.Errorf(
+				"версия %s собрана из профиля r2modman до того, как состав стал записываться, "+
+					"и восстановить его нечем — загрузите профиль заново через «Импорт»", version)
+		}
+	default:
+		return Request{}, fmt.Errorf("неизвестный источник версии %s: %q", version, src.Kind)
+	}
+	return req, nil
+}
+
+// Rebuild assembles an already published version again, streaming progress as
+// NDJSON (POST gameId, version).
+//
+// Тот же состав, сегодняшние правила раскладки. Нужно это ровно тогда, когда
+// правила изменились: сборка, разложенная старым конвейером, останется лежать
+// как есть, пока её не тронешь, — а понять по панели, что она устарела не
+// версией, а способом сборки, нельзя никак.
+//
+// Версия публикуется под тем же именем и поверх себя. latest.json при этом не
+// трогается: если версия была активной, игроки получат новое дерево, если не
+// была — она так и останется ждать активации.
+func (h *Handlers) Rebuild(w http.ResponseWriter, r *http.Request) {
+	if !adminutil.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "malformed form", http.StatusBadRequest)
+		return
+	}
+	entry, cfg, ok := h.gameConfig(w, r)
+	if !ok {
+		return
+	}
+	version := strings.TrimSpace(r.FormValue("version"))
+	if !adminutil.IsSafeVersion(version) {
+		http.Error(w, "нужно имя уже собранной версии", http.StatusBadRequest)
+		return
+	}
+
+	req, err := h.rebuildRequest(entry, cfg, version)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	log.Printf("[mods] rebuild %s/%s: источник %q, корней %d",
+		entry.GameID, version, req.Kind, len(req.Roots))
+
+	ctx, cancel := context.WithTimeout(r.Context(), buildTimeout)
+	defer cancel()
+	h.runBuild(ctx, w, req, cfg, truthy(r.FormValue("allowMissing")))
+}
+
 // Import builds a modpack from an uploaded r2modman profile (POST multipart).
 //
 // This is the migration path off the current builds: their mods.yml names
@@ -432,6 +522,14 @@ type VersionInfo struct {
 	Bytes       int64  `json:"bytes"`
 	Packages    int    `json:"packages"`
 	Missing     int    `json:"missing"`
+
+	// Rebuildable is false for a version whose build cannot be reconstructed —
+	// an r2modman import recorded before the composition was kept. The panel
+	// disables the button instead of offering a request that can only fail.
+	Rebuildable bool `json:"rebuildable"`
+
+	// Collisions is how many places two of this version's packages met.
+	Collisions int `json:"collisions,omitempty"`
 }
 
 // List returns a game's built modpack versions plus the update check
@@ -465,6 +563,8 @@ func (h *Handlers) List(w http.ResponseWriter, r *http.Request) {
 			info.Kind = string(src.Kind)
 			info.Packages = len(src.Tree)
 			info.Missing = len(src.Missing)
+			info.Collisions = len(src.Collisions)
+			info.Rebuildable = src.Kind == SourceThunderstore || len(src.Roots) > 0
 		}
 		items = append(items, info)
 	}

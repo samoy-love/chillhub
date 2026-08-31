@@ -31,6 +31,7 @@ const HTML_PATH = path.join(ADMIN_DIR, 'admin.html');
 // Порядок обязателен: он повторяет <script> в admin.html построчно (не
 // module-система, каждый файл читает/пишет window напрямую).
 const SCRIPT_ORDER = [
+  'admin-time.js',
   'ui-throttle.js',
   'upload-bench.js',
   'speed-chart.js',
