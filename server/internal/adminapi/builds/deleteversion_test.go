@@ -50,6 +50,10 @@ func TestDeleteVersionRejectsIncompleteAndUnsafeInput(t *testing.T) {
 		{"traversal in the game id", "gameId=../../etc&version=1.0.0"},
 		{"traversal in the version", "gameId=game&version=../../etc"},
 		{"separator in the version", "gameId=game&version=1.0.0/files"},
+		// Dots and nothing else: IsSafeVersion accepts this one, because
+		// versions are allowed to contain dots. See the test below for what it
+		// costs when the joined path is not re-checked.
+		{"the version is just dot-dot", "gameId=game&version=.."},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -108,6 +112,46 @@ func TestDeleteVersionKeepsTheContentWhenTheManifestCannotBeRemoved(t *testing.T
 	// The error body is shown in the panel and must not carry the content root.
 	if strings.Contains(w.Body.String(), root) {
 		t.Fatalf("the content root leaked into the error: %s", w.Body.String())
+	}
+}
+
+// version=".." passes adminutil.IsSafeVersion — it is dots and nothing else,
+// and versions are allowed dots. Joined onto the game directory it collapses to
+// the content root, and the os.RemoveAll that follows takes out every game on
+// the server while the endpoint answers "ok".
+func TestDeleteVersionCannotEscapeTheGameDirectory(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	seedManifest(t, h, "game", "1.0.0", true)
+	seedManifest(t, h, "other", "2.0.0", true)
+	victim := filepath.Join(root, "content", "other", "2.0.0", "files")
+	mustMkdirAll(t, victim)
+	mustWriteFile(t, filepath.Join(victim, "app.exe"), "payload")
+
+	w := deleteRequest(t, h, http.MethodPost, "gameId=game&version=..")
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("%d %s, want 400", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(victim, "app.exe")); err != nil {
+		t.Fatalf("another game's content was deleted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "content")); err != nil {
+		t.Fatalf("the content root itself was removed: %v", err)
+	}
+}
+
+// The mass cleanup shares removeVersion with the single-row delete, so the same
+// guard has to hold there. A manifest file named "...json" yields the version
+// "..", and nothing stops such a file from existing on disk.
+func TestPruneVersionsSkipsAManifestThatNamesNoDirectory(t *testing.T) {
+	root := t.TempDir()
+	h := New(root)
+	if err := h.removeVersion("game", ".."); err == nil {
+		t.Fatal("removeVersion accepted a version that escapes its game directory")
+	}
+	if _, err := os.Stat(filepath.Join(root, "content")); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("unexpected state of the content root: %v", err)
 	}
 }
 

@@ -10,6 +10,7 @@ package builds
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -94,8 +95,12 @@ func (h *Handlers) manifestsDir(gid string) string {
 // the same volume. Returns the staging dir and the files root inside it.
 func (h *Handlers) stageVersionDir(gid, ver string) (string, string, error) {
 	// gid and ver are proven safe by adminutil.IsSafeGameID/IsSafeVersion at
-	// every entry point before publication starts; neither can contain a
-	// separator or a "..".
+	// every entry point before publication starts, so neither can contain a
+	// separator. IsSafeVersion alone does NOT stop a ver of "..", but this
+	// function only ever CREATES a directory, so the worst a ".." would do here
+	// is make a staging directory one level up and fail on the manifest write.
+	// The destructive counterpart, removeVersion, does not get to rely on that
+	// and re-checks the joined paths itself.
 	parent := filepath.Join(h.root, "content", gid)
 	if err := os.MkdirAll(parent, contentDirPerm); err != nil {
 		return "", "", err
@@ -743,6 +748,13 @@ func (h *Handlers) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 	manDir := h.manifestsDir(gid)
 	if err := h.removeVersion(gid, ver); err != nil {
 		log.Printf("[builds] delete %s/%s: %v", gid, ver, err)
+		// A version that does not name a directory inside its game is a bad
+		// request, not a server fault: answering 500 would send the panel into
+		// a retry loop over something that can never succeed.
+		if errors.Is(err, errUnsafeVersionPath) {
+			http.Error(w, "invalid gameId or version", http.StatusBadRequest)
+			return
+		}
 		http.Error(w, "failed to delete version", http.StatusInternalServerError)
 		return
 	}
@@ -753,19 +765,39 @@ func (h *Handlers) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 	adminutil.WriteJSON(w, map[string]string{"status": "ok"})
 }
 
+// errUnsafeVersionPath means the version label, joined onto the content root,
+// pointed outside the directory it is supposed to name. Nothing this package
+// publishes can produce such a label; a request that carries one is either a
+// probe or a mistake, and either way it must not reach os.RemoveAll.
+var errUnsafeVersionPath = errors.New("builds: version path escapes its game directory")
+
 // removeVersion erases one published version: its manifest and its extracted
 // content directory. gid and ver must already have passed the safety checks.
+//
+// THE JOINED PATHS ARE RE-CHECKED HERE, and that is not belt-and-braces.
+// adminutil.IsSafeVersion accepts ".." — it allows dots because versions are
+// semver, and ".." is dots and nothing else; adminutil's own
+// TestVersionCheckAloneDoesNotStopDotDot exists to say so and to require the
+// second check from every caller that turns a version into a path. Without it
+// version=".." collapses content/{gid}/.. to the content root and this
+// function's os.RemoveAll takes out every game on the server, answering "ok".
 //
 // A manifest that is not there is not a failure: the panel retries a delete
 // that timed out, two admins can click the same row, and the mass cleanup below
 // walks a directory listing that may be a moment out of date.
 func (h *Handlers) removeVersion(gid, ver string) error {
-	if err := os.Remove(filepath.Join(h.manifestsDir(gid), ver+".json")); err != nil {
+	manDir := h.manifestsDir(gid)
+	manPath := filepath.Join(manDir, ver+".json")
+	contentDir := filepath.Join(h.root, "content", gid)
+	filesDir := filepath.Join(contentDir, ver)
+	if !adminutil.EnsureWithin(manDir, manPath) || !adminutil.EnsureWithin(contentDir, filesDir) {
+		return fmt.Errorf("%w: %s/%s", errUnsafeVersionPath, gid, ver)
+	}
+	if err := os.Remove(manPath); err != nil {
 		if !os.IsNotExist(err) {
 			return err
 		}
 	}
-	filesDir := filepath.Join(h.root, "content", gid, ver)
 	if err := os.RemoveAll(filesDir); err != nil {
 		// A locked file, a lost permission or a mount point under the version
 		// directory leaves gigabytes on disk while the panel counts the version as
