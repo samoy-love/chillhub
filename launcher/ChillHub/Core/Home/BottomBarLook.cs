@@ -65,10 +65,25 @@ namespace ChillHub.Core.Home {
                 FilesSize: !string.IsNullOrWhiteSpace(filesSize));
         }
 
-        /// <summary>Сообщает ли строка состояния о работе.</summary>
+        /// <summary>
+        /// Сообщает ли строка состояния о работе.
+        /// <para>
+        /// Пустая строка — обычный способ сказать «работы нет». «Готово» остаётся
+        /// известным этому месту, потому что так до сих пор отчитываются общие с
+        /// другими экранами куски (<c>Core.Game.GameSyncRunner</c>, очередь загрузок),
+        /// причём один — с точкой на конце, другой — без. Панель, не узнавшая отчёт о
+        /// конце работы, остаётся висеть на экране с ним, поэтому точку здесь снимаем:
+        /// разница в один знак не должна решать, уйдёт панель или нет.
+        /// </para>
+        /// </summary>
         /// <param name="text">Текст строки.</param>
         /// <returns>true, если работы нет.</returns>
-        private static bool IsIdle(string? text)
-            => string.IsNullOrWhiteSpace(text) || string.Equals(text.Trim(), IdleStatus, StringComparison.Ordinal);
+        private static bool IsIdle(string? text) {
+            if (string.IsNullOrWhiteSpace(text)) {
+                return true;
+            }
+
+            return string.Equals(text.Trim().TrimEnd('.'), IdleStatus, StringComparison.Ordinal);
+        }
     }
 }

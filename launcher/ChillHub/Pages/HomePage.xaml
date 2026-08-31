@@ -1367,7 +1367,7 @@
         <Grid>
           <!-- Два взаимоисключающих вида на одном месте:
                очередь не пуста  → список карточек (по карточке на игру);
-               очередь пуста     → статус выбранной игры («Готово», объём, свободное место).
+               очередь пуста     → ход работы по выбранной игре (что делаем, объём, место).
                Раньше показывались ОБА сразу, в разных концах экрана, про одну и ту же
                позицию: «Ждёт очереди…» стояло и в карточке, и здесь. -->
           <!-- Очередь загрузок: карточка на каждую игру — ждёт, качается, снимается по ✕,
@@ -1541,7 +1541,9 @@
                держат фиксированную высоту: пустая строка теперь не занимает места, а
                полоса появляется только когда есть чему идти. -->
           <StackPanel x:Name="IdleStatusPanel" VerticalAlignment="Center">
-            <TextBlock Name="StatusText" Text="Готово" FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis"/>
+            <!-- Строка пустая, пока работы нет: словом «Готово» панель отчитывалась о
+                 работе, которой не было, и сама же оставалась из-за него на экране. -->
+            <TextBlock Name="StatusText" Text="" FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis"/>
             <ProgressBar Name="UpdateProgress" Height="4" Minimum="0" Maximum="100" Value="0" Margin="0,8,0,0"
                          Style="{StaticResource Style.ProgressBar.Rounded}"/>
             <TextBlock Name="SpeedEtaText" Text="" Foreground="{DynamicResource Brush.TextSecondary}" FontSize="11" Margin="0,6,0,0"/>
