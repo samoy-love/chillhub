@@ -195,7 +195,9 @@ namespace ChillHub {
         /// </summary>
         internal void ShowChangelog() {
             try {
-                this.FillChangelog();
+                // Отмечаем по той же отметке, что и автоматический показ: после него
+                // непросмотренного не остаётся, и открытый вручную список стоит чистым.
+                this.FillChangelog(Core.ConfigService.Current.LastSeenChangelogVersion);
                 this.ChangelogSubtitle.Text = $"У вас версия {this.LauncherVersion()}. Ниже — история обновлений лаунчера.";
                 this.ChangelogOverlay.Visibility = Visibility.Visible;
             }
@@ -217,10 +219,14 @@ namespace ChillHub {
                     return;
                 }
 
-                this.FillChangelog();
+                // Отмечаем ДО того, как отметка о показе съедет на текущую версию:
+                // после неё новым не окажется ничего.
+                var unseen = this.FillChangelog(lastSeen);
                 this.ChangelogSubtitle.Text = string.IsNullOrWhiteSpace(lastSeen)
                     ? $"У вас версия {current}. Ниже — вся история обновлений лаунчера."
-                    : $"Лаунчер обновился до версии {current}. Вот что изменилось.";
+                    : unseen > 0
+                        ? $"Лаунчер обновился до версии {current}. Всё, что вышло с прошлого раза, отмечено значком."
+                        : $"Лаунчер обновился до версии {current}. Вот что изменилось.";
                 this.ChangelogOverlay.Visibility = Visibility.Visible;
 
                 // Отметку ставим на показе, а не на закрытии: окно можно закрыть и вместе
@@ -236,10 +242,22 @@ namespace ChillHub {
             }
         }
 
-        /// <summary>Прокрутку возвращаем в начало: открытый второй раз список начинается сверху.</summary>
-        private void FillChangelog() {
-            this.ChangelogList.ItemsSource = Core.Changelog.ChangelogData.Visible;
+        /// <summary>
+        /// Наполняет окно и отмечает непросмотренные выпуски. Прокрутку возвращает
+        /// в начало: открытый второй раз список должен начинаться сверху.
+        /// </summary>
+        /// <param name="lastSeenVersion">Версия, на которой список показывали в прошлый раз.</param>
+        /// <returns>Сколько выпусков отмечено новыми.</returns>
+        private int FillChangelog(string? lastSeenVersion) {
+            var releases = Core.Changelog.ChangelogData.Visible;
+            var unseen = Core.Changelog.ChangelogMarks.MarkUnseen(releases, lastSeenVersion);
+
+            // Список один на весь запуск, а отметки на нём только что поменялись:
+            // без сброса источника окно покажет подсветку прошлого открытия.
+            this.ChangelogList.ItemsSource = null;
+            this.ChangelogList.ItemsSource = releases;
             this.ChangelogScroll.ScrollToTop();
+            return unseen;
         }
 
         private string LauncherVersion()
