@@ -148,6 +148,7 @@ export default [
   // must never see them.
   {
     files: [
+      'server/admin_ui/admin-time.js',
       'server/admin_ui/upload-bench.js',
       'server/admin_ui/ui-throttle.js',
       'server/admin_ui/speed-chart.js',

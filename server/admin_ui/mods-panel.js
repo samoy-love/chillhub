@@ -31,6 +31,15 @@
     if (typeof window !== 'undefined' && window.formatBytes) return window.formatBytes(n);
     return String(n) + ' B';
   }
+  // Время сборки — по Москве, как везде в панели. Форматтер живёт в
+  // admin-time.js и кладётся в window; ищем его и в globalThis, потому что в
+  // тестах разметки окна нет, а показывать там отметку сервера как есть —
+  // значит проверять не тот вывод, который увидит оператор.
+  function when(iso) {
+    const host = typeof window !== 'undefined' ? window : globalThis;
+    if (host && host.formatMoscow) return host.formatMoscow(iso);
+    return String(iso === null || iso === undefined ? '' : iso);
+  }
   function say(msg, level) {
     if (typeof window !== 'undefined' && window.notifyLevel) return window.notifyLevel(msg, level || 'info');
     if (typeof window !== 'undefined' && window.notify) return window.notify(msg);
@@ -140,7 +149,7 @@
       link: it.packageUrl
         ? '<a class="small" href="' + esc(it.packageUrl) + '" target="_blank" rel="noopener">страница на Thunderstore</a>'
         : '',
-      built: esc((it.createdAt || '').replace('T', ' ').replace('Z', '')),
+      built: esc(when(it.createdAt)),
       packages: it.packages || 0,
       files: it.files || 0,
       size: bytes(it.bytes || 0),
