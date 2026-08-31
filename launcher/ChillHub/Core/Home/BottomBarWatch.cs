@@ -104,10 +104,8 @@ namespace ChillHub.Core.Home {
         }
 
         private void OnPageLoaded(object? sender, RoutedEventArgs e) {
-            if (this.disposed) {
-                return;
-            }
-
+            // Проверять disposed здесь незачем: освобождение снимает и эти два
+            // обработчика — после него страница о подписке уже не знает.
             this.Subscribe();
 
             // Пока страницы не было на экране, статус и полоса менялись без свидетелей:
@@ -115,13 +113,7 @@ namespace ChillHub.Core.Home {
             this.handler(this, EventArgs.Empty);
         }
 
-        private void OnPageUnloaded(object? sender, RoutedEventArgs e) {
-            if (this.disposed) {
-                return;
-            }
-
-            this.Unsubscribe();
-        }
+        private void OnPageUnloaded(object? sender, RoutedEventArgs e) => this.Unsubscribe();
 
         private void Subscribe() {
             if (this.watched.Count > 0) {
