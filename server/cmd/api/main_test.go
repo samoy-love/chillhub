@@ -170,20 +170,7 @@ func TestBuildsHidesVersionsNewerThanLatest(t *testing.T) {
 	if len(got.Items) != len(want) || got.Items[0] != want[0] {
 		t.Fatalf("items = %v, want %v", got.Items, want)
 	}
-
-	// Without latest.json there is nothing to filter against: serve everything.
-	if err := os.Remove(filepath.Join(dir, "latest.json")); err != nil {
-		t.Fatal(err)
-	}
-	rec = httptest.NewRecorder()
-	testRouter().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/games/demo/builds", nil))
-	got.Items = nil
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
-	if len(got.Items) != 4 {
-		t.Fatalf("items = %v, want all four versions", got.Items)
-	}
+	// The missing-latest.json case is covered by TestBuildsWithoutLatestAreNotOffered.
 }
 
 func TestHeadIsAllowedWhereverGetIs(t *testing.T) {
