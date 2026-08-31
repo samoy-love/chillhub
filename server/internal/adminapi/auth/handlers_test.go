@@ -163,6 +163,7 @@ func TestMiddlewareAllowlist(t *testing.T) {
 	closed := []string{
 		"/admin/api/list",
 		"/admin/api/deleteVersion",
+		"/admin/api/pruneVersions",
 		"/admin/api/news/save",
 		"/admin/api/feedback/list",
 	}

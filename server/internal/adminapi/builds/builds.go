@@ -740,17 +740,31 @@ func (h *Handlers) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid gameId or version", http.StatusBadRequest)
 		return
 	}
-	// remove manifest file
 	manDir := h.manifestsDir(gid)
-	manPath := filepath.Join(manDir, ver+".json")
-	if err := os.Remove(manPath); err != nil {
+	if err := h.removeVersion(gid, ver); err != nil {
+		log.Printf("[builds] delete %s/%s: %v", gid, ver, err)
+		http.Error(w, "failed to delete version", http.StatusInternalServerError)
+		return
+	}
+	// adjust latest.json if it pointed to deleted version
+	if readLatestVersion(manDir) == ver {
+		recalcLatest(manDir)
+	}
+	adminutil.WriteJSON(w, map[string]string{"status": "ok"})
+}
+
+// removeVersion erases one published version: its manifest and its extracted
+// content directory. gid and ver must already have passed the safety checks.
+//
+// A manifest that is not there is not a failure: the panel retries a delete
+// that timed out, two admins can click the same row, and the mass cleanup below
+// walks a directory listing that may be a moment out of date.
+func (h *Handlers) removeVersion(gid, ver string) error {
+	if err := os.Remove(filepath.Join(h.manifestsDir(gid), ver+".json")); err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("[builds] delete %s/%s: %v", gid, ver, err)
-			http.Error(w, "failed to delete version", http.StatusInternalServerError)
-			return
+			return err
 		}
 	}
-	// remove extracted content folder
 	filesDir := filepath.Join(h.root, "content", gid, ver)
 	if err := os.RemoveAll(filesDir); err != nil {
 		// A locked file, a lost permission or a mount point under the version
@@ -759,19 +773,113 @@ func (h *Handlers) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 		// nothing anywhere to explain it. The journal gets the absolute path — it
 		// is not public, unlike the response body.
 		//
-		// The status stays 200 on purpose: the manifest is already removed, so the
-		// version has disappeared for every client, and the operation the operator
-		// asked for is complete. A 500 would make the panel retry deleting a
-		// version that is no longer in the list and turn a finished job into a
-		// failure. What is left is a leftover directory for the operator to clear,
-		// and the journal is where that belongs.
+		// This is deliberately not reported as a failure: the manifest is already
+		// removed, so the version has disappeared for every client, and the
+		// operation the operator asked for is complete. An error would make the
+		// panel retry deleting a version that is no longer in the list and turn a
+		// finished job into a failure. What is left is a leftover directory for
+		// the operator to clear, and the journal is where that belongs.
 		log.Printf("[builds] delete content %s/%s: %v", gid, ver, err)
 	}
-	// adjust latest.json if it pointed to deleted version
-	if readLatestVersion(manDir) == ver {
-		recalcLatest(manDir)
+	return nil
+}
+
+// keepBeforeActive — сколько версий, предшествующих активной, переживает
+// массовую чистку. Две: на первую откатываются, если в активной обнаружился
+// брак, вторая остаётся запасом на случай, что и первая окажется битой.
+const keepBeforeActive = 2
+
+// prunableVersions выбирает версии, которые массовая чистка удаляет: всё, что
+// старше активной, кроме keepBeforeActive ближайших к ней.
+//
+// Версии НОВЕЕ активной не трогаются никогда: это залитая, но ещё не
+// включённая сборка — ровно то, ради чего заливку и активацию развели по
+// разным кнопкам. Если активной версии в списке нет, чистка не выбирает
+// ничего: без точки отсчёта «старое» не определено.
+func prunableVersions(vers []string, active string) []string {
+	sorted := append([]string(nil), vers...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return adminutil.CompareVersions(sorted[i], sorted[j]) < 0
+	})
+	idx := -1
+	for i, v := range sorted {
+		if v == active {
+			idx = i
+			break
+		}
 	}
-	adminutil.WriteJSON(w, map[string]string{"status": "ok"})
+	if idx < 0 {
+		return nil
+	}
+	cut := idx - keepBeforeActive
+	if cut <= 0 {
+		return nil
+	}
+	return sorted[:cut]
+}
+
+// PruneVersions removes the old versions of one game in a single request:
+// everything older than the active version except the keepBeforeActive builds
+// immediately preceding it.
+//
+// Deleting them one row at a time was the only way before, and the launcher
+// accumulates a release every few days — a couple of gigabytes each. The rule
+// is fixed rather than a number in the request on purpose: the endpoint that
+// wipes the most data at once should not also be the one that takes "how much
+// to keep" from whoever calls it.
+func (h *Handlers) PruneVersions(w http.ResponseWriter, r *http.Request) {
+	if !adminutil.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	gid := r.URL.Query().Get("gameId")
+	if gid == "" {
+		http.Error(w, "missing gameId", http.StatusBadRequest)
+		return
+	}
+	if !adminutil.IsSafeGameID(gid) {
+		http.Error(w, "invalid gameId", http.StatusBadRequest)
+		return
+	}
+	dir := h.manifestsDir(gid)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		// Do not echo the filesystem error: it carries the absolute content root.
+		log.Printf("[builds] prune %s: %v", gid, err)
+		http.Error(w, "game not found", http.StatusNotFound)
+		return
+	}
+	// Без активной версии чистить нечего и не от чего: «старое» здесь
+	// отсчитывается только от неё. Молча удалить ноль версий было бы хуже
+	// отказа — в панели это выглядит как «всё уже чисто».
+	active := readLatestVersion(dir)
+	if active == "" || !h.hasVersionManifest(gid, active) {
+		http.Error(w, "no active version", http.StatusConflict)
+		return
+	}
+	deleted := []string{}
+	failed := []string{}
+	for _, v := range prunableVersions(manifestVersions(entries), active) {
+		// A manifest file whose name is not a usable version never came from
+		// this package; it is left alone rather than turned into a path.
+		if !adminutil.IsSafeVersion(v) {
+			log.Printf("[builds] prune %s: skipping unsafe manifest name %q", gid, v)
+			continue
+		}
+		if err := h.removeVersion(gid, v); err != nil {
+			// One stuck version must not hide the rest: the loop goes on and the
+			// answer names both halves, so the panel can say what is still there
+			// instead of reporting the whole cleanup as a failure.
+			log.Printf("[builds] prune %s/%s: %v", gid, v, err)
+			failed = append(failed, v)
+			continue
+		}
+		deleted = append(deleted, v)
+	}
+	adminutil.WriteJSON(w, map[string]any{
+		"deleted": deleted,
+		"failed":  failed,
+		"active":  active,
+	})
 }
 
 // recalcLatest repoints latest.json at the highest remaining version, or
