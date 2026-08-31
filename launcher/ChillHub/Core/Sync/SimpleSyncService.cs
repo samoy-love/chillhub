@@ -1491,12 +1491,18 @@ namespace ChillHub.Core.Sync {
             // настроек делает ExecuteAsync БЕЗ последующей записи маркера, и после
             // успешного ремонта игра показывалась как неустановленная.
             //
-            // .mods.version и .mods.manifest.json — то же самое для модпака, который
-            // живёт в ТОМ ЖЕ корне. Их в корне игры не ждёт ни один из двух манифестов,
-            // поэтому без этой проверки каждая из двух синхронизаций записала бы их себе
-            // в ToDelete. Потеря `.mods.manifest.json` особенно дорога: из него берётся
-            // список файлов модпака, и без него синхронизация игры перестаёт понимать,
-            // что моды — не мусор.
+            // .mods.version, .mods.revision и .mods.manifest.json — то же самое для
+            // модпака, который живёт в ТОМ ЖЕ корне. Их в корне игры не ждёт ни один из
+            // двух манифестов, поэтому без этой проверки каждая из двух синхронизаций
+            // записала бы их себе в ToDelete. Потеря `.mods.manifest.json` особенно
+            // дорога: из него берётся список файлов модпака, и без него синхронизация
+            // игры перестаёт понимать, что моды — не мусор.
+            //
+            // За `.mods.revision` эта строка уже заплачена. Маркер завели, а сюда его
+            // добавить забыли — и получилась вечная кнопка «Обновить»: установка модов
+            // писала отпечаток, синхронизация игры следом стирала его как лишний файл,
+            // проверка статуса не находила отпечаток и снова звала обновляться. Круг
+            // замыкался за полсекунды и не размыкался никогда.
             // .integrity.json — слепок папки, которым проверка статуса отвечает «файлы не
             // трогали» без полного плана. Он тоже наш и тоже не значится ни в одном
             // манифесте, так что без этой строки первая же синхронизация внесла бы его
@@ -1504,6 +1510,7 @@ namespace ChillHub.Core.Sync {
             return r.Equals(UpdateMarkerFileName, StringComparison.OrdinalIgnoreCase)
                 || r.Equals(IntegrityChecker.VersionMarkerFileName, StringComparison.OrdinalIgnoreCase)
                 || r.Equals(IntegrityChecker.ModsVersionMarkerFileName, StringComparison.OrdinalIgnoreCase)
+                || r.Equals(IntegrityChecker.ModsRevisionMarkerFileName, StringComparison.OrdinalIgnoreCase)
                 || r.Equals(IntegrityChecker.ModsManifestFileName, StringComparison.OrdinalIgnoreCase)
                 || r.Equals(InstallFingerprint.FileName, StringComparison.OrdinalIgnoreCase);
         }
