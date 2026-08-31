@@ -44,6 +44,12 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
+                Version = "1.6.33",
+                Date = "2026-08-31",
+                Changes = System.Array.Empty<string>(),
+                Technical = true,
+            },
+            new ChangelogRelease {
                 Version = "1.6.32",
                 Date = "2026-08-31",
                 Changes = new[] {
