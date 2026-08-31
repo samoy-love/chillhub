@@ -141,13 +141,14 @@ func TestPruneVersionsDeletesNothingWhenOnlyTheKeptVersionsExist(t *testing.T) {
 // broken state is reported instead.
 func TestPruneVersionsRefusesWithoutAnActiveVersion(t *testing.T) {
 	cases := []struct {
-		name  string
-		setup func(t *testing.T, h *Handlers)
+		name string
+		// latestJSON — содержимое latest.json; пустая строка означает, что файла
+		// нет вовсе.
+		latestJSON string
 	}{
-		{"no latest.json at all", func(t *testing.T, h *Handlers) {}},
-		{"latest.json names a version that is gone", func(t *testing.T, h *Handlers) {
-			mustWriteFile(t, filepath.Join(h.manifestsDir("launcher"), "latest.json"), `{"version":"9.9.9"}`)
-		}},
+		{"no latest.json at all", ""},
+		{"latest.json names a version that is gone", `{"version":"9.9.9"}`},
+		{"latest.json is not readable as JSON", "not json at all"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -155,7 +156,9 @@ func TestPruneVersionsRefusesWithoutAnActiveVersion(t *testing.T) {
 			for _, v := range []string{"1.0.0", "1.0.1", "1.0.2", "1.0.3"} {
 				seedVersion(t, h, "launcher", v, false)
 			}
-			tc.setup(t, h)
+			if tc.latestJSON != "" {
+				mustWriteFile(t, filepath.Join(h.manifestsDir("launcher"), "latest.json"), tc.latestJSON)
+			}
 
 			w := pruneRequest(t, h, http.MethodPost, "gameId=launcher")
 
