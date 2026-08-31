@@ -230,6 +230,15 @@ namespace ChillHub.Pages {
             this.saveStatusTimer.Start();
         }
 
+        /// <summary>
+        /// Открывает список обновлений. Разметка окна — в <see cref="ChillHub.MainWindow"/>:
+        /// один и тот же список открывают и настройки, и новости лаунчера на главной.
+        /// </summary>
+        private void ChangelogBtn_Click(object sender, RoutedEventArgs e) {
+            var win = Window.GetWindow(this) as ChillHub.MainWindow;
+            win?.ShowChangelog();
+        }
+
         private async void CheckUpdateBtn_Click(object sender, RoutedEventArgs e) {
             var win = Window.GetWindow(this) as ChillHub.MainWindow;
             if (win == null) {

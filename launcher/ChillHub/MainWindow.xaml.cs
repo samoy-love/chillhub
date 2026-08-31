@@ -188,6 +188,84 @@ namespace ChillHub {
         }
 
         /// <summary>
+        /// Открывает окно «Что нового» по просьбе человека: из новостей лаунчера или
+        /// из настроек. Ничего не спрашивает и отметку о показе не двигает — иначе
+        /// нажатие «посмотреть список» отменяло бы автоматический показ следующего
+        /// обновления.
+        /// </summary>
+        internal void ShowChangelog() {
+            try {
+                this.FillChangelog();
+                this.ChangelogSubtitle.Text = $"У вас версия {this.LauncherVersion()}. Ниже — история обновлений лаунчера.";
+                this.ChangelogOverlay.Visibility = Visibility.Visible;
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "MainWindow.ShowChangelog");
+            }
+        }
+
+        /// <summary>
+        /// Показывает список сам, если лаунчер обновился с прошлого запуска. Решение —
+        /// в <see cref="Core.Changelog.ChangelogGate"/>; здесь только показ и отметка.
+        /// </summary>
+        internal void ShowChangelogAfterUpdate() {
+            try {
+                var cfg = Core.ConfigService.Current;
+                var lastSeen = cfg.LastSeenChangelogVersion ?? string.Empty;
+                var current = this.LauncherVersion();
+                if (!Core.Changelog.ChangelogGate.ShouldShow(lastSeen, current, Core.Changelog.ChangelogData.Visible)) {
+                    return;
+                }
+
+                this.FillChangelog();
+                this.ChangelogSubtitle.Text = string.IsNullOrWhiteSpace(lastSeen)
+                    ? $"У вас версия {current}. Ниже — вся история обновлений лаунчера."
+                    : $"Лаунчер обновился до версии {current}. Вот что изменилось.";
+                this.ChangelogOverlay.Visibility = Visibility.Visible;
+
+                // Отметку ставим на показе, а не на закрытии: окно можно закрыть и вместе
+                // со всем лаунчером, и тогда список всплывал бы после каждого запуска.
+                cfg.LastSeenChangelogVersion = current;
+                if (!Core.ConfigService.TrySave(cfg, out var saveError)) {
+                    Core.Logging.Logger.Warn($"Changelog: отметку о показе сохранить не удалось: {saveError}");
+                }
+            }
+            catch (Exception ex) {
+                // Список обновлений — приятная мелочь, ронять из-за неё запуск нельзя.
+                Core.Logging.Logger.Error(ex, "MainWindow.ShowChangelogAfterUpdate");
+            }
+        }
+
+        /// <summary>Прокрутку возвращаем в начало: открытый второй раз список начинается сверху.</summary>
+        private void FillChangelog() {
+            this.ChangelogList.ItemsSource = Core.Changelog.ChangelogData.Visible;
+            this.ChangelogScroll.ScrollToTop();
+        }
+
+        private string LauncherVersion()
+            => Core.SelfUpdate.SelfUpdateVersions.ReadLocalVersion(AppDomain.CurrentDomain.BaseDirectory);
+
+        private void ChangelogClose_Click(object sender, RoutedEventArgs e)
+            => this.ChangelogOverlay.Visibility = Visibility.Collapsed;
+
+        /// <summary>
+        /// Escape закрывает список обновлений. Обработчик висит на окне, а не на странице:
+        /// оверлей теперь общий, и из настроек его иначе нечем было бы закрыть с клавиатуры.
+        /// </summary>
+        private void MainWindow_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e) {
+            try {
+                if (e.Key == System.Windows.Input.Key.Escape && this.ChangelogOverlay.Visibility == Visibility.Visible) {
+                    e.Handled = true;
+                    this.ChangelogOverlay.Visibility = Visibility.Collapsed;
+                }
+            }
+            catch (Exception ex) {
+                // Обработчик клавиш не имеет права ронять окно
+                Core.Logging.Logger.Error(ex, "MainWindow.PreviewKeyDown");
+            }
+        }
+
+        /// <summary>
         /// Крестик/Alt+F4: при включённом MinimizeToTray прячем окно в трей вместо закрытия.
         /// Единственный способ по-настоящему выйти в этом режиме — пункт «Выход»
         /// в меню значка (см. <see cref="EnsureTray"/>), который сам ставит <see cref="exitRequested"/>.
