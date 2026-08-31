@@ -44,6 +44,13 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
+                Version = "1.6.34",
+                Date = "2026-08-31",
+                Changes = new[] {
+                    "В списке обновлений видно, что вышло с прошлого раза: такие выпуски отмечены значком «Новое».",
+                },
+            },
+            new ChangelogRelease {
                 Version = "1.6.33",
                 Date = "2026-08-31",
                 Changes = System.Array.Empty<string>(),
@@ -62,7 +69,6 @@ namespace ChillHub.Core.Changelog {
                 Changes = new[] {
                     "Появилось окно «Что нового»: после обновления лаунчер сам показывает, что изменилось.",
                     "Список обновлений можно открыть в любой момент — в новостях лаунчера и в настройках.",
-                    "Выпуски, которых вы ещё не видели, отмечены значком «Новое».",
                 },
             },
             new ChangelogRelease {
