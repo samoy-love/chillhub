@@ -65,6 +65,50 @@ namespace ChillHub.Tests {
             Assert.Equal(1, state.Missing);
         }
 
+        /// <summary>
+        /// ЗАПОМНЕННЫЙ СПИСОК ФАЙЛОВ НЕ ПРЯЧЕТ ПРОПАЖУ. Разбор манифеста запоминается
+        /// (вопрос задаётся до двух раз в секунду на UI-потоке), но сам манифест от
+        /// удаления файла не меняется. Обходи мы папки только при первом чтении —
+        /// удалённый руками мод остался бы незамеченным до следующей установки модпака.
+        /// </summary>
+        [Fact]
+        public void ЗапомненныйСписокФайловНеПрячетПропажу() {
+            using var dir = new TempDir();
+            InstallPack(dir.Root);
+
+            Assert.False(ModPackFiles.Broken(dir.Root));
+
+            File.Delete(Path.Combine(dir.Root, "BepInEx", "plugins", "Mod.dll"));
+
+            Assert.True(ModPackFiles.Broken(dir.Root));
+        }
+
+        /// <summary>
+        /// Новый манифест перечитывается: список файлов запомнен, но ключ памяти — сам
+        /// файл манифеста. Иначе мод, выбывший из новой версии модпака, до конца сеанса
+        /// числился бы пропавшим, и лаунчер звал бы восстанавливать то, чего больше нет.
+        /// </summary>
+        [Fact]
+        public void НовыйМанифестПеречитывается() {
+            using var dir = new TempDir();
+            InstallPack(dir.Root);
+
+            File.Delete(Path.Combine(dir.Root, "BepInEx", "plugins", "Mod.dll"));
+            Assert.True(ModPackFiles.Broken(dir.Root));
+
+            // Вышла новая версия модпака, и этого мода в ней больше нет.
+            var installed = GameLocalState.ReadInstalledModPackManifest(dir.Root);
+            var updated = new Manifest {
+                Version = "vcMoo-Moo_Modpack-2.0.0",
+                Files = installed!.Files
+                    .Where(f => !f.Path!.EndsWith("Mod.dll", StringComparison.Ordinal))
+                    .ToList(),
+            };
+            Assert.True(GameLocalState.WriteInstalledModPackManifest(dir.Root, updated));
+
+            Assert.False(ModPackFiles.Broken(dir.Root));
+        }
+
         /// <summary>Удалённая папка целиком — тоже поломка, а не «папки нет, значит и спроса нет».</summary>
         [Fact]
         public void УдалённаяПапкаМодовВидна() {

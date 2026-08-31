@@ -5,6 +5,7 @@
 
 namespace ChillHub.Core.Mods {
     using System;
+    using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.IO;
 
@@ -51,8 +52,28 @@ namespace ChillHub.Core.Mods {
     /// файлов на восемь десятков папок, и разница между восемью десятками обходов и
     /// тысячей обращений к диску заметна там, где вопрос задаётся раз в секунду.
     /// </para>
+    /// <para>
+    /// РАЗБОР МАНИФЕСТА ЗАПОМИНАЕТСЯ, ОБХОД ПАПОК — НЕТ. Вопрос задаётся до двух раз в
+    /// секунду (копия из Steam и сборка с сервера) и на UI-потоке, а список файлов
+    /// модпака — это чтение и разбор JSON на тысячу записей, всякий раз одинаковый.
+    /// Ключ запоминания — время правки и размер самого файла манифеста: меняется он
+    /// только установкой модпака, и тогда список читается заново. А вот ПРОПАЖУ файла
+    /// манифест не отражает никак, поэтому папки обходятся каждый раз — иначе
+    /// удалённый руками мод остался бы незамеченным до следующей установки.
+    /// </para>
     /// </summary>
     internal static class ModPackFiles {
+        /// <summary>Сколько папок помним. Дальше кеш чистится целиком: он не про попадания, а про повтор.</summary>
+        private const int MaxRemembered = 32;
+
+        /// <summary>
+        /// Разобранные списки файлов по папкам: ключ — папка игры. Больше пары записей
+        /// здесь не живёт (у игры две копии), но игр за сеанс перебирают много, поэтому
+        /// на всякий случай стоит потолок.
+        /// </summary>
+        private static readonly ConcurrentDictionary<string, WantedFiles> WantedCache =
+            new ConcurrentDictionary<string, WantedFiles>(StringComparer.OrdinalIgnoreCase);
+
         /// <summary>Смотрит, всё ли на месте.</summary>
         /// <param name="root">Папка игры: копия из Steam или сборка с сервера.</param>
         /// <returns>Что нашлось.</returns>
@@ -62,12 +83,12 @@ namespace ChillHub.Core.Mods {
                     return default;
                 }
 
-                var manifest = Home.GameLocalState.ReadInstalledModPackManifest(root);
-                if (manifest?.Files == null || manifest.Files.Count == 0) {
+                var wanted = WantedFor(root);
+                if (wanted == null) {
                     return default;
                 }
 
-                return Compare(root, Wanted(manifest));
+                return Compare(root, wanted);
             }
             catch (Exception ex) {
                 // Не смогли посмотреть — молчим о поломке. Ошибка в эту сторону стоит
@@ -119,6 +140,41 @@ namespace ChillHub.Core.Mods {
             return byDir;
         }
 
+        /// <summary>
+        /// Список файлов модпака этой папки — из памяти, если файл манифеста с прошлого
+        /// раза не менялся. null — модпака здесь нет.
+        /// </summary>
+        /// <param name="root">Папка игры.</param>
+        /// <returns>Имена файлов модпака по папкам.</returns>
+        private static Dictionary<string, List<string>>? WantedFor(string root) {
+            var manifestPath = Path.Combine(root, Home.GameLocalState.ModsManifestFileName);
+            var info = new FileInfo(manifestPath);
+            if (!info.Exists) {
+                WantedCache.TryRemove(root, out _);
+                return null;
+            }
+
+            if (WantedCache.TryGetValue(root, out var remembered)
+                && remembered.Stamp == info.LastWriteTimeUtc.Ticks
+                && remembered.Length == info.Length) {
+                return remembered.ByDir;
+            }
+
+            var manifest = Home.GameLocalState.ReadInstalledModPackManifest(root);
+            if (manifest?.Files == null || manifest.Files.Count == 0) {
+                WantedCache.TryRemove(root, out _);
+                return null;
+            }
+
+            var byDir = Wanted(manifest);
+            if (WantedCache.Count >= MaxRemembered) {
+                WantedCache.Clear();
+            }
+
+            WantedCache[root] = new WantedFiles(info.LastWriteTimeUtc.Ticks, info.Length, byDir);
+            return byDir;
+        }
+
         /// <summary>Сверяет ожидаемое с тем, что лежит в папках.</summary>
         /// <param name="root">Папка игры.</param>
         /// <param name="byDir">Имена файлов модпака по папкам.</param>
@@ -161,5 +217,11 @@ namespace ChillHub.Core.Mods {
 
             return names;
         }
+
+        /// <summary>Запомненный разбор манифеста одной папки.</summary>
+        /// <param name="Stamp">Время правки файла манифеста.</param>
+        /// <param name="Length">Его размер.</param>
+        /// <param name="ByDir">Имена файлов модпака по папкам.</param>
+        private sealed record WantedFiles(long Stamp, long Length, Dictionary<string, List<string>> ByDir);
     }
 }
