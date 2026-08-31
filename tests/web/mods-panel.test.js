@@ -20,6 +20,11 @@ const {
   catalogCardHtml, versionsTableHtml, diffHtml, formatCount, formatDate,
 } = require('../../server/admin_ui/mods-panel.js');
 
+// Время в панели общее: в браузере admin-time.js кладёт форматтер в window,
+// здесь — в globalThis. Без него таблица версий печатала бы отметку сервера
+// как есть, то есть UTC под видом местного времени.
+Object.assign(globalThis, require('../../server/admin_ui/admin-time.js'));
+
 // ---------- NDJSON ----------
 
 test('splitNdjson отдаёт готовые строки и оставляет хвост', () => {
@@ -211,6 +216,21 @@ test('пересечения между пакетами видны в спис�
     }],
   });
   assert.match(html, /пересечений 2/);
+});
+
+test('время сборки показано по Москве и подписано', () => {
+  // Отметка сервера — UTC. «собран 2026-08-30 21:43:27» читается как местное
+  // время и расходится с часами на три часа, а у сборки, сделанной поздно
+  // вечером, съезжает ещё и дата.
+  const html = versionsTableHtml({
+    items: [{
+      version: 'Team-Pack-1.0.0', displayName: 'Pack', active: true,
+      createdAt: '2026-08-30T21:43:27Z', rebuildable: true,
+    }],
+  });
+
+  assert.match(html, /собран 2026-08-31 00:43:27 МСК/);
+  assert.doesNotMatch(html, /21:43:27/);
 });
 
 test('«Дифф» у единственной версии выключен и говорит почему', () => {
