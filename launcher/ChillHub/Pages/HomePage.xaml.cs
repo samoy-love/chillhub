@@ -811,10 +811,12 @@ namespace ChillHub.Pages {
                     this.ShowGamesVerifyIndicator(false);
                     this.RefreshGamesBtn.IsEnabled = true;
 
-                    // После завершения всегда выставляем финальный статус, чтобы не зависало "Проверка игр X/Y".
+                    // Проверка кончилась — строку гасим, чтобы не зависало «Проверка игр X/Y».
+                    // Именно гасим, а не пишем «Готово»: панель показывает идущую работу, и
+                    // отчёт о кончившейся оставлял её висеть на экране до следующей закачки.
                     // Сообщение об ошибке при этом не затираем — оно важнее.
                     if (string.IsNullOrWhiteSpace(this.lastErrorDetails)) {
-                        this.StatusText.Text = "Готово";
+                        this.StatusText.Text = string.Empty;
                     }
 
                     this.UpdateActionButtonState();
@@ -1165,7 +1167,7 @@ namespace ChillHub.Pages {
                 // очереди этот блок вообще скрыт (вместо него — карточки, см.
                 // SyncQueuePanelVisibility), и прогресс позиции живёт в её собственной карточке.
                 if (this.queueDockItems.Count == 0) {
-                    this.StatusText.Text = "Готово";
+                    this.StatusText.Text = string.Empty;
                     this.UpdateProgress.IsIndeterminate = false;
                     this.UpdateProgress.Value = 0;
                     this.SpeedEtaText.Text = string.Empty;
@@ -1194,7 +1196,7 @@ namespace ChillHub.Pages {
                 this.UpdateActionButtonState();
             }
             else {
-                this.StatusText.Text = "Готово";
+                this.StatusText.Text = string.Empty;
                 this.UpdateProgress.IsIndeterminate = false;
                 this.UpdateProgress.Value = 0;
                 this.SpeedEtaText.Text = string.Empty;
@@ -1960,8 +1962,8 @@ namespace ChillHub.Pages {
         }
 
         /// <summary>
-        /// Нижняя панель видна, только пока что-то происходит: есть очередь, идёт полоса или
-        /// статус сообщает не «Готово». В покое она забирала полтораста пикселей под пустой
+        /// Нижняя панель видна, только пока что-то происходит: есть очередь, идёт полоса
+        /// или строке состояния есть что сказать. В покое она забирала полтораста пикселей под пустой
         /// прогрессбар — полоса в нуле читается как остановившийся процесс, а не как его
         /// отсутствие.
         /// </summary>
@@ -2182,7 +2184,7 @@ namespace ChillHub.Pages {
 
         // Сервер сообщил о смене режима: работы начались или закончились.
         // Перезапуск клиента не нужен — просто пересчитываем кнопку. Строку статуса не
-        // трогаем: режим работ в неё не пишет, а сбрасывать в «Готово» чужое сообщение
+        // трогаем: режим работ в неё не пишет, а гасить чужое сообщение
         // («Обновление не завершено…») из-за окончания работ было бы неверно.
         private void OnMaintenanceChanged(Core.Maintenance.MaintenanceState state) {
             try {
@@ -2397,8 +2399,15 @@ namespace ChillHub.Pages {
                         break;
                 }
 
+                // Конец работы — всплывашкой, строка внизу остаётся за идущей работой:
+                // см. Core.Home.QueueDone. Ошибка — исключение, её оставляем в строке.
+                var done = Core.Home.QueueDone.For(item.State, item.Title, item.StatusText);
+                if (done.Toast.Length > 0) {
+                    this.ShowToast(done.Toast);
+                }
+
                 if (string.Equals(this.GetSelectedGameId(), item.GameId, StringComparison.OrdinalIgnoreCase)) {
-                    this.StatusText.Text = item.StatusText;
+                    this.StatusText.Text = done.Status;
                     this.UpdateActionButtonState();
                 }
             });
@@ -2790,7 +2799,9 @@ namespace ChillHub.Pages {
             if (proc == null && option.ViaSteam) {
                 // Steam.exe завершается сразу, отдав команду; отсутствие процесса тут
                 // не ошибка. Настоящий отказ уже записан в журнал внутри ModsLaunch.
-                this.StatusText.Text = "Запуск через Steam…";
+                // Про сам запуск строке внизу говорить нечего: «Запускается…» уже стоит
+                // на кнопке, в бейдже витрины и в строке списка (Core.Game.RunningGameLook),
+                // а строка внизу это же слово никогда потом не убирала.
             }
             else if (proc == null) {
                 this.StatusText.Text = "Не удалось запустить игру. Подробности в журнале.";
@@ -2934,7 +2945,8 @@ namespace ChillHub.Pages {
 
                 var message = Core.Home.SteamModsInstall.DescribeResult(result, title, repair);
                 if (result.Ok) {
-                    this.StatusText.Text = "Готово";
+                    // Об успехе говорит всплывашка; строку внизу гасим, чтобы панель ушла.
+                    this.StatusText.Text = string.Empty;
                     this.ShowToast(message);
                 }
                 else {

@@ -51,6 +51,19 @@ namespace ChillHub.Tests {
             Assert.False(look.Status);
         }
 
+        /// <summary>
+        /// «Готово.» с точкой — то же молчание. Общий с другими экранами код отчитывается
+        /// о конце работы то с точкой, то без; панель, не узнавшая отчёт, оставалась
+        /// висеть на экране вместе с ним.
+        /// </summary>
+        [Fact]
+        public void ГотовоСТочкойПанельНеДержит() {
+            var look = BottomBarLook.Decide(false, false, 0, "Готово.", string.Empty, string.Empty);
+
+            Assert.False(look.Panel);
+            Assert.False(look.Status);
+        }
+
         /// <summary>«Готово» — тоже молчание: отчёт о конце работы поверх идущей работы сбивает с толку.</summary>
         [Fact]
         public void ГотовоПодПолосойСтрокиНеЗанимает() {
