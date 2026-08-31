@@ -357,6 +357,10 @@ Rate limit Public API (`server/cmd/api/main.go`): по умолчанию **600 
 - Список версий: `GET /admin/api/list?gameId={id}` → `{ items: [{version}], latest }`.
 - Активация latest: `POST /admin/api/activate?gameId={id}&version={v}` (создает/обновляет `latest.json`).
 - Удаление версии: `POST /admin/api/deleteVersion?gameId={id}&version={v}` (удаляет манифест и папку `content/{gameId}/{version}`; корректирует `latest.json`).
+- Массовое удаление старых версий: `POST /admin/api/pruneVersions?gameId={id}` — удаляет всё,
+  что старше активной версии, кроме двух ближайших к ней; активная и всё, что новее её
+  (залитое, но не включённое), остаются. Без `latest.json` отвечает 409. В ответе
+  `{ deleted, failed, active }`: версия, которую не удалось снять с раздачи, названа явно.
 - Свободное место на диске сервера: `GET /admin/api/system/free`.
 - Подсказка следующей версии: (убрана). Версию вводит администратор вручную в UI.
 - Сборка манифеста из уже разложенных файлов (compose) — убрана в пользу загрузки ZIP.

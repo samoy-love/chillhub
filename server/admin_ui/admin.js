@@ -460,11 +460,51 @@ function versionsTableHtml(items, latest, cls){
     ? '<tfoot><tr><td colspan="4" class="text-body-secondary">Версий: '+items.length+'</td>'
       + '<td class="text-end text-body-secondary">'+escapeHtml(formatBytes(total))+'</td><td></td></tr></tfoot>'
     : '';
-  return '<div class="table-responsive"><table class="table table-admin table-striped align-middle">'
+  return prunePanelHtml(items, latest, cls)
+    + '<div class="table-responsive"><table class="table table-admin table-striped align-middle">'
     + '<thead><tr><th>Версия</th><th>Статус</th><th>Собрана</th>'
     + '<th class="text-end">Файлов</th><th class="text-end">Размер</th><th class="text-end"></th></tr></thead>'
     + '<tbody>'+(rows || '<tr><td colspan="6" class="text-body-secondary">Версий нет</td></tr>')+'</tbody>'
     + foot + '</table></div>';
+}
+
+// Сколько версий перед активной остаётся после чистки. Значение должно
+// совпадать с keepBeforeActive на сервере: здесь оно нужно только для того,
+// чтобы кнопка заранее сказала, что именно исчезнет.
+const KEEP_BEFORE_ACTIVE = 2;
+
+// prunableVersions — версии, которые снесёт «Удалить старые версии»: всё старше
+// активной, кроме KEEP_BEFORE_ACTIVE ближайших к ней. Всё, что новее активной,
+// остаётся: это залитая, но ещё не включённая сборка.
+//
+// Порядок берётся из ответа сервера как есть: /admin/list уже отдаёт версии по
+// возрастанию номера, а не по алфавиту (иначе 1.1.10 оказалась бы старше
+// 1.1.9). Своего сравнения версий в панели нет и заводить второе, способное
+// разойтись с серверным, незачем.
+function prunableVersions(items, latest){
+  const list = Array.isArray(items) ? items : [];
+  if(!latest) return [];
+  const idx = list.findIndex(it => (it && it.version) === latest);
+  if(idx < 0) return [];
+  const cut = idx - KEEP_BEFORE_ACTIVE;
+  if(cut <= 0) return [];
+  return list.slice(0, cut);
+}
+
+// Кнопка массовой чистки. Появляется, только когда сносить действительно есть
+// что, и сразу говорит сколько версий и сколько места: без этих цифр решение
+// принимается вслепую, а действие необратимо.
+function prunePanelHtml(items, latest, cls){
+  const victims = prunableVersions(items, latest);
+  if(!victims.length) return '';
+  const bytes = victims.reduce((a, it)=> a + Number(it.bytes||0), 0);
+  return '<div class="d-flex align-items-center justify-content-between gap-2 mb-2">'
+    + '<span class="text-body-secondary">Старых версий: '+victims.length
+    + ' · '+escapeHtml(formatBytes(bytes))+'</span>'
+    + '<button class="btn btn-sm btn-outline-danger '+cls+'-prune"'
+    + ' data-vers="'+escapeHtml(victims.map(it=>it.version||'').join(' '))+'"'
+    + ' data-latest="'+escapeHtml(String(latest||''))+'">Удалить старые версии</button>'
+    + '</div>';
 }
 
 // bindVersionActions вешает подтверждения на кнопки таблицы. Удаление версии
@@ -508,6 +548,45 @@ function bindVersionActions(root, cls, gameId, afterChange){
       catch(e){ notifyLevel('Не удалось удалить версию: '+e, 'error'); return; }
       if(!r.ok){ await notifyHttp(r, 'Удаление версии '+ver); return; }
       notifyLevel('Версия '+ver+' удалена', 'success');
+      try{ await afterChange(); }catch(_){ /* обновление вида не критично */ }
+    });
+  });
+  root.querySelectorAll('.'+cls+'-prune').forEach(btn=>{
+    btn.addEventListener('click', async (ev)=>{
+      const el = ev.currentTarget;
+      const vers = String(el.getAttribute('data-vers')||'').split(' ').filter(Boolean);
+      if(!vers.length) return;
+      const latest = String(el.getAttribute('data-latest')||'');
+      const ok = await askConfirm({
+        title: 'Удалить старые версии?',
+        // Что ОСТАНЕТСЯ — первое, что нужно знать перед этой кнопкой: список
+        // удаляемого длинный, и по нему одному не видно, не сносится ли то,
+        // на что откатываются.
+        body: 'Останутся активная '+latest+', две версии перед ней и всё, что новее её. '
+          + 'Под удаление попадают '+vers.length+' шт.: '+vers.join(', ')+'.',
+        bullets: [
+          'Манифесты и файлы этих сборок удаляются с диска безвозвратно.',
+          'Вернуть версию можно только повторной заливкой того же ZIP.',
+          'Активная версия и откат на предыдущую не затрагиваются.',
+        ],
+        okText: 'Удалить старые версии',
+        danger: true,
+      });
+      if(!ok) return;
+      let r;
+      try{ r = await fetch('/admin/pruneVersions?gameId='+encodeURIComponent(gameId), {method:'POST'}); }
+      catch(e){ notifyLevel('Не удалось удалить старые версии: '+e, 'error'); return; }
+      if(!r.ok){ await notifyHttp(r, 'Удаление старых версий'); return; }
+      let j = null; try{ j = await r.json(); }catch(_){ /* сервер ответил успехом — считаем работу сделанной */ }
+      const done = (j && Array.isArray(j.deleted)) ? j.deleted : [];
+      const stuck = (j && Array.isArray(j.failed)) ? j.failed : [];
+      // Застрявшую версию нельзя проглотить: она осталась на диске и в списке,
+      // и объяснить это потом будет нечем.
+      if(stuck.length){
+        notifyLevel('Удалено версий: '+done.length+'. Не удалось удалить: '+stuck.join(', '), 'error');
+      } else {
+        notifyLevel('Удалено версий: '+done.length, 'success');
+      }
       try{ await afterChange(); }catch(_){ /* обновление вида не критично */ }
     });
   });
