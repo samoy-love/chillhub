@@ -21,6 +21,20 @@ namespace ChillHub.Tests {
     /// </summary>
     [Collection(GamesPathCollection.Name)]
     public class MetricsAndPathFormatTests {
+        /// <summary>
+        /// Сам прогон тестов статистику не шлёт.
+        /// <para>
+        /// Стеречь это приходится тестом, потому что нарушение не видно ниоткуда:
+        /// отправка «выстрелил и забыл», ошибки сети проглочены, в логе ни строки.
+        /// Пока рубильника здесь не было, тесты сотнями слали game_session и ошибки
+        /// на боевой сервер, и панель показывала их как игроков.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void ПрогонТестовСтатистикуНеШлёт() {
+            Assert.False(MetricsService.Enabled);
+        }
+
         /// <summary>Тумблер в настройках выключает отправку.</summary>
         [Fact]
         public void ВыключенныйТумблерЗапрещаетОтправку() {
