@@ -151,11 +151,12 @@ test('таблица версий отмечает активную, обнов�
         displayName: 'Lethal Reloaded',
         packageUrl: 'https://thunderstore.io/c/lethal-company/p/ASTeam/LethalReloaded/',
         active: true, packages: 151, files: 2400, bytes: 123, missing: 0,
-        createdAt: '2026-08-27T10:00:00',
+        createdAt: '2026-08-27T10:00:00', rebuildable: true,
       },
       {
         version: 'Other-Pack-1.0.0', displayName: 'Other', active: false,
         packages: 10, files: 40, bytes: 5, missing: 3, createdAt: '2026-08-20T10:00:00',
+        rebuildable: true,
       },
     ],
     updates: [{
@@ -172,7 +173,44 @@ test('таблица версий отмечает активную, обнов�
   assert.doesNotMatch(html, /data-md-delete="ASTeam-LethalReloaded-2\.2\.12"/);
   assert.doesNotMatch(html, /data-md-activate="ASTeam-LethalReloaded-2\.2\.12"/);
   assert.match(html, /data-md-activate="Other-Pack-1\.0\.0"/);
-  assert.match(html, /data-md-rebuild="ASTeam\/LethalReloaded"/);
+  // «Собрать 2.2.13» берёт с Thunderstore другую версию пакета; «Пересобрать»
+  // раскладывает эту же. Раньше обе назывались «Пересобрать», и по названию
+  // было не понять, что нажатие опубликует НОВУЮ версию.
+  assert.match(html, /data-md-newer="ASTeam\/LethalReloaded" data-md-newer-version="2\.2\.13"[^>]*>Собрать 2\.2\.13</);
+  assert.match(html, /data-md-again="ASTeam-LethalReloaded-2\.2\.12"/);
+});
+
+test('«Пересобрать» выключена у версии, состав которой не записан', () => {
+  // Импорт профиля r2modman до появления записи о составе пересобрать не из
+  // чего. Кнопка, которая на нажатие отвечает ошибкой сервера, — хуже
+  // выключенной: выключенная объясняет себя подписью.
+  const html = versionsTableHtml({
+    items: [
+      {
+        version: 'lethal-1.0.7', displayName: 'Импорт', active: false,
+        createdAt: '2026-08-27T10:00:00', rebuildable: false,
+      },
+      {
+        version: 'Team-Pack-1.0.0', displayName: 'Pack', active: true,
+        createdAt: '2026-08-20T10:00:00', rebuildable: true,
+      },
+    ],
+  });
+  assert.match(html, /data-md-again="lethal-1\.0\.7" disabled title="Версия импортирована/);
+  assert.doesNotMatch(html, /data-md-again="Team-Pack-1\.0\.0"[^>]*disabled/);
+  // У активной версии кнопка помечена: подтверждение перед пересборкой обязано
+  // сказать, что заменяет то, что игроки качают прямо сейчас.
+  assert.match(html, /data-md-again="Team-Pack-1\.0\.0" data-md-again-active=""/);
+});
+
+test('пересечения между пакетами видны в списке версий', () => {
+  const html = versionsTableHtml({
+    items: [{
+      version: 'Team-Pack-1.0.0', displayName: 'Pack', active: true,
+      createdAt: '2026-08-27T10:00:00', rebuildable: true, collisions: 2,
+    }],
+  });
+  assert.match(html, /пересечений 2/);
 });
 
 test('«Дифф» у единственной версии выключен и говорит почему', () => {

@@ -114,7 +114,27 @@ namespace ChillHub.Core.Home {
             }
 
             var installed = GameLocalState.ReadLocalModsVersion(g!.GameId).Trim();
-            return !string.Equals(installed, wanted, StringComparison.OrdinalIgnoreCase);
+            if (!string.Equals(installed, wanted, StringComparison.OrdinalIgnoreCase)) {
+                return true;
+            }
+
+            // ОДНОГО ИМЕНИ ВЕРСИИ МАЛО.
+            //
+            // Версия модпака — имя пакета на Thunderstore, а не номер нашей сборки.
+            // Админка умеет пересобрать тот же пакет изменившимся конвейером, и тогда
+            // под тем же именем лежит другое дерево. Сравнивая только имена, лаунчер
+            // такую пересборку не замечал вовсе: исправление оставалось на сервере.
+            //
+            // Пустой отпечаток на сервере — старый сервер, сравнивать нечем. Пустой на
+            // диске при непустом на сервере — модпак ставил лаунчер, отпечатков ещё не
+            // писавший: один раз сверимся, и дальше маркер будет на месте.
+            var wantedRevision = (g.Mods?.Revision ?? string.Empty).Trim();
+            if (wantedRevision.Length == 0) {
+                return false;
+            }
+
+            var installedRevision = GameLocalState.ReadLocalModsRevision(g.GameId).Trim();
+            return !string.Equals(installedRevision, wantedRevision, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
