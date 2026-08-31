@@ -804,21 +804,14 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	// another publication of the same version.
 	unlock := lockPublish(m.GameID, m.Version)
 	defer unlock()
-	prom, err := beginPromote(stageDir, finalVerDir)
-	if err != nil {
-		streamError(nw, fl, "activate failed: "+err.Error())
-		return
-	}
-	promoted = true
 	// See Upload: the backup goes only after the manifest is written.
 	// update latest.json is opted-in by client via existing API; here keep minimal
-	outPath, _, err := h.writeManifest(mOut, false)
+	outPath, _, err := h.publishTree(stageDir, finalVerDir, h.manifestsDir(m.GameID), mOut, false)
 	if err != nil {
-		prom.Rollback(err)
 		streamError(nw, fl, err.Error())
 		return
 	}
-	prom.Commit()
+	promoted = true
 	// The archive has served its purpose. Dropping it here — rather than waiting
 	// out the janitor's 12 hours — is what keeps a 30 GB upload from occupying
 	// the volume long after the build is live.

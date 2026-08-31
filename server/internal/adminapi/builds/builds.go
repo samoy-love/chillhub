@@ -111,7 +111,7 @@ func (h *Handlers) stageVersionDir(gid, ver string) (string, string, error) {
 	return stageDir, filesRoot, nil
 }
 
-// promoteVersionDir replaces the published version directory with a fully
+// beginPromote replaces the published version directory with a fully
 // extracted staging directory.
 //
 // os.Rename cannot overwrite an existing directory (on any OS, and notably on
@@ -125,19 +125,34 @@ func (h *Handlers) stageVersionDir(gid, ver string) (string, string, error) {
 //     good with nothing to restore. Now it is put back.
 //
 // The old tree is deleted only once the new one is live.
+
+// publishTree performs the whole publication: it swaps the staged tree into
+// place, writes the manifest that describes it, and undoes the swap if that
+// write fails. It returns the manifest path and its bytes.
 //
-// Use beginPromote instead wherever a manifest write follows: the published
-// version is the tree AND the manifest that describes it, and this function
-// drops the backup before that manifest exists. This one remains for the
-// callers that have nothing left to write.
-func promoteVersionDir(stageDir, finalDir string) error {
-	p, err := beginPromote(stageDir, finalDir)
+// One function rather than the same five lines at each of the four publication
+// paths: the ORDER is the invariant here — tree in, manifest written, backup
+// dropped — and four copies of an order is four chances to get it wrong. The
+// previous one already was: every path promoted first and wrote the manifest
+// afterwards, with the backup already gone.
+func (h *Handlers) publishTree(
+	stageDir, finalDir, manifestDir string, m manifest, updateLatest bool) (string, []byte, error) {
+	prom, err := beginPromote(stageDir, finalDir)
 	if err != nil {
-		return err
+		return "", nil, fmt.Errorf("%w: %w", errPromoteFailed, err)
 	}
-	p.Commit()
-	return nil
+	path, b, err := h.writeManifestTo(manifestDir, m, updateLatest)
+	if err != nil {
+		prom.Rollback(err)
+		return "", nil, err
+	}
+	prom.Commit()
+	return path, b, nil
 }
+
+// errPromoteFailed marks the half of publishTree that failed before anything
+// was written, so a caller can still tell the operator which step gave up.
+var errPromoteFailed = errors.New("builds: promoting the version directory")
 
 // promotion is a version directory that is already live but whose manifest has
 // not been written yet. The replaced tree is still on disk under its backup
@@ -264,7 +279,7 @@ func dropBackup(backup string) {
 
 // publishLocks serialises publication per gameId+version.
 //
-// promoteVersionDir first deletes every finalDir+".old-*" it finds and only
+// beginPromote first deletes every finalDir+".old-*" it finds and only
 // then renames the live version aside under that same pattern. Two publications
 // of the SAME version running at once therefore destroy each other's backup,
 // and — worse — the winner of the content rename is not necessarily the one
@@ -441,7 +456,7 @@ func stripLauncherStateDirs(gameID string, dirs []string) []string {
 // stored.
 //
 // ЭТО НАДО СПРОСИТЬ ДО ПОДМЕНЫ ДЕРЕВА ВЕРСИИ, а не только перед записью
-// манифеста. Порядок в каждом пути публикации был «promoteVersionDir → запись
+// манифеста. Порядок в каждом пути публикации был «промоут → запись
 // манифеста», а проверка жила внутри записи: отказ на пути вида "aux.dll" или
 // на двух записях, различающихся только регистром, оставлял НОВЫЕ файлы под
 // СТАРЫМ манифестом. Откатывать уже нечего — прежнее дерево удалено, — а клиент
@@ -463,7 +478,7 @@ func prepareManifest(m manifest) (manifest, error) {
 }
 
 // publishable reports whether the manifest that WILL be written once the tree
-// is promoted passes validation. Called before promoteVersionDir by every
+// is promoted passes validation. Called before publishTree by every
 // publication path; see prepareManifest for why the answer is worthless after.
 func publishable(m manifest) error {
 	_, err := prepareManifest(m)
@@ -657,7 +672,7 @@ func (h *Handlers) hasVersionManifest(gid, ver string) bool {
 // launcherVersionAlreadyPublished refuses to publish a LAUNCHER build under a
 // version number that already has a manifest.
 //
-// promoteVersionDir happily replaces an existing version directory — by
+// beginPromote happily replaces an existing version directory — by
 // design, and correctly so for games, where a same-version re-upload is a
 // legitimate "fix this build without a new number" workflow. For the
 // launcher it is not: self-update compares version STRINGS, not content, so

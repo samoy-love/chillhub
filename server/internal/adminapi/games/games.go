@@ -426,7 +426,7 @@ func (h *Handlers) Purge(w http.ResponseWriter, r *http.Request) {
 		// вместе с манифестами и сборками» на любой успешный ответ и тело не
 		// читает. Статус — единственное, что до оператора точно дойдёт.
 		http.Error(w,
-			fmt.Sprintf("the registry row is gone, but these trees are still on disk: %s", strings.Join(failed, ", ")),
+			"the registry row is gone, but these trees are still on disk: "+strings.Join(failed, ", "),
 			http.StatusInternalServerError)
 		return
 	}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -283,7 +284,7 @@ func newRouter(limiter *ratelimit.Limiter, reg *promexp.Registry) *mux.Router {
 	// тысячи запросов по несуществующим путям, не был виден нигде. Обёртка той
 	// же цепочкой возвращает их на общий путь; ветка "other" в muxRoute написана
 	// ровно про этот случай.
-	r.NotFoundHandler = withMiddleware(http.HandlerFunc(http.NotFound), chain)
+	r.NotFoundHandler = withMiddleware(http.NotFoundHandler(), chain)
 	r.MethodNotAllowedHandler = withMiddleware(http.HandlerFunc(methodNotAllowed), chain)
 
 	// The limiter is attached per JSON endpoint, NOT router-wide. In dev this
@@ -339,8 +340,8 @@ func newRouter(limiter *ratelimit.Limiter, reg *promexp.Registry) *mux.Router {
 // entry of the chain ends up outermost, so a hand-wrapped handler and a routed
 // one see the middleware in the same sequence.
 func withMiddleware(h http.Handler, chain []mux.MiddlewareFunc) http.Handler {
-	for i := len(chain) - 1; i >= 0; i-- {
-		h = chain[i].Middleware(h)
+	for _, mw := range slices.Backward(chain) {
+		h = mw.Middleware(h)
 	}
 	return h
 }

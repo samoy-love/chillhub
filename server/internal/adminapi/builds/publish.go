@@ -225,19 +225,14 @@ func (h *Handlers) Publish(s *StagedTree, updateLatest bool, onFile func(path st
 	defer unlock()
 
 	finalDir := filepath.Join(h.ContentDirFor(s.ns, s.gameID), s.version)
-	prom, err := beginPromote(s.Dir, finalDir)
-	if err != nil {
-		return res, fmt.Errorf("builds: promoting the version directory: %w", err)
-	}
+	stage := s.Dir
 	s.Dir = "" // promoted; Discard must not delete the live version
 
 	// See Upload: the replaced tree comes home if the manifest cannot be written.
-	path, _, err := h.writeManifestTo(h.ManifestsDirFor(s.ns, s.gameID), m, updateLatest)
+	path, _, err := h.publishTree(stage, finalDir, h.ManifestsDirFor(s.ns, s.gameID), m, updateLatest)
 	if err != nil {
-		prom.Rollback(err)
 		return res, err
 	}
-	prom.Commit()
 
 	return PublishResult{
 		Version: s.version, Files: len(files), Bytes: total, ManifestPath: path,
