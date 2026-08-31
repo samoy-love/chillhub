@@ -75,6 +75,12 @@ type GameInfo struct {
 type ModsInfo struct {
 	HasLatest bool   `json:"hasLatest"`
 	Version   string `json:"version,omitempty"`
+
+	// Revision identifies the CONTENT behind Version. A modpack is published
+	// under the name of its Thunderstore package, so rebuilding the same pack
+	// with a fixed pipeline produces a different tree under the same name. The
+	// launcher compares this too, or such a rebuild never reaches anyone.
+	Revision string `json:"revision,omitempty"`
 	// DisplayName/DisplayVersion are what the player is shown on the game card
 	// ("Lethal Reloaded 2.2.12"). They exist so a support report can name the
 	// pack instead of "моды сломались".
@@ -124,30 +130,35 @@ func modsInfoFor(it games.Entry) *ModsInfo {
 	info.Version = meta.Version
 	info.ManifestURL = "/manifests/_mods/" + it.GameID + "/" + meta.Version + ".json"
 	info.ContentBaseURL = "/content/_mods/" + it.GameID + "/" + meta.Version + "/files"
-	info.DisplayName, info.DisplayVersion = modsDisplay(dir, meta.Version)
+	info.DisplayName, info.DisplayVersion, info.Revision = modsSource(dir, meta.Version)
 	return info
 }
 
 // modsDisplay reads the human-readable name of a built version from its source
 // record, falling back to the version name itself.
-func modsDisplay(dir, version string) (name, ver string) {
+//
+// The digest comes from the same record: computing it here would mean parsing
+// a half-megabyte manifest on every /games request, and it is written once per
+// build anyway.
+func modsSource(dir, version string) (name, ver, revision string) {
 	// #nosec G304 -- dir is the content root plus validated components and
 	// version came from latest.json written by this project.
 	b, err := os.ReadFile(filepath.Join(dir, "sources", version+".json"))
 	if err != nil {
-		return version, ""
+		return version, "", ""
 	}
 	var src struct {
 		DisplayName string `json:"displayName"`
+		TreeDigest  string `json:"treeDigest"`
 	}
 	if json.Unmarshal(b, &src) != nil || src.DisplayName == "" {
-		return version, ""
+		return version, "", src.TreeDigest
 	}
 	// "ASTeam-LethalReloaded-2.2.12" -> ("Lethal Reloaded", "2.2.12")
 	if i := strings.LastIndex(version, "-"); i > 0 {
-		return src.DisplayName, version[i+1:]
+		return src.DisplayName, version[i+1:], src.TreeDigest
 	}
-	return src.DisplayName, ""
+	return src.DisplayName, "", src.TreeDigest
 }
 
 // (moved to server/internal/httpx)

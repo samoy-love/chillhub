@@ -111,10 +111,22 @@
     if (it.missing > 0) badges.push('<span class="badge text-bg-warning" title="Столько модов не нашлось на Thunderstore">пропущено ' + it.missing + '</span>');
     if (upd && upd.latest) badges.push('<span class="badge text-bg-info">доступна ' + esc(upd.latest) + '</span>');
     if (upd && upd.deprecated) badges.push('<span class="badge text-bg-warning">автор пометил устаревшим</span>');
+    if (it.collisions > 0) badges.push('<span class="badge text-bg-warning" title="Два пакета положили файл по одному пути или принесли DLL с одним именем">пересечений ' + it.collisions + '</span>');
 
+    // «Собрать N» и «Пересобрать» — разные действия, и раньше обе назывались
+    // «Пересобрать». Первая берёт с Thunderstore ДРУГУЮ, более свежую версию
+    // пакета и публикует её рядом; вторая раскладывает ЭТУ же версию заново.
+    // Нужны обе: состав модпака меняет автор, а раскладку меняем мы, и версия,
+    // собранная старыми правилами, иначе так и лежит собранной по-старому.
     const actions = ''
       + (it.active ? '' : '<button type="button" class="btn btn-sm btn-success me-1" data-md-activate="' + esc(it.version) + '">Активировать</button>')
-      + (upd && upd.latest ? '<button type="button" class="btn btn-sm btn-outline-primary me-1" data-md-rebuild="' + esc(upd.namespace + '/' + upd.name) + '" data-md-rebuild-version="' + esc(upd.latest) + '">Пересобрать</button>' : '')
+      + (upd && upd.latest ? '<button type="button" class="btn btn-sm btn-outline-primary me-1" data-md-newer="' + esc(upd.namespace + '/' + upd.name) + '" data-md-newer-version="' + esc(upd.latest) + '" title="Собрать более свежую версию модпака рядом с этой">Собрать ' + esc(upd.latest) + '</button>' : '')
+      + '<button type="button" class="btn btn-sm btn-outline-primary me-1" data-md-again="' + esc(it.version) + '"'
+      + (it.active ? ' data-md-again-active=""' : '')
+      + (it.rebuildable
+        ? ' title="Разложить этот же состав заново — нужно, когда изменились правила сборки"'
+        : ' disabled title="Версия импортирована из профиля r2modman до того, как состав стал записываться: пересобрать не из чего"')
+      + '>Пересобрать</button>'
       + '<button type="button" class="btn btn-sm btn-outline-secondary me-1" data-md-diff="' + esc(it.version) + '"'
       + (many
         ? ' title="Сравнить состав с другой собранной версией"'
@@ -580,14 +592,20 @@
       };
     }
 
-    async function buildPack(full, version, allowMissing) {
-      const parts = full.split('/');
+    // ПОТОК СОБЫТИЙ ОДИН НА ДВЕ КНОПКИ.
+    //
+    // Сборка нового пакета и пересборка уже собранной версии отличаются только
+    // адресом и телом запроса: прогресс, повторы, разбор «пакетов больше нет на
+    // Thunderstore» и подтверждение «собрать без них» у них общие. Разведённые
+    // по двум копиям, они разъезжаются на первой же правке — а правится тут
+    // ровно то, что видит оператор двадцать минут подряд.
+    async function streamBuild(opts) {
       const bar = el('progress');
       const status = el('status');
       const detail = el('detail');
       const retriesBox = el('retriesBox');
       const retriesList = el('retries');
-      setBusy(true, 'Сборка…');
+      setBusy(true, opts.busy || 'Сборка…');
       showBuildCard(true);
       const box = el('progressBox');
       if (box) box.classList.remove('hidden');
@@ -599,12 +617,9 @@
       const progress = buildProgress();
 
       try {
-        const body = new URLSearchParams({ gameId: gameId(), namespace: parts[0], name: parts[1] });
-        if (version) body.set('version', version);
-        if (allowMissing) body.set('allowMissing', '1');
-        const res = await fetch('/admin/api/mods/build', {
+        const res = await fetch(opts.url, {
           method: 'POST',
-          body,
+          body: opts.body,
           headers: { Accept: 'application/x-ndjson', 'Cache-Control': 'no-store' },
         });
         if (!res.ok) { say(await res.text(), 'error'); return; }
@@ -628,18 +643,18 @@
           say('Сервер не прислал ни одного события — вероятно, ответ буферизуется прокси', 'error');
           return;
         }
-        if (missing && !allowMissing) {
+        if (missing && !opts.allowMissing) {
           const agreed = typeof confirm === 'function'
             && confirm(missing + '\n\nСобрать модпак без них?');
           if (agreed) {
             setBusy(false);
-            return buildPack(full, version, true);
+            return opts.retry();
           }
           return;
         }
         if (!failed) {
           progress.finish();
-          say('Модпак собран. Чтобы игроки его получили, нажмите «Активировать».');
+          say(opts.done);
           reloadVersions();
         }
       } catch (e) {
@@ -648,6 +663,37 @@
         setBusy(false);
         finishBuildCard();
       }
+    }
+
+    async function buildPack(full, version, allowMissing) {
+      const parts = full.split('/');
+      const body = new URLSearchParams({ gameId: gameId(), namespace: parts[0], name: parts[1] });
+      if (version) body.set('version', version);
+      if (allowMissing) body.set('allowMissing', '1');
+      return streamBuild({
+        url: '/admin/api/mods/build',
+        body: body,
+        allowMissing: allowMissing,
+        retry: function () { return buildPack(full, version, true); },
+        done: 'Модпак собран. Чтобы игроки его получили, нажмите «Активировать».',
+      });
+    }
+
+    // rebuildVersion раскладывает уже собранную версию заново — тот же состав,
+    // сегодняшние правила. Публикуется под тем же именем, поверх себя.
+    async function rebuildVersion(version, active, allowMissing) {
+      const body = new URLSearchParams({ gameId: gameId(), version: version });
+      if (allowMissing) body.set('allowMissing', '1');
+      return streamBuild({
+        url: '/admin/api/mods/rebuild',
+        body: body,
+        busy: 'Пересборка…',
+        allowMissing: allowMissing,
+        retry: function () { return rebuildVersion(version, active, true); },
+        done: active
+          ? 'Модпак пересобран. Версия активна — игроки получат новое дерево при следующей проверке.'
+          : 'Модпак пересобран. Чтобы игроки его получили, нажмите «Активировать».',
+      });
     }
 
     // ---- собранные версии -------------------------------------------------
@@ -713,7 +759,19 @@
       else if (t.dataset.mcReadme) { e.preventDefault(); showReadme(t.dataset.mcReadme); }
       else if (t.dataset.mcResolve) { e.preventDefault(); resolvePack(t.dataset.mcResolve); }
       else if (t.dataset.mcBuild) { e.preventDefault(); buildPack(t.dataset.mcBuild); }
-      else if (t.dataset.mdRebuild) { e.preventDefault(); buildPack(t.dataset.mdRebuild, t.dataset.mdRebuildVersion); }
+      else if (t.dataset.mdNewer) { e.preventDefault(); buildPack(t.dataset.mdNewer, t.dataset.mdNewerVersion); }
+      else if (t.dataset.mdAgain) {
+        e.preventDefault();
+        const version = t.dataset.mdAgain;
+        // Пересборка активной версии заменяет то, что игроки качают прямо
+        // сейчас, и происходит это без отдельной активации. Спросить обязаны.
+        const active = t.dataset.mdAgainActive !== undefined;
+        const warn = active
+          ? 'Версия ' + version + ' активна. Пересборка заменит её у игроков без отдельной активации.\n\nПересобрать?'
+          : 'Пересобрать версию ' + version + ' тем же составом?';
+        if (typeof confirm === 'function' && !confirm(warn)) return;
+        rebuildVersion(version, active);
+      }
       else if (t.dataset.mdActivate) {
         e.preventDefault();
         post('/admin/mods/activate', { gameId: gameId(), version: t.dataset.mdActivate }, 'Модпак активирован')

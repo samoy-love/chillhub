@@ -25,6 +25,9 @@ namespace ChillHub.Core.Home {
         /// <summary>Имя файла-маркера с версией установленного модпака.</summary>
         internal const string ModsVersionMarkerFileName = Sync.IntegrityChecker.ModsVersionMarkerFileName;
 
+        /// <summary>Имя файла с отпечатком содержимого модпака.</summary>
+        internal const string ModsRevisionMarkerFileName = Sync.IntegrityChecker.ModsRevisionMarkerFileName;
+
         /// <summary>Имя файла с копией установленного манифеста модпака.</summary>
         internal const string ModsManifestFileName = Sync.IntegrityChecker.ModsManifestFileName;
 
@@ -178,6 +181,63 @@ namespace ChillHub.Core.Home {
             }
 
             return string.Empty;
+        }
+
+        /// <summary>
+        /// Читает отпечаток содержимого установленного модпака.
+        /// <para>
+        /// Пусто — не «повреждено», а «поставлено лаунчером, который отпечатков ещё не
+        /// писал». Решение, что с этим делать, принимает
+        /// <see cref="GameStatus.ModsOutOfDate"/>, а не чтение файла.
+        /// </para>
+        /// </summary>
+        /// <param name="localRoot">Корень папки игры.</param>
+        /// <returns>Отпечаток или пустая строка.</returns>
+        internal static string ReadModsRevisionAt(string? localRoot) {
+            try {
+                if (string.IsNullOrWhiteSpace(localRoot)) {
+                    return string.Empty;
+                }
+
+                var marker = Path.Combine(localRoot, ModsRevisionMarkerFileName);
+                if (File.Exists(marker)) {
+                    return File.ReadAllText(marker).Trim();
+                }
+            }
+            catch (Exception ex) {
+                Logging.Logger.Warn($"ReadModsRevisionAt('{localRoot}'): {ex.Message}");
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>Читает отпечаток модпака по идентификатору игры.</summary>
+        /// <param name="gameId">Идентификатор игры.</param>
+        /// <returns>Отпечаток или пустая строка.</returns>
+        internal static string ReadLocalModsRevision(string? gameId)
+            => string.IsNullOrWhiteSpace(gameId) ? string.Empty : ReadModsRevisionAt(GameLocalRoot(gameId));
+
+        /// <summary>Пишет отпечаток содержимого модпака в указанный корень.</summary>
+        /// <param name="localRoot">Корень папки игры.</param>
+        /// <param name="revision">Отпечаток дерева.</param>
+        /// <returns>true, если маркер записан.</returns>
+        internal static bool WriteModsRevisionAt(string? localRoot, string? revision) {
+            try {
+                if (string.IsNullOrWhiteSpace(localRoot)) {
+                    return false;
+                }
+
+                Directory.CreateDirectory(localRoot);
+                var toWrite = (revision ?? string.Empty).Trim();
+                Update.AtomicFile.WriteAllText(
+                    Path.Combine(localRoot, ModsRevisionMarkerFileName), toWrite, SelfUpdate.SelfUpdateRules.Utf8NoBom);
+                Logging.Logger.Info($"WriteModsRevision root='{localRoot}' value='{toWrite}'");
+                return true;
+            }
+            catch (Exception ex) {
+                Logging.Logger.Error(ex, $"WriteModsRevisionAt({localRoot})");
+                return false;
+            }
         }
 
         /// <summary>Пишет маркер версии модпака в указанный корень.</summary>

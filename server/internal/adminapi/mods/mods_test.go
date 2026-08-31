@@ -112,7 +112,7 @@ func TestLayoutDestination(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.what, func(t *testing.T) {
-			got, keep := l.destination(c.pkg, c.rel, c.pkg.Namespace+"-"+c.pkg.Name)
+			got, _, keep := l.destination(c.pkg, c.rel, c.pkg.Namespace+"-"+c.pkg.Name)
 			if keep != c.keep || (keep && got != c.want) {
 				t.Errorf("destination(%q) = (%q,%v), want (%q,%v)", c.rel, got, keep, c.want, c.keep)
 			}

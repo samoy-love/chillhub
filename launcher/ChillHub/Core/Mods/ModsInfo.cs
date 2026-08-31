@@ -25,6 +25,17 @@ namespace ChillHub.Core {
         /// </summary>
         public string Version { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Отпечаток СОДЕРЖИМОГО этой версии.
+        /// <para>
+        /// Нужен потому, что <see cref="Version"/> — имя пакета на Thunderstore, а не
+        /// номер нашей сборки: админка умеет пересобрать тот же пакет и опубликовать
+        /// другое дерево под тем же именем. Пусто — сервер старый, тогда сравниваются
+        /// одни версии, как раньше.
+        /// </para>
+        /// </summary>
+        public string Revision { get; set; } = string.Empty;
+
         /// <summary>Читаемое имя модпака для карточки игры.</summary>
         public string DisplayName { get; set; } = string.Empty;
 

@@ -116,6 +116,7 @@ var wantPaths = []string{
 	"/admin/api/mods/import",
 	"/admin/api/mods/list",
 	"/admin/api/mods/readme",
+	"/admin/api/mods/rebuild",
 	"/admin/api/mods/resolve",
 	"/admin/api/games/purge",
 	"/admin/api/games/scan",
