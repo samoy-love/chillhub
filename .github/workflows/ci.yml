@@ -14,8 +14,10 @@ name: CI
 #
 #   htmlhint                 1.9.2
 #   eslint                   10.8.0
+#   @eslint/js               10.0.1
 #   stylelint                17.14.1
 #   stylelint-config-standard 40.0.0
+#   c8                       12.0.0
 #   golangci-lint            v2.12.2
 #   govulncheck              v1.1.4
 #   Go toolchain             taken from server/go.mod (single source of truth)
@@ -70,19 +72,71 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Проверить сообщения
-        run: |
-          # Событие всегда pull_request (см. блок on:), поэтому диапазон один:
-          # то, что ветка добавляет к своей базе.
-          RANGE="origin/${{ github.base_ref }}..HEAD"
-          echo "проверяю $RANGE"
+      # Версия прибита, как и у остальных инструментов: разбор YAML, уехавший
+      # вместе с апстримом, — это красный PR, в котором ничего не меняли.
+      - name: Install PyYAML
+        run: pip install --quiet pyyaml==6.0.3
 
-          BAD=$(git log "$RANGE" --format='%H %B' \
-            | grep -iE '^Co-[Aa]uthored-[Bb]y:.*(claude|anthropic|copilot|gpt)|(generated|created|written) with .*(claude|copilot|chatgpt)|🤖' \
-            || true)
+      # Сначала гейт проверяет сам себя. Он уже однажды молчал: при запуске без
+      # PR диапазон коммитов получался битым, git падал, а `|| true` гасил и
+      # это — шаг печатал «чисто» на ветке с трейлером в каждом коммите.
+      # Самопроверка исполняет тело шага ниже на заведомо грязных и заведомо
+      # чистых входах и требует, чтобы оно на них покраснело и позеленело.
+      - name: Самопроверка гейта
+        run: python3 scripts/ci/commit-gate-selftest.py
+
+      - name: Проверить сообщения
+        env:
+          # Оба значения приходят извне и в теле скрипта им делать нечего:
+          # заголовок PR пишет автор, а подстановка ${{ }} попала бы в код.
+          BASE_REF: ${{ github.base_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+
+          # Один и тот же образец на оба источника. Заголовок PR проверяется
+          # наравне с коммитами не для симметрии: сквош-мерж схлопывает ветку в
+          # один коммит, темой которого становится ИМЕННО заголовок, и дальше
+          # он уезжает в публичные version.json и summary.json (CLAUDE.md).
+          # Чистить это пришлось бы переписыванием опубликованной истории.
+          PATTERN='^Co-[Aa]uthored-[Bb]y:.*(claude|anthropic|copilot|gpt)|(generated|created|written) with .*(claude|copilot|chatgpt)|🤖'
+
+          # У заголовка образец СВОЙ, и отличается он ровно якорем. В теле
+          # коммита трейлер — это отдельная строка, и `^` там бережёт от ложной
+          # тревоги на цитату посреди абзаца. Заголовок же всегда ОДНА строка, и
+          # дописанный в её конец трейлер под `^` не попадал: «Ускорить сборку
+          # Co-Authored-By: Claude <...>» гейт пропускал, а сквош-мерж делал эту
+          # строку темой коммита в main и уносил её в публичные version.json и
+          # summary.json, откуда убрать её можно только переписыванием истории.
+          TITLE_PATTERN='Co-[Aa]uthored-[Bb]y:.*(claude|anthropic|copilot|gpt)|(generated|created|written) with .*(claude|copilot|chatgpt)|🤖'
+
+          BAD=""
+
+          # base_ref пуст везде, кроме pull_request, — в том числе на ручном
+          # workflow_dispatch (см. блок on:). Раньше диапазон в этом случае
+          # получался вида "origin/..HEAD", git падал на разборе аргумента, а
+          # `|| true` гасил и это падение тоже: шаг печатал «чисто» на ветке, в
+          # каждом коммите которой стоял трейлер. Теперь пропуск явный и вслух,
+          # как в launcher-version-bump, а `|| true` накрывает только grep —
+          # падение git роняет шаг благодаря pipefail.
+          if [ -n "$BASE_REF" ]; then
+            RANGE="origin/$BASE_REF..HEAD"
+            echo "проверяю коммиты $RANGE"
+            BAD=$(git log "$RANGE" --format='%H %B' | { grep -iE "$PATTERN" || true; })
+          else
+            echo "::notice::нет base_ref (не pull_request) — диапазона коммитов нет, сверяю только заголовок"
+          fi
+
+          if [ -n "$PR_TITLE" ]; then
+            echo "проверяю заголовок PR"
+            BAD_TITLE=$(printf '%s\n' "$PR_TITLE" | { grep -iE "$TITLE_PATTERN" || true; })
+            if [ -n "$BAD_TITLE" ]; then
+              BAD=$(printf '%s\nзаголовок PR: %s' "$BAD" "$BAD_TITLE")
+            fi
+          fi
 
           if [ -n "$BAD" ]; then
-            echo "::error::в сообщениях коммитов есть упоминания ИИ — авторство принадлежит владельцу репозитория (CLAUDE.md)"
+            echo "::error::есть упоминания ИИ — авторство принадлежит владельцу репозитория (CLAUDE.md)"
             echo "$BAD"
             exit 1
           fi
@@ -122,6 +176,24 @@ jobs:
         run: python3 scripts/ci/deploy-paths-superset.py --self-test
       - name: Сверить on.push.paths с job'ой changes
         run: python3 scripts/ci/deploy-paths-superset.py
+
+  repo-hygiene:
+    name: Repo invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Сначала проверка проверяет себя — по той же причине, что и у соседней
+      # deploy-paths: скрипт, разучившийся находить нарушение, отвечал бы
+      # «инварианты целы» и повторял собой ровно тот дефект, который сторожит.
+      - name: Самопроверка инвариантов
+        run: python3 scripts/ci/repo-hygiene.py --self-test
+      # Без этого шага скрипт гейтом не был: единственным его вызовом был
+      # `make lint-repo`, который в CI никто не зовёт, — то есть все шесть
+      # правил могли разойтись обратно с зелёным прогоном. Именно так они и
+      # разошлись в прошлый раз.
+      - name: Инварианты репозитория
+        run: python3 scripts/ci/repo-hygiene.py
 
   htmlhint-web:
     name: HTMLHint (web)
@@ -184,11 +256,19 @@ jobs:
           key: npm-cache-linters-${{ runner.os }}-node24-v1
           restore-keys: |
             npm-cache-linters-${{ runner.os }}-node24-
+      # @eslint/js — базовый набор правил, который подключает eslint.config.js.
+      # С десятой версии он не входит в зависимости eslint, а ставить его надо
+      # ЛОКАЛЬНО: имя разрешается от каталога конфига, и глобальный префикс npm
+      # в этот путь не попадает.
       - name: Install ESLint
-        run: npm i -g eslint@10.8.0
+        run: |
+          npm i -g eslint@10.8.0
+          npm i --no-save @eslint/js@10.0.1
+      # --max-warnings 0: без него `npx eslint` возвращает 0 на предупреждениях,
+      # то есть eqeqeq и no-unused-vars (оба 'warn') гейт не держали вовсе.
       - name: Run ESLint (landing + admin_ui)
         run: |
-          npx eslint "landing/**/*.js" "server/admin_ui/**/*.js" || (echo "ESLint found issues" && exit 1)
+          npx eslint --max-warnings 0 "landing/**/*.js" "server/admin_ui/**/*.js" || (echo "ESLint found issues" && exit 1)
 
   web-tests:
     name: Web tests (node --test)
@@ -216,7 +296,7 @@ jobs:
       # знаменателя и процент растёт от того, что кода стало «меньше».
       - name: node --test с покрытием
         run: >
-          npx --yes c8 --all
+          npx --yes c8@12.0.0 --all
           --include 'server/admin_ui/**/*.js'
           --include 'landing/**/*.js'
           --reporter=text --reporter=lcov
@@ -825,7 +905,10 @@ jobs:
         run: |
           echo "::notice::PAT недоступен (dependabot или форк) — сверка защиты ветки пропущена"
 
-      - uses: actions/checkout@v7
+      # SHA, а не тег: тег мутабелен, а на уровне job'ы здесь лежит PAT с
+      # правами на чтение защиты ветки — переставленный владельцем тег унёс бы
+      # его на ближайшем же прогоне.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.GH_TOKEN != ''
 
       - name: Сверить задачи с обязательными проверками main

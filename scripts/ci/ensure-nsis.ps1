@@ -77,6 +77,13 @@ function Add-NsisToPath {
     if ($env:GITHUB_PATH) { Add-Content -Path $env:GITHUB_PATH -Value $Dir }
 }
 
+# Несовпадение контрольной суммы отличается от «не скачалось», и отличать их
+# обязан catch у вызова: резервный путь через Chocolatey сумму не сверяет
+# вовсе, поэтому уход туда превратил бы подмену архива в предупреждение в логе
+# при зелёном шаге. Флаг ставится ровно в одном месте — там, где сумма не
+# сошлась.
+$script:NsisChecksumMismatch = $false
+
 function Install-NsisPortable {
     param([Parameter(Mandatory = $true)][string]$TargetDir)
 
@@ -102,6 +109,7 @@ function Install-NsisPortable {
 
         $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash
         if ($actual -ne $NsisZipSha256) {
+            $script:NsisChecksumMismatch = $true
             throw @"
 Контрольная сумма архива NSIS не совпала.
   ожидалась: $NsisZipSha256
@@ -170,6 +178,10 @@ else {
         Add-NsisToPath -Dir $PortableDir
     }
     catch {
+        # Сумма не сошлась — резервного пути нет. Chocolatey поставил бы тот же
+        # NSIS без единой сверки, а этим компилятором собирается файл, который
+        # скачивают пользователи: такой отказ обязан быть красным.
+        if ($script:NsisChecksumMismatch) { throw }
         Write-Warning "Портативный NSIS получить не удалось: $($_.Exception.Message)"
         Write-Warning "Пробую резервный путь — Chocolatey."
         if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {

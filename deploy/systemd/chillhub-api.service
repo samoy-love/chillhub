@@ -8,7 +8,12 @@ Type=simple
 User=www-data
 Group=www-data
 Environment=CONTENT_ROOT=/var/www/launcher
-ExecStart=/opt/chillhub/api
+# Путь — каталог релиза deploy-kit: ROOT=/opt/chillhub-api, симлинк current
+# указывает на выкаченный релиз, имя бинаря задано BUILD_CMD (.deploy-kit/api.env).
+# Раньше здесь стоял /opt/chillhub/api — раскладка удалённого скрипта выкатки,
+# которую не создаёт никто: юнит, развёрнутый из репозитория на новом хосте,
+# не запустился бы вовсе.
+ExecStart=/opt/chillhub-api/current/chillhub-api
 Restart=on-failure
 RestartSec=3
 # Increase file limits for many concurrent downloads
