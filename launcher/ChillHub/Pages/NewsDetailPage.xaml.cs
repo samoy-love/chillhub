@@ -35,6 +35,9 @@ namespace ChillHub.Pages {
         /// <summary>Страница уже освободила WebView2 — повторно им пользоваться нельзя.</summary>
         private bool browserReleased;
 
+        /// <summary>Переходы этой страницы: отличает свою отрисовку от ссылки в тексте.</summary>
+        private readonly NewsNavigationGate gate = new NewsNavigationGate(OpenOutside);
+
         public NewsDetailPage(string title, string markdownUrl) {
             this.InitializeComponent();
             this.TitleText.Text = title;
@@ -181,31 +184,48 @@ namespace ChillHub.Pages {
                     // отдать оболочке, решает NewsLinkPolicy: обычный клик поднимает
                     // NavigationStarting, клик с новым окном — NewWindowRequested,
                     // и оба должны судить одинаково.
+                    // Своя отрисовка узнаётся по метке, а не по адресу: адрес нашей
+                    // страницы придумывает сам движок, и его вид меняется от версии к
+                    // версии. Порядок «пометили — пришёл переход — метка снялась» и всё
+                    // решение целиком держит NewsNavigationGate, он же и проверяется
+                    // тестами; здесь остаётся только проводка события.
                     this.Browser.CoreWebView2.NavigationStarting += (s, ev) => {
-                        var action = NewsLinkPolicy.ForNavigation(ev.Uri);
-                        ev.Cancel = action.Cancel;
-                        OpenOutside(action.OpenExternally);
+                        ev.Cancel = this.gate.OnNavigationStarting(ev.Uri);
                     };
 
                     this.Browser.CoreWebView2.NewWindowRequested += (s, ev) => {
                         ev.Handled = true;
-                        OpenOutside(NewsLinkPolicy.ForNewWindow(ev.Uri).OpenExternally);
+                        this.gate.OnNewWindowRequested(ev.Uri);
                     };
                 }
                 catch {
                 }
 
-                this.Browser.NavigateToString(page);
+                this.NavigateToOwnPage(page);
             }
             catch (Exception ex) {
                 try {
-                    this.Browser.NavigateToString(NewsPageRenderer.RenderError(ex.Message, palette));
+                    this.NavigateToOwnPage(NewsPageRenderer.RenderError(ex.Message, palette));
                 }
                 catch {
                     // Даже отрисовать ошибку не вышло — уходим в запасную панель WPF
                     this.ShowFallbackError("Не удалось загрузить новость.\n\n" + ex.Message);
                 }
             }
+        }
+
+        /// <summary>
+        /// Показывает собственную страницу, пометив её переход как свой.
+        /// <para>
+        /// Единственный путь к <c>NavigateToString</c> на этой странице: обработчик
+        /// перехода отменяет всё, что не разрешила политика, и без пометки он отменял
+        /// бы и саму новость — на экране оставалась пустота.
+        /// </para>
+        /// </summary>
+        /// <param name="html">Готовая страница.</param>
+        private void NavigateToOwnPage(string html) {
+            this.gate.BeginOwnPageLoad();
+            this.Browser.NavigateToString(html);
         }
 
         /// <summary>
