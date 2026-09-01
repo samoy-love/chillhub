@@ -5,9 +5,8 @@ import (
 	"testing"
 )
 
-// The rendered HTML is shown both in the admin preview and in the launcher's
-// news view, so a body that can break out of an attribute is a stored XSS in
-// two clients at once.
+// The rendered HTML is what the admin panel shows in the preview, so a body
+// that can break out of an attribute is a stored XSS in the panel.
 func TestMdToHTMLEscapesAttributeBreakouts(t *testing.T) {
 	cases := []string{
 		`![a](/x" onerror="alert(1))`,

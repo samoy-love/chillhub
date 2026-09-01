@@ -22,7 +22,11 @@ Environment=COOKIE_DOMAIN=launcher.samoy.love
 #Environment=JWT_SECRET=change_me_to_long_random
 #Environment=ADMIN_USERNAME=admin
 #Environment=ADMIN_PASSWORD_BCRYPT=$2y$12$examplehash...
-ExecStart=/opt/chillhub/admin
+# Путь — каталог релиза deploy-kit: ROOT=/opt/chillhub-admin, симлинк current
+# указывает на выкаченный релиз, имя бинаря задано BUILD_CMD (.deploy-kit/admin.env).
+# Раньше здесь стоял /opt/chillhub/admin — раскладка удалённого скрипта выкатки,
+# которую не создаёт никто.
+ExecStart=/opt/chillhub-admin/current/chillhub-admin
 Restart=on-failure
 RestartSec=3
 LimitNOFILE=65536

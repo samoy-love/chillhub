@@ -42,7 +42,7 @@ func TestSubmitAndAggregate(t *testing.T) {
 		`{"installId":"bbb","event":"launcher_start","appVersion":"1.4.0","os":"Windows 10 x64"}`,
 		`{"installId":"aaa","event":"game_install","gameId":"g1","version":"1.0.0","result":"ok","durationMs":1000,"bytes":500}`,
 		`{"installId":"aaa","event":"game_update","gameId":"g1","version":"1.0.1","result":"fail","durationMs":50}`,
-		`{"installId":"bbb","event":"error","gameId":"g1","errorCode":"SYNC_HASH_MISMATCH"}`,
+		`{"installId":"bbb","event":"error","gameId":"g1","errorCode":"SYNC_FAILED"}`,
 	}
 	for _, b := range bodies {
 		if w := submit(t, h, b); w.Code != http.StatusOK {
@@ -81,7 +81,9 @@ func TestSubmitAndAggregate(t *testing.T) {
 	if len(s.ByGame) != 1 || s.ByGame[0].GameID != "g1" {
 		t.Fatalf("byGame = %+v", s.ByGame)
 	}
-	if len(s.TopErrors) != 1 || s.TopErrors[0].Key != "SYNC_HASH_MISMATCH" {
+	// The code is folded to lower case on the way in, so the panel does not
+	// show one failure under two spellings.
+	if len(s.TopErrors) != 1 || s.TopErrors[0].Key != "sync_failed" {
 		t.Fatalf("topErrors = %+v", s.TopErrors)
 	}
 }
@@ -172,8 +174,8 @@ func TestRotationKeepsTwoGenerations(t *testing.T) {
 	h := New(t.TempDir())
 	h.MaxBytes = 4 << 10 // shrink the ceiling instead of writing 16 MiB
 	// Fill the active file past the ceiling with a padded field.
-	pad := strings.Repeat("e", maxErrorCode)
-	line := fmt.Sprintf(`{"event":"error","errorCode":%q}`, pad)
+	pad := strings.Repeat("e", maxOS)
+	line := fmt.Sprintf(`{"event":"error","errorCode":"sync_failed","os":%q}`, pad)
 	n := 0
 	for {
 		submit(t, h, line)

@@ -1,9 +1,15 @@
-.PHONY: deploy deploy-nobuild nginx-reload services-restart smoke lint
+.PHONY: nginx-reload services-restart smoke lint
 
-# Defaults can be overridden: make deploy BRANCH=main
-BRANCH ?= main
-REPO_DIR ?= $(CURDIR)
-DEPLOY_SCRIPT := $(REPO_DIR)/scripts/deploy.sh
+# ВЫКАТКИ ЗДЕСЬ НЕТ И БЫТЬ НЕ ДОЛЖНО.
+#
+# Цели deploy и deploy-nobuild звали scripts/deploy.sh — собственный скрипт
+# выкатки, оставшийся от времён до deploy-kit. Половина файлов, которые он
+# ставил, из репозитория давно удалена, и под `set -e` он рвался на них уже
+# ПОСЛЕ подмены боевых бинарей: новые файлы на диске, сервисы на старых
+# процессах, health-проверки и смоук не запускались вовсе.
+#
+# Единственный путь выкатки — deploy-kit (`dk deploy`), так требует CLAUDE.md.
+# Описания целей лежат в .deploy-kit/*.env.
 
 # Defaults for Windows deploy helper
 COOKIE_DOMAIN ?= launcher.samoy.love
@@ -21,18 +27,6 @@ COOKIE_SECURE ?= true
 -include deploy.local.mk
 
 ADMIN_USER ?= admin
-
-# One command to deploy everything
-deploy:
-	@chmod +x "$(DEPLOY_SCRIPT)"
-	@echo "[make] Deploying branch=$(BRANCH) repo=$(REPO_DIR)"
-	@bash "$(DEPLOY_SCRIPT)" --branch "$(BRANCH)" --repo-dir "$(REPO_DIR)"
-
-# Same, but skip rebuilding Go binaries (only configs/static)
-deploy-nobuild:
-	@chmod +x "$(DEPLOY_SCRIPT)"
-	@echo "[make] Deploying (no-build) branch=$(BRANCH) repo=$(REPO_DIR)"
-	@bash "$(DEPLOY_SCRIPT)" --branch "$(BRANCH)" --no-build --repo-dir "$(REPO_DIR)"
 
 # Helpers (useful on server)
 nginx-reload:
@@ -55,10 +49,11 @@ SITE_BASE ?= https://launcher.samoy.love
 #
 # Теперь коды ответов сверяются с ожидаемыми, а цель возвращает ненулевой код,
 # если хоть одна проверка не прошла. Набор проверок держим согласованным со
-# смоук-тестами в scripts/deploy.sh и .github/workflows/deploy.yml.
+# смоук-тестами в .github/workflows/deploy.yml.
 #
 # Никаких -k: непроверенный сертификат делает главный реальный отказ (протухший
-# Let's Encrypt) невидимым — см. подробный комментарий на эту тему в deploy.sh.
+# Let's Encrypt) невидимым — curl молча съел бы просроченную цепочку, и смоук
+# остался бы зелёным ровно тогда, когда сайт у игрока не открывается.
 smoke:
 	@FAIL=0; \
 	code(){ curl -s --max-time 10 -o /dev/null -w '%{http_code}' "$$1"; }; \
@@ -86,12 +81,26 @@ smoke:
 # ============
 # Linting
 # ============
-.PHONY: lint lint-web lint-go lint-dotnet
+.PHONY: lint lint-repo lint-web lint-go lint-dotnet
 
 # Aggregate lint that runs all available checks (like CI)
-lint: lint-web lint-go lint-dotnet
+lint: lint-repo lint-web lint-go lint-dotnet
 	@echo.
 	@echo ✅ All lint stages finished (see logs above for any issues).
+
+# Инварианты сборки и выкатки: то, что до сих пор держалось на комментариях.
+# Ссылки скриптов на несуществующие файлы, ротация снимков, постусловие
+# установщика, закреплённые версии, счётчик отчётов Codecov — каждое из этих
+# правил уже один раз разошлось с кодом молча. Подробности — в шапке скрипта.
+lint-repo:
+	@echo.
+	@echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	@echo 🧱 Repo invariants
+	@echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	@echo [lint:repo] Самопроверка проверок
+	python scripts/ci/repo-hygiene.py --self-test
+	@echo [lint:repo] Инварианты репозитория
+	python scripts/ci/repo-hygiene.py
 
 # Web: HTMLHint, Stylelint, ESLint (landing + admin_ui)
 lint-web:
@@ -116,7 +125,12 @@ lint-web:
 	@echo [lint:web] Stylelint (landing + server/admin_ui)
 	npx -y stylelint@17.14.1 "landing/**/*.css" "server/admin_ui/**/*.css"
 	@echo [lint:web] ESLint (landing + server/admin_ui)
-	npx -y eslint@10.8.0 "landing/**/*.js" "server/admin_ui/**/*.js"
+# @eslint/js ставится ЛОКАЛЬНО, а не через npx: eslint.config.js импортирует
+# базовый набор по имени, а имя разрешается от каталога конфига — из временного
+# каталога npx пакет не виден. --max-warnings 0 здесь по той же причине, что и
+# в CI: без него предупреждения не роняют прогон.
+	npm i --no-save @eslint/js@10.0.1
+	npx -y eslint@10.8.0 --max-warnings 0 "landing/**/*.js" "server/admin_ui/**/*.js"
 
 # Go: Prefer golangci-lint like CI; fallback to vet/fmt if unavailable
 lint-go:
@@ -163,46 +177,10 @@ run-local:
 # ============
 # Windows remote deploy helper
 # ============
-.PHONY: deploy-win
-# Usage:
-# make deploy-win HOST=your.vps.host USER=ubuntu KEY="C:/Users/you/.ssh/id_rsa" [BRANCH=main] [JWT=...] [ADMIN_USER=admin] [ADMIN_BCRYPT=...] [ADMIN_PLAIN=...] [COOKIE_DOMAIN=launcher.samoy.love] [COOKIE_SECURE=true] [DOWNLOADS_DIR=C:/path/downloads]
+# ВЫКАТКИ ЗДЕСЬ НЕТ И БЫТЬ НЕ ДОЛЖНО.
 #
-# И14: СЕКРЕТЫ ПЕРЕДАЮТСЯ СКРИПТУ ЧЕРЕЗ ОКРУЖЕНИЕ, А НЕ АРГУМЕНТАМИ.
-#
-# Раньше JWT, ADMIN_BCRYPT и ADMIN_PLAIN подставлялись прямо в командную строку
-# powershell. Такая строка видна в списке процессов кому угодно на машине:
-# Диспетчер задач и `Get-CimInstance Win32_Process | select CommandLine`
-# показывают её без прав администратора, и висит она там всё время деплоя.
-#
-# Вдобавок у рецепта не было префикса @, поэтому make ПЕЧАТАЛ всю команду
-# целиком — секреты уезжали ещё и в терминал, а оттуда в историю оболочки.
-# Префикс @ добавлен вместе с переходом на окружение.
-#
-# Значения JWT/ADMIN_BCRYPT/ADMIN_PLAIN по-прежнему берутся из deploy.local.mk
-# (он в .gitignore) — меняется только способ доставки до скрипта.
-deploy-win:
-ifeq ($(strip $(HOST)),)
-	$(error HOST is not set. Put it in deploy.local.mk or pass HOST=... on the command line)
-endif
-ifeq ($(strip $(USER)),)
-	$(error USER is not set. Put it in deploy.local.mk or pass USER=... on the command line)
-endif
-ifeq ($(strip $(KEY)),)
-	$(error KEY is not set. Put it in deploy.local.mk or pass KEY=... on the command line)
-endif
-	@echo Deploying to $(HOST) as $(USER) using PowerShell script
-	@CHILLHUB_JWT_SECRET="$(JWT)" \
-	 CHILLHUB_ADMIN_PASSWORD_BCRYPT="$(ADMIN_BCRYPT)" \
-	 CHILLHUB_ADMIN_PASSWORD="$(ADMIN_PLAIN)" \
-	 powershell -NoProfile -ExecutionPolicy Bypass -File "scripts/deploy-win.ps1" \
-	 -SshHost "$(HOST)" \
-	 -SshUser "$(USER)" \
-	 -KeyPath "$(KEY)" \
-	 -Branch "$(BRANCH)" \
-	 -AdminUser "$(ADMIN_USER)" \
-	 -CookieDomain "$(COOKIE_DOMAIN)" \
-	 -CookieSecure "$(COOKIE_SECURE)" \
-	 -DownloadsDir "$(DOWNLOADS_DIR)" \
-	 -Parallel "$(or $(PARALLEL),8)" \
-	 $(if $(START_AT_REMOTE),-StartAtRemote) \
-	 $(if $(FAIL_ON_MISMATCH),-FailOnManifestMismatch)
+# Здесь стояла цель deploy-win: она звала scripts/deploy-win.ps1, удалённый
+# вместе с остальным собственным флоу выкатки. Цель пережила свой скрипт и
+# гарантированно падала на «файл не найден» — но оставалась документированным
+# путём, на который ссылались и шапка этого файла, и deploy.local.mk.example.
+# Единственный путь выкатки — deploy-kit (см. CLAUDE.md).

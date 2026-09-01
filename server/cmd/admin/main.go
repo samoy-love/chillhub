@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -142,6 +143,40 @@ func adminCORSOrigin() string {
 	return httpx.CORSDisabled
 }
 
+// middleware оборачивает маршрутизатор цепочкой админского API.
+//
+// Порядок в chain — это порядок, в котором обёртки встречает ЗАПРОС: первая
+// снаружи, последняя ближе всех к хендлеру. Обёртки навешиваются с конца
+// списка именно поэтому. Раньше их перечисляли в этом же порядке, но
+// накладывали построчно сверху вниз, и цепочка исполнялась задом наперёд:
+// заданный ADMIN_CORS_ORIGIN не спасал preflight, который упирался в 401
+// раньше CORS, а X-Request-Id, выданный клиенту, не попадал ни в одну строку
+// журнала — RequestID оказывался внутри Logging. Публичный API (cmd/api)
+// собран правильно с самого начала, и теперь обе цепочки читаются одинаково.
+//
+// ЖУРНАЛ СНАРУЖИ АВТОРИЗАЦИИ И CORS — по той же причине, что и счётчик. Обе
+// эти обёртки отвечают САМИ и хендлер не зовут: авторизация — 401, CORS —
+// 204 на preflight. Стоя внутри них, журнал не увидел бы ни того, ни другого,
+// и «у меня истекла сессия» вместе со сканером, перебирающим /admin/api/*,
+// пропали бы из него совсем — а это ровно те два случая, ради которых в него
+// и смотрят. RequestID при этом остаётся снаружи журнала, чтобы выданный
+// клиенту идентификатор попадал в строку.
+func (s *server) middleware(h http.Handler, corsOrigin string, route httpx.RouteFunc) http.Handler {
+	chain := []func(http.Handler) http.Handler{
+		// Счётчик снаружи авторизации: 401 и 429 — это тоже ответы, и всплеск
+		// именно таких кодов виден только если их считают.
+		httpx.Metrics(s.prom.reg, "admin", route),
+		httpx.RequestID(),
+		httpx.Logging("ADMIN"),
+		httpx.CORS(corsOrigin),
+		s.auth.Middleware,
+	}
+	for _, mw := range slices.Backward(chain) {
+		h = mw(h)
+	}
+	return h
+}
+
 func main() {
 	configureMaxProcs()
 	contentRoot := adminutil.DetectContentRoot()
@@ -159,16 +194,8 @@ func main() {
 	// только nginx, и ни один его location сюда не ведёт.
 	go promexp.Serve(httpx.ListenAddr("ADMIN_METRICS_LISTEN_ADDR", 55778), s.prom.reg)
 
-	// Middlewares: Metrics -> RequestID -> CORS -> Auth -> Logging
-	// Счётчик снаружи авторизации: 401 и 429 — это тоже ответы, и всплеск
-	// именно таких кодов виден только если их считают.
 	exact, prefixes := routeLabels(paths)
-	var h http.Handler = mux
-	h = httpx.RequestID()(h)
-	h = httpx.CORS(adminCORSOrigin())(h)
-	h = s.auth.Middleware(h)
-	h = httpx.Logging("ADMIN")(h)
-	h = httpx.Metrics(s.prom.reg, "admin", httpx.StaticRoutes(exact, prefixes))(h)
+	h := s.middleware(mux, adminCORSOrigin(), httpx.StaticRoutes(exact, prefixes))
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           h,

@@ -289,51 +289,220 @@ func normalize(u string) string {
 	return "/assets/" + u
 }
 
-// mdToHTML is a very small markdown to HTML converter for the editor preview
-// (H1/H2, paragraphs, code blocks, links, bold/italic).
+// mdToHTML converts an article body to the HTML of the editor preview.
+//
+// WHAT THIS IS AND IS NOT. The launcher does not receive this HTML: it fetches
+// the raw .md and renders it itself (NewsPageRenderer, Markdig with the
+// advanced extensions). So this converter is an approximation of the client
+// renderer, and the point of the preview is that an editor can tell before
+// publishing what the article will look like. Everything the launcher turns
+// into a block — headings, paragraphs, code fences, lists, quotes, tables —
+// has to become the same tag here, or the preview shows a wall of pipes and
+// dashes for exactly the articles that needed checking.
+//
+// The one deliberate difference is raw HTML: it is escaped here (see
+// escapeHTML) rather than passed through.
 func mdToHTML(md string) string {
 	var out strings.Builder
+	var para, quote, list []string
+	listTag := ""
 	inCode := false
-	para := ""
+
 	flushPara := func() {
-		if strings.TrimSpace(para) != "" {
-			out.WriteString("<p>" + inlineMD(escapeHTML(para)) + "</p>\n")
+		if len(para) > 0 {
+			out.WriteString("<p>" + inlineMD(escapeHTML(strings.Join(para, "\n"))) + "</p>\n")
+			para = nil
 		}
-		para = ""
 	}
-	for ln := range strings.SplitSeq(md, "\n") {
+	flushQuote := func() {
+		if len(quote) > 0 {
+			out.WriteString("<blockquote><p>" + inlineMD(escapeHTML(strings.Join(quote, "\n"))) + "</p></blockquote>\n")
+			quote = nil
+		}
+	}
+	flushList := func() {
+		if listTag == "" {
+			return
+		}
+		out.WriteString("<" + listTag + ">\n")
+		for _, it := range list {
+			out.WriteString("<li>" + inlineMD(escapeHTML(it)) + "</li>\n")
+		}
+		out.WriteString("</" + listTag + ">\n")
+		list, listTag = nil, ""
+	}
+	flushBlocks := func() {
+		flushPara()
+		flushQuote()
+		flushList()
+	}
+
+	lines := strings.Split(md, "\n")
+	for i := 0; i < len(lines); i++ {
+		s := strings.TrimRight(lines[i], "\r")
 		// code blocks ```
-		if strings.HasPrefix(strings.TrimSpace(ln), "```") {
+		if strings.HasPrefix(strings.TrimSpace(s), "```") {
 			if inCode {
 				out.WriteString("</pre>\n")
 			} else {
-				flushPara()
+				flushBlocks()
 				out.WriteString("<pre>")
 			}
 			inCode = !inCode
 			continue
 		}
 		if inCode {
-			out.WriteString(escapeHTML(ln) + "\n")
+			out.WriteString(escapeHTML(s) + "\n")
 			continue
 		}
-		s := strings.TrimRight(ln, "\r")
 		if h := headingHTML(s); h != "" {
-			flushPara()
+			flushBlocks()
 			out.WriteString(h)
 			continue
 		}
 		if strings.TrimSpace(s) == "" {
-			flushPara()
+			flushBlocks()
 			continue
 		}
-		if para != "" {
-			para += "\n"
+		if item, tag, ok := listItem(s); ok {
+			flushPara()
+			flushQuote()
+			if listTag != "" && listTag != tag {
+				flushList()
+			}
+			listTag = tag
+			list = append(list, item)
+			continue
 		}
-		para += s
+		if q, ok := quoteLine(s); ok {
+			flushPara()
+			flushList()
+			quote = append(quote, q)
+			continue
+		}
+		if rows, n := tableAt(lines, i); n > 0 {
+			flushBlocks()
+			out.WriteString(tableHTML(rows))
+			i += n - 1
+			continue
+		}
+		flushQuote()
+		flushList()
+		para = append(para, s)
 	}
-	flushPara()
+	// An unterminated fence is what the editor sees while typing one; closing
+	// it keeps the preview from swallowing the rest of the article.
+	if inCode {
+		out.WriteString("</pre>\n")
+	}
+	flushBlocks()
 	return out.String()
+}
+
+// listItem recognises one list line and returns its text and the tag the list
+// needs. Indentation is ignored: nesting is a level of detail the preview does
+// not promise, but a bulleted list drawn as a bulleted list is.
+func listItem(s string) (item, tag string, ok bool) {
+	t := strings.TrimLeft(s, " \t")
+	for _, m := range []string{"- ", "* ", "+ "} {
+		if rest, cut := strings.CutPrefix(t, m); cut {
+			return strings.TrimSpace(rest), "ul", true
+		}
+	}
+	// "12. текст" — the number itself is dropped: <ol> renumbers anyway.
+	digits := 0
+	for digits < len(t) && t[digits] >= '0' && t[digits] <= '9' {
+		digits++
+	}
+	if digits > 0 && strings.HasPrefix(t[digits:], ". ") {
+		return strings.TrimSpace(t[digits+2:]), "ol", true
+	}
+	return "", "", false
+}
+
+// quoteLine recognises one blockquote line and returns its text.
+func quoteLine(s string) (string, bool) {
+	t := strings.TrimLeft(s, " \t")
+	if rest, ok := strings.CutPrefix(t, ">"); ok {
+		return strings.TrimPrefix(rest, " "), true
+	}
+	return "", false
+}
+
+// tableAt reads a pipe table starting at lines[i] and returns its rows (the
+// header first) and how many lines it consumed. n is 0 when there is no table:
+// a header row alone is just a paragraph with pipes in it, so the delimiter row
+// below it is what makes a table a table.
+func tableAt(lines []string, i int) (rows [][]string, n int) {
+	if i+1 >= len(lines) || !strings.Contains(lines[i], "|") || !isTableDelimiter(lines[i+1]) {
+		return nil, 0
+	}
+	rows = append(rows, tableCells(lines[i]))
+	n = 2
+	for j := i + 2; j < len(lines); j++ {
+		s := strings.TrimRight(lines[j], "\r")
+		if !strings.Contains(s, "|") || strings.TrimSpace(s) == "" {
+			break
+		}
+		rows = append(rows, tableCells(s))
+		n++
+	}
+	return rows, n
+}
+
+// isTableDelimiter reports whether s is the |---|:--:| row under a table head.
+func isTableDelimiter(s string) bool {
+	cells := tableCells(s)
+	if len(cells) == 0 {
+		return false
+	}
+	for _, c := range cells {
+		c = strings.TrimPrefix(strings.TrimSuffix(c, ":"), ":")
+		if c == "" || strings.Trim(c, "-") != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// tableCells splits one table row on the pipes, dropping the optional outer
+// ones.
+func tableCells(s string) []string {
+	t := strings.TrimSpace(strings.TrimRight(s, "\r"))
+	t = strings.TrimSuffix(strings.TrimPrefix(t, "|"), "|")
+	if strings.TrimSpace(t) == "" {
+		return nil
+	}
+	cells := strings.Split(t, "|")
+	for i := range cells {
+		cells[i] = strings.TrimSpace(cells[i])
+	}
+	return cells
+}
+
+// tableHTML renders the rows tableAt collected.
+func tableHTML(rows [][]string) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("<table>\n<thead>\n")
+	writeRow(&b, rows[0], "th")
+	b.WriteString("</thead>\n<tbody>\n")
+	for _, r := range rows[1:] {
+		writeRow(&b, r, "td")
+	}
+	b.WriteString("</tbody>\n</table>\n")
+	return b.String()
+}
+
+// writeRow writes one table row with the given cell tag.
+func writeRow(b *strings.Builder, cells []string, cell string) {
+	b.WriteString("<tr>")
+	for _, c := range cells {
+		b.WriteString("<" + cell + ">" + inlineMD(escapeHTML(c)) + "</" + cell + ">")
+	}
+	b.WriteString("</tr>\n")
 }
 
 // headingHTML renders an H1 or H2 line, or returns "" when s is neither.
@@ -356,7 +525,9 @@ func headingHTML(s string) string {
 //	![a](/x" onerror="alert(1))
 //
 // closes the attribute early and injects an event handler that the admin
-// preview AND the launcher's news view then execute.
+// preview then executes. The launcher renders the same body through its own
+// converter, so this escaping speaks for the preview only — the client end is
+// the launcher's to guard.
 func escapeHTML(s string) string {
 	s = strings.ReplaceAll(s, "&", "&amp;")
 	s = strings.ReplaceAll(s, "<", "&lt;")

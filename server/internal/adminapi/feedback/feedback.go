@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ChillHub/server/internal/adminutil"
@@ -126,6 +127,14 @@ type Handlers struct {
 	mu   sync.Mutex
 	// CurrentUser resolves the acting admin for audit log lines. It may be nil.
 	CurrentUser func(*http.Request) string
+
+	// compacting keeps at most one background rewrite in flight: submissions
+	// arrive faster than a 64 MiB rewrite finishes, and a goroutine per submit
+	// would queue them all up on the same mutex.
+	compacting atomic.Bool
+	// compactWG accounts for that goroutine so a caller can wait for the
+	// rewrite instead of observing the inbox halfway through it.
+	compactWG sync.WaitGroup
 }
 
 // New returns handlers rooted at the given content directory.
@@ -147,14 +156,49 @@ func (h *Handlers) user(r *http.Request) string {
 // i.e. 64 MiB) under a global mutex on every single submission made the
 // endpoint quadratic and let anyone keep the admin API busy with disk I/O. A
 // submission now costs one appended line; the array file is rebuilt only when
-// the journal has grown past journalCompactBytes, or whenever an admin
-// operation rewrites the inbox anyway.
+// the journal has grown past journalCompactBytes — in the background, off the
+// submitting request's own path — or whenever an admin operation rewrites the
+// inbox anyway.
 func (h *Handlers) journalPath() string { return filepath.Join(h.dir(), "inbox.pending.ndjson") }
 
-// journalCompactBytes is how much unmerged journal is tolerated before a submit
-// pays for a compaction. It bounds both the extra memory a read costs and how
-// far the inbox can overshoot Prune's limits between compactions.
-const journalCompactBytes = 1 << 20 // 1 MiB
+// journalCompactBytes is how much unmerged journal is tolerated before a
+// compaction is worth doing. It bounds both the extra memory a read costs and
+// how far the inbox can overshoot Prune's limits between compactions.
+//
+// It has to stay well above MaxLogBytes. While the two were equal, a single
+// report carrying the largest bundle the client is allowed to send already
+// pushed the journal past the threshold, so the amortisation promised above
+// never happened for exactly those reports: every such submission rewrote the
+// whole inbox. Sixteen times the largest single report means a compaction is
+// paid for by many submissions, which is what makes it amortised.
+const journalCompactBytes = 16 * MaxLogBytes // 16 MiB
+
+// startCompaction rebuilds the inbox array from journal + array in the
+// background, unless a rebuild is already running.
+//
+// A failure is logged and nothing else: the reports are already durable in the
+// journal, readAll merges them in regardless, and the next submission past the
+// threshold tries again.
+func (h *Handlers) startCompaction() {
+	if !h.compacting.CompareAndSwap(false, true) {
+		return
+	}
+	h.compactWG.Go(func() {
+		defer h.compacting.Store(false)
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		items, err := h.readAll()
+		if err == nil {
+			err = h.writeAll(Prune(items))
+		}
+		if err != nil {
+			log.Printf("[feedback] compact inbox: %v", err)
+		}
+	})
+}
+
+// waitCompaction blocks until a background compaction has finished.
+func (h *Handlers) waitCompaction() { h.compactWG.Wait() }
 
 // readAll returns the inbox, newest first: the compacted array plus everything
 // still sitting in the journal.
@@ -448,13 +492,14 @@ func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
 	// journal is big enough to be worth it.
 	h.mu.Lock()
 	journalBytes, err := h.appendJournal(item)
-	if err == nil && journalBytes > journalCompactBytes {
-		var items []Item
-		if items, err = h.readAll(); err == nil {
-			err = h.writeAll(Prune(items))
-		}
-	}
 	h.mu.Unlock()
+	if err == nil && journalBytes > journalCompactBytes {
+		// Not on the request's own path: the rewrite reads and writes the whole
+		// inbox under the global mutex, and the sender of one report must not
+		// be made to wait for it — nor should the admin's list of reports,
+		// which takes the same mutex.
+		h.startCompaction()
+	}
 	if err != nil {
 		// Public endpoint: the error text would carry the content-root path.
 		log.Printf("[feedback] store report: %v", err)

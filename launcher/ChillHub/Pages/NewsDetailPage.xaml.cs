@@ -174,20 +174,22 @@ namespace ChillHub.Pages {
                     // подписки пережили его и создавали видимость, будто страница чего-то ждёт
                     // от содержимого. Ждать нечего: страница новости статична.
 
-                    // Открывать внешние ссылки во внешнем браузере
+                    // Ссылки уходят наружу, а сам WebView остаётся на странице новости:
+                    // в окне лаунчера нет ни адресной строки, ни кнопки «назад», и
+                    // ушедший по ссылке WebView оставил бы игрока на чужом сайте без
+                    // единого признака, что он уже не в лаунчере. Что именно можно
+                    // отдать оболочке, решает NewsLinkPolicy: обычный клик поднимает
+                    // NavigationStarting, клик с новым окном — NewWindowRequested,
+                    // и оба должны судить одинаково.
+                    this.Browser.CoreWebView2.NavigationStarting += (s, ev) => {
+                        var action = NewsLinkPolicy.ForNavigation(ev.Uri);
+                        ev.Cancel = action.Cancel;
+                        OpenOutside(action.OpenExternally);
+                    };
+
                     this.Browser.CoreWebView2.NewWindowRequested += (s, ev) => {
-                        try {
-                            ev.Handled = true;
-                            var uri = ev.Uri;
-                            if (!string.IsNullOrWhiteSpace(uri)) {
-                                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
-                                    FileName = uri,
-                                    UseShellExecute = true,
-                                });
-                            }
-                        }
-                        catch {
-                        }
+                        ev.Handled = true;
+                        OpenOutside(NewsLinkPolicy.ForNewWindow(ev.Uri).OpenExternally);
                     };
                 }
                 catch {
@@ -202,6 +204,30 @@ namespace ChillHub.Pages {
                 catch {
                     // Даже отрисовать ошибку не вышло — уходим в запасную панель WPF
                     this.ShowFallbackError("Не удалось загрузить новость.\n\n" + ex.Message);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Отдаёт адрес системному браузеру — и только тот, который разрешила политика.
+        /// </summary>
+        /// <param name="uri">Адрес, который политика разрешила отдать; null — не отдавать.</param>
+        private static void OpenOutside(string? uri) {
+            if (string.IsNullOrWhiteSpace(uri)) {
+                return;
+            }
+
+            try {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
+                    FileName = uri,
+                    UseShellExecute = true,
+                });
+            }
+            catch (Exception ex) {
+                try {
+                    ChillHub.Core.Logging.Logger.Warn($"NewsDetailPage: открыть ссылку не удалось: {ex.Message}");
+                }
+                catch {
                 }
             }
         }

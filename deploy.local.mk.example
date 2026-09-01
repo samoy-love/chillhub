@@ -1,4 +1,6 @@
-# Local deploy settings for `make deploy-win`.
+# Локальные значения для целей Makefile, которым нужен доступ к серверу.
+#
+# Выкатка сюда НЕ входит: она идёт только через deploy-kit (см. CLAUDE.md).
 #
 # Copy to deploy.local.mk and fill in. deploy.local.mk is gitignored and must
 # stay that way: it holds a private key path and production secrets.

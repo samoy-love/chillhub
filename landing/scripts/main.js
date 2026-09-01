@@ -1,5 +1,12 @@
 /* Waves background on Canvas + Parallax + Reveal + Tilt */
 (function(){
+  // Отметка «скрипт выполнился». За неё в стилях спрятаны две вещи, которые
+  // без скрипта до конца не доводятся: начальная прозрачность блоков с
+  // data-animate (класс `in` им ставит IntersectionObserver ниже) и заглушка
+  // фона со спиннером (её снимает отрисовка волн). Ставим первой строкой,
+  // чтобы страница не успела мигнуть видимым содержимым.
+  document.documentElement.classList.add('js');
+
   const mqMobile = window.matchMedia('(max-width: 640px)');
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const isMobile = () => mqMobile.matches;
@@ -47,15 +54,18 @@
     });
   })();
 
+  // Ctrl/Cmd+клик, Shift+клик и средняя кнопка — это просьба открыть ссылку в
+  // новой вкладке или окне. Безусловный preventDefault() такую просьбу
+  // отменяет: вместо новой вкладки страница просто прокручивается или
+  // перезагружается. Поэтому каждый обработчик ссылок сначала спрашивает здесь.
+  const isPlainClick = (e) => !(e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0);
+
   // Brand click: reload page, clear hash, and scroll to top
   (function setupBrandReload(){
     const brand = document.querySelector('.site-header .brand');
     if(!brand) return;
     brand.addEventListener('click', (e)=>{
-      // Ctrl/Cmd+клик, Shift+клик и средняя кнопка — это просьба открыть ссылку
-      // в новой вкладке или окне. Раньше preventDefault() стоял безусловно, и
-      // такой клик вместо открытия новой вкладки перезагружал текущую.
-      if(e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;
+      if(!isPlainClick(e)) return;
       // Always handle ourselves to ensure hash reset and scroll-to-top
       e.preventDefault();
       try {
@@ -583,14 +593,7 @@
           // Disable costly will-change in static state; minimal hints stay applied
           setAnimating(false);
           // Highlight centered slot in each column simultaneously
-          tracks.forEach((t,i)=>{
-            const d = data[i];
-            const activeIdx = Math.floor(d.repeat/2)*d.baseCount + d.chosenIdx;
-            t.track.querySelectorAll('.slot--active').forEach(el=>el.classList.remove('slot--active'));
-            const slots = t.track.querySelectorAll('.slot');
-            const el = slots[activeIdx] || null;
-            if(el) el.classList.add('slot--active');
-          });
+          highlightCentered();
           // Add vibrant row highlight on finish
           reelsWrap.classList.add('row-lit');
           clearTimeout(rowLitTO);
@@ -605,6 +608,24 @@
       }
       raf = requestAnimationFrame(step);
     }
+
+    // Подсвечивает символ под направляющей в каждой колонке.
+    function highlightCentered(){
+      tracks.forEach((t,i)=>{
+        const d = data[i];
+        const activeIdx = Math.floor(d.repeat/2)*d.baseCount + d.chosenIdx;
+        t.track.querySelectorAll('.slot--active').forEach(el=>el.classList.remove('slot--active'));
+        const slots = t.track.querySelectorAll('.slot');
+        const el = slots[activeIdx] || null;
+        if(el) el.classList.add('slot--active');
+      });
+    }
+
+    // Показанная комбинация: null — барабаны ещё ни разу не останавливались.
+    // Нужна, чтобы пережить смену ширины окна: геометрия слота от неё зависит
+    // (на узком экране поля 1px и шаг 58px, на широком 4px и 64px), и без
+    // пересчёта сохранённое смещение указывает уже на ЧУЖОЙ символ.
+    var shownPick = null;
 
     function spin(preset, opts){
       if(spinning) return;
@@ -621,6 +642,8 @@
         computeTargets(pick, { strong: false });
         data.forEach(d=>{ d.y = d.snap; d.done = true; });
         renderAll();
+        shownPick = pick;
+        highlightCentered();
         ensureAudio(); playChime();
         reelsWrap.classList.remove('spinning');
         // Hide guideline when final combo is shown instantly
@@ -637,6 +660,7 @@
       reelsWrap.classList.add('guideline');
       setAnimating(true);
       // On user click: strong spin
+      shownPick = pick;
       computeTargets(pick, { strong: true });
       if(!raf) raf = requestAnimationFrame(step);
     }
@@ -674,9 +698,31 @@
 
     // Recompute metrics on resize/orientation change to keep center alignment stable
     let resizeTO = 0;
+    var lastWidth = window.innerWidth;
     function onResize(){
+      // На телефоне пересчёт срабатывал от одного скролла: схлопнулась
+      // адресная строка, изменился innerHeight — и результат крутки пропадал,
+      // потому что пересчёт пересобирает дорожки, а подсветка живёт на узлах
+      // старой. Но геометрия слота зависит от ШИРИНЫ, а не от высоты, поэтому
+      // сторожим именно её: событие без смены ширины пропускаем.
+      //
+      // Совсем отключать пересчёт после крутки нельзя: шаг дорожки на узком
+      // экране 58px, на широком 64px, и поворот телефона из портрета в
+      // ландшафт при сохранённом смещении подставляет под направляющую чужой
+      // символ. Поэтому ширина изменилась — пересчитываем и показываем ту же
+      // комбинацию заново.
+      if(window.innerWidth === lastWidth) return;
+      lastWidth = window.innerWidth;
       clearTimeout(resizeTO);
-      resizeTO = setTimeout(()=>{ computeMetrics(); renderAll(); }, 120);
+      resizeTO = setTimeout(()=>{
+        computeMetrics();
+        if(shownPick && !spinning){
+          computeTargets(shownPick, { strong: false });
+          data.forEach(d=>{ d.y = d.snap; d.done = true; });
+        }
+        renderAll();
+        if(shownPick && !spinning) highlightCentered();
+      }, 120);
     }
     window.addEventListener('resize', onResize, { passive: true });
     window.addEventListener('orientationchange', onResize, { passive: true });
@@ -690,6 +736,7 @@
     if(!nav) return;
     nav.querySelectorAll('a[href^="#"]').forEach(a=>{
       a.addEventListener('click', (e)=>{
+        if(!isPlainClick(e)) return;
         const id = a.getAttribute('href').slice(1);
         const target = document.getElementById(id);
         if(!target) return;
@@ -705,6 +752,7 @@
     const btn = document.querySelector('.cta a[href="#games"]');
     if(!btn) return;
     btn.addEventListener('click', (e)=>{
+      if(!isPlainClick(e)) return;
       const target = document.getElementById('games');
       if(!target) return;
       e.preventDefault();
@@ -722,6 +770,7 @@
     const anchorSel = 'a[href="#casino"]';
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     function onLuckyClick(e){
+      if(!isPlainClick(e)) return;
       const target = document.getElementById('casino');
       if(!target) return;
       e.preventDefault();
@@ -790,6 +839,7 @@
     if(!target) return;
     links.forEach(a=>{
       a.addEventListener('click', (e)=>{
+        if(!isPlainClick(e)) return;
         e.preventDefault();
         target.scrollIntoView({ behavior: prefersReducedMotion.matches ? 'auto' : 'smooth', block: 'start' });
       });

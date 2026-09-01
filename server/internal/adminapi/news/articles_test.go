@@ -731,9 +731,9 @@ func TestSaveRejectsMalformedBody(t *testing.T) {
 
 // ===== Preview =====
 
-// Preview renders the very same HTML the launcher shows, so a body that can
-// break out of an attribute here is a stored XSS in the admin panel and in the
-// client at once.
+// Preview renders the body with the server's own converter — the launcher
+// fetches the raw .md and renders it itself — so a body that can break out of
+// an attribute here is a stored XSS in the admin panel.
 func TestPreviewRendersTheCardAndEscapesPayloads(t *testing.T) {
 	h, _ := newHandlers(t)
 	w := httptest.NewRecorder()

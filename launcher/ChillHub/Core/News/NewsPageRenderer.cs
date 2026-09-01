@@ -39,8 +39,19 @@ namespace ChillHub.Core.News {
     /// или при правке разметки, и проверять их надо без WebView2.
     /// </summary>
     internal static class NewsPageRenderer {
-        /// <summary>Конвейер разбора markdown. Один на процесс: он неизменяемый и потокобезопасный.</summary>
-        private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
+        /// <summary>
+        /// Конвейер разбора markdown. Один на процесс: он неизменяемый и потокобезопасный.
+        /// <para>
+        /// Сырой html из текста новости не доживает до страницы: <c>DisableHtml</c>
+        /// выводит его как текст. Markdown по спецификации пропускает html насквозь, а
+        /// страница новости показывается в окне лаунчера — скрипт, фрейм или форма из
+        /// текста новости оказались бы там на правах части лаунчера. Заодно это
+        /// приводит вид новости к предпросмотру в админке, который html тоже
+        /// экранирует: редактор видит ровно то, что увидит игрок.
+        /// </para>
+        /// </summary>
+        private static readonly MarkdownPipeline Pipeline =
+            new MarkdownPipelineBuilder().UseAdvancedExtensions().DisableHtml().Build();
 
         /// <summary>
         /// Абзац, целиком состоящий из одной картинки, — именно так markdown записывает

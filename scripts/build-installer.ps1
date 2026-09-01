@@ -754,12 +754,20 @@ $nsisArgs += @("/DAPP_VERSION=$resolvedVersion")
 $nsisArgs += @("/DAPP_VERSION_NUMERIC=$(ConvertTo-FileVersionQuad $resolvedVersion)")
 $nsisArgs += @("$installerPath")
 
+# Старый файл удаляется ДО компиляции — так же, как это делает ZIP-ветка выше.
+# generated_downloads/ лежит в .gitignore и не чистится, поэтому проверка
+# Test-Path ниже без этого удаления отвечала на вопрос «файл есть?», а не
+# «makensis его написал?»: выйди компилятор нулём, не тронув OutFile, — и
+# подписался бы, а потом и опубликовался .exe прошлой сборки, со своей
+# прежней версией внутри.
+$setupExe = Join-Path $outDir "ChillHub-Setup.exe"
+if (Test-Path -LiteralPath $setupExe) { Remove-Item -LiteralPath $setupExe -Force }
+
 & "$makensis" @nsisArgs
 Assert-NativeSuccess "makensis" $LASTEXITCODE
 
 # makensis can also exit 0 without writing the file (e.g. OutFile pointing
 # somewhere unexpected). Verify the artefact before declaring success.
-$setupExe = Join-Path $outDir "ChillHub-Setup.exe"
 if (-not (Test-Path -LiteralPath $setupExe)) {
     throw "makensis reported success but '$setupExe' does not exist."
 }

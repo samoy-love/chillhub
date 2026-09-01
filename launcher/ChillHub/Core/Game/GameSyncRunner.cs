@@ -237,7 +237,12 @@ namespace ChillHub.Core.Game {
                         // здесь лаунчер уже сходил на сервер и операция именно
                         // сорвалась. Без этой строки неудачное обновление исчезает из
                         // метрик целиком — ни успеха, ни ошибки.
-                        this.Report(request, null, "fail", opStart, "mods_sync_failed");
+                        //
+                        // Код ошибки при этом НЕ передаём: событие error по этому отказу
+                        // уже отправил ModsService, и причину он называет точнее
+                        // (отвергнутый манифест модпака — это не «сорвалась установка»).
+                        // Второе событие удваивало бы «Топ ошибок» на ровном месте.
+                        this.Report(request, null, "fail", opStart);
                         return;
                     }
 
@@ -412,7 +417,10 @@ namespace ChillHub.Core.Game {
             }
 
             this.ui.SetStatus(result.Message);
-            this.Report(request, null, "fail", opStart, "mods_sync_failed");
+
+            // Без кода ошибки — по той же причине, что и у модпака основной копии:
+            // событие error об этом отказе уже ушло из ModsService.
+            this.Report(request, null, "fail", opStart);
             return false;
         }
 

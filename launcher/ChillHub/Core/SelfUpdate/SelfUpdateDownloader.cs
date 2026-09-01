@@ -286,6 +286,12 @@ namespace ChillHub.Core.SelfUpdate {
         /// <param name="contentBase">База URL с файлами версии.</param>
         /// <returns>План, в котором Downloads — только реально изменившиеся файлы.</returns>
         internal DiffPlan BuildSelfUpdatePlan(Manifest manifest, string stripPrefix, string tempRoot, string contentBase) {
+            // Свой план — свой рубеж. Этот метод обходит SimpleSyncService.PlanAsync
+            // вместе с его проверкой манифеста, а результат ложится поверх каталога
+            // установки лаунчера. Дальше проверять уже нечем: запись без хешей
+            // сверка скачанного файла пропускает молча — сверять не с чем.
+            ManifestValidator.Validate(manifest, "план самообновления");
+
             var baseDir = this.paths.InstallDir;
             var plan = new DiffPlan {
                 GameId = manifest.GameId,

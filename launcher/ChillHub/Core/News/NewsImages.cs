@@ -53,7 +53,10 @@ namespace ChillHub.Core.News {
             }
 
             // Один адрес — одна загрузка, сколько бы раз он ни встретился в тексте.
-            var byUrl = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            // Адреса сверяются посимвольно: ассеты лежат на Linux, где Before.png и
+            // before.png — разные файлы. Без учёта регистра вторая картинка считалась
+            // бы уже загруженной, и на её место вставали байты первой.
+            var byUrl = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (Match m in ImageSource.Matches(html)) {
                 var src = m.Groups["src"].Value;
                 if (src.StartsWith("data:", StringComparison.OrdinalIgnoreCase) || byUrl.ContainsKey(src)) {
