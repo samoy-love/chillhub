@@ -25,7 +25,8 @@ namespace ChillHub.Core.News {
 
         private bool ownPageLoadPending;
 
-        /// <summary>Создаёт шлюз одной открытой новости.</summary>
+        /// <summary>Initializes a new instance of the <see cref="NewsNavigationGate"/> class
+        /// для одной открытой новости.</summary>
         /// <param name="openOutside">Отдать адрес системному браузеру.</param>
         /// <param name="note">Куда писать след; по умолчанию — общий журнал.</param>
         internal NewsNavigationGate(Action<string> openOutside, Action<string>? note = null) {
