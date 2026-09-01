@@ -73,7 +73,12 @@ namespace ChillHub.Core.Sync {
 
             using var f = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, StreamBufferSize, useAsync: false);
             using var sha = SHA256.Create();
-            var b3 = Blake3.Hasher.New();
+
+            // using обязателен: состояние хешера живёт в НАТИВНОЙ куче, а у ref-struct
+            // не бывает финализатора — без Dispose эту память не вернёт никто до выхода
+            // из процесса. Считается она на КАЖДЫЙ файл, так что «Проверить файлы» на
+            // сборке в пятнадцать тысяч файлов оставляла за собой десятки мегабайт.
+            using var b3 = Blake3.Hasher.New();
             var buf = new byte[ChunkSize];
             int r;
 
@@ -117,7 +122,7 @@ namespace ChillHub.Core.Sync {
         /// <returns>true, если Blake3 работает.</returns>
         private static bool ProbeBlake3() {
             try {
-                var h = Blake3.Hasher.New();
+                using var h = Blake3.Hasher.New();
                 Span<byte> probe = stackalloc byte[32];
                 h.Finalize(probe);
                 return true;

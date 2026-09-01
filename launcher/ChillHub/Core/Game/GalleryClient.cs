@@ -78,6 +78,10 @@ namespace ChillHub.Core.Game {
         /// не дублируется), порядок остальных — как в `items`. При отсутствии
         /// `gallery.json` на сервере (404/сетевая ошибка) — пустой список, а не исключение:
         /// у витрины должен быть план Б (градиент вместо карусели), а не сломанная страница.
+        /// <para>
+        /// Отмена — исключение из этого правила: она пробрасывается наружу, потому что
+        /// означает «результат уже не нужен», а не «у игры нет галереи».
+        /// </para>
         /// </summary>
         /// <param name="baseApi">База API/контента из конфига.</param>
         /// <param name="gameId">Идентификатор игры.</param>
@@ -101,9 +105,24 @@ namespace ChillHub.Core.Game {
                     .ConfigureAwait(true);
                 result = ParseManifest(manifest, baseApi, gameId);
             }
-            catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException or TaskCanceledException) {
-                ChillHub.Core.Logging.Logger.Warn($"GalleryClient: галерея '{gameId}' недоступна: {ex.Message}");
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                // ОТМЕНА — НЕ ОТВЕТ СЕРВЕРА. Перещёлкивание списка игр стрелками отменяет
+                // предыдущий запрос штатно, а пустой результат из этой ветки уезжал в кеш
+                // как «галереи нет»: обложка витрины пропадала до перезапуска лаунчера.
+                throw;
+            }
+            catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) {
+                // 404 — это ответ: галереи у игры нет. Его и запоминаем, иначе за
+                // отсутствующим файлом будем ходить на каждое наведение на игру.
+                ChillHub.Core.Logging.Logger.Warn($"GalleryClient: галереи '{gameId}' нет на сервере");
                 result = Array.Empty<GalleryImage>();
+            }
+            catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException or TaskCanceledException) {
+                // Сеть отвалилась, ответ не разобрался, вышел таймаут — про игру мы так
+                // ничего и не узнали. Витрина обойдётся градиентом, но в кеш это не идёт:
+                // иначе одна неудачная минута гасила бы обложку на весь сеанс.
+                ChillHub.Core.Logging.Logger.Warn($"GalleryClient: галерея '{gameId}' недоступна: {ex.Message}");
+                return Array.Empty<GalleryImage>();
             }
 
             this.cache[gameId] = result;

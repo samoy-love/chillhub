@@ -50,10 +50,11 @@ func TestDeleteVersionRejectsIncompleteAndUnsafeInput(t *testing.T) {
 		{"traversal in the game id", "gameId=../../etc&version=1.0.0"},
 		{"traversal in the version", "gameId=game&version=../../etc"},
 		{"separator in the version", "gameId=game&version=1.0.0/files"},
-		// Dots and nothing else: IsSafeVersion accepts this one, because
-		// versions are allowed to contain dots. See the test below for what it
-		// costs when the joined path is not re-checked.
+		// Dots and nothing else. Versions are allowed to contain dots, so this
+		// one used to reach the joined path; see the test below for what it
+		// costs when nothing re-checks it.
 		{"the version is just dot-dot", "gameId=game&version=.."},
+		{"the version is just a dot", "gameId=game&version=."},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -115,10 +116,10 @@ func TestDeleteVersionKeepsTheContentWhenTheManifestCannotBeRemoved(t *testing.T
 	}
 }
 
-// version=".." passes adminutil.IsSafeVersion — it is dots and nothing else,
-// and versions are allowed dots. Joined onto the game directory it collapses to
-// the content root, and the os.RemoveAll that follows takes out every game on
-// the server while the endpoint answers "ok".
+// version=".." is dots and nothing else, and versions are allowed dots — the
+// character class alone let it through. Joined onto the game directory it
+// collapses to the content root, and the os.RemoveAll that follows takes out
+// every game on the server while the endpoint answers "ok".
 func TestDeleteVersionCannotEscapeTheGameDirectory(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)

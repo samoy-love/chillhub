@@ -103,7 +103,7 @@ func TestRollbackLiveVersionShoutsWhenTheRestoreFails(t *testing.T) {
 //
 // Обструкция здесь — существующий непустой каталог на месте цели, а не права
 // на родителя. Через права этот случай не собирается: read-only родитель ломает
-// уже ПЕРВЫЙ rename (увод живой версии в бэкап), promoteVersionDir выходит с
+// уже ПЕРВЫЙ rename (увод живой версии в бэкап), beginPromote выходит с
 // ошибкой раньше, чем доходит до восстановления, и проверять становится нечего.
 // Ровно на этом тест и падал на Linux, а на Windows молча скипался — то есть не
 // выполнялся нигде. Непустой каталог отвергается rename и там, и там.
@@ -153,7 +153,7 @@ func TestPromoteVersionDirAbortsWhenTheLiveVersionCannotBeMovedAside(t *testing.
 	if !denyRenamesOf(t, final) {
 		t.Skip("the filesystem does not let a directory rename be blocked here")
 	}
-	if err := promoteVersionDir(stage, final); err == nil {
+	if err := promoteForTest(stage, final); err == nil {
 		t.Fatal("promote reported success although the live version could not be moved aside")
 	}
 	b, err := os.ReadFile(filepath.Join(final, "live.txt")) // #nosec G304 -- built from t.TempDir().

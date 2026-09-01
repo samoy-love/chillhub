@@ -96,11 +96,9 @@ func (h *Handlers) manifestsDir(gid string) string {
 func (h *Handlers) stageVersionDir(gid, ver string) (string, string, error) {
 	// gid and ver are proven safe by adminutil.IsSafeGameID/IsSafeVersion at
 	// every entry point before publication starts, so neither can contain a
-	// separator. IsSafeVersion alone does NOT stop a ver of "..", but this
-	// function only ever CREATES a directory, so the worst a ".." would do here
-	// is make a staging directory one level up and fail on the manifest write.
-	// The destructive counterpart, removeVersion, does not get to rely on that
-	// and re-checks the joined paths itself.
+	// separator and neither can be "." or "..". The destructive counterpart,
+	// removeVersion, still re-checks the joined paths itself: it is also fed
+	// version labels read off disk, not only ones that came through a guard.
 	parent := filepath.Join(h.root, "content", gid)
 	if err := os.MkdirAll(parent, contentDirPerm); err != nil {
 		return "", "", err
@@ -113,7 +111,7 @@ func (h *Handlers) stageVersionDir(gid, ver string) (string, string, error) {
 	return stageDir, filesRoot, nil
 }
 
-// promoteVersionDir replaces the published version directory with a fully
+// beginPromote replaces the published version directory with a fully
 // extracted staging directory.
 //
 // os.Rename cannot overwrite an existing directory (on any OS, and notably on
@@ -127,22 +125,104 @@ func (h *Handlers) stageVersionDir(gid, ver string) (string, string, error) {
 //     good with nothing to restore. Now it is put back.
 //
 // The old tree is deleted only once the new one is live.
-func promoteVersionDir(stageDir, finalDir string) error {
+
+// publishTree performs the whole publication: it swaps the staged tree into
+// place, writes the manifest that describes it, and undoes the swap if that
+// write fails. It returns the manifest path and its bytes.
+//
+// One function rather than the same five lines at each of the four publication
+// paths: the ORDER is the invariant here — tree in, manifest written, backup
+// dropped — and four copies of an order is four chances to get it wrong. The
+// previous one already was: every path promoted first and wrote the manifest
+// afterwards, with the backup already gone.
+func (h *Handlers) publishTree(
+	stageDir, finalDir, manifestDir string, m manifest, updateLatest bool) (string, []byte, error) {
+	prom, err := beginPromote(stageDir, finalDir)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: %w", errPromoteFailed, err)
+	}
+	path, b, err := h.writeManifestTo(manifestDir, m, updateLatest)
+	if err != nil {
+		prom.Rollback(err)
+		return "", nil, err
+	}
+	prom.Commit()
+	return path, b, nil
+}
+
+// errPromoteFailed marks the half of publishTree that failed before anything
+// was written, so a caller can still tell the operator which step gave up.
+var errPromoteFailed = errors.New("builds: promoting the version directory")
+
+// promotion is a version directory that is already live but whose manifest has
+// not been written yet. The replaced tree is still on disk under its backup
+// name, so the pair can still be undone as a whole.
+//
+// It exists because "published" is two things — the file tree and the manifest
+// that lists its hashes — and the tree used to go live first with the backup
+// already deleted. A manifest write that then failed (a full volume is the
+// realistic one) left the NEW files on disk under the OLD manifest, with
+// nothing to roll back to: every client hashed a file the manifest did not
+// describe, decided the install was damaged and re-downloaded it forever.
+type promotion struct {
+	finalDir string
+	// backup is the replaced tree, or "" when this version had never been
+	// published before — in which case undoing means simply removing what we
+	// just put there.
+	backup string
+}
+
+// beginPromote swaps the staging tree into place and keeps the replaced one.
+// The caller MUST finish with Commit or Rollback.
+func beginPromote(stageDir, finalDir string) (*promotion, error) {
 	if err := os.MkdirAll(filepath.Dir(finalDir), contentDirPerm); err != nil {
-		return err
+		return nil, err
 	}
 	sweepStaleBackups(finalDir)
 
 	backup, err := moveLiveVersionAside(finalDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := os.Rename(stageDir, finalDir); err != nil {
 		rollbackLiveVersion(backup, finalDir, err)
-		return err
+		return nil, err
 	}
-	dropBackup(backup)
-	return nil
+	return &promotion{finalDir: finalDir, backup: backup}, nil
+}
+
+// Commit deletes the replaced tree: the new version and its manifest are both
+// on disk, and there is nothing left to go back to.
+func (p *promotion) Commit() {
+	if p == nil {
+		return
+	}
+	dropBackup(p.backup)
+	p.backup = ""
+}
+
+// Rollback undoes the swap after the manifest could not be written.
+//
+// The freshly promoted tree goes first: os.Rename cannot overwrite a directory,
+// so the backup cannot come home while the new files occupy its place. If that
+// removal fails there is nothing sensible left to try — saying so loudly is the
+// only useful action, because the version on disk then belongs to neither build.
+func (p *promotion) Rollback(cause error) {
+	if p == nil {
+		return
+	}
+	if err := os.RemoveAll(p.finalDir); err != nil {
+		log.Printf("[builds] CRITICAL: manifest write failed (%v) and the promoted tree %s could not be removed (%v); "+
+			"the files on disk are the new build and the manifest is the old one", cause, p.finalDir, err)
+		return
+	}
+	if p.backup == "" {
+		// Nothing was published under this version before, so "absent" is
+		// exactly the state the failed publication should leave behind.
+		return
+	}
+	rollbackLiveVersion(p.backup, p.finalDir, cause)
+	p.backup = ""
 }
 
 // sweepStaleBackups removes backups a previous crash may have left next to this
@@ -199,7 +279,7 @@ func dropBackup(backup string) {
 
 // publishLocks serialises publication per gameId+version.
 //
-// promoteVersionDir first deletes every finalDir+".old-*" it finds and only
+// beginPromote first deletes every finalDir+".old-*" it finds and only
 // then renames the live version aside under that same pattern. Two publications
 // of the SAME version running at once therefore destroy each other's backup,
 // and — worse — the winner of the content rename is not necessarily the one
@@ -371,6 +451,40 @@ func stripLauncherStateDirs(gameID string, dirs []string) []string {
 	return out
 }
 
+// prepareManifest drops the launcher's own state files and checks that what is
+// left is a manifest the client will accept. Returns the manifest as it will be
+// stored.
+//
+// ЭТО НАДО СПРОСИТЬ ДО ПОДМЕНЫ ДЕРЕВА ВЕРСИИ, а не только перед записью
+// манифеста. Порядок в каждом пути публикации был «промоут → запись
+// манифеста», а проверка жила внутри записи: отказ на пути вида "aux.dll" или
+// на двух записях, различающихся только регистром, оставлял НОВЫЕ файлы под
+// СТАРЫМ манифестом. Откатывать уже нечего — прежнее дерево удалено, — а клиент
+// не сходится по blake3 сразу на всех файлах и либо качает их без конца, либо
+// объявляет установку битой. Файлы и пустые каталоги известны задолго до
+// промоута, поэтому publishable() спрашивают там, где отказ ещё безвреден.
+func prepareManifest(m manifest) (manifest, error) {
+	m.Files = stripLauncherStateFiles(m.GameID, m.Files)
+	m.EmptyDirs = stripLauncherStateDirs(m.GameID, m.EmptyDirs)
+
+	// Публиковать манифест, который клиент заведомо отвергнет, бессмысленно:
+	// лучше сломать выкладку здесь, с внятной причиной, чем у пользователя на
+	// установке. Правила те же, что и на клиенте (ManifestValidator).
+	if err := validateManifest(m); err != nil {
+		log.Printf("[builds] refusing to publish manifest gameId=%q version=%q: %v", m.GameID, m.Version, err)
+		return m, err
+	}
+	return m, nil
+}
+
+// publishable reports whether the manifest that WILL be written once the tree
+// is promoted passes validation. Called before publishTree by every
+// publication path; see prepareManifest for why the answer is worthless after.
+func publishable(m manifest) error {
+	_, err := prepareManifest(m)
+	return err
+}
+
 // writeManifest validates the manifest, stores it for a version and optionally
 // points latest.json at it. Returns the manifest path and the exact bytes
 // written.
@@ -389,14 +503,8 @@ func (h *Handlers) writeManifest(m manifest, updateLatest bool) (string, []byte,
 // state-file stripping and the atomic write — the three things that must never
 // diverge between publication paths.
 func (h *Handlers) writeManifestTo(outDir string, m manifest, updateLatest bool) (string, []byte, error) {
-	m.Files = stripLauncherStateFiles(m.GameID, m.Files)
-	m.EmptyDirs = stripLauncherStateDirs(m.GameID, m.EmptyDirs)
-
-	// Публиковать манифест, который клиент заведомо отвергнет, бессмысленно:
-	// лучше сломать выкладку здесь, с внятной причиной, чем у пользователя на
-	// установке. Правила те же, что и на клиенте (ManifestValidator).
-	if err := validateManifest(m); err != nil {
-		log.Printf("[builds] refusing to publish manifest gameId=%q version=%q: %v", m.GameID, m.Version, err)
+	m, err := prepareManifest(m)
+	if err != nil {
 		return "", nil, err
 	}
 
@@ -564,7 +672,7 @@ func (h *Handlers) hasVersionManifest(gid, ver string) bool {
 // launcherVersionAlreadyPublished refuses to publish a LAUNCHER build under a
 // version number that already has a manifest.
 //
-// promoteVersionDir happily replaces an existing version directory — by
+// beginPromote happily replaces an existing version directory — by
 // design, and correctly so for games, where a same-version re-upload is a
 // legitimate "fix this build without a new number" workflow. For the
 // launcher it is not: self-update compares version STRINGS, not content, so
@@ -774,13 +882,13 @@ var errUnsafeVersionPath = errors.New("builds: version path escapes its game dir
 // removeVersion erases one published version: its manifest and its extracted
 // content directory. gid and ver must already have passed the safety checks.
 //
-// THE JOINED PATHS ARE RE-CHECKED HERE, and that is not belt-and-braces.
-// adminutil.IsSafeVersion accepts ".." — it allows dots because versions are
-// semver, and ".." is dots and nothing else; adminutil's own
-// TestVersionCheckAloneDoesNotStopDotDot exists to say so and to require the
-// second check from every caller that turns a version into a path. Without it
-// version=".." collapses content/{gid}/.. to the content root and this
-// function's os.RemoveAll takes out every game on the server, answering "ok".
+// THE JOINED PATHS ARE RE-CHECKED HERE, and that is not belt-and-braces. The
+// version does not have to come from a request: PruneVersions derives it from a
+// manifest FILE NAME, and a file called "...json" on disk yields the version
+// "..". Joined onto the game directory that collapses to the content root, and
+// this function's os.RemoveAll would take out every game on the server while
+// answering "ok". The check is strict — a version of "." resolves to the game
+// directory itself, which is every version of the game.
 //
 // A manifest that is not there is not a failure: the panel retries a delete
 // that timed out, two admins can click the same row, and the mass cleanup below
@@ -790,9 +898,17 @@ func (h *Handlers) removeVersion(gid, ver string) error {
 	manPath := filepath.Join(manDir, ver+".json")
 	contentDir := filepath.Join(h.root, "content", gid)
 	filesDir := filepath.Join(contentDir, ver)
-	if !adminutil.EnsureWithin(manDir, manPath) || !adminutil.EnsureWithin(contentDir, filesDir) {
+	if !adminutil.EnsureStrictlyWithin(manDir, manPath) || !adminutil.EnsureStrictlyWithin(contentDir, filesDir) {
 		return fmt.Errorf("%w: %s/%s", errUnsafeVersionPath, gid, ver)
 	}
+	// The same lock every publication takes around promote + manifest write.
+	// Deleting without it can slice a concurrent republication of this version
+	// in half: the promote lands, this RemoveAll erases the tree, and the
+	// manifest write that follows publishes a version with no files behind it —
+	// a 404 on every file for every client, with the panel listing the version
+	// as present.
+	unlock := lockPublish(gid, ver)
+	defer unlock()
 	if err := os.Remove(manPath); err != nil {
 		if !os.IsNotExist(err) {
 			return err
@@ -888,9 +1004,26 @@ func (h *Handlers) PruneVersions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no active version", http.StatusConflict)
 		return
 	}
+	victims := prunableVersions(manifestVersions(entries), active)
+	// Оператор согласился на КОНКРЕТНЫЙ список — тот, что панель показала ему в
+	// диалоге. Считать набор здесь заново и молча удалить другой нельзя: между
+	// показом диалога и нажатием кнопки из соседней вкладки или из CI успевают
+	// залить и включить новую версию, набор съезжает на одну, и стирается та
+	// сборка, которую диалог только что назвал сохраняемой. Вернуть её нечем.
+	//
+	// Параметр необязателен: без него ручка ведёт себя как раньше. Обязательным
+	// его сделать нельзя, не сломав уже разосланные копии панели, а отказ по
+	// расхождению защищает ровно того, кто список прислал.
+	if expected, ok := r.URL.Query()["expected"]; ok {
+		if diff := versionSetDiff(victims, expected); diff != "" {
+			log.Printf("[builds] prune %s: refused, %s", gid, diff)
+			http.Error(w, "the set of old versions changed since the panel showed it; reopen and try again", http.StatusConflict)
+			return
+		}
+	}
 	deleted := []string{}
 	failed := []string{}
-	for _, v := range prunableVersions(manifestVersions(entries), active) {
+	for _, v := range victims {
 		// A manifest file whose name is not a usable version never came from
 		// this package; it is left alone rather than turned into a path.
 		if !adminutil.IsSafeVersion(v) {
@@ -912,6 +1045,33 @@ func (h *Handlers) PruneVersions(w http.ResponseWriter, r *http.Request) {
 		"failed":  failed,
 		"active":  active,
 	})
+}
+
+// versionSetDiff compares what the server is about to delete with what the
+// panel told the operator it would delete, and describes the first difference
+// for the journal. An empty string means the two sets match.
+//
+// Sets, not sequences: the panel builds its list from /admin/list, which is
+// sorted the same way, but agreeing on the ORDER is not what matters here —
+// agreeing on the membership is.
+func versionSetDiff(server, expected []string) string {
+	want := make(map[string]bool, len(expected))
+	for _, v := range expected {
+		want[strings.TrimSpace(v)] = true
+	}
+	have := make(map[string]bool, len(server))
+	for _, v := range server {
+		have[v] = true
+		if !want[v] {
+			return fmt.Sprintf("%q is not in the list the panel showed", v)
+		}
+	}
+	for v := range want {
+		if !have[v] {
+			return fmt.Sprintf("%q was in the list the panel showed but is no longer old", v)
+		}
+	}
+	return ""
 }
 
 // recalcLatest repoints latest.json after the active version was deleted, or

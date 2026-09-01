@@ -3,9 +3,10 @@
 // the path-safety guards.
 //
 // The guards (IsSafeGameID, IsSafeVersion, IsSafeNewsSlug, NewsSlugPath,
-// EnsureWithin, SanitizeFilename, SanitizeAssetPath) live here and only here on
-// purpose: a second copy of a traversal check is a second chance to get it
-// wrong. Domain packages must import them, never reimplement them.
+// EnsureWithin, EnsureStrictlyWithin, SanitizeFilename, SanitizeAssetPath) live
+// here and only here on purpose: a second copy of a traversal check is a second
+// chance to get it wrong. Domain packages must import them, never reimplement
+// them.
 package adminutil
 
 import (
@@ -160,6 +161,11 @@ func syncDirEntry(dir string) {
 }
 
 // EnsureWithin reports whether p resolves to a location inside base.
+//
+// BASE ITSELF COUNTS AS INSIDE. Listing and creating legitimately address the
+// root of a tree (the asset browser opens on path=""), so this cannot be
+// tightened here. Anything that DELETES, RENAMES or REPLACES must use
+// EnsureStrictlyWithin instead.
 func EnsureWithin(base, p string) bool {
 	b, _ := filepath.Abs(base)
 	q, _ := filepath.Abs(p)
@@ -167,13 +173,33 @@ func EnsureWithin(base, p string) bool {
 	if err != nil {
 		return false
 	}
-	if rel == "" || rel == ".." {
+	// filepath.Rel never answers "": equal paths come back as ".", which is
+	// base itself and is handled by EnsureStrictlyWithin, not here.
+	if rel == ".." {
 		return false
 	}
 	// Only a ".." SEGMENT means "outside base". A plain HasPrefix(rel, "..")
 	// also rejected legitimate names that merely begin with two dots — "..foo",
 	// "..gitkeep" — which are ordinary files inside base.
 	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// EnsureStrictlyWithin reports whether p names something inside base WITHOUT
+// being base itself.
+//
+// A path that collapses exactly onto its own base is the shape every traversal
+// through a destructive endpoint ends up in: content/{gid}/{version} with a
+// version of "." is content/{gid}, i.e. every version of the game, and
+// os.RemoveAll on it answers 200 with nothing left to restore. EnsureWithin
+// waves that through by design, so the destructive callers ask this one, with
+// the PARENT of the entity they are about to touch as base.
+func EnsureStrictlyWithin(base, p string) bool {
+	if !EnsureWithin(base, p) {
+		return false
+	}
+	b, _ := filepath.Abs(base)
+	q, _ := filepath.Abs(p)
+	return b != q
 }
 
 // isASCIIAlnum reports whether r is [A-Za-z0-9].
@@ -207,8 +233,18 @@ func IsSafeGameID(s string) bool {
 
 // IsSafeVersion allows [0-9A-Za-z._-] for version labels (e.g., semver with
 // pre-release), not empty.
+//
+// "." AND ".." ARE REFUSED OUTRIGHT even though they are dots and nothing else,
+// which the character class below allows. A version becomes a directory name
+// under content/{gameId}/, and those two name the game directory and the whole
+// content root instead — the delete, upload and import endpoints all joined
+// them and then removed or renamed what came out. No release is ever labelled
+// ".", so refusing them here costs nothing and closes every caller at once.
 func IsSafeVersion(s string) bool {
 	if strings.TrimSpace(s) == "" {
+		return false
+	}
+	if s == "." || s == ".." {
 		return false
 	}
 	for _, r := range s {

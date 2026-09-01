@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -268,10 +269,23 @@ func newRouter(limiter *ratelimit.Limiter, reg *promexp.Registry) *mux.Router {
 	// Счётчик первым в цепочке: запрос, отбитый лимитером или CORS, — это тоже
 	// ответ, и «всем прилетает 429» должно быть видно на графике, а не только
 	// в логе.
-	r.Use(httpx.Metrics(reg, "api", muxRoute))
-	r.Use(httpx.RequestID())
-	r.Use(httpx.CORS("*"))
-	r.Use(httpx.Logging("PUBLIC"))
+	chain := []mux.MiddlewareFunc{
+		httpx.Metrics(reg, "api", muxRoute),
+		httpx.RequestID(),
+		httpx.CORS("*"),
+		httpx.Logging("PUBLIC"),
+	}
+	for _, mw := range chain {
+		r.Use(mw)
+	}
+	// r.Use накрывает только НАЙДЕННЫЙ маршрут: при промахе gorilla/mux зовёт
+	// эти два хендлера напрямую, мимо цепочки. Поэтому 404 и 405 не попадали ни
+	// в метрики, ни в журнал доступа и уходили без X-Request-Id — сканер, льющий
+	// тысячи запросов по несуществующим путям, не был виден нигде. Обёртка той
+	// же цепочкой возвращает их на общий путь; ветка "other" в muxRoute написана
+	// ровно про этот случай.
+	r.NotFoundHandler = withMiddleware(http.NotFoundHandler(), chain)
+	r.MethodNotAllowedHandler = withMiddleware(http.HandlerFunc(methodNotAllowed), chain)
 
 	// The limiter is attached per JSON endpoint, NOT router-wide. In dev this
 	// process also serves /content/ and /manifests/, and installing a game is
@@ -320,6 +334,23 @@ func newRouter(limiter *ratelimit.Limiter, reg *promexp.Registry) *mux.Router {
 	r.PathPrefix("/assets/").Handler(httpx.Revalidate(http.StripPrefix("/assets/", http.FileServer(http.Dir(filepath.Join(contentRoot, "news", "assets"))))))
 
 	return r
+}
+
+// withMiddleware wraps h in the same order gorilla/mux applies r.Use: the first
+// entry of the chain ends up outermost, so a hand-wrapped handler and a routed
+// one see the middleware in the same sequence.
+func withMiddleware(h http.Handler, chain []mux.MiddlewareFunc) http.Handler {
+	for _, mw := range slices.Backward(chain) {
+		h = mw.Middleware(h)
+	}
+	return h
+}
+
+// methodNotAllowed answers a request whose path matched but whose method did
+// not. Status only, like gorilla/mux's own default — the body is of no use to a
+// client that already knows the method it sent.
+func methodNotAllowed(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusMethodNotAllowed)
 }
 
 var contentRoot string
@@ -394,10 +425,21 @@ func loadGamesFromRegistry() ([]GameInfo, bool) {
 	// No part of it comes from the request.
 	b, err := os.ReadFile(p)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			// Файл есть, но не читается (права, ошибка диска). Это отказ, а не
+			// «сервера ещё не настраивали»: скан выдал бы за каталог игр всё
+			// содержимое manifests/, включая снятое с публикации.
+			log.Printf("registry: cannot read games.json (%v), serving an empty list", err)
+			return nil, true
+		}
 		return nil, false
 	}
-	if json.Unmarshal(b, &reg) != nil || len(reg.Items) == 0 {
-		return nil, false
+	if json.Unmarshal(b, &reg) != nil {
+		// Битый реестр — тоже отказ. Сканом его не починить, а разница между
+		// «реестра ещё нет» и «реестр сломан» здесь принципиальна: в первом
+		// случае скан уместен, во втором он публикует то, что оператор скрыл.
+		log.Printf("registry: games.json is malformed, serving an empty list")
+		return nil, true
 	}
 	// The launcher trusts THIS array's order as the display order — it has no
 	// order/pinned fields of its own in the response, it just remembers each
@@ -650,8 +692,13 @@ func handleGameNewsIndex(w http.ResponseWriter, r *http.Request) {
 // as publishing it. Older versions stay listed on purpose: they were published
 // once, and switching back to one is a supported action.
 //
-// When latest.json is missing or unreadable nothing can be filtered against, so
-// the list is served unfiltered, exactly as before.
+// When latest.json is missing or unreadable the answer is an EMPTY list. Serving
+// the list unfiltered used to look like the cautious choice — "nothing to filter
+// against, so hide nothing" — but it is the opposite one: the launcher falls
+// back to the newest entry of this list exactly when the latest endpoint is
+// silent, so a game whose latest.json was never written (a chunked upload does
+// not write one) had its newest staged build installed by every player. A gate
+// that disappears has to read as "no", not as "yes".
 func handleBuilds(w http.ResponseWriter, r *http.Request) {
 	gid, ok := publicGameID(w, r)
 	if !ok {
@@ -664,6 +711,10 @@ func handleBuilds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	published, hasLatest := readLatest(filepath.Join(dir, "latest.json"))
+	if !hasLatest {
+		writeJSON(w, map[string]any{"gameId": gid, "items": []string{}})
+		return
+	}
 	versions := make([]string, 0)
 	for _, e := range entries {
 		if e.IsDir() {
@@ -675,7 +726,7 @@ func handleBuilds(w http.ResponseWriter, r *http.Request) {
 		}
 		if strings.HasSuffix(strings.ToLower(name), ".json") {
 			v := strings.TrimSuffix(name, ".json")
-			if hasLatest && adminutil.CompareVersions(v, published.Version) > 0 {
+			if adminutil.CompareVersions(v, published.Version) > 0 {
 				continue
 			}
 			versions = append(versions, v)

@@ -145,9 +145,11 @@ func (h *Handlers) Ecosystem(w http.ResponseWriter, r *http.Request) {
 	} else {
 		log.Printf("[mods] section uuid for %s: %v", slug, err)
 	}
-	entry.Mods = cfg
-
-	if err := h.games.SaveEntry(entry); err != nil {
+	// Сохраняется только настройка модов. Запись реестра перечитывается внутри
+	// SaveMods: между чтением выше и этой строкой прошли два обращения к
+	// Thunderstore, а оператор в другой вкладке за это время мог переименовать
+	// игру или снять её с публикации.
+	if err := h.games.SaveMods(gid, cfg); err != nil {
 		adminutil.Fail(w, http.StatusInternalServerError, "не удалось сохранить реестр", "mods:ecosystem", err)
 		return
 	}

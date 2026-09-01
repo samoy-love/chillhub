@@ -29,14 +29,13 @@ func modded(t *testing.T, h *Handlers) {
 	if !ok {
 		t.Fatal("игра не попала в реестр")
 	}
-	e.Mods = &ModsConfig{
+	if err := h.SaveMods(e.GameID, &ModsConfig{
 		Enabled:     true,
 		Community:   "lethal-company",
 		SteamAppID:  "1966720",
 		SteamFolder: "Lethal Company",
 		Loader:      "bepinex",
-	}
-	if err := h.SaveEntry(e); err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -92,6 +92,15 @@
 
     let path = '';
 
+    // Номер последнего ушедшего запроса списка. Ответы приходят не в том
+    // порядке, в котором уходили: медленный ответ по прошлой игре (или по
+    // прошлой букве в поиске) возвращался последним и перерисовывал сетку
+    // чужими файлами. Кнопки на таких карточках работали уже с ТЕКУЩЕЙ игрой,
+    // то есть «Сделать обложкой», «Переименовать» и «Удалить» отправляли имя
+    // файла одной игры с идентификатором другой, а сервер существование файла
+    // не проверяет. Приём тот же, что у __lnPrevSeq в admin.js.
+    let listSeq = 0;
+
     function setPath(p) { path = String(p || '').replace(/^\/+|\/+$/g, ''); renderBreadcrumbs(); }
 
     function renderBreadcrumbs() {
@@ -147,16 +156,23 @@
     }
 
     async function fetchAndRender() {
+      const seq = ++listSeq;
+      // stale() отвечает «этот ответ уже неинтересен»: пока мы ждали, ушёл
+      // более свежий запрос, и всё, что осталось от нашего, — сетка, путь и
+      // сообщение об ошибке — относится к другой игре или другому поиску.
+      const stale = function () { return seq !== listSeq; };
       const gameId = getGameId();
       if (!gameId) { renderError('Игра не выбрана'); return; }
       const q = (els.search && els.search.value) || '';
       let url = EP.list + '?gameId=' + encodeURIComponent(gameId) + '&path=' + encodeURIComponent(path);
       if (q.trim() !== '') url += '&q=' + encodeURIComponent(q.trim());
       let res;
-      try { res = await fetch(url); } catch (e) { renderError('Ошибка загрузки: ' + e); return; }
+      try { res = await fetch(url); } catch (e) { if (stale()) return; renderError('Ошибка загрузки: ' + e); return; }
+      if (stale()) return;
       if (!res.ok) { renderError(httpReason(res, 'Не удалось открыть галерею')); return; }
       let j;
-      try { j = await res.json(); } catch (e) { renderError('Сервер вернул не то, что ожидалось. Обновите страницу.'); return; }
+      try { j = await res.json(); } catch (e) { if (stale()) return; renderError('Сервер вернул не то, что ожидалось. Обновите страницу.'); return; }
+      if (stale()) return;
       setPath(j.path || path);
       const items = j.items || [];
       // Подписи и обложка в gallery.json ключуются по голому имени файла
@@ -165,6 +181,7 @@
       // сервер, где gallery.json лежит рядом с картинками, а не в подпапках.
       if (!path) {
         const meta = await fetchGalleryMeta(gameId);
+        if (stale()) return;
         const capByName = {};
         meta.items.forEach(function (it) { if (it && it.file) capByName[it.file] = it.caption || ''; });
         items.forEach(function (it) {
@@ -173,7 +190,7 @@
           it.isCover = !!meta.cover && meta.cover === it.name;
         });
       }
-      renderGrid(items);
+      renderGrid(items, gameId);
     }
 
     async function mutate(url, params) {
@@ -209,7 +226,10 @@
       return b;
     }
 
-    function renderGrid(items) {
+    // gameId приходит параметром от того запроса, чьи файлы рисуются, а не
+    // читается заново: карточка обязана действовать над той игрой, чей список
+    // на ней показан.
+    function renderGrid(items, gameId) {
       if (!els.grid) return;
       if (!items || items.length === 0) {
         // Пустая галерея — обычное состояние новой игры, а не сбой: подсказываем,
@@ -222,7 +242,6 @@
         return;
       }
       els.grid.innerHTML = '';
-      const gameId = getGameId();
       items.forEach(function (it) {
         const col = document.createElement('div');
         col.className = 'col-6 col-sm-4 col-md-3';
@@ -410,7 +429,15 @@
     }
 
     if (els.refresh) els.refresh.addEventListener('click', function (e) { e.preventDefault(); fetchAndRender(); });
-    if (els.search) els.search.addEventListener('input', function () { fetchAndRender(); });
+    // Поиск ждёт паузы в наборе: раньше каждая нажатая буква поднимала свой
+    // запрос к серверу, и слово из восьми букв стоило восьми обходов каталога.
+    // Свой таймер, а не debounce() из admin.js: этот файл не полагается на
+    // порядок загрузки скриптов (см. esc/toast выше).
+    let searchTimer = null;
+    if (els.search) els.search.addEventListener('input', function () {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(fetchAndRender, 250);
+    });
     if (els.mkdir) els.mkdir.addEventListener('click', async function (e) {
       e.preventDefault();
       const gameId = getGameId();

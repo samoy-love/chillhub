@@ -274,7 +274,7 @@ namespace ChillHub.Tests {
                 ForeignPaths = new List<string> { ModDll },
             };
 
-            SimpleSyncService.FinishPlan(plan, new ConcurrentBag<string>(), changesDisk: false, CancellationToken.None);
+            SimpleSyncService.FinishPlan(plan, new ConcurrentBag<string>(), CancellationToken.None);
 
             Assert.True(File.Exists(dir.PathTo(ModDll)), "файл модпака удалён фазой завершения");
             Assert.False(File.Exists(dir.PathTo("мусор.tmp")), "обычный лишний файл не удалён");
@@ -300,7 +300,7 @@ namespace ChillHub.Tests {
                 ToDelete = new List<string> { rel },
             };
 
-            SimpleSyncService.FinishPlan(plan, new ConcurrentBag<string>(), changesDisk: false, CancellationToken.None);
+            SimpleSyncService.FinishPlan(plan, new ConcurrentBag<string>(), CancellationToken.None);
 
             Assert.True(File.Exists(dir.PathTo(rel)), $"служебный файл {rel} удалён фазой завершения");
         }

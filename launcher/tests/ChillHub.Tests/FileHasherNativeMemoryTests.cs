@@ -1,0 +1,73 @@
+// <copyright file="FileHasherNativeMemoryTests.cs" company="PlaceholderCompany">
+// Copyright (c) 2025 ChillHub
+// Licensed under the MIT License.
+// </copyright>
+
+namespace ChillHub.Tests {
+    using System;
+    using System.Diagnostics;
+
+    using ChillHub.Core.Sync;
+
+    using Xunit;
+
+    /// <summary>
+    /// Расход памяти на подсчёте хешей.
+    /// <para>
+    /// Хеши считаются по одному разу на КАЖДЫЙ файл: при обходе сборки, при сверке
+    /// каждого скачанного куска, при проверке файлов самого лаунчера. Состояние Blake3
+    /// живёт в нативной куче, а у ref-struct не бывает финализатора — если его не
+    /// освобождать, «Проверить файлы» на сборке в пятнадцать тысяч файлов оставляет за
+    /// собой десятки мегабайт до самого выхода из лаунчера, и каждая следующая проверка
+    /// добавляет столько же. Со стороны это «лаунчер ничего не делает, а память растёт».
+    /// </para>
+    /// </summary>
+    public class FileHasherNativeMemoryTests {
+        /// <summary>Сколько раз хешируем: примерно сборка среднего размера.</summary>
+        private const int Iterations = 50000;
+
+        /// <summary>
+        /// Хеширование сборки не оставляет за собой памяти.
+        /// <para>
+        /// Порог намеренно грубый: измеряется вся память процесса, и попасть в него
+        /// точно нельзя. Незакрытый хешер на этом числе файлов стоит несколько десятков
+        /// мегабайт — расхождение с порогом кратное, поэтому шум прогона на вердикт
+        /// не влияет.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void ХешированиеСборкиНеОставляетПамятьЗаСобой() {
+            if (!FileHasher.Blake3Available) {
+                // Без Blake3 считается один SHA-256, и проверять тут нечего.
+                return;
+            }
+
+            using var dir = new TempDir();
+            var path = dir.WriteFile("chunk.bin", new string('x', 8192));
+
+            // Прогрев: первый проход поднимает нативную библиотеку и раздаёт буферы,
+            // и без него в замер попал бы разовый расход, а не утечка.
+            for (var i = 0; i < 500; i++) {
+                FileHasher.ComputeHashes(path, out _, out _);
+            }
+
+            var before = PrivateBytes();
+            for (var i = 0; i < Iterations; i++) {
+                FileHasher.ComputeHashes(path, out _, out _);
+            }
+
+            var grown = PrivateBytes() - before;
+            Assert.True(
+                grown < 6L * 1024 * 1024,
+                $"после {Iterations} хеширований память процесса выросла на {grown / (1024 * 1024)} МБ — состояние хешера не освобождается");
+        }
+
+        private static long PrivateBytes() {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            using var self = Process.GetCurrentProcess();
+            return self.PrivateMemorySize64;
+        }
+    }
+}

@@ -7,6 +7,8 @@ namespace ChillHub.Core.UI {
     using System.Windows;
     using System.Windows.Controls;
 
+    using ChillHub.Core.Maintenance;
+
     /// <summary>Каким показать один пункт контекстного меню строки списка игр.</summary>
     /// <param name="Visible">Показывать ли пункт.</param>
     /// <param name="Enabled">Можно ли его нажать.</param>
@@ -48,8 +50,10 @@ namespace ChillHub.Core.UI {
         /// </param>
         /// <param name="game">Игра из строки списка.</param>
         /// <param name="hasFiles">На диске есть файлы этой игры.</param>
+        /// <param name="maintenance">Режим технических работ; null — ограничений нет.</param>
         /// <returns>Показывать ли пункт и можно ли его нажать.</returns>
-        internal static GameMenuItemLook For(string? name, bool isFirst, GameInfo? game, bool hasFiles) {
+        internal static GameMenuItemLook For(
+            string? name, bool isFirst, GameInfo? game, bool hasFiles, MaintenanceState? maintenance = null) {
             var verify = ShowsVerify(game);
             var visible = name switch {
                 Enqueue => !verify,
@@ -57,7 +61,47 @@ namespace ChillHub.Core.UI {
                 _ => true,
             };
 
-            return new GameMenuItemLook(visible, isFirst || hasFiles);
+            // ФАЙЛЫ НУЖНЫ ТОМУ, КТО С НИМИ РАБОТАЕТ. Правило «нужны файлы» стояло на всём
+            // меню сразу, и «Добавить в очередь загрузок» оказывался серым ровно у той игры,
+            // которую ещё ни разу не ставили, — единственный путь установки из списка игр
+            // не работал. Постановка в очередь файлы создаёт, а не читает.
+            //
+            // Но и «нажимается всегда» неверно: пункт обязан повторять предусловия самой
+            // очереди и запрет техработ. Иначе у игры, которая живёт только копией из Steam,
+            // он отвечает молчаливым отказом, а во время техработ через меню начинается
+            // установка, которую кнопка на странице начать не даёт.
+            var enabled = name switch {
+                Enqueue => CanEnqueue(game, maintenance),
+                _ => isFirst || hasFiles,
+            };
+
+            return new GameMenuItemLook(visible, enabled);
+        }
+
+        /// <summary>
+        /// Есть ли смысл ставить эту игру в очередь прямо сейчас.
+        /// <para>
+        /// Оба условия взяты не отсюда, а у тех, кто их и без того применяет: сборка на
+        /// сервере — предусловие <c>DownloadQueue.Enqueue</c>, без неё позиция появлялась
+        /// в панели загрузок и через секунду падала с отказом; запрет техработ — то же
+        /// правило, по которому гаснет кнопка действия (<c>ActionButtonState</c>).
+        /// </para>
+        /// </summary>
+        /// <param name="game">Игра из строки списка.</param>
+        /// <param name="maintenance">Режим технических работ; null — ограничений нет.</param>
+        /// <returns>true, если пункт имеет смысл нажимать.</returns>
+        internal static bool CanEnqueue(GameInfo? game, MaintenanceState? maintenance) {
+            if (game == null || string.IsNullOrWhiteSpace(game.LatestVersion)) {
+                return false;
+            }
+
+            if (maintenance == null) {
+                return true;
+            }
+
+            // Установка это или обновление, решает наличие игры на диске — ровно так же,
+            // как это решает страница игры.
+            return !(game.IsInstalled ? maintenance.BlocksUpdate : maintenance.BlocksInstall);
         }
 
         /// <summary>
@@ -87,7 +131,9 @@ namespace ChillHub.Core.UI {
         /// <param name="items">Пункты меню; null — одевать нечего.</param>
         /// <param name="game">Игра из строки списка.</param>
         /// <param name="hasFiles">На диске есть файлы этой игры.</param>
-        internal static void Apply(ItemCollection? items, GameInfo? game, bool hasFiles) {
+        /// <param name="maintenance">Режим технических работ; null — ограничений нет.</param>
+        internal static void Apply(
+            ItemCollection? items, GameInfo? game, bool hasFiles, MaintenanceState? maintenance = null) {
             if (items == null) {
                 return;
             }
@@ -97,7 +143,7 @@ namespace ChillHub.Core.UI {
                     continue;
                 }
 
-                var look = For(item.Name, i == 0, game, hasFiles);
+                var look = For(item.Name, i == 0, game, hasFiles, maintenance);
                 item.Visibility = look.Visible ? Visibility.Visible : Visibility.Collapsed;
                 item.IsEnabled = look.Enabled;
             }

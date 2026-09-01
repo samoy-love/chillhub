@@ -1,7 +1,7 @@
 package auth
 
 import (
-	"net"
+	"bufio"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,11 +15,14 @@ import (
 // sides — and "only safe because" is exactly the kind of claim that deserves a
 // test rather than a comment.
 //
-// This one goes through a real socket: the request line and headers are written
-// by hand, in the casing the admin panel actually puts on the wire, so nothing
-// in net/http's client-side normalisation can hide a mismatch. If a future
-// rename breaks the contract, every write from the admin panel starts answering
-// 401 and this fails first.
+// The request is written out as WIRE BYTES, in the casing the admin panel
+// actually sends, and handed to http.ReadRequest — the very parser the server
+// runs on a connection, so the canonicalisation under test is the real one and
+// nothing on the client side can normalise the mismatch away. It used to reach
+// that parser through an actual TCP socket, which added nothing to the claim
+// and cost a flake: the server closes the connection first, and on Windows the
+// reset arrived before the answer could be read ("wsarecv: an existing
+// connection was forcibly closed"), failing two runs in three.
 func TestCSRFHeaderIsAcceptedInTheCasingTheAdminUISends(t *testing.T) {
 	a := secureAuth(t)
 	access, err := a.signToken("admin", tokenAccess, time.Hour)
@@ -28,44 +31,33 @@ func TestCSRFHeaderIsAcceptedInTheCasingTheAdminUISends(t *testing.T) {
 	}
 	const csrf = "abcdefghijklmnopqrstuvwxyz012345"
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if user := a.CurrentUser(r); user != "admin" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
+	})
 
 	// Every spelling a browser or a proxy might put on the wire.
 	for _, spelling := range []string{"X-CSRF-Token", "X-Csrf-Token", "x-csrf-token", "X-CSRF-TOKEN"} {
 		t.Run(spelling, func(t *testing.T) {
-			host := strings.TrimPrefix(srv.URL, "http://")
-			conn, err := net.Dial("tcp", host)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = conn.Close() }()
-
-			req := "POST /admin/api/news/save HTTP/1.1\r\n" +
-				"Host: " + host + "\r\n" +
+			wire := "POST /admin/api/news/save HTTP/1.1\r\n" +
+				"Host: admin.example.com\r\n" +
 				"Cookie: " + cookieAccess + "=" + access + "; " + cookieCSRF + "=" + csrf + "\r\n" +
 				spelling + ": " + csrf + "\r\n" +
-				"Content-Length: 0\r\n" +
-				"Connection: close\r\n\r\n"
-			if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
-				t.Fatal(err)
+				"Content-Length: 0\r\n\r\n"
+			req, err := http.ReadRequest(bufio.NewReader(strings.NewReader(wire)))
+			if err != nil {
+				t.Fatalf("the wire bytes did not parse as a request: %v", err)
 			}
-			if _, err := conn.Write([]byte(req)); err != nil {
-				t.Fatal(err)
-			}
-			buf := make([]byte, 128)
-			n, err := conn.Read(buf)
-			if err != nil && n == 0 {
-				t.Fatalf("no answer: %v", err)
-			}
-			if status := string(buf[:n]); !strings.HasPrefix(status, "HTTP/1.1 200") {
-				t.Fatalf("%s was not accepted: %q", spelling, strings.SplitN(status, "\r\n", 2)[0])
+			req = req.WithContext(t.Context())
+
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("%s was not accepted: %d %s", spelling, w.Code, strings.TrimSpace(w.Body.String()))
 			}
 		})
 	}

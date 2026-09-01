@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"ChillHub/server/internal/adminapi/media"
 	"ChillHub/server/internal/adminutil"
@@ -98,6 +99,18 @@ var reservedGameIDs = map[string]bool{
 // Handlers serves the games endpoints for one content root.
 type Handlers struct {
 	root string
+
+	// mu сериализует «прочитал реестр — изменил — записал».
+	//
+	// Писателей у games.json четыре — Save, SaveMods, dropRegistryEntry и
+	// первичная генерация, — и ни один не был отделён от остальных, в отличие
+	// от news, feedback и gamegallery, где такой мьютекс заведён именно под
+	// этот цикл. Запись атомарна, но проигравший всё равно кладёт на диск
+	// версию, прочитанную ДО чужой правки: «Подтянуть из Thunderstore» уходит
+	// в сеть на две минуты, и сохранение, случившееся за это время, откатом
+	// возвращалось назад — снятая с публикации игра снова становилась видна
+	// игрокам, а ответ был «ok».
+	mu sync.Mutex
 }
 
 // New returns handlers rooted at the given content directory.
@@ -285,16 +298,22 @@ func (h *Handlers) Entry(gid string) (Entry, bool) {
 	return Entry{}, false
 }
 
-// SaveEntry updates one registry row in place, leaving the rest untouched.
+// SaveMods stores one game's modpack configuration, leaving every other field
+// of that row — and every other row — exactly as it is on disk.
 //
-// The panel always posts the whole registry, which is fine when a human is
-// editing it. The modpack endpoints change one field of one game (the metadata
-// pulled from Thunderstore), and rewriting three hundred rows to do it would
-// make every such call a chance to clobber a concurrent edit.
-func (h *Handlers) SaveEntry(e Entry) error {
-	if !adminutil.IsSafeGameID(e.GameID) || reservedGameIDs[strings.ToLower(e.GameID)] {
-		return fmt.Errorf("games: unusable gameId %q", e.GameID)
+// ЗАПИСЫВАЕТСЯ ОДНО ПОЛЕ, А НЕ СТРОКА ЦЕЛИКОМ. Раньше вызывающий читал запись,
+// уходил в Thunderstore на две минуты и клал прочитанное обратно вместе с
+// настройкой модов. Всё, что оператор успевал изменить за это время в другой
+// вкладке — название, порядок, закрепление, снятие с публикации, — молча
+// откатывалось на две минуты назад, и ответ был «ok». Реестр перечитывается
+// здесь, под замком, непосредственно перед записью.
+func (h *Handlers) SaveMods(gid string, cfg *ModsConfig) error {
+	if !adminutil.IsSafeGameID(gid) || reservedGameIDs[strings.ToLower(gid)] {
+		return fmt.Errorf("games: unusable gameId %q", gid)
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	// #nosec G304 -- see Entry.
 	b, err := os.ReadFile(h.registryPath())
 	if err != nil {
@@ -306,15 +325,20 @@ func (h *Handlers) SaveEntry(e Entry) error {
 	}
 	found := false
 	for i := range items {
-		if strings.EqualFold(items[i].GameID, e.GameID) {
-			items[i] = e
+		if strings.EqualFold(items[i].GameID, gid) {
+			items[i].Mods = cfg
 			found = true
 			break
 		}
 	}
 	if !found {
-		return fmt.Errorf("games: %q is not in the registry", e.GameID)
+		return fmt.Errorf("games: %q is not in the registry", gid)
 	}
+	return h.storeRegistry(items)
+}
+
+// storeRegistry sorts and writes the registry. The caller must hold h.mu.
+func (h *Handlers) storeRegistry(items []Entry) error {
 	sortEntries(items)
 	out, err := json.MarshalIndent(struct {
 		Items []Entry `json:"items"`
@@ -349,11 +373,22 @@ func (h *Handlers) Purge(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid gameId", http.StatusBadRequest)
 		return
 	}
+	// Reserved ids, refused here exactly as Save refuses them. They are not
+	// games but directory names under manifests/: "_registry" holds games.json,
+	// the registry of every game, and "_mods" holds every modpack ever built.
+	// IsSafeGameID accepts both — an underscore is a legal character — and both
+	// stay comfortably inside their roots, so nothing further down said no: the
+	// endpoint deleted the registry, answered "ok", and the launcher got an
+	// empty list of games.
+	if reservedGameIDs[strings.ToLower(gid)] {
+		http.Error(w, "gameId is reserved for internal use", http.StatusBadRequest)
+		return
+	}
 	manifests := filepath.Join(h.root, "manifests")
 	content := filepath.Join(h.root, "content")
 	manDir := filepath.Join(manifests, gid)
 	conDir := filepath.Join(content, gid)
-	if !adminutil.EnsureWithin(manifests, manDir) || !adminutil.EnsureWithin(content, conDir) {
+	if !adminutil.EnsureStrictlyWithin(manifests, manDir) || !adminutil.EnsureStrictlyWithin(content, conDir) {
 		http.Error(w, "invalid gameId", http.StatusBadRequest)
 		return
 	}
@@ -365,16 +400,41 @@ func (h *Handlers) Purge(w http.ResponseWriter, r *http.Request) {
 		adminutil.Fail(w, http.StatusInternalServerError, "failed to update the registry", "games", err)
 		return
 	}
-	// #nosec G703 -- gid passed IsSafeGameID and both paths were confirmed to
-	// stay inside their roots above.
-	if err := os.RemoveAll(manDir); err != nil {
-		log.Printf("[games] purge manifests %s: %v", gid, err)
+	// ЧТО НЕ УДАЛИЛОСЬ, НАЗЫВАЕТСЯ В ОТВЕТЕ. Обе ошибки только писались в
+	// журнал, ответ был «ok», а панель печатала «удалена вместе с манифестами и
+	// сборками». Строки в реестре к этому моменту уже нет, так что застрявшее
+	// дерево — заблокированный файл, точка монтирования, потерянное право —
+	// остаётся на диске, которого не видно ниоткуда: ни в панели, ни в списке
+	// игр, зато в показателе свободного места.
+	deleted := []string{}
+	failed := []string{}
+	for _, part := range []struct {
+		name string
+		dir  string
+	}{{"manifests", manDir}, {"content", conDir}} {
+		// #nosec G703 -- gid passed IsSafeGameID, is not a reserved id, and both
+		// paths were confirmed to stay strictly inside their roots above.
+		if err := os.RemoveAll(part.dir); err != nil {
+			log.Printf("[games] purge %s %s: %v", part.name, gid, err)
+			failed = append(failed, part.name)
+			continue
+		}
+		deleted = append(deleted, part.name)
 	}
-	// #nosec G703 -- see above.
-	if err := os.RemoveAll(conDir); err != nil {
-		log.Printf("[games] purge content %s: %v", gid, err)
+	if len(failed) > 0 {
+		// Отказом, а не полем в теле: панель печатает свою фразу «удалена
+		// вместе с манифестами и сборками» на любой успешный ответ и тело не
+		// читает. Статус — единственное, что до оператора точно дойдёт.
+		http.Error(w,
+			"the registry row is gone, but these trees are still on disk: "+strings.Join(failed, ", "),
+			http.StatusInternalServerError)
+		return
 	}
-	adminutil.WriteJSON(w, map[string]string{"status": "ok"})
+	adminutil.WriteJSON(w, map[string]any{
+		"status":  "ok",
+		"deleted": deleted,
+		"failed":  failed,
+	})
 }
 
 // dropRegistryEntry removes gid from the stored registry, leaving the file
@@ -382,6 +442,9 @@ func (h *Handlers) Purge(w http.ResponseWriter, r *http.Request) {
 // exist yet, or does not list gid, is not an error: the caller's goal is that
 // the game is absent, and it already is.
 func (h *Handlers) dropRegistryEntry(gid string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	p := h.registryPath()
 	// #nosec G304 -- p is registryPath(): the content root plus three constant
 	// path components. No part of it comes from the request.
@@ -418,7 +481,28 @@ func (h *Handlers) dropRegistryEntry(gid string) error {
 //
 // Failing to persist is logged but not fatal — the answer is still correct and
 // the next request simply regenerates it.
+//
+// The write goes under the same mutex as every other writer of games.json, and
+// the file is re-checked under it. This one is a writer too, and it was the one
+// left out: a GET that arrives on a server with no registry yet used to race a
+// concurrent Save or Ecosystem, and the scan — which knows only ids, no titles,
+// no exe paths, no mods config — could land on top of a row somebody had just
+// filled in. Both writes are atomic, so nothing is corrupt; the edit is simply
+// gone, and both requests answer success.
 func (h *Handlers) serveAutogenerated(w http.ResponseWriter, p string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Somebody may have written a real registry between the caller's stat and
+	// this lock. Theirs wins: it has the data a manifest scan cannot recover.
+	// #nosec G304 -- p is registryPath(): the content root plus three constant
+	// path components. No part of it comes from the request.
+	if stored, err := os.ReadFile(p); err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(stored)
+		return
+	}
+
 	b, err := json.MarshalIndent(struct {
 		Items []Entry `json:"items"`
 	}{Items: h.FromManifests()}, "", "  ")
@@ -437,12 +521,23 @@ func (h *Handlers) serveAutogenerated(w http.ResponseWriter, p string) {
 	_, _ = w.Write(b)
 }
 
+// maxRegistryBytes bounds the posted registry.
+//
+// Nothing outside this process limits it: the admin http.Server runs with
+// ReadTimeout and WriteTimeout deliberately at zero, and nginx allows 30 GB on
+// the admin routes for the build uploads. io.ReadAll below therefore buffered
+// whatever it was sent until the process died — taking the public
+// /feedback/submit and /metrics/report down with it, because the same process
+// serves them. Three hundred games with a full mods config are well under a
+// megabyte; four is room for a decade of growth.
+const maxRegistryBytes = 4 << 20
+
 // Save overwrites the registry with the posted list.
 func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 	if !adminutil.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRegistryBytes))
 	if err != nil {
 		http.Error(w, "invalid json body", http.StatusBadRequest)
 		return
@@ -519,6 +614,12 @@ func (h *Handlers) Save(w http.ResponseWriter, r *http.Request) {
 	// Чинится на сервере, а не в панели, намеренно: тогда никакой клиент — ни
 	// нынешний, ни будущий, ни curl из консоли — не сможет снести поле, о
 	// котором не знает.
+	//
+	// Чтение сохранённого и запись — один неделимый шаг: между ними успевает
+	// пройти чужой SaveMods, и тогда только что записанная настройка модов
+	// сливается из версии, прочитанной до неё.
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	items = mergeWithStored(items, body, h.storedByID())
 
 	sortEntries(items)

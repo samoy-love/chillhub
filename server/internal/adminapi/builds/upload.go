@@ -135,17 +135,6 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Everything is extracted and hashed: publish the build in one rename.
-	// The lock keeps a concurrent publication of the same version from
-	// interleaving its content rename with our manifest write.
-	unlock := lockPublish(gid, ver)
-	defer unlock()
-	if err := promoteVersionDir(stageDir, finalVerDir); err != nil {
-		adminutil.Fail(w, http.StatusInternalServerError, "activate failed", "upload", err)
-		return
-	}
-	promoted = true
-
 	m := manifest{
 		Version:   ver,
 		BuildID:   adminutil.NewBuildID(),
@@ -154,11 +143,27 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 		Files:     files,
 		EmptyDirs: emptyDirs,
 	}
-	_, b, err := h.writeManifest(m, upd)
-	if err != nil {
-		adminutil.Fail(w, http.StatusInternalServerError, "failed to write the manifest", "upload", err)
+	// Before the promote: a manifest refused afterwards leaves the new files
+	// live under the previous version's manifest, with nothing left to roll
+	// back to. See prepareManifest.
+	if err := publishable(m); err != nil {
+		adminutil.Fail(w, http.StatusBadRequest, "the build cannot be published: "+err.Error(), "upload", err)
 		return
 	}
+
+	// Everything is extracted and hashed: publish the build in one rename.
+	// The lock keeps a concurrent publication of the same version from
+	// interleaving its content rename with our manifest write.
+	unlock := lockPublish(gid, ver)
+	defer unlock()
+	// The replaced tree stays under its backup name until the manifest that
+	// describes the new one is on disk: the two together are the version.
+	_, b, err := h.publishTree(stageDir, finalVerDir, h.manifestsDir(gid), m, upd)
+	if err != nil {
+		adminutil.Fail(w, http.StatusInternalServerError, "failed to publish the build", "upload", err)
+		return
+	}
+	promoted = true
 	// return manifest JSON
 	w.Header().Set("Content-Type", "application/json")
 	// The build is published; a client that hung up before reading the manifest
@@ -716,23 +721,25 @@ func (h *Handlers) UploadStream(w http.ResponseWriter, r *http.Request) {
 		Files:     files,
 		EmptyDirs: emptyDirs,
 	}
+	// Before the promote, while stageDir is still discardable: see
+	// prepareManifest.
+	if err := publishable(m); err != nil {
+		nw.fail(http.StatusBadRequest, "the build cannot be published: "+err.Error())
+		return
+	}
 
 	// Everything is extracted and hashed: publish the build in one rename.
 	// See lockPublish: promote and the manifest write must not interleave with
 	// another publication of the same version.
 	unlock := lockPublish(gid, ver)
 	defer unlock()
-	if err := promoteVersionDir(stageDir, finalVerDir); err != nil {
-		streamError(nw, fl, "activate failed: "+err.Error())
-		return
-	}
-	promoted = true
-
-	outPath, _, err := h.writeManifest(m, upd)
+	// See Upload: the backup goes only after the manifest is written.
+	outPath, _, err := h.publishTree(stageDir, finalVerDir, h.manifestsDir(gid), m, upd)
 	if err != nil {
 		streamError(nw, fl, err.Error())
 		return
 	}
+	promoted = true
 
 	emitEventf(nw, "{\"type\":\"done\",\"outPath\":%q}\n", outPath)
 	fl.Flush()

@@ -308,7 +308,7 @@ namespace ChillHub.Core.Sync {
                     var task = new FileTask {
                         RelativePath = rel,
                         Size = mf.Size,
-                        Url = CombineUrl(contentBaseUrl, rel),
+                        Url = ContentUrl.Combine(contentBaseUrl, rel),
                         Blake3 = mf.Blake3,
                         Sha256 = mf.Sha256,
                         Executable = mf.Executable,
@@ -871,7 +871,7 @@ namespace ChillHub.Core.Sync {
             // вызывающие стартуют ExecuteAsync с UI-потока — уводим её в пул, иначе окно
             // замирает и «Отмена» физически не нажимается.
             progress.Report(new SyncProgress { Stage = "Activating", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
-            await Task.Run(() => FinishPlan(plan, deferred, changesDisk, ct), ct).ConfigureAwait(false);
+            await Task.Run(() => FinishPlan(plan, deferred, ct), ct).ConfigureAwait(false);
 
             // Финальный сигнал о завершении
             progress.Report(new SyncProgress { Stage = "Completed", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
@@ -1151,12 +1151,10 @@ namespace ChillHub.Core.Sync {
         /// </summary>
         /// <param name="plan">План различий.</param>
         /// <param name="deferred">Файлы, замена которых отложена до перезагрузки.</param>
-        /// <param name="changesDisk">Ставился ли маркер незавершённого обновления.</param>
         /// <param name="ct">Токен отмены.</param>
         internal static void FinishPlan(
             DiffPlan plan,
             System.Collections.Concurrent.ConcurrentBag<string> deferred,
-            bool changesDisk,
             CancellationToken ct) {
             ChillHub.Core.Logging.Logger.Info(
                 $"Applied gid={plan.GameId} ver={plan.Version} files={plan.Downloads.Count} deferred={deferred.Count} toDelete={plan.ToDelete.Count}");
@@ -1234,11 +1232,6 @@ namespace ChillHub.Core.Sync {
                 Directory.CreateDirectory(dirPath);
             }
 
-            if (!changesDisk) {
-                // Ничего не меняли — и маркера не ставили, снимать нечего.
-                return;
-            }
-
             // Маркер снимаем ТОЛЬКО если обновление реально доведено до конца. Если хотя бы
             // один файл был занят и заменится лишь после перезагрузки, снятие маркера
             // означало бы «игра обновлена», хотя на диске у неё старый исполняемый файл:
@@ -1251,6 +1244,13 @@ namespace ChillHub.Core.Sync {
                 return;
             }
 
+            // Снимаем по факту «диск сошёлся с манифестом», а не по признаку «мы что-то
+            // писали». Раньше здесь стоял выход «ничего не меняли — снимать нечего», и
+            // маркер переживал ровно тот случай, ради которого нужен выход из него:
+            // отложенные замены выполняет перезагрузка, файлы после неё соответствуют
+            // манифесту, а маркер снять некому. Дальше петля без выхода — статус
+            // «обновление прервано», «Обновить» даёт пустой план и уходит по тому же
+            // выходу. Пустой план и есть доказательство, что чинить нечего.
             ClearUpdateMarker(plan.LocalRoot);
         }
 
@@ -1282,12 +1282,6 @@ namespace ChillHub.Core.Sync {
                     yield return root;
                 }
             }
-        }
-
-        private static string CombineUrl(string baseUrl, string relativePath) {
-            baseUrl = baseUrl.TrimEnd('/') + "/";
-            relativePath = relativePath.Replace("\\", "/");
-            return baseUrl + relativePath;
         }
 
         private static List<string> ListLocalFiles(string root) => ListLocalFiles(root, null, null);

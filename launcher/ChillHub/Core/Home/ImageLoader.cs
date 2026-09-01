@@ -580,7 +580,6 @@ namespace ChillHub.Core.Home {
             return http;
         }
 
-        /// <summary>Одна HTTP-загрузка картинки в память; результат разделяют все ждущие элементы.</summary>
         /// <summary>
         /// Достаёт картинку: из кеша на диске, если сервер подтвердил, что она не менялась,
         /// иначе по сети.
@@ -599,8 +598,22 @@ namespace ChillHub.Core.Home {
         /// </summary>
         /// <param name="url">Адрес картинки.</param>
         /// <returns>Байты картинки.</returns>
-        private static async Task<byte[]> DownloadAsync(string url) {
-            var cached = ImageDiskCache.Read(url);
+        private static Task<byte[]> DownloadAsync(string url) => DownloadAsync(url, ImageDiskCache.Read);
+
+        /// <summary>
+        /// То же самое, но с подменяемым чтением кеша: без этого некому проверить, что
+        /// диск читается не на потоке интерфейса.
+        /// </summary>
+        /// <param name="url">Адрес картинки.</param>
+        /// <param name="readCache">Чтение дискового кеша по адресу.</param>
+        /// <returns>Байты картинки.</returns>
+        internal static async Task<byte[]> DownloadAsync(string url, Func<string, CachedImage?> readCache) {
+            // ДИСК — В ФОН, И ПЕРВЫМ ЖЕ ДЕЙСТВИЕМ. Фабрику Inflight.GetOrAdd вызывает тот,
+            // кто попросил картинку, то есть поток интерфейса, и исполняет её синхронно до
+            // первого await: чтение кеша (File.Exists + ReadAllBytes + разбор json) шло
+            // прямо на нём — по чтению на каждую строку списка игр. На холодном диске
+            // «Обновить список игр» подвешивало окно на всё это время.
+            var cached = await Task.Run(() => readCache(url)).ConfigureAwait(false);
             try {
                 return await FetchAsync(url, cached).ConfigureAwait(false);
             }

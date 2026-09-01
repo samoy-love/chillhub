@@ -467,7 +467,10 @@ function versionsTableHtml(items, latest, cls){
 
 // Сколько версий перед активной остаётся после чистки. Значение должно
 // совпадать с keepBeforeActive на сервере: здесь оно нужно только для того,
-// чтобы кнопка заранее сказала, что именно исчезнет.
+// чтобы кнопка заранее сказала, что именно исчезнет. Набор под удаление
+// считает сервер, и в ответе он перечисляет удалённое поимённо — обработчик
+// чистки сверяет ответ с показанным списком, поэтому разъехавшееся правило
+// увидит оператор, а не только тот, кто заметит пропажу версии.
 const KEEP_BEFORE_ACTIVE = 2;
 
 // prunableVersions — версии, которые снесёт «Удалить старые версии»: всё старше
@@ -491,6 +494,11 @@ function prunableVersions(items, latest){
 // Кнопка массовой чистки. Появляется, только когда сносить действительно есть
 // что, и сразу говорит сколько версий и сколько места: без этих цифр решение
 // принимается вслепую, а действие необратимо.
+//
+// Поимённого списка в разметке нет намеренно: он был бы снимком на момент
+// отрисовки, а решение принимается в момент клика — за это время версию могут
+// залить и активировать из другой вкладки. Список для диалога перечитывается
+// обработчиком, см. bindVersionActions.
 function prunePanelHtml(items, latest, cls){
   const victims = prunableVersions(items, latest);
   if(!victims.length) return '';
@@ -498,10 +506,19 @@ function prunePanelHtml(items, latest, cls){
   return '<div class="d-flex align-items-center justify-content-between gap-2 mb-2">'
     + '<span class="text-body-secondary">Старых версий: '+victims.length
     + ' · '+escapeHtml(formatBytes(bytes))+'</span>'
-    + '<button class="btn btn-sm btn-outline-danger '+cls+'-prune"'
-    + ' data-vers="'+escapeHtml(victims.map(it=>it.version||'').join(' '))+'"'
-    + ' data-latest="'+escapeHtml(String(latest||''))+'">Удалить старые версии</button>'
+    + '<button class="btn btn-sm btn-outline-danger '+cls+'-prune">Удалить старые версии</button>'
     + '</div>';
+}
+
+// fetchVersionList — свежий список версий игры прямо с сервера: активная и
+// сами версии по возрастанию номера, в том же порядке, в котором их отдаёт
+// /admin/list. Нужен перед необратимыми действиями, чтобы диалог обещал то,
+// что произойдёт сейчас, а не то, что было на момент отрисовки таблицы.
+async function fetchVersionList(gameId){
+  const r = await fetch('/admin/list?gameId='+encodeURIComponent(gameId));
+  if(!r.ok) throw new Error('HTTP '+r.status+' '+r.statusText);
+  const j = await r.json();
+  return { latest: j.latest || '', items: Array.isArray(j.items) ? j.items : [] };
 }
 
 // bindVersionActions вешает подтверждения на кнопки таблицы. Удаление версии
@@ -534,7 +551,11 @@ function bindVersionActions(root, cls, gameId, afterChange){
         bullets: [
           'Манифест и все файлы сборки удаляются с диска безвозвратно.',
           'Вернуть версию можно только повторной заливкой того же ZIP.',
-          'Если версия сейчас активна (latest), обновляться станет не на что, пока вы не назначите активной другую.',
+          // Так делает recalcLatest на сервере. Диалог обещал обратное —
+          // «обновляться станет не на что», — а лаунчеры тем временем
+          // откатывались на предыдущую сборку молча и сразу.
+          'Если версия сейчас активна (latest), активной станет ближайшая ПРЕДЫДУЩАЯ: все лаунчеры откатятся на неё.',
+          'Сборки новее активной сервер сам не включает. Если предыдущей нет, активной не станет ни одна, и обновляться будет не на что.',
         ],
         okText: 'Удалить версию',
         danger: true,
@@ -550,10 +571,29 @@ function bindVersionActions(root, cls, gameId, afterChange){
   });
   root.querySelectorAll('.'+cls+'-prune').forEach(btn=>{
     btn.addEventListener('click', async (ev)=>{
+      // Список перечитывается ПЕРЕД диалогом, а не берётся из таблицы.
+      // Таблица могла быть отрисована час назад; за это время из другой
+      // вкладки или из CI заливают и активируют новую версию, набор под нож
+      // съезжает на одну — и сервер сносил версию, которую диалог только что
+      // назвал сохраняемой.
       const el = ev.currentTarget;
-      const vers = String(el.getAttribute('data-vers')||'').split(' ').filter(Boolean);
-      if(!vers.length) return;
-      const latest = String(el.getAttribute('data-latest')||'');
+      // Пока идёт перечитывание, кнопка обязана быть занята. Без этого на
+      // медленном /admin/list оператор жмёт её второй раз, поверх друг друга
+      // открываются два диалога, и подтверждение обоих шлёт два запроса:
+      // второй отвечает «Удалено версий: 0» — успехом, противоречащим первому.
+      if(el.disabled) return;
+      el.disabled = true;
+      let fresh;
+      try{ fresh = await fetchVersionList(gameId); }
+      catch(e){ notifyLevel('Не удалось перечитать список версий: '+e, 'error'); return; }
+      finally{ el.disabled = false; }
+      const latest = fresh.latest;
+      const vers = prunableVersions(fresh.items, latest).map(it=> (it && it.version) || '').filter(Boolean);
+      if(!vers.length){
+        notifyLevel('Старых версий больше нет — удалять нечего', 'info');
+        try{ await afterChange(); }catch(_){ /* обновление вида не критично */ }
+        return;
+      }
       const ok = await askConfirm({
         title: 'Удалить старые версии?',
         // Что ОСТАНЕТСЯ — первое, что нужно знать перед этой кнопкой: список
@@ -571,16 +611,28 @@ function bindVersionActions(root, cls, gameId, afterChange){
       });
       if(!ok) return;
       let r;
-      try{ r = await fetch('/admin/pruneVersions?gameId='+encodeURIComponent(gameId), {method:'POST'}); }
+      // Список уезжает на сервер вместе с запросом: тот сверяет его со своим
+      // набором и отказывается, если они разошлись, — вместо того чтобы молча
+      // удалить не то, на что согласился оператор.
+      const expected = vers.map(v=>'&expected='+encodeURIComponent(v)).join('');
+      try{ r = await fetch('/admin/pruneVersions?gameId='+encodeURIComponent(gameId)+expected, {method:'POST'}); }
       catch(e){ notifyLevel('Не удалось удалить старые версии: '+e, 'error'); return; }
       if(!r.ok){ await notifyHttp(r, 'Удаление старых версий'); return; }
       let j = null; try{ j = await r.json(); }catch(_){ /* сервер ответил успехом — считаем работу сделанной */ }
       const done = (j && Array.isArray(j.deleted)) ? j.deleted : [];
       const stuck = (j && Array.isArray(j.failed)) ? j.failed : [];
+      // Правило «сколько версий перед активной оставить» посчитано дважды:
+      // KEEP_BEFORE_ACTIVE здесь и keepBeforeActive в builds.go. Разойтись они
+      // могут только молча, поэтому ответ сверяется с тем, что было показано:
+      // удалённое сверх списка — это либо разъехавшееся правило, либо
+      // изменившийся между вопросом и запросом набор.
+      const extra = done.filter(v => vers.indexOf(v) < 0);
       // Застрявшую версию нельзя проглотить: она осталась на диске и в списке,
       // и объяснить это потом будет нечем.
       if(stuck.length){
         notifyLevel('Удалено версий: '+done.length+'. Не удалось удалить: '+stuck.join(', '), 'error');
+      } else if(extra.length){
+        notifyLevel('Удалено версий: '+done.length+'. Сервер удалил и то, чего не было в списке: '+extra.join(', '), 'error');
       } else {
         notifyLevel('Удалено версий: '+done.length, 'success');
       }
@@ -2320,7 +2372,10 @@ async function mgmSave(){
   for(const it of items){ if(!it.gameId){ notify('Пустой gameId'); return; } if(ids.has(it.gameId)){ notify('Дубликат gameId: '+it.gameId); return; } ids.add(it.gameId); }
   let res; try{ res = await fetch('/admin/games/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({items}) }); }catch(e){ notifyLevel('Ошибка сохранения: '+e, 'error'); return; }
   if(!res.ok){ await notifyHttp(res, 'Сохранение списка игр'); return; }
-  notifyLevel(await res.text(), 'success');
+  // Своё сообщение, а не тело ответа: /admin/games/save отвечает целым
+  // реестром, и всплывашка с многокилобайтным JSON выдавливала с экрана
+  // остальные — их на месте не больше пяти.
+  notifyLevel('Список игр сохранён: '+items.length+' шт.', 'success');
   mgmSetDirty(false);
   mgmReload();
 }
@@ -3118,7 +3173,16 @@ function showSection(id){
     // переключение вкладок — это не команда «выбросить введённое».
     try{ if(!__mgmDirty) mgmReload(); }catch(_){ /* no-op */ }
   }
-  if(id==='secMods'){ try{ modsPanel && modsPanel.reload(window.__modsWantGame || ''); }catch(_){ /* no-op */ } }
+  if(id==='secMods'){
+    // Флаг живёт ровно один переход. Метка «моды» в списке игр просит открыть
+    // конкретную игру, а не закрепить её за вкладкой: пока флаг не обнулялся,
+    // каждый следующий возврат на «Моды» откатывал выбор оператора к той игре,
+    // по метке которой сюда зашли когда-то, — вместе с её каталогом, списком
+    // версий и всеми дальнейшими действиями.
+    const want = window.__modsWantGame || '';
+    window.__modsWantGame = '';
+    try{ modsPanel && modsPanel.reload(want); }catch(_){ /* no-op */ }
+  }
   if(id==='secInbox'){ try{ fbReload(true); }catch(_){ /* no-op */ } }
   if(id==='secMaint'){ try{ mtLoad(); }catch(_){ /* no-op */ } }
   if(id==='secMetrics'){ try{ mxOnTabOpen(); }catch(_){ /* no-op */ } }
@@ -3201,7 +3265,6 @@ try{
   if(ta){
     ta.addEventListener('input', ()=>{ editorDirty = true; autosizeTextArea(ta); updateCoverPreview(); newsPreview(); });
   }
-  const btnNew = document.getElementById('ns_btnNew'); if(btnNew) btnNew.addEventListener('click', ()=>{ const slugEl=document.getElementById('ns_slug'); if(slugEl) slugEl.value=''; clearNewsEditorAndPreviews(); const ta=document.getElementById('ns_md'); if(ta){ ta.value = '# Заголовок\n\nКраткое описание...\n\nТекст новости...'; autosizeTextArea(ta); editorDirty = true; } });
 })();
 
 async function upload(){
@@ -3339,6 +3402,12 @@ if (document.getElementById('ns_btnNew')) document.getElementById('ns_btnNew').a
   const ta = document.getElementById('ns_md');
   // «Новая» стирала набранный текст без вопросов — при том, что кнопка стоит
   // вплотную к «Сохранить».
+  //
+  // ЭТО ЕДИНСТВЕННЫЙ ОБРАБОТЧИК КНОПКИ, и очистка идёт только после согласия.
+  // Второй, зарегистрированный раньше, чистил слаг и текст синхронно — то есть
+  // до вопроса: «Отмена» возвращала не текст, а подставленный им шаблон, а
+  // черновик уходил в localStorage под ключом уже пустого слага, откуда
+  // «Восстановить черновик» его не находил.
   if(editorDirty && ta && ta.value.trim()){
     const ok = await askConfirm({
       title: 'Начать новую новость?',
@@ -3346,11 +3415,15 @@ if (document.getElementById('ns_btnNew')) document.getElementById('ns_btnNew').a
       okText: 'Очистить',
     });
     if(!ok) return;
+    // Черновик сохраняется, пока слаг ещё на месте: ключ строится по нему.
     newsDraftSave();
   }
+  clearNewsEditorAndPreviews();
   if(document.getElementById('ns_slug')) document.getElementById('ns_slug').value='';
-  if(ta){ ta.value=''; autosizeTextArea(ta); }
-  if(document.getElementById('ns_preview')) document.getElementById('ns_preview').innerHTML='';
+  // Пустое поле не подсказывает, из чего состоит новость. Шаблон — не работа
+  // оператора, поэтому editorDirty остаётся снятым: иначе следующая «Новая»
+  // спрашивала бы подтверждение на нетронутую рыбу.
+  if(ta){ ta.value = '# Заголовок\n\nКраткое описание...\n\nТекст новости...'; autosizeTextArea(ta); }
   editorDirty = false;
   newsDraftUpdateBadge();
 });
@@ -3589,7 +3662,9 @@ async function newsSave(){
   fd.append('coverUrl', currentCoverUrl || '');
   let res; try{ res=await fetch('/admin/news/save', {method:'POST', body: fd}); }catch(e){ notifyLevel('Не удалось сохранить новость: '+e, 'error'); return; }
   if(!res.ok){ await notifyHttp(res, 'Сохранение новости'); return; }
-  notifyLevel(await res.text(), 'success');
+  // Тело ответа — служебный JSON вида {"status":"ok","slug":"..."}; человеку
+  // нужно название того, что сохранилось, а не он.
+  notifyLevel('Новость «'+slug+'» сохранена', 'success');
   newsList();
   newsPreview();
   editorDirty = false;
@@ -3727,7 +3802,7 @@ async function newsDelete(){
   if(!ok) return;
   let res; try{ res=await fetch('/admin/news/delete?scope='+encodeURIComponent(scope)+'&slug='+encodeURIComponent(slug)+(scope==='game'?'&gameId='+encodeURIComponent(gid):''), {method:'POST'}); }catch(e){ notifyLevel('Не удалось удалить новость: '+e, 'error'); return; }
   if(!res.ok){ await notifyHttp(res, 'Удаление новости'); return; }
-  notifyLevel(await res.text(), 'success');
+  notifyLevel('Новость «'+slug+'» удалена', 'success');
   newsDraftDrop();
   newsList();
 }

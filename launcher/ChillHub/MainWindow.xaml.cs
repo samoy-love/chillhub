@@ -370,6 +370,7 @@ namespace ChillHub {
         /// Пункт «Играть» из трея. Готовую игру запускает, не поднимая окно — ровно за этим
         /// пункт и нужен. Если играть пока нельзя (идёт установка, требуется обновление,
         /// статус ещё проверяется), окно показываем: действие всё равно потребует внимания.
+        /// Что именно делать, решает <see cref="Core.UI.TrayPlayDecision"/>.
         /// </summary>
         private void PlayFromTray() {
             var home = this.CurrentHome;
@@ -378,11 +379,14 @@ namespace ChillHub {
                 return;
             }
 
-            if (!home.CanPlaySelectedGame) {
+            var what = Core.UI.TrayPlayDecision.For(home.CanPlaySelectedGame, home.SelectedActionCancels);
+            if (what != Core.UI.TrayPlay.Launch) {
                 this.RestoreFromTray();
             }
 
-            home.InvokeSelectedAction();
+            if (what != Core.UI.TrayPlay.ShowWindow) {
+                home.InvokeSelectedAction();
+            }
         }
 
         /// <summary>Возвращает окно из трея на экран. Значок в трее остаётся — см. конструктор.</summary>

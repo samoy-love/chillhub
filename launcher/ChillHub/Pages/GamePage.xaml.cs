@@ -390,7 +390,10 @@ namespace ChillHub.Pages {
             this.StatusText.Text = "Ждёт очереди…";
         }
 
-        /// <summary>Подхватывает текущее состояние этой игры из очереди, если она там уже есть.</summary>
+        /// <summary>
+        /// Сверяет состояние страницы с очередью: подхватывает свою позицию, а если её
+        /// там больше нет — выходит из режима работы (см. <see cref="Core.Game.QueuePageSync"/>).
+        /// </summary>
         private void SyncFromQueueSnapshot() {
             if (this.downloadQueue == null) {
                 return;
@@ -398,9 +401,45 @@ namespace ChillHub.Pages {
 
             var item = this.downloadQueue.Snapshot()
                 .FirstOrDefault(i => string.Equals(i.GameId, this.game.GameId, StringComparison.OrdinalIgnoreCase));
-            if (item != null) {
-                this.ApplyQueueItem(item);
+
+            switch (Core.Game.QueuePageSync.Decide(item != null, this.isBusy, this.viaQueue)) {
+                case Core.Game.QueuePageAction.Follow:
+                    this.ApplyQueueItem(item!);
+                    break;
+                case Core.Game.QueuePageAction.Finish:
+                    this.FinishAfterMissedQueueEvent();
+                    break;
+                default:
+                    break;
             }
+        }
+
+        /// <summary>
+        /// Закачка кончилась, пока страница была скрыта, и её событие никому не досталось.
+        /// Возвращаем страницу в обычный вид тем же путём, что и обычное завершение
+        /// позиции, — иначе на ней навсегда остаются «Отмена» и «Обновляется».
+        /// </summary>
+        private void FinishAfterMissedQueueEvent() {
+            this.viaQueue = false;
+            this.SetBusy(false);
+            this.SyncProgressBar.IsIndeterminate = false;
+
+            // Позиции в очереди уже нет, и её итоговую строку взять неоткуда: обычный
+            // OnQueueItemFinished ставит сюда item.StatusText, а здесь никакого item нет.
+            // Оставить прежний текст нельзя — это «Обновляется...» и застывшая на своих
+            // процентах полоса рядом с кнопкой «Играть». Чем всё кончилось на самом деле,
+            // скажет RefreshStateAsync: он читает диск, а не событие.
+            this.SyncProgressBar.Value = 0;
+            this.StatusText.Text = string.Empty;
+            this.StatusText.ToolTip = null;
+            this.Dispatcher.BeginInvoke(async () => {
+                try {
+                    await this.RefreshStateAsync().ConfigureAwait(true);
+                }
+                catch (Exception ex) {
+                    Core.Logging.Logger.Error(ex, "GamePage.FinishAfterMissedQueueEvent");
+                }
+            });
         }
 
         /// <summary>Событие очереди про эту игру: обновляем прогресс, если страница ещё показана.</summary>

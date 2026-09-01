@@ -55,19 +55,6 @@ func TestIsSafeVersionAllowsSemverButNotTraversal(t *testing.T) {
 	}
 }
 
-// ".." passes IsSafeVersion by itself — dots and nothing else. That is why every
-// caller must ALSO run EnsureWithin on the joined path; this test documents the
-// gap so nobody drops that second check.
-func TestVersionCheckAloneDoesNotStopDotDot(t *testing.T) {
-	if !IsSafeVersion("..") {
-		t.Skip("IsSafeVersion now rejects '..' outright — better; delete this test")
-	}
-	base := t.TempDir()
-	if EnsureWithin(base, filepath.Join(base, "manifests", "..", "..", "escape")) {
-		t.Fatal("EnsureWithin, the second line of defence, let '..' through")
-	}
-}
-
 // Ids that come back from a client and become paths must be recognisably
 // server-generated.
 func TestIsHexIDMatchesWhatTheServerGenerates(t *testing.T) {

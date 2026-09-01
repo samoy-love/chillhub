@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// promoteVersionDir must replace an existing published directory (os.Rename
+// promoteForTest must replace an existing published directory (os.Rename
 // alone cannot overwrite a directory).
 func TestPromoteVersionDirReplacesExisting(t *testing.T) {
 	root := t.TempDir()
@@ -28,7 +28,7 @@ func TestPromoteVersionDirReplacesExisting(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(filesRoot, "new.txt"), []byte("new"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := promoteVersionDir(stage, final); err != nil {
+	if err := promoteForTest(stage, final); err != nil {
 		t.Fatalf("promote: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(final, "files", "new.txt")); err != nil {
@@ -57,7 +57,7 @@ func TestPromoteVersionDirRestoresOnFailure(t *testing.T) {
 	}
 	// A staging directory that does not exist makes the second rename fail.
 	missing := filepath.Join(root, "content", "game", "1.0.0.tmp-doesnotexist")
-	if err := promoteVersionDir(missing, final); err == nil {
+	if err := promoteForTest(missing, final); err == nil {
 		t.Fatal("promote of a missing staging dir reported success")
 	}
 	b, err := os.ReadFile(filepath.Join(final, "files", "live.txt"))
@@ -83,7 +83,7 @@ func TestPromoteVersionDirSweepsStaleBackups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := promoteVersionDir(stage, final); err != nil {
+	if err := promoteForTest(stage, final); err != nil {
 		t.Fatal(err)
 	}
 	assertNoBackupDirs(t, filepath.Dir(final))
@@ -95,4 +95,16 @@ func assertNoBackupDirs(t *testing.T, parent string) {
 	if len(matches) > 0 {
 		t.Errorf("backup directories left behind: %v", matches)
 	}
+}
+
+// promoteForTest is the publication swap without the manifest half: beginPromote
+// followed by Commit, which is what publishTree does when the manifest write
+// succeeds. The tests below are about the two renames themselves.
+func promoteForTest(stageDir, finalDir string) error {
+	p, err := beginPromote(stageDir, finalDir)
+	if err != nil {
+		return err
+	}
+	p.Commit()
+	return nil
 }
