@@ -242,7 +242,11 @@ namespace ChillHub.Pages {
                 // Changelog второстепенен: установка и обновление работают без него
                 Core.Logging.Logger.ErrorNoReport(ex, $"GamePage.LoadChangelogAsync(gid={gid})");
                 this.ChangelogList.ItemsSource = Array.Empty<NewsItem>();
-                this.ChangelogEmptyText.Text = "Не удалось загрузить changelog. Проверьте подключение к интернету.";
+                // Ни «changelog», ни совета чинить исправный интернет: причину называет
+                // Core.Net.OfflineMessage — короткой строкой, потому что это подпись
+                // пустого списка, а не сообщение об ошибке.
+                this.ChangelogEmptyText.Text = Core.Net.OfflineMessage
+                    .Describe(ex, Core.Net.OfflineMessage.NetworkAvailable()).Title;
                 this.ChangelogEmptyText.Visibility = Visibility.Visible;
             }
         }

@@ -119,6 +119,15 @@ namespace ChillHub {
                 this.Progress.Value = state.ProgressValue.Value;
             }
 
+            // Полоса видна, только когда ей есть что показывать. Пустая серая дорожка
+            // под сообщением «не удалось проверить обновления» читается как застрявшая
+            // на нуле загрузка: игрок ждёт, что она поедет, а ехать нечему.
+            if (state.Indeterminate.HasValue || state.ProgressValue.HasValue) {
+                this.Progress.Visibility = this.Progress.IsIndeterminate || this.Progress.Value > 0
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+
             if (state.ButtonContent != null) {
                 this.PrimaryBtn.Content = state.ButtonContent;
             }
@@ -184,7 +193,8 @@ namespace ChillHub {
                     this.ShowDecision(pre.Decision);
                 }
                 else {
-                    this.StatusText.Text = "Проверка обновлений лаунчера...";
+                    this.StatusText.Text = "Проверяем, есть ли новая версия…";
+                    this.Progress.Visibility = Visibility.Visible;
                     this.Progress.IsIndeterminate = true;
                     this.PrimaryBtn.IsEnabled = false;
                     this.ShowDecision(await this.checker.CheckAsync());
@@ -194,9 +204,11 @@ namespace ChillHub {
                 // Сама проверка свои отказы уже разбирает и возвращает решением.
                 // Сюда доходит только сбой отрисовки — но окно всё равно обязано
                 // остаться работоспособным, иначе пользователь заперт в диалоге.
-                this.StatusText.Text = $"Не удалось проверить обновление (GET {this.BaseApi}/manifests/launcher/latest.json): {ex.Message}";
+                this.StatusText.Text = Core.Net.OfflineMessage.UpdateCheckFailed(
+                    Core.Net.OfflineMessage.Classify(ex, Core.Net.OfflineMessage.NetworkAvailable()));
                 this.Progress.IsIndeterminate = false;
                 this.Progress.Value = 0;
+                this.Progress.Visibility = Visibility.Collapsed;
                 this.PrimaryBtn.Content = "Продолжить";
                 this.updateRequired = false;
                 this.PrimaryBtn.IsEnabled = true;
@@ -361,11 +373,20 @@ namespace ChillHub {
         internal string? PreviousOutcomeText { get; init; }
 
         /// <summary>
-        /// Окно можно не показывать вовсе: версия актуальна, а рассказать пользователю
-        /// нечего (нет ни доступного обновления, ни исхода прошлого неудачного
-        /// обновления — иначе сбой выглядел бы как «ничего не произошло», см.
-        /// <see cref="PreviousUpdateOutcome"/>).
+        /// Окно можно не показывать вовсе: рассказать пользователю нечего — нет ни
+        /// доступного обновления, ни исхода прошлого неудачного обновления (иначе сбой
+        /// выглядел бы как «ничего не произошло», см. <see cref="PreviousUpdateOutcome"/>).
+        /// <para>
+        /// Несостоявшаяся проверка — тоже «нечего рассказать». Без интернета лаунчер
+        /// встречал игрока модальным окном с адресом запроса и английским текстом
+        /// ошибки, где единственным осмысленным действием было нажать «Продолжить».
+        /// Обновиться в этот момент всё равно нельзя, а про отсутствие связи главный
+        /// экран скажет сам и предложит повторить — там это уместно, а на пороге нет.
+        /// </para>
         /// </summary>
-        internal bool NeedsWindow => this.Decision.State != SelfUpdateState.UpToDate || this.PreviousOutcomeText != null;
+        internal bool NeedsWindow =>
+            this.PreviousOutcomeText != null
+            || (this.Decision.State != SelfUpdateState.UpToDate
+                && this.Decision.State != SelfUpdateState.CheckFailed);
     }
 }
