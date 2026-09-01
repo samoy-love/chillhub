@@ -130,6 +130,53 @@ var eventKinds = map[string]bool{
 // results is the allowlist for the outcome of install/update/launch events.
 var results = map[string]bool{"ok": true, "fail": true, "cancel": true}
 
+// errorCodes is the allowlist of error classifications, i.e. every code the
+// launcher can send (MetricsService.Error and GameSyncRunner.Report).
+//
+// The field used to be clamped to maxErrorCode and stored as-is. /metrics/report
+// is public, prom.go puts the code straight into a metric label, and a metric
+// family holds promexp.MaxSeries values: 200 invented codes — seven minutes at
+// the per-address budget — pushed every real code into "other" until the process
+// restarted, and filled the panel's top-errors list with the same rubbish.
+//
+// A code outside the list is folded into "unknown" rather than rejected: an
+// older or newer launcher naming a code this build has not heard of is still
+// reporting a real failure, and the event itself is worth keeping.
+var errorCodes = map[string]bool{
+	// the download or the file work under it failed
+	"sync_failed": true,
+	"sync_io":     true,
+	// the build manifest did not pass validation
+	"manifest_invalid": true,
+	// there was not enough free space for the operation
+	"no_disk_space": true,
+	// BLAKE3 hashing is unavailable on this machine
+	"blake3_unavailable": true,
+	// the mod pack could not be synced or its manifest was rejected
+	"mods_sync_failed":      true,
+	"mods_manifest_invalid": true,
+	// the modded launch could not be prepared or started
+	"mods_doorstop_write_failed": true,
+	"mods_steam_not_found":       true,
+	"mods_exe_missing":           true,
+	"mods_launch_failed":         true,
+}
+
+// normalizeErrorCode keeps errorCode inside the known set.
+//
+// An empty code stays empty: only "error" events carry one, and the summary
+// already counts a missing code as "unknown" when it aggregates.
+func normalizeErrorCode(code string) string {
+	code = strings.ToLower(clamp(code, maxErrorCode))
+	if code == "" {
+		return ""
+	}
+	if !errorCodes[code] {
+		return "unknown"
+	}
+	return code
+}
+
 // Event is one stored line. Field names are the wire contract with the client.
 //
 // FilesDownloaded/FilesTotal/FullBytes/HashMismatches were added later and are
@@ -294,7 +341,7 @@ func (h *Handlers) Submit(w http.ResponseWriter, r *http.Request) {
 		Result:     res,
 		DurationMs: in.DurationMs,
 		Bytes:      in.Bytes,
-		ErrorCode:  clamp(in.ErrorCode, maxErrorCode),
+		ErrorCode:  normalizeErrorCode(in.ErrorCode),
 
 		FilesDownloaded: in.FilesDownloaded,
 		FilesTotal:      in.FilesTotal,

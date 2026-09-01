@@ -318,8 +318,12 @@ func (l *Layout) destination(pkg ResolvedPackage, rel, subdir string) (dest stri
 		rule, tail, named = r, parts[n:], true
 	}
 	// A .mm.dll is MonoMod's, wherever it sits — but only when the path did
-	// not already name a route explicitly.
-	if l.monomodRule != nil && rule.Route == l.defaultRule.Route && strings.HasSuffix(strings.ToLower(rel), ".mm.dll") {
+	// not already name a route explicitly. The guard has to look at named and
+	// nothing else: comparing the chosen route with the default one is
+	// tautologically true for a path that named the default route itself, so
+	// BepInEx/plugins/CoolMod/Something.mm.dll — a plugin's own build
+	// dependency, deliberately placed — was moved out of the plugin folder.
+	if l.monomodRule != nil && !named && strings.HasSuffix(strings.ToLower(rel), ".mm.dll") {
 		rule = *l.monomodRule
 	}
 	if len(tail) == 0 {

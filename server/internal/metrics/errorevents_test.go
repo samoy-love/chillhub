@@ -40,7 +40,7 @@ func TestErrorEventsReturnsMatchingEventsOnly(t *testing.T) {
 	for _, b := range []string{
 		`{"installId":"aaa","event":"error","gameId":"g1","errorCode":"sync_failed","appVersion":"1.3.8"}`,
 		`{"installId":"bbb","event":"error","gameId":"g2","errorCode":"sync_failed","appVersion":"1.3.7"}`,
-		`{"installId":"ccc","event":"error","gameId":"g1","errorCode":"other_code"}`,
+		`{"installId":"ccc","event":"error","gameId":"g1","errorCode":"manifest_invalid"}`,
 		`{"installId":"ddd","event":"launcher_start"}`,
 	} {
 		if w := submit(t, h, b); w.Code != http.StatusOK {
@@ -71,14 +71,14 @@ func TestErrorEventsFiltersByGame(t *testing.T) {
 	// gameIDOK only accepts games the registry knows; an unknown id is a 400,
 	// so the filter is exercised through the summary's own allowlist instead.
 	for _, b := range []string{
-		`{"event":"error","gameId":"g1","errorCode":"boom"}`,
-		`{"event":"error","gameId":"g2","errorCode":"boom"}`,
+		`{"event":"error","gameId":"g1","errorCode":"sync_io"}`,
+		`{"event":"error","gameId":"g2","errorCode":"sync_io"}`,
 	} {
 		if w := submit(t, h, b); w.Code != http.StatusOK {
 			t.Fatalf("submit %s -> %d", b, w.Code)
 		}
 	}
-	code, out := errorEvents(t, h, "?code=boom")
+	code, out := errorEvents(t, h, "?code=sync_io")
 	if code != http.StatusOK || len(out.Items) != 2 {
 		t.Fatalf("code=%d items=%d, want 200 and 2", code, len(out.Items))
 	}
@@ -116,11 +116,11 @@ func TestErrorEventsRejectsUnknownGame(t *testing.T) {
 func TestErrorEventsCapsAndFlags(t *testing.T) {
 	h := New(t.TempDir())
 	for i := range maxErrorEvents + 10 {
-		if w := submit(t, h, `{"event":"error","errorCode":"flood"}`); w.Code != http.StatusOK {
+		if w := submit(t, h, `{"event":"error","errorCode":"sync_failed"}`); w.Code != http.StatusOK {
 			t.Fatalf("submit #%d -> %d", i, w.Code)
 		}
 	}
-	code, out := errorEvents(t, h, "?code=flood")
+	code, out := errorEvents(t, h, "?code=sync_failed")
 	if code != http.StatusOK {
 		t.Fatalf("code = %d", code)
 	}

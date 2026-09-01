@@ -289,6 +289,16 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
+// maxLoginBodyBytes ограничивает тело запроса на вход.
+//
+// Вход — единственная ручка админки, доступная без авторизации, и лимитер
+// (10 попыток за 5 минут на адрес) считает попытку ДО чтения тела. Без потолка
+// декодер буферизовал сколько прислали, а ReadTimeout у админского сервера
+// нулевой намеренно (туда льют многогигабайтные сборки), так что одна медленная
+// «попытка входа» держала память до конца отправки. Логин и пароль — это сотни
+// байт; килобайты здесь с огромным запасом.
+const maxLoginBodyBytes = 64 << 10
+
 // readLoginRequest достаёт логин и пароль из запроса.
 //
 // Форма входа умеет оба формата: JSON шлёт admin_ui, а обычный POST формы
@@ -296,13 +306,15 @@ type loginRequest struct {
 // намеренно не различаются — при любой из них поля остаются пустыми, и
 // HandleLogin отвечает одинаковым "missing credentials". Разные ответы на
 // «сломанный JSON» и «пустой пароль» рассказывали бы о форме входа больше,
-// чем нужно тому, кто её перебирает.
+// чем нужно тому, кто её перебирает. Тело, не влезшее в maxLoginBodyBytes,
+// попадает в ту же ветку: обрезанный разбор оставляет поля пустыми.
 //
 // Вынесено из HandleLogin: разбор формата запроса и собственно проверка
 // учётных данных — разные вещи, и держать их в одной функции значило
 // пересказывать в ней оба сюжета сразу.
-func readLoginRequest(r *http.Request) loginRequest {
+func readLoginRequest(w http.ResponseWriter, r *http.Request) loginRequest {
 	var in loginRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBodyBytes)
 	if strings.Contains(r.Header.Get("Content-Type"), "application/json") {
 		_ = json.NewDecoder(r.Body).Decode(&in)
 	} else {
@@ -320,7 +332,7 @@ func (a *Auth) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	in := readLoginRequest(r)
+	in := readLoginRequest(w, r)
 	if in.Username == "" || in.Password == "" {
 		http.Error(w, "missing credentials", http.StatusBadRequest)
 		return
