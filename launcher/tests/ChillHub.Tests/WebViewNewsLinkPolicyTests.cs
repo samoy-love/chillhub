@@ -91,7 +91,7 @@ namespace ChillHub.Tests {
         [InlineData("", true, null)]
         [InlineData("about:blank", false, null)]
         public void ПереходСоСтраницыРешаетсяОдинаково(string uri, bool cancel, string? openExternally) {
-            var action = NewsLinkPolicy.ForNavigation(uri);
+            var action = NewsLinkPolicy.ForNavigation(uri, ownPageLoad: false);
 
             Assert.Equal(cancel, action.Cancel);
             Assert.Equal(openExternally, action.OpenExternally);
@@ -117,12 +117,36 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// СОБСТВЕННАЯ ОТРИСОВКА ПРОХОДИТ ПРИ ЛЮБОМ АДРЕСЕ.
+        /// <para>
+        /// Из-за этого случая новость и открывалась пустой: адрес своей же страницы
+        /// придумывает движок (NavigateToString не даёт странице настоящего адреса),
+        /// правило его не узнало и отменило переход к самой новости. Проверяем на
+        /// заведомо чужих адресах: пометка обязана перебивать их все.
+        /// </para>
+        /// </summary>
+        /// <param name="uri">Адрес, который сообщил движок для нашей же страницы.</param>
+        [Theory]
+        [InlineData("about:blank")]
+        [InlineData("data:text/html;charset=utf-8,%3Chtml%3E")]
+        [InlineData("https://launcher.samoy.love/news/x.md")]
+        [InlineData("file:///C:/tmp/page.html")]
+        [InlineData("")]
+        [InlineData("что угодно, чего мы не предвидели")]
+        public void СвояОтрисовкаНеОтменяетсяНикогда(string uri) {
+            var action = NewsLinkPolicy.ForNavigation(uri, ownPageLoad: true);
+
+            Assert.False(action.Cancel, "отменённая своя страница — это пустая новость");
+            Assert.Null(action.OpenExternally);
+        }
+
+        /// <summary>
         /// Сама отрисованная страница — единственный переход, который НЕ отменяется:
         /// отменив его, лаунчер показал бы пустое окно вместо новости.
         /// </summary>
         [Fact]
         public void СамаСтраницаНеОтменяетсяИНикудаНеУходит() {
-            var action = NewsLinkPolicy.ForNavigation("about:blank");
+            var action = NewsLinkPolicy.ForNavigation("about:blank", ownPageLoad: false);
 
             Assert.False(action.Cancel);
             Assert.Null(action.OpenExternally);

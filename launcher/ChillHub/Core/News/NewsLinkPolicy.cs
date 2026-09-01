@@ -55,12 +55,27 @@ namespace ChillHub.Core.News {
         /// </para>
         /// </summary>
         /// <param name="uri">Адрес из события.</param>
+        /// <param name="ownPageLoad">Это наша собственная отрисовка страницы новости.</param>
         /// <returns>Что сделать.</returns>
-        internal static NewsNavigationAction ForNavigation(string? uri) => Decide(uri) switch {
-            NewsLinkDecision.Show => new NewsNavigationAction(false, null),
-            NewsLinkDecision.OpenInBrowser => new NewsNavigationAction(true, uri),
-            _ => new NewsNavigationAction(true, null),
-        };
+        internal static NewsNavigationAction ForNavigation(string? uri, bool ownPageLoad) {
+            // СВОЯ ОТРИСОВКА ПРОХОДИТ ВСЕГДА, и решает это флаг, а не адрес.
+            //
+            // Адрес нашей же страницы приходит от движка, а не от нас: NavigateToString
+            // не даёт странице настоящего адреса, и какой именно суррогат окажется в
+            // событии — about:blank, data:text/html или что-то третье, — зависит от
+            // версии среды WebView2. Ровно на этом всё и сломалось: правило не узнало
+            // свою страницу, отменило её переход, и вместо новости открывалась пустота.
+            // Угадывать здесь нечего: кто вызвал отрисовку, знает сам вызывающий.
+            if (ownPageLoad) {
+                return new NewsNavigationAction(false, null);
+            }
+
+            return Decide(uri) switch {
+                NewsLinkDecision.Show => new NewsNavigationAction(false, null),
+                NewsLinkDecision.OpenInBrowser => new NewsNavigationAction(true, uri),
+                _ => new NewsNavigationAction(true, null),
+            };
+        }
 
         /// <summary>
         /// Что делать с попыткой открыть новое окно (событие <c>NewWindowRequested</c>).

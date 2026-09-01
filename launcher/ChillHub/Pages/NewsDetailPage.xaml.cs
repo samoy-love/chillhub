@@ -35,6 +35,12 @@ namespace ChillHub.Pages {
         /// <summary>Страница уже освободила WebView2 — повторно им пользоваться нельзя.</summary>
         private bool browserReleased;
 
+        /// <summary>
+        /// Ближайший переход — наша собственная отрисовка, а не ссылка из текста новости.
+        /// Поднимается перед <c>NavigateToString</c> и снимается первым же переходом.
+        /// </summary>
+        private bool ownPageLoadPending;
+
         public NewsDetailPage(string title, string markdownUrl) {
             this.InitializeComponent();
             this.TitleText.Text = title;
@@ -182,8 +188,27 @@ namespace ChillHub.Pages {
                     // NavigationStarting, клик с новым окном — NewWindowRequested,
                     // и оба должны судить одинаково.
                     this.Browser.CoreWebView2.NavigationStarting += (s, ev) => {
-                        var action = NewsLinkPolicy.ForNavigation(ev.Uri);
+                        // Своя отрисовка узнаётся по флагу, а не по адресу: адрес нашей
+                        // страницы придумывает сам движок, и его вид меняется от версии
+                        // к версии. Флаг снимается здесь же — следующий переход будет
+                        // уже настоящим, из ссылки в тексте новости.
+                        var own = this.ownPageLoadPending;
+                        this.ownPageLoadPending = false;
+                        var action = NewsLinkPolicy.ForNavigation(ev.Uri, own);
                         ev.Cancel = action.Cancel;
+                        if (action.Cancel) {
+                            // След в журнале обязателен: отменённый переход, которым
+                            // оказалась сама новость, выглядит на экране просто пустотой,
+                            // и объяснить её потом было нечем — ровно так этот обработчик
+                            // однажды и погасил страницу целиком.
+                            try {
+                                Core.Logging.Logger.Info(
+                                    $"NewsDetailPage: переход отменён, адрес '{ev.Uri}', наружу={action.OpenExternally != null}");
+                            }
+                            catch {
+                            }
+                        }
+
                         OpenOutside(action.OpenExternally);
                     };
 
@@ -195,17 +220,31 @@ namespace ChillHub.Pages {
                 catch {
                 }
 
-                this.Browser.NavigateToString(page);
+                this.NavigateToOwnPage(page);
             }
             catch (Exception ex) {
                 try {
-                    this.Browser.NavigateToString(NewsPageRenderer.RenderError(ex.Message, palette));
+                    this.NavigateToOwnPage(NewsPageRenderer.RenderError(ex.Message, palette));
                 }
                 catch {
                     // Даже отрисовать ошибку не вышло — уходим в запасную панель WPF
                     this.ShowFallbackError("Не удалось загрузить новость.\n\n" + ex.Message);
                 }
             }
+        }
+
+        /// <summary>
+        /// Показывает собственную страницу, пометив её переход как свой.
+        /// <para>
+        /// Единственный путь к <c>NavigateToString</c> на этой странице: обработчик
+        /// перехода отменяет всё, что не разрешила политика, и без пометки он отменял
+        /// бы и саму новость — на экране оставалась пустота.
+        /// </para>
+        /// </summary>
+        /// <param name="html">Готовая страница.</param>
+        private void NavigateToOwnPage(string html) {
+            this.ownPageLoadPending = true;
+            this.Browser.NavigateToString(html);
         }
 
         /// <summary>
