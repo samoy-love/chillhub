@@ -707,12 +707,15 @@
               <Border Style="{DynamicResource Style.Skeleton}" Height="{StaticResource Skeleton.GameRowHeight}"/>
             </StackPanel>
             <!-- Пустое состояние: сервер недоступен -->
+            <!-- Заголовок и пояснение ставит код: совет «проверьте интернет» верен только
+                 тогда, когда интернета и правда нет, а при нашей аварии он отправляет
+                 человека чинить исправный роутер (см. Core.Net.OfflineMessage). -->
             <StackPanel Name="GamesEmptyState" Visibility="Collapsed" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="12">
               <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xEB5E;" FontSize="28" HorizontalAlignment="Center"
                          Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,0,0,8"/>
-              <TextBlock Text="Не удалось связаться с сервером" TextWrapping="Wrap" TextAlignment="Center"
+              <TextBlock Name="GamesEmptyTitle" Text="Нет связи с сервером" TextWrapping="Wrap" TextAlignment="Center"
                          FontWeight="SemiBold" Foreground="{DynamicResource Brush.Text}"/>
-              <TextBlock Text="Проверьте подключение к интернету и попробуйте снова." TextWrapping="Wrap" TextAlignment="Center"
+              <TextBlock Name="GamesEmptyHint" Text="Проверьте подключение и попробуйте снова." TextWrapping="Wrap" TextAlignment="Center"
                          FontSize="12" Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,4,0,12"/>
               <Button Name="RetryLoadBtn" Content="Повторить" Click="RetryLoad_Click"
                       Style="{DynamicResource Style.Button.GhostNeutral}" Width="140" Height="32" HorizontalAlignment="Center"/>
@@ -1146,9 +1149,9 @@
                  обычное состояние молодой игры, а не ошибка. -->
             <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE946;" FontSize="24" HorizontalAlignment="Center"
                        Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,0,0,8"/>
-            <TextBlock Text="Пока новостей нет" TextWrapping="Wrap" TextAlignment="Center"
+            <TextBlock Name="GameNewsEmptyTitle" Text="Пока новостей нет" TextWrapping="Wrap" TextAlignment="Center"
                        FontWeight="SemiBold" Foreground="{DynamicResource Brush.Text}"/>
-            <TextBlock Text="Здесь появятся объявления и события этой игры." TextWrapping="Wrap" TextAlignment="Center"
+            <TextBlock Name="GameNewsEmptyHint" Text="Здесь появятся объявления и события этой игры." TextWrapping="Wrap" TextAlignment="Center"
                        FontSize="12" Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,4,0,0"/>
           </StackPanel>
           <ListBox Name="GameNewsList" SelectionChanged="GameNewsList_SelectionChanged" Visibility="Collapsed" Padding="0" Margin="-4,-4,0,0"
@@ -1255,6 +1258,17 @@
             <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
             <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
             <Border Style="{DynamicResource Style.Skeleton}" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
+          </StackPanel>
+          <!-- Пустое состояние ленты лаунчера. Его тут не было вовсе: без связи вкладка
+               «Новости лаунчера» оставалась чёрным прямоугольником во весь экран, и
+               отличить «новостей нет» от «лаунчер сломался» было невозможно. -->
+          <StackPanel Name="LauncherNewsEmptyState" Visibility="Collapsed" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="12">
+            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE946;" FontSize="24" HorizontalAlignment="Center"
+                       Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,0,0,8"/>
+            <TextBlock Name="LauncherNewsEmptyTitle" Text="Пока новостей нет" TextWrapping="Wrap" TextAlignment="Center"
+                       FontWeight="SemiBold" Foreground="{DynamicResource Brush.Text}"/>
+            <TextBlock Name="LauncherNewsEmptyHint" Text="Здесь появятся новости о самом лаунчере." TextWrapping="Wrap" TextAlignment="Center"
+                       FontSize="12" Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,4,0,0"/>
           </StackPanel>
           <ListBox Grid.Row="0" Name="LauncherNewsList" SelectionChanged="LauncherNewsList_SelectionChanged" Visibility="Collapsed" Padding="0" Margin="-4,-4,0,0"
                  ScrollViewer.VerticalScrollBarVisibility="Auto"

@@ -83,8 +83,12 @@
     <TextBlock Text="Проверка обновления лаунчера" FontSize="18" Margin="0,0,0,8"/>
 
     <StackPanel Grid.Row="1">
-      <TextBlock x:Name="StatusText" Text="Инициализация..." TextWrapping="Wrap" Margin="0,0,0,8"/>
-      <ProgressBar x:Name="Progress" Height="14" Minimum="0" Maximum="100" Value="0" Margin="0,0,0,8" Style="{DynamicResource Style.ProgressBar.Rounded}"/>
+      <TextBlock x:Name="StatusText" Text="Проверяем, есть ли новая версия…" TextWrapping="Wrap" Margin="0,0,0,8"/>
+      <!-- Полоса скрыта до первой работы: до этого она стояла пустой дорожкой под любым
+           сообщением окна, в том числе под сообщением об ошибке, и выглядела застрявшей
+           загрузкой. Видимостью управляет ApplyUiState. -->
+      <ProgressBar x:Name="Progress" Height="14" Minimum="0" Maximum="100" Value="0" Margin="0,0,0,8"
+                   Visibility="Collapsed" Style="{DynamicResource Style.ProgressBar.Rounded}"/>
       <StackPanel x:Name="DevPanel">
         <Border Background="{DynamicResource Brush.Surface}" Padding="8" CornerRadius="6" Margin="0,0,0,8" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
           <TextBlock Text="Для разработки можно пропустить проверку. Отметьте флаг ниже и нажмите 'Продолжить'."

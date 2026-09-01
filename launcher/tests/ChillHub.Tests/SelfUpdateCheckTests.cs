@@ -130,8 +130,11 @@ namespace ChillHub.Tests {
             Assert.Equal(SelfUpdateState.CheckFailed, decision.State);
             Assert.False(decision.UpdateRequired);
             Assert.True(decision.Ui.ButtonEnabled);
-            Assert.Contains("Не удалось проверить обновление", decision.Ui.StatusText, StringComparison.Ordinal);
-            Assert.Contains("нет маршрута", decision.Ui.StatusText, StringComparison.Ordinal);
+            // Текст исключения («нет маршрута») уезжает в лог: на экране игрок читает
+            // причину и то, что будет дальше, — см. Core.Net.OfflineMessage.
+            Assert.Contains("Не удалось проверить обновления", decision.Ui.StatusText, StringComparison.Ordinal);
+            Assert.Contains("запустится", decision.Ui.StatusText, StringComparison.Ordinal);
+            Assert.DoesNotContain("нет маршрута", decision.Ui.StatusText, StringComparison.Ordinal);
         }
 
         /// <summary>Сервер отдал мусор вместо JSON — тот же исход, что и «нет сети».</summary>

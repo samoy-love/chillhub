@@ -136,6 +136,11 @@ namespace ChillHub.Pages {
         // детали уходят в лог и в подсказку к строке статуса (C5).
         private string lastErrorDetails = string.Empty;
 
+        // Связи с сервером нет — экран показывает не игры, а объяснение и «Повторить».
+        // Хранится текстом, а не флагом: причина («нет интернета» или «сервер молчит»)
+        // определяется один раз при сбое и одинаково звучит во всех углах экрана.
+        private Core.Net.OfflineText? offline;
+
         // ===== Обратная связь =====
         // Отправка, оффлайн-очередь и ретраи живут в Core/Home/FeedbackService.
         // Здесь остаются только обработчики, на имена которых ссылается XAML.
@@ -513,9 +518,7 @@ namespace ChillHub.Pages {
                 this.NormalizeCoverUrls(launcherNews);
                 await this.DispatcherInvokeAsync(() => {
                     try {
-                        this.LauncherNewsList.ItemsSource = launcherNews;
-                        this.LauncherNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
-                        this.LauncherNewsList.Visibility = System.Windows.Visibility.Visible;
+                        this.ShowLauncherNews(launcherNews);
                     }
                     catch (Exception ex) {
                         // Новости — необязательная секция, из-за неё не мешаем работать с играми
@@ -533,6 +536,11 @@ namespace ChillHub.Pages {
                     // Task-версия: загрузку нужно ДОЖДАТЬСЯ, иначе следом включаются тяжёлые
                     // проверки файлов и конкурируют с ней за UI-поток.
                     await this.DispatcherInvokeTaskAsync(() => this.LoadBuildsAndGameNewsAsync(gid0));
+                }
+                else {
+                    // Выбирать нечего — но и скелетон новостей игры тогда не за кем ждать:
+                    // без этой ветки он остался бы мерцать до конца работы лаунчера.
+                    await this.DispatcherInvokeAsync(() => this.ShowGameNews(Array.Empty<NewsItem>()));
                 }
 
                 // После первичного рендеринга — разрешаем тяжёлые проверки и запускаем в фоне
@@ -563,7 +571,10 @@ namespace ChillHub.Pages {
             }
             catch (Exception ex) {
                 await this.DispatcherInvokeAsync(() =>
-                    this.ShowUserError("Не удалось загрузить данные. Проверьте подключение к интернету.", ex, "HomePage.LoadInitialAsync"));
+                    this.ShowUserError(
+                        Core.Net.OfflineMessage.Describe(ex, Core.Net.OfflineMessage.NetworkAvailable()).Status,
+                        ex,
+                        "HomePage.LoadInitialAsync"));
             }
             finally {
                 // ЛЮБОЙ исход загрузки — это ответ ожидающему ярлыку: и полный список, и
@@ -574,7 +585,21 @@ namespace ChillHub.Pages {
         }
 
         // --- Пустое состояние «сервер недоступен» (C5) ---
+
+        /// <summary>
+        /// Переводит весь экран в состояние «связи нет».
+        /// <para>
+        /// Раньше это состояние занимало только список игр: витрина справа продолжала
+        /// звать «Выберите игру» и предлагала «Повторить» и «Об игре» — обе про игру,
+        /// которой на экране нет, — а обе ленты новостей оставались чёрной пустотой.
+        /// Экран выглядел сломанным, хотя всего лишь пропал интернет. Теперь причина
+        /// названа один раз и повторяется всюду, где без связи показывать нечего.
+        /// </para>
+        /// </summary>
+        /// <param name="ex">Сбой, из-за которого связи нет.</param>
         private void ShowServerUnavailableState(Exception? ex) {
+            var text = Core.Net.OfflineMessage.Describe(ex, Core.Net.OfflineMessage.NetworkAvailable());
+            this.offline = text;
             try {
                 this.games = new List<GameInfo>();
                 this.SetGamesSource();
@@ -582,16 +607,17 @@ namespace ChillHub.Pages {
                 this.GameList.Visibility = System.Windows.Visibility.Collapsed;
                 this.GamesEmptyState.Visibility = System.Windows.Visibility.Visible;
 
-                // Новости тоже не пришли — уберём вечные скелетоны
-                this.LauncherNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
-                this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
+                // Новости тоже не пришли: вместо вечных скелетонов — та же причина.
+                this.ApplyOfflineState();
+                this.ShowGameNews(Array.Empty<NewsItem>());
+                this.ShowLauncherNews(Array.Empty<NewsItem>());
             }
             catch (Exception uiEx) {
                 // Даже если не удалось перерисовать секции, сообщение об ошибке ниже показать обязаны
                 Core.Logging.Logger.Error(uiEx, "HomePage.ShowServerUnavailableState");
             }
 
-            this.ShowUserError("Не удалось связаться с сервером.", ex, "HomePage.LoadInitialAsync");
+            this.ShowUserError(text.Status, ex, "HomePage.LoadInitialAsync");
             try {
                 this.SetActionMode(ActionMode.Retry);
                 this.ActionBtn.IsEnabled = false; // действия недоступны: список игр пуст
@@ -602,21 +628,63 @@ namespace ChillHub.Pages {
         }
 
         private void HideServerUnavailableState() {
+            this.offline = null;
             this.GamesEmptyState.Visibility = System.Windows.Visibility.Collapsed;
+            this.ApplyOfflineState();
             this.ClearErrorDetails();
         }
+
+        /// <summary>
+        /// Раскладывает по экрану одно решение <see cref="Core.Home.OfflineScreen"/>:
+        /// список игр, обе ленты новостей и витрину. Вместе, а не по отдельности —
+        /// причина у пустоты общая, и называться в разных углах она обязана одинаково.
+        /// </summary>
+        private void ApplyOfflineState() {
+            try {
+                var view = Core.Home.OfflineScreen.Decide(this.offline, this.GetSelectedGame() != null);
+                this.GamesEmptyTitle.Text = view.Games.Title;
+                this.GamesEmptyHint.Text = view.Games.Hint;
+                this.ApplyFeedCaptions(view);
+                this.UpdateHero();
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Warn($"ApplyOfflineState: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Подписывает пустые ленты новостей. Отдельно от остального экрана, потому что
+        /// упавшая лента — ещё не пропавший экран: игры на месте, и трогать из-за одних
+        /// новостей витрину нельзя.
+        /// </summary>
+        /// <param name="view">Решение, посчитанное по причине сбоя.</param>
+        private void ApplyFeedCaptions(Core.Home.OfflineScreenView view) {
+            this.GameNewsEmptyTitle.Text = view.GameNews.Title;
+            this.GameNewsEmptyHint.Text = view.GameNews.Hint;
+            this.LauncherNewsEmptyTitle.Text = view.LauncherNews.Title;
+            this.LauncherNewsEmptyHint.Text = view.LauncherNews.Hint;
+        }
+
+        /// <summary>Подписи лент по причине сбоя, не трогая остальной экран.</summary>
+        /// <param name="offlineText">Причина, если лента пуста из-за пропавшей связи.</param>
+        private void ApplyFeedCaptions(Core.Net.OfflineText? offlineText) =>
+            this.ApplyFeedCaptions(Core.Home.OfflineScreen.Decide(offlineText, gameSelected: true));
 
         // Кнопка «Повторить» в пустом состоянии: переигрываем первичную загрузку
         private async void RetryLoad_Click(object sender, RoutedEventArgs e) {
             try {
                 this.HideServerUnavailableState();
-                this.StatusText.Text = "Повторная попытка…";
+                this.StatusText.Text = "Пробуем связаться с сервером…";
                 this.GamesSkeleton.Visibility = System.Windows.Visibility.Visible;
                 this.GameList.Visibility = System.Windows.Visibility.Collapsed;
+                this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Visible;
+                this.GameNewsEmptyState.Visibility = System.Windows.Visibility.Collapsed;
+                this.LauncherNewsSkeleton.Visibility = System.Windows.Visibility.Visible;
+                this.LauncherNewsEmptyState.Visibility = System.Windows.Visibility.Collapsed;
                 await this.LoadInitialAsync();
             }
             catch (Exception ex) {
-                this.ShowUserError("Не удалось связаться с сервером.", ex, "HomePage.RetryLoad_Click");
+                this.ShowServerUnavailableState(ex);
             }
         }
 
@@ -944,7 +1012,7 @@ namespace ChillHub.Pages {
             catch (Exception ex) {
                 // Пользователю — суть, URL и текст исключения уходят в лог и в подсказку
                 this.ShowUserError(
-                    "Не удалось загрузить сведения об игре. Проверьте подключение к интернету.",
+                    Core.Net.OfflineMessage.Describe(ex, Core.Net.OfflineMessage.NetworkAvailable()).Status,
                     ex,
                     $"HomePage.LoadBuildsAndGameNewsAsync: GET {this.BaseApi}/api/games/{gameId}/builds, /news/games/{gameId}/index.json");
 
@@ -1008,18 +1076,21 @@ namespace ChillHub.Pages {
             try {
                 this.LauncherNewsSkeleton.Visibility = System.Windows.Visibility.Visible;
                 this.LauncherNewsList.Visibility = System.Windows.Visibility.Collapsed;
+                this.LauncherNewsEmptyState.Visibility = System.Windows.Visibility.Collapsed;
                 var newsUrl = HomeFeed.LauncherNewsUrl(this.BaseApi);
                 var news = await this.http.GetFromJsonAsync<NewsIndex>(newsUrl);
                 var launcherNews = news?.Items ?? new List<NewsItem>();
                 this.NormalizeCoverUrls(launcherNews);
-                this.LauncherNewsList.ItemsSource = launcherNews;
+                this.ApplyFeedCaptions(this.offline);
+                this.ShowLauncherNews(launcherNews);
             }
             catch (Exception ex) {
-                this.ShowUserError("Не удалось обновить новости лаунчера.", ex, "HomePage.ReloadLauncherNewsAsync");
-            }
-            finally {
-                this.LauncherNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
-                this.LauncherNewsList.Visibility = System.Windows.Visibility.Visible;
+                // Причина пустой ленты обязана попасть и в саму ленту: строка статуса
+                // внизу окна — не то место, куда игрок смотрит, обновляя новости.
+                var text = Core.Net.OfflineMessage.Describe(ex, Core.Net.OfflineMessage.NetworkAvailable());
+                this.ApplyFeedCaptions(text);
+                this.ShowUserError(text.Status, ex, "HomePage.ReloadLauncherNewsAsync");
+                this.ShowLauncherNews(Array.Empty<NewsItem>());
             }
         }
 
@@ -1039,10 +1110,13 @@ namespace ChillHub.Pages {
                 var gameNews = await HomeFeed.GetOptionalAsync<NewsIndex>(this.http, gameNewsUrl);
                 var items = gameNews?.Items ?? new List<NewsItem>();
                 this.NormalizeCoverUrls(items);
+                this.ApplyFeedCaptions(this.offline);
                 this.ShowGameNews(items);
             }
             catch (Exception ex) {
-                this.ShowUserError("Не удалось обновить новости игры.", ex, "HomePage.ReloadGameNewsAsync");
+                var text = Core.Net.OfflineMessage.Describe(ex, Core.Net.OfflineMessage.NetworkAvailable());
+                this.ApplyFeedCaptions(text);
+                this.ShowUserError(text.Status, ex, "HomePage.ReloadGameNewsAsync");
                 this.ShowGameNews(Array.Empty<NewsItem>());
             }
         }
@@ -1059,6 +1133,21 @@ namespace ChillHub.Pages {
             var empty = items.Count == 0;
             this.GameNewsList.Visibility = empty ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;
             this.GameNewsEmptyState.Visibility = empty ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+        }
+
+        /// <summary>
+        /// Показывает ленту новостей лаунчера либо пустое состояние — ровно одно из двух,
+        /// как и у ленты игры. До этого лента показывалась всегда: при нуле новостей и при
+        /// пропавшей связи вкладка была просто чёрной.
+        /// </summary>
+        /// <param name="items">Новости лаунчера.</param>
+        private void ShowLauncherNews(IReadOnlyList<NewsItem> items) {
+            this.LauncherNewsList.ItemsSource = items;
+            this.LauncherNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
+
+            var empty = items.Count == 0;
+            this.LauncherNewsList.Visibility = empty ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;
+            this.LauncherNewsEmptyState.Visibility = empty ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
         }
 
         /// <summary>
@@ -1458,7 +1547,10 @@ namespace ChillHub.Pages {
                     this.ShowServerUnavailableState(ex);
                 }
                 else {
-                    this.ShowUserError("Не удалось обновить список игр. Проверьте подключение к интернету.", ex, "HomePage.RefreshGames_Click");
+                    this.ShowUserError(
+                        Core.Net.OfflineMessage.Describe(ex, Core.Net.OfflineMessage.NetworkAvailable()).Status,
+                        ex,
+                        "HomePage.RefreshGames_Click");
                 }
             }
             finally {
@@ -1641,6 +1733,17 @@ namespace ChillHub.Pages {
         private void SyncLaunchBar(ActionMode mode) {
             try {
                 var game = this.GetSelectedGame();
+
+                // Связи нет и игр нет — запускать нечего, строка действий остаётся
+                // пустой (см. Core.Home.OfflineScreen).
+                if (!Core.Home.OfflineScreen.Decide(this.offline, game != null).ActionsVisible) {
+                    this.ActionBtn.Visibility = Visibility.Collapsed;
+                    this.LaunchBtn1.Visibility = Visibility.Collapsed;
+                    this.LaunchBtn2.Visibility = Visibility.Collapsed;
+                    this.LaunchMenuBtn.Visibility = Visibility.Collapsed;
+                    return;
+                }
+
                 var playMode = mode == ActionMode.Play;
 
                 // Копия из Steam живёт своей жизнью: моды ставятся в чужую папку, и
@@ -1821,6 +1924,19 @@ namespace ChillHub.Pages {
         private void UpdateHero() {
             try {
                 var g = this.GetSelectedGame();
+
+                // Без связи выбирать не из чего: витрина называет причину сама и убирает
+                // кнопки к игре, которой на экране нет (см. Core.Home.OfflineScreen).
+                var look = Core.Home.OfflineScreen.Decide(this.offline, g != null);
+                this.HeroInfoBtn.Visibility = look.ActionsVisible ? Visibility.Visible : Visibility.Collapsed;
+                if (look.HeroExplains) {
+                    this.HeroTitleText.Text = look.HeroTitle;
+                    this.HeroMetaText.Text = look.HeroHint;
+                    this.HeroStatusBadge.Visibility = Visibility.Collapsed;
+                    this.ActionBtn.Visibility = Visibility.Collapsed;
+                    return;
+                }
+
                 this.HeroTitleText.Text = g?.Title is string t && !string.IsNullOrWhiteSpace(t) ? t : "Выберите игру";
 
                 string status;

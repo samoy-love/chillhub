@@ -253,7 +253,10 @@ namespace ChillHub.Core.SelfUpdate {
                 return new SelfUpdateDecision {
                     State = SelfUpdateState.CheckFailed,
                     Ui = new SelfUpdateUiState {
-                        StatusText = $"Не удалось проверить обновление (GET {this.baseApi()}/manifests/launcher/latest.json): {ex.Message}",
+                        // Адрес запроса и текст исключения ушли строкой выше в лог: на экране
+                        // они игроку ничем не помогают, а выглядят как поломка лаунчера.
+                        StatusText = Net.OfflineMessage.UpdateCheckFailed(
+                            Net.OfflineMessage.Classify(ex, Net.OfflineMessage.NetworkAvailable())),
                         Indeterminate = false,
                         ProgressValue = 0,
                         ButtonContent = "Продолжить",
