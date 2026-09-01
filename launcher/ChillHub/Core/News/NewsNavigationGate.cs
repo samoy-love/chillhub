@@ -4,19 +4,34 @@
 // </copyright>
 
 namespace ChillHub.Core.News {
+    using System;
+
     /// <summary>
-    /// Состояние переходов одной открытой новости: отличает нашу собственную
-    /// отрисовку от перехода по ссылке из текста.
+    /// Переходы одной открытой новости: отличает нашу собственную отрисовку от
+    /// перехода по ссылке из текста и сам исполняет решение — гасит переход, пишет
+    /// след и отдаёт адрес оболочке.
     /// <para>
-    /// Отдельным классом, а не полем страницы, потому что именно здесь жил дефект,
-    /// из-за которого новость открывалась пустой: обработчик отменял всё, чей адрес
-    /// не узнавал, — и не узнавал в том числе свою же страницу. Внутри обработчика
-    /// WebView2 это не проверить ничем, а порядок «пометили — пришёл переход — метка
-    /// снялась» и есть то, что должно удерживаться тестом.
+    /// Отдельным классом, а не полем и парой методов страницы, потому что именно
+    /// здесь жил дефект, из-за которого новость открывалась пустой: обработчик
+    /// отменял всё, чей адрес не узнавал, — и не узнавал в том числе свою же
+    /// страницу. Внутри обработчика WebView2 не проверяется ничто, поэтому у
+    /// страницы осталась только проводка события, а порядок «пометили — пришёл
+    /// переход — метка снялась» и всё, что за ним следует, держит тест.
     /// </para>
     /// </summary>
     internal sealed class NewsNavigationGate {
+        private readonly Action<string> openOutside;
+        private readonly Action<string> note;
+
         private bool ownPageLoadPending;
+
+        /// <summary>Создаёт шлюз одной открытой новости.</summary>
+        /// <param name="openOutside">Отдать адрес системному браузеру.</param>
+        /// <param name="note">Куда писать след; по умолчанию — общий журнал.</param>
+        internal NewsNavigationGate(Action<string> openOutside, Action<string>? note = null) {
+            this.openOutside = openOutside;
+            this.note = note ?? Logging.Logger.Info;
+        }
 
         /// <summary>
         /// Объявляет, что следующий переход — наша собственная отрисовка страницы.
@@ -32,11 +47,11 @@ namespace ChillHub.Core.News {
         /// </para>
         /// </summary>
         /// <param name="uri">Адрес из события.</param>
-        /// <returns>Что сделать с переходом.</returns>
-        internal NewsNavigationAction OnNavigationStarting(string? uri) {
+        /// <returns>true, если переход надо отменить.</returns>
+        internal bool OnNavigationStarting(string? uri) {
             var own = this.ownPageLoadPending;
             this.ownPageLoadPending = false;
-            return NewsLinkPolicy.ForNavigation(uri, own);
+            return this.Execute(NewsLinkPolicy.ForNavigation(uri, own), uri);
         }
 
         /// <summary>
@@ -44,7 +59,26 @@ namespace ChillHub.Core.News {
         /// нового окна не просит, а второе окно не нужно ни при каком адресе.
         /// </summary>
         /// <param name="uri">Адрес из события.</param>
-        /// <returns>Что сделать с переходом.</returns>
-        internal NewsNavigationAction OnNewWindowRequested(string? uri) => NewsLinkPolicy.ForNewWindow(uri);
+        /// <returns>true — второе окно не появляется никогда.</returns>
+        internal bool OnNewWindowRequested(string? uri) => this.Execute(NewsLinkPolicy.ForNewWindow(uri), uri);
+
+        /// <summary>Исполняет решение политики и отвечает, гасить ли переход.</summary>
+        /// <param name="action">Что решила политика.</param>
+        /// <param name="uri">Адрес из события — только для следа.</param>
+        /// <returns>true, если переход надо отменить.</returns>
+        private bool Execute(NewsNavigationAction action, string? uri) {
+            if (action.Cancel) {
+                // След обязателен: погашенный переход, которым оказалась сама новость,
+                // выглядит на экране просто пустотой, и объяснить её было нечем — ровно
+                // так этот обработчик однажды и стёр страницу целиком.
+                this.note($"NewsDetailPage: переход отменён, адрес '{uri}', наружу={action.OpenExternally != null}");
+            }
+
+            if (action.OpenExternally != null) {
+                this.openOutside(action.OpenExternally);
+            }
+
+            return action.Cancel;
+        }
     }
 }

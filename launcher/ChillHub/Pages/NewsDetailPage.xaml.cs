@@ -36,7 +36,7 @@ namespace ChillHub.Pages {
         private bool browserReleased;
 
         /// <summary>Переходы этой страницы: отличает свою отрисовку от ссылки в тексте.</summary>
-        private readonly NewsNavigationGate gate = new NewsNavigationGate();
+        private readonly NewsNavigationGate gate = new NewsNavigationGate(OpenOutside);
 
         public NewsDetailPage(string title, string markdownUrl) {
             this.InitializeComponent();
@@ -184,17 +184,18 @@ namespace ChillHub.Pages {
                     // отдать оболочке, решает NewsLinkPolicy: обычный клик поднимает
                     // NavigationStarting, клик с новым окном — NewWindowRequested,
                     // и оба должны судить одинаково.
+                    // Своя отрисовка узнаётся по метке, а не по адресу: адрес нашей
+                    // страницы придумывает сам движок, и его вид меняется от версии к
+                    // версии. Порядок «пометили — пришёл переход — метка снялась» и всё
+                    // решение целиком держит NewsNavigationGate, он же и проверяется
+                    // тестами; здесь остаётся только проводка события.
                     this.Browser.CoreWebView2.NavigationStarting += (s, ev) => {
-                        // Своя отрисовка узнаётся по метке, а не по адресу: адрес нашей
-                        // страницы придумывает сам движок, и его вид меняется от версии
-                        // к версии. Порядок «пометили — пришёл переход — метка снялась»
-                        // держит NewsNavigationGate, и он же проверяется тестами.
-                        Apply(this.gate.OnNavigationStarting(ev.Uri), ev.Uri, c => ev.Cancel = c);
+                        ev.Cancel = this.gate.OnNavigationStarting(ev.Uri);
                     };
 
                     this.Browser.CoreWebView2.NewWindowRequested += (s, ev) => {
                         ev.Handled = true;
-                        Apply(this.gate.OnNewWindowRequested(ev.Uri), ev.Uri, _ => { });
+                        this.gate.OnNewWindowRequested(ev.Uri);
                     };
                 }
                 catch {
@@ -211,31 +212,6 @@ namespace ChillHub.Pages {
                     this.ShowFallbackError("Не удалось загрузить новость.\n\n" + ex.Message);
                 }
             }
-        }
-
-        /// <summary>
-        /// Исполняет решение: отменяет переход, пишет след в журнал и отдаёт адрес оболочке.
-        /// <para>
-        /// След обязателен: отменённый переход, которым оказалась сама новость, выглядит
-        /// на экране просто пустотой, и объяснить её потом было нечем — ровно так этот
-        /// обработчик однажды и погасил страницу целиком.
-        /// </para>
-        /// </summary>
-        /// <param name="action">Решение шлюза.</param>
-        /// <param name="uri">Адрес из события — только для журнала.</param>
-        /// <param name="cancel">Как сообщить отмену событию.</param>
-        private static void Apply(NewsNavigationAction action, string? uri, Action<bool> cancel) {
-            cancel(action.Cancel);
-            if (action.Cancel) {
-                try {
-                    Core.Logging.Logger.Info(
-                        $"NewsDetailPage: переход отменён, адрес '{uri}', наружу={action.OpenExternally != null}");
-                }
-                catch {
-                }
-            }
-
-            OpenOutside(action.OpenExternally);
         }
 
         /// <summary>

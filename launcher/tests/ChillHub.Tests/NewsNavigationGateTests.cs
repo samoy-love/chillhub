@@ -4,6 +4,8 @@
 // </copyright>
 
 namespace ChillHub.Tests {
+    using System.Collections.Generic;
+
     using ChillHub.Core.News;
 
     using Xunit;
@@ -18,6 +20,9 @@ namespace ChillHub.Tests {
     /// </para>
     /// </summary>
     public class NewsNavigationGateTests {
+        private readonly List<string> opened = new List<string>();
+        private readonly List<string> notes = new List<string>();
+
         /// <summary>Своя отрисовка проходит, даже если движок назвал её как угодно.</summary>
         /// <param name="uri">Адрес, сообщённый движком для нашей же страницы.</param>
         [Theory]
@@ -27,13 +32,14 @@ namespace ChillHub.Tests {
         [InlineData("")]
         [InlineData("нечто непредвиденное")]
         public void ПослеПометкиПереходПроходитПриЛюбомАдресе(string uri) {
-            var gate = new NewsNavigationGate();
+            var gate = this.Gate();
             gate.BeginOwnPageLoad();
 
-            var action = gate.OnNavigationStarting(uri);
+            var cancel = gate.OnNavigationStarting(uri);
 
-            Assert.False(action.Cancel, "отменённая своя страница — это пустая новость");
-            Assert.Null(action.OpenExternally);
+            Assert.False(cancel, "отменённая своя страница — это пустая новость");
+            Assert.Empty(this.opened);
+            Assert.Empty(this.notes);
         }
 
         /// <summary>
@@ -42,25 +48,25 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void СледующийПереходПослеОтрисовкиУжеСсылка() {
-            var gate = new NewsNavigationGate();
+            var gate = this.Gate();
             gate.BeginOwnPageLoad();
             gate.OnNavigationStarting("about:blank");
 
-            var action = gate.OnNavigationStarting("https://example.com/article");
+            var cancel = gate.OnNavigationStarting("https://example.com/article");
 
-            Assert.True(action.Cancel, "по ссылке из новости окно лаунчера никуда не уходит");
-            Assert.Equal("https://example.com/article", action.OpenExternally);
+            Assert.True(cancel, "по ссылке из новости окно лаунчера никуда не уходит");
+            Assert.Equal(new[] { "https://example.com/article" }, this.opened);
         }
 
         /// <summary>Без пометки не проходит ничего чужого — метка не выдаётся сама собой.</summary>
         [Fact]
         public void БезПометкиЧужойАдресОтменяетсяИНикудаНеУходит() {
-            var gate = new NewsNavigationGate();
+            var gate = this.Gate();
 
-            var action = gate.OnNavigationStarting("file:///C:/Windows/System32/cmd.exe");
+            var cancel = gate.OnNavigationStarting("file:///C:/Windows/System32/cmd.exe");
 
-            Assert.True(action.Cancel);
-            Assert.Null(action.OpenExternally);
+            Assert.True(cancel);
+            Assert.Empty(this.opened);
         }
 
         /// <summary>
@@ -69,12 +75,12 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void ПовторнаяОтрисовкаСноваПроходит() {
-            var gate = new NewsNavigationGate();
+            var gate = this.Gate();
             gate.BeginOwnPageLoad();
             gate.OnNavigationStarting("about:blank");
             gate.BeginOwnPageLoad();
 
-            Assert.False(gate.OnNavigationStarting("about:blank").Cancel);
+            Assert.False(gate.OnNavigationStarting("about:blank"));
         }
 
         /// <summary>
@@ -83,14 +89,51 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void НовоеОкноНеТратитПометку() {
-            var gate = new NewsNavigationGate();
+            var gate = this.Gate();
             gate.BeginOwnPageLoad();
 
-            var window = gate.OnNewWindowRequested("https://example.com");
-
-            Assert.True(window.Cancel);
-            Assert.Equal("https://example.com", window.OpenExternally);
-            Assert.False(gate.OnNavigationStarting("about:blank").Cancel);
+            Assert.True(gate.OnNewWindowRequested("https://example.com"));
+            Assert.Equal(new[] { "https://example.com" }, this.opened);
+            Assert.False(gate.OnNavigationStarting("about:blank"));
         }
+
+        /// <summary>Запрещённый адрес гасится и оболочке не достаётся.</summary>
+        [Fact]
+        public void ЗапрещённыйАдресНовогоОкнаНикудаНеУходит() {
+            var gate = this.Gate();
+
+            Assert.True(gate.OnNewWindowRequested("steam://run/570"));
+            Assert.Empty(this.opened);
+        }
+
+        /// <summary>
+        /// Каждый погашенный переход оставляет след с адресом.
+        /// <para>
+        /// Без следа пустая страница ничем себя не объясняет: в прошлый раз объяснить
+        /// её было нечем, и разбираться пришлось по описанию с чужого экрана.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void ПогашенныйПереходОставляетСледСАдресом() {
+            var gate = this.Gate();
+
+            gate.OnNavigationStarting("file:///C:/Windows/System32/cmd.exe");
+
+            var note = Assert.Single(this.notes);
+            Assert.Contains("file:///C:/Windows/System32/cmd.exe", note);
+        }
+
+        /// <summary>Своя отрисовка следа не оставляет: гасить в ней нечего.</summary>
+        [Fact]
+        public void СвояОтрисовкаСледаНеОставляет() {
+            var gate = this.Gate();
+            gate.BeginOwnPageLoad();
+
+            gate.OnNavigationStarting("about:blank");
+
+            Assert.Empty(this.notes);
+        }
+
+        private NewsNavigationGate Gate() => new NewsNavigationGate(this.opened.Add, this.notes.Add);
     }
 }
