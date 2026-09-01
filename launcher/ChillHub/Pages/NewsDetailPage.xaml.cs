@@ -35,11 +35,8 @@ namespace ChillHub.Pages {
         /// <summary>Страница уже освободила WebView2 — повторно им пользоваться нельзя.</summary>
         private bool browserReleased;
 
-        /// <summary>
-        /// Ближайший переход — наша собственная отрисовка, а не ссылка из текста новости.
-        /// Поднимается перед <c>NavigateToString</c> и снимается первым же переходом.
-        /// </summary>
-        private bool ownPageLoadPending;
+        /// <summary>Переходы этой страницы: отличает свою отрисовку от ссылки в тексте.</summary>
+        private readonly NewsNavigationGate gate = new NewsNavigationGate();
 
         public NewsDetailPage(string title, string markdownUrl) {
             this.InitializeComponent();
@@ -188,33 +185,16 @@ namespace ChillHub.Pages {
                     // NavigationStarting, клик с новым окном — NewWindowRequested,
                     // и оба должны судить одинаково.
                     this.Browser.CoreWebView2.NavigationStarting += (s, ev) => {
-                        // Своя отрисовка узнаётся по флагу, а не по адресу: адрес нашей
+                        // Своя отрисовка узнаётся по метке, а не по адресу: адрес нашей
                         // страницы придумывает сам движок, и его вид меняется от версии
-                        // к версии. Флаг снимается здесь же — следующий переход будет
-                        // уже настоящим, из ссылки в тексте новости.
-                        var own = this.ownPageLoadPending;
-                        this.ownPageLoadPending = false;
-                        var action = NewsLinkPolicy.ForNavigation(ev.Uri, own);
-                        ev.Cancel = action.Cancel;
-                        if (action.Cancel) {
-                            // След в журнале обязателен: отменённый переход, которым
-                            // оказалась сама новость, выглядит на экране просто пустотой,
-                            // и объяснить её потом было нечем — ровно так этот обработчик
-                            // однажды и погасил страницу целиком.
-                            try {
-                                Core.Logging.Logger.Info(
-                                    $"NewsDetailPage: переход отменён, адрес '{ev.Uri}', наружу={action.OpenExternally != null}");
-                            }
-                            catch {
-                            }
-                        }
-
-                        OpenOutside(action.OpenExternally);
+                        // к версии. Порядок «пометили — пришёл переход — метка снялась»
+                        // держит NewsNavigationGate, и он же проверяется тестами.
+                        Apply(this.gate.OnNavigationStarting(ev.Uri), ev.Uri, c => ev.Cancel = c);
                     };
 
                     this.Browser.CoreWebView2.NewWindowRequested += (s, ev) => {
                         ev.Handled = true;
-                        OpenOutside(NewsLinkPolicy.ForNewWindow(ev.Uri).OpenExternally);
+                        Apply(this.gate.OnNewWindowRequested(ev.Uri), ev.Uri, _ => { });
                     };
                 }
                 catch {
@@ -234,6 +214,31 @@ namespace ChillHub.Pages {
         }
 
         /// <summary>
+        /// Исполняет решение: отменяет переход, пишет след в журнал и отдаёт адрес оболочке.
+        /// <para>
+        /// След обязателен: отменённый переход, которым оказалась сама новость, выглядит
+        /// на экране просто пустотой, и объяснить её потом было нечем — ровно так этот
+        /// обработчик однажды и погасил страницу целиком.
+        /// </para>
+        /// </summary>
+        /// <param name="action">Решение шлюза.</param>
+        /// <param name="uri">Адрес из события — только для журнала.</param>
+        /// <param name="cancel">Как сообщить отмену событию.</param>
+        private static void Apply(NewsNavigationAction action, string? uri, Action<bool> cancel) {
+            cancel(action.Cancel);
+            if (action.Cancel) {
+                try {
+                    Core.Logging.Logger.Info(
+                        $"NewsDetailPage: переход отменён, адрес '{uri}', наружу={action.OpenExternally != null}");
+                }
+                catch {
+                }
+            }
+
+            OpenOutside(action.OpenExternally);
+        }
+
+        /// <summary>
         /// Показывает собственную страницу, пометив её переход как свой.
         /// <para>
         /// Единственный путь к <c>NavigateToString</c> на этой странице: обработчик
@@ -243,7 +248,7 @@ namespace ChillHub.Pages {
         /// </summary>
         /// <param name="html">Готовая страница.</param>
         private void NavigateToOwnPage(string html) {
-            this.ownPageLoadPending = true;
+            this.gate.BeginOwnPageLoad();
             this.Browser.NavigateToString(html);
         }
 
