@@ -30,4 +30,23 @@ namespace ChillHub.Core.SelfUpdate {
         /// <summary>Значение полосы прогресса; null — оставить прежнее.</summary>
         internal double? ProgressValue { get; init; }
     }
+
+    /// <summary>
+    /// Видимость полосы прогресса в окне самообновления.
+    /// <para>
+    /// Полоса показывает работу, а не занимает место. Прибитая видимой в разметке,
+    /// она стояла пустой дорожкой под любым сообщением окна — в том числе под
+    /// «не удалось проверить обновления» — и читалась как загрузка, застрявшая на
+    /// нуле: игрок ждал, что она поедет, а ехать было нечему.
+    /// </para>
+    /// </summary>
+    internal static class SelfUpdateProgressBar {
+        /// <summary>
+        /// Видна ли полоса.
+        /// </summary>
+        /// <param name="indeterminate">Полоса бежит без известного процента.</param>
+        /// <param name="value">Значение полосы.</param>
+        /// <returns>true, если полосе есть что показать.</returns>
+        internal static bool Visible(bool indeterminate, double value) => indeterminate || value > 0;
+    }
 }

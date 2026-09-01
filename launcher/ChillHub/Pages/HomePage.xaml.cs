@@ -605,15 +605,12 @@ namespace ChillHub.Pages {
                 this.SetGamesSource();
                 this.GamesSkeleton.Visibility = System.Windows.Visibility.Collapsed;
                 this.GameList.Visibility = System.Windows.Visibility.Collapsed;
-                this.GamesEmptyTitle.Text = text.Title;
-                this.GamesEmptyHint.Text = text.Hint;
                 this.GamesEmptyState.Visibility = System.Windows.Visibility.Visible;
 
                 // Новости тоже не пришли: вместо вечных скелетонов — та же причина.
-                this.ApplyNewsEmptyTexts(text);
+                this.ApplyOfflineState();
                 this.ShowGameNews(Array.Empty<NewsItem>());
                 this.ShowLauncherNews(Array.Empty<NewsItem>());
-                this.UpdateHero();
             }
             catch (Exception uiEx) {
                 // Даже если не удалось перерисовать секции, сообщение об ошибке ниже показать обязаны
@@ -633,36 +630,45 @@ namespace ChillHub.Pages {
         private void HideServerUnavailableState() {
             this.offline = null;
             this.GamesEmptyState.Visibility = System.Windows.Visibility.Collapsed;
-            this.ApplyNewsEmptyTexts(null);
-            this.UpdateHero();
+            this.ApplyOfflineState();
             this.ClearErrorDetails();
         }
 
         /// <summary>
-        /// Подписывает пустые ленты новостей: без связи — причиной, иначе — обычным
-        /// «новостей пока нет». Обе ленты подписываются вместе, потому что причина у
-        /// пустоты одна на весь экран, а вкладку игрок переключает когда захочет.
+        /// Раскладывает по экрану одно решение <see cref="Core.Home.OfflineScreen"/>:
+        /// список игр, обе ленты новостей и витрину. Вместе, а не по отдельности —
+        /// причина у пустоты общая, и называться в разных углах она обязана одинаково.
         /// </summary>
-        /// <param name="offlineText">Причина, если лента пуста из-за пропавшей связи.</param>
-        private void ApplyNewsEmptyTexts(Core.Net.OfflineText? offlineText) {
+        private void ApplyOfflineState() {
             try {
-                if (offlineText is Core.Net.OfflineText text) {
-                    this.GameNewsEmptyTitle.Text = text.Title;
-                    this.GameNewsEmptyHint.Text = text.Hint;
-                    this.LauncherNewsEmptyTitle.Text = text.Title;
-                    this.LauncherNewsEmptyHint.Text = text.Hint;
-                    return;
-                }
-
-                this.GameNewsEmptyTitle.Text = "Пока новостей нет";
-                this.GameNewsEmptyHint.Text = "Здесь появятся объявления и события этой игры.";
-                this.LauncherNewsEmptyTitle.Text = "Пока новостей нет";
-                this.LauncherNewsEmptyHint.Text = "Здесь появятся новости о самом лаунчере.";
+                var view = Core.Home.OfflineScreen.Decide(this.offline, this.GetSelectedGame() != null);
+                this.GamesEmptyTitle.Text = view.Games.Title;
+                this.GamesEmptyHint.Text = view.Games.Hint;
+                this.ApplyFeedCaptions(view);
+                this.UpdateHero();
             }
             catch (Exception ex) {
-                Core.Logging.Logger.Warn($"ApplyNewsEmptyTexts: {ex.Message}");
+                Core.Logging.Logger.Warn($"ApplyOfflineState: {ex.Message}");
             }
         }
+
+        /// <summary>
+        /// Подписывает пустые ленты новостей. Отдельно от остального экрана, потому что
+        /// упавшая лента — ещё не пропавший экран: игры на месте, и трогать из-за одних
+        /// новостей витрину нельзя.
+        /// </summary>
+        /// <param name="view">Решение, посчитанное по причине сбоя.</param>
+        private void ApplyFeedCaptions(Core.Home.OfflineScreenView view) {
+            this.GameNewsEmptyTitle.Text = view.GameNews.Title;
+            this.GameNewsEmptyHint.Text = view.GameNews.Hint;
+            this.LauncherNewsEmptyTitle.Text = view.LauncherNews.Title;
+            this.LauncherNewsEmptyHint.Text = view.LauncherNews.Hint;
+        }
+
+        /// <summary>Подписи лент по причине сбоя, не трогая остальной экран.</summary>
+        /// <param name="offlineText">Причина, если лента пуста из-за пропавшей связи.</param>
+        private void ApplyFeedCaptions(Core.Net.OfflineText? offlineText) =>
+            this.ApplyFeedCaptions(Core.Home.OfflineScreen.Decide(offlineText, gameSelected: true));
 
         // Кнопка «Повторить» в пустом состоянии: переигрываем первичную загрузку
         private async void RetryLoad_Click(object sender, RoutedEventArgs e) {
@@ -1075,14 +1081,14 @@ namespace ChillHub.Pages {
                 var news = await this.http.GetFromJsonAsync<NewsIndex>(newsUrl);
                 var launcherNews = news?.Items ?? new List<NewsItem>();
                 this.NormalizeCoverUrls(launcherNews);
-                this.ApplyNewsEmptyTexts(this.offline);
+                this.ApplyFeedCaptions(this.offline);
                 this.ShowLauncherNews(launcherNews);
             }
             catch (Exception ex) {
                 // Причина пустой ленты обязана попасть и в саму ленту: строка статуса
                 // внизу окна — не то место, куда игрок смотрит, обновляя новости.
                 var text = Core.Net.OfflineMessage.Describe(ex, Core.Net.OfflineMessage.NetworkAvailable());
-                this.ApplyNewsEmptyTexts(text);
+                this.ApplyFeedCaptions(text);
                 this.ShowUserError(text.Status, ex, "HomePage.ReloadLauncherNewsAsync");
                 this.ShowLauncherNews(Array.Empty<NewsItem>());
             }
@@ -1104,12 +1110,12 @@ namespace ChillHub.Pages {
                 var gameNews = await HomeFeed.GetOptionalAsync<NewsIndex>(this.http, gameNewsUrl);
                 var items = gameNews?.Items ?? new List<NewsItem>();
                 this.NormalizeCoverUrls(items);
-                this.ApplyNewsEmptyTexts(this.offline);
+                this.ApplyFeedCaptions(this.offline);
                 this.ShowGameNews(items);
             }
             catch (Exception ex) {
                 var text = Core.Net.OfflineMessage.Describe(ex, Core.Net.OfflineMessage.NetworkAvailable());
-                this.ApplyNewsEmptyTexts(text);
+                this.ApplyFeedCaptions(text);
                 this.ShowUserError(text.Status, ex, "HomePage.ReloadGameNewsAsync");
                 this.ShowGameNews(Array.Empty<NewsItem>());
             }
@@ -1728,10 +1734,9 @@ namespace ChillHub.Pages {
             try {
                 var game = this.GetSelectedGame();
 
-                // Связи нет и игр нет — запускать нечего. Строка действий витрины при
-                // этом остаётся пустой: кнопка, которая ничего не сделает, хуже её
-                // отсутствия (см. UpdateHero).
-                if (game == null && this.offline != null) {
+                // Связи нет и игр нет — запускать нечего, строка действий остаётся
+                // пустой (см. Core.Home.OfflineScreen).
+                if (!Core.Home.OfflineScreen.Decide(this.offline, game != null).ActionsVisible) {
                     this.ActionBtn.Visibility = Visibility.Collapsed;
                     this.LaunchBtn1.Visibility = Visibility.Collapsed;
                     this.LaunchBtn2.Visibility = Visibility.Collapsed;
@@ -1920,20 +1925,18 @@ namespace ChillHub.Pages {
             try {
                 var g = this.GetSelectedGame();
 
-                // Без связи выбирать не из чего. Витрина при этом продолжала звать
-                // «Выберите игру» и держала «Повторить» и «Об игре» — кнопки про игру,
-                // которой на экране нет: «Об игре» открывала пустую страницу, а
-                // «Повторить» стояла второй такой же рядом с настоящей в списке слева.
-                if (g == null && this.offline is Core.Net.OfflineText text) {
-                    this.HeroTitleText.Text = text.Title;
-                    this.HeroMetaText.Text = text.Hint;
+                // Без связи выбирать не из чего: витрина называет причину сама и убирает
+                // кнопки к игре, которой на экране нет (см. Core.Home.OfflineScreen).
+                var look = Core.Home.OfflineScreen.Decide(this.offline, g != null);
+                this.HeroInfoBtn.Visibility = look.ActionsVisible ? Visibility.Visible : Visibility.Collapsed;
+                if (look.HeroExplains) {
+                    this.HeroTitleText.Text = look.HeroTitle;
+                    this.HeroMetaText.Text = look.HeroHint;
                     this.HeroStatusBadge.Visibility = Visibility.Collapsed;
-                    this.HeroInfoBtn.Visibility = Visibility.Collapsed;
                     this.ActionBtn.Visibility = Visibility.Collapsed;
                     return;
                 }
 
-                this.HeroInfoBtn.Visibility = Visibility.Visible;
                 this.HeroTitleText.Text = g?.Title is string t && !string.IsNullOrWhiteSpace(t) ? t : "Выберите игру";
 
                 string status;

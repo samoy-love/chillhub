@@ -119,13 +119,12 @@ namespace ChillHub {
                 this.Progress.Value = state.ProgressValue.Value;
             }
 
-            // Полоса видна, только когда ей есть что показывать. Пустая серая дорожка
-            // под сообщением «не удалось проверить обновления» читается как застрявшая
-            // на нуле загрузка: игрок ждёт, что она поедет, а ехать нечему.
+            // Полоса видна, только когда ей есть что показывать, — см. SelfUpdateProgressBar.
             if (state.Indeterminate.HasValue || state.ProgressValue.HasValue) {
-                this.Progress.Visibility = this.Progress.IsIndeterminate || this.Progress.Value > 0
-                    ? Visibility.Visible
-                    : Visibility.Collapsed;
+                this.Progress.Visibility =
+                    Core.SelfUpdate.SelfUpdateProgressBar.Visible(this.Progress.IsIndeterminate, this.Progress.Value)
+                        ? Visibility.Visible
+                        : Visibility.Collapsed;
             }
 
             if (state.ButtonContent != null) {
