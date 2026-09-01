@@ -4,6 +4,7 @@
 // </copyright>
 
 namespace ChillHub.Tests {
+    using System;
     using System.Threading;
 
     using ChillHub.Core;
@@ -21,18 +22,20 @@ namespace ChillHub.Tests {
     /// Замок именованный и на весь сеанс пользователя, поэтому «другой экземпляр» тут
     /// изображает отдельный поток: владение мьютексом принадлежит потоку, а не процессу.
     /// </para>
+    /// <para>
+    /// Имя замка у каждого теста своё. Боевое брать нельзя: его держит настоящий
+    /// лаунчер, если он запущен, — тогда набор всегда красный, — а пока тест держал
+    /// бы его сам, установленная копия отказалась бы стартовать.
+    /// </para>
     /// </summary>
     public class SingleInstanceTests {
-        /// <summary>Имя должно совпадать с тем, что занимает продакшн-код.</summary>
-        private const string MutexName = @"Local\ChillHub.SingleInstance";
-
         /// <summary>Свободный замок — запускаться можно.</summary>
         [Fact]
         public void СвободныйЗамокПозволяетЗапуск() {
+            var mutexName = UniqueMutexName();
+
             try {
-                // Именно та перегрузка, которую зовёт App: на свободном замке
-                // она отвечает сразу и ожиданием прогон не задерживает.
-                Assert.True(SingleInstance.TryAcquire());
+                Assert.True(SingleInstance.TryAcquire(100, mutexName));
             }
             finally {
                 // Иначе замок остался бы за потоком xunit и следующий тест увидел бы
@@ -44,13 +47,14 @@ namespace ChillHub.Tests {
         /// <summary>Занятый замок не пускает второй экземпляр.</summary>
         [Fact]
         public void ЗанятыйЗамокНеПускаетВторойЭкземпляр() {
+            var mutexName = UniqueMutexName();
             using var held = new ManualResetEventSlim(false);
             using var release = new ManualResetEventSlim(false);
 
             // Владение мьютексом — за потоком, поэтому «чужой экземпляр» держит его
             // из отдельного потока, а не из текущего.
             var holder = new Thread(() => {
-                using var m = new Mutex(initiallyOwned: false, MutexName);
+                using var m = new Mutex(initiallyOwned: false, mutexName);
                 m.WaitOne();
                 held.Set();
                 release.Wait();
@@ -61,7 +65,7 @@ namespace ChillHub.Tests {
 
             try {
                 Assert.True(held.Wait(5000), "поток-владелец должен успеть занять замок");
-                Assert.False(SingleInstance.TryAcquire(100), "второй экземпляр запускаться не должен");
+                Assert.False(SingleInstance.TryAcquire(100, mutexName), "второй экземпляр запускаться не должен");
             }
             finally {
                 SingleInstance.ReleaseForTests();
@@ -79,9 +83,11 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void БрошенныйЗамокНеЗапираетЛаунчерНавсегда() {
+            var mutexName = UniqueMutexName();
+
             // Поток занимает замок и умирает, не отпустив, — ровно как убитый процесс
             var holder = new Thread(() => {
-                var m = new Mutex(initiallyOwned: false, MutexName);
+                var m = new Mutex(initiallyOwned: false, mutexName);
                 m.WaitOne();
             });
             holder.IsBackground = true;
@@ -89,7 +95,7 @@ namespace ChillHub.Tests {
             Assert.True(holder.Join(5000), "поток-владелец должен завершиться");
 
             try {
-                Assert.True(SingleInstance.TryAcquire(100), "брошенный замок должен доставаться нам");
+                Assert.True(SingleInstance.TryAcquire(100, mutexName), "брошенный замок должен доставаться нам");
             }
             finally {
                 SingleInstance.ReleaseForTests();
@@ -106,10 +112,11 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void ОсвободившийсяВоВремяОжиданияЗамокПускает() {
+            var mutexName = UniqueMutexName();
             using var held = new ManualResetEventSlim(false);
 
             var holder = new Thread(() => {
-                using var m = new Mutex(initiallyOwned: false, MutexName);
+                using var m = new Mutex(initiallyOwned: false, mutexName);
                 m.WaitOne();
                 held.Set();
                 Thread.Sleep(200);
@@ -122,7 +129,7 @@ namespace ChillHub.Tests {
 
             try {
                 // На входе замок занят: ждём и дожидаемся
-                Assert.True(SingleInstance.TryAcquire(5000));
+                Assert.True(SingleInstance.TryAcquire(5000, mutexName));
             }
             finally {
                 SingleInstance.ReleaseForTests();
@@ -133,11 +140,12 @@ namespace ChillHub.Tests {
         /// <summary>Отпущенный замок снова пускает — иначе после выхода лаунчер не поднять.</summary>
         [Fact]
         public void ОтпущенныйЗамокСноваПускает() {
+            var mutexName = UniqueMutexName();
             using var held = new ManualResetEventSlim(false);
             using var release = new ManualResetEventSlim(false);
 
             var holder = new Thread(() => {
-                using var m = new Mutex(initiallyOwned: false, MutexName);
+                using var m = new Mutex(initiallyOwned: false, mutexName);
                 m.WaitOne();
                 held.Set();
                 release.Wait();
@@ -151,11 +159,19 @@ namespace ChillHub.Tests {
             Assert.True(holder.Join(5000), "поток-владелец должен отпустить замок");
 
             try {
-                Assert.True(SingleInstance.TryAcquire(1000));
+                Assert.True(SingleInstance.TryAcquire(1000, mutexName));
             }
             finally {
                 SingleInstance.ReleaseForTests();
             }
         }
+
+        /// <summary>
+        /// Имя замка, которого нет больше ни у кого: ни у боевого лаунчера, ни у
+        /// соседнего теста. Замок именованный и виден всему сеансу пользователя.
+        /// </summary>
+        /// <returns>Уникальное имя.</returns>
+        private static string UniqueMutexName()
+            => @"Local\ChillHub.SingleInstance.Tests." + Guid.NewGuid().ToString("N");
     }
 }

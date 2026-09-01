@@ -119,9 +119,11 @@ namespace ChillHub.Core.Sync {
         public Task<DiffPlan> PlanAsync(Manifest manifest, string localRoot, string contentBaseUrl, PlanOptions options, CancellationToken ct) {
             options ??= PlanOptions.Default;
 
-            // Планировщик — вторая (и последняя) точка входа манифеста в код,
-            // который трогает диск: сюда попадают и манифесты, полученные не через
-            // GetManifestAsync. Проверка идемпотентна и стоит копейки.
+            // Планировщик — вторая точка входа манифеста в код, который трогает диск:
+            // сюда попадают и манифесты, полученные не через GetManifestAsync. Третья —
+            // SelfUpdateDownloader.BuildSelfUpdatePlan: он строит план самообновления
+            // сам, минуя этот метод, и потому проверяет манифест у себя.
+            // Проверка идемпотентна и стоит копейки.
             ManifestValidator.Validate(manifest, $"план для '{localRoot}'");
 
             // Пути, которыми в этом же корне владеет ЧУЖОЙ манифест: для синхронизации

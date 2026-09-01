@@ -65,9 +65,27 @@ namespace ChillHub.Core {
         /// </summary>
         /// <param name="timeoutMs">Сколько ждать освобождения замка.</param>
         /// <returns>true, если запускаться можно.</returns>
-        internal static bool TryAcquire(int timeoutMs) {
+        internal static bool TryAcquire(int timeoutMs) => Acquire(timeoutMs, MutexName, focusRunningInstance: true);
+
+        /// <summary>
+        /// То же самое, но на СВОЁМ имени замка — только для тестов.
+        /// <para>
+        /// Боевое имя одно на сеанс пользователя, и занимает его настоящий лаунчер.
+        /// Тест, который берёт то же имя, на машине разработчика падает сам (замок
+        /// уже чужой), а установленной копии в этот момент отказывает в запуске.
+        /// Под собственным именем поднимать на передний план тоже нечего: процесса
+        /// и окна за таким замком не стоит — поэтому поиск чужого окна пропускается.
+        /// </para>
+        /// </summary>
+        /// <param name="timeoutMs">Сколько ждать освобождения замка.</param>
+        /// <param name="mutexName">Имя замка вместо боевого.</param>
+        /// <returns>true, если запускаться можно.</returns>
+        internal static bool TryAcquire(int timeoutMs, string mutexName)
+            => Acquire(timeoutMs, mutexName, focusRunningInstance: false);
+
+        private static bool Acquire(int timeoutMs, string mutexName, bool focusRunningInstance) {
             try {
-                mutex = new Mutex(initiallyOwned: false, MutexName);
+                mutex = new Mutex(initiallyOwned: false, mutexName);
             }
             catch (Exception ex) {
                 // Не смогли даже создать замок — это не повод не запускать лаунчер
@@ -81,7 +99,7 @@ namespace ChillHub.Core {
 
             // Замок занят. Обычный случай — пользователь запустил лаунчер второй раз:
             // показываем ему уже открытое окно и тихо уходим.
-            if (TryFocusRunningInstance()) {
+            if (focusRunningInstance && TryFocusRunningInstance()) {
                 ChillHub.Core.Logging.Logger.Info("SingleInstance: лаунчер уже запущен, показываем его окно");
                 return false;
             }

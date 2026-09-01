@@ -135,6 +135,45 @@ namespace ChillHub.Core {
             catch { return true; }
         }
 
+        /// <summary>
+        /// Возвращает слот, списанный <see cref="TryConsumeGlobal"/>, когда отчёт до
+        /// сервера так и не дошёл.
+        /// <para>
+        /// Квота считает отчёты, ПРИНЯТЫЕ сервером, а не попытки их отправить. Без
+        /// возврата три исключения на машине без сети выжигали её целиком, и первый же
+        /// отчёт, который дошёл бы, пользователь видел заглушённым: очереди у
+        /// автоотчётов нет, непринятый отчёт теряется навсегда.
+        /// </para>
+        /// </summary>
+        private static void RefundGlobal() {
+            try {
+                lock (gqLock) {
+                    var path = GlobalQuotaPath;
+                    if (!File.Exists(path)) {
+                        return;
+                    }
+
+                    var st = JsonSerializer.Deserialize<GlobalQuotaState>(File.ReadAllText(path, Encoding.UTF8));
+                    if (st == null || st.Count <= 0) {
+                        return;
+                    }
+
+                    // Окно успело смениться, пока ждали ответа: списанный слот остался в
+                    // прошлом окне, а уменьшать счётчик нового значило бы выдать лишнюю
+                    // попытку сверх лимита.
+                    if (st.WindowStartUtc == default || (DateTime.UtcNow - st.WindowStartUtc) >= GLOBAL_WINDOW) {
+                        return;
+                    }
+
+                    st.Count--;
+                    File.WriteAllText(path, JsonSerializer.Serialize(st), Encoding.UTF8);
+                }
+            }
+            catch {
+                // Не смогли вернуть слот — отправку это ронять не должно
+            }
+        }
+
         public static bool TryConsumeManual(out TimeSpan retryAfter) {
             retryAfter = TimeSpan.Zero;
             try {
@@ -221,6 +260,7 @@ namespace ChillHub.Core {
         /// не на UI-потоке.
         /// </summary>
         private static async Task ReportCoreAsync(Exception ex, string context, bool includeDiagnostics = true) {
+            var quotaConsumed = false;
             try {
                 // Тумблера в настройках у автоотчётов больше нет: они всегда включены.
                 // Осталась переменная окружения — тем же приёмом, что у метрик
@@ -243,8 +283,11 @@ namespace ChillHub.Core {
                     return;
                 }
 
-                // Global persistent quota
+                // Global persistent quota. Слот списывается авансом, а на любом исходе,
+                // кроме принятого сервером отчёта, возвращается через RefundGlobal:
+                // считаем доставленные отчёты, а не попытки.
                 if (!TryConsumeGlobal(out var retryAfter)) { OnAutoReportSuppressed(retryAfter); return; }
+                quotaConsumed = true;
 
                 string logs = string.Empty;
                 Dictionary<string, string>? system = CollectSystemInfo();
@@ -293,10 +336,12 @@ namespace ChillHub.Core {
                                 Content = new StringContent(json, Encoding.UTF8, "application/json")
                             };
                             var r2 = await http.SendAsync(req2).ConfigureAwait(false);
-                            if (r2.IsSuccessStatusCode) { OnAutoReported(context); }
+                            if (r2.IsSuccessStatusCode) { OnAutoReported(context); return; }
                         }
                         catch { }
                     }
+
+                    RefundGlobal();
                     return;
                 }
 
@@ -308,14 +353,20 @@ namespace ChillHub.Core {
                                 Content = new StringContent(json, Encoding.UTF8, "application/json")
                             };
                             var r3 = await http.SendAsync(req3).ConfigureAwait(false);
-                            if (r3.IsSuccessStatusCode) { OnAutoReported(context); }
+                            if (r3.IsSuccessStatusCode) { OnAutoReported(context); return; }
                         }
                         catch { }
                     }
+
+                    RefundGlobal();
                 }
                 else { OnAutoReported(context); }
             }
-            catch { }
+            catch {
+                // Сорвались, не отправив: слот квоты возвращаем — иначе её выжигают
+                // попытки, ни одна из которых до сервера не дошла.
+                if (quotaConsumed) { RefundGlobal(); }
+            }
         }
 
         private static void CurrentDomain_UnhandledException(object? sender, UnhandledExceptionEventArgs e) {
