@@ -2,8 +2,8 @@
 
 [Русский](README.md) · English
 
-[![CI](https://github.com/tr0llex/chillhub/actions/workflows/ci.yml/badge.svg)](https://github.com/tr0llex/chillhub/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/tr0llex/chillhub/branch/main/graph/badge.svg)](https://codecov.io/gh/tr0llex/chillhub)
+[![CI](https://github.com/samoy-love/chillhub/actions/workflows/ci.yml/badge.svg)](https://github.com/samoy-love/chillhub/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/samoy-love/chillhub/branch/main/graph/badge.svg)](https://codecov.io/gh/samoy-love/chillhub)
 [![prod](https://img.shields.io/website?url=https%3A%2F%2Flauncher.samoy.love&up_message=online&up_color=2ea043&down_message=offline&label=launcher.samoy.love)](https://launcher.samoy.love)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -63,7 +63,7 @@ Thunderstore modpack builds, news, maintenance mode, metrics, feedback). Both
 listen on loopback only. The admin UI is vanilla JS with no bundler.
 
 **Production** — systemd units behind the system nginx, atomic releases with
-rollback via [deploy-kit](https://github.com/tr0llex/deploy-kit). One host
+rollback via [deploy-kit](https://github.com/samoy-love/deploy-kit). One host
 serves everything: `/` the landing page, `/api/*` the public API,
 `/admin/api/*` and `/admin/ui/*` the admin side, `/content/*` and
 `/downloads/*` the builds straight from nginx.
@@ -120,7 +120,7 @@ manifest against the updater's preserve rules — details in
 
 Five targets ship independently — landing page, public API, admin server, admin
 UI and the installer — through
-[deploy-kit](https://github.com/tr0llex/deploy-kit). The installer is rebuilt by
+[deploy-kit](https://github.com/samoy-love/deploy-kit). The installer is rebuilt by
 every merge that touches the client: the exe is swapped on the site
 (`/downloads/ChillHub-Setup.exe`) and the self-update build goes to the admin
 panel; making it active is a manual `latest` switch there.
@@ -157,19 +157,19 @@ one host and ships through one pipeline.
 
 | Project | What it is |
 |---|---|
-| [launcher.samoy.love](https://launcher.samoy.love) | This launcher — [tr0llex/chillhub](https://github.com/tr0llex/chillhub) |
-| [snakes.samoy.love](https://snakes.samoy.love) | Browser territory-capture game — [tr0llex/snakes](https://github.com/tr0llex/snakes) |
-| [metro.samoy.love](https://metro.samoy.love) | Offline PWA of the Moscow metro map — [tr0llex/metro-map](https://github.com/tr0llex/metro-map) |
-| [status.samoy.love](https://status.samoy.love) | Service status: an on-host agent, a Telegram bot and an external watchdog — [tr0llex/status.samoy.love](https://github.com/tr0llex/status.samoy.love) |
-| [samoy.love](https://samoy.love) | Personal site — [tr0llex/samoy.love](https://github.com/tr0llex/samoy.love) |
-| Monitoring | [tr0llex/metrics.samoy.love](https://github.com/tr0llex/metrics.samoy.love) — monitoring for the whole ecosystem; both Chill Hub binaries expose a Prometheus endpoint on loopback for it to scrape |
-| Pipeline | [tr0llex/deploy-kit](https://github.com/tr0llex/deploy-kit) — the shared release pipeline behind all of the above |
+| [launcher.samoy.love](https://launcher.samoy.love) | This launcher — [samoy-love/chillhub](https://github.com/samoy-love/chillhub) |
+| [snakes.samoy.love](https://snakes.samoy.love) | Browser territory-capture game — [samoy-love/snakes](https://github.com/samoy-love/snakes) |
+| [metro.samoy.love](https://metro.samoy.love) | Offline PWA of the Moscow metro map — [samoy-love/metro-map](https://github.com/samoy-love/metro-map) |
+| [status.samoy.love](https://status.samoy.love) | Service status: an on-host agent, a Telegram bot and an external watchdog — [samoy-love/status.samoy.love](https://github.com/samoy-love/status.samoy.love) |
+| [samoy.love](https://samoy.love) | Personal site — [samoy-love/samoy.love](https://github.com/samoy-love/samoy.love) |
+| Monitoring | [samoy-love/metrics.samoy.love](https://github.com/samoy-love/metrics.samoy.love) — monitoring for the whole ecosystem; both Chill Hub binaries expose a Prometheus endpoint on loopback for it to scrape |
+| Pipeline | [samoy-love/deploy-kit](https://github.com/samoy-love/deploy-kit) — the shared release pipeline behind all of the above |
 
 ## Contacts and license
 
 Alexey Samoylov — [alex@samoy.love](mailto:alex@samoy.love),
 [t.me/tr0llex](https://t.me/tr0llex). Security reports:
 [docs/SECURITY.md](docs/SECURITY.md). Tasks and plans live in
-[issues](https://github.com/tr0llex/chillhub/issues).
+[issues](https://github.com/samoy-love/chillhub/issues).
 
 MIT, see [LICENSE](LICENSE).

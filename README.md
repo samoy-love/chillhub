@@ -2,8 +2,8 @@
 
 Русский · [English](README.en.md)
 
-[![CI](https://github.com/tr0llex/chillhub/actions/workflows/ci.yml/badge.svg)](https://github.com/tr0llex/chillhub/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/tr0llex/chillhub/branch/main/graph/badge.svg)](https://codecov.io/gh/tr0llex/chillhub)
+[![CI](https://github.com/samoy-love/chillhub/actions/workflows/ci.yml/badge.svg)](https://github.com/samoy-love/chillhub/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/samoy-love/chillhub/branch/main/graph/badge.svg)](https://codecov.io/gh/samoy-love/chillhub)
 [![прод](https://img.shields.io/website?url=https%3A%2F%2Flauncher.samoy.love&up_message=online&up_color=2ea043&down_message=offline&label=launcher.samoy.love)](https://launcher.samoy.love)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -65,7 +65,7 @@ TLS, SmartScreen предупреждает при установке, пока 
 только loopback. Морда админки — vanilla JS без сборщика.
 
 **Прод** — systemd-юниты за системным nginx, атомарные релизы с откатом через
-[deploy-kit](https://github.com/tr0llex/deploy-kit). Один хост раздаёт всё:
+[deploy-kit](https://github.com/samoy-love/deploy-kit). Один хост раздаёт всё:
 `/` — лендинг, `/api/*` — публичный API, `/admin/api/*` и `/admin/ui/*` —
 админка, `/content/*` и `/downloads/*` — сборки, их отдаёт nginx напрямую.
 
@@ -120,7 +120,7 @@ preserve-правил апдейтера — подробнее в [docs/spec.md
 
 Пять целей катятся по отдельности — лендинг, публичный API, админ-сервер,
 морда админки и установщик — через
-[deploy-kit](https://github.com/tr0llex/deploy-kit). Установщик пересобирается
+[deploy-kit](https://github.com/samoy-love/deploy-kit). Установщик пересобирается
 каждым мержем, задевшим клиента: exe подменяется на сайте
 (`/downloads/ChillHub-Setup.exe`), сборка самообновления уезжает в админку;
 активной её делает переключение latest в админке — руками.
@@ -155,19 +155,19 @@ dk rollback chillhub-admin
 
 | Проект | Что это |
 |---|---|
-| [launcher.samoy.love](https://launcher.samoy.love) | Этот лаунчер — [tr0llex/chillhub](https://github.com/tr0llex/chillhub) |
-| [snakes.samoy.love](https://snakes.samoy.love) | Браузерная игра в захват территории — [tr0llex/snakes](https://github.com/tr0llex/snakes) |
-| [metro.samoy.love](https://metro.samoy.love) | Офлайн-PWA со схемой московского метро — [tr0llex/metro-map](https://github.com/tr0llex/metro-map) |
-| [status.samoy.love](https://status.samoy.love) | Статус сервисов: агент на хосте, бот в Telegram и внешний сторож — [tr0llex/status.samoy.love](https://github.com/tr0llex/status.samoy.love) |
-| [samoy.love](https://samoy.love) | Личная страница — [tr0llex/samoy.love](https://github.com/tr0llex/samoy.love) |
-| Мониторинг | [tr0llex/metrics.samoy.love](https://github.com/tr0llex/metrics.samoy.love) — мониторинг всей экосистемы; оба бинаря Chill Hub отдают ему метрики в формате Prometheus на loopback |
-| Пайплайн | [tr0llex/deploy-kit](https://github.com/tr0llex/deploy-kit) — общий релизный пайплайн для всех перечисленных |
+| [launcher.samoy.love](https://launcher.samoy.love) | Этот лаунчер — [samoy-love/chillhub](https://github.com/samoy-love/chillhub) |
+| [snakes.samoy.love](https://snakes.samoy.love) | Браузерная игра в захват территории — [samoy-love/snakes](https://github.com/samoy-love/snakes) |
+| [metro.samoy.love](https://metro.samoy.love) | Офлайн-PWA со схемой московского метро — [samoy-love/metro-map](https://github.com/samoy-love/metro-map) |
+| [status.samoy.love](https://status.samoy.love) | Статус сервисов: агент на хосте, бот в Telegram и внешний сторож — [samoy-love/status.samoy.love](https://github.com/samoy-love/status.samoy.love) |
+| [samoy.love](https://samoy.love) | Личная страница — [samoy-love/samoy.love](https://github.com/samoy-love/samoy.love) |
+| Мониторинг | [samoy-love/metrics.samoy.love](https://github.com/samoy-love/metrics.samoy.love) — мониторинг всей экосистемы; оба бинаря Chill Hub отдают ему метрики в формате Prometheus на loopback |
+| Пайплайн | [samoy-love/deploy-kit](https://github.com/samoy-love/deploy-kit) — общий релизный пайплайн для всех перечисленных |
 
 ## Контакты и лицензия
 
 Алексей Самойлов — [alex@samoy.love](mailto:alex@samoy.love),
 [t.me/tr0llex](https://t.me/tr0llex). Сообщения об уязвимостях —
 [docs/SECURITY.md](docs/SECURITY.md). Задачи и планы — в
-[issues](https://github.com/tr0llex/chillhub/issues).
+[issues](https://github.com/samoy-love/chillhub/issues).
 
 MIT, см. [LICENSE](LICENSE).

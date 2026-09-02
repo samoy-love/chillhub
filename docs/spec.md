@@ -832,7 +832,7 @@ UI — `Pages/SettingsPage.xaml(.cs)`; та же логика доступна �
 
 ## 12. Nginx (общее)
 
-**Конфигурация живёт в [deploy-kit](https://github.com/tr0llex/deploy-kit)**, в
+**Конфигурация живёт в [deploy-kit](https://github.com/samoy-love/deploy-kit)**, в
 `deploy-kit/nginx/sites/chillhub-launcher.conf`. В этом репозитории копий нет и
 быть не должно: копия не обновляется вместе с оригиналом, а расходится с ним
 молча. Один такой файл (`build/deploy/launcher.conf`, остаток прежней схемы
@@ -946,7 +946,7 @@ UI — `Pages/SettingsPage.xaml(.cs)`; та же логика доступна �
 
 ## 17. Планы
 
-Планы и идеи живут в [issues](https://github.com/tr0llex/chillhub/issues), а не
+Планы и идеи живут в [issues](https://github.com/samoy-love/chillhub/issues), а не
 в этом файле. Так требует соглашение репозитория (`CLAUDE.md`), и так честнее:
 дорожная карта внутри спецификации устаревает первой и незаметнее всего —
 половина пунктов оказывается сделанной, а читатель верит написанному.
@@ -986,7 +986,7 @@ Let’s Encrypt выписывает сертификаты на оба доме
 
 ## 20. Выкатка
 
-**Единственный путь — [deploy-kit](https://github.com/tr0llex/deploy-kit).**
+**Единственный путь — [deploy-kit](https://github.com/samoy-love/deploy-kit).**
 Своих скриптов выкатки в проекте нет; локальная выкатка и CI идут одним и тем
 же путём: одно описание цели (`.deploy-kit/*.env`) и один `release.sh` на
 сервере.

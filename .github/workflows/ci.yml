@@ -766,7 +766,7 @@ jobs:
           # `changes` в фолбэк «не с чем сравнивать — катим всё» (см. ветку
           # `all` там) и установщик едет заново со старой, уже опубликованной
           # версией — молча, задним числом, уже после мержа. Ровно так провалился
-          # прогон https://github.com/tr0llex/chillhub/actions/runs/31264927554:
+          # прогон https://github.com/samoy-love/chillhub/actions/runs/31264927554:
           # PR трогал только .deploy-kit/*.env, launcher-version-bump это не
           # заметил и пропустил проверку, а installer/build упал на «launcher
           # version 1.3.2 is already published».
