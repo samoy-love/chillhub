@@ -26,7 +26,7 @@
 | `ADMIN_METRICS_LISTEN_ADDR` | `127.0.0.1:55778` | адрес экспортёра админки |
 
 Prometheus работает в контейнере стека `samoylove-metrics`
-([metrics.samoy.love](https://github.com/tr0llex/metrics.samoy.love)) и до
+([metrics.samoy.love](https://github.com/samoy-love/metrics.samoy.love)) и до
 `127.0.0.1` хоста не достаёт — из своего сетевого namespace он видит хост по
 адресу docker-моста.
 Поэтому на проде адрес задаётся явно:
