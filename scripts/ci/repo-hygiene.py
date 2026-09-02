@@ -47,7 +47,7 @@ NPX_RE = re.compile(r"npx\s+(?:--yes|-y)\s+(\S+)")
 # с мутабельным тегом», а единственный путь выкатки этого и соседних проектов
 # (CLAUDE.md): прибей их к SHA — и починка выкатки перестанет доезжать до
 # репозиториев, пока кто-нибудь не обновит хеш в каждом.
-OWN_REUSABLE_PREFIX = "tr0llex/deploy-kit/"
+OWN_REUSABLE_PREFIX = "samoy-love/deploy-kit/"
 
 
 class Unsupported(Exception):
