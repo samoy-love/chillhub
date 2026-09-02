@@ -96,3 +96,21 @@ updates:
         update-types: ['minor', 'patch']
     commit-message:
       prefix: 'deps'
+
+  # Корневой package.json держит единственную зависимость — jsdom, на котором
+  # admin-dom.test.js гоняет admin.js в настоящем DOM. Экосистемы здесь не
+  # было, и это заметили ровно тогда, когда jsdom отстал на пять мажорных
+  # версий: следить за ним было некому. Одна зависимость — не повод оставлять
+  # её без присмотра, наоборот: незаметное отставание тем вероятнее, чем реже
+  # файл открывают.
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: ['minor', 'patch']
+    commit-message:
+      prefix: 'deps'
