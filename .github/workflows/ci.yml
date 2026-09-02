@@ -481,7 +481,11 @@ jobs:
 
   dotnet-lint:
     name: C# (launcher)
-    runs-on: windows-latest
+    # Свои ветки собираются на домашней Windows-машине win-builder, форк-PR —
+    # на GitHub-hosted. Метка win-builder есть только у нашей VM, поэтому
+    # чужой код физически не попадёт на домашнее железо даже при ошибочном
+    # одобрении: для форка выражение вычисляется в windows-latest.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'windows-latest' || 'win-builder' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -558,7 +562,11 @@ jobs:
   # раз в матрице отмечает конкретный проект, а не общий шаг в длинном логе.
   format:
     name: dotnet format (${{ matrix.project }})
-    runs-on: windows-latest
+    # Свои ветки собираются на домашней Windows-машине win-builder, форк-PR —
+    # на GitHub-hosted. Метка win-builder есть только у нашей VM, поэтому
+    # чужой код физически не попадёт на домашнее железо даже при ошибочном
+    # одобрении: для форка выражение вычисляется в windows-latest.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'windows-latest' || 'win-builder' }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -619,7 +627,11 @@ jobs:
 
   installer-windows:
     name: Installer (NSIS)
-    runs-on: windows-latest
+    # Свои ветки собираются на домашней Windows-машине win-builder, форк-PR —
+    # на GitHub-hosted. Метка win-builder есть только у нашей VM, поэтому
+    # чужой код физически не попадёт на домашнее железо даже при ошибочном
+    # одобрении: для форка выражение вычисляется в windows-latest.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'windows-latest' || 'win-builder' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
