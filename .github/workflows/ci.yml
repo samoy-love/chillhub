@@ -340,7 +340,7 @@ jobs:
           # Кэш здесь НЕ через встроенный `cache: true`.
           #
           # На windows-latest этот джоб не только тестирует нативно, но ещё и
-          # кросс-компилирует linux/arm64 (шаг ниже). Встроенный кэш setup-go
+          # кросс-компилирует linux/amd64 (шаг ниже). Встроенный кэш setup-go
           # ключуется от runner.os + хэша go.sum и не знает про GOOS/GOARCH —
           # объекты нативной сборки и кросс-компиляции падали в один и тот же
           # GOCACHE и вытесняли друг друга: отсюда разброс 5m21s/1m35s на
@@ -360,11 +360,11 @@ jobs:
             ${{ steps.go-cache-paths.outputs.gomodcache }}
           # Отдельное измерение ключа для windows-джобы: она одна собирает под
           # двумя разными GOOS/GOARCH в рамках одного прогона (нативно и
-          # linux/arm64), поэтому её кэш держится отдельно от простого
+          # linux/amd64), поэтому её кэш держится отдельно от простого
           # ubuntu-native, чтобы не смешивать объекты двух платформ.
-          key: go-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'native-and-linux-arm64' || 'native' }}-${{ hashFiles('server/go.sum') }}
+          key: go-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'native-and-linux-amd64' || 'native' }}-${{ hashFiles('server/go.sum') }}
           restore-keys: |
-            go-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'native-and-linux-arm64' || 'native' }}-
+            go-${{ matrix.os }}-${{ matrix.os == 'windows-latest' && 'native-and-linux-amd64' || 'native' }}-
       - name: Run golangci-lint
         # Приколот к SHA, а не к тегу: тег v8 мутабелен, а этот шаг выполняется
         # рядом с исходниками и кэшем модулей.
@@ -378,13 +378,13 @@ jobs:
         run: go vet ./...
 
       # Кросс-компиляция под прод: ловит то, что не собирается под
-      # linux/arm64, даже когда прогон идёт на Windows.
-      - name: Go build (linux/arm64, как на проде)
+      # linux/amd64, даже когда прогон идёт на Windows.
+      - name: Go build (linux/amd64, как на проде)
         if: matrix.os == 'windows-latest'
         working-directory: server
         env:
           GOOS: linux
-          GOARCH: arm64
+          GOARCH: amd64
         run: go build ./...
 
       # -race только на Linux: он требует cgo, а на windows-раннере это тянет
@@ -481,10 +481,10 @@ jobs:
 
   dotnet-lint:
     name: C# (launcher)
-    # Свои ветки собираются на домашней Windows-машине win-builder, форк-PR —
-    # на GitHub-hosted. Метка win-builder есть только у нашей VM, поэтому
-    # чужой код физически не попадёт на домашнее железо даже при ошибочном
-    # одобрении: для форка выражение вычисляется в windows-latest.
+    # Свои ветки собираются на собственном Windows-раннере, форк-PR — на
+    # GitHub-hosted. Метка win-builder есть только у нашей машины, поэтому
+    # чужой код до неё физически не доедет даже при ошибочном одобрении:
+    # для форка выражение вычисляется в windows-latest.
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'windows-latest' || 'win-builder' }}
     timeout-minutes: 15
     steps:
@@ -562,10 +562,10 @@ jobs:
   # раз в матрице отмечает конкретный проект, а не общий шаг в длинном логе.
   format:
     name: dotnet format (${{ matrix.project }})
-    # Свои ветки собираются на домашней Windows-машине win-builder, форк-PR —
-    # на GitHub-hosted. Метка win-builder есть только у нашей VM, поэтому
-    # чужой код физически не попадёт на домашнее железо даже при ошибочном
-    # одобрении: для форка выражение вычисляется в windows-latest.
+    # Свои ветки собираются на собственном Windows-раннере, форк-PR — на
+    # GitHub-hosted. Метка win-builder есть только у нашей машины, поэтому
+    # чужой код до неё физически не доедет даже при ошибочном одобрении:
+    # для форка выражение вычисляется в windows-latest.
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'windows-latest' || 'win-builder' }}
     timeout-minutes: 10
     strategy:
@@ -627,10 +627,10 @@ jobs:
 
   installer-windows:
     name: Installer (NSIS)
-    # Свои ветки собираются на домашней Windows-машине win-builder, форк-PR —
-    # на GitHub-hosted. Метка win-builder есть только у нашей VM, поэтому
-    # чужой код физически не попадёт на домашнее железо даже при ошибочном
-    # одобрении: для форка выражение вычисляется в windows-latest.
+    # Свои ветки собираются на собственном Windows-раннере, форк-PR — на
+    # GitHub-hosted. Метка win-builder есть только у нашей машины, поэтому
+    # чужой код до неё физически не доедет даже при ошибочном одобрении:
+    # для форка выражение вычисляется в windows-latest.
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'windows-latest' || 'win-builder' }}
     timeout-minutes: 15
     steps:
