@@ -51,23 +51,33 @@ namespace ChillHub.Tests {
                 FileHasher.ComputeHashes(path, out _, out _);
             }
 
-            var before = PrivateBytes();
+            var before = NativeBytes();
             for (var i = 0; i < Iterations; i++) {
                 FileHasher.ComputeHashes(path, out _, out _);
             }
 
-            var grown = PrivateBytes() - before;
+            var grown = NativeBytes() - before;
             Assert.True(
                 grown < 6L * 1024 * 1024,
-                $"после {Iterations} хеширований память процесса выросла на {grown / (1024 * 1024)} МБ — состояние хешера не освобождается");
+                $"после {Iterations} хеширований нативная память выросла на {grown / (1024 * 1024)} МБ — состояние хешера не освобождается");
         }
 
-        private static long PrivateBytes() {
+        /// <summary>
+        /// Память процесса за вычетом управляемой кучи — то, что удерживает нативный код.
+        /// <para>
+        /// Раньше здесь были просто private bytes, и тест мерил заодно управляемую кучу.
+        /// Сборщик мусора не обязан возвращать системе уже зафиксированные сегменты, а
+        /// сколько их — зависит от числа ядер и объёма памяти машины. Из-за этого тест
+        /// проходил на одном раннере и падал на другом, ничего не сообщая о том, ради
+        /// чего написан: об утечке в нативном состоянии Blake3.
+        /// </para>
+        /// </summary>
+        private static long NativeBytes() {
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
             using var self = Process.GetCurrentProcess();
-            return self.PrivateMemorySize64;
+            return self.PrivateMemorySize64 - GC.GetTotalMemory(false);
         }
     }
 }
