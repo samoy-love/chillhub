@@ -423,7 +423,7 @@ jobs:
         || (github.event_name == 'push' && github.ref == 'refs/heads/main'
             && (needs.changes.result != 'success' || needs.changes.outputs.site == 'true'))
       )
-    uses: tr0llex/deploy-kit/.github/workflows/static-site.yml@main
+    uses: samoy-love/deploy-kit/.github/workflows/static-site.yml@main
     with:
       config: .deploy-kit/site.env
       # Лендинг — статика без сборки; регресс для него это линтеры разметки.
@@ -442,7 +442,7 @@ jobs:
         || (github.event_name == 'push' && github.ref == 'refs/heads/main'
             && (needs.changes.result != 'success' || needs.changes.outputs.api == 'true'))
       )
-    uses: tr0llex/deploy-kit/.github/workflows/go-service.yml@main
+    uses: samoy-love/deploy-kit/.github/workflows/go-service.yml@main
     with:
       config: .deploy-kit/api.env
       workdir: server
@@ -465,7 +465,7 @@ jobs:
         || (github.event_name == 'push' && github.ref == 'refs/heads/main'
             && (needs.changes.result != 'success' || needs.changes.outputs.admin == 'true'))
       )
-    uses: tr0llex/deploy-kit/.github/workflows/go-service.yml@main
+    uses: samoy-love/deploy-kit/.github/workflows/go-service.yml@main
     with:
       config: .deploy-kit/admin.env
       workdir: server
@@ -493,7 +493,7 @@ jobs:
         || (github.event_name == 'push' && github.ref == 'refs/heads/main'
             && (needs.changes.result != 'success' || needs.changes.outputs.admin_ui == 'true'))
       )
-    uses: tr0llex/deploy-kit/.github/workflows/static-site.yml@main
+    uses: samoy-love/deploy-kit/.github/workflows/static-site.yml@main
     with:
       config: .deploy-kit/admin-ui.env
       # Морда админки — та же разметка и стили, что и лендинг: гейт тот же.
@@ -542,7 +542,7 @@ jobs:
         || (github.event_name == 'push' && github.ref == 'refs/heads/main'
             && (needs.changes.result != 'success' || needs.changes.outputs.client == 'true'))
       )
-    uses: tr0llex/deploy-kit/.github/workflows/desktop-artifact.yml@main
+    uses: samoy-love/deploy-kit/.github/workflows/desktop-artifact.yml@main
     with:
       # ВСЯ цель — сборка, версия, куда класть и что сверять — описана в
       # .deploy-kit/installer.env, и это описание общее с локальной выкаткой:
