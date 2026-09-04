@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Админ-панель Chill Hub 2.0</title>
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="noindex, nofollow">
+
+<!-- Шрифты лежат рядом, а не на Google Fonts: у /admin/ui/ действует CSP
+     с font-src 'self', и подключение с чужого домена молча отбрасывается. -->
+<link rel="stylesheet" href="./vendor/fonts/fonts.css">
+
+<link rel="stylesheet" href="./admin.css">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+</head>
+<body>
+
+<div class="app">
+
+  <div class="topbar">
+    <div class="brand">
+      <img src="../favicon.svg" alt="">
+      <span>Chill Hub</span>
+      <span class="badge badge--accent">2.0</span>
+    </div>
+
+    <button class="search" type="button" data-open-palette>
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" aria-hidden="true">
+        <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/>
+        <path d="M16 16l4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <span class="lbl">Раздел, игра, сборка, код ошибки…</span>
+      <kbd>Ctrl K</kbd>
+    </button>
+
+    <span class="spacer"></span>
+
+    <!-- «Ждёт решения» считает ровно то, что решает человек: загруженную,
+         но не активированную сборку лаунчера и модпаки, отставшие от
+         Thunderstore. В панели 1.0 это были значки на двух вкладках из
+         восьми — узнать о них можно было только зайдя на вкладку. -->
+    <span class="badge" data-waiting title="Загруженные сборки и отставшие модпаки">
+      <span class="dot"></span><span data-waiting-text>—</span>
+    </span>
+    <span class="badge" data-maint title="Режим технических работ">
+      <span class="dot"></span><span data-maint-text>—</span>
+    </span>
+
+    <button class="btn btn--text" type="button" data-refresh>Обновить всё</button>
+    <button class="btn" type="button" data-logout>Выйти</button>
+  </div>
+
+  <nav class="rail" aria-label="Разделы панели">
+    <span class="group">Выкатка</span>
+    <a href="#overview" data-nav>Что решить</a>
+    <a href="#launcher" data-nav>Лаунчер</a>
+    <a href="#packs" data-nav>Сборки модов</a>
+    <a href="#games" data-nav>Игры</a>
+
+    <span class="group">Игрокам</span>
+    <a href="#news" data-nav>Новости</a>
+    <a href="#inbox" data-nav>Обращения</a>
+
+    <span class="group">Служебное</span>
+    <a href="#maint" data-nav>Технические работы</a>
+    <a href="#errors" data-nav>Ошибки у игроков</a>
+    <a href="#transfer" data-nav>Диск и загрузки</a>
+  </nav>
+
+  <main class="main" data-main>
+    <div class="stack">
+      <div class="sk" style="width: 220px; height: 18px"></div>
+      <div class="sk" style="width: 100%; height: 120px"></div>
+    </div>
+  </main>
+</div>
+
+<div class="palette" hidden data-palette>
+  <div class="box" role="dialog" aria-modal="true" aria-label="Поиск по панели">
+    <input type="search" placeholder="Раздел, игра, сборка, код ошибки…" data-palette-input aria-label="Поиск">
+    <ul data-palette-list role="listbox"></ul>
+  </div>
+</div>
+
+<div class="toasts" data-toasts aria-live="polite"></div>
+
+<!-- Транспорт подключается первым: он подменяет window.fetch и XHR, и
+     всё, что грузится после, обязано ходить уже через него. -->
+<script src="./transport.js"></script>
+<script src="./data.js"></script>
+<script src="./admin.js"></script>
+</body>
+</html>

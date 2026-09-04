@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chill Hub — лаунчер для игры с модами</title>
+<meta name="description" content="Chill Hub качает сборки модов, обновляет их сам и следит, чтобы у всей компании были одинаковые версии. Запускает вашу копию игры из Steam или свою — с модами и без.">
+
+<meta name="color-scheme" content="dark light">
+<link rel="canonical" href="https://launcher.samoy.love/v2/">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Chill Hub">
+<meta property="og:locale" content="ru_RU">
+<meta property="og:url" content="https://launcher.samoy.love/v2/">
+<meta property="og:title" content="Chill Hub — лаунчер для игры с модами">
+<meta property="og:description" content="Моды ставит лаунчер, вы нажимаете «Играть». Одинаковые сборки у всей компании — значит, вы попадёте в одно лобби.">
+<meta property="og:image" content="https://launcher.samoy.love/assets/images/launcher.png">
+<meta property="og:image:width" content="1298">
+<meta property="og:image:height" content="953">
+<meta property="og:image:alt" content="Главный экран лаунчера Chill Hub: список игр, выбранная игра и очередь загрузок">
+<meta name="twitter:card" content="summary_large_image">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bitter:wght@500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="./styles.css">
+<link rel="stylesheet" href="./emu.css">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon.ico" type="image/x-icon">
+</head>
+<body>
+
+<a class="skip" href="#main">К содержимому</a>
+
+<div class="backdrop" aria-hidden="true"><canvas></canvas></div>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="./">
+      <img src="../assets/icons/logo.svg" alt="" width="24" height="24">
+      <span>Chill Hub</span>
+    </a>
+    <nav class="site-nav">
+      <a class="nav-link" href="#try">Попробовать</a>
+      <a class="nav-link" href="#games">Игры</a>
+      <a class="nav-link" href="#how">Как это работает</a>
+      <a class="nav-link" href="#trust">Что ставится</a>
+      <a class="btn btn--primary" href="/downloads/ChillHub-Setup.exe" download="ChillHub-Setup.exe">Скачать</a>
+    </nav>
+  </div>
+</header>
+
+<!-- Баннер технических работ. Тот же /api/maintenance, что читает
+     лаунчер: если сборки сейчас не отдаются, человеку незачем узнавать
+     об этом уже после установки. -->
+<div class="maint" data-maint hidden>
+  <div class="wrap"><b>Технические работы</b><span data-maint-text></span></div>
+</div>
+
+<main id="main">
+
+  <section class="hero">
+    <div class="wrap">
+      <div>
+        <span class="eyebrow">Windows 10 и 11</span>
+        <h1>Моды ставит лаунчер.<br>Вы нажимаете <em>«Играть»</em>.</h1>
+        <p class="hero-lede">
+          Chill Hub качает сборку модов, обновляет её сам и следит, чтобы у всей
+          компании были одинаковые версии. Совпали версии — попали в одно лобби.
+        </p>
+
+        <div class="hero-cta">
+          <a class="btn btn--primary btn--lg" href="/downloads/ChillHub-Setup.exe" download="ChillHub-Setup.exe">
+            Скачать установщик
+          </a>
+          <a class="btn btn--lg" href="#try">Сначала попробовать</a>
+        </div>
+
+        <!-- Версия подтягивается из манифеста самообновления: свёрстанная
+             цифра протухает молча. Размер, дата и хеш правятся руками при
+             выпуске релиза — устаревший хеш хуже, чем его отсутствие. -->
+        <ul class="dl-facts">
+          <li><b>версия</b> <span data-launcher-version>—</span></li>
+          <li hidden data-setup="size"><b>размер</b> <span></span></li>
+          <li hidden data-setup="builtAt"><b>собран</b> <span></span></li>
+          <li hidden data-setup="sha256"><button class="copy-hash" type="button">скопировать SHA‑256</button></li>
+        </ul>
+      </div>
+
+      <!-- Снимок уходит за правый край экрана и не обведён рамкой: окно
+           продолжается за страницей, а не лежит на ней картинкой в
+           рамочке. Подписи нет намеренно — она пересказывала то, что и
+           так видно, и вторым голосом спорила с заголовком слева. -->
+      <div class="hero-shot">
+        <img src="../assets/images/launcher.png" alt="Окно лаунчера: слева список игр, справа выбранная игра, внизу очередь загрузок"
+             width="1298" height="953" class="skeleton" fetchpriority="high" decoding="async">
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ЭМУЛЯТОР ================= -->
+  <!-- Не скриншот и не ролик, а работающая копия главного экрана.
+       Игры и версии в ней — из того же /api/games, который читает
+       настоящий лаунчер; кнопки, подписи и порядок очереди перенесены
+       из его исходников. -->
+  <section class="section" id="try">
+    <div class="wrap">
+      <header>
+        <div>
+          <span class="eyebrow">Лаунчер в браузере</span>
+          <h2>Попробуйте, ничего не устанавливая</h2>
+        </div>
+        <p>Копия главного экрана на настоящих данных каталога. Поставьте игру в очередь, дождитесь загрузки, запустите.</p>
+      </header>
+
+      <div class="shot">
+        <div class="emu" data-emu>
+          <div class="emu-title"><span class="emu-app">Лаунчер Chill Hub</span></div>
+          <div class="emu-empty big"><b>Загружаем каталог…</b></div>
+        </div>
+      </div>
+
+      <p class="emu-note" data-emu-note aria-live="polite"></p>
+
+      <ul class="emu-legend">
+        <li>Загрузка здесь ненастоящая: качать гигабайты в браузер незачем.</li>
+        <li>Остальное настоящее: состояния кнопок, подписи и порядок очереди взяты из кода лаунчера.</li>
+        <li>Значок и обложка — разные файлы и приходят порознь. Чего нет, то заменяется заглушкой: лаунчер делает так же.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ================= ИГРЫ ================= -->
+  <!-- Карточки собираются из /api/games. Ни одного названия игры и ни
+       одного номера версии в разметке нет: добавили игру в админке —
+       она появилась здесь, и сайт трогать не пришлось. -->
+  <section class="section" id="games">
+    <div class="wrap">
+      <header>
+        <div>
+          <span class="eyebrow">Каталог</span>
+          <h2>Что уже собрано</h2>
+        </div>
+        <p>Сборки составляет человек, а не автоматика. У каждой игры одна активная сборка — та же самая у всех, кто её скачал.</p>
+      </header>
+
+      <div class="games" data-games>
+        <div class="game sk-card" aria-hidden="true"></div>
+        <div class="game sk-card" aria-hidden="true"></div>
+        <div class="game sk-card" aria-hidden="true"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= НОВОСТИ ================= -->
+  <section class="section" id="news">
+    <div class="wrap">
+      <header>
+        <div>
+          <span class="eyebrow">Новости</span>
+          <h2>О чём писали недавно</h2>
+        </div>
+        <p>Те же заметки, что видно на главном экране лаунчера.</p>
+      </header>
+
+      <div class="posts" data-news>
+        <div class="post sk-card" aria-hidden="true"></div>
+        <div class="post sk-card" aria-hidden="true"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= КАК ЭТО РАБОТАЕТ ================= -->
+  <section class="section" id="how">
+    <div class="wrap">
+      <header>
+        <div>
+          <span class="eyebrow">Порядок действий</span>
+          <h2>От скачивания до лобби</h2>
+        </div>
+        <p>Четыре шага, из которых три занимают меньше минуты. Дольше всего качается сама сборка.</p>
+      </header>
+
+      <ol class="steps">
+        <li>
+          <h3>Ставите установщик</h3>
+          <p>Установщик не просит прав администратора: лаунчер живёт в вашем профиле, а не в <code>Program&nbsp;Files</code>. Windows покажет предупреждение — что с ним делать, написано ниже.</p>
+        </li>
+        <li>
+          <h3>Выбираете игру</h3>
+          <p>Слева — список игр с состоянием каждой: установлена, есть обновление, качается. Сколько места нужно, лаунчер говорит до начала загрузки, а не после отказа на середине.</p>
+        </li>
+        <li>
+          <h3>Ставите в очередь</h3>
+          <p>Качается одна игра, остальные ждут: два потока на один канал делят скорость и удлиняют обе загрузки. Порядок в очереди можно менять, лишнее — отменять. Оборвалась связь — докачает с места обрыва.</p>
+        </li>
+        <li>
+          <h3>Запускаете как удобно</h3>
+          <p>Свою копию из Steam или сборку, которую скачал лаунчер, и каждую — с модами или без. Четыре варианта; тот, которым играли в прошлый раз, стоит первым и выделен цветом. Моды подкладываются на время сессии и убираются, когда игру закрыли.</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ================= ЧТО СТАВИТСЯ ================= -->
+  <section class="section" id="trust">
+    <div class="wrap">
+      <header>
+        <div>
+          <span class="eyebrow">Без сюрпризов</span>
+          <h2>Что попадёт на компьютер</h2>
+        </div>
+        <p>Три каталога, никаких служб и записей в автозагрузке. Удаление — обычное, через «Программы и компоненты».</p>
+      </header>
+
+      <div class="facts">
+        <div>
+          <h3>Сам лаунчер</h3>
+          <p><code>%LOCALAPPDATA%\ChillHub</code> — только файлы сборки. Обновляется сам, отдельной программой: запущенный процесс не может переписать свои же файлы.</p>
+        </div>
+        <div>
+          <h3>Настройки и журналы</h3>
+          <p><code>%APPDATA%\ChillHub</code> — конфиг, журналы и отметка о наигранном времени. Переустановка их не трогает.</p>
+        </div>
+        <div>
+          <h3>Файлы игр</h3>
+          <p>Каталог с играми выбираете сами. Сколько места нужно и сколько свободно, лаунчер пишет рядом с кнопкой — до загрузки, а не после отказа на середине.</p>
+        </div>
+        <div>
+          <h3>Ваша копия игры</h3>
+          <p>Моды подкладываются в папку игры только на время сессии и убираются, когда игру закрыли. Steam-аккаунт не трогается, пароль не спрашивается.</p>
+        </div>
+        <div>
+          <h3>Сколько стоит</h3>
+          <p>Нисколько, и платной версии не планируется. Это проект для своей компании, выложенный наружу, а не бизнес.</p>
+        </div>
+        <div>
+          <h3>Что уходит на сервер</h3>
+          <p>Обезличенная статистика скачиваний и ошибок, чтобы чинить обрывы загрузки. Ни аккаунтов, ни логинов: регистрации нет. Подробности — в <a href="./privacy.html">политике приватности</a>.</p>
+        </div>
+      </div>
+
+      <div class="warnbox">
+        <h3>Windows покажет синее окно «Система Windows защитила ваш компьютер»</h3>
+        <p>
+          Так и будет, и это ожидаемо: установщик не подписан сертификатом. Подпись
+          стоит денег и выдаётся на юрлицо, у бесплатного проекта её нет. Чтобы
+          продолжить: «Подробнее» → «Выполнить в любом случае».
+        </p>
+        <p data-setup="sha256" hidden>
+          Если верить на слово не хочется — сверьте SHA‑256 скачанного файла с
+          опубликованным под кнопкой:
+          <code>Get-FileHash .\ChillHub-Setup.exe</code> в PowerShell.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ЗАЯВКА ================= -->
+  <section class="section" id="wish">
+    <div class="wrap">
+      <header>
+        <div>
+          <span class="eyebrow">Заявки</span>
+          <h2>Какую игру добавить</h2>
+        </div>
+        <p>Крутите, если не знаете, чего хотите. Знаете — пишите сразу: заявка попадёт туда же, куда «Поделиться идеей» из лаунчера.</p>
+      </header>
+
+      <div class="slots" data-slots>
+        <div class="reels" aria-hidden="true">
+          <div class="reel"><div class="reel-track"></div><div class="reel-line"></div></div>
+          <div class="reel"><div class="reel-track"></div><div class="reel-line"></div></div>
+          <div class="reel"><div class="reel-track"></div><div class="reel-line"></div></div>
+        </div>
+        <p class="slots-out" id="slots-out" data-slots-out aria-live="polite"></p>
+        <div class="slots-actions">
+          <button class="btn" type="button" data-slots-spin aria-describedby="slots-out">Крутить</button>
+        </div>
+
+        <form class="wish" data-wish>
+          <div class="field">
+            <label for="wish-text">Игра и пара слов о ней</label>
+            <textarea id="wish-text" name="comment" rows="3" required maxlength="5000"
+                      placeholder="Название игры и пара слов — почему в неё стоит играть компанией"></textarea>
+          </div>
+          <div class="field">
+            <label for="wish-contact">Куда ответить <span class="faint">— по желанию</span></label>
+            <input id="wish-contact" name="contact" type="text" maxlength="200"
+                   placeholder="телеграм, почта, ник в Discord">
+          </div>
+          <div class="slots-actions">
+            <button class="btn btn--primary" type="submit">Отправить</button>
+            <span class="wish-note" data-wish-note aria-live="polite"></span>
+          </div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= СКАЧАТЬ ================= -->
+  <section class="section" id="download">
+    <div class="wrap">
+      <header>
+        <div>
+          <span class="eyebrow">Установка</span>
+          <h2>Скачать Chill Hub</h2>
+        </div>
+        <p>Один файл, установка без прав администратора, удаление обычным способом.</p>
+      </header>
+
+      <div class="hero-cta">
+        <a class="btn btn--primary btn--lg" href="/downloads/ChillHub-Setup.exe" download="ChillHub-Setup.exe">
+          Скачать для Windows
+        </a>
+        <a class="btn btn--lg" href="#trust">Что попадёт на компьютер</a>
+      </div>
+
+      <ul class="dl-facts" style="margin-top: var(--s3)">
+        <li><b>версия</b> <span data-launcher-version>—</span></li>
+        <li hidden data-setup="size"><b>размер</b> <span></span></li>
+        <li hidden data-setup="builtAt"><b>собран</b> <span></span></li>
+        <li><b>требуется</b> Windows 10 (21H2) или 11, 64 бита</li>
+      </ul>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div>
+      <a class="brand" href="./">
+        <img src="../assets/icons/logo.svg" alt="" width="24" height="24">
+        <span>Chill Hub</span>
+      </a>
+      <p style="margin-top: var(--s3)">
+        Чтобы играть с модами своей компанией. Проект некоммерческий,
+        исходники открыты.
+      </p>
+    </div>
+    <div>
+      <h4>Продукт</h4>
+      <ul>
+        <li><a href="#try">Попробовать</a></li>
+        <li><a href="#games">Игры</a></li>
+        <li><a href="#news">Новости</a></li>
+        <li><a href="/downloads/ChillHub-Setup.exe" download="ChillHub-Setup.exe">Скачать</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>Правила</h4>
+      <ul>
+        <li><a href="./terms.html">Условия использования</a></li>
+        <li><a href="./privacy.html">Политика приватности</a></li>
+        <li><a href="mailto:tr0llex.rus@gmail.com">Связаться</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="wrap" style="margin-top: var(--s5)">
+    <p class="faint">© <span data-year>2026</span> Chill Hub. Названия игр принадлежат их правообладателям.</p>
+  </div>
+</footer>
+
+<script src="./api.js"></script>
+<script src="./app.js" defer></script>
+<script src="./emu.js" defer></script>
+</body>
+</html>
