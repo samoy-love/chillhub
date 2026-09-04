@@ -219,6 +219,9 @@ export default [
       'server/admin_ui/v2/store.js',
       'server/admin_ui/v2/sections.js',
       'server/admin_ui/v2/upload.js',
+      'server/admin_ui/v2/registry.js',
+      'server/admin_ui/v2/news.js',
+      'server/admin_ui/v2/gallery.js',
       'server/admin_ui/v2/build.js',
       'landing/v2/emu-core.js'
     ],
