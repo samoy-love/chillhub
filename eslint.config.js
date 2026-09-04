@@ -168,7 +168,10 @@ export default [
       'server/admin_ui/v2/api.js',
       'server/admin_ui/v2/actions.js',
       'server/admin_ui/v2/store.js',
-      'server/admin_ui/v2/sections.js'
+      'server/admin_ui/v2/sections.js',
+
+      // Лендинг 2.0: правила копии лаунчера, тот же guard `typeof module`.
+      'landing/v2/emu-core.js'
     ],
     languageOptions: {
       globals: {
