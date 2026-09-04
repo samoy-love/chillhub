@@ -15,7 +15,7 @@
 (() => {
   'use strict';
 
-  const calm = matchMedia('(prefers-reduced-motion: reduce)');
+  const calm = window.matchMedia('(prefers-reduced-motion: reduce)');
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
@@ -40,7 +40,7 @@
     const ROWS = 26;
 
     const readColors = () => {
-      const cs = getComputedStyle(document.documentElement);
+      const cs = window.getComputedStyle(document.documentElement);
       return {
         bg: cs.getPropertyValue('--page').trim() || '#0e1114',
         line: cs.getPropertyValue('--line').trim() || '#262e36',
@@ -52,7 +52,7 @@
     function resize() {
       // Плотность режется двойкой: на 3x-экране поле стоит втрое дороже,
       // а разницы в линиях толщиной в пиксель не видно.
-      const dpr = Math.min(devicePixelRatio || 1, 2);
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
       w = host.clientWidth;
       h = host.clientHeight;
       cv.width = Math.max(1, Math.round(w * dpr));
@@ -101,10 +101,10 @@
       raf = 0;
     };
 
-    addEventListener('resize', resize, { passive: true });
+    window.addEventListener('resize', resize, { passive: true });
     document.addEventListener('visibilitychange', () => (document.hidden ? stop() : start()));
     calm.addEventListener('change', () => (calm.matches ? (stop(), draw()) : start()));
-    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', resize);
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', resize);
 
     resize();
     host.classList.add('on');

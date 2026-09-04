@@ -849,7 +849,7 @@
       }
     });
 
-    addEventListener('keydown', (e) => {
+    window.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         box.hidden ? open() : close();
@@ -888,7 +888,7 @@
     if (!again) {
       topbar();
       palette();
-      addEventListener('hashchange', route);
+      window.addEventListener('hashchange', route);
     }
     route();
     if (again) {

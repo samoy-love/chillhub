@@ -16,14 +16,12 @@
   --e-panel-2: #221d31;
   --e-line: #2c2540;
   --e-line-2: #3b3355;
-
   --e-fg: #e9e6f2;
   --e-fg-2: #9d95b4;
   --e-fg-3: #6f6786;
-
   --e-accent: #7c5cff;
   --e-accent-hi: #8f73ff;
-  --e-accent-ink: #ffffff;
+  --e-accent-ink: #fff;
   --e-ok: #5fbf82;
   --e-warn: #d8a34a;
 
@@ -61,10 +59,12 @@
 
 .emu-win { margin-left: auto; display: flex; gap: 16px; }
 .emu-win i { width: 11px; height: 11px; position: relative; }
+
 .emu-win i::before,
 .emu-win i::after { content: ""; position: absolute; background: var(--e-fg-3); }
-.emu-win .min::before { inset: 5px 0 5px; height: 1px; }
+.emu-win .min::before { inset: 5px 0; height: 1px; }
 .emu-win .max::before { inset: 1px; border: 1px solid var(--e-fg-3); background: none; }
+
 .emu-win .cls::before,
 .emu-win .cls::after { inset: 5px 0; height: 1px; }
 .emu-win .cls::before { transform: rotate(45deg); }
@@ -178,6 +178,7 @@
 /* Витрина на телефоне ниже: обложка на 208 px съедала пол-экрана. */
 .emu--compact .emu-hero { min-height: 0; padding: 12px; }
 .emu--compact .emu-hero h3 { font-size: 20px; }
+
 .emu--compact .emu-hero.has-cover h3,
 .emu--compact .emu-hero.has-cover .emu-meta,
 .emu--compact .emu-hero.has-cover .emu-hint { max-width: none; }
@@ -188,6 +189,7 @@
 .emu--compact .emu-hero.has-cover::after { background: none; }
 
 .emu--compact .emu-actions { gap: 6px; }
+
 .emu--compact .emu-action,
 .emu--compact .emu-launch { min-width: 0; flex: 1; height: 42px; padding-inline: 12px; }
 .emu--compact .emu-about { margin-left: 0; height: 42px; padding-inline: 12px; }
@@ -328,6 +330,7 @@
   position: absolute;
   inset: 0;
   background: var(--cover) right center / cover no-repeat;
+
   /* Правый край — там же, где в лаунчере: фигуры не должны упираться в рамку. */
   z-index: 0;
 }
@@ -493,7 +496,6 @@
 .emu-post-cover {
   width: 108px;
   height: 62px;
-  flex: 0 0 auto;
   border-radius: 6px;
   flex: 0 0 auto;
   background: linear-gradient(150deg, var(--e-panel-2), var(--e-line));

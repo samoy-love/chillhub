@@ -22,10 +22,8 @@
   --surface: #14181d;
   --surface-2: #1a2027;
   --surface-3: #212932;
-
   --line: #262e36;
   --line-2: #384450;
-
   --fg: #dde2e6;
   --fg-2: #98a3ac;
   --fg-3: #7a848d;
@@ -41,14 +39,12 @@
   --ok: #6f9d63;
   --warn: #bf9439;
   --bad: #c0564d;
-
   --shot-frame: #0a0c0e;
 
   /* Радиус почти отсутствует: скругление здесь ничего не сообщает,
      а «мягкий по умолчанию» — первый признак шаблона. */
   --r: 3px;
   --r-lg: 5px;
-
   --header-h: 60px;
 
   /* Модульная шкала отступов, шаг 1.5. Промежуточных значений нет:
@@ -60,13 +56,11 @@
   --s5: 36px;
   --s6: 58px;
   --s7: 92px;
-
   --measure: 64ch;
   --wide: 1180px;
-
   --sans: "IBM Plex Sans", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
-  --display: Bitter, ui-serif, Georgia, serif;
-  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --display: bitter, ui-serif, georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", consolas, monospace;
 }
 
 /* Светлая тема — тёплая бумага, а не белый лист: на #fff тёмные
@@ -77,20 +71,16 @@
     --surface: #f6f3ed;
     --surface-2: #ebe6dd;
     --surface-3: #e1dbd0;
-
     --line: #d8d1c4;
     --line-2: #b9b1a1;
-
     --fg: #1e2226;
     --fg-2: #5a6167;
     --fg-3: #6b6459;
-
     --ember: #a8461c;
     --ember-hi: #8f3a15;
     --ember-lo: #c0673d;
     --on-ember: #fdf6f1;
     --ember-wash: rgb(168 70 28 / 10%);
-
     --shot-frame: #cdc6b8;
   }
 }
@@ -340,6 +330,7 @@ kbd {
    «холодную ночь». Но амплитуда и контраст срезаны так, чтобы поле
    читалось как фактура, а не как заставка, и оно больше не закрывает
    старт страницы спиннером — сетка рисуется поверх готового фона. */
+
 /* Имя намеренно не `.field`: этот же класс носят строки формы заявки,
    и на общем имени они получали `position: fixed; inset: 0` — то есть
    раскрывались во весь экран непрозрачной плашкой и закрывали
@@ -355,11 +346,11 @@ kbd {
 .backdrop canvas {
   width: 100%;
   height: 100%;
-  opacity: 0;
+  opacity: 0%;
   transition: opacity 1.2s ease;
 }
 
-.backdrop.on canvas { opacity: 1; }
+.backdrop.on canvas { opacity: 100%; }
 
 main { position: relative; z-index: 1; }
 

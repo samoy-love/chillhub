@@ -224,7 +224,7 @@
   async function section(live, key, path, pick) {
     try {
       const data = pick(await get(path));
-      if (data == null) throw new Error(path + ': пустой ответ');
+      if (data === null || data === undefined) throw new Error(path + ': пустой ответ');
       live.add(key);
       return data;
     } catch {
@@ -264,11 +264,10 @@
         ),
         section(live, 'days', 'metrics/summary', (d) => arr(d?.days ?? d)),
         section(live, 'errors', 'metrics/errors', (d) => arr(d)),
-        section(live, 'disk', 'system/free', (d) =>
-          d && (d.freeBytes ?? d.free) != null
-            ? { freeBytes: d.freeBytes ?? d.free, totalBytes: d.totalBytes ?? d.total ?? 0 }
-            : null
-        ),
+        section(live, 'disk', 'system/free', (d) => {
+          const free = d?.freeBytes ?? d?.free;
+          return typeof free === 'number' ? { freeBytes: free, totalBytes: d.totalBytes ?? d.total ?? 0 } : null;
+        }),
       ]);
 
     return {

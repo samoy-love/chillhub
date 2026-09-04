@@ -32,7 +32,7 @@
      высоты: список, витрина, лента и очередь встают друг под друга и
      каждая ужата до нечитаемости. Ниже 720 px показываем короткий
      вариант — то же поведение, но только главное. */
-  const wide = matchMedia('(min-width: 720px)');
+  const wide = window.matchMedia('(min-width: 720px)');
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
   /* ---------- Порт HomeFormat.cs ---------- */
