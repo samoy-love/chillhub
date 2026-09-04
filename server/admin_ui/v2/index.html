@@ -85,6 +85,9 @@
 
 <div class="toasts" data-toasts aria-live="polite"></div>
 
+<!-- Транспорт подключается первым: он подменяет window.fetch и XHR, и
+     всё, что грузится после, обязано ходить уже через него. -->
+<script src="./transport.js"></script>
 <script src="./data.js"></script>
 <script src="./admin.js"></script>
 </body>
