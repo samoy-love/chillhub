@@ -429,6 +429,55 @@ main { position: relative; z-index: 1; }
 
 .dl-facts .copy-hash:hover { color: var(--ember); }
 
+/* ---------- Снимок в первом экране ---------- */
+
+/* Окно показано обрезанным, а не вписанным в рамку целиком: так видно,
+   что программа больше, чем помещается в колонку, и взгляд не считает
+   картинку иллюстрацией под стеклом. Правой границы нет, справа кадр
+   уходит в градиент — срез выглядит намеренным, а не обрубленным.
+
+   Вылет за край вьюпорта делать не стал: он считается через 100vw,
+   который на десктопе включает полосу прокрутки, и страница получает
+   горизонтальный скролл на ровном месте. */
+.hero-shot {
+  position: relative;
+  border: 1px solid var(--line);
+  border-right: 0;
+  border-radius: var(--r-lg) 0 0 var(--r-lg);
+  background: var(--shot-frame);
+  overflow: hidden;
+}
+
+.hero-shot img {
+  display: block;
+  width: 100%;
+
+  /* Кадр шире и ниже исходника: справа срезается край окна, снизу —
+     очередь загрузок, которую страница ниже показывает вживую. */
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  object-position: left top;
+}
+
+.hero-shot::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 96px;
+  background: linear-gradient(90deg, transparent, var(--page));
+  pointer-events: none;
+}
+
+@media (width < 900px) {
+  .hero-shot {
+    border-right: 1px solid var(--line);
+    border-radius: var(--r-lg);
+  }
+
+  .hero-shot img { aspect-ratio: 1298 / 953; }
+  .hero-shot::after { display: none; }
+}
+
 /* ---------- Рамка скриншота ---------- */
 
 .shot {
