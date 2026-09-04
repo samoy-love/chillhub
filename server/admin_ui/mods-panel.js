@@ -45,6 +45,27 @@
     if (typeof window !== 'undefined' && window.notify) return window.notify(msg);
   }
 
+  // pendingRefresh гасит значок «здесь ждут действия» сразу после того, как
+  // действие сделано. Сводку сервер держит десять минут, поэтому здесь просят
+  // пересчитать её заново: иначе значок висит над уже активированным модпаком
+  // до конца этого срока.
+  function pendingRefresh() {
+    if (typeof window === 'undefined' || !window.refreshPendingBadges) return;
+    try { window.refreshPendingBadges(null, null, { force: true }); } catch (_) { /* значок не критичен */ }
+  }
+
+  // plural живёт в registry-diff.js (он грузится раньше); в тестах модуля рядом
+  // может не быть, поэтому форма выбирается через мягкую обёртку.
+  function plural(n, one, few, many) {
+    if (typeof window !== 'undefined' && window.plural) return window.plural(n, one, few, many);
+    const mod100 = n % 100;
+    if (mod100 >= 11 && mod100 <= 14) return many;
+    const mod10 = n % 10;
+    if (mod10 === 1) return one;
+    if (mod10 >= 2 && mod10 <= 4) return few;
+    return many;
+  }
+
   // formatCount делает из 2699026 «2.7M» — в карточке каталога важен порядок
   // величины, а не точное число загрузок.
   function formatCount(n) {
@@ -111,16 +132,49 @@
   // читатель ищет в них то, что и так написано в первой ячейке.
   const VERSIONS_TABLE_FROM = 4;
 
+  // collisionsTitle перечисляет встречи пакетов: где именно и между кем.
+  //
+  // Длинный список режется — подсказка на сорок строк не читается, — но число
+  // на значке остаётся полным, и «показано не всё» сказано словами.
+  const COLLISIONS_SHOWN = 6;
+  function collisionsTitle(list) {
+    const head = list.slice(0, COLLISIONS_SHOWN).map(function (c) {
+      const what = (c.kind === 'assembly' ? 'DLL ' : 'файл ') + (c.what || '');
+      const by = (c.by || []).join(' и ');
+      return by ? what + ' — ' + by : what;
+    });
+    const rest = list.length - head.length;
+    return 'Пакеты сборки встретились здесь, и остался файл того, кто писал последним:\n'
+      + head.join('\n')
+      + (rest > 0 ? '\n…и ещё ' + rest : '');
+  }
+
   // versionBits собирает то, что описывает одну собранную версию, — общее для
   // карточек и таблицы. Иначе две разметки разъезжаются на первой же правке:
   // в одной кнопка «Дифф» объясняет, почему выключена, в другой нет.
   function versionBits(it, upd, many) {
     const badges = [];
     if (it.active) badges.push('<span class="badge text-bg-success">активен</span>');
-    if (it.missing > 0) badges.push('<span class="badge text-bg-warning" title="Столько модов не нашлось на Thunderstore">пропущено ' + it.missing + '</span>');
+    // ЗНАЧОК НАЗЫВАЕТ ПРОПАВШИЕ МОДЫ. «Пропущено 2» — это число без единой
+    // подсказки, о чём речь: собран ли пакет без мелкого твика или без того,
+    // ради чего его собирали, оператор по нему не узнает, а состав лежит
+    // только файлом на диске.
+    const missing = (it.missing && it.missing.length) ? it.missing : null;
+    if (missing) {
+      badges.push('<span class="badge text-bg-warning" title="'
+        + esc('Этих модов больше нет на Thunderstore, пакет собран без них: ' + missing.join(', '))
+        + '">собран без ' + missing.length + ' ' + plural(missing.length, 'мода', 'модов', 'модов') + '</span>');
+    }
     if (upd && upd.latest) badges.push('<span class="badge text-bg-info">доступна ' + esc(upd.latest) + '</span>');
     if (upd && upd.deprecated) badges.push('<span class="badge text-bg-warning">автор пометил устаревшим</span>');
-    if (it.collisions > 0) badges.push('<span class="badge text-bg-warning" title="Два пакета положили файл по одному пути или принесли DLL с одним именем">пересечений ' + it.collisions + '</span>');
+    // ЗНАЧОК НАЗЫВАЕТ МЕСТА И ПАКЕТЫ. «Пересечений 2» — число, по которому
+    // нельзя решить ничего: спорят ли два README, которые никому не мешают,
+    // или две DLL с одним именем, из которых загрузчик возьмёт одну.
+    const clashes = (it.collisions && it.collisions.length) ? it.collisions : null;
+    if (clashes) {
+      badges.push('<span class="badge text-bg-warning" title="' + esc(collisionsTitle(clashes)) + '">'
+        + clashes.length + ' ' + plural(clashes.length, 'пересечение', 'пересечения', 'пересечений') + '</span>');
+    }
 
     // «Собрать N» и «Пересобрать» — разные действия, и раньше обе назывались
     // «Пересобрать». Первая берёт с Thunderstore ДРУГУЮ, более свежую версию
@@ -793,7 +847,7 @@
       else if (t.dataset.mdActivate) {
         e.preventDefault();
         post('/admin/mods/activate', { gameId: gameId(), version: t.dataset.mdActivate }, 'Модпак активирован')
-          .then(function (ok) { if (ok) reloadVersions(); });
+          .then(function (ok) { if (ok) { reloadVersions(); pendingRefresh(); } });
       } else if (t.dataset.mdDelete) {
         e.preventDefault();
         if (typeof confirm === 'function' && !confirm('Удалить версию ' + t.dataset.mdDelete + '?')) return;

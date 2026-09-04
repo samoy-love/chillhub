@@ -155,12 +155,13 @@ test('таблица версий отмечает активную, обнов�
         version: 'ASTeam-LethalReloaded-2.2.12',
         displayName: 'Lethal Reloaded',
         packageUrl: 'https://thunderstore.io/c/lethal-company/p/ASTeam/LethalReloaded/',
-        active: true, packages: 151, files: 2400, bytes: 123, missing: 0,
+        active: true, packages: 151, files: 2400, bytes: 123, missing: [],
         createdAt: '2026-08-27T10:00:00', rebuildable: true,
       },
       {
         version: 'Other-Pack-1.0.0', displayName: 'Other', active: false,
-        packages: 10, files: 40, bytes: 5, missing: 3, createdAt: '2026-08-20T10:00:00',
+        packages: 10, files: 40, bytes: 5, createdAt: '2026-08-20T10:00:00',
+        missing: ['Some-Tweak-1.0.0', 'Some-Skin-2.0.0', 'Some-Map-3.0.0'],
         rebuildable: true,
       },
     ],
@@ -173,7 +174,12 @@ test('таблица версий отмечает активную, обнов�
   assert.match(html, /Lethal Reloaded/);
   assert.match(html, /активен/);
   assert.match(html, /доступна 2\.2\.13/);
-  assert.match(html, /пропущено 3/);
+  // ЗНАЧОК НАЗЫВАЕТ ПРОПАВШИЕ МОДЫ: по числу нельзя понять, потерялся ли твик
+  // текстур или мод, ради которого пакет и собирали.
+  assert.match(html, /собран без 3 модов/);
+  assert.match(html, /Some-Tweak-1\.0\.0, Some-Skin-2\.0\.0, Some-Map-3\.0\.0/);
+  // У версии без потерь значка нет вовсе.
+  assert.strictEqual(html.match(/собран без \d/g).length, 1);
   // Активную версию нельзя ни удалить, ни активировать повторно.
   assert.doesNotMatch(html, /data-md-delete="ASTeam-LethalReloaded-2\.2\.12"/);
   assert.doesNotMatch(html, /data-md-activate="ASTeam-LethalReloaded-2\.2\.12"/);
@@ -212,10 +218,18 @@ test('пересечения между пакетами видны в спис�
   const html = versionsTableHtml({
     items: [{
       version: 'Team-Pack-1.0.0', displayName: 'Pack', active: true,
-      createdAt: '2026-08-27T10:00:00', rebuildable: true, collisions: 2,
+      createdAt: '2026-08-27T10:00:00', rebuildable: true,
+      collisions: [
+        { kind: 'path', what: 'BepInEx/core/BepInEx.dll', by: ['A-Core-1.0.0', 'B-Core-2.0.0'] },
+        { kind: 'assembly', what: 'DriverMod.dll', by: ['rob_gaming-Driver-1.0.0', 'public_ParticleSystem-Driver-2.0.0'] },
+      ],
     }],
   });
-  assert.match(html, /пересечений 2/);
+  assert.match(html, /2 пересечения/);
+  // ЗНАЧОК НАЗЫВАЕТ МЕСТА И ПАКЕТЫ: по одному числу нельзя решить, спорят ли
+  // два README или две DLL с одним именем, из которых загрузчик возьмёт одну.
+  assert.match(html, /файл BepInEx\/core\/BepInEx\.dll — A-Core-1\.0\.0 и B-Core-2\.0\.0/);
+  assert.match(html, /DLL DriverMod\.dll — rob_gaming-Driver-1\.0\.0 и public_ParticleSystem-Driver-2\.0\.0/);
 });
 
 test('время сборки показано по Москве и подписано', () => {

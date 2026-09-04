@@ -57,6 +57,10 @@
       text: String(behind.length),
       title: 'Модпаки требуют внимания — ' + lines.join('; ')
         + '. Пересоберите пакет и активируйте новую версию.',
+      // Игра, с которой начинать. Значок говорил «где-то есть обновление», а
+      // искать, в какой именно игре, оператор шёл в подсказку и потом в
+      // выпадающий список: вкладка открывалась на той игре, что стояла первой.
+      gameId: (behind[0] && behind[0].gameId) || '',
     };
   }
 
@@ -68,25 +72,34 @@
       el.style.display = 'none';
       el.textContent = '';
       el.removeAttribute('title');
+      el.removeAttribute('data-game-id');
       return;
     }
     el.style.display = '';
     el.textContent = view.text;
     el.title = view.title;
+    // Игру кладём на сам значок: вкладка читает её при открытии и показывает
+    // сразу ту, где ждут действия.
+    if (view.gameId) el.setAttribute('data-game-id', view.gameId);
+    else el.removeAttribute('data-game-id');
   }
 
   // refreshPendingBadges тянет сводку и раскладывает её по вкладкам.
   //
   // Ошибку глотает намеренно: панель, которая не смогла нарисовать значки,
   // обязана нарисовать всё остальное.
-  async function refreshPendingBadges(doc, fetchImpl) {
+  // opts.force — спросить Thunderstore заново, не дожидаясь, пока стухнет
+  // серверный кеш сводки. Нужно ровно после действия оператора: он только что
+  // активировал новый модпак, а значок ещё десять минут показывал бы прежний
+  // ответ — то есть висел бы над уже сделанной работой.
+  async function refreshPendingBadges(doc, fetchImpl, opts) {
     const d = doc || (typeof document !== 'undefined' ? document : null);
     const f = fetchImpl || (typeof fetch === 'function' ? fetch : null);
     if (!d || !f) return null;
 
     let data = null;
     try {
-      const res = await f('/admin/summary');
+      const res = await f('/admin/summary' + (opts && opts.force ? '?force=1' : ''));
       if (!res || !res.ok) return null;
       data = await res.json();
     } catch (_) {

@@ -68,12 +68,12 @@ const VERSIONS = {
   items: [
     {
       version: 'Team-Pack-1.0.0', displayName: 'Pack', active: true,
-      packages: 3, files: 7, bytes: 1024, missing: 0, createdAt: '2026-08-27T10:00:00',
+      packages: 3, files: 7, bytes: 1024, missing: [], createdAt: '2026-08-27T10:00:00',
       rebuildable: true,
     },
     {
       version: 'Old-Pack-0.9.0', displayName: 'Old', active: false,
-      packages: 2, files: 4, bytes: 512, missing: 1, createdAt: '2026-08-20T10:00:00',
+      packages: 2, files: 4, bytes: 512, missing: ['Gone-Mod-9.9.9'], createdAt: '2026-08-20T10:00:00',
       rebuildable: true,
     },
   ],
@@ -120,7 +120,8 @@ test('список версий показывает активную, обно�
 
   assert.match(html, /активен/);
   assert.match(html, /доступна 1\.1\.0/);
-  assert.match(html, /пропущено 1/);
+  assert.match(html, /собран без 1 мода/);
+  assert.match(html, /Gone-Mod-9\.9\.9/);
   // Активную версию нельзя ни удалить, ни активировать повторно.
   assert.doesNotMatch(html, /data-md-delete="Team-Pack-1\.0\.0"/);
   assert.match(html, /data-md-activate="Old-Pack-0\.9\.0"/);
