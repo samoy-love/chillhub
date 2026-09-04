@@ -65,7 +65,7 @@ jobs:
   # клоне отсутствует — здесь страховка.
   commits:
     name: Commit messages
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -159,7 +159,7 @@ jobs:
   # так же, как разъезжаются эти два.
   deploy-paths:
     name: Deploy path filter coverage
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -179,7 +179,7 @@ jobs:
 
   repo-hygiene:
     name: Repo invariants
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -197,7 +197,7 @@ jobs:
 
   htmlhint-web:
     name: HTMLHint (web)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -219,7 +219,7 @@ jobs:
 
   stylelint-web:
     name: Stylelint (web)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -242,7 +242,7 @@ jobs:
 
   eslint-web:
     name: ESLint (web)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -272,7 +272,7 @@ jobs:
 
   web-tests:
     name: Web tests (node --test)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -419,7 +419,7 @@ jobs:
 
   vuln-scan:
     name: Dependency vulnerabilities
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -715,7 +715,7 @@ jobs:
 
   coverage-launcher:
     name: Launcher coverage (Codecov)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     needs: dotnet-lint
     timeout-minutes: 10
     steps:
@@ -752,7 +752,7 @@ jobs:
   # с первым.
   launcher-version-bump:
     name: Launcher version bump
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -881,7 +881,7 @@ jobs:
   # вручную в настройках репозитория. Токен передаётся только этому шагу.
   protection-sync:
     name: Защита ветки соответствует задачам CI
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     timeout-minutes: 5
     # needs — не про очерёдность результата, а про то, что видит Jobs API.
     # GitHub регистрирует задачу с зависимостями в API прогона только когда
