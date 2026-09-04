@@ -7,6 +7,11 @@
 <meta name="description" content="Chill Hub качает сборки модов, обновляет их сам и следит, чтобы у всей компании были одинаковые версии. Запускает вашу копию игры из Steam или свою — с модами и без.">
 
 <meta name="color-scheme" content="dark light">
+<!-- Превью версии 2.0. Пока настоящая страница живёт в корне, эта
+     обязана быть закрыта от поиска: две страницы с одним и тем же
+     текстом соревнуются между собой, и наверх может выйти превью.
+     Строку снимаем в тот же коммит, которым 2.0 переезжает в корень. -->
+<meta name="robots" content="noindex, nofollow">
 <link rel="canonical" href="https://launcher.samoy.love/v2/">
 
 <meta property="og:type" content="website">
@@ -21,9 +26,11 @@
 <meta property="og:image:alt" content="Главный экран лаунчера Chill Hub: список игр, выбранная игра и очередь загрузок">
 <meta name="twitter:card" content="summary_large_image">
 
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bitter:wght@500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- Шрифты лежат у себя: там, где `fonts.googleapis.com` не отвечает,
+     заголовки молча съезжали на системную гарнитуру. Подробности и
+     подмножества — в самом файле. -->
+<link rel="preload" href="./vendor/fonts/IBMPlexSans-400-600-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="./vendor/fonts/fonts.css">
 
 <link rel="stylesheet" href="./styles.css">
 <link rel="stylesheet" href="./emu.css">
