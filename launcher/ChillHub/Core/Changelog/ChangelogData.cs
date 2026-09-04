@@ -43,6 +43,16 @@ namespace ChillHub.Core.Changelog {
     /// </summary>
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
+            // Тот же выпуск, что 1.6.44: проверка выкатки не дозвонилась до прода,
+            // и сборка самообновления 1.6.44 не уехала — на кнопке «Скачать» она
+            // была, а до установленных лаунчеров не добралась. Читать игроку тут
+            // нечего: всё, что изменилось, названо записью ниже.
+            new ChangelogRelease {
+                Version = "1.6.45",
+                Date = "2026-09-04",
+                Changes = System.Array.Empty<string>(),
+                Technical = true,
+            },
             new ChangelogRelease {
                 Version = "1.6.44",
                 Date = "2026-09-04",
