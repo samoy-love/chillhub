@@ -44,6 +44,16 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
+                Version = "1.6.44",
+                Date = "2026-09-04",
+                Changes = new[] {
+                    "Остановленную закачку теперь видно сразу: строка так и говорит «Останавливаем», а не показывает прежние проценты.",
+                    "Остановленную игру можно запустить заново сразу, не дожидаясь, пока прежняя попытка встанет.",
+                    "Кнопка у остановленной игры снова предлагает скачать, а не отменить то, что уже отменено.",
+                    "В начале установки лаунчер пишет, чем занят, и не молчит на строке «Начинаем».",
+                },
+            },
+            new ChangelogRelease {
                 Version = "1.6.43",
                 Date = "2026-09-01",
                 Changes = new[] {
