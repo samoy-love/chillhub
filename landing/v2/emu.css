@@ -1,0 +1,612 @@
+/* Оформление эмулятора лаунчера
+   ------------------------------------------------------------------
+   Здесь намеренно НЕ палитра сайта. Эмулятор — это витрина продукта, и
+   выглядеть он обязан как продукт: тёмно-фиолетовое окно WPF, а не
+   страница вокруг него. Поэтому у него свои токены, замкнутые на
+   `.emu`, и наружу они не текут.
+
+   Рамка вокруг — сайтовая (`.shot`): окно стоит на странице как
+   экспонат, а не притворяется её частью.
+   ------------------------------------------------------------------ */
+
+.emu {
+  --e-win: #17141f;
+  --e-bg: #131019;
+  --e-panel: #1b1726;
+  --e-panel-2: #221d31;
+  --e-line: #2c2540;
+  --e-line-2: #3b3355;
+
+  --e-fg: #e9e6f2;
+  --e-fg-2: #9d95b4;
+  --e-fg-3: #6f6786;
+
+  --e-accent: #7c5cff;
+  --e-accent-hi: #8f73ff;
+  --e-accent-ink: #ffffff;
+  --e-ok: #5fbf82;
+  --e-warn: #d8a34a;
+
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--e-bg);
+  color: var(--e-fg);
+  font: 400 13px/1.45 var(--sans);
+  container-type: inline-size;
+  min-height: 560px;
+}
+
+.emu * { box-sizing: border-box; }
+.emu b { font-weight: 600; }
+.emu i { font-style: normal; }
+.emu svg { display: block; flex: 0 0 auto; }
+
+/* ---------- Заголовок окна ---------- */
+
+.emu-title {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding-inline: 10px;
+  background: var(--e-win);
+  border-bottom: 1px solid var(--e-line);
+}
+
+.emu-app { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--e-fg-2); }
+
+.emu-logo { width: 16px; height: 16px; }
+.emu-logo rect { fill: var(--e-accent); }
+.emu-logo path { stroke: #fff; stroke-width: 1.8; stroke-linecap: round; fill: none; }
+
+.emu-win { margin-left: auto; display: flex; gap: 16px; }
+.emu-win i { width: 11px; height: 11px; position: relative; }
+.emu-win i::before,
+.emu-win i::after { content: ""; position: absolute; background: var(--e-fg-3); }
+.emu-win .min::before { inset: 5px 0 5px; height: 1px; }
+.emu-win .max::before { inset: 1px; border: 1px solid var(--e-fg-3); background: none; }
+.emu-win .cls::before,
+.emu-win .cls::after { inset: 5px 0; height: 1px; }
+.emu-win .cls::before { transform: rotate(45deg); }
+.emu-win .cls::after { transform: rotate(-45deg); }
+
+/* ---------- Шапка ---------- */
+
+.emu-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--e-line);
+}
+
+.emu-hello { display: flex; align-items: center; gap: 7px; color: var(--e-fg-2); font-size: 13px; }
+.emu-hello b { color: var(--e-fg); font-size: 15px; }
+.emu-hello .emu-logo { width: 18px; height: 18px; }
+
+.emu-karaoke {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--e-fg-3);
+}
+
+.emu-karaoke span { display: grid; }
+.emu-karaoke b { color: var(--e-fg); font-size: 13px; font-weight: 500; }
+.emu-karaoke i { font-size: 11px; }
+
+.emu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--e-fg-2);
+  cursor: pointer;
+  padding: 0;
+}
+
+.emu-icon:hover { background: var(--e-panel-2); color: var(--e-fg); }
+
+.emu-icon--framed {
+  width: 32px;
+  height: 32px;
+  border-color: var(--e-line-2);
+  background: var(--e-panel);
+}
+
+/* ---------- Раскладка ---------- */
+
+.emu-body {
+  display: grid;
+  grid-template-columns: 258px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ---------- Узкий экран ---------- */
+
+/* Не «то же самое, но уже», а другой состав: окно без хрома, игры лентой,
+   витрина и очередь. Ленты новостей и поиска здесь нет — см. emu.js. */
+.emu--compact { min-height: 0; }
+
+.emu--compact .emu-body {
+  grid-template-columns: 1fr;
+  gap: 8px;
+  padding: 8px;
+}
+
+.emu-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+
+.emu-strip::-webkit-scrollbar { display: none; }
+
+.emu-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  padding: 5px 10px 5px 5px;
+  border: 1px solid var(--e-line);
+  border-radius: 999px;
+  background: var(--e-panel-2);
+  color: var(--e-fg-2);
+  font: 500 12px/1 var(--sans);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.emu-chip .emu-ico { width: 22px; height: 22px; border-radius: 999px; }
+
+.emu-chip.on {
+  border-color: var(--e-accent);
+  background: color-mix(in srgb, var(--e-accent) 14%, var(--e-panel-2));
+  color: var(--e-fg);
+}
+
+/* Витрина на телефоне ниже: обложка на 208 px съедала пол-экрана. */
+.emu--compact .emu-hero { min-height: 0; padding: 12px; }
+.emu--compact .emu-hero h3 { font-size: 20px; }
+.emu--compact .emu-hero.has-cover h3,
+.emu--compact .emu-hero.has-cover .emu-meta,
+.emu--compact .emu-hero.has-cover .emu-hint { max-width: none; }
+
+/* Обложка уходит подложкой целиком: узкой полосы справа не хватает,
+   чтобы в ней что-то разглядеть. */
+.emu--compact .emu-hero.has-cover::before { background-position: center; opacity: 30%; }
+.emu--compact .emu-hero.has-cover::after { background: none; }
+
+.emu--compact .emu-actions { gap: 6px; }
+.emu--compact .emu-action,
+.emu--compact .emu-launch { min-width: 0; flex: 1; height: 42px; padding-inline: 12px; }
+.emu--compact .emu-about { margin-left: 0; height: 42px; padding-inline: 12px; }
+.emu--compact .emu-dock { margin: 0 8px 8px; }
+.emu--compact .emu-q-num { display: none; }
+
+/* ---------- Список игр ---------- */
+
+.emu-side {
+  background: var(--e-panel);
+  border: 1px solid var(--e-line);
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.emu-side-head { display: flex; align-items: center; }
+.emu-side-head b { font-size: 15px; }
+.emu-side-head .emu-icon { margin-left: auto; }
+
+.emu-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding-inline: 9px;
+  border: 1px solid var(--e-line);
+  border-radius: 7px;
+  background: var(--e-bg);
+  color: var(--e-fg-3);
+}
+
+.emu-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--e-fg);
+  font: inherit;
+  outline: none;
+}
+
+.emu-games { display: grid; gap: 4px; overflow-y: auto; flex: 1; min-height: 0; }
+
+.emu-game {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--e-panel-2);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+}
+
+.emu-game:hover { border-color: var(--e-line-2); }
+.emu-game.on { border-color: var(--e-accent); background: color-mix(in srgb, var(--e-accent) 12%, var(--e-panel-2)); }
+
+.emu-game-text { display: grid; min-width: 0; }
+.emu-game-text b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.emu-game-text i { font-size: 11px; color: var(--e-fg-3); }
+.emu-game-text i[data-tone="ok"] { color: var(--e-ok); }
+.emu-game-text i[data-tone="update"] { color: var(--e-accent-hi); }
+.emu-game-text i[data-tone="busy"] { color: var(--e-warn); }
+
+/* Значок игры из каталога (`iconUrl`). Буква на плашке — запасной
+   вариант для игр, у которых иконки в реестре нет: лаунчер в этом
+   случае показывает ровно такую же заглушку. */
+.emu-ico {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  border: 1px solid var(--e-line-2);
+  flex: 0 0 auto;
+  object-fit: cover;
+  background: var(--e-panel-2);
+}
+
+.emu-ico--letter {
+  display: grid;
+  place-items: center;
+  background: linear-gradient(160deg, var(--e-panel-2), var(--e-line));
+  font: 600 13px/1 var(--sans);
+  color: var(--e-fg-2);
+}
+
+.emu-ico--letter::before { content: attr(data-letter); }
+
+.emu-side-foot { display: grid; gap: 7px; padding-top: 8px; border-top: 1px solid var(--e-line); }
+.emu-free { font-size: 11px; color: var(--e-fg-3); }
+
+.emu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding-inline: 12px;
+  border: 1px solid var(--e-line-2);
+  border-radius: 7px;
+  background: var(--e-panel-2);
+  color: var(--e-fg);
+  font: 500 12px/1 var(--sans);
+  cursor: pointer;
+}
+
+.emu-btn:hover { background: var(--e-line); }
+.emu-btn--wide { width: 100%; }
+
+/* ---------- Витрина игры ---------- */
+
+.emu-main { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; }
+
+.emu-hero {
+  position: relative;
+  border: 1px solid var(--e-line);
+  border-radius: 10px;
+  padding: 14px 16px 16px;
+  min-height: 208px;
+  background:
+    radial-gradient(120% 140% at 100% 0%, color-mix(in srgb, var(--e-accent) 26%, transparent), transparent 62%),
+    var(--e-panel);
+  overflow: hidden;
+}
+
+/* Обложка из галереи ложится справа, а слева гасится до цвета панели:
+   заголовок и кнопки стоят поверх неё, и без затемнения светлая часть
+   картинки съедает белый текст. */
+.emu-hero.has-cover::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--cover) right center / cover no-repeat;
+  /* Правый край — там же, где в лаунчере: фигуры не должны упираться в рамку. */
+  z-index: 0;
+}
+
+/* Два слоя затемнения. Один горизонтальный градиент оставлял под
+   заголовком мутную «тень» картинки: у обложки светлая левая половина, и
+   82% панели её не гасили. Слева теперь сплошной цвет до половины, а
+   поверх всей витрины ещё ровная подложка — она сажает контраст
+   правой части, не трогая сами фигуры. */
+.emu-hero.has-cover::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(
+      90deg,
+      var(--e-panel) 0%,
+      var(--e-panel) 46%,
+      color-mix(in srgb, var(--e-panel) 55%, transparent) 68%,
+      transparent 88%
+    ),
+    linear-gradient(
+      0deg,
+      color-mix(in srgb, var(--e-panel) 45%, transparent) 0%,
+      transparent 55%
+    );
+  z-index: 1;
+}
+
+.emu-hero.has-cover > * { position: relative; z-index: 2; }
+
+.emu-badge {
+  display: inline-block;
+  padding: 3px 9px;
+  border: 1px solid var(--e-line-2);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--e-bg) 70%, transparent);
+  font-size: 11px;
+  color: var(--e-fg-2);
+  margin-bottom: 8px;
+}
+
+.emu-hero h3 { margin: 0 0 4px; font-size: 26px; font-weight: 600; letter-spacing: -0.02em; }
+.emu-meta { margin: 0 0 14px; font-size: 12px; color: var(--e-fg-2); }
+
+/* Обложка занимает правую часть витрины, поэтому текст и кнопки живут в
+   левой: иначе строка «8 мин в игре · версия…» ложится на картинку. */
+.emu-hero.has-cover h3,
+.emu-hero.has-cover .emu-meta,
+.emu-hero.has-cover .emu-hint { max-width: 62%; }
+
+.emu-actions { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; }
+
+.emu-action,
+.emu-launch {
+  min-width: 128px;
+  height: 46px;
+  border: 1px solid var(--e-line-2);
+  border-radius: 8px;
+  background: var(--e-panel-2);
+  color: var(--e-fg);
+  font: 500 14px/1 var(--sans);
+  cursor: pointer;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 2px;
+  padding-inline: 18px;
+}
+
+.emu-action:hover,
+.emu-launch:hover { background: var(--e-line); }
+
+/* Залитая кнопка в ряду ровно одна: два фиолетовых прямоугольника рядом
+   не читаются как «главный» и «запасной». */
+.emu-action.install,
+.emu-action.update,
+.emu-action.play,
+.emu-action.retry,
+.emu-launch.accent {
+  background: var(--e-accent);
+  border-color: var(--e-accent);
+  color: var(--e-accent-ink);
+}
+
+.emu-action.install:hover,
+.emu-action.update:hover,
+.emu-action.play:hover,
+.emu-action.retry:hover,
+.emu-launch.accent:hover { background: var(--e-accent-hi); border-color: var(--e-accent-hi); }
+
+.emu-action.cancel,
+.emu-action.dequeue { border-color: var(--e-line-2); }
+.emu-action[disabled] { opacity: 55%; cursor: default; }
+
+.emu-launch b { font-size: 14px; font-weight: 600; }
+.emu-launch i { font-size: 11px; opacity: 80%; }
+
+.emu-chev {
+  width: 34px;
+  height: 46px;
+  border: 1px solid var(--e-line-2);
+  border-radius: 8px;
+  background: var(--e-panel-2);
+  color: var(--e-fg-2);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.emu-chev:hover { background: var(--e-line); color: var(--e-fg); }
+
+/* Отступ 24, а не 8: «Об игре» — не третий вариант запуска, а переход
+   на другой экран, и стоять вплотную к ним он не должен. */
+.emu-about {
+  margin-left: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 46px;
+  padding-inline: 16px;
+  border: 1px solid var(--e-line-2);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--e-bg) 55%, transparent);
+  color: var(--e-fg);
+  font: 500 13px/1 var(--sans);
+  cursor: pointer;
+}
+
+.emu-about:hover { background: var(--e-panel-2); }
+
+.emu-hint { margin: 12px 0 0; font-size: 11px; color: var(--e-fg-3); }
+
+/* ---------- Новости ---------- */
+
+.emu-tabs { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--e-line); }
+
+.emu-tab {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--e-fg-3);
+  font: 500 13px/1 var(--sans);
+  padding: 9px 10px;
+  cursor: pointer;
+}
+
+.emu-tab:hover { color: var(--e-fg-2); }
+.emu-tab.on { color: var(--e-fg); border-bottom-color: var(--e-accent); }
+.emu-tabs .emu-icon { margin-left: 4px; }
+
+.emu-feed { display: grid; gap: 8px; overflow-y: auto; min-height: 0; flex: 1; padding-right: 2px; }
+
+.emu-post {
+  display: flex;
+  gap: 12px;
+  padding: 9px;
+  border: 1px solid var(--e-line);
+  border-radius: 9px;
+  background: var(--e-panel);
+}
+
+.emu-post-cover {
+  width: 108px;
+  height: 62px;
+  flex: 0 0 auto;
+  border-radius: 6px;
+  flex: 0 0 auto;
+  background: linear-gradient(150deg, var(--e-panel-2), var(--e-line));
+  background-size: cover;
+  background-position: center;
+  border: 1px solid var(--e-line-2);
+}
+
+.emu-post-text { display: grid; gap: 2px; min-width: 0; }
+.emu-post-text b { font-size: 13px; }
+.emu-post-text i { font-size: 11px; color: var(--e-fg-3); }
+.emu-post-text span { font-size: 12px; color: var(--e-fg-2); }
+
+/* ---------- Очередь ---------- */
+
+.emu-dock {
+  margin: 0 10px 10px;
+  border: 1px solid var(--e-line);
+  border-radius: 10px;
+  background: var(--e-panel);
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.emu-dock-head { font-size: 13px; }
+.emu-dock-head b em { font-style: normal; color: var(--e-accent-hi); }
+
+.emu-q {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px 9px;
+  border: 1px solid var(--e-line);
+  border-radius: 8px;
+  background: var(--e-panel-2);
+}
+
+.emu-q-text { display: grid; min-width: 0; flex: 1; }
+.emu-q-text b { font-size: 13px; }
+.emu-q-text b em { font-style: normal; color: var(--e-accent-hi); margin-left: 4px; }
+.emu-q-text i { font-size: 11px; color: var(--e-fg-3); }
+
+.emu-q-num { display: grid; text-align: right; }
+.emu-q-num b { font-size: 12px; font-weight: 500; }
+.emu-q-num i { font-size: 11px; color: var(--e-fg-3); }
+
+.emu-q-move { display: flex; gap: 2px; }
+
+.emu-q-bar {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 4px;
+  height: 2px;
+  background: var(--e-line);
+  border-radius: 1px;
+  overflow: hidden;
+}
+
+.emu-q-bar i { display: block; height: 100%; background: var(--e-accent); }
+
+.emu-collapse {
+  justify-self: start;
+  border: 0;
+  background: none;
+  color: var(--e-fg-3);
+  font: 400 12px/1 var(--sans);
+  cursor: pointer;
+  padding: 4px 2px;
+}
+
+.emu-collapse:hover { color: var(--e-fg-2); }
+
+/* ---------- Пустые состояния ---------- */
+
+.emu-empty {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  text-align: center;
+  padding: 24px 12px;
+  color: var(--e-fg-3);
+}
+
+.emu-empty b { color: var(--e-fg-2); font-size: 13px; }
+.emu-empty span { font-size: 12px; max-width: 34ch; }
+.emu-empty.big { margin: auto; padding: 60px 20px; }
+
+/* ---------- Подпись под окном ---------- */
+
+.emu-note {
+  min-height: 1.5em;
+  font-size: 0.8125rem;
+  color: var(--fg-2);
+  margin-top: var(--s2);
+}
+
+/* Список в строку: браузерные маркеры и отступ в 40px тут висели сбоку
+   ни к чему не привязанные — элементы разделяет черта, а не точка. */
+.emu-legend {
+  display: flex;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  list-style: none;
+  margin: var(--s3) 0 0;
+  padding: 0;
+  font-size: 0.8125rem;
+  color: var(--fg-3);
+}
+
+.emu-legend li + li {
+  padding-left: var(--s3);
+  border-left: 1px solid var(--line);
+}
