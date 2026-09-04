@@ -50,6 +50,52 @@
     return 'код ' + status;
   }
 
+  /* Куда ведёт панель анонима. Отдельной страницы входа нет: /admin/ сам
+     отдаёт login.html тому, у кого нет сессии (см. handleAdminUI в
+     cmd/admin/main.go). */
+  const LOGIN = '/admin/';
+
+  /* Уход на вход — отдельной функцией, а не строчкой в двух местах.
+     Так у него одно имя на всю панель, и так его можно подменить в
+     тесте: настоящий переход jsdom не выполняет и проверить его иначе
+     нечем. */
+  function goLogin() {
+    if (typeof window !== 'undefined') window.location.href = LOGIN;
+  }
+
+  /**
+   * Что делать с сессией на входе.
+   *
+   * Три исхода, и путать их нельзя. `ok` — сессия жива. `login` — сервер
+   * ответил «не узнаю»: сначала пробуем обновить, и только если он не
+   * узнаёт и после этого, уводим на вход. `offline` — сервер не ответил
+   * вовсе; это не то же самое, что отказ, и выкидывать человека из
+   * панели потому, что упала сеть, нельзя — панель покажет снимок и
+   * скажет, что записывать нельзя.
+   */
+  async function session(api) {
+    const ask = async () => {
+      try {
+        await api.me();
+        return 'ok';
+      } catch (e) {
+        if (e && e.status === 401) return 'login';
+        if (e && e.status === 0) return 'offline';
+        return 'offline';
+      }
+    };
+
+    const first = await ask();
+    if (first !== 'login') return first;
+
+    try {
+      await api.authRefresh();
+    } catch {
+      // Обновить не вышло — решает следующий вопрос, а не этот
+    }
+    return ask();
+  }
+
   function makeApi(opts) {
     const options = opts || {};
     const f = options.fetch || (typeof fetch !== 'undefined' ? fetch : null);
@@ -111,6 +157,7 @@
       ApiError: ApiError,
 
       me: () => get('auth/me'),
+      authRefresh: () => post('auth/refresh'),
       logout: () => post('auth/logout'),
 
       launcherVersions: () => get('list'),
@@ -181,5 +228,5 @@
     };
   }
 
-  return { makeApi: makeApi, ApiError: ApiError, reason: reason, BASE: BASE };
+  return { makeApi: makeApi, ApiError: ApiError, reason: reason, session: session, goLogin: goLogin, BASE: BASE, LOGIN: LOGIN };
 });

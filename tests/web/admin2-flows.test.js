@@ -66,10 +66,11 @@ async function boot(routes) {
   window.fetch = async (url, init) => {
     const u = String(url);
     const method = (init && init.method) || 'GET';
-    let body = null;
+    let body;
     try {
       body = init && typeof init.body === 'string' ? JSON.parse(init.body) : null;
     } catch {
+      // Не разбор — значит, тело ушло как есть, и записываем его как есть
       body = init ? init.body : null;
     }
     calls.push({ method, url: u, body });
@@ -86,8 +87,13 @@ async function boot(routes) {
     vm.runInContext(fs.readFileSync(file, 'utf8'), dom.getInternalVMContext(), { filename: file });
   }
 
+  /* Настоящий переход jsdom не выполняет — вместо него считаем уходы на
+     вход. Панель ходит туда одной функцией именно ради этого. */
+  const left = [];
+  if (window.CH2Api) window.CH2Api.goLogin = () => left.push(window.CH2Api.LOGIN);
+
   for (let i = 0; i < 40; i++) await new Promise((r) => setTimeout(r, 0));
-  return { window, calls, dom };
+  return { window, calls, dom, left };
 }
 
 /* Досматривает начатое до конца.
@@ -441,4 +447,66 @@ test('таблица прогонов помечает лучший и объя�
   assert.match(body, /выбрано/);
   assert.match(body, /Лучший прогон|Быстрее всех/);
   assert.ok(sheet.querySelector('tr.best'), 'лучший прогон не помечен');
+});
+
+/* ---------- Сессия ---------- */
+
+test('анонима уводят на вход, а не показывают ему разделы', async (t) => {
+  // Иначе 401 на первом же нажатии выглядит поломкой панели, а не отказом
+  const { window, left } = await boot({
+    'auth/me': () => ({ ok: false, status: 401, text: async () => '{}' }),
+    'auth/refresh': () => ({ ok: false, status: 401, text: async () => '{}' }),
+  });
+  t.after(() => window.close());
+
+  const gone = await until(() => left.length > 0);
+  assert.ok(gone, 'аноним остался в панели');
+  assert.deepStrictEqual(left, ['/admin/']);
+});
+
+test('истёкшую сессию обновляют молча, не показывая вход', async (t) => {
+  let asked = 0;
+  const { window, calls, left } = await boot({
+    'auth/me': () => {
+      asked++;
+      return asked === 1
+        ? { ok: false, status: 401, text: async () => '{}' }
+        : { ok: true, status: 200, text: async () => JSON.stringify({ user: 'admin' }) };
+    },
+  });
+  t.after(() => window.close());
+
+  await until(() => window.document.querySelector('h1'));
+  assert.ok(calls.some((c) => c.url.includes('auth/refresh')), 'сессию не пробовали обновить');
+  assert.deepStrictEqual(left, [], 'увели на вход с живой сессией');
+});
+
+test('упавшая сеть не выкидывает из панели, а показывает снимок', async (t) => {
+  const { window, left } = await boot({
+    'auth/me': () => {
+      throw new Error('сети нет');
+    },
+  });
+  t.after(() => window.close());
+
+  await until(() => window.document.querySelector('h1'));
+  assert.deepStrictEqual(left, [], 'из-за упавшей сети увели на вход');
+  assert.ok(window.document.querySelector('h1'), 'панель не показала ничего');
+});
+
+test('выход уводит на вход, даже если сервер на него не ответил', async (t) => {
+  // Держать человека в панели, из которой он попросил выйти, хуже
+  const { window, calls, left } = await boot({
+    'auth/logout': () => {
+      throw new Error('сети нет');
+    },
+  });
+  t.after(() => window.close());
+
+  await until(() => window.document.querySelector('[data-logout]'));
+  window.document.querySelector('[data-logout]').click();
+
+  const gone = await until(() => left.length > 0);
+  assert.ok(gone, 'после выхода остались в панели');
+  assert.ok(calls.some((c) => c.url.includes('auth/logout')), 'выход не дошёл до сервера');
 });

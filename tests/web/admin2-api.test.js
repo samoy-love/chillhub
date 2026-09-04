@@ -8,7 +8,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { makeApi, reason, BASE } = require('../../server/admin_ui/v2/api.js');
+const A = require('../../server/admin_ui/v2/api.js');
+const { makeApi, reason, BASE } = A;
 
 /** Поддельный fetch: запоминает вызовы и отдаёт заданный ответ. */
 function fake(response) {
@@ -122,6 +123,7 @@ test('длинный текст ошибки обрезается, а не за�
 
 const ENDPOINTS = [
   ['me', [], 'GET', 'auth/me'],
+  ['authRefresh', [], 'POST', 'auth/refresh'],
   ['logout', [], 'POST', 'auth/logout'],
 
   ['launcherVersions', [], 'GET', 'list'],
@@ -206,4 +208,70 @@ test('опись покрывает все ручки слоя, а слой — 
   const declared = Object.keys(api).filter((k) => k !== 'call' && k !== 'ApiError');
   const listed = ENDPOINTS.map((e) => e[0]);
   assert.deepStrictEqual(declared.slice().sort(), listed.slice().sort());
+});
+
+/* ---------- Сессия ---------- */
+
+/** Подделка слоя обращений: `me` отвечает по очереди из списка. */
+function fakeApi(answers) {
+  const queue = answers.slice();
+  const log = [];
+  return {
+    log,
+    me: async () => {
+      log.push('me');
+      const a = queue.shift();
+      if (a === 'ok') return { user: 'admin' };
+      const err = new Error('нет');
+      err.status = a === 'off' ? 0 : 401;
+      throw err;
+    },
+    authRefresh: async () => {
+      log.push('refresh');
+    },
+  };
+}
+
+test('живая сессия не дёргает обновление зря', async () => {
+  const api = fakeApi(['ok']);
+  assert.strictEqual(await A.session(api), 'ok');
+  assert.deepStrictEqual(api.log, ['me']);
+});
+
+test('истёкшую сессию сначала пробуют обновить, а не выкидывают', async () => {
+  // Обновление молчаливое: человек не должен видеть вход из-за живого токена
+  const api = fakeApi([401, 'ok']);
+  assert.strictEqual(await A.session(api), 'ok');
+  assert.deepStrictEqual(api.log, ['me', 'refresh', 'me']);
+});
+
+test('не узнал и после обновления — значит на вход', async () => {
+  const api = fakeApi([401, 401]);
+  assert.strictEqual(await A.session(api), 'login');
+});
+
+test('молчащий сервер — не отказ, и из панели за это не выкидывают', async () => {
+  // Иначе упавшая сеть выглядит как «вас разлогинили»
+  const api = fakeApi(['off']);
+  assert.strictEqual(await A.session(api), 'offline');
+  assert.deepStrictEqual(api.log, ['me']);
+});
+
+test('сервер, легший после отказа, тоже не уводит на вход', async () => {
+  const api = fakeApi([401, 'off']);
+  assert.strictEqual(await A.session(api), 'offline');
+});
+
+test('упавшее обновление не мешает задать вопрос второй раз', async () => {
+  const api = fakeApi([401, 'ok']);
+  api.authRefresh = async () => {
+    api.log.push('refresh');
+    throw new Error('и обновление не вышло');
+  };
+  assert.strictEqual(await A.session(api), 'ok');
+});
+
+test('страница входа — корень админки, отдельной её нет', () => {
+  // /admin/ сам отдаёт login.html анониму (handleAdminUI в cmd/admin/main.go)
+  assert.strictEqual(A.LOGIN, '/admin/');
 });

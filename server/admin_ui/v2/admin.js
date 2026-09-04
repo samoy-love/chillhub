@@ -1505,7 +1505,19 @@
     $('[data-maint-text]').textContent = D.maint.on ? 'техработы включены' : 'техработы выключены';
 
     $('[data-refresh]').addEventListener('click', () => boot(true));
-    $('[data-logout]').addEventListener('click', () => toast('Это превью: выход отключён'));
+
+    /* Выход уводит на страницу входа независимо от того, ответил ли
+       сервер успехом: держать человека в панели, из которой он попросил
+       выйти, хуже, чем лишний раз показать вход. */
+    $('[data-logout]').addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      try {
+        await API.logout();
+      } catch {
+        // Сеть отвалилась — всё равно уводим на вход
+      }
+      window.CH2Api.goLogin();
+    });
   }
 
   /* ---------- Запуск ---------- */
@@ -1552,6 +1564,18 @@
   }
 
   async function boot(again = false) {
+    /* Сессия проверяется до того, как панель что-то покажет. Аноним,
+       увидевший разделы и получивший 401 на первом же нажатии, решит,
+       что сломалась панель, а не что его не пустили. Оборванная сеть —
+       не отказ: панель покажет снимок и скажет, что записывать нельзя. */
+    if (!again) {
+      const state = await window.CH2Api.session(API);
+      if (state === 'login') {
+        window.CH2Api.goLogin();
+        return;
+      }
+    }
+
     D = await collect();
     if (!again) {
       topbar();
