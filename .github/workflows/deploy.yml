@@ -117,6 +117,9 @@ on:
     paths:
       - 'landing/**'
       - 'server/**'
+      # Юниты и их дополнения едут в артефактах api и admin (см. BUILD_CMD
+      # в .deploy-kit/): правка drop-in'а — такая же выкатка, как правка кода.
+      - 'deploy/systemd/**'
       - 'launcher/ChillHub/**'
       - 'launcher/*'
       - 'updater/**'
@@ -392,6 +395,24 @@ jobs:
              && echo "$FILES_SERVER" | grep -E '^server/internal/' \
                                      | grep -qvE '^server/internal/(adminapi|metrics)/'; then
             API=true
+          fi
+
+          # Юниты systemd. Лежат вне server/, поэтому под грепы выше не
+          # подпадают, а ездят при этом в артефактах обеих серверных целей.
+          # Пока их тут не было, правка drop-in'а молча не доезжала до прода:
+          # выкатка проходила зелёной, а файл на сервере оставался прежним —
+          # так и обнаружилось 04.09.2026, что зависимость от docker.service
+          # приходится доставлять руками.
+          #
+          # Греп без якоря на конце: одним выражением ловится и сам юнит, и
+          # дополнения в <юнит>.d/. `if`, а не `&&`, потому что шаг идёт под
+          # bash -e: цепочка с ненулевым кодом уронила бы весь расчёт, а этот
+          # греп только ДОБАВЛЯЕТ цель к уже посчитанным, но не снимает.
+          if echo "$FILES_SERVER" | grep -qE '^deploy/systemd/chillhub-api\.service'; then
+            API=true
+          fi
+          if echo "$FILES_SERVER" | grep -qE '^deploy/systemd/chillhub-admin\.service'; then
+            ADMIN=true
           fi
 
           # Установщик: всё, из чего build-installer.ps1 собирает артефакт
