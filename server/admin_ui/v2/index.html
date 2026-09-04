@@ -7,14 +7,9 @@
 <meta name="color-scheme" content="dark">
 <meta name="robots" content="noindex, nofollow">
 
-<!-- Шрифты подключены с Google Fonts только в этом превью. У боевой
-     панели такой зависимости быть не должно: она внутренняя, и её
-     работоспособность не завязывают на чужой CDN — по той же причине,
-     по которой Bootstrap лежал в vendor/. Перед выкаткой файлы
-     переезжают в vendor/fonts/. -->
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- Шрифты лежат рядом, а не на Google Fonts: у /admin/ui/ действует CSP
+     с font-src 'self', и подключение с чужого домена молча отбрасывается. -->
+<link rel="stylesheet" href="./vendor/fonts/fonts.css">
 
 <link rel="stylesheet" href="./admin.css">
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
