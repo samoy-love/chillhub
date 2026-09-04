@@ -48,6 +48,52 @@
     return `${n < 10 && i ? dec(n) : Math.round(n)} ${u[i]}`;
   }
 
+  /* Вопрос перед необратимым действием.
+
+     `window.confirm` не годился: он не умеет ни выделить объект, ни
+     подписать кнопку глаголом, и в нём нельзя сказать, что именно
+     произойдёт с игроками. А безымянное «Вы уверены?» приучает жать
+     «да» не читая. */
+  function ask(q) {
+    return new Promise((resolve) => {
+      const back = document.createElement('div');
+      back.className = 'modal-back';
+      back.innerHTML = `
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ask-t">
+          <h2 id="ask-t"></h2>
+          <p></p>
+          <div class="btn-row">
+            <button class="btn" type="button" data-no></button>
+            <button class="btn btn--danger" type="button" data-yes></button>
+          </div>
+        </div>`;
+      back.querySelector('h2').textContent = q.title;
+      back.querySelector('p').textContent = q.body;
+      back.querySelector('[data-no]').textContent = q.cancel;
+      back.querySelector('[data-yes]').textContent = q.ok;
+
+      const close = (answer) => {
+        back.remove();
+        document.removeEventListener('keydown', onKey);
+        resolve(answer);
+      };
+      const onKey = (e) => {
+        if (e.key === 'Escape') close(false);
+      };
+
+      back.querySelector('[data-no]').addEventListener('click', () => close(false));
+      back.querySelector('[data-yes]').addEventListener('click', () => close(true));
+      back.addEventListener('click', (e) => {
+        if (e.target === back) close(false);
+      });
+      document.addEventListener('keydown', onKey);
+
+      document.body.append(back);
+      // Фокус на отказе: опасная кнопка не должна срабатывать пробелом
+      back.querySelector('[data-no]').focus();
+    });
+  }
+
   function toast(text, tone = '') {
     const el = document.createElement('div');
     el.className = `toast ${tone}`;
@@ -101,7 +147,7 @@
         const unread = D.inbox.filter((f) => f.status === 'new');
         const important = unread.filter((f) => f.important);
         const freePct = Math.round((D.disk.freeBytes / D.disk.totalBytes) * 100);
-        const drafts = D.news.filter((n) => n.state === 'draft').length;
+        const drafts = D.news.filter((n) => !n.published).length;
         const today = D.days.at(-1);
         const errToday = today.errors;
 
@@ -200,7 +246,7 @@
                      <span class="v mono">${esc(L.newest)}</span>
                    </div>
                    <div class="push"></div>
-                   <button class="btn btn--accent" type="button" data-act="activate-launcher" data-what="лаунчер ${esc(L.newest)}">
+                   <button class="btn btn--accent" type="button" data-act="launcher.activate" data-args='{"version":"${esc(L.newest)}"}'>
                      Сделать активной
                    </button>
                  </div>`
@@ -247,8 +293,8 @@
                       <td class="num">${bytes(v.size)}</td>
                       <td>${stateBadge[v.state]}</td>
                       <td class="act">
-                        ${v.state === 'active' ? '' : `<button class="btn btn--text" type="button" data-act="activate-launcher" data-what="лаунчер ${esc(v.version)}">Активировать</button>`}
-                        ${v.state === 'active' ? '' : `<button class="btn btn--danger btn--text" type="button" data-act="drop" data-what="версия ${esc(v.version)}">Удалить</button>`}
+                        ${v.state === 'active' ? '' : `<button class="btn btn--text" type="button" data-act="launcher.activate" data-args='{"version":"${esc(v.version)}"}'>Активировать</button>`}
+                        ${v.state === 'active' ? '' : `<button class="btn btn--danger btn--text" type="button" data-act="launcher.delete" data-args='{"version":"${esc(v.version)}"}'>Удалить</button>`}
                       </td>
                     </tr>`,
                   empty: 'Ни одной версии не загружено',
@@ -297,7 +343,7 @@
               <span class="k">${esc(p.upstream.at)}</span>
             </div>
             <div class="push"></div>
-            ${staged ? `<button class="btn btn--accent" type="button" data-act="activate-pack" data-what="${esc(p.title)} ${esc(p.built)}">Отдать игрокам</button>` : ''}
+            ${staged ? `<button class="btn btn--accent" type="button" data-act="mods.activate" data-args='{"gameId":"${esc(p.gameId)}","version":"${esc(p.built)}"}'>Отдать игрокам</button>` : ''}
             ${stale ? '<button class="btn btn--accent" type="button" data-act="build">Пересобрать</button>' : ''}
           </div>
 
@@ -392,7 +438,7 @@
     games: {
       title: 'Игры',
       lede: 'Реестр, который лаунчер читает при старте: чем игра запускается и как выглядит.',
-      actions: '<button class="btn" type="button" data-act="scan">Просканировать контент</button><button class="btn btn--accent" type="button" data-act="new-game">Добавить игру</button>',
+      actions: '<button class="btn" type="button" data-act="games.scan">Просканировать контент</button><button class="btn btn--accent" type="button" data-act="new-game">Добавить игру</button>',
       render() {
         return `
           ${card(
@@ -412,7 +458,7 @@
                   </td>
                   <td class="act">
                     <button class="btn btn--text" type="button" data-act="gallery">Галерея</button>
-                    <button class="btn btn--danger btn--text" type="button" data-act="purge" data-what="весь контент игры ${esc(g.title)}">Удалить контент</button>
+                    <button class="btn btn--danger btn--text" type="button" data-act="games.purge" data-args='{"gameId":"${esc(g.gameId)}","title":"${esc(g.title)}"}'>Удалить контент</button>
                   </td>
                 </tr>`,
               empty: 'Реестр пуст',
@@ -457,6 +503,11 @@
       lede: 'То, что игрок читает на главном экране лаунчера.',
       actions: '<button class="btn btn--accent" type="button" data-act="new-post">Написать</button>',
       render() {
+        /* Редактор показывает одну заметку. Пока выбор из списка не
+           подключён — первую; аргументы кнопок берутся из неё, а не из
+           того, что набрано в поле. */
+        const draft = D.news[0] || { id: '', title: '', published: false };
+
         /* Ширина текстового раздела ограничена читаемой мерой: в 1.0
            редактор растягивался на всю ширину 2K-монитора, а строка в
            2000 px не читается. */
@@ -470,9 +521,9 @@
                 row: (n) => `<tr>
                     <td>${esc(n.title)}<br><span class="faint">${esc(n.at)}${n.game ? ` · ${esc(n.game)}` : ' · все игры'}</span></td>
                     <td class="act">${
-                      n.state === 'draft'
-                        ? '<span class="badge badge--warn">черновик</span>'
-                        : '<span class="badge badge--ok">на виду</span>'
+                      n.published
+                        ? '<span class="badge badge--ok">на виду</span>'
+                        : '<span class="badge badge--warn">черновик</span>'
                     }</td>
                   </tr>`,
                 empty: 'Новостей нет',
@@ -498,10 +549,10 @@
                    <span class="help">Разметка Markdown. Пиши простым языком: это читают в лаунчере, а не в документации.</span>
                  </div>
                  <div class="btn-row">
-                   <button class="btn btn--accent" type="button" data-act="publish">Опубликовать</button>
+                   <button class="btn btn--accent" type="button" data-act="news.publish" data-args='{"id":"${esc(draft.id)}","title":"${esc(draft.title)}","published":${draft.published ? 'false' : 'true'}}'>${draft.published ? 'Снять с публикации' : 'Опубликовать'}</button>
                    <button class="btn" type="button" data-act="preview">Посмотреть, как увидит игрок</button>
                    <span class="push"></span>
-                   <button class="btn btn--danger btn--text" type="button" data-act="drop" data-what="новость">Удалить</button>
+                   <button class="btn btn--danger btn--text" type="button" data-act="news.delete" data-args='{"id":"${esc(draft.id)}","title":"${esc(draft.title)}"}'>Удалить</button>
                  </div>
                </div>`
             )}
@@ -533,9 +584,9 @@
                 }</td>
                 <td class="dim">${esc(f.at)}</td>
                 <td class="act">
-                  <button class="btn btn--text" type="button" data-act="star" title="Пометить важным">${f.important ? '★' : '☆'}</button>
-                  <button class="btn btn--text" type="button" data-act="read">${f.status === 'new' ? 'Отметить прочитанным' : 'Вернуть в новые'}</button>
-                  <button class="btn btn--danger btn--text" type="button" data-act="drop" data-what="обращение ${esc(f.id)}">Удалить</button>
+                  <button class="btn btn--text" type="button" data-act="inbox.important" data-args='{"id":"${esc(f.id)}","important":${f.important ? 'false' : 'true'}}' title="Пометить важным">${f.important ? '★' : '☆'}</button>
+                  <button class="btn btn--text" type="button" data-act="inbox.read" data-args='{"id":"${esc(f.id)}","read":${f.status === 'new' ? 'true' : 'false'}}'>${f.status === 'new' ? 'Отметить прочитанным' : 'Вернуть в новые'}</button>
+                  <button class="btn btn--danger btn--text" type="button" data-act="inbox.delete" data-args='{"id":"${esc(f.id)}"}'>Удалить</button>
                 </td>
               </tr>`,
             empty: 'Обращений нет',
@@ -571,8 +622,8 @@
                  <div class="btn-row">
                    ${
                      D.maint.on
-                       ? '<button class="btn btn--accent" type="button" data-act="maint-off">Выключить работы</button>'
-                       : '<button class="btn btn--danger" type="button" data-act="maint-on" data-what="технические работы для всех игроков">Включить работы</button>'
+                       ? '<button class="btn btn--accent" type="button" data-act="maint.off">Выключить работы</button>'
+                       : '<button class="btn btn--danger" type="button" data-act="maint.on">Включить работы</button>'
                    }
                  </div>
                </div>`
@@ -684,7 +735,7 @@
                  <p class="faint">Кэш экономит время пересборки: те же архивы Thunderstore не качаются повторно. Чистить имеет смысл, когда место кончается, а не по расписанию.</p>
                  <div class="btn-row">
                    <button class="btn" type="button" data-act="sweep">Убрать старое</button>
-                   <button class="btn btn--danger btn--text" type="button" data-act="drop" data-what="весь кэш архивов">Очистить полностью</button>
+                   <button class="btn btn--danger btn--text" type="button" data-act="cache.clear">Очистить полностью</button>
                  </div>
                </div>`
             )}
@@ -761,25 +812,37 @@
       })
     );
 
-    /* Необратимое действие называет объект и спрашивает подтверждение.
-       В 1.0 «Удалить версию» срабатывала с первого клика, а активации
-       в интерфейсе не было вовсе — она пряталась в списке версий. */
+    /* Кнопка называет действие — и только. Спрашивать ли, как звучит
+       вопрос и что перечитать после, знает реестр (actions.js), а не
+       разметка. В 1.0 это решала каждая кнопка сама, и «Удалить версию»
+       спрашивало, а «Удалить игру и все версии» — нет. */
     $$('[data-act]').forEach((b) =>
-      b.addEventListener('click', () => {
-        const what = b.dataset.what;
-        if (what) {
-          const act = b.dataset.act;
-          let msg;
-          if (act.startsWith('activate')) msg = `${what} уедет всем игрокам сразу и заменит то, что они получают сейчас.`;
-          else if (act === 'maint-on') msg = `Включаются ${what}: вместо каталога игр они увидят заглушку.`;
-          else msg = `Будет удалено: ${what}. Вернуть нельзя.`;
-          if (!confirm(`${msg}
-
-Продолжить?`)) return;
-          toast('Это превью: ничего не изменилось', 'bad');
+      b.addEventListener('click', async () => {
+        const id = b.dataset.act;
+        if (!window.CH2Actions.has(id)) {
+          toast('Это действие ещё не подключено', 'warn');
           return;
         }
-        toast(`Это превью: «${b.textContent.trim()}» ничего не меняет`);
+
+        let args = {};
+        try {
+          args = b.dataset.args ? JSON.parse(b.dataset.args) : {};
+        } catch {
+          args = {};
+        }
+
+        b.disabled = true;
+        const res = await window.CH2Actions.run(id, args, { api: API, confirm: ask });
+        b.disabled = false;
+
+        if (res.cancelled) return;
+        if (!res.ok) {
+          toast('Не вышло: ' + res.message, 'bad');
+          return;
+        }
+        toast(res.message, 'ok');
+        await store.invalidate(res.stale);
+        route();
       })
     );
   }
@@ -883,32 +946,67 @@
 
   /* ---------- Запуск ---------- */
 
+  const API = window.CH2Api.makeApi();
+
+  /* Разделы читаются порознь и складываются в ту же плоскую форму, что
+     ждёт отрисовка. Часть кусков (дерево манифеста, каталог Thunderstore,
+     журнал сборки, прогоны) пока приходит из снимка — их флоу ещё не
+     подключены, и панель об этом говорит, а не выдаёт снимок за прод. */
+  const store = window.CH2Store.createStore(window.CH2Sections.LOADERS, { api: API });
+
+  const SNAPSHOT_ONLY = ['manifest', 'launcherDiff', 'resolved', 'catalog', 'buildLog', 'bench'];
+
+  async function collect() {
+    await store.loadAll();
+    const demo = await window.CHILLHUB_DATA.load();
+
+    /* Снимок проходит через тот же разбор, что и ответ сервера.
+       Иначе в панели живут две формы одних и тех же данных, и отрисовка
+       обязана уметь обе — ровно так в 1.0 одна игра выглядела по-разному
+       на двух вкладках. */
+    const S = window.CH2Sections;
+    const val = (name, raw, parse) => {
+      const st = store.get(name);
+      if (st && st.status === window.CH2Store.READY) return st.data;
+      return parse ? parse(raw) : raw;
+    };
+
+    const data = {
+      launcher: val('launcher', { items: demo.launcher.versions }, S.launcher),
+      games: val('games', demo.games, S.games),
+      packs: val('packs', demo.packs, S.packs),
+      news: val('news', demo.news, S.news),
+      inbox: val('inbox', demo.inbox, S.inbox),
+      maint: val('maint', { enabled: demo.maint.on, reason: demo.maint.reason }, S.maintenance),
+      days: val('metrics', demo.days, S.metrics),
+      errors: val('errors', demo.errors, S.errors),
+      disk: val('disk', demo.disk, S.disk),
+      cache: val('cache', demo.cache, S.cache),
+    };
+    for (const k of SNAPSHOT_ONLY) data[k] = demo[k];
+    return data;
+  }
+
   async function boot(again = false) {
-    D = await window.CHILLHUB_DATA.load();
+    D = await collect();
     if (!again) {
       topbar();
       palette();
       window.addEventListener('hashchange', route);
     }
     route();
+
+    const h = store.health();
     if (again) {
       toast('Данные перечитаны', 'ok');
       return;
     }
-    // Признак «живое или демо» теперь посекционный: часть разделов может
-    // читаться с сервера, часть — остаться на снимке, если эндпоинт не
-    // ответил. Сказать «всё демо», когда половина настоящая, значит
-    // обесценить настоящую половину; промолчать про снимок — хуже вдвое.
-    const total = 9;
-    const live = (D.live || []).length;
-    if (!live) {
-      toast('Демо-данные: сервер не отвечает, ничего не сохраняется');
-    } else if (live < total) {
-      toast(`Часть разделов на снимке: живых ${live} из ${total}`, 'warn');
+    if (!h.live.length) {
+      toast('Сервер не отвечает: показан снимок, записывать нельзя', 'bad');
+    } else if (h.failed.length) {
+      toast(`Не ответили разделы: ${h.failed.join(', ')}`, 'warn');
     }
   }
 
   boot();
 })();
-
-// проверка записи

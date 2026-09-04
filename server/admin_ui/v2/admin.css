@@ -723,3 +723,31 @@ tr.unread td:first-child { box-shadow: inset 2px 0 0 var(--ember); }
   .card > .body.flush { overflow-x: auto; }
   table { min-width: 620px; }
 }
+
+/* ---------- Вопрос перед необратимым действием ---------- */
+
+/* Своё окно, а не `window.confirm`: тот не умеет ни выделить объект, ни
+   подписать кнопку глаголом, ни сказать, что произойдёт с игроками. */
+.modal-back {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: var(--s4);
+  background: rgb(0 0 0 / 55%);
+}
+
+.modal {
+  width: min(100%, 460px);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  padding: var(--s4);
+  display: grid;
+  gap: var(--s3);
+}
+
+.modal h2 { font-size: 1rem; margin: 0; }
+.modal p { margin: 0; color: var(--fg-2); font-size: 0.875rem; }
+.modal .btn-row { justify-content: flex-end; }
