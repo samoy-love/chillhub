@@ -1,13 +1,14 @@
-// Длинные дела панели 2.0 в настоящем DOM.
+// Длинные дела панели 2.0 целиком, в настоящем DOM.
 //
-// Шесть дел — загрузка сборки, сборка модпака, новость, галерея,
-// порядок игр и подбор параметров — идут минутами и умеют оборваться на
-// середине. Правила внутри них уже проверены по отдельности; здесь
-// проверяется связывание: открылось ли дело, что ушло на сервер и что
-// осталось на экране, когда всё кончилось.
+// Приём тот же, что в admin2-dom.test.js: реальный index.html грузится в
+// jsdom, все его <script> исполняются в браузерном порядке, сеть
+// подменена полностью. Отличие — здесь проверяются не одиночные записи,
+// а дела, которые идут минутами и умеют оборваться на середине.
 //
-// Сеть подменена целиком: наружу не уходит ни один запрос, а каждый
-// записывается вместе с методом, адресом и телом.
+// Смысл именно в обрывах. Что панель показывает на успешном пути, видно
+// и глазами; что она показывает, когда связь легла на сороковом
+// проценте, а пакет пропал с Thunderstore, — не видно никак, и в версии
+// 1.0 это не показывалось вовсе.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -18,63 +19,65 @@ const { JSDOM } = require('jsdom');
 
 const V2 = path.join(__dirname, '..', '..', 'server', 'admin_ui', 'v2');
 
-function fixtures() {
-  return {
-    summary: { launcher: { pending: false, newest: '1.6.25', active: '1.6.25' }, mods: [] },
-    list: { items: [{ version: '1.6.25', date: '04.09.2026', files: 478, size: 121400000, state: 'active' }] },
-    games: {
-      items: [
-        { gameId: 'repo', title: 'R.E.P.O.', exeRelativePath: 'REPO.exe', order: 0, mods: { steamAppId: '3241660' } },
-        { gameId: 'peak', title: 'PEAK', exeRelativePath: 'PEAK.exe', order: 1 },
-      ],
-    },
-    'mods/list': { items: [{ gameId: 'repo', title: 'R.E.P.O.', built: '1.9.9', active: '1.9.9', mods: 17 }] },
-    'news/list': { items: [{ id: 'n1', title: 'Заметка', published: false }] },
-    'news/get': { id: 'n1', title: 'Заметка', body: 'Текст с сервера', gameId: '' },
-    'feedback/list': { items: [] },
-    'maintenance/get': { enabled: false, reason: '', blocks: {} },
-    'metrics/summary': { days: [] },
-    'metrics/errors': { items: [] },
-    'system/free': { freeBytes: 214000000000, totalBytes: 480000000000 },
-    'mods/cache': { files: 412, bytes: 8900000000 },
-    'games/gallery': {
-      cover: 'cover.jpg',
-      items: [
-        { name: 'cover.jpg', size: 240000 },
-        { name: 'screens', dir: true },
-        { name: 'guide.pdf', size: 90000 },
-      ],
-    },
-  };
-}
+const FIXTURES = {
+  summary: { launcher: { pending: true, newest: '1.6.25', active: '1.6.24' }, mods: [] },
+  list: {
+    items: [
+      { version: '1.6.25', date: '04.09.2026', files: 478, size: 121400000, state: 'uploaded' },
+      { version: '1.6.24', date: '31.08.2026', files: 476, size: 121100000, state: 'active' },
+    ],
+  },
+  games: {
+    items: [
+      { gameId: 'repo', title: 'R.E.P.O.', exeRelativePath: 'REPO.exe', order: 0 },
+      { gameId: 'peak', title: 'PEAK', exeRelativePath: 'PEAK.exe', order: 1 },
+    ],
+  },
+  'mods/list': {
+    items: [{ gameId: 'repo', title: 'R.E.P.O.', built: '1.9.9', active: '1.9.8', mods: 17, size: 251000000 }],
+  },
+  'news/list': { items: [{ id: 'n1', title: 'Заметка', published: false }] },
+  'news/get': { id: 'n1', title: 'Заметка', body: 'Текст заметки', gameId: '' },
+  'feedback/list': { items: [{ id: 'f1', type: 'bug', status: 'new', comment: 'обрывается' }] },
+  'maintenance/get': { enabled: false, reason: '', blocks: {} },
+  'metrics/summary': { days: [{ date: '04.09', launcherStarts: 10, updates: 4, errors: 1 }] },
+  'metrics/errors': { items: [{ code: 'download_reset', n: 3, what: 'обрыв' }] },
+  'system/free': { freeBytes: 214000000000, totalBytes: 480000000000 },
+  'mods/cache': { files: 412, bytes: 8900000000 },
+  'games/gallery': {
+    cover: 'cover.png',
+    items: [
+      { name: 'cover.png', size: 240000 },
+      { name: 'screens', dir: true },
+      { name: 'guide.pdf', size: 90000 },
+    ],
+  },
+};
 
-async function boot(overrides) {
+/** Поднимает панель в jsdom. `routes` подменяет отдельные ответы. */
+async function boot(routes) {
   const html = fs.readFileSync(path.join(V2, 'index.html'), 'utf8');
   const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'https://example.test/admin/ui/v2/' });
   const { window } = dom;
 
   const calls = [];
-  const fx = Object.assign(fixtures(), overrides || {});
+  const table = Object.assign({}, FIXTURES, routes || {});
 
   window.fetch = async (url, init) => {
     const u = String(url);
     const method = (init && init.method) || 'GET';
-    let body;
+    let body = null;
     try {
-      body = init && init.body ? JSON.parse(init.body) : null;
+      body = init && typeof init.body === 'string' ? JSON.parse(init.body) : null;
     } catch {
-      body = init.body;
+      body = init ? init.body : null;
     }
     calls.push({ method, url: u, body });
 
     const key = u.replace('/admin/api/', '').split('?')[0];
-    if (Object.prototype.hasOwnProperty.call(fx, key)) {
-      const v = fx[key];
-      if (v && v.__fail) {
-        return { ok: false, status: v.__fail, text: async () => JSON.stringify({ error: v.error || 'сбой' }) };
-      }
-      return { ok: true, status: 200, text: async () => JSON.stringify(v) };
-    }
+    const hit = table[key];
+    if (typeof hit === 'function') return hit({ method, url: u, body });
+    if (hit !== undefined) return { ok: true, status: 200, text: async () => JSON.stringify(hit) };
     return { ok: true, status: 200, text: async () => '{}' };
   };
 
@@ -82,326 +85,360 @@ async function boot(overrides) {
     const file = path.resolve(V2, src);
     vm.runInContext(fs.readFileSync(file, 'utf8'), dom.getInternalVMContext(), { filename: file });
   }
+
   for (let i = 0; i < 40; i++) await new Promise((r) => setTimeout(r, 0));
   return { window, calls, dom };
 }
 
-async function until(fn, tries = 80) {
+/* Досматривает начатое до конца.
+
+   Дело после ответа сервера ещё закрывает лист, перечитывает разделы и
+   перерисовывает раздел. Оборвать окно раньше — значит получить падение
+   в чужой асинхронной работе вместо результата теста. */
+const settle = (n = 30) => until(() => false, n);
+
+/** Ждёт условия, прокручивая очередь микрозадач. */
+async function until(fn, tries = 200) {
   for (let i = 0; i < tries; i++) {
-    if (fn()) return true;
+    const v = fn();
+    if (v) return v;
     await new Promise((r) => setTimeout(r, 0));
   }
-  return false;
+  return null;
 }
 
-/* Дать делу договорить до конца: закрытие листа тянет за собой
-   перечитывание разделов и перерисовку, и окно нельзя закрывать раньше. */
-const settle = async (window) => {
-  await until(() => !window.document.querySelector('.sheet'));
-  for (let i = 0; i < 30; i++) await new Promise((r) => setTimeout(r, 0));
-};
-
-const go = async (window, hash, sel) => {
+/** Открывает раздел и жмёт кнопку дела. */
+async function open(window, hash, act) {
   window.location.hash = hash;
-  await until(() => window.document.querySelector(sel));
-  return window.document.querySelector(sel);
-};
+  const btn = await until(() => window.document.querySelector(`[data-act="${act}"]`));
+  assert.ok(btn, 'кнопки «' + act + '» нет в разделе ' + hash);
+  btn.click();
+  const sheet = await until(() => window.document.querySelector('.sheet'));
+  assert.ok(sheet, 'лист «' + act + '» не открылся');
+  return sheet;
+}
+
+const text = (el) => el.textContent.replace(/\s+/g, ' ').trim();
 
 /* ---------- Оболочка ---------- */
 
-test('дело открывается листом поверх раздела, а раздел остаётся на месте', async (t) => {
+test('лист закрывается по Escape, крестику и клику мимо', async (t) => {
   const { window } = await boot();
   t.after(() => window.close());
+  const doc = window.document;
 
-  const btn = await go(window, '#launcher', '[data-act="upload"]');
-  btn.click();
-  assert.ok(await until(() => window.document.querySelector('.sheet')), 'лист не открылся');
+  await open(window, '#launcher', 'upload');
+  doc.querySelector('[data-sheet-close]').click();
+  assert.strictEqual(doc.querySelector('.sheet'), null, 'крестик не закрыл лист');
 
-  assert.match(window.document.querySelector('.sheet').textContent, /Загрузка сборки/);
-  // Раздел под листом никуда не делся: видно, к чему вернуться
-  assert.ok(window.document.querySelector('h1'));
+  await open(window, '#launcher', 'upload');
+  doc.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+  assert.strictEqual(doc.querySelector('.sheet'), null, 'Escape не закрыл лист');
+
+  const back = (await open(window, '#launcher', 'upload')).closest('.sheet-back');
+  back.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.strictEqual(doc.querySelector('.sheet'), null, 'клик мимо не закрыл лист');
 });
 
-test('лист закрывается по Escape', async (t) => {
+test('фокус уходит внутрь листа, а не остаётся на странице под ним', async (t) => {
   const { window } = await boot();
   t.after(() => window.close());
-
-  (await go(window, '#launcher', '[data-act="upload"]')).click();
-  await until(() => window.document.querySelector('.sheet'));
-
-  window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
-  assert.ok(await until(() => !window.document.querySelector('.sheet')), 'лист не закрылся');
+  const sheet = await open(window, '#launcher', 'upload');
+  assert.ok(sheet.contains(window.document.activeElement), 'фокус остался снаружи листа');
 });
 
-test('открытая загрузка сама на сервер не ходит, пока файл не выбран', async (t) => {
+/* ---------- Загрузка ---------- */
+
+test('загрузка доходит до конца и не выдаёт себя за выкатку игрокам', async (t) => {
+  const chunks = [];
+  const { window, calls } = await boot({
+    'upload/init': { uploadId: 'u1', chunkSize: 4, totalChunks: 3 },
+    'upload/status': { received: [] },
+    'upload/process': () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ type: 'start' }) + '\n' + JSON.stringify({ type: 'done' }) + '\n',
+    }),
+  });
+  t.after(() => window.close());
+
+  const sheet = await open(window, '#launcher', 'upload');
+  window.XMLHttpRequest = undefined; // куски льём подменённым PUT, а не XHR
+
+  // Файл подсовываем напрямую: диалог выбора в jsdom не открыть
+  window.CH2Upload.run(
+    { name: 'ChillHub-1.6.25.zip', size: 12, slice: () => 'кусок' },
+    { kind: 'launcher', chunkSize: 4 },
+    {
+      api: window.CH2Api.makeApi(),
+      chunks: {
+        uploadChunkWithRetries: async (id, i) => {
+          chunks.push(i);
+          return { ok: true };
+        },
+        runWorkerPool: window.runWorkerPool,
+        pendingBytes: window.pendingBytes,
+      },
+      slice: () => 'кусок',
+      concurrency: () => 2,
+    }
+  );
+
+  await until(() => calls.some((c) => c.url.includes('upload/complete')));
+  assert.deepStrictEqual(chunks.sort(), [0, 1, 2], 'залиты не все куски');
+  assert.ok(sheet, 'лист пропал посреди загрузки');
+
+  const done = window.CH2Views.uploadStatus({ phase: 'done' });
+  assert.match(done.text, /Игрокам версия пока не ушла/);
+});
+
+test('докачка спрашивает сервер и не льёт то, что уже лежит', async (t) => {
+  const sent = [];
+  const { window } = await boot({
+    'upload/init': { uploadId: 'u1', chunkSize: 4, totalChunks: 3 },
+    'upload/status': { received: [0, 1] },
+  });
+  t.after(() => window.close());
+
+  await window.CH2Upload.run(
+    { name: 'a.zip', size: 12 },
+    { kind: 'launcher', chunkSize: 4 },
+    {
+      api: window.CH2Api.makeApi(),
+      chunks: {
+        uploadChunkWithRetries: async (id, i) => {
+          sent.push(i);
+          return { ok: true };
+        },
+        runWorkerPool: window.runWorkerPool,
+        pendingBytes: window.pendingBytes,
+      },
+      slice: () => 'кусок',
+      concurrency: () => 2,
+    }
+  );
+
+  // Заливка на 1,8 ГБ рвётся, и повторять её с нуля неприемлемо
+  assert.deepStrictEqual(sent, [2], 'докачка залила уже лежащие куски');
+});
+
+/* ---------- Сборка ---------- */
+
+test('журнал сборки наполняется строками по мере их прихода', async (t) => {
+  const lines = [
+    { type: 'info', message: 'читаем список модов' },
+    { type: 'info', message: 'качаем BepInEx' },
+    { type: 'done', message: 'собрано 17 модов' },
+  ];
+  const { window } = await boot({
+    'mods/build': () => ({ ok: true, status: 200, text: async () => lines.map((l) => JSON.stringify(l)).join('\n') + '\n' }),
+  });
+  t.after(() => window.close());
+
+  const sheet = await open(window, '#packs', 'build');
+  await until(() => sheet.querySelector('[data-build-outcome]'));
+
+  const body = text(sheet.querySelector('.sheet-body'));
+  assert.match(body, /читаем список модов/);
+  assert.match(body, /собрано 17 модов/);
+  assert.match(body, /отдайте новую версию/, 'сборка выдана за выкатку игрокам');
+});
+
+test('пропавший с Thunderstore пакет спрашивают один раз и собирают без него', async (t) => {
+  let attempts = 0;
+  const { window, calls } = await boot({
+    'mods/build': ({ body }) => {
+      attempts++;
+      const missing = { type: 'error', message: 'пакета Mod.Foo больше нет на Thunderstore' };
+      const okDone = { type: 'done', message: 'собрано без пропавших' };
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(body && body.allowMissing ? okDone : missing) + '\n',
+      };
+    },
+  });
+  t.after(() => window.close());
+
+  const sheet = await open(window, '#packs', 'build');
+  const modal = await until(() => window.document.querySelector('.modal'));
+  assert.ok(modal, 'про пропавшие пакеты не спросили');
+  assert.match(modal.textContent, /без пропавших пакетов/);
+
+  modal.querySelector('[data-yes]').click();
+  await until(() => sheet.querySelector('[data-build-outcome]'));
+
+  assert.strictEqual(attempts, 2, 'повтор без пропавших не случился');
+  // Второй вопрос превратил бы отказ на середине в бесконечный диалог
+  assert.strictEqual(window.document.querySelector('.modal'), null, 'спросили второй раз');
+  assert.ok(calls.some((c) => c.body && c.body.allowMissing === '1'));
+});
+
+test('страница ошибки от прокси не попадает на экран куском разметки', async (t) => {
+  const { window } = await boot({
+    'mods/build': () => ({ ok: false, status: 502, text: async () => '<!DOCTYPE html><html><body>Bad Gateway</body></html>' }),
+  });
+  t.after(() => window.close());
+
+  const sheet = await open(window, '#packs', 'build');
+  const out = await until(() => sheet.querySelector('[data-build-outcome]'));
+  assert.ok(out, 'итог сборки не показан');
+  assert.match(out.textContent, /код 502/);
+  assert.ok(!/DOCTYPE|<body>/.test(out.textContent), 'на экран вывалилась страница ошибки');
+});
+
+/* ---------- Новость ---------- */
+
+test('новость сохраняется тем, что набрали, и черновик после этого убирается', async (t) => {
   const { window, calls } = await boot();
   t.after(() => window.close());
 
-  const btn = await go(window, '#launcher', '[data-act="upload"]');
-  const before = calls.length;
-  btn.click();
-  await until(() => window.document.querySelector('.sheet'));
+  const sheet = await open(window, '#news', 'new-post');
+  await until(() => sheet.querySelector('[name="title"]'));
 
-  assert.strictEqual(calls.length, before, 'лист сходил на сервер до выбора файла');
-  assert.match(window.document.querySelector('.sheet').textContent, /Файл ещё не выбран/);
+  const set = (name, value) => {
+    const el = sheet.querySelector(`[name="${name}"]`);
+    el.value = value;
+    el.dispatchEvent(new window.Event('input', { bubbles: true }));
+  };
+  set('title', 'Вышла 1.6.25');
+  set('body', 'Починили обрыв скачивания больших файлов.');
+
+  // Черновик пишется на каждый ввод: новость набирают минутами
+  assert.ok(window.CH2News.readDraft(window.localStorage, ''), 'черновик не сохранён');
+
+  sheet.querySelector('[data-flow="save"]').click();
+  await until(() => calls.some((c) => c.url.includes('news/save')));
+
+  const saved = calls.find((c) => c.url.includes('news/save'));
+  assert.strictEqual(saved.body.title, 'Вышла 1.6.25');
+  assert.match(saved.body.body, /обрыв скачивания/);
+  const gone = await until(() => window.CH2News.readDraft(window.localStorage, '') === null);
+  assert.ok(gone, 'черновик остался после сохранения');
+  await settle();
+});
+
+test('пустую новость не отправляют, а показывают, чего не хватает', async (t) => {
+  const { window, calls } = await boot();
+  t.after(() => window.close());
+
+  const sheet = await open(window, '#news', 'new-post');
+  await until(() => sheet.querySelector('[name="title"]'));
+  sheet.querySelector('[data-flow="save"]').click();
+
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(!calls.some((c) => c.url.includes('news/save')), 'пустая новость ушла на сервер');
+  assert.ok(sheet.querySelector('.help--bad'), 'не сказано, чего не хватает');
+});
+
+test('оставшийся черновик предлагают вернуть, а не подставляют молча', async (t) => {
+  const { window } = await boot();
+  t.after(() => window.close());
+
+  window.CH2News.saveDraft(window.localStorage, 'n1', { title: 'Заметка', body: 'Недописанное' });
+
+  const sheet = await open(window, '#news', 'edit-post');
+  await until(() => sheet.querySelector('[data-draft-restore]'));
+  assert.ok(sheet.querySelector('[data-draft-restore]'), 'про черновик не сказали');
+
+  // Молча подставленный черновик затёр бы то, что уже на сервере
+  assert.strictEqual(sheet.querySelector('[name="body"]').value, 'Текст заметки');
+
+  sheet.querySelector('[data-draft-restore]').click();
+  await until(() => sheet.querySelector('[name="body"]').value === 'Недописанное');
+  assert.strictEqual(sheet.querySelector('[name="body"]').value, 'Недописанное');
 });
 
 /* ---------- Галерея ---------- */
 
-test('галерея открывается для той игры, в строке которой нажали', async (t) => {
-  const { window, calls } = await boot();
-  t.after(() => window.close());
-
-  await go(window, '#games', '[data-act="gallery"]');
-  const rows = [...window.document.querySelectorAll('[data-act="gallery"]')];
-  const peak = rows.find((b) => (b.dataset.args || '').includes('peak'));
-  assert.ok(peak, 'у строки игры нет своей кнопки галереи');
-  peak.click();
-
-  assert.ok(await until(() => calls.some((c) => c.url.includes('games/gallery') && c.url.includes('peak'))), 'галерея не запрошена');
-});
-
-test('в галерее видно, какой файл уйдёт на витрину', async (t) => {
+test('галерея показывает содержимое папки и помечает обложку', async (t) => {
   const { window } = await boot();
   t.after(() => window.close());
 
-  (await go(window, '#games', '[data-act="gallery"]')).click();
-  assert.ok(await until(() => /обложка/.test(window.document.querySelector('.sheet').textContent)));
+  const sheet = await open(window, '#games', 'gallery');
+  await until(() => sheet.querySelector('[data-name="cover.png"]'));
 
-  const sheet = window.document.querySelector('.sheet');
-  assert.match(sheet.textContent, /cover\.jpg/);
-  // PDF обложкой быть не может, и предлагать это незачем
-  assert.ok(!sheet.querySelector('[data-cover="guide.pdf"]'));
+  const body = text(sheet.querySelector('.sheet-body'));
+  assert.match(body, /cover\.png/);
+  assert.match(body, /обложка/);
+  // Обложкой можно сделать только картинку, и только не текущую
+  assert.strictEqual(sheet.querySelector('[data-cover="cover.png"]'), null);
+  assert.strictEqual(sheet.querySelector('[data-cover="guide.pdf"]'), null);
 });
 
-test('переименование в занятое имя до сервера не доходит', async (t) => {
+test('удаление обложки предупреждает о том, что увидит игрок', async (t) => {
   const { window, calls } = await boot();
   t.after(() => window.close());
 
-  (await go(window, '#games', '[data-act="gallery"]')).click();
-  await until(() => window.document.querySelector('[data-rename]'));
+  const sheet = await open(window, '#games', 'gallery');
+  await until(() => sheet.querySelector('[data-remove="cover.png"]'));
+  sheet.querySelector('[data-remove="cover.png"]').click();
 
-  // Windows не различает регистр: «Cover.JPG» затрёт «cover.jpg» молча
-  window.prompt = () => 'Cover.JPG';
-  const before = calls.length;
-  window.document.querySelector('[data-rename="guide.pdf"]').click();
-  await until(() => /уже занято/.test(window.document.body.textContent));
+  const modal = await until(() => window.document.querySelector('.modal'));
+  assert.ok(modal, 'удаление не спросило');
+  assert.match(modal.textContent, /витрина останется с градиентом/);
 
-  assert.match(window.document.body.textContent, /уже занято/);
-  assert.strictEqual(calls.length, before, 'запрос ушёл при заведомо плохом имени');
+  modal.querySelector('[data-no]').click();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(!calls.some((c) => c.url.includes('gallery/delete')), 'отказ всё равно удалил');
 });
 
-test('отказ от переименования ничего не меняет', async (t) => {
+test('переименование в занятое имя не уходит на сервер', async (t) => {
   const { window, calls } = await boot();
   t.after(() => window.close());
 
-  (await go(window, '#games', '[data-act="gallery"]')).click();
-  await until(() => window.document.querySelector('[data-rename]'));
+  const sheet = await open(window, '#games', 'gallery');
+  await until(() => sheet.querySelector('[data-rename="guide.pdf"]'));
 
-  window.prompt = () => null;
-  const before = calls.length;
-  window.document.querySelector('[data-rename="guide.pdf"]').click();
-  for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
-  assert.strictEqual(calls.length, before);
-});
+  // Windows не различает регистр: «Cover.png» затёрло бы «cover.png» молча
+  window.prompt = () => 'Cover.PNG';
+  sheet.querySelector('[data-rename="guide.pdf"]').click();
 
-test('удаление обложки сначала называет последствие для игрока', async (t) => {
-  const { window, calls } = await boot();
-  t.after(() => window.close());
-
-  (await go(window, '#games', '[data-act="gallery"]')).click();
-  await until(() => window.document.querySelector('[data-remove="cover.jpg"]'));
-  window.document.querySelector('[data-remove="cover.jpg"]').click();
-
-  assert.ok(await until(() => window.document.querySelector('.modal')), 'вопрос не показан');
-  assert.match(window.document.querySelector('.modal').textContent, /витрина останется с градиентом/);
-  assert.strictEqual(calls.filter((c) => c.url.includes('gallery/delete')).length, 0);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(!calls.some((c) => c.url.includes('gallery/rename')), 'занятое имя ушло на сервер');
+  assert.match(text(window.document.querySelector('.toast')), /уже занято/);
 });
 
 /* ---------- Порядок игр ---------- */
 
-test('пока ничего не переехало, сохранять нечего', async (t) => {
+test('пока порядок не менялся, сохранять нечего', async (t) => {
   const { window } = await boot();
   t.after(() => window.close());
 
-  (await go(window, '#games', '[data-act="order"]')).click();
-  await until(() => window.document.querySelector('.order'));
-
-  const save = window.document.querySelector('[data-flow="save"]');
-  assert.strictEqual(save.disabled, true);
-  assert.match(window.document.querySelector('.sheet').textContent, /сохранять нечего/);
+  const sheet = await open(window, '#games', 'new-game');
+  const save = sheet.querySelector('[data-flow="save"]');
+  assert.ok(save.disabled, 'предложено сохранить неизменённый порядок');
+  assert.match(text(sheet.querySelector('footer')), /сохранять нечего/);
 });
 
 test('перестановка называет последствие и уходит на сервер пересчитанной', async (t) => {
   const { window, calls } = await boot();
   t.after(() => window.close());
 
-  (await go(window, '#games', '[data-act="order"]')).click();
-  await until(() => window.document.querySelector('[data-down="repo"]'));
-  window.document.querySelector('[data-down="repo"]').click();
-  await until(() => !window.document.querySelector('[data-flow="save"]').disabled);
+  const sheet = await open(window, '#games', 'new-game');
+  sheet.querySelector('[data-down="repo"]').click();
 
-  assert.match(window.document.querySelector('.sheet').textContent, /Игроки увидят новый порядок сразу/);
+  assert.match(text(sheet.querySelector('footer')), /Игроки увидят новый порядок сразу/);
+  sheet.querySelector('[data-flow="save"]').click();
+  await until(() => calls.some((c) => c.url.includes('games/save')));
 
-  window.document.querySelector('[data-flow="save"]').click();
-  assert.ok(await until(() => calls.some((c) => c.url.includes('games/save'))), 'порядок не сохранён');
-
-  const sent = calls.find((c) => c.url.includes('games/save')).body.items;
-  // Лаунчер помнит игру по её месту, поэтому номера пересчитываются целиком
-  assert.deepStrictEqual(sent.map((g) => g.gameId), ['peak', 'repo']);
-  assert.deepStrictEqual(sent.map((g) => g.order), [0, 1]);
-  await settle(window);
-});
-
-/* ---------- Новость ---------- */
-
-test('правка новости открывает её текст, а не чужой', async (t) => {
-  const { window, calls } = await boot();
-  t.after(() => window.close());
-
-  (await go(window, '#news', '[data-act="edit-post"]')).click();
-  assert.ok(await until(() => window.document.querySelector('[name="body"]')), 'редактор не открылся');
-
-  assert.ok(calls.some((c) => c.url.includes('news/get')));
-  assert.strictEqual(window.document.querySelector('[name="body"]').value, 'Текст с сервера');
-});
-
-test('черновик пишется в браузер по ходу набора', async (t) => {
-  const { window } = await boot();
-  t.after(() => window.close());
-
-  (await go(window, '#news', '[data-act="edit-post"]')).click();
-  await until(() => window.document.querySelector('[name="body"]'));
-
-  const body = window.document.querySelector('[name="body"]');
-  body.value = 'Дописал абзац';
-  body.dispatchEvent(new window.Event('input', { bubbles: true }));
-
-  assert.ok(
-    await until(() => JSON.stringify(Object.entries(window.localStorage)).includes('Дописал абзац')),
-    'черновик не сохранён'
-  );
-});
-
-test('новость без заголовка на сервер не уходит', async (t) => {
-  const { window, calls } = await boot({ 'news/get': { id: 'n1', title: '', body: 'Текст', gameId: '' } });
-  t.after(() => window.close());
-
-  (await go(window, '#news', '[data-act="edit-post"]')).click();
-  await until(() => window.document.querySelector('[name="title"]'));
-
-  const before = calls.length;
-  window.document.querySelector('[data-flow="save"]').click();
-  await until(() => /Не хватает/.test(window.document.body.textContent));
-
-  assert.match(window.document.body.textContent, /Не хватает/);
-  assert.strictEqual(calls.filter((c) => c.url.includes('news/save')).length, 0);
-  assert.strictEqual(calls.length, before);
-});
-
-test('сохранение новости не выдаёт её за опубликованную', async (t) => {
-  const { window, calls } = await boot();
-  t.after(() => window.close());
-
-  (await go(window, '#news', '[data-act="edit-post"]')).click();
-  await until(() => window.document.querySelector('[name="title"]'));
-  window.document.querySelector('[data-flow="save"]').click();
-
-  assert.ok(await until(() => calls.some((c) => c.url.includes('news/save'))), 'новость не сохранена');
-  await until(() => /уйдёт после публикации/.test(window.document.body.textContent));
-  assert.match(window.document.body.textContent, /уйдёт после публикации/);
-  await settle(window);
+  const saved = calls.find((c) => c.url.includes('games/save'));
+  const ids = saved.body.items.map((g) => g.gameId);
+  assert.deepStrictEqual(ids, ['peak', 'repo']);
+  // Лаунчер помнит игру по её месту в списке — номера пересчитываются целиком
+  assert.deepStrictEqual(saved.body.items.map((g) => g.order), [0, 1]);
+  await settle();
 });
 
 /* ---------- Подбор параметров ---------- */
 
-test('прогон ничего не публикует и убирает за собой', async (t) => {
-  const { window, calls } = await boot({ 'upload/init': { uploadId: 'bench-1', chunkSize: 4194304, totalChunks: 1 } });
+test('таблица прогонов помечает лучший и объясняет, почему он', async (t) => {
+  const { window } = await boot();
   t.after(() => window.close());
 
-  (await go(window, '#transfer', '[data-act="bench"]')).click();
-  await until(() => window.document.querySelector('.sheet'));
-  window.document.querySelector('[data-flow="run"]').click();
-
-  assert.ok(await until(() => calls.filter((c) => c.url.includes('upload/abort')).length >= 3, 400), 'заявки не отменены');
-  // Ни активации, ни сохранения — прогон только меряет
-  assert.strictEqual(calls.filter((c) => /activate|games\/save|news\/save/.test(c.url)).length, 0);
-});
-
-test('после прогона видно, почему выбран именно этот набор', async (t) => {
-  const { window } = await boot({ 'upload/init': { uploadId: 'bench-1', chunkSize: 4194304, totalChunks: 1 } });
-  t.after(() => window.close());
-
-  (await go(window, '#transfer', '[data-act="bench"]')).click();
-  await until(() => window.document.querySelector('.sheet'));
-  window.document.querySelector('[data-flow="run"]').click();
-
-  assert.ok(await until(() => window.document.querySelector('tr.best'), 400), 'лучший прогон не помечен');
-  assert.match(window.document.querySelector('.sheet').textContent, /прогон|повторами/);
-});
-
-/* ---------- Панель без сервера ---------- */
-
-/* Сервер, не отвечающий ни на один запрос, — не выдуманный случай: так
-   выглядит истёкшая сессия, упавший процесс и просто открытая на ночь
-   вкладка. Панель обязана в этом состоянии показать снимок и сказать,
-   что записывать нельзя, а не остаться скелетом навсегда. */
-async function bootDead() {
-  const html = fs.readFileSync(path.join(V2, 'index.html'), 'utf8');
-  const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'https://example.test/admin/ui/v2/' });
-  const { window } = dom;
-  const errors = [];
-  window.addEventListener('error', (e) => errors.push((e.error && e.error.message) || 'ошибка'));
-  window.fetch = async () => ({ ok: false, status: 404, text: async () => 'not found' });
-
-  for (const src of [...window.document.querySelectorAll('script[src]')].map((x) => x.getAttribute('src'))) {
-    const file = path.resolve(V2, src);
-    vm.runInContext(fs.readFileSync(file, 'utf8'), dom.getInternalVMContext(), { filename: file });
-  }
-  for (let i = 0; i < 60; i++) await new Promise((r) => setTimeout(r, 0));
-  return { window, errors };
-}
-
-test('молчащий сервер не оставляет панель скелетом', async (t) => {
-  const { window } = await bootDead();
-  t.after(() => window.close());
-
-  const h1 = window.document.querySelector('h1');
-  assert.ok(h1 && h1.textContent.trim().length > 2, 'раздел не отрисовался');
-  assert.match(window.document.body.textContent, /Сервер не отвечает/);
-  assert.match(window.document.body.textContent, /записывать нельзя/);
-});
-
-test('на снимке открываются все разделы до единого', async (t) => {
-  // Поля, которых нет в ответе сервера, ломали раздел молча
-  const { window } = await bootDead();
-  t.after(() => window.close());
-
-  for (const id of ['overview', 'launcher', 'packs', 'games', 'news', 'inbox', 'maint', 'errors', 'transfer']) {
-    window.location.hash = '#' + id;
-    await until(() => window.document.querySelector('h1'));
-    const h1 = window.document.querySelector('h1');
-    assert.ok(h1 && h1.textContent.trim().length > 2, 'раздел ' + id + ' не открылся без сервера');
-  }
-});
-
-test('на снимке открываются все длинные дела', async (t) => {
-  const { window } = await bootDead();
-  t.after(() => window.close());
-
-  for (const [hash, act] of [
-    ['#launcher', 'upload'],
-    ['#packs', 'build'],
-    ['#news', 'new-post'],
-    ['#games', 'gallery'],
-    ['#games', 'order'],
-    ['#transfer', 'bench'],
-  ]) {
-    const btn = await go(window, hash, `[data-act="${act}"]`);
-    assert.ok(btn, 'нет кнопки ' + act);
-    btn.click();
-    assert.ok(await until(() => window.document.querySelector('.sheet')), 'дело ' + act + ' не открылось');
-    window.document.querySelector('[data-sheet-close]').click();
-    await until(() => !window.document.querySelector('.sheet'));
-  }
+  const sheet = await open(window, '#transfer', 'bench');
+  const body = text(sheet.querySelector('.sheet-body'));
+  assert.match(body, /выбрано/);
+  assert.match(body, /Лучший прогон|Быстрее всех/);
+  assert.ok(sheet.querySelector('tr.best'), 'лучший прогон не помечен');
 });

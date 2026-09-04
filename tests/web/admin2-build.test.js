@@ -205,3 +205,30 @@ test('без функции подтверждения пропавшие пак
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.kind, 'missing');
 });
+
+/* ---------- Тело неудачного ответа ---------- */
+
+test('страница ошибки от прокси не вываливается человеку куском HTML', () => {
+  // Прокси на 502 отдаёт страницу, а не разбор
+  assert.strictEqual(B.errorText('<!DOCTYPE html><html><body>Bad Gateway</body></html>', 502), 'код 502');
+});
+
+test('разобранная причина показывается словами сервера', () => {
+  assert.strictEqual(B.errorText(JSON.stringify({ error: 'нет такого модпака' }), 400), 'нет такого модпака');
+  assert.strictEqual(B.errorText(JSON.stringify({ message: 'очередь занята' }), 409), 'очередь занята');
+});
+
+test('короткий простой текст проходит как есть', () => {
+  assert.strictEqual(B.errorText('очередь занята', 409), 'очередь занята');
+});
+
+test('пустое тело и простыня текста уступают место коду ответа', () => {
+  // Код ответа скучен, но он хотя бы честен
+  assert.strictEqual(B.errorText('', 500), 'код 500');
+  assert.strictEqual(B.errorText('x'.repeat(400), 500), 'код 500');
+});
+
+test('длинную причину из разбора обрезаем, а не выбрасываем', () => {
+  const long = B.errorText(JSON.stringify({ error: 'ы'.repeat(500) }), 400);
+  assert.strictEqual(long.length, 300);
+});

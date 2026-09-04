@@ -75,6 +75,31 @@
     };
   }
 
+  /**
+   * Во что превратить тело неудачного ответа.
+   *
+   * Прокси и сам сервер на ошибке отдают страницу, а не разбор: вывести
+   * её как есть значит вывалить человеку кусок HTML вместо причины.
+   * Годится только короткий текст или поле `error` из разбора — иначе
+   * остаётся код ответа, который хотя бы честен.
+   */
+  function errorText(body, status) {
+    const raw = String(body || '').trim();
+    const code = 'код ' + status;
+    if (!raw) return code;
+
+    try {
+      const parsed = JSON.parse(raw);
+      const msg = parsed && (parsed.error || parsed.message);
+      if (msg) return String(msg).slice(0, 300);
+    } catch {
+      // не разбор — значит, страница или простой текст
+    }
+
+    if (/[<>]/.test(raw) || raw.length > 300) return code;
+    return raw;
+  }
+
   /** Тело запроса на сборку. */
   function requestBody(opts) {
     const o = opts || {};
@@ -121,7 +146,7 @@
       } catch {
         text = '';
       }
-      return { ok: false, kind: 'error', message: text || 'код ' + res.status, events: events };
+      return { ok: false, kind: 'error', message: errorText(text, res.status), events: events };
     }
 
     const seen = await ndjson.readNdjsonStream(res, emit);
@@ -146,5 +171,5 @@
     return Object.assign({}, result, { events: events });
   }
 
-  return { MISSING: MISSING, isMissing: isMissing, normalize: normalize, outcome: outcome, requestBody: requestBody, run: run };
+  return { MISSING: MISSING, isMissing: isMissing, errorText: errorText, normalize: normalize, outcome: outcome, requestBody: requestBody, run: run };
 });
