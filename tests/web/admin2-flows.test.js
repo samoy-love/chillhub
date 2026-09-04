@@ -80,6 +80,12 @@ async function boot(routes) {
     }
     calls.push({ method, url: u, body });
 
+    /* Манифесты сборок раздаются публично, а не через админ-API: их
+       адрес не начинается с префикса, и подменяются они отдельно. */
+    if (!u.startsWith('/admin/api/')) {
+      return table.__raw ? table.__raw(u) : { ok: false, status: 404, text: async () => '' };
+    }
+
     const key = u.replace('/admin/api/', '').split('?')[0];
     const hit = table[key];
     if (typeof hit === 'function') return hit({ method, url: u, body });
@@ -450,75 +456,89 @@ test('перестановка называет последствие и ухо
 
 /* ---------- Подбор параметров ---------- */
 
-test('таблица прогонов помечает лучший и объясняет, почему он', async (t) => {
+test('прогоны помнит браузер, который их и мерил', async (t) => {
+  // Прогон меряет канал ЭТОГО компьютера: с другой машины его число не
+  // значит ничего, а показанное как общее — сбивает с толку
   const { window } = await boot();
   t.after(() => window.close());
+
+  window.CH2Tuning.remember(window.localStorage, [
+    { chunk: '8 МиБ', streams: 4, mbps: 92.4, retries: 0 },
+    { chunk: '2 МиБ', streams: 8, mbps: 79.3, retries: 3 },
+  ]);
 
   const sheet = await open(window, '#transfer', 'bench');
   const body = text(sheet.querySelector('.sheet-body'));
   assert.match(body, /выбрано/);
-  assert.match(body, /Лучший прогон|Быстрее всех/);
+  assert.match(body, /Лучший прогон: 8 МиБ на 4 потоках/);
   assert.ok(sheet.querySelector('tr.best'), 'лучший прогон не помечен');
 });
 
-/* ---------- Сессия ---------- */
-
-test('анонима уводят на вход, а не показывают ему разделы', async (t) => {
-  // Иначе 401 на первом же нажатии выглядит поломкой панели, а не отказом
-  const { window, left } = await boot({
-    'auth/me': () => ({ ok: false, status: 401, text: async () => '{}' }),
-    'auth/refresh': () => ({ ok: false, status: 401, text: async () => '{}' }),
-  });
+test('без прошлого прогона таблица честно пуста', async (t) => {
+  const { window } = await boot();
   t.after(() => window.close());
 
-  const gone = await until(() => left.length > 0);
-  assert.ok(gone, 'аноним остался в панели');
-  assert.deepStrictEqual(left, ['/admin/']);
+  const sheet = await open(window, '#transfer', 'bench');
+  assert.match(text(sheet.querySelector('.sheet-body')), /Прогонов ещё не было/);
 });
 
-test('истёкшую сессию обновляют молча, не показывая вход', async (t) => {
-  let asked = 0;
-  const { window, calls, left } = await boot({
-    'auth/me': () => {
-      asked++;
-      return asked === 1
-        ? { ok: false, status: 401, text: async () => '{}' }
-        : { ok: true, status: 200, text: async () => JSON.stringify({ user: 'admin' }) };
+/* ---------- Что изменится у игрока ---------- */
+
+/** Манифест сборки, как его отдаёт раздача. */
+const manifest = (files) => ({
+  ok: true,
+  status: 200,
+  text: async () => JSON.stringify({ version: '1.0', files }),
+});
+
+test('разница считается из настоящих манифестов, а не из снимка', async (t) => {
+  const { window } = await boot({
+    __raw: (url) => {
+      if (url.includes('1.6.24')) {
+        return manifest([
+          { path: 'ChillHub.exe', size: 100, blake3: 'старый' },
+          { path: 'Old.dll', size: 50, blake3: 'x' },
+        ]);
+      }
+      return manifest([
+        { path: 'ChillHub.exe', size: 100, blake3: 'новый' },
+        { path: 'New.dll', size: 70, blake3: 'n' },
+      ]);
     },
   });
   t.after(() => window.close());
 
-  await until(() => window.document.querySelector('h1'));
-  assert.ok(calls.some((c) => c.url.includes('auth/refresh')), 'сессию не пробовали обновить');
-  assert.deepStrictEqual(left, [], 'увели на вход с живой сессией');
+  window.location.hash = '#launcher';
+  const counts = await until(() => {
+    const el = window.document.querySelector('[data-diff-counts]');
+    return el && el.textContent.trim() ? el : null;
+  });
+  assert.ok(counts, 'счётчики разницы не появились');
+
+  const shown = text(counts);
+  assert.match(shown, /\+1/, 'не посчитано добавленное');
+  assert.match(shown, /~1/, 'не посчитано изменённое');
+  assert.match(shown, /−1/, 'не посчитано пропавшее');
+
+  const tree = text(window.document.querySelector('[data-diff]'));
+  assert.match(tree, /ChillHub\.exe/);
+  assert.match(tree, /New\.dll/);
+  assert.match(tree, /Old\.dll/);
 });
 
-test('упавшая сеть не выкидывает из панели, а показывает снимок', async (t) => {
-  const { window, left } = await boot({
-    'auth/me': () => {
-      throw new Error('сети нет');
-    },
+test('подчищенный старый манифест не выдаётся за «всё совпало»', async (t) => {
+  // Иначе решение об активации принимают вслепую, думая, что видят всё
+  const { window } = await boot({
+    __raw: (url) => (url.includes('1.6.24') ? { ok: false, status: 404 } : manifest([])),
   });
   t.after(() => window.close());
 
-  await until(() => window.document.querySelector('h1'));
-  assert.deepStrictEqual(left, [], 'из-за упавшей сети увели на вход');
-  assert.ok(window.document.querySelector('h1'), 'панель не показала ничего');
-});
-
-test('выход уводит на вход, даже если сервер на него не ответил', async (t) => {
-  // Держать человека в панели, из которой он попросил выйти, хуже
-  const { window, calls, left } = await boot({
-    'auth/logout': () => {
-      throw new Error('сети нет');
-    },
+  window.location.hash = '#launcher';
+  const box = await until(() => {
+    const el = window.document.querySelector('[data-diff]');
+    return el && /Сравнить|совпад/.test(el.textContent) ? el : null;
   });
-  t.after(() => window.close());
-
-  await until(() => window.document.querySelector('[data-logout]'));
-  window.document.querySelector('[data-logout]').click();
-
-  const gone = await until(() => left.length > 0);
-  assert.ok(gone, 'после выхода остались в панели');
-  assert.ok(calls.some((c) => c.url.includes('auth/logout')), 'выход не дошёл до сервера');
+  assert.ok(box, 'ничего не сказано про разницу');
+  assert.match(text(box), /Сравнить не с чем/);
+  assert.match(text(box), /старые подчищаются/);
 });

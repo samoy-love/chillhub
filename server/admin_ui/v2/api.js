@@ -276,6 +276,12 @@
       modsDelete: (gameId, version) => post('mods/deleteVersion', { gameId: gameId, version: version }),
       modsImport: (gameId, file) => upload('mods/import', { gameId: gameId }, 'file', file),
 
+      /* Разница между двумя собранными версиями модпака. Читают её перед
+         тем, как отдать пересборку игрокам: «какие моды изменились» —
+         это вопрос, на который список из полутора сотен полных имён до и
+         после не отвечает. */
+      modsDiff: (gameId, from, to) => get('mods/diff', { gameId: gameId, from: from, to: to }),
+
       /* Кэш архивов: одна ручка на чтение и на чистку. Без `all` сервер
          убирает только просроченное, с `all=1` — всё. */
       modsCache: () => get('mods/cache'),
@@ -301,6 +307,8 @@
       newsAssetsRename: (path, from, to) => post('news/assets/rename', { path: path, from: from, to: to }),
       newsAssetsDelete: (path, name) => post('news/assets/delete', { path: path, name: name }),
       newsAssetsUpload: (path, file) => upload('news/assets/upload', { path: path }, 'file', file),
+      newsCoverUpload: (scope, gameId, slug, file) =>
+        upload('news/uploadCover', { scope: scope, gameId: gameId, slug: slug }, 'file', file),
       newsAssetsUploadByUrl: (path, url, filename) =>
         post('news/assets/uploadByUrl', { path: path, url: url, filename: filename }),
 

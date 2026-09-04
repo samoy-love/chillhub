@@ -164,6 +164,7 @@ const ENDPOINTS = [
   ['modsActivate', ['g', 'v'], 'POST', 'mods/activate'],
   ['modsDelete', ['g', 'v'], 'POST', 'mods/deleteVersion'],
   ['modsImport', ['g', 'f'], 'POST', 'mods/import'],
+  ['modsDiff', ['g', 'a', 'b'], 'GET', 'mods/diff'],
   ['modsCache', [], 'GET', 'mods/cache'],
   ['modsCacheSweep', [], 'POST', 'mods/cache'],
   ['modsCacheClear', [], 'POST', 'mods/cache'],
@@ -181,6 +182,7 @@ const ENDPOINTS = [
   ['newsAssetsRename', ['', 'a', 'b'], 'POST', 'news/assets/rename'],
   ['newsAssetsDelete', ['', 'n'], 'POST', 'news/assets/delete'],
   ['newsAssetsUpload', ['', 'f'], 'POST', 'news/assets/upload'],
+  ['newsCoverUpload', ['launcher', '', 's', 'f'], 'POST', 'news/uploadCover'],
   ['newsAssetsUploadByUrl', ['', 'u', 'n'], 'POST', 'news/assets/uploadByUrl'],
 
   ['feedbackList', [{}], 'GET', 'feedback/list'],

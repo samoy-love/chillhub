@@ -453,3 +453,46 @@ test('ломаная называет свой цвет и не исполняе
   assert.match(html, /stroke="var\(--ember\)"/);
   assert.ok(!/</.test(V.sparkLine([1, 2], { width: 10, height: 10, color: '"><script>' }).split('points=')[1] || ''));
 });
+
+/* ---------- Разница модпаков ---------- */
+
+test('разница модпака показывает, что стало с каждым модом', () => {
+  // «Какие моды изменились» — вопрос, на который список из полутора
+  // сотен полных имён до и после не отвечает
+  const html = V.modsDiff([
+    { package: 'Ura/Core', change: 'updated', from: '1.0.0', to: '1.1.0' },
+    { package: 'Ura/New', change: 'added', to: '2.0.0' },
+    { package: 'Ura/Gone', change: 'removed', from: '0.9.0' },
+  ]);
+  assert.match(html, /Ura\/Core/);
+  assert.match(html, /1\.0\.0 → 1\.1\.0/);
+  assert.match(html, /1 появилось/);
+  assert.match(html, /1 обновилось/);
+  assert.match(html, /1 пропало/);
+});
+
+test('пустые разряды в сводке не перечисляются', () => {
+  // «0 пропало» не по-русски и мешает увидеть то, что изменилось
+  const html = V.modsDiff([{ package: 'A', change: 'added', to: '1.0' }]);
+  assert.match(html, /1 появилось/);
+  assert.ok(!/0 /.test(html.split('note">')[1] || ''));
+});
+
+test('одинаковый состав назван одинаковым, а не пустотой', () => {
+  assert.match(V.modsDiff([]), /Состав не изменился/);
+  assert.match(V.modsDiff([]), /не поменяется ничего/);
+});
+
+test('имя пакета с сервера не исполняется как разметка', () => {
+  assert.ok(!V.modsDiff([{ package: '<script>x</script>', change: 'added' }]).includes('<script>'));
+});
+
+/* ---------- Обложка заметки ---------- */
+
+test('обложку файлом предлагают только у сохранённой заметки', () => {
+  // Сервер кладёт её рядом с заметкой, а той ещё нет
+  assert.match(V.newsForm({ slug: 'release', existing: true }, []), /data-flow="cover"/);
+  const fresh = V.newsForm({ slug: '' }, []);
+  assert.ok(!/data-flow="cover"/.test(fresh));
+  assert.match(fresh, /после первого сохранения/);
+});

@@ -79,6 +79,36 @@
     return { chunk: run.chunk, streams: num(run.streams) || 1 };
   }
 
+  /* ---------- Память о прогонах ---------- */
+
+  /* ГДЕ ХРАНИТЬ ПРОГОНЫ. На сервере им не место, и это не лень: прогон
+     меряет канал между этим компьютером и сервером. С другой машины он
+     ничего не значит, а показанный как общий — сбивает с толку. Поэтому
+     он лежит в браузере того, кто мерил. */
+  const KEY = 'ch2:bench';
+
+  /** Запоминает прогон. Закрытое хранилище — не повод ронять подбор. */
+  function remember(storage, runs) {
+    if (!storage) return false;
+    try {
+      storage.setItem(KEY, JSON.stringify({ at: Date.now(), runs: runs || [] }));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Читает прошлый прогон. Мусор в хранилище — это его отсутствие. */
+  function recall(storage) {
+    if (!storage) return [];
+    try {
+      const d = JSON.parse(storage.getItem(KEY) || 'null');
+      return d && Array.isArray(d.runs) ? d.runs : [];
+    } catch {
+      return [];
+    }
+  }
+
   /* ---------- Кэш архивов ---------- */
 
   /** Доля диска, ниже которой чистить кэш пора, а не «можно». */
@@ -116,5 +146,5 @@
     };
   }
 
-  return { RETRY_PENALTY, LOW_SPACE, score, best, mark, why, apply, cacheAdvice };
+  return { RETRY_PENALTY, LOW_SPACE, KEY, score, best, mark, why, apply, remember, recall, cacheAdvice };
 });

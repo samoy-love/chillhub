@@ -136,3 +136,50 @@ test('пустой файл не превращается в ноль поток
   assert.ok(p.concurrency >= 1);
   assert.ok(p.chunkSize > 0);
 });
+
+/* ---------- Память о прогонах ---------- */
+
+/** Хранилище, какое бывает в браузере. */
+function storage() {
+  const map = new Map();
+  return {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => map.set(k, String(v)),
+    removeItem: (k) => map.delete(k),
+  };
+}
+
+test('прогон запоминается и читается обратно', () => {
+  // Он меряет канал ЭТОГО компьютера, поэтому и лежит в этом браузере
+  const s = storage();
+  const runs = [{ chunk: '8 МиБ', streams: 4, mbps: 92.4, retries: 0 }];
+  assert.strictEqual(T.remember(s, runs), true);
+  assert.deepStrictEqual(T.recall(s), runs);
+});
+
+test('без прошлого прогона возвращается пустой список, а не выдумка', () => {
+  assert.deepStrictEqual(T.recall(storage()), []);
+  assert.deepStrictEqual(T.recall(null), []);
+});
+
+test('мусор в хранилище — это его отсутствие', () => {
+  const s = storage();
+  s.setItem(T.KEY, 'не json');
+  assert.deepStrictEqual(T.recall(s), []);
+  s.setItem(T.KEY, JSON.stringify({ runs: 'не список' }));
+  assert.deepStrictEqual(T.recall(s), []);
+});
+
+test('закрытое хранилище не роняет подбор', () => {
+  const dead = {
+    getItem: () => {
+      throw new Error('заблокировано');
+    },
+    setItem: () => {
+      throw new Error('заблокировано');
+    },
+  };
+  assert.strictEqual(T.remember(dead, []), false);
+  assert.deepStrictEqual(T.recall(dead), []);
+  assert.strictEqual(T.remember(null, []), false);
+});

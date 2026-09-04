@@ -149,7 +149,7 @@
         /* Пустая метрика — это «сегодня ещё ничего не случилось», а не
            повод уронить весь обзор: первый день после чистки метрик и
            первый запуск нового сервера выглядят именно так. */
-        const freePct = D.disk.totalBytes ? Math.round((D.disk.freeBytes / D.disk.totalBytes) * 100) : 100;
+        const freePct = D.disk.total ? Math.round((D.disk.free / D.disk.total) * 100) : 100;
         const drafts = D.news.filter((n) => !n.published).length;
         const today = D.days.at(-1) || { date: '', starts: 0, updates: 0, errors: 0 };
         const errToday = today.errors;
@@ -161,7 +161,7 @@
           </section>`;
 
         const launcherBody = L.pending
-          ? `<p>Игроки получают <span class="mono">${esc(L.active)}</span>. Загружена <span class="mono">${esc(L.newest)}</span> — ${D.launcherDiff.length} файлов расходятся.</p>
+          ? `<p>Игроки получают <span class="mono">${esc(L.active)}</span>. Загружена <span class="mono">${esc(L.newest)}</span>${D.diff ? ` — ${D.diff.counts.total} файлов расходятся` : ''}.</p>
              <p class="faint">Пока не активируешь, новая версия лежит на сервере и никому не отдаётся.</p>`
           : `<p>Игроки получают <span class="mono">${esc(L.active)}</span>. Ничего свежее не загружено.</p>`;
 
@@ -215,7 +215,7 @@
             ${watch('#errors', 'Ошибок за сутки', errToday, `при ${today.updates} обновлениях`, errToday > 3 ? 'warn' : 'ok')}
             ${watch('#news', 'Черновики', drafts, 'не опубликованы', drafts ? 'warn' : '')}
             ${watch('#maint', 'Техработы', D.maint.on ? 'включены' : 'выключены', D.maint.on ? 'игроки видят заглушку' : 'сервис отдаёт всё', D.maint.on ? 'bad' : 'ok')}
-            ${watch('#transfer', 'Свободно', bytes(D.disk.freeBytes), `${100 - freePct}% занято`, freePct < 15 ? 'bad' : freePct < 30 ? 'warn' : 'ok')}
+            ${watch('#transfer', 'Свободно', bytes(D.disk.free), `${100 - freePct}% занято`, freePct < 15 ? 'bad' : freePct < 30 ? 'warn' : 'ok')}
             ${watch('#transfer', 'Кэш архивов', bytes(D.cache.bytes), `${D.cache.files} файлов`, '')}
           </div>`;
       },
@@ -229,9 +229,10 @@
       lede: 'Выкатка самого лаунчера: загрузить, сравнить, отдать игрокам.',
       render() {
         const L = D.launcher;
-        const add = D.launcherDiff.filter((f) => f.diff === 'add').length;
-        const mod = D.launcherDiff.filter((f) => f.diff === 'mod').length;
-        const del = D.launcherDiff.filter((f) => f.diff === 'del').length;
+        /* Разница считается из настоящих манифестов и приезжает уже
+           после отрисовки: два файла по мегабайту каждый — не повод
+           держать раздел пустым. До неё стоит скелет. */
+        const dif = D.diff;
 
         const stateBadge = {
           active: '<span class="badge badge--ok"><span class="dot"></span>у игроков</span>',
@@ -264,12 +265,16 @@
             <div class="sticky">
               ${card(
                 `Что изменится у игрока`,
-                tree(D.launcherDiff),
+                `<div data-diff>${
+                  dif === undefined
+                    ? '<div class="sk" style="height:12rem"></div>'
+                    : V().launcherDiff(dif, { active: L.active })
+                }</div>`,
                 {
-                  head: `<span class="badge badge--ok">+${add}</span>
-                         <span class="badge badge--warn">~${mod}</span>
-                         <span class="badge badge--bad">−${del}</span>`,
-                  foot: `${D.launcherDiff.length} файлов из ${D.manifest.length} расходятся между <code>${esc(L.active)}</code> и <code>${esc(L.newest)}</code>. Остальное клиент не скачивает.`,
+                  head: `<span data-diff-counts>${dif ? V().diffCounts(dif) : ''}</span>`,
+                  foot: dif
+                    ? `${dif.counts.total} файлов из ${dif.total} расходятся между <code>${esc(L.active)}</code> и <code>${esc(L.newest)}</code>. Остальное клиент не скачивает.`
+                    : 'Клиент качает только расходящиеся файлы, а не сборку целиком.',
                 }
               )}
             </div>
@@ -354,6 +359,7 @@
               <span class="k">${esc(p.latestAt || 'дата не приходит с Thunderstore')}</span>
             </div>
             <div class="push"></div>
+            ${staged ? `<button class="btn" type="button" data-act="mods-diff" data-args='{"gameId":"${esc(p.gameId)}","from":"${esc(p.active)}","to":"${esc(p.built)}","title":"${esc(p.title)}"}'>Что изменится</button>` : ''}
             ${staged ? `<button class="btn btn--accent" type="button" data-act="mods.activate" data-args='{"gameId":"${esc(p.gameId)}","version":"${esc(p.built)}"}'>Отдать игрокам</button>` : ''}
             ${stale ? '<button class="btn btn--accent" type="button" data-act="build">Пересобрать</button>' : ''}
           </div>
@@ -366,76 +372,47 @@
 
           <div class="cols cols--55" style="margin-top: var(--s4)">
             <div class="stack">
+              ${/* Состав, каталог и журнал живут в своих листах, а не
+                    таблицами прямо здесь. Причина одна на три: каждое из
+                    этих дел ходит к Thunderstore и идёт секундами, а то
+                    и минутами. Таблица в разделе показывала бы их
+                    прошлый результат — то есть числа, к которым сейчас
+                    никто не обращался, и по которым не видно, свежие они
+                    или позавчерашние. */ ''}
               ${card(
                 'Состав будущей сборки',
-                list({
-                  rows: D.resolved,
-                  head: '<th>Мод</th><th>Версия</th><th class="num">Размер</th><th>Откуда</th>',
-                  row: (m) => `<tr>
-                      <td>${esc(m.name)}<br><span class="faint mono">${esc(m.ns)}</span></td>
-                      <td class="mono">${esc(m.version)}</td>
-                      <td class="num">${bytes(m.size)}</td>
-                      <td class="dim">${esc(m.why)}</td>
-                    </tr>`,
-                  empty: 'Состав не разрешён',
-                  emptyHint: 'Нажми «Пересчитать» — Thunderstore ответит списком, ничего не скачивая.',
-                }),
-                {
-                  flush: true,
-                  head: '<button class="btn btn--text" type="button" data-act="resolve">Пересчитать</button>',
-                  foot: `${D.resolved.length} пакетов, ${bytes(D.resolved.reduce((a, m) => a + m.size, 0))}. Зависимости разрешены без скачивания.`,
-                }
+                `<div class="stack stack--tight">
+                   <p class="dim">Thunderstore отвечает списком: сколько пакетов, какой загрузчик, сколько качать с учётом кэша и каких пакетов больше нет.</p>
+                   <p class="faint">Ничего не скачивается и никуда не уходит. Пропавший пакет лучше увидеть здесь, чем на середине выкатки.</p>
+                   <div class="btn-row"><button class="btn" type="button" data-act="resolve">Посчитать состав</button></div>
+                 </div>`
               )}
 
               ${card(
                 'Каталог Thunderstore',
-                list({
-                  rows: D.catalog,
-                  head: '<th>Модпак</th><th>Версия</th><th class="num">Скачиваний</th><th>Обновлён</th><th></th>',
-                  row: (c) => `<tr>
-                      <td>${esc(c.name)}${c.deprecated ? ' <span class="badge badge--bad">устарел</span>' : ''}<br><span class="faint mono">${esc(c.ns)}</span></td>
-                      <td class="mono">${esc(c.version)}</td>
-                      <td class="num">${c.downloads.toLocaleString('ru')}</td>
-                      <td class="dim">${esc(c.updated)}</td>
-                      <td class="act"><button class="btn btn--text" type="button" data-act="choose">Выбрать</button></td>
-                    </tr>`,
-                  empty: 'Ничего не найдено',
-                }),
-                {
-                  flush: true,
-                  head: '<input type="search" placeholder="Поиск по каталогу" style="max-width:200px">',
-                  foot: 'Запросы к Thunderstore идут через сервер, а не из браузера: иначе панель светила бы трафик третьей стороне.',
-                }
+                `<div class="stack stack--tight">
+                   <p class="dim">Поиск по модпакам этой игры. Половина из них в раздел «Modpacks» не проставлена и не находится — такие подставляются ссылкой на страницу пакета.</p>
+                   <p class="faint">Запросы идут через сервер, а не из браузера: иначе панель светила бы трафик третьей стороне.</p>
+                   <div class="btn-row"><button class="btn" type="button" data-act="choose">Открыть каталог</button></div>
+                 </div>`
               )}
             </div>
 
             <div class="stack">
               ${card(
-                'Журнал сборки',
-                `<div class="log scroll scroll--md">${D.buildLog
-                  .map(
-                    (l) => `<div class="log-row ${esc(l.k)}">
-                        <span class="t">${esc(l.t)}</span>
-                        <span class="k">${esc(l.k)}</span>
-                        <span class="m">${esc(l.m)}</span>
-                      </div>`
-                  )
-                  .join('')}</div>`,
-                {
-                  head: '<span class="badge badge--ok"><span class="dot"></span>завершена</span>',
-                  foot: 'Поток NDJSON. Сборка тянет до 1,8 ГБ полутора сотнями запросов: молчащий запрос на двадцать минут неотличим от зависшего, поэтому строки идут по мере работы.',
-                }
+                'Сборка',
+                `<div class="stack stack--tight">
+                   <p class="dim">Сборка тянет до 1,8 ГБ полутора сотнями запросов и идёт минутами, поэтому журнал показывается строка за строкой, пока она работает.</p>
+                   <p class="faint">Собранное игрокам само не уходит — отдать его отдельное решение.</p>
+                   <div class="btn-row"><button class="btn btn--accent" type="button" data-act="build">Собрать</button></div>
+                 </div>`
               )}
 
               ${card(
-                'Импорт профиля r2modman',
-                `<div class="stack">
-                   <div class="field">
-                     <label for="imp">Файл профиля</label>
-                     <input id="imp" type="text" placeholder="mods.yml или экспорт профиля" readonly>
-                     <span class="help">Путь для переезда со старых сборок: в профиле перечислены все моды с точными версиями, поэтому набор, который у игроков уже стоит, публикуется как есть, а не собирается заново на глаз.</span>
-                   </div>
-                   <div class="btn-row"><button class="btn" type="button" data-act="import">Выбрать файл</button></div>
+                'Переезд со старой сборки',
+                `<div class="stack stack--tight">
+                   <p class="dim">В профиле r2modman перечислены все моды с точными версиями, поэтому набор, который у игроков уже стоит, публикуется как есть, а не собирается заново на глаз.</p>
+                   <div class="btn-row"><button class="btn" type="button" data-act="import">Выбрать файл профиля</button></div>
                  </div>`
               )}
             </div>
@@ -709,7 +686,9 @@
       title: 'Диск и загрузки',
       lede: 'Параметры загрузки, кэш архивов и свободное место на диске с контентом.',
       render() {
-        const freePct = Math.round((D.disk.freeBytes / D.disk.totalBytes) * 100);
+        /* Ноль в знаменателе — не «сто процентов свободно», а «места
+           не посчитали»: сервер мог не ответить, и делить тут нечего. */
+        const freePct = D.disk.total ? Math.round((D.disk.free / D.disk.total) * 100) : 0;
 
         return `
           <div class="cols cols--55">
@@ -717,8 +696,8 @@
               'Место на диске с контентом',
               `<div class="stack stack--tight">
                  <div class="btn-row">
-                   <span class="num" style="font-size:20px">${bytes(D.disk.freeBytes)}</span>
-                   <span class="faint">свободно из ${bytes(D.disk.totalBytes)}</span>
+                   <span class="num" style="font-size:20px">${bytes(D.disk.free)}</span>
+                   <span class="faint">свободно из ${bytes(D.disk.total)}</span>
                  </div>
                  <div class="meter"><i class="${freePct < 15 ? 'bad' : freePct < 30 ? 'warn' : 'ok'}" style="width:${100 - freePct}%"></i></div>
                  <p class="faint">Сборки и манифесты лежат здесь же. Загрузка новой версии на заполненный диск падает на середине и оставляет обрывок.</p>
@@ -747,11 +726,15 @@
                  второй её копией в разделе управлять было нечем —
                  кнопка «Применить» тут ни к чему не вела. */
               const T = window.CH2Tuning;
-              const best = T.best(D.bench);
+              /* Прогон меряет канал ЭТОГО компьютера, поэтому и лежит
+                 он в этом браузере: с другой машины его число не значит
+                 ничего, а показанное как общее — сбивает с толку. */
+              const runs = T.recall(window.localStorage);
+              const best = T.best(runs);
               return card(
                 'Подбор параметров загрузки',
                 `<div class="stack stack--tight">
-                   <p class="dim">${best ? esc(T.why(D.bench)) : 'Прогонов ещё не было. Прогон занимает около минуты и ничего не публикует.'}</p>
+                   <p class="dim">${best ? esc(T.why(runs)) : 'Прогонов ещё не было. Прогон занимает около минуты и ничего не публикует.'}</p>
                    <p class="faint">Больше потоков не всегда быстрее: на восьми канал начинает терять куски и переспрашивать их заново.</p>
                    <div class="btn-row"><button class="btn" type="button" data-act="bench">${best ? 'Прогнать заново' : 'Запустить прогон'}</button></div>
                  </div>`
@@ -1045,6 +1028,28 @@
 
     /* Заголовок здесь не поле, а первая строка текста, поэтому строка
        «в ленте игрок увидит» пересчитывается на каждый ввод. */
+    /* Обложку можно загрузить файлом, но только у сохранённой заметки:
+       сервер кладёт её рядом с самой заметкой, а той ещё нет. */
+    const coverInput = document.createElement('input');
+    coverInput.type = 'file';
+    coverInput.accept = 'image/*';
+    coverInput.addEventListener('change', async () => {
+      if (!coverInput.files || !coverInput.files[0]) return;
+      try {
+        const got = await API.newsCoverUpload(
+          post.gameId ? 'game' : 'launcher',
+          post.gameId,
+          post.slug,
+          coverInput.files[0]
+        );
+        post.coverUrl = (got && (got.coverUrl || got.url)) || post.coverUrl;
+        draw();
+        toast('Обложка загружена', 'ok');
+      } catch (err) {
+        toast('Не загрузилось: ' + window.CH2Api.reason(err), 'bad');
+      }
+    });
+
     sheet.root.addEventListener('input', () => {
       read();
       N.saveDraft(window.localStorage, post);
@@ -1084,6 +1089,11 @@
       }
 
       read();
+
+      if (b.dataset.flow === 'cover') {
+        coverInput.click();
+        return;
+      }
 
       if (b.dataset.flow === 'assets') {
         flowAssets((markup) => {
@@ -1515,7 +1525,7 @@
 
   function flowBench() {
     const T = window.CH2Tuning;
-    let runs = (D.bench || []).slice();
+    let runs = T.recall(window.localStorage);
 
     const sheet = openSheet({
       title: 'Подбор параметров загрузки',
@@ -1539,6 +1549,7 @@
       run.disabled = true;
       sheet.body('<div class="empty"><b>Идёт прогон</b><span>Гоняем наборы по очереди</span></div>');
       runs = await benchRuns(API);
+      T.remember(window.localStorage, runs);
       sheet.body(V().benchTable(runs, T));
       run.disabled = false;
     });
@@ -1655,6 +1666,33 @@
 
     sheet.root.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && e.target.matches('[data-q]')) load(e.target.value.trim());
+    });
+  }
+
+  /* --- Что изменится в модпаке --- */
+
+  /* Читают это перед тем, как отдать пересборку игрокам: «какие моды
+     изменились» — вопрос, на который список из полутора сотен полных
+     имён до и после не отвечает. */
+  function flowModsDiff(a) {
+    const sheet = openSheet({
+      title: 'Что изменится: ' + (a.title || a.gameId),
+      lede: 'Между версией у игроков (' + a.from + ') и собранной (' + a.to + ').',
+      body: '<div class="sk" style="height:14rem"></div>',
+      foot: '<button class="btn" type="button" data-flow="close">Закрыть</button>',
+    });
+
+    (async () => {
+      try {
+        const got = await API.modsDiff(a.gameId, a.from, a.to);
+        sheet.body(V().modsDiff((got && (got.items || got.list)) || []));
+      } catch (err) {
+        sheet.body('<div class="empty"><b>Не сравнилось</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
+      }
+    })();
+
+    sheet.root.addEventListener('click', (e) => {
+      if (e.target.closest('[data-flow="close"]')) sheet.close();
     });
   }
 
@@ -1779,6 +1817,7 @@
     resolve: () => flowResolve(packOf(game)),
     choose: () => flowCatalog(packOf(game)),
     import: () => flowImport(packOf(game)),
+    'mods-diff': (a) => flowModsDiff(a),
     'new-post': () => flowNews({}),
     'edit-post': (a) => flowNews(a),
     gallery: (a) => flowGallery(a.gameId || (D.games[0] && D.games[0].gameId) || ''),
@@ -1822,6 +1861,12 @@
   }
 
   function wireSection() {
+    /* Разница между сборками считается из двух настоящих манифестов и
+       приезжает уже после отрисовки: это два файла по мегабайту, и
+       держать из-за них весь раздел пустым незачем. Считается она один
+       раз на пару версий — второй заход берёт готовое. */
+    if ($('[data-diff]') && D.diff === undefined) diffLoad();
+
     const filter = $('[data-tree-filter]');
     const t = $('[data-tree]');
     if (filter && t) {
@@ -1879,6 +1924,27 @@
         route();
       })
     );
+  }
+
+  /* Разница между активной и загруженной версиями лаунчера.
+
+     `null` — это «сравнить не с чем», и от «файлы совпадают» его надо
+     отличать: старые манифесты на сервере подчищаются, и пустое дерево
+     вместо честного «нет манифеста» означало бы, что решение об
+     активации принимают вслепую, думая, что видят всё. */
+  async function diffLoad() {
+    const L = D.launcher;
+    if (!L || !L.pending || !L.active || !L.newest) {
+      D.diff = null;
+      return;
+    }
+
+    D.diff = await window.CH2Manifest.between(L.active, L.newest, { fetch: window.fetch.bind(window) });
+
+    const box = $('[data-diff]');
+    if (box) box.innerHTML = V().launcherDiff(D.diff, { active: L.active });
+    const counts = $('[data-diff-counts]');
+    if (counts) counts.innerHTML = D.diff ? V().diffCounts(D.diff) : '';
   }
 
   /* ---------- Палитра ---------- */
@@ -1995,12 +2061,10 @@
   const API = window.CH2Api.makeApi();
 
   /* Разделы читаются порознь и складываются в ту же плоскую форму, что
-     ждёт отрисовка. Часть кусков (дерево манифеста, каталог Thunderstore,
-     журнал сборки, прогоны) пока приходит из снимка — их флоу ещё не
-     подключены, и панель об этом говорит, а не выдаёт снимок за прод. */
+     ждёт отрисовка. Снимок остался ровно для одного: показать панель,
+     когда сервер не отвечает вовсе, — и панель тогда об этом говорит, а
+     не выдаёт снимок за прод. */
   const store = window.CH2Store.createStore(window.CH2Sections.LOADERS, { api: API });
-
-  const SNAPSHOT_ONLY = ['manifest', 'launcherDiff', 'resolved', 'catalog', 'buildLog', 'bench'];
 
   async function collect() {
     await store.loadAll();
@@ -2029,7 +2093,6 @@
       disk: val('disk', demo.disk, S.disk),
       cache: val('cache', demo.cache, S.cache),
     };
-    for (const k of SNAPSHOT_ONLY) data[k] = demo[k];
     return data;
   }
 

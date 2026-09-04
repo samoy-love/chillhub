@@ -266,10 +266,16 @@
       '<span class="help">Пустое поле означает новость про лаунчер, а не про игру</span></div>' +
       '</div>' +
       '<div class="field"><label for="n-cover">Обложка</label>' +
-      '<input id="n-cover" name="coverUrl" type="text" value="' +
+      '<div class="btn-row"><input id="n-cover" name="coverUrl" type="text" value="' +
       esc(p.coverUrl) +
       '" placeholder="необязательно">' +
-      '<span class="help">Без неё сервер возьмёт первую картинку из текста</span></div>' +
+      (p.existing
+        ? '<button class="btn" type="button" data-flow="cover">Загрузить файл</button>'
+        : '') +
+      '</div>' +
+      '<span class="help">Без неё сервер возьмёт первую картинку из текста' +
+      (p.existing ? '' : '. Загрузить файлом можно после первого сохранения') +
+      '</span></div>' +
       '<div class="field"><label for="n-body">Текст</label>' +
       '<textarea id="n-body" name="markdown" rows="16" placeholder="# Название заметки">' +
       esc(p.markdown) +
@@ -503,6 +509,58 @@
     };
   }
 
+  /* ---------- Разница сборок ---------- */
+
+  /**
+   * Что поедет игроку при активации.
+   *
+   * Пустой результат и отсутствие манифеста — разные вещи, и путать их
+   * нельзя. Пустое дерево читается как «ничего не изменилось», а на деле
+   * это чаще всего «старый манифест уже подчищен, сравнить не с чем», и
+   * решение об активации принимают вслепую, думая, что видят всё.
+   */
+  function launcherDiff(result, opts) {
+    const o = opts || {};
+    const f = F();
+    if (!result) {
+      return (
+        '<div class="empty"><b>Сравнить не с чем</b><span>Манифест версии ' +
+        esc(o.active || '') +
+        ' на сервере уже не лежит — старые подчищаются. Список файлов покажется после активации.</span></div>'
+      );
+    }
+
+    const c = result.counts || {};
+    if (!c.total) {
+      return '<div class="empty"><b>Файлы совпадают</b><span>Между этими версиями качать нечего</span></div>';
+    }
+
+    const rows = (result.rows || [])
+      .map(
+        (r) =>
+          '<div class="row ' + esc(r.diff) + '" data-path="' + esc(r.path) + '">' +
+          '<span>' + esc(r.path) + '</span>' +
+          '<span class="size">' + (r.diff === 'del' ? '—' : esc(f.bytes(r.size))) + '</span>' +
+          '</div>'
+      )
+      .join('');
+
+    return '<div class="tree" data-tree>' + rows + '</div>';
+  }
+
+  /** Счётчики над деревом: сколько добавилось, изменилось и пропало. */
+  function diffCounts(result) {
+    if (!result) return '';
+    const c = result.counts || {};
+    const f = F();
+    return (
+      '<span class="badge badge--ok">+' + c.add + '</span>' +
+      '<span class="badge badge--warn">~' + c.mod + '</span>' +
+      '<span class="badge badge--bad">−' + c.del + '</span>' +
+      '<span class="badge">' + esc(f.bytes(result.weight || 0)) + ' игроку</span>'
+    );
+  }
+
   /* ---------- График ---------- */
 
   /**
@@ -576,6 +634,50 @@
       : '';
 
     return head + note + gone;
+  }
+
+  /**
+   * Разница между двумя собранными версиями модпака.
+   *
+   * Читают её перед тем, как отдать пересборку игрокам: «какие моды
+   * изменились» — это вопрос, на который список из полутора сотен полных
+   * имён до и после не отвечает.
+   */
+  function modsDiff(items) {
+    const rows = items || [];
+    if (!rows.length) {
+      return '<div class="empty"><b>Состав не изменился</b><span>Между этими версиями у игрока не поменяется ничего</span></div>';
+    }
+    const word = { added: 'появилось', removed: 'пропало', updated: 'обновилось' };
+    const cls = { added: 'add', removed: 'del', updated: 'mod' };
+    return (
+      '<div class="tree" data-tree>' +
+      rows
+        .map((r) => {
+          const change = String(r.change || '');
+          const versions =
+            change === 'updated' ? esc(r.from || '') + ' → ' + esc(r.to || '') : esc(r.to || r.from || '');
+          return (
+            '<div class="row ' + esc(cls[change] || '') + '" data-path="' + esc(r.package) + '">' +
+            '<span>' + esc(r.package) + '</span>' +
+            '<span class="size">' + versions + '</span>' +
+            '</div>'
+          );
+        })
+        .join('') +
+      '</div>' +
+      /* Пустые разряды не перечисляем: «0 пропал» — не по-русски и
+         вдобавок мешает увидеть то, что изменилось на самом деле. */
+      '<p class="note">' +
+      esc(
+        ['added', 'updated', 'removed']
+          .map((k) => ({ n: rows.filter((r) => r.change === k).length, k: k }))
+          .filter((x) => x.n > 0)
+          .map((x) => x.n + ' ' + word[x.k])
+          .join(', ')
+      ) +
+      '</p>'
+    );
   }
 
   /* ---------- Каталог ---------- */
@@ -724,9 +826,12 @@
     galleryCrumbs,
     galleryList,
     assetList,
+    launcherDiff,
+    diffCounts,
     sparkPoints,
     sparkLine,
     resolvePlan,
+    modsDiff,
     catalogList,
     importResult,
     logsView,
