@@ -57,6 +57,14 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 
+/* Скрытое обязано быть скрытым.
+
+   Встроенное `[hidden] { display: none }` слабее любого своего правила,
+   задающего элементу `display`, — и спрятанная строка показывалась
+   подписью без значения. Правило общее: ловить такие места по одному
+   значит пропустить следующее. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--page);
@@ -629,7 +637,6 @@ tr.unread td:first-child { box-shadow: inset 2px 0 0 var(--ember); }
   padding-top: 14vh;
 }
 
-.palette[hidden] { display: none; }
 
 .palette .box {
   width: min(560px, 92vw);
