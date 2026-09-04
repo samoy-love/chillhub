@@ -180,12 +180,20 @@
     }
   }
 
+  /* Размер, дата сборки и SHA-256 установщика. Их нельзя ни вычислить на
+     странице, ни свёрстать: свёрстанный хеш — это опубликованная рядом с
+     кнопкой скачивания ЛОЖЬ, как только соберётся следующая версия.
+     Поэтому их пишет релиз в /downloads/setup.json, а чего нет — того на
+     странице не показывается вовсе. */
+  const MOCK_SETUP = {};
+
   async function load() {
-    const [games, news, maint, launcher] = await Promise.all([
+    const [games, news, maint, launcher, setup] = await Promise.all([
       get('/api/games', MOCK_GAMES),
       get('/news/index.json', MOCK_NEWS),
       get('/api/maintenance', MOCK_MAINT),
       get('/manifests/launcher/latest.json', MOCK_LAUNCHER),
+      get('/downloads/setup.json', MOCK_SETUP),
     ]);
 
     return {
@@ -194,6 +202,7 @@
       news: (news.data.items || []).filter((n) => n && n.published !== false),
       maintenance: maint.data || MOCK_MAINT,
       launcherVersion: (launcher.data.version || launcher.data.Version || '').trim(),
+      setup: setup.data || {},
     };
   }
 

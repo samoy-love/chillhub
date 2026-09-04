@@ -164,6 +164,44 @@
       </article>`;
   }
 
+  /* Размер, дата сборки и SHA-256 установщика. Показывается только то,
+     что релиз действительно записал в /downloads/setup.json: свёрстанные
+     числа устаревают на следующей же сборке, а свёрстанный хеш — это
+     опубликованная рядом с кнопкой скачивания ложь. Нет значения —
+     нет и строки. */
+  const KB = 1024;
+  const MB = KB * 1024;
+
+  function humanSize(bytes) {
+    const n = Number(bytes);
+    if (!Number.isFinite(n) || n <= 0) return '';
+    return n >= MB ? `${(n / MB).toFixed(0)} МБ` : `${(n / KB).toFixed(0)} КБ`;
+  }
+
+  function humanDate(v) {
+    const d = new Date(v);
+    if (Number.isNaN(+d)) return '';
+    return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  }
+
+  function setupFacts(setup) {
+    const value = {
+      size: humanSize(setup.size ?? setup.bytes),
+      builtAt: humanDate(setup.builtAt ?? setup.date),
+      sha256: String(setup.sha256 || '').trim(),
+    };
+
+    $$('[data-setup]').forEach((el) => {
+      const v = value[el.dataset.setup];
+      if (!v) return;
+      const slot = $('span', el);
+      if (slot) slot.textContent = v;
+      const btn = $('.copy-hash', el);
+      if (btn) btn.dataset.hash = v;
+      el.hidden = false;
+    });
+  }
+
   function postCard(n) {
     const d = new Date(n.createdAt);
     // `toLocaleDateString` добавляет «г.» в конце — лаунчер её не пишет.
@@ -204,6 +242,8 @@
     if (data.launcherVersion) {
       $$('[data-launcher-version]').forEach((el) => (el.textContent = data.launcherVersion));
     }
+
+    setupFacts(data.setup || {});
 
     // Технические работы: если сборки сейчас не отдаются, узнавать об
     // этом после установки — худший момент из возможных.
@@ -394,6 +434,9 @@
   function copyHash() {
     const btn = $('.copy-hash');
     if (!btn) return;
+    // Обработчик вешается один раз, а значение приезжает позже — из
+    // setupFacts. До него у кнопки нет data-hash, и она скрыта.
+
     btn.addEventListener('click', async () => {
       const was = btn.textContent;
       try {

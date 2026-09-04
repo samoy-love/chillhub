@@ -82,10 +82,10 @@
              цифра протухает молча. Размер, дата и хеш правятся руками при
              выпуске релиза — устаревший хеш хуже, чем его отсутствие. -->
         <ul class="dl-facts">
-          <li><b>версия</b> <span data-launcher-version>1.6.25</span></li>
-          <li><b>размер</b> 118 МБ</li>
-          <li><b>собран</b> 04.09.2026</li>
-          <li><button class="copy-hash" type="button" data-hash="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855">скопировать SHA‑256</button></li>
+          <li><b>версия</b> <span data-launcher-version>—</span></li>
+          <li hidden data-setup="size"><b>размер</b> <span></span></li>
+          <li hidden data-setup="builtAt"><b>собран</b> <span></span></li>
+          <li hidden data-setup="sha256"><button class="copy-hash" type="button">скопировать SHA‑256</button></li>
         </ul>
       </div>
 
@@ -246,8 +246,9 @@
           стоит денег и выдаётся на юрлицо, у бесплатного проекта её нет. Чтобы
           продолжить: «Подробнее» → «Выполнить в любом случае».
         </p>
-        <p>
-          Если верить на слово не хочется — сверьте SHA‑256 скачанного файла с опубликованным под кнопкой:
+        <p data-setup="sha256" hidden>
+          Если верить на слово не хочется — сверьте SHA‑256 скачанного файла с
+          опубликованным под кнопкой:
           <code>Get-FileHash .\ChillHub-Setup.exe</code> в PowerShell.
         </p>
       </div>
@@ -315,9 +316,9 @@
       </div>
 
       <ul class="dl-facts" style="margin-top: var(--s3)">
-        <li><b>версия</b> <span data-launcher-version>1.6.25</span></li>
-        <li><b>размер</b> 118 МБ</li>
-        <li><b>собран</b> 04.09.2026</li>
+        <li><b>версия</b> <span data-launcher-version>—</span></li>
+        <li hidden data-setup="size"><b>размер</b> <span></span></li>
+        <li hidden data-setup="builtAt"><b>собран</b> <span></span></li>
         <li><b>требуется</b> Windows 10 (21H2) или 11, 64 бита</li>
       </ul>
     </div>
