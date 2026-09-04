@@ -741,7 +741,7 @@ tr.unread td:first-child { box-shadow: inset 2px 0 0 var(--ember); }
 .modal {
   width: min(100%, 460px);
   border: 1px solid var(--line-2);
-  border-radius: var(--r-lg);
+  border-radius: var(--r);
   background: var(--surface);
   padding: var(--s4);
   display: grid;
@@ -751,3 +751,102 @@ tr.unread td:first-child { box-shadow: inset 2px 0 0 var(--ember); }
 .modal h2 { font-size: 1rem; margin: 0; }
 .modal p { margin: 0; color: var(--fg-2); font-size: 0.875rem; }
 .modal .btn-row { justify-content: flex-end; }
+
+/* ---------- Лист длинного дела ---------- */
+
+/* Загрузка, сборка, новость, галерея, порядок и подбор идут минутами.
+   Лист держит дело на своём экране: заголовок и подпись остаются на
+   месте всё это время, а раздел под ним никуда не девается — видно, к
+   чему вернуться, когда дело кончится.
+
+   Ширина ограничена читаемой мерой: в панели 1.0 журнал сборки
+   растягивался на всю ширину монитора, и строка в 2000 px не читалась. */
+.sheet-back {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: end center;
+  padding: var(--s4);
+  background: rgb(0 0 0 / 55%);
+}
+
+.sheet {
+  width: min(100%, 860px);
+  max-height: min(88vh, 900px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r);
+  background: var(--surface);
+}
+
+.sheet > header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line);
+}
+
+.sheet > header h2 { margin: 0; font-size: 1rem; }
+.sheet > header p { margin: var(--s1) 0 0; color: var(--fg-2); font-size: 0.8125rem; }
+.sheet > header .push { flex: 1; }
+
+.sheet-body {
+  overflow: auto;
+  padding: var(--s4);
+  display: grid;
+  gap: var(--s3);
+  align-content: start;
+}
+
+.sheet > footer {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s3) var(--s4);
+  border-top: 1px solid var(--line);
+}
+
+.sheet > footer .push { flex: 1; }
+
+@media (width <= 720px) {
+  .sheet-back { padding: 0; }
+  .sheet { max-height: 100vh; height: 100vh; border: 0; border-radius: 0; }
+}
+
+/* ---------- Путь в галерее ---------- */
+
+.crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1); }
+.crumbs .sep { color: var(--fg-3); }
+.crumbs [aria-current="page"] { color: var(--fg); font-weight: 500; }
+
+/* ---------- Порядок игр ---------- */
+
+/* Номер слева — не украшение: он и есть то, чем лаунчер помнит игру,
+   и по нему видно, что именно переехало. */
+.order { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s1); }
+
+.order li {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface-2);
+  cursor: grab;
+}
+
+.order li:active { cursor: grabbing; }
+.order li .n { color: var(--fg-3); font-variant-numeric: tabular-nums; min-width: 1.5rem; }
+.order li .push { flex: 1; }
+
+/* ---------- Выбранный прогон ---------- */
+
+tr.best > td { background: var(--ember-wash); }
+
+/* ---------- Ошибка поля ---------- */
+
+.help--bad { color: var(--bad); }

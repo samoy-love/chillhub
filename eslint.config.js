@@ -49,6 +49,7 @@ export default [
         location: 'readonly',
         history: 'readonly',
         fetch: 'readonly',
+        AbortController: 'readonly',
         Request: 'readonly',
         Response: 'readonly',
         Headers: 'readonly',
@@ -224,11 +225,14 @@ export default [
       'server/admin_ui/v2/gallery.js',
       'server/admin_ui/v2/tuning.js',
       'server/admin_ui/v2/build.js',
+      'server/admin_ui/v2/views.js',
       'landing/v2/emu-core.js'
     ],
     languageOptions: {
       globals: {
-        module: 'readonly'
+        // Ветка Node в UMD-обёртке: там же и `require` для соседних модулей
+        module: 'readonly',
+        require: 'readonly'
       }
     }
   }

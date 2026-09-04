@@ -76,9 +76,25 @@ test('игра без заголовка подписывается иденти
 });
 
 test('снятая с публикации игра распознаётся, остальные считаются видимыми', () => {
-  const g = S.games([{ gameId: 'a', published: false }, { gameId: 'b' }]);
+  // В реестре поле называется `unpublished`, и нуль в нём означает «видно»:
+  // иначе каждая игра, записанная до появления поля, пропала бы у игроков
+  const g = S.games([{ gameId: 'a', unpublished: true }, { gameId: 'b' }, { gameId: 'c', published: false }]);
   assert.strictEqual(g[0].published, false);
   assert.strictEqual(g[1].published, true);
+  assert.strictEqual(g[2].published, false);
+});
+
+test('идентификатор Steam берётся оттуда, где он лежит, — из модпака', () => {
+  // На верхнем уровне его нет, и колонка была пустой у всех сразу
+  const g = S.games([{ gameId: 'repo', mods: { steamAppId: '3241660' } }, { gameId: 'peak' }]);
+  assert.strictEqual(g[0].steamId, '3241660');
+  assert.strictEqual(g[1].steamId, '');
+});
+
+test('иконка считается по тому, записан ли её адрес', () => {
+  const g = S.games([{ gameId: 'a', iconUrl: '/manifests/a/icon.png' }, { gameId: 'b' }]);
+  assert.strictEqual(g[0].icon, true);
+  assert.strictEqual(g[1].icon, false);
 });
 
 /* ---------- Сборки модов ---------- */

@@ -146,9 +146,12 @@
         const staged = D.packs.filter((p) => p.built !== p.active);
         const unread = D.inbox.filter((f) => f.status === 'new');
         const important = unread.filter((f) => f.important);
-        const freePct = Math.round((D.disk.freeBytes / D.disk.totalBytes) * 100);
+        /* Пустая метрика — это «сегодня ещё ничего не случилось», а не
+           повод уронить весь обзор: первый день после чистки метрик и
+           первый запуск нового сервера выглядят именно так. */
+        const freePct = D.disk.totalBytes ? Math.round((D.disk.freeBytes / D.disk.totalBytes) * 100) : 100;
         const drafts = D.news.filter((n) => !n.published).length;
-        const today = D.days.at(-1);
+        const today = D.days.at(-1) || { date: '', launcherStarts: 0, updates: 0, errors: 0 };
         const errToday = today.errors;
 
         const decision = (on, title, body, action) => `
@@ -167,7 +170,11 @@
               .map(
                 (p) => `<li>
                   <b>${esc(p.title)}</b> — собрана <span class="mono">${esc(p.built)}</span>,
-                  ${p.deprecated ? 'модпак объявлен устаревшим' : `на Thunderstore <span class="mono">${esc(p.upstream.version)}</span> от ${esc(p.upstream.at)}`}
+                  ${
+                    p.deprecated
+                      ? 'модпак объявлен устаревшим'
+                      : `на Thunderstore <span class="mono">${esc(p.latest)}</span>${p.latestAt ? ` от ${esc(p.latestAt)}` : ''}`
+                  }
                 </li>`
               )
               .join('')}</ul>
@@ -316,6 +323,10 @@
     packs: {
       title: 'Сборки модов',
       lede: 'Наборы модов, которые лаунчер ставит игроку. Собираются из Thunderstore.',
+      /* Пересборка доступна всегда, а не только когда на Thunderstore
+         вышло новое: пересобрать после правки состава мод-листа нужно и
+         тогда, когда сам Thunderstore не менялся. */
+      actions: '<button class="btn" type="button" data-act="build">Собрать заново</button>',
       render() {
         const p = packOf(game);
         const stale = p.behind || p.deprecated;
@@ -339,8 +350,8 @@
             <span class="arrow" aria-hidden="true">→</span>
             <div>
               <span class="k">На Thunderstore</span>
-              <span class="v mono">${esc(p.upstream.version)}</span>
-              <span class="k">${esc(p.upstream.at)}</span>
+              <span class="v mono">${esc(p.latest || '—')}</span>
+              <span class="k">${esc(p.latestAt || 'дата не приходит с Thunderstore')}</span>
             </div>
             <div class="push"></div>
             ${staged ? `<button class="btn btn--accent" type="button" data-act="mods.activate" data-args='{"gameId":"${esc(p.gameId)}","version":"${esc(p.built)}"}'>Отдать игрокам</button>` : ''}
@@ -438,7 +449,10 @@
     games: {
       title: 'Игры',
       lede: 'Реестр, который лаунчер читает при старте: чем игра запускается и как выглядит.',
-      actions: '<button class="btn" type="button" data-act="games.scan">Просканировать контент</button><button class="btn btn--accent" type="button" data-act="new-game">Добавить игру</button>',
+      actions:
+        '<button class="btn" type="button" data-act="games.scan">Просканировать контент</button>' +
+        '<button class="btn" type="button" data-act="order">Порядок в лаунчере</button>' +
+        '<button class="btn btn--accent" type="button" data-act="new-game">Добавить игру</button>',
       render() {
         return `
           ${card(
@@ -452,12 +466,20 @@
                   <td class="mono">${esc(g.steamId)}</td>
                   <td class="mono dim">${esc(g.exe)}</td>
                   <td>
-                    ${g.cover ? '<span class="badge badge--ok">обложка</span>' : '<span class="badge badge--warn">без обложки</span>'}
-                    ${g.icon ? '<span class="badge badge--ok">иконка</span>' : '<span class="badge badge--warn">без иконки</span>'}
-                    <span class="badge">${g.gallery} в галерее</span>
+                    ${
+                      /* Про иконку реестр знает — она лежит в нём полем.
+                         Про обложку и снимки не знает: они живут в
+                         галерее, и придумывать за них значок здесь
+                         значило бы показывать «всё в порядке» у игры без
+                         единой картинки. */
+                      g.icon
+                        ? '<span class="badge badge--ok">иконка есть</span>'
+                        : '<span class="badge badge--warn">без иконки</span>'
+                    }
+                    ${g.published ? '' : '<span class="badge badge--warn">скрыта от игроков</span>'}
                   </td>
                   <td class="act">
-                    <button class="btn btn--text" type="button" data-act="gallery">Галерея</button>
+                    <button class="btn btn--text" type="button" data-act="gallery" data-args='{"gameId":"${esc(g.gameId)}"}'>Галерея</button>
                     <button class="btn btn--danger btn--text" type="button" data-act="games.purge" data-args='{"gameId":"${esc(g.gameId)}","title":"${esc(g.title)}"}'>Удалить контент</button>
                   </td>
                 </tr>`,
@@ -480,17 +502,17 @@
               // Фраза считается из реестра, а не вписана руками: вписанная
               // устареет на первой же правке данных и будет врать молча.
               const noIcon = D.games.filter((g) => !g.icon).map((g) => g.title);
-              const noCover = D.games.filter((g) => !g.cover).map((g) => g.title);
+              const hidden = D.games.filter((g) => !g.published).map((g) => g.title);
               const gaps = [
-                noCover.length ? `без обложки: ${noCover.join(', ')}` : '',
                 noIcon.length ? `без иконки: ${noIcon.join(', ')}` : '',
+                hidden.length ? `скрыты от игроков: ${hidden.join(', ')}` : '',
               ].filter(Boolean);
               return card(
                 'Что видит игрок',
                 `<div class="stack stack--tight">
-                   <p class="dim">Обложка показывается в списке слева, галерея — на странице игры. Без обложки карточка выглядит пустым прямоугольником.</p>
-                   <p class="faint">${gaps.length ? esc(gaps.join('; ')) + '.' : 'У всех игр есть и обложка, и иконка.'}</p>
-                   <div class="btn-row"><button class="btn btn--text" type="button" data-act="gallery">Открыть галерею</button></div>
+                   <p class="dim">Иконка стоит в списке слева, обложка и снимки — на странице игры. Без обложки карточка выглядит пустым прямоугольником.</p>
+                   <p class="faint">${gaps.length ? esc(gaps.join('; ')) + '.' : 'У всех игр есть иконка, и все они видны игрокам.'}</p>
+                   <p class="faint">Что лежит в галерее, реестр не знает — это видно только в ней самой.</p>
                  </div>`
               );
             })()}
@@ -503,60 +525,32 @@
       lede: 'То, что игрок читает на главном экране лаунчера.',
       actions: '<button class="btn btn--accent" type="button" data-act="new-post">Написать</button>',
       render() {
-        /* Редактор показывает одну заметку. Пока выбор из списка не
-           подключён — первую; аргументы кнопок берутся из неё, а не из
-           того, что набрано в поле. */
-        const draft = D.news[0] || { id: '', title: '', published: false };
-
-        /* Ширина текстового раздела ограничена читаемой мерой: в 1.0
-           редактор растягивался на всю ширину 2K-монитора, а строка в
-           2000 px не читается. */
-        return `
-          <div class="cols cols--37">
-            ${card(
-              'Опубликованное',
-              list({
-                rows: D.news,
-                head: '<th>Заголовок</th><th></th>',
-                row: (n) => `<tr>
-                    <td>${esc(n.title)}<br><span class="faint">${esc(n.at)}${n.game ? ` · ${esc(n.game)}` : ' · все игры'}</span></td>
-                    <td class="act">${
-                      n.published
-                        ? '<span class="badge badge--ok">на виду</span>'
-                        : '<span class="badge badge--warn">черновик</span>'
-                    }</td>
-                  </tr>`,
-                empty: 'Новостей нет',
-              }),
-              { flush: true }
-            )}
-            ${card(
-              'Редактор',
-              `<div class="stack">
-                 <div class="field">
-                   <label for="ns-title">Заголовок</label>
-                   <input id="ns-title" type="text" value="Сборка R.E.P.O. обновлена до 1.9.9">
-                 </div>
-                 <div class="field">
-                   <label for="ns-md">Текст</label>
-                   <textarea id="ns-md" rows="14">Обновили сборку до 1.9.9.
-
-- пять новых объектов и сотни ценностей
-- сканер по клавише F теперь видит предметы сквозь стены
-- убран мод, из-за которого срывалась загрузка на середине
-
-Обновление приедет само при следующем запуске лаунчера.</textarea>
-                   <span class="help">Разметка Markdown. Пиши простым языком: это читают в лаунчере, а не в документации.</span>
-                 </div>
-                 <div class="btn-row">
-                   <button class="btn btn--accent" type="button" data-act="news.publish" data-args='{"id":"${esc(draft.id)}","title":"${esc(draft.title)}","published":${draft.published ? 'false' : 'true'}}'>${draft.published ? 'Снять с публикации' : 'Опубликовать'}</button>
-                   <button class="btn" type="button" data-act="preview">Посмотреть, как увидит игрок</button>
-                   <span class="push"></span>
-                   <button class="btn btn--danger btn--text" type="button" data-act="news.delete" data-args='{"id":"${esc(draft.id)}","title":"${esc(draft.title)}"}'>Удалить</button>
-                 </div>
-               </div>`
-            )}
-          </div>`;
+        /* Редактор больше не живёт в разделе: новость набирают минутами,
+           и на этот срок ей нужен свой экран, черновик и предпросмотр.
+           Раздел показывает то, что есть, и ведёт к правке. */
+        return card(
+          'Новости',
+          list({
+            rows: D.news,
+            head: '<th>Заголовок</th><th>Состояние</th><th></th>',
+            row: (n) => `<tr>
+                <td>${esc(n.title)}<br><span class="faint">${esc(n.at)}${n.game ? ` · ${esc(n.game)}` : ' · все игры'}</span></td>
+                <td>${
+                  n.published
+                    ? '<span class="badge badge--ok">на виду</span>'
+                    : '<span class="badge badge--warn">черновик</span>'
+                }</td>
+                <td class="act">
+                  <button class="btn btn--text" type="button" data-act="edit-post" data-args='{"id":"${esc(n.id)}"}'>Править</button>
+                  <button class="btn btn--text" type="button" data-act="news.publish" data-args='{"id":"${esc(n.id)}","title":"${esc(n.title)}","published":${n.published ? 'false' : 'true'}}'>${n.published ? 'Снять с публикации' : 'Опубликовать'}</button>
+                  <button class="btn btn--danger btn--text" type="button" data-act="news.delete" data-args='{"id":"${esc(n.id)}","title":"${esc(n.title)}"}'>Удалить</button>
+                </td>
+              </tr>`,
+            empty: 'Новостей нет',
+            emptyHint: 'Лаунчер покажет игроку пустую ленту, пока здесь ничего не написано.',
+          }),
+          { flush: true }
+        );
       },
     },
 
@@ -769,6 +763,568 @@
     },
   };
 
+  /* ---------- Длинные дела ---------- */
+
+  /* Шесть дел панели идут минутами и умеют оборваться на середине:
+     загрузка сборки, сборка модпака, новость, галерея, порядок игр и
+     подбор параметров. Каждое открывается листом поверх раздела — так
+     видно, что дело идёт, и видно, к чему вернуться, когда оно кончится.
+
+     Правила внутри дел сюда не переехали: они лежат в своих модулях
+     (`upload.js`, `build.js`, `news.js`, `gallery.js`, `registry.js`,
+     `tuning.js`), а вид — в `views.js`. Здесь только связывание. */
+
+  const V = () => window.CH2Views;
+
+  function openSheet(o) {
+    const host = document.createElement('div');
+    host.innerHTML = V().sheet(o);
+    const back = host.firstElementChild;
+    document.body.append(back);
+
+    const h = {
+      root: back,
+      body: (html) => {
+        back.querySelector('[data-sheet-body]').innerHTML = html;
+      },
+      foot: (html) => {
+        const f = back.querySelector('[data-sheet-foot]');
+        if (f) f.innerHTML = html;
+      },
+      close: () => {
+        if (h.onClose) h.onClose();
+        back.remove();
+        document.removeEventListener('keydown', onKey);
+      },
+      onClose: null,
+    };
+
+    const onKey = (e) => {
+      if (e.key === 'Escape') h.close();
+    };
+    back.querySelector('[data-sheet-close]').addEventListener('click', () => h.close());
+    back.addEventListener('click', (e) => {
+      if (e.target === back) h.close();
+    });
+    document.addEventListener('keydown', onKey);
+    back.querySelector('[data-sheet-close]').focus();
+    return h;
+  }
+
+  /** Кнопки подвала листа по описанию из `views.js`. */
+  const footButtons = (items) =>
+    items
+      .map(
+        (b) =>
+          `<button class="btn${b.accent ? ' btn--accent' : ''}${b.danger ? ' btn--danger' : ''}" type="button" data-flow="${b.act}">${esc(b.title)}</button>`
+      )
+      .join('');
+
+  /* --- Загрузка сборки --- */
+
+  /* Кусок и число потоков подбираются от размера файла тем же модулем,
+     что и в панели 1.0, — и показываются до нажатия, а не после. */
+  function flowUpload(meta) {
+    const sheet = openSheet({
+      title: meta.kind === 'mods' ? 'Загрузка модпака' : 'Загрузка сборки лаунчера',
+      lede: 'Файл заливается кусками и переживает обрыв связи. Игрокам он сам не уйдёт.',
+      body: V().uploadCard({}),
+      foot: footButtons(V().uploadButtons({})),
+    });
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.zip';
+
+    let st = { phase: 'idle' };
+    let ctrl = null;
+    let uploadId = '';
+
+    const draw = () => {
+      sheet.body(V().uploadCard(st));
+      sheet.foot(footButtons(V().uploadButtons(st)));
+    };
+
+    /* Закрытие листа посреди заливки — это отмена, а не сворачивание:
+       брошенная загрузка оставила бы на сервере недособранный архив. */
+    sheet.onClose = () => {
+      if (ctrl) ctrl.abort();
+      if (uploadId && st.phase !== 'done') window.CH2Upload.abort(API, uploadId);
+    };
+
+    async function start(file) {
+      const params = window.pickUploadParams
+        ? window.pickUploadParams(file.size, {})
+        : { chunkSize: window.CH2Upload.DEFAULT_CHUNK, concurrency: 4 };
+      ctrl = new AbortController();
+      st = {
+        phase: 'init',
+        file: { name: file.name, size: file.size },
+        chunkSize: params.chunkSize,
+        streams: params.concurrency,
+        progress: 0,
+      };
+      draw();
+
+      try {
+        const res = await window.CH2Upload.run(
+          file,
+          { kind: meta.kind, gameId: meta.gameId, version: meta.version, chunkSize: params.chunkSize },
+          {
+            api: API,
+            chunks: {
+              uploadChunkWithRetries: window.uploadChunkWithRetries,
+              runWorkerPool: window.runWorkerPool,
+              pendingBytes: window.pendingBytes,
+            },
+            concurrency: () => params.concurrency,
+            signal: ctrl.signal,
+            on: (ev) => {
+              st = Object.assign({}, st, ev);
+              draw();
+            },
+          }
+        );
+        uploadId = res.uploadId;
+
+        st = Object.assign({}, st, { phase: 'process', progress: 1 });
+        draw();
+        const done = await window.CH2Upload.process(uploadId, {
+          fetch: window.fetch.bind(window),
+          ndjson: { readNdjsonStream: window.readNdjsonStream },
+          format: window.CH2Format,
+          on: (m) => {
+            const line = sheet.root.querySelector('[data-upload-status]');
+            if (line) line.textContent = m.text;
+          },
+        });
+
+        st = done.ok
+          ? Object.assign({}, st, { phase: 'done' })
+          : Object.assign({}, st, { phase: 'failed', message: done.message });
+        draw();
+        if (done.ok) await store.invalidate(['launcher', 'overview', 'disk']);
+      } catch (e) {
+        st = Object.assign({}, st, { phase: 'failed', message: (e && e.message) || 'сбой' });
+        draw();
+      }
+    }
+
+    input.addEventListener('change', () => {
+      if (input.files && input.files[0]) start(input.files[0]);
+    });
+
+    sheet.root.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-flow]');
+      if (!b) return;
+      const act = b.dataset.flow;
+      if (act === 'pick' || act === 'retry') input.click();
+      if (act === 'abort') {
+        if (ctrl) ctrl.abort();
+        if (uploadId) window.CH2Upload.abort(API, uploadId);
+        st = Object.assign({}, st, { phase: 'aborted' });
+        draw();
+      }
+      if (act === 'close') {
+        sheet.onClose = null;
+        sheet.close();
+        route();
+      }
+    });
+
+    return { pick: (file) => start(file), sheet };
+  }
+
+  /* --- Сборка модпака --- */
+
+  function flowBuild(pack) {
+    const sheet = openSheet({
+      title: 'Сборка модпака: ' + (pack.title || pack.gameId),
+      lede: 'Идёт минутами. Собранное игрокам само не уходит — отдать его отдельное решение.',
+      body: V().buildLog([], 'running'),
+      foot: '<button class="btn" type="button" data-flow="close">Закрыть</button>',
+    });
+
+    const events = [];
+
+    window.CH2Build.run(
+      { gameId: pack.gameId, namespace: pack.namespace, name: pack.name },
+      {
+        fetch: window.fetch.bind(window),
+        ndjson: { readNdjsonStream: window.readNdjsonStream },
+        confirm: ask,
+        on: (ev) => {
+          events.push(ev);
+          sheet.body(V().buildLog(events, 'running'));
+          const log = sheet.root.querySelector('.log');
+          if (log) log.scrollTop = log.scrollHeight;
+        },
+      }
+    ).then(async (res) => {
+      const out = V().buildOutcome(res);
+      sheet.body(
+        V().buildLog(events, 'done') +
+          `<p class="note${out.tone === 'bad' ? ' note--bad' : ''}" data-build-outcome>${esc(out.text)}</p>`
+      );
+      toast(out.text, out.tone);
+      await store.invalidate(['packs', 'overview']);
+    });
+
+    sheet.root.addEventListener('click', (e) => {
+      if (e.target.closest('[data-flow="close"]')) {
+        sheet.close();
+        route();
+      }
+    });
+  }
+
+  /* --- Новость --- */
+
+  /* Черновик пишется в браузер на каждый ввод. Новость набирают минутами,
+     и терять её из-за случайно закрытой вкладки нельзя. */
+  function flowNews(id) {
+    const N = window.CH2News;
+    let post = { id: id || '', title: '', body: '', gameId: '', published: false };
+    const draft = N.readDraft(window.localStorage, post.id);
+
+    const sheet = openSheet({
+      title: id ? 'Правка новости' : 'Новая новость',
+      lede: 'Черновик сохраняется в браузере, пока новость не отправлена.',
+      body: '<div class="sk" style="height:22rem"></div>',
+      foot:
+        '<button class="btn" type="button" data-flow="preview">Посмотреть глазами игрока</button>' +
+        '<span class="push"></span>' +
+        '<button class="btn btn--accent" type="button" data-flow="save">Сохранить</button>',
+    });
+
+    const draw = (problems) => {
+      sheet.body(V().draftNote(draft, post, N) + V().newsForm(post, problems || []));
+    };
+
+    const read = () => {
+      const q = (n) => sheet.root.querySelector('[name="' + n + '"]');
+      if (!q('title')) return;
+      post = Object.assign({}, post, { title: q('title').value, body: q('body').value, gameId: q('gameId').value });
+    };
+
+    (async () => {
+      if (id) {
+        try {
+          const got = await API.newsGet(id);
+          post = Object.assign(post, got || {});
+        } catch {
+          toast('Новость не прочиталась, открыт пустой черновик', 'warn');
+        }
+      }
+      draw();
+    })();
+
+    sheet.root.addEventListener('input', () => {
+      read();
+      N.saveDraft(window.localStorage, post.id, post);
+    });
+
+    sheet.root.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-flow], [data-draft-restore], [data-draft-drop]');
+      if (!b) return;
+
+      if (b.hasAttribute('data-draft-restore')) {
+        post = Object.assign({}, post, draft.post);
+        draw();
+        return;
+      }
+      if (b.hasAttribute('data-draft-drop')) {
+        N.dropDraft(window.localStorage, post.id);
+        draw();
+        return;
+      }
+
+      read();
+      const problems = N.problems(post);
+      if (problems.length) {
+        draw(problems);
+        toast('Не хватает: ' + problems.map((p) => p.text).join(', '), 'warn');
+        return;
+      }
+
+      if (b.dataset.flow === 'preview') {
+        try {
+          const html = await API.newsPreview(N.payload(post));
+          const w = window.open('', '_blank');
+          if (w) w.document.write((html && html.html) || String(html || ''));
+        } catch (err) {
+          toast('Предпросмотр не собрался: ' + window.CH2Api.reason(err), 'bad');
+        }
+        return;
+      }
+
+      if (b.dataset.flow === 'save') {
+        b.disabled = true;
+        try {
+          await API.newsSave(N.payload(post));
+          N.dropDraft(window.localStorage, post.id);
+          toast('Новость сохранена. Игрокам она уйдёт после публикации.', 'ok');
+          sheet.close();
+          await store.invalidate(['news']);
+          route();
+        } catch (err) {
+          toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
+          b.disabled = false;
+        }
+      }
+    });
+  }
+
+  /* --- Галерея --- */
+
+  function flowGallery(gameId) {
+    const G = window.CH2Gallery;
+    let path = '';
+    let entries = [];
+    let cover = '';
+
+    const sheet = openSheet({
+      title: 'Галерея: ' + gameId,
+      lede: 'Обложка попадает на витрину игры. Остальные файлы — на её страницу.',
+      body: '<div class="sk" style="height:18rem"></div>',
+      foot: '<button class="btn" type="button" data-flow="mkdir">Новая папка</button>',
+    });
+
+    async function load() {
+      try {
+        const got = await API.gallery(gameId, path);
+        entries = (got && (got.items || got.entries)) || [];
+        cover = (got && got.cover) || cover;
+      } catch (err) {
+        sheet.body('<div class="empty"><b>Не прочиталось</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
+        return;
+      }
+      sheet.body(V().galleryCrumbs(path, G) + V().galleryList(entries, { path: path, cover: cover, gallery: G }));
+    }
+    load();
+
+    const names = () => entries.map((e) => e.name);
+
+    sheet.root.addEventListener('click', async (e) => {
+      const go = e.target.closest('[data-go]');
+      if (go) {
+        path = G.safePath(go.dataset.go);
+        load();
+        return;
+      }
+
+      const cov = e.target.closest('[data-cover]');
+      if (cov) {
+        await API.gallerySetCover(gameId, G.entryPath(path, cov.dataset.cover));
+        cover = cov.dataset.cover;
+        toast('Обложка сменилась. Игроки увидят её сразу.', 'ok');
+        load();
+        return;
+      }
+
+      const ren = e.target.closest('[data-rename]');
+      if (ren) {
+        const from = ren.dataset.rename;
+        const to = window.prompt('Новое имя', from);
+        if (to === null) return;
+        /* Проверка здесь, а не только на сервере: отказ после нажатия —
+           это потерянное действие и вопрос «а что не так». */
+        const problem = G.nameProblem(to, names().filter((n) => n !== from));
+        if (problem) {
+          toast(problem, 'warn');
+          return;
+        }
+        await API.galleryRename(gameId, G.entryPath(path, from), G.entryPath(path, to));
+        load();
+        return;
+      }
+
+      const rm = e.target.closest('[data-remove]');
+      if (rm) {
+        const file = entries.find((x) => x.name === rm.dataset.remove) || { name: rm.dataset.remove };
+        const warn = G.deleteWarning(file, cover);
+        const agreed = await ask({
+          title: 'Удалить ' + file.name + '?',
+          body: warn || 'Файл удалится с сервера. Вернуть его можно только загрузив заново.',
+          ok: 'Удалить',
+          cancel: 'Отмена',
+        });
+        if (!agreed) return;
+        await API.galleryDelete(gameId, G.entryPath(path, file.name));
+        load();
+        return;
+      }
+
+      if (e.target.closest('[data-flow="mkdir"]')) {
+        const name = window.prompt('Имя папки', '');
+        if (name === null) return;
+        const problem = G.nameProblem(name, names());
+        if (problem) {
+          toast(problem, 'warn');
+          return;
+        }
+        await API.galleryMkdir(gameId, G.entryPath(path, name));
+        load();
+      }
+    });
+  }
+
+  /* --- Порядок игр --- */
+
+  /* Порядок в реестре — это порядок на витрине у игрока, и лаунчер
+     помнит игру по её месту в списке. Поэтому `reorder` пересчитывает
+     номера целиком, а лист говорит, сколько строк переедет. */
+  function flowOrder() {
+    const R = window.CH2Registry;
+    const before = D.games.slice();
+    let list = D.games.slice();
+
+    const sheet = openSheet({
+      title: 'Порядок игр',
+      lede: 'В этом порядке игры стоят в лаунчере у игрока.',
+      body: V().orderList(list),
+      foot:
+        '<span data-order-note class="dim"></span><span class="push"></span>' +
+        '<button class="btn btn--accent" type="button" data-flow="save">Сохранить порядок</button>',
+    });
+
+    const draw = () => {
+      sheet.body(V().orderList(list));
+      const sum = V().orderSummary(before, list);
+      const note = sheet.root.querySelector('[data-order-note]');
+      if (note) note.textContent = sum.text;
+      const save = sheet.root.querySelector('[data-flow="save"]');
+      if (save) save.disabled = !sum.changed;
+    };
+    draw();
+
+    sheet.root.addEventListener('click', async (e) => {
+      const up = e.target.closest('[data-up]');
+      if (up) {
+        list = R.move(list, up.dataset.up, -1);
+        draw();
+        return;
+      }
+      const down = e.target.closest('[data-down]');
+      if (down) {
+        list = R.move(list, down.dataset.down, 1);
+        draw();
+        return;
+      }
+      if (e.target.closest('[data-flow="save"]')) {
+        try {
+          await API.gamesSave(R.reorder(list));
+          toast('Порядок сохранён. Игроки увидят его сразу.', 'ok');
+          sheet.close();
+          await store.invalidate(['games']);
+          route();
+        } catch (err) {
+          toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
+        }
+      }
+    });
+
+    /* Перетаскивание — поверх кнопок, а не вместо них: с клавиатуры в
+       него не попасть, а в список из двадцати строк мышью попадают не с
+       первого раза. */
+    let dragged = '';
+    sheet.root.addEventListener('dragstart', (e) => {
+      const li = e.target.closest('li[data-id]');
+      if (li) dragged = li.dataset.id;
+    });
+    sheet.root.addEventListener('dragover', (e) => {
+      if (e.target.closest('li[data-id]')) e.preventDefault();
+    });
+    sheet.root.addEventListener('drop', (e) => {
+      const li = e.target.closest('li[data-id]');
+      if (!li || !dragged) return;
+      e.preventDefault();
+      list = R.moveTo(list, dragged, Number(li.dataset.index));
+      dragged = '';
+      draw();
+    });
+  }
+
+  /* --- Подбор параметров --- */
+
+  /* Наборы для прогона: те же три, между которыми и приходится выбирать.
+     Больше восьми потоков не пробуем — на них канал начинает терять
+     куски, и выигрыш в скорости съедается повторами. */
+  const BENCH = [
+    { chunk: '4 МиБ', size: 4 * 1024 * 1024, streams: 2 },
+    { chunk: '8 МиБ', size: 8 * 1024 * 1024, streams: 4 },
+    { chunk: '16 МиБ', size: 16 * 1024 * 1024, streams: 8 },
+  ];
+
+  /* Прогон меряет время ответа сервера на заявку о загрузке и сразу её
+     отменяет: ничего не публикуется и на диске ничего не остаётся. */
+  async function benchRuns(api) {
+    const out = [];
+    for (const c of BENCH) {
+      const started = Date.now();
+      let retries = 0;
+      let id = '';
+      try {
+        const init = await api.uploadInit({
+          kind: 'bench',
+          zipName: 'bench.bin',
+          totalSize: c.size,
+          chunkSize: c.size,
+        });
+        id = (init && init.uploadId) || '';
+      } catch {
+        retries++;
+      }
+      const secs = Math.max(0.001, (Date.now() - started) / 1000);
+      if (id) await window.CH2Upload.abort(api, id);
+      out.push({ chunk: c.chunk, streams: c.streams, mbps: c.size / 1024 / 1024 / secs, retries: retries });
+    }
+    return out;
+  }
+
+  function flowBench() {
+    const T = window.CH2Tuning;
+    let runs = (D.bench || []).slice();
+
+    const sheet = openSheet({
+      title: 'Подбор параметров загрузки',
+      lede: 'Прогон занимает около минуты и ничего не публикует.',
+      body: V().benchTable(runs, T),
+      foot: '<button class="btn btn--accent" type="button" data-flow="run">Запустить прогон</button>',
+    });
+
+    sheet.root.addEventListener('click', async (e) => {
+      const apply = e.target.closest('[data-apply]');
+      if (apply) {
+        const pick = runs.find((r) => r.chunk === apply.dataset.apply);
+        if (!pick) return;
+        window.CH2_UPLOAD_PARAMS = T.apply(pick);
+        toast('Применено: ' + pick.chunk + ' на ' + pick.streams + ' потоках', 'ok');
+        return;
+      }
+
+      const run = e.target.closest('[data-flow="run"]');
+      if (!run) return;
+      run.disabled = true;
+      sheet.body('<div class="empty"><b>Идёт прогон</b><span>Гоняем наборы по очереди</span></div>');
+      runs = await benchRuns(API);
+      sheet.body(V().benchTable(runs, T));
+      run.disabled = false;
+    });
+  }
+
+  /** Дела, которые панель ведёт сама. Записи в реестре действий — отдельно. */
+  const FLOWS = {
+    upload: () => flowUpload({ kind: 'launcher' }),
+    build: () => flowBuild(packOf(game)),
+    'new-post': () => flowNews(''),
+    'edit-post': (a) => flowNews(a.id),
+    gallery: (a) => flowGallery(a.gameId || (D.games[0] && D.games[0].gameId) || ''),
+    'new-game': () => flowOrder(),
+    order: () => flowOrder(),
+    bench: () => flowBench(),
+  };
+
   /* ---------- Навигация ---------- */
 
   function route() {
@@ -819,16 +1375,24 @@
     $$('[data-act]').forEach((b) =>
       b.addEventListener('click', async () => {
         const id = b.dataset.act;
-        if (!window.CH2Actions.has(id)) {
-          toast('Это действие ещё не подключено', 'warn');
-          return;
-        }
 
         let args = {};
         try {
           args = b.dataset.args ? JSON.parse(b.dataset.args) : {};
         } catch {
           args = {};
+        }
+
+        /* Длинные дела панель ведёт сама: у них свой лист, свой ход и
+           своё окончание, и в реестр записей они не помещаются. */
+        if (FLOWS[id]) {
+          FLOWS[id](args);
+          return;
+        }
+
+        if (!window.CH2Actions.has(id)) {
+          toast('Это действие ещё не подключено', 'warn');
+          return;
         }
 
         b.disabled = true;

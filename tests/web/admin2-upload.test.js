@@ -227,3 +227,88 @@ test('прерывание не даёт заливать оставшиеся �
   await assert.rejects(U.run(fakeFile(3000), { kind: 'launcher' }, h.deps), /не удалось залить/);
   assert.strictEqual(h.put.length, 0, 'после прерывания ни один кусок не уходит');
 });
+
+/* ---------- Разбор архива на сервере ---------- */
+
+const ndjson = require('../../server/admin_ui/ndjson.js');
+const format = require('../../server/admin_ui/v2/format.js');
+
+/** Ответ-поток из готовых строк NDJSON. */
+function stream(lines) {
+  const text = lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+  return { ok: true, status: 200, text: async () => text };
+}
+
+test('каждый шаг разбора называет себя, а не молчит', () => {
+  // Разбор идёт минутами, и без своей строки выглядит как зависание
+  assert.match(U.processMessage({ type: 'start' }).text, /Начали разбор/);
+  assert.match(U.processMessage({ type: 'unzip', path: 'ChillHub.exe' }).text, /ChillHub\.exe/);
+  assert.match(U.processMessage({ type: 'composeStart', totalFiles: 478 }).text, /478/);
+  assert.strictEqual(U.processMessage({ type: 'done' }).done, true);
+});
+
+test('счётчик файлов показывает и объём, по-русски', () => {
+  const m = U.processMessage({ type: 'file', idx: 120, bytesDone: 11010048 }, format);
+  assert.match(m.text, /120 файлов/);
+  assert.match(m.text, /10,5\u00a0МБ/);
+});
+
+test('неизвестное событие не превращается в пустую строку на экране', () => {
+  assert.strictEqual(U.processMessage({ type: 'whatever' }), null);
+  assert.strictEqual(U.processMessage(null), null);
+});
+
+test('разбор доходит до манифеста и считается успешным', async () => {
+  const seen = [];
+  const res = await U.process('u1', {
+    fetch: async () => stream([{ type: 'start' }, { type: 'file', idx: 1 }, { type: 'done' }]),
+    ndjson,
+    format,
+    on: (m) => seen.push(m.text),
+  });
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(seen.length, 3);
+});
+
+test('ошибка в потоке — это провал, даже если поток дочитался', async () => {
+  const res = await U.process('u1', {
+    fetch: async () => stream([{ type: 'start' }, { type: 'error', message: 'битый архив' }]),
+    ndjson,
+    format,
+  });
+  assert.strictEqual(res.ok, false);
+  assert.match(res.message, /битый архив/);
+});
+
+test('молчащий поток не выдаётся за успех', async () => {
+  // Так выглядит прокси, сложивший ответ в буфер и оборвавший его
+  const res = await U.process('u1', { fetch: async () => ({ ok: true, text: async () => '' }), ndjson, format });
+  assert.strictEqual(res.ok, false);
+  assert.match(res.message, /проверьте список версий/);
+});
+
+test('поток без «манифест записан» — не успех', async () => {
+  const res = await U.process('u1', {
+    fetch: async () => stream([{ type: 'start' }, { type: 'file', idx: 4 }]),
+    ndjson,
+    format,
+  });
+  assert.strictEqual(res.ok, false);
+  assert.match(res.message, /не дописав манифест/);
+});
+
+test('упавший запрос разбора не притворяется удачей', async () => {
+  const dead = await U.process('u1', {
+    fetch: async () => {
+      throw new Error('нет сети');
+    },
+    ndjson,
+    format,
+  });
+  assert.strictEqual(dead.ok, false);
+  assert.match(dead.message, /сервер не отвечает/);
+
+  const bad = await U.process('u1', { fetch: async () => ({ ok: false, status: 500 }), ndjson, format });
+  assert.strictEqual(bad.ok, false);
+  assert.match(bad.message, /500/);
+});

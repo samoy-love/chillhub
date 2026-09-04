@@ -173,6 +173,72 @@
     return { uploadId: uploadId, total: total, chunkSize: chunkSize, resumed: received.length };
   }
 
+  /**
+   * Что показывать по событию разбора архива.
+   *
+   * Разбор — отдельный шаг после сборки файла, и идёт он минутами:
+   * сервер распаковывает архив, считает sha256 каждого файла и пишет
+   * манифест. Без своей строки этот шаг выглядит как зависание ровно в
+   * тот момент, когда всё уже почти готово.
+   */
+  function processMessage(ev, format) {
+    const e = ev || {};
+    const f = format || (typeof window !== 'undefined' && window.CH2Format);
+    const bytes = (n) => (f ? f.bytes(n) : String(n));
+    if (e.type === 'start') return { text: 'Начали разбор архива', done: false };
+    if (e.type === 'unzip') return { text: 'Распаковка: ' + (e.path || ''), done: false };
+    if (e.type === 'composeStart') return { text: 'Готовим манифест: ' + (e.totalFiles || 0) + ' файлов', done: false };
+    if (e.type === 'file') {
+      return { text: 'Манифест: ' + (e.idx || 0) + ' файлов, ' + bytes(e.bytesDone || 0), done: false };
+    }
+    if (e.type === 'done') return { text: 'Манифест записан', done: true };
+    if (e.type === 'error') return { text: 'Ошибка разбора: ' + (e.message || 'сбой'), done: false, failed: true };
+    return null;
+  }
+
+  /**
+   * Разбор архива на сервере.
+   *
+   * Метод обязательно POST: обработчик распаковывает архив, публикует
+   * версию и удаляет ZIP, а CSRF-проверка на сервере действует только
+   * для изменяющих методов — GET оставил бы это без защиты.
+   *
+   * Поток, не давший ни одной строки, — не успех. Так выглядит прокси,
+   * сложивший ответ в буфер и оборвавший его: выдать это за «готово»
+   * значит объявить версию загруженной, не зная этого.
+   */
+  async function process(uploadId, deps) {
+    const d = deps || {};
+    const on = d.on || function () {};
+    let res;
+    try {
+      res = await d.fetch('/admin/api/upload/process?uploadId=' + encodeURIComponent(uploadId), {
+        method: 'POST',
+        headers: { accept: 'application/x-ndjson', 'cache-control': 'no-store' },
+      });
+    } catch {
+      return { ok: false, message: 'сервер не отвечает' };
+    }
+    if (!res.ok) return { ok: false, message: 'код ' + res.status };
+
+    let failed = '';
+    let done = false;
+    let lines = 0;
+    await d.ndjson.readNdjsonStream(res, (ev) => {
+      lines++;
+      const m = processMessage(ev, d.format);
+      if (!m) return;
+      if (m.failed) failed = m.text;
+      if (m.done) done = true;
+      on(m);
+    });
+
+    if (failed) return { ok: false, message: failed };
+    if (!lines) return { ok: false, message: 'сервер оборвал разбор молча — проверьте список версий' };
+    if (!done) return { ok: false, message: 'разбор оборвался, не дописав манифест' };
+    return { ok: true };
+  }
+
   /** Отмена: сервер должен убрать за собой недособранную загрузку. */
   async function abort(api, uploadId) {
     try {
@@ -190,6 +256,8 @@
     chunkRange: chunkRange,
     progress: progress,
     run: run,
+    processMessage: processMessage,
+    process: process,
     abort: abort,
   };
 });

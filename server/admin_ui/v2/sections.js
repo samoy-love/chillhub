@@ -79,15 +79,29 @@
   /* ---------- Игры ---------- */
 
   function games(raw) {
-    return items(raw).map((g) => ({
-      gameId: String(pick(g, ['gameId', 'id'], '')),
-      title: String(pick(g, ['title', 'name'], pick(g, ['gameId', 'id'], ''))),
-      exe: String(pick(g, ['exeRelativePath', 'exe'], '')),
-      iconUrl: String(pick(g, ['iconUrl', 'icon'], '')),
-      steamId: String(pick(g, ['steamAppId', 'steamId'], '')),
-      published: pick(g, ['published'], true) !== false,
-      order: num(pick(g, ['order'], 0), 0),
-    }));
+    return items(raw).map((g) => {
+      const mods = g && g.mods ? g.mods : {};
+      const iconUrl = String(pick(g, ['iconUrl', 'icon'], ''));
+      return {
+        gameId: String(pick(g, ['gameId', 'id'], '')),
+        title: String(pick(g, ['title', 'name'], pick(g, ['gameId', 'id'], ''))),
+        exe: String(pick(g, ['exeRelativePath', 'exe'], '')),
+        iconUrl: iconUrl,
+        icon: iconUrl !== '',
+
+        /* Идентификатор Steam лежит внутри `mods`, а не рядом с полями
+           игры: он есть только у игр с модпаком. Искать его на верхнем
+           уровне значит показывать пустую колонку у всех сразу. */
+        steamId: String(pick(mods, ['steamAppId', 'steamId'], pick(g, ['steamAppId', 'steamId'], ''))),
+
+        /* Поле в реестре называется `unpublished`, и нуль в нём означает
+           «видно». Перевернуть его при чтении, а не при отрисовке: иначе
+           каждое место, где спрашивают «опубликована ли», обязано помнить
+           про двойное отрицание. */
+        published: pick(g, ['unpublished'], false) !== true && pick(g, ['published'], true) !== false,
+        order: num(pick(g, ['order'], 0), 0),
+      };
+    });
   }
 
   /* ---------- Сборки модов ---------- */
@@ -110,7 +124,11 @@
       size: num(pick(p, ['size', 'bytes'], 0), 0),
       behind: Boolean(p && p.behind),
       deprecated: Boolean(p && p.deprecated),
+      /* Версия с Thunderstore приходит плоским полем `latest`. Снимок
+         держал её вложенной в `upstream`; читать обе формы приходится
+         здесь, иначе отрисовка обязана уметь две. */
       latest: String(pick(p, ['latest'], (p && p.upstream && p.upstream.version) || '')),
+      latestAt: String(pick(p, ['latestAt'], (p && p.upstream && p.upstream.at) || '')),
     }));
   }
 
