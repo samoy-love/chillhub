@@ -76,7 +76,7 @@
     `<div class="tree scroll scroll--lg" ${id ? `data-tree="${id}"` : 'data-tree'}>${files
       .map(
         (f) => `<div class="row ${f.diff || 'file'}" data-path="${esc(f.path)}">
-            <span>${f.diff === 'add' ? '+' : f.diff === 'del' ? '−' : f.diff === 'mod' ? '~' : ' '}</span>
+            <span>${f.diff === 'add' ? '+' : f.diff === 'del' ? '−' : f.diff === 'mod' ? '~' : '\u00a0'}</span>
             <span>${esc(f.path)}</span>
             <span class="size">${bytes(f.size)}</span>
           </div>`
@@ -633,7 +633,7 @@
             <div class="attn-item"><span class="k">Запусков лаунчера</span><span class="v">${sum('launcherStarts')}</span><span class="s">за 30 дней</span></div>
             <div class="attn-item"><span class="k">Установок</span><span class="v">${sum('installs')}</span><span class="s">первых, с нуля</span></div>
             <div class="attn-item"><span class="k">Обновлений</span><span class="v">${sum('updates')}</span><span class="s">докачек разницы</span></div>
-            <div class="attn-item" data-tone="${sum('errors') / sum('updates') > 0.1 ? 'warn' : 'ok'}"><span class="k">Доля ошибок</span><span class="v">${dec((sum('errors') / sum('updates')) * 100)} %</span><span class="s">от обновлений</span></div>
+            <div class="attn-item" data-tone="${sum('errors') / sum('updates') > 0.1 ? 'warn' : 'ok'}"><span class="k">Доля ошибок</span><span class="v">${dec((sum('errors') / sum('updates')) * 100)}\u00a0%</span><span class="s">от обновлений</span></div>
           </div>
 
           ${card(
@@ -910,3 +910,5 @@
 
   boot();
 })();
+
+// проверка записи
