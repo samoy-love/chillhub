@@ -42,6 +42,18 @@ function serverFixtures() {
   };
 }
 
+/** Разбирает тело запроса, каким бы оно ни было: форма, JSON или файл. */
+function readBody(init) {
+  const raw = init && init.body;
+  if (!raw) return null;
+  if (typeof raw !== 'string') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return Object.fromEntries(new URLSearchParams(raw));
+  }
+}
+
 /** Поднимает панель в jsdom и отдаёт окно вместе с журналом запросов. */
 async function boot(overrides) {
   const html = fs.readFileSync(path.join(V2, 'index.html'), 'utf8');
@@ -54,7 +66,8 @@ async function boot(overrides) {
   window.fetch = async (url, init) => {
     const u = String(url);
     const method = (init && init.method) || 'GET';
-    const body = init && init.body ? JSON.parse(init.body) : null;
+    // Запись уезжает формой, чтение — без тела; JSON остался у двух ручек
+    const body = readBody(init);
     calls.push({ method, url: u, body });
 
     const key = u.replace('/admin/api/', '').split('?')[0];
@@ -143,7 +156,7 @@ test('отказ в диалоге не отправляет запрос', asyn
   window.document.querySelector('.modal [data-no]').click();
   await until(() => !window.document.querySelector('.modal'));
 
-  assert.strictEqual(calls.filter((c) => c.url.includes('/activate')).length, 0);
+  assert.strictEqual(calls.filter((c) => c.url.split('?')[0].includes('/activate')).length, 0);
   assert.ok(!window.document.querySelector('.modal'), 'окно не закрылось');
 });
 
@@ -155,15 +168,19 @@ test('согласие доводит действие до сервера и п
   await until(() => window.document.querySelector('.modal'));
   window.document.querySelector('.modal [data-yes]').click();
 
-  const sent = await until(() => calls.some((c) => c.method === 'POST' && c.url.endsWith('/activate')));
+  // Параметры теперь висят на адресе — сервер читает их именно оттуда
+  const sent = await until(() => calls.some((c) => c.method === 'POST' && c.url.split('?')[0].endsWith('/activate')));
   assert.ok(sent, 'запрос активации не ушёл');
 
-  const req = calls.find((c) => c.url.endsWith('/activate'));
-  assert.deepStrictEqual(req.body, { version: '1.6.25' });
+  const at = (c) => c.url.split('?')[0];
+  const req = calls.find((c) => at(c).endsWith('/activate'));
+  // И в адресе, и телом формы — сервер читает то одним способом, то другим
+  assert.match(req.url, /gameId=launcher&version=1\.6\.25/);
+  assert.deepStrictEqual(req.body, { gameId: 'launcher', version: '1.6.25' });
 
   // После записи раздел обязан перечитаться, иначе экран останется врать
-  const before = calls.filter((c) => c.url.endsWith('/list')).length;
-  const reread = await until(() => calls.filter((c) => c.url.endsWith('/list')).length > before - 1);
+  const before = calls.filter((c) => at(c).endsWith('/list')).length;
+  const reread = await until(() => calls.filter((c) => at(c).endsWith('/list')).length > before - 1);
   assert.ok(reread);
 });
 

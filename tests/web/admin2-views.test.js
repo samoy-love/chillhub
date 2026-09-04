@@ -177,9 +177,30 @@ test('настоящая ошибка называет причину', () => {
 /* ---------- Новость ---------- */
 
 test('ошибка поля стоит рядом со своим полем', () => {
-  const html = V.newsForm({ title: '', body: 'текст' }, News.problems({ title: '', body: 'текст' }));
-  const beforeBody = html.slice(0, html.indexOf('n-body'));
-  assert.match(beforeBody, /help--bad/);
+  const post = { slug: '-плохо', markdown: '# Т\n\nтекст' };
+  const html = V.newsForm(post, News.problems(post));
+  const beforeGame = html.slice(0, html.indexOf('n-game'));
+  assert.match(beforeGame, /help--bad/);
+});
+
+test('поля новости — те, что знает сервер, и заголовка среди них нет', () => {
+  // Отдельное поле «Заголовок» было бы враньём: он берётся первой строкой текста
+  const html = V.newsForm({ slug: 'release', markdown: '# Т' }, []);
+  for (const f of ['slug', 'gameId', 'coverUrl', 'markdown']) {
+    assert.match(html, new RegExp('name="' + f + '"'), 'нет поля ' + f);
+  }
+  assert.ok(!/name="title"/.test(html), 'в форме есть поле, которого сервер не знает');
+});
+
+test('у существующей заметки имя не правят: оно уже в адресе статьи', () => {
+  assert.match(V.newsForm({ slug: 'release', existing: true }, []), /name="slug"[^>]*readonly/);
+  assert.ok(!/name="slug"[^>]*readonly/.test(V.newsForm({ slug: '' }, [])));
+});
+
+test('видно, какой заголовок прочтёт сервер', () => {
+  // Заголовок здесь не поле, а первая строка — без подсказки это не увидеть
+  assert.match(V.newsHeadline('# Вышла 1.6.25', News), /Вышла 1\.6\.25/);
+  assert.match(V.newsHeadline('без решётки', News), /Заголовка нет/);
 });
 
 test('пустая игра объясняется, а не остаётся загадкой', () => {
@@ -188,16 +209,16 @@ test('пустая игра объясняется, а не остаётся з�
 });
 
 test('текст новости попадает в поле, а не в разметку страницы', () => {
-  const html = V.newsForm({ title: '</textarea><script>', body: '"><b>' }, []);
+  const html = V.newsForm({ slug: '</textarea><script>', markdown: '"><b>' }, []);
   assert.ok(!html.includes('<script>'));
   assert.ok(!html.includes('value="</textarea>'));
   assert.match(html, /&lt;\/textarea&gt;/);
 });
 
 test('черновик предлагается вернуть, только когда он отличается', () => {
-  const same = V.draftNote({ post: { title: 'x', body: 'y' } }, { title: 'x', body: 'y' }, News);
+  const same = V.draftNote({ post: { markdown: '# Т\n\nтекст' } }, { markdown: '# Т\n\nтекст' }, News);
   assert.strictEqual(same, '');
-  const diff = V.draftNote({ post: { title: 'x', body: 'другое' } }, { title: 'x', body: 'y' }, News);
+  const diff = V.draftNote({ post: { markdown: '# Т\n\nдругое' } }, { markdown: '# Т\n\nтекст' }, News);
   assert.match(diff, /data-draft-restore/);
   assert.match(diff, /data-draft-drop/);
 });

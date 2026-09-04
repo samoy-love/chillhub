@@ -20,6 +20,35 @@
 
   const BASE = '/admin/api/';
 
+  /* КАК СЕРВЕР ЧИТАЕТ ПАРАМЕТРЫ ЗАПИСИ.
+     ------------------------------------------------------------------
+     Почти все обработчики админ-API берут параметры из строки запроса
+     (`r.URL.Query()`) либо из формы (`r.ParseForm` / `r.FormValue`), и
+     тело JSON для них не существует вовсе: `r.FormValue("version")`
+     вернёт пустую строку, а `ParseForm` разберёт только строку запроса.
+     Панель 1.0 поэтому и вешала параметры на адрес — `POST
+     /admin/activate?gameId=…&version=…` без тела.
+
+     Значит, по умолчанию параметры записи уезжают ДВУМЯ путями сразу:
+     в строке запроса (её видит `Query()`) и телом
+     `application/x-www-form-urlencoded` (его видит `ParseForm`). Оба
+     несут одно и то же, так что читающий любым способом получит одно
+     значение, а не два разных.
+
+     Длинные значения — текст новости, разметка предпросмотра — в адрес
+     не кладём: он не резиновый, и на длинном тексте запрос упрётся в
+     ограничение сервера. Такие уезжают только телом; обработчиков,
+     которые читали бы длинное значение из `Query()`, в API нет.
+
+     Исключения перечислены поимённо: две ручки разбирают именно JSON. */
+  const JSON_BODY = new Set(['upload/init', 'games/save']);
+
+  /** Длиннее этого в адрес не кладём. */
+  const URL_VALUE_LIMIT = 512;
+
+  /** Идентификатор, под которым сервер держит сборки самого лаунчера. */
+  const LAUNCHER = 'launcher';
+
   /** Ошибка запроса, у которой есть человеческий текст и код HTTP. */
   class ApiError extends Error {
     constructor(message, status, path) {
@@ -106,25 +135,44 @@
       const method = c.method || 'GET';
       let url = BASE + path;
 
-      if (c.query) {
-        const q = new URLSearchParams();
-        for (const k of Object.keys(c.query)) {
-          const v = c.query[k];
-          if (v !== undefined && v !== null && v !== '') q.set(k, String(v));
+      /* Значения приводим к строкам одинаково во всех трёх местах:
+         `false` обязано уехать как «false», а не пропасть, иначе снятие
+         галочки на сервере выглядит как её отсутствие. */
+      const usable = (v) => v !== undefined && v !== null && v !== '';
+      const asText = (v) => (typeof v === 'boolean' ? String(v) : String(v));
+
+      const q = new URLSearchParams();
+      const add = (src) => {
+        for (const k of Object.keys(src || {})) {
+          const v = src[k];
+          if (usable(v) && asText(v).length <= URL_VALUE_LIMIT) q.set(k, asText(v));
         }
-        const s = q.toString();
-        if (s) url += '?' + s;
-      }
+      };
+      add(c.query);
 
       const init = { method: method, signal: c.signal, headers: { accept: 'application/json' } };
+
       if (c.body !== undefined) {
         if (typeof FormData !== 'undefined' && c.body instanceof FormData) {
           init.body = c.body;
-        } else {
+        } else if (JSON_BODY.has(path)) {
           init.headers['content-type'] = 'application/json';
           init.body = JSON.stringify(c.body);
+        } else {
+          /* Обычный путь: то же самое и в адрес, и телом формы. */
+          add(c.body);
+          const form = new URLSearchParams();
+          for (const k of Object.keys(c.body || {})) {
+            const v = c.body[k];
+            if (usable(v)) form.set(k, asText(v));
+          }
+          init.headers['content-type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
+          init.body = form.toString();
         }
       }
+
+      const qs = q.toString();
+      if (qs) url += '?' + qs;
 
       let res;
       try {
@@ -152,6 +200,20 @@
     const get = (path, query, signal) => call(path, { query: query, signal: signal });
     const post = (path, body, query) => call(path, { method: 'POST', body: body, query: query });
 
+    /* Файл уезжает multipart: сервер читает его через `r.FormFile`.
+       Свой content-type здесь ставить нельзя — в нём нет границы, и
+       разбор на сервере разваливается. Остальные поля кладутся в ту же
+       форму, а не в адрес: имя файла бывает длинным. */
+    function upload(path, fields, fileField, file) {
+      const fd = new FormData();
+      for (const k of Object.keys(fields || {})) {
+        const v = fields[k];
+        if (v !== undefined && v !== null && v !== '') fd.set(k, String(v));
+      }
+      fd.set(fileField, file);
+      return call(path, { method: 'POST', body: fd });
+    }
+
     return {
       call: call,
       ApiError: ApiError,
@@ -160,54 +222,84 @@
       authRefresh: () => post('auth/refresh'),
       logout: () => post('auth/logout'),
 
-      launcherVersions: () => get('list'),
-      launcherActivate: (version) => post('activate', { version: version }),
-      launcherDelete: (version) => post('deleteVersion', { version: version }),
-      launcherPrune: (keep) => post('pruneVersions', { keep: keep }),
+      /* Лаунчер для сервера — такая же «игра», как остальные, только с
+         зарезервированным идентификатором. Без него ручки версий
+         отвечают про пустой идентификатор, а не про лаунчер. */
+      launcherVersions: () => get('list', { gameId: LAUNCHER }),
+      launcherActivate: (version) => post('activate', { gameId: LAUNCHER, version: version }),
+      launcherDelete: (version) => post('deleteVersion', { gameId: LAUNCHER, version: version }),
+      launcherPrune: (keep) => post('pruneVersions', { gameId: LAUNCHER, keep: keep }),
       freeSpace: () => get('system/free'),
 
       uploadInit: (payload) => post('upload/init', payload),
-      uploadStatus: (id) => get('upload/status', { id: id }),
-      uploadComplete: (payload) => post('upload/complete', payload),
-      uploadCleanup: (id) => post('upload/cleanup', { id: id }),
-      uploadAbort: (id) => post('upload/abort', { id: id }),
+      /* Номер загрузки сервер зовёт `uploadId` во всех четырёх ручках
+         (`uploadID(r)` в chunked.go). Под именем `id` он его не видит, и
+         докачка, завершение и отмена молча отвечали «missing id». */
+      uploadStatus: (id) => get('upload/status', { uploadId: id }),
+      uploadComplete: (payload) => post('upload/complete', { uploadId: (payload && payload.uploadId) || payload }),
+      uploadCleanup: (id) => post('upload/cleanup', { uploadId: id }),
+      uploadAbort: (id) => post('upload/abort', { uploadId: id }),
 
       games: () => get('games'),
       gamesSave: (items) => post('games/save', { items: items }),
       gamesScan: () => post('games/scan'),
       gamesPurge: (gameId) => post('games/purge', { gameId: gameId }),
       gamesEcosystem: (gameId) => get('games/ecosystem', { gameId: gameId }),
+      gamesIconUpload: (gameId, file) => upload('games/icon/upload', { gameId: gameId }, 'file', file),
 
-      gallery: (gameId, dir) => get('games/gallery', { gameId: gameId, dir: dir }),
-      galleryMkdir: (gameId, dir) => post('games/gallery/mkdir', { gameId: gameId, dir: dir }),
-      galleryRename: (gameId, from, to) => post('games/gallery/rename', { gameId: gameId, from: from, to: to }),
-      galleryDelete: (gameId, path) => post('games/gallery/delete', { gameId: gameId, path: path }),
+      /* ГАЛЕРЕЯ АДРЕСУЕТСЯ ПАПКОЙ И ИМЕНЕМ, А НЕ ПУТЁМ ЦЕЛИКОМ.
+         `path` — папка внутри галереи игры, `name` — файл в ней. Полный
+         путь одной строкой сервер не принимает: он режет `path` своим
+         `SanitizeAssetPath`, а имя проверяет отдельно, и склейка ушла бы
+         в никуда. */
+      gallery: (gameId, path) => get('games/gallery', { gameId: gameId, path: path }),
+      galleryMkdir: (gameId, path, name) => post('games/gallery/mkdir', { gameId: gameId, path: path, name: name }),
+      galleryRename: (gameId, path, from, to) =>
+        post('games/gallery/rename', { gameId: gameId, path: path, from: from, to: to }),
+      galleryDelete: (gameId, path, name) => post('games/gallery/delete', { gameId: gameId, path: path, name: name }),
       gallerySetCaption: (gameId, file, caption) =>
         post('games/gallery/setCaption', { gameId: gameId, file: file, caption: caption }),
       gallerySetCover: (gameId, file) => post('games/gallery/setCover', { gameId: gameId, file: file }),
-      galleryUploadByUrl: (payload) => post('games/gallery/uploadByUrl', payload),
+      galleryUpload: (gameId, path, file) => upload('games/gallery/upload', { gameId: gameId, path: path }, 'file', file),
+      galleryUploadByUrl: (gameId, path, url, filename) =>
+        post('games/gallery/uploadByUrl', { gameId: gameId, path: path, url: url, filename: filename }),
 
       modsList: (gameId) => get('mods/list', { gameId: gameId }),
       modsCatalog: (query) => get('mods/catalog', query),
-      modsReadme: (pkg) => get('mods/readme', { pkg: pkg }),
+      modsReadme: (namespace, name, version) =>
+        get('mods/readme', { namespace: namespace, name: name, version: version }),
       modsResolve: (payload) => post('mods/resolve', payload),
       modsActivate: (gameId, version) => post('mods/activate', { gameId: gameId, version: version }),
       modsDelete: (gameId, version) => post('mods/deleteVersion', { gameId: gameId, version: version }),
+      modsImport: (gameId, file) => upload('mods/import', { gameId: gameId }, 'file', file),
+
+      /* Кэш архивов: одна ручка на чтение и на чистку. Без `all` сервер
+         убирает только просроченное, с `all=1` — всё. */
       modsCache: () => get('mods/cache'),
+      modsCacheSweep: () => post('mods/cache'),
+      modsCacheClear: () => post('mods/cache', { all: '1' }),
       summary: () => get('summary'),
 
-      newsList: (query) => get('news/list', query),
-      newsGet: (id) => get('news/get', { id: id }),
+      /* НОВОСТЬ АДРЕСУЕТСЯ ТРОЙКОЙ, А НЕ ОДНИМ НОМЕРОМ.
+         `scope` — «launcher» или «game», `gameId` нужен только второму,
+         `slug` — имя самой заметки. Заголовок отдельным полем сервер не
+         знает: он живёт первой строкой markdown. */
+      newsList: (scope, gameId) => get('news/list', { scope: scope, gameId: gameId }),
+      newsGet: (scope, gameId, slug) => get('news/get', { scope: scope, gameId: gameId, slug: slug }),
       newsSave: (payload) => post('news/save', payload),
-      newsDelete: (id) => post('news/delete', { id: id }),
-      newsPublish: (id, published) => post('news/publish', { id: id, published: published }),
-      newsPreview: (payload) => post('news/preview', payload),
-      newsRebuild: () => post('news/rebuild'),
-      newsAssets: (dir) => get('news/assets', { dir: dir }),
-      newsAssetsMkdir: (dir) => post('news/assets/mkdir', { dir: dir }),
-      newsAssetsRename: (from, to) => post('news/assets/rename', { from: from, to: to }),
-      newsAssetsDelete: (path) => post('news/assets/delete', { path: path }),
-      newsAssetsUploadByUrl: (payload) => post('news/assets/uploadByUrl', payload),
+      newsDelete: (scope, gameId, slug) => post('news/delete', { scope: scope, gameId: gameId, slug: slug }),
+      newsPublish: (scope, gameId, slug, published) =>
+        post('news/publish', { scope: scope, gameId: gameId, slug: slug, published: published }),
+      newsPreview: (markdown, scope, gameId) =>
+        post('news/preview', { markdown: markdown, scope: scope, gameId: gameId }),
+      newsRebuild: (scope, gameId) => post('news/rebuild', { scope: scope, gameId: gameId }),
+      newsAssets: (path) => get('news/assets', { path: path }),
+      newsAssetsMkdir: (path, name) => post('news/assets/mkdir', { path: path, name: name }),
+      newsAssetsRename: (path, from, to) => post('news/assets/rename', { path: path, from: from, to: to }),
+      newsAssetsDelete: (path, name) => post('news/assets/delete', { path: path, name: name }),
+      newsAssetsUpload: (path, file) => upload('news/assets/upload', { path: path }, 'file', file),
+      newsAssetsUploadByUrl: (path, url, filename) =>
+        post('news/assets/uploadByUrl', { path: path, url: url, filename: filename }),
 
       feedbackList: (query) => get('feedback/list', query),
       feedbackGet: (id) => get('feedback/get', { id: id }),
@@ -228,5 +320,8 @@
     };
   }
 
-  return { makeApi: makeApi, ApiError: ApiError, reason: reason, session: session, goLogin: goLogin, BASE: BASE, LOGIN: LOGIN };
+  return {
+    makeApi: makeApi, ApiError: ApiError, reason: reason, session: session, goLogin: goLogin,
+    BASE: BASE, LOGIN: LOGIN, JSON_BODY: JSON_BODY, URL_VALUE_LIMIT: URL_VALUE_LIMIT, LAUNCHER: LAUNCHER,
+  };
 });

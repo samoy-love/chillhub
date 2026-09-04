@@ -134,11 +134,18 @@
 
   /* ---------- Новости ---------- */
 
-  function news(raw) {
+  /* Заметка адресуется тройкой scope + gameId + slug. В индексе сервер
+     кладёт `id` и `slug` одинаковыми, но обращаться надо именно по
+     slug: `id` — это его собственное поле, а не адрес. */
+  function news(raw, gameId) {
+    const game = String(gameId || '');
     return items(raw).map((n) => ({
-      id: String(pick(n, ['id'], '')),
+      slug: String(pick(n, ['slug', 'id'], '')),
       title: String(pick(n, ['title'], 'Без заголовка')),
-      game: String(pick(n, ['game', 'gameId'], '')),
+      summary: String(pick(n, ['summary'], '')),
+      game: game || String(pick(n, ['game', 'gameId'], '')),
+      scope: game || pick(n, ['gameId'], '') ? 'game' : 'launcher',
+      coverUrl: String(pick(n, ['coverUrl'], '')),
       at: pick(n, ['at', 'createdAt', 'date'], ''),
       published: pick(n, ['published'], pick(n, ['state'], '') === 'published') === true,
     }));
@@ -359,7 +366,7 @@
     launcher: (api) => api.launcherVersions().then(launcher),
     games: (api) => api.games().then(games),
     packs: (api) => api.modsList().then(packs),
-    news: (api) => api.newsList().then(news),
+    news: (api) => api.newsList('launcher', '').then((r) => news(r, '')),
     inbox: (api) => api.feedbackList().then(inbox),
     maint: (api) => api.maintenanceGet().then(maintenance),
     metrics: (api) => api.metricsSummary().then(metrics),

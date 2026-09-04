@@ -1,188 +1,210 @@
-// Редактор новостей в панели 2.0.
+// Новость в панели 2.0.
 //
-// Между «написал» и «опубликовал» теряется больше всего: в панели 1.0
-// набранный текст жил только в поле, и закрытая вкладка стоила работы.
-// Отсюда черновик на диске браузера — и требование, чтобы восстановление
-// предлагалось, а не случалось само.
+// Модель здесь не выдуманная, а серверная, и это главное, что
+// проверяется. Заметка — один markdown-файл: заголовок сервер берёт
+// первой строкой `# ...`, отдельного поля под него нет. Адресуется она
+// тройкой `scope` + `gameId` + `slug`, а не одним номером. Панель,
+// придумавшая себе «id» и «title», молча промахивается мимо каждой
+// ручки: сервер отвечает «invalid slug», а человек видит «не
+// сохранилось» без единой подсказки почему.
 
 const test = require('node:test');
 const assert = require('node:assert');
 
 const N = require('../../server/admin_ui/v2/news.js');
 
-/** Хранилище браузера в памяти, с возможностью сломаться. */
-function storage(opts) {
-  const o = opts || {};
+/** Хранилище черновиков, какое бывает в браузере. */
+function storage() {
   const map = new Map();
   return {
     map,
-    getItem: (k) => (o.readThrows ? (() => { throw new Error('нет доступа'); })() : (map.has(k) ? map.get(k) : null)),
-    setItem: (k, v) => {
-      if (o.writeThrows) throw new Error('переполнено');
-      map.set(k, v);
-    },
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => map.set(k, String(v)),
     removeItem: (k) => map.delete(k),
   };
 }
 
-const post = (over) => Object.assign({ id: 'n1', title: 'Заголовок', body: 'Текст' }, over || {});
+/* ---------- Адрес ---------- */
 
-/* ---------- Проверки ---------- */
-
-test('заполненная заметка сохраняется', () => {
-  assert.deepStrictEqual(N.problems(post()), []);
-  assert.strictEqual(N.canSave(post()), true);
+test('пустая игра означает новость про лаунчер, а не про игру без имени', () => {
+  assert.deepStrictEqual(N.address({ slug: 'note' }), { scope: 'launcher', gameId: '', slug: 'note' });
+  assert.deepStrictEqual(N.address({ gameId: 'repo', slug: 'p1' }), { scope: 'game', gameId: 'repo', slug: 'p1' });
 });
 
-test('без заголовка сохранять нельзя, и сказано почему', () => {
-  const p = N.problems(post({ title: '' }));
+test('адрес не разваливается на пустой заметке', () => {
+  assert.deepStrictEqual(N.address(null), { scope: 'launcher', gameId: '', slug: '' });
+});
+
+/* ---------- Имя файла ---------- */
+
+test('нормальное имя проходит', () => {
+  assert.strictEqual(N.slugProblem('release-1_6_25'), '');
+  assert.strictEqual(N.slugProblem('заметка'), '');
+});
+
+test('имя, которое сервер не примет, названо до нажатия', () => {
+  // Имя становится путём к файлу и частью адреса статьи
+  assert.match(N.slugProblem(''), /Без имени/);
+  assert.match(N.slugProblem('.скрытая'), /только буквы/);
+  assert.match(N.slugProblem('-минус'), /только буквы/);
+  assert.match(N.slugProblem('а..б'), /Две точки подряд/);
+  assert.match(N.slugProblem('есть пробел'), /только буквы/);
+  assert.match(N.slugProblem('слэш/внутри'), /только буквы/);
+  assert.match(N.slugProblem('я'.repeat(129)), /128/);
+});
+
+test('имя предлагается из заголовка, но не навязывается', () => {
+  // Имя попадает в адрес статьи и потом не меняется, заголовок правят свободно
+  assert.strictEqual(N.suggestSlug('Вышла версия 1.6.25!'), 'вышла-версия-1-6-25');
+  assert.strictEqual(N.suggestSlug('  ---  '), '');
+});
+
+test('предложенное имя само по себе годится', () => {
+  for (const t of ['Вышла 1.6.25', '...Точки в начале', '— Тире в начале']) {
+    const s = N.suggestSlug(t);
+    if (s) assert.strictEqual(N.slugProblem(s), '', t + ' -> ' + s);
+  }
+});
+
+/* ---------- Текст ---------- */
+
+test('заголовок читается так же, как его прочтёт сервер', () => {
+  assert.strictEqual(N.titleOf('# Вышла 1.6.25\n\nПочинили обрыв.'), 'Вышла 1.6.25');
+  assert.strictEqual(N.titleOf('Вступление\n# Заголовок ниже'), 'Заголовок ниже');
+  assert.strictEqual(N.titleOf('## Не тот уровень'), '');
+  assert.strictEqual(N.titleOf(''), '');
+});
+
+test('текст без заголовка — это текст, а заголовок в него не входит', () => {
+  assert.strictEqual(N.bodyOf('# Т\n\nПочинили обрыв.'), 'Починили обрыв.');
+  assert.strictEqual(N.bodyOf('# Только заголовок'), '');
+});
+
+test('заметка без заголовка не уйдёт в ленту безымянной строкой', () => {
+  const p = N.problems({ slug: 'ok', markdown: 'просто текст' });
   assert.strictEqual(p.length, 1);
-  assert.strictEqual(p[0].field, 'title');
-  assert.match(p[0].message, /сбоем загрузки/);
+  assert.strictEqual(p[0].field, 'markdown');
+  assert.match(p[0].text, /# Название заметки/);
 });
 
-test('пустой текст — тоже замечание', () => {
-  const p = N.problems(post({ body: '   ' }));
-  assert.strictEqual(p[0].field, 'body');
-  assert.strictEqual(N.canSave(post({ body: '' })), false);
+test('заметка из одного заголовка выглядит сбоем загрузки', () => {
+  const p = N.problems({ slug: 'ok', markdown: '# Вышла 1.6.25' });
+  assert.match(p[0].text, /откроет и закроет/);
 });
 
-test('пустой считается заметка без заголовка и без текста', () => {
-  assert.strictEqual(N.isEmpty({ title: '', body: '' }), true);
-  assert.strictEqual(N.isEmpty({ title: ' ', body: '\n' }), true);
-  assert.strictEqual(N.isEmpty({ title: 'Есть', body: '' }), false);
-  assert.strictEqual(N.isEmpty(null), true);
+test('целая заметка проходит', () => {
+  const post = { slug: 'release', markdown: '# Вышла 1.6.25\n\nПочинили обрыв скачивания.' };
+  assert.deepStrictEqual(N.problems(post), []);
+  assert.strictEqual(N.canSave(post), true);
 });
 
-/* ---------- Что уезжает на сервер ---------- */
+/* ---------- Что уезжает ---------- */
 
-test('в запрос уходит только заполненное', () => {
-  assert.deepStrictEqual(N.payload({ title: ' Заголовок ', body: 'Текст' }), {
-    title: 'Заголовок', body: 'Текст',
-  });
+test('на сервер уезжают имена полей контракта, а не свои', () => {
+  // scope, gameId, slug, markdown, coverUrl, published — и никакого title
+  const out = N.payload({ slug: 'p1', gameId: 'repo', markdown: '# Т\n\nтекст', published: true, coverUrl: '/x.png' });
+  assert.deepStrictEqual(Object.keys(out).sort(), ['coverUrl', 'gameId', 'markdown', 'published', 'scope', 'slug']);
+  assert.strictEqual(out.scope, 'game');
+  assert.strictEqual(out.published, 'true');
 });
 
-test('пустая игра означает новость лаунчера, а не игру с пустым именем', () => {
-  assert.strictEqual(N.payload({ title: 'A', body: 'B', game: '' }).game, undefined);
-  assert.strictEqual(N.payload({ title: 'A', body: 'B', game: 'repo' }).game, 'repo');
+test('новость лаунчера не тащит с собой идентификатор игры', () => {
+  const out = N.payload({ slug: 'note', markdown: '# Т\n\nтекст' });
+  assert.strictEqual(out.scope, 'launcher');
+  assert.ok(!('gameId' in out), 'в новость лаунчера попал gameId');
 });
 
-test('перенос строки в тексте не съедается', () => {
-  const body = 'Первая\n\nВторая';
-  assert.strictEqual(N.payload({ title: 'A', body }).body, body);
+test('«не опубликовано» уезжает словом, а не пропадает', () => {
+  // Пропавшее поле на сервере неотличимо от «не прислали»
+  assert.strictEqual(N.payload({ slug: 'n', markdown: '# Т' }).published, 'false');
 });
 
 /* ---------- Черновик ---------- */
 
-test('черновик пишется и читается', () => {
+test('черновик сохраняется и читается по адресу заметки', () => {
   const s = storage();
-  assert.strictEqual(N.saveDraft(s, 'n1', post()), true);
-
-  const d = N.readDraft(s, 'n1');
-  assert.strictEqual(d.post.title, 'Заголовок');
-  assert.ok(d.at > 0, 'у черновика должно быть время');
+  const post = { slug: 'p1', gameId: 'repo', markdown: '# Т\n\nнедописано' };
+  assert.strictEqual(N.saveDraft(s, post), true);
+  assert.strictEqual(N.readDraft(s, post).post.markdown, '# Т\n\nнедописано');
 });
 
-test('черновики разных заметок не смешиваются', () => {
+test('заметка игры и заметка лаунчера с одним именем — разные черновики', () => {
+  // Иначе одна затирает другую, и пропажу замечают уже после сохранения
   const s = storage();
-  N.saveDraft(s, 'n1', post({ title: 'Первая' }));
-  N.saveDraft(s, 'n2', post({ title: 'Вторая' }));
-  assert.strictEqual(N.readDraft(s, 'n1').post.title, 'Первая');
-  assert.strictEqual(N.readDraft(s, 'n2').post.title, 'Вторая');
+  N.saveDraft(s, { slug: 'note', gameId: 'repo', markdown: '# Игра' });
+  N.saveDraft(s, { slug: 'note', markdown: '# Лаунчер' });
+  assert.strictEqual(N.readDraft(s, { slug: 'note', gameId: 'repo' }).post.markdown, '# Игра');
+  assert.strictEqual(N.readDraft(s, { slug: 'note' }).post.markdown, '# Лаунчер');
 });
 
-test('новая заметка получает свой ключ, а не чужой', () => {
-  assert.notStrictEqual(N.draftKey(''), N.draftKey('n1'));
-  assert.match(N.draftKey(''), /new$/);
-});
-
-test('очищенное поле стирает черновик, а не сохраняет пустоту', () => {
+test('очищенное поле убирает черновик, а не сохраняет пустоту', () => {
   const s = storage();
-  N.saveDraft(s, 'n1', post());
-  N.saveDraft(s, 'n1', { title: '', body: '' });
-  assert.strictEqual(N.readDraft(s, 'n1'), null);
+  N.saveDraft(s, { slug: 'p1', markdown: '# Т' });
+  assert.strictEqual(N.saveDraft(s, { slug: '', markdown: '   ' }), false);
+  assert.strictEqual(N.readDraft(s, { slug: '' }), null);
 });
 
-test('мусор в хранилище равносилен его отсутствию', () => {
+test('мусор в хранилище — это его отсутствие, а не падение редактора', () => {
   const s = storage();
-  s.map.set(N.draftKey('n1'), 'не json');
-  assert.strictEqual(N.readDraft(s, 'n1'), null);
+  s.setItem(N.draftKey({ slug: 'p1' }), 'не json');
+  assert.strictEqual(N.readDraft(s, { slug: 'p1' }), null);
 });
 
-test('недоступное хранилище не роняет редактор', () => {
-  // Приватный режим и переполнение — обычное дело, терять из-за них редактор нельзя
-  assert.strictEqual(N.saveDraft(storage({ writeThrows: true }), 'n1', post()), false);
-  assert.strictEqual(N.readDraft(storage({ readThrows: true }), 'n1'), null);
-  assert.strictEqual(N.saveDraft(null, 'n1', post()), false);
-  assert.strictEqual(N.readDraft(null, 'n1'), null);
+test('закрытое хранилище не роняет редактор', () => {
+  // Браузер может запретить запись настройками — черновик приятен, но не обязателен
+  const dead = {
+    getItem: () => {
+      throw new Error('заблокировано');
+    },
+    setItem: () => {
+      throw new Error('заблокировано');
+    },
+    removeItem: () => {
+      throw new Error('заблокировано');
+    },
+  };
+  assert.strictEqual(N.saveDraft(dead, { slug: 'p', markdown: '# Т' }), false);
+  assert.strictEqual(N.readDraft(dead, { slug: 'p' }), null);
+  N.dropDraft(dead, { slug: 'p' });
 });
 
-test('черновик удаляется явно', () => {
-  const s = storage();
-  N.saveDraft(s, 'n1', post());
-  N.dropDraft(s, 'n1');
-  assert.strictEqual(N.readDraft(s, 'n1'), null);
-  assert.doesNotThrow(() => N.dropDraft(null, 'n1'));
+test('черновика нет — и без хранилища ничего не ломается', () => {
+  assert.strictEqual(N.saveDraft(null, { slug: 'p' }), false);
+  assert.strictEqual(N.readDraft(null, { slug: 'p' }), null);
+  N.dropDraft(null, { slug: 'p' });
 });
 
-/* ---------- Восстановление ---------- */
-
-test('восстановление предлагается только когда черновик отличается', () => {
-  // Иначе панель предлагает восстановить ровно то, что уже открыто,
-  // и это предложение перестают читать
-  const same = { post: { title: 'Заголовок', body: 'Текст' } };
-  assert.strictEqual(N.restorable(same, post()), false);
-
-  const other = { post: { title: 'Заголовок', body: 'Другой текст' } };
-  assert.strictEqual(N.restorable(other, post()), true);
-});
-
-test('черновик новой заметки предлагается, когда с сервера ничего нет', () => {
-  const draft = { post: { title: 'Набросок', body: 'Текст' } };
-  assert.strictEqual(N.restorable(draft, null), true);
-});
-
-test('отсутствующий черновик восстанавливать нечего', () => {
-  assert.strictEqual(N.restorable(null, post()), false);
-  assert.strictEqual(N.restorable({}, post()), false);
+test('вернуть черновик предлагают, только когда он отличается', () => {
+  // Предлагать восстановить ровно то, что открыто, — значит пугать зря
+  const same = { post: { markdown: '# Т\n\nтекст' } };
+  assert.strictEqual(N.restorable(same, { markdown: '# Т\n\nтекст' }), false);
+  assert.strictEqual(N.restorable(same, { markdown: '# Т\n\nдругое' }), true);
+  assert.strictEqual(N.restorable(null, {}), false);
 });
 
 /* ---------- Вложения ---------- */
 
-test('картинка распознаётся по расширению, а не по вере', () => {
-  for (const n of ['a.png', 'b.JPG', 'c.jpeg', 'd.webp', 'e.svg', 'f.avif', 'g.gif']) {
-    assert.strictEqual(N.isImage(n), true, n);
+test('вложение вставляется тем адресом, по которому его увидит игрок', () => {
+  // Раздаются они с /news/assets/, а не по пути внутри админки
+  assert.strictEqual(N.normalizePath('2026/shot.png'), '/news/assets/2026/shot.png');
+  assert.strictEqual(N.normalizePath('/2026//shot.png'), '/news/assets/2026/shot.png');
+  assert.strictEqual(N.normalizePath('2026\\shot.png'), '/news/assets/2026/shot.png');
+});
+
+test('путь наружу отвергается целиком, а не чинится молча', () => {
+  for (const bad of ['../secrets/x.png', 'a/../../b', '.', '']) {
+    assert.strictEqual(N.normalizePath(bad), '', bad);
   }
-  for (const n of ['a.zip', 'b.md', 'c', 'd.png.txt']) {
-    assert.strictEqual(N.isImage(n), false, n);
-  }
 });
 
-test('путь вложения приводится к виду, который откроется', () => {
-  // Обратные слэши приезжают из проводника Windows, двойные — делают чужой хост
-  assert.strictEqual(N.normalizePath('img\\cover.png'), 'img/cover.png');
-  assert.strictEqual(N.normalizePath('./img/cover.png'), 'img/cover.png');
-  assert.strictEqual(N.normalizePath('//evil.example/x.png'), 'evil.example/x.png');
-  assert.strictEqual(N.normalizePath('/img//cover.png'), 'img/cover.png');
+test('картинка вставляется картинкой, остальное — ссылкой', () => {
+  assert.strictEqual(N.insertMarkup('2026/shot.png'), '![shot.png](/news/assets/2026/shot.png)');
+  assert.strictEqual(N.insertMarkup('guide.pdf'), '[guide.pdf](/news/assets/guide.pdf)');
+  assert.strictEqual(N.insertMarkup('../x.png'), '');
 });
 
-test('картинка вставляется картинкой, файл — ссылкой', () => {
-  assert.strictEqual(N.insertMarkup('img/cover.png'), '![cover.png](img/cover.png)');
-  assert.strictEqual(N.insertMarkup('files/guide.pdf'), '[guide.pdf](files/guide.pdf)');
-});
-
-test('подпись вложения можно задать', () => {
-  assert.strictEqual(N.insertMarkup('img/a.png', 'Скриншот'), '![Скриншот](img/a.png)');
-});
-
-test('вставка идёт в позицию курсора и не съедает набранное', () => {
+test('вставка сохраняет то, что уже набрано', () => {
   assert.strictEqual(N.insertAt('раз два', 4, 'X'), 'раз Xдва');
-  assert.strictEqual(N.insertAt('раз', 0, 'X'), 'Xраз');
-  assert.strictEqual(N.insertAt('раз', 99, 'X'), 'разX');
-  assert.strictEqual(N.insertAt('', 0, 'X'), 'X');
-});
-
-test('вставка переживает отсутствие позиции', () => {
-  assert.strictEqual(N.insertAt('раз', null, 'X'), 'Xраз');
-  assert.strictEqual(N.insertAt(null, 0, 'X'), 'X');
+  assert.strictEqual(N.insertAt('раз', 999, '!'), 'раз!');
+  assert.strictEqual(N.insertAt('раз', -5, '!'), '!раз');
 });

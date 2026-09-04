@@ -36,8 +36,8 @@ const FIXTURES = {
   'mods/list': {
     items: [{ gameId: 'repo', title: 'R.E.P.O.', built: '1.9.9', active: '1.9.8', mods: 17, size: 251000000 }],
   },
-  'news/list': { items: [{ id: 'n1', title: 'Заметка', published: false }] },
-  'news/get': { id: 'n1', title: 'Заметка', body: 'Текст заметки', gameId: '' },
+  'news/list': { items: [{ id: 'release', slug: 'release', title: 'Заметка', published: false }] },
+  'news/get': { markdown: '# Заметка\n\nТекст заметки', published: false, coverUrl: '' },
   'feedback/list': { items: [{ id: 'f1', type: 'bug', status: 'new', comment: 'обрывается' }] },
   'maintenance/get': { enabled: false, reason: '', blocks: {} },
   'metrics/summary': { days: [{ date: '04.09', launcherStarts: 10, updates: 4, errors: 1 }] },
@@ -66,12 +66,17 @@ async function boot(routes) {
   window.fetch = async (url, init) => {
     const u = String(url);
     const method = (init && init.method) || 'GET';
-    let body;
-    try {
-      body = init && typeof init.body === 'string' ? JSON.parse(init.body) : null;
-    } catch {
-      // Не разбор — значит, тело ушло как есть, и записываем его как есть
-      body = init ? init.body : null;
+    let body = null;
+    const raw = init && init.body;
+    if (typeof raw === 'string') {
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        // Запись уезжает формой: сервер читает её, а не JSON
+        body = Object.fromEntries(new URLSearchParams(raw));
+      }
+    } else if (raw) {
+      body = raw;
     }
     calls.push({ method, url: u, body });
 
@@ -295,31 +300,36 @@ test('страница ошибки от прокси не попадает на
 
 /* ---------- Новость ---------- */
 
-test('новость сохраняется тем, что набрали, и черновик после этого убирается', async (t) => {
-  const { window, calls } = await boot();
+test('заметка сохраняется тем, что набрали, и черновик после этого убирается', async (t) => {
+  const { window, calls, left } = await boot();
   t.after(() => window.close());
+  void left;
 
   const sheet = await open(window, '#news', 'new-post');
-  await until(() => sheet.querySelector('[name="title"]'));
+  await until(() => sheet.querySelector('[name="markdown"]'));
 
   const set = (name, value) => {
     const el = sheet.querySelector(`[name="${name}"]`);
     el.value = value;
     el.dispatchEvent(new window.Event('input', { bubbles: true }));
   };
-  set('title', 'Вышла 1.6.25');
-  set('body', 'Починили обрыв скачивания больших файлов.');
+  set('markdown', '# Вышла 1.6.25\n\nПочинили обрыв скачивания больших файлов.');
+  set('slug', 'release-1-6-25');
 
-  // Черновик пишется на каждый ввод: новость набирают минутами
-  assert.ok(window.CH2News.readDraft(window.localStorage, ''), 'черновик не сохранён');
+  // Черновик пишется на каждый ввод: заметку набирают минутами
+  assert.ok(window.CH2News.readDraft(window.localStorage, { slug: 'release-1-6-25' }), 'черновик не сохранён');
 
   sheet.querySelector('[data-flow="save"]').click();
   await until(() => calls.some((c) => c.url.includes('news/save')));
 
   const saved = calls.find((c) => c.url.includes('news/save'));
-  assert.strictEqual(saved.body.title, 'Вышла 1.6.25');
-  assert.match(saved.body.body, /обрыв скачивания/);
-  const gone = await until(() => window.CH2News.readDraft(window.localStorage, '') === null);
+  // Имена полей — контракт сервера: scope, slug, markdown; заголовка среди них нет
+  assert.strictEqual(saved.body.scope, 'launcher');
+  assert.strictEqual(saved.body.slug, 'release-1-6-25');
+  assert.match(saved.body.markdown, /# Вышла 1\.6\.25/);
+  assert.ok(!('title' in saved.body), 'уехало поле, которого сервер не знает');
+
+  const gone = await until(() => window.CH2News.readDraft(window.localStorage, { slug: 'release-1-6-25' }) === null);
   assert.ok(gone, 'черновик остался после сохранения');
   await settle();
 });
@@ -341,18 +351,20 @@ test('оставшийся черновик предлагают вернуть,
   const { window } = await boot();
   t.after(() => window.close());
 
-  window.CH2News.saveDraft(window.localStorage, 'n1', { title: 'Заметка', body: 'Недописанное' });
+  const where = { slug: 'release', gameId: '' };
+  window.CH2News.saveDraft(window.localStorage, Object.assign({ markdown: '# Заметка\n\nНедописанное' }, where));
 
   const sheet = await open(window, '#news', 'edit-post');
   await until(() => sheet.querySelector('[data-draft-restore]'));
   assert.ok(sheet.querySelector('[data-draft-restore]'), 'про черновик не сказали');
 
   // Молча подставленный черновик затёр бы то, что уже на сервере
-  assert.strictEqual(sheet.querySelector('[name="body"]').value, 'Текст заметки');
+  assert.match(sheet.querySelector('[name="markdown"]').value, /Текст заметки/);
 
   sheet.querySelector('[data-draft-restore]').click();
-  await until(() => sheet.querySelector('[name="body"]').value === 'Недописанное');
-  assert.strictEqual(sheet.querySelector('[name="body"]').value, 'Недописанное');
+  await until(() => /Недописанное/.test(sheet.querySelector('[name="markdown"]').value));
+  assert.match(sheet.querySelector('[name="markdown"]').value, /Недописанное/);
+  await settle();
 });
 
 /* ---------- Галерея ---------- */

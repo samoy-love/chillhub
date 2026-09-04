@@ -229,7 +229,14 @@
 
   /* ---------- Новость ---------- */
 
-  /** Поля новости. Ошибка называется рядом со своим полем, а не общим списком. */
+  /**
+   * Поля новости.
+   *
+   * Полей ровно столько, сколько знает сервер: имя файла, игра, обложка
+   * и сам текст. Заголовка среди них нет намеренно — сервер берёт его
+   * первой строкой текста, и отдельное поле «Заголовок» было бы
+   * враньём: набранное в нём никуда бы не уехало.
+   */
   function newsForm(post, problems) {
     const p = post || {};
     const errs = problems || [];
@@ -238,24 +245,52 @@
       return hit ? '<span class="help help--bad">' + esc(hit.text) + '</span>' : '';
     };
     return (
-      '<div class="field"><label for="n-title">Заголовок</label>' +
-      '<input id="n-title" name="title" type="text" value="' +
-      esc(p.title) +
-      '" maxlength="120">' +
-      err('title') +
+      '<div class="cols cols--2">' +
+      '<div class="field"><label for="n-slug">Имя заметки</label>' +
+      '<input id="n-slug" name="slug" type="text" value="' +
+      esc(p.slug) +
+      '" maxlength="128"' +
+      (p.existing ? ' readonly' : '') +
+      '>' +
+      (p.existing
+        ? '<span class="help">Имя уже в адресе статьи и не меняется</span>'
+        : '<span class="help">Попадёт в адрес статьи. Буквы, цифры, дефис, подчёркивание, точка.</span>') +
+      err('slug') +
       '</div>' +
       '<div class="field"><label for="n-game">Игра</label>' +
       '<input id="n-game" name="gameId" type="text" value="' +
       esc(p.gameId) +
-      '" placeholder="пусто — новость про лаунчер">' +
+      '" placeholder="пусто — новость про лаунчер"' +
+      (p.existing ? ' readonly' : '') +
+      '>' +
       '<span class="help">Пустое поле означает новость про лаунчер, а не про игру</span></div>' +
+      '</div>' +
+      '<div class="field"><label for="n-cover">Обложка</label>' +
+      '<input id="n-cover" name="coverUrl" type="text" value="' +
+      esc(p.coverUrl) +
+      '" placeholder="необязательно">' +
+      '<span class="help">Без неё сервер возьмёт первую картинку из текста</span></div>' +
       '<div class="field"><label for="n-body">Текст</label>' +
-      '<textarea id="n-body" name="body" rows="14">' +
-      esc(p.body) +
+      '<textarea id="n-body" name="markdown" rows="16" placeholder="# Название заметки">' +
+      esc(p.markdown) +
       '</textarea>' +
-      err('body') +
+      err('markdown') +
       '</div>'
     );
+  }
+
+  /**
+   * Заголовок и начало заметки — так, как их прочтёт сервер.
+   *
+   * Показывается рядом с текстом, потому что заголовок здесь не поле, а
+   * первая строка: без подсказки человек не видит, что именно уедет в
+   * ленту лаунчера, пока не опубликует.
+   */
+  function newsHeadline(markdown, news) {
+    const N = M('CH2News', news);
+    const title = N.titleOf(markdown);
+    if (!title) return '<p class="note note--bad">Заголовка нет: первой строкой нужен «# Название заметки»</p>';
+    return '<p class="note">В ленте игрок увидит: <b>' + esc(title) + '</b></p>';
   }
 
   /**
@@ -269,7 +304,7 @@
     const N = M('CH2News', news);
     if (!N.restorable(draft, serverPost)) return '';
     return (
-      '<div class="note note--bad">Остался несохранённый черновик этой новости. ' +
+      '<div class="note note--bad">Остался несохранённый черновик этой заметки. ' +
       '<button class="btn btn--text" type="button" data-draft-restore>Вернуть его</button>' +
       '<button class="btn btn--text" type="button" data-draft-drop>Выбросить</button></div>'
     );
@@ -335,6 +370,13 @@
             (e.dir || isCover || G.coverProblem(e)
               ? ''
               : '<button class="btn btn--text" type="button" data-cover="' + esc(e.name) + '">Сделать обложкой</button>') +
+            (e.dir || !G.isImage(e.name)
+              ? ''
+              : '<button class="btn btn--text" type="button" data-caption="' +
+                esc(e.name) +
+                '" data-caption-text="' +
+                esc(e.caption || '') +
+                '">Подпись</button>') +
             '<button class="btn btn--text" type="button" data-rename="' +
             esc(e.name) +
             '">Переименовать</button>' +
@@ -342,6 +384,52 @@
             esc(e.name) +
             '">Удалить</button>' +
             '</td></tr>'
+          );
+        })
+        .join('') +
+      '</tbody></table>'
+    );
+  }
+
+  /**
+   * Содержимое папки вложений.
+   *
+   * Отличается от галереи одним: здесь у файла нет роли обложки, зато
+   * есть «Вставить» — ради этого лист и открывали.
+   */
+  function assetList(entries, opts) {
+    const o = opts || {};
+    const G = M('CH2Gallery', o.gallery);
+    const f = F();
+    const rows = G.sortEntries(entries);
+    if (!rows.length) {
+      return '<div class="empty"><b>Папка пуста</b><span>Загрузите файл или создайте папку</span></div>';
+    }
+    return (
+      '<table><thead><tr><th>Имя</th><th>Размер</th><th></th></tr></thead><tbody>' +
+      rows
+        .map((e) => {
+          const name = e.dir
+            ? '<button class="btn btn--text" type="button" data-go="' +
+              esc(G.entryPath(o.path, e.name)) +
+              '">' +
+              esc(e.name) +
+              '/</button>'
+            : esc(e.name);
+          return (
+            '<tr data-name="' +
+            esc(e.name) +
+            '"><td>' +
+            name +
+            '</td><td class="num">' +
+            (e.dir ? '' : esc(f.bytes(e.size || 0))) +
+            '</td><td class="act">' +
+            (e.dir
+              ? ''
+              : '<button class="btn btn--text" type="button" data-use="' + esc(e.name) + '">Вставить</button>') +
+            '<button class="btn btn--danger btn--text" type="button" data-remove="' +
+            esc(e.name) +
+            '">Удалить</button></td></tr>'
           );
         })
         .join('') +
@@ -470,9 +558,11 @@
     buildLog,
     buildOutcome,
     newsForm,
+    newsHeadline,
     draftNote,
     galleryCrumbs,
     galleryList,
+    assetList,
     orderList,
     orderSummary,
     benchTable,

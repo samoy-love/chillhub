@@ -30,7 +30,7 @@ function fake(response) {
 test('адрес собирается от одного префикса', async () => {
   const { calls, api } = fake();
   await api.launcherVersions();
-  assert.strictEqual(calls[0].url, BASE + 'list');
+  assert.ok(calls[0].url.startsWith(BASE + 'list'), calls[0].url);
   assert.strictEqual(calls[0].init.method, 'GET');
 });
 
@@ -41,12 +41,15 @@ test('пустые параметры запроса не уезжают на с
   assert.strictEqual(calls[0].url, BASE + 'feedback/list?status=new');
 });
 
-test('тело уходит как JSON с нужным заголовком', async () => {
+test('запись уходит формой, а не JSON: так её читает сервер', async () => {
+  // Обработчик берёт параметры из r.URL.Query() и r.FormValue; тело JSON
+  // для него не существует вовсе, и версия доехала бы пустой
   const { calls, api } = fake();
   await api.launcherActivate('1.6.25');
   assert.strictEqual(calls[0].init.method, 'POST');
-  assert.strictEqual(calls[0].init.headers['content-type'], 'application/json');
-  assert.deepStrictEqual(JSON.parse(calls[0].init.body), { version: '1.6.25' });
+  assert.match(calls[0].init.headers['content-type'], /x-www-form-urlencoded/);
+  assert.match(calls[0].url, /gameId=launcher&version=1\.6\.25/);
+  assert.strictEqual(new URLSearchParams(calls[0].init.body).get('version'), '1.6.25');
 });
 
 test('FormData уходит как есть: границу multipart ставит браузер', async () => {
@@ -133,7 +136,7 @@ const ENDPOINTS = [
   ['freeSpace', [], 'GET', 'system/free'],
 
   ['uploadInit', [{}], 'POST', 'upload/init'],
-  ['uploadStatus', ['id'], 'GET', 'upload/status?id=id'],
+  ['uploadStatus', ['id'], 'GET', 'upload/status'],
   ['uploadComplete', [{}], 'POST', 'upload/complete'],
   ['uploadCleanup', ['id'], 'POST', 'upload/cleanup'],
   ['uploadAbort', ['id'], 'POST', 'upload/abort'],
@@ -142,37 +145,43 @@ const ENDPOINTS = [
   ['gamesSave', [[]], 'POST', 'games/save'],
   ['gamesScan', [], 'POST', 'games/scan'],
   ['gamesPurge', ['g'], 'POST', 'games/purge'],
-  ['gamesEcosystem', ['g'], 'GET', 'games/ecosystem?gameId=g'],
+  ['gamesEcosystem', ['g'], 'GET', 'games/ecosystem'],
+  ['gamesIconUpload', ['g', 'f'], 'POST', 'games/icon/upload'],
 
-  ['gallery', ['g'], 'GET', 'games/gallery?gameId=g'],
-  ['galleryMkdir', ['g', 'd'], 'POST', 'games/gallery/mkdir'],
-  ['galleryRename', ['g', 'a', 'b'], 'POST', 'games/gallery/rename'],
-  ['galleryDelete', ['g', 'p'], 'POST', 'games/gallery/delete'],
+  ['gallery', ['g', ''], 'GET', 'games/gallery'],
+  ['galleryMkdir', ['g', '', 'd'], 'POST', 'games/gallery/mkdir'],
+  ['galleryRename', ['g', '', 'a', 'b'], 'POST', 'games/gallery/rename'],
+  ['galleryDelete', ['g', '', 'n'], 'POST', 'games/gallery/delete'],
   ['gallerySetCaption', ['g', 'f', 'c'], 'POST', 'games/gallery/setCaption'],
   ['gallerySetCover', ['g', 'f'], 'POST', 'games/gallery/setCover'],
-  ['galleryUploadByUrl', [{}], 'POST', 'games/gallery/uploadByUrl'],
+  ['galleryUpload', ['g', '', 'f'], 'POST', 'games/gallery/upload'],
+  ['galleryUploadByUrl', ['g', '', 'u', 'n'], 'POST', 'games/gallery/uploadByUrl'],
 
-  ['modsList', ['g'], 'GET', 'mods/list?gameId=g'],
+  ['modsList', ['g'], 'GET', 'mods/list'],
   ['modsCatalog', [{}], 'GET', 'mods/catalog'],
-  ['modsReadme', ['p'], 'GET', 'mods/readme?pkg=p'],
+  ['modsReadme', ['ns', 'n', 'v'], 'GET', 'mods/readme'],
   ['modsResolve', [{}], 'POST', 'mods/resolve'],
   ['modsActivate', ['g', 'v'], 'POST', 'mods/activate'],
   ['modsDelete', ['g', 'v'], 'POST', 'mods/deleteVersion'],
+  ['modsImport', ['g', 'f'], 'POST', 'mods/import'],
   ['modsCache', [], 'GET', 'mods/cache'],
+  ['modsCacheSweep', [], 'POST', 'mods/cache'],
+  ['modsCacheClear', [], 'POST', 'mods/cache'],
   ['summary', [], 'GET', 'summary'],
 
-  ['newsList', [{}], 'GET', 'news/list'],
-  ['newsGet', ['1'], 'GET', 'news/get?id=1'],
+  ['newsList', ['launcher', ''], 'GET', 'news/list'],
+  ['newsGet', ['launcher', '', 's'], 'GET', 'news/get'],
   ['newsSave', [{}], 'POST', 'news/save'],
-  ['newsDelete', ['1'], 'POST', 'news/delete'],
-  ['newsPublish', ['1', true], 'POST', 'news/publish'],
-  ['newsPreview', [{}], 'POST', 'news/preview'],
-  ['newsRebuild', [], 'POST', 'news/rebuild'],
-  ['newsAssets', ['d'], 'GET', 'news/assets?dir=d'],
-  ['newsAssetsMkdir', ['d'], 'POST', 'news/assets/mkdir'],
-  ['newsAssetsRename', ['a', 'b'], 'POST', 'news/assets/rename'],
-  ['newsAssetsDelete', ['p'], 'POST', 'news/assets/delete'],
-  ['newsAssetsUploadByUrl', [{}], 'POST', 'news/assets/uploadByUrl'],
+  ['newsDelete', ['launcher', '', 's'], 'POST', 'news/delete'],
+  ['newsPublish', ['launcher', '', 's', true], 'POST', 'news/publish'],
+  ['newsPreview', ['# т', 'launcher', ''], 'POST', 'news/preview'],
+  ['newsRebuild', ['launcher', ''], 'POST', 'news/rebuild'],
+  ['newsAssets', [''], 'GET', 'news/assets'],
+  ['newsAssetsMkdir', ['', 'd'], 'POST', 'news/assets/mkdir'],
+  ['newsAssetsRename', ['', 'a', 'b'], 'POST', 'news/assets/rename'],
+  ['newsAssetsDelete', ['', 'n'], 'POST', 'news/assets/delete'],
+  ['newsAssetsUpload', ['', 'f'], 'POST', 'news/assets/upload'],
+  ['newsAssetsUploadByUrl', ['', 'u', 'n'], 'POST', 'news/assets/uploadByUrl'],
 
   ['feedbackList', [{}], 'GET', 'feedback/list'],
   ['feedbackGet', ['1'], 'GET', 'feedback/get?id=1'],
@@ -199,7 +208,8 @@ test('каждая ручка ходит по своему адресу свои
     await api[name](...args);
     assert.strictEqual(calls.length, 1, `${name}: ожидался один запрос`);
     assert.strictEqual(calls[0].init.method, method, `${name}: метод`);
-    assert.strictEqual(calls[0].url, BASE + path, `${name}: адрес`);
+    // Параметры сверяются отдельно: здесь важен только адрес ручки
+    assert.strictEqual(calls[0].url.split('?')[0], (BASE + path).split('?')[0], `${name}: адрес`);
   }
 });
 
@@ -274,4 +284,97 @@ test('упавшее обновление не мешает задать воп�
 test('страница входа — корень админки, отдельной её нет', () => {
   // /admin/ сам отдаёт login.html анониму (handleAdminUI в cmd/admin/main.go)
   assert.strictEqual(A.LOGIN, '/admin/');
+});
+
+/* ---------- Как параметры доезжают до сервера ---------- */
+
+/** Слой поверх подменённого fetch, запоминающий, что ушло. */
+function spy() {
+  const calls = [];
+  const api = A.makeApi({
+    fetch: async (url, init) => {
+      calls.push({
+        url: String(url),
+        method: (init && init.method) || 'GET',
+        type: (init && init.headers && init.headers['content-type']) || '',
+        body: init ? init.body : undefined,
+      });
+      return { ok: true, status: 200, text: async () => '{}' };
+    },
+  });
+  return { api, calls, last: () => calls[calls.length - 1] };
+}
+
+test('параметры записи уезжают строкой запроса, а не только телом', async () => {
+  // Обработчики читают r.URL.Query() — тело JSON для них не существует
+  const s = spy();
+  await s.api.launcherActivate('1.6.25');
+  assert.match(s.last().url, /\?.*gameId=launcher/);
+  assert.match(s.last().url, /version=1\.6\.25/);
+});
+
+test('те же параметры уезжают и телом формы', async () => {
+  // Другие обработчики читают r.FormValue — им нужна форма, а не адрес
+  const s = spy();
+  await s.api.modsActivate('repo', '1.9.9');
+  assert.match(s.last().type, /x-www-form-urlencoded/);
+  assert.match(s.last().body, /gameId=repo/);
+  assert.match(s.last().body, /version=1\.9\.9/);
+});
+
+test('лаунчер называет себя сервером зарезервированным идентификатором', async () => {
+  // Без gameId ручки версий отвечают про пустой идентификатор
+  const s = spy();
+  await s.api.launcherVersions();
+  await s.api.launcherDelete('1.6.20');
+  await s.api.launcherPrune(5);
+  for (const c of s.calls) assert.match(c.url, /gameId=launcher/, c.url);
+});
+
+test('две ручки, которые разбирают именно JSON, получают JSON', async () => {
+  const s = spy();
+  await s.api.gamesSave([{ gameId: 'repo' }]);
+  assert.match(s.last().type, /application\/json/);
+  assert.deepStrictEqual(JSON.parse(s.last().body), { items: [{ gameId: 'repo' }] });
+
+  await s.api.uploadInit({ kind: 'launcher', totalSize: 5 });
+  assert.match(s.last().type, /application\/json/);
+  assert.strictEqual(JSON.parse(s.last().body).kind, 'launcher');
+});
+
+test('список ручек с JSON закрыт: остальным JSON не годится', () => {
+  // Он же документация контракта — расширять его можно только по коду сервера
+  assert.deepStrictEqual([...A.JSON_BODY].sort(), ['games/save', 'upload/init']);
+});
+
+test('длинный текст в адрес не лезет, но телом уезжает целиком', async () => {
+  // Адрес не резиновый: на длинном тексте запрос упрётся в ограничение сервера
+  const s = spy();
+  const long = 'я'.repeat(A.URL_VALUE_LIMIT + 1);
+  await s.api.newsSave({ title: 'Заметка', body: long });
+  assert.ok(!s.last().url.includes('body='), 'длинный текст ушёл в адрес');
+  assert.match(s.last().url, /title=/, 'короткий заголовок в адрес не попал');
+  assert.strictEqual(new URLSearchParams(s.last().body).get('body'), long);
+});
+
+test('«нет» доезжает как «нет», а не пропадает', async () => {
+  // Пропавший false на сервере неотличим от «поля не прислали»
+  const s = spy();
+  await s.api.newsPublish('launcher', '', 'note', false);
+  assert.match(s.last().url, /published=false/);
+  assert.strictEqual(new URLSearchParams(s.last().body).get('published'), 'false');
+});
+
+test('пустые значения не засоряют запрос', async () => {
+  const s = spy();
+  await s.api.gallery('repo', '');
+  assert.match(s.last().url, /gameId=repo/);
+  assert.ok(!s.last().url.includes('dir='), 'пустая папка уехала как параметр');
+});
+
+test('чтение остаётся чтением: тела у него нет', async () => {
+  const s = spy();
+  await s.api.games();
+  assert.strictEqual(s.last().method, 'GET');
+  assert.strictEqual(s.last().body, undefined);
 });

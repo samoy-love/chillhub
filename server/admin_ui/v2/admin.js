@@ -533,19 +533,24 @@
           list({
             rows: D.news,
             head: '<th>Заголовок</th><th>Состояние</th><th></th>',
-            row: (n) => `<tr>
-                <td>${esc(n.title)}<br><span class="faint">${esc(n.at)}${n.game ? ` · ${esc(n.game)}` : ' · все игры'}</span></td>
+            /* Заметка называется адресом целиком — scope, игра и имя
+               файла. По одному номеру сервер её не найдёт. */
+            row: (n) => {
+              const at = `"scope":"${esc(n.scope || 'launcher')}","gameId":"${esc(n.game)}","slug":"${esc(n.slug)}"`;
+              return `<tr>
+                <td>${esc(n.title)}<br><span class="faint">${esc(n.at)}${n.game ? ` · ${esc(n.game)}` : ' · лаунчер'}</span></td>
                 <td>${
                   n.published
                     ? '<span class="badge badge--ok">на виду</span>'
                     : '<span class="badge badge--warn">черновик</span>'
                 }</td>
                 <td class="act">
-                  <button class="btn btn--text" type="button" data-act="edit-post" data-args='{"id":"${esc(n.id)}"}'>Править</button>
-                  <button class="btn btn--text" type="button" data-act="news.publish" data-args='{"id":"${esc(n.id)}","title":"${esc(n.title)}","published":${n.published ? 'false' : 'true'}}'>${n.published ? 'Снять с публикации' : 'Опубликовать'}</button>
-                  <button class="btn btn--danger btn--text" type="button" data-act="news.delete" data-args='{"id":"${esc(n.id)}","title":"${esc(n.title)}"}'>Удалить</button>
+                  <button class="btn btn--text" type="button" data-act="edit-post" data-args='{${at},"published":${n.published}}'>Править</button>
+                  <button class="btn btn--text" type="button" data-act="news.publish" data-args='{${at},"title":"${esc(n.title)}","published":${n.published ? 'false' : 'true'}}'>${n.published ? 'Снять с публикации' : 'Опубликовать'}</button>
+                  <button class="btn btn--danger btn--text" type="button" data-act="news.delete" data-args='{${at},"title":"${esc(n.title)}"}'>Удалить</button>
                 </td>
-              </tr>`,
+              </tr>`;
+            },
             empty: 'Новостей нет',
             emptyHint: 'Лаунчер покажет игроку пустую ленту, пока здесь ничего не написано.',
           }),
@@ -982,46 +987,89 @@
 
   /* Черновик пишется в браузер на каждый ввод. Новость набирают минутами,
      и терять её из-за случайно закрытой вкладки нельзя. */
-  function flowNews(id) {
+  function flowNews(where) {
     const N = window.CH2News;
-    let post = { id: id || '', title: '', body: '', gameId: '', published: false };
-    const draft = N.readDraft(window.localStorage, post.id);
+    const w = where || {};
+    const existing = Boolean(w.slug);
+
+    let post = {
+      slug: w.slug || '',
+      gameId: w.gameId || '',
+      markdown: '',
+      coverUrl: '',
+      published: Boolean(w.published),
+      existing: existing,
+    };
+    let draft = N.readDraft(window.localStorage, post);
 
     const sheet = openSheet({
-      title: id ? 'Правка новости' : 'Новая новость',
-      lede: 'Черновик сохраняется в браузере, пока новость не отправлена.',
+      title: existing ? 'Правка заметки: ' + post.slug : 'Новая заметка',
+      lede: 'Заголовок — первая строка текста. Черновик хранится в браузере, пока заметка не отправлена.',
       body: '<div class="sk" style="height:22rem"></div>',
       foot:
+        '<button class="btn" type="button" data-flow="assets">Вложения</button>' +
         '<button class="btn" type="button" data-flow="preview">Посмотреть глазами игрока</button>' +
         '<span class="push"></span>' +
         '<button class="btn btn--accent" type="button" data-flow="save">Сохранить</button>',
     });
 
     const draw = (problems) => {
-      sheet.body(V().draftNote(draft, post, N) + V().newsForm(post, problems || []));
+      sheet.body(
+        V().draftNote(draft, post, N) +
+          V().newsForm(post, problems || []) +
+          V().newsHeadline(post.markdown, N)
+      );
     };
 
     const read = () => {
       const q = (n) => sheet.root.querySelector('[name="' + n + '"]');
-      if (!q('title')) return;
-      post = Object.assign({}, post, { title: q('title').value, body: q('body').value, gameId: q('gameId').value });
+      if (!q('markdown')) return;
+      post = Object.assign({}, post, {
+        slug: q('slug').value,
+        gameId: q('gameId').value,
+        coverUrl: q('coverUrl').value,
+        markdown: q('markdown').value,
+      });
     };
 
     (async () => {
-      if (id) {
+      if (existing) {
         try {
-          const got = await API.newsGet(id);
-          post = Object.assign(post, got || {});
-        } catch {
-          toast('Новость не прочиталась, открыт пустой черновик', 'warn');
+          const got = await API.newsGet(post.gameId ? 'game' : 'launcher', post.gameId, post.slug);
+          post = Object.assign(post, {
+            markdown: (got && got.markdown) || '',
+            coverUrl: (got && got.coverUrl) || '',
+            published: Boolean(got && got.published),
+          });
+          draft = N.readDraft(window.localStorage, post);
+        } catch (err) {
+          toast('Заметка не прочиталась: ' + window.CH2Api.reason(err), 'warn');
         }
       }
       draw();
     })();
 
+    /* Заголовок здесь не поле, а первая строка текста, поэтому строка
+       «в ленте игрок увидит» пересчитывается на каждый ввод. */
     sheet.root.addEventListener('input', () => {
       read();
-      N.saveDraft(window.localStorage, post.id, post);
+      N.saveDraft(window.localStorage, post);
+      const head = sheet.root.querySelector('.note:last-of-type');
+      if (head) head.outerHTML = V().newsHeadline(post.markdown, N);
+    });
+
+    /* Имя файла предлагается из заголовка, пока его не тронули руками:
+       у новой заметки оно всё равно нужно, а придумывать его дважды
+       (заголовок и имя) — работа на пустом месте. */
+    sheet.root.addEventListener('input', (e) => {
+      if (existing || !e.target.matches('[name="markdown"]')) return;
+      const slugField = sheet.root.querySelector('[name="slug"]');
+      if (!slugField || slugField.dataset.touched) return;
+      slugField.value = N.suggestSlug(N.titleOf(post.markdown));
+      post.slug = slugField.value;
+    });
+    sheet.root.addEventListener('change', (e) => {
+      if (e.target.matches('[name="slug"]')) e.target.dataset.touched = '1';
     });
 
     sheet.root.addEventListener('click', async (e) => {
@@ -1030,28 +1078,42 @@
 
       if (b.hasAttribute('data-draft-restore')) {
         post = Object.assign({}, post, draft.post);
+        draft = null;
         draw();
         return;
       }
       if (b.hasAttribute('data-draft-drop')) {
-        N.dropDraft(window.localStorage, post.id);
+        N.dropDraft(window.localStorage, post);
+        draft = null;
         draw();
         return;
       }
 
       read();
+
+      if (b.dataset.flow === 'assets') {
+        flowAssets((markup) => {
+          const area = sheet.root.querySelector('[name="markdown"]');
+          const at = area ? area.selectionStart : post.markdown.length;
+          post.markdown = N.insertAt(post.markdown, at, markup);
+          N.saveDraft(window.localStorage, post);
+          draw();
+        });
+        return;
+      }
+
       const problems = N.problems(post);
       if (problems.length) {
         draw(problems);
-        toast('Не хватает: ' + problems.map((p) => p.text).join(', '), 'warn');
+        toast('Не хватает: ' + problems.map((p) => p.text).join('; '), 'warn');
         return;
       }
 
       if (b.dataset.flow === 'preview') {
         try {
-          const html = await API.newsPreview(N.payload(post));
-          const w = window.open('', '_blank');
-          if (w) w.document.write((html && html.html) || String(html || ''));
+          const got = await API.newsPreview(post.markdown, post.gameId ? 'game' : 'launcher', post.gameId);
+          const w2 = window.open('', '_blank');
+          if (w2) w2.document.write((got && (got.html || got.markdown)) || String(got || ''));
         } catch (err) {
           toast('Предпросмотр не собрался: ' + window.CH2Api.reason(err), 'bad');
         }
@@ -1062,8 +1124,13 @@
         b.disabled = true;
         try {
           await API.newsSave(N.payload(post));
-          N.dropDraft(window.localStorage, post.id);
-          toast('Новость сохранена. Игрокам она уйдёт после публикации.', 'ok');
+          N.dropDraft(window.localStorage, post);
+          toast(
+            post.published
+              ? 'Заметка сохранена и осталась опубликованной'
+              : 'Заметка сохранена. Игроки увидят её после публикации.',
+            'ok'
+          );
           sheet.close();
           await store.invalidate(['news']);
           route();
@@ -1075,8 +1142,114 @@
     });
   }
 
+  /* --- Вложения новостей --- */
+
+  /* Отдельным листом поверх редактора: складывать управление файлами в
+     ту же форму значит потерять набранный текст на первом же переходе
+     по папкам. */
+  function flowAssets(onPick) {
+    const N = window.CH2News;
+    const G = window.CH2Gallery;
+    let path = '';
+    let entries = [];
+
+    const sheet = openSheet({
+      title: 'Вложения новостей',
+      lede: 'Файлы раздаются игрокам по адресу /news/assets/. Выбранный вставится в текст.',
+      body: '<div class="sk" style="height:16rem"></div>',
+      foot:
+        '<button class="btn" type="button" data-flow="mkdir">Новая папка</button>' +
+        '<button class="btn" type="button" data-flow="pick">Загрузить файл</button>' +
+        '<button class="btn" type="button" data-flow="byUrl">Загрузить по ссылке</button>',
+    });
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.addEventListener('change', async () => {
+      if (!input.files || !input.files[0]) return;
+      try {
+        await API.newsAssetsUpload(path, input.files[0]);
+        load();
+      } catch (err) {
+        toast('Не загрузилось: ' + window.CH2Api.reason(err), 'bad');
+      }
+    });
+
+    async function load() {
+      try {
+        const got = await API.newsAssets(path);
+        entries = (got && (got.items || got.entries)) || [];
+      } catch (err) {
+        sheet.body('<div class="empty"><b>Не прочиталось</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
+        return;
+      }
+      sheet.body(V().galleryCrumbs(path, G) + V().assetList(entries, { path: path, gallery: G }));
+    }
+    load();
+
+    sheet.root.addEventListener('click', async (e) => {
+      const go = e.target.closest('[data-go]');
+      if (go) {
+        path = G.safePath(go.dataset.go);
+        load();
+        return;
+      }
+
+      const use = e.target.closest('[data-use]');
+      if (use) {
+        onPick(N.insertMarkup(G.entryPath(path, use.dataset.use)));
+        sheet.close();
+        return;
+      }
+
+      const rm = e.target.closest('[data-remove]');
+      if (rm) {
+        const agreed = await ask({
+          title: 'Удалить ' + rm.dataset.remove + '?',
+          body: 'Файл пропадёт из всех заметок, где на него ссылались.',
+          ok: 'Удалить',
+          cancel: 'Отмена',
+        });
+        if (!agreed) return;
+        await API.newsAssetsDelete(path, rm.dataset.remove);
+        load();
+        return;
+      }
+
+      const act = e.target.closest('[data-flow]');
+      if (!act) return;
+      if (act.dataset.flow === 'pick') input.click();
+      if (act.dataset.flow === 'mkdir') {
+        const name = window.prompt('Имя папки', '');
+        if (name === null) return;
+        const problem = G.nameProblem(name, entries.map((x) => x.name));
+        if (problem) {
+          toast(problem, 'warn');
+          return;
+        }
+        await API.newsAssetsMkdir(path, name);
+        load();
+      }
+      if (act.dataset.flow === 'byUrl') {
+        const url = window.prompt('Ссылка на файл', '');
+        if (!url) return;
+        const name = window.prompt('Под каким именем сохранить', url.split('/').pop() || 'file');
+        if (name === null) return;
+        try {
+          await API.newsAssetsUploadByUrl(path, url, name);
+          load();
+        } catch (err) {
+          toast('Не скачалось: ' + window.CH2Api.reason(err), 'bad');
+        }
+      }
+    });
+  }
+
   /* --- Галерея --- */
 
+  /* Галерея адресуется папкой и именем по отдельности: сервер режет
+     `path` своим SanitizeAssetPath, а имя проверяет сам, и склеенный
+     путь одной строкой ушёл бы в никуда. */
   function flowGallery(gameId) {
     const G = window.CH2Gallery;
     let path = '';
@@ -1087,14 +1260,29 @@
       title: 'Галерея: ' + gameId,
       lede: 'Обложка попадает на витрину игры. Остальные файлы — на её страницу.',
       body: '<div class="sk" style="height:18rem"></div>',
-      foot: '<button class="btn" type="button" data-flow="mkdir">Новая папка</button>',
+      foot:
+        '<button class="btn" type="button" data-flow="mkdir">Новая папка</button>' +
+        '<button class="btn" type="button" data-flow="pick">Загрузить файл</button>' +
+        '<button class="btn" type="button" data-flow="byUrl">Загрузить по ссылке</button>',
+    });
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.addEventListener('change', async () => {
+      if (!input.files || !input.files[0]) return;
+      try {
+        await API.galleryUpload(gameId, path, input.files[0]);
+        load();
+      } catch (err) {
+        toast('Не загрузилось: ' + window.CH2Api.reason(err), 'bad');
+      }
     });
 
     async function load() {
       try {
         const got = await API.gallery(gameId, path);
         entries = (got && (got.items || got.entries)) || [];
-        cover = (got && got.cover) || cover;
+        cover = got && got.cover !== undefined ? got.cover : cover;
       } catch (err) {
         sheet.body('<div class="empty"><b>Не прочиталось</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
         return;
@@ -1115,10 +1303,27 @@
 
       const cov = e.target.closest('[data-cover]');
       if (cov) {
-        await API.gallerySetCover(gameId, G.entryPath(path, cov.dataset.cover));
-        cover = cov.dataset.cover;
-        toast('Обложка сменилась. Игроки увидят её сразу.', 'ok');
-        load();
+        try {
+          await API.gallerySetCover(gameId, G.entryPath(path, cov.dataset.cover));
+          cover = cov.dataset.cover;
+          toast('Обложка сменилась. Игроки увидят её сразу.', 'ok');
+          load();
+        } catch (err) {
+          toast('Не вышло: ' + window.CH2Api.reason(err), 'bad');
+        }
+        return;
+      }
+
+      const cap = e.target.closest('[data-caption]');
+      if (cap) {
+        const text = window.prompt('Подпись под кадром', cap.dataset.captionText || '');
+        if (text === null) return;
+        try {
+          await API.gallerySetCaption(gameId, G.entryPath(path, cap.dataset.caption), text);
+          load();
+        } catch (err) {
+          toast('Не вышло: ' + window.CH2Api.reason(err), 'bad');
+        }
         return;
       }
 
@@ -1134,8 +1339,12 @@
           toast(problem, 'warn');
           return;
         }
-        await API.galleryRename(gameId, G.entryPath(path, from), G.entryPath(path, to));
-        load();
+        try {
+          await API.galleryRename(gameId, path, from, to);
+          load();
+        } catch (err) {
+          toast('Не переименовалось: ' + window.CH2Api.reason(err), 'bad');
+        }
         return;
       }
 
@@ -1150,12 +1359,19 @@
           cancel: 'Отмена',
         });
         if (!agreed) return;
-        await API.galleryDelete(gameId, G.entryPath(path, file.name));
-        load();
+        try {
+          await API.galleryDelete(gameId, path, file.name);
+          load();
+        } catch (err) {
+          toast('Не удалилось: ' + window.CH2Api.reason(err), 'bad');
+        }
         return;
       }
 
-      if (e.target.closest('[data-flow="mkdir"]')) {
+      const act = e.target.closest('[data-flow]');
+      if (!act) return;
+      if (act.dataset.flow === 'pick') input.click();
+      if (act.dataset.flow === 'mkdir') {
         const name = window.prompt('Имя папки', '');
         if (name === null) return;
         const problem = G.nameProblem(name, names());
@@ -1163,8 +1379,29 @@
           toast(problem, 'warn');
           return;
         }
-        await API.galleryMkdir(gameId, G.entryPath(path, name));
-        load();
+        try {
+          await API.galleryMkdir(gameId, path, name);
+          load();
+        } catch (err) {
+          toast('Не создалось: ' + window.CH2Api.reason(err), 'bad');
+        }
+      }
+      if (act.dataset.flow === 'byUrl') {
+        const url = window.prompt('Ссылка на картинку', '');
+        if (!url) return;
+        const name = window.prompt('Под каким именем сохранить', url.split('/').pop() || 'image.png');
+        if (name === null) return;
+        const problem = G.nameProblem(name, names());
+        if (problem) {
+          toast(problem, 'warn');
+          return;
+        }
+        try {
+          await API.galleryUploadByUrl(gameId, path, url, name);
+          load();
+        } catch (err) {
+          toast('Не скачалось: ' + window.CH2Api.reason(err), 'bad');
+        }
       }
     });
   }
@@ -1317,8 +1554,8 @@
   const FLOWS = {
     upload: () => flowUpload({ kind: 'launcher' }),
     build: () => flowBuild(packOf(game)),
-    'new-post': () => flowNews(''),
-    'edit-post': (a) => flowNews(a.id),
+    'new-post': () => flowNews({}),
+    'edit-post': (a) => flowNews(a),
     gallery: (a) => flowGallery(a.gameId || (D.games[0] && D.games[0].gameId) || ''),
     'new-game': () => flowOrder(),
     order: () => flowOrder(),
