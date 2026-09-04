@@ -149,6 +149,13 @@ namespace ChillHub.Core.UI {
             // «мне опять что-то катят», хотя игрок просил сверить файлы.
             var work = item.Kind == QueueTaskKind.Verify ? "Проверка" : "Скачивание";
 
+            // Остановку видно и в списке игр: строка продолжала писать «Скачивание · 38%»
+            // всё время, пока движок вставал, — и нажатие «Отмена» выглядело как
+            // не сработавшее.
+            if (item.Cancelling) {
+                return "Останавливаем";
+            }
+
             switch (item.State) {
                 case QueueItemState.Running:
                     if (item.TotalBytes > 0) {

@@ -140,6 +140,65 @@ namespace ChillHub.Tests {
             Assert.Equal(QueueItemState.Cancelled, lastCompleted!.State);
         }
 
+        /// <summary>
+        /// НАЖАТИЕ «ОТМЕНА» ВИДНО СРАЗУ. Движок встаёт не мгновенно, и до правки карточка
+        /// всё это время показывала прежний процент, прежнюю скорость и прежнее
+        /// «Скачивание»: нажатие выглядело как не сработавшее, и его повторяли.
+        /// </summary>
+        [Fact]
+        public async Task RemoveRunningСразуСообщаетОбОстановке() {
+            using var pathScope = new GamesPathScope();
+            var sync = new FakeSync { RespectCancellation = true, StopGate = new SemaphoreSlim(0) };
+            using var queue = NewQueue(sync, new Dictionary<string, GameInfo> { ["a"] = Game("a") });
+            var progress = new ConcurrentBag<QueueItem>();
+            var added = new ConcurrentBag<QueueItem>();
+            queue.ItemProgress += i => progress.Add(i);
+            queue.ItemAdded += i => added.Add(i);
+
+            queue.Enqueue("a");
+            await WaitUntil(() => sync.ExecuteStarted, "воркер не начал качать 'a'");
+            Assert.Equal("a", Assert.Single(added).GameId); // без ItemAdded карточка в панели загрузок не появится
+
+            Assert.True(queue.Remove("a"));
+
+            var stopping = Assert.Single(queue.Snapshot());
+            Assert.True(stopping.Cancelling, "остановленная позиция обязана отличаться от идущей закачки");
+            Assert.Equal("Останавливаем…", stopping.StatusText);
+            Assert.Contains(progress, i => i.Cancelling);
+
+            sync.StopGate!.Release(10);
+        }
+
+        /// <summary>
+        /// ОСТАНОВЛЕННУЮ ИГРУ МОЖНО ЗАПУСТИТЬ ЗАНОВО, НЕ ДОЖИДАЯСЬ ОСТАНОВКИ. Позиция
+        /// остаётся в очереди, пока движок встаёт, и Enqueue отвечал на «Скачать» отказом
+        /// «уже в очереди»: запустить игру снова было нельзя, пока прежняя попытка не
+        /// домотает — а домотать она могла и через минуту.
+        /// </summary>
+        [Fact]
+        public async Task EnqueueПослеОтменыВозвращаетПозициюВОчередь() {
+            using var pathScope = new GamesPathScope();
+            var sync = new FakeSync { RespectCancellation = true, StopGate = new SemaphoreSlim(0) };
+            using var queue = NewQueue(sync, new Dictionary<string, GameInfo> { ["a"] = Game("a") });
+            var completed = new ConcurrentBag<QueueItem>();
+            queue.ItemCompleted += i => completed.Add(i);
+
+            queue.Enqueue("a");
+            await WaitUntil(() => sync.ExecuteStarted, "воркер не начал качать 'a'");
+            Assert.True(queue.Remove("a"));
+            await WaitUntil(() => sync.CancelObserved, "движок не увидел отмену");
+
+            // Игрок жмёт «Скачать» ещё раз, пока прежняя попытка ещё не встала
+            Assert.True(queue.Enqueue("a"), "повторный запуск остановленной игры обязан приниматься");
+
+            sync.StopGate!.Release(10); // прежняя попытка наконец домотала
+
+            await WaitUntil(
+                () => queue.Snapshot().Any(i => i.GameId == "a" && i.State == QueueItemState.Running && !i.Cancelling),
+                "позиция должна была начаться заново, а не исчезнуть из очереди");
+            Assert.Empty(completed); // позиция никуда не уходила — «снята из очереди» присылать не за что
+        }
+
         /// <summary>Соседние ожидающие позиции меняются местами и присылают новый порядок целиком.</summary>
         [Fact]
         public void MoveUpМеняетМестамиССоседнейОжидающейПозицией() {
@@ -280,7 +339,16 @@ namespace ChillHub.Tests {
 
             internal bool RespectCancellation { get; set; }
 
+            /// <summary>
+            /// Держит движок ПОСЛЕ того, как он увидел отмену: настоящая остановка не
+            /// мгновенна (непрерываемый шаг, пробуждение диска), и без этой задержки
+            /// проверить поведение очереди в это самое окно нечем.
+            /// </summary>
+            internal SemaphoreSlim? StopGate { get; set; }
+
             internal volatile bool ExecuteStarted;
+
+            internal volatile bool CancelObserved;
 
             public Task<Manifest> GetManifestAsync(string manifestUrl, CancellationToken ct) => Task.FromResult(new Manifest());
 
@@ -298,6 +366,11 @@ namespace ChillHub.Tests {
                     }
                     catch (OperationCanceledException) {
                         // Ушли по отмене — как и настоящий движок, не выпускаем исключение наружу.
+                    }
+
+                    this.CancelObserved = true;
+                    if (this.StopGate != null) {
+                        await this.StopGate.WaitAsync().ConfigureAwait(false);
                     }
 
                     return;
