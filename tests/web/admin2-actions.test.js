@@ -24,6 +24,7 @@ const DANGER = [
   'inbox.clear',
   'maint.on',
   'metrics.clear',
+  'cache.clear',
 ];
 
 /** Действия, которые можно повторить или отменить обычным способом. */
@@ -39,6 +40,7 @@ const SAFE = [
   'inbox.important',
   'inbox.read',
   'maint.off',
+  'cache.sweep',
 ];
 
 test('опись действий и реестр не расходятся', () => {

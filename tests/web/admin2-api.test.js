@@ -145,7 +145,7 @@ const ENDPOINTS = [
   ['gamesSave', [[]], 'POST', 'games/save'],
   ['gamesScan', [], 'POST', 'games/scan'],
   ['gamesPurge', ['g'], 'POST', 'games/purge'],
-  ['gamesEcosystem', ['g'], 'GET', 'games/ecosystem'],
+  ['gamesEcosystem', ['g', 's'], 'POST', 'games/ecosystem'],
   ['gamesIconUpload', ['g', 'f'], 'POST', 'games/icon/upload'],
 
   ['gallery', ['g', ''], 'GET', 'games/gallery'],

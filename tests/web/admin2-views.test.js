@@ -334,3 +334,122 @@ test('без прогонов таблица объясняет, чего сто
   const html = V.benchTable([], Tuning);
   assert.match(html, /около минуты и ничего не публикует/);
 });
+
+/* ---------- Состав сборки ---------- */
+
+const Mods = require('../../server/admin_ui/v2/mods.js');
+
+test('план сборки называет пропавшие пакеты поимённо и до сборки', () => {
+  // Узнать о них на середине выкатки — значит откатывать уже отданное
+  const html = V.resolvePlan(
+    { displayName: 'Модпак', version: '1.9.9', packages: 17, totalBytes: 1024 ** 3, missing: ['Ura/Old'] },
+    Mods
+  );
+  assert.match(html, /Ura\/Old/);
+  assert.match(html, /больше нет на Thunderstore/);
+  assert.match(html, /Собрать без них можно/);
+});
+
+test('без пропавших про них и не говорится', () => {
+  const html = V.resolvePlan({ displayName: 'М', packages: 3, totalBytes: 10 }, Mods);
+  assert.ok(!/больше нет на Thunderstore/.test(html));
+});
+
+test('нехватка места в плане показана как беда, а не как справка', () => {
+  const html = V.resolvePlan({ packages: 3, totalBytes: 10, spaceOk: false, spaceNote: 'мало места' }, Mods);
+  assert.match(html, /note--bad/);
+  assert.match(html, /мало места/);
+});
+
+/* ---------- Каталог ---------- */
+
+test('каталог показывает пакет с его пространством имён и версией', () => {
+  const html = V.catalogList([{ owner: 'Ura', name: 'Modpack', version_number: '1.2.3', download_count: 4200 }], {
+    mods: Mods,
+  });
+  assert.match(html, /Modpack/);
+  assert.match(html, /Ura/);
+  assert.match(html, /1\.2\.3/);
+  assert.match(html, /data-take/);
+  assert.match(html, /data-readme/);
+});
+
+test('пустой каталог объясняет, что делать со ссылкой', () => {
+  // Половина модпаков в раздел «Modpacks» не проставлена и не находится
+  const html = V.catalogList([], { query: 'нет такого', mods: Mods });
+  assert.match(html, /По запросу ничего нет/);
+  assert.match(html, /подставляют ссылкой/);
+});
+
+/* ---------- Журналы ---------- */
+
+test('отсутствующий журнал — не ошибка', () => {
+  const html = V.logsView('');
+  assert.match(html, /Журнала нет/);
+  assert.match(html, /обращение от этого не хуже/);
+});
+
+test('журнал не исполняется как разметка', () => {
+  // Текст пишет игрок, и в нём бывает что угодно
+  const html = V.logsView('<script>alert(1)</script>');
+  assert.ok(!html.includes('<script>'));
+});
+
+/* ---------- Переезд со старой сборки ---------- */
+
+test('разобранный профиль не выдаётся за выкатку игрокам', () => {
+  const html = V.importResult({ version: '1.9.9', packages: 17 });
+  assert.match(html, /1\.9\.9/);
+  assert.match(html, /игрокам не ушла/);
+});
+
+/* ---------- Подсказка из Thunderstore ---------- */
+
+test('выбор игры объясняет, что вписывать во второе поле', () => {
+  const html = V.ecosystemPicker([{ gameId: 'repo', title: 'R.E.P.O.' }]);
+  assert.match(html, /name="gameId"/);
+  assert.match(html, /name="slug"/);
+  assert.match(html, /lethal-company/);
+});
+
+test('без игр выбирать не из чего, и так и сказано', () => {
+  assert.match(V.ecosystemPicker([]), /Сначала добавьте игру/);
+});
+
+/* ---------- График ---------- */
+
+test('ряд превращается в точки от нуля до высоты', () => {
+  const p = V.sparkPoints([0, 5, 10], 100, 50);
+  assert.strictEqual(p, '0.0,50.0 50.0,25.0 100.0,0.0');
+});
+
+test('ряд из одних нулей рисуется по низу, а не в NaN', () => {
+  // Так выглядит первый день после чистки метрик, и SVG на NaN молчит
+  const p = V.sparkPoints([0, 0, 0], 100, 50);
+  assert.ok(!/NaN/.test(p), p);
+  assert.strictEqual(p, '0.0,50.0 50.0,50.0 100.0,50.0');
+});
+
+test('один день не превращает шаг в бесконечность', () => {
+  const p = V.sparkPoints([7], 100, 50);
+  assert.ok(!/NaN|Infinity/.test(p), p);
+  assert.strictEqual(p, '0.0,0.0');
+});
+
+test('пустой ряд не рисует битый тег', () => {
+  assert.strictEqual(V.sparkPoints([], 100, 50), '');
+  assert.strictEqual(V.sparkLine([], { width: 100, height: 50 }), '');
+  assert.strictEqual(V.sparkPoints(null, 100, 50), '');
+});
+
+test('дырка в данных считается нулём, а не ломает весь график', () => {
+  // Одно undefined в ряду делало NaN каждую точку разом
+  const p = V.sparkPoints([10, undefined, 5], 100, 50);
+  assert.ok(!/NaN/.test(p), p);
+});
+
+test('ломаная называет свой цвет и не исполняет его как разметку', () => {
+  const html = V.sparkLine([1, 2], { width: 10, height: 10, color: 'var(--ember)' });
+  assert.match(html, /stroke="var\(--ember\)"/);
+  assert.ok(!/</.test(V.sparkLine([1, 2], { width: 10, height: 10, color: '"><script>' }).split('points=')[1] || ''));
+});

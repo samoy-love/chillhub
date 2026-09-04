@@ -226,6 +226,7 @@ export default [
       'server/admin_ui/v2/tuning.js',
       'server/admin_ui/v2/build.js',
       'server/admin_ui/v2/views.js',
+      'server/admin_ui/v2/mods.js',
       'landing/v2/emu-core.js'
     ],
     languageOptions: {

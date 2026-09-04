@@ -244,7 +244,10 @@
       gamesSave: (items) => post('games/save', { items: items }),
       gamesScan: () => post('games/scan'),
       gamesPurge: (gameId) => post('games/purge', { gameId: gameId }),
-      gamesEcosystem: (gameId) => get('games/ecosystem', { gameId: gameId }),
+      /* Это запись, а не чтение: ручка сама сохраняет запись реестра
+         тем, что нашла в схеме Thunderstore. `slug` — игра в их
+         терминах, например «lethal-company». */
+      gamesEcosystem: (gameId, slug) => post('games/ecosystem', { gameId: gameId, slug: slug }),
       gamesIconUpload: (gameId, file) => upload('games/icon/upload', { gameId: gameId }, 'file', file),
 
       /* ГАЛЕРЕЯ АДРЕСУЕТСЯ ПАПКОЙ И ИМЕНЕМ, А НЕ ПУТЁМ ЦЕЛИКОМ.

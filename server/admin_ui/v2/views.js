@@ -503,6 +503,167 @@
     };
   }
 
+  /* ---------- График ---------- */
+
+  /**
+   * Точки ломаной по ряду чисел.
+   *
+   * Считается отдельно и проверяется, потому что у графика есть три
+   * состояния, в которых деление превращает координаты в NaN, а SVG
+   * молча не рисует ничего: пустой ряд, ряд из одной точки и ряд из
+   * одних нулей — так выглядит первый день после чистки метрик.
+   */
+  function sparkPoints(values, width, height) {
+    const nums = (values || []).map((v) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    });
+    if (!nums.length) return '';
+
+    const w = Number(width) || 0;
+    const h = Number(height) || 0;
+    const max = Math.max(...nums);
+    // Ровный ряд рисуем по низу, а не делим на ноль
+    const scale = max > 0 ? h / max : 0;
+    const step = nums.length > 1 ? w / (nums.length - 1) : 0;
+
+    return nums
+      .map((v, i) => (i * step).toFixed(1) + ',' + (h - v * scale).toFixed(1))
+      .join(' ');
+  }
+
+  /** Ломаная одного ряда. Пустой ряд — пустая строка, а не битый тег. */
+  function sparkLine(values, opts) {
+    const o = opts || {};
+    const points = sparkPoints(values, o.width, o.height);
+    if (!points) return '';
+    return (
+      '<polyline fill="none" stroke="' + esc(o.color || 'currentColor') +
+      '" stroke-width="1.5" points="' + points + '"/>'
+    );
+  }
+
+  /* ---------- Состав сборки ---------- */
+
+  /**
+   * План будущей сборки.
+   *
+   * Пропавшие пакеты называются поимённо и до сборки: узнать о них на
+   * середине выкатки — значит откатывать уже отданное игрокам.
+   */
+  function resolvePlan(plan, mods) {
+    const p = plan || {};
+    const M2 = M('CH2Mods', mods);
+    const f = F();
+    const space = M2.planSpace(p, f);
+    const missing = Array.isArray(p.missing) ? p.missing : [];
+
+    const head =
+      '<div class="handoff">' +
+      '<div><span class="k">Модпак</span><span class="v">' + esc(p.displayName || '—') + '</span></div>' +
+      '<div><span class="k">Версия</span><span class="v">' + esc(p.version || '—') + '</span></div>' +
+      '<div><span class="k">Пакетов</span><span class="v">' + esc(String(p.packages || 0)) + '</span></div>' +
+      (p.loader ? '<div><span class="k">Загрузчик</span><span class="v">' + esc(p.loader) + '</span></div>' : '') +
+      '</div>';
+
+    const note =
+      '<p class="note' + (space.tone === 'bad' ? ' note--bad' : '') + '">' + esc(space.text) + '</p>';
+
+    const gone = missing.length
+      ? '<div class="note note--bad"><b>Этих пакетов больше нет на Thunderstore:</b><br>' +
+        missing.map((m) => esc(typeof m === 'string' ? m : M2.fullName(m.namespace, m.name))).join('<br>') +
+        '<br>Собрать без них можно — сборка спросит об этом отдельно.</div>'
+      : '';
+
+    return head + note + gone;
+  }
+
+  /* ---------- Каталог ---------- */
+
+  /** Список пакетов каталога. */
+  function catalogList(items, opts) {
+    const o = opts || {};
+    const M2 = M('CH2Mods', o.mods);
+    const f = F();
+    const rows = M2.entries({ results: items });
+
+    if (!rows.length) {
+      return (
+        '<div class="empty"><b>' +
+        (o.query ? 'По запросу ничего нет' : 'Каталог пуст') +
+        '</b><span>Половина модпаков в раздел «Modpacks» не проставлена — такие подставляют ссылкой</span></div>'
+      );
+    }
+
+    return (
+      '<table><thead><tr><th>Модпак</th><th>Версия</th><th class="num">Скачиваний</th><th></th></tr></thead><tbody>' +
+      rows
+        .map(
+          (r) =>
+            '<tr><td>' +
+            esc(r.name) +
+            (r.deprecated ? ' <span class="badge badge--bad">устарел</span>' : '') +
+            '<br><span class="faint mono">' +
+            esc(r.namespace) +
+            '</span></td>' +
+            '<td class="mono">' + esc(r.version || '—') + '</td>' +
+            '<td class="num">' + esc(f.dec(r.downloads, 0)) + '</td>' +
+            '<td class="act">' +
+            '<button class="btn btn--text" type="button" data-readme data-ns="' + esc(r.namespace) +
+            '" data-name="' + esc(r.name) + '" data-version="' + esc(r.version) + '">Описание</button>' +
+            '<button class="btn btn--text" type="button" data-take data-ns="' + esc(r.namespace) +
+            '" data-name="' + esc(r.name) + '" data-version="' + esc(r.version) + '">Выбрать</button>' +
+            '</td></tr>'
+        )
+        .join('') +
+      '</tbody></table>' +
+      '<pre class="log scroll scroll--sm" data-readme-box></pre>'
+    );
+  }
+
+  /* ---------- Переезд со старой сборки ---------- */
+
+  /** Что получилось из профиля. */
+  function importResult(res) {
+    const r = res || {};
+    const f = F();
+    const packages = Number(r.packages || (Array.isArray(r.mods) ? r.mods.length : 0));
+    return (
+      '<div class="handoff">' +
+      '<div><span class="k">Версия</span><span class="v">' + esc(r.version || '—') + '</span></div>' +
+      '<div><span class="k">Пакетов</span><span class="v">' + esc(f.dec(packages, 0)) + '</span></div>' +
+      '</div>' +
+      '<p class="note">Сборка готова, но игрокам не ушла: отдать её — отдельное решение.</p>'
+    );
+  }
+
+  /* ---------- Журналы обращения ---------- */
+
+  /** Журнал, приложенный игроком. */
+  function logsView(text2) {
+    const t = String(text2 || '').trim();
+    if (!t) {
+      return '<div class="empty"><b>Журнала нет</b><span>Игрок его не приложил — обращение от этого не хуже</span></div>';
+    }
+    return '<pre class="log scroll scroll--lg">' + esc(t) + '</pre>';
+  }
+
+  /* ---------- Подсказка из Thunderstore ---------- */
+
+  /** Выбор игры и её имени в терминах Thunderstore. */
+  function ecosystemPicker(games) {
+    const rows = games || [];
+    if (!rows.length) return '<div class="empty"><b>Игр нет</b><span>Сначала добавьте игру в реестр</span></div>';
+    return (
+      '<div class="field"><label for="e-game">Игра</label><select id="e-game" name="gameId">' +
+      rows.map((g) => '<option value="' + esc(g.gameId) + '">' + esc(g.title || g.gameId) + '</option>').join('') +
+      '</select></div>' +
+      '<div class="field"><label for="e-slug">Имя в Thunderstore</label>' +
+      '<input id="e-slug" name="slug" type="text" placeholder="lethal-company">' +
+      '<span class="help">Так игра называется в адресе на thunderstore.io — например, thunderstore.io/c/<b>lethal-company</b>/</span></div>'
+    );
+  }
+
   /* ---------- Подбор параметров ---------- */
 
   /** Таблица прогонов с пометкой лучшего и объяснением, почему выбран он. */
@@ -563,6 +724,13 @@
     galleryCrumbs,
     galleryList,
     assetList,
+    sparkPoints,
+    sparkLine,
+    resolvePlan,
+    catalogList,
+    importResult,
+    logsView,
+    ecosystemPicker,
     orderList,
     orderSummary,
     benchTable,

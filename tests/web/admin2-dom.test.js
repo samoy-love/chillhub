@@ -249,14 +249,26 @@ test('все разделы открываются и рисуют заголо�
   }
 });
 
-test('кнопка неподключённого действия честно об этом говорит', async () => {
-  const { window, calls } = await boot();
-  window.location.hash = '#transfer';
-  await until(() => window.document.querySelector('[data-act="cache.clear"]'));
-  const before = calls.length;
-  window.document.querySelector('[data-act="cache.clear"]').click();
-  await until(() => /ещё не подключено/.test(window.document.body.textContent));
+test('у каждой кнопки панели есть обработчик', async () => {
+  // Панель 2.0 какое-то время жила с кнопками, отвечавшими «ещё не
+  // подключено». Честно, но бесполезно: проверка держит, чтобы такие не
+  // заводились снова незаметно
+  const { window } = await boot();
+  const seen = new Set();
 
-  assert.match(window.document.body.textContent, /ещё не подключено/);
-  assert.strictEqual(calls.length, before, 'неподключённая кнопка не должна ходить на сервер');
+  // Разделы берём из самой навигации, чтобы новый раздел попадал под
+  // проверку сам, без правки теста
+  const links = [...window.document.querySelectorAll('[data-nav]')].map((a) => a.getAttribute('href'));
+  assert.ok(links.length >= 5, 'разделов нашлось подозрительно мало: ' + links.length);
+
+  for (const href of links) {
+    window.location.hash = href;
+    await until(() => window.document.title.length > 0);
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+    for (const b of window.document.querySelectorAll('[data-act]')) seen.add(b.dataset.act);
+  }
+
+  const orphan = [...seen].filter((id) => !window.CH2Actions.has(id) && !window.CH2Flows.has(id));
+  assert.deepStrictEqual(orphan, [], 'кнопки без обработчика: ' + orphan.join(', '));
+  assert.ok(seen.size > 15, 'кнопок нашлось подозрительно мало: ' + seen.size);
 });

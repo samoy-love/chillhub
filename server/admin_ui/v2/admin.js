@@ -151,7 +151,7 @@
            первый запуск нового сервера выглядят именно так. */
         const freePct = D.disk.totalBytes ? Math.round((D.disk.freeBytes / D.disk.totalBytes) * 100) : 100;
         const drafts = D.news.filter((n) => !n.published).length;
-        const today = D.days.at(-1) || { date: '', launcherStarts: 0, updates: 0, errors: 0 };
+        const today = D.days.at(-1) || { date: '', starts: 0, updates: 0, errors: 0 };
         const errToday = today.errors;
 
         const decision = (on, title, body, action) => `
@@ -576,7 +576,7 @@
                 <td><span class="badge ${tone[f.type] ? `badge--${tone[f.type]}` : ''}">${t[f.type]}</span></td>
                 <td>
                   ${esc(f.comment)}
-                  ${f.logBytes ? `<br><button class="btn btn--text" type="button" data-act="logs">Журналы, ${bytes(f.logBytes)}</button>` : ''}
+                  ${f.logBytes ? `<br><button class="btn btn--text" type="button" data-act="logs" data-args='{"id":"${esc(f.id)}"}'>Журналы, ${bytes(f.logBytes)}</button>` : ''}
                 </td>
                 <td class="dim">${f.name ? esc(f.name) : '<span class="faint">без имени</span>'}${
                   f.contact ? `<br><span class="faint mono">${esc(f.contact)}</span>` : '<br><span class="faint">ответить некуда</span>'
@@ -645,15 +645,15 @@
       title: 'Ошибки у игроков',
       lede: 'Ради чего собираются события: где именно ломается загрузка и запуск.',
       render() {
-        const max = Math.max(...D.days.map((d) => d.gameLaunches));
+        /* Имена полей — те, что отдаёт разбор ответа, а не те, что в
+           JSON сервера: иначе весь раздел считает undefined и рисует
+           NaN. Геометрия графика — в views.js, там же её и проверяют:
+           пустой ряд, один день и ряд из одних нулей ломали её молча. */
         const w = 640;
         const h = 140;
-        const step = w / (D.days.length - 1);
-        const line = (key, color) =>
-          `<polyline fill="none" stroke="${color}" stroke-width="1.5" points="${D.days
-            .map((d, i) => `${(i * step).toFixed(1)},${(h - (d[key] / max) * h).toFixed(1)}`)
-            .join(' ')}"/>`;
-        const sum = (k) => D.days.reduce((a, d) => a + d[k], 0);
+        const line = (key, color) => V().sparkLine(D.days.map((d) => d[key]), { width: w, height: h, color: color });
+        const sum = (k) => D.days.reduce((a, d) => a + (Number(d[k]) || 0), 0);
+        const share = sum('updates') > 0 ? sum('errors') / sum('updates') : 0;
 
         return `
           ${card(
@@ -680,7 +680,7 @@
           )}
 
           <div class="attn" style="margin: var(--s4) 0">
-            <div class="attn-item"><span class="k">Запусков лаунчера</span><span class="v">${sum('launcherStarts')}</span><span class="s">за 30 дней</span></div>
+            <div class="attn-item"><span class="k">Запусков лаунчера</span><span class="v">${sum('starts')}</span><span class="s">за 30 дней</span></div>
             <div class="attn-item"><span class="k">Установок</span><span class="v">${sum('installs')}</span><span class="s">первых, с нуля</span></div>
             <div class="attn-item"><span class="k">Обновлений</span><span class="v">${sum('updates')}</span><span class="s">докачек разницы</span></div>
             <div class="attn-item" data-tone="${sum('errors') / sum('updates') > 0.1 ? 'warn' : 'ok'}"><span class="k">Доля ошибок</span><span class="v">${dec((sum('errors') / sum('updates')) * 100)}\u00a0%</span><span class="s">от обновлений</span></div>
@@ -689,7 +689,7 @@
           ${card(
             'Динамика',
             `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none" role="img" aria-label="Запуски игр, обновления и ошибки за 30 дней">
-               ${line('gameLaunches', 'var(--ember)')}
+               ${line('launches', 'var(--ember)')}
                ${line('updates', 'var(--ok)')}
                ${line('errors', 'var(--bad)')}
              </svg>
@@ -733,7 +733,7 @@
                  </div>
                  <p class="faint">Кэш экономит время пересборки: те же архивы Thunderstore не качаются повторно. Чистить имеет смысл, когда место кончается, а не по расписанию.</p>
                  <div class="btn-row">
-                   <button class="btn" type="button" data-act="sweep">Убрать старое</button>
+                   <button class="btn" type="button" data-act="cache.sweep">Убрать старое</button>
                    <button class="btn btn--danger btn--text" type="button" data-act="cache.clear">Очистить полностью</button>
                  </div>
                </div>`
@@ -741,28 +741,22 @@
           </div>
 
           <div style="margin-top: var(--s3)">
-            ${card(
-              'Подбор параметров загрузки',
-              list({
-                rows: D.bench,
-                head: '<th>Когда</th><th>Размер куска</th><th class="num">Потоков</th><th class="num">МБ/с</th><th class="num">Повторов</th><th></th>',
-                row: (b) => `<tr>
-                    <td class="dim">${esc(b.at)}</td>
-                    <td class="mono">${esc(b.chunk)}</td>
-                    <td class="num">${b.streams}</td>
-                    <td class="num">${dec(b.mbps)}</td>
-                    <td class="num">${b.retries ? `<span class="badge badge--warn">${b.retries}</span>` : '0'}</td>
-                    <td class="act">${b.best ? '<span class="badge badge--ok">выбрано</span>' : '<button class="btn btn--text" type="button" data-act="apply">Применить</button>'}</td>
-                  </tr>`,
-                empty: 'Прогонов не было',
-                emptyHint: 'Запусти прогон, чтобы подобрать кусок и число потоков под текущий канал.',
-              }),
-              {
-                flush: true,
-                head: '<button class="btn" type="button" data-act="bench">Запустить прогон</button>',
-                foot: 'Больше потоков не всегда быстрее: на 8 потоках канал начал терять куски и переспрашивать их заново.',
-              }
-            )}
+            ${(() => {
+              /* Таблица прогонов живёт в своём листе, а не здесь: она
+                 нужна ровно в тот момент, когда подбирают параметры, и
+                 второй её копией в разделе управлять было нечем —
+                 кнопка «Применить» тут ни к чему не вела. */
+              const T = window.CH2Tuning;
+              const best = T.best(D.bench);
+              return card(
+                'Подбор параметров загрузки',
+                `<div class="stack stack--tight">
+                   <p class="dim">${best ? esc(T.why(D.bench)) : 'Прогонов ещё не было. Прогон занимает около минуты и ничего не публикует.'}</p>
+                   <p class="faint">Больше потоков не всегда быстрее: на восьми канал начинает терять куски и переспрашивать их заново.</p>
+                   <div class="btn-row"><button class="btn" type="button" data-act="bench">${best ? 'Прогнать заново' : 'Запустить прогон'}</button></div>
+                 </div>`
+              );
+            })()}
           </div>`;
       },
     },
@@ -1550,17 +1544,256 @@
     });
   }
 
+  /* --- Состав будущей сборки --- */
+
+  /* Пересчёт спрашивает у Thunderstore, из чего соберётся модпак, и не
+     качает ни байта. Нужен он затем, что после сборки список менять
+     поздно: пропавший пакет виден здесь, а не на середине выкатки. */
+  function flowResolve(pack) {
+    const sheet = openSheet({
+      title: 'Состав сборки: ' + (pack.title || pack.gameId),
+      lede: 'Thunderstore отвечает списком. Ничего не скачивается и никуда не уходит.',
+      body: '<div class="sk" style="height:14rem"></div>',
+      foot: '<button class="btn" type="button" data-flow="close">Закрыть</button>',
+    });
+
+    (async () => {
+      try {
+        const plan = await API.modsResolve({
+          gameId: pack.gameId,
+          namespace: pack.namespace,
+          name: pack.name,
+          version: pack.version || '',
+        });
+        sheet.body(V().resolvePlan(plan));
+      } catch (err) {
+        sheet.body('<div class="empty"><b>Не посчиталось</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
+      }
+    })();
+
+    sheet.root.addEventListener('click', (e) => {
+      if (e.target.closest('[data-flow="close"]')) sheet.close();
+    });
+  }
+
+  /* --- Каталог Thunderstore --- */
+
+  /* Половина модпаков в раздел «Modpacks» не проставлена и в каталоге не
+     находится вовсе, поэтому рядом с поиском живёт поле для ссылки на
+     страницу пакета: сервер разберёт её сам. */
+  function flowCatalog(pack) {
+    let items = [];
+    let browseUrl = '';
+
+    const sheet = openSheet({
+      title: 'Каталог Thunderstore: ' + (pack.title || pack.gameId),
+      lede: 'Выбранный пакет подставится в сборку. Ничего не собирается и не публикуется.',
+      body: '<div class="sk" style="height:16rem"></div>',
+      foot:
+        '<input class="inline" type="search" data-q placeholder="Название пакета" aria-label="Поиск по каталогу">' +
+        '<button class="btn" type="button" data-flow="find">Найти</button>' +
+        '<span class="push"></span>' +
+        '<button class="btn" type="button" data-flow="byUrl">Вставить ссылку</button>',
+    });
+
+    async function load(q) {
+      sheet.body('<div class="sk" style="height:16rem"></div>');
+      try {
+        const got = await API.modsCatalog({ gameId: pack.gameId, q: q || '', page: 1 });
+        items = (got && got.results) || [];
+        browseUrl = (got && got.browseUrl) || '';
+      } catch (err) {
+        sheet.body('<div class="empty"><b>Каталог недоступен</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
+        return;
+      }
+      sheet.body(V().catalogList(items, { query: q, browseUrl: browseUrl }));
+    }
+    load('');
+
+    const choose = (ns, name, version) => {
+      pick = { gameId: pack.gameId, namespace: ns, name: name, version: version || '' };
+      toast('Выбрано: ' + ns + '/' + name, 'ok');
+      sheet.close();
+      flowResolve(Object.assign({ title: pack.title }, pick));
+    };
+
+    let pick = null;
+
+    sheet.root.addEventListener('click', async (e) => {
+      const take = e.target.closest('[data-take]');
+      if (take) {
+        choose(take.dataset.ns, take.dataset.name, take.dataset.version);
+        return;
+      }
+
+      const readme = e.target.closest('[data-readme]');
+      if (readme) {
+        try {
+          const got = await API.modsReadme(readme.dataset.ns, readme.dataset.name, readme.dataset.version || '');
+          const box = sheet.root.querySelector('[data-readme-box]');
+          if (box) box.textContent = (got && got.markdown) || 'Описания нет';
+        } catch (err) {
+          toast('Описание не пришло: ' + window.CH2Api.reason(err), 'warn');
+        }
+        return;
+      }
+
+      const b = e.target.closest('[data-flow]');
+      if (!b) return;
+      if (b.dataset.flow === 'find') load(sheet.root.querySelector('[data-q]').value.trim());
+      if (b.dataset.flow === 'byUrl') {
+        const link = window.prompt('Ссылка на страницу пакета Thunderstore', '');
+        if (!link) return;
+        const parsed = window.CH2Mods.parsePackageUrl(link);
+        if (!parsed) {
+          toast('Это не похоже на страницу пакета Thunderstore', 'warn');
+          return;
+        }
+        choose(parsed.namespace, parsed.name, '');
+      }
+    });
+
+    sheet.root.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target.matches('[data-q]')) load(e.target.value.trim());
+    });
+  }
+
+  /* --- Переезд со старых сборок --- */
+
+  /* Профиль r2modman перечисляет моды с точными версиями. Набор, который
+     у игроков уже стоит, публикуется как есть — а не собирается заново
+     на глаз, с риском разойтись по версиям и развалить лобби. */
+  function flowImport(pack) {
+    const sheet = openSheet({
+      title: 'Переезд со старой сборки: ' + (pack.title || pack.gameId),
+      lede: 'Файл профиля r2modman или mods.yml. Сборка не публикуется — её ещё надо отдать игрокам.',
+      body:
+        '<div class="empty"><b>Файл не выбран</b><span>В профиле перечислены моды с точными версиями</span></div>',
+      foot: '<button class="btn btn--accent" type="button" data-flow="pick">Выбрать файл</button>',
+    });
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.yml,.yaml,.r2z,.zip,.json';
+    input.addEventListener('change', async () => {
+      if (!input.files || !input.files[0]) return;
+      sheet.body('<div class="empty"><b>Разбираем профиль</b><span>' + esc(input.files[0].name) + '</span></div>');
+      try {
+        const got = await API.modsImport(pack.gameId, input.files[0]);
+        sheet.body(V().importResult(got));
+        toast('Профиль разобран. Игрокам сборка пока не ушла.', 'ok');
+        await store.invalidate(['packs']);
+      } catch (err) {
+        sheet.body('<div class="empty"><b>Не разобрался</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
+      }
+    });
+
+    sheet.root.addEventListener('click', (e) => {
+      if (e.target.closest('[data-flow="pick"]')) input.click();
+    });
+  }
+
+  /* --- Журналы обращения --- */
+
+  /* Журнал прикладывает сам игрок, и это единственное место, где видно,
+     что у него на самом деле происходило. Сервер отдаёт его текстом. */
+  function flowLogs(feedback) {
+    const sheet = openSheet({
+      title: 'Журналы обращения',
+      lede: 'Прислал игрок вместе с обращением. Ничего никуда не отправляется.',
+      body: '<div class="sk" style="height:18rem"></div>',
+      foot: '<button class="btn" type="button" data-flow="copy">Скопировать</button>',
+    });
+
+    let text = '';
+    (async () => {
+      try {
+        const got = await API.feedbackLogs(feedback.id);
+        text = typeof got === 'string' ? got : '';
+        sheet.body(V().logsView(text));
+      } catch (err) {
+        sheet.body('<div class="empty"><b>Журнал не пришёл</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
+      }
+    })();
+
+    sheet.root.addEventListener('click', async (e) => {
+      if (!e.target.closest('[data-flow="copy"]')) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        toast('Журнал скопирован', 'ok');
+      } catch {
+        toast('Браузер не дал скопировать — выделите текст руками', 'warn');
+      }
+    });
+  }
+
+  /* --- Подсказка из Thunderstore --- */
+
+  /* Заполняет идентификатор Steam, имя исполняемого файла и папку
+     установки из схемы экосистемы. Руками это копирование трёх значений
+     на игру, и папка, вложенная внутрь каталога установки, с первого
+     раза угадывается неправильно. */
+  function flowEcosystem() {
+    const rows = D.games;
+    const sheet = openSheet({
+      title: 'Подтянуть из Thunderstore',
+      lede: 'Перезапишет настройки модов у выбранной игры. Файлы игр это не трогает.',
+      body: V().ecosystemPicker(rows),
+      foot: '<button class="btn btn--accent" type="button" data-flow="pull">Подтянуть</button>',
+    });
+
+    sheet.root.addEventListener('click', async (e) => {
+      if (!e.target.closest('[data-flow="pull"]')) return;
+      const gameId = sheet.root.querySelector('[name="gameId"]').value;
+      const slug = sheet.root.querySelector('[name="slug"]').value.trim();
+      if (!slug) {
+        toast('Нужно имя игры в терминах Thunderstore, например lethal-company', 'warn');
+        return;
+      }
+
+      const game = rows.find((g) => g.gameId === gameId) || { title: gameId };
+      const agreed = await ask({
+        title: 'Перезаписать настройки «' + game.title + '»?',
+        body: 'Идентификатор Steam, имя исполняемого файла и папка установки заменятся тем, что в схеме Thunderstore.',
+        ok: 'Перезаписать',
+        cancel: 'Отмена',
+      });
+      if (!agreed) return;
+
+      try {
+        await API.gamesEcosystem(gameId, slug);
+        toast('Настройки подтянуты', 'ok');
+        sheet.close();
+        await store.invalidate(['games']);
+        route();
+      } catch (err) {
+        toast('Не вышло: ' + window.CH2Api.reason(err), 'bad');
+      }
+    });
+  }
+
   /** Дела, которые панель ведёт сама. Записи в реестре действий — отдельно. */
   const FLOWS = {
     upload: () => flowUpload({ kind: 'launcher' }),
     build: () => flowBuild(packOf(game)),
+    resolve: () => flowResolve(packOf(game)),
+    choose: () => flowCatalog(packOf(game)),
+    import: () => flowImport(packOf(game)),
     'new-post': () => flowNews({}),
     'edit-post': (a) => flowNews(a),
     gallery: (a) => flowGallery(a.gameId || (D.games[0] && D.games[0].gameId) || ''),
     'new-game': () => flowOrder(),
     order: () => flowOrder(),
+    ecosystem: () => flowEcosystem(),
+    logs: (a) => flowLogs(a),
     bench: () => flowBench(),
   };
+
+  /* Наружу — только вопрос «есть ли такое дело». Нужен он проверке,
+     которая следит, чтобы в панели не заводились кнопки без
+     обработчика: такие честно говорят «ещё не подключено», но делать от
+     этого ничего не начинают. */
+  window.CH2Flows = { has: (id) => Object.prototype.hasOwnProperty.call(FLOWS, id) };
 
   /* ---------- Навигация ---------- */
 
