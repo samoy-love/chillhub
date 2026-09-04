@@ -129,21 +129,52 @@ namespace ChillHub.Core.Game {
                 return false;
             }
 
-            Entry entry;
+            Entry entry = null!;
+            Entry? revived = null;
             IReadOnlyList<QueueItem> snapshot;
             lock (this.gate) {
-                if (this.items.Any(e => string.Equals(e.GameId, gameId, StringComparison.OrdinalIgnoreCase))) {
-                    return false;
-                }
+                var existing = this.items.FirstOrDefault(e => string.Equals(e.GameId, gameId, StringComparison.OrdinalIgnoreCase));
+                if (existing != null) {
+                    // ОСТАНОВЛЕННАЯ ПОЗИЦИЯ ЕЩЁ СТОИТ В СПИСКЕ, И ЭТО НЕ ПОВОД ОТКАЗЫВАТЬ.
+                    //
+                    // Движок останавливается не мгновенно: шаг может быть непрерываемым
+                    // (опрос процессов, пробуждение диска), и до конца ProcessAsync позиция
+                    // остаётся в очереди качающейся. Всё это время «Скачать» по той самой
+                    // игре, которую игрок сам только что остановил, отвечало «уже в
+                    // очереди» и не делало ничего — запустить её заново было нельзя.
+                    // Возвращаем позицию в очередь: воркер поднимет её сразу, как только
+                    // прежняя попытка домотает. Второй параллельной закачки той же игры при
+                    // этом не возникает — позиция одна и та же.
+                    if (existing.State != QueueItemState.Running
+                        || !existing.CancelRequested
+                        || existing.Kind != kind) {
+                        return false;
+                    }
 
-                entry = new Entry(
-                    gameId,
-                    string.IsNullOrWhiteSpace(game.Title) ? gameId : game.Title,
-                    game.IconUrl,
-                    kind,
-                    this.clock);
-                this.items.Add(entry);
-                snapshot = this.SnapshotLocked();
+                    existing.CancelRequested = false;
+                    existing.RequeueRequested = true;
+                    existing.StatusText = "Останавливаем прежнюю попытку, потом начнём заново…";
+                    revived = existing;
+                    snapshot = this.SnapshotLocked();
+                }
+                else {
+                    entry = new Entry(
+                        gameId,
+                        string.IsNullOrWhiteSpace(game.Title) ? gameId : game.Title,
+                        game.IconUrl,
+                        kind,
+                        this.clock);
+                    this.items.Add(entry);
+                    snapshot = this.SnapshotLocked();
+                }
+            }
+
+            if (revived != null) {
+                // Будить воркер не надо: позиция ещё занимает его собой, а обратно в
+                // очередь её поставит Settle() — он же и разбудит.
+                this.ItemProgress?.Invoke(revived.ToItem());
+                this.Reordered?.Invoke(snapshot);
+                return true;
             }
 
             this.ItemAdded?.Invoke(entry.ToItem());
@@ -163,6 +194,7 @@ namespace ChillHub.Core.Game {
 
             Entry? entry;
             var removedNow = false;
+            var stopping = false;
             IReadOnlyList<QueueItem> snapshot;
             lock (this.gate) {
                 entry = this.items.FirstOrDefault(e => string.Equals(e.GameId, gameId, StringComparison.OrdinalIgnoreCase));
@@ -178,6 +210,14 @@ namespace ChillHub.Core.Game {
                     // Снятие важнее возврата в очередь: пользователь просил убрать, а не пропустить.
                     entry.RequeueRequested = false;
                     entry.CancelRequested = true;
+
+                    // КАРТОЧКА ОБЯЗАНА ИЗМЕНИТЬСЯ В ТОТ ЖЕ МИГ. Отмена доходит до движка
+                    // не мгновенно, и до правки строка всё это время показывала прежний
+                    // процент, прежнюю скорость и прежнее «Скачивание» — нажатие выглядело
+                    // как не сработавшее, и его повторяли ещё несколько раз.
+                    entry.StatusText = "Останавливаем…";
+                    entry.ResetSpeed();
+                    stopping = true;
                     entry.Cts?.Cancel();
                 }
                 else {
@@ -192,6 +232,9 @@ namespace ChillHub.Core.Game {
             if (removedNow) {
                 this.ItemRemoved?.Invoke(entry.ToItem());
                 this.Reordered?.Invoke(snapshot);
+            }
+            else if (stopping) {
+                this.ItemProgress?.Invoke(entry.ToItem());
             }
 
             return true;
@@ -213,7 +256,7 @@ namespace ChillHub.Core.Game {
         /// </para>
         /// <para>
         /// Шаг вверх через КАЧАЮЩУЮСЯ позицию — это «начать эту вместо текущей»: текущая
-        /// закачка прерывается и возвращается в очередь следом (см. <see cref="Requeue"/>).
+        /// закачка прерывается и возвращается в очередь следом (см. <see cref="Settle"/>).
         /// Прогресс прерванной не теряется — движок докачивает по Range из уцелевших
         /// .part-файлов.
         /// </para>
@@ -290,24 +333,73 @@ namespace ChillHub.Core.Game {
         }
 
         /// <summary>
-        /// Возвращает прерванную позицию в очередь: состояние снова «ждёт», счётчик скорости
-        /// сброшен (докачка начнётся с новой оценкой), воркер разбужен — он возьмёт ту
-        /// позицию, которая теперь стоит первой.
+        /// Решает судьбу позиции, у которой <c>RunAsync</c> только что вернулся: вернуть её
+        /// в очередь (прервали ради другой позиции или игрок успел запустить её заново) или
+        /// снять совсем.
+        /// <para>
+        /// РЕШЕНИЕ ПРИНИМАЕТСЯ ПОД <see cref="gate"/> ВМЕСТЕ С САМИМ ДЕЙСТВИЕМ. Раньше флаги
+        /// читались снаружи замка, и между чтением и снятием позиции успевал вклиниться
+        /// <see cref="Enqueue"/>: нажатие «Скачать» по только что остановленной игре
+        /// пропадало вместе с позицией, а игрок видел пустую очередь и ничего не
+        /// происходящее.
+        /// </para>
+        /// <para>
+        /// Возвращённая в очередь позиция начинает с новой оценкой скорости, а воркер
+        /// будится — он возьмёт ту, что теперь стоит первой. Прогресс не теряется: движок
+        /// докачивает по Range из уцелевших .part-файлов.
+        /// </para>
         /// </summary>
-        /// <param name="entry">Прерванная позиция.</param>
-        private void Requeue(Entry entry) {
+        /// <param name="entry">Позиция, которую только что перестали обрабатывать.</param>
+        /// <param name="failed">Операция сорвалась — снимаем с ошибкой, а не с успехом.</param>
+        private void Settle(Entry entry, bool failed) {
             IReadOnlyList<QueueItem> snapshot;
+            bool requeued;
+            var stillPresent = false;
             lock (this.gate) {
-                entry.RequeueRequested = false;
-                entry.CancelRequested = false;
-                entry.State = QueueItemState.Waiting;
-                entry.StatusText = "Ждёт очереди…";
-                entry.ResetSpeed();
+                requeued = entry.RequeueRequested;
+                if (requeued) {
+                    entry.RequeueRequested = false;
+                    entry.CancelRequested = false;
+                    entry.State = QueueItemState.Waiting;
+                    entry.StatusText = "Ждёт очереди…";
+                    entry.ResetSpeed();
+                }
+                else {
+                    // State/StatusText мутируются под тем же gate, что читает Remove() — без
+                    // этого Remove() мог застать позицию ещё Waiting/Running и сообщить об
+                    // отмене только что успешно завершённой закачки.
+                    var state = failed
+                        ? QueueItemState.Failed
+                        : entry.CancelRequested ? QueueItemState.Cancelled : QueueItemState.Completed;
+                    stillPresent = this.items.Remove(entry);
+                    entry.State = state;
+                    entry.StatusText = state switch {
+                        QueueItemState.Failed => "Не удалось завершить операцию.",
+                        QueueItemState.Cancelled => "Снята из очереди.",
+                        _ => "Готово.",
+                    };
+                }
+
                 snapshot = this.SnapshotLocked();
             }
 
+            if (requeued) {
+                this.Reordered?.Invoke(snapshot);
+                this.workSignal.Release();
+                return;
+            }
+
+            if (!stillPresent) {
+                // Remove() уже убрал позицию и разослал ItemRemoved сам — не дублируем и не
+                // переопределяем то, что UI уже увидел.
+                return;
+            }
+
+            this.ItemCompleted?.Invoke(entry.ToItem());
+
+            // Уход позиции меняет «можно сдвинуть» у оставшихся: та, что была под ней,
+            // становится верхней и теряет стрелку вверх.
             this.Reordered?.Invoke(snapshot);
-            this.workSignal.Release();
         }
 
         /// <summary>Останавливает фоновый воркер. Позиции, которые не успели стартовать, просто пропадают.</summary>
@@ -352,7 +444,19 @@ namespace ChillHub.Core.Game {
                     continue;
                 }
 
-                await this.ProcessAsync(next).ConfigureAwait(false);
+                try {
+                    await this.ProcessAsync(next).ConfigureAwait(false);
+                }
+                catch (Exception ex) {
+                    // ВОРКЕР ОДИН НА ВЕСЬ ЛАУНЧЕР, И ЕГО СМЕРТЬ НЕЗАМЕТНА. ProcessAsync
+                    // ловит свои исключения сам, но не всё в нём под try: поиск игры по
+                    // списку — это чужой колбэк, заданный страницей. Улетев отсюда, любое
+                    // исключение завершало задачу воркера, и очередь после этого молчала до
+                    // перезапуска лаунчера, а позиция навсегда оставалась «качается» —
+                    // ни снять, ни запустить заново.
+                    Logging.Logger.Error(ex, $"DownloadQueue.RunWorkerAsync gid={next.GameId}");
+                    this.Settle(next, failed: true);
+                }
 
                 // Могло остаться больше одной позиции, а сигнал был съеден одним Release() на Enqueue —
                 // будим себя снова, чтобы не ждать нового Enqueue ради уже стоящих в очереди игр.
@@ -377,7 +481,7 @@ namespace ChillHub.Core.Game {
             // позиция навсегда останется висеть в очереди как Running — Remove() для Running-
             // позиции не удаляет её из items сама, ждёт именно Finish().
             try {
-                this.RaiseProgress(entry, "Ожидание в очереди завершено, начинаем…");
+                this.RaiseProgress(entry, "Начинаем…");
 
                 var ui = new GameSyncUi {
                     SetStatus = text => this.RaiseProgress(entry, text),
@@ -418,27 +522,17 @@ namespace ChillHub.Core.Game {
                 // entry.Cts всегда назначен в RunWorkerAsync до вызова ProcessAsync — см. gate там.
                 await runner.RunAsync(request, entry.Cts!.Token).ConfigureAwait(false);
 
-                // Прервали, чтобы пропустить вперёд другую позицию — эта возвращается в
-                // очередь, а не снимается: проверяем ДО CancelRequested, потому что
-                // пропуск вперёд тоже отменяет токен.
-                if (entry.RequeueRequested) {
-                    this.Requeue(entry);
-                    return;
-                }
-
-                this.Finish(entry, entry.CancelRequested ? QueueItemState.Cancelled : QueueItemState.Completed, entry.CancelRequested ? "Снята из очереди." : "Готово.");
+                // Прервали, чтобы пропустить вперёд другую позицию или чтобы начать эту
+                // заново, — тогда позиция возвращается в очередь, а не снимается. Решение
+                // принимает Settle() под gate: снаружи замка его успевал обогнать Enqueue().
+                this.Settle(entry, failed: false);
             }
             catch (Exception ex) {
                 // GameSyncRunner.RunAsync сам не выпускает исключения наружу — сюда попадём,
                 // если что-то пошло не так уже в самой очереди (например, отмена), либо если
                 // упала сборка запроса выше.
                 Logging.Logger.Error(ex, $"DownloadQueue.ProcessAsync gid={entry.GameId}");
-                if (entry.RequeueRequested) {
-                    this.Requeue(entry);
-                    return;
-                }
-
-                this.Finish(entry, QueueItemState.Failed, "Не удалось завершить операцию.");
+                this.Settle(entry, failed: true);
             }
             finally {
                 entry.Cts?.Dispose();
@@ -624,7 +718,12 @@ namespace ChillHub.Core.Game {
                     canMoveDown,
                     this.IconUrl,
                     position,
-                    this.Kind);
+                    this.Kind,
+
+                    // Отмена уже запрошена, но движок ещё не остановился. Признак нужен
+                    // именно снимку: по State такая позиция неотличима от работающей, и
+                    // экран продолжал показывать её как идущую закачку.
+                    this.CancelRequested && this.State == QueueItemState.Running);
         }
     }
 }
