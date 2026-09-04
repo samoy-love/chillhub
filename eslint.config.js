@@ -1,6 +1,20 @@
 // ESLint Flat Config for ESLint v9+
 // Migrated from .eslintrc.json and .eslintignore
 
+// БАЗОВЫЙ НАБОР ПОДКЛЮЧАЕТСЯ ЯВНО.
+//
+// В .eslintrc.json стоял "extends": ["eslint:recommended"], и при переезде на
+// flat config он потерялся: flat config сам по себе не включает НИ ОДНОГО
+// правила. Остались четыре правила из блока ниже, из которых блокировал только
+// no-undef, — дубль ключа в объекте, код после return и прочее, что ловит
+// базовый набор, проходили гейт зелёными.
+//
+// Пакет ставится отдельно от eslint (с версии 10 он не входит в его
+// зависимости) и обязательно ЛОКАЛЬНО: имя разрешается от каталога этого
+// файла, и из глобального префикса npm пакет не виден. Версии — в шапке
+// .github/workflows/ci.yml, ставит его тот же шаг, что и eslint.
+import js from '@eslint/js';
+
 /** @type {import('eslint').Linter.FlatConfig[]} */
 export default [
   // Global ignore patterns (migrated from .eslintignore)
@@ -14,6 +28,10 @@ export default [
       'content/'
     ]
   },
+
+  // Базовый набор — отдельным блоком, ДО собственных правил: то, что ниже,
+  // должно иметь возможность его переопределить.
+  { files: ['**/*.js'], ...js.configs.recommended },
 
   // Base JS config
   {
@@ -67,7 +85,19 @@ export default [
       'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrors: 'all', caughtErrorsIgnorePattern: '^_' }],
       'no-undef': 'error',
       eqeqeq: ['warn', 'always'],
-      'no-console': 'off'
+      'no-console': 'off',
+      // Пустой catch — намеренная идиома обоих фронтендов: «не вышло — и
+      // ладно, показывать нечего». Все остальные пустые блоки базовый набор
+      // по-прежнему считает ошибкой.
+      'no-empty': ['error', { allowEmptyCatch: true }],
+      // В базовый набор no-eval не входит, а во фронтендах лаунчера eval быть
+      // не должно вовсе: обе панели собирают html строками, и eval рядом с
+      // этим — прямая дорога к исполнению того, что пришло с сервера.
+      // Единственное законное место — тест санитайзера, который достаёт
+      // функцию из admin.js текстом; там стоит точечное подавление, и без
+      // этого правила оно висело неиспользуемым, то есть при --max-warnings 0
+      // роняло прогон.
+      'no-eval': 'error'
     }
   },
 
@@ -86,6 +116,11 @@ export default [
         process: 'readonly',
         Buffer: 'readonly',
       }
+    },
+    rules: {
+      // Тест санитайзера повторяет его регулярку дословно — вместе с
+      // диапазоном управляющих символов, ради которого она и написана.
+      'no-control-regex': 'off'
     }
   },
 
@@ -99,7 +134,20 @@ export default [
   {
     files: ['server/admin_ui/**/*.js'],
     rules: {
-      'no-unused-vars': 'off'
+      'no-unused-vars': 'off',
+      // Два правила базового набора, которые в админке срабатывают на живой
+      // код и ни одного дефекта не показывают:
+      //
+      // no-control-regex — sanitizeUrl вырезает управляющие символы ДО разбора
+      // схемы, и класс управляющих в регулярке там не описка, а сама
+      // проверка (см. комментарий над ней);
+      // no-useless-assignment — инициализация `let x = null` перед цепочкой
+      // ветвлений.
+      //
+      // Выключены до уборки этих мест, а не навсегда: как только останется
+      // ноль срабатываний, строки отсюда убрать.
+      'no-control-regex': 'off',
+      'no-useless-assignment': 'off'
     }
   },
 
@@ -148,6 +196,7 @@ export default [
   // must never see them.
   {
     files: [
+      'server/admin_ui/admin-time.js',
       'server/admin_ui/upload-bench.js',
       'server/admin_ui/ui-throttle.js',
       'server/admin_ui/speed-chart.js',
@@ -163,14 +212,12 @@ export default [
       'server/admin_ui/pending-badges.js',
       'server/admin_ui/registry-diff.js',
 
-      // Панель 2.0: те же UMD-модули, тот же guard `typeof module`.
+      // Панель и лендинг 2.0: те же UMD-модули, тот же guard `typeof module`.
       'server/admin_ui/v2/format.js',
       'server/admin_ui/v2/api.js',
       'server/admin_ui/v2/actions.js',
       'server/admin_ui/v2/store.js',
       'server/admin_ui/v2/sections.js',
-
-      // Лендинг 2.0: правила копии лаунчера, тот же guard `typeof module`.
       'landing/v2/emu-core.js'
     ],
     languageOptions: {
