@@ -176,6 +176,12 @@ function loadAdminPage(t, { fetchImpl, xhrScript } = {}) {
   return { dom, window, document: window.document };
 }
 
+// settle прокручивает очередь микрозадач: загрузчики вкладок — цепочки
+// await-ов, и одного setTimeout(0) им не хватает.
+async function settle(times = 5) {
+  for (let i = 0; i < times; i++) await new Promise(r => setTimeout(r, 0));
+}
+
 function setValue(document, id, value) {
   const el = document.getElementById(id);
   el.value = value;
@@ -343,6 +349,47 @@ test('вкладки: клик по каждой показывает её се�
   // Переключение запускает загрузчики вкладок (newsList, mtLoad, ...) — их
   // промисы должны отработать до того, как t.after() закроет окно.
   await new Promise(r => setTimeout(r, 0));
+});
+
+// ЗНАЧОК ГОВОРИЛ «ГДЕ-ТО ЕСТЬ ОБНОВЛЕНИЕ», А ВКЛАДКА ОТКРЫВАЛАСЬ НА ПЕРВОЙ
+// ИГРЕ СПИСКА: чтобы понять, о какой игре речь, приходилось читать подсказку
+// значка и потом искать ту же игру в выпадающем списке.
+test('вкладка «Моды»: горящий значок открывает ту игру, где вышло обновление', async (t) => {
+  const fetchStub = makeFetchStub([
+    { test: (u) => /\/games(\?|$)/.test(u), respond: () => jsonResponse({ items: [
+      { gameId: 'peak', title: 'PEAK', mods: { enabled: true } },
+      { gameId: 'lethal-company', title: 'Lethal Company', mods: { enabled: true } },
+    ] }) },
+    { test: (u) => u.includes('/mods/list'), respond: () => jsonResponse({ items: [] }) },
+    { test: (u) => u.includes('/mods/cache'), respond: () => jsonResponse({ files: 0, bytes: 0 }) },
+    { test: () => true, respond: () => jsonResponse({}) },
+  ]);
+  const { window, document } = loadAdminPage(t, { fetchImpl: fetchStub });
+
+  const badge = document.getElementById('mods_pending_badge');
+  badge.style.display = '';
+  badge.textContent = '1';
+  badge.setAttribute('data-game-id', 'lethal-company');
+
+  document.getElementById('tabMods').dispatchEvent(
+    new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  await settle();
+
+  assert.strictEqual(document.getElementById('md_game').value, 'lethal-company');
+
+  // Выбор одноразовый: следующий заход на вкладку не должен уводить с игры,
+  // которую оператор выбрал руками.
+  document.getElementById('md_game').value = 'peak';
+  document.getElementById('md_game').dispatchEvent(new window.Event('change', { bubbles: true }));
+  badge.style.display = 'none';
+  badge.removeAttribute('data-game-id');
+  document.getElementById('tabLauncher').dispatchEvent(
+    new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  document.getElementById('tabMods').dispatchEvent(
+    new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  await settle();
+
+  assert.strictEqual(document.getElementById('md_game').value, 'peak');
 });
 
 test('up_cleanup бьёт по /admin/api/upload/cleanup и пишет результат в #out', async (t) => {

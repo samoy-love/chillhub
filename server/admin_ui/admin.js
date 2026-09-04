@@ -539,6 +539,9 @@ function bindVersionActions(root, cls, gameId, afterChange){
       catch(e){ notifyLevel('Не удалось активировать версию: '+e, 'error'); return; }
       if(!r.ok){ await notifyHttp(r, 'Активация версии '+ver); return; }
       notifyLevel('Версия '+ver+' активна', 'success');
+      // Значок «здесь ждут действия» гаснет сразу, а не через минуту опроса:
+      // активировали версию — вкладка обязана перестать звать.
+      try{ await window.refreshPendingBadges(); }catch(_){ /* значок не критичен */ }
       try{ await afterChange(); }catch(_){ /* обновление вида не критично */ }
     });
   });
@@ -3201,7 +3204,19 @@ function showSection(id){
 TAB_MAP.forEach((t, i)=>{
   const btn = document.getElementById(t.btn);
   if(!btn) return;
-  btn.addEventListener('click', (e)=>{ e.preventDefault(); showSection(t.sec); });
+  btn.addEventListener('click', (e)=>{
+    e.preventDefault();
+    // Значок на вкладке знает, в какой игре вышло обновление, — клик по самой
+    // вкладке открывает её. Раньше значок говорил «где-то есть обновление», а
+    // вкладка открывалась на первой игре списка, и нужную приходилось искать
+    // руками, вычитав название из подсказки значка.
+    if(t.sec === 'secMods'){
+      const badge = document.getElementById('mods_pending_badge');
+      const gid = badge && badge.style.display !== 'none' ? badge.getAttribute('data-game-id') : '';
+      if(gid) window.__modsWantGame = gid;
+    }
+    showSection(t.sec);
+  });
   // Стрелки, Home/End — обязательная часть шаблона tablist: без них вкладки
   // остаются шестью ссылками, по которым можно только табать поочерёдно.
   btn.addEventListener('keydown', (e)=>{
@@ -3292,6 +3307,9 @@ async function upload(){
   if(latest){
     try{
       const act = await fetch('/admin/activate?gameId=launcher&version='+encodeURIComponent(ver), { method:'POST' });
+      // Заливка с галочкой «сделать активной» — то же действие, что кнопка в
+      // таблице: значок обязан погаснуть здесь так же.
+      try{ await window.refreshPendingBadges(); }catch(_){ /* значок не критичен */ }
       if(!act.ok){ notify('HTTP '+act.status+' activate'); } else { try{ lnRefresh(); }catch(_){ } }
     }catch(e){ notify('Ошибка activate: '+e); }
   }

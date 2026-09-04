@@ -523,15 +523,23 @@ type VersionInfo struct {
 	Files       int    `json:"files"`
 	Bytes       int64  `json:"bytes"`
 	Packages    int    `json:"packages"`
-	Missing     int    `json:"missing"`
+
+	// Missing — моды, которых на Thunderstore уже нет: пакет собран без них с
+	// согласия оператора. Списком, а не числом: «пропущено 2» не даёт понять,
+	// потерялся ли безобидный твик текстур или мод, ради которого пакет и
+	// собирали, — а узнать это было негде, кроме файла состава на диске.
+	Missing []string `json:"missing,omitempty"`
 
 	// Rebuildable is false for a version whose build cannot be reconstructed —
 	// an r2modman import recorded before the composition was kept. The panel
 	// disables the button instead of offering a request that can only fail.
 	Rebuildable bool `json:"rebuildable"`
 
-	// Collisions is how many places two of this version's packages met.
-	Collisions int `json:"collisions,omitempty"`
+	// Collisions — места, где пакеты этой сборки встретились. Списком, а не
+	// числом: «пересечений 2» не говорит НИ ГДЕ, ни между кем, — а решать по
+	// нему нечего, пока не видно, спорят ли два безобидных README или две
+	// разные DLL с одним именем, из которых загрузчик возьмёт одну.
+	Collisions []Collision `json:"collisions,omitempty"`
 }
 
 // List returns a game's built modpack versions plus the update check
@@ -564,8 +572,8 @@ func (h *Handlers) List(w http.ResponseWriter, r *http.Request) {
 			info.PackageURL = src.PackageURL
 			info.Kind = string(src.Kind)
 			info.Packages = len(src.Tree)
-			info.Missing = len(src.Missing)
-			info.Collisions = len(src.Collisions)
+			info.Missing = src.Missing
+			info.Collisions = src.Collisions
 			info.Rebuildable = src.Kind == SourceThunderstore || len(src.Roots) > 0
 		}
 		items = append(items, info)

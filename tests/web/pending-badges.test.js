@@ -137,3 +137,41 @@ test('недоступная сводка не ломает панель и не
   assert.strictEqual(await refreshPendingBadges(doc, () => Promise.resolve({ ok: false })), null);
   assert.strictEqual(doc.getElementById('launcher_pending_badge').textContent, '');
 });
+
+// КЛИК ПО ВКЛАДКЕ ДОЛЖЕН ВЕСТИ К ИГРЕ, А НЕ К СПИСКУ ИГР. Значок знал, что
+// обновление есть, но не говорил, где: название игры было только в подсказке.
+test('моды: значок несёт игру, с которой начинать', () => {
+  const view = describeMods([
+    { gameId: 'peak', title: 'PEAK', latest: '1.8.13', behind: false },
+    { gameId: 'lethal-company', title: 'Lethal Company', latest: '2.2.13', behind: true },
+  ]);
+
+  assert.strictEqual(view.gameId, 'lethal-company');
+});
+
+test('игра со значка попадает в разметку и исчезает вместе с ним', () => {
+  const dom = new JSDOM('<span id="b"></span>');
+  const el = dom.window.document.getElementById('b');
+
+  applyBadge(el, { show: true, text: '1', title: 'т', gameId: 'lethal-company' });
+  assert.strictEqual(el.getAttribute('data-game-id'), 'lethal-company');
+
+  applyBadge(el, { show: false });
+  assert.strictEqual(el.getAttribute('data-game-id'), null);
+});
+
+// СВОДКУ СЕРВЕР ДЕРЖИТ ДЕСЯТЬ МИНУТ. После действия оператора это ровно то
+// время, которое значок висел бы над уже сделанной работой.
+test('после действия сводку просят пересчитать заново', async () => {
+  const dom = new JSDOM('<span id="launcher_pending_badge"></span><span id="mods_pending_badge"></span>');
+  const urls = [];
+  const fetchImpl = (url) => {
+    urls.push(url);
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ launcher: {}, mods: [] }) });
+  };
+
+  await refreshPendingBadges(dom.window.document, fetchImpl);
+  await refreshPendingBadges(dom.window.document, fetchImpl, { force: true });
+
+  assert.deepStrictEqual(urls, ['/admin/summary', '/admin/summary?force=1']);
+});
