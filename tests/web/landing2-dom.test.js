@@ -78,8 +78,10 @@ async function boot(t, overrides) {
 
   const scripts = [...window.document.querySelectorAll('script[src]')].map((s) => s.getAttribute('src'));
   for (const src of scripts) {
-    const code = fs.readFileSync(path.join(V2, src.replace('./', '')), 'utf8');
-    vm.runInContext(code, dom.getInternalVMContext(), { filename: path.join(V2, src) });
+    // Путь разрешается как в браузере: и './', и '../'
+    const file = path.resolve(V2, src);
+    const code = fs.readFileSync(file, 'utf8');
+    vm.runInContext(code, dom.getInternalVMContext(), { filename: file });
   }
 
   for (let i = 0; i < 60; i++) await new Promise((r) => setTimeout(r, 0));

@@ -218,6 +218,8 @@ export default [
       'server/admin_ui/v2/actions.js',
       'server/admin_ui/v2/store.js',
       'server/admin_ui/v2/sections.js',
+      'server/admin_ui/v2/upload.js',
+      'server/admin_ui/v2/build.js',
       'landing/v2/emu-core.js'
     ],
     languageOptions: {
