@@ -116,7 +116,7 @@ test('панель подключает ровно те модули, что л�
   // Забытый в index.html модуль — это раздел, падающий на первом нажатии;
   // лишний тег — запрос в никуда на каждой загрузке
   const html = fs.readFileSync(path.join(__dirname, '..', '..', 'server/admin_ui/index.html'), 'utf8');
-  const linked = [...html.matchAll(/<script src="\.\/([^"]+)"/g)].map((m) => m[1]);
+  const linked = [...html.matchAll(/<script src="\/admin\/ui\/([^"]+)"/g)].map((m) => m[1]);
   // login.js — единственный скрипт панели, живущий отдельно: страницу
   // входа открывают БЕЗ сессии, и остальные модули ей недоступны
   const onDisk = fs

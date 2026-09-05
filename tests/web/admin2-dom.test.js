@@ -84,9 +84,10 @@ async function boot(overrides) {
   // Скрипты страницы — в том же порядке, что в браузере
   const scripts = [...window.document.querySelectorAll('script[src]')].map((s) => s.getAttribute('src'));
   for (const src of scripts) {
-    // Путь разрешается как в браузере: и './', и '../' — иначе модули,
-    // переиспользуемые из версии 1.0, стенд не найдёт.
-    const file = path.resolve(V2, src);
+    // Страница лежит по /admin/, а её модули — по /admin/ui/, поэтому
+    // адреса в разметке абсолютные. Стенд повторяет то же отображение,
+    // что делает nginx: /admin/ui/<файл> → server/admin_ui/<файл>.
+    const file = path.join(V2, src.replace('/admin/ui/', ''));
     const code = fs.readFileSync(file, 'utf8');
     vm.runInContext(code, dom.getInternalVMContext(), { filename: file });
   }

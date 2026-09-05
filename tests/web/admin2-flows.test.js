@@ -106,7 +106,7 @@ async function boot(routes) {
   };
 
   for (const src of [...window.document.querySelectorAll('script[src]')].map((s) => s.getAttribute('src'))) {
-    const file = path.resolve(V2, src);
+    const file = path.join(V2, src.replace('/admin/ui/', ''));
     vm.runInContext(fs.readFileSync(file, 'utf8'), dom.getInternalVMContext(), { filename: file });
   }
 
