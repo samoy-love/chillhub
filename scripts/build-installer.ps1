@@ -742,10 +742,10 @@ if ($NoCompress) {
     # не влияет. Замер: шаг «Собрать установщик» с ключом и без него — те же
     # 74 секунды.
     #
-    # SetCompressor разрешено вызывать один раз, и побеждает первый вызов.
-    # Ключи /X выполняются ДО скрипта, поэтому zlib отсюда перебивает lzma из
-    # .nsi; makensis предупреждает о повторном вызове и работает дальше.
-    $nsisArgs += @('/XSetCompressor /SOLID zlib', '/XSetCompress off')
+    # Переключается это define-ом, а не ключом: /XSetCompressor до объявления
+    # в .nsi не достаёт, а /XSetCompress в whole-режиме игнорируется вовсе
+    # (предупреждение 8021). Сам выбор компрессора живёт в installer.nsi.
+    $nsisArgs += @('/DFAST_COMPRESS')
 }
 # Package exactly what we just built. installer.nsi defaults to
 # bin\Release\net8.0-windows when this is not passed, which is why
