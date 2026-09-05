@@ -50,6 +50,10 @@ type Handlers struct {
 
 	// sum кеширует сводку «что ждёт действия» — см. summary.go.
 	sum summaryCache
+
+	// pkgs кеширует ответы Thunderstore про пакеты — см. packagecache.go.
+	// Общий на оба места, которые их спрашивают: сводку и список версий.
+	pkgs packageCache
 }
 
 // New returns handlers for one content root.
@@ -588,8 +592,10 @@ func (h *Handlers) List(w http.ResponseWriter, r *http.Request) {
 		"community": cfg.Community,
 	}
 
-	// Update check: one request per distinct pack, cheap enough to do on every
-	// panel visit.
+	// Update check: один ответ на пакет, общий со сводкой и переживающий
+	// запрос (packagecache.go). Своими запросами это стоило 320 мс на игру —
+	// столько клиент держит между обращениями к Thunderstore, — и раздел
+	// сборок открывался тем дольше, чем больше игр с модами.
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
 	out["updates"] = h.updateChecks(ctx, entry.GameID, items)
@@ -623,7 +629,7 @@ func (h *Handlers) updateChecks(ctx context.Context, gid string, items []Version
 		}
 		seen[PackageKey(ns, name)] = true
 
-		p, err := h.builder.Client.GetPackage(ctx, ns, name)
+		p, err := h.pkgs.pkg(ctx, h.builder.Client, ns, name)
 		if err != nil {
 			log.Printf("[mods] update check %s-%s: %v", ns, name, err)
 			continue
