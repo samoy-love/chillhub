@@ -898,6 +898,38 @@ tr.best > td { background: var(--ember-wash); }
 .folder > summary .size { margin-left: auto; color: var(--fg-3); }
 .folder .row { padding-left: var(--s4); }
 
+/* График с подписями осей. Подписи слева и снизу, а не поверх линий:
+   поверх они мешают читать сами линии, ради которых график и рисуют. */
+.chart {
+  position: relative;
+  padding: 0 0 var(--s3) 3.5rem;
+}
+
+.chart-y {
+  position: absolute;
+  inset: 0 auto var(--s3) 0;
+  width: 3rem;
+}
+
+.chart-y .tick {
+  position: absolute;
+  right: 0;
+  transform: translateY(-50%);
+  font: 400 0.6875rem/1 var(--mono);
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-x {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font: 400 0.6875rem/1 var(--mono);
+  color: var(--fg-3);
+}
+
+.badge .dot { background: var(--dot, currentcolor); }
+
 .quote {
   margin: var(--s3) 0;
   padding: var(--s2) var(--s3);

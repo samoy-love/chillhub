@@ -848,3 +848,44 @@ test('смена цели предлагает свой номер: версии
   await until(() => sheet.querySelector('[name="version"]').value !== '1.6.25');
   assert.strictEqual(sheet.querySelector('[name="version"]').value, '1.0.1');
 });
+
+/* ---------- Опоздавшие ответы ---------- */
+
+test('опоздавший ответ по прошлой папке не перерисовывает галерею', async (t) => {
+  // Ответы возвращаются не в том порядке, в каком уходили, и опоздавший
+  // затирал бы свежий: на экране прошлая папка, а путь говорит про новую
+  let hold;
+  const gate = new Promise((r) => (hold = r));
+  let call = 0;
+
+  const { window } = await boot({
+    'games/gallery': async ({ url }) => {
+      call++;
+      const nested = url.includes('path=screens');
+      if (!nested) await gate; // первый запрос отвечает последним
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({ cover: '', items: [{ name: nested ? 'ИЗ ПАПКИ.png' : 'ИЗ КОРНЯ.png', size: 1 }] }),
+      };
+    },
+  });
+  t.after(() => window.close());
+
+  const sheet = await open(window, '#games', 'gallery');
+  await until(() => call >= 1);
+
+  // Уходим в подпапку, пока корень ещё отвечает
+  sheet.querySelector('[data-sheet-body]').innerHTML =
+    '<button type="button" data-go="screens">screens</button>';
+  sheet.querySelector('[data-go]').click();
+  await until(() => call >= 2);
+  await until(() => text(sheet).includes('ИЗ ПАПКИ.png'));
+
+  hold();
+  await settle(40);
+
+  assert.ok(text(sheet).includes('ИЗ ПАПКИ.png'), 'опоздавший ответ затёр свежий');
+  assert.ok(!text(sheet).includes('ИЗ КОРНЯ.png'), 'на экране содержимое прошлой папки');
+});

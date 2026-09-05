@@ -323,7 +323,7 @@
                       <td>${stateBadge[v.state]}</td>
                       <td class="act">
                         ${v.state === 'active' ? '' : `<button class="btn btn--text" type="button" data-act="launcher.activate" data-args='{"version":"${esc(v.version)}"}'>Активировать</button>`}
-                        ${v.state === 'active' ? '' : `<button class="btn btn--danger btn--text" type="button" data-act="launcher.delete" data-args='{"version":"${esc(v.version)}"}'>Удалить</button>`}
+                        ${v.state === 'active' ? '' : `<button class="btn btn--danger btn--text" type="button" data-act="launcher.delete" data-args='{"version":"${esc(v.version)}","active":${v.state === 'active'}}'>Удалить</button>`}
                       </td>
                     </tr>`,
                   empty: 'Ни одной версии не загружено',
@@ -661,7 +661,6 @@
            пустой ряд, один день и ряд из одних нулей ломали её молча. */
         const w = 640;
         const h = 140;
-        const line = (key, color) => V().sparkLine(D.days.map((d) => d[key]), { width: w, height: h, color: color });
         const sum = (k) => D.days.reduce((a, d) => a + (Number(d[k]) || 0), 0);
         const share = sum('updates') > 0 ? sum('errors') / sum('updates') : 0;
 
@@ -699,16 +698,20 @@
 
           ${card(
             'Динамика',
-            `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none" role="img" aria-label="Запуски игр, обновления и ошибки за 30 дней">
-               ${line('launches', 'var(--ember)')}
-               ${line('updates', 'var(--ok)')}
-               ${line('errors', 'var(--bad)')}
-             </svg>
-             <div class="btn-row" style="margin-top: var(--s2)">
-               <span class="badge badge--accent"><span class="dot"></span>запуски игр</span>
-               <span class="badge badge--ok"><span class="dot"></span>обновления</span>
-               <span class="badge badge--bad"><span class="dot"></span>ошибки</span>
-             </div>`
+            V().chart(
+              [
+                { title: 'запуски игр', color: 'var(--ember)', values: D.days.map((d) => d.launches) },
+                { title: 'обновления', color: 'var(--ok)', values: D.days.map((d) => d.updates) },
+                { title: 'ошибки', color: 'var(--bad)', values: D.days.map((d) => d.errors) },
+              ],
+              {
+                width: w,
+                height: h,
+                from: (D.days[0] || {}).date || '',
+                to: (D.days.at(-1) || {}).date || '',
+                label: `Запуски игр, обновления и ошибки за ${metricsFilter.days} дней`,
+              }
+            )
           )}`;
       },
     },
@@ -825,6 +828,21 @@
     document.addEventListener('keydown', onKey);
     back.querySelector('[data-sheet-close]').focus();
     return h;
+  }
+
+  /* Сторож опоздавших ответов.
+
+     Листы со списками читают сервер на каждый шаг: перешли в папку,
+     сменили страницу, нажали поиск. Ответы возвращаются не в том
+     порядке, в каком уходили, и опоздавший затирает свежий — на экране
+     оказывается содержимое прошлой папки, а подпись пути говорит про
+     новую. Считаем запросы и отбрасываем всё, кроме последнего. */
+  function latest() {
+    let seq = 0;
+    return {
+      start: () => ++seq,
+      fresh: (n) => n === seq,
+    };
   }
 
   /** Кнопки подвала листа по описанию из `views.js`. */
@@ -1280,11 +1298,16 @@
       }
     });
 
+    const seq = latest();
+
     async function load() {
+      const mine = seq.start();
       try {
         const got = await API.newsAssets(path);
+        if (!seq.fresh(mine)) return;
         entries = (got && (got.items || got.entries)) || [];
       } catch (err) {
+        if (!seq.fresh(mine)) return;
         sheet.body('<div class="empty"><b>Не прочиталось</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
         return;
       }
@@ -1383,12 +1406,17 @@
       }
     });
 
+    const seq = latest();
+
     async function load() {
+      const mine = seq.start();
       try {
         const got = await API.gallery(gameId, path);
+        if (!seq.fresh(mine)) return;
         entries = (got && (got.items || got.entries)) || [];
         cover = got && got.cover !== undefined ? got.cover : cover;
       } catch (err) {
+        if (!seq.fresh(mine)) return;
         sheet.body('<div class="empty"><b>Не прочиталось</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
         return;
       }
@@ -1785,11 +1813,15 @@
       foot: '<button class="btn" type="button" data-flow="byUrl">Вставить ссылку на пакет</button>',
     });
 
+    const seq = latest();
+
     async function load() {
+      const mine = seq.start();
       const bar = sheet.root.querySelector('[data-catalog-bar]');
       if (bar) bar.setAttribute('aria-busy', 'true');
       try {
         const got = await API.modsCatalog({ gameId: pack.gameId, q: st.q, ordering: st.ordering, page: st.page });
+        if (!seq.fresh(mine)) return;
         items = (got && got.results) || [];
         st.count = Number((got && got.count) || 0);
         /* «Есть ли ещё» считается по полной странице, а не по счётчику:
@@ -1797,6 +1829,7 @@
            страница обиднее лишней стрелки. */
         st.hasMore = items.length >= st.perPage;
       } catch (err) {
+        if (!seq.fresh(mine)) return;
         sheet.body(
           V().catalogBar(st) +
             '<div class="empty"><b>Каталог недоступен</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>'
@@ -2068,7 +2101,7 @@
       try {
         const got = await API.feedbackLogs(feedback.id);
         text = typeof got === 'string' ? got : '';
-        sheet.body(V().logsView(text));
+        sheet.body(V().logsView({ logs: text, logBytes: feedback.logBytes }));
       } catch (err) {
         sheet.body('<div class="empty"><b>Журнал не пришёл</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
       }

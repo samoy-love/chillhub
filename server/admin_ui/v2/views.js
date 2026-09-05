@@ -1042,7 +1042,7 @@
    * молча не рисует ничего: пустой ряд, ряд из одной точки и ряд из
    * одних нулей — так выглядит первый день после чистки метрик.
    */
-  function sparkPoints(values, width, height) {
+  function sparkPoints(values, width, height, scaleMax) {
     const nums = (values || []).map((v) => {
       const n = Number(v);
       return Number.isFinite(n) ? n : 0;
@@ -1051,7 +1051,9 @@
 
     const w = Number(width) || 0;
     const h = Number(height) || 0;
-    const max = Math.max(...nums);
+    /* Общий масштаб, если задан: ряды, нарисованные каждый в своём,
+       выглядят сопоставимыми, не будучи ими. */
+    const max = Number(scaleMax) > 0 ? Number(scaleMax) : Math.max(...nums);
     // Ровный ряд рисуем по низу, а не делим на ноль
     const scale = max > 0 ? h / max : 0;
     const step = nums.length > 1 ? w / (nums.length - 1) : 0;
@@ -1061,10 +1063,65 @@
       .join(' ');
   }
 
+  /**
+   * График нескольких рядов с подписанными осями.
+   *
+   * Подписи — не украшение: ломаная без них не отвечает даже на «84 или
+   * 8400», и по ней нельзя сказать, три дня она покрывает или девяносто.
+   * Ось значений подписана тремя делениями (ноль, середина, максимум),
+   * ось времени — краями периода.
+   *
+   * Все ряды делят один масштаб: нарисованные каждый в своём, они
+   * выглядят сопоставимыми, не будучи ими, — ошибки на фоне запусков
+   * казались бы такими же частыми.
+   */
+  function chart(series, opts) {
+    const o = opts || {};
+    const rows = (series || []).filter((r) => r && Array.isArray(r.values) && r.values.length);
+    const w = Number(o.width) || 640;
+    const h = Number(o.height) || 140;
+    const f = F();
+
+    if (!rows.length) {
+      return '<div class="empty"><b>Событий за период нет</b><span>Либо их не было, либо метрики чистили</span></div>';
+    }
+
+    const all = rows.reduce((a, r) => a.concat(r.values.map((v) => Number(v) || 0)), []);
+    const max = Math.max(...all, 0);
+    const label = o.format || ((n) => f.dec(n, 0));
+
+    const lines = rows
+      .map((r) => sparkLine(r.values, { width: w, height: h, color: r.color, max: max }))
+      .join('');
+
+    const ticks = [max, max / 2, 0]
+      .map(
+        (v, i) =>
+          '<span class="tick" style="top:' + Math.round((i / 2) * 100) + '%">' + esc(label(v)) + '</span>'
+      )
+      .join('');
+
+    const legend = rows
+      .map((r) => '<span class="badge" style="--dot:' + esc(r.color) + '"><span class="dot"></span>' + esc(r.title) + '</span>')
+      .join('');
+
+    return (
+      '<div class="chart">' +
+      '<div class="chart-y">' + ticks + '</div>' +
+      '<svg viewBox="0 0 ' + w + ' ' + h + '" width="100%" height="' + h +
+      '" preserveAspectRatio="none" role="img" aria-label="' + esc(o.label || 'График') + '">' +
+      lines +
+      '</svg>' +
+      '<div class="chart-x"><span>' + esc(o.from || '') + '</span><span>' + esc(o.to || '') + '</span></div>' +
+      '</div>' +
+      '<div class="btn-row">' + legend + '</div>'
+    );
+  }
+
   /** Ломаная одного ряда. Пустой ряд — пустая строка, а не битый тег. */
   function sparkLine(values, opts) {
     const o = opts || {};
-    const points = sparkPoints(values, o.width, o.height);
+    const points = sparkPoints(values, o.width, o.height, o.max);
     if (!points) return '';
     return (
       '<polyline fill="none" stroke="' + esc(o.color || 'currentColor') +
@@ -1314,13 +1371,31 @@
 
   /* ---------- Журналы обращения ---------- */
 
-  /** Журнал, приложенный игроком. */
-  function logsView(text2) {
-    const t = String(text2 || '').trim();
-    if (!t) {
+  /**
+   * Журнал, приложенный игроком.
+   *
+   * Показывается ХВОСТ, а не начало: авария всегда в конце, а начало —
+   * загрузка лаунчера, одинаковая у всех. Целиком в разметку он не
+   * кладётся: журнал бывает до мегабайта, и панель подвисает ровно на
+   * том обращении, которое открыли потому, что у человека сломалось.
+   *
+   * Решение о хвосте принимает `feedback-logs.js` версии 1.0 — оно
+   * написано и покрыто тестами, переписывать его заново незачем.
+   */
+  function logsView(item, logs) {
+    const L = logs || (typeof window !== 'undefined' && window.feedbackLogsView);
+    const src = typeof item === 'string' ? { logs: item } : item || {};
+    const view = L
+      ? L(src)
+      : { has: Boolean(src.logs), text: String(src.logs || ''), note: '', truncated: false };
+
+    if (!view.has) {
       return '<div class="empty"><b>Журнала нет</b><span>Игрок его не приложил — обращение от этого не хуже</span></div>';
     }
-    return '<pre class="log scroll scroll--lg">' + esc(t) + '</pre>';
+    return (
+      (view.note ? '<p class="note">' + esc(view.note) + '</p>' : '') +
+      '<pre class="log scroll scroll--lg">' + esc(view.text) + '</pre>'
+    );
   }
 
   /* ---------- Подсказка из Thunderstore ---------- */
@@ -1460,6 +1535,7 @@
     diffCounts,
     sparkPoints,
     sparkLine,
+    chart,
     resolvePlan,
     modVersions,
     modsDiff,

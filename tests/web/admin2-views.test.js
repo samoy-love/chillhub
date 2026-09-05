@@ -13,6 +13,21 @@ const News = require('../../server/admin_ui/v2/news.js');
 const Gallery = require('../../server/admin_ui/v2/gallery.js');
 const Tuning = require('../../server/admin_ui/v2/tuning.js');
 
+/* Решение о хвосте журнала принимает модуль 1.0 — панель 2.0
+   переиспользует его как есть. */
+const Logs = (() => {
+  const fs = require('node:fs');
+  const vm = require('node:vm');
+  const path = require('node:path');
+  const sandbox = { window: {} };
+  vm.createContext(sandbox);
+  vm.runInContext(
+    fs.readFileSync(path.join(__dirname, '..', '..', 'server/admin_ui/feedback-logs.js'), 'utf8'),
+    sandbox
+  );
+  return sandbox.window;
+})();
+
 /* ---------- Оболочка ---------- */
 
 test('лист называет дело и в заголовке, и в метке для читалки', () => {
@@ -384,15 +399,37 @@ test('пустой каталог объясняет, что делать со �
 /* ---------- Журналы ---------- */
 
 test('отсутствующий журнал — не ошибка', () => {
-  const html = V.logsView('');
+  const html = V.logsView('', Logs.feedbackLogsView);
   assert.match(html, /Журнала нет/);
   assert.match(html, /обращение от этого не хуже/);
 });
 
 test('журнал не исполняется как разметка', () => {
   // Текст пишет игрок, и в нём бывает что угодно
-  const html = V.logsView('<script>alert(1)</script>');
+  const html = V.logsView('<script>alert(1)</script>', Logs.feedbackLogsView);
   assert.ok(!html.includes('<script>'));
+});
+
+test('длинный журнал обрезается с конца, а не с начала', () => {
+  // Авария всегда в конце, а начало — загрузка лаунчера, одинаковая у всех
+  const long = 'строка загрузки\n'.repeat(20000) + 'ВОТ ЗДЕСЬ СЛОМАЛОСЬ';
+  const html = V.logsView({ logs: long }, Logs.feedbackLogsView);
+  assert.ok(html.includes('ВОТ ЗДЕСЬ СЛОМАЛОСЬ'), 'потерян конец журнала');
+  assert.ok(html.length < long.length, 'журнал не обрезан вовсе');
+});
+
+test('подпись обрезанного журнала называет полный объём, а не показанный', () => {
+  // Иначе «64 КБ» читается как весь журнал, и в файл никто не полезет
+  const long = 'x'.repeat(300 * 1024);
+  const html = V.logsView({ logs: long }, Logs.feedbackLogsView);
+  assert.match(html, /300 КБ/);
+  assert.match(html, /показан конец/);
+});
+
+test('короткий журнал показывается целиком и без оговорок', () => {
+  const html = V.logsView({ logs: 'две строки\nвсего' }, Logs.feedbackLogsView);
+  assert.match(html, /две строки/);
+  assert.ok(!/показан конец/.test(html));
 });
 
 /* ---------- Переезд со старой сборки ---------- */
@@ -644,4 +681,57 @@ test('версия и игра не исполняются как разметк
   const html = V.modVersions([{ version: '"><script>x</script>' }], { gameId: '"><b>' });
   assert.ok(!html.includes('<script>'));
   assert.ok(!html.includes('<b>'));
+});
+
+/* ---------- График ---------- */
+
+test('у графика подписаны обе оси', () => {
+  // Ломаная без подписей не отвечает даже на «84 или 8400», и по ней
+  // нельзя сказать, три дня она покрывает или девяносто
+  const html = V.chart([{ title: 'запуски', color: 'var(--ember)', values: [10, 40, 84] }], {
+    from: '06.08',
+    to: '05.09',
+  });
+  assert.match(html, /84/);
+  assert.match(html, /42/, 'нет середины шкалы');
+  assert.match(html, />0</, 'нет нуля');
+  assert.match(html, /06\.08/);
+  assert.match(html, /05\.09/);
+});
+
+test('ряды делят один масштаб, а не каждый свой', () => {
+  // В своём масштабе редкие ошибки выглядят такими же частыми, как запуски
+  const html = V.chart(
+    [
+      { title: 'много', color: 'a', values: [0, 100] },
+      { title: 'мало', color: 'b', values: [0, 1] },
+    ],
+    { width: 100, height: 50 }
+  );
+  const lines = [...html.matchAll(/points="([^"]+)"/g)].map((m) => m[1]);
+  assert.strictEqual(lines.length, 2);
+  assert.ok(lines[0].endsWith('0.0'), 'верхняя точка большого ряда не наверху: ' + lines[0]);
+  assert.ok(!lines[1].endsWith('0.0'), 'маленький ряд нарисован в своём масштабе: ' + lines[1]);
+});
+
+test('в легенде названы все ряды', () => {
+  const html = V.chart(
+    [
+      { title: 'запуски игр', color: 'a', values: [1] },
+      { title: 'ошибки', color: 'b', values: [1] },
+    ],
+    {}
+  );
+  assert.match(html, /запуски игр/);
+  assert.match(html, /ошибки/);
+});
+
+test('пустой период объясняется, а не рисует пустую рамку', () => {
+  assert.match(V.chart([], {}), /Событий за период нет/);
+  assert.match(V.chart([{ title: 'x', values: [] }], {}), /метрики чистили/);
+});
+
+test('график называет себя читалке', () => {
+  const html = V.chart([{ title: 'x', color: 'a', values: [1, 2] }], { label: 'Запуски за 30 дней' });
+  assert.match(html, /aria-label="Запуски за 30 дней"/);
 });

@@ -168,3 +168,27 @@ test('чтение прочитанного и возврат в новые — 
   await A.run('inbox.read', { id: '7', read: false }, { api });
   assert.deepStrictEqual(seen, ['read:7', 'unread:7']);
 });
+
+/* ---------- Что обещает вопрос ---------- */
+
+test('удаление активной версии предупреждает об откате всех лаунчеров', () => {
+  // Сервер не убирает latest.json, а переставляет его на предыдущую
+  // версию — и все установленные лаунчеры уезжают на неё
+  const q = A.question('launcher.delete', { version: '1.6.25', active: true });
+  assert.match(q.body, /ПРЕДЫДУЩАЯ|предыдущая/);
+  assert.match(q.body, /откат/i);
+});
+
+test('удаление старой версии не пугает откатом, которого не будет', () => {
+  // Пугать там, где ничего не произойдёт, — верный способ приучить
+  // жать «да» не читая
+  const q = A.question('launcher.delete', { version: '1.6.20', active: false });
+  assert.ok(!/откат/i.test(q.body), q.body);
+  assert.match(q.body, /ничего не изменится/);
+});
+
+test('оба вопроса называют версию, которую удаляют', () => {
+  for (const active of [true, false]) {
+    assert.match(A.question('launcher.delete', { version: '1.6.25', active }).title, /1\.6\.25/);
+  }
+});
