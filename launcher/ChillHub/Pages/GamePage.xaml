@@ -10,7 +10,7 @@
          из-за которых страница игры выглядела приложением из другого проекта. -->
     <SolidColorBrush x:Key="Brush.ProgressBorder" Color="{DynamicResource Color.Border}"/>
     <SolidColorBrush x:Key="Brush.ProgressTrack" Color="{DynamicResource Color.Track}"/>
-    <SolidColorBrush x:Key="Brush.GameAccentGradient" Color="{DynamicResource Color.Accent}"/>
+    <SolidColorBrush x:Key="Brush.GameAccent" Color="{DynamicResource Color.Accent}"/>
 
     <Style x:Key="Style.ProgressBar.Game" TargetType="ProgressBar">
       <Setter Property="Height" Value="4"/>
@@ -64,12 +64,13 @@
 
     <!-- Подпись поля в карточке сведений -->
     <Style x:Key="Style.FieldLabel" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Brush.TextMuted}"/>
       <Setter Property="FontSize" Value="12"/>
       <Setter Property="Margin" Value="0,0,0,2"/>
     </Style>
     <Style x:Key="Style.FieldValue" TargetType="TextBlock">
       <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+      <Setter Property="FontFamily" Value="Consolas"/>
       <Setter Property="FontSize" Value="14"/>
       <Setter Property="TextWrapping" Value="Wrap"/>
       <Setter Property="Margin" Value="0,0,16,12"/>
@@ -81,11 +82,14 @@
         </Trigger>
       </Style.Triggers>
     </Style>
+    <!-- Заголовок раздела — подпись к карточке, а не второй заголовок страницы.
+         Мелкие прописные моноширинным: карточек на экране три, и полужирный 16-й в
+         каждой спорил с названием игры в шапке. -->
     <Style x:Key="Style.SectionHeader" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="{DynamicResource Brush.Title}"/>
-      <Setter Property="FontSize" Value="16"/>
-      <Setter Property="FontWeight" Value="SemiBold"/>
-      <Setter Property="Margin" Value="0,0,0,8"/>
+      <Setter Property="Foreground" Value="{DynamicResource Brush.TextMuted}"/>
+      <Setter Property="FontFamily" Value="Consolas"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="Margin" Value="0,0,0,12"/>
     </Style>
     <!-- Карточка в списке changelog. Свой стиль, а не общий из HomePage:
          Style.ListBoxItem.SelectableCard объявлен в ресурсах HomePage и снаружи недоступен. -->
@@ -129,7 +133,7 @@
       </Grid.ColumnDefinitions>
       <!-- Всё в шапке центрируется по вертикали относительно обложки: раньше «Назад»
            висел по верху, а заголовок с чипом — по центру, и шапка выглядела рыхлой. -->
-      <Button Grid.Column="0" Name="BackBtn" Style="{DynamicResource Style.Button.Back}"
+      <Button Grid.Column="0" Name="BackBtn" Content="К библиотеке" Style="{DynamicResource Style.Button.Back}"
               Click="BackBtn_Click" VerticalAlignment="Center"/>
       <Border Grid.Column="1" Width="64" Height="64" Margin="16,0,0,0" CornerRadius="{DynamicResource Radius.M}"
               Background="{DynamicResource Brush.Surface}" ClipToBounds="True">
@@ -143,7 +147,7 @@
       <StackPanel Grid.Column="2" Margin="16,0,0,0" VerticalAlignment="Center">
         <TextBlock Name="TitleText" Text="Игра" FontSize="24" FontWeight="Bold"
                    Foreground="{DynamicResource Brush.Title}" TextTrimming="CharacterEllipsis"/>
-        <Border Name="StateBadge" CornerRadius="{DynamicResource Radius.S}" Padding="8,3" Margin="0,6,0,0"
+        <Border Name="StateBadge" CornerRadius="999" Padding="9,3" Margin="0,6,0,0"
                 HorizontalAlignment="Left"
                 Background="{DynamicResource Brush.Surface}"
                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
@@ -156,9 +160,12 @@
     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
       <Grid Margin="0,0,8,0">
         <Grid.ColumnDefinitions>
+          <!-- Широкая колонка чтения и узкая полоса действий, как в макете: сведения и
+               история занимают столько, сколько нужно тексту, а кнопки — ровно 340.
+               Две равные колонки растягивали ряд кнопок на пол-экрана. -->
           <ColumnDefinition Width="*"/>
           <ColumnDefinition Width="16"/>
-          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="340"/>
         </Grid.ColumnDefinitions>
 
         <!-- ЛЕВАЯ КОЛОНКА: сведения, действия, версии -->
@@ -167,7 +174,7 @@
           <!-- Сведения об установке -->
           <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
             <StackPanel>
-              <TextBlock Text="Сведения" Style="{StaticResource Style.SectionHeader}"/>
+              <TextBlock Text="СВЕДЕНИЯ" Style="{StaticResource Style.SectionHeader}"/>
               <Grid>
                 <Grid.ColumnDefinitions>
                   <ColumnDefinition Width="*"/>
@@ -236,149 +243,309 @@
             </StackPanel>
           </Border>
 
-          <!-- Действия и прогресс -->
-          <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
-            <StackPanel>
-              <TextBlock Text="Действия" Style="{StaticResource Style.SectionHeader}"/>
-              <!-- Кнопки «Играть» здесь нет намеренно: запуск игры остаётся на главной странице -->
-              <!-- Основное действие — во всю ширину, вспомогательные — парой одинаковой ширины
-                   под ним. WrapPanel с разными MinWidth раскладывал три кнопки как попало:
-                   две в ряд и одна сиротой на второй строке. -->
-              <Button Name="ActionBtn" Content="Установить" Height="40" Margin="0,0,0,8"
-                      HorizontalAlignment="Stretch"
-                      Style="{StaticResource Style.Button.GamePrimary}" Click="ActionBtn_Click"/>
-              <!-- Статус и полоса — сразу ПОД кнопкой, которой они принадлежат: «Отмена»
-                   наверху и «5% · осталось 14 мин» в самом низу карточки, через ряд
-                   посторонних кнопок, читались как две разные истории. -->
-              <!-- Строка статуса подписана: одинокое «Готов» под кнопками не читалось как
-                   состояние операции. -->
-              <Grid Margin="0,4,0,0">
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="Auto"/>
-                  <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="Статус" Style="{StaticResource Style.FieldLabel}"
-                           Margin="0,0,8,0" VerticalAlignment="Center"/>
-                <TextBlock Grid.Column="1" Name="StatusText" Text="Готов" FontWeight="SemiBold" FontSize="14"
-                           TextWrapping="Wrap" Foreground="{DynamicResource Brush.Text}"/>
-              </Grid>
-              <!-- Полосу видно, только пока что-то идёт: в покое она стояла в нуле под
-                   надписью «Готов» и читалась как остановившийся процесс — ровно та же
-                   правка, что и в нижней панели главного экрана. -->
-              <ProgressBar Name="SyncProgressBar" Minimum="0" Maximum="100" Value="0" Margin="0,8,0,0">
-                <ProgressBar.Style>
-                  <Style TargetType="ProgressBar" BasedOn="{StaticResource Style.ProgressBar.Game}">
-                    <Setter Property="Visibility" Value="Visible"/>
-                    <Style.Triggers>
-                      <MultiDataTrigger>
-                        <MultiDataTrigger.Conditions>
-                          <Condition Binding="{Binding Value, RelativeSource={RelativeSource Self}}" Value="0"/>
-                          <Condition Binding="{Binding IsIndeterminate, RelativeSource={RelativeSource Self}}" Value="False"/>
-                        </MultiDataTrigger.Conditions>
-                        <Setter Property="Visibility" Value="Collapsed"/>
-                      </MultiDataTrigger>
-                    </Style.Triggers>
-                  </Style>
-                </ProgressBar.Style>
-              </ProgressBar>
-              <!-- Пустые строки прячутся целиком: две пустые TextBlock с отступами держали
-                   ~40px пустоты между статусом и кнопкой папки, пока ничего не качалось. -->
-              <TextBlock Name="SpeedEtaText" Text="" FontSize="12" Margin="0,6,0,0"
-                         Foreground="{DynamicResource Brush.TextSecondary}"
-                         Style="{StaticResource Style.HideWhenEmpty}"/>
-              <TextBlock Name="FilesSizeText" Text="" FontSize="12"
-                         Foreground="{DynamicResource Brush.TextSecondary}"
-                         Style="{StaticResource Style.HideWhenEmpty}"/>
-              <!-- Обслуживание. Прежде здесь стояла одна кнопка «Открыть папку игры», а
-                   всё остальное, что можно сделать с установленной игрой, жило только в
-                   контекстном меню списка на главной — то есть находилось случайно.
-                   «Открыть логи» отсюда убрана: журналы лаунчера — не свойство игры, они
-                   открываются из настроек («О программе»), а здесь эта кнопка выглядела
-                   инструментом разработчика на игровом экране.
-                   Удаления в этой группе нет намеренно: оно живёт в контекстном меню
-                   списка вместе со своим подтверждением и защитой от удаления во время
-                   закачки. Вторая копия разрушающего действия — вторая копия и этих
-                   защит, а расходятся они молча. -->
-              <Border Margin="0,16,0,0" Padding="0,12,0,0" BorderThickness="0,1,0,0"
-                      BorderBrush="{DynamicResource Brush.Border}">
-                <StackPanel>
-                  <TextBlock Text="Обслуживание" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,8"
-                             Foreground="{DynamicResource Brush.TextSecondary}"/>
-                  <Button Name="VerifyFilesBtn" Content="Проверить файлы" Height="36"
-                          HorizontalAlignment="Stretch"
-                          ToolTip="Сверить файлы игры с сервером и докачать испорченные"
-                          Style="{DynamicResource Style.Button.GhostNeutral}" Click="VerifyFilesBtn_Click"/>
-                  <Button Name="ShortcutBtn" Content="Ярлык на рабочий стол" Height="36" Margin="0,8,0,0"
-                          HorizontalAlignment="Stretch"
-                          ToolTip="Создать ярлык, запускающий игру через лаунчер"
-                          Style="{DynamicResource Style.Button.GhostNeutral}" Click="ShortcutBtn_Click"/>
-                  <Button Name="OpenFolderBtn" Content="Открыть папку игры" Height="36" Margin="0,8,0,0"
-                          HorizontalAlignment="Stretch"
-                          Style="{DynamicResource Style.Button.GhostNeutral}" Click="OpenFolderBtn_Click"/>
-                </StackPanel>
-              </Border>
-            </StackPanel>
-          </Border>
+          <!-- Что менялось в сборке — в широкой колонке рядом со сведениями: это чтение,
+               а не действие. -->
+          <!-- ПРАВАЯ КОЛОНКА: changelog (новости игры) -->
+
+        <!-- Карточка по высоте содержимого, а не растянута до низа: растянутая упиралась в
+
+             край окна, пока левая колонка заканчивалась раньше, и низ страницы выглядел рваным. -->
+
+        <Border Style="{DynamicResource Style.Card}" Padding="16" VerticalAlignment="Top">
+
+          <Grid>
+
+            <Grid.RowDefinitions>
+
+              <RowDefinition Height="Auto"/>
+
+              <RowDefinition Height="*"/>
+
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="0,0,0,8">
+
+              <Grid.ColumnDefinitions>
+
+                <ColumnDefinition Width="*"/>
+
+                <ColumnDefinition Width="Auto"/>
+
+              </Grid.ColumnDefinitions>
+
+              <StackPanel Grid.Column="0">
+
+                <TextBlock Text="ЧТО МЕНЯЛОСЬ В СБОРКЕ" Style="{StaticResource Style.SectionHeader}" Margin="0"/>
+
+                <TextBlock Text="Новости и списки изменений этой игры" FontSize="11"
+
+                           Foreground="{DynamicResource Brush.TextSecondary}"/>
+
+              </StackPanel>
+
+              <Button Grid.Column="1" Name="RefreshChangelogBtn" Width="28" Height="28"
+
+                      VerticalAlignment="Top"
+
+                      Style="{DynamicResource Style.Button.GhostNeutral}" Padding="0"
+
+                      ToolTip="Обновить историю изменений" Click="RefreshChangelog_Click">
+
+                <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="12"
+
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+
+              </Button>
+
+            </Grid>
+
+            <Grid Grid.Row="1" MinHeight="240">
+
+              <TextBlock Name="ChangelogEmptyText" Text="Записей пока нет" Visibility="Collapsed"
+
+                         Foreground="{DynamicResource Brush.TextSecondary}" FontSize="12"
+
+                         HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap"
+
+                         TextAlignment="Center"/>
+
+              <ListBox Name="ChangelogList" Background="Transparent" BorderThickness="0"
+
+                       SelectionChanged="ChangelogList_SelectionChanged"
+
+                       ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+
+                       HorizontalContentAlignment="Stretch">
+
+                <ListBox.ItemContainerStyle>
+
+                  <Style TargetType="ListBoxItem" BasedOn="{StaticResource Style.ListBoxItem.ChangelogCard}"/>
+
+                </ListBox.ItemContainerStyle>
+
+                <ListBox.ItemTemplate>
+
+                  <DataTemplate>
+
+                    <Border Padding="12" Margin="0,1,0,1" HorizontalAlignment="Stretch"
+
+                            BorderThickness="0" Background="Transparent">
+
+                      <StackPanel>
+
+                        <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap"/>
+
+                        <TextBlock Text="{Binding CreatedAt, Converter={StaticResource RuDateConv}}"
+
+                                   Foreground="{DynamicResource Brush.TextSecondary}" FontSize="12" Margin="0,2,0,6"/>
+
+                        <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" TextTrimming="WordEllipsis"
+
+                                   FontSize="12" LineStackingStrategy="BlockLineHeight" LineHeight="17" MaxHeight="51"/>
+
+                      </StackPanel>
+
+                    </Border>
+
+                  </DataTemplate>
+
+                </ListBox.ItemTemplate>
+
+              </ListBox>
+
+            </Grid>
+
+          </Grid>
+
+        </Border>
 
         </StackPanel>
 
-        <!-- ПРАВАЯ КОЛОНКА: changelog (новости игры) -->
-        <!-- Карточка по высоте содержимого, а не растянута до низа: растянутая упиралась в
-             край окна, пока левая колонка заканчивалась раньше, и низ страницы выглядел рваным. -->
-        <Border Grid.Column="2" Style="{DynamicResource Style.Card}" Padding="16" VerticalAlignment="Top">
-          <Grid>
-            <Grid.RowDefinitions>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="*"/>
-            </Grid.RowDefinitions>
-            <Grid Grid.Row="0" Margin="0,0,0,8">
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-              </Grid.ColumnDefinitions>
-              <StackPanel Grid.Column="0">
-                <TextBlock Text="История изменений" Style="{StaticResource Style.SectionHeader}" Margin="0"/>
-                <TextBlock Text="Новости и списки изменений этой игры" FontSize="11"
-                           Foreground="{DynamicResource Brush.TextSecondary}"/>
-              </StackPanel>
-              <Button Grid.Column="1" Name="RefreshChangelogBtn" Width="28" Height="28"
-                      VerticalAlignment="Top"
-                      Style="{DynamicResource Style.Button.GhostNeutral}" Padding="0"
-                      ToolTip="Обновить историю изменений" Click="RefreshChangelog_Click">
-                <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="12"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
-              </Button>
-            </Grid>
-            <Grid Grid.Row="1" MinHeight="240">
-              <TextBlock Name="ChangelogEmptyText" Text="Записей пока нет" Visibility="Collapsed"
-                         Foreground="{DynamicResource Brush.TextSecondary}" FontSize="12"
-                         HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap"
-                         TextAlignment="Center"/>
-              <ListBox Name="ChangelogList" Background="Transparent" BorderThickness="0"
-                       SelectionChanged="ChangelogList_SelectionChanged"
-                       ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                       HorizontalContentAlignment="Stretch">
-                <ListBox.ItemContainerStyle>
-                  <Style TargetType="ListBoxItem" BasedOn="{StaticResource Style.ListBoxItem.ChangelogCard}"/>
-                </ListBox.ItemContainerStyle>
-                <ListBox.ItemTemplate>
-                  <DataTemplate>
-                    <Border Padding="12" Margin="0,1,0,1" HorizontalAlignment="Stretch"
-                            BorderThickness="0" Background="Transparent">
-                      <StackPanel>
-                        <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap"/>
-                        <TextBlock Text="{Binding CreatedAt, Converter={StaticResource RuDateConv}}"
-                                   Foreground="{DynamicResource Brush.TextSecondary}" FontSize="12" Margin="0,2,0,6"/>
-                        <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" TextTrimming="WordEllipsis"
-                                   FontSize="12" LineStackingStrategy="BlockLineHeight" LineHeight="17" MaxHeight="51"/>
-                      </StackPanel>
-                    </Border>
-                  </DataTemplate>
-                </ListBox.ItemTemplate>
-              </ListBox>
-            </Grid>
-          </Grid>
-        </Border>
+        <!-- ПРАВАЯ КОЛОНКА: как запустить и обслуживание. Узкая полоса действий рядом
+             с широкой колонкой чтения — так же, как в макете. -->
+        <StackPanel Grid.Column="2">
+          <!-- Действия и прогресс -->
+
+          <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
+
+            <StackPanel>
+
+              <TextBlock Text="СОСТОЯНИЕ" Style="{StaticResource Style.SectionHeader}"/>
+
+              <!-- Раздел называется «Состояние», а не «Как запустить»: кнопок запуска здесь нет —
+                   играют с главной страницы. Здесь живёт то, что состояние меняет:
+                   установка, обновление, отмена — и строка о том, что сейчас со сборкой. -->
+
+              <!-- Основное действие — во всю ширину, вспомогательные — парой одинаковой ширины
+
+                   под ним. WrapPanel с разными MinWidth раскладывал три кнопки как попало:
+
+                   две в ряд и одна сиротой на второй строке. -->
+
+              <Button Name="ActionBtn" Content="Установить" Height="40" Margin="0,0,0,8"
+
+                      HorizontalAlignment="Stretch"
+
+                      Style="{StaticResource Style.Button.GamePrimary}" Click="ActionBtn_Click"/>
+
+              <!-- Статус и полоса — сразу ПОД кнопкой, которой они принадлежат: «Отмена»
+
+                   наверху и «5% · осталось 14 мин» в самом низу карточки, через ряд
+
+                   посторонних кнопок, читались как две разные истории. -->
+
+              <!-- Строка статуса подписана: одинокое «Готов» под кнопками не читалось как
+
+                   состояние операции. -->
+
+              <Grid Margin="0,4,0,0">
+
+                <Grid.ColumnDefinitions>
+
+                  <ColumnDefinition Width="Auto"/>
+
+                  <ColumnDefinition Width="*"/>
+
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" Text="Статус" Style="{StaticResource Style.FieldLabel}"
+
+                           Margin="0,0,8,0" VerticalAlignment="Center"/>
+
+                <TextBlock Grid.Column="1" Name="StatusText" Text="Готов" FontWeight="SemiBold" FontSize="14"
+
+                           TextWrapping="Wrap" Foreground="{DynamicResource Brush.Text}"/>
+
+              </Grid>
+
+              <!-- Полосу видно, только пока что-то идёт: в покое она стояла в нуле под
+
+                   надписью «Готов» и читалась как остановившийся процесс — ровно та же
+
+                   правка, что и в нижней панели главного экрана. -->
+
+              <ProgressBar Name="SyncProgressBar" Minimum="0" Maximum="100" Value="0" Margin="0,8,0,0">
+
+                <ProgressBar.Style>
+
+                  <Style TargetType="ProgressBar" BasedOn="{StaticResource Style.ProgressBar.Game}">
+
+                    <Setter Property="Visibility" Value="Visible"/>
+
+                    <Style.Triggers>
+
+                      <MultiDataTrigger>
+
+                        <MultiDataTrigger.Conditions>
+
+                          <Condition Binding="{Binding Value, RelativeSource={RelativeSource Self}}" Value="0"/>
+
+                          <Condition Binding="{Binding IsIndeterminate, RelativeSource={RelativeSource Self}}" Value="False"/>
+
+                        </MultiDataTrigger.Conditions>
+
+                        <Setter Property="Visibility" Value="Collapsed"/>
+
+                      </MultiDataTrigger>
+
+                    </Style.Triggers>
+
+                  </Style>
+
+                </ProgressBar.Style>
+
+              </ProgressBar>
+
+              <!-- Пустые строки прячутся целиком: две пустые TextBlock с отступами держали
+
+                   ~40px пустоты между статусом и кнопкой папки, пока ничего не качалось. -->
+
+              <TextBlock Name="SpeedEtaText" Text="" FontSize="12" Margin="0,6,0,0"
+
+                         Foreground="{DynamicResource Brush.TextSecondary}"
+
+                         Style="{StaticResource Style.HideWhenEmpty}"/>
+
+              <TextBlock Name="FilesSizeText" Text="" FontSize="12"
+
+                         Foreground="{DynamicResource Brush.TextSecondary}"
+
+                         Style="{StaticResource Style.HideWhenEmpty}"/>
+
+              <!-- Обслуживание. Прежде здесь стояла одна кнопка «Открыть папку игры», а
+
+                   всё остальное, что можно сделать с установленной игрой, жило только в
+
+                   контекстном меню списка на главной — то есть находилось случайно.
+
+                   «Открыть логи» отсюда убрана: журналы лаунчера — не свойство игры, они
+
+                   открываются из настроек («О программе»), а здесь эта кнопка выглядела
+
+                   инструментом разработчика на игровом экране.
+
+                   Удаления в этой группе нет намеренно: оно живёт в контекстном меню
+
+                   списка вместе со своим подтверждением и защитой от удаления во время
+
+                   закачки. Вторая копия разрушающего действия — вторая копия и этих
+
+                   защит, а расходятся они молча. -->
+
+              <Border Margin="0,16,0,0" Padding="0,12,0,0" BorderThickness="0,1,0,0"
+
+                      BorderBrush="{DynamicResource Brush.Border}">
+
+                <StackPanel>
+
+                  <TextBlock Text="ОБСЛУЖИВАНИЕ" Style="{StaticResource Style.SectionHeader}"/>
+
+                  <Button Name="VerifyFilesBtn" Content="Проверить файлы" Height="36"
+
+                          HorizontalAlignment="Stretch"
+
+                          ToolTip="Сверить файлы игры с сервером и докачать испорченные"
+
+                          Style="{DynamicResource Style.Button.GhostNeutral}" Click="VerifyFilesBtn_Click"/>
+
+                  <Button Name="ShortcutBtn" Content="Ярлык на рабочий стол" Height="36" Margin="0,8,0,0"
+
+                          HorizontalAlignment="Stretch"
+
+                          ToolTip="Создать ярлык, запускающий игру через лаунчер"
+
+                          Style="{DynamicResource Style.Button.GhostNeutral}" Click="ShortcutBtn_Click"/>
+
+                  <Button Name="OpenFolderBtn" Content="Открыть папку игры" Height="36" Margin="0,8,0,0"
+
+                          HorizontalAlignment="Stretch"
+
+                          Style="{DynamicResource Style.Button.GhostNeutral}" Click="OpenFolderBtn_Click"/>
+
+                  <!-- Разрушающее — отдельной группой и без заливки: красная кнопка в общем
+
+                       ряду перетягивает на себя весь экран. Запреты и сама работа общие с
+
+                       контекстным меню списка (Core.Home.GameDeletion), второй копии защит
+
+                       здесь нет. -->
+
+                  <Button Name="DeleteGameBtn" Content="Удалить сборку с диска" Height="36" Margin="0,16,0,0"
+
+                          HorizontalAlignment="Stretch"
+
+                          ToolTip="Снести файлы игры и её ярлык с рабочего стола"
+
+                          Style="{DynamicResource Style.Button.Danger}" Click="DeleteGameBtn_Click"/>
+
+                </StackPanel>
+
+              </Border>
+
+            </StackPanel>
+
+          </Border>
+        </StackPanel>
       </Grid>
     </ScrollViewer>
 

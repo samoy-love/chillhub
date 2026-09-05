@@ -453,6 +453,19 @@ namespace ChillHub {
             _ = this.OpenShortcutRequestAsync(request);
         }
 
+        /// <summary>
+        /// Открывает главную с выделенной игрой — из новости про эту игру.
+        /// </summary>
+        /// <param name="gameId">Игра из заметки.</param>
+        internal void OpenGameFromNews(string? gameId) {
+            if (string.IsNullOrWhiteSpace(gameId)) {
+                return;
+            }
+
+            this.NavigateToHome();
+            this.homePage?.SelectGameById(gameId);
+        }
+
         private async Task OpenShortcutRequestAsync(Core.Shell.ShortcutRequest request) {
             try {
                 // Именно главная, а не страница игры: запуск, обновление и моды живут

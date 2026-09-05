@@ -16,7 +16,7 @@
            Полосы прогресса берут краски из темы по тем же именам, что и главный экран. -->
       <SolidColorBrush x:Key="Brush.ProgressBorder" Color="{DynamicResource Color.Border}"/>
       <SolidColorBrush x:Key="Brush.ProgressTrack" Color="{DynamicResource Color.Track}"/>
-      <SolidColorBrush x:Key="Brush.VerifyGradient" Color="{DynamicResource Color.Accent}"/>
+      <SolidColorBrush x:Key="Brush.VerifyFill" Color="{DynamicResource Color.Accent}"/>
       <!-- Neutral ghost button style (outline) -->
       <!-- ProgressBar styles copied from HomePage (sizes removed) -->
       <Style x:Key="Style.ProgressBar.Verify" TargetType="ProgressBar">
@@ -26,7 +26,7 @@
               <Grid ClipToBounds="True">
                 <Border CornerRadius="3" Background="{DynamicResource Brush.Border}"/>
                 <!-- Animated indicator for indeterminate state -->
-                <Border x:Name="IndBar" CornerRadius="3" Width="160" HorizontalAlignment="Left" Background="{StaticResource Brush.VerifyGradient}">
+                <Border x:Name="IndBar" CornerRadius="3" Width="160" HorizontalAlignment="Left" Background="{StaticResource Brush.VerifyFill}">
                   <Border.RenderTransform>
                     <TranslateTransform X="-180"/>
                   </Border.RenderTransform>

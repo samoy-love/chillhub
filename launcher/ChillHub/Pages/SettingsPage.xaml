@@ -7,9 +7,9 @@
        в другой оттенок, и слайдеры с чекбоксами настроек отличались по цвету от всего
        остального приложения. -->
   <Page.Resources>
-    <!-- Заголовок раздела: 14/SemiBold, чуть крупнее подписи, ощутимо мельче заголовка страницы -->
+    <!-- Заголовок раздела: крупнее подписи, ощутимо мельче заголовка страницы -->
     <Style x:Key="Style.SettingsSection" TargetType="TextBlock">
-      <Setter Property="FontSize" Value="14"/>
+      <Setter Property="FontSize" Value="15"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="Foreground" Value="{DynamicResource Brush.Title}"/>
       <Setter Property="Margin" Value="0,0,0,10"/>
@@ -28,6 +28,9 @@
     <!-- Узкое числовое поле рядом с ползунком: точное значение проще набрать, чем поймать
          бегунком; ползунок остаётся для «примерно». -->
     <Style x:Key="Style.SettingsNumberBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+      <!-- Моноширинный, как везде, где на экране число: цифры одной ширины не пляшут,
+           когда значение меняется бегунком. -->
+      <Setter Property="FontFamily" Value="Consolas"/>
       <Setter Property="Width" Value="64"/>
       <Setter Property="MinHeight" Value="32"/>
       <Setter Property="Margin" Value="12,0,0,0"/>
@@ -51,7 +54,7 @@
         <ColumnDefinition Width="*"/>
         <ColumnDefinition Width="Auto"/>
       </Grid.ColumnDefinitions>
-      <Button Grid.Column="0" Name="BackBtn" Style="{DynamicResource Style.Button.Back}" Click="BackBtn_Click"/>
+      <Button Grid.Column="0" Name="BackBtn" Content="К библиотеке" Style="{DynamicResource Style.Button.Back}" Click="BackBtn_Click"/>
       <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
         <TextBlock Text="Настройки" Style="{DynamicResource Style.PageTitle}" Margin="16,0,0,0"/>
         <!-- Настройки применяются сразу, кнопки «Сохранить» нет. Подтверждение записи —
@@ -66,7 +69,8 @@
          по вертикали — без прокрутки нижние секции просто обрезались по низу
          страницы. -->
     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-    <StackPanel Orientation="Vertical" VerticalAlignment="Top" Margin="0,0,8,0">
+    <StackPanel Orientation="Vertical" VerticalAlignment="Top" HorizontalAlignment="Center"
+                MaxWidth="720" Margin="0,0,8,0">
       <!-- Storage section -->
       <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
         <StackPanel>
@@ -80,7 +84,7 @@
             <TextBlock Text="Путь" Style="{StaticResource Style.SettingsLabel}"/>
             <!-- Путь применяется по уходу фокуса или Enter, а не на каждую букву:
                  сохранение создаёт папку, и набор пути посимвольно наплодил бы каталогов. -->
-            <TextBox Grid.Column="1" Name="GamesPathBox" Margin="12,0,12,0" MinHeight="32" VerticalContentAlignment="Center"
+            <TextBox Grid.Column="1" Name="GamesPathBox" FontFamily="Consolas" Margin="12,0,12,0" MinHeight="32" VerticalContentAlignment="Center"
                      LostKeyboardFocus="GamesPathBox_LostKeyboardFocus" KeyDown="GamesPathBox_KeyDown"/>
             <Button Grid.Column="2" Name="ChooseBtn" Content="Выбрать" Click="ChooseBtn_Click" Padding="12,0" MinHeight="32" MinWidth="110" Margin="0"/>
           </Grid>
@@ -154,7 +158,7 @@
               <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
             <TextBlock Text="Версия лаунчера" Style="{StaticResource Style.SettingsLabel}"/>
-            <TextBlock Grid.Column="1" Name="VersionText" Text="—" Margin="12,0,0,0" VerticalAlignment="Center"/>
+            <TextBlock Grid.Column="1" Name="VersionText" Text="—" FontFamily="Consolas" Margin="12,0,0,0" VerticalAlignment="Center"/>
             <!-- Номер версии сам по себе ничего не предлагает; рядом с ним ждут кнопку
                  «проверить». Фоновая проверка молчит, когда всё актуально, — эта отвечает. -->
             <Button Grid.Column="2" Name="CheckUpdateBtn" Content="Проверить обновления" Click="CheckUpdateBtn_Click"
