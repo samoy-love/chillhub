@@ -43,6 +43,16 @@ namespace ChillHub.Core.Changelog {
     /// </summary>
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
+            // Значок лаунчера, сайта и админки нарисован заново. В окне
+            // самого лаунчера от этого не меняется ничего: значок виден в
+            // панели задач, на ярлыке и во вкладке браузера, и читать
+            // игроку тут нечего.
+            new ChangelogRelease {
+                Version = "1.6.47",
+                Date = "2026-09-05",
+                Changes = System.Array.Empty<string>(),
+                Technical = true,
+            },
             // Третий заход на тот же выпуск 1.6.44. У 1.6.45 сборка самообновления
             // снова не уехала, и по той же причине — проверка выкатки не дозвонилась
             // до прода. Причину на этот раз нашли и устранили: раннеру был закрыт
