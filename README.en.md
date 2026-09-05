@@ -103,15 +103,16 @@ cd ..\launcher; dotnet test
 ## Tests
 
 Close to two thousand tests on the client (xUnit), several hundred on the
-server (`go test -race`) and a couple of hundred on the web side
+server (`go test -race`) and seven hundred on the web side
 (`node --test`); current coverage is on the codecov badge above. A red run
 stops the deployment.
 
 CI gates more than the test suites: golangci-lint and `go vet` on both Linux
 and Windows, a cross-compile to linux/arm64 as on production, `dotnet format
 --verify-no-changes`, ESLint, Stylelint and HTMLHint for the landing page and
-admin UI, `node --test` for the admin UI's escaping helpers, and govulncheck
-plus a vulnerable-NuGet scan. The hash seam between Go and C# is pinned
+admin UI, `node --test` for the whole site and panel — from response parsing
+to section markup in a real DOM — and govulncheck plus a vulnerable-NuGet
+scan. The hash seam between Go and C# is pinned
 separately (`hashvector_test.go` / `HashVectorTests.cs`), as is the launcher
 manifest against the updater's preserve rules — details in
 [docs/spec.md](docs/spec.md).
