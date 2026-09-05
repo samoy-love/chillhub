@@ -86,6 +86,10 @@ func (c *packageCache) pkg(ctx context.Context, cl *Client, ns, name string) (*P
 					pkg := e.pkg
 					if stale && !e.renewing {
 						e.renewing = true
+						// Свой контекст, а не запроса: тот отменяется, как только
+						// ответ ушёл в браузер, и обновление обрывалось бы на
+						// середине каждый раз.
+						//nolint:gosec,contextcheck // контекст запроса здесь был бы ошибкой, а не упущением: он отменяется, как только ответ ушёл в браузер
 						go c.renew(cl, ns, name, e)
 					}
 					c.mu.Unlock()

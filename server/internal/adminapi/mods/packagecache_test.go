@@ -25,7 +25,7 @@ import (
 // а число обращений — ровно то, что решает задержку.
 
 // countingThunderstore считает обращения к каждому пакету.
-func countingThunderstore(t *testing.T, hits *int32) *httptest.Server {
+func countingThunderstore(t *testing.T, hits *atomic.Int32) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/experimental/package/", func(w http.ResponseWriter, r *http.Request) {
@@ -34,7 +34,7 @@ func countingThunderstore(t *testing.T, hits *int32) *httptest.Server {
 			http.NotFound(w, r)
 			return
 		}
-		atomic.AddInt32(hits, 1)
+		hits.Add(1)
 		_ = json.NewEncoder(w).Encode(Package{
 			Namespace: parts[0],
 			Name:      parts[1],
@@ -45,30 +45,30 @@ func countingThunderstore(t *testing.T, hits *int32) *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
-func TestПакетСпрашиваетсяОдинРазНаВсехЧитателей(t *testing.T) {
-	var hits int32
+func TestPackageAskedOncePerReaders(t *testing.T) {
+	var hits atomic.Int32
 	srv := countingThunderstore(t, &hits)
 	defer srv.Close()
 
 	cl := NewClient(srv.Client()).WithBases(srv.URL, srv.URL+"/cdn").WithInterval(time.Millisecond)
 	var c packageCache
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if _, err := c.pkg(context.Background(), cl, "Moo", "Moo_Modpack"); err != nil {
 			t.Fatalf("запрос %d: %v", i, err)
 		}
 	}
 
-	if got := atomic.LoadInt32(&hits); got != 1 {
+	if got := hits.Load(); got != 1 {
 		t.Fatalf("обращений к Thunderstore: %d, ожидалось 1 — остальные обязаны брать готовое", got)
 	}
 }
 
-func TestОдновременныеЧитателиНеЗаводятСвоихЗапросов(t *testing.T) {
+func TestConcurrentReadersShareOneRequest(t *testing.T) {
 	// Пять `mods/list` приходят одновременно при загрузке панели. Без общего
 	// ожидания каждый начал бы свой запрос за тем же пакетом, и очередь
 	// клиента снова растянулась бы на 320 мс за штуку.
-	var hits int32
+	var hits atomic.Int32
 	srv := countingThunderstore(t, &hits)
 	defer srv.Close()
 
@@ -77,14 +77,12 @@ func TestОдновременныеЧитателиНеЗаводятСвоих�
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 8)
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 8 {
+		wg.Go(func() {
 			if _, err := c.pkg(context.Background(), cl, "Moo", "Moo_Modpack"); err != nil {
 				errs <- err
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)
@@ -92,14 +90,14 @@ func TestОдновременныеЧитателиНеЗаводятСвоих�
 		t.Fatalf("одновременный запрос: %v", err)
 	}
 
-	if got := atomic.LoadInt32(&hits); got != 1 {
+	if got := hits.Load(); got != 1 {
 		t.Fatalf("обращений к Thunderstore: %d, ожидалось 1", got)
 	}
 }
 
-func TestРазныеПакетыСпрашиваютсяПорознь(t *testing.T) {
+func TestDifferentPackagesAskedSeparately(t *testing.T) {
 	// Кеш обязан различать пакеты, а не отвечать первым на любой вопрос
-	var hits int32
+	var hits atomic.Int32
 	srv := countingThunderstore(t, &hits)
 	defer srv.Close()
 
@@ -118,21 +116,21 @@ func TestРазныеПакетыСпрашиваютсяПорознь(t *testi
 	if first.Name == second.Name {
 		t.Fatalf("оба ответа про %q — кеш не различает пакеты", first.Name)
 	}
-	if got := atomic.LoadInt32(&hits); got != 2 {
+	if got := hits.Load(); got != 2 {
 		t.Fatalf("обращений: %d, ожидалось 2", got)
 	}
 }
 
-func TestОтказНеЗапоминаетсяНаДесятьМинут(t *testing.T) {
+func TestFailureIsNotRemembered(t *testing.T) {
 	// Моргнувшая сеть — состояние на секунды. Запомнив отказ, панель показывала
 	// бы «состояние неизвестно» до конца TTL, хотя Thunderstore давно отвечает.
-	var hits int32
+	var hits atomic.Int32
 	var fail atomic.Bool
 	fail.Store(true)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/experimental/package/", func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&hits, 1)
+		hits.Add(1)
 		if fail.Load() {
 			http.Error(w, "нет связи", http.StatusBadGateway)
 			return
@@ -148,26 +146,26 @@ func TestОтказНеЗапоминаетсяНаДесятьМинут(t *tes
 	if _, err := c.pkg(context.Background(), cl, "Moo", "Moo_Modpack"); err == nil {
 		t.Fatal("ожидался отказ")
 	}
-	before := atomic.LoadInt32(&hits)
+	before := hits.Load()
 
 	fail.Store(false)
 	if _, err := c.pkg(context.Background(), cl, "Moo", "Moo_Modpack"); err != nil {
 		t.Fatalf("после восстановления связи: %v", err)
 	}
-	if atomic.LoadInt32(&hits) <= before {
+	if hits.Load() <= before {
 		t.Fatal("после отказа кеш не пошёл спрашивать заново")
 	}
 }
 
-func TestПротухшийОтветОтдаётсяСразу(t *testing.T) {
+func TestStaleAnswerServedImmediately(t *testing.T) {
 	/* Ждать Thunderstore обязаны только те, кто не знает ничего. Иначе раз в
 	   packageTTL кто-то один открывал бы панель за полторы секунды вместо
 	   двухсот миллисекунд — и это был бы не всегда один и тот же человек. */
-	var hits int32
+	var hits atomic.Int32
 	release := make(chan struct{})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/experimental/package/", func(w http.ResponseWriter, r *http.Request) {
-		if atomic.AddInt32(&hits, 1) > 1 {
+		if hits.Add(1) > 1 {
 			// Второе обращение — фоновое обновление: держим его, чтобы
 			// читатель заведомо не мог его дождаться
 			<-release
@@ -205,10 +203,10 @@ func TestПротухшийОтветОтдаётсяСразу(t *testing.T) {
 	}
 }
 
-func TestНастойчивыйЗапросЗабываетЗапомненное(t *testing.T) {
+func TestForcedRequestForgetsCache(t *testing.T) {
 	// «Обновить» обязано дойти до Thunderstore: иначе оно отвечает тем же
 	// снимком, ради обхода которого его и нажали
-	var hits int32
+	var hits atomic.Int32
 	srv := countingThunderstore(t, &hits)
 	defer srv.Close()
 
@@ -223,7 +221,7 @@ func TestНастойчивыйЗапросЗабываетЗапомненно�
 		t.Fatal(err)
 	}
 
-	if got := atomic.LoadInt32(&hits); got != 2 {
+	if got := hits.Load(); got != 2 {
 		t.Fatalf("обращений: %d, ожидалось 2 — забытый кеш обязан спросить заново", got)
 	}
 }
