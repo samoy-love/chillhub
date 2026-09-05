@@ -242,8 +242,8 @@ namespace ChillHub.Tests {
 
             var idle = (SolidColorBrush)brush.Convert(new object[] { game, string.Empty }, typeof(Brush), null!, CultureInfo.InvariantCulture);
             var busy = (SolidColorBrush)brush.Convert(new object[] { game, "В очереди" }, typeof(Brush), null!, CultureInfo.InvariantCulture);
-            Assert.Equal((Color)ColorConverter.ConvertFromString("#E0A64B"), idle.Color);
-            Assert.Equal((Color)ColorConverter.ConvertFromString("#7C5CFF"), busy.Color);
+            Assert.Equal((Color)ColorConverter.ConvertFromString("#BF9439"), idle.Color);
+            Assert.Equal((Color)ColorConverter.ConvertFromString("#E5825B"), busy.Color);
         }
 
         /// <summary>Лента новостей: две колонки только на широком окне.</summary>

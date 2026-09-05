@@ -286,15 +286,15 @@ namespace ChillHub.Pages {
 
         /// <summary>Собирает цвета страницы новости из кистей темы.</summary>
         private static NewsPalette BuildPalette() => new NewsPalette(
-            Background: BrushToCss("Brush.Background", "#0F1116"),
-            Text: BrushToCss("Brush.Text", "#E5E5E5"),
-            CodeBackground: BrushToCss("Brush.Surface", "#171B24"),
-            Link: BrushToCss("Brush.Accent", "#EF4444"),
-            LinkHover: BrushToCss("Brush.AccentHover", "#DC2626"),
-            HorizontalRule: BrushToCss("Brush.Border", "#262626"),
-            Surface: BrushToCss("Brush.Surface", "#0B0B0B"),
-            ScrollThumb: BrushToCss("Brush.ScrollbarThumb", BrushToCss("Brush.ListHover", "#2E2E2E")),
-            ScrollThumbHover: BrushToCss("Brush.ScrollbarThumbHover", BrushToCss("Brush.ListHoverAlt", "#474747")));
+            Background: BrushToCss("Brush.Background", "#0E1114"),
+            Text: BrushToCss("Brush.Text", "#DDE2E6"),
+            CodeBackground: BrushToCss("Brush.Surface", "#14181D"),
+            Link: BrushToCss("Brush.Accent", "#E5825B"),
+            LinkHover: BrushToCss("Brush.AccentHover", "#F09A72"),
+            HorizontalRule: BrushToCss("Brush.Border", "#262E36"),
+            Surface: BrushToCss("Brush.Surface", "#14181D"),
+            ScrollThumb: BrushToCss("Brush.ScrollbarThumb", BrushToCss("Brush.ListHover", "#171C22")),
+            ScrollThumbHover: BrushToCss("Brush.ScrollbarThumbHover", BrushToCss("Brush.ListHoverAlt", "#1A2027")));
 
         private static string BrushToCss(string key, string fallback) {
             try {

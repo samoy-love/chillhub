@@ -5,8 +5,12 @@
 
 namespace ChillHub.Tests {
     using System;
+    using System.Globalization;
     using System.Windows;
     using System.Windows.Media;
+
+    using ChillHub.Core;
+    using ChillHub.Core.UI;
 
     using Xunit;
 
@@ -100,6 +104,41 @@ namespace ChillHub.Tests {
                 var ratio = Contrast(Colors.White, Color(key));
 
                 Assert.True(ratio >= 4.5, $"белая подпись на {key} даёт {ratio:0.00}:1 при пороге 4.5:1");
+            });
+
+        /// <summary>
+        /// Запасные краски статусов в списке игр совпадают с темой.
+        /// <para>
+        /// Кисти статусов берутся из темы, а выписанные в коде значения — только запас
+        /// на случай, когда темы в процессе нет. Запас и обязан совпадать с темой: иначе
+        /// он тихо разойдётся с ней, как уже разошёлся однажды — разметку перекрасили в
+        /// 2.0, а список игр продолжал красить статусы старыми красками, и «в очереди»
+        /// оставалась отменённым фиолетовым. Разметку смотрят глазами, кисти в C# — нет.
+        /// </para>
+        /// <para>
+        /// Тема здесь НЕ подключается намеренно: без неё конвертер возвращает ровно
+        /// запасное значение, и сравнение с темой проверяет именно расхождение.
+        /// </para>
+        /// </summary>
+        [Theory]
+        [InlineData(true, false, "Brush.Success")]
+        [InlineData(true, true, "Brush.Warning")]
+        [InlineData(false, false, "Brush.TextMuted")]
+        public void ЗапаснойЦветСтатусаСовпадаетСТемой(bool installed, bool needsUpdate, string themeKey)
+            => UiThread.Run(() => {
+                var game = new GameInfo { GameId = "probe", IsInstalled = installed, NeedsUpdate = needsUpdate };
+                var brush = (SolidColorBrush)new GameStatusBrushConverter()
+                    .Convert(game, typeof(Brush), null!, CultureInfo.InvariantCulture);
+
+                Assert.Equal(Color(themeKey), brush.Color);
+            });
+
+        /// <summary>«В очереди» и «играет» тоже: акцент темы и её же зелёный.</summary>
+        [Fact]
+        public void ЗапаснойЦветОчередиИЗапускаСовпадаетСТемой()
+            => UiThread.Run(() => {
+                Assert.Equal(Color("Brush.Accent"), GameStatusBrushConverter.Queued.Color);
+                Assert.Equal(Color("Brush.Success"), GameStatusBrushConverter.Playing.Color);
             });
 
         private static Color Color(string key) {

@@ -6,6 +6,7 @@
 namespace ChillHub.Core.UI {
     using System;
     using System.Globalization;
+    using System.Windows;
     using System.Windows.Data;
     using System.Windows.Media;
 
@@ -47,9 +48,15 @@ namespace ChillHub.Core.UI {
     /// не установлена. Вход: сам <see cref="GameInfo"/>.
     /// </summary>
     public class GameStatusBrushConverter : IValueConverter {
-        private static readonly SolidColorBrush Ready = Freeze("#57C98A");
-        private static readonly SolidColorBrush Update = Freeze("#E0A64B");
-        private static readonly SolidColorBrush Absent = Freeze("#80809A");
+        // Краски берутся из темы, а не выписываются здесь. Выписанные однажды уже
+        // разошлись с палитрой молча: разметку перекрасили, а список игр остался
+        // красить статусы старыми цветами — включая отменённый фиолетовый у очереди.
+        // Запасные значения — на случай, когда темы ещё нет (тесты конвертеров).
+        private static SolidColorBrush Ready => Themed("Brush.Success", "#7DAB71");
+
+        private static SolidColorBrush Update => Themed("Brush.Warning", "#BF9439");
+
+        private static SolidColorBrush Absent => Themed("Brush.TextMuted", "#8A949D");
 
         /// <inheritdoc/>
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture) {
@@ -69,14 +76,28 @@ namespace ChillHub.Core.UI {
             => throw new NotImplementedException();
 
         /// <summary>Акцент — игра прямо сейчас в очереди загрузок.</summary>
-        internal static SolidColorBrush Queued { get; } = Freeze("#7C5CFF");
+        internal static SolidColorBrush Queued => Themed("Brush.Accent", "#E5825B");
 
         /// <summary>
         /// Игра открыта прямо сейчас. Тот же зелёный, что у готовой к запуску: это
         /// её же состояние, доведённое до конца, — и лишний цвет в списке из трёх
         /// подписей делит внимание, а не направляет его.
         /// </summary>
-        internal static SolidColorBrush Playing { get; } = Freeze("#57C98A");
+        internal static SolidColorBrush Playing => Themed("Brush.Success", "#7DAB71");
+
+        /// <summary>Кисть из темы по ключу; запасной цвет — когда темы в процессе нет.</summary>
+        private static SolidColorBrush Themed(string key, string fallback) {
+            try {
+                if (Application.Current?.Resources[key] is SolidColorBrush brush) {
+                    return brush;
+                }
+            }
+            catch (Exception) {
+                // Тема ещё не подключена — рисуем запасным.
+            }
+
+            return Freeze(fallback);
+        }
 
         private static SolidColorBrush Freeze(string hex) {
             var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
