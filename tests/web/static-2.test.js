@@ -103,6 +103,22 @@ test('страница называет своим адресом корень',
   assert.doesNotMatch(html, /launcher\.samoy\.love\/v2/);
 });
 
+/* ---------- Политика говорит о том, что есть ---------- */
+
+test('политика приватности не обещает сторонних запросов, которых нет', () => {
+  // Политика полгода уверяла, что шрифты идут с Google Fonts и Google
+  // видит IP читателя. Шрифты давно лежат у себя. Ошибка в свою пользу
+  // всё равно ошибка: политику читают как обязательство, а не как эссе
+  const clean = (html) => html.replace(/<!--[\s\S]*?-->/g, '');
+  const own = (u) => u.startsWith('https://launcher.samoy.love');
+  const links = (html) => (clean(html).match(/https?:\/\/[^"'\s>]+/g) || []).filter((u) => !own(u));
+  const third = PAGES.some((page) => links(read(LANDING, page)).length > 0);
+
+  if (!third) {
+    assert.doesNotMatch(read(LANDING, 'privacy.html'), /Google Fonts/, 'политика описывает запрос, которого нет');
+  }
+});
+
 /* ---------- Страница входа ---------- */
 
 // Она стоит особняком: её открывают БЕЗ сессии, и nginx отдаёт анониму

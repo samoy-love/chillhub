@@ -163,6 +163,87 @@ test('баннер техработ появляется только когда
   assert.match(banner.textContent, /Переезд на новый диск/);
 });
 
+test('баннер техработ называет закрытое, а не обещает своё', async (t) => {
+  // Раньше здесь стояла одна выдуманная фраза «уже установленные игры
+  // запускаются как обычно». Запуск закрывается отдельным флагом, и с
+  // ним обещание становилось ложью — из тех, что проверяют сразу
+  const { window } = await boot(t, {
+    '/api/maintenance': {
+      enabled: true,
+      reason: 'Меняем диск на сервере раздачи',
+      blocks: { install: true, update: true, launch: true },
+    },
+  });
+
+  const text = window.document.querySelector('[data-maint]').textContent;
+  assert.match(text, /Меняем диск на сервере раздачи\./, 'причина набрана не предложением');
+  assert.match(text, /установка новых игр/);
+  assert.match(text, /запуск/);
+  assert.doesNotMatch(text, /запускаются как обычно/);
+});
+
+test('когда закрыто не всё, баннер это и говорит', async (t) => {
+  const { window } = await boot(t, {
+    '/api/maintenance': { enabled: true, reason: 'Перебираем сборки', blocks: { update: true } },
+  });
+
+  const text = window.document.querySelector('[data-maint]').textContent;
+  assert.match(text, /обновление уже установленных/);
+  assert.doesNotMatch(text, /запуск/);
+});
+
+test('баннер без единого запрета не выдумывает запрет', async (t) => {
+  // Состояние «работы идут, но ничего не закрыто» законно, и сервер его
+  // отдаёт: баннер тогда предупреждает, а не запрещает
+  const { window } = await boot(t, {
+    '/api/maintenance': { enabled: true, reason: 'Готовим переезд', blocks: {} },
+  });
+
+  assert.match(window.document.querySelector('[data-maint]').textContent, /можно как обычно/);
+});
+
+test('срок работ считается по часам сервера, а не посетителя', async (t) => {
+  // Часы посетителя бывают сбиты на сутки, и по ним ещё не наступивший
+  // срок выглядит истёкшим
+  const { window } = await boot(t, {
+    '/api/maintenance': {
+      enabled: true,
+      reason: 'Меняем диск',
+      blocks: { install: true },
+      serverTime: '2026-09-05T10:00:00Z',
+      endsAt: '2026-09-05T12:00:00Z',
+    },
+  });
+
+  assert.match(window.document.querySelector('[data-maint]').textContent, /Ожидаемое окончание/);
+});
+
+test('истёкший срок не обещают заново', async (t) => {
+  const { window } = await boot(t, {
+    '/api/maintenance': {
+      enabled: true,
+      reason: 'Меняем диск',
+      blocks: { install: true },
+      serverTime: '2026-09-05T14:00:00Z',
+      endsAt: '2026-09-05T12:00:00Z',
+    },
+  });
+
+  const text = window.document.querySelector('[data-maint]').textContent;
+  assert.match(text, /Работы затянулись/);
+  assert.doesNotMatch(text, /Ожидаемое окончание/);
+});
+
+test('кривой срок не ломает баннер', async (t) => {
+  const { window } = await boot(t, {
+    '/api/maintenance': { enabled: true, reason: 'Меняем диск', blocks: { install: true }, endsAt: 'завтра' },
+  });
+
+  const text = window.document.querySelector('[data-maint]').textContent;
+  assert.match(text, /Меняем диск/);
+  assert.doesNotMatch(text, /Ожидаемое окончание/);
+});
+
 /* ---------- Факты об установщике ---------- */
 
 test('без setup.json размер, дата и хеш не показываются', async (t) => {

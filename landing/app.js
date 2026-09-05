@@ -281,8 +281,7 @@
     const m = data.maintenance;
     const banner = $('[data-maint]');
     if (banner && m && m.enabled) {
-      $('[data-maint-text]').textContent =
-        m.reason || 'Сборки временно не отдаются. Уже установленные игры запускаются как обычно.';
+      $('[data-maint-text]').textContent = maintText(m);
       banner.hidden = false;
     }
 
@@ -405,6 +404,53 @@
     }
 
     spin.addEventListener('click', go);
+  }
+
+  /* Текст баннера технических работ.
+
+     Прежде здесь стояла одна выдуманная фраза: «Сборки временно не
+     отдаются, уже установленные игры запускаются как обычно». Первая
+     половина неверна, когда закрыто только обновление, вторая — когда
+     закрыт запуск, а закрывается он отдельным флагом. Обещание «играть
+     можно» человек проверяет сразу и запоминает надолго.
+
+     Поэтому говорим ровно то, что сказал сервер: причину, что именно
+     закрыто, и срок. Слова те же, что у баннера в лаунчере
+     (Core/Shell/MaintenanceBannerView.cs) — это одно сообщение, увиденное
+     в двух местах. */
+  function maintText(m, now) {
+    const parts = [];
+
+    const reason = String(m.reason || '').trim();
+    parts.push(reason ? (/[.!?…]$/.test(reason) ? reason : reason + '.') : 'На сервере идут технические работы.');
+
+    const b = m.blocks || {};
+    const closed = [];
+    if (b.install) closed.push('установка новых игр');
+    if (b.update) closed.push('обновление уже установленных');
+    if (b.launch) closed.push('запуск');
+    if (closed.length) parts.push('Сейчас недоступно: ' + closed.join(', ') + '.');
+    else parts.push('Скачивать и играть при этом можно как обычно.');
+
+    parts.push(maintEta(m, now));
+    return parts.filter(Boolean).join(' ');
+  }
+
+  /* Срок считаем по часам СЕРВЕРА: у посетителя они бывают сбиты, и
+     тогда ещё не наступивший срок выглядел бы истёкшим. Показываем
+     местное время — оно и есть то, на которое человек посмотрит. */
+  function maintEta(m, now) {
+    const until = new Date(m.endsAt || '');
+    if (!m.endsAt || Number.isNaN(until.getTime())) return '';
+
+    const server = new Date(m.serverTime || now || Date.now());
+    const from = Number.isNaN(server.getTime()) ? new Date() : server;
+    if (until <= from) return 'Работы затянулись, ждём сообщения от сервера.';
+
+    const hhmm = until.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    const sameDay = until.toDateString() === new Date().toDateString();
+    const when = sameDay ? 'сегодня в ' + hhmm : until.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' в ' + hhmm;
+    return 'Ожидаемое окончание — ' + when + '.';
   }
 
   /* ---------- Заявка ---------- */
