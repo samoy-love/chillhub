@@ -734,8 +734,18 @@ if (!(Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Nul
 $nsisArgs = @('/INPUTCHARSET', 'UTF8')
 if ($NoCompress) {
     Write-Host "NSIS: building without compression (fast dev build)" -ForegroundColor Yellow
-    # Inject a directive override: SetCompress off (at compile-time)
-    $nsisArgs += @('/XSetCompress off')
+    # ГЛУШИТСЯ ИМЕННО SetCompressor, А НЕ SetCompress.
+    #
+    # Раньше здесь стоял только `/XSetCompress off`, и ключ не делал ничего:
+    # installer.nsi объявляет `SetCompressor /SOLID lzma`, а в solid-режиме вся
+    # полезная нагрузка жмётся ОДНИМ потоком, и пофайловый SetCompress на него
+    # не влияет. Замер: шаг «Собрать установщик» с ключом и без него — те же
+    # 74 секунды.
+    #
+    # Переключается это define-ом, а не ключом: /XSetCompressor до объявления
+    # в .nsi не достаёт, а /XSetCompress в whole-режиме игнорируется вовсе
+    # (предупреждение 8021). Сам выбор компрессора живёт в installer.nsi.
+    $nsisArgs += @('/DFAST_COMPRESS')
 }
 # Package exactly what we just built. installer.nsi defaults to
 # bin\Release\net8.0-windows when this is not passed, which is why

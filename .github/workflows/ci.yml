@@ -579,11 +579,17 @@ jobs:
       - name: Build (Debug)
         working-directory: launcher/ChillHub
         run: dotnet build --no-restore -c Debug
-      - name: Build (Release)
-        # Release is what ships; building it here catches configuration-specific
-        # breakage before a release is cut instead of during a manual build.
-        working-directory: launcher/ChillHub
-        run: dotnet build --no-restore -c Release
+      # СБОРКИ RELEASE ЗДЕСЬ БОЛЬШЕ НЕТ — ЕЁ ДЕЛАЕТ ЗАДАНИЕ УСТАНОВЩИКА.
+      #
+      # Шаг стоял тут, чтобы поймать поломку, свойственную именно Release, до того
+      # как её увидит релиз. Но `Installer (NSIS)` собирает Release и так,
+      # причём полнее: self-contained публикацию под win-x64, а следом ставит
+      # получившийся setup.exe и сверяет состав. Отдельная framework-dependent
+      # сборка тем же компилятором ничего сверх этого не проверяла.
+      #
+      # Шестнадцать секунд на критическом пути прогона: с тех пор как эти два
+      # задания разъехались по разным машинам и пошли параллельно, длиннее
+      # оказалось именно это.
       - name: Tests (launcher)
         # Тесты плана обновления, разбора манифеста, хешей и структурной проверки
         # путей. Без этого шага регрессия уезжала бы в релиз незамеченной: тесты
@@ -753,7 +759,17 @@ jobs:
         # ловил релиз, а не PR — при том, что цена такой ошибки известна:
         # вечный цикл самообновления у всех, кто поставил сборку (1.0.2, 1.0.3,
         # 1.1.7, 1.1.8).
-        run: ./scripts/build-installer.ps1 -Configuration Release -AppVersion 0.0.0-ci -PackageZip
+        #
+        # -NoCompress: этот установщик собирается только чтобы поймать поломку
+        # .nsi и сборки, он не подписывается и не публикуется. Сжатие в нём
+        # не проверяет ничего, а стоит дороже всего остального вместе взятого:
+        # внутри шага сама сборка занимает 18 секунд, а solid-LZMA со словарём
+        # 64 МБ жмёт 274 файла self-contained .NET около пятидесяти — однопоточно.
+        #
+        # Релиз собирается ДРУГИМ вызовом (deploy-kit, desktop-artifact.yml) и
+        # ключа не получает: там размер загрузки для каждого игрока важнее
+        # минуты прогона.
+        run: ./scripts/build-installer.ps1 -Configuration Release -AppVersion 0.0.0-ci -PackageZip -NoCompress
       # Собранный установщик ЗАПУСКАЕТСЯ: ставится тихо во временный каталог,
       # проверяется по составу, версии и реестру, затем так же тихо удаляется.
       # До этого шага единственной проверкой установщика было «makensis не
