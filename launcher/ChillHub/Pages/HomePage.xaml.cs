@@ -36,6 +36,12 @@ namespace ChillHub.Pages {
     using static ChillHub.Core.Home.SyncPlanLog;
 
     public partial class HomePage : Page {
+        /// <summary>Свободное место посчитано заново — шапке есть что показать.</summary>
+        public event Action<string>? DiskFreeChanged;
+
+        /// <summary>Страница сама сбросила поиск: шапке надо очистить поле.</summary>
+        public event Action? SearchCleared;
+
         private string BaseApi => ChillHub.Core.ConfigService.Current.ApiBaseUrl;
 
         /// <summary>Завершается, когда каталог игр загружен, — см. <see cref="gamesLoaded"/>.</summary>
@@ -57,7 +63,18 @@ namespace ChillHub.Pages {
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         private List<string> builds = new();
+
+        // Что набрано в поиске. Поле живёт в шапке окна, строка — здесь.
+        private string searchQuery = string.Empty;
+
         // Идёт удаление локальных файлов игры: блокирует повторный запуск и установку
+
+        /// <summary>
+        /// Игра, которую попросили скачать по ярлыку и запустить сразу после установки.
+        /// Пусто — значит запускать по завершении нечего.
+        /// </summary>
+        private string? launchAfterInstall;
+
         private bool isDeleting = false;
 
         // Идёт установка модпака в копию из Steam. Второй такой же запуск писал бы в ту
@@ -1435,19 +1452,56 @@ namespace ChillHub.Pages {
 
             this.GameList.ItemsSource = this.games;
             this.ApplyGameFilter();
+            this.UpdateGamesSectionTitle();
+        }
+
+        /// <summary>
+        /// Пустая выдача поиска: список есть, но под запрос ничего не подошло.
+        /// <para>
+        /// Показывается только когда каталог УЖЕ приехал: иначе экран «ничего не нашлось»
+        /// встал бы поверх настоящей причины — нет связи или сервер молчит.
+        /// </para>
+        /// </summary>
+        private void ShowSearchEmptyIfNeeded() {
+            if (this.GameList == null || this.SearchEmptyState == null) {
+                return;
+            }
+
+            var catalogLoaded = (this.games?.Count ?? 0) > 0;
+            var nothingMatched = catalogLoaded && this.GameList.Items.Count == 0;
+
+            this.SearchEmptyState.Visibility = nothingMatched ? Visibility.Visible : Visibility.Collapsed;
+            if (nothingMatched) {
+                this.SearchEmptyHint.Text = Core.Home.SearchEmptyMessage.Hint(this.games!.Count);
+            }
+        }
+
+        /// <summary>
+        /// «Библиотека · 8». Число здесь, потому что заголовок и так занимает строку,
+        /// а «сколько всего игр» — первое, что о списке хочется знать.
+        /// </summary>
+        private void UpdateGamesSectionTitle() {
+            if (this.GamesSectionTitle == null) {
+                return;
+            }
+
+            var count = this.games?.Count ?? 0;
+            this.GamesSectionTitle.Text = count > 0 ? $"Библиотека · {count}" : "Библиотека";
         }
 
         private void ApplyGameFilter() {
             try {
-                var query = this.GameSearchBox?.Text?.Trim() ?? string.Empty;
+                var query = this.searchQuery.Trim();
                 if (query.Length == 0) {
                     this.GameList.Items.Filter = null;
+                    this.ShowSearchEmptyIfNeeded();
                     return;
                 }
 
                 this.GameList.Items.Filter = o =>
                     o is GameInfo g
                     && (g.Title ?? string.Empty).Contains(query, StringComparison.CurrentCultureIgnoreCase);
+                this.ShowSearchEmptyIfNeeded();
             }
             catch (Exception ex) {
                 // Фильтр — удобство, а не функция: список должен остаться показанным целиком
@@ -1455,7 +1509,18 @@ namespace ChillHub.Pages {
             }
         }
 
-        private void GameSearch_TextChanged(object sender, TextChangedEventArgs e) {
+        /// <summary>
+        /// Применяет запрос из поля поиска в шапке окна.
+        /// <para>
+        /// Само поле живёт в MainWindow: список игр — единственная навигация в
+        /// приложении, и искать по нему логично там же, где остальное управление.
+        /// Страница о поле не знает и получает только строку.
+        /// </para>
+        /// </summary>
+        /// <param name="query">Что набрано в поиске.</param>
+        public void ApplySearch(string? query) {
+            this.searchQuery = query ?? string.Empty;
+
             var selected = this.GameList?.SelectedItem;
             this.ApplyGameFilter();
 
@@ -1467,19 +1532,18 @@ namespace ChillHub.Pages {
         }
 
         /// <summary>
-        /// Свободное место на диске игр — в подвале сайдбара. Это свойство машины, а не
-        /// текущей закачки, поэтому оно живёт отдельно от строки прогресса.
+        /// Свободное место на диске игр — в шапке окна. Это свойство машины, а не текущей
+        /// закачки, поэтому оно живёт отдельно от строки прогресса; считает его страница
+        /// (она знает выбранную игру), а показывает шапка.
         /// </summary>
         private void UpdateDiskFreeText(string? gid) {
             try {
                 var free = GetAvailableFreeSpaceFor(gid);
-                this.DiskFreeText.Text = free > 0
-                    ? $"Свободно на диске: {FormatSize(free)}"
-                    : string.Empty;
+                this.DiskFreeChanged?.Invoke(free > 0 ? $"свободно {FormatSize(free)}" : string.Empty);
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Warn($"UpdateDiskFreeText gid={gid}: {ex.Message}");
-                this.DiskFreeText.Text = string.Empty;
+                this.DiskFreeChanged?.Invoke(string.Empty);
             }
         }
 
@@ -2501,9 +2565,16 @@ namespace ChillHub.Pages {
                         // Ярлык на рабочем столе: игра уже распакована и запускается, так что
                         // ошибки здесь установку не портят — их гасит сам вызов.
                         GameLocalState.StartDesktopShortcutCreation(g?.Title, item.GameId, g?.ExeRelativePath);
+                        this.LaunchIfAskedFromShortcut(item.GameId);
                         break;
                     case Core.Game.QueueItemState.Failed:
                         this.updateErrorGameId = item.GameId;
+
+                        // Строка списка остаётся с «Обрыв загрузки» и после того, как
+                        // позиция ушла из очереди: молча вернуться к «Не установлена» —
+                        // значит сделать вид, что ничего не было, и человек узнает об
+                        // обрыве только по тому, что игра не запускается.
+                        this.SetQueueLabel(item.GameId, Core.UI.QueueRowLabel.Interrupted);
                         break;
                     case Core.Game.QueueItemState.Cancelled:
                     default:
@@ -2526,14 +2597,47 @@ namespace ChillHub.Pages {
             this.OnQueueItemRemoved(item);
         }
 
+        /// <summary>
+        /// Запускает игру, если её просили скачать по ярлыку. Намерение одноразовое:
+        /// повторная закачка той же игры руками игру уже не поднимет.
+        /// </summary>
+        /// <param name="gameId">Игра, чья закачка только что завершилась.</param>
+        private void LaunchIfAskedFromShortcut(string? gameId) {
+            if (string.IsNullOrWhiteSpace(gameId)
+                || !string.Equals(this.launchAfterInstall, gameId, StringComparison.OrdinalIgnoreCase)) {
+                return;
+            }
+
+            this.launchAfterInstall = null;
+            try {
+                this.SelectGameById(gameId);
+                this.PlaySelectedGame();
+            }
+            catch (Exception ex) {
+                // Скачалось — уже польза: не запустилось, человек нажмёт «Играть» сам.
+                Core.Logging.Logger.Warn($"Ярлык: скачали '{gameId}', но запустить не вышло: {ex.Message}");
+            }
+        }
+
         private void OnQueueItemRemoved(Core.Game.QueueItem item) {
             this.Dispatcher.BeginInvoke(() => {
+                // Закачка снята или не удалась — обещание «и запустить» снимается вместе с
+                // ней: игра, поднявшаяся после отменённой закачки, — сюрприз, а не услуга.
+                if (string.Equals(this.launchAfterInstall, item.GameId, StringComparison.OrdinalIgnoreCase)) {
+                    this.launchAfterInstall = null;
+                }
+
                 var idx = IndexOfQueueItem(this.queueDockItems, item.GameId);
                 if (idx >= 0) {
                     this.queueDockItems.RemoveAt(idx);
                 }
 
-                this.SetQueueLabel(item.GameId, string.Empty);
+                // Метку обрыва снимает не уход из очереди, а следующая попытка: см.
+                // ветку Failed в OnQueueItemCompleted.
+                if (!string.Equals(this.QueueLabelOf(item.GameId), Core.UI.QueueRowLabel.Interrupted, StringComparison.Ordinal)) {
+                    this.SetQueueLabel(item.GameId, string.Empty);
+                }
+
                 this.rowRefreshedAt.Remove(item.GameId ?? string.Empty);
                 this.SyncQueuePanelVisibility();
 
@@ -2551,6 +2655,13 @@ namespace ChillHub.Pages {
         /// PropertyChanged — без Items.Refresh(), который на каждый тик прогресса
         /// пересобирал бы все карточки.
         /// </summary>
+        /// <summary>Текущая метка строки списка — чтобы не затирать «Обрыв загрузки».</summary>
+        /// <param name="gameId">Игра.</param>
+        /// <returns>Метка или пустая строка.</returns>
+        private string QueueLabelOf(string? gameId)
+            => this.games.FirstOrDefault(x => string.Equals(x.GameId, gameId, StringComparison.OrdinalIgnoreCase))?.QueueLabel
+               ?? string.Empty;
+
         private void SetQueueLabel(string gameId, string label) {
             try {
                 var g = this.games.FirstOrDefault(x => string.Equals(x.GameId, gameId, StringComparison.OrdinalIgnoreCase));
@@ -2954,13 +3065,41 @@ namespace ChillHub.Pages {
             // Набранный в поиске запрос мог отфильтровать эту игру из списка, а выделять
             // скрытую строку бессмысленно: экран остался бы прежним, будто ярлык не нажимали.
             // Фильтр переставит сам обработчик GameSearch_TextChanged.
-            if (!string.IsNullOrEmpty(this.GameSearchBox?.Text)) {
-                this.GameSearchBox.Text = string.Empty;
+            if (this.searchQuery.Length > 0) {
+                this.searchQuery = string.Empty;
+                this.ApplyGameFilter();
+                this.SearchCleared?.Invoke();
             }
 
             this.GameList.SelectedItem = game;
             this.GameList.ScrollIntoView(game);
             return true;
+        }
+
+        /// <summary>
+        /// Скачать игру заново и запустить, когда докачается. Приходит из окна ярлыка:
+        /// игра в каталоге есть, а папки со сборкой на диске уже нет.
+        /// <para>
+        /// «И запустить» — не вежливость: человек нажимал на ярлык ИГРЫ, и остановка на
+        /// готовой, но не запущенной сборке была бы обманом ожидания. Намерение живёт до
+        /// завершения закачки и снимается при неудаче или отмене — иначе игра поднялась бы
+        /// после закачки, которую человек уже передумал ждать.
+        /// </para>
+        /// </summary>
+        /// <param name="gameId">Игра из ярлыка.</param>
+        internal void InstallAndLaunch(string? gameId) {
+            if (string.IsNullOrWhiteSpace(gameId)) {
+                return;
+            }
+
+            this.SelectGameById(gameId);
+            this.launchAfterInstall = gameId;
+
+            if (!this.downloadQueue.Enqueue(gameId!)) {
+                // Очередь не приняла — намерение снимаем, чтобы оно не выстрелило потом.
+                this.launchAfterInstall = null;
+                this.ShowToast("Не удалось поставить игру в очередь. Попробуйте ещё раз.");
+            }
         }
 
         /// <summary>

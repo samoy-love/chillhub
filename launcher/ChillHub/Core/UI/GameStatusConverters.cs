@@ -78,6 +78,9 @@ namespace ChillHub.Core.UI {
         /// <summary>Акцент — игра прямо сейчас в очереди загрузок.</summary>
         internal static SolidColorBrush Queued => Themed("Brush.Accent", "#E5825B");
 
+        /// <summary>Обрыв закачки — тем же цветом, что и остальные беды.</summary>
+        internal static SolidColorBrush Interrupted => Themed("Brush.Danger", "#D47A70");
+
         /// <summary>
         /// Игра открыта прямо сейчас. Тот же зелёный, что у готовой к запуску: это
         /// её же состояние, доведённое до конца, — и лишний цвет в списке из трёх
@@ -145,7 +148,11 @@ namespace ChillHub.Core.UI {
         public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture) {
             var label = values.Length > 1 ? values[1] as string : null;
             if (!string.IsNullOrEmpty(label)) {
-                return GameStatusBrushConverter.Queued;
+                // Обрыв — не «идёт работа», и красить его акцентом очереди нельзя:
+                // строка выглядела бы как ещё одна качающаяся игра.
+                return string.Equals(label, QueueRowLabel.Interrupted, StringComparison.Ordinal)
+                    ? GameStatusBrushConverter.Interrupted
+                    : GameStatusBrushConverter.Queued;
             }
 
             var run = values.Length > 2 ? values[2] as string : null;

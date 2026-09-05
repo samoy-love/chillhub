@@ -289,12 +289,34 @@
               <TextBlock Name="FilesSizeText" Text="" FontSize="12"
                          Foreground="{DynamicResource Brush.TextSecondary}"
                          Style="{StaticResource Style.HideWhenEmpty}"/>
-              <!-- Одна вспомогательная кнопка. «Открыть логи» отсюда убрана: журналы
-                   лаунчера — не свойство игры, они открываются из настроек («О программе»),
-                   а здесь эта кнопка выглядела инструментом разработчика на игровом экране. -->
-              <Button Name="OpenFolderBtn" Content="Открыть папку игры" Height="36" Margin="0,12,0,0"
-                      HorizontalAlignment="Stretch"
-                      Style="{DynamicResource Style.Button.GhostNeutral}" Click="OpenFolderBtn_Click"/>
+              <!-- Обслуживание. Прежде здесь стояла одна кнопка «Открыть папку игры», а
+                   всё остальное, что можно сделать с установленной игрой, жило только в
+                   контекстном меню списка на главной — то есть находилось случайно.
+                   «Открыть логи» отсюда убрана: журналы лаунчера — не свойство игры, они
+                   открываются из настроек («О программе»), а здесь эта кнопка выглядела
+                   инструментом разработчика на игровом экране.
+                   Удаления в этой группе нет намеренно: оно живёт в контекстном меню
+                   списка вместе со своим подтверждением и защитой от удаления во время
+                   закачки. Вторая копия разрушающего действия — вторая копия и этих
+                   защит, а расходятся они молча. -->
+              <Border Margin="0,16,0,0" Padding="0,12,0,0" BorderThickness="0,1,0,0"
+                      BorderBrush="{DynamicResource Brush.Border}">
+                <StackPanel>
+                  <TextBlock Text="Обслуживание" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,8"
+                             Foreground="{DynamicResource Brush.TextSecondary}"/>
+                  <Button Name="VerifyFilesBtn" Content="Проверить файлы" Height="36"
+                          HorizontalAlignment="Stretch"
+                          ToolTip="Сверить файлы игры с сервером и докачать испорченные"
+                          Style="{DynamicResource Style.Button.GhostNeutral}" Click="VerifyFilesBtn_Click"/>
+                  <Button Name="ShortcutBtn" Content="Ярлык на рабочий стол" Height="36" Margin="0,8,0,0"
+                          HorizontalAlignment="Stretch"
+                          ToolTip="Создать ярлык, запускающий игру через лаунчер"
+                          Style="{DynamicResource Style.Button.GhostNeutral}" Click="ShortcutBtn_Click"/>
+                  <Button Name="OpenFolderBtn" Content="Открыть папку игры" Height="36" Margin="0,8,0,0"
+                          HorizontalAlignment="Stretch"
+                          Style="{DynamicResource Style.Button.GhostNeutral}" Click="OpenFolderBtn_Click"/>
+                </StackPanel>
+              </Border>
             </StackPanel>
           </Border>
 

@@ -1,6 +1,7 @@
 <Window x:Class="ChillHub.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:ChillHub.Core.UI"
         Title="Лаунчер Chill Hub" WindowStartupLocation="CenterScreen"
         MinHeight="640" MinWidth="980"
         ResizeMode="CanResize" SizeToContent="Manual"
@@ -55,8 +56,17 @@
                     </Style>
                 </Grid.Resources>
                 <Grid.ColumnDefinitions>
+                    <!-- Имя, поиск, свободное место, караоке, правый блок.
+                         Лишнюю ширину забирает ПОИСК, а не караоке: караоке подбирает
+                         себе ширину само, под самую длинную строку песни, и в звёздочной
+                         колонке оказывалось шире неё — ClipToBounds срезал строку слева,
+                         и от песни оставался хвост. А в колонке по содержимому оно той же
+                         шириной выталкивало кнопку настроек за край окна.
+                         Поэтому поиск сжимается первым, а караоке ограничено сверху. -->
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <!-- Слева — приветствие и имя приложения: «Добро пожаловать в ⟨значок⟩ Chill Hub».
@@ -68,12 +78,37 @@
                     <TextBlock Text="Chill Hub" FontSize="15" Margin="8,0,0,0" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Title}" VerticalAlignment="Center"/>
                 </StackPanel>
 
+                <!-- Поиск по играм. Переехал сюда из сайдбара: список игр — единственная
+                     навигация в приложении, и её место там же, где остальное управление.
+                     Подсказка — свойством поля, а не надписью поверх: своя надпись стояла
+                     по краю сетки, а текст поля начинается внутри рамки и Padding, и после
+                     клика каретка появлялась правее подсказки. Значок лупы отдельным слоем:
+                     он не текст и с кареткой не спорит. -->
+                <Grid Grid.Column="1" MaxWidth="220" HorizontalAlignment="Left" MinWidth="120" Margin="24,0,16,0" VerticalAlignment="Center">
+                    <TextBox x:Name="GameSearchBox" TextChanged="GameSearch_TextChanged"
+                             ui:Placeholder.Text="Поиск по играм"
+                             Template="{DynamicResource Template.TextBox.Field}"
+                             VerticalContentAlignment="Center" Height="28"
+                             Background="{DynamicResource Brush.Surface2}" BorderBrush="{DynamicResource Brush.Border}"
+                             Padding="26,0,8,0" FontSize="12" Foreground="{DynamicResource Brush.Text}"/>
+                    <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE721;" FontSize="12" IsHitTestVisible="False"
+                               Margin="8,0,0,0" VerticalAlignment="Center" HorizontalAlignment="Left"
+                               Foreground="{DynamicResource Brush.TextMuted}"/>
+                </Grid>
+
+                <!-- Свободное место на диске игр. Тоже из подвала сайдбара: это свойство
+                     машины, а не списка, и в шапке оно видно с любого экрана. Пустая
+                     строка — когда диск недоступен; тогда и места в шапке не занимает. -->
+                <TextBlock x:Name="DiskFreeText" Grid.Column="2" Text="" FontSize="12" Margin="16,0,0,0"
+                           VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource Brush.TextMuted}"/>
+
                 <!-- Караоке — Баста, «Моя игра»: печатаемая строка с мигающим курсором и
                      следующая строка бледнее, слева нота акцентом. Ни фона, ни рамки: с ними
                      строка выглядела как поле ввода с подсказкой. Высоты строк фиксированы,
                      чтобы шапка не дышала, когда строка пустая (пауза между куплетами).
                      Ширина подбирается под самую длинную строку (KaraokePresenter). -->
-                <Border x:Name="KaraokeHost" Grid.Column="1" HorizontalAlignment="Right" Margin="0,0,16,0"
+                <Border x:Name="KaraokeHost" Grid.Column="3" MaxWidth="340" HorizontalAlignment="Right" Margin="16,0,16,0"
                         Background="Transparent" BorderThickness="0" Padding="8,0"
                         ClipToBounds="True" ToolTip="Баста — «Моя игра»" ToolTipService.Placement="Bottom">
                     <Grid VerticalAlignment="Center">
@@ -99,7 +134,7 @@
                 </Border>
 
                 <!-- Right: индикатор загрузок + настройки -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <StackPanel Grid.Column="4" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                     <!-- Чип загрузок виден, пока очередь не пуста и мы НЕ на главной: со
                          страницы игры и из настроек ход закачки иначе не виден вовсе, а на
                          главной он повторял бы очередь, стоящую внизу того же экрана

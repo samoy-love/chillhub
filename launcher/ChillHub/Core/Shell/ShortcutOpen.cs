@@ -17,6 +17,9 @@ namespace ChillHub.Core.Shell {
         /// <summary>Выделить игру в каталоге на главной: она там есть.</summary>
         SelectGame,
 
+        /// <summary>Игра в каталоге есть, а файлов на диске нет — предложить скачать заново.</summary>
+        OfferInstall,
+
         /// <summary>Игры в каталоге нет, но файлы на месте — предложить просто запустить.</summary>
         OfferLaunch,
 
@@ -47,13 +50,22 @@ namespace ChillHub.Core.Shell {
                 return ShortcutOpenAction.None;
             }
 
+            var exists = exeExists ?? File.Exists;
             var known = games?.Any(g =>
                 g != null && string.Equals(g.GameId, request.GameId, StringComparison.OrdinalIgnoreCase)) ?? false;
             if (known) {
-                return ShortcutOpenAction.SelectGame;
+                // Игра в каталоге есть, а папки со сборкой на диске уже нет: ярлык ведёт
+                // в пустоту. Открыть каталог и промолчать — значит оставить человека с
+                // вопросом «я же нажал на игру, почему я смотрю на список». Поэтому
+                // отдельное окно с предложением скачать заново.
+                //
+                // Путь известен не у всех ярлыков: старые его не писали. Без пути судить
+                // о файлах не по чему, и остаётся прежнее поведение — выделить в каталоге.
+                return !string.IsNullOrWhiteSpace(request.ExePath) && !exists(request.ExePath)
+                    ? ShortcutOpenAction.OfferInstall
+                    : ShortcutOpenAction.SelectGame;
             }
 
-            var exists = exeExists ?? File.Exists;
             return !string.IsNullOrWhiteSpace(request.ExePath) && exists(request.ExePath)
                 ? ShortcutOpenAction.OfferLaunch
                 : ShortcutOpenAction.ReportMissing;
@@ -73,9 +85,11 @@ namespace ChillHub.Core.Shell {
         /// <param name="action">Решение.</param>
         /// <returns>Строка заголовка.</returns>
         internal static string Heading(ShortcutRequest? request, ShortcutOpenAction action)
-            => action == ShortcutOpenAction.OfferLaunch
-                ? $"«{DisplayName(request)}» больше нет в Chill Hub"
-                : $"«{DisplayName(request)}» запустить нечем";
+            => action switch {
+                ShortcutOpenAction.OfferLaunch => $"«{DisplayName(request)}» больше нет в Chill Hub",
+                ShortcutOpenAction.OfferInstall => $"«{DisplayName(request)}» не найдена на диске",
+                _ => $"«{DisplayName(request)}» запустить нечем",
+            };
 
         /// <summary>
         /// Текст окна. Он обязан объяснить не только «игры нет», но и чем это грозит:
@@ -85,12 +99,28 @@ namespace ChillHub.Core.Shell {
         /// <param name="action">Решение.</param>
         /// <returns>Текст для окна.</returns>
         internal static string Message(ShortcutRequest? request, ShortcutOpenAction action)
-            => action == ShortcutOpenAction.OfferLaunch
-                ? "Игру не удалось найти в каталоге: её могли снять с публикации или сервер сейчас "
-                  + "недоступен. Обновить её и проверить файлы лаунчеру не с чем, но установленную "
-                  + "копию можно запустить как есть."
-                  + Environment.NewLine + Environment.NewLine + (request?.ExePath ?? string.Empty)
-                : "Игры нет ни в каталоге Chill Hub, ни на диске: её файлы удалены или перенесены. "
-                  + "Ярлык можно убрать с рабочего стола.";
+            => action switch {
+                ShortcutOpenAction.OfferLaunch =>
+                    "Игру не удалось найти в каталоге: её могли снять с публикации или сервер сейчас "
+                    + "недоступен. Обновить её и проверить файлы лаунчеру не с чем, но установленную "
+                    + "копию можно запустить как есть."
+                    + Environment.NewLine + Environment.NewLine + (request?.ExePath ?? string.Empty),
+                ShortcutOpenAction.OfferInstall =>
+                    "Папку со сборкой переместили или удалили. Лаунчер может скачать её заново — "
+                    + "ярлык после этого снова заработает."
+                    + Environment.NewLine + Environment.NewLine + (request?.ExePath ?? string.Empty),
+                _ =>
+                    "Игры нет ни в каталоге Chill Hub, ни на диске: её файлы удалены или перенесены. "
+                    + "Ярлык можно убрать с рабочего стола.",
+            };
+
+        /// <summary>
+        /// Подпись главной кнопки окна. «Скачать и запустить», а не «Скачать»: человек
+        /// нажимал на ярлык ИГРЫ, и остановка на середине была бы обманом ожидания.
+        /// </summary>
+        /// <param name="action">Решение.</param>
+        /// <returns>Подпись кнопки.</returns>
+        internal static string PrimaryButton(ShortcutOpenAction action)
+            => action == ShortcutOpenAction.OfferInstall ? "Скачать и запустить" : "Запустить игру";
     }
 }
