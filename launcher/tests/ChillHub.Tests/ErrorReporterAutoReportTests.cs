@@ -492,14 +492,24 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void ПовторнаяУстановкаОбработчиковНеПлодитПодписки() {
-            ErrorReporter.InitGlobalHandlers();
-            var afterFirst = CountReporterHandlers();
-            Assert.True(afterFirst > 0, "подписки на глобальные исключения не найдены");
+            var before = CountReporterHandlers();
+            try {
+                ErrorReporter.InitGlobalHandlers();
+                var afterFirst = CountReporterHandlers();
+                Assert.True(afterFirst > 0, "подписки на глобальные исключения не найдены");
 
-            ErrorReporter.InitGlobalHandlers();
-            ErrorReporter.InitGlobalHandlers();
+                ErrorReporter.InitGlobalHandlers();
+                ErrorReporter.InitGlobalHandlers();
 
-            Assert.Equal(afterFirst, CountReporterHandlers());
+                Assert.Equal(afterFirst, CountReporterHandlers());
+            }
+            finally {
+                RemoveGlobalHandlers();
+            }
+
+            // Уборка проверяется здесь же: незаметно переставшая работать, она вернула бы
+            // ровно то случайное падение соседних тестов, ради которого её и завели.
+            Assert.Equal(before, CountReporterHandlers());
         }
 
         /// <summary>
@@ -529,11 +539,8 @@ namespace ChillHub.Tests {
         private static InvalidOperationException Repeated() => new InvalidOperationException("одна и та же ошибка");
 
         /// <summary>Зовёт закрытый обработчик так же, как это сделала бы среда исполнения.</summary>
-        private static void Invoke(string method, object? sender, EventArgs args) {
-            var mi = typeof(ErrorReporter).GetMethod(method, BindingFlags.NonPublic | BindingFlags.Static);
-            Assert.True(mi != null, $"обработчик {method} не найден");
-            mi!.Invoke(null, new[] { sender, args });
-        }
+        private static void Invoke(string method, object? sender, EventArgs args)
+            => Method(method).Invoke(null, new[] { sender, args });
 
         /// <summary>
         /// Считает подписки, принадлежащие <see cref="ErrorReporter"/>, среди обработчиков
@@ -542,6 +549,39 @@ namespace ChillHub.Tests {
         /// </summary>
         private static int CountReporterHandlers()
             => CountIn(typeof(AppDomain), AppDomain.CurrentDomain) + CountIn(typeof(TaskScheduler), null);
+
+        /// <summary>
+        /// Снимает подписки, поставленные <see cref="ErrorReporter.InitGlobalHandlers"/>.
+        /// <para>
+        /// ПОДПИСКА ЖИВЁТ ДОЛЬШЕ ТЕСТА, КОТОРЫЙ ЕЁ ПОСТАВИЛ. Оставленная стоять, она делает
+        /// весь оставшийся прогон чужим: <c>TaskScheduler.UnobservedTaskException</c> среда
+        /// поднимает на потоке финализатора, когда сборщик мусора доберётся до забытой
+        /// упавшей задачи, — то есть в произвольный момент любого следующего теста. Отчёт
+        /// об этом уходит через подменённый транспорт той области, которая в этот момент
+        /// открыта, и её тест видит лишний запрос, которого не делал.
+        /// </para>
+        /// <para>
+        /// Ловилось это только на загруженной машине CI и выглядело как случайное падение
+        /// то одного теста, то другого. Отписываться обязан тот, кто подписался.
+        /// </para>
+        /// </summary>
+        private static void RemoveGlobalHandlers() {
+            var domain = Method("CurrentDomain_UnhandledException");
+            var unobserved = Method("TaskScheduler_UnobservedTaskException");
+
+            AppDomain.CurrentDomain.UnhandledException
+                -= (UnhandledExceptionEventHandler)Delegate.CreateDelegate(typeof(UnhandledExceptionEventHandler), domain);
+            TaskScheduler.UnobservedTaskException
+                -= (EventHandler<UnobservedTaskExceptionEventArgs>)Delegate.CreateDelegate(
+                    typeof(EventHandler<UnobservedTaskExceptionEventArgs>), unobserved);
+        }
+
+        /// <summary>Закрытый обработчик <see cref="ErrorReporter"/> по имени.</summary>
+        private static MethodInfo Method(string name) {
+            var mi = typeof(ErrorReporter).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.True(mi != null, $"обработчик {name} не найден");
+            return mi!;
+        }
 
         private static int CountIn(Type type, object? instance) {
             var flags = BindingFlags.NonPublic | (instance == null ? BindingFlags.Static : BindingFlags.Instance);
