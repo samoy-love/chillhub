@@ -25,7 +25,7 @@
       <Border Name="ErrorPanel" Visibility="Collapsed"
               Background="{DynamicResource Brush.Surface}"
               BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
-              CornerRadius="8" Padding="20" MaxWidth="620"
+              CornerRadius="{DynamicResource Radius.M}" Padding="20" MaxWidth="620"
               HorizontalAlignment="Center" VerticalAlignment="Center">
         <StackPanel Orientation="Vertical">
           <TextBlock Text="Не удалось открыть новость" FontSize="16" FontWeight="SemiBold"

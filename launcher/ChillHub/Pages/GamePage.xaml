@@ -31,9 +31,9 @@
     <!-- Основная кнопка действия (Установить/Обновить/Отмена) -->
     <Style x:Key="Style.Button.GamePrimary" TargetType="Button">
       <Setter Property="Background" Value="{DynamicResource Brush.AccentFill}"/>
-      <!-- Белая подпись на заливке кнопок — как у кнопки действия на витрине: на самом
-           акценте не проходили обе, и белая, и тёмная (см. Color.AccentFill в теме). -->
-      <Setter Property="Foreground" Value="#FFFFFF"/>
+      <!-- Тёмная подпись на заливке — как у кнопки действия на витрине: на угле белая
+           даёт 3,70 и порог не берёт, тёмная 5,30 (см. Color.AccentFill в теме). -->
+      <Setter Property="Foreground" Value="{DynamicResource Brush.OnAccent}"/>
       <Setter Property="BorderThickness" Value="0"/>
       <Setter Property="BorderBrush" Value="Transparent"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
@@ -42,7 +42,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" CornerRadius="8" Background="{TemplateBinding Background}"
+            <Border x:Name="bd" CornerRadius="{DynamicResource Radius.M}" Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
@@ -96,7 +96,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ListBoxItem">
-            <Border x:Name="bd" CornerRadius="12" BorderThickness="1"
+            <Border x:Name="bd" CornerRadius="{DynamicResource Radius.L}" BorderThickness="1"
                     Background="{DynamicResource Brush.Surface}"
                     BorderBrush="{DynamicResource Brush.Border}">
               <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
@@ -131,7 +131,7 @@
            висел по верху, а заголовок с чипом — по центру, и шапка выглядела рыхлой. -->
       <Button Grid.Column="0" Name="BackBtn" Style="{DynamicResource Style.Button.Back}"
               Click="BackBtn_Click" VerticalAlignment="Center"/>
-      <Border Grid.Column="1" Width="64" Height="64" Margin="16,0,0,0" CornerRadius="8"
+      <Border Grid.Column="1" Width="64" Height="64" Margin="16,0,0,0" CornerRadius="{DynamicResource Radius.M}"
               Background="{DynamicResource Brush.Surface}" ClipToBounds="True">
         <Grid>
           <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE7C3;" FontSize="26"
@@ -143,7 +143,7 @@
       <StackPanel Grid.Column="2" Margin="16,0,0,0" VerticalAlignment="Center">
         <TextBlock Name="TitleText" Text="Игра" FontSize="24" FontWeight="Bold"
                    Foreground="{DynamicResource Brush.Title}" TextTrimming="CharacterEllipsis"/>
-        <Border Name="StateBadge" CornerRadius="6" Padding="8,3" Margin="0,6,0,0"
+        <Border Name="StateBadge" CornerRadius="{DynamicResource Radius.S}" Padding="8,3" Margin="0,6,0,0"
                 HorizontalAlignment="Left"
                 Background="{DynamicResource Brush.Surface}"
                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
@@ -368,7 +368,7 @@
               Background="{DynamicResource Brush.Surface}"
               BorderBrush="{DynamicResource Brush.Border}"
               BorderThickness="1"
-              CornerRadius="8"
+              CornerRadius="{DynamicResource Radius.M}"
               Padding="12"
               Effect="{x:Null}">
         <TextBlock x:Name="ToastText" Foreground="{DynamicResource Brush.Text}"/>
