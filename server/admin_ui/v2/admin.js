@@ -29,6 +29,12 @@
   let D = null;
   let game = 'lethal'; // выбранная игра в разделе сборок
 
+  /* Отборы держатся между перерисовками: раздел перечитывается после
+     каждой записи, и сбрасывать отбор на «пометил прочитанным» значило
+     бы терять место в списке из двухсот обращений. */
+  let inboxFilter = {};
+  let metricsFilter = { days: 30, gameId: '' };
+
   /* ---------- Помощники ---------- */
 
   const esc = (s) =>
@@ -233,6 +239,7 @@
            после отрисовки: два файла по мегабайту каждый — не повод
            держать раздел пустым. До неё стоит скелет. */
         const dif = D.diff;
+        const diffPair = D.diffPair || {};
 
         const stateBadge = {
           active: '<span class="badge badge--ok"><span class="dot"></span>у игроков</span>',
@@ -265,11 +272,12 @@
             <div class="sticky">
               ${card(
                 `Что изменится у игрока`,
-                `<div data-diff>${
-                  dif === undefined
-                    ? '<div class="sk" style="height:12rem"></div>'
-                    : V().launcherDiff(dif, { active: L.active })
-                }</div>`,
+                `${V().versionPicker(L.versions, diffPair.from || L.active, diffPair.to || L.newest)}
+                 <div data-diff>${
+                   dif === undefined
+                     ? '<div class="sk" style="height:12rem"></div>'
+                     : V().launcherDiff(dif, { active: diffPair.from || L.active })
+                 }</div>`,
                 {
                   head: `<span data-diff-counts>${dif ? V().diffCounts(dif) : ''}</span>`,
                   foot: dif
@@ -547,10 +555,11 @@
         const tone = { bug: 'bad', question: 'accent', idea: 'ok', other: '' };
         const news = D.inbox.filter((f) => f.status === 'new').length;
 
-        return card(
+        const rows = window.CH2Sections.filterInbox(D.inbox, inboxFilter);
+        return V().inboxFilter(inboxFilter) + card(
           'Входящие',
           list({
-            rows: D.inbox,
+            rows: rows,
             head: '<th>Тип</th><th>Обращение</th><th>Кто</th><th>Когда</th><th></th>',
             row: (f) => `<tr${f.status === 'new' ? ' class="unread"' : ''}>
                 <td><span class="badge ${tone[f.type] ? `badge--${tone[f.type]}` : ''}">${t[f.type]}</span></td>
@@ -569,7 +578,7 @@
                   <button class="btn btn--danger btn--text" type="button" data-act="inbox.delete" data-args='{"id":"${esc(f.id)}"}'>Удалить</button>
                 </td>
               </tr>`,
-            empty: 'Обращений нет',
+            empty: V().anyFilter(inboxFilter) ? 'Под отбор ничего не попало' : 'Обращений нет',
             emptyHint: 'Пусто — это хорошая новость.',
           }),
           {
@@ -641,8 +650,9 @@
         const share = sum('updates') > 0 ? sum('errors') / sum('updates') : 0;
 
         return `
+          ${V().metricsFilter(metricsFilter, D.games)}
           ${card(
-            'Коды ошибок за 30 дней',
+            `Коды ошибок за ${metricsFilter.days} дней${metricsFilter.gameId ? ': ' + esc(metricsFilter.gameId) : ''}`,
             list({
               rows: D.errors,
               head: '<th>Код</th><th>Что это значит</th><th>Где чаще</th><th class="num">Случаев</th><th class="num">Доля</th>',
@@ -1644,75 +1654,6 @@
     });
   }
 
-  /* --- Подбор параметров --- */
-
-  /* Наборы для прогона: те же три, между которыми и приходится выбирать.
-     Больше восьми потоков не пробуем — на них канал начинает терять
-     куски, и выигрыш в скорости съедается повторами. */
-  const BENCH = [
-    { chunk: '4 МиБ', size: 4 * 1024 * 1024, streams: 2 },
-    { chunk: '8 МиБ', size: 8 * 1024 * 1024, streams: 4 },
-    { chunk: '16 МиБ', size: 16 * 1024 * 1024, streams: 8 },
-  ];
-
-  /* Прогон меряет время ответа сервера на заявку о загрузке и сразу её
-     отменяет: ничего не публикуется и на диске ничего не остаётся. */
-  async function benchRuns(api) {
-    const out = [];
-    for (const c of BENCH) {
-      const started = Date.now();
-      let retries = 0;
-      let id = '';
-      try {
-        const init = await api.uploadInit({
-          kind: 'bench',
-          zipName: 'bench.bin',
-          totalSize: c.size,
-          chunkSize: c.size,
-        });
-        id = (init && init.uploadId) || '';
-      } catch {
-        retries++;
-      }
-      const secs = Math.max(0.001, (Date.now() - started) / 1000);
-      if (id) await window.CH2Upload.abort(api, id);
-      out.push({ chunk: c.chunk, streams: c.streams, mbps: c.size / 1024 / 1024 / secs, retries: retries });
-    }
-    return out;
-  }
-
-  function flowBench() {
-    const T = window.CH2Tuning;
-    let runs = T.recall(window.localStorage);
-
-    const sheet = openSheet({
-      title: 'Подбор параметров загрузки',
-      lede: 'Прогон занимает около минуты и ничего не публикует.',
-      body: V().benchTable(runs, T),
-      foot: '<button class="btn btn--accent" type="button" data-flow="run">Запустить прогон</button>',
-    });
-
-    sheet.root.addEventListener('click', async (e) => {
-      const apply = e.target.closest('[data-apply]');
-      if (apply) {
-        const pick = runs.find((r) => r.chunk === apply.dataset.apply);
-        if (!pick) return;
-        window.CH2_UPLOAD_PARAMS = T.apply(pick);
-        toast('Применено: ' + pick.chunk + ' на ' + pick.streams + ' потоках', 'ok');
-        return;
-      }
-
-      const run = e.target.closest('[data-flow="run"]');
-      if (!run) return;
-      run.disabled = true;
-      sheet.body('<div class="empty"><b>Идёт прогон</b><span>Гоняем наборы по очереди</span></div>');
-      runs = await benchRuns(API);
-      T.remember(window.localStorage, runs);
-      sheet.body(V().benchTable(runs, T));
-      run.disabled = false;
-    });
-  }
-
   /* --- Состав будущей сборки --- */
 
   /* Пересчёт спрашивает у Thunderstore, из чего соберётся модпак, и не
@@ -1748,45 +1689,46 @@
   /* --- Каталог Thunderstore --- */
 
   /* Половина модпаков в раздел «Modpacks» не проставлена и в каталоге не
-     находится вовсе, поэтому рядом с поиском живёт поле для ссылки на
+     находится вовсе, поэтому рядом с поиском живёт приём ссылки на
      страницу пакета: сервер разберёт её сам. */
   function flowCatalog(pack) {
     let items = [];
-    let browseUrl = '';
+    const st = { q: '', ordering: 'most-downloaded', page: 1, perPage: 20, count: 0, hasMore: false };
 
     const sheet = openSheet({
       title: 'Каталог Thunderstore: ' + (pack.title || pack.gameId),
       lede: 'Выбранный пакет подставится в сборку. Ничего не собирается и не публикуется.',
       body: '<div class="sk" style="height:16rem"></div>',
-      foot:
-        '<input class="inline" type="search" data-q placeholder="Название пакета" aria-label="Поиск по каталогу">' +
-        '<button class="btn" type="button" data-flow="find">Найти</button>' +
-        '<span class="push"></span>' +
-        '<button class="btn" type="button" data-flow="byUrl">Вставить ссылку</button>',
+      foot: '<button class="btn" type="button" data-flow="byUrl">Вставить ссылку на пакет</button>',
     });
 
-    async function load(q) {
-      sheet.body('<div class="sk" style="height:16rem"></div>');
+    async function load() {
+      const bar = sheet.root.querySelector('[data-catalog-bar]');
+      if (bar) bar.setAttribute('aria-busy', 'true');
       try {
-        const got = await API.modsCatalog({ gameId: pack.gameId, q: q || '', page: 1 });
+        const got = await API.modsCatalog({ gameId: pack.gameId, q: st.q, ordering: st.ordering, page: st.page });
         items = (got && got.results) || [];
-        browseUrl = (got && got.browseUrl) || '';
+        st.count = Number((got && got.count) || 0);
+        /* «Есть ли ещё» считается по полной странице, а не по счётчику:
+           счётчик Thunderstore иногда отстаёт, а пустая следующая
+           страница обиднее лишней стрелки. */
+        st.hasMore = items.length >= st.perPage;
       } catch (err) {
-        sheet.body('<div class="empty"><b>Каталог недоступен</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
+        sheet.body(
+          V().catalogBar(st) +
+            '<div class="empty"><b>Каталог недоступен</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>'
+        );
         return;
       }
-      sheet.body(V().catalogList(items, { query: q, browseUrl: browseUrl }));
+      sheet.body(V().catalogBar(st) + V().catalogList(items, { query: st.q }));
     }
-    load('');
+    load();
 
     const choose = (ns, name, version) => {
-      pick = { gameId: pack.gameId, namespace: ns, name: name, version: version || '' };
       toast('Выбрано: ' + ns + '/' + name, 'ok');
       sheet.close();
-      flowResolve(Object.assign({ title: pack.title }, pick));
+      flowResolve({ title: pack.title, gameId: pack.gameId, namespace: ns, name: name, version: version || '' });
     };
-
-    let pick = null;
 
     sheet.root.addEventListener('click', async (e) => {
       const take = e.target.closest('[data-take]');
@@ -1807,23 +1749,45 @@
         return;
       }
 
-      const b = e.target.closest('[data-flow]');
-      if (!b) return;
-      if (b.dataset.flow === 'find') load(sheet.root.querySelector('[data-q]').value.trim());
-      if (b.dataset.flow === 'byUrl') {
-        const link = window.prompt('Ссылка на страницу пакета Thunderstore', '');
-        if (!link) return;
-        const parsed = window.CH2Mods.parsePackageUrl(link);
-        if (!parsed) {
-          toast('Это не похоже на страницу пакета Thunderstore', 'warn');
-          return;
-        }
-        choose(parsed.namespace, parsed.name, '');
+      const page = e.target.closest('[data-page]');
+      if (page) {
+        st.page = Math.max(1, st.page + Number(page.dataset.page));
+        load();
+        return;
       }
+
+      const b = e.target.closest('[data-flow]');
+      if (!b || b.dataset.flow !== 'byUrl') return;
+
+      const link = window.prompt('Ссылка на страницу пакета Thunderstore', '');
+      if (!link) return;
+      const parsed = window.CH2Mods.parsePackageUrl(link);
+      if (!parsed) {
+        toast('Это не похоже на страницу пакета Thunderstore', 'warn');
+        return;
+      }
+      choose(parsed.namespace, parsed.name, '');
     });
 
+    /* Смена поиска или порядка возвращает на первую страницу: остаться
+       на седьмой странице другого запроса — верный способ увидеть
+       «ничего не найдено» там, где всё нашлось. */
+    const restart = () => {
+      const bar = sheet.root.querySelector('[data-catalog-bar]');
+      if (!bar) return;
+      st.q = bar.querySelector('[name="q"]').value.trim();
+      st.ordering = bar.querySelector('[name="ordering"]').value;
+      st.page = 1;
+      load();
+    };
+    sheet.root.addEventListener('change', (e) => {
+      if (e.target.matches('[name="ordering"], [name="q"]')) restart();
+    });
+    sheet.root.addEventListener('search', (e) => {
+      if (e.target.matches('[name="q"]')) restart();
+    });
     sheet.root.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && e.target.matches('[data-q]')) load(e.target.value.trim());
+      if (e.key === 'Enter' && e.target.matches('[name="q"]')) restart();
     });
   }
 
@@ -2075,6 +2039,136 @@
     return out;
   }
 
+  /* --- Подбор параметров --- */
+
+  /* САМ ПРОГОН — ИЗ ВЕРСИИ 1.0. `upload-bench.js` умеет разобрать списки
+     наборов, посчитать размер пробы, залить её и остановиться по сигналу
+     — всё это написано и покрыто тестами. Здесь только экран вокруг:
+     что спрашивают до, что показывают во время и что делают с итогом. */
+  function flowBench() {
+    const T = window.CH2Tuning;
+    const B = {
+      parseBenchList: window.parseBenchList,
+      benchCombos: window.benchCombos,
+      benchPlan: window.benchPlan,
+      benchUploadOnce: window.benchUploadOnce,
+    };
+
+    let runs = T.recall(window.localStorage);
+    let setup = { chunks: '4, 8, 16', concurrency: '2, 4, 8', probe: 64, file: null };
+    let ctrl = null;
+
+    const sheet = openSheet({
+      title: 'Подбор параметров загрузки',
+      lede: 'Проба заливается и сразу отменяется: на сервере ничего не остаётся и никуда не публикуется.',
+      body: '',
+      foot: '',
+    });
+
+    const draw = (progress) => {
+      sheet.body(
+        V().benchSetup(setup) +
+          (progress ? V().benchProgress(progress) : '') +
+          V().benchTable(runs, T)
+      );
+      sheet.foot(
+        ctrl
+          ? '<button class="btn btn--danger" type="button" data-flow="stop">Остановить</button>'
+          : '<button class="btn" type="button" data-flow="pick">Выбрать файл пробы</button>' +
+            '<span class="push"></span>' +
+            '<button class="btn btn--accent" type="button" data-flow="run"' +
+            (setup.file ? '' : ' disabled') +
+            '>Запустить прогон</button>'
+      );
+    };
+    draw();
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.addEventListener('change', () => {
+      if (input.files && input.files[0]) {
+        setup.file = input.files[0];
+        draw();
+      }
+    });
+
+    const read = () => {
+      const q = (n) => sheet.root.querySelector('[name="' + n + '"]');
+      if (!q('chunks')) return;
+      setup = Object.assign({}, setup, {
+        chunks: q('chunks').value,
+        concurrency: q('concurrency').value,
+        probe: Number(q('probe').value) || 64,
+      });
+    };
+
+    async function run() {
+      read();
+      const chunkList = B.parseBenchList(setup.chunks);
+      const concList = B.parseBenchList(setup.concurrency);
+      const combos = B.benchCombos(chunkList, concList);
+      if (!combos.length) {
+        toast('Наборы не разобрались: нужны числа через запятую', 'warn');
+        return;
+      }
+
+      ctrl = new AbortController();
+      runs = [];
+      draw({ done: 0, total: combos.length });
+
+      for (let i = 0; i < combos.length; i++) {
+        if (ctrl.signal.aborted) break;
+        const c = combos[i];
+        draw({ done: i, total: combos.length, current: { chunk: c.chunkMB + ' МиБ', streams: c.conc } });
+
+        const res = await B.benchUploadOnce(setup.file, c.chunkMB, c.conc, setup.probe * 1024 * 1024, {
+          fetch: window.fetch.bind(window),
+          signal: ctrl.signal,
+        });
+
+        /* Сорвавшийся набор не выбрасываем: ноль скорости с пометкой —
+           тоже ответ, и он объясняет, почему выбран не он. */
+        runs.push({
+          chunk: c.chunkMB + ' МиБ',
+          streams: c.conc,
+          mbps: res.ok ? res.speed / 1024 / 1024 : 0,
+          retries: res.ok ? 0 : 1,
+          note: res.ok ? '' : res.error || 'не прошёл',
+        });
+        draw({ done: i + 1, total: combos.length, speed: res.ok ? res.speed : 0 });
+      }
+
+      const stopped = ctrl.signal.aborted;
+      ctrl = null;
+      if (runs.some((r) => r.mbps > 0)) T.remember(window.localStorage, runs);
+      draw();
+      toast(stopped ? 'Прогон остановлен, что успели — в таблице' : 'Прогон закончен', stopped ? 'warn' : 'ok');
+    }
+
+    /* Закрытие листа посреди прогона — это остановка: брошенный прогон
+       продолжал бы лить пробы в фон и занимать канал. */
+    sheet.onClose = () => {
+      if (ctrl) ctrl.abort();
+    };
+
+    sheet.root.addEventListener('click', (e) => {
+      const apply = e.target.closest('[data-apply]');
+      if (apply) {
+        const pick = runs.find((r) => r.chunk === apply.dataset.apply);
+        if (!pick) return;
+        window.CH2_UPLOAD_PARAMS = T.apply(pick);
+        toast('Применено: ' + pick.chunk + ' на ' + pick.streams + ' потоках', 'ok');
+        return;
+      }
+
+      const b = e.target.closest('[data-flow]');
+      if (!b) return;
+      if (b.dataset.flow === 'pick') input.click();
+      if (b.dataset.flow === 'stop' && ctrl) ctrl.abort();
+      if (b.dataset.flow === 'run') run();
+    });
+  }
+
   /** Дела, которые панель ведёт сама. Записи в реестре действий — отдельно. */
   const FLOWS = {
     upload: () => flowUpload({ kind: 'launcher' }),
@@ -2133,7 +2227,61 @@
        приезжает уже после отрисовки: это два файла по мегабайту, и
        держать из-за них весь раздел пустым незачем. Считается она один
        раз на пару версий — второй заход берёт готовое. */
-    if ($('[data-diff]') && D.diff === undefined) diffLoad();
+    if ($('[data-diff]') && D.diff === undefined) diffLoad(D.diffPair);
+
+    const go = $('[data-diff-go]');
+    if (go) {
+      go.addEventListener('click', () => {
+        D.diff = undefined;
+        const box = $('[data-diff]');
+        if (box) box.innerHTML = '<div class="sk" style="height:12rem"></div>';
+        diffLoad({ from: $('[data-diff-from]').value, to: $('[data-diff-to]').value });
+      });
+    }
+
+    /* Отбор обращений считается на месте: сервер отдаёт инбокс целиком,
+       и гонять его туда-обратно ради фильтра по типу незачем. */
+    const inboxBar = $('[data-inbox-filter]');
+    if (inboxBar) {
+      const collect = () => {
+        const q = (n) => inboxBar.querySelector('[name="' + n + '"]');
+        inboxFilter = {
+          query: q('query').value.trim(),
+          type: q('type').value,
+          status: q('status').value,
+          important: q('important').checked,
+          from: q('from').value,
+          to: q('to').value,
+        };
+        route();
+      };
+      inboxBar.addEventListener('change', collect);
+      inboxBar.addEventListener('search', collect);
+      const reset = $('[data-inbox-reset]');
+      if (reset) {
+        reset.addEventListener('click', () => {
+          inboxFilter = {};
+          route();
+        });
+      }
+    }
+
+    /* Метрики считает сервер, поэтому смена периода — это перечитывание
+       раздела, а не пересчёт на месте. */
+    const metricsBar = $('[data-metrics-filter]');
+    if (metricsBar) {
+      metricsBar.addEventListener('click', async (e) => {
+        const b = e.target.closest('[data-days]');
+        if (!b) return;
+        metricsFilter = Object.assign({}, metricsFilter, { days: Number(b.dataset.days) });
+        await reloadMetrics();
+      });
+      metricsBar.addEventListener('change', async (e) => {
+        if (!e.target.matches('[name="gameId"]')) return;
+        metricsFilter = Object.assign({}, metricsFilter, { gameId: e.target.value });
+        await reloadMetrics();
+      });
+    }
 
     const filter = $('[data-tree-filter]');
     const t = $('[data-tree]');
@@ -2212,19 +2360,44 @@
      отличать: старые манифесты на сервере подчищаются, и пустое дерево
      вместо честного «нет манифеста» означало бы, что решение об
      активации принимают вслепую, думая, что видят всё. */
-  async function diffLoad() {
+  async function diffLoad(pair) {
     const L = D.launcher;
-    if (!L || !L.pending || !L.active || !L.newest) {
+    const from = (pair && pair.from) || L.active;
+    const to = (pair && pair.to) || L.newest;
+    D.diffPair = { from: from, to: to };
+
+    if (!from || !to || from === to) {
       D.diff = null;
       return;
     }
 
-    D.diff = await window.CH2Manifest.between(L.active, L.newest, { fetch: window.fetch.bind(window) });
+    D.diff = await window.CH2Manifest.between(from, to, { fetch: window.fetch.bind(window) });
 
     const box = $('[data-diff]');
-    if (box) box.innerHTML = V().launcherDiff(D.diff, { active: L.active });
+    if (box) box.innerHTML = V().launcherDiff(D.diff, { active: from });
     const counts = $('[data-diff-counts]');
     if (counts) counts.innerHTML = D.diff ? V().diffCounts(D.diff) : '';
+  }
+
+  /* Перечитывает метрики под выбранный период и игру.
+
+     Границы считаются в браузере и уезжают в UTC: сервер понимает
+     RFC3339, а «за 7 дней» у человека — это его последние семь дней, не
+     чужие. */
+  async function reloadMetrics() {
+    const box = $('[data-metrics-filter]');
+    if (box) box.setAttribute('aria-busy', 'true');
+
+    const p = V().period(metricsFilter.days);
+    const query = { from: p.from, to: p.to, gameId: metricsFilter.gameId };
+    try {
+      const raw = await API.metricsSummary(query);
+      D.days = window.CH2Sections.metrics(raw);
+      D.errors = window.CH2Sections.errors(raw);
+    } catch (err) {
+      toast('Метрики не перечитались: ' + window.CH2Api.reason(err), 'bad');
+    }
+    route();
   }
 
   /* ---------- Палитра ---------- */

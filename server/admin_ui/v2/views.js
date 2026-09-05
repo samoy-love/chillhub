@@ -566,6 +566,83 @@
     };
   }
 
+  /* ---------- Отборы ---------- */
+
+  /**
+   * Полоса отбора над списком обращений.
+   *
+   * Правило отбора давно написано и проверено (`filterInbox`), не было
+   * только полосы. Без неё инбокс из двухсот обращений читается ровно
+   * одним способом — сверху вниз, каждый раз заново.
+   */
+  function inboxFilter(f) {
+    const flt = f || {};
+    const sel = (name, label, options) =>
+      '<label class="inline-label" for="fi-' + name + '">' + esc(label) + '</label>' +
+      '<select id="fi-' + name + '" name="' + name + '">' +
+      options
+        .map(
+          ([v, t]) =>
+            '<option value="' + esc(v) + '"' + (String(flt[name] || '') === v ? ' selected' : '') + '>' + esc(t) + '</option>'
+        )
+        .join('') +
+      '</select>';
+
+    return (
+      '<div class="filters" data-inbox-filter>' +
+      '<input type="search" name="query" value="' + esc(flt.query) + '" placeholder="Поиск по тексту, имени и контакту" aria-label="Поиск по обращениям">' +
+      sel('type', 'Тип', [['', 'любой'], ['bug', 'поломка'], ['idea', 'идея'], ['question', 'вопрос'], ['other', 'прочее']]) +
+      sel('status', 'Состояние', [['', 'любое'], ['new', 'новые'], ['read', 'прочитанные']]) +
+      '<label class="check check--inline"><input type="checkbox" name="important"' +
+      (flt.important ? ' checked' : '') +
+      '><span>только важные</span></label>' +
+      '<label class="inline-label" for="fi-from">С</label><input id="fi-from" name="from" type="date" value="' + esc(flt.from) + '">' +
+      '<label class="inline-label" for="fi-to">по</label><input id="fi-to" name="to" type="date" value="' + esc(flt.to) + '">' +
+      (anyFilter(flt) ? '<button class="btn btn--text" type="button" data-inbox-reset>Сбросить</button>' : '') +
+      '</div>'
+    );
+  }
+
+  const anyFilter = (f) =>
+    Boolean(f && (f.query || f.type || f.status || f.important || f.from || f.to));
+
+  /**
+   * Полоса отбора над метриками.
+   *
+   * Период — не украшение: «за 30 дней» и «за 7 дней» отвечают на разные
+   * вопросы, и после выкатки смотрят именно вчерашний день, а не месяц,
+   * в котором он растворился.
+   */
+  function metricsFilter(state, games) {
+    const st = state || {};
+    const days = Number(st.days || 30);
+    const btn = (n, label) =>
+      '<button class="seg' + (days === n ? ' on' : '') + '" type="button" data-days="' + n + '">' + esc(label) + '</button>';
+    return (
+      '<div class="filters" data-metrics-filter>' +
+      '<div class="segs">' + btn(7, '7 дней') + btn(30, '30 дней') + btn(90, '90 дней') + '</div>' +
+      '<label class="inline-label" for="mf-game">Игра</label>' +
+      '<select id="mf-game" name="gameId"><option value="">все</option>' +
+      (games || [])
+        .map(
+          (g) =>
+            '<option value="' + esc(g.gameId) + '"' + (st.gameId === g.gameId ? ' selected' : '') + '>' +
+            esc(g.title || g.gameId) +
+            '</option>'
+        )
+        .join('') +
+      '</select></div>'
+    );
+  }
+
+  /** Границы периода в том виде, который понимает сервер. */
+  function period(days) {
+    const n = Math.max(1, Number(days) || 30);
+    const to = new Date();
+    const from = new Date(to.getTime() - n * 24 * 60 * 60 * 1000);
+    return { from: from.toISOString(), to: to.toISOString() };
+  }
+
   /* ---------- Обращение ---------- */
 
   /**
@@ -781,6 +858,8 @@
   function launcherDiff(result, opts) {
     const o = opts || {};
     const f = F();
+    const M2 = M('CH2Manifest', o.manifest);
+
     if (!result) {
       return (
         '<div class="empty"><b>Сравнить не с чем</b><span>Манифест версии ' +
@@ -794,17 +873,66 @@
       return '<div class="empty"><b>Файлы совпадают</b><span>Между этими версиями качать нечего</span></div>';
     }
 
-    const rows = (result.rows || [])
-      .map(
-        (r) =>
-          '<div class="row ' + esc(r.diff) + '" data-path="' + esc(r.path) + '">' +
-          '<span>' + esc(r.path) + '</span>' +
-          '<span class="size">' + (r.diff === 'del' ? '—' : esc(f.bytes(r.size))) + '</span>' +
-          '</div>'
-      )
-      .join('');
+    /* Свёрнутые папки, а не плоский список: в сборке четыре с половиной
+       сотни файлов, и на «что изменилось» плоский отвечает единственным
+       способом — пролистать целиком. Папка с числом отвечает сразу. */
+    const groups = M2.folders(result.rows || []);
+    const open = groups.length <= 3;
 
-    return '<div class="tree" data-tree>' + rows + '</div>';
+    return (
+      '<div class="tree scroll scroll--lg" data-tree>' +
+      groups
+        .map((g) => {
+          const rows = g.files
+            .map(
+              (r) =>
+                '<div class="row ' + esc(r.diff) + '" data-path="' + esc(g.dir ? g.dir + '/' + r.name : r.name) + '">' +
+                '<span>' + (r.diff === 'add' ? '+' : r.diff === 'del' ? '−' : '~') + '</span>' +
+                '<span>' + esc(r.name) + '</span>' +
+                '<span class="size">' + (r.diff === 'del' ? '—' : esc(f.bytes(r.size))) + '</span>' +
+                '</div>'
+            )
+            .join('');
+          return (
+            '<details class="folder"' + (open ? ' open' : '') + '>' +
+            '<summary><span>' + esc(g.dir || 'корень сборки') + '</span>' +
+            '<span class="size">' + g.counts.total + '</span></summary>' +
+            rows +
+            '</details>'
+          );
+        })
+        .join('') +
+      '</div>'
+    );
+  }
+
+  /**
+   * Выбор двух версий для сравнения.
+   *
+   * По умолчанию сравнивается активная с загруженной — это то решение,
+   * которое сейчас на столе. Но иногда нужен другой вопрос: «что
+   * набежало за три выпуска», и ответить на него без выбора нельзя.
+   */
+  function versionPicker(versions, from, to) {
+    const list = versions || [];
+    if (list.length < 2) return '';
+    const opts = (selected) =>
+      list
+        .map(
+          (v) =>
+            '<option value="' + esc(v.version) + '"' + (v.version === selected ? ' selected' : '') + '>' +
+            esc(v.version) +
+            (v.state === 'active' ? ' — у игроков' : v.state === 'uploaded' ? ' — загружена' : '') +
+            '</option>'
+        )
+        .join('');
+    return (
+      '<div class="btn-row">' +
+      '<label class="inline-label" for="v-from">С</label><select id="v-from" data-diff-from>' + opts(from) + '</select>' +
+      '<label class="inline-label" for="v-to">на</label><select id="v-to" data-diff-to>' + opts(to) + '</select>' +
+      '<button class="btn btn--text" type="button" data-diff-go>Сравнить</button>' +
+      '</div>'
+    );
   }
 
   /** Счётчики над деревом: сколько добавилось, изменилось и пропало. */
@@ -941,6 +1069,58 @@
 
   /* ---------- Каталог ---------- */
 
+  /**
+   * Полоса каталога: поиск, сортировка, страницы.
+   *
+   * Сортировка не украшение: по умолчанию Thunderstore отдаёт самые
+   * скачиваемые, а ищут обычно свежее — «что вышло на этой неделе».
+   * Страницы тоже: в каталоге игры сотни модпаков, и первая двадцатка
+   * отвечает далеко не всегда.
+   */
+  function catalogBar(state) {
+    const st = state || {};
+    const orderings = [
+      ['most-downloaded', 'по скачиваниям'],
+      ['newest', 'сначала новые'],
+      ['last-updated', 'по обновлению'],
+      ['top-rated', 'по оценке'],
+    ];
+    return (
+      '<div class="filters" data-catalog-bar>' +
+      '<input type="search" name="q" value="' + esc(st.q) + '" placeholder="Название модпака" aria-label="Поиск по каталогу">' +
+      '<label class="inline-label" for="c-ord">Порядок</label>' +
+      '<select id="c-ord" name="ordering">' +
+      orderings
+        .map(
+          ([v, t]) =>
+            '<option value="' + esc(v) + '"' + ((st.ordering || 'most-downloaded') === v ? ' selected' : '') + '>' +
+            esc(t) +
+            '</option>'
+        )
+        .join('') +
+      '</select>' +
+      '<span class="push"></span>' +
+      '<button class="btn btn--icon" type="button" data-page="-1" aria-label="Предыдущая страница"' +
+      (Number(st.page || 1) <= 1 ? ' disabled' : '') +
+      '>←</button>' +
+      '<span class="inline-label">' + esc(pageLabel(st)) + '</span>' +
+      '<button class="btn btn--icon" type="button" data-page="1" aria-label="Следующая страница"' +
+      (st.hasMore ? '' : ' disabled') +
+      '>→</button>' +
+      '</div>'
+    );
+  }
+
+  /* Номер страницы вместе с тем, из скольких: «страница 3» без «из 12»
+     не говорит, много ли ещё осталось. */
+  function pageLabel(st) {
+    const page = Number(st.page || 1);
+    const total = Number(st.count || 0);
+    const per = Number(st.perPage || 20);
+    if (!total) return 'страница ' + page;
+    return 'страница ' + page + ' из ' + Math.max(1, Math.ceil(total / per));
+  }
+
   /** Список пакетов каталога. */
   function catalogList(items, opts) {
     const o = opts || {};
@@ -1027,6 +1207,48 @@
 
   /* ---------- Подбор параметров ---------- */
 
+  /**
+   * Настройки прогона.
+   *
+   * Наборы задаются списком, а не тремя кнопками: канал у всех разный, и
+   * то, что на одном упирается в восемь потоков, на другом только
+   * начинает разгоняться. Проба — настоящий файл: гонять синтетику
+   * бесполезно, мерить надо ровно то, что потом и поедет.
+   */
+  function benchSetup(st) {
+    const s = st || {};
+    return (
+      '<div class="cols cols--2">' +
+      '<div class="field"><label for="b-chunks">Размеры куска, МБ</label>' +
+      '<input id="b-chunks" name="chunks" type="text" value="' + esc(s.chunks || '4, 8, 16') + '">' +
+      '<span class="help">Через запятую. Сервер принимает от 1 до 32</span></div>' +
+      '<div class="field"><label for="b-conc">Потоки</label>' +
+      '<input id="b-conc" name="concurrency" type="text" value="' + esc(s.concurrency || '2, 4, 8') + '">' +
+      '<span class="help">Больше не значит быстрее: на восьми канал начинает терять куски</span></div>' +
+      '</div>' +
+      '<div class="field"><label for="b-probe">Сколько лить на пробу, МБ</label>' +
+      '<input id="b-probe" name="probe" type="number" min="8" max="512" value="' + esc(String(s.probe || 64)) + '">' +
+      '<span class="help">Меньше 32 МБ меряет не канал, а задержку до сервера</span></div>' +
+      (s.file
+        ? '<div class="handoff"><div><span class="k">Файл пробы</span><span class="v">' + esc(s.file.name) + '</span></div></div>'
+        : '<div class="empty"><b>Файл не выбран</b><span>Нужен настоящий архив: синтетика сжимается и меряет не то</span></div>')
+    );
+  }
+
+  /** Ход прогона: какой набор сейчас и сколько осталось. */
+  function benchProgress(state) {
+    const s = state || {};
+    if (!s.total) return '';
+    const f = F();
+    return (
+      '<div class="meter"><i class="ok" style="width:' + Math.round((s.done / s.total) * 100) + '%"></i></div>' +
+      '<p class="note">Набор ' + (s.done + 1) + ' из ' + s.total +
+      (s.current ? ': ' + esc(s.current.chunk) + ' на ' + s.current.streams + ' потоках' : '') +
+      (s.speed ? ' · ' + esc(f.speed(s.speed)) : '') +
+      '</p>'
+    );
+  }
+
   /** Таблица прогонов с пометкой лучшего и объяснением, почему выбран он. */
   function benchTable(runs, tuning) {
     const T = M('CH2Tuning', tuning);
@@ -1085,6 +1307,10 @@
     galleryCrumbs,
     galleryList,
     assetList,
+    inboxFilter,
+    anyFilter,
+    metricsFilter,
+    period,
     feedbackCard,
     replyLink,
     diagnosticsText,
@@ -1094,11 +1320,14 @@
     maintProblem,
     errorEvents,
     launcherDiff,
+    versionPicker,
     diffCounts,
     sparkPoints,
     sparkLine,
     resolvePlan,
     modsDiff,
+    catalogBar,
+    pageLabel,
     catalogList,
     importResult,
     logsView,
@@ -1106,6 +1335,8 @@
     gameForm,
     orderList,
     orderSummary,
+    benchSetup,
+    benchProgress,
     benchTable,
   };
 });
