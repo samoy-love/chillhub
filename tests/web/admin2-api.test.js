@@ -353,10 +353,42 @@ test('длинный текст в адрес не лезет, но телом �
   // Адрес не резиновый: на длинном тексте запрос упрётся в ограничение сервера
   const s = spy();
   const long = 'я'.repeat(A.URL_VALUE_LIMIT + 1);
-  await s.api.newsSave({ title: 'Заметка', body: long });
-  assert.ok(!s.last().url.includes('body='), 'длинный текст ушёл в адрес');
-  assert.match(s.last().url, /title=/, 'короткий заголовок в адрес не попал');
-  assert.strictEqual(new URLSearchParams(s.last().body).get('body'), long);
+  await s.api.gallerySetCaption('repo', 'cover.jpg', long);
+  assert.ok(!s.last().url.includes('caption='), 'длинный текст ушёл в адрес');
+  assert.match(s.last().url, /file=cover/, 'короткое имя файла в адрес не попало');
+  assert.strictEqual(new URLSearchParams(s.last().body).get('caption'), long);
+});
+
+test('список ручек с формой закрыт тем же правилом, что и список с JSON', () => {
+  // Расширять его можно только по коду сервера
+  assert.deepStrictEqual([...A.FORM_BODY].sort(), ['news/preview', 'news/save']);
+});
+
+test('заметка уезжает формой: сервер разбирает её только так', async () => {
+  /* `news/save` и `news/preview` не принимают ни одного файла, но оба
+     начинаются с ParseMultipartForm — на чужом Content-Type он ничего не
+     разбирает, и обработчик отвечает 400. Панель из-за этого не могла ни
+     сохранить заметку, ни показать её глазами игрока. */
+  const s = spy();
+  await s.api.newsSave({ scope: 'launcher', slug: 'note', markdown: '# Заметка', published: true });
+
+  const sent = s.last().body;
+  assert.ok(typeof FormData !== 'undefined' && sent instanceof FormData, 'заметка ушла не формой');
+  assert.strictEqual(sent.get('slug'), 'note');
+  assert.strictEqual(sent.get('markdown'), '# Заметка');
+  assert.strictEqual(sent.get('published'), 'true');
+
+  /* Content-Type руками не ставим: его вместе с разделителем проставляет
+     сам FormData, и заданный вручную ломает разбор надёжнее, чем
+     отсутствующий. */
+  assert.ok(!s.last().type || !s.last().type.includes('urlencoded'), 'форме приписали чужой тип');
+});
+
+test('предпросмотр заметки уезжает так же', async () => {
+  const s = spy();
+  await s.api.newsPreview('# Заметка', 'launcher', '');
+  assert.ok(s.last().body instanceof FormData, 'предпросмотр ушёл не формой');
+  assert.strictEqual(s.last().body.get('markdown'), '# Заметка');
 });
 
 test('«нет» доезжает как «нет», а не пропадает', async () => {
