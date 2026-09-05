@@ -44,7 +44,7 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
-                Version = "1.6.49",
+                Version = "1.6.50",
                 Date = "2026-09-05",
                 Changes = new[] {
                     "Список игр читается с одного взгляда: выбранная игра выделена, у каждой строки цветная точка состояния.",
