@@ -28,7 +28,10 @@ function serverFixtures() {
         { version: '1.6.24', date: '31.08.2026', files: 476, size: 121100000, state: 'active' },
       ],
     },
-    'games': { items: [{ gameId: 'repo', title: 'R.E.P.O.', exeRelativePath: 'REPO.exe' }] },
+    /* У игры включены моды: без этого панель про сборки не спрашивает
+       вовсе — `mods/list` у игры без модпака отвечает 400. Форма поля
+       взята из реестра (adminapi/mods/profile.go). */
+    'games': { items: [{ gameId: 'repo', title: 'R.E.P.O.', exeRelativePath: 'REPO.exe', mods: { enabled: true, steamAppId: '3241660' } }] },
     'mods/list': {
       items: [{ gameId: 'repo', title: 'R.E.P.O.', built: '1.9.9', active: '1.9.8', mods: 17, size: 251000000 }],
     },
@@ -109,13 +112,48 @@ async function until(fn, tries = 60) {
 test('панель поднимается и читает все разделы с сервера', async () => {
   const { window, calls } = await boot();
 
-  const asked = calls.filter((c) => c.method === 'GET').map((c) => c.url.replace('/admin/api/', ''));
+  const gets = calls.filter((c) => c.method === 'GET').map((c) => c.url.replace('/admin/api/', ''));
+  const asked = gets.map((u) => u.split('?')[0]);
   for (const path of ['list', 'games', 'mods/list', 'news/list', 'feedback/list', 'maintenance/get', 'system/free']) {
     assert.ok(asked.includes(path), 'не запрошен раздел ' + path);
   }
   // Ни одного запроса мимо своего префикса
   assert.ok(calls.every((c) => c.url.startsWith('/admin/api/')), 'запрос ушёл мимо админ-API');
   assert.ok(window.document.querySelector('h1'), 'заголовок раздела не отрисован');
+});
+
+test('каждый запрос несёт то, без чего сервер отвечает отказом', async () => {
+  // РАНЬШЕ ЭТА ПРОВЕРКА СМОТРЕЛА НА АДРЕС ЦЕЛИКОМ И СЧИТАЛА «list»
+  // запрошенным разделом. Ровно так она и пропустила боевую поломку:
+  // панель слала `list`, `mods/list` и `news/list` без обязательных
+  // параметров, сервер отвечал 400, а тест был зелёным, потому что
+  // строка совпадала.
+  //
+  // Требования взяты у обработчиков: builds.ListVersions и mods.List
+  // проверяют gameId, news.List — scope, metrics.ErrorEvents — code
+  // (это разбор одного кода ошибки, а не список: сводка ошибок приходит
+  // в metrics/summary, и запрашивать errors на старте незачем).
+  const { calls } = await boot();
+  const need = { list: 'gameId', 'mods/list': 'gameId', 'news/list': 'scope', 'metrics/errors': 'code' };
+
+  for (const c of calls.filter((x) => x.method === 'GET')) {
+    const [path, query] = c.url.replace('/admin/api/', '').split('?');
+    const param = need[path];
+    if (!param) continue;
+    const has = new URLSearchParams(query || '').get(param);
+    assert.ok(has, `${path} уходит без ${param} — сервер ответит 400`);
+  }
+});
+
+test('снимок не ходит в сеть сам', async () => {
+  // Снимок нужен на случай «раздел не загрузился». Ходил он при этом в те
+  // же эндпоинты вторым слоем — девять лишних запросов на запуск, чей
+  // результат не читал никто, и четыре ошибки в консоли из них
+  const { window, calls } = await boot();
+  const before = calls.length;
+
+  await window.CHILLHUB_DATA.load();
+  assert.strictEqual(calls.length, before, 'снимок сходил в сеть');
 });
 
 test('первый экран показывает решение, а не сводку цифр', async () => {

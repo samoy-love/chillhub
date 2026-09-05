@@ -1,12 +1,14 @@
-/* Данные для превью админ-панели 2.0
+/* Снимок данных для админ-панели 2.0
    ------------------------------------------------------------------
-   ЭТО НЕ БОЕВОЙ СЛОЙ ДАННЫХ. Правдоподобные ответы тех же эндпоинтов,
-   что отдаёт админ-API, в той же форме. Точка перехода на настоящие
-   данные — функция `load` внизу файла.
+   ЭТО НЕ СЛОЙ ЗАГРУЗКИ, И В СЕТЬ ОТСЮДА НИКТО НЕ ХОДИТ. Живые данные
+   панель берёт из store.js по загрузчикам CH2Sections.LOADERS. Здесь
+   лежат правдоподобные ответы тех же эндпоинтов в той же форме — на два
+   случая: раздел не загрузился, и панель открыли файлом, чтобы
+   посмотреть оформление.
 
    Формы взяты из кода, а не выдуманы: см. adminapi/mods/handlers.go
    (Catalog, Resolve, Build, List, Activate, Diff, Cache),
-   adminapi/feedback, adminapi/metrics, admin_ui/pending-badges.js.
+   adminapi/feedback, adminapi/metrics.
    ------------------------------------------------------------------ */
 
 (() => {
@@ -197,102 +199,35 @@
 
   /* ---------- Боевые данные ---------- */
 
-  /* Панель читает те же эндпоинты, что и версия 1.0 (см. cmd/admin/routes.go).
-     Каждая секция запрашивается отдельно и падает на демо-данные сама по
-     себе: один недоступный эндпоинт не должен оставлять пустой всю панель,
-     а молча показывать выдумку под видом прода — тем более.
-
-     ПИШУЩИЕ ДЕЙСТВИЯ СЮДА НЕ ПОДКЛЮЧЕНЫ, И ЭТО РЕШЕНИЕ. Активация версии
-     лаунчера, пересборка модпака, включение техработ и удаление версий
-     необратимы для всех игроков сразу. Подключать их вслепую, без
-     возможности прогнать на живой сессии, — не та цена за галочку
-     «доделано». Кнопки по-прежнему честно говорят, что ничего не делают. */
-
   const demo = { launcher, launcherDiff, manifest, packs, resolved, catalog, buildLog, cache, games, news, inbox, maint, days, errors, bench, disk };
 
-  async function get(path) {
-    const r = await fetch('/admin/api/' + path, {
-      headers: { accept: 'application/json' },
-      credentials: 'same-origin',
-    });
-    if (!r.ok) throw new Error(path + ': ' + r.status);
-    return r.json();
-  }
+  /* ЗДЕСЬ БЫЛ ВТОРОЙ СЛОЙ ЗАГРУЗКИ, И ОН НИКОМУ НЕ БЫЛ НУЖЕН.
+     ------------------------------------------------------------------
+     Файл сам с первой строки объявляет, что боевым слоем данных не
+     является, — и при этом на каждом запуске ходил в сеть за девятью
+     разделами. Четыре запроса из девяти уходили без обязательных
+     параметров и отвечали 400: `list` и `mods/list` без gameId,
+     `news/list` без scope, а `metrics/errors` — это вообще разбор
+     ОДНОГО кода ошибки, а не список; сводка ошибок приходит в
+     `metrics/summary`.
 
-  /* Один раздел. `pick` получает ответ и обязан вернуть данные в той форме,
-     которую ждёт разметка, либо бросить — тогда останется демо. */
-  async function section(live, key, path, pick) {
-    try {
-      const data = pick(await get(path));
-      if (data === null || data === undefined) throw new Error(path + ': пустой ответ');
-      live.add(key);
-      return data;
-    } catch {
-      return demo[key];
-    }
-  }
+     Разбираться, чем их дополнить, не пришлось: результат этой загрузки
+     не читал никто. Живые данные панель берёт из store.js по загрузчикам
+     CH2Sections.LOADERS — с правильными параметрами, — а признак «сервер
+     не ответил» считает по store.health(). Отсюда брались только формы
+     на случай, когда раздел не загрузился.
 
-  const arr = (v) => (Array.isArray(v) ? v : Array.isArray(v?.items) ? v.items : null);
-
-  async function loadLive() {
-    const live = new Set();
-
-    const [versions, packList, gameList, newsList, inboxList, maintState, summary, errList, free] =
-      await Promise.all([
-        section(live, 'launcher', 'list', (d) => {
-          const items = arr(d);
-          if (!items) return null;
-          return {
-            active: items.find((v) => v.state === 'active' || v.active)?.version || '',
-            newest: items[0]?.version || '',
-            pending: items.some((v) => v.state === 'uploaded'),
-            versions: items.map((v) => ({
-              version: v.version,
-              date: v.date || v.createdAt || '',
-              files: v.files ?? 0,
-              size: v.size ?? v.bytes ?? 0,
-              state: v.state || (v.active ? 'active' : 'old'),
-            })),
-          };
-        }),
-        section(live, 'packs', 'mods/list', (d) => arr(d)),
-        section(live, 'games', 'games', (d) => arr(d)),
-        section(live, 'news', 'news/list', (d) => arr(d)),
-        section(live, 'inbox', 'feedback/list', (d) => arr(d)),
-        section(live, 'maint', 'maintenance/get', (d) =>
-          d && typeof d.enabled === 'boolean' ? { on: d.enabled, reason: d.reason || '' } : null
-        ),
-        section(live, 'days', 'metrics/summary', (d) => arr(d?.days ?? d)),
-        section(live, 'errors', 'metrics/errors', (d) => arr(d)),
-        section(live, 'disk', 'system/free', (d) => {
-          const free = d?.freeBytes ?? d?.free;
-          return typeof free === 'number' ? { freeBytes: free, totalBytes: d.totalBytes ?? d.total ?? 0 } : null;
-        }),
-      ]);
-
-    return {
-      ...demo,
-      launcher: versions,
-      packs: packList,
-      games: gameList,
-      news: newsList,
-      inbox: inboxList,
-      maint: maintState,
-      days: summary,
-      errors: errList,
-      disk: free,
-      live: [...live],
-    };
-  }
+     Поэтому загрузка убрана целиком, а файл стал тем, чем назван:
+     снимком. Панель от этого лишилась девяти запросов на запуск и
+     четырёх ошибок в консоли — тех самых, что оставались после переезда
+     и выглядели как поломка панели.
+     ------------------------------------------------------------------ */
 
   window.CHILLHUB_DATA = {
-    /* Панель открывают и вне сервера — просто файлом, чтобы посмотреть
-       оформление. Признак живых данных считается по факту ответа, а не по
-       адресу: за `/admin/ui/` может стоять и локальный прокси. */
+    /* Асинхронной остаётся ради вызывающего: `collect` ждёт её вместе с
+       загрузкой store, и менять там порядок ради снимка незачем. */
     async load() {
-      const data = await loadLive();
-      data.demo = !data.live.length;
-      return data;
+      return demo;
     },
   };
 })();
