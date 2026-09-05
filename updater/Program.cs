@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -59,6 +60,7 @@ internal static class Program {
         finally {
             UpdateLock.Release(ctx.Lock);
             WriteStatus(ctx, exit, log);
+            RefreshIcons(ctx, log, host);
             Restart(ctx, log, host);
             log.Write($"updater finished with exit code {exit} ({ctx.Outcome})");
         }
@@ -846,6 +848,37 @@ internal static class Program {
     }
 
     /// <summary>
+    /// Толкнуть проводник, чтобы он перерисовал значки.
+    /// <para>
+    /// Ярлыки лаунчера — на рабочем столе и в меню «Пуск» — своей иконки не задают
+    /// (см. installer.nsi: у CreateShortCut указана только цель), поэтому берут её из
+    /// ресурса ChillHub.exe. Новый exe уже лежит на диске, но Windows держит разобранные
+    /// значки в кеше и продолжает рисовать старый — иногда до перезагрузки. Смена
+    /// значка без этого выглядит как «обновилось, а иконка прежняя».
+    /// </para>
+    /// <para>
+    /// Зовём только когда файлы действительно поменялись: на busy, access-denied и
+    /// fatal обновления не было, и дёргать оболочку не за что.
+    /// </para>
+    /// </summary>
+    /// <param name="ctx">Состояние прогона.</param>
+    /// <param name="log">Журнал.</param>
+    /// <param name="host">Шов к операционной системе.</param>
+    private static void RefreshIcons(RunContext ctx, UpdateLog log, UpdaterHost host) {
+        if (ctx.Outcome != "ok" && ctx.Outcome != "marker-failed") {
+            return;
+        }
+
+        try {
+            host.RefreshIconCache(log);
+        }
+        catch (Exception ex) {
+            // Не повод портить обновление: значок догонит после перезахода в систему.
+            log.Write($"icons: не удалось обновить кеш значков — {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// A9. Перезапуск лаунчера — в finally и с повторами.
     /// <para>
     /// Лаунчер завершил себя сам, чтобы освободить файлы. Если апдейтер после
@@ -1147,6 +1180,9 @@ internal static class Program {
         /// <summary>Пауза между попытками перезапуска.</summary>
         public Action<int> Sleep = Thread.Sleep;
 
+        /// <summary>Сбрасывает кеш значков оболочки, чтобы ярлыки перерисовались.</summary>
+        public Action<UpdateLog> RefreshIconCache = DefaultRefreshIconCache;
+
         /// <summary>
         /// Ждать нужно обязательно: пока лаунчер жив, его exe и dll заблокированы,
         /// и копирование поверх них провалится. Но ждать БЕЗ ограничения нельзя —
@@ -1161,6 +1197,22 @@ internal static class Program {
         /// </summary>
         /// <param name="parent">Идентификатор родительского процесса.</param>
         /// <param name="log">Журнал.</param>
+        /// <summary>
+        /// SHCNE_ASSOCCHANGED говорит оболочке «сопоставления поменялись» — по этому
+        /// событию проводник выбрасывает разобранные значки и читает их заново. Более
+        /// узкого события для «у файла сменилась иконка» в Windows нет.
+        /// </summary>
+        private static void DefaultRefreshIconCache(UpdateLog log) {
+            const int SHCNE_ASSOCCHANGED = 0x08000000;
+            const uint SHCNF_IDLIST = 0x0000;
+
+            SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, IntPtr.Zero, IntPtr.Zero);
+            log.Write("icons: кеш значков оболочки сброшен");
+        }
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern void SHChangeNotify(int eventId, uint flags, IntPtr item1, IntPtr item2);
+
         private static void DefaultWaitForParent(int parent, UpdateLog log) {
             if (parent <= 0) {
                 return;
