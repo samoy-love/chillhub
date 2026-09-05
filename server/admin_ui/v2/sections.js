@@ -94,6 +94,11 @@
            уровне значит показывать пустую колонку у всех сразу. */
         steamId: String(pick(mods, ['steamAppId', 'steamId'], pick(g, ['steamAppId', 'steamId'], ''))),
 
+        /* Есть ли у игры модпак. Спрашивать про моды у игры без них
+           бесполезно: `mods/list` отвечает «у игры не включены моды»
+           кодом 400, и раздел падал бы на ровном месте. */
+        modsEnabled: Boolean(mods && mods.enabled),
+
         /* Поле в реестре называется `unpublished`, и нуль в нём означает
            «видно». Перевернуть его при чтении, а не при отрисовке: иначе
            каждое место, где спрашивают «опубликована ли», обязано помнить
@@ -204,7 +209,9 @@
   /* ---------- Метрики ---------- */
 
   function metrics(raw) {
-    const src = raw && raw.days ? raw.days : raw;
+    /* Сервер зовёт их `byDay`; `days` — форма снимка. Читаем обе, иначе
+       раздел молча считает пустой список за «событий не было». */
+    const src = (raw && (raw.byDay || raw.days)) || raw;
     return items(src).map((d) => ({
       date: String(pick(d, ['date'], '')),
       starts: num(pick(d, ['launcherStarts', 'starts'], 0), 0),
@@ -215,11 +222,30 @@
     }));
   }
 
+  /* ОТКУДА БЕРУТСЯ КОДЫ ОШИБОК. Из сводки (`topErrors`), а не из
+     `metrics/errors`: та ручка отвечает событиями ОДНОГО кода и без
+     параметра `code` возвращает 400. Раздел же спрашивает обратное —
+     какие коды вообще встречаются и как часто. */
+  /* Код ошибки сам по себе не говорит ничего тому, кто его не писал.
+     Названия здесь, а не на сервере: сервер отдаёт события, а объяснять
+     их — работа того, кто показывает. */
+  const WHAT = {
+    download_reset: 'связь оборвалась на середине закачки',
+    download_failed: 'файл не скачался целиком',
+    hash_mismatch: 'скачанный файл не сошёлся по контрольной сумме',
+    disk_full: 'на диске игрока кончилось место',
+    launch_failed: 'игра не запустилась',
+    steam_missing: 'Steam не нашёлся там, где его ждали',
+    manifest_error: 'манифест не прочитался',
+    update_failed: 'обновление не доехало',
+  };
+
   function errors(raw) {
-    const list = items(raw).map((e) => ({
-      code: String(pick(e, ['code', 'errorCode'], '')),
-      n: num(pick(e, ['n', 'count'], 0), 0),
-      what: String(pick(e, ['what', 'message'], '')),
+    const src = (raw && (raw.topErrors || raw.items)) || raw;
+    const list = items(src).map((e) => ({
+      code: String(pick(e, ['key', 'code', 'errorCode'], '')),
+      n: num(pick(e, ['count', 'n'], 0), 0),
+      what: String(pick(e, ['what', 'message'], WHAT[String(pick(e, ['key', 'code'], ''))] || '')),
       where: String(pick(e, ['where', 'game'], '')),
     }));
     const total = list.reduce((a, e) => a + e.n, 0);
@@ -365,12 +391,27 @@
     overview: (api) => api.summary(),
     launcher: (api) => api.launcherVersions().then(launcher),
     games: (api) => api.games().then(games),
-    packs: (api) => api.modsList().then(packs),
+    /* `mods/list` отвечает про ОДНУ игру и без `gameId` даёт 400,
+       поэтому сначала реестр, потом по запросу на игру с включёнными
+       модами. Игры без модпака не спрашиваем вовсе: у них эта ручка
+       отвечает «у игры не включены моды», тоже четырёхсотым. */
+    packs: async (api) => {
+      const list = games(await api.games()).filter((g) => g.modsEnabled);
+      const answers = await Promise.all(
+        list.map((g) =>
+          api
+            .modsList(g.gameId)
+            .then((r) => Object.assign({ gameId: g.gameId, title: g.title }, r))
+            .catch(() => null)
+        )
+      );
+      return packs({ items: answers.filter(Boolean) });
+    },
     news: (api) => api.newsList('launcher', '').then((r) => news(r, '')),
     inbox: (api) => api.feedbackList().then(inbox),
     maint: (api) => api.maintenanceGet().then(maintenance),
     metrics: (api) => api.metricsSummary().then(metrics),
-    errors: (api) => api.metricsErrors().then(errors),
+    errors: (api) => api.metricsSummary().then(errors),
     disk: (api) => api.freeSpace().then(disk),
     cache: (api) => api.modsCache().then(cache),
   };

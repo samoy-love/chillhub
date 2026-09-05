@@ -29,13 +29,12 @@ const FIXTURES = {
   },
   games: {
     items: [
-      { gameId: 'repo', title: 'R.E.P.O.', exeRelativePath: 'REPO.exe', order: 0 },
+      // Моды включены только у первой: про остальных `mods/list` и не спросят
+      { gameId: 'repo', title: 'R.E.P.O.', exeRelativePath: 'REPO.exe', order: 0, mods: { enabled: true } },
       { gameId: 'peak', title: 'PEAK', exeRelativePath: 'PEAK.exe', order: 1 },
     ],
   },
-  'mods/list': {
-    items: [{ gameId: 'repo', title: 'R.E.P.O.', built: '1.9.9', active: '1.9.8', mods: 17, size: 251000000 }],
-  },
+  'mods/list': { gameId: 'repo', title: 'R.E.P.O.', built: '1.9.9', active: '1.9.8', mods: 17, size: 251000000 },
   'news/list': { items: [{ id: 'release', slug: 'release', title: 'Заметка', published: false }] },
   'news/get': { markdown: '# Заметка\n\nТекст заметки', published: false, coverUrl: '' },
   'feedback/list': { items: [{ id: 'f1', type: 'bug', status: 'new', comment: 'обрывается' }] },

@@ -639,7 +639,7 @@
               rows: D.errors,
               head: '<th>Код</th><th>Что это значит</th><th>Где чаще</th><th class="num">Случаев</th><th class="num">Доля</th>',
               row: (e) => `<tr>
-                  <td class="mono">${esc(e.code)}</td>
+                  <td class="mono"><button class="btn btn--text" type="button" data-act="error-events" data-args='{"code":"${esc(e.code)}"}'>${esc(e.code)}</button></td>
                   <td class="dim">${esc(e.what)}</td>
                   <td class="mono faint">${esc(e.where)}</td>
                   <td class="num">${e.n}</td>
@@ -1669,6 +1669,32 @@
     });
   }
 
+  /* --- События одного кода ошибки --- */
+
+  /* Счётчик в таблице говорит, что ломается часто. Кто именно на это
+     напоролся — отдельный вопрос, и отвечает на него `metrics/errors`:
+     она отдаёт события ОДНОГО кода, а без кода честно даёт 400. */
+  function flowErrorEvents(a) {
+    const sheet = openSheet({
+      title: 'Ошибка ' + a.code,
+      lede: 'У кого она случалась. Если весь код собрался на одной версии клиента, чинить надо её.',
+      body: '<div class="sk" style="height:14rem"></div>',
+      foot: '<button class="btn" type="button" data-flow="close">Закрыть</button>',
+    });
+
+    (async () => {
+      try {
+        sheet.body(V().errorEvents(await API.metricsErrors({ code: a.code })));
+      } catch (err) {
+        sheet.body('<div class="empty"><b>Не прочиталось</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
+      }
+    })();
+
+    sheet.root.addEventListener('click', (e) => {
+      if (e.target.closest('[data-flow="close"]')) sheet.close();
+    });
+  }
+
   /* --- Что изменится в модпаке --- */
 
   /* Читают это перед тем, как отдать пересборку игрокам: «какие моды
@@ -1818,6 +1844,7 @@
     choose: () => flowCatalog(packOf(game)),
     import: () => flowImport(packOf(game)),
     'mods-diff': (a) => flowModsDiff(a),
+    'error-events': (a) => flowErrorEvents(a),
     'new-post': () => flowNews({}),
     'edit-post': (a) => flowNews(a),
     gallery: (a) => flowGallery(a.gameId || (D.games[0] && D.games[0].gameId) || ''),

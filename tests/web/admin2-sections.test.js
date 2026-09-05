@@ -290,9 +290,51 @@ test('у каждого раздела есть загрузчик, и он зо
   for (const name of Object.keys(S.LOADERS)) {
     await S.LOADERS[name](api);
   }
+  // «Сборки» сначала читают реестр: `mods/list` отвечает про одну игру
+  // и без gameId даёт 400. Коды ошибок берутся из сводки — `metrics/errors`
+  // отвечает событиями одного кода и без него тоже даёт 400
   assert.deepStrictEqual(called, [
-    'summary', 'launcherVersions', 'games', 'modsList', 'newsList',
-    'feedbackList', 'maintenanceGet', 'metricsSummary', 'metricsErrors',
+    'summary', 'launcherVersions', 'games', 'games', 'newsList',
+    'feedbackList', 'maintenanceGet', 'metricsSummary', 'metricsSummary',
     'freeSpace', 'modsCache',
   ]);
+});
+
+test('про моды спрашивают только игры, у которых они включены', async () => {
+  // У остальных `mods/list` отвечает «у игры не включены моды» кодом 400
+  const asked = [];
+  const api = {
+    games: async () => ({
+      items: [
+        { gameId: 'repo', title: 'R.E.P.O.', mods: { enabled: true } },
+        { gameId: 'bodycam', title: 'Bodycam' },
+        { gameId: 'peak', title: 'PEAK', mods: { enabled: false } },
+      ],
+    }),
+    modsList: async (gameId) => {
+      asked.push(gameId);
+      return { items: [] };
+    },
+  };
+  await S.LOADERS.packs(api);
+  assert.deepStrictEqual(asked, ['repo']);
+});
+
+test('игра, ответившая ошибкой, не уносит с собой весь раздел', async () => {
+  // Один упавший запрос из пяти не повод показать пустой список
+  const api = {
+    games: async () => ({
+      items: [
+        { gameId: 'a', title: 'А', mods: { enabled: true } },
+        { gameId: 'b', title: 'Б', mods: { enabled: true } },
+      ],
+    }),
+    modsList: async (gameId) => {
+      if (gameId === 'a') throw new Error('сервер не в духе');
+      return { gameId: 'b', title: 'Б', built: '1.0', active: '1.0' };
+    },
+  };
+  const out = await S.LOADERS.packs(api);
+  assert.strictEqual(out.length, 1);
+  assert.strictEqual(out[0].gameId, 'b');
 });

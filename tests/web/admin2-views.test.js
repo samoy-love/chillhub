@@ -496,3 +496,32 @@ test('обложку файлом предлагают только у сохр�
   assert.ok(!/data-flow="cover"/.test(fresh));
   assert.match(fresh, /после первого сохранения/);
 });
+
+/* ---------- События одного кода ---------- */
+
+test('события кода сначала группируются, потом перечисляются', () => {
+  // Если весь код собрался на одной версии клиента, чинить надо её
+  const html = V.errorEvents({
+    items: [
+      { ts: '2026-09-04T10:00:00Z', appVersion: '1.6.25', gameId: 'repo', event: 'update' },
+      { ts: '2026-09-04T11:00:00Z', appVersion: '1.6.25', gameId: 'peak', event: 'install' },
+    ],
+  });
+  assert.match(html, /Версии клиента/);
+  assert.match(html, /1\.6\.25 · 2/);
+  assert.match(html, /repo/);
+});
+
+test('пустой список объясняется, а не выглядит поломкой', () => {
+  assert.match(V.errorEvents({ items: [] }), /Событий не осталось/);
+  assert.match(V.errorEvents(null), /метрики чистили/);
+});
+
+test('обрезанный список честно назван обрезанным', () => {
+  const html = V.errorEvents({ items: [{ ts: '', appVersion: 'x' }], capped: true });
+  assert.match(html, /их было больше/);
+});
+
+test('поле события не исполняется как разметка', () => {
+  assert.ok(!V.errorEvents({ items: [{ gameId: '<script>x</script>' }] }).includes('<script>'));
+});

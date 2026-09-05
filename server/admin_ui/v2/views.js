@@ -509,6 +509,55 @@
     };
   }
 
+  /* ---------- События одного кода ---------- */
+
+  /**
+   * Из чего складывается код ошибки.
+   *
+   * Счётчик говорит, что ломается часто; события — у кого именно.
+   * Версия клиента и игра здесь важнее времени: если весь код собрался
+   * на одной версии, чинить надо её, а не всё подряд.
+   */
+  function errorEvents(res) {
+    const r = res || {};
+    const rows = (r.items || []).slice(0, 200);
+    const f = F();
+    if (!rows.length) {
+      return '<div class="empty"><b>Событий не осталось</b><span>Счётчик считает за другой период либо метрики чистили</span></div>';
+    }
+
+    const по = (key) => {
+      const m = new Map();
+      for (const e of rows) {
+        const k = String(e[key] || '—');
+        m.set(k, (m.get(k) || 0) + 1);
+      }
+      return [...m.entries()].sort((a, b) => b[1] - a[1]);
+    };
+
+    const chips = (title, pairs) =>
+      '<div class="btn-row"><span class="k">' + esc(title) + '</span>' +
+      pairs.slice(0, 6).map(([k, n]) => '<span class="badge">' + esc(k) + ' · ' + n + '</span>').join('') +
+      '</div>';
+
+    return (
+      chips('Версии клиента', по('appVersion')) +
+      chips('Игры', по('gameId')) +
+      '<table><thead><tr><th>Когда</th><th>Версия</th><th>Игра</th><th>Что делал</th></tr></thead><tbody>' +
+      rows
+        .map(
+          (e) =>
+            '<tr><td class="dim">' + esc(f.dateTime(e.ts)) + '</td>' +
+            '<td class="mono">' + esc(e.appVersion || '—') + '</td>' +
+            '<td>' + esc(e.gameId || '—') + '</td>' +
+            '<td class="dim">' + esc(e.event || '') + '</td></tr>'
+        )
+        .join('') +
+      '</tbody></table>' +
+      (r.capped ? '<p class="note">Показаны последние ' + rows.length + ' — их было больше.</p>' : '')
+    );
+  }
+
   /* ---------- Разница сборок ---------- */
 
   /**
@@ -826,6 +875,7 @@
     galleryCrumbs,
     galleryList,
     assetList,
+    errorEvents,
     launcherDiff,
     diffCounts,
     sparkPoints,
