@@ -8,7 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const A = require('../../server/admin_ui/v2/api.js');
+const A = require('../../server/admin_ui/api.js');
 const { makeApi, reason, BASE } = A;
 
 /** Поддельный fetch: запоминает вызовы и отдаёт заданный ответ. */

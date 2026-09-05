@@ -20,8 +20,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
 
-const V2 = path.join(__dirname, '..', '..', 'server', 'admin_ui', 'v2');
-const PAGE_URL = 'http://localhost/admin/ui/v2/';
+const V2 = path.join(__dirname, '..', '..', 'server', 'admin_ui');
+const PAGE_URL = 'http://localhost/admin/ui/';
 const FOREIGN = 'https://example.invalid/collect';
 
 /* Кука хранится в процентной кодировке, а на сервер обязано уехать
@@ -169,8 +169,8 @@ test('адрес самой морды не переписывается', async
   const { window, calls } = boot();
   t.after(() => window.close());
 
-  await window.fetch('/admin/ui/v2/views.js');
-  assert.strictEqual(calls[0].url, '/admin/ui/v2/views.js');
+  await window.fetch('/admin/ui/views.js');
+  assert.strictEqual(calls[0].url, '/admin/ui/views.js');
 });
 
 test('уже полный адрес переписывается один раз, а не дважды', async (t) => {

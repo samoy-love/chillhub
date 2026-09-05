@@ -7,7 +7,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { createStore, IDLE, LOADING, READY, FAILED } = require('../../server/admin_ui/v2/store.js');
+const { createStore, IDLE, LOADING, READY, FAILED } = require('../../server/admin_ui/store.js');
 
 const defer = () => {
   let resolve, reject;

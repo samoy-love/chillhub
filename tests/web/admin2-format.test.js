@@ -7,7 +7,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const F = require('../../server/admin_ui/v2/format.js');
+const F = require('../../server/admin_ui/format.js');
 
 const NB = '\u00a0';
 

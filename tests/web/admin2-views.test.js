@@ -8,10 +8,10 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const V = require('../../server/admin_ui/v2/views.js');
-const News = require('../../server/admin_ui/v2/news.js');
-const Gallery = require('../../server/admin_ui/v2/gallery.js');
-const Tuning = require('../../server/admin_ui/v2/tuning.js');
+const V = require('../../server/admin_ui/views.js');
+const News = require('../../server/admin_ui/news.js');
+const Gallery = require('../../server/admin_ui/gallery.js');
+const Tuning = require('../../server/admin_ui/tuning.js');
 
 /* Решение о хвосте журнала принимает модуль 1.0 — панель 2.0
    переиспользует его как есть. */
@@ -352,7 +352,7 @@ test('без прогонов таблица объясняет, чего сто
 
 /* ---------- Состав сборки ---------- */
 
-const Mods = require('../../server/admin_ui/v2/mods.js');
+const Mods = require('../../server/admin_ui/mods.js');
 
 test('план сборки называет пропавшие пакеты поимённо и до сборки', () => {
   // Узнать о них на середине выкатки — значит откатывать уже отданное

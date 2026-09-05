@@ -11,7 +11,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const S = require('../../server/admin_ui/v2/sections.js');
+const S = require('../../server/admin_ui/sections.js');
 
 /* ---------- Общее ---------- */
 

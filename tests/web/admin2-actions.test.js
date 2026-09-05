@@ -7,7 +7,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const A = require('../../server/admin_ui/v2/actions.js');
+const A = require('../../server/admin_ui/actions.js');
 
 /** Все действия, которые уводят изменение к игрокам необратимо. */
 const DANGER = [

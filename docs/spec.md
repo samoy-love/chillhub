@@ -112,7 +112,7 @@ Chill Hub избавляет от рутинной и хрупкой ручно�
   - `/api/*` (проксируется nginx), dev‑статика: `/manifests/*`, `/content/*`, `/news/*`, `/assets/*` → `content/` каталоги.
 
 - Admin API/UI (`server/cmd/admin`, `server/admin_ui`)
-  - Prod: `/admin/ui/*` (статика), `/admin/` (admin.html), `/admin/api/*` (backend, защищён через `auth_request`).
+  - Prod: `/admin/ui/*` (статика), `/admin/` (index.html), `/admin/api/*` (backend, защищён через `auth_request`).
   - Dev: `http://localhost:55777/admin` (бэкенд + выдача статики для удобства).
 
 - Nginx (конфигурация — в deploy-kit, на сервере `/etc/nginx/sites-available/chillhub-launcher.conf`)
@@ -125,7 +125,7 @@ Chill Hub избавляет от рутинной и хрупкой ручно�
   - `/` — лендинг из `landing/`.
   - `/api/*` — прокси на Public API (`127.0.0.1:55700`).
   - `/admin/api/*` — прокси на Admin API (`127.0.0.1:55777`) 1:1 (без переписывания пути).
-  - `/admin/` и `/admin/ui/*` — статика админки из `/var/www/launcher/admin_ui/` (точный матч для `/admin/` отдает `admin.html`).
+  - `/admin/` и `/admin/ui/*` — статика админки из `/var/www/launcher/admin_ui/` (точный матч для `/admin/` отдаёт `index.html` вошедшему и `login.html` анониму).
   - `/feedback/submit` и `/metrics/report` — публичные (без авторизации) POST‑эндпоинты, проксируются на Admin API (`127.0.0.1:55777`); объявлены в конфиге ДО защищённого `location /admin/api/`.
   - `/content/*`, `/manifests/*`, `/news/*` — статика контента (`/var/www/launcher/...`).
   - `/assets/*` — «комбинированные ассеты»: сперва лендинг (`/var/www/site/assets`), затем fallback на новости (`/var/www/launcher/news/assets`).
@@ -417,7 +417,7 @@ CSRF: для методов `POST/PUT/PATCH/DELETE` требуется заго�
 
 - Здоровье сервиса: `GET /admin/api/health` → `ok` (в nginx вынесен в отдельный `location` до `auth_request`, поэтому доступен без авторизации). Алиас `/admin/health` также зарегистрирован.
 
-UI админки: `server/admin_ui/admin.html` + `admin.js` (Bootstrap 5, темная тема). Кнопки «Собрать» и «Предложить следующую версию» удалены; используется загрузка ZIP и просмотр списков версий.
+UI админки: `server/admin_ui/index.html` + модули рядом с ним (свой слой стилей, тёмная тема, без сборщика и без Bootstrap). Опись разделов и того, что откуда берётся, — `docs/admin-2.0-requirements.md`.
 
 Сервер админки для dev также отдает статику, чтобы UI работал без nginx:
 - `/manifests/*` → `content/manifests/*`
@@ -854,7 +854,7 @@ UI — `Pages/SettingsPage.xaml(.cs)`; та же логика доступна �
   - `/admin/api/*` → `127.0.0.1:55777` один в один, без переписывания пути,
     под `auth_request /_auth` → `/admin/api/auth/verify`.
   - `/admin/` и `/admin/ui/*` — статика из `/var/www/launcher/admin_ui/`
-    (точный матч на `/admin/` отдаёт `admin.html`).
+    (точный матч на `/admin/` отдаёт `index.html`, анониму — `login.html`).
   - `/content/*`, `/manifests/*`, `/news/*`, `/downloads/*` — статика с диска.
   - `/assets/*` — `try_files` с приоритетом ассетов лендинга и внутренним
     fallback на новости (`@news_assets_fallback`): смешивать `alias` и `root`
@@ -958,7 +958,7 @@ UI — `Pages/SettingsPage.xaml(.cs)`; та же логика доступна �
 - Admin API: `server/cmd/admin/main.go` (процесс), `server/cmd/admin/routes.go` (список эндпоинтов), обработчики — `server/internal/adminapi/*`
 - Режим техработ: `server/internal/maintenance/maintenance.go`
 - Метрики: `server/internal/metrics/metrics.go`
-- Админ UI: `server/admin_ui/admin.html`, `server/admin_ui/admin.js`
+- Админ UI: `server/admin_ui/index.html`, `server/admin_ui/admin.js`
 - Клиент: 
   - Обновление лаунчера: `launcher/ChillHub/UpdateWindow.xaml.cs`
   - Синхронизация файлов: `launcher/ChillHub/Core/Sync/SimpleSyncService.cs`

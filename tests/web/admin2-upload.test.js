@@ -8,7 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const U = require('../../server/admin_ui/v2/upload.js');
+const U = require('../../server/admin_ui/upload.js');
 const chunks = require('../../server/admin_ui/chunk-upload.js');
 
 /** Файл, у которого есть только размер, имя и нарезка. */
@@ -231,7 +231,7 @@ test('прерывание не даёт заливать оставшиеся �
 /* ---------- Разбор архива на сервере ---------- */
 
 const ndjson = require('../../server/admin_ui/ndjson.js');
-const format = require('../../server/admin_ui/v2/format.js');
+const format = require('../../server/admin_ui/format.js');
 
 /** Ответ-поток из готовых строк NDJSON. */
 function stream(lines) {

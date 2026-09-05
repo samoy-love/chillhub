@@ -12,7 +12,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const R = require('../../server/admin_ui/v2/registry.js');
+const R = require('../../server/admin_ui/registry.js');
 const diff = require('../../server/admin_ui/registry-diff.js');
 
 const game = (id, over) =>

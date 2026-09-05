@@ -13,7 +13,7 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..', '..');
 const LANDING = path.join(ROOT, 'landing');
-const ADMIN = path.join(ROOT, 'server', 'admin_ui', 'v2');
+const ADMIN = path.join(ROOT, 'server', 'admin_ui');
 
 const read = (...p) => fs.readFileSync(path.join(...p), 'utf8');
 const PAGES = ['index.html', 'privacy.html', 'terms.html'];
@@ -101,6 +101,37 @@ test('страница называет своим адресом корень',
   const html = read(LANDING, 'index.html');
   assert.match(html, /<link rel="canonical" href="https:\/\/launcher\.samoy\.love\/">/);
   assert.doesNotMatch(html, /launcher\.samoy\.love\/v2/);
+});
+
+/* ---------- Страница входа ---------- */
+
+// Она стоит особняком: её открывают БЕЗ сессии, и nginx отдаёт анониму
+// лишь несколько файлов из /admin/ui/. Всё, что страница попросит сверх
+// этого, вернётся 401 — молча, без единой ошибки на экране.
+
+test('страница входа обходится без стороннего кода', () => {
+  // На ней набирают пароль администратора. Чужой скрипт здесь выполняется
+  // в её origin и видит поле пароля целиком
+  const html = read(ADMIN, 'login.html');
+  for (const tag of html.match(/<(script|link)[^>]*>/g) || []) {
+    assert.ok(!/https?:\/\//.test(tag), 'страница входа тянет чужое: ' + tag);
+  }
+});
+
+test('страница входа не просит того, чего анониму не отдадут', () => {
+  // admin.css, шрифты и модули панели закрыты авторизацией: попросив их,
+  // страница получит 401 и останется без оформления
+  const html = read(ADMIN, 'login.html');
+  const allowed = ['/admin/ui/login.js', '/admin/ui/app.ico', '/admin/ui/favicon.svg'];
+  const asked = [...html.matchAll(/(?:src|href)="([^"]+)"/g)].map((m) => m[1]);
+  for (const url of asked) {
+    assert.ok(allowed.includes(url), 'страница входа просит закрытое: ' + url);
+  }
+  assert.ok(html.includes('<style>'), 'оформление вынесено наружу — анониму его не отдадут');
+});
+
+test('страница входа закрыта от поиска', () => {
+  assert.match(read(ADMIN, 'login.html'), /content="noindex/);
 });
 
 test('картинка для карточки в мессенджерах открыта обходу', () => {

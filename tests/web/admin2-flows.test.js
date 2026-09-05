@@ -17,7 +17,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
 
-const V2 = path.join(__dirname, '..', '..', 'server', 'admin_ui', 'v2');
+const V2 = path.join(__dirname, '..', '..', 'server', 'admin_ui');
 
 const FIXTURES = {
   summary: { launcher: { pending: true, newest: '1.6.25', active: '1.6.24' }, mods: [] },
@@ -65,7 +65,7 @@ const FIXTURES = {
 /** Поднимает панель в jsdom. `routes` подменяет отдельные ответы. */
 async function boot(routes) {
   const html = fs.readFileSync(path.join(V2, 'index.html'), 'utf8');
-  const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'https://example.test/admin/ui/v2/' });
+  const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'https://example.test/admin/ui/' });
   const { window } = dom;
 
   const calls = [];

@@ -9,7 +9,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const G = require('../../server/admin_ui/v2/gallery.js');
+const G = require('../../server/admin_ui/gallery.js');
 
 /* ---------- Пути ---------- */
 

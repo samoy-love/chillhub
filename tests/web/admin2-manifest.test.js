@@ -13,7 +13,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const M = require('../../server/admin_ui/v2/manifest.js');
+const M = require('../../server/admin_ui/manifest.js');
 
 const man = (files) => ({ version: '1.0', files });
 const f = (path, size, hash) => ({ path, size, blake3: hash });
