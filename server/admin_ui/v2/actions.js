@@ -31,6 +31,13 @@
    * `done` — что сказать после успеха.
    * `after` — какие разделы перечитать.
    */
+  /* ЧЕГО ЗДЕСЬ НЕТ И ПОЧЕМУ. Галерея, новость и реестр игр правятся
+     листами, и вопрос у них свой, знающий обстоятельства: удаление
+     обложки предупреждает про витрину с градиентом, а удаление файла —
+     нет. Общая запись в реестре такого сказать не может, а держать две
+     формулировки одного вопроса — верный способ их развести. Поэтому
+     эти дела спрашивают сами, а реестр знает только то, что вызывается
+     кнопкой напрямую. */
   const ACTIONS = {
     /* --- лаунчер --- */
     'launcher.activate': {
@@ -68,11 +75,6 @@
     },
 
     /* --- игры --- */
-    'games.save': {
-      run: (api, a) => api.gamesSave(a.items),
-      done: () => 'Реестр сохранён',
-      after: ['games', 'overview'],
-    },
     'games.scan': {
       run: (api) => api.gamesScan(),
       done: () => 'Каталог просканирован',
@@ -91,37 +93,6 @@
     },
 
     /* --- галерея --- */
-    'gallery.mkdir': {
-      run: (api, a) => api.galleryMkdir(a.gameId, a.dir),
-      done: (a) => 'Папка ' + a.dir + ' создана',
-      after: ['gallery'],
-    },
-    'gallery.rename': {
-      run: (api, a) => api.galleryRename(a.gameId, a.from, a.to),
-      done: (a) => 'Переименовано в ' + a.to,
-      after: ['gallery'],
-    },
-    'gallery.delete': {
-      danger: true,
-      ask: (a) => ({
-        title: 'Удалить ' + a.path + '?',
-        body: 'Файл уйдёт из галереи игры. Если он был обложкой, витрина останется с градиентом.',
-        ok: 'Удалить',
-      }),
-      run: (api, a) => api.galleryDelete(a.gameId, a.path),
-      done: () => 'Удалено',
-      after: ['gallery'],
-    },
-    'gallery.caption': {
-      run: (api, a) => api.gallerySetCaption(a.gameId, a.file, a.caption),
-      done: () => 'Подпись сохранена',
-      after: ['gallery'],
-    },
-    'gallery.cover': {
-      run: (api, a) => api.gallerySetCover(a.gameId, a.file),
-      done: () => 'Обложка выбрана',
-      after: ['gallery', 'games'],
-    },
 
     /* --- сборки модов --- */
     'mods.activate': {
@@ -148,11 +119,6 @@
     },
 
     /* --- новости --- */
-    'news.save': {
-      run: (api, a) => api.newsSave(a.payload),
-      done: () => 'Сохранено',
-      after: ['news'],
-    },
     'news.publish': {
       danger: true,
       ask: (a) => ({

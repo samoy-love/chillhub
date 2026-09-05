@@ -15,7 +15,6 @@ const DANGER = [
   'launcher.delete',
   'launcher.prune',
   'games.purge',
-  'gallery.delete',
   'mods.activate',
   'mods.delete',
   'news.publish',
@@ -29,13 +28,7 @@ const DANGER = [
 
 /** Действия, которые можно повторить или отменить обычным способом. */
 const SAFE = [
-  'games.save',
   'games.scan',
-  'gallery.mkdir',
-  'gallery.rename',
-  'gallery.caption',
-  'gallery.cover',
-  'news.save',
   'news.rebuild',
   'inbox.important',
   'inbox.read',

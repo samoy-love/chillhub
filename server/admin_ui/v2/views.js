@@ -699,7 +699,7 @@
     const head =
       '<div class="handoff">' +
       '<div><span class="k">Тип</span><span class="v">' + esc(f.type || 'other') + '</span></div>' +
-      '<div><span class="k">Когда</span><span class="v">' + esc(fm.dateTime(f.at)) + '</span></div>' +
+      '<div><span class="k">Когда</span><span class="v">' + esc(fm.dateTimeZoned(f.at)) + '</span></div>' +
       (f.name ? '<div><span class="k">Кто</span><span class="v">' + esc(f.name) + '</span></div>' : '') +
       (f.contact ? '<div><span class="k">Связь</span><span class="v">' + esc(f.contact) + '</span></div>' : '') +
       '</div>';
@@ -869,7 +869,7 @@
     return (
       chips('Версии клиента', по('appVersion')) +
       chips('Игры', по('gameId')) +
-      '<table><thead><tr><th>Когда</th><th>Версия</th><th>Игра</th><th>Что делал</th></tr></thead><tbody>' +
+      '<table><thead><tr><th>Когда, ' + esc(f.zone()) + '</th><th>Версия</th><th>Игра</th><th>Что делал</th></tr></thead><tbody>' +
       rows
         .map(
           (e) =>
@@ -1103,6 +1103,56 @@
           .join(', ')
       ) +
       '</p>'
+    );
+  }
+
+  /**
+   * Собранные версии модпака.
+   *
+   * В панели 1.0 это была таблица на вкладке игры, и она отвечала на два
+   * вопроса, на которые строка раздела не отвечает: какая версия сейчас
+   * у игроков и без каких модов собрана каждая. Пропавшие называются
+   * поимённо — «пропущено 2» не говорит, потерялся ли твик текстур или
+   * мод, ради которого пакет и собирали.
+   */
+  function modVersions(list, opts) {
+    const rows = list || [];
+    const o = opts || {};
+    const f = F();
+    if (!rows.length) {
+      return '<div class="empty"><b>Собранных версий нет</b><span>Соберите первую — игрокам она сама не уйдёт</span></div>';
+    }
+    return (
+      '<table><thead><tr><th>Версия</th><th>Когда</th><th class="num">Модов</th><th class="num">Размер</th><th></th></tr></thead><tbody>' +
+      rows
+        .map((v) => {
+          const active = String(v.version) === String(o.active);
+          const missing = Array.isArray(v.missing) ? v.missing : [];
+          return (
+            '<tr' + (active ? ' class="best"' : '') + '><td class="mono">' + esc(v.version) +
+            (active ? ' <span class="badge badge--ok">у игроков</span>' : '') +
+            (missing.length
+              ? '<br><span class="faint">собрана без: ' + esc(missing.join(', ')) + '</span>'
+              : '') +
+            '</td>' +
+            '<td class="dim">' + esc(f.dateTime(v.createdAt)) + '</td>' +
+            '<td class="num">' + esc(String(v.packages || 0)) + '</td>' +
+            '<td class="num">' + esc(f.bytes(v.bytes || 0)) + '</td>' +
+            '<td class="act">' +
+            (active
+              ? ''
+              : '<button class="btn btn--text" type="button" data-act="mods.activate" data-args=\'{"gameId":"' +
+                esc(o.gameId) + '","version":"' + esc(v.version) + '"}\'>Отдать игрокам</button>') +
+            (active
+              ? ''
+              : '<button class="btn btn--danger btn--text" type="button" data-act="mods.delete" data-args=\'{"gameId":"' +
+                esc(o.gameId) + '","version":"' + esc(v.version) + '"}\'>Удалить</button>') +
+            '</td></tr>'
+          );
+        })
+        .join('') +
+      '</tbody></table>' +
+      '<p class="note">Активную версию удалить нельзя: игроки останутся без модпака посреди сессии.</p>'
     );
   }
 
@@ -1365,6 +1415,7 @@
     sparkPoints,
     sparkLine,
     resolvePlan,
+    modVersions,
     modsDiff,
     catalogBar,
     pageLabel,

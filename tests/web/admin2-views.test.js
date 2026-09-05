@@ -610,3 +610,38 @@ test('скорость без остатка показывается, оста�
   const onlyLeft = V.uploadStatus({ phase: 'upload', progress: 0.5, left: 1000 });
   assert.ok(!/осталось/.test(onlyLeft.text));
 });
+
+/* ---------- Версии модпака ---------- */
+
+test('список версий отмечает ту, что у игроков, и не даёт её удалить', () => {
+  // Удалив активную, оставишь игроков без модпака посреди сессии
+  const html = V.modVersions(
+    [
+      { version: '1.9.9', createdAt: '2026-09-01T10:00:00Z', packages: 17, bytes: 251000000 },
+      { version: '1.9.8', packages: 16, bytes: 250000000 },
+    ],
+    { active: '1.9.8', gameId: 'repo' }
+  );
+  const args = [...html.matchAll(/data-act="mods\.delete" data-args='([^']+)'/g)].map((m) => JSON.parse(m[1]).version);
+  assert.deepStrictEqual(args, ['1.9.9'], 'удалять предложили активную версию');
+  assert.match(html, /у игроков/);
+});
+
+test('пропавшие моды названы поимённо, а не числом', () => {
+  // «Пропущено 2» не говорит, потерялся ли твик текстур или сам модпак
+  const html = V.modVersions([{ version: '1.9.9', missing: ['Ura/Old', 'Ura/Gone'] }], { gameId: 'g' });
+  assert.match(html, /Ura\/Old, Ura\/Gone/);
+  assert.match(html, /собрана без/);
+});
+
+test('без единой сборки список объясняет, что делать', () => {
+  const html = V.modVersions([], { gameId: 'g' });
+  assert.match(html, /Собранных версий нет/);
+  assert.match(html, /игрокам она сама не уйдёт/);
+});
+
+test('версия и игра не исполняются как разметка', () => {
+  const html = V.modVersions([{ version: '"><script>x</script>' }], { gameId: '"><b>' });
+  assert.ok(!html.includes('<script>'));
+  assert.ok(!html.includes('<b>'));
+});

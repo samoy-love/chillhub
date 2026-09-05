@@ -237,6 +237,11 @@
     launcher: {
       title: 'Лаунчер',
       lede: 'Выкатка самого лаунчера: загрузить, сравнить, отдать игрокам.',
+      /* Каждая версия — сотня мегабайт, и место кончается тихо: диск
+         забивается сборками, о которых никто не помнит. Оставляем пять
+         свежих — этого хватает, чтобы откатиться на пару выпусков. */
+      actions:
+        '<button class="btn" type="button" data-act="launcher.prune" data-args=\'{"keep":5}\'>Убрать старые</button>',
       render() {
         const L = D.launcher;
         /* Разница считается из настоящих манифестов и приезжает уже
@@ -371,6 +376,7 @@
               <span class="k">${esc(p.latestAt || 'дата не приходит с Thunderstore')}</span>
             </div>
             <div class="push"></div>
+            <button class="btn btn--text" type="button" data-act="versions" data-args='{"gameId":"${esc(p.gameId)}","title":"${esc(p.title)}"}'>Все версии</button>
             ${staged ? `<button class="btn" type="button" data-act="mods-diff" data-args='{"gameId":"${esc(p.gameId)}","from":"${esc(p.active)}","to":"${esc(p.built)}","title":"${esc(p.title)}"}'>Что изменится</button>` : ''}
             ${staged ? `<button class="btn btn--accent" type="button" data-act="mods.activate" data-args='{"gameId":"${esc(p.gameId)}","version":"${esc(p.built)}"}'>Отдать игрокам</button>` : ''}
             ${stale ? '<button class="btn btn--accent" type="button" data-act="build">Пересобрать</button>' : ''}
@@ -554,6 +560,10 @@
     inbox: {
       title: 'Обращения',
       lede: 'Что пишут из лаунчера. Контакт необязателен, поэтому ответить получится не на всё.',
+      /* Функцией, а не строкой: счётчик берётся из данных, а их на
+         момент создания раздела ещё нет. */
+      actions: () =>
+        `<button class="btn btn--danger btn--text" type="button" data-act="inbox.clear" data-args='{"count":${D.inbox.length}}'>Очистить всё</button>`,
       render() {
         const t = { bug: 'поломка', question: 'вопрос', idea: 'идея', other: 'прочее' };
         const tone = { bug: 'bad', question: 'accent', idea: 'ok', other: '' };
@@ -642,6 +652,8 @@
     errors: {
       title: 'Ошибки у игроков',
       lede: 'Ради чего собираются события: где именно ломается загрузка и запуск.',
+      actions:
+        '<button class="btn btn--danger btn--text" type="button" data-act="metrics.clear">Удалить все метрики</button>',
       render() {
         /* Имена полей — те, что отдаёт разбор ответа, а не те, что в
            JSON сервера: иначе весь раздел считает undefined и рисует
@@ -1908,6 +1920,35 @@
     });
   }
 
+  /* --- Собранные версии модпака --- */
+
+  /* Строка раздела говорит про свежую сборку, а вопросов у списка версий
+     два других: какая сейчас у игроков и без каких модов собрана каждая.
+     Отвечать на них строкой нельзя, поэтому список — отдельным листом. */
+  function flowVersions(a) {
+    const sheet = openSheet({
+      title: 'Версии модпака: ' + (a.title || a.gameId),
+      lede: 'Отдать игрокам можно любую, удалить — любую, кроме той, что у них сейчас.',
+      body: '<div class="sk" style="height:14rem"></div>',
+      foot: '<button class="btn" type="button" data-flow="close">Закрыть</button>',
+    });
+
+    (async () => {
+      try {
+        const got = await API.modsList(a.gameId);
+        sheet.body(
+          V().modVersions(window.CH2Sections.items(got), { active: (got && got.active) || '', gameId: a.gameId })
+        );
+      } catch (err) {
+        sheet.body('<div class="empty"><b>Не прочиталось</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
+      }
+    })();
+
+    sheet.root.addEventListener('click', (e) => {
+      if (e.target.closest('[data-flow="close"]')) sheet.close();
+    });
+  }
+
   /* --- Что изменится в модпаке --- */
 
   /* Читают это перед тем, как отдать пересборку игрокам: «какие моды
@@ -2208,6 +2249,7 @@
     choose: () => flowCatalog(packOf(game)),
     import: () => flowImport(packOf(game)),
     'mods-diff': (a) => flowModsDiff(a),
+    versions: (a) => flowVersions(a),
     'error-events': (a) => flowErrorEvents(a),
     'new-post': () => flowNews({}),
     'edit-post': (a) => flowNews(a),
@@ -2275,7 +2317,12 @@
           <h1>${esc(S.title)}</h1>
           <p>${esc(S.lede)}</p>
         </div>
-        ${S.actions ? `<div class="actions">${S.actions}</div>` : ''}
+        ${(() => {
+          /* Кнопки раздела бывают строкой и функцией: функция нужна там,
+             где в подписи стоит число из данных. */
+          const acts = typeof S.actions === 'function' ? S.actions() : S.actions;
+          return acts ? `<div class="actions">${acts}</div>` : '';
+        })()}
       </div>
       ${freshness(sec)}
       ${S.render()}`;
