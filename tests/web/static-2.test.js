@@ -12,7 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..', '..');
-const LANDING = path.join(ROOT, 'landing', 'v2');
+const LANDING = path.join(ROOT, 'landing');
 const ADMIN = path.join(ROOT, 'server', 'admin_ui', 'v2');
 
 const read = (...p) => fs.readFileSync(path.join(...p), 'utf8');
@@ -85,16 +85,22 @@ test('текст читается, пока шрифт едет', () => {
 
 /* ---------- Индексация ---------- */
 
-test('превью закрыто от поиска, пока настоящая страница в корне', () => {
-  // Две страницы с одним текстом соревнуются, и наверх может выйти превью
+test('страницы открыты поиску', () => {
+  // Пока сайт лежал превью рядом с настоящим, страницы были закрыты от
+  // обхода: два адреса с одним текстом соревнуются между собой. Сайт
+  // переехал в корень, соревноваться стало не с чем — закрытие обязано
+  // было уехать тем же коммитом, иначе сайт просто пропадёт из поиска.
   for (const page of PAGES) {
-    assert.match(read(LANDING, page), /<meta name="robots" content="noindex, nofollow">/, page + ' открыт поиску');
+    assert.doesNotMatch(read(LANDING, page), /content="noindex/, page + ' закрыт от поиска');
   }
 });
 
-test('в разметке сказано, когда снимать закрытие от поиска', () => {
-  // Иначе 2.0 переедет в корень и останется невидимой для поиска
-  assert.match(read(LANDING, 'index.html'), /Строку снимаем в тот же коммит/);
+test('страница называет своим адресом корень', () => {
+  // Канонический адрес превью вёл на /v2/ — оставшись, он увёл бы поиск
+  // на страницу, которой больше нет
+  const html = read(LANDING, 'index.html');
+  assert.match(html, /<link rel="canonical" href="https:\/\/launcher\.samoy\.love\/">/);
+  assert.doesNotMatch(html, /launcher\.samoy\.love\/v2/);
 });
 
 test('картинка для карточки в мессенджерах открыта обходу', () => {

@@ -15,8 +15,7 @@ Disallow: /downloads/
 # картинка превращает ссылку на сайт в карточку без изображения
 Allow: /assets/images/
 
-# Разрешаем лендинг
+# Разрешаем сайт
 Allow: /
-Allow: /scripts/
 
 Sitemap: https://launcher.samoy.love/sitemap.xml

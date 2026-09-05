@@ -13,7 +13,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
 
-const V2 = path.join(__dirname, '..', '..', 'landing', 'v2');
+const V2 = path.join(__dirname, '..', '..', 'landing');
 
 /** Ответы, которыми притворяется сервер. Форма — как у публичного API. */
 function fixtures() {

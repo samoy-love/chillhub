@@ -280,7 +280,7 @@ test('наблюдение переживает полностью пустые 
 test('у каждого раздела есть загрузчик, и он зовёт свою ручку', async () => {
   const called = [];
   const api = new Proxy({}, {
-    get: (_, name) => (...args) => {
+    get: (_, name) => (..._args) => {
       called.push(String(name));
       // Ответы разной формы: загрузчик обязан пережить любую
       return Promise.resolve({ items: [], enabled: false, days: [], freeBytes: 0 });

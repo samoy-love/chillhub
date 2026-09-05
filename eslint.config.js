@@ -157,7 +157,7 @@ export default [
      определить схему, и «java	script:» для него — javascript:. Класс
      управляющих в регулярке здесь не описка, а сама проверка. */
   {
-    files: ['landing/v2/app.js', 'landing/v2/emu.js'],
+    files: ['landing/app.js', 'landing/emu.js'],
     rules: { 'no-control-regex': 'off' }
   },
 
@@ -237,7 +237,7 @@ export default [
       'server/admin_ui/v2/views.js',
       'server/admin_ui/v2/mods.js',
       'server/admin_ui/v2/manifest.js',
-      'landing/v2/emu-core.js'
+      'landing/emu-core.js'
     ],
     languageOptions: {
       globals: {
