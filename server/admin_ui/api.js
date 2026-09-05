@@ -40,8 +40,23 @@
      ограничение сервера. Такие уезжают только телом; обработчиков,
      которые читали бы длинное значение из `Query()`, в API нет.
 
-     Исключения перечислены поимённо: две ручки разбирают именно JSON. */
+     Исключения перечислены поимённо: одни ручки разбирают именно JSON,
+     другие — именно multipart. */
   const JSON_BODY = new Set(['upload/init', 'games/save', 'maintenance/set']);
+
+  /* ФОРМА ЗДЕСЬ НЕ ИЗ-ЗА ФАЙЛА, А ПОТОМУ ЧТО ТАК ЧИТАЕТ СЕРВЕР.
+     ------------------------------------------------------------------
+     `news/save` и `news/preview` не принимают ни одного файла — только
+     текст. Но оба начинаются с `ParseMultipartForm`, а он на чужом
+     Content-Type возвращает ошибку и ничего не разбирает: обработчик
+     отвечает 400 «request Content-Type isn't multipart/form-data». То
+     есть панель не могла ни сохранить заметку, ни показать её глазами
+     игрока — обе кнопки отвечали отказом на любое содержимое.
+
+     Ручки с файлами (загрузка сборки, обложки, вложения, профиля,
+     значка игры) сюда не нужны: у них тело и так собирается FormData
+     через `upload` ниже. */
+  const FORM_BODY = new Set(['news/save', 'news/preview']);
 
   /** Длиннее этого в адрес не кладём. */
   const URL_VALUE_LIMIT = 512;
@@ -155,6 +170,16 @@
       if (c.body !== undefined) {
         if (typeof FormData !== 'undefined' && c.body instanceof FormData) {
           init.body = c.body;
+        } else if (FORM_BODY.has(path)) {
+          /* Content-Type ставит сам FormData — вместе с разделителем,
+             которого у нас нет. Проставленный руками заголовок сломал бы
+             разбор надёжнее, чем его отсутствие. */
+          const fd = new FormData();
+          for (const k of Object.keys(c.body || {})) {
+            const v = c.body[k];
+            if (usable(v)) fd.set(k, asText(v));
+          }
+          init.body = fd;
         } else if (JSON_BODY.has(path)) {
           init.headers['content-type'] = 'application/json';
           init.body = JSON.stringify(c.body);
@@ -336,6 +361,6 @@
 
   return {
     makeApi: makeApi, ApiError: ApiError, reason: reason, session: session, goLogin: goLogin,
-    BASE: BASE, LOGIN: LOGIN, JSON_BODY: JSON_BODY, URL_VALUE_LIMIT: URL_VALUE_LIMIT, LAUNCHER: LAUNCHER,
+    BASE: BASE, LOGIN: LOGIN, JSON_BODY: JSON_BODY, FORM_BODY: FORM_BODY, URL_VALUE_LIMIT: URL_VALUE_LIMIT, LAUNCHER: LAUNCHER,
   };
 });
