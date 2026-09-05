@@ -138,6 +138,13 @@ namespace ChillHub.Core.UI {
     /// Процент — целый, чтобы строка списка менялась сотню раз за закачку, а не тысячи.
     /// </summary>
     internal static class QueueRowLabel {
+        /// <summary>
+        /// Закачка оборвалась. Строка остаётся в списке и после того, как позиция ушла из
+        /// очереди: молча вернуться к «Не установлена» — значит сделать вид, что ничего не
+        /// было, и человек узнает об обрыве только по тому, что игра не запускается.
+        /// </summary>
+        internal const string Interrupted = "Обрыв загрузки";
+
         /// <summary>Подпись для позиции очереди; null-позиция — пустая строка.</summary>
         internal static string For(QueueItem? item) {
             if (item is null) {
@@ -166,6 +173,8 @@ namespace ChillHub.Core.UI {
                     return work;
                 case QueueItemState.Waiting:
                     return "В очереди";
+                case QueueItemState.Failed:
+                    return Interrupted;
                 default:
                     return string.Empty;
             }

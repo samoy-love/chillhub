@@ -177,6 +177,16 @@ namespace ChillHub {
                 if (this.homePage == null) {
                     this.homePage = new Pages.HomePage();
                     this.AttachDownloadsIndicator(this.homePage.DownloadQueue);
+
+                    // Шапка показывает то, что считает страница: свободное место и
+                    // очищённый поиск. Обратно уходит только строка запроса.
+                    this.homePage.DiskFreeChanged += text => this.DiskFreeText.Text = text;
+                    this.homePage.SearchCleared += () => {
+                        if (this.GameSearchBox.Text.Length > 0) {
+                            this.GameSearchBox.Text = string.Empty;
+                        }
+                    };
+                    this.homePage.ApplySearch(this.GameSearchBox.Text);
                 }
 
                 this.ContentFrame.Navigate(this.homePage);
@@ -464,9 +474,15 @@ namespace ChillHub {
                     return;
                 }
 
-                Core.Logging.Logger.Info($"Ярлык: игры '{request.GameId}' нет в каталоге ({action})");
+                Core.Logging.Logger.Info($"Ярлык: игра '{request.GameId}' — {action}");
                 var dialog = new ShortcutLaunchWindow(request, action) { Owner = this };
                 dialog.ShowDialog();
+
+                // Согласились скачать заново — качаем и поднимаем игру, когда докачается.
+                // Само окно этого не умеет: очередь и запуск живут на главной.
+                if (dialog.InstallRequested) {
+                    home.InstallAndLaunch(request.GameId);
+                }
             }
             catch (Exception ex) {
                 // Ярлык не должен ронять уже открытый лаунчер: человек просто останется
@@ -690,6 +706,15 @@ namespace ChillHub {
                 Core.Logging.Logger.Warn($"MainWindow.RefreshDownloadsIndicator: {ex.Message}");
             }
         }
+
+        /// <summary>
+        /// Набранное в поиске уходит на главную страницу. Поле живёт здесь, а список
+        /// игр — там; страница о поле не знает и получает только строку.
+        /// </summary>
+        /// <param name="sender">Поле поиска.</param>
+        /// <param name="e">Аргументы события.</param>
+        private void GameSearch_TextChanged(object sender, TextChangedEventArgs e)
+            => this.homePage?.ApplySearch(this.GameSearchBox.Text);
 
         private void SettingsBtn_Click(object sender, RoutedEventArgs e) {
             try {

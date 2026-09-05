@@ -425,5 +425,31 @@ namespace ChillHub.Tests {
 
         private static Color Brush(System.Windows.Data.IValueConverter conv, GameInfo game)
             => ((SolidColorBrush)conv.Convert(game, typeof(Brush), null!, CultureInfo.InvariantCulture)).Color;
+
+        /// <summary>
+        /// Обрыв закачки виден в строке списка и красится как беда, а не как очередь.
+        /// Акцентом он выглядел бы ещё одной качающейся игрой.
+        /// </summary>
+        [Fact]
+        public void ОбрывЗагрузкиВиденВСтрокеИКраситсяКакБеда() {
+            var game = new GameInfo { IsInstalled = false };
+            var text = new GameRowStatusTextConverter();
+            var brush = new GameRowStatusBrushConverter();
+            var args = new object[] { game, Core.UI.QueueRowLabel.Interrupted };
+
+            Assert.Equal("Обрыв загрузки", text.Convert(args, typeof(string), null!, CultureInfo.InvariantCulture));
+
+            var painted = (SolidColorBrush)brush.Convert(args, typeof(Brush), null!, CultureInfo.InvariantCulture);
+            var queued = (SolidColorBrush)brush.Convert(
+                new object[] { game, "В очереди" }, typeof(Brush), null!, CultureInfo.InvariantCulture);
+
+            Assert.NotEqual(queued.Color, painted.Color);
+            Assert.Equal((Color)ColorConverter.ConvertFromString("#D47A70"), painted.Color);
+        }
+
+        /// <summary>Неудачная позиция очереди сама называет себя обрывом.</summary>
+        [Fact]
+        public void НеудачнаяПозицияНазываетСебяОбрывом()
+            => Assert.Equal("Обрыв загрузки", QueueRowLabel.For(Item(QueueItemState.Failed)));
     }
 }

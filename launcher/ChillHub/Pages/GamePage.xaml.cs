@@ -510,6 +510,38 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Сверить файлы игры с сервером. Та же работа, что и «Проверить файлы игры» в
+        /// контекстном меню списка, и та же очередь: две проверки одних файлов сразу — это
+        /// два прохода по одному диску, а не вдвое быстрее.
+        /// </summary>
+        /// <param name="sender">Кнопка.</param>
+        /// <param name="e">Аргументы события.</param>
+        private void VerifyFilesBtn_Click(object sender, RoutedEventArgs e) {
+            if (this.downloadQueue == null) {
+                return;
+            }
+
+            this.StartQueuedSync(Core.Game.QueueTaskKind.Verify);
+        }
+
+        /// <summary>
+        /// Ярлык игры на рабочий стол. Тот же вызов, что делает лаунчер сам после установки,
+        /// — здесь он нужен, когда ярлык удалили руками.
+        /// </summary>
+        /// <param name="sender">Кнопка.</param>
+        /// <param name="e">Аргументы события.</param>
+        private void ShortcutBtn_Click(object sender, RoutedEventArgs e) {
+            try {
+                Core.Home.GameLocalState.StartDesktopShortcutCreation(
+                    this.game.Title, this.game.GameId, this.game.ExeRelativePath);
+            }
+            catch (Exception ex) {
+                // Ярлык — удобство: страница обязана остаться рабочей и без него.
+                Core.Logging.Logger.Warn($"GamePage: ярлык для '{this.game.GameId}' не создан: {ex.Message}");
+            }
+        }
+
         private void OpenFolderBtn_Click(object sender, RoutedEventArgs e) {
             try {
                 var root = this.LocalRoot;
