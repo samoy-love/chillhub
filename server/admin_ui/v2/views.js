@@ -83,7 +83,18 @@
       const head = s.resumed
         ? 'Докачка: ' + s.resumed + ' из ' + (s.total || 0) + ' кусков уже на сервере'
         : 'Заливка: ' + (s.done || 0) + ' из ' + (s.total || 0);
-      return { text: head + ' · ' + f.percent(s.progress || 0, 1, 0), tone: '' };
+
+      /* Скорость и остаток — не украшение. Заливка на 1,8 ГБ идёт
+         минутами, и один процент не отвечает на единственный вопрос,
+         который в это время задают: ждать ещё минуту или уйти пить чай.
+         Пока скорость неизвестна, их не показываем вовсе: выдумывать
+         остаток по двум точкам — то же самое, что соврать. */
+      const parts = [head, f.percent(s.progress || 0, 1, 0)];
+      if (s.speed > 0) {
+        parts.push(f.speed(s.speed));
+        if (s.left > 0) parts.push('осталось ' + f.eta(s.left / s.speed));
+      }
+      return { text: parts.join(' · '), tone: '' };
     }
     if (s.phase === 'retry') return { text: 'Повторяем сорвавшиеся куски: ' + (s.count || 0), tone: 'warn' };
     if (s.phase === 'complete') return { text: 'Собираем файл на сервере', tone: '' };

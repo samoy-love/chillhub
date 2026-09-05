@@ -576,3 +576,37 @@ test('окно наоборот ловится до нажатия', () => {
 test('выключение работ проверок не требует', () => {
   assert.strictEqual(V.maintProblem({ enabled: false, blocks: {} }), '');
 });
+
+/* ---------- Скорость и остаток ---------- */
+
+test('во время заливки видно скорость и сколько ещё ждать', () => {
+  // Заливка на 1,8 ГБ идёт минутами, и один процент не отвечает на
+  // единственный вопрос, который в это время задают
+  const s = V.uploadStatus({
+    phase: 'upload',
+    done: 40,
+    total: 300,
+    progress: 0.13,
+    speed: 11 * 1024 * 1024,
+    left: 1.5 * 1024 ** 3,
+  });
+  assert.match(s.text, /11\u00a0МБ\/с/);
+  assert.match(s.text, /осталось/);
+});
+
+test('пока скорость неизвестна, остаток не выдумывается', () => {
+  // Оценщик молчит первые секунды намеренно: там не скорость канала, а
+  // байты, принятые буферами, и по ним остаток получается втрое меньше
+  const s = V.uploadStatus({ phase: 'upload', done: 1, total: 300, progress: 0.003 });
+  assert.ok(!/осталось/.test(s.text), s.text);
+  assert.ok(!/МБ\/с/.test(s.text), s.text);
+});
+
+test('скорость без остатка показывается, остаток без скорости — нет', () => {
+  const onlySpeed = V.uploadStatus({ phase: 'upload', progress: 0.5, speed: 5 * 1024 * 1024 });
+  assert.match(onlySpeed.text, /5\u00a0МБ\/с/);
+  assert.ok(!/осталось/.test(onlySpeed.text));
+
+  const onlyLeft = V.uploadStatus({ phase: 'upload', progress: 0.5, left: 1000 });
+  assert.ok(!/осталось/.test(onlyLeft.text));
+});

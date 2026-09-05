@@ -152,6 +152,15 @@ export default [
     }
   },
 
+  /* safeUrl вырезает управляющие символы ДО разбора схемы: браузер по
+     спецификации URL удаляет табуляции и переводы строк перед тем, как
+     определить схему, и «java	script:» для него — javascript:. Класс
+     управляющих в регулярке здесь не описка, а сама проверка. */
+  {
+    files: ['landing/v2/app.js', 'landing/v2/emu.js'],
+    rules: { 'no-control-regex': 'off' }
+  },
+
   // upload-bench.js attaches its exports to `window` (see the UMD wrapper at
   // its top) precisely so admin.js can call them as plain globals, the same
   // way it calls every other helper in this directory — ESLint just can't see

@@ -357,3 +357,51 @@ test('ответ «галереи нет» запоминается: спраш�
   await api.gallery('bodycam');
   assert.strictEqual(asked, 0, 'стабильный ответ спросили заново');
 });
+
+/* ---------- Ссылки с сервера в разметке ---------- */
+
+test('обложка со сломанным адресом не дописывает своих правил в CSS', async (t) => {
+  // Обложка уезжает в style="background-image:url('…')". Кавычка внутри
+  // становится &#39;, но разбор идёт в два шага: HTML раскрывает
+  // сущности, и CSS видит уже настоящую кавычку
+  const { window } = await boot(t, {
+    '/news/index.json': {
+      items: [
+        {
+          id: 'n1',
+          slug: 'n1',
+          title: 'Заметка',
+          createdAt: '2026-09-01T10:00:00Z',
+          summary: 'текст',
+          coverUrl: "x'); background:url('https://зло/маяк.png",
+        },
+      ],
+    },
+  });
+
+  await until(() => window.document.querySelector('.post'));
+  const html = window.document.querySelector('[data-news]').innerHTML;
+  assert.ok(!html.includes('зло'), 'чужой адрес попал в разметку');
+  assert.ok(!/background:url/.test(html.replace('background-image:url', '')), 'дописалось лишнее правило');
+});
+
+test('javascript: в адресе обложки не проходит ни в каком виде', async (t) => {
+  const { window } = await boot(t, {
+    '/news/index.json': {
+      items: [
+        { id: 'n1', slug: 'n1', title: 'З', createdAt: '2026-09-01T10:00:00Z', coverUrl: 'java\tscript:alert(1)' },
+      ],
+    },
+  });
+
+  await until(() => window.document.querySelector('.post'));
+  const html = window.document.querySelector('[data-news]').innerHTML;
+  assert.ok(!/script:/.test(html), 'схема прошла через табуляцию');
+});
+
+test('обычные адреса обложек и значков не портятся', async (t) => {
+  const { window } = await boot(t);
+  await until(() => window.document.querySelector('.game-ico, [data-letter]'));
+  const html = window.document.querySelector('[data-games]').innerHTML;
+  assert.match(html, /\/manifests\/repo\/icon\.png/, 'нормальный значок отфильтровали');
+});

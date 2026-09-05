@@ -750,3 +750,25 @@ test('пометка называет раздел словами навигац
   assert.match(text(note), /метрики/);
   assert.ok(!/metrics/.test(text(note)));
 });
+
+/* ---------- Скорость заливки ---------- */
+
+test('скорость считается по байтам и не рисуется чаще четырёх раз в секунду', async (t) => {
+  // Событий прогресса летят сотни в секунду — по одному на кусок каждого
+  // потока. Перерисовка на каждое занимает кадр вместо загрузки
+  const { window } = await boot();
+  t.after(() => window.close());
+
+  await open(window, '#launcher', 'upload');
+  assert.strictEqual(typeof window.makeRateEstimator, 'function', 'оценщик скорости не подключён');
+  assert.strictEqual(typeof window.makeUiThrottler, 'function', 'троттлер не подключён');
+
+  // Оценщик тот же, что в 1.0: пока окно уже минимального, он молчит
+  const rate = window.makeRateEstimator(4000, { minSpanMs: 1200 });
+  rate.push(0, 0);
+  rate.push(300, 30 * 1024 * 1024);
+  assert.strictEqual(rate.rate(), 0, 'скорость показана по буферам, а не по каналу');
+
+  rate.push(2000, 40 * 1024 * 1024);
+  assert.ok(rate.rate() > 0, 'скорость не появилась и после набора окна');
+});

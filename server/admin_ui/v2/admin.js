@@ -844,10 +844,25 @@
     let ctrl = null;
     let uploadId = '';
 
-    const draw = () => {
+    /* Скорость считает тот же оценщик, что и в панели 1.0. Окно и
+       минимальная ширина взяты оттуда же и не с потолка: в первые
+       мгновения заливки байты, посчитанные по onprogress, — это не
+       переданное, а принятое буферами, и узкое окно честно делит
+       мегабайты на миллисекунды, выдавая «>100 МБ/с» на канале, где
+       столько не бывает. */
+    const rate = window.makeRateEstimator(4000, { minSpanMs: 1200 });
+
+    const paint = () => {
       sheet.body(V().uploadCard(st));
       sheet.foot(footButtons(V().uploadButtons(st)));
     };
+
+    /* Отрисовка не чаще четырёх раз в секунду. Событий прогресса летят
+       сотни в секунду — по одному на каждый принятый кусок каждого
+       потока, — и перерисовывать на каждое значит занять весь кадр
+       перерисовкой вместо загрузки. */
+    const throttled = window.makeUiThrottler(250, paint);
+    const draw = (now) => (now ? paint() : throttled.schedule());
 
     /* Закрытие листа посреди заливки — это отмена, а не сворачивание:
        брошенная загрузка оставила бы на сервере недособранный архив. */
@@ -868,7 +883,7 @@
         streams: params.concurrency,
         progress: 0,
       };
-      draw();
+      draw(true);
 
       try {
         const res = await window.CH2Upload.run(
@@ -885,14 +900,26 @@
             signal: ctrl.signal,
             on: (ev) => {
               st = Object.assign({}, st, ev);
-              draw();
+
+              /* Оценщику скармливаем байты, а не куски: кусок в 8 МБ
+                 меняет счётчик рывком, и по нему скорость выглядит
+                 пилой вместо ровной линии. */
+              if (ev.phase === 'upload') {
+                const sent = Math.round((Number(ev.progress) || 0) * file.size);
+                // push(время, байты) — порядок как в модуле 1.0
+                st.speed = rate.push(Date.now(), sent);
+                st.left = Math.max(0, file.size - sent);
+              }
+
+              /* Смена шага — событие, а не тик: её показывают сразу. */
+              draw(ev.phase !== 'upload');
             },
           }
         );
         uploadId = res.uploadId;
 
         st = Object.assign({}, st, { phase: 'process', progress: 1 });
-        draw();
+        draw(true);
         const done = await window.CH2Upload.process(uploadId, {
           fetch: window.fetch.bind(window),
           ndjson: { readNdjsonStream: window.readNdjsonStream },
@@ -906,11 +933,11 @@
         st = done.ok
           ? Object.assign({}, st, { phase: 'done' })
           : Object.assign({}, st, { phase: 'failed', message: done.message });
-        draw();
+        draw(true);
         if (done.ok) await store.invalidate(['launcher', 'overview', 'disk']);
       } catch (e) {
         st = Object.assign({}, st, { phase: 'failed', message: (e && e.message) || 'сбой' });
-        draw();
+        draw(true);
       }
     }
 
@@ -927,7 +954,7 @@
         if (ctrl) ctrl.abort();
         if (uploadId) window.CH2Upload.abort(API, uploadId);
         st = Object.assign({}, st, { phase: 'aborted' });
-        draw();
+        draw(true);
       }
       if (act === 'close') {
         sheet.onClose = null;

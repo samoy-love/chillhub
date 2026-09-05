@@ -98,12 +98,41 @@
   const esc = (s) =>
     String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  /* Ссылка с сервера в разметку — только через проверку схемы.
+     ------------------------------------------------------------------
+     ПОЧЕМУ ОДНОГО esc() МАЛО. Обложка новости уезжает в
+     `style="background-image:url('…')"`. Кавычка внутри превращается в
+     `&#39;`, но разбор идёт в два шага: сначала HTML раскрывает
+     сущности, и только потом CSS видит уже настоящую кавычку. Строка
+     вида `x'); background:…` таким образом закрывает url() и
+     дописывает свои объявления.
+
+     Управляющие символы вырезаются ДО разбора схемы: браузер по
+     спецификации URL удаляет табуляции и переводы строк перед тем, как
+     определить схему, поэтому `java&#9;script:` для него — javascript:.
+     Правило перенесено из панели 1.0 (`sanitizeUrl`) как есть.
+     ------------------------------------------------------------------ */
+  const safeUrl = (value) => {
+    const v = String(value ?? '')
+      .replace(/[\u0000-\u001F\u007F]/g, '')
+      .trim();
+    if (!v) return '';
+    // Скобка и кавычка ломают url() даже в безопасной схеме
+    if (/[()'"\\]/.test(v)) return '';
+    if (/^[a-z][a-z0-9+.-]*:/i.test(v)) {
+      const scheme = v.slice(0, v.indexOf(':')).toLowerCase();
+      return scheme === 'http' || scheme === 'https' ? v : '';
+    }
+    // Относительная ссылка, якорь, протокол-относительная — безопасны
+    return v;
+  };
+
   /* Значок игры приходит из каталога (`iconUrl` в GameInfo). Буква на
      плашке — не «дизайн», а честный запасной вариант: у части игр в
      реестре иконки нет, и лаунчер рисует ровно то же самое. */
   function icon(g) {
-    return g.iconUrl
-      ? `<img class="emu-ico" src="${esc(g.iconUrl)}" alt="" loading="lazy" decoding="async">`
+    return safeUrl(g.iconUrl)
+      ? `<img class="emu-ico" src="${esc(safeUrl(g.iconUrl))}" alt="" loading="lazy" decoding="async">`
       : `<span class="emu-ico emu-ico--letter" data-letter="${esc((g.title || '?').slice(0, 1))}"></span>`;
   }
 
@@ -271,7 +300,7 @@
       .map(
         (n) => `
         <article class="emu-post">
-          <span class="emu-post-cover"${n.coverUrl ? ` style="background-image:url('${esc(n.coverUrl)}')"` : ''}></span>
+          <span class="emu-post-cover"${safeUrl(n.coverUrl) ? ` style="background-image:url('${esc(safeUrl(n.coverUrl))}')"` : ''}></span>
           <span class="emu-post-text">
             <b>${esc(n.title)}</b>
             <i>${esc(dateRu(n.createdAt))}</i>
