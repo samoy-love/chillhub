@@ -105,3 +105,53 @@ test('upload-tuning.js в браузерном режиме кладёт авт�
   const p = w.pickUploadParams(1.3 * 1024 * 1024 * 1024, { protocol: 'http/1.1' });
   assert.strictEqual(p.concurrency, 6);
 });
+
+/* ---------- Модули панели 2.0 ---------- */
+
+/* Панель 2.0 подключает их обычными <script>, без сборщика: сломанная
+   обёртка UMD означает, что модуль тихо не появится в window и раздел
+   развалится уже в браузере — тесты, которые грузят их через require,
+   этого не увидят. */
+const V2_MODULES = [
+  ['format.js', 'CH2Format', ['bytes', 'dec', 'percent']],
+  ['api.js', 'CH2Api', ['makeApi', 'session', 'reason']],
+  ['actions.js', 'CH2Actions', ['has', 'run']],
+  ['store.js', 'CH2Store', ['createStore']],
+  ['sections.js', 'CH2Sections', ['launcher', 'games', 'filterInbox']],
+  ['upload.js', 'CH2Upload', ['run', 'process', 'abort']],
+  ['build.js', 'CH2Build', ['run', 'outcome', 'errorText']],
+  ['registry.js', 'CH2Registry', ['move', 'reorder', 'problems']],
+  ['news.js', 'CH2News', ['address', 'payload', 'problems']],
+  ['gallery.js', 'CH2Gallery', ['safePath', 'nameProblem']],
+  ['tuning.js', 'CH2Tuning', ['best', 'why', 'remember']],
+  ['views.js', 'CH2Views', ['sheet', 'maintForm', 'gameForm']],
+  ['mods.js', 'CH2Mods', ['parsePackageUrl', 'planSpace']],
+  ['manifest.js', 'CH2Manifest', ['diff', 'folders', 'between']],
+];
+
+for (const [file, global, fns] of V2_MODULES) {
+  test(`${file} в браузерном режиме кладёт ${global} в window`, () => {
+    const w = loadAsBrowserScript('server/admin_ui/v2/' + file);
+    assert.strictEqual(typeof w[global], 'object', `${global} не появился в window`);
+    for (const fn of fns) {
+      assert.strictEqual(typeof w[global][fn], 'function', `${global}.${fn} не функция`);
+    }
+  });
+}
+
+test('панель подключает ровно те модули, что лежат рядом', () => {
+  // Забытый в index.html модуль — это раздел, падающий на первом нажатии;
+  // лишний тег — запрос в никуда на каждой загрузке
+  const html = fs.readFileSync(path.join(__dirname, '..', '..', 'server/admin_ui/v2/index.html'), 'utf8');
+  const linked = [...html.matchAll(/<script src="\.\/([^"]+)"/g)].map((m) => m[1]);
+  const onDisk = fs
+    .readdirSync(path.join(__dirname, '..', '..', 'server/admin_ui/v2'))
+    .filter((n) => n.endsWith('.js'));
+
+  for (const f of onDisk) {
+    assert.ok(linked.includes(f), 'модуль лежит, но не подключён: ' + f);
+  }
+  for (const f of linked) {
+    assert.ok(onDisk.includes(f), 'подключён несуществующий модуль: ' + f);
+  }
+});

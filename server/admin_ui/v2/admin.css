@@ -860,6 +860,44 @@ tr.best > td { background: var(--ember-wash); }
 
 /* Текст обращения — словами игрока, и это видно: отступ и полоса слева
    отделяют его от того, что написала панель. */
+
+/* Полоса отбора: всё в одну строку, переносится на узком экране.
+   Отбор стоит НАД списком, а не сбоку: сначала читают, что отобрано,
+   потом смотрят, что попало. */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+  margin-bottom: var(--s3);
+  padding: var(--s2) var(--s3);
+  background: var(--bg-1);
+  border: 1px solid var(--line-1);
+  border-radius: 3px;
+}
+
+.filters input[type="search"] { min-width: 15rem; flex: 1; }
+.filters[aria-busy="true"] { opacity: 60%; pointer-events: none; }
+.inline-label { color: var(--fg-3); font-size: 0.8125rem; }
+.check--inline { display: flex; gap: var(--s1); padding: 0; }
+
+/* Дерево по папкам: свёрнутая папка отвечает «поехал один каталог или
+   вся сборка» без пролистывания четырёх сотен строк. */
+.folder > summary {
+  display: flex;
+  gap: var(--s2);
+  align-items: center;
+  padding: 4px var(--s2);
+  cursor: pointer;
+  color: var(--fg-2);
+  font-weight: 500;
+}
+
+.folder > summary::-webkit-details-marker { color: var(--fg-3); }
+.folder > summary:hover { background: var(--bg-2); }
+.folder > summary .size { margin-left: auto; color: var(--fg-3); }
+.folder .row { padding-left: var(--s4); }
+
 .quote {
   margin: var(--s3) 0;
   padding: var(--s2) var(--s3);
