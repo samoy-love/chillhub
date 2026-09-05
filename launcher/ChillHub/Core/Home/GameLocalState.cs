@@ -429,7 +429,8 @@ namespace ChillHub.Core.Home {
         /// <param name="title">Название игры для имени ярлыка.</param>
         /// <param name="gameId">Идентификатор игры.</param>
         /// <param name="exeRelativePath">Путь к exe относительно папки игры.</param>
-        internal static void StartDesktopShortcutCreation(string? title, string? gameId, string? exeRelativePath) {
+        internal static void StartDesktopShortcutCreation(
+            string? title, string? gameId, string? exeRelativePath, Action<string>? created = null) {
             try {
                 var exePath = GameExePath(gameId, exeRelativePath);
                 if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath)) {
@@ -437,7 +438,18 @@ namespace ChillHub.Core.Home {
                 }
 
                 var name = string.IsNullOrWhiteSpace(title) ? gameId! : title!;
-                var thread = new Thread(() => TryCreateDesktopShortcut(name, gameId!, exePath)) { IsBackground = true };
+                var thread = new Thread(() => {
+                    TryCreateDesktopShortcut(name, gameId!, exePath);
+
+                    // Ярлык создавался молча, и узнать о нём можно было только свернув
+                    // лаунчер и посмотрев на стол. Отчитываемся тому, кто попросил.
+                    try {
+                        created?.Invoke(name);
+                    }
+                    catch (Exception ex) {
+                        Logging.Logger.Warn($"StartDesktopShortcutCreation: отчёт не доставлен: {ex.Message}");
+                    }
+                }) { IsBackground = true };
                 try {
                     thread.SetApartmentState(ApartmentState.STA);
                 }

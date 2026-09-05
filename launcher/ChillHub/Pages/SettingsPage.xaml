@@ -51,7 +51,7 @@
         <ColumnDefinition Width="*"/>
         <ColumnDefinition Width="Auto"/>
       </Grid.ColumnDefinitions>
-      <Button Grid.Column="0" Name="BackBtn" Style="{DynamicResource Style.Button.Back}" Click="BackBtn_Click"/>
+      <Button Grid.Column="0" Name="BackBtn" Content="К библиотеке" Style="{DynamicResource Style.Button.Back}" Click="BackBtn_Click"/>
       <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
         <TextBlock Text="Настройки" Style="{DynamicResource Style.PageTitle}" Margin="16,0,0,0"/>
         <!-- Настройки применяются сразу, кнопки «Сохранить» нет. Подтверждение записи —

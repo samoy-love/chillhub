@@ -190,7 +190,23 @@ namespace ChillHub.Pages {
             }
         }
 
-        private void FbCancel_Click(object sender, RoutedEventArgs e) {
+        private void FbCancel_Click(object sender, RoutedEventArgs e) => this.CloseFeedbackWithConfirm();
+
+        /// <summary>
+        /// Закрывает форму обратной связи, спросив, если есть что терять. Пустую закрываем
+        /// молча: вопрос там не о чем, а лишнее окно на каждый промах по крестику мешает.
+        /// </summary>
+        private void CloseFeedbackWithConfirm() {
+            if (Core.Home.FeedbackClose.NeedsConfirm(this.FbName.Text, this.FbContact.Text, this.FbComment.Text)
+                && MessageBox.Show(
+                    Core.Home.FeedbackClose.Body,
+                    Core.Home.FeedbackClose.Title,
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question,
+                    MessageBoxResult.No) != MessageBoxResult.Yes) {
+                return;
+            }
+
             this.FeedbackOverlay.Visibility = Visibility.Collapsed;
         }
 
@@ -414,11 +430,7 @@ namespace ChillHub.Pages {
             try {
                 if (e.Key == Key.Escape && this.FeedbackOverlay != null && this.FeedbackOverlay.Visibility == Visibility.Visible) {
                     e.Handled = true;
-                    var res = MessageBox.Show("Закрыть форму обратной связи? Введённый текст будет сохранён только если вы отправите его.",
-                        "Подтверждение", MessageBoxButton.YesNo, MessageBoxImage.Question);
-                    if (res == MessageBoxResult.Yes) {
-                        this.FeedbackOverlay.Visibility = Visibility.Collapsed;
-                    }
+                    this.CloseFeedbackWithConfirm();
                 }
             }
             catch (Exception ex) {
@@ -1406,7 +1418,10 @@ namespace ChillHub.Pages {
                 try {
                     var url = HomeFeed.GameNewsItemUrl(this.BaseApi, gid, it.Slug);
                     var win = Window.GetWindow(this) as ChillHub.MainWindow;
-                    win?.ContentFrame.Navigate(new NewsDetailPage(it.Title, url));
+
+                    // Заметку про игру открываем ВМЕСТЕ с игрой: со страницы новости
+                    // должен быть выход к ней, а не только назад в список.
+                    win?.ContentFrame.Navigate(new NewsDetailPage(it.Title, url, this.GameList.SelectedItem as GameInfo));
                 }
                 finally {
                     this.GameNewsList.SelectedItem = null;
@@ -2005,12 +2020,17 @@ namespace ChillHub.Pages {
                 if (look.HeroExplains) {
                     this.HeroTitleText.Text = look.HeroTitle;
                     this.HeroMetaText.Text = look.HeroHint;
+                    this.HeroHintText.Visibility = Visibility.Collapsed;
                     this.HeroStatusBadge.Visibility = Visibility.Collapsed;
                     this.ActionBtn.Visibility = Visibility.Collapsed;
                     return;
                 }
 
                 this.HeroTitleText.Text = g?.Title is string t && !string.IsNullOrWhiteSpace(t) ? t : "Выберите игру";
+
+                // Подсказка — только на пустой витрине: у выбранной игры её место занимает
+                // строка с версией и наигранным.
+                this.HeroHintText.Visibility = g == null ? Visibility.Visible : Visibility.Collapsed;
 
                 string status;
                 if (g == null) {
@@ -2564,7 +2584,12 @@ namespace ChillHub.Pages {
 
                         // Ярлык на рабочем столе: игра уже распакована и запускается, так что
                         // ошибки здесь установку не портят — их гасит сам вызов.
-                        GameLocalState.StartDesktopShortcutCreation(g?.Title, item.GameId, g?.ExeRelativePath);
+                        GameLocalState.StartDesktopShortcutCreation(
+                            g?.Title,
+                            item.GameId,
+                            g?.ExeRelativePath,
+                            name => this.Dispatcher.BeginInvoke(
+                                () => this.ShowToast($"Ярлык {name} создан на рабочем столе")));
                         this.LaunchIfAskedFromShortcut(item.GameId);
                         break;
                     case Core.Game.QueueItemState.Failed:
@@ -2583,7 +2608,7 @@ namespace ChillHub.Pages {
 
                 // Конец работы — всплывашкой, строка внизу остаётся за идущей работой:
                 // см. Core.Home.QueueDone. Ошибка — исключение, её оставляем в строке.
-                var done = Core.Home.QueueDone.For(item.State, item.Title, item.StatusText);
+                var done = Core.Home.QueueDone.For(item.State, item.Title, item.StatusText, item.Kind);
                 if (done.Toast.Length > 0) {
                     this.ShowToast(done.Toast);
                 }
@@ -3453,12 +3478,14 @@ namespace ChillHub.Pages {
                 // из-под работающей закачки, а сама закачка продолжила бы писать в удаляемую
                 // папку. Другая игра, качающаяся параллельно в очереди, тут не мешает —
                 // список игр больше не блокируется целиком на время любой закачки.
-                if (this.IsQueued(gid)) {
-                    this.ShowToast("Идёт установка или обновление этой игры. Дождитесь завершения или снимите её с очереди.");
+                var localRoot = GameLocalRoot(gid);
+
+                // Запреты — общие со страницей игры (Core.Home.GameDeletion): файлы прямо
+                // сейчас держит либо закачка, либо запущенная игра.
+                if (Core.Home.GameDeletion.Blocker(this.IsQueued(gid), gi?.ExeRelativePath) is { Length: > 0 } refusal) {
+                    this.ShowToast(refusal);
                     return;
                 }
-
-                var localRoot = GameLocalRoot(gid);
 
                 // Переключаем текущий выбор на удаляемую игру, чтобы область действий и статусы относились к ней
                 if (gi != null) {
@@ -3469,22 +3496,6 @@ namespace ChillHub.Pages {
                 var title = string.IsNullOrWhiteSpace(gi?.Title) ? gid : gi!.Title;
                 if (!HomeDialogs.ConfirmDeleteGameFiles(this, title!, localRoot)) {
                     return;
-                }
-
-                // Проверим, не запущен ли процесс игры
-                try {
-                    var exeName = System.IO.Path.GetFileNameWithoutExtension(gi?.ExeRelativePath ?? string.Empty);
-                    if (!string.IsNullOrWhiteSpace(exeName)) {
-                        var running = Process.GetProcessesByName(exeName);
-                        if (running?.Length > 0) {
-                            MessageBox.Show($"Игра запущена ({exeName}). Закройте игру перед удалением.", "Удаление локальных файлов", MessageBoxButton.OK, MessageBoxImage.Information);
-                            return;
-                        }
-                    }
-                }
-                catch (Exception ex) {
-                    // Не удалось опросить процессы — не блокируем удаление, файлы всё равно защищены самой ОС
-                    Core.Logging.Logger.Warn($"DeleteGame_Click: проверка запущенного процесса не выполнена: {ex.Message}");
                 }
 
                 // Пытаемся удалить папку целиком.
@@ -3510,24 +3521,13 @@ namespace ChillHub.Pages {
                     // игра продолжала числиться установленной — а на диске лежали её остатки,
                     // неспособные запуститься. Поэтому удаляем сами, по файлу, и доводим до
                     // конца: занятые собираем в список и потом честно называем.
-                    var blocked = await Task.Run(() => GameFiles.DeleteGameFiles(localRoot));
-
-                    // Ярлык уносим вместе с файлами: иначе на рабочем столе остаётся иконка,
-                    // которая по клику ругается «не найден элемент».
-                    await Task.Run(() => GameLocalState.TryRemoveDesktopShortcuts(localRoot));
-
-                    ChillHub.Core.Sync.FileHashCache.Remove(gid);
+                    var blocked = await Core.Home.GameDeletion.RunAsync(gid!, localRoot);
                     this.spaceHint.Remember(gid, 0);
                     this.FilesSizeText.Text = string.Empty;
 
                     // Состояние обновляем в любом случае: игра с вырванными файлами не
                     // запустится, и показывать её установленной — врать пользователю.
                     this.MarkUninstalled(gid);
-
-                    // Освободившиеся гигабайты обязаны отразиться и в «Установка и
-                    // удаление программ»: размер там считается вместе с папкой игр
-                    // (Core/Shell/InstalledAppsEntry.cs). Обход папки уходит в фон.
-                    Core.Shell.InstalledAppsEntry.RefreshInBackground();
 
                     if (blocked.Count > 0) {
                         this.ShowUserError(

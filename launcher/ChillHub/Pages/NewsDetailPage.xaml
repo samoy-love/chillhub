@@ -13,9 +13,28 @@
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="Auto"/>
         <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
       </Grid.ColumnDefinitions>
-      <Button Grid.Column="0" Name="BackBtn" Style="{DynamicResource Style.Button.Back}" Click="BackBtn_Click"/>
+      <Button Grid.Column="0" Name="BackBtn" Content="К новостям" Style="{DynamicResource Style.Button.Back}" Click="BackBtn_Click"/>
       <TextBlock Grid.Column="1" Name="TitleText" Style="{DynamicResource Style.PageTitle}" Margin="16,0,0,0"/>
+      <!-- Заметка про игру ведёт к самой игре. Прежде из новости выхода к ней не было
+           вовсе: человек читал про мод или обновление и возвращался искать игру в
+           списке руками. Блок появляется только у новостей игры — у новостей лаунчера
+           игры нет. -->
+      <Border Grid.Column="2" Name="GameLinkPanel" Visibility="Collapsed" VerticalAlignment="Center"
+              Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}"
+              BorderThickness="1" CornerRadius="{DynamicResource Radius.M}" Padding="12,6" Margin="16,0,0,0">
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+          <StackPanel Margin="0,0,12,0" VerticalAlignment="Center">
+            <TextBlock Text="Игра из этой заметки" FontSize="11"
+                       Foreground="{DynamicResource Brush.TextMuted}"/>
+            <TextBlock Name="GameLinkTitle" FontSize="13" FontWeight="SemiBold"
+                       Foreground="{DynamicResource Brush.Text}"/>
+          </StackPanel>
+          <Button Name="GameLinkBtn" Content="Перейти к игре" Height="30" Padding="12,0"
+                  Style="{DynamicResource Style.Button.GhostNeutral}" Click="GameLinkBtn_Click"/>
+        </StackPanel>
+      </Border>
     </Grid>
     <Grid Grid.Row="1">
       <!-- Main content (browser) -->

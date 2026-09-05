@@ -1037,6 +1037,11 @@
               </Grid>
               <TextBlock x:Name="HeroTitleText" Text="Выберите игру" FontSize="26" FontWeight="Bold"
                          Foreground="{DynamicResource Brush.Title}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+              <!-- Пустой экран объясняет следующий шаг, а не сообщает о пустоте: одно
+                   «Выберите игру» не говорит ни где выбирать, ни что за этим будет. -->
+              <TextBlock x:Name="HeroHintText" Text="Выберите игру слева, чтобы увидеть её сборку и запуск."
+                         FontSize="12" Margin="0,6,0,0" Foreground="{DynamicResource Brush.TextSecondary}"
+                         TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
               <!-- Версия, объём и наигранное. Витрина занимала полтораста пикселей под одно
                    название — всё, что игрок хотел о ней знать, лежало на других экранах. -->
               <TextBlock x:Name="HeroMetaText" Text="" FontSize="12" Margin="0,4,0,0"

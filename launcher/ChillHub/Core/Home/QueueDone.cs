@@ -36,9 +36,18 @@ namespace ChillHub.Core.Home {
         /// <param name="state">Чем кончилась позиция.</param>
         /// <param name="title">Название игры.</param>
         /// <param name="statusText">Последняя строка состояния позиции.</param>
+        /// <param name="kind">Качали или проверяли.</param>
         /// <returns>Что сказать.</returns>
-        internal static QueueDoneReport For(QueueItemState state, string? title, string? statusText) {
+        internal static QueueDoneReport For(
+            QueueItemState state, string? title, string? statusText, QueueTaskKind kind = QueueTaskKind.Download) {
             var name = string.IsNullOrWhiteSpace(title) ? string.Empty : title.Trim();
+
+            // Проверка кончается своими словами. «Готова к запуску» после проверки
+            // читается как «мы её тебе поставили», хотя человек просил только сверить
+            // файлы, и на диске ничего не изменилось.
+            if (state == QueueItemState.Completed && kind == QueueTaskKind.Verify) {
+                return new QueueDoneReport("Файлы проверены, всё на месте", string.Empty);
+            }
 
             return state switch {
                 // Успех. «Готова к запуску» вместо «Готово»: одно слово о конце работы

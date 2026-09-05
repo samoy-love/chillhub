@@ -534,11 +534,71 @@ namespace ChillHub.Pages {
         private void ShortcutBtn_Click(object sender, RoutedEventArgs e) {
             try {
                 Core.Home.GameLocalState.StartDesktopShortcutCreation(
-                    this.game.Title, this.game.GameId, this.game.ExeRelativePath);
+                    this.game.Title,
+                    this.game.GameId,
+                    this.game.ExeRelativePath,
+                    name => this.Dispatcher.BeginInvoke(
+                        () => this.StateText.Text = $"Ярлык {name} создан на рабочем столе"));
             }
             catch (Exception ex) {
                 // Ярлык — удобство: страница обязана остаться рабочей и без него.
                 Core.Logging.Logger.Warn($"GamePage: ярлык для '{this.game.GameId}' не создан: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Сносит файлы игры с диска. Запреты и сама работа общие с контекстным меню
+        /// списка — <see cref="Core.Home.GameDeletion"/>: разрушающее действие в двух
+        /// местах не должно означать двух копий его защит.
+        /// </summary>
+        /// <param name="sender">Кнопка.</param>
+        /// <param name="e">Аргументы события.</param>
+        private async void DeleteGameBtn_Click(object sender, RoutedEventArgs e) {
+            try {
+                var gid = this.game.GameId;
+                var queued = this.downloadQueue?.Snapshot()
+                    .Any(i => string.Equals(i.GameId, gid, StringComparison.OrdinalIgnoreCase)) ?? false;
+
+                if (Core.Home.GameDeletion.Blocker(queued, this.game.ExeRelativePath) is { Length: > 0 } refusal) {
+                    MessageBox.Show(refusal, "Удаление локальных файлов", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                var title = string.IsNullOrWhiteSpace(this.game.Title) ? gid : this.game.Title;
+                var localRoot = this.LocalRoot;
+                if (!Core.Home.HomeDialogs.ConfirmDeleteGameFiles(this, title!, localRoot)) {
+                    return;
+                }
+
+                this.DeleteGameBtn.IsEnabled = false;
+                this.StateText.Text = $"Удаление файлов {title}…";
+                try {
+                    var blocked = await Core.Home.GameDeletion.RunAsync(gid, localRoot);
+                    if (blocked.Count > 0) {
+                        MessageBox.Show(
+                            Core.Home.GameFiles.BuildBlockedFilesMessage(blocked),
+                            "Удаление локальных файлов",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Warning);
+                        return;
+                    }
+
+                    // Игра с вырванными файлами не запустится, и показывать её
+                    // установленной — врать: страница перечитывает состояние с диска.
+                    this.game.IsInstalled = false;
+                    await this.RefreshStateAsync();
+                }
+                finally {
+                    this.DeleteGameBtn.IsEnabled = true;
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "GamePage.DeleteGameBtn_Click");
+                MessageBox.Show(
+                    "Не удалось удалить файлы игры. Возможно, они заняты другой программой.",
+                    "Удаление локальных файлов",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
             }
         }
 
@@ -570,7 +630,7 @@ namespace ChillHub.Pages {
             try {
                 var url = GameChangelogLoader.ArticleUrl(this.BaseApi, this.game.GameId, item.Slug);
                 var win = Window.GetWindow(this) as ChillHub.MainWindow;
-                win?.ContentFrame.Navigate(new NewsDetailPage(item.Title, url));
+                win?.ContentFrame.Navigate(new NewsDetailPage(item.Title, url, this.game));
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Error(ex, "GamePage.ChangelogList_SelectionChanged");
