@@ -396,6 +396,10 @@ namespace ChillHub.Pages {
                 };
                 this.Unloaded += (s, e) => this.UnsubscribeRunningGames();
 
+                // Ворота индикаторов заводят отложенные вызовы. Страница ушла — вызовы
+                // обесцениваются: иначе таймер сработает по элементу, которого уже нет.
+                this.Unloaded += (s, e) => this.CancelBusyGates();
+
                 // Статус пишут два десятка мест по всему файлу; вместо того чтобы обходить
                 // каждое, слушаем сами свойства — панель прячется и показывается там, где
                 // текст и полоса действительно меняются. Список наблюдаемого — в
@@ -759,6 +763,15 @@ namespace ChillHub.Pages {
         /// </summary>
         /// <param name="skeleton">Заглушка.</param>
         /// <param name="show">Показать.</param>
+        /// <summary>Глушит отложенные показы индикаторов: страница уходит.</summary>
+        private void CancelBusyGates() {
+            this.bottomBarGate?.Cancel();
+            this.verifyIndicatorGate?.Cancel();
+            foreach (var gate in this.skeletonGates.Values) {
+                gate.Cancel();
+            }
+        }
+
         private void ShowSkeleton(UIElement skeleton, bool show) {
             if (!this.skeletonGates.TryGetValue(skeleton, out var gate)) {
                 gate = new Core.UI.BusyGate(

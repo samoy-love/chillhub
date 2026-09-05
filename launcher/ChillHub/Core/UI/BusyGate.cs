@@ -6,6 +6,8 @@
 namespace ChillHub.Core.UI {
     using System;
 
+    using ChillHub.Core.Logging;
+
     /// <summary>
     /// Показ индикатора работы, которая может кончиться мгновенно.
     /// <para>
@@ -33,7 +35,7 @@ namespace ChillHub.Core.UI {
         /// <summary>Появился — живёт не меньше. 400 мс хватает, чтобы прочитать короткую строку.</summary>
         internal const int MinVisibleMs = 400;
 
-        private readonly Action<bool> apply;
+        private readonly Action<bool> applyRaw;
         private readonly Func<DateTime> now;
         private readonly Action<TimeSpan, Action> schedule;
 
@@ -47,9 +49,19 @@ namespace ChillHub.Core.UI {
         /// <param name="now">Часы; по умолчанию системные.</param>
         /// <param name="schedule">Отложенный вызов; по умолчанию — таймер диспетчера.</param>
         internal BusyGate(Action<bool> apply, Func<DateTime>? now = null, Action<TimeSpan, Action>? schedule = null) {
-            this.apply = apply;
+            this.applyRaw = apply;
             this.now = now ?? (() => DateTime.UtcNow);
             this.schedule = schedule ?? DispatcherSchedule;
+        }
+
+        /// <summary>
+        /// Отменяет всё отложенное. Зовётся, когда страница уходит: таймер переживает её
+        /// и срабатывает, когда элемента уже нет. В бою это лишняя запись в журнале, в
+        /// тестах — чужой индикатор, дёрнувшийся посреди следующей проверки.
+        /// </summary>
+        internal void Cancel() {
+            this.generation++;
+            this.wanted = this.visible;
         }
 
         /// <summary>Видно ли индикатор прямо сейчас.</summary>
@@ -70,7 +82,7 @@ namespace ChillHub.Core.UI {
 
             this.visible = busy;
             this.shownAt = this.now();
-            this.apply(busy);
+            this.Apply(busy);
         }
 
         /// <summary>Сообщает, идёт работа или нет.</summary>
@@ -99,7 +111,7 @@ namespace ChillHub.Core.UI {
 
                     this.visible = true;
                     this.shownAt = this.now();
-                    this.apply(true);
+                    this.Apply(true);
                 });
                 return;
             }
@@ -111,7 +123,7 @@ namespace ChillHub.Core.UI {
             var left = TimeSpan.FromMilliseconds(MinVisibleMs) - (this.now() - this.shownAt);
             if (left <= TimeSpan.Zero) {
                 this.visible = false;
-                this.apply(false);
+                this.Apply(false);
                 return;
             }
 
@@ -121,8 +133,27 @@ namespace ChillHub.Core.UI {
                 }
 
                 this.visible = false;
-                this.apply(false);
+                this.Apply(false);
             });
+        }
+
+        /// <summary>
+        /// Показать или спрятать — и ни при каких обстоятельствах не уронить окно.
+        /// <para>
+        /// Отложенный вызов переживает страницу, которая его завела: таймер срабатывает,
+        /// когда элемента уже нет. Исключение отсюда уходило в общий обработчик и
+        /// превращалось в отчёт об ошибке — пользователю про мигание полосы, которого он
+        /// даже не увидел. Видимость индикатора того не стоит.
+        /// </para>
+        /// </summary>
+        /// <param name="visible">Показать.</param>
+        private void Apply(bool visible) {
+            try {
+                this.applyRaw(visible);
+            }
+            catch (Exception ex) {
+                Logger.Warn($"BusyGate: индикатор не переключён ({visible}): {ex.Message}");
+            }
         }
 
         private static void DispatcherSchedule(TimeSpan delay, Action action) {

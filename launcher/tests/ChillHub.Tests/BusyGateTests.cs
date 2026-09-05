@@ -123,6 +123,41 @@ namespace ChillHub.Tests {
             Assert.Equal(new[] { true }, seen);
         }
 
+        /// <summary>
+        /// Отменённые ворота молчат. Таймер переживает страницу, которая его завела, и
+        /// без отмены срабатывал по элементу, которого уже нет: в бою — лишняя запись в
+        /// журнале, в тестах — чужой индикатор, дёрнувшийся посреди следующей проверки.
+        /// </summary>
+        [Fact]
+        public void ОтменённыеВоротаМолчат() {
+            var clock = new FakeClock();
+            var seen = new List<bool>();
+            var gate = new BusyGate(v => seen.Add(v), clock.Now, clock.Schedule);
+
+            gate.Set(true);
+            gate.Cancel();
+            clock.Advance(TimeSpan.FromSeconds(5));
+
+            Assert.Empty(seen);
+            Assert.False(gate.Visible);
+        }
+
+        /// <summary>Отмена не прячет то, что уже показано: это не «спрятать», а «забыть отложенное».</summary>
+        [Fact]
+        public void ОтменаНеПрячетПоказанное() {
+            var clock = new FakeClock();
+            var seen = new List<bool>();
+            var gate = new BusyGate(v => seen.Add(v), clock.Now, clock.Schedule);
+
+            gate.Set(true);
+            clock.Advance(TimeSpan.FromSeconds(1));
+            gate.Cancel();
+            clock.Advance(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(new[] { true }, seen);
+            Assert.True(gate.Visible);
+        }
+
         /// <summary>Часы и отложенный вызов вместо настоящих пауз.</summary>
         private sealed class FakeClock {
             private readonly List<(DateTime At, Action What)> pending = new();
