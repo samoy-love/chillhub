@@ -282,7 +282,7 @@
                    </div>
                    <div class="push"></div>
                    <button class="btn btn--accent" type="button" data-act="launcher.activate" data-args='{"version":"${esc(L.newest)}"}'>
-                     Сделать активной
+                     Отдать игрокам
                    </button>
                  </div>`
               : `<div class="note">Игроки получают <span class="mono">${esc(L.active)}</span>. Загруженных версий новее нет — активировать нечего.</div>`
@@ -333,7 +333,7 @@
                       <td class="num">${bytes(v.size)}</td>
                       <td>${stateBadge[v.state]}</td>
                       <td class="act">
-                        ${v.state === 'active' ? '' : `<button class="btn btn--text" type="button" data-act="launcher.activate" data-args='{"version":"${esc(v.version)}"}'>Активировать</button>`}
+                        ${v.state === 'active' ? '' : `<button class="btn btn--text" type="button" data-act="launcher.activate" data-args='{"version":"${esc(v.version)}"}'>Отдать игрокам</button>`}
                         ${v.state === 'active' ? '' : `<button class="btn btn--danger btn--text" type="button" data-act="launcher.delete" data-args='{"version":"${esc(v.version)}","active":${v.state === 'active'}}'>Удалить</button>`}
                       </td>
                     </tr>`,
@@ -356,10 +356,10 @@
     packs: {
       title: 'Сборки модов',
       lede: 'Наборы модов, которые лаунчер ставит игроку. Собираются из Thunderstore.',
-      /* Пересборка доступна всегда, а не только когда на Thunderstore
-         вышло новое: пересобрать после правки состава мод-листа нужно и
-         тогда, когда сам Thunderstore не менялся. */
-      actions: '<button class="btn" type="button" data-act="build">Собрать заново</button>',
+      /* Кнопки в заголовке нет намеренно: сборка живёт в своей карточке
+         ниже, где сказано, что она делает и сколько идёт. Три кнопки
+         одного действия на одном экране — это три разных названия
+         одного и того же, и читатель ищет между ними разницу. */
       render() {
         /* Игра без модпака из раздела просто исчезала, и подключить ей
            моды было негде: панель показывала только те, у которых они
@@ -373,7 +373,7 @@
             `<div class="stack stack--tight">
                <p class="dim">Модпак — это набор модов с Thunderstore, который лаунчер ставит игроку вместе с игрой и держит одинаковым у всей компании.</p>
                <p class="faint">Чтобы подключить его игре, нужно назвать её так, как она зовётся на Thunderstore: оттуда придут идентификатор Steam, папка установки и раздел с модпаками.</p>
-               <div class="btn-row"><button class="btn btn--accent" type="button" data-act="ecosystem">Подключить моды игре</button></div>
+               <div class="btn-row"><button class="btn btn--accent" type="button" data-act="ecosystem">Подключить моды</button></div>
              </div>`
           );
         }
@@ -414,7 +414,7 @@
             <button class="btn btn--text" type="button" data-act="versions" data-args='{"gameId":"${esc(p.gameId)}","title":"${esc(p.title)}"}'>Все версии</button>
             ${staged ? `<button class="btn" type="button" data-act="mods-diff" data-args='{"gameId":"${esc(p.gameId)}","from":"${esc(p.active)}","to":"${esc(p.built)}","title":"${esc(p.title)}"}'>Что изменится</button>` : ''}
             ${staged ? `<button class="btn btn--accent" type="button" data-act="mods.activate" data-args='{"gameId":"${esc(p.gameId)}","version":"${esc(p.built)}"}'>Отдать игрокам</button>` : ''}
-            ${stale ? '<button class="btn btn--accent" type="button" data-act="build">Пересобрать</button>' : ''}
+            ${stale && p.latest ? `<button class="btn btn--accent" type="button" data-act="build">Собрать ${esc(p.latest)}</button>` : ''}
           </div>
 
           ${
@@ -457,7 +457,7 @@
                 `<div class="stack stack--tight">
                    <p class="dim">Сборка тянет до 1,8 ГБ полутора сотнями запросов и идёт минутами, поэтому журнал показывается строка за строкой, пока она работает.</p>
                    <p class="faint">Собранное игрокам само не уходит — отдать его отдельное решение.</p>
-                   <div class="btn-row"><button class="btn btn--accent" type="button" data-act="build">Собрать</button></div>
+                   <div class="btn-row"><button class="btn${stale && p.latest ? '' : ' btn--accent'}" type="button" data-act="build">Собрать</button></div>
                  </div>`
               )}
 
@@ -526,7 +526,7 @@
               `<div class="stack stack--tight">
                  <p class="dim">Заполняет идентификатор Steam, имя исполняемого файла и папку установки из схемы экосистемы Thunderstore.</p>
                  <p class="faint">Руками это копирование трёх значений на игру, и папка, вложенная внутрь каталога установки, с первого раза угадывается неправильно.</p>
-                 <div class="btn-row"><button class="btn" type="button" data-act="ecosystem">Подтянуть</button></div>
+                 <div class="btn-row"><button class="btn" type="button" data-act="ecosystem">Подключить моды</button></div>
                </div>`
             )}
             ${(() => {

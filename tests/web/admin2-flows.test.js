@@ -969,3 +969,32 @@ test('кнопка внутри листа работает так же, как 
   assert.ok(calls.some((c) => c.url.includes('mods/activate')), 'действие из листа не дошло до сервера');
   await settle();
 });
+
+test('одно действие названо на экране одним словом', async (t) => {
+  // Три кнопки сборки с тремя подписями — это три названия одного и
+  // того же, и читатель ищет между ними разницу
+  const { window } = await boot();
+  t.after(() => window.close());
+
+  window.location.hash = '#packs';
+  await until(() => window.document.querySelector('[data-act="build"]'));
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+
+  const labels = [...window.document.querySelectorAll('[data-act="build"]')].map((b) =>
+    b.textContent.trim().split(' ')[0]
+  );
+  assert.ok(labels.length > 0, 'кнопки сборки нет вовсе');
+  assert.deepStrictEqual([...new Set(labels)], ['Собрать'], 'подписи разошлись: ' + labels.join(', '));
+});
+
+test('акцент на экране один: подсвечено то, что делают сейчас', async (t) => {
+  const { window } = await boot();
+  t.after(() => window.close());
+
+  window.location.hash = '#packs';
+  await until(() => window.document.querySelector('[data-act="build"]'));
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+
+  const accented = [...window.document.querySelectorAll('[data-act="build"].btn--accent')];
+  assert.ok(accented.length <= 1, 'акцентных кнопок сборки больше одной: ' + accented.length);
+});

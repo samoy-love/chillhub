@@ -494,3 +494,12 @@ test('дни и итоги приезжают одной сводкой, а не
   assert.strictEqual(out.days.length, 1);
   assert.strictEqual(out.totals.moved, 5);
 });
+
+test('признак «иконка есть» не подставляется в поле адреса', () => {
+  // Снимок кладёт в `icon` булево, и в поле правки уезжало слово «true»
+  const [a, b, c] = S.games([{ gameId: 'a', icon: true }, { gameId: 'b', iconUrl: '/x.png' }, { gameId: 'c' }]);
+  assert.strictEqual(a.iconUrl, '', 'булево попало в адрес');
+  assert.strictEqual(a.icon, true, 'потерян признак наличия иконки');
+  assert.strictEqual(b.iconUrl, '/x.png');
+  assert.strictEqual(c.icon, false);
+});

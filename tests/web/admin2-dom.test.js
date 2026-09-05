@@ -272,3 +272,32 @@ test('у каждой кнопки панели есть обработчик', 
   assert.deepStrictEqual(orphan, [], 'кнопки без обработчика: ' + orphan.join(', '));
   assert.ok(seen.size > 15, 'кнопок нашлось подозрительно мало: ' + seen.size);
 });
+
+/* ---------- Одно действие — одно имя ---------- */
+
+test('одно действие подписано одинаково во всех разделах', async () => {
+  // Разные подписи у одной кнопки читаются как разные дела, и человек
+  // ищет между ними разницу, которой нет
+  const { window } = await boot();
+  const labels = new Map();
+
+  for (const href of [...window.document.querySelectorAll('[data-nav]')].map((a) => a.getAttribute('href'))) {
+    window.location.hash = href;
+    await until(() => window.document.title.length > 0);
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+
+    for (const b of window.document.querySelectorAll('[data-act]')) {
+      const first = b.textContent.trim().split(/\s+/).slice(0, 2).join(' ');
+      if (!first) continue;
+      if (!labels.has(b.dataset.act)) labels.set(b.dataset.act, new Set());
+      labels.get(b.dataset.act).add(first);
+    }
+  }
+
+  const mixed = [...labels.entries()].filter(([, set]) => set.size > 1);
+  assert.deepStrictEqual(
+    mixed.map(([id, set]) => id + ': ' + [...set].join(' / ')),
+    [],
+    'у действия несколько подписей'
+  );
+});

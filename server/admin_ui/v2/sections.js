@@ -81,13 +81,17 @@
   function games(raw) {
     return items(raw).map((g) => {
       const mods = g && g.mods ? g.mods : {};
-      const iconUrl = String(pick(g, ['iconUrl', 'icon'], ''));
+      /* `icon` бывает и адресом, и признаком «иконка есть»: снимок
+         кладёт туда булево. Адресом считаем только строку — иначе в
+         поле правки уезжает слово «true», и его сохраняют. */
+      const rawIcon = pick(g, ['iconUrl', 'icon'], '');
+      const iconUrl = typeof rawIcon === 'string' ? rawIcon : '';
       return {
         gameId: String(pick(g, ['gameId', 'id'], '')),
         title: String(pick(g, ['title', 'name'], pick(g, ['gameId', 'id'], ''))),
         exe: String(pick(g, ['exeRelativePath', 'exe'], '')),
         iconUrl: iconUrl,
-        icon: iconUrl !== '',
+        icon: iconUrl !== '' || rawIcon === true,
 
         /* Идентификатор Steam лежит внутри `mods`, а не рядом с полями
            игры: он есть только у игр с модпаком. Искать его на верхнем
