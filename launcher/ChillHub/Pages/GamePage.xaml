@@ -64,12 +64,13 @@
 
     <!-- Подпись поля в карточке сведений -->
     <Style x:Key="Style.FieldLabel" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Brush.TextMuted}"/>
       <Setter Property="FontSize" Value="12"/>
       <Setter Property="Margin" Value="0,0,0,2"/>
     </Style>
     <Style x:Key="Style.FieldValue" TargetType="TextBlock">
       <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+      <Setter Property="FontFamily" Value="Consolas"/>
       <Setter Property="FontSize" Value="14"/>
       <Setter Property="TextWrapping" Value="Wrap"/>
       <Setter Property="Margin" Value="0,0,16,12"/>
@@ -81,11 +82,14 @@
         </Trigger>
       </Style.Triggers>
     </Style>
+    <!-- Заголовок раздела — подпись к карточке, а не второй заголовок страницы.
+         Мелкие прописные моноширинным: карточек на экране три, и полужирный 16-й в
+         каждой спорил с названием игры в шапке. -->
     <Style x:Key="Style.SectionHeader" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="{DynamicResource Brush.Title}"/>
-      <Setter Property="FontSize" Value="16"/>
-      <Setter Property="FontWeight" Value="SemiBold"/>
-      <Setter Property="Margin" Value="0,0,0,8"/>
+      <Setter Property="Foreground" Value="{DynamicResource Brush.TextMuted}"/>
+      <Setter Property="FontFamily" Value="Consolas"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="Margin" Value="0,0,0,12"/>
     </Style>
     <!-- Карточка в списке changelog. Свой стиль, а не общий из HomePage:
          Style.ListBoxItem.SelectableCard объявлен в ресурсах HomePage и снаружи недоступен. -->
@@ -143,7 +147,7 @@
       <StackPanel Grid.Column="2" Margin="16,0,0,0" VerticalAlignment="Center">
         <TextBlock Name="TitleText" Text="Игра" FontSize="24" FontWeight="Bold"
                    Foreground="{DynamicResource Brush.Title}" TextTrimming="CharacterEllipsis"/>
-        <Border Name="StateBadge" CornerRadius="{DynamicResource Radius.S}" Padding="8,3" Margin="0,6,0,0"
+        <Border Name="StateBadge" CornerRadius="999" Padding="9,3" Margin="0,6,0,0"
                 HorizontalAlignment="Left"
                 Background="{DynamicResource Brush.Surface}"
                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
@@ -170,7 +174,7 @@
           <!-- Сведения об установке -->
           <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
             <StackPanel>
-              <TextBlock Text="Сведения" Style="{StaticResource Style.SectionHeader}"/>
+              <TextBlock Text="СВЕДЕНИЯ" Style="{StaticResource Style.SectionHeader}"/>
               <Grid>
                 <Grid.ColumnDefinitions>
                   <ColumnDefinition Width="*"/>
@@ -271,7 +275,7 @@
 
               <StackPanel Grid.Column="0">
 
-                <TextBlock Text="Что менялось в сборке" Style="{StaticResource Style.SectionHeader}" Margin="0"/>
+                <TextBlock Text="ЧТО МЕНЯЛОСЬ В СБОРКЕ" Style="{StaticResource Style.SectionHeader}" Margin="0"/>
 
                 <TextBlock Text="Новости и списки изменений этой игры" FontSize="11"
 
@@ -366,9 +370,11 @@
 
             <StackPanel>
 
-              <TextBlock Text="Как запустить" Style="{StaticResource Style.SectionHeader}"/>
+              <TextBlock Text="СОСТОЯНИЕ" Style="{StaticResource Style.SectionHeader}"/>
 
-              <!-- Кнопки «Играть» здесь нет намеренно: запуск игры остаётся на главной странице -->
+              <!-- Раздел называется «Состояние», а не «Как запустить»: кнопок запуска здесь нет —
+                   играют с главной страницы. Здесь живёт то, что состояние меняет:
+                   установка, обновление, отмена — и строка о том, что сейчас со сборкой. -->
 
               <!-- Основное действие — во всю ширину, вспомогательные — парой одинаковой ширины
 
@@ -492,9 +498,7 @@
 
                 <StackPanel>
 
-                  <TextBlock Text="Обслуживание" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,8"
-
-                             Foreground="{DynamicResource Brush.TextSecondary}"/>
+                  <TextBlock Text="ОБСЛУЖИВАНИЕ" Style="{StaticResource Style.SectionHeader}"/>
 
                   <Button Name="VerifyFilesBtn" Content="Проверить файлы" Height="36"
 

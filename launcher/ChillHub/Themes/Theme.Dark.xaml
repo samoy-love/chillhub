@@ -90,7 +90,6 @@
   <Color x:Key="Color.Skeleton">#1A2027</Color>
   <!-- Слайдеры и полосы -->
   <Color x:Key="Color.Track">#212932</Color>
-  <Color x:Key="Color.Thumb">#384450</Color>
   <!-- Три радиуса на всё приложение: мелкое, контролы, карточки. Были 6/8/12 — мягкое
        скругление «по умолчанию», за которое цепляется глаз. Стало 3/4/5: форма читается
        как инструмент, а не как карточка в ленте. -->
@@ -105,7 +104,6 @@
   <SolidColorBrush x:Key="Brush.Surface3" Color="{StaticResource Color.Surface3}"/>
   <SolidColorBrush x:Key="Brush.Border" Color="{StaticResource Color.Border}"/>
   <SolidColorBrush x:Key="Brush.Border2" Color="{StaticResource Color.Border2}"/>
-  <SolidColorBrush x:Key="Brush.Border3" Color="{StaticResource Color.Border3}"/>
   <SolidColorBrush x:Key="Brush.Text" Color="{StaticResource Color.Text}"/>
   <SolidColorBrush x:Key="Brush.TextSecondary" Color="{StaticResource Color.TextSecondary}"/>
   <SolidColorBrush x:Key="Brush.TextMuted" Color="{StaticResource Color.TextMuted}"/>
@@ -134,7 +132,6 @@
   <SolidColorBrush x:Key="Brush.ListHoverAlt" Color="{StaticResource Color.ListHoverAlt}"/>
   <SolidColorBrush x:Key="Brush.Skeleton" Color="{StaticResource Color.Skeleton}"/>
   <SolidColorBrush x:Key="Brush.Track" Color="{StaticResource Color.Track}"/>
-  <SolidColorBrush x:Key="Brush.Thumb" Color="{StaticResource Color.Thumb}"/>
   <!-- Semantic colors -->
   <SolidColorBrush x:Key="Brush.Success" Color="{StaticResource Color.Success}"/>
   <SolidColorBrush x:Key="Brush.Warning" Color="{StaticResource Color.Warning}"/>
@@ -691,7 +688,7 @@
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
-              <Setter Property="Foreground" Value="#FFFFFF"/>
+              <Setter Property="Foreground" Value="{DynamicResource Brush.Title}"/>
             </Trigger>
             <Trigger Property="IsPressed" Value="True">
               <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Pressed}"/>
@@ -1282,20 +1279,24 @@
        картинка гасла почти целиком, и витрина превращалась в тёмно-серую плашку с
        текстом. Теперь читаемость текста держит нижняя половина и левый край, а верх и
        правая часть отдают обложку как есть. -->
-  <LinearGradientBrush x:Key="Brush.HeroScrim" StartPoint="0,0" EndPoint="0,1">
-    <GradientStop Offset="0" Color="#00000000"/>
-    <GradientStop Offset="0.5" Color="#33000000"/>
-    <GradientStop Offset="1" Color="#CC0E1114"/>
+  <!-- Витрина: обложка живёт в правой части, слева ровный цвет панели.
+       Слоёв затемнения было два — сверху вниз и слева направо, — и вместе они гасили
+       картинку целиком, а заголовок всё равно попадал то на логотип, то на светлый
+       участок. Теперь слой один и работает как в макете: до 46% ширины сплошной цвет
+       панели, к 88% он сходит на нет. Заголовок и кнопки стоят на плоском фоне, а не
+       на артворке, и читаются одинаково на любой обложке — светлой, пёстрой, пустой.
+       Границы заданы долями, поэтому композиция держится и на 980, и на 2K. -->
+  <LinearGradientBrush x:Key="Brush.HeroScrim" StartPoint="0,0" EndPoint="1,0">
+    <GradientStop Offset="0" Color="#FF14181D"/>
+    <GradientStop Offset="0.46" Color="#FF14181D"/>
+    <GradientStop Offset="0.68" Color="#8C14181D"/>
+    <GradientStop Offset="0.88" Color="#0014181D"/>
   </LinearGradientBrush>
-  <!-- Второй слой затемнения — слева направо, под заголовок и кнопку в левом нижнем углу.
-       Правая половина обложки остаётся почти нетронутой: там обычно логотип игры. -->
-  <LinearGradientBrush x:Key="Brush.HeroScrimSide" StartPoint="0,0" EndPoint="1,0">
-    <GradientStop Offset="0" Color="#990E1114"/>
-    <GradientStop Offset="0.5" Color="#260E1114"/>
-    <GradientStop Offset="1" Color="#000E1114"/>
-  </LinearGradientBrush>
-  <SolidColorBrush x:Key="Brush.HeroBadge.Bg" Color="{StaticResource Color.Surface2}"/>
-  <SolidColorBrush x:Key="Brush.HeroBadge.Border" Color="{StaticResource Color.Border}"/>
+  <!-- Бейдж стоит на обложке, поэтому подложка полупрозрачная: сплошная вырезала бы
+       из картинки прямоугольник. Рамка светлее обычной — на пёстром фоне обычная
+       теряется, и бейдж расплывается. -->
+  <SolidColorBrush x:Key="Brush.HeroBadge.Bg" Color="#B30E1114"/>
+  <SolidColorBrush x:Key="Brush.HeroBadge.Border" Color="{StaticResource Color.Border2}"/>
 
   <!-- Кнопка сведений об игре на витрине: полупрозрачная «стеклянная» кнопка с текстом.
        Круглая ⓘ без подписи читалась как подсказка, а не как переход на страницу игры. -->
@@ -1307,34 +1308,30 @@
        она разваливалась на светлых картинках — рамка и подпись висели прямо на песке и
        небе, без подложки под текстом. Та же полупрозрачная подложка, что у «стеклянной»
        кнопки запуска рядом. -->
+  <!-- «Об игре» в углу витрины. Ссылка, а не кнопка: рамка и заливка ставили её в один
+       вес с кнопками запуска, между которыми она и стояла, — получался третий способ
+       играть, который никуда не запускает. Ни фона, ни рамки; отзыв на наведение —
+       цветом, как у любой ссылки. -->
   <Style x:Key="Style.Button.HeroInfo" TargetType="Button">
-    <Setter Property="Height" Value="42"/>
-    <Setter Property="Padding" Value="16,0"/>
-    <Setter Property="FontSize" Value="14"/>
+    <Setter Property="Padding" Value="0"/>
+    <Setter Property="FontSize" Value="12"/>
     <Setter Property="FontWeight" Value="Normal"/>
     <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
-    <Setter Property="Background" Value="#99101017"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
-    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Button">
-          <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}" Background="{TemplateBinding Background}"
-                  BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
-                  Padding="{TemplateBinding Padding}">
+          <Border x:Name="bd" Background="Transparent" Padding="{TemplateBinding Padding}">
             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
-              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
-              <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+              <Setter Property="Foreground" Value="{DynamicResource Brush.Accent}"/>
             </Trigger>
             <Trigger Property="IsPressed" Value="True">
-              <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Pressed}"/>
-              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderPressed}"/>
-              <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+              <Setter Property="Foreground" Value="{DynamicResource Brush.AccentHover}"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Opacity" Value="0.5"/>

@@ -10,7 +10,7 @@
         Background="{DynamicResource Brush.Background}">
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="44"/>
+            <RowDefinition Height="56"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
@@ -56,39 +56,34 @@
                     </Style>
                 </Grid.Resources>
                 <Grid.ColumnDefinitions>
-                    <!-- Имя, поиск, свободное место, караоке, правый блок.
+                    <!-- Поиск, свободное место, караоке, правый блок.
                          Лишнюю ширину забирает ПОИСК, а не караоке: караоке подбирает
                          себе ширину само, под самую длинную строку песни, и в звёздочной
                          колонке оказывалось шире неё — ClipToBounds срезал строку слева,
                          и от песни оставался хвост. А в колонке по содержимому оно той же
                          шириной выталкивало кнопку настроек за край окна.
                          Поэтому поиск сжимается первым, а караоке ограничено сверху. -->
-                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <!-- Слева — приветствие и имя приложения: «Добро пожаловать в ⟨значок⟩ Chill Hub».
-                     Приветствие набрано вторичным цветом, чтобы главным словом оставалось имя. -->
-                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="Добро пожаловать в" FontSize="14" Margin="0,0,8,0"
-                               Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center"/>
-                    <Image Source="/ChillHub;component/Assets/app.ico" Width="22" Height="22" VerticalAlignment="Center"/>
-                    <TextBlock Text="Chill Hub" FontSize="15" Margin="8,0,0,0" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Title}" VerticalAlignment="Center"/>
-                </StackPanel>
-
+                <!-- Приветствия и имени приложения здесь больше нет. Значок и «Chill Hub»
+                     стоят в заголовке окна — его рисует Windows, и он виден всегда. Строка
+                     «Добро пожаловать в Chill Hub» занимала две сотни пикселей, чтобы
+                     сообщить человеку, какую программу он открыл; из-за неё на окне в 980
+                     поиск сжимался до 120, а кнопка настроек упиралась в край. -->
                 <!-- Поиск по играм. Переехал сюда из сайдбара: список игр — единственная
                      навигация в приложении, и её место там же, где остальное управление.
                      Подсказка — свойством поля, а не надписью поверх: своя надпись стояла
                      по краю сетки, а текст поля начинается внутри рамки и Padding, и после
                      клика каретка появлялась правее подсказки. Значок лупы отдельным слоем:
                      он не текст и с кареткой не спорит. -->
-                <Grid Grid.Column="1" MaxWidth="220" HorizontalAlignment="Left" MinWidth="120" Margin="24,0,16,0" VerticalAlignment="Center">
+                <Grid Grid.Column="0" MaxWidth="246" HorizontalAlignment="Left" MinWidth="120" Margin="0,0,12,0" VerticalAlignment="Center">
                     <TextBox x:Name="GameSearchBox" TextChanged="GameSearch_TextChanged"
                              ui:Placeholder.Text="Поиск по играм"
                              Template="{DynamicResource Template.TextBox.Field}"
-                             VerticalContentAlignment="Center" Height="28"
+                             VerticalContentAlignment="Center" Height="30"
                              Background="{DynamicResource Brush.Surface2}" BorderBrush="{DynamicResource Brush.Border}"
                              Padding="26,0,8,0" FontSize="12" Foreground="{DynamicResource Brush.Text}"/>
                     <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE721;" FontSize="12" IsHitTestVisible="False"
@@ -99,7 +94,7 @@
                 <!-- Свободное место на диске игр. Тоже из подвала сайдбара: это свойство
                      машины, а не списка, и в шапке оно видно с любого экрана. Пустая
                      строка — когда диск недоступен; тогда и места в шапке не занимает. -->
-                <TextBlock x:Name="DiskFreeText" Grid.Column="2" Text="" FontSize="12" Margin="16,0,0,0"
+                <TextBlock x:Name="DiskFreeText" Grid.Column="1" Text="" FontSize="12" Margin="0,0,0,0"
                            VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
                            Foreground="{DynamicResource Brush.TextMuted}"/>
 
@@ -108,7 +103,7 @@
                      строка выглядела как поле ввода с подсказкой. Высоты строк фиксированы,
                      чтобы шапка не дышала, когда строка пустая (пауза между куплетами).
                      Ширина подбирается под самую длинную строку (KaraokePresenter). -->
-                <Border x:Name="KaraokeHost" Grid.Column="3" MaxWidth="340" HorizontalAlignment="Right" Margin="16,0,16,0"
+                <Border x:Name="KaraokeHost" Grid.Column="2" MaxWidth="340" HorizontalAlignment="Right" Margin="16,0,16,0"
                         Background="Transparent" BorderThickness="0" Padding="8,0"
                         ClipToBounds="True" ToolTip="Баста — «Моя игра»" ToolTipService.Placement="Bottom">
                     <Grid VerticalAlignment="Center">
@@ -134,7 +129,7 @@
                 </Border>
 
                 <!-- Right: индикатор загрузок + настройки -->
-                <StackPanel Grid.Column="4" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                     <!-- Чип загрузок виден, пока очередь не пуста и мы НЕ на главной: со
                          страницы игры и из настроек ход закачки иначе не виден вовсе, а на
                          главной он повторял бы очередь, стоящую внизу того же экрана
@@ -169,7 +164,7 @@
 
         <!-- Баннер режима технических работ. Скрыт, пока сервер не сообщил о работах.
              Полоса под шапкой, той же ширины и с тем же отступом слева (14), чтобы значок
-             стоял в одной колонке с приветствием, а не на два пикселя правее. Значок —
+             стоял в одной колонке с поиском, а не на два пикселя правее. Значок —
              Warning, а не Danger: работы — временное ограничение, как «нужно обновление»
              у игры, а красным в лаунчере отмечены сбои и разрушительные действия.
              Причина набрана основным весом, срок — вторичным цветом: сообщение читается

@@ -1545,8 +1545,10 @@ namespace ChillHub.Pages {
         }
 
         /// <summary>
-        /// «Библиотека · 8». Число здесь, потому что заголовок и так занимает строку,
-        /// а «сколько всего игр» — первое, что о списке хочется знать.
+        /// «БИБЛИОТЕКА · 8». Число здесь, потому что заголовок и так занимает строку,
+        /// а «сколько всего игр» — первое, что о списке хочется знать. Прописные —
+        /// не украшение: подпись к колонке набрана мельче названий игр, и без них она
+        /// читается как ещё одна строка списка.
         /// </summary>
         private void UpdateGamesSectionTitle() {
             if (this.GamesSectionTitle == null) {
@@ -1554,7 +1556,7 @@ namespace ChillHub.Pages {
             }
 
             var count = this.games?.Count ?? 0;
-            this.GamesSectionTitle.Text = count > 0 ? $"Библиотека · {count}" : "Библиотека";
+            this.GamesSectionTitle.Text = count > 0 ? $"БИБЛИОТЕКА · {count}" : "БИБЛИОТЕКА";
         }
 
         private void ApplyGameFilter() {

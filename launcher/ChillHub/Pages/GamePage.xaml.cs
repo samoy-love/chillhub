@@ -209,6 +209,14 @@ namespace ChillHub.Pages {
                 this.ActionBtn.IsEnabled = true;
                 this.ActionBtn.Style = this.TryFindResource("Style.Button.GamePrimary") as Style ?? this.ActionBtn.Style;
 
+                // У свежей установленной игры делать нечего: кнопка действия вырождается в
+                // «Проверить файлы», а такая кнопка уже стоит ниже, в «Обслуживании». Две
+                // одинаковые надписи на одном экране — залитая сверху и обычная снизу —
+                // читаются как два разных действия, и залитая ещё и обещает главное.
+                this.ActionBtn.Visibility = state == GameState.Installed
+                    ? Visibility.Collapsed
+                    : Visibility.Visible;
+
                 // Последним словом остаётся режим технических работ: он может запретить действие
                 this.ApplyMaintenanceToButtons();
             }
