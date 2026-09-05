@@ -8,10 +8,25 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const V = require('../../server/admin_ui/v2/views.js');
-const News = require('../../server/admin_ui/v2/news.js');
-const Gallery = require('../../server/admin_ui/v2/gallery.js');
-const Tuning = require('../../server/admin_ui/v2/tuning.js');
+const V = require('../../server/admin_ui/views.js');
+const News = require('../../server/admin_ui/news.js');
+const Gallery = require('../../server/admin_ui/gallery.js');
+const Tuning = require('../../server/admin_ui/tuning.js');
+
+/* Решение о хвосте журнала принимает модуль 1.0 — панель 2.0
+   переиспользует его как есть. */
+const Logs = (() => {
+  const fs = require('node:fs');
+  const vm = require('node:vm');
+  const path = require('node:path');
+  const sandbox = { window: {} };
+  vm.createContext(sandbox);
+  vm.runInContext(
+    fs.readFileSync(path.join(__dirname, '..', '..', 'server/admin_ui/feedback-logs.js'), 'utf8'),
+    sandbox
+  );
+  return sandbox.window;
+})();
 
 /* ---------- Оболочка ---------- */
 
@@ -337,7 +352,7 @@ test('без прогонов таблица объясняет, чего сто
 
 /* ---------- Состав сборки ---------- */
 
-const Mods = require('../../server/admin_ui/v2/mods.js');
+const Mods = require('../../server/admin_ui/mods.js');
 
 test('план сборки называет пропавшие пакеты поимённо и до сборки', () => {
   // Узнать о них на середине выкатки — значит откатывать уже отданное
@@ -384,15 +399,37 @@ test('пустой каталог объясняет, что делать со �
 /* ---------- Журналы ---------- */
 
 test('отсутствующий журнал — не ошибка', () => {
-  const html = V.logsView('');
+  const html = V.logsView('', Logs.feedbackLogsView);
   assert.match(html, /Журнала нет/);
   assert.match(html, /обращение от этого не хуже/);
 });
 
 test('журнал не исполняется как разметка', () => {
   // Текст пишет игрок, и в нём бывает что угодно
-  const html = V.logsView('<script>alert(1)</script>');
+  const html = V.logsView('<script>alert(1)</script>', Logs.feedbackLogsView);
   assert.ok(!html.includes('<script>'));
+});
+
+test('длинный журнал обрезается с конца, а не с начала', () => {
+  // Авария всегда в конце, а начало — загрузка лаунчера, одинаковая у всех
+  const long = 'строка загрузки\n'.repeat(20000) + 'ВОТ ЗДЕСЬ СЛОМАЛОСЬ';
+  const html = V.logsView({ logs: long }, Logs.feedbackLogsView);
+  assert.ok(html.includes('ВОТ ЗДЕСЬ СЛОМАЛОСЬ'), 'потерян конец журнала');
+  assert.ok(html.length < long.length, 'журнал не обрезан вовсе');
+});
+
+test('подпись обрезанного журнала называет полный объём, а не показанный', () => {
+  // Иначе «64 КБ» читается как весь журнал, и в файл никто не полезет
+  const long = 'x'.repeat(300 * 1024);
+  const html = V.logsView({ logs: long }, Logs.feedbackLogsView);
+  assert.match(html, /300 КБ/);
+  assert.match(html, /показан конец/);
+});
+
+test('короткий журнал показывается целиком и без оговорок', () => {
+  const html = V.logsView({ logs: 'две строки\nвсего' }, Logs.feedbackLogsView);
+  assert.match(html, /две строки/);
+  assert.ok(!/показан конец/.test(html));
 });
 
 /* ---------- Переезд со старой сборки ---------- */
@@ -495,4 +532,206 @@ test('обложку файлом предлагают только у сохр�
   const fresh = V.newsForm({ slug: '' }, []);
   assert.ok(!/data-flow="cover"/.test(fresh));
   assert.match(fresh, /после первого сохранения/);
+});
+
+/* ---------- События одного кода ---------- */
+
+test('события кода сначала группируются, потом перечисляются', () => {
+  // Если весь код собрался на одной версии клиента, чинить надо её
+  const html = V.errorEvents({
+    items: [
+      { ts: '2026-09-04T10:00:00Z', appVersion: '1.6.25', gameId: 'repo', event: 'update' },
+      { ts: '2026-09-04T11:00:00Z', appVersion: '1.6.25', gameId: 'peak', event: 'install' },
+    ],
+  });
+  assert.match(html, /Версии клиента/);
+  assert.match(html, /1\.6\.25 · 2/);
+  assert.match(html, /repo/);
+});
+
+test('пустой список объясняется, а не выглядит поломкой', () => {
+  assert.match(V.errorEvents({ items: [] }), /Событий не осталось/);
+  assert.match(V.errorEvents(null), /метрики чистили/);
+});
+
+test('обрезанный список честно назван обрезанным', () => {
+  const html = V.errorEvents({ items: [{ ts: '', appVersion: 'x' }], capped: true });
+  assert.match(html, /их было больше/);
+});
+
+test('поле события не исполняется как разметка', () => {
+  assert.ok(!V.errorEvents({ items: [{ gameId: '<script>x</script>' }] }).includes('<script>'));
+});
+
+/* ---------- Технические работы ---------- */
+
+test('форма работ спрашивает всё, что понимает сервер', () => {
+  const html = V.maintForm({ reason: 'переносим сборки', blocks: { launch: true } });
+  for (const n of ['reason', 'startsAt', 'endsAt', 'install', 'update', 'launch']) {
+    assert.match(html, new RegExp('name="' + n + '"'), 'нет поля ' + n);
+  }
+  assert.match(html, /переносим сборки/);
+});
+
+test('запуск игр по умолчанию оставляют открытым', () => {
+  // Игра стартует локально и серверу не мешает
+  const html = V.maintForm({ blocks: {} });
+  const launch = html.slice(html.indexOf('name="launch"'), html.indexOf('name="launch"') + 40);
+  assert.ok(!/checked/.test(launch), 'запуск закрыт по умолчанию');
+});
+
+test('время показывается местное, а уезжает в UTC', () => {
+  // Показывать UTC тому, кто назначает работы на свой вечер, — способ
+  // ошибиться на три часа
+  const local = V.localTime('2026-09-05T18:00:00Z');
+  assert.match(local, /^2026-09-05T\d{2}:\d{2}$/);
+  assert.strictEqual(V.isoTime(local), '2026-09-05T18:00:00.000Z');
+});
+
+test('пустое и битое время не превращается в дату', () => {
+  assert.strictEqual(V.localTime(''), '');
+  assert.strictEqual(V.localTime('не дата'), '');
+  assert.strictEqual(V.isoTime(''), '');
+  assert.strictEqual(V.isoTime('не дата'), '');
+});
+
+test('работы, которые ничего не закрывают, названы бессмысленными', () => {
+  assert.match(V.maintProblem({ enabled: true, blocks: {} }), /ничего и не делают/);
+  assert.strictEqual(V.maintProblem({ enabled: true, blocks: { install: true } }), '');
+});
+
+test('окно наоборот ловится до нажатия', () => {
+  const bad = V.maintProblem({
+    enabled: true,
+    blocks: { install: true },
+    startsAt: '2030-01-01T20:00:00Z',
+    endsAt: '2030-01-01T10:00:00Z',
+  });
+  assert.match(bad, /позже начала/);
+});
+
+test('выключение работ проверок не требует', () => {
+  assert.strictEqual(V.maintProblem({ enabled: false, blocks: {} }), '');
+});
+
+/* ---------- Скорость и остаток ---------- */
+
+test('во время заливки видно скорость и сколько ещё ждать', () => {
+  // Заливка на 1,8 ГБ идёт минутами, и один процент не отвечает на
+  // единственный вопрос, который в это время задают
+  const s = V.uploadStatus({
+    phase: 'upload',
+    done: 40,
+    total: 300,
+    progress: 0.13,
+    speed: 11 * 1024 * 1024,
+    left: 1.5 * 1024 ** 3,
+  });
+  assert.match(s.text, /11\u00a0МБ\/с/);
+  assert.match(s.text, /осталось/);
+});
+
+test('пока скорость неизвестна, остаток не выдумывается', () => {
+  // Оценщик молчит первые секунды намеренно: там не скорость канала, а
+  // байты, принятые буферами, и по ним остаток получается втрое меньше
+  const s = V.uploadStatus({ phase: 'upload', done: 1, total: 300, progress: 0.003 });
+  assert.ok(!/осталось/.test(s.text), s.text);
+  assert.ok(!/МБ\/с/.test(s.text), s.text);
+});
+
+test('скорость без остатка показывается, остаток без скорости — нет', () => {
+  const onlySpeed = V.uploadStatus({ phase: 'upload', progress: 0.5, speed: 5 * 1024 * 1024 });
+  assert.match(onlySpeed.text, /5\u00a0МБ\/с/);
+  assert.ok(!/осталось/.test(onlySpeed.text));
+
+  const onlyLeft = V.uploadStatus({ phase: 'upload', progress: 0.5, left: 1000 });
+  assert.ok(!/осталось/.test(onlyLeft.text));
+});
+
+/* ---------- Версии модпака ---------- */
+
+test('список версий отмечает ту, что у игроков, и не даёт её удалить', () => {
+  // Удалив активную, оставишь игроков без модпака посреди сессии
+  const html = V.modVersions(
+    [
+      { version: '1.9.9', createdAt: '2026-09-01T10:00:00Z', packages: 17, bytes: 251000000 },
+      { version: '1.9.8', packages: 16, bytes: 250000000 },
+    ],
+    { active: '1.9.8', gameId: 'repo' }
+  );
+  const args = [...html.matchAll(/data-act="mods\.delete" data-args='([^']+)'/g)].map((m) => JSON.parse(m[1]).version);
+  assert.deepStrictEqual(args, ['1.9.9'], 'удалять предложили активную версию');
+  assert.match(html, /у игроков/);
+});
+
+test('пропавшие моды названы поимённо, а не числом', () => {
+  // «Пропущено 2» не говорит, потерялся ли твик текстур или сам модпак
+  const html = V.modVersions([{ version: '1.9.9', missing: ['Ura/Old', 'Ura/Gone'] }], { gameId: 'g' });
+  assert.match(html, /Ura\/Old, Ura\/Gone/);
+  assert.match(html, /собрана без/);
+});
+
+test('без единой сборки список объясняет, что делать', () => {
+  const html = V.modVersions([], { gameId: 'g' });
+  assert.match(html, /Собранных версий нет/);
+  assert.match(html, /игрокам она сама не уйдёт/);
+});
+
+test('версия и игра не исполняются как разметка', () => {
+  const html = V.modVersions([{ version: '"><script>x</script>' }], { gameId: '"><b>' });
+  assert.ok(!html.includes('<script>'));
+  assert.ok(!html.includes('<b>'));
+});
+
+/* ---------- График ---------- */
+
+test('у графика подписаны обе оси', () => {
+  // Ломаная без подписей не отвечает даже на «84 или 8400», и по ней
+  // нельзя сказать, три дня она покрывает или девяносто
+  const html = V.chart([{ title: 'запуски', color: 'var(--ember)', values: [10, 40, 84] }], {
+    from: '06.08',
+    to: '05.09',
+  });
+  assert.match(html, /84/);
+  assert.match(html, /42/, 'нет середины шкалы');
+  assert.match(html, />0</, 'нет нуля');
+  assert.match(html, /06\.08/);
+  assert.match(html, /05\.09/);
+});
+
+test('ряды делят один масштаб, а не каждый свой', () => {
+  // В своём масштабе редкие ошибки выглядят такими же частыми, как запуски
+  const html = V.chart(
+    [
+      { title: 'много', color: 'a', values: [0, 100] },
+      { title: 'мало', color: 'b', values: [0, 1] },
+    ],
+    { width: 100, height: 50 }
+  );
+  const lines = [...html.matchAll(/points="([^"]+)"/g)].map((m) => m[1]);
+  assert.strictEqual(lines.length, 2);
+  assert.ok(lines[0].endsWith('0.0'), 'верхняя точка большого ряда не наверху: ' + lines[0]);
+  assert.ok(!lines[1].endsWith('0.0'), 'маленький ряд нарисован в своём масштабе: ' + lines[1]);
+});
+
+test('в легенде названы все ряды', () => {
+  const html = V.chart(
+    [
+      { title: 'запуски игр', color: 'a', values: [1] },
+      { title: 'ошибки', color: 'b', values: [1] },
+    ],
+    {}
+  );
+  assert.match(html, /запуски игр/);
+  assert.match(html, /ошибки/);
+});
+
+test('пустой период объясняется, а не рисует пустую рамку', () => {
+  assert.match(V.chart([], {}), /Событий за период нет/);
+  assert.match(V.chart([{ title: 'x', values: [] }], {}), /метрики чистили/);
+});
+
+test('график называет себя читалке', () => {
+  const html = V.chart([{ title: 'x', color: 'a', values: [1, 2] }], { label: 'Запуски за 30 дней' });
+  assert.match(html, /aria-label="Запуски за 30 дней"/);
 });

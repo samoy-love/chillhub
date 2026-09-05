@@ -22,6 +22,35 @@
   const esc = (s) =>
     String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  /* Ссылка с сервера в разметку — только через проверку схемы.
+     ------------------------------------------------------------------
+     ПОЧЕМУ ОДНОГО esc() МАЛО. Обложка новости уезжает в
+     `style="background-image:url('…')"`. Кавычка внутри превращается в
+     `&#39;`, но разбор идёт в два шага: сначала HTML раскрывает
+     сущности, и только потом CSS видит уже настоящую кавычку. Строка
+     вида `x'); background:…` таким образом закрывает url() и
+     дописывает свои объявления.
+
+     Управляющие символы вырезаются ДО разбора схемы: браузер по
+     спецификации URL удаляет табуляции и переводы строк перед тем, как
+     определить схему, поэтому `java&#9;script:` для него — javascript:.
+     Правило перенесено из панели 1.0 (`sanitizeUrl`) как есть.
+     ------------------------------------------------------------------ */
+  const safeUrl = (value) => {
+    const v = String(value ?? '')
+      .replace(/[\u0000-\u001F\u007F]/g, '')
+      .trim();
+    if (!v) return '';
+    // Скобка и кавычка ломают url() даже в безопасной схеме
+    if (/[()'"\\]/.test(v)) return '';
+    if (/^[a-z][a-z0-9+.-]*:/i.test(v)) {
+      const scheme = v.slice(0, v.indexOf(':')).toLowerCase();
+      return scheme === 'http' || scheme === 'https' ? v : '';
+    }
+    // Относительная ссылка, якорь, протокол-относительная — безопасны
+    return v;
+  };
+
   /* ---------- Фон: волновое поле ---------- */
 
   /* Горизонтальные линии, идущие волной. Контраст намеренно на грани
@@ -144,7 +173,7 @@
           <div class="game-top">
             ${
               g.iconUrl
-                ? `<img class="game-ico" src="${esc(g.iconUrl)}" alt="" width="40" height="40" loading="lazy" decoding="async" data-letter="${esc(title.slice(0, 1))}">`
+                ? `<img class="game-ico" src="${esc(safeUrl(g.iconUrl))}" alt="" width="40" height="40" loading="lazy" decoding="async" data-letter="${esc(title.slice(0, 1))}">`
                 : `<span class="game-ico game-ico--letter" aria-hidden="true">${esc(title.slice(0, 1))}</span>`
             }
             <h3>${esc(title)}</h3>
@@ -208,7 +237,7 @@
     const when = Number.isNaN(+d) ? '' : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }).replace(/\s*г\.$/, '');
     return `
       <article class="post">
-        <span class="post-cover"${n.coverUrl ? ` style="background-image:url('${esc(n.coverUrl)}')"` : ''} aria-hidden="true"></span>
+        <span class="post-cover"${safeUrl(n.coverUrl) ? ` style="background-image:url('${esc(safeUrl(n.coverUrl))}')"` : ''} aria-hidden="true"></span>
         <div>
           <h3>${esc(n.title)}</h3>
           <p class="faint">${esc(when)}</p>
@@ -252,8 +281,7 @@
     const m = data.maintenance;
     const banner = $('[data-maint]');
     if (banner && m && m.enabled) {
-      $('[data-maint-text]').textContent =
-        m.reason || 'Сборки временно не отдаются. Уже установленные игры запускаются как обычно.';
+      $('[data-maint-text]').textContent = maintText(m);
       banner.hidden = false;
     }
 
@@ -376,6 +404,53 @@
     }
 
     spin.addEventListener('click', go);
+  }
+
+  /* Текст баннера технических работ.
+
+     Прежде здесь стояла одна выдуманная фраза: «Сборки временно не
+     отдаются, уже установленные игры запускаются как обычно». Первая
+     половина неверна, когда закрыто только обновление, вторая — когда
+     закрыт запуск, а закрывается он отдельным флагом. Обещание «играть
+     можно» человек проверяет сразу и запоминает надолго.
+
+     Поэтому говорим ровно то, что сказал сервер: причину, что именно
+     закрыто, и срок. Слова те же, что у баннера в лаунчере
+     (Core/Shell/MaintenanceBannerView.cs) — это одно сообщение, увиденное
+     в двух местах. */
+  function maintText(m, now) {
+    const parts = [];
+
+    const reason = String(m.reason || '').trim();
+    parts.push(reason ? (/[.!?…]$/.test(reason) ? reason : reason + '.') : 'На сервере идут технические работы.');
+
+    const b = m.blocks || {};
+    const closed = [];
+    if (b.install) closed.push('установка новых игр');
+    if (b.update) closed.push('обновление уже установленных');
+    if (b.launch) closed.push('запуск');
+    if (closed.length) parts.push('Сейчас недоступно: ' + closed.join(', ') + '.');
+    else parts.push('Скачивать и играть при этом можно как обычно.');
+
+    parts.push(maintEta(m, now));
+    return parts.filter(Boolean).join(' ');
+  }
+
+  /* Срок считаем по часам СЕРВЕРА: у посетителя они бывают сбиты, и
+     тогда ещё не наступивший срок выглядел бы истёкшим. Показываем
+     местное время — оно и есть то, на которое человек посмотрит. */
+  function maintEta(m, now) {
+    const until = new Date(m.endsAt || '');
+    if (!m.endsAt || Number.isNaN(until.getTime())) return '';
+
+    const server = new Date(m.serverTime || now || Date.now());
+    const from = Number.isNaN(server.getTime()) ? new Date() : server;
+    if (until <= from) return 'Работы затянулись, ждём сообщения от сервера.';
+
+    const hhmm = until.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    const sameDay = until.toDateString() === new Date().toDateString();
+    const when = sameDay ? 'сегодня в ' + hhmm : until.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' в ' + hhmm;
+    return 'Ожидаемое окончание — ' + when + '.';
   }
 
   /* ---------- Заявка ---------- */

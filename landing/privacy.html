@@ -6,24 +6,19 @@
 <title>Политика приватности — Chill Hub</title>
 <meta name="description" content="Какие данные собирает лаунчер Chill Hub, зачем и что с ними происходит.">
 <meta name="color-scheme" content="dark light">
-<!-- Превью версии 2.0. Пока настоящая страница живёт в корне, эта
-     обязана быть закрыта от поиска: две страницы с одним и тем же
-     текстом соревнуются между собой, и наверх может выйти превью.
-     Строку снимаем в тот же коммит, которым 2.0 переезжает в корень. -->
-<meta name="robots" content="noindex, nofollow">
 <!-- Шрифты лежат у себя: там, где `fonts.googleapis.com` не отвечает,
      заголовки молча съезжали на системную гарнитуру. Подробности и
      подмножества — в самом файле. -->
 <link rel="preload" href="./vendor/fonts/IBMPlexSans-400-600-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="./vendor/fonts/fonts.css">
 <link rel="stylesheet" href="./styles.css">
-<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
 </head>
 <body>
 
 <header class="site-header">
   <div class="wrap">
-    <a class="brand" href="./"><img src="../assets/icons/logo.svg" alt="" width="24" height="24"><span>Chill Hub</span></a>
+    <a class="brand" href="./"><img src="./assets/icons/logo.svg" alt="" width="24" height="24"><span>Chill Hub</span></a>
     <nav class="site-nav"><a class="nav-link" href="./">На главную</a></nav>
   </div>
 </header>
@@ -123,10 +118,9 @@
     <h2>Сайт</h2>
     <p>
       Сайт не ставит счётчиков и не пишет куки. В браузер не сохраняется ничего:
-      ни рекламных идентификаторов, ни профиля. Шрифты подгружаются с Google
-      Fonts — при этом Google видит факт запроса и ваш IP-адрес; если это
-      нежелательно, шрифты блокируются любым расширением-блокировщиком, страница
-      останется читаемой.
+      ни рекламных идентификаторов, ни профиля. Сторонних запросов страница не
+      делает вовсе: шрифты лежат на этом же домене, и ни один чужой сервер не
+      узнаёт, что вы её открыли.
     </p>
 
     <h2>Дети</h2>

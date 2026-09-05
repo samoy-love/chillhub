@@ -8,8 +8,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const M = require('../../server/admin_ui/v2/mods.js');
-const format = require('../../server/admin_ui/v2/format.js');
+const M = require('../../server/admin_ui/mods.js');
+const format = require('../../server/admin_ui/format.js');
 
 /* ---------- Ссылка на пакет ---------- */
 

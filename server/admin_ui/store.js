@@ -66,7 +66,15 @@
       if (!loaders[name]) return Promise.reject(new Error('нет такого раздела: ' + name));
       const force = opts && opts.force;
 
-      if (inFlight.has(name)) return inFlight.get(name);
+      /* Уже идущий запрос годится только тогда, когда свежести от него
+         не требуют. Настойчивому вызову он не годится: запрос ушёл ДО
+         записи и ответит тем, что было до неё, — а раздел после этого
+         будет числиться свежим и показывать вчерашнее. Поэтому ждём
+         идущий и сразу спрашиваем заново. */
+      if (inFlight.has(name)) {
+        if (!force) return inFlight.get(name);
+        return inFlight.get(name).then(() => load(name, { force: true }));
+      }
       if (!force && state[name].status === READY) return Promise.resolve(state[name]);
 
       state[name] = { status: LOADING, data: state[name].data, error: null, at: state[name].at };

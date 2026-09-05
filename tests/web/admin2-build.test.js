@@ -8,7 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const B = require('../../server/admin_ui/v2/build.js');
+const B = require('../../server/admin_ui/build.js');
 const ndjson = require('../../server/admin_ui/ndjson.js');
 
 /** Ответ, отдающий заданные строки NDJSON по кускам. */

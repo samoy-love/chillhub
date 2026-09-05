@@ -152,6 +152,15 @@ export default [
     }
   },
 
+  /* safeUrl вырезает управляющие символы ДО разбора схемы: браузер по
+     спецификации URL удаляет табуляции и переводы строк перед тем, как
+     определить схему, и «java	script:» для него — javascript:. Класс
+     управляющих в регулярке здесь не описка, а сама проверка. */
+  {
+    files: ['landing/app.js', 'landing/emu.js'],
+    rules: { 'no-control-regex': 'off' }
+  },
+
   // upload-bench.js attaches its exports to `window` (see the UMD wrapper at
   // its top) precisely so admin.js can call them as plain globals, the same
   // way it calls every other helper in this directory — ESLint just can't see
@@ -214,21 +223,21 @@ export default [
       'server/admin_ui/registry-diff.js',
 
       // Панель и лендинг 2.0: те же UMD-модули, тот же guard `typeof module`.
-      'server/admin_ui/v2/format.js',
-      'server/admin_ui/v2/api.js',
-      'server/admin_ui/v2/actions.js',
-      'server/admin_ui/v2/store.js',
-      'server/admin_ui/v2/sections.js',
-      'server/admin_ui/v2/upload.js',
-      'server/admin_ui/v2/registry.js',
-      'server/admin_ui/v2/news.js',
-      'server/admin_ui/v2/gallery.js',
-      'server/admin_ui/v2/tuning.js',
-      'server/admin_ui/v2/build.js',
-      'server/admin_ui/v2/views.js',
-      'server/admin_ui/v2/mods.js',
-      'server/admin_ui/v2/manifest.js',
-      'landing/v2/emu-core.js'
+      'server/admin_ui/format.js',
+      'server/admin_ui/api.js',
+      'server/admin_ui/actions.js',
+      'server/admin_ui/store.js',
+      'server/admin_ui/sections.js',
+      'server/admin_ui/upload.js',
+      'server/admin_ui/registry.js',
+      'server/admin_ui/news.js',
+      'server/admin_ui/gallery.js',
+      'server/admin_ui/tuning.js',
+      'server/admin_ui/build.js',
+      'server/admin_ui/views.js',
+      'server/admin_ui/mods.js',
+      'server/admin_ui/manifest.js',
+      'landing/emu-core.js'
     ],
     languageOptions: {
       globals: {

@@ -8,7 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const E = require('../../landing/v2/emu-core.js');
+const E = require('../../landing/emu-core.js');
 
 const game = (over) => Object.assign({
   gameId: 'repo',

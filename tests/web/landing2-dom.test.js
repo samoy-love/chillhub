@@ -13,7 +13,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
 
-const V2 = path.join(__dirname, '..', '..', 'landing', 'v2');
+const V2 = path.join(__dirname, '..', '..', 'landing');
 
 /** Ответы, которыми притворяется сервер. Форма — как у публичного API. */
 function fixtures() {
@@ -163,6 +163,87 @@ test('баннер техработ появляется только когда
   assert.match(banner.textContent, /Переезд на новый диск/);
 });
 
+test('баннер техработ называет закрытое, а не обещает своё', async (t) => {
+  // Раньше здесь стояла одна выдуманная фраза «уже установленные игры
+  // запускаются как обычно». Запуск закрывается отдельным флагом, и с
+  // ним обещание становилось ложью — из тех, что проверяют сразу
+  const { window } = await boot(t, {
+    '/api/maintenance': {
+      enabled: true,
+      reason: 'Меняем диск на сервере раздачи',
+      blocks: { install: true, update: true, launch: true },
+    },
+  });
+
+  const text = window.document.querySelector('[data-maint]').textContent;
+  assert.match(text, /Меняем диск на сервере раздачи\./, 'причина набрана не предложением');
+  assert.match(text, /установка новых игр/);
+  assert.match(text, /запуск/);
+  assert.doesNotMatch(text, /запускаются как обычно/);
+});
+
+test('когда закрыто не всё, баннер это и говорит', async (t) => {
+  const { window } = await boot(t, {
+    '/api/maintenance': { enabled: true, reason: 'Перебираем сборки', blocks: { update: true } },
+  });
+
+  const text = window.document.querySelector('[data-maint]').textContent;
+  assert.match(text, /обновление уже установленных/);
+  assert.doesNotMatch(text, /запуск/);
+});
+
+test('баннер без единого запрета не выдумывает запрет', async (t) => {
+  // Состояние «работы идут, но ничего не закрыто» законно, и сервер его
+  // отдаёт: баннер тогда предупреждает, а не запрещает
+  const { window } = await boot(t, {
+    '/api/maintenance': { enabled: true, reason: 'Готовим переезд', blocks: {} },
+  });
+
+  assert.match(window.document.querySelector('[data-maint]').textContent, /можно как обычно/);
+});
+
+test('срок работ считается по часам сервера, а не посетителя', async (t) => {
+  // Часы посетителя бывают сбиты на сутки, и по ним ещё не наступивший
+  // срок выглядит истёкшим
+  const { window } = await boot(t, {
+    '/api/maintenance': {
+      enabled: true,
+      reason: 'Меняем диск',
+      blocks: { install: true },
+      serverTime: '2026-09-05T10:00:00Z',
+      endsAt: '2026-09-05T12:00:00Z',
+    },
+  });
+
+  assert.match(window.document.querySelector('[data-maint]').textContent, /Ожидаемое окончание/);
+});
+
+test('истёкший срок не обещают заново', async (t) => {
+  const { window } = await boot(t, {
+    '/api/maintenance': {
+      enabled: true,
+      reason: 'Меняем диск',
+      blocks: { install: true },
+      serverTime: '2026-09-05T14:00:00Z',
+      endsAt: '2026-09-05T12:00:00Z',
+    },
+  });
+
+  const text = window.document.querySelector('[data-maint]').textContent;
+  assert.match(text, /Работы затянулись/);
+  assert.doesNotMatch(text, /Ожидаемое окончание/);
+});
+
+test('кривой срок не ломает баннер', async (t) => {
+  const { window } = await boot(t, {
+    '/api/maintenance': { enabled: true, reason: 'Меняем диск', blocks: { install: true }, endsAt: 'завтра' },
+  });
+
+  const text = window.document.querySelector('[data-maint]').textContent;
+  assert.match(text, /Меняем диск/);
+  assert.doesNotMatch(text, /Ожидаемое окончание/);
+});
+
 /* ---------- Факты об установщике ---------- */
 
 test('без setup.json размер, дата и хеш не показываются', async (t) => {
@@ -310,4 +391,98 @@ test('битая картинка вне каталога убирается, а
   const shot = window.document.querySelector('.hero-shot img');
   shot.dispatchEvent(new window.Event('error'));
   assert.strictEqual(shot.hidden, true);
+});
+
+/* ---------- Память о галерее ---------- */
+
+test('оборванный запрос галереи не запоминается как «галереи нет»', async (t) => {
+  // Иначе игра остаётся с пустой витриной до перезагрузки страницы,
+  // хотя связь давно вернулась. Игра взята без запасного кадра: с ним
+  // проверялся бы запасной кадр, а не память об обрыве
+  const { window } = await boot(t, {
+    '/content/peak/gallery/gallery.json': { __throw: true },
+  });
+
+  const api = window.CHILLHUB_API;
+  assert.strictEqual((await api.gallery('peak')).length, 0, 'при обрыве галерея не пуста');
+
+  // Связь вернулась: следующий запрос обязан уйти на сервер, а не в память
+  let asked = 0;
+  window.fetch = async () => {
+    asked++;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ cover: 'cover.jpg', items: [{ file: 'cover.jpg', caption: 'Смена' }] }),
+      text: async () => '',
+    };
+  };
+  const second = await api.gallery('peak');
+  assert.strictEqual(asked, 1, 'повторный запрос не ушёл: обрыв запомнили');
+  assert.strictEqual(second.length, 1);
+});
+
+test('ответ «галереи нет» запоминается: спрашивать второй раз незачем', async (t) => {
+  const { window } = await boot(t, {
+    '/content/bodycam/gallery/gallery.json': { __status: 404 },
+  });
+
+  const api = window.CHILLHUB_API;
+  assert.strictEqual((await api.gallery('bodycam')).length, 0);
+
+  let asked = 0;
+  window.fetch = async () => {
+    asked++;
+    return { ok: false, status: 404, json: async () => ({}), text: async () => '' };
+  };
+  await api.gallery('bodycam');
+  assert.strictEqual(asked, 0, 'стабильный ответ спросили заново');
+});
+
+/* ---------- Ссылки с сервера в разметке ---------- */
+
+test('обложка со сломанным адресом не дописывает своих правил в CSS', async (t) => {
+  // Обложка уезжает в style="background-image:url('…')". Кавычка внутри
+  // становится &#39;, но разбор идёт в два шага: HTML раскрывает
+  // сущности, и CSS видит уже настоящую кавычку
+  const { window } = await boot(t, {
+    '/news/index.json': {
+      items: [
+        {
+          id: 'n1',
+          slug: 'n1',
+          title: 'Заметка',
+          createdAt: '2026-09-01T10:00:00Z',
+          summary: 'текст',
+          coverUrl: "x'); background:url('https://зло/маяк.png",
+        },
+      ],
+    },
+  });
+
+  await until(() => window.document.querySelector('.post'));
+  const html = window.document.querySelector('[data-news]').innerHTML;
+  assert.ok(!html.includes('зло'), 'чужой адрес попал в разметку');
+  assert.ok(!/background:url/.test(html.replace('background-image:url', '')), 'дописалось лишнее правило');
+});
+
+test('javascript: в адресе обложки не проходит ни в каком виде', async (t) => {
+  const { window } = await boot(t, {
+    '/news/index.json': {
+      items: [
+        { id: 'n1', slug: 'n1', title: 'З', createdAt: '2026-09-01T10:00:00Z', coverUrl: 'java\tscript:alert(1)' },
+      ],
+    },
+  });
+
+  await until(() => window.document.querySelector('.post'));
+  const html = window.document.querySelector('[data-news]').innerHTML;
+  assert.ok(!/script:/.test(html), 'схема прошла через табуляцию');
+});
+
+test('обычные адреса обложек и значков не портятся', async (t) => {
+  const { window } = await boot(t);
+  await until(() => window.document.querySelector('.game-ico, [data-letter]'));
+  const html = window.document.querySelector('[data-games]').innerHTML;
+  assert.match(html, /\/manifests\/repo\/icon\.png/, 'нормальный значок отфильтровали');
 });

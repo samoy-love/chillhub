@@ -28,6 +28,91 @@
 
   const DEFAULT_CHUNK = 8 * 1024 * 1024;
 
+  /* ---------- Чистка старых версий ---------- */
+
+  /** Сколько версий перед активной оставляют нетронутыми. */
+  const KEEP_BEFORE_ACTIVE = 2;
+
+  /**
+   * Сравнение версий по числам, а не по буквам.
+   *
+   * «1.6.9» и «1.6.10»: по алфавиту вторая меньше первой, и чистка
+   * снесла бы не то. Правило то же, что у сервера
+   * (`adminutil.CompareVersions`).
+   */
+  function compareVersions(a, b) {
+    const parts = (v) => String(v || '').split('-')[0].split('.');
+    const A = parts(a);
+    const B = parts(b);
+    for (let i = 0; i < Math.max(A.length, B.length); i++) {
+      const x = A[i] === undefined ? '' : A[i];
+      const y = B[i] === undefined ? '' : B[i];
+      const nx = Number(x);
+      const ny = Number(y);
+      if (Number.isFinite(nx) && Number.isFinite(ny) && x !== '' && y !== '') {
+        if (nx !== ny) return nx < ny ? -1 : 1;
+        continue;
+      }
+      if (x !== y) return x < y ? -1 : 1;
+    }
+    return 0;
+  }
+
+  /**
+   * Какие версии уйдут под нож.
+   *
+   * ПРАВИЛО НЕ «ОСТАВИТЬ N САМЫХ СВЕЖИХ». Сервер удаляет всё, что
+   * старше активной, кроме двух непосредственно перед ней: откатиться
+   * на шаг-два должно оставаться возможным, а всё новее активной — это
+   * загруженное и ещё не отданное, и трогать его нельзя.
+   *
+   * Без активной версии не удаляется ничего: отсчитывать не от чего.
+   */
+  function prunable(versions, active) {
+    if (!active) return [];
+    const sorted = (versions || []).slice().sort(compareVersions);
+    const idx = sorted.indexOf(active);
+    if (idx < 0) return [];
+    const cut = idx - KEEP_BEFORE_ACTIVE;
+    return cut > 0 ? sorted.slice(0, cut) : [];
+  }
+
+  /* ---------- Версия сборки ---------- */
+
+  /**
+   * Что не так с номером версии.
+   *
+   * Правило то же, что у сервера (`IsSafeVersion`): номер становится
+   * именем файла и частью адреса манифеста. Сервер откажет теми же
+   * словами, но уже после того, как человек выберет файл на полтора
+   * гигабайта, — а здесь это видно до.
+   */
+  const VERSION_RE = /^[A-Za-z0-9._-]+$/;
+  function versionProblem(v) {
+    const s = String(v === undefined || v === null ? '' : v).trim();
+    if (!s) return 'Без номера версии сборку некуда положить';
+    if (s === '.' || s === '..') return 'Такой номер означает папку, а не версию';
+    if (!VERSION_RE.test(s)) return 'В номере только латиница, цифры, точка, дефис и подчёркивание';
+    if (!/^\d+\.\d+\.\d+$/.test(s)) return 'Номер обычно из трёх чисел через точку — например, 1.6.47';
+    return '';
+  }
+
+  /**
+   * Следующий номер по порядку.
+   *
+   * Предлагается, а не навязывается: девять раз из десяти выпуск —
+   * очередной патч, и набирать номер руками значит однажды ошибиться в
+   * нём. Порт `bumpSemverPatch` из панели 1.0.
+   */
+  function nextVersion(current) {
+    const v = String(current === undefined || current === null ? '' : current).trim();
+    const three = /^(\d+)\.(\d+)\.(\d+)$/.exec(v);
+    if (three) return three[1] + '.' + three[2] + '.' + (Number(three[3]) + 1);
+    const two = /^(\d+)\.(\d+)$/.exec(v);
+    if (two) return two[1] + '.' + two[2] + '.1';
+    return '1.0.1';
+  }
+
   /** Индексы кусков, которых у сервера нет. */
   function missingChunks(totalChunks, received) {
     const have = new Set((received || []).map((x) => Number(x) | 0));
@@ -251,6 +336,12 @@
 
   return {
     DEFAULT_CHUNK: DEFAULT_CHUNK,
+    KEEP_BEFORE_ACTIVE: KEEP_BEFORE_ACTIVE,
+    compareVersions: compareVersions,
+    prunable: prunable,
+    VERSION_RE: VERSION_RE,
+    versionProblem: versionProblem,
+    nextVersion: nextVersion,
     missingChunks: missingChunks,
     chunkCount: chunkCount,
     chunkRange: chunkRange,

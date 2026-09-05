@@ -223,7 +223,7 @@ func (s *server) handleAdminUI(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join(uiDir, "login.html"))
 		return
 	}
-	http.ServeFile(w, r, filepath.Join(uiDir, "admin.html"))
+	http.ServeFile(w, r, filepath.Join(uiDir, "index.html"))
 }
 
 func detectAdminUIDir() string {

@@ -8,7 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const T = require('../../server/admin_ui/v2/tuning.js');
+const T = require('../../server/admin_ui/tuning.js');
 const tuning = require('../../server/admin_ui/upload-tuning.js');
 
 const run = (chunk, streams, mbps, retries) => ({ chunk, streams, mbps, retries: retries || 0 });
