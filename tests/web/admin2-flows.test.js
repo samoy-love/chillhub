@@ -83,6 +83,11 @@ async function boot(routes) {
         // Запись уезжает формой: сервер читает её, а не JSON
         body = Object.fromEntries(new URLSearchParams(raw));
       }
+    } else if (raw && typeof raw.entries === 'function') {
+      /* multipart: так уходят ручки, которые на сервере начинаются с
+         ParseMultipartForm. Разбираем в тот же простой объект, что и
+         форму, — проверкам важны имена полей, а не способ упаковки. */
+      body = Object.fromEntries(raw.entries());
     } else if (raw) {
       body = raw;
     }
@@ -317,6 +322,38 @@ test('страница ошибки от прокси не попадает на
 });
 
 /* ---------- Новость ---------- */
+
+test('лист на экране всегда один', async (t) => {
+  // Два нажатия «Написать» подряд клали на страницу два наложенных
+  // редактора: человек правит верхний, нижний ждёт под ним со своим
+  // черновиком и своими обработчиками, а Escape закрывает только верхний
+  const { window } = await boot();
+  t.after(() => window.close());
+
+  await open(window, '#news', 'new-post');
+  assert.strictEqual(window.document.querySelectorAll('[data-sheet]').length, 1);
+
+  window.document.querySelector('[data-act="new-post"]').click();
+  await settle();
+  assert.strictEqual(window.document.querySelectorAll('[data-sheet]').length, 1, 'лист открылся поверх прежнего');
+});
+
+test('лист, открытый из листа, ложится поверх, а не вместо', async (t) => {
+  // Выбор вложения открывается ИЗ редактора заметки и по выбору пишет
+  // разметку обратно в его поле. Закрыв редактор, панель писала бы в
+  // вырванный из страницы узел, и набранное пропадало бы молча
+  const { window } = await boot();
+  t.after(() => window.close());
+
+  const editor = await open(window, '#news', 'new-post');
+  await until(() => editor.querySelector('[name="markdown"]'));
+
+  editor.querySelector('[data-flow="assets"]').click();
+  await until(() => window.document.querySelectorAll('[data-sheet]').length === 2);
+
+  assert.strictEqual(window.document.querySelectorAll('[data-sheet]').length, 2, 'редактор закрылся под выбором вложения');
+  assert.ok(editor.isConnected, 'редактор вырван из страницы');
+});
 
 test('заметка сохраняется тем, что набрали, и черновик после этого убирается', async (t) => {
   const { window, calls, left } = await boot();
