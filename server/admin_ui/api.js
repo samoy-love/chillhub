@@ -140,6 +140,32 @@
     return ask();
   }
 
+  /* ОДИН И ТОТ ЖЕ ВОПРОС, ЗАДАННЫЙ ОДНОВРЕМЕННО, — ОДИН ЗАПРОС.
+     ------------------------------------------------------------------
+     Разделы панели читаются независимо друг от друга, и трое из них
+     начинают с реестра игр: список игр, сборки модов и новости. При
+     загрузке они уходят вместе, и сервер отвечал на один и тот же
+     `games` четыре раза; `metrics/summary` — дважды. Видно это только в
+     сетевой панели браузера, и молчит оно ровно до тех пор, пока ответ
+     не станет тяжёлым.
+
+     Складываем ТОЛЬКО идущие сейчас чтения и только их. Готовый ответ не
+     запоминаем ни на секунду: перечитывание после записи обязано уйти в
+     сеть, иначе панель показывает состояние до записи и числит его
+     свежим — эта ошибка уже была, в хранилище разделов. */
+  const inFlight = new Map();
+
+  function coalesce(key, start) {
+    const waiting = inFlight.get(key);
+    if (waiting) return waiting;
+
+    const p = start().finally(() => {
+      if (inFlight.get(key) === p) inFlight.delete(key);
+    });
+    inFlight.set(key, p);
+    return p;
+  }
+
   function makeApi(opts) {
     const options = opts || {};
     const f = options.fetch || (typeof fetch !== 'undefined' ? fetch : null);
@@ -222,7 +248,12 @@
       return data;
     }
 
-    const get = (path, query, signal) => call(path, { query: query, signal: signal });
+    const get = (path, query, signal) => {
+      /* Запрос, который умеют отменять, не складываем ни с чем: отмена
+         одного читателя оборвала бы ответ и всем остальным. */
+      if (signal) return call(path, { query: query, signal: signal });
+      return coalesce('GET ' + path + ' ' + JSON.stringify(query || {}), () => call(path, { query: query }));
+    };
     const post = (path, body, query) => call(path, { method: 'POST', body: body, query: query });
 
     /* Файл уезжает multipart: сервер читает его через `r.FormFile`.

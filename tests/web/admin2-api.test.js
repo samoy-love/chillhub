@@ -406,6 +406,37 @@ test('пустые значения не засоряют запрос', async (
   assert.ok(!s.last().url.includes('dir='), 'пустая папка уехала как параметр');
 });
 
+test('один и тот же вопрос, заданный одновременно, уходит одним запросом', async () => {
+  /* Три раздела панели начинают с реестра игр — список, сборки и новости.
+     На загрузке они спрашивали его порознь, и сервер отвечал на `games`
+     четыре раза, а на `metrics/summary` дважды. */
+  const s = spy();
+  await Promise.all([s.api.games(), s.api.games(), s.api.games()]);
+  assert.strictEqual(s.calls.filter((c) => c.url.includes('/games')).length, 1);
+});
+
+test('вопрос с разными параметрами не складывается в один', async () => {
+  const s = spy();
+  await Promise.all([s.api.newsList('launcher', ''), s.api.newsList('game', 'repo')]);
+  assert.strictEqual(s.calls.filter((c) => c.url.includes('news/list')).length, 2);
+});
+
+test('готовый ответ не запоминается: перечитывание уходит в сеть', async () => {
+  /* Складываем только идущие сейчас чтения. Запомнив готовый ответ,
+     перечитывание после записи вернуло бы состояние ДО записи и панель
+     сочла бы его свежим — эта ошибка уже была, в хранилище разделов. */
+  const s = spy();
+  await s.api.games();
+  await s.api.games();
+  assert.strictEqual(s.calls.filter((c) => c.url.includes('/games')).length, 2);
+});
+
+test('запись не складывается с чтением и сама с собой', async () => {
+  const s = spy();
+  await Promise.all([s.api.gamesScan(), s.api.gamesScan()]);
+  assert.strictEqual(s.calls.filter((c) => c.method === 'POST').length, 2, 'две записи слились в одну');
+});
+
 test('чтение остаётся чтением: тела у него нет', async () => {
   const s = spy();
   await s.api.games();

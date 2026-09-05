@@ -122,6 +122,12 @@ func (h *Handlers) summary(ctx context.Context, force bool) *Summary {
 
 // modsSummaryCached keeps the Thunderstore half for summaryTTL.
 func (h *Handlers) modsSummaryCached(ctx context.Context, force bool) []ModsGameSummary {
+	if force {
+		// Настойчивый запрос обязан дойти до Thunderstore, а не взять
+		// готовое из кеша пакетов: иначе «обновить» отвечало бы тем же
+		// снимком, ради обхода которого его и нажали.
+		h.pkgs.forget()
+	}
 	if !force {
 		h.sum.mu.Lock()
 		fresh := h.sum.last != nil && time.Since(h.sum.at) < summaryTTL
@@ -228,7 +234,7 @@ func (h *Handlers) packStatus(ctx context.Context, gid, version string) (packSta
 		return packState{}, fmt.Errorf("имя версии %q не разбирается на пакет и номер", version)
 	}
 
-	p, err := h.builder.Client.GetPackage(ctx, ns, name)
+	p, err := h.pkgs.pkg(ctx, h.builder.Client, ns, name)
 	if err != nil {
 		return packState{}, fmt.Errorf("не удалось спросить Thunderstore про %s-%s: %w", ns, name, err)
 	}
