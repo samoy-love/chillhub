@@ -57,6 +57,64 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # ЧТО ЗАДЕТО — ЧТОБЫ НЕ БУДИТЬ WINDOWS-МАШИНУ РАДИ ПРАВКИ В JS.
+  #
+  # Задания `C# (launcher)` и `Installer (NSIS)` идут на единственном
+  # собственном Windows-раннере: параллелить их не на чем, они выстраиваются в
+  # очередь, и их суммарное время — это и есть время всего прогона. При этом
+  # четыре из последних десяти PR не трогали ни строчки .NET: правки админки,
+  # лендинга и веб-тестов ждали сборку установщика, которая не могла измениться
+  # ни при каких обстоятельствах.
+  #
+  # Отбор стоит около двадцати секунд на ubuntu и отдаёт их обратно сотнями.
+  #
+  # СПИСОК ОБЯЗАН ПОКРЫВАТЬ ВСЁ, ЧТО ЧИТАЮТ ОБА ЗАДАНИЯ, и с запасом: цена
+  # лишнего прогона — минуты, цена пропущенного — регрессия, уехавшая в релиз.
+  # Поэтому `launcher/` и `scripts/` взяты целиком, а не разобраны по файлам
+  # (в отличие от гейта версии ниже, где точность решает, требовать ли релиз).
+  # Сюда же .editorconfig и Directory.Build.props: они меняют набор
+  # анализаторов, а сборка идёт с TreatWarningsAsErrors.
+  #
+  # Отсутствие базы для сравнения — не «ничего не задето», а «сравнивать не с
+  # чем»: отвечаем «задето всё». Пропустить проверку молча дороже, чем
+  # прогнать её зря.
+  changes:
+    name: Что затронул PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      dotnet: ${{ steps.f.outputs.dotnet }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Полная история: база PR бывает старше пары коммитов, и при мелкой
+          # глубине её объекта в клоне просто нет.
+          fetch-depth: 0
+      - id: f
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.sha }}"
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "базы для сравнения нет (ручной запуск?) — считаем, что задето всё"
+            echo "dotnet=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          FILES="$(git diff --name-only "$BASE" "$HEAD")"
+          echo "изменённые файлы:"
+          echo "$FILES" | sed 's/^/  /'
+
+          if echo "$FILES" | grep -qE '^(launcher/|updater/|scripts/|Directory\.Build\.props$|\.editorconfig$|\.gitattributes$|\.github/workflows/ci\.yml$)'; then
+            echo "dotnet=true" >> "$GITHUB_OUTPUT"
+            echo "→ клиент задет: сборка и установщик прогоняются"
+          else
+            echo "dotnet=false" >> "$GITHUB_OUTPUT"
+            echo "→ клиент не задет: сборка и установщик пропускаются"
+          fi
+
   # Соглашение из CLAUDE.md, проверяемое машиной.
   #
   # Записанного правила оказалось мало: трейлер `Co-Authored-By: Claude` уехал
@@ -481,6 +539,11 @@ jobs:
 
   dotnet-lint:
     name: C# (launcher)
+    needs: changes
+    # Пропуск засчитывается защите ветки как успех, поэтому обязательной
+    # проверкой задание быть не перестаёт — оно просто не запускается там,
+    # где проверять нечего.
+    if: needs.changes.outputs.dotnet == 'true'
     # Свои ветки собираются на собственном Windows-раннере, форк-PR — на
     # GitHub-hosted. Метка win-builder есть только у нашей машины, поэтому
     # чужой код до неё физически не доедет даже при ошибочном одобрении:
@@ -642,6 +705,8 @@ jobs:
 
   installer-windows:
     name: Installer (NSIS)
+    needs: changes
+    if: needs.changes.outputs.dotnet == 'true'
     # Свои ветки собираются на собственном Windows-раннере, форк-PR — на
     # GitHub-hosted. Метка win-builder есть только у нашей машины, поэтому
     # чужой код до неё физически не доедет даже при ошибочном одобрении:
@@ -908,6 +973,7 @@ jobs:
     # задач ещё не создана, а не пропущена. Итог — те же ложные "пропала
     # проверка", от которых задача должна защищать.
     needs:
+      - changes
       - commits
       - deploy-paths
       - htmlhint-web
