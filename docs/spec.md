@@ -622,7 +622,7 @@ UI админки: `server/admin_ui/index.html` + модули рядом с н�
 
 ### 8.8. Моды
 
-Вкладка «Моды» (`server/admin_ui/mods-panel.js`, обработчики —
+Раздел «Сборки модов» панели (обработчики —
 `server/internal/adminapi/mods/handlers.go`). Модель данных, конвейер сборки и
 раскладка файлов описаны отдельно в [modpacks.md](modpacks.md); здесь —
 эндпоинты.

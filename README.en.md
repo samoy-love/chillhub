@@ -98,7 +98,7 @@ cd ..\launcher; dotnet test
 | `content/` | Manifests, version files, news, maintenance state |
 | `scripts/` | Dev runners, installer build, NSIS script |
 | `.deploy-kit/` | Deployment target definitions |
-| `docs/` | [Specification](docs/spec.md), [modpacks](docs/modpacks.md), [configuration](docs/configuration.md), [installer](docs/installer.md), [security policy](docs/SECURITY.md) |
+| `docs/` | [Specification](docs/spec.md), [modpacks](docs/modpacks.md), [design](docs/design.md), [configuration](docs/configuration.md), [installer](docs/installer.md), [security policy](docs/SECURITY.md) |
 
 ## Tests
 
