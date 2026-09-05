@@ -1112,7 +1112,7 @@
       '" preserveAspectRatio="none" role="img" aria-label="' + esc(o.label || 'График') + '">' +
       lines +
       '</svg>' +
-      '<div class="chart-x"><span>' + esc(o.from || '') + '</span><span>' + esc(o.to || '') + '</span></div>' +
+      '<div class="chart-x"><span>' + esc(f.dateLoose(o.from)) + '</span><span>' + esc(f.dateLoose(o.to)) + '</span></div>' +
       '</div>' +
       '<div class="btn-row">' + legend + '</div>'
     );
@@ -1245,6 +1245,9 @@
               ? ''
               : '<button class="btn btn--text" type="button" data-act="mods.activate" data-args=\'{"gameId":"' +
                 esc(o.gameId) + '","version":"' + esc(v.version) + '"}\'>Отдать игрокам</button>') +
+            '<button class="btn btn--text" type="button" data-act="rebuild" data-args=\'{"gameId":"' +
+              esc(o.gameId) + '","version":"' + esc(v.version) + '","active":' + (active ? 'true' : 'false') +
+              '}\'>Пересобрать</button>' +
             (active
               ? ''
               : '<button class="btn btn--danger btn--text" type="button" data-act="mods.delete" data-args=\'{"gameId":"' +

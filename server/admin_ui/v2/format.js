@@ -84,6 +84,23 @@
     return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}`;
   }
 
+  /**
+   * Дата, если её удаётся прочитать, иначе — как пришла.
+   *
+   * Сервер отдаёт день то полной датой, то коротким «04.09». Гнать
+   * второе через разбор значит показать прочерк там, где день известен.
+   */
+  function dateLoose(v) {
+    if (v instanceof Date) return date(v);
+    const s2 = String(v === undefined || v === null ? '' : v).trim();
+    if (!s2) return '';
+
+    /* Разбираем только то, что заведомо дата: `new Date('04.09')` в JS
+       даёт 9 апреля 2001 года — не ошибку, а другую дату, и подпись оси
+       врала бы молча. */
+    return /^\d{4}-\d{2}-\d{2}/.test(s2) ? date(s2) : s2;
+  }
+
   /** Дата со временем: 04.09.2026 03:12. */
   function dateTime(v) {
     // Пустое — это не эпоха: `new Date(null)` даёт 01.01.1970, и раздел
@@ -143,5 +160,5 @@
   /** Скорость: «10,5 МБ/с». */
   const speed = (bytesPerSec) => `${bytes(bytesPerSec)}/с`;
 
-  return { NBSP, dec, bytes, plural, count, percent, date, dateTime, zone, dateTimeZoned, eta, speed };
+  return { NBSP, dec, bytes, plural, count, percent, date, dateLoose, dateTime, zone, dateTimeZoned, eta, speed };
 });

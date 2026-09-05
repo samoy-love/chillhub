@@ -34,7 +34,16 @@ const FIXTURES = {
       { gameId: 'peak', title: 'PEAK', exeRelativePath: 'PEAK.exe', order: 1 },
     ],
   },
-  'mods/list': { gameId: 'repo', title: 'R.E.P.O.', built: '1.9.9', active: '1.9.8', mods: 17, size: 251000000 },
+  /* Форма ответа настоящая: список версий плюс активная. Отдельного
+     поля с собранной версией сервер не отдаёт — она первая в списке. */
+  'mods/list': {
+    gameId: 'repo',
+    active: '1.9.8',
+    items: [
+      { version: '1.9.9', displayName: 'Moo Modpack', createdAt: '2026-09-01T10:00:00Z', packages: 17, bytes: 251000000 },
+      { version: '1.9.8', displayName: 'Moo Modpack', packages: 16, bytes: 250000000 },
+    ],
+  },
   'news/list': { items: [{ id: 'release', slug: 'release', title: 'Заметка', published: false }] },
   'news/get': { markdown: '# Заметка\n\nТекст заметки', published: false, coverUrl: '' },
   'feedback/list': { items: [{ id: 'f1', type: 'bug', status: 'new', comment: 'обрывается' }] },
@@ -888,4 +897,75 @@ test('опоздавший ответ по прошлой папке не пер
 
   assert.ok(text(sheet).includes('ИЗ ПАПКИ.png'), 'опоздавший ответ затёр свежий');
   assert.ok(!text(sheet).includes('ИЗ КОРНЯ.png'), 'на экране содержимое прошлой папки');
+});
+
+/* ---------- Пересборка версии ---------- */
+
+test('пересборка активной версии предупреждает, что заменит её у игроков', async (t) => {
+  // Сборка ляжет под тем же номером: у половины окажется старый набор,
+  // у половины новый — и различить их будет нечем
+  const { window } = await boot();
+  t.after(() => window.close());
+
+  window.location.hash = '#packs';
+  await until(() => window.document.querySelector('[data-act="versions"]'));
+  window.document.querySelector('[data-act="versions"]').click();
+
+  const sheet = await until(() => window.document.querySelector('.sheet'));
+  await until(() => sheet.querySelector('[data-act="rebuild"]'));
+
+  const active = [...sheet.querySelectorAll('[data-act="rebuild"]')].find(
+    (b) => JSON.parse(b.dataset.args).active
+  );
+  assert.ok(active, 'у активной версии нет кнопки пересборки');
+  active.click();
+
+  const modal = await until(() => window.document.querySelector('.modal'));
+  assert.ok(modal, 'пересборка активной не спросила');
+  assert.match(text(modal), /заменит то, что игроки уже качают/);
+  modal.querySelector('[data-no]').click();
+  await settle();
+});
+
+test('игра без модпака не исчезает молча, а объясняет, чего ей не хватает', async (t) => {
+  // Подключить моды было негде: раздел показывал только те игры, у
+  // которых они уже есть
+  const { window } = await boot({
+    games: {
+      items: [
+        { gameId: 'repo', title: 'R.E.P.O.', mods: { enabled: true } },
+        { gameId: 'peak', title: 'PEAK' },
+      ],
+    },
+  });
+  t.after(() => window.close());
+
+  window.location.hash = '#packs';
+  await until(() => window.document.body.textContent.includes('Без модпака'));
+  assert.match(window.document.body.textContent, /Без модпака: PEAK/);
+  assert.ok(window.document.querySelector('[data-act="ecosystem"]'), 'подключить моды негде');
+});
+
+test('кнопка внутри листа работает так же, как кнопка раздела', async (t) => {
+  // Обработчики висели на разметке текущего раздела, и всё, что
+  // появлялось позже — а появляется в листах, — было мёртвым: кнопка
+  // есть, нажимается, не делает ничего
+  const { window, calls } = await boot();
+  t.after(() => window.close());
+
+  window.location.hash = '#packs';
+  await until(() => window.document.querySelector('[data-act="versions"]'));
+  window.document.querySelector('[data-act="versions"]').click();
+
+  const sheet = await until(() => window.document.querySelector('.sheet'));
+  const activate = await until(() => sheet.querySelector('[data-act="mods.activate"]'));
+  activate.click();
+
+  const modal = await until(() => window.document.querySelector('.modal'));
+  assert.ok(modal, 'кнопка листа ничего не сделала');
+  modal.querySelector('[data-yes]').click();
+
+  await until(() => calls.some((c) => c.url.includes('mods/activate')));
+  assert.ok(calls.some((c) => c.url.includes('mods/activate')), 'действие из листа не дошло до сервера');
+  await settle();
 });

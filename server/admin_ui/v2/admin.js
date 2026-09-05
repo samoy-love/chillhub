@@ -350,6 +350,23 @@
          тогда, когда сам Thunderstore не менялся. */
       actions: '<button class="btn" type="button" data-act="build">Собрать заново</button>',
       render() {
+        /* Игра без модпака из раздела просто исчезала, и подключить ей
+           моды было негде: панель показывала только те, у которых они
+           уже есть. Раздел обязан объяснить, чего у игры нет и что
+           даст подключение. */
+        const off = D.games.filter((g) => !D.packs.some((x) => x.gameId === g.gameId));
+
+        if (!D.packs.length) {
+          return card(
+            'Модпаков ещё нет',
+            `<div class="stack stack--tight">
+               <p class="dim">Модпак — это набор модов с Thunderstore, который лаунчер ставит игроку вместе с игрой и держит одинаковым у всей компании.</p>
+               <p class="faint">Чтобы подключить его игре, нужно назвать её так, как она зовётся на Thunderstore: оттуда придут идентификатор Steam, папка установки и раздел с модпаками.</p>
+               <div class="btn-row"><button class="btn btn--accent" type="button" data-act="ecosystem">Подключить моды игре</button></div>
+             </div>`
+          );
+        }
+
         const p = packOf(game);
         const stale = p.behind || p.deprecated;
         const staged = p.staged;
@@ -364,6 +381,13 @@
 
         return `
           <div class="segs">${tabs}</div>
+          ${
+            off.length
+              ? `<p class="faint" style="margin-top: var(--s2)">Без модпака: ${off
+                  .map((g) => esc(g.title))
+                  .join(', ')}. <button class="btn btn--text" type="button" data-act="ecosystem">Подключить моды</button></p>`
+              : ''
+          }
 
           <div class="handoff" style="margin-top: var(--s3)">
             <div><span class="k">Игроки получают</span><span class="v mono">${esc(p.active)}</span></div>
@@ -1038,9 +1062,27 @@
 
   /* --- Сборка модпака --- */
 
+  /* Пересборка КОНКРЕТНОЙ версии — не то же самое, что сборка свежей.
+     Сервер собирает под тем же номером и кладёт на то же место, поэтому
+     пересборка активной заменяет то, что игроки уже качают: у половины
+     окажется старый набор, у половины новый под одним номером. */
+  async function flowRebuild(a) {
+    if (a.active) {
+      const agreed = await ask({
+        title: 'Пересобрать версию ' + a.version + ', которая сейчас у игроков?',
+        body:
+          'Сборка ляжет под тем же номером и заменит то, что игроки уже качают. У тех, кто скачал раньше, останется прежний набор — под тем же номером версии. Обычно вместо этого собирают следующую.',
+        ok: 'Всё равно пересобрать',
+        cancel: 'Отмена',
+      });
+      if (!agreed) return;
+    }
+    flowBuild(Object.assign({}, packOf(a.gameId) || {}, { gameId: a.gameId, version: a.version }));
+  }
+
   function flowBuild(pack) {
     const sheet = openSheet({
-      title: 'Сборка модпака: ' + (pack.title || pack.gameId),
+      title: (pack.version ? 'Пересборка ' + pack.version + ': ' : 'Сборка модпака: ') + (pack.title || pack.gameId),
       lede: 'Идёт минутами. Собранное игрокам само не уходит — отдать его отдельное решение.',
       body: V().buildLog([], 'running'),
       foot: '<button class="btn" type="button" data-flow="close">Закрыть</button>',
@@ -1049,7 +1091,7 @@
     const events = [];
 
     window.CH2Build.run(
-      { gameId: pack.gameId, namespace: pack.namespace, name: pack.name },
+      { gameId: pack.gameId, namespace: pack.namespace, name: pack.name, version: pack.version || '' },
       {
         fetch: window.fetch.bind(window),
         ndjson: { readNdjsonStream: window.readNdjsonStream },
@@ -2322,6 +2364,7 @@
     choose: () => flowCatalog(packOf(game)),
     import: () => flowImport(packOf(game)),
     'mods-diff': (a) => flowModsDiff(a),
+    rebuild: (a) => flowRebuild(a),
     versions: (a) => flowVersions(a),
     'error-events': (a) => flowErrorEvents(a),
     'new-post': () => flowNews({}),
@@ -2370,6 +2413,62 @@
       if (st.status === window.CH2Store.LOADING) loading.push(map[name]);
     }
     return V().staleNote(failed, loading);
+  }
+
+  /* РАЗБОР НАЖАТИЙ — ОДИН НА ВСЮ ПАНЕЛЬ, А НЕ НА КАЖДУЮ ОТРИСОВКУ.
+     Раньше обработчики вешались на кнопки текущего раздела, и всё, что
+     появлялось позже — а появляется в листах, — оказывалось мёртвым:
+     кнопка есть, нажимается, не делает ничего. Слушаем документ и
+     находим ближайшую кнопку от места нажатия. */
+  async function onAct(e) {
+    const b = e.target.closest && e.target.closest('[data-act]');
+    if (!b || b.disabled) return;
+
+    const id = b.dataset.act;
+
+    let args = {};
+    try {
+      args = b.dataset.args ? JSON.parse(b.dataset.args) : {};
+    } catch {
+      args = {};
+    }
+
+    /* Технические работы собираются формой прямо в разделе: у них есть
+       причина, окно и набор блоков, и кнопкой без них обошлась бы
+       только заглушка без объяснения. */
+    if (id === 'maint.on' || id === 'maint.save') {
+      args.payload = maintPayload(true);
+      const problem = V().maintProblem(args.payload);
+      if (problem) {
+        toast(problem, 'warn');
+        return;
+      }
+    }
+
+    /* Длинные дела панель ведёт сама: у них свой лист, свой ход и своё
+       окончание, и в реестр записей они не помещаются. */
+    if (FLOWS[id]) {
+      FLOWS[id](args);
+      return;
+    }
+
+    if (!window.CH2Actions.has(id)) {
+      toast('Это действие ещё не подключено', 'warn');
+      return;
+    }
+
+    b.disabled = true;
+    const res = await window.CH2Actions.run(id, args, { api: API, confirm: ask });
+    b.disabled = false;
+
+    if (res.cancelled) return;
+    if (!res.ok) {
+      toast('Не вышло: ' + res.message, 'bad');
+      return;
+    }
+    toast(res.message, 'ok');
+    await store.invalidate(res.stale);
+    route();
   }
 
   /* ---------- Навигация ---------- */
@@ -2485,56 +2584,8 @@
        вопрос и что перечитать после, знает реестр (actions.js), а не
        разметка. В 1.0 это решала каждая кнопка сама, и «Удалить версию»
        спрашивало, а «Удалить игру и все версии» — нет. */
-    $$('[data-act]').forEach((b) =>
-      b.addEventListener('click', async () => {
-        const id = b.dataset.act;
-
-        let args = {};
-        try {
-          args = b.dataset.args ? JSON.parse(b.dataset.args) : {};
-        } catch {
-          args = {};
-        }
-
-        /* Технические работы собираются формой прямо в разделе: у них
-           есть причина, окно и набор блоков, и кнопкой без них
-           обошлась бы только заглушка без объяснения. */
-        if (id === 'maint.on' || id === 'maint.save') {
-          args.payload = maintPayload(true);
-          const problem = V().maintProblem(args.payload);
-          if (problem) {
-            toast(problem, 'warn');
-            return;
-          }
-        }
-
-        /* Длинные дела панель ведёт сама: у них свой лист, свой ход и
-           своё окончание, и в реестр записей они не помещаются. */
-        if (FLOWS[id]) {
-          FLOWS[id](args);
-          return;
-        }
-
-        if (!window.CH2Actions.has(id)) {
-          toast('Это действие ещё не подключено', 'warn');
-          return;
-        }
-
-        b.disabled = true;
-        const res = await window.CH2Actions.run(id, args, { api: API, confirm: ask });
-        b.disabled = false;
-
-        if (res.cancelled) return;
-        if (!res.ok) {
-          toast('Не вышло: ' + res.message, 'bad');
-          return;
-        }
-        toast(res.message, 'ok');
-        await store.invalidate(res.stale);
-        route();
-      })
-    );
   }
+
 
   /* Разница между активной и загруженной версиями лаунчера.
 
@@ -2763,6 +2814,9 @@
     if (!again) {
       topbar();
       palette();
+      /* Один слушатель на документ: кнопки листов создаются позже
+         раздела, и подписка «на текущую разметку» их не видит. */
+      document.addEventListener('click', onAct);
       window.addEventListener('hashchange', route);
     }
     route();

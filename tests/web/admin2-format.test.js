@@ -140,3 +140,23 @@ test('пустое и непонятное время остаётся проч�
   assert.strictEqual(F.dateTimeZoned('не дата'), '—');
   assert.strictEqual(F.dateTimeZoned(null), '—');
 });
+
+/* ---------- Дата, какой её прислали ---------- */
+
+test('полная дата приводится к виду панели', () => {
+  assert.strictEqual(F.dateLoose('2026-08-06'), '06.08.2026');
+  assert.strictEqual(F.dateLoose('2026-08-06T10:00:00Z'), '06.08.2026');
+});
+
+test('короткий день остаётся как есть, а не превращается в другую дату', () => {
+  // new Date('04.09') в JS даёт 9 апреля 2001 года — не ошибку, а
+  // другую дату, и подпись оси врала бы молча
+  assert.strictEqual(F.dateLoose('04.09'), '04.09');
+  assert.strictEqual(F.dateLoose('вчера'), 'вчера');
+});
+
+test('пустое остаётся пустым, а не прочерком', () => {
+  // Прочерк на оси графика читается как значение
+  assert.strictEqual(F.dateLoose(''), '');
+  assert.strictEqual(F.dateLoose(null), '');
+});
