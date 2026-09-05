@@ -636,6 +636,15 @@ namespace ChillHub.Tests {
 
                 this.savedReportsEnv = Environment.GetEnvironmentVariable(ErrorReporter.EnvVar);
                 this.savedApiBaseUrl = ConfigService.Current.ApiBaseUrl;
+
+                // ЖДЁМ ЧУЖИЕ ОТЧЁТЫ ДО ТОГО, КАК СНИМЕМ РУБИЛЬНИК. Report
+                // «выстрелил и забыл»: отчёт, заказанный предыдущим тестом через
+                // Logger.Error, доезжает когда придётся. Застав рубильник снятым,
+                // он уходит через подменённый транспорт ЭТОЙ области и попадает в
+                // её ожидания и в её файл квоты. Пока рубильник стоит, такой
+                // отчёт возвращается сразу и ничего не трогает.
+                ErrorReporter.WaitForIdleForTests(TimeSpan.FromSeconds(5));
+
                 // Общий инициализатор тестов глушит отправку на весь прогон; здесь она
                 // как раз и проверяется, поэтому рубильник на время области снимается.
                 Environment.SetEnvironmentVariable(ErrorReporter.EnvVar, null);
