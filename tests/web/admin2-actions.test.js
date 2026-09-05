@@ -192,3 +192,12 @@ test('оба вопроса называют версию, которую уда
     assert.match(A.question('launcher.delete', { version: '1.6.25', active }).title, /1\.6\.25/);
   }
 });
+
+test('вопрос о чистке называет версии поимённо и то, что останется', () => {
+  // «Удалить старые» без списка — просьба довериться, а доверяться нечему
+  const q = A.question('launcher.prune', { victims: ['1.0.0', '1.0.1'], active: '1.0.4' });
+  assert.match(q.title, /2 старых/);
+  assert.match(q.body, /1\.0\.0, 1\.0\.1/);
+  assert.match(q.body, /Останутся активная 1\.0\.4/);
+  assert.match(q.body, /две перед ней/);
+});

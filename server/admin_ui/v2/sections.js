@@ -272,6 +272,54 @@
 
   /* ---------- Метрики ---------- */
 
+  /**
+   * Итоги за период: то, ради чего события вообще собирают.
+   *
+   * Сервер считает их давно, а панель показывала только счётчики
+   * запусков. Три числа здесь отвечают на вопросы, которых счётчики не
+   * касаются:
+   *
+   *   — сколько трафика сэкономила разностная синхронизация. «40 МБ
+   *     перевезено» без «вместо 12 ГБ» не значит ничего, а вместе это
+   *     единственная цифра, говорящая, ради чего лаунчер вообще качает
+   *     разницу, а не сборку целиком;
+   *   — сколько проверок целостности нашли расхождение. Игрок,
+   *     проверяющий свои файлы, был не виден в панели, которая
+   *     существует ровно для того, чтобы это замечать;
+   *   — сколько установок и обновлений сорвалось. Доля отказов
+   *     считается от попыток, а не от всех событий: иначе она тонет.
+   */
+  function totals(raw) {
+    const t = (raw && raw.totals) || {};
+    const n = (v) => num(v, 0);
+
+    const moved = n(t.bytesDownloaded);
+    const full = n(t.fullBytes);
+    const checks = n(t.integrityChecks);
+    const installs = n(t.installs);
+    const updates = n(t.updates);
+    const failed = n(t.installFail) + n(t.updateFail);
+
+    return {
+      moved: moved,
+      full: full,
+      saved: full > moved ? full - moved : 0,
+      savedShare: full > 0 ? (full - moved) / full : 0,
+
+      checks: checks,
+      checksFailed: n(t.integrityFailed),
+      checksShare: checks > 0 ? n(t.integrityFailed) / checks : 0,
+
+      tries: installs + updates,
+      failed: failed,
+      failShare: installs + updates > 0 ? failed / (installs + updates) : 0,
+
+      players: n(t.uniquePlayers),
+      sessions: n(t.gameSessions),
+      playtimeMs: n(t.playtimeMs),
+    };
+  }
+
   function metrics(raw) {
     /* Сервер зовёт их `byDay`; `days` — форма снимка. Читаем обе, иначе
        раздел молча считает пустой список за «событий не было». */
@@ -501,7 +549,9 @@
        состояние и то, что из него следует прямо сейчас. Читать надо
        state, иначе окно работ, ещё не наступившее, выглядит выключенным. */
     maint: (api) => api.maintenanceGet().then((r) => maintenance((r && (r.state || r)) || r)),
-    metrics: (api) => api.metricsSummary().then(metrics),
+    /* Одна сводка — три разных взгляда на неё: дни для графика, итоги
+       за период и коды ошибок. Спрашивать её трижды незачем. */
+    metrics: (api) => api.metricsSummary().then((raw) => ({ days: metrics(raw), totals: totals(raw) })),
     errors: (api) => api.metricsSummary().then(errors),
     disk: (api) => api.freeSpace().then(disk),
     cache: (api) => api.modsCache().then(cache),
@@ -510,7 +560,7 @@
   return {
     items, pick,
     launcher, games, packs, packRow, isStaged, news, inbox, filterInbox,
-    maintenance, metrics, errors, disk, cache,
+    maintenance, metrics, totals, errors, disk, cache,
     decisions, watch,
     LOADERS,
   };

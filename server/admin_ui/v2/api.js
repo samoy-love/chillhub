@@ -228,7 +228,10 @@
       launcherVersions: () => get('list', { gameId: LAUNCHER }),
       launcherActivate: (version) => post('activate', { gameId: LAUNCHER, version: version }),
       launcherDelete: (version) => post('deleteVersion', { gameId: LAUNCHER, version: version }),
-      launcherPrune: (keep) => post('pruneVersions', { gameId: LAUNCHER, keep: keep }),
+      /* Сколько оставить, сервер решает сам: всё старше активной,
+         кроме двух перед ней. Параметра `keep` у ручки нет, и слать
+         его — притворяться, будто панель этим управляет. */
+      launcherPrune: () => post('pruneVersions', { gameId: LAUNCHER }),
       freeSpace: () => get('system/free'),
 
       uploadInit: (payload) => post('upload/init', payload),

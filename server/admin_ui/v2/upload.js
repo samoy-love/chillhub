@@ -28,6 +28,55 @@
 
   const DEFAULT_CHUNK = 8 * 1024 * 1024;
 
+  /* ---------- Чистка старых версий ---------- */
+
+  /** Сколько версий перед активной оставляют нетронутыми. */
+  const KEEP_BEFORE_ACTIVE = 2;
+
+  /**
+   * Сравнение версий по числам, а не по буквам.
+   *
+   * «1.6.9» и «1.6.10»: по алфавиту вторая меньше первой, и чистка
+   * снесла бы не то. Правило то же, что у сервера
+   * (`adminutil.CompareVersions`).
+   */
+  function compareVersions(a, b) {
+    const parts = (v) => String(v || '').split('-')[0].split('.');
+    const A = parts(a);
+    const B = parts(b);
+    for (let i = 0; i < Math.max(A.length, B.length); i++) {
+      const x = A[i] === undefined ? '' : A[i];
+      const y = B[i] === undefined ? '' : B[i];
+      const nx = Number(x);
+      const ny = Number(y);
+      if (Number.isFinite(nx) && Number.isFinite(ny) && x !== '' && y !== '') {
+        if (nx !== ny) return nx < ny ? -1 : 1;
+        continue;
+      }
+      if (x !== y) return x < y ? -1 : 1;
+    }
+    return 0;
+  }
+
+  /**
+   * Какие версии уйдут под нож.
+   *
+   * ПРАВИЛО НЕ «ОСТАВИТЬ N САМЫХ СВЕЖИХ». Сервер удаляет всё, что
+   * старше активной, кроме двух непосредственно перед ней: откатиться
+   * на шаг-два должно оставаться возможным, а всё новее активной — это
+   * загруженное и ещё не отданное, и трогать его нельзя.
+   *
+   * Без активной версии не удаляется ничего: отсчитывать не от чего.
+   */
+  function prunable(versions, active) {
+    if (!active) return [];
+    const sorted = (versions || []).slice().sort(compareVersions);
+    const idx = sorted.indexOf(active);
+    if (idx < 0) return [];
+    const cut = idx - KEEP_BEFORE_ACTIVE;
+    return cut > 0 ? sorted.slice(0, cut) : [];
+  }
+
   /* ---------- Версия сборки ---------- */
 
   /**
@@ -287,6 +336,9 @@
 
   return {
     DEFAULT_CHUNK: DEFAULT_CHUNK,
+    KEEP_BEFORE_ACTIVE: KEEP_BEFORE_ACTIVE,
+    compareVersions: compareVersions,
+    prunable: prunable,
     VERSION_RE: VERSION_RE,
     versionProblem: versionProblem,
     nextVersion: nextVersion,

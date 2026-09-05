@@ -240,8 +240,19 @@
       /* Каждая версия — сотня мегабайт, и место кончается тихо: диск
          забивается сборками, о которых никто не помнит. Оставляем пять
          свежих — этого хватает, чтобы откатиться на пару выпусков. */
-      actions:
-        '<button class="btn" type="button" data-act="launcher.prune" data-args=\'{"keep":5}\'>Убрать старые</button>',
+      /* Кнопка появляется, только когда есть что удалять, и называет
+         объём: «убрать старые» при нечего убирать — обещание, которое
+         не выполнится, и человек идёт искать, что пошло не так. */
+      actions: () => {
+        const victims = window.CH2Upload.prunable(
+          D.launcher.versions.map((v) => v.version),
+          D.launcher.active
+        );
+        if (!victims.length) return '';
+        return `<button class="btn" type="button" data-act="launcher.prune" data-args='${esc(
+          JSON.stringify({ victims: victims, active: D.launcher.active })
+        )}'>Убрать ${victims.length} старых</button>`;
+      },
       render() {
         const L = D.launcher;
         /* Разница считается из настоящих манифестов и приезжает уже
@@ -714,11 +725,14 @@
           )}
 
           <div class="attn" style="margin: var(--s4) 0">
-            <div class="attn-item"><span class="k">Запусков лаунчера</span><span class="v">${sum('starts')}</span><span class="s">за 30 дней</span></div>
+            <div class="attn-item"><span class="k">Запусков лаунчера</span><span class="v">${sum('starts')}</span><span class="s">за ${metricsFilter.days} дней</span></div>
             <div class="attn-item"><span class="k">Установок</span><span class="v">${sum('installs')}</span><span class="s">первых, с нуля</span></div>
             <div class="attn-item"><span class="k">Обновлений</span><span class="v">${sum('updates')}</span><span class="s">докачек разницы</span></div>
-            <div class="attn-item" data-tone="${sum('errors') / sum('updates') > 0.1 ? 'warn' : 'ok'}"><span class="k">Доля ошибок</span><span class="v">${dec((sum('errors') / sum('updates')) * 100)}\u00a0%</span><span class="s">от обновлений</span></div>
           </div>
+
+          ${/* Ради этих трёх чисел события и собирают: счётчики выше
+                говорят, сколько всего было, а эти — что из этого вышло. */ ''}
+          ${V().metricsTotals(D.totals)}
 
           ${card(
             'Динамика',
@@ -2627,6 +2641,7 @@
       const raw = await API.metricsSummary(query);
       D.days = window.CH2Sections.metrics(raw);
       D.errors = window.CH2Sections.errors(raw);
+      D.totals = window.CH2Sections.totals(raw);
     } catch (err) {
       toast('Метрики не перечитались: ' + window.CH2Api.reason(err), 'bad');
     }
@@ -2784,11 +2799,16 @@
       news: val('news', demo.news, S.news),
       inbox: val('inbox', demo.inbox, S.inbox),
       maint: val('maint', { enabled: demo.maint.on, reason: demo.maint.reason }, S.maintenance),
-      days: val('metrics', demo.days, S.metrics),
+      metrics: val('metrics', demo.days, (raw) => ({ days: S.metrics(raw), totals: S.totals(raw) })),
       errors: val('errors', demo.errors, S.errors),
       disk: val('disk', demo.disk, S.disk),
       cache: val('cache', demo.cache, S.cache),
     };
+
+    /* Дни и итоги приходят одной сводкой — раскладываем их по местам,
+       чтобы отрисовка не знала, что они ехали вместе. */
+    data.days = data.metrics.days;
+    data.totals = data.metrics.totals;
 
     /* Реестр целиком, как он лежит на сервере. Правка игры уезжает
        вместе со всем списком, а в списке есть поля, которых таблица не

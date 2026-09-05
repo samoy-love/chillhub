@@ -436,3 +436,61 @@ test('признак «собрано, но не отдано» одинаков
   assert.strictEqual(S.isStaged('', '1.0'), false);
   assert.strictEqual(S.isStaged('1.0', '1.0'), false);
 });
+
+/* ---------- Итоги за период ---------- */
+
+test('экономия считается от того, сколько весила бы полная загрузка', () => {
+  // «40 МБ перевезено» без «вместо 12 ГБ» не значит ничего, а вместе
+  // это единственная цифра про смысл разностной синхронизации
+  const t = S.totals({ totals: { bytesDownloaded: 40 * 1024 ** 2, fullBytes: 12 * 1024 ** 3 } });
+  assert.strictEqual(t.moved, 40 * 1024 ** 2);
+  assert.ok(t.saved > 0);
+  assert.ok(t.savedShare > 0.99 && t.savedShare < 1);
+});
+
+test('без полного размера экономия не выдумывается', () => {
+  const t = S.totals({ totals: { bytesDownloaded: 100 } });
+  assert.strictEqual(t.saved, 0);
+  assert.strictEqual(t.savedShare, 0);
+});
+
+test('доля отказов считается от попыток, а не от всех событий', () => {
+  // Иначе она тонет: событий тысячи, а установок сотни
+  const t = S.totals({ totals: { installs: 200, updates: 800, installFail: 4, updateFail: 20, events: 100000 } });
+  assert.strictEqual(t.tries, 1000);
+  assert.strictEqual(t.failed, 24);
+  assert.ok(Math.abs(t.failShare - 0.024) < 1e-9);
+});
+
+test('проверки целостности доезжают до панели', () => {
+  // Игрок, проверяющий свои файлы, был не виден в панели, которая
+  // существует ровно для того, чтобы это замечать
+  const t = S.totals({ totals: { integrityChecks: 120, integrityFailed: 3 } });
+  assert.strictEqual(t.checks, 120);
+  assert.strictEqual(t.checksFailed, 3);
+  assert.ok(Math.abs(t.checksShare - 0.025) < 1e-9);
+});
+
+test('пустая сводка даёт нули, а не NaN', () => {
+  const t = S.totals({});
+  for (const k of ['moved', 'full', 'saved', 'savedShare', 'checks', 'tries', 'failShare']) {
+    assert.strictEqual(Number.isFinite(t[k]), true, k + ' = ' + t[k]);
+  }
+});
+
+test('дни и итоги приезжают одной сводкой, а не тремя запросами', async () => {
+  let asked = 0;
+  const raw = {
+    byDay: [{ date: '2026-09-04', launcherStarts: 10 }],
+    totals: { bytesDownloaded: 5, fullBytes: 50 },
+  };
+  const out = await S.LOADERS.metrics({
+    metricsSummary: async () => {
+      asked++;
+      return raw;
+    },
+  });
+  assert.strictEqual(asked, 1);
+  assert.strictEqual(out.days.length, 1);
+  assert.strictEqual(out.totals.moved, 5);
+});

@@ -132,7 +132,7 @@ const ENDPOINTS = [
   ['launcherVersions', [], 'GET', 'list'],
   ['launcherActivate', ['1.0'], 'POST', 'activate'],
   ['launcherDelete', ['1.0'], 'POST', 'deleteVersion'],
-  ['launcherPrune', [5], 'POST', 'pruneVersions'],
+  ['launcherPrune', [], 'POST', 'pruneVersions'],
   ['freeSpace', [], 'GET', 'system/free'],
 
   ['uploadInit', [{}], 'POST', 'upload/init'],
@@ -329,7 +329,7 @@ test('лаунчер называет себя сервером зарезерв
   const s = spy();
   await s.api.launcherVersions();
   await s.api.launcherDelete('1.6.20');
-  await s.api.launcherPrune(5);
+  await s.api.launcherPrune();
   for (const c of s.calls) assert.match(c.url, /gameId=launcher/, c.url);
 });
 

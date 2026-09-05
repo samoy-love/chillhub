@@ -1032,6 +1032,61 @@
     );
   }
 
+  /* ---------- Итоги за период ---------- */
+
+  /**
+   * Три числа, ради которых события и собирают.
+   *
+   * Каждое подписано тем, что оно значит, а не тем, как называется поле:
+   * «40 МБ вместо 12 ГБ» отвечает на вопрос, а «bytesDownloaded» — нет.
+   * Там, где считать не из чего, стоит прочерк, а не ноль: ноль читается
+   * как «ни одной проверки не сорвалось», хотя проверок не было вовсе.
+   */
+  function metricsTotals(t) {
+    const v = t || {};
+    const f = F();
+    const tile = (k, value, note, tone) =>
+      '<div class="attn-item"' + (tone ? ' data-tone="' + tone + '"' : '') + '>' +
+      '<span class="k">' + esc(k) + '</span>' +
+      '<span class="v">' + value + '</span>' +
+      '<span class="s">' + esc(note) + '</span></div>';
+
+    const savings = v.full > 0
+      ? tile(
+          'Скачано игроками',
+          esc(f.bytes(v.moved)),
+          /* Доля с десятой: 99,7 % округлилось бы до 100 %, а «сто
+             процентов сэкономлено» читается как «не скачали ничего». */
+          'вместо ' + f.bytes(v.full) + ' — на ' + f.percent(v.savedShare, 1, 1) + ' меньше',
+          'ok'
+        )
+      : tile('Скачано игроками', esc(f.bytes(v.moved)), 'полного размера в событиях нет', '');
+
+    const integrity = v.checks > 0
+      ? tile(
+          'Проверок целостности',
+          esc(f.dec(v.checks, 0)),
+          f.percent(v.checksShare, 1, 0) + ' нашли расхождение',
+          v.checksShare > 0.05 ? 'warn' : 'ok'
+        )
+      : tile('Проверок целостности', '—', 'игроки файлы не проверяли', '');
+
+    const fails = v.tries > 0
+      ? tile(
+          'Сорвалось',
+          esc(f.dec(v.failed, 0)),
+          f.percent(v.failShare, 1, 0) + ' от установок и обновлений',
+          v.failShare > 0.1 ? 'bad' : v.failShare > 0.03 ? 'warn' : 'ok'
+        )
+      : tile('Сорвалось', '—', 'ни установок, ни обновлений не было', '');
+
+    const players = v.players > 0
+      ? tile('Играли', esc(f.dec(v.players, 0)), f.dec(v.sessions, 0) + ' запусков, ' + f.eta(v.playtimeMs / 1000), '')
+      : tile('Играли', '—', 'сессий за период нет', '');
+
+    return '<div class="attn">' + savings + integrity + fails + players + '</div>';
+  }
+
   /* ---------- График ---------- */
 
   /**
@@ -1536,6 +1591,7 @@
     launcherDiff,
     versionPicker,
     diffCounts,
+    metricsTotals,
     sparkPoints,
     sparkLine,
     chart,
