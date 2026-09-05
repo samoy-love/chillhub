@@ -692,3 +692,61 @@ test('новая игра проверяется по тем же правила
   assert.ok(!calls.some((c) => c.url.includes('games/save')));
   assert.match(text(window.document.querySelector('.toast')), /латиницу в нижнем регистре/);
 });
+
+/* ---------- Откуда данные ---------- */
+
+test('раздел с упавшей ручкой честно говорит, что показывает снимок', async (t) => {
+  // Всплывающего сообщения при запуске мало: оно живёт четыре секунды,
+  // а раздел открывают через полчаса
+  const { window } = await boot({
+    'mods/list': () => ({ ok: false, status: 500, text: async () => 'сервер лёг' }),
+  });
+  t.after(() => window.close());
+
+  window.location.hash = '#packs';
+  // Дожидаемся именно этого раздела: обзор тоже честно помечен, и найти
+  // его пометку вместо нужной ничего не докажет
+  await until(() => window.document.querySelector('h1').textContent === 'Сборки модов');
+  const note = await until(() => window.document.querySelector('[data-stale]'));
+
+  assert.ok(note, 'раздел молчит про снимок');
+  assert.match(text(note), /показан снимок/);
+  assert.match(text(note), /сборки модов/);
+  assert.match(text(note), /Записывать в этом состоянии нельзя/);
+});
+
+test('обзор помечается так же: он собран из тех же разделов', async (t) => {
+  const { window } = await boot({
+    'mods/list': () => ({ ok: false, status: 500, text: async () => 'сервер лёг' }),
+  });
+  t.after(() => window.close());
+
+  window.location.hash = '#overview';
+  const note = await until(() => window.document.querySelector('[data-stale]'));
+  assert.ok(note, 'обзор молчит про снимок');
+  assert.match(text(note), /сборки/);
+});
+
+test('живой раздел никакой пометки не показывает', async (t) => {
+  const { window } = await boot();
+  t.after(() => window.close());
+
+  window.location.hash = '#games';
+  await until(() => window.document.querySelector('h1'));
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+  assert.strictEqual(window.document.querySelector('[data-stale]'), null, 'пометка на живых данных');
+});
+
+test('пометка называет раздел словами навигации, а не ключом хранилища', async (t) => {
+  // «metrics не ответил» человеку не говорит ничего
+  const { window } = await boot({
+    'metrics/summary': () => ({ ok: false, status: 500, text: async () => '' }),
+  });
+  t.after(() => window.close());
+
+  window.location.hash = '#errors';
+  const note = await until(() => window.document.querySelector('[data-stale]'));
+  assert.ok(note);
+  assert.match(text(note), /метрики/);
+  assert.ok(!/metrics/.test(text(note)));
+});

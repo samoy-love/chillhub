@@ -165,3 +165,52 @@ test('синхронно брошенная ошибка загрузчика н
   assert.strictEqual(s.get('a').status, FAILED);
   assert.strictEqual(s.get('a').error.message, 'сразу');
 });
+
+/* ---------- Гонка записи и чтения ---------- */
+
+test('перечитывание после записи не подменяется идущим запросом', async () => {
+  // Запрос, ушедший ДО записи, ответит тем, что было до неё. Вернув его,
+  // хранилище пометило бы раздел свежим — и экран остался бы врать
+  let answer = 'до записи';
+  let calls = 0;
+  let release;
+  const gate = new Promise((r) => (release = r));
+
+  const store = createStore({
+    games: async () => {
+      calls++;
+      if (calls === 1) await gate;
+      return answer;
+    },
+  });
+
+  const slow = store.load('games');
+  await new Promise((r) => setTimeout(r, 0));
+
+  // Запись прошла, пока первый запрос ещё в пути
+  answer = 'после записи';
+  const fresh = store.invalidate(['games']);
+
+  release();
+  await slow;
+  await fresh;
+
+  assert.strictEqual(calls, 2, 'второй запрос не ушёл');
+  assert.strictEqual(store.get('games').data, 'после записи');
+  assert.strictEqual(store.get('games').status, READY);
+});
+
+test('обычное чтение по-прежнему не плодит второй запрос', async () => {
+  // Щелчок по «Обновить» дважды подряд — обычное дело
+  let calls = 0;
+  const store = createStore({
+    games: async () => {
+      calls++;
+      await new Promise((r) => setTimeout(r, 0));
+      return 'данные';
+    },
+  });
+
+  await Promise.all([store.load('games'), store.load('games'), store.load('games')]);
+  assert.strictEqual(calls, 1);
+});

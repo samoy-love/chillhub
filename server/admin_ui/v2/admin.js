@@ -2200,6 +2200,36 @@
      этого ничего не начинают. */
   window.CH2Flows = { has: (id) => Object.prototype.hasOwnProperty.call(FLOWS, id) };
 
+  /* Из каких разделов хранилища собран каждый экран. Нужно ровно для
+     одного: сказать в самом разделе, что он показывает снимок, а не то,
+     что на сервере. Имена — те, что человек видит в навигации, а не
+     ключи хранилища: «metrics не ответил» ему ничего не говорит. */
+  const SOURCES = {
+    overview: { launcher: 'лаунчер', packs: 'сборки', news: 'новости', inbox: 'обращения', disk: 'диск' },
+    launcher: { launcher: 'версии лаунчера' },
+    packs: { packs: 'сборки модов' },
+    games: { games: 'реестр игр' },
+    news: { news: 'новости' },
+    inbox: { inbox: 'обращения' },
+    maint: { maint: 'технические работы' },
+    errors: { metrics: 'метрики', errors: 'коды ошибок' },
+    transfer: { disk: 'место на диске', cache: 'кэш архивов' },
+  };
+
+  /* Что сказать про свежесть открытого раздела. */
+  function freshness(sectionId) {
+    const map = SOURCES[sectionId] || {};
+    const failed = [];
+    const loading = [];
+    for (const name of Object.keys(map)) {
+      const st = store.get(name);
+      if (!st) continue;
+      if (st.status === window.CH2Store.FAILED) failed.push(map[name]);
+      if (st.status === window.CH2Store.LOADING) loading.push(map[name]);
+    }
+    return V().staleNote(failed, loading);
+  }
+
   /* ---------- Навигация ---------- */
 
   function route() {
@@ -2220,6 +2250,7 @@
         </div>
         ${S.actions ? `<div class="actions">${S.actions}</div>` : ''}
       </div>
+      ${freshness(sec)}
       ${S.render()}`;
 
     document.title = `${S.title} — админ-панель Chill Hub`;
