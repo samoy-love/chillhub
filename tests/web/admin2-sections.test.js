@@ -367,3 +367,72 @@ test('упавшая лента одной игры не уносит остал
   const out = await S.LOADERS.news(api);
   assert.strictEqual(out.length, 2, 'потерялись ленты');
 });
+
+/* ---------- Строка сборки ---------- */
+
+test('собранная версия берётся из списка: отдельным полем её нет', () => {
+  // Раздел показывал пустое место ровно там, где решают «отдать игрокам»
+  const row = S.packRow(
+    {
+      gameId: 'repo',
+      active: '1.9.8',
+      items: [
+        { version: '1.9.9', displayName: 'Moo Modpack', createdAt: '2026-09-01', packages: 17, bytes: 251000000 },
+        { version: '1.9.8', packages: 16 },
+      ],
+    },
+    { gameId: 'repo', title: 'R.E.P.O.' }
+  );
+  assert.strictEqual(row.built, '1.9.9');
+  assert.strictEqual(row.active, '1.9.8');
+  assert.strictEqual(row.pack, 'Moo Modpack');
+  assert.strictEqual(row.mods, 17);
+  assert.strictEqual(row.size, 251000000);
+});
+
+test('«собрано, но не отдано» отличается от «Thunderstore ушёл вперёд»', () => {
+  // Первое закрывается кнопкой, второе — пересборкой
+  const staged = S.packRow({ gameId: 'g', active: '1.0', items: [{ version: '1.1' }] }, {});
+  assert.strictEqual(staged.staged, true);
+  assert.strictEqual(staged.behind, false);
+
+  const behind = S.packRow(
+    { gameId: 'g', active: '1.1', items: [{ version: '1.1' }], updates: [{ latest: '2.0' }] },
+    {}
+  );
+  assert.strictEqual(behind.staged, false);
+  assert.strictEqual(behind.behind, true);
+  assert.strictEqual(behind.latest, '2.0');
+});
+
+test('устаревший пакет — не то же самое, что вышедший вперёд', () => {
+  const row = S.packRow({ gameId: 'g', items: [{ version: '1.0' }], updates: [{ deprecated: true }] }, {});
+  assert.strictEqual(row.deprecated, true);
+  assert.strictEqual(row.behind, false, 'устаревший посчитали за отставший');
+});
+
+test('игра без единой сборки не роняет строку', () => {
+  const row = S.packRow({ gameId: 'fresh', items: [] }, { gameId: 'fresh', title: 'Свежая' });
+  assert.strictEqual(row.built, '');
+  assert.strictEqual(row.staged, false);
+  assert.strictEqual(row.title, 'Свежая');
+});
+
+test('пропавшие пакеты доезжают до строки списком, а не числом', () => {
+  // «Пропущено 2» не говорит, потерялся ли твик текстур или сам модпак
+  const row = S.packRow({ gameId: 'g', items: [{ version: '1.0', missing: ['Ura/Old'] }] }, {});
+  assert.deepStrictEqual(row.missing, ['Ura/Old']);
+});
+
+test('признак «собрано, но не отдано» одинаков у снимка и у ответа сервера', () => {
+  // Два одинаковых условия в разных местах расходятся молча — и как раз
+  // на краях: у игры без сборок и у игры без активной версии
+  const fromServer = S.packRow({ gameId: 'g', active: '1.0', items: [{ version: '1.1' }] }, {});
+  const fromSnapshot = S.packs([{ gameId: 'g', built: '1.1', active: '1.0' }])[0];
+  assert.strictEqual(fromServer.staged, fromSnapshot.staged);
+
+  assert.strictEqual(S.isStaged('', ''), false, 'игра без сборок числится ждущей');
+  assert.strictEqual(S.isStaged('1.0', ''), true, 'первая сборка не считается ждущей');
+  assert.strictEqual(S.isStaged('', '1.0'), false);
+  assert.strictEqual(S.isStaged('1.0', '1.0'), false);
+});

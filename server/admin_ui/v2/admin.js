@@ -149,7 +149,11 @@
       render() {
         const L = D.launcher;
         const behind = D.packs.filter((p) => p.behind || p.deprecated);
-        const staged = D.packs.filter((p) => p.built !== p.active);
+        /* Правило «собрано, но не отдано» одно на панель и лежит в
+           разборе: два одинаковых условия в разных местах расходятся
+           молча, а расходятся они как раз на краях — у игры без единой
+           сборки и у игры без активной версии. */
+        const staged = D.packs.filter((p) => p.staged);
         const unread = D.inbox.filter((f) => f.status === 'new');
         const important = unread.filter((f) => f.important);
         /* Пустая метрика — это «сегодня ещё ничего не случилось», а не
@@ -343,7 +347,7 @@
       render() {
         const p = packOf(game);
         const stale = p.behind || p.deprecated;
-        const staged = p.built !== p.active;
+        const staged = p.staged;
 
         const tabs = D.packs
           .map(

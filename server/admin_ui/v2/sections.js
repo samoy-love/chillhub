@@ -117,6 +117,55 @@
    * и советы по ним противоположные: первый пересобирают, второму ищут
    * замену. Сливать их в «требует внимания» нельзя.
    */
+  /**
+   * Собрано, но игрокам не отдано.
+   *
+   * Правило одно на панель и живёт здесь: два одинаковых условия в
+   * разных местах расходятся молча, а расходятся они как раз на краях —
+   * у игры без единой сборки и у игры, которой ещё ни разу ничего не
+   * активировали.
+   */
+  const isStaged = (built, active) => Boolean(built) && built !== active;
+
+  /**
+   * Строка раздела «Сборки» из ответа `mods/list` по одной игре.
+   *
+   * Ручка отвечает не готовой строкой, а списком версий: `items` со
+   * всеми собранными, `active` с той, что у игроков, и `updates` с
+   * пакетами, которые на Thunderstore успели уйти вперёд. Собранной
+   * версии отдельным полем в ответе нет — она первая в списке
+   * (`ListPublished` отдаёт от новых к старым). Складывать строку
+   * приходится здесь; без этого раздел показывал пустое место ровно
+   * там, где принимается решение «отдать игрокам».
+   */
+  function packRow(raw, game) {
+    const r = raw || {};
+    const list = items(r);
+    const g = game || {};
+    const built = list[0] || {};
+    const updates = Array.isArray(r.updates) ? r.updates : [];
+
+    return {
+      gameId: String(r.gameId || g.gameId || ''),
+      title: String(g.title || r.gameId || g.gameId || ''),
+      pack: String(built.displayName || ''),
+      active: String(r.active || ''),
+      built: String(built.version || ''),
+      builtAt: built.createdAt || '',
+      mods: num(built.packages, 0),
+      size: num(built.bytes, 0),
+
+      /* «Собрано, но не отдано» и «Thunderstore ушёл вперёд» — разные
+         поводы: первое закрывается кнопкой, второе пересборкой. */
+      staged: isStaged(String(built.version || ''), String(r.active || '')),
+      behind: updates.some((u) => u && !u.deprecated),
+      deprecated: updates.some((u) => u && u.deprecated),
+      latest: String((updates[0] && updates[0].latest) || ''),
+      latestAt: '',
+      missing: Array.isArray(built.missing) ? built.missing : [],
+    };
+  }
+
   function packs(raw) {
     return items(raw).map((p) => ({
       gameId: String(pick(p, ['gameId', 'id'], '')),
@@ -134,6 +183,11 @@
          здесь, иначе отрисовка обязана уметь две. */
       latest: String(pick(p, ['latest'], (p && p.upstream && p.upstream.version) || '')),
       latestAt: String(pick(p, ['latestAt'], (p && p.upstream && p.upstream.at) || '')),
+      staged: isStaged(
+        String(pick(p, ['built', 'builtVersion', 'version'], '')),
+        String(pick(p, ['active', 'activeVersion'], ''))
+      ),
+      missing: Array.isArray(p && p.missing) ? p.missing : [],
     }));
   }
 
@@ -411,11 +465,11 @@
         list.map((g) =>
           api
             .modsList(g.gameId)
-            .then((r) => Object.assign({ gameId: g.gameId, title: g.title }, r))
+            .then((r) => packRow(r, g))
             .catch(() => null)
         )
       );
-      return packs({ items: answers.filter(Boolean) });
+      return answers.filter(Boolean);
     },
     /* У каждой игры своя лента, и у лаунчера своя. Спрашивать только
        про лаунчер значит не показать в панели половину написанного:
@@ -445,7 +499,7 @@
 
   return {
     items, pick,
-    launcher, games, packs, news, inbox, filterInbox,
+    launcher, games, packs, packRow, isStaged, news, inbox, filterInbox,
     maintenance, metrics, errors, disk, cache,
     decisions, watch,
     LOADERS,

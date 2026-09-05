@@ -311,3 +311,49 @@ test('битая картинка вне каталога убирается, а
   shot.dispatchEvent(new window.Event('error'));
   assert.strictEqual(shot.hidden, true);
 });
+
+/* ---------- Память о галерее ---------- */
+
+test('оборванный запрос галереи не запоминается как «галереи нет»', async (t) => {
+  // Иначе игра остаётся с пустой витриной до перезагрузки страницы,
+  // хотя связь давно вернулась. Игра взята без запасного кадра: с ним
+  // проверялся бы запасной кадр, а не память об обрыве
+  const { window } = await boot(t, {
+    '/content/peak/gallery/gallery.json': { __throw: true },
+  });
+
+  const api = window.CHILLHUB_API;
+  assert.strictEqual((await api.gallery('peak')).length, 0, 'при обрыве галерея не пуста');
+
+  // Связь вернулась: следующий запрос обязан уйти на сервер, а не в память
+  let asked = 0;
+  window.fetch = async () => {
+    asked++;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ cover: 'cover.jpg', items: [{ file: 'cover.jpg', caption: 'Смена' }] }),
+      text: async () => '',
+    };
+  };
+  const second = await api.gallery('peak');
+  assert.strictEqual(asked, 1, 'повторный запрос не ушёл: обрыв запомнили');
+  assert.strictEqual(second.length, 1);
+});
+
+test('ответ «галереи нет» запоминается: спрашивать второй раз незачем', async (t) => {
+  const { window } = await boot(t, {
+    '/content/bodycam/gallery/gallery.json': { __status: 404 },
+  });
+
+  const api = window.CHILLHUB_API;
+  assert.strictEqual((await api.gallery('bodycam')).length, 0);
+
+  let asked = 0;
+  window.fetch = async () => {
+    asked++;
+    return { ok: false, status: 404, json: async () => ({}), text: async () => '' };
+  };
+  await api.gallery('bodycam');
+  assert.strictEqual(asked, 0, 'стабильный ответ спросили заново');
+});
