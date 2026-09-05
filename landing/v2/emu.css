@@ -54,8 +54,6 @@
 .emu-app { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--e-fg-2); }
 
 .emu-logo { width: 16px; height: 16px; }
-.emu-logo rect { fill: var(--e-accent); }
-.emu-logo path { stroke: #fff; stroke-width: 1.8; stroke-linecap: round; fill: none; }
 
 .emu-win { margin-left: auto; display: flex; gap: 16px; }
 .emu-win i { width: 11px; height: 11px; position: relative; }
