@@ -294,7 +294,7 @@ test('у каждого раздела есть загрузчик, и он зо
   // и без gameId даёт 400. Коды ошибок берутся из сводки — `metrics/errors`
   // отвечает событиями одного кода и без него тоже даёт 400
   assert.deepStrictEqual(called, [
-    'summary', 'launcherVersions', 'games', 'games', 'newsList',
+    'summary', 'launcherVersions', 'games', 'games', 'games', 'newsList',
     'feedbackList', 'maintenanceGet', 'metricsSummary', 'metricsSummary',
     'freeSpace', 'modsCache',
   ]);
@@ -337,4 +337,33 @@ test('игра, ответившая ошибкой, не уносит с соб
   const out = await S.LOADERS.packs(api);
   assert.strictEqual(out.length, 1);
   assert.strictEqual(out[0].gameId, 'b');
+});
+
+test('в разделе новостей видны и лента лаунчера, и ленты игр', async () => {
+  // У каждой игры своя лента: спрашивать только про лаунчер — значит не
+  // показать половину написанного и не дать её править
+  const asked = [];
+  const api = {
+    games: async () => ({ items: [{ gameId: 'repo', title: 'R.E.P.O.' }] }),
+    newsList: async (scope, gameId) => {
+      asked.push(scope + ':' + (gameId || '-'));
+      return { items: [{ slug: (gameId || 'launcher') + '-note', title: 'Заметка' }] };
+    },
+  };
+  const out = await S.LOADERS.news(api);
+  assert.deepStrictEqual(asked, ['launcher:-', 'game:repo']);
+  assert.deepStrictEqual(out.map((n) => n.scope), ['launcher', 'game']);
+  assert.strictEqual(out[1].game, 'repo');
+});
+
+test('упавшая лента одной игры не уносит остальные', async () => {
+  const api = {
+    games: async () => ({ items: [{ gameId: 'a' }, { gameId: 'b' }] }),
+    newsList: async (scope, gameId) => {
+      if (gameId === 'a') throw new Error('нет такой ленты');
+      return { items: [{ slug: 's', title: 'Есть' }] };
+    },
+  };
+  const out = await S.LOADERS.news(api);
+  assert.strictEqual(out.length, 2, 'потерялись ленты');
 });

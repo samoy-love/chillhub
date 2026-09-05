@@ -456,6 +456,7 @@
                     ${g.published ? '' : '<span class="badge badge--warn">скрыта от игроков</span>'}
                   </td>
                   <td class="act">
+                    <button class="btn btn--text" type="button" data-act="edit-game" data-args='{"gameId":"${esc(g.gameId)}"}'>Править</button>
                     <button class="btn btn--text" type="button" data-act="gallery" data-args='{"gameId":"${esc(g.gameId)}"}'>Галерея</button>
                     <button class="btn btn--danger btn--text" type="button" data-act="games.purge" data-args='{"gameId":"${esc(g.gameId)}","title":"${esc(g.title)}"}'>Удалить контент</button>
                   </td>
@@ -500,7 +501,9 @@
     news: {
       title: 'Новости',
       lede: 'То, что игрок читает на главном экране лаунчера.',
-      actions: '<button class="btn btn--accent" type="button" data-act="new-post">Написать</button>',
+      actions:
+        '<button class="btn" type="button" data-act="news.rebuild">Пересобрать индекс</button>' +
+        '<button class="btn btn--accent" type="button" data-act="new-post">Написать</button>',
       render() {
         /* Редактор больше не живёт в разделе: новость набирают минутами,
            и на этот срок ей нужен свой экран, черновик и предпросмотр.
@@ -560,6 +563,7 @@
                 }</td>
                 <td class="dim">${esc(f.at)}</td>
                 <td class="act">
+                  <button class="btn btn--text" type="button" data-act="feedback" data-args='{"id":"${esc(f.id)}"}'>Открыть</button>
                   <button class="btn btn--text" type="button" data-act="inbox.important" data-args='{"id":"${esc(f.id)}","important":${f.important ? 'false' : 'true'}}' title="Пометить важным">${f.important ? '★' : '☆'}</button>
                   <button class="btn btn--text" type="button" data-act="inbox.read" data-args='{"id":"${esc(f.id)}","read":${f.status === 'new' ? 'true' : 'false'}}'>${f.status === 'new' ? 'Отметить прочитанным' : 'Вернуть в новые'}</button>
                   <button class="btn btn--danger btn--text" type="button" data-act="inbox.delete" data-args='{"id":"${esc(f.id)}"}'>Удалить</button>
@@ -581,34 +585,38 @@
       title: 'Технические работы',
       lede: 'Заглушка вместо каталога — у всех игроков сразу.',
       render() {
+        const m = D.maint;
         return `
           <div class="cols cols--55">
             ${card(
               'Режим',
-              `<div class="stack">
+              `<div class="stack" data-maint>
                  <div class="btn-row">
-                   <span class="badge badge--${D.maint.on ? 'bad' : 'ok'}"><span class="dot"></span>${D.maint.on ? 'включены' : 'выключены'}</span>
-                   <span class="faint">${D.maint.on ? 'лаунчер показывает заглушку и не отдаёт сборки' : 'всё работает обычным образом'}</span>
+                   <span class="badge badge--${m.on ? 'bad' : 'ok'}"><span class="dot"></span>${m.on ? 'включены' : 'выключены'}</span>
+                   <span class="faint">${m.on ? 'лаунчер показывает заглушку и не отдаёт сборки' : 'всё работает обычным образом'}</span>
                  </div>
-                 <div class="field">
-                   <label for="mt-msg">Что увидит игрок</label>
-                   <textarea id="mt-msg" rows="3" placeholder="Переносим сборки на новый диск, вернёмся к 21:00 по Москве."></textarea>
-                   <span class="help">Простым языком и с указанием времени. Пустое поле означает общую фразу без подробностей — и поток обращений «а что случилось».</span>
-                 </div>
+                 ${V().maintForm(m)}
                  <div class="btn-row">
                    ${
-                     D.maint.on
-                       ? '<button class="btn btn--accent" type="button" data-act="maint.off">Выключить работы</button>'
+                     m.on
+                       ? '<button class="btn" type="button" data-act="maint.save">Сохранить</button>' +
+                         '<span class="push"></span>' +
+                         '<button class="btn btn--accent" type="button" data-act="maint.off">Выключить работы</button>'
                        : '<button class="btn btn--danger" type="button" data-act="maint.on">Включить работы</button>'
                    }
                  </div>
                </div>`
             )}
             ${card(
-              'Что именно закрывается',
+              'Что происходит с игроком',
               `<div class="stack stack--tight">
-                 <p class="dim">Каталог игр, манифесты сборок и новости перестают отдаваться. Уже скачанные сборки продолжают запускаться: игра стартует локально.</p>
+                 <p class="dim">Каталог игр, манифесты сборок и новости перестают отдаваться. Уже скачанные сборки продолжают запускаться: игра стартует локально — если не закрыть и запуск.</p>
                  <p class="faint">Самообновление лаунчера при включённых работах тоже молчит — иначе клиент уйдёт в цикл проверки версии.</p>
+                 ${
+                   m.on && !m.endsAt
+                     ? '<div class="note note--bad">Окончание не назначено: работы придётся выключать руками. Забытые включёнными — это тихо не работающий лаунчер у всех сразу.</div>'
+                     : ''
+                 }
                </div>`
             )}
           </div>`;
@@ -1410,6 +1418,156 @@
     });
   }
 
+  /* --- Карточка игры --- */
+
+  /* Реестр — это то, что лаунчер читает при старте. Сохраняется он
+     целиком, поэтому правка одной игры уезжает вместе со всем списком:
+     отправить одну строку сервер не умеет, а собирать список из
+     отрисованной таблицы значило бы потерять всё, чего в ней не видно. */
+  function flowGame(where) {
+    const R = window.CH2Registry;
+    const w = where || {};
+    const existing = Boolean(w.gameId);
+
+    const source = D.games.find((g) => g.gameId === w.gameId) || {};
+    let item = {
+      gameId: w.gameId || '',
+      title: source.title || '',
+      exeRelativePath: source.exe || '',
+      steamAppId: source.steamId || '',
+      steamFolder: source.steamFolder || '',
+      iconUrl: source.iconUrl || '',
+      unpublished: source.published === false,
+      existing: existing,
+    };
+
+    const sheet = openSheet({
+      title: existing ? 'Игра: ' + (item.title || item.gameId) : 'Новая игра',
+      lede: 'Это читает лаунчер при старте у каждого игрока. Ошибка здесь ломает запуск сразу у всех.',
+      body: V().gameForm(item, []),
+      foot:
+        (existing
+          ? '<button class="btn btn--danger btn--text" type="button" data-flow="remove">Убрать из реестра</button>'
+          : '') +
+        '<span class="push"></span>' +
+        '<button class="btn btn--accent" type="button" data-flow="save">Сохранить</button>',
+    });
+
+    const read = () => {
+      const q = (n) => sheet.root.querySelector('[name="' + n + '"]');
+      if (!q('title')) return;
+      item = Object.assign({}, item, {
+        gameId: existing ? item.gameId : q('gameId').value.trim(),
+        title: q('title').value,
+        exeRelativePath: q('exeRelativePath').value,
+        steamAppId: q('steamAppId').value,
+        steamFolder: q('steamFolder').value,
+        iconUrl: q('iconUrl').value,
+        unpublished: !q('published').checked,
+      });
+    };
+
+    const draw = (problems) => {
+      sheet.body(V().gameForm(item, problems || []));
+    };
+
+    /* Иконку загружают файлом, но только у существующей игры: сервер
+       кладёт её в каталог манифестов, а того ещё нет. */
+    const iconInput = document.createElement('input');
+    iconInput.type = 'file';
+    iconInput.accept = 'image/*';
+    iconInput.addEventListener('change', async () => {
+      if (!iconInput.files || !iconInput.files[0]) return;
+      try {
+        const got = await API.gamesIconUpload(item.gameId, iconInput.files[0]);
+        item.iconUrl = (got && (got.iconUrl || got.url)) || '/manifests/' + item.gameId + '/icon.png';
+        draw();
+        toast('Иконка загружена', 'ok');
+        await store.invalidate(['games']);
+      } catch (err) {
+        toast('Не загрузилось: ' + window.CH2Api.reason(err), 'bad');
+      }
+    });
+
+    /* Список для сохранения собирается из того, что прочитано с
+       сервера, а не из таблицы на экране: в реестре есть поля, которых
+       таблица не показывает, и собранный из неё список их бы стёр. */
+    const merged = () => {
+      const rows = D.raw.games.slice();
+      const at = rows.findIndex((g) => g.gameId === item.gameId);
+      const row = Object.assign({}, at >= 0 ? rows[at] : {}, {
+        gameId: item.gameId,
+        title: item.title.trim(),
+        exeRelativePath: item.exeRelativePath.trim(),
+        steamAppId: item.steamAppId.trim(),
+        steamFolder: item.steamFolder.trim(),
+        iconUrl: item.iconUrl.trim(),
+        unpublished: item.unpublished,
+      });
+      if (at >= 0) rows[at] = row;
+      else rows.push(row);
+      return R.reorder(rows);
+    };
+
+    sheet.root.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-flow]');
+      if (!b) return;
+      read();
+
+      if (b.dataset.flow === 'icon') {
+        iconInput.click();
+        return;
+      }
+      if (b.dataset.flow === 'icon-default') {
+        item.iconUrl = '';
+        draw();
+        return;
+      }
+
+      if (b.dataset.flow === 'remove') {
+        const agreed = await ask({
+          title: 'Убрать «' + (item.title || item.gameId) + '» из реестра?',
+          body: 'Игра пропадёт из лаунчера. Её манифесты, версии и галерея останутся на диске — удалить их можно отдельно, кнопкой «Удалить контент».',
+          ok: 'Убрать из реестра',
+          cancel: 'Отмена',
+        });
+        if (!agreed) return;
+        try {
+          await API.gamesSave(R.reorder(R.remove(D.raw.games, item.gameId)));
+          toast('Игра убрана из реестра', 'ok');
+          sheet.close();
+          await store.invalidate(['games', 'overview']);
+          route();
+        } catch (err) {
+          toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
+        }
+        return;
+      }
+
+      if (b.dataset.flow !== 'save') return;
+
+      const list = merged();
+      const problems = R.problems(list).filter((p) => p.gameId === item.gameId || !p.gameId);
+      if (problems.length) {
+        draw(problems);
+        toast(problems[0].message, 'warn');
+        return;
+      }
+
+      b.disabled = true;
+      try {
+        await API.gamesSave(list);
+        toast(existing ? 'Сохранено. Лаунчер увидит это при следующем старте.' : 'Игра заведена', 'ok');
+        sheet.close();
+        await store.invalidate(['games', 'overview']);
+        route();
+      } catch (err) {
+        toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
+        b.disabled = false;
+      }
+    });
+  }
+
   /* --- Порядок игр --- */
 
   /* Порядок в реестре — это порядок на витрине у игрока, и лаунчер
@@ -1669,6 +1827,66 @@
     });
   }
 
+  /* --- Обращение целиком --- */
+
+  /* В списке видно первую строку, а починить по ней нельзя. Здесь —
+     весь текст, диагностика с компьютера игрока и то, что с ней можно
+     сделать: ответить письмом, скопировать в задачу, открыть журналы. */
+  function flowFeedback(a) {
+    let item = D.inbox.find((f) => f.id === a.id) || { id: a.id };
+
+    const sheet = openSheet({
+      title: 'Обращение',
+      lede: 'Прислал игрок из лаунчера. Ответить получится не на всё: контакт оставляют по желанию.',
+      body: '<div class="sk" style="height:14rem"></div>',
+      foot: '<span data-fb-actions></span>',
+    });
+
+    const draw = () => {
+      sheet.body(V().feedbackCard(item));
+      const reply = V().replyLink(item);
+      sheet.foot(
+        (reply ? '<a class="btn" href="' + esc(reply) + '">Ответить письмом</a>' : '') +
+          '<button class="btn" type="button" data-flow="copy">Скопировать диагностику</button>' +
+          (item.logBytes
+            ? '<button class="btn" type="button" data-flow="logs">Журналы, ' + esc(bytes(item.logBytes)) + '</button>'
+            : '') +
+          '<span class="push"></span>' +
+          (reply ? '' : '<span class="faint">Контакта нет — ответить некуда</span>')
+      );
+    };
+    draw();
+
+    /* Диагностика приходит только с одним обращением: в списке сервер
+       её не отдаёт, иначе список весил бы мегабайты. */
+    (async () => {
+      try {
+        const got = await API.feedbackGet(a.id);
+        item = Object.assign({}, item, window.CH2Sections.inbox({ items: [got] })[0] || {});
+        draw();
+      } catch {
+        // Список у нас уже есть — покажем хотя бы его
+      }
+    })();
+
+    sheet.root.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-flow]');
+      if (!b) return;
+      if (b.dataset.flow === 'logs') {
+        flowLogs(item);
+        return;
+      }
+      if (b.dataset.flow === 'copy') {
+        try {
+          await navigator.clipboard.writeText(V().diagnosticsText(item));
+          toast('Диагностика скопирована', 'ok');
+        } catch {
+          toast('Браузер не дал скопировать — выделите текст руками', 'warn');
+        }
+      }
+    });
+  }
+
   /* --- События одного кода ошибки --- */
 
   /* Счётчик в таблице говорит, что ломается часто. Кто именно на это
@@ -1836,6 +2054,27 @@
     });
   }
 
+  /* Собирает форму технических работ.
+
+     Пустое окно — это «сразу» и «пока не выключат», а не нулевые даты:
+     сервер отличает отсутствие поля от пустой строки. */
+  function maintPayload(enabled) {
+    const q = (n) => $(`[data-maint] [name="${n}"]`);
+    const val = (n) => (q(n) ? q(n).value : '');
+    const on = (n) => Boolean(q(n) && q(n).checked);
+
+    const out = {
+      enabled: Boolean(enabled),
+      reason: val('reason').trim(),
+      blocks: { install: on('install'), update: on('update'), launch: on('launch') },
+    };
+    const from = V().isoTime(val('startsAt'));
+    const to = V().isoTime(val('endsAt'));
+    if (from) out.startsAt = from;
+    if (to) out.endsAt = to;
+    return out;
+  }
+
   /** Дела, которые панель ведёт сама. Записи в реестре действий — отдельно. */
   const FLOWS = {
     upload: () => flowUpload({ kind: 'launcher' }),
@@ -1848,10 +2087,12 @@
     'new-post': () => flowNews({}),
     'edit-post': (a) => flowNews(a),
     gallery: (a) => flowGallery(a.gameId || (D.games[0] && D.games[0].gameId) || ''),
-    'new-game': () => flowOrder(),
+    'new-game': () => flowGame({}),
+    'edit-game': (a) => flowGame(a),
     order: () => flowOrder(),
     ecosystem: () => flowEcosystem(),
     logs: (a) => flowLogs(a),
+    feedback: (a) => flowFeedback(a),
     bench: () => flowBench(),
   };
 
@@ -1923,6 +2164,18 @@
           args = b.dataset.args ? JSON.parse(b.dataset.args) : {};
         } catch {
           args = {};
+        }
+
+        /* Технические работы собираются формой прямо в разделе: у них
+           есть причина, окно и набор блоков, и кнопкой без них
+           обошлась бы только заглушка без объяснения. */
+        if (id === 'maint.on' || id === 'maint.save') {
+          args.payload = maintPayload(true);
+          const problem = V().maintProblem(args.payload);
+          if (problem) {
+            toast(problem, 'warn');
+            return;
+          }
         }
 
         /* Длинные дела панель ведёт сама: у них свой лист, свой ход и
@@ -2093,6 +2346,16 @@
      не выдаёт снимок за прод. */
   const store = window.CH2Store.createStore(window.CH2Sections.LOADERS, { api: API });
 
+  /* Ответ реестра без разбора. Неудача — пустой список, а не падение:
+     без него нельзя только править игру, всё остальное работает. */
+  async function rawGames() {
+    try {
+      return await API.games();
+    } catch {
+      return { items: [] };
+    }
+  }
+
   async function collect() {
     await store.loadAll();
     const demo = await window.CHILLHUB_DATA.load();
@@ -2120,6 +2383,11 @@
       disk: val('disk', demo.disk, S.disk),
       cache: val('cache', demo.cache, S.cache),
     };
+
+    /* Реестр целиком, как он лежит на сервере. Правка игры уезжает
+       вместе со всем списком, а в списке есть поля, которых таблица не
+       показывает: собранный из неё список их бы стёр. */
+    data.raw = { games: window.CH2Sections.items(await rawGames()) };
     return data;
   }
 

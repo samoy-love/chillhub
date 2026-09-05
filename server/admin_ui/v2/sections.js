@@ -169,6 +169,11 @@
       status: String(pick(f, ['status'], 'new')),
       important: Boolean(f && f.important),
       logBytes: num(pick(f, ['logBytes'], 0), 0),
+
+      /* Диагностика: версия клиента, система, место на диске. В списке
+         сервер её не присылает — она приходит с одним обращением. Без
+         неё «у меня не качается» остаётся без единой зацепки. */
+      system: (f && f.system) || null,
     }));
   }
 
@@ -198,6 +203,11 @@
     return {
       on: r.enabled === true,
       reason: String(r.reason || ''),
+      /* Окно работ: сервер понимает RFC3339 и умеет закончить работы
+         сам. Без него выключать приходится руками, а забытые включённые
+         работы — это тихо не работающий лаунчер у всех сразу. */
+      startsAt: String(r.startsAt || ''),
+      endsAt: String(r.endsAt || ''),
       blocks: {
         install: blocks.install !== false,
         update: blocks.update !== false,
@@ -407,9 +417,26 @@
       );
       return packs({ items: answers.filter(Boolean) });
     },
-    news: (api) => api.newsList('launcher', '').then((r) => news(r, '')),
+    /* У каждой игры своя лента, и у лаунчера своя. Спрашивать только
+       про лаунчер значит не показать в панели половину написанного:
+       новости игр были бы не видны и не правились вовсе. */
+    news: async (api) => {
+      const list = games(await api.games());
+      const feeds = await Promise.all(
+        [{ gameId: '' }].concat(list).map((g) =>
+          api
+            .newsList(g.gameId ? 'game' : 'launcher', g.gameId)
+            .then((r) => news(r, g.gameId))
+            .catch(() => [])
+        )
+      );
+      return feeds.flat();
+    },
     inbox: (api) => api.feedbackList().then(inbox),
-    maint: (api) => api.maintenanceGet().then(maintenance),
+    /* Ответ админской ручки — это {state, effective, path}: сохранённое
+       состояние и то, что из него следует прямо сейчас. Читать надо
+       state, иначе окно работ, ещё не наступившее, выглядит выключенным. */
+    maint: (api) => api.maintenanceGet().then((r) => maintenance((r && (r.state || r)) || r)),
     metrics: (api) => api.metricsSummary().then(metrics),
     errors: (api) => api.metricsSummary().then(errors),
     disk: (api) => api.freeSpace().then(disk),

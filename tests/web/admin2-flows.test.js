@@ -77,7 +77,11 @@ async function boot(routes) {
     } else if (raw) {
       body = raw;
     }
-    calls.push({ method, url: u, body });
+    /* Транспорт перекладывает заголовки в Headers, добавляя CSRF, —
+       читаем оба вида, иначе тип тела теряется на ровном месте. */
+    const h = init && init.headers;
+    const type = (h && (typeof h.get === 'function' ? h.get('content-type') : h['content-type'])) || '';
+    calls.push({ method, url: u, body, type });
 
     /* Манифесты сборок раздаются публично, а не через админ-API: их
        адрес не начинается с префикса, и подменяются они отдельно. */
@@ -428,7 +432,7 @@ test('пока порядок не менялся, сохранять нечег
   const { window } = await boot();
   t.after(() => window.close());
 
-  const sheet = await open(window, '#games', 'new-game');
+  const sheet = await open(window, '#games', 'order');
   const save = sheet.querySelector('[data-flow="save"]');
   assert.ok(save.disabled, 'предложено сохранить неизменённый порядок');
   assert.match(text(sheet.querySelector('footer')), /сохранять нечего/);
@@ -438,7 +442,7 @@ test('перестановка называет последствие и ухо
   const { window, calls } = await boot();
   t.after(() => window.close());
 
-  const sheet = await open(window, '#games', 'new-game');
+  const sheet = await open(window, '#games', 'order');
   sheet.querySelector('[data-down="repo"]').click();
 
   assert.match(text(sheet.querySelector('footer')), /Игроки увидят новый порядок сразу/);
@@ -540,4 +544,151 @@ test('подчищенный старый манифест не выдаётся
   assert.ok(box, 'ничего не сказано про разницу');
   assert.match(text(box), /Сравнить не с чем/);
   assert.match(text(box), /старые подчищаются/);
+});
+
+/* ---------- Технические работы ---------- */
+
+test('работы уходят на сервер с причиной, окном и блоками', async (t) => {
+  // Кнопка без них отдала бы игрокам заглушку без единого слова
+  const { window, calls } = await boot();
+  t.after(() => window.close());
+
+  window.location.hash = '#maint';
+  await until(() => window.document.querySelector('[name="reason"]'));
+
+  const set = (name, value) => {
+    const el = window.document.querySelector(`[data-maint] [name="${name}"]`);
+    el.value = value;
+  };
+  set('reason', 'Переносим сборки, вернёмся к 21:00');
+  set('endsAt', '2030-01-01T21:00');
+  window.document.querySelector('[data-maint] [name="launch"]').checked = false;
+
+  window.document.querySelector('[data-act="maint.on"]').click();
+  const modal = await until(() => window.document.querySelector('.modal'));
+  modal.querySelector('[data-yes]').click();
+
+  await until(() => calls.some((c) => c.url.includes('maintenance/set')));
+  const sent = calls.find((c) => c.url.includes('maintenance/set'));
+
+  // Ручка разбирает именно JSON: форма для неё — «invalid json body»
+  assert.match(sent.type || '', /json/);
+  assert.strictEqual(sent.body.enabled, true);
+  assert.match(sent.body.reason, /вернёмся к 21:00/);
+  assert.strictEqual(sent.body.blocks.launch, false);
+  assert.match(sent.body.endsAt, /^\d{4}-\d{2}-\d{2}T/);
+  await settle();
+});
+
+test('работы, которые ничего не закрывают, на сервер не уходят', async (t) => {
+  const { window, calls } = await boot();
+  t.after(() => window.close());
+
+  window.location.hash = '#maint';
+  await until(() => window.document.querySelector('[name="reason"]'));
+  for (const n of ['install', 'update', 'launch']) {
+    window.document.querySelector(`[data-maint] [name="${n}"]`).checked = false;
+  }
+  window.document.querySelector('[data-act="maint.on"]').click();
+
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(!calls.some((c) => c.url.includes('maintenance/set')), 'пустые работы ушли на сервер');
+  assert.match(text(window.document.querySelector('.toast')), /ничего и не делают/);
+});
+
+test('окно с концом раньше начала не доходит до сервера', async (t) => {
+  const { window, calls } = await boot();
+  t.after(() => window.close());
+
+  window.location.hash = '#maint';
+  await until(() => window.document.querySelector('[name="reason"]'));
+  window.document.querySelector('[data-maint] [name="startsAt"]').value = '2030-01-01T20:00';
+  window.document.querySelector('[data-maint] [name="endsAt"]').value = '2030-01-01T10:00';
+  window.document.querySelector('[data-act="maint.on"]').click();
+
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(!calls.some((c) => c.url.includes('maintenance/set')));
+  assert.match(text(window.document.querySelector('.toast')), /позже начала/);
+});
+
+/* ---------- Карточка игры ---------- */
+
+test('игру можно править: поля открываются с тем, что в реестре', async (t) => {
+  // В панели 2.0 реестр какое-то время был таблицей только на чтение
+  const { window } = await boot();
+  t.after(() => window.close());
+
+  window.location.hash = '#games';
+  const btn = await until(() => window.document.querySelector('[data-act="edit-game"]'));
+  btn.click();
+  const sheet = await until(() => window.document.querySelector('.sheet'));
+
+  assert.strictEqual(sheet.querySelector('[name="gameId"]').value, 'repo');
+  assert.strictEqual(sheet.querySelector('[name="title"]').value, 'R.E.P.O.');
+  assert.strictEqual(sheet.querySelector('[name="exeRelativePath"]').value, 'REPO.exe');
+  // Идентификатор уже стал именем папки — править его нельзя
+  assert.ok(sheet.querySelector('[name="gameId"]').hasAttribute('readonly'));
+});
+
+test('правка уезжает всем реестром, не теряя чужих полей', async (t) => {
+  // Сервер принимает список целиком, а в строках есть поля, которых
+  // таблица не показывает
+  const { window, calls } = await boot({
+    games: {
+      items: [
+        { gameId: 'repo', title: 'R.E.P.O.', exeRelativePath: 'REPO.exe', order: 0, mods: { enabled: true }, secretField: 'не трогать' },
+        { gameId: 'peak', title: 'PEAK', exeRelativePath: 'PEAK.exe', order: 1 },
+      ],
+    },
+  });
+  t.after(() => window.close());
+
+  window.location.hash = '#games';
+  (await until(() => window.document.querySelector('[data-act="edit-game"]'))).click();
+  const sheet = await until(() => window.document.querySelector('.sheet'));
+
+  sheet.querySelector('[name="title"]').value = 'R.E.P.O. (новое)';
+  sheet.querySelector('[data-flow="save"]').click();
+  await until(() => calls.some((c) => c.url.includes('games/save')));
+
+  const saved = calls.find((c) => c.url.includes('games/save'));
+  const rows = saved.body.items;
+  assert.strictEqual(rows.length, 2, 'вторая игра пропала из реестра');
+  assert.strictEqual(rows[0].title, 'R.E.P.O. (новое)');
+  assert.strictEqual(rows[0].secretField, 'не трогать', 'стёрлось поле, которого не видно в таблице');
+  await settle();
+});
+
+test('игра без исполняемого файла на сервер не уходит', async (t) => {
+  // Запускать её было бы нечем, а ошибка вылезла бы у игрока
+  const { window, calls } = await boot();
+  t.after(() => window.close());
+
+  window.location.hash = '#games';
+  (await until(() => window.document.querySelector('[data-act="edit-game"]'))).click();
+  const sheet = await until(() => window.document.querySelector('.sheet'));
+
+  sheet.querySelector('[name="exeRelativePath"]').value = '';
+  sheet.querySelector('[data-flow="save"]').click();
+
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(!calls.some((c) => c.url.includes('games/save')), 'игра без exe ушла на сервер');
+  assert.match(text(window.document.querySelector('.toast')), /исполняемый файл/);
+});
+
+test('новая игра проверяется по тем же правилам, но с открытым именем', async (t) => {
+  const { window, calls } = await boot();
+  t.after(() => window.close());
+
+  const sheet = await open(window, '#games', 'new-game');
+  assert.ok(!sheet.querySelector('[name="gameId"]').hasAttribute('readonly'));
+
+  sheet.querySelector('[name="gameId"]').value = 'ПлохойID';
+  sheet.querySelector('[name="title"]').value = 'Игра';
+  sheet.querySelector('[name="exeRelativePath"]').value = 'game.exe';
+  sheet.querySelector('[data-flow="save"]').click();
+
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(!calls.some((c) => c.url.includes('games/save')));
+  assert.match(text(window.document.querySelector('.toast')), /латиницу в нижнем регистре/);
 });

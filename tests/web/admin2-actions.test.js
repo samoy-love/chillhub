@@ -40,6 +40,7 @@ const SAFE = [
   'inbox.important',
   'inbox.read',
   'maint.off',
+  'maint.save',
   'cache.sweep',
 ];
 

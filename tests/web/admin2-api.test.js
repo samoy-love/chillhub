@@ -346,7 +346,7 @@ test('две ручки, которые разбирают именно JSON, п
 
 test('список ручек с JSON закрыт: остальным JSON не годится', () => {
   // Он же документация контракта — расширять его можно только по коду сервера
-  assert.deepStrictEqual([...A.JSON_BODY].sort(), ['games/save', 'upload/init']);
+  assert.deepStrictEqual([...A.JSON_BODY].sort(), ['games/save', 'maintenance/set', 'upload/init']);
 });
 
 test('длинный текст в адрес не лезет, но телом уезжает целиком', async () => {
