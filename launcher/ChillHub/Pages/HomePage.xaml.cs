@@ -67,6 +67,16 @@ namespace ChillHub.Pages {
         // Что набрано в поиске. Поле живёт в шапке окна, строка — здесь.
         private string searchQuery = string.Empty;
 
+        // Ворота короткоживущих индикаторов: проверка файлов на быстрой машине занимает
+        // полсотни миллисекунд, и полоса внизу успевала мигнуть — человек видел вспышку,
+        // а не статус. См. Core.UI.BusyGate.
+        private Core.UI.BusyGate? bottomBarGate;
+
+        private Core.UI.BusyGate? verifyIndicatorGate;
+
+        // Своё окно у каждой заглушки: каталог и две ленты новостей едут независимо.
+        private readonly Dictionary<UIElement, Core.UI.BusyGate> skeletonGates = new();
+
         // Идёт удаление локальных файлов игры: блокирует повторный запуск и установку
 
         /// <summary>
@@ -467,7 +477,7 @@ namespace ChillHub.Pages {
         private async Task LoadInitialAsync() {
             try {
                 // Показ скелетонов по секциям: Игры видимые, список скрыт до загрузки
-                this.GamesSkeleton.Visibility = System.Windows.Visibility.Visible;
+                this.ShowSkeleton(this.GamesSkeleton, true);
                 this.GameList.Visibility = System.Windows.Visibility.Collapsed;
 
                 // Проверка доступа к папке для игр и предложение выбрать другую при отсутствии прав
@@ -528,7 +538,7 @@ namespace ChillHub.Pages {
                         }
 
                         // Скелетоны -> список
-                        this.GamesSkeleton.Visibility = System.Windows.Visibility.Collapsed;
+                        this.ShowSkeleton(this.GamesSkeleton, false);
                         this.GameList.Visibility = System.Windows.Visibility.Visible;
 
                         // Отметки «Играет» — на новых объектах списка: подпись живёт в
@@ -632,7 +642,7 @@ namespace ChillHub.Pages {
             try {
                 this.games = new List<GameInfo>();
                 this.SetGamesSource();
-                this.GamesSkeleton.Visibility = System.Windows.Visibility.Collapsed;
+                this.ShowSkeleton(this.GamesSkeleton, false);
                 this.GameList.Visibility = System.Windows.Visibility.Collapsed;
                 this.GamesEmptyState.Visibility = System.Windows.Visibility.Visible;
 
@@ -704,11 +714,11 @@ namespace ChillHub.Pages {
             try {
                 this.HideServerUnavailableState();
                 this.StatusText.Text = "Пробуем связаться с сервером…";
-                this.GamesSkeleton.Visibility = System.Windows.Visibility.Visible;
+                this.ShowSkeleton(this.GamesSkeleton, true);
                 this.GameList.Visibility = System.Windows.Visibility.Collapsed;
-                this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Visible;
+                this.ShowSkeleton(this.GameNewsSkeleton, true);
                 this.GameNewsEmptyState.Visibility = System.Windows.Visibility.Collapsed;
-                this.LauncherNewsSkeleton.Visibility = System.Windows.Visibility.Visible;
+                this.ShowSkeleton(this.LauncherNewsSkeleton, true);
                 this.LauncherNewsEmptyState.Visibility = System.Windows.Visibility.Collapsed;
                 await this.LoadInitialAsync();
             }
@@ -725,8 +735,38 @@ namespace ChillHub.Pages {
         /// </summary>
         /// <param name="running">Проверка идёт.</param>
         private void ShowGamesVerifyIndicator(bool running) {
-            this.GamesVerifyIndicator.IsIndeterminate = running;
-            this.GamesVerifyIndicator.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+            this.verifyIndicatorGate ??= new Core.UI.BusyGate(shown => {
+                this.GamesVerifyIndicator.IsIndeterminate = shown;
+                this.GamesVerifyIndicator.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
+            });
+
+            // Через ворота: проверка нескольких игр по кешу заканчивается быстрее, чем
+            // полоска успевает прорисоваться, и в заголовке сайдбара дёргалась пустота.
+            this.verifyIndicatorGate.Set(running);
+        }
+
+        /// <summary>
+        /// Показывает или прячет заглушку через ворота.
+        /// <para>
+        /// Каталог и новости часто приходят из кеша мгновенно, и заглушка успевала лишь
+        /// мигнуть — а обещание у неё ровно обратное: пока данные едут, окно не прыгает.
+        /// Мигнувшая заглушка сама и есть прыжок.
+        /// </para>
+        /// <para>
+        /// Заглушка лежит в разметке ПОД настоящим списком, поэтому задержка на её
+        /// сокрытие ничего не загораживает: пришедший список накрывает её сам.
+        /// </para>
+        /// </summary>
+        /// <param name="skeleton">Заглушка.</param>
+        /// <param name="show">Показать.</param>
+        private void ShowSkeleton(UIElement skeleton, bool show) {
+            if (!this.skeletonGates.TryGetValue(skeleton, out var gate)) {
+                gate = new Core.UI.BusyGate(
+                    shown => skeleton.Visibility = shown ? Visibility.Visible : Visibility.Collapsed);
+                this.skeletonGates[skeleton] = gate;
+            }
+
+            gate.Set(show);
         }
 
         // --- Фактическая проверка статуса игры по манифесту (полное сравнение) ---
@@ -1064,7 +1104,7 @@ namespace ChillHub.Pages {
         private void BeginGameNewsLoading() {
             try {
                 this.GameNewsList.ItemsSource = Array.Empty<NewsItem>();
-                this.GameNewsSkeleton.Visibility = Visibility.Visible;
+                this.ShowSkeleton(this.GameNewsSkeleton, true);
                 this.GameNewsList.Visibility = Visibility.Collapsed;
                 this.GameNewsEmptyState.Visibility = Visibility.Collapsed;
             }
@@ -1103,7 +1143,7 @@ namespace ChillHub.Pages {
 
         private async Task ReloadLauncherNewsAsync() {
             try {
-                this.LauncherNewsSkeleton.Visibility = System.Windows.Visibility.Visible;
+                this.ShowSkeleton(this.LauncherNewsSkeleton, true);
                 this.LauncherNewsList.Visibility = System.Windows.Visibility.Collapsed;
                 this.LauncherNewsEmptyState.Visibility = System.Windows.Visibility.Collapsed;
                 var newsUrl = HomeFeed.LauncherNewsUrl(this.BaseApi);
@@ -1130,7 +1170,7 @@ namespace ChillHub.Pages {
             }
 
             try {
-                this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Visible;
+                this.ShowSkeleton(this.GameNewsSkeleton, true);
                 this.GameNewsList.Visibility = System.Windows.Visibility.Collapsed;
                 this.GameNewsEmptyState.Visibility = System.Windows.Visibility.Collapsed;
                 // Ленты у игры может не быть вовсе — тогда раздел просто пустой,
@@ -1157,7 +1197,7 @@ namespace ChillHub.Pages {
         /// </summary>
         private void ShowGameNews(IReadOnlyList<NewsItem> items) {
             this.GameNewsList.ItemsSource = items;
-            this.GameNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
+            this.ShowSkeleton(this.GameNewsSkeleton, false);
 
             var empty = items.Count == 0;
             this.GameNewsList.Visibility = empty ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;
@@ -1172,7 +1212,7 @@ namespace ChillHub.Pages {
         /// <param name="items">Новости лаунчера.</param>
         private void ShowLauncherNews(IReadOnlyList<NewsItem> items) {
             this.LauncherNewsList.ItemsSource = items;
-            this.LauncherNewsSkeleton.Visibility = System.Windows.Visibility.Collapsed;
+            this.ShowSkeleton(this.LauncherNewsSkeleton, false);
 
             var empty = items.Count == 0;
             this.LauncherNewsList.Visibility = empty ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;
@@ -1576,7 +1616,7 @@ namespace ChillHub.Pages {
                 // пустым, хотя данные на нём были верные.
                 var firstFill = this.games == null || this.games.Count == 0;
                 if (firstFill) {
-                    this.GamesSkeleton.Visibility = Visibility.Visible;
+                    this.ShowSkeleton(this.GamesSkeleton, true);
                     this.GameList.Visibility = Visibility.Collapsed;
                 }
 
@@ -1635,7 +1675,7 @@ namespace ChillHub.Pages {
             finally {
                 // finally выполняется без внешнего try: любой сбой здесь уронил бы async void-обработчик
                 try {
-                    this.GamesSkeleton.Visibility = Visibility.Collapsed;
+                    this.ShowSkeleton(this.GamesSkeleton, false);
 
                     // Список показываем только если не активно пустое состояние «сервер недоступен»
                     if (this.GamesEmptyState.Visibility != Visibility.Visible) {
@@ -2175,7 +2215,20 @@ namespace ChillHub.Pages {
                     this.SpeedEtaText.Text,
                     this.FilesSizeText.Text);
 
-                this.BottomBar.Visibility = Shown(look.Panel);
+                // Очередь загрузок появляется сразу и висит минутами — задерживать её
+                // незачем. А статус проверки живёт доли секунды, и без ворот панель
+                // мигала: см. Core.UI.BusyGate.
+                this.bottomBarGate ??= new Core.UI.BusyGate(
+                    shown => this.BottomBar.Visibility = Shown(shown));
+
+                var queueVisible = this.QueuePanel.Visibility == Visibility.Visible;
+                if (queueVisible) {
+                    this.bottomBarGate.Force(look.Panel);
+                }
+                else {
+                    this.bottomBarGate.Set(look.Panel);
+                }
+
                 this.UpdateProgress.Visibility = Shown(look.Progress);
                 this.StatusText.Visibility = Shown(look.Status);
                 this.SpeedEtaText.Visibility = Shown(look.SpeedEta);
