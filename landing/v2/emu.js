@@ -160,8 +160,15 @@
       </div>`;
   }
 
+  // Тот же знак, что у настоящего лаунчера: он собирается из
+  // scripts/icon/geometry.mjs, поэтому правится в одном месте.
   const logo = () =>
-    `<svg class="emu-logo" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6"/><path d="M7 8h10M7 12h6M7 16h8"/></svg>`;
+    `<svg class="emu-logo" viewBox="0 0 32 32" aria-hidden="true">` +
+    `<rect x="0" y="0" width="32" height="32" rx="5" fill="#d1663c"/>` +
+    `<rect x="2" y="2" width="28" height="28" rx="3" fill="#2a1a12"/>` +
+    `<rect x="6" y="8" width="20" height="4" fill="#e5825b"/>` +
+    `<rect x="6" y="14" width="14" height="4" fill="#e5825b"/>` +
+    `<rect x="6" y="20" width="9" height="4" fill="#e5825b"/></svg>`;
 
   function header() {
     return `
