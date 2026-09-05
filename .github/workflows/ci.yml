@@ -57,6 +57,64 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # ЧТО ЗАДЕТО — ЧТОБЫ НЕ БУДИТЬ WINDOWS-МАШИНУ РАДИ ПРАВКИ В JS.
+  #
+  # Задания `C# (launcher)` и `Installer (NSIS)` идут на единственном
+  # собственном Windows-раннере: параллелить их не на чем, они выстраиваются в
+  # очередь, и их суммарное время — это и есть время всего прогона. При этом
+  # четыре из последних десяти PR не трогали ни строчки .NET: правки админки,
+  # лендинга и веб-тестов ждали сборку установщика, которая не могла измениться
+  # ни при каких обстоятельствах.
+  #
+  # Отбор стоит около двадцати секунд на ubuntu и отдаёт их обратно сотнями.
+  #
+  # СПИСОК ОБЯЗАН ПОКРЫВАТЬ ВСЁ, ЧТО ЧИТАЮТ ОБА ЗАДАНИЯ, и с запасом: цена
+  # лишнего прогона — минуты, цена пропущенного — регрессия, уехавшая в релиз.
+  # Поэтому `launcher/` и `scripts/` взяты целиком, а не разобраны по файлам
+  # (в отличие от гейта версии ниже, где точность решает, требовать ли релиз).
+  # Сюда же .editorconfig и Directory.Build.props: они меняют набор
+  # анализаторов, а сборка идёт с TreatWarningsAsErrors.
+  #
+  # Отсутствие базы для сравнения — не «ничего не задето», а «сравнивать не с
+  # чем»: отвечаем «задето всё». Пропустить проверку молча дороже, чем
+  # прогнать её зря.
+  changes:
+    name: Что затронул PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      dotnet: ${{ steps.f.outputs.dotnet }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Полная история: база PR бывает старше пары коммитов, и при мелкой
+          # глубине её объекта в клоне просто нет.
+          fetch-depth: 0
+      - id: f
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.sha }}"
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "базы для сравнения нет (ручной запуск?) — считаем, что задето всё"
+            echo "dotnet=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          FILES="$(git diff --name-only "$BASE" "$HEAD")"
+          echo "изменённые файлы:"
+          echo "$FILES" | sed 's/^/  /'
+
+          if echo "$FILES" | grep -qE '^(launcher/|updater/|scripts/|Directory\.Build\.props$|\.editorconfig$|\.gitattributes$|\.github/workflows/ci\.yml$)'; then
+            echo "dotnet=true" >> "$GITHUB_OUTPUT"
+            echo "→ клиент задет: сборка и установщик прогоняются"
+          else
+            echo "dotnet=false" >> "$GITHUB_OUTPUT"
+            echo "→ клиент не задет: сборка и установщик пропускаются"
+          fi
+
   # Соглашение из CLAUDE.md, проверяемое машиной.
   #
   # Записанного правила оказалось мало: трейлер `Co-Authored-By: Claude` уехал
@@ -481,6 +539,11 @@ jobs:
 
   dotnet-lint:
     name: C# (launcher)
+    needs: changes
+    # Пропуск засчитывается защите ветки как успех, поэтому обязательной
+    # проверкой задание быть не перестаёт — оно просто не запускается там,
+    # где проверять нечего.
+    if: needs.changes.outputs.dotnet == 'true'
     # Свои ветки собираются на собственном Windows-раннере, форк-PR — на
     # GitHub-hosted. Метка win-builder есть только у нашей машины, поэтому
     # чужой код до неё физически не доедет даже при ошибочном одобрении:
@@ -489,14 +552,35 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Setup .NET
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          dotnet-version: '8.0.x'
-          cache: true
-          cache-dependency-path: |
-            **/*.csproj
-            **/packages.lock.json
+      # SETUP-DOTNET ЗДЕСЬ НЕТ НАМЕРЕННО.
+      #
+      # SDK 8.0.424 стоит в самом образе собственного раннера, и действие
+      # только подтверждало это: «.NET Core SDK with version '8.0.424' is
+      # already installed» и 31 секунда в среднем на задание.
+      #
+      # Дороже обходилось другое — действие сначала надо СКАЧАТЬ. Канал этого
+      # раннера наружу заметно у́же, чем у GitHub-hosted, и загрузка репозитория
+      # действия занимала от 26 секунд до 200 (со срабатыванием стосекундного
+      # таймаута и повтором). Время это попадало в шаг «Set up job», где его
+      # никто не искал: по журналу видно только «Download action repository».
+      # Спрятать действие под `if:` нельзя — раннер скачивает все `uses:`
+      # задания разом, до первого шага, поэтому убирается оно целиком.
+      #
+      # Вместе с ним ушёл и кэш NuGet: раннер постоянный, пакеты и так лежат
+      # между заданиями, а actions/cache гонял их по тому же узкому каналу —
+      # 90 секунд на сохранение того, что никуда не девалось с диска.
+      #
+      # Взамен — явная проверка. Без неё пропавший SDK проявился бы как
+      # «dotnet: command not found» посреди сборки, а на форк-PR (windows-latest,
+      # SDK из образа GitHub) — как непонятное расхождение версий.
+      - name: Проверить .NET 8 SDK на раннере
+        shell: pwsh
+        run: |
+          $sdks = dotnet --list-sdks
+          $sdks
+          if (-not ($sdks | Select-String -Pattern '^8\.0\.')) {
+            throw ".NET 8 SDK на раннере нет: он должен приезжать с образом машины, а не ставиться прогоном"
+          }
       - name: Restore
         working-directory: launcher/ChillHub
         run: dotnet restore
@@ -552,81 +636,77 @@ jobs:
         #   ManifestPreserveCheck.exe <путь-к-content/manifests/launcher>
         run: dotnet run --project updater/tests/ManifestPreserveCheck -c Release
 
-  # Раньше это были четыре последовательных шага `dotnet format` внутри
-  # dotnet-lint: launcher/ChillHub, launcher/tests/ChillHub.Tests, updater,
-  # updater/tests/ManifestPreserveCheck. Каждый шаг — самостоятельная проверка
-  # своего проекта, ни один не зависит от результата другого и не зависит от
-  # build/test выше в dotnet-lint (dotnet format сам restore'ит, что нужно).
-  # Четыре independent checks одна за другой — это просто последовательно
-  # потраченное время раннера. Матрица гоняет их параллельно, и красный один
-  # раз в матрице отмечает конкретный проект, а не общий шаг в длинном логе.
+  # Четыре проверки стиля — по одной на проект: launcher/ChillHub,
+  # launcher/tests/ChillHub.Tests, updater, updater/tests/ManifestPreserveCheck.
+  # Ни одна не зависит от результата другой и от build/test в dotnet-lint тоже
+  # не зависит: dotnet format сам restore'ит, что ему нужно. Матрица гоняет их
+  # параллельно, и красный один раз в матрице отмечает конкретный проект, а не
+  # общий шаг в длинном логе.
   format:
     name: dotnet format (${{ matrix.project }})
-    # Свои ветки собираются на собственном Windows-раннере, форк-PR — на
-    # GitHub-hosted. Метка win-builder есть только у нашей машины, поэтому
-    # чужой код до неё физически не доедет даже при ошибочном одобрении:
-    # для форка выражение вычисляется в windows-latest.
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'windows-latest' || 'win-builder' }}
+    # LINUX, А НЕ WINDOWS — И ЭТО НЕ УСТУПКА.
+    #
+    # Проверка стиля читает исходники, а не собирает WPF. net8.0-windows
+    # восстанавливается на Linux штатным ключом EnableWindowsTargeting, и
+    # dotnet format видит ровно тот же код и те же анализаторы.
+    #
+    # Пока матрица стояла на собственном Windows-раннере, она стоила дороже
+    # всего остального вместе взятого — не работой, а входом. Машина одна,
+    # поэтому четыре задания выстраивались в очередь друг за другом, и каждое
+    # платило за подготовку больше, чем за саму проверку: 9 секунд
+    # dotnet format против минуты подготовки. По шестнадцати прогонам это
+    # 296 секунд из 619 — почти половина всего времени CI уходила на проверку
+    # стиля, которой Windows не нужен вовсе.
+    #
+    # На ubuntu-latest раннеров столько, сколько нужно: матрица идёт
+    # параллельно и целиком укладывается в тень остальных задач.
+    #
+    # Переносимость держится на .gitattributes: `*.cs`/`*.xaml` прибиты к
+    # `eol=crlf`, поэтому и на Linux в рабочем дереве оказывается CRLF,
+    # которого требует .editorconfig. Без этого шаг увидел бы тысячи
+    # фантомных ENDOFLINE-диффов.
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        # cache задаётся ПОПРОЕКТНО, а не одним `cache: true` на всю матрицу.
-        #
-        # У updater и его теста НОЛЬ PackageReference. Восстанавливать им
-        # нечего, поэтому C:\Users\runneradmin\.nuget\packages не создаётся
-        # никогда — а post-шаг setup-dotnet идёт сохранять кеш этой папки и
-        # падает: «Cache folder path is retrieved for .NET CLI but doesn't
-        # exist on disk». Проверка при этом зелёная, красный — уже уборка
-        # после неё.
-        #
-        # Почему это вылезало не всегда: ключ кеша считается по
-        # cache-dependency-path, то есть по всем *.csproj репозитория. Пока
-        # csproj не менялись, кеш попадал, папку создавало восстановление, и
-        # post-шаг проходил. Любая правка csproj — прежде всего ПОДЪЁМ ВЕРСИИ
-        # ЛАУНЧЕРА — сбрасывает ключ, восстанавливать становится нечего, и обе
-        # updater-задачи краснеют. Отсюда закономерность: релизные PR (#90,
-        # #93) валились, а те, что csproj не трогали (#91, #92), были зелёными.
-        include:
-          - project: launcher/ChillHub
-            cache: true
-          - project: launcher/tests/ChillHub.Tests
-            cache: true
-          - project: updater
-            cache: false
-          - project: updater/tests/ManifestPreserveCheck
-            cache: false
+        project:
+          - launcher/ChillHub
+          - launcher/tests/ChillHub.Tests
+          - updater
+          - updater/tests/ManifestPreserveCheck
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '8.0.x'
-          cache: ${{ matrix.cache }}
-          # Путь задаётся только там, где кеш включён: с cache: false он не
-          # нужен, а лишний вход у выключенной функции — приглашение к
-          # рассинхрону, когда кеш когда-нибудь вернут.
+          # Кэша NuGet здесь нет намеренно.
           #
-          # packages.lock.json в шаблоне не осталось: в репозитории нет ни
-          # одного такого файла, и он лишь размывал ключ.
-          cache-dependency-path: ${{ matrix.cache && '**/*.csproj' || '' }}
+          # Он и раньше задавался попроектно (у updater и его теста ноль
+          # PackageReference, и post-шаг падал на несуществующей папке), а
+          # выигрыш давал только на двух проектах из четырёх. Восстанавливать
+          # тут нечего: два маленьких проекта на канале GitHub-раннера
+          # restore'ятся быстрее, чем распаковывается архив кэша.
       - name: Code style check (dotnet format)
         working-directory: ${{ matrix.project }}
+        env:
+          # Без этого ключа restore net8.0-windows на Linux падает с
+          # NETSDK1100 «to build a project targeting Windows on this
+          # operating system». MSBuild читает его из переменной окружения.
+          # Для updater (net8.0) ключ безвреден.
+          EnableWindowsTargeting: 'true'
         # Blocking as of the launcher/** formatting cleanup: the tree is fully
         # formatted and both Debug and Release build warning-free, so anything
         # this step reports now is a real regression and should red-line the PR
         # that introduced it. Reproduce locally by running `dotnet format`
         # (write mode) in this directory and committing the result.
-        #
-        # Line endings are load-bearing: .editorconfig requires CRLF, so
-        # launcher/.gitattributes and updater/.gitattributes pin `*.cs`/`*.xaml`
-        # to `eol=crlf`. Without that, the checkout would follow the runner's
-        # core.autocrlf and this step would report thousands of phantom
-        # ENDOFLINE diffs.
         run: dotnet format --verify-no-changes --verbosity minimal
 
   installer-windows:
     name: Installer (NSIS)
+    needs: changes
+    if: needs.changes.outputs.dotnet == 'true'
     # Свои ветки собираются на собственном Windows-раннере, форк-PR — на
     # GitHub-hosted. Метка win-builder есть только у нашей машины, поэтому
     # чужой код до неё физически не доедет даже при ошибочном одобрении:
@@ -635,14 +715,17 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Setup .NET
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          dotnet-version: '8.0.x'
-          cache: true
-          cache-dependency-path: |
-            **/*.csproj
-            **/packages.lock.json
+      # setup-dotnet нет по той же причине, что и в dotnet-lint выше:
+      # SDK приезжает с образом раннера, а скачивание действия стоило дороже
+      # самой проверки. Подробности — в комментарии там.
+      - name: Проверить .NET 8 SDK на раннере
+        shell: pwsh
+        run: |
+          $sdks = dotnet --list-sdks
+          $sdks
+          if (-not ($sdks | Select-String -Pattern '^8\.0\.')) {
+            throw ".NET 8 SDK на раннере нет: он должен приезжать с образом машины, а не ставиться прогоном"
+          }
       # Кэш каталога NSIS. Образ windows-latest его не несёт, поэтому
       # ensure-nsis.ps1 каждый прогон тянет дистрибутив заново — минута на то,
       # что от коммита к коммиту не меняется.
@@ -890,6 +973,7 @@ jobs:
     # задач ещё не создана, а не пропущена. Итог — те же ложные "пропала
     # проверка", от которых задача должна защищать.
     needs:
+      - changes
       - commits
       - deploy-paths
       - htmlhint-web
