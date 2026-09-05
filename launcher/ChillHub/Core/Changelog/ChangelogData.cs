@@ -43,6 +43,15 @@ namespace ChillHub.Core.Changelog {
     /// </summary>
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
+            // Выпуск ради сборки: изменился только путь, по которому машина сборки
+            // держит компилятор установщика. Сам установщик и лаунчер те же самые,
+            // читать игроку тут нечего.
+            new ChangelogRelease {
+                Version = "1.6.49",
+                Date = "2026-09-05",
+                Changes = System.Array.Empty<string>(),
+                Technical = true,
+            },
             new ChangelogRelease {
                 Version = "1.6.48",
                 Date = "2026-09-05",
