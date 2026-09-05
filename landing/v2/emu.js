@@ -35,79 +35,13 @@
   const wide = window.matchMedia('(min-width: 720px)');
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
-  /* ---------- Порт HomeFormat.cs ---------- */
+  /* ---------- Правила ---------- */
 
-  const KB = 1024;
-  const MB = KB * 1024;
-  const GB = MB * 1024;
-
-  /* Дробная часть отделяется запятой. `toFixed` даёт точку, и по всему
-     интерфейсу шли «1.6 ГБ» и «9.6 МБ/с» — английская запись в русском
-     тексте. В лаунчере этого нет: там форматирование идёт по культуре
-     системы, и он пишет «1,6 ГБ». */
-  const dec = (n) => n.toFixed(1).replace('.', ',');
-
-  function formatSize(bytes) {
-    if (bytes >= GB) return `${dec(bytes / GB)} ГБ`;
-    if (bytes >= MB) return `${dec(bytes / MB)} МБ`;
-    if (bytes >= KB) return `${dec(bytes / KB)} КБ`;
-    return `${bytes} Б`;
-  }
-
-  function pluralizeDayRu(n) {
-    const n10 = n % 10;
-    const n100 = n % 100;
-    if (n10 === 1 && n100 !== 11) return 'день';
-    if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return 'дня';
-    return 'дней';
-  }
-
-  function formatEta(seconds) {
-    if (!Number.isFinite(seconds)) return '—';
-    const total = Math.max(0, Math.ceil(seconds));
-    const d = Math.floor(total / 86400);
-    const h = Math.floor((total % 86400) / 3600);
-    const m = Math.floor((total % 3600) / 60);
-    const s = total % 60;
-    if (d >= 1) return h > 0 ? `${d} ${pluralizeDayRu(d)} ${h} ч` : `${d} ${pluralizeDayRu(d)}`;
-    if (total >= 3600) return `${h} ч ${String(m).padStart(2, '0')} мин`;
-    if (total >= 60) return `${Math.ceil(total / 60)} мин`;
-    return `${s} с`;
-  }
-
-  /* ---------- Порт ActionButtonState.cs ---------- */
-
-  const MODE = {
-    Checking: { text: 'Проверка…', on: false, look: 'checking' },
-    Install: { text: 'Установить', on: true, look: 'install' },
-    Update: { text: 'Обновить', on: true, look: 'update' },
-    Play: { text: 'Играть', on: true, look: 'play' },
-    Cancel: { text: 'Отмена', on: true, look: 'cancel' },
-    Dequeue: { text: 'Убрать из очереди', on: true, look: 'dequeue' },
-    Retry: { text: 'Повторить', on: true, look: 'retry' },
-    Maintenance: { text: 'Технические работы', on: false, look: 'checking' },
-    SteamOnly: { text: 'Нужна копия в Steam', on: false, look: 'checking' },
-  };
-
-  function decideMode(g) {
-    if (g.error) return 'Retry';
-    // Сборки нет — значит, нет и «Установить»: такая игра есть только в
-    // Steam, а кнопка предлагала бы скачать несуществующий манифест.
-    if (!g.hasServerBuild && !g.installed) return 'SteamOnly';
-    if (g.unfinished) return 'Update';
-    if (g.installed && !g.needsUpdate) return 'Play';
-    return g.installed ? 'Update' : 'Install';
-  }
-
-  function blockedByMaintenance(mode, maint) {
-    if (!maint || !maint.enabled) return false;
-    const b = maint.blocks || {};
-    if (mode === 'SteamOnly') return false;
-    if (mode === 'Install') return !!b.install;
-    if (mode === 'Update' || mode === 'Retry') return !!b.update;
-    if (mode === 'Play') return !!b.launch;
-    return false;
-  }
+  /* Вся логика — в emu-core.js: там она без DOM и покрыта тестами
+     (tests/web/landing2-emu.test.js). Здесь остаётся только рисование,
+     иначе поведение копии проверить нечем. */
+  const C = window.CHEmuCore;
+  const { formatSize, formatEta, MB, GB } = C;
 
   /* ---------- Состояние ---------- */
 
@@ -134,7 +68,6 @@
     selected: 0,
     queue: [], // [{gameId, done, total, speed, state:'run'|'wait'}]
     tab: 'game',
-    offline: null,
     freeBytes: 164.1 * GB, // 164,1 ГБ — как на скриншоте лаунчера
     covers: {}, // gameId -> адрес обложки из галереи
     tick: 0,
@@ -176,22 +109,8 @@
 
   /* ---------- Подписи ---------- */
 
-  // Core/UI/GameStatusConverters.cs
-  function listSubtitle(g) {
-    const q = state.queue.find((i) => i.gameId === g.gameId);
-    if (q) return q.state === 'run' ? 'Скачивание обновления…' : 'В очереди';
-    if (g.needsUpdate) return 'Обновление';
-    return g.installed ? 'Установлена' : 'Не установлена';
-  }
-
-  function playtime(g) {
-    const m = g.playtimeMin;
-    // Первые запуски давали «0 ч в игре» — цифра, которая выглядит как
-    // отсутствие данных. Поэтому до часа считаем в минутах.
-    if (!m) return 'ещё не запускали';
-    if (m < 60) return `${m} мин в игре`;
-    return `${Math.floor(m / 60)} ч в игре`;
-  }
+  const listSubtitle = (g) => C.listSubtitle(g, state.queue);
+  const listTone = (g) => C.listTone(g, state.queue);
 
   /* ---------- Отрисовка ---------- */
 
@@ -220,7 +139,6 @@
      свободное место и «Поделиться идеей» убраны — на телефоне это три
      строки ради того, чего здесь всё равно не сделать. */
   function strip() {
-    if (state.offline) return sidebar();
     return `
       <div class="emu-strip" role="tablist" aria-label="Игры">
         ${state.games
@@ -258,27 +176,14 @@
   }
 
   function sidebar() {
-    if (state.offline) {
-      return `
-        <aside class="emu-side">
-          <div class="emu-side-head"><b>Игры</b></div>
-          <div class="emu-empty">
-            <b>${esc(state.offline.title)}</b>
-            <span>${esc(state.offline.hint)}</span>
-            <button class="emu-btn" type="button" data-emu-online>Повторить</button>
-          </div>
-        </aside>`;
-    }
-
     const rows = state.games
       .map((g, i) => {
-        const q = state.queue.find((x) => x.gameId === g.gameId);
         return `
         <button class="emu-game${i === state.selected ? ' on' : ''}" type="button" data-emu-select="${i}">
           ${icon(g)}
           <span class="emu-game-text">
             <b>${esc(g.title)}</b>
-            <i data-tone="${q ? 'busy' : g.needsUpdate ? 'update' : g.installed ? 'ok' : 'none'}">${esc(listSubtitle(g))}</i>
+            <i data-tone="${listTone(g)}">${esc(listSubtitle(g))}</i>
           </span>
         </button>`;
       })
@@ -300,45 +205,18 @@
   }
 
   function panel() {
-    if (state.offline) {
-      return `<section class="emu-main"><div class="emu-empty big">
-        <b>${esc(state.offline.title)}</b><span>${esc(state.offline.hint)}</span>
-      </div></section>`;
-    }
-
     const g = state.games[state.selected];
     if (!g) return '<section class="emu-main"></section>';
 
-    const q = state.queue.find((x) => x.gameId === g.gameId);
-    let mode = decideMode(g);
-    if (q) mode = q.state === 'run' ? 'Cancel' : 'Dequeue';
-    if (blockedByMaintenance(mode, state.maintenance)) mode = 'Maintenance';
-    const look = MODE[mode];
+    const mode = C.effectiveMode(g, state.queue, state.maintenance);
+    const look = C.look(mode);
 
-    // Core/Mods/LaunchButtons.cs: вне режима «Играть» сборки с сервера на
-    // витрине нет — её кнопка это «Установить»/«Обновить» слева. В режиме
-    // «Играть» встают два варианта, и залита ровно одна кнопка.
-    const playMode = mode === 'Play';
-    const launch = playMode && g.mods
-      ? [
-          { target: 'SteamModded', title: 'Steam', sub: 'с модами', accent: true },
-          { target: 'LocalModded', title: 'Пиратка', sub: 'с модами', accent: false },
-        ]
-      : [];
+    const launch = C.launchButtons(g, mode);
     const actionVisible = launch.length === 0;
 
-    const meta = [playtime(g), `версия ${g.latestVersion || '—'}`];
-    if (g.mods && g.mods.displayName) {
-      meta.push(`моды: ${g.mods.displayName}${g.mods.displayVersion ? ' ' + g.mods.displayVersion : ''}`);
-    }
+    const meta = C.heroMeta(g);
 
-    // Только про место и только когда игру ещё качать. «Последняя версия
-    // уже установлена» на главном экране лаунчер не показывает — эта
-    // строка у него на странице игры.
-    const hint =
-      mode === 'Install' || mode === 'Update'
-        ? `Нужно: ${formatSize(g.bytes)} (${formatSize(state.freeBytes)} доступно)`
-        : '';
+    const hint = C.spaceHint(mode, g.bytes, state.freeBytes);
 
     const cover = state.covers[g.gameId];
 
@@ -407,8 +285,6 @@
      что-то есть. Пустая панель внизу читается как сломанная. */
   function queueDock() {
     if (!state.queue.length) return '';
-    const running = state.queue.filter((q) => q.state === 'run').length;
-
     const rows = state.queue
       .map((q, i) => {
         const g = state.games.find((x) => x.gameId === q.gameId);
@@ -420,7 +296,7 @@
           ${icon(g)}
           <span class="emu-q-text">
             <b>${esc(g.title)}${q.state === 'run' ? ` <em>${pct}%</em>` : ''}</b>
-            <i>${q.state === 'run' ? 'Скачивание обновления…' : `В очереди · ${i + 1}-я`}</i>
+            <i>${esc(C.queueLabel(q, i))}</i>
           </span>
           ${
             q.state === 'run'
@@ -442,7 +318,7 @@
     return `
       <div class="emu-dock">
         <div class="emu-dock-head">
-          <b>Очередь загрузок${running && state.queue.length > 1 ? ` · качается 1 из ${state.queue.length}` : ''}</b>
+          <b>${esc(C.dockTitle(state.queue))}</b>
         </div>
         ${rows}
         ${state.queue.length > 1 ? '<button class="emu-collapse" type="button">Свернуть очередь</button>' : ''}
@@ -487,12 +363,6 @@
 
     const refresh = $('[data-emu-refresh]');
     if (refresh) refresh.addEventListener('click', () => boot(true));
-
-    const online = $('[data-emu-online]');
-    if (online) online.addEventListener('click', () => {
-      state.offline = null;
-      render();
-    });
   }
 
   function onAction() {
@@ -502,7 +372,7 @@
       dequeue(g.gameId);
       return;
     }
-    const mode = decideMode(g);
+    const mode = C.decideMode(g);
     if (mode === 'Play') {
       note(`${g.title} запускается…`);
       return;
@@ -517,27 +387,20 @@
     note(`${g.title}: запускаем ${where} с модами`);
   }
 
-  /* Качается ровно одна игра, остальные ждут — как в лаунчере: два
-     параллельных потока на один канал делят скорость и удлиняют обе
-     загрузки. */
+  /* Операции над очередью — в ядре: там они без DOM и проверены тестом
+     (качается одна, эстафета переходит, качающегося не подвинуть). */
   function enqueue(g) {
-    if (state.queue.some((x) => x.gameId === g.gameId)) return;
-    const busy = state.queue.some((x) => x.state === 'run');
-    state.queue.push({ gameId: g.gameId, done: 0, total: g.bytes, speed: 0, state: busy ? 'wait' : 'run' });
+    state.queue = C.enqueue(state.queue, g);
     render();
   }
 
   function dequeue(gameId) {
-    state.queue = state.queue.filter((x) => x.gameId !== gameId);
-    if (state.queue.length && !state.queue.some((x) => x.state === 'run')) state.queue[0].state = 'run';
+    state.queue = C.dequeue(state.queue, gameId);
     render();
   }
 
   function move(gameId, dir) {
-    const i = state.queue.findIndex((x) => x.gameId === gameId);
-    const j = i + dir;
-    if (i < 0 || j < 1 || j >= state.queue.length) return; // первая позиция занята качающейся
-    [state.queue[i], state.queue[j]] = [state.queue[j], state.queue[i]];
+    state.queue = C.move(state.queue, gameId, dir);
     render();
   }
 

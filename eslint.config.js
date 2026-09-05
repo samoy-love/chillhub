@@ -49,6 +49,7 @@ export default [
         location: 'readonly',
         history: 'readonly',
         fetch: 'readonly',
+        AbortController: 'readonly',
         Request: 'readonly',
         Response: 'readonly',
         Headers: 'readonly',
@@ -210,11 +211,30 @@ export default [
       'server/admin_ui/mods-panel.js',
       'server/admin_ui/feedback-logs.js',
       'server/admin_ui/pending-badges.js',
-      'server/admin_ui/registry-diff.js'
+      'server/admin_ui/registry-diff.js',
+
+      // Панель и лендинг 2.0: те же UMD-модули, тот же guard `typeof module`.
+      'server/admin_ui/v2/format.js',
+      'server/admin_ui/v2/api.js',
+      'server/admin_ui/v2/actions.js',
+      'server/admin_ui/v2/store.js',
+      'server/admin_ui/v2/sections.js',
+      'server/admin_ui/v2/upload.js',
+      'server/admin_ui/v2/registry.js',
+      'server/admin_ui/v2/news.js',
+      'server/admin_ui/v2/gallery.js',
+      'server/admin_ui/v2/tuning.js',
+      'server/admin_ui/v2/build.js',
+      'server/admin_ui/v2/views.js',
+      'server/admin_ui/v2/mods.js',
+      'server/admin_ui/v2/manifest.js',
+      'landing/v2/emu-core.js'
     ],
     languageOptions: {
       globals: {
-        module: 'readonly'
+        // Ветка Node в UMD-обёртке: там же и `require` для соседних модулей
+        module: 'readonly',
+        require: 'readonly'
       }
     }
   }

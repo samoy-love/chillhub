@@ -1,0 +1,498 @@
+// Вид под длинные дела панели 2.0.
+//
+// Проверяется не «есть ли тег», а то, что человек прочтёт на экране в
+// каждый момент долгого дела: началось оно или нет, докачка это или
+// заливка с нуля, оборвался поток или сборка всё же дошла до конца.
+// Именно эти состояния в панели 1.0 не показывались никак.
+
+const test = require('node:test');
+const assert = require('node:assert');
+
+const V = require('../../server/admin_ui/v2/views.js');
+const News = require('../../server/admin_ui/v2/news.js');
+const Gallery = require('../../server/admin_ui/v2/gallery.js');
+const Tuning = require('../../server/admin_ui/v2/tuning.js');
+
+/* ---------- Оболочка ---------- */
+
+test('лист называет дело и в заголовке, и в метке для читалки', () => {
+  const html = V.sheet({ title: 'Загрузка сборки', lede: 'Файл не уйдёт игрокам сам' });
+  assert.match(html, /<h2>Загрузка сборки<\/h2>/);
+  assert.match(html, /aria-label="Загрузка сборки"/);
+  assert.match(html, /aria-modal="true"/);
+  assert.match(html, /Файл не уйдёт игрокам сам/);
+});
+
+test('подвал появляется только когда есть чем его занять', () => {
+  assert.ok(!/<footer/.test(V.sheet({ title: 'x' })));
+  assert.match(V.sheet({ title: 'x', foot: '<button></button>' }), /<footer/);
+});
+
+test('разметка внутри заголовка не исполняется', () => {
+  const html = V.sheet({ title: '<img src=x onerror=alert(1)>' });
+  assert.ok(!html.includes('<img'));
+  assert.match(html, /&lt;img/);
+});
+
+/* ---------- Загрузка ---------- */
+
+test('до выбора файла экран честно говорит, что дела ещё нет', () => {
+  assert.strictEqual(V.uploadStatus({}).text, 'Файл ещё не выбран');
+  assert.strictEqual(V.uploadStatus(null).text, 'Файл ещё не выбран');
+});
+
+test('докачка называется докачкой, а не заливкой с нуля', () => {
+  // Иначе после обрыва человек уверен, что половина работы пропала
+  const s = V.uploadStatus({ phase: 'upload', resumed: 148, total: 300, progress: 0.49 });
+  assert.match(s.text, /Докачка: 148 из 300 кусков уже на сервере/);
+  assert.match(s.text, /49/);
+});
+
+test('заливка с нуля показывает, сколько кусков уже дошло', () => {
+  const s = V.uploadStatus({ phase: 'upload', done: 12, total: 300, progress: 0.04 });
+  assert.match(s.text, /Заливка: 12 из 300/);
+  assert.ok(!/Докачка/.test(s.text));
+});
+
+test('повтор сорвавшихся кусков — не ошибка, но и не тишина', () => {
+  const s = V.uploadStatus({ phase: 'retry', count: 3 });
+  assert.strictEqual(s.tone, 'warn');
+  assert.match(s.text, /3/);
+});
+
+test('после сборки файла есть ещё разбор архива — это отдельный шаг', () => {
+  // Он занимает минуты, и без своей строки выглядит как зависание
+  assert.match(V.uploadStatus({ phase: 'complete' }).text, /Собираем файл на сервере/);
+  assert.match(V.uploadStatus({ phase: 'process' }).text, /Разбираем архив/);
+});
+
+test('успех не выдаёт загрузку за публикацию', () => {
+  const s = V.uploadStatus({ phase: 'done' });
+  assert.strictEqual(s.tone, 'ok');
+  assert.match(s.text, /Игрокам версия пока не ушла/);
+});
+
+test('провал называет причину, а не только факт', () => {
+  const s = V.uploadStatus({ phase: 'failed', message: 'не удалось залить 4 из 300' });
+  assert.strictEqual(s.tone, 'bad');
+  assert.match(s.text, /4 из 300/);
+});
+
+test('отмена обещает, что за собой убрали', () => {
+  assert.match(V.uploadStatus({ phase: 'aborted' }).text, /убрано с сервера/);
+});
+
+test('пока куски летят, предлагается только отмена', () => {
+  // «Закрыть» здесь прочитали бы как «свернуть», а лист загрузку прерывает
+  const b = V.uploadButtons({ phase: 'upload' });
+  assert.deepStrictEqual(b.map((x) => x.act), ['abort']);
+  assert.strictEqual(b[0].danger, true);
+});
+
+test('после провала можно повторить, после успеха — только закрыть', () => {
+  assert.deepStrictEqual(V.uploadButtons({ phase: 'failed' }).map((x) => x.act), ['retry', 'close']);
+  assert.deepStrictEqual(V.uploadButtons({ phase: 'aborted' }).map((x) => x.act), ['retry', 'close']);
+  assert.deepStrictEqual(V.uploadButtons({ phase: 'done' }).map((x) => x.act), ['close']);
+  assert.deepStrictEqual(V.uploadButtons({}).map((x) => x.act), ['pick']);
+});
+
+test('подобранные кусок и потоки видны до нажатия, а не после', () => {
+  const html = V.uploadCard({
+    phase: 'upload',
+    file: { name: 'ChillHub-1.6.25.zip', size: 121400000 },
+    chunkSize: 8 * 1024 * 1024,
+    streams: 4,
+    total: 15,
+    done: 3,
+    progress: 0.2,
+  });
+  assert.match(html, /ChillHub-1\.6\.25\.zip/);
+  assert.match(html, /8\u00a0МБ/);
+  assert.match(html, />4</);
+});
+
+test('полоска прогресса называет себя читалке', () => {
+  const html = V.uploadCard({ phase: 'upload', file: { name: 'a.zip', size: 10 }, progress: 0.37 });
+  assert.match(html, /role="progressbar"/);
+  assert.match(html, /aria-valuenow="37"/);
+});
+
+test('без файла полоски нет вовсе', () => {
+  const html = V.uploadCard({});
+  assert.ok(!/progressbar/.test(html));
+  assert.match(html, /Файл ещё не выбран/);
+});
+
+/* ---------- Журнал сборки ---------- */
+
+test('до первой строки журнал говорит, что сборка началась', () => {
+  // Первые секунды тишины иначе читаются как «кнопка не нажалась»
+  assert.match(V.buildLog([], 'running'), /Сборка началась/);
+  assert.match(V.buildLog([], 'idle'), /Журнала пока нет/);
+});
+
+test('строки журнала различимы по роду', () => {
+  assert.match(V.logRow({ kind: 'error', message: 'нет пакета' }), /log-row err/);
+  assert.match(V.logRow({ kind: 'done', message: 'готово' }), /log-row ok/);
+  assert.match(V.logRow({ kind: 'warn', message: 'старая версия' }), /log-row warn/);
+});
+
+test('строка без рода не ломает разметку', () => {
+  const html = V.logRow({ message: 'что-то' });
+  assert.match(html, /class="log-row"/);
+  assert.match(html, /info/);
+});
+
+test('сообщение сервера не исполняется как разметка', () => {
+  // Текст в журнал приходит с сервера и в общем случае произвольный
+  const html = V.logRow({ kind: 'info', message: '<script>alert(1)</script>' });
+  assert.ok(!html.includes('<script>'));
+});
+
+test('оборванный поток не выдаётся за провал', () => {
+  // Сборка могла досчитаться и умереть на последней строке
+  const o = V.buildOutcome({ ok: false, kind: 'buffered' });
+  assert.strictEqual(o.tone, 'warn');
+  assert.match(o.text, /могла дойти до конца/);
+});
+
+test('успешная сборка не выдаётся за выкатку игрокам', () => {
+  const o = V.buildOutcome({ ok: true });
+  assert.strictEqual(o.tone, 'ok');
+  assert.match(o.text, /отдельное решение/);
+});
+
+test('отказ от пропавших пакетов — не ошибка', () => {
+  const o = V.buildOutcome({ cancelled: true, kind: 'missing' });
+  assert.strictEqual(o.tone, 'warn');
+  assert.match(o.text, /остались в списке/);
+});
+
+test('настоящая ошибка называет причину', () => {
+  const o = V.buildOutcome({ ok: false, kind: 'error', message: 'сервер не отвечает' });
+  assert.strictEqual(o.tone, 'bad');
+  assert.match(o.text, /сервер не отвечает/);
+});
+
+/* ---------- Новость ---------- */
+
+test('ошибка поля стоит рядом со своим полем', () => {
+  const post = { slug: '-плохо', markdown: '# Т\n\nтекст' };
+  const html = V.newsForm(post, News.problems(post));
+  const beforeGame = html.slice(0, html.indexOf('n-game'));
+  assert.match(beforeGame, /help--bad/);
+});
+
+test('поля новости — те, что знает сервер, и заголовка среди них нет', () => {
+  // Отдельное поле «Заголовок» было бы враньём: он берётся первой строкой текста
+  const html = V.newsForm({ slug: 'release', markdown: '# Т' }, []);
+  for (const f of ['slug', 'gameId', 'coverUrl', 'markdown']) {
+    assert.match(html, new RegExp('name="' + f + '"'), 'нет поля ' + f);
+  }
+  assert.ok(!/name="title"/.test(html), 'в форме есть поле, которого сервер не знает');
+});
+
+test('у существующей заметки имя не правят: оно уже в адресе статьи', () => {
+  assert.match(V.newsForm({ slug: 'release', existing: true }, []), /name="slug"[^>]*readonly/);
+  assert.ok(!/name="slug"[^>]*readonly/.test(V.newsForm({ slug: '' }, [])));
+});
+
+test('видно, какой заголовок прочтёт сервер', () => {
+  // Заголовок здесь не поле, а первая строка — без подсказки это не увидеть
+  assert.match(V.newsHeadline('# Вышла 1.6.25', News), /Вышла 1\.6\.25/);
+  assert.match(V.newsHeadline('без решётки', News), /Заголовка нет/);
+});
+
+test('пустая игра объясняется, а не остаётся загадкой', () => {
+  const html = V.newsForm({ title: 'x', body: 'y' }, []);
+  assert.match(html, /новость про лаунчер, а не про игру/);
+});
+
+test('текст новости попадает в поле, а не в разметку страницы', () => {
+  const html = V.newsForm({ slug: '</textarea><script>', markdown: '"><b>' }, []);
+  assert.ok(!html.includes('<script>'));
+  assert.ok(!html.includes('value="</textarea>'));
+  assert.match(html, /&lt;\/textarea&gt;/);
+});
+
+test('черновик предлагается вернуть, только когда он отличается', () => {
+  const same = V.draftNote({ post: { markdown: '# Т\n\nтекст' } }, { markdown: '# Т\n\nтекст' }, News);
+  assert.strictEqual(same, '');
+  const diff = V.draftNote({ post: { markdown: '# Т\n\nдругое' } }, { markdown: '# Т\n\nтекст' }, News);
+  assert.match(diff, /data-draft-restore/);
+  assert.match(diff, /data-draft-drop/);
+});
+
+/* ---------- Галерея ---------- */
+
+test('текущая папка в крошках — не ссылка', () => {
+  const html = V.galleryCrumbs('screens/2026', Gallery);
+  assert.match(html, /<span aria-current="page">2026<\/span>/);
+  assert.match(html, /data-go="screens"/);
+});
+
+test('обложка помечена прямо в списке', () => {
+  // Иначе узнать, что попадёт на витрину, можно было только на другой вкладке
+  const html = V.galleryList([{ name: 'cover.png', size: 100 }, { name: 'other.png', size: 200 }], {
+    cover: 'cover.png',
+    gallery: Gallery,
+  });
+  const coverRow = html.slice(html.indexOf('data-name="cover.png"'), html.indexOf('data-name="other.png"'));
+  assert.match(coverRow, /badge--accent">обложка/);
+  assert.ok(!/data-cover="cover.png"/.test(html));
+});
+
+test('обложкой предлагают сделать только картинку', () => {
+  const html = V.galleryList([{ name: 'guide.pdf', size: 10 }], { gallery: Gallery });
+  assert.ok(!/data-cover/.test(html));
+  assert.match(html, /data-remove="guide.pdf"/);
+});
+
+test('в папку можно зайти, но не сделать её обложкой', () => {
+  const html = V.galleryList([{ name: 'screens', dir: true }], { path: '', gallery: Gallery });
+  assert.match(html, /data-go="screens"/);
+  assert.ok(!/data-cover/.test(html));
+});
+
+test('папки идут выше файлов и в разметке тоже', () => {
+  const html = V.galleryList([{ name: 'a.png' }, { name: 'screens', dir: true }], { gallery: Gallery });
+  assert.ok(html.indexOf('data-name="screens"') < html.indexOf('data-name="a.png"'));
+});
+
+test('пустая папка объясняет, что с ней делать', () => {
+  assert.match(V.galleryList([], { gallery: Gallery }), /Перетащите сюда файлы/);
+});
+
+/* ---------- Порядок игр ---------- */
+
+test('у первой строки нет «выше», у последней — «ниже»', () => {
+  const html = V.orderList([{ gameId: 'a', title: 'А' }, { gameId: 'b', title: 'Б' }]);
+  const first = html.slice(html.indexOf('data-id="a"'), html.indexOf('data-id="b"'));
+  assert.match(first, /data-up="a" aria-label="Выше" disabled/);
+  const last = html.slice(html.indexOf('data-id="b"'));
+  assert.match(last, /data-down="b" aria-label="Ниже" disabled/);
+});
+
+test('перестановка доступна и мышью, и кнопками', () => {
+  // С клавиатуры в перетаскивание не попадают вовсе
+  const html = V.orderList([{ gameId: 'a' }, { gameId: 'b' }]);
+  assert.match(html, /draggable="true"/);
+  assert.match(html, /data-up="b"/);
+});
+
+test('игра без названия показывается по своему коду', () => {
+  assert.match(V.orderList([{ gameId: 'repo' }]), />repo</);
+});
+
+test('неизменный порядок не предлагают сохранять', () => {
+  const l = [{ gameId: 'a' }, { gameId: 'b' }];
+  const s = V.orderSummary(l, l.slice());
+  assert.strictEqual(s.changed, false);
+  assert.match(s.text, /сохранять нечего/);
+});
+
+test('изменённый порядок называет последствие для игрока', () => {
+  const s = V.orderSummary([{ gameId: 'a' }, { gameId: 'b' }], [{ gameId: 'b' }, { gameId: 'a' }]);
+  assert.strictEqual(s.changed, true);
+  assert.match(s.text, /2\u00a0строки/);
+  assert.match(s.text, /Игроки увидят новый порядок сразу/);
+});
+
+test('пустые списки не считаются изменением', () => {
+  assert.strictEqual(V.orderSummary(null, null).changed, false);
+});
+
+/* ---------- Прогоны ---------- */
+
+test('лучший прогон помечен, и применять его повторно не предлагают', () => {
+  const html = V.benchTable(
+    [
+      { chunk: '8 МиБ', streams: 4, mbps: 92.4, retries: 0 },
+      { chunk: '2 МиБ', streams: 8, mbps: 79.3, retries: 3 },
+    ],
+    Tuning
+  );
+  assert.match(html, /class="best"/);
+  assert.match(html, /badge--ok">выбрано/);
+  assert.match(html, /data-apply="2 МиБ"/);
+  assert.ok(!/data-apply="8 МиБ"/.test(html));
+});
+
+test('под таблицей стоит объяснение выбора', () => {
+  // Без него подбор выглядит гаданием, и его результату не верят
+  const html = V.benchTable([{ chunk: '2 МиБ', streams: 8, mbps: 79.3, retries: 3 }, { chunk: '8 МиБ', streams: 4, mbps: 74 }], Tuning);
+  assert.match(html, /Быстрее всех/);
+});
+
+test('скорость в таблице пишется по-русски', () => {
+  const html = V.benchTable([{ chunk: '8 МиБ', streams: 4, mbps: 10.5 }], Tuning);
+  assert.match(html, /10,5/);
+  assert.ok(!/10\.5/.test(html));
+});
+
+test('без прогонов таблица объясняет, чего стоит прогон', () => {
+  const html = V.benchTable([], Tuning);
+  assert.match(html, /около минуты и ничего не публикует/);
+});
+
+/* ---------- Состав сборки ---------- */
+
+const Mods = require('../../server/admin_ui/v2/mods.js');
+
+test('план сборки называет пропавшие пакеты поимённо и до сборки', () => {
+  // Узнать о них на середине выкатки — значит откатывать уже отданное
+  const html = V.resolvePlan(
+    { displayName: 'Модпак', version: '1.9.9', packages: 17, totalBytes: 1024 ** 3, missing: ['Ura/Old'] },
+    Mods
+  );
+  assert.match(html, /Ura\/Old/);
+  assert.match(html, /больше нет на Thunderstore/);
+  assert.match(html, /Собрать без них можно/);
+});
+
+test('без пропавших про них и не говорится', () => {
+  const html = V.resolvePlan({ displayName: 'М', packages: 3, totalBytes: 10 }, Mods);
+  assert.ok(!/больше нет на Thunderstore/.test(html));
+});
+
+test('нехватка места в плане показана как беда, а не как справка', () => {
+  const html = V.resolvePlan({ packages: 3, totalBytes: 10, spaceOk: false, spaceNote: 'мало места' }, Mods);
+  assert.match(html, /note--bad/);
+  assert.match(html, /мало места/);
+});
+
+/* ---------- Каталог ---------- */
+
+test('каталог показывает пакет с его пространством имён и версией', () => {
+  const html = V.catalogList([{ owner: 'Ura', name: 'Modpack', version_number: '1.2.3', download_count: 4200 }], {
+    mods: Mods,
+  });
+  assert.match(html, /Modpack/);
+  assert.match(html, /Ura/);
+  assert.match(html, /1\.2\.3/);
+  assert.match(html, /data-take/);
+  assert.match(html, /data-readme/);
+});
+
+test('пустой каталог объясняет, что делать со ссылкой', () => {
+  // Половина модпаков в раздел «Modpacks» не проставлена и не находится
+  const html = V.catalogList([], { query: 'нет такого', mods: Mods });
+  assert.match(html, /По запросу ничего нет/);
+  assert.match(html, /подставляют ссылкой/);
+});
+
+/* ---------- Журналы ---------- */
+
+test('отсутствующий журнал — не ошибка', () => {
+  const html = V.logsView('');
+  assert.match(html, /Журнала нет/);
+  assert.match(html, /обращение от этого не хуже/);
+});
+
+test('журнал не исполняется как разметка', () => {
+  // Текст пишет игрок, и в нём бывает что угодно
+  const html = V.logsView('<script>alert(1)</script>');
+  assert.ok(!html.includes('<script>'));
+});
+
+/* ---------- Переезд со старой сборки ---------- */
+
+test('разобранный профиль не выдаётся за выкатку игрокам', () => {
+  const html = V.importResult({ version: '1.9.9', packages: 17 });
+  assert.match(html, /1\.9\.9/);
+  assert.match(html, /игрокам не ушла/);
+});
+
+/* ---------- Подсказка из Thunderstore ---------- */
+
+test('выбор игры объясняет, что вписывать во второе поле', () => {
+  const html = V.ecosystemPicker([{ gameId: 'repo', title: 'R.E.P.O.' }]);
+  assert.match(html, /name="gameId"/);
+  assert.match(html, /name="slug"/);
+  assert.match(html, /lethal-company/);
+});
+
+test('без игр выбирать не из чего, и так и сказано', () => {
+  assert.match(V.ecosystemPicker([]), /Сначала добавьте игру/);
+});
+
+/* ---------- График ---------- */
+
+test('ряд превращается в точки от нуля до высоты', () => {
+  const p = V.sparkPoints([0, 5, 10], 100, 50);
+  assert.strictEqual(p, '0.0,50.0 50.0,25.0 100.0,0.0');
+});
+
+test('ряд из одних нулей рисуется по низу, а не в NaN', () => {
+  // Так выглядит первый день после чистки метрик, и SVG на NaN молчит
+  const p = V.sparkPoints([0, 0, 0], 100, 50);
+  assert.ok(!/NaN/.test(p), p);
+  assert.strictEqual(p, '0.0,50.0 50.0,50.0 100.0,50.0');
+});
+
+test('один день не превращает шаг в бесконечность', () => {
+  const p = V.sparkPoints([7], 100, 50);
+  assert.ok(!/NaN|Infinity/.test(p), p);
+  assert.strictEqual(p, '0.0,0.0');
+});
+
+test('пустой ряд не рисует битый тег', () => {
+  assert.strictEqual(V.sparkPoints([], 100, 50), '');
+  assert.strictEqual(V.sparkLine([], { width: 100, height: 50 }), '');
+  assert.strictEqual(V.sparkPoints(null, 100, 50), '');
+});
+
+test('дырка в данных считается нулём, а не ломает весь график', () => {
+  // Одно undefined в ряду делало NaN каждую точку разом
+  const p = V.sparkPoints([10, undefined, 5], 100, 50);
+  assert.ok(!/NaN/.test(p), p);
+});
+
+test('ломаная называет свой цвет и не исполняет его как разметку', () => {
+  const html = V.sparkLine([1, 2], { width: 10, height: 10, color: 'var(--ember)' });
+  assert.match(html, /stroke="var\(--ember\)"/);
+  assert.ok(!/</.test(V.sparkLine([1, 2], { width: 10, height: 10, color: '"><script>' }).split('points=')[1] || ''));
+});
+
+/* ---------- Разница модпаков ---------- */
+
+test('разница модпака показывает, что стало с каждым модом', () => {
+  // «Какие моды изменились» — вопрос, на который список из полутора
+  // сотен полных имён до и после не отвечает
+  const html = V.modsDiff([
+    { package: 'Ura/Core', change: 'updated', from: '1.0.0', to: '1.1.0' },
+    { package: 'Ura/New', change: 'added', to: '2.0.0' },
+    { package: 'Ura/Gone', change: 'removed', from: '0.9.0' },
+  ]);
+  assert.match(html, /Ura\/Core/);
+  assert.match(html, /1\.0\.0 → 1\.1\.0/);
+  assert.match(html, /1 появилось/);
+  assert.match(html, /1 обновилось/);
+  assert.match(html, /1 пропало/);
+});
+
+test('пустые разряды в сводке не перечисляются', () => {
+  // «0 пропало» не по-русски и мешает увидеть то, что изменилось
+  const html = V.modsDiff([{ package: 'A', change: 'added', to: '1.0' }]);
+  assert.match(html, /1 появилось/);
+  assert.ok(!/0 /.test(html.split('note">')[1] || ''));
+});
+
+test('одинаковый состав назван одинаковым, а не пустотой', () => {
+  assert.match(V.modsDiff([]), /Состав не изменился/);
+  assert.match(V.modsDiff([]), /не поменяется ничего/);
+});
+
+test('имя пакета с сервера не исполняется как разметка', () => {
+  assert.ok(!V.modsDiff([{ package: '<script>x</script>', change: 'added' }]).includes('<script>'));
+});
+
+/* ---------- Обложка заметки ---------- */
+
+test('обложку файлом предлагают только у сохранённой заметки', () => {
+  // Сервер кладёт её рядом с заметкой, а той ещё нет
+  assert.match(V.newsForm({ slug: 'release', existing: true }, []), /data-flow="cover"/);
+  const fresh = V.newsForm({ slug: '' }, []);
+  assert.ok(!/data-flow="cover"/.test(fresh));
+  assert.match(fresh, /после первого сохранения/);
+});

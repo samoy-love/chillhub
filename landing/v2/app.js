@@ -144,7 +144,7 @@
           <div class="game-top">
             ${
               g.iconUrl
-                ? `<img class="game-ico" src="${esc(g.iconUrl)}" alt="" width="40" height="40" loading="lazy" decoding="async">`
+                ? `<img class="game-ico" src="${esc(g.iconUrl)}" alt="" width="40" height="40" loading="lazy" decoding="async" data-letter="${esc(title.slice(0, 1))}">`
                 : `<span class="game-ico game-ico--letter" aria-hidden="true">${esc(title.slice(0, 1))}</span>`
             }
             <h3>${esc(title)}</h3>
@@ -230,6 +230,8 @@
         ? data.games.map(gameCard).join('')
         : '<p class="dim">Каталог сейчас пуст. Загляните позже: игры добавляются через админку и появляются здесь сами.</p>';
     }
+
+    imageFallback(games);
 
     const news = $('[data-news]');
     if (news) {
@@ -431,6 +433,33 @@
     });
   }
 
+  /* Картинка, которая не загрузилась, оставляет пустой прямоугольник —
+     страница выглядит недоделанной, а не «без иллюстрации». Значок игры
+     подменяется той же буквой на плашке, что и при отсутствии адреса;
+     остальные картинки просто убираются из потока. */
+  function imageFallback(root) {
+    $$('img', root || document).forEach((img) => {
+      if (img.dataset.fallbackDone) return;
+      img.dataset.fallbackDone = '1';
+      img.addEventListener(
+        'error',
+        () => {
+          const letter = img.dataset.letter;
+          if (letter) {
+            const span = document.createElement('span');
+            span.className = img.className.replace('game-ico', 'game-ico game-ico--letter');
+            span.setAttribute('aria-hidden', 'true');
+            span.textContent = letter;
+            img.replaceWith(span);
+            return;
+          }
+          img.hidden = true;
+        },
+        { once: true }
+      );
+    });
+  }
+
   function copyHash() {
     const btn = $('.copy-hash');
     if (!btn) return;
@@ -459,6 +488,7 @@
   slots();
   wish();
   skeletons();
+  imageFallback();
   copyHash();
   year();
 })();

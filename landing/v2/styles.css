@@ -91,6 +91,15 @@
 *::before,
 *::after { box-sizing: border-box; }
 
+/* Скрытое обязано быть скрытым.
+
+   Встроенное правило браузера `[hidden] { display: none }` слабее любого
+   собственного, задающего `display` элементу, — и скрытая строка
+   показывалась подписью без значения: «размер», «собран», «SHA-256» и
+   пустота рядом. Пряталось ровно от этого. Правило общее, потому что
+   ловить такие места по одному значит пропустить следующее. */
+[hidden] { display: none !important; }
+
 html {
   -webkit-text-size-adjust: 100%;
   scroll-behavior: smooth;
@@ -414,7 +423,12 @@ main { position: relative; z-index: 1; }
   padding: 0;
 }
 
+/* `display` в правиле для элемента списка сильнее встроенного
+   `[hidden] { display: none }` — и факты об установщике, которых нет,
+   показывались подписями без значений: «размер», «собран», «SHA-256» и
+   пустота. Это ровно то, ради чего их и прятали. */
 .dl-facts li { display: flex; gap: 6px; }
+.dl-facts li[hidden] { display: none; }
 .dl-facts b { color: var(--fg-2); font-weight: 400; }
 
 .dl-facts .copy-hash {

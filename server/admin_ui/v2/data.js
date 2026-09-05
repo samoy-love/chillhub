@@ -141,10 +141,10 @@
   /* --- Новости: /admin/api/news/list --- */
 
   const news = [
-    { id: 'n-141', title: 'Что за игра: R.E.P.O.', game: 'repo', at: '31.08.2026', state: 'published' },
-    { id: 'n-140', title: 'Как перенести игры на другой диск', game: '', at: '29.08.2026', state: 'published' },
-    { id: 'n-139', title: 'Какие моды идут в комплекте: Moo Modpack', game: 'repo', at: '30.08.2026', state: 'draft' },
-    { id: 'n-138', title: 'Очередь загрузок: качается одна игра, остальные ждут', game: '', at: '27.08.2026', state: 'published' },
+    { id: 'n-141', title: 'Что за игра: R.E.P.O.', game: 'repo', at: '31.08.2026', published: true },
+    { id: 'n-140', title: 'Как перенести игры на другой диск', game: '', at: '29.08.2026', published: true },
+    { id: 'n-139', title: 'Какие моды идут в комплекте: Moo Modpack', game: 'repo', at: '30.08.2026', published: false },
+    { id: 'n-138', title: 'Очередь загрузок: качается одна игра, остальные ждут', game: '', at: '27.08.2026', published: true },
   ];
 
   /* --- Обращения: /admin/api/feedback/list --- */

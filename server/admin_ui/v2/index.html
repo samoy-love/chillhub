@@ -88,6 +88,29 @@
 <!-- Транспорт подключается первым: он подменяет window.fetch и XHR, и
      всё, что грузится после, обязано ходить уже через него. -->
 <script src="./transport.js"></script>
+<!-- Проверяемые модули: форматирование, адреса, реестр действий,
+     хранилище разделов и разбор ответов. Каждый покрыт tests/web. -->
+<script src="./format.js"></script>
+<script src="./api.js"></script>
+<script src="./actions.js"></script>
+<script src="./store.js"></script>
+<script src="./sections.js"></script>
+<!-- Флоу со своей механикой. Куски, повторы и чтение потока берутся из
+     модулей версии 1.0 — здесь только порядок шагов. -->
+<script src="../chunk-upload.js"></script>
+<script src="../ndjson.js"></script>
+<script src="./upload.js"></script>
+<script src="./build.js"></script>
+<script src="../registry-diff.js"></script>
+<script src="./registry.js"></script>
+<script src="./news.js"></script>
+<script src="./gallery.js"></script>
+<script src="../upload-tuning.js"></script>
+<script src="./tuning.js"></script>
+<script src="./mods.js"></script>
+<script src="./manifest.js"></script>
+<script src="./views.js"></script>
+<!-- Снимок ответов: подставляется там, где флоу ещё не подключён. -->
 <script src="./data.js"></script>
 <script src="./admin.js"></script>
 </body>
