@@ -525,3 +525,54 @@ test('обрезанный список честно назван обрезан
 test('поле события не исполняется как разметка', () => {
   assert.ok(!V.errorEvents({ items: [{ gameId: '<script>x</script>' }] }).includes('<script>'));
 });
+
+/* ---------- Технические работы ---------- */
+
+test('форма работ спрашивает всё, что понимает сервер', () => {
+  const html = V.maintForm({ reason: 'переносим сборки', blocks: { launch: true } });
+  for (const n of ['reason', 'startsAt', 'endsAt', 'install', 'update', 'launch']) {
+    assert.match(html, new RegExp('name="' + n + '"'), 'нет поля ' + n);
+  }
+  assert.match(html, /переносим сборки/);
+});
+
+test('запуск игр по умолчанию оставляют открытым', () => {
+  // Игра стартует локально и серверу не мешает
+  const html = V.maintForm({ blocks: {} });
+  const launch = html.slice(html.indexOf('name="launch"'), html.indexOf('name="launch"') + 40);
+  assert.ok(!/checked/.test(launch), 'запуск закрыт по умолчанию');
+});
+
+test('время показывается местное, а уезжает в UTC', () => {
+  // Показывать UTC тому, кто назначает работы на свой вечер, — способ
+  // ошибиться на три часа
+  const local = V.localTime('2026-09-05T18:00:00Z');
+  assert.match(local, /^2026-09-05T\d{2}:\d{2}$/);
+  assert.strictEqual(V.isoTime(local), '2026-09-05T18:00:00.000Z');
+});
+
+test('пустое и битое время не превращается в дату', () => {
+  assert.strictEqual(V.localTime(''), '');
+  assert.strictEqual(V.localTime('не дата'), '');
+  assert.strictEqual(V.isoTime(''), '');
+  assert.strictEqual(V.isoTime('не дата'), '');
+});
+
+test('работы, которые ничего не закрывают, названы бессмысленными', () => {
+  assert.match(V.maintProblem({ enabled: true, blocks: {} }), /ничего и не делают/);
+  assert.strictEqual(V.maintProblem({ enabled: true, blocks: { install: true } }), '');
+});
+
+test('окно наоборот ловится до нажатия', () => {
+  const bad = V.maintProblem({
+    enabled: true,
+    blocks: { install: true },
+    startsAt: '2030-01-01T20:00:00Z',
+    endsAt: '2030-01-01T10:00:00Z',
+  });
+  assert.match(bad, /позже начала/);
+});
+
+test('выключение работ проверок не требует', () => {
+  assert.strictEqual(V.maintProblem({ enabled: false, blocks: {} }), '');
+});

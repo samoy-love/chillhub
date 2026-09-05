@@ -443,6 +443,63 @@
     );
   }
 
+  /* ---------- Карточка игры ---------- */
+
+  /**
+   * Поля одной строки реестра.
+   *
+   * Реестр — это то, что лаунчер читает при старте: чем игра
+   * запускается и как называется. Ошибка здесь ломает запуск у всех
+   * сразу, поэтому у каждого поля написано, на что оно влияет, а не
+   * просто как называется.
+   *
+   * Идентификатор у существующей игры не правится: он уже стал именем
+   * папки в манифестах и в контенте, и переименование в панели оставило
+   * бы файлы под старым именем — игра просто исчезла бы у игроков.
+   */
+  function gameForm(item, problems) {
+    const g = item || {};
+    const errs = problems || [];
+    const err = (field) => {
+      const hit = errs.find((e) => e.field === field);
+      return hit ? '<span class="help help--bad">' + esc(hit.message || hit.text) + '</span>' : '';
+    };
+    const field = (name, label, value, help, extra) =>
+      '<div class="field"><label for="g-' + name + '">' + esc(label) + '</label>' +
+      '<input id="g-' + name + '" name="' + name + '" type="text" value="' + esc(value) + '"' + (extra || '') + '>' +
+      (help ? '<span class="help">' + esc(help) + '</span>' : '') +
+      err(name) + '</div>';
+
+    return (
+      '<div class="cols cols--2">' +
+      field(
+        'gameId',
+        'Идентификатор',
+        g.gameId,
+        g.existing
+          ? 'Уже стал именем папки в манифестах и контенте — не меняется'
+          : 'Латиница в нижнем регистре, цифры, дефис и подчёркивание',
+        g.existing ? ' readonly' : ''
+      ) +
+      field('title', 'Название', g.title, 'Его игрок видит в списке слева') +
+      '</div>' +
+      field('exeRelativePath', 'Исполняемый файл', g.exeRelativePath, 'Путь внутри папки игры, например REPO.exe. Без него запускать нечего') +
+      '<div class="cols cols--2">' +
+      field('steamAppId', 'Steam AppID', g.steamAppId, 'Нужен, чтобы запустить игру через Steam') +
+      field('steamFolder', 'Папка в Steam', g.steamFolder, 'Как называется каталог игры внутри steamapps/common') +
+      '</div>' +
+      '<div class="field"><label for="g-icon">Иконка</label>' +
+      '<div class="btn-row"><input id="g-icon" name="iconUrl" type="text" value="' + esc(g.iconUrl) + '" placeholder="/manifests/' + esc(g.gameId || 'gameId') + '/icon.png">' +
+      (g.existing ? '<button class="btn" type="button" data-flow="icon">Загрузить</button>' : '') +
+      (g.iconUrl ? '<button class="btn btn--text" type="button" data-flow="icon-default">Вернуть стандартную</button>' : '') +
+      '</div>' +
+      '<span class="help">Без неё в списке будет буква на цветном квадрате</span></div>' +
+      '<label class="check"><input type="checkbox" name="published"' + (g.unpublished ? '' : ' checked') + '>' +
+      '<span>Показывать игрокам</span>' +
+      '<span class="help">Снятая галочка убирает игру из лаунчера, но файлы и версии остаются на месте</span></label>'
+    );
+  }
+
   /* ---------- Порядок игр ---------- */
 
   /**
@@ -507,6 +564,159 @@
       changed: true,
       text: 'Переедет ' + f.count(moved, 'строка', 'строки', 'строк') + '. Игроки увидят новый порядок сразу.',
     };
+  }
+
+  /* ---------- Обращение ---------- */
+
+  /**
+   * Обращение целиком.
+   *
+   * В списке видно первую строку, а починить по ней нельзя: важна
+   * диагностика — версия клиента, система, место на диске. Её присылает
+   * сам игрок, и это единственная зацепка под «у меня не качается».
+   */
+  function feedbackCard(item) {
+    const f = item || {};
+    const fm = F();
+    const sys = f.system && typeof f.system === 'object' ? f.system : null;
+
+    const head =
+      '<div class="handoff">' +
+      '<div><span class="k">Тип</span><span class="v">' + esc(f.type || 'other') + '</span></div>' +
+      '<div><span class="k">Когда</span><span class="v">' + esc(fm.dateTime(f.at)) + '</span></div>' +
+      (f.name ? '<div><span class="k">Кто</span><span class="v">' + esc(f.name) + '</span></div>' : '') +
+      (f.contact ? '<div><span class="k">Связь</span><span class="v">' + esc(f.contact) + '</span></div>' : '') +
+      '</div>';
+
+    const body = '<p class="quote">' + esc(f.comment || '') + '</p>';
+
+    const diag = sys
+      ? '<table><tbody>' +
+        Object.keys(sys)
+          .sort()
+          .map((k) => '<tr><td class="dim">' + esc(k) + '</td><td class="mono">' + esc(sys[k]) + '</td></tr>')
+          .join('') +
+        '</tbody></table>'
+      : '<div class="empty"><b>Диагностики нет</b><span>Игрок отправил обращение без неё</span></div>';
+
+    return head + body + '<h3 class="sub">Что за компьютер</h3>' + diag;
+  }
+
+  /**
+   * Ссылка для ответа.
+   *
+   * Своей почты у панели нет, и заводить её ради этого незачем: письмо
+   * пишется в обычном почтовом клиенте. Контакт игрок оставляет по
+   * желанию, поэтому ответить получится не на всё.
+   */
+  function replyLink(item) {
+    const f = item || {};
+    const contact = String(f.contact || '').trim();
+    if (!contact || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(contact)) return '';
+    const subject = 'Chill Hub: ответ на ваше обращение';
+    const quoted = String(f.comment || '')
+      .split('\n')
+      .map((l) => '> ' + l)
+      .join('\n');
+    return (
+      'mailto:' + encodeURIComponent(contact) +
+      '?subject=' + encodeURIComponent(subject) +
+      '&body=' + encodeURIComponent('\n\n' + quoted + '\n')
+    );
+  }
+
+  /** Диагностика одной строкой — чтобы вставить в переписку или задачу. */
+  function diagnosticsText(item) {
+    const f = item || {};
+    const sys = f.system && typeof f.system === 'object' ? f.system : {};
+    const lines = Object.keys(sys)
+      .sort()
+      .map((k) => k + ': ' + sys[k]);
+    return ['Обращение ' + (f.id || ''), 'Тип: ' + (f.type || ''), ''].concat(lines).join('\n');
+  }
+
+  /* ---------- Технические работы ---------- */
+
+  /**
+   * Форма работ: причина, окно и что именно закрывается.
+   *
+   * Всё это было в панели 1.0 и не декоративно. Причина — единственное,
+   * что игрок увидит вместо каталога; без неё он видит общую фразу и
+   * идёт спрашивать «а что случилось». Окончание сервер отрабатывает
+   * сам, и без него забытые включёнными работы — это тихо не работающий
+   * лаунчер у всех сразу. Блоки решают, что именно перестаёт отдаваться:
+   * закрыть установку, но оставить запуск уже скачанного — обычный
+   * случай, и одной кнопкой его не выразить.
+   */
+  function maintForm(state) {
+    const m = state || {};
+    const b = m.blocks || {};
+    const box = (name, label, on, hint) =>
+      '<label class="check"><input type="checkbox" name="' + name + '"' + (on ? ' checked' : '') + '>' +
+      '<span>' + esc(label) + '</span>' +
+      (hint ? '<span class="help">' + esc(hint) + '</span>' : '') +
+      '</label>';
+
+    return (
+      '<div class="field"><label for="mt-reason">Что увидит игрок</label>' +
+      '<textarea id="mt-reason" name="reason" rows="3" maxlength="500" placeholder="Переносим сборки на новый диск, вернёмся к 21:00 по Москве.">' +
+      esc(m.reason) +
+      '</textarea>' +
+      '<span class="help">Простым языком и с указанием времени. Пустое поле означает общую фразу без подробностей — и поток обращений «а что случилось».</span></div>' +
+
+      '<div class="cols cols--2">' +
+      '<div class="field"><label for="mt-from">Начало</label>' +
+      '<input id="mt-from" name="startsAt" type="datetime-local" value="' + esc(localTime(m.startsAt)) + '">' +
+      '<span class="help">Пусто — начинается сразу</span></div>' +
+      '<div class="field"><label for="mt-to">Окончание</label>' +
+      '<input id="mt-to" name="endsAt" type="datetime-local" value="' + esc(localTime(m.endsAt)) + '">' +
+      '<span class="help">Сервер выключит работы сам. Пусто — выключать придётся руками</span></div>' +
+      '</div>' +
+
+      '<div class="field"><label>Что закрывается</label>' +
+      box('install', 'Установку новых игр', b.install !== false) +
+      box('update', 'Обновление уже установленных', b.update !== false) +
+      box('launch', 'Запуск игр', b.launch === true, 'Обычно оставляют открытым: игра стартует локально и серверу не мешает') +
+      '</div>'
+    );
+  }
+
+  /* Время в поле ввода — местное, а на сервере RFC3339 в UTC. Показывать
+     UTC человеку, который назначает работы на свой вечер, — верный
+     способ ошибиться на три часа. */
+  function localTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    const p = (n) => String(n).padStart(2, '0');
+    return (
+      d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+      'T' + p(d.getHours()) + ':' + p(d.getMinutes())
+    );
+  }
+
+  /** Обратно: из поля ввода в то, что понимает сервер. */
+  function isoTime(local) {
+    if (!local) return '';
+    const d = new Date(local);
+    return Number.isNaN(d.getTime()) ? '' : d.toISOString();
+  }
+
+  /**
+   * Что не так с назначенным окном.
+   *
+   * Сервер откажет теми же словами, но уже после нажатия — а работы
+   * назначают заранее и на конкретное время.
+   */
+  function maintProblem(payload) {
+    const p = payload || {};
+    if (p.startsAt && p.endsAt && new Date(p.endsAt) <= new Date(p.startsAt)) {
+      return 'Окончание должно быть позже начала';
+    }
+    if (p.enabled && !p.blocks.install && !p.blocks.update && !p.blocks.launch) {
+      return 'Работы, которые ничего не закрывают, ничего и не делают';
+    }
+    return '';
   }
 
   /* ---------- События одного кода ---------- */
@@ -875,6 +1085,13 @@
     galleryCrumbs,
     galleryList,
     assetList,
+    feedbackCard,
+    replyLink,
+    diagnosticsText,
+    maintForm,
+    localTime,
+    isoTime,
+    maintProblem,
     errorEvents,
     launcherDiff,
     diffCounts,
@@ -886,6 +1103,7 @@
     importResult,
     logsView,
     ecosystemPicker,
+    gameForm,
     orderList,
     orderSummary,
     benchTable,

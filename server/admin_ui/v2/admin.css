@@ -857,3 +857,40 @@ tr.best > td { background: var(--ember-wash); }
 /* ---------- Ошибка поля ---------- */
 
 .help--bad { color: var(--bad); }
+
+/* Текст обращения — словами игрока, и это видно: отступ и полоса слева
+   отделяют его от того, что написала панель. */
+.quote {
+  margin: var(--s3) 0;
+  padding: var(--s2) var(--s3);
+  border-left: 2px solid var(--ember);
+  background: var(--bg-2);
+  white-space: pre-wrap;
+}
+
+.sub {
+  margin: var(--s4) 0 var(--s2);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--fg-2);
+}
+
+
+/* Галочка с подписью и пояснением. Пояснение под самой галочкой, а не
+   в общей справке внизу: решение «закрывать ли запуск игр» принимают
+   ровно в этот момент, а не дочитав до конца формы. */
+.check {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 var(--s2);
+  align-items: center;
+  padding: var(--s1) 0;
+  cursor: pointer;
+}
+
+.check input { margin: 0; accent-color: var(--ember); }
+.check .help { grid-column: 2; margin: 0; }
+
+/* Поле даты в тёмной теме иначе отдаёт системный белый прямоугольник */
+input[type="datetime-local"] { color-scheme: inherit; }
+

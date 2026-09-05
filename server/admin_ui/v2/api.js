@@ -41,7 +41,7 @@
      которые читали бы длинное значение из `Query()`, в API нет.
 
      Исключения перечислены поимённо: две ручки разбирают именно JSON. */
-  const JSON_BODY = new Set(['upload/init', 'games/save']);
+  const JSON_BODY = new Set(['upload/init', 'games/save', 'maintenance/set']);
 
   /** Длиннее этого в адрес не кладём. */
   const URL_VALUE_LIMIT = 512;
