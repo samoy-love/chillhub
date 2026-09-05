@@ -29,7 +29,7 @@
                         <Setter Property="Template">
                             <Setter.Value>
                                 <ControlTemplate TargetType="Button">
-                                    <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}"
+                                    <Border x:Name="bd" CornerRadius="{DynamicResource Radius.M}"
                                             Background="{TemplateBinding Background}"
                                             BorderBrush="{TemplateBinding BorderBrush}"
                                             BorderThickness="{TemplateBinding BorderThickness}">
@@ -107,7 +107,7 @@
                          подсвечиваться и нажиматься ему нечего. Отступы задаются здесь
                          явно — шаблон Style.SettingsButton свой Padding не пробрасывает. -->
                     <Border x:Name="HeaderDownloadsBtn" Height="32" Padding="12,0" Margin="0,0,8,0"
-                            Visibility="Collapsed" CornerRadius="{StaticResource Radius.M}"
+                            Visibility="Collapsed" CornerRadius="{DynamicResource Radius.M}"
                             Background="{DynamicResource Brush.Surface}"
                             BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
                             ToolTip="Очередь загрузок" ToolTipService.Placement="Bottom">
@@ -171,7 +171,7 @@
              а вторая копия той же разметки на второй странице разъехалась бы с первой.
              RowSpan на все три строки — затемнение обязано накрыть и шапку, и баннер
              работ, иначе кнопки под «модальным» окном остаются нажимаемыми. -->
-        <Grid x:Name="ChangelogOverlay" Visibility="Collapsed" Background="#C0000000"
+        <Grid x:Name="ChangelogOverlay" Visibility="Collapsed" Background="{DynamicResource Brush.Scrim}"
               HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Grid.RowSpan="3">
           <Grid.Resources>
             <BooleanToVisibilityConverter x:Key="Changelog.BoolToVis"/>
@@ -209,7 +209,7 @@
             <!-- Один выпуск: номер версии, дата и пункты. Слева — акцентная полоса:
                  она делит длинный список на выпуски заметнее, чем отступ. -->
             <DataTemplate x:Key="Template.Changelog.Release">
-              <Border Background="{DynamicResource Brush.Surface2}" CornerRadius="8"
+              <Border Background="{DynamicResource Brush.Surface2}" CornerRadius="{DynamicResource Radius.M}"
                       BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
                       Margin="0,0,0,12" SnapsToDevicePixels="True" UseLayoutRounding="True">
                 <Grid>
@@ -232,10 +232,10 @@
                            читать. На первом запуске отмечать нечем, и значка не будет
                            ни у одного выпуска (см. ChangelogMarks). -->
                       <Border Grid.Column="1" Margin="10,2,0,0" Padding="7,2" VerticalAlignment="Center"
-                              CornerRadius="{StaticResource Radius.S}"
+                              CornerRadius="{DynamicResource Radius.S}"
                               Background="{DynamicResource Brush.AccentFill}"
                               Visibility="{Binding IsNew, Converter={StaticResource Changelog.BoolToVis}}">
-                        <TextBlock Text="Новое" FontSize="10.5" FontWeight="SemiBold" Foreground="#FFFFFF"/>
+                        <TextBlock Text="Новое" FontSize="10.5" FontWeight="SemiBold" Foreground="{DynamicResource Brush.OnAccent}"/>
                       </Border>
                       <TextBlock Grid.Column="2" Text="{Binding DateText}" FontSize="12.5"
                                  HorizontalAlignment="Right" VerticalAlignment="Center"
@@ -253,13 +253,13 @@
                содержимого делает текст мыльным. Тот же приём, что и у формы обратной связи
                на главной. -->
           <Border Width="720" HorizontalAlignment="Center" VerticalAlignment="Stretch" Margin="0,40,0,34"
-                  CornerRadius="12" Background="#000000" Opacity="0.22"
+                  CornerRadius="{DynamicResource Radius.L}" Background="#000000" Opacity="0.22"
                   SnapsToDevicePixels="True" UseLayoutRounding="True"/>
 
           <!-- VerticalAlignment=Stretch + Margin держат карточку внутри окна: список длинный,
                и при Center он ушёл бы за нижний край экрана вместо того, чтобы прокручиваться. -->
           <Border Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderHover}"
-                  BorderThickness="1" CornerRadius="10" Width="720"
+                  BorderThickness="1" CornerRadius="{DynamicResource Radius.L}" Width="720"
                   HorizontalAlignment="Center" VerticalAlignment="Stretch" Margin="0,40,0,40"
                   SnapsToDevicePixels="True" UseLayoutRounding="True"
                   TextOptions.TextRenderingMode="ClearType" TextOptions.TextFormattingMode="Display"

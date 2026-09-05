@@ -16,7 +16,7 @@
 
     <TextBlock x:Name="HeadingText" FontSize="18" TextWrapping="Wrap" Margin="0,0,0,8"/>
 
-    <Border Grid.Row="1" Background="{DynamicResource Brush.Surface}" Padding="12" CornerRadius="6"
+    <Border Grid.Row="1" Background="{DynamicResource Brush.Surface}" Padding="12" CornerRadius="{DynamicResource Radius.S}"
             BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
       <TextBlock x:Name="MessageText" TextWrapping="Wrap"
                  Foreground="{DynamicResource Brush.TextSecondary}"/>

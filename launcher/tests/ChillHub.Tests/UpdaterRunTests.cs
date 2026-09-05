@@ -59,6 +59,67 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// После удачного обновления оболочке говорят перечитать значки.
+        /// <para>
+        /// Ярлыки лаунчера своей иконки не задают и берут её из ресурса exe, но Windows
+        /// держит разобранные значки в кеше. Без этого толчка смена значка выглядит как
+        /// «обновилось, а иконка прежняя» — иногда до перезагрузки.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public async Task ПослеОбновленияОболочкеГоворятПеречитатьЗначки() {
+            using var dir = new TempDir();
+            dir.WriteFile("dst/ChillHub.dll", "старая сборка");
+            var exe = dir.WriteFile("dst/ChillHub.exe", "лаунчер");
+            dir.WriteFile("src/ChillHub.dll", "новая сборка");
+            var files = dir.WriteFile("filelist.txt", "ChillHub.dll\r\n");
+
+            var started = new List<ProcessStartInfo>();
+            var icons = new List<string>();
+
+            var exit = await global::Program.RunMainAsync(
+                Args(dir, exe, "--files", files, "--version", "1.2.3"),
+                Host(started, icons));
+
+            Assert.Equal(0, exit);
+            Assert.Single(icons);
+        }
+
+        /// <summary>
+        /// Значки перечитываются ДО того, как лаунчер вернётся на экран.
+        /// <para>
+        /// Порядок здесь и есть смысл: если толкнуть оболочку после перезапуска, окно
+        /// уже нарисовано со старым значком, и в панели задач он таким и останется до
+        /// следующего запуска.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public async Task ЗначкиОбновляютсяДоПерезапускаЛаунчера() {
+            using var dir = new TempDir();
+            dir.WriteFile("dst/ChillHub.dll", "старая сборка");
+            var exe = dir.WriteFile("dst/ChillHub.exe", "лаунчер");
+            dir.WriteFile("src/ChillHub.dll", "новая сборка");
+            var files = dir.WriteFile("filelist.txt", "ChillHub.dll\r\n");
+
+            var order = new List<string>();
+            var host = new global::Program.UpdaterHost {
+                WaitForParent = (_, _) => { },
+                StartProcess = _ => {
+                    order.Add("restart");
+                    return 4242;
+                },
+                Sleep = _ => { },
+                RefreshIconCache = _ => order.Add("icons"),
+            };
+
+            await global::Program.RunMainAsync(
+                Args(dir, exe, "--files", files, "--version", "1.2.3"),
+                host);
+
+            Assert.Equal(new[] { "icons", "restart" }, order);
+        }
+
+        /// <summary>
         /// Родителя ждём ДО первой записи в папку установки. Скопировать поверх живого
         /// лаунчера нельзя: его exe и dll заблокированы, половина файлов не встанет,
         /// и обновление развалится без внятной причины.
@@ -215,7 +276,7 @@ namespace ChillHub.Tests {
         }
 
         // Шов, в котором ничего не запускается и никто не ждёт.
-        private static global::Program.UpdaterHost Host(List<ProcessStartInfo> started)
+        private static global::Program.UpdaterHost Host(List<ProcessStartInfo> started, List<string>? icons = null)
             => new global::Program.UpdaterHost {
                 WaitForParent = (_, _) => { },
                 StartProcess = psi => {
@@ -223,6 +284,7 @@ namespace ChillHub.Tests {
                     return 4242;
                 },
                 Sleep = _ => { },
+                RefreshIconCache = _ => icons?.Add("refreshed"),
             };
     }
 
