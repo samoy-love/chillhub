@@ -63,10 +63,10 @@
             <ControlTemplate TargetType="ProgressBar">
               <Grid ClipToBounds="True">
                 <!-- Track with thick dark border and dark background; named PART_Track so WPF wires it -->
-                <Border x:Name="PART_Track" CornerRadius="6" BorderThickness="2.5"
+                <Border x:Name="PART_Track" CornerRadius="{DynamicResource Radius.S}" BorderThickness="2.5"
                         Background="{DynamicResource Brush.ProgressTrack}" BorderBrush="{DynamicResource Brush.ProgressBorder}"/>
                 <!-- Indicator; named PART_Indicator so WPF sets width automatically for determinate mode -->
-                <Border x:Name="PART_Indicator" CornerRadius="6" Background="{DynamicResource Brush.AccentFill}"
+                <Border x:Name="PART_Indicator" CornerRadius="{DynamicResource Radius.S}" Background="{DynamicResource Brush.AccentFill}"
                         HorizontalAlignment="Left"/>
               </Grid>
             </ControlTemplate>
@@ -90,7 +90,7 @@
       <ProgressBar x:Name="Progress" Height="14" Minimum="0" Maximum="100" Value="0" Margin="0,0,0,8"
                    Visibility="Collapsed" Style="{DynamicResource Style.ProgressBar.Rounded}"/>
       <StackPanel x:Name="DevPanel">
-        <Border Background="{DynamicResource Brush.Surface}" Padding="8" CornerRadius="6" Margin="0,0,0,8" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+        <Border Background="{DynamicResource Brush.Surface}" Padding="8" CornerRadius="{DynamicResource Radius.S}" Margin="0,0,0,8" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
           <TextBlock Text="Для разработки можно пропустить проверку. Отметьте флаг ниже и нажмите 'Продолжить'."
                      Foreground="{DynamicResource Brush.TextSecondary}"/>
         </Border>

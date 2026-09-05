@@ -24,32 +24,45 @@ namespace ChillHub.Tests {
     /// </para>
     /// </summary>
     public class ThemeContrastTests {
-        /// <summary>Подпись главной кнопки читается в покое, под курсором и в нажатии.</summary>
+        /// <summary>
+        /// Подпись главной кнопки читается в покое, под курсором и в нажатии.
+        /// <para>
+        /// Проверяется та краска, которой подпись набрана на самом деле — Brush.OnAccent.
+        /// Раньше здесь стоял белый: на прежней фиолетовой заливке он и был подписью. На
+        /// угольке белая даёт 3,70 и порог не берёт, поэтому подпись стала тёмной; тест,
+        /// проверяющий белую, после смены палитры проверял бы несуществующее сочетание.
+        /// </para>
+        /// </summary>
         [Theory]
         [InlineData("Brush.AccentFill")]
         [InlineData("Brush.AccentFillHover")]
         [InlineData("Brush.AccentFillPressed")]
-        public void БелаяПодписьНаЗаливкеКнопкиПроходитПорог(string fillKey)
+        public void ПодписьНаЗаливкеКнопкиПроходитПорог(string fillKey)
             => UiThread.Run(() => {
                 var fill = Color(fillKey);
+                var label = Color("Brush.OnAccent");
 
                 Assert.True(
-                    Contrast(Colors.White, fill) >= 4.5,
-                    $"{fillKey}: белая подпись даёт {Contrast(Colors.White, fill):0.00}:1 при пороге 4.5:1");
+                    Contrast(label, fill) >= 4.5,
+                    $"{fillKey}: подпись даёт {Contrast(label, fill):0.00}:1 при пороге 4.5:1");
             });
 
         /// <summary>
         /// Подписи вторичным и приглушённым цветом читаются на самом светлом из фонов, на
-        /// которых они встречаются, — на карточке поверх карточки.
+        /// которых они встречаются. С палитрой 2.0 таким фоном стала третья ступень
+        /// (поле ввода, дорожка ползунка), а не вторая: приглушённый #7A848D из палитры
+        /// сайта давал на ней 3,86 и порог не брал — в теме он поэтому светлее.
         /// </summary>
         [Theory]
-        [InlineData("Brush.TextSecondary")]
-        [InlineData("Brush.TextMuted")]
-        public void ВторичныеПодписиЧитаютсяНаКарточке(string textKey)
+        [InlineData("Brush.TextSecondary", "Brush.Surface2")]
+        [InlineData("Brush.TextMuted", "Brush.Surface2")]
+        [InlineData("Brush.TextSecondary", "Brush.Surface3")]
+        [InlineData("Brush.TextMuted", "Brush.Surface3")]
+        public void ВторичныеПодписиЧитаютсяНаКарточке(string textKey, string surfaceKey)
             => UiThread.Run(() => {
-                var ratio = Contrast(Color(textKey), Color("Brush.Surface2"));
+                var ratio = Contrast(Color(textKey), Color(surfaceKey));
 
-                Assert.True(ratio >= 4.5, $"{textKey} на Surface2 даёт {ratio:0.00}:1 при пороге 4.5:1");
+                Assert.True(ratio >= 4.5, $"{textKey} на {surfaceKey} даёт {ratio:0.00}:1 при пороге 4.5:1");
             });
 
         /// <summary>

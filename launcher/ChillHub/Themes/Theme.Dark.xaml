@@ -3,80 +3,110 @@
                     xmlns:sys="clr-namespace:System;assembly=mscorlib"
                     xmlns:ui="clr-namespace:ChillHub.Core.UI">
   <!-- Palette -->
-  <!-- Одна акцентная краска (#7C5CFF) и три статусных цвета. Раньше акцентов было три —
-       розовый, фиолетовый и градиент между ними — и ни один из них не значил «главное». -->
-  <Color x:Key="Color.Background">#0C0C10</Color>        <!-- фон окна -->
-  <Color x:Key="Color.Surface">#14141B</Color>           <!-- карточка на фоне -->
-  <Color x:Key="Color.Surface2">#1B1B24</Color>          <!-- карточка на карточке -->
-  <Color x:Key="Color.Border">#24242F</Color>
-  <Color x:Key="Color.Text">#E9E9F0</Color>
-  <Color x:Key="Color.TextSecondary">#9A9AAB</Color>
-  <!-- #86869F, а не #6E6E80: на карточке (#14141B) старый давал контраст 3.7:1 —
-       ниже порога AA 4.5:1 для мелкого текста, а именно им набраны все подписи.
-       Промежуточный #80809A порог на #14141B проходил (4.8:1), но не на карточке
-       поверх карточки (#1B1B24) и на выделенной строке списка (#1B1B26) — там
-       выходило 4.45:1, а подписи игр стоят именно на них. #86869F даёт 4.8:1
-       на самом светлом из фонов, на которых он встречается. -->
-  <Color x:Key="Color.TextMuted">#86869F</Color>          <!-- подписи, «не установлена» -->
-  <!-- Единственный акцент -->
-  <Color x:Key="Color.Accent">#7C5CFF</Color>
-  <Color x:Key="Color.AccentHover">#8F73FF</Color>
-  <Color x:Key="Color.SecondaryAccent">#6949E0</Color>   <!-- нажатое состояние акцента -->
   <!--
-    ЗАЛИВКА ГЛАВНЫХ КНОПОК. Отдельная от Color.Accent, и вот почему.
+    ХОЛОДНАЯ НОЧЬ И ОДИН УГОЛЁК. Та же система, что у сайта и админки 2.0.
 
-    Акцент #7C5CFF стоит ровно посередине по светлоте: на нём не читается ни белая
-    подпись (4.35:1), ни тёмная (4.49:1) — обе не дотягивают до порога AA 4.5:1 для
-    мелкого текста, а именно им набраны кнопки. Прежний комментарий обещал тёмному
-    тексту 6:1; счёт этого не подтверждает.
+    Ушла связка «фиолетовый #7C5CFF на чёрном #0C0C10»: она читалась как самый
+    расхожий признак наспех сделанного интерфейса и, что важнее, спорила с
+    обложками игр — те стоят рядом и обязаны держать свой цвет.
 
-    Эта краска темнее ровно настолько, чтобы белая подпись давала 5.8:1, а наведение
-    и нажатие оставались различимыми и тоже проходили порог (4.9:1 и 7.0:1). Сам
-    акцент при этом не трогаем: полосы прогресса, рамка выбранной карточки и проценты
-    стоят на тёмном фоне, где он читается прекрасно.
+    Глубина здесь набирается СВЕТЛОТОЙ, а не тенями: четыре ступени фона от
+    страницы до третьей карточки. Тени остаются только у настоящих оверлеев,
+    которые действительно висят над экраном.
+
+    Каждая краска ниже проверена счётом на всех четырёх фонах, где встречается,
+    а не подобрана на глаз. Цифры в комментариях — худший контраст из четырёх.
   -->
-  <Color x:Key="Color.AccentFill">#6949E0</Color>
-  <Color x:Key="Color.AccentFillHover">#7457E6</Color>
-  <Color x:Key="Color.AccentFillPressed">#5A3FCC</Color>
+  <Color x:Key="Color.Background">#0E1114</Color>        <!-- фон окна -->
+  <Color x:Key="Color.Surface">#14181D</Color>           <!-- карточка на фоне -->
+  <Color x:Key="Color.Surface2">#1A2027</Color>          <!-- карточка на карточке -->
+  <Color x:Key="Color.Surface3">#212932</Color>          <!-- поле ввода, дорожка -->
+  <Color x:Key="Color.Border">#262E36</Color>
+  <Color x:Key="Color.Border2">#384450</Color>           <!-- рамка под курсором -->
+  <Color x:Key="Color.Text">#DDE2E6</Color>              <!-- 11,27 -->
+  <Color x:Key="Color.TextSecondary">#98A3AC</Color>     <!-- 5,72 -->
+  <!--
+    #8A949D, а не #7A848D из палитры сайта. На сайте приглушённый текст не
+    попадает на третью карточку, а здесь попадает — на #212932 он давал 3,86,
+    ниже порога AA 4,5 для мелкого текста, а им набраны все подписи. #8A949D
+    даёт 4,76 на самом светлом из фонов, на которых встречается.
+  -->
+  <Color x:Key="Color.TextMuted">#8A949D</Color>          <!-- подписи, «не установлена» -->
+  <!--
+    ДВА УГЛЯ, А НЕ ОДИН, И ВОТ ПОЧЕМУ.
+
+    Color.Accent — краска ЗНАКА: полосы прогресса, проценты, рамка выбранной
+    карточки, каретка караоке. Она стоит на тёмном фоне, и ей нужен контраст
+    к нему: #E5825B даёт 5,38 на самом светлом фоне, а #D1663C — только 3,98.
+
+    Color.AccentFill — краска ЗАЛИВКИ главной кнопки. Здесь наоборот: важен
+    контраст подписи НА ней. На #D1663C тёмная подпись даёт 5,30, а белая —
+    3,70, то есть белая порог не берёт. Поэтому подпись на заливке тёмная
+    (Brush.OnAccent), и это единственное место, где текст темнее фона.
+  -->
+  <Color x:Key="Color.Accent">#E5825B</Color>
+  <Color x:Key="Color.AccentHover">#F09A72</Color>
+  <Color x:Key="Color.SecondaryAccent">#C25A33</Color>   <!-- нажатое состояние акцента -->
+  <Color x:Key="Color.AccentFill">#D1663C</Color>
+  <Color x:Key="Color.AccentFillHover">#E5825B</Color>
+  <Color x:Key="Color.AccentFillPressed">#C25E37</Color>
+  <Color x:Key="Color.OnAccent">#140904</Color>          <!-- подпись на заливке, 5,30 -->
+  <!-- Выключенная главная кнопка: тёплая, но погасшая. Светлая подпись на ней
+       (Brush.TextSecondary) читается, тёмная — нет, поэтому подпись у выключенной
+       своя, см. триггеры IsEnabled в HomePage. -->
+  <Color x:Key="Color.AccentFillDisabled">#33261F</Color>
   <!-- Пункт меню и выпадающего списка под курсором и в нажатии. Отдельные краски, а не
-       Brush.Hover: тот совпадает с фоном самого меню (Surface2 #1B1B24), и наведение на
-       пункт не было видно вовсе — список выглядел нерабочим. Взяты с запасом по светлоте
-       (1.55 и 1.85 к фону меню): подсветка на грани различимости в списке из четырёх
-       строк не отвечает на вопрос «на чём я сейчас». -->
-  <Color x:Key="Color.MenuHover">#3F3175</Color>
-  <Color x:Key="Color.MenuPressed">#4A3A8C</Color>
-  <!-- Статусы игр: готова / нужно обновление / проблема -->
-  <Color x:Key="Color.Success">#57C98A</Color>
-  <Color x:Key="Color.Warning">#E0A64B</Color>
-  <Color x:Key="Color.Danger">#E06B6B</Color>
-  <Color x:Key="Color.Selection">#1B1B26</Color>
+       Brush.Hover: тот совпадает с фоном самого меню, и наведение на пункт не было видно
+       вовсе — список выглядел нерабочим. Взяты с запасом по светлоте (1,52 и 1,72 к фону
+       меню): подсветка на грани различимости в списке из четырёх строк не отвечает на
+       вопрос «на чём я сейчас». Тёплыми их не делаем — уголёк в интерфейсе один, и он
+       занят главным действием. -->
+  <Color x:Key="Color.MenuHover">#333F4A</Color>
+  <Color x:Key="Color.MenuPressed">#3A4753</Color>
+  <!-- Статусы игр: готова / нужно обновление / проблема. Все три проверены на четырёх
+       фонах; краски сайта пришлось осветлить — #C0564D давал 3,28 на третьей карточке. -->
+  <Color x:Key="Color.Success">#7DAB71</Color>            <!-- 5,56 -->
+  <Color x:Key="Color.Warning">#BF9439</Color>            <!-- 5,26 -->
+  <Color x:Key="Color.Danger">#D47A70</Color>             <!-- 4,77 -->
+  <!-- Заливка опасной кнопки: приглушённый тёплый красный, заметный, но не спорящий
+       с угольком главного действия. Светлая подпись на нём даёт 11,45. -->
+  <Color x:Key="Color.DangerFill">#3A1F1C</Color>
+  <Color x:Key="Color.DangerFillHover">#4A2925</Color>
+  <Color x:Key="Color.DangerFillPressed">#5A332E</Color>
+  <Color x:Key="Color.DangerFillDisabled">#241614</Color>
+  <Color x:Key="Color.DangerText">#F0DCD9</Color>
+  <Color x:Key="Color.Selection">#1A2027</Color>
   <!-- Состояния -->
-  <Color x:Key="Color.HeaderStart">#101017</Color>
-  <Color x:Key="Color.HeaderMid">#101017</Color>
-  <Color x:Key="Color.HeaderEnd">#101017</Color>
-  <Color x:Key="Color.Hover">#1B1B24</Color>
-  <Color x:Key="Color.Pressed">#22222E</Color>
-  <Color x:Key="Color.BorderHover">#35354A</Color>
-  <Color x:Key="Color.BorderPressed">#35354A</Color>
-  <Color x:Key="Color.ListHover">#16161E</Color>
-  <Color x:Key="Color.ListHoverAlt">#1B1B24</Color>
-  <Color x:Key="Color.Skeleton">#1B1B24</Color>
+  <Color x:Key="Color.HeaderStart">#12161A</Color>
+  <Color x:Key="Color.HeaderMid">#12161A</Color>
+  <Color x:Key="Color.HeaderEnd">#12161A</Color>
+  <Color x:Key="Color.Hover">#1A2027</Color>
+  <Color x:Key="Color.Pressed">#212932</Color>
+  <Color x:Key="Color.BorderHover">#384450</Color>
+  <Color x:Key="Color.BorderPressed">#384450</Color>
+  <Color x:Key="Color.ListHover">#171C22</Color>
+  <Color x:Key="Color.ListHoverAlt">#1A2027</Color>
+  <Color x:Key="Color.Skeleton">#1A2027</Color>
   <!-- Слайдеры и полосы -->
-  <Color x:Key="Color.Track">#22222E</Color>
-  <Color x:Key="Color.TrackFill">#7C5CFF</Color>
-  <Color x:Key="Color.Thumb">#4A4458</Color>
-  <Color x:Key="Color.ThumbHover">#7C5CFF</Color>
-  <Color x:Key="Color.ThumbActive">#8F73FF</Color>
-  <!-- Три радиуса на всё приложение: мелкое, контролы, карточки -->
-  <CornerRadius x:Key="Radius.S">6</CornerRadius>
-  <CornerRadius x:Key="Radius.M">8</CornerRadius>
-  <CornerRadius x:Key="Radius.L">12</CornerRadius>
+  <Color x:Key="Color.Track">#212932</Color>
+  <Color x:Key="Color.TrackFill">#D1663C</Color>
+  <Color x:Key="Color.Thumb">#384450</Color>
+  <Color x:Key="Color.ThumbHover">#D1663C</Color>
+  <Color x:Key="Color.ThumbActive">#E5825B</Color>
+  <!-- Три радиуса на всё приложение: мелкое, контролы, карточки. Были 6/8/12 — мягкое
+       скругление «по умолчанию», за которое цепляется глаз. Стало 3/4/5: форма читается
+       как инструмент, а не как карточка в ленте. -->
+  <CornerRadius x:Key="Radius.S">3</CornerRadius>
+  <CornerRadius x:Key="Radius.M">4</CornerRadius>
+  <CornerRadius x:Key="Radius.L">5</CornerRadius>
 
   <!-- Brushes mapped to new Palette -->
   <SolidColorBrush x:Key="Brush.Background" Color="{StaticResource Color.Background}"/>
   <SolidColorBrush x:Key="Brush.Surface" Color="{StaticResource Color.Surface}"/>
   <SolidColorBrush x:Key="Brush.Surface2" Color="{StaticResource Color.Surface2}"/>
+  <SolidColorBrush x:Key="Brush.Surface3" Color="{StaticResource Color.Surface3}"/>
   <SolidColorBrush x:Key="Brush.Border" Color="{StaticResource Color.Border}"/>
+  <SolidColorBrush x:Key="Brush.Border2" Color="{StaticResource Color.Border2}"/>
   <SolidColorBrush x:Key="Brush.Text" Color="{StaticResource Color.Text}"/>
   <SolidColorBrush x:Key="Brush.TextSecondary" Color="{StaticResource Color.TextSecondary}"/>
   <SolidColorBrush x:Key="Brush.TextMuted" Color="{StaticResource Color.TextMuted}"/>
@@ -88,11 +118,17 @@
   <SolidColorBrush x:Key="Brush.AccentFill" Color="{StaticResource Color.AccentFill}"/>
   <SolidColorBrush x:Key="Brush.AccentFillHover" Color="{StaticResource Color.AccentFillHover}"/>
   <SolidColorBrush x:Key="Brush.AccentFillPressed" Color="{StaticResource Color.AccentFillPressed}"/>
+  <!-- Подпись на залитой кнопке: тёмная, потому что белая на угле не берёт порог. -->
+  <SolidColorBrush x:Key="Brush.OnAccent" Color="{StaticResource Color.OnAccent}"/>
+  <SolidColorBrush x:Key="Brush.AccentFillDisabled" Color="{StaticResource Color.AccentFillDisabled}"/>
+  <!-- Затемнение под настоящими оверлеями. Единственное место, где чёрный уместен:
+       это не поверхность, а тень от неё на всём остальном. -->
+  <SolidColorBrush x:Key="Brush.Scrim" Color="#C0000000"/>
   <SolidColorBrush x:Key="Brush.MenuHover" Color="{StaticResource Color.MenuHover}"/>
   <SolidColorBrush x:Key="Brush.MenuPressed" Color="{StaticResource Color.MenuPressed}"/>
   <!-- Заливка главной кнопки. Ключ остался с градиентных времён, но краска теперь одна:
        градиент на тёмном фоне всё равно читался как грязное пятно. -->
-  <SolidColorBrush x:Key="Brush.AccentGradientPrimary" Color="{StaticResource Color.Accent}"/>
+  <SolidColorBrush x:Key="Brush.AccentGradientPrimary" Color="{StaticResource Color.AccentFill}"/>
   <!-- State brushes -->
   <SolidColorBrush x:Key="Brush.Hover" Color="{StaticResource Color.Hover}"/>
   <SolidColorBrush x:Key="Brush.Pressed" Color="{StaticResource Color.Pressed}"/>
@@ -285,7 +321,7 @@
       <Setter.Value>
         <ControlTemplate TargetType="ContentControl">
           <Grid ClipToBounds="True">
-            <Border CornerRadius="10" Background="{DynamicResource Brush.Surface}" Opacity="0.35"/>
+            <Border CornerRadius="{StaticResource Radius.L}" Background="{DynamicResource Brush.Surface}" Opacity="0.35"/>
             <Rectangle>
               <Rectangle.Fill>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
@@ -356,7 +392,7 @@
       <Setter.Value>
         <ControlTemplate TargetType="ContentControl">
           <Grid ClipToBounds="True">
-            <Border CornerRadius="6" Background="{DynamicResource Brush.Surface}" Opacity="0.35"/>
+            <Border CornerRadius="{StaticResource Radius.S}" Background="{DynamicResource Brush.Surface}" Opacity="0.35"/>
             <Rectangle x:Name="SkRect2">
               <Rectangle.Fill>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
@@ -505,9 +541,9 @@
   <!-- Primary button (e.g., Play) -->
   <Style x:Key="Style.Button.Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
     <Setter Property="Background" Value="{DynamicResource Brush.AccentFill}"/>
-    <!-- Белый по Brush.AccentFill — 5.8:1. На самом акценте (#7C5CFF) не проходили обе
-         подписи: белая 4.35:1, тёмная 4.49:1 при пороге 4.5:1 — см. Color.AccentFill. -->
-    <Setter Property="Foreground" Value="#FFFFFF"/>
+    <!-- Подпись тёмная, а не белая: на угле #D1663C тёмная даёт 5,30, белая — 3,70,
+         то есть порог AA 4,5 белая не берёт. См. Color.AccentFill. -->
+    <Setter Property="Foreground" Value="{DynamicResource Brush.OnAccent}"/>
     <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="BorderBrush" Value="Transparent"/>
     <Setter Property="Padding" Value="12,6"/>
@@ -610,10 +646,11 @@
        Одна на всё приложение — раньше главная красила отмену так, а страница игры
        показывала её ТОЙ ЖЕ фиолетовой заливкой, что и «Установить»: остановить закачку
        и начать её выглядели одинаково. -->
-  <SolidColorBrush x:Key="Brush.DangerFill" Color="#2A1E22"/>
-  <SolidColorBrush x:Key="Brush.DangerFillHover" Color="#3A2A2E"/>
-  <SolidColorBrush x:Key="Brush.DangerFillPressed" Color="#48343A"/>
-  <SolidColorBrush x:Key="Brush.DangerText" Color="#F0D9D9"/>
+  <SolidColorBrush x:Key="Brush.DangerFill" Color="{StaticResource Color.DangerFill}"/>
+  <SolidColorBrush x:Key="Brush.DangerFillHover" Color="{StaticResource Color.DangerFillHover}"/>
+  <SolidColorBrush x:Key="Brush.DangerFillPressed" Color="{StaticResource Color.DangerFillPressed}"/>
+  <SolidColorBrush x:Key="Brush.DangerFillDisabled" Color="{StaticResource Color.DangerFillDisabled}"/>
+  <SolidColorBrush x:Key="Brush.DangerText" Color="{StaticResource Color.DangerText}"/>
   <Style x:Key="Style.Button.Danger" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
     <Setter Property="Background" Value="{StaticResource Brush.DangerFill}"/>
     <Setter Property="Foreground" Value="{StaticResource Brush.DangerText}"/>
@@ -1046,7 +1083,7 @@
 
   <!-- Ползунок: дорожка 4px, заполненная часть — акцент, бегунок — светлый круг с
        акцентным кольцом, под курсором и при перетаскивании кольцо ярче и бегунок чуть
-       больше. Прежний бегунок был тёмно-серым (#4A4458) кругом на тёмной же дорожке —
+       больше. Прежний бегунок был тёмно-серым кругом на тёмной же дорожке —
        его приходилось искать, а заполнение уезжало под бегунок отрицательным отступом. -->
   <Style TargetType="Slider">
     <Setter Property="Foreground" Value="{StaticResource Brush.Accent}"/>
@@ -1140,7 +1177,7 @@
                       BorderBrush="{StaticResource Brush.Border}"
                       BorderThickness="1"/>
               <Path x:Name="CheckMark" Data="M 3 9 L 7 13 L 15 5"
-                      StrokeThickness="2" Stroke="#0C0C10" Visibility="Collapsed"
+                      StrokeThickness="2" Stroke="{DynamicResource Brush.Background}" Visibility="Collapsed"
                       StrokeEndLineCap="Square" StrokeLineJoin="Round"/>
             </Grid>
             <ContentPresenter VerticalAlignment="Center"/>
@@ -1259,16 +1296,16 @@
   <LinearGradientBrush x:Key="Brush.HeroScrim" StartPoint="0,0" EndPoint="0,1">
     <GradientStop Offset="0" Color="#00000000"/>
     <GradientStop Offset="0.5" Color="#33000000"/>
-    <GradientStop Offset="1" Color="#CC0C0C10"/>
+    <GradientStop Offset="1" Color="#CC0E1114"/>
   </LinearGradientBrush>
   <!-- Второй слой затемнения — слева направо, под заголовок и кнопку в левом нижнем углу.
        Правая половина обложки остаётся почти нетронутой: там обычно логотип игры. -->
   <LinearGradientBrush x:Key="Brush.HeroScrimSide" StartPoint="0,0" EndPoint="1,0">
-    <GradientStop Offset="0" Color="#990C0C10"/>
-    <GradientStop Offset="0.5" Color="#260C0C10"/>
-    <GradientStop Offset="1" Color="#000C0C10"/>
+    <GradientStop Offset="0" Color="#990E1114"/>
+    <GradientStop Offset="0.5" Color="#260E1114"/>
+    <GradientStop Offset="1" Color="#000E1114"/>
   </LinearGradientBrush>
-  <SolidColorBrush x:Key="Brush.HeroBadge.Bg" Color="#1B1B24"/>
+  <SolidColorBrush x:Key="Brush.HeroBadge.Bg" Color="{StaticResource Color.Surface2}"/>
   <SolidColorBrush x:Key="Brush.HeroBadge.Border" Color="{StaticResource Color.Border}"/>
 
   <!-- Кнопка сведений об игре на витрине: полупрозрачная «стеклянная» кнопка с текстом.

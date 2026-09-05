@@ -21,36 +21,37 @@
     <SolidColorBrush x:Key="Btn.Play.Bg" Color="{DynamicResource Color.AccentFill}"/>
     <SolidColorBrush x:Key="Btn.Play.Bg.Hover" Color="{DynamicResource Color.AccentFillHover}"/>
     <SolidColorBrush x:Key="Btn.Play.Bg.Pressed" Color="{DynamicResource Color.AccentFillPressed}"/>
-    <SolidColorBrush x:Key="Btn.Play.Bg.Disabled" Color="#3A3550"/>
-    <SolidColorBrush x:Key="Btn.Play.Fg" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="Btn.Play.Bg.Disabled" Color="{DynamicResource Color.AccentFillDisabled}"/>
+    <SolidColorBrush x:Key="Btn.Play.Fg" Color="{DynamicResource Color.OnAccent}"/>
     <SolidColorBrush x:Key="Btn.Play.Border" Color="Transparent"/>
 
     <SolidColorBrush x:Key="Btn.Update.Bg" Color="{DynamicResource Color.AccentFill}"/>
     <SolidColorBrush x:Key="Btn.Update.Bg.Hover" Color="{DynamicResource Color.AccentFillHover}"/>
     <SolidColorBrush x:Key="Btn.Update.Bg.Pressed" Color="{DynamicResource Color.AccentFillPressed}"/>
-    <SolidColorBrush x:Key="Btn.Update.Bg.Disabled" Color="#3A3550"/>
-    <SolidColorBrush x:Key="Btn.Update.Fg" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="Btn.Update.Bg.Disabled" Color="{DynamicResource Color.AccentFillDisabled}"/>
+    <SolidColorBrush x:Key="Btn.Update.Fg" Color="{DynamicResource Color.OnAccent}"/>
     <SolidColorBrush x:Key="Btn.Update.Border" Color="Transparent"/>
 
     <SolidColorBrush x:Key="Btn.Install.Bg" Color="{DynamicResource Color.AccentFill}"/>
     <SolidColorBrush x:Key="Btn.Install.Bg.Hover" Color="{DynamicResource Color.AccentFillHover}"/>
     <SolidColorBrush x:Key="Btn.Install.Bg.Pressed" Color="{DynamicResource Color.AccentFillPressed}"/>
-    <SolidColorBrush x:Key="Btn.Install.Bg.Disabled" Color="#3A3550"/>
-    <SolidColorBrush x:Key="Btn.Install.Fg" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="Btn.Install.Bg.Disabled" Color="{DynamicResource Color.AccentFillDisabled}"/>
+    <SolidColorBrush x:Key="Btn.Install.Fg" Color="{DynamicResource Color.OnAccent}"/>
 
-    <!-- Повторить: приглушённый красный, заметный, но не спорящий с акцентом -->
-    <SolidColorBrush x:Key="Btn.Retry.Bg" Color="#2A1E22"/>
-    <SolidColorBrush x:Key="Btn.Retry.Bg.Hover" Color="#3A2A2E"/>
-    <SolidColorBrush x:Key="Btn.Retry.Bg.Pressed" Color="#48343A"/>
-    <SolidColorBrush x:Key="Btn.Retry.Bg.Disabled" Color="#221A1C"/>
-    <SolidColorBrush x:Key="Btn.Retry.Fg" Color="#F0D9D9"/>
+    <!-- Повторить и Отмена: те же краски, что у Style.Button.Danger в теме. Раньше
+         десять значений были выписаны здесь заново и жили своей жизнью. -->
+    <SolidColorBrush x:Key="Btn.Retry.Bg" Color="{DynamicResource Color.DangerFill}"/>
+    <SolidColorBrush x:Key="Btn.Retry.Bg.Hover" Color="{DynamicResource Color.DangerFillHover}"/>
+    <SolidColorBrush x:Key="Btn.Retry.Bg.Pressed" Color="{DynamicResource Color.DangerFillPressed}"/>
+    <SolidColorBrush x:Key="Btn.Retry.Bg.Disabled" Color="{DynamicResource Color.DangerFillDisabled}"/>
+    <SolidColorBrush x:Key="Btn.Retry.Fg" Color="{DynamicResource Color.DangerText}"/>
     <SolidColorBrush x:Key="Btn.Retry.Border" Color="{DynamicResource Color.Danger}"/>
 
-    <SolidColorBrush x:Key="Btn.Cancel.Bg" Color="#2A1E22"/>
-    <SolidColorBrush x:Key="Btn.Cancel.Bg.Hover" Color="#3A2A2E"/>
-    <SolidColorBrush x:Key="Btn.Cancel.Bg.Pressed" Color="#48343A"/>
-    <SolidColorBrush x:Key="Btn.Cancel.Bg.Disabled" Color="#221A1C"/>
-    <SolidColorBrush x:Key="Btn.Cancel.Fg" Color="#F0D9D9"/>
+    <SolidColorBrush x:Key="Btn.Cancel.Bg" Color="{DynamicResource Color.DangerFill}"/>
+    <SolidColorBrush x:Key="Btn.Cancel.Bg.Hover" Color="{DynamicResource Color.DangerFillHover}"/>
+    <SolidColorBrush x:Key="Btn.Cancel.Bg.Pressed" Color="{DynamicResource Color.DangerFillPressed}"/>
+    <SolidColorBrush x:Key="Btn.Cancel.Bg.Disabled" Color="{DynamicResource Color.DangerFillDisabled}"/>
+    <SolidColorBrush x:Key="Btn.Cancel.Fg" Color="{DynamicResource Color.DangerText}"/>
     <SolidColorBrush x:Key="Btn.Cancel.Border" Color="{DynamicResource Color.Danger}"/>
 
     <SolidColorBrush x:Key="Btn.Check.Bg" Color="{DynamicResource Color.Surface}"/>
@@ -165,7 +166,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ListBoxItem">
-            <Border x:Name="bd" CornerRadius="12" BorderThickness="1"
+            <Border x:Name="bd" CornerRadius="{DynamicResource Radius.L}" BorderThickness="1"
                     Background="{DynamicResource Brush.Surface}"
                     BorderBrush="{DynamicResource Brush.Border}">
               <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
@@ -233,7 +234,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
+            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{DynamicResource Radius.S}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
@@ -264,7 +265,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
+            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{DynamicResource Radius.S}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
@@ -294,7 +295,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
+            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{DynamicResource Radius.S}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
@@ -325,7 +326,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
+            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{DynamicResource Radius.S}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
@@ -371,7 +372,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" CornerRadius="6" Background="{TemplateBinding Background}"
+            <Border x:Name="bd" CornerRadius="{DynamicResource Radius.S}" Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
                     Padding="{TemplateBinding Padding}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
@@ -402,12 +403,12 @@
       <Setter Property="MinWidth" Value="140"/>
       <Setter Property="Padding" Value="14,0"/>
       <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
-      <Setter Property="Background" Value="#66101017"/>
+      <Setter Property="Background" Value="#6612161A"/>
       <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" CornerRadius="6" Background="{TemplateBinding Background}"
+            <Border x:Name="bd" CornerRadius="{DynamicResource Radius.S}" Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
                     Padding="{TemplateBinding Padding}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
@@ -437,7 +438,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
+            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{DynamicResource Radius.S}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
@@ -467,7 +468,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
+            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{DynamicResource Radius.S}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
@@ -497,7 +498,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
+            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{DynamicResource Radius.S}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
@@ -531,7 +532,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
+            <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{DynamicResource Radius.S}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
@@ -562,7 +563,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ListBoxItem">
-            <Border x:Name="bd" CornerRadius="12" BorderThickness="1"
+            <Border x:Name="bd" CornerRadius="{DynamicResource Radius.L}" BorderThickness="1"
                     Background="{DynamicResource Brush.Surface}"
                     BorderBrush="{DynamicResource Brush.Border}">
               <!-- Stretch, а не Center: в двухколоночной ленте карточки одного ряда
@@ -950,7 +951,7 @@
              WPF накладывал на него layout-clip по внутреннему полю — обложка и
              затемнение обрезались рамкой в 16px, а низ кнопки срезался. MinHeight
              сильнее MaxHeight, поэтому доля здесь просто перестаёт работать. -->
-        <Border Grid.Row="0" Margin="0,0,0,8" CornerRadius="12" MinHeight="184"
+        <Border Grid.Row="0" Margin="0,0,0,8" CornerRadius="{DynamicResource Radius.L}" MinHeight="184"
                 MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=Page},
                                     Converter={StaticResource HeightShareConv}, ConverterParameter=0.30}"
                 Background="{DynamicResource Brush.HeroGradient}" ClipToBounds="True">
@@ -1023,7 +1024,7 @@
 
             <StackPanel Grid.Row="1" VerticalAlignment="Bottom">
               <!-- Бейдж статуса выбранной игры -->
-              <Border x:Name="HeroStatusBadge" CornerRadius="{StaticResource Radius.S}" Padding="8,3" HorizontalAlignment="Left" Margin="0,0,0,8"
+              <Border x:Name="HeroStatusBadge" CornerRadius="{DynamicResource Radius.S}" Padding="8,3" HorizontalAlignment="Left" Margin="0,0,0,8"
                       Background="{DynamicResource Brush.HeroBadge.Bg}" BorderBrush="{DynamicResource Brush.HeroBadge.Border}" BorderThickness="1">
                 <TextBlock x:Name="HeroStatusText" Text="Проверка…" FontSize="11" Foreground="{DynamicResource Brush.TextSecondary}"/>
               </Border>
@@ -1224,7 +1225,7 @@
                          на откуп пропорциям картинки: широкая новость получала 168x95,
                          квадратная — 108x108, и соседние карточки расходились и по высоте
                          обложки, и по левому краю текста. -->
-                    <Border Width="168" Height="94" CornerRadius="{StaticResource Radius.S}"
+                    <Border Width="168" Height="94" CornerRadius="{DynamicResource Radius.S}"
                             HorizontalAlignment="Left" VerticalAlignment="Top" ClipToBounds="True"
                             Background="{DynamicResource Brush.Surface2}">
                       <!-- Height дублирует высоту рамки не ради разметки, а ради раскодирования:
@@ -1340,7 +1341,7 @@
                          на откуп пропорциям картинки: широкая новость получала 168x95,
                          квадратная — 108x108, и соседние карточки расходились и по высоте
                          обложки, и по левому краю текста. -->
-                    <Border Width="168" Height="94" CornerRadius="{StaticResource Radius.S}"
+                    <Border Width="168" Height="94" CornerRadius="{DynamicResource Radius.S}"
                             HorizontalAlignment="Left" VerticalAlignment="Top" ClipToBounds="True"
                             Background="{DynamicResource Brush.Surface2}">
                       <!-- Height дублирует высоту рамки не ради разметки, а ради раскодирования:
@@ -1448,7 +1449,7 @@
                            по краю карточки. Uniform вписывает целиком, ClipToBounds страхует
                            от нестандартных пропорций. У ожидающей строки — меньше. -->
                       <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="0"
-                              Margin="0,0,12,0" CornerRadius="6"
+                              Margin="0,0,12,0" CornerRadius="{DynamicResource Radius.S}"
                               VerticalAlignment="Center" ClipToBounds="True"
                               Background="{DynamicResource Brush.Surface2}">
                         <Border.Style>
@@ -1575,7 +1576,7 @@
               Background="{DynamicResource Brush.Surface}"
               BorderBrush="{DynamicResource Brush.Border}"
               BorderThickness="1"
-              CornerRadius="8"
+              CornerRadius="{DynamicResource Radius.M}"
               Padding="12"
               Effect="{x:Null}">
         <TextBlock x:Name="ToastText" Foreground="{DynamicResource Brush.Text}"/>
@@ -1585,7 +1586,7 @@
     <!-- Модальная форма обратной связи. RowSpan на все четыре строки корневого Grid:
          затемнение обязано накрыть и шапку, и ленту, иначе сквозь «модальное» окно
          остаются нажимаемыми кнопки под ним. -->
-    <Grid x:Name="FeedbackOverlay" Visibility="Collapsed" Background="#C0000000"
+    <Grid x:Name="FeedbackOverlay" Visibility="Collapsed" Background="{DynamicResource Brush.Scrim}"
           HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Grid.RowSpan="4">
       <Grid.Resources>
         <!-- Сами поля формы одеты общим стилем из темы (Style.TextBox.Field): штатный
@@ -1601,12 +1602,12 @@
       <!-- Тень: отдельный слой на 6px ниже карточки, а не Effect на ней. Размытие поверх
            содержимого делает текст мыльным, поэтому карточка остаётся без эффектов. -->
       <Border Width="720" HorizontalAlignment="Center" VerticalAlignment="Stretch" Margin="0,40,0,34"
-              CornerRadius="12" Background="#000000" Opacity="0.22"
+              CornerRadius="{DynamicResource Radius.L}" Background="#000000" Opacity="0.22"
               SnapsToDevicePixels="True" UseLayoutRounding="True"/>
 
       <!-- Карточка. VerticalAlignment=Stretch + Margin ограничивают её высотой окна: при
            Center высота не ограничена ничем, и поле сообщения убегало за нижний край экрана. -->
-      <Border Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderHover}" BorderThickness="1" CornerRadius="10"
+      <Border Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderHover}" BorderThickness="1" CornerRadius="{DynamicResource Radius.L}"
               Padding="20" Width="720" HorizontalAlignment="Center" VerticalAlignment="Stretch" Margin="0,40,0,40"
               SnapsToDevicePixels="True" UseLayoutRounding="True"
               TextOptions.TextRenderingMode="ClearType" TextOptions.TextFormattingMode="Display"
