@@ -60,11 +60,26 @@ $ChocoMaxAttempts = 3
 $ChocoRetryDelaySeconds = 30
 
 $SystemNsisDir = 'C:\Program Files (x86)\NSIS'
-# Портативная копия кладётся В РЕПОЗИТОРИЙ, а не в Program Files: туда можно
-# писать без администратора (локальный прогон у обычного пользователя), и этот
-# же каталог кэширует CI. Он в .gitignore.
-$RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$PortableDir = Join-Path $RepoRoot ".tools\nsis-$NsisVersion"
+# Портативная копия кладётся РЯДОМ С ПРОФИЛЕМ, а не в репозиторий и не
+# в Program Files: писать туда можно без администратора, и — главное —
+# каталог переживает `git clean -ffdx`.
+#
+# Раньше он лежал в .tools/ внутри репозитория, и actions/checkout сносил
+# его каждым прогоном: на постоянном раннере компилятор, не
+# менявшийся месяцами, приходилось возить заново. Лечили это шагом
+# actions/cache — то есть возили его по сети вместо диска, а само
+# действие кэша ещё и надо было скачать, что на узком канале
+# раннера стоило дороже самого NSIS.
+#
+# Вне Windows LOCALAPPDATA может быть не задан — тогда падаем обратно
+# в репозиторий, как было.
+$LocalAppData = $env:LOCALAPPDATA
+if ([string]::IsNullOrWhiteSpace($LocalAppData)) {
+    $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $PortableDir = Join-Path $RepoRoot ".tools\nsis-$NsisVersion"
+} else {
+    $PortableDir = Join-Path $LocalAppData "chillhub-tools\nsis-$NsisVersion"
+}
 
 # PATH правится ДВАЖДЫ, и обе правки нужны:
 #   * $env:PATH — для текущего процесса: вызывающий может собрать установщик
