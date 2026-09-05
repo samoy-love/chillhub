@@ -11,7 +11,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const N = require('../../server/admin_ui/v2/news.js');
+const N = require('../../server/admin_ui/news.js');
 
 /** Хранилище черновиков, какое бывает в браузере. */
 function storage() {

@@ -8,7 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const A = require('../../server/admin_ui/v2/api.js');
+const A = require('../../server/admin_ui/api.js');
 const { makeApi, reason, BASE } = A;
 
 /** Поддельный fetch: запоминает вызовы и отдаёт заданный ответ. */
@@ -132,7 +132,7 @@ const ENDPOINTS = [
   ['launcherVersions', [], 'GET', 'list'],
   ['launcherActivate', ['1.0'], 'POST', 'activate'],
   ['launcherDelete', ['1.0'], 'POST', 'deleteVersion'],
-  ['launcherPrune', [5], 'POST', 'pruneVersions'],
+  ['launcherPrune', [], 'POST', 'pruneVersions'],
   ['freeSpace', [], 'GET', 'system/free'],
 
   ['uploadInit', [{}], 'POST', 'upload/init'],
@@ -329,7 +329,7 @@ test('лаунчер называет себя сервером зарезерв
   const s = spy();
   await s.api.launcherVersions();
   await s.api.launcherDelete('1.6.20');
-  await s.api.launcherPrune(5);
+  await s.api.launcherPrune();
   for (const c of s.calls) assert.match(c.url, /gameId=launcher/, c.url);
 });
 
@@ -346,7 +346,7 @@ test('две ручки, которые разбирают именно JSON, п
 
 test('список ручек с JSON закрыт: остальным JSON не годится', () => {
   // Он же документация контракта — расширять его можно только по коду сервера
-  assert.deepStrictEqual([...A.JSON_BODY].sort(), ['games/save', 'upload/init']);
+  assert.deepStrictEqual([...A.JSON_BODY].sort(), ['games/save', 'maintenance/set', 'upload/init']);
 });
 
 test('длинный текст в адрес не лезет, но телом уезжает целиком', async () => {

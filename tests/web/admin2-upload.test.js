@@ -8,7 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const U = require('../../server/admin_ui/v2/upload.js');
+const U = require('../../server/admin_ui/upload.js');
 const chunks = require('../../server/admin_ui/chunk-upload.js');
 
 /** Файл, у которого есть только размер, имя и нарезка. */
@@ -231,7 +231,7 @@ test('прерывание не даёт заливать оставшиеся �
 /* ---------- Разбор архива на сервере ---------- */
 
 const ndjson = require('../../server/admin_ui/ndjson.js');
-const format = require('../../server/admin_ui/v2/format.js');
+const format = require('../../server/admin_ui/format.js');
 
 /** Ответ-поток из готовых строк NDJSON. */
 function stream(lines) {
@@ -311,4 +311,71 @@ test('упавший запрос разбора не притворяется �
   const bad = await U.process('u1', { fetch: async () => ({ ok: false, status: 500 }), ndjson, format });
   assert.strictEqual(bad.ok, false);
   assert.match(bad.message, /500/);
+});
+
+/* ---------- Номер версии ---------- */
+
+test('годный номер проходит', () => {
+  assert.strictEqual(U.versionProblem('1.6.47'), '');
+  assert.strictEqual(U.versionProblem('  1.6.47  '), '', 'пробелы по краям не должны мешать');
+});
+
+test('номер, который сервер не примет, назван до выбора файла', () => {
+  // Иначе отказ приходит после того, как выбран архив на полтора гигабайта
+  assert.match(U.versionProblem(''), /Без номера/);
+  assert.match(U.versionProblem('..'), /означает папку/);
+  assert.match(U.versionProblem('версия'), /только латиница/);
+  assert.match(U.versionProblem('1.6'), /из трёх чисел/);
+  assert.match(U.versionProblem('1.6.47-beta'), /из трёх чисел/);
+});
+
+test('следующий номер предлагается патчем', () => {
+  // Девять выпусков из десяти — очередной патч, и набирать номер руками
+  // значит однажды в нём ошибиться
+  assert.strictEqual(U.nextVersion('1.6.46'), '1.6.47');
+  assert.strictEqual(U.nextVersion('1.6.9'), '1.6.10');
+});
+
+test('неполный и непонятный номер не мешают предложить годный', () => {
+  assert.strictEqual(U.nextVersion('1.6'), '1.6.1');
+  assert.strictEqual(U.nextVersion('мусор'), '1.0.1');
+  assert.strictEqual(U.nextVersion(''), '1.0.1');
+  assert.strictEqual(U.nextVersion(null), '1.0.1');
+});
+
+test('предложенный номер сам по себе годится', () => {
+  for (const v of ['1.6.46', '1.6', '', 'мусор']) {
+    assert.strictEqual(U.versionProblem(U.nextVersion(v)), '', v);
+  }
+});
+
+/* ---------- Чистка старых версий ---------- */
+
+test('версии сравниваются числами, а не буквами', () => {
+  // По алфавиту «1.0.10» меньше «1.0.9», и чистка снесла бы не то
+  const sorted = ['1.0.10', '1.0.9', '1.0.2'].sort(U.compareVersions);
+  assert.deepStrictEqual(sorted, ['1.0.2', '1.0.9', '1.0.10']);
+});
+
+test('под нож идёт всё старше активной, кроме двух перед ней', () => {
+  // Откатиться на шаг-два должно оставаться возможным
+  const all = ['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4', '1.0.10'];
+  assert.deepStrictEqual(U.prunable(all, '1.0.4'), ['1.0.0', '1.0.1']);
+});
+
+test('всё новее активной не трогается: это загруженное и не отданное', () => {
+  const all = ['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.9'];
+  assert.ok(!U.prunable(all, '1.0.3').includes('1.0.9'));
+});
+
+test('перед активной меньше двух — удалять нечего', () => {
+  assert.deepStrictEqual(U.prunable(['1.0.0', '1.0.1'], '1.0.1'), []);
+  assert.deepStrictEqual(U.prunable(['1.0.0', '1.0.1', '1.0.2'], '1.0.2'), []);
+});
+
+test('без активной версии не удаляется ничего: отсчитывать не от чего', () => {
+  const all = ['1.0.0', '1.0.1', '1.0.2', '1.0.3'];
+  assert.deepStrictEqual(U.prunable(all, ''), []);
+  assert.deepStrictEqual(U.prunable(all, '9.9.9'), []);
+  assert.deepStrictEqual(U.prunable(null, '1.0.0'), []);
 });

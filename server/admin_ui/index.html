@@ -9,10 +9,10 @@
 
 <!-- Шрифты лежат рядом, а не на Google Fonts: у /admin/ui/ действует CSP
      с font-src 'self', и подключение с чужого домена молча отбрасывается. -->
-<link rel="stylesheet" href="./vendor/fonts/fonts.css">
+<link rel="stylesheet" href="/admin/ui/vendor/fonts/fonts.css">
 
-<link rel="stylesheet" href="./admin.css">
-<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/admin/ui/admin.css">
+<link rel="icon" href="/admin/ui/favicon.svg" type="image/svg+xml">
 </head>
 <body>
 
@@ -20,7 +20,7 @@
 
   <div class="topbar">
     <div class="brand">
-      <img src="../favicon.svg" alt="">
+      <img src="/admin/ui/favicon.svg" alt="">
       <span>Chill Hub</span>
       <span class="badge badge--accent">2.0</span>
     </div>
@@ -87,31 +87,35 @@
 
 <!-- Транспорт подключается первым: он подменяет window.fetch и XHR, и
      всё, что грузится после, обязано ходить уже через него. -->
-<script src="./transport.js"></script>
+<script src="/admin/ui/transport.js"></script>
 <!-- Проверяемые модули: форматирование, адреса, реестр действий,
      хранилище разделов и разбор ответов. Каждый покрыт tests/web. -->
-<script src="./format.js"></script>
-<script src="./api.js"></script>
-<script src="./actions.js"></script>
-<script src="./store.js"></script>
-<script src="./sections.js"></script>
+<script src="/admin/ui/format.js"></script>
+<script src="/admin/ui/api.js"></script>
+<script src="/admin/ui/actions.js"></script>
+<script src="/admin/ui/store.js"></script>
+<script src="/admin/ui/sections.js"></script>
 <!-- Флоу со своей механикой. Куски, повторы и чтение потока берутся из
      модулей версии 1.0 — здесь только порядок шагов. -->
-<script src="../chunk-upload.js"></script>
-<script src="../ndjson.js"></script>
-<script src="./upload.js"></script>
-<script src="./build.js"></script>
-<script src="../registry-diff.js"></script>
-<script src="./registry.js"></script>
-<script src="./news.js"></script>
-<script src="./gallery.js"></script>
-<script src="../upload-tuning.js"></script>
-<script src="./tuning.js"></script>
-<script src="./mods.js"></script>
-<script src="./manifest.js"></script>
-<script src="./views.js"></script>
+<script src="/admin/ui/rate-estimator.js"></script>
+<script src="/admin/ui/ui-throttle.js"></script>
+<script src="/admin/ui/chunk-upload.js"></script>
+<script src="/admin/ui/ndjson.js"></script>
+<script src="/admin/ui/feedback-logs.js"></script>
+<script src="/admin/ui/upload.js"></script>
+<script src="/admin/ui/build.js"></script>
+<script src="/admin/ui/registry-diff.js"></script>
+<script src="/admin/ui/registry.js"></script>
+<script src="/admin/ui/news.js"></script>
+<script src="/admin/ui/gallery.js"></script>
+<script src="/admin/ui/upload-tuning.js"></script>
+<script src="/admin/ui/upload-bench.js"></script>
+<script src="/admin/ui/tuning.js"></script>
+<script src="/admin/ui/mods.js"></script>
+<script src="/admin/ui/manifest.js"></script>
+<script src="/admin/ui/views.js"></script>
 <!-- Снимок ответов: подставляется там, где флоу ещё не подключён. -->
-<script src="./data.js"></script>
-<script src="./admin.js"></script>
+<script src="/admin/ui/data.js"></script>
+<script src="/admin/ui/admin.js"></script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-// Проверяет, что upload-bench.js, ui-throttle.js и speed-chart.js реально
+// Проверяет, что upload-bench.js, ui-throttle.js и остальные модули реально
 // работают в том режиме, для которого их UMD-обёртка и написана: как обычный
 // <script> в
 // браузере, без CommonJS. require() в остальных tests/web/*.test.js всегда
@@ -51,25 +51,6 @@ test('ui-throttle.js в браузерном режиме кладёт makeUiThr
   assert.strictEqual(runs, 1);
 });
 
-test('speed-chart.js в браузерном режиме кладёт функции графика в window', () => {
-  const w = loadAsBrowserScript('server/admin_ui/speed-chart.js');
-  assert.strictEqual(typeof w.mapPointsToPixels, 'function');
-  assert.strictEqual(typeof w.drawSpeedChart, 'function');
-  assert.deepStrictEqual(
-    Array.from(w.mapPointsToPixels([{ t: 0, bps: 1 }], { width: 10, height: 10, padding: 0, horizonMs: 1000, now: 0 })).length,
-    1
-  );
-});
-
-test('line-chart.js в браузерном режиме кладёт функции графика в window', () => {
-  const w = loadAsBrowserScript('server/admin_ui/line-chart.js');
-  assert.strictEqual(typeof w.mapSeriesToPixels, 'function');
-  assert.strictEqual(typeof w.drawMultiLineChart, 'function');
-  const px = w.mapSeriesToPixels([{ values: [1, 2] }], { width: 10, height: 10, padding: { left: 0, right: 0, top: 0, bottom: 0 } });
-  assert.strictEqual(Array.from(px).length, 1);
-  assert.strictEqual(Array.from(px[0]).length, 2);
-});
-
 test('chunk-upload.js в браузерном режиме кладёт putChunkXHR/pendingBytes в window', () => {
   const w = loadAsBrowserScript('server/admin_ui/chunk-upload.js');
   assert.strictEqual(typeof w.putChunkXHR, 'function');
@@ -87,14 +68,6 @@ test('rate-estimator.js в браузерном режиме кладёт фун
   assert.strictEqual(est.push(1000, 1000), 1000);
 });
 
-test('ui-status.js в браузерном режиме кладёт setStatusError/clearStatusError в window', () => {
-  const w = loadAsBrowserScript('server/admin_ui/ui-status.js');
-  assert.strictEqual(typeof w.setStatusError, 'function');
-  assert.strictEqual(typeof w.clearStatusError, 'function');
-  // window тут — тот самый sandbox.window из vm-контекста, а не наш process.
-  assert.doesNotThrow(() => w.setStatusError(null, 'x'));
-});
-
 test('upload-tuning.js в браузерном режиме кладёт автоподбор в window', () => {
   const w = loadAsBrowserScript('server/admin_ui/upload-tuning.js');
   assert.strictEqual(typeof w.pickUploadParams, 'function');
@@ -104,4 +77,56 @@ test('upload-tuning.js в браузерном режиме кладёт авт�
   // admin.js зовёт её как глобальную ровно так же.
   const p = w.pickUploadParams(1.3 * 1024 * 1024 * 1024, { protocol: 'http/1.1' });
   assert.strictEqual(p.concurrency, 6);
+});
+
+/* ---------- Модули панели 2.0 ---------- */
+
+/* Панель 2.0 подключает их обычными <script>, без сборщика: сломанная
+   обёртка UMD означает, что модуль тихо не появится в window и раздел
+   развалится уже в браузере — тесты, которые грузят их через require,
+   этого не увидят. */
+const V2_MODULES = [
+  ['format.js', 'CH2Format', ['bytes', 'dec', 'percent']],
+  ['api.js', 'CH2Api', ['makeApi', 'session', 'reason']],
+  ['actions.js', 'CH2Actions', ['has', 'run']],
+  ['store.js', 'CH2Store', ['createStore']],
+  ['sections.js', 'CH2Sections', ['launcher', 'games', 'filterInbox']],
+  ['upload.js', 'CH2Upload', ['run', 'process', 'abort']],
+  ['build.js', 'CH2Build', ['run', 'outcome', 'errorText']],
+  ['registry.js', 'CH2Registry', ['move', 'reorder', 'problems']],
+  ['news.js', 'CH2News', ['address', 'payload', 'problems']],
+  ['gallery.js', 'CH2Gallery', ['safePath', 'nameProblem']],
+  ['tuning.js', 'CH2Tuning', ['best', 'why', 'remember']],
+  ['views.js', 'CH2Views', ['sheet', 'maintForm', 'gameForm']],
+  ['mods.js', 'CH2Mods', ['parsePackageUrl', 'planSpace']],
+  ['manifest.js', 'CH2Manifest', ['diff', 'folders', 'between']],
+];
+
+for (const [file, global, fns] of V2_MODULES) {
+  test(`${file} в браузерном режиме кладёт ${global} в window`, () => {
+    const w = loadAsBrowserScript('server/admin_ui/' + file);
+    assert.strictEqual(typeof w[global], 'object', `${global} не появился в window`);
+    for (const fn of fns) {
+      assert.strictEqual(typeof w[global][fn], 'function', `${global}.${fn} не функция`);
+    }
+  });
+}
+
+test('панель подключает ровно те модули, что лежат рядом', () => {
+  // Забытый в index.html модуль — это раздел, падающий на первом нажатии;
+  // лишний тег — запрос в никуда на каждой загрузке
+  const html = fs.readFileSync(path.join(__dirname, '..', '..', 'server/admin_ui/index.html'), 'utf8');
+  const linked = [...html.matchAll(/<script src="\/admin\/ui\/([^"]+)"/g)].map((m) => m[1]);
+  // login.js — единственный скрипт панели, живущий отдельно: страницу
+  // входа открывают БЕЗ сессии, и остальные модули ей недоступны
+  const onDisk = fs
+    .readdirSync(path.join(__dirname, '..', '..', 'server/admin_ui'))
+    .filter((n) => n.endsWith('.js') && n !== 'login.js');
+
+  for (const f of onDisk) {
+    assert.ok(linked.includes(f), 'модуль лежит, но не подключён: ' + f);
+  }
+  for (const f of linked) {
+    assert.ok(onDisk.includes(f), 'подключён несуществующий модуль: ' + f);
+  }
 });

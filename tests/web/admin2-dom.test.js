@@ -16,7 +16,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
 
-const V2 = path.join(__dirname, '..', '..', 'server', 'admin_ui', 'v2');
+const V2 = path.join(__dirname, '..', '..', 'server', 'admin_ui');
 
 /** Ответы, которыми притворяется сервер. Форма — как у настоящего API. */
 function serverFixtures() {
@@ -57,7 +57,7 @@ function readBody(init) {
 /** Поднимает панель в jsdom и отдаёт окно вместе с журналом запросов. */
 async function boot(overrides) {
   const html = fs.readFileSync(path.join(V2, 'index.html'), 'utf8');
-  const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'https://example.test/admin/ui/v2/' });
+  const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'https://example.test/admin/ui/' });
   const { window } = dom;
 
   const calls = [];
@@ -84,9 +84,10 @@ async function boot(overrides) {
   // Скрипты страницы — в том же порядке, что в браузере
   const scripts = [...window.document.querySelectorAll('script[src]')].map((s) => s.getAttribute('src'));
   for (const src of scripts) {
-    // Путь разрешается как в браузере: и './', и '../' — иначе модули,
-    // переиспользуемые из версии 1.0, стенд не найдёт.
-    const file = path.resolve(V2, src);
+    // Страница лежит по /admin/, а её модули — по /admin/ui/, поэтому
+    // адреса в разметке абсолютные. Стенд повторяет то же отображение,
+    // что делает nginx: /admin/ui/<файл> → server/admin_ui/<файл>.
+    const file = path.join(V2, src.replace('/admin/ui/', ''));
     const code = fs.readFileSync(file, 'utf8');
     vm.runInContext(code, dom.getInternalVMContext(), { filename: file });
   }
@@ -271,4 +272,33 @@ test('у каждой кнопки панели есть обработчик', 
   const orphan = [...seen].filter((id) => !window.CH2Actions.has(id) && !window.CH2Flows.has(id));
   assert.deepStrictEqual(orphan, [], 'кнопки без обработчика: ' + orphan.join(', '));
   assert.ok(seen.size > 15, 'кнопок нашлось подозрительно мало: ' + seen.size);
+});
+
+/* ---------- Одно действие — одно имя ---------- */
+
+test('одно действие подписано одинаково во всех разделах', async () => {
+  // Разные подписи у одной кнопки читаются как разные дела, и человек
+  // ищет между ними разницу, которой нет
+  const { window } = await boot();
+  const labels = new Map();
+
+  for (const href of [...window.document.querySelectorAll('[data-nav]')].map((a) => a.getAttribute('href'))) {
+    window.location.hash = href;
+    await until(() => window.document.title.length > 0);
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+
+    for (const b of window.document.querySelectorAll('[data-act]')) {
+      const first = b.textContent.trim().split(/\s+/).slice(0, 2).join(' ');
+      if (!first) continue;
+      if (!labels.has(b.dataset.act)) labels.set(b.dataset.act, new Set());
+      labels.get(b.dataset.act).add(first);
+    }
+  }
+
+  const mixed = [...labels.entries()].filter(([, set]) => set.size > 1);
+  assert.deepStrictEqual(
+    mixed.map(([id, set]) => id + ': ' + [...set].join(' / ')),
+    [],
+    'у действия несколько подписей'
+  );
 });

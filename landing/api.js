@@ -150,17 +150,27 @@
     if (!gameId) return [];
     if (galleryCache.has(gameId)) return galleryCache.get(gameId);
 
+    /* «Сервер ответил» и «сеть не дошла» — разные вещи, и запоминать
+       можно только первое. Ответ 404 стабилен: галереи у игры нет, и
+       спрашивать второй раз незачем. Оборванный запрос стабильным не
+       бывает — запомнив его, страница показывала бы игре пустую
+       галерею до перезагрузки, хотя связь давно вернулась. */
     let result = [];
+    let answered = false;
     try {
       const r = await fetch(galleryBase(gameId) + 'gallery.json', { headers: { accept: 'application/json' } });
       if (r.ok) result = orderGallery(await r.json(), galleryBase(gameId), null);
+      answered = true;
     } catch {
-      /* ниже — мок или пустой список */
+      // Сеть не дошла — запоминать нечего
     }
+
     if (!result.length && MOCK_GALLERY[gameId]) {
       result = orderGallery(MOCK_GALLERY[gameId], galleryBase(gameId), MOCK_GALLERY_FILE[gameId]);
+      answered = true;
     }
-    galleryCache.set(gameId, result);
+
+    if (answered) galleryCache.set(gameId, result);
     return result;
   }
 

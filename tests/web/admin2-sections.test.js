@@ -11,7 +11,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const S = require('../../server/admin_ui/v2/sections.js');
+const S = require('../../server/admin_ui/sections.js');
 
 /* ---------- Общее ---------- */
 
@@ -280,7 +280,7 @@ test('наблюдение переживает полностью пустые 
 test('у каждого раздела есть загрузчик, и он зовёт свою ручку', async () => {
   const called = [];
   const api = new Proxy({}, {
-    get: (_, name) => (...args) => {
+    get: (_, name) => (..._args) => {
       called.push(String(name));
       // Ответы разной формы: загрузчик обязан пережить любую
       return Promise.resolve({ items: [], enabled: false, days: [], freeBytes: 0 });
@@ -290,9 +290,216 @@ test('у каждого раздела есть загрузчик, и он зо
   for (const name of Object.keys(S.LOADERS)) {
     await S.LOADERS[name](api);
   }
+  // «Сборки» сначала читают реестр: `mods/list` отвечает про одну игру
+  // и без gameId даёт 400. Коды ошибок берутся из сводки — `metrics/errors`
+  // отвечает событиями одного кода и без него тоже даёт 400
   assert.deepStrictEqual(called, [
-    'summary', 'launcherVersions', 'games', 'modsList', 'newsList',
-    'feedbackList', 'maintenanceGet', 'metricsSummary', 'metricsErrors',
+    'summary', 'launcherVersions', 'games', 'games', 'games', 'newsList',
+    'feedbackList', 'maintenanceGet', 'metricsSummary', 'metricsSummary',
     'freeSpace', 'modsCache',
   ]);
+});
+
+test('про моды спрашивают только игры, у которых они включены', async () => {
+  // У остальных `mods/list` отвечает «у игры не включены моды» кодом 400
+  const asked = [];
+  const api = {
+    games: async () => ({
+      items: [
+        { gameId: 'repo', title: 'R.E.P.O.', mods: { enabled: true } },
+        { gameId: 'bodycam', title: 'Bodycam' },
+        { gameId: 'peak', title: 'PEAK', mods: { enabled: false } },
+      ],
+    }),
+    modsList: async (gameId) => {
+      asked.push(gameId);
+      return { items: [] };
+    },
+  };
+  await S.LOADERS.packs(api);
+  assert.deepStrictEqual(asked, ['repo']);
+});
+
+test('игра, ответившая ошибкой, не уносит с собой весь раздел', async () => {
+  // Один упавший запрос из пяти не повод показать пустой список
+  const api = {
+    games: async () => ({
+      items: [
+        { gameId: 'a', title: 'А', mods: { enabled: true } },
+        { gameId: 'b', title: 'Б', mods: { enabled: true } },
+      ],
+    }),
+    modsList: async (gameId) => {
+      if (gameId === 'a') throw new Error('сервер не в духе');
+      return { gameId: 'b', title: 'Б', built: '1.0', active: '1.0' };
+    },
+  };
+  const out = await S.LOADERS.packs(api);
+  assert.strictEqual(out.length, 1);
+  assert.strictEqual(out[0].gameId, 'b');
+});
+
+test('в разделе новостей видны и лента лаунчера, и ленты игр', async () => {
+  // У каждой игры своя лента: спрашивать только про лаунчер — значит не
+  // показать половину написанного и не дать её править
+  const asked = [];
+  const api = {
+    games: async () => ({ items: [{ gameId: 'repo', title: 'R.E.P.O.' }] }),
+    newsList: async (scope, gameId) => {
+      asked.push(scope + ':' + (gameId || '-'));
+      return { items: [{ slug: (gameId || 'launcher') + '-note', title: 'Заметка' }] };
+    },
+  };
+  const out = await S.LOADERS.news(api);
+  assert.deepStrictEqual(asked, ['launcher:-', 'game:repo']);
+  assert.deepStrictEqual(out.map((n) => n.scope), ['launcher', 'game']);
+  assert.strictEqual(out[1].game, 'repo');
+});
+
+test('упавшая лента одной игры не уносит остальные', async () => {
+  const api = {
+    games: async () => ({ items: [{ gameId: 'a' }, { gameId: 'b' }] }),
+    newsList: async (scope, gameId) => {
+      if (gameId === 'a') throw new Error('нет такой ленты');
+      return { items: [{ slug: 's', title: 'Есть' }] };
+    },
+  };
+  const out = await S.LOADERS.news(api);
+  assert.strictEqual(out.length, 2, 'потерялись ленты');
+});
+
+/* ---------- Строка сборки ---------- */
+
+test('собранная версия берётся из списка: отдельным полем её нет', () => {
+  // Раздел показывал пустое место ровно там, где решают «отдать игрокам»
+  const row = S.packRow(
+    {
+      gameId: 'repo',
+      active: '1.9.8',
+      items: [
+        { version: '1.9.9', displayName: 'Moo Modpack', createdAt: '2026-09-01', packages: 17, bytes: 251000000 },
+        { version: '1.9.8', packages: 16 },
+      ],
+    },
+    { gameId: 'repo', title: 'R.E.P.O.' }
+  );
+  assert.strictEqual(row.built, '1.9.9');
+  assert.strictEqual(row.active, '1.9.8');
+  assert.strictEqual(row.pack, 'Moo Modpack');
+  assert.strictEqual(row.mods, 17);
+  assert.strictEqual(row.size, 251000000);
+});
+
+test('«собрано, но не отдано» отличается от «Thunderstore ушёл вперёд»', () => {
+  // Первое закрывается кнопкой, второе — пересборкой
+  const staged = S.packRow({ gameId: 'g', active: '1.0', items: [{ version: '1.1' }] }, {});
+  assert.strictEqual(staged.staged, true);
+  assert.strictEqual(staged.behind, false);
+
+  const behind = S.packRow(
+    { gameId: 'g', active: '1.1', items: [{ version: '1.1' }], updates: [{ latest: '2.0' }] },
+    {}
+  );
+  assert.strictEqual(behind.staged, false);
+  assert.strictEqual(behind.behind, true);
+  assert.strictEqual(behind.latest, '2.0');
+});
+
+test('устаревший пакет — не то же самое, что вышедший вперёд', () => {
+  const row = S.packRow({ gameId: 'g', items: [{ version: '1.0' }], updates: [{ deprecated: true }] }, {});
+  assert.strictEqual(row.deprecated, true);
+  assert.strictEqual(row.behind, false, 'устаревший посчитали за отставший');
+});
+
+test('игра без единой сборки не роняет строку', () => {
+  const row = S.packRow({ gameId: 'fresh', items: [] }, { gameId: 'fresh', title: 'Свежая' });
+  assert.strictEqual(row.built, '');
+  assert.strictEqual(row.staged, false);
+  assert.strictEqual(row.title, 'Свежая');
+});
+
+test('пропавшие пакеты доезжают до строки списком, а не числом', () => {
+  // «Пропущено 2» не говорит, потерялся ли твик текстур или сам модпак
+  const row = S.packRow({ gameId: 'g', items: [{ version: '1.0', missing: ['Ura/Old'] }] }, {});
+  assert.deepStrictEqual(row.missing, ['Ura/Old']);
+});
+
+test('признак «собрано, но не отдано» одинаков у снимка и у ответа сервера', () => {
+  // Два одинаковых условия в разных местах расходятся молча — и как раз
+  // на краях: у игры без сборок и у игры без активной версии
+  const fromServer = S.packRow({ gameId: 'g', active: '1.0', items: [{ version: '1.1' }] }, {});
+  const fromSnapshot = S.packs([{ gameId: 'g', built: '1.1', active: '1.0' }])[0];
+  assert.strictEqual(fromServer.staged, fromSnapshot.staged);
+
+  assert.strictEqual(S.isStaged('', ''), false, 'игра без сборок числится ждущей');
+  assert.strictEqual(S.isStaged('1.0', ''), true, 'первая сборка не считается ждущей');
+  assert.strictEqual(S.isStaged('', '1.0'), false);
+  assert.strictEqual(S.isStaged('1.0', '1.0'), false);
+});
+
+/* ---------- Итоги за период ---------- */
+
+test('экономия считается от того, сколько весила бы полная загрузка', () => {
+  // «40 МБ перевезено» без «вместо 12 ГБ» не значит ничего, а вместе
+  // это единственная цифра про смысл разностной синхронизации
+  const t = S.totals({ totals: { bytesDownloaded: 40 * 1024 ** 2, fullBytes: 12 * 1024 ** 3 } });
+  assert.strictEqual(t.moved, 40 * 1024 ** 2);
+  assert.ok(t.saved > 0);
+  assert.ok(t.savedShare > 0.99 && t.savedShare < 1);
+});
+
+test('без полного размера экономия не выдумывается', () => {
+  const t = S.totals({ totals: { bytesDownloaded: 100 } });
+  assert.strictEqual(t.saved, 0);
+  assert.strictEqual(t.savedShare, 0);
+});
+
+test('доля отказов считается от попыток, а не от всех событий', () => {
+  // Иначе она тонет: событий тысячи, а установок сотни
+  const t = S.totals({ totals: { installs: 200, updates: 800, installFail: 4, updateFail: 20, events: 100000 } });
+  assert.strictEqual(t.tries, 1000);
+  assert.strictEqual(t.failed, 24);
+  assert.ok(Math.abs(t.failShare - 0.024) < 1e-9);
+});
+
+test('проверки целостности доезжают до панели', () => {
+  // Игрок, проверяющий свои файлы, был не виден в панели, которая
+  // существует ровно для того, чтобы это замечать
+  const t = S.totals({ totals: { integrityChecks: 120, integrityFailed: 3 } });
+  assert.strictEqual(t.checks, 120);
+  assert.strictEqual(t.checksFailed, 3);
+  assert.ok(Math.abs(t.checksShare - 0.025) < 1e-9);
+});
+
+test('пустая сводка даёт нули, а не NaN', () => {
+  const t = S.totals({});
+  for (const k of ['moved', 'full', 'saved', 'savedShare', 'checks', 'tries', 'failShare']) {
+    assert.strictEqual(Number.isFinite(t[k]), true, k + ' = ' + t[k]);
+  }
+});
+
+test('дни и итоги приезжают одной сводкой, а не тремя запросами', async () => {
+  let asked = 0;
+  const raw = {
+    byDay: [{ date: '2026-09-04', launcherStarts: 10 }],
+    totals: { bytesDownloaded: 5, fullBytes: 50 },
+  };
+  const out = await S.LOADERS.metrics({
+    metricsSummary: async () => {
+      asked++;
+      return raw;
+    },
+  });
+  assert.strictEqual(asked, 1);
+  assert.strictEqual(out.days.length, 1);
+  assert.strictEqual(out.totals.moved, 5);
+});
+
+test('признак «иконка есть» не подставляется в поле адреса', () => {
+  // Снимок кладёт в `icon` булево, и в поле правки уезжало слово «true»
+  const [a, b, c] = S.games([{ gameId: 'a', icon: true }, { gameId: 'b', iconUrl: '/x.png' }, { gameId: 'c' }]);
+  assert.strictEqual(a.iconUrl, '', 'булево попало в адрес');
+  assert.strictEqual(a.icon, true, 'потерян признак наличия иконки');
+  assert.strictEqual(b.iconUrl, '/x.png');
+  assert.strictEqual(c.icon, false);
 });

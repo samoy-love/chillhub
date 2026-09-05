@@ -79,6 +79,33 @@
   }
 
   /**
+   * Складывает плоский список в папки.
+   *
+   * В сборке лаунчера четыре с половиной сотни файлов, и плоский список
+   * отвечает на «что изменилось» одним способом: пролистать целиком.
+   * Свёрнутая папка с числом внутри отвечает сразу — поехал один
+   * каталог или вся сборка.
+   */
+  function folders(rows) {
+    const map = new Map();
+    for (const r of rows || []) {
+      const path = String(r.path || '');
+      const cut = path.lastIndexOf('/');
+      const dir = cut < 0 ? '' : path.slice(0, cut);
+      if (!map.has(dir)) map.set(dir, []);
+      map.get(dir).push(Object.assign({}, r, { name: cut < 0 ? path : path.slice(cut + 1) }));
+    }
+    return [...map.entries()]
+      .map(([dir, files]) => ({
+        dir: dir,
+        files: files,
+        counts: counts(files),
+        weight: weight(files),
+      }))
+      .sort((a, b) => a.dir.localeCompare(b.dir, 'ru'));
+  }
+
+  /**
    * Читает манифест версии.
    *
    * Манифест раздаётся публично, поэтому идёт он не через админ-API.
@@ -112,5 +139,5 @@
     return { rows: rows, counts: counts(rows), weight: weight(rows), total: files(b).length };
   }
 
-  return { BASE, files, diff, counts, weight, load, between };
+  return { BASE, files, diff, counts, weight, folders, load, between };
 });

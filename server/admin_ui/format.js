@@ -84,12 +84,60 @@
     return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}`;
   }
 
+  /**
+   * Дата, если её удаётся прочитать, иначе — как пришла.
+   *
+   * Сервер отдаёт день то полной датой, то коротким «04.09». Гнать
+   * второе через разбор значит показать прочерк там, где день известен.
+   */
+  function dateLoose(v) {
+    if (v instanceof Date) return date(v);
+    const s2 = String(v === undefined || v === null ? '' : v).trim();
+    if (!s2) return '';
+
+    /* Разбираем только то, что заведомо дата: `new Date('04.09')` в JS
+       даёт 9 апреля 2001 года — не ошибку, а другую дату, и подпись оси
+       врала бы молча. */
+    return /^\d{4}-\d{2}-\d{2}/.test(s2) ? date(s2) : s2;
+  }
+
   /** Дата со временем: 04.09.2026 03:12. */
   function dateTime(v) {
+    // Пустое — это не эпоха: `new Date(null)` даёт 01.01.1970, и раздел
+    // показывал бы дату там, где даты нет
+    if (v === null || v === undefined || v === '') return '—';
     const d = v instanceof Date ? v : new Date(v);
     if (Number.isNaN(d.getTime())) return '—';
     const p = (x) => String(x).padStart(2, '0');
     return `${date(d)} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+
+  /**
+   * Зона, в которой показано время.
+   *
+   * Сервер хранит всё в UTC, а показывается местное. Время без подписи
+   * рядом с серверными данными читается как серверное — и назначенные
+   * работы уезжают на три часа. Подписываем смещением браузера, а не
+   * «МСК»: подпись обязана быть верной и там, куда человек уехал.
+   */
+  function zone(d) {
+    /* Принимаем и Date, и что угодно со смещением: подпись зоны надо
+       уметь проверить, не переводя машину в чужой часовой пояс. */
+    const src = d && typeof d.getTimezoneOffset === 'function' ? d : new Date();
+    const off = -src.getTimezoneOffset();
+    if (off === 0) return 'UTC';
+    const sign = off > 0 ? '+' : '−';
+    const h = Math.floor(Math.abs(off) / 60);
+    const m = Math.abs(off) % 60;
+    return 'UTC' + sign + h + (m ? ':' + String(m).padStart(2, '0') : '');
+  }
+
+  /** Дата со временем и подписанной зоной: «04.09.2026 03:12 UTC+3». */
+  function dateTimeZoned(v) {
+    if (v === null || v === undefined || v === '') return '—';
+    const d = v instanceof Date ? v : new Date(v);
+    if (Number.isNaN(d.getTime())) return '—';
+    return dateTime(d) + ' ' + zone(d);
   }
 
   /**
@@ -112,5 +160,5 @@
   /** Скорость: «10,5 МБ/с». */
   const speed = (bytesPerSec) => `${bytes(bytesPerSec)}/с`;
 
-  return { NBSP, dec, bytes, plural, count, percent, date, dateTime, eta, speed };
+  return { NBSP, dec, bytes, plural, count, percent, date, dateLoose, dateTime, zone, dateTimeZoned, eta, speed };
 });

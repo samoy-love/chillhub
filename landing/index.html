@@ -1,338 +1,376 @@
 <!doctype html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <!-- Color scheme hints for Safari/iOS (dark-only) -->
-  <meta name="color-scheme" content="dark">
-  <meta name="supported-color-schemes" content="dark">
-  <!-- Prefer transparent UI bars on iOS Safari so content shows under status bar (dark only) -->
-  <meta name="theme-color" content="rgba(0,0,0,0)">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Chill Hub">
-  <!-- Disable auto-detection of phone numbers on iOS -->
-  <meta name="format-detection" content="telephone=no">
-  <meta name="description" content="Chill Hub — лаунчер для игры с модами: Lethal Company, R.E.P.O., Risk of Rain 2 и другие" />
-  <title>Chill Hub — Лаунчер</title>
-  <!-- Канонический адрес: страница доступна и как /, и как /index.html.
-       Без canonical это две разные страницы для поисковика. -->
-  <link rel="canonical" href="https://launcher.samoy.love/">
-  <!-- Open Graph / Twitter: без них ссылка в мессенджерах и соцсетях
-       разворачивается голым текстом, без заголовка, описания и картинки.
-       og:image указывается абсолютным URL — относительный путь клиенты
-       предпросмотра не резолвят. -->
-  <meta property="og:type" content="website">
-  <meta property="og:site_name" content="Chill Hub">
-  <meta property="og:locale" content="ru_RU">
-  <meta property="og:url" content="https://launcher.samoy.love/">
-  <meta property="og:title" content="Chill Hub — лаунчер для игры с модами">
-  <meta property="og:description" content="Lethal Company, R.E.P.O., Risk of Rain 2 и другие: моды ставятся и обновляются сами, друзьям остаётся только нажать «Играть».">
-  <meta property="og:image" content="https://launcher.samoy.love/assets/images/launcher-main.jpg">
-  <meta property="og:image:width" content="1400">
-  <meta property="og:image:height" content="820">
-  <meta property="og:image:alt" content="Главный экран лаунчера Chill Hub со списком игр">
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Chill Hub — лаунчер для игры с модами">
-  <meta name="twitter:description" content="Lethal Company, R.E.P.O., Risk of Rain 2 и другие: моды ставятся и обновляются сами, друзьям остаётся только нажать «Играть».">
-  <meta name="twitter:image" content="https://launcher.samoy.love/assets/images/launcher-main.jpg">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800;900&display=swap" rel="stylesheet">
-  <!-- Critical CSS to avoid initial white/black flash before main CSS arrives -->
-  <style>
-    html{background:#0b0b1a;color:#e8e8fb;}
-    body{margin:0;background:#0b0b1a;min-height:100dvh;padding-top:64px;}
-    .site-header{position:fixed;left:0;right:0;top:0;height:64px;background:rgba(10,10,20,.7);border-bottom:1px solid rgba(255,255,255,.06);box-shadow:0 6px 24px rgba(0,0,0,.25);z-index:1000}
-    /* Ensure waves background has layout before main CSS loads */
-    .waves-bg{position:fixed;inset:0;pointer-events:none}
-    #waves-canvas{display:block;width:100%;height:100%;opacity:0;transition:opacity .35s ease}
-    .waves-bg.ready #waves-canvas{opacity:1}
-    .waves-loader{position:absolute;inset:0;display:grid;place-items:center;background:linear-gradient(180deg, #0b0b1a, #11112a)}
-    .waves-bg.ready .waves-loader{display:none}
-  </style>
-  <!-- Use standard stylesheet to eliminate FOUC from preload+swap pattern -->
-  <link rel="stylesheet" href="./styles.css?v=20260816-1">
-  <!-- Preload the download screenshot to ensure instant visibility when navigating to #download -->
-  <link rel="preload" as="image" href="./assets/images/launcher-main.jpg?v=20260816-1" imagesizes="(max-width: 980px) 92vw, 1120px">
-  <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="icon" href="favicon.ico" type="image/x-icon">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chill Hub — лаунчер для игры с модами</title>
+<meta name="description" content="Chill Hub качает сборки модов, обновляет их сам и следит, чтобы у всей компании были одинаковые версии. Запускает вашу копию игры из Steam или свою — с модами и без.">
+
+<meta name="color-scheme" content="dark light">
+<link rel="canonical" href="https://launcher.samoy.love/">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Chill Hub">
+<meta property="og:locale" content="ru_RU">
+<meta property="og:url" content="https://launcher.samoy.love/">
+<meta property="og:title" content="Chill Hub — лаунчер для игры с модами">
+<meta property="og:description" content="Моды ставит лаунчер, вы нажимаете «Играть». Одинаковые сборки у всей компании — значит, вы попадёте в одно лобби.">
+<meta property="og:image" content="https://launcher.samoy.love/assets/images/launcher.png">
+<meta property="og:image:width" content="1298">
+<meta property="og:image:height" content="953">
+<meta property="og:image:alt" content="Главный экран лаунчера Chill Hub: список игр, выбранная игра и очередь загрузок">
+<meta name="twitter:card" content="summary_large_image">
+
+<!-- Шрифты лежат у себя: там, где `fonts.googleapis.com` не отвечает,
+     заголовки молча съезжали на системную гарнитуру. Подробности и
+     подмножества — в самом файле. -->
+<link rel="preload" href="./vendor/fonts/IBMPlexSans-400-600-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="./vendor/fonts/fonts.css">
+
+<link rel="stylesheet" href="./styles.css">
+<link rel="stylesheet" href="./emu.css">
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
+<link rel="icon" href="./favicon.ico" type="image/x-icon">
 </head>
 <body>
-  <!-- Animated Waves Background -->
-  <div class="waves-bg" aria-hidden="true">
-    <div id="waves-loader" class="waves-loader" aria-hidden="true">
-      <div class="spinner" role="presentation"></div>
-    </div>
-    <canvas id="waves-canvas"></canvas>
+
+<a class="skip" href="#main">К содержимому</a>
+
+<div class="backdrop" aria-hidden="true"><canvas></canvas></div>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="./">
+      <img src="./assets/icons/logo.svg" alt="" width="24" height="24">
+      <span>Chill Hub</span>
+    </a>
+    <nav class="site-nav">
+      <a class="nav-link" href="#try">Попробовать</a>
+      <a class="nav-link" href="#games">Игры</a>
+      <a class="nav-link" href="#how">Как это работает</a>
+      <a class="nav-link" href="#trust">Что ставится</a>
+      <a class="btn btn--primary" href="/downloads/ChillHub-Setup.exe" download="ChillHub-Setup.exe">Скачать</a>
+    </nav>
   </div>
+</header>
 
-  
+<!-- Баннер технических работ. Тот же /api/maintenance, что читает
+     лаунчер: если сборки сейчас не отдаются, человеку незачем узнавать
+     об этом уже после установки. -->
+<div class="maint" data-maint hidden>
+  <div class="wrap"><b>Технические работы</b><span data-maint-text></span></div>
+</div>
 
-  <header class="site-header">
-    <div class="container">
-      <a class="brand" href="./" title="Обновить страницу и перейти к началу">
-        <img src="./assets/icons/logo.svg" alt="Chill Hub" data-fallback="hide" decoding="async" fetchpriority="high" width="28" height="28" />
+<main id="main">
+
+  <section class="hero">
+    <div class="wrap">
+      <div>
+        <span class="eyebrow">Windows 10 и 11</span>
+        <h1>Моды ставит лаунчер.<br>Вы нажимаете <em>«Играть»</em>.</h1>
+        <p class="hero-lede">
+          Chill Hub качает сборку модов, обновляет её сам и следит, чтобы у всей
+          компании были одинаковые версии. Совпали версии — попали в одно лобби.
+        </p>
+
+        <div class="hero-cta">
+          <a class="btn btn--primary btn--lg" href="/downloads/ChillHub-Setup.exe" download="ChillHub-Setup.exe">
+            Скачать установщик
+          </a>
+          <a class="btn btn--lg" href="#try">Сначала попробовать</a>
+        </div>
+
+        <!-- Версия подтягивается из манифеста самообновления: свёрстанная
+             цифра протухает молча. Размер, дата и хеш правятся руками при
+             выпуске релиза — устаревший хеш хуже, чем его отсутствие. -->
+        <ul class="dl-facts">
+          <li><b>версия</b> <span data-launcher-version>—</span></li>
+          <li hidden data-setup="size"><b>размер</b> <span></span></li>
+          <li hidden data-setup="builtAt"><b>собран</b> <span></span></li>
+          <li hidden data-setup="sha256"><button class="copy-hash" type="button">скопировать SHA‑256</button></li>
+        </ul>
+      </div>
+
+      <!-- Снимок уходит за правый край экрана и не обведён рамкой: окно
+           продолжается за страницей, а не лежит на ней картинкой в
+           рамочке. Подписи нет намеренно — она пересказывала то, что и
+           так видно, и вторым голосом спорила с заголовком слева. -->
+      <div class="hero-shot">
+        <img src="./assets/images/launcher.png" alt="Окно лаунчера: слева список игр, справа выбранная игра, внизу очередь загрузок"
+             width="1298" height="953" class="skeleton" fetchpriority="high" decoding="async">
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ЭМУЛЯТОР ================= -->
+  <!-- Не скриншот и не ролик, а работающая копия главного экрана.
+       Игры и версии в ней — из того же /api/games, который читает
+       настоящий лаунчер; кнопки, подписи и порядок очереди перенесены
+       из его исходников. -->
+  <section class="section" id="try">
+    <div class="wrap">
+      <header>
+        <div>
+          <span class="eyebrow">Лаунчер в браузере</span>
+          <h2>Попробуйте, ничего не устанавливая</h2>
+        </div>
+        <p>Копия главного экрана на настоящих данных каталога. Поставьте игру в очередь, дождитесь загрузки, запустите.</p>
+      </header>
+
+      <div class="shot">
+        <div class="emu" data-emu>
+          <div class="emu-title"><span class="emu-app">Лаунчер Chill Hub</span></div>
+          <div class="emu-empty big"><b>Загружаем каталог…</b></div>
+        </div>
+      </div>
+
+      <p class="emu-note" data-emu-note aria-live="polite"></p>
+
+      <ul class="emu-legend">
+        <li>Загрузка здесь ненастоящая: качать гигабайты в браузер незачем.</li>
+        <li>Остальное настоящее: состояния кнопок, подписи и порядок очереди взяты из кода лаунчера.</li>
+        <li>Значок и обложка — разные файлы и приходят порознь. Чего нет, то заменяется заглушкой: лаунчер делает так же.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ================= ИГРЫ ================= -->
+  <!-- Карточки собираются из /api/games. Ни одного названия игры и ни
+       одного номера версии в разметке нет: добавили игру в админке —
+       она появилась здесь, и сайт трогать не пришлось. -->
+  <section class="section" id="games">
+    <div class="wrap">
+      <header>
+        <div>
+          <span class="eyebrow">Каталог</span>
+          <h2>Что уже собрано</h2>
+        </div>
+        <p>Сборки составляет человек, а не автоматика. У каждой игры одна активная сборка — та же самая у всех, кто её скачал.</p>
+      </header>
+
+      <div class="games" data-games>
+        <div class="game sk-card" aria-hidden="true"></div>
+        <div class="game sk-card" aria-hidden="true"></div>
+        <div class="game sk-card" aria-hidden="true"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= НОВОСТИ ================= -->
+  <section class="section" id="news">
+    <div class="wrap">
+      <header>
+        <div>
+          <span class="eyebrow">Новости</span>
+          <h2>О чём писали недавно</h2>
+        </div>
+        <p>Те же заметки, что видно на главном экране лаунчера.</p>
+      </header>
+
+      <div class="posts" data-news>
+        <div class="post sk-card" aria-hidden="true"></div>
+        <div class="post sk-card" aria-hidden="true"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= КАК ЭТО РАБОТАЕТ ================= -->
+  <section class="section" id="how">
+    <div class="wrap">
+      <header>
+        <div>
+          <span class="eyebrow">Порядок действий</span>
+          <h2>От скачивания до лобби</h2>
+        </div>
+        <p>Четыре шага, из которых три занимают меньше минуты. Дольше всего качается сама сборка.</p>
+      </header>
+
+      <ol class="steps">
+        <li>
+          <h3>Ставите установщик</h3>
+          <p>Установщик не просит прав администратора: лаунчер живёт в вашем профиле, а не в <code>Program&nbsp;Files</code>. Windows покажет предупреждение — что с ним делать, написано ниже.</p>
+        </li>
+        <li>
+          <h3>Выбираете игру</h3>
+          <p>Слева — список игр с состоянием каждой: установлена, есть обновление, качается. Сколько места нужно, лаунчер говорит до начала загрузки, а не после отказа на середине.</p>
+        </li>
+        <li>
+          <h3>Ставите в очередь</h3>
+          <p>Качается одна игра, остальные ждут: два потока на один канал делят скорость и удлиняют обе загрузки. Порядок в очереди можно менять, лишнее — отменять. Оборвалась связь — докачает с места обрыва.</p>
+        </li>
+        <li>
+          <h3>Запускаете как удобно</h3>
+          <p>Свою копию из Steam или сборку, которую скачал лаунчер, и каждую — с модами или без. Два частых варианта стоят отдельными кнопками, остальные — под стрелкой рядом; недоступный не гаснет молча, а объясняет причину. Моды подкладываются на время сессии и убираются, когда игру закрыли.</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ================= ЧТО СТАВИТСЯ ================= -->
+  <section class="section" id="trust">
+    <div class="wrap">
+      <header>
+        <div>
+          <span class="eyebrow">Без сюрпризов</span>
+          <h2>Что попадёт на компьютер</h2>
+        </div>
+        <p>Три каталога, никаких служб и записей в автозагрузке. Удаление — обычное, через «Программы и компоненты».</p>
+      </header>
+
+      <div class="facts">
+        <div>
+          <h3>Сам лаунчер</h3>
+          <p><code>%LOCALAPPDATA%\ChillHub</code> — только файлы сборки. Обновляется сам, отдельной программой: запущенный процесс не может переписать свои же файлы.</p>
+        </div>
+        <div>
+          <h3>Настройки и журналы</h3>
+          <p><code>%APPDATA%\ChillHub</code> — конфиг, журналы и отметка о наигранном времени. Переустановка их не трогает.</p>
+        </div>
+        <div>
+          <h3>Файлы игр</h3>
+          <p>Каталог с играми выбираете сами. Сколько места нужно и сколько свободно, лаунчер пишет рядом с кнопкой — до загрузки, а не после отказа на середине.</p>
+        </div>
+        <div>
+          <h3>Ваша копия игры</h3>
+          <p>Моды подкладываются в папку игры только на время сессии и убираются, когда игру закрыли. Steam-аккаунт не трогается, пароль не спрашивается.</p>
+        </div>
+        <div>
+          <h3>Сколько стоит</h3>
+          <p>Нисколько, и платной версии не планируется. Это проект для своей компании, выложенный наружу, а не бизнес.</p>
+        </div>
+        <div>
+          <h3>Что уходит на сервер</h3>
+          <p>Обезличенная статистика скачиваний и ошибок, чтобы чинить обрывы загрузки. Ни аккаунтов, ни логинов: регистрации нет. Подробности — в <a href="./privacy.html">политике приватности</a>.</p>
+        </div>
+      </div>
+
+      <div class="warnbox">
+        <h3>Windows покажет синее окно «Система Windows защитила ваш компьютер»</h3>
+        <p>
+          Так и будет, и это ожидаемо: установщик не подписан сертификатом. Подпись
+          стоит денег и выдаётся на юрлицо, у бесплатного проекта её нет. Чтобы
+          продолжить: «Подробнее» → «Выполнить в любом случае».
+        </p>
+        <p data-setup="sha256" hidden>
+          Если верить на слово не хочется — сверьте SHA‑256 скачанного файла с
+          опубликованным под кнопкой:
+          <code>Get-FileHash .\ChillHub-Setup.exe</code> в PowerShell.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ЗАЯВКА ================= -->
+  <section class="section" id="wish">
+    <div class="wrap">
+      <header>
+        <div>
+          <span class="eyebrow">Заявки</span>
+          <h2>Какую игру добавить</h2>
+        </div>
+        <p>Крутите, если не знаете, чего хотите. Знаете — пишите сразу: заявка попадёт туда же, куда «Поделиться идеей» из лаунчера.</p>
+      </header>
+
+      <div class="slots" data-slots>
+        <div class="reels" aria-hidden="true">
+          <div class="reel"><div class="reel-track"></div><div class="reel-line"></div></div>
+          <div class="reel"><div class="reel-track"></div><div class="reel-line"></div></div>
+          <div class="reel"><div class="reel-track"></div><div class="reel-line"></div></div>
+        </div>
+        <p class="slots-out" id="slots-out" data-slots-out aria-live="polite"></p>
+        <div class="slots-actions">
+          <button class="btn" type="button" data-slots-spin aria-describedby="slots-out">Крутить</button>
+        </div>
+
+        <form class="wish" data-wish>
+          <div class="field">
+            <label for="wish-text">Игра и пара слов о ней</label>
+            <textarea id="wish-text" name="comment" rows="3" required maxlength="5000"
+                      placeholder="Название игры и пара слов — почему в неё стоит играть компанией"></textarea>
+          </div>
+          <div class="field">
+            <label for="wish-contact">Куда ответить <span class="faint">— по желанию</span></label>
+            <input id="wish-contact" name="contact" type="text" maxlength="200"
+                   placeholder="телеграм, почта, ник в Discord">
+          </div>
+          <div class="slots-actions">
+            <button class="btn btn--primary" type="submit">Отправить</button>
+            <span class="wish-note" data-wish-note aria-live="polite"></span>
+          </div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= СКАЧАТЬ ================= -->
+  <section class="section" id="download">
+    <div class="wrap">
+      <header>
+        <div>
+          <span class="eyebrow">Установка</span>
+          <h2>Скачать Chill Hub</h2>
+        </div>
+        <p>Один файл, установка без прав администратора, удаление обычным способом.</p>
+      </header>
+
+      <div class="hero-cta">
+        <a class="btn btn--primary btn--lg" href="/downloads/ChillHub-Setup.exe" download="ChillHub-Setup.exe">
+          Скачать для Windows
+        </a>
+        <a class="btn btn--lg" href="#trust">Что попадёт на компьютер</a>
+      </div>
+
+      <ul class="dl-facts" style="margin-top: var(--s3)">
+        <li><b>версия</b> <span data-launcher-version>—</span></li>
+        <li hidden data-setup="size"><b>размер</b> <span></span></li>
+        <li hidden data-setup="builtAt"><b>собран</b> <span></span></li>
+        <li><b>требуется</b> Windows 10 (21H2) или 11, 64 бита</li>
+      </ul>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div>
+      <a class="brand" href="./">
+        <img src="./assets/icons/logo.svg" alt="" width="24" height="24">
         <span>Chill Hub</span>
       </a>
-      <nav class="nav">
-        <a href="#games">Игры</a>
-        <a href="#features">Фичи</a>
-        <a href="#download" class="btn btn--sm">Скачать</a>
-      </nav>
+      <p style="margin-top: var(--s3)">
+        Чтобы играть с модами своей компанией. Проект некоммерческий,
+        исходники открыты.
+      </p>
     </div>
-  </header>
-
-  <main>
-    <!-- HERO -->
-    <section class="hero" id="top">
-      <div class="container" data-animate>
-        <h1 class="sun-title"><span class="accent">Лаунчер</span><br>для кооператива и моддинга</h1>
-        <div class="brand-badge" aria-label="Chill Hub">
-          <img src="./assets/icons/logo.svg" alt="Chill Hub" width="28" height="28" />
-          <span class="name">Chill Hub</span>
-          <span class="pill">для Windows 10–11</span>
-        </div>
-        <p>Нажал — играешь. Готовые мод‑сборки, моментальные обновления и ноль возни с файлами или конфликтами</p>
-        <div class="cta">
-          <a id="download-btn" href="#download" class="btn btn--primary btn--lg">Скачать лаунчер</a>
-          <a href="#casino" class="btn btn--ghost btn--lg">Мне повезёт</a>
-        </div>
-      </div>
-    </section>
-
-    <!-- GAMES -->
-    <section class="section section--alt" id="games">
-      <div class="container">
-        <h2>Игры и моды</h2>
-        <div class="games-grid">
-          <!-- Lethal Company -->
-          <article class="game-card" data-tilt>
-            <div class="game-thumb">
-              <img class="skeleton" src="./assets/images/lethal.jpg" alt="Lethal Company" decoding="async" loading="lazy" fetchpriority="low" data-fallback="https://placehold.co/640x360/0f0f1f/FFFFFF?text=Lethal+Company" width="920" height="430" sizes="(max-width: 640px) 92vw, (max-width: 980px) 50vw, 33vw" />
-            </div>
-            <div class="game-body">
-              <h3>Lethal Company</h3>
-              <p>Выживание с друзьями: смех, паника и монстры в темноте, а моды делают каждый забег непредсказуемым.</p>
-              <div class="tags">
-                <span class="tag tag--mode">Сетевой кооператив</span>
-                <span class="tag tag--genre">Хоррор</span>
-                <span class="tag tag--persp">От первого лица</span>
-                <span class="tag tag--tone">Смешная</span>
-              </div>
-            </div>
-          </article>
-
-          <!-- R.E.P.O. -->
-          <article class="game-card" data-tilt>
-            <div class="game-thumb">
-              <img class="skeleton" src="./assets/images/repo.jpg" alt="R.E.P.O." decoding="async" loading="lazy" fetchpriority="low" data-fallback="https://placehold.co/640x360/0f0f1f/FFFFFF?text=R.E.P.O." width="920" height="430" sizes="(max-width: 640px) 92vw, (max-width: 980px) 50vw, 33vw" />
-            </div>
-            <div class="game-body">
-              <h3>R.E.P.O.</h3>
-              <p>Рейды с друзьями: сражения, физический хаос и моды, которые превращают миссии в настоящий аттракцион.</p>
-              <div class="tags">
-                <span class="tag tag--mode">Сетевой кооператив</span>
-                <span class="tag tag--genre">Хоррор</span>
-                <span class="tag tag--persp">От первого лица</span>
-                <span class="tag tag--tone">Смешная</span>
-              </div>
-            </div>
-          </article>
-
-          <!-- Risk of Rain 2 -->
-          <article class="game-card" data-tilt>
-            <div class="game-thumb">
-              <img class="skeleton" src="./assets/images/ror2.jpg" alt="Risk of Rain 2" decoding="async" loading="lazy" fetchpriority="low" data-fallback="https://placehold.co/640x360/0f0f1f/FFFFFF?text=Risk+of+Rain+2" width="920" height="430" sizes="(max-width: 640px) 92vw, (max-width: 980px) 50vw, 33vw" />
-            </div>
-            <div class="game-body">
-              <h3>Risk of Rain 2</h3>
-              <p>Врывайтесь в бой с друзьями: растущая сложность, море лута и десятки способов умереть красиво.</p>
-              <div class="tags">
-                <span class="tag tag--mode">Кооператив</span>
-                <span class="tag tag--genre">Экшен-рогалик</span>
-                <span class="tag tag--persp">Шутер от третьего лица</span>
-                <span class="tag tag--mech">Лут</span>
-              </div>
-            </div>
-          </article>
-
-          <!-- More coming -->
-          <h3 class="reels-title">Какую ещё игру добавить?</h3>
-          <article id="casino" class="game-card coming full" aria-label="Скоро больше игр">
-            <div class="game-coming">
-              <div class="reels">
-                <!-- Reel 1: Жанры -->
-                <div class="reel r1">
-                  <div class="reel-track">
-                    <div class="slot">Выживание</div>
-                    <div class="slot alt">Рогалик</div>
-                    <div class="slot">Шутер</div>
-                    <div class="slot alt">Песочница</div>
-                    <div class="slot">Пати-игра</div>
-                    <div class="slot alt">Экшен</div>
-                    <div class="slot">Стратегия</div>
-                    <div class="slot alt">Симулятор</div>
-                    <div class="slot">Приключение</div>
-                    <div class="slot alt">Хоррор</div>
-                  </div>
-                </div>
-                <!-- Reel 2: Поджанры -->
-                <div class="reel r2">
-                  <div class="reel-track">
-                    <div class="slot">Хоррор-выживание</div>
-                    <div class="slot alt">Экшен-рогалик</div>
-                    <div class="slot">Тактический шутер</div>
-                    <div class="slot alt">Крафтовая песочница</div>
-                    <div class="slot">Социальная дедукция</div>
-                    <div class="slot alt">Souls-like</div>
-                    <div class="slot">Тактика в реальном времени</div>
-                    <div class="slot alt">Космосим</div>
-                    <div class="slot">Метроидвания</div>
-                    <div class="slot alt">Кооперативный хоррор</div>
-                  </div>
-                </div>
-                <!-- Reel 3: Особенности -->
-                <div class="reel r3">
-                  <div class="reel-track">
-                    <div class="slot">Кооператив на 4 игрока</div>
-                    <div class="slot alt">Случайная генерация уровней</div>
-                    <div class="slot">Разрушаемое окружение</div>
-                    <div class="slot alt">Мастерская Steam</div>
-                    <div class="slot">Кроссплей</div>
-                    <div class="slot alt">Хардкорная боёвка</div>
-                    <div class="slot">Совместимость модов</div>
-                    <div class="slot alt">Система экипажа</div>
-                    <div class="slot">Нелинейное прохождение</div>
-                    <div class="slot alt">Случайные события</div>
-                  </div>
-                </div>
-              </div>
-              <div class="reels-controls" role="group" aria-label="Управление слотами">
-                <button class="btn btn--reels btn--lg reels-spin" type="button" aria-label="Крутить"><span class="emoji" aria-hidden="true">🎰</span>Крутить</button>
-              </div>
-            </div>
-          </article>
-        </div>
-      </div>
-    </section>
-
-    
-
-    <!-- FEATURES -->
-    <section class="section" id="features">
-      <div class="container">
-        <h2>Почему Chill Hub</h2>
-        <div class="benefits-strip" aria-label="Преимущества">
-          <span class="benefit"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Без архивов и распаковок</span>
-          <span class="benefit"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Докачка и возобновление</span>
-          <span class="benefit"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Автоочистка «хвостов»</span>
-          <span class="benefit"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Один клик — и в игре</span>
-        </div>
-        
-        <div class="features">
-          <div class="feature">
-            <div class="ico" aria-hidden="true">
-              <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true">
-                <path d="M16.08,59.26A8,8,0,0,1,0,59.26a59,59,0,0,1,97.13-45V8a8,8,0,1,1,16.08,0V33.35a8,8,0,0,1-8,8L80.82,43.62a8,8,0,1,1-1.44-15.95l8-.73A43,43,0,0,0,16.08,59.26Zm22.77,19.6a8,8,0,0,1,1.44,16l-10.08.91A42.95,42.95,0,0,0,102,63.86a8,8,0,0,1,16.08,0A59,59,0,0,1,22.3,110v4.18a8,8,0,0,1-16.08,0V89.14h0a8,8,0,0,1,7.29-8l25.31-2.3Z" transform="translate(60 60) scale(0.78) translate(-60 -60)"/>
-              </svg>
-            </div>
-            <h3>Умные обновления</h3>
-            <p>Качаем не весь клиент, а только разницу. Экономим время и интернет, чтобы ты быстрее возвращался в игру.</p>
-          </div>
-          <div class="feature">
-            <div class="ico" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <!-- Lightning bolt (zap) -->
-                <path d="M13 2L3 14h7l-1 8L21 8h-7l-1-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </div>
-            <h3>Обновить → Играть</h3>
-            <p>Никаких архивов и ручной распаковки. Нажал — и уже в игре. Обновления ставятся быстро, без лишней возни и шагов.</p>
-          </div>
-          <div class="feature">
-            <div class="ico" aria-hidden="true">
-              <!-- Apps Grid -->
-              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <rect x="4" y="4" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="2"/>
-                <rect x="14" y="4" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="2"/>
-                <rect x="4" y="14" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="2"/>
-                <rect x="14" y="14" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="2"/>
-              </svg>
-            </div>
-            <h3>Ещё больше кооперативных игр</h3>
-            <p>Каталог постоянно растёт: новые игры, свежие сборки, больше поводов звать друзей. Запуск в пару кликов.</p>
-          </div>
-          <div class="feature">
-            <div class="ico" aria-hidden="true">
-              <!-- Shield Check -->
-              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M12 3l7 3v5c0 5-3.5 8.7-7 10-3.5-1.3-7-5-7-10V6l7-3z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-                <path d="M8.5 12.5l2.2 2.2 4.8-4.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </div>
-            <h3>Стабильность</h3>
-            <p>Держим папку игры в идеальном порядке: лишнее удаляем, нужное создаём, хеши проверяем. Без конфликтов и «мусора» — всё работает стабильно.</p>
-          </div>
-          <div class="feature">
-            <div class="ico" aria-hidden="true">
-              <!-- Chat bubble: friendly icon for news & guides -->
-              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M4 7.5A3.5 3.5 0 017.5 4h9A3.5 3.5 0 0120 7.5v6A3.5 3.5 0 0116.5 17H11l-4 3v-3H7.5A3.5 3.5 0 014 13.5v-6z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-                <path d="M8 9.5h8M8 12h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-              </svg>
-            </div>
-            <h3>Новости и гайды внутри</h3>
-            <p>Обновления и гайды — прямо в лаунчере.</p>
-          </div>
-          <div class="feature">
-            <div class="ico" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.25l-7.19-.61L12 2 9.19 8.64 2 9.25l5.46 4.72L5.82 21 12 17.27z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
-            </div>
-            <h3>Уникальные сборки — бесплатно</h3>
-            <p>Уникальные сборки с автообновлениями. То, чего нет в открытом доступе.</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- CTA DOWNLOAD -->
-    <section class="section section--cta" id="download">
-      <div class="container">
-        <figure class="screenshot-win compare compare--narrow" style="--compare-pos: 3%">
-          <div class="compare__stage">
-            <img class="compare__img" src="./assets/images/launcher-main.jpg?v=20260816-1" alt="Лаунчер Chill Hub сейчас" decoding="async" loading="eager" fetchpriority="high" data-fallback="https://placehold.co/1400x820/0f0f1f/FFFFFF?text=Launcher" width="1400" height="820" />
-            <!-- Старый скриншот лежит поверх нового и обрезается по бегунку:
-                 слева видно «до», справа — «после». -->
-            <div class="compare__clip" aria-hidden="true">
-              <img class="compare__img" src="./assets/images/launcher-main-old.jpg?v=20260816-1" alt="" decoding="async" loading="eager" data-fallback="https://placehold.co/1400x820/0f0f1f/FFFFFF?text=Launcher" width="1400" height="820" />
-            </div>
-            <span class="compare__tag compare__tag--before" aria-hidden="true">Было</span>
-            <span class="compare__tag compare__tag--after" aria-hidden="true">Стало</span>
-            <div class="compare__handle" aria-hidden="true"><span class="compare__grip"></span></div>
-            <!-- range, а не свой drag: мышь, тач и стрелки клавиатуры бесплатно -->
-            <input class="compare__range" type="range" min="0" max="100" step="0.5" value="3" aria-label="Сравнить старый и новый вид лаунчера" />
-          </div>
-          <figcaption class="compare__caption">
-            Потяни бегунок: слева — старый лаунчер, справа — как он выглядит сейчас.
-            <button class="compare__zoom" type="button">Открыть скриншот</button>
-          </figcaption>
-        </figure>
-        <h2>Готов начать?</h2>
-        <p>Скачай лаунчер и подключайся к друзьям за минуты.</p>
-        <a class="btn btn--primary btn--xl" href="/downloads/ChillHub-Setup.exe" download="ChillHub-Setup.exe">Скачать для Windows</a>
-        <p class="muted">Поддержка Windows 10–11</p>
-      </div>
-    </section>
-  </main>
-
-  <footer class="site-footer">
-    <div class="container">
-      <p>© <span id="year"></span> Chill Hub. Все права защищены.</p>
-      <nav></nav>
+    <div>
+      <h4>Продукт</h4>
+      <ul>
+        <li><a href="#try">Попробовать</a></li>
+        <li><a href="#games">Игры</a></li>
+        <li><a href="#news">Новости</a></li>
+        <li><a href="/downloads/ChillHub-Setup.exe" download="ChillHub-Setup.exe">Скачать</a></li>
+      </ul>
     </div>
-  </footer>
+    <div>
+      <h4>Правила</h4>
+      <ul>
+        <li><a href="./terms.html">Условия использования</a></li>
+        <li><a href="./privacy.html">Политика приватности</a></li>
+        <li><a href="mailto:tr0llex.rus@gmail.com">Связаться</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="wrap" style="margin-top: var(--s5)">
+    <p class="faint">© <span data-year>2026</span> Chill Hub. Названия игр принадлежат их правообладателям.</p>
+  </div>
+</footer>
 
-  <script src="./scripts/main.js?v=20260816-1" defer></script>
+<!-- Правила копии лаунчера — отдельным модулем без DOM: только так их
+     поведение проверяется тестом (tests/web/landing2-emu.test.js). -->
+<script src="./emu-core.js"></script>
+<script src="./api.js"></script>
+<script src="./app.js" defer></script>
+<script src="./emu.js" defer></script>
 </body>
 </html>

@@ -12,8 +12,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..', '..');
-const LANDING = path.join(ROOT, 'landing', 'v2');
-const ADMIN = path.join(ROOT, 'server', 'admin_ui', 'v2');
+const LANDING = path.join(ROOT, 'landing');
+const ADMIN = path.join(ROOT, 'server', 'admin_ui');
 
 const read = (...p) => fs.readFileSync(path.join(...p), 'utf8');
 const PAGES = ['index.html', 'privacy.html', 'terms.html'];
@@ -85,16 +85,124 @@ test('текст читается, пока шрифт едет', () => {
 
 /* ---------- Индексация ---------- */
 
-test('превью закрыто от поиска, пока настоящая страница в корне', () => {
-  // Две страницы с одним текстом соревнуются, и наверх может выйти превью
+test('страницы открыты поиску', () => {
+  // Пока сайт лежал превью рядом с настоящим, страницы были закрыты от
+  // обхода: два адреса с одним текстом соревнуются между собой. Сайт
+  // переехал в корень, соревноваться стало не с чем — закрытие обязано
+  // было уехать тем же коммитом, иначе сайт просто пропадёт из поиска.
   for (const page of PAGES) {
-    assert.match(read(LANDING, page), /<meta name="robots" content="noindex, nofollow">/, page + ' открыт поиску');
+    assert.doesNotMatch(read(LANDING, page), /content="noindex/, page + ' закрыт от поиска');
   }
 });
 
-test('в разметке сказано, когда снимать закрытие от поиска', () => {
-  // Иначе 2.0 переедет в корень и останется невидимой для поиска
-  assert.match(read(LANDING, 'index.html'), /Строку снимаем в тот же коммит/);
+test('страница называет своим адресом корень', () => {
+  // Канонический адрес превью вёл на /v2/ — оставшись, он увёл бы поиск
+  // на страницу, которой больше нет
+  const html = read(LANDING, 'index.html');
+  assert.match(html, /<link rel="canonical" href="https:\/\/launcher\.samoy\.love\/">/);
+  assert.doesNotMatch(html, /launcher\.samoy\.love\/v2/);
+});
+
+/* ---------- Политика говорит о том, что есть ---------- */
+
+test('политика приватности не обещает сторонних запросов, которых нет', () => {
+  // Политика полгода уверяла, что шрифты идут с Google Fonts и Google
+  // видит IP читателя. Шрифты давно лежат у себя. Ошибка в свою пользу
+  // всё равно ошибка: политику читают как обязательство, а не как эссе
+  const clean = (html) => html.replace(/<!--[\s\S]*?-->/g, '');
+  const own = (u) => u.startsWith('https://launcher.samoy.love');
+  const links = (html) => (clean(html).match(/https?:\/\/[^"'\s>]+/g) || []).filter((u) => !own(u));
+  const third = PAGES.some((page) => links(read(LANDING, page)).length > 0);
+
+  if (!third) {
+    assert.doesNotMatch(read(LANDING, 'privacy.html'), /Google Fonts/, 'политика описывает запрос, которого нет');
+  }
+});
+
+/* ---------- Точка входа панели ---------- */
+
+// ИМЕНА ЭТИХ ФАЙЛОВ — ДОГОВОР С КОНФИГОМ NGINX, КОТОРЫЙ ЛЕЖИТ В ДРУГОМ
+// РЕПОЗИТОРИИ. Nginx отдаёт /admin/ точным совпадением и просит файл по
+// имени; переименованная точка входа отвечает 404 — и только вошедшему:
+// анонима редиректит на форму входа, а смоук после выкатки проверяет как
+// раз форму входа. То есть выкатка остаётся зелёной, а панель не
+// открывается. Так и случилось при переезде на 2.0.
+//
+// Здесь имена и закреплены. Тест не проверяет прод — он не даёт
+// переименовать файл, не заметив, что правка обязана уехать и в
+// deploy-kit тем же заходом.
+
+test('точка входа панели названа так, как её просит nginx', () => {
+  for (const name of ['index.html', 'login.html', 'login.js', 'app.ico', 'favicon.svg']) {
+    assert.ok(fs.existsSync(path.join(ADMIN, name)), 'nginx просит этот файл по имени: ' + name);
+  }
+});
+
+test('сервер админки отдаёт ту же точку входа, что и nginx', () => {
+  // В деве статику раздаёт сам сервер, на проде — nginx. Разойдясь, они
+  // дают «локально работает, на проде 404» — ровно тот случай, который
+  // не ловится ничем до открытия панели руками
+  const go = read(ROOT, 'server', 'cmd', 'admin', 'main.go');
+  assert.match(go, /filepath\.Join\(uiDir, "index\.html"\)/, 'сервер отдаёт не index.html');
+  assert.match(go, /filepath\.Join\(uiDir, "login\.html"\)/, 'сервер отдаёт анониму не login.html');
+});
+
+test('панель просит свои файлы по абсолютным адресам', () => {
+  // СТРАНИЦА ЛЕЖИТ НЕ ТАМ, ГДЕ ЕЁ ФАЙЛЫ. Разметку отдают по /admin/, а
+  // модули, стили и шрифты — по /admin/ui/. Относительный './views.js'
+  // браузер разрешит от адреса страницы, попросит /admin/views.js и
+  // получит HTML вместо скрипта: nginx на неизвестном пути отвечает
+  // страницей, а браузер отказывается её исполнять по MIME.
+  //
+  // Так и вышло при переезде: панель открылась и осталась голой — ни
+  // одного стиля, ни одного модуля. Проверить это снаружи нельзя (за
+  // авторизацией), поэтому адреса закреплены здесь.
+  const html = read(ADMIN, 'index.html');
+  for (const [, url] of html.matchAll(/(?:src|href)="([^"#]+)"/g)) {
+    assert.ok(
+      url.startsWith('/admin/ui/'),
+      'адрес разрешится от /admin/, а файл лежит в /admin/ui/: ' + url
+    );
+  }
+});
+
+test('каждый файл, который просит панель, лежит на месте', () => {
+  const html = read(ADMIN, 'index.html');
+  for (const [, url] of html.matchAll(/(?:src|href)="(\/admin\/ui\/[^"#]+)"/g)) {
+    const rel = url.replace('/admin/ui/', '');
+    assert.ok(fs.existsSync(path.join(ADMIN, rel)), 'панель просит несуществующий файл: ' + url);
+  }
+});
+
+/* ---------- Страница входа ---------- */
+
+// Она стоит особняком: её открывают БЕЗ сессии, и nginx отдаёт анониму
+// лишь несколько файлов из /admin/ui/. Всё, что страница попросит сверх
+// этого, вернётся 401 — молча, без единой ошибки на экране.
+
+test('страница входа обходится без стороннего кода', () => {
+  // На ней набирают пароль администратора. Чужой скрипт здесь выполняется
+  // в её origin и видит поле пароля целиком
+  const html = read(ADMIN, 'login.html');
+  for (const tag of html.match(/<(script|link)[^>]*>/g) || []) {
+    assert.ok(!/https?:\/\//.test(tag), 'страница входа тянет чужое: ' + tag);
+  }
+});
+
+test('страница входа не просит того, чего анониму не отдадут', () => {
+  // admin.css, шрифты и модули панели закрыты авторизацией: попросив их,
+  // страница получит 401 и останется без оформления
+  const html = read(ADMIN, 'login.html');
+  const allowed = ['/admin/ui/login.js', '/admin/ui/app.ico', '/admin/ui/favicon.svg'];
+  const asked = [...html.matchAll(/(?:src|href)="([^"]+)"/g)].map((m) => m[1]);
+  for (const url of asked) {
+    assert.ok(allowed.includes(url), 'страница входа просит закрытое: ' + url);
+  }
+  assert.ok(html.includes('<style>'), 'оформление вынесено наружу — анониму его не отдадут');
+});
+
+test('страница входа закрыта от поиска', () => {
+  assert.match(read(ADMIN, 'login.html'), /content="noindex/);
 });
 
 test('картинка для карточки в мессенджерах открыта обходу', () => {

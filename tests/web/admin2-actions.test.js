@@ -7,7 +7,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const A = require('../../server/admin_ui/v2/actions.js');
+const A = require('../../server/admin_ui/actions.js');
 
 /** Все действия, которые уводят изменение к игрокам необратимо. */
 const DANGER = [
@@ -15,7 +15,6 @@ const DANGER = [
   'launcher.delete',
   'launcher.prune',
   'games.purge',
-  'gallery.delete',
   'mods.activate',
   'mods.delete',
   'news.publish',
@@ -29,17 +28,12 @@ const DANGER = [
 
 /** Действия, которые можно повторить или отменить обычным способом. */
 const SAFE = [
-  'games.save',
   'games.scan',
-  'gallery.mkdir',
-  'gallery.rename',
-  'gallery.caption',
-  'gallery.cover',
-  'news.save',
   'news.rebuild',
   'inbox.important',
   'inbox.read',
   'maint.off',
+  'maint.save',
   'cache.sweep',
 ];
 
@@ -173,4 +167,37 @@ test('чтение прочитанного и возврат в новые — 
   await A.run('inbox.read', { id: '7', read: true }, { api });
   await A.run('inbox.read', { id: '7', read: false }, { api });
   assert.deepStrictEqual(seen, ['read:7', 'unread:7']);
+});
+
+/* ---------- Что обещает вопрос ---------- */
+
+test('удаление активной версии предупреждает об откате всех лаунчеров', () => {
+  // Сервер не убирает latest.json, а переставляет его на предыдущую
+  // версию — и все установленные лаунчеры уезжают на неё
+  const q = A.question('launcher.delete', { version: '1.6.25', active: true });
+  assert.match(q.body, /ПРЕДЫДУЩАЯ|предыдущая/);
+  assert.match(q.body, /откат/i);
+});
+
+test('удаление старой версии не пугает откатом, которого не будет', () => {
+  // Пугать там, где ничего не произойдёт, — верный способ приучить
+  // жать «да» не читая
+  const q = A.question('launcher.delete', { version: '1.6.20', active: false });
+  assert.ok(!/откат/i.test(q.body), q.body);
+  assert.match(q.body, /ничего не изменится/);
+});
+
+test('оба вопроса называют версию, которую удаляют', () => {
+  for (const active of [true, false]) {
+    assert.match(A.question('launcher.delete', { version: '1.6.25', active }).title, /1\.6\.25/);
+  }
+});
+
+test('вопрос о чистке называет версии поимённо и то, что останется', () => {
+  // «Удалить старые» без списка — просьба довериться, а доверяться нечему
+  const q = A.question('launcher.prune', { victims: ['1.0.0', '1.0.1'], active: '1.0.4' });
+  assert.match(q.title, /2 старых/);
+  assert.match(q.body, /1\.0\.0, 1\.0\.1/);
+  assert.match(q.body, /Останутся активная 1\.0\.4/);
+  assert.match(q.body, /две перед ней/);
 });
