@@ -64,9 +64,9 @@
     <!-- Рамка выбранной карточки: тот же акцент, что и у кнопки действия. Раньше здесь был
          розово-фиолетовый градиент — третий акцентный цвет на экране, не значивший ничего,
          кроме «выбрано». -->
-    <SolidColorBrush x:Key="Brush.CheckmarkGradientPink" Color="{DynamicResource Color.Accent}"/>
+    <SolidColorBrush x:Key="Brush.CardSelectedBorder" Color="{DynamicResource Color.Accent}"/>
     <SolidColorBrush x:Key="Brush.CardHoverBorder" Color="{DynamicResource Color.BorderHover}"/>
-    <SolidColorBrush x:Key="Brush.VerifyGradient" Color="{DynamicResource Color.Accent}"/>
+    <SolidColorBrush x:Key="Brush.VerifyFill" Color="{DynamicResource Color.Accent}"/>
     <Style x:Key="Style.ProgressBar.Verify" TargetType="ProgressBar">
       <Setter Property="Height" Value="6"/>
       <Setter Property="Template">
@@ -75,7 +75,7 @@
             <Grid ClipToBounds="True">
               <Border CornerRadius="3" Background="{DynamicResource Brush.Border}"/>
               <!-- Animated indicator for indeterminate state -->
-              <Border x:Name="IndBar" CornerRadius="3" Height="6" Width="160" HorizontalAlignment="Left" Background="{StaticResource Brush.VerifyGradient}">
+              <Border x:Name="IndBar" CornerRadius="3" Height="6" Width="160" HorizontalAlignment="Left" Background="{StaticResource Brush.VerifyFill}">
                 <Border.RenderTransform>
                   <TranslateTransform X="-180"/>
                 </Border.RenderTransform>
@@ -158,56 +158,41 @@
       </Setter>
     </Style>
 
-    <!-- Game-specific selectable style: brighter hover, special selected+hover -->
+    <!-- Строка списка игр.
+         Не карточка: восемь карточек в столбец — это восемь рамок, между которыми
+         глазу нечего выбирать, и выбранная отличалась от соседок только цветом своей
+         рамки. Теперь строка — просто строка, а выбранная взята заливкой и полосой
+         углей слева: полоса стоит на краю колонки, её видно боковым зрением, и она не
+         спорит с обложкой игры справа.
+         Рамки нет вовсе, поэтому при выборе строка не «толстеет» — прежняя смена
+         толщины рамки сдвигала содержимое на пиксель при каждом клике. -->
     <Style x:Key="Style.ListBoxItem.SelectableCard.Game" TargetType="ListBoxItem">
       <Setter Property="Padding" Value="0"/>
-      <Setter Property="Margin" Value="0,4,0,4"/>
+      <Setter Property="Margin" Value="0,0,0,1"/>
       <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ListBoxItem">
-            <Border x:Name="bd" CornerRadius="{DynamicResource Radius.L}" BorderThickness="1"
-                    Background="{DynamicResource Brush.Surface}"
-                    BorderBrush="{DynamicResource Brush.Border}">
+            <Border x:Name="bd" CornerRadius="{DynamicResource Radius.M}"
+                    Background="Transparent"
+                    BorderThickness="2,0,0,0" BorderBrush="Transparent">
               <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
             </Border>
             <ControlTemplate.Triggers>
-              <!-- Hover (not selected) brighter -->
               <MultiTrigger>
                 <MultiTrigger.Conditions>
                   <Condition Property="IsMouseOver" Value="True"/>
                   <Condition Property="IsSelected" Value="False"/>
                 </MultiTrigger.Conditions>
-                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.CardHoverBorder}"/>
-                <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.ListHover}"/>
               </MultiTrigger>
-              <!-- Selected without focus -->
-              <MultiTrigger>
-                <MultiTrigger.Conditions>
-                  <Condition Property="IsSelected" Value="True"/>
-                  <Condition Property="IsKeyboardFocusWithin" Value="False"/>
-                </MultiTrigger.Conditions>
-                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
-                <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
-              </MultiTrigger>
-              <!-- Selected with focus -->
-              <MultiTrigger>
-                <MultiTrigger.Conditions>
-                  <Condition Property="IsSelected" Value="True"/>
-                  <Condition Property="IsKeyboardFocusWithin" Value="True"/>
-                </MultiTrigger.Conditions>
-                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
-                <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
-              </MultiTrigger>
-              <!-- Selected + Hover: emphasize slightly more -->
-              <MultiTrigger>
-                <MultiTrigger.Conditions>
-                  <Condition Property="IsSelected" Value="True"/>
-                  <Condition Property="IsMouseOver" Value="True"/>
-                </MultiTrigger.Conditions>
-                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
-                <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
-              </MultiTrigger>
+              <!-- Выбранная строка: заливка на ступень светлее и полоса углей слева.
+                   Фокус клавиатуры ничего не добавляет — выбранная строка выглядит
+                   одинаково, попали в неё мышью или стрелками. -->
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Surface3}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.AccentFill}"/>
+              </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter TargetName="bd" Property="Opacity" Value="0.6"/>
               </Trigger>
@@ -403,7 +388,7 @@
       <Setter Property="MinWidth" Value="140"/>
       <Setter Property="Padding" Value="14,0"/>
       <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
-      <Setter Property="Background" Value="#6612161A"/>
+      <Setter Property="Background" Value="{DynamicResource Brush.GhostFill}"/>
       <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
       <Setter Property="Template">
         <Setter.Value>
@@ -582,7 +567,7 @@
                   <Condition Property="IsSelected" Value="True"/>
                   <Condition Property="IsKeyboardFocusWithin" Value="False"/>
                 </MultiTrigger.Conditions>
-                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CardSelectedBorder}"/>
                 <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
               </MultiTrigger>
               <!-- Selected with focus: brightest and thicker -->
@@ -591,7 +576,7 @@
                   <Condition Property="IsSelected" Value="True"/>
                   <Condition Property="IsKeyboardFocusWithin" Value="True"/>
                 </MultiTrigger.Conditions>
-                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CardSelectedBorder}"/>
                 <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
               </MultiTrigger>
               <!-- Disabled dim -->
@@ -608,7 +593,7 @@
     
     <!-- Shared skeleton sizing resources -->
     <sys:Double x:Key="Skeleton.GameRowHeight">60</sys:Double>
-    <sys:Double x:Key="Skeleton.NewsPreloadHeight">120</sys:Double>
+    <sys:Double x:Key="Skeleton.NewsPreloadHeight">78</sys:Double>
     <Thickness x:Key="Skeleton.GameTopOffsetThickness">0,4,0,0</Thickness>
     <Thickness x:Key="Skeleton.NewsTopOffsetThickness">0,6,0,0</Thickness>
   </Page.Resources>
@@ -632,15 +617,22 @@
     <Grid Grid.Row="2">
       <Grid.ColumnDefinitions>
         <!-- Сайдбар. Стало уже прежних 310: статус переехал из иконки в подпись под
-             названием, поэтому строке больше не нужны две колонки под значки справа. -->
-        <ColumnDefinition Width="248"/>
-        <ColumnDefinition Width="8"/>
+             названием, поэтому строке больше не нужны две колонки под значки справа.
+             Распорки между колонками нет: сайдбар отделён линией, а воздух справа от
+             неё даёт собственное поле витрины. -->
+        <ColumnDefinition Width="260"/>
         <!-- Витрина выбранной игры + вкладки новостей -->
         <ColumnDefinition Width="*"/>
       </Grid.ColumnDefinitions>
 
-      <!-- Левый сайдбар: выбор игры (лист) -->
-      <Border Grid.Column="0" Style="{DynamicResource Style.Card}" Margin="0,0,0,0" Padding="12" VerticalAlignment="Stretch">
+      <!-- Левый сайдбар: выбор игры (лист).
+           Не карточка, а колонка: карточка обещает, что содержимое можно куда-то деть —
+           свернуть, закрыть, перетащить, — а список игр никуда не девается, это
+           единственная навигация приложения. Отделён одной линией справа; рамка по
+           периметру рисовала бы вокруг половины окна прямоугольник, который ничего не
+           ограничивает. -->
+      <Border Grid.Column="0" Background="Transparent" VerticalAlignment="Stretch"
+              BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,1,0">
         <Grid>
           <Grid.RowDefinitions>
             <!-- Заголовок, список, подвал. Поиск уехал в шапку окна: список игр —
@@ -659,14 +651,21 @@
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
           </Grid.RowDefinitions>
-          <!-- Header with refresh button -->
-          <Grid Grid.Row="0" Margin="0,0,0,10">
+          <!-- Шапка сайдбара -->
+          <Grid Grid.Row="0" Margin="12,12,12,8">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="*"/>
               <ColumnDefinition Width="Auto"/>
               <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <TextBlock Grid.Column="0" x:Name="GamesSectionTitle" Text="Библиотека" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Title}"/>
+            <!-- Мелкие прописные моноширинным, разряжённые: это не заголовок раздела,
+                 а подпись к колонке — она называет содержимое и уходит на второй план,
+                 вместо того чтобы спорить в весе с названиями игр под собой. Гарнитура
+                 Consolas, а не IBM Plex Mono из макета: роль здесь играет моноширинность,
+                 а тащить в установщик шрифт ради одной строки — плохой обмен. -->
+            <TextBlock Grid.Column="0" x:Name="GamesSectionTitle" Text="БИБЛИОТЕКА"
+                       FontFamily="Consolas" FontSize="11" VerticalAlignment="Center"
+                       Foreground="{DynamicResource Brush.TextMuted}"/>
             <!-- Compact verify indicator: small indeterminate bar between title and refresh button -->
             <!-- IsIndeterminate ставится из кода вместе с видимостью, а не здесь: прибитый
                  в разметке, он запускал бесконечный бегунок при загрузке страницы, и тот
@@ -674,7 +673,11 @@
             <ProgressBar Grid.Column="1" Name="GamesVerifyIndicator" Width="80" Height="4" VerticalAlignment="Center"
                          Visibility="Collapsed"
                          Style="{StaticResource Style.ProgressBar.Verify}" Margin="8,0,8,0"/>
-            <Button Grid.Column="2" Name="RefreshGamesBtn" Width="28" Height="28" ToolTip="Обновить список и статусы" Click="RefreshGames_Click" Margin="8,0,0,0" Padding="0">
+            <!-- Значок без рамки: рамка обещает вес, которого у «обновить» нет, а
+                 стоит кнопка рядом с подписью к колонке, не рядом с действием. -->
+            <Button Grid.Column="2" Name="RefreshGamesBtn" Width="22" Height="22"
+                    Style="{DynamicResource Style.Button.QueueIcon}"
+                    ToolTip="Обновить список и статусы" Click="RefreshGames_Click" Margin="8,0,0,0">
               <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Center"/>
             </Button>
           </Grid>
@@ -682,9 +685,9 @@
           <!-- Контейнер строки списка/скелетона с тёмным фоном. VerticalAlignment=Top:
                строка сетки звёздочная, а список — по содержимому, чтобы при трёх играх
                не растягивать пустой ListBox до подвала. -->
-          <Grid Grid.Row="1" VerticalAlignment="Top" Background="{DynamicResource Brush.Surface}">
+          <Grid Grid.Row="1" VerticalAlignment="Top" Margin="8,0">
             <!-- Skeleton loader для списка игр -->
-            <StackPanel Name="GamesSkeleton" Margin="{StaticResource Skeleton.GameTopOffsetThickness}">
+            <StackPanel Name="GamesSkeleton" Visibility="Collapsed" Margin="{StaticResource Skeleton.GameTopOffsetThickness}">
               <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.GameRowHeight}"/>
               <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.GameRowHeight}"/>
               <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.GameRowHeight}"/>
@@ -717,7 +720,7 @@
             </StackPanel>
             <!-- Листаемый список игр как боковое меню (карточки) -->
             <ListBox Name="GameList" SelectionChanged="GameCombo_SelectionChanged" MouseDoubleClick="GameList_MouseDoubleClick"
-                     Visibility="Collapsed" Background="{DynamicResource Brush.Surface}"
+                     Visibility="Collapsed" Background="Transparent"
                      ScrollViewer.VerticalScrollBarVisibility="Auto"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.CanContentScroll="False"
                      VirtualizingPanel.IsVirtualizing="False"
@@ -726,12 +729,12 @@
                      HorizontalContentAlignment="Stretch">
               <ListBox.Resources>
                 <Style TargetType="ScrollViewer">
-                  <Setter Property="Background" Value="{DynamicResource Brush.Surface}"/>
+                  <Setter Property="Background" Value="Transparent"/>
                 </Style>
               </ListBox.Resources>
               <ListBox.Template>
                 <ControlTemplate TargetType="ListBox">
-                  <Border Background="{DynamicResource Brush.Surface}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" SnapsToDevicePixels="True">
+                  <Border Background="Transparent" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" SnapsToDevicePixels="True">
                     <!-- Видимости полос ОБЯЗАТЕЛЬНО пробрасываем из присоединённых свойств.
                          Свой ControlTemplate заменяет штатный, где эти связи есть, поэтому без
                          них ScrollViewer брал СВОИ значения по умолчанию — а у него горизонтальная
@@ -770,8 +773,10 @@
               </ListBox.ItemContainerStyle>
               <ListBox.ItemTemplate>
                 <DataTemplate>
-                  <!-- Neutralize inner card border to avoid double border; content still keeps padding -->
-                  <Border Padding="10" Margin="0" HorizontalAlignment="Stretch"
+                  <!-- Заливку и рамку рисует контейнер строки (Style.ListBoxItem.SelectableCard.Game);
+                       здесь остаются только поля. Padding 10,9 — как в макете. -->
+                  <Border Padding="10,9" Margin="0" HorizontalAlignment="Stretch"
+                          Background="Transparent"
                           BorderThickness="0" BorderBrush="Transparent"
                           ContextMenuOpening="GameItem_ContextMenuOpening">
                     <Border.ContextMenu>
@@ -792,13 +797,13 @@
                                   Style="{DynamicResource Style.MenuItem.Danger}"/>
                       </ContextMenu>
                     </Border.ContextMenu>
-                    <!-- Grow row height while skeleton is visible -->
+                    <!-- Пока виден скелетон, строка выше: иначе полоска-заглушка не
+                         помещается в высоту готовой строки и обрезается. -->
                     <Border.Style>
-                      <Style TargetType="Border" BasedOn="{StaticResource Style.Card}">
+                      <Style TargetType="Border">
                         <Style.Triggers>
                           <DataTrigger Binding="{Binding ElementName=GameRowSkeleton, Path=Visibility}" Value="Visible">
                             <Setter Property="MinHeight" Value="80"/>
-                            <!-- Add extra top padding so the skeleton/card is not stuck to the top -->
                             <Setter Property="Padding" Value="10,12,10,10"/>
                           </DataTrigger>
                         </Style.Triggers>
@@ -837,28 +842,71 @@
                           </Style>
                         </ContentControl.Style>
                       </ContentControl>
-                      <!-- Иконка игры -->
-                      <Grid Grid.Column="0" Width="32" Height="32" VerticalAlignment="Center">
-                        <!-- Default icon (visible under image or when no image) -->
-                        <TextBlock x:Name="DefaultGameIcon" FontFamily="Segoe MDL2 Assets" Text="&#xE7C3;" FontSize="18"
-                                   Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center" HorizontalAlignment="Center"
-                                   Visibility="Collapsed"/>
-                        <Image x:Name="IconImg" ui:CoverImage.Url="{Binding IconUrl}"
-                               Stretch="UniformToFill" Visibility="Visible"
-                               ImageFailed="CoverImg_ImageFailed"/>
-                      </Grid>
+                      <!-- Иконка игры. В скруглённой рамке: голый квадрат встык к строке
+                           читался как обрезок картинки, а не как значок. Рамка светлее
+                           фона — она отделяет тёмную обложку от тёмной строки. -->
+                      <Border Grid.Column="0" Width="32" Height="32" VerticalAlignment="Center"
+                              CornerRadius="{DynamicResource Radius.M}" ClipToBounds="True"
+                              BorderThickness="1" BorderBrush="{DynamicResource Brush.Border2}"
+                              Background="{DynamicResource Brush.Surface2}">
+                        <Grid>
+                          <TextBlock x:Name="DefaultGameIcon" FontFamily="Segoe MDL2 Assets" Text="&#xE7C3;" FontSize="18"
+                                     Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center" HorizontalAlignment="Center"
+                                     Visibility="Collapsed"/>
+                          <Image x:Name="IconImg" ui:CoverImage.Url="{Binding IconUrl}"
+                                 Stretch="UniformToFill" Visibility="Visible"
+                                 ImageFailed="CoverImg_ImageFailed"/>
+                        </Grid>
+                      </Border>
                       <!-- Название и статус словом. Статус занимает вторую строку той же
                            колонки — раньше он был иконкой справа, а расшифровка иконок жила
                            в легенде внизу сайдбара. -->
                       <StackPanel Grid.Column="1" Margin="10,0,4,0" VerticalAlignment="Center">
-                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13"
+                        <!-- Полужирным набрана только выбранная строка. Восемь полужирных
+                             названий подряд — это ни одного выделенного: вес перестаёт
+                             что-либо значить, когда он у всех. Неустановленная игра к тому
+                             же приглушена: она в каталоге есть, но на диске её нет, и в
+                             столбце это должно быть видно раньше, чем прочитана подпись. -->
+                        <TextBlock Text="{Binding Title}" FontSize="13"
                                    TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
-                                   ToolTip="{Binding Title}"/>
+                                   ToolTip="{Binding Title}">
+                          <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                              <Setter Property="FontWeight" Value="Normal"/>
+                              <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+                              <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsInstalled}" Value="False">
+                                  <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=IsSelected}" Value="True">
+                                  <Setter Property="FontWeight" Value="Medium"/>
+                                  <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+                                </DataTrigger>
+                              </Style.Triggers>
+                            </Style>
+                          </TextBlock.Style>
+                        </TextBlock>
                         <!-- Подпись знает про очередь: пока игра качается — «Скачивание · 38%»
                              акцентом, а не то же янтарное «Обновление», что у соседки, которая
                              только ждёт. Второй вход MultiBinding — свойство с уведомлением,
                              по нему строка перерисовывается без пересборки списка. -->
-                        <TextBlock FontSize="11" Margin="0,2,0,0" TextWrapping="NoWrap">
+                        <!-- Точка перед словом. Статусов четыре, и слова у них разной
+                             длины: без метки одной высоты глаз каждый раз перечитывает
+                             подпись целиком, вместо того чтобы поймать цвет. Точка и
+                             слово берут цвет из одного конвертера — разойтись не могут. -->
+                        <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                          <Ellipse Width="6" Height="6" VerticalAlignment="Center" Margin="0,0,6,0">
+                            <Ellipse.Fill>
+                              <MultiBinding Converter="{StaticResource GameRowStatusBrushConv}" Mode="OneWay">
+                                <Binding/>
+                                <Binding Path="QueueLabel"/>
+                                <Binding Path="RunLabel"/>
+                                <Binding Path="IsInstalled"/>
+                                <Binding Path="NeedsUpdate"/>
+                              </MultiBinding>
+                            </Ellipse.Fill>
+                          </Ellipse>
+                          <TextBlock FontSize="11" TextWrapping="NoWrap" VerticalAlignment="Center">
                           <TextBlock.Text>
                             <MultiBinding Converter="{StaticResource GameRowStatusTextConv}" Mode="OneWay">
                               <Binding/>
@@ -883,7 +931,8 @@
                               <Binding Path="NeedsUpdate"/>
                             </MultiBinding>
                           </TextBlock.Foreground>
-                        </TextBlock>
+                          </TextBlock>
+                        </StackPanel>
                       </StackPanel>
                     </Grid>
                   </Border>
@@ -894,7 +943,7 @@
 
           <!-- Подвал сайдбара. Свободное место уехало в шапку окна: это свойство машины,
                а не списка игр, и в шапке оно видно с любого экрана. -->
-          <StackPanel Grid.Row="2" Margin="0,10,0,0">
+          <StackPanel Grid.Row="2" Margin="12,10,12,10">
             <Border Height="1" Background="{DynamicResource Brush.Border}" Margin="0,0,0,8"/>
             <Button Name="FeedbackBtn" Click="FeedbackBtn_Click" Height="28" Margin="0,0,0,0"
                     HorizontalAlignment="Stretch"
@@ -912,7 +961,7 @@
       <!-- Без правого отступа: витрина, лента и очередь внизу кончаются на одной
            вертикали. Раньше витрина заканчивалась на 8px раньше очереди, кнопка
            обновления новостей — ещё на 8px раньше витрины: три правых края в столбце. -->
-      <Grid Grid.Column="2">
+      <Grid Grid.Column="1" Margin="14,0,0,0">
         <Grid.RowDefinitions>
           <!-- Витрина-герой выбранной игры -->
           <RowDefinition Height="Auto"/>
@@ -943,10 +992,11 @@
              WPF накладывал на него layout-clip по внутреннему полю — обложка и
              затемнение обрезались рамкой в 16px, а низ кнопки срезался. MinHeight
              сильнее MaxHeight, поэтому доля здесь просто перестаёт работать. -->
-        <Border Grid.Row="0" Margin="0,0,0,8" CornerRadius="{DynamicResource Radius.L}" MinHeight="184"
+        <Border Grid.Row="0" Margin="0,0,0,8" CornerRadius="{DynamicResource Radius.L}" MinHeight="190"
+                BorderThickness="1" BorderBrush="{DynamicResource Brush.Border}"
                 MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=Page},
                                     Converter={StaticResource HeightShareConv}, ConverterParameter=0.30}"
-                Background="{DynamicResource Brush.HeroGradient}" ClipToBounds="True">
+                Background="{DynamicResource Brush.Surface}" ClipToBounds="True">
           <Border.Style>
             <Style TargetType="Border">
               <!-- Пропорция включается только когда обложка есть. Без неё витрина
@@ -980,21 +1030,16 @@
             <!-- Opacity 0.75, а не 0.5: половинная прозрачность плюс два слоя затемнения
                  сверху гасили обложку до серого пятна. Читаемость текста держат сами
                  затемнения (Brush.HeroScrim/HeroScrimSide), а не глушение всей картинки. -->
-            <Rectangle x:Name="HeroCoverImg" Grid.Row="0" Grid.RowSpan="2" Opacity="0.75" Visibility="Collapsed"
+            <Rectangle x:Name="HeroCoverImg" Grid.Row="0" Grid.RowSpan="2" Opacity="1" Visibility="Collapsed"
                        HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="-16">
               <Rectangle.Fill>
                 <ImageBrush x:Name="HeroCoverBrush" Stretch="UniformToFill" AlignmentX="Center" AlignmentY="Bottom"/>
               </Rectangle.Fill>
             </Rectangle>
 
-            <!-- Затемнение под текстом: белый заголовок обязан читаться на любой обложке,
-                 а не только на тёмной. -->
+            <!-- Затемнение одно и горизонтальное: обложка занимает правую часть витрины,
+                 слева ровный цвет панели под заголовком и кнопками (см. Brush.HeroScrim). -->
             <Border Grid.Row="0" Grid.RowSpan="2" Background="{DynamicResource Brush.HeroScrim}"
-                    Margin="-16" IsHitTestVisible="False"/>
-            <!-- Второй слой — слева направо: текст стоит в левом нижнем углу, а логотип
-                 обложки обычно по центру. Одно вертикальное затемнение либо не спасало
-                 заголовок от логотипа, либо гасило всю картинку. -->
-            <Border Grid.Row="0" Grid.RowSpan="2" Background="{DynamicResource Brush.HeroScrimSide}"
                     Margin="-16" IsHitTestVisible="False"/>
 
             <!-- Иконка игры крупным планом — заглушка, пока обложки нет. Поверх обложки
@@ -1014,20 +1059,35 @@
                      Stretch="Uniform" ImageFailed="CoverImg_ImageFailed"/>
             </Grid>
 
-            <StackPanel Grid.Row="1" VerticalAlignment="Bottom">
+            <!-- Текст и кнопки занимают левые 62% витрины — ту часть, где затемнение
+                 уже сплошное. Доля, а не число пикселей: на 980 это 430 под ряд кнопок
+                 (двум кнопкам запуска со стрелкой хватает 340), на 2K — та же
+                 композиция, а не строка, растянутая через весь экран. -->
+            <Grid Grid.Row="1" VerticalAlignment="Bottom">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="62*"/>
+                <ColumnDefinition Width="38*"/>
+              </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" VerticalAlignment="Bottom">
               <!-- Бейдж статуса слева, «Об игре» справа — одной линией над названием.
                    «Об игре» здесь, а не в ряду кнопок запуска: это переход на другой
                    экран, а не третий способ играть. В ряду она читалась как вариант
                    запуска, и стрелка «другие варианты» стояла ровно между двумя
                    кнопками, к которым могла относиться. -->
               <Grid Margin="0,0,0,8">
-                <Border x:Name="HeroStatusBadge" CornerRadius="{DynamicResource Radius.S}" Padding="8,3" HorizontalAlignment="Left"
+                <!-- Бейдж — таблетка, а не прямоугольник со скруглением: он называет
+                     состояние, а не ограничивает область, и от кнопки рядом должен
+                     отличаться формой, а не только размером. -->
+                <Border x:Name="HeroStatusBadge" CornerRadius="999" Padding="9,3" HorizontalAlignment="Left"
                         Background="{DynamicResource Brush.HeroBadge.Bg}" BorderBrush="{DynamicResource Brush.HeroBadge.Border}" BorderThickness="1">
                   <TextBlock x:Name="HeroStatusText" Text="Проверка…" FontSize="11" Foreground="{DynamicResource Brush.TextSecondary}"/>
                 </Border>
+                <!-- Ссылкой, а не кнопкой с рамкой: это переход на другой экран. Рамка
+                     ставила «Об игре» в один ряд по весу с кнопками запуска, хотя ничего
+                     не запускает. -->
                 <Button x:Name="HeroInfoBtn" Click="GameDetails_Click"
                         Style="{DynamicResource Style.Button.HeroInfo}"
-                        Height="28" Padding="10,0" HorizontalAlignment="Right" VerticalAlignment="Center"
+                        Height="28" Padding="0" HorizontalAlignment="Right" VerticalAlignment="Center"
                         ToolTip="Сведения, история изменений, папка игры">
                   <StackPanel Orientation="Horizontal">
                     <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE946;" FontSize="12" Margin="0,1,6,0" VerticalAlignment="Center"/>
@@ -1035,11 +1095,16 @@
                   </StackPanel>
                 </Button>
               </Grid>
-              <TextBlock x:Name="HeroTitleText" Text="Выберите игру" FontSize="26" FontWeight="Bold"
+              <TextBlock x:Name="HeroTitleText" Text="Выберите игру" FontSize="30" FontWeight="SemiBold"
                          Foreground="{DynamicResource Brush.Title}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+              <!-- Пустой экран объясняет следующий шаг, а не сообщает о пустоте: одно
+                   «Выберите игру» не говорит ни где выбирать, ни что за этим будет. -->
+              <TextBlock x:Name="HeroHintText" Text="Выберите игру слева, чтобы увидеть её сборку и запуск."
+                         FontSize="12" Margin="0,6,0,0" Foreground="{DynamicResource Brush.TextSecondary}"
+                         TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
               <!-- Версия, объём и наигранное. Витрина занимала полтораста пикселей под одно
                    название — всё, что игрок хотел о ней знать, лежало на других экранах. -->
-              <TextBlock x:Name="HeroMetaText" Text="" FontSize="12" Margin="0,4,0,0"
+              <TextBlock x:Name="HeroMetaText" Text="" FontFamily="Consolas" FontSize="12" Margin="0,4,0,0"
                          Foreground="{DynamicResource Brush.TextSecondary}"
                          TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
               <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
@@ -1082,6 +1147,7 @@
                 </Button>
               </StackPanel>
             </StackPanel>
+            </Grid>
           </Grid>
         </Border>
 
@@ -1130,7 +1196,7 @@
              вкладок. -->
         <Grid>
           <!-- Skeleton loader -->
-          <StackPanel Name="GameNewsSkeleton" Margin="{StaticResource Skeleton.NewsTopOffsetThickness}">
+          <StackPanel Name="GameNewsSkeleton" Visibility="Collapsed" Margin="{StaticResource Skeleton.NewsTopOffsetThickness}">
             <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
             <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
             <Border Style="{DynamicResource Style.Skeleton}" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
@@ -1172,11 +1238,11 @@
           </ListBox.ItemContainerStyle>
           <ListBox.ItemTemplate>
             <DataTemplate>
-              <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,1,0,1" HorizontalAlignment="Stretch" BorderThickness="0" BorderBrush="Transparent">
+              <Border Style="{DynamicResource Style.Card}" CornerRadius="{DynamicResource Radius.M}" Padding="9" Margin="0,1,0,1" HorizontalAlignment="Stretch">
                 <Grid>
                   <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="168"/>
-                    <ColumnDefinition Width="18"/>
+                    <ColumnDefinition Width="104"/>
+                    <ColumnDefinition Width="12"/>
                     <ColumnDefinition Width="*"/>
                   </Grid.ColumnDefinitions>
                   <!-- Restrict shimmer overlay to image area only (fixed height 88) -->
@@ -1218,24 +1284,31 @@
                          на откуп пропорциям картинки: широкая новость получала 168x95,
                          квадратная — 108x108, и соседние карточки расходились и по высоте
                          обложки, и по левому краю текста. -->
-                    <Border Width="168" Height="94" CornerRadius="{DynamicResource Radius.S}"
+                    <Border Width="104" Height="58" CornerRadius="{DynamicResource Radius.S}"
                             HorizontalAlignment="Left" VerticalAlignment="Top" ClipToBounds="True"
+                            BorderThickness="1" BorderBrush="{DynamicResource Brush.Border2}"
                             Background="{DynamicResource Brush.Surface2}">
                       <!-- Height дублирует высоту рамки не ради разметки, а ради раскодирования:
                            ImageLoader берёт из него размер, под который распаковывать картинку
                            (см. ApplyBitmap), и без него каждая обложка новости разворачивалась
                            бы в память в полный рост. -->
-                      <Image x:Name="CoverImg" ui:CoverImage.Url="{Binding CoverUrl}" Stretch="UniformToFill" Height="94"
+                      <Image x:Name="CoverImg" ui:CoverImage.Url="{Binding CoverUrl}" Stretch="UniformToFill" Height="58"
                              ImageFailed="CoverImg_ImageFailed"/>
                     </Border>
                   </Grid>
                   <!-- Правая колонка: текст -->
                   <StackPanel Grid.Column="2">
-                    <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold"/>
-                    <TextBlock Text="{Binding CreatedAt, Converter={StaticResource RuDateConv}}" Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,2,0,6"/>
+                    <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="Medium"
+                               TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                    <!-- Дата моноширинным: в столбце карточек даты выстраиваются в
+                         колонку, и одинаковая ширина цифр делает её колонкой, а не
+                         рваным краем. -->
+                    <TextBlock Text="{Binding CreatedAt, Converter={StaticResource RuDateConv}}"
+                               FontFamily="Consolas" FontSize="11"
+                               Foreground="{DynamicResource Brush.TextMuted}" Margin="0,2,0,4"/>
                     <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" TextTrimming="WordEllipsis"
-                               Foreground="{DynamicResource Brush.TextSecondary}"
-                               LineStackingStrategy="BlockLineHeight" LineHeight="18" MaxHeight="54"/>
+                               FontSize="12" Foreground="{DynamicResource Brush.TextSecondary}"
+                               LineStackingStrategy="BlockLineHeight" LineHeight="16" MaxHeight="32"/>
                   </StackPanel>
                 </Grid>
               </Border>
@@ -1248,7 +1321,7 @@
         <Grid x:Name="LauncherNewsPanel" Grid.Row="2" Visibility="Collapsed">
         <Grid>
           <!-- Skeleton loader -->
-          <StackPanel Name="LauncherNewsSkeleton" Margin="{StaticResource Skeleton.NewsTopOffsetThickness}">
+          <StackPanel Name="LauncherNewsSkeleton" Visibility="Collapsed" Margin="{StaticResource Skeleton.NewsTopOffsetThickness}">
             <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
             <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
             <Border Style="{DynamicResource Style.Skeleton}" Height="{StaticResource Skeleton.NewsPreloadHeight}"/>
@@ -1288,11 +1361,11 @@
           </ListBox.ItemContainerStyle>
           <ListBox.ItemTemplate>
             <DataTemplate>
-              <Border Style="{DynamicResource Style.Card}" Padding="12" Margin="0,1,0,1" HorizontalAlignment="Stretch" BorderThickness="0" BorderBrush="Transparent">
+              <Border Style="{DynamicResource Style.Card}" CornerRadius="{DynamicResource Radius.M}" Padding="9" Margin="0,1,0,1" HorizontalAlignment="Stretch">
                 <Grid>
                   <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="168"/>
-                    <ColumnDefinition Width="18"/>
+                    <ColumnDefinition Width="104"/>
+                    <ColumnDefinition Width="12"/>
                     <ColumnDefinition Width="*"/>
                   </Grid.ColumnDefinitions>
                   <!-- Левая колонка: обложка -->
@@ -1328,30 +1401,37 @@
                         </Style>
                       </ContentControl.Style>
                     </ContentControl>
-                    <Border x:Name="ImgSkeleton" Style="{DynamicResource Style.Skeleton}" Width="168" Height="94" HorizontalAlignment="Left" VerticalAlignment="Top"/>
+                    <Border x:Name="ImgSkeleton" Style="{DynamicResource Style.Skeleton}" Width="104" Height="58" HorizontalAlignment="Left" VerticalAlignment="Top"/>
                     <!-- Обложка — рамка 16:9 фиксированного размера, картинка вписывается
                          заполнением. Прежние Uniform + Height=108 отдавали размер обложки
                          на откуп пропорциям картинки: широкая новость получала 168x95,
                          квадратная — 108x108, и соседние карточки расходились и по высоте
                          обложки, и по левому краю текста. -->
-                    <Border Width="168" Height="94" CornerRadius="{DynamicResource Radius.S}"
+                    <Border Width="104" Height="58" CornerRadius="{DynamicResource Radius.S}"
                             HorizontalAlignment="Left" VerticalAlignment="Top" ClipToBounds="True"
+                            BorderThickness="1" BorderBrush="{DynamicResource Brush.Border2}"
                             Background="{DynamicResource Brush.Surface2}">
                       <!-- Height дублирует высоту рамки не ради разметки, а ради раскодирования:
                            ImageLoader берёт из него размер, под который распаковывать картинку
                            (см. ApplyBitmap), и без него каждая обложка новости разворачивалась
                            бы в память в полный рост. -->
-                      <Image x:Name="CoverImg" ui:CoverImage.Url="{Binding CoverUrl}" Stretch="UniformToFill" Height="94"
+                      <Image x:Name="CoverImg" ui:CoverImage.Url="{Binding CoverUrl}" Stretch="UniformToFill" Height="58"
                              ImageFailed="CoverImg_ImageFailed"/>
                     </Border>
                   </Grid>
                   <!-- Правая колонка: текст -->
                   <StackPanel Grid.Column="2">
-                    <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold"/>
-                    <TextBlock Text="{Binding CreatedAt, Converter={StaticResource RuDateConv}}" Foreground="{DynamicResource Brush.TextSecondary}" Margin="0,2,0,6"/>
+                    <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="Medium"
+                               TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                    <!-- Дата моноширинным: в столбце карточек даты выстраиваются в
+                         колонку, и одинаковая ширина цифр делает её колонкой, а не
+                         рваным краем. -->
+                    <TextBlock Text="{Binding CreatedAt, Converter={StaticResource RuDateConv}}"
+                               FontFamily="Consolas" FontSize="11"
+                               Foreground="{DynamicResource Brush.TextMuted}" Margin="0,2,0,4"/>
                     <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" TextTrimming="WordEllipsis"
-                               Foreground="{DynamicResource Brush.TextSecondary}"
-                               LineStackingStrategy="BlockLineHeight" LineHeight="18" MaxHeight="54"/>
+                               FontSize="12" Foreground="{DynamicResource Brush.TextSecondary}"
+                               LineStackingStrategy="BlockLineHeight" LineHeight="16" MaxHeight="32"/>
                   </StackPanel>
                 </Grid>
               </Border>

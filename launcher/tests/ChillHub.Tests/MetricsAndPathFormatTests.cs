@@ -168,9 +168,9 @@ namespace ChillHub.Tests {
 
         /// <summary>Задвоенные разделители в показываемом пути схлопываются.</summary>
         [Theory]
-        [InlineData(@"C:\Games\ChillHub", "C:/Games/ChillHub")]
-        [InlineData(@"C:\\Games\\ChillHub", "C:/Games/ChillHub")]
-        [InlineData("C://Games//ChillHub", "C:/Games/ChillHub")]
+        [InlineData(@"C:\Games\ChillHub", @"C:\Games\ChillHub")]
+        [InlineData(@"C:\\Games\\ChillHub", @"C:\Games\ChillHub")]
+        [InlineData("C://Games//ChillHub", @"C:\Games\ChillHub")]
         public void ПутьПоказываетсяБезЗадвоенныхРазделителей(string input, string expected) {
             Assert.Equal(expected, HomeFormat.NormalizeDisplayPath(input));
         }
@@ -180,8 +180,8 @@ namespace ChillHub.Tests {
         /// Схлопнуть его — значит показать путь, указывающий уже не туда.
         /// </summary>
         [Theory]
-        [InlineData(@"\\nas\games", "//nas/games")]
-        [InlineData(@"\\nas\\games\\ChillHub", "//nas/games/ChillHub")]
+        [InlineData(@"\\nas\games", @"\\nas\games")]
+        [InlineData(@"\\nas\\games\\ChillHub", @"\\nas\games\ChillHub")]
         public void СетевойПутьСохраняетДвойнойПрефикс(string input, string expected) {
             Assert.Equal(expected, HomeFormat.NormalizeDisplayPath(input));
         }

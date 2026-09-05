@@ -333,7 +333,7 @@ namespace ChillHub.Tests {
                 var content = HomeDialogs.BuildConfirmDeleteContent(new Grid(), "Lethal Company", @"D:\Games\ChillHub\lethal");
 
                 Assert.Contains("Lethal Company", content.Question.Text, StringComparison.Ordinal);
-                Assert.Contains("D:/Games/ChillHub/lethal", content.FolderLine.Text, StringComparison.Ordinal);
+                Assert.Contains(@"D:\Games\ChillHub\lethal", content.FolderLine.Text, StringComparison.Ordinal);
                 Assert.Equal("Отмена", content.CancelButton.Content);
                 Assert.Equal("Удалить", content.DeleteButton.Content);
             });
@@ -348,8 +348,8 @@ namespace ChillHub.Tests {
             UiThread.Run(() => {
                 var content = HomeDialogs.BuildConfirmDeleteContent(new Grid(), "Игра", @"D:\Games\\ChillHub\\game");
 
-                Assert.Contains("D:/Games/ChillHub/game", content.FolderLine.Text, StringComparison.Ordinal);
-                Assert.DoesNotContain("//", content.FolderLine.Text, StringComparison.Ordinal);
+                Assert.Contains(@"D:\Games\ChillHub\game", content.FolderLine.Text, StringComparison.Ordinal);
+                Assert.DoesNotContain(@"\\", content.FolderLine.Text, StringComparison.Ordinal);
             });
         }
 

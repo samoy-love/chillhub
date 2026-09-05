@@ -26,6 +26,9 @@ namespace ChillHub.Pages {
 
         private readonly string markdownUrl;
 
+        /// <summary>Игра, о которой заметка; null — новость лаунчера.</summary>
+        private readonly Core.GameInfo? game;
+
         /// <summary>Название из шапки: им же отсекается дублирующий заголовок в тексте.</summary>
         private readonly string newsTitle;
 
@@ -38,11 +41,29 @@ namespace ChillHub.Pages {
         /// <summary>Переходы этой страницы: отличает свою отрисовку от ссылки в тексте.</summary>
         private readonly NewsNavigationGate gate = new NewsNavigationGate(OpenOutside);
 
-        public NewsDetailPage(string title, string markdownUrl) {
+        public NewsDetailPage(string title, string markdownUrl)
+            : this(title, markdownUrl, null) {
+        }
+
+        /// <summary>Initializes a new instance of the <see cref="NewsDetailPage"/> class.</summary>
+        /// <param name="title">Заголовок новости.</param>
+        /// <param name="markdownUrl">Адрес текста новости.</param>
+        /// <param name="game">
+        /// Игра, о которой заметка; null — новость лаунчера, вести некуда. Прежде выхода
+        /// к игре из новости не было вовсе: человек читал про мод или обновление и
+        /// возвращался искать игру в списке руками.
+        /// </param>
+        public NewsDetailPage(string title, string markdownUrl, Core.GameInfo? game) {
             this.InitializeComponent();
             this.TitleText.Text = title;
             this.newsTitle = title;
             this.markdownUrl = markdownUrl;
+            this.game = game;
+
+            if (game != null && !string.IsNullOrWhiteSpace(game.GameId)) {
+                this.GameLinkTitle.Text = string.IsNullOrWhiteSpace(game.Title) ? game.GameId : game.Title;
+                this.GameLinkPanel.Visibility = Visibility.Visible;
+            }
 
             // WebView2 держит собственный процесс msedgewebview2.exe. Без освобождения
             // десяток прочитанных новостей оставляет десяток процессов до выхода из лаунчера.
@@ -269,6 +290,17 @@ namespace ChillHub.Pages {
             }
             catch {
             }
+        }
+
+        /// <summary>
+        /// Ведёт к игре, о которой заметка: главная с выделенной игрой. Возврат по стеку
+        /// не годится — он вернул бы туда, откуда пришли, а это могла быть другая игра.
+        /// </summary>
+        /// <param name="sender">Кнопка.</param>
+        /// <param name="e">Аргументы события.</param>
+        private void GameLinkBtn_Click(object sender, RoutedEventArgs e) {
+            var win = Window.GetWindow(this) as ChillHub.MainWindow;
+            win?.OpenGameFromNews(this.game?.GameId);
         }
 
         private void BackBtn_Click(object sender, RoutedEventArgs e) {
