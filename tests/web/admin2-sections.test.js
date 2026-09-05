@@ -62,8 +62,14 @@ test('пустой ответ лаунчера не роняет разбор', 
   assert.strictEqual(l.active, '');
 });
 
-test('размер и число файлов читаются из обоих имён', () => {
-  const l = S.launcher([{ version: '1', bytes: 10, fileCount: 3, state: 'active' }]);
+test('размер и число файлов читаются теми именами, что шлёт сервер', () => {
+  /* ЗАПАСНОЕ ИМЯ — ЭТО ВТОРОЙ КОНТРАКТ, КОТОРЫЙ НИКТО НЕ ВЫПОЛНЯЕТ.
+     Проверка раньше подавала `fileCount`, и разбор его послушно понимал —
+     хотя ни сервер (builds.ListVersions отдаёт `files` и `bytes`), ни
+     снимок такого поля не шлют. Держать разбор шире контракта значит
+     прятать расхождение: приди от сервера чужое имя, панель показала бы
+     ноль вместо ошибки. */
+  const l = S.launcher([{ version: '1', bytes: 10, files: 3, state: 'active' }]);
   assert.strictEqual(l.versions[0].size, 10);
   assert.strictEqual(l.versions[0].files, 3);
 });
@@ -169,9 +175,10 @@ test('пустой список ошибок не делит на ноль', () 
   assert.strictEqual(one[0].share, 0);
 });
 
-test('дни метрик читаются и из обёртки, и из голого массива', () => {
-  const a = S.metrics({ days: [{ date: '01', launcherStarts: 5 }] });
-  const b = S.metrics([{ date: '01', starts: 5 }]);
+test('дни метрик читаются и из ответа сервера, и из голого массива', () => {
+  // Сервер отдаёт сводку обёрткой `byDay`, снимок — готовым массивом
+  const a = S.metrics({ byDay: [{ date: '01', launcherStarts: 5 }] });
+  const b = S.metrics([{ date: '01', launcherStarts: 5 }]);
   assert.strictEqual(a[0].starts, 5);
   assert.strictEqual(b[0].starts, 5);
 });

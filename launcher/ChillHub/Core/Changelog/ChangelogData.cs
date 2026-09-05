@@ -43,6 +43,15 @@ namespace ChillHub.Core.Changelog {
     /// </summary>
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
+            // Выпуск ради надёжности прогона: отчёт об ошибке уходит фоном и
+            // переживает вызов, который его заказал, — тесты из-за этого ловили
+            // чужие отчёты. Для игрока не меняется ничего.
+            new ChangelogRelease {
+                Version = "1.6.51",
+                Date = "2026-09-06",
+                Changes = System.Array.Empty<string>(),
+                Technical = true,
+            },
             new ChangelogRelease {
                 Version = "1.6.50",
                 Date = "2026-09-05",

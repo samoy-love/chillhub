@@ -197,32 +197,26 @@ export default [
     }
   },
 
-  // upload-bench.js, ui-throttle.js, speed-chart.js, line-chart.js,
-  // chunk-upload.js, rate-estimator.js and ui-status.js are UMD modules:
-  // `module` is only referenced behind a `typeof module === 'object'` guard
-  // so they work as a plain <script> in the browser too, but that guard
-  // doesn't stop no-undef from flagging the bare identifier — the browser
-  // globals list above has no `module`/`exports` because real browser code
-  // must never see them.
+  // Модули панели — UMD: `module` упоминается только под проверкой
+  // `typeof module === 'object'`, чтобы тот же файл работал и обычным
+  // <script> в браузере. Проверка не мешает no-undef ругаться на голый
+  // идентификатор, а в списке браузерных глобальных выше `module` и
+  // `exports` нет намеренно: настоящий браузерный код их видеть не должен.
+  //
+  // Перечислены поимённо, а не маской `server/admin_ui/*.js`: маска
+  // молча выдала бы поблажку и обычному браузерному файлу, если такой
+  // здесь заведётся. Файлы панели 1.0 из списка ушли вместе с самой 1.0 —
+  // правило, разрешающее то, чего нет, ничего не охраняет.
   {
     files: [
-      'server/admin_ui/admin-time.js',
       'server/admin_ui/upload-bench.js',
       'server/admin_ui/ui-throttle.js',
-      'server/admin_ui/speed-chart.js',
-      'server/admin_ui/line-chart.js',
       'server/admin_ui/chunk-upload.js',
       'server/admin_ui/rate-estimator.js',
       'server/admin_ui/upload-tuning.js',
-      'server/admin_ui/ui-status.js',
-      'server/admin_ui/upload-card.js',
       'server/admin_ui/ndjson.js',
-      'server/admin_ui/mods-panel.js',
       'server/admin_ui/feedback-logs.js',
-      'server/admin_ui/pending-badges.js',
       'server/admin_ui/registry-diff.js',
-
-      // Панель и лендинг 2.0: те же UMD-модули, тот же guard `typeof module`.
       'server/admin_ui/format.js',
       'server/admin_ui/api.js',
       'server/admin_ui/actions.js',

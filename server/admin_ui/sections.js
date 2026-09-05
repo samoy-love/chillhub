@@ -57,7 +57,7 @@
     const list = items(raw).map((v) => ({
       version: String(pick(v, ['version', 'name'], '')),
       date: pick(v, ['date', 'createdAt', 'builtAt'], ''),
-      files: num(pick(v, ['files', 'fileCount'], 0), 0),
+      files: num(pick(v, ['files'], 0), 0),
       size: num(pick(v, ['size', 'bytes'], 0), 0),
       state: v && (v.state || (v.active ? 'active' : '')) ? String(v.state || 'active') : 'old',
     }));
@@ -175,10 +175,10 @@
       gameId: String(pick(p, ['gameId', 'id'], '')),
       title: String(pick(p, ['title', 'name'], pick(p, ['gameId'], ''))),
       pack: String(pick(p, ['pack', 'package'], '')),
-      active: String(pick(p, ['active', 'activeVersion'], '')),
-      built: String(pick(p, ['built', 'builtVersion', 'version'], '')),
+      active: String(pick(p, ['active'], '')),
+      built: String(pick(p, ['built', 'version'], '')),
       builtAt: pick(p, ['builtAt', 'date'], ''),
-      mods: num(pick(p, ['mods', 'modCount'], 0), 0),
+      mods: num(pick(p, ['mods'], 0), 0),
       size: num(pick(p, ['size', 'bytes'], 0), 0),
       behind: Boolean(p && p.behind),
       deprecated: Boolean(p && p.deprecated),
@@ -188,8 +188,8 @@
       latest: String(pick(p, ['latest'], (p && p.upstream && p.upstream.version) || '')),
       latestAt: String(pick(p, ['latestAt'], (p && p.upstream && p.upstream.at) || '')),
       staged: isStaged(
-        String(pick(p, ['built', 'builtVersion', 'version'], '')),
-        String(pick(p, ['active', 'activeVersion'], ''))
+        String(pick(p, ['built', 'version'], '')),
+        String(pick(p, ['active'], ''))
       ),
       missing: Array.isArray(p && p.missing) ? p.missing : [],
     }));
@@ -222,7 +222,7 @@
       type: String(pick(f, ['type'], 'other')),
       name: String(pick(f, ['name'], '')),
       contact: String(pick(f, ['contact'], '')),
-      comment: String(pick(f, ['comment', 'text'], '')),
+      comment: String(pick(f, ['comment'], '')),
       at: pick(f, ['createdAt', 'at'], ''),
       status: String(pick(f, ['status'], 'new')),
       important: Boolean(f && f.important),
@@ -325,15 +325,16 @@
   }
 
   function metrics(raw) {
-    /* Сервер зовёт их `byDay`; `days` — форма снимка. Читаем обе, иначе
-       раздел молча считает пустой список за «событий не было». */
-    const src = (raw && (raw.byDay || raw.days)) || raw;
+    /* Сервер отдаёт сводку обёрткой `byDay`, снимок — готовым массивом.
+       Читаем обе формы, иначе раздел молча считает пустой список за
+       «событий не было». */
+    const src = (raw && raw.byDay) || raw;
     return items(src).map((d) => ({
       date: String(pick(d, ['date'], '')),
-      starts: num(pick(d, ['launcherStarts', 'starts'], 0), 0),
+      starts: num(pick(d, ['launcherStarts'], 0), 0),
       installs: num(pick(d, ['installs'], 0), 0),
       updates: num(pick(d, ['updates'], 0), 0),
-      launches: num(pick(d, ['gameLaunches', 'launches'], 0), 0),
+      launches: num(pick(d, ['gameLaunches'], 0), 0),
       errors: num(pick(d, ['errors'], 0), 0),
     }));
   }
@@ -357,12 +358,13 @@
   };
 
   function errors(raw) {
-    const src = (raw && (raw.topErrors || raw.items)) || raw;
+    /* Та же пара форм, что у дней: обёртка от сервера, массив от снимка. */
+    const src = (raw && raw.topErrors) || raw;
     const list = items(src).map((e) => ({
-      code: String(pick(e, ['key', 'code', 'errorCode'], '')),
+      code: String(pick(e, ['key', 'code'], '')),
       n: num(pick(e, ['count', 'n'], 0), 0),
-      what: String(pick(e, ['what', 'message'], WHAT[String(pick(e, ['key', 'code'], ''))] || '')),
-      where: String(pick(e, ['where', 'game'], '')),
+      what: String(pick(e, ['what'], WHAT[String(pick(e, ['key', 'code'], ''))] || '')),
+      where: String(pick(e, ['where'], '')),
     }));
     const total = list.reduce((a, e) => a + e.n, 0);
     // Долю считаем здесь, а не на сервере: она обязана сходиться с тем
@@ -373,7 +375,7 @@
   /* ---------- Диск ---------- */
 
   const disk = (raw) => ({
-    free: num(pick(raw, ['freeBytes', 'free'], 0), 0),
+    free: num(pick(raw, ['freeBytes'], 0), 0),
     total: num(pick(raw, ['totalBytes', 'total'], 0), 0),
   });
 

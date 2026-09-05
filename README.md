@@ -99,20 +99,21 @@ cd ..\launcher; dotnet test
 | `content/` | Манифесты, файлы версий, новости, состояние техработ |
 | `scripts/` | Запуск для разработки, сборка установщика, NSIS-скрипт |
 | `.deploy-kit/` | Описания целей выкатки |
-| `docs/` | [Спецификация](docs/spec.md), [модпаки](docs/modpacks.md), [конфигурация](docs/configuration.md), [установщик](docs/installer.md), [политика безопасности](docs/SECURITY.md) |
+| `docs/` | [Спецификация](docs/spec.md), [модпаки](docs/modpacks.md), [оформление](docs/design.md), [конфигурация](docs/configuration.md), [установщик](docs/installer.md), [политика безопасности](docs/SECURITY.md) |
 
 ## Тесты
 
 Около двух тысяч тестов на клиенте (xUnit), несколько сотен на сервере
-(`go test -race`) и пара сотен на вебе (`node --test`); актуальное покрытие —
+(`go test -race`) и семь сотен на вебе (`node --test`); актуальное покрытие —
 на бейдже codecov вверху. Красный
 прогон останавливает выкатку.
 
 CI гейтит не только тесты: golangci-lint и `go vet` на Linux и на Windows,
 кросс-сборка под linux/arm64 как на проде, `dotnet format
 --verify-no-changes`, ESLint, Stylelint и HTMLHint для лендинга и админки,
-`node --test` для функций экранирования в админке, govulncheck и проверка
-NuGet-пакетов на уязвимости. Отдельно закреплён тестами стык хешей между Go
+`node --test` для сайта и панели целиком — от разбора ответов до вёрстки
+разделов в настоящем DOM, — govulncheck и проверка NuGet-пакетов на
+уязвимости. Отдельно закреплён тестами стык хешей между Go
 и C# (`hashvector_test.go` / `HashVectorTests.cs`) и манифест лаунчера против
 preserve-правил апдейтера — подробнее в [docs/spec.md](docs/spec.md).
 
