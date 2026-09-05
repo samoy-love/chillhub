@@ -64,9 +64,9 @@
     <!-- Рамка выбранной карточки: тот же акцент, что и у кнопки действия. Раньше здесь был
          розово-фиолетовый градиент — третий акцентный цвет на экране, не значивший ничего,
          кроме «выбрано». -->
-    <SolidColorBrush x:Key="Brush.CheckmarkGradientPink" Color="{DynamicResource Color.Accent}"/>
+    <SolidColorBrush x:Key="Brush.CardSelectedBorder" Color="{DynamicResource Color.Accent}"/>
     <SolidColorBrush x:Key="Brush.CardHoverBorder" Color="{DynamicResource Color.BorderHover}"/>
-    <SolidColorBrush x:Key="Brush.VerifyGradient" Color="{DynamicResource Color.Accent}"/>
+    <SolidColorBrush x:Key="Brush.VerifyFill" Color="{DynamicResource Color.Accent}"/>
     <Style x:Key="Style.ProgressBar.Verify" TargetType="ProgressBar">
       <Setter Property="Height" Value="6"/>
       <Setter Property="Template">
@@ -75,7 +75,7 @@
             <Grid ClipToBounds="True">
               <Border CornerRadius="3" Background="{DynamicResource Brush.Border}"/>
               <!-- Animated indicator for indeterminate state -->
-              <Border x:Name="IndBar" CornerRadius="3" Height="6" Width="160" HorizontalAlignment="Left" Background="{StaticResource Brush.VerifyGradient}">
+              <Border x:Name="IndBar" CornerRadius="3" Height="6" Width="160" HorizontalAlignment="Left" Background="{StaticResource Brush.VerifyFill}">
                 <Border.RenderTransform>
                   <TranslateTransform X="-180"/>
                 </Border.RenderTransform>
@@ -187,7 +187,7 @@
                   <Condition Property="IsSelected" Value="True"/>
                   <Condition Property="IsKeyboardFocusWithin" Value="False"/>
                 </MultiTrigger.Conditions>
-                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CardSelectedBorder}"/>
                 <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
               </MultiTrigger>
               <!-- Selected with focus -->
@@ -196,7 +196,7 @@
                   <Condition Property="IsSelected" Value="True"/>
                   <Condition Property="IsKeyboardFocusWithin" Value="True"/>
                 </MultiTrigger.Conditions>
-                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CardSelectedBorder}"/>
                 <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
               </MultiTrigger>
               <!-- Selected + Hover: emphasize slightly more -->
@@ -205,7 +205,7 @@
                   <Condition Property="IsSelected" Value="True"/>
                   <Condition Property="IsMouseOver" Value="True"/>
                 </MultiTrigger.Conditions>
-                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CardSelectedBorder}"/>
                 <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
               </MultiTrigger>
               <Trigger Property="IsEnabled" Value="False">
@@ -403,7 +403,7 @@
       <Setter Property="MinWidth" Value="140"/>
       <Setter Property="Padding" Value="14,0"/>
       <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
-      <Setter Property="Background" Value="#6612161A"/>
+      <Setter Property="Background" Value="{DynamicResource Brush.GhostFill}"/>
       <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
       <Setter Property="Template">
         <Setter.Value>
@@ -582,7 +582,7 @@
                   <Condition Property="IsSelected" Value="True"/>
                   <Condition Property="IsKeyboardFocusWithin" Value="False"/>
                 </MultiTrigger.Conditions>
-                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CardSelectedBorder}"/>
                 <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
               </MultiTrigger>
               <!-- Selected with focus: brightest and thicker -->
@@ -591,7 +591,7 @@
                   <Condition Property="IsSelected" Value="True"/>
                   <Condition Property="IsKeyboardFocusWithin" Value="True"/>
                 </MultiTrigger.Conditions>
-                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CheckmarkGradientPink}"/>
+                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Brush.CardSelectedBorder}"/>
                 <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
               </MultiTrigger>
               <!-- Disabled dim -->
@@ -946,7 +946,7 @@
         <Border Grid.Row="0" Margin="0,0,0,8" CornerRadius="{DynamicResource Radius.L}" MinHeight="184"
                 MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=Page},
                                     Converter={StaticResource HeightShareConv}, ConverterParameter=0.30}"
-                Background="{DynamicResource Brush.HeroGradient}" ClipToBounds="True">
+                Background="{DynamicResource Brush.Surface}" ClipToBounds="True">
           <Border.Style>
             <Style TargetType="Border">
               <!-- Пропорция включается только когда обложка есть. Без неё витрина

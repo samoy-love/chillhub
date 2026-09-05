@@ -22,7 +22,8 @@
   <Color x:Key="Color.Surface2">#1A2027</Color>          <!-- карточка на карточке -->
   <Color x:Key="Color.Surface3">#212932</Color>          <!-- поле ввода, дорожка -->
   <Color x:Key="Color.Border">#262E36</Color>
-  <Color x:Key="Color.Border2">#384450</Color>           <!-- рамка под курсором -->
+  <Color x:Key="Color.Border2">#384450</Color>
+  <Color x:Key="Color.Border3">#4A5866</Color>           <!-- бегунок полосы под курсором -->           <!-- рамка под курсором -->
   <Color x:Key="Color.Text">#DDE2E6</Color>              <!-- 11,27 -->
   <Color x:Key="Color.TextSecondary">#98A3AC</Color>     <!-- 5,72 -->
   <!--
@@ -46,7 +47,6 @@
   -->
   <Color x:Key="Color.Accent">#E5825B</Color>
   <Color x:Key="Color.AccentHover">#F09A72</Color>
-  <Color x:Key="Color.SecondaryAccent">#C25A33</Color>   <!-- нажатое состояние акцента -->
   <Color x:Key="Color.AccentFill">#D1663C</Color>
   <Color x:Key="Color.AccentFillHover">#E5825B</Color>
   <Color x:Key="Color.AccentFillPressed">#C25E37</Color>
@@ -76,10 +76,11 @@
   <Color x:Key="Color.DangerFillDisabled">#241614</Color>
   <Color x:Key="Color.DangerText">#F0DCD9</Color>
   <Color x:Key="Color.Selection">#1A2027</Color>
+  <!-- Заливка кнопки запуска без акцента. Полупрозрачная, потому что кнопка стоит
+       на обложке игры: сплошная плашка вырезала бы из картинки прямоугольник. -->
+  <Color x:Key="Color.GhostFill">#D91A2027</Color>
   <!-- Состояния -->
   <Color x:Key="Color.HeaderStart">#12161A</Color>
-  <Color x:Key="Color.HeaderMid">#12161A</Color>
-  <Color x:Key="Color.HeaderEnd">#12161A</Color>
   <Color x:Key="Color.Hover">#1A2027</Color>
   <Color x:Key="Color.Pressed">#212932</Color>
   <Color x:Key="Color.BorderHover">#384450</Color>
@@ -89,10 +90,7 @@
   <Color x:Key="Color.Skeleton">#1A2027</Color>
   <!-- Слайдеры и полосы -->
   <Color x:Key="Color.Track">#212932</Color>
-  <Color x:Key="Color.TrackFill">#D1663C</Color>
   <Color x:Key="Color.Thumb">#384450</Color>
-  <Color x:Key="Color.ThumbHover">#D1663C</Color>
-  <Color x:Key="Color.ThumbActive">#E5825B</Color>
   <!-- Три радиуса на всё приложение: мелкое, контролы, карточки. Были 6/8/12 — мягкое
        скругление «по умолчанию», за которое цепляется глаз. Стало 3/4/5: форма читается
        как инструмент, а не как карточка в ленте. -->
@@ -107,14 +105,15 @@
   <SolidColorBrush x:Key="Brush.Surface3" Color="{StaticResource Color.Surface3}"/>
   <SolidColorBrush x:Key="Brush.Border" Color="{StaticResource Color.Border}"/>
   <SolidColorBrush x:Key="Brush.Border2" Color="{StaticResource Color.Border2}"/>
+  <SolidColorBrush x:Key="Brush.Border3" Color="{StaticResource Color.Border3}"/>
   <SolidColorBrush x:Key="Brush.Text" Color="{StaticResource Color.Text}"/>
   <SolidColorBrush x:Key="Brush.TextSecondary" Color="{StaticResource Color.TextSecondary}"/>
   <SolidColorBrush x:Key="Brush.TextMuted" Color="{StaticResource Color.TextMuted}"/>
-  <!-- Title/headline text color -->
-  <SolidColorBrush x:Key="Brush.Title" Color="#FFFFFF"/>
+  <!-- Заголовки. Не чистый белый: самый светлый тон системы — Color.Text, и белее
+       него на странице нет ничего. Чистый белый остался от прежней палитры. -->
+  <SolidColorBrush x:Key="Brush.Title" Color="{StaticResource Color.Text}"/>
   <SolidColorBrush x:Key="Brush.Accent" Color="{StaticResource Color.Accent}"/>
   <SolidColorBrush x:Key="Brush.AccentHover" Color="{StaticResource Color.AccentHover}"/>
-  <SolidColorBrush x:Key="Brush.SecondaryAccent" Color="{StaticResource Color.SecondaryAccent}"/>
   <SolidColorBrush x:Key="Brush.AccentFill" Color="{StaticResource Color.AccentFill}"/>
   <SolidColorBrush x:Key="Brush.AccentFillHover" Color="{StaticResource Color.AccentFillHover}"/>
   <SolidColorBrush x:Key="Brush.AccentFillPressed" Color="{StaticResource Color.AccentFillPressed}"/>
@@ -126,9 +125,6 @@
   <SolidColorBrush x:Key="Brush.Scrim" Color="#C0000000"/>
   <SolidColorBrush x:Key="Brush.MenuHover" Color="{StaticResource Color.MenuHover}"/>
   <SolidColorBrush x:Key="Brush.MenuPressed" Color="{StaticResource Color.MenuPressed}"/>
-  <!-- Заливка главной кнопки. Ключ остался с градиентных времён, но краска теперь одна:
-       градиент на тёмном фоне всё равно читался как грязное пятно. -->
-  <SolidColorBrush x:Key="Brush.AccentGradientPrimary" Color="{StaticResource Color.AccentFill}"/>
   <!-- State brushes -->
   <SolidColorBrush x:Key="Brush.Hover" Color="{StaticResource Color.Hover}"/>
   <SolidColorBrush x:Key="Brush.Pressed" Color="{StaticResource Color.Pressed}"/>
@@ -138,20 +134,16 @@
   <SolidColorBrush x:Key="Brush.ListHoverAlt" Color="{StaticResource Color.ListHoverAlt}"/>
   <SolidColorBrush x:Key="Brush.Skeleton" Color="{StaticResource Color.Skeleton}"/>
   <SolidColorBrush x:Key="Brush.Track" Color="{StaticResource Color.Track}"/>
-  <SolidColorBrush x:Key="Brush.TrackFill" Color="{StaticResource Color.TrackFill}"/>
   <SolidColorBrush x:Key="Brush.Thumb" Color="{StaticResource Color.Thumb}"/>
-  <SolidColorBrush x:Key="Brush.ThumbHover" Color="{StaticResource Color.ThumbHover}"/>
-  <SolidColorBrush x:Key="Brush.ThumbActive" Color="{StaticResource Color.ThumbActive}"/>
   <!-- Semantic colors -->
   <SolidColorBrush x:Key="Brush.Success" Color="{StaticResource Color.Success}"/>
   <SolidColorBrush x:Key="Brush.Warning" Color="{StaticResource Color.Warning}"/>
   <SolidColorBrush x:Key="Brush.Danger" Color="{StaticResource Color.Danger}"/>
   <SolidColorBrush x:Key="Brush.Selection" Color="{StaticResource Color.Selection}"/>
+  <SolidColorBrush x:Key="Brush.GhostFill" Color="{StaticResource Color.GhostFill}"/>
 
-  <!-- Header background (solid per spec) -->
-
-  <!-- Шапка — ровная заливка. Ключ сохранён ради ссылок из MainWindow. -->
-  <SolidColorBrush x:Key="Brush.HeaderGradient" Color="{StaticResource Color.HeaderStart}"/>
+  <!-- Шапка — ровная заливка. -->
+  <SolidColorBrush x:Key="Brush.HeaderBg" Color="{StaticResource Color.HeaderStart}"/>
 
   <!-- Пунктирный прямоугольник фокуса Windows: выключен разом для всех элементов.
 
@@ -1213,8 +1205,8 @@
        полупрозрачная пилюля, которая наливается цветом только под курсором. Прежняя
        серая дорожка во всю высоту ленты читалась как отдельная колонка интерфейса. -->
   <SolidColorBrush x:Key="Brush.ScrollbarTrack" Color="Transparent"/>
-  <SolidColorBrush x:Key="Brush.ScrollbarThumb" Color="#3A3A4C"/>
-  <SolidColorBrush x:Key="Brush.ScrollbarThumbHover" Color="#5A5A72"/>
+  <SolidColorBrush x:Key="Brush.ScrollbarThumb" Color="{StaticResource Color.Border2}"/>
+  <SolidColorBrush x:Key="Brush.ScrollbarThumbHover" Color="{StaticResource Color.Border3}"/>
   <SolidColorBrush x:Key="Brush.ScrollbarThumbBorder" Color="{StaticResource Color.Border}"/>
   <Style TargetType="ScrollBar">
     <Setter Property="Background" Value="{StaticResource Brush.ScrollbarTrack}"/>
@@ -1285,10 +1277,7 @@
 
   <!-- Window/Page background fallback -->
 
-  <!-- Витрина: ровная подложка под обложкой игры. Пока обложки нет, это единственный фон,
-       и он не должен спорить с ней цветом, когда она появится. -->
-  <SolidColorBrush x:Key="Brush.HeroGradient" Color="#1E1B2B"/>
-  <!-- Затемнение поверх обложки, чтобы белый заголовок читался на любой картинке -->
+  <!-- Затемнение поверх обложки, чтобы заголовок читался на любой картинке -->
   <!-- Затемнение легче прежнего (0.45 → #66, низ #E6): вместе с Opacity=0.5 самой обложки
        картинка гасла почти целиком, и витрина превращалась в тёмно-серую плашку с
        текстом. Теперь читаемость текста держит нижняя половина и левый край, а верх и

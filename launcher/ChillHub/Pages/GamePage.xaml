@@ -10,7 +10,7 @@
          из-за которых страница игры выглядела приложением из другого проекта. -->
     <SolidColorBrush x:Key="Brush.ProgressBorder" Color="{DynamicResource Color.Border}"/>
     <SolidColorBrush x:Key="Brush.ProgressTrack" Color="{DynamicResource Color.Track}"/>
-    <SolidColorBrush x:Key="Brush.GameAccentGradient" Color="{DynamicResource Color.Accent}"/>
+    <SolidColorBrush x:Key="Brush.GameAccent" Color="{DynamicResource Color.Accent}"/>
 
     <Style x:Key="Style.ProgressBar.Game" TargetType="ProgressBar">
       <Setter Property="Height" Value="4"/>
