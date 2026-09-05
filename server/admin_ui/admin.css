@@ -378,11 +378,10 @@ input:hover, select:hover, textarea:hover { border-color: var(--surface-4); }
 
 .cols { display: grid; gap: var(--s3); }
 .cols--2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-.cols--37 { grid-template-columns: minmax(0, 3fr) minmax(0, 7fr); }
 .cols--55 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 
 @media (width < 1200px) {
-  .cols--2, .cols--37, .cols--55 { grid-template-columns: 1fr; }
+  .cols--2, .cols--55 { grid-template-columns: 1fr; }
 }
 
 .stack { display: grid; gap: var(--s3); }
@@ -394,7 +393,6 @@ input:hover, select:hover, textarea:hover { border-color: var(--surface-4); }
 
 .scroll { overflow: auto; overscroll-behavior: contain; }
 .scroll--sm { max-height: clamp(180px, 30vh, 380px); }
-.scroll--md { max-height: clamp(240px, 42vh, 560px); }
 .scroll--lg { max-height: clamp(300px, 62vh, 900px); }
 
 /* ---------- Метки ---------- */
@@ -473,7 +471,6 @@ td.act { text-align: right; white-space: nowrap; }
 .tree .row.add { color: var(--ok); }
 .tree .row.del { color: var(--bad); }
 .tree .row.mod { color: var(--warn); }
-.tree .indent { display: inline-block; width: 14px; flex: 0 0 auto; }
 
 /* ---------- Сводка ---------- */
 
