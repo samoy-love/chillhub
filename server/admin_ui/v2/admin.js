@@ -832,7 +832,7 @@
     items
       .map(
         (b) =>
-          `<button class="btn${b.accent ? ' btn--accent' : ''}${b.danger ? ' btn--danger' : ''}" type="button" data-flow="${b.act}">${esc(b.title)}</button>`
+          `<button class="btn${b.accent ? ' btn--accent' : ''}${b.danger ? ' btn--danger' : ''}" type="button" data-flow="${b.act}"${b.off ? ' disabled' : ''}>${esc(b.title)}</button>`
       )
       .join('');
 
@@ -841,18 +841,30 @@
   /* Кусок и число потоков подбираются от размера файла тем же модулем,
      что и в панели 1.0, — и показываются до нажатия, а не после. */
   function flowUpload(meta) {
+    const U = window.CH2Upload;
+    const L = D.launcher;
+
+    /* Что и какой версией грузим — спрашиваем до выбора файла: сервер
+       без игры и номера отвечает отказом, и узнавать это, выбрав архив
+       на полтора гигабайта, значит потерять время дважды. */
+    let st = {
+      phase: 'idle',
+      gameId: meta.gameId || '',
+      version: U.nextVersion(meta.gameId ? '' : L.active || L.newest),
+      current: meta.gameId ? '' : L.active,
+    };
+
     const sheet = openSheet({
-      title: meta.kind === 'mods' ? 'Загрузка модпака' : 'Загрузка сборки лаунчера',
+      title: 'Загрузка сборки',
       lede: 'Файл заливается кусками и переживает обрыв связи. Игрокам он сам не уйдёт.',
-      body: V().uploadCard({}),
-      foot: footButtons(V().uploadButtons({})),
+      body: V().uploadTarget(st, D.games, U) + V().uploadCard(st),
+      foot: footButtons(V().uploadButtons(st, U)),
     });
 
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.zip';
 
-    let st = { phase: 'idle' };
     let ctrl = null;
     let uploadId = '';
 
@@ -865,8 +877,11 @@
     const rate = window.makeRateEstimator(4000, { minSpanMs: 1200 });
 
     const paint = () => {
-      sheet.body(V().uploadCard(st));
-      sheet.foot(footButtons(V().uploadButtons(st)));
+      /* Выбор цели показываем, только пока дело не началось: менять
+         игру и версию посреди заливки некуда, а поле на экране это
+         предлагает. */
+      sheet.body((st.phase === 'idle' ? V().uploadTarget(st, D.games, U) : '') + V().uploadCard(st));
+      sheet.foot(footButtons(V().uploadButtons(st, U)));
     };
 
     /* Отрисовка не чаще четырёх раз в секунду. Событий прогресса летят
@@ -884,23 +899,32 @@
     };
 
     async function start(file) {
-      const params = window.pickUploadParams
-        ? window.pickUploadParams(file.size, {})
-        : { chunkSize: window.CH2Upload.DEFAULT_CHUNK, concurrency: 4 };
+      const params = window.CH2_UPLOAD_PARAMS
+        ? { chunkSize: window.CH2_UPLOAD_PARAMS.size || window.CH2Upload.DEFAULT_CHUNK, concurrency: window.CH2_UPLOAD_PARAMS.streams }
+        : window.pickUploadParams
+          ? window.pickUploadParams(file.size, {})
+          : { chunkSize: window.CH2Upload.DEFAULT_CHUNK, concurrency: 4 };
       ctrl = new AbortController();
-      st = {
+      st = Object.assign({}, st, {
         phase: 'init',
         file: { name: file.name, size: file.size },
         chunkSize: params.chunkSize,
         streams: params.concurrency,
         progress: 0,
-      };
+      });
       draw(true);
 
       try {
         const res = await window.CH2Upload.run(
           file,
-          { kind: meta.kind, gameId: meta.gameId, version: meta.version, chunkSize: params.chunkSize },
+          {
+            /* Лаунчер для сервера — такая же «игра» с зарезервированным
+               идентификатором, поэтому вид один, а различает их gameId. */
+            kind: st.gameId ? 'game' : 'launcher',
+            gameId: st.gameId || window.CH2Api.LAUNCHER,
+            version: st.version.trim(),
+            chunkSize: params.chunkSize,
+          },
           {
             api: API,
             chunks: {
@@ -955,6 +979,22 @@
 
     input.addEventListener('change', () => {
       if (input.files && input.files[0]) start(input.files[0]);
+    });
+
+    sheet.root.addEventListener('change', (e) => {
+      if (!e.target.matches('[name="target"], [name="version"]')) return;
+      const target = sheet.root.querySelector('[name="target"]').value;
+      const version = sheet.root.querySelector('[name="version"]').value;
+      const switched = (target === 'launcher' ? '' : target) !== st.gameId;
+      st = Object.assign({}, st, {
+        gameId: target === 'launcher' ? '' : target,
+        version: version,
+        current: target === 'launcher' ? L.active : '',
+      });
+      /* Сменили цель — номер предлагаем заново: версия лаунчера и
+         версия игры между собой не связаны никак. */
+      if (switched) st.version = U.nextVersion(st.gameId ? '' : L.active || L.newest);
+      draw(true);
     });
 
     sheet.root.addEventListener('click', (e) => {

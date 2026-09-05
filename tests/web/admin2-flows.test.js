@@ -772,3 +772,79 @@ test('скорость считается по байтам и не рисует
   rate.push(2000, 40 * 1024 * 1024);
   assert.ok(rate.rate() > 0, 'скорость не появилась и после набора окна');
 });
+
+/* ---------- Что и какой версией грузим ---------- */
+
+test('загрузка спрашивает цель и версию до выбора файла', async (t) => {
+  // Сервер без gameId и версии отвечает отказом. Узнавать это, выбрав
+  // архив на полтора гигабайта, — потерять время дважды
+  const { window } = await boot();
+  t.after(() => window.close());
+
+  const sheet = await open(window, '#launcher', 'upload');
+  assert.ok(sheet.querySelector('[name="target"]'), 'не спрашивают, что грузим');
+  assert.ok(sheet.querySelector('[name="version"]'), 'не спрашивают версию');
+
+  // Номер предложен следующим по порядку от той, что у игроков
+  assert.strictEqual(sheet.querySelector('[name="version"]').value, '1.6.25');
+});
+
+test('пока версия не годится, файл выбирать не предлагают', async (t) => {
+  const { window } = await boot();
+  t.after(() => window.close());
+
+  const sheet = await open(window, '#launcher', 'upload');
+  const field = sheet.querySelector('[name="version"]');
+  field.value = 'не версия';
+  field.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  await until(() => sheet.querySelector('[data-flow="pick"]').disabled);
+  assert.ok(sheet.querySelector('[data-flow="pick"]').disabled, 'предложили выбрать файл под негодный номер');
+  assert.match(text(sheet), /только латиница, цифры/);
+});
+
+test('загрузка доносит до сервера и игру, и версию', async (t) => {
+  const { window, calls } = await boot({
+    'upload/init': { uploadId: 'u1', chunkSize: 4, totalChunks: 1 },
+    'upload/status': { received: [] },
+  });
+  t.after(() => window.close());
+
+  const sheet = await open(window, '#launcher', 'upload');
+  const target = sheet.querySelector('[name="target"]');
+  target.value = 'repo';
+  target.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  await window.CH2Upload.run(
+    { name: 'a.zip', size: 4 },
+    { kind: 'game', gameId: 'repo', version: '1.0.1', chunkSize: 4 },
+    {
+      api: window.CH2Api.makeApi(),
+      chunks: {
+        uploadChunkWithRetries: async () => ({ ok: true }),
+        runWorkerPool: window.runWorkerPool,
+        pendingBytes: window.pendingBytes,
+      },
+      slice: () => 'кусок',
+      concurrency: () => 1,
+    }
+  );
+
+  const init = calls.find((c) => c.url.includes('upload/init'));
+  assert.strictEqual(init.body.gameId, 'repo');
+  assert.strictEqual(init.body.version, '1.0.1');
+  await settle();
+});
+
+test('смена цели предлагает свой номер: версии игры и лаунчера не связаны', async (t) => {
+  const { window } = await boot();
+  t.after(() => window.close());
+
+  const sheet = await open(window, '#launcher', 'upload');
+  const target = sheet.querySelector('[name="target"]');
+  target.value = 'repo';
+  target.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  await until(() => sheet.querySelector('[name="version"]').value !== '1.6.25');
+  assert.strictEqual(sheet.querySelector('[name="version"]').value, '1.0.1');
+});

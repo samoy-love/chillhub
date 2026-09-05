@@ -28,6 +28,42 @@
 
   const DEFAULT_CHUNK = 8 * 1024 * 1024;
 
+  /* ---------- Версия сборки ---------- */
+
+  /**
+   * Что не так с номером версии.
+   *
+   * Правило то же, что у сервера (`IsSafeVersion`): номер становится
+   * именем файла и частью адреса манифеста. Сервер откажет теми же
+   * словами, но уже после того, как человек выберет файл на полтора
+   * гигабайта, — а здесь это видно до.
+   */
+  const VERSION_RE = /^[A-Za-z0-9._-]+$/;
+  function versionProblem(v) {
+    const s = String(v === undefined || v === null ? '' : v).trim();
+    if (!s) return 'Без номера версии сборку некуда положить';
+    if (s === '.' || s === '..') return 'Такой номер означает папку, а не версию';
+    if (!VERSION_RE.test(s)) return 'В номере только латиница, цифры, точка, дефис и подчёркивание';
+    if (!/^\d+\.\d+\.\d+$/.test(s)) return 'Номер обычно из трёх чисел через точку — например, 1.6.47';
+    return '';
+  }
+
+  /**
+   * Следующий номер по порядку.
+   *
+   * Предлагается, а не навязывается: девять раз из десяти выпуск —
+   * очередной патч, и набирать номер руками значит однажды ошибиться в
+   * нём. Порт `bumpSemverPatch` из панели 1.0.
+   */
+  function nextVersion(current) {
+    const v = String(current === undefined || current === null ? '' : current).trim();
+    const three = /^(\d+)\.(\d+)\.(\d+)$/.exec(v);
+    if (three) return three[1] + '.' + three[2] + '.' + (Number(three[3]) + 1);
+    const two = /^(\d+)\.(\d+)$/.exec(v);
+    if (two) return two[1] + '.' + two[2] + '.1';
+    return '1.0.1';
+  }
+
   /** Индексы кусков, которых у сервера нет. */
   function missingChunks(totalChunks, received) {
     const have = new Set((received || []).map((x) => Number(x) | 0));
@@ -251,6 +287,9 @@
 
   return {
     DEFAULT_CHUNK: DEFAULT_CHUNK,
+    VERSION_RE: VERSION_RE,
+    versionProblem: versionProblem,
+    nextVersion: nextVersion,
     missingChunks: missingChunks,
     chunkCount: chunkCount,
     chunkRange: chunkRange,

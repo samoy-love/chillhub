@@ -112,9 +112,15 @@
    * «Закрыть» на этом месте прочитали бы как «свернуть», а закрытие
    * листа загрузку прерывает.
    */
-  function uploadButtons(st) {
-    const phase = (st && st.phase) || 'idle';
-    if (phase === 'idle') return [{ act: 'pick', title: 'Выбрать файл', accent: true }];
+  function uploadButtons(st, upload) {
+    const s = st || {};
+    const phase = s.phase || 'idle';
+    if (phase === 'idle') {
+      /* Пока версия не годится, файл выбирать незачем: сервер откажет,
+         и полтора гигабайта уйдут в пустоту. */
+      const U = M('CH2Upload', upload);
+      return [{ act: 'pick', title: 'Выбрать файл', accent: true, off: Boolean(U.versionProblem(s.version)) }];
+    }
     if (phase === 'done') return [{ act: 'close', title: 'Закрыть', accent: true }];
     if (phase === 'failed' || phase === 'aborted') {
       return [
@@ -123,6 +129,45 @@
       ];
     }
     return [{ act: 'abort', title: 'Отменить загрузку', accent: false, danger: true }];
+  }
+
+  /**
+   * Что и какой версией грузят.
+   *
+   * Спрашивается ДО выбора файла, а не после: сервер отказывает без
+   * игры и номера версии, и узнавать это, выбрав архив на полтора
+   * гигабайта, — потерянное время. Номер предлагается следующим по
+   * порядку: девять выпусков из десяти — очередной патч.
+   */
+  function uploadTarget(st, games, upload) {
+    const s = st || {};
+    const U = M('CH2Upload', upload);
+    const list = games || [];
+    const problem = U.versionProblem(s.version);
+
+    return (
+      '<div class="cols cols--2">' +
+      '<div class="field"><label for="u-target">Что грузим</label>' +
+      '<select id="u-target" name="target">' +
+      '<option value="launcher"' + (s.gameId ? '' : ' selected') + '>сам лаунчер</option>' +
+      list
+        .map(
+          (g) =>
+            '<option value="' + esc(g.gameId) + '"' + (s.gameId === g.gameId ? ' selected' : '') + '>' +
+            esc(g.title || g.gameId) +
+            '</option>'
+        )
+        .join('') +
+      '</select>' +
+      '<span class="help">Сборка лаунчера обновляет саму программу, сборка игры — её файлы у игрока</span></div>' +
+
+      '<div class="field"><label for="u-version">Версия</label>' +
+      '<input id="u-version" name="version" type="text" value="' + esc(s.version) + '" placeholder="1.6.47">' +
+      (s.current ? '<span class="help">Сейчас у игроков ' + esc(s.current) + '</span>' : '') +
+      (problem ? '<span class="help help--bad">' + esc(problem) + '</span>' : '') +
+      '</div>' +
+      '</div>'
+    );
   }
 
   /**
@@ -1385,6 +1430,7 @@
     esc,
     sheet,
     uploadStatus,
+    uploadTarget,
     uploadButtons,
     uploadCard,
     logRow,

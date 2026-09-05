@@ -312,3 +312,39 @@ test('упавший запрос разбора не притворяется �
   assert.strictEqual(bad.ok, false);
   assert.match(bad.message, /500/);
 });
+
+/* ---------- Номер версии ---------- */
+
+test('годный номер проходит', () => {
+  assert.strictEqual(U.versionProblem('1.6.47'), '');
+  assert.strictEqual(U.versionProblem('  1.6.47  '), '', 'пробелы по краям не должны мешать');
+});
+
+test('номер, который сервер не примет, назван до выбора файла', () => {
+  // Иначе отказ приходит после того, как выбран архив на полтора гигабайта
+  assert.match(U.versionProblem(''), /Без номера/);
+  assert.match(U.versionProblem('..'), /означает папку/);
+  assert.match(U.versionProblem('версия'), /только латиница/);
+  assert.match(U.versionProblem('1.6'), /из трёх чисел/);
+  assert.match(U.versionProblem('1.6.47-beta'), /из трёх чисел/);
+});
+
+test('следующий номер предлагается патчем', () => {
+  // Девять выпусков из десяти — очередной патч, и набирать номер руками
+  // значит однажды в нём ошибиться
+  assert.strictEqual(U.nextVersion('1.6.46'), '1.6.47');
+  assert.strictEqual(U.nextVersion('1.6.9'), '1.6.10');
+});
+
+test('неполный и непонятный номер не мешают предложить годный', () => {
+  assert.strictEqual(U.nextVersion('1.6'), '1.6.1');
+  assert.strictEqual(U.nextVersion('мусор'), '1.0.1');
+  assert.strictEqual(U.nextVersion(''), '1.0.1');
+  assert.strictEqual(U.nextVersion(null), '1.0.1');
+});
+
+test('предложенный номер сам по себе годится', () => {
+  for (const v of ['1.6.46', '1.6', '', 'мусор']) {
+    assert.strictEqual(U.versionProblem(U.nextVersion(v)), '', v);
+  }
+});
