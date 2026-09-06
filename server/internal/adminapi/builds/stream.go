@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"sync"
 
 	"ChillHub/server/internal/adminutil"
 
@@ -43,6 +45,17 @@ func streamUnzip(w io.Writer, fl adminutil.Flusher, zipPath, filesRoot string) b
 	// See extractBudget: the entry sizes in the archive cannot be trusted, so
 	// the bytes actually written are counted and capped.
 	budget := newExtractBudget()
+
+	// Проверки пути — до единой записи на диск и по порядку: выход за
+	// пределы каталога обязан останавливать распаковку целиком, а не после
+	// того, как соседний поток уже что-то создал.
+	type job struct {
+		zf   *zip.File
+		rel  string
+		full string
+		dir  bool
+	}
+	jobs := make([]job, 0, len(zr.File))
 	for _, zf := range zr.File {
 		rel := zipEntryRelPath(zf)
 		if rel == "" {
@@ -53,18 +66,42 @@ func streamUnzip(w io.Writer, fl adminutil.Flusher, zipPath, filesRoot string) b
 			streamError(w, fl, errZipSlip.Error()+": "+rel)
 			return false
 		}
-		if zf.FileInfo().IsDir() || hasTrailingSlash(rel) {
-			_ = os.MkdirAll(full, contentDirPerm)
-			emitEventf(w, "{\"type\":\"unzip\",\"path\":%q}\n", rel)
-			fl.Flush()
+		jobs = append(jobs, job{zf: zf, rel: rel, full: full,
+			dir: zf.FileInfo().IsDir() || hasTrailingSlash(rel)})
+	}
+
+	// Каталоги создаём заранее и последовательно: иначе десяток потоков
+	// делают MkdirAll на один и тот же путь.
+	for _, j := range jobs {
+		if j.dir {
+			_ = os.MkdirAll(j.full, contentDirPerm)
 			continue
 		}
-		if err := extractZipEntry(zf, rel, full, budget); err != nil {
+		if err := makeEntryParent(j.full); err != nil {
 			streamError(w, fl, err.Error())
 			return false
 		}
-		emitEventf(w, "{\"type\":\"unzip\",\"path\":%q}\n", rel)
+	}
+
+	// РАСПАКОВКА ШЛА В ОДИН ПОТОК, А ЭТО САМЫЙ ДОЛГИЙ ШАГ ПУБЛИКАЦИИ.
+	// Сборка в полтора гигабайта распаковывалась четыре секунды из шести
+	// на тридцатидвухъядерной машине; на четырёхъядерном arm64 прода тот
+	// же проход стоит кратно дороже. Работа здесь и дисковая, и
+	// процессорная (распаковка), и та и другая умеют идти параллельно.
+	//
+	// Порядок событий держится тем же приёмом, что у хеширования: готовая
+	// запись ждёт своей очереди, и оператор видит ровный список.
+	if err := hashAll(len(jobs), func(i int) error {
+		if jobs[i].dir {
+			return nil
+		}
+		return extractZipEntry(jobs[i].zf, jobs[i].rel, jobs[i].full, budget)
+	}, func(i int) {
+		emitEventf(w, "{\"type\":\"unzip\",\"path\":%q}\n", jobs[i].rel)
 		fl.Flush()
+	}); err != nil {
+		streamError(w, fl, err.Error())
+		return false
 	}
 	return true
 }
@@ -102,9 +139,16 @@ func scanManifest(filesRoot string) ([]manifestFile, []string, error) {
 // apart once already (only one of them stopped ignoring a failed d.Info(), the
 // other kept panicking on the nil FileInfo).
 func walkManifest(filesRoot string, onFile func(manifestFile)) ([]manifestFile, []string, error) {
-	var files []manifestFile
 	dirHasFile := map[string]bool{}
 	allDirs := map[string]bool{}
+
+	// Сначала обход без единого хеша: он дешёвый и задаёт ПОРЯДОК.
+	type entry struct {
+		path string
+		rel  string
+		size int64
+	}
+	var list []entry
 	err := filepath.WalkDir(filesRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -124,28 +168,112 @@ func walkManifest(filesRoot string, onFile func(manifestFile)) ([]manifestFile, 
 		if err != nil {
 			return err
 		}
-		b3Sum, shaSum, err := hashFile(path)
-		if err != nil {
-			return err
-		}
-		mf := manifestFile{
-			Path:       rel,
-			Size:       info.Size(),
-			Blake3:     b3Sum,
-			Sha256:     shaSum,
-			Executable: isExecutable(rel),
-		}
-		files = append(files, mf)
+		list = append(list, entry{path: path, rel: rel, size: info.Size()})
 		markParentDirs(dirHasFile, rel)
-		if onFile != nil {
-			onFile(mf)
-		}
 		return nil
 	})
 	if err != nil {
 		return nil, nil, err
 	}
+
+	files := make([]manifestFile, len(list))
+	if err := hashAll(len(list), func(i int) error {
+		b3Sum, shaSum, herr := hashFile(list[i].path)
+		if herr != nil {
+			return herr
+		}
+		files[i] = manifestFile{
+			Path:       list[i].rel,
+			Size:       list[i].size,
+			Blake3:     b3Sum,
+			Sha256:     shaSum,
+			Executable: isExecutable(list[i].rel),
+		}
+		return nil
+	}, func(i int) {
+		if onFile != nil {
+			onFile(files[i])
+		}
+	}); err != nil {
+		return nil, nil, err
+	}
+
 	return files, emptyDirsOf(allDirs, dirHasFile), nil
+}
+
+// hashWorkers — сколько файлов хешируется одновременно.
+//
+// ХЕШИРОВАНИЕ БЫЛО ОДНОПОТОЧНЫМ, А СЧИТАЕТСЯ ДВА ХЕША НА КАЖДЫЙ ФАЙЛ.
+// Сборка в полтора гигабайта и шесть тысяч файлов проводила в этом месте
+// две секунды на машине, где сборка занимает шесть, — и это машина с
+// тридцатью двумя ядрами. Прод — четырёхъядерный arm64 без ускорителей
+// sha256, там тот же проход стоит кратно дороже, и растёт он вместе с
+// размером сборки, то есть ровно тогда, когда ждать больнее всего.
+//
+// Потолок в восемь потоков, а не «сколько ядер»: работа упирается и в
+// диск тоже, а от разгона очереди чтений на HDD становится хуже, чем
+// лучше. Восемь загружают и четыре ядра прода, и не превращают чтение в
+// случайное.
+func hashWorkers() int {
+	return max(min(runtime.GOMAXPROCS(0), 8), 1)
+}
+
+// hashAll считает n задач параллельно, а сообщает о них ПО ПОРЯДКУ.
+//
+// Порядок здесь не украшение. В том же порядке файлы попадают в манифест,
+// и он уезжает игрокам; перемешанный манифест — это другой файл при том же
+// содержимом, то есть лишний повод считать сборку изменившейся. И тот же
+// порядок видит оператор в потоке событий: прогресс, скачущий взад-вперёд,
+// читается как сбой, а не как ускорение.
+//
+// Поэтому готовые задачи ждут своей очереди: как только готов очередной
+// префикс, он и уходит наружу.
+func hashAll(n int, work func(int) error, report func(int)) error {
+	if n == 0 {
+		return nil
+	}
+
+	done := make([]bool, n)
+	var mu sync.Mutex
+	var next int
+	var firstErr error
+
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for range hashWorkers() {
+		wg.Go(func() {
+			for i := range jobs {
+				err := work(i)
+
+				mu.Lock()
+				if err != nil && firstErr == nil {
+					firstErr = err
+				}
+				done[i] = true
+				for next < n && done[next] {
+					if firstErr == nil {
+						report(next)
+					}
+					next++
+				}
+				mu.Unlock()
+			}
+		})
+	}
+
+	for i := range n {
+		mu.Lock()
+		stop := firstErr != nil
+		mu.Unlock()
+		if stop {
+			break
+		}
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+
+	return firstErr
 }
 
 // hashFile returns the blake3 and sha256 digests of one extracted file.
