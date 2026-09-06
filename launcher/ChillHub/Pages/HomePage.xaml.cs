@@ -487,29 +487,12 @@ namespace ChillHub.Pages {
                 // Проверка доступа к папке для игр и предложение выбрать другую при отсутствии прав
                 HomeDialogs.EnsureGamesPathAccessibleOrPrompt();
 
-                // Быстрая параллельная загрузка игр и новостей лаунчера
-                var gamesUrl = HomeFeed.GamesUrl(this.BaseApi);
-                var newsUrl = HomeFeed.LauncherNewsUrl(this.BaseApi);
-
-                GamesResponse? gamesResp = null;
-                NewsIndex? newsResp = null;
-                Exception? gamesError = null;
-                try {
-                    gamesResp = await this.http.GetFromJsonAsync<GamesResponse>(gamesUrl).ConfigureAwait(false);
-                }
-                catch (Exception ex) {
-                    // Ошибку показываем ниже как empty-state «сервер недоступен», а не как исключение
-                    gamesError = ex;
-                    Core.Logging.Logger.ErrorNoReport(ex, $"LoadInitialAsync: GET {gamesUrl}");
-                }
-
-                try {
-                    newsResp = await this.http.GetFromJsonAsync<NewsIndex>(newsUrl).ConfigureAwait(false);
-                }
-                catch (Exception ex) {
-                    // Новости второстепенны: без них лаунчер полностью работоспособен
-                    Core.Logging.Logger.ErrorNoReport(ex, $"LoadInitialAsync: GET {newsUrl}");
-                }
+                // Игры и новости спрашиваем одновременно; правило и его проверка —
+                // в HomeFeed.LoadStartAsync, здесь только показ.
+                var start = await HomeFeed.LoadStartAsync(this.http, this.BaseApi).ConfigureAwait(false);
+                var gamesResp = start.Games;
+                var newsResp = start.News;
+                var gamesError = start.GamesError;
 
                 var games = gamesResp?.Items ?? new List<GameInfo>();
 
