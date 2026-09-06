@@ -129,6 +129,11 @@ const ENDPOINTS = [
   ['authRefresh', [], 'POST', 'auth/refresh'],
   ['logout', [], 'POST', 'auth/logout'],
 
+  ['versions', ['repo'], 'GET', 'list'],
+  ['activate', ['repo', '1.0'], 'POST', 'activate'],
+  ['deleteVersion', ['repo', '1.0'], 'POST', 'deleteVersion'],
+  ['pruneVersions', ['repo'], 'POST', 'pruneVersions'],
+
   ['launcherVersions', [], 'GET', 'list'],
   ['launcherActivate', ['1.0'], 'POST', 'activate'],
   ['launcherDelete', ['1.0'], 'POST', 'deleteVersion'],

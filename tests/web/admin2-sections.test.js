@@ -577,3 +577,48 @@ test('код ошибки читается из сводки и получает
   assert.match(e.what, /связь оборвалась/);
   assert.strictEqual(e.share, 1);
 });
+
+/* КАКОЙ ПАКЕТ СОБИРАТЬ — ЭТО НЕ ИГРА.
+   Сервер собирает названный пакет на Thunderstore и на одну игру
+   отвечает «не указан модпак». Строка раздела имени пакета не несла
+   вовсе, поэтому «Собрать» и «Посчитать состав» отказывали, не начав
+   работу. Имя лежит в двух местах ответа, и оба бывают пустыми. */
+test('имя пакета берётся из проверки обновлений', () => {
+  const row = S.packRow(
+    {
+      gameId: 'repo',
+      active: '1.9.8',
+      items: [{ version: 'ASTeam-MooModpack-1.9.9' }],
+      updates: [{ namespace: 'ASTeam', name: 'MooModpack', latest: '2.0.0' }],
+    },
+    { gameId: 'repo', title: 'R.E.P.O.' }
+  );
+  assert.strictEqual(row.namespace, 'ASTeam');
+  assert.strictEqual(row.name, 'MooModpack');
+});
+
+test('без проверки обновлений имя разбирается из адреса пакета', () => {
+  const row = S.packRow(
+    {
+      gameId: 'repo',
+      items: [{ version: 'ASTeam-MooModpack-1.9.9', packageUrl: 'https://thunderstore.io/c/repo/p/ASTeam/MooModpack/' }],
+      updates: [],
+    },
+    { gameId: 'repo' }
+  );
+  assert.strictEqual(row.namespace, 'ASTeam');
+  assert.strictEqual(row.name, 'MooModpack');
+  assert.strictEqual(row.packageUrl, 'https://thunderstore.io/c/repo/p/ASTeam/MooModpack/');
+});
+
+/* Имя версии третьим источником не идёт намеренно: у сборки, приехавшей
+   профилем r2modman, оно своё, какое назвал оператор, и разобранное из
+   него имя указало бы на чужой пакет на Thunderstore. */
+test('из имени версии профиля пакет не выдумывается', () => {
+  const row = S.packRow(
+    { gameId: 'repo', items: [{ version: 'moy-nabor-3', kind: 'profile' }], updates: [] },
+    { gameId: 'repo' }
+  );
+  assert.strictEqual(row.namespace, '');
+  assert.strictEqual(row.name, '');
+});

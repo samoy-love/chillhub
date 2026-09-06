@@ -38,12 +38,24 @@ const FIXTURES = {
     ],
   },
   /* Форма ответа настоящая: список версий плюс активная. Отдельного
-     поля с собранной версией сервер не отдаёт — она первая в списке. */
+     поля с собранной версией сервер не отдаёт — она первая в списке.
+     `packageUrl` в записи о сборке тоже настоящий: без него панели
+     неоткуда узнать, КАКОЙ пакет собирать, а сервер собирает пакет, а
+     не игру, и на одну игру отвечает «не указан модпак». */
   'mods/list': {
     gameId: 'repo',
     active: '1.9.8',
     items: [
-      { version: '1.9.9', displayName: 'Moo Modpack', createdAt: '2026-09-01T10:00:00Z', packages: 17, bytes: 251000000 },
+      {
+        version: '1.9.9',
+        displayName: 'Moo Modpack',
+        packageUrl: 'https://thunderstore.io/c/repo/p/ASTeam/MooModpack/',
+        kind: 'thunderstore',
+        createdAt: '2026-09-01T10:00:00Z',
+        packages: 17,
+        bytes: 251000000,
+        rebuildable: true,
+      },
       { version: '1.9.8', displayName: 'Moo Modpack', packages: 16, bytes: 250000000 },
     ],
   },
@@ -162,6 +174,32 @@ async function open(window, hash, act) {
   const sheet = await until(() => window.document.querySelector('.sheet'));
   assert.ok(sheet, 'лист «' + act + '» не открылся');
   return sheet;
+}
+
+/**
+ * Открывает раздел и, если названо дело, запускает его.
+ *
+ * Игры и новости правятся НА ЭКРАНЕ, а не в листе поверх него: список
+ * слева, работа справа. Поэтому проверки смотрят в раздел, а не ищут
+ * `.sheet`.
+ */
+async function openScreen(window, hash, act) {
+  window.location.hash = hash;
+  if (act) {
+    const btn = await until(() => window.document.querySelector(`[data-act="${act}"]`));
+    assert.ok(btn, 'кнопки «' + act + '» нет в разделе ' + hash);
+    btn.click();
+  }
+  await settle(6);
+  return window.document.querySelector('[data-main]');
+}
+
+/** Ждёт вкладку карточки игры и открывает её. */
+async function openTab(window, id) {
+  const tab = await until(() => window.document.querySelector(`[data-tab="${id}"]`));
+  assert.ok(tab, 'вкладки «' + id + '» нет');
+  tab.click();
+  await settle(6);
 }
 
 const text = (el) => el.textContent.replace(/\s+/g, ' ').trim();
@@ -336,47 +374,48 @@ test('страница ошибки от прокси не попадает на
 /* ---------- Новость ---------- */
 
 test('лист на экране всегда один', async (t) => {
-  // Два нажатия «Написать» подряд клали на страницу два наложенных
-  // редактора: человек правит верхний, нижний ждёт под ним со своим
-  // черновиком и своими обработчиками, а Escape закрывает только верхний
+  // Два нажатия подряд клали на страницу два наложенных листа: человек
+  // работает в верхнем, нижний ждёт под ним со своими обработчиками, а
+  // Escape закрывает только верхний
   const { window } = await boot();
   t.after(() => window.close());
 
-  await open(window, '#news', 'new-post');
+  await open(window, '#games', 'order');
   assert.strictEqual(window.document.querySelectorAll('[data-sheet]').length, 1);
 
-  window.document.querySelector('[data-act="new-post"]').click();
+  window.document.querySelector('[data-act="order"]').click();
   await settle();
   assert.strictEqual(window.document.querySelectorAll('[data-sheet]').length, 1, 'лист открылся поверх прежнего');
 });
 
-test('лист, открытый из листа, ложится поверх, а не вместо', async (t) => {
-  // Выбор вложения открывается ИЗ редактора заметки и по выбору пишет
-  // разметку обратно в его поле. Закрыв редактор, панель писала бы в
-  // вырванный из страницы узел, и набранное пропадало бы молча
+test('выбор вложения не разрушает редактор заметки', async (t) => {
+  // Вложение выбирают ИЗ редактора и по выбору пишут разметку обратно в
+  // его поле. Закройся редактор — панель писала бы в вырванный из
+  // страницы узел, и набранное пропадало бы молча
   const { window } = await boot();
   t.after(() => window.close());
 
-  const editor = await open(window, '#news', 'new-post');
-  await until(() => editor.querySelector('[name="markdown"]'));
+  await openScreen(window, '#news', 'new-post');
+  const area = await until(() => window.document.querySelector('[data-news-editor] [name="markdown"]'));
+  area.value = '# Черновик\n\nНабранное до вложения';
+  area.dispatchEvent(new window.Event('input', { bubbles: true }));
 
-  editor.querySelector('[data-flow="assets"]').click();
-  await until(() => window.document.querySelectorAll('[data-sheet]').length === 2);
+  window.document.querySelector('[data-post="assets"]').click();
+  await until(() => window.document.querySelector('[data-sheet]'));
 
-  assert.strictEqual(window.document.querySelectorAll('[data-sheet]').length, 2, 'редактор закрылся под выбором вложения');
-  assert.ok(editor.isConnected, 'редактор вырван из страницы');
+  assert.ok(area.isConnected, 'редактор вырван из страницы');
+  assert.match(window.document.querySelector('[data-news-editor] [name="markdown"]').value, /Набранное до вложения/);
 });
 
 test('заметка сохраняется тем, что набрали, и черновик после этого убирается', async (t) => {
-  const { window, calls, left } = await boot();
+  const { window, calls } = await boot();
   t.after(() => window.close());
-  void left;
 
-  const sheet = await open(window, '#news', 'new-post');
-  await until(() => sheet.querySelector('[name="markdown"]'));
+  await openScreen(window, '#news', 'new-post');
+  const editor = await until(() => window.document.querySelector('[data-news-editor]'));
 
   const set = (name, value) => {
-    const el = sheet.querySelector(`[name="${name}"]`);
+    const el = editor.querySelector(`[name="${name}"]`);
     el.value = value;
     el.dispatchEvent(new window.Event('input', { bubbles: true }));
   };
@@ -386,7 +425,7 @@ test('заметка сохраняется тем, что набрали, и ч
   // Черновик пишется на каждый ввод: заметку набирают минутами
   assert.ok(window.CH2News.readDraft(window.localStorage, { slug: 'release-1-6-25' }), 'черновик не сохранён');
 
-  sheet.querySelector('[data-flow="save"]').click();
+  window.document.querySelector('[data-post="save"]').click();
   await until(() => calls.some((c) => c.url.includes('news/save')));
 
   const saved = calls.find((c) => c.url.includes('news/save'));
@@ -405,13 +444,13 @@ test('пустую новость не отправляют, а показыва
   const { window, calls } = await boot();
   t.after(() => window.close());
 
-  const sheet = await open(window, '#news', 'new-post');
-  await until(() => sheet.querySelector('[name="title"]'));
-  sheet.querySelector('[data-flow="save"]').click();
+  await openScreen(window, '#news', 'new-post');
+  await until(() => window.document.querySelector('[data-news-editor] [name="markdown"]'));
+  window.document.querySelector('[data-post="save"]').click();
 
   await new Promise((r) => setTimeout(r, 10));
   assert.ok(!calls.some((c) => c.url.includes('news/save')), 'пустая новость ушла на сервер');
-  assert.ok(sheet.querySelector('.help--bad'), 'не сказано, чего не хватает');
+  assert.ok(window.document.querySelector('[data-news-editor] .help--bad'), 'не сказано, чего не хватает');
 });
 
 test('оставшийся черновик предлагают вернуть, а не подставляют молча', async (t) => {
@@ -421,16 +460,17 @@ test('оставшийся черновик предлагают вернуть,
   const where = { slug: 'release', gameId: '' };
   window.CH2News.saveDraft(window.localStorage, Object.assign({ markdown: '# Заметка\n\nНедописанное' }, where));
 
-  const sheet = await open(window, '#news', 'edit-post');
-  await until(() => sheet.querySelector('[data-draft-restore]'));
-  assert.ok(sheet.querySelector('[data-draft-restore]'), 'про черновик не сказали');
+  await openScreen(window, '#news');
+  const editor = await until(() => window.document.querySelector('[data-news-editor] [data-draft-restore]'));
+  assert.ok(editor, 'про черновик не сказали');
 
+  const area = () => window.document.querySelector('[data-news-editor] [name="markdown"]');
   // Молча подставленный черновик затёр бы то, что уже на сервере
-  assert.match(sheet.querySelector('[name="markdown"]').value, /Текст заметки/);
+  assert.match(area().value, /Текст заметки/);
 
-  sheet.querySelector('[data-draft-restore]').click();
-  await until(() => /Недописанное/.test(sheet.querySelector('[name="markdown"]').value));
-  assert.match(sheet.querySelector('[name="markdown"]').value, /Недописанное/);
+  window.document.querySelector('[data-draft-restore]').click();
+  await until(() => /Недописанное/.test(area().value));
+  assert.match(area().value, /Недописанное/);
   await settle();
 });
 
@@ -440,24 +480,28 @@ test('галерея показывает содержимое папки и п�
   const { window } = await boot();
   t.after(() => window.close());
 
-  const sheet = await open(window, '#games', 'gallery');
-  await until(() => sheet.querySelector('[data-name="cover.png"]'));
+  await openScreen(window, '#games');
+  await openTab(window, 'gallery');
+  const pane = await until(() => window.document.querySelector('[data-gallery]'));
+  await until(() => pane.querySelector('[data-name="cover.png"]'));
 
-  const body = text(sheet.querySelector('.sheet-body'));
+  const body = text(pane);
   assert.match(body, /cover\.png/);
   assert.match(body, /обложка/);
   // Обложкой можно сделать только картинку, и только не текущую
-  assert.strictEqual(sheet.querySelector('[data-cover="cover.png"]'), null);
-  assert.strictEqual(sheet.querySelector('[data-cover="guide.pdf"]'), null);
+  assert.strictEqual(pane.querySelector('[data-cover="cover.png"]'), null);
+  assert.strictEqual(pane.querySelector('[data-cover="guide.pdf"]'), null);
 });
 
 test('удаление обложки предупреждает о том, что увидит игрок', async (t) => {
   const { window, calls } = await boot();
   t.after(() => window.close());
 
-  const sheet = await open(window, '#games', 'gallery');
-  await until(() => sheet.querySelector('[data-remove="cover.png"]'));
-  sheet.querySelector('[data-remove="cover.png"]').click();
+  await openScreen(window, '#games');
+  await openTab(window, 'gallery');
+  const pane = await until(() => window.document.querySelector('[data-gallery]'));
+  await until(() => pane.querySelector('[data-remove="cover.png"]'));
+  pane.querySelector('[data-remove="cover.png"]').click();
 
   const modal = await until(() => window.document.querySelector('.modal'));
   assert.ok(modal, 'удаление не спросило');
@@ -472,12 +516,14 @@ test('переименование в занятое имя не уходит н
   const { window, calls } = await boot();
   t.after(() => window.close());
 
-  const sheet = await open(window, '#games', 'gallery');
-  await until(() => sheet.querySelector('[data-rename="guide.pdf"]'));
+  await openScreen(window, '#games');
+  await openTab(window, 'gallery');
+  const pane = await until(() => window.document.querySelector('[data-gallery]'));
+  await until(() => pane.querySelector('[data-rename="guide.pdf"]'));
 
   // Windows не различает регистр: «Cover.png» затёрло бы «cover.png» молча
   window.prompt = () => 'Cover.PNG';
-  sheet.querySelector('[data-rename="guide.pdf"]').click();
+  pane.querySelector('[data-rename="guide.pdf"]').click();
 
   await new Promise((r) => setTimeout(r, 10));
   assert.ok(!calls.some((c) => c.url.includes('gallery/rename')), 'занятое имя ушло на сервер');
@@ -672,25 +718,85 @@ test('окно с концом раньше начала не доходит д�
 /* ---------- Карточка игры ---------- */
 
 test('игру можно править: поля открываются с тем, что в реестре', async (t) => {
-  // В панели 2.0 реестр какое-то время был таблицей только на чтение
   const { window } = await boot();
   t.after(() => window.close());
 
-  window.location.hash = '#games';
-  const btn = await until(() => window.document.querySelector('[data-act="edit-game"]'));
-  btn.click();
-  const sheet = await until(() => window.document.querySelector('.sheet'));
+  await openScreen(window, '#games');
+  const form = await until(() => window.document.querySelector('[data-game-detail]'));
 
-  assert.strictEqual(sheet.querySelector('[name="gameId"]').value, 'repo');
-  assert.strictEqual(sheet.querySelector('[name="title"]').value, 'R.E.P.O.');
-  assert.strictEqual(sheet.querySelector('[name="exeRelativePath"]').value, 'REPO.exe');
+  assert.strictEqual(form.querySelector('[name="gameId"]').value, 'repo');
+  assert.strictEqual(form.querySelector('[name="title"]').value, 'R.E.P.O.');
+  assert.strictEqual(form.querySelector('[name="exeRelativePath"]').value, 'REPO.exe');
   // Идентификатор уже стал именем папки — править его нельзя
-  assert.ok(sheet.querySelector('[name="gameId"]').hasAttribute('readonly'));
+  assert.ok(form.querySelector('[name="gameId"]').hasAttribute('readonly'));
+});
+
+/* СПИСОК СЛЕВА ОТВЕЧАЕТ НА ВОПРОС «КАКАЯ ЕЩЁ ЕСТЬ».
+   Реестр был таблицей, а правка открывалась листом поверх неё: чтобы
+   перейти к соседней игре, лист закрывали, искали строку глазами и
+   открывали заново. */
+test('соседняя игра открывается выбором в списке', async (t) => {
+  const { window } = await boot();
+  t.after(() => window.close());
+
+  await openScreen(window, '#games');
+  await until(() => window.document.querySelector('[data-pick="peak"]'));
+  window.document.querySelector('[data-pick="peak"]').click();
+  await until(() => window.document.querySelector('[name="title"]').value === 'PEAK');
+
+  assert.strictEqual(window.document.querySelector('[name="exeRelativePath"]').value, 'PEAK.exe');
+  assert.strictEqual(
+    window.document.querySelector('[data-pick="peak"]').getAttribute('aria-current'),
+    'true',
+    'выбранная игра не помечена в списке'
+  );
+});
+
+/* ВЕРСИИ СБОРОК ИГРЫ ПАНЕЛЬ НЕ ПОКАЗЫВАЛА ВОВСЕ.
+   Отдать игрокам другую версию игры или убрать старую было нельзя: обе
+   ручки существуют, а места, откуда их позвать, в панели не было. */
+test('версии игры видно и отдать игрокам можно', async (t) => {
+  const { window, calls } = await boot({
+    list: ({ url }) =>
+      url.includes('gameId=repo')
+        ? {
+            ok: true,
+            status: 200,
+            text: async () =>
+              JSON.stringify({
+                items: [
+                  { version: '1.0.0', createdAt: '2026-08-20T12:00:00Z', files: 3, bytes: 500 },
+                  { version: '1.0.1', createdAt: '2026-08-21T12:00:00Z', files: 3, bytes: 700 },
+                ],
+                latest: '1.0.0',
+              }),
+          }
+        : { ok: true, status: 200, text: async () => JSON.stringify({ items: [], latest: '' }) },
+  });
+  t.after(() => window.close());
+
+  await openScreen(window, '#games');
+  await openTab(window, 'versions');
+  await until(() => /1\.0\.1/.test(text(window.document.querySelector('[data-game-detail]'))));
+
+  const body = text(window.document.querySelector('[data-game-detail]'));
+  assert.match(body, /у игроков/);
+  assert.match(body, /загружена/);
+
+  window.document.querySelector('[data-game-do="activate"]').click();
+  const modal = await until(() => window.document.querySelector('.modal'));
+  modal.querySelector('[data-yes]').click();
+
+  await until(() => calls.some((c) => c.url.includes('activate')));
+  const sent = calls.find((c) => c.url.includes('activate'));
+  assert.match(sent.url, /gameId=repo/);
+  assert.match(sent.url, /version=1\.0\.1/);
+  await settle();
 });
 
 test('правка уезжает всем реестром, не теряя чужих полей', async (t) => {
   // Сервер принимает список целиком, а в строках есть поля, которых
-  // таблица не показывает
+  // экран не показывает
   const { window, calls } = await boot({
     games: {
       items: [
@@ -701,30 +807,26 @@ test('правка уезжает всем реестром, не теряя ч�
   });
   t.after(() => window.close());
 
-  window.location.hash = '#games';
-  (await until(() => window.document.querySelector('[data-act="edit-game"]'))).click();
-  const sheet = await until(() => window.document.querySelector('.sheet'));
+  await openScreen(window, '#games');
+  const form = await until(() => window.document.querySelector('[data-game-detail]'));
 
-  sheet.querySelector('[name="title"]').value = 'R.E.P.O. (новое)';
-  sheet.querySelector('[data-flow="save"]').click();
+  form.querySelector('[name="title"]').value = 'R.E.P.O. (новое)';
+  form.querySelector('[data-game-do="save"]').click();
   await until(() => calls.some((c) => c.url.includes('games/save')));
 
   const saved = calls.find((c) => c.url.includes('games/save'));
   const rows = saved.body.items;
   assert.strictEqual(rows.length, 2, 'вторая игра пропала из реестра');
   assert.strictEqual(rows[0].title, 'R.E.P.O. (новое)');
-  assert.strictEqual(rows[0].secretField, 'не трогать', 'стёрлось поле, которого не видно в таблице');
+  assert.strictEqual(rows[0].secretField, 'не трогать', 'стёрлось поле, которого не видно на экране');
   await settle();
 });
 
 /* СОХРАНЁННОЕ ОБЯЗАНО ПОЯВИТЬСЯ НА ЭКРАНЕ СРАЗУ.
-   ------------------------------------------------------------------
    Хранилище разделов панель перечитывала, а рисует она из снимка,
    собранного из хранилища один раз на запуске. Снимок никто не
    пересобирал, поэтому после успешной записи экран показывал то же,
-   что и до неё — до перезагрузки страницы. Со стороны это «кнопка
-   ничего не сделала», и человек жмёт её второй раз. Касалось это всех
-   записей разом: и правки игры, и выдачи версии игрокам, и работ. */
+   что и до неё — до перезагрузки страницы. */
 test('сохранённое название видно сразу, без перезагрузки страницы', async (t) => {
   let registry = {
     items: [
@@ -741,11 +843,10 @@ test('сохранённое название видно сразу, без пе
   });
   t.after(() => window.close());
 
-  window.location.hash = '#games';
-  (await until(() => window.document.querySelector('[data-act="edit-game"]'))).click();
-  const sheet = await until(() => window.document.querySelector('.sheet'));
-  sheet.querySelector('[name="title"]').value = 'R.E.P.O. (новое)';
-  sheet.querySelector('[data-flow="save"]').click();
+  await openScreen(window, '#games');
+  const form = await until(() => window.document.querySelector('[data-game-detail]'));
+  form.querySelector('[name="title"]').value = 'R.E.P.O. (новое)';
+  form.querySelector('[data-game-do="save"]').click();
 
   await until(() => /R\.E\.P\.O\. \(новое\)/.test(text(window.document.querySelector('main'))));
   assert.match(text(window.document.querySelector('main')), /R\.E\.P\.O\. \(новое\)/);
@@ -757,29 +858,29 @@ test('игра без исполняемого файла на сервер не
   const { window, calls } = await boot();
   t.after(() => window.close());
 
-  window.location.hash = '#games';
-  (await until(() => window.document.querySelector('[data-act="edit-game"]'))).click();
-  const sheet = await until(() => window.document.querySelector('.sheet'));
+  await openScreen(window, '#games');
+  const form = await until(() => window.document.querySelector('[data-game-detail]'));
 
-  sheet.querySelector('[name="exeRelativePath"]').value = '';
-  sheet.querySelector('[data-flow="save"]').click();
+  form.querySelector('[name="exeRelativePath"]').value = '';
+  form.querySelector('[data-game-do="save"]').click();
 
   await new Promise((r) => setTimeout(r, 20));
   assert.ok(!calls.some((c) => c.url.includes('games/save')), 'игра без exe ушла на сервер');
-  assert.match(text(window.document.querySelector('.toast')), /исполняемый файл/);
+  assert.match(text(window.document.querySelector('[data-game-detail]')), /запускать будет нечего/);
 });
 
 test('новая игра проверяется по тем же правилам, но с открытым именем', async (t) => {
   const { window, calls } = await boot();
   t.after(() => window.close());
 
-  const sheet = await open(window, '#games', 'new-game');
-  assert.ok(!sheet.querySelector('[name="gameId"]').hasAttribute('readonly'));
+  await openScreen(window, '#games', 'new-game');
+  const form = await until(() => window.document.querySelector('[data-game-detail]'));
+  assert.ok(!form.querySelector('[name="gameId"]').hasAttribute('readonly'));
 
-  sheet.querySelector('[name="gameId"]').value = 'ПлохойID';
-  sheet.querySelector('[name="title"]').value = 'Игра';
-  sheet.querySelector('[name="exeRelativePath"]').value = 'game.exe';
-  sheet.querySelector('[data-flow="save"]').click();
+  form.querySelector('[name="gameId"]').value = 'ПлохойID';
+  form.querySelector('[name="title"]').value = 'Игра';
+  form.querySelector('[name="exeRelativePath"]').value = 'game.exe';
+  form.querySelector('[data-game-do="save"]').click();
 
   await new Promise((r) => setTimeout(r, 20));
   assert.ok(!calls.some((c) => c.url.includes('games/save')));
@@ -966,21 +1067,63 @@ test('опоздавший ответ по прошлой папке не пер
   });
   t.after(() => window.close());
 
-  const sheet = await open(window, '#games', 'gallery');
+  await openScreen(window, '#games');
+  await openTab(window, 'gallery');
+  const pane = await until(() => window.document.querySelector('[data-gallery]'));
   await until(() => call >= 1);
 
   // Уходим в подпапку, пока корень ещё отвечает
-  sheet.querySelector('[data-sheet-body]').innerHTML =
+  pane.querySelector('[data-gallery-body]').innerHTML =
     '<button type="button" data-go="screens">screens</button>';
-  sheet.querySelector('[data-go]').click();
+  pane.querySelector('[data-go]').click();
   await until(() => call >= 2);
-  await until(() => text(sheet).includes('ИЗ ПАПКИ.png'));
+  await until(() => text(pane).includes('ИЗ ПАПКИ.png'));
 
   hold();
   await settle(40);
 
-  assert.ok(text(sheet).includes('ИЗ ПАПКИ.png'), 'опоздавший ответ затёр свежий');
-  assert.ok(!text(sheet).includes('ИЗ КОРНЯ.png'), 'на экране содержимое прошлой папки');
+  assert.ok(text(pane).includes('ИЗ ПАПКИ.png'), 'опоздавший ответ затёр свежий');
+  assert.ok(!text(pane).includes('ИЗ КОРНЯ.png'), 'на экране содержимое прошлой папки');
+});
+
+/* КАКОЙ ПАКЕТ СОБИРАТЬ — СЕРВЕР ДОЛЖЕН УЗНАТЬ ИЗ ЗАПРОСА.
+   Он собирает названный пакет на Thunderstore и на одну игру отвечает
+   «не указан модпак». Строка раздела имени пакета не несла вовсе,
+   поэтому «Собрать» и «Посчитать состав» отказывали, не начав работу. */
+test('сборка называет серверу пакет, а не одну только игру', async (t) => {
+  const { window, calls } = await boot({
+    'mods/build': () => ({ ok: true, status: 200, text: async () => '{"type":"done","message":"собрано"}\n' }),
+  });
+  t.after(() => window.close());
+
+  window.location.hash = '#packs';
+  const btn = await until(() => window.document.querySelector('[data-act="build"]'));
+  btn.click();
+  await until(() => calls.some((c) => c.url.includes('mods/build')));
+
+  const sent = calls.find((c) => c.url.includes('mods/build'));
+  assert.strictEqual(sent.body.gameId, 'repo');
+  assert.strictEqual(sent.body.namespace, 'ASTeam');
+  assert.strictEqual(sent.body.name, 'MooModpack');
+  await settle();
+});
+
+/* Игре, которой ничего ещё не собирали, пакет назвать неоткуда — и
+   правильный ответ на нажатие тут не отказ сервера, а каталог, где
+   пакет выбирают. */
+test('без выбранного модпака сборка ведёт в каталог, а не в отказ', async (t) => {
+  const { window, calls } = await boot({
+    'mods/list': { gameId: 'repo', active: '', items: [], updates: [] },
+  });
+  t.after(() => window.close());
+
+  window.location.hash = '#packs';
+  const btn = await until(() => window.document.querySelector('[data-act="build"]'));
+  btn.click();
+  await until(() => window.document.querySelector('[data-sheet]'));
+
+  assert.ok(!calls.some((c) => c.url.includes('mods/build')), 'запрос без пакета ушёл на сервер');
+  assert.match(text(window.document.querySelector('[data-sheet]')), /Каталог Thunderstore/);
 });
 
 /* ---------- Пересборка версии ---------- */

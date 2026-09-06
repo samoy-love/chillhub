@@ -380,9 +380,65 @@ input:hover, select:hover, textarea:hover { border-color: var(--surface-4); }
 .cols--2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .cols--55 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 
-@media (width < 1200px) {
-  .cols--2, .cols--55 { grid-template-columns: 1fr; }
+/* СПИСОК СЛЕВА, РАБОТА СПРАВА.
+   Игры и новости — это выбор одного из многих и правка выбранного. Пока
+   правка жила в листе поверх экрана, список из-под неё пропадал: чтобы
+   перейти к соседней игре, лист закрывали, искали строку в таблице на
+   всю ширину и открывали снова. Список рядом отвечает на это сам. */
+.cols--master { grid-template-columns: minmax(0, 20rem) minmax(0, 1fr); align-items: start; }
+.cols--master3 { grid-template-columns: minmax(0, 17rem) minmax(0, 1fr) minmax(0, 21rem); align-items: start; }
+
+@media (width < 1400px) {
+  .cols--master3 { grid-template-columns: minmax(0, 17rem) minmax(0, 1fr); }
 }
+
+@media (width < 1200px) {
+  .cols--2, .cols--55, .cols--master, .cols--master3 { grid-template-columns: 1fr; }
+}
+
+/* ---------- Выбор одного из списка ---------- */
+
+.pick { display: grid; gap: 1px; max-height: 60vh; overflow: auto; }
+
+.pick > button {
+  display: grid;
+  gap: 2px;
+  padding: var(--s2) var(--s3);
+  text-align: left;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pick > button:hover { background: var(--surface-2); }
+
+.pick > button[aria-current="true"] {
+  background: var(--surface-2);
+  border-left-color: var(--ember);
+}
+
+.pick .t { display: flex; align-items: center; gap: var(--s2); }
+.pick .s { color: var(--fg-3); font-size: 0.75rem; }
+
+/* ---------- Вкладки внутри карточки ---------- */
+
+.tabs { display: flex; gap: var(--s1); border-bottom: 1px solid var(--line); margin-bottom: var(--s3); }
+
+.tabs > button {
+  padding: var(--s2) var(--s3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--fg-2);
+  font: inherit;
+  cursor: pointer;
+}
+
+.tabs > button:hover { color: var(--fg); }
+.tabs > button[aria-current="page"] { color: var(--fg); border-bottom-color: var(--ember); }
 
 .stack { display: grid; gap: var(--s3); }
 .stack--tight { gap: var(--s2); }
@@ -770,7 +826,12 @@ tr.unread td:first-child { box-shadow: inset 2px 0 0 var(--ember); }
   inset: 0;
   z-index: 90;
   display: grid;
-  place-items: end center;
+
+  /* ПО ЦЕНТРУ, А НЕ У НИЖНЕГО КРАЯ.
+     Лист прижимался к низу экрана: короткое дело — вопрос, отказ сборки —
+     оказывалось внизу, куда взгляд не смотрит, а на большом мониторе ещё
+     и в стороне от того места, где нажали. */
+  place-items: center;
   padding: var(--s4);
   background: rgb(0 0 0 / 55%);
 }

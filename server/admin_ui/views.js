@@ -293,6 +293,39 @@
    * первой строкой текста, и отдельное поле «Заголовок» было бы
    * враньём: набранное в нём никуда бы не уехало.
    */
+  /**
+   * Отбор заметок: чья это лента.
+   *
+   * У лаунчера своя лента, у каждой игры своя, и в одном списке они
+   * путаются: заголовки похожи, а публикуются в разные места.
+   */
+  function newsFilter(state, games) {
+    const st = state || {};
+    const list = games || [];
+    return (
+      '<div class="filters" data-news-filter>' +
+      '<label class="inline-label" for="ns-scope">Лента</label>' +
+      '<select id="ns-scope" name="scope">' +
+      '<option value="launcher"' + (st.scope === 'game' ? '' : ' selected') + '>Лаунчер</option>' +
+      '<option value="game"' + (st.scope === 'game' ? ' selected' : '') + '>Игра</option>' +
+      '</select>' +
+      (st.scope === 'game'
+        ? '<label class="inline-label" for="ns-game">Игра</label>' +
+          '<select id="ns-game" name="gameId">' +
+          list
+            .map(
+              (g) =>
+                '<option value="' + esc(g.gameId) + '"' + (g.gameId === st.gameId ? ' selected' : '') + '>' +
+                esc(g.title || g.gameId) +
+                '</option>'
+            )
+            .join('') +
+          '</select>'
+        : '') +
+      '</div>'
+    );
+  }
+
   function newsForm(post, problems) {
     const p = post || {};
     const errs = problems || [];
@@ -513,6 +546,58 @@
    * папки в манифестах и в контенте, и переименование в панели оставило
    * бы файлы под старым именем — игра просто исчезла бы у игроков.
    */
+  /**
+   * Список, из которого выбирают одну строку.
+   *
+   * Заменил таблицу на всю ширину: у игр и новостей вопрос не «покажи
+   * всё сразу», а «дай выбрать и править». Выбранное помечается и
+   * атрибутом, и полосой слева — цвета одного мало.
+   */
+  function pickList(rows, opts) {
+    const list = rows || [];
+    const o = opts || {};
+    if (!list.length) {
+      return '<div class="empty"><b>' + esc(o.empty || 'Пусто') + '</b><span>' + esc(o.emptyHint || '') + '</span></div>';
+    }
+    return (
+      '<div class="pick" role="listbox">' +
+      list
+        .map(
+          (r) =>
+            '<button type="button" role="option" data-pick="' + esc(r.id) + '"' +
+            ' aria-current="' + (r.id === o.selected ? 'true' : 'false') + '"' +
+            ' aria-selected="' + (r.id === o.selected ? 'true' : 'false') + '">' +
+            '<span class="t">' + esc(r.title) + (r.badge || '') + '</span>' +
+            (r.sub ? '<span class="s">' + esc(r.sub) + '</span>' : '') +
+            '</button>'
+        )
+        .join('') +
+      '</div>'
+    );
+  }
+
+  /**
+   * Вкладки внутри карточки.
+   *
+   * Правка игры — это четыре разных дела над одним предметом: поля,
+   * версии, галерея и необратимое. Одним полотном они не читаются, а
+   * четырьмя листами теряют предмет.
+   */
+  function tabs(items, active) {
+    return (
+      '<div class="tabs" role="tablist">' +
+      (items || [])
+        .map(
+          (t) =>
+            '<button type="button" role="tab" data-tab="' + esc(t.id) + '"' +
+            (t.id === active ? ' aria-current="page"' : '') +
+            '>' + esc(t.title) + '</button>'
+        )
+        .join('') +
+      '</div>'
+    );
+  }
+
   function gameForm(item, problems) {
     const g = item || {};
     const errs = problems || [];
@@ -1014,7 +1099,9 @@
       '<div class="btn-row">' +
       '<label class="inline-label" for="v-from">С</label><select id="v-from" data-diff-from>' + opts(from) + '</select>' +
       '<label class="inline-label" for="v-to">на</label><select id="v-to" data-diff-to>' + opts(to) + '</select>' +
-      '<button class="btn btn--text" type="button" data-diff-go>Сравнить</button>' +
+      /* Кнопки «Сравнить» здесь нет намеренно: выбор версии — это и есть
+         запрос на сравнение, а кнопка рядом только откладывала его до
+         второго нажатия. */
       '</div>'
     );
   }
@@ -1618,6 +1705,9 @@
     logsView,
     ecosystemPicker,
     gameForm,
+    newsFilter,
+    pickList,
+    tabs,
     orderList,
     orderSummary,
     benchSetup,
