@@ -139,7 +139,7 @@ const cssClasses = (file) => {
 const sourceOf = (dir, names) => names.map((n) => read(dir, n)).join('\n');
 
 test('в стилях сайта нет классов, которых нет в коде', () => {
-  const src = sourceOf(LANDING, ['index.html', 'privacy.html', 'terms.html', 'app.js', 'api.js', 'emu.js', 'emu-core.js']);
+  const src = sourceOf(LANDING, ['index.html', 'privacy.html', 'terms.html', 'app.js', 'api.js']);
   for (const cls of cssClasses([LANDING, 'styles.css'])) {
     assert.ok(src.includes(cls), 'класс ничего не оформляет: .' + cls);
   }

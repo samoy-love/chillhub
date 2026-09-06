@@ -28,7 +28,6 @@
 <link rel="stylesheet" href="./vendor/fonts/fonts.css">
 
 <link rel="stylesheet" href="./styles.css">
-<link rel="stylesheet" href="./emu.css">
 <link rel="icon" href="./favicon.svg" type="image/svg+xml">
 <link rel="icon" href="./favicon.ico" type="image/x-icon">
 </head>
@@ -45,7 +44,6 @@
       <span>Chill Hub</span>
     </a>
     <nav class="site-nav">
-      <a class="nav-link" href="#try">Попробовать</a>
       <a class="nav-link" href="#games">Игры</a>
       <a class="nav-link" href="#how">Как это работает</a>
       <a class="nav-link" href="#trust">Что ставится</a>
@@ -77,7 +75,7 @@
           <a class="btn btn--primary btn--lg" href="/downloads/ChillHub-Setup.exe" download="ChillHub-Setup.exe">
             Скачать установщик
           </a>
-          <a class="btn btn--lg" href="#try">Сначала попробовать</a>
+          <a class="btn btn--lg" href="#games">Посмотреть сборки</a>
         </div>
 
         <!-- Версия подтягивается из манифеста самообновления: свёрстанная
@@ -99,38 +97,6 @@
         <img src="./assets/images/launcher.png" alt="Окно лаунчера: слева список игр, справа выбранная игра, внизу очередь загрузок"
              width="1298" height="953" class="skeleton" fetchpriority="high" decoding="async">
       </div>
-    </div>
-  </section>
-
-  <!-- ================= ЭМУЛЯТОР ================= -->
-  <!-- Не скриншот и не ролик, а работающая копия главного экрана.
-       Игры и версии в ней — из того же /api/games, который читает
-       настоящий лаунчер; кнопки, подписи и порядок очереди перенесены
-       из его исходников. -->
-  <section class="section" id="try">
-    <div class="wrap">
-      <header>
-        <div>
-          <span class="eyebrow">Лаунчер в браузере</span>
-          <h2>Попробуйте, ничего не устанавливая</h2>
-        </div>
-        <p>Копия главного экрана на настоящих данных каталога. Поставьте игру в очередь, дождитесь загрузки, запустите.</p>
-      </header>
-
-      <div class="shot">
-        <div class="emu" data-emu>
-          <div class="emu-title"><span class="emu-app">Лаунчер Chill Hub</span></div>
-          <div class="emu-empty big"><b>Загружаем каталог…</b></div>
-        </div>
-      </div>
-
-      <p class="emu-note" data-emu-note aria-live="polite"></p>
-
-      <ul class="emu-legend">
-        <li>Загрузка здесь ненастоящая: качать гигабайты в браузер незачем.</li>
-        <li>Остальное настоящее: состояния кнопок, подписи и порядок очереди взяты из кода лаунчера.</li>
-        <li>Значок и обложка — разные файлы и приходят порознь. Чего нет, то заменяется заглушкой: лаунчер делает так же.</li>
-      </ul>
     </div>
   </section>
 
@@ -346,7 +312,6 @@
     <div>
       <h4>Продукт</h4>
       <ul>
-        <li><a href="#try">Попробовать</a></li>
         <li><a href="#games">Игры</a></li>
         <li><a href="#news">Новости</a></li>
         <li><a href="/downloads/ChillHub-Setup.exe" download="ChillHub-Setup.exe">Скачать</a></li>
@@ -366,11 +331,7 @@
   </div>
 </footer>
 
-<!-- Правила копии лаунчера — отдельным модулем без DOM: только так их
-     поведение проверяется тестом (tests/web/landing2-emu.test.js). -->
-<script src="./emu-core.js"></script>
 <script src="./api.js"></script>
 <script src="./app.js" defer></script>
-<script src="./emu.js" defer></script>
 </body>
 </html>

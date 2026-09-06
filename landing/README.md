@@ -6,9 +6,8 @@
 ## Структура
 
 - `index.html` — главная, `privacy.html` и `terms.html` — правовые страницы
-- `styles.css` — оформление всего сайта, `emu.css` — только эмулятор
+- `styles.css` — оформление всего сайта
 - `app.js` — поведение страницы, `api.js` — обращения к публичному API
-- `emu-core.js` — что эмулятор считает, `emu.js` — как показывает
 - `vendor/` — шрифты своей копией: сторонний CDN знал бы каждого читателя
 - `assets/icons/` — логотип, `assets/images/` — снимки и обложки игр
 
@@ -38,6 +37,6 @@
 ## Проверки
 
 ```bash
-node --test tests/web/landing2-dom.test.js tests/web/landing2-emu.test.js
+node --test tests/web/landing2-dom.test.js
 node --test tests/web/static-2.test.js
 ```
