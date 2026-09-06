@@ -100,13 +100,41 @@
     return raw;
   }
 
-  /** Тело запроса на сборку. */
+  /**
+   * Тело запроса.
+   *
+   * У пересборки состав не спрашивают: его читают из записи рядом с
+   * манифестом. Пакет и пространство имён в теле пересборки не только
+   * лишние — они бы и врали: у сборки, приехавшей профилем r2modman,
+   * имени пакета на Thunderstore нет вовсе.
+   */
   function requestBody(opts) {
     const o = opts || {};
-    const body = { gameId: o.gameId, namespace: o.namespace, name: o.name };
-    if (o.version) body.version = o.version;
+    const body = o.rebuild
+      ? { gameId: o.gameId, version: o.version }
+      : { gameId: o.gameId, namespace: o.namespace, name: o.name };
+    if (!o.rebuild && o.version) body.version = o.version;
     if (o.allowMissing) body.allowMissing = '1';
     return body;
+  }
+
+  /** Куда уходит запрос: сборка нового состава и пересборка прежнего — разные вещи. */
+  function endpoint(opts) {
+    return opts && opts.rebuild ? '/admin/api/mods/rebuild' : '/admin/api/mods/build';
+  }
+
+  /**
+   * ФОРМА, А НЕ РАЗБОР. Сервер читает и сборку, и пересборку через
+   * `r.FormValue` — так же, как все остальные записи админки. Тело,
+   * отправленное разбором, он просто не видит: `gameId` приходит пустым,
+   * и обе кнопки отвечают «invalid gameId», не начав работу.
+   */
+  function encodeBody(body) {
+    const p = new URLSearchParams();
+    for (const k of Object.keys(body || {})) {
+      if (body[k] !== undefined && body[k] !== null && body[k] !== '') p.set(k, String(body[k]));
+    }
+    return p.toString();
   }
 
   /**
@@ -130,10 +158,14 @@
 
     let res;
     try {
-      res = await doFetch('/admin/api/mods/build', {
+      res = await doFetch(endpoint(opts), {
         method: 'POST',
-        headers: { accept: 'application/x-ndjson', 'cache-control': 'no-store', 'content-type': 'application/json' },
-        body: JSON.stringify(requestBody(opts)),
+        headers: {
+          accept: 'application/x-ndjson',
+          'cache-control': 'no-store',
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        body: encodeBody(requestBody(opts)),
       });
     } catch {
       return { ok: false, kind: 'error', message: 'сервер не отвечает', events: events };
@@ -171,5 +203,15 @@
     return Object.assign({}, result, { events: events });
   }
 
-  return { MISSING: MISSING, isMissing: isMissing, errorText: errorText, normalize: normalize, outcome: outcome, requestBody: requestBody, run: run };
+  return {
+    MISSING: MISSING,
+    isMissing: isMissing,
+    errorText: errorText,
+    normalize: normalize,
+    outcome: outcome,
+    requestBody: requestBody,
+    endpoint: endpoint,
+    encodeBody: encodeBody,
+    run: run,
+  };
 });

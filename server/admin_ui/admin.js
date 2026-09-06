@@ -1099,7 +1099,12 @@
       });
       if (!agreed) return;
     }
-    flowBuild(Object.assign({}, packOf(a.gameId) || {}, { gameId: a.gameId, version: a.version }));
+    /* Пересборка идёт СВОИМ путём на сервере: он читает состав из записи
+       рядом с манифестом и собирает ровно его. Отправь мы сюда обычную
+       сборку — сервер разложил бы сегодняшний состав модпака под старым
+       номером, а у сборки, приехавшей профилем r2modman, ещё и не нашёл бы
+       по имени вообще ничего. */
+    flowBuild(Object.assign({}, packOf(a.gameId) || {}, { gameId: a.gameId, version: a.version, rebuild: true }));
   }
 
   function flowBuild(pack) {
@@ -1113,7 +1118,13 @@
     const events = [];
 
     window.CH2Build.run(
-      { gameId: pack.gameId, namespace: pack.namespace, name: pack.name, version: pack.version || '' },
+      {
+        gameId: pack.gameId,
+        namespace: pack.namespace,
+        name: pack.name,
+        version: pack.version || '',
+        rebuild: Boolean(pack.rebuild),
+      },
       {
         fetch: window.fetch.bind(window),
         ndjson: { readNdjsonStream: window.readNdjsonStream },
