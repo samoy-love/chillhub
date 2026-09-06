@@ -43,6 +43,13 @@ namespace ChillHub.Core.Changelog {
     /// </summary>
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
+            new ChangelogRelease {
+                Version = "1.6.53",
+                Date = "2026-09-06",
+                Changes = new[] {
+                    "Проверка файлов игры идёт быстрее, а окно во время неё больше не подтормаживает.",
+                },
+            },
             // Выпуск ради сборки: установщик для проверок стал собираться без
             // сжатия. У релизной сборки сжатие прежнее, файл тот же самый —
             // читать игроку тут нечего.
