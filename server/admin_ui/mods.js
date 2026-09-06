@@ -46,7 +46,7 @@
       name: String(r.name || ''),
       version: String(r.version_number || v.version_number || r.latest_version_number || ''),
       downloads: Number(r.download_count || v.download_count || r.downloads || 0),
-      updated: String(r.date_updated || r.updated || ''),
+      updated: String(r.last_updated || r.date_updated || r.updated || ''),
       description: String(r.description || v.description || ''),
       deprecated: Boolean(r.is_deprecated || r.deprecated),
       pinned: Boolean(r.is_pinned || r.pinned),

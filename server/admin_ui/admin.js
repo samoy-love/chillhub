@@ -328,7 +328,7 @@
                   head: '<th>Версия</th><th>Собрана</th><th class="num">Файлов</th><th class="num">Размер</th><th>Состояние</th><th></th>',
                   row: (v) => `<tr>
                       <td class="mono">${esc(v.version)}</td>
-                      <td class="dim">${esc(v.date)}</td>
+                      <td class="dim">${esc(when(v.date))}</td>
                       <td class="num">${v.files}</td>
                       <td class="num">${bytes(v.size)}</td>
                       <td>${stateBadge[v.state]}</td>
@@ -403,7 +403,7 @@
           <div class="handoff" style="margin-top: var(--s3)">
             <div><span class="k">Игроки получают</span><span class="v mono">${esc(p.active)}</span></div>
             <span class="arrow" aria-hidden="true">→</span>
-            <div><span class="k">Собрано</span><span class="v mono">${esc(p.built)}</span><span class="k">${esc(p.builtAt)}</span></div>
+            <div><span class="k">Собрано</span><span class="v mono">${esc(p.built)}</span><span class="k">${esc(when(p.builtAt))}</span></div>
             <span class="arrow" aria-hidden="true">→</span>
             <div>
               <span class="k">На Thunderstore</span>
@@ -571,7 +571,7 @@
             row: (n) => {
               const at = `"scope":"${esc(n.scope || 'launcher')}","gameId":"${esc(n.game)}","slug":"${esc(n.slug)}"`;
               return `<tr>
-                <td>${esc(n.title)}<br><span class="faint">${esc(n.at)}${n.game ? ` · ${esc(n.game)}` : ' · лаунчер'}</span></td>
+                <td>${esc(n.title)}<br><span class="faint">${esc(window.CH2Format.dateTime(n.at))}${n.game ? ` · ${esc(n.game)}` : ' · лаунчер'}</span></td>
                 <td>${
                   n.published
                     ? '<span class="badge badge--ok">на виду</span>'
@@ -619,7 +619,7 @@
                 <td class="dim">${f.name ? esc(f.name) : '<span class="faint">без имени</span>'}${
                   f.contact ? `<br><span class="faint mono">${esc(f.contact)}</span>` : '<br><span class="faint">ответить некуда</span>'
                 }</td>
-                <td class="dim">${esc(f.at)}</td>
+                <td class="dim">${esc(when(f.at))}</td>
                 <td class="act">
                   <button class="btn btn--text" type="button" data-act="feedback" data-args='{"id":"${esc(f.id)}"}'>Открыть</button>
                   <button class="btn btn--text" type="button" data-act="inbox.important" data-args='{"id":"${esc(f.id)}","important":${f.important ? 'false' : 'true'}}' title="Пометить важным">${f.important ? '★' : '☆'}</button>
@@ -833,6 +833,14 @@
 
   const V = () => window.CH2Views;
 
+  /* ВРЕМЯ ПОКАЗЫВАЕМ ЛЮДЯМ, А НЕ ОТДАЁМ КАК ЕСТЬ.
+     Сервер отвечает RFC3339 в UTC («2026-09-06T12:53:24Z»), и три
+     колонки выводили эту строку в таблицу. Читать её неудобно, а «Z» в
+     конце ещё и врёт рядом с остальными экранами: там время местное.
+     Снимок из data.js держал даты уже готовыми строками, поэтому в
+     проверках это не всплывало ни разу. */
+  const when = (v) => window.CH2Format.dateTime(v);
+
   /* Верхний открытый лист; null — открытых нет. Ведётся ради одного
      правила: нажатие в РАЗДЕЛЕ не должно класть второй лист поверх
      первого. Лист, открытый из другого листа (выбор вложения поверх
@@ -1034,7 +1042,7 @@
           ? Object.assign({}, st, { phase: 'done' })
           : Object.assign({}, st, { phase: 'failed', message: done.message });
         draw(true);
-        if (done.ok) await store.invalidate(['launcher', 'overview', 'disk']);
+        if (done.ok) await refresh(['launcher', 'overview', 'disk'], false);
       } catch (e) {
         st = Object.assign({}, st, { phase: 'failed', message: (e && e.message) || 'сбой' });
         draw(true);
@@ -1099,7 +1107,12 @@
       });
       if (!agreed) return;
     }
-    flowBuild(Object.assign({}, packOf(a.gameId) || {}, { gameId: a.gameId, version: a.version }));
+    /* Пересборка идёт СВОИМ путём на сервере: он читает состав из записи
+       рядом с манифестом и собирает ровно его. Отправь мы сюда обычную
+       сборку — сервер разложил бы сегодняшний состав модпака под старым
+       номером, а у сборки, приехавшей профилем r2modman, ещё и не нашёл бы
+       по имени вообще ничего. */
+    flowBuild(Object.assign({}, packOf(a.gameId) || {}, { gameId: a.gameId, version: a.version, rebuild: true }));
   }
 
   function flowBuild(pack) {
@@ -1113,7 +1126,13 @@
     const events = [];
 
     window.CH2Build.run(
-      { gameId: pack.gameId, namespace: pack.namespace, name: pack.name, version: pack.version || '' },
+      {
+        gameId: pack.gameId,
+        namespace: pack.namespace,
+        name: pack.name,
+        version: pack.version || '',
+        rebuild: Boolean(pack.rebuild),
+      },
       {
         fetch: window.fetch.bind(window),
         ndjson: { readNdjsonStream: window.readNdjsonStream },
@@ -1132,7 +1151,7 @@
           `<p class="note${out.tone === 'bad' ? ' note--bad' : ''}" data-build-outcome>${esc(out.text)}</p>`
       );
       toast(out.text, out.tone);
-      await store.invalidate(['packs', 'overview']);
+      await refresh(['packs', 'overview'], false);
     });
 
     sheet.root.addEventListener('click', (e) => {
@@ -1319,8 +1338,7 @@
             'ok'
           );
           sheet.close();
-          await store.invalidate(['news']);
-          route();
+          await refresh(['news']);
         } catch (err) {
           toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
           b.disabled = false;
@@ -1668,7 +1686,7 @@
         item.iconUrl = (got && (got.iconUrl || got.url)) || '/manifests/' + item.gameId + '/icon.png';
         draw();
         toast('Иконка загружена', 'ok');
-        await store.invalidate(['games']);
+        await refresh(['games'], false);
       } catch (err) {
         toast('Не загрузилось: ' + window.CH2Api.reason(err), 'bad');
       }
@@ -1721,8 +1739,7 @@
           await API.gamesSave(R.reorder(R.remove(D.raw.games, item.gameId)));
           toast('Игра убрана из реестра', 'ok');
           sheet.close();
-          await store.invalidate(['games', 'overview']);
-          route();
+          await refresh(['games', 'overview']);
         } catch (err) {
           toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
         }
@@ -1744,8 +1761,7 @@
         await API.gamesSave(list);
         toast(existing ? 'Сохранено. Лаунчер увидит это при следующем старте.' : 'Игра заведена', 'ok');
         sheet.close();
-        await store.invalidate(['games', 'overview']);
-        route();
+        await refresh(['games', 'overview']);
       } catch (err) {
         toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
         b.disabled = false;
@@ -1800,8 +1816,7 @@
           await API.gamesSave(R.reorder(list));
           toast('Порядок сохранён. Игроки увидят его сразу.', 'ok');
           sheet.close();
-          await store.invalidate(['games']);
-          route();
+          await refresh(['games']);
         } catch (err) {
           toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
         }
@@ -2137,7 +2152,7 @@
         const got = await API.modsImport(pack.gameId, input.files[0]);
         sheet.body(V().importResult(got));
         toast('Профиль разобран. Игрокам сборка пока не ушла.', 'ok');
-        await store.invalidate(['packs']);
+        await refresh(['packs'], false);
       } catch (err) {
         sheet.body('<div class="empty"><b>Не разобрался</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
       }
@@ -2219,8 +2234,7 @@
         await API.gamesEcosystem(gameId, slug);
         toast('Настройки подтянуты', 'ok');
         sheet.close();
-        await store.invalidate(['games']);
-        route();
+        await refresh(['games']);
       } catch (err) {
         toast('Не вышло: ' + window.CH2Api.reason(err), 'bad');
       }
@@ -2502,8 +2516,24 @@
       return;
     }
     toast(res.message, 'ok');
-    await store.invalidate(res.stale);
-    route();
+    await refresh(res.stale);
+  }
+
+  /**
+   * Перечитать разделы и пересобрать данные, по которым рисуются экраны.
+   *
+   * ПОЧЕМУ НЕ ХВАТАЕТ store.invalidate. Хранилище держит разделы, а
+   * рисуют экраны из `D` — снимка, собранного из хранилища один раз на
+   * запуске. Обновив хранилище и перерисовав экран, панель показывала
+   * то же самое, что и до действия: сохранённое название игры,
+   * отданная игрокам версия, включённые работы — всё оставалось
+   * прежним до перезагрузки страницы. Со стороны это «кнопка ничего не
+   * делает», и второе нажатие на такую кнопку стоит дороже первого.
+   */
+  async function refresh(stale, redraw) {
+    await store.invalidate(stale);
+    D = await collect();
+    if (redraw !== false) { route(); }
   }
 
   /* ---------- Навигация ---------- */
@@ -2799,6 +2829,12 @@
   }
 
   async function collect() {
+    /* Реестр целиком спрашиваем ДО загрузки разделов, а не после.
+       Тот же запрос делают три загрузчика (games, packs, news), и слой
+       запросов склеивает одинаковые GET, пока они в полёте. Запрошенный
+       после — уже не в полёте, и панель ходила за реестром дважды на
+       каждый запуск и каждое обновление данных. */
+    const rawGamesSoon = rawGames();
     await store.loadAll();
     const demo = await window.CHILLHUB_DATA.load();
 
@@ -2834,7 +2870,7 @@
     /* Реестр целиком, как он лежит на сервере. Правка игры уезжает
        вместе со всем списком, а в списке есть поля, которых таблица не
        показывает: собранный из неё список их бы стёр. */
-    data.raw = { games: window.CH2Sections.items(await rawGames()) };
+    data.raw = { games: window.CH2Sections.items(await rawGamesSoon) };
     return data;
   }
 

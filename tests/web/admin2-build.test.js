@@ -99,6 +99,54 @@ test('в запрос уходит игра и пакет, версия — то
   assert.strictEqual(withVersion.version, '1.9.9');
 });
 
+/* Тело уходит формой, а не разбором.
+   ------------------------------------------------------------------
+   Сервер читает и сборку, и пересборку через `r.FormValue` — как и все
+   остальные записи админки. Панель слала разбор с `content-type:
+   application/json`, и сервер его просто не видел: `gameId` приходил
+   пустым, а обе кнопки отвечали 400 «invalid gameId», не начав работу.
+   Проверять надо ровно провод — прежний тест смотрел на объект до
+   отправки и потому не замечал ничего. */
+test('запрос на сборку уходит формой, которую сервер умеет читать', async () => {
+  let sent = null;
+  await B.run({ gameId: 'repo', namespace: 'A', name: 'B', version: '1.0.0' }, {
+    ndjson: ndjson,
+    fetch: async (url, init) => {
+      sent = { url: url, init: init };
+      return streamOf([{ type: 'ok', message: 'готово' }]);
+    },
+  });
+
+  assert.strictEqual(sent.url, '/admin/api/mods/build');
+  assert.strictEqual(sent.init.headers['content-type'], 'application/x-www-form-urlencoded');
+  const got = Object.fromEntries(new URLSearchParams(sent.init.body));
+  assert.deepStrictEqual(got, { gameId: 'repo', namespace: 'A', name: 'B', version: '1.0.0' });
+});
+
+/* Пересборка — другой эндпоинт, и это не придирка к адресу.
+   `mods/build` собирает названный пакет заново: у модпака с Thunderstore
+   это сегодняшний состав под старым номером, а у сборки, приехавшей
+   профилем r2modman, — вообще ничего, потому что имени пакета у неё нет.
+   `mods/rebuild` читает состав из записи рядом с манифестом. */
+test('пересборка идёт своим путём и не называет пакет', async () => {
+  let sent = null;
+  await B.run({ gameId: 'repo', namespace: 'A', name: 'B', version: 'Team-Pack-1.0.0', rebuild: true }, {
+    ndjson: ndjson,
+    fetch: async (url, init) => {
+      sent = { url: url, init: init };
+      return streamOf([{ type: 'ok', message: 'готово' }]);
+    },
+  });
+
+  assert.strictEqual(sent.url, '/admin/api/mods/rebuild');
+  const got = Object.fromEntries(new URLSearchParams(sent.init.body));
+  assert.deepStrictEqual(got, { gameId: 'repo', version: 'Team-Pack-1.0.0' });
+});
+
+test('пустые поля в тело не уезжают', () => {
+  assert.strictEqual(B.encodeBody({ gameId: 'repo', namespace: '', version: undefined }), 'gameId=repo');
+});
+
 test('согласие собрать без пропавших уходит на сервер отдельным признаком', () => {
   assert.strictEqual(B.requestBody({ allowMissing: true }).allowMissing, '1');
   assert.strictEqual(B.requestBody({}).allowMissing, undefined);
@@ -161,7 +209,7 @@ test('про пропавшие пакеты спрашивают и повто�
     ndjson: ndjson,
     confirm: async () => true,
     fetch: async (url, init) => {
-      bodies.push(JSON.parse(init.body));
+      bodies.push(Object.fromEntries(new URLSearchParams(init.body)));
       call++;
       return call === 1
         ? streamOf([{ type: 'error', message: missing }])
