@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,28 +14,6 @@ import (
 
 	"github.com/zeebo/blake3"
 )
-
-// launcherUploadRequest builds a multipart POST that publishes a launcher build.
-func launcherUploadRequest(t *testing.T, ver string, zipData []byte) *http.Request {
-	t.Helper()
-	var body bytes.Buffer
-	mw := multipart.NewWriter(&body)
-	_ = mw.WriteField("kind", "launcher")
-	_ = mw.WriteField("version", ver)
-	fw, err := mw.CreateFormFile("zip", "launcher.zip")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fw.Write(zipData); err != nil {
-		t.Fatal(err)
-	}
-	if err := mw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	req := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/upload", &body)
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	return req
-}
 
 func decodeManifest(t *testing.T, b []byte) manifest {
 	t.Helper()
@@ -84,11 +61,11 @@ func TestManifestUsesSlashPathsForNestedDirectories(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequest(t, "game", "1.0.0", zipBytes(t, map[string]string{
+	publishInto(t, h, w, "game", "game", "1.0.0", zipBytes(t, map[string]string{
 		"runtimes/win-x64/native/blake3_dotnet.dll": "native",
 		"data/levels/level1.dat":                    "lvl",
 		"top.txt":                                   "t",
-	})))
+	}))
 	if w.Code != http.StatusOK {
 		t.Fatalf("publish failed: %d %s", w.Code, w.Body.String())
 	}
@@ -115,7 +92,7 @@ func TestManifestHashesAndSizesDescribeTheRealBytes(t *testing.T) {
 	h := New(root)
 	payload := "content of the published file\n"
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequest(t, "game", "1.0.0", zipBytes(t, map[string]string{"bin/app.exe": payload})))
+	publishInto(t, h, w, "game", "game", "1.0.0", zipBytes(t, map[string]string{"bin/app.exe": payload}))
 	if w.Code != http.StatusOK {
 		t.Fatalf("publish failed: %d %s", w.Code, w.Body.String())
 	}
@@ -148,10 +125,10 @@ func TestManifestPublishesZeroLengthFiles(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequest(t, "game", "1.0.0", zipBytes(t, map[string]string{
+	publishInto(t, h, w, "game", "game", "1.0.0", zipBytes(t, map[string]string{
 		"empty.marker": "",
 		"other.txt":    "x",
-	})))
+	}))
 	if w.Code != http.StatusOK {
 		t.Fatalf("a build containing an empty file was refused: %d %s", w.Code, w.Body.String())
 	}
@@ -173,7 +150,7 @@ func TestManifestPreservesCyrillicNames(t *testing.T) {
 	h := New(root)
 	const rel = "данные/уровень 1.dat"
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequest(t, "game", "1.0.0", zipBytes(t, map[string]string{rel: "данные"})))
+	publishInto(t, h, w, "game", "game", "1.0.0", zipBytes(t, map[string]string{rel: "данные"}))
 	if w.Code != http.StatusOK {
 		t.Fatalf("publish failed: %d %s", w.Code, w.Body.String())
 	}
