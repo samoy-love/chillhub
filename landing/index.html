@@ -47,8 +47,11 @@
       <a class="nav-link" href="#games">Игры</a>
       <a class="nav-link" href="#how">Как это работает</a>
       <a class="nav-link" href="#trust">Что ставится</a>
-      <a class="btn btn--primary" href="/downloads/ChillHub-Setup.exe" download="ChillHub-Setup.exe">Скачать</a>
     </nav>
+    <!-- Кнопка стоит РЯДОМ с навигацией, а не внутри неё: на телефоне
+         разделы уезжают во второй ряд, а она обязана остаться в первом,
+         рядом с именем. -->
+    <a class="btn btn--primary" href="/downloads/ChillHub-Setup.exe" download="ChillHub-Setup.exe">Скачать</a>
   </div>
 </header>
 
@@ -118,24 +121,6 @@
         <div class="game sk-card" aria-hidden="true"></div>
         <div class="game sk-card" aria-hidden="true"></div>
         <div class="game sk-card" aria-hidden="true"></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ================= НОВОСТИ ================= -->
-  <section class="section" id="news">
-    <div class="wrap">
-      <header>
-        <div>
-          <span class="eyebrow">Новости</span>
-          <h2>О чём писали недавно</h2>
-        </div>
-        <p>Те же заметки, что видно на главном экране лаунчера.</p>
-      </header>
-
-      <div class="posts" data-news>
-        <div class="post sk-card" aria-hidden="true"></div>
-        <div class="post sk-card" aria-hidden="true"></div>
       </div>
     </div>
   </section>
@@ -238,14 +223,20 @@
       </header>
 
       <div class="slots" data-slots>
-        <div class="reels" aria-hidden="true">
-          <div class="reel"><div class="reel-track"></div><div class="reel-line"></div></div>
-          <div class="reel"><div class="reel-track"></div><div class="reel-line"></div></div>
-          <div class="reel"><div class="reel-track"></div><div class="reel-line"></div></div>
-        </div>
-        <p class="slots-out" id="slots-out" data-slots-out aria-live="polite"></p>
-        <div class="slots-actions">
-          <button class="btn" type="button" data-slots-spin aria-describedby="slots-out">Крутить</button>
+        <!-- Барабаны, линия выпадения и рычаг — одна рамка. Порознь это
+             читалось как три случайно сложенных куска: коробка с текстом,
+             под ней строка, под ней кнопка сама по себе. -->
+        <div class="slots-machine">
+          <div class="machine">
+            <div class="reels" aria-hidden="true">
+              <div class="reel"><div class="reel-track"></div></div>
+              <div class="reel"><div class="reel-track"></div></div>
+              <div class="reel"><div class="reel-track"></div></div>
+              <div class="reel-line"></div>
+            </div>
+            <button class="btn slots-spin" type="button" data-slots-spin aria-describedby="slots-out">Крутить</button>
+          </div>
+          <p class="slots-out" id="slots-out" data-slots-out aria-live="polite">Нажмите «Крутить» — выпадет, во что поиграть компанией.</p>
         </div>
 
         <form class="wish" data-wish>
@@ -259,7 +250,7 @@
             <input id="wish-contact" name="contact" type="text" maxlength="200"
                    placeholder="телеграм, почта, ник в Discord">
           </div>
-          <div class="slots-actions">
+          <div class="wish-actions">
             <button class="btn btn--primary" type="submit">Отправить</button>
             <span class="wish-note" data-wish-note aria-live="polite"></span>
           </div>
@@ -313,7 +304,6 @@
       <h4>Продукт</h4>
       <ul>
         <li><a href="#games">Игры</a></li>
-        <li><a href="#news">Новости</a></li>
         <li><a href="/downloads/ChillHub-Setup.exe" download="ChillHub-Setup.exe">Скачать</a></li>
       </ul>
     </div>

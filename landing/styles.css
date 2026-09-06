@@ -319,10 +319,33 @@ kbd {
 
 .site-nav .nav-link:hover { color: var(--fg); border-bottom-color: var(--line-2); }
 
-.site-nav .btn { margin-left: var(--s2); }
+.site-header .wrap > .btn { flex: 0 0 auto; }
 
+/* НА ТЕЛЕФОНЕ РАЗДЕЛЫ ТОЖЕ НУЖНЫ.
+   Ссылки просто прятались, и в шапке оставалась одна кнопка «Скачать»:
+   попасть в «Игры», «Как это работает» и «Что ставится» с телефона было
+   неоткуда — только прокруткой всей страницы или из подвала.
+
+   Шапка становится двухрядной: имя и кнопка сверху, разделы под ними.
+   Высота объявлена переменной, поэтому отступ страницы и прокрутка к
+   якорям пересчитываются сами. */
 @media (width < 720px) {
-  .site-nav .nav-link { display: none; }
+  :root { --header-h: 104px; }
+
+  .site-header .wrap {
+    flex-wrap: wrap;
+    align-content: center;
+    row-gap: var(--s2);
+  }
+
+  .site-header .wrap > .btn { margin-left: auto; }
+
+  .site-nav {
+    order: 3;
+    width: 100%;
+    margin-left: 0;
+    font-size: 0.875rem;
+  }
 }
 
 /* ---------- Фон ---------- */
@@ -620,37 +643,6 @@ img.loaded { animation: none; background: none; }
   color: var(--fg-3);
 }
 
-/* ---------- Новости ---------- */
-
-.posts { display: grid; gap: var(--s3); }
-
-.post {
-  display: flex;
-  gap: var(--s4);
-  padding: var(--s3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  background: var(--surface);
-}
-
-.post-cover {
-  width: 140px;
-  height: 84px;
-  flex: 0 0 auto;
-  border: 1px solid var(--line);
-  border-radius: var(--r);
-  background: var(--surface-2) center / cover no-repeat;
-}
-
-@media (width < 640px) {
-  .post { flex-direction: column; }
-  .post-cover { width: 100%; height: 120px; }
-}
-
-.post h3 { margin-bottom: 2px; }
-.post p { font-size: 0.9375rem; color: var(--fg-2); }
-.post p.faint { font-size: 0.8125rem; margin-bottom: var(--s2); }
-
 /* ---------- Технические работы ---------- */
 
 /* Полоса, а не всплывающее окно: её нельзя закрыть и забыть, а
@@ -681,8 +673,6 @@ img.loaded { animation: none; background: none; }
   background-size: 200% 100%;
   animation: sk 1.4s linear infinite;
 }
-
-.posts .sk-card { min-height: 110px; }
 
 /* ---------- Шаги ---------- */
 
@@ -767,24 +757,42 @@ img.loaded { animation: none; background: none; }
    перестал быть аттракционом: комбинацию можно отправить как заявку,
    и она уходит туда же, куда обратная связь из лаунчера. Лампочки,
    мигание и радужные рамки убраны — крутится только то, что крутится. */
+
+/* АВТОМАТ — ОДИН ПРЕДМЕТ, А НЕ ТРИ ЧАСТИ ПОДРЯД.
+   Барабаны, линия выпадения и рычаг стояли отдельными блоками: коробка,
+   под ней пустая строка, под ней кнопка сама по себе. Читалось как
+   недоделанная вёрстка, а не как автомат.
+
+   На узком экране барабаны вставали друг под друга — три полосы в
+   столбик. Автомат так не выглядит нигде: барабаны крутятся рядом, и
+   поэтому колонок здесь три при любой ширине, а сужается сам текст. */
 .slots {
   display: grid;
-  gap: var(--s4);
-  justify-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 26rem);
+  gap: var(--s5);
+  align-items: start;
 }
 
-.reels {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  width: 100%;
+@media (width < 980px) {
+  .slots { grid-template-columns: 1fr; gap: var(--s4); }
+}
+
+.slots-machine { display: grid; gap: var(--s3); }
+
+.machine {
   border: 1px solid var(--line-2);
   border-radius: var(--r-lg);
-  background: var(--line);
+  background: var(--surface);
   overflow: hidden;
 }
 
-@media (width < 640px) { .reels { grid-template-columns: 1fr; } }
+.reels {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+}
 
 .reel {
   background: var(--surface);
@@ -801,37 +809,56 @@ img.loaded { animation: none; background: none; }
   display: flex;
   align-items: center;
   justify-content: center;
-  padding-inline: var(--s3);
+  padding-inline: var(--s2);
   font-size: 0.875rem;
   color: var(--fg-3);
   text-align: center;
+  line-height: 1.2;
 }
 
+@media (width < 560px) {
+  .reel-track div { font-size: 0.75rem; padding-inline: 4px; }
+}
+
+/* Линия выпадения одна на весь автомат, а не по одной на барабан: в
+   автомате она и есть одна — это ряд, по которому читают результат. */
 .reel-line {
   position: absolute;
   inset-inline: 0;
   top: 44px;
   height: 44px;
   border-block: 1px solid var(--line-2);
+  background: var(--ember-wash);
   pointer-events: none;
 }
+
+/* Рычаг: во всю ширину автомата и вплотную к барабанам. Отдельно
+   стоящая кнопка не читается как часть автомата. */
+.slots-spin {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--line-2);
+  border-radius: 0;
+  padding-block: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.slots.busy .slots-spin { color: var(--fg-3); }
 
 .slots.done .reel-track div.hit { color: var(--fg); }
 
 .slots-out {
   font-size: 0.9375rem;
   color: var(--fg-2);
-  min-height: 1.6em;
+  min-height: 3em;
 }
-
-.slots-actions { display: flex; gap: var(--s3); flex-wrap: wrap; align-items: center; }
 
 /* ---------- Форма заявки ---------- */
 
 .wish {
   display: grid;
   gap: var(--s3);
-  width: min(100%, 46ch);
   padding: var(--s4);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
@@ -839,6 +866,8 @@ img.loaded { animation: none; background: none; }
 }
 
 .wish .field { display: grid; gap: 6px; }
+
+.wish-actions { display: flex; gap: var(--s3); flex-wrap: wrap; align-items: center; }
 
 .wish label {
   font-size: 0.8125rem;

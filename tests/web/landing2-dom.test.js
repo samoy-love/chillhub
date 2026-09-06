@@ -29,7 +29,6 @@ function fixtures() {
         { gameId: 'lethal-company', title: 'Lethal Company', hasLatest: true, latestVersion: '1.0.9', iconUrl: '/manifests/lethal-company/icon.png' },
       ],
     },
-    '/news/index.json': { items: [{ id: 'n1', title: 'Заметка', createdAt: '2026-08-31T10:00:00Z', summary: 'Текст', published: true }] },
     '/api/maintenance': { enabled: false, blocks: {} },
     '/manifests/launcher/latest.json': { version: '1.6.25' },
     '/downloads/setup.json': { __status: 404 },
@@ -107,7 +106,6 @@ test('страница собирается из каталога, а не из 
   const { window, calls } = await boot(t);
   const asked = calls.map((c) => c.url);
   assert.ok(asked.includes('/api/games'), 'каталог не запрошен');
-  assert.ok(asked.includes('/news/index.json'), 'новости не запрошены');
   assert.ok(asked.includes('/api/maintenance'), 'техработы не запрошены');
 
   const cards = window.document.querySelectorAll('[data-games] .game');
@@ -147,7 +145,7 @@ test('без каталога страница не пустеет и честн
 });
 
 test('о снимке говорится один раз, а не под каждым разделом', async (t) => {
-  const { window } = await boot(t, { '/api/games': { __throw: true }, '/news/index.json': { __throw: true } });
+  const { window } = await boot(t, { '/api/games': { __throw: true } });
   const hits = window.document.body.textContent.match(/показан сохранённый снимок/g) || [];
   assert.strictEqual(hits.length, 1);
 });
@@ -406,48 +404,34 @@ test('ответ «галереи нет» запоминается: спраш�
 
 /* ---------- Ссылки с сервера в разметке ---------- */
 
-test('обложка со сломанным адресом не дописывает своих правил в CSS', async (t) => {
-  // Обложка уезжает в style="background-image:url('…')". Кавычка внутри
-  // становится &#39;, но разбор идёт в два шага: HTML раскрывает
-  // сущности, и CSS видит уже настоящую кавычку
+/* Адрес значка приходит от сервера и попадает в разметку. Схема
+   проверяется ДО того, как он туда уедет: управляющие символы браузер по
+   спецификации URL выбрасывает сам, и `java&#9;script:` для него — это
+   javascript:. Правило перенесено из панели 1.0 (`sanitizeUrl`). */
+test('чужая схема в адресе значка не проходит ни в каком виде', async (t) => {
   const { window } = await boot(t, {
-    '/news/index.json': {
-      items: [
-        {
-          id: 'n1',
-          slug: 'n1',
-          title: 'Заметка',
-          createdAt: '2026-09-01T10:00:00Z',
-          summary: 'текст',
-          coverUrl: "x'); background:url('https://зло/маяк.png",
-        },
-      ],
+    '/api/games': {
+      items: [{ gameId: 'x', title: 'Икс', hasLatest: true, latestVersion: '1.0', iconUrl: 'java	script:alert(1)' }],
     },
   });
 
-  await until(() => window.document.querySelector('.post'));
-  const html = window.document.querySelector('[data-news]').innerHTML;
-  assert.ok(!html.includes('зло'), 'чужой адрес попал в разметку');
-  assert.ok(!/background:url/.test(html.replace('background-image:url', '')), 'дописалось лишнее правило');
-});
-
-test('javascript: в адресе обложки не проходит ни в каком виде', async (t) => {
-  const { window } = await boot(t, {
-    '/news/index.json': {
-      items: [
-        { id: 'n1', slug: 'n1', title: 'З', createdAt: '2026-09-01T10:00:00Z', coverUrl: 'java\tscript:alert(1)' },
-      ],
-    },
-  });
-
-  await until(() => window.document.querySelector('.post'));
-  const html = window.document.querySelector('[data-news]').innerHTML;
+  await until(() => window.document.querySelector('[data-games] .game'));
+  const html = window.document.querySelector('[data-games]').innerHTML;
   assert.ok(!/script:/.test(html), 'схема прошла через табуляцию');
 });
 
-test('обычные адреса обложек и значков не портятся', async (t) => {
-  const { window } = await boot(t);
-  await until(() => window.document.querySelector('.game-ico, [data-letter]'));
+test('кавычка и скобка в адресе значка не проходят', async (t) => {
+  // Тот же адрес однажды уедет и в url(): там кавычка закрывает
+  // выражение и дописывает чужое правило
+  const { window } = await boot(t, {
+    '/api/games': {
+      items: [
+        { gameId: 'x', title: 'Икс', hasLatest: true, latestVersion: '1.0', iconUrl: "x'); background:url('https://зло/маяк.png" },
+      ],
+    },
+  });
+
+  await until(() => window.document.querySelector('[data-games] .game'));
   const html = window.document.querySelector('[data-games]').innerHTML;
-  assert.match(html, /\/manifests\/repo\/icon\.png/, 'нормальный значок отфильтровали');
+  assert.ok(!html.includes('зло'), 'чужой адрес попал в разметку');
 });

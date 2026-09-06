@@ -1,9 +1,9 @@
 /* Chill Hub — лендинг 2.0
    ------------------------------------------------------------------
    Страница собирается из данных, а не из свёрстанного текста: игры,
-   версии сборок, названия модпаков, новости, режим технических работ и
-   версия лаунчера приходят из публичного API (см. api.js). Добавили
-   игру в админке — она появилась и здесь.
+   версии сборок, названия модпаков, режим технических работ и версия
+   лаунчера приходят из публичного API (см. api.js). Добавили игру в
+   админке — она появилась и здесь.
 
    Здесь остались: фон, шаблонизация разделов, автомат заявок, сама
    заявка и мелочи. Всё анимированное молчит при `prefers-reduced-motion`
@@ -22,12 +22,12 @@
 
   /* Ссылка с сервера в разметку — только через проверку схемы.
      ------------------------------------------------------------------
-     ПОЧЕМУ ОДНОГО esc() МАЛО. Обложка новости уезжает в
-     `style="background-image:url('…')"`. Кавычка внутри превращается в
-     `&#39;`, но разбор идёт в два шага: сначала HTML раскрывает
-     сущности, и только потом CSS видит уже настоящую кавычку. Строка
-     вида `x'); background:…` таким образом закрывает url() и
-     дописывает свои объявления.
+     ПОЧЕМУ ОДНОГО esc() МАЛО. Адрес с сервера уезжает в атрибут, а
+     оттуда однажды и в `style="background-image:url('…')"`. Кавычка
+     внутри превращается в `&#39;`, но разбор идёт в два шага: сначала
+     HTML раскрывает сущности, и только потом CSS видит уже настоящую
+     кавычку. Строка вида `x'); background:…` таким образом закрывает
+     url() и дописывает свои объявления.
 
      Управляющие символы вырезаются ДО разбора схемы: браузер по
      спецификации URL удаляет табуляции и переводы строк перед тем, как
@@ -229,21 +229,6 @@
     });
   }
 
-  function postCard(n) {
-    const d = new Date(n.createdAt);
-    // `toLocaleDateString` добавляет «г.» в конце — лаунчер её не пишет.
-    const when = Number.isNaN(+d) ? '' : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }).replace(/\s*г\.$/, '');
-    return `
-      <article class="post">
-        <span class="post-cover"${safeUrl(n.coverUrl) ? ` style="background-image:url('${esc(safeUrl(n.coverUrl))}')"` : ''} aria-hidden="true"></span>
-        <div>
-          <h3>${esc(n.title)}</h3>
-          <p class="faint">${esc(when)}</p>
-          <p>${esc(n.summary || '')}</p>
-        </div>
-      </article>`;
-  }
-
   async function content() {
     // Правовые страницы подключают только app.js: там нечего наполнять,
     // и обращение к отсутствующему модулю уронило бы им весь скрипт —
@@ -259,14 +244,6 @@
     }
 
     imageFallback(games);
-
-    const news = $('[data-news]');
-    if (news) {
-      const items = data.news.slice(0, 4);
-      news.innerHTML = items.length
-        ? items.map(postCard).join('')
-        : '<p class="dim">Новостей пока нет.</p>';
-    }
 
     if (data.launcherVersion) {
       $$('[data-launcher-version]').forEach((el) => (el.textContent = data.launcherVersion));
@@ -285,8 +262,7 @@
 
     if (!data.live) {
       // Молча подсунуть моки нельзя: посетитель решит, что видит настоящий
-      // каталог, а он видит снимок. Но сказать это надо ОДИН раз: одна и
-      // та же фраза под играми и под новостями читается как сбой вёрстки.
+      // каталог, а он видит снимок.
       const note = document.createElement('p');
       note.className = 'faint';
       note.style.gridColumn = '1 / -1';
@@ -358,6 +334,7 @@
       if (busy) return;
       busy = true;
       root.classList.remove('done');
+      root.classList.add('busy');
       out.textContent = '';
 
       const picks = REELS.map((items) => Math.floor(Math.random() * items.length));
@@ -393,6 +370,7 @@
 
     function finish(picks) {
       busy = false;
+      root.classList.remove('busy');
       root.classList.add('done');
       mark();
       const phrase = picks.map((p, i) => REELS[i][p]).join(' ').toLowerCase();

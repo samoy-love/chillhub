@@ -1,18 +1,16 @@
 /* Данные сайта: тот же публичный API, что у лаунчера
    ------------------------------------------------------------------
    Сайт больше ничего не рассказывает о продукте из свёрстанного текста.
-   Список игр, версии сборок, названия модпаков, новости и режим
+   Список игр, версии сборок, названия модпаков и режим
    технических работ приходят из тех же эндпоинтов, которые опрашивает
    сам лаунчер:
 
      GET /api/games                        — каталог (GameInfo[])
-     GET /news/index.json                  — новости лаунчера
-     GET /news/games/{gameId}/index.json    — новости игры
      GET /api/maintenance                  — технические работы
      GET /manifests/launcher/latest.json   — версия лаунчера
 
-   Формы ответов — из server/cmd/api/main.go (GameInfo, ModsInfo),
-   internal/adminapi/news (newsItem) и internal/maintenance (State).
+   Формы ответов — из server/cmd/api/main.go (GameInfo, ModsInfo) и
+   internal/maintenance (State).
 
    Когда API недоступен — открыли index.html файлом, сервер лежит, сайт
    смотрят с чужого домена — в дело идут моки ниже. Они не «примерные»:
@@ -37,8 +35,6 @@
                 фиксированным именем и возвращает этот адрес)
        обложка  первый кадр галереи -> /content/{gameId}/gallery/gallery.json
                 (HomePage.LoadHeroGalleryAsync берёт images.First())
-       новость  `coverUrl` из /news/index.json
-                (HomeFeed.NormalizeCoverUrls дописывает базу к пути от корня)
 
      Адреса значков здесь абсолютные: превью открывают и локально, где
      /manifests/ не раздаётся. На проде мок не используется вовсе —
@@ -71,38 +67,6 @@
       { gameId: 'peak', title: 'PEAK', hasLatest: true, latestVersion: '1.0.1', iconUrl: iconOf('peak'), exeRelativePath: 'PEAK.exe',
         mods: modpack('PeakFriendsEdition', '1.9.1', 'peak', '3527290') },
       { gameId: 'machine-party', title: 'Machine Party', hasLatest: true, latestVersion: '1.0.1', iconUrl: iconOf('machine-party'), exeRelativePath: 'MachineParty.exe' },
-    ],
-  };
-
-  const MOCK_NEWS = {
-    items: [
-      {
-        id: 'n-141',
-        title: 'Что за игра: R.E.P.O.',
-        slug: 'chto-za-igra-repo',
-        createdAt: '2026-08-31T10:00:00Z',
-        summary: 'Ваза стоит десять тысяч, пока не встретится с дверным косяком.',
-        coverUrl: '/assets/images/repo.jpg',
-        published: true,
-      },
-      {
-        id: 'n-140',
-        title: 'Какие моды идут в комплекте: Moo Modpack',
-        slug: 'moo-modpack',
-        createdAt: '2026-08-30T10:00:00Z',
-        summary: 'Пять новых объектов и сотни ценностей, но главный мод в сборке — сканер по клавише F.',
-        coverUrl: '',
-        published: true,
-      },
-      {
-        id: 'n-139',
-        title: 'Очередь загрузок: качается одна игра, остальные ждут',
-        slug: 'ochered-zagruzok',
-        createdAt: '2026-08-27T10:00:00Z',
-        summary: 'Правильные значки, честный объём и никаких вылетов из-за одного пропавшего файла.',
-        coverUrl: '/assets/images/launcher-updater.jpg',
-        published: true,
-      },
     ],
   };
 
@@ -198,9 +162,8 @@
   const MOCK_SETUP = {};
 
   async function load() {
-    const [games, news, maint, launcher, setup] = await Promise.all([
+    const [games, maint, launcher, setup] = await Promise.all([
       get('/api/games', MOCK_GAMES),
-      get('/news/index.json', MOCK_NEWS),
       get('/api/maintenance', MOCK_MAINT),
       get('/manifests/launcher/latest.json', MOCK_LAUNCHER),
       get('/downloads/setup.json', MOCK_SETUP),
@@ -209,7 +172,6 @@
     return {
       live: games.live,
       games: (games.data.items || []).filter((g) => g && g.gameId),
-      news: (news.data.items || []).filter((n) => n && n.published !== false),
       maintenance: maint.data || MOCK_MAINT,
       launcherVersion: (launcher.data.version || launcher.data.Version || '').trim(),
       setup: setup.data || {},
@@ -222,5 +184,5 @@
   let once = null;
   const cached = () => (once ??= load());
 
-  window.CHILLHUB_API = { load: cached, reload: () => (once = load()), gallery, MOCK_GAMES, MOCK_NEWS };
+  window.CHILLHUB_API = { load: cached, reload: () => (once = load()), gallery, MOCK_GAMES };
 })();
