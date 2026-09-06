@@ -328,7 +328,7 @@
                   head: '<th>Версия</th><th>Собрана</th><th class="num">Файлов</th><th class="num">Размер</th><th>Состояние</th><th></th>',
                   row: (v) => `<tr>
                       <td class="mono">${esc(v.version)}</td>
-                      <td class="dim">${esc(v.date)}</td>
+                      <td class="dim">${esc(when(v.date))}</td>
                       <td class="num">${v.files}</td>
                       <td class="num">${bytes(v.size)}</td>
                       <td>${stateBadge[v.state]}</td>
@@ -403,7 +403,7 @@
           <div class="handoff" style="margin-top: var(--s3)">
             <div><span class="k">Игроки получают</span><span class="v mono">${esc(p.active)}</span></div>
             <span class="arrow" aria-hidden="true">→</span>
-            <div><span class="k">Собрано</span><span class="v mono">${esc(p.built)}</span><span class="k">${esc(p.builtAt)}</span></div>
+            <div><span class="k">Собрано</span><span class="v mono">${esc(p.built)}</span><span class="k">${esc(when(p.builtAt))}</span></div>
             <span class="arrow" aria-hidden="true">→</span>
             <div>
               <span class="k">На Thunderstore</span>
@@ -571,7 +571,7 @@
             row: (n) => {
               const at = `"scope":"${esc(n.scope || 'launcher')}","gameId":"${esc(n.game)}","slug":"${esc(n.slug)}"`;
               return `<tr>
-                <td>${esc(n.title)}<br><span class="faint">${esc(n.at)}${n.game ? ` · ${esc(n.game)}` : ' · лаунчер'}</span></td>
+                <td>${esc(n.title)}<br><span class="faint">${esc(window.CH2Format.dateTime(n.at))}${n.game ? ` · ${esc(n.game)}` : ' · лаунчер'}</span></td>
                 <td>${
                   n.published
                     ? '<span class="badge badge--ok">на виду</span>'
@@ -619,7 +619,7 @@
                 <td class="dim">${f.name ? esc(f.name) : '<span class="faint">без имени</span>'}${
                   f.contact ? `<br><span class="faint mono">${esc(f.contact)}</span>` : '<br><span class="faint">ответить некуда</span>'
                 }</td>
-                <td class="dim">${esc(f.at)}</td>
+                <td class="dim">${esc(when(f.at))}</td>
                 <td class="act">
                   <button class="btn btn--text" type="button" data-act="feedback" data-args='{"id":"${esc(f.id)}"}'>Открыть</button>
                   <button class="btn btn--text" type="button" data-act="inbox.important" data-args='{"id":"${esc(f.id)}","important":${f.important ? 'false' : 'true'}}' title="Пометить важным">${f.important ? '★' : '☆'}</button>
@@ -832,6 +832,14 @@
      `tuning.js`), а вид — в `views.js`. Здесь только связывание. */
 
   const V = () => window.CH2Views;
+
+  /* ВРЕМЯ ПОКАЗЫВАЕМ ЛЮДЯМ, А НЕ ОТДАЁМ КАК ЕСТЬ.
+     Сервер отвечает RFC3339 в UTC («2026-09-06T12:53:24Z»), и три
+     колонки выводили эту строку в таблицу. Читать её неудобно, а «Z» в
+     конце ещё и врёт рядом с остальными экранами: там время местное.
+     Снимок из data.js держал даты уже готовыми строками, поэтому в
+     проверках это не всплывало ни разу. */
+  const when = (v) => window.CH2Format.dateTime(v);
 
   /* Верхний открытый лист; null — открытых нет. Ведётся ради одного
      правила: нажатие в РАЗДЕЛЕ не должно класть второй лист поверх
