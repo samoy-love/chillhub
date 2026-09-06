@@ -557,3 +557,23 @@ test('признак «иконка есть» не подставляется �
   assert.strictEqual(b.iconUrl, '/x.png');
   assert.strictEqual(c.icon, false);
 });
+
+/* КЭШ АРХИВОВ: `mods/cache` отвечает `{bytes, files, ttlDays}`.
+   Разбор ждал ещё и `oldest` — такого поля нет, и строка под размером
+   кэша заканчивалась словами «старейший от» и пустотой. */
+test('кэш читается теми полями, какие отдаёт сервер', () => {
+  const c = S.cache({ bytes: 8900000000, files: 412, ttlDays: 30 });
+  assert.strictEqual(c.bytes, 8900000000);
+  assert.strictEqual(c.files, 412);
+  assert.strictEqual(c.ttlDays, 30);
+});
+
+/* Коды ошибок приходят сводкой `topErrors: [{key, count}]`. Ничего про
+   «где чаще» в ней нет, и колонка с этим стояла пустой у каждой строки. */
+test('код ошибки читается из сводки и получает человеческое объяснение', () => {
+  const [e] = S.errors({ topErrors: [{ key: 'download_reset', count: 3 }] });
+  assert.strictEqual(e.code, 'download_reset');
+  assert.strictEqual(e.n, 3);
+  assert.match(e.what, /связь оборвалась/);
+  assert.strictEqual(e.share, 1);
+});
