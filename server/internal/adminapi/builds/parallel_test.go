@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"ChillHub/server/internal/adminutil"
@@ -160,29 +161,24 @@ func TestExtractBudgetHoldsUnderConcurrency(t *testing.T) {
 	const limit = 2048
 	b := adminutil.NewExtractBudget(limit)
 
-	var wrote int64
-	errs := 0
-	done := make(chan struct{})
+	var wrote, errs atomic.Int64
+	var wg sync.WaitGroup
 	for range 8 {
-		go func() {
-			defer func() { done <- struct{}{} }()
+		wg.Go(func() {
 			var sink countingWriter
-			err := b.Copy(&sink, strings.NewReader(strings.Repeat("x", 1024)))
-			if err != nil {
-				errs++
+			if err := b.Copy(&sink, strings.NewReader(strings.Repeat("x", 1024))); err != nil {
+				errs.Add(1)
 				return
 			}
-			wrote += sink.n
-		}()
+			wrote.Add(sink.n)
+		})
 	}
-	for range 8 {
-		<-done
-	}
+	wg.Wait()
 
-	if wrote > limit {
-		t.Fatalf("на диск ушло %d байт при лимите %d — лимит оказался на поток, а не общий", wrote, limit)
+	if wrote.Load() > limit {
+		t.Fatalf("на диск ушло %d байт при лимите %d — лимит оказался на поток, а не общий", wrote.Load(), limit)
 	}
-	if errs == 0 {
+	if errs.Load() == 0 {
 		t.Fatal("ни один поток не получил отказа, хотя суммарно они просили вчетверо больше лимита")
 	}
 }
