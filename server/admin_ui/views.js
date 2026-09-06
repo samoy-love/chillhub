@@ -1300,9 +1300,16 @@
               ? ''
               : '<button class="btn btn--text" type="button" data-act="mods.activate" data-args=\'{"gameId":"' +
                 esc(o.gameId) + '","version":"' + esc(v.version) + '"}\'>Отдать игрокам</button>') +
-            '<button class="btn btn--text" type="button" data-act="rebuild" data-args=\'{"gameId":"' +
-              esc(o.gameId) + '","version":"' + esc(v.version) + '","active":' + (active ? 'true' : 'false') +
-              '}\'>Пересобрать</button>' +
+            /* Пересобрать можно не всё. Сборку, приехавшую профилем r2modman до
+               того, как состав стал записываться, восстановить нечем — сервер об
+               этом и говорит полем `rebuildable`. Кнопка, которая умеет только
+               отказать, хуже отсутствующей: человек жмёт её и остаётся без
+               ответа на вопрос, что делать вместо. */
+            (v.rebuildable === false
+              ? '<button class="btn btn--text" type="button" disabled title="Состав этой сборки не записан — восстановить его нечем. Загрузите профиль заново через «Импорт».">Пересобрать</button>'
+              : '<button class="btn btn--text" type="button" data-act="rebuild" data-args=\'{"gameId":"' +
+                esc(o.gameId) + '","version":"' + esc(v.version) + '","active":' + (active ? 'true' : 'false') +
+                '}\'>Пересобрать</button>') +
             (active
               ? ''
               : '<button class="btn btn--danger btn--text" type="button" data-act="mods.delete" data-args=\'{"gameId":"' +

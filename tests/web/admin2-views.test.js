@@ -664,6 +664,23 @@ test('список версий отмечает ту, что у игроков,
   assert.match(html, /у игроков/);
 });
 
+/* Сервер говорит полем `rebuildable`, что состав этой сборки не
+   записан и восстановить его нечем: так приезжали профили r2modman до
+   того, как состав стал сохраняться. Кнопка, которая умеет только
+   отказать, хуже отсутствующей. */
+test('невосстановимую сборку пересобрать не предлагают', () => {
+  const html = V.modVersions(
+    [
+      { version: 'own-profile', rebuildable: false },
+      { version: 'Team-Pack-1.0.0', rebuildable: true },
+    ],
+    { gameId: 'repo' }
+  );
+  const offered = [...html.matchAll(/data-act="rebuild" data-args='([^']+)'/g)].map((m) => JSON.parse(m[1]).version);
+  assert.deepStrictEqual(offered, ['Team-Pack-1.0.0']);
+  assert.match(html, /Загрузите профиль заново/);
+});
+
 test('пропавшие моды названы поимённо, а не числом', () => {
   // «Пропущено 2» не говорит, потерялся ли твик текстур или сам модпак
   const html = V.modVersions([{ version: '1.9.9', missing: ['Ura/Old', 'Ura/Gone'] }], { gameId: 'g' });
