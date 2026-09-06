@@ -1094,11 +1094,17 @@
         fetch: window.fetch.bind(window),
         ndjson: { readNdjsonStream: window.readNdjsonStream },
         confirm: ask,
+        /* Строка ДОПИСЫВАЕТСЯ, а не перерисовывает журнал целиком.
+           Перерисовка сбрасывала прокрутку в начало на каждую строку —
+           и «прокрутить в конец» после неё ничего не давало, потому что
+           прокручивался не журнал, а лист вокруг него. Заодно это
+           работа, растущая квадратом от числа строк, а у сборки их
+           сотни. */
         on: (ev) => {
           events.push(ev);
-          sheet.body(V().buildLog(events, 'running'));
-          const log = sheet.root.querySelector('.log');
-          if (log) log.scrollTop = log.scrollHeight;
+          const log = sheet.root.querySelector('[data-log]');
+          if (log) window.logAppend(log, V().logRow(ev));
+          else sheet.body(V().buildLog(events, 'running'));
         },
       }
     ).then(async (res) => {
@@ -1107,6 +1113,10 @@
         V().buildLog(events, 'done') +
           `<p class="note${out.tone === 'bad' ? ' note--bad' : ''}" data-build-outcome>${esc(out.text)}</p>`
       );
+      /* Конец журнала — это причина отказа. Открывать его началом значит
+         показывать «читаем список модов» там, где спрашивают «почему не
+         собралось». */
+      window.logToBottom(sheet.root.querySelector('[data-log]'));
       toast(out.text, out.tone);
       await refresh(['packs', 'overview'], false);
     });
@@ -2322,6 +2332,9 @@
         const got = await API.feedbackLogs(feedback.id);
         text = typeof got === 'string' ? got : '';
         sheet.body(V().logsView({ logs: text, logBytes: feedback.logBytes }));
+        /* Журнал открывается концом, а не началом: спрашивают про то,
+           что случилось перед обращением, а это последние строки. */
+        window.logToBottom(sheet.root.querySelector('.log'));
       } catch (err) {
         sheet.body('<div class="empty"><b>Журнал не пришёл</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
       }
