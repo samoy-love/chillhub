@@ -2810,6 +2810,12 @@
   }
 
   async function collect() {
+    /* Реестр целиком спрашиваем ДО загрузки разделов, а не после.
+       Тот же запрос делают три загрузчика (games, packs, news), и слой
+       запросов склеивает одинаковые GET, пока они в полёте. Запрошенный
+       после — уже не в полёте, и панель ходила за реестром дважды на
+       каждый запуск и каждое обновление данных. */
+    const rawGamesSoon = rawGames();
     await store.loadAll();
     const demo = await window.CHILLHUB_DATA.load();
 
@@ -2845,7 +2851,7 @@
     /* Реестр целиком, как он лежит на сервере. Правка игры уезжает
        вместе со всем списком, а в списке есть поля, которых таблица не
        показывает: собранный из неё список их бы стёр. */
-    data.raw = { games: window.CH2Sections.items(await rawGames()) };
+    data.raw = { games: window.CH2Sections.items(await rawGamesSoon) };
     return data;
   }
 
