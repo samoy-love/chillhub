@@ -114,3 +114,29 @@ test('нехватка места — запрет', () => {
 test('пустая сборка — запрет', () => {
   assert.match(M.planProblem({ packages: 0 }), /ни одного пакета/);
 });
+
+/* КАТАЛОГ СЕРВЕР ОТДАЁТ СВОИМИ ИМЕНАМИ ПОЛЕЙ.
+   `/admin/api/mods/catalog` отвечает `namespace`, `name`, `description`,
+   `download_count`, `is_deprecated` и `last_updated`. Номера версии в
+   нём нет вовсе, а дату обновления разбор искал под именем
+   `date_updated` — и не находил никогда. */
+test('строка каталога читается по именам полей сервера', () => {
+  const [e] = M.entries({
+    results: [
+      {
+        namespace: 'ASTeam',
+        name: 'MooModpack',
+        description: 'Пак',
+        download_count: 41200,
+        rating_count: 12,
+        last_updated: '2026-09-03T10:00:00Z',
+        is_deprecated: false,
+        is_pinned: true,
+      },
+    ],
+  });
+  assert.strictEqual(e.namespace, 'ASTeam');
+  assert.strictEqual(e.downloads, 41200);
+  assert.strictEqual(e.updated, '2026-09-03T10:00:00Z', 'дата обновления не прочиталась');
+  assert.strictEqual(e.pinned, true);
+});

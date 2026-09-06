@@ -1393,7 +1393,13 @@
     }
 
     return (
-      '<table><thead><tr><th>Модпак</th><th>Версия</th><th class="num">Скачиваний</th><th></th></tr></thead><tbody>' +
+      /* Версии в каталоге у сервера нет: `/admin/api/mods/catalog`
+         отдаёт имя, описание, счётчики и дату обновления, а номер
+         версии — нет. Колонка «Версия» показывала «—» у каждой строки
+         и читалась как «данные не доехали». Дату обновления сервер
+         отдаёт полем `last_updated`, и по ней как раз и выбирают
+         модпак: заброшенный виден сразу. */
+      '<table><thead><tr><th>Модпак</th><th>Обновлён</th><th class="num">Скачиваний</th><th></th></tr></thead><tbody>' +
       rows
         .map(
           (r) =>
@@ -1403,7 +1409,7 @@
             '<br><span class="faint mono">' +
             esc(r.namespace) +
             '</span></td>' +
-            '<td class="mono">' + esc(r.version || '—') + '</td>' +
+            '<td class="dim">' + esc(f.date(r.updated)) + '</td>' +
             '<td class="num">' + esc(f.dec(r.downloads, 0)) + '</td>' +
             '<td class="act">' +
             '<button class="btn btn--text" type="button" data-readme data-ns="' + esc(r.namespace) +
