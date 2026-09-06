@@ -278,15 +278,22 @@
       authRefresh: () => post('auth/refresh'),
       logout: () => post('auth/logout'),
 
+      /* Версии сборок — общие ручки на любую игру: у лаунчера они те же
+         самые, просто идентификатор зарезервирован. */
+      versions: (gameId) => get('list', { gameId: gameId }),
+      activate: (gameId, version) => post('activate', { gameId: gameId, version: version }),
+      deleteVersion: (gameId, version) => post('deleteVersion', { gameId: gameId, version: version }),
+      /* Сколько оставить, сервер решает сам: всё старше активной,
+         кроме двух перед ней. Параметра `keep` у ручки нет, и слать
+         его — притворяться, будто панель этим управляет. */
+      pruneVersions: (gameId) => post('pruneVersions', { gameId: gameId }),
+
       /* Лаунчер для сервера — такая же «игра», как остальные, только с
          зарезервированным идентификатором. Без него ручки версий
          отвечают про пустой идентификатор, а не про лаунчер. */
       launcherVersions: () => get('list', { gameId: LAUNCHER }),
       launcherActivate: (version) => post('activate', { gameId: LAUNCHER, version: version }),
       launcherDelete: (version) => post('deleteVersion', { gameId: LAUNCHER, version: version }),
-      /* Сколько оставить, сервер решает сам: всё старше активной,
-         кроме двух перед ней. Параметра `keep` у ручки нет, и слать
-         его — притворяться, будто панель этим управляет. */
       launcherPrune: () => post('pruneVersions', { gameId: LAUNCHER }),
       freeSpace: () => get('system/free'),
 

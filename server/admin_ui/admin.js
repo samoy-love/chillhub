@@ -476,81 +476,45 @@
     /* Реестр игр — это не таблица «для красоты», а то, что лаунчер
        читает при старте: идентификатор Steam, имя исполняемого файла,
        обложка и галерея. Ошибка здесь ломает запуск у всех сразу. */
+    /* ИГРЫ: СПИСОК СЛЕВА, РАБОТА СПРАВА.
+       Реестр был таблицей на всю ширину, а правка, галерея и удаление
+       открывались листами поверх неё. Чтобы перейти к соседней игре,
+       лист закрывали, искали строку глазами и открывали снова, — а
+       версии сборок игры панель не показывала вовсе. Здесь выбор и
+       работа стоят рядом, как в 1.0. */
     games: {
       title: 'Игры',
       lede: 'Реестр, который лаунчер читает при старте: чем игра запускается и как выглядит.',
       actions:
-        '<button class="btn" type="button" data-act="games.scan">Просканировать контент</button>' +
+        '<button class="btn" type="button" data-act="games.scan">Найти новые</button>' +
         '<button class="btn" type="button" data-act="order">Порядок в лаунчере</button>' +
         '<button class="btn btn--accent" type="button" data-act="new-game">Добавить игру</button>',
       render() {
+        pickGameIfNeeded();
         return `
-          ${card(
-            'Реестр',
-            list({
-              rows: D.games,
-              head: '<th>Игра</th><th>Идентификатор</th><th>Steam</th><th>Исполняемый файл</th><th>Оформление</th><th></th>',
-              row: (g) => `<tr>
-                  <td>${esc(g.title)}</td>
-                  <td><code>${esc(g.gameId)}</code></td>
-                  <td class="mono">${esc(g.steamId)}</td>
-                  <td class="mono dim">${esc(g.exe)}</td>
-                  <td>
-                    ${
-                      /* Про иконку реестр знает — она лежит в нём полем.
-                         Про обложку и снимки не знает: они живут в
-                         галерее, и придумывать за них значок здесь
-                         значило бы показывать «всё в порядке» у игры без
-                         единой картинки. */
-                      g.icon
-                        ? '<span class="badge badge--ok">иконка есть</span>'
-                        : '<span class="badge badge--warn">без иконки</span>'
-                    }
-                    ${g.published ? '' : '<span class="badge badge--warn">скрыта от игроков</span>'}
-                  </td>
-                  <td class="act">
-                    <button class="btn btn--text" type="button" data-act="edit-game" data-args='{"gameId":"${esc(g.gameId)}"}'>Править</button>
-                    <button class="btn btn--text" type="button" data-act="gallery" data-args='{"gameId":"${esc(g.gameId)}"}'>Галерея</button>
-                    <button class="btn btn--danger btn--text" type="button" data-act="games.purge" data-args='{"gameId":"${esc(g.gameId)}","title":"${esc(g.title)}"}'>Удалить контент</button>
-                  </td>
-                </tr>`,
-              empty: 'Реестр пуст',
-              emptyHint: 'Пока здесь ничего нет, лаунчер показывает игроку пустую библиотеку.',
-            }),
-            { flush: true }
-          )}
-
-          <div class="cols cols--55" style="margin-top: var(--s3)">
+          <div class="cols cols--master" data-games>
             ${card(
-              'Подтянуть из Thunderstore',
+              'Реестр',
               `<div class="stack stack--tight">
-                 <p class="dim">Заполняет идентификатор Steam, имя исполняемого файла и папку установки из схемы экосистемы Thunderstore.</p>
-                 <p class="faint">Руками это копирование трёх значений на игру, и папка, вложенная внутрь каталога установки, с первого раза угадывается неправильно.</p>
-                 <div class="btn-row"><button class="btn" type="button" data-act="ecosystem">Подключить моды</button></div>
+                 <input type="search" data-game-search placeholder="Поиск по названию или идентификатору" aria-label="Поиск игры">
+                 ${V().pickList(D.games.map(gameRow), {
+                   selected: gameEdit.adding ? '' : gameEdit.gameId,
+                   empty: 'Реестр пуст',
+                   emptyHint: 'Пока здесь ничего нет, лаунчер показывает игроку пустую библиотеку.',
+                 })}
                </div>`
             )}
-            ${(() => {
-              // Фраза считается из реестра, а не вписана руками: вписанная
-              // устареет на первой же правке данных и будет врать молча.
-              const noIcon = D.games.filter((g) => !g.icon).map((g) => g.title);
-              const hidden = D.games.filter((g) => !g.published).map((g) => g.title);
-              const gaps = [
-                noIcon.length ? `без иконки: ${noIcon.join(', ')}` : '',
-                hidden.length ? `скрыты от игроков: ${hidden.join(', ')}` : '',
-              ].filter(Boolean);
-              return card(
-                'Что видит игрок',
-                `<div class="stack stack--tight">
-                   <p class="dim">Иконка стоит в списке слева, обложка и снимки — на странице игры. Без обложки карточка выглядит пустым прямоугольником.</p>
-                   <p class="faint">${gaps.length ? esc(gaps.join('; ')) + '.' : 'У всех игр есть иконка, и все они видны игрокам.'}</p>
-                   <p class="faint">Что лежит в галерее, реестр не знает — это видно только в ней самой.</p>
-                 </div>`
-              );
-            })()}
+            <div data-game-detail>${gameDetail()}</div>
           </div>`;
       },
     },
 
+    /* НОВОСТИ: СПИСОК, РЕДАКТОР И ПРЕДПРОСМОТР РЯДОМ.
+       Раздел был таблицей, а заметку правили в листе поверх неё. Значит,
+       чтобы взглянуть на соседнюю, лист закрывали; чтобы увидеть, что
+       выйдет у игрока, открывали новое окно браузера. Здесь всё три
+       вещи стоят рядом, как в 1.0: выбор слева, текст посередине, вид
+       игрока справа. */
     news: {
       title: 'Новости',
       lede: 'То, что игрок читает на главном экране лаунчера.',
@@ -558,37 +522,24 @@
         '<button class="btn" type="button" data-act="news.rebuild">Пересобрать индекс</button>' +
         '<button class="btn btn--accent" type="button" data-act="new-post">Написать</button>',
       render() {
-        /* Редактор больше не живёт в разделе: новость набирают минутами,
-           и на этот срок ей нужен свой экран, черновик и предпросмотр.
-           Раздел показывает то, что есть, и ведёт к правке. */
-        return card(
-          'Новости',
-          list({
-            rows: D.news,
-            head: '<th>Заголовок</th><th>Состояние</th><th></th>',
-            /* Заметка называется адресом целиком — scope, игра и имя
-               файла. По одному номеру сервер её не найдёт. */
-            row: (n) => {
-              const at = `"scope":"${esc(n.scope || 'launcher')}","gameId":"${esc(n.game)}","slug":"${esc(n.slug)}"`;
-              return `<tr>
-                <td>${esc(n.title)}<br><span class="faint">${esc(window.CH2Format.dateTime(n.at))}${n.game ? ` · ${esc(n.game)}` : ' · лаунчер'}</span></td>
-                <td>${
-                  n.published
-                    ? '<span class="badge badge--ok">на виду</span>'
-                    : '<span class="badge badge--warn">черновик</span>'
-                }</td>
-                <td class="act">
-                  <button class="btn btn--text" type="button" data-act="edit-post" data-args='{${at},"published":${n.published}}'>Править</button>
-                  <button class="btn btn--text" type="button" data-act="news.publish" data-args='{${at},"title":"${esc(n.title)}","published":${n.published ? 'false' : 'true'}}'>${n.published ? 'Снять с публикации' : 'Опубликовать'}</button>
-                  <button class="btn btn--danger btn--text" type="button" data-act="news.delete" data-args='{${at},"title":"${esc(n.title)}"}'>Удалить</button>
-                </td>
-              </tr>`;
-            },
-            empty: 'Новостей нет',
-            emptyHint: 'Лаунчер покажет игроку пустую ленту, пока здесь ничего не написано.',
-          }),
-          { flush: true }
-        );
+        pickPostIfNeeded();
+        const shown = visibleNews();
+        return `
+          <div class="cols cols--master3" data-news>
+            ${card(
+              'Заметки',
+              `<div class="stack stack--tight">
+                 ${V().newsFilter(newsEdit, D.games)}
+                 ${V().pickList(shown.map(newsRow), {
+                   selected: newsEdit.adding ? '' : newsKey(newsEdit),
+                   empty: 'Заметок нет',
+                   emptyHint: 'Лаунчер покажет игроку пустую ленту, пока здесь ничего не написано.',
+                 })}
+               </div>`
+            )}
+            <div data-news-editor>${newsEditor()}</div>
+            <div data-news-preview>${newsPreview()}</div>
+          </div>`;
       },
     },
 
@@ -1117,6 +1068,8 @@
   }
 
   function flowBuild(pack) {
+    if (!pack.rebuild && !knowsPack(pack)) return;
+
     const sheet = openSheet({
       title: (pack.version ? 'Пересборка ' + pack.version + ': ' : 'Сборка модпака: ') + (pack.title || pack.gameId),
       lede: 'Идёт минутами. Собранное игрокам само не уходит — отдать его отдельное решение.',
@@ -1131,6 +1084,9 @@
         gameId: pack.gameId,
         namespace: pack.namespace,
         name: pack.name,
+        /* Адрес страницы пакета сервер разбирает сам, и он есть там, где
+           проверка обновлений молчит: у свежего модпака её попросту нет. */
+        packageUrl: pack.packageUrl,
         version: pack.version || '',
         rebuild: Boolean(pack.rebuild),
       },
@@ -1163,188 +1119,209 @@
     });
   }
 
-  /* --- Новость --- */
+  /* ---------- Экран новостей: выбор, правка и вид игрока ---------- */
 
-  /* Черновик пишется в браузер на каждый ввод. Новость набирают минутами,
-     и терять её из-за случайно закрытой вкладки нельзя. */
-  function flowNews(where) {
+  /** Что открыто в редакторе и по чему отобран список слева. */
+  let newsEdit = {
+    scope: 'launcher',
+    gameId: '',
+    slug: '',
+    adding: false,
+    post: null,
+    draft: null,
+    problems: [],
+    loading: false,
+  };
+
+  /* ВИД ГЛАЗАМИ ИГРОКА СОБИРАЕТ СЕРВЕР, И ОТДАЁТ ОН ДВЕ ЧАСТИ.
+     `news/preview` отвечает `{listHtml, contentHtml}`: карточка в ленте и
+     сама статья. Панель искала в ответе `html` и `markdown` — таких
+     полей там нет, — и открывала пустое окно браузера со строкой
+     «[object Object]». Разметку в текст превращает Markdig на сервере,
+     теми же правилами, что и для лаунчера; собирать её в браузере
+     второй раз значило бы показывать не то, что увидит игрок. */
+  let newsShow = null;
+
+  /** Заметка адресуется тройкой: раздел, игра и имя файла. */
+  const newsKey = (n) => (n.gameId ? 'game/' + n.gameId + '/' : 'launcher//') + n.slug;
+
+  function newsRow(n) {
+    return {
+      id: newsKey({ gameId: n.game, slug: n.slug }),
+      title: n.title || n.slug,
+      sub: window.CH2Format.dateTime(n.at) + (n.game ? ' · ' + n.game : ' · лаунчер'),
+      badge: n.published
+        ? '<span class="badge badge--ok">на виду</span>'
+        : '<span class="badge badge--warn">черновик</span>',
+    };
+  }
+
+  /* Отбор считается на месте: ленты всех игр уже прочитаны, и ходить за
+     ними ещё раз ради переключателя незачем. */
+  function visibleNews() {
+    return D.news.filter((n) =>
+      newsEdit.scope === 'game' ? n.game === newsEdit.gameId : !n.game
+    );
+  }
+
+  /* Открытой остаётся та заметка, которую открыли. Пропала из списка —
+     открываем первую видимую: экран не должен показывать поля того,
+     чего уже нет. */
+  function pickPostIfNeeded() {
+    if (newsEdit.adding) return;
+    const shown = visibleNews();
+    const alive = shown.some((n) => newsKey({ gameId: n.game, slug: n.slug }) === newsKey(newsEdit));
+    if (!alive) {
+      const first = shown[0];
+      openPost(first ? { scope: first.game ? 'game' : 'launcher', gameId: first.game, slug: first.slug } : null, true);
+    }
+  }
+
+  /** Средняя колонка: имя, действия и текст. */
+  function newsEditor() {
+    if (!newsEdit.post) {
+      return '<div class="empty"><b>Заметка не выбрана</b><span>Выберите её слева или напишите новую</span></div>';
+    }
     const N = window.CH2News;
-    const w = where || {};
-    const existing = Boolean(w.slug);
+    const post = newsEdit.post;
+    return card(
+      newsEdit.adding ? 'Новая заметка' : 'Заметка: ' + post.slug,
+      (newsEdit.draft ? V().draftNote(newsEdit.draft, post, N) : '') +
+        V().newsForm(post, newsEdit.problems),
+      {
+        foot:
+          '<button class="btn" type="button" data-post="assets">Вложения</button>' +
+          (post.existing
+            ? '<button class="btn" type="button" data-post="publish">' +
+              (post.published ? 'Снять с публикации' : 'Опубликовать') +
+              '</button>' +
+              '<button class="btn btn--danger btn--text" type="button" data-post="delete">Удалить</button>'
+            : '') +
+          '<span class="push"></span>' +
+          '<button class="btn btn--accent" type="button" data-post="save">Сохранить</button>',
+      }
+    );
+  }
 
-    let post = {
-      slug: w.slug || '',
-      gameId: w.gameId || '',
+  /** Правая колонка: как это увидит игрок. */
+  function newsPreview() {
+    if (!newsEdit.post) return '';
+    const N = window.CH2News;
+    const post = newsEdit.post;
+    return `
+      <div class="stack">
+        ${card(
+          'Обложка',
+          post.coverUrl
+            ? `<img src="${esc(post.coverUrl)}" alt="" style="width:100%;border-radius:var(--r)">`
+            : '<p class="faint">Обложки нет — сервер возьмёт первую картинку из текста.</p>'
+        )}
+        ${card(
+          'В ленте',
+          newsShow && newsShow.list
+            ? `<div data-news-card>${newsShow.list}</div>`
+            : V().newsHeadline(post.markdown, N)
+        )}
+        ${card(
+          'Внутри заметки',
+          newsShow === null
+            ? '<p class="faint">Показать, что выйдет у игрока, можно кнопкой ниже: разметку в текст превращает сервер, а не браузер.</p>'
+            : `<div class="scroll scroll--sm" data-news-body>${newsShow.content}</div>`,
+          { foot: '<button class="btn" type="button" data-post="preview">Посмотреть глазами игрока</button>' }
+        )}
+      </div>`;
+  }
+
+  function drawNewsEditor() {
+    const box = $('[data-news-editor]');
+    if (box) box.innerHTML = newsEditor();
+    drawNewsPreview();
+  }
+
+  function drawNewsPreview() {
+    const box = $('[data-news-preview]');
+    if (box) box.innerHTML = newsPreview();
+  }
+
+  /** Открыть заметку. `where === null` — редактор пуст. */
+  function openPost(where, quiet) {
+    const N = window.CH2News;
+    newsShow = null;
+    newsEdit.problems = [];
+    newsEdit.adding = false;
+
+    if (!where) {
+      newsEdit.slug = '';
+      newsEdit.post = null;
+      newsEdit.draft = null;
+      if (!quiet) route();
+      return;
+    }
+
+    newsEdit.scope = where.scope || (where.gameId ? 'game' : 'launcher');
+    newsEdit.gameId = where.gameId || '';
+    newsEdit.slug = where.slug || '';
+    newsEdit.post = {
+      slug: newsEdit.slug,
+      gameId: newsEdit.gameId,
       markdown: '',
       coverUrl: '',
-      published: Boolean(w.published),
-      existing: existing,
+      published: false,
+      existing: true,
     };
-    let draft = N.readDraft(window.localStorage, post);
+    newsEdit.draft = null;
+    newsEdit.loading = true;
 
-    const sheet = openSheet({
-      title: existing ? 'Правка заметки: ' + post.slug : 'Новая заметка',
-      lede: 'Заголовок — первая строка текста. Черновик хранится в браузере, пока заметка не отправлена.',
-      body: '<div class="sk" style="height:22rem"></div>',
-      foot:
-        '<button class="btn" type="button" data-flow="assets">Вложения</button>' +
-        '<button class="btn" type="button" data-flow="preview">Посмотреть глазами игрока</button>' +
-        '<span class="push"></span>' +
-        '<button class="btn btn--accent" type="button" data-flow="save">Сохранить</button>',
-    });
-
-    const draw = (problems) => {
-      sheet.body(
-        V().draftNote(draft, post, N) +
-          V().newsForm(post, problems || []) +
-          V().newsHeadline(post.markdown, N)
-      );
-    };
-
-    const read = () => {
-      const q = (n) => sheet.root.querySelector('[name="' + n + '"]');
-      if (!q('markdown')) return;
-      post = Object.assign({}, post, {
-        slug: q('slug').value,
-        gameId: q('gameId').value,
-        coverUrl: q('coverUrl').value,
-        markdown: q('markdown').value,
-      });
-    };
-
+    const want = newsKey(newsEdit);
     (async () => {
-      if (existing) {
-        try {
-          const got = await API.newsGet(post.gameId ? 'game' : 'launcher', post.gameId, post.slug);
-          post = Object.assign(post, {
-            markdown: (got && got.markdown) || '',
-            coverUrl: (got && got.coverUrl) || '',
-            published: Boolean(got && got.published),
-          });
-          draft = N.readDraft(window.localStorage, post);
-        } catch (err) {
-          toast('Заметка не прочиталась: ' + window.CH2Api.reason(err), 'warn');
-        }
+      try {
+        const got = await API.newsGet(newsEdit.gameId ? 'game' : 'launcher', newsEdit.gameId, newsEdit.slug);
+        if (newsKey(newsEdit) !== want) return;
+        newsEdit.post = Object.assign({}, newsEdit.post, {
+          markdown: (got && got.markdown) || '',
+          coverUrl: (got && got.coverUrl) || '',
+          published: Boolean(got && got.published),
+        });
+        newsEdit.draft = N.readDraft(window.localStorage, newsEdit.post);
+      } catch (err) {
+        toast('Заметка не прочиталась: ' + window.CH2Api.reason(err), 'warn');
       }
-      draw();
+      newsEdit.loading = false;
+      drawNewsEditor();
     })();
 
-    /* Заголовок здесь не поле, а первая строка текста, поэтому строка
-       «в ленте игрок увидит» пересчитывается на каждый ввод. */
-    /* Обложку можно загрузить файлом, но только у сохранённой заметки:
-       сервер кладёт её рядом с самой заметкой, а той ещё нет. */
-    const coverInput = document.createElement('input');
-    coverInput.type = 'file';
-    coverInput.accept = 'image/*';
-    coverInput.addEventListener('change', async () => {
-      if (!coverInput.files || !coverInput.files[0]) return;
-      try {
-        const got = await API.newsCoverUpload(
-          post.gameId ? 'game' : 'launcher',
-          post.gameId,
-          post.slug,
-          coverInput.files[0]
-        );
-        post.coverUrl = (got && (got.coverUrl || got.url)) || post.coverUrl;
-        draw();
-        toast('Обложка загружена', 'ok');
-      } catch (err) {
-        toast('Не загрузилось: ' + window.CH2Api.reason(err), 'bad');
-      }
-    });
+    if (!quiet) route();
+  }
 
-    sheet.root.addEventListener('input', () => {
-      read();
-      N.saveDraft(window.localStorage, post);
-      const head = sheet.root.querySelector('.note:last-of-type');
-      if (head) head.outerHTML = V().newsHeadline(post.markdown, N);
-    });
+  function openNewPost() {
+    newsShow = null;
+    newsEdit.adding = true;
+    newsEdit.problems = [];
+    newsEdit.slug = '';
+    newsEdit.post = {
+      slug: '',
+      gameId: newsEdit.scope === 'game' ? newsEdit.gameId : '',
+      markdown: '',
+      coverUrl: '',
+      published: false,
+      existing: false,
+    };
+    newsEdit.draft = null;
+    if (location.hash.slice(1).split('?')[0] === 'news') route();
+    else location.hash = '#news';
+  }
 
-    /* Имя файла предлагается из заголовка, пока его не тронули руками:
-       у новой заметки оно всё равно нужно, а придумывать его дважды
-       (заголовок и имя) — работа на пустом месте. */
-    sheet.root.addEventListener('input', (e) => {
-      if (existing || !e.target.matches('[name="markdown"]')) return;
-      const slugField = sheet.root.querySelector('[name="slug"]');
-      if (!slugField || slugField.dataset.touched) return;
-      slugField.value = N.suggestSlug(N.titleOf(post.markdown));
-      post.slug = slugField.value;
-    });
-    sheet.root.addEventListener('change', (e) => {
-      if (e.target.matches('[name="slug"]')) e.target.dataset.touched = '1';
-    });
-
-    sheet.root.addEventListener('click', async (e) => {
-      const b = e.target.closest('[data-flow], [data-draft-restore], [data-draft-drop]');
-      if (!b) return;
-
-      if (b.hasAttribute('data-draft-restore')) {
-        post = Object.assign({}, post, draft.post);
-        draft = null;
-        draw();
-        return;
-      }
-      if (b.hasAttribute('data-draft-drop')) {
-        N.dropDraft(window.localStorage, post);
-        draft = null;
-        draw();
-        return;
-      }
-
-      read();
-
-      if (b.dataset.flow === 'cover') {
-        coverInput.click();
-        return;
-      }
-
-      if (b.dataset.flow === 'assets') {
-        flowAssets((markup) => {
-          const area = sheet.root.querySelector('[name="markdown"]');
-          const at = area ? area.selectionStart : post.markdown.length;
-          post.markdown = N.insertAt(post.markdown, at, markup);
-          N.saveDraft(window.localStorage, post);
-          draw();
-        });
-        return;
-      }
-
-      const problems = N.problems(post);
-      if (problems.length) {
-        draw(problems);
-        toast('Не хватает: ' + problems.map((p) => p.text).join('; '), 'warn');
-        return;
-      }
-
-      if (b.dataset.flow === 'preview') {
-        try {
-          const got = await API.newsPreview(post.markdown, post.gameId ? 'game' : 'launcher', post.gameId);
-          const w2 = window.open('', '_blank');
-          if (w2) w2.document.write((got && (got.html || got.markdown)) || String(got || ''));
-        } catch (err) {
-          toast('Предпросмотр не собрался: ' + window.CH2Api.reason(err), 'bad');
-        }
-        return;
-      }
-
-      if (b.dataset.flow === 'save') {
-        b.disabled = true;
-        try {
-          await API.newsSave(N.payload(post));
-          N.dropDraft(window.localStorage, post);
-          toast(
-            post.published
-              ? 'Заметка сохранена и осталась опубликованной'
-              : 'Заметка сохранена. Игроки увидят её после публикации.',
-            'ok'
-          );
-          sheet.close();
-          await refresh(['news']);
-        } catch (err) {
-          toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
-          b.disabled = false;
-        }
-      }
+  /** Читает поля со страницы: перерисовки на каждый ввод здесь нет. */
+  function readPostForm() {
+    const box = $('[data-news-editor]');
+    if (!box || !newsEdit.post) return;
+    const q = (n) => box.querySelector('[name="' + n + '"]');
+    if (!q('markdown')) return;
+    newsEdit.post = Object.assign({}, newsEdit.post, {
+      slug: q('slug').value,
+      gameId: q('gameId').value,
+      coverUrl: q('coverUrl').value,
+      markdown: q('markdown').value,
     });
   }
 
@@ -1461,21 +1438,31 @@
   /* Галерея адресуется папкой и именем по отдельности: сервер режет
      `path` своим SanitizeAssetPath, а имя проверяет сам, и склеенный
      путь одной строкой ушёл бы в никуда. */
-  function flowGallery(gameId) {
+  /**
+   * Галерея игры.
+   *
+   * `host` — куда рисовать: у него есть `root` (элемент, на котором висят
+   * нажатия) и `body(html)` (перерисовать содержимое). Лист даёт и то, и
+   * другое; вкладка «Галерея» на экране игр — тоже. Работа с файлами от
+   * этого не зависит, а второй копии её здесь быть не должно.
+   */
+  function flowGallery(gameId, host) {
     const G = window.CH2Gallery;
     let path = '';
     let entries = [];
     let cover = '';
 
-    const sheet = openSheet({
-      title: 'Галерея: ' + gameId,
-      lede: 'Обложка попадает на витрину игры. Остальные файлы — на её страницу.',
-      body: '<div class="sk" style="height:18rem"></div>',
-      foot:
-        '<button class="btn" type="button" data-flow="mkdir">Новая папка</button>' +
-        '<button class="btn" type="button" data-flow="pick">Загрузить файл</button>' +
-        '<button class="btn" type="button" data-flow="byUrl">Загрузить по ссылке</button>',
-    });
+    const sheet =
+      host ||
+      openSheet({
+        title: 'Галерея: ' + gameId,
+        lede: 'Обложка попадает на витрину игры. Остальные файлы — на её страницу.',
+        body: '<div class="sk" style="height:18rem"></div>',
+        foot:
+          '<button class="btn" type="button" data-flow="mkdir">Новая папка</button>' +
+          '<button class="btn" type="button" data-flow="pick">Загрузить файл</button>' +
+          '<button class="btn" type="button" data-flow="byUrl">Загрузить по ссылке</button>',
+      });
 
     const input = document.createElement('input');
     input.type = 'file';
@@ -1622,152 +1609,288 @@
     });
   }
 
-  /* --- Карточка игры --- */
+  /* ---------- Экран игр: выбор слева, работа справа ---------- */
 
-  /* Реестр — это то, что лаунчер читает при старте. Сохраняется он
-     целиком, поэтому правка одной игры уезжает вместе со всем списком:
-     отправить одну строку сервер не умеет, а собирать список из
-     отрисованной таблицы значило бы потерять всё, чего в ней не видно. */
-  function flowGame(where) {
-    const R = window.CH2Registry;
-    const w = where || {};
-    const existing = Boolean(w.gameId);
+  /** Какая игра открыта, какой стороной и не заводят ли новую. */
+  let gameEdit = { gameId: '', tab: 'overview', adding: false, item: null, problems: [] };
 
-    const source = D.games.find((g) => g.gameId === w.gameId) || {};
-    let item = {
-      gameId: w.gameId || '',
-      title: source.title || '',
-      exeRelativePath: source.exe || '',
-      steamAppId: source.steamId || '',
-      steamFolder: source.steamFolder || '',
-      iconUrl: source.iconUrl || '',
-      unpublished: source.published === false,
-      existing: existing,
+  /** Версии сборок выбранной игры: читаются по открытию вкладки. */
+  let gameBuilds = null;
+
+  const GAME_TABS = [
+    { id: 'overview', title: 'Обзор' },
+    { id: 'versions', title: 'Версии' },
+    { id: 'gallery', title: 'Галерея' },
+    { id: 'danger', title: 'Публикация и удаление' },
+  ];
+
+  /** Строка списка игр: что видно, не открывая её. */
+  function gameRow(g) {
+    const marks =
+      (g.icon ? '' : '<span class="badge badge--warn">без иконки</span>') +
+      (g.published ? '' : '<span class="badge badge--warn">скрыта</span>') +
+      (g.modsEnabled ? '<span class="badge">моды</span>' : '');
+    return { id: g.gameId, title: g.title || g.gameId, sub: g.gameId, badge: marks };
+  }
+
+  /** Поля правки — из того, что прочитано с сервера. */
+  function gameFields(gameId) {
+    const src = D.games.find((g) => g.gameId === gameId) || {};
+    return {
+      gameId: gameId,
+      title: src.title || '',
+      exeRelativePath: src.exe || '',
+      steamAppId: src.steamId || '',
+      steamFolder: src.steamFolder || '',
+      iconUrl: src.iconUrl || '',
+      unpublished: src.published === false,
+      existing: Boolean(gameId),
     };
+  }
 
-    const sheet = openSheet({
-      title: existing ? 'Игра: ' + (item.title || item.gameId) : 'Новая игра',
-      lede: 'Это читает лаунчер при старте у каждого игрока. Ошибка здесь ломает запуск сразу у всех.',
-      body: V().gameForm(item, []),
-      foot:
-        (existing
-          ? '<button class="btn btn--danger btn--text" type="button" data-flow="remove">Убрать из реестра</button>'
-          : '') +
+  /* Открытым остаётся то, что открыли. Но выбранная игра могла пропасть
+     из реестра — тогда открываем первую, иначе экран показывал бы поля
+     того, чего уже нет. */
+  function pickGameIfNeeded() {
+    if (gameEdit.adding) return;
+    const alive = D.games.some((g) => g.gameId === gameEdit.gameId);
+    if (!alive) {
+      const first = D.games[0];
+      gameEdit = {
+        gameId: first ? first.gameId : '',
+        tab: 'overview',
+        adding: false,
+        item: first ? gameFields(first.gameId) : null,
+        problems: [],
+      };
+      gameBuilds = null;
+      return;
+    }
+    if (!gameEdit.item) gameEdit.item = gameFields(gameEdit.gameId);
+  }
+
+  /** Правая половина экрана целиком. */
+  function gameDetail() {
+    if (gameEdit.adding) {
+      return card('Новая игра', V().gameForm(gameEdit.item, gameEdit.problems), {
+        foot:
+          '<button class="btn btn--text" type="button" data-game-do="cancel">Отмена</button>' +
+          '<span class="push"></span>' +
+          '<button class="btn btn--accent" type="button" data-game-do="save">Завести игру</button>',
+      });
+    }
+    if (!gameEdit.item) {
+      return '<div class="empty"><b>Реестр пуст</b><span>Заведите первую игру — лаунчер покажет её игрокам</span></div>';
+    }
+    return card(
+      'Игра: ' + (gameEdit.item.title || gameEdit.item.gameId),
+      V().tabs(GAME_TABS, gameEdit.tab) + gameTabBody(),
+      { foot: gameTabFoot() }
+    );
+  }
+
+  function gameTabBody() {
+    if (gameEdit.tab === 'overview') {
+      return V().gameForm(gameEdit.item, gameEdit.problems);
+    }
+
+    if (gameEdit.tab === 'versions') {
+      if (gameBuilds === null) return '<div class="sk" style="height:12rem"></div>';
+      return (
+        list({
+          rows: gameBuilds.versions,
+          head: '<th>Версия</th><th>Собрана</th><th class="num">Файлов</th><th class="num">Размер</th><th>Состояние</th><th></th>',
+          row: (v) => `<tr>
+              <td class="mono">${esc(v.version)}</td>
+              <td class="dim">${esc(window.CH2Format.dateTime(v.date))}</td>
+              <td class="num">${v.files}</td>
+              <td class="num">${bytes(v.size)}</td>
+              <td>${
+                v.state === 'active'
+                  ? '<span class="badge badge--ok">у игроков</span>'
+                  : v.state === 'uploaded'
+                    ? '<span class="badge badge--accent">загружена</span>'
+                    : '<span class="badge">старая</span>'
+              }</td>
+              <td class="act">${
+                v.state === 'active'
+                  ? ''
+                  : `<button class="btn btn--text" type="button" data-game-do="activate" data-version="${esc(v.version)}">Отдать игрокам</button>` +
+                    `<button class="btn btn--danger btn--text" type="button" data-game-do="delete" data-version="${esc(v.version)}">Удалить</button>`
+              }</td>
+            </tr>`,
+          empty: 'Сборок нет',
+          emptyHint: 'Игроки увидят игру в списке, но скачать им будет нечего.',
+        }) +
+        '<p class="note">Активную версию удалить нельзя: клиенты, которые её докачивают, потеряют файлы на середине.</p>'
+      );
+    }
+
+    if (gameEdit.tab === 'gallery') {
+      /* У галереи свой корень: на нём висят её нажатия, и создаётся он
+         заново на каждую отрисовку. Вешать их на общий ящик нельзя —
+         подписки копились бы с каждым открытием вкладки. */
+      return (
+        '<div data-gallery>' +
+        '<div class="btn-row" style="margin-bottom: var(--s3)">' +
+        '<button class="btn" type="button" data-flow="mkdir">Новая папка</button>' +
+        '<button class="btn" type="button" data-flow="pick">Загрузить файл</button>' +
+        '<button class="btn" type="button" data-flow="byUrl">Загрузить по ссылке</button>' +
+        '</div>' +
+        '<div data-gallery-body><div class="sk" style="height:14rem"></div></div>' +
+        '</div>'
+      );
+    }
+
+    const g = gameEdit.item;
+    return `
+      <div class="stack">
+        <div class="note">${
+          g.unpublished
+            ? 'Игра скрыта от игроков: в лаунчере её нет, файлы и версии лежат на месте.'
+            : 'Игра видна игрокам. Убрать её с витрины можно галочкой на вкладке «Обзор» — файлы при этом останутся.'
+        }</div>
+        <div class="stack stack--tight">
+          <p class="dim">Убрать из реестра — игра пропадает из лаунчера, а её манифесты, версии и галерея остаются на диске.</p>
+          <div class="btn-row"><button class="btn btn--danger" type="button" data-game-do="remove">Убрать из реестра</button></div>
+        </div>
+        <div class="stack stack--tight">
+          <p class="dim">Удалить контент — с диска уходят все сборки, манифесты и картинки этой игры. Вернуть их можно только заливкой заново.</p>
+          <div class="btn-row"><button class="btn btn--danger" type="button" data-act="games.purge" data-args='{"gameId":"${esc(g.gameId)}","title":"${esc(g.title || g.gameId)}"}'>Удалить контент</button></div>
+        </div>
+      </div>`;
+  }
+
+  function gameTabFoot() {
+    if (gameEdit.tab === 'overview') {
+      return '<span class="push"></span><button class="btn btn--accent" type="button" data-game-do="save">Сохранить</button>';
+    }
+    if (gameEdit.tab === 'versions') {
+      return (
+        '<span class="faint">Старее активной сервер оставляет две — на случай отката</span>' +
         '<span class="push"></span>' +
-        '<button class="btn btn--accent" type="button" data-flow="save">Сохранить</button>',
+        '<button class="btn" type="button" data-game-do="prune">Убрать старые</button>'
+      );
+    }
+    return '';
+  }
+
+  /** Перерисовывает правую половину, не трогая список слева. */
+  function drawGameDetail() {
+    const box = $('[data-game-detail]');
+    if (!box) return;
+    box.innerHTML = gameDetail();
+    if (gameEdit.tab === 'gallery' && !gameEdit.adding) mountGameGallery();
+  }
+
+  /* Галерея рисует себя во вкладку тем же кодом, что и в листе: второй
+     копии работы с файлами здесь быть не должно. */
+  function mountGameGallery() {
+    const box = $('[data-game-detail]');
+    if (!box) return;
+    const pane = box.querySelector('[data-gallery]');
+    if (!pane) return;
+    flowGallery(gameEdit.gameId, {
+      root: pane,
+      body: (html) => {
+        const slot = pane.querySelector('[data-gallery-body]');
+        if (slot) slot.innerHTML = html;
+      },
     });
+  }
 
-    const read = () => {
-      const q = (n) => sheet.root.querySelector('[name="' + n + '"]');
-      if (!q('title')) return;
-      item = Object.assign({}, item, {
-        gameId: existing ? item.gameId : q('gameId').value.trim(),
-        title: q('title').value,
-        exeRelativePath: q('exeRelativePath').value,
-        steamAppId: q('steamAppId').value,
-        steamFolder: q('steamFolder').value,
-        iconUrl: q('iconUrl').value,
-        unpublished: !q('published').checked,
-      });
-    };
+  async function loadGameBuilds() {
+    const want = gameEdit.gameId;
+    try {
+      const got = await API.versions(want);
+      if (gameEdit.gameId !== want) return;
+      gameBuilds = window.CH2Sections.launcher(got);
+    } catch {
+      /* Сборок у игры может не быть вовсе — сервер отвечает 404, и это не
+         отказ: игра заведена, заливать ей ещё нечего. */
+      if (gameEdit.gameId !== want) return;
+      gameBuilds = { versions: [], active: '', newest: '', uploaded: [], pending: false };
+    }
+    if (gameEdit.tab === 'versions') drawGameDetail();
+  }
 
-    const draw = (problems) => {
-      sheet.body(V().gameForm(item, problems || []));
-    };
-
-    /* Иконку загружают файлом, но только у существующей игры: сервер
-       кладёт её в каталог манифестов, а того ещё нет. */
-    const iconInput = document.createElement('input');
-    iconInput.type = 'file';
-    iconInput.accept = 'image/*';
-    iconInput.addEventListener('change', async () => {
-      if (!iconInput.files || !iconInput.files[0]) return;
-      try {
-        const got = await API.gamesIconUpload(item.gameId, iconInput.files[0]);
-        item.iconUrl = (got && (got.iconUrl || got.url)) || '/manifests/' + item.gameId + '/icon.png';
-        draw();
-        toast('Иконка загружена', 'ok');
-        await refresh(['games'], false);
-      } catch (err) {
-        toast('Не загрузилось: ' + window.CH2Api.reason(err), 'bad');
-      }
+  /** Читает поля со страницы в состояние: перерисовки на ввод здесь нет. */
+  function readGameForm() {
+    const box = $('[data-game-detail]');
+    if (!box || !gameEdit.item) return;
+    const q = (n) => box.querySelector('[name="' + n + '"]');
+    if (!q('title')) return;
+    gameEdit.item = Object.assign({}, gameEdit.item, {
+      gameId: gameEdit.adding ? q('gameId').value.trim() : gameEdit.item.gameId,
+      title: q('title').value,
+      exeRelativePath: q('exeRelativePath').value,
+      steamAppId: q('steamAppId').value,
+      steamFolder: q('steamFolder').value,
+      iconUrl: q('iconUrl').value,
+      unpublished: !q('published').checked,
     });
+  }
 
-    /* Список для сохранения собирается из того, что прочитано с
-       сервера, а не из таблицы на экране: в реестре есть поля, которых
-       таблица не показывает, и собранный из неё список их бы стёр. */
-    const merged = () => {
-      const rows = D.raw.games.slice();
-      const at = rows.findIndex((g) => g.gameId === item.gameId);
-      const row = Object.assign({}, at >= 0 ? rows[at] : {}, {
-        gameId: item.gameId,
-        title: item.title.trim(),
-        exeRelativePath: item.exeRelativePath.trim(),
-        steamAppId: item.steamAppId.trim(),
-        steamFolder: item.steamFolder.trim(),
-        iconUrl: item.iconUrl.trim(),
-        unpublished: item.unpublished,
-      });
-      if (at >= 0) rows[at] = row;
-      else rows.push(row);
-      return R.reorder(rows);
-    };
-
-    sheet.root.addEventListener('click', async (e) => {
-      const b = e.target.closest('[data-flow]');
-      if (!b) return;
-      read();
-
-      if (b.dataset.flow === 'icon') {
-        iconInput.click();
-        return;
-      }
-      if (b.dataset.flow === 'icon-default') {
-        item.iconUrl = '';
-        draw();
-        return;
-      }
-
-      if (b.dataset.flow === 'remove') {
-        const agreed = await ask({
-          title: 'Убрать «' + (item.title || item.gameId) + '» из реестра?',
-          body: 'Игра пропадёт из лаунчера. Её манифесты, версии и галерея останутся на диске — удалить их можно отдельно, кнопкой «Удалить контент».',
-          ok: 'Убрать из реестра',
-          cancel: 'Отмена',
-        });
-        if (!agreed) return;
-        try {
-          await API.gamesSave(R.reorder(R.remove(D.raw.games, item.gameId)));
-          toast('Игра убрана из реестра', 'ok');
-          sheet.close();
-          await refresh(['games', 'overview']);
-        } catch (err) {
-          toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
-        }
-        return;
-      }
-
-      if (b.dataset.flow !== 'save') return;
-
-      const list = merged();
-      const problems = R.problems(list).filter((p) => p.gameId === item.gameId || !p.gameId);
-      if (problems.length) {
-        draw(problems);
-        toast(problems[0].message, 'warn');
-        return;
-      }
-
-      b.disabled = true;
-      try {
-        await API.gamesSave(list);
-        toast(existing ? 'Сохранено. Лаунчер увидит это при следующем старте.' : 'Игра заведена', 'ok');
-        sheet.close();
-        await refresh(['games', 'overview']);
-      } catch (err) {
-        toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
-        b.disabled = false;
-      }
+  /* Список для сохранения собирается из того, что прочитано с сервера, а
+     не из строк на экране: в реестре есть поля, которых экран не
+     показывает, и собранный из него список их бы стёр. */
+  function mergedRegistry() {
+    const R = window.CH2Registry;
+    const item = gameEdit.item;
+    const rows = D.raw.games.slice();
+    const at = rows.findIndex((g) => g.gameId === item.gameId);
+    const row = Object.assign({}, at >= 0 ? rows[at] : {}, {
+      gameId: item.gameId,
+      title: item.title.trim(),
+      exeRelativePath: item.exeRelativePath.trim(),
+      steamAppId: item.steamAppId.trim(),
+      steamFolder: item.steamFolder.trim(),
+      iconUrl: item.iconUrl.trim(),
+      unpublished: item.unpublished,
     });
+    if (at >= 0) rows[at] = row;
+    else rows.push(row);
+    return R.reorder(rows);
+  }
+
+  /** Открыть игру нужной стороной. Зовут и с экрана, и из палитры. */
+  function openGame(gameId, tab) {
+    gameEdit = {
+      gameId: gameId,
+      tab: tab || 'overview',
+      adding: false,
+      item: gameFields(gameId),
+      problems: [],
+    };
+    gameBuilds = null;
+    goGames();
+  }
+
+  function openNewGame() {
+    gameEdit = {
+      gameId: '',
+      tab: 'overview',
+      adding: true,
+      item: {
+        gameId: '',
+        title: '',
+        exeRelativePath: '',
+        steamAppId: '',
+        steamFolder: '',
+        iconUrl: '',
+        unpublished: false,
+        existing: false,
+      },
+      problems: [],
+    };
+    gameBuilds = null;
+    goGames();
+  }
+
+  /* Смена хэша сама позовёт отрисовку; если мы уже здесь, зовём её сами. */
+  function goGames() {
+    if (location.hash.slice(1).split('?')[0] === 'games') route();
+    else location.hash = '#games';
   }
 
   /* --- Порядок игр --- */
@@ -1845,12 +1968,29 @@
     });
   }
 
+  /* ИЗ ЧЕГО СОБИРАТЬ — ЭТО ПАКЕТ, А НЕ ИГРА.
+     Сервер собирает названный пакет на Thunderstore; из одной игры он
+     собрать не может и отвечает «не указан модпак». У игры, которой
+     ничего ещё не собирали, пакета и правда нет — и правильный ответ на
+     нажатие тут не отказ в листе, а каталог, где его выбирают. */
+  function knowsPack(pack) {
+    const p = pack || {};
+    if (p.namespace && p.name) return true;
+    if (p.packageUrl) return true;
+
+    toast('Сначала выберите модпак в каталоге', 'warn');
+    flowCatalog(p);
+    return false;
+  }
+
   /* --- Состав будущей сборки --- */
 
   /* Пересчёт спрашивает у Thunderstore, из чего соберётся модпак, и не
      качает ни байта. Нужен он затем, что после сборки список менять
      поздно: пропавший пакет виден здесь, а не на середине выкатки. */
   function flowResolve(pack) {
+    if (!knowsPack(pack)) return;
+
     const sheet = openSheet({
       title: 'Состав сборки: ' + (pack.title || pack.gameId),
       lede: 'Thunderstore отвечает списком. Ничего не скачивается и никуда не уходит.',
@@ -2404,11 +2544,16 @@
     rebuild: (a) => flowRebuild(a),
     versions: (a) => flowVersions(a),
     'error-events': (a) => flowErrorEvents(a),
-    'new-post': () => flowNews({}),
-    'edit-post': (a) => flowNews(a),
-    gallery: (a) => flowGallery(a.gameId || (D.games[0] && D.games[0].gameId) || ''),
-    'new-game': () => flowGame({}),
-    'edit-game': (a) => flowGame(a),
+    /* Заметку правят на экране «Новости», рядом со списком и видом
+       игрока, — не в листе поверх раздела. */
+    'new-post': () => openNewPost(),
+    'edit-post': (a) => openPost({ scope: a.gameId ? 'game' : 'launcher', gameId: a.gameId, slug: a.slug }),
+    /* Правка игры, её галерея и версии живут на экране «Игры» — не в
+       листе поверх него. Дело этих трёх кнопок теперь одно: открыть там
+       нужную игру нужной стороной. */
+    gallery: (a) => openGame(a.gameId || (D.games[0] && D.games[0].gameId) || '', 'gallery'),
+    'new-game': () => openNewGame(),
+    'edit-game': (a) => openGame(a.gameId, 'overview'),
     order: () => flowOrder(),
     ecosystem: () => flowEcosystem(),
     logs: (a) => flowLogs(a),
@@ -2569,21 +2714,435 @@
     wireSection();
   }
 
+  /* ---------- Экран игр: нажатия ---------- */
+
+  function wireGames() {
+    const box = $('[data-games]');
+    if (!box) return;
+
+    /* Поиск прячет строки на месте, а не перерисовывает список: иначе
+       поле теряет и текст, и курсор на каждой букве. */
+    const search = box.querySelector('[data-game-search]');
+    if (search) {
+      search.addEventListener('input', () => {
+        const q = search.value.trim().toLowerCase();
+        box.querySelectorAll('[data-pick]').forEach((b) => {
+          b.hidden = q ? !b.textContent.toLowerCase().includes(q) : false;
+        });
+      });
+    }
+
+    if (gameEdit.tab === 'versions' && gameBuilds === null && !gameEdit.adding) loadGameBuilds();
+    if (gameEdit.tab === 'gallery' && !gameEdit.adding) mountGameGallery();
+
+    /* Кнопки экрана помечены `data-game-do`, а не `data-game`: второе имя
+       уже занято переключателем игр на экране сборок, и его обработчик
+       перерисовывал раздел на каждое нажатие — вместе с формой, из
+       которой мы в этот момент читаем поля. Правка при этом молча
+       терялась: на сервер уезжало то, что было до неё. */
+    box.addEventListener('click', async (e) => {
+      const pick = e.target.closest('[data-pick]');
+      if (pick) {
+        openGame(pick.dataset.pick, gameEdit.tab === 'versions' ? 'versions' : gameEdit.tab);
+        return;
+      }
+
+      const tab = e.target.closest('[data-tab]');
+      if (tab) {
+        readGameForm();
+        gameEdit.tab = tab.dataset.tab;
+        gameEdit.problems = [];
+        if (gameEdit.tab === 'versions' && gameBuilds === null) loadGameBuilds();
+        drawGameDetail();
+        return;
+      }
+
+      /* Иконка живёт в форме «Обзора», а нажатия галереи — внутри её
+         собственного корня: сюда они не доходят. */
+      const icon = e.target.closest('[data-flow]');
+      if (icon && !e.target.closest('[data-gallery]')) {
+        readGameForm();
+        if (icon.dataset.flow === 'icon') gameIconInput.click();
+        if (icon.dataset.flow === 'icon-default') {
+          gameEdit.item.iconUrl = '';
+          drawGameDetail();
+        }
+        return;
+      }
+
+      const b = e.target.closest('[data-game-do]');
+      if (!b) return;
+      await onGameAction(b);
+    });
+  }
+
+  async function onGameAction(b) {
+    const R = window.CH2Registry;
+    const kind = b.dataset.gameDo;
+
+    if (kind === 'cancel') {
+      gameEdit.adding = false;
+      gameEdit.item = null;
+      route();
+      return;
+    }
+
+    if (kind === 'activate' || kind === 'delete') {
+      const version = b.dataset.version;
+      const question =
+        kind === 'activate'
+          ? {
+              title: 'Отдать игрокам версию ' + version + '?',
+              body: 'Лаунчер начнёт качать её всем, кто запустит игру. Прежняя останется на сервере — вернуться к ней можно тем же способом.',
+              ok: 'Отдать игрокам',
+              cancel: 'Отмена',
+            }
+          : {
+              title: 'Удалить версию ' + version + '?',
+              body: 'Сборка уйдёт с диска вместе с манифестом. Вернуть её можно только заливкой заново.',
+              ok: 'Удалить',
+              cancel: 'Отмена',
+            };
+      if (!(await ask(question))) return;
+      try {
+        if (kind === 'activate') await API.activate(gameEdit.gameId, version);
+        else await API.deleteVersion(gameEdit.gameId, version);
+        toast(kind === 'activate' ? 'Версия отдана игрокам' : 'Версия удалена', 'ok');
+        gameBuilds = null;
+        await loadGameBuilds();
+        drawGameDetail();
+      } catch (err) {
+        toast('Не вышло: ' + window.CH2Api.reason(err), 'bad');
+      }
+      return;
+    }
+
+    if (kind === 'prune') {
+      const agreed = await ask({
+        title: 'Убрать старые версии?',
+        body: 'Уйдёт всё, что старше версии у игроков, кроме двух непосредственно перед ней: откатиться на шаг-два останется возможным.',
+        ok: 'Убрать старые',
+        cancel: 'Отмена',
+      });
+      if (!agreed) return;
+      try {
+        await API.pruneVersions(gameEdit.gameId);
+        toast('Старые версии убраны', 'ok');
+        gameBuilds = null;
+        await loadGameBuilds();
+        drawGameDetail();
+      } catch (err) {
+        toast('Не вышло: ' + window.CH2Api.reason(err), 'bad');
+      }
+      return;
+    }
+
+    if (kind === 'remove') {
+      const item = gameEdit.item;
+      const agreed = await ask({
+        title: 'Убрать «' + (item.title || item.gameId) + '» из реестра?',
+        body: 'Игра пропадёт из лаунчера. Её манифесты, версии и галерея останутся на диске — удалить их можно отдельно, кнопкой «Удалить контент».',
+        ok: 'Убрать из реестра',
+        cancel: 'Отмена',
+      });
+      if (!agreed) return;
+      try {
+        await API.gamesSave(R.reorder(R.remove(D.raw.games, item.gameId)));
+        toast('Игра убрана из реестра', 'ok');
+        gameEdit.item = null;
+        gameEdit.gameId = '';
+        await refresh(['games', 'overview']);
+      } catch (err) {
+        toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
+      }
+      return;
+    }
+
+    if (kind !== 'save') return;
+
+    readGameForm();
+    const rows = mergedRegistry();
+    const problems = R.problems(rows).filter((x) => x.gameId === gameEdit.item.gameId || !x.gameId);
+    if (problems.length) {
+      gameEdit.problems = problems;
+      drawGameDetail();
+      toast(problems[0].message, 'warn');
+      return;
+    }
+
+    b.disabled = true;
+    const wasNew = gameEdit.adding;
+    const savedId = gameEdit.item.gameId;
+    try {
+      await API.gamesSave(rows);
+      toast(wasNew ? 'Игра заведена' : 'Сохранено. Лаунчер увидит это при следующем старте.', 'ok');
+      gameEdit.adding = false;
+      gameEdit.gameId = savedId;
+      gameEdit.problems = [];
+      gameEdit.item = null;
+      await refresh(['games', 'overview']);
+    } catch (err) {
+      toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
+      b.disabled = false;
+    }
+  }
+
+  /* Иконку загружают файлом, но только у заведённой игры: сервер кладёт
+     её в каталог манифестов, а того у новой ещё нет. */
+  const gameIconInput = document.createElement('input');
+  gameIconInput.type = 'file';
+  gameIconInput.accept = 'image/*';
+  gameIconInput.addEventListener('change', async () => {
+    if (!gameIconInput.files || !gameIconInput.files[0]) return;
+    try {
+      const got = await API.gamesIconUpload(gameEdit.gameId, gameIconInput.files[0]);
+      gameEdit.item.iconUrl = (got && (got.iconUrl || got.url)) || '/manifests/' + gameEdit.gameId + '/icon.png';
+      drawGameDetail();
+      toast('Иконка загружена', 'ok');
+      await refresh(['games'], false);
+    } catch (err) {
+      toast('Не загрузилось: ' + window.CH2Api.reason(err), 'bad');
+    }
+  });
+
+  /* ---------- Экран новостей: нажатия ---------- */
+
+  function wireNews() {
+    const box = $('[data-news]');
+    if (!box) return;
+
+    const N = window.CH2News;
+
+    /* Смена ленты сразу показывает её содержимое: выбор — это и есть
+       запрос, кнопки «применить» рядом с ним быть не должно. */
+    box.addEventListener('change', (e) => {
+      if (e.target.matches('[name="scope"]')) {
+        newsEdit.scope = e.target.value;
+        if (newsEdit.scope === 'game' && !newsEdit.gameId) {
+          const withGame = D.games[0];
+          newsEdit.gameId = withGame ? withGame.gameId : '';
+        }
+        newsEdit.adding = false;
+        newsEdit.post = null;
+        route();
+        return;
+      }
+      if (e.target.matches('[name="gameId"]') && e.target.closest('[data-news-filter]')) {
+        newsEdit.gameId = e.target.value;
+        newsEdit.adding = false;
+        newsEdit.post = null;
+        route();
+        return;
+      }
+      /* Имя файла предлагается из заголовка, пока его не тронули руками. */
+      if (e.target.matches('[name="slug"]')) e.target.dataset.touched = '1';
+    });
+
+    /* Черновик пишется в браузер на каждый ввод: заметку набирают
+       минутами, и терять её из-за случайно закрытой вкладки нельзя. */
+    box.addEventListener('input', (e) => {
+      if (!e.target.closest('[data-news-editor]')) return;
+      readPostForm();
+      N.saveDraft(window.localStorage, newsEdit.post);
+
+      if (!newsEdit.adding || !e.target.matches('[name="markdown"]')) {
+        drawNewsHeadline();
+        return;
+      }
+      const slugField = box.querySelector('[name="slug"]');
+      if (slugField && !slugField.dataset.touched) {
+        slugField.value = N.suggestSlug(N.titleOf(newsEdit.post.markdown));
+        newsEdit.post.slug = slugField.value;
+      }
+      drawNewsHeadline();
+    });
+
+    box.addEventListener('click', async (e) => {
+      const pick = e.target.closest('[data-pick]');
+      if (pick) {
+        const parts = pick.dataset.pick.split('/');
+        openPost({ scope: parts[0], gameId: parts[1], slug: parts.slice(2).join('/') });
+        return;
+      }
+
+      if (e.target.closest('[data-draft-restore]')) {
+        newsEdit.post = Object.assign({}, newsEdit.post, newsEdit.draft.post);
+        newsEdit.draft = null;
+        drawNewsEditor();
+        return;
+      }
+      if (e.target.closest('[data-draft-drop]')) {
+        N.dropDraft(window.localStorage, newsEdit.post);
+        newsEdit.draft = null;
+        drawNewsEditor();
+        return;
+      }
+
+      const cover = e.target.closest('[data-flow="cover"]');
+      if (cover) {
+        readPostForm();
+        newsCoverInput.click();
+        return;
+      }
+
+      const b = e.target.closest('[data-post]');
+      if (!b) return;
+      await onPostAction(b);
+    });
+  }
+
+  /* Строка «в ленте игрок увидит» пересчитывается на каждый ввод:
+     заголовок здесь не поле, а первая строка текста. */
+  function drawNewsHeadline() {
+    const box = $('[data-news-preview]');
+    if (box) box.innerHTML = newsPreview();
+  }
+
+  async function onPostAction(b) {
+    const N = window.CH2News;
+    readPostForm();
+    const post = newsEdit.post;
+    const scope = post.gameId ? 'game' : 'launcher';
+
+    if (b.dataset.post === 'assets') {
+      flowAssets((markup) => {
+        const area = $('[data-news-editor] [name="markdown"]');
+        const at = area ? area.selectionStart : post.markdown.length;
+        newsEdit.post.markdown = N.insertAt(post.markdown, at, markup);
+        N.saveDraft(window.localStorage, newsEdit.post);
+        drawNewsEditor();
+      });
+      return;
+    }
+
+    if (b.dataset.post === 'delete') {
+      const agreed = await ask({
+        title: 'Удалить заметку «' + (N.titleOf(post.markdown) || post.slug) + '»?',
+        body: 'Она пропадёт из ленты у всех игроков. Вернуть её можно только написав заново.',
+        ok: 'Удалить',
+        cancel: 'Отмена',
+      });
+      if (!agreed) return;
+      try {
+        await API.newsDelete(scope, post.gameId, post.slug);
+        N.dropDraft(window.localStorage, post);
+        toast('Заметка удалена', 'ok');
+        newsEdit.post = null;
+        newsEdit.slug = '';
+        await refresh(['news', 'overview']);
+      } catch (err) {
+        toast('Не удалилось: ' + window.CH2Api.reason(err), 'bad');
+      }
+      return;
+    }
+
+    if (b.dataset.post === 'publish') {
+      try {
+        await API.newsPublish(scope, post.gameId, post.slug, !post.published);
+        newsEdit.post.published = !post.published;
+        toast(newsEdit.post.published ? 'Заметка на виду у игроков' : 'Заметка снята с публикации', 'ok');
+        await refresh(['news', 'overview']);
+      } catch (err) {
+        toast('Не вышло: ' + window.CH2Api.reason(err), 'bad');
+      }
+      return;
+    }
+
+    const problems = N.problems(post);
+    if (problems.length) {
+      newsEdit.problems = problems;
+      drawNewsEditor();
+      toast('Не хватает: ' + problems.map((x) => x.text).join('; '), 'warn');
+      return;
+    }
+    newsEdit.problems = [];
+
+    if (b.dataset.post === 'preview') {
+      try {
+        const got = await API.newsPreview(post.markdown, scope, post.gameId);
+        newsShow = { list: (got && got.listHtml) || '', content: (got && got.contentHtml) || '' };
+        drawNewsPreview();
+      } catch (err) {
+        toast('Предпросмотр не собрался: ' + window.CH2Api.reason(err), 'bad');
+      }
+      return;
+    }
+
+    if (b.dataset.post !== 'save') return;
+
+    b.disabled = true;
+    const wasNew = newsEdit.adding;
+    try {
+      await API.newsSave(N.payload(post));
+      N.dropDraft(window.localStorage, post);
+      toast(
+        post.published
+          ? 'Заметка сохранена и осталась опубликованной'
+          : 'Заметка сохранена. Игроки увидят её после публикации.',
+        'ok'
+      );
+      newsEdit.adding = false;
+      newsEdit.draft = null;
+      newsEdit.slug = post.slug;
+      newsEdit.gameId = post.gameId;
+      newsEdit.scope = post.gameId ? 'game' : 'launcher';
+      newsEdit.post = Object.assign({}, post, { existing: true });
+      await refresh(['news', 'overview']);
+      if (wasNew) openPost({ scope: newsEdit.scope, gameId: newsEdit.gameId, slug: newsEdit.slug });
+    } catch (err) {
+      toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
+      b.disabled = false;
+    }
+  }
+
+  /* Обложку загружают файлом, но только у сохранённой заметки: сервер
+     кладёт её рядом с самой заметкой, а той ещё нет. */
+  const newsCoverInput = document.createElement('input');
+  newsCoverInput.type = 'file';
+  newsCoverInput.accept = 'image/*';
+  newsCoverInput.addEventListener('change', async () => {
+    if (!newsCoverInput.files || !newsCoverInput.files[0]) return;
+    const post = newsEdit.post;
+    try {
+      const got = await API.newsCoverUpload(
+        post.gameId ? 'game' : 'launcher',
+        post.gameId,
+        post.slug,
+        newsCoverInput.files[0]
+      );
+      newsEdit.post.coverUrl = (got && (got.coverUrl || got.url)) || post.coverUrl;
+      drawNewsEditor();
+      toast('Обложка загружена', 'ok');
+    } catch (err) {
+      toast('Не загрузилось: ' + window.CH2Api.reason(err), 'bad');
+    }
+  });
+
   function wireSection() {
+    wireGames();
+    wireNews();
+
     /* Разница между сборками считается из двух настоящих манифестов и
        приезжает уже после отрисовки: это два файла по мегабайту, и
        держать из-за них весь раздел пустым незачем. Считается она один
        раз на пару версий — второй заход берёт готовое. */
     if ($('[data-diff]') && D.diff === undefined) diffLoad(D.diffPair);
 
-    const go = $('[data-diff-go]');
-    if (go) {
-      go.addEventListener('click', () => {
+    /* Выбор версии сразу и считает разницу: выбор — это и есть запрос,
+       а кнопка «Сравнить» рядом только откладывала его до второго
+       нажатия. Пока считается, на месте дерева стоит скелет: иначе
+       непонятно, устарел показанный список или ещё нет. */
+    const fromBox = $('[data-diff-from]');
+    const toBox = $('[data-diff-to]');
+    if (fromBox && toBox) {
+      const recompare = () => {
         D.diff = undefined;
         const box = $('[data-diff]');
         if (box) box.innerHTML = '<div class="sk" style="height:12rem"></div>';
-        diffLoad({ from: $('[data-diff-from]').value, to: $('[data-diff-to]').value });
-      });
+        diffLoad({ from: fromBox.value, to: toBox.value });
+      };
+      fromBox.addEventListener('change', recompare);
+      toBox.addEventListener('change', recompare);
     }
 
     /* Отбор обращений считается на месте: сервер отдаёт инбокс целиком,
