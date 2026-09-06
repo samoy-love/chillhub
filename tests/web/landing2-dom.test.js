@@ -86,9 +86,8 @@ async function boot(t, overrides) {
 
   for (let i = 0; i < 60; i++) await new Promise((r) => setTimeout(r, 0));
 
-  /* Окно закрывается после проверки. Эмулятор держит `setInterval` для
-     очереди, а фон — `requestAnimationFrame`: без закрытия процесс тестов
-     не завершается вовсе. */
+  /* Окно закрывается после проверки: фон держит `requestAnimationFrame`,
+     и без закрытия процесс тестов не завершается вовсе. */
   t.after(() => window.close());
 
   return { window, calls };
@@ -267,40 +266,6 @@ test('с setup.json факты появляются и хеш попадает �
   const btn = window.document.querySelector('.copy-hash');
   assert.strictEqual(btn.dataset.hash, 'abc123');
   assert.strictEqual(window.document.querySelector('p[data-setup="sha256"]').hidden, false);
-});
-
-/* ---------- Копия лаунчера ---------- */
-
-test('копия лаунчера наполняется теми же играми, что каталог', async (t) => {
-  const { window } = await boot(t);
-  const rows = window.document.querySelectorAll('.emu-game');
-  assert.strictEqual(rows.length, 3);
-  assert.match(rows[0].textContent, /R\.E\.P\.O\./);
-});
-
-test('игра без модпака не получает кнопок запуска', async (t) => {
-  const { window } = await boot(t);
-  const rows = [...window.document.querySelectorAll('[data-emu-select]')];
-  const bodycam = rows.find((r) => /Bodycam/.test(r.textContent));
-  bodycam.click();
-  await until(() => /Bodycam/.test(window.document.querySelector('.emu-hero h3').textContent));
-  // У неё нет modpack и steamAppId — вариантов запуска быть не может
-  assert.strictEqual(window.document.querySelectorAll('.emu-launch').length, 0);
-  assert.ok(window.document.querySelector('[data-emu-action]'), 'кнопка действия обязана остаться');
-});
-
-test('постановка в очередь показывает док и подписывает позиции', async (t) => {
-  const { window } = await boot(t);
-  const rows = [...window.document.querySelectorAll('[data-emu-select]')];
-  // Нужна игра, которую ещё предстоит поставить: у установленной кнопка запускает
-  const lethal = rows.find((r) => /Lethal Company/.test(r.textContent));
-  lethal.click();
-  await until(() => /Установить/.test(window.document.querySelector('[data-emu-action]').textContent));
-  window.document.querySelector('[data-emu-action]').click();
-
-  const shown = await until(() => window.document.querySelector('.emu-dock'));
-  assert.ok(shown, 'док очереди не появился');
-  assert.match(window.document.querySelector('.emu-dock').textContent, /Очередь загрузок/);
 });
 
 /* ---------- Заявка ---------- */
