@@ -31,28 +31,53 @@ test('пустая строка не считается значением по�
 
 /* ---------- Лаунчер ---------- */
 
-test('активная версия берётся по метке, а не по месту в списке', () => {
+/* ФОРМА ОТВЕТА ЗДЕСЬ — СЕРВЕРНАЯ, А НЕ ПРИДУМАННАЯ.
+   `/admin/api/list` отдаёт `{items:[{version,createdAt,files,bytes}],
+   latest}` — версии от старых к новым, активная названа отдельным
+   полем. Признака `state` в строке нет вовсе. Прежние проверки его
+   выдумали, разбор искал его же, и на настоящем ответе активной не
+   оказывалось ни одной: первый экран показывал «Игроки получают .
+   Ничего свежее не загружено» при трёх залитых сборках. */
+test('активная версия берётся из поля latest, а не из строки', () => {
   const l = S.launcher({
-    items: [
-      { version: '1.6.23', state: 'old' },
-      { version: '1.6.24', state: 'active' },
-      { version: '1.6.25', state: 'uploaded' },
-    ],
+    items: [{ version: '1.6.23' }, { version: '1.6.24' }, { version: '1.6.25' }],
+    latest: '1.6.24',
   });
-  // Порядок ответа не гарантирован, и «первая» однажды оказалась старой
   assert.strictEqual(l.active, '1.6.24');
-  assert.strictEqual(l.uploaded.length, 1);
+  assert.deepStrictEqual(l.uploaded.map((v) => v.version), ['1.6.25']);
   assert.strictEqual(l.pending, true);
 });
 
+test('список разворачивается: сверху свежая, а не самая старая', () => {
+  const l = S.launcher({
+    items: [{ version: '1.6.23' }, { version: '1.6.24' }, { version: '1.6.25' }],
+    latest: '1.6.24',
+  });
+  assert.deepStrictEqual(l.versions.map((v) => v.version), ['1.6.25', '1.6.24', '1.6.23']);
+  assert.strictEqual(l.newest, '1.6.25');
+  assert.deepStrictEqual(l.versions.map((v) => v.state), ['uploaded', 'active', 'old']);
+});
+
 test('без активной версии решать нечего', () => {
-  const l = S.launcher({ items: [{ version: '1.0', state: 'uploaded' }] });
+  const l = S.launcher({ items: [{ version: '1.0' }], latest: '' });
   assert.strictEqual(l.pending, false, 'первая публикация — это не «ждёт решения»');
+  assert.strictEqual(l.active, '');
 });
 
 test('без загруженной сверх активной решать тоже нечего', () => {
-  const l = S.launcher({ items: [{ version: '1.0', state: 'active' }] });
+  const l = S.launcher({ items: [{ version: '1.0' }], latest: '1.0' });
   assert.strictEqual(l.pending, false);
+  assert.strictEqual(l.active, '1.0');
+});
+
+/* Активная, которой нет в списке, — это рассогласование на сервере, а не
+   повод показать активной соседнюю: по такой подсказке отдают игрокам не
+   ту сборку. */
+test('активная не из списка не назначается соседней версии', () => {
+  const l = S.launcher({ items: [{ version: '1.0' }, { version: '1.1' }], latest: '9.9' });
+  assert.strictEqual(l.active, '');
+  assert.strictEqual(l.pending, false);
+  assert.deepStrictEqual(l.versions.map((v) => v.state), ['old', 'old']);
 });
 
 test('пустой ответ лаунчера не роняет разбор', () => {
@@ -155,6 +180,25 @@ test('запреты по умолчанию: каталог и обновлен
   assert.strictEqual(m.blocks.launch, false);
 });
 
+/* СЕРВЕР ВСЕГДА ОТДАЁТ ВСЕ ТРИ ПОЛЯ, И НА ВЫКЛЮЧЕННЫХ РАБОТАХ ОНИ FALSE.
+   Умолчания писались под отсутствующий объект блоков. На настоящем
+   ответе форма открывалась с пустыми галочками, а «Включить работы»
+   молча отказывала: работы, которые ничего не закрывают, панель на
+   сервер не шлёт. Со стороны это мёртвая кнопка. */
+test('всё снятое читается как «не выбирали», а не как выбор', () => {
+  const m = S.maintenance({ enabled: false, blocks: { install: false, update: false, launch: false } });
+  assert.strictEqual(m.blocks.install, true);
+  assert.strictEqual(m.blocks.update, true);
+  assert.strictEqual(m.blocks.launch, false);
+});
+
+test('выбранное человеком остаётся как есть', () => {
+  const m = S.maintenance({ enabled: true, blocks: { install: false, update: true, launch: true } });
+  assert.strictEqual(m.blocks.install, false, 'снятую галочку возвращать нельзя');
+  assert.strictEqual(m.blocks.update, true);
+  assert.strictEqual(m.blocks.launch, true);
+});
+
 test('выключенные работы разбираются из пустого ответа', () => {
   const m = S.maintenance(null);
   assert.strictEqual(m.on, false);
@@ -195,10 +239,10 @@ test('нечего решать — список решений пуст', () =>
 
 test('загруженная версия лаунчера становится решением с действием', () => {
   const d = S.decisions({
-    launcher: S.launcher([
-      { version: '1.6.25', state: 'uploaded' },
-      { version: '1.6.24', state: 'active' },
-    ]),
+    launcher: S.launcher({
+      items: [{ version: '1.6.24' }, { version: '1.6.25' }],
+      latest: '1.6.24',
+    }),
   });
   assert.strictEqual(d.length, 1);
   assert.match(d[0].title, /1\.6\.25/);
@@ -270,8 +314,11 @@ test('включённые техработы окрашены тревожно 
 });
 
 test('кончающееся место на диске выделяется', () => {
-  const low = S.watch({ disk: S.disk({ freeBytes: 5, totalBytes: 100 }) }).find((x) => x.id === 'disk');
-  const ok = S.watch({ disk: S.disk({ freeBytes: 50, totalBytes: 100 }) }).find((x) => x.id === 'disk');
+  /* Ключи те же, что у сервера: `/admin/api/system/free` отвечает
+     `{bytes,total}`. Придуманный `freeBytes` стоил панели показания
+     «свободно 0 Б, 100% занято» на сервере с гигабайтами запаса. */
+  const low = S.watch({ disk: S.disk({ bytes: 5, total: 100 }) }).find((x) => x.id === 'disk');
+  const ok = S.watch({ disk: S.disk({ bytes: 50, total: 100 }) }).find((x) => x.id === 'disk');
   assert.strictEqual(low.tone, 'bad');
   assert.strictEqual(ok.tone, '');
 });

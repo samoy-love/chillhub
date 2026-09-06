@@ -22,11 +22,14 @@ const V2 = path.join(__dirname, '..', '..', 'server', 'admin_ui');
 function serverFixtures() {
   return {
     'summary': { launcher: { pending: true, newest: '1.6.25', active: '1.6.24' }, mods: [] },
-    'list': {
+    list: {
+      /* Форма серверная: версии от старых к новым, активная — отдельным
+         полем `latest`. Признака `state` в строке нет вовсе. */
       items: [
-        { version: '1.6.25', date: '04.09.2026', files: 478, size: 121400000, state: 'uploaded' },
-        { version: '1.6.24', date: '31.08.2026', files: 476, size: 121100000, state: 'active' },
+        { version: '1.6.24', createdAt: '2026-08-31T22:41:00Z', files: 476, bytes: 121100000 },
+        { version: '1.6.25', createdAt: '2026-09-04T03:12:00Z', files: 478, bytes: 121400000 },
       ],
+      latest: '1.6.24',
     },
     /* У игры включены моды: без этого панель про сборки не спрашивает
        вовсе — `mods/list` у игры без модпака отвечает 400. Форма поля
@@ -37,10 +40,19 @@ function serverFixtures() {
     },
     'news/list': { items: [{ id: 'n1', title: 'Заметка', published: false }] },
     'feedback/list': { items: [{ id: 'f1', type: 'bug', status: 'new', comment: 'обрывается' }] },
-    'maintenance/get': { enabled: false, reason: '', blocks: {} },
-    'metrics/summary': { days: [{ date: '04.09', launcherStarts: 10, updates: 4, errors: 1 }] },
-    'metrics/errors': { items: [{ code: 'download_reset', n: 3, what: 'обрыв' }] },
-    'system/free': { freeBytes: 214000000000, totalBytes: 480000000000 },
+    'maintenance/get': {
+      state: { enabled: false, blocks: { install: false, update: false, launch: false } },
+      effective: { enabled: false, blocks: {}, serverTime: '2026-09-06T12:00:00Z' },
+    },
+    'metrics/summary': {
+      from: '2026-08-07T00:00:00Z',
+      to: '2026-09-06T00:00:00Z',
+      totals: { launcherStarts: 10, updates: 4, updateOk: 3, updateFail: 1, errors: 1 },
+      byDay: [{ date: '2026-09-04', launcherStarts: 10, updates: 4, errors: 1 }],
+      topErrors: [{ key: 'download_reset', count: 3 }],
+    },
+
+    'system/free': { bytes: 214000000000, total: 480000000000 },
     'mods/cache': { files: 412, bytes: 8900000000 },
   };
 }
