@@ -37,7 +37,7 @@ func TestUploadRefusedByValidationLeavesThePublishedVersionIntact(t *testing.T) 
 	h := New(root)
 
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequest(t, "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "первая сборка"})))
+	publishInto(t, h, w, "game", "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "первая сборка"}))
 	if w.Code != http.StatusOK {
 		t.Fatalf("первая заливка не прошла: %d %s", w.Code, w.Body.String())
 	}
@@ -46,10 +46,10 @@ func TestUploadRefusedByValidationLeavesThePublishedVersionIntact(t *testing.T) 
 	// поэтому pathProblem их отвергает — «a.txt» и « a.txt» иначе один файл, но
 	// две записи манифеста.
 	w = httptest.NewRecorder()
-	h.Upload(w, uploadRequest(t, "game", "1.0.0", zipBytes(t, map[string]string{
+	publishInto(t, h, w, "game", "game", "1.0.0", zipBytes(t, map[string]string{
 		"a.txt":       "вторая сборка",
 		"sub/ bad.md": "x",
-	})))
+	}))
 	if w.Code == http.StatusOK {
 		t.Fatalf("сборка с непубликуемым путём принята: %s", w.Body.String())
 	}

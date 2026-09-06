@@ -25,180 +25,18 @@ import (
 // subsequent move a same-volume rename.
 func (h *Handlers) tmpDir() string { return filepath.Join(h.root, "tmp") }
 
-// Upload handles a plain multipart ZIP upload and publishes a release
-// (launcher or game), returning the manifest JSON.
-func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
-	if !adminutil.RequireMethod(w, r, http.MethodPost) {
-		return
-	}
-	// The body is read part by part rather than through ParseMultipartForm:
-	// ParseMultipartForm spools everything above its memory budget into
-	// os.TempDir(), which for a 30 GB archive meant a second full copy on the
-	// root partition on top of the one we write ourselves.
-	var tmpName string
-	defer func() {
-		if tmpName != "" {
-			_ = os.Remove(tmpName)
-		}
-	}()
-	parts, code, err := readUploadParts(r, h.tmpDir(), nil, nil)
-	if parts != nil {
-		tmpName = parts.tmpName
-	}
-	if err != nil {
-		// The detail (a temp path, a disk error) goes to the log only; the
-		// size and space guards are the exception, since an operator staring at
-		// a rejected publish has to know whether the archive was too big or the
-		// volume was too full.
-		msg := "failed to read the upload"
-		if isPublicUploadError(err) {
-			msg = err.Error()
-		}
-		adminutil.Fail(w, code, msg, "upload", err)
-		return
-	}
-	kind := parts.kind
-	gid := parts.gid
-	ver := parts.ver
-	upd := parts.updateLatest
-	if kind == "launcher" {
-		gid = "launcher"
-	}
-	if problem := missingPublishParam(kind, gid, ver); problem != "" {
-		http.Error(w, problem, http.StatusBadRequest)
-		return
-	}
-	// validate inputs
-	if !adminutil.IsSafeGameID(gid) {
-		http.Error(w, "invalid gameId", http.StatusBadRequest)
-		return
-	}
-	if !adminutil.IsSafeVersion(ver) {
-		http.Error(w, "invalid version", http.StatusBadRequest)
-		return
-	}
-	if tmpName == "" {
-		http.Error(w, "missing zip part", http.StatusBadRequest)
-		return
-	}
-	// The already-published check happens after extraction (below), once the
-	// fresh content actually exists to compare — see the comment there for why.
-	log.Printf("/admin/upload: kind=%s gid=%s ver=%s zip=%s bytes=%d", kind, gid, ver, parts.filename, parts.saved)
-
-	// Extract into a staging directory next to the published one, exactly like
-	// UploadStream and UploadProcessStream do. Writing straight into
-	// content/<gid>/<ver>/files would leave a half-extracted, already published
-	// version behind if the request is aborted mid-way.
-	finalVerDir := filepath.Join(h.root, "content", gid, ver)
-	stageDir, filesRoot, err := h.stageVersionDir(gid, ver)
-	if err != nil {
-		adminutil.Fail(w, http.StatusInternalServerError, "failed to prepare the staging directory", "upload", err)
-		return
-	}
-	promoted := false
-	defer func() {
-		if !promoted {
-			_ = os.RemoveAll(stageDir)
-		}
-	}()
-
-	// Same precheck as the streaming paths: refuse an archive that cannot fit
-	// rather than filling the volume and failing halfway through extraction.
-	// filesRoot is under the content root, i.e. the same volume the ZIP was
-	// just written to, so this now measures the volume that will actually be
-	// filled.
-	if msg := extractSpaceProblem(tmpName, filesRoot); msg != "" {
-		http.Error(w, msg, http.StatusInsufficientStorage)
-		return
-	}
-
-	if err := unzipTo(tmpName, filesRoot); err != nil {
-		adminutil.Fail(w, http.StatusInternalServerError, "unzip failed", "upload", err)
-		return
-	}
-
-	// Build manifest by scanning extracted files
-	files, emptyDirs, err := scanManifest(filesRoot)
-	if err != nil {
-		adminutil.Fail(w, http.StatusInternalServerError, "failed to scan the extracted build", "upload", err)
-		return
-	}
-
-	// The archive is already fully extracted and hashed at this point — the
-	// same amount of work would have happened whether or not this version
-	// turns out to already be published — so checking here rather than before
-	// extraction costs nothing and is what makes a same-content re-upload
-	// answerable at all: without the fresh manifest there would be nothing to
-	// compare the published one against. promoted is still false, so the
-	// deferred cleanup above removes stageDir without touching anything live.
-	if h.respondLauncherRepublish(w, gid, ver, files, emptyDirs) {
-		return
-	}
-
-	m := manifest{
-		Version:   ver,
-		BuildID:   adminutil.NewBuildID(),
-		GameID:    gid,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
-		Files:     files,
-		EmptyDirs: emptyDirs,
-	}
-	// Before the promote: a manifest refused afterwards leaves the new files
-	// live under the previous version's manifest, with nothing left to roll
-	// back to. See prepareManifest.
-	if err := publishable(m); err != nil {
-		adminutil.Fail(w, http.StatusBadRequest, "the build cannot be published: "+err.Error(), "upload", err)
-		return
-	}
-
-	// Everything is extracted and hashed: publish the build in one rename.
-	// The lock keeps a concurrent publication of the same version from
-	// interleaving its content rename with our manifest write.
-	unlock := lockPublish(gid, ver)
-	defer unlock()
-	// The replaced tree stays under its backup name until the manifest that
-	// describes the new one is on disk: the two together are the version.
-	_, b, err := h.publishTree(stageDir, finalVerDir, h.manifestsDir(gid), m, upd)
-	if err != nil {
-		adminutil.Fail(w, http.StatusInternalServerError, "failed to publish the build", "upload", err)
-		return
-	}
-	promoted = true
-	// return manifest JSON
-	w.Header().Set("Content-Type", "application/json")
-	// The build is published; a client that hung up before reading the manifest
-	// changes nothing and cannot be told anything either.
-	_, _ = w.Write(b)
-}
-
-// respondLauncherRepublish answers a plain-multipart publish whose version is
-// an already-published launcher build: it writes either the existing
-// manifest (identical content) or the 409 conflict, and reports whether it
-// wrote anything at all. false means the version isn't an already-published
-// launcher build, and the caller should proceed to promote as normal.
+// ПРОСТОЙ ЗАГРУЗЧИК УБРАН: ЕГО НИКТО НЕ ЗВАЛ.
 //
-// Pulled out of Upload as its own function (rather than left as inline ifs)
-// purely to keep Upload's own cyclomatic complexity under the linter's
-// ceiling — see the identical split for UploadStream and UploadProcessStream.
-func (h *Handlers) respondLauncherRepublish(w http.ResponseWriter, gid, ver string, files []manifestFile, emptyDirs []string) bool {
-	if !h.launcherVersionAlreadyPublished(gid, ver) {
-		return false
-	}
-	if !h.launcherRepublishMatches(gid, ver, files, emptyDirs) {
-		log.Printf("/admin/upload: refused: launcher version %s already published with different content", ver)
-		http.Error(w, launcherVersionConflictMessage(ver), http.StatusConflict)
-		return true
-	}
-	b, err := os.ReadFile(filepath.Join(h.manifestsDir(gid), ver+".json"))
-	if err != nil {
-		adminutil.Fail(w, http.StatusInternalServerError, "failed to read the published manifest", "upload", err)
-		return true
-	}
-	log.Printf("/admin/upload: launcher version %s re-uploaded with identical content, no-op", ver)
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(b)
-	return true
-}
+// Обработчик принимал ZIP одной multipart-формой и публиковал сборку целиком
+// за один запрос. К моменту удаления его не звал никто: панель грузит кусками
+// (upload/init → chunk → complete → process), а выкатка лаунчера — потоком
+// (uploadStream, см. bin/selfupdate-upload в deploy-kit). Снаружи он тоже был
+// недостижим: nginx на голый /admin/api/upload отвечает 301 на вариант со
+// слэшем, и до бэкенда запрос не доходит вовсе.
+//
+// Поточный собрат остаётся и остаётся не по недосмотру: им уезжает КАЖДЫЙ
+// релиз лаунчера. Общие с ним куски — разбор формы, спулинг архива, отчёт о
+// приёме — ниже, и они живые.
 
 // extractSpaceProblem reports why an archive cannot be unpacked next to its
 // destination, or "" when it fits — or cannot be judged.
@@ -322,12 +160,6 @@ var (
 	errZipTooLarge      = errors.New("zip part exceeds the maximum upload size")
 	errNoTempSpace      = errors.New("insufficient free space to spool the archive")
 )
-
-// isPublicUploadError reports whether err is one of the guards above, i.e.
-// whether its message may be used as the HTTP response body.
-func isPublicUploadError(err error) bool {
-	return errors.Is(err, errDuplicateZipPart) || errors.Is(err, errZipTooLarge) || errors.Is(err, errNoTempSpace)
-}
 
 // freeSpaceFn is the free-space probe every upload guard uses: the spool budget
 // as well as the precheck each publish path runs before extraction. It is a

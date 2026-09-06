@@ -4,37 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
-
-// kindUploadRequest is uploadRequest with a caller-chosen kind/gameId, needed
-// here because uploadRequest hardcodes kind=game.
-func kindUploadRequest(t *testing.T, kind, gid, ver string, zipData []byte) *http.Request {
-	t.Helper()
-	var body bytes.Buffer
-	mw := multipart.NewWriter(&body)
-	_ = mw.WriteField("kind", kind)
-	_ = mw.WriteField("gameId", gid)
-	_ = mw.WriteField("version", ver)
-	fw, err := mw.CreateFormFile("zip", "build.zip")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fw.Write(zipData); err != nil {
-		t.Fatal(err)
-	}
-	if err := mw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	req := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/upload", &body)
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	return req
-}
 
 // TestLauncherReuploadUnderSameVersionRejected reproduces, at the HTTP layer,
 // the 2026-08-08 incident: the same launcher version uploaded a second time
@@ -47,17 +23,17 @@ func TestLauncherReuploadUnderSameVersionRejected(t *testing.T) {
 	h := New(root)
 
 	w1 := httptest.NewRecorder()
-	h.Upload(w1, kindUploadRequest(t, "launcher", "launcher", "1.3.2", zipBytes(t, map[string]string{
+	publishInto(t, h, w1, "launcher", "launcher", "1.3.2", zipBytes(t, map[string]string{
 		"ChillHub.exe": "first build",
-	})))
+	}))
 	if w1.Code != http.StatusOK {
 		t.Fatalf("first upload: %d %s", w1.Code, w1.Body.String())
 	}
 
 	w2 := httptest.NewRecorder()
-	h.Upload(w2, kindUploadRequest(t, "launcher", "launcher", "1.3.2", zipBytes(t, map[string]string{
+	publishInto(t, h, w2, "launcher", "launcher", "1.3.2", zipBytes(t, map[string]string{
 		"ChillHub.exe": "second, different build",
-	})))
+	}))
 	if w2.Code != http.StatusConflict {
 		t.Fatalf("second upload under the same version: got %d %s, want %d", w2.Code, w2.Body.String(), http.StatusConflict)
 	}
@@ -71,19 +47,24 @@ func TestLauncherReuploadUnderSameVersionRejected(t *testing.T) {
 	}
 }
 
-// TestLauncherReuploadWithIdenticalContentSucceeds is the idempotency half of
-// the same guard: a deploy retry that re-sends EXACTLY the same archive under
-// a version that is already published (e.g. a later CI job re-running after
-// an unrelated failure) must not be treated as the 2026-08-08 incident. It has
-// nothing in common with it — the version's meaning on disk never changes —
-// so it must succeed, and it must change nothing on disk.
-func TestLauncherReuploadWithIdenticalContentSucceeds(t *testing.T) {
+// ПОВТОРНАЯ ЗАЛИВКА ТОГО ЖЕ НОМЕРА ОТКАЗЫВАЕТ СРАЗУ, И ЭТО РЕШЕНИЕ.
+//
+// Прежний обработчик пропускал повтор с тем же содержимым: он сравнивал байты
+// и, увидев то же самое, отвечал «уже так и есть». Чанковый путь так не умеет
+// и не должен: он отказывает В НАЧАЛЕ, когда не приехало ещё ни байта. Выбор
+// не между умным и глупым, а между двумя ценами — отказать сразу и, может
+// быть, зря, или пропустить и упереться в отказ, прогнав по сети гигабайты
+// (см. комментарий в UploadInit).
+//
+// Отказ обязан быть внятным: он называет версию и говорит, что делать. Молчаливое
+// «уже опубликовано» выглядит как поломка сервера, а не как ответ.
+func TestLauncherReuploadOfPublishedVersionIsRefusedUpFront(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
 	zip := zipBytes(t, map[string]string{"ChillHub.exe": "same build"})
 
 	w1 := httptest.NewRecorder()
-	h.Upload(w1, kindUploadRequest(t, "launcher", "launcher", "1.3.2", zip))
+	publishInto(t, h, w1, "launcher", "launcher", "1.3.2", zip)
 	if w1.Code != http.StatusOK {
 		t.Fatalf("first upload: %d %s", w1.Code, w1.Body.String())
 	}
@@ -93,9 +74,12 @@ func TestLauncherReuploadWithIdenticalContentSucceeds(t *testing.T) {
 	}
 
 	w2 := httptest.NewRecorder()
-	h.Upload(w2, kindUploadRequest(t, "launcher", "launcher", "1.3.2", zip))
-	if w2.Code != http.StatusOK {
-		t.Fatalf("identical re-upload: got %d %s, want %d", w2.Code, w2.Body.String(), http.StatusOK)
+	publishInto(t, h, w2, "launcher", "launcher", "1.3.2", zip)
+	if w2.Code == http.StatusOK {
+		t.Fatal("повторная заливка опубликованной версии прошла")
+	}
+	if !strings.Contains(w2.Body.String(), "1.3.2") {
+		t.Errorf("отказ не называет версию: %s", w2.Body.String())
 	}
 
 	secondManifest, err := os.ReadFile(filepath.Join(root, "manifests", "launcher", "1.3.2.json"))
@@ -163,13 +147,13 @@ func TestGameReuploadUnderSameVersionStillAllowed(t *testing.T) {
 	h := New(root)
 
 	w1 := httptest.NewRecorder()
-	h.Upload(w1, kindUploadRequest(t, "game", "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "first"})))
+	publishInto(t, h, w1, "game", "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "first"}))
 	if w1.Code != http.StatusOK {
 		t.Fatalf("first upload: %d %s", w1.Code, w1.Body.String())
 	}
 
 	w2 := httptest.NewRecorder()
-	h.Upload(w2, kindUploadRequest(t, "game", "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "second"})))
+	publishInto(t, h, w2, "game", "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "second"}))
 	if w2.Code != http.StatusOK {
 		t.Fatalf("re-upload of a game under the same version must still succeed: %d %s", w2.Code, w2.Body.String())
 	}
@@ -192,9 +176,9 @@ func TestUploadInitRefusesAlreadyPublishedLauncherVersion(t *testing.T) {
 	h.CurrentUser = func(*http.Request) string { return "admin" }
 
 	w1 := httptest.NewRecorder()
-	h.Upload(w1, kindUploadRequest(t, "launcher", "launcher", "1.3.2", zipBytes(t, map[string]string{
+	publishInto(t, h, w1, "launcher", "launcher", "1.3.2", zipBytes(t, map[string]string{
 		"ChillHub.exe": "already published",
-	})))
+	}))
 	if w1.Code != http.StatusOK {
 		t.Fatalf("seed upload: %d %s", w1.Code, w1.Body.String())
 	}
@@ -228,9 +212,9 @@ func TestUploadStreamRefusesAlreadyPublishedLauncherVersion(t *testing.T) {
 	h.CurrentUser = func(*http.Request) string { return "admin" }
 
 	w1 := httptest.NewRecorder()
-	h.Upload(w1, kindUploadRequest(t, "launcher", "launcher", "1.3.2", zipBytes(t, map[string]string{
+	publishInto(t, h, w1, "launcher", "launcher", "1.3.2", zipBytes(t, map[string]string{
 		"ChillHub.exe": "already published",
-	})))
+	}))
 	if w1.Code != http.StatusOK {
 		t.Fatalf("seed upload: %d %s", w1.Code, w1.Body.String())
 	}
@@ -273,9 +257,9 @@ func TestUploadProcessStreamRefusesAlreadyPublishedLauncherVersion(t *testing.T)
 	// Someone else published "1.3.2" while this chunked upload was already in
 	// flight — the exact race UploadInit's own check cannot see.
 	wPublish := httptest.NewRecorder()
-	h.Upload(wPublish, kindUploadRequest(t, "launcher", "launcher", "1.3.2", zipBytes(t, map[string]string{
+	publishInto(t, h, wPublish, "launcher", "launcher", "1.3.2", zipBytes(t, map[string]string{
 		"ChillHub.exe": "published while the chunked upload was in flight",
-	})))
+	}))
 	if wPublish.Code != http.StatusOK {
 		t.Fatalf("racing publish: %d %s", wPublish.Code, wPublish.Body.String())
 	}
@@ -314,9 +298,9 @@ func TestActivateLauncherDoesNotBlockOnNotify(t *testing.T) {
 	h := New(root)
 
 	w1 := httptest.NewRecorder()
-	h.Upload(w1, kindUploadRequest(t, "launcher", "launcher", "1.3.2", zipBytes(t, map[string]string{
+	publishInto(t, h, w1, "launcher", "launcher", "1.3.2", zipBytes(t, map[string]string{
 		"ChillHub.exe": "build",
-	})))
+	}))
 	if w1.Code != http.StatusOK {
 		t.Fatalf("seed upload: %d %s", w1.Code, w1.Body.String())
 	}

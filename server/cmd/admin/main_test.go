@@ -27,7 +27,6 @@ func TestMutatingHandlersRejectGET(t *testing.T) {
 		{name: "activate", h: s.builds.Activate, url: "http://example.com/admin/activate?gameId=launcher&version=1.0.0"},
 		{name: "deleteVersion", h: s.builds.DeleteVersion, url: "http://example.com/admin/deleteVersion?gameId=launcher&version=1.0.0"},
 		{name: "pruneVersions", h: s.builds.PruneVersions, url: "http://example.com/admin/pruneVersions?gameId=launcher"},
-		{name: "upload", h: s.builds.Upload, url: "http://example.com/admin/upload"},
 		{name: "uploadStream", h: s.builds.UploadStream, url: "http://example.com/admin/uploadStream"},
 
 		{name: "feedbackDelete", h: s.feedback.Delete, url: "http://example.com/admin/feedback/delete?id=1"},
@@ -145,7 +144,6 @@ var wantPaths = []string{
 	"/admin/api/news/uploadCover",
 	"/admin/api/pruneVersions",
 	"/admin/api/system/free",
-	"/admin/api/upload",
 	"/admin/api/upload/abort",
 	"/admin/api/upload/chunk",
 	"/admin/api/upload/cleanup",
@@ -210,7 +208,6 @@ var wantPaths = []string{
 	"/admin/news/uploadCover",
 	"/admin/pruneVersions",
 	"/admin/system/free",
-	"/admin/upload",
 	"/admin/uploadStream",
 	"/feedback/submit",
 	"/metrics/report",
