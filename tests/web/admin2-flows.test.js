@@ -717,6 +717,41 @@ test('правка уезжает всем реестром, не теряя ч�
   await settle();
 });
 
+/* СОХРАНЁННОЕ ОБЯЗАНО ПОЯВИТЬСЯ НА ЭКРАНЕ СРАЗУ.
+   ------------------------------------------------------------------
+   Хранилище разделов панель перечитывала, а рисует она из снимка,
+   собранного из хранилища один раз на запуске. Снимок никто не
+   пересобирал, поэтому после успешной записи экран показывал то же,
+   что и до неё — до перезагрузки страницы. Со стороны это «кнопка
+   ничего не сделала», и человек жмёт её второй раз. Касалось это всех
+   записей разом: и правки игры, и выдачи версии игрокам, и работ. */
+test('сохранённое название видно сразу, без перезагрузки страницы', async (t) => {
+  let registry = {
+    items: [
+      { gameId: 'repo', title: 'R.E.P.O.', exeRelativePath: 'REPO.exe', order: 0, mods: { enabled: true } },
+      { gameId: 'peak', title: 'PEAK', exeRelativePath: 'PEAK.exe', order: 1 },
+    ],
+  };
+  const { window } = await boot({
+    games: () => ({ ok: true, status: 200, text: async () => JSON.stringify(registry) }),
+    'games/save': ({ body }) => {
+      registry = { items: body.items };
+      return { ok: true, status: 200, text: async () => '{"ok":true}' };
+    },
+  });
+  t.after(() => window.close());
+
+  window.location.hash = '#games';
+  (await until(() => window.document.querySelector('[data-act="edit-game"]'))).click();
+  const sheet = await until(() => window.document.querySelector('.sheet'));
+  sheet.querySelector('[name="title"]').value = 'R.E.P.O. (новое)';
+  sheet.querySelector('[data-flow="save"]').click();
+
+  await until(() => /R\.E\.P\.O\. \(новое\)/.test(text(window.document.querySelector('main'))));
+  assert.match(text(window.document.querySelector('main')), /R\.E\.P\.O\. \(новое\)/);
+  await settle();
+});
+
 test('игра без исполняемого файла на сервер не уходит', async (t) => {
   // Запускать её было бы нечем, а ошибка вылезла бы у игрока
   const { window, calls } = await boot();

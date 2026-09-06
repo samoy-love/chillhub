@@ -1034,7 +1034,7 @@
           ? Object.assign({}, st, { phase: 'done' })
           : Object.assign({}, st, { phase: 'failed', message: done.message });
         draw(true);
-        if (done.ok) await store.invalidate(['launcher', 'overview', 'disk']);
+        if (done.ok) await refresh(['launcher', 'overview', 'disk'], false);
       } catch (e) {
         st = Object.assign({}, st, { phase: 'failed', message: (e && e.message) || 'сбой' });
         draw(true);
@@ -1143,7 +1143,7 @@
           `<p class="note${out.tone === 'bad' ? ' note--bad' : ''}" data-build-outcome>${esc(out.text)}</p>`
       );
       toast(out.text, out.tone);
-      await store.invalidate(['packs', 'overview']);
+      await refresh(['packs', 'overview'], false);
     });
 
     sheet.root.addEventListener('click', (e) => {
@@ -1330,8 +1330,7 @@
             'ok'
           );
           sheet.close();
-          await store.invalidate(['news']);
-          route();
+          await refresh(['news']);
         } catch (err) {
           toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
           b.disabled = false;
@@ -1679,7 +1678,7 @@
         item.iconUrl = (got && (got.iconUrl || got.url)) || '/manifests/' + item.gameId + '/icon.png';
         draw();
         toast('Иконка загружена', 'ok');
-        await store.invalidate(['games']);
+        await refresh(['games'], false);
       } catch (err) {
         toast('Не загрузилось: ' + window.CH2Api.reason(err), 'bad');
       }
@@ -1732,8 +1731,7 @@
           await API.gamesSave(R.reorder(R.remove(D.raw.games, item.gameId)));
           toast('Игра убрана из реестра', 'ok');
           sheet.close();
-          await store.invalidate(['games', 'overview']);
-          route();
+          await refresh(['games', 'overview']);
         } catch (err) {
           toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
         }
@@ -1755,8 +1753,7 @@
         await API.gamesSave(list);
         toast(existing ? 'Сохранено. Лаунчер увидит это при следующем старте.' : 'Игра заведена', 'ok');
         sheet.close();
-        await store.invalidate(['games', 'overview']);
-        route();
+        await refresh(['games', 'overview']);
       } catch (err) {
         toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
         b.disabled = false;
@@ -1811,8 +1808,7 @@
           await API.gamesSave(R.reorder(list));
           toast('Порядок сохранён. Игроки увидят его сразу.', 'ok');
           sheet.close();
-          await store.invalidate(['games']);
-          route();
+          await refresh(['games']);
         } catch (err) {
           toast('Не сохранилось: ' + window.CH2Api.reason(err), 'bad');
         }
@@ -2148,7 +2144,7 @@
         const got = await API.modsImport(pack.gameId, input.files[0]);
         sheet.body(V().importResult(got));
         toast('Профиль разобран. Игрокам сборка пока не ушла.', 'ok');
-        await store.invalidate(['packs']);
+        await refresh(['packs'], false);
       } catch (err) {
         sheet.body('<div class="empty"><b>Не разобрался</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
       }
@@ -2230,8 +2226,7 @@
         await API.gamesEcosystem(gameId, slug);
         toast('Настройки подтянуты', 'ok');
         sheet.close();
-        await store.invalidate(['games']);
-        route();
+        await refresh(['games']);
       } catch (err) {
         toast('Не вышло: ' + window.CH2Api.reason(err), 'bad');
       }
@@ -2513,8 +2508,24 @@
       return;
     }
     toast(res.message, 'ok');
-    await store.invalidate(res.stale);
-    route();
+    await refresh(res.stale);
+  }
+
+  /**
+   * Перечитать разделы и пересобрать данные, по которым рисуются экраны.
+   *
+   * ПОЧЕМУ НЕ ХВАТАЕТ store.invalidate. Хранилище держит разделы, а
+   * рисуют экраны из `D` — снимка, собранного из хранилища один раз на
+   * запуске. Обновив хранилище и перерисовав экран, панель показывала
+   * то же самое, что и до действия: сохранённое название игры,
+   * отданная игрокам версия, включённые работы — всё оставалось
+   * прежним до перезагрузки страницы. Со стороны это «кнопка ничего не
+   * делает», и второе нажатие на такую кнопку стоит дороже первого.
+   */
+  async function refresh(stale, redraw) {
+    await store.invalidate(stale);
+    D = await collect();
+    if (redraw !== false) { route(); }
   }
 
   /* ---------- Навигация ---------- */
