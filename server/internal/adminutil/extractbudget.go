@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync/atomic"
 )
 
 // ErrExtractBudgetExceeded is returned by ExtractBudget.Copy once the shared
@@ -27,26 +28,55 @@ var ErrExtractBudgetExceeded = errors.New("archive expands beyond the allowed si
 // the caller wants a cumulative cap over a whole batch — construct one
 // instance with NewExtractBudget and pass the SAME instance to every Copy
 // call that should count against the same limit.
+// СЧЁТЧИК АТОМАРНЫЙ, ПОТОМУ ЧТО РАСПАКОВКА ИДЁТ В НЕСКОЛЬКО ПОТОКОВ.
+// Обычное поле здесь — гонка на защите от zip-бомбы: каждый поток читал бы
+// остаток до вычитаний соседей, и вместе они выписали бы на диск больше
+// лимита, каждый «в пределах».
 type ExtractBudget struct {
 	limit     int64
-	remaining int64
+	remaining atomic.Int64
 }
 
 // NewExtractBudget returns a budget capped at limit bytes.
 func NewExtractBudget(limit int64) *ExtractBudget {
-	return &ExtractBudget{limit: limit, remaining: limit}
+	b := &ExtractBudget{limit: limit}
+	b.remaining.Store(limit)
+	return b
 }
 
 // Copy writes src into dst, counting the bytes actually produced against the
 // shared budget and failing as soon as it's exhausted.
+//
+// Байты списываются ПО ХОДУ записи, а не в конце: раньше проверка стояла
+// после копирования целиком, и запись обрывалась только потому, что
+// LimitReader не давал прочитать больше остатка. С несколькими потоками
+// такого предела на каждого не хватает — считать надо там же, где пишется.
 func (b *ExtractBudget) Copy(dst io.Writer, src io.Reader) error {
-	n, err := io.Copy(dst, io.LimitReader(src, b.remaining+1))
-	b.remaining -= n
-	if err != nil {
-		return err
-	}
-	if b.remaining < 0 {
+	cw := &budgetWriter{dst: dst, budget: b}
+	_, err := io.Copy(cw, src)
+	if cw.exceeded {
 		return fmt.Errorf("%w (%d bytes)", ErrExtractBudgetExceeded, b.limit)
 	}
-	return nil
+	return err
+}
+
+// budgetWriter списывает записанное с общего остатка и обрывает копирование,
+// как только тот ушёл в минус.
+type budgetWriter struct {
+	dst      io.Writer
+	budget   *ExtractBudget
+	exceeded bool
+}
+
+func (w *budgetWriter) Write(p []byte) (int, error) {
+	if w.budget.remaining.Add(-int64(len(p))) < 0 {
+		w.exceeded = true
+		return 0, ErrExtractBudgetExceeded
+	}
+	n, err := w.dst.Write(p)
+	if n < len(p) {
+		// Недописанное возвращаем в общий остаток: списано было всё.
+		w.budget.remaining.Add(int64(len(p) - n))
+	}
+	return n, err
 }
