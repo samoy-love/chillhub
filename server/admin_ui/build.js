@@ -113,6 +113,10 @@
     const body = o.rebuild
       ? { gameId: o.gameId, version: o.version }
       : { gameId: o.gameId, namespace: o.namespace, name: o.name };
+    /* Адрес страницы пакета сервер разбирает сам. Он есть там, где
+       проверка обновлений молчит — у свежего модпака её попросту нет, —
+       и потому едет вместе с именем, а не вместо него. */
+    if (!o.rebuild && o.packageUrl) body.packageUrl = o.packageUrl;
     if (!o.rebuild && o.version) body.version = o.version;
     if (o.allowMissing) body.allowMissing = '1';
     return body;

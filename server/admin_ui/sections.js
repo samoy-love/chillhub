@@ -164,12 +164,50 @@
    * приходится здесь; без этого раздел показывал пустое место ровно
    * там, где принимается решение «отдать игрокам».
    */
+  /**
+   * Пакет на Thunderstore, из которого собран модпак.
+   *
+   * Сервер собирает НАЗВАННЫЙ пакет: без пространства имён и имени он
+   * отвечает «не указан модпак». В ответе про игру это имя лежит в двух
+   * местах, и оба бывают пустыми:
+   *
+   *   — проверка обновлений (`updates`) называет пакет прямо, но её нет
+   *     у сборки, приехавшей профилем r2modman, и у той, что уже свежая;
+   *   — запись о сборке хранит адрес страницы пакета (`packageUrl`) —
+   *     сервер разбирает его сам.
+   *
+   * Имя версии (`Namespace-Name-1.0.0`) третьим источником сюда не идёт
+   * намеренно: у профиля r2modman оно своё, какое назвал оператор, и
+   * разобранное из него имя указало бы на чужой пакет.
+   */
+  function packIdentity(updates, built) {
+    const named = (Array.isArray(updates) ? updates : []).find((u) => u && u.namespace && u.name);
+    if (named) {
+      return { namespace: String(named.namespace), name: String(named.name) };
+    }
+
+    const url = built && built.packageUrl;
+    if (url) {
+      /* Разбор адреса — в mods.js, и берём мы его оттуда, а не пишем
+         второй такой же здесь: два правила «что считать ссылкой на
+         пакет» расходятся молча. */
+      const mods =
+        (typeof window !== 'undefined' && window.CH2Mods) ||
+        (typeof require === 'function' ? require('./mods.js') : null);
+      const parsed = mods && mods.parsePackageUrl(url);
+      if (parsed) return { namespace: parsed.namespace, name: parsed.name };
+    }
+
+    return { namespace: '', name: '' };
+  }
+
   function packRow(raw, game) {
     const r = raw || {};
     const list = items(r);
     const g = game || {};
     const built = list[0] || {};
     const updates = Array.isArray(r.updates) ? r.updates : [];
+    const pack = packIdentity(updates, built);
 
     return {
       gameId: String(r.gameId || g.gameId || ''),
@@ -180,6 +218,15 @@
       builtAt: built.createdAt || '',
       mods: num(built.packages, 0),
       size: num(built.bytes, 0),
+
+      /* ЧЕЙ ЭТО ПАКЕТ НА THUNDERSTORE. Без этих двух полей «Собрать»
+         отправляла на сервер одну только игру, и он отвечал «не указан
+         модпак»: собрать он умеет названный пакет, а не игру.
+         Первым берём проверку обновлений — она и заведена ради имени
+         пакета, — вторым разбираем адрес страницы из записи о сборке. */
+      namespace: String(pack.namespace || ''),
+      name: String(pack.name || ''),
+      packageUrl: String(built.packageUrl || ''),
 
       /* «Собрано, но не отдано» и «Thunderstore ушёл вперёд» — разные
          поводы: первое закрывается кнопкой, второе пересборкой. */
