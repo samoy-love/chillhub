@@ -328,6 +328,69 @@ test('журнал сборки наполняется строками по м�
   assert.match(body, /отдайте новую версию/, 'сборка выдана за выкатку игрокам');
 });
 
+/* ЖУРНАЛ СБОРКИ ДОПИСЫВАЕТСЯ, А НЕ ПЕРЕРИСОВЫВАЕТСЯ.
+   Перерисовка всего журнала на каждую строку сбрасывала прокрутку в
+   начало — и «уехать в конец» после неё было невозможно: место, куда
+   человек отлистал, не переживало ни одной строки. Заодно это работа,
+   растущая квадратом от числа строк, а у сборки их сотни. */
+test('журнал сборки дописывается в тот же узел, а не рисуется заново', async (t) => {
+  const lines = [
+    { type: 'info', message: 'читаем список модов' },
+    { type: 'get', message: 'качаем BepInEx' },
+    { type: 'done', message: 'собрано 17 модов' },
+  ];
+  /* Строки приходят по одной и с задержкой — как со сборки. Одним куском
+     разницы между «дописали» и «нарисовали заново» не видно: к первому
+     взгляду на экран журнал уже собран целиком. */
+  let letSecond;
+  let letLast;
+  const afterFirst = new Promise((r) => (letSecond = r));
+  const afterSecond = new Promise((r) => (letLast = r));
+  const encoder = new TextEncoder();
+  let at = 0;
+
+  const { window } = await boot({
+    'mods/build': () => ({
+      ok: true,
+      status: 200,
+      text: async () => '',
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (at >= lines.length) return { done: true, value: undefined };
+            // Держим поток на каждом шаге: иначе строки прилетают все разом,
+            // и разницы между «дописали» и «нарисовали заново» не увидеть
+            if (at === 1) await afterFirst;
+            if (at === 2) await afterSecond;
+            const chunk = JSON.stringify(lines[at]) + '\n';
+            at++;
+            return { done: false, value: encoder.encode(chunk) };
+          },
+          releaseLock() {},
+        }),
+      },
+    }),
+  });
+  t.after(() => window.close());
+
+  const sheet = await open(window, '#packs', 'build');
+  await until(() => sheet.querySelector('[data-log] .log-row'));
+  const log = sheet.querySelector('[data-log]');
+  assert.ok(log, 'журналу негде прокручиваться: своего узла у него нет');
+
+  /* Пока поток идёт, узел журнала обязан остаться тем же: место, куда
+     человек отлистал, живёт именно в нём. */
+  letSecond();
+  await until(() => sheet.querySelectorAll('[data-log] .log-row').length >= 2);
+  assert.ok(log.isConnected, 'журнал перерисовали заново, и прокрутка сбросилась');
+  assert.match(text(log), /читаем список модов/);
+  assert.match(text(log), /качаем BepInEx/);
+
+  letLast();
+  await until(() => /собрано 17 модов/.test(text(sheet)));
+  await settle();
+});
+
 test('пропавший с Thunderstore пакет спрашивают один раз и собирают без него', async (t) => {
   let attempts = 0;
   const { window, calls } = await boot({

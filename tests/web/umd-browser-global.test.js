@@ -36,6 +36,13 @@ test('upload-bench.js в браузерном режиме кладёт функ
   assert.deepStrictEqual(Array.from(w.parseBenchList('4,8', 1)), [4, 8]);
 });
 
+test('log-scroll.js в браузерном режиме кладёт слежение за журналом в window', () => {
+  const w = loadAsBrowserScript('server/admin_ui/log-scroll.js');
+  assert.strictEqual(typeof w.logAtBottom, 'function', 'logAtBottom не появился в window');
+  assert.strictEqual(typeof w.logToBottom, 'function', 'logToBottom не появился в window');
+  assert.strictEqual(typeof w.logAppend, 'function', 'logAppend не появился в window');
+});
+
 test('ui-throttle.js в браузерном режиме кладёт makeUiThrottler в window', () => {
   const w = loadAsBrowserScript('server/admin_ui/ui-throttle.js');
   assert.strictEqual(typeof w.makeUiThrottler, 'function');
