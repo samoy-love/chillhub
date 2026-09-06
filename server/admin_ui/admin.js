@@ -705,11 +705,12 @@
             `Коды ошибок за ${metricsFilter.days} дней${metricsFilter.gameId ? ': ' + esc(metricsFilter.gameId) : ''}`,
             list({
               rows: D.errors,
-              head: '<th>Код</th><th>Что это значит</th><th>Где чаще</th><th class="num">Случаев</th><th class="num">Доля</th>',
+              /* Колонки «Где чаще» здесь не было никогда: сводка отдаёт
+                 код и число, и колонка стояла пустой у каждой строки. */
+              head: '<th>Код</th><th>Что это значит</th><th class="num">Случаев</th><th class="num">Доля</th>',
               row: (e) => `<tr>
                   <td class="mono"><button class="btn btn--text" type="button" data-act="error-events" data-args='{"code":"${esc(e.code)}"}'>${esc(e.code)}</button></td>
                   <td class="dim">${esc(e.what)}</td>
-                  <td class="mono faint">${esc(e.where)}</td>
                   <td class="num">${e.n}</td>
                   <td class="num" style="width:120px">
                     <div class="meter"><i class="${e.share > 0.3 ? 'bad' : 'warn'}" style="width:${Math.round(e.share * 100)}%"></i></div>
@@ -783,7 +784,7 @@
               `<div class="stack stack--tight">
                  <div class="btn-row">
                    <span class="num" style="font-size:20px">${bytes(D.cache.bytes)}</span>
-                   <span class="faint">${D.cache.files} файлов, старейший от ${esc(D.cache.oldest)}</span>
+                   <span class="faint">${D.cache.files} файлов${D.cache.ttlDays ? `, хранятся ${D.cache.ttlDays} дней` : ''}</span>
                  </div>
                  <p class="faint">Кэш экономит время пересборки: те же архивы Thunderstore не качаются повторно. Чистить имеет смысл, когда место кончается, а не по расписанию.</p>
                  <div class="btn-row">

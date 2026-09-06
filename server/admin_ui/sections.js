@@ -403,7 +403,6 @@
       code: String(pick(e, ['key', 'code'], '')),
       n: num(pick(e, ['count', 'n'], 0), 0),
       what: String(pick(e, ['what'], WHAT[String(pick(e, ['key', 'code'], ''))] || '')),
-      where: String(pick(e, ['where'], '')),
     }));
     const total = list.reduce((a, e) => a + e.n, 0);
     // Долю считаем здесь, а не на сервере: она обязана сходиться с тем
@@ -425,10 +424,15 @@
     total: num(pick(raw, ['total', 'totalBytes'], 0), 0),
   });
 
+  /* СРОК ХРАНЕНИЯ, А НЕ ДАТА САМОГО СТАРОГО ФАЙЛА.
+     Разбор ждал `oldest` — такого поля сервер не отдаёт, и строка под
+     размером кэша заканчивалась словами «старейший от» и пустотой.
+     `mods/cache` отвечает `{bytes, files, ttlDays}`, и срок как раз
+     объясняет, что сделает кнопка «Убрать старое». */
   const cache = (raw) => ({
     files: num(pick(raw, ['files', 'count'], 0), 0),
     bytes: num(pick(raw, ['bytes', 'size'], 0), 0),
-    oldest: pick(raw, ['oldest'], ''),
+    ttlDays: num(pick(raw, ['ttlDays'], 0), 0),
   });
 
   /* ---------- Первый экран ---------- */
