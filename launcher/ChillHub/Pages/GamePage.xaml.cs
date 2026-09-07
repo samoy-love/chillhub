@@ -25,7 +25,8 @@ namespace ChillHub.Pages {
 
     /// <summary>
     /// Страница отдельной игры: сведения об установке, состояние, прогресс установки или
-    /// обновления, наигранное время и changelog из новостей игры.
+    /// обновления и наигранное время. Новостей здесь нет: их место — ленты на главной,
+    /// а страница игры отвечает на вопрос «что с ней сейчас».
     /// Кнопки «Играть» здесь нет намеренно — запуск остаётся на главной странице.
     /// </summary>
     public partial class GamePage : Page {
@@ -33,7 +34,6 @@ namespace ChillHub.Pages {
         private readonly HttpClient http = HttpClientProvider.Shared;
         private readonly ISyncService sync = new SimpleSyncService();
         private readonly GameBuildsLoader buildsLoader;
-        private readonly GameChangelogLoader changelogLoader;
         private readonly GameSyncRunner syncRunner;
         private readonly SyncProgressView progressView = new();
 
@@ -68,7 +68,6 @@ namespace ChillHub.Pages {
             this.game = game ?? new GameInfo();
             this.downloadQueue = downloadQueue;
             this.buildsLoader = new GameBuildsLoader(this.http);
-            this.changelogLoader = new GameChangelogLoader(this.http);
             this.syncRunner = new GameSyncRunner(this.sync, this.BuildSyncUi());
 
             try {
@@ -115,7 +114,6 @@ namespace ChillHub.Pages {
             try {
                 await this.RefreshStateAsync().ConfigureAwait(true);
                 await this.LoadBuildsAsync().ConfigureAwait(true);
-                await this.LoadChangelogAsync().ConfigureAwait(true);
                 this.LoadPlaytime();
             }
             catch (Exception ex) {
@@ -234,28 +232,6 @@ namespace ChillHub.Pages {
                 // Без списка сборок страница остаётся рабочей, просто нельзя переключить версию
                 Core.Logging.Logger.ErrorNoReport(ex, $"GamePage.LoadBuildsAsync(gid={gid})");
                 this.builds = new List<string>();
-            }
-        }
-
-        private async Task LoadChangelogAsync() {
-            var gid = this.game.GameId;
-            try {
-                var items = await this.changelogLoader.LoadAsync(this.BaseApi, gid).ConfigureAwait(true);
-
-                this.ChangelogList.ItemsSource = items;
-                this.ChangelogEmptyText.Text = "Записей пока нет";
-                this.ChangelogEmptyText.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-            }
-            catch (Exception ex) {
-                // Changelog второстепенен: установка и обновление работают без него
-                Core.Logging.Logger.ErrorNoReport(ex, $"GamePage.LoadChangelogAsync(gid={gid})");
-                this.ChangelogList.ItemsSource = Array.Empty<NewsItem>();
-                // Ни «changelog», ни совета чинить исправный интернет: причину называет
-                // Core.Net.OfflineMessage — короткой строкой, потому что это подпись
-                // пустого списка, а не сообщение об ошибке.
-                this.ChangelogEmptyText.Text = Core.Net.OfflineMessage
-                    .Describe(ex, Core.Net.OfflineMessage.NetworkAvailable()).Title;
-                this.ChangelogEmptyText.Visibility = Visibility.Visible;
             }
         }
 
@@ -623,28 +599,6 @@ namespace ChillHub.Pages {
             catch (Exception ex) {
                 this.StatusText.Text = "Не удалось открыть папку игры.";
                 Core.Logging.Logger.Error(ex, "GamePage.OpenFolderBtn_Click");
-            }
-        }
-
-        private async void RefreshChangelog_Click(object sender, RoutedEventArgs e) {
-            await this.LoadChangelogAsync().ConfigureAwait(true);
-        }
-
-        private void ChangelogList_SelectionChanged(object sender, SelectionChangedEventArgs e) {
-            if (this.ChangelogList.SelectedItem is not NewsItem item) {
-                return;
-            }
-
-            try {
-                var url = GameChangelogLoader.ArticleUrl(this.BaseApi, this.game.GameId, item.Slug);
-                var win = Window.GetWindow(this) as ChillHub.MainWindow;
-                win?.ContentFrame.Navigate(new NewsDetailPage(item.Title, url, this.game));
-            }
-            catch (Exception ex) {
-                Core.Logging.Logger.Error(ex, "GamePage.ChangelogList_SelectionChanged");
-            }
-            finally {
-                this.ChangelogList.SelectedItem = null;
             }
         }
 

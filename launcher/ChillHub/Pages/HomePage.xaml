@@ -211,10 +211,10 @@
       <Setter Property="BorderBrush" Value="{DynamicResource Btn.Update.Border}"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="Padding" Value="10,6"/>
-      <!-- 15, а не 18: остальной экран набран 11–14, и кнопка кричала громче заголовка
-           витрины. Главной её делает акцентная заливка, а не кегль. -->
+      <!-- 16, а не 18: остальной экран набран 11–14, и кнопка не должна кричать громче
+           заголовка витрины. Главной её делает акцентная заливка, а не кегль. -->
       <Setter Property="FontWeight" Value="SemiBold"/>
-      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="FontSize" Value="16"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
@@ -635,11 +635,12 @@
               BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,1,0">
         <Grid>
           <Grid.RowDefinitions>
-            <!-- Заголовок, список, подвал. Поиск уехал в шапку окна: список игр —
-                 единственная навигация в приложении, и искать по нему логично там же,
-                 где живёт всё остальное управление. Разделителей и легенды здесь нет:
-                 первые ничего не отделяли (сайдбар и так карточка), вторая объясняла
-                 иконки, которых больше нет. -->
+            <!-- Заголовок, поиск, список, подвал. Поиск стоит здесь, у списка, по
+                 которому ищет, но обычно свёрнут: искать в каталоге из восьми игр
+                 нужно редко, а поле занимает строку всегда. Разворачивает его кнопка
+                 рядом с «обновить». Разделителей и легенды здесь нет: первые ничего не
+                 отделяли, вторая объясняла иконки, которых больше нет. -->
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <!-- Список живёт в звёздочной строке и прижат к её верху: занимает ровно
                  столько, сколько нужно играм, а когда высоты не хватает — сжимается и
@@ -655,6 +656,7 @@
           <Grid Grid.Row="0" Margin="12,12,12,8">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
               <ColumnDefinition Width="Auto"/>
               <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
@@ -673,19 +675,42 @@
             <ProgressBar Grid.Column="1" Name="GamesVerifyIndicator" Width="80" Height="4" VerticalAlignment="Center"
                          Visibility="Collapsed"
                          Style="{StaticResource Style.ProgressBar.Verify}" Margin="8,0,8,0"/>
-            <!-- Значок без рамки: рамка обещает вес, которого у «обновить» нет, а
-                 стоит кнопка рядом с подписью к колонке, не рядом с действием. -->
-            <Button Grid.Column="2" Name="RefreshGamesBtn" Width="22" Height="22"
+            <!-- Значки без рамки: рамка обещает вес, которого у «найти» и «обновить»
+                 нет, а стоят они рядом с подписью к колонке, не рядом с действием. -->
+            <Button Grid.Column="2" Name="ToggleSearchBtn" Width="22" Height="22"
                     Style="{DynamicResource Style.Button.QueueIcon}"
-                    ToolTip="Обновить список и статусы" Click="RefreshGames_Click" Margin="8,0,0,0">
+                    ToolTip="Искать по названию" Click="ToggleSearch_Click" Margin="8,0,0,0">
+              <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE721;" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+            </Button>
+            <Button Grid.Column="3" Name="RefreshGamesBtn" Width="22" Height="22"
+                    Style="{DynamicResource Style.Button.QueueIcon}"
+                    ToolTip="Обновить список и статусы" Click="RefreshGames_Click" Margin="4,0,0,0">
               <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Center"/>
             </Button>
+          </Grid>
+
+          <!-- Поле поиска. Свёрнуто, пока не нажали лупу; Escape сворачивает обратно и
+               снимает фильтр — иначе спрятанное поле продолжало бы отсеивать игры, и
+               пропавшую строку было бы нечем объяснить. Подсказка — свойством поля, а не
+               надписью поверх: своя надпись стояла по краю сетки, а текст поля начинается
+               внутри рамки и Padding, и после клика каретка появлялась правее подсказки. -->
+          <Grid Grid.Row="1" Name="SearchRow" Visibility="Collapsed" Margin="12,0,12,8">
+            <TextBox x:Name="GameSearchBox" TextChanged="GameSearch_TextChanged"
+                     PreviewKeyDown="GameSearchBox_PreviewKeyDown"
+                     ui:Placeholder.Text="Название игры"
+                     Template="{DynamicResource Template.TextBox.Field}"
+                     VerticalContentAlignment="Center" Height="30"
+                     Background="{DynamicResource Brush.Surface2}" BorderBrush="{DynamicResource Brush.Border}"
+                     Padding="26,0,8,0" FontSize="12" Foreground="{DynamicResource Brush.Text}"/>
+            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE721;" FontSize="12" IsHitTestVisible="False"
+                       Margin="8,0,0,0" VerticalAlignment="Center" HorizontalAlignment="Left"
+                       Foreground="{DynamicResource Brush.TextMuted}"/>
           </Grid>
 
           <!-- Контейнер строки списка/скелетона с тёмным фоном. VerticalAlignment=Top:
                строка сетки звёздочная, а список — по содержимому, чтобы при трёх играх
                не растягивать пустой ListBox до подвала. -->
-          <Grid Grid.Row="1" VerticalAlignment="Top" Margin="8,0">
+          <Grid Grid.Row="2" VerticalAlignment="Top" Margin="8,0">
             <!-- Skeleton loader для списка игр -->
             <StackPanel Name="GamesSkeleton" Visibility="Collapsed" Margin="{StaticResource Skeleton.GameTopOffsetThickness}">
               <Border Style="{DynamicResource Style.Skeleton}" Margin="0,0,0,8" Height="{StaticResource Skeleton.GameRowHeight}"/>
@@ -842,22 +867,16 @@
                           </Style>
                         </ContentControl.Style>
                       </ContentControl>
-                      <!-- Иконка игры. В скруглённой рамке: голый квадрат встык к строке
-                           читался как обрезок картинки, а не как значок. Рамка светлее
-                           фона — она отделяет тёмную обложку от тёмной строки. -->
-                      <Border Grid.Column="0" Width="32" Height="32" VerticalAlignment="Center"
-                              CornerRadius="{DynamicResource Radius.M}" ClipToBounds="True"
-                              BorderThickness="1" BorderBrush="{DynamicResource Brush.Border2}"
-                              Background="{DynamicResource Brush.Surface2}">
-                        <Grid>
-                          <TextBlock x:Name="DefaultGameIcon" FontFamily="Segoe MDL2 Assets" Text="&#xE7C3;" FontSize="18"
-                                     Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center" HorizontalAlignment="Center"
-                                     Visibility="Collapsed"/>
-                          <Image x:Name="IconImg" ui:CoverImage.Url="{Binding IconUrl}"
-                                 Stretch="UniformToFill" Visibility="Visible"
-                                 ImageFailed="CoverImg_ImageFailed"/>
-                        </Grid>
-                      </Border>
+                      <!-- Иконка игры. Запасной значок виден, пока картинки нет или она
+                           не загрузилась. -->
+                      <Grid Grid.Column="0" Width="32" Height="32" VerticalAlignment="Center">
+                        <TextBlock x:Name="DefaultGameIcon" FontFamily="Segoe MDL2 Assets" Text="&#xE7C3;" FontSize="18"
+                                   Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center" HorizontalAlignment="Center"
+                                   Visibility="Collapsed"/>
+                        <Image x:Name="IconImg" ui:CoverImage.Url="{Binding IconUrl}"
+                               Stretch="UniformToFill" Visibility="Visible"
+                               ImageFailed="CoverImg_ImageFailed"/>
+                      </Grid>
                       <!-- Название и статус словом. Статус занимает вторую строку той же
                            колонки — раньше он был иконкой справа, а расшифровка иконок жила
                            в легенде внизу сайдбара. -->
@@ -943,7 +962,7 @@
 
           <!-- Подвал сайдбара. Свободное место уехало в шапку окна: это свойство машины,
                а не списка игр, и в шапке оно видно с любого экрана. -->
-          <StackPanel Grid.Row="2" Margin="12,10,12,10">
+          <StackPanel Grid.Row="3" Margin="12,10,12,10">
             <Border Height="1" Background="{DynamicResource Brush.Border}" Margin="0,0,0,8"/>
             <Button Name="FeedbackBtn" Click="FeedbackBtn_Click" Height="28" Margin="0,0,0,0"
                     HorizontalAlignment="Stretch"
@@ -1030,16 +1049,21 @@
             <!-- Opacity 0.75, а не 0.5: половинная прозрачность плюс два слоя затемнения
                  сверху гасили обложку до серого пятна. Читаемость текста держат сами
                  затемнения (Brush.HeroScrim/HeroScrimSide), а не глушение всей картинки. -->
-            <Rectangle x:Name="HeroCoverImg" Grid.Row="0" Grid.RowSpan="2" Opacity="1" Visibility="Collapsed"
+            <Rectangle x:Name="HeroCoverImg" Grid.Row="0" Grid.RowSpan="2" Opacity="0.75" Visibility="Collapsed"
                        HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="-16">
               <Rectangle.Fill>
                 <ImageBrush x:Name="HeroCoverBrush" Stretch="UniformToFill" AlignmentX="Center" AlignmentY="Bottom"/>
               </Rectangle.Fill>
             </Rectangle>
 
-            <!-- Затемнение одно и горизонтальное: обложка занимает правую часть витрины,
-                 слева ровный цвет панели под заголовком и кнопками (см. Brush.HeroScrim). -->
+            <!-- Затемнение под текстом: светлый заголовок обязан читаться на любой обложке,
+                 а не только на тёмной. -->
             <Border Grid.Row="0" Grid.RowSpan="2" Background="{DynamicResource Brush.HeroScrim}"
+                    Margin="-16" IsHitTestVisible="False"/>
+            <!-- Второй слой — слева направо: текст стоит в левом нижнем углу, а логотип
+                 обложки обычно по центру. Одно вертикальное затемнение либо не спасало
+                 заголовок от логотипа, либо гасило всю картинку. -->
+            <Border Grid.Row="0" Grid.RowSpan="2" Background="{DynamicResource Brush.HeroScrimSide}"
                     Margin="-16" IsHitTestVisible="False"/>
 
             <!-- Иконка игры крупным планом — заглушка, пока обложки нет. Поверх обложки
@@ -1069,32 +1093,13 @@
                 <ColumnDefinition Width="38*"/>
               </Grid.ColumnDefinitions>
             <StackPanel Grid.Column="0" VerticalAlignment="Bottom">
-              <!-- Бейдж статуса слева, «Об игре» справа — одной линией над названием.
-                   «Об игре» здесь, а не в ряду кнопок запуска: это переход на другой
-                   экран, а не третий способ играть. В ряду она читалась как вариант
-                   запуска, и стрелка «другие варианты» стояла ровно между двумя
-                   кнопками, к которым могла относиться. -->
-              <Grid Margin="0,0,0,8">
-                <!-- Бейдж — таблетка, а не прямоугольник со скруглением: он называет
-                     состояние, а не ограничивает область, и от кнопки рядом должен
-                     отличаться формой, а не только размером. -->
-                <Border x:Name="HeroStatusBadge" CornerRadius="999" Padding="9,3" HorizontalAlignment="Left"
-                        Background="{DynamicResource Brush.HeroBadge.Bg}" BorderBrush="{DynamicResource Brush.HeroBadge.Border}" BorderThickness="1">
-                  <TextBlock x:Name="HeroStatusText" Text="Проверка…" FontSize="11" Foreground="{DynamicResource Brush.TextSecondary}"/>
-                </Border>
-                <!-- Ссылкой, а не кнопкой с рамкой: это переход на другой экран. Рамка
-                     ставила «Об игре» в один ряд по весу с кнопками запуска, хотя ничего
-                     не запускает. -->
-                <Button x:Name="HeroInfoBtn" Click="GameDetails_Click"
-                        Style="{DynamicResource Style.Button.HeroInfo}"
-                        Height="28" Padding="0" HorizontalAlignment="Right" VerticalAlignment="Center"
-                        ToolTip="Сведения, история изменений, папка игры">
-                  <StackPanel Orientation="Horizontal">
-                    <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE946;" FontSize="12" Margin="0,1,6,0" VerticalAlignment="Center"/>
-                    <TextBlock Text="Об игре" FontSize="12" VerticalAlignment="Center"/>
-                  </StackPanel>
-                </Button>
-              </Grid>
+              <!-- Бейдж статуса — прямоугольник со скруглением, а не пилюля: у короткого
+                   слова круглые торцы съедали половину плашки, и она читалась овалом. -->
+              <Border x:Name="HeroStatusBadge" CornerRadius="{DynamicResource Radius.M}" Padding="10,3"
+                      HorizontalAlignment="Left" Margin="0,0,0,8"
+                      Background="{DynamicResource Brush.HeroBadge.Bg}" BorderBrush="{DynamicResource Brush.HeroBadge.Border}" BorderThickness="1">
+                <TextBlock x:Name="HeroStatusText" Text="Проверка…" FontSize="11" Foreground="{DynamicResource Brush.TextSecondary}"/>
+              </Border>
               <TextBlock x:Name="HeroTitleText" Text="Выберите игру" FontSize="30" FontWeight="SemiBold"
                          Foreground="{DynamicResource Brush.Title}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
               <!-- Пустой экран объясняет следующий шаг, а не сообщает о пустоте: одно
@@ -1121,18 +1126,28 @@
                      вариант сейчас недоступен: тогда он ждёт под стрелкой вместе с причиной. -->
                 <Button x:Name="LaunchBtn1" Click="LaunchBtn_Click" Visibility="Collapsed"
                         Style="{DynamicResource Style.LaunchButton.Accent}">
-                  <StackPanel>
-                    <TextBlock x:Name="LaunchBtn1Title" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center"/>
-                    <!-- 0.85, а не 0.75: подпись набрана 11-м кеглем, и на заливке кнопки более
-                         бледная давала 3,4:1 при пороге 4,5:1. -->
-                    <TextBlock x:Name="LaunchBtn1Note" FontSize="11" Opacity="0.85" Margin="0,1,0,0" HorizontalAlignment="Center"/>
+                  <StackPanel Orientation="Horizontal">
+                    <!-- Значок запуска слева от подписи, как на кнопке игры в Steam:
+                         действие узнаётся раньше, чем прочитано слово. -->
+                    <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE768;" FontSize="14"
+                               Margin="0,0,10,0" VerticalAlignment="Center"/>
+                    <StackPanel VerticalAlignment="Center">
+                      <TextBlock x:Name="LaunchBtn1Title" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                      <!-- 0.85, а не 0.75: подпись набрана мелким кеглем, и на заливке кнопки
+                           более бледная давала 3,4:1 при пороге 4,5:1. -->
+                      <TextBlock x:Name="LaunchBtn1Note" FontSize="12" Opacity="0.85" Margin="0,1,0,0" HorizontalAlignment="Center"/>
+                    </StackPanel>
                   </StackPanel>
                 </Button>
                 <Button x:Name="LaunchBtn2" Click="LaunchBtn_Click" Visibility="Collapsed" Margin="8,0,0,0"
                         Style="{DynamicResource Style.LaunchButton.Ghost}">
-                  <StackPanel>
-                    <TextBlock x:Name="LaunchBtn2Title" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center"/>
-                    <TextBlock x:Name="LaunchBtn2Note" FontSize="11" Opacity="0.85" Margin="0,1,0,0" HorizontalAlignment="Center"/>
+                  <StackPanel Orientation="Horizontal">
+                    <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE768;" FontSize="14"
+                               Margin="0,0,10,0" VerticalAlignment="Center"/>
+                    <StackPanel VerticalAlignment="Center">
+                      <TextBlock x:Name="LaunchBtn2Title" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                      <TextBlock x:Name="LaunchBtn2Note" FontSize="12" Opacity="0.85" Margin="0,1,0,0" HorizontalAlignment="Center"/>
+                    </StackPanel>
                   </StackPanel>
                 </Button>
                 <!-- Стрелка с остальными вариантами: «без модов» и то, что сейчас
@@ -1143,6 +1158,19 @@
                         Width="46" MinWidth="46" Padding="0" Margin="4,0,0,0"
                         Visibility="Collapsed" ToolTip="Другие варианты запуска">
                   <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE70D;" FontSize="12"
+                             VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                </Button>
+                <!-- «Об игре» — одним значком и без подложки: это переход на другой экран,
+                     а не третий способ играть, и заливка ставила бы её в один вес с
+                     кнопками запуска. Отступ 24, а не 8: расстояние делит ряд на группы,
+                     иначе стрелка «другие варианты» стоит ровно посередине между двумя
+                     кнопками и непонятно, к какой из них относится. Цветом отзывается на
+                     наведение и нажатие — см. Style.Button.HeroInfo. -->
+                <Button x:Name="HeroInfoBtn" Click="GameDetails_Click"
+                        Style="{DynamicResource Style.Button.HeroInfo}"
+                        Width="46" Height="46" Margin="24,0,0,0" VerticalAlignment="Center"
+                        ToolTip="Об игре: сведения, история изменений, папка игры">
+                  <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE946;" FontSize="20"
                              VerticalAlignment="Center" HorizontalAlignment="Center"/>
                 </Button>
               </StackPanel>

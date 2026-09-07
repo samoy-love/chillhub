@@ -91,30 +91,6 @@
       <Setter Property="FontSize" Value="11"/>
       <Setter Property="Margin" Value="0,0,0,12"/>
     </Style>
-    <!-- Карточка в списке changelog. Свой стиль, а не общий из HomePage:
-         Style.ListBoxItem.SelectableCard объявлен в ресурсах HomePage и снаружи недоступен. -->
-    <Style x:Key="Style.ListBoxItem.ChangelogCard" TargetType="ListBoxItem">
-      <Setter Property="Padding" Value="0"/>
-      <Setter Property="Margin" Value="0,4,0,4"/>
-      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="ListBoxItem">
-            <Border x:Name="bd" CornerRadius="{DynamicResource Radius.L}" BorderThickness="1"
-                    Background="{DynamicResource Brush.Surface}"
-                    BorderBrush="{DynamicResource Brush.Border}">
-              <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
-                
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
 
   </Page.Resources>
 
@@ -147,7 +123,9 @@
       <StackPanel Grid.Column="2" Margin="16,0,0,0" VerticalAlignment="Center">
         <TextBlock Name="TitleText" Text="Игра" FontSize="24" FontWeight="Bold"
                    Foreground="{DynamicResource Brush.Title}" TextTrimming="CharacterEllipsis"/>
-        <Border Name="StateBadge" CornerRadius="999" Padding="9,3" Margin="0,6,0,0"
+        <!-- Прямоугольник со скруглением, а не пилюля: у короткого слова круглые торцы
+             съедали половину плашки, и бейдж читался овалом. -->
+        <Border Name="StateBadge" CornerRadius="{DynamicResource Radius.M}" Padding="10,3" Margin="0,6,0,0"
                 HorizontalAlignment="Left"
                 Background="{DynamicResource Brush.Surface}"
                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
@@ -242,122 +220,6 @@
               </Grid>
             </StackPanel>
           </Border>
-
-          <!-- Что менялось в сборке — в широкой колонке рядом со сведениями: это чтение,
-               а не действие. -->
-          <!-- ПРАВАЯ КОЛОНКА: changelog (новости игры) -->
-
-        <!-- Карточка по высоте содержимого, а не растянута до низа: растянутая упиралась в
-
-             край окна, пока левая колонка заканчивалась раньше, и низ страницы выглядел рваным. -->
-
-        <Border Style="{DynamicResource Style.Card}" Padding="16" VerticalAlignment="Top">
-
-          <Grid>
-
-            <Grid.RowDefinitions>
-
-              <RowDefinition Height="Auto"/>
-
-              <RowDefinition Height="*"/>
-
-            </Grid.RowDefinitions>
-
-            <Grid Grid.Row="0" Margin="0,0,0,8">
-
-              <Grid.ColumnDefinitions>
-
-                <ColumnDefinition Width="*"/>
-
-                <ColumnDefinition Width="Auto"/>
-
-              </Grid.ColumnDefinitions>
-
-              <StackPanel Grid.Column="0">
-
-                <TextBlock Text="ЧТО МЕНЯЛОСЬ В СБОРКЕ" Style="{StaticResource Style.SectionHeader}" Margin="0"/>
-
-                <TextBlock Text="Новости и списки изменений этой игры" FontSize="11"
-
-                           Foreground="{DynamicResource Brush.TextSecondary}"/>
-
-              </StackPanel>
-
-              <Button Grid.Column="1" Name="RefreshChangelogBtn" Width="28" Height="28"
-
-                      VerticalAlignment="Top"
-
-                      Style="{DynamicResource Style.Button.GhostNeutral}" Padding="0"
-
-                      ToolTip="Обновить историю изменений" Click="RefreshChangelog_Click">
-
-                <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72C;" FontSize="12"
-
-                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
-
-              </Button>
-
-            </Grid>
-
-            <Grid Grid.Row="1" MinHeight="240">
-
-              <TextBlock Name="ChangelogEmptyText" Text="Записей пока нет" Visibility="Collapsed"
-
-                         Foreground="{DynamicResource Brush.TextSecondary}" FontSize="12"
-
-                         HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap"
-
-                         TextAlignment="Center"/>
-
-              <ListBox Name="ChangelogList" Background="Transparent" BorderThickness="0"
-
-                       SelectionChanged="ChangelogList_SelectionChanged"
-
-                       ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-
-                       HorizontalContentAlignment="Stretch">
-
-                <ListBox.ItemContainerStyle>
-
-                  <Style TargetType="ListBoxItem" BasedOn="{StaticResource Style.ListBoxItem.ChangelogCard}"/>
-
-                </ListBox.ItemContainerStyle>
-
-                <ListBox.ItemTemplate>
-
-                  <DataTemplate>
-
-                    <Border Padding="12" Margin="0,1,0,1" HorizontalAlignment="Stretch"
-
-                            BorderThickness="0" Background="Transparent">
-
-                      <StackPanel>
-
-                        <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap"/>
-
-                        <TextBlock Text="{Binding CreatedAt, Converter={StaticResource RuDateConv}}"
-
-                                   Foreground="{DynamicResource Brush.TextSecondary}" FontSize="12" Margin="0,2,0,6"/>
-
-                        <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" TextTrimming="WordEllipsis"
-
-                                   FontSize="12" LineStackingStrategy="BlockLineHeight" LineHeight="17" MaxHeight="51"/>
-
-                      </StackPanel>
-
-                    </Border>
-
-                  </DataTemplate>
-
-                </ListBox.ItemTemplate>
-
-              </ListBox>
-
-            </Grid>
-
-          </Grid>
-
-        </Border>
 
         </StackPanel>
 

@@ -178,15 +178,15 @@ namespace ChillHub {
                     this.homePage = new Pages.HomePage();
                     this.AttachDownloadsIndicator(this.homePage.DownloadQueue);
 
-                    // Шапка показывает то, что считает страница: свободное место и
-                    // очищённый поиск. Обратно уходит только строка запроса.
-                    this.homePage.DiskFreeChanged += text => this.DiskFreeText.Text = text;
-                    this.homePage.SearchCleared += () => {
-                        if (this.GameSearchBox.Text.Length > 0) {
-                            this.GameSearchBox.Text = string.Empty;
-                        }
+                    // Шапка показывает то, что считает страница: свободное место на
+                    // диске с играми. Пустая строка — диск недоступен, и чип прячется
+                    // целиком, а не висит пустой рамкой.
+                    this.homePage.DiskFreeChanged += text => {
+                        this.DiskFreeText.Text = text;
+                        this.DiskFreeChip.Visibility = string.IsNullOrEmpty(text)
+                            ? Visibility.Collapsed
+                            : Visibility.Visible;
                     };
-                    this.homePage.ApplySearch(this.GameSearchBox.Text);
                 }
 
                 this.ContentFrame.Navigate(this.homePage);
@@ -719,15 +719,6 @@ namespace ChillHub {
                 Core.Logging.Logger.Warn($"MainWindow.RefreshDownloadsIndicator: {ex.Message}");
             }
         }
-
-        /// <summary>
-        /// Набранное в поиске уходит на главную страницу. Поле живёт здесь, а список
-        /// игр — там; страница о поле не знает и получает только строку.
-        /// </summary>
-        /// <param name="sender">Поле поиска.</param>
-        /// <param name="e">Аргументы события.</param>
-        private void GameSearch_TextChanged(object sender, TextChangedEventArgs e)
-            => this.homePage?.ApplySearch(this.GameSearchBox.Text);
 
         private void SettingsBtn_Click(object sender, RoutedEventArgs e) {
             try {

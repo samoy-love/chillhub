@@ -39,9 +39,6 @@ namespace ChillHub.Pages {
         /// <summary>Свободное место посчитано заново — шапке есть что показать.</summary>
         public event Action<string>? DiskFreeChanged;
 
-        /// <summary>Страница сама сбросила поиск: шапке надо очистить поле.</summary>
-        public event Action? SearchCleared;
-
         private string BaseApi => ChillHub.Core.ConfigService.Current.ApiBaseUrl;
 
         /// <summary>Завершается, когда каталог игр загружен, — см. <see cref="gamesLoaded"/>.</summary>
@@ -1563,12 +1560,7 @@ namespace ChillHub.Pages {
         }
 
         /// <summary>
-        /// Применяет запрос из поля поиска в шапке окна.
-        /// <para>
-        /// Само поле живёт в MainWindow: список игр — единственная навигация в
-        /// приложении, и искать по нему логично там же, где остальное управление.
-        /// Страница о поле не знает и получает только строку.
-        /// </para>
+        /// Применяет запрос из поля поиска в сайдбаре.
         /// </summary>
         /// <param name="query">Что набрано в поиске.</param>
         public void ApplySearch(string? query) {
@@ -1592,11 +1584,57 @@ namespace ChillHub.Pages {
         private void UpdateDiskFreeText(string? gid) {
             try {
                 var free = GetAvailableFreeSpaceFor(gid);
-                this.DiskFreeChanged?.Invoke(free > 0 ? $"свободно {FormatSize(free)}" : string.Empty);
+                this.DiskFreeChanged?.Invoke(free > 0 ? FormatSize(free) : string.Empty);
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Warn($"UpdateDiskFreeText gid={gid}: {ex.Message}");
                 this.DiskFreeChanged?.Invoke(string.Empty);
+            }
+        }
+
+        /// <summary>
+        /// Лупа в шапке сайдбара разворачивает поле поиска и ставит в него курсор.
+        /// <para>
+        /// Поле свёрнуто, пока его не позвали: в каталоге из восьми игр искать нужно
+        /// редко, а строку под поле список отдавал всегда. Повторное нажатие сворачивает
+        /// поле и снимает фильтр — спрятанный запрос продолжал бы отсеивать игры, и
+        /// пропавшую строку было бы нечем объяснить.
+        /// </para>
+        /// </summary>
+        /// <param name="sender">Кнопка поиска.</param>
+        /// <param name="e">Аргументы события.</param>
+        private void ToggleSearch_Click(object sender, RoutedEventArgs e) {
+            if (this.SearchRow.Visibility == Visibility.Visible) {
+                this.CollapseSearch();
+                return;
+            }
+
+            this.SearchRow.Visibility = Visibility.Visible;
+            this.GameSearchBox.Focus();
+            this.GameSearchBox.SelectAll();
+        }
+
+        /// <summary>Прячет поле поиска и снимает фильтр, если он был набран.</summary>
+        private void CollapseSearch() {
+            if (this.SearchRow == null || this.GameSearchBox == null) {
+                return;
+            }
+
+            this.SearchRow.Visibility = Visibility.Collapsed;
+
+            // Фильтр снимет сам обработчик TextChanged — второй раз считать не нужно.
+            if (this.GameSearchBox.Text.Length > 0) {
+                this.GameSearchBox.Text = string.Empty;
+            }
+        }
+
+        private void GameSearch_TextChanged(object sender, TextChangedEventArgs e)
+            => this.ApplySearch(this.GameSearchBox.Text);
+
+        private void GameSearchBox_PreviewKeyDown(object sender, KeyEventArgs e) {
+            if (e.Key == Key.Escape) {
+                this.CollapseSearch();
+                e.Handled = true;
             }
         }
 
@@ -1836,7 +1874,8 @@ namespace ChillHub.Pages {
             this.actionMode = mode;
             try {
                 var look = ActionButtonState.Appearance(mode, this.SelectedRunState());
-                this.ActionBtn.Content = look.Content;
+                this.ActionBtn.Content = ActionButtonContent(
+                    look.IsEnabled ? ActionButtonState.Glyph(mode) : string.Empty, look.Content);
                 this.ActionBtn.IsEnabled = look.IsEnabled;
                 this.ApplyActionButtonStyle(look.StyleKey);
                 this.SyncLaunchBar(mode);
@@ -1845,6 +1884,37 @@ namespace ChillHub.Pages {
                 // Кнопка действия — центральный элемент экрана: не даём сбою оформления уронить страницу
                 Core.Logging.Logger.Error(ex, $"SetActionMode({mode})");
             }
+        }
+
+        /// <summary>
+        /// Содержимое кнопки действия: значок и надпись в строку. Без значка возвращает
+        /// саму надпись — лишняя обёртка сдвинула бы текст с центра кнопки.
+        /// </summary>
+        /// <param name="glyph">Символ Segoe MDL2 или пустая строка.</param>
+        /// <param name="text">Надпись на кнопке.</param>
+        /// <returns>Строка или готовая разметка для свойства Content.</returns>
+        private static object ActionButtonContent(string glyph, string text) {
+            if (string.IsNullOrEmpty(glyph)) {
+                return text;
+            }
+
+            var row = new StackPanel {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            row.Children.Add(new TextBlock {
+                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                Text = glyph,
+                FontSize = 14,
+                Margin = new Thickness(0, 0, 10, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            row.Children.Add(new TextBlock {
+                Text = text,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            return row;
         }
 
         /// <summary>
@@ -2143,7 +2213,7 @@ namespace ChillHub.Pages {
         internal bool HasActiveDownloads => this.queueDockItems.Count > 0;
 
         /// <summary>
-        /// Строка под названием в витрине: версия, куда обновляемся, и сколько наиграно.
+        /// Строка под названием в витрине: сколько наиграно и какая сборка модов стоит.
         /// Пустая, если про игру нечего сказать — пустых разделителей в ней не остаётся.
         /// </summary>
         private static string BuildHeroMeta(GameInfo? g) {
@@ -2152,11 +2222,7 @@ namespace ChillHub.Pages {
             }
 
             var parts = new List<string>();
-            var installed = (g.InstalledVersion ?? string.Empty).Trim();
-            var latest = (g.LatestVersion ?? string.Empty).Trim();
 
-            // Сначала наигранное, потом версия: игроку интересно первое, номер сборки —
-            // справочная мелочь, и на первом месте он читался как главное о игре.
             try {
                 var playtime = Core.Game.PlaytimeStore.Get(g.GameId);
                 if (playtime.TotalSeconds > 0) {
@@ -2168,14 +2234,9 @@ namespace ChillHub.Pages {
                 Core.Logging.Logger.Warn($"BuildHeroMeta playtime gid={g.GameId}: {ex.Message}");
             }
 
-            if (g.IsInstalled && installed.Length > 0) {
-                parts.Add(g.NeedsUpdate && latest.Length > 0 && latest != installed
-                    ? $"версия {installed} → {latest}"
-                    : $"версия {installed}");
-            }
-            else if (latest.Length > 0) {
-                parts.Add($"версия {latest}");
-            }
+            // Номера сборки здесь нет: игроку он ничего не решает — «обновить» или «всё
+            // свежее» сказано бейджем состояния и кнопкой. Кому номер нужен (в жалобе,
+            // в сверке с сервером) — он на странице игры, в «Сведениях».
 
             // Модпак называется здесь же, отдельным куском строки. Выбирать игроку
             // нечего — активный модпак на игру ровно один и назначается в админке, —
@@ -3140,12 +3201,7 @@ namespace ChillHub.Pages {
 
             // Набранный в поиске запрос мог отфильтровать эту игру из списка, а выделять
             // скрытую строку бессмысленно: экран остался бы прежним, будто ярлык не нажимали.
-            // Фильтр переставит сам обработчик GameSearch_TextChanged.
-            if (this.searchQuery.Length > 0) {
-                this.searchQuery = string.Empty;
-                this.ApplyGameFilter();
-                this.SearchCleared?.Invoke();
-            }
+            this.CollapseSearch();
 
             this.GameList.SelectedItem = game;
             this.GameList.ScrollIntoView(game);

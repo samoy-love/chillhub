@@ -25,12 +25,10 @@
               Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}"
               BorderThickness="1" CornerRadius="{DynamicResource Radius.M}" Padding="12,6" Margin="16,0,0,0">
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-          <StackPanel Margin="0,0,12,0" VerticalAlignment="Center">
-            <TextBlock Text="Игра из этой заметки" FontSize="11"
-                       Foreground="{DynamicResource Brush.TextMuted}"/>
-            <TextBlock Name="GameLinkTitle" FontSize="13" FontWeight="SemiBold"
-                       Foreground="{DynamicResource Brush.Text}"/>
-          </StackPanel>
+          <!-- Только название игры: подпись «Игра из этой заметки» объясняла то, что и
+               так видно по кнопке рядом. -->
+          <TextBlock Name="GameLinkTitle" FontSize="13" FontWeight="SemiBold" Margin="0,0,12,0"
+                     VerticalAlignment="Center" Foreground="{DynamicResource Brush.Text}"/>
           <Button Name="GameLinkBtn" Content="Перейти к игре" Height="30" Padding="12,0"
                   Style="{DynamicResource Style.Button.GhostNeutral}" Click="GameLinkBtn_Click"/>
         </StackPanel>
