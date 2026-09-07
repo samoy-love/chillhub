@@ -138,6 +138,25 @@ namespace ChillHub.Core.Home {
             return Look(mode);
         }
 
+        /// <summary>
+        /// Значок действия — глиф Segoe MDL2 перед надписью, как на кнопке запуска в
+        /// Steam: действие узнаётся по форме раньше, чем прочитано слово.
+        /// <para>
+        /// У режимов, в которых нажимать нечего («Проверка…», «Удаление…», технические
+        /// работы, отсутствующая копия в Steam), значка нет: он обещал бы действие.
+        /// </para>
+        /// </summary>
+        /// <param name="mode">Режим кнопки.</param>
+        /// <returns>Символ шрифта Segoe MDL2 Assets или пустая строка.</returns>
+        internal static string Glyph(ActionMode mode) => mode switch {
+            ActionMode.Play => "\uE768",
+            ActionMode.Install => "\uE896",
+            ActionMode.Update => "\uE895",
+            ActionMode.Retry => "\uE72C",
+            ActionMode.Cancel or ActionMode.Dequeue => "\uE711",
+            _ => string.Empty,
+        };
+
         /// <summary>Оформление режима как такового, без оглядки на запущенную игру.</summary>
         /// <param name="mode">Режим кнопки.</param>
         /// <returns>Оформление кнопки.</returns>
