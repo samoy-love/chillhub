@@ -113,10 +113,19 @@ test('страница собирается из каталога, а не из 
   assert.ok(asked.includes('/api/games'), 'каталог не запрошен');
   assert.ok(asked.includes('/api/maintenance'), 'техработы не запрошены');
 
-  const cards = window.document.querySelectorAll('[data-games] .game');
+  const cards = window.document.querySelectorAll('[data-games] .game:not(.game--ask)');
   assert.strictEqual(cards.length, 3);
   assert.match(window.document.body.textContent, /R\.E\.P\.O\./);
   assert.match(window.document.body.textContent, /Bodycam/);
+});
+
+/* Каталог кончался тупиком: своей игры человек не нашёл, и дальше ему
+   некуда. Плитка в конце ведёт туда, где игру просят добавить. */
+test('после списка игр каталог предлагает добавить свою', async (t) => {
+  const { window } = await boot(t);
+  const ask = window.document.querySelector('[data-games] .game--ask');
+  assert.ok(ask, 'из каталога некуда пойти тому, кто не нашёл свою игру');
+  assert.strictEqual(ask.getAttribute('href'), '#wish');
 });
 
 test('версия лаунчера приходит из манифеста, а не вписана в разметку', async (t) => {
@@ -125,18 +134,26 @@ test('версия лаунчера приходит из манифеста, а
   assert.ok(shown.every((v) => v === '1.6.25'), 'версия не подставлена: ' + shown.join(','));
 });
 
-test('загрузчик модов печатается человеческим именем', async (t) => {
+/* КАТАЛОГ ОТВЕЧАЕТ НА ОДИН ВОПРОС: «есть ли тут игра, в которую мы
+   играем». Номер сборки и имя загрузчика на него не отвечают: «1.0.0» и
+   «BepInEx» ничего не значат тому, кто ещё ничего не установил, — а
+   вместе с тремя одинаковыми у всех метками они занимали три четверти
+   карточки и мешали читать названия. */
+test('в плитке игры нет ни версии сборки, ни загрузчика', async (t) => {
   const { window } = await boot(t);
-  // API отдаёт «bepinex» строчными, а называется он BepInEx
-  assert.match(window.document.body.textContent, /BepInEx/);
-  assert.ok(!/загрузчик bepinex/.test(window.document.body.textContent));
+  const cards = [...window.document.querySelectorAll('[data-games] .game:not(.game--ask)')];
+  const repo = cards.find((c) => /R\.E\.P\.O\./.test(c.textContent));
+
+  assert.ok(!/сборка/i.test(repo.textContent), 'в плитке остался номер сборки');
+  assert.ok(!/загрузчик|BepInEx/i.test(repo.textContent), 'в плитке остался загрузчик');
+  assert.match(repo.textContent, /Moo Modpack/, 'пропало имя модпака — единственное, чем игры и различаются');
 });
 
 test('игра без модпака не обещает того, чего нет', async (t) => {
   const { window } = await boot(t);
   const cards = [...window.document.querySelectorAll('[data-games] .game')];
   const bodycam = cards.find((c) => /Bodycam/.test(c.textContent));
-  assert.match(bodycam.textContent, /Модпака для неё пока нет/);
+  assert.match(bodycam.textContent, /Пока без модпака/);
   assert.ok(!/Модпак Moo/.test(bodycam.textContent));
 });
 

@@ -547,33 +547,34 @@ img.loaded { animation: none; background: none; }
 
 /* ---------- Игры ---------- */
 
+/* КАТАЛОГ — ЭТО СПИСОК, А НЕ ВОСЕМЬ РАССКАЗОВ.
+   ------------------------------------------------------------------
+   Карточка была высотой в треть экрана и на три четверти состояла из
+   текста, одинакового у всех игр. Восемь таких карточек — это экран, по
+   которому нельзя пробежать глазами, хотя пришли сюда ровно за этим:
+   посмотреть, есть ли в списке своя игра.
+
+   Плитка отвечает на этот вопрос строкой: значок, название, модпак.
+   Общее для всех сказано один раз в подписи раздела. */
 .games {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: var(--s4);
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: var(--s2);
 }
 
 .game {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-width: 0;
+  padding: var(--s3);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   background: var(--surface);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
 }
-
-.game-inner {
-  padding: var(--s3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--s2);
-  flex: 1;
-}
-
-.game-top { display: flex; align-items: center; gap: var(--s3); }
 
 /* Значок из каталога, а когда его нет — буква на плашке. Пустое место
-   на его месте сбивает высоту карточек в ряду. */
+   на его месте сбивает высоту плиток в ряду. */
 .game-ico {
   width: 40px;
   height: 40px;
@@ -591,57 +592,33 @@ img.loaded { animation: none; background: none; }
   color: var(--fg-3);
 }
 
-.game h3 { font-size: 1.125rem; }
+.game-body { min-width: 0; }
 
-.game p { font-size: 0.9375rem; color: var(--fg-2); }
-
-.game-stats {
-  display: flex;
-  gap: var(--s3);
-  font: 400 0.75rem/1 var(--mono);
-  color: var(--fg-3);
-  padding-top: var(--s2);
-  border-top: 1px solid var(--line);
-  margin-top: auto;
-  flex-wrap: wrap;
+/* Названия игр бывают длинными («Drive Beyond Horizons»), а плитка на
+   телефоне — узкой: без переноса слово вылезает за край. */
+.game h3 {
+  margin: 0;
+  font: 600 0.9375rem/1.3 var(--sans);
+  overflow-wrap: anywhere;
 }
 
-.game-stats b { color: var(--fg); font-weight: 500; }
-
-.tags { display: flex; flex-wrap: wrap; gap: var(--s1); }
-
-/* Метки жанров были раскрашены в пять разных цветов — радуга, которая
-   ничего не кодирует: посетитель не знает, что оранжевый значит «хоррор».
-   Теперь они одинаковые, а различает их текст. */
-.tags span {
-  font-size: 0.75rem;
-  color: var(--fg-2);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 3px 9px;
-}
-
-.game details { margin-top: var(--s2); }
-
-.game summary {
-  cursor: pointer;
+.game-pack {
+  margin: 2px 0 0;
   font-size: 0.8125rem;
   color: var(--fg-2);
-  list-style: none;
+  overflow-wrap: anywhere;
 }
 
-.game summary::-webkit-details-marker { display: none; }
-.game summary::before { content: "+ "; color: var(--fg-3); }
-.game details[open] summary::before { content: "− "; }
-.game summary:hover { color: var(--ember); }
-
-.game details ul {
-  margin: var(--s2) 0 0;
-  padding: 0;
-  list-style: none;
-  font: 400 0.75rem/1.8 var(--mono);
-  color: var(--fg-3);
+/* Каталог кончался тупиком: своей игры человек не нашёл, и дальше ему
+   некуда. Пунктир отличает эту плитку от игр — она не игра. */
+.game--ask {
+  text-decoration: none;
+  color: inherit;
+  border-style: dashed;
 }
+
+.game--ask:hover { border-color: var(--ember); }
+.game--ask:hover h3 { color: var(--ember); }
 
 /* ---------- Технические работы ---------- */
 
@@ -665,7 +642,7 @@ img.loaded { animation: none; background: none; }
 /* Разделы приходят из API, и до ответа на их месте должна стоять форма
    будущего содержимого, а не пустота, из-за которой страница прыгает. */
 .sk-card {
-  min-height: 168px;
+  min-height: 68px;
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   background:
