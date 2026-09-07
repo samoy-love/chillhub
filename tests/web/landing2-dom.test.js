@@ -35,7 +35,7 @@ function fixtures() {
   };
 }
 
-async function boot(t, overrides) {
+async function boot(t, overrides, opts) {
   const html = fs.readFileSync(path.join(V2, 'index.html'), 'utf8');
   const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'https://launcher.samoy.love/v2/' });
   const { window } = dom;
@@ -59,9 +59,14 @@ async function boot(t, overrides) {
 
   /* jsdom не реализует matchMedia. Заглушка отвечает «нет» на все запросы:
      значит, страница считает, что движение не ограничено и экран широкий, —
-     то есть проверяется полный вариант, а не урезанный. */
+     то есть проверяется полный вариант, а не урезанный.
+
+     `calm` включает «движение ограничено»: барабаны тогда встают сразу, и
+     проверке автомата не приходится ждать полторы секунды прокрутки. */
   window.matchMedia = (query) => ({
-    matches: /min-width/.test(query) ? true : false,
+    matches: /prefers-reduced-motion/.test(query)
+      ? Boolean(opts && opts.calm)
+      : /min-width/.test(query),
     media: query,
     addEventListener() {},
     removeEventListener() {},
@@ -264,6 +269,82 @@ test('с setup.json факты появляются и хеш попадает �
   const btn = window.document.querySelector('.copy-hash');
   assert.strictEqual(btn.dataset.hash, 'abc123');
   assert.strictEqual(window.document.querySelector('p[data-setup="sha256"]').hidden, false);
+});
+
+/* ---------- Автомат заявок ---------- */
+
+/* Единственное, что на странице можно нажать и получить ответ. Ни одна
+   проверка его не касалась: он мог перестать крутиться, подсвечивать не
+   тот ряд или затирать набранную заявку — и никто бы не узнал. */
+
+test('прокрутка называет три значения и подсвечивает выпавший ряд', async (t) => {
+  const { window } = await boot(t, null, { calm: true });
+
+  window.document.querySelector('[data-slots-spin]').click();
+  await until(() => window.document.querySelector('.slots.done'));
+
+  const hit = [...window.document.querySelectorAll('.reel-track div.hit')].map((d) => d.textContent);
+  assert.strictEqual(hit.length, 3, 'подсвечен не ряд, а что-то другое');
+
+  const out = window.document.querySelector('[data-slots-out]').textContent;
+  for (const value of hit) {
+    assert.ok(out.includes(value), 'в строке результата нет выпавшего значения: ' + value);
+  }
+});
+
+/* Жанры берутся из магазина Steam: человек ищет игру там, и слово из
+   чужого словаря пришлось бы переводить в уме. */
+test('жанры на первом барабане — те же, что в Steam', async (t) => {
+  const { window } = await boot(t, null, { calm: true });
+
+  const first = [...window.document.querySelectorAll('.reel')][0];
+  const values = new Set([...first.querySelectorAll('.reel-track div')].map((d) => d.textContent));
+
+  for (const genre of ['Экшены', 'Приключения', 'Ролевые', 'Стратегии', 'Симуляторы', 'Инди']) {
+    assert.ok(values.has(genre), 'нет жанра Steam: ' + genre);
+  }
+});
+
+/* Имена собственные в результате остаются собой. Прежде вся строка
+   приводилась к нижнему регистру, и Steam Workshop превращался в
+   steam workshop. */
+test('в результате не портятся имена собственные', async (t) => {
+  const { window } = await boot(t, null, { calm: true });
+
+  // Крутим, пока не выпадет барабан с именем собственным
+  for (let i = 0; i < 40; i++) {
+    window.document.querySelector('[data-slots-spin]').click();
+    await until(() => window.document.querySelector('.slots.done'));
+    const out = window.document.querySelector('[data-slots-out]').textContent;
+    if (/Steam Workshop/i.test(out)) {
+      assert.match(out, /Steam Workshop/, 'имя собственное приведено к нижнему регистру');
+      return;
+    }
+    window.document.querySelector('.slots').classList.remove('done');
+  }
+});
+
+test('уже набранную заявку автомат не затирает', async (t) => {
+  const { window } = await boot(t, null, { calm: true });
+
+  const ta = window.document.querySelector('#wish-text');
+  ta.value = 'Deep Rock Galactic, играем вчетвером';
+
+  window.document.querySelector('[data-slots-spin]').click();
+  await until(() => window.document.querySelector('.slots.done'));
+
+  assert.strictEqual(ta.value, 'Deep Rock Galactic, играем вчетвером', 'автомат стёр набранное');
+});
+
+test('пустую заявку автомат заполняет выпавшим', async (t) => {
+  const { window } = await boot(t, null, { calm: true });
+
+  window.document.querySelector('[data-slots-spin]').click();
+  await until(() => window.document.querySelector('.slots.done'));
+
+  const ta = window.document.querySelector('#wish-text');
+  assert.match(ta.value, /^Автомат выдал: /);
+  assert.match(ta.value, /Предлагаю добавить: $/);
 });
 
 /* ---------- Заявка ---------- */
