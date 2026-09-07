@@ -146,50 +146,59 @@
   const packUrl = (mods) =>
     mods && mods.community ? `https://thunderstore.io/c/${encodeURIComponent(mods.community)}/` : '';
 
-  /* В реестре загрузчик записан строчными, а называется он BepInEx.
-     Печатать «bepinex» в витрине — то же, что писать «steam». */
-  const LOADERS = { bepinex: 'BepInEx', melonloader: 'MelonLoader' };
-  const loaderName = (v) => LOADERS[String(v).toLowerCase()] || v;
-
+  /**
+   * Плитка игры в каталоге.
+   *
+   * КАТАЛОГ ОТВЕЧАЕТ НА ОДИН ВОПРОС: «есть ли тут игра, в которую мы
+   * играем». Всё остальное посетитель узнает, когда найдёт свою.
+   *
+   * Поэтому в плитке осталось только различающее: значок, название и
+   * модпак. Ушли номер сборки и имя загрузчика — цифра «1.0.0» и слово
+   * «BepInEx» ничего не значат тому, кто ещё ничего не установил; ушли
+   * три метки, которые стояли у всех игр одинаково и потому не
+   * различали ничего; ушли два абзаца, повторявшиеся дословно в каждой
+   * карточке, — они переехали в подпись раздела и сказаны один раз.
+   *
+   * @param {object} g Игра из /api/games.
+   * @returns {string} Разметка плитки.
+   */
   function gameCard(g) {
     const mods = g.mods;
-    const pack = mods && mods.displayName
-      ? `${mods.displayName}${mods.displayVersion ? ' ' + mods.displayVersion : ''}`
-      : '';
     const url = packUrl(mods);
-
-    const stats = [
-      g.latestVersion ? `сборка <b>${esc(g.latestVersion)}</b>` : 'сборки пока нет',
-      mods && mods.loader ? `загрузчик <b>${esc(loaderName(mods.loader))}</b>` : '',
-    ].filter(Boolean);
-
     const title = g.title || g.gameId;
+
+    /* Номер версии модпака не показываем: он меняется на каждой сборке,
+       а посетителю важно, ЧТО за модпак, а не какой он сейчас. */
+    const pack = (mods && mods.displayName) || '';
 
     return `
       <article class="game">
-        <div class="game-inner">
-          <div class="game-top">
-            ${
-              g.iconUrl
-                ? `<img class="game-ico" src="${esc(safeUrl(g.iconUrl))}" alt="" width="40" height="40" loading="lazy" decoding="async" data-letter="${esc(title.slice(0, 1))}">`
-                : `<span class="game-ico game-ico--letter" aria-hidden="true">${esc(title.slice(0, 1))}</span>`
-            }
-            <h3>${esc(title)}</h3>
-          </div>
+        ${
+          g.iconUrl
+            ? `<img class="game-ico" src="${esc(safeUrl(g.iconUrl))}" alt="" width="40" height="40" loading="lazy" decoding="async" data-letter="${esc(title.slice(0, 1))}">`
+            : `<span class="game-ico game-ico--letter" aria-hidden="true">${esc(title.slice(0, 1))}</span>`
+        }
+        <div class="game-body">
+          <h3>${esc(title)}</h3>
           ${
             pack
-              ? `<p>Модпак ${url ? `<a href="${esc(url)}" rel="noopener noreferrer" target="_blank">${esc(pack)}</a>` : `<b>${esc(pack)}</b>`}. Он один на всех: у вас и у друзей встанет ровно эта версия.</p>`
-              : '<p>Модпака для неё пока нет. Лаунчер всё равно поможет: запустит вашу копию игры и будет следить за обновлениями.</p>'
+              ? `<p class="game-pack">Модпак ${url ? `<a href="${esc(url)}" rel="noopener noreferrer" target="_blank">${esc(pack)}</a>` : esc(pack)}</p>`
+              : '<p class="game-pack faint">Пока без модпака</p>'
           }
-          <div class="tags">
-            ${mods && mods.steamAppId ? '<span>Своя копия из Steam</span>' : ''}
-            ${mods && mods.hasLatest ? '<span>С модами и без</span>' : ''}
-            ${g.hasLatest ? '<span>Сборка с сервера</span>' : '<span>Только своя копия</span>'}
-          </div>
-          <div class="game-stats">${stats.map((s) => `<span>${s}</span>`).join('')}</div>
         </div>
       </article>`;
   }
+
+  /* Каталог кончался тупиком: своей игры человек не нашёл, и дальше ему
+     некуда. Плитка в конце ведёт туда, где её просят добавить. */
+  const askTile = `
+      <a class="game game--ask" href="#wish">
+        <span class="game-ico game-ico--letter" aria-hidden="true">+</span>
+        <div class="game-body">
+          <h3>Нет вашей игры?</h3>
+          <p class="game-pack">Предложите — добавим</p>
+        </div>
+      </a>`;
 
   /* Размер, дата сборки и SHA-256 установщика. Показывается только то,
      что релиз действительно записал в /downloads/setup.json: свёрстанные
@@ -239,7 +248,7 @@
     const games = $('[data-games]');
     if (games) {
       games.innerHTML = data.games.length
-        ? data.games.map(gameCard).join('')
+        ? data.games.map(gameCard).join('') + askTile
         : '<p class="dim">Каталог сейчас пуст. Загляните позже: игры добавляются через админку и появляются здесь сами.</p>';
     }
 
