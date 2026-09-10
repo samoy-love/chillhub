@@ -605,7 +605,12 @@
         <ControlTemplate TargetType="Button">
           <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}" Background="{TemplateBinding Background}"
                   BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
-            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <!-- Поля кнопки доходят до содержимого. Без этой привязки Padding не делал
+                 ничего вовсе: подпись прижималась к рамке, а кнопка казалась тесной ровно
+                 настолько, насколько длинной была надпись. Заметнее всего это было на
+                 «Перейти к игре» и «К библиотеке» — там подпись длинная и со значком. -->
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Margin="{TemplateBinding Padding}"/>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
