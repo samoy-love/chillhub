@@ -1,6 +1,6 @@
 // Значок собирается из scripts/icon/geometry.mjs. Ломается он молча: сместился
-// на пиксель — на 256 не заметит никто, а на 16 геймпад поедет. Здесь заперты
-// свойства, ради которых геометрия и задана таблицей.
+// на полпикселя — на 256 не заметит никто, а на 16 буква C расплывётся в пятно.
+// Здесь заперты свойства, ради которых геометрия и задана таблицей.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
@@ -8,148 +8,127 @@ const { resolve } = require('node:path');
 
 // Генератор значка написан модулями ES, а тесты здесь — CommonJS.
 // Подгружаем его один раз перед прогоном.
-let geometry, ICO_SIZES, COLORS, framed, ico, raster, svg;
+let geometry, caps, ICO_SIZES, COLORS, ico, raster, svg;
 test.before(async () => {
-  ({ geometry, ICO_SIZES, COLORS, framed } = await import('../../scripts/icon/geometry.mjs'));
+  ({ geometry, caps, ICO_SIZES, COLORS } = await import('../../scripts/icon/geometry.mjs'));
   ({ ico, raster, svg } = await import('../../scripts/icon/render.mjs'));
 });
 
 const whole = (v) => Number.isInteger(v);
 
-// Точка внутри скруглённого прямоугольника — тот же счёт, что у растеризатора.
-function inside(x, y, R) {
-  if (x < R.x || y < R.y || x > R.x + R.w || y > R.y + R.h) return false;
-  const r = R.r || 0;
-  if (r <= 0) return true;
-  const cx = Math.min(Math.max(x, R.x + r), R.x + R.w - r);
-  const cy = Math.min(Math.max(y, R.y + r), R.y + R.h - r);
-  return (x - cx) ** 2 + (y - cy) ** 2 <= r * r;
+// Контраст по WCAG — тот же счёт, что в тестах темы лаунчера.
+function lum(hex) {
+  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
 }
+const contrast = (a, b) => {
+  const x = lum(a);
+  const y = lum(b);
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+};
+const hexMix = (a, b, t) =>
+  '#' + [1, 3, 5].map((i) => {
+    const va = parseInt(a.slice(i, i + 2), 16);
+    const vb = parseInt(b.slice(i, i + 2), 16);
+    return Math.round(va + (vb - va) * t).toString(16).padStart(2, '0');
+  }).join('');
 
-const overlap = (a, b, gap = 0) =>
-  a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
-
-test('на каждом размере все координаты целые', () => {
+test('края кольца, точки и плашки лежат на сетке пикселей', () => {
+  // Крайние точки кольца слева, сверху и снизу и края точки по горизонтали —
+  // именно по ним глаз ловит резкость на 16 px.
   for (const size of ICO_SIZES) {
-    const g = geometry(size);
-    for (const r of [g.plate, g.inner, g.body, ...g.holes]) {
-      for (const k of ['x', 'y', 'w', 'h', 'r']) {
-        assert.ok(whole(r[k]), `${size}: ${k}=${r[k]} не целое`);
-      }
-    }
+    const { plate, arc, dot } = geometry(size);
+    for (const k of ['x', 'y', 'w', 'h', 'r']) assert.ok(whole(plate[k]), `${size}: плашка ${k}=${plate[k]}`);
+    assert.ok(whole(arc.cx - arc.ro) && whole(arc.cy - arc.ro) && whole(arc.cy + arc.ro), `${size}: край кольца`);
+    assert.ok(whole(arc.cx - arc.ri), `${size}: внутренний край кольца`);
+    assert.ok(whole(dot.cx - dot.r) && whole(dot.cx + dot.r), `${size}: края точки`);
   }
 });
 
-test('корпус сидит по центру плашки с равными полями', () => {
+test('знак стоит по центру плашки', () => {
+  // Точка лежит на средней окружности кольца, поэтому знак вместе с ней
+  // занимает ровно круг радиуса ro — и этот круг обязан быть по центру.
   for (const size of ICO_SIZES) {
-    const { inner, body } = geometry(size);
-    const left = body.x - inner.x;
-    const right = inner.x + inner.w - (body.x + body.w);
-    const top = body.y - inner.y;
-    const bottom = inner.y + inner.h - (body.y + body.h);
+    const { plate, arc, dot } = geometry(size);
+    const left = arc.cx - arc.ro - plate.x;
+    const right = plate.x + plate.w - (dot.cx + dot.r);
+    const top = arc.cy - arc.ro - plate.y;
+    const bottom = plate.y + plate.h - (arc.cy + arc.ro);
     assert.equal(left, right, `${size}: поля по бокам ${left} и ${right}`);
     assert.equal(top, bottom, `${size}: поля сверху и снизу ${top} и ${bottom}`);
   }
 });
 
-test('между корпусом и кантом всегда остаётся плашка', () => {
-  // Кант и корпус одного цвета. Сомкнутся — геймпад прилипнет к краю значка
-  // и перестанет быть отдельной формой.
+test('пропорции знака одинаковы на всех размерах', () => {
+  // Таблица задаёт размеры пикселями, и знак легко «поплывёт» — на одном
+  // размере жирная C, на соседнем тощая. Держим вилку, а не точное число.
+  for (const size of ICO_SIZES) {
+    const { arc } = geometry(size);
+    const ro = arc.ro / size;
+    const sw = arc.sw / size;
+    assert.ok(ro >= 0.27 && ro <= 0.32, `${size}: кольцо ${(ro * 100).toFixed(1)} % холста`);
+    assert.ok(sw >= 0.11 && sw <= 0.13, `${size}: толщина ${(sw * 100).toFixed(1)} % холста`);
+  }
+});
+
+test('буква не закрывается и не прилипает к краю плашки', () => {
+  for (const size of ICO_SIZES) {
+    const { plate, arc } = geometry(size);
+    // Внутренний просвет C: схлопнется — буква станет кругляшом.
+    assert.ok(arc.ri >= 3, `${size}: просвет внутри C всего ${arc.ri}`);
+    assert.ok(arc.ri >= arc.sw, `${size}: просвет ${arc.ri} уже толщины ${arc.sw}`);
+    // Поле вокруг знака: без него знак упирается в скругление плашки.
+    const margin = arc.cx - arc.ro - plate.x;
+    assert.ok(margin >= Math.max(2, size * 0.1), `${size}: поле ${margin}`);
+  }
+});
+
+test('точка не сливается с концами буквы', () => {
+  // Слипнутся — и C читается с хвостом, а не с точкой. Просвет не меньше
+  // полутора пикселей на мелких размерах и растёт вместе с холстом.
   for (const size of ICO_SIZES) {
     const g = geometry(size);
-    assert.ok(g.clear >= 1, `${size}: просвет ${g.clear}`);
-    assert.ok(g.body.x >= g.inner.x + 1 && g.body.x + g.body.w <= g.inner.x + g.inner.w - 1, `${size}: по бокам`);
-    assert.ok(g.body.y >= g.inner.y + 1 && g.body.y + g.body.h <= g.inner.y + g.inner.h - 1, `${size}: сверху или снизу`);
-  }
-});
-
-test('корпус широкий и низкий — силуэт контроллера', () => {
-  // Уже — и он читается таблеткой, выше — кнопкой. Держим вилку, а не порог.
-  for (const size of ICO_SIZES) {
-    const { body } = geometry(size);
-    const w = body.w / size;
-    const h = body.h / size;
-    assert.ok(w >= 0.6 && w <= 0.78, `${size}: ширина ${(w * 100).toFixed(0)} % холста вне вилки`);
-    assert.ok(h >= 0.3 && h <= 0.44, `${size}: высота ${(h * 100).toFixed(0)} % холста вне вилки`);
-    assert.ok(body.w / body.h >= 1.6, `${size}: корпус ${body.w}×${body.h} слишком квадратный`);
-    assert.equal(body.r, Math.floor(body.h / 2), `${size}: торцы корпуса не полукруглые`);
-  }
-});
-
-test('крестовина и кнопки не прорезают край корпуса', () => {
-  // Вырез, дошедший до края, выгрызает кусок силуэта: геймпад на 16 px
-  // превращается в подкову. Вокруг каждого выреза — пиксель корпуса.
-  for (const size of ICO_SIZES) {
-    const { body, holes } = geometry(size);
-    for (const h of holes) {
-      assert.ok(framed(h, body), `${size}: вырез ${h.x},${h.y} ${h.w}×${h.h} у края корпуса`);
-      // И независимо от framed: вырез целиком лежит внутри корпуса.
-      assert.ok(inside(h.x + h.w / 2, h.y + h.h / 2, body), `${size}: вырез вне корпуса`);
+    for (const c of caps(g)) {
+      const gap = Math.hypot(c.x - g.dot.cx, c.y - g.dot.cy) - g.arc.sw / 2 - g.dot.r;
+      assert.ok(gap >= Math.max(1.5, size * 0.05) - 1e-9, `${size}: просвет ${gap.toFixed(2)}`);
     }
+    // И разрыв не распахнут: C остаётся C, а не скобкой.
+    assert.ok(g.arc.phi < Math.PI / 3, `${size}: разрыв ${((g.arc.phi * 360) / Math.PI).toFixed(0)}°`);
   }
 });
 
-test('крестовина — крест, а не квадрат', () => {
-  // Две планки одной толщины крест-накрест, с общим центром. Толщина меньше
-  // размаха: иначе крест заливается в квадрат и геймпад теряет лицо.
-  for (const size of ICO_SIZES) {
-    const [v, hz] = geometry(size).holes;
-    assert.equal(v.w, hz.h, `${size}: планки разной толщины`);
-    assert.equal(v.h, hz.w, `${size}: планки разного размаха`);
-    assert.equal(v.x + v.w / 2, hz.x + hz.w / 2, `${size}: центры разъехались по горизонтали`);
-    assert.equal(v.y + v.h / 2, hz.y + hz.h / 2, `${size}: центры разъехались по вертикали`);
-    assert.ok(v.w < v.h, `${size}: толщина ${v.w} при размахе ${v.h} — квадрат`);
-  }
+test('знак и плашка различимы на любом фоне', () => {
+  // Белый знак на обоих концах градиента и плашка на тёмной панели задач и
+  // на светлой вкладке браузера. Кантом значок больше не держится — только
+  // цветом, поэтому пороги здесь несущие.
+  const middle = hexMix(COLORS.top, COLORS.bottom, 0.5);
+  assert.ok(contrast(COLORS.mark, COLORS.bottom) >= 4.5, 'знак на нижнем краю градиента');
+  assert.ok(contrast(COLORS.mark, COLORS.top) >= 3, 'знак на верхнем краю градиента');
+  assert.ok(contrast(middle, '#202020') >= 3, 'плашка на тёмной панели задач');
+  assert.ok(contrast(middle, '#f3f3f3') >= 3, 'плашка на светлой вкладке');
 });
 
-test('кнопки не слипаются друг с другом и с крестовиной', () => {
-  for (const size of ICO_SIZES) {
-    const holes = geometry(size).holes;
-    const cross = holes.slice(0, 2);
-    const buttons = holes.slice(2);
-    for (const b of buttons) {
-      for (const c of cross) assert.ok(!overlap(b, c, 1), `${size}: кнопка прилипла к крестовине`);
-    }
-    if (buttons.length === 2) assert.ok(!overlap(buttons[0], buttons[1], 1), `${size}: кнопки слиплись`);
-  }
-});
-
-test('на 16 px кнопка одна, дальше две', () => {
-  // Две точки по пикселю на 16 сливаются в полоску; одна остаётся точкой.
-  assert.equal(geometry(16).holes.length, 3);
-  for (const s of ICO_SIZES.filter((s) => s > 16)) {
-    assert.equal(geometry(s).holes.length, 4, `${s}`);
-  }
-});
-
-test('кант относительно толще на мелких размерах', () => {
-  // Кант несущий: на тёмном фоне силуэт значка даёт только он. Поэтому при
-  // уменьшении его доля растёт — до 16 px, где упирается в пиксельный пол и
-  // тоньше уже некуда.
-  const sizes = ICO_SIZES.filter((s) => s > 16);
-  const share = sizes.map((s) => geometry(s).ring / s);
-  assert.equal(geometry(16).ring, 1, '16: кант обязан быть ровно в пиксель');
-  for (const [i, s] of sizes.entries()) {
-    assert.ok(geometry(s).ring >= 1, `${s}: кант исчез`);
-    if (i > 0) assert.ok(share[i] <= share[i - 1] + 1e-9, `${s}: кант потолстел относительно`);
-  }
-});
-
-test('растр несёт кант, плашку, корпус и вырезы', () => {
-  const hex = (px, i) =>
-    '#' + [0, 1, 2].map((k) => px[i + k].toString(16).padStart(2, '0')).join('');
+test('растр несёт плашку, букву и точку', () => {
+  const at = (px, size, x, y) => {
+    const i = (y * size + x) * 4;
+    return [px[i], px[i + 1], px[i + 2], px[i + 3]];
+  };
+  const white = ([r, g, b, a]) => r === 255 && g === 255 && b === 255 && a === 255;
+  // Точка в два пикселя на 16 px не бывает чисто белой: круг покрывает каждый
+  // из четырёх её пикселей на 78 %. Поэтому для неё — «светлая», а не «белая».
+  const light = ([r, g, b, a]) => r >= 200 && g >= 200 && b >= 200 && a === 255;
   for (const size of ICO_SIZES) {
     const g = geometry(size);
     const px = raster(size);
-    const at = (x, y) => hex(px, (y * size + x) * 4);
-    const mid = Math.floor(size / 2);
-    assert.equal(at(g.plate.x, mid), COLORS.ring, `${size}: кант`);
-    assert.equal(at(g.inner.x, mid), COLORS.plate, `${size}: плашка`);
-    // Корпус пробуется у верхнего края посередине: там прямой край, а не
-    // скруглённый торец, и ни одного выреза.
-    const [v] = g.holes;
-    assert.equal(at(g.body.x + (g.body.w >> 1), g.body.y), COLORS.mark, `${size}: корпус`);
-    assert.equal(at(v.x, v.y + (v.h >> 1)), COLORS.plate, `${size}: крестовина`);
+    const { cx, cy, ri, sw } = g.arc;
+    // Середина левой дуги, центр точки — белые; центр буквы — плашка.
+    assert.ok(white(at(px, size, Math.floor(cx - ri - sw / 2), Math.floor(cy))), `${size}: буква`);
+    assert.ok(light(at(px, size, Math.floor(g.dot.cx), Math.floor(g.dot.cy))), `${size}: точка`);
+    const hole = at(px, size, Math.floor(cx), Math.floor(cy));
+    assert.ok(!white(hole) && hole[3] === 255, `${size}: внутри буквы должна быть плашка`);
+    // Угол холста за скруглением — прозрачный.
+    assert.equal(at(px, size, 0, 0)[3], 0, `${size}: угол не прозрачный`);
   }
 });
 
