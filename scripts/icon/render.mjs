@@ -55,9 +55,10 @@ function paint(buf, size, R, color) {
 export function raster(size) {
   const g = geometry(size);
   const buf = new Uint8Array(size * size * 4);
-  paint(buf, size, g.plate, COLORS.ring); // внешний контур — цвет обводки
+  paint(buf, size, g.plate, COLORS.ring); // внешний контур — цвет канта
   paint(buf, size, g.inner, COLORS.plate); // плашка вырезает из него кольцо
-  for (const b of g.bars) paint(buf, size, b, COLORS.mark);
+  paint(buf, size, g.body, COLORS.mark); // корпус геймпада
+  for (const h of g.holes) paint(buf, size, h, COLORS.plate); // крестовина и кнопки
   return buf;
 }
 
@@ -167,7 +168,8 @@ export function svg(size = 32, { title = null } = {}) {
   const body = [
     rr(g.plate, COLORS.ring),
     rr(g.inner, COLORS.plate),
-    ...g.bars.map((b) => rr(b, COLORS.mark)),
+    rr(g.body, COLORS.mark),
+    ...g.holes.map((h) => rr(h, COLORS.plate)),
   ];
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg"${title ? ' role="img"' : ''}>
