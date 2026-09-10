@@ -36,9 +36,6 @@ namespace ChillHub.Pages {
     using static ChillHub.Core.Home.SyncPlanLog;
 
     public partial class HomePage : Page {
-        /// <summary>Свободное место посчитано заново — шапке есть что показать.</summary>
-        public event Action<string>? DiskFreeChanged;
-
         private string BaseApi => ChillHub.Core.ConfigService.Current.ApiBaseUrl;
 
         /// <summary>Завершается, когда каталог игр загружен, — см. <see cref="gamesLoaded"/>.</summary>
@@ -1577,18 +1574,17 @@ namespace ChillHub.Pages {
         }
 
         /// <summary>
-        /// Свободное место на диске игр — в шапке окна. Это свойство машины, а не текущей
-        /// закачки, поэтому оно живёт отдельно от строки прогресса; считает его страница
-        /// (она знает выбранную игру), а показывает шапка.
+        /// Свободное место на диске игр — в подвале сайдбара. Это свойство машины, а не
+        /// текущей закачки, поэтому оно живёт отдельно от строки прогресса.
         /// </summary>
         private void UpdateDiskFreeText(string? gid) {
             try {
                 var free = GetAvailableFreeSpaceFor(gid);
-                this.DiskFreeChanged?.Invoke(free > 0 ? FormatSize(free) : string.Empty);
+                this.DiskFreeText.Text = free > 0 ? $"Свободно на диске: {FormatSize(free)}" : string.Empty;
             }
             catch (Exception ex) {
                 Core.Logging.Logger.Warn($"UpdateDiskFreeText gid={gid}: {ex.Message}");
-                this.DiskFreeChanged?.Invoke(string.Empty);
+                this.DiskFreeText.Text = string.Empty;
             }
         }
 

@@ -44,6 +44,16 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
+                Version = "1.6.55",
+                Date = "2026-09-11",
+                Changes = new[] {
+                    "Лаунчер снова фиолетовый: тёплый цвет ушёл, значок перекрашен вместе с ним.",
+                    "Свободное место вернулось в подвал списка игр.",
+                    "Название и кнопки на витрине снова занимают всю её ширину.",
+                    "Плашки состояния — таблетками, как раньше.",
+                },
+            },
+            new ChangelogRelease {
                 Version = "1.6.54",
                 Date = "2026-09-07",
                 Changes = new[] {
