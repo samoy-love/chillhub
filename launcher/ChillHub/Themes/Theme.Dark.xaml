@@ -1203,6 +1203,21 @@
     </Setter>
   </Style>
 
+  <!-- Пилюля: скругление ровно в половину меньшей стороны, при любом шрифте и масштабе.
+       CornerRadius="999" пилюлю не даёт: WPF ужимает лишний радиус по каждой стороне
+       отдельно, и короткий бейдж становится эллипсом. Подробности — PillCornerConverter. -->
+  <ui:PillCornerConverter x:Key="PillCornerConv"/>
+  <Style x:Key="Border.Pill" TargetType="Border">
+    <Setter Property="CornerRadius">
+      <Setter.Value>
+        <MultiBinding Converter="{StaticResource PillCornerConv}">
+          <Binding Path="ActualWidth" RelativeSource="{RelativeSource Self}"/>
+          <Binding Path="ActualHeight" RelativeSource="{RelativeSource Self}"/>
+        </MultiBinding>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <!-- Полоса прокрутки в духе overlay-скроллбаров: дорожка прозрачная, бегунок — тонкая
        полупрозрачная пилюля, которая наливается цветом только под курсором. Прежняя
        серая дорожка во всю высоту ленты читалась как отдельная колонка интерфейса. -->
@@ -1247,7 +1262,7 @@
                               BorderBrush="{TemplateBinding BorderBrush}"
                               BorderThickness="{TemplateBinding BorderThickness}"
                               Margin="2"
-                              CornerRadius="3"/>
+                              Style="{StaticResource Border.Pill}"/>
                     </ControlTemplate>
                   </Thumb.Template>
                 </Thumb>
