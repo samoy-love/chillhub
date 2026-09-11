@@ -2,7 +2,7 @@
 // форма знака — плашка, кольцо, точка — задана аналитически, и покрытие пикселя
 // считается подвыборкой. Так края сглажены честно, а не фильтром поверх растра.
 import zlib from 'node:zlib';
-import { geometry, caps, COLORS } from './geometry.mjs';
+import { geometry, COLORS } from './geometry.mjs';
 
 const SUB = 8; // подвыборка на пиксель по каждой оси
 
@@ -18,17 +18,9 @@ function inRoundRect(x, y, R) {
   return (x - cx) ** 2 + (y - cy) ** 2 <= R.r * R.r;
 }
 
-// Точка на знаке: на кольце вне разрыва, в одном из скруглённых торцов или в точке.
+// Точка на знаке: внутри одного из прямоугольников букв.
 export function onMark(x, y, g) {
-  const { cx, cy, ro, ri, sw, phi } = g.arc;
-  const dx = x - cx;
-  const dy = cy - y;
-  const d = Math.hypot(dx, dy);
-  if (d >= ri && d <= ro && Math.abs(Math.atan2(dy, dx)) >= phi) return true;
-  for (const c of caps(g)) {
-    if ((x - c.x) ** 2 + (y - c.y) ** 2 <= (sw / 2) ** 2) return true;
-  }
-  return (x - g.dot.cx) ** 2 + (y - g.dot.cy) ** 2 <= g.dot.r ** 2;
+  return g.blocks.some((b) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h);
 }
 
 // Цвет плашки в точке: диагональный градиент, как linearGradient 0,0 → 1,1 в SVG.
@@ -169,23 +161,18 @@ export function ico(sizes) {
 
 /* ---------- SVG ---------- */
 
-const n2 = (v) => Number(v.toFixed(2));
-
 export function svg(size = 32, { title = null } = {}) {
   const g = geometry(size);
   const P = g.plate;
-  const [a, b] = caps(g);
-  const { mid, sw } = g.arc;
-  // Дуга идёт от верхнего торца через левую сторону к нижнему — большая дуга
-  // против часовой стрелки на экране: флаги 1 и 0.
+  // Буквы — одним путём из прямоугольников: так в файле нет швов между
+  // соседними блоками, которые браузер иначе сглаживает полупрозрачной линией.
+  const d = g.blocks.map((b) => `M${b.x} ${b.y}h${b.w}v${b.h}h${-b.w}z`).join('');
   const body = [
     '<defs><linearGradient id="chillhub-plate" x1="0" y1="0" x2="1" y2="1">' +
       `<stop offset="0" stop-color="${COLORS.top}"/><stop offset="1" stop-color="${COLORS.bottom}"/>` +
       '</linearGradient></defs>',
     `<rect x="${P.x}" y="${P.y}" width="${P.w}" height="${P.h}" rx="${P.r}" fill="url(#chillhub-plate)"/>`,
-    `<path d="M${n2(a.x)} ${n2(a.y)}A${n2(mid)} ${n2(mid)} 0 1 0 ${n2(b.x)} ${n2(b.y)}" ` +
-      `fill="none" stroke="${COLORS.mark}" stroke-width="${sw}" stroke-linecap="round"/>`,
-    `<circle cx="${n2(g.dot.cx)}" cy="${n2(g.dot.cy)}" r="${n2(g.dot.r)}" fill="${COLORS.mark}"/>`,
+    `<path d="${d}" fill="${COLORS.mark}"/>`,
   ];
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg"${title ? ' role="img"' : ''}>

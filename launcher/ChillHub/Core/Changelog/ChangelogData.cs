@@ -43,14 +43,13 @@ namespace ChillHub.Core.Changelog {
     /// </summary>
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
-            // Выпуск ради сайта: лендинг стал выкатываться с хешем в именах файлов,
-            // и правка описания выкатки по правилам пайплайна пересобирает и
-            // установщик. Сам лаунчер тот же, читать игроку тут нечего.
             new ChangelogRelease {
                 Version = "1.6.56",
                 Date = "2026-09-11",
-                Changes = System.Array.Empty<string>(),
-                Technical = true,
+                Changes = new[] {
+                    "Новый значок — первые буквы названия, белым по фиолетовому.",
+                    "Ярлык на рабочем столе, в «Пуске» и кнопка на панели задач сразу показывают новый значок, без перезагрузки.",
+                },
             },
             new ChangelogRelease {
                 Version = "1.6.55",

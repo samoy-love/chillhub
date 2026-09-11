@@ -1,6 +1,6 @@
-// Значок собирается из scripts/icon/geometry.mjs. Ломается он молча: сместился
-// на полпикселя — на 256 не заметит никто, а на 16 буква C расплывётся в пятно.
-// Здесь заперты свойства, ради которых геометрия и задана таблицей.
+// Значок собирается из scripts/icon/geometry.mjs. Ломается он молча: край буквы
+// съехал на полпикселя — на 256 не заметит никто, а на 16 буквы размоются в
+// серое пятно. Здесь заперты свойства, ради которых геометрия и собрана из блоков.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
@@ -8,10 +8,11 @@ const { resolve } = require('node:path');
 
 // Генератор значка написан модулями ES, а тесты здесь — CommonJS.
 // Подгружаем его один раз перед прогоном.
-let geometry, caps, ICO_SIZES, COLORS, ico, raster, svg;
+let geometry, ICO_SIZES, COLORS, ico, raster, svg, adminIconVersion;
 test.before(async () => {
-  ({ geometry, caps, ICO_SIZES, COLORS } = await import('../../scripts/icon/geometry.mjs'));
+  ({ geometry, ICO_SIZES, COLORS } = await import('../../scripts/icon/geometry.mjs'));
   ({ ico, raster, svg } = await import('../../scripts/icon/render.mjs'));
+  ({ adminIconVersion } = await import('../../scripts/icon/build.mjs'));
 });
 
 const whole = (v) => Number.isInteger(v);
@@ -34,74 +35,68 @@ const hexMix = (a, b, t) =>
     return Math.round(va + (vb - va) * t).toString(16).padStart(2, '0');
   }).join('');
 
-test('края кольца, точки и плашки лежат на сетке пикселей', () => {
-  // Крайние точки кольца слева, сверху и снизу и края точки по горизонтали —
-  // именно по ним глаз ловит резкость на 16 px.
+test('все края букв и плашки лежат на сетке пикселей', () => {
   for (const size of ICO_SIZES) {
-    const { plate, arc, dot } = geometry(size);
-    for (const k of ['x', 'y', 'w', 'h', 'r']) assert.ok(whole(plate[k]), `${size}: плашка ${k}=${plate[k]}`);
-    assert.ok(whole(arc.cx - arc.ro) && whole(arc.cy - arc.ro) && whole(arc.cy + arc.ro), `${size}: край кольца`);
-    assert.ok(whole(arc.cx - arc.ri), `${size}: внутренний край кольца`);
-    assert.ok(whole(dot.cx - dot.r) && whole(dot.cx + dot.r), `${size}: края точки`);
+    const g = geometry(size);
+    for (const k of ['x', 'y', 'w', 'h', 'r']) assert.ok(whole(g.plate[k]), `${size}: плашка ${k}=${g.plate[k]}`);
+    for (const b of g.blocks) {
+      for (const k of ['x', 'y', 'w', 'h']) assert.ok(whole(b[k]), `${size}: блок ${k}=${b[k]}`);
+      assert.ok(b.w >= 1 && b.h >= 1, `${size}: пустой блок`);
+    }
   }
 });
 
-test('знак стоит по центру плашки', () => {
-  // Точка лежит на средней окружности кольца, поэтому знак вместе с ней
-  // занимает ровно круг радиуса ro — и этот круг обязан быть по центру.
+test('буквы стоят по центру плашки — с точностью до пикселя', () => {
+  // Полупиксель размыл бы края, поэтому нечётный остаток уходит вправо и вниз.
+  // Больше пикселя разницы — уже перекос, который видно.
   for (const size of ICO_SIZES) {
-    const { plate, arc, dot } = geometry(size);
-    const left = arc.cx - arc.ro - plate.x;
-    const right = plate.x + plate.w - (dot.cx + dot.r);
-    const top = arc.cy - arc.ro - plate.y;
-    const bottom = plate.y + plate.h - (arc.cy + arc.ro);
-    assert.equal(left, right, `${size}: поля по бокам ${left} и ${right}`);
-    assert.equal(top, bottom, `${size}: поля сверху и снизу ${top} и ${bottom}`);
+    const { box } = geometry(size);
+    const left = box.x;
+    const right = size - (box.x + box.w);
+    const top = box.y;
+    const bottom = size - (box.y + box.h);
+    assert.ok(right - left >= 0 && right - left <= 1, `${size}: поля по бокам ${left} и ${right}`);
+    assert.ok(bottom - top >= 0 && bottom - top <= 1, `${size}: поля сверху и снизу ${top} и ${bottom}`);
+  }
+});
+
+test('у C есть просвет, у H — щель между стойками, между буквами — промежуток', () => {
+  // Схлопнутся — и вместо CH на 16 px выходят два сплошных прямоугольника.
+  for (const size of ICO_SIZES) {
+    const { t, letterC, letterH } = geometry(size);
+    const [top, back] = letterC;
+    const [left, right] = letterH;
+    assert.ok(top.w - back.w >= 2, `${size}: просвет C всего ${top.w - back.w}`);
+    assert.ok(right.x - (left.x + left.w) >= 1, `${size}: стойки H слиплись`);
+    assert.ok(left.x - (top.x + top.w) >= 1, `${size}: C и H слиплись`);
+    assert.ok(back.h - 2 * t >= t, `${size}: внутренний проём C ниже толщины штриха`);
   }
 });
 
 test('пропорции знака одинаковы на всех размерах', () => {
-  // Таблица задаёт размеры пикселями, и знак легко «поплывёт» — на одном
-  // размере жирная C, на соседнем тощая. Держим вилку, а не точное число.
+  // Каждая величина округляется отдельно, и знак легко «поплывёт»: на одном
+  // размере жирные буквы, на соседнем тощие. Держим вилку, а не точное число.
   for (const size of ICO_SIZES) {
-    const { arc } = geometry(size);
-    const ro = arc.ro / size;
-    const sw = arc.sw / size;
-    assert.ok(ro >= 0.27 && ro <= 0.32, `${size}: кольцо ${(ro * 100).toFixed(1)} % холста`);
-    assert.ok(sw >= 0.11 && sw <= 0.13, `${size}: толщина ${(sw * 100).toFixed(1)} % холста`);
+    const { t, box } = geometry(size);
+    const share = (v) => v / size;
+    assert.ok(share(box.w) >= 0.55 && share(box.w) <= 0.7, `${size}: ширина ${(share(box.w) * 100).toFixed(0)} %`);
+    assert.ok(share(box.h) >= 0.4 && share(box.h) <= 0.5, `${size}: высота ${(share(box.h) * 100).toFixed(0)} %`);
+    if (size >= 24) assert.ok(share(t) >= 0.1 && share(t) <= 0.13, `${size}: штрих ${(share(t) * 100).toFixed(1)} %`);
   }
 });
 
-test('буква не закрывается и не прилипает к краю плашки', () => {
+test('перекладина H — посередине высоты', () => {
   for (const size of ICO_SIZES) {
-    const { plate, arc } = geometry(size);
-    // Внутренний просвет C: схлопнется — буква станет кругляшом.
-    assert.ok(arc.ri >= 3, `${size}: просвет внутри C всего ${arc.ri}`);
-    assert.ok(arc.ri >= arc.sw, `${size}: просвет ${arc.ri} уже толщины ${arc.sw}`);
-    // Поле вокруг знака: без него знак упирается в скругление плашки.
-    const margin = arc.cx - arc.ro - plate.x;
-    assert.ok(margin >= Math.max(2, size * 0.1), `${size}: поле ${margin}`);
-  }
-});
-
-test('точка не сливается с концами буквы', () => {
-  // Слипнутся — и C читается с хвостом, а не с точкой. Просвет не меньше
-  // полутора пикселей на мелких размерах и растёт вместе с холстом.
-  for (const size of ICO_SIZES) {
-    const g = geometry(size);
-    for (const c of caps(g)) {
-      const gap = Math.hypot(c.x - g.dot.cx, c.y - g.dot.cy) - g.arc.sw / 2 - g.dot.r;
-      assert.ok(gap >= Math.max(1.5, size * 0.05) - 1e-9, `${size}: просвет ${gap.toFixed(2)}`);
-    }
-    // И разрыв не распахнут: C остаётся C, а не скобкой.
-    assert.ok(g.arc.phi < Math.PI / 3, `${size}: разрыв ${((g.arc.phi * 360) / Math.PI).toFixed(0)}°`);
+    const { box, letterH } = geometry(size);
+    const bar = letterH[2];
+    const above = bar.y - box.y;
+    const below = box.y + box.h - (bar.y + bar.h);
+    assert.ok(Math.abs(above - below) <= 1, `${size}: над перекладиной ${above}, под ней ${below}`);
   }
 });
 
 test('знак и плашка различимы на любом фоне', () => {
-  // Белый знак на обоих концах градиента и плашка на тёмной панели задач и
-  // на светлой вкладке браузера. Кантом значок больше не держится — только
-  // цветом, поэтому пороги здесь несущие.
+  // Кантом значок не держится — только цветом, поэтому пороги здесь несущие.
   const middle = hexMix(COLORS.top, COLORS.bottom, 0.5);
   assert.ok(contrast(COLORS.mark, COLORS.bottom) >= 4.5, 'знак на нижнем краю градиента');
   assert.ok(contrast(COLORS.mark, COLORS.top) >= 3, 'знак на верхнем краю градиента');
@@ -109,25 +104,26 @@ test('знак и плашка различимы на любом фоне', () 
   assert.ok(contrast(middle, '#f3f3f3') >= 3, 'плашка на светлой вкладке');
 });
 
-test('растр несёт плашку, букву и точку', () => {
+test('растр несёт плашку и чисто белые буквы', () => {
+  // Буквы на сетке пикселей обязаны получаться ЧИСТО белыми: серый пиксель
+  // внутри штриха значит, что край съехал с сетки и сглаживание размыло букву.
   const at = (px, size, x, y) => {
     const i = (y * size + x) * 4;
     return [px[i], px[i + 1], px[i + 2], px[i + 3]];
   };
   const white = ([r, g, b, a]) => r === 255 && g === 255 && b === 255 && a === 255;
-  // Точка в два пикселя на 16 px не бывает чисто белой: круг покрывает каждый
-  // из четырёх её пикселей на 78 %. Поэтому для неё — «светлая», а не «белая».
-  const light = ([r, g, b, a]) => r >= 200 && g >= 200 && b >= 200 && a === 255;
   for (const size of ICO_SIZES) {
     const g = geometry(size);
     const px = raster(size);
-    const { cx, cy, ri, sw } = g.arc;
-    // Середина левой дуги, центр точки — белые; центр буквы — плашка.
-    assert.ok(white(at(px, size, Math.floor(cx - ri - sw / 2), Math.floor(cy))), `${size}: буква`);
-    assert.ok(light(at(px, size, Math.floor(g.dot.cx), Math.floor(g.dot.cy))), `${size}: точка`);
-    const hole = at(px, size, Math.floor(cx), Math.floor(cy));
-    assert.ok(!white(hole) && hole[3] === 255, `${size}: внутри буквы должна быть плашка`);
-    // Угол холста за скруглением — прозрачный.
+    for (const b of g.blocks) {
+      for (const [x, y] of [[b.x, b.y], [b.x + b.w - 1, b.y + b.h - 1]]) {
+        assert.ok(white(at(px, size, x, y)), `${size}: угол блока ${x},${y} не белый`);
+      }
+    }
+    // Внутри C — плашка, угол холста за скруглением — прозрачный.
+    const [top, back] = g.letterC;
+    const inside = at(px, size, back.x + back.w, top.y + top.h);
+    assert.ok(!white(inside) && inside[3] === 255, `${size}: внутри C должна быть плашка`);
     assert.equal(at(px, size, 0, 0)[3], 0, `${size}: угол не прозрачный`);
   }
 });
@@ -166,5 +162,18 @@ test('значок в репозитории совпадает с тем, чт�
   for (const [p, expected] of cases) {
     const file = readFileSync(resolve(__dirname, '../..', p));
     assert.ok(expected.equals(file), `${p} разошёлся с генератором`);
+  }
+});
+
+test('админка ссылается на значок с версией текущего значка', () => {
+  // Браузер держит значок вкладки в своём отдельном кэше дольше любых
+  // заголовков: пока адрес тот же, он показывает старую картинку. Версия в
+  // адресе — хеш самого значка, её проставляет build.mjs.
+  const v = adminIconVersion();
+  for (const page of ['server/admin_ui/index.html', 'server/admin_ui/login.html']) {
+    const html = readFileSync(resolve(__dirname, '../..', page), 'utf8');
+    const refs = [...html.matchAll(/\/admin\/ui\/(?:favicon\.svg|app\.ico)(\?v=[a-f0-9]+)?/g)];
+    assert.ok(refs.length > 0, `${page}: нет ссылки на значок`);
+    for (const m of refs) assert.equal(m[1], `?v=${v}`, `${page}: ${m[0]} — не текущая версия значка`);
   }
 });
