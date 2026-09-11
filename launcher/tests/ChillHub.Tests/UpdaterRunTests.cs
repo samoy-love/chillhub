@@ -109,7 +109,7 @@ namespace ChillHub.Tests {
                     return 4242;
                 },
                 Sleep = _ => { },
-                RefreshIconCache = _ => order.Add("icons"),
+                RefreshIconCache = (_, _) => order.Add("icons"),
             };
 
             await global::Program.RunMainAsync(
@@ -284,7 +284,7 @@ namespace ChillHub.Tests {
                     return 4242;
                 },
                 Sleep = _ => { },
-                RefreshIconCache = _ => icons?.Add("refreshed"),
+                RefreshIconCache = (_, _) => icons?.Add("refreshed"),
             };
     }
 

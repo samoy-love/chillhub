@@ -474,6 +474,17 @@ Section "Install" SecInstall
     CreateShortCut "$DESKTOP\${APP_TITLE}.lnk" "$INSTDIR\${APP_EXE}"
   ${EndIf}
 
+  ; Значок ярлыков — из ресурса ChillHub.exe, а оболочка держит разобранные значки
+  ; в кеше. Переустановка поверх старой версии со сменившимся значком оставляла на
+  ; рабочем столе и в «Пуске» прежнюю картинку. SHCNE_ASSOCCHANGED велит проводнику
+  ; выбросить разобранные значки, ie4uinit -show перестраивает кеш пользователя.
+  ; Тем же занимается апдейтер после самообновления (DefaultRefreshIconCache).
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+  ${If} ${FileExists} "$SYSDIR\ie4uinit.exe"
+    nsExec::Exec '"$SYSDIR\ie4uinit.exe" -show'
+    Pop $R9 ; код возврата: неудача здесь не повод прерывать установку
+  ${EndIf}
+
   ; Uninstall registry (per-user)
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${APP_TITLE}"
   ; Один слэш, а не два: NSIS не обрабатывает \\ как escape, и в реестр
