@@ -123,9 +123,8 @@
       <StackPanel Grid.Column="2" Margin="16,0,0,0" VerticalAlignment="Center">
         <TextBlock Name="TitleText" Text="Игра" FontSize="24" FontWeight="Bold"
                    Foreground="{DynamicResource Brush.Title}" TextTrimming="CharacterEllipsis"/>
-        <!-- Прямоугольник со скруглением, а не пилюля: у короткого слова круглые торцы
-             съедали половину плашки, и бейдж читался овалом. -->
-        <Border Name="StateBadge" CornerRadius="{DynamicResource Radius.M}" Padding="10,3" Margin="0,6,0,0"
+        <!-- Таблетка: бейдж называет состояние, а не ограничивает область. -->
+        <Border Name="StateBadge" CornerRadius="999" Padding="9,3" Margin="0,6,0,0"
                 HorizontalAlignment="Left"
                 Background="{DynamicResource Brush.Surface}"
                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">

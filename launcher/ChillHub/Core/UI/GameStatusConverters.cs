@@ -52,11 +52,11 @@ namespace ChillHub.Core.UI {
         // разошлись с палитрой молча: разметку перекрасили, а список игр остался
         // красить статусы старыми цветами — включая отменённый фиолетовый у очереди.
         // Запасные значения — на случай, когда темы ещё нет (тесты конвертеров).
-        private static SolidColorBrush Ready => Themed("Brush.Success", "#7DAB71");
+        private static SolidColorBrush Ready => Themed("Brush.Success", "#57C98A");
 
-        private static SolidColorBrush Update => Themed("Brush.Warning", "#BF9439");
+        private static SolidColorBrush Update => Themed("Brush.Warning", "#E0A64B");
 
-        private static SolidColorBrush Absent => Themed("Brush.TextMuted", "#8A949D");
+        private static SolidColorBrush Absent => Themed("Brush.TextMuted", "#86869F");
 
         /// <inheritdoc/>
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture) {
@@ -76,17 +76,17 @@ namespace ChillHub.Core.UI {
             => throw new NotImplementedException();
 
         /// <summary>Акцент — игра прямо сейчас в очереди загрузок.</summary>
-        internal static SolidColorBrush Queued => Themed("Brush.Accent", "#E5825B");
+        internal static SolidColorBrush Queued => Themed("Brush.Accent", "#7C5CFF");
 
         /// <summary>Обрыв закачки — тем же цветом, что и остальные беды.</summary>
-        internal static SolidColorBrush Interrupted => Themed("Brush.Danger", "#D47A70");
+        internal static SolidColorBrush Interrupted => Themed("Brush.Danger", "#E06B6B");
 
         /// <summary>
         /// Игра открыта прямо сейчас. Тот же зелёный, что у готовой к запуску: это
         /// её же состояние, доведённое до конца, — и лишний цвет в списке из трёх
         /// подписей делит внимание, а не направляет его.
         /// </summary>
-        internal static SolidColorBrush Playing => Themed("Brush.Success", "#7DAB71");
+        internal static SolidColorBrush Playing => Themed("Brush.Success", "#57C98A");
 
         /// <summary>Кисть из темы по ключу; запасной цвет — когда темы в процессе нет.</summary>
         private static SolidColorBrush Themed(string key, string fallback) {

@@ -690,7 +690,7 @@
             'Динамика',
             V().chart(
               [
-                { title: 'запуски игр', color: 'var(--ember)', values: D.days.map((d) => d.launches) },
+                { title: 'запуски игр', color: 'var(--accent)', values: D.days.map((d) => d.launches) },
                 { title: 'обновления', color: 'var(--ok)', values: D.days.map((d) => d.updates) },
                 { title: 'ошибки', color: 'var(--bad)', values: D.days.map((d) => d.errors) },
               ],

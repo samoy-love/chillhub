@@ -440,7 +440,7 @@ namespace ChillHub.Tests {
             var playing = (System.Windows.Media.SolidColorBrush)brush.Convert(
                 new object[] { game, string.Empty, "Играет" }, typeof(System.Windows.Media.Brush), null!, Culture);
             Assert.Equal(
-                (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#7DAB71"),
+                (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#57C98A"),
                 playing.Color);
         }
 

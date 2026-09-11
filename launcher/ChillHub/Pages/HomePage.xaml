@@ -960,11 +960,14 @@
             </ListBox>
           </Grid>
 
-          <!-- Подвал сайдбара. Свободное место уехало в шапку окна: это свойство машины,
-               а не списка игр, и в шапке оно видно с любого экрана. -->
+          <!-- Подвал сайдбара: свободное место и кнопка обратной связи. Место на диске
+               здесь, а не под прогрессом: это свойство машины, а не текущей закачки. -->
           <StackPanel Grid.Row="3" Margin="12,10,12,10">
             <Border Height="1" Background="{DynamicResource Brush.Border}" Margin="0,0,0,8"/>
-            <Button Name="FeedbackBtn" Click="FeedbackBtn_Click" Height="28" Margin="0,0,0,0"
+            <TextBlock x:Name="DiskFreeText" Text="" FontSize="11" TextWrapping="NoWrap"
+                       TextTrimming="CharacterEllipsis"
+                       Foreground="{DynamicResource Brush.TextMuted}"/>
+            <Button Name="FeedbackBtn" Click="FeedbackBtn_Click" Height="28" Margin="0,8,0,0"
                     HorizontalAlignment="Stretch"
                     Background="Transparent"
                     BorderBrush="{DynamicResource Brush.Border}"
@@ -1083,19 +1086,10 @@
                      Stretch="Uniform" ImageFailed="CoverImg_ImageFailed"/>
             </Grid>
 
-            <!-- Текст и кнопки занимают левые 62% витрины — ту часть, где затемнение
-                 уже сплошное. Доля, а не число пикселей: на 980 это 430 под ряд кнопок
-                 (двум кнопкам запуска со стрелкой хватает 340), на 2K — та же
-                 композиция, а не строка, растянутая через весь экран. -->
-            <Grid Grid.Row="1" VerticalAlignment="Bottom">
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="62*"/>
-                <ColumnDefinition Width="38*"/>
-              </Grid.ColumnDefinitions>
-            <StackPanel Grid.Column="0" VerticalAlignment="Bottom">
-              <!-- Бейдж статуса — прямоугольник со скруглением, а не пилюля: у короткого
-                   слова круглые торцы съедали половину плашки, и она читалась овалом. -->
-              <Border x:Name="HeroStatusBadge" CornerRadius="{DynamicResource Radius.M}" Padding="10,3"
+            <StackPanel Grid.Row="1" VerticalAlignment="Bottom">
+              <!-- Бейдж — таблетка: он называет состояние, а не ограничивает область,
+                   и от кнопки рядом должен отличаться формой, а не только размером. -->
+              <Border x:Name="HeroStatusBadge" CornerRadius="999" Padding="9,3"
                       HorizontalAlignment="Left" Margin="0,0,0,8"
                       Background="{DynamicResource Brush.HeroBadge.Bg}" BorderBrush="{DynamicResource Brush.HeroBadge.Border}" BorderThickness="1">
                 <TextBlock x:Name="HeroStatusText" Text="Проверка…" FontSize="11" Foreground="{DynamicResource Brush.TextSecondary}"/>
@@ -1175,7 +1169,6 @@
                 </Button>
               </StackPanel>
             </StackPanel>
-            </Grid>
           </Grid>
         </Border>
 

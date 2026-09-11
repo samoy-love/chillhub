@@ -178,15 +178,6 @@ namespace ChillHub {
                     this.homePage = new Pages.HomePage();
                     this.AttachDownloadsIndicator(this.homePage.DownloadQueue);
 
-                    // Шапка показывает то, что считает страница: свободное место на
-                    // диске с играми. Пустая строка — диск недоступен, и чип прячется
-                    // целиком, а не висит пустой рамкой.
-                    this.homePage.DiskFreeChanged += text => {
-                        this.DiskFreeText.Text = text;
-                        this.DiskFreeChip.Visibility = string.IsNullOrEmpty(text)
-                            ? Visibility.Collapsed
-                            : Visibility.Visible;
-                    };
                 }
 
                 this.ContentFrame.Navigate(this.homePage);

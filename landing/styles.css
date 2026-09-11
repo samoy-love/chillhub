@@ -1,10 +1,13 @@
 /* Chill Hub — лендинг 2.0
    ------------------------------------------------------------------
-   Идея оформления: холодная ночь и один тёплый огонёк.
-   Фон — остывший графит (в такие цвета покрашены сами игры, к которым
-   лаунчер ведёт), единственный акцент — цвет углей. Костёр, вокруг
-   которого собираются, — это и есть «хаб», поэтому акцентом красится
-   ровно то, к чему зовут нажать, и ничего больше.
+   Идея оформления: ночь и один фиолетовый — тот самый, которым в
+   лаунчере залита кнопка «Играть». Сайт и лаунчер теперь одного цвета:
+   человек видит на странице то, что получит, поставив программу.
+
+   Акцент один, но у него две роли. Знак (ссылки, подписи, указатели)
+   красится светлым фиолетовым — ему нужен контраст к тёмному фону.
+   Заливка кнопки — тёмным, потому что на ней стоит белая подпись.
+   Одна краска на обе роли не проходит порог ни там, ни там.
 
    Отсюда все запреты ниже: ни второго акцента, ни градиента, ни неона.
    Если элементу нужно выделиться, он выделяется поверхностью и рамкой,
@@ -16,30 +19,35 @@
 :root {
   color-scheme: dark light;
 
-  /* Поверхности. Каждая следующая на шаг светлее предыдущей: глубина
-     набирается светлотой, а не тенью. */
-  --page: #0e1114;
-  --surface: #14181d;
-  --surface-2: #1a2027;
-  --surface-3: #212932;
-  --line: #262e36;
-  --line-2: #384450;
-  --fg: #dde2e6;
-  --fg-2: #98a3ac;
-  --fg-3: #7a848d;
+  /* Поверхности — те же, что в лаунчере. Каждая следующая на шаг светлее
+     предыдущей: глубина набирается светлотой, а не тенью. */
+  --page: #0c0c10;
+  --surface: #14141b;
+  --surface-2: #1b1b24;
+  --surface-3: #20202a;
+  --line: #24242f;
+  --line-2: #35354a;
+  --fg: #e9e9f0;
+  --fg-2: #9a9aab;
+  --fg-3: #86869f;
 
-  /* Угли. Один акцент на весь сайт. */
-  --ember: #d1663c;
-  --ember-hi: #e5825b;
-  --ember-lo: #a34a27;
-  --on-ember: #140904;
-  --ember-wash: rgb(209 102 60 / 12%);
+  /* Фиолетовый. Знак — светлый: на самом светлом фоне #9a82ff даёт 5,39.
+     Заливка — тёмная: белая подпись на #6949e0 даёт 5,79, под курсором 4,94,
+     в нажатии 6,96. Приглушённый — только для указателей и рамок. */
+  --accent: #9a82ff;
+  --accent-hi: #b3a3ff;
+  --accent-dim: #7c5cff;
+  --accent-fill: #6949e0;
+  --accent-fill-hi: #7457e6;
+  --accent-fill-lo: #5a3fcc;
+  --on-accent: #fff;
+  --accent-wash: rgb(124 92 255 / 14%);
 
   /* Статусы: приглушённые, чтобы не спорить с акцентом. */
   --ok: #6f9d63;
   --warn: #bf9439;
   --bad: #c0564d;
-  --shot-frame: #0a0c0e;
+  --shot-frame: #08080b;
 
   /* Радиус почти отсутствует: скругление здесь ничего не сообщает,
      а «мягкий по умолчанию» — первый признак шаблона. */
@@ -63,25 +71,28 @@
   --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", consolas, monospace;
 }
 
-/* Светлая тема — тёплая бумага, а не белый лист: на #fff тёмные
-   скриншоты лаунчера выглядят дырами. */
+/* Светлая тема — прохладная бумага с лёгкой синевой, а не белый лист:
+   на #fff тёмные скриншоты лаунчера выглядят дырами. */
 @media (prefers-color-scheme: light) {
   :root {
-    --page: #efebe4;
-    --surface: #f6f3ed;
-    --surface-2: #ebe6dd;
-    --surface-3: #e1dbd0;
-    --line: #d8d1c4;
-    --line-2: #b9b1a1;
-    --fg: #1e2226;
-    --fg-2: #5a6167;
-    --fg-3: #6b6459;
-    --ember: #a8461c;
-    --ember-hi: #8f3a15;
-    --ember-lo: #c0673d;
-    --on-ember: #fdf6f1;
-    --ember-wash: rgb(168 70 28 / 10%);
-    --shot-frame: #cdc6b8;
+    --page: #f4f4f8;
+    --surface: #fbfbfd;
+    --surface-2: #ececf3;
+    --surface-3: #e2e2eb;
+    --line: #d9d9e3;
+    --line-2: #b8b8c8;
+    --fg: #17171f;
+    --fg-2: #55556a;
+    --fg-3: #5f5f73;
+    --accent: #5a3fcc;
+    --accent-hi: #4a30b8;
+    --accent-dim: #6949e0;
+    --accent-fill: #6949e0;
+    --accent-fill-hi: #5a3fcc;
+    --accent-fill-lo: #4a30b8;
+    --on-accent: #fff;
+    --accent-wash: rgb(105 73 224 / 10%);
+    --shot-frame: #d0d0da;
   }
 }
 
@@ -137,14 +148,14 @@ img { height: auto; }
 a { color: inherit; }
 
 :where(a, button, input, select, summary):focus-visible {
-  outline: 2px solid var(--ember);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: var(--r);
 }
 
 ::selection {
-  background: var(--ember);
-  color: var(--on-ember);
+  background: var(--accent-fill);
+  color: var(--on-accent);
 }
 
 /* ---------- Типографика ---------- */
@@ -253,14 +264,14 @@ kbd {
 .btn:active { background: var(--surface); }
 
 .btn--primary {
-  background: var(--ember);
-  border-color: var(--ember);
-  color: var(--on-ember);
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--on-accent);
   font-weight: 600;
 }
 
-.btn--primary:hover { background: var(--ember-hi); border-color: var(--ember-hi); }
-.btn--primary:active { background: var(--ember-lo); border-color: var(--ember-lo); }
+.btn--primary:hover { background: var(--accent-fill-hi); border-color: var(--accent-fill-hi); }
+.btn--primary:active { background: var(--accent-fill-lo); border-color: var(--accent-fill-lo); }
 
 
 
@@ -404,7 +415,7 @@ main { position: relative; z-index: 1; }
 
 .hero h1 em {
   font-style: normal;
-  color: var(--ember);
+  color: var(--accent);
 }
 
 .hero-lede {
@@ -457,56 +468,26 @@ main { position: relative; z-index: 1; }
   border-bottom: 1px dotted var(--line-2);
 }
 
-.dl-facts .copy-hash:hover { color: var(--ember); }
+.dl-facts .copy-hash:hover { color: var(--accent); }
 
 /* ---------- Снимок в первом экране ---------- */
 
-/* Окно показано обрезанным, а не вписанным в рамку целиком: так видно,
-   что программа больше, чем помещается в колонку, и взгляд не считает
-   картинку иллюстрацией под стеклом. Правой границы нет, справа кадр
-   уходит в градиент — срез выглядит намеренным, а не обрубленным.
+/* Снимок — само окно лаунчера, вырезанное по контуру: скруглённые углы и
+   прозрачность вокруг, как оно стоит на рабочем столе. Ни рамки, ни
+   подложки, ни градиента по краю — окно не лежит на странице картинкой под
+   стеклом, а стоит на ней само, целиком, вместе со всем, ради чего его
+   показывают.
 
-   Вылет за край вьюпорта делать не стал: он считается через 100vw,
-   который на десктопе включает полосу прокрутки, и страница получает
-   горизонтальный скролл на ровном месте. */
-.hero-shot {
-  position: relative;
-  border: 1px solid var(--line);
-  border-right: 0;
-  border-radius: var(--r-lg) 0 0 var(--r-lg);
-  background: var(--shot-frame);
-  overflow: hidden;
-}
+   Светлый контур в пиксель запечён в сам снимок — так его рисует Windows.
+   Без него тёмное окно растворялось бы на такой же тёмной странице. Тень
+   мягкая и нейтральная: свечения акцентом здесь нет, как и во всём сайте. */
+.hero-shot { position: relative; }
 
 .hero-shot img {
   display: block;
   width: 100%;
-
-  /* СНИМОК ПОКАЗЫВАЕТСЯ ЦЕЛИКОМ.
-     Кадр был ниже исходника и срезал окну низ — вместе с очередью
-     загрузок. Смысл в этом был, пока страницей ниже стоял работающий
-     эмулятор: очередь показывалась там вживую. Эмулятора нет, и
-     обрезанный снимок остался просто обрезанным: у окна пропала нижняя
-     половина, а вместе с ней и половина того, ради чего его показывают. */
   height: auto;
-}
-
-.hero-shot::after {
-  content: "";
-  position: absolute;
-  inset: 0 0 0 auto;
-  width: 96px;
-  background: linear-gradient(90deg, transparent, var(--page));
-  pointer-events: none;
-}
-
-@media (width < 900px) {
-  .hero-shot {
-    border-right: 1px solid var(--line);
-    border-radius: var(--r-lg);
-  }
-
-  .hero-shot::after { display: none; }
+  filter: drop-shadow(0 24px 48px rgb(0 0 0 / 45%));
 }
 
 /* ---------- Рамка скриншота ---------- */
@@ -636,8 +617,8 @@ img.loaded { animation: none; background: none; }
   border-style: dashed;
 }
 
-.game--ask:hover { border-color: var(--ember); }
-.game--ask:hover h3 { color: var(--ember); }
+.game--ask:hover { border-color: var(--accent); }
+.game--ask:hover h3 { color: var(--accent); }
 
 /* ---------- Технические работы ---------- */
 
@@ -703,7 +684,7 @@ img.loaded { animation: none; background: none; }
 .steps li::before {
   content: counter(step, decimal-leading-zero);
   font: 400 0.8125rem/1.6 var(--mono);
-  color: var(--ember);
+  color: var(--accent);
 }
 
 .steps p { color: var(--fg-2); font-size: 0.875rem; }
@@ -850,7 +831,7 @@ img.loaded { animation: none; background: none; }
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  color: var(--ember-lo);
+  color: var(--accent-dim);
   font-size: 0.6875rem;
   line-height: 1;
 }
@@ -864,17 +845,17 @@ img.loaded { animation: none; background: none; }
 .reel:last-child .reel-track div { padding-right: 16px; }
 
 .slots.done .reel-line {
-  border-color: var(--ember-lo);
-  background: var(--ember-wash);
+  border-color: var(--accent-dim);
+  background: var(--accent-wash);
 }
 
 .slots.done .reel-line::before,
-.slots.done .reel-line::after { color: var(--ember); }
+.slots.done .reel-line::after { color: var(--accent); }
 
 /* Рычаг: во всю ширину корпуса и вплотную к барабанам. Отдельно стоящая
    кнопка не читается как часть автомата.
 
-   Углями он подписан, а не залит: залитая кнопка на странице одна — та,
+   Фиолетовым он подписан, а не залит: залитая кнопка на странице одна — та,
    что скачивает лаунчер. Второй такой же автомат бы у неё и отобрал. */
 .slots-spin {
   width: 100%;
@@ -883,20 +864,20 @@ img.loaded { animation: none; background: none; }
   border-top: 1px solid var(--line-2);
   border-radius: 0;
   background: var(--surface);
-  color: var(--ember);
+  color: var(--accent);
   font: 600 0.8125rem/1 var(--mono);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   padding-block: 14px;
 }
 
-.slots-spin:hover { background: var(--ember-wash); color: var(--ember-hi); }
+.slots-spin:hover { background: var(--accent-wash); color: var(--accent-hi); }
 .slots-spin:active { background: var(--surface-2); }
 
 .slots.busy .slots-spin { color: var(--fg-3); pointer-events: none; }
 
 /* Выпавший ряд подсвечен акцентом: он и есть выигрыш. */
-.slots.done .reel-track div.hit { color: var(--ember-hi); }
+.slots.done .reel-track div.hit { color: var(--accent-hi); }
 
 .slots-out {
   font-size: 0.9375rem;
@@ -972,7 +953,7 @@ img.loaded { animation: none; background: none; }
 
 .site-footer ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
 .site-footer a { color: var(--fg-2); text-decoration: none; font-size: 0.9375rem; }
-.site-footer a:hover { color: var(--ember); }
+.site-footer a:hover { color: var(--accent); }
 .site-footer p { font-size: 0.875rem; color: var(--fg-3); }
 
 /* ---------- Правовые страницы ---------- */

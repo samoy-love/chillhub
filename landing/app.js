@@ -69,8 +69,8 @@
     const readColors = () => {
       const cs = window.getComputedStyle(document.documentElement);
       return {
-        bg: cs.getPropertyValue('--page').trim() || '#0e1114',
-        line: cs.getPropertyValue('--line').trim() || '#262e36',
+        bg: cs.getPropertyValue('--page').trim() || '#0c0c10',
+        line: cs.getPropertyValue('--line').trim() || '#24242f',
       };
     };
 

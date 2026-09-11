@@ -112,24 +112,6 @@
 
                 <!-- Right: индикатор загрузок + настройки -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <!-- Свободное место на диске игр — чипом, как очередь загрузок рядом:
-                         это такое же справочное число, и одинаковая форма ставит их в один
-                         ряд вместо разнобоя «строка и кнопка». Слово «свободно» мельче и
-                         бледнее числа: читают здесь число. Пусто — когда диск недоступен;
-                         тогда чип и места не занимает (см. UpdateDiskFreeText). -->
-                    <Border x:Name="DiskFreeChip" Height="32" Padding="12,0" Margin="0,0,8,0"
-                            Visibility="Collapsed" CornerRadius="{DynamicResource Radius.M}"
-                            Background="{DynamicResource Brush.Surface}"
-                            BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
-                            ToolTip="Свободно на диске с играми" ToolTipService.Placement="Bottom">
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Text="свободно" FontSize="11" VerticalAlignment="Center"
-                                       Foreground="{DynamicResource Brush.TextMuted}"/>
-                            <TextBlock x:Name="DiskFreeText" Text="" FontFamily="Consolas" FontSize="12.5"
-                                       Margin="8,0,0,0" VerticalAlignment="Center" TextWrapping="NoWrap"
-                                       Foreground="{DynamicResource Brush.Text}"/>
-                        </StackPanel>
-                    </Border>
                     <!-- Чип загрузок виден, пока очередь не пуста и мы НЕ на главной: со
                          страницы игры и из настроек ход закачки иначе не виден вовсе, а на
                          главной он повторял бы очередь, стоящую внизу того же экрана

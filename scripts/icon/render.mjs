@@ -1,63 +1,73 @@
-// Растеризация значка и упаковка в PNG/ICO. Без внешних зависимостей:
-// значок состоит из скруглённых прямоугольников, их площадь считается точно.
+// Растеризация значка и упаковка в PNG/ICO. Без внешних зависимостей: каждая
+// форма знака — плашка, кольцо, точка — задана аналитически, и покрытие пикселя
+// считается подвыборкой. Так края сглажены честно, а не фильтром поверх растра.
 import zlib from 'node:zlib';
-import { geometry, COLORS } from './geometry.mjs';
+import { geometry, caps, COLORS } from './geometry.mjs';
 
 const SUB = 8; // подвыборка на пиксель по каждой оси
 
 const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+const TOP = rgb(COLORS.top);
+const BOTTOM = rgb(COLORS.bottom);
+const MARK = rgb(COLORS.mark);
 
-function inside(x, y, R) {
+function inRoundRect(x, y, R) {
   if (x < R.x || y < R.y || x > R.x + R.w || y > R.y + R.h) return false;
-  const r = R.r || 0;
-  if (r <= 0) return true;
-  const cx = Math.min(Math.max(x, R.x + r), R.x + R.w - r);
-  const cy = Math.min(Math.max(y, R.y + r), R.y + R.h - r);
+  const cx = Math.min(Math.max(x, R.x + R.r), R.x + R.w - R.r);
+  const cy = Math.min(Math.max(y, R.y + R.r), R.y + R.h - R.r);
+  return (x - cx) ** 2 + (y - cy) ** 2 <= R.r * R.r;
+}
+
+// Точка на знаке: на кольце вне разрыва, в одном из скруглённых торцов или в точке.
+export function onMark(x, y, g) {
+  const { cx, cy, ro, ri, sw, phi } = g.arc;
   const dx = x - cx;
-  const dy = y - cy;
-  return dx * dx + dy * dy <= r * r;
+  const dy = cy - y;
+  const d = Math.hypot(dx, dy);
+  if (d >= ri && d <= ro && Math.abs(Math.atan2(dy, dx)) >= phi) return true;
+  for (const c of caps(g)) {
+    if ((x - c.x) ** 2 + (y - c.y) ** 2 <= (sw / 2) ** 2) return true;
+  }
+  return (x - g.dot.cx) ** 2 + (y - g.dot.cy) ** 2 <= g.dot.r ** 2;
 }
 
-function coverage(px, py, R) {
-  // Целые края попадают ровно на границу пикселя, подвыборка их не портит.
-  let hit = 0;
-  for (let sy = 0; sy < SUB; sy++) {
-    const y = py + (sy + 0.5) / SUB;
-    for (let sx = 0; sx < SUB; sx++) {
-      if (inside(px + (sx + 0.5) / SUB, y, R)) hit++;
-    }
-  }
-  return hit / (SUB * SUB);
-}
-
-function paint(buf, size, R, color) {
-  const [cr, cg, cb] = rgb(color);
-  const x0 = Math.max(0, Math.floor(R.x));
-  const y0 = Math.max(0, Math.floor(R.y));
-  const x1 = Math.min(size, Math.ceil(R.x + R.w));
-  const y1 = Math.min(size, Math.ceil(R.y + R.h));
-  for (let y = y0; y < y1; y++) {
-    for (let x = x0; x < x1; x++) {
-      const a = coverage(x, y, R);
-      if (a <= 0) continue;
-      const i = (y * size + x) * 4;
-      const da = buf[i + 3] / 255;
-      const oa = a + da * (1 - a);
-      for (let c = 0; c < 3; c++) {
-        const src = [cr, cg, cb][c];
-        buf[i + c] = Math.round((src * a + buf[i + c] * da * (1 - a)) / oa);
-      }
-      buf[i + 3] = Math.round(oa * 255);
-    }
-  }
+// Цвет плашки в точке: диагональный градиент, как linearGradient 0,0 → 1,1 в SVG.
+export function plateColor(x, y, g) {
+  const P = g.plate;
+  const t = Math.min(1, Math.max(0, ((x - P.x) / P.w + (y - P.y) / P.h) / 2));
+  return TOP.map((v, i) => v + (BOTTOM[i] - v) * t);
 }
 
 export function raster(size) {
   const g = geometry(size);
   const buf = new Uint8Array(size * size * 4);
-  paint(buf, size, g.plate, COLORS.ring); // внешний контур — цвет обводки
-  paint(buf, size, g.inner, COLORS.plate); // плашка вырезает из него кольцо
-  for (const b of g.bars) paint(buf, size, b, COLORS.mark);
+  const n = SUB * SUB;
+  for (let py = 0; py < size; py++) {
+    for (let px = 0; px < size; px++) {
+      let r = 0;
+      let gr = 0;
+      let b = 0;
+      let hit = 0;
+      for (let sy = 0; sy < SUB; sy++) {
+        const y = py + (sy + 0.5) / SUB;
+        for (let sx = 0; sx < SUB; sx++) {
+          const x = px + (sx + 0.5) / SUB;
+          if (!inRoundRect(x, y, g.plate)) continue;
+          const c = onMark(x, y, g) ? MARK : plateColor(x, y, g);
+          r += c[0];
+          gr += c[1];
+          b += c[2];
+          hit++;
+        }
+      }
+      if (!hit) continue;
+      const i = (py * size + px) * 4;
+      buf[i] = Math.round(r / hit);
+      buf[i + 1] = Math.round(gr / hit);
+      buf[i + 2] = Math.round(b / hit);
+      buf[i + 3] = Math.round((hit / n) * 255);
+    }
+  }
   return buf;
 }
 
@@ -159,15 +169,23 @@ export function ico(sizes) {
 
 /* ---------- SVG ---------- */
 
-const rr = (R, fill) =>
-  `<rect x="${R.x}" y="${R.y}" width="${R.w}" height="${R.h}"${R.r ? ` rx="${R.r}"` : ''} fill="${fill}"/>`;
+const n2 = (v) => Number(v.toFixed(2));
 
 export function svg(size = 32, { title = null } = {}) {
   const g = geometry(size);
+  const P = g.plate;
+  const [a, b] = caps(g);
+  const { mid, sw } = g.arc;
+  // Дуга идёт от верхнего торца через левую сторону к нижнему — большая дуга
+  // против часовой стрелки на экране: флаги 1 и 0.
   const body = [
-    rr(g.plate, COLORS.ring),
-    rr(g.inner, COLORS.plate),
-    ...g.bars.map((b) => rr(b, COLORS.mark)),
+    '<defs><linearGradient id="chillhub-plate" x1="0" y1="0" x2="1" y2="1">' +
+      `<stop offset="0" stop-color="${COLORS.top}"/><stop offset="1" stop-color="${COLORS.bottom}"/>` +
+      '</linearGradient></defs>',
+    `<rect x="${P.x}" y="${P.y}" width="${P.w}" height="${P.h}" rx="${P.r}" fill="url(#chillhub-plate)"/>`,
+    `<path d="M${n2(a.x)} ${n2(a.y)}A${n2(mid)} ${n2(mid)} 0 1 0 ${n2(b.x)} ${n2(b.y)}" ` +
+      `fill="none" stroke="${COLORS.mark}" stroke-width="${sw}" stroke-linecap="round"/>`,
+    `<circle cx="${n2(g.dot.cx)}" cy="${n2(g.dot.cy)}" r="${n2(g.dot.r)}" fill="${COLORS.mark}"/>`,
   ];
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg"${title ? ' role="img"' : ''}>

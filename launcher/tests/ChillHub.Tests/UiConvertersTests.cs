@@ -242,8 +242,8 @@ namespace ChillHub.Tests {
 
             var idle = (SolidColorBrush)brush.Convert(new object[] { game, string.Empty }, typeof(Brush), null!, CultureInfo.InvariantCulture);
             var busy = (SolidColorBrush)brush.Convert(new object[] { game, "В очереди" }, typeof(Brush), null!, CultureInfo.InvariantCulture);
-            Assert.Equal((Color)ColorConverter.ConvertFromString("#BF9439"), idle.Color);
-            Assert.Equal((Color)ColorConverter.ConvertFromString("#E5825B"), busy.Color);
+            Assert.Equal((Color)ColorConverter.ConvertFromString("#E0A64B"), idle.Color);
+            Assert.Equal((Color)ColorConverter.ConvertFromString("#7C5CFF"), busy.Color);
         }
 
         /// <summary>Лента новостей: две колонки только на широком окне.</summary>
@@ -444,7 +444,7 @@ namespace ChillHub.Tests {
                 new object[] { game, "В очереди" }, typeof(Brush), null!, CultureInfo.InvariantCulture);
 
             Assert.NotEqual(queued.Color, painted.Color);
-            Assert.Equal((Color)ColorConverter.ConvertFromString("#D47A70"), painted.Color);
+            Assert.Equal((Color)ColorConverter.ConvertFromString("#E06B6B"), painted.Color);
         }
 
         /// <summary>Неудачная позиция очереди сама называет себя обрывом.</summary>
