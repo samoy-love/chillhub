@@ -596,7 +596,10 @@ func (h *Handlers) List(w http.ResponseWriter, r *http.Request) {
 	// запрос (packagecache.go). Своими запросами это стоило 320 мс на игру —
 	// столько клиент держит между обращениями к Thunderstore, — и раздел
 	// сборок открывался тем дольше, чем больше игр с модами.
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	//
+	// Ждём не дольше thunderstoreWait: не дождались — список уходит без
+	// пометок об обновлениях, а не висит, пока лежит чужой сайт.
+	ctx, cancel := context.WithTimeout(r.Context(), thunderstoreWait)
 	defer cancel()
 	out["updates"] = h.updateChecks(ctx, entry.GameID, items)
 

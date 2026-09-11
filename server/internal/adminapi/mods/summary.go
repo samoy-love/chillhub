@@ -34,9 +34,6 @@ const (
 	// минут — это «узнать о вышедшем обновлении в тот же рабочий подход», а не
 	// «ходить в сеть по кнопке».
 	summaryTTL = 10 * time.Minute
-
-	// summaryTimeout бережёт панель от того, чтобы ждать Thunderstore.
-	summaryTimeout = 30 * time.Second
 )
 
 // LauncherSummary tells whether the newest uploaded launcher build is the one
@@ -138,15 +135,32 @@ func (h *Handlers) modsSummaryCached(ctx context.Context, force bool) []ModsGame
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, summaryTimeout)
+	// Панель не ждёт Thunderstore дольше thunderstoreWait — см. там.
+	ctx, cancel := context.WithTimeout(ctx, thunderstoreWait)
 	defer cancel()
 	mods := h.modsSummary(ctx)
 
-	h.sum.mu.Lock()
-	h.sum.last = mods
-	h.sum.at = time.Now()
-	h.sum.mu.Unlock()
+	// Неполную сводку не запоминаем. Ответ, которого не дождались, доезжает
+	// в кеш пакетов за спиной, и следующая загрузка панели возьмёт его
+	// оттуда; запомненная на десять минут, сводка всё это время твердила бы
+	// «состояние неизвестно».
+	if complete(mods) {
+		h.sum.mu.Lock()
+		h.sum.last = mods
+		h.sum.at = time.Now()
+		h.sum.mu.Unlock()
+	}
 	return mods
+}
+
+// complete reports whether every game's state is known.
+func complete(mods []ModsGameSummary) bool {
+	for _, m := range mods {
+		if m.Error != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // launcherSummary compares the active launcher build with the newest uploaded

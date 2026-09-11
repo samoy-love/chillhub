@@ -54,6 +54,25 @@ const packageTTL = summaryTTL
 // renewTimeout бережёт фоновое обновление от бесконечного ожидания.
 const renewTimeout = 30 * time.Second
 
+// fetchTimeout — сколько первый запрос за пакетом ходит в Thunderstore.
+//
+// Столько, сколько нужно самому запросу с его повторами, а не сколько готов
+// ждать человек у панели: сколько ждать, решает читатель (thunderstoreWait).
+const fetchTimeout = 2 * time.Minute
+
+// thunderstoreWait — сколько панель ждёт ответа Thunderstore, прежде чем
+// показать раздел без него.
+//
+// ПАНЕЛЬ НЕ ДОЛЖНА ЛОЖИТЬСЯ ВМЕСТЕ С ЧУЖИМ САЙТОМ. Раньше список сборок и
+// сводка ждали Thunderstore по две минуты и полминуты, а панель при запуске
+// ждёт все разделы разом. На пустом кеше — сразу после выкатки — недоступный
+// Thunderstore оставлял на экране одни заглушки: не открывался ни один раздел,
+// хотя от Thunderstore в них зависят две пометки «вышло обновление».
+//
+// Запрос при этом не обрывается: он доезжает за спиной и кладёт ответ в кеш,
+// так что следующее открытие панели пометки уже покажет.
+const thunderstoreWait = 5 * time.Second
+
 // pkg returns the package document, from cache when there is one.
 //
 // ЖДЁМ THUNDERSTORE ТОЛЬКО ТОГДА, КОГДА НЕ ЗНАЕМ НИЧЕГО. Протухший ответ
@@ -68,64 +87,72 @@ const renewTimeout = 30 * time.Second
 // Ошибку не кешируем: отказ Thunderstore — состояние на секунды, и запомнить
 // его на десять минут значит показывать «состояние неизвестно» всё это время
 // после одной моргнувшей сети.
+//
+// ctx ограничивает ожидание, а не сам запрос: читатель, у которого кончилось
+// время, уходит без ответа, а запрос доезжает и остаётся в кеше (fetch).
 func (c *packageCache) pkg(ctx context.Context, cl *Client, ns, name string) (*Package, error) {
 	key := PackageKey(ns, name)
 
-	for {
-		c.mu.Lock()
-		if c.rows == nil {
-			c.rows = map[string]*packageEntry{}
-		}
-		e := c.rows[key]
-
-		if e != nil {
-			select {
-			case <-e.done:
-				if e.err == nil {
-					stale := time.Since(e.at) >= packageTTL
-					pkg := e.pkg
-					if stale && !e.renewing {
-						e.renewing = true
-						// Свой контекст, а не запроса: тот отменяется, как только
-						// ответ ушёл в браузер, и обновление обрывалось бы на
-						// середине каждый раз.
-						//nolint:gosec,contextcheck // контекст запроса здесь был бы ошибкой, а не упущением: он отменяется, как только ответ ушёл в браузер
-						go c.renew(cl, ns, name, e)
-					}
-					c.mu.Unlock()
-					return pkg, nil
-				}
-				// Ответа нет вовсе — спрашиваем заново.
-				delete(c.rows, key)
-			default:
-				// Запрос уже идёт: ждём его, а не заводим второй.
-				c.mu.Unlock()
-				select {
-				case <-e.done:
-					continue
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				}
-			}
-		}
-
+	c.mu.Lock()
+	if c.rows == nil {
+		c.rows = map[string]*packageEntry{}
+	}
+	e := c.rows[key]
+	if e == nil {
 		e = &packageEntry{done: make(chan struct{})}
 		c.rows[key] = e
-		c.mu.Unlock()
-
-		e.pkg, e.err = cl.GetPackage(ctx, ns, name)
-		e.at = time.Now()
-		close(e.done)
-
-		if e.err != nil {
-			c.mu.Lock()
-			if c.rows[key] == e {
-				delete(c.rows, key)
-			}
-			c.mu.Unlock()
-		}
-		return e.pkg, e.err
+		// Свой контекст, а не запроса: читатель вправе перестать ждать, но
+		// оборванный вместе с ним запрос не оставил бы в кеше ничего, и
+		// следующий читатель снова ждал бы с нуля.
+		//nolint:gosec,contextcheck // контекст запроса здесь был бы ошибкой, а не упущением: он кончается раньше, чем Thunderstore успевает ответить
+		go c.fetch(cl, ns, name, key, e)
 	}
+
+	select {
+	case <-e.done:
+		// В таблице лежат только удачные ответы: неудачный fetch убирает
+		// сам, до того как закрыть done.
+		stale := time.Since(e.at) >= packageTTL
+		pkg := e.pkg
+		if stale && !e.renewing {
+			e.renewing = true
+			// Свой контекст, а не запроса: тот отменяется, как только
+			// ответ ушёл в браузер, и обновление обрывалось бы на
+			// середине каждый раз.
+			//nolint:gosec,contextcheck // контекст запроса здесь был бы ошибкой, а не упущением: он отменяется, как только ответ ушёл в браузер
+			go c.renew(cl, ns, name, e)
+		}
+		c.mu.Unlock()
+		return pkg, nil
+	default:
+	}
+	c.mu.Unlock()
+
+	// Запрос уже идёт: ждём его, а не заводим второй.
+	select {
+	case <-e.done:
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return e.pkg, e.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// fetch asks Thunderstore about a package nobody knows anything about yet.
+func (c *packageCache) fetch(cl *Client, ns, name, key string, e *packageEntry) {
+	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+	defer cancel()
+
+	pkg, err := cl.GetPackage(ctx, ns, name)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e.pkg, e.err, e.at = pkg, err, time.Now()
+	if err != nil && c.rows[key] == e {
+		delete(c.rows, key)
+	}
+	close(e.done)
 }
 
 // renew re-asks Thunderstore behind the request that found the answer stale.
