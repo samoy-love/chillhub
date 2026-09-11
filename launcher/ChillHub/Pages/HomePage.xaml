@@ -1089,7 +1089,7 @@
             <StackPanel Grid.Row="1" VerticalAlignment="Bottom">
               <!-- Бейдж — таблетка: он называет состояние, а не ограничивает область,
                    и от кнопки рядом должен отличаться формой, а не только размером. -->
-              <Border x:Name="HeroStatusBadge" CornerRadius="999" Padding="9,3"
+              <Border x:Name="HeroStatusBadge" Style="{DynamicResource Border.Pill}" Padding="9,3"
                       HorizontalAlignment="Left" Margin="0,0,0,8"
                       Background="{DynamicResource Brush.HeroBadge.Bg}" BorderBrush="{DynamicResource Brush.HeroBadge.Border}" BorderThickness="1">
                 <TextBlock x:Name="HeroStatusText" Text="Проверка…" FontSize="11" Foreground="{DynamicResource Brush.TextSecondary}"/>
