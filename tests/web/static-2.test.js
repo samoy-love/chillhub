@@ -203,7 +203,8 @@ test('панель просит свои файлы по абсолютным а
 test('каждый файл, который просит панель, лежит на месте', () => {
   const html = read(ADMIN, 'index.html');
   for (const [, url] of html.matchAll(/(?:src|href)="(\/admin\/ui\/[^"#]+)"/g)) {
-    const rel = url.replace('/admin/ui/', '');
+    // `?v=…` у значка — версия для кэша вкладки (scripts/icon/build.mjs), файл тот же.
+    const rel = url.split('?')[0].replace('/admin/ui/', '');
     assert.ok(fs.existsSync(path.join(ADMIN, rel)), 'панель просит несуществующий файл: ' + url);
   }
 });
@@ -228,7 +229,9 @@ test('страница входа не просит того, чего анон�
   // страница получит 401 и останется без оформления
   const html = read(ADMIN, 'login.html');
   const allowed = ['/admin/ui/login.js', '/admin/ui/app.ico', '/admin/ui/favicon.svg'];
-  const asked = [...html.matchAll(/(?:src|href)="([^"]+)"/g)].map((m) => m[1]);
+  // Строка запроса отбрасывается: `?v=…` у значка — версия для кэша вкладки, а
+  // location в nginx выбирается по пути без неё — анониму отдаётся тот же файл.
+  const asked = [...html.matchAll(/(?:src|href)="([^"]+)"/g)].map((m) => m[1].split('?')[0]);
   for (const url of asked) {
     assert.ok(allowed.includes(url), 'страница входа просит закрытое: ' + url);
   }

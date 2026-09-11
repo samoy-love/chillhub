@@ -44,6 +44,14 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
+                Version = "1.6.56",
+                Date = "2026-09-11",
+                Changes = new[] {
+                    "Новый значок — первые буквы названия, белым по фиолетовому.",
+                    "Ярлык на рабочем столе, в «Пуске» и кнопка на панели задач сразу показывают новый значок, без перезагрузки.",
+                },
+            },
+            new ChangelogRelease {
                 Version = "1.6.55",
                 Date = "2026-09-11",
                 Changes = new[] {

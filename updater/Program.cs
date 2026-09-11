@@ -870,7 +870,8 @@ internal static class Program {
         }
 
         try {
-            host.RefreshIconCache(log);
+            var exe = !string.IsNullOrEmpty(ctx.Exe) ? ctx.Exe : Path.Combine(ctx.Dst, "ChillHub.exe");
+            host.RefreshIconCache(exe, log);
         }
         catch (Exception ex) {
             // Не повод портить обновление: значок догонит после перезахода в систему.
@@ -1180,8 +1181,8 @@ internal static class Program {
         /// <summary>Пауза между попытками перезапуска.</summary>
         public Action<int> Sleep = Thread.Sleep;
 
-        /// <summary>Сбрасывает кеш значков оболочки, чтобы ярлыки перерисовались.</summary>
-        public Action<UpdateLog> RefreshIconCache = DefaultRefreshIconCache;
+        /// <summary>Сбрасывает кеш значков оболочки для exe лаунчера и его ярлыков.</summary>
+        public Action<string, UpdateLog> RefreshIconCache = DefaultRefreshIconCache;
 
         /// <summary>
         /// Ждать нужно обязательно: пока лаунчер жив, его exe и dll заблокированы,
@@ -1198,16 +1199,92 @@ internal static class Program {
         /// <param name="parent">Идентификатор родительского процесса.</param>
         /// <param name="log">Журнал.</param>
         /// <summary>
-        /// SHCNE_ASSOCCHANGED говорит оболочке «сопоставления поменялись» — по этому
-        /// событию проводник выбрасывает разобранные значки и читает их заново. Более
-        /// узкого события для «у файла сменилась иконка» в Windows нет.
+        /// Заставляет оболочку перечитать значок лаунчера везде, где она его держит.
+        /// <para>
+        /// Одного SHCNE_ASSOCCHANGED мало: по нему проводник выбрасывает разобранные
+        /// значки файлов, но ярлык на рабочем столе, в «Пуске» и кнопка, закреплённая на
+        /// панели задач, хранят свою картинку отдельно — и после смены значка
+        /// продолжали показывать старый, иногда до перезагрузки. Поэтому о самом exe и
+        /// о каждом ярлыке Chill Hub оболочке сообщается поимённо (SHCNE_UPDATEITEM), а
+        /// кеш значков пользователя перестраивает штатный ie4uinit.exe -show.
+        /// </para>
         /// </summary>
-        private static void DefaultRefreshIconCache(UpdateLog log) {
+        /// <param name="exe">Путь к ChillHub.exe.</param>
+        /// <param name="log">Журнал.</param>
+        private static void DefaultRefreshIconCache(string exe, UpdateLog log) {
             const int SHCNE_ASSOCCHANGED = 0x08000000;
+            const int SHCNE_UPDATEITEM = 0x00002000;
             const uint SHCNF_IDLIST = 0x0000;
+            const uint SHCNF_PATHW = 0x0005;
+            const uint SHCNF_FLUSHNOWAIT = 0x3000;
+
+            var items = new List<string> { exe };
+            items.AddRange(ShortcutsToRefresh(ShortcutFolders()));
+            foreach (var item in items) {
+                var path = Marshal.StringToHGlobalUni(item);
+                try {
+                    SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW | SHCNF_FLUSHNOWAIT, path, IntPtr.Zero);
+                }
+                finally {
+                    Marshal.FreeHGlobal(path);
+                }
+            }
 
             SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, IntPtr.Zero, IntPtr.Zero);
-            log.Write("icons: кеш значков оболочки сброшен");
+            log.Write($"icons: кеш значков оболочки сброшен, ярлыков: {items.Count - 1}");
+
+            // ie4uinit ждём недолго: он перестраивает кеш за доли секунды, а зависший
+            // не должен задерживать перезапуск лаунчера.
+            try {
+                var ie4 = Path.Combine(Environment.SystemDirectory, "ie4uinit.exe");
+                if (File.Exists(ie4)) {
+                    using var p = Process.Start(new ProcessStartInfo(ie4, "-show") { UseShellExecute = false, CreateNoWindow = true });
+                    p?.WaitForExit(5000);
+                }
+            }
+            catch (Exception ex) {
+                log.Write($"icons: ie4uinit не запустился — {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        /// <summary>Где лежат ярлыки лаунчера: папка и искать ли во вложенных.</summary>
+        /// <returns>Папки рабочего стола, «Пуска» и закреплённых кнопок панели задач.</returns>
+        private static IEnumerable<(string Dir, bool Recursive)> ShortcutFolders() {
+            yield return (Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), false);
+            yield return (Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory), false);
+            yield return (Environment.GetFolderPath(Environment.SpecialFolder.Programs), true);
+            yield return (Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms), true);
+            yield return (Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "Microsoft", "Internet Explorer", "Quick Launch", "User Pinned", "TaskBar"), false);
+        }
+
+        /// <summary>
+        /// Ярлыки Chill Hub в указанных папках. Разбирать .lnk незачем: имена задаёт
+        /// установщик — «Chill Hub», прежде «ChillHub», — а кнопку на панели задач
+        /// Windows называет по имени ярлыка, с которого её закрепили. Рабочий стол
+        /// обходится без вложенных папок: там бывают тысячи чужих файлов.
+        /// </summary>
+        /// <param name="folders">Папки и признак обхода вложенных.</param>
+        /// <returns>Пути найденных ярлыков.</returns>
+        internal static List<string> ShortcutsToRefresh(IEnumerable<(string Dir, bool Recursive)> folders) {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Chill Hub.lnk", "ChillHub.lnk" };
+            var found = new List<string>();
+            foreach (var (dir, recursive) in folders) {
+                if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) {
+                    continue;
+                }
+
+                try {
+                    var option = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+                    found.AddRange(Directory.EnumerateFiles(dir, "*.lnk", option).Where(f => names.Contains(Path.GetFileName(f))));
+                }
+                catch (Exception) {
+                    // Папка без доступа — не причина оставить без обновления остальные.
+                }
+            }
+
+            return found;
         }
 
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]

@@ -43,7 +43,8 @@ permissions:
 # Список выведен из BUILD_CMD в .deploy-kit/*.env — из того, что реально
 # попадает в артефакт, а не из имён каталогов:
 #
-#   landing/**    site: BUILD_CMD буквально `cp -r landing stage-site`.
+#   landing/**    site: BUILD_CMD — копия landing/ с хешем в именах файлов,
+#                 её делает scripts/landing-stamp.mjs (он в списке тоже).
 #   server/**     api, admin и admin-ui разом. Первые два — `cd server && go
 #                 build ./cmd/api|./cmd/admin`, то есть весь модуль server/
 #                 целиком: go.mod, go.sum, internal/**. Третья — `cp -r
@@ -92,6 +93,7 @@ permissions:
 #   ^\.github/workflows/deploy\.yml      → .github/workflows/deploy.yml
 #   ^\.deploy-kit/                       → .deploy-kit/**
 #   ^landing/                            → landing/**
+#   ^scripts/landing-stamp\.mjs          → scripts/landing-stamp.mjs
 #   ^\.htmlhintrc                        → .htmlhintrc*
 #   ^\.stylelintrc\.json, ^\.stylelintignore → .stylelint*
 #   ^server/admin_ui/                    → server/**
@@ -116,6 +118,8 @@ on:
     branches: [main]
     paths:
       - 'landing/**'
+      # Сборка лендинга: правка скрипта меняет артефакт так же, как правка страниц.
+      - 'scripts/landing-stamp.mjs'
       - 'server/**'
       # Юниты и их дополнения едут в артефактах api и admin (см. BUILD_CMD
       # в .deploy-kit/): правка drop-in'а — такая же выкатка, как правка кода.
@@ -177,8 +181,8 @@ jobs:
   # Раскладка путей по целям (выведена из .deploy-kit/*.env и из того, кто что
   # реально импортирует, а не из имён каталогов):
   #
-  #   site      — landing/**. BUILD_CMD в site.env буквально `cp -r landing`,
-  #               больше в артефакт лендинга не попадает ничего.
+  #   site      — landing/** и scripts/landing-stamp.mjs: BUILD_CMD в site.env
+  #               копирует landing/ этим скриптом, давая файлам имена с хешем.
   #   admin-ui  — server/admin_ui/**. Тоже голое копирование каталога; бинарь
   #               админки эту статику не встраивает (`go:embed` в server/ нет
   #               ни одного), её раздаёт nginx напрямую.
@@ -380,7 +384,7 @@ jobs:
           # Конфиги линтеров — часть гейта обеих статических целей.
           LINT='\.htmlhintrc|\.stylelintrc\.json|\.stylelintignore'
 
-          echo "$FILES_SITE"   | grep -qE "^(landing/|$LINT)"         && SITE=true  || SITE=false
+          echo "$FILES_SITE"   | grep -qE "^(landing/|scripts/landing-stamp\.mjs|$LINT)" && SITE=true || SITE=false
           echo "$FILES_SERVER" | grep -qE "^(server/admin_ui/|$LINT)" && UI=true    || UI=false
 
           # Админка тянет весь internal, поэтому здесь достаточно одного грепа.
