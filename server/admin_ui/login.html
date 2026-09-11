@@ -20,16 +20,17 @@
   :root {
     color-scheme: dark;
 
-    --page: #0e1114;
-    --surface: #14181d;
-    --surface-3: #212932;
-    --line: #242c34;
-    --line-2: #353f4a;
-    --fg: #dde2e6;
-    --fg-2: #98a3ac;
-    --ember: #d1663c;
-    --ember-hi: #e5825b;
-    --on-ember: #140904;
+    --page: #0c0c10;
+    --surface: #14141b;
+    --surface-3: #20202a;
+    --line: #24242f;
+    --line-2: #35354a;
+    --fg: #e9e9f0;
+    --fg-2: #9a9aab;
+    --accent: #9a82ff;
+    --accent-fill: #6949e0;
+    --accent-fill-hi: #7457e6;
+    --on-accent: #fff;
     --bad: #cd6057;
     --r: 3px;
   }
@@ -81,7 +82,7 @@
   }
 
   input:focus-visible, button:focus-visible {
-    outline: 2px solid var(--ember-hi);
+    outline: 2px solid var(--accent);
     outline-offset: 1px;
   }
 
@@ -89,14 +90,14 @@
     padding: 7px 12px;
     border: 1px solid transparent;
     border-radius: var(--r);
-    background: var(--ember);
-    color: var(--on-ember);
+    background: var(--accent-fill);
+    color: var(--on-accent);
     font: inherit;
     font-weight: 600;
     cursor: pointer;
   }
 
-  button:hover:not(:disabled) { background: var(--ember-hi); }
+  button:hover:not(:disabled) { background: var(--accent-fill-hi); }
   button:disabled { opacity: 55%; cursor: default; }
 
   /* Сообщение занимает место всегда: без этого карточка прыгает на

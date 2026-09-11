@@ -14,28 +14,30 @@
    действие экрана, один на экран), обычная, разрушающая. Всё
    остальное — текстовые кнопки без фона.
 
-   Палитра общая с лендингом: холодный графит и один тёплый акцент.
-   Синего Bootstrap больше нет нигде, кроме фокусной обводки, которая
-   и должна выбиваться.
+   Палитра общая с лендингом и лаунчером: ночь и один фиолетовый. У
+   акцента две роли — светлый для знака (ссылки, отметки, полосы) и
+   тёмный для заливки главной кнопки, на которой стоит белая подпись.
    ------------------------------------------------------------------ */
 
 :root {
   color-scheme: dark;
 
-  --page: #0e1114;
-  --surface: #14181d;
-  --surface-2: #1a2027;
-  --surface-3: #212932;
-  --surface-4: #2b343e;
-  --line: #242c34;
-  --line-2: #353f4a;
-  --fg: #dde2e6;
-  --fg-2: #98a3ac;
-  --fg-3: #7a848d;
-  --ember: #d1663c;
-  --ember-hi: #e5825b;
-  --on-ember: #140904;
-  --ember-wash: rgb(209 102 60 / 14%);
+  --page: #0c0c10;
+  --surface: #14141b;
+  --surface-2: #1b1b24;
+  --surface-3: #20202a;
+  --surface-4: #2a2a36;
+  --line: #24242f;
+  --line-2: #35354a;
+  --fg: #e9e9f0;
+  --fg-2: #9a9aab;
+  --fg-3: #86869f;
+  --accent: #9a82ff;
+  --accent-hi: #b3a3ff;
+  --accent-fill: #6949e0;
+  --accent-fill-hi: #7457e6;
+  --on-accent: #fff;
+  --accent-wash: rgb(124 92 255 / 16%);
   --ok: #6f9d63;
   --ok-wash: rgb(111 157 99 / 15%);
   --warn: #c2973f;
@@ -78,7 +80,7 @@ h1 { font-size: 18px; }
 h2 { font-size: 15px; }
 h3 { font-size: 13px; }
 p { margin: 0; }
-a { color: var(--ember); text-decoration: none; }
+a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
 .mono, code, .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
@@ -87,7 +89,7 @@ code { font-size: 12px; color: var(--fg); }
 .faint { color: var(--fg-3); }
 
 :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
-  outline: 2px solid var(--ember);
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
   border-radius: var(--r);
 }
@@ -211,7 +213,7 @@ kbd {
 .rail a[aria-current="page"] {
   background: var(--surface-3);
   color: var(--fg);
-  border-left-color: var(--ember);
+  border-left-color: var(--accent);
 }
 
 .rail a .n {
@@ -263,13 +265,13 @@ kbd {
 .btn[disabled] { opacity: 45%; pointer-events: none; }
 
 .btn--accent {
-  background: var(--ember);
-  border-color: var(--ember);
-  color: var(--on-ember);
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--on-accent);
   font-weight: 600;
 }
 
-.btn--accent:hover { background: var(--ember-hi); border-color: var(--ember-hi); }
+.btn--accent:hover { background: var(--accent-fill-hi); border-color: var(--accent-fill-hi); }
 
 /* Разрушающее действие обязано выглядеть иначе, чем «Обновить список».
    В 1.0 «Удалить версию» и «Свернуть всё» были одной и той же серой
@@ -417,7 +419,7 @@ input:hover, select:hover, textarea:hover { border-color: var(--surface-4); }
 
 .pick > button[aria-current="true"] {
   background: var(--surface-2);
-  border-left-color: var(--ember);
+  border-left-color: var(--accent);
 }
 
 .pick .t { display: flex; align-items: center; gap: var(--s2); }
@@ -438,7 +440,7 @@ input:hover, select:hover, textarea:hover { border-color: var(--surface-4); }
 }
 
 .tabs > button:hover { color: var(--fg); }
-.tabs > button[aria-current="page"] { color: var(--fg); border-bottom-color: var(--ember); }
+.tabs > button[aria-current="page"] { color: var(--fg); border-bottom-color: var(--accent); }
 
 .stack { display: grid; gap: var(--s3); }
 .stack--tight { gap: var(--s2); }
@@ -469,7 +471,7 @@ input:hover, select:hover, textarea:hover { border-color: var(--surface-4); }
 .badge--ok { background: var(--ok-wash); color: var(--ok); }
 .badge--warn { background: var(--warn-wash); color: var(--warn); }
 .badge--bad { background: var(--bad-wash); color: var(--bad); }
-.badge--accent { background: var(--ember-wash); color: var(--ember); }
+.badge--accent { background: var(--accent-wash); color: var(--accent); }
 
 .dot { width: 6px; height: 6px; border-radius: 50%; background: currentcolor; }
 
@@ -553,7 +555,7 @@ td.act { text-align: right; white-space: nowrap; }
 .attn-item[data-tone="warn"] .v { color: var(--warn); }
 .attn-item[data-tone="bad"] .v { color: var(--bad); }
 .attn-item[data-tone="ok"] .v { color: var(--ok); }
-.attn-item[data-tone="accent"] .v { color: var(--ember); }
+.attn-item[data-tone="accent"] .v { color: var(--accent); }
 
 /* ---------- Полоса передачи ---------- */
 
@@ -580,14 +582,14 @@ td.act { text-align: right; white-space: nowrap; }
 
 /* Карточка решения на первом экране. Подсвечивается только когда решать
    действительно есть что: горящая всегда рамка ничего не значит. */
-.decision--on { border-color: var(--ember); }
-.decision--on > header { background: var(--ember-wash); }
+.decision--on { border-color: var(--accent); }
+.decision--on > header { background: var(--accent-wash); }
 
 .note {
   padding: var(--s3) var(--s4);
   background: var(--surface);
   border: 1px solid var(--line);
-  border-left: 2px solid var(--ember);
+  border-left: 2px solid var(--accent);
   border-radius: var(--r);
   color: var(--fg-2);
 }
@@ -633,16 +635,16 @@ ul.plain { margin: 0; padding: 0; list-style: none; display: grid; gap: 5px; col
 .log-row.warn .k, .log-row.warn .m { color: var(--warn); }
 .log-row.err .k, .log-row.err .m { color: var(--bad); }
 .log-row.cache .k { color: var(--fg-3); }
-.log-row.get .k { color: var(--ember); }
+.log-row.get .k { color: var(--accent); }
 
 /* Непрочитанное обращение помечается полосой, а не жирным шрифтом:
    жирный в таблице из пяти строк читается как «важное». */
-tr.unread td:first-child { box-shadow: inset 2px 0 0 var(--ember); }
+tr.unread td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 
 /* ---------- Полоса заполнения ---------- */
 
 .meter { height: 4px; background: var(--surface-3); border-radius: 2px; overflow: hidden; }
-.meter > i { display: block; height: 100%; background: var(--ember); }
+.meter > i { display: block; height: 100%; background: var(--accent); }
 .meter > i.ok { background: var(--ok); }
 .meter > i.warn { background: var(--warn); }
 .meter > i.bad { background: var(--bad); }
@@ -739,7 +741,7 @@ tr.unread td:first-child { box-shadow: inset 2px 0 0 var(--ember); }
 .toast {
   background: var(--surface-3);
   border: 1px solid var(--line-2);
-  border-left: 2px solid var(--ember);
+  border-left: 2px solid var(--accent);
   border-radius: var(--r);
   padding: var(--s2) var(--s3);
   max-width: 380px;
@@ -766,7 +768,7 @@ tr.unread td:first-child { box-shadow: inset 2px 0 0 var(--ember); }
 
   .rail .group { display: none; }
   .rail a { border-left: 0; border-bottom: 2px solid transparent; white-space: nowrap; }
-  .rail a[aria-current="page"] { border-bottom-color: var(--ember); }
+  .rail a[aria-current="page"] { border-bottom-color: var(--accent); }
   .topbar .brand { width: auto; }
   .search { min-width: 0; }
   .search .lbl { display: none; }
@@ -910,7 +912,7 @@ tr.unread td:first-child { box-shadow: inset 2px 0 0 var(--ember); }
 
 /* ---------- Выбранный прогон ---------- */
 
-tr.best > td { background: var(--ember-wash); }
+tr.best > td { background: var(--accent-wash); }
 
 /* ---------- Ошибка поля ---------- */
 
@@ -991,7 +993,7 @@ tr.best > td { background: var(--ember-wash); }
 .quote {
   margin: var(--s3) 0;
   padding: var(--s2) var(--s3);
-  border-left: 2px solid var(--ember);
+  border-left: 2px solid var(--accent);
   background: var(--bg-2);
   white-space: pre-wrap;
 }
@@ -1016,7 +1018,7 @@ tr.best > td { background: var(--ember-wash); }
   cursor: pointer;
 }
 
-.check input { margin: 0; accent-color: var(--ember); }
+.check input { margin: 0; accent-color: var(--accent); }
 .check .help { grid-column: 2; margin: 0; }
 
 /* Поле даты в тёмной теме иначе отдаёт системный белый прямоугольник */
