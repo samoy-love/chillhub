@@ -225,3 +225,45 @@ func TestForcedRequestForgetsCache(t *testing.T) {
 		t.Fatalf("обращений: %d, ожидалось 2 — забытый кеш обязан спросить заново", got)
 	}
 }
+
+func TestReaderStopsWaitingButAnswerLands(t *testing.T) {
+	/* Недоступный Thunderstore не должен класть панель. Читатель ждёт до
+	   своего срока и уходит без ответа, а запрос доезжает за спиной: вместе
+	   с читателем он оборвался бы, и следующий снова ждал бы с нуля. */
+	var hits atomic.Int32
+	release := make(chan struct{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/experimental/package/", func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		<-release
+		_ = json.NewEncoder(w).Encode(Package{Namespace: "Moo", Name: "Moo_Modpack",
+			Latest: PackageVersion{VersionNumber: "2.0.0"}})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cl := NewClient(srv.Client()).WithBases(srv.URL, srv.URL+"/cdn").WithInterval(time.Millisecond)
+	var c packageCache
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := c.pkg(ctx, cl, "Moo", "Moo_Modpack"); err == nil {
+		t.Fatal("ответа ещё нет, а читатель его получил")
+	}
+	if waited := time.Since(start); waited > 2*time.Second {
+		t.Fatalf("читатель прождал %v вместо своего срока", waited)
+	}
+
+	close(release)
+	p, err := c.pkg(context.Background(), cl, "Moo", "Moo_Modpack")
+	if err != nil {
+		t.Fatalf("после ответа Thunderstore: %v", err)
+	}
+	if p.Latest.VersionNumber != "2.0.0" {
+		t.Fatalf("версия %q", p.Latest.VersionNumber)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("обращений: %d, ожидалось 1 — второй читатель обязан взять доехавший ответ", got)
+	}
+}
