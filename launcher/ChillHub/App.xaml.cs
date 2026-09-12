@@ -203,8 +203,11 @@ namespace ChillHub {
                 foreach (var p in candidates) {
                     if (File.Exists(p)) {
                         var uri = new Uri(p, UriKind.Absolute);
-                        var icon = new System.Windows.Media.Imaging.BitmapImage(uri);
-                        w.Icon = icon;
+
+                        // Именно BitmapFrame, а не BitmapImage: у кадра остаётся декодер .ico,
+                        // и WPF сам берёт кадр под размер заголовка и Alt+Tab с учётом
+                        // масштаба экрана. BitmapImage давал один кадр на всё и растягивал его.
+                        w.Icon = System.Windows.Media.Imaging.BitmapFrame.Create(uri);
                         break;
                     }
                 }
