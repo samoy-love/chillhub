@@ -233,31 +233,49 @@
       </header>
 
       <div class="slots" data-slots>
-        <!-- Барабаны, линия выпадения и рычаг — одна рамка. Порознь это
-             читалось как три случайно сложенных куска: коробка с текстом,
-             под ней строка, под ней кнопка сама по себе. -->
-        <div class="slots-machine">
-          <div class="machine">
-            <!-- Подписи барабанов: без них человек угадывает, что вообще
-                 значат три столбца, и читает выпавшее как набор слов. -->
-            <div class="machine-head" aria-hidden="true">
-              <span>жанр</span><span>с кем</span><span>особенность</span>
-            </div>
-            <div class="reels" aria-hidden="true">
-              <div class="reel"><div class="reel-track"></div></div>
-              <div class="reel"><div class="reel-track"></div></div>
-              <div class="reel"><div class="reel-track"></div></div>
-              <div class="reel-line"></div>
-            </div>
-            <button class="btn slots-spin" type="button" data-slots-spin aria-describedby="slots-out">Крутить</button>
+        <!-- Корпус автомата. Единственное место на странице, где свечение
+             и лампочки разрешены: это аттракцион, и он обязан выглядеть
+             как аттракцион. Всё, что мигает, гаснет при reduced-motion. -->
+        <div class="machine" data-machine>
+          <div class="machine-lights" aria-hidden="true"></div>
+          <div class="machine-top" aria-hidden="true">
+            <span class="machine-brand">Chill Hub · рулетка игр</span>
+            <span class="machine-combo">комбинация <b data-slots-combo>—</b><i>/ <span data-slots-total>1440</span></i></span>
           </div>
+          <!-- Подписи барабанов: без них человек угадывает, что вообще
+               значат три столбца, и читает выпавшее как набор слов. -->
+          <div class="machine-head" aria-hidden="true">
+            <span>что</span><span>с кем</span><span>в чём подвох</span>
+          </div>
+          <div class="reels" aria-hidden="true">
+            <div class="reel"><div class="reel-track"></div><div class="reel-line"></div><div class="reel-shade"></div></div>
+            <div class="reel"><div class="reel-track"></div><div class="reel-line"></div><div class="reel-shade"></div></div>
+            <div class="reel"><div class="reel-track"></div><div class="reel-line"></div><div class="reel-shade"></div></div>
+          </div>
+          <div class="machine-glass" aria-hidden="true"></div>
+          <div class="sparks" aria-hidden="true" data-sparks></div>
           <p class="slots-out" id="slots-out" data-slots-out aria-live="polite">Нажмите «Крутить» — выпадет, во что поиграть компанией.</p>
+          <div class="slots-actions">
+            <button class="btn btn--spin" type="button" data-slots-spin aria-describedby="slots-out">
+              <span class="btn-spin-face"><span>Крутить</span><span>Крутится…</span></span>
+            </button>
+            <span class="slots-hint">или дёрните рычаг</span>
+          </div>
         </div>
 
+        <button class="lever" type="button" data-lever tabindex="-1" aria-hidden="true">
+          <span class="lever-base"></span>
+          <span class="lever-arm"><span class="lever-knob"></span></span>
+        </button>
+
         <form class="wish" data-wish>
+          <div class="wish-head" aria-hidden="true">
+            <span class="wish-ticket">Заявка</span>
+            <span class="wish-no" data-wish-no>№ ····</span>
+          </div>
           <div class="field">
             <label for="wish-text">Игра и пара слов о ней</label>
-            <textarea id="wish-text" name="comment" rows="3" required maxlength="5000"
+            <textarea id="wish-text" name="comment" rows="4" required maxlength="5000"
                       placeholder="Название игры и пара слов — почему в неё стоит играть компанией"></textarea>
           </div>
           <div class="field">
@@ -265,10 +283,11 @@
             <input id="wish-contact" name="contact" type="text" maxlength="200"
                    placeholder="телеграм, почта, ник в Discord">
           </div>
-          <div class="wish-actions">
-            <button class="btn btn--primary" type="submit">Отправить</button>
+          <div class="slots-actions">
+            <button class="btn btn--primary btn--send" type="submit"><span>Отправить</span></button>
             <span class="wish-note" data-wish-note aria-live="polite"></span>
           </div>
+          <div class="wish-stamp" aria-hidden="true">Отправлено</div>
         </form>
       </div>
     </div>
