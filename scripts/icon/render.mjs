@@ -78,9 +78,10 @@ function prepare(S) {
 
 const cache = new Map();
 
-export function raster(size) {
-  if (cache.has(size)) return cache.get(size);
-  const g = geometry(size);
+export function raster(size, opts = {}) {
+  const key = `${size}${opts.avatar ? ':avatar' : ''}`;
+  if (cache.has(key)) return cache.get(key);
+  const g = geometry(size, opts);
   const layers = g.shapes.map((S) => ({ S, B: bbox(S), color: prepare(S) }));
   const buf = new Uint8Array(size * size * 4);
   const n = SUB * SUB;
@@ -124,7 +125,7 @@ export function raster(size) {
       buf[i + 3] = Math.round((a / n) * 255);
     }
   }
-  cache.set(size, buf);
+  cache.set(key, buf);
   return buf;
 }
 
@@ -155,8 +156,8 @@ function chunk(type, data) {
   return Buffer.concat([len, body, crc]);
 }
 
-export function png(size) {
-  const px = raster(size);
+export function png(size, opts = {}) {
+  const px = raster(size, opts);
   const raw = Buffer.alloc(size * (size * 4 + 1));
   for (let y = 0; y < size; y++) {
     raw[y * (size * 4 + 1)] = 0; // фильтр None: deflate и так сжимает градиенты

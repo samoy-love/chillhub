@@ -2,7 +2,13 @@
 //
 // Знак — аркадный стик: коралловый шар на стальной ножке, стальная шайба и
 // сиреневое основание. Плашка — тёмный индиго с объёмом (градиент сверху вниз
-// и блик по верхнему краю), за шаром — тёплое свечение.
+// и блик по верхнему краю) в светлой сиреневой рамке, за шаром — тёплое
+// свечение.
+//
+// Зачем рамка. Тёмная плашка на тёмной шапке лаунчера растворялась целиком,
+// и предмет висел в воздухе; на светлой вкладке её край читался, на тёмной —
+// нет. Рамка светлее и плашки, и любой панели, поэтому контур значка виден
+// везде одинаково. Она светлее сверху и темнее снизу — как свет на ребре.
 //
 // Почему тёмная плашка. Все места, где живёт значок, тёмные: заголовок окна,
 // шапка лаунчера, трей, навбар админки, сайт. Светлая только вкладка браузера.
@@ -23,12 +29,18 @@
 // Почему шар коралловый, а не красный. Красная точка в трее и в шапке — это
 // сигнал ошибки. Коралл остаётся аркадным, но ошибкой не читается.
 //
+// Аватарка — отдельный файл: круглая плашка без рамки. Круглый кроп
+// (Discord, Steam) резал бы скруглённую рамку в четыре дуги по бокам, а
+// свою рамку у аватарки рисует сама площадка.
+//
 // Два режима. От 24 px и выше значок — сглаженные фигуры с градиентами,
 // заданные в единицах эталона 32 × 32 и масштабируемые линейно. На 16 px
 // градиенты и эллипсы превращаются в кашу, поэтому там своя, плоская версия:
 // три сплошных цвета, все края на целых пикселях, шайбы и бликов нет.
 
 export const COLORS = {
+  rimTop: '#c0bae8',
+  rimBottom: '#605a9a',
   plateTop: '#2e2260',
   plateBottom: '#120a30',
   glow: '#ff6a55',
@@ -42,6 +54,7 @@ export const COLORS = {
   baseTop: '#c0b4ff',
   baseBottom: '#8f73ff',
   // Плоская версия 16 px — по одному цвету на деталь.
+  flatRim: '#9a94cc',
   flatPlate: '#241a48',
   flatBall: '#ff6a55',
   flatStem: '#cfcfe0',
@@ -61,6 +74,12 @@ function plateOf(size) {
   return { x: pad, y: pad, w, h: w, r: Math.round(w / 4) };
 }
 
+// Толщина рамки — 3/4 единицы эталона, но не тоньше пикселя: на 24 px
+// рамка в полпикселя размывается в серую кайму.
+const rimOf = (k) => Math.max(1, 0.75 * k);
+
+const inset = (R, d) => ({ x: R.x + d, y: R.y + d, w: R.w - 2 * d, h: R.h - 2 * d, r: Math.max(0, R.r - d) });
+
 const solid = (color, alpha = 1) => ({ type: 'solid', color, alpha });
 const linear = (x1, y1, x2, y2, stops) => ({ type: 'linear', x1, y1, x2, y2, stops });
 const radial = (cx, cy, r, stops) => ({ type: 'radial', cx, cy, r, stops });
@@ -70,26 +89,32 @@ const radial = (cx, cy, r, stops) => ({ type: 'radial', cx, cy, r, stops });
  * Координаты градиентов — в долях рамки фигуры (objectBoundingBox в SVG),
  * поэтому масштабируются вместе с ней без пересчёта.
  */
-function shapesOf(k, plate) {
+function shapesOf(k, plate, avatar) {
   const s = (v) => v * k;
+  const inner = inset(plate, rimOf(k));
+  const plateFill = linear(0, 0, 0.6, 1, [[0, COLORS.plateTop, 1], [1, COLORS.plateBottom, 1]]);
+  // Блик по верхнему краю плашки. Контур — вся плашка, а не её верхняя
+  // часть: у обрезанного контура нижние скругления просвечивали посреди
+  // плашки светлыми «уголками». Гаснет к середине высоты.
+  const shineFill = linear(0, 0, 0, 1, [[0, '#ffffff', 0.14], [0.45, '#ffffff', 0], [1, '#ffffff', 0]]);
+  const circle = { kind: 'circle', cx: plate.x + plate.w / 2, cy: plate.y + plate.h / 2, r: plate.w / 2 };
+  const ground = avatar
+    ? [
+        { name: 'plate', ...circle, fill: plateFill },
+        { name: 'shine', ...circle, fill: shineFill },
+      ]
+    : [
+        {
+          name: 'rim',
+          kind: 'rrect',
+          ...plate,
+          fill: linear(0, 0, 0, 1, [[0, COLORS.rimTop, 1], [1, COLORS.rimBottom, 1]]),
+        },
+        { name: 'plate', kind: 'rrect', ...inner, fill: plateFill },
+        { name: 'shine', kind: 'rrect', ...inner, fill: shineFill },
+      ];
   return [
-    {
-      name: 'plate',
-      kind: 'rrect',
-      ...plate,
-      fill: linear(0, 0, 0.6, 1, [[0, COLORS.plateTop, 1], [1, COLORS.plateBottom, 1]]),
-    },
-    {
-      // Блик по верхнему краю плашки — тот же контур, обрезанный по высоте.
-      name: 'shine',
-      kind: 'rrect',
-      x: plate.x,
-      y: plate.y,
-      w: plate.w,
-      h: plate.h * 0.4,
-      r: plate.r,
-      fill: linear(0, 0, 0, 1, [[0, '#ffffff', 0.16], [1, '#ffffff', 0]]),
-    },
+    ...ground,
     {
       name: 'glow',
       kind: 'ellipse',
@@ -151,11 +176,13 @@ function shapesOf(k, plate) {
   ];
 }
 
-// Плоская версия 16 px: шар — пиксельный круг 6 × 6, ножка 2 × 3, основание 10 × 3.
-// Всё на целых пикселях, поэтому растр даёт ЧИСТЫЕ цвета без сглаживания.
-// Стик стоит по центру плашки: по два пикселя поля сверху и снизу.
+// Плоская версия 16 px: рамка в один пиксель, шар — пиксельный круг 6 × 6,
+// ножка 2 × 3, основание 10 × 3. Всё на целых пикселях, поэтому растр даёт
+// ЧИСТЫЕ цвета без сглаживания. Стик стоит по центру: по два пикселя поля
+// сверху и снизу.
 const FLAT_16 = {
-  plate: { x: 0, y: 0, w: 16, h: 16, r: 4 },
+  rim: { x: 0, y: 0, w: 16, h: 16, r: 4 },
+  plate: { x: 1, y: 1, w: 14, h: 14, r: 3 },
   ball: [
     { x: 6, y: 2, w: 4, h: 1 },
     { x: 5, y: 3, w: 6, h: 4 },
@@ -165,17 +192,19 @@ const FLAT_16 = {
   base: [{ x: 3, y: 11, w: 10, h: 3 }],
 };
 
-export function geometry(size) {
+export function geometry(size, { avatar = false } = {}) {
+  if (avatar && size < 32) throw new Error(`аватарка ${size}: круглая версия есть только от 32 px`);
   if (size <= 16) {
     if (size !== 16) throw new Error(`значок ${size}: плоская версия есть только для 16 px`);
-    const { plate, ball, stem, base } = FLAT_16;
+    const { rim, plate, ball, stem, base } = FLAT_16;
     const block = (list, color, name) => list.map((b) => ({ name, kind: 'rrect', ...b, r: 0, fill: solid(color) }));
     return {
       size,
       flat: true,
-      plate,
+      plate: rim,
       blocks: { ball, stem, base },
       shapes: [
+        { name: 'rim', kind: 'rrect', ...rim, fill: solid(COLORS.flatRim) },
         { name: 'plate', kind: 'rrect', ...plate, fill: solid(COLORS.flatPlate) },
         ...block(ball, COLORS.flatBall, 'ball'),
         ...block(stem, COLORS.flatStem, 'stem'),
@@ -185,5 +214,5 @@ export function geometry(size) {
   }
   const k = size / U;
   const plate = plateOf(size);
-  return { size, flat: false, plate, shapes: shapesOf(k, plate) };
+  return { size, flat: false, avatar, plate, shapes: shapesOf(k, plate, avatar) };
 }

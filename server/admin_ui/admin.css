@@ -139,7 +139,7 @@ code { font-size: 12px; color: var(--fg); }
   flex: 0 0 auto;
 }
 
-.topbar .brand img { width: 18px; height: 18px; }
+.topbar .brand img { width: 24px; height: 24px; }
 .topbar .spacer { flex: 1; }
 
 /* Поиск по панели. В 1.0 его не было вовсе: чтобы найти игру или
