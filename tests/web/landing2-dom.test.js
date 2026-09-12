@@ -309,17 +309,31 @@ test('прокрутка называет три значения и подсв�
   }
 });
 
-/* Жанры берутся из магазина Steam: человек ищет игру там, и слово из
-   чужого словаря пришлось бы переводить в уме. */
-test('жанры на первом барабане — те же, что в Steam', async (t) => {
+/* Три барабана читаются одной фразой: что за игра, с кем и в чём
+   подвох. Первый — жанры простым языком, без магазинных рубрик вроде
+   «Казуальные»: их пришлось бы переводить в уме. */
+test('первый барабан — жанры простым языком, а не рубрики магазина', async (t) => {
   const { window } = await boot(t, null, { calm: true });
 
   const first = [...window.document.querySelectorAll('.reel')][0];
   const values = new Set([...first.querySelectorAll('.reel-track div')].map((d) => d.textContent));
 
-  for (const genre of ['Экшены', 'Приключения', 'Ролевые', 'Стратегии', 'Симуляторы', 'Инди']) {
-    assert.ok(values.has(genre), 'нет жанра Steam: ' + genre);
+  for (const genre of ['Хоррор', 'Выживание', 'Рогалик', 'Песочница', 'Пати-игра', 'Игра с предателем']) {
+    assert.ok(values.has(genre), 'нет жанра: ' + genre);
   }
+  assert.ok(!values.has('Казуальные'), 'на барабане рубрика магазина');
+});
+
+/* Выпавшее читается предложением, а не перечнем через точку. */
+test('результат читается фразой, а не перечнем', async (t) => {
+  const { window } = await boot(t, null, { calm: true });
+
+  window.document.querySelector('[data-slots-spin]').click();
+  await until(() => window.document.querySelector('.slots.done'));
+
+  const out = window.document.querySelector('[data-slots-out]').textContent;
+  assert.match(out, /^Выпало: \S+ .+\. Есть такая на примете\?$/);
+  assert.ok(!out.includes(' · '), 'значения перечислены, а не сложены во фразу');
 });
 
 /* Имена собственные в результате остаются собой. Прежде вся строка

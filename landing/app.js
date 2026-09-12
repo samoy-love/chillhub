@@ -282,36 +282,79 @@
 
   /* ---------- Автомат заявок ---------- */
 
-  /* Жанры — те же, что в магазине Steam: человек ищет игру там, и слово
-     из чужого словаря пришлось бы переводить в уме. */
+  /* Три барабана читаются подряд одной фразой: что за игра, с кем в неё
+     играть и в чём подвох. Слова подобраны под тех, кто сюда приходит, —
+     компанию, которая собирается вечером в голосовом чате; часть строк
+     про них самих, а не про жанры. Абсурдные сочетания не ошибка, а
+     повод написать заявку. */
   const REELS = [
     [
-      'Экшены',
-      'Приключения',
-      'Ролевые',
-      'Стратегии',
-      'Симуляторы',
-      'Спорт',
+      'Хоррор',
+      'Выживание',
+      'Рогалик',
+      'Шутер',
+      'Песочница',
+      'Пати-игра',
+      'Стратегия',
+      'Головоломка',
       'Гонки',
-      'Казуальные',
-      'Инди',
-      'Многопользовательские',
+      'Рыбалка',
+      'Симулятор смены',
+      'Игра с предателем',
     ],
-    ['вчетвером', 'вшестером', 'всей компанией', 'на двоих', 'со случайными людьми'],
-    ['с крафтом', 'с голосовым чатом', 'со Steam Workshop', 'с разрушаемым миром', 'со случайными картами', 'с постоянным прогрессом'],
+    [
+      'вчетвером',
+      'вшестером',
+      'на двоих',
+      'всей компанией',
+      'со случайными людьми',
+      'с тем, кто вечно опаздывает',
+      'с тем, кто всех подставляет',
+      'в пятницу до утра',
+      'когда все уже спят',
+      'с микрофоном на всю квартиру',
+    ],
+    [
+      'с крафтом',
+      'с голосовым чатом',
+      'со Steam Workshop',
+      'с разрушаемым миром',
+      'со случайными картами',
+      'с постоянным прогрессом',
+      'с физикой, которая всё ломает',
+      'где слышно только соседей',
+      'где смерть — навсегда',
+      'с модами на всё подряд',
+      'где никому нельзя верить',
+      'с базой, которую надо строить',
+    ],
   ];
 
+  // Высота строки задана в стилях (--item-h) и на телефоне другая;
+  // 44 — запасное значение там, где стили не разобраны.
   const ITEM_H = 44;
-  const REPS = 4;
+  // Повторов больше, чем нужно для пробега: барабан останавливается на
+  // предпоследнем повторе, чтобы и над строкой, и под ней что-то было.
+  const REPS = 6;
 
   function slots() {
     const root = $('[data-slots]');
     if (!root) return;
 
     const tracks = $$('.reel-track', root);
+    const reels = $$('.reel', root);
     const out = $('[data-slots-out]', root);
     const spin = $('[data-slots-spin]', root);
+    const lever = $('[data-lever]', root);
+    const machine = $('[data-machine]', root);
+    const sparks = $('[data-sparks]', root);
+    const combo = $('[data-slots-combo]', root);
+    const total = $('[data-slots-total]', root);
     let busy = false;
+
+    if (total) total.textContent = String(REELS.reduce((n, r) => n * r.length, 1));
+
+    const itemH = () => parseFloat(window.getComputedStyle(root).getPropertyValue('--item-h')) || ITEM_H;
 
     tracks.forEach((tr, i) => {
       for (let r = 0; r < REPS; r++) {
@@ -321,46 +364,81 @@
           tr.append(d);
         });
       }
-      place(tr, 0);
+      // Стартуем со второго повтора: над окошком тоже должны быть строки,
+      // иначе до первой прокрутки верхняя треть барабана пустая.
+      place(tr, REELS[i].length * itemH());
     });
 
     function place(tr, p) {
-      tr.style.transform = `translateY(${ITEM_H - p}px)`;
+      tr.style.transform = `translateY(${itemH() - p}px)`;
     }
 
     function mark() {
       $$('.reel-track div', root).forEach((d) => d.classList.remove('hit'));
+      const h = itemH();
       tracks.forEach((tr) => {
         const value = parseFloat(tr.style.transform.match(/-?[\d.]+/));
-        tr.children[Math.round((ITEM_H - value) / ITEM_H)]?.classList.add('hit');
+        tr.children[Math.round((h - value) / h)]?.classList.add('hit');
       });
     }
 
-    function animate(tr, total, dur, cb) {
+    // Барабан проскакивает нужную строку на несколько пикселей и
+    // возвращается: так останавливается настоящий, с храповиком.
+    const OVERSHOOT = 60;
+
+    function animate(tr, totalPx, dur, cb) {
       if (!dur) {
-        place(tr, total);
+        place(tr, totalPx);
         cb();
         return;
       }
       const t0 = performance.now();
       const step = (now) => {
         const k = Math.min(1, (now - t0) / dur);
-        place(tr, total * (1 - Math.pow(1 - k, 4)));
+        const main = totalPx * (1 - Math.pow(1 - k, 4));
+        const bounce = OVERSHOOT * Math.pow(k, 8) * Math.sin(Math.PI * k);
+        place(tr, main + bounce);
         if (k < 1) requestAnimationFrame(step);
         else cb();
       };
       requestAnimationFrame(step);
     }
 
+    // Искры из-под линии выигрыша. Вектор у каждой свой; сами убираются,
+    // когда догорят.
+    function burst() {
+      if (!sparks || !machine || calm.matches) return;
+      const w = machine.clientWidth;
+      const h = machine.clientHeight;
+      const frag = document.createDocumentFragment();
+      for (let i = 0; i < 28; i++) {
+        const el = document.createElement('i');
+        const a = Math.random() * Math.PI * 2;
+        const r = 60 + Math.random() * 140;
+        el.style.setProperty('--x', `${w * (0.15 + Math.random() * 0.7)}px`);
+        el.style.setProperty('--y', `${h * 0.45}px`);
+        el.style.setProperty('--dx', `${Math.cos(a) * r}px`);
+        el.style.setProperty('--dy', `${Math.sin(a) * r - 40}px`);
+        el.style.setProperty('--s', `${2 + Math.random() * 4}px`);
+        el.style.setProperty('--d', `${0.6 + Math.random() * 0.7}s`);
+        el.addEventListener('animationend', () => el.remove(), { once: true });
+        frag.append(el);
+      }
+      sparks.append(frag);
+    }
+
     function go() {
       if (busy) return;
       busy = true;
-      root.classList.remove('done');
+      root.classList.remove('done', 'thud');
       root.classList.add('busy');
+      reels.forEach((r) => r.classList.remove('stopped'));
       out.textContent = '';
+      if (combo) combo.textContent = '···';
 
+      const h = itemH();
       const picks = REELS.map((items) => Math.floor(Math.random() * items.length));
-      const totals = tracks.map((_, i) => (REELS[i].length * (REPS - 1) + picks[i]) * ITEM_H);
+      const totals = tracks.map((_, i) => (REELS[i].length * (REPS - 2) + picks[i]) * h);
       let done = 0;
       let last = 0;
 
@@ -388,10 +466,11 @@
       tracks.forEach((tr, i) => {
         // Барабаны останавливаются по очереди — три одновременные
         // остановки читаются как один рывок.
-        const dur = calm.matches ? 0 : 900 + i * 350;
+        const dur = calm.matches ? 0 : 1100 + i * 420;
         last = Math.max(last, dur);
         animate(tr, totals[i], dur, () => {
           if (done < 0) return;
+          reels[i].classList.add('stopped');
           done++;
           if (done === tracks.length) settle();
         });
@@ -407,19 +486,83 @@
     function finish(picks) {
       busy = false;
       root.classList.remove('busy');
-      root.classList.add('done');
+      root.classList.add('done', 'thud');
       mark();
-      /* Значения перечисляются, а не склеиваются в фразу: «экшены
-         вчетвером с крафтом» читается как сломанное предложение, а
-         нижний регистр к тому же портил имена собственные — Steam
-         Workshop превращался в steam workshop. */
-      const parts = picks.map((p, i) => REELS[i][p]);
-      out.textContent = `Выпало: ${parts.join(' · ')}. Есть такая на примете?`;
+      burst();
+
+      // Номер комбинации — порядковый в декартовом произведении барабанов.
+      let idx = 0;
+      picks.forEach((p, i) => (idx = idx * REELS[i].length + p));
+      if (combo) combo.textContent = String(idx + 1).padStart(4, '0');
+
+      /* Регистр не трогается: жанр остаётся с прописной, а «Steam
+         Workshop» — собой. Прежде вся строка приводилась к нижнему
+         регистру, и имя собственное портилось. */
+      const phrase = picks.map((p, i) => REELS[i][p]).join(' ');
+      out.textContent = `Выпало: ${phrase}. Есть такая на примете?`;
       const ta = $('#wish-text');
-      if (ta && !ta.value.trim()) ta.value = `Автомат выдал: ${parts.join(', ')}. Предлагаю добавить: `;
+      if (ta && !ta.value.trim()) typeInto(ta, `Автомат выдал: ${phrase}. Предлагаю добавить: `);
+    }
+
+    // Автомат сам печатает комбинацию в заявку, по букве. Если человек
+    // начал писать раньше, чем допечаталось, — уступает ему.
+    let typer = 0;
+
+    function typeInto(ta, text) {
+      clearInterval(typer);
+      const form = ta.closest('form');
+      if (calm.matches) {
+        ta.value = text;
+        return;
+      }
+      let i = 0;
+      ta.value = '';
+      form?.classList.add('typing');
+      const stop = () => {
+        clearInterval(typer);
+        form?.classList.remove('typing');
+        ta.removeEventListener('input', stop);
+        form?.removeEventListener('submit', flush, true);
+      };
+      // Нажали «Отправить», не дождавшись конца набора, — уходит вся
+      // фраза, а не её половина. Ловится на захвате, чтобы сработать
+      // раньше обработчика отправки.
+      const flush = () => {
+        ta.value = text;
+        stop();
+      };
+      ta.addEventListener('input', stop);
+      form?.addEventListener('submit', flush, true);
+      typer = setInterval(() => {
+        i++;
+        ta.value = text.slice(0, i);
+        if (i >= text.length) stop();
+      }, 22);
     }
 
     spin.addEventListener('click', go);
+
+    if (lever) {
+      lever.addEventListener('click', () => {
+        if (busy) return;
+        lever.classList.remove('pulled');
+        void lever.offsetWidth;
+        lever.classList.add('pulled');
+        go();
+      });
+    }
+
+    if (machine) {
+      machine.addEventListener('animationend', (e) => {
+        if (e.animationName === 'thud') root.classList.remove('thud');
+      });
+      // Блик на стекле идёт за курсором.
+      machine.addEventListener('pointermove', (e) => {
+        const b = machine.getBoundingClientRect();
+        machine.style.setProperty('--mx', `${((e.clientX - b.left) / b.width) * 100}%`);
+        machine.style.setProperty('--my', `${((e.clientY - b.top) / b.height) * 100}%`);
+      });
+    }
   }
 
   /* Текст баннера технических работ.
@@ -480,6 +623,23 @@
     if (!form) return;
     const note = $('[data-wish-note]', form);
     const btn = $('button[type="submit"]', form);
+    const no = $('[data-wish-no]', form);
+
+    // Номер билета — декорация: загорается, как только в заявке
+    // появляется текст, и не имеет ничего общего с номером обращения.
+    const ta = $('#wish-text', form);
+    if (no && ta) {
+      ta.addEventListener('input', () => {
+        const has = ta.value.trim().length > 0;
+        if (has && !no.classList.contains('lit')) {
+          no.textContent = '№ ' + String(Math.floor(1000 + Math.random() * 9000));
+          no.classList.add('lit');
+        } else if (!has) {
+          no.textContent = '№ ····';
+          no.classList.remove('lit');
+        }
+      });
+    }
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -487,6 +647,8 @@
       if (!comment) return;
 
       btn.disabled = true;
+      form.classList.add('sending');
+      form.classList.remove('sent');
       note.textContent = 'отправляем…';
 
       try {
@@ -502,13 +664,21 @@
           }),
         });
         if (!r.ok) throw new Error(String(r.status));
-        form.reset();
+        form.classList.add('sent');
         note.textContent = 'Отправлено. Спасибо — прочитаю.';
+        // Штамп держится, пока человек не начнёт следующую заявку.
+        setTimeout(() => {
+          form.reset();
+          form.classList.remove('sent');
+          no?.classList.remove('lit');
+          if (no) no.textContent = '№ ····';
+        }, 2600);
       } catch {
         // Молчаливый провал тут хуже всего: человек уверен, что написал.
         note.textContent = 'Не ушло. Напишите на tr0llex.rus@gmail.com — так точно дойдёт.';
       } finally {
         btn.disabled = false;
+        form.classList.remove('sending');
       }
     });
   }
