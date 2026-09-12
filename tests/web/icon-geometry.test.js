@@ -9,10 +9,10 @@ const { resolve } = require('node:path');
 
 // Генератор значка написан модулями ES, а тесты здесь — CommonJS.
 // Подгружаем его один раз перед прогоном.
-let geometry, ICO_SIZES, COLORS, ico, raster, svg, adminIconVersion;
+let geometry, ICO_SIZES, COLORS, ico, raster, svg, png, adminIconVersion;
 test.before(async () => {
   ({ geometry, ICO_SIZES, COLORS } = await import('../../scripts/icon/geometry.mjs'));
-  ({ ico, raster, svg } = await import('../../scripts/icon/render.mjs'));
+  ({ ico, raster, svg, png } = await import('../../scripts/icon/render.mjs'));
   ({ adminIconVersion } = await import('../../scripts/icon/build.mjs'));
 });
 
@@ -75,6 +75,7 @@ test('16 px — растр даёт чистые цвета деталей', () 
   check(stem, COLORS.flatStem, 'ножки');
   check(base, COLORS.flatBase, 'основания');
   assert.ok(same(at(px, 16, 2, 9), COLORS.flatPlate), '16: плашка рядом с ножкой не сплошная');
+  assert.ok(same(at(px, 16, 0, 8), COLORS.flatRim) && same(at(px, 16, 8, 15), COLORS.flatRim), '16: рамка не сплошная');
   assert.equal(at(px, 16, 0, 0)[3], 0, '16: угол за скруглением не прозрачный');
 });
 
@@ -135,6 +136,11 @@ test('знак и плашка различимы на любом фоне', () 
   }
   // На светлой вкладке силуэт держит плашка.
   assert.ok(contrast(COLORS.plateTop, '#f3f3f3') >= 3, 'плашка на светлой вкладке');
+  // Рамка — контур значка на любом фоне: светлее и плашки, и тёмных панелей.
+  const rim = hexMix(COLORS.rimTop, COLORS.rimBottom, 0.5);
+  assert.ok(contrast(rim, plate) >= 3, 'рамка на плашке');
+  assert.ok(contrast(rim, '#1b1b24') >= 3, 'рамка на тёмной панели');
+  assert.ok(contrast(COLORS.flatRim, COLORS.flatPlate) >= 3 && contrast(COLORS.flatRim, '#1b1b24') >= 3, '16: рамка');
   // Плоская версия — те же требования.
   for (const [name, c] of [['шар', COLORS.flatBall], ['ножка', COLORS.flatStem], ['основание', COLORS.flatBase]]) {
     assert.ok(contrast(c, COLORS.flatPlate) >= 3, `16: ${name} на плашке`);
@@ -158,12 +164,33 @@ test('растр: шар сверху, плашка под ним, угол пр
     const center = at(px, size, Math.round(ball.cx), Math.round(ball.cy));
     assert.ok(center[0] > 200 && center[0] > center[2] + 60, `${size}: центр шара не тёплый (${center})`);
     assert.equal(center[3], 255, `${size}: шар просвечивает`);
-    // У левого края на середине высоты — плашка без скругления и без деталей.
-    const edge = at(px, size, g.plate.x + 1, Math.floor(size / 2));
+    // У левого края на середине высоты — рамка, за ней плашка без деталей.
+    const rimPx = at(px, size, g.plate.x, Math.floor(size / 2));
+    assert.equal(rimPx[3], 255, `${size}: рамка у края не сплошная`);
+    assert.ok(rimPx[0] > 80 && rimPx[2] > rimPx[0], `${size}: рамка у края не сиреневая (${rimPx})`);
+    const inner = named(g, 'plate');
+    const edge = at(px, size, Math.ceil(inner.x) + 1, Math.floor(size / 2));
     assert.equal(edge[3], 255, `${size}: плашка у края не сплошная`);
-    assert.ok(edge[2] > edge[0] && edge[2] > edge[1], `${size}: плашка у края не индиго (${edge})`);
+    assert.ok(edge[2] > edge[0] && edge[2] > edge[1] && edge[0] < 80, `${size}: плашка у края не индиго (${edge})`);
     assert.equal(at(px, size, 0, 0)[3], 0, `${size}: угол не прозрачный`);
   }
+});
+
+test('аватарка — круглая плашка без рамки, знак тот же', () => {
+  // Круглый кроп площадки резал бы скруглённую рамку в дуги по бокам.
+  const g = geometry(256, { avatar: true });
+  assert.ok(!g.shapes.some((S) => S.name === 'rim'), 'у аватарки есть рамка');
+  const plate = named(g, 'plate');
+  assert.equal(plate.kind, 'circle');
+  assert.ok(Math.abs(plate.cx - 128) < 1e-9 && Math.abs(plate.cy - 128) < 1e-9, 'плашка не по центру');
+  for (const name of ['ball', 'stem', 'base', 'washer']) {
+    assert.deepEqual(named(g, name), named(geometry(256), name), `${name}: аватарка рисует знак иначе`);
+  }
+  const px = raster(256, { avatar: true });
+  assert.equal(at(px, 256, 2, 2)[3], 0, 'угол аватарки не прозрачный');
+  assert.equal(at(px, 256, 128, plate.cy + plate.r - 2)[3], 255, 'низ круга просвечивает');
+  const file = readFileSync(resolve(__dirname, '../..', 'docs/assets/avatar-256.png'));
+  assert.ok(png(256, { avatar: true }).equals(file), 'docs/assets/avatar-256.png разошёлся с генератором');
 });
 
 test('ico содержит все размеры и каждая запись указывает внутрь файла', () => {

@@ -312,7 +312,7 @@ kbd {
   flex: 0 0 auto;
 }
 
-.brand img { width: 24px; height: 24px; }
+.brand img { width: 32px; height: 32px; }
 
 .site-nav {
   display: flex;

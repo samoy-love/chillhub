@@ -47,6 +47,7 @@ export function build() {
   put('landing/favicon.svg', mark);
   put('landing/assets/icons/logo.svg', mark);
   put('docs/assets/icon-256.png', png(256)); // для README и витрины
+  put('docs/assets/avatar-256.png', png(256, { avatar: true })); // круглая, без рамки: Discord, Steam
   // Остаток от старой раскладки: на него никто не ссылается. Пересобираем, пока
   // он лежит в репозитории, — иначе это второй значок, который тихо разойдётся
   // с первым. Удалить его можно в любой момент, тогда строку убрать отсюда.
