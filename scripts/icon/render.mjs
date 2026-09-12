@@ -225,6 +225,60 @@ export function ico(sizes) {
   return Buffer.concat([head, ...dir, ...images]);
 }
 
+/* ---------- WPF ---------- */
+
+// Векторный логотип для окон лаунчера: DrawingImage из того же списка фигур.
+// Растровый кадр из app.ico в шапке WPF растягивал под масштаб экрана, и на
+// 125–200 % значок мылился; вектор рисуется сглаженно на любом масштабе.
+// Градиенты в WPF, как и в SVG, заданы в долях рамки фигуры
+// (MappingMode по умолчанию — RelativeToBoundingBox), поэтому переносятся
+// без пересчёта.
+
+const argb = (hex, a = 1) =>
+  '#' + Math.round(a * 255).toString(16).padStart(2, '0').toUpperCase() + hex.slice(1).toUpperCase();
+
+function wpfBrush(F) {
+  if (F.type === 'solid') return `<SolidColorBrush Color="${argb(F.color, F.alpha)}"/>`;
+  const stops = F.stops.map(([t, c, a]) => `<GradientStop Offset="${num(t)}" Color="${argb(c, a)}"/>`).join('');
+  if (F.type === 'linear') {
+    return `<LinearGradientBrush StartPoint="${num(F.x1)},${num(F.y1)}" EndPoint="${num(F.x2)},${num(F.y2)}">${stops}</LinearGradientBrush>`;
+  }
+  return `<RadialGradientBrush Center="${num(F.cx)},${num(F.cy)}" GradientOrigin="${num(F.cx)},${num(F.cy)}" RadiusX="${num(F.r)}" RadiusY="${num(F.r)}">${stops}</RadialGradientBrush>`;
+}
+
+function wpfGeometry(S) {
+  if (S.kind === 'rrect') {
+    return `<RectangleGeometry Rect="${num(S.x)},${num(S.y)},${num(S.w)},${num(S.h)}" RadiusX="${num(S.r || 0)}" RadiusY="${num(S.r || 0)}"/>`;
+  }
+  if (S.kind === 'circle') return `<EllipseGeometry Center="${num(S.cx)},${num(S.cy)}" RadiusX="${num(S.r)}" RadiusY="${num(S.r)}"/>`;
+  return `<EllipseGeometry Center="${num(S.cx)},${num(S.cy)}" RadiusX="${num(S.rx)}" RadiusY="${num(S.ry)}"/>`;
+}
+
+export function wpf(size = 32, { key = 'AppLogo' } = {}) {
+  const g = geometry(size);
+  const drawing = (brush, geometry) =>
+    `<GeometryDrawing><GeometryDrawing.Brush>${brush}</GeometryDrawing.Brush><GeometryDrawing.Geometry>${geometry}</GeometryDrawing.Geometry></GeometryDrawing>`;
+  const drawings = [
+    // Прозрачное поле во весь холст: у DrawingImage нет своих размеров, он
+    // берёт их из рисунка, и без поля значок терял бы отступ от края.
+    drawing('<SolidColorBrush Color="#00000000"/>', `<RectangleGeometry Rect="0,0,${size},${size}"/>`),
+    ...g.shapes.map((S) => drawing(wpfBrush(S.fill), wpfGeometry(S))),
+  ];
+  return `<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!-- Собрано scripts/icon/build.mjs из scripts/icon/geometry.mjs. Руками не править:
+       тест сверяет файл с генератором. -->
+  <DrawingImage x:Key="${key}">
+    <DrawingImage.Drawing>
+      <DrawingGroup>
+        ${drawings.join('\n        ')}
+      </DrawingGroup>
+    </DrawingImage.Drawing>
+  </DrawingImage>
+</ResourceDictionary>
+`;
+}
+
 /* ---------- SVG ---------- */
 
 const num = (v) => String(Math.round(v * 1000) / 1000);

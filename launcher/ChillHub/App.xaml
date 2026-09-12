@@ -8,6 +8,8 @@
             <ResourceDictionary.MergedDictionaries>
                 <!-- Provide a safe default theme so resources like Style.Card exist at parse-time -->
                 <ResourceDictionary Source="/ChillHub;component/Themes/Theme.Dark.xaml" />
+                <!-- Векторный логотип для шапки: собирается генератором значка. -->
+                <ResourceDictionary Source="/ChillHub;component/Assets/AppLogo.xaml" />
             </ResourceDictionary.MergedDictionaries>
             <ui:RuDateConverter x:Key="RuDateConv" />
             <ui:QueueItemPercentConverter x:Key="QueueItemPercentConv" />

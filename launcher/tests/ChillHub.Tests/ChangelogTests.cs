@@ -260,7 +260,7 @@ namespace ChillHub.Tests {
         /// Поднимается от каталога сборки тестов до корня репозитория по метке
         /// (CLAUDE.md + каталог launcher/), а не по фиксированной глубине.
         /// </summary>
-        private static string FindRepoRoot() {
+        internal static string FindRepoRoot() {
             var current = new DirectoryInfo(AppContext.BaseDirectory);
             while (current != null) {
                 if (File.Exists(Path.Combine(current.FullName, "CLAUDE.md")) &&

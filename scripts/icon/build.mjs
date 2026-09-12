@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ico, svg, png } from './render.mjs';
+import { ico, svg, png, wpf } from './render.mjs';
 import { ICO_SIZES } from './geometry.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -40,6 +40,9 @@ export function build() {
   const mark = svg(32, { title: 'Chill Hub' });
 
   put('launcher/ChillHub/Assets/app.ico', appIco); // окно, трей, ресурс exe
+  // Шапка лаунчера: вектор, чтобы не мылиться на 125–200 %. Файлы .xaml в
+  // репозитории лежат с CRLF (.gitattributes), пишем так же.
+  put('launcher/ChillHub/Assets/AppLogo.xaml', wpf(32).replace(/\n/g, '\r\n'));
   put('scripts/app.ico', appIco); // установщик и деинсталлятор NSIS
   put('server/admin_ui/app.ico', appIco); // админка v1 показывает его картинкой
   put('server/admin_ui/favicon.svg', mark);

@@ -9,10 +9,10 @@ const { resolve } = require('node:path');
 
 // Генератор значка написан модулями ES, а тесты здесь — CommonJS.
 // Подгружаем его один раз перед прогоном.
-let geometry, ICO_SIZES, COLORS, ico, raster, svg, png, adminIconVersion;
+let geometry, ICO_SIZES, COLORS, ico, raster, svg, png, wpf, adminIconVersion;
 test.before(async () => {
   ({ geometry, ICO_SIZES, COLORS } = await import('../../scripts/icon/geometry.mjs'));
-  ({ ico, raster, svg, png } = await import('../../scripts/icon/render.mjs'));
+  ({ ico, raster, svg, png, wpf } = await import('../../scripts/icon/render.mjs'));
   ({ adminIconVersion } = await import('../../scripts/icon/build.mjs'));
 });
 
@@ -191,6 +191,27 @@ test('аватарка — круглая плашка без рамки, зна
   assert.equal(at(px, 256, 128, plate.cy + plate.r - 2)[3], 255, 'низ круга просвечивает');
   const file = readFileSync(resolve(__dirname, '../..', 'docs/assets/avatar-256.png'));
   assert.ok(png(256, { avatar: true }).equals(file), 'docs/assets/avatar-256.png разошёлся с генератором');
+});
+
+test('в ico есть кадры под каждый масштаб Windows', () => {
+  // Заголовок и трей просят 16 × масштаб, панель задач — 24 × масштаб.
+  // Без своего кадра Windows растягивает соседний, и значок мылится.
+  for (const size of [16, 20, 24, 28, 32, 36, 48]) assert.ok(ICO_SIZES.includes(size), `нет кадра ${size}`);
+});
+
+test('векторный логотип для WPF повторяет те же фигуры и градиенты', () => {
+  const x = wpf(32);
+  assert.match(x, /x:Key="AppLogo"/);
+  const shapes = geometry(32).shapes;
+  const count = (re) => (x.match(re) || []).length;
+  assert.equal(count(/<GeometryDrawing>/g), shapes.length + 1, 'число фигур: все фигуры знака и прозрачное поле');
+  assert.equal(count(/<RadialGradientBrush /g), shapes.filter((S) => S.fill.type === 'radial').length, 'радиальные градиенты');
+  assert.equal(count(/<LinearGradientBrush /g), shapes.filter((S) => S.fill.type === 'linear').length, 'линейные градиенты');
+  assert.ok(x.includes(`Color="#FF${COLORS.ball.slice(1).toUpperCase()}"`), 'цвет шара');
+  assert.ok(x.includes('Rect="0,0,32,32"'), 'прозрачное поле во весь холст');
+  // Файл в репозитории лежит с CRLF; сверяем по содержимому.
+  const file = readFileSync(resolve(__dirname, '../..', 'launcher/ChillHub/Assets/AppLogo.xaml'), 'utf8');
+  assert.equal(file.replace(/\r\n/g, '\n'), x, 'launcher/ChillHub/Assets/AppLogo.xaml разошёлся с генератором');
 });
 
 test('ico содержит все размеры и каждая запись указывает внутрь файла', () => {
