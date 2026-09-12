@@ -44,6 +44,13 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
+                Version = "1.6.61",
+                Date = "2026-09-12",
+                Changes = new[] {
+                    "Выбранное с клавиатуры больше не обводится пунктиром: вместо него аккуратная светлая рамка.",
+                },
+            },
+            new ChangelogRelease {
                 Version = "1.6.60",
                 Date = "2026-09-12",
                 Changes = new[] {

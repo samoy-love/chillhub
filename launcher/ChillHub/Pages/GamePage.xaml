@@ -30,6 +30,7 @@
 
     <!-- Основная кнопка действия (Установить/Обновить/Отмена) -->
     <Style x:Key="Style.Button.GamePrimary" TargetType="Button">
+      <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
       <Setter Property="Background" Value="{DynamicResource Brush.AccentFill}"/>
       <!-- Тёмная подпись на заливке — как у кнопки действия на витрине: на угле белая
            даёт 3,70 и порог не берёт, тёмная 5,30 (см. Color.AccentFill в теме). -->

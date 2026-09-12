@@ -167,6 +167,7 @@
          Рамки нет вовсе, поэтому при выборе строка не «толстеет» — прежняя смена
          толщины рамки сдвигала содержимое на пиксель при каждом клике. -->
     <Style x:Key="Style.ListBoxItem.SelectableCard.Game" TargetType="ListBoxItem">
+      <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
       <Setter Property="Padding" Value="0"/>
       <Setter Property="Margin" Value="0,0,0,1"/>
       <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
@@ -206,6 +207,7 @@
 
     <!-- Generic dim button template -->
     <Style x:Key="Style.Button.Dim.Base" TargetType="Button">
+      <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
       <Setter Property="Foreground" Value="{DynamicResource Btn.Update.Fg}"/>
       <Setter Property="Background" Value="{DynamicResource Btn.Update.Bg}"/>
       <Setter Property="BorderBrush" Value="{DynamicResource Btn.Update.Border}"/>
@@ -340,6 +342,7 @@
          помещалось, а подсказка по наведению — не то место, где игрок узнаёт, что
          делает кнопка. -->
     <Style x:Key="Style.LaunchButton.Base" TargetType="Button">
+      <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
       <Setter Property="Height" Value="46"/>
       <Setter Property="Padding" Value="16,0"/>
       <Setter Property="BorderThickness" Value="1"/>
@@ -542,6 +545,7 @@
 
     <!-- Rounded bright selectable item style (used for games and news) -->
     <Style x:Key="Style.ListBoxItem.SelectableCard" TargetType="ListBoxItem">
+      <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
       <Setter Property="Padding" Value="0"/>
       <Setter Property="Margin" Value="0,4,0,4"/>
       <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
