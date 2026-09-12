@@ -40,6 +40,7 @@
   <!-- Единственный акцент -->
   <Color x:Key="Color.Accent">#7C5CFF</Color>
   <Color x:Key="Color.AccentHover">#8F73FF</Color>
+  <Color x:Key="Color.Focus">#C3B2FF</Color>             <!-- кольцо фокуса с клавиатуры -->
   <!--
     ЗАЛИВКА ГЛАВНЫХ КНОПОК. Отдельная от Color.Accent: сам акцент #7C5CFF стоит
     ровно посередине по светлоте, и на нём не читается ни белая подпись (4,35),
@@ -107,6 +108,7 @@
   <SolidColorBrush x:Key="Brush.Title" Color="{StaticResource Color.Text}"/>
   <SolidColorBrush x:Key="Brush.Accent" Color="{StaticResource Color.Accent}"/>
   <SolidColorBrush x:Key="Brush.AccentHover" Color="{StaticResource Color.AccentHover}"/>
+  <SolidColorBrush x:Key="Brush.Focus" Color="{StaticResource Color.Focus}"/>
   <SolidColorBrush x:Key="Brush.AccentFill" Color="{StaticResource Color.AccentFill}"/>
   <SolidColorBrush x:Key="Brush.AccentFillHover" Color="{StaticResource Color.AccentFillHover}"/>
   <SolidColorBrush x:Key="Brush.AccentFillPressed" Color="{StaticResource Color.AccentFillPressed}"/>
@@ -137,22 +139,38 @@
   <!-- Шапка — ровная заливка. -->
   <SolidColorBrush x:Key="Brush.HeaderBg" Color="{StaticResource Color.HeaderStart}"/>
 
-  <!-- Пунктирный прямоугольник фокуса Windows: выключен разом для всех элементов.
+  <!-- Рамка фокуса. Системная — пунктирный прямоугольник времён Windows 2000:
+       на тёмной теме он читается как артефакт, а на выделенной карточке идёт
+       вторым контуром впритык к её собственной рамке. Вместо него — сплошное
+       светло-лиловое кольцо на 2px снаружи элемента: оно не спорит с акцентной
+       рамкой выделения (та темнее и лежит по самому краю) и одинаково видно и
+       на тёмном фоне, и на акцентной заливке главных кнопок.
 
-       Значение FocusVisualStyle по умолчанию — ссылка на ресурс с этим ключом, поэтому
-       пустой шаблон здесь снимает рамку и с тех элементов, у которых своего стиля нет
-       (например Border с Focusable="True" на карточке игры). Точечные сеттеры
-       FocusVisualStyle="{x:Null}" в стилях ниже остаются: они дешевле, чем разбирать,
-       какой из них теперь лишний.
+       Кольцо появляется только при переходе с клавиатуры: мышиный клик рамку
+       фокуса в WPF не рисует.
 
-       Через FrameworkElement.FocusVisualStyleProperty.OverrideMetadata это не делается:
-       свойство объявлено самим FrameworkElement, метаданные для типа-владельца уже
-       зарегистрированы, и вызов падает с ArgumentException. В статическом конструкторе
-       App это роняло лаунчер до первой строки boot.log — версия 1.5.11 не запускалась
-       вовсе. -->
-  <Style x:Key="{x:Static SystemParameters.FocusVisualStyleKey}" TargetType="Control">
-    <Setter Property="Template" Value="{x:Null}"/>
+       Ключ SystemParameters.FocusVisualStyleKey — страховка для элементов без
+       своего стиля; остальным тот же стиль проставлен сеттером явно, потому что
+       поиск системного ключа не всегда доходит до ресурсов приложения.
+
+       Через FrameworkElement.FocusVisualStyleProperty.OverrideMetadata это не
+       делается: свойство объявлено самим FrameworkElement, метаданные для
+       типа-владельца уже зарегистрированы, и вызов падает с ArgumentException.
+       В статическом конструкторе App это роняло лаунчер до первой строки
+       boot.log — версия 1.5.11 не запускалась вовсе. -->
+  <Style x:Key="Style.FocusVisual" TargetType="Control">
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate>
+          <Border Margin="-2" CornerRadius="10" BorderThickness="2"
+                  BorderBrush="{DynamicResource Brush.Focus}"
+                  SnapsToDevicePixels="True" IsHitTestVisible="False"/>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
   </Style>
+  <Style x:Key="{x:Static SystemParameters.FocusVisualStyleKey}" TargetType="Control"
+         BasedOn="{StaticResource Style.FocusVisual}"/>
 
   <!-- TextBlock default -->
   <Style TargetType="TextBlock">
@@ -213,7 +231,7 @@
     <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="BorderBrush" Value="Transparent"/>
     <Setter Property="OverridesDefaultStyle" Value="True"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <!-- Custom template without IconPresenter to avoid black icon placeholders -->
     <Setter Property="Template">
       <Setter.Value>
@@ -465,12 +483,12 @@
     </Style.Triggers>
   </Style>
 
-  <!-- Гасит системную пунктирную рамку фокуса по Tab на элементах, у которых нет
-       своего implicit-стиля ниже. Button/TextBox/ComboBox и остальные со своим
-       стилем это правило не увидят — им та же настройка проставлена в их
-       собственных стилях; здесь — страховка для всего, что появится позже. -->
+  <!-- Кольцо фокуса по Tab на элементах, у которых нет своего implicit-стиля
+       ниже. Button/TextBox/ComboBox и остальные со своим стилем это правило не
+       увидят — им та же настройка проставлена в их собственных стилях; здесь —
+       страховка для всего, что появится позже. -->
   <Style TargetType="Control">
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
   </Style>
 
   <!-- Window/Page background -->
@@ -491,11 +509,10 @@
     <Setter Property="Margin" Value="0,0,8,0"/>
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="SnapsToDevicePixels" Value="True"/>
-    <!-- Кнопки — единственный часто табаемый элемент, у которого не было своего
-         шаблона: остальные (TextBox, ComboBox, ListBox…) уже гасят рамку ниже
-         по файлу, а Button рисовал системный пунктирный прямоугольник поверх
-         тёмной темы. -->
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <!-- Кнопка — самый часто табаемый элемент, и своего шаблона у неё нет:
+         кольцо фокуса ей нужно проставить отдельно, как и остальным
+         (TextBox, ComboBox, ListBox…) ниже по файлу. -->
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Button">
@@ -773,7 +790,7 @@
     <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Padding" Value="8,6"/>
     <Setter Property="Margin" Value="0,0,8,0"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
   </Style>
 
   <!-- Поле формы: рамка, подсветка фокуса и подсказка ВНУТРИ шаблона.
@@ -865,7 +882,7 @@
     <Setter Property="MinHeight" Value="34"/>
     <Setter Property="HorizontalContentAlignment" Value="Left"/>
     <Setter Property="ScrollViewer.Background" Value="{StaticResource Brush.Surface}"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="ComboBox">
@@ -954,7 +971,7 @@
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="Padding" Value="8,6"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <!-- Наведение — нейтральная подсветка, как у пунктов меню; акцентом отмечен только
          выбранный пункт. Раньше и наведение, и выбор красились одним фиолетовым, и в
          списке из четырёх строк две выглядели «выбранными». -->
@@ -1019,12 +1036,12 @@
     <Setter Property="BorderBrush" Value="{StaticResource Brush.Border}"/>
     <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="Padding" Value="0"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
   </Style>
   <Style TargetType="ListBoxItem">
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
     <Setter Property="Background" Value="{StaticResource Brush.Surface}"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <Setter Property="OverridesDefaultStyle" Value="True"/>
     <Setter Property="Template">
       <Setter.Value>
@@ -1085,7 +1102,7 @@
     <Setter Property="MinHeight" Value="28"/>
     <!-- Щелчок по дорожке ставит бегунок под курсор, а не сдвигает его на одно деление -->
     <Setter Property="IsMoveToPointEnabled" Value="True"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Slider">
@@ -1121,6 +1138,9 @@
                 </RepeatButton>
               </Track.IncreaseRepeatButton>
               <Track.Thumb>
+                <!-- Бегунок круглый, и прямоугольное кольцо фокуса вокруг него выглядит
+                     ошибкой. Фокус всё равно получает сам ползунок — кольцо рисуется
+                     вокруг дорожки целиком. -->
                 <Thumb Width="20" Height="20" FocusVisualStyle="{x:Null}" Cursor="Hand">
                   <Thumb.Template>
                     <ControlTemplate TargetType="Thumb">
@@ -1160,7 +1180,7 @@
   <!-- CheckBox (dark theme) -->
   <Style TargetType="CheckBox">
     <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="CheckBox">
@@ -1335,6 +1355,7 @@
        играть, который никуда не запускает. Ни фона, ни рамки; отзыв на наведение —
        цветом, как у любой ссылки. -->
   <Style x:Key="Style.Button.HeroInfo" TargetType="Button">
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <Setter Property="Padding" Value="0"/>
     <Setter Property="FontSize" Value="12"/>
     <Setter Property="FontWeight" Value="Normal"/>
@@ -1367,6 +1388,7 @@
   <!-- Вкладки под витриной: подчёркивание, а не залитая пилюля. Пилюля весом спорила с
        главной кнопкой действия — две крашенные акцентом плашки рядом, и обе «главные». -->
   <Style x:Key="Style.Button.HeroTab" TargetType="ToggleButton">
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <Setter Property="Padding" Value="2,0,2,8"/>
     <Setter Property="MinHeight" Value="30"/>
     <Setter Property="FontSize" Value="13"/>

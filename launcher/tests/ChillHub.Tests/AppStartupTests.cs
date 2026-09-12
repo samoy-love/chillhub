@@ -7,9 +7,11 @@ namespace ChillHub.Tests {
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
     using System.Runtime.CompilerServices;
     using System.Text;
     using System.Windows;
+    using System.Windows.Controls;
 
     using ChillHub.Core.Shell;
 
@@ -204,18 +206,37 @@ namespace ChillHub.Tests {
             => UiThread.Run(() => RuntimeHelpers.RunClassConstructor(typeof(ChillHub.App).TypeHandle));
 
         /// <summary>
-        /// Прямоугольник фокуса снимается стилем по ключу
-        /// <see cref="SystemParameters.FocusVisualStyleKey"/> — единственный способ достать
-        /// элементы без собственного стиля, не трогая метаданные FrameworkElement.
+        /// Рамка фокуса — своё кольцо, а не системный пунктир.
+        /// <para>
+        /// Проверяется три вещи разом: кольцо в теме есть и рисует шаблон; по системному
+        /// ключу <see cref="SystemParameters.FocusVisualStyleKey"/> лежит оно же (иначе
+        /// пунктир вернётся на элементы без своего стиля); и ни один стиль темы не гасит
+        /// рамку в <c>null</c> — раньше так было сделано везде, и элемент, получивший
+        /// фокус с клавиатуры, ничем себя не выдавал.
+        /// </para>
         /// </summary>
         [Fact]
-        public void ТемаОтключаетПрямоугольникФокусаГлобально() => UiThread.Run(() => {
+        public void ТемаРисуетСвоёКольцоФокуса() => UiThread.Run(() => {
             var theme = (ResourceDictionary)Application.LoadComponent(
                 new Uri("/ChillHub;component/Themes/Theme.Dark.xaml", UriKind.Relative));
 
+            var ring = Assert.IsType<Style>(theme["Style.FocusVisual"]);
+            Assert.Contains(
+                ring.Setters.OfType<Setter>(),
+                setter => setter.Property == Control.TemplateProperty && setter.Value is not null);
+
             Assert.True(
                 theme.Contains(SystemParameters.FocusVisualStyleKey),
-                "в теме нет стиля фокуса по системному ключу — рамка вернётся на элементы без своего стиля");
+                "в теме нет стиля фокуса по системному ключу — пунктир вернётся на элементы без своего стиля");
+            Assert.Same(ring, ((Style)theme[SystemParameters.FocusVisualStyleKey]).BasedOn);
+
+            foreach (var style in theme.Values.OfType<Style>()) {
+                foreach (var setter in style.Setters.OfType<Setter>()) {
+                    if (setter.Property == FrameworkElement.FocusVisualStyleProperty) {
+                        Assert.Same(ring, setter.Value);
+                    }
+                }
+            }
         });
 
         // ---- Окно обновления ----
