@@ -1,65 +1,130 @@
-// Растеризация значка и упаковка в PNG/ICO. Без внешних зависимостей: каждая
-// форма знака — плашка, кольцо, точка — задана аналитически, и покрытие пикселя
-// считается подвыборкой. Так края сглажены честно, а не фильтром поверх растра.
+// Растеризация значка и упаковка в PNG/ICO/SVG. Без внешних зависимостей:
+// каждая фигура — скруглённый прямоугольник, круг или эллипс с заливкой
+// (сплошной, линейной или радиальной), и цвет каждой подвыборки пикселя
+// считается аналитически. Края сглажены честно, а не фильтром поверх растра.
+//
+// Растр и SVG рисуют один и тот же список фигур из geometry.mjs, поэтому
+// картинка во вкладке и в exe одна — с точностью до сглаживания браузера.
 import zlib from 'node:zlib';
-import { geometry, COLORS } from './geometry.mjs';
+import { geometry } from './geometry.mjs';
 
 const SUB = 8; // подвыборка на пиксель по каждой оси
 
 const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
-const TOP = rgb(COLORS.top);
-const BOTTOM = rgb(COLORS.bottom);
-const MARK = rgb(COLORS.mark);
 
-function inRoundRect(x, y, R) {
-  if (x < R.x || y < R.y || x > R.x + R.w || y > R.y + R.h) return false;
-  const cx = Math.min(Math.max(x, R.x + R.r), R.x + R.w - R.r);
-  const cy = Math.min(Math.max(y, R.y + R.r), R.y + R.h - R.r);
-  return (x - cx) ** 2 + (y - cy) ** 2 <= R.r * R.r;
+/* ---------- фигуры ---------- */
+
+function bbox(S) {
+  if (S.kind === 'rrect') return { x: S.x, y: S.y, w: S.w, h: S.h };
+  if (S.kind === 'circle') return { x: S.cx - S.r, y: S.cy - S.r, w: 2 * S.r, h: 2 * S.r };
+  return { x: S.cx - S.rx, y: S.cy - S.ry, w: 2 * S.rx, h: 2 * S.ry };
 }
 
-// Точка на знаке: внутри одного из прямоугольников букв.
-export function onMark(x, y, g) {
-  return g.blocks.some((b) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h);
+function inside(x, y, S) {
+  if (S.kind === 'rrect') {
+    if (x < S.x || y < S.y || x > S.x + S.w || y > S.y + S.h) return false;
+    if (!S.r) return true;
+    const cx = Math.min(Math.max(x, S.x + S.r), S.x + S.w - S.r);
+    const cy = Math.min(Math.max(y, S.y + S.r), S.y + S.h - S.r);
+    return (x - cx) ** 2 + (y - cy) ** 2 <= S.r * S.r;
+  }
+  if (S.kind === 'circle') return (x - S.cx) ** 2 + (y - S.cy) ** 2 <= S.r * S.r;
+  const dx = (x - S.cx) / S.rx;
+  const dy = (y - S.cy) / S.ry;
+  return dx * dx + dy * dy <= 1;
 }
 
-// Цвет плашки в точке: диагональный градиент, как linearGradient 0,0 → 1,1 в SVG.
-export function plateColor(x, y, g) {
-  const P = g.plate;
-  const t = Math.min(1, Math.max(0, ((x - P.x) / P.w + (y - P.y) / P.h) / 2));
-  return TOP.map((v, i) => v + (BOTTOM[i] - v) * t);
+/* ---------- заливки ---------- */
+
+// Заливки подготавливаются один раз на фигуру: цвета остановок в числах и
+// рамка фигуры, в долях которой заданы координаты градиента.
+function prepare(S) {
+  const F = S.fill;
+  const B = bbox(S);
+  if (F.type === 'solid') {
+    const c = rgb(F.color);
+    return () => [c[0], c[1], c[2], F.alpha];
+  }
+  const stops = F.stops.map(([t, color, alpha]) => [t, ...rgb(color), alpha]);
+  const at = (t) => {
+    t = Math.min(1, Math.max(0, t));
+    let i = 1;
+    while (i < stops.length - 1 && stops[i][0] < t) i++;
+    const a = stops[i - 1];
+    const b = stops[i];
+    const u = b[0] === a[0] ? 0 : (t - a[0]) / (b[0] - a[0]);
+    return [a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u, a[3] + (b[3] - a[3]) * u, a[4] + (b[4] - a[4]) * u];
+  };
+  if (F.type === 'linear') {
+    // Как linearGradient в objectBoundingBox: проекция точки на отрезок x1y1→x2y2.
+    const dx = F.x2 - F.x1;
+    const dy = F.y2 - F.y1;
+    const dd = dx * dx + dy * dy;
+    return (x, y) => {
+      const u = (x - B.x) / B.w - F.x1;
+      const v = (y - B.y) / B.h - F.y1;
+      return at((u * dx + v * dy) / dd);
+    };
+  }
+  // radialGradient: расстояние до центра в долях радиуса.
+  return (x, y) => {
+    const u = (x - B.x) / B.w - F.cx;
+    const v = (y - B.y) / B.h - F.cy;
+    return at(Math.sqrt(u * u + v * v) / F.r);
+  };
 }
+
+/* ---------- растр ---------- */
+
+const cache = new Map();
 
 export function raster(size) {
+  if (cache.has(size)) return cache.get(size);
   const g = geometry(size);
+  const layers = g.shapes.map((S) => ({ S, B: bbox(S), color: prepare(S) }));
   const buf = new Uint8Array(size * size * 4);
   const n = SUB * SUB;
   for (let py = 0; py < size; py++) {
     for (let px = 0; px < size; px++) {
+      // Фигуры, не касающиеся пикселя, отсеиваются по рамке один раз на пиксель.
+      const hit = layers.filter(({ B }) => px + 1 > B.x && px < B.x + B.w && py + 1 > B.y && py < B.y + B.h);
+      if (!hit.length) continue;
       let r = 0;
       let gr = 0;
       let b = 0;
-      let hit = 0;
+      let a = 0;
       for (let sy = 0; sy < SUB; sy++) {
         const y = py + (sy + 0.5) / SUB;
         for (let sx = 0; sx < SUB; sx++) {
           const x = px + (sx + 0.5) / SUB;
-          if (!inRoundRect(x, y, g.plate)) continue;
-          const c = onMark(x, y, g) ? MARK : plateColor(x, y, g);
-          r += c[0];
-          gr += c[1];
-          b += c[2];
-          hit++;
+          // Обычное наложение «поверх» слой за слоем, premultiplied.
+          let pr = 0;
+          let pg = 0;
+          let pb = 0;
+          let pa = 0;
+          for (const L of hit) {
+            if (!inside(x, y, L.S)) continue;
+            const [cr, cg, cb, ca] = L.color(x, y);
+            pr = cr * ca + pr * (1 - ca);
+            pg = cg * ca + pg * (1 - ca);
+            pb = cb * ca + pb * (1 - ca);
+            pa = ca + pa * (1 - ca);
+          }
+          r += pr;
+          gr += pg;
+          b += pb;
+          a += pa;
         }
       }
-      if (!hit) continue;
+      if (a <= 0) continue;
       const i = (py * size + px) * 4;
-      buf[i] = Math.round(r / hit);
-      buf[i + 1] = Math.round(gr / hit);
-      buf[i + 2] = Math.round(b / hit);
-      buf[i + 3] = Math.round((hit / n) * 255);
+      buf[i] = Math.round(r / a);
+      buf[i + 1] = Math.round(gr / a);
+      buf[i + 2] = Math.round(b / a);
+      buf[i + 3] = Math.round((a / n) * 255);
     }
   }
+  cache.set(size, buf);
   return buf;
 }
 
@@ -94,7 +159,7 @@ export function png(size) {
   const px = raster(size);
   const raw = Buffer.alloc(size * (size * 4 + 1));
   for (let y = 0; y < size; y++) {
-    raw[y * (size * 4 + 1)] = 0; // фильтр None: картинка плоская, предсказание не помогает
+    raw[y * (size * 4 + 1)] = 0; // фильтр None: deflate и так сжимает градиенты
     Buffer.from(px.buffer, y * size * 4, size * 4).copy(raw, y * (size * 4 + 1) + 1);
   }
   const ihdr = Buffer.alloc(13);
@@ -161,22 +226,43 @@ export function ico(sizes) {
 
 /* ---------- SVG ---------- */
 
+const num = (v) => String(Math.round(v * 1000) / 1000);
+
+function svgFill(id, F) {
+  if (F.type === 'solid') return { attr: `fill="${F.color}"${F.alpha < 1 ? ` fill-opacity="${num(F.alpha)}"` : ''}`, def: '' };
+  const stops = F.stops
+    .map(([t, c, a]) => `<stop offset="${num(t)}" stop-color="${c}"${a < 1 ? ` stop-opacity="${num(a)}"` : ''}/>`)
+    .join('');
+  const def =
+    F.type === 'linear'
+      ? `<linearGradient id="${id}" x1="${num(F.x1)}" y1="${num(F.y1)}" x2="${num(F.x2)}" y2="${num(F.y2)}">${stops}</linearGradient>`
+      : `<radialGradient id="${id}" cx="${num(F.cx)}" cy="${num(F.cy)}" r="${num(F.r)}">${stops}</radialGradient>`;
+  return { attr: `fill="url(#${id})"`, def };
+}
+
+function svgShape(S, attr) {
+  if (S.kind === 'rrect') {
+    return `<rect x="${num(S.x)}" y="${num(S.y)}" width="${num(S.w)}" height="${num(S.h)}"${S.r ? ` rx="${num(S.r)}"` : ''} ${attr}/>`;
+  }
+  if (S.kind === 'circle') return `<circle cx="${num(S.cx)}" cy="${num(S.cy)}" r="${num(S.r)}" ${attr}/>`;
+  return `<ellipse cx="${num(S.cx)}" cy="${num(S.cy)}" rx="${num(S.rx)}" ry="${num(S.ry)}" ${attr}/>`;
+}
+
 export function svg(size = 32, { title = null } = {}) {
   const g = geometry(size);
-  const P = g.plate;
-  // Буквы — одним путём из прямоугольников: так в файле нет швов между
-  // соседними блоками, которые браузер иначе сглаживает полупрозрачной линией.
-  const d = g.blocks.map((b) => `M${b.x} ${b.y}h${b.w}v${b.h}h${-b.w}z`).join('');
-  const body = [
-    '<defs><linearGradient id="chillhub-plate" x1="0" y1="0" x2="1" y2="1">' +
-      `<stop offset="0" stop-color="${COLORS.top}"/><stop offset="1" stop-color="${COLORS.bottom}"/>` +
-      '</linearGradient></defs>',
-    `<rect x="${P.x}" y="${P.y}" width="${P.w}" height="${P.h}" rx="${P.r}" fill="url(#chillhub-plate)"/>`,
-    `<path d="${d}" fill="${COLORS.mark}"/>`,
-  ];
+  const defs = [];
+  const body = [];
+  for (const S of g.shapes) {
+    const { attr, def } = svgFill(`chillhub-${S.name}`, S.fill);
+    if (def) defs.push(def);
+    body.push(svgShape(S, attr));
+  }
+  // Плоская версия обязана лечь на пиксели и в браузере — без сглаживания краёв.
+  const crisp = g.flat ? ' shape-rendering="crispEdges"' : '';
   return `<?xml version="1.0" encoding="UTF-8"?>
-<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg"${title ? ' role="img"' : ''}>
-${title ? `  <title>${title}</title>\n` : ''}  ${body.join('\n  ')}
+<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg"${title ? ' role="img"' : ''}${crisp}>
+${title ? `  <title>${title}</title>\n` : ''}  <defs>${defs.join('')}</defs>
+  ${body.join('\n  ')}
 </svg>
 `;
 }
