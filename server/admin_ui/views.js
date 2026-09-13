@@ -632,6 +632,27 @@
     );
   }
 
+  /**
+   * Обложка новости в той же рамке, что в ленте лаунчера.
+   *
+   * Лаунчер рисует обложку рамкой 104 на 58 и заполняет её картинкой с
+   * обрезкой по центру (`Stretch="UniformToFill"`), а у новости без
+   * обложки колонку не показывает вовсе. Здесь те же пропорции и то же
+   * заполнение: по списку в панели видно, как картинка обрежется у
+   * игрока, а не как она выглядит целиком.
+   *
+   * Не загрузилась — рамка остаётся пустой на фоне-заглушке, как у
+   * лаунчера: ряд карточек не должен прыгать из-за одной битой ссылки.
+   */
+  function newsCover(url, size) {
+    if (!url) return '';
+    return (
+      '<span class="news-cover' + (size === 'wide' ? ' news-cover--wide' : '') + '" aria-hidden="true">' +
+      '<img src="' + esc(url) + '" alt="" loading="lazy" decoding="async" data-news-cover>' +
+      '</span>'
+    );
+  }
+
   function pickList(rows, opts) {
     const list = rows || [];
     const o = opts || {};
@@ -643,17 +664,23 @@
       list
         .map((r) => {
           /* Иконка — только у строк, которые её объявили (пусть и пустой):
-             у списков без иконок строка остаётся прежней. */
+             у списков без иконок строка остаётся прежней. Обложка — у строк,
+             где она есть: у новости без обложки лаунчер колонку не рисует. */
           const withIcon = r.icon !== undefined;
+          const withCover = Boolean(r.cover);
           const text =
             '<span class="t">' + esc(r.title) + (r.badge || '') + '</span>' +
             (r.sub ? '<span class="s">' + esc(r.sub) + '</span>' : '');
           return (
             '<button type="button" role="option" data-pick="' + esc(r.id) + '"' +
-            (withIcon ? ' class="has-icon"' : '') +
+            (withCover ? ' class="has-cover"' : withIcon ? ' class="has-icon"' : '') +
             ' aria-current="' + (r.id === o.selected ? 'true' : 'false') + '"' +
             ' aria-selected="' + (r.id === o.selected ? 'true' : 'false') + '">' +
-            (withIcon ? pickIcon(r) + '<span class="pick-text">' + text + '</span>' : text) +
+            (withCover
+              ? newsCover(r.cover) + '<span class="pick-text">' + text + '</span>'
+              : withIcon
+                ? pickIcon(r) + '<span class="pick-text">' + text + '</span>'
+                : text) +
             '</button>'
           );
         })
@@ -1804,6 +1831,7 @@
     gameForm,
     newsFilter,
     pickList,
+    newsCover,
     pickIcon,
     tabs,
     orderList,

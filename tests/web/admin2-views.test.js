@@ -814,3 +814,42 @@ test('у выбора версий в листе свои id', () => {
   assert.match(html, /id="cmp-from"/);
   assert.match(html, /for="cmp-to"/);
 });
+
+/* ---------- Обложки новостей ---------- */
+
+test('обложка в списке — рамка лаунчера, а без обложки колонки нет', () => {
+  const html = V.pickList([
+    { id: 'a', title: 'С обложкой', cover: '/news/a.png' },
+    { id: 'b', title: 'Без обложки', cover: '' },
+  ]);
+  assert.match(html, /data-pick="a" class="has-cover"/);
+  assert.match(html, /<span class="news-cover" aria-hidden="true"><img src="\/news\/a\.png"/);
+  const rowB = html.slice(html.indexOf('data-pick="b"'));
+  assert.ok(!/news-cover|has-cover/.test(rowB), 'у новости без обложки появилась рамка');
+});
+
+test('предпросмотр держит пропорции рамки, а не её размер', () => {
+  assert.match(V.newsCover('/c.png', 'wide'), /class="news-cover news-cover--wide"/);
+  assert.strictEqual(V.newsCover(''), '');
+});
+
+test('рамка обложки в стилях — те же 104 на 58 и заполнение, что в лаунчере', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const css = fs.readFileSync(path.join(__dirname, '..', '..', 'server', 'admin_ui', 'admin.css'), 'utf8');
+  const xaml = fs.readFileSync(path.join(__dirname, '..', '..', 'launcher', 'ChillHub', 'Pages', 'HomePage.xaml'), 'utf8');
+
+  // Лаунчер: рамка обложки новости и заполнение картинкой
+  assert.match(xaml, /<Border Width="104" Height="58"/);
+  assert.match(xaml, /x:Name="CoverImg"[^>]*Stretch="UniformToFill"/);
+
+  const block = (sel) => {
+    const at = css.indexOf(sel + ' {');
+    assert.ok(at >= 0, 'нет правила ' + sel);
+    return css.slice(at, css.indexOf('}', at));
+  };
+  assert.match(block('.news-cover'), /width: 104px;/);
+  assert.match(block('.news-cover'), /height: 58px;/);
+  assert.match(block('.news-cover--wide'), /aspect-ratio: 104 \/ 58;/);
+  assert.match(block('.news-cover img'), /object-fit: cover;/);
+});
