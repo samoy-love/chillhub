@@ -296,6 +296,70 @@ namespace ChillHub.Tests {
             Assert.Equal(-1, GameCatalog.SelectionIndexAfterRefresh(null, "a"));
         }
 
+        /// <summary>
+        /// НОВЫЙ МОДПАК — ЭТО ОБНОВЛЕНИЕ, даже когда сборка игры прежняя. Фоновое обновление
+        /// списка пересчитывает только изменившиеся игры, и промах здесь оставлял бы
+        /// «Играть» у игры с вышедшими модами до перезапуска лаунчера.
+        /// </summary>
+        [Fact]
+        public void ИзменившимсяСчитаетсяНовыйМодпак() {
+            var shown = new[] { Modded("peak", "1.0.1", "Pack-1.9.9", "aaa") };
+            var incoming = new[] { Modded("peak", "1.0.1", "Pack-1.9.10", "bbb") };
+
+            Assert.Equal(new[] { "peak" }, GameCatalog.ChangedOnServer(shown, incoming));
+        }
+
+        /// <summary>Пересобранный под тем же именем модпак — тоже изменение: дерево на сервере другое.</summary>
+        [Fact]
+        public void ИзменившимсяСчитаетсяПересобранныйМодпак() {
+            var shown = new[] { Modded("repo", "1.0.1", "Pack-1.9.9", "aaa") };
+            var incoming = new[] { Modded("repo", "1.0.1", "Pack-1.9.9", "bbb") };
+
+            Assert.Contains("repo", GameCatalog.ChangedOnServer(shown, incoming));
+        }
+
+        /// <summary>Новая сборка игры, появление модпака и новая игра в списке — изменения.</summary>
+        [Fact]
+        public void ИзменившимисяСчитаютсяНоваяСборкаНовыеМодыИНоваяИгра() {
+            var shown = new[] {
+                Modded("a", "1.0.0", null, null),
+                Modded("b", "1.0.0", null, null),
+            };
+            var incoming = new[] {
+                Modded("a", "1.1.0", null, null),
+                Modded("b", "1.0.0", "Pack-1.0.0", "ccc"),
+                Modded("c", "1.0.0", null, null),
+            };
+
+            var changed = GameCatalog.ChangedOnServer(shown, incoming);
+
+            Assert.Equal(3, changed.Count);
+            Assert.Contains("a", changed);
+            Assert.Contains("b", changed);
+            Assert.Contains("c", changed);
+        }
+
+        /// <summary>
+        /// Тот же ответ сервера — не изменение, даже если поля отличаются пробелами и
+        /// регистром: иначе каждый возврат к окну гонял бы проверку файлов впустую.
+        /// </summary>
+        [Fact]
+        public void ТотЖеОтветСервераНеИзменение() {
+            var shown = new[] { Modded("Lethal", "1.0.9", "Pack-2.2.12", "ABC") };
+            var incoming = new[] { Modded("lethal", " 1.0.9 ", "pack-2.2.12", "abc") };
+
+            Assert.Empty(GameCatalog.ChangedOnServer(shown, incoming));
+        }
+
+        private static GameInfo Modded(string id, string latest, string? modsVersion, string? revision) => new GameInfo {
+            GameId = id,
+            Title = id,
+            LatestVersion = latest,
+            Mods = modsVersion == null
+                ? null
+                : new ModsInfo { HasLatest = true, Version = modsVersion, Revision = revision ?? string.Empty },
+        };
+
         private static GameInfo Game(string id, string title, bool installed = false) =>
             new GameInfo { GameId = id, Title = title, IsInstalled = installed };
     }
