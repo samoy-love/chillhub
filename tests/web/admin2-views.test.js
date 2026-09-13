@@ -784,3 +784,33 @@ test('у модпака не спрашивают цель, но предупр�
   assert.match(V.uploadCard({ kind: 'mods' }), /Архив модпака/);
   assert.match(V.uploadCard({ gameId: 'repo' }), /всеми файлами игры/);
 });
+
+/* ---------- Иконки в списках ---------- */
+
+test('строка с иконкой показывает картинку поверх первой буквы', () => {
+  const html = V.pickList([{ id: 'repo', title: 'R.E.P.O.', icon: '/manifests/repo/icon.png' }], { selected: 'repo' });
+  assert.match(html, /class="has-icon"/);
+  assert.match(html, /<img src="\/manifests\/repo\/icon\.png"/);
+  // Буква под картинкой держит место, если картинка не загрузится
+  assert.match(html, /<span class="pick-icon" aria-hidden="true"><span>R<\/span>/);
+});
+
+test('без заданной иконки остаётся буква, а список без иконок — прежним', () => {
+  const noIcon = V.pickList([{ id: 'peak', title: 'PEAK', icon: '' }]);
+  assert.match(noIcon, /<span>P<\/span>/);
+  assert.ok(!/<img/.test(noIcon));
+
+  const plain = V.pickList([{ id: 'a', title: 'Заметка' }]);
+  assert.ok(!/pick-icon/.test(plain), 'иконка появилась у списка, который её не просил');
+});
+
+test('подпись пропавшего манифеста можно заменить своей', () => {
+  assert.match(V.launcherDiff(null, { missing: 'Манифест одной из версий уже не лежит' }), /одной из версий/);
+  assert.match(V.launcherDiff(null, { active: '1.6.24' }), /после активации/);
+});
+
+test('у выбора версий в листе свои id', () => {
+  const html = V.versionPicker([{ version: '1.0.1' }, { version: '1.0.0' }], '1.0.0', '1.0.1', 'cmp');
+  assert.match(html, /id="cmp-from"/);
+  assert.match(html, /for="cmp-to"/);
+});

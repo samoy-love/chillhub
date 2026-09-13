@@ -412,6 +412,7 @@
             </div>
             <div class="push"></div>
             <button class="btn btn--text" type="button" data-act="versions" data-args='{"gameId":"${esc(p.gameId)}","title":"${esc(p.title)}"}'>Все версии</button>
+            <button class="btn btn--text" type="button" data-act="compare" data-args='{"kind":"mods","gameId":"${esc(p.gameId)}","title":"${esc(p.title)}"}'>Сравнить версии</button>
             ${staged ? `<button class="btn" type="button" data-act="mods-diff" data-args='{"gameId":"${esc(p.gameId)}","from":"${esc(p.active)}","to":"${esc(p.built)}","title":"${esc(p.title)}"}'>Что изменится</button>` : ''}
             ${staged ? `<button class="btn btn--accent" type="button" data-act="mods.activate" data-args='{"gameId":"${esc(p.gameId)}","version":"${esc(p.built)}"}'>Отдать игрокам</button>` : ''}
             ${stale && p.latest ? `<button class="btn btn--accent" type="button" data-act="build">Собрать ${esc(p.latest)}</button>` : ''}
@@ -1232,7 +1233,13 @@
   const newsKey = (n) => (n.gameId ? 'game/' + n.gameId + '/' : 'launcher//') + n.slug;
 
   function newsRow(n) {
+    /* Иконка ленты, а не заметки: в списке рядом лежат заметки лаунчера и
+       всех игр, и по иконке видно, чья лента, раньше, чем прочитан текст
+       мелкой подписи под заголовком. */
+    const g = n.game ? D.games.find((x) => x.gameId === n.game) : null;
     return {
+      icon: n.game ? (g && g.iconUrl) || '' : '/admin/ui/favicon.svg',
+      iconLetter: n.game ? (g && g.title) || n.game : 'C',
       id: newsKey({ gameId: n.game, slug: n.slug }),
       title: n.title || n.slug,
       sub: window.CH2Format.dateTime(n.at) + (n.game ? ' · ' + n.game : ' · лаунчер'),
@@ -1716,7 +1723,7 @@
       (g.icon ? '' : '<span class="badge badge--warn">без иконки</span>') +
       (g.published ? '' : '<span class="badge badge--warn">скрыта</span>') +
       (g.modsEnabled ? '<span class="badge">моды</span>' : '');
-    return { id: g.gameId, title: g.title || g.gameId, sub: g.gameId, badge: marks };
+    return { id: g.gameId, title: g.title || g.gameId, sub: g.gameId, badge: marks, icon: g.iconUrl || '' };
   }
 
   /** Поля правки — из того, что прочитано с сервера. */
@@ -1801,7 +1808,12 @@
               <td class="act">${
                 v.state === 'active'
                   ? ''
-                  : `<button class="btn btn--text" type="button" data-game-do="activate" data-version="${esc(v.version)}">Отдать игрокам</button>` +
+                  : (gameBuilds.active
+                      ? `<button class="btn btn--text" type="button" data-act="compare" data-args='${esc(
+                          JSON.stringify({ kind: 'game', gameId: gameEdit.gameId, from: gameBuilds.active, to: v.version })
+                        )}'>Сравнить</button>`
+                      : '') +
+                    `<button class="btn btn--text" type="button" data-game-do="activate" data-version="${esc(v.version)}">Отдать игрокам</button>` +
                     `<button class="btn btn--danger btn--text" type="button" data-game-do="delete" data-version="${esc(v.version)}">Удалить</button>`
               }</td>
             </tr>`,
@@ -1856,6 +1868,11 @@
         '<span class="faint">Старее активной сервер оставляет две — на случай отката</span>' +
         '<span class="push"></span>' +
         '<button class="btn" type="button" data-game-do="prune">Убрать старые</button>' +
+        (gameBuilds && gameBuilds.versions.length >= 2
+          ? '<button class="btn" type="button" data-act="compare" data-args=\'' +
+            esc(JSON.stringify({ kind: 'game', gameId: gameEdit.gameId })) +
+            '\'>Сравнить версии</button>'
+          : '') +
         '<button class="btn btn--accent" type="button" data-game-do="upload">Залить версию</button>'
       );
     }
@@ -2329,6 +2346,129 @@
     });
   }
 
+  /* --- Сравнение двух версий игры или модпака --- */
+
+  /* ПО ТЕМ ЖЕ МАНИФЕСТАМ, ЧТО ЧИТАЕТ ЛАУНЧЕР.
+     У лаунчера сравнение живёт прямо в разделе, а у игры и модпака
+     версий не одна пара, и спрашивают про любую: что поехало между
+     вчерашней пересборкой и той, что у игроков. Список файлов считается
+     в браузере из открытых манифестов — ровно того, по чему клиент
+     решает, что докачивать.
+
+     У модпака рядом состав по модам: «обновились три мода» отвечает на
+     вопрос быстрее четырёхсот путей. У залитого архивом модпака состава
+     нет, и сервер так и говорит — это показывается честно, а файлы всё
+     равно сравниваются. */
+  function flowCompare(a) {
+    const mods = a.kind === 'mods';
+    const gameId = String(a.gameId || '');
+    const title =
+      a.title ||
+      (mods ? (D.packs.find((p) => p.gameId === gameId) || {}).title : (D.games.find((g) => g.gameId === gameId) || {}).title) ||
+      gameId;
+    const base = mods ? '/manifests/_mods/' + encodeURIComponent(gameId) + '/' : '/manifests/' + encodeURIComponent(gameId) + '/';
+
+    const sheet = openSheet({
+      title: (mods ? 'Сравнить сборки модпака: ' : 'Сравнить версии: ') + title,
+      lede: 'Какие файлы у игрока добавятся, изменятся и пропадут при переходе с одной версии на другую.',
+      body: '<div class="sk" style="height:14rem"></div>',
+      foot: '<span data-cmp-counts></span><span class="push"></span><button class="btn" type="button" data-flow="close">Закрыть</button>',
+    });
+
+    let versions = [];
+    let active = '';
+    let token = 0;
+
+    const pick = () => ({
+      from: (sheet.root.querySelector('[data-diff-from]') || {}).value,
+      to: (sheet.root.querySelector('[data-diff-to]') || {}).value,
+    });
+
+    async function compare(from, to) {
+      const my = ++token;
+      const box = sheet.root.querySelector('[data-cmp]');
+      const counts = sheet.root.querySelector('[data-cmp-counts]');
+      if (counts) counts.innerHTML = '';
+      if (!box) return;
+      if (from === to) {
+        box.innerHTML = '<div class="empty"><b>Выбрана одна и та же версия</b><span>Выберите две разные — сравнивать её саму с собой нечего</span></div>';
+        return;
+      }
+      box.innerHTML = '<div class="sk" style="height:12rem"></div>';
+
+      const [files, pack] = await Promise.all([
+        window.CH2Manifest.between(from, to, { fetch: window.fetch.bind(window), base: base }),
+        mods
+          ? API.modsDiff(gameId, from, to).then(
+              (got) => ({ items: (got && (got.items || got.list)) || [] }),
+              (err) => ({ error: window.CH2Api.reason(err) })
+            )
+          : Promise.resolve(null),
+      ]);
+      /* Выбор успели сменить, пока шли ответы: прошлый ответ не рисуем,
+         иначе на экране окажется разница не тех двух версий, что выбраны. */
+      if (my !== token) return;
+
+      const fileHtml = V().launcherDiff(files, {
+        missing: 'Манифест одной из версий на сервере уже не лежит — старые версии подчищаются, и сравнить их файлы нечем.',
+      });
+      box.innerHTML = pack
+        ? '<h3 class="sub">Моды</h3>' +
+          (pack.error
+            ? '<p class="note">' + esc(pack.error) + '</p>'
+            : V().modsDiff(pack.items)) +
+          '<h3 class="sub">Файлы</h3>' + fileHtml
+        : fileHtml;
+      if (counts) counts.innerHTML = files ? V().diffCounts(files) : '';
+    }
+
+    (async () => {
+      try {
+        if (mods) {
+          const got = await API.modsList(gameId);
+          active = String((got && got.active) || '');
+          versions = window.CH2Sections.items(got).map((v) => ({
+            version: String(v.version),
+            state: String(v.version) === active ? 'active' : '',
+          }));
+        } else {
+          const got = window.CH2Sections.launcher(await API.versions(gameId));
+          active = got.active;
+          versions = got.versions;
+        }
+      } catch (err) {
+        sheet.body('<div class="empty"><b>Не прочиталось</b><span>' + esc(window.CH2Api.reason(err)) + '</span></div>');
+        return;
+      }
+
+      if (versions.length < 2) {
+        sheet.body('<div class="empty"><b>Сравнивать не с чем</b><span>Нужны хотя бы две версии, а на сервере ' + (versions.length ? 'одна' : 'ни одной') + '</span></div>');
+        return;
+      }
+
+      /* По умолчанию — то, о чём спрашивают чаще всего: что поменяется
+         у игроков, если отдать им самую свежую версию. */
+      const newest = versions[0].version;
+      const other = (versions.find((v) => v.version !== newest) || {}).version;
+      const to = versions.some((v) => v.version === a.to) ? a.to : newest;
+      let from = versions.some((v) => v.version === a.from) ? a.from : active && active !== to ? active : other;
+      if (from === to) from = (versions.find((v) => v.version !== to) || {}).version;
+
+      sheet.body(V().versionPicker(versions, from, to, 'cmp') + '<div data-cmp></div>');
+      compare(from, to);
+    })();
+
+    sheet.root.addEventListener('change', (e) => {
+      if (!e.target.matches('[data-diff-from], [data-diff-to]')) return;
+      const p = pick();
+      compare(p.from, p.to);
+    });
+
+    sheet.root.addEventListener('click', (e) => {
+      if (e.target.closest('[data-flow="close"]')) sheet.close();
+    });
+  }
+
   /* --- Что изменится в модпаке --- */
 
   /* Читают это перед тем, как отдать пересборку игрокам: «какие моды
@@ -2635,6 +2775,7 @@
     choose: () => flowCatalog(packOf(game)),
     import: () => flowImport(packOf(game)),
     'mods-diff': (a) => flowModsDiff(a),
+    compare: (a) => flowCompare(a),
     rebuild: (a) => flowRebuild(a),
     versions: (a) => flowVersions(a),
     'error-events': (a) => flowErrorEvents(a),
@@ -3488,6 +3629,18 @@
   /* ---------- Запуск ---------- */
 
   const API = window.CH2Api.makeApi();
+
+  /* Иконка, которая не загрузилась, прячется, и под ней остаётся буква.
+     Ловим на документе в фазе захвата: событие `error` у картинки не
+     всплывает, а списки перерисовываются целиком. */
+  document.addEventListener(
+    'error',
+    (e) => {
+      const img = e.target;
+      if (img && img.matches && img.matches('img[data-pick-icon]')) img.hidden = true;
+    },
+    true
+  );
 
   /* Таблицы рисуются в разделах, листах и вкладках через innerHTML.
      Подписи колонок для телефонной раскладки ставит один наблюдатель на

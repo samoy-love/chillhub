@@ -615,6 +615,23 @@
    * всё сразу», а «дай выбрать и править». Выбранное помечается и
    * атрибутом, и полосой слева — цвета одного мало.
    */
+  /**
+   * Иконка строки списка.
+   *
+   * Под картинкой всегда лежит первая буква названия. Иконки у игры
+   * может не быть вовсе, а заданная может не загрузиться — и в обоих
+   * случаях строка не должна остаться с пустой дырой слева: буква
+   * держит место и всё равно отличает строки друг от друга.
+   */
+  function pickIcon(r) {
+    const letter = String(r.iconLetter || r.title || r.id || '?').trim().charAt(0).toUpperCase() || '?';
+    return (
+      '<span class="pick-icon" aria-hidden="true"><span>' + esc(letter) + '</span>' +
+      (r.icon ? '<img src="' + esc(r.icon) + '" alt="" loading="lazy" decoding="async" data-pick-icon>' : '') +
+      '</span>'
+    );
+  }
+
   function pickList(rows, opts) {
     const list = rows || [];
     const o = opts || {};
@@ -624,15 +641,22 @@
     return (
       '<div class="pick" role="listbox">' +
       list
-        .map(
-          (r) =>
+        .map((r) => {
+          /* Иконка — только у строк, которые её объявили (пусть и пустой):
+             у списков без иконок строка остаётся прежней. */
+          const withIcon = r.icon !== undefined;
+          const text =
+            '<span class="t">' + esc(r.title) + (r.badge || '') + '</span>' +
+            (r.sub ? '<span class="s">' + esc(r.sub) + '</span>' : '');
+          return (
             '<button type="button" role="option" data-pick="' + esc(r.id) + '"' +
+            (withIcon ? ' class="has-icon"' : '') +
             ' aria-current="' + (r.id === o.selected ? 'true' : 'false') + '"' +
             ' aria-selected="' + (r.id === o.selected ? 'true' : 'false') + '">' +
-            '<span class="t">' + esc(r.title) + (r.badge || '') + '</span>' +
-            (r.sub ? '<span class="s">' + esc(r.sub) + '</span>' : '') +
+            (withIcon ? pickIcon(r) + '<span class="pick-text">' + text + '</span>' : text) +
             '</button>'
-        )
+          );
+        })
         .join('') +
       '</div>'
     );
@@ -1093,9 +1117,12 @@
 
     if (!result) {
       return (
-        '<div class="empty"><b>Сравнить не с чем</b><span>Манифест версии ' +
-        esc(o.active || '') +
-        ' на сервере уже не лежит — старые подчищаются. Список файлов покажется после активации.</span></div>'
+        '<div class="empty"><b>Сравнить не с чем</b><span>' +
+        esc(
+          o.missing ||
+            'Манифест версии ' + (o.active || '') + ' на сервере уже не лежит — старые подчищаются. Список файлов покажется после активации.'
+        ) +
+        '</span></div>'
       );
     }
 
@@ -1144,9 +1171,12 @@
    * которое сейчас на столе. Но иногда нужен другой вопрос: «что
    * набежало за три выпуска», и ответить на него без выбора нельзя.
    */
-  function versionPicker(versions, from, to) {
+  function versionPicker(versions, from, to, idPrefix) {
     const list = versions || [];
     if (list.length < 2) return '';
+    /* Свои id у выбора в листе: под листом может стоять раздел лаунчера
+       со своим выбором, и одинаковые id связали бы подпись не с тем полем. */
+    const id = idPrefix || 'v';
     const opts = (selected) =>
       list
         .map(
@@ -1159,8 +1189,8 @@
         .join('');
     return (
       '<div class="btn-row">' +
-      '<label class="inline-label" for="v-from">С</label><select id="v-from" data-diff-from>' + opts(from) + '</select>' +
-      '<label class="inline-label" for="v-to">на</label><select id="v-to" data-diff-to>' + opts(to) + '</select>' +
+      '<label class="inline-label" for="' + id + '-from">С</label><select id="' + id + '-from" data-diff-from>' + opts(from) + '</select>' +
+      '<label class="inline-label" for="' + id + '-to">на</label><select id="' + id + '-to" data-diff-to>' + opts(to) + '</select>' +
       /* Кнопки «Сравнить» здесь нет намеренно: выбор версии — это и есть
          запрос на сравнение, а кнопка рядом только откладывала его до
          второго нажатия. */
@@ -1445,6 +1475,10 @@
             '<td class="num">' + esc(String(v.packages || 0)) + '</td>' +
             '<td class="num">' + esc(f.bytes(v.bytes || 0)) + '</td>' +
             '<td class="act">' +
+            (active || !o.active
+              ? ''
+              : '<button class="btn btn--text" type="button" data-act="compare" data-args=\'{"kind":"mods","gameId":"' +
+                esc(o.gameId) + '","from":"' + esc(o.active) + '","to":"' + esc(v.version) + '"}\'>Сравнить</button>') +
             (active
               ? ''
               : '<button class="btn btn--text" type="button" data-act="mods.activate" data-args=\'{"gameId":"' +
@@ -1770,6 +1804,7 @@
     gameForm,
     newsFilter,
     pickList,
+    pickIcon,
     tabs,
     orderList,
     orderSummary,
