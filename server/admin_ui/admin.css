@@ -329,6 +329,7 @@ input[type="search"],
 input[type="number"],
 input[type="password"],
 input[type="datetime-local"],
+input[type="date"],
 select,
 textarea {
   width: 100%;
@@ -343,6 +344,10 @@ textarea {
 
 textarea { height: auto; padding: 6px 8px; line-height: 1.5; font-family: var(--mono); font-size: 12px; resize: vertical; }
 select { padding-right: 4px; }
+
+/* Дата берёт тёмную тему полей, но не их ширину: в строке отбора она
+   стоит рядом с подписью и растягиваться на всю строку ей незачем. */
+input[type="date"] { width: auto; }
 input::placeholder { color: var(--fg-3); }
 input:hover, select:hover, textarea:hover { border-color: var(--surface-4); }
 
@@ -395,7 +400,7 @@ input:hover, select:hover, textarea:hover { border-color: var(--surface-4); }
 }
 
 @media (width < 1200px) {
-  .cols--2, .cols--55, .cols--master, .cols--master3 { grid-template-columns: 1fr; }
+  .cols--2, .cols--55, .cols--master, .cols--master3 { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ---------- Выбор одного из списка ---------- */
@@ -751,41 +756,6 @@ tr.unread td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 .toast.ok { border-left-color: var(--ok); }
 .toast.bad { border-left-color: var(--bad); }
 
-/* ---------- Узкий экран ---------- */
-
-@media (width < 900px) {
-  .app { grid-template-columns: 1fr; }
-
-  .rail {
-    position: static;
-    max-height: none;
-    flex-direction: row;
-    overflow-x: auto;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-    padding: var(--s2);
-  }
-
-  .rail .group { display: none; }
-  .rail a { border-left: 0; border-bottom: 2px solid transparent; white-space: nowrap; }
-  .rail a[aria-current="page"] { border-bottom-color: var(--accent); }
-  .topbar .brand { width: auto; }
-  .search { min-width: 0; }
-  .search .lbl { display: none; }
-  .main { padding: var(--s4) var(--s3) var(--s6); }
-
-  /* Шапка не переносится и не сжимается: «Обновить всё» вызывается
-     клавишей и с узкого экрана убирается, а два индикатора состояния
-     остаются — они и есть причина, по которой шапка вообще нужна. */
-  .topbar [data-refresh] { display: none; }
-
-  /* Таблица шире экрана обязана скроллиться внутри карточки. Без этого
-     `overflow: hidden` карточки просто обрезал последние столбцы —
-     и «Принять» с «Отклонить» становились недостижимы с телефона. */
-  .card > .body.flush { overflow-x: auto; }
-  table { min-width: 620px; }
-}
-
 /* ---------- Вопрос перед необратимым действием ---------- */
 
 /* Своё окно, а не `window.confirm`: тот не умеет ни выделить объект, ни
@@ -880,7 +850,13 @@ tr.unread td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 
 @media (width <= 720px) {
   .sheet-back { padding: 0; }
+
+  /* Высота по видимой части экрана, а не по `100vh`: на телефоне
+     `vh` считает и место под адресной строкой, и кнопка подвала
+     уезжала под неё. */
   .sheet { max-height: 100vh; height: 100vh; border: 0; border-radius: 0; }
+  .sheet { max-height: 100dvh; height: 100dvh; }
+  .sheet > footer { padding-bottom: max(var(--s3), env(safe-area-inset-bottom)); }
 }
 
 /* ---------- Путь в галерее ---------- */
@@ -1022,5 +998,232 @@ tr.best > td { background: var(--accent-wash); }
 .check .help { grid-column: 2; margin: 0; }
 
 /* Поле даты в тёмной теме иначе отдаёт системный белый прямоугольник */
-input[type="datetime-local"] { color-scheme: inherit; }
+input[type="datetime-local"], input[type="date"] { color-scheme: inherit; }
 
+/* Правила узких экранов стоят последними: общие правила ниже них в
+   файле перебивали бы их при равной специфичности. */
+
+/* ---------- Узкий экран ---------- */
+
+@media (width < 900px) {
+  /* КОЛОНКА НЕ РАСТЯГИВАЕТСЯ ПОД СОДЕРЖИМОЕ.
+     У `1fr` нижняя граница — самый широкий неразрывный кусок внутри, и
+     шапка с поиском и двумя индикаторами раздувала всю страницу до
+     шестисот пикселей: на телефоне каждый раздел листался вбок. */
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .rail {
+    position: static;
+    max-height: none;
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding: var(--s2);
+    scrollbar-width: none;
+  }
+
+  .rail .group { display: none; }
+  .rail a { border-left: 0; border-bottom: 2px solid transparent; white-space: nowrap; flex: 0 0 auto; }
+  .rail a[aria-current="page"] { border-bottom-color: var(--accent); }
+  .topbar .brand { width: auto; }
+  .search { min-width: 0; }
+  .search .lbl { display: none; }
+  .main { padding: var(--s4) var(--s3) var(--s6); }
+
+  /* Шапка не переносится и не сжимается: «Обновить всё» вызывается
+     клавишей и с узкого экрана убирается, а два индикатора состояния
+     остаются — они и есть причина, по которой шапка вообще нужна. */
+  .topbar [data-refresh] { display: none; }
+
+  /* Таблица шире экрана обязана скроллиться внутри карточки. Без этого
+     `overflow: hidden` карточки просто обрезал последние столбцы —
+     и «Принять» с «Отклонить» становились недостижимы с телефона. */
+  .card > .body.flush { overflow-x: auto; }
+  table { min-width: 620px; }
+
+  /* Прилипшая колонка имеет смысл только рядом с соседней. В одну
+     колонку она наезжает на то, что листают под ней. */
+  .sticky { position: static; }
+
+  /* Вкладок у игры четыре, и в ширину телефона они не влезают: ряд
+     листается вбок, а не переносится лесенкой. */
+  .tabs { overflow-x: auto; scrollbar-width: none; }
+  .tabs > button { white-space: nowrap; flex: 0 0 auto; }
+}
+
+/* ---------- Телефон ---------- */
+
+@media (width <= 600px) {
+  /* ШАПКА В ДВЕ СТРОКИ.
+     Сверху — значок, поиск и выход, снизу — два индикатора. В одну
+     строку это не помещается никак, а прятать индикаторы нельзя: ради
+     них на телефон панель и открывают — узнать, ждёт ли что-то решения. */
+  .topbar {
+    flex-wrap: wrap;
+    row-gap: var(--s2);
+    padding-block: var(--s2);
+  }
+
+  .topbar .brand span { display: none; }
+  .topbar .spacer { display: none; }
+  .search { flex: 1 1 40%; justify-content: center; }
+  .search kbd { display: none; }
+  .topbar [data-logout] { margin-left: auto; }
+
+  .topbar [data-waiting],
+  .topbar [data-maint] {
+    order: 1;
+
+    /* Треть ширины — чтобы оба ушли на вторую строку, а не сжались до
+       обрывков рядом с кнопкой выхода. */
+    flex: 1 1 34%;
+    height: 24px;
+    justify-content: center;
+  }
+
+  .main { padding: var(--s3) var(--s3) var(--s6); }
+
+  /* Кнопки раздела уходят под заголовок и занимают строку целиком: у
+     правого края они вылезали за экран или сжимались до обрезков. */
+  .page-head { flex-direction: column; align-items: stretch; gap: var(--s2); }
+  .page-head .actions { margin-left: 0; flex-wrap: wrap; }
+  .page-head .actions .btn { flex: 1 1 auto; }
+
+  /* Длинное имя сборки, путь или хеш без пробелов не должны раздвигать
+     карточку: переносятся где угодно, а не уезжают за край. */
+  .main :where(p, li, h1, h2, .note, .help, .empty span, .handoff .v, code) { overflow-wrap: anywhere; }
+
+  .card > header { flex-wrap: wrap; }
+
+  .handoff { gap: var(--s2) var(--s3); padding: var(--s3); }
+  .handoff .arrow { display: none; }
+  .handoff .push { flex-basis: 100%; height: 0; }
+
+  /* ОТБОР — ПАРАМИ «ПОДПИСЬ, ПОЛЕ».
+     Перенос строки в ряду рвал пары как придётся: «Тип» оставался в
+     строке поиска, а его список уезжал на следующую. Сетка из двух
+     колонок держит подпись рядом со своим полем, а всё без подписи —
+     поиск, галочка, переключатели — занимает строку целиком. */
+  .main .filters {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: var(--s2);
+  }
+
+  .main .filters > :not(.inline-label, .inline-label + *) { grid-column: 1 / -1; }
+  .main .filters input[type="search"] { min-width: 0; }
+  .main .filters :is(input:not([type="checkbox"]), select) { width: 100%; }
+
+  /* СТРОКА ТАБЛИЦЫ — КАРТОЧКОЙ.
+     Таблица в шесть колонок на телефоне листалась вбок внутри карточки и
+     резала текст обращения в столбик по два слова. Здесь каждая строка —
+     блок: подпись колонки слева, значение справа, кнопки строки внизу во
+     всю ширину. Подписи проставляет table-labels.js из заголовка, поэтому
+     таблица без него остаётся обычной и листается, как раньше. */
+  table.labelled { min-width: 0; }
+  table.labelled thead { display: none; }
+  table.labelled, table.labelled tbody { display: block; }
+
+  table.labelled tr {
+    display: grid;
+    gap: 2px;
+    padding: var(--s2) var(--s3);
+    border-bottom: 1px solid var(--line);
+  }
+
+  table.labelled tbody tr:last-child { border-bottom: 0; }
+
+  /* Значение идёт обычным потоком, а подпись стоит слева отдельно: в
+     ячейке бывает несколько кусков — контакт и кнопка журналов, — и
+     сетка раскидала бы их по колонкам, под подпись. */
+  table.labelled td {
+    display: block;
+    position: relative;
+    min-height: 22px;
+    height: auto;
+    padding: 2px 0 2px min(40%, 9rem);
+    border: 0;
+    text-align: left;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  table.labelled td::before {
+    content: attr(data-label);
+    position: absolute;
+    left: 0;
+    top: 4px;
+    width: calc(min(40%, 9rem) - var(--s2));
+    font: 500 11px/1.4 var(--sans);
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--fg-3);
+  }
+
+  /* Ячейка без подписи — кнопки строки: во всю ширину. */
+  table.labelled td:not([data-label]) { padding-left: 0; }
+  table.labelled td:not([data-label])::before { content: none; }
+  table.labelled td.act { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: var(--s1); padding-top: var(--s1); }
+  table.labelled td.act:empty { display: none; }
+  table.labelled tbody tr:hover td { background: none; }
+  table.labelled tr.unread { box-shadow: inset 2px 0 0 var(--accent); }
+  table.labelled tr.unread td:first-child { box-shadow: none; }
+  table.labelled tr.best { background: var(--accent-wash); }
+  table.labelled tr.best > td { background: none; }
+
+  .attn { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .attn-item .v { font-size: 20px; }
+
+  .pick { max-height: 40vh; }
+
+  .log-row { flex-wrap: wrap; }
+  .log-row .m { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; }
+
+  .chart { padding-left: 2.75rem; }
+  .chart-y { width: 2.25rem; }
+
+  .palette { padding-top: var(--s3); }
+  .palette .box { width: calc(100vw - var(--s3) * 2); }
+  .palette ul { max-height: 60vh; }
+
+  /* Уведомление во всю ширину снизу: у правого края шириной 380 px оно
+     уходило наполовину за экран. */
+  .toasts { left: var(--s3); right: var(--s3); bottom: var(--s3); justify-items: stretch; }
+  .toast { max-width: none; }
+
+  .modal .btn-row .btn { flex: 1 1 auto; }
+  .sheet > header, .sheet > footer { padding: var(--s3); }
+  .sheet-body { padding: var(--s3); }
+  .sheet > footer { flex-wrap: wrap; }
+  .sheet > footer .btn { flex: 1 1 auto; }
+}
+
+/* ---------- Палец вместо мыши ---------- */
+
+/* Строка в 28 px — плотность для мыши. Пальцем в неё не попасть, а
+   поле с кеглем мельче 16 px iOS при фокусе увеличивает вместе со всей
+   страницей, и после ввода её приходится отдалять руками. */
+@media (pointer: coarse) {
+  .btn, .seg { height: 36px; }
+  .btn--icon { width: 36px; }
+  .rail a, .tabs > button { padding-block: 10px; }
+  td.act .btn { height: 32px; }
+
+  input[type="text"],
+  input[type="search"],
+  input[type="number"],
+  input[type="password"],
+  input[type="datetime-local"],
+  input[type="date"],
+  select {
+    height: 38px;
+    font-size: 16px;
+  }
+
+  textarea { font-size: 16px; }
+  .check input { width: 18px; height: 18px; }
+}

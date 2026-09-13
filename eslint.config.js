@@ -212,6 +212,7 @@ export default [
       'server/admin_ui/upload-bench.js',
       'server/admin_ui/ui-throttle.js',
       'server/admin_ui/log-scroll.js',
+      'server/admin_ui/table-labels.js',
       'server/admin_ui/chunk-upload.js',
       'server/admin_ui/rate-estimator.js',
       'server/admin_ui/upload-tuning.js',

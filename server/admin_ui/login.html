@@ -104,6 +104,13 @@
      первой же ошибке, ровно в тот момент, когда её читают. */
   #msg { min-height: 18px; color: var(--fg-2); }
   #msg[data-bad] { color: var(--bad); }
+
+  /* Пальцем по полю в 33 px не попасть, а кегль мельче 16 px iOS при
+     фокусе увеличивает вместе со всей страницей. */
+  @media (pointer: coarse) {
+    input { height: 40px; font-size: 16px; }
+    button { height: 42px; }
+  }
 </style>
 </head>
 <body>
