@@ -752,3 +752,35 @@ test('график называет себя читалке', () => {
   const html = V.chart([{ title: 'x', color: 'a', values: [1, 2] }], { label: 'Запуски за 30 дней' });
   assert.match(html, /aria-label="Запуски за 30 дней"/);
 });
+
+/* ---------- Заливка игры и модпака ---------- */
+
+test('модпаку хватает безопасного имени, игре нужны три числа', () => {
+  assert.strictEqual(V.uploadVersionProblem({ kind: 'mods', version: 'Team-Pack-1.1.0' }), '');
+  assert.match(V.uploadVersionProblem({ kind: 'mods', version: 'пак 1' }), /только латиница/);
+  assert.match(V.uploadVersionProblem({ kind: 'mods', version: '' }), /Без номера/);
+  assert.match(V.uploadVersionProblem({ gameId: 'repo', version: 'Team-Pack-1.1.0' }), /из трёх чисел/);
+});
+
+test('поверх того, что игроки получают сейчас, не заливают', () => {
+  // Файлы подменились бы под теми, кто в эту минуту качает
+  assert.match(V.uploadVersionProblem({ gameId: 'repo', version: '1.0.0', current: '1.0.0' }), /получают сейчас/);
+  assert.match(V.uploadVersionProblem({ kind: 'mods', version: 'P-1.0.0', current: 'P-1.0.0' }), /получают сейчас/);
+  assert.strictEqual(V.uploadVersionProblem({ gameId: 'repo', version: '1.0.1', current: '1.0.0' }), '');
+});
+
+test('после заливки игры отдать игрокам можно, у лаунчера — нет', () => {
+  assert.deepStrictEqual(V.uploadButtons({ phase: 'done', activatable: true }).map((x) => x.act), ['activate', 'close']);
+  assert.deepStrictEqual(V.uploadButtons({ phase: 'done' }).map((x) => x.act), ['close']);
+});
+
+test('у модпака не спрашивают цель, но предупреждают о замене', () => {
+  const html = V.uploadTarget({ kind: 'mods', version: 'P-1.0.0', current: 'P-1.1.0', versions: ['P-1.0.0', 'P-1.1.0'] }, [
+    { gameId: 'repo', title: 'R.E.P.O.' },
+  ]);
+  assert.ok(!/name="target"/.test(html), 'модпаку предлагают выбрать лаунчер');
+  assert.match(html, /Сейчас у игроков P-1\.1\.0/);
+  assert.match(html, /уже залита/);
+  assert.match(V.uploadCard({ kind: 'mods' }), /Архив модпака/);
+  assert.match(V.uploadCard({ gameId: 'repo' }), /всеми файлами игры/);
+});

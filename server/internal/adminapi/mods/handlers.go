@@ -374,6 +374,9 @@ func (h *Handlers) rebuildRequest(entry games.Entry, cfg *games.ModsConfig, vers
 				"версия %s собрана из профиля r2modman до того, как состав стал записываться, "+
 					"и восстановить его нечем — загрузите профиль заново через «Импорт»", version)
 		}
+	case SourceUpload:
+		return Request{}, fmt.Errorf(
+			"версия %s залита готовым архивом: состава по пакетам у неё нет, пересобирать нечего — залейте архив заново", version)
 	default:
 		return Request{}, fmt.Errorf("неизвестный источник версии %s: %q", version, src.Kind)
 	}
@@ -579,6 +582,11 @@ func (h *Handlers) List(w http.ResponseWriter, r *http.Request) {
 			info.Missing = src.Missing
 			info.Collisions = src.Collisions
 			info.Rebuildable = src.Kind == SourceThunderstore || len(src.Roots) > 0
+		} else {
+			// No build record means the version came in as a finished archive
+			// (upload kind=mods): the builder writes a record for everything it
+			// publishes itself.
+			info.Kind = string(SourceUpload)
 		}
 		items = append(items, info)
 	}

@@ -462,6 +462,15 @@
               )}
 
               ${card(
+                'Готовый архив',
+                `<div class="stack stack--tight">
+                   <p class="dim">Когда набор собран руками и на Thunderstore его нет: ZIP с файлами, разложенными так, как они лежат в папке игры.</p>
+                   <p class="faint">Версия встанет рядом с собранными и так же ждёт, пока её отдадут игрокам.</p>
+                   <div class="btn-row"><button class="btn" type="button" data-act="upload-mods">Залить архив</button></div>
+                 </div>`
+              )}
+
+              ${card(
                 'Переезд со старой сборки',
                 `<div class="stack stack--tight">
                    <p class="dim">В профиле r2modman перечислены все моды с точными версиями, поэтому набор, который у игроков уже стоит, публикуется как есть, а не собирается заново на глаз.</p>
@@ -867,20 +876,33 @@
   function flowUpload(meta) {
     const U = window.CH2Upload;
     const L = D.launcher;
+    const mods = meta.kind === 'mods';
 
     /* Что и какой версией грузим — спрашиваем до выбора файла: сервер
        без игры и номера отвечает отказом, и узнавать это, выбрав архив
-       на полтора гигабайта, значит потерять время дважды. */
+       на полтора гигабайта, значит потерять время дважды.
+
+       Открытый из карточки игры лист уже знает её версии: номер
+       предлагается следующим за новейшей, а не «1.0.1» наугад. Модпаку
+       номер не угадываем — у него имя пакета, а не три числа. */
     let st = {
       phase: 'idle',
+      kind: mods ? 'mods' : '',
       gameId: meta.gameId || '',
-      version: U.nextVersion(meta.gameId ? '' : L.active || L.newest),
-      current: meta.gameId ? '' : L.active,
+      version: mods ? '' : U.nextVersion(meta.gameId ? meta.newest || '' : L.active || L.newest),
+      current: meta.gameId ? meta.current || '' : L.active,
+      versions: meta.versions || [],
     };
 
     const sheet = openSheet({
-      title: 'Загрузка сборки',
-      lede: 'Файл заливается кусками и переживает обрыв связи. Игрокам он сам не уйдёт.',
+      title: mods
+        ? 'Модпак архивом: ' + (meta.title || meta.gameId)
+        : meta.gameId && meta.title
+          ? 'Новая версия: ' + meta.title
+          : 'Загрузка сборки',
+      lede: mods
+        ? 'Готовый набор модов без Thunderstore. Заливается кусками и переживает обрыв связи. Игрокам он сам не уйдёт.'
+        : 'Файл заливается кусками и переживает обрыв связи. Игрокам он сам не уйдёт.',
       body: V().uploadTarget(st, D.games, U) + V().uploadCard(st),
       foot: footButtons(V().uploadButtons(st, U)),
     });
@@ -891,6 +913,23 @@
 
     let ctrl = null;
     let uploadId = '';
+
+    /* Что уже лежит у модпака, спрашиваем у сервера: список сборок в
+       разделе знает только новейшую, а заливка поверх активной опасна. */
+    if (mods && meta.gameId) {
+      API.modsList(meta.gameId)
+        .then((got) => {
+          const items = (got && got.items) || [];
+          st = Object.assign({}, st, {
+            current: String((got && got.active) || ''),
+            versions: items.map((v) => String(v.version)),
+          });
+          if (st.phase === 'idle') draw(true);
+        })
+        .catch(() => {
+          /* Не ответил — заливать это не мешает, просто без подсказки. */
+        });
+    }
 
     /* Скорость считает тот же оценщик, что и в панели 1.0. Окно и
        минимальная ширина взяты оттуда же и не с потолка: в первые
@@ -944,7 +983,7 @@
           {
             /* Лаунчер для сервера — такая же «игра» с зарезервированным
                идентификатором, поэтому вид один, а различает их gameId. */
-            kind: st.gameId ? 'game' : 'launcher',
+            kind: mods ? 'mods' : st.gameId ? 'game' : 'launcher',
             gameId: st.gameId || window.CH2Api.LAUNCHER,
             version: st.version.trim(),
             chunkSize: params.chunkSize,
@@ -991,10 +1030,13 @@
         });
 
         st = done.ok
-          ? Object.assign({}, st, { phase: 'done' })
+          ? Object.assign({}, st, { phase: 'done', activatable: Boolean(st.gameId) })
           : Object.assign({}, st, { phase: 'failed', message: done.message });
         draw(true);
-        if (done.ok) await refresh(['launcher', 'overview', 'disk'], false);
+        if (done.ok) {
+          await refresh(uploadStale(), false);
+          if (meta.onDone) meta.onDone();
+        }
       } catch (e) {
         st = Object.assign({}, st, { phase: 'failed', message: (e && e.message) || 'сбой' });
         draw(true);
@@ -1005,23 +1047,36 @@
       if (input.files && input.files[0]) start(input.files[0]);
     });
 
+    /* Какие разделы после заливки устарели — зависит от того, что лили. */
+    const uploadStale = () =>
+      mods ? ['packs', 'overview', 'disk'] : st.gameId ? ['games', 'overview', 'disk'] : ['launcher', 'overview', 'disk'];
+
     sheet.root.addEventListener('change', (e) => {
       if (!e.target.matches('[name="target"], [name="version"]')) return;
+      if (mods) {
+        st = Object.assign({}, st, { version: e.target.value });
+        draw(true);
+        return;
+      }
       const target = sheet.root.querySelector('[name="target"]').value;
       const version = sheet.root.querySelector('[name="version"]').value;
       const switched = (target === 'launcher' ? '' : target) !== st.gameId;
+      /* Что у игроков, известно про лаунчер и про игру, из карточки
+         которой открыт лист. Про остальные — нет, и выдумывать не будем. */
+      const own = target !== 'launcher' && target === meta.gameId;
       st = Object.assign({}, st, {
         gameId: target === 'launcher' ? '' : target,
         version: version,
-        current: target === 'launcher' ? L.active : '',
+        current: target === 'launcher' ? L.active : own ? meta.current || '' : '',
+        versions: own ? meta.versions || [] : [],
       });
       /* Сменили цель — номер предлагаем заново: версия лаунчера и
          версия игры между собой не связаны никак. */
-      if (switched) st.version = U.nextVersion(st.gameId ? '' : L.active || L.newest);
+      if (switched) st.version = U.nextVersion(st.gameId ? (own ? meta.newest || '' : '') : L.active || L.newest);
       draw(true);
     });
 
-    sheet.root.addEventListener('click', (e) => {
+    sheet.root.addEventListener('click', async (e) => {
       const b = e.target.closest('[data-flow]');
       if (!b) return;
       const act = b.dataset.flow;
@@ -1031,6 +1086,27 @@
         if (uploadId) window.CH2Upload.abort(API, uploadId);
         st = Object.assign({}, st, { phase: 'aborted' });
         draw(true);
+      }
+      if (act === 'activate') {
+        const version = st.version.trim();
+        const agreed = await ask({
+          title: 'Отдать игрокам ' + (mods ? 'модпак ' : 'версию ') + version + '?',
+          body: 'Лаунчер начнёт качать её всем, кто запустит игру, и скачает только разницу. Прежняя останется на сервере — вернуться к ней можно тем же способом.',
+          ok: 'Отдать игрокам',
+          cancel: 'Отмена',
+        });
+        if (!agreed) return;
+        try {
+          if (mods) await API.modsActivate(st.gameId, version);
+          else await API.activate(st.gameId, version);
+          toast('Игроки получают ' + version, 'ok');
+          st = Object.assign({}, st, { activatable: false, current: version });
+          draw(true);
+          await refresh(uploadStale(), false);
+          if (meta.onDone) meta.onDone();
+        } catch (err) {
+          toast('Не вышло: ' + window.CH2Api.reason(err), 'bad');
+        }
       }
       if (act === 'close') {
         sheet.onClose = null;
@@ -1779,7 +1855,8 @@
       return (
         '<span class="faint">Старее активной сервер оставляет две — на случай отката</span>' +
         '<span class="push"></span>' +
-        '<button class="btn" type="button" data-game-do="prune">Убрать старые</button>'
+        '<button class="btn" type="button" data-game-do="prune">Убрать старые</button>' +
+        '<button class="btn btn--accent" type="button" data-game-do="upload">Залить версию</button>'
       );
     }
     return '';
@@ -2549,6 +2626,10 @@
   /** Дела, которые панель ведёт сама. Записи в реестре действий — отдельно. */
   const FLOWS = {
     upload: () => flowUpload({ kind: 'launcher' }),
+    'upload-mods': () => {
+      const p = packOf(game);
+      if (p) flowUpload({ kind: 'mods', gameId: p.gameId, title: p.title });
+    },
     build: () => flowBuild(packOf(game)),
     resolve: () => flowResolve(packOf(game)),
     choose: () => flowCatalog(packOf(game)),
@@ -2797,6 +2878,29 @@
       gameEdit.adding = false;
       gameEdit.item = null;
       route();
+      return;
+    }
+
+    /* Новая версия заливается отсюда же, где её потом отдают игрокам:
+       искать заливку игры в разделе лаунчера никто не догадается. */
+    if (kind === 'upload') {
+      /* Кнопка видна раньше, чем приходит список версий. Без него лист не
+         знает, что у игроков, и пропустил бы заливку поверх активной. */
+      if (gameBuilds === null) await loadGameBuilds();
+      const builds = gameBuilds || { versions: [], active: '', newest: '' };
+      flowUpload({
+        kind: 'game',
+        gameId: gameEdit.gameId,
+        title: (gameEdit.item && gameEdit.item.title) || gameEdit.gameId,
+        current: builds.active,
+        newest: builds.newest,
+        versions: builds.versions.map((v) => v.version),
+        onDone: async () => {
+          gameBuilds = null;
+          await loadGameBuilds();
+          drawGameDetail();
+        },
+      });
       return;
     }
 
