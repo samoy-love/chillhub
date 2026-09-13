@@ -118,8 +118,16 @@
     if (phase === 'idle') {
       /* Пока версия не годится, файл выбирать незачем: сервер откажет,
          и полтора гигабайта уйдут в пустоту. */
-      const U = M('CH2Upload', upload);
-      return [{ act: 'pick', title: 'Выбрать файл', accent: true, off: Boolean(U.versionProblem(s.version)) }];
+      return [{ act: 'pick', title: 'Выбрать файл', accent: true, off: Boolean(uploadVersionProblem(s, upload)) }];
+    }
+    /* Игру и модпак можно отдать игрокам прямо отсюда — отдельным
+       нажатием и с вопросом. Лаунчеру эта кнопка не положена: перед его
+       выкаткой смотрят разницу сборок в разделе. */
+    if (phase === 'done' && s.activatable) {
+      return [
+        { act: 'activate', title: 'Отдать игрокам', accent: true },
+        { act: 'close', title: 'Закрыть', accent: false },
+      ];
     }
     if (phase === 'done') return [{ act: 'close', title: 'Закрыть', accent: true }];
     if (phase === 'failed' || phase === 'aborted') {
@@ -139,11 +147,56 @@
    * гигабайта, — потерянное время. Номер предлагается следующим по
    * порядку: девять выпусков из десяти — очередной патч.
    */
-  function uploadTarget(st, games, upload) {
+  /**
+   * Что не так с номером, или пустая строка.
+   *
+   * Модпаку трёх чисел не нужно: собранные с Thunderstore называются
+   * «Автор-Пакет-1.2.3», и готовый архив обязан уметь назваться так же.
+   * Остальные правила — безопасное имя папки — общие.
+   *
+   * Номер, который игроки получают прямо сейчас, не годится никому:
+   * файлы подменились бы под теми, кто в эту минуту качает.
+   */
+  function uploadVersionProblem(st, upload) {
     const s = st || {};
     const U = M('CH2Upload', upload);
+    const v = String(s.version === undefined || s.version === null ? '' : s.version).trim();
+    let problem = U.versionProblem(v);
+    if (s.kind === 'mods' && /^[A-Za-z0-9._-]+$/.test(v) && v !== '.' && v !== '..') problem = '';
+    if (!problem && s.current && v === String(s.current)) {
+      problem = 'Версию ' + v + ' игроки получают сейчас — новую залейте под другим номером';
+    }
+    return problem;
+  }
+
+  /** Подсказка под номером: что у игроков и не заменит ли заливка старое. */
+  function uploadVersionHelp(s) {
+    const v = String(s.version || '').trim();
+    const replaced = v && (s.versions || []).indexOf(v) >= 0 && v !== String(s.current || '');
+    return (
+      (s.current ? '<span class="help">Сейчас у игроков ' + esc(s.current) + '</span>' : '') +
+      (replaced ? '<span class="help">Такая версия уже залита — новый архив её заменит</span>' : '')
+    );
+  }
+
+  function uploadTarget(st, games, upload) {
+    const s = st || {};
     const list = games || [];
-    const problem = U.versionProblem(s.version);
+    const problem = uploadVersionProblem(s, upload);
+
+    /* Модпак грузится в свою игру и только в неё: выбирать цель здесь
+       незачем, а список «лаунчер или игра» предлагал бы то, чего этот
+       лист не делает. */
+    if (s.kind === 'mods') {
+      return (
+        '<div class="field"><label for="u-version">Версия модпака</label>' +
+        '<input id="u-version" name="version" type="text" value="' + esc(s.version) + '" placeholder="Team-Pack-1.0.0">' +
+        uploadVersionHelp(s) +
+        '<span class="help">Латиница, цифры, точка, дефис и подчёркивание — так же, как у собранных с Thunderstore</span>' +
+        (problem ? '<span class="help help--bad">' + esc(problem) + '</span>' : '') +
+        '</div>'
+      );
+    }
 
     return (
       '<div class="cols cols--2">' +
@@ -163,7 +216,7 @@
 
       '<div class="field"><label for="u-version">Версия</label>' +
       '<input id="u-version" name="version" type="text" value="' + esc(s.version) + '" placeholder="1.6.47">' +
-      (s.current ? '<span class="help">Сейчас у игроков ' + esc(s.current) + '</span>' : '') +
+      uploadVersionHelp(s) +
       (problem ? '<span class="help help--bad">' + esc(problem) + '</span>' : '') +
       '</div>' +
       '</div>'
@@ -180,6 +233,12 @@
   function uploadCard(st) {
     const s = st || {};
     const f = F();
+    const what =
+      s.kind === 'mods'
+        ? 'Архив модпака: файлы лежат так, как их положить в папку игры'
+        : s.gameId
+          ? 'Архив со всеми файлами игры'
+          : 'Архив сборки лаунчера';
     const status = uploadStatus(s);
     const pct = Math.round(Number(s.progress || 0) * 100);
     const tone = status.tone === 'bad' ? 'bad' : status.tone === 'warn' ? 'warn' : 'ok';
@@ -200,7 +259,7 @@
             '</span></div>'
           : '') +
         '</div>'
-      : '<div class="empty"><b>Файл ещё не выбран</b><span>Архив сборки лаунчера</span></div>';
+      : '<div class="empty"><b>Файл ещё не выбран</b><span>' + esc(what) + '</span></div>';
 
     const bar =
       s.phase && s.phase !== 'idle'
@@ -1669,6 +1728,7 @@
     uploadTarget,
     uploadButtons,
     uploadCard,
+    uploadVersionProblem,
     logRow,
     buildLog,
     buildOutcome,

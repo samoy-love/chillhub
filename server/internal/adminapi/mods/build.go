@@ -51,6 +51,11 @@ const (
 	// It exists for the migration off the current "game and mods in one ZIP"
 	// builds, whose mods.yml names every installed mod and its exact version.
 	SourceProfile SourceKind = "r2modman"
+
+	// SourceUpload is a ready-made archive the operator published through the
+	// chunked upload with kind=mods. There is no build record for it: the
+	// server never saw a package list, only files.
+	SourceUpload SourceKind = "upload"
 )
 
 // Request describes one build.
@@ -772,15 +777,29 @@ type DiffEntry struct {
 // reads before making a rebuild live: "which mods changed" is the question,
 // and a list of 151 full names before and after does not answer it.
 func (b *Builder) Diff(gid, fromVersion, toVersion string) ([]DiffEntry, error) {
-	from, err := b.ReadSource(gid, fromVersion)
+	from, err := b.readSourceForDiff(gid, fromVersion)
 	if err != nil {
-		return nil, fmt.Errorf("mods: состав версии %s недоступен: %w", fromVersion, err)
+		return nil, err
 	}
-	to, err := b.ReadSource(gid, toVersion)
+	to, err := b.readSourceForDiff(gid, toVersion)
 	if err != nil {
-		return nil, fmt.Errorf("mods: состав версии %s недоступен: %w", toVersion, err)
+		return nil, err
 	}
 	return diffTrees(from.Tree, to.Tree), nil
+}
+
+// readSourceForDiff explains a missing record in the operator's terms: a
+// version without one was uploaded as a finished archive, and nobody knows
+// which packages are inside it.
+func (b *Builder) readSourceForDiff(gid, version string) (*Source, error) {
+	src, err := b.ReadSource(gid, version)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("mods: версия %s залита готовым архивом, её состав по пакетам неизвестен", version)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("mods: состав версии %s недоступен: %w", version, err)
+	}
+	return src, nil
 }
 
 // diffTrees compares two lists of "Author-Mod-1.2.3" names by package identity.

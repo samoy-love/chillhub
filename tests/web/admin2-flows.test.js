@@ -1288,3 +1288,134 @@ test('акцент на экране один: подсвечено то, что
   const accented = [...window.document.querySelectorAll('[data-act="build"].btn--accent')];
   assert.ok(accented.length <= 1, 'акцентных кнопок сборки больше одной: ' + accented.length);
 });
+
+/* ---------- Заливка из карточки игры и из сборок модов ---------- */
+
+/* Подсовывает файл вместо диалога выбора: в jsdom его не открыть. Куски
+   принимает подменённый PUT, а не сеть. */
+function fakePicker(window, file) {
+  const sent = [];
+  window.uploadChunkWithRetries = async (id, i) => {
+    sent.push(i);
+    return { ok: true };
+  };
+  window.HTMLInputElement.prototype.click = function () {
+    if (this.type !== 'file') return;
+    Object.defineProperty(this, 'files', { value: [file], configurable: true });
+    this.dispatchEvent(new window.Event('change'));
+  };
+  return sent;
+}
+
+const processDone = () => ({
+  ok: true,
+  status: 200,
+  text: async () => JSON.stringify({ type: 'start' }) + '\n' + JSON.stringify({ type: 'done' }) + '\n',
+});
+
+test('версия игры заливается из её карточки и отдаётся игрокам отдельным нажатием', async (t) => {
+  const { window, calls } = await boot({
+    list: {
+      items: [
+        { version: '1.4.1', createdAt: '2026-08-20T12:00:00Z', files: 3, bytes: 500 },
+        { version: '1.4.2', createdAt: '2026-08-21T12:00:00Z', files: 3, bytes: 700 },
+      ],
+      latest: '1.4.2',
+    },
+    'upload/init': { uploadId: 'g1', chunkSize: 4, totalChunks: 2 },
+    'upload/status': { received: [] },
+    'upload/process': processDone,
+  });
+  t.after(() => window.close());
+
+  await openScreen(window, '#games');
+  await openTab(window, 'versions');
+  const btn = await until(() => window.document.querySelector('[data-game-do="upload"]'));
+  assert.ok(btn, 'во вкладке версий нечем залить новую');
+  btn.click();
+
+  const sheet = await until(() => window.document.querySelector('.sheet'));
+  assert.ok(sheet, 'лист заливки не открылся');
+  assert.strictEqual(sheet.querySelector('[name="target"]').value, 'repo', 'лист не знает, чью версию льём');
+  assert.strictEqual(sheet.querySelector('[name="version"]').value, '1.4.3', 'номер не следующий за новейшей');
+
+  fakePicker(window, { name: 'repo-1.4.3.zip', size: 8, slice: () => 'кусок' });
+  sheet.querySelector('[data-flow="pick"]').click();
+
+  const init = await until(() => calls.find((c) => c.url.includes('upload/init')));
+  assert.ok(init, 'заливка не началась');
+  assert.strictEqual(init.body.kind, 'game');
+  assert.strictEqual(init.body.gameId, 'repo');
+  assert.strictEqual(init.body.version, '1.4.3');
+
+  const activate = await until(() => window.document.querySelector('.sheet [data-flow="activate"]'));
+  assert.ok(activate, 'после заливки нечем отдать версию игрокам');
+  assert.ok(!calls.some((c) => c.url.startsWith('/admin/api/activate')), 'версия ушла игрокам без спроса');
+
+  activate.click();
+  const modal = await until(() => window.document.querySelector('.modal'));
+  assert.match(text(modal), /1\.4\.3/);
+  modal.querySelector('[data-yes]').click();
+
+  const sent = await until(() => calls.find((c) => c.url.startsWith('/admin/api/activate')));
+  assert.ok(sent, 'активация не ушла на сервер');
+  assert.match(sent.url, /gameId=repo/);
+  assert.match(sent.url, /version=1\.4\.3/);
+  await settle();
+});
+
+test('поверх версии у игроков файл выбрать не дают', async (t) => {
+  const { window } = await boot({ list: { items: [{ version: '1.4.2' }], latest: '1.4.2' } });
+  t.after(() => window.close());
+
+  await openScreen(window, '#games');
+  await openTab(window, 'versions');
+  (await until(() => window.document.querySelector('[data-game-do="upload"]'))).click();
+  const sheet = await until(() => window.document.querySelector('.sheet'));
+
+  const field = sheet.querySelector('[name="version"]');
+  field.value = '1.4.2';
+  field.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  await until(() => sheet.querySelector('[data-flow="pick"]').disabled);
+  assert.ok(sheet.querySelector('[data-flow="pick"]').disabled, 'предложили залить поверх активной');
+  assert.match(text(sheet), /получают сейчас/);
+});
+
+test('готовый модпак заливается в сборки модов и ждёт решения', async (t) => {
+  const { window, calls } = await boot({
+    'upload/init': { uploadId: 'm1', chunkSize: 4, totalChunks: 1 },
+    'upload/status': { received: [] },
+    'upload/process': processDone,
+  });
+  t.after(() => window.close());
+
+  const sheet = await open(window, '#packs', 'upload-mods');
+  assert.ok(!sheet.querySelector('[name="target"]'), 'модпаку предлагают выбрать лаунчер');
+  await until(() => /Сейчас у игроков 1\.9\.8/.test(text(sheet)));
+
+  const field = sheet.querySelector('[name="version"]');
+  field.value = 'Team-Pack-2.0.0';
+  field.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await until(() => !sheet.querySelector('[data-flow="pick"]').disabled);
+
+  fakePicker(window, { name: 'pack.zip', size: 4, slice: () => 'кусок' });
+  sheet.querySelector('[data-flow="pick"]').click();
+
+  const init = await until(() => calls.find((c) => c.url.includes('upload/init')));
+  assert.ok(init, 'заливка модпака не началась');
+  assert.strictEqual(init.body.kind, 'mods');
+  assert.strictEqual(init.body.gameId, 'repo');
+  assert.strictEqual(init.body.version, 'Team-Pack-2.0.0');
+
+  const activate = await until(() => window.document.querySelector('.sheet [data-flow="activate"]'));
+  assert.ok(activate, 'после заливки модпака нечем отдать его игрокам');
+  assert.ok(!calls.some((c) => c.url.includes('mods/activate')), 'модпак ушёл игрокам без спроса');
+
+  activate.click();
+  (await until(() => window.document.querySelector('.modal [data-yes]'))).click();
+  const sent = await until(() => calls.find((c) => c.url.includes('mods/activate')));
+  assert.ok(sent, 'активация модпака не ушла');
+  assert.match(sent.url, /version=Team-Pack-2\.0\.0/);
+  await settle();
+});

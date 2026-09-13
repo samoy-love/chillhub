@@ -579,6 +579,11 @@ func (h *Handlers) List(w http.ResponseWriter, r *http.Request) {
 			info.Missing = src.Missing
 			info.Collisions = src.Collisions
 			info.Rebuildable = src.Kind == SourceThunderstore || len(src.Roots) > 0
+		} else {
+			// No build record means the version came in as a finished archive
+			// (upload kind=mods): the builder writes a record for everything it
+			// publishes itself.
+			info.Kind = string(SourceUpload)
 		}
 		items = append(items, info)
 	}
