@@ -43,6 +43,13 @@ test('log-scroll.js в браузерном режиме кладёт слеже
   assert.strictEqual(typeof w.logAppend, 'function', 'logAppend не появился в window');
 });
 
+test('table-labels.js в браузерном режиме кладёт подписи таблиц в window', () => {
+  const w = loadAsBrowserScript('server/admin_ui/table-labels.js');
+  assert.strictEqual(typeof w.labelTable, 'function');
+  assert.strictEqual(typeof w.labelTables, 'function');
+  assert.strictEqual(typeof w.watchTables, 'function');
+});
+
 test('ui-throttle.js в браузерном режиме кладёт makeUiThrottler в window', () => {
   const w = loadAsBrowserScript('server/admin_ui/ui-throttle.js');
   assert.strictEqual(typeof w.makeUiThrottler, 'function');
