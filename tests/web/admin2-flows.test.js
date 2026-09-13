@@ -1419,3 +1419,153 @@ test('готовый модпак заливается в сборки модо�
   assert.match(sent.url, /version=Team-Pack-2\.0\.0/);
   await settle();
 });
+
+/* ---------- Сравнение версий игры и модпака ---------- */
+
+const manifestOf = (files) => ({
+  ok: true,
+  status: 200,
+  text: async () => JSON.stringify({ files: files }),
+});
+
+test('версии игры сравниваются по её манифестам, а не лаунчера', async (t) => {
+  const asked = [];
+  const { window } = await boot({
+    list: {
+      items: [
+        { version: '1.4.1', createdAt: '2026-08-20T12:00:00Z', files: 2, bytes: 500 },
+        { version: '1.4.2', createdAt: '2026-08-21T12:00:00Z', files: 2, bytes: 700 },
+      ],
+      latest: '1.4.1',
+    },
+    __raw: (u) => {
+      asked.push(u);
+      if (u === '/manifests/repo/1.4.1.json') {
+        return manifestOf([
+          { path: 'REPO.exe', size: 100, sha256: 'a' },
+          { path: 'old.dll', size: 50, sha256: 'o' },
+        ]);
+      }
+      if (u === '/manifests/repo/1.4.2.json') {
+        return manifestOf([
+          { path: 'REPO.exe', size: 120, sha256: 'b' },
+          { path: 'new.dll', size: 60, sha256: 'n' },
+        ]);
+      }
+      return { ok: false, status: 404, text: async () => '' };
+    },
+  });
+  t.after(() => window.close());
+
+  await openScreen(window, '#games');
+  await openTab(window, 'versions');
+  const btn = await until(() => window.document.querySelector('[data-game-detail] [data-act="compare"]'));
+  assert.ok(btn, 'в строке версии нечем сравнить');
+  btn.click();
+
+  const sheet = await until(() => window.document.querySelector('.sheet'));
+  const tree = await until(() => sheet.querySelector('[data-cmp] [data-tree]'));
+  assert.ok(tree, 'разница не показалась');
+  assert.ok(asked.includes('/manifests/repo/1.4.1.json') && asked.includes('/manifests/repo/1.4.2.json'), 'читали не те манифесты: ' + asked.join(', '));
+  assert.ok(!asked.some((u) => u.includes('/manifests/launcher/')), 'сравнение ушло к манифестам лаунчера');
+
+  assert.strictEqual(sheet.querySelector('[data-diff-from]').value, '1.4.1', 'сравнивают не с той, что у игроков');
+  assert.strictEqual(sheet.querySelector('[data-diff-to]').value, '1.4.2');
+  const rows = [...tree.querySelectorAll('.row')].map((r) => r.className + ' ' + r.dataset.path);
+  assert.ok(rows.some((r) => /add/.test(r) && /new\.dll/.test(r)), 'не видно добавленного файла');
+  assert.ok(rows.some((r) => /del/.test(r) && /old\.dll/.test(r)), 'не видно пропавшего файла');
+  assert.ok(rows.some((r) => /mod/.test(r) && /REPO\.exe/.test(r)), 'не видно изменённого файла');
+  await settle();
+});
+
+test('одну и ту же версию саму с собой не сравнивают', async (t) => {
+  const { window } = await boot({
+    list: { items: [{ version: '1.4.1' }, { version: '1.4.2' }], latest: '1.4.1' },
+    __raw: () => manifestOf([]),
+  });
+  t.after(() => window.close());
+
+  await openScreen(window, '#games');
+  await openTab(window, 'versions');
+  (await until(() => window.document.querySelector('[data-game-detail] [data-act="compare"]'))).click();
+  const sheet = await until(() => window.document.querySelector('.sheet'));
+  const to = await until(() => sheet.querySelector('[data-diff-to]'));
+  to.value = '1.4.1';
+  to.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await until(() => /одна и та же/.test(text(sheet)));
+  assert.match(text(sheet), /одна и та же/);
+  await settle();
+});
+
+test('сборки модпака сравниваются и по модам, и по файлам', async (t) => {
+  const asked = [];
+  const { window, calls } = await boot({
+    'mods/list': {
+      gameId: 'repo',
+      active: 'Pack-1.0.0',
+      items: [{ version: 'Pack-1.1.0' }, { version: 'Pack-1.0.0' }],
+    },
+    'mods/diff': { items: [{ package: 'Author-Mod', from: '1.0.0', to: '1.1.0', change: 'updated' }] },
+    __raw: (u) => {
+      asked.push(u);
+      if (u === '/manifests/_mods/repo/Pack-1.0.0.json') return manifestOf([{ path: 'BepInEx/a.dll', size: 1, sha256: 'x' }]);
+      if (u === '/manifests/_mods/repo/Pack-1.1.0.json') return manifestOf([{ path: 'BepInEx/a.dll', size: 2, sha256: 'y' }]);
+      return { ok: false, status: 404, text: async () => '' };
+    },
+  });
+  t.after(() => window.close());
+
+  const sheet = await open(window, '#packs', 'compare');
+  const tree = await until(() => sheet.querySelectorAll('[data-cmp] [data-tree]').length === 2 && sheet);
+  assert.ok(tree, 'нет состава по модам и файлам');
+  assert.ok(asked.includes('/manifests/_mods/repo/Pack-1.0.0.json'), 'манифесты модпака читали не из ветки _mods');
+  const diff = calls.find((c) => c.url.includes('mods/diff'));
+  assert.match(diff.url, /from=Pack-1\.0\.0/);
+  assert.match(diff.url, /to=Pack-1\.1\.0/);
+  assert.match(text(sheet), /Author-Mod/);
+  await settle();
+});
+
+test('у залитого архивом модпака состав честно неизвестен, а файлы всё равно сравниваются', async (t) => {
+  const { window } = await boot({
+    'mods/list': { gameId: 'repo', active: 'A-1', items: [{ version: 'A-2' }, { version: 'A-1' }] },
+    'mods/diff': () => ({
+      ok: false,
+      status: 400,
+      text: async () => 'mods: версия A-2 залита готовым архивом, её состав по пакетам неизвестен',
+    }),
+    __raw: (u) => manifestOf([{ path: 'x.dll', size: 1, sha256: u }]),
+  });
+  t.after(() => window.close());
+
+  const sheet = await open(window, '#packs', 'compare');
+  await until(() => /готовым архивом/.test(text(sheet)));
+  assert.match(text(sheet), /готовым архивом/);
+  assert.ok(await until(() => sheet.querySelector('[data-cmp] [data-tree]')), 'файлы не сравнились');
+  await settle();
+});
+
+test('в реестре игр и в списке новостей у строк есть иконки', async (t) => {
+  const { window } = await boot({
+    games: {
+      items: [
+        { gameId: 'repo', title: 'R.E.P.O.', exeRelativePath: 'REPO.exe', iconUrl: '/manifests/repo/icon.png', mods: { enabled: true } },
+        { gameId: 'peak', title: 'PEAK', exeRelativePath: 'PEAK.exe' },
+      ],
+    },
+  });
+  t.after(() => window.close());
+
+  await openScreen(window, '#games');
+  const repo = await until(() => window.document.querySelector('[data-pick="repo"] .pick-icon img'));
+  assert.ok(repo, 'у игры с иконкой её не видно');
+  assert.strictEqual(repo.getAttribute('src'), '/manifests/repo/icon.png');
+  const peak = window.document.querySelector('[data-pick="peak"] .pick-icon');
+  assert.ok(peak && !peak.querySelector('img'), 'у игры без иконки должна остаться буква');
+  assert.match(peak.textContent, /P/);
+
+  await openScreen(window, '#news');
+  const newsIcon = await until(() => window.document.querySelector('[data-news] .pick-icon, .pick .pick-icon'));
+  assert.ok(newsIcon, 'у заметок в списке нет иконки');
+  await settle();
+});
