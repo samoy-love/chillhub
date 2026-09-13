@@ -279,6 +279,10 @@ func (b *Builder) roots(req Request) ([]string, error) {
 			return nil, errors.New("mods: the imported profile has no enabled mods")
 		}
 		return deps, nil
+	case SourceUpload:
+		// A finished archive has no package list to resolve: the server only
+		// ever saw its files.
+		return nil, errors.New("mods: a version uploaded as an archive has no packages to resolve")
 	default:
 		return nil, fmt.Errorf("mods: unknown source kind %q", req.Kind)
 	}
