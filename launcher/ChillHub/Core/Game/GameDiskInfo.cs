@@ -50,6 +50,17 @@ namespace ChillHub.Core.Game {
             }
         }
 
+        /// <summary>
+        /// Отказ менять файлы запущенной игры — одними словами у кнопки и у самой
+        /// установки: кнопка отказывает раньше, чем позиция попадёт в очередь.
+        /// </summary>
+        /// <param name="exeName">Имя процесса игры.</param>
+        /// <returns>Строка состояния.</returns>
+        internal static string RunningRefusal(string? exeName)
+            => string.IsNullOrWhiteSpace(exeName)
+                ? "Игра запущена. Закройте игру и повторите."
+                : $"Игра запущена ({exeName}). Закройте игру и повторите.";
+
         /// <summary>Запущена ли игра прямо сейчас: пока её файлы открыты, менять их нельзя.</summary>
         /// <param name="exeRelativePath">Путь к exe игры относительно её папки.</param>
         /// <param name="exeName">Имя процесса, по которому шла проверка.</param>

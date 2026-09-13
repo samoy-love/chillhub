@@ -351,7 +351,8 @@ namespace ChillHub.Core.Game {
         /// </summary>
         /// <param name="entry">Позиция, которую только что перестали обрабатывать.</param>
         /// <param name="failed">Операция сорвалась — снимаем с ошибкой, а не с успехом.</param>
-        private void Settle(Entry entry, bool failed) {
+        /// <param name="failure">Причина срыва словами для игрока; пусто — общая фраза.</param>
+        private void Settle(Entry entry, bool failed, string? failure = null) {
             IReadOnlyList<QueueItem> snapshot;
             bool requeued;
             var stillPresent = false;
@@ -368,13 +369,17 @@ namespace ChillHub.Core.Game {
                     // State/StatusText мутируются под тем же gate, что читает Remove() — без
                     // этого Remove() мог застать позицию ещё Waiting/Running и сообщить об
                     // отмене только что успешно завершённой закачки.
-                    var state = failed
-                        ? QueueItemState.Failed
-                        : entry.CancelRequested ? QueueItemState.Cancelled : QueueItemState.Completed;
+                    //
+                    // Снятие проверяется раньше срыва: отменённая закачка возвращается из
+                    // RunAsync с false, и считать её ошибкой значило бы показать игроку
+                    // «не удалось» в ответ на его же «Отмена».
+                    var state = entry.CancelRequested
+                        ? QueueItemState.Cancelled
+                        : failed ? QueueItemState.Failed : QueueItemState.Completed;
                     stillPresent = this.items.Remove(entry);
                     entry.State = state;
                     entry.StatusText = state switch {
-                        QueueItemState.Failed => "Не удалось завершить операцию.",
+                        QueueItemState.Failed => string.IsNullOrWhiteSpace(failure) ? "Не удалось завершить операцию." : failure,
                         QueueItemState.Cancelled => "Снята из очереди.",
                         _ => "Готово.",
                     };
@@ -492,6 +497,16 @@ namespace ChillHub.Core.Game {
                     // "Сравнение файлов…" на всё время реального скачивания, пока байты росли.
                     ReportProgress = (p, _) => this.RaiseProgress(entry, entry.Stage(p), p.BytesDownloaded, p.TotalBytes, p.NetworkBytes),
                     Confirm = this.confirm,
+
+                    // Ошибку установки пишут сюда, а не в SetStatus. Пустой колбэк по
+                    // умолчанию глотал её целиком: ни строки для игрока, ни записи в журнале.
+                    ShowUserError = (message, ex, context) => {
+                        if (ex != null) {
+                            Logging.Logger.Error(ex, context ?? $"DownloadQueue gid={entry.GameId}");
+                        }
+
+                        this.RaiseProgress(entry, message);
+                    },
                 };
 
                 // Проверка удаляет всё, чего нет в манифесте, — моды, скриншоты,
@@ -520,12 +535,15 @@ namespace ChillHub.Core.Game {
                     Game: game);
 
                 // entry.Cts всегда назначен в RunWorkerAsync до вызова ProcessAsync — см. gate там.
-                await runner.RunAsync(request, entry.Cts!.Token).ConfigureAwait(false);
+                var ok = await runner.RunAsync(request, entry.Cts!.Token).ConfigureAwait(false);
 
                 // Прервали, чтобы пропустить вперёд другую позицию или чтобы начать эту
                 // заново, — тогда позиция возвращается в очередь, а не снимается. Решение
                 // принимает Settle() под gate: снаружи замка его успевал обогнать Enqueue().
-                this.Settle(entry, failed: false);
+                //
+                // Несостоявшаяся операция — не успех. Причину runner уже положил в строку
+                // позиции, её и оставляем: «Игра запущена» вместо «готова к запуску».
+                this.Settle(entry, failed: !ok, failure: entry.StatusText);
             }
             catch (Exception ex) {
                 // GameSyncRunner.RunAsync сам не выпускает исключения наружу — сюда попадём,

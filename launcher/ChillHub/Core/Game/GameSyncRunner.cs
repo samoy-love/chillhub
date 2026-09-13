@@ -182,8 +182,18 @@ namespace ChillHub.Core.Game {
         /// </summary>
         /// <param name="request">Что устанавливаем.</param>
         /// <param name="token">Токен отмены.</param>
-        /// <returns>Задача, завершающаяся вместе с операцией.</returns>
-        internal async Task RunAsync(GameSyncRequest request, CancellationToken token) {
+        /// <returns>
+        /// true — файлы приведены к версии. false — операция не состоялась: игра
+        /// запущена, не хватило места, сорвалась закачка или её отменили. Причина к
+        /// этому моменту уже в строке состояния.
+        /// <para>
+        /// ОЧЕРЕДЬ ОБЯЗАНА ОТЛИЧАТЬ ОДНО ОТ ДРУГОГО. Пока метод ничего не возвращал,
+        /// очередь считала успехом любой возврат: «Обновить» у запущенной игры
+        /// заканчивался всплывашкой «готова к запуску», причина терялась, а кнопка
+        /// снова звала обновляться.
+        /// </para>
+        /// </returns>
+        internal async Task<bool> RunAsync(GameSyncRequest request, CancellationToken token) {
             var gid = request.GameId;
             var version = request.Version;
 
@@ -208,8 +218,8 @@ namespace ChillHub.Core.Game {
                 // Игра запущена — файлы менять нельзя. Метрики нет намеренно: операция
                 // не начиналась и не срывалась, лаунчер даже не ходил на сервер.
                 if (GameDiskInfo.IsGameRunning(request.ExeRelativePath, out var exeName)) {
-                    this.ui.SetStatus($"Игра запущена ({exeName}). Закройте игру и повторите.");
-                    return;
+                    this.ui.SetStatus(GameDiskInfo.RunningRefusal(exeName));
+                    return false;
                 }
 
                 // МОДПАК ИДЁТ ПЕРВЫМ, и это не косметика.
@@ -251,7 +261,7 @@ namespace ChillHub.Core.Game {
                         // (отвергнутый манифест модпака — это не «сорвалась установка»).
                         // Второе событие удваивало бы «Топ ошибок» на ровном месте.
                         this.Report(request, null, "fail", opStart);
-                        return;
+                        return false;
                     }
 
                     // Строки модпака стираются перед игрой: «Скорость» и «файлов • байт»
@@ -260,7 +270,7 @@ namespace ChillHub.Core.Game {
                     this.ui.SetFilesSize(string.Empty);
 
                     if (!await this.CheckSteamModsAsync(request, opStart, token).ConfigureAwait(true)) {
-                        return;
+                        return false;
                     }
                 }
 
@@ -293,7 +303,7 @@ namespace ChillHub.Core.Game {
                     if (!this.ui.Confirm(DeletionConfirmText(version, plan.ToDelete.Count), "Проверка файлов")) {
                         this.ui.SetStatus("Проверка отменена.");
                         Report(request, plan, "cancel", opStart);
-                        return;
+                        return false;
                     }
                 }
 
@@ -308,7 +318,7 @@ namespace ChillHub.Core.Game {
                         // «ничего не качается»: без кода в статистике её видно только
                         // по чужому скриншоту.
                         Report(request, plan, "fail", opStart, "no_disk_space");
-                        return;
+                        return false;
                     }
                 }
 
@@ -335,6 +345,7 @@ namespace ChillHub.Core.Game {
                 this.ui.SetSpeedEta(string.Empty);
                 Logging.Logger.Info($"GamePage.StartSync done gid={gid} version={version}");
                 Report(request, plan, "ok", opStart);
+                return true;
             }
             catch (OperationCanceledException) {
                 this.ui.SetStatus("Операция отменена.");
@@ -344,6 +355,7 @@ namespace ChillHub.Core.Game {
                 // Отмена — не ошибка: отдельный результат как раз затем и существует,
                 // чтобы брошенные закачки не портили ни долю неудач, ни среднее время.
                 Report(request, plan, "cancel", opStart);
+                return false;
             }
             catch (ManifestValidationException ex) {
                 // Манифест отклонён проверкой структуры: опасный путь, дубликат или
@@ -351,6 +363,7 @@ namespace ChillHub.Core.Game {
                 // а не общей фразой «попробуйте ещё раз».
                 this.ui.ShowUserError(ManifestValidator.UserMessage, ex, $"GamePage.StartSyncAsync.ManifestValidation(gid={gid}, version={version})");
                 Report(request, plan, "fail", opStart, "manifest_invalid");
+                return false;
             }
             catch (Exception ex) {
                 var message = ex is IOException
@@ -361,6 +374,7 @@ namespace ChillHub.Core.Game {
                 // Код классифицирует проблему и только её: текст исключения содержит
                 // пути и имена файлов пользователя, а метрика — публичная сводка.
                 Report(request, plan, "fail", opStart, ex is IOException ? "sync_io" : "sync_failed");
+                return false;
             }
         }
 

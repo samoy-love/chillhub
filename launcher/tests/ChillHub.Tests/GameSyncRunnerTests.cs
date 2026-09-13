@@ -289,8 +289,11 @@ namespace ChillHub.Tests {
             var runner = NewRunner(sync, probe, out var written);
             using var processes = new RunningProcessScope("Lethal");
 
-            await runner.RunAsync(Request(exeRelativePath: @"bin\Lethal.exe"), CancellationToken.None);
+            var ok = await runner.RunAsync(Request(exeRelativePath: @"bin\Lethal.exe"), CancellationToken.None);
 
+            // Не состоялась — и говорит об этом вызывающему: очередь иначе объявляла
+            // игру «готовой к запуску», и «Обновить» загоралось снова.
+            Assert.False(ok);
             Assert.Equal("Игра запущена (Lethal). Закройте игру и повторите.", probe.LastStatus);
             Assert.False(sync.Executed);
             Assert.Empty(written);

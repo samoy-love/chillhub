@@ -44,6 +44,14 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
+                Version = "1.6.62",
+                Date = "2026-09-13",
+                Changes = new[] {
+                    "Новые версии игр и модов видны сразу, как только вы вернулись в лаунчер, без перезапуска.",
+                    "«Обновить» у запущенной игры просит её закрыть, а не делает вид, что всё обновилось.",
+                },
+            },
+            new ChangelogRelease {
                 Version = "1.6.61",
                 Date = "2026-09-12",
                 Changes = new[] {

@@ -90,6 +90,18 @@ namespace ChillHub.Pages {
         // метод зовут и из UI-потока, и из фоновых задач.
         private int verifyRunning;
 
+        // 1, пока идёт тихое обновление списка (RefreshCatalogQuietlyAsync).
+        private int catalogRefreshRunning;
+
+        /// <summary>
+        /// Фоновый опрос списка игр. Сборки и модпаки меняют в админке в любой момент, а
+        /// список до правки спрашивался только при старте и по кнопке: лаунчер, открытый
+        /// с утра, до вечера показывал «Играть» у игры, для которой давно вышли новые моды.
+        /// </summary>
+        private readonly DispatcherTimer catalogRefreshTimer = new(DispatcherPriority.Background) {
+            Interval = CatalogRefreshInterval,
+        };
+
         // Загрузка данных выбранной игры: сериализуется воротами, предыдущая отменяется токеном.
         private readonly SemaphoreSlim selectionGate = new(1, 1);
         private CancellationTokenSource? selectionCts;
@@ -302,6 +314,9 @@ namespace ChillHub.Pages {
         /// </summary>
         private string knownGamesPath = ChillHub.Core.ConfigService.Current.GamesPath ?? string.Empty;
 
+        /// <summary>Как часто список игр спрашивается в фоне. Запрос лёгкий — один JSON.</summary>
+        internal static TimeSpan CatalogRefreshInterval => TimeSpan.FromMinutes(5);
+
         public HomePage() {
             this.InitializeComponent();
 
@@ -334,6 +349,11 @@ namespace ChillHub.Pages {
             this.downloadQueue.ItemCompleted += this.OnQueueItemCompleted;
             this.downloadQueue.ItemRemoved += this.OnQueueItemRemoved;
             this.downloadQueue.Reordered += this.OnQueueReordered;
+
+            // Опрос живёт вместе со страницей и тикает, даже пока окно в трее: так
+            // вернувшийся игрок сразу видит «Обновить», а не ждёт следующего тика.
+            this.catalogRefreshTimer.Tick += async (s, e) => await this.RefreshCatalogQuietlyAsync();
+            this.catalogRefreshTimer.Start();
 
             // Ни одна из инициализаций ниже не должна ронять конструктор страницы:
             // при сбое любой из них лаунчер обязан открыться, пусть и без части удобств.
@@ -1758,6 +1778,103 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Тихо сверяет список игр с сервером: при возврате фокуса на окно и по таймеру.
+        /// <para>
+        /// В отличие от кнопки «Обновить список», ничего не прячет, не сбрасывает кеш
+        /// картинок и не пересчитывает все игры: статус считается заново только у тех,
+        /// для которых сервер объявил другую сборку или другой модпак
+        /// (<see cref="GameCatalog.ChangedOnServer"/>). Без этого вышедшее обновление
+        /// доезжало до игрока только после перезапуска лаунчера.
+        /// </para>
+        /// <para>
+        /// Сбой сети молчит: это фоновая проверка, и о недоступном сервере игроку и так
+        /// скажет первое же действие.
+        /// </para>
+        /// </summary>
+        /// <returns>Задача обновления.</returns>
+        internal async Task RefreshCatalogQuietlyAsync() {
+            // До первой загрузки списка сравнивать не с чем, а пустое состояние
+            // «сервер недоступен» чинит своя кнопка «Повторить».
+            if (!this.allowFileChecks || this.games == null || this.games.Count == 0) {
+                return;
+            }
+
+            if (Interlocked.CompareExchange(ref this.catalogRefreshRunning, 1, 0) != 0) {
+                return;
+            }
+
+            try {
+                var gamesResp = await this.http.GetFromJsonAsync<GamesResponse>(HomeFeed.GamesUrl(this.BaseApi));
+                var incoming = gamesResp?.Items;
+
+                // Полная проверка уже идёт (старт, кнопка «Обновить список») — она сама
+                // перечитает всё, а вмешательство посреди неё правило бы те же объекты.
+                if (incoming == null || incoming.Count == 0 || Volatile.Read(ref this.verifyRunning) != 0) {
+                    return;
+                }
+
+                // Адреса значков — заранее: слияние переписывает их у прежних объектов,
+                // и относительный адрес на миг подменил бы рабочий, перезагрузив картинку.
+                GameStatus.NormalizeIconUrls(incoming, this.BaseApi);
+
+                var changed = GameCatalog.ChangedOnServer(this.games, incoming);
+                var selectedId = this.GetSelectedGameId();
+                var merged = GameCatalog.Merge(this.games, incoming);
+
+                // Изменившиеся игры — сразу по маркерам на диске (это «Обновить» на
+                // кнопке без ожидания), а затем честной проверкой в фоне.
+                var toVerify = merged
+                    .Where(g => changed.Contains(g.GameId) && !this.IsQueued(g.GameId))
+                    .ToList();
+                GameStatus.NormalizeIconsAndLocalState(toVerify, this.BaseApi);
+
+                this.catalog.RememberApiOrder(merged);
+                var sorted = this.catalog.Sort(merged);
+                var rebind = GameCatalog.NeedsRebind(this.GameList.ItemsSource, sorted);
+                this.games = sorted;
+                if (changed.Count == 0 && !rebind) {
+                    return;
+                }
+
+                Core.Logging.Logger.Info($"RefreshCatalogQuietly: на сервере изменились игры: {string.Join(", ", changed)}");
+                if (rebind) {
+                    this.SetGamesSource();
+                    this.RestoreSelection(selectedId);
+                }
+
+                this.SyncRunLabels();
+                if (!string.IsNullOrWhiteSpace(selectedId) && changed.Contains(selectedId)) {
+                    // Варианты запуска построены по прежнему модпаку.
+                    this.InvalidateLaunchOptions();
+                }
+
+                this.UpdateActionButtonState();
+
+                foreach (var g in toVerify) {
+                    await Task.Run(() => this.Verifier.VerifyAsync(g));
+                }
+
+                if (toVerify.Count > 0) {
+                    var resorted = this.catalog.Sort(this.games);
+                    if (!GameCatalog.SameOrder(this.games, resorted)) {
+                        var keep = this.GetSelectedGameId();
+                        this.games = resorted;
+                        this.SetGamesSource();
+                        this.RestoreSelection(keep);
+                    }
+
+                    this.UpdateActionButtonState();
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Info($"RefreshCatalogQuietly: список игр не обновлён: {ex.Message}");
+            }
+            finally {
+                Interlocked.Exchange(ref this.catalogRefreshRunning, 0);
+            }
+        }
+
         // Theme toggle and icon are now managed in MainWindow header
         private void ActionBtn_Click(object sender, RoutedEventArgs e) {
             // Идёт удаление файлов игры — начинать установку в ту же папку нельзя
@@ -1815,6 +1932,15 @@ namespace ChillHub.Pages {
                         // "Добавить в очередь загрузок" контекстного меню, см. EnqueueGame_Click.
                         // Список игр при этом никогда не блокируется — переключаться на другие
                         // экраны можно свободно, пока эта позиция стоит в очереди или качается.
+                        // Запущенную игру менять нельзя, и установка всё равно откажет. Но
+                        // отказ из очереди приходит уже после того, как позиция мелькнула
+                        // в панели загрузок, — говорим сразу и в очередь не ставим.
+                        if (this.GetSelectedGame() is { } selected
+                            && Core.Game.GameDiskInfo.IsGameRunning(selected.ExeRelativePath, out var exeName)) {
+                            this.StatusText.Text = Core.Game.GameDiskInfo.RunningRefusal(exeName);
+                            break;
+                        }
+
                         if (!this.downloadQueue.Enqueue(gid!)) {
                             this.StatusText.Text = "Игра уже установлена или уже в очереди.";
                         }
