@@ -1233,13 +1233,11 @@
   const newsKey = (n) => (n.gameId ? 'game/' + n.gameId + '/' : 'launcher//') + n.slug;
 
   function newsRow(n) {
-    /* Иконка ленты, а не заметки: в списке рядом лежат заметки лаунчера и
-       всех игр, и по иконке видно, чья лента, раньше, чем прочитан текст
-       мелкой подписи под заголовком. */
-    const g = n.game ? D.games.find((x) => x.gameId === n.game) : null;
+    /* Картинка новости — та же, что в ленте лаунчера, и в той же рамке:
+       по списку видно, как обложка обрежется у игрока. Чья это лента,
+       говорит подпись под заголовком. */
     return {
-      icon: n.game ? (g && g.iconUrl) || '' : '/admin/ui/favicon.svg',
-      iconLetter: n.game ? (g && g.title) || n.game : 'C',
+      cover: n.coverUrl || '',
       id: newsKey({ gameId: n.game, slug: n.slug }),
       title: n.title || n.slug,
       sub: window.CH2Format.dateTime(n.at) + (n.game ? ' · ' + n.game : ' · лаунчер'),
@@ -1306,7 +1304,8 @@
         ${card(
           'Обложка',
           post.coverUrl
-            ? `<img src="${esc(post.coverUrl)}" alt="" style="width:100%;border-radius:var(--r)">`
+            ? V().newsCover(post.coverUrl, 'wide') +
+                '<p class="faint">Так её обрежет лента лаунчера: рамка 16:9, картинка заполняет её по центру.</p>'
             : '<p class="faint">Обложки нет — сервер возьмёт первую картинку из текста.</p>'
         )}
         ${card(
@@ -3637,7 +3636,7 @@
     'error',
     (e) => {
       const img = e.target;
-      if (img && img.matches && img.matches('img[data-pick-icon]')) img.hidden = true;
+      if (img && img.matches && img.matches('img[data-pick-icon], img[data-news-cover]')) img.hidden = true;
     },
     true
   );

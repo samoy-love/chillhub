@@ -1545,8 +1545,14 @@ test('у залитого архивом модпака состав честн�
   await settle();
 });
 
-test('в реестре игр и в списке новостей у строк есть иконки', async (t) => {
+test('в реестре игр у строк есть иконки, а в списке новостей — обложки', async (t) => {
   const { window } = await boot({
+    'news/list': {
+      items: [
+        { id: 'release', slug: 'release', title: 'С обложкой', published: true, coverUrl: '/news/launcher/release/cover.png' },
+        { id: 'plain', slug: 'plain', title: 'Без обложки', published: false, coverUrl: '' },
+      ],
+    },
     games: {
       items: [
         { gameId: 'repo', title: 'R.E.P.O.', exeRelativePath: 'REPO.exe', iconUrl: '/manifests/repo/icon.png', mods: { enabled: true } },
@@ -1565,7 +1571,11 @@ test('в реестре игр и в списке новостей у строк
   assert.match(peak.textContent, /P/);
 
   await openScreen(window, '#news');
-  const newsIcon = await until(() => window.document.querySelector('[data-news] .pick-icon, .pick .pick-icon'));
-  assert.ok(newsIcon, 'у заметок в списке нет иконки');
+  const cover = await until(() => window.document.querySelector('[data-pick$="release"] .news-cover img'));
+  assert.ok(cover, 'у заметки с обложкой её не видно в списке');
+  assert.strictEqual(cover.getAttribute('src'), '/news/launcher/release/cover.png');
+  // У заметки без обложки колонки нет вовсе — как в ленте лаунчера
+  const plain = window.document.querySelector('[data-pick$="plain"]');
+  assert.ok(plain && !plain.querySelector('.news-cover, .pick-icon'), 'у заметки без обложки появилась пустая рамка');
   await settle();
 });
