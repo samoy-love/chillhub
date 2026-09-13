@@ -199,6 +199,65 @@ namespace ChillHub.Tests {
             Assert.Empty(completed); // позиция никуда не уходила — «снята из очереди» присылать не за что
         }
 
+        /// <summary>
+        /// «ОБНОВИТЬ» У ЗАПУЩЕННОЙ ИГРЫ — НЕ УСПЕХ. Установка отказывала, а очередь всё
+        /// равно снимала позицию как готовую: игрок видел «готова к запуску», причина
+        /// терялась, и кнопка снова звала обновляться — будто обновление не работает.
+        /// </summary>
+        [Fact]
+        public async Task ОтказИзЗаЗапущеннойИгрыСнимаетПозициюСПричиной() {
+            using var pathScope = new GamesPathScope();
+            var sync = new FakeSync();
+            var previous = GameDiskInfo.ProcessCountByName;
+            GameDiskInfo.ProcessCountByName = name => name == "game" ? 1 : 0;
+            try {
+                using var queue = NewQueue(sync, new Dictionary<string, GameInfo> { ["a"] = Game("a", installed: true, needsUpdate: true) });
+                QueueItem? done = null;
+                queue.ItemCompleted += i => done = i;
+
+                Assert.True(queue.Enqueue("a"));
+                await WaitUntil(() => done != null, "позиция не завершилась");
+
+                Assert.Equal(QueueItemState.Failed, done!.State);
+                Assert.Equal("Игра запущена (game). Закройте игру и повторите.", done.StatusText);
+                Assert.False(sync.ExecuteStarted);
+            }
+            finally {
+                GameDiskInfo.ProcessCountByName = previous;
+            }
+        }
+
+        /// <summary>Сорвавшаяся закачка тоже уходит ошибкой и со своей причиной, а не «Готово».</summary>
+        [Fact]
+        public async Task СорвавшаясяЗакачкаСнимаетсяОшибкой() {
+            using var pathScope = new GamesPathScope();
+            var sync = new FakeSync { ExecuteError = new InvalidOperationException("сеть") };
+            using var queue = NewQueue(sync, new Dictionary<string, GameInfo> { ["a"] = Game("a") });
+            QueueItem? done = null;
+            queue.ItemCompleted += i => done = i;
+
+            Assert.True(queue.Enqueue("a"));
+            await WaitUntil(() => done != null, "позиция не завершилась");
+
+            Assert.Equal(QueueItemState.Failed, done!.State);
+            Assert.Equal("Не удалось завершить операцию. Попробуйте ещё раз.", done.StatusText);
+        }
+
+        /// <summary>Состоявшаяся закачка по-прежнему снимается успехом.</summary>
+        [Fact]
+        public async Task СостоявшаясяЗакачкаСнимаетсяУспехом() {
+            using var pathScope = new GamesPathScope();
+            var sync = new FakeSync();
+            using var queue = NewQueue(sync, new Dictionary<string, GameInfo> { ["a"] = Game("a") });
+            QueueItem? done = null;
+            queue.ItemCompleted += i => done = i;
+
+            Assert.True(queue.Enqueue("a"));
+            await WaitUntil(() => done != null, "позиция не завершилась");
+
+            Assert.Equal(QueueItemState.Completed, done!.State);
+        }
+
         /// <summary>Соседние ожидающие позиции меняются местами и присылают новый порядок целиком.</summary>
         [Fact]
         public void MoveUpМеняетМестамиССоседнейОжидающейПозицией() {
@@ -339,6 +398,8 @@ namespace ChillHub.Tests {
 
             internal bool RespectCancellation { get; set; }
 
+            internal Exception? ExecuteError { get; set; }
+
             /// <summary>
             /// Держит движок ПОСЛЕ того, как он увидел отмену: настоящая остановка не
             /// мгновенна (непрерываемый шаг, пробуждение диска), и без этой задержки
@@ -360,6 +421,10 @@ namespace ChillHub.Tests {
 
             public async Task ExecuteAsync(DiffPlan plan, IProgress<SyncProgress> progress, CancellationToken ct) {
                 this.ExecuteStarted = true;
+                if (this.ExecuteError != null) {
+                    throw this.ExecuteError;
+                }
+
                 if (this.RespectCancellation) {
                     try {
                         await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false);
