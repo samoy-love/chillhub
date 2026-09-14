@@ -407,6 +407,12 @@ input:hover, select:hover, textarea:hover { border-color: var(--surface-4); }
 
 .pick { display: grid; gap: 1px; max-height: 60vh; overflow: auto; }
 
+/* Список заметок целиком, без прокрутки внутри карточки. С обложками
+   строка выше, и в окошко на 60 % экрана помещалось пять-шесть заметок —
+   остальные приходилось листать отдельно от страницы. Правило сильнее
+   телефонного ограничения `.pick` в конце файла. */
+.pick.pick--full { max-height: none; overflow: visible; }
+
 .pick > button {
   display: grid;
   gap: 2px;

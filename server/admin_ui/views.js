@@ -660,7 +660,7 @@
       return '<div class="empty"><b>' + esc(o.empty || 'Пусто') + '</b><span>' + esc(o.emptyHint || '') + '</span></div>';
     }
     return (
-      '<div class="pick" role="listbox">' +
+      '<div class="pick' + (o.full ? ' pick--full' : '') + '" role="listbox">' +
       list
         .map((r) => {
           /* Иконка — только у строк, которые её объявили (пусть и пустой):

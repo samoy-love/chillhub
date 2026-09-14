@@ -1579,3 +1579,16 @@ test('в реестре игр у строк есть иконки, а в спи
   assert.ok(plain && !plain.querySelector('.news-cover, .pick-icon'), 'у заметки без обложки появилась пустая рамка');
   await settle();
 });
+
+test('список новостей не прокручивается внутри карточки', async (t) => {
+  const { window } = await boot();
+  t.after(() => window.close());
+  await openScreen(window, '#news');
+  const list = await until(() => window.document.querySelector('[data-news] .pick'));
+  assert.ok(list, 'списка заметок нет');
+  assert.ok(list.classList.contains('pick--full'), 'список новостей снова зажат в окошко с прокруткой');
+  await openScreen(window, '#games');
+  const games = await until(() => window.document.querySelector('.pick'));
+  assert.ok(games && !games.classList.contains('pick--full'), 'реестр игр потерял свою прокрутку');
+  await settle();
+});

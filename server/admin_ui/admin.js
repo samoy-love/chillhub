@@ -541,6 +541,9 @@
               `<div class="stack stack--tight">
                  ${V().newsFilter(newsEdit, D.games)}
                  ${V().pickList(shown.map(newsRow), {
+                   /* Весь список на странице, без своей прокрутки: заметки
+                      листают вместе со страницей, а не в окошке внутри неё. */
+                   full: true,
                    selected: newsEdit.adding ? '' : newsKey(newsEdit),
                    empty: 'Заметок нет',
                    emptyHint: 'Лаунчер покажет игроку пустую ленту, пока здесь ничего не написано.',
