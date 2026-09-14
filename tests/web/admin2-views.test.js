@@ -853,3 +853,9 @@ test('рамка обложки в стилях — те же 104 на 58 и з�
   assert.match(block('.news-cover--wide'), /aspect-ratio: 104 \/ 58;/);
   assert.match(block('.news-cover img'), /object-fit: cover;/);
 });
+
+test('список заметок идёт целиком, а обычный список держит свою прокрутку', () => {
+  const rows = [{ id: 'a', title: 'Заметка' }];
+  assert.match(V.pickList(rows, { full: true }), /<div class="pick pick--full" role="listbox">/);
+  assert.match(V.pickList(rows), /<div class="pick" role="listbox">/);
+});
