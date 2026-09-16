@@ -71,7 +71,7 @@ namespace ChillHub.Tests {
                 GameLocalState.TryCreateDesktopShortcut("Игра", "gid", exe);
             }
 
-            Assert.False(File.Exists(Path.Combine(desktop.Root, "Игра.lnk")));
+            Assert.False(File.Exists(Path.Combine(desktop.Root, GameLocalState.ShortcutFileName("Игра"))));
         }
 
         /// <summary>
@@ -85,10 +85,10 @@ namespace ChillHub.Tests {
         /// <param name="title">Название игры.</param>
         /// <param name="expectedFile">Ожидаемое имя файла ярлыка.</param>
         [Theory]
-        [InlineData("Half-Life: Alyx", "Half-Life_ Alyx.lnk")]
-        [InlineData("Игра/2", "Игра_2.lnk")]
-        [InlineData(@"Игра\3", "Игра_3.lnk")]
-        [InlineData("Игра?*|", "Игра___.lnk")]
+        [InlineData("Half-Life: Alyx", "Half-Life_ Alyx (Chill Hub).lnk")]
+        [InlineData("Игра/2", "Игра_2 (Chill Hub).lnk")]
+        [InlineData(@"Игра\3", "Игра_3 (Chill Hub).lnk")]
+        [InlineData("Игра?*|", "Игра___ (Chill Hub).lnk")]
         public void ИмяЯрлыкаОчищаетсяОтЗапрещённыхСимволов(string title, string expectedFile) {
             using var desktop = new TempDir();
             var exe = desktop.WriteFile("game.exe", "MZ");
@@ -124,7 +124,7 @@ namespace ChillHub.Tests {
                 return;
             }
 
-            Assert.True(File.Exists(Path.Combine(desktop.Root, "lethal-company.lnk")));
+            Assert.True(File.Exists(Path.Combine(desktop.Root, GameLocalState.ShortcutFileName("lethal-company"))));
         }
 
         /// <summary>Ярлык кладётся именно в каталог рабочего стола, а не рядом с игрой.</summary>
@@ -144,7 +144,7 @@ namespace ChillHub.Tests {
                 return;
             }
 
-            Assert.True(File.Exists(Path.Combine(desktop.Root, "Игра.lnk")));
+            Assert.True(File.Exists(Path.Combine(desktop.Root, GameLocalState.ShortcutFileName("Игра"))));
         }
 
         /// <summary>

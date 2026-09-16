@@ -44,6 +44,13 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
+                Version = "1.6.63",
+                Date = "2026-09-16",
+                Changes = new[] {
+                    "Ярлык игры на рабочем столе подписан «(Chill Hub)» — его не спутать с ярлыком из Steam.",
+                },
+            },
+            new ChangelogRelease {
                 Version = "1.6.62",
                 Date = "2026-09-13",
                 Changes = new[] {
