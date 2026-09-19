@@ -161,7 +161,7 @@
     const s = st || {};
     const U = M('CH2Upload', upload);
     const v = String(s.version === undefined || s.version === null ? '' : s.version).trim();
-    let problem = U.versionProblem(v);
+    let problem = U.versionProblem(v, { game: s.kind !== 'mods' && Boolean(s.gameId) });
     if (s.kind === 'mods' && /^[A-Za-z0-9._-]+$/.test(v) && v !== '.' && v !== '..') problem = '';
     if (!problem && s.current && v === String(s.current)) {
       problem = 'Версию ' + v + ' игроки получают сейчас — новую залейте под другим номером';
