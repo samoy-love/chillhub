@@ -477,7 +477,10 @@ namespace ChillHub.Core.Game {
                     request.Version,
                     result,
                     DurationMs: (long)(DateTime.UtcNow - opStart).TotalMilliseconds,
-                    Bytes: plan?.TotalDownloadBytes ?? 0,
+                    // Без взятого блоками из старых копий: по сети оно не ехало, а
+                    // рядом с FullBytes эта цифра и есть экономия, ради которой
+                    // блоки заведены.
+                    Bytes: plan == null ? 0 : Math.Max(0, plan.TotalDownloadBytes - plan.BlockReusedBytes),
                     FilesDownloaded: plan?.TotalFilesToDownload ?? 0,
                     FilesTotal: plan?.TotalManifestFiles ?? 0,
                     FullBytes: plan?.TotalManifestBytes ?? 0,
