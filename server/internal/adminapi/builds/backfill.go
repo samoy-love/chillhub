@@ -67,6 +67,12 @@ func (h *Handlers) BackfillBlocks(ns Namespace, gid, ver string) (BackfillResult
 	if err := json.Unmarshal(before, &m); err != nil {
 		return BackfillResult{}, fmt.Errorf("parse %s: %w", manPath, err)
 	}
+	// Записывается манифест по версии из его тела, а проверялся — по имени
+	// файла. Разойдись они (файл переименовали руками), команда переписала бы
+	// ДРУГУЮ версию списком файлов этой.
+	if m.Version != ver || m.GameID != gid {
+		return BackfillResult{}, fmt.Errorf("%s describes %s/%s, not %s/%s", manPath, m.GameID, m.Version, gid, ver)
+	}
 
 	todo, skipped := backfillTodo(m)
 	if skipped != "" {
@@ -140,7 +146,21 @@ func hashServedFile(filesRoot string, f manifestFile) (fileSums, error) {
 
 // writeIfUnchanged пишет манифест, только если на диске лежит ровно тот,
 // по которому считали (before).
+//
+// Всё, что можно сделать заранее, — проверка и сериализация — сделано до
+// сравнения: между сравнением и записью остаётся одна атомарная подмена
+// файла. Закрыть это окно совсем нечем — блокировка публикации живёт в
+// процессе админки, а команда запускается отдельным, — поэтому запускать её
+// одновременно с перезаливкой той же версии не следует (см. docs/spec.md, 6.1).
 func (h *Handlers) writeIfUnchanged(manDir, manPath string, before []byte, m manifest) error {
+	m, err := prepareManifest(m)
+	if err != nil {
+		return err
+	}
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
 	now, err := os.ReadFile(manPath)
 	if err != nil {
 		return err
@@ -148,8 +168,7 @@ func (h *Handlers) writeIfUnchanged(manDir, manPath string, before []byte, m man
 	if !bytes.Equal(before, now) {
 		return ErrManifestChanged
 	}
-	_, _, err = h.writeManifestTo(manDir, m, false)
-	return err
+	return adminutil.WriteFileAtomic(filepath.Join(manDir, m.Version+".json"), out, contentFilePerm)
 }
 
 // BackfillTarget — одна версия, которой можно дописать хеши блоков.
@@ -161,8 +180,8 @@ type BackfillTarget struct {
 
 // BackfillTargets перечисляет опубликованные версии игр и модпаков.
 //
-// Лаунчер пропускается: себя он обновляет своим путём, без блоков, а его
-// манифест сверяет ещё и апдейтер — трогать его ради ненужного поля незачем.
+// Лаунчер пропускается: себя он обновляет своим путём, без блоков, и сервер
+// их в его манифесты не пишет (prepareManifest).
 // Пустые gid и ver — «все»; заданные сужают выбор.
 func (h *Handlers) BackfillTargets(gid, ver string) ([]BackfillTarget, error) {
 	var out []BackfillTarget

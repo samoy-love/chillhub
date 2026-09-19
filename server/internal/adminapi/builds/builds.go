@@ -473,6 +473,13 @@ func prepareManifest(m manifest) (manifest, error) {
 	m.Files = stripLauncherStateFiles(m.GameID, m.Files)
 	m.EmptyDirs = stripLauncherStateDirs(m.GameID, m.EmptyDirs)
 
+	// Себя лаунчер обновляет своим путём, без блоков: в его манифесте они —
+	// лишние полмегабайта, которые апдейтер скачивает и выбрасывает.
+	if strings.EqualFold(strings.TrimSpace(m.GameID), LauncherGameID) {
+		m.Files = withoutBlocks(m.Files)
+		m.BlockSize = 0
+	}
+
 	// Размер блока объявляется здесь, а не в каждом пути публикации: их четыре,
 	// и манифест с хешами блоков, но без размера, лаунчер счёл бы бесполезным.
 	if m.BlockSize == 0 && hasBlocks(m.Files) {

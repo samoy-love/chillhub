@@ -69,6 +69,7 @@ namespace ChillHub.Tests {
             Assert.Equal(last.TotalBytes, last.BytesDownloaded);
             Assert.Equal(server.BytesServed, last.NetworkBytes);
             Assert.Equal(Bs + 4, last.NetworkBytes);
+            Assert.Equal(Bs + 4, plan.NetworkBytes);
             Assert.False(SimpleSyncService.HasUpdateMarker(this.dir.Root));
         }
 
@@ -234,6 +235,28 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// Сорвавшееся обновление отчитывается о том, что реально прошло по сети:
+        /// не о плане на весь файл и не о нуле.
+        /// </summary>
+        [Fact]
+        public async Task ТрафикУчитываетсяИПриСрыве() {
+            var oldPak = BlockData.Random(10 * Bs, 14);
+            var newPak = Changed(Changed(oldPak, 2), 8);
+            this.dir.WriteBytes("data.pak", oldPak);
+            var manifest = Manifest(true, ("data.pak", newPak));
+            manifest.GameId = this.gameId;
+
+            using var cts = new CancellationTokenSource();
+            var server = new RangeServer(("data.pak", newPak)) { OnRequest = n => { if (n == 2) { cts.Cancel(); } } };
+            var sync = new SimpleSyncService(new HttpClient(server));
+            var plan = await sync.PlanAsync(manifest, this.dir.Root, Base, CancellationToken.None);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sync.ExecuteAsync(plan, new ProgressLog(), cts.Token));
+
+            // До отмены по сети пришёл только блок с первой правкой
+            Assert.Equal(Bs, plan.NetworkBytes);
+        }
+
+        /// <summary>
         /// Проверка целостности нашла испорченный блок в файле нужного размера —
         /// чинится этот блок, а не весь файл.
         /// </summary>
@@ -297,7 +320,7 @@ namespace ChillHub.Tests {
         public void ПоляБлоковЧитаютсяИзJson() {
             var json = "{\"version\":\"1\",\"gameId\":\"g\",\"blockSize\":1048576,\"files\":[" +
                        "{\"path\":\"a.pak\",\"size\":2621440,\"blake3\":\"\",\"sha256\":\"x\",\"executable\":false," +
-                       "\"blocks\":\"H39kQAX/MP6y/vPk1TW5uQorQJYe+vO52f4Zuf3Q3yhS4Lq0\"}],\"emptyDirs\":[]}";
+                       "\"blocks\":\"AABwkJJw2bEff2RABf8w/gAAcN5Z5HW21TW5uQorQJYAAHj4i/JXFdn+Gbn90N8o\"}],\"emptyDirs\":[]}";
 
             var m = System.Text.Json.JsonSerializer.Deserialize<Manifest>(json)!;
 

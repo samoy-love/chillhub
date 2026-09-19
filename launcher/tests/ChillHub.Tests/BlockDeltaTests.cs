@@ -49,7 +49,7 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void ХешиБлоковСовпадаютССервером() {
-            const string pinned = "H39kQAX/MP6y/vPk1TW5uQorQJYe+vO52f4Zuf3Q3yhS4Lq0";
+            const string pinned = "AABwkJJw2bEff2RABf8w/gAAcN5Z5HW21TW5uQorQJYAAHj4i/JXFdn+Gbn90N8o";
             var data = BlockData.ServerPattern((2 * 1024 * 1024) + (512 * 1024));
 
             Assert.Equal(pinned, BlockData.Encode(data, 1024 * 1024));
@@ -119,19 +119,132 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
-        /// Сдвиг не на целое число блоков фиксированная нарезка не ловит: все блоки
-        /// новые, файл качается целиком, но собирается верно. Это граница метода, а
-        /// не поломка: у Steam она та же.
+        /// Три байта в начале сдвигают весь файл мимо границ блоков. Окно, катящееся
+        /// с шагом в байт, находит сдвинутые блоки: качается только первый, в который
+        /// попала вставка. Так растут файлы Unity-игр от версии к версии.
         /// </summary>
         [Fact]
-        public async Task СдвигНеКратныйБлокуКачаетсяЦеликомНоВерно() {
+        public async Task СдвигНаНесколькоБайтНаходитсяКатящимсяОкном() {
             var oldData = BlockData.Random(4 * Bs, 4);
             var newData = new byte[] { 1, 2, 3 }.Concat(oldData).ToArray();
 
             var (result, _) = await this.AssembleAsync(oldData, newData);
 
-            Assert.Equal(0, result.FromOld);
-            Assert.Equal(newData.Length, result.Fetched);
+            Assert.Equal(Bs, result.Fetched);
+            Assert.Equal(newData.Length - Bs, result.FromOld);
+        }
+
+        /// <summary>
+        /// Вставка и удаление посреди файла: пропадают только блоки, в которые
+        /// попала правка, всё до и после находится на своих новых местах.
+        /// </summary>
+        /// <param name="delta">Сколько байт вставлено (плюс) или удалено (минус).</param>
+        [Theory]
+        [InlineData(137)]
+        [InlineData(-4099)]
+        [InlineData(1)]
+        public async Task ПравкаПосрединеСтоитТолькоЗадетыхБлоков(int delta) {
+            var oldData = BlockData.Random(12 * Bs, 43);
+            var cut = (5 * Bs) + 777;
+            var newData = delta > 0
+                ? oldData.Take(cut).Concat(BlockData.Random(delta, 44)).Concat(oldData.Skip(cut)).ToArray()
+                : oldData.Take(cut).Concat(oldData.Skip(cut - delta)).ToArray();
+
+            var (result, _) = await this.AssembleAsync(oldData, newData);
+
+            // Качаются блок с правкой и, может быть, соседний, если правка легла на
+            // границу; хвост нового файла короче блока — его находит проверка конца.
+            Assert.True(result.Fetched <= 2L * Bs, $"скачано {result.Fetched}, ждали не больше двух блоков");
+            Assert.True(result.FromOld >= newData.Length - (2L * Bs));
+        }
+
+        /// <summary>
+        /// Сдвиг окна на байт даёт то же число, что подсчёт с нуля. На этом стоит
+        /// весь поиск: разойдись сдвиг с определением — ни одно смещённое окно не
+        /// совпадёт, а ошибкой это не станет нигде.
+        /// </summary>
+        [Fact]
+        public void СдвигСкользящегоХешаРавенПодсчётуСНуля() {
+            const int w = 4096;
+            var data = BlockData.Random(3 * w, 45);
+            var top = BlockList.Power(w - 1);
+            var h = BlockList.Rolling(0, data.AsSpan(0, w));
+            Assert.Equal(BlockData.Weak(data.AsSpan(0, w)), h);
+            for (var pos = 0; pos + w < data.Length; pos++) {
+                h = unchecked(((h - (data[pos] * top)) * BlockList.RollingPrime) + data[pos + w]);
+                Assert.Equal(BlockList.Rolling(0, data.AsSpan(pos + 1, w)), h);
+            }
+        }
+
+        /// <summary>
+        /// Скользящий хеш совпал, а SHA-256 — нет: так бывает на особо устроенных
+        /// данных, и на каждом таком байте поиск считал бы SHA-256 целого окна.
+        /// Сверх лимита поиск переходит на шаг в блок — выровненные блоки
+        /// по-прежнему находятся.
+        /// </summary>
+        [Fact]
+        public void ЛожныеСовпаденияСкользящегоХешаОграничены() {
+            var oldData = BlockData.Random(6 * Bs, 46);
+            var newData = (byte[])oldData.Clone();
+            newData[(2 * Bs) + 1] ^= 1;
+
+            // У второго блока скользящий хеш — от окна старого файла со смещением 5,
+            // а SHA-256 настоящий: окно на смещении 5 совпадёт по хешу и промахнётся
+            // по SHA-256.
+            var raw = Convert.FromBase64String(BlockData.Encode(newData, Bs));
+            BitConverter.GetBytes(BlockData.Weak(oldData.AsSpan(5, Bs))).CopyTo(raw, 1 * BlockList.DigestBytes);
+            var list = BlockList.TryParse(Bs, newData.Length, Convert.ToBase64String(raw), out _)!;
+
+            var saved = BlockFinder.MaxFalseMatches;
+            BlockFinder.MaxFalseMatches = 0;
+            try {
+                File.WriteAllBytes(this.Old, oldData);
+                var at = BlockFinder.Find(list, this.Old, CancellationToken.None);
+
+                Assert.Equal(0, at[0]);
+                Assert.Equal(-1, at[1]);
+                Assert.Equal(-1, at[2]);
+                Assert.Equal(3L * Bs, at[3]);
+                Assert.Equal(5L * Bs, at[5]);
+            }
+            finally {
+                BlockFinder.MaxFalseMatches = saved;
+            }
+        }
+
+        /// <summary>
+        /// Тысячи одинаковых блоков (мегабайты нулей в pak-архиве) находит одно
+        /// совпадение. Раньше каждое следующее обходило всю их цепочку — квадрат от
+        /// числа блоков, минуты на одном файле.
+        /// </summary>
+        [Fact]
+        public void ОдинаковыеБлокиНеОбходятсяНаКаждомСовпадении() {
+            const int count = 600;
+            var newData = new byte[count * Bs];
+            File.WriteAllBytes(this.Old, new byte[count * Bs]);
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var at = BlockFinder.Find(BlockData.List(newData, Bs), this.Old, CancellationToken.None);
+
+            Assert.All(at, a => Assert.True(a >= 0));
+            Assert.True(sw.Elapsed < TimeSpan.FromSeconds(20), $"{count} одинаковых блоков нашлись за {sw.Elapsed}");
+        }
+
+        /// <summary>
+        /// Старый файл без единого блока нового прокатывается окном целиком, байт за
+        /// байтом. Это худший случай по времени, и он обязан оставаться порядка
+        /// чтения файла, а не часов.
+        /// </summary>
+        [Fact]
+        public void ПоискПоЧужомуФайлуНеЗатягивается() {
+            var newData = BlockData.Random(8 * Bs, 47);
+            File.WriteAllBytes(this.Old, BlockData.Random(256 * Bs, 48));
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var at = BlockFinder.Find(BlockData.List(newData, Bs), this.Old, CancellationToken.None);
+
+            Assert.All(at, a => Assert.Equal(-1, a));
+            Assert.True(sw.Elapsed < TimeSpan.FromSeconds(20), $"16 МБ прокатились за {sw.Elapsed}");
         }
 
         [Theory]
@@ -560,15 +673,31 @@ namespace ChillHub.Tests {
             return b;
         }
 
-        /// <summary>Поле "blocks", посчитанное в лоб, по определению формата.</summary>
+        /// <summary>
+        /// Поле "blocks", посчитанное в лоб, по определению формата: Σ b[i]·P^(n−1−i)
+        /// по модулю 2^64 (little-endian), затем первые восемь байт SHA-256.
+        /// </summary>
         internal static string Encode(byte[] data, int blockSize) {
             var digests = new List<byte>();
             for (var off = 0; off < data.Length; off += blockSize) {
                 var len = Math.Min(blockSize, data.Length - off);
-                digests.AddRange(SHA256.HashData(data.AsSpan(off, len)).Take(BlockList.DigestBytes));
+                digests.AddRange(BitConverter.GetBytes(Weak(data.AsSpan(off, len))));
+                digests.AddRange(SHA256.HashData(data.AsSpan(off, len)).Take(8));
             }
 
             return Convert.ToBase64String(digests.ToArray());
+        }
+
+        /// <summary>Скользящий хеш по определению — степенями, а не схемой Горнера, как в коде.</summary>
+        internal static ulong Weak(ReadOnlySpan<byte> block) {
+            ulong h = 0;
+            ulong pow = 1;
+            for (var i = block.Length - 1; i >= 0; i--) {
+                h = unchecked(h + (block[i] * pow));
+                pow = unchecked(pow * BlockList.RollingPrime);
+            }
+
+            return h;
         }
 
         internal static BlockList List(byte[] data, int blockSize)

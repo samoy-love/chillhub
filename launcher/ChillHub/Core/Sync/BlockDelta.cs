@@ -6,8 +6,6 @@
 namespace ChillHub.Core.Sync {
     using System;
     using System.Buffers;
-    using System.Buffers.Binary;
-    using System.Collections.Generic;
     using System.IO;
     using System.Threading;
     using System.Threading.Tasks;
@@ -46,6 +44,15 @@ namespace ChillHub.Core.Sync {
         }
     }
 
+    /// <summary>Не удалось записать в .part: это диск, а не сеть, и повтор куска не поможет.</summary>
+    internal sealed class LocalWriteException : IOException {
+        /// <summary>Initializes a new instance of the <see cref="LocalWriteException"/> class.</summary>
+        /// <param name="inner">Что ответила файловая система.</param>
+        internal LocalWriteException(IOException inner)
+            : base(inner.Message, inner) {
+        }
+    }
+
     /// <summary>Что вышло из сборки файла по блокам.</summary>
     internal sealed class BlockDeltaResult {
         /// <summary>Gets or sets сколько байт уже лежало в .part от прошлой попытки и прошло сверку.</summary>
@@ -71,10 +78,11 @@ namespace ChillHub.Core.Sync {
     /// или обычной докачкой по Range, и сделанное не пропадёт.
     /// </para>
     /// <para>
-    /// Блоки из старой копии ищутся по хешу, а не по месту: pak-архив, в середину
-    /// которого дописали данные, сдвигает весь хвост. Замер на обновлении Bodycam:
-    /// блоки «на своём месте» экономят 42 ГБ из 53, а «где угодно в том же файле» —
-    /// 50 из 53.
+    /// Блоки в старой копии ищутся не по месту, а на любом смещении (см.
+    /// <see cref="BlockFinder"/>): и pak-архив Unreal, куда дописали мегабайты, и
+    /// файл Unity, подросший на сотню байт, сдвигают весь хвост. Замер на
+    /// обновлении Bodycam: блоки «на своём месте» экономят 42 ГБ из 53, «где
+    /// угодно» — 50.
     /// </para>
     /// </summary>
     internal static class BlockDelta {
@@ -123,27 +131,32 @@ namespace ChillHub.Core.Sync {
             CancellationToken ct,
             FileHasher.StreamingHashes? hashes = null) {
             var result = new BlockDeltaResult();
-            var start = VerifyPrefix(blocks, partPath, ct, hashes);
-            var written = start == blocks.Count ? blocks.FileSize : blocks.OffsetOf(start);
-            result.Resumed = written;
-            onPartLength(written);
-            if (start == blocks.Count) {
-                return result;
-            }
 
-            // Проход по старому файлу — чтение его целиком. Потоков загрузки до
-            // шестнадцати, и без ограничителя на обычном винчестере шестнадцать
-            // гигабайтных файлов читались бы разом, вперемешку.
-            Dictionary<BlockKey, long> index;
+            // Проверка уцелевшего .part и поиск по старому файлу — чтение их
+            // целиком. Потоков загрузки до шестнадцати, и без ограничителя на
+            // обычном винчестере шестнадцать гигабайтных файлов читались бы разом,
+            // вперемешку.
+            int start;
+            long[]? inOld = null;
             if (indexGate != null) {
                 await indexGate.WaitAsync(ct).ConfigureAwait(false);
             }
 
             try {
-                index = IndexFile(oldPath, blocks.BlockSize, ct);
+                start = VerifyPrefix(blocks, partPath, ct, hashes);
+                if (start < blocks.Count) {
+                    inOld = BlockFinder.Find(blocks, oldPath, ct);
+                }
             }
             finally {
                 indexGate?.Release();
+            }
+
+            var written = start == blocks.Count ? blocks.FileSize : blocks.OffsetOf(start);
+            result.Resumed = written;
+            onPartLength(written);
+            if (inOld == null) {
+                return result;
             }
 
             var buffer = ArrayPool<byte>.Shared.Rent(blocks.BlockSize);
@@ -165,14 +178,14 @@ namespace ChillHub.Core.Sync {
                 var i = start;
                 while (i < blocks.Count) {
                     ct.ThrowIfCancellationRequested();
-                    if (TryCopyFromOld(blocks, i, index, old, buffer, part, result, hashes)) {
+                    if (TryCopyFromOld(blocks, i, inOld, old, buffer, part, result, hashes)) {
                         onPartLength(part.Position);
                         i++;
                         continue;
                     }
 
                     var end = i + 1;
-                    while (end < blocks.Count && end - i < MaxRunBlocks && !index.ContainsKey(BlockKey.Of(blocks.DigestAt(end)))) {
+                    while (end < blocks.Count && end - i < MaxRunBlocks && inOld[end] < 0) {
                         end++;
                     }
 
@@ -244,47 +257,11 @@ namespace ChillHub.Core.Sync {
             return good;
         }
 
-        /// <summary>
-        /// Хеши блоков старого файла: по хешу — смещение первого такого блока.
-        /// </summary>
-        /// <param name="path">Старый файл.</param>
-        /// <param name="blockSize">Размер блока.</param>
-        /// <param name="ct">Токен отмены.</param>
-        /// <returns>Индекс блоков.</returns>
-        internal static Dictionary<BlockKey, long> IndexFile(string path, int blockSize, CancellationToken ct) {
-            var index = new Dictionary<BlockKey, long>();
-            var buffer = ArrayPool<byte>.Shared.Rent(blockSize);
-            Span<byte> digest = stackalloc byte[BlockList.DigestBytes];
-            try {
-                using var f = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 0);
-                long offset = 0;
-                while (true) {
-                    ct.ThrowIfCancellationRequested();
-                    var n = f.ReadAtLeast(buffer.AsSpan(0, blockSize), blockSize, throwOnEndOfStream: false);
-                    if (n == 0) {
-                        break;
-                    }
-
-                    BlockList.Digest(buffer.AsSpan(0, n), digest);
-                    index.TryAdd(BlockKey.Of(digest), offset);
-                    offset += n;
-                    if (n < blockSize) {
-                        break;
-                    }
-                }
-            }
-            finally {
-                ArrayPool<byte>.Shared.Return(buffer);
-            }
-
-            return index;
-        }
-
         private static bool TryCopyFromOld(
-            BlockList blocks, int i, Dictionary<BlockKey, long> index, Microsoft.Win32.SafeHandles.SafeFileHandle old,
+            BlockList blocks, int i, long[] inOld, Microsoft.Win32.SafeHandles.SafeFileHandle old,
             byte[] buffer, FileStream part, BlockDeltaResult result, FileHasher.StreamingHashes? hashes) {
-            var key = BlockKey.Of(blocks.DigestAt(i));
-            if (!index.TryGetValue(key, out var offset)) {
+            var offset = inOld[i];
+            if (offset < 0) {
                 return false;
             }
 
@@ -303,7 +280,7 @@ namespace ChillHub.Core.Sync {
             // Старый файл могли поменять между проходами (игра, антивирус, игрок).
             // Блок перепроверяется на том, что прочитано сейчас, а не тогда.
             if (got != len || !blocks.Matches(i, span)) {
-                index.Remove(key);
+                inOld[i] = -1;
                 return false;
             }
 
@@ -343,7 +320,15 @@ namespace ChillHub.Core.Sync {
                                     throw new InvalidDataException($"блок {current} не совпал с манифестом");
                                 }
 
-                                part.Write(pending, 0, len);
+                                try {
+                                    part.Write(pending, 0, len);
+                                }
+                                catch (IOException ex) {
+                                    // Отказ диска (кончилось место) — не сбой сети: повтор
+                                    // того же куска упрётся в то же самое.
+                                    throw new LocalWriteException(ex);
+                                }
+
                                 hashes?.Append(pending, 0, len);
                                 result.Fetched += len;
                                 current++;
@@ -366,7 +351,7 @@ namespace ChillHub.Core.Sync {
 
                         next = end;
                     }
-                    catch (Exception ex) when (ex is not BlockRangeUnsupportedException && !ct.IsCancellationRequested) {
+                    catch (Exception ex) when (ex is not BlockRangeUnsupportedException && ex is not LocalWriteException && !ct.IsCancellationRequested) {
                         // Обрыв посреди куска не отменяет сверенных блоков: они уже в
                         // файле, и повтор просит только остаток. Счётчик неудач
                         // обнуляется всякий раз, когда дело сдвинулось.
@@ -385,15 +370,6 @@ namespace ChillHub.Core.Sync {
             finally {
                 ArrayPool<byte>.Shared.Return(pending);
             }
-        }
-
-        /// <summary>Хеш блока как ключ словаря: двенадцать байт без аллокаций.</summary>
-        internal readonly record struct BlockKey(ulong High, uint Low) {
-            /// <summary>Ключ из хеша блока.</summary>
-            /// <param name="digest">Двенадцать байт хеша.</param>
-            /// <returns>Ключ.</returns>
-            internal static BlockKey Of(ReadOnlySpan<byte> digest) =>
-                new(BinaryPrimitives.ReadUInt64LittleEndian(digest), BinaryPrimitives.ReadUInt32LittleEndian(digest.Slice(8)));
         }
     }
 }

@@ -195,6 +195,27 @@ func TestBackfillCoversModpacksAndSkipsTheLauncher(t *testing.T) {
 	}
 }
 
+// Имя файла и версия в его теле разошлись (файл переименовали руками).
+// Писать команде пришлось бы по версии из тела — то есть в ЧУЖОЙ манифест.
+func TestBackfillRefusesAManifestNamedForAnotherVersion(t *testing.T) {
+	root := t.TempDir()
+	publishedBeforeBlocks(t, root, NamespaceGame, "g", "1.2", map[string][]byte{"a.pak": blockPattern(2 * BlockSize)})
+	publishedBeforeBlocks(t, root, NamespaceGame, "g", "1.3", map[string][]byte{"b.pak": blockPattern(2 * BlockSize)})
+	dir := filepath.Join(root, "manifests", "g")
+	other, _ := os.ReadFile(filepath.Join(dir, "1.3.json"))
+	if err := os.Rename(filepath.Join(dir, "1.2.json"), filepath.Join(dir, "1.2-renamed.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := New(root).BackfillBlocks(NamespaceGame, "g", "1.2-renamed"); err == nil {
+		t.Fatal("backfill accepted a manifest whose body names another version")
+	}
+	now, _ := os.ReadFile(filepath.Join(dir, "1.3.json"))
+	if string(now) != string(other) {
+		t.Fatal("the manifest of another version was overwritten")
+	}
+}
+
 func TestBackfillRejectsUnsafeNames(t *testing.T) {
 	h := New(t.TempDir())
 	for _, tc := range [][2]string{{"../x", "1.0"}, {"g", "../../etc"}, {"", "1"}} {

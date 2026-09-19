@@ -184,16 +184,17 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
-        /// Взятое блоками из старых копий файлов в объём закачки не входит: по сети
-        /// оно не ехало, и «скачано 52 ГБ» при 2,6 ГБ трафика врало бы ровно о том,
-        /// ради чего блоки заведены.
+        /// После загрузки объём закачки — то, что прошло по сети, а не план: блоки
+        /// из старых копий по сети не ехали, и «скачано 52 ГБ» при 2,6 ГБ трафика
+        /// врало бы ровно о том, ради чего блоки заведены.
         /// </summary>
         [Fact]
-        public async Task ВзятоеИзСтарыхКопийНеСчитаетсяЗакачанным() {
+        public async Task ПослеЗагрузкиСчитаетсяТрафикАНеПлан() {
             var sent = new List<SyncOutcome>();
             var plan = new DiffPlan {
                 TotalDownloadBytes = 52_000,
                 BlockReusedBytes = 49_400,
+                NetworkBytes = 2_600,
                 TotalManifestBytes = 60_000,
             };
             var runner = NewRunner(new FakeSync { Plan = plan }, sent);

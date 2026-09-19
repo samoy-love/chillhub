@@ -3,9 +3,12 @@ package builds
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -21,14 +24,43 @@ func blockPattern(n int) []byte {
 	return b
 }
 
-// referenceBlocks считает хеши блоков в лоб, по определению формата.
+// referenceBlocks считает хеши блоков в лоб, по определению формата:
+// Σ b[i]·P^(n−1−i) mod 2^64 little-endian, затем первые 8 байт SHA-256.
 func referenceBlocks(data []byte, bs int) []byte {
 	var out []byte
 	for off := 0; off < len(data); off += bs {
-		sum := sha256.Sum256(data[off:min(off+bs, len(data))])
-		out = append(out, sum[:blockDigestBytes]...)
+		block := data[off:min(off+bs, len(data))]
+		var weak, pow uint64 = 0, 1
+		for _, c := range slices.Backward(block) {
+			weak += uint64(c) * pow
+			pow *= rollingPrime
+		}
+		out = binary.LittleEndian.AppendUint64(out, weak)
+		sum := sha256.Sum256(block)
+		out = append(out, sum[:8]...)
 	}
 	return out
+}
+
+// Скользящий хеш обязан сдвигаться на байт за одно действие и давать то же
+// число, что подсчёт окна с нуля. На этом стоит поиск блоков у лаунчера:
+// разойдись сдвиг с определением хоть на бит — ни одно смещённое окно не
+// совпадёт, и экономия пропадёт без единой ошибки.
+func TestRollingHashSlidesByOneByte(t *testing.T) {
+	const w = 4096
+	data := make([]byte, 3*w)
+	rand.New(rand.NewSource(1)).Read(data)
+	var top uint64 = 1
+	for range w - 1 {
+		top *= rollingPrime
+	}
+	h := rollingHash(0, data[:w])
+	for pos := 0; pos+w < len(data); pos++ {
+		h = (h-uint64(data[pos])*top)*rollingPrime + uint64(data[pos+w])
+		if want := rollingHash(0, data[pos+1:pos+1+w]); h != want {
+			t.Fatalf("window at %d: slid to %x, computed from scratch %x", pos+1, h, want)
+		}
+	}
 }
 
 func TestBlockHasherMatchesTheDefinitionForAnyWriteSizes(t *testing.T) {
@@ -64,12 +96,13 @@ func TestSingleBlockFilesGetNoBlockList(t *testing.T) {
 	}
 }
 
-// Двенадцать байт на блок ложатся в base64 ровно шестнадцатью символами, без
-// выравнивания. На этом стоит разбор у лаунчера: строка режется по 16 символов.
-func TestBlockDigestIsSixteenBase64Chars(t *testing.T) {
-	enc := encodeBlocks(referenceBlocks(blockPattern(3*BlockSize), BlockSize), 3*BlockSize)
-	if len(enc) != 3*16 || strings.Contains(enc, "=") {
-		t.Fatalf("3 blocks encoded as %d chars (%q), want 48 without padding", len(enc), enc)
+// На каждый блок — ровно blockDigestBytes байт; лаунчер режет по ним
+// расшифрованную строку и по длине сверяет число блоков с размером файла.
+func TestBlockDigestsTakeSixteenBytesEach(t *testing.T) {
+	enc := encodeBlocks(referenceBlocks(blockPattern(3*BlockSize+1), BlockSize), 3*BlockSize+1)
+	raw, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil || len(raw) != 4*blockDigestBytes {
+		t.Fatalf("4 blocks encoded as %d bytes (%v), want %d", len(raw), err, 4*blockDigestBytes)
 	}
 }
 
@@ -81,7 +114,7 @@ func TestBlockDigestIsSixteenBase64Chars(t *testing.T) {
 // ни один блок не совпадёт, и каждое обновление снова будет качать файлы
 // целиком. Та же строка закреплена в launcher/tests/ChillHub.Tests/BlockDeltaTests.cs.
 func TestBlockDigestsMatchTheLauncherImplementation(t *testing.T) {
-	const want = "H39kQAX/MP6y/vPk1TW5uQorQJYe+vO52f4Zuf3Q3yhS4Lq0"
+	const want = "AABwkJJw2bEff2RABf8w/gAAcN5Z5HW21TW5uQorQJYAAHj4i/JXFdn+Gbn90N8o"
 	data := blockPattern(2*BlockSize + BlockSize/2)
 	h := newBlockHasher(BlockSize)
 	_, _ = h.Write(data)
@@ -156,7 +189,7 @@ func TestInconsistentBlocksAreRejected(t *testing.T) {
 		"block size too large": {1 << 30, 2 * BlockSize, good},
 		"not base64":           {BlockSize, 2 * BlockSize, "!!!!"},
 		"one digest short":     {BlockSize, 3 * BlockSize, good},
-		"one digest too many":  {BlockSize, BlockSize + 1, good + good[:16]},
+		"one digest too many":  {BlockSize, BlockSize + 1, base64.StdEncoding.EncodeToString(referenceBlocks(blockPattern(3*BlockSize), BlockSize))},
 	} {
 		m := manifest{BlockSize: tc.bs, Files: []manifestFile{{Path: "a.pak", Size: tc.size, Sha256: "x", Blocks: tc.blocks}}}
 		if err := validateManifest(m); err == nil {
@@ -166,6 +199,40 @@ func TestInconsistentBlocksAreRejected(t *testing.T) {
 	ok := manifest{BlockSize: BlockSize, Files: []manifestFile{{Path: "a.pak", Size: 2 * BlockSize, Sha256: "x", Blocks: good}}}
 	if err := validateManifest(ok); err != nil {
 		t.Fatalf("consistent blocks rejected: %v", err)
+	}
+}
+
+// Файлу из одного блока список не положен: лаунчер такой не использует, и
+// пропусти его сервер — в логе игрока каждый раз была бы «поломка».
+func TestBlocksOfASingleBlockFileAreRejected(t *testing.T) {
+	one := base64.StdEncoding.EncodeToString(referenceBlocks(blockPattern(BlockSize), BlockSize))
+	m := manifest{BlockSize: BlockSize, Files: []manifestFile{{Path: "a.bin", Size: BlockSize, Sha256: "x", Blocks: one}}}
+	if err := validateManifest(m); err == nil {
+		t.Fatal("blocks of a one-block file accepted")
+	}
+}
+
+// Себя лаунчер обновляет без блоков: в его манифест они не попадают, даже
+// если сборка крупная.
+func TestLauncherManifestCarriesNoBlocks(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "ChillHub.dll"), blockPattern(3*BlockSize))
+	files, dirs, err := scanManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files[0].Blocks == "" {
+		t.Fatal("precondition: the scan itself computes blocks")
+	}
+	m, err := prepareManifest(manifest{GameID: LauncherGameID, Version: "1.7.1", Files: files, EmptyDirs: dirs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.BlockSize != 0 || hasBlocks(m.Files) {
+		t.Fatalf("launcher manifest got blocks: blockSize=%d", m.BlockSize)
+	}
+	if files[0].Blocks == "" {
+		t.Fatal("stripping blocks must not modify the caller's slice")
 	}
 }
 

@@ -965,12 +965,9 @@ namespace ChillHub.Core.Sync {
 
                     await Task.WhenAll(tasks).ConfigureAwait(false);
                     plan.BlockReusedBytes = Interlocked.Read(ref fromOldBlocks);
+                    plan.NetworkBytes = Interlocked.Read(ref fromNetwork);
                 }
                 catch {
-                    // Сорвавшееся обновление тоже отчитывается о трафике: метрика
-                    // берёт его из плана, и «скачали 12 ГБ» при 300 МБ по сети — неправда.
-                    plan.BlockReusedBytes = Interlocked.Read(ref fromOldBlocks);
-
                     // Из using нельзя выходить, пока живы задачи: каждая делает sem.Release()
                     // в finally, а семафор к тому моменту был бы уже уничтожен. Отмена
                     // прилетала прямо из sem.WaitAsync(ct), Task.WhenAll пропускался — и
@@ -983,6 +980,11 @@ namespace ChillHub.Core.Sync {
                         ChillHub.Core.Logging.Logger.Info($"Загрузка остановлена: {drainEx.Message}");
                     }
 
+                    // Сорвавшееся обновление тоже отчитывается о трафике: метрика
+                    // берёт его из плана. Читать — после того как задачи дошли:
+                    // иначе скачанное ими уже после остановки в счёт не попадёт.
+                    plan.BlockReusedBytes = Interlocked.Read(ref fromOldBlocks);
+                    plan.NetworkBytes = Interlocked.Read(ref fromNetwork);
                     throw;
                 }
             }
@@ -1031,7 +1033,7 @@ namespace ChillHub.Core.Sync {
         /// <param name="indexGate">Ограничитель одновременных чтений старых файлов.</param>
         /// <param name="onPartLength">Сколько байт нового файла уже лежит в .part.</param>
         /// <param name="onNetwork">Сколько байт пришло по сети.</param>
-        /// <param name="onFromOld">Сколько байт взято из старой копии.</param>
+        /// <param name="onFromOld">Сколько байт собранного файла взято из старой копии.</param>
         /// <param name="ct">Токен отмены.</param>
         /// <returns>true, если файл собран и сверен целиком.</returns>
         private async Task<bool> TryAssembleFromBlocksAsync(

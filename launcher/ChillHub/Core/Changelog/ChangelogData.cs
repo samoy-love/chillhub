@@ -44,7 +44,7 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
-                Version = "1.6.64",
+                Version = "1.7.1",
                 Date = "2026-09-19",
                 Changes = new[] {
                     "Обновление игры скачивает только изменившиеся части файлов — большое обновление приходит в разы быстрее.",
