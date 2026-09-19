@@ -180,6 +180,9 @@ func (s *server) middleware(h http.Handler, corsOrigin string, route httpx.Route
 func main() {
 	configureMaxProcs()
 	contentRoot := adminutil.DetectContentRoot()
+	if len(os.Args) > 1 && os.Args[1] == backfillCommand {
+		os.Exit(runBackfill(builds.New(contentRoot), os.Args[2:], os.Stdout))
+	}
 	s := newServer(contentRoot)
 
 	mux := http.NewServeMux()

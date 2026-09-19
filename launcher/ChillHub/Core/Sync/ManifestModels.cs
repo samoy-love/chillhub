@@ -22,6 +22,13 @@ namespace ChillHub.Core.Sync {
         [JsonPropertyName("createdAt")]
         public string CreatedAt { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Gets or sets размер блока, по которому посчитаны <see cref="ManifestFile.Blocks"/>.
+        /// Ноль — хешей блоков у манифеста нет, файлы качаются целиком.
+        /// </summary>
+        [JsonPropertyName("blockSize")]
+        public long BlockSize { get; set; }
+
         [JsonPropertyName("files")]
         public List<ManifestFile> Files { get; set; } = new();
 
@@ -48,6 +55,13 @@ namespace ChillHub.Core.Sync {
 
         [JsonPropertyName("executable")]
         public bool Executable { get; set; }
+
+        /// <summary>
+        /// Gets or sets хеши блоков файла одной base64-строкой (см. <see cref="BlockList"/>).
+        /// Пусто — у файла из одного блока и в манифестах, выпущенных до блоков.
+        /// </summary>
+        [JsonPropertyName("blocks")]
+        public string? Blocks { get; set; }
     }
 
     /// <summary>

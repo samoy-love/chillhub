@@ -107,6 +107,10 @@ func validateManifest(m manifest) error {
 		// filesystem and keys its map the same way, so "A.dll" and "a.dll"
 		// are one destination but two manifest entries — and whichever comes
 		// last wins.
+		if why := blocksProblem(f, m.BlockSize); why != "" {
+			return errors.New("file #" + strconv.Itoa(i) + " " + strconv.Quote(f.Path) + ": " + why)
+		}
+
 		key := strings.ToLower(f.Path)
 		if prev, dup := seen[key]; dup {
 			return errors.New("duplicate path " + strconv.Quote(f.Path) + " (entries #" +

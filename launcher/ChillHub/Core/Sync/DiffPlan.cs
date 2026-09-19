@@ -79,6 +79,18 @@ namespace ChillHub.Core.Sync {
         /// <summary>Gets or sets сколько байт не поедет по сети благодаря соседней копии.</summary>
         public long ReusedBytes { get; set; }
 
+        /// <summary>
+        /// Gets or sets сколько байт при загрузке взято блоками из старых копий
+        /// самих обновляемых файлов.
+        /// <para>
+        /// Становится известно только по ходу загрузки: какие блоки совпадут, видно,
+        /// лишь когда старый файл прочитан. До <see cref="SimpleSyncService.ExecuteAsync"/>
+        /// здесь ноль, и <see cref="TotalDownloadBytes"/> — это верхняя граница
+        /// трафика, а не он сам.
+        /// </para>
+        /// </summary>
+        public long BlockReusedBytes { get; set; }
+
         public List<FileTask> Downloads { get; set; } = new();
 
         public List<string> ToDelete { get; set; } = new();
