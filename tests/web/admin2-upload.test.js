@@ -325,8 +325,22 @@ test('номер, который сервер не примет, назван д
   assert.match(U.versionProblem(''), /Без номера/);
   assert.match(U.versionProblem('..'), /означает папку/);
   assert.match(U.versionProblem('версия'), /только латиница/);
-  assert.match(U.versionProblem('1.6'), /из трёх чисел/);
-  assert.match(U.versionProblem('1.6.47-beta'), /из трёх чисел/);
+  assert.match(U.versionProblem('1.6'), /три числа/);
+  assert.match(U.versionProblem('1.6.47-beta'), /три числа/);
+});
+
+test('номер лаунчера — только три числа, у игры — как выпустил разработчик', () => {
+  // Самообновление лаунчера у игроков отвергает номер с буквами,
+  // а номер игры лаунчер сравнивает по частям любой длины
+  for (const v of ['2.4.A', '2.4.4.4.01', '0.8.12.19193']) {
+    assert.match(U.versionProblem(v), /три числа/, v);
+    assert.strictEqual(U.versionProblem(v, { game: true }), '', v);
+  }
+  assert.strictEqual(U.versionProblem('1.6.47', { game: true }), '');
+  for (const v of ['2..4', '2.4.', '.2.4', '2.4-']) {
+    assert.match(U.versionProblem(v, { game: true }), /Между точками/, v);
+  }
+  assert.match(U.versionProblem('2.4.Б', { game: true }), /только латиница/);
 });
 
 test('следующий номер предлагается патчем', () => {
@@ -343,9 +357,20 @@ test('неполный и непонятный номер не мешают пр
   assert.strictEqual(U.nextVersion(null), '1.0.1');
 });
 
+test('следующий номер игры в чужом формате растит последнюю часть', () => {
+  assert.strictEqual(U.nextVersion('2.4.4.4.01'), '2.4.4.4.02');
+  assert.strictEqual(U.nextVersion('0.8.12.19193'), '0.8.12.19194');
+  assert.strictEqual(U.nextVersion('2.4.09'), '2.4.10');
+  assert.strictEqual(U.nextVersion('2.4.A'), '2.4.B');
+  assert.strictEqual(U.nextVersion('2.4.Z'), '1.0.1', 'дальше Z букв нет — не угадываем');
+});
+
 test('предложенный номер сам по себе годится', () => {
   for (const v of ['1.6.46', '1.6', '', 'мусор']) {
     assert.strictEqual(U.versionProblem(U.nextVersion(v)), '', v);
+  }
+  for (const v of ['2.4.A', '2.4.4.4.01']) {
+    assert.strictEqual(U.versionProblem(U.nextVersion(v), { game: true }), '', v);
   }
 });
 

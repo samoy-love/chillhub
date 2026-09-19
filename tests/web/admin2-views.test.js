@@ -759,7 +759,15 @@ test('модпаку хватает безопасного имени, игре 
   assert.strictEqual(V.uploadVersionProblem({ kind: 'mods', version: 'Team-Pack-1.1.0' }), '');
   assert.match(V.uploadVersionProblem({ kind: 'mods', version: 'пак 1' }), /только латиница/);
   assert.match(V.uploadVersionProblem({ kind: 'mods', version: '' }), /Без номера/);
-  assert.match(V.uploadVersionProblem({ gameId: 'repo', version: 'Team-Pack-1.1.0' }), /из трёх чисел/);
+  assert.strictEqual(V.uploadVersionProblem({ gameId: 'repo', version: 'Team-Pack-1.1.0' }), '');
+});
+
+test('номер игры может быть с буквой и из скольких угодно частей, у лаунчера — нет', () => {
+  assert.strictEqual(V.uploadVersionProblem({ gameId: 'bodycam', version: '2.4.A' }), '');
+  assert.strictEqual(V.uploadVersionProblem({ gameId: 'bodycam', version: '2.4.4.4.01' }), '');
+  assert.match(V.uploadVersionProblem({ gameId: 'bodycam', version: '2..4' }), /Между точками/);
+  assert.match(V.uploadVersionProblem({ version: '2.4.A' }), /три числа/);
+  assert.match(V.uploadVersionProblem({ kind: 'launcher', version: '2.4.4.4' }), /три числа/);
 });
 
 test('поверх того, что игроки получают сейчас, не заливают', () => {
