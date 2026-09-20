@@ -255,15 +255,25 @@ jobs:
 
   htmlhint-web:
     name: HTMLHint (web)
-    runs-on: ubuntu-latest
+    # СВОИ ЛЁГКИЕ РАННЕРЫ, А ФОРКИ — В ОБЛАКО.
+    # Метка light — три собственных контейнера (три ядра, 4 ГиБ) с кэшем npm и
+    # тулчейнами на датасете снаружи: он переживает откат, поэтому установка
+    # пакетов здесь не ходит в сеть, а канал у нас узкий. Код из форк-PR на
+    # собственное железо не попадает — для него остаётся ubuntu-latest, и это
+    # условие, а не пожелание: раннер там исполняет чужой код.
+    runs-on: ${{ fromJSON(github.event.pull_request.head.repo.fork && '["ubuntu-latest"]' || '["self-hosted","light"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
+      # Только в облаке: у своего раннера кэш npm лежит на датасете снаружи
+      # контейнера (npm_config_cache=/cache/npm) и переживает откат, а выгрузка
+      # его в хранилище GitHub стоила бы дороже самой установки пакетов.
       - name: Cache npm
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: runner.environment == 'github-hosted'
         with:
           path: ~/.npm
           key: npm-cache-linters-${{ runner.os }}-node24-v1
@@ -277,15 +287,25 @@ jobs:
 
   stylelint-web:
     name: Stylelint (web)
-    runs-on: ubuntu-latest
+    # СВОИ ЛЁГКИЕ РАННЕРЫ, А ФОРКИ — В ОБЛАКО.
+    # Метка light — три собственных контейнера (три ядра, 4 ГиБ) с кэшем npm и
+    # тулчейнами на датасете снаружи: он переживает откат, поэтому установка
+    # пакетов здесь не ходит в сеть, а канал у нас узкий. Код из форк-PR на
+    # собственное железо не попадает — для него остаётся ubuntu-latest, и это
+    # условие, а не пожелание: раннер там исполняет чужой код.
+    runs-on: ${{ fromJSON(github.event.pull_request.head.repo.fork && '["ubuntu-latest"]' || '["self-hosted","light"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
+      # Только в облаке: у своего раннера кэш npm лежит на датасете снаружи
+      # контейнера (npm_config_cache=/cache/npm) и переживает откат, а выгрузка
+      # его в хранилище GitHub стоила бы дороже самой установки пакетов.
       - name: Cache npm
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: runner.environment == 'github-hosted'
         with:
           path: ~/.npm
           key: npm-cache-linters-${{ runner.os }}-node24-v1
@@ -300,15 +320,25 @@ jobs:
 
   eslint-web:
     name: ESLint (web)
-    runs-on: ubuntu-latest
+    # СВОИ ЛЁГКИЕ РАННЕРЫ, А ФОРКИ — В ОБЛАКО.
+    # Метка light — три собственных контейнера (три ядра, 4 ГиБ) с кэшем npm и
+    # тулчейнами на датасете снаружи: он переживает откат, поэтому установка
+    # пакетов здесь не ходит в сеть, а канал у нас узкий. Код из форк-PR на
+    # собственное железо не попадает — для него остаётся ubuntu-latest, и это
+    # условие, а не пожелание: раннер там исполняет чужой код.
+    runs-on: ${{ fromJSON(github.event.pull_request.head.repo.fork && '["ubuntu-latest"]' || '["self-hosted","light"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
+      # Только в облаке: у своего раннера кэш npm лежит на датасете снаружи
+      # контейнера (npm_config_cache=/cache/npm) и переживает откат, а выгрузка
+      # его в хранилище GitHub стоила бы дороже самой установки пакетов.
       - name: Cache npm
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: runner.environment == 'github-hosted'
         with:
           path: ~/.npm
           key: npm-cache-linters-${{ runner.os }}-node24-v1
@@ -330,7 +360,13 @@ jobs:
 
   web-tests:
     name: Web tests (node --test)
-    runs-on: ubuntu-latest
+    # СВОИ ЛЁГКИЕ РАННЕРЫ, А ФОРКИ — В ОБЛАКО.
+    # Метка light — три собственных контейнера (три ядра, 4 ГиБ) с кэшем npm и
+    # тулчейнами на датасете снаружи: он переживает откат, поэтому установка
+    # пакетов здесь не ходит в сеть, а канал у нас узкий. Код из форк-PR на
+    # собственное железо не попадает — для него остаётся ubuntu-latest, и это
+    # условие, а не пожелание: раннер там исполняет чужой код.
+    runs-on: ${{ fromJSON(github.event.pull_request.head.repo.fork && '["ubuntu-latest"]' || '["self-hosted","light"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
