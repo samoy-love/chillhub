@@ -45,7 +45,7 @@ namespace ChillHub.Core.Game {
     /// <param name="Version">Версия сборки.</param>
     /// <param name="Result">ok, fail или cancel.</param>
     /// <param name="DurationMs">Сколько ждал пользователь — от нажатия кнопки, а не от начала закачки.</param>
-    /// <param name="Bytes">Сколько байт операция собиралась скачать.</param>
+    /// <param name="Bytes">Сколько байт прошло по сети; если до загрузки не дошло — сколько операция собиралась скачать.</param>
     /// <param name="FilesDownloaded">Сколько файлов операция собиралась скачать.</param>
     /// <param name="FilesTotal">Сколько файлов в сборке целиком.</param>
     /// <param name="FullBytes">Сколько весила бы та же операция полной загрузкой.</param>
@@ -477,7 +477,10 @@ namespace ChillHub.Core.Game {
                     request.Version,
                     result,
                     DurationMs: (long)(DateTime.UtcNow - opStart).TotalMilliseconds,
-                    Bytes: plan?.TotalDownloadBytes ?? 0,
+                    // Сколько прошло по сети, если загрузка уже шла: рядом с FullBytes
+                    // эта цифра и есть экономия — блоки из старых копий, соседняя
+                    // копия игры, докачка. До загрузки известен только план.
+                    Bytes: plan == null ? 0 : plan.NetworkBytes ?? plan.TotalDownloadBytes,
                     FilesDownloaded: plan?.TotalFilesToDownload ?? 0,
                     FilesTotal: plan?.TotalManifestFiles ?? 0,
                     FullBytes: plan?.TotalManifestBytes ?? 0,
