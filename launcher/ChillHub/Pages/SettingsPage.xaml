@@ -128,7 +128,7 @@
             <TextBox Grid.Column="2" Name="SpeedLimitBox" Style="{StaticResource Style.SettingsNumberBox}"
                      IsEnabled="{Binding IsChecked, ElementName=SpeedLimitCheck}"
                      LostKeyboardFocus="SpeedLimitBox_LostKeyboardFocus" KeyDown="NumberBox_KeyDown"/>
-            <TextBlock Grid.Column="3" Text="МБ/с, от 1 до 10" Style="{StaticResource Style.SettingsLabel}" Margin="8,0,0,0"/>
+            <TextBlock Grid.Column="3" Text="МБ/с, от 1 до 1000" Style="{StaticResource Style.SettingsLabel}" Margin="8,0,0,0"/>
             <TextBlock Grid.Column="4" Name="SpeedLimitValueText" Text="без лимита" Style="{StaticResource Style.SettingsLabel}" Margin="16,0,0,0"
                        Foreground="{DynamicResource Brush.TextMuted}"/>
           </Grid>

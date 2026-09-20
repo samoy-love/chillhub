@@ -4,6 +4,7 @@
 // </copyright>
 
 namespace ChillHub.Core.Sync {
+    using System;
     using System.IO;
 
     /// <summary>
@@ -28,9 +29,16 @@ namespace ChillHub.Core.Sync {
         /// <param name="drive">Корень тома, на котором не хватило места.</param>
         /// <param name="requiredBytes">Сколько байт нужно свободными.</param>
         /// <param name="availableBytes">Сколько байт свободно на самом деле.</param>
-        internal NotEnoughSpaceException(string drive, long requiredBytes, long availableBytes)
-            : base($"Недостаточно свободного места на диске {drive}. " +
-                   $"Требуется {requiredBytes} байт, доступно {availableBytes} байт.") {
+        /// <param name="inner">
+        /// Отказ файловой системы, из которого этот вывод сделан; null — место
+        /// посчитали заранее, и отказа ещё не было. Нужен журналу: без него в логе
+        /// остаётся вердикт без единой строки о том, на чём именно он получен.
+        /// </param>
+        internal NotEnoughSpaceException(string drive, long requiredBytes, long availableBytes, Exception? inner = null)
+            : base(
+                $"Недостаточно свободного места на диске {drive}. " +
+                $"Требуется {requiredBytes} байт, доступно {availableBytes} байт.",
+                inner) {
             this.Drive = drive;
             this.RequiredBytes = requiredBytes;
             this.AvailableBytes = availableBytes;

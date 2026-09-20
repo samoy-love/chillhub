@@ -186,7 +186,48 @@ namespace ChillHub.Core.Game {
         /// <param name="ex">Отказ по месту.</param>
         /// <returns>Текст для строки состояния.</returns>
         internal static string NoSpaceStatus(NotEnoughSpaceException ex)
-            => $"На диске {ex.Drive} не хватает места: освободите {FormatSize(ex.MissingBytes)} и повторите.";
+            => NoSpaceStatus(ex.Drive, ex.MissingBytes);
+
+        /// <summary>
+        /// Та же строка для предварительной проверки: там нет исключения, а сказать
+        /// игроку надо ровно то же самое.
+        /// </summary>
+        /// <param name="drive">Корень тома; пусто — не определился.</param>
+        /// <param name="missingBytes">Сколько байт не хватает.</param>
+        /// <returns>Текст для строки состояния.</returns>
+        internal static string NoSpaceStatus(string? drive, long missingBytes) {
+            var where = string.IsNullOrWhiteSpace(drive) ? string.Empty : $" {drive.Trim()}";
+            return $"На диске{where} не хватает места: освободите {FormatSize(missingBytes)} и повторите.";
+        }
+
+        /// <summary>
+        /// Строка о файлах, которые заменятся только после перезагрузки.
+        /// <para>
+        /// Про закрытие игры — первым делом: держит файлы почти всегда она, и тогда
+        /// повтор помогает сразу. Скачанное при этом не пропадает, о чём и сказано:
+        /// иначе фраза про перезагрузку читается как «всё заново».
+        /// </para>
+        /// </summary>
+        /// <param name="count">Сколько файлов ждут.</param>
+        /// <returns>Текст для строки состояния.</returns>
+        internal static string RebootPendingStatus(int count)
+            => $"Файлов занято другой программой: {count}. Закройте игру и повторите, "
+                + "а если не поможет — перезагрузите компьютер: скачанное сохранится.";
+
+        /// <summary>Корень тома, на котором лежит путь; пусто, если определить не вышло.</summary>
+        /// <param name="path">Любой путь.</param>
+        /// <returns>Корень тома.</returns>
+        internal static string DriveOf(string? path) {
+            try {
+                return string.IsNullOrWhiteSpace(path)
+                    ? string.Empty
+                    : Path.GetPathRoot(Path.GetFullPath(path)) ?? string.Empty;
+            }
+            catch (Exception) {
+                // Кривой путь не должен ронять отказ: без буквы строка беднее, но верна.
+                return string.Empty;
+            }
+        }
 
         /// <summary>
         /// Проводит операцию целиком. Исключения наружу не выпускает: всё, что могло пойти
@@ -323,8 +364,19 @@ namespace ChillHub.Core.Game {
                 var free = this.FreeSpaceFor(gid);
                 if (plan.TotalDownloadBytes > 0) {
                     this.ui.SetFilesSize($"Нужно: {FormatSize(plan.TotalDownloadBytes)} ({FormatSize(free)} доступно)");
-                    if (free > 0 && free < plan.TotalDownloadBytes) {
-                        this.ui.SetStatus("Недостаточно свободного места.");
+
+                    // ТРЕБУЕМ РОВНО ТО, ЧТО ПОТРЕБУЕТ ДВИЖОК, А НЕ ВЕСЬ ОБЪЁМ ЗАКАЧКИ.
+                    //
+                    // Файл больше не копится в staging: он качается в «.part» рядом с
+                    // целью и подменяет её сразу после сверки, поэтому старые байты
+                    // освобождаются по ходу дела. У обновления, где файлы заменяются на
+                    // месте, прирост занятого места близок к нулю, и требовать под него
+                    // второй размер сборки — значит отказывать в обновлении, которое
+                    // спокойно поместилось бы. На сборке в 53 ГБ это отказ при полусотне
+                    // свободных гигабайт вместо честных нескольких.
+                    var required = Sync.SimpleSyncService.RequiredFreeBytes(plan, Sync.SimpleSyncService.DownloadDegree());
+                    if (free > 0 && free < required) {
+                        this.ui.SetStatus(NoSpaceStatus(DriveOf(request.LocalRoot), required - free));
 
                         // Именно та ошибка, о которой пишут в обратную связь словами
                         // «ничего не качается»: без кода в статистике её видно только
@@ -337,6 +389,23 @@ namespace ChillHub.Core.Game {
                 var start = DateTime.UtcNow;
                 var progress = new Progress<SyncProgress>(p => this.ui.ReportProgress(p, start));
                 await this.sync.ExecuteAsync(plan, progress, token).ConfigureAwait(true);
+
+                // ЧАСТЬ ФАЙЛОВ ЗАНЯТА И ЖДЁТ ПЕРЕЗАГРУЗКИ — ЭТО НЕ «ГОТОВО».
+                //
+                // Такой файл движок не заменяет: новое содержимое ложится рядом как
+                // «.new», замена планируется на перезагрузку, а на диске остаётся
+                // старое. Записать маркер версии значило бы объявить установленным то,
+                // чего на диске нет. Маркер незавершённого обновления движок оставляет
+                // на месте — им проверка статуса и позовёт докатить.
+                if (plan.DeferredToReboot.Count > 0) {
+                    this.ui.SetStatus(RebootPendingStatus(plan.DeferredToReboot.Count));
+                    this.ui.SetSpeedEta(string.Empty);
+                    Logging.Logger.Warn(
+                        $"GamePage.StartSync gid={gid} version={version}: " +
+                        $"{plan.DeferredToReboot.Count} файл(ов) заменятся после перезагрузки");
+                    Report(request, plan, "fail", opStart, "reboot_required");
+                    return false;
+                }
 
                 // Маркер версии обязан соответствовать тому, что реально установлено (в т.ч. после отката)
                 this.WriteLocalVersion(gid, version);

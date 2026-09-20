@@ -44,6 +44,15 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
+                Version = "1.7.4",
+                Date = "2026-09-21",
+                Changes = new[] {
+                    "Про свободное место лаунчер больше не врёт: не отказывает зря и говорит, где и сколько освободить.",
+                    "Пересобранные моды теперь доезжают и до копии игры из Steam.",
+                    "Занятые игрой файлы больше не выдаются за обновлённые — лаунчер просит закрыть игру.",
+                },
+            },
+            new ChangelogRelease {
                 Version = "1.7.3",
                 Date = "2026-09-21",
                 Changes = new[] {

@@ -3177,7 +3177,8 @@ namespace ChillHub.Pages {
                 Core.Mods.SteamLocator.Locate,
                 Core.Home.GameLocalState.ReadModsVersionAt,
                 logSteam ? Core.Logging.Logger.Info : null,
-                Core.Mods.ModPackFiles.Broken);
+                Core.Mods.ModPackFiles.Broken,
+                Core.Home.GameLocalState.ReadModsRevisionAt);
 
         /// <summary>
         /// Считает четыре (или два) варианта запуска на текущий момент.

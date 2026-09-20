@@ -177,7 +177,7 @@ namespace ChillHub.Pages {
             }
 
             // Тот же диапазон, что и в Config.Clamp: показываем то, что реально сохранится
-            mbps = Math.Clamp(mbps, 1, 10);
+            mbps = Math.Clamp(mbps, 1, AppConfig.MaxSpeedLimitMbps);
             if (this.SpeedLimitBox != null) {
                 this.SpeedLimitBox.Text = mbps.ToString(CultureInfo.InvariantCulture);
             }

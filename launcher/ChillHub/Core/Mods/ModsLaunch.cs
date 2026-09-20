@@ -130,6 +130,13 @@ namespace ChillHub.Core.Mods {
     /// пункт «Steam · с модами» после этого обещал запуск с тем, чего в папке нет.
     /// </param>
     /// <param name="LocalModsBroken">То же про сборку с сервера.</param>
+    /// <param name="SteamModsRevision">
+    /// Отпечаток модпака, стоящего в копии из Steam; пусто — отпечатка нет.
+    /// Отдельно от версии: версия модпака — это имя пакета на Thunderstore, и тот же
+    /// пакет админка умеет пересобрать изменившимся конвейером. Сборке Chill Hub этот
+    /// вопрос задаёт <c>GameStatus.ModsOutOfDate</c>, а копия из Steam сравнивалась
+    /// только по имени — пересборка до неё не доезжала вовсе.
+    /// </param>
     internal sealed record LaunchContext(
         ModsInfo? Mods,
         string LocalRoot,
@@ -140,7 +147,8 @@ namespace ChillHub.Core.Mods {
         string SteamModsVersion,
         string GameTitle = "",
         bool SteamModsBroken = false,
-        bool LocalModsBroken = false);
+        bool LocalModsBroken = false,
+        string SteamModsRevision = "");
 
     /// <summary>
     /// Четыре способа запустить игру с модпаком: копия из Steam или сборка с сервера,
@@ -181,6 +189,35 @@ namespace ChillHub.Core.Mods {
                 LaunchTarget.LocalModded => $"Пиратка · {modded}",
                 _ => "Пиратка · без модов",
             };
+        }
+
+        /// <summary>
+        /// Пересобран ли модпак в копии из Steam под тем же именем версии.
+        /// <para>
+        /// ОДНОГО ИМЕНИ ВЕРСИИ МАЛО, и для сборки Chill Hub это давно учтено
+        /// (<c>GameStatus.ModsOutOfDate</c>). Версия модпака — имя пакета на
+        /// Thunderstore, а не номер нашей сборки: админка умеет пересобрать тот же
+        /// пакет изменившимся конвейером, и тогда под тем же именем лежит другое
+        /// дерево. Пока сравнивались только имена, такая пересборка до копии из Steam
+        /// не доезжала никогда — пункт так и говорил «Steam · с модами» и запускал
+        /// старое.
+        /// </para>
+        /// <para>
+        /// Пустой отпечаток на сервере — старый сервер, сравнивать нечем. Пустой на
+        /// диске при непустом на сервере — модпак ставил лаунчер, отпечатков ещё не
+        /// писавший: один раз сверимся, и дальше маркер будет на месте. Правило то же
+        /// самое, что у сборки с сервера, — разойтись этим двум местам нельзя.
+        /// </para>
+        /// </summary>
+        /// <param name="ctx">Что известно об игре и её копиях.</param>
+        /// <returns>true, если отпечатки разошлись.</returns>
+        private static bool SteamPackRebuilt(LaunchContext ctx) {
+            var wanted = (ctx.Mods?.Revision ?? string.Empty).Trim();
+            if (wanted.Length == 0) {
+                return false;
+            }
+
+            return !string.Equals(ctx.SteamModsRevision.Trim(), wanted, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -229,7 +266,8 @@ namespace ChillHub.Core.Mods {
             else if (string.IsNullOrWhiteSpace(ctx.SteamModsVersion)) {
                 options.Add(Make(LaunchTarget.SteamModded, ctx.Steam.GameDir, true, LaunchAction.InstallMods, "установить моды"));
             }
-            else if (!string.Equals(ctx.SteamModsVersion.Trim(), (mods!.Version ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase)) {
+            else if (!string.Equals(ctx.SteamModsVersion.Trim(), (mods!.Version ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase)
+                || SteamPackRebuilt(ctx)) {
                 options.Add(Make(LaunchTarget.SteamModded, ctx.Steam.GameDir, true, LaunchAction.InstallMods, "обновить моды"));
             }
             else if (!DoorstopConfig.IsInstalled(ctx.Steam.GameDir) || ctx.SteamModsBroken) {
