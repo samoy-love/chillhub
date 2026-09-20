@@ -902,8 +902,11 @@ namespace ChillHub.Pages {
         }
 
         // Обход папки игры с пересчётом хешей не имеет права выполняться на UI-потоке: см. Core/Home/SyncPlanner.
+        // Через Shared-путь: подсказка «Нужно: N» и проверка статуса спрашивают одно и то
+        // же, и второй обход той же папки — это минуты чтения диска впустую. Файлы по
+        // этому плану здесь не меняются, поэтому делить его безопасно.
         private Task<DiffPlan> PlanOffUiThreadAsync(Manifest manifest, string localRoot, string contentBaseUrl, CancellationToken token) =>
-            SyncPlanner.PlanOffUiThreadAsync(this.sync, manifest, localRoot, contentBaseUrl, token);
+            SyncPlanner.SharedPlanOffUiThreadAsync(this.sync, manifest, localRoot, contentBaseUrl, token);
 
         private Task DispatcherInvokeAsync(Action action) {
             Dispatcher? dispatcher;

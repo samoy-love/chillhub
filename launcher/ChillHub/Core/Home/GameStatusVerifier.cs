@@ -131,7 +131,10 @@ namespace ChillHub.Core.Home {
                 Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} fetching manifest {manifestUrl}");
                 var manifest = await this.sync.GetManifestAsync(manifestUrl, CancellationToken.None);
                 var contentBase = IntegrityChecker.ContentBaseUrl(this.baseApi(), gid, latest);
-                var plan = await SyncPlanner.PlanOffUiThreadAsync(this.sync, manifest, localRoot, contentBase, CancellationToken.None);
+                // Shared-путь: ту же папку с теми же настройками прямо сейчас обходит
+                // подсказка «Нужно: N» на главной. Файлы по этому плану проверка не
+                // меняет, поэтому расчёт можно поделить, а не платить за него дважды.
+                var plan = await SyncPlanner.SharedPlanOffUiThreadAsync(this.sync, manifest, localRoot, contentBase, CancellationToken.None);
                 Logging.Logger.Info($"VerifyGameStatusAsync gid={gid} plan: downloads={plan.Downloads.Count} bytes={plan.TotalDownloadBytes} toDelete={plan.ToDelete.Count} emptyDirs={plan.EmptyDirsToCreate.Count}");
                 LogPlanDownloads(gid, "verify", plan, localRoot);
 
