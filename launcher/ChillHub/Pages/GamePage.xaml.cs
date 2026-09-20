@@ -25,7 +25,8 @@ namespace ChillHub.Pages {
 
     /// <summary>
     /// Страница отдельной игры: сведения об установке, состояние, прогресс установки или
-    /// обновления, наигранное время и changelog из новостей игры.
+    /// обновления и наигранное время. Новостей здесь нет: их место — ленты на главной,
+    /// а страница игры отвечает на вопрос «что с ней сейчас».
     /// Кнопки «Играть» здесь нет намеренно — запуск остаётся на главной странице.
     /// </summary>
     public partial class GamePage : Page {
@@ -33,7 +34,6 @@ namespace ChillHub.Pages {
         private readonly HttpClient http = HttpClientProvider.Shared;
         private readonly ISyncService sync = new SimpleSyncService();
         private readonly GameBuildsLoader buildsLoader;
-        private readonly GameChangelogLoader changelogLoader;
         private readonly GameSyncRunner syncRunner;
         private readonly SyncProgressView progressView = new();
 
@@ -68,7 +68,6 @@ namespace ChillHub.Pages {
             this.game = game ?? new GameInfo();
             this.downloadQueue = downloadQueue;
             this.buildsLoader = new GameBuildsLoader(this.http);
-            this.changelogLoader = new GameChangelogLoader(this.http);
             this.syncRunner = new GameSyncRunner(this.sync, this.BuildSyncUi());
 
             try {
@@ -115,7 +114,6 @@ namespace ChillHub.Pages {
             try {
                 await this.RefreshStateAsync().ConfigureAwait(true);
                 await this.LoadBuildsAsync().ConfigureAwait(true);
-                await this.LoadChangelogAsync().ConfigureAwait(true);
                 this.LoadPlaytime();
             }
             catch (Exception ex) {
@@ -209,6 +207,14 @@ namespace ChillHub.Pages {
                 this.ActionBtn.IsEnabled = true;
                 this.ActionBtn.Style = this.TryFindResource("Style.Button.GamePrimary") as Style ?? this.ActionBtn.Style;
 
+                // У свежей установленной игры делать нечего: кнопка действия вырождается в
+                // «Проверить файлы», а такая кнопка уже стоит ниже, в «Обслуживании». Две
+                // одинаковые надписи на одном экране — залитая сверху и обычная снизу —
+                // читаются как два разных действия, и залитая ещё и обещает главное.
+                this.ActionBtn.Visibility = state == GameState.Installed
+                    ? Visibility.Collapsed
+                    : Visibility.Visible;
+
                 // Последним словом остаётся режим технических работ: он может запретить действие
                 this.ApplyMaintenanceToButtons();
             }
@@ -226,28 +232,6 @@ namespace ChillHub.Pages {
                 // Без списка сборок страница остаётся рабочей, просто нельзя переключить версию
                 Core.Logging.Logger.ErrorNoReport(ex, $"GamePage.LoadBuildsAsync(gid={gid})");
                 this.builds = new List<string>();
-            }
-        }
-
-        private async Task LoadChangelogAsync() {
-            var gid = this.game.GameId;
-            try {
-                var items = await this.changelogLoader.LoadAsync(this.BaseApi, gid).ConfigureAwait(true);
-
-                this.ChangelogList.ItemsSource = items;
-                this.ChangelogEmptyText.Text = "Записей пока нет";
-                this.ChangelogEmptyText.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-            }
-            catch (Exception ex) {
-                // Changelog второстепенен: установка и обновление работают без него
-                Core.Logging.Logger.ErrorNoReport(ex, $"GamePage.LoadChangelogAsync(gid={gid})");
-                this.ChangelogList.ItemsSource = Array.Empty<NewsItem>();
-                // Ни «changelog», ни совета чинить исправный интернет: причину называет
-                // Core.Net.OfflineMessage — короткой строкой, потому что это подпись
-                // пустого списка, а не сообщение об ошибке.
-                this.ChangelogEmptyText.Text = Core.Net.OfflineMessage
-                    .Describe(ex, Core.Net.OfflineMessage.NetworkAvailable()).Title;
-                this.ChangelogEmptyText.Visibility = Visibility.Visible;
             }
         }
 
@@ -510,6 +494,98 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Сверить файлы игры с сервером. Та же работа, что и «Проверить файлы игры» в
+        /// контекстном меню списка, и та же очередь: две проверки одних файлов сразу — это
+        /// два прохода по одному диску, а не вдвое быстрее.
+        /// </summary>
+        /// <param name="sender">Кнопка.</param>
+        /// <param name="e">Аргументы события.</param>
+        private void VerifyFilesBtn_Click(object sender, RoutedEventArgs e) {
+            if (this.downloadQueue == null) {
+                return;
+            }
+
+            this.StartQueuedSync(Core.Game.QueueTaskKind.Verify);
+        }
+
+        /// <summary>
+        /// Ярлык игры на рабочий стол. Тот же вызов, что делает лаунчер сам после установки,
+        /// — здесь он нужен, когда ярлык удалили руками.
+        /// </summary>
+        /// <param name="sender">Кнопка.</param>
+        /// <param name="e">Аргументы события.</param>
+        private void ShortcutBtn_Click(object sender, RoutedEventArgs e) {
+            try {
+                Core.Home.GameLocalState.StartDesktopShortcutCreation(
+                    this.game.Title,
+                    this.game.GameId,
+                    this.game.ExeRelativePath,
+                    name => this.Dispatcher.BeginInvoke(
+                        () => this.StateText.Text = $"Ярлык {name} создан на рабочем столе"));
+            }
+            catch (Exception ex) {
+                // Ярлык — удобство: страница обязана остаться рабочей и без него.
+                Core.Logging.Logger.Warn($"GamePage: ярлык для '{this.game.GameId}' не создан: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Сносит файлы игры с диска. Запреты и сама работа общие с контекстным меню
+        /// списка — <see cref="Core.Home.GameDeletion"/>: разрушающее действие в двух
+        /// местах не должно означать двух копий его защит.
+        /// </summary>
+        /// <param name="sender">Кнопка.</param>
+        /// <param name="e">Аргументы события.</param>
+        private async void DeleteGameBtn_Click(object sender, RoutedEventArgs e) {
+            try {
+                var gid = this.game.GameId;
+                var queued = this.downloadQueue?.Snapshot()
+                    .Any(i => string.Equals(i.GameId, gid, StringComparison.OrdinalIgnoreCase)) ?? false;
+
+                if (Core.Home.GameDeletion.Blocker(queued, this.game.ExeRelativePath) is { Length: > 0 } refusal) {
+                    MessageBox.Show(refusal, "Удаление локальных файлов", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                var title = string.IsNullOrWhiteSpace(this.game.Title) ? gid : this.game.Title;
+                var localRoot = this.LocalRoot;
+                if (!Core.Home.HomeDialogs.ConfirmDeleteGameFiles(this, title!, localRoot)) {
+                    return;
+                }
+
+                this.DeleteGameBtn.IsEnabled = false;
+                this.StateText.Text = $"Удаление файлов {title}…";
+                try {
+                    var blocked = await Core.Home.GameDeletion.RunAsync(gid, localRoot);
+                    if (blocked.Count > 0) {
+                        MessageBox.Show(
+                            Core.Home.GameFiles.BuildBlockedFilesMessage(blocked),
+                            "Удаление локальных файлов",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Warning);
+                        return;
+                    }
+
+                    // Игра с вырванными файлами не запустится, и показывать её
+                    // установленной — врать: страница перечитывает состояние с диска.
+                    this.game.IsInstalled = false;
+                    await this.RefreshStateAsync();
+                }
+                finally {
+                    this.DeleteGameBtn.IsEnabled = true;
+                }
+            }
+            catch (Exception ex) {
+                Core.Logging.Logger.Error(ex, "GamePage.DeleteGameBtn_Click");
+                MessageBox.Show(
+                    "Не удалось удалить файлы игры. Возможно, они заняты другой программой.",
+                    "Удаление локальных файлов",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+        }
+
         private void OpenFolderBtn_Click(object sender, RoutedEventArgs e) {
             try {
                 var root = this.LocalRoot;
@@ -523,28 +599,6 @@ namespace ChillHub.Pages {
             catch (Exception ex) {
                 this.StatusText.Text = "Не удалось открыть папку игры.";
                 Core.Logging.Logger.Error(ex, "GamePage.OpenFolderBtn_Click");
-            }
-        }
-
-        private async void RefreshChangelog_Click(object sender, RoutedEventArgs e) {
-            await this.LoadChangelogAsync().ConfigureAwait(true);
-        }
-
-        private void ChangelogList_SelectionChanged(object sender, SelectionChangedEventArgs e) {
-            if (this.ChangelogList.SelectedItem is not NewsItem item) {
-                return;
-            }
-
-            try {
-                var url = GameChangelogLoader.ArticleUrl(this.BaseApi, this.game.GameId, item.Slug);
-                var win = Window.GetWindow(this) as ChillHub.MainWindow;
-                win?.ContentFrame.Navigate(new NewsDetailPage(item.Title, url));
-            }
-            catch (Exception ex) {
-                Core.Logging.Logger.Error(ex, "GamePage.ChangelogList_SelectionChanged");
-            }
-            finally {
-                this.ChangelogList.SelectedItem = null;
             }
         }
 

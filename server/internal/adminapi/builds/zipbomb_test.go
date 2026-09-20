@@ -21,7 +21,7 @@ func TestUnzipStopsAtTheSizeCeiling(t *testing.T) {
 
 	big := strings.Repeat("A", 4096) // compresses to almost nothing
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequest(t, "game", "1.0.0", zipBytes(t, map[string]string{"big.bin": big})))
+	publishInto(t, h, w, "game", "game", "1.0.0", zipBytes(t, map[string]string{"big.bin": big}))
 	if w.Code == http.StatusOK {
 		t.Fatalf("oversized archive was accepted: %s", w.Body.String())
 	}
@@ -38,7 +38,7 @@ func TestUnzipAllowsArchivesUnderTheCeiling(t *testing.T) {
 	h := New(root)
 
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequest(t, "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "hello"})))
+	publishInto(t, h, w, "game", "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "hello"}))
 	if w.Code != http.StatusOK {
 		t.Fatalf("upload failed: %d %s", w.Code, w.Body.String())
 	}

@@ -27,5 +27,16 @@ namespace ChillHub.Core.Sync {
         /// </para>
         /// </summary>
         public string LocalSource { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Gets or sets хеши блоков нового файла; null — собирать по блокам нечего,
+        /// файл качается целиком.
+        /// <para>
+        /// По ним файл собирается из своей старой копии на диске и докачанных
+        /// недостающих кусков. Собранное проходит ту же сверку полных хешей, что и
+        /// скачанное целиком.
+        /// </para>
+        /// </summary>
+        internal BlockList? Blocks { get; set; }
     }
 }

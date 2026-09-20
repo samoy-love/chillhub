@@ -66,6 +66,7 @@ namespace ChillHub.Tests {
                 var rows = new ObservableCollection<Row> { new Row(Peak), new Row(Drive) };
                 var list = Dock(rows);
                 await Settle();
+                await Until(() => ImageOfRow(list, 0).Source is BitmapSource);
 
                 var img = ImageOfRow(list, 0);
                 Assert.Equal(Peak, CoverImage.GetUrl(img));
@@ -77,7 +78,7 @@ namespace ChillHub.Tests {
                 // Ровно то, что делает QueueDockLayout.ApplyVisible при смене порядка.
                 rows[0] = new Row(Drive);
                 list.UpdateLayout();
-                await Settle();
+                await Until(() => (ImageOfRow(list, 0).Source as BitmapSource)?.PixelWidth == Side * 2);
 
                 // Строка та же самая — WPF её переиспользовал, — а картинка другая.
                 Assert.Same(img, ImageOfRow(list, 0));
@@ -112,7 +113,7 @@ namespace ChillHub.Tests {
 
                 // Строку отдали другой игре, пока значок первой ещё качался.
                 CoverImage.SetUrl(img, Drive);
-                await Settle();
+                await Until(() => img.Source != null);
                 var afterDrive = img.Source;
                 Assert.NotNull(afterDrive);
 
@@ -135,7 +136,7 @@ namespace ChillHub.Tests {
 
                 ImageLoader.Http = FakeImageHandler.Ok(Png(64, 64)).Client();
                 CoverImage.SetUrl(img, Drive);
-                await Settle();
+                await Until(() => img.Source != null);
                 Assert.Equal(Visibility.Visible, img.Visibility);
 
                 // Пришёл ответ по адресу, которого элемент уже не ждёт.
@@ -159,7 +160,7 @@ namespace ChillHub.Tests {
                 var img = new Image { Width = 36, Height = 36 };
 
                 CoverImage.SetUrl(img, Peak);
-                await Settle();
+                await Until(() => img.Source != null);
                 Assert.NotNull(img.Source);
 
                 CoverImage.SetUrl(img, string.Empty);
@@ -267,7 +268,27 @@ namespace ChillHub.Tests {
             return ms.ToArray();
         }
 
-        /// <summary>Даёт диспетчеру доработать поставленное в очередь: загрузка идёт в фоне.</summary>
+        /// <summary>
+        /// Ждёт, пока картинка доедет, — по условию и с потолком, а не фиксированным
+        /// числом кругов диспетчера. Загрузка идёт в фоновом потоке, и на загруженной
+        /// машине CI сорока кругов Settle ей иногда не хватало: тест падал на
+        /// «картинки ещё нет», хотя код был исправен. По таймауту ожидание просто
+        /// заканчивается — что именно не так, скажет утверждение следом.
+        /// </summary>
+        /// <param name="done">Условие, которого ждём.</param>
+        /// <returns>Задача ожидания.</returns>
+        private static async Task Until(Func<bool> done) {
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (!done() && DateTime.UtcNow < deadline) {
+                await Dispatcher.CurrentDispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                await Task.Delay(5);
+            }
+        }
+
+        /// <summary>
+        /// Даёт диспетчеру доработать поставленное в очередь. Годится там, где
+        /// проверяется, что НИЧЕГО не случилось; ждать, пока что-то случится, — Until.
+        /// </summary>
         private static async Task Settle() {
             for (var i = 0; i < 40; i++) {
                 await Dispatcher.CurrentDispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);

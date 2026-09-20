@@ -93,7 +93,7 @@ namespace ChillHub.Tests {
                 }
 
                 Assert.True(
-                    WaitForFile(Path.Combine(desktop.Root, "Игра.lnk")),
+                    WaitForFile(Path.Combine(desktop.Root, GameLocalState.ShortcutFileName("Игра"))),
                     $"ярлык не создан; в каталоге: {string.Join(", ", Directory.GetFiles(desktop.Root))}");
             }
         }
@@ -120,7 +120,7 @@ namespace ChillHub.Tests {
                     return;
                 }
 
-                Assert.True(WaitForFile(Path.Combine(desktop.Root, "lethal-company.lnk")));
+                Assert.True(WaitForFile(Path.Combine(desktop.Root, GameLocalState.ShortcutFileName("lethal-company"))));
             }
         }
 

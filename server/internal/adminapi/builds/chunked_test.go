@@ -419,3 +419,69 @@ func TestPlanChunksMaxParallelHonoursEnvLimitAndFloor(t *testing.T) {
 		t.Errorf("maxParallel = %d, want 4", got)
 	}
 }
+
+// A modpack archive uploaded by hand must land where the Thunderstore builder
+// publishes: manifests/_mods/{game} and content/_mods/{game}. Published as a
+// version of the game itself it would be invisible to the modpack list, and
+// worse, a game update would ship the mods to players who never asked.
+func TestChunkedUploadOfKindModsPublishesIntoTheModsNamespace(t *testing.T) {
+	h, root := adminHandlers(t)
+	zipData := zipBytes(t, map[string]string{
+		"BepInEx/plugins/Mod.dll": "plugin",
+		"winhttp.dll":             strings.Repeat("l", 2000),
+	})
+
+	id, _ := initUpload(t, h, fmt.Sprintf(
+		`{"kind":"mods","gameId":"repo","version":"Team-Pack-1.2.3","zipName":"pack.zip","totalSize":%d,"chunkSize":65536}`,
+		len(zipData)))
+	m, err := h.readUploadMeta(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range m.TotalChunks {
+		lo := i * m.ChunkSize
+		hi := min(lo+m.ChunkSize, len(zipData))
+		if w := putChunk(t, h, id, i, zipData[lo:hi]); w.Code != http.StatusOK {
+			t.Fatalf("chunk %d: %d %s", i, w.Code, w.Body.String())
+		}
+	}
+	if w := completeUpload(t, h, id); w.Code != http.StatusOK {
+		t.Fatalf("complete: %d %s", w.Code, w.Body.String())
+	}
+	w := processUpload(t, h, id)
+	events, _ := ndjsonEvents(t, w.Body.String())
+	if hasErrorEvent(events) {
+		t.Fatalf("process reported an error: %s", w.Body.String())
+	}
+
+	if _, err := os.Stat(filepath.Join(root, "content", "_mods", "repo", "Team-Pack-1.2.3", "files", "winhttp.dll")); err != nil {
+		t.Errorf("modpack files are not under content/_mods: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "manifests", "_mods", "repo", "Team-Pack-1.2.3.json")); err != nil {
+		t.Errorf("modpack manifest is not under manifests/_mods: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "manifests", "repo")); err == nil {
+		t.Error("a modpack upload created a manifests directory for the game itself")
+	}
+	// Uploading is not activating: players keep what they have until the
+	// operator says otherwise.
+	if got := h.LatestVersion(NamespaceMods, "repo"); got != "" {
+		t.Errorf("the uploaded modpack became active on its own: %q", got)
+	}
+	versions, err := h.ListPublished(NamespaceMods, "repo")
+	if err != nil || len(versions) != 1 || versions[0] != "Team-Pack-1.2.3" {
+		t.Errorf("ListPublished(_mods) = %v, %v", versions, err)
+	}
+}
+
+// The kind picks the namespace, so a kind nobody knows must not silently turn
+// into a game build.
+func TestUploadInitRejectsAnUnknownKind(t *testing.T) {
+	h, _ := adminHandlers(t)
+	w := httptest.NewRecorder()
+	h.UploadInit(w, httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/upload/init",
+		strings.NewReader(`{"kind":"plugin","gameId":"repo","version":"1.0.0","totalSize":10}`)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("unknown kind accepted: %d %s", w.Code, w.Body.String())
+	}
+}

@@ -57,6 +57,55 @@ namespace ChillHub.Core.Home {
             return false;
         }
 
+        /// <summary>
+        /// Спрашивает у сервера всё, что нужно главному экрану при открытии:
+        /// список игр и ленту лаунчера.
+        /// <para>
+        /// ОБА ЗАПРОСА УХОДЯТ ОДНОВРЕМЕННО. На странице было написано
+        /// «параллельная загрузка», а запросы шли один за другим: сначала
+        /// дожидались игр, потом начинали новости. Это два обращения к серверу
+        /// подряд на самом видном месте — старте, — и чем дальше игрок от
+        /// сервера, тем дороже второе ожидание. Правило переехало сюда, где его
+        /// проверяют: на странице проверить его нечем.
+        /// </para>
+        /// <para>
+        /// Новости второстепенны: без них лаунчер работает целиком, поэтому их
+        /// отказ только пишется в журнал. Отказ по играм возвращается вызывающему —
+        /// из него складывается сообщение «сервер недоступен».
+        /// </para>
+        /// </summary>
+        /// <param name="http">Клиент, которым ходим на сервер.</param>
+        /// <param name="baseApi">Корень API.</param>
+        /// <returns>Игры, новости и причина отказа по играм, если он был.</returns>
+        internal static async Task<HomeStart> LoadStartAsync(HttpClient http, string baseApi) {
+            var gamesUrl = GamesUrl(baseApi);
+            var newsUrl = LauncherNewsUrl(baseApi);
+
+            var gamesRequest = http.GetFromJsonAsync<GamesResponse>(gamesUrl);
+            var newsRequest = http.GetFromJsonAsync<NewsIndex>(newsUrl);
+
+            GamesResponse? games = null;
+            NewsIndex? news = null;
+            Exception? gamesError = null;
+
+            try {
+                games = await gamesRequest.ConfigureAwait(false);
+            }
+            catch (Exception ex) {
+                gamesError = ex;
+                Logging.Logger.ErrorNoReport(ex, $"LoadInitialAsync: GET {gamesUrl}");
+            }
+
+            try {
+                news = await newsRequest.ConfigureAwait(false);
+            }
+            catch (Exception ex) {
+                Logging.Logger.ErrorNoReport(ex, $"LoadInitialAsync: GET {newsUrl}");
+            }
+
+            return new HomeStart(games, news, gamesError);
+        }
+
         /// <summary>Адрес списка игр.</summary>
         /// <param name="baseApi">База адреса сервера.</param>
         /// <returns>Полный адрес.</returns>

@@ -44,17 +44,29 @@ namespace ChillHub.Core.UI {
     }
 
     /// <summary>
-    /// Объём закачки: скачано из общего. Отдельно от скорости и остатка
-    /// (<see cref="QueueItemSpeedConverter"/>), потому что в карточке очереди они стоят
-    /// двумя строками друг под другом: сверху — сколько всего, снизу — как быстро идёт.
-    /// Одной строкой они занимали ширину, которой у правой колонки нет.
+    /// Объём обновления: сделано из общего, а рядом — сколько из этого пришло по сети.
+    /// Отдельно от скорости и остатка (<see cref="QueueItemSpeedConverter"/>), потому
+    /// что в карточке очереди они стоят двумя строками друг под другом.
+    /// <para>
+    /// Про сеть здесь сказано не для полноты. Обновление, где почти всё взято из старой
+    /// копии файлов на диске, показывало «8,1 ГБ / 49,3 ГБ» — и это читалось как «мне
+    /// катят 49 гигабайт», хотя по сети шло два.
+    /// </para>
     /// </summary>
     public class QueueItemSizeConverter : IValueConverter {
         /// <inheritdoc/>
-        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
-            => value is not QueueItem item || item.TotalBytes <= 0
-                ? string.Empty
-                : $"{HomeFormat.FormatSize(item.BytesDownloaded)} / {HomeFormat.FormatSize(item.TotalBytes)}";
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture) {
+            if (value is not QueueItem item || item.TotalBytes <= 0) {
+                return string.Empty;
+            }
+
+            var done = $"{HomeFormat.FormatSize(item.BytesDownloaded)} / {HomeFormat.FormatSize(item.TotalBytes)}";
+
+            // Пока разница невелика (обычная загрузка), второе число — только шум.
+            return item.NetworkBytes > 0 && item.NetworkBytes < item.BytesDownloaded * 0.9
+                ? $"{done} · по сети {HomeFormat.FormatSize(item.NetworkBytes)}"
+                : done;
+        }
 
         /// <inheritdoc/>
         public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
@@ -64,6 +76,11 @@ namespace ChillHub.Core.UI {
     /// <summary>
     /// Скорость и остаток времени. Пусто, пока скорость неизвестна: «0,0 МБ/с» на первых
     /// секундах закачки — не сведения, а шум, и остаток по такой скорости бесконечен.
+    /// <para>
+    /// Скорость — сетевая, остаток — по скорости работы. Обновление, собранное из кусков
+    /// старой копии, идёт быстрее своей сетевой части в десятки раз, и «осталось» по
+    /// скорости сети обещало бы часы там, где работы на десять минут.
+    /// </para>
     /// </summary>
     public class QueueItemSpeedConverter : IValueConverter {
         /// <inheritdoc/>
@@ -81,8 +98,9 @@ namespace ChillHub.Core.UI {
 
             var speed = $"{item.BytesPerSecond / 1024.0 / 1024.0:0.0} МБ/с";
             var remaining = item.TotalBytes - item.BytesDownloaded;
+            var rate = item.WorkBytesPerSecond > 0 ? item.WorkBytesPerSecond : item.BytesPerSecond;
             return remaining > 0
-                ? $"{speed} · осталось {HomeFormat.FormatEta(remaining / item.BytesPerSecond)}"
+                ? $"{speed} · осталось {HomeFormat.FormatEta(remaining / rate)}"
                 : speed;
         }
 
@@ -121,7 +139,12 @@ namespace ChillHub.Core.UI {
             }
 
             if (item.State != QueueItemState.Waiting) {
-                return item.StatusText;
+                // «Скачивание обновления…» не говорит, велика ли работа и сколько её
+                // осталось. Файлы отвечают на это короче любых байт: «12 из 92» видно,
+                // как шкалу, и по ней понятно, стоит ли ждать у экрана.
+                return item.FilesTotal > 0
+                    ? $"{item.StatusText} · файлы {item.FilesDone} из {item.FilesTotal}"
+                    : item.StatusText;
             }
 
             return item.QueuePosition > 1 ? $"В очереди · {item.QueuePosition}-я" : "Следующая в очереди";
@@ -158,6 +181,13 @@ namespace ChillHub.Core.UI {
     /// Процент — целый, чтобы строка списка менялась сотню раз за закачку, а не тысячи.
     /// </summary>
     internal static class QueueRowLabel {
+        /// <summary>
+        /// Закачка оборвалась. Строка остаётся в списке и после того, как позиция ушла из
+        /// очереди: молча вернуться к «Не установлена» — значит сделать вид, что ничего не
+        /// было, и человек узнает об обрыве только по тому, что игра не запускается.
+        /// </summary>
+        internal const string Interrupted = "Обрыв загрузки";
+
         /// <summary>Подпись для позиции очереди; null-позиция — пустая строка.</summary>
         internal static string For(QueueItem? item) {
             if (item is null) {
@@ -186,6 +216,8 @@ namespace ChillHub.Core.UI {
                     return work;
                 case QueueItemState.Waiting:
                     return "В очереди";
+                case QueueItemState.Failed:
+                    return Interrupted;
                 default:
                     return string.Empty;
             }

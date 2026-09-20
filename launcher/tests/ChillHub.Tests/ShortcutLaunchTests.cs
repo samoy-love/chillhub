@@ -36,7 +36,7 @@ namespace ChillHub.Tests {
                 GameLocalState.TryCreateDesktopShortcut("Игра", "gid", exe);
             }
 
-            var link = Path.Combine(desktop.Root, "Игра.lnk");
+            var link = Path.Combine(desktop.Root, GameLocalState.ShortcutFileName("Игра"));
             if (!GameLocalStateShortcutTests.ShellAvailable || !File.Exists(link)) {
                 // Оболочка ярлыков не создаёт (политика, урезанная система, агент сборки).
                 return;
@@ -66,7 +66,7 @@ namespace ChillHub.Tests {
                 GameLocalState.TryCreateDesktopShortcut("Игра", "gid", exe);
             }
 
-            var link = Path.Combine(desktop.Root, "Игра.lnk");
+            var link = Path.Combine(desktop.Root, GameLocalState.ShortcutFileName("Игра"));
             if (!GameLocalStateShortcutTests.ShellAvailable || !File.Exists(link)) {
                 return;
             }

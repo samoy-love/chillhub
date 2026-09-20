@@ -96,6 +96,53 @@ namespace ChillHub.Core.Sync {
             blake3Hex = Convert.ToHexString(b3out).ToLowerInvariant();
         }
 
+        /// <summary>
+        /// Полные хеши файла, который пишется строго по порядку.
+        /// <para>
+        /// Файл, собранный по блокам, сверяется по тем байтам, которые в него ушли,
+        /// а не перечитыванием с диска: иначе к двум проходам сборки (по старой копии
+        /// и записи нового) добавлялся третий, на обновлении в 53 ГБ — ещё 53 ГБ
+        /// чтения ради ответа, который уже известен.
+        /// </para>
+        /// </summary>
+        internal sealed class StreamingHashes : IDisposable {
+            private readonly IncrementalHash sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+
+            // Без Blake3 — как у ComputeHashes: вердикт выносит один SHA-256.
+            private readonly HashAlgorithm? b3 = Blake3Available ? new Blake3.Blake3HashAlgorithm() : null;
+
+            /// <summary>Gets сколько байт уже учтено.</summary>
+            internal long Length { get; private set; }
+
+            /// <summary>Учитывает следующую порцию файла.</summary>
+            /// <param name="buffer">Буфер.</param>
+            /// <param name="offset">Начало порции.</param>
+            /// <param name="count">Длина порции.</param>
+            internal void Append(byte[] buffer, int offset, int count) {
+                this.sha.AppendData(buffer, offset, count);
+                this.b3?.TransformBlock(buffer, offset, count, null, 0);
+                this.Length += count;
+            }
+
+            /// <summary>Хеши всего учтённого.</summary>
+            /// <returns>SHA-256 и Blake3 в hex; Blake3 пустой, если считать его нечем.</returns>
+            internal (string Sha256, string Blake3) Finish() {
+                var shaHex = Convert.ToHexString(this.sha.GetHashAndReset()).ToLowerInvariant();
+                if (this.b3 == null) {
+                    return (shaHex, string.Empty);
+                }
+
+                this.b3.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+                return (shaHex, Convert.ToHexString(this.b3.Hash!).ToLowerInvariant());
+            }
+
+            /// <inheritdoc/>
+            public void Dispose() {
+                this.sha.Dispose();
+                this.b3?.Dispose();
+            }
+        }
+
         /// <summary>Один SHA-256 за проход — путь без Blake3.</summary>
         /// <param name="path">Путь к файлу.</param>
         /// <param name="ct">Токен отмены.</param>

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -59,6 +60,7 @@ internal static class Program {
         finally {
             UpdateLock.Release(ctx.Lock);
             WriteStatus(ctx, exit, log);
+            RefreshIcons(ctx, log, host);
             Restart(ctx, log, host);
             log.Write($"updater finished with exit code {exit} ({ctx.Outcome})");
         }
@@ -846,6 +848,38 @@ internal static class Program {
     }
 
     /// <summary>
+    /// Толкнуть проводник, чтобы он перерисовал значки.
+    /// <para>
+    /// Ярлыки лаунчера — на рабочем столе и в меню «Пуск» — своей иконки не задают
+    /// (см. installer.nsi: у CreateShortCut указана только цель), поэтому берут её из
+    /// ресурса ChillHub.exe. Новый exe уже лежит на диске, но Windows держит разобранные
+    /// значки в кеше и продолжает рисовать старый — иногда до перезагрузки. Смена
+    /// значка без этого выглядит как «обновилось, а иконка прежняя».
+    /// </para>
+    /// <para>
+    /// Зовём только когда файлы действительно поменялись: на busy, access-denied и
+    /// fatal обновления не было, и дёргать оболочку не за что.
+    /// </para>
+    /// </summary>
+    /// <param name="ctx">Состояние прогона.</param>
+    /// <param name="log">Журнал.</param>
+    /// <param name="host">Шов к операционной системе.</param>
+    private static void RefreshIcons(RunContext ctx, UpdateLog log, UpdaterHost host) {
+        if (ctx.Outcome != "ok" && ctx.Outcome != "marker-failed") {
+            return;
+        }
+
+        try {
+            var exe = !string.IsNullOrEmpty(ctx.Exe) ? ctx.Exe : Path.Combine(ctx.Dst, "ChillHub.exe");
+            host.RefreshIconCache(exe, log);
+        }
+        catch (Exception ex) {
+            // Не повод портить обновление: значок догонит после перезахода в систему.
+            log.Write($"icons: не удалось обновить кеш значков — {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// A9. Перезапуск лаунчера — в finally и с повторами.
     /// <para>
     /// Лаунчер завершил себя сам, чтобы освободить файлы. Если апдейтер после
@@ -1147,6 +1181,9 @@ internal static class Program {
         /// <summary>Пауза между попытками перезапуска.</summary>
         public Action<int> Sleep = Thread.Sleep;
 
+        /// <summary>Сбрасывает кеш значков оболочки для exe лаунчера и его ярлыков.</summary>
+        public Action<string, UpdateLog> RefreshIconCache = DefaultRefreshIconCache;
+
         /// <summary>
         /// Ждать нужно обязательно: пока лаунчер жив, его exe и dll заблокированы,
         /// и копирование поверх них провалится. Но ждать БЕЗ ограничения нельзя —
@@ -1161,6 +1198,98 @@ internal static class Program {
         /// </summary>
         /// <param name="parent">Идентификатор родительского процесса.</param>
         /// <param name="log">Журнал.</param>
+        /// <summary>
+        /// Заставляет оболочку перечитать значок лаунчера везде, где она его держит.
+        /// <para>
+        /// Одного SHCNE_ASSOCCHANGED мало: по нему проводник выбрасывает разобранные
+        /// значки файлов, но ярлык на рабочем столе, в «Пуске» и кнопка, закреплённая на
+        /// панели задач, хранят свою картинку отдельно — и после смены значка
+        /// продолжали показывать старый, иногда до перезагрузки. Поэтому о самом exe и
+        /// о каждом ярлыке Chill Hub оболочке сообщается поимённо (SHCNE_UPDATEITEM), а
+        /// кеш значков пользователя перестраивает штатный ie4uinit.exe -show.
+        /// </para>
+        /// </summary>
+        /// <param name="exe">Путь к ChillHub.exe.</param>
+        /// <param name="log">Журнал.</param>
+        private static void DefaultRefreshIconCache(string exe, UpdateLog log) {
+            const int SHCNE_ASSOCCHANGED = 0x08000000;
+            const int SHCNE_UPDATEITEM = 0x00002000;
+            const uint SHCNF_IDLIST = 0x0000;
+            const uint SHCNF_PATHW = 0x0005;
+            const uint SHCNF_FLUSHNOWAIT = 0x3000;
+
+            var items = new List<string> { exe };
+            items.AddRange(ShortcutsToRefresh(ShortcutFolders()));
+            foreach (var item in items) {
+                var path = Marshal.StringToHGlobalUni(item);
+                try {
+                    SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW | SHCNF_FLUSHNOWAIT, path, IntPtr.Zero);
+                }
+                finally {
+                    Marshal.FreeHGlobal(path);
+                }
+            }
+
+            SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, IntPtr.Zero, IntPtr.Zero);
+            log.Write($"icons: кеш значков оболочки сброшен, ярлыков: {items.Count - 1}");
+
+            // ie4uinit ждём недолго: он перестраивает кеш за доли секунды, а зависший
+            // не должен задерживать перезапуск лаунчера.
+            try {
+                var ie4 = Path.Combine(Environment.SystemDirectory, "ie4uinit.exe");
+                if (File.Exists(ie4)) {
+                    using var p = Process.Start(new ProcessStartInfo(ie4, "-show") { UseShellExecute = false, CreateNoWindow = true });
+                    p?.WaitForExit(5000);
+                }
+            }
+            catch (Exception ex) {
+                log.Write($"icons: ie4uinit не запустился — {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        /// <summary>Где лежат ярлыки лаунчера: папка и искать ли во вложенных.</summary>
+        /// <returns>Папки рабочего стола, «Пуска» и закреплённых кнопок панели задач.</returns>
+        private static IEnumerable<(string Dir, bool Recursive)> ShortcutFolders() {
+            yield return (Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), false);
+            yield return (Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory), false);
+            yield return (Environment.GetFolderPath(Environment.SpecialFolder.Programs), true);
+            yield return (Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms), true);
+            yield return (Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "Microsoft", "Internet Explorer", "Quick Launch", "User Pinned", "TaskBar"), false);
+        }
+
+        /// <summary>
+        /// Ярлыки Chill Hub в указанных папках. Разбирать .lnk незачем: имена задаёт
+        /// установщик — «Chill Hub», прежде «ChillHub», — а кнопку на панели задач
+        /// Windows называет по имени ярлыка, с которого её закрепили. Рабочий стол
+        /// обходится без вложенных папок: там бывают тысячи чужих файлов.
+        /// </summary>
+        /// <param name="folders">Папки и признак обхода вложенных.</param>
+        /// <returns>Пути найденных ярлыков.</returns>
+        internal static List<string> ShortcutsToRefresh(IEnumerable<(string Dir, bool Recursive)> folders) {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Chill Hub.lnk", "ChillHub.lnk" };
+            var found = new List<string>();
+            foreach (var (dir, recursive) in folders) {
+                if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) {
+                    continue;
+                }
+
+                try {
+                    var option = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+                    found.AddRange(Directory.EnumerateFiles(dir, "*.lnk", option).Where(f => names.Contains(Path.GetFileName(f))));
+                }
+                catch (Exception) {
+                    // Папка без доступа — не причина оставить без обновления остальные.
+                }
+            }
+
+            return found;
+        }
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern void SHChangeNotify(int eventId, uint flags, IntPtr item1, IntPtr item2);
+
         private static void DefaultWaitForParent(int parent, UpdateLog log) {
             if (parent <= 0) {
                 return;

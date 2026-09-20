@@ -204,7 +204,7 @@ namespace ChillHub.Tests {
             var text = SteamModsInstall.DescribeTarget("How to Fish", @"D:\SteamLibrary\steamapps\common\Fish");
 
             Assert.Contains("How to Fish", text, System.StringComparison.Ordinal);
-            Assert.Contains("D:/SteamLibrary/steamapps/common/Fish", text, System.StringComparison.Ordinal);
+            Assert.Contains(@"D:\SteamLibrary\steamapps\common\Fish", text, System.StringComparison.Ordinal);
         }
 
         /// <summary>
@@ -216,7 +216,7 @@ namespace ChillHub.Tests {
             var text = SteamModsInstall.DescribeTarget("How to Fish", @"D:\Games\Fish", repair: true);
 
             Assert.Contains("осстановление", text, System.StringComparison.Ordinal);
-            Assert.Contains("D:/Games/Fish", text, System.StringComparison.Ordinal);
+            Assert.Contains(@"D:\Games\Fish", text, System.StringComparison.Ordinal);
         }
 
         /// <summary>Папки не знаем — строка всё равно осмысленная, а не с пустотой на конце.</summary>

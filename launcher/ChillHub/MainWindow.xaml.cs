@@ -137,6 +137,11 @@ namespace ChillHub {
                 // актуальную картину сразу, а не через остаток минутного интервала опроса.
                 _ = Core.Maintenance.MaintenanceService.RefreshNowAsync();
 
+                // Список игр и модпаков — тоже: пока окно было в фоне, в админке могли
+                // выпустить сборку или модпак, и «Обновить» должно гореть сразу. Через
+                // поле, а не CurrentHome: со страницы игры в лаунчер возвращаются так же.
+                _ = this.homePage?.RefreshCatalogQuietlyAsync();
+
                 // И состояние модов в папке Steam: из Steam в лаунчер возвращаются именно
                 // так, а за время отсутствия игру могли поставить, удалить или перенести
                 // (см. HomePage.RefreshLaunchOptionsFromDisk).
@@ -177,6 +182,7 @@ namespace ChillHub {
                 if (this.homePage == null) {
                     this.homePage = new Pages.HomePage();
                     this.AttachDownloadsIndicator(this.homePage.DownloadQueue);
+
                 }
 
                 this.ContentFrame.Navigate(this.homePage);
@@ -443,6 +449,19 @@ namespace ChillHub {
             _ = this.OpenShortcutRequestAsync(request);
         }
 
+        /// <summary>
+        /// Открывает главную с выделенной игрой — из новости про эту игру.
+        /// </summary>
+        /// <param name="gameId">Игра из заметки.</param>
+        internal void OpenGameFromNews(string? gameId) {
+            if (string.IsNullOrWhiteSpace(gameId)) {
+                return;
+            }
+
+            this.NavigateToHome();
+            this.homePage?.SelectGameById(gameId);
+        }
+
         private async Task OpenShortcutRequestAsync(Core.Shell.ShortcutRequest request) {
             try {
                 // Именно главная, а не страница игры: запуск, обновление и моды живут
@@ -464,9 +483,15 @@ namespace ChillHub {
                     return;
                 }
 
-                Core.Logging.Logger.Info($"Ярлык: игры '{request.GameId}' нет в каталоге ({action})");
+                Core.Logging.Logger.Info($"Ярлык: игра '{request.GameId}' — {action}");
                 var dialog = new ShortcutLaunchWindow(request, action) { Owner = this };
                 dialog.ShowDialog();
+
+                // Согласились скачать заново — качаем и поднимаем игру, когда докачается.
+                // Само окно этого не умеет: очередь и запуск живут на главной.
+                if (dialog.InstallRequested) {
+                    home.InstallAndLaunch(request.GameId);
+                }
             }
             catch (Exception ex) {
                 // Ярлык не должен ронять уже открытый лаунчер: человек просто останется

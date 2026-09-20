@@ -90,6 +90,7 @@ namespace ChillHub.Core.Mods {
                 this.inner.Report(new SyncProgress {
                     FilesDownloaded = value.FilesDownloaded,
                     TotalFiles = value.TotalFiles,
+                    FilesFromNetwork = value.FilesFromNetwork,
                     BytesDownloaded = value.BytesDownloaded,
                     NetworkBytes = value.NetworkBytes,
                     TotalBytes = value.TotalBytes,

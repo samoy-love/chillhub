@@ -41,6 +41,17 @@ namespace ChillHub.Core.Sync {
         private const int PlanLogSamples = 20;
 
         /// <summary>
+        /// Сколько файлов хешируется одновременно на стадии проверки.
+        /// <para>
+        /// Замер на сборке в 3,5 ГБ и 1123 файла: в один поток 2,22 с, в два 1,17 с,
+        /// в четыре 0,59 с, в восемь 0,53 с. Дальше четырёх выигрыша уже нет — упор
+        /// в диск, а не в процессор, — а лишние потоки на обычном винчестере
+        /// превращают чтение подряд в гонку головок.
+        /// </para>
+        /// </summary>
+        private const int HashWorkers = 4;
+
+        /// <summary>
         /// Сколько ждать следующий байт от сервера, прежде чем считать попытку зависшей, мс.
         /// Это таймаут ПРОСТОЯ, а не всей загрузки: пока данные идут, он сбрасывается,
         /// поэтому многогигабайтный файл на медленном канале докачивается, а мёртвое
@@ -192,8 +203,10 @@ namespace ChillHub.Core.Sync {
             // сборке с сервера, а записи ключуются относительным путём.
             var hashCache = FileHashCache.Load(manifest.GameId, localRoot);
 
-            // Счётчики для отчёта о прогрессе: считаем «проверенные» файлы манифеста и их байты
-            var checkedFiles = 0;
+            // Счётчики для отчёта о прогрессе: считаем «проверенные» файлы манифеста и их байты.
+            // Прибавляет к ним и предварительный подсчёт хешей, идущий в несколько потоков,
+            // поэтому оба — long под Interlocked.
+            long checkedFiles = 0;
             long checkedBytes = 0;
             var totalToCheck = manifestFiles.Count;
             long totalBytesToCheck = 0;
@@ -209,15 +222,41 @@ namespace ChillHub.Core.Sync {
             plan.TotalManifestBytes = totalBytesToCheck;
             plan.TotalManifestFiles = totalToCheck;
 
-            if (options.Progress != null) {
+            // Отчёт о проверке уходил на КАЖДЫЙ файл манифеста. Каждый такой отчёт —
+            // это переход на поток интерфейса и перерисовка пяти элементов: на сборке
+            // в пятнадцать тысяч файлов окно занималось только этим, а проверка ждала
+            // диспетчер. У загрузки та же беда вылечена десятью обновлениями в секунду —
+            // здесь ровно то же самое. Крайний отчёт делается принудительно, иначе
+            // проверка заканчивалась бы на «14990 из 15000».
+            var lastCheckTicks = 0L;
+            void ReportChecked(bool force) {
+                if (options.Progress == null) {
+                    return;
+                }
+
+                if (!force) {
+                    var now = Environment.TickCount64;
+                    var last = Interlocked.Read(ref lastCheckTicks);
+                    if (now - last < ProgressThrottleMs) {
+                        return;
+                    }
+
+                    // Отчёт делает тот поток, который выиграл обмен: остальные пропускают такт
+                    if (Interlocked.CompareExchange(ref lastCheckTicks, now, last) != last) {
+                        return;
+                    }
+                }
+
                 options.Progress.Report(new SyncProgress {
                     Stage = "Checking",
-                    FilesDownloaded = 0,
+                    FilesDownloaded = (int)Interlocked.Read(ref checkedFiles),
                     TotalFiles = totalToCheck,
-                    BytesDownloaded = 0,
+                    BytesDownloaded = Interlocked.Read(ref checkedBytes),
                     TotalBytes = totalBytesToCheck,
                 });
             }
+
+            ReportChecked(true);
 
             // Причины попадания в план: сводка вместо строки лога на каждый файл.
             // Построчный лог обходился в открытие файла на запись на КАЖДЫЙ файл сборки
@@ -225,6 +264,37 @@ namespace ChillHub.Core.Sync {
             // чего лог и читают. Примеры оставляем — по ним чинят конкретные сборки.
             var reasonCounts = new Dictionary<string, int>(StringComparer.Ordinal);
             var reasonSamples = new List<string>();
+
+            // Сколько файлов плана можно собрать по блокам и сколько манифест
+            // объявил с блоками, которые не сошлись: второе — поломка на сервере,
+            // и видеть её надо в логе, а не по внезапно тяжёлым обновлениям.
+            var blockReady = 0;
+            var blockBroken = 0;
+            string? blockProblem = null;
+
+            // Хеши считаются заранее и в несколько потоков, а решение по каждому файлу
+            // принимается дальше в один — тем же порядком, что и раньше.
+            //
+            // Проход по файлам сборки был целиком последовательным, хотя работа в нём
+            // поштучная: у каждого файла свои байты и два своих хеша. Проверка сборки
+            // в 3,5 ГБ занимала 2,22 с процессорного времени вместо 0,59 с, и это
+            // видно игроку: «Проверить файлы» на большой игре — минуты.
+            //
+            // Ошибиться этим нельзя по устройству: предварительный подсчёт ничего не
+            // решает и ничего не пропускает. Посчитал лишнее — потеряли работу, не
+            // посчитал нужное — цикл ниже посчитает сам, как считал всегда.
+            var prefetched = PrefetchHashes(
+                manifestFiles,
+                localRoot,
+                preservePaths,
+                hashCache,
+                options,
+                size => {
+                    Interlocked.Increment(ref checkedFiles);
+                    Interlocked.Add(ref checkedBytes, size);
+                    ReportChecked(false);
+                },
+                ct);
 
             // Определим новые/изменённые: при наличии хеша сравниваем по хешу, иначе по размеру
             foreach (var kv in manifestFiles) {
@@ -239,12 +309,19 @@ namespace ChillHub.Core.Sync {
                 string reason = "missing";
                 long localSize = 0;
 
+                // Файл, чей хеш посчитал предварительный проход, уже учтён в прогрессе:
+                // иначе он попал бы в счётчик дважды и проверка «закончилась» бы раньше срока.
+                // Смотрим по самому проходу, а не по ветке ниже: файл мог смениться
+                // между двумя проходами и уйти в другую ветку, уже посчитанным.
+                bool counted = prefetched.ContainsKey(rel);
+
                 // Файл из preserve-списка уже на месте — он наш, его правит лаунчер,
                 // и содержимое манифеста для него не эталон. Отсутствующий ставим как
                 // обычно: без него моды не запустятся вовсе.
                 if (preservePaths.Contains(rel) && File.Exists(localPath)) {
-                    checkedFiles++;
-                    checkedBytes += mf.Size;
+                    Interlocked.Increment(ref checkedFiles);
+                    Interlocked.Add(ref checkedBytes, mf.Size);
+                    ReportChecked(false);
                     continue;
                 }
 
@@ -267,7 +344,12 @@ namespace ChillHub.Core.Sync {
 
                                 // В режиме проверки целостности кеш не спрашиваем: он подтвердил бы
                                 // повреждённый файл по совпадению размера и времени модификации.
-                                if (options.ForceRehash || !hashCache.TryGet(rel, info.Length, mtimeTicks, out shaHex, out b3Hex)) {
+                                if (prefetched.TryGetValue(rel, out var ready)) {
+                                    shaHex = ready.Sha256;
+                                    b3Hex = ready.Blake3;
+                                    hashCache.Set(rel, info.Length, mtimeTicks, shaHex, b3Hex);
+                                }
+                                else if (options.ForceRehash || !hashCache.TryGet(rel, info.Length, mtimeTicks, out shaHex, out b3Hex)) {
                                     FileHasher.ComputeHashes(localPath, out shaHex, out b3Hex, ct);
                                     hashCache.Set(rel, info.Length, mtimeTicks, shaHex, b3Hex);
                                 }
@@ -314,7 +396,15 @@ namespace ChillHub.Core.Sync {
                         Blake3 = mf.Blake3,
                         Sha256 = mf.Sha256,
                         Executable = mf.Executable,
+                        Blocks = BlockList.TryParse(manifest.BlockSize, mf.Size, mf.Blocks, out var blocksWrong),
                     };
+                    if (task.Blocks != null) {
+                        blockReady++;
+                    }
+                    else if (blocksWrong != null) {
+                        blockBroken++;
+                        blockProblem ??= $"'{rel}': {blocksWrong}";
+                    }
 
                     // Такой же файл уже лежит в другой копии этой игры — возьмём оттуда.
                     // Сверку он пройдёт ту же, что и скачанный, поэтому ошибиться здесь
@@ -342,18 +432,15 @@ namespace ChillHub.Core.Sync {
                     }
                 }
 
-                if (options.Progress != null) {
-                    checkedFiles++;
-                    checkedBytes += mf.Size;
-                    options.Progress.Report(new SyncProgress {
-                        Stage = "Checking",
-                        FilesDownloaded = checkedFiles,
-                        TotalFiles = totalToCheck,
-                        BytesDownloaded = checkedBytes,
-                        TotalBytes = totalBytesToCheck,
-                    });
+                if (!counted) {
+                    Interlocked.Increment(ref checkedFiles);
+                    Interlocked.Add(ref checkedBytes, mf.Size);
                 }
+
+                ReportChecked(false);
             }
+
+            ReportChecked(true);
 
             plan.TotalFilesToDownload = plan.Downloads.Count;
 
@@ -367,6 +454,15 @@ namespace ChillHub.Core.Sync {
 
                 if (plan.Downloads.Count > reasonSamples.Count) {
                     ChillHub.Core.Logging.Logger.Info($"Plan include ... ещё {plan.Downloads.Count - reasonSamples.Count} файл(ов), см. сводку выше");
+                }
+
+                if (blockReady > 0) {
+                    ChillHub.Core.Logging.Logger.Info($"Plan gid={manifest.GameId}: у {blockReady} файл(ов) есть хеши блоков — старые копии пойдут в дело");
+                }
+
+                if (blockBroken > 0) {
+                    ChillHub.Core.Logging.Logger.Warn(
+                        $"Plan gid={manifest.GameId} ver={manifest.Version}: у {blockBroken} файл(ов) хеши блоков не годятся, качаем их целиком; первый — {blockProblem}");
                 }
             }
 
@@ -511,6 +607,13 @@ namespace ChillHub.Core.Sync {
             // Отдельно от downloaded: тот меряет сделанное (включая взятое с диска), а
             // это — то, что реально прошло по проводу. По нему считается скорость.
             long fromNetwork = 0;
+
+            // Сколько байт взято блоками из старых копий обновляемых файлов.
+            long fromOldBlocks = 0;
+
+            // Скольким файлам понадобилась сеть: остальные собраны из старой копии
+            // целиком или взяты из соседней копии игры.
+            long filesFromNetwork = 0;
             int filesDone = 0;
             var total = plan.TotalDownloadBytes;
             var totalFiles = plan.TotalFilesToDownload;
@@ -534,6 +637,11 @@ namespace ChillHub.Core.Sync {
             // делят все потоки скачивания, поэтому ограничивается суммарная скорость,
             // а не скорость каждого потока по отдельности. null — лимита нет.
             var speedLimiter = SpeedLimiter.Create(ConfigService.Current.SpeedLimitMbps);
+
+            // Сборка по блокам начинается с чтения старого файла целиком, и без
+            // ограничителя потоки загрузки читали бы разом до шестнадцати файлов.
+            // Потолок тот же, что у проверки файлов, и по той же причине.
+            using var blockIndexGate = new SemaphoreSlim(HashWorkers);
 
             // Проверка свободного места (без запаса) на КАЖДОМ задействованном диске.
             // Скачиваем в LocalRoot, а применяем в ApplyRoot — при самообновлении это
@@ -599,6 +707,7 @@ namespace ChillHub.Core.Sync {
                     TotalBytes = total,
                     FilesDownloaded = Volatile.Read(ref filesDone),
                     TotalFiles = totalFiles,
+                    FilesFromNetwork = (int)Interlocked.Read(ref filesFromNetwork),
                 });
             }
 
@@ -609,6 +718,10 @@ namespace ChillHub.Core.Sync {
                         await sem.WaitAsync(ct).ConfigureAwait(false);
                         tasks.Add(Task.Run(
                             async () => {
+                                // Сеть по этому файлу: по ней он и попадает в счёт
+                                // скачиваемых. Прибавляет её один поток — свой, а читает
+                                // её finally того же потока.
+                                long fileNetwork = 0;
                                 try {
                                     ct.ThrowIfCancellationRequested();
 
@@ -655,6 +768,29 @@ namespace ChillHub.Core.Sync {
                                     if (reused) {
                                         Credit(t.Size);
                                         ReportDownloadProgress();
+                                    }
+
+                                    // Старая копия этого же файла на месте, и манифест знает
+                                    // его блоки: собираем новый из совпавших блоков старого
+                                    // и докачанных недостающих. Не вышло — обычная загрузка
+                                    // ниже продолжит с проверенного начала, что уже в .part.
+                                    if (!reused && t.Blocks != null && File.Exists(dstPath)) {
+                                        reused = await this.TryAssembleFromBlocksAsync(
+                                            t,
+                                            dstPath,
+                                            partPath,
+                                            speedLimiter,
+                                            blockIndexGate,
+                                            onDisk => {
+                                                Credit(Math.Min(onDisk, t.Size));
+                                                ReportDownloadProgress();
+                                            },
+                                            read => {
+                                                fileNetwork += read;
+                                                Interlocked.Add(ref fromNetwork, read);
+                                            },
+                                            fromOld => Interlocked.Add(ref fromOldBlocks, fromOld),
+                                            ct).ConfigureAwait(false);
                                     }
 
                                     // Скачивание в .part. Уцелевший от прерванной попытки
@@ -731,6 +867,7 @@ namespace ChillHub.Core.Sync {
 
                                                             // Сюда идёт всё вычитанное из сети, включая
                                                             // перезакачанное: по проводу оно прошло.
+                                                            fileNetwork += read;
                                                             Interlocked.Add(ref fromNetwork, read);
 
                                                             // Ограничение скорости: список токенов общий на все потоки загрузки,
@@ -830,6 +967,10 @@ namespace ChillHub.Core.Sync {
                                     }
                                 }
                                 finally {
+                                    if (fileNetwork > 0) {
+                                        Interlocked.Increment(ref filesFromNetwork);
+                                    }
+
                                     Interlocked.Increment(ref filesDone);
                                     ReportDownloadProgress();
                                     sem.Release();
@@ -838,6 +979,8 @@ namespace ChillHub.Core.Sync {
                     }
 
                     await Task.WhenAll(tasks).ConfigureAwait(false);
+                    plan.BlockReusedBytes = Interlocked.Read(ref fromOldBlocks);
+                    plan.NetworkBytes = Interlocked.Read(ref fromNetwork);
                 }
                 catch {
                     // Из using нельзя выходить, пока живы задачи: каждая делает sem.Release()
@@ -852,29 +995,121 @@ namespace ChillHub.Core.Sync {
                         ChillHub.Core.Logging.Logger.Info($"Загрузка остановлена: {drainEx.Message}");
                     }
 
+                    // Сорвавшееся обновление тоже отчитывается о трафике: метрика
+                    // берёт его из плана. Читать — после того как задачи дошли:
+                    // иначе скачанное ими уже после остановки в счёт не попадёт.
+                    plan.BlockReusedBytes = Interlocked.Read(ref fromOldBlocks);
+                    plan.NetworkBytes = Interlocked.Read(ref fromNetwork);
                     throw;
                 }
             }
 
             RememberHashes(plan, applied);
 
+            if (plan.BlockReusedBytes > 0) {
+                ChillHub.Core.Logging.Logger.Info(
+                    $"Blocks gid={plan.GameId} ver={plan.Version}: из старых копий взято {plan.BlockReusedBytes} байт, " +
+                    $"по сети {Interlocked.Read(ref fromNetwork)} байт из {plan.TotalDownloadBytes}");
+            }
+
             // Итоговые цифры скачивания — уже без троттлинга, иначе счётчик файлов
             // может замереть на предпоследнем значении
-            progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+            progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles, FilesFromNetwork = (int)filesFromNetwork });
 
             // Верификация (хеши пропустим на моках)
-            progress.Report(new SyncProgress { Stage = "Verifying", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+            progress.Report(new SyncProgress { Stage = "Verifying", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles, FilesFromNetwork = (int)filesFromNetwork });
 
             // Завершение: убрать лишние файлы, опустевшие каталоги и снять маркер. Сами
             // файлы игры уже на своих местах — их поставили потоки загрузки. Фаза синхронная
             // и блокирующая (SafeDeleteFile с ожиданиями, обход дерева каталогов), а
             // вызывающие стартуют ExecuteAsync с UI-потока — уводим её в пул, иначе окно
             // замирает и «Отмена» физически не нажимается.
-            progress.Report(new SyncProgress { Stage = "Activating", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+            progress.Report(new SyncProgress { Stage = "Activating", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles, FilesFromNetwork = (int)filesFromNetwork });
             await Task.Run(() => FinishPlan(plan, deferred, ct), ct).ConfigureAwait(false);
 
             // Финальный сигнал о завершении
-            progress.Report(new SyncProgress { Stage = "Completed", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+            progress.Report(new SyncProgress { Stage = "Completed", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles, FilesFromNetwork = (int)filesFromNetwork });
+        }
+
+        /// <summary>
+        /// Собирает файл по блокам: из старой копии на месте и докачанных кусков.
+        /// <para>
+        /// Любая неудача здесь — не ошибка обновления, а повод качать файл обычным
+        /// путём. «.part» при этом остаётся проверенным началом нового файла (см.
+        /// <see cref="BlockDelta"/>), и обычная загрузка продолжает с него по Range,
+        /// не теряя собранного. Выбрасывается только то, чего обычная загрузка тоже
+        /// не переживёт: отмена и отсутствие нужных для сверки сборок.
+        /// </para>
+        /// </summary>
+        /// <param name="t">Задача загрузки с хешами блоков.</param>
+        /// <param name="dstPath">Старая копия файла — она же место назначения.</param>
+        /// <param name="partPath">Куда собирать.</param>
+        /// <param name="limiter">Общий лимит скорости; null — без лимита.</param>
+        /// <param name="indexGate">Ограничитель одновременных чтений старых файлов.</param>
+        /// <param name="onPartLength">Сколько байт нового файла уже лежит в .part.</param>
+        /// <param name="onNetwork">Сколько байт пришло по сети.</param>
+        /// <param name="onFromOld">Сколько байт собранного файла взято из старой копии.</param>
+        /// <param name="ct">Токен отмены.</param>
+        /// <returns>true, если файл собран и сверен целиком.</returns>
+        private async Task<bool> TryAssembleFromBlocksAsync(
+            FileTask t,
+            string dstPath,
+            string partPath,
+            SpeedLimiter? limiter,
+            SemaphoreSlim indexGate,
+            Action<long> onPartLength,
+            Action<int> onNetwork,
+            Action<long> onFromOld,
+            CancellationToken ct) {
+            var assembled = false;
+            try {
+                var source = new HttpRangeSource(this.downloadHttp, t.Url, limiter, onNetwork);
+                using var hashes = new FileHasher.StreamingHashes();
+                var r = await BlockDelta.AssembleAsync(t.Blocks!, dstPath, partPath, source, onPartLength, indexGate, ct, hashes).ConfigureAwait(false);
+                assembled = true;
+
+                // Блоки сверены по отдельности, но файл принимается только целиком —
+                // по тем же полным хешам, что и скачанный обычным путём. Считаны они
+                // по ходу записи: каждый байт .part прошёл через них ровно один раз.
+                var (shaHex, b3Hex) = hashes.Finish();
+                CheckHashes(t, shaHex, b3Hex);
+                onFromOld(r.FromOld);
+                onPartLength(t.Size);
+                ChillHub.Core.Logging.Logger.Info(
+                    $"Файл '{t.RelativePath}' собран по блокам: из старой копии {r.FromOld} байт, скачано {r.Fetched}, " +
+                    $"уже было {r.Resumed}, запросов {r.Requests}");
+                return true;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                throw;
+            }
+            catch (Exception ex) {
+                if (IsUnrecoverable(ex)) {
+                    throw new IOException(
+                        $"Не удалось проверить {t.RelativePath}: {ExceptionText.Describe(ex)}. " +
+                        "Файлы лаунчера неполные — переустановите его.",
+                        ex);
+                }
+
+                // Собранный целиком файл не сошёлся по полному хешу: блоки совпали, а
+                // файл нет. Продолжать с него нельзя — только с нуля.
+                if (assembled) {
+                    SafeDeleteFile(partPath);
+                }
+
+                long kept = 0;
+                try {
+                    kept = File.Exists(partPath) ? new FileInfo(partPath).Length : 0;
+                }
+                catch {
+                }
+
+                onPartLength(Math.Min(kept, t.Size));
+                ChillHub.Core.Logging.Logger.Warn(
+                    $"Файл '{t.RelativePath}' по блокам не собран ({ExceptionText.Describe(ex)}) — качаем обычным путём" +
+                    (kept > 0 ? $", продолжая с {kept} байт" : string.Empty));
+                return false;
+            }
         }
 
         /// <summary>
@@ -1121,8 +1356,24 @@ namespace ChillHub.Core.Sync {
 
             // ComputeHashes закрывает файл до выхода: иначе повторная попытка не смогла бы его удалить.
             FileHasher.ComputeHashes(partPath, out var shaHex, out var b3Hex);
+            CheckHashes(t, shaHex, b3Hex);
+        }
 
-            // Файл закрыт: иначе повторная попытка не смогла бы его удалить
+        /// <summary>
+        /// Сравнивает посчитанные хеши файла с манифестом. Одно правило на оба пути:
+        /// скачанный файл сверяется перечитыванием с диска, собранный по блокам — по
+        /// хешам, посчитанным по ходу записи.
+        /// </summary>
+        /// <param name="t">Задание из плана с ожидаемыми хешами.</param>
+        /// <param name="shaHex">Посчитанный SHA-256.</param>
+        /// <param name="b3Hex">Посчитанный Blake3; пусто — считать нечем.</param>
+        /// <exception cref="InvalidDataException">Содержимое не совпало с манифестом.</exception>
+        /// <exception cref="VerificationUnavailableException">Проверять файл не по чему.</exception>
+        private static void CheckHashes(FileTask t, string shaHex, string b3Hex) {
+            if (string.IsNullOrWhiteSpace(t.Sha256) && string.IsNullOrWhiteSpace(t.Blake3)) {
+                return;
+            }
+
             if (!string.IsNullOrWhiteSpace(t.Sha256) && !string.Equals(shaHex, t.Sha256, StringComparison.OrdinalIgnoreCase)) {
                 throw new InvalidDataException($"Хеш SHA-256 не совпадает: {t.RelativePath}");
             }
@@ -1345,6 +1596,103 @@ namespace ChillHub.Core.Sync {
         internal static string NormalizeRel(string? rel) => ManifestPath.Canonicalize(rel);
 
         /// <summary>
+        /// Считает хеши локальных файлов заранее и в несколько потоков.
+        /// <para>
+        /// Ничего не решает: возвращает готовые хеши тех файлов, у которых их точно
+        /// спросят. Что сюда не попало — посчитает последовательный проход, поэтому
+        /// разойтись с ним в вердикте этот метод не может в принципе.
+        /// </para>
+        /// </summary>
+        /// <param name="manifestFiles">Файлы сборки, уже очищенные от служебных и чужих.</param>
+        /// <param name="localRoot">Корень установки.</param>
+        /// <param name="preservePaths">Пути, которые лаунчер правит сам и не сверяет.</param>
+        /// <param name="hashCache">Кеш хешей: у чего он и так есть, читать незачем.</param>
+        /// <param name="options">Настройки плана; важен ForceRehash.</param>
+        /// <param name="counted">Зовётся на каждый посчитанный файл с его размером.</param>
+        /// <param name="ct">Токен отмены.</param>
+        /// <returns>Хеши по относительному пути; файлов, которые не удалось прочитать, здесь нет.</returns>
+        private static Dictionary<string, (string Sha256, string Blake3)> PrefetchHashes(
+            Dictionary<string, ManifestFile> manifestFiles,
+            string localRoot,
+            HashSet<string> preservePaths,
+            FileHashCache hashCache,
+            PlanOptions options,
+            Action<long> counted,
+            CancellationToken ct) {
+            var todo = new List<KeyValuePair<string, ManifestFile>>();
+            foreach (var kv in manifestFiles) {
+                ct.ThrowIfCancellationRequested();
+                var mf = kv.Value;
+                if (string.IsNullOrWhiteSpace(mf.Sha256) && string.IsNullOrWhiteSpace(mf.Blake3)) {
+                    // Сравнение по размеру — файл читать незачем
+                    continue;
+                }
+
+                try {
+                    if (preservePaths.Contains(kv.Key)) {
+                        continue;
+                    }
+
+                    var info = new FileInfo(ManifestPath.Combine(localRoot, kv.Key));
+                    if (!info.Exists || (mf.Size > 0 && info.Length != mf.Size)) {
+                        // Файла нет или он другого размера — хеш заведомо не понадобится
+                        continue;
+                    }
+
+                    if (!options.ForceRehash
+                        && hashCache.TryGet(kv.Key, info.Length, info.LastWriteTimeUtc.Ticks, out _, out _)) {
+                        continue;
+                    }
+                }
+                catch (OperationCanceledException) {
+                    throw;
+                }
+                catch {
+                    // Кривой путь или отказ файловой системы: пусть с этим разбирается
+                    // последовательный проход — там для этого есть и место, и причина в плане.
+                    continue;
+                }
+
+                todo.Add(kv);
+            }
+
+            var ready = new Dictionary<string, (string Sha256, string Blake3)>(todo.Count, StringComparer.OrdinalIgnoreCase);
+            if (todo.Count == 0) {
+                return ready;
+            }
+
+            var gate = new object();
+            var degree = Math.Clamp(Environment.ProcessorCount, 1, HashWorkers);
+            Parallel.ForEach(
+                todo,
+                new ParallelOptions { MaxDegreeOfParallelism = degree, CancellationToken = ct },
+                kv => {
+                    string sha;
+                    string b3;
+                    try {
+                        FileHasher.ComputeHashes(ManifestPath.Combine(localRoot, kv.Key), out sha, out b3, ct);
+                    }
+                    catch (OperationCanceledException) {
+                        throw;
+                    }
+                    catch {
+                        // Файл пропал или не читается между двумя проходами. Молчим:
+                        // последовательный проход наткнётся на то же самое и запишет
+                        // причину в план — так это работало и до ускорения.
+                        return;
+                    }
+
+                    lock (gate) {
+                        ready[kv.Key] = (sha, b3);
+                    }
+
+                    counted(kv.Value.Size);
+                });
+
+            return ready;
+        }
+
+        /// <summary>
         /// Собирает набор относительных путей для быстрой проверки принадлежности:
         /// регистронезависимый (как файловая система Windows) и канонизированный.
         /// </summary>
@@ -1457,6 +1805,82 @@ namespace ChillHub.Core.Sync {
                     }
 
                     dir = Path.GetDirectoryName(full);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Куски файла с раздачи: Range-запрос на каждый отрезок недостающих блоков.
+        /// <para>
+        /// Правила те же, что у обычной загрузки: таймаут по простою, а не по всему
+        /// ответу; общий на все потоки лимит скорости; каждый пришедший байт — в
+        /// счётчик сетевого трафика.
+        /// </para>
+        /// </summary>
+        private sealed class HttpRangeSource : IBlockRangeSource {
+            private readonly HttpClient http;
+            private readonly string url;
+            private readonly SpeedLimiter? limiter;
+            private readonly Action<int> onNetwork;
+
+            internal HttpRangeSource(HttpClient http, string url, SpeedLimiter? limiter, Action<int> onNetwork) {
+                this.http = http;
+                this.url = url;
+                this.limiter = limiter;
+                this.onNetwork = onNetwork;
+            }
+
+            public async Task FetchAsync(long offset, long length, Func<ReadOnlyMemory<byte>, ValueTask> sink, CancellationToken ct) {
+                using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                stallCts.CancelAfter(StallTimeoutMs);
+                var attemptCt = stallCts.Token;
+
+                using var req = new HttpRequestMessage(HttpMethod.Get, this.url);
+                req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(offset, offset + length - 1);
+                using var resp = await this.http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, attemptCt).ConfigureAwait(false);
+
+                // 200 на Range — раздача отдаёт файл целиком. Читать его ради одного
+                // куска — та же полная загрузка, только повторённая на каждом отрезке.
+                if (resp.StatusCode != HttpStatusCode.PartialContent) {
+                    if (resp.IsSuccessStatusCode) {
+                        throw new BlockRangeUnsupportedException($"на запрос куска раздача ответила {(int)resp.StatusCode}");
+                    }
+
+                    resp.EnsureSuccessStatusCode();
+                }
+
+                var range = resp.Content.Headers.ContentRange;
+                if (range == null || range.From != offset || range.To != offset + length - 1) {
+                    throw new BlockRangeUnsupportedException(
+                        $"раздача отдала не тот кусок: просили {offset}-{offset + length - 1}, пришло {range}");
+                }
+
+                var buffer = ArrayPool<byte>.Shared.Rent(DownloadBufferBytes);
+                try {
+                    using var src = await resp.Content.ReadAsStreamAsync(attemptCt).ConfigureAwait(false);
+                    long got = 0;
+                    int read;
+                    while ((read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), attemptCt).ConfigureAwait(false)) > 0) {
+                        got += read;
+                        if (got > length) {
+                            throw new InvalidDataException($"раздача прислала больше {length} байт");
+                        }
+
+                        this.onNetwork(read);
+                        if (this.limiter != null) {
+                            await this.limiter.ThrottleAsync(read, attemptCt).ConfigureAwait(false);
+                        }
+
+                        await sink(buffer.AsMemory(0, read)).ConfigureAwait(false);
+                        stallCts.CancelAfter(StallTimeoutMs);
+                    }
+
+                    if (got < length) {
+                        throw new IOException($"ответ оборвался: {got} из {length} байт");
+                    }
+                }
+                finally {
+                    ArrayPool<byte>.Shared.Return(buffer);
                 }
             }
         }

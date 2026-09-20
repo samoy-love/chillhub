@@ -125,7 +125,7 @@ func TestTruncatedArchiveLeavesNothingBehind(t *testing.T) {
 	good := zipBytes(t, map[string]string{"a.txt": "hello", "b/c.txt": "world"})
 
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequest(t, "game", "1.0.0", good[:len(good)/2]))
+	publishInto(t, h, w, "game", "game", "1.0.0", good[:len(good)/2])
 	if w.Code == http.StatusOK {
 		t.Fatalf("a truncated archive was published: %s", w.Body.String())
 	}
@@ -136,7 +136,7 @@ func TestTruncatedArchiveLeavesNothingBehind(t *testing.T) {
 		t.Error("a manifest was written for a truncated archive")
 	}
 	assertNoStagingLeftovers(t, filepath.Join(root, "content", "game"))
-	assertTmpDirEmpty(t, root)
+	assertNoPublishScratch(t, root)
 }
 
 // Extraction that dies in the middle — here forced by the uncompressed-size
@@ -149,10 +149,10 @@ func TestExtractionAbortedMidwayLeavesNoPartialTree(t *testing.T) {
 	h := New(root)
 
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequest(t, "game", "1.0.0", zipBytes(t, map[string]string{
+	publishInto(t, h, w, "game", "game", "1.0.0", zipBytes(t, map[string]string{
 		"aaa-small.txt": "tiny",
 		"zzz-big.bin":   strings.Repeat("A", 4096),
-	})))
+	}))
 	if w.Code == http.StatusOK {
 		t.Fatalf("the oversized archive was published: %s", w.Body.String())
 	}
@@ -160,7 +160,7 @@ func TestExtractionAbortedMidwayLeavesNoPartialTree(t *testing.T) {
 		t.Error("a half-extracted build is live")
 	}
 	assertNoStagingLeftovers(t, filepath.Join(root, "content", "game"))
-	assertTmpDirEmpty(t, root)
+	assertNoPublishScratch(t, root)
 }
 
 // estimateZipUncompressedSize decides whether the volume can hold the build

@@ -26,6 +26,9 @@ namespace ChillHub.Pages {
 
         private readonly string markdownUrl;
 
+        /// <summary>Игра, о которой заметка; null — новость лаунчера.</summary>
+        private readonly Core.GameInfo? game;
+
         /// <summary>Название из шапки: им же отсекается дублирующий заголовок в тексте.</summary>
         private readonly string newsTitle;
 
@@ -38,11 +41,29 @@ namespace ChillHub.Pages {
         /// <summary>Переходы этой страницы: отличает свою отрисовку от ссылки в тексте.</summary>
         private readonly NewsNavigationGate gate = new NewsNavigationGate(OpenOutside);
 
-        public NewsDetailPage(string title, string markdownUrl) {
+        public NewsDetailPage(string title, string markdownUrl)
+            : this(title, markdownUrl, null) {
+        }
+
+        /// <summary>Initializes a new instance of the <see cref="NewsDetailPage"/> class.</summary>
+        /// <param name="title">Заголовок новости.</param>
+        /// <param name="markdownUrl">Адрес текста новости.</param>
+        /// <param name="game">
+        /// Игра, о которой заметка; null — новость лаунчера, вести некуда. Прежде выхода
+        /// к игре из новости не было вовсе: человек читал про мод или обновление и
+        /// возвращался искать игру в списке руками.
+        /// </param>
+        public NewsDetailPage(string title, string markdownUrl, Core.GameInfo? game) {
             this.InitializeComponent();
             this.TitleText.Text = title;
             this.newsTitle = title;
             this.markdownUrl = markdownUrl;
+            this.game = game;
+
+            if (game != null && !string.IsNullOrWhiteSpace(game.GameId)) {
+                this.GameLinkTitle.Text = string.IsNullOrWhiteSpace(game.Title) ? game.GameId : game.Title;
+                this.GameLinkPanel.Visibility = Visibility.Visible;
+            }
 
             // WebView2 держит собственный процесс msedgewebview2.exe. Без освобождения
             // десяток прочитанных новостей оставляет десяток процессов до выхода из лаунчера.
@@ -271,6 +292,17 @@ namespace ChillHub.Pages {
             }
         }
 
+        /// <summary>
+        /// Ведёт к игре, о которой заметка: главная с выделенной игрой. Возврат по стеку
+        /// не годится — он вернул бы туда, откуда пришли, а это могла быть другая игра.
+        /// </summary>
+        /// <param name="sender">Кнопка.</param>
+        /// <param name="e">Аргументы события.</param>
+        private void GameLinkBtn_Click(object sender, RoutedEventArgs e) {
+            var win = Window.GetWindow(this) as ChillHub.MainWindow;
+            win?.OpenGameFromNews(this.game?.GameId);
+        }
+
         private void BackBtn_Click(object sender, RoutedEventArgs e) {
             // Возвращаемся по стеку навигации, чтобы сохранить состояние HomePage (включая выбранную игру)
             if (this.NavigationService?.CanGoBack == true) {
@@ -286,15 +318,15 @@ namespace ChillHub.Pages {
 
         /// <summary>Собирает цвета страницы новости из кистей темы.</summary>
         private static NewsPalette BuildPalette() => new NewsPalette(
-            Background: BrushToCss("Brush.Background", "#0F1116"),
-            Text: BrushToCss("Brush.Text", "#E5E5E5"),
-            CodeBackground: BrushToCss("Brush.Surface", "#171B24"),
-            Link: BrushToCss("Brush.Accent", "#EF4444"),
-            LinkHover: BrushToCss("Brush.AccentHover", "#DC2626"),
-            HorizontalRule: BrushToCss("Brush.Border", "#262626"),
-            Surface: BrushToCss("Brush.Surface", "#0B0B0B"),
-            ScrollThumb: BrushToCss("Brush.ScrollbarThumb", BrushToCss("Brush.ListHover", "#2E2E2E")),
-            ScrollThumbHover: BrushToCss("Brush.ScrollbarThumbHover", BrushToCss("Brush.ListHoverAlt", "#474747")));
+            Background: BrushToCss("Brush.Background", "#0C0C10"),
+            Text: BrushToCss("Brush.Text", "#E9E9F0"),
+            CodeBackground: BrushToCss("Brush.Surface", "#14141B"),
+            Link: BrushToCss("Brush.Accent", "#7C5CFF"),
+            LinkHover: BrushToCss("Brush.AccentHover", "#8F73FF"),
+            HorizontalRule: BrushToCss("Brush.Border", "#24242F"),
+            Surface: BrushToCss("Brush.Surface", "#14141B"),
+            ScrollThumb: BrushToCss("Brush.ScrollbarThumb", BrushToCss("Brush.ListHover", "#16161E")),
+            ScrollThumbHover: BrushToCss("Brush.ScrollbarThumbHover", BrushToCss("Brush.ListHoverAlt", "#1B1B24")));
 
         private static string BrushToCss(string key, string fallback) {
             try {

@@ -25,6 +25,7 @@ namespace ChillHub {
     /// </summary>
     public partial class ShortcutLaunchWindow : Window {
         private readonly ShortcutRequest request;
+        private readonly ShortcutOpenAction action;
 
         /// <summary>Initializes a new instance of the <see cref="ShortcutLaunchWindow"/> class.</summary>
         /// <param name="request">Запрос ярлыка: название и путь к exe на момент установки.</param>
@@ -33,12 +34,14 @@ namespace ChillHub {
             this.InitializeComponent();
             this.request = request;
 
+            this.action = action;
             this.HeadingText.Text = ShortcutOpen.Heading(request, action);
             this.MessageText.Text = ShortcutOpen.Message(request, action);
+            this.LaunchBtn.Content = ShortcutOpen.PrimaryButton(action);
 
             // Запускать нечего — кнопки нет вовсе: погашенная кнопка выглядела бы как
             // «лаунчер что-то может, просто не сейчас», а он не может ничего.
-            if (action != ShortcutOpenAction.OfferLaunch) {
+            if (action != ShortcutOpenAction.OfferLaunch && action != ShortcutOpenAction.OfferInstall) {
                 this.ShowNothingToLaunch();
             }
 
@@ -56,7 +59,19 @@ namespace ChillHub {
         /// <summary>Игра запущена в обход лаунчера. Нужно вызывающему для лога.</summary>
         internal bool Launched { get; private set; }
 
+        /// <summary>Человек согласился скачать игру заново — качать и запускать вызывающему.</summary>
+        internal bool InstallRequested { get; private set; }
+
         private void LaunchBtn_Click(object sender, RoutedEventArgs e) {
+            // Скачать заново окно не умеет и не должно: очередь и запуск живут на главной.
+            // Отсюда уходит только согласие.
+            if (this.action == ShortcutOpenAction.OfferInstall) {
+                this.InstallRequested = true;
+                this.DialogResult = true;
+                this.Close();
+                return;
+            }
+
             this.Launched = ShortcutFallbackLaunch.TryStart(this.request.ExePath);
             if (!this.Launched) {
                 // Файл исчез между показом окна и нажатием: говорим об этом прямо в окне.

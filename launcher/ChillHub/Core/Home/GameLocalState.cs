@@ -37,6 +37,12 @@ namespace ChillHub.Core.Home {
         /// <summary>Имя exe лаунчера: на него ведёт ярлык игры.</summary>
         private const string LauncherFileName = "ChillHub.exe";
 
+        /// <summary>
+        /// Хвост в имени ярлыка: на рабочем столе уже может лежать ярлык той же игры из
+        /// другого источника, и без пометки они неотличимы — а ведут в разные места.
+        /// </summary>
+        private const string ShortcutNameSuffix = " (Chill Hub)";
+
         /// <summary>Потолок размера `.lnk`, который мы вообще разбираем (обычный ярлык — единицы килобайт).</summary>
         private const long MaxLinkBytes = 512 * 1024;
 
@@ -429,7 +435,8 @@ namespace ChillHub.Core.Home {
         /// <param name="title">Название игры для имени ярлыка.</param>
         /// <param name="gameId">Идентификатор игры.</param>
         /// <param name="exeRelativePath">Путь к exe относительно папки игры.</param>
-        internal static void StartDesktopShortcutCreation(string? title, string? gameId, string? exeRelativePath) {
+        internal static void StartDesktopShortcutCreation(
+            string? title, string? gameId, string? exeRelativePath, Action<string>? created = null) {
             try {
                 var exePath = GameExePath(gameId, exeRelativePath);
                 if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath)) {
@@ -437,7 +444,18 @@ namespace ChillHub.Core.Home {
                 }
 
                 var name = string.IsNullOrWhiteSpace(title) ? gameId! : title!;
-                var thread = new Thread(() => TryCreateDesktopShortcut(name, gameId!, exePath)) { IsBackground = true };
+                var thread = new Thread(() => {
+                    TryCreateDesktopShortcut(name, gameId!, exePath);
+
+                    // Ярлык создавался молча, и узнать о нём можно было только свернув
+                    // лаунчер и посмотрев на стол. Отчитываемся тому, кто попросил.
+                    try {
+                        created?.Invoke(name);
+                    }
+                    catch (Exception ex) {
+                        Logging.Logger.Warn($"StartDesktopShortcutCreation: отчёт не доставлен: {ex.Message}");
+                    }
+                }) { IsBackground = true };
                 try {
                     thread.SetApartmentState(ApartmentState.STA);
                 }
@@ -486,7 +504,7 @@ namespace ChillHub.Core.Home {
                 var desktop = env?.DesktopDirectory
                     ?? Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
                 var name = string.IsNullOrWhiteSpace(title) ? Path.GetFileNameWithoutExtension(exePath) : title;
-                var linkPath = Path.Combine(desktop, HomeFormat.SanitizeFileName(name) + ".lnk");
+                var linkPath = Path.Combine(desktop, ShortcutFileName(name));
 
                 var shellType = Type.GetTypeFromProgID(env?.ShellProgId ?? ShellProgId);
                 if (shellType == null) {
@@ -514,6 +532,20 @@ namespace ChillHub.Core.Home {
                 Logging.Logger.Warn($"TryCreateDesktopShortcut('{title}'): {ex.Message}");
             }
         }
+
+        /// <summary>
+        /// Имя файла ярлыка: название игры с пометкой «(Chill Hub)».
+        /// <para>
+        /// Пометка нужна человеку, а не нам: игра могла стоять и раньше, и её ярлык
+        /// (из Steam, от установщика, сделанный руками) лежит на том же рабочем столе —
+        /// два одинаковых значка «Игра» ведут в разные места, и какой из них наш,
+        /// по имени не понять.
+        /// </para>
+        /// </summary>
+        /// <param name="name">Название игры.</param>
+        /// <returns>Имя файла с расширением `.lnk`.</returns>
+        internal static string ShortcutFileName(string name)
+            => HomeFormat.SanitizeFileName(name) + ShortcutNameSuffix + ".lnk";
 
         /// <summary>
         /// Путь к exe лаунчера, на который ссылается ярлык. Пустая строка — путь определить

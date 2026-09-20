@@ -50,6 +50,10 @@ type Handlers struct {
 
 	// sum кеширует сводку «что ждёт действия» — см. summary.go.
 	sum summaryCache
+
+	// pkgs кеширует ответы Thunderstore про пакеты — см. packagecache.go.
+	// Общий на оба места, которые их спрашивают: сводку и список версий.
+	pkgs packageCache
 }
 
 // New returns handlers for one content root.
@@ -370,6 +374,9 @@ func (h *Handlers) rebuildRequest(entry games.Entry, cfg *games.ModsConfig, vers
 				"версия %s собрана из профиля r2modman до того, как состав стал записываться, "+
 					"и восстановить его нечем — загрузите профиль заново через «Импорт»", version)
 		}
+	case SourceUpload:
+		return Request{}, fmt.Errorf(
+			"версия %s залита готовым архивом: состава по пакетам у неё нет, пересобирать нечего — залейте архив заново", version)
 	default:
 		return Request{}, fmt.Errorf("неизвестный источник версии %s: %q", version, src.Kind)
 	}
@@ -575,6 +582,11 @@ func (h *Handlers) List(w http.ResponseWriter, r *http.Request) {
 			info.Missing = src.Missing
 			info.Collisions = src.Collisions
 			info.Rebuildable = src.Kind == SourceThunderstore || len(src.Roots) > 0
+		} else {
+			// No build record means the version came in as a finished archive
+			// (upload kind=mods): the builder writes a record for everything it
+			// publishes itself.
+			info.Kind = string(SourceUpload)
 		}
 		items = append(items, info)
 	}
@@ -588,9 +600,14 @@ func (h *Handlers) List(w http.ResponseWriter, r *http.Request) {
 		"community": cfg.Community,
 	}
 
-	// Update check: one request per distinct pack, cheap enough to do on every
-	// panel visit.
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	// Update check: один ответ на пакет, общий со сводкой и переживающий
+	// запрос (packagecache.go). Своими запросами это стоило 320 мс на игру —
+	// столько клиент держит между обращениями к Thunderstore, — и раздел
+	// сборок открывался тем дольше, чем больше игр с модами.
+	//
+	// Ждём не дольше thunderstoreWait: не дождались — список уходит без
+	// пометок об обновлениях, а не висит, пока лежит чужой сайт.
+	ctx, cancel := context.WithTimeout(r.Context(), thunderstoreWait)
 	defer cancel()
 	out["updates"] = h.updateChecks(ctx, entry.GameID, items)
 
@@ -623,7 +640,7 @@ func (h *Handlers) updateChecks(ctx context.Context, gid string, items []Version
 		}
 		seen[PackageKey(ns, name)] = true
 
-		p, err := h.builder.Client.GetPackage(ctx, ns, name)
+		p, err := h.pkgs.pkg(ctx, h.builder.Client, ns, name)
 		if err != nil {
 			log.Printf("[mods] update check %s-%s: %v", ns, name, err)
 			continue

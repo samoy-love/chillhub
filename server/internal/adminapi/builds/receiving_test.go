@@ -23,6 +23,7 @@ func TestUploadStreamAnswersWhileTheArchiveIsStillArriving(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
 	h.CurrentUser = func(*http.Request) string { return "admin" }
+	h.CurrentUser = func(*http.Request) string { return "admin" }
 
 	w := httptest.NewRecorder()
 	h.UploadStream(w, streamUploadRequest(t,

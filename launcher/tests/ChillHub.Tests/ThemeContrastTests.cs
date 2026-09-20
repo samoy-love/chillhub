@@ -5,8 +5,12 @@
 
 namespace ChillHub.Tests {
     using System;
+    using System.Globalization;
     using System.Windows;
     using System.Windows.Media;
+
+    using ChillHub.Core;
+    using ChillHub.Core.UI;
 
     using Xunit;
 
@@ -24,32 +28,45 @@ namespace ChillHub.Tests {
     /// </para>
     /// </summary>
     public class ThemeContrastTests {
-        /// <summary>Подпись главной кнопки читается в покое, под курсором и в нажатии.</summary>
+        /// <summary>
+        /// Подпись главной кнопки читается в покое, под курсором и в нажатии.
+        /// <para>
+        /// Проверяется та краска, которой подпись набрана на самом деле — Brush.OnAccent.
+        /// Раньше здесь стоял белый: на прежней фиолетовой заливке он и был подписью. На
+        /// угольке белая даёт 3,70 и порог не берёт, поэтому подпись стала тёмной; тест,
+        /// проверяющий белую, после смены палитры проверял бы несуществующее сочетание.
+        /// </para>
+        /// </summary>
         [Theory]
         [InlineData("Brush.AccentFill")]
         [InlineData("Brush.AccentFillHover")]
         [InlineData("Brush.AccentFillPressed")]
-        public void БелаяПодписьНаЗаливкеКнопкиПроходитПорог(string fillKey)
+        public void ПодписьНаЗаливкеКнопкиПроходитПорог(string fillKey)
             => UiThread.Run(() => {
                 var fill = Color(fillKey);
+                var label = Color("Brush.OnAccent");
 
                 Assert.True(
-                    Contrast(Colors.White, fill) >= 4.5,
-                    $"{fillKey}: белая подпись даёт {Contrast(Colors.White, fill):0.00}:1 при пороге 4.5:1");
+                    Contrast(label, fill) >= 4.5,
+                    $"{fillKey}: подпись даёт {Contrast(label, fill):0.00}:1 при пороге 4.5:1");
             });
 
         /// <summary>
         /// Подписи вторичным и приглушённым цветом читаются на самом светлом из фонов, на
-        /// которых они встречаются, — на карточке поверх карточки.
+        /// которых они встречаются. С палитрой 2.0 таким фоном стала третья ступень
+        /// (поле ввода, дорожка ползунка), а не вторая: приглушённый #7A848D из палитры
+        /// сайта давал на ней 3,86 и порог не брал — в теме он поэтому светлее.
         /// </summary>
         [Theory]
-        [InlineData("Brush.TextSecondary")]
-        [InlineData("Brush.TextMuted")]
-        public void ВторичныеПодписиЧитаютсяНаКарточке(string textKey)
+        [InlineData("Brush.TextSecondary", "Brush.Surface2")]
+        [InlineData("Brush.TextMuted", "Brush.Surface2")]
+        [InlineData("Brush.TextSecondary", "Brush.Surface3")]
+        [InlineData("Brush.TextMuted", "Brush.Surface3")]
+        public void ВторичныеПодписиЧитаютсяНаКарточке(string textKey, string surfaceKey)
             => UiThread.Run(() => {
-                var ratio = Contrast(Color(textKey), Color("Brush.Surface2"));
+                var ratio = Contrast(Color(textKey), Color(surfaceKey));
 
-                Assert.True(ratio >= 4.5, $"{textKey} на Surface2 даёт {ratio:0.00}:1 при пороге 4.5:1");
+                Assert.True(ratio >= 4.5, $"{textKey} на {surfaceKey} даёт {ratio:0.00}:1 при пороге 4.5:1");
             });
 
         /// <summary>
@@ -87,6 +104,41 @@ namespace ChillHub.Tests {
                 var ratio = Contrast(Colors.White, Color(key));
 
                 Assert.True(ratio >= 4.5, $"белая подпись на {key} даёт {ratio:0.00}:1 при пороге 4.5:1");
+            });
+
+        /// <summary>
+        /// Запасные краски статусов в списке игр совпадают с темой.
+        /// <para>
+        /// Кисти статусов берутся из темы, а выписанные в коде значения — только запас
+        /// на случай, когда темы в процессе нет. Запас и обязан совпадать с темой: иначе
+        /// он тихо разойдётся с ней, как уже разошёлся однажды — разметку перекрасили в
+        /// 2.0, а список игр продолжал красить статусы старыми красками, и «в очереди»
+        /// оставалась отменённым фиолетовым. Разметку смотрят глазами, кисти в C# — нет.
+        /// </para>
+        /// <para>
+        /// Тема здесь НЕ подключается намеренно: без неё конвертер возвращает ровно
+        /// запасное значение, и сравнение с темой проверяет именно расхождение.
+        /// </para>
+        /// </summary>
+        [Theory]
+        [InlineData(true, false, "Brush.Success")]
+        [InlineData(true, true, "Brush.Warning")]
+        [InlineData(false, false, "Brush.TextMuted")]
+        public void ЗапаснойЦветСтатусаСовпадаетСТемой(bool installed, bool needsUpdate, string themeKey)
+            => UiThread.Run(() => {
+                var game = new GameInfo { GameId = "probe", IsInstalled = installed, NeedsUpdate = needsUpdate };
+                var brush = (SolidColorBrush)new GameStatusBrushConverter()
+                    .Convert(game, typeof(Brush), null!, CultureInfo.InvariantCulture);
+
+                Assert.Equal(Color(themeKey), brush.Color);
+            });
+
+        /// <summary>«В очереди» и «играет» тоже: акцент темы и её же зелёный.</summary>
+        [Fact]
+        public void ЗапаснойЦветОчередиИЗапускаСовпадаетСТемой()
+            => UiThread.Run(() => {
+                Assert.Equal(Color("Brush.Accent"), GameStatusBrushConverter.Queued.Color);
+                Assert.Equal(Color("Brush.Success"), GameStatusBrushConverter.Playing.Color);
             });
 
         private static Color Color(string key) {

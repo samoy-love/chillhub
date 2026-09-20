@@ -2,8 +2,22 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://launcher.samoy.love/</loc>
-    <lastmod>2025-09-23</lastmod>
+    <lastmod>2026-09-05</lastmod>
     <changefreq>daily</changefreq>
     <priority>1.0</priority>
+  </url>
+  <!-- Правовые страницы появились вместе с 2.0. Меняются они редко, но
+       без них в карте поиск находит их только по ссылкам со страницы. -->
+  <url>
+    <loc>https://launcher.samoy.love/privacy.html</loc>
+    <lastmod>2026-09-05</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+  <url>
+    <loc>https://launcher.samoy.love/terms.html</loc>
+    <lastmod>2026-09-05</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
   </url>
 </urlset>

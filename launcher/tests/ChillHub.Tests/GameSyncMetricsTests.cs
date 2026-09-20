@@ -184,6 +184,29 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// После загрузки объём закачки — то, что прошло по сети, а не план: блоки
+        /// из старых копий по сети не ехали, и «скачано 52 ГБ» при 2,6 ГБ трафика
+        /// врало бы ровно о том, ради чего блоки заведены.
+        /// </summary>
+        [Fact]
+        public async Task ПослеЗагрузкиСчитаетсяТрафикАНеПлан() {
+            var sent = new List<SyncOutcome>();
+            var plan = new DiffPlan {
+                TotalDownloadBytes = 52_000,
+                BlockReusedBytes = 49_400,
+                NetworkBytes = 2_600,
+                TotalManifestBytes = 60_000,
+            };
+            var runner = NewRunner(new FakeSync { Plan = plan }, sent);
+
+            await runner.RunAsync(Request(SyncKind.Update), CancellationToken.None);
+
+            var o = Assert.Single(sent);
+            Assert.Equal(2_600, o.Bytes);
+            Assert.Equal(60_000, o.FullBytes);
+        }
+
+        /// <summary>
         /// Сбой до построения плана всё равно сообщается: объём неизвестен, но сам факт
         /// неудачи важнее любых чисел о ней.
         /// </summary>

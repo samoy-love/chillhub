@@ -13,9 +13,26 @@
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="Auto"/>
         <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
       </Grid.ColumnDefinitions>
-      <Button Grid.Column="0" Name="BackBtn" Style="{DynamicResource Style.Button.Back}" Click="BackBtn_Click"/>
+      <Button Grid.Column="0" Name="BackBtn" Content="К новостям" Style="{DynamicResource Style.Button.Back}" Click="BackBtn_Click"/>
       <TextBlock Grid.Column="1" Name="TitleText" Style="{DynamicResource Style.PageTitle}" Margin="16,0,0,0"/>
+      <!-- Заметка про игру ведёт к самой игре. Прежде из новости выхода к ней не было
+           вовсе: человек читал про мод или обновление и возвращался искать игру в
+           списке руками. Блок появляется только у новостей игры — у новостей лаунчера
+           игры нет. -->
+      <Border Grid.Column="2" Name="GameLinkPanel" Visibility="Collapsed" VerticalAlignment="Center"
+              Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}"
+              BorderThickness="1" CornerRadius="{DynamicResource Radius.M}" Padding="12,6" Margin="16,0,0,0">
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+          <!-- Только название игры: подпись «Игра из этой заметки» объясняла то, что и
+               так видно по кнопке рядом. -->
+          <TextBlock Name="GameLinkTitle" FontSize="13" FontWeight="SemiBold" Margin="0,0,12,0"
+                     VerticalAlignment="Center" Foreground="{DynamicResource Brush.Text}"/>
+          <Button Name="GameLinkBtn" Content="Перейти к игре" Height="30" Padding="14,0"
+                  Style="{DynamicResource Style.Button.GhostNeutral}" Click="GameLinkBtn_Click"/>
+        </StackPanel>
+      </Border>
     </Grid>
     <Grid Grid.Row="1">
       <!-- Main content (browser) -->
@@ -25,7 +42,7 @@
       <Border Name="ErrorPanel" Visibility="Collapsed"
               Background="{DynamicResource Brush.Surface}"
               BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
-              CornerRadius="8" Padding="20" MaxWidth="620"
+              CornerRadius="{DynamicResource Radius.M}" Padding="20" MaxWidth="620"
               HorizontalAlignment="Center" VerticalAlignment="Center">
         <StackPanel Orientation="Vertical">
           <TextBlock Text="Не удалось открыть новость" FontSize="16" FontWeight="SemiBold"

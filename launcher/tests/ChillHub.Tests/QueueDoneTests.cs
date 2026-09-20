@@ -64,5 +64,35 @@ namespace ChillHub.Tests {
             Assert.Equal(string.Empty, done.Toast);
             Assert.Equal(string.Empty, done.Status);
         }
+
+        /// <summary>
+        /// Проверка кончается своими словами. «Готова к запуску» после проверки читается
+        /// как «мы её тебе поставили», хотя человек просил только сверить файлы и на
+        /// диске ничего не изменилось.
+        /// </summary>
+        [Fact]
+        public void ПроверкаОтчитываетсяСвоимиСловами() {
+            var done = QueueDone.For(QueueItemState.Completed, "R.E.P.O.", string.Empty, QueueTaskKind.Verify);
+
+            Assert.Equal("Файлы проверены, всё на месте", done.Toast);
+            Assert.Equal(string.Empty, done.Status);
+        }
+
+        /// <summary>Закачка отчитывается по-прежнему: слова у неё свои.</summary>
+        [Fact]
+        public void ЗакачкаОтчитываетсяПоПрежнему() {
+            var done = QueueDone.For(QueueItemState.Completed, "R.E.P.O.", string.Empty, QueueTaskKind.Download);
+
+            Assert.Contains("готова к запуску", done.Toast);
+        }
+
+        /// <summary>Неудачная проверка — это неудача, а не «всё на месте».</summary>
+        [Fact]
+        public void НеудачнаяПроверкаНеОтчитываетсяОбУспехе() {
+            var done = QueueDone.For(QueueItemState.Failed, "R.E.P.O.", "Сервер не ответил.", QueueTaskKind.Verify);
+
+            Assert.Equal(string.Empty, done.Toast);
+            Assert.Contains("Сервер не ответил", done.Status);
+        }
     }
 }

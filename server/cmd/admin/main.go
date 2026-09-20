@@ -180,6 +180,9 @@ func (s *server) middleware(h http.Handler, corsOrigin string, route httpx.Route
 func main() {
 	configureMaxProcs()
 	contentRoot := adminutil.DetectContentRoot()
+	if len(os.Args) > 1 && os.Args[1] == backfillCommand {
+		os.Exit(runBackfill(builds.New(contentRoot), os.Args[2:], os.Stdout))
+	}
 	s := newServer(contentRoot)
 
 	mux := http.NewServeMux()
@@ -223,7 +226,7 @@ func (s *server) handleAdminUI(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join(uiDir, "login.html"))
 		return
 	}
-	http.ServeFile(w, r, filepath.Join(uiDir, "admin.html"))
+	http.ServeFile(w, r, filepath.Join(uiDir, "index.html"))
 }
 
 func detectAdminUIDir() string {

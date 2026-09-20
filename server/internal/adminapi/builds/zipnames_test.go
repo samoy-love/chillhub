@@ -172,10 +172,10 @@ func TestPublishingAnArchiveWithWindowsSeparatorsProducesASlashTree(t *testing.T
 	root := t.TempDir()
 	h := New(root)
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequest(t, "game", "1.0.0", zipWithNames(t, [][2]string{
+	publishInto(t, h, w, "game", "game", "1.0.0", zipWithNames(t, [][2]string{
 		{`runtimes\win-x64\native\b3.dll`, "native"},
 		{`top.txt`, "t"},
-	})))
+	}))
 	if w.Code != http.StatusOK {
 		t.Fatalf("an archive written by a careless archiver was refused: %d %s", w.Code, w.Body.String())
 	}

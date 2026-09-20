@@ -71,6 +71,20 @@ namespace ChillHub.Core.Home {
         }
 
         /// <summary>
+        /// Делает абсолютными адреса значков, пришедшие от сервера корнеотносительными.
+        /// Не трогает ни диск, ни статусы — это для ответа сервера, ещё не влитого в список.
+        /// </summary>
+        /// <param name="games">Игры из ответа сервера.</param>
+        /// <param name="baseApi">База адреса сервера.</param>
+        internal static void NormalizeIconUrls(IEnumerable<GameInfo>? games, string baseApi) {
+            foreach (var g in games ?? Array.Empty<GameInfo>()) {
+                if (g != null && !string.IsNullOrWhiteSpace(g.IconUrl) && g.IconUrl.StartsWith("/")) {
+                    g.IconUrl = baseApi + g.IconUrl;
+                }
+            }
+        }
+
+        /// <summary>
         /// Отмечает игру установленной в только что применённой версии.
         /// «Нужно обновление» пересчитывается тут же: latest мог уйти вперёд, пока шла установка.
         /// </summary>

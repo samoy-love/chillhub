@@ -34,9 +34,6 @@ const (
 	// минут — это «узнать о вышедшем обновлении в тот же рабочий подход», а не
 	// «ходить в сеть по кнопке».
 	summaryTTL = 10 * time.Minute
-
-	// summaryTimeout бережёт панель от того, чтобы ждать Thunderstore.
-	summaryTimeout = 30 * time.Second
 )
 
 // LauncherSummary tells whether the newest uploaded launcher build is the one
@@ -122,6 +119,12 @@ func (h *Handlers) summary(ctx context.Context, force bool) *Summary {
 
 // modsSummaryCached keeps the Thunderstore half for summaryTTL.
 func (h *Handlers) modsSummaryCached(ctx context.Context, force bool) []ModsGameSummary {
+	if force {
+		// Настойчивый запрос обязан дойти до Thunderstore, а не взять
+		// готовое из кеша пакетов: иначе «обновить» отвечало бы тем же
+		// снимком, ради обхода которого его и нажали.
+		h.pkgs.forget()
+	}
 	if !force {
 		h.sum.mu.Lock()
 		fresh := h.sum.last != nil && time.Since(h.sum.at) < summaryTTL
@@ -132,15 +135,32 @@ func (h *Handlers) modsSummaryCached(ctx context.Context, force bool) []ModsGame
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, summaryTimeout)
+	// Панель не ждёт Thunderstore дольше thunderstoreWait — см. там.
+	ctx, cancel := context.WithTimeout(ctx, thunderstoreWait)
 	defer cancel()
 	mods := h.modsSummary(ctx)
 
-	h.sum.mu.Lock()
-	h.sum.last = mods
-	h.sum.at = time.Now()
-	h.sum.mu.Unlock()
+	// Неполную сводку не запоминаем. Ответ, которого не дождались, доезжает
+	// в кеш пакетов за спиной, и следующая загрузка панели возьмёт его
+	// оттуда; запомненная на десять минут, сводка всё это время твердила бы
+	// «состояние неизвестно».
+	if complete(mods) {
+		h.sum.mu.Lock()
+		h.sum.last = mods
+		h.sum.at = time.Now()
+		h.sum.mu.Unlock()
+	}
 	return mods
+}
+
+// complete reports whether every game's state is known.
+func complete(mods []ModsGameSummary) bool {
+	for _, m := range mods {
+		if m.Error != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // launcherSummary compares the active launcher build with the newest uploaded
@@ -228,7 +248,7 @@ func (h *Handlers) packStatus(ctx context.Context, gid, version string) (packSta
 		return packState{}, fmt.Errorf("имя версии %q не разбирается на пакет и номер", version)
 	}
 
-	p, err := h.builder.Client.GetPackage(ctx, ns, name)
+	p, err := h.pkgs.pkg(ctx, h.builder.Client, ns, name)
 	if err != nil {
 		return packState{}, fmt.Errorf("не удалось спросить Thunderstore про %s-%s: %w", ns, name, err)
 	}

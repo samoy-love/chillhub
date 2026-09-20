@@ -168,6 +168,111 @@ namespace ChillHub.Tests {
             Assert.True(string.IsNullOrWhiteSpace(HomeFeed.SelectVersion(null, new List<string>())));
         }
 
+        /// <summary>
+        /// Игры и новости обязаны спрашиваться ОДНОВРЕМЕННО.
+        /// <para>
+        /// На странице было написано «параллельная загрузка», а запросы шли один
+        /// за другим: сначала дожидались игр, потом начинали новости. Это два
+        /// обращения к серверу подряд на самом видном месте — старте, — и чем
+        /// дальше игрок от сервера, тем дороже второе ожидание.
+        /// </para>
+        /// <para>
+        /// Проверяется это удержанием: ответ на игры не отдаётся, пока не придёт
+        /// запрос за новостями. Последовательная загрузка на таком сервере просто
+        /// не закончится, а одновременная проходит.
+        /// </para>
+        /// </summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task ИгрыИНовостиСпрашиваютсяОдновременно() {
+            using var handler = new PairedHandler();
+            using var http = new HttpClient(handler);
+
+            var load = HomeFeed.LoadStartAsync(http, "https://chillhub.test");
+            var done = await Task.WhenAny(load, Task.Delay(5000)).ConfigureAwait(true);
+
+            Assert.Same(load, done);
+            var start = await load.ConfigureAwait(true);
+            Assert.NotNull(start.Games);
+            Assert.NotNull(start.News);
+            Assert.Null(start.GamesError);
+        }
+
+        /// <summary>
+        /// Отказ по новостям не отменяет главный экран: без ленты лаунчер работает
+        /// целиком, а список игр — единственное, без чего он бесполезен.
+        /// </summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task ОтказПоНовостямНеЛишаетСпискаИгр() {
+            using var handler = new ByUrlHandler(
+                games: (HttpStatusCode.OK, "{\"items\":[{\"gameId\":\"lethal\"}]}"),
+                news: (HttpStatusCode.InternalServerError, "beda"));
+            using var http = new HttpClient(handler);
+
+            var start = await HomeFeed.LoadStartAsync(http, "https://chillhub.test").ConfigureAwait(true);
+
+            Assert.NotNull(start.Games);
+            Assert.Null(start.News);
+            Assert.Null(start.GamesError);
+        }
+
+        /// <summary>Отказ по играм возвращается вызывающему: из него складывается «сервер недоступен».</summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task ОтказПоИграмДоезжаетДоВызывающего() {
+            using var handler = new ByUrlHandler(
+                games: (HttpStatusCode.InternalServerError, "beda"),
+                news: (HttpStatusCode.OK, "{\"items\":[]}"));
+            using var http = new HttpClient(handler);
+
+            var start = await HomeFeed.LoadStartAsync(http, "https://chillhub.test").ConfigureAwait(true);
+
+            Assert.Null(start.Games);
+            Assert.NotNull(start.GamesError);
+        }
+
+        /// <summary>
+        /// Сервер, который отдаёт игры только после того, как спросили новости.
+        /// Последовательная загрузка на нём не заканчивается вовсе.
+        /// </summary>
+        private sealed class PairedHandler : HttpMessageHandler {
+            private readonly TaskCompletionSource newsAsked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) {
+                var url = request.RequestUri!.ToString();
+                if (url.Contains("news", System.StringComparison.Ordinal)) {
+                    this.newsAsked.TrySetResult();
+                    return Json("{\"items\":[]}");
+                }
+
+                await this.newsAsked.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                return Json("{\"items\":[{\"gameId\":\"lethal\"}]}");
+            }
+
+            private static HttpResponseMessage Json(string body) => new HttpResponseMessage(HttpStatusCode.OK) {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
+        }
+
+        /// <summary>Свой ответ на каждый из двух адресов.</summary>
+        private sealed class ByUrlHandler : HttpMessageHandler {
+            private readonly (HttpStatusCode Code, string Body) games;
+            private readonly (HttpStatusCode Code, string Body) news;
+
+            internal ByUrlHandler((HttpStatusCode Code, string Body) games, (HttpStatusCode Code, string Body) news) {
+                this.games = games;
+                this.news = news;
+            }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) {
+                var pick = request.RequestUri!.ToString().Contains("news", System.StringComparison.Ordinal) ? this.news : this.games;
+                return Task.FromResult(new HttpResponseMessage(pick.Code) {
+                    Content = new StringContent(pick.Body, Encoding.UTF8, "application/json"),
+                });
+            }
+        }
+
         /// <summary>Ответ сервера, заданный тестом: проверяемому коду важен только он.</summary>
         private sealed class StubHandler : HttpMessageHandler {
             private readonly HttpStatusCode code;

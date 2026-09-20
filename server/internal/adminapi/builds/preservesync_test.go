@@ -85,7 +85,7 @@ func TestPublishingLauncherBuildNeverManifestsClientSkippedFiles(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
 	w := httptest.NewRecorder()
-	h.Upload(w, launcherUploadRequest(t, "1.1.9", zipBytes(t, map[string]string{
+	publishInto(t, h, w, "launcher", "launcher", "1.1.9", zipBytes(t, map[string]string{
 		"ChillHub.exe":                     "payload",
 		"config.json":                      "{}",
 		"launcher.version":                 "1.1.9",
@@ -94,7 +94,7 @@ func TestPublishingLauncherBuildNeverManifestsClientSkippedFiles(t *testing.T) {
 		"filelist.txt":                     "junk",
 		"updater/ChillHub.Updater.exe": "junk",
 		"data/config.json":                 "legit",
-	})))
+	}))
 	if w.Code != http.StatusOK {
 		t.Fatalf("publish failed: %d %s", w.Code, w.Body.String())
 	}
@@ -141,9 +141,9 @@ func TestPublishingLauncherBuildNeverManifestsUpdaterOwnedDirectories(t *testing
 	root := t.TempDir()
 	h := New(root)
 	w := httptest.NewRecorder()
-	h.Upload(w, launcherUploadRequest(t, "1.1.9", zipWithEmptyDirs(t,
+	publishInto(t, h, w, "launcher", "launcher", "1.1.9", zipWithEmptyDirs(t,
 		map[string]string{"ChillHub.exe": "payload"},
-		[]string{"updater/", "updater/backup/", "logs/"})))
+		[]string{"updater/", "updater/backup/", "logs/"}))
 	if w.Code != http.StatusOK {
 		t.Fatalf("publish failed: %d %s", w.Code, w.Body.String())
 	}
@@ -168,8 +168,8 @@ func TestPublishingGameBuildKeepsUpdaterNamedDirectories(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequest(t, "lethal-company", "1.0.0", zipWithEmptyDirs(t,
-		map[string]string{"game.exe": "x"}, []string{"updater/"})))
+	publishInto(t, h, w, "game", "lethal-company", "1.0.0", zipWithEmptyDirs(t,
+		map[string]string{"game.exe": "x"}, []string{"updater/"}))
 	if w.Code != http.StatusOK {
 		t.Fatalf("publish failed: %d %s", w.Code, w.Body.String())
 	}
@@ -217,11 +217,11 @@ func TestPublishingGameBuildKeepsThoseNames(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequest(t, "lethal-company", "1.0.0", zipBytes(t, map[string]string{
+	publishInto(t, h, w, "game", "lethal-company", "1.0.0", zipBytes(t, map[string]string{
 		"config.json":  "{}",
 		"filelist.txt": "data",
 		"game.exe":     "x",
-	})))
+	}))
 	if w.Code != http.StatusOK {
 		t.Fatalf("publish failed: %d %s", w.Code, w.Body.String())
 	}

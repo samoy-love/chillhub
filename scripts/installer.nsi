@@ -170,9 +170,24 @@ RequestExecutionLevel user
 ; находились НА РАССТОЯНИИ, а маленький словарь ровно это и обрезает. Память
 ; нужна только машине, которая собирает (примерно десятикратно от словаря);
 ; распаковка у пользователя от размера словаря не зависит.
+; FAST_COMPRESS переключает компрессор для сборок, которые никто не скачивает.
+;
+; Прогон CI собирает установщик, чтобы поймать поломку .nsi и проверить состав
+; установки; версия у него заведомо нерелизная, он не подписывается и не
+; публикуется. Сжатие в нём не проверяет ничего, а стоит около пятидесяти секунд
+; из семидесяти четырёх — solid-LZMA со словарём 64 МБ жмёт 160 МБ полезной
+; нагрузки одним однопоточным проходом.
+;
+; Через ключ командной строки это не переключается: SetCompress в whole-режиме
+; игнорируется (предупреждение 8021), а /XSetCompressor до объявления ниже не
+; достаёт. Поэтому выбор сделан здесь, где он виден.
+!ifdef FAST_COMPRESS
+SetCompressor /SOLID zlib
+!else
 SetCompress auto
 SetCompressor /SOLID lzma
 SetCompressorDictSize 64
+!endif
 SetDatablockOptimize on
 
 ; MUI options (simple modern touches)
@@ -457,6 +472,17 @@ Section "Install" SecInstall
   ${If} $DesktopShortcut_State == 1
     Delete "$DESKTOP\${LEGACY_SHORTCUT_NAME}.lnk"
     CreateShortCut "$DESKTOP\${APP_TITLE}.lnk" "$INSTDIR\${APP_EXE}"
+  ${EndIf}
+
+  ; Значок ярлыков — из ресурса ChillHub.exe, а оболочка держит разобранные значки
+  ; в кеше. Переустановка поверх старой версии со сменившимся значком оставляла на
+  ; рабочем столе и в «Пуске» прежнюю картинку. SHCNE_ASSOCCHANGED велит проводнику
+  ; выбросить разобранные значки, ie4uinit -show перестраивает кеш пользователя.
+  ; Тем же занимается апдейтер после самообновления (DefaultRefreshIconCache).
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+  ${If} ${FileExists} "$SYSDIR\ie4uinit.exe"
+    nsExec::Exec '"$SYSDIR\ie4uinit.exe" -show'
+    Pop $R9 ; код возврата: неудача здесь не повод прерывать установку
   ${EndIf}
 
   ; Uninstall registry (per-user)

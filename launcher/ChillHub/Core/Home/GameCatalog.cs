@@ -101,6 +101,49 @@ namespace ChillHub.Core.Home {
         }
 
         /// <summary>
+        /// Какие игры сервер изменил так, что их статус на диске нужно считать заново:
+        /// вышла другая сборка или другой модпак (в том числе пересобранный под тем же
+        /// именем), либо игра появилась в списке впервые.
+        /// <para>
+        /// Спрашивается ДО <see cref="Merge"/>: слияние переписывает поля прежних объектов,
+        /// и сравнивать после него было бы не с чем.
+        /// </para>
+        /// <para>
+        /// Фоновое обновление списка пересчитывает только эти игры. Пересчёт всех разом
+        /// обходит папки каждой установленной игры и пишет «Проверка игр» внизу экрана —
+        /// на каждый возврат к окну это шум, а сервер обычно не сказал ничего нового.
+        /// </para>
+        /// </summary>
+        /// <param name="current">Список, который сейчас на экране.</param>
+        /// <param name="incoming">Что вернул сервер.</param>
+        /// <returns>Идентификаторы изменившихся и новых игр.</returns>
+        internal static HashSet<string> ChangedOnServer(IEnumerable<GameInfo>? current, IEnumerable<GameInfo>? incoming) {
+            var changed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (incoming == null) {
+                return changed;
+            }
+
+            var known = new Dictionary<string, GameInfo>(StringComparer.OrdinalIgnoreCase);
+            foreach (var g in current ?? Enumerable.Empty<GameInfo>()) {
+                if (g != null && !string.IsNullOrWhiteSpace(g.GameId)) {
+                    known[g.GameId] = g;
+                }
+            }
+
+            foreach (var g in incoming) {
+                if (g == null || string.IsNullOrWhiteSpace(g.GameId)) {
+                    continue;
+                }
+
+                if (!known.TryGetValue(g.GameId, out var was) || !SameBuilds(was, g)) {
+                    changed.Add(g.GameId);
+                }
+            }
+
+            return changed;
+        }
+
+        /// <summary>
         /// Идут ли игры в том же порядке. Нужно, чтобы не подменять источник списка
         /// впустую: смена источника пересоздаёт строки со всеми их значками, а порядок
         /// после обычной проверки статусов чаще всего прежний.
@@ -142,6 +185,15 @@ namespace ChillHub.Core.Home {
         /// <returns>true, если источник нужно подменить.</returns>
         internal static bool NeedsRebind(object? bound, IReadOnlyList<GameInfo>? next)
             => !SameOrder(bound as IReadOnlyList<GameInfo>, next);
+
+        private static bool SameBuilds(GameInfo was, GameInfo now) =>
+            SameText(was.LatestVersion, now.LatestVersion)
+            && (was.Mods?.HasLatest ?? false) == (now.Mods?.HasLatest ?? false)
+            && SameText(was.Mods?.Version, now.Mods?.Version)
+            && SameText(was.Mods?.Revision, now.Mods?.Revision);
+
+        private static bool SameText(string? left, string? right) =>
+            string.Equals((left ?? string.Empty).Trim(), (right ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// Какую игру выделить при первом показе списка: последнюю запущенную, иначе первую

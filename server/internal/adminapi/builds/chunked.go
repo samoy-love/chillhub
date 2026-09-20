@@ -45,6 +45,37 @@ const (
 
 var uploadMu sync.Mutex
 
+// What an archive is. The kind decides where the version is published:
+// launcher and game builds keep their historic layout, a modpack goes to the
+// _mods namespace (see Namespace in publish.go).
+const (
+	uploadKindLauncher = "launcher"
+	uploadKindGame     = "game"
+	uploadKindMods     = "mods"
+)
+
+// normalizeUploadKind maps what a client sent to one of the three kinds, or ""
+// when it is none of them. An empty kind is a game build: that is what every
+// caller before the kind existed meant, and refusing it would break them.
+func normalizeUploadKind(kind string) string {
+	switch k := strings.ToLower(strings.TrimSpace(kind)); k {
+	case "":
+		return uploadKindGame
+	case uploadKindLauncher, uploadKindGame, uploadKindMods:
+		return k
+	default:
+		return ""
+	}
+}
+
+// uploadNamespace is where a kind's versions live.
+func uploadNamespace(kind string) Namespace {
+	if kind == uploadKindMods {
+		return NamespaceMods
+	}
+	return NamespaceGame
+}
+
 // uploadMeta is the resumable-upload state persisted next to the part file.
 type uploadMeta struct {
 	UploadID       string `json:"uploadId"`
@@ -279,7 +310,14 @@ func (h *Handlers) UploadInit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
-	if strings.ToLower(strings.TrimSpace(in.Kind)) == "launcher" {
+	rawKind := in.Kind
+	in.Kind = normalizeUploadKind(rawKind)
+	if in.Kind == "" {
+		log.Printf("[upload:init] invalid kind: %q", rawKind)
+		http.Error(w, "invalid kind (launcher|game|mods)", http.StatusBadRequest)
+		return
+	}
+	if in.Kind == uploadKindLauncher {
 		in.GameID = "launcher"
 	}
 	if !adminutil.IsSafeGameID(in.GameID) || !adminutil.IsSafeVersion(in.Version) {
@@ -332,7 +370,7 @@ func (h *Handlers) UploadInit(w http.ResponseWriter, r *http.Request) {
 	// allocate uploadId
 	id := adminutil.NewBuildID()
 	m := &uploadMeta{
-		UploadID: id, Kind: strings.ToLower(in.Kind), GameID: in.GameID, Version: in.Version,
+		UploadID: id, Kind: in.Kind, GameID: in.GameID, Version: in.Version,
 		ZipName: in.ZipName, TotalSize: in.TotalSize, ChunkSize: in.ChunkSize,
 		TotalChunks:    int((in.TotalSize + int64(in.ChunkSize) - 1) / int64(in.ChunkSize)),
 		Received:       make([]bool, int((in.TotalSize+int64(in.ChunkSize)-1)/int64(in.ChunkSize))),
@@ -352,7 +390,7 @@ func (h *Handlers) UploadInit(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("X-Request-ID", id)
 	linfof(id, "init ok kind=%s gameId=%s version=%s zip=%s total=%d chunkSize=%d recChunk=%d maxPar=%d from=%s",
-		strings.ToLower(in.Kind), in.GameID, in.Version, in.ZipName, in.TotalSize, m.ChunkSize, plan.recommended, plan.maxParallel, r.RemoteAddr)
+		in.Kind, in.GameID, in.Version, in.ZipName, in.TotalSize, m.ChunkSize, plan.recommended, plan.maxParallel, r.RemoteAddr)
 	adminutil.WriteJSON(w, map[string]any{
 		"uploadId":             id,
 		"chunkSize":            m.ChunkSize,
@@ -542,13 +580,40 @@ func expectedChunkSize(m *uploadMeta, idx int) int {
 	return rem
 }
 
+// chunkBufSize — сколько байт зараз перекладывается из сети в файл.
+//
+// РАЗМЕР БУФЕРА ЗДЕСЬ — ЭТО СКОРОСТЬ ЗАГРУЗКИ, А НЕ ПАМЯТЬ. io.Copy без
+// своего буфера берёт 32 КБ: на куске в 8 МБ это 256 проходов, и каждый —
+// системный вызов записи. Замерено на пустом сервере: 8 МБ уезжали за
+// ~265 мс, то есть 30 МБ/с при диске, дающем гигабайты. С буфером в 1 МБ
+// проходов остаётся восемь.
+//
+// Больше мегабайта смысла не имеет: дальше упирается уже не в число
+// вызовов. Меньше — возвращает ту же потерю. Память при этом ограничена
+// сверху числом одновременных кусков, а его задаёт клиент (обычно 4–8).
+const chunkBufSize = 1 << 20
+
+// chunkBufs переиспользует буферы между кусками: на каждый кусок свой
+// мегабайт — это мусор, который сборщику придётся собирать посреди заливки.
+var chunkBufs = sync.Pool{New: func() any {
+	b := make([]byte, chunkBufSize)
+	return &b
+}}
+
 // writeChunk copies exactly n bytes of body into the part file at off.
 func (h *Handlers) writeChunk(id string, off int64, body io.Reader, n int64) (int64, error) {
 	f, err := os.OpenFile(h.uploadZipPartPath(id), os.O_WRONLY, 0)
 	if err != nil {
 		return 0, err
 	}
-	written, werr := io.CopyN(&writeAt{f: f, off: off}, body, n)
+	buf, _ := chunkBufs.Get().(*[]byte)
+	if buf == nil {
+		b := make([]byte, chunkBufSize)
+		buf = &b
+	}
+	defer chunkBufs.Put(buf)
+
+	written, werr := io.CopyBuffer(&writeAt{f: f, off: off}, io.LimitReader(body, n), *buf)
 	// A Close that fails on a file we just wrote to is a lost chunk; it must not
 	// hide behind the copy error, but the copy error is the more specific one.
 	if cerr := f.Close(); cerr != nil && werr == nil {
@@ -557,16 +622,19 @@ func (h *Handlers) writeChunk(id string, off int64, body io.Reader, n int64) (in
 	return written, werr
 }
 
+// writeAt кладёт кусок по своему смещению, не двигая позицию файла.
+//
+// Раньше здесь перед каждой записью шёл Seek. Куски пишутся в один файл
+// параллельно, и позиция файла у них общая — Seek был не просто лишним
+// вызовом, а единственным, что удерживало запись на своём месте. WriteAt
+// смещение несёт в себе: он и быстрее, и не зависит от соседей.
 type writeAt struct {
 	f   *os.File
 	off int64
 }
 
 func (w *writeAt) Write(p []byte) (int, error) {
-	if _, err := w.f.Seek(w.off, io.SeekStart); err != nil {
-		return 0, err
-	}
-	n, err := w.f.Write(p)
+	n, err := w.f.WriteAt(p, w.off)
 	w.off += int64(n)
 	return n, err
 }
@@ -750,12 +818,19 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	// step succeed instead of failing for no reason a retry can act on.
 	// Extract into a staging dir on the same volume and publish with a single
 	// rename, so an interrupted run never leaves a partial version in place.
-	finalVerDir := filepath.Join(h.root, "content", m.GameID, m.Version)
-	stageDir, filesRoot, err := h.stageVersionDir(m.GameID, m.Version)
+	//
+	// A modpack archive lands in the _mods namespace, next to the versions the
+	// Thunderstore builder produces: the panel lists, activates and deletes
+	// modpack versions from that subtree, and a hand-made pack published as a
+	// version of the game itself would never show up there.
+	ns := uploadNamespace(m.Kind)
+	finalVerDir := filepath.Join(h.ContentDirFor(ns, m.GameID), m.Version)
+	staged, err := h.StageTree(ns, m.GameID, m.Version)
 	if err != nil {
 		nw.fail(http.StatusInternalServerError, err.Error())
 		return
 	}
+	stageDir, filesRoot := staged.Dir, staged.FilesRoot
 	promoted := false
 	defer func() {
 		if !promoted {
@@ -802,11 +877,14 @@ func (h *Handlers) UploadProcessStream(w http.ResponseWriter, r *http.Request) {
 	// Everything is extracted and hashed: publish the build in one rename.
 	// See lockPublish: promote and the manifest write must not interleave with
 	// another publication of the same version.
-	unlock := lockPublish(m.GameID, m.Version)
+	// The key must match what Publish (publish.go) locks for the same
+	// namespace, or a hand upload and a Thunderstore build of one version
+	// would not exclude each other.
+	unlock := lockPublish(string(ns)+"/"+m.GameID, m.Version)
 	defer unlock()
 	// See Upload: the backup goes only after the manifest is written.
 	// update latest.json is opted-in by client via existing API; here keep minimal
-	outPath, _, err := h.publishTree(stageDir, finalVerDir, h.manifestsDir(m.GameID), mOut, false)
+	outPath, _, err := h.publishTree(stageDir, finalVerDir, h.ManifestsDirFor(ns, m.GameID), mOut, false)
 	if err != nil {
 		streamError(nw, fl, err.Error())
 		return

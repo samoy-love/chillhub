@@ -8,6 +8,7 @@ namespace ChillHub.Core {
     using System.Net.Http;
     using System.Text;
     using System.Text.Json;
+    using System.Threading;
     using System.Threading.Tasks;
     using System.Windows;
 
@@ -238,6 +239,13 @@ namespace ChillHub.Core {
         }
 
         /// <summary>
+        /// Сколько отчётов сейчас в полёте: <see cref="Report"/> их не ждёт, а
+        /// тестам без этого счётчика не отличить «ничего не отправлено» от
+        /// «ещё не доехало». Подробности — у <see cref="WaitForIdleForTests"/>.
+        /// </summary>
+        private static int inFlight;
+
+        /// <summary>
         /// Fire-and-forget error report.
         /// Работа целиком уходит в пул потоков: сбор диагностики синхронный и тяжёлый
         /// (SHA-256 файлов лаунчера, обход дерева папки игр, чтение логов), а Report вызывается
@@ -246,12 +254,52 @@ namespace ChillHub.Core {
         /// </summary>
         public static void Report(Exception ex, string context, bool includeDiagnostics = true) {
             try {
-                _ = Task.Run(() => ReportCoreAsync(ex, context, includeDiagnostics));
+                Interlocked.Increment(ref inFlight);
+                _ = Task.Run(async () => {
+                    try {
+                        await ReportCoreAsync(ex, context, includeDiagnostics).ConfigureAwait(false);
+                    }
+                    finally {
+                        Interlocked.Decrement(ref inFlight);
+                    }
+                });
             }
             catch (Exception scheduleEx) {
+                Interlocked.Decrement(ref inFlight);
                 // Пул потоков недоступен (выгрузка приложения) — отчёт не важнее живучести
                 System.Diagnostics.Debug.WriteLine("ErrorReporter.Report: " + scheduleEx.Message);
             }
+        }
+
+        /// <summary>
+        /// Ждёт, пока разойдутся отчёты, запущенные <see cref="Report"/>.
+        /// <para>
+        /// ОТЧЁТ ПЕРЕЖИВАЕТ ВЫЗОВ, КОТОРЫЙ ЕГО ЗАКАЗАЛ. Report сознательно
+        /// «выстрелил и забыл»: он зовётся из Logger.Error, часто с UI-потока,
+        /// и ждать на нём сбор диагностики нельзя. В тестах у этого есть цена:
+        /// отчёт, заказанный одним тестом, доезжает в середине следующего — и
+        /// уходит через подменённый транспорт ЕГО области, попадая в чужие
+        /// ожидания и в чужой файл квоты.
+        /// </para>
+        /// <para>
+        /// Ловилось это только на загруженной машине CI и выглядело как
+        /// случайное падение то одного теста, то другого: то лишний запрос в
+        /// проверке, то «файл занят другим процессом» на report_rl.json.
+        /// </para>
+        /// </summary>
+        /// <param name="timeout">Сколько ждать; по истечении просто возвращает управление.</param>
+        /// <returns>true, если в полёте больше ничего нет.</returns>
+        internal static bool WaitForIdleForTests(TimeSpan timeout) {
+            var until = DateTime.UtcNow + timeout;
+            while (Volatile.Read(ref inFlight) > 0) {
+                if (DateTime.UtcNow >= until) {
+                    return false;
+                }
+
+                Thread.Sleep(5);
+            }
+
+            return true;
         }
 
         /// <summary>

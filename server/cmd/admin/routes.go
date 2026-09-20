@@ -68,7 +68,6 @@ func (s *server) apiRoutes() []route {
 		{path: "/admin/api/activate", handler: s.prom.count(s.prom.activations, b.Activate)},
 		{path: "/admin/api/deleteVersion", handler: b.DeleteVersion},
 		{path: "/admin/api/pruneVersions", handler: b.PruneVersions},
-		{path: "/admin/api/upload", handler: b.Upload},
 		{path: "/admin/api/uploadStream", handler: b.UploadStream},
 
 		// Chunked upload; the client always calls the /admin/api form.

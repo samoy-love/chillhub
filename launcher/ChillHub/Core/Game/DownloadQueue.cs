@@ -364,7 +364,8 @@ namespace ChillHub.Core.Game {
         /// </summary>
         /// <param name="entry">Позиция, которую только что перестали обрабатывать.</param>
         /// <param name="failed">Операция сорвалась — снимаем с ошибкой, а не с успехом.</param>
-        private void Settle(Entry entry, bool failed) {
+        /// <param name="failure">Причина срыва словами для игрока; пусто — общая фраза.</param>
+        private void Settle(Entry entry, bool failed, string? failure = null) {
             IReadOnlyList<QueueItem> snapshot;
             bool requeued;
             var stillPresent = false;
@@ -381,13 +382,17 @@ namespace ChillHub.Core.Game {
                     // State/StatusText мутируются под тем же gate, что читает Remove() — без
                     // этого Remove() мог застать позицию ещё Waiting/Running и сообщить об
                     // отмене только что успешно завершённой закачки.
-                    var state = failed
-                        ? QueueItemState.Failed
-                        : entry.CancelRequested ? QueueItemState.Cancelled : QueueItemState.Completed;
+                    //
+                    // Снятие проверяется раньше срыва: отменённая закачка возвращается из
+                    // RunAsync с false, и считать её ошибкой значило бы показать игроку
+                    // «не удалось» в ответ на его же «Отмена».
+                    var state = entry.CancelRequested
+                        ? QueueItemState.Cancelled
+                        : failed ? QueueItemState.Failed : QueueItemState.Completed;
                     stillPresent = this.items.Remove(entry);
                     entry.State = state;
                     entry.StatusText = state switch {
-                        QueueItemState.Failed => "Не удалось завершить операцию.",
+                        QueueItemState.Failed => string.IsNullOrWhiteSpace(failure) ? "Не удалось завершить операцию." : failure,
                         QueueItemState.Cancelled => "Снята из очереди.",
                         _ => "Готово.",
                     };
@@ -503,8 +508,19 @@ namespace ChillHub.Core.Game {
                     // только через сюда, отчётами с полем Stage. Раньше здесь текст не менялся
                     // (оставался entry.StatusText как есть), и статус на карточке замирал на
                     // "Сравнение файлов…" на всё время реального скачивания, пока байты росли.
-                    ReportProgress = (p, _) => this.RaiseProgress(entry, entry.Stage(p), p.BytesDownloaded, p.TotalBytes, p.NetworkBytes),
+                    ReportProgress = (p, _) => this.RaiseProgress(
+                        entry, entry.Stage(p), p.BytesDownloaded, p.TotalBytes, p.NetworkBytes, p.FilesDownloaded, p.TotalFiles),
                     Confirm = this.confirm,
+
+                    // Ошибку установки пишут сюда, а не в SetStatus. Пустой колбэк по
+                    // умолчанию глотал её целиком: ни строки для игрока, ни записи в журнале.
+                    ShowUserError = (message, ex, context) => {
+                        if (ex != null) {
+                            Logging.Logger.Error(ex, context ?? $"DownloadQueue gid={entry.GameId}");
+                        }
+
+                        this.RaiseProgress(entry, message);
+                    },
                 };
 
                 // Проверка удаляет всё, чего нет в манифесте, — моды, скриншоты,
@@ -533,12 +549,15 @@ namespace ChillHub.Core.Game {
                     Game: game);
 
                 // entry.Cts всегда назначен в RunWorkerAsync до вызова ProcessAsync — см. gate там.
-                await runner.RunAsync(request, entry.Cts!.Token).ConfigureAwait(false);
+                var ok = await runner.RunAsync(request, entry.Cts!.Token).ConfigureAwait(false);
 
                 // Прервали, чтобы пропустить вперёд другую позицию или чтобы начать эту
                 // заново, — тогда позиция возвращается в очередь, а не снимается. Решение
                 // принимает Settle() под gate: снаружи замка его успевал обогнать Enqueue().
-                this.Settle(entry, failed: false);
+                //
+                // Несостоявшаяся операция — не успех. Причину runner уже положил в строку
+                // позиции, её и оставляем: «Игра запущена» вместо «готова к запуску».
+                this.Settle(entry, failed: !ok, failure: entry.StatusText);
             }
             catch (Exception ex) {
                 // GameSyncRunner.RunAsync сам не выпускает исключения наружу — сюда попадём,
@@ -580,16 +599,29 @@ namespace ChillHub.Core.Game {
         }
 
         private void RaiseProgress(
-            Entry entry, string status, long bytesDownloaded = -1, long totalBytes = -1, long networkBytes = -1) {
+            Entry entry, string status, long bytesDownloaded = -1, long totalBytes = -1, long networkBytes = -1,
+            int filesDone = -1, int filesTotal = -1) {
             entry.StatusText = status;
+            if (filesTotal >= 0) {
+                entry.FilesDone = filesDone;
+                entry.FilesTotal = filesTotal;
+            }
+
             if (bytesDownloaded >= 0) {
                 entry.BytesDownloaded = bytesDownloaded;
             }
 
-            // Скорость — по пришедшему из сети, а не по сделанному: в сделанное идут и
-            // файлы, взятые из соседней копии на диске, а копирование быстрее сети в разы.
+            // Две скорости, и обе нужны. Сетевая — та, что показывается: в сделанное
+            // идут и куски, взятые из старой копии на диске, а они «приходят» в разы
+            // быстрее сети. Скорость работы — для остатка времени: ждать игроку
+            // столько, сколько идёт вся работа, а не только её сетевая часть.
             if (networkBytes >= 0) {
+                entry.NetworkBytes = networkBytes;
                 entry.UpdateSpeed(networkBytes);
+            }
+
+            if (bytesDownloaded >= 0) {
+                entry.UpdateWorkSpeed(bytesDownloaded);
             }
 
             if (totalBytes >= 0) {
@@ -673,13 +705,29 @@ namespace ChillHub.Core.Game {
 
             internal CancellationTokenSource? Cts { get; set; }
 
-            /// <summary>Сглаженная скорость, Б/с. 0 — ещё не измеряли.</summary>
+            /// <summary>Сглаженная скорость сети, Б/с. 0 — ещё не измеряли.</summary>
             internal double BytesPerSecond { get; private set; }
+
+            /// <summary>Сглаженная скорость работы, Б/с: из неё считается остаток времени.</summary>
+            internal double WorkBytesPerSecond { get; private set; }
+
+            /// <summary>Сколько байт пришло по сети на этот момент.</summary>
+            internal long NetworkBytes { get; set; }
+
+            /// <summary>Сколько файлов обновления готово.</summary>
+            internal int FilesDone { get; set; }
+
+            /// <summary>Сколько файлов обновление трогает всего.</summary>
+            internal int FilesTotal { get; set; }
 
             /// <summary>Показания предыдущего замера — база для расчёта скорости.</summary>
             private long lastBytes;
 
             private long lastTicks;
+
+            private long lastWorkBytes;
+
+            private long lastWorkTicks;
 
             /// <summary>
             /// Пересчитывает скорость по приросту байт с прошлого отчёта, сглаживая
@@ -715,11 +763,45 @@ namespace ChillHub.Core.Game {
                     : (SpeedEmaAlpha * instant) + ((1 - SpeedEmaAlpha) * this.BytesPerSecond);
             }
 
+            /// <summary>
+            /// То же по сделанным байтам: сколько обновление продвигается в секунду,
+            /// считая и куски, взятые с диска.
+            /// </summary>
+            /// <param name="bytes">Сколько сделано всего на этот момент.</param>
+            internal void UpdateWorkSpeed(long bytes) {
+                var now = this.clock();
+                if (this.lastWorkTicks == 0) {
+                    this.lastWorkTicks = now;
+                    this.lastWorkBytes = bytes;
+                    return;
+                }
+
+                var elapsedMs = now - this.lastWorkTicks;
+                if (elapsedMs < 500) {
+                    return;
+                }
+
+                var delta = bytes - this.lastWorkBytes;
+                this.lastWorkTicks = now;
+                this.lastWorkBytes = bytes;
+                if (delta < 0) {
+                    return;
+                }
+
+                var instant = delta * 1000.0 / elapsedMs;
+                this.WorkBytesPerSecond = this.WorkBytesPerSecond <= 0
+                    ? instant
+                    : (SpeedEmaAlpha * instant) + ((1 - SpeedEmaAlpha) * this.WorkBytesPerSecond);
+            }
+
             /// <summary>Сбрасывает измерение скорости: после паузы прежняя оценка не про эту закачку.</summary>
             internal void ResetSpeed() {
                 this.BytesPerSecond = 0;
                 this.lastTicks = 0;
                 this.lastBytes = 0;
+                this.WorkBytesPerSecond = 0;
+                this.lastWorkTicks = 0;
+                this.lastWorkBytes = 0;
             }
 
             internal QueueItem ToItem(bool canMoveUp = false, bool canMoveDown = false, int position = 0)
@@ -740,7 +822,11 @@ namespace ChillHub.Core.Game {
                     // Отмена уже запрошена, но движок ещё не остановился. Признак нужен
                     // именно снимку: по State такая позиция неотличима от работающей, и
                     // экран продолжал показывать её как идущую закачку.
-                    this.CancelRequested && this.State == QueueItemState.Running);
+                    this.CancelRequested && this.State == QueueItemState.Running,
+                    this.NetworkBytes,
+                    this.WorkBytesPerSecond,
+                    this.FilesDone,
+                    this.FilesTotal);
         }
     }
 }

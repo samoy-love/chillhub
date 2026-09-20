@@ -39,20 +39,6 @@ func uploadRequestParts(t *testing.T, gid, ver string, zips ...[]byte) *http.Req
 	return req
 }
 
-// assertTmpDirEmpty fails if any spool file survived the request. Everything the
-// upload path writes into <root>/tmp is scratch: a leftover there is a leak on a
-// partition production shares with the public API and three other sites.
-func assertTmpDirEmpty(t *testing.T, root string) {
-	t.Helper()
-	entries, err := os.ReadDir(filepath.Join(root, "tmp"))
-	if err != nil {
-		return // never created is as good as empty
-	}
-	for _, e := range entries {
-		t.Fatalf("scratch file left behind in tmp: %s", e.Name())
-	}
-}
-
 // stubFreeSpace replaces the free-space probe for the duration of one test.
 // A full volume cannot be arranged on the machine running the suite, so the
 // only way to exercise the 507 paths at all is to lie about the disk.
@@ -70,6 +56,7 @@ func stubFreeSpace(t *testing.T, fn func(string) (uint64, error)) {
 func TestUploadOversizedArchiveIsRejectedAndCleanedUp(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
+	h.CurrentUser = func(*http.Request) string { return "admin" }
 
 	prev := uploadZipLimit
 	uploadZipLimit = 512
@@ -77,12 +64,12 @@ func TestUploadOversizedArchiveIsRejectedAndCleanedUp(t *testing.T) {
 
 	payload := bytes.Repeat([]byte("A"), 64<<10)
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequestParts(t, "game", "1.0.0", payload))
+	h.UploadStream(w, uploadRequestParts(t, "game", "1.0.0", payload))
 
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 413 for an oversized archive, got %d: %s", w.Code, w.Body.String())
 	}
-	assertTmpDirEmpty(t, root)
+	assertNoPublishScratch(t, root)
 	if _, err := os.Stat(filepath.Join(root, "content", "game", "1.0.0")); err == nil {
 		t.Fatal("a rejected upload published a version")
 	}
@@ -95,20 +82,25 @@ func TestUploadOversizedArchiveIsRejectedAndCleanedUp(t *testing.T) {
 func TestUploadDuplicateZipPartLeavesNoScratchFiles(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
+	h.CurrentUser = func(*http.Request) string { return "admin" }
 
 	first := zipBytes(t, map[string]string{"a.txt": "first"})
 	second := zipBytes(t, map[string]string{"b.txt": "second"})
 
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequestParts(t, "game", "1.0.0", first, second))
+	h.UploadStream(w, uploadRequestParts(t, "game", "1.0.0", first, second))
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for a duplicated zip part, got %d: %s", w.Code, w.Body.String())
+	// Поток уже начался, и отказ едет СОБЫТИЕМ: заголовки ушли, кода ответа
+	// больше нет. Панель читает поток без события "error" как успешную
+	// публикацию — значит, молчание здесь хуже любого кода.
+	msg, refused := streamFailure(w.Body.String())
+	if !refused {
+		t.Fatalf("дубль zip-части принят: %s", w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "duplicate zip part") {
-		t.Fatalf("the client cannot tell what went wrong: %q", w.Body.String())
+	if !strings.Contains(msg, "duplicate zip part") {
+		t.Fatalf("the client cannot tell what went wrong: %q", msg)
 	}
-	assertTmpDirEmpty(t, root)
+	assertNoPublishScratch(t, root)
 	if _, err := os.Stat(filepath.Join(root, "content", "game", "1.0.0")); err == nil {
 		t.Fatal("an ambiguous request published a version")
 	}
@@ -119,10 +111,11 @@ func TestUploadDuplicateZipPartLeavesNoScratchFiles(t *testing.T) {
 func TestUploadUnderLimitStillPublishes(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
+	h.CurrentUser = func(*http.Request) string { return "admin" }
 	stubFreeSpace(t, func(string) (uint64, error) { return 500 << 30, nil })
 
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequestParts(t, "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "hello"})))
+	h.UploadStream(w, uploadRequestParts(t, "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "hello"})))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("normal upload broke: %d %s", w.Code, w.Body.String())
@@ -130,7 +123,7 @@ func TestUploadUnderLimitStillPublishes(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "content", "game", "1.0.0", "files", "a.txt")); err != nil {
 		t.Fatalf("build not published: %v", err)
 	}
-	assertTmpDirEmpty(t, root)
+	assertNoPublishScratch(t, root)
 }
 
 // A volume with nothing but the reserve left must be refused before a single
@@ -139,15 +132,16 @@ func TestUploadUnderLimitStillPublishes(t *testing.T) {
 func TestUploadRefusesWhenVolumeIsAlreadyFull(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
+	h.CurrentUser = func(*http.Request) string { return "admin" }
 	stubFreeSpace(t, func(string) (uint64, error) { return uploadFreeSpaceReserveBytes, nil })
 
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequestParts(t, "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "hello"})))
+	h.UploadStream(w, uploadRequestParts(t, "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "hello"})))
 
 	if w.Code != http.StatusInsufficientStorage {
 		t.Fatalf("expected 507 on a full volume, got %d: %s", w.Code, w.Body.String())
 	}
-	assertTmpDirEmpty(t, root)
+	assertNoPublishScratch(t, root)
 }
 
 // Space that runs out DURING the copy must stop it too. A ceiling derived from
@@ -157,17 +151,18 @@ func TestUploadRefusesWhenVolumeIsAlreadyFull(t *testing.T) {
 func TestUploadStopsWhenSpaceRunsOutMidCopy(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
+	h.CurrentUser = func(*http.Request) string { return "admin" }
 	// Just enough budget (reserve + 16 bytes) that the precheck passes and the
 	// very first buffer of the archive exceeds it.
 	stubFreeSpace(t, func(string) (uint64, error) { return uploadFreeSpaceReserveBytes + 16, nil })
 
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequestParts(t, "game", "1.0.0", bytes.Repeat([]byte("A"), 8<<10)))
+	h.UploadStream(w, uploadRequestParts(t, "game", "1.0.0", bytes.Repeat([]byte("A"), 8<<10)))
 
 	if w.Code != http.StatusInsufficientStorage {
 		t.Fatalf("expected 507 when the volume fills up mid-copy, got %d: %s", w.Code, w.Body.String())
 	}
-	assertTmpDirEmpty(t, root)
+	assertNoPublishScratch(t, root)
 }
 
 // A disk we cannot measure must not block publishing: freeSpaceBytes fails on
@@ -176,17 +171,17 @@ func TestUploadStopsWhenSpaceRunsOutMidCopy(t *testing.T) {
 func TestUploadProceedsWhenFreeSpaceIsUnknown(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
+	h.CurrentUser = func(*http.Request) string { return "admin" }
 	stubFreeSpace(t, func(string) (uint64, error) { return 0, errors.New("statfs not supported") })
 
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequestParts(t, "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "hello"})))
+	h.UploadStream(w, uploadRequestParts(t, "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "hello"})))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("an unmeasurable volume blocked a valid upload: %d %s", w.Code, w.Body.String())
 	}
-	assertTmpDirEmpty(t, root)
+	assertNoPublishScratch(t, root)
 }
-
 // stubTightContentVolume makes the volume that will hold the EXTRACTED tree look
 // almost full while the spool volume stays roomy. Both are measured through the
 // same probe, so they are told apart by their path: the extraction root always
@@ -201,39 +196,13 @@ func stubTightContentVolume(t *testing.T, contentFree uint64) {
 	})
 }
 
-// An archive that cannot possibly fit must be refused BEFORE extraction starts.
-// Finding out halfway through fills the content partition — which production
-// shares with the public API and three other sites — and leaves a staging tree
-// of up to 30 GB behind for someone to notice and delete by hand.
-func TestUploadRefusesAnArchiveTooBigForTheContentVolume(t *testing.T) {
-	root := t.TempDir()
-	h := New(root)
-	stubTightContentVolume(t, 4096)
-
-	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequest(t, "game", "1.0.0", zipBytes(t, map[string]string{
-		"big.bin": strings.Repeat("A", 64<<10),
-	})))
-
-	if w.Code != http.StatusInsufficientStorage {
-		t.Fatalf("expected 507 for an archive that does not fit, got %d: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "insufficient disk space") {
-		t.Errorf("the operator cannot tell the volume was the problem: %q", w.Body.String())
-	}
-	if _, err := os.Stat(filepath.Join(root, "content", "game", "1.0.0")); err == nil {
-		t.Error("a build that does not fit was published anyway")
-	}
-	assertNoStagingLeftovers(t, filepath.Join(root, "content", "game"))
-	assertTmpDirEmpty(t, root)
-}
-
 // The same guard on the streaming path, where the refusal has to travel as an
 // NDJSON error event rather than a status line: the admin UI reads a stream with
 // no error event as a successful publication.
 func TestUploadStreamRefusesAnArchiveTooBigForTheContentVolume(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
+	h.CurrentUser = func(*http.Request) string { return "admin" }
 	h.CurrentUser = func(*http.Request) string { return "admin" }
 	stubTightContentVolume(t, 4096)
 
@@ -264,6 +233,7 @@ func TestUploadStreamRefusesAnArchiveTooBigForTheContentVolume(t *testing.T) {
 func TestUploadProcessStreamRefusesAnArchiveTooBigForTheContentVolume(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
+	h.CurrentUser = func(*http.Request) string { return "admin" }
 	h.CurrentUser = func(*http.Request) string { return "admin" }
 	stubTightContentVolume(t, 4096)
 

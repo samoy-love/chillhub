@@ -199,9 +199,13 @@ namespace ChillHub.Core.Shell {
                     Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico"),
                     Path.Combine(Environment.CurrentDirectory, "Assets", "app.ico"),
                 };
+                // Размер — тот, что трей просит на текущем масштабе экрана (16 × масштаб):
+                // так из .ico берётся свой кадр, а не 32 px по умолчанию, растянутый
+                // или сжатый до нужного. В app.ico кадры есть под каждый масштаб Windows.
+                var size = Forms.SystemInformation.SmallIconSize;
                 foreach (var p in candidates) {
                     if (File.Exists(p)) {
-                        return new Drawing.Icon(p);
+                        return new Drawing.Icon(p, size);
                     }
                 }
             }

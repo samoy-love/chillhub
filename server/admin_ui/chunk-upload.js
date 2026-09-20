@@ -1,8 +1,6 @@
-// Ядро byte-level прогресса чанковой загрузки — вынесено из admin.js по той
-// же причине, что upload-bench.js/ui-throttle.js/speed-chart.js/line-chart.js:
-// только обычный require()-имый CommonJS-модуль даёт c8 построчное покрытие,
-// код, вытащенный из admin.js регэкспом и исполненный через new Function,
-// V8 с исходным файлом не связывает (см. шапку upload-bench.js).
+// Ядро byte-level прогресса чанковой загрузки. Отдельным CommonJS-модулем,
+// как upload-bench.js, ui-throttle.js и rate-estimator.js: такой файл
+// require()-ится как есть, и c8 видит его построчно.
 //
 // ПОЧЕМУ ЭТОТ МОДУЛЬ ВООБЩЕ ПОЯВИЛСЯ: чанк заливался через fetch(), а у
 // Fetch API нет события прогресса отправки тела запроса — uploadedBytes

@@ -3,7 +3,6 @@ package builds
 import (
 	"bytes"
 	"encoding/json"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -39,30 +38,6 @@ func seedManifest(t *testing.T, h *Handlers, gid, ver string, updateLatest bool)
 	}
 }
 
-// uploadRequestWithLatest publishes a game build and flips latest.json to it.
-func uploadRequestWithLatest(t *testing.T, gid, ver string, zipData []byte) *http.Request {
-	t.Helper()
-	var body bytes.Buffer
-	mw := multipart.NewWriter(&body)
-	_ = mw.WriteField("kind", "game")
-	_ = mw.WriteField("gameId", gid)
-	_ = mw.WriteField("version", ver)
-	_ = mw.WriteField("updateLatest", "1")
-	fw, err := mw.CreateFormFile("zip", "build.zip")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fw.Write(zipData); err != nil {
-		t.Fatal(err)
-	}
-	if err := mw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	req := httptest.NewRequest(http.MethodPost, "http://example.com/admin/api/upload", &body)
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	return req
-}
-
 // latest.json is the trigger for every client update. It may only start pointing
 // at a version after that version's content and manifest are both fully on disk
 // — otherwise every launcher in the field asks for files that are not there yet.
@@ -70,7 +45,7 @@ func TestUploadPointsLatestAtTheVersionOnlyAfterItIsComplete(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequestWithLatest(t, "game", "1.2.3", zipBytes(t, map[string]string{"a.txt": "x"})))
+	publishAndActivate(t, h, w, "game", "1.2.3", zipBytes(t, map[string]string{"a.txt": "x"}))
 	if w.Code != http.StatusOK {
 		t.Fatalf("publish failed: %d %s", w.Code, w.Body.String())
 	}
@@ -94,7 +69,7 @@ func TestFailedPublicationLeavesTheLiveReleaseUntouched(t *testing.T) {
 	h := New(root)
 
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequestWithLatest(t, "game", "1.0.0", zipBytes(t, map[string]string{"good.txt": "v1"})))
+	publishAndActivate(t, h, w, "game", "1.0.0", zipBytes(t, map[string]string{"good.txt": "v1"}))
 	if w.Code != http.StatusOK {
 		t.Fatalf("baseline publish failed: %d %s", w.Code, w.Body.String())
 	}
@@ -102,7 +77,7 @@ func TestFailedPublicationLeavesTheLiveReleaseUntouched(t *testing.T) {
 	// A body that is not a ZIP at all: extraction fails after the parameters have
 	// been accepted, i.e. exactly where a truncated upload dies.
 	w2 := httptest.NewRecorder()
-	h.Upload(w2, uploadRequestWithLatest(t, "game", "1.0.1", []byte("this is not a zip archive")))
+	publishInto(t, h, w2, "game", "game", "1.0.1", []byte("this is not a zip archive"))
 	if w2.Code == http.StatusOK {
 		t.Fatalf("a broken archive was published: %s", w2.Body.String())
 	}
@@ -283,13 +258,13 @@ func TestRepublishingSameVersionReplacesContentAndManifestTogether(t *testing.T)
 	h := New(root)
 
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequestWithLatest(t, "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "first"})))
+	publishInto(t, h, w, "game", "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "first"}))
 	if w.Code != http.StatusOK {
 		t.Fatalf("first publish failed: %d %s", w.Code, w.Body.String())
 	}
 
 	w2 := httptest.NewRecorder()
-	h.Upload(w2, uploadRequestWithLatest(t, "game", "1.0.0", zipBytes(t, map[string]string{"b.txt": "second"})))
+	publishInto(t, h, w2, "game", "game", "1.0.0", zipBytes(t, map[string]string{"b.txt": "second"}))
 	if w2.Code != http.StatusOK {
 		t.Fatalf("republish failed: %d %s", w2.Code, w2.Body.String())
 	}
@@ -327,7 +302,7 @@ func TestPublishFailsWhenLatestCannotBeRepointed(t *testing.T) {
 
 	// Publish once so that manifests/game/ exists and latest.json points at 1.0.0.
 	w := httptest.NewRecorder()
-	h.Upload(w, uploadRequestWithLatest(t, "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "first"})))
+	publishAndActivate(t, h, w, "game", "1.0.0", zipBytes(t, map[string]string{"a.txt": "first"}))
 	if w.Code != http.StatusOK {
 		t.Fatalf("setup publish returned %d: %s", w.Code, w.Body.String())
 	}
@@ -343,11 +318,17 @@ func TestPublishFailsWhenLatestCannotBeRepointed(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Заливка latest не двигает — её двигает отдельное «отдать игрокам».
+	// Проверяется именно оно: отчитаться об успехе, не переписав latest.json,
+	// нельзя.
 	w2 := httptest.NewRecorder()
-	h.Upload(w2, uploadRequestWithLatest(t, "game", "2.0.0", zipBytes(t, map[string]string{"b.txt": "second"})))
+	publishInto(t, h, w2, "game", "game", "2.0.0", zipBytes(t, map[string]string{"b.txt": "second"}))
+	if w2.Code != http.StatusOK {
+		t.Fatalf("заливка 2.0.0 не прошла: %d %s", w2.Code, w2.Body.String())
+	}
 
-	if w2.Code == http.StatusOK {
-		t.Fatalf("publish reported success while latest.json was not updated (%d)", w2.Code)
+	if err := h.ActivateVersion(NamespaceGame, "game", "2.0.0"); err == nil {
+		t.Fatal("активация отчиталась об успехе, хотя latest.json переписать не удалось")
 	}
 	// latest.json is still the directory we planted: nothing pretended to
 	// activate 2.0.0 behind the failed write.

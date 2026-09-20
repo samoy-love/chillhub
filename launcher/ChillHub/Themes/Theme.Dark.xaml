@@ -3,57 +3,80 @@
                     xmlns:sys="clr-namespace:System;assembly=mscorlib"
                     xmlns:ui="clr-namespace:ChillHub.Core.UI">
   <!-- Palette -->
-  <!-- Одна акцентная краска (#7C5CFF) и три статусных цвета. Раньше акцентов было три —
-       розовый, фиолетовый и градиент между ними — и ни один из них не значил «главное». -->
+  <!--
+    ФИОЛЕТОВЫЙ НА ЧЁРНОМ. Владелец вернул прежнюю связку: #7C5CFF на #0C0C10.
+    Уголёк #D1663C, которым лаунчер ходил две недели, снят по его решению —
+    сайт и админка остаются в своей системе, у клиента палитра своя.
+
+    Ключей в теме больше, чем было до перекраски: третья ступень фона, вторая
+    и третья рамка, заливки опасной кнопки. Они не выдуманы заново — это те
+    самые краски, что раньше лежали россыпью по разметке (Btn.Retry.*,
+    ScrollbarThumb, BorderHover), просто теперь у них есть имя.
+
+    Контраст каждой подписи считается тестом (ThemeContrastTests), а не
+    подбирается на глаз: порог AA 4,5 для мелкого текста, которым здесь набрано
+    всё, кроме заголовков.
+  -->
   <Color x:Key="Color.Background">#0C0C10</Color>        <!-- фон окна -->
   <Color x:Key="Color.Surface">#14141B</Color>           <!-- карточка на фоне -->
   <Color x:Key="Color.Surface2">#1B1B24</Color>          <!-- карточка на карточке -->
+  <!--
+    Третья ступень: поле ввода, дорожка ползунка, нажатая строка. Светлее её
+    брать нельзя — приглушённый #86869F даёт на #20202A ровно 4,55, а уже на
+    #21212C проваливает порог 4,5, и подписи на полях ввода становятся серым
+    по серому.
+  -->
+  <Color x:Key="Color.Surface3">#20202A</Color>
   <Color x:Key="Color.Border">#24242F</Color>
+  <Color x:Key="Color.Border2">#35354A</Color>           <!-- рамка под курсором, обводка значка -->
+  <Color x:Key="Color.Border3">#5A5A72</Color>           <!-- бегунок полосы под курсором -->
   <Color x:Key="Color.Text">#E9E9F0</Color>
   <Color x:Key="Color.TextSecondary">#9A9AAB</Color>
-  <!-- #86869F, а не #6E6E80: на карточке (#14141B) старый давал контраст 3.7:1 —
-       ниже порога AA 4.5:1 для мелкого текста, а именно им набраны все подписи.
-       Промежуточный #80809A порог на #14141B проходил (4.8:1), но не на карточке
-       поверх карточки (#1B1B24) и на выделенной строке списка (#1B1B26) — там
-       выходило 4.45:1, а подписи игр стоят именно на них. #86869F даёт 4.8:1
-       на самом светлом из фонов, на которых он встречается. -->
+  <!--
+    #86869F, а не #6E6E80: на карточке (#14141B) старый давал 3,7 — ниже порога
+    AA 4,5 для мелкого текста, а именно им набраны все подписи.
+  -->
   <Color x:Key="Color.TextMuted">#86869F</Color>          <!-- подписи, «не установлена» -->
   <!-- Единственный акцент -->
   <Color x:Key="Color.Accent">#7C5CFF</Color>
   <Color x:Key="Color.AccentHover">#8F73FF</Color>
-  <Color x:Key="Color.SecondaryAccent">#6949E0</Color>   <!-- нажатое состояние акцента -->
+  <Color x:Key="Color.Focus">#C3B2FF</Color>             <!-- кольцо фокуса с клавиатуры -->
   <!--
-    ЗАЛИВКА ГЛАВНЫХ КНОПОК. Отдельная от Color.Accent, и вот почему.
-
-    Акцент #7C5CFF стоит ровно посередине по светлоте: на нём не читается ни белая
-    подпись (4.35:1), ни тёмная (4.49:1) — обе не дотягивают до порога AA 4.5:1 для
-    мелкого текста, а именно им набраны кнопки. Прежний комментарий обещал тёмному
-    тексту 6:1; счёт этого не подтверждает.
-
-    Эта краска темнее ровно настолько, чтобы белая подпись давала 5.8:1, а наведение
-    и нажатие оставались различимыми и тоже проходили порог (4.9:1 и 7.0:1). Сам
-    акцент при этом не трогаем: полосы прогресса, рамка выбранной карточки и проценты
-    стоят на тёмном фоне, где он читается прекрасно.
+    ЗАЛИВКА ГЛАВНЫХ КНОПОК. Отдельная от Color.Accent: сам акцент #7C5CFF стоит
+    ровно посередине по светлоте, и на нём не читается ни белая подпись (4,35),
+    ни тёмная (4,49) — обе не дотягивают до 4,5. Заливка темнее ровно настолько,
+    чтобы белая подпись давала 5,79, а наведение и нажатие оставались различимыми
+    и тоже проходили порог (4,94 и 6,96).
   -->
   <Color x:Key="Color.AccentFill">#6949E0</Color>
   <Color x:Key="Color.AccentFillHover">#7457E6</Color>
   <Color x:Key="Color.AccentFillPressed">#5A3FCC</Color>
+  <Color x:Key="Color.OnAccent">#FFFFFF</Color>          <!-- подпись на заливке, 5,79 -->
+  <!-- Выключенная главная кнопка: та же краска, но погасшая. -->
+  <Color x:Key="Color.AccentFillDisabled">#3A3550</Color>
   <!-- Пункт меню и выпадающего списка под курсором и в нажатии. Отдельные краски, а не
-       Brush.Hover: тот совпадает с фоном самого меню (Surface2 #1B1B24), и наведение на
-       пункт не было видно вовсе — список выглядел нерабочим. Взяты с запасом по светлоте
-       (1.55 и 1.85 к фону меню): подсветка на грани различимости в списке из четырёх
-       строк не отвечает на вопрос «на чём я сейчас». -->
+       Brush.Hover: тот совпадает с фоном самого меню (#1B1B24), и наведение на пункт не
+       было видно вовсе — список выглядел нерабочим. Взяты с запасом по светлоте
+       (1,55 и 1,85 к фону меню). -->
   <Color x:Key="Color.MenuHover">#3F3175</Color>
   <Color x:Key="Color.MenuPressed">#4A3A8C</Color>
   <!-- Статусы игр: готова / нужно обновление / проблема -->
   <Color x:Key="Color.Success">#57C98A</Color>
   <Color x:Key="Color.Warning">#E0A64B</Color>
   <Color x:Key="Color.Danger">#E06B6B</Color>
+  <!-- Заливка опасной кнопки: приглушённый красный, заметный, но не спорящий с акцентом.
+       Раньше эти десять значений были выписаны в разметке главной страницы. -->
+  <Color x:Key="Color.DangerFill">#2A1E22</Color>
+  <Color x:Key="Color.DangerFillHover">#3A2A2E</Color>
+  <Color x:Key="Color.DangerFillPressed">#48343A</Color>
+  <Color x:Key="Color.DangerFillDisabled">#221A1C</Color>
+  <Color x:Key="Color.DangerText">#F0D9D9</Color>
   <Color x:Key="Color.Selection">#1B1B26</Color>
+  <!-- Заливка кнопки запуска без акцента. Полупрозрачная, потому что кнопка стоит
+       на обложке игры: сплошная плашка вырезала бы из картинки прямоугольник. -->
+  <Color x:Key="Color.GhostFill">#6612161A</Color>
   <!-- Состояния -->
   <Color x:Key="Color.HeaderStart">#101017</Color>
-  <Color x:Key="Color.HeaderMid">#101017</Color>
-  <Color x:Key="Color.HeaderEnd">#101017</Color>
   <Color x:Key="Color.Hover">#1B1B24</Color>
   <Color x:Key="Color.Pressed">#22222E</Color>
   <Color x:Key="Color.BorderHover">#35354A</Color>
@@ -63,36 +86,40 @@
   <Color x:Key="Color.Skeleton">#1B1B24</Color>
   <!-- Слайдеры и полосы -->
   <Color x:Key="Color.Track">#22222E</Color>
-  <Color x:Key="Color.TrackFill">#7C5CFF</Color>
-  <Color x:Key="Color.Thumb">#4A4458</Color>
-  <Color x:Key="Color.ThumbHover">#7C5CFF</Color>
-  <Color x:Key="Color.ThumbActive">#8F73FF</Color>
-  <!-- Три радиуса на всё приложение: мелкое, контролы, карточки -->
-  <CornerRadius x:Key="Radius.S">6</CornerRadius>
-  <CornerRadius x:Key="Radius.M">8</CornerRadius>
-  <CornerRadius x:Key="Radius.L">12</CornerRadius>
+  <!-- Три радиуса на всё приложение: мелкое, контролы, карточки. Были 6/8/12 — мягкое
+       скругление «по умолчанию», за которое цепляется глаз. Стало 3/4/5: форма читается
+       как инструмент, а не как карточка в ленте. -->
+  <CornerRadius x:Key="Radius.S">3</CornerRadius>
+  <CornerRadius x:Key="Radius.M">4</CornerRadius>
+  <CornerRadius x:Key="Radius.L">5</CornerRadius>
 
   <!-- Brushes mapped to new Palette -->
   <SolidColorBrush x:Key="Brush.Background" Color="{StaticResource Color.Background}"/>
   <SolidColorBrush x:Key="Brush.Surface" Color="{StaticResource Color.Surface}"/>
   <SolidColorBrush x:Key="Brush.Surface2" Color="{StaticResource Color.Surface2}"/>
+  <SolidColorBrush x:Key="Brush.Surface3" Color="{StaticResource Color.Surface3}"/>
   <SolidColorBrush x:Key="Brush.Border" Color="{StaticResource Color.Border}"/>
+  <SolidColorBrush x:Key="Brush.Border2" Color="{StaticResource Color.Border2}"/>
   <SolidColorBrush x:Key="Brush.Text" Color="{StaticResource Color.Text}"/>
   <SolidColorBrush x:Key="Brush.TextSecondary" Color="{StaticResource Color.TextSecondary}"/>
   <SolidColorBrush x:Key="Brush.TextMuted" Color="{StaticResource Color.TextMuted}"/>
-  <!-- Title/headline text color -->
-  <SolidColorBrush x:Key="Brush.Title" Color="#FFFFFF"/>
+  <!-- Заголовки. Не чистый белый: самый светлый тон системы — Color.Text, и белее
+       него на странице нет ничего. Чистый белый остался от прежней палитры. -->
+  <SolidColorBrush x:Key="Brush.Title" Color="{StaticResource Color.Text}"/>
   <SolidColorBrush x:Key="Brush.Accent" Color="{StaticResource Color.Accent}"/>
   <SolidColorBrush x:Key="Brush.AccentHover" Color="{StaticResource Color.AccentHover}"/>
-  <SolidColorBrush x:Key="Brush.SecondaryAccent" Color="{StaticResource Color.SecondaryAccent}"/>
+  <SolidColorBrush x:Key="Brush.Focus" Color="{StaticResource Color.Focus}"/>
   <SolidColorBrush x:Key="Brush.AccentFill" Color="{StaticResource Color.AccentFill}"/>
   <SolidColorBrush x:Key="Brush.AccentFillHover" Color="{StaticResource Color.AccentFillHover}"/>
   <SolidColorBrush x:Key="Brush.AccentFillPressed" Color="{StaticResource Color.AccentFillPressed}"/>
+  <!-- Подпись на залитой кнопке: тёмная, потому что белая на угле не берёт порог. -->
+  <SolidColorBrush x:Key="Brush.OnAccent" Color="{StaticResource Color.OnAccent}"/>
+  <SolidColorBrush x:Key="Brush.AccentFillDisabled" Color="{StaticResource Color.AccentFillDisabled}"/>
+  <!-- Затемнение под настоящими оверлеями. Единственное место, где чёрный уместен:
+       это не поверхность, а тень от неё на всём остальном. -->
+  <SolidColorBrush x:Key="Brush.Scrim" Color="#C0000000"/>
   <SolidColorBrush x:Key="Brush.MenuHover" Color="{StaticResource Color.MenuHover}"/>
   <SolidColorBrush x:Key="Brush.MenuPressed" Color="{StaticResource Color.MenuPressed}"/>
-  <!-- Заливка главной кнопки. Ключ остался с градиентных времён, но краска теперь одна:
-       градиент на тёмном фоне всё равно читался как грязное пятно. -->
-  <SolidColorBrush x:Key="Brush.AccentGradientPrimary" Color="{StaticResource Color.Accent}"/>
   <!-- State brushes -->
   <SolidColorBrush x:Key="Brush.Hover" Color="{StaticResource Color.Hover}"/>
   <SolidColorBrush x:Key="Brush.Pressed" Color="{StaticResource Color.Pressed}"/>
@@ -102,37 +129,48 @@
   <SolidColorBrush x:Key="Brush.ListHoverAlt" Color="{StaticResource Color.ListHoverAlt}"/>
   <SolidColorBrush x:Key="Brush.Skeleton" Color="{StaticResource Color.Skeleton}"/>
   <SolidColorBrush x:Key="Brush.Track" Color="{StaticResource Color.Track}"/>
-  <SolidColorBrush x:Key="Brush.TrackFill" Color="{StaticResource Color.TrackFill}"/>
-  <SolidColorBrush x:Key="Brush.Thumb" Color="{StaticResource Color.Thumb}"/>
-  <SolidColorBrush x:Key="Brush.ThumbHover" Color="{StaticResource Color.ThumbHover}"/>
-  <SolidColorBrush x:Key="Brush.ThumbActive" Color="{StaticResource Color.ThumbActive}"/>
   <!-- Semantic colors -->
   <SolidColorBrush x:Key="Brush.Success" Color="{StaticResource Color.Success}"/>
   <SolidColorBrush x:Key="Brush.Warning" Color="{StaticResource Color.Warning}"/>
   <SolidColorBrush x:Key="Brush.Danger" Color="{StaticResource Color.Danger}"/>
   <SolidColorBrush x:Key="Brush.Selection" Color="{StaticResource Color.Selection}"/>
+  <SolidColorBrush x:Key="Brush.GhostFill" Color="{StaticResource Color.GhostFill}"/>
 
-  <!-- Header background (solid per spec) -->
+  <!-- Шапка — ровная заливка. -->
+  <SolidColorBrush x:Key="Brush.HeaderBg" Color="{StaticResource Color.HeaderStart}"/>
 
-  <!-- Шапка — ровная заливка. Ключ сохранён ради ссылок из MainWindow. -->
-  <SolidColorBrush x:Key="Brush.HeaderGradient" Color="{StaticResource Color.HeaderStart}"/>
+  <!-- Рамка фокуса. Системная — пунктирный прямоугольник времён Windows 2000:
+       на тёмной теме он читается как артефакт, а на выделенной карточке идёт
+       вторым контуром впритык к её собственной рамке. Вместо него — сплошное
+       светло-лиловое кольцо на 2px снаружи элемента: оно не спорит с акцентной
+       рамкой выделения (та темнее и лежит по самому краю) и одинаково видно и
+       на тёмном фоне, и на акцентной заливке главных кнопок.
 
-  <!-- Пунктирный прямоугольник фокуса Windows: выключен разом для всех элементов.
+       Кольцо появляется только при переходе с клавиатуры: мышиный клик рамку
+       фокуса в WPF не рисует.
 
-       Значение FocusVisualStyle по умолчанию — ссылка на ресурс с этим ключом, поэтому
-       пустой шаблон здесь снимает рамку и с тех элементов, у которых своего стиля нет
-       (например Border с Focusable="True" на карточке игры). Точечные сеттеры
-       FocusVisualStyle="{x:Null}" в стилях ниже остаются: они дешевле, чем разбирать,
-       какой из них теперь лишний.
+       Ключ SystemParameters.FocusVisualStyleKey — страховка для элементов без
+       своего стиля; остальным тот же стиль проставлен сеттером явно, потому что
+       поиск системного ключа не всегда доходит до ресурсов приложения.
 
-       Через FrameworkElement.FocusVisualStyleProperty.OverrideMetadata это не делается:
-       свойство объявлено самим FrameworkElement, метаданные для типа-владельца уже
-       зарегистрированы, и вызов падает с ArgumentException. В статическом конструкторе
-       App это роняло лаунчер до первой строки boot.log — версия 1.5.11 не запускалась
-       вовсе. -->
-  <Style x:Key="{x:Static SystemParameters.FocusVisualStyleKey}" TargetType="Control">
-    <Setter Property="Template" Value="{x:Null}"/>
+       Через FrameworkElement.FocusVisualStyleProperty.OverrideMetadata это не
+       делается: свойство объявлено самим FrameworkElement, метаданные для
+       типа-владельца уже зарегистрированы, и вызов падает с ArgumentException.
+       В статическом конструкторе App это роняло лаунчер до первой строки
+       boot.log — версия 1.5.11 не запускалась вовсе. -->
+  <Style x:Key="Style.FocusVisual" TargetType="Control">
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate>
+          <Border Margin="-2" CornerRadius="10" BorderThickness="2"
+                  BorderBrush="{DynamicResource Brush.Focus}"
+                  SnapsToDevicePixels="True" IsHitTestVisible="False"/>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
   </Style>
+  <Style x:Key="{x:Static SystemParameters.FocusVisualStyleKey}" TargetType="Control"
+         BasedOn="{StaticResource Style.FocusVisual}"/>
 
   <!-- TextBlock default -->
   <Style TargetType="TextBlock">
@@ -193,7 +231,7 @@
     <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="BorderBrush" Value="Transparent"/>
     <Setter Property="OverridesDefaultStyle" Value="True"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <!-- Custom template without IconPresenter to avoid black icon placeholders -->
     <Setter Property="Template">
       <Setter.Value>
@@ -285,7 +323,7 @@
       <Setter.Value>
         <ControlTemplate TargetType="ContentControl">
           <Grid ClipToBounds="True">
-            <Border CornerRadius="10" Background="{DynamicResource Brush.Surface}" Opacity="0.35"/>
+            <Border CornerRadius="{StaticResource Radius.L}" Background="{DynamicResource Brush.Surface}" Opacity="0.35"/>
             <Rectangle>
               <Rectangle.Fill>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
@@ -356,7 +394,7 @@
       <Setter.Value>
         <ControlTemplate TargetType="ContentControl">
           <Grid ClipToBounds="True">
-            <Border CornerRadius="6" Background="{DynamicResource Brush.Surface}" Opacity="0.35"/>
+            <Border CornerRadius="{StaticResource Radius.S}" Background="{DynamicResource Brush.Surface}" Opacity="0.35"/>
             <Rectangle x:Name="SkRect2">
               <Rectangle.Fill>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
@@ -445,12 +483,12 @@
     </Style.Triggers>
   </Style>
 
-  <!-- Гасит системную пунктирную рамку фокуса по Tab на элементах, у которых нет
-       своего implicit-стиля ниже. Button/TextBox/ComboBox и остальные со своим
-       стилем это правило не увидят — им та же настройка проставлена в их
-       собственных стилях; здесь — страховка для всего, что появится позже. -->
+  <!-- Кольцо фокуса по Tab на элементах, у которых нет своего implicit-стиля
+       ниже. Button/TextBox/ComboBox и остальные со своим стилем это правило не
+       увидят — им та же настройка проставлена в их собственных стилях; здесь —
+       страховка для всего, что появится позже. -->
   <Style TargetType="Control">
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
   </Style>
 
   <!-- Window/Page background -->
@@ -471,11 +509,10 @@
     <Setter Property="Margin" Value="0,0,8,0"/>
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="SnapsToDevicePixels" Value="True"/>
-    <!-- Кнопки — единственный часто табаемый элемент, у которого не было своего
-         шаблона: остальные (TextBox, ComboBox, ListBox…) уже гасят рамку ниже
-         по файлу, а Button рисовал системный пунктирный прямоугольник поверх
-         тёмной темы. -->
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <!-- Кнопка — самый часто табаемый элемент, и своего шаблона у неё нет:
+         кольцо фокуса ей нужно проставить отдельно, как и остальным
+         (TextBox, ComboBox, ListBox…) ниже по файлу. -->
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Button">
@@ -505,9 +542,9 @@
   <!-- Primary button (e.g., Play) -->
   <Style x:Key="Style.Button.Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
     <Setter Property="Background" Value="{DynamicResource Brush.AccentFill}"/>
-    <!-- Белый по Brush.AccentFill — 5.8:1. На самом акценте (#7C5CFF) не проходили обе
-         подписи: белая 4.35:1, тёмная 4.49:1 при пороге 4.5:1 — см. Color.AccentFill. -->
-    <Setter Property="Foreground" Value="#FFFFFF"/>
+    <!-- Подпись белая: на заливке #6949E0 она даёт 5,79, а тёмная — 4,49 и порога
+         не берёт. Считает ThemeContrastTests. -->
+    <Setter Property="Foreground" Value="{DynamicResource Brush.OnAccent}"/>
     <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="BorderBrush" Value="Transparent"/>
     <Setter Property="Padding" Value="12,6"/>
@@ -585,7 +622,12 @@
         <ControlTemplate TargetType="Button">
           <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}" Background="{TemplateBinding Background}"
                   BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
-            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <!-- Поля кнопки доходят до содержимого. Без этой привязки Padding не делал
+                 ничего вовсе: подпись прижималась к рамке, а кнопка казалась тесной ровно
+                 настолько, насколько длинной была надпись. Заметнее всего это было на
+                 «Перейти к игре» и «К библиотеке» — там подпись длинная и со значком. -->
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Margin="{TemplateBinding Padding}"/>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
@@ -610,10 +652,11 @@
        Одна на всё приложение — раньше главная красила отмену так, а страница игры
        показывала её ТОЙ ЖЕ фиолетовой заливкой, что и «Установить»: остановить закачку
        и начать её выглядели одинаково. -->
-  <SolidColorBrush x:Key="Brush.DangerFill" Color="#2A1E22"/>
-  <SolidColorBrush x:Key="Brush.DangerFillHover" Color="#3A2A2E"/>
-  <SolidColorBrush x:Key="Brush.DangerFillPressed" Color="#48343A"/>
-  <SolidColorBrush x:Key="Brush.DangerText" Color="#F0D9D9"/>
+  <SolidColorBrush x:Key="Brush.DangerFill" Color="{StaticResource Color.DangerFill}"/>
+  <SolidColorBrush x:Key="Brush.DangerFillHover" Color="{StaticResource Color.DangerFillHover}"/>
+  <SolidColorBrush x:Key="Brush.DangerFillPressed" Color="{StaticResource Color.DangerFillPressed}"/>
+  <SolidColorBrush x:Key="Brush.DangerFillDisabled" Color="{StaticResource Color.DangerFillDisabled}"/>
+  <SolidColorBrush x:Key="Brush.DangerText" Color="{StaticResource Color.DangerText}"/>
   <Style x:Key="Style.Button.Danger" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
     <Setter Property="Background" Value="{StaticResource Brush.DangerFill}"/>
     <Setter Property="Foreground" Value="{StaticResource Brush.DangerText}"/>
@@ -662,7 +705,7 @@
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
-              <Setter Property="Foreground" Value="#FFFFFF"/>
+              <Setter Property="Foreground" Value="{DynamicResource Brush.Title}"/>
             </Trigger>
             <Trigger Property="IsPressed" Value="True">
               <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Pressed}"/>
@@ -704,10 +747,15 @@
        было три разных — на странице игры без стрелки слева, в новости другой ширины
        слева, в настройках со стрелкой и СПРАВА, — и возврат каждый раз искали заново. -->
   <Style x:Key="Style.Button.Back" TargetType="Button" BasedOn="{StaticResource Style.Button.GhostNeutral}">
-    <Setter Property="Height" Value="32"/>
+    <!-- Высота и поля больше, чем у прочих призрачных кнопок: подпись стала длиннее
+         («К библиотеке», «К новостям»), и при прежних 32 со значком и текстом впритык
+         кнопка выглядела переполненной — буквы упирались в рамку. -->
+    <Setter Property="Height" Value="34"/>
     <Setter Property="MinWidth" Value="96"/>
+    <Setter Property="Padding" Value="14,0"/>
     <Setter Property="FontSize" Value="13"/>
     <Setter Property="HorizontalAlignment" Value="Left"/>
+    <Setter Property="VerticalContentAlignment" Value="Center"/>
     <!-- Содержимое — через шаблон, а не готовый StackPanel в Setter Content: элемент
          в сеттере один на весь стиль, его получает первая кнопка, а на остальных
          страницах (игра, новость) кнопка оставалась пустой рамкой. -->
@@ -742,7 +790,7 @@
     <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Padding" Value="8,6"/>
     <Setter Property="Margin" Value="0,0,8,0"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
   </Style>
 
   <!-- Поле формы: рамка, подсветка фокуса и подсказка ВНУТРИ шаблона.
@@ -834,7 +882,7 @@
     <Setter Property="MinHeight" Value="34"/>
     <Setter Property="HorizontalContentAlignment" Value="Left"/>
     <Setter Property="ScrollViewer.Background" Value="{StaticResource Brush.Surface}"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="ComboBox">
@@ -923,7 +971,7 @@
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="Padding" Value="8,6"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <!-- Наведение — нейтральная подсветка, как у пунктов меню; акцентом отмечен только
          выбранный пункт. Раньше и наведение, и выбор красились одним фиолетовым, и в
          списке из четырёх строк две выглядели «выбранными». -->
@@ -988,12 +1036,12 @@
     <Setter Property="BorderBrush" Value="{StaticResource Brush.Border}"/>
     <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="Padding" Value="0"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
   </Style>
   <Style TargetType="ListBoxItem">
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
     <Setter Property="Background" Value="{StaticResource Brush.Surface}"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <Setter Property="OverridesDefaultStyle" Value="True"/>
     <Setter Property="Template">
       <Setter.Value>
@@ -1046,7 +1094,7 @@
 
   <!-- Ползунок: дорожка 4px, заполненная часть — акцент, бегунок — светлый круг с
        акцентным кольцом, под курсором и при перетаскивании кольцо ярче и бегунок чуть
-       больше. Прежний бегунок был тёмно-серым (#4A4458) кругом на тёмной же дорожке —
+       больше. Прежний бегунок был тёмно-серым кругом на тёмной же дорожке —
        его приходилось искать, а заполнение уезжало под бегунок отрицательным отступом. -->
   <Style TargetType="Slider">
     <Setter Property="Foreground" Value="{StaticResource Brush.Accent}"/>
@@ -1054,7 +1102,7 @@
     <Setter Property="MinHeight" Value="28"/>
     <!-- Щелчок по дорожке ставит бегунок под курсор, а не сдвигает его на одно деление -->
     <Setter Property="IsMoveToPointEnabled" Value="True"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Slider">
@@ -1090,6 +1138,9 @@
                 </RepeatButton>
               </Track.IncreaseRepeatButton>
               <Track.Thumb>
+                <!-- Бегунок круглый, и прямоугольное кольцо фокуса вокруг него выглядит
+                     ошибкой. Фокус всё равно получает сам ползунок — кольцо рисуется
+                     вокруг дорожки целиком. -->
                 <Thumb Width="20" Height="20" FocusVisualStyle="{x:Null}" Cursor="Hand">
                   <Thumb.Template>
                     <ControlTemplate TargetType="Thumb">
@@ -1129,7 +1180,7 @@
   <!-- CheckBox (dark theme) -->
   <Style TargetType="CheckBox">
     <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="CheckBox">
@@ -1140,7 +1191,7 @@
                       BorderBrush="{StaticResource Brush.Border}"
                       BorderThickness="1"/>
               <Path x:Name="CheckMark" Data="M 3 9 L 7 13 L 15 5"
-                      StrokeThickness="2" Stroke="#0C0C10" Visibility="Collapsed"
+                      StrokeThickness="2" Stroke="{DynamicResource Brush.Background}" Visibility="Collapsed"
                       StrokeEndLineCap="Square" StrokeLineJoin="Round"/>
             </Grid>
             <ContentPresenter VerticalAlignment="Center"/>
@@ -1172,12 +1223,27 @@
     </Setter>
   </Style>
 
+  <!-- Пилюля: скругление ровно в половину меньшей стороны, при любом шрифте и масштабе.
+       CornerRadius="999" пилюлю не даёт: WPF ужимает лишний радиус по каждой стороне
+       отдельно, и короткий бейдж становится эллипсом. Подробности — PillCornerConverter. -->
+  <ui:PillCornerConverter x:Key="PillCornerConv"/>
+  <Style x:Key="Border.Pill" TargetType="Border">
+    <Setter Property="CornerRadius">
+      <Setter.Value>
+        <MultiBinding Converter="{StaticResource PillCornerConv}">
+          <Binding Path="ActualWidth" RelativeSource="{RelativeSource Self}"/>
+          <Binding Path="ActualHeight" RelativeSource="{RelativeSource Self}"/>
+        </MultiBinding>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <!-- Полоса прокрутки в духе overlay-скроллбаров: дорожка прозрачная, бегунок — тонкая
        полупрозрачная пилюля, которая наливается цветом только под курсором. Прежняя
        серая дорожка во всю высоту ленты читалась как отдельная колонка интерфейса. -->
   <SolidColorBrush x:Key="Brush.ScrollbarTrack" Color="Transparent"/>
-  <SolidColorBrush x:Key="Brush.ScrollbarThumb" Color="#3A3A4C"/>
-  <SolidColorBrush x:Key="Brush.ScrollbarThumbHover" Color="#5A5A72"/>
+  <SolidColorBrush x:Key="Brush.ScrollbarThumb" Color="{StaticResource Color.Border2}"/>
+  <SolidColorBrush x:Key="Brush.ScrollbarThumbHover" Color="{StaticResource Color.Border3}"/>
   <SolidColorBrush x:Key="Brush.ScrollbarThumbBorder" Color="{StaticResource Color.Border}"/>
   <Style TargetType="ScrollBar">
     <Setter Property="Background" Value="{StaticResource Brush.ScrollbarTrack}"/>
@@ -1216,7 +1282,7 @@
                               BorderBrush="{TemplateBinding BorderBrush}"
                               BorderThickness="{TemplateBinding BorderThickness}"
                               Margin="2"
-                              CornerRadius="3"/>
+                              Style="{StaticResource Border.Pill}"/>
                     </ControlTemplate>
                   </Thumb.Template>
                 </Thumb>
@@ -1248,28 +1314,31 @@
 
   <!-- Window/Page background fallback -->
 
-  <!-- Витрина: ровная подложка под обложкой игры. Пока обложки нет, это единственный фон,
-       и он не должен спорить с ней цветом, когда она появится. -->
-  <SolidColorBrush x:Key="Brush.HeroGradient" Color="#1E1B2B"/>
-  <!-- Затемнение поверх обложки, чтобы белый заголовок читался на любой картинке -->
+  <!-- Затемнение поверх обложки, чтобы заголовок читался на любой картинке -->
   <!-- Затемнение легче прежнего (0.45 → #66, низ #E6): вместе с Opacity=0.5 самой обложки
        картинка гасла почти целиком, и витрина превращалась в тёмно-серую плашку с
        текстом. Теперь читаемость текста держит нижняя половина и левый край, а верх и
        правая часть отдают обложку как есть. -->
+  <!-- Витрина затемняется двумя слоями. Первый — снизу вверх, под заголовок и мету:
+       низ витрины обязан читаться на любой обложке, а верх картинки при этом остаётся
+       как есть. Границы заданы долями, поэтому композиция держится и на 980, и на 2K. -->
   <LinearGradientBrush x:Key="Brush.HeroScrim" StartPoint="0,0" EndPoint="0,1">
     <GradientStop Offset="0" Color="#00000000"/>
     <GradientStop Offset="0.5" Color="#33000000"/>
     <GradientStop Offset="1" Color="#CC0C0C10"/>
   </LinearGradientBrush>
-  <!-- Второй слой затемнения — слева направо, под заголовок и кнопку в левом нижнем углу.
-       Правая половина обложки остаётся почти нетронутой: там обычно логотип игры. -->
+  <!-- Второй слой — слева направо, под заголовок и кнопки в левом нижнем углу. Правая
+       половина обложки остаётся почти нетронутой: там обычно логотип игры. -->
   <LinearGradientBrush x:Key="Brush.HeroScrimSide" StartPoint="0,0" EndPoint="1,0">
     <GradientStop Offset="0" Color="#990C0C10"/>
     <GradientStop Offset="0.5" Color="#260C0C10"/>
     <GradientStop Offset="1" Color="#000C0C10"/>
   </LinearGradientBrush>
-  <SolidColorBrush x:Key="Brush.HeroBadge.Bg" Color="#1B1B24"/>
-  <SolidColorBrush x:Key="Brush.HeroBadge.Border" Color="{StaticResource Color.Border}"/>
+  <!-- Бейдж стоит на обложке, поэтому подложка полупрозрачная: сплошная вырезала бы
+       из картинки прямоугольник. Рамка светлее обычной — на пёстром фоне обычная
+       теряется, и бейдж расплывается. -->
+  <SolidColorBrush x:Key="Brush.HeroBadge.Bg" Color="#B30C0C10"/>
+  <SolidColorBrush x:Key="Brush.HeroBadge.Border" Color="{StaticResource Color.Border2}"/>
 
   <!-- Кнопка сведений об игре на витрине: полупрозрачная «стеклянная» кнопка с текстом.
        Круглая ⓘ без подписи читалась как подсказка, а не как переход на страницу игры. -->
@@ -1281,34 +1350,31 @@
        она разваливалась на светлых картинках — рамка и подпись висели прямо на песке и
        небе, без подложки под текстом. Та же полупрозрачная подложка, что у «стеклянной»
        кнопки запуска рядом. -->
+  <!-- «Об игре» в углу витрины. Ссылка, а не кнопка: рамка и заливка ставили её в один
+       вес с кнопками запуска, между которыми она и стояла, — получался третий способ
+       играть, который никуда не запускает. Ни фона, ни рамки; отзыв на наведение —
+       цветом, как у любой ссылки. -->
   <Style x:Key="Style.Button.HeroInfo" TargetType="Button">
-    <Setter Property="Height" Value="42"/>
-    <Setter Property="Padding" Value="16,0"/>
-    <Setter Property="FontSize" Value="14"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
+    <Setter Property="Padding" Value="0"/>
+    <Setter Property="FontSize" Value="12"/>
     <Setter Property="FontWeight" Value="Normal"/>
     <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}"/>
-    <Setter Property="Background" Value="#99101017"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
-    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Button">
-          <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}" Background="{TemplateBinding Background}"
-                  BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
-                  Padding="{TemplateBinding Padding}">
+          <Border x:Name="bd" Background="Transparent" Padding="{TemplateBinding Padding}">
             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Hover}"/>
-              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderHover}"/>
-              <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+              <Setter Property="Foreground" Value="{DynamicResource Brush.Accent}"/>
             </Trigger>
             <Trigger Property="IsPressed" Value="True">
-              <Setter TargetName="bd" Property="Background" Value="{DynamicResource Brush.Pressed}"/>
-              <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Brush.BorderPressed}"/>
-              <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
+              <Setter Property="Foreground" Value="{DynamicResource Brush.AccentHover}"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Opacity" Value="0.5"/>
@@ -1322,6 +1388,7 @@
   <!-- Вкладки под витриной: подчёркивание, а не залитая пилюля. Пилюля весом спорила с
        главной кнопкой действия — две крашенные акцентом плашки рядом, и обе «главные». -->
   <Style x:Key="Style.Button.HeroTab" TargetType="ToggleButton">
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <Setter Property="Padding" Value="2,0,2,8"/>
     <Setter Property="MinHeight" Value="30"/>
     <Setter Property="FontSize" Value="13"/>
