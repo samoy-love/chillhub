@@ -87,11 +87,13 @@ namespace ChillHub.Tests {
             ProcessStartInfo? started = null;
 
             try {
+                ShortcutExePath.GamesRoot = () => games.Root;
                 ShortcutFallbackLaunch.StartProcess = psi => started = psi;
                 Assert.True(ShortcutFallbackLaunch.TryStart(exe));
             }
             finally {
                 ShortcutFallbackLaunch.ResetForTests();
+                ShortcutExePath.ResetForTests();
             }
 
             Assert.Equal(exe, started!.FileName);
@@ -108,6 +110,7 @@ namespace ChillHub.Tests {
             var started = false;
 
             try {
+                ShortcutExePath.GamesRoot = () => games.Root;
                 ShortcutFallbackLaunch.StartProcess = _ => started = true;
 
                 Assert.False(ShortcutFallbackLaunch.TryStart(Path.Combine(games.Root, "нет-такого.exe")));
@@ -116,6 +119,63 @@ namespace ChillHub.Tests {
             }
             finally {
                 ShortcutFallbackLaunch.ResetForTests();
+                ShortcutExePath.ResetForTests();
+            }
+
+            Assert.False(started);
+        }
+
+        /// <summary>
+        /// ПУТЬ ИЗ ЯРЛЫКА — НЕ НАШ ПУТЬ. Ключ <c>--exe</c> пишет ярлык, но ярлык — обычный
+        /// файл на рабочем столе, а аргументы лаунчеру может передать кто угодно. Пока путь
+        /// не проверялся, Chill Hub работал переходником «запусти вот этот exe»: человек
+        /// видел окно от знакомого лаунчера, нажимал одну кнопку — и стартовало что угодно
+        /// с любого диска.
+        /// </summary>
+        [Fact]
+        public void ПутьВнеПапкиИгрНеЗапускается() {
+            using var games = new TempDir();
+            using var elsewhere = new TempDir();
+            var stranger = elsewhere.WriteFile("evil.exe", "MZ");
+            var started = false;
+
+            try {
+                ShortcutExePath.GamesRoot = () => games.Root;
+                ShortcutFallbackLaunch.StartProcess = _ => started = true;
+
+                Assert.False(ShortcutFallbackLaunch.TryStart(stranger));
+
+                // И тот же путь, поданный «изнутри» папки игр через «..».
+                Assert.False(ShortcutFallbackLaunch.TryStart(
+                    Path.Combine(games.Root, "gid", "..", "..", Path.GetFileName(elsewhere.Root), "evil.exe")));
+            }
+            finally {
+                ShortcutFallbackLaunch.ResetForTests();
+                ShortcutExePath.ResetForTests();
+            }
+
+            Assert.False(started);
+        }
+
+        /// <summary>
+        /// Не exe мы не запускаем даже из папки игр: ярлык на .bat или .cmd — это уже не
+        /// «запустить установленную копию», а выполнение чужого сценария.
+        /// </summary>
+        [Fact]
+        public void НеИсполняемыйФайлНеЗапускается() {
+            using var games = new TempDir();
+            var script = games.WriteFile("gid/run.bat", "@echo off");
+            var started = false;
+
+            try {
+                ShortcutExePath.GamesRoot = () => games.Root;
+                ShortcutFallbackLaunch.StartProcess = _ => started = true;
+
+                Assert.False(ShortcutFallbackLaunch.TryStart(script));
+            }
+            finally {
+                ShortcutFallbackLaunch.ResetForTests();
+                ShortcutExePath.ResetForTests();
             }
 
             Assert.False(started);

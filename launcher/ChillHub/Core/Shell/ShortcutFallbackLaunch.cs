@@ -40,6 +40,16 @@ namespace ChillHub.Core.Shell {
             }
 
             try {
+                // Путь пришёл из командной строки — запускаем только то, что лежит в
+                // папке игр (см. ShortcutExePath). Проверка повторяется здесь, хотя
+                // ShortcutOpen.Decide уже её делала: между решением и нажатием кнопки
+                // проходит время, а запуск постороннего exe — не та вещь, у которой
+                // хватает одного рубежа.
+                if (!ShortcutExePath.IsAllowed(exePath)) {
+                    Logging.Logger.Warn($"ShortcutFallbackLaunch: путь вне папки игр, не запускаем: '{exePath}'");
+                    return false;
+                }
+
                 if (!File.Exists(exePath)) {
                     // Файл мог исчезнуть между показом окна и нажатием кнопки.
                     Logging.Logger.Warn($"ShortcutFallbackLaunch: не найден исполняемый файл '{exePath}'");
