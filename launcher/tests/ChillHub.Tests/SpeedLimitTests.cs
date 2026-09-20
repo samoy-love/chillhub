@@ -29,7 +29,7 @@ namespace ChillHub.Tests {
         /// на канале в 500–1000 Мбит «ограничить» означало «резать до восьмой части».
         /// </summary>
         [Fact]
-        public void ПотолокОграниченияВышеДомашнегоКанала() {
+        public void ПотолокОграниченияВышеБытовогоКанала() {
             var cfg = new AppConfig { SpeedLimitMbps = 200 };
 
             ConfigService.Clamp(cfg);
