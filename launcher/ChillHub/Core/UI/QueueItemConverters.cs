@@ -72,6 +72,13 @@ namespace ChillHub.Core.UI {
                 return string.Empty;
             }
 
+            // Остановку уже попросили — считать по этой скорости остаток нечего: закачка
+            // не доедет до конца, а «осталось 4 мин» под надписью «Останавливаем…»
+            // противоречит само себе.
+            if (item.Cancelling) {
+                return string.Empty;
+            }
+
             var speed = $"{item.BytesPerSecond / 1024.0 / 1024.0:0.0} МБ/с";
             var remaining = item.TotalBytes - item.BytesDownloaded;
             return remaining > 0
@@ -98,6 +105,19 @@ namespace ChillHub.Core.UI {
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture) {
             if (value is not QueueItem item) {
                 return string.Empty;
+            }
+
+            // ОСТАНОВКУ ВИДНО И НА КАРТОЧКЕ, А НЕ ТОЛЬКО В СПИСКЕ ИГР.
+            //
+            // Движок встаёт не мгновенно и всё это время продолжает слать отчёты, а
+            // каждый отчёт переписывает StatusText (см. DownloadQueue.RaiseProgress).
+            // Поставленное отменой «Останавливаем…» держалось на карточке доли секунды,
+            // дальше строка снова писала «Скачивание обновления…» с растущими
+            // процентами — нажатие «Отмена» выглядело как не сработавшее, и его
+            // повторяли ещё несколько раз. В строке списка игр это уже учтено
+            // (см. QueueRowLabel), а на карточке — самом видном месте — ещё нет.
+            if (item.Cancelling) {
+                return "Останавливаем…";
             }
 
             if (item.State != QueueItemState.Waiting) {
