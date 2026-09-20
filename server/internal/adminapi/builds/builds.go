@@ -55,10 +55,14 @@ func (h *Handlers) authorized(r *http.Request) bool {
 
 // manifest describes a published version.
 type manifest struct {
-	Version   string         `json:"version"`
-	BuildID   string         `json:"buildId"`
-	GameID    string         `json:"gameId"`
-	CreatedAt string         `json:"createdAt"`
+	Version   string `json:"version"`
+	BuildID   string `json:"buildId"`
+	GameID    string `json:"gameId"`
+	CreatedAt string `json:"createdAt"`
+	// BlockSize — размер блока, по которому посчитаны "blocks" файлов (см.
+	// blocks.go). Ноль — у манифеста хешей блоков нет, лаунчер качает файлы
+	// целиком, как до их появления.
+	BlockSize int64          `json:"blockSize,omitempty"`
 	Files     []manifestFile `json:"files"`
 	EmptyDirs []string       `json:"emptyDirs"`
 }
@@ -69,6 +73,8 @@ type manifestFile struct {
 	Blake3     string `json:"blake3"`
 	Sha256     string `json:"sha256,omitempty"`
 	Executable bool   `json:"executable"`
+	// Blocks — хеши блоков файла, см. blocks.go. Пусто у файлов из одного блока.
+	Blocks string `json:"blocks,omitempty"`
 }
 
 func ensureTrailingSlash(s string) string {
@@ -466,6 +472,19 @@ func stripLauncherStateDirs(gameID string, dirs []string) []string {
 func prepareManifest(m manifest) (manifest, error) {
 	m.Files = stripLauncherStateFiles(m.GameID, m.Files)
 	m.EmptyDirs = stripLauncherStateDirs(m.GameID, m.EmptyDirs)
+
+	// Себя лаунчер обновляет своим путём, без блоков: в его манифесте они —
+	// лишние полмегабайта, которые апдейтер скачивает и выбрасывает.
+	if strings.EqualFold(strings.TrimSpace(m.GameID), LauncherGameID) {
+		m.Files = withoutBlocks(m.Files)
+		m.BlockSize = 0
+	}
+
+	// Размер блока объявляется здесь, а не в каждом пути публикации: их четыре,
+	// и манифест с хешами блоков, но без размера, лаунчер счёл бы бесполезным.
+	if m.BlockSize == 0 && hasBlocks(m.Files) {
+		m.BlockSize = BlockSize
+	}
 
 	// Публиковать манифест, который клиент заведомо отвергнет, бессмысленно:
 	// лучше сломать выкладку здесь, с внятной причиной, чем у пользователя на

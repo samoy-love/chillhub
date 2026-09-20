@@ -79,6 +79,25 @@ namespace ChillHub.Core.Sync {
         /// <summary>Gets or sets сколько байт не поедет по сети благодаря соседней копии.</summary>
         public long ReusedBytes { get; set; }
 
+        /// <summary>
+        /// Gets or sets сколько байт в собранных по блокам файлах взято из их старых
+        /// копий. Становится известно только по ходу загрузки: какие блоки совпадут,
+        /// видно, лишь когда старый файл прочитан.
+        /// </summary>
+        public long BlockReusedBytes { get; set; }
+
+        /// <summary>
+        /// Gets or sets сколько байт на самом деле пришло по сети; null — план ещё не
+        /// выполнялся.
+        /// <para>
+        /// До выполнения известна только верхняя граница — <see cref="TotalDownloadBytes"/>.
+        /// По сети выходит меньше: блоки из старых копий, файлы из соседней копии игры,
+        /// уцелевший от прошлой попытки .part. И больше, если что-то пришлось
+        /// перекачать. Метрика берёт отсюда, чтобы «скачано» значило «прошло по сети».
+        /// </para>
+        /// </summary>
+        public long? NetworkBytes { get; set; }
+
         public List<FileTask> Downloads { get; set; } = new();
 
         public List<string> ToDelete { get; set; } = new();

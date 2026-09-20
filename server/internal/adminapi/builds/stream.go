@@ -178,16 +178,17 @@ func walkManifest(filesRoot string, onFile func(manifestFile)) ([]manifestFile, 
 
 	files := make([]manifestFile, len(list))
 	if err := hashAll(len(list), func(i int) error {
-		b3Sum, shaSum, herr := hashFile(list[i].path)
+		sums, herr := hashFile(list[i].path)
 		if herr != nil {
 			return herr
 		}
 		files[i] = manifestFile{
 			Path:       list[i].rel,
 			Size:       list[i].size,
-			Blake3:     b3Sum,
-			Sha256:     shaSum,
+			Blake3:     sums.blake3,
+			Sha256:     sums.sha256,
 			Executable: isExecutable(list[i].rel),
+			Blocks:     encodeBlocks(sums.blocks, list[i].size),
 		}
 		return nil
 	}, func(i int) {
@@ -276,19 +277,35 @@ func hashAll(n int, work func(int) error, report func(int)) error {
 	return firstErr
 }
 
-// hashFile returns the blake3 and sha256 digests of one extracted file.
-func hashFile(path string) (string, string, error) {
+// fileSums — всё, что манифест знает о содержимом одного файла.
+type fileSums struct {
+	blake3 string
+	sha256 string
+	// blocks — хеши блоков по BlockSize подряд, ещё не закодированные.
+	blocks []byte
+	size   int64
+}
+
+// hashFile считает полные хеши файла и хеши его блоков за один проход.
+func hashFile(path string) (fileSums, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", "", err
+		return fileSums{}, err
 	}
 	defer func() { _ = f.Close() }()
 	hSha := sha256.New()
 	hB3 := blake3.New()
-	if _, err := io.Copy(io.MultiWriter(hSha, hB3), f); err != nil {
-		return "", "", err
+	hBlocks := newBlockHasher(BlockSize)
+	n, err := io.Copy(io.MultiWriter(hSha, hB3, hBlocks), f)
+	if err != nil {
+		return fileSums{}, err
 	}
-	return hex.EncodeToString(hB3.Sum(nil)), hex.EncodeToString(hSha.Sum(nil)), nil
+	return fileSums{
+		blake3: hex.EncodeToString(hB3.Sum(nil)),
+		sha256: hex.EncodeToString(hSha.Sum(nil)),
+		blocks: hBlocks.digests(),
+		size:   n,
+	}, nil
 }
 
 // markParentDirs records every ancestor directory of rel as non-empty.
