@@ -325,8 +325,73 @@ namespace ChillHub.Tests {
             bool localInstalled = true,
             bool localNeedsUpdate = false,
             bool hasServerBuild = true,
-            string steamModsVersion = "ASTeam-LethalReloaded-2.2.12")
-            => new(mods, localRoot, localInstalled, localNeedsUpdate, hasServerBuild, steam, steamModsVersion);
+            string steamModsVersion = "ASTeam-LethalReloaded-2.2.12",
+            string steamModsRevision = "")
+            => new(
+                mods, localRoot, localInstalled, localNeedsUpdate, hasServerBuild, steam, steamModsVersion,
+                SteamModsRevision: steamModsRevision);
+
+        /// <summary>Настройки модов вместе с отпечатком сборки на сервере.</summary>
+        /// <param name="revision">Отпечаток; пусто — сервер его не присылает.</param>
+        /// <returns>Настройки модов.</returns>
+        private static ModsInfo ModsWithRevision(string revision) => new() {
+            HasLatest = true,
+            Version = "ASTeam-LethalReloaded-2.2.12",
+            DisplayName = "Lethal Reloaded",
+            DisplayVersion = "2.2.12",
+            SteamAppId = "1966720",
+            Revision = revision,
+        };
+
+        /// <summary>
+        /// ПЕРЕСОБРАННЫЙ ПОД ТЕМ ЖЕ ИМЕНЕМ МОДПАК ДОЛЖЕН ДОЕХАТЬ И ДО КОПИИ ИЗ STEAM.
+        /// <para>
+        /// Версия модпака — имя пакета на Thunderstore, и админка умеет разложить тот
+        /// же пакет заново. Сборке Chill Hub этот вопрос давно задаёт
+        /// <c>GameStatus.ModsOutOfDate</c>, а копия из Steam сравнивалась только по
+        /// имени: пункт так и говорил «с модами» и запускал старое дерево.
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void ПересобранныйМодпакВSteamЗовётОбновиться() {
+            var steamDir = this.MakeGameDir("[General]" + Environment.NewLine + "enabled = true" + Environment.NewLine);
+            var steam = new SteamGame(SteamLookup.Found, steamDir, "steam.exe", Array.Empty<string>());
+
+            var options = ModsLaunch.Options(
+                Ctx(ModsWithRevision("bbbb2222"), steamDir, steam, steamModsRevision: "aaaa1111"));
+
+            var modded = options.Single(o => o.Target == LaunchTarget.SteamModded);
+            Assert.Equal(LaunchAction.InstallMods, modded.Action);
+            Assert.Equal("обновить моды", modded.Note);
+        }
+
+        /// <summary>Тот же отпечаток — обновляться незачем, пункт просто запускает.</summary>
+        [Fact]
+        public void ТотЖеОтпечатокВSteamОставляетПунктЗапуском() {
+            var steamDir = this.MakeGameDir("[General]" + Environment.NewLine + "enabled = true" + Environment.NewLine);
+            var steam = new SteamGame(SteamLookup.Found, steamDir, "steam.exe", Array.Empty<string>());
+
+            var options = ModsLaunch.Options(
+                Ctx(ModsWithRevision("aaaa1111"), steamDir, steam, steamModsRevision: "aaaa1111"));
+
+            Assert.Equal(LaunchAction.Play, options.Single(o => o.Target == LaunchTarget.SteamModded).Action);
+        }
+
+        /// <summary>
+        /// Старый сервер отпечатка не присылает — сравниваются одни версии, как
+        /// раньше. Иначе обновление лаунчера впереди обновления сервера позвало бы
+        /// переставить моды у всех сразу и ни на что не указало.
+        /// </summary>
+        [Fact]
+        public void БезОтпечаткаНаСервереКопияSteamСверяетсяПоВерсии() {
+            var steamDir = this.MakeGameDir("[General]" + Environment.NewLine + "enabled = true" + Environment.NewLine);
+            var steam = new SteamGame(SteamLookup.Found, steamDir, "steam.exe", Array.Empty<string>());
+
+            var options = ModsLaunch.Options(
+                Ctx(ModsWithRevision(string.Empty), steamDir, steam, steamModsRevision: "aaaa1111"));
+
+            Assert.Equal(LaunchAction.Play, options.Single(o => o.Target == LaunchTarget.SteamModded).Action);
+        }
 
         /// <summary>Строка меню склеивается из подписи и пояснения.</summary>
         [Fact]

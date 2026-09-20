@@ -166,9 +166,79 @@ namespace ChillHub.Tests {
 
             await runner.RunAsync(Request(), CancellationToken.None);
 
-            Assert.Equal("Недостаточно свободного места.", probe.LastStatus);
+            Assert.Contains("освободите", probe.LastStatus, StringComparison.Ordinal);
             Assert.False(sync.Executed);
             Assert.Empty(written);
+        }
+
+        /// <summary>
+        /// СТРАНИЦА ТРЕБУЕТ РОВНО СТОЛЬКО, СКОЛЬКО ПОТРЕБУЕТ ДВИЖОК.
+        /// <para>
+        /// Файл больше не копится в отдельной папке: он качается рядом с целью и
+        /// подменяет её сразу после сверки, поэтому заменяемые байты освобождаются по
+        /// ходу дела. Пока страница требовала свободным весь объём закачки, обновление,
+        /// где сборка меняется целиком, просило второй свой размер — и отказывало там,
+        /// где движок прошёл бы без запинки.
+        /// </para>
+        /// </summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task ЗаменаФайловНаМестеНеТребуетВторогоРазмераСборки() {
+            var probe = new UiProbe();
+            var plan = PlanWith(totalBytes: 10_000);
+
+            // Вся закачка заменяет уже лежащие файлы — прирост занятого места нулевой.
+            plan.ReplacedBytes = 10_000;
+            var sync = new FakeSync { Plan = plan };
+            var runner = NewRunner(sync, probe, out _);
+            runner.FreeSpaceFor = _ => 5_000;
+
+            await runner.RunAsync(Request(), CancellationToken.None);
+
+            Assert.True(sync.Executed);
+        }
+
+        /// <summary>
+        /// Отказ по месту называет диск и объём — тот же текст, что и у движка. «Мало
+        /// места» без буквы отправляет чистить не тот том: папка игр задаётся в
+        /// настройках и стоит не там же, где лаунчер.
+        /// </summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task ОтказПоМестуНазываетДискИОбъём() {
+            var probe = new UiProbe();
+            var sync = new FakeSync { Plan = PlanWith(totalBytes: 3000) };
+            var runner = NewRunner(sync, probe, out _);
+            runner.FreeSpaceFor = _ => 1000;
+
+            await runner.RunAsync(Request(), CancellationToken.None);
+
+            Assert.Contains(@"C:\", probe.LastStatus, StringComparison.Ordinal);
+            Assert.DoesNotContain("права доступа", probe.LastStatus, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// ЗАНЯТЫЕ ФАЙЛЫ — ЭТО НЕ «ГОТОВО». Занятый файл движок не заменяет: новое
+        /// содержимое ложится рядом, а замена планируется на перезагрузку, и на диске
+        /// остаётся старое. Записать маркер версии значило бы объявить установленным
+        /// то, чего там нет, — и кнопка позвала бы играть в недообновлённую сборку.
+        /// </summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task ФайлыЖдущиеПерезагрузкиНеСчитаютсяУстановленными() {
+            var probe = new UiProbe();
+            var plan = PlanWith(totalBytes: 1000);
+            var sync = new FakeSync {
+                Plan = plan,
+                OnExecute = () => plan.DeferredToReboot = new List<string> { "game.exe" },
+            };
+            var runner = NewRunner(sync, probe, out var written);
+
+            var ok = await runner.RunAsync(Request(), CancellationToken.None);
+
+            Assert.False(ok);
+            Assert.Empty(written);
+            Assert.Contains("закройте игру", probe.LastStatus, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>

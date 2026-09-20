@@ -54,13 +54,20 @@ namespace ChillHub.Core.Mods {
     /// так ведут себя тесты, которым важны другие ветки, и ответ по умолчанию —
     /// «претензий нет».
     /// </param>
+    /// <param name="ReadModsRevision">
+    /// Отпечаток модпака, установленного в указанную папку. Имени версии мало:
+    /// это имя пакета на Thunderstore, а админка умеет пересобрать тот же пакет
+    /// изменившимся конвейером — под тем же именем оказывается другое дерево.
+    /// null — не спрашивать (тесты, которым важны другие ветки).
+    /// </param>
     internal sealed record LaunchProbes(
         Func<string?, string> LocalRoot,
         Func<string, bool> HasLocalFiles,
         Func<string, string, SteamGame> LocateSteam,
         Func<string, string> ReadModsVersion,
         Action<string>? LogLine = null,
-        Func<string, bool>? ModsBroken = null);
+        Func<string, bool>? ModsBroken = null,
+        Func<string, string>? ReadModsRevision = null);
 
     /// <summary>
     /// Решения меню запуска, отделённые от самого меню.
@@ -98,6 +105,7 @@ namespace ChillHub.Core.Mods {
             }
 
             var steamModsVersion = probes.ReadModsVersion(steam.GameDir);
+            var steamModsRevision = probes.ReadModsRevision?.Invoke(steam.GameDir) ?? string.Empty;
 
             return ModsLaunch.Options(new LaunchContext(
                 mods,
@@ -108,6 +116,7 @@ namespace ChillHub.Core.Mods {
                 steam,
                 steamModsVersion,
                 game.Title ?? string.Empty,
+                SteamModsRevision: steamModsRevision,
                 SteamModsBroken: Broken(probes, steam.GameDir, steamModsVersion),
                 LocalModsBroken: Broken(probes, localRoot, probes.ReadModsVersion(localRoot))));
         }
