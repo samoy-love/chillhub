@@ -139,6 +139,41 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// В ПАПКУ ЗАПУЩЕННОЙ ИГРЫ МОДЫ НЕ ПИШУТСЯ. Копию из Steam обычно запускают самим
+        /// Steam'ом, мимо лаунчера, и список «что сейчас играет» о таком запуске не знает.
+        /// Модпак при этом затирал и удалял файлы прямо под работающей игрой: пока перед
+        /// записью стояло окно с вопросом, у человека был шанс заметить, — вопроса больше
+        /// нет, значит проверка обязана быть в самой цепочке.
+        /// </summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task УстановкаМодовНеТрогаетПапкуЗапущеннойИгры() {
+            var probe = new Probe { InstallResult = true, RunningExe = "REPO" };
+
+            await probe.Runner().RunAsync(Game(), this.Option(LaunchAction.InstallMods), Off, this.Probes());
+
+            Assert.Empty(probe.Installed);
+            Assert.Empty(probe.Launched);
+            Assert.Contains(probe.Toasts, t => t.Contains("REPO", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// Починка молчит по тому же правилу: возвращать файлы под работающей игрой —
+        /// это тот же самый способ её сломать.
+        /// </summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task ПочинкаМодовНеТрогаетПапкуЗапущеннойИгры() {
+            var probe = new Probe { InstallResult = true, RunningExe = "REPO" };
+            this.ModdedDir();
+
+            await probe.Runner().RunAsync(
+                Game(), this.Option(LaunchAction.RepairMods), Off, this.Probes(modsInSteam: "pack-1"));
+
+            Assert.Empty(probe.Installed);
+        }
+
+        /// <summary>
         /// ГЛАВНАЯ ПРОВЕРКА ПОЧИНКИ: она чинит и останавливается. Игрок нажимал
         /// «восстановить моды» — ровно одно действие, — и начавшаяся следом игра
         /// оказывалась неожиданностью. Запускает уже следующий щелчок.
@@ -329,6 +364,9 @@ namespace ChillHub.Tests {
 
             internal bool Busy { get; set; }
 
+            /// <summary>Имя процесса запущенной игры; пусто — игра закрыта.</summary>
+            internal string RunningExe { get; set; } = string.Empty;
+
             internal LaunchRunner Runner() => new(new LaunchUi {
                 SetStatus = t => this.Statuses.Add(t),
                 Toast = t => this.Toasts.Add(t),
@@ -346,6 +384,7 @@ namespace ChillHub.Tests {
             }) {
                 ModsBusy = () => this.Busy,
                 Remember = (_, target) => this.Remembered = target,
+                RunningExe = _ => this.RunningExe,
             };
         }
     }

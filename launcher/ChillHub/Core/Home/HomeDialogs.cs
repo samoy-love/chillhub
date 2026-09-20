@@ -369,6 +369,42 @@ namespace ChillHub.Core.Home {
         private const string RepairNextStep = " Нажмите ещё раз, чтобы запустить игру.";
 
         /// <summary>
+        /// Отказ писать моды в папку запущенной игры.
+        /// <para>
+        /// Называется процесс, а не игра: человек знает, что игра открыта, а вот какое
+        /// окно закрывать — не всегда, особенно когда игру запустил Steam, а не лаунчер.
+        /// </para>
+        /// </summary>
+        /// <param name="exeName">Имя найденного процесса.</param>
+        /// <returns>Текст для всплывашки.</returns>
+        internal static string GameRunningRefusal(string? exeName) {
+            var proc = string.IsNullOrWhiteSpace(exeName) ? string.Empty : $" ({exeName})";
+            return $"Игра запущена{proc}. Закройте её и повторите: пока она работает, менять файлы модов нельзя.";
+        }
+
+        /// <summary>
+        /// Строка состояния на время установки: что делаем и КУДА.
+        /// <para>
+        /// ПАПКА НАЗЫВАЕТСЯ ДО ЗАПИСИ, А НЕ ПОСЛЕ. Модпак уезжает в чужую установку
+        /// Steam, библиотек у Steam бывает несколько, а вопроса перед записью больше
+        /// нет — и единственным местом, где всплывала настоящая папка, оставался отчёт
+        /// по итогу. Увидеть «пишем не туда» после полутора скачанных гигабайт поздно.
+        /// </para>
+        /// </summary>
+        /// <param name="gameTitle">Название игры.</param>
+        /// <param name="steamDir">Найденная папка копии из Steam.</param>
+        /// <param name="repair">Моды не ставят с нуля, а возвращают на место.</param>
+        /// <returns>Текст для нижней панели.</returns>
+        internal static string DescribeTarget(string? gameTitle, string? steamDir, bool repair = false) {
+            var title = string.IsNullOrWhiteSpace(gameTitle) ? "игры" : $"«{gameTitle}»";
+            var work = repair
+                ? $"Восстановление модов в копии {title} из Steam"
+                : $"Установка модов в копию {title} из Steam";
+            var where = HomeFormat.NormalizeDisplayPath(steamDir ?? string.Empty);
+            return string.IsNullOrWhiteSpace(where) ? work + "…" : $"{work}: {where}";
+        }
+
+        /// <summary>
         /// Объясняет по-человечески, почему копию в Steam не нашли.
         /// <para>
         /// Каждая ступень поиска — своя причина и свой следующий шаг. «Ошибка» здесь

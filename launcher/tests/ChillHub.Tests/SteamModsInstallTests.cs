@@ -190,5 +190,65 @@ namespace ChillHub.Tests {
             Assert.Contains("восстановить", text, System.StringComparison.Ordinal);
             Assert.DoesNotContain("Нажмите ещё раз", text, System.StringComparison.Ordinal);
         }
+
+        // ---- Куда именно пишем ----
+
+        /// <summary>
+        /// ПАПКА НАЗЫВАЕТСЯ ДО ЗАПИСИ. Модпак уезжает в чужую установку Steam, библиотек
+        /// у Steam бывает несколько, а вопроса перед записью больше нет — и единственным
+        /// местом, где всплывала настоящая папка, оставался отчёт по итогу. Увидеть
+        /// «пишем не туда» после полутора скачанных гигабайт поздно.
+        /// </summary>
+        [Fact]
+        public void СтрокаУстановкиНазываетПапку() {
+            var text = SteamModsInstall.DescribeTarget("How to Fish", @"D:\SteamLibrary\steamapps\common\Fish");
+
+            Assert.Contains("How to Fish", text, System.StringComparison.Ordinal);
+            Assert.Contains("D:/SteamLibrary/steamapps/common/Fish", text, System.StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Починка называет ту же папку, но своим словом: «Установка модов» над возвратом
+        /// двух пропавших файлов вводит в заблуждение ровно там, где игрок и так недоволен.
+        /// </summary>
+        [Fact]
+        public void ПочинкаНазываетПапкуСвоимСловом() {
+            var text = SteamModsInstall.DescribeTarget("How to Fish", @"D:\Games\Fish", repair: true);
+
+            Assert.Contains("осстановление", text, System.StringComparison.Ordinal);
+            Assert.Contains("D:/Games/Fish", text, System.StringComparison.Ordinal);
+        }
+
+        /// <summary>Папки не знаем — строка всё равно осмысленная, а не с пустотой на конце.</summary>
+        [Fact]
+        public void БезПапкиСтрокаОстаётсяЦелой() {
+            var text = SteamModsInstall.DescribeTarget("How to Fish", string.Empty);
+
+            Assert.Contains("How to Fish", text, System.StringComparison.Ordinal);
+            Assert.EndsWith("…", text, System.StringComparison.Ordinal);
+        }
+
+        // ---- Запущенная игра ----
+
+        /// <summary>
+        /// Отказ называет процесс, а не игру: человек знает, что игра открыта, а вот какое
+        /// окно закрывать — не всегда, особенно когда игру запустил Steam, а не лаунчер.
+        /// </summary>
+        [Fact]
+        public void ОтказПриЗапущеннойИгреНазываетПроцесс() {
+            var text = SteamModsInstall.GameRunningRefusal("REPO");
+
+            Assert.Contains("REPO", text, System.StringComparison.Ordinal);
+            Assert.Contains("Закройте", text, System.StringComparison.Ordinal);
+        }
+
+        /// <summary>Имени процесса нет — скобок с пустотой в тексте тоже нет.</summary>
+        [Fact]
+        public void ОтказБезИмениПроцессаОстаётсяЧитаемым() {
+            var text = SteamModsInstall.GameRunningRefusal(string.Empty);
+
+            Assert.DoesNotContain("()", text, System.StringComparison.Ordinal);
+            Assert.Contains("Закройте", text, System.StringComparison.Ordinal);
+        }
     }
 }
