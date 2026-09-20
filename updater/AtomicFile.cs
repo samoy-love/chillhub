@@ -29,30 +29,87 @@ public static class AtomicFile {
     public const string BackupSuffix = ".chbak";
 
     /// <summary>
+    /// Замки записи.
+    /// <para>
+    /// ИМЯ ВРЕМЕННОГО ФАЙЛА ВЫВОДИТСЯ ИЗ ИМЕНИ ЦЕЛИ, поэтому две одновременные записи
+    /// одного файла дерутся за один и тот же временный, а открыт он монопольно: опоздавшая
+    /// падает с «файл занят другим процессом», и её содержимое пропадает. Так терялся кеш
+    /// хешей — обход папки игры идёт из нескольких мест сразу, и все они в конце пишут
+    /// один файл.
+    /// </para>
+    /// <para>
+    /// Полоса замков фиксированной длины, а не замок на каждый путь: словарь «путь →
+    /// замок» растёт вместе с числом файлов и никогда не пустеет, а случайное совпадение
+    /// полосы у двух РАЗНЫХ файлов не стоит ничего — одна запись подождёт другую, обе
+    /// пройдут.
+    /// </para>
+    /// </summary>
+    private static readonly object[] Gates = CreateGates(64);
+
+    /// <summary>
     /// Пишет текст в файл атомарно: временный файл рядом + подмена.
+    /// Записи в один и тот же файл выстраиваются в очередь, а не отменяют друг друга.
     /// </summary>
     /// <param name="path">Целевой файл.</param>
     /// <param name="content">Содержимое.</param>
     /// <param name="encoding">Кодировка (для служебных файлов — UTF-8 без BOM).</param>
     public static void WriteAllText(string path, string content, Encoding encoding) {
-        var dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir)) {
-            Directory.CreateDirectory(dir);
-        }
-
-        var tmp = path + TempSuffix;
-        try {
-            using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None)) {
-                var bytes = encoding.GetBytes(content);
-                fs.Write(bytes, 0, bytes.Length);
-                fs.Flush(true);
+        lock (GateFor(path)) {
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) {
+                Directory.CreateDirectory(dir);
             }
 
-            Replace(tmp, path, backup: null);
+            var tmp = path + TempSuffix;
+            try {
+                using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None)) {
+                    var bytes = encoding.GetBytes(content);
+                    fs.Write(bytes, 0, bytes.Length);
+                    fs.Flush(true);
+                }
+
+                Replace(tmp, path, backup: null);
+            }
+            finally {
+                TryDelete(tmp);
+            }
         }
-        finally {
-            TryDelete(tmp);
+    }
+
+    /// <summary>
+    /// Замок, охраняющий запись этого файла. Путь сначала разворачивается: один и тот же
+    /// файл, названный по-разному («.\a.json» и «C:\...\a.json»), обязан достаться одному
+    /// замку, иначе замок не охраняет ничего.
+    /// </summary>
+    /// <param name="path">Целевой файл.</param>
+    /// <returns>Объект синхронизации.</returns>
+    private static object GateFor(string path) {
+        string key;
+        try {
+            key = Path.GetFullPath(path);
         }
+        catch (Exception) {
+            // Путь настолько странный, что не разворачивается, — берём как есть: в худшем
+            // случае запись достанется соседней полосе, а это не хуже, чем было.
+            key = path ?? string.Empty;
+        }
+
+        // Полоса по хешу пути. Отрицательный хеш и int.MinValue разбираются маской, а не
+        // Math.Abs: у int.MinValue модуля в int не существует, и Abs на нём бросает.
+        var index = (StringComparer.OrdinalIgnoreCase.GetHashCode(key) & 0x7FFFFFFF) % Gates.Length;
+        return Gates[index];
+    }
+
+    /// <summary>Готовит полосу замков.</summary>
+    /// <param name="count">Сколько замков в полосе.</param>
+    /// <returns>Полоса.</returns>
+    private static object[] CreateGates(int count) {
+        var gates = new object[count];
+        for (var i = 0; i < count; i++) {
+            gates[i] = new object();
+        }
+
+        return gates;
     }
 
     /// <summary>
