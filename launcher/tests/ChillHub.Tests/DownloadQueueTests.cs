@@ -199,6 +199,66 @@ namespace ChillHub.Tests {
             Assert.Empty(completed); // позиция никуда не уходила — «снята из очереди» присылать не за что
         }
 
+        /// <summary>
+        /// ВИД РАБОТЫ У ЗАПУЩЕННОЙ ЗАНОВО ПОЗИЦИИ МОЖЕТ БЫТЬ ДРУГИМ. Игрок останавливает
+        /// проверку файлов и тут же жмёт «Обновить»: пока Enqueue сверял вид, такое
+        /// нажатие пропадало ровно так же, как раньше пропадало любое, — кнопка не делала
+        /// ничего до конца остановки.
+        /// </summary>
+        [Fact]
+        public async Task EnqueueПослеОтменыПринимаетДругойВидРаботы() {
+            using var pathScope = new GamesPathScope();
+            var sync = new FakeSync { RespectCancellation = true, StopGate = new SemaphoreSlim(0) };
+            var game = Game("a", installed: true, needsUpdate: true);
+            using var queue = NewQueue(sync, new Dictionary<string, GameInfo> { ["a"] = game });
+
+            queue.Enqueue("a", QueueTaskKind.Verify);
+            await WaitUntil(() => sync.ExecuteStarted, "воркер не начал проверять 'a'");
+            Assert.True(queue.Remove("a"));
+            await WaitUntil(() => sync.CancelObserved, "движок не увидел отмену");
+
+            Assert.True(
+                queue.Enqueue("a", QueueTaskKind.Download),
+                "остановленную проверку обязано пускать в очередь заново как загрузку");
+
+            sync.StopGate!.Release(10);
+
+            await WaitUntil(
+                () => queue.Snapshot().Any(i =>
+                    i.GameId == "a" && i.Kind == QueueTaskKind.Download && !i.Cancelling),
+                "позиция должна была вернуться в очередь уже загрузкой");
+        }
+
+        /// <summary>
+        /// СНЯТУЮ ЗАКАЧКУ ПЕРЕСТАНОВКА СОСЕДА НЕ ВОСКРЕШАЕТ. Игрок нажал «Остановить»,
+        /// движок ещё вставал, и в эту щель пришёл щелчок «вверх» по ждущей позиции.
+        /// Settle() смотрит признак возврата раньше признака снятия, поэтому снятая
+        /// закачка возвращалась в очередь и через минуту шла снова — хотя её просили
+        /// прекратить.
+        /// </summary>
+        [Fact]
+        public async Task ПерестановкаСоседаНеВозвращаетСнятуюЗакачку() {
+            using var pathScope = new GamesPathScope();
+            var sync = new FakeSync { RespectCancellation = true, StopGate = new SemaphoreSlim(0) };
+            using var queue = NewQueue(sync, new Dictionary<string, GameInfo> { ["a"] = Game("a"), ["b"] = Game("b") });
+
+            queue.Enqueue("a");
+            await WaitUntil(() => sync.ExecuteStarted, "воркер не начал качать 'a'");
+            queue.Enqueue("b");
+
+            Assert.True(queue.Remove("a"), "игрок снял идущую закачку");
+            await WaitUntil(() => sync.CancelObserved, "движок не увидел отмену");
+
+            // Щелчок «вверх» по соседу приходит, пока 'a' ещё не встала
+            Assert.True(queue.MoveUp("b"));
+
+            sync.StopGate!.Release(10);
+
+            await WaitUntil(
+                () => queue.Snapshot().All(i => i.GameId != "a"),
+                "снятая закачка обязана уйти из очереди, а не вернуться в неё");
+        }
+
         /// <summary>Соседние ожидающие позиции меняются местами и присылают новый порядок целиком.</summary>
         [Fact]
         public void MoveUpМеняетМестамиССоседнейОжидающейПозицией() {
