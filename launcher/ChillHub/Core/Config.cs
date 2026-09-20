@@ -23,7 +23,16 @@ namespace ChillHub.Core {
         public int DownloadThreads { get; set; } = 8; // 2..16
 
         // Ограничение скорости скачивания, МБ/с. 0 — без лимита.
-        public int SpeedLimitMbps { get; set; } = 0; // 0..10
+        //
+        // ПОТОЛОК БЫЛ 10 МБ/с, и это делало настройку бесполезной ровно там, где она
+        // нужна: у канала на 500–1000 Мбит «ограничить» означало «резать до восьмой
+        // части», и выбирать приходилось между «без лимита» и «очень медленно».
+        // Теперь потолок заведомо выше любого бытового канала, и любое значение,
+        // которое игрок поставит, — настоящее ограничение, а не обрыв.
+        public int SpeedLimitMbps { get; set; } = 0; // 0..MaxSpeedLimitMbps
+
+        /// <summary>Потолок ограничения скорости, МБ/с: выше него ограничивать нечего.</summary>
+        public const int MaxSpeedLimitMbps = 1000;
 
         public string ApiBaseUrl { get; set; } = DefaultApiBaseUrl; // base URL for server API/content
 
@@ -438,8 +447,8 @@ namespace ChillHub.Core {
                 cfg.SpeedLimitMbps = 0;
             }
 
-            if (cfg.SpeedLimitMbps > 10) {
-                cfg.SpeedLimitMbps = 10;
+            if (cfg.SpeedLimitMbps > AppConfig.MaxSpeedLimitMbps) {
+                cfg.SpeedLimitMbps = AppConfig.MaxSpeedLimitMbps;
             }
 
             if (string.IsNullOrWhiteSpace(cfg.GamesPath)) {

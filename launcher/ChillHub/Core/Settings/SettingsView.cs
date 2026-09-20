@@ -30,10 +30,6 @@ namespace ChillHub.Core.Settings {
         /// <summary>Подпись рядом с ползунком ограничения скорости.</summary>
         internal required string SpeedLimitText { get; init; }
 
-        /// <summary>Отправлять обезличенную статистику.</summary>
-
-        /// <summary>Отправлять отчёты об ошибках автоматически.</summary>
-
         /// <summary>Сворачивать окно в трей вместо закрытия.</summary>
         internal required bool MinimizeToTray { get; init; }
 

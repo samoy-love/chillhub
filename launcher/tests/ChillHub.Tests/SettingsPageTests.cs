@@ -87,11 +87,19 @@ namespace ChillHub.Tests {
                 Call(page, "ThreadsBox_LostKeyboardFocus", null!, null!);
                 Assert.Equal(16, cfgDir.ReadConfigFromDisk().DownloadThreads);
 
+                // 42 МБ/с — обычная доля гигабитного канала, и обрезать её больше
+                // незачем: потолок в 10 МБ/с делал настройку бесполезной там, где она
+                // и нужна, оставляя выбор между «без лимита» и «очень медленно».
                 Field<System.Windows.Controls.CheckBox>(page, "SpeedLimitCheck").IsChecked = true;
                 Field<System.Windows.Controls.TextBox>(page, "SpeedLimitBox").Text = "42";
                 Call(page, "SpeedLimitBox_LostKeyboardFocus", null!, null!);
-                Assert.Equal(10, cfgDir.ReadConfigFromDisk().SpeedLimitMbps);
-                Assert.Equal("10 МБ/с", Field<System.Windows.Controls.TextBlock>(page, "SpeedLimitValueText").Text);
+                Assert.Equal(42, cfgDir.ReadConfigFromDisk().SpeedLimitMbps);
+                Assert.Equal("42 МБ/с", Field<System.Windows.Controls.TextBlock>(page, "SpeedLimitValueText").Text);
+
+                // А выше потолка — обрезается, и поле показывает то, что сохранилось.
+                Field<System.Windows.Controls.TextBox>(page, "SpeedLimitBox").Text = "999999";
+                Call(page, "SpeedLimitBox_LostKeyboardFocus", null!, null!);
+                Assert.Equal(AppConfig.MaxSpeedLimitMbps, cfgDir.ReadConfigFromDisk().SpeedLimitMbps);
 
                 Field<System.Windows.Controls.CheckBox>(page, "SpeedLimitCheck").IsChecked = false;
                 Call(page, "SpeedLimitCheck_Click", null!, null!);

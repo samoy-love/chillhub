@@ -189,6 +189,35 @@ namespace ChillHub.Tests {
             Assert.DoesNotContain("Попробуйте ещё раз", result.Message, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// ЧАСТЬ ФАЙЛОВ ЖДЁТ ПЕРЕЗАГРУЗКИ — ЗНАЧИТ, МОДПАК НЕ УСТАНОВЛЕН.
+        /// <para>
+        /// Занятый файл движок не заменяет: новое содержимое ложится рядом, а замена
+        /// планируется на перезагрузку — на диске остаётся старое. Маркер версии после
+        /// такого писать нельзя: пункт «Steam · с модами» стал бы «Играть», тост сказал
+        /// бы «Моды установлены», а игра пошла бы с половиной пака. Случай не редкий:
+        /// копию из Steam запускают Steam'ом, мимо лаунчера, и сделать это можно прямо
+        /// посреди установки, которая идёт минутами.
+        /// </para>
+        /// </summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task ФайлыЖдущиеПерезагрузкиНеСчитаютсяУстановленнымиМодами() {
+            var plan = new DiffPlan {
+                Downloads = new List<FileTask> { new FileTask { RelativePath = "BepInEx/core/BepInEx.dll", Size = 10 } },
+                DeferredToReboot = new List<string> { "BepInEx/core/BepInEx.dll" },
+            };
+            var sync = new RecordingSync(plan, PackManifest());
+
+            var result = await ModsService.EnsureAsync(
+                GameWithPack(), this.root, "https://example", sync, null, CancellationToken.None);
+
+            Assert.Equal(ModsSyncOutcome.Failed, result.Outcome);
+            Assert.False(result.Ok);
+            Assert.Contains("закройте игру", result.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(GameLocalState.ReadModsVersionAt(this.root));
+        }
+
         /// <summary>Отмена пробрасывается наружу, а не превращается в «не удалось».</summary>
         [Fact]
         public async Task ОтменаПробрасывается() {

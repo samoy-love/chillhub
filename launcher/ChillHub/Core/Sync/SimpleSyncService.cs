@@ -631,12 +631,12 @@ namespace ChillHub.Core.Sync {
                 TryDeleteDirectoryWithRetry(legacyStaging, recursive: true, attempts: 3, delayMs: 150);
             }
 
-            var degree = Math.Clamp(ConfigService.Current.DownloadThreads, 2, 16);
+            var degree = DownloadDegree();
 
             // Общий на все параллельные загрузки лимитер: один и тот же экземпляр
             // делят все потоки скачивания, поэтому ограничивается суммарная скорость,
             // а не скорость каждого потока по отдельности. null — лимита нет.
-            var speedLimiter = SpeedLimiter.Create(ConfigService.Current.SpeedLimitMbps);
+            var speedLimiter = SpeedLimiter.Create(() => ConfigService.Current.SpeedLimitMbps);
 
             // Сборка по блокам начинается с чтения старого файла целиком, и без
             // ограничителя потоки загрузки читали бы разом до шестнадцати файлов.
@@ -916,6 +916,13 @@ namespace ChillHub.Core.Sync {
                                                             ex);
                                                     }
 
+                                                    // Место на диске кончилось — повторять незачем: следующая
+                                                    // попытка упрётся в тот же байт. И сказать об этом надо
+                                                    // словами «освободите столько-то», а не «попробуйте ещё раз».
+                                                    if (IsDiskFull(ex)) {
+                                                        throw DiskFull(partPath, total - Interlocked.Read(ref downloaded), ex);
+                                                    }
+
                                                     attempt++;
                                                     if (attempt >= maxAttempts) {
                                                         throw ex is InvalidDataException
@@ -965,6 +972,13 @@ namespace ChillHub.Core.Sync {
                                     else {
                                         deferred.Add(t.RelativePath);
                                     }
+                                }
+                                catch (IOException ex) when (ex is not NotEnoughSpaceException && IsDiskFull(ex)) {
+                                    // Сеть — не единственное, что пишет на диск: место кончается и
+                                    // на создании каталога, и на постановке файла на место, и в
+                                    // сборке по блокам. Один невод на весь путь файла: что бы
+                                    // здесь ни упёрлось в полный том, игрок услышит одно и то же.
+                                    throw DiskFull(plan.LocalRoot, total - Interlocked.Read(ref downloaded), ex);
                                 }
                                 finally {
                                     if (fileNetwork > 0) {
@@ -1111,6 +1125,18 @@ namespace ChillHub.Core.Sync {
                 return false;
             }
         }
+
+        /// <summary>
+        /// Сколько файлов качается одновременно по текущим настройкам.
+        /// <para>
+        /// Отдельным методом, потому что это же число нужно странице игры: она считает
+        /// требуемое место ДО начала работы тем же <see cref="RequiredFreeBytes"/>, и
+        /// разойдись эти два места в числе потоков — предварительная проверка отвечала
+        /// бы не на тот вопрос, на который потом ответит движок.
+        /// </para>
+        /// </summary>
+        /// <returns>Число потоков загрузки, приведённое к допустимому диапазону.</returns>
+        internal static int DownloadDegree() => Math.Clamp(ConfigService.Current.DownloadThreads, 2, 16);
 
         /// <summary>
         /// Сколько места на диске обновлению нужно на самом деле.
@@ -1274,6 +1300,13 @@ namespace ChillHub.Core.Sync {
 
             if (!File.Exists(dstPath)) {
                 File.Move(partPath, dstPath, overwrite: true);
+
+                // Отведённый старый файл больше не нужен. Сам он не исчезнет: в
+                // манифесте его нет, и для сборки игры он ушёл бы в ToDelete лишь
+                // СЛЕДУЮЩИМ обновлением, а для модпака (тот удаляет только свои
+                // выбывшие файлы) — не ушёл бы никогда. То есть в чужой папке Steam
+                // такой дубль оставался бы лежать вечно, занимая размер файла.
+                SafeDeleteFile(backup);
                 return true;
             }
 
@@ -1316,6 +1349,87 @@ namespace ChillHub.Core.Sync {
             // И при успешном планировании, и при отказе MoveFileEx на диске сейчас
             // лежит СТАРОЕ содержимое: игра обновлена не полностью.
             return false;
+        }
+
+        /// <summary>HRESULT собран из кода Win32: старшие 16 бит равны 0x8007.</summary>
+        private const int Win32FacilityMask = unchecked((int)0xFFFF0000);
+
+        /// <summary>Значение тех самых старших бит.</summary>
+        private const int Win32FacilityBits = unchecked((int)0x80070000);
+
+        /// <summary>ERROR_DISK_FULL: на томе не осталось места.</summary>
+        private const int ErrorDiskFull = 0x70;
+
+        /// <summary>ERROR_HANDLE_DISK_FULL: то же самое, но от записи в открытый файл.</summary>
+        private const int ErrorHandleDiskFull = 0x27;
+
+        /// <summary>
+        /// Отказ файловой системы «на диске нет места».
+        /// <para>
+        /// Вердикт выносится по коду Win32 внутри HRESULT, а не по тексту: текст
+        /// локализован, и проверка на «места» не сработала бы ни на немецкой Windows,
+        /// ни на английской. Тот же приём, что в <c>HomeDialogs.ClassifyIoFailure</c>.
+        /// </para>
+        /// <para>
+        /// Цепочка вложенных исключений проходится целиком: цикл повторов заворачивает
+        /// причину в свой <see cref="IOException"/> с именем файла, а блочная сборка —
+        /// в <see cref="LocalWriteException"/>.
+        /// </para>
+        /// </summary>
+        /// <param name="ex">Пойманное исключение.</param>
+        /// <returns>true, если дело в кончившемся месте.</returns>
+        internal static bool IsDiskFull(Exception? ex) {
+            for (var e = ex; e != null; e = e.InnerException) {
+                if (e is not IOException || (e.HResult & Win32FacilityMask) != Win32FacilityBits) {
+                    continue;
+                }
+
+                var code = e.HResult & 0xFFFF;
+                if (code is ErrorDiskFull or ErrorHandleDiskFull) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Превращает отказ «нет места» в отказ, у которого есть ответ для игрока.
+        /// <para>
+        /// ПРЕДВАРИТЕЛЬНАЯ ПРОВЕРКА МЕСТА ЛОВИТ НЕ ВСЁ: она смотрит на диск один раз, в
+        /// начале, а обновление большой сборки идёт часами, и за это время том успевают
+        /// забить и игра, и браузер, и сосед по диску. Пока такой отказ приезжал наверх
+        /// обычным <see cref="IOException"/>, игрок читал «проверьте свободное место и
+        /// права доступа»: про права там ни при чём, а сколько освободить — не сказано.
+        /// </para>
+        /// <para>
+        /// «Сколько освободить» берётся как остаток плана: сколько байт работы ещё не
+        /// легло на диск. Это оценка сверху — часть места вернут заменяемые файлы, — и
+        /// ошибаться здесь надо именно в эту сторону: освободивший меньше нужного
+        /// упрётся в тот же отказ второй раз.
+        /// </para>
+        /// </summary>
+        /// <param name="path">Любой путь на том самом томе.</param>
+        /// <param name="stillNeeded">Сколько байт работы осталось.</param>
+        /// <param name="inner">Исходный отказ файловой системы.</param>
+        /// <returns>Отказ по месту с диском и объёмом.</returns>
+        internal static NotEnoughSpaceException DiskFull(string path, long stillNeeded, Exception inner) {
+            var drive = string.Empty;
+            long available = 0;
+            try {
+                drive = Path.GetPathRoot(Path.GetFullPath(path)) ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(drive)) {
+                    available = new DriveInfo(drive).AvailableFreeSpace;
+                }
+            }
+            catch (Exception ex) {
+                // Не определился том — строка выйдет без буквы, но останется верной.
+                ChillHub.Core.Logging.Logger.Warn($"DiskFull('{path}'): {ex.Message}");
+            }
+
+            // Хотя бы байт: «освободите 0 байт» — это не совет, а насмешка.
+            var missing = Math.Max(1, stillNeeded);
+            return new NotEnoughSpaceException(drive, available + missing, available, inner);
         }
 
         /// <summary>
@@ -1489,6 +1603,9 @@ namespace ChillHub.Core.Sync {
             // запуск такой сборки — это как раз то, от чего маркер и защищает.
             var pending = deferred.ToArray();
             if (pending.Length > 0) {
+                // Наверх — списком в плане, а не только маркером на диске: маркер лежит
+                // в папке игры, и для модпака в копии Steam его не читает никто.
+                plan.DeferredToReboot = new List<string>(pending);
                 WriteRebootPendingMarker(plan.LocalRoot, plan.Version, pending);
                 ChillHub.Core.Logging.Logger.Warn(
                     $"Обновление до {plan.Version} применено не полностью: {pending.Length} файл(ов) заменятся после перезагрузки ({string.Join(", ", pending.Take(5))}).");
