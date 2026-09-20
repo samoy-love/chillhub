@@ -981,8 +981,11 @@ namespace ChillHub.Pages {
         }
 
         // Обход папки игры с пересчётом хешей не имеет права выполняться на UI-потоке: см. Core/Home/SyncPlanner.
+        // Через Shared-путь: подсказка «Нужно: N» и проверка статуса спрашивают одно и то
+        // же, и второй обход той же папки — это минуты чтения диска впустую. Файлы по
+        // этому плану здесь не меняются, поэтому делить его безопасно.
         private Task<DiffPlan> PlanOffUiThreadAsync(Manifest manifest, string localRoot, string contentBaseUrl, CancellationToken token) =>
-            SyncPlanner.PlanOffUiThreadAsync(this.sync, manifest, localRoot, contentBaseUrl, token);
+            SyncPlanner.SharedPlanOffUiThreadAsync(this.sync, manifest, localRoot, contentBaseUrl, token);
 
         private Task DispatcherInvokeAsync(Action action) {
             Dispatcher? dispatcher;
@@ -3463,9 +3466,7 @@ namespace ChillHub.Pages {
             this.UpdateProgress.IsIndeterminate = true;
             this.SpeedEtaText.Text = string.Empty;
             this.FilesSizeText.Text = string.Empty;
-            this.StatusText.Text = repair
-                ? $"Восстановление модов в копии {title} из Steam…"
-                : $"Установка модов в копию {title} из Steam…";
+            this.StatusText.Text = Core.Home.SteamModsInstall.DescribeTarget(title, steamDir, repair);
             this.SyncBottomBarVisibility();
 
             try {

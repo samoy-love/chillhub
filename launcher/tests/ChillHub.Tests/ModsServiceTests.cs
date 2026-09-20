@@ -168,6 +168,27 @@ namespace ChillHub.Tests {
             Assert.Empty(GameLocalState.ReadModsVersionAt(this.root));
         }
 
+        /// <summary>
+        /// МЕСТО КОНЧИЛОСЬ — ЭТО НЕ «ПОПРОБУЙТЕ ЕЩЁ РАЗ». Модпак весит до полутора
+        /// гигабайт и ставится ПЕРВЫМ, до того как синхронизация игры дойдёт до своей
+        /// проверки свободного места. Пока отказ приезжал сюда обычным IOException,
+        /// игроку предлагали повторить ровно то, что гарантированно повторится, — и это
+        /// та самая «у меня ничего не качается» из обратной связи.
+        /// </summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task НехваткаМестаНазываетсяСвоимИменем() {
+            var sync = new ThrowingSync(new NotEnoughSpaceException(@"D:\", 3_000_000_000, 1_000_000_000));
+
+            var result = await ModsService.EnsureAsync(
+                GameWithPack(), this.root, "https://example", sync, null, CancellationToken.None);
+
+            Assert.Equal(ModsSyncOutcome.Failed, result.Outcome);
+            Assert.Contains(@"D:\", result.Message, StringComparison.Ordinal);
+            Assert.Contains("освободите", result.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("Попробуйте ещё раз", result.Message, StringComparison.Ordinal);
+        }
+
         /// <summary>Отмена пробрасывается наружу, а не превращается в «не удалось».</summary>
         [Fact]
         public async Task ОтменаПробрасывается() {

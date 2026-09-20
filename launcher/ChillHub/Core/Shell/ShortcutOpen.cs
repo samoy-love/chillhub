@@ -66,9 +66,14 @@ namespace ChillHub.Core.Shell {
                     : ShortcutOpenAction.SelectGame;
             }
 
-            return !string.IsNullOrWhiteSpace(request.ExePath) && exists(request.ExePath)
-                ? ShortcutOpenAction.OfferLaunch
-                : ShortcutOpenAction.ReportMissing;
+            // Предлагаем запуск только того, что лаунчер вправе запустить: путь приходит
+            // из командной строки ярлыка, и до этой проверки окно предлагало кнопку
+            // «Запустить» для любого exe на диске (см. ShortcutExePath).
+            return !string.IsNullOrWhiteSpace(request.ExePath)
+                && ShortcutExePath.IsAllowed(request.ExePath)
+                && exists(request.ExePath)
+                    ? ShortcutOpenAction.OfferLaunch
+                    : ShortcutOpenAction.ReportMissing;
         }
 
         /// <summary>

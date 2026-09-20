@@ -172,6 +172,30 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// СВОЯ ПРОВЕРКА МЕСТА ЛОВИТ НЕ ВСЁ: она смотрит на диск игры, а движок считает
+        /// требования по каждому задействованному тому и с учётом заменяемых файлов.
+        /// Дойдя сюда общим IOException, нехватка места называлась «проверьте свободное
+        /// место и права доступа» — про права там ни при чём, а сколько освобождать, не
+        /// сказано вовсе.
+        /// </summary>
+        /// <returns>Задача теста.</returns>
+        [Fact]
+        public async Task НехваткаМестаВДвижкеНазываетДискИОбъём() {
+            var probe = new UiProbe();
+            var sync = new FakeSync {
+                Plan = PlanWith(totalBytes: 1000),
+                OnExecute = () => throw new NotEnoughSpaceException(@"D:\", 3_000_000_000, 1_000_000_000),
+            };
+            var runner = NewRunner(sync, probe, out _);
+
+            await runner.RunAsync(Request(), CancellationToken.None);
+
+            Assert.Contains(@"D:\", probe.LastStatus, StringComparison.Ordinal);
+            Assert.Contains("освободите", probe.LastStatus, StringComparison.Ordinal);
+            Assert.DoesNotContain("права доступа", probe.LastStatus, StringComparison.Ordinal);
+        }
+
+        /// <summary>
         /// Неизвестное свободное место (0 — сетевой путь, отсутствующий диск) не считается
         /// нехваткой: отказать в установке из-за неудавшейся диагностики хуже, чем попробовать.
         /// </summary>

@@ -177,6 +177,18 @@ namespace ChillHub.Core.Game {
                 + "Проверка удалит их: это могут быть моды, сохранения внутри папки игры и остатки прежних версий.\n\nПродолжить?";
 
         /// <summary>
+        /// Строка о нехватке места: сколько освободить и на каком диске.
+        /// <para>
+        /// Диск назван потому, что папка игр задаётся в настройках и стоит не там же,
+        /// где лаунчер: «не хватает места» без буквы отправляет чистить не тот том.
+        /// </para>
+        /// </summary>
+        /// <param name="ex">Отказ по месту.</param>
+        /// <returns>Текст для строки состояния.</returns>
+        internal static string NoSpaceStatus(NotEnoughSpaceException ex)
+            => $"На диске {ex.Drive} не хватает места: освободите {FormatSize(ex.MissingBytes)} и повторите.";
+
+        /// <summary>
         /// Проводит операцию целиком. Исключения наружу не выпускает: всё, что могло пойти
         /// не так, уже превращено в сообщение пользователю и запись в логе.
         /// </summary>
@@ -363,6 +375,18 @@ namespace ChillHub.Core.Game {
                 // а не общей фразой «попробуйте ещё раз».
                 this.ui.ShowUserError(ManifestValidator.UserMessage, ex, $"GamePage.StartSyncAsync.ManifestValidation(gid={gid}, version={version})");
                 Report(request, plan, "fail", opStart, "manifest_invalid");
+                return false;
+            }
+            catch (NotEnoughSpaceException ex) {
+                // Своя проверка места выше ловит не всё: она смотрит на диск игры, а
+                // движок считает требования по КАЖДОМУ задействованному тому и с учётом
+                // заменяемых файлов. Дойдя сюда общим IOException, нехватка места
+                // называлась «проверьте свободное место и права доступа» — про права там
+                // ни при чём, а сколько освободить, не сказано.
+                this.ui.SetStatus(NoSpaceStatus(ex));
+                this.ui.SetSpeedEta(string.Empty);
+                Logging.Logger.Error(ex, $"GamePage.StartSyncAsync места не хватает (gid={gid}, version={version})");
+                Report(request, plan, "fail", opStart, "no_disk_space");
                 return false;
             }
             catch (Exception ex) {

@@ -57,6 +57,24 @@ namespace ChillHub.Core.Mods {
         /// <summary>Gets or sets признак «модпак уже ставится прямо сейчас».</summary>
         internal Func<bool> ModsBusy { get; set; } = () => false;
 
+        /// <summary>
+        /// Gets or sets опрос «игра сейчас запущена?»: имя процесса или пустая строка.
+        /// <para>
+        /// МОДЫ НЕЛЬЗЯ ПИСАТЬ В ПАПКУ РАБОТАЮЩЕЙ ИГРЫ. Установка сборки с сервера это
+        /// проверяет с самого начала (<see cref="Game.GameSyncRunner"/>), а установка
+        /// модпака в копию из Steam — нет: единственным барьером был список запущенного,
+        /// который лаунчер ведёт по СВОИМ запускам. Игру из Steam обычно и запускают
+        /// Steam'ом, мимо лаунчера, — и тогда модпак затирал и удалял файлы прямо под
+        /// работающей игрой. Пока перед записью стояло окно с вопросом, у человека был
+        /// шанс заметить; вопроса больше нет, так что проверка обязана быть здесь.
+        /// </para>
+        /// <para>
+        /// Шов, а не прямой вызов: опрос процессов в прогоне тестов зависит от того, что
+        /// открыто на машине, и проверка «отказались ли мы писать» иначе не пишется.
+        /// </para>
+        /// </summary>
+        internal Func<GameInfo, string> RunningExe { get; set; } = DefaultRunningExe;
+
         /// <summary>Gets or sets запоминание выбора игрока.</summary>
         internal Action<string?, LaunchTarget> Remember { get; set; } = LaunchChoice.Remember;
 
@@ -142,6 +160,10 @@ namespace ChillHub.Core.Mods {
                 return;
             }
 
+            if (!this.AllowedToWrite(game)) {
+                return;
+            }
+
             if (!await this.ui.InstallMods(game, title, option.GameDir, false).ConfigureAwait(true)) {
                 return;
             }
@@ -179,6 +201,10 @@ namespace ChillHub.Core.Mods {
                 return;
             }
 
+            if (!this.AllowedToWrite(game)) {
+                return;
+            }
+
             // Об исходе рассказывает сама установка — всплывашкой, и в ней же сказано,
             // что следующий щелчок запускает игру (Home.SteamModsInstall.DescribeResult).
             // Своей строки состояния тут нет намеренно: нижняя панель показывает ИДУЩУЮ
@@ -186,5 +212,31 @@ namespace ChillHub.Core.Mods {
             // висеть на экране до следующей закачки.
             await this.ui.InstallMods(game, title, option.GameDir, true).ConfigureAwait(true);
         }
+
+        /// <summary>
+        /// Можно ли сейчас трогать файлы игры. Запущенной игре мы в папку не пишем:
+        /// половина модпака, положенная под работающий процесс, ломает и текущую
+        /// сессию, и следующий запуск.
+        /// </summary>
+        /// <param name="game">Игра.</param>
+        /// <returns>false, если игра запущена; отказ уже показан.</returns>
+        private bool AllowedToWrite(GameInfo game) {
+            var exe = this.RunningExe(game);
+            if (string.IsNullOrWhiteSpace(exe)) {
+                return true;
+            }
+
+            // Всплывашкой, а не строкой внизу: строка показывает идущую работу и
+            // уходит, когда её нет, — отказ в ней остался бы висеть до следующей
+            // закачки (тот же довод, что у отчёта об установке модов).
+            this.ui.Toast(Home.SteamModsInstall.GameRunningRefusal(exe));
+            return false;
+        }
+
+        /// <summary>Настоящий опрос процессов: игра ищется по имени своего exe.</summary>
+        /// <param name="game">Игра.</param>
+        /// <returns>Имя процесса или пустая строка.</returns>
+        private static string DefaultRunningExe(GameInfo game)
+            => Game.GameDiskInfo.IsGameRunning(game?.ExeRelativePath, out var exeName) ? exeName : string.Empty;
     }
 }

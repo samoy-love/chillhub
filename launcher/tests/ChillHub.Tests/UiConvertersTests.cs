@@ -81,6 +81,33 @@ namespace ChillHub.Tests {
             Assert.Equal("Скачивание обновления…", Convert(new QueueItemStatusConverter(), item));
         }
 
+        /// <summary>
+        /// ОСТАНОВКА ВИДНА И НА КАРТОЧКЕ ОЧЕРЕДИ, а не только в строке списка игр.
+        /// Движок встаёт не мгновенно и всё это время шлёт отчёты, каждый из которых
+        /// переписывает StatusText: поставленное отменой «Останавливаем…» держалось доли
+        /// секунды, дальше карточка снова писала «Скачивание обновления…» с растущими
+        /// процентами — и нажатие «Отмена» выглядело как не сработавшее.
+        /// </summary>
+        [Fact]
+        public void ОстанавливаемаяПозицияНеВыдаётСебяЗаИдущуюЗакачку() {
+            var item = Item(QueueItemState.Running, done: 38, total: 100, status: "Скачивание обновления…", cancelling: true);
+
+            Assert.Equal("Останавливаем…", Convert(new QueueItemStatusConverter(), item));
+        }
+
+        /// <summary>
+        /// У останавливаемой закачки нет остатка времени: она не доедет до конца, и
+        /// «осталось 4 мин» под надписью «Останавливаем…» противоречит само себе.
+        /// </summary>
+        [Fact]
+        public void УОстанавливаемойПозицииНетСкоростиИОстатка() {
+            var running = Item(QueueItemState.Running, done: 38, total: 100, speed: 5_000_000);
+            Assert.NotEqual(string.Empty, Convert(new QueueItemSpeedConverter(), running));
+
+            var stopping = Item(QueueItemState.Running, done: 38, total: 100, speed: 5_000_000, cancelling: true);
+            Assert.Equal(string.Empty, Convert(new QueueItemSpeedConverter(), stopping));
+        }
+
         /// <summary>Доля скачанного округляется до целых процентов.</summary>
         [Theory]
         [InlineData(0, 100, "0%")]
@@ -485,8 +512,9 @@ namespace ChillHub.Tests {
             long total = 0,
             string status = "",
             int position = 0,
-            double speed = 0)
-            => new("game", "Игра", state, done, total, status, speed, QueuePosition: position);
+            double speed = 0,
+            bool cancelling = false)
+            => new("game", "Игра", state, done, total, status, speed, QueuePosition: position, Cancelling: cancelling);
 
         private static string Convert(System.Windows.Data.IValueConverter conv, object? value)
             => (string)conv.Convert(value!, typeof(string), null!, CultureInfo.InvariantCulture);

@@ -165,5 +165,60 @@ namespace ChillHub.Tests {
 
             Assert.False(AtomicFile.TryDelete(path));
         }
+
+        /// <summary>
+        /// ОДНОВРЕМЕННЫЕ ЗАПИСИ ОДНОГО ФАЙЛА НЕ ОТМЕНЯЮТ ДРУГ ДРУГА. Имя временного файла
+        /// выводится из имени цели, и открыт он монопольно: до замка опоздавшая запись
+        /// падала с «файл занят другим процессом», а её содержимое пропадало. Так терялся
+        /// кеш хешей — обход папки игры идёт из нескольких мест сразу, и все они в конце
+        /// пишут один файл.
+        /// </summary>
+        [Fact]
+        public void ОдновременныеЗаписиОдногоФайлаНеТеряются() {
+            using var dir = new TempDir();
+            var path = Path.Combine(dir.Root, "cache.json");
+            var failures = new System.Collections.Concurrent.ConcurrentBag<System.Exception>();
+
+            System.Threading.Tasks.Parallel.For(0, 32, i => {
+                try {
+                    AtomicFile.WriteAllText(path, $"запись {i}", new UTF8Encoding(false));
+                }
+                catch (System.Exception ex) {
+                    failures.Add(ex);
+                }
+            });
+
+            Assert.Empty(failures);
+
+            // Победила одна из записей целиком: файл не пустой и не склеен из двух.
+            Assert.StartsWith("запись ", File.ReadAllText(path), System.StringComparison.Ordinal);
+
+            // Временный файл после себя не оставлен ни одной из записей.
+            Assert.False(File.Exists(path + AtomicFile.TempSuffix));
+        }
+
+        /// <summary>
+        /// Замок берётся по развёрнутому пути: один и тот же файл, названный по-разному,
+        /// обязан достаться одному замку — иначе замок не охраняет ничего.
+        /// </summary>
+        [Fact]
+        public void РазныеНаписанияОдногоПутиБерутОдинЗамок() {
+            using var dir = new TempDir();
+            var direct = Path.Combine(dir.Root, "cache.json");
+            var roundabout = Path.Combine(dir.Root, "sub", "..", "cache.json");
+            Directory.CreateDirectory(Path.Combine(dir.Root, "sub"));
+            var failures = new System.Collections.Concurrent.ConcurrentBag<System.Exception>();
+
+            System.Threading.Tasks.Parallel.For(0, 32, i => {
+                try {
+                    AtomicFile.WriteAllText(i % 2 == 0 ? direct : roundabout, $"запись {i}", new UTF8Encoding(false));
+                }
+                catch (System.Exception ex) {
+                    failures.Add(ex);
+                }
+            });
+
+            Assert.Empty(failures);
+        }
     }
 }

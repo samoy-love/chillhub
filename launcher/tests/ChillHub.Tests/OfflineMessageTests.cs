@@ -33,16 +33,36 @@ namespace ChillHub.Tests {
             Assert.Equal("Нет интернета", OfflineMessage.Describe(kind).Title);
         }
 
-        /// <summary>Имя сервера не разрешилось — наружу ходу нет, это не молчание сервера.</summary>
+        /// <summary>Маршрута наружу нет — сеть на компьютере есть только на бумаге.</summary>
         [Theory]
-        [InlineData(SocketError.HostNotFound)]
-        [InlineData(SocketError.TryAgain)]
         [InlineData(SocketError.NetworkUnreachable)]
         [InlineData(SocketError.NetworkDown)]
+        [InlineData(SocketError.HostUnreachable)]
         public void ОтказНаУровнеСетиЧитаетсяКакОтсутствиеИнтернета(SocketError error) {
             var ex = new HttpRequestException("не удалось", new SocketException((int)error));
 
             Assert.Equal(OfflineKind.NoInternet, OfflineMessage.Classify(ex, networkAvailable: true));
+        }
+
+        /// <summary>
+        /// ИМЯ НЕ РАЗРЕШИЛОСЬ — ЭТО НЕ «НЕТ ИНТЕРНЕТА». Причин у такого отказа две и они
+        /// противоположные: ограниченное подключение у игрока и пропавшая запись домена
+        /// у нас. Пока он выдавался за отсутствие интернета, при нашей же аварии человек
+        /// получал единственный совет — идти чинить исправный роутер.
+        /// </summary>
+        [Theory]
+        [InlineData(SocketError.HostNotFound)]
+        [InlineData(SocketError.TryAgain)]
+        [InlineData(SocketError.NoData)]
+        public void НеразрешённоеИмяНеВыдаётсяЗаОтсутствиеИнтернета(SocketError error) {
+            var ex = new HttpRequestException("не удалось", new SocketException((int)error));
+
+            var kind = OfflineMessage.Classify(ex, networkAvailable: true);
+            var text = OfflineMessage.Describe(kind);
+
+            Assert.Equal(OfflineKind.NameNotResolved, kind);
+            Assert.DoesNotContain("Wi-Fi", text.Hint, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("кабель", text.Hint, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -82,6 +102,7 @@ namespace ChillHub.Tests {
         /// <summary>Ни одного адреса, метода запроса и английского слова на экране.</summary>
         [Theory]
         [InlineData(nameof(OfflineKind.NoInternet))]
+        [InlineData(nameof(OfflineKind.NameNotResolved))]
         [InlineData(nameof(OfflineKind.ServerUnreachable))]
         [InlineData(nameof(OfflineKind.ServerError))]
         public void ТекстыБезТехническихПодробностей(string kindName) {

@@ -145,12 +145,17 @@ namespace ChillHub.Core.Game {
                     // Возвращаем позицию в очередь: воркер поднимет её сразу, как только
                     // прежняя попытка домотает. Второй параллельной закачки той же игры при
                     // этом не возникает — позиция одна и та же.
-                    if (existing.State != QueueItemState.Running
-                        || !existing.CancelRequested
-                        || existing.Kind != kind) {
+                    if (existing.State != QueueItemState.Running || !existing.CancelRequested) {
                         return false;
                     }
 
+                    // ВИД РАБОТЫ МОГ И ПОМЕНЯТЬСЯ. Игрок останавливает проверку файлов и
+                    // тут же жмёт «Обновить» — это та же позиция, только делать с ней
+                    // надо другое. Пока вид сверялся, такое нажатие пропадало ровно так
+                    // же, как раньше пропадало любое: кнопка не делала ничего до конца
+                    // остановки. Прежняя попытка всё равно домотает и в очередь вернётся
+                    // уже с новым видом.
+                    existing.Kind = kind;
                     existing.CancelRequested = false;
                     existing.RequeueRequested = true;
                     existing.StatusText = "Останавливаем прежнюю попытку, потом начнём заново…";
@@ -298,7 +303,15 @@ namespace ChillHub.Core.Game {
                 if (interrupted != null) {
                     // Помечаем ДО отмены: ProcessAsync прочтёт флаг, когда RunAsync вернётся
                     // по токену, и вернёт позицию в очередь вместо снятия.
-                    interrupted.RequeueRequested = true;
+                    //
+                    // НО НЕ ПОВЕРХ СНЯТИЯ. Прерываемую позицию игрок мог за мгновение до
+                    // этого остановить сам: он нажал «Остановить», движок ещё вставал, и
+                    // в эту щель пришёл щелчок «вверх» по соседу. Settle() смотрит
+                    // RequeueRequested раньше CancelRequested, поэтому снятая закачка
+                    // возвращалась в очередь и через минуту шла снова — хотя её просили
+                    // прекратить. Просьба игрока весомее: такую позицию только отменяем,
+                    // а сосед и без того встал выше неё перестановкой.
+                    interrupted.RequeueRequested = !interrupted.CancelRequested;
                     interrupted.Cts?.Cancel();
                 }
 
@@ -662,8 +675,12 @@ namespace ChillHub.Core.Game {
 
             internal string IconUrl { get; }
 
-            /// <summary>Что делаем с игрой: качаем или проверяем.</summary>
-            internal QueueTaskKind Kind { get; }
+            /// <summary>
+            /// Что делаем с игрой: качаем или проверяем. Меняется ровно в одном месте —
+            /// когда остановленную позицию запускают заново уже другой кнопкой
+            /// (см. <see cref="DownloadQueue.Enqueue"/>).
+            /// </summary>
+            internal QueueTaskKind Kind { get; set; }
 
             internal QueueItemState State { get; set; } = QueueItemState.Waiting;
 

@@ -14,6 +14,18 @@ namespace ChillHub.Core.Net {
         /// <summary>На компьютере нет сети: кабель, Wi-Fi, самолётный режим.</summary>
         NoInternet,
 
+        /// <summary>
+        /// Сеть есть, а имя сервера не разрешается.
+        /// <para>
+        /// ОТДЕЛЬНЫЙ СЛУЧАЙ, ПОТОМУ ЧТО ПРИЧИН У НЕГО ДВЕ И ОНИ ПРОТИВОПОЛОЖНЫЕ: либо
+        /// подключение ограничено (гостевой Wi-Fi до входа в него, роутер без интернета),
+        /// либо сломалось имя на нашей стороне. Раньше такой отказ выдавался за
+        /// «нет интернета», и при нашей же аварии человек шёл перезагружать исправный
+        /// роутер — ровно то, ради чего весь этот класс и писался.
+        /// </para>
+        /// </summary>
+        NameNotResolved,
+
         /// <summary>Сеть есть, но сервер молчит: не отвечает, обрывает, отдаёт мусор.</summary>
         ServerUnreachable,
 
@@ -66,8 +78,14 @@ namespace ChillHub.Core.Net {
                     return OfflineKind.ServerError;
                 }
 
-                if (current is SocketException socket && IsNoNetwork(socket.SocketErrorCode)) {
-                    return OfflineKind.NoInternet;
+                if (current is SocketException socket) {
+                    if (IsNoNetwork(socket.SocketErrorCode)) {
+                        return OfflineKind.NoInternet;
+                    }
+
+                    if (IsNameFailure(socket.SocketErrorCode)) {
+                        return OfflineKind.NameNotResolved;
+                    }
                 }
             }
 
@@ -84,6 +102,10 @@ namespace ChillHub.Core.Net {
                 "Нет интернета",
                 "Проверьте Wi-Fi или сетевой кабель и попробуйте снова.",
                 "Нет интернета — игры и новости появятся, когда связь вернётся."),
+            OfflineKind.NameNotResolved => new OfflineText(
+                "Не удаётся найти сервер",
+                "Проверьте подключение. Если с ним всё в порядке — подождите, неполадка у нас.",
+                "Не удаётся найти сервер — проверьте подключение или попробуйте позже."),
             OfflineKind.ServerError => new OfflineText(
                 "На сервере неполадки",
                 "С интернетом всё в порядке, сбой на нашей стороне. Попробуйте позже.",
@@ -116,6 +138,7 @@ namespace ChillHub.Core.Net {
         internal static string UpdateCheckFailed(OfflineKind kind) {
             var reason = kind switch {
                 OfflineKind.NoInternet => "нет интернета",
+                OfflineKind.NameNotResolved => "не удаётся найти сервер",
                 OfflineKind.ServerError => "на сервере неполадки",
                 _ => "сервер не отвечает",
             };
@@ -149,12 +172,23 @@ namespace ChillHub.Core.Net {
         /// <param name="error">Код ошибки сокета.</param>
         /// <returns>true, если похоже на отсутствие сети.</returns>
         private static bool IsNoNetwork(SocketError error) => error switch {
-            SocketError.HostNotFound => true,
-            SocketError.TryAgain => true,
-            SocketError.NoData => true,
             SocketError.NetworkDown => true,
             SocketError.NetworkUnreachable => true,
             SocketError.HostUnreachable => true,
+            _ => false,
+        };
+
+        /// <summary>
+        /// Отказ разрешения имени. Сам по себе он не говорит, чья это беда: так выглядит
+        /// и подключение без выхода наружу, и пропавшая запись нашего домена. Поэтому
+        /// случай свой, а не «нет интернета» (см. <see cref="OfflineKind.NameNotResolved"/>).
+        /// </summary>
+        /// <param name="error">Код ошибки сокета.</param>
+        /// <returns>true, если не разрешилось имя.</returns>
+        private static bool IsNameFailure(SocketError error) => error switch {
+            SocketError.HostNotFound => true,
+            SocketError.TryAgain => true,
+            SocketError.NoData => true,
             _ => false,
         };
     }
