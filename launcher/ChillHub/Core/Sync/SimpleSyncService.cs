@@ -610,6 +610,10 @@ namespace ChillHub.Core.Sync {
 
             // Сколько байт взято блоками из старых копий обновляемых файлов.
             long fromOldBlocks = 0;
+
+            // Скольким файлам понадобилась сеть: остальные собраны из старой копии
+            // целиком или взяты из соседней копии игры.
+            long filesFromNetwork = 0;
             int filesDone = 0;
             var total = plan.TotalDownloadBytes;
             var totalFiles = plan.TotalFilesToDownload;
@@ -705,6 +709,7 @@ namespace ChillHub.Core.Sync {
                     TotalBytes = total,
                     FilesDownloaded = Volatile.Read(ref filesDone),
                     TotalFiles = totalFiles,
+                    FilesFromNetwork = (int)Interlocked.Read(ref filesFromNetwork),
                 });
             }
 
@@ -715,6 +720,10 @@ namespace ChillHub.Core.Sync {
                         await sem.WaitAsync(ct).ConfigureAwait(false);
                         tasks.Add(Task.Run(
                             async () => {
+                                // Сеть по этому файлу: по ней он и попадает в счёт
+                                // скачиваемых. Прибавляет её один поток — свой, а читает
+                                // её finally того же потока.
+                                long fileNetwork = 0;
                                 try {
                                     ct.ThrowIfCancellationRequested();
 
@@ -778,7 +787,10 @@ namespace ChillHub.Core.Sync {
                                                 Credit(Math.Min(onDisk, t.Size));
                                                 ReportDownloadProgress();
                                             },
-                                            read => Interlocked.Add(ref fromNetwork, read),
+                                            read => {
+                                                fileNetwork += read;
+                                                Interlocked.Add(ref fromNetwork, read);
+                                            },
                                             fromOld => Interlocked.Add(ref fromOldBlocks, fromOld),
                                             ct).ConfigureAwait(false);
                                     }
@@ -857,6 +869,7 @@ namespace ChillHub.Core.Sync {
 
                                                             // Сюда идёт всё вычитанное из сети, включая
                                                             // перезакачанное: по проводу оно прошло.
+                                                            fileNetwork += read;
                                                             Interlocked.Add(ref fromNetwork, read);
 
                                                             // Ограничение скорости: список токенов общий на все потоки загрузки,
@@ -956,6 +969,10 @@ namespace ChillHub.Core.Sync {
                                     }
                                 }
                                 finally {
+                                    if (fileNetwork > 0) {
+                                        Interlocked.Increment(ref filesFromNetwork);
+                                    }
+
                                     Interlocked.Increment(ref filesDone);
                                     ReportDownloadProgress();
                                     sem.Release();
@@ -999,21 +1016,21 @@ namespace ChillHub.Core.Sync {
 
             // Итоговые цифры скачивания — уже без троттлинга, иначе счётчик файлов
             // может замереть на предпоследнем значении
-            progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+            progress.Report(new SyncProgress { Stage = "Downloading", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles, FilesFromNetwork = (int)filesFromNetwork });
 
             // Верификация (хеши пропустим на моках)
-            progress.Report(new SyncProgress { Stage = "Verifying", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+            progress.Report(new SyncProgress { Stage = "Verifying", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles, FilesFromNetwork = (int)filesFromNetwork });
 
             // Завершение: убрать лишние файлы, опустевшие каталоги и снять маркер. Сами
             // файлы игры уже на своих местах — их поставили потоки загрузки. Фаза синхронная
             // и блокирующая (SafeDeleteFile с ожиданиями, обход дерева каталогов), а
             // вызывающие стартуют ExecuteAsync с UI-потока — уводим её в пул, иначе окно
             // замирает и «Отмена» физически не нажимается.
-            progress.Report(new SyncProgress { Stage = "Activating", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+            progress.Report(new SyncProgress { Stage = "Activating", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles, FilesFromNetwork = (int)filesFromNetwork });
             await Task.Run(() => FinishPlan(plan, deferred, ct), ct).ConfigureAwait(false);
 
             // Финальный сигнал о завершении
-            progress.Report(new SyncProgress { Stage = "Completed", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles });
+            progress.Report(new SyncProgress { Stage = "Completed", BytesDownloaded = downloaded, NetworkBytes = fromNetwork, TotalBytes = total, FilesDownloaded = filesDone, TotalFiles = totalFiles, FilesFromNetwork = (int)filesFromNetwork });
         }
 
         /// <summary>

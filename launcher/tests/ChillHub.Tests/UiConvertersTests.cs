@@ -360,6 +360,74 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// Стадия называет файлы: «12 из 92» читается как шкала, и по ней видно, сколько
+        /// работы осталось, — одни байты этого не говорят.
+        /// </summary>
+        [Fact]
+        public void СтадияНазываетСколькоФайловОбновляется() {
+            var item = Item(QueueItemState.Running, done: 100, total: 1000, speed: 10)
+                with { StatusText = "Скачивание обновления…", FilesDone = 12, FilesTotal = 92 };
+
+            Assert.Equal("Скачивание обновления… · файлы 12 из 92", Convert(new QueueItemStatusConverter(), item));
+        }
+
+        /// <summary>Пока число файлов неизвестно, стадия остаётся сама собой.</summary>
+        [Fact]
+        public void БезЧислаФайловСтадияНеМеняется() {
+            var item = Item(QueueItemState.Running, done: 100, total: 1000, speed: 10)
+                with { StatusText = "Проверка…" };
+
+            Assert.Equal("Проверка…", Convert(new QueueItemStatusConverter(), item));
+        }
+
+        /// <summary>
+        /// Обновление, собранное из кусков старой копии, говорит, сколько из него
+        /// пришло по сети. Без этого «8,1 ГБ / 49,3 ГБ» читается как «мне катят
+        /// 49 гигабайт» — ровно так это и прочитали, когда по сети шло два.
+        /// </summary>
+        [Fact]
+        public void ОбновлениеИзСтаройКопииПоказываетСетевойОбъём() {
+            const long mb = 1024 * 1024;
+            var item = Item(QueueItemState.Running, done: 8000 * mb, total: 49000 * mb, speed: 50 * mb)
+                with { NetworkBytes = 400 * mb, WorkBytesPerSecond = 50 * mb };
+
+            Assert.Equal(
+                $"{HomeFormat.FormatSize(8000 * mb)} / {HomeFormat.FormatSize(49000 * mb)} · по сети {HomeFormat.FormatSize(400 * mb)}",
+                Convert(new QueueItemSizeConverter(), item));
+        }
+
+        /// <summary>
+        /// У обычной загрузки, где по сети идёт всё, второго числа нет: оно повторяло бы
+        /// первое и мешало читать строку.
+        /// </summary>
+        [Fact]
+        public void ОбычнаяЗагрузкаВтороеЧислоНеПоказывает() {
+            const long mb = 1024 * 1024;
+            var item = Item(QueueItemState.Running, done: 5 * mb, total: 20 * mb, speed: mb)
+                with { NetworkBytes = 5 * mb };
+
+            Assert.Equal(
+                $"{HomeFormat.FormatSize(5 * mb)} / {HomeFormat.FormatSize(20 * mb)}",
+                Convert(new QueueItemSizeConverter(), item));
+        }
+
+        /// <summary>
+        /// Остаток времени считается по скорости всей работы, а не сетевой части: иначе
+        /// обновление, где 49 ГБ берутся с диска, а по сети идут два, обещало бы часы
+        /// вместо десяти минут.
+        /// </summary>
+        [Fact]
+        public void ОстатокСчитаетсяПоСкоростиРаботыАНеСети() {
+            const long mb = 1024 * 1024;
+            var item = Item(QueueItemState.Running, done: 100 * mb, total: 700 * mb, speed: 2 * mb)
+                with { NetworkBytes = 10 * mb, WorkBytesPerSecond = 60 * mb };
+
+            Assert.Equal(
+                $"{2.0:0.0} МБ/с · осталось {HomeFormat.FormatEta(10)}",
+                Convert(new QueueItemSpeedConverter(), item));
+        }
+
+        /// <summary>
         /// Пока скорость неизвестна, второй строки нет вовсе: «0,0 МБ/с» на первых
         /// секундах — не сведения, а шум, и остаток по такой скорости бесконечен.
         /// </summary>

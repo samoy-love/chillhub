@@ -60,6 +60,86 @@ namespace ChillHub.Tests {
             Assert.True(display.Indeterminate);
         }
 
+        /// <summary>
+        /// Строка под полосой отвечает на «сколько всего файлов трогает обновление и
+        /// сколько уже готово»: по одним байтам этого не видно, а именно по файлам
+        /// понятно, идёт дело или встало.
+        /// </summary>
+        [Fact]
+        public void СтрокаПодПолосойНазываетФайлыИОбъём() {
+            const long mb = 1024 * 1024;
+            var p = Stage("Downloading");
+            p.TotalBytes = 700 * mb;
+            p.BytesDownloaded = 100 * mb;
+            p.NetworkBytes = 100 * mb;
+            p.FilesDownloaded = 12;
+            p.TotalFiles = 92;
+
+            var display = new SyncProgressView().Describe(p, 5);
+
+            Assert.Equal(
+                $"Файлы: 12 из 92 • {ChillHub.Core.Home.HomeFormat.FormatSize(100 * mb)} из {ChillHub.Core.Home.HomeFormat.FormatSize(700 * mb)}",
+                display.FilesSize);
+        }
+
+        /// <summary>
+        /// Сколько файлов и байт пришло по сети — там же, рядом со скоростью. Файл,
+        /// собранный из своих же кусков, и файл, скачанный целиком, в счётчике файлов
+        /// выглядят одинаково.
+        /// </summary>
+        [Fact]
+        public void СетеваяЧастьНазываетсяФайламиИОбъёмом() {
+            const long mb = 1024 * 1024;
+            var p = Stage("Downloading");
+            p.TotalBytes = 700 * mb;
+            p.BytesDownloaded = 100 * mb;
+            p.NetworkBytes = 10 * mb;
+            p.FilesDownloaded = 12;
+            p.TotalFiles = 92;
+            p.FilesFromNetwork = 9;
+
+            var display = new SyncProgressView().Describe(p, 5);
+
+            Assert.Contains($"По сети: 9 файлов, {ChillHub.Core.Home.HomeFormat.FormatSize(10 * mb)}", display.SpeedEta);
+        }
+
+        /// <summary>
+        /// Обновление, собранное из кусков старой копии, называет сетевой объём и
+        /// считает остаток по скорости работы. Иначе строка обещает часы на обновлении,
+        /// которому осталось десять минут, а цифры читаются как «качаю 49 ГБ».
+        /// </summary>
+        [Fact]
+        public void СобранноеИзСтаройКопииПоказываетСетевойОбъёмИЧестныйОстаток() {
+            const long mb = 1024 * 1024;
+            var p = Stage("Downloading");
+            p.TotalBytes = 700 * mb;
+            p.BytesDownloaded = 100 * mb;
+            p.NetworkBytes = 10 * mb;
+            p.FilesDownloaded = 3;
+            p.TotalFiles = 9;
+
+            var display = new SyncProgressView().Describe(p, 10);
+
+            Assert.Contains($"По сети: 0 файлов, {ChillHub.Core.Home.HomeFormat.FormatSize(10 * mb)}", display.SpeedEta);
+            // Работа идёт 10 МБ/с (100 МБ за 10 с), осталось 600 МБ — минута
+            Assert.Contains(ChillHub.Core.Home.HomeFormat.FormatEta(60), display.SpeedEta);
+            Assert.Contains($"{1.0:0.0} МБ/с", display.SpeedEta);
+        }
+
+        /// <summary>У обычной загрузки о сети отдельно не говорится: по ней идёт всё.</summary>
+        [Fact]
+        public void ОбычнаяЗагрузкаОСетиОтдельноНеГоворит() {
+            const long mb = 1024 * 1024;
+            var p = Stage("Downloading");
+            p.TotalBytes = 100 * mb;
+            p.BytesDownloaded = 50 * mb;
+            p.NetworkBytes = 50 * mb;
+
+            var display = new SyncProgressView().Describe(p, 5);
+
+            Assert.DoesNotContain("По сети", display.SpeedEta);
+        }
+
         /// <summary>Скачивание переводит бар в проценты: только тут видно, что процесс идёт.</summary>
         [Fact]
         public void СкачиваниеПоказываетПроценты() {
@@ -129,7 +209,7 @@ namespace ChillHub.Tests {
 
             var display = new SyncProgressView().Describe(p, 1);
 
-            Assert.StartsWith("3/10 • ", display.FilesSize, StringComparison.Ordinal);
+            Assert.StartsWith("Файлы: 3 из 10 • ", display.FilesSize, StringComparison.Ordinal);
         }
 
         /// <summary>
@@ -238,7 +318,7 @@ namespace ChillHub.Tests {
             Assert.Equal(25.0, shown.Value);
             Assert.False(shown.Indeterminate);
             Assert.Empty(shown.SpeedEta!);
-            Assert.Contains("3/12", shown.FilesSize!);
+            Assert.Contains("Файлы: 3 из 12", shown.FilesSize!);
         }
 
         /// <summary>
