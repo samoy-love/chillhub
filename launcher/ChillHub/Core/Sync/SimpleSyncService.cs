@@ -544,9 +544,7 @@ namespace ChillHub.Core.Sync {
                 foreach (var checkedRoot in EnumerateDistinctDrives(plan.LocalRoot, plan.ApplyRoot)) {
                     var drive = new DriveInfo(checkedRoot);
                     if (drive.AvailableFreeSpace < required) {
-                        throw new IOException(
-                            $"Недостаточно свободного места на диске {checkedRoot}. " +
-                            $"Требуется {required} байт, доступно {drive.AvailableFreeSpace} байт.");
+                        throw new NotEnoughSpaceException(checkedRoot, required, drive.AvailableFreeSpace);
                     }
                 }
             }

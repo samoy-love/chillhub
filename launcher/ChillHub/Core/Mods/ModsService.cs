@@ -192,6 +192,20 @@ namespace ChillHub.Core.Mods {
                     ModsSyncOutcome.Failed, mods.Version, 0, 0,
                     "Сервер прислал некорректный манифест модпака. Сообщите об этом — подробности уже в журнале.");
             }
+            catch (NotEnoughSpaceException ex) {
+                // МЕСТО КОНЧИЛОСЬ — ЭТО НЕ «ПОПРОБУЙТЕ ЕЩЁ РАЗ».
+                //
+                // Модпак весит до полутора гигабайт и ставится ПЕРВЫМ, до того как
+                // синхронизация игры доберётся до своей проверки свободного места. Пока
+                // отказ приезжал сюда обычным IOException, игроку предлагали повторить
+                // ровно то, что гарантированно повторится, а в статистику это уходило
+                // как общий сбой — то есть «ничего не качается» из обратной связи не
+                // отличалось от обрыва сети.
+                Logging.Logger.Error(ex, "[mods] места на диске не хватает");
+                Metrics.MetricsService.Error("no_disk_space", game.GameId);
+                return new ModsSyncResult(
+                    ModsSyncOutcome.Failed, mods.Version, 0, 0, NoSpaceMessage(ex));
+            }
             catch (Exception ex) {
                 Logging.Logger.Error(ex, "[mods] ModsService.EnsureAsync");
                 Metrics.MetricsService.Error("mods_sync_failed", game.GameId);
@@ -200,6 +214,17 @@ namespace ChillHub.Core.Mods {
                     "Не удалось установить моды. Попробуйте ещё раз.");
             }
         }
+
+        /// <summary>
+        /// Говорит, сколько освободить и где. Диск назван потому, что модпак ложится в
+        /// папку игры, а она у копии из Steam может стоять на совсем другом томе, чем
+        /// сборки Chill Hub, — «не хватает места» без буквы отправляет чистить не тот.
+        /// </summary>
+        /// <param name="ex">Отказ по месту.</param>
+        /// <returns>Текст для игрока.</returns>
+        internal static string NoSpaceMessage(NotEnoughSpaceException ex) =>
+            $"На диске {ex.Drive} не хватает места для модов: освободите " +
+            $"{HomeFormat.FormatSize(ex.MissingBytes)} и повторите.";
 
         /// <summary>
         /// Другие папки этой же игры, где модпак уже может стоять.
