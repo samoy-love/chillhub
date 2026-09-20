@@ -55,6 +55,8 @@ namespace ChillHub.Core.Game {
     /// Номер позиции в очереди, начиная с 1. Ожидающая карточка сообщала только «Ждёт
     /// очереди…» — из трёх одинаковых надписей нельзя было понять, какая пойдёт следующей.
     /// </param>
+    /// <param name="FilesDone">Сколько файлов обновления уже готово.</param>
+    /// <param name="FilesTotal">Сколько файлов обновление трогает всего.</param>
     /// <param name="NetworkBytes">
     /// Сколько байт пришло по сети. Меньше <paramref name="BytesDownloaded"/>, когда
     /// файл собран из кусков старой копии на диске: обновление на 49 ГБ бывает
@@ -103,7 +105,9 @@ namespace ChillHub.Core.Game {
         QueueTaskKind Kind = QueueTaskKind.Download,
         bool Cancelling = false,
         long NetworkBytes = 0,
-        double WorkBytesPerSecond = 0);
+        double WorkBytesPerSecond = 0,
+        int FilesDone = 0,
+        int FilesTotal = 0);
 
     /// <summary>
     /// Очередь загрузок игр: то, с чем говорит UI. Реализация — деталь (фаза 1 держит всё

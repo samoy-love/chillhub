@@ -235,6 +235,36 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// Файл, собранный из старой копии целиком, в счёт скачиваемых не идёт: по сети
+        /// по нему не пришло ни байта. Без этого «по сети 92 файла» стояло бы рядом с
+        /// нулевым трафиком.
+        /// </summary>
+        [Fact]
+        public async Task ФайлыСчитаютсяПоТомуКомуПонадобиласьСеть() {
+            var first = BlockData.Random(2 * Bs, 15);
+            var second = BlockData.Random(2 * Bs, 16);
+
+            // Те же блоки, переставленные местами: качать нечего, всё есть на диске.
+            var oldPak = first.Concat(second).ToArray();
+            var newPak = second.Concat(first).ToArray();
+            this.dir.WriteBytes("shuffled.pak", oldPak);
+            this.dir.WriteBytes("cfg.ini", new byte[] { 1, 2, 3 });
+            var cfg = new byte[] { 4, 5, 6, 7 };
+            var server = new RangeServer(("shuffled.pak", newPak), ("cfg.ini", cfg));
+
+            var (plan, progress) = await this.SyncAsync(server, Manifest(true, ("shuffled.pak", newPak), ("cfg.ini", cfg)));
+
+            this.AssertOnDisk(("shuffled.pak", newPak), ("cfg.ini", cfg));
+            Assert.Equal(2, progress.Last.FilesDownloaded);
+            Assert.Equal(2, progress.Last.TotalFiles);
+
+            // По сети понадобился только мелкий файл без блоков
+            Assert.Equal(1, progress.Last.FilesFromNetwork);
+            Assert.Equal(cfg.Length, plan.NetworkBytes);
+            Assert.Equal(4L * Bs, plan.BlockReusedBytes);
+        }
+
+        /// <summary>
         /// Сорвавшееся обновление отчитывается о том, что реально прошло по сети:
         /// не о плане на весь файл и не о нуле.
         /// </summary>

@@ -119,7 +119,12 @@ namespace ChillHub.Core.UI {
             }
 
             if (item.State != QueueItemState.Waiting) {
-                return item.StatusText;
+                // «Скачивание обновления…» не говорит, велика ли работа и сколько её
+                // осталось. Файлы отвечают на это короче любых байт: «12 из 92» видно,
+                // как шкалу, и по ней понятно, стоит ли ждать у экрана.
+                return item.FilesTotal > 0
+                    ? $"{item.StatusText} · файлы {item.FilesDone} из {item.FilesTotal}"
+                    : item.StatusText;
             }
 
             return item.QueuePosition > 1 ? $"В очереди · {item.QueuePosition}-я" : "Следующая в очереди";

@@ -360,6 +360,27 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// Стадия называет файлы: «12 из 92» читается как шкала, и по ней видно, сколько
+        /// работы осталось, — одни байты этого не говорят.
+        /// </summary>
+        [Fact]
+        public void СтадияНазываетСколькоФайловОбновляется() {
+            var item = Item(QueueItemState.Running, done: 100, total: 1000, speed: 10)
+                with { StatusText = "Скачивание обновления…", FilesDone = 12, FilesTotal = 92 };
+
+            Assert.Equal("Скачивание обновления… · файлы 12 из 92", Convert(new QueueItemStatusConverter(), item));
+        }
+
+        /// <summary>Пока число файлов неизвестно, стадия остаётся сама собой.</summary>
+        [Fact]
+        public void БезЧислаФайловСтадияНеМеняется() {
+            var item = Item(QueueItemState.Running, done: 100, total: 1000, speed: 10)
+                with { StatusText = "Проверка…" };
+
+            Assert.Equal("Проверка…", Convert(new QueueItemStatusConverter(), item));
+        }
+
+        /// <summary>
         /// Обновление, собранное из кусков старой копии, говорит, сколько из него
         /// пришло по сети. Без этого «8,1 ГБ / 49,3 ГБ» читается как «мне катят
         /// 49 гигабайт» — ровно так это и прочитали, когда по сети шло два.

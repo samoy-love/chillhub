@@ -495,7 +495,8 @@ namespace ChillHub.Core.Game {
                     // только через сюда, отчётами с полем Stage. Раньше здесь текст не менялся
                     // (оставался entry.StatusText как есть), и статус на карточке замирал на
                     // "Сравнение файлов…" на всё время реального скачивания, пока байты росли.
-                    ReportProgress = (p, _) => this.RaiseProgress(entry, entry.Stage(p), p.BytesDownloaded, p.TotalBytes, p.NetworkBytes),
+                    ReportProgress = (p, _) => this.RaiseProgress(
+                        entry, entry.Stage(p), p.BytesDownloaded, p.TotalBytes, p.NetworkBytes, p.FilesDownloaded, p.TotalFiles),
                     Confirm = this.confirm,
 
                     // Ошибку установки пишут сюда, а не в SetStatus. Пустой колбэк по
@@ -585,8 +586,14 @@ namespace ChillHub.Core.Game {
         }
 
         private void RaiseProgress(
-            Entry entry, string status, long bytesDownloaded = -1, long totalBytes = -1, long networkBytes = -1) {
+            Entry entry, string status, long bytesDownloaded = -1, long totalBytes = -1, long networkBytes = -1,
+            int filesDone = -1, int filesTotal = -1) {
             entry.StatusText = status;
+            if (filesTotal >= 0) {
+                entry.FilesDone = filesDone;
+                entry.FilesTotal = filesTotal;
+            }
+
             if (bytesDownloaded >= 0) {
                 entry.BytesDownloaded = bytesDownloaded;
             }
@@ -689,6 +696,12 @@ namespace ChillHub.Core.Game {
 
             /// <summary>Сколько байт пришло по сети на этот момент.</summary>
             internal long NetworkBytes { get; set; }
+
+            /// <summary>Сколько файлов обновления готово.</summary>
+            internal int FilesDone { get; set; }
+
+            /// <summary>Сколько файлов обновление трогает всего.</summary>
+            internal int FilesTotal { get; set; }
 
             /// <summary>Показания предыдущего замера — база для расчёта скорости.</summary>
             private long lastBytes;
@@ -794,7 +807,9 @@ namespace ChillHub.Core.Game {
                     // экран продолжал показывать её как идущую закачку.
                     this.CancelRequested && this.State == QueueItemState.Running,
                     this.NetworkBytes,
-                    this.WorkBytesPerSecond);
+                    this.WorkBytesPerSecond,
+                    this.FilesDone,
+                    this.FilesTotal);
         }
     }
 }

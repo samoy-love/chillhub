@@ -9,6 +9,16 @@ namespace ChillHub.Core.Sync {
 
         public int TotalFiles { get; set; }
 
+        /// <summary>
+        /// Сколько файлов из <see cref="FilesDownloaded"/> потребовали хоть байта из
+        /// сети. Остальные собраны из старой копии на диске целиком.
+        /// <para>
+        /// Без этого числа «обновляется 92 файла» ничего не говорит о трафике: файл,
+        /// собранный из своих же кусков, и файл, скачанный целиком, выглядят одинаково.
+        /// </para>
+        /// </summary>
+        public int FilesFromNetwork { get; set; }
+
         public long BytesDownloaded { get; set; }
 
         public long TotalBytes { get; set; }

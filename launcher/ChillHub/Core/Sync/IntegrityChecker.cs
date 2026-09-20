@@ -696,22 +696,7 @@ namespace ChillHub.Core.Sync {
 
             var problems = parts.Count > 0 ? string.Join(", ", parts) : "повреждений нет";
             var ver = string.IsNullOrWhiteSpace(version) ? string.Empty : $" (версия {version})";
-            return $"{name}: {total} {PluralizeFileRu(total)}{ver}, {problems}.";
-        }
-
-        // Русское склонение слова «файл» по числу: «2404 файла», а не «2404 файлов».
-        private static string PluralizeFileRu(int n) {
-            var n10 = n % 10;
-            var n100 = n % 100;
-            if (n10 == 1 && n100 != 11) {
-                return "файл";
-            }
-
-            if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) {
-                return "файла";
-            }
-
-            return "файлов";
+            return $"{name}: {total} {ChillHub.Core.Home.HomeFormat.PluralizeFileRu(total)}{ver}, {problems}.";
         }
 
         // Считает файлы манифеста так же, как их считает построитель плана:
