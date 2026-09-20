@@ -360,6 +360,53 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>
+        /// Обновление, собранное из кусков старой копии, говорит, сколько из него
+        /// пришло по сети. Без этого «8,1 ГБ / 49,3 ГБ» читается как «мне катят
+        /// 49 гигабайт» — ровно так это и прочитали, когда по сети шло два.
+        /// </summary>
+        [Fact]
+        public void ОбновлениеИзСтаройКопииПоказываетСетевойОбъём() {
+            const long mb = 1024 * 1024;
+            var item = Item(QueueItemState.Running, done: 8000 * mb, total: 49000 * mb, speed: 50 * mb)
+                with { NetworkBytes = 400 * mb, WorkBytesPerSecond = 50 * mb };
+
+            Assert.Equal(
+                $"{HomeFormat.FormatSize(8000 * mb)} / {HomeFormat.FormatSize(49000 * mb)} · по сети {HomeFormat.FormatSize(400 * mb)}",
+                Convert(new QueueItemSizeConverter(), item));
+        }
+
+        /// <summary>
+        /// У обычной загрузки, где по сети идёт всё, второго числа нет: оно повторяло бы
+        /// первое и мешало читать строку.
+        /// </summary>
+        [Fact]
+        public void ОбычнаяЗагрузкаВтороеЧислоНеПоказывает() {
+            const long mb = 1024 * 1024;
+            var item = Item(QueueItemState.Running, done: 5 * mb, total: 20 * mb, speed: mb)
+                with { NetworkBytes = 5 * mb };
+
+            Assert.Equal(
+                $"{HomeFormat.FormatSize(5 * mb)} / {HomeFormat.FormatSize(20 * mb)}",
+                Convert(new QueueItemSizeConverter(), item));
+        }
+
+        /// <summary>
+        /// Остаток времени считается по скорости всей работы, а не сетевой части: иначе
+        /// обновление, где 49 ГБ берутся с диска, а по сети идут два, обещало бы часы
+        /// вместо десяти минут.
+        /// </summary>
+        [Fact]
+        public void ОстатокСчитаетсяПоСкоростиРаботыАНеСети() {
+            const long mb = 1024 * 1024;
+            var item = Item(QueueItemState.Running, done: 100 * mb, total: 700 * mb, speed: 2 * mb)
+                with { NetworkBytes = 10 * mb, WorkBytesPerSecond = 60 * mb };
+
+            Assert.Equal(
+                $"{2.0:0.0} МБ/с · осталось {HomeFormat.FormatEta(10)}",
+                Convert(new QueueItemSpeedConverter(), item));
+        }
+
+        /// <summary>
         /// Пока скорость неизвестна, второй строки нет вовсе: «0,0 МБ/с» на первых
         /// секундах — не сведения, а шум, и остаток по такой скорости бесконечен.
         /// </summary>

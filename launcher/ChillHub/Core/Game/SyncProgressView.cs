@@ -36,8 +36,14 @@ namespace ChillHub.Core.Game {
 
         private double emaSpeedMBs;
 
+        /// <summary>Сглаженная скорость всей работы, МБ/с: из неё считается остаток.</summary>
+        private double emaWorkMBs;
+
         /// <summary>Сбрасывает сглаживание перед новой операцией.</summary>
-        internal void Reset() => this.emaSpeedMBs = 0.0;
+        internal void Reset() {
+            this.emaSpeedMBs = 0.0;
+            this.emaWorkMBs = 0.0;
+        }
 
         /// <summary>Считает, что показать по одному отчёту о прогрессе.</summary>
         /// <param name="p">Отчёт от службы синхронизации.</param>
@@ -68,17 +74,29 @@ namespace ChillHub.Core.Game {
                         var value = Math.Min(100, Math.Max(0, p.BytesDownloaded * 100.0 / p.TotalBytes));
 
                         // Скорость — по пришедшему из сети: в BytesDownloaded идут и файлы,
-                        // взятые из соседней копии на диске, а копирование быстрее сети в разы.
+                        // взятые из соседней копии на диске, и куски, собранные из старой
+                        // копии самого файла, а это в разы быстрее сети.
                         var instant = elapsedSeconds > 0 ? (p.NetworkBytes / 1024.0 / 1024.0) / elapsedSeconds : 0;
                         this.emaSpeedMBs = this.emaSpeedMBs <= 0 ? instant : ((EmaAlpha * instant) + ((1 - EmaAlpha) * this.emaSpeedMBs));
+
+                        // Остаток времени — по скорости всей работы: у обновления, собранного
+                        // из старой копии, сетевая часть мала, и по ней «осталось» обещало бы
+                        // часы там, где работы на десять минут.
+                        var workMBs = elapsedSeconds > 0 ? (p.BytesDownloaded / 1024.0 / 1024.0) / elapsedSeconds : 0;
+                        this.emaWorkMBs = this.emaWorkMBs <= 0 ? workMBs : ((EmaAlpha * workMBs) + ((1 - EmaAlpha) * this.emaWorkMBs));
                         var remain = p.TotalBytes - p.BytesDownloaded;
-                        var eta = this.emaSpeedMBs > 0 ? (remain / 1024.0 / 1024.0) / this.emaSpeedMBs : 0;
+                        var eta = this.emaWorkMBs > 0 ? (remain / 1024.0 / 1024.0) / this.emaWorkMBs : 0;
+
+                        // Сколько из сделанного пришло по сети — пока разница заметна.
+                        var overNetwork = p.NetworkBytes > 0 && p.NetworkBytes < p.BytesDownloaded * 0.9
+                            ? $" • по сети {FormatSize(p.NetworkBytes)}"
+                            : string.Empty;
                         return new SyncProgressDisplay(
                             what + "Скачивание…",
                             false,
                             value,
                             $"Скорость: {this.emaSpeedMBs:0.0} МБ/с • Осталось: {FormatEta(eta)}",
-                            $"{p.FilesDownloaded}/{p.TotalFiles} • {FormatSize(p.BytesDownloaded)}/{FormatSize(p.TotalBytes)}");
+                            $"{p.FilesDownloaded}/{p.TotalFiles} • {FormatSize(p.BytesDownloaded)}/{FormatSize(p.TotalBytes)}{overNetwork}");
                     }
 
                     return new SyncProgressDisplay(what + "Скачивание…", false, null, null, null);

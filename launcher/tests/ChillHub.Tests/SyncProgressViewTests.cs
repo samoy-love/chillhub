@@ -60,6 +60,43 @@ namespace ChillHub.Tests {
             Assert.True(display.Indeterminate);
         }
 
+        /// <summary>
+        /// Обновление, собранное из кусков старой копии, называет сетевой объём и
+        /// считает остаток по скорости работы. Иначе строка обещает часы на обновлении,
+        /// которому осталось десять минут, а цифры читаются как «качаю 49 ГБ».
+        /// </summary>
+        [Fact]
+        public void СобранноеИзСтаройКопииПоказываетСетевойОбъёмИЧестныйОстаток() {
+            const long mb = 1024 * 1024;
+            var p = Stage("Downloading");
+            p.TotalBytes = 700 * mb;
+            p.BytesDownloaded = 100 * mb;
+            p.NetworkBytes = 10 * mb;
+            p.FilesDownloaded = 3;
+            p.TotalFiles = 9;
+
+            var display = new SyncProgressView().Describe(p, 10);
+
+            Assert.Contains($"по сети {ChillHub.Core.Home.HomeFormat.FormatSize(10 * mb)}", display.FilesSize);
+            // Работа идёт 10 МБ/с (100 МБ за 10 с), осталось 600 МБ — минута
+            Assert.Contains(ChillHub.Core.Home.HomeFormat.FormatEta(60), display.SpeedEta);
+            Assert.Contains($"{1.0:0.0} МБ/с", display.SpeedEta);
+        }
+
+        /// <summary>У обычной загрузки о сети отдельно не говорится: по ней идёт всё.</summary>
+        [Fact]
+        public void ОбычнаяЗагрузкаОСетиОтдельноНеГоворит() {
+            const long mb = 1024 * 1024;
+            var p = Stage("Downloading");
+            p.TotalBytes = 100 * mb;
+            p.BytesDownloaded = 50 * mb;
+            p.NetworkBytes = 50 * mb;
+
+            var display = new SyncProgressView().Describe(p, 5);
+
+            Assert.DoesNotContain("по сети", display.FilesSize);
+        }
+
         /// <summary>Скачивание переводит бар в проценты: только тут видно, что процесс идёт.</summary>
         [Fact]
         public void СкачиваниеПоказываетПроценты() {
