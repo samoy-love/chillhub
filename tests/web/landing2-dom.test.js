@@ -31,7 +31,7 @@ function fixtures() {
     },
     '/api/maintenance': { enabled: false, blocks: {} },
     '/manifests/launcher/latest.json': { version: '1.6.25' },
-    '/downloads/setup.json': { __status: 404 },
+    '/downloads/ChillHub-Setup.exe.json': { __status: 404 },
   };
 }
 
@@ -54,7 +54,10 @@ async function boot(t, overrides, opts) {
     const v = table[key];
     if (v && v.__throw) throw new Error('сеть');
     if (v && v.__status) return { ok: false, status: v.__status, text: async () => '', json: async () => ({}) };
-    return { ok: true, status: 200, text: async () => JSON.stringify(v), json: async () => v };
+    /* Заголовки — как у nginx: раздача статики всегда ставит Last-Modified,
+       и дата сборки установщика берётся именно оттуда. */
+    const headers = { get: (n) => (String(n).toLowerCase() === 'last-modified' ? (v && v.__lastModified) || null : null) };
+    return { ok: true, status: 200, headers, text: async () => JSON.stringify(v), json: async () => v };
   };
 
   /* jsdom не реализует matchMedia. Заглушка отвечает «нет» на все запросы:
@@ -265,7 +268,7 @@ test('кривой срок не ломает баннер', async (t) => {
 
 /* ---------- Факты об установщике ---------- */
 
-test('без setup.json размер, дата и хеш не показываются', async (t) => {
+test('без спутника установщика размер, дата и хеш не показываются', async (t) => {
   const { window } = await boot(t);
   for (const key of ['size', 'builtAt', 'sha256']) {
     const el = window.document.querySelector(`[data-setup="${key}"]`);
@@ -275,9 +278,9 @@ test('без setup.json размер, дата и хеш не показываю
   assert.ok(!/e3b0c442/.test(window.document.body.innerHTML));
 });
 
-test('с setup.json факты появляются и хеш попадает на кнопку', async (t) => {
+test('с спутником установщика факты появляются и хеш попадает на кнопку', async (t) => {
   const { window } = await boot(t, {
-    '/downloads/setup.json': { size: 123731968, builtAt: '2026-09-04T03:12:00Z', sha256: 'abc123' },
+    '/downloads/ChillHub-Setup.exe.json': { size: 123731968, builtAt: '2026-09-04T03:12:00Z', sha256: 'abc123' },
   });
   const size = window.document.querySelector('[data-setup="size"]');
   assert.strictEqual(size.hidden, false);
