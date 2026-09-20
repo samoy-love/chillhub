@@ -148,7 +148,7 @@
       const r = await fetch(url, { headers: { accept: 'application/json' } });
       if (!r.ok) return { data: mock, live: false };
       const data = await r.json();
-      return { data, live: true };
+      return { data, live: true, headers: r.headers };
     } catch {
       return { data: mock, live: false };
     }
@@ -157,16 +157,33 @@
   /* Размер, дата сборки и SHA-256 установщика. Их нельзя ни вычислить на
      странице, ни свёрстать: свёрстанный хеш — это опубликованная рядом с
      кнопкой скачивания ЛОЖЬ, как только соберётся следующая версия.
-     Поэтому их пишет релиз в /downloads/setup.json, а чего нет — того на
+
+     Берутся они из файла, который релиз кладёт РЯДОМ с установщиком:
+     публикация пишет спутник <имя файла>.json, то есть
+     /downloads/ChillHub-Setup.exe.json. Имени setup.json не публиковал
+     никто и никогда — страница спрашивала его каждую загрузку, получала
+     404 и молча оставалась без размера и хеша. Чего нет — того на
      странице не показывается вовсе. */
+  const SETUP_URL = '/downloads/ChillHub-Setup.exe.json';
   const MOCK_SETUP = {};
+
+  /* Даты сборки в спутнике нет: публикация пишет версию, имя, размер и
+     сумму. Дата при этом известна — это время самого файла, которым его
+     раздаёт nginx. Заголовка нет (старый прокси, подменённая сеть) —
+     строка «собран» просто не покажется, как и раньше. */
+  function setupFacts(res) {
+    const data = res.data || {};
+    if (data.builtAt || data.date) return data;
+    const stamp = res.headers && res.headers.get ? res.headers.get('last-modified') : null;
+    return stamp ? Object.assign({}, data, { builtAt: stamp }) : data;
+  }
 
   async function load() {
     const [games, maint, launcher, setup] = await Promise.all([
       get('/api/games', MOCK_GAMES),
       get('/api/maintenance', MOCK_MAINT),
       get('/manifests/launcher/latest.json', MOCK_LAUNCHER),
-      get('/downloads/setup.json', MOCK_SETUP),
+      get(SETUP_URL, MOCK_SETUP),
     ]);
 
     return {
@@ -174,7 +191,7 @@
       games: (games.data.items || []).filter((g) => g && g.gameId),
       maintenance: maint.data || MOCK_MAINT,
       launcherVersion: (launcher.data.version || launcher.data.Version || '').trim(),
-      setup: setup.data || {},
+      setup: setupFacts(setup),
     };
   }
 
