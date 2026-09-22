@@ -90,15 +90,9 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <!-- Нота в своей плашке: одинокий значок на фоне шапки читался как
-                             сбойный символ, а плашка называет строку рядом с ней песней. -->
-                        <Border Grid.Column="0" Width="26" Height="26" Margin="0,0,10,0" VerticalAlignment="Center"
-                                CornerRadius="{DynamicResource Radius.M}" Background="{DynamicResource Brush.Surface2}"
-                                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
-                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE8D6;" FontSize="13"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       Foreground="{DynamicResource Brush.Accent}"/>
-                        </Border>
+                        <!-- Нота без плашки: плашка рядом со строкой читалась как кнопка. -->
+                        <TextBlock Grid.Column="0" FontFamily="Segoe MDL2 Assets" Text="&#xE8D6;" FontSize="14"
+                                   Foreground="{DynamicResource Brush.Accent}" VerticalAlignment="Center" Margin="0,0,10,0"/>
                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                             <StackPanel Orientation="Horizontal" Height="17">
                                 <TextBlock x:Name="KaraokeCurrentText" TextWrapping="NoWrap" FontSize="12.5"
