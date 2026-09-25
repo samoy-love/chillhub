@@ -425,7 +425,7 @@ jobs:
       - name: Отправить покрытие веба в Codecov
         # Приколот к SHA, а не к тегу: тег мутабелен, и у Codecov уже был
         # прецедент компрометации релиза.
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: ./coverage/lcov.info
           flags: web
@@ -524,7 +524,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         # Приколот к SHA, а не к тегу: тег мутабелен, и у Codecov уже был
         # прецедент компрометации релиза.
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: server/coverage.out
           flags: server
@@ -864,7 +864,7 @@ jobs:
       - name: Отправить покрытие клиента в Codecov
         # Приколот к SHA, а не к тегу: тег мутабелен, и у Codecov уже был
         # прецедент компрометации релиза.
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: launcher.cobertura.xml
           flags: launcher
