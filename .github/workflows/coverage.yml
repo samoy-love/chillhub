@@ -51,7 +51,7 @@ jobs:
       - name: Отправить покрытие в Codecov
         # Приколот к SHA, а не к тегу: тег мутабелен, и у Codecov уже был
         # прецедент компрометации релиза.
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: server/coverage.out
           flags: server
@@ -124,7 +124,7 @@ jobs:
         run: test -s launcher.cobertura.xml
 
       - name: Отправить покрытие клиента в Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: launcher.cobertura.xml
           flags: launcher
@@ -160,7 +160,7 @@ jobs:
           node --test tests/web/*.test.js
 
       - name: Отправить покрытие веба в Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: ./coverage/lcov.info
           flags: web
