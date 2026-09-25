@@ -256,12 +256,12 @@ jobs:
   htmlhint-web:
     name: HTMLHint (web)
     # СВОИ ЛЁГКИЕ РАННЕРЫ, А ФОРКИ — В ОБЛАКО.
-    # Метка light — три собственных контейнера (три ядра, 4 ГиБ) с кэшем npm и
+    # Набор home-light — собственные лёгкие раннеры (три ядра, 2 ГиБ) с кэшем npm и
     # тулчейнами на датасете снаружи: он переживает откат, поэтому установка
     # пакетов здесь не ходит в сеть, а канал у нас узкий. Код из форк-PR на
     # собственное железо не попадает — для него остаётся ubuntu-latest, и это
     # условие, а не пожелание: раннер там исполняет чужой код.
-    runs-on: ${{ fromJSON(github.event.pull_request.head.repo.fork && '["ubuntu-latest"]' || '["self-hosted","light"]') }}
+    runs-on: ${{ fromJSON(github.event.pull_request.head.repo.fork && '["ubuntu-latest"]' || '["home-light"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -288,12 +288,12 @@ jobs:
   stylelint-web:
     name: Stylelint (web)
     # СВОИ ЛЁГКИЕ РАННЕРЫ, А ФОРКИ — В ОБЛАКО.
-    # Метка light — три собственных контейнера (три ядра, 4 ГиБ) с кэшем npm и
+    # Набор home-light — собственные лёгкие раннеры (три ядра, 2 ГиБ) с кэшем npm и
     # тулчейнами на датасете снаружи: он переживает откат, поэтому установка
     # пакетов здесь не ходит в сеть, а канал у нас узкий. Код из форк-PR на
     # собственное железо не попадает — для него остаётся ubuntu-latest, и это
     # условие, а не пожелание: раннер там исполняет чужой код.
-    runs-on: ${{ fromJSON(github.event.pull_request.head.repo.fork && '["ubuntu-latest"]' || '["self-hosted","light"]') }}
+    runs-on: ${{ fromJSON(github.event.pull_request.head.repo.fork && '["ubuntu-latest"]' || '["home-light"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -321,12 +321,12 @@ jobs:
   eslint-web:
     name: ESLint (web)
     # СВОИ ЛЁГКИЕ РАННЕРЫ, А ФОРКИ — В ОБЛАКО.
-    # Метка light — три собственных контейнера (три ядра, 4 ГиБ) с кэшем npm и
+    # Набор home-light — собственные лёгкие раннеры (три ядра, 2 ГиБ) с кэшем npm и
     # тулчейнами на датасете снаружи: он переживает откат, поэтому установка
     # пакетов здесь не ходит в сеть, а канал у нас узкий. Код из форк-PR на
     # собственное железо не попадает — для него остаётся ubuntu-latest, и это
     # условие, а не пожелание: раннер там исполняет чужой код.
-    runs-on: ${{ fromJSON(github.event.pull_request.head.repo.fork && '["ubuntu-latest"]' || '["self-hosted","light"]') }}
+    runs-on: ${{ fromJSON(github.event.pull_request.head.repo.fork && '["ubuntu-latest"]' || '["home-light"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -361,12 +361,12 @@ jobs:
   web-tests:
     name: Web tests (node --test)
     # СВОИ ЛЁГКИЕ РАННЕРЫ, А ФОРКИ — В ОБЛАКО.
-    # Метка light — три собственных контейнера (три ядра, 4 ГиБ) с кэшем npm и
+    # Набор home-light — собственные лёгкие раннеры (три ядра, 2 ГиБ) с кэшем npm и
     # тулчейнами на датасете снаружи: он переживает откат, поэтому установка
     # пакетов здесь не ходит в сеть, а канал у нас узкий. Код из форк-PR на
     # собственное железо не попадает — для него остаётся ubuntu-latest, и это
     # условие, а не пожелание: раннер там исполняет чужой код.
-    runs-on: ${{ fromJSON(github.event.pull_request.head.repo.fork && '["ubuntu-latest"]' || '["self-hosted","light"]') }}
+    runs-on: ${{ fromJSON(github.event.pull_request.head.repo.fork && '["ubuntu-latest"]' || '["home-light"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
