@@ -16,7 +16,7 @@ namespace ChillHub.Core.UI {
         public static void ApplyTitleBarTheme(Window window, bool isDark) {
             try {
                 var hwnd = new WindowInteropHelper(window).Handle;
-                if (hwnd == IntPtr.Zero) {
+                if (hwnd == nint.Zero) {
                     return;
                 }
 
@@ -50,7 +50,7 @@ namespace ChillHub.Core.UI {
         }
 
         [DllImport("dwmapi.dll")]
-        private static extern int DwmSetWindowAttribute(IntPtr hwnd, DWMWINDOWATTRIBUTE attribute, ref int pvAttribute, int cbAttribute);
+        private static extern int DwmSetWindowAttribute(nint hwnd, DWMWINDOWATTRIBUTE attribute, ref int pvAttribute, int cbAttribute);
 
         private enum DWMWINDOWATTRIBUTE {
             DWMWA_USE_IMMERSIVE_DARK_MODE = 20,

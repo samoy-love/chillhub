@@ -23,12 +23,12 @@ namespace ChillHub.Pages {
 
     using static ChillHub.Core.Home.HomeFormat;
 
-    /// <summary>
+    /// <content>
     /// Страница отдельной игры: сведения об установке, состояние, прогресс установки или
     /// обновления и наигранное время. Новостей здесь нет: их место — ленты на главной,
     /// а страница игры отвечает на вопрос «что с ней сейчас».
     /// Кнопки «Играть» здесь нет намеренно — запуск остаётся на главной странице.
-    /// </summary>
+    /// </content>
     public partial class GamePage : Page {
         private readonly GameInfo game;
         private readonly HttpClient http = HttpClientProvider.Shared;

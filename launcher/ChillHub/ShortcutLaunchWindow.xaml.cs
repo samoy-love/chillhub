@@ -9,7 +9,7 @@ namespace ChillHub {
 
     using ChillHub.Core.Shell;
 
-    /// <summary>
+    /// <content>
     /// Окно на случай, когда ярлык ведёт в игру, которой в лаунчере уже нет.
     /// <para>
     /// Ярлык открывает главную с выделенной игрой (см. <see cref="Core.Home.GameLocalState"/>),
@@ -22,7 +22,7 @@ namespace ChillHub {
     /// Windows посреди запуска игры выглядит как чужая ошибка, а не как разговор с
     /// лаунчером. Тот же довод, по которому своя палитра ушла из окна самообновления.
     /// </para>
-    /// </summary>
+    /// </content>
     public partial class ShortcutLaunchWindow : Window {
         private readonly ShortcutRequest request;
         private readonly ShortcutOpenAction action;
