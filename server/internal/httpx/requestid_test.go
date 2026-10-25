@@ -21,10 +21,10 @@ func TestRequestIDRejectsHostileValues(t *testing.T) {
 	for _, v := range bad {
 		var seen string
 		h := RequestID()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-			seen = r.Header.Get("X-Request-Id")
+			seen = r.Header.Get("X-Request-ID")
 		}))
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/", nil)
-		req.Header.Set("X-Request-Id", v)
+		req.Header.Set("X-Request-ID", v)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if seen == v {
@@ -33,8 +33,8 @@ func TestRequestIDRejectsHostileValues(t *testing.T) {
 		if seen == "" || len(seen) > maxRequestIDLen {
 			t.Errorf("no sane replacement generated for %q: %q", v, seen)
 		}
-		if rec.Header().Get("X-Request-Id") != seen {
-			t.Errorf("echoed header %q differs from the logged id %q", rec.Header().Get("X-Request-Id"), seen)
+		if rec.Header().Get("X-Request-ID") != seen {
+			t.Errorf("echoed header %q differs from the logged id %q", rec.Header().Get("X-Request-ID"), seen)
 		}
 	}
 }
@@ -45,10 +45,10 @@ func TestRequestIDKeepsSaneValues(t *testing.T) {
 	const want = "0123456789abcdef-req.1:2"
 	var seen string
 	h := RequestID()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		seen = r.Header.Get("X-Request-Id")
+		seen = r.Header.Get("X-Request-ID")
 	}))
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/", nil)
-	req.Header.Set("X-Request-Id", want)
+	req.Header.Set("X-Request-ID", want)
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	if seen != want {
 		t.Fatalf("request id = %q, want %q", seen, want)

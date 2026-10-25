@@ -102,8 +102,7 @@ namespace ChillHub.Core.Mods {
         internal bool ReadyToPlay => this.Action == LaunchAction.Play;
 
         /// <summary>Строка пункта меню целиком.</summary>
-        internal string MenuText => this.ReadyToPlay ? $"Играть: {this.Title}"
-            : string.IsNullOrEmpty(this.Note) ? this.Title : $"{this.Title} — {this.Note}";
+        internal string MenuText => this.ReadyToPlay ? $"Играть: {this.Title}" : string.IsNullOrEmpty(this.Note) ? this.Title : $"{this.Title} — {this.Note}";
     }
 
     /// <summary>

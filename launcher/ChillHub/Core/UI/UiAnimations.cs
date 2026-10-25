@@ -42,7 +42,9 @@ namespace ChillHub.Core.UI {
         /// самообновления, которым знать про состояние главного окна незачем.
         /// </summary>
         public bool Enabled {
-            get => this.enabled;
+            get {
+                return this.enabled;
+            }
 
             set {
                 if (this.enabled == value) {

@@ -16,12 +16,12 @@ namespace ChillHub {
     using ChillHub.Core.SelfUpdate;
     using ChillHub.Core.Sync;
 
-    /// <summary>
+    /// <content>
     /// Окно самообновления. Самой логики обновления здесь нет: она живёт в
     /// <see cref="ChillHub.Core.SelfUpdate"/> и проверяется тестами. Здесь остаются
     /// обработчики событий, отрисовка <see cref="SelfUpdateUiState"/> и три поля
     /// состояния диалога.
-    /// </summary>
+    /// </content>
     public partial class UpdateWindow : Window {
         private readonly HttpClient http = HttpClientProvider.Shared;
         private readonly ISyncService sync = new SimpleSyncService();

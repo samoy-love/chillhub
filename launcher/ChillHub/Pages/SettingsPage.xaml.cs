@@ -16,10 +16,10 @@ namespace ChillHub.Pages {
     using ChillHub.Core.Settings;
     using ChillHub.Core.Shell;
 
-    /// <summary>
+    /// <content>
     /// Страница настроек. Каждая правка применяется сразу (см. <see cref="ApplyNow"/>):
     /// кнопки «Сохранить» нет — с ней правки терялись у тех, кто уходил «Назад».
-    /// </summary>
+    /// </content>
     public partial class SettingsPage : Page {
         /// <summary>
         /// Пока страница заполняется из конфига, обработчики контролов молчат — иначе

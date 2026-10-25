@@ -89,9 +89,9 @@ func TestRemoveVersionWaitsForAPublicationOfTheSameVersion(t *testing.T) {
 	go func() { done <- h.removeVersion("game", "1.0.0") }()
 
 	select {
-	case <-done:
+	case err := <-done:
 		unlock()
-		t.Fatal("удаление прошло, пока версия публикуется: манифест останется без файлов")
+		t.Fatalf("удаление завершилось, пока версия публикуется: %v", err)
 	case <-time.After(100 * time.Millisecond):
 	}
 

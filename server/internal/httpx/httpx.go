@@ -61,7 +61,7 @@ func logLine(label string, r *http.Request, status int, dur time.Duration) strin
 		b.WriteByte(' ')
 	}
 	fmt.Fprintf(&b, "%s %s %d %s", r.Method, r.URL.String(), status, dur)
-	if reqID := sanitizeRequestID(r.Header.Get("X-Request-Id")); reqID != "" {
+	if reqID := sanitizeRequestID(r.Header.Get("X-Request-ID")); reqID != "" {
 		b.WriteString(" reqid=")
 		b.WriteString(reqID)
 	}
@@ -97,7 +97,7 @@ func NoStore(h http.Handler) http.Handler {
 	})
 }
 
-// maxRequestIDLen bounds an incoming X-Request-Id.
+// maxRequestIDLen bounds an incoming X-Request-ID.
 const maxRequestIDLen = 64
 
 // sanitizeRequestID returns the caller's request id if it is safe to keep, or
@@ -126,12 +126,12 @@ func sanitizeRequestID(v string) string {
 	return v
 }
 
-// RequestID middleware: ensures each request has an X-Request-Id header
+// RequestID middleware: ensures each request has an X-Request-ID header
 // (a sane incoming value is preserved, anything else is replaced).
 func RequestID() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			rid := sanitizeRequestID(r.Header.Get("X-Request-Id"))
+			rid := sanitizeRequestID(r.Header.Get("X-Request-ID"))
 			if rid == "" {
 				// generate 16 random bytes as hex (32 chars)
 				var b [16]byte
@@ -141,9 +141,9 @@ func RequestID() func(http.Handler) http.Handler {
 					rid = time.Now().UTC().Format("20060102150405.000000000")
 				}
 				r = r.Clone(r.Context())
-				r.Header.Set("X-Request-Id", rid)
+				r.Header.Set("X-Request-ID", rid)
 			}
-			w.Header().Set("X-Request-Id", rid)
+			w.Header().Set("X-Request-ID", rid)
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -218,8 +218,8 @@ func (p corsPolicy) apply(w http.ResponseWriter, r *http.Request) {
 		p.echoAllowedOrigin(w, r)
 	}
 	w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "*, Authorization, Content-Type, X-Requested-With, X-Request-Id")
-	w.Header().Set("Access-Control-Expose-Headers", "X-Request-Id, Content-Length")
+	w.Header().Set("Access-Control-Allow-Headers", "*, Authorization, Content-Type, X-Requested-With, X-Request-ID")
+	w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, Content-Length")
 }
 
 // echoAllowedOrigin echoes the request Origin back only when it is on the

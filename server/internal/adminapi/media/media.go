@@ -482,8 +482,7 @@ func runFFmpegTranscode(args []string) error {
 	}
 	if err != nil {
 		exitCode := 0
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
+		if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 			exitCode = ee.ExitCode()
 		}
 		log.Printf("ffmpeg failed (code=%d) exe=%q args=%q output:\n%s", exitCode, exe, args, string(out))

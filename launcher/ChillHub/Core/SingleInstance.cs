@@ -240,7 +240,7 @@ namespace ChillHub.Core {
                         otherFound = true;
 
                         var handle = other.MainWindowHandle;
-                        if (handle == IntPtr.Zero) {
+                        if (handle == nint.Zero) {
                             // Хендла нет — скорее всего окно свёрнуто в трей (Window.Hide()).
                             // Показать его тут нечем, но сигнал events выше уже ушёл слушателю.
                             continue;
@@ -290,11 +290,11 @@ namespace ChillHub.Core {
 
             [DllImport("user32.dll")]
             [return: MarshalAs(UnmanagedType.Bool)]
-            internal static extern bool SetForegroundWindow(IntPtr hWnd);
+            internal static extern bool SetForegroundWindow(nint hWnd);
 
             [DllImport("user32.dll")]
             [return: MarshalAs(UnmanagedType.Bool)]
-            internal static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+            internal static extern bool ShowWindow(nint hWnd, int nCmdShow);
         }
     }
 }

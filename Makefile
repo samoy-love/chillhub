@@ -123,14 +123,14 @@ lint-web:
 	@echo [lint:web] HTMLHint (landing + server/admin_ui)
 	npx -y htmlhint@1.9.2 "landing/**/*.html" "server/admin_ui/**/*.html"
 	@echo [lint:web] Stylelint (landing + server/admin_ui)
-	npx -y stylelint@17.14.1 "landing/**/*.css" "server/admin_ui/**/*.css"
+	npx -y stylelint@17.16.0 "landing/**/*.css" "server/admin_ui/**/*.css"
 	@echo [lint:web] ESLint (landing + server/admin_ui)
 # @eslint/js ставится ЛОКАЛЬНО, а не через npx: eslint.config.js импортирует
 # базовый набор по имени, а имя разрешается от каталога конфига — из временного
 # каталога npx пакет не виден. --max-warnings 0 здесь по той же причине, что и
 # в CI: без него предупреждения не роняют прогон.
 	npm i --no-save @eslint/js@10.0.1
-	npx -y eslint@10.8.0 --max-warnings 0 "landing/**/*.js" "server/admin_ui/**/*.js"
+	npx -y eslint@10.13.0 --max-warnings 0 "landing/**/*.js" "server/admin_ui/**/*.js"
 
 # Go: Prefer golangci-lint like CI; fallback to vet/fmt if unavailable
 lint-go:
