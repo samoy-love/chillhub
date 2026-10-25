@@ -20,6 +20,16 @@ namespace ChillHub.Tests {
     /// </para>
     /// </summary>
     public class SelfUpdatePrecheckTests {
+        /// <summary>Ручная проверка не выдаёт отсутствие ответа за актуальную версию.</summary>
+        [Fact]
+        public void РучнаяПроверкаРазличаетСбойАктуальностьИЗанятость() {
+            Assert.Equal("Установлена последняя версия", SelfUpdatePrecheck.ManualStatusText(SelfUpdateState.UpToDate));
+            Assert.Contains("Не удалось проверить", SelfUpdatePrecheck.ManualStatusText(SelfUpdateState.CheckFailed));
+            Assert.Contains("уже выполняется", SelfUpdatePrecheck.ManualStatusText(null));
+            Assert.Empty(SelfUpdatePrecheck.ManualStatusText(SelfUpdateState.UpdateAvailable));
+        }
+
+
         /// <summary>
         /// Актуальная версия и никакого исхода прошлого обновления — окно пропускаем
         /// и сразу показываем лаунчер.

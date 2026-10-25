@@ -93,8 +93,8 @@ test('провал называет причину, а не только фак�
   assert.match(s.text, /4 из 300/);
 });
 
-test('отмена обещает, что за собой убрали', () => {
-  assert.match(V.uploadStatus({ phase: 'aborted' }).text, /убрано с сервера/);
+test('отмена не обещает неподтверждённую очистку сервера', () => {
+  assert.match(V.uploadStatus({ phase: 'aborted' }).text, /отменена/);
 });
 
 test('пока куски летят, предлагается только отмена', () => {
@@ -866,4 +866,8 @@ test('список заметок идёт целиком, а обычный с�
   const rows = [{ id: 'a', title: 'Заметка' }];
   assert.match(V.pickList(rows, { full: true }), /<div class="pick pick--full" role="listbox">/);
   assert.match(V.pickList(rows), /<div class="pick" role="listbox">/);
+});
+
+test('повтор недоступен, пока отмена не завершилась', () => {
+  assert.deepStrictEqual(V.uploadButtons({ phase: 'cancelling' }), []);
 });

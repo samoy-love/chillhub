@@ -24,16 +24,28 @@
     const XHRCtor = (deps && deps.XHR) || XMLHttpRequest;
     return new Promise((resolve) => {
       const xhr = new XHRCtor();
+      const signal = deps && deps.signal;
+      const finish = (result) => {
+        if (signal) signal.removeEventListener('abort', cancel);
+        resolve(result);
+      };
+      const cancel = () => {
+        xhr.abort();
+        finish({ ok: false, status: 0, json: null });
+      };
+      if (signal && signal.aborted) { finish({ ok: false, status: 0, json: null }); return; }
       xhr.open('PUT', url);
       xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded); };
       xhr.onreadystatechange = () => {
         if (xhr.readyState === 4) {
           let json = null;
           try { json = JSON.parse(xhr.responseText || 'null'); } catch (_) { /* not JSON */ }
-          resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, json });
+          finish({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, json });
         }
       };
-      xhr.onerror = () => resolve({ ok: false, status: 0, json: null });
+      xhr.onerror = () => finish({ ok: false, status: 0, json: null });
+      xhr.onabort = () => finish({ ok: false, status: 0, json: null });
+      if (signal) signal.addEventListener('abort', cancel, { once: true });
       xhr.send(blob);
     });
   }
@@ -59,15 +71,17 @@
     const retryDelayMs = o.retryDelayMs || 400;
     const put = o.put || putChunkXHR;
     let attempts = 0;
-    while (attempts < maxAttempts) {
+    while (attempts < maxAttempts && !(o.signal && o.signal.aborted)) {
       attempts++;
       try {
         const r = await put(o.url, blob, o.onProgress, o.deps);
+        if (o.signal && o.signal.aborted) break;
         if (r.ok) return { ok: true, attempts, exists: false, writeMs: Number((r.json && r.json.writeMs) || 0) | 0 };
         if (r.status === 409) return { ok: true, attempts, exists: true, writeMs: 0 };
         if (o.onAttemptFailed) o.onAttemptFailed({ index, attempts, status: r.status });
         await new Promise((res) => setTimeout(res, retryDelayMs * attempts));
       } catch (e) {
+        if (o.signal && o.signal.aborted) break;
         if (o.onAttemptFailed) o.onAttemptFailed({ index, attempts, error: e });
         await new Promise((res) => setTimeout(res, retryDelayMs * attempts));
       }

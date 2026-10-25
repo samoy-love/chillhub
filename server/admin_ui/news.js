@@ -154,6 +154,7 @@
   /* Ключ включает адрес целиком: заметка про игру и заметка лаунчера с
      одинаковым именем — разные заметки, и путать их черновики нельзя. */
   function draftKey(post) {
+    if (post && post.existing === false) return KEY + 'new';
     const a = address(post);
     return KEY + a.scope + ':' + (a.gameId || '-') + ':' + (a.slug || 'new');
   }
@@ -170,7 +171,7 @@
         draftKey(post),
         JSON.stringify({
           at: Date.now(),
-          post: { slug: norm(post.slug), gameId: norm(post.gameId), markdown: text(post.markdown), coverUrl: norm(post.coverUrl) },
+          post: { existing: post.existing, slug: norm(post.slug), gameId: norm(post.gameId), markdown: text(post.markdown), coverUrl: norm(post.coverUrl) },
         })
       );
       return true;

@@ -597,21 +597,21 @@ namespace ChillHub {
 
         /// <summary>
         /// Проверка обновления лаунчера по явной просьбе пользователя (кнопка в настройках).
-        /// В отличие от фоновой (<see cref="RunSelfUpdateCheckAsync"/>) не молчит, когда
-        /// версия актуальна: возвращает false, и вызывающий говорит об этом сам. Активная
+        /// Возвращает результат проверки, чтобы настройки отличали актуальную версию
+        /// от отсутствия связи. Активная
         /// закачка игры её не откладывает — человек нажал кнопку и ждёт ответа сейчас.
         /// </summary>
-        /// <returns>True — обновление есть и диалог показан; false — установлена последняя версия.</returns>
-        internal async Task<bool> CheckForLauncherUpdateAsync() {
+        /// <returns>Результат проверки; null — другая проверка уже выполняется.</returns>
+        internal async Task<Core.SelfUpdate.SelfUpdateState?> CheckForLauncherUpdateAsync() {
             if (this.selfUpdateCheckRunning) {
-                return false;
+                return null;
             }
 
             this.selfUpdateCheckRunning = true;
             try {
                 var precheck = await UpdateWindow.PrecheckAsync();
                 if (!precheck.NeedsWindow) {
-                    return false;
+                    return precheck.Decision.State;
                 }
 
                 var upd = new UpdateWindow(precheck) {
@@ -619,7 +619,7 @@ namespace ChillHub {
                     WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 };
                 upd.ShowDialog();
-                return true;
+                return precheck.Decision.State;
             }
             finally {
                 this.selfUpdateCheckRunning = false;

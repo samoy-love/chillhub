@@ -62,6 +62,8 @@
      «да» не читая. */
   function ask(q) {
     return new Promise((resolve) => {
+      const previousFocus = document.activeElement;
+      const modal = {};
       const back = document.createElement('div');
       back.className = 'modal-back';
       back.innerHTML = `
@@ -79,12 +81,21 @@
       back.querySelector('[data-yes]').textContent = q.ok;
 
       const close = (answer) => {
+        const index = sheetStack.indexOf(modal);
+        if (index < 0) return;
+        const wasTop = index === sheetStack.length - 1;
+        sheetStack.splice(index, 1);
         back.remove();
         document.removeEventListener('keydown', onKey);
+        if (wasTop && previousFocus && previousFocus.isConnected) previousFocus.focus();
         resolve(answer);
       };
       const onKey = (e) => {
-        if (e.key === 'Escape') close(false);
+        if (e.key === 'Escape' && sheetStack[sheetStack.length - 1] === modal) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          close(false);
+        }
       };
 
       back.querySelector('[data-no]').addEventListener('click', () => close(false));
@@ -92,6 +103,7 @@
       back.addEventListener('click', (e) => {
         if (e.target === back) close(false);
       });
+      sheetStack.push(modal);
       document.addEventListener('keydown', onKey);
 
       document.body.append(back);
@@ -812,7 +824,10 @@
      редактора заметки), — не то же самое, и его не трогаем. */
   let openedSheet = null;
 
+  const sheetStack = [];
+
   function openSheet(o) {
+    const previousFocus = document.activeElement;
     const host = document.createElement('div');
     host.innerHTML = V().sheet(o);
     const back = host.firstElementChild;
@@ -828,21 +843,31 @@
         if (f) f.innerHTML = html;
       },
       close: () => {
+        const index = sheetStack.indexOf(h);
+        if (index < 0) return;
+        const wasTop = index === sheetStack.length - 1;
+        sheetStack.splice(index, 1);
         if (h.onClose) h.onClose();
         back.remove();
         document.removeEventListener('keydown', onKey);
         if (openedSheet === h) openedSheet = null;
+        if (wasTop && previousFocus && previousFocus.isConnected) previousFocus.focus();
       },
       onClose: null,
     };
 
     const onKey = (e) => {
-      if (e.key === 'Escape') h.close();
+      if (e.key === 'Escape' && sheetStack[sheetStack.length - 1] === h) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        h.close();
+      }
     };
     back.querySelector('[data-sheet-close]').addEventListener('click', () => h.close());
     back.addEventListener('click', (e) => {
       if (e.target === back) h.close();
     });
+    sheetStack.push(h);
     document.addEventListener('keydown', onKey);
     back.querySelector('[data-sheet-close]').focus();
     openedSheet = h;
@@ -917,6 +942,7 @@
 
     let ctrl = null;
     let uploadId = '';
+    let running = false;
 
     /* Что уже лежит у модпака, спрашиваем у сервера: список сборок в
        разделе знает только новейшую, а заливка поверх активной опасна. */
@@ -966,12 +992,16 @@
     };
 
     async function start(file) {
+      if (running) return;
+      running = true;
       const params = window.CH2_UPLOAD_PARAMS
         ? { chunkSize: window.CH2_UPLOAD_PARAMS.size || window.CH2Upload.DEFAULT_CHUNK, concurrency: window.CH2_UPLOAD_PARAMS.streams }
         : window.pickUploadParams
           ? window.pickUploadParams(file.size, {})
           : { chunkSize: window.CH2Upload.DEFAULT_CHUNK, concurrency: 4 };
-      ctrl = new AbortController();
+      const operation = new AbortController();
+      ctrl = operation;
+      uploadId = '';
       st = Object.assign({}, st, {
         phase: 'init',
         file: { name: file.name, size: file.size },
@@ -1000,8 +1030,10 @@
               pendingBytes: window.pendingBytes,
             },
             concurrency: () => params.concurrency,
-            signal: ctrl.signal,
+            signal: operation.signal,
             on: (ev) => {
+              if (ev.uploadId) uploadId = ev.uploadId;
+              if (operation.signal.aborted) return;
               st = Object.assign({}, st, ev);
 
               /* Оценщику скармливаем байты, а не куски: кусок в 8 МБ
@@ -1019,11 +1051,13 @@
             },
           }
         );
+        if (operation.signal.aborted) return;
         uploadId = res.uploadId;
 
         st = Object.assign({}, st, { phase: 'process', progress: 1 });
         draw(true);
         const done = await window.CH2Upload.process(uploadId, {
+          signal: operation.signal,
           fetch: window.fetch.bind(window),
           ndjson: { readNdjsonStream: window.readNdjsonStream },
           format: window.CH2Format,
@@ -1033,6 +1067,7 @@
           },
         });
 
+        if (operation.signal.aborted) return;
         st = done.ok
           ? Object.assign({}, st, { phase: 'done', activatable: Boolean(st.gameId) })
           : Object.assign({}, st, { phase: 'failed', message: done.message });
@@ -1042,8 +1077,14 @@
           if (meta.onDone) meta.onDone();
         }
       } catch (e) {
-        st = Object.assign({}, st, { phase: 'failed', message: (e && e.message) || 'сбой' });
+        st = Object.assign({}, st, { phase: operation.signal.aborted ? 'aborted' : 'failed', message: (e && e.message) || 'сбой' });
         draw(true);
+      } finally {
+        running = false;
+        if (operation.signal.aborted) {
+          st = Object.assign({}, st, { phase: 'aborted' });
+          draw(true);
+        }
       }
     }
 
@@ -1084,11 +1125,11 @@
       const b = e.target.closest('[data-flow]');
       if (!b) return;
       const act = b.dataset.flow;
-      if (act === 'pick' || act === 'retry') input.click();
+      if ((act === 'pick' || act === 'retry') && !running) input.click();
       if (act === 'abort') {
         if (ctrl) ctrl.abort();
         if (uploadId) window.CH2Upload.abort(API, uploadId);
-        st = Object.assign({}, st, { phase: 'aborted' });
+        st = Object.assign({}, st, { phase: 'cancelling' });
         draw(true);
       }
       if (act === 'activate') {
@@ -1401,7 +1442,7 @@
       published: false,
       existing: false,
     };
-    newsEdit.draft = null;
+    newsEdit.draft = window.CH2News.readDraft(window.localStorage, newsEdit.post);
     if (location.hash.slice(1).split('?')[0] === 'news') route();
     else location.hash = '#news';
   }
@@ -3213,6 +3254,7 @@
       if (slugField && !slugField.dataset.touched) {
         slugField.value = N.suggestSlug(N.titleOf(newsEdit.post.markdown));
         newsEdit.post.slug = slugField.value;
+        N.saveDraft(window.localStorage, newsEdit.post);
       }
       drawNewsHeadline();
     });

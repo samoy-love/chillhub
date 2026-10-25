@@ -101,7 +101,8 @@
     if (s.phase === 'process') return { text: 'Разбираем архив и считаем хеши', tone: '' };
     if (s.phase === 'done') return { text: 'Готово. Игрокам версия пока не ушла — это отдельное решение.', tone: 'ok' };
     if (s.phase === 'failed') return { text: 'Не вышло: ' + (s.message || 'сбой'), tone: 'bad' };
-    if (s.phase === 'aborted') return { text: 'Отменено, недозалитое убрано с сервера', tone: 'warn' };
+    if (s.phase === 'cancelling') return { text: 'Останавливаем загрузку…', tone: 'warn' };
+    if (s.phase === 'aborted') return { text: 'Загрузка отменена', tone: 'warn' };
     return { text: '', tone: '' };
   }
 
@@ -115,6 +116,7 @@
   function uploadButtons(st, upload) {
     const s = st || {};
     const phase = s.phase || 'idle';
+    if (phase === 'cancelling') return [];
     if (phase === 'idle') {
       /* Пока версия не годится, файл выбирать незачем: сервер откажет,
          и полтора гигабайта уйдут в пустоту. */

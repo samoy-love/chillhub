@@ -207,3 +207,25 @@ test('runWorkerPool: onActiveChange репортит текущее число �
   await runWorkerPool([0, 1], () => 1, worker, (active) => seen.push(active));
   assert.deepStrictEqual(seen, [1, 0, 1, 0]);
 });
+
+test('отмена прерывает текущий XHR и не запускает повтор', async () => {
+  const ctrl = new AbortController();
+  let xhr;
+  let sent = 0;
+  let aborted = 0;
+  class XHR {
+    constructor() { this.upload = {}; xhr = this; }
+    open() {}
+    send() { sent++; }
+    abort() { aborted++; this.onabort(); }
+  }
+  const pending = uploadChunkWithRetries('u1', 0, {}, {
+    url: '/chunk', signal: ctrl.signal, deps: { XHR, signal: ctrl.signal }, retryDelayMs: 1,
+  });
+  assert.ok(xhr);
+  ctrl.abort();
+  const result = await pending;
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(sent, 1);
+  assert.strictEqual(aborted, 1);
+});
