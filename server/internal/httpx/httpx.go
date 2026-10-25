@@ -97,7 +97,7 @@ func NoStore(h http.Handler) http.Handler {
 	})
 }
 
-// maxRequestIDLen bounds an incoming X-Request-Id.
+// maxRequestIDLen bounds an incoming X-Request-ID.
 const maxRequestIDLen = 64
 
 // sanitizeRequestID returns the caller's request id if it is safe to keep, or
@@ -126,7 +126,7 @@ func sanitizeRequestID(v string) string {
 	return v
 }
 
-// RequestID middleware: ensures each request has an X-Request-Id header
+// RequestID middleware: ensures each request has an X-Request-ID header
 // (a sane incoming value is preserved, anything else is replaced).
 func RequestID() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -218,8 +218,8 @@ func (p corsPolicy) apply(w http.ResponseWriter, r *http.Request) {
 		p.echoAllowedOrigin(w, r)
 	}
 	w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "*, Authorization, Content-Type, X-Requested-With, X-Request-Id")
-	w.Header().Set("Access-Control-Expose-Headers", "X-Request-Id, Content-Length")
+	w.Header().Set("Access-Control-Allow-Headers", "*, Authorization, Content-Type, X-Requested-With, X-Request-ID")
+	w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, Content-Length")
 }
 
 // echoAllowedOrigin echoes the request Origin back only when it is on the

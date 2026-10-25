@@ -167,7 +167,7 @@ func TestMissesGoThroughTheMiddlewareChain(t *testing.T) {
 			t.Fatalf("%s %s = %d, want %s", c.method, c.path, rec.Code, c.code)
 		}
 		if rec.Header().Get("X-Request-ID") == "" {
-			t.Errorf("%s %s: no X-Request-Id, the chain did not run", c.method, c.path)
+			t.Errorf("%s %s: no X-Request-ID, the chain did not run", c.method, c.path)
 		}
 		if rec.Header().Get("Access-Control-Allow-Origin") == "" {
 			t.Errorf("%s %s: no CORS header, the chain did not run", c.method, c.path)

@@ -39,7 +39,7 @@ func TestPreflightIsAnsweredBeforeAuth(t *testing.T) {
 	}
 }
 
-// X-Request-Id, отданный клиенту, обязан стоять и в строке журнала: иначе
+// X-Request-ID, отданный клиенту, обязан стоять и в строке журнала: иначе
 // «пришлите номер запроса» ничего не находит в логе. RequestID для этого
 // должен быть СНАРУЖИ Logging.
 func TestRequestIDReachesTheAccessLog(t *testing.T) {
@@ -61,7 +61,7 @@ func TestRequestIDReachesTheAccessLog(t *testing.T) {
 	}
 	rid := w.Header().Get("X-Request-ID")
 	if rid == "" {
-		t.Fatal("ответ ушёл без X-Request-Id")
+		t.Fatal("ответ ушёл без X-Request-ID")
 	}
 	if !strings.Contains(buf.String(), "reqid="+rid) {
 		t.Fatalf("журнал не знает выданного номера %q:\n%s", rid, buf.String())
