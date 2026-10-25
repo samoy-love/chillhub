@@ -436,6 +436,23 @@ namespace ChillHub.Tests {
             sync.ExecuteGate!.Release(10);
         }
 
+        /// <summary>Обработанная движком ошибка должна остаться ошибкой в очереди.</summary>
+        [Fact]
+        public async Task ОшибкаЗаписиНеВыдаётсяЗаГотовуюИгру() {
+            using var pathScope = new GamesPathScope();
+            var sync = new FakeSync { ExecuteError = new System.IO.IOException("disk full") };
+            using var queue = NewQueue(sync, new Dictionary<string, GameInfo> { ["a"] = Game("a") });
+            var completed = new TaskCompletionSource<QueueItem>(TaskCreationOptions.RunContinuationsAsynchronously);
+            queue.ItemCompleted += item => completed.TrySetResult(item);
+            Assert.True(queue.Enqueue("a"));
+
+            var result = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(QueueItemState.Failed, result.State);
+            Assert.Contains("Не удалось записать", result.StatusText);
+            Assert.Empty(queue.Snapshot());
+        }
+
         private static async Task WaitUntil(Func<bool> condition, string failureMessage, int timeoutMs = 5000) {
             var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
             while (!condition()) {

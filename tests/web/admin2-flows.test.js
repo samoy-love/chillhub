@@ -486,7 +486,7 @@ test('заметка сохраняется тем, что набрали, и ч
   set('slug', 'release-1-6-25');
 
   // Черновик пишется на каждый ввод: заметку набирают минутами
-  assert.ok(window.CH2News.readDraft(window.localStorage, { slug: 'release-1-6-25' }), 'черновик не сохранён');
+  assert.ok(window.CH2News.readDraft(window.localStorage, { slug: 'release-1-6-25', existing: false }), 'черновик не сохранён');
 
   window.document.querySelector('[data-post="save"]').click();
   await until(() => calls.some((c) => c.url.includes('news/save')));
@@ -498,7 +498,7 @@ test('заметка сохраняется тем, что набрали, и ч
   assert.match(saved.body.markdown, /# Вышла 1\.6\.25/);
   assert.ok(!('title' in saved.body), 'уехало поле, которого сервер не знает');
 
-  const gone = await until(() => window.CH2News.readDraft(window.localStorage, { slug: 'release-1-6-25' }) === null);
+  const gone = await until(() => window.CH2News.readDraft(window.localStorage, { slug: 'release-1-6-25', existing: false }) === null);
   assert.ok(gone, 'черновик остался после сохранения');
   await settle();
 });
@@ -1592,3 +1592,78 @@ test('список новостей не прокручивается внутр
   assert.ok(games && !games.classList.contains('pick--full'), 'реестр игр потерял свою прокрутку');
   await settle();
 });
+
+test('новая заметка восстанавливает весь текст после изменения заголовка', async (t) => {
+  const { window, calls } = await boot();
+  t.after(() => window.close());
+  await openScreen(window, '#news', 'new-post');
+  const area = await until(() => window.document.querySelector('[data-news-editor] [name="markdown"]'));
+  const latest = '# Новое название\n\nПолный текст черновика';
+  for (const value of ['# Н', '# Название', latest]) {
+    area.value = value;
+    area.dispatchEvent(new window.Event('input', { bubbles: true }));
+  }
+  await openScreen(window, '#launcher');
+  await openScreen(window, '#news', 'new-post');
+  const restore = await until(() => window.document.querySelector('[data-draft-restore]'));
+  assert.ok(restore);
+  restore.click();
+  assert.strictEqual(window.document.querySelector('[data-news-editor] [name="markdown"]').value, latest);
+  window.document.querySelector('[data-post="save"]').click();
+  assert.ok(await until(() => calls.some((c) => c.url.includes('news/save'))));
+  await settle();
+  assert.strictEqual(window.CH2News.readDraft(window.localStorage, { existing: false }), null);
+});
+
+test('Escape закрывает только подтверждение и возвращает фокус во вложения', async (t) => {
+  const { window, calls } = await boot({ 'news/assets': { items: [{ name: 'cover.png', size: 10 }] } });
+  t.after(() => window.close());
+  await openScreen(window, '#news', 'new-post');
+  const button = await until(() => window.document.querySelector('[data-post="assets"]'));
+  button.focus();
+  button.click();
+  const remove = await until(() => window.document.querySelector('[data-remove="cover.png"]'));
+  assert.ok(remove);
+  remove.focus();
+  remove.click();
+  assert.ok(await until(() => window.document.querySelector('.modal')));
+  window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+  assert.strictEqual(window.document.querySelector('.modal'), null);
+  assert.strictEqual(window.document.querySelectorAll('.sheet').length, 1);
+  assert.strictEqual(window.document.activeElement, remove);
+  window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+  assert.strictEqual(window.document.querySelectorAll('.sheet').length, 0);
+  assert.strictEqual(window.document.activeElement, button);
+  assert.ok(!calls.some((c) => c.url.includes('news/assets/delete')));
+  await settle();
+});
+
+for (const cancelVia of ['button', 'close', 'escape']) {
+  test('отмена последнего чанка через ' + cancelVia + ' не запускает разбор', async (t) => {
+    const { window, calls } = await boot({
+      'upload/init': { uploadId: 'cancel-id', chunkSize: 4, totalChunks: 1 },
+      'upload/status': { received: [] },
+      'upload/process': processDone,
+    });
+    t.after(() => window.close());
+    fakePicker(window, { name: 'build.zip', size: 4, slice: () => ({}) }, []);
+    let finish;
+    window.uploadChunkWithRetries = () => new Promise((resolve) => { finish = resolve; });
+    const sheet = await open(window, '#launcher', 'upload');
+    sheet.querySelector('[data-flow="pick"]').click();
+    assert.ok(await until(() => finish));
+    if (cancelVia === 'button') sheet.querySelector('[data-flow="abort"]').click();
+    if (cancelVia === 'close') sheet.querySelector('[data-sheet-close]').click();
+    if (cancelVia === 'escape') window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+    assert.ok(await until(() => calls.some((c) => c.url.includes('upload/abort'))));
+    if (cancelVia === 'button') {
+      assert.match(sheet.textContent, /Останавливаем/);
+      assert.strictEqual(sheet.querySelector('[data-flow="retry"]'), null);
+    }
+    finish({ ok: true });
+    await settle();
+    assert.ok(!calls.some((c) => c.url.includes('upload/complete')));
+    assert.ok(!calls.some((c) => c.url.includes('upload/process')));
+    if (cancelVia === 'button') assert.match(sheet.textContent, /отмен|останов/i);
+  });
+}

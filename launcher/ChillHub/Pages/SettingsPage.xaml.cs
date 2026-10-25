@@ -248,8 +248,8 @@ namespace ChillHub.Pages {
             this.CheckUpdateBtn.IsEnabled = false;
             this.CheckUpdateStatus.Text = "Проверяем…";
             try {
-                var shown = await win.CheckForLauncherUpdateAsync();
-                this.CheckUpdateStatus.Text = shown ? string.Empty : "Установлена последняя версия";
+                var state = await win.CheckForLauncherUpdateAsync();
+                this.CheckUpdateStatus.Text = SelfUpdatePrecheck.ManualStatusText(state);
             }
             catch (Exception ex) {
                 ChillHub.Core.Logging.Logger.Warn($"SettingsPage.CheckUpdate: {ex.Message}");

@@ -224,7 +224,7 @@ test('прерывание не даёт заливать оставшиеся �
   const h = harness();
   const controller = { aborted: true };
   h.deps.signal = controller;
-  await assert.rejects(U.run(fakeFile(3000), { kind: 'launcher' }, h.deps), /не удалось залить/);
+  await assert.rejects(U.run(fakeFile(3000), { kind: 'launcher' }, h.deps), { name: 'AbortError' });
   assert.strictEqual(h.put.length, 0, 'после прерывания ни один кусок не уходит');
 });
 
@@ -403,4 +403,44 @@ test('без активной версии не удаляется ничего:
   assert.deepStrictEqual(U.prunable(all, ''), []);
   assert.deepStrictEqual(U.prunable(all, '9.9.9'), []);
   assert.deepStrictEqual(U.prunable(null, '1.0.0'), []);
+});
+
+test('отмена последнего чанка запрещает complete и очищает загрузку', async () => {
+  const h = harness();
+  const ctrl = new AbortController();
+  h.deps.signal = ctrl.signal;
+  h.deps.put = async () => {
+    ctrl.abort();
+    return { ok: true, status: 200, json: {} };
+  };
+  await assert.rejects(U.run(fakeFile(10), { kind: 'launcher' }, h.deps), { name: 'AbortError' });
+  assert.strictEqual(h.calls.complete, 0);
+  assert.strictEqual(h.calls.abort, 1);
+  assert.ok(h.events.some((e) => e.phase === 'init' && e.uploadId === 'u1'));
+});
+
+test('отмена до ответа init очищает полученную позднее сессию', async () => {
+  const h = harness();
+  const ctrl = new AbortController();
+  h.deps.signal = ctrl.signal;
+  h.deps.api.uploadInit = async () => { ctrl.abort(); return { uploadId: 'u1' }; };
+  await assert.rejects(U.run(fakeFile(10), { kind: 'launcher' }, h.deps), { name: 'AbortError' });
+  assert.strictEqual(h.calls.status, 0);
+  assert.strictEqual(h.calls.complete, 0);
+  assert.strictEqual(h.calls.abort, 1);
+});
+
+test('отмена во время complete не возвращает готовый архив', async () => {
+  const h = harness();
+  const ctrl = new AbortController();
+  h.deps.signal = ctrl.signal;
+  h.deps.api.uploadComplete = async () => { ctrl.abort(); };
+  await assert.rejects(U.run(fakeFile(10), { kind: 'launcher' }, h.deps), { name: 'AbortError' });
+  assert.strictEqual(h.calls.abort, 1);
+});
+
+test('отменённый разбор не отправляет запрос', async () => {
+  const ctrl = new AbortController();
+  ctrl.abort();
+  await assert.rejects(U.process('u1', { signal: ctrl.signal, fetch: () => assert.fail('разбор отправлен') }), { name: 'AbortError' });
 });

@@ -214,3 +214,41 @@ test('обычное чтение по-прежнему не плодит вто
   await Promise.all([store.load('games'), store.load('games'), store.load('games')]);
   assert.strictEqual(calls, 1);
 });
+
+test('запись во время чтения дожидается нового снимка', async () => {
+  const old = defer();
+  const fresh = defer();
+  let calls = 0;
+  const s = createStore({ a: () => ++calls === 1 ? old.promise : fresh.promise });
+  const ready = [];
+  s.subscribe((_, state) => { if (state.status === READY) ready.push(state.data); });
+  const first = s.load('a');
+  await Promise.resolve();
+  const updated = s.invalidate('a');
+  old.resolve('до записи');
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(calls, 2);
+  assert.deepStrictEqual(ready, []);
+  fresh.resolve('после записи');
+  await Promise.all([first, updated]);
+  assert.strictEqual(s.get('a').data, 'после записи');
+  assert.deepStrictEqual(ready, ['после записи']);
+});
+
+test('повторная запись во время перечитывания тоже обновляет снимок', async () => {
+  const reads = [defer(), defer(), defer()];
+  let calls = 0;
+  const s = createStore({ a: () => reads[calls++].promise });
+  const first = s.load('a');
+  await Promise.resolve();
+  const second = s.invalidate('a');
+  reads[0].reject(new Error('старый сбой'));
+  await new Promise((r) => setImmediate(r));
+  const third = s.invalidate('a');
+  reads[1].resolve('промежуточное');
+  await new Promise((r) => setImmediate(r));
+  reads[2].resolve('последнее');
+  await Promise.all([first, second, third]);
+  assert.strictEqual(calls, 3);
+  assert.strictEqual(s.get('a').data, 'последнее');
+});

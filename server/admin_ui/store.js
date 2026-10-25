@@ -39,6 +39,7 @@
 
     const listeners = new Set();
     const inFlight = new Map();
+    const revisions = Object.fromEntries(names.map((name) => [name, 0]));
 
     const emit = (name) => {
       for (const fn of listeners) fn(name, state[name]);
@@ -66,32 +67,31 @@
       if (!loaders[name]) return Promise.reject(new Error('нет такого раздела: ' + name));
       const force = opts && opts.force;
 
-      /* Уже идущий запрос годится только тогда, когда свежести от него
-         не требуют. Настойчивому вызову он не годится: запрос ушёл ДО
-         записи и ответит тем, что было до неё, — а раздел после этого
-         будет числиться свежим и показывать вчерашнее. Поэтому ждём
-         идущий и сразу спрашиваем заново. */
       if (inFlight.has(name)) {
-        if (!force) return inFlight.get(name);
-        return inFlight.get(name).then(() => load(name, { force: true }));
+        if (force) revisions[name]++;
+        return inFlight.get(name);
       }
       if (!force && state[name].status === READY) return Promise.resolve(state[name]);
 
       state[name] = { status: LOADING, data: state[name].data, error: null, at: state[name].at };
       emit(name);
 
-      const p = Promise.resolve()
-        .then(() => loaders[name](d.api))
-        .then((data) => {
-          state[name] = { status: READY, data: data, error: null, at: Date.now() };
-          return state[name];
-        })
-        .catch((e) => {
-          // Прошлые данные не выбрасываем: показать вчерашнее с пометкой
-          // честнее, чем пустой экран, — лишь бы пометка была.
-          state[name] = { status: FAILED, data: state[name].data, error: e, at: state[name].at };
-          return state[name];
-        })
+      const p = Promise.resolve().then(async () => {
+        // Запись во время чтения требует нового запроса: старый ответ уже не актуален.
+        for (;;) {
+          const revision = revisions[name];
+          let next;
+          try {
+            const data = await loaders[name](d.api);
+            next = { status: READY, data: data, error: null, at: Date.now() };
+          } catch (e) {
+            next = { status: FAILED, data: state[name].data, error: e, at: state[name].at };
+          }
+          if (revision !== revisions[name]) continue;
+          state[name] = next;
+          return next;
+        }
+      })
         .then((s) => {
           inFlight.delete(name);
           emit(name);
@@ -108,7 +108,8 @@
       const jobs = [];
       for (const name of arr) {
         if (!loaders[name]) continue;
-        const seen = state[name].status !== IDLE;
+        const seen = state[name].status !== IDLE || inFlight.has(name);
+        revisions[name]++;
         state[name] = { status: IDLE, data: state[name].data, error: null, at: state[name].at };
         if (seen) jobs.push(load(name, { force: true }));
         else emit(name);

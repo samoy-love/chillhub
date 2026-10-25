@@ -371,6 +371,14 @@ namespace ChillHub {
 
         internal string? PreviousOutcomeText { get; init; }
 
+        /// <summary>Ответ на явную проверку из настроек, включая отсутствие результата.</summary>
+        internal static string ManualStatusText(SelfUpdateState? state) => state switch {
+            null => "Проверка уже выполняется. Повторите чуть позже.",
+            SelfUpdateState.UpToDate => "Установлена последняя версия",
+            SelfUpdateState.CheckFailed => "Не удалось проверить обновления. Повторите позже.",
+            _ => string.Empty,
+        };
+
         /// <summary>
         /// Окно можно не показывать вовсе: рассказать пользователю нечего — нет ни
         /// доступного обновления, ни исхода прошлого неудачного обновления (иначе сбой

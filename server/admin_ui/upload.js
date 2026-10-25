@@ -26,6 +26,14 @@
 })(typeof window !== 'undefined' ? window : globalThis, function () {
   'use strict';
 
+  function checkCancelled(signal) {
+    if (signal && signal.aborted) {
+      const error = new Error('Загрузка отменена');
+      error.name = 'AbortError';
+      throw error;
+    }
+  }
+
   const DEFAULT_CHUNK = 8 * 1024 * 1024;
 
   /* ---------- Чистка старых версий ---------- */
@@ -190,6 +198,7 @@
 
     const say = (phase, extra) => on(Object.assign({ phase: phase }, extra || {}));
 
+    checkCancelled(d.signal);
     say('init');
     const init = await api.uploadInit({
       kind: meta.kind,
@@ -203,81 +212,93 @@
     const uploadId = init && init.uploadId;
     if (!uploadId) throw new Error('сервер не выдал номер загрузки');
 
-    const chunkSize = Number(init.chunkSize) > 0 ? Number(init.chunkSize) : meta.chunkSize || DEFAULT_CHUNK;
-    const total = Number(init.totalChunks) > 0 ? Number(init.totalChunks) : chunkCount(file.size, chunkSize);
-
-    /* Докачка: спрашиваем, что уже лежит. Ошибку здесь глотаем намеренно —
-       не ответивший `status` означает «начнём сначала», а не «всё пропало». */
-    let received = [];
     try {
-      const st = await api.uploadStatus(uploadId);
-      if (st && Array.isArray(st.received)) received = st.received;
-    } catch {
-      received = [];
-    }
+      say('init', { uploadId: uploadId });
+      checkCancelled(d.signal);
 
-    let todo = missingChunks(total, received);
-    const confirmed = new Set(received.map((x) => Number(x) | 0));
+      const chunkSize = Number(init.chunkSize) > 0 ? Number(init.chunkSize) : meta.chunkSize || DEFAULT_CHUNK;
+      const total = Number(init.totalChunks) > 0 ? Number(init.totalChunks) : chunkCount(file.size, chunkSize);
 
-    say('upload', {
-      uploadId: uploadId,
-      total: total,
-      resumed: received.length,
-      progress: progress(confirmed.size * chunkSize, 0, file.size),
-    });
+      /* Докачка: спрашиваем, что уже лежит. Ошибку здесь глотаем намеренно —
+         не ответивший `status` означает «начнём сначала», а не «всё пропало». */
+      let received = [];
+      try {
+        const st = await api.uploadStatus(uploadId);
+        if (st && Array.isArray(st.received)) received = st.received;
+      } catch {
+        received = [];
+      }
 
-    const inFlight = new Map();
-    const report = () => {
+      let todo = missingChunks(total, received);
+      const confirmed = new Set(received.map((x) => Number(x) | 0));
+
       say('upload', {
         uploadId: uploadId,
         total: total,
-        done: confirmed.size,
-        progress: progress(confirmed.size * chunkSize, chunks.pendingBytes(inFlight), file.size),
-      });
-    };
-
-    const worker = async (index) => {
-      if (d.signal && d.signal.aborted) return false;
-      const r = chunkRange(index, chunkSize, file.size);
-      const blob = slice(file, r.start, r.end);
-      inFlight.set(index, 0);
-
-      const res = await chunks.uploadChunkWithRetries(uploadId, index, blob, {
-        url: '/admin/api/upload/chunk?uploadId=' + encodeURIComponent(uploadId) + '&index=' + index,
-        onProgress: (loaded) => {
-          inFlight.set(index, loaded);
-          report();
-        },
-        deps: d.xhrDeps,
-        put: d.put,
-        maxAttempts: d.maxAttempts,
-        retryDelayMs: d.retryDelayMs,
+        resumed: received.length,
+        progress: progress(confirmed.size * chunkSize, 0, file.size),
       });
 
-      inFlight.delete(index);
-      if (res.ok) confirmed.add(index);
-      report();
-      return res.ok;
-    };
+      const inFlight = new Map();
+      const report = () => {
+        say('upload', {
+          uploadId: uploadId,
+          total: total,
+          done: confirmed.size,
+          progress: progress(confirmed.size * chunkSize, chunks.pendingBytes(inFlight), file.size),
+        });
+      };
 
-    let failed = await chunks.runWorkerPool(todo, concurrency, worker);
+      const worker = async (index) => {
+        if (d.signal && d.signal.aborted) return false;
+        const r = chunkRange(index, chunkSize, file.size);
+        const blob = slice(file, r.start, r.end);
+        inFlight.set(index, 0);
 
-    /* Второй проход по сорвавшимся. Он не «на всякий случай»: сервер мог
-       ответить 500 на один кусок из трёхсот, и требовать из-за этого
-       перезаливать всё — то же самое, что не иметь докачки. */
-    if (failed.length) {
-      say('retry', { count: failed.length });
-      failed = await chunks.runWorkerPool(failed, concurrency, worker);
+        const res = await chunks.uploadChunkWithRetries(uploadId, index, blob, {
+          url: '/admin/api/upload/chunk?uploadId=' + encodeURIComponent(uploadId) + '&index=' + index,
+          onProgress: (loaded) => {
+            inFlight.set(index, loaded);
+            report();
+          },
+          deps: Object.assign({}, d.xhrDeps, { signal: d.signal }),
+          signal: d.signal,
+          put: d.put,
+          maxAttempts: d.maxAttempts,
+          retryDelayMs: d.retryDelayMs,
+        });
+
+        inFlight.delete(index);
+        if (res.ok) confirmed.add(index);
+        report();
+        return res.ok;
+      };
+
+      let failed = await chunks.runWorkerPool(todo, concurrency, worker);
+      checkCancelled(d.signal);
+
+      /* Второй проход по сорвавшимся. Он не «на всякий случай»: сервер мог
+         ответить 500 на один кусок из трёхсот, и требовать из-за этого
+         перезаливать всё — то же самое, что не иметь докачки. */
+      if (failed.length) {
+        say('retry', { count: failed.length });
+        failed = await chunks.runWorkerPool(failed, concurrency, worker);
+      }
+
+      checkCancelled(d.signal);
+      if (failed.length) {
+        throw new Error('не удалось залить ' + failed.length + ' из ' + total);
+      }
+
+      say('complete');
+      checkCancelled(d.signal);
+      await api.uploadComplete({ uploadId: uploadId });
+      checkCancelled(d.signal);
+
+      return { uploadId: uploadId, total: total, chunkSize: chunkSize, resumed: received.length };
+    } finally {
+      if (d.signal && d.signal.aborted) await abort(api, uploadId);
     }
-
-    if (failed.length) {
-      throw new Error('не удалось залить ' + failed.length + ' из ' + total);
-    }
-
-    say('complete');
-    await api.uploadComplete({ uploadId: uploadId });
-
-    return { uploadId: uploadId, total: total, chunkSize: chunkSize, resumed: received.length };
   }
 
   /**
@@ -318,9 +339,11 @@
     const d = deps || {};
     const on = d.on || function () {};
     let res;
+    checkCancelled(d.signal);
     try {
       res = await d.fetch('/admin/api/upload/process?uploadId=' + encodeURIComponent(uploadId), {
         method: 'POST',
+        signal: d.signal,
         headers: { accept: 'application/x-ndjson', 'cache-control': 'no-store' },
       });
     } catch {
@@ -340,6 +363,7 @@
       on(m);
     });
 
+    checkCancelled(d.signal);
     if (failed) return { ok: false, message: failed };
     if (!lines) return { ok: false, message: 'сервер оборвал разбор молча — проверьте список версий' };
     if (!done) return { ok: false, message: 'разбор оборвался, не дописав манифест' };
