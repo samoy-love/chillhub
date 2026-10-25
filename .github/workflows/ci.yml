@@ -18,8 +18,8 @@ name: CI
 #   stylelint                17.16.0
 #   stylelint-config-standard 40.0.0
 #   c8                       12.0.0
-#   golangci-lint            v2.12.2
-#   govulncheck              v1.1.4
+#   golangci-lint            v2.15.0
+#   govulncheck              v1.9.0
 #   Go toolchain             taken from server/go.mod (single source of truth)
 # ---------------------------------------------------------------------------
 
@@ -490,7 +490,7 @@ jobs:
         # рядом с исходниками и кэшем модулей.
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.12.2
+          version: v2.15.0
           working-directory: server
 
       - name: Go vet
@@ -563,7 +563,7 @@ jobs:
       - name: govulncheck (Go)
         working-directory: server
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           govulncheck ./...
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
