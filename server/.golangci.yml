@@ -33,6 +33,7 @@ linters:
     - nlreturn    # 545: пустая строка перед каждым return
     - varnamelen  # 507: запрещает i, w, r, db — идиоматичные имена Go
     - noinlineerr # 321: запрещает if err := f(); err != nil
+    - exhaustruct_v5 # та же проверка в golangci-lint 2.15
     - exhaustruct # 159: требует заполнять все поля любого литерала структуры
     - lll         # длина строки; форматирование делает gofmt
     - godot       # точки в конце комментариев

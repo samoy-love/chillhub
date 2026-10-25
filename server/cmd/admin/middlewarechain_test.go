@@ -59,7 +59,7 @@ func TestRequestIDReachesTheAccessLog(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("health = %d, want 200", w.Code)
 	}
-	rid := w.Header().Get("X-Request-Id")
+	rid := w.Header().Get("X-Request-ID")
 	if rid == "" {
 		t.Fatal("ответ ушёл без X-Request-Id")
 	}

@@ -61,7 +61,7 @@ func logLine(label string, r *http.Request, status int, dur time.Duration) strin
 		b.WriteByte(' ')
 	}
 	fmt.Fprintf(&b, "%s %s %d %s", r.Method, r.URL.String(), status, dur)
-	if reqID := sanitizeRequestID(r.Header.Get("X-Request-Id")); reqID != "" {
+	if reqID := sanitizeRequestID(r.Header.Get("X-Request-ID")); reqID != "" {
 		b.WriteString(" reqid=")
 		b.WriteString(reqID)
 	}
@@ -131,7 +131,7 @@ func sanitizeRequestID(v string) string {
 func RequestID() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			rid := sanitizeRequestID(r.Header.Get("X-Request-Id"))
+			rid := sanitizeRequestID(r.Header.Get("X-Request-ID"))
 			if rid == "" {
 				// generate 16 random bytes as hex (32 chars)
 				var b [16]byte
@@ -141,9 +141,9 @@ func RequestID() func(http.Handler) http.Handler {
 					rid = time.Now().UTC().Format("20060102150405.000000000")
 				}
 				r = r.Clone(r.Context())
-				r.Header.Set("X-Request-Id", rid)
+				r.Header.Set("X-Request-ID", rid)
 			}
-			w.Header().Set("X-Request-Id", rid)
+			w.Header().Set("X-Request-ID", rid)
 			next.ServeHTTP(w, r)
 		})
 	}
