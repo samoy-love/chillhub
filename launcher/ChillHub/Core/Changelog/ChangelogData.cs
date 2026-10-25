@@ -44,6 +44,13 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
+                Version = "1.7.6",
+                Date = "2026-10-26",
+                Changes = new[] {
+                    "Обновление и установка модов больше не запускают игру: для запуска нажмите «Играть».",
+                },
+            },
+            new ChangelogRelease {
                 Version = "1.7.5",
                 Date = "2026-09-22",
                 Changes = new[] {

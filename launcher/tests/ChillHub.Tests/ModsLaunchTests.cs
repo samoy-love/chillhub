@@ -399,7 +399,7 @@ namespace ChillHub.Tests {
             var plain = new LaunchOption(LaunchTarget.SteamVanilla, "Steam · без модов", "d", false, LaunchAction.Play, string.Empty);
             var noted = new LaunchOption(LaunchTarget.SteamModded, "Steam · с модами", "d", true, LaunchAction.InstallMods, "установить моды");
 
-            Assert.Equal("Steam · без модов", plain.MenuText);
+            Assert.Equal("Играть: Steam · без модов", plain.MenuText);
             Assert.Equal("Steam · с модами — установить моды", noted.MenuText);
         }
 

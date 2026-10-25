@@ -18,8 +18,8 @@ namespace ChillHub.Core.Mods {
         /// <summary>Запустить игру прямо сейчас.</summary>
         Play,
 
-        /// <summary>Поставить модпак в эту папку и следом запустить.</summary>
-        InstallModsThenPlay,
+        /// <summary>Поставить или обновить модпак без запуска игры.</summary>
+        InstallMods,
 
         /// <summary>Вернуть на место пропавшие файлы модпака и остановиться.</summary>
         RepairMods,
@@ -178,7 +178,7 @@ namespace ChillHub.Core.Mods {
                     // Модпак пишется в папку игры — это обновление файлов, а не запуск.
                     return state?.BlocksUpdate == true
                         ? new LaunchDecision(LaunchStep.Blocked, banner)
-                        : new LaunchDecision(LaunchStep.InstallModsThenPlay, string.Empty);
+                        : new LaunchDecision(LaunchStep.InstallMods, string.Empty);
 
                 case LaunchAction.RepairMods:
                     // Тоже запись в папку игры, и запрещает её тот же запрет обновления.

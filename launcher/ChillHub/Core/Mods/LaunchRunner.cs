@@ -117,38 +117,25 @@ namespace ChillHub.Core.Mods {
 
                     return;
 
-                case LaunchStep.InstallModsThenPlay:
-                    await this.InstallThenPlayAsync(game, option, probes).ConfigureAwait(true);
+                case LaunchStep.InstallMods:
+                    await this.InstallModsAsync(game, option).ConfigureAwait(true);
                     return;
 
                 case LaunchStep.RepairMods:
                     await this.RepairAsync(game, option).ConfigureAwait(true);
                     return;
 
-                default:
+                case LaunchStep.Play:
                     this.ui.Launch(game, option);
                     return;
             }
         }
 
-        /// <summary>
-        /// Ставит модпак в папку и запускает игру.
-        /// <para>
-        /// ОДИН ЩЕЛЧОК НА ВЕСЬ ПУТЬ: игрок выбрал «с модами», а не «выполнить
-        /// установку». Установка модпака идёт минуты, а не часы — это единственный
-        /// шаг, после которого запуск без отдельного спроса уместен.
-        /// </para>
-        /// <para>
-        /// Вопроса перед записью нет: на строке меню и так написано, что моды поставят
-        /// в копию из Steam, а окно с той же мыслью стояло между «хочу играть с модами»
-        /// и игрой на каждом запуске. Куда именно легли файлы, говорит тост по итогу.
-        /// </para>
-        /// </summary>
+        /// <summary>Ставит или обновляет модпак без запуска игры.</summary>
         /// <param name="game">Игра.</param>
-        /// <param name="option">Выбранная строка меню.</param>
-        /// <param name="probes">Чем пересчитать варианты после установки.</param>
-        /// <returns>Задача установки и запуска.</returns>
-        private async Task InstallThenPlayAsync(GameInfo game, LaunchOption option, LaunchProbes probes) {
+        /// <param name="option">Выбранное действие.</param>
+        /// <returns>Задача установки.</returns>
+        private async Task InstallModsAsync(GameInfo game, LaunchOption option) {
             if (this.ModsBusy()) {
                 this.ui.Toast("Моды уже устанавливаются. Дождитесь завершения.");
                 return;
@@ -168,22 +155,14 @@ namespace ChillHub.Core.Mods {
                 return;
             }
 
-            // Пересчитываем варианты: тот, что был «установить моды», стал «играть».
-            // Запускать по старому объекту нельзя — в нём записано, что модов нет.
-            var ready = LaunchPlan.ReadyAfterInstall(LaunchPlan.OptionsFor(game, probes), option.Target);
-            if (ready != null) {
-                this.ui.Launch(game, ready);
-            }
+            this.ui.RefreshChoice();
         }
 
         /// <summary>
         /// Возвращает на место пропавшие файлы модпака — и останавливается.
         /// <para>
-        /// ИГРУ ПОСЛЕ ПОЧИНКИ НЕ ЗАПУСКАЕМ. Соседний путь «установить моды» доводит до
-        /// игры за один щелчок, и это верно: там игрок нажимал «хочу играть с модами».
-        /// Здесь на кнопке написано «восстановить моды» — ровно одно действие, и
-        /// начавшаяся следом игра оказывалась неожиданностью. После починки строка
-        /// снова становится обычным «с модами», и запускает уже следующий щелчок.
+        /// Установка, обновление и восстановление меняют только файлы.
+        /// Для запуска нужен отдельный щелчок по кнопке «Играть».
         /// </para>
         /// </summary>
         /// <param name="game">Игра.</param>

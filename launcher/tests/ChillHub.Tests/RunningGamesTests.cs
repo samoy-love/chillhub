@@ -154,7 +154,7 @@ namespace ChillHub.Tests {
             Assert.Equal("запускается…", steam.Subtitle);
 
             Assert.True(local.Enabled);
-            Assert.Equal("с модами", local.Subtitle);
+            Assert.Equal("Играть с модами", local.Subtitle);
         }
 
         /// <summary>Состояние — про свою игру: соседняя от него не меняется.</summary>
@@ -325,7 +325,7 @@ namespace ChillHub.Tests {
 
             Assert.True(view.MenuVisible);
             Assert.All(view.Buttons, b => Assert.True(b.Enabled));
-            Assert.All(view.Buttons, b => Assert.Equal("с модами", b.Subtitle));
+            Assert.All(view.Buttons, b => Assert.Equal("Играть с модами", b.Subtitle));
         }
 
         /// <summary>«Играть» под открытой игрой называет происходящее, а не предлагает второй запуск.</summary>

@@ -2122,7 +2122,7 @@ namespace ChillHub.Pages {
             title.Text = model.Title;
             note.Text = model.Subtitle;
             button.ToolTip = model.Tooltip;
-            button.Tag = model.Target;
+            button.Tag = model;
             button.Visibility = Visibility.Visible;
             button.IsEnabled = model.Enabled;
 
@@ -2191,7 +2191,7 @@ namespace ChillHub.Pages {
         /// <param name="sender">Нажатая кнопка.</param>
         /// <param name="e">Аргументы события.</param>
         private void LaunchBtn_Click(object sender, RoutedEventArgs e) {
-            if (sender is not Button { Tag: Core.Mods.LaunchTarget target }) {
+            if (sender is not Button { Tag: Core.Mods.LaunchButtonView button }) {
                 return;
             }
 
@@ -2204,7 +2204,7 @@ namespace ChillHub.Pages {
             // могли удалить из Steam, а запустить не то, что написано на кнопке, —
             // худший из возможных исходов.
             this.InvalidateLaunchOptions();
-            var chosen = Core.Mods.LaunchButtons.Chosen(this.LaunchOptionsFor(game, logSteam: true), target);
+            var chosen = Core.Mods.LaunchButtons.Chosen(this.LaunchOptionsFor(game, logSteam: true), button.Target, button.Action);
             if (chosen.Option == null) {
                 this.StatusText.Text = chosen.Message;
                 this.SyncLaunchBar(this.actionMode);

@@ -21,13 +21,15 @@ namespace ChillHub.Core.Mods {
     /// запускается: кнопка остаётся на месте и подписью объясняет, что происходит,
     /// вместо того чтобы исчезнуть или поднять вторую копию игры.
     /// </param>
+    /// <param name="Action">Действие, обещанное подписью кнопки.</param>
     internal sealed record LaunchButtonView(
         LaunchTarget Target,
         string Title,
         string Subtitle,
         string Tooltip,
         bool Accent,
-        bool Enabled = true) {
+        bool Enabled = true,
+        LaunchAction Action = LaunchAction.Play) {
         /// <summary>
         /// Ключ стиля кнопки в ресурсах темы. Акцент носит вариант, которым играли в
         /// прошлый раз, и он может оказаться как первой кнопкой, так и второй — поэтому
@@ -113,7 +115,7 @@ namespace ChillHub.Core.Mods {
         /// Копия из Steam НЕ ЗАВИСИТ от сборки с сервера: моды ставятся в чужую папку,
         /// и требовать ради них скачать десять гигабайт сборки, которую игрок не
         /// просил, — плата ни за что. Отсюда «Установить» и «Steam · с модами» стоят
-        /// рядом: первая ставит сборку, вторая ставит моды в Steam и запускает.
+        /// рядом: первая ставит сборку, вторая ставит моды в Steam без запуска.
         /// </param>
         /// <param name="options">Варианты запуска, посчитанные на этот момент.</param>
         /// <param name="remembered">Запомненный вариант запуска или null.</param>
@@ -225,10 +227,15 @@ namespace ChillHub.Core.Mods {
         /// </summary>
         /// <param name="options">Варианты, посчитанные заново.</param>
         /// <param name="target">Что было написано на кнопке.</param>
+        /// <param name="expectedAction">Действие на кнопке в момент нажатия.</param>
         /// <returns>Вариант к запуску либо причина отказа.</returns>
         internal static (LaunchOption? Option, string Message) Chosen(
-            IReadOnlyList<LaunchOption>? options, LaunchTarget target) {
+            IReadOnlyList<LaunchOption>? options, LaunchTarget target, LaunchAction? expectedAction = null) {
             var option = options?.FirstOrDefault(o => o.Target == target);
+            if (option is { Available: true } && expectedAction.HasValue && option.Action != expectedAction.Value) {
+                return (null, "Действие изменилось. Нажмите нужную кнопку ещё раз.");
+            }
+
             if (option is { Available: true }) {
                 return (option, string.Empty);
             }
@@ -250,7 +257,7 @@ namespace ChillHub.Core.Mods {
             LaunchOption option, ModsInfo? mods, LaunchTarget? remembered, bool soleAction = false) {
             // Подпись говорит о ДЕЙСТВИИ, а не о состоянии: «установить моды» вместо
             // «моды не установлены». Кнопка на то и кнопка, что называет своё нажатие.
-            var subtitle = option.ReadyToPlay ? "с модами" : option.Note;
+            var subtitle = option.ReadyToPlay ? "Играть с модами" : option.Note;
             var full = ModsLaunch.TitleOf(option.Target, mods);
             var wasLast = remembered == option.Target;
             var accent = wasLast || soleAction;
@@ -263,7 +270,7 @@ namespace ChillHub.Core.Mods {
                 tooltip += " · запускали в прошлый раз";
             }
 
-            return new LaunchButtonView(option.Target, SourceOf(option.Target), subtitle, tooltip, accent);
+            return new LaunchButtonView(option.Target, SourceOf(option.Target), subtitle, tooltip, accent, Action: option.Action);
         }
 
         /// <summary>
