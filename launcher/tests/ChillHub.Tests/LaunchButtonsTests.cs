@@ -22,6 +22,28 @@ namespace ChillHub.Tests {
     /// </para>
     /// </summary>
     public class LaunchButtonsTests {
+        /// <summary>Смена действия после отрисовки не превращает обновление в запуск.</summary>
+        [Fact]
+        public void ОбновлениеНаКнопкеНеПревращаетсяВЗапуск() {
+            var options = new[] { Option(LaunchTarget.SteamModded, LaunchAction.Play) };
+            var chosen = LaunchButtons.Chosen(options, LaunchTarget.SteamModded, LaunchAction.InstallMods);
+
+            Assert.Null(chosen.Option);
+            Assert.NotEmpty(chosen.Message);
+        }
+
+        /// <summary>Неизменившееся действие обновления остаётся доступным.</summary>
+        [Fact]
+        public void ОбновлениеНаКнопкеСохраняетДействие() {
+            var option = Option(LaunchTarget.SteamModded, LaunchAction.InstallMods, "обновить моды");
+            var view = LaunchButtons.Compute(new ModsInfo { SteamAppId = "123" }, true, true, new[] { option }, null);
+            var button = Assert.Single(view.Buttons);
+            var chosen = LaunchButtons.Chosen(new[] { option }, button.Target, button.Action);
+
+            Assert.Equal("обновить моды", button.Subtitle);
+            Assert.Same(option, chosen.Option);
+        }
+
         /// <summary>Обе копии готовы — на витрине две кнопки, обычной «Играть» нет.</summary>
         [Fact]
         public void ДвеГотовыеКопииДаютДвеКнопки() {
@@ -33,7 +55,7 @@ namespace ChillHub.Tests {
                 new[] { LaunchTarget.SteamModded, LaunchTarget.LocalModded },
                 view.Buttons.Select(b => b.Target));
             Assert.Equal(new[] { "Steam", "Пиратка" }, view.Buttons.Select(b => b.Title));
-            Assert.All(view.Buttons, b => Assert.Equal("с модами", b.Subtitle));
+            Assert.All(view.Buttons, b => Assert.Equal("Играть с модами", b.Subtitle));
         }
 
         /// <summary>

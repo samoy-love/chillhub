@@ -35,7 +35,7 @@ namespace ChillHub.Tests {
         [Fact]
         public void СтрокаУстановкиМодовВедётКЗапуску() {
             Assert.Equal(
-                LaunchStep.InstallModsThenPlay,
+                LaunchStep.InstallMods,
                 LaunchPlan.Decide(Option(LaunchAction.InstallMods), Off).Step);
         }
 
@@ -75,7 +75,7 @@ namespace ChillHub.Tests {
             Check(LaunchAction.InstallGame, false, true, true, LaunchStep.Enqueue);
             Check(LaunchAction.Update, false, true, false, LaunchStep.Blocked);
             Check(LaunchAction.InstallMods, false, true, false, LaunchStep.Blocked);
-            Check(LaunchAction.InstallMods, true, false, true, LaunchStep.InstallModsThenPlay);
+            Check(LaunchAction.InstallMods, true, false, true, LaunchStep.InstallMods);
 
             static void Check(
                 LaunchAction action, bool blocksInstall, bool blocksUpdate, bool blocksPlay, LaunchStep expected) {

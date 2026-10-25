@@ -119,23 +119,22 @@ namespace ChillHub.Tests {
             Assert.NotEmpty(probe.Statuses);
         }
 
-        /// <summary>
-        /// Установка модов идёт без вопросов и доводит до игры одним щелчком: на строке
-        /// меню и так написано, куда лягут файлы, а окно с тем же текстом стояло между
-        /// «хочу играть с модами» и игрой на каждом запуске.
-        /// </summary>
+        /// <summary>Установка и обновление модов не запускают даже готовую игру.</summary>
+        /// <param name="note">Подпись нажатого действия.</param>
         /// <returns>Задача теста.</returns>
-        [Fact]
-        public async Task УстановкаМодовСразуЗапускаетИгру() {
+        [Theory]
+        [InlineData("установить моды")]
+        [InlineData("обновить моды")]
+        public async Task УстановкаИОбновлениеМодовНеЗапускаютИгру(string note) {
             var probe = new Probe { InstallResult = true };
             this.ModdedDir();
 
             await probe.Runner().RunAsync(
-                Game(), this.Option(LaunchAction.InstallMods), Off, this.Probes(modsInSteam: "pack-1"));
+                Game(), this.Option(LaunchAction.InstallMods, note), Off, this.Probes(modsInSteam: "pack-1"));
 
             Assert.Single(probe.Installed);
-            Assert.Single(probe.Launched);
-            Assert.True(probe.Launched[0].ReadyToPlay);
+            Assert.Empty(probe.Launched);
+            Assert.Equal(2, probe.Refreshed);
         }
 
         /// <summary>
