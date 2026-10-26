@@ -2085,8 +2085,8 @@ namespace ChillHub.Pages {
 
                 this.launchBar = view;
                 this.ActionBtn.Visibility = view.ActionVisible ? Visibility.Visible : Visibility.Collapsed;
-                this.ApplyLaunchButton(this.LaunchBtn1, this.LaunchBtn1Title, this.LaunchBtn1Note, view, 0);
-                this.ApplyLaunchButton(this.LaunchBtn2, this.LaunchBtn2Title, this.LaunchBtn2Note, view, 1);
+                this.ApplyLaunchButton(this.LaunchBtn1, this.LaunchBtn1Icon, this.LaunchBtn1Title, this.LaunchBtn1Note, view, 0);
+                this.ApplyLaunchButton(this.LaunchBtn2, this.LaunchBtn2Icon, this.LaunchBtn2Title, this.LaunchBtn2Note, view, 1);
                 this.LaunchMenuBtn.Visibility = view.MenuVisible ? Visibility.Visible : Visibility.Collapsed;
                 this.LaunchMenuBtn.ToolTip = view.MenuVisible ? view.MenuTooltip : null;
 
@@ -2106,12 +2106,13 @@ namespace ChillHub.Pages {
         /// Выставляет одну кнопку запуска по счёту или прячет её, если варианта нет.
         /// </summary>
         /// <param name="button">Сама кнопка.</param>
+        /// <param name="icon">Значок текущего действия.</param>
         /// <param name="title">Крупная строка.</param>
         /// <param name="note">Мелкая строка.</param>
         /// <param name="view">Посчитанная строка действий.</param>
         /// <param name="index">Место кнопки в строке.</param>
         private void ApplyLaunchButton(
-            Button button, TextBlock title, TextBlock note, Core.Mods.LaunchBarView view, int index) {
+            Button button, TextBlock icon, TextBlock title, TextBlock note, Core.Mods.LaunchBarView view, int index) {
             if (index >= view.Buttons.Count) {
                 button.Visibility = Visibility.Collapsed;
                 button.Tag = null;
@@ -2119,6 +2120,7 @@ namespace ChillHub.Pages {
             }
 
             var model = view.Buttons[index];
+            icon.Text = model.Glyph;
             title.Text = model.Title;
             note.Text = model.Subtitle;
             button.ToolTip = model.Tooltip;
