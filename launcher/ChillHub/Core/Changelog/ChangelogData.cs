@@ -44,6 +44,13 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
+                Version = "1.7.9",
+                Date = "2026-10-26",
+                Changes = new[] {
+                    "Значок установки модов больше не выглядит как кнопка запуска игры.",
+                },
+            },
+            new ChangelogRelease {
                 Version = "1.7.8",
                 Date = "2026-10-26",
                 Changes = new[] {

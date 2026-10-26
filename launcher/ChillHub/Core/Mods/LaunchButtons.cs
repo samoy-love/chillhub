@@ -30,6 +30,14 @@ namespace ChillHub.Core.Mods {
         bool Accent,
         bool Enabled = true,
         LaunchAction Action = LaunchAction.Play) {
+        /// <summary>Значок действия: установка и обновление не обещают запуск игры.</summary>
+        internal string Glyph => this.Action switch {
+            LaunchAction.InstallMods or LaunchAction.InstallGame => "\uE896",
+            LaunchAction.Update or LaunchAction.RepairMods => "\uE895",
+            LaunchAction.Play => "\uE768",
+            _ => string.Empty,
+        };
+
         /// <summary>
         /// Ключ стиля кнопки в ресурсах темы. Акцент носит вариант, которым играли в
         /// прошлый раз, и он может оказаться как первой кнопкой, так и второй — поэтому

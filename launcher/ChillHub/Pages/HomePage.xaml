@@ -1125,9 +1125,8 @@
                 <Button x:Name="LaunchBtn1" Click="LaunchBtn_Click" Visibility="Collapsed"
                         Style="{DynamicResource Style.LaunchButton.Accent}">
                   <StackPanel Orientation="Horizontal">
-                    <!-- Значок запуска слева от подписи, как на кнопке игры в Steam:
-                         действие узнаётся раньше, чем прочитано слово. -->
-                    <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE768;" FontSize="14"
+                    <!-- Значок соответствует текущему действию кнопки. -->
+                    <TextBlock x:Name="LaunchBtn1Icon" FontFamily="Segoe MDL2 Assets" FontSize="14"
                                Margin="0,0,10,0" VerticalAlignment="Center"/>
                     <StackPanel VerticalAlignment="Center">
                       <TextBlock x:Name="LaunchBtn1Title" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center"/>
@@ -1140,7 +1139,7 @@
                 <Button x:Name="LaunchBtn2" Click="LaunchBtn_Click" Visibility="Collapsed" Margin="8,0,0,0"
                         Style="{DynamicResource Style.LaunchButton.Ghost}">
                   <StackPanel Orientation="Horizontal">
-                    <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE768;" FontSize="14"
+                    <TextBlock x:Name="LaunchBtn2Icon" FontFamily="Segoe MDL2 Assets" FontSize="14"
                                Margin="0,0,10,0" VerticalAlignment="Center"/>
                     <StackPanel VerticalAlignment="Center">
                       <TextBlock x:Name="LaunchBtn2Title" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center"/>
