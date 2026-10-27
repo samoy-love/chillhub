@@ -147,8 +147,11 @@ namespace ChillHub.Core.Home {
         /// </para>
         /// </summary>
         /// <param name="mode">Режим кнопки.</param>
+        /// <param name="run">Состояние запуска игры.</param>
         /// <returns>Символ шрифта Segoe MDL2 Assets или пустая строка.</returns>
-        internal static string Glyph(ActionMode mode) => mode switch {
+        internal static string Glyph(ActionMode mode, Game.GameRunState run = Game.GameRunState.None) => mode switch {
+            ActionMode.Play when run == Game.GameRunState.Starting => "\uE916",
+            ActionMode.Play when run == Game.GameRunState.Running => "\uE73E",
             ActionMode.Play => "\uE768",
             ActionMode.Install => "\uE896",
             ActionMode.Update => "\uE895",
@@ -161,12 +164,12 @@ namespace ChillHub.Core.Home {
         /// <param name="mode">Режим кнопки.</param>
         /// <returns>Оформление кнопки.</returns>
         private static ActionButtonAppearance Look(ActionMode mode) => mode switch {
-            ActionMode.Cancel => new ActionButtonAppearance("Отмена", true, "Style.ActionButton.Cancel"),
+            ActionMode.Cancel => new ActionButtonAppearance("Отменить загрузку", true, "Style.ActionButton.Cancel"),
             ActionMode.Dequeue => new ActionButtonAppearance("Убрать из очереди", true, "Style.ActionButton.Dequeue"),
             ActionMode.Checking => new ActionButtonAppearance("Проверка…", false, "Style.ActionButton.Checking"),
             ActionMode.Deleting => new ActionButtonAppearance("Удаление…", false, "Style.ActionButton.Checking"),
             ActionMode.Play => new ActionButtonAppearance("Играть", true, "Style.ActionButton.Play"),
-            ActionMode.Retry => new ActionButtonAppearance("Повторить", true, "Style.ActionButton.Retry"),
+            ActionMode.Retry => new ActionButtonAppearance("Повторить загрузку", true, "Style.ActionButton.Retry"),
 
             // Причина и сроки — в баннере шапки, на кнопке только суть запрета
             ActionMode.Maintenance => new ActionButtonAppearance("Технические работы", false, "Style.ActionButton.Checking"),

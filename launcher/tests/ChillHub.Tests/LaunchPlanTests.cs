@@ -75,6 +75,8 @@ namespace ChillHub.Tests {
             Check(LaunchAction.InstallGame, false, true, true, LaunchStep.Enqueue);
             Check(LaunchAction.Update, false, true, false, LaunchStep.Blocked);
             Check(LaunchAction.InstallMods, false, true, false, LaunchStep.Blocked);
+            Check(LaunchAction.UpdateMods, false, true, false, LaunchStep.Blocked);
+            Check(LaunchAction.UpdateMods, true, false, true, LaunchStep.InstallMods);
             Check(LaunchAction.InstallMods, true, false, true, LaunchStep.InstallMods);
 
             static void Check(

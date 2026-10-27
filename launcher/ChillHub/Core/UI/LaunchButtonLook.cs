@@ -17,27 +17,32 @@ namespace ChillHub.Core.UI {
     /// заливки — залитая и контурная стояли вплотную одинаково жирными близнецами.
     /// </para>
     /// <para>
-    /// Здесь оно одно на обе кнопки и проверяется тестом: у главной подпись плотнее и
-    /// набрана тем же цветом, что заголовок, у запасной — обычным начертанием и
-    /// вторичным цветом.
+    /// Действие — главная строка на обеих кнопках. Название копии идёт ниже,
+    /// вторичным цветом; главный вариант отличается заливкой, а не размером.
     /// </para>
     /// </summary>
     public static class LaunchButtonLook {
-        /// <summary>Насколько приглушена подпись на залитой кнопке.</summary>
+        /// <summary>Короткая подпись меню дополнительных действий.</summary>
+        public static string MoreOptionsLabel => "Ещё";
+
+        /// <summary>Насколько приглушено название копии на залитой кнопке.</summary>
         public const double AccentNoteOpacity = 0.85;
 
         /// <summary>Одевает надписи кнопки запуска.</summary>
-        /// <param name="title">Крупная строка: откуда копия.</param>
-        /// <param name="note">Мелкая строка: что произойдёт по нажатию.</param>
+        /// <param name="title">Вторичная строка: откуда копия.</param>
+        /// <param name="note">Главная строка: что произойдёт по нажатию.</param>
         /// <param name="accent">Кнопка залита акцентом — это главный путь.</param>
-        /// <param name="subtleForeground">Вторичный цвет для подписи запасной кнопки.</param>
-        public static void Apply(TextBlock title, TextBlock note, bool accent, Brush subtleForeground) {
-            title.FontWeight = accent ? FontWeights.SemiBold : FontWeights.Normal;
-
-            // На заливке подпись того же цвета, что заголовок, просто тише: вторичный
-            // серый по акценту не проходит по контрасту (см. ThemeContrastTests).
-            note.Foreground = accent ? title.Foreground : subtleForeground;
-            note.Opacity = accent ? AccentNoteOpacity : 1.0;
+        /// <param name="subtleForeground">Вторичный цвет названия копии.</param>
+        /// <param name="enabled">Доступно ли действие.</param>
+        public static void Apply(TextBlock title, TextBlock note, bool accent, Brush subtleForeground, bool enabled = true) {
+            // Действие заметнее названия копии. Основной цвет наследуется от кнопки,
+            // поэтому выключение и смена темы не оставляют яркую надпись на сером фоне.
+            note.ClearValue(TextBlock.ForegroundProperty);
+            note.FontWeight = FontWeights.SemiBold;
+            note.Opacity = 1.0;
+            title.FontWeight = FontWeights.Normal;
+            title.Foreground = accent || !enabled ? note.Foreground : subtleForeground;
+            title.Opacity = accent && enabled ? AccentNoteOpacity : 1.0;
         }
     }
 }
