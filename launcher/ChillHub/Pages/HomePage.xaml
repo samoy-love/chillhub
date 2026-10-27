@@ -1006,12 +1006,8 @@
              с очередью загрузок витрина выдавливала новости в ноль. Доля 0.30: на 2K
              треть окна под витриной оказалась 350px почти пустого фона — обложка,
              обрезанная до 5:1, теряла и логотип, и силуэты, а текст занимал угол. -->
-        <!-- MinHeight не меньше содержимого (бейдж, заголовок, строка сведений, кнопка —
-             ~140px плюс поля 16 с двух сторон). На минимальном окне доля высоты давала
-             витрине меньше, чем нужно её содержимому: Grid переставал помещаться,
-             WPF накладывал на него layout-clip по внутреннему полю — обложка и
-             затемнение обрезались рамкой в 16px, а низ кнопки срезался. MinHeight
-             сильнее MaxHeight, поэтому доля здесь просто перестаёт работать. -->
+        <!-- Нижняя граница учитывает текст, перенесённые кнопки, поля и рамку.
+             Она важнее доли высоты окна: содержимое не должно обрезаться. -->
         <Border x:Name="HeroBanner" Grid.Row="0" Margin="0,0,0,8" CornerRadius="{DynamicResource Radius.L}" MinHeight="190"
                 BorderThickness="1" BorderBrush="{DynamicResource Brush.Border}"
                 MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=Page},
@@ -1032,26 +1028,17 @@
               </Style.Triggers>
             </Style>
           </Border.Style>
-          <Grid Margin="16">
-            <Grid.RowDefinitions>
-              <RowDefinition Height="*"/>
-              <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-
+          <Grid>
             <!-- Обложка из галереи игры (GalleryClient): показывается, когда gallery.json
                  отдал хотя бы одну картинку, иначе остаётся Collapsed и виден только градиент фона. -->
-            <!-- Кадрируется с упором вниз, а не по центру: когда витрина ниже пропорции
-                 обложки, срезается верх — небо и пустой фон, — а сюжетная часть, где обычно
-                 логотип и персонажи, остаётся в кадре.
-                 Кисть на прямоугольнике, а не <Image VerticalAlignment=Bottom>: у Image с
-                 не-Stretch выравниванием и отрицательным Margin разметка ужимала картинку в
-                 поле Grid без учёта Margin — на маленьком окне обложка стояла в рамке 16px
-                 внутри витрины. Прямоугольник тянется по слоту, а кадрирование делает кисть. -->
+            <!-- Фон занимает весь баннер независимо от высоты текста и кнопок.
+                 Поля принадлежат только содержимому: отрицательные отступы фона
+                 внутри тесного Grid попадали под layout-clip WPF. -->
             <!-- Opacity 0.75, а не 0.5: половинная прозрачность плюс два слоя затемнения
                  сверху гасили обложку до серого пятна. Читаемость текста держат сами
                  затемнения (Brush.HeroScrim/HeroScrimSide), а не глушение всей картинки. -->
-            <Rectangle x:Name="HeroCoverImg" Grid.Row="0" Grid.RowSpan="2" Opacity="0.75" Visibility="Collapsed"
-                       HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Margin="-16">
+            <Rectangle x:Name="HeroCoverImg" Opacity="0.75" Visibility="Collapsed"
+                       HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
               <Rectangle.Fill>
                 <ImageBrush x:Name="HeroCoverBrush" Stretch="UniformToFill" AlignmentX="Center" AlignmentY="Bottom"/>
               </Rectangle.Fill>
@@ -1059,18 +1046,16 @@
 
             <!-- Затемнение под текстом: светлый заголовок обязан читаться на любой обложке,
                  а не только на тёмной. -->
-            <Border Grid.Row="0" Grid.RowSpan="2" Background="{DynamicResource Brush.HeroScrim}"
-                    Margin="-16" IsHitTestVisible="False"/>
+            <Border Background="{DynamicResource Brush.HeroScrim}" IsHitTestVisible="False"/>
             <!-- Второй слой — слева направо: текст стоит в левом нижнем углу, а логотип
                  обложки обычно по центру. Одно вертикальное затемнение либо не спасало
                  заголовок от логотипа, либо гасило всю картинку. -->
-            <Border Grid.Row="0" Grid.RowSpan="2" Background="{DynamicResource Brush.HeroScrimSide}"
-                    Margin="-16" IsHitTestVisible="False"/>
+            <Border Background="{DynamicResource Brush.HeroScrimSide}" IsHitTestVisible="False"/>
 
             <!-- Иконка игры крупным планом — заглушка, пока обложки нет. Поверх обложки
                  не рисуется: маленький квадрат в углу спорил с картинкой во всю витрину. -->
-            <Grid Grid.Row="0" Grid.RowSpan="2" HorizontalAlignment="Right" VerticalAlignment="Top" Width="104" Height="104"
-                  Margin="0,0,0,0" Opacity="0.9">
+            <Grid HorizontalAlignment="Right" VerticalAlignment="Top" Width="104" Height="104"
+                  Margin="16" Opacity="0.9">
               <Grid.Style>
                 <Style TargetType="Grid">
                   <Style.Triggers>
@@ -1084,7 +1069,7 @@
                      Stretch="Uniform" ImageFailed="CoverImg_ImageFailed"/>
             </Grid>
 
-            <StackPanel x:Name="HeroContent" Grid.Row="1" VerticalAlignment="Bottom" SizeChanged="HeroContent_SizeChanged">
+            <StackPanel x:Name="HeroContent" Margin="16" VerticalAlignment="Bottom" SizeChanged="HeroContent_SizeChanged">
               <!-- Бейдж — таблетка: он называет состояние, а не ограничивает область,
                    и от кнопки рядом должен отличаться формой, а не только размером. -->
               <Border x:Name="HeroStatusBadge" Style="{DynamicResource Border.Pill}" Padding="9,3"
@@ -1111,7 +1096,7 @@
                      не отвечала на вопрос, ЧТО именно запустится. -->
                 <Button x:Name="ActionBtn" Content="Играть" Click="ActionBtn_Click"
                         Style="{DynamicResource Style.ActionButton.Play}"
-                        MinWidth="220" Height="56" Padding="16,0" Margin="0,0,8,8" VerticalAlignment="Center"/>
+                        MinWidth="180" Height="48" Padding="16,0" Margin="0,0,8,8" VerticalAlignment="Center"/>
                 <!-- Два способа играть с модами — своей копией из Steam и сборкой с сервера —
                      вынесены кнопками. Выбор, спрятанный в меню, — не выбор: чем запустит
                      «Играть», можно было узнать, только открыв стрелку. Кнопки нет, если её
