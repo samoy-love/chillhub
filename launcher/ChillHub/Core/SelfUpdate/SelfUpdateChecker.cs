@@ -112,9 +112,10 @@ namespace ChillHub.Core.SelfUpdate {
         /// Спрашивает сервер о последней версии и решает, надо ли обновляться.
         /// </summary>
         /// <returns>Решение и состояние окна.</returns>
-        internal async Task<SelfUpdateDecision> CheckAsync() {
+        internal async Task<SelfUpdateDecision> CheckAsync(TimeSpan? timeout = null) {
+            using var cancellation = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(15));
             try {
-                var latest = await this.http.GetFromJsonAsync<LatestMeta>($"{this.baseApi()}/manifests/launcher/latest.json");
+                var latest = await this.http.GetFromJsonAsync<LatestMeta>($"{this.baseApi()}/manifests/launcher/latest.json", cancellation.Token);
                 var remote = latest?.Version?.Trim();
                 var local = SelfUpdateVersions.ReadLocalVersion(this.paths.InstallDir);
 
@@ -185,7 +186,10 @@ namespace ChillHub.Core.SelfUpdate {
                 Manifest? mf = null;
                 try {
                     var manifestUrl = $"{this.baseApi()}/manifests/launcher/{remote}.json";
-                    mf = await this.sync.GetManifestAsync(manifestUrl, CancellationToken.None);
+                    mf = await this.sync.GetManifestAsync(manifestUrl, cancellation.Token);
+                }
+                catch (OperationCanceledException) {
+                    throw;
                 }
                 catch (ManifestValidationException ex) {
                     // Манифест отклонён проверкой структуры — предлагать обновление
