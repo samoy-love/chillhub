@@ -169,7 +169,7 @@ namespace ChillHub.Core.Home {
             ActionMode.Checking => new ActionButtonAppearance("Проверка…", false, "Style.ActionButton.Checking"),
             ActionMode.Deleting => new ActionButtonAppearance("Удаление…", false, "Style.ActionButton.Checking"),
             ActionMode.Play => new ActionButtonAppearance("Играть", true, "Style.ActionButton.Play"),
-            ActionMode.Retry => new ActionButtonAppearance("Повторить", true, "Style.ActionButton.Retry"),
+            ActionMode.Retry => new ActionButtonAppearance("Повторить загрузку", true, "Style.ActionButton.Retry"),
 
             // Причина и сроки — в баннере шапки, на кнопке только суть запрета
             ActionMode.Maintenance => new ActionButtonAppearance("Технические работы", false, "Style.ActionButton.Checking"),

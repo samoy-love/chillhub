@@ -14,8 +14,8 @@
     <!-- Кнопка действия. Главные состояния («Играть», «Обновить», «Установить») красятся
          ОДНОЙ заливкой: раньше у каждого был свой цвет — сиреневый, тёмно-лиловый и
          розовый градиент — и по цвету нельзя было понять, что все они означают одно и то
-         же «сделай главное». Отличаются они текстом, а не окраской. Опасные состояния
-         («Отмена», «Повторить») остаются приглушённо-красными.
+         же «сделай главное». Отличаются они текстом, а не окраской. Отмена загрузки
+         остаётся приглушённо-красной, а повтор — обычным основным действием.
          Заливка — Color.AccentFill, а не сам акцент: на акценте не читалась ни белая
          подпись, ни тёмная, обе не дотягивали до порога AA (см. палитру темы). -->
     <SolidColorBrush x:Key="Btn.Play.Bg" Color="{DynamicResource Color.AccentFill}"/>
@@ -40,12 +40,12 @@
 
     <!-- Повторить и Отмена: те же краски, что у Style.Button.Danger в теме. Раньше
          десять значений были выписаны здесь заново и жили своей жизнью. -->
-    <SolidColorBrush x:Key="Btn.Retry.Bg" Color="{DynamicResource Color.DangerFill}"/>
-    <SolidColorBrush x:Key="Btn.Retry.Bg.Hover" Color="{DynamicResource Color.DangerFillHover}"/>
-    <SolidColorBrush x:Key="Btn.Retry.Bg.Pressed" Color="{DynamicResource Color.DangerFillPressed}"/>
-    <SolidColorBrush x:Key="Btn.Retry.Bg.Disabled" Color="{DynamicResource Color.DangerFillDisabled}"/>
-    <SolidColorBrush x:Key="Btn.Retry.Fg" Color="{DynamicResource Color.DangerText}"/>
-    <SolidColorBrush x:Key="Btn.Retry.Border" Color="{DynamicResource Color.Danger}"/>
+    <SolidColorBrush x:Key="Btn.Retry.Bg" Color="{DynamicResource Color.AccentFill}"/>
+    <SolidColorBrush x:Key="Btn.Retry.Bg.Hover" Color="{DynamicResource Color.AccentFillHover}"/>
+    <SolidColorBrush x:Key="Btn.Retry.Bg.Pressed" Color="{DynamicResource Color.AccentFillPressed}"/>
+    <SolidColorBrush x:Key="Btn.Retry.Bg.Disabled" Color="{DynamicResource Color.AccentFillDisabled}"/>
+    <SolidColorBrush x:Key="Btn.Retry.Fg" Color="{DynamicResource Color.OnAccent}"/>
+    <SolidColorBrush x:Key="Btn.Retry.Border" Color="Transparent"/>
 
     <SolidColorBrush x:Key="Btn.Cancel.Bg" Color="{DynamicResource Color.DangerFill}"/>
     <SolidColorBrush x:Key="Btn.Cancel.Bg.Hover" Color="{DynamicResource Color.DangerFillHover}"/>
