@@ -120,17 +120,18 @@ namespace ChillHub.Tests {
         }
 
         /// <summary>Установка и обновление модов не запускают даже готовую игру.</summary>
+        /// <param name="update">Обновление ранее установленных модов.</param>
         /// <param name="note">Подпись нажатого действия.</param>
         /// <returns>Задача теста.</returns>
         [Theory]
-        [InlineData("установить моды")]
-        [InlineData("обновить моды")]
-        public async Task УстановкаИОбновлениеМодовНеЗапускаютИгру(string note) {
+        [InlineData(false, "установить моды")]
+        [InlineData(true, "обновить моды")]
+        public async Task УстановкаИОбновлениеМодовНеЗапускаютИгру(bool update, string note) {
             var probe = new Probe { InstallResult = true };
             this.ModdedDir();
 
             await probe.Runner().RunAsync(
-                Game(), this.Option(LaunchAction.InstallMods, note), Off, this.Probes(modsInSteam: "pack-1"));
+                Game(), this.Option(update ? LaunchAction.UpdateMods : LaunchAction.InstallMods, note), Off, this.Probes(modsInSteam: "pack-1"));
 
             Assert.Single(probe.Installed);
             Assert.Empty(probe.Launched);

@@ -12,8 +12,8 @@ namespace ChillHub.Core.Mods {
     /// Одна кнопка запуска на витрине.
     /// </summary>
     /// <param name="Target">Что она запускает.</param>
-    /// <param name="Title">Крупная строка: откуда копия.</param>
-    /// <param name="Subtitle">Мелкая строка: что произойдёт по нажатию.</param>
+    /// <param name="Title">Вторичная строка: откуда копия.</param>
+    /// <param name="Subtitle">Главная строка: что произойдёт по нажатию.</param>
     /// <param name="Tooltip">Подсказка целиком — с названием модпака и пояснением.</param>
     /// <param name="Accent">Красить ли акцентом: это последний запущенный вариант.</param>
     /// <param name="Enabled">
@@ -22,6 +22,7 @@ namespace ChillHub.Core.Mods {
     /// вместо того чтобы исчезнуть или поднять вторую копию игры.
     /// </param>
     /// <param name="Action">Действие, обещанное подписью кнопки.</param>
+    /// <param name="RunState">Состояние запуска этой копии.</param>
     internal sealed record LaunchButtonView(
         LaunchTarget Target,
         string Title,
@@ -29,14 +30,17 @@ namespace ChillHub.Core.Mods {
         string Tooltip,
         bool Accent,
         bool Enabled = true,
-        LaunchAction Action = LaunchAction.Play) {
+        LaunchAction Action = LaunchAction.Play,
+        Game.GameRunState RunState = Game.GameRunState.None) {
         /// <summary>Значок действия: установка и обновление не обещают запуск игры.</summary>
-        internal string Glyph => this.Action switch {
-            LaunchAction.InstallMods or LaunchAction.InstallGame => "\uE896",
-            LaunchAction.Update or LaunchAction.RepairMods => "\uE895",
-            LaunchAction.Play => "\uE768",
-            _ => string.Empty,
-        };
+        internal string Glyph => this.RunState != Game.GameRunState.None
+            ? (this.RunState == Game.GameRunState.Starting ? "\uE916" : "\uE73E")
+            : this.Action switch {
+                LaunchAction.InstallMods or LaunchAction.InstallGame => "\uE896",
+                LaunchAction.Update or LaunchAction.UpdateMods or LaunchAction.RepairMods => "\uE895",
+                LaunchAction.Play => "\uE768",
+                _ => string.Empty,
+            };
 
         /// <summary>
         /// Ключ стиля кнопки в ресурсах темы. Акцент носит вариант, которым играли в
@@ -195,8 +199,8 @@ namespace ChillHub.Core.Mods {
                         return b;
                     }
 
-                    var note = Game.RunningGameLook.ButtonNote(state);
-                    return b with { Subtitle = note, Tooltip = $"{b.Tooltip} · {note}", Enabled = false };
+                    var note = Game.RunningGameLook.Headline(state);
+                    return b with { Subtitle = note, Tooltip = $"{b.Tooltip} · {note}", Enabled = false, RunState = state };
                 })
                 .ToList();
 
@@ -265,7 +269,15 @@ namespace ChillHub.Core.Mods {
             LaunchOption option, ModsInfo? mods, LaunchTarget? remembered, bool soleAction = false) {
             // Подпись говорит о ДЕЙСТВИИ, а не о состоянии: «установить моды» вместо
             // «моды не установлены». Кнопка на то и кнопка, что называет своё нажатие.
-            var subtitle = option.ReadyToPlay ? "Играть с модами" : option.Note;
+            var subtitle = option.Action switch {
+                LaunchAction.Play => "Играть с модами",
+                LaunchAction.InstallMods => "Установить моды",
+                LaunchAction.UpdateMods => "Обновить моды",
+                LaunchAction.RepairMods => "Восстановить моды",
+                LaunchAction.InstallGame => "Установить игру",
+                LaunchAction.Update => "Обновить игру",
+                _ => option.Note,
+            };
             var full = ModsLaunch.TitleOf(option.Target, mods);
             var wasLast = remembered == option.Target;
             var accent = wasLast || soleAction;

@@ -25,9 +25,11 @@ namespace ChillHub.Tests {
 
             LaunchButtonLook.Apply(title, note, accent: true, subtleForeground: Brushes.Gray);
 
-            Assert.Equal(FontWeights.SemiBold, title.FontWeight);
+            Assert.Equal(FontWeights.SemiBold, note.FontWeight);
+            Assert.Equal(FontWeights.Normal, title.FontWeight);
             Assert.Same(title.Foreground, note.Foreground);
-            Assert.Equal(LaunchButtonLook.AccentNoteOpacity, note.Opacity);
+            Assert.Equal(LaunchButtonLook.AccentNoteOpacity, title.Opacity);
+            Assert.Equal(1.0, note.Opacity);
         });
 
         /// <summary>Запасная: обычное начертание и вторичный цвет подписи, без приглушения.</summary>
@@ -38,7 +40,8 @@ namespace ChillHub.Tests {
             LaunchButtonLook.Apply(title, note, accent: false, subtleForeground: Brushes.Gray);
 
             Assert.Equal(FontWeights.Normal, title.FontWeight);
-            Assert.Same(Brushes.Gray, note.Foreground);
+            Assert.Same(Brushes.Gray, title.Foreground);
+            Assert.Equal(DependencyProperty.UnsetValue, note.ReadLocalValue(TextBlock.ForegroundProperty));
             Assert.Equal(1.0, note.Opacity);
         });
 
@@ -55,7 +58,8 @@ namespace ChillHub.Tests {
 
             Assert.Equal(FontWeights.Normal, title.FontWeight);
             Assert.Equal(1.0, note.Opacity);
-            Assert.Same(Brushes.Gray, note.Foreground);
+            Assert.Same(Brushes.Gray, title.Foreground);
+            Assert.Equal(DependencyProperty.UnsetValue, note.ReadLocalValue(TextBlock.ForegroundProperty));
         });
 
         private static (TextBlock Title, TextBlock Note) Pair()

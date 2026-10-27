@@ -175,6 +175,7 @@ namespace ChillHub.Core.Mods {
                     return new LaunchDecision(LaunchStep.Nothing, option.Note);
 
                 case LaunchAction.InstallMods:
+                case LaunchAction.UpdateMods:
                     // Модпак пишется в папку игры — это обновление файлов, а не запуск.
                     return state?.BlocksUpdate == true
                         ? new LaunchDecision(LaunchStep.Blocked, banner)

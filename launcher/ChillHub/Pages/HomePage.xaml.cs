@@ -1995,12 +1995,21 @@ namespace ChillHub.Pages {
             return null;
         }
 
+        /// <summary>Перенесённые кнопки не должны обрезаться высотой обложки.</summary>
+        /// <param name="sender">Содержимое витрины.</param>
+        /// <param name="e">Новые размеры содержимого.</param>
+        private void HeroContent_SizeChanged(object sender, SizeChangedEventArgs e) {
+            this.HeroBanner.MinHeight = Math.Max(190, e.NewSize.Height + 32);
+        }
+
         private void SetActionMode(ActionMode mode) {
             this.actionMode = mode;
             try {
-                var look = ActionButtonState.Appearance(mode, this.SelectedRunState());
+                var run = this.SelectedRunState();
+                var look = ActionButtonState.Appearance(mode, run);
                 this.ActionBtn.Content = ActionButtonContent(
-                    look.IsEnabled ? ActionButtonState.Glyph(mode) : string.Empty, look.Content);
+                    ActionButtonState.Glyph(mode, run), look.Content);
+                System.Windows.Automation.AutomationProperties.SetName(this.ActionBtn, look.Content);
                 this.ActionBtn.IsEnabled = look.IsEnabled;
                 this.ApplyActionButtonStyle(look.StyleKey);
                 this.SyncLaunchBar(mode);
@@ -2031,8 +2040,9 @@ namespace ChillHub.Pages {
             row.Children.Add(new TextBlock {
                 FontFamily = new FontFamily("Segoe MDL2 Assets"),
                 Text = glyph,
-                FontSize = 14,
-                Margin = new Thickness(0, 0, 10, 0),
+                FontSize = 16,
+                Width = 20,
+                Margin = new Thickness(0, 0, 12, 0),
                 VerticalAlignment = VerticalAlignment.Center,
             });
             row.Children.Add(new TextBlock {
@@ -2124,6 +2134,7 @@ namespace ChillHub.Pages {
             title.Text = model.Title;
             note.Text = model.Subtitle;
             button.ToolTip = model.Tooltip;
+            System.Windows.Automation.AutomationProperties.SetName(button, $"{model.Subtitle} — {model.Title}");
             button.Tag = model;
             button.Visibility = Visibility.Visible;
             button.IsEnabled = model.Enabled;
@@ -2136,7 +2147,7 @@ namespace ChillHub.Pages {
             // (обе живут именованными TextBlock'ами внутри содержимого), а различаться
             // залитая и контурная кнопки обязаны не только фоном.
             Core.UI.LaunchButtonLook.Apply(
-                title, note, model.Accent, (Brush)(this.TryFindResource("Brush.TextSecondary") ?? title.Foreground));
+                title, note, model.Accent, (Brush)(this.TryFindResource("Brush.TextSecondary") ?? title.Foreground), model.Enabled);
         }
 
         /// <summary>

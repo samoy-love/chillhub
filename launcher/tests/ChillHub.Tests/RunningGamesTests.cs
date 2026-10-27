@@ -151,7 +151,8 @@ namespace ChillHub.Tests {
             var local = view.Buttons.Single(b => b.Target == LaunchTarget.LocalModded);
 
             Assert.False(steam.Enabled);
-            Assert.Equal("запускается…", steam.Subtitle);
+            Assert.Equal("Запускается…", steam.Subtitle);
+            Assert.Equal("\uE916", steam.Glyph);
 
             Assert.True(local.Enabled);
             Assert.Equal("Играть с модами", local.Subtitle);
@@ -305,7 +306,8 @@ namespace ChillHub.Tests {
 
             Assert.Equal(2, view.Buttons.Count);
             Assert.All(view.Buttons, b => Assert.False(b.Enabled));
-            Assert.All(view.Buttons, b => Assert.Equal("игра запущена", b.Subtitle));
+            Assert.All(view.Buttons, b => Assert.Equal("Игра запущена", b.Subtitle));
+            Assert.All(view.Buttons, b => Assert.Equal("\uE73E", b.Glyph));
         }
 
         /// <summary>Пока игра только запускается — то же самое, другими словами.</summary>
@@ -315,7 +317,8 @@ namespace ChillHub.Tests {
                 Pack(), playMode: true, steamAllowed: false, All(), remembered: null, runOf: _ => GameRunState.Starting);
 
             Assert.All(view.Buttons, b => Assert.False(b.Enabled));
-            Assert.All(view.Buttons, b => Assert.Equal("запускается…", b.Subtitle));
+            Assert.All(view.Buttons, b => Assert.Equal("Запускается…", b.Subtitle));
+            Assert.All(view.Buttons, b => Assert.Equal("\uE916", b.Glyph));
         }
 
         /// <summary>Незапущенная игра ничего не теряет: подписи прежние, кнопки живые.</summary>
@@ -348,7 +351,7 @@ namespace ChillHub.Tests {
         public void ОстальныеРежимыКнопкиЗапущеннаяИграНеТрогает() {
             Assert.Equal("Обновить", ActionButtonState.Appearance(ActionMode.Update, GameRunState.Running).Content);
             Assert.Equal("Установить", ActionButtonState.Appearance(ActionMode.Install, GameRunState.Running).Content);
-            Assert.Equal("Отмена", ActionButtonState.Appearance(ActionMode.Cancel, GameRunState.Running).Content);
+            Assert.Equal("Отменить загрузку", ActionButtonState.Appearance(ActionMode.Cancel, GameRunState.Running).Content);
         }
 
         /// <summary>
