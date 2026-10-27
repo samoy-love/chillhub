@@ -44,10 +44,17 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
-                Version = "1.7.11",
+                Version = "1.7.12",
                 Date = "2026-10-27",
                 Changes = new[] {
                     "Обложка игры снова заполняет баннер, а кнопка запуска стала компактнее.",
+                },
+            },
+            new ChangelogRelease {
+                Version = "1.7.11",
+                Date = "2026-10-27",
+                Changes = new[] {
+                    "Настройки стали аккуратнее, проверка обновлений больше не заставляет долго ждать ответа.",
                 },
             },
             new ChangelogRelease {

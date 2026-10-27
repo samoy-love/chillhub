@@ -48,7 +48,7 @@
     <!-- Header -->
     <!-- «Назад» слева, заголовок следом — как на странице игры и в новости. Раньше
          кнопка стояла справа, и на трёх экранах возврат был в трёх разных местах. -->
-    <Grid Grid.Row="0" Margin="0,0,0,16">
+    <Grid Grid.Row="0" Margin="0,0,8,16" MaxWidth="820">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="Auto"/>
         <ColumnDefinition Width="*"/>
@@ -68,16 +68,17 @@
     <!-- Content. Обёрнуто в ScrollViewer: на невысоком окне карточки не влезают
          по вертикали — без прокрутки нижние секции просто обрезались по низу
          страницы. -->
-    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-    <StackPanel Orientation="Vertical" VerticalAlignment="Top" HorizontalAlignment="Center"
-                MaxWidth="720" Margin="0,0,8,0">
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                  CanContentScroll="False" Padding="0,4,0,0">
+    <StackPanel Orientation="Vertical" VerticalAlignment="Top"
+                MaxWidth="820" Margin="0,0,8,0">
       <!-- Storage section -->
       <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,12">
         <StackPanel>
           <TextBlock Text="Папка для установки игр" Style="{StaticResource Style.SettingsSection}"/>
           <Grid>
             <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="160"/>
+              <ColumnDefinition Width="150"/>
               <ColumnDefinition Width="*"/>
               <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
@@ -99,13 +100,13 @@
           <TextBlock Text="Скачивание" Style="{StaticResource Style.SettingsSection}"/>
           <Grid>
             <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="160"/>
+              <ColumnDefinition Width="150"/>
               <ColumnDefinition Width="Auto"/>
               <ColumnDefinition Width="Auto"/>
               <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
             <TextBlock Text="Потоки" Style="{StaticResource Style.SettingsLabel}"/>
-            <Slider Grid.Column="1" Name="ThreadsSlider" Minimum="2" Maximum="16" Width="260" Margin="12,0,0,0"
+            <Slider Grid.Column="1" Name="ThreadsSlider" Minimum="2" Maximum="16" Width="220" Margin="12,0,0,0"
                     TickFrequency="1" IsSnapToTickEnabled="true" ValueChanged="ThreadsSlider_ValueChanged"/>
             <TextBox Grid.Column="2" Name="ThreadsBox" Style="{StaticResource Style.SettingsNumberBox}"
                      LostKeyboardFocus="ThreadsBox_LostKeyboardFocus" KeyDown="NumberBox_KeyDown"/>
@@ -116,7 +117,7 @@
                «без лимита»: ноль слева, означающий «максимум», читался наоборот. -->
           <Grid Margin="0,14,0,0">
             <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="160"/>
+              <ColumnDefinition Width="150"/>
               <ColumnDefinition Width="Auto"/>
               <ColumnDefinition Width="Auto"/>
               <ColumnDefinition Width="Auto"/>
@@ -149,31 +150,20 @@
       <Border Style="{DynamicResource Style.Card}" Padding="16" Margin="0,0,0,6">
         <StackPanel>
           <TextBlock Text="О программе" Style="{StaticResource Style.SettingsSection}"/>
-          <Grid>
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="160"/>
-              <ColumnDefinition Width="Auto"/>
-              <ColumnDefinition Width="Auto"/>
-              <ColumnDefinition Width="Auto"/>
-              <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
+          <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
             <TextBlock Text="Версия лаунчера" Style="{StaticResource Style.SettingsLabel}"/>
-            <TextBlock Grid.Column="1" Name="VersionText" Text="—" FontFamily="Consolas" Margin="12,0,0,0" VerticalAlignment="Center"/>
-            <!-- Номер версии сам по себе ничего не предлагает; рядом с ним ждут кнопку
-                 «проверить». Фоновая проверка молчит, когда всё актуально, — эта отвечает. -->
-            <Button Grid.Column="2" Name="CheckUpdateBtn" Content="Проверить обновления" Click="CheckUpdateBtn_Click"
-                    Style="{DynamicResource Style.Button.GhostNeutral}" MinHeight="32" MinWidth="180" Margin="16,0,0,0"/>
-            <!-- «Что нового» стоит рядом с «Проверить обновления» и номером версии: это
-                 один разговор об обновлениях лаунчера. Оформлена скромнее соседки —
-                 проверка обновлений здесь главное действие, а список только читают. -->
-            <Button Grid.Column="3" Name="ChangelogBtn" Content="Что нового" Click="ChangelogBtn_Click"
-                    Style="{DynamicResource Style.Button.Link}" MinHeight="32" Margin="16,0,0,0"/>
-            <TextBlock Grid.Column="4" Name="CheckUpdateStatus" Text="" Style="{StaticResource Style.SettingsLabel}" Margin="12,0,0,0"
-                       TextTrimming="CharacterEllipsis"/>
-          </Grid>
-          <Button Name="OpenLogsBtn" Content="Открыть папку с логами" Click="OpenLogsBtn_Click"
-                  Style="{DynamicResource Style.Button.GhostNeutral}"
-                  HorizontalAlignment="Left" MinHeight="32" MinWidth="200" Margin="0,12,0,0"/>
+            <TextBlock Name="VersionText" Text="—" FontFamily="Consolas" Margin="12,0,0,0" VerticalAlignment="Center"/>
+          </StackPanel>
+          <WrapPanel>
+            <Button Name="CheckUpdateBtn" Content="Проверить обновления" Click="CheckUpdateBtn_Click"
+                    Style="{DynamicResource Style.Button.GhostNeutral}" MinHeight="32" MinWidth="180" Margin="0,0,12,0"/>
+            <Button Name="ChangelogBtn" Content="Что нового" Click="ChangelogBtn_Click"
+                    Style="{DynamicResource Style.Button.Link}" MinHeight="32" Margin="0,0,12,0"/>
+            <Button Name="OpenLogsBtn" Content="Открыть папку с логами" Click="OpenLogsBtn_Click"
+                    Style="{DynamicResource Style.Button.GhostNeutral}" MinHeight="32" MinWidth="200" Margin="0"/>
+          </WrapPanel>
+          <TextBlock Name="CheckUpdateStatus" Text="" TextWrapping="Wrap"
+                     Style="{StaticResource Style.SettingsLabel}" Margin="0,8,0,0"/>
         </StackPanel>
       </Border>
     </StackPanel>
