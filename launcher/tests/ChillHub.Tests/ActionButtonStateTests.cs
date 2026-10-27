@@ -133,7 +133,7 @@ namespace ChillHub.Tests {
             AssertLook(ActionMode.Update, "Обновить", true, "Style.ActionButton.Update");
             AssertLook(ActionMode.Play, "Играть", true, "Style.ActionButton.Play");
             AssertLook(ActionMode.Retry, "Повторить", true, "Style.ActionButton.Retry");
-            AssertLook(ActionMode.Cancel, "Отмена", true, "Style.ActionButton.Cancel");
+            AssertLook(ActionMode.Cancel, "Отменить загрузку", true, "Style.ActionButton.Cancel");
 
             // Ждущая позиция — нейтральная кнопка: красная «Отмена» обещает остановить
             // процесс, а процесса ещё нет.

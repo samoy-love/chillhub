@@ -35,12 +35,13 @@ namespace ChillHub.Tests {
         /// <summary>Неизменившееся действие обновления остаётся доступным.</summary>
         [Fact]
         public void ОбновлениеНаКнопкеСохраняетДействие() {
-            var option = Option(LaunchTarget.SteamModded, LaunchAction.InstallMods, "обновить моды");
+            var option = Option(LaunchTarget.SteamModded, LaunchAction.UpdateMods, "обновить моды");
             var view = LaunchButtons.Compute(new ModsInfo { SteamAppId = "123" }, true, true, new[] { option }, null);
             var button = Assert.Single(view.Buttons);
             var chosen = LaunchButtons.Chosen(new[] { option }, button.Target, button.Action);
 
-            Assert.Equal("обновить моды", button.Subtitle);
+            Assert.Equal("Обновить моды", button.Subtitle);
+            Assert.Equal("\uE895", button.Glyph);
             Assert.Same(option, chosen.Option);
         }
 
@@ -110,7 +111,8 @@ namespace ChillHub.Tests {
 
             var button = Assert.Single(LaunchButtons.Compute(Pack(), playMode: true, steamAllowed: false, options, null).Buttons);
 
-            Assert.Equal("установить моды", button.Subtitle);
+            Assert.Equal("Установить моды", button.Subtitle);
+            Assert.Equal("\uE896", button.Glyph);
             Assert.Contains("установить моды", button.Tooltip, System.StringComparison.Ordinal);
         }
 
@@ -253,7 +255,8 @@ namespace ChillHub.Tests {
 
             var button = Assert.Single(view.Buttons);
             Assert.Equal(LaunchTarget.SteamModded, button.Target);
-            Assert.Equal("установить моды", button.Subtitle);
+            Assert.Equal("Установить моды", button.Subtitle);
+            Assert.Equal("\uE896", button.Glyph);
 
             // «Установить» остаётся на месте: она про сборку, а не про моды.
             Assert.True(view.ActionVisible);

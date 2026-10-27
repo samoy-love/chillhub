@@ -44,17 +44,17 @@ namespace ChillHub.Core.Mods {
         /// <summary>Всё на месте — запустить.</summary>
         Play,
 
-        /// <summary>Поставить или обновить модпак в этой папке, потом запустить.</summary>
+        /// <summary>Установить модпак без запуска игры.</summary>
         InstallMods,
+
+        /// <summary>Обновить установленный модпак без запуска игры.</summary>
+        UpdateMods,
 
         /// <summary>
         /// Вернуть на место пропавшие файлы модпака — и остановиться.
         /// <para>
-        /// От <see cref="InstallMods"/> отличается именно этим: тот доводит до игры за
-        /// один щелчок, потому что игрок нажимал «хочу играть с модами». А здесь он
-        /// нажимал «восстановить моды» — и запуск игры следом оказывался неожиданностью.
-        /// После починки строка снова становится обычным «с модами», и запускает уже
-        /// следующий щелчок.
+        /// Проверяет и возвращает пропавшие файлы уже установленного модпака.
+        /// После восстановления для запуска нужно отдельно нажать «Играть».
         /// </para>
         /// </summary>
         RepairMods,
@@ -268,7 +268,7 @@ namespace ChillHub.Core.Mods {
             }
             else if (!string.Equals(ctx.SteamModsVersion.Trim(), (mods!.Version ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase)
                 || SteamPackRebuilt(ctx)) {
-                options.Add(Make(LaunchTarget.SteamModded, ctx.Steam.GameDir, true, LaunchAction.InstallMods, "обновить моды"));
+                options.Add(Make(LaunchTarget.SteamModded, ctx.Steam.GameDir, true, LaunchAction.UpdateMods, "обновить моды"));
             }
             else if (!DoorstopConfig.IsInstalled(ctx.Steam.GameDir) || ctx.SteamModsBroken) {
                 // Версия записана, а файлов нет. Проверка целостности в Steam тут ни при

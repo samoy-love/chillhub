@@ -361,7 +361,7 @@ namespace ChillHub.Tests {
                 Ctx(ModsWithRevision("bbbb2222"), steamDir, steam, steamModsRevision: "aaaa1111"));
 
             var modded = options.Single(o => o.Target == LaunchTarget.SteamModded);
-            Assert.Equal(LaunchAction.InstallMods, modded.Action);
+            Assert.Equal(LaunchAction.UpdateMods, modded.Action);
             Assert.Equal("обновить моды", modded.Note);
         }
 
@@ -495,7 +495,7 @@ namespace ChillHub.Tests {
             var options = ModsLaunch.Options(Ctx(Pack(), steamDir, steam, steamModsVersion: "ASTeam-LethalReloaded-2.2.11"));
 
             var modded = options.Single(o => o.Target == LaunchTarget.SteamModded);
-            Assert.Equal(LaunchAction.InstallMods, modded.Action);
+            Assert.Equal(LaunchAction.UpdateMods, modded.Action);
             Assert.Equal("обновить моды", modded.Note);
         }
 
