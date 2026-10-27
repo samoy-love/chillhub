@@ -1999,7 +1999,9 @@ namespace ChillHub.Pages {
         /// <param name="sender">Содержимое витрины.</param>
         /// <param name="e">Новые размеры содержимого.</param>
         private void HeroContent_SizeChanged(object sender, SizeChangedEventArgs e) {
-            this.HeroBanner.MinHeight = Math.Max(190, e.NewSize.Height + 32);
+            var contentHeight = e.NewSize.Height + this.HeroContent.Margin.Top + this.HeroContent.Margin.Bottom
+                + this.HeroBanner.BorderThickness.Top + this.HeroBanner.BorderThickness.Bottom;
+            this.HeroBanner.MinHeight = Math.Max(190, contentHeight);
         }
 
         private void SetActionMode(ActionMode mode) {
