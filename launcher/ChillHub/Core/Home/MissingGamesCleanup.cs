@@ -103,7 +103,7 @@ namespace ChillHub.Core.Home {
                     return MissingGamesText.Changed;
                 }
 
-                ValidateRoot(root);
+                using var guard = DeletionPathGuard.HoldRoot(root);
                 if (available(folder.Name)) {
                     return MissingGamesText.Available;
                 }
@@ -170,7 +170,8 @@ namespace ChillHub.Core.Home {
         }
 
         private static void DeleteNode(string path) {
-            if (!Exists(path)) {
+            using var handle = DeletionPathGuard.HoldEntry(path);
+            if (handle == null) {
                 return;
             }
 
@@ -178,6 +179,7 @@ namespace ChillHub.Core.Home {
             var directory = (attributes & FileAttributes.Directory) != 0;
             // Никакого рекурсивного Directory.Delete: у ссылок удаляется только сама запись.
             if ((attributes & FileAttributes.ReparsePoint) != 0) {
+                handle.Dispose();
                 if (directory) {
                     Directory.Delete(path, false);
                 }
@@ -198,6 +200,9 @@ namespace ChillHub.Core.Home {
                     }
                 }
 
+                // Родители остаются закреплены. После освобождения самой папки
+                // удаляем только запись, без повторного рекурсивного обхода.
+                handle.Dispose();
                 Directory.Delete(path, false);
             }
             else {
@@ -205,6 +210,7 @@ namespace ChillHub.Core.Home {
                     File.SetAttributes(path, attributes & ~FileAttributes.ReadOnly);
                 }
 
+                handle.Dispose();
                 File.Delete(path);
             }
         }

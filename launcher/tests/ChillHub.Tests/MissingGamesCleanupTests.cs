@@ -215,6 +215,72 @@ namespace ChillHub.Tests {
         }
 
         [Fact]
+        public void RootCannotBeSwappedWhileDeletionChecksRunningProcesses() {
+            using var temp = new TempDir();
+            using var outside = new TempDir();
+            var root = Directory.CreateDirectory(Path.Combine(temp.Root, "games")).FullName;
+            Directory.CreateDirectory(Path.Combine(root, "game"));
+            var save = outside.WriteFile("game/save.txt", "keep");
+            var snapshot = MissingGamesCleanup.Scan(root, Array.Empty<GameInfo>());
+            var replaced = false;
+            var checkedProcesses = false;
+            try {
+                var result = MissingGamesCleanup.DeleteFolder(snapshot, snapshot.Folders[0], () => root, _ => false, _ => false, _ => {
+                    checkedProcesses = true;
+                    try {
+                        Directory.Move(root, Path.Combine(temp.Root, "previous"));
+                        CreateJunction(root, outside.Root);
+                        replaced = true;
+                    }
+                    catch (IOException) {
+                        // Удаление удерживает родительский каталог до конца обхода.
+                    }
+
+                    return false;
+                }, _ => { });
+                Assert.True(File.Exists(save), "подмена корня не должна удалять внешние файлы");
+                Assert.True(checkedProcesses);
+                Assert.Equal(MissingGamesText.Deleted, result);
+                Assert.False(replaced);
+            }
+            finally {
+                if (replaced) {
+                    Directory.Delete(root);
+                }
+            }
+        }
+
+        [Fact]
+        public void TraversedEntryCannotBeRenamedUntilItsHandleIsReleased() {
+            using var temp = new TempDir();
+            var folder = Directory.CreateDirectory(Path.Combine(temp.Root, "nested")).FullName;
+            var moved = Path.Combine(temp.Root, "moved");
+            using (var held = DeletionPathGuard.HoldEntry(folder)) {
+                Assert.NotNull(held);
+                Assert.Throws<IOException>(() => Directory.Move(folder, moved));
+                // Другим играм не запрещена работа с файлами внутри общего корня.
+                File.WriteAllText(Path.Combine(folder, "new.txt"), "new");
+            }
+
+            Directory.Move(folder, moved);
+            Assert.Equal("new", File.ReadAllText(Path.Combine(moved, "new.txt")));
+        }
+
+        [Fact]
+        public void DeletionSupportsPathsLongerThanMaxPath() {
+            using var temp = new TempDir();
+            var game = Directory.CreateDirectory(Path.Combine(temp.Root, "game")).FullName;
+            var nested = Path.Combine(game, new string('a', 110), new string('b', 110));
+            Directory.CreateDirectory(nested);
+            File.WriteAllText(Path.Combine(nested, "save.txt"), "save");
+            Assert.True(nested.Length > 260);
+            var snapshot = MissingGamesCleanup.Scan(temp.Root, Array.Empty<GameInfo>());
+            Assert.Equal(MissingGamesText.Deleted, MissingGamesCleanup.DeleteFolder(snapshot, snapshot.Folders[0],
+                () => temp.Root, _ => false, _ => false, _ => false, _ => { }));
+            Assert.False(Directory.Exists(game));
+        }
+
+        [Fact]
         public void DirectoryLinksAreRemovedWithoutTouchingTheirTargets() {
             using var temp = new TempDir();
             using var outside = new TempDir();
