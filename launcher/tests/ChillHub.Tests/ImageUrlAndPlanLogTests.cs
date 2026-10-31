@@ -7,8 +7,10 @@ namespace ChillHub.Tests {
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
 
     using ChillHub.Core.Home;
+    using ChillHub.Core.Logging;
     using ChillHub.Core.Sync;
 
     using Xunit;
@@ -109,11 +111,14 @@ namespace ChillHub.Tests {
         [Fact]
         public void КрупныйПланВыгружаетсяЧастично() {
             using var dir = new TempDir();
+            using var logs = new TempDir();
             var downloads = new List<FileTask>();
             var deletes = new List<string>();
+            var emptyDirs = new List<string>();
             for (var i = 0; i < 500; i++) {
                 downloads.Add(new FileTask { RelativePath = $"data/file{i}.pak", Size = i });
                 deletes.Add($"old/file{i}.pak");
+                emptyDirs.Add($"empty/dir{i}");
             }
 
             var plan = new DiffPlan {
@@ -121,9 +126,31 @@ namespace ChillHub.Tests {
                 LocalRoot = dir.Root,
                 Downloads = downloads,
                 ToDelete = deletes,
+                EmptyDirsToCreate = emptyDirs,
             };
 
-            SyncPlanLog.LogPlanDownloads("game", "before", plan, dir.Root);
+            using (Logger.OverrideForTests(logs.Root)) {
+                SyncPlanLog.LogPlanDownloads("game", "before", plan, dir.Root);
+            }
+
+            var logPath = Path.Combine(logs.Root, "client.log");
+            Assert.True(File.Exists(logPath), "Дамп плана не записан в журнал");
+            var lines = File.ReadAllLines(logPath)
+                .Where(line => line.Contains("Plan[before] gid=game ", StringComparison.Ordinal)).ToArray();
+            Assert.Equal(33, lines.Length);
+            foreach (var (label, prefix, suffix, remainder) in new[] {
+                ("file", "data/file", ".pak", "files"),
+                ("toDelete", "old/file", ".pak", "toDelete entries"),
+                ("emptyDir", "empty/dir", string.Empty, "emptyDir entries"),
+            }) {
+                var entries = lines.Where(line => line.Contains($" {label}='", StringComparison.Ordinal)).ToArray();
+                Assert.Equal(10, entries.Length);
+                for (var i = 0; i < 10; i++) {
+                    Assert.Contains($"{label}='{prefix}{i}{suffix}'", entries[i], StringComparison.Ordinal);
+                }
+
+                Assert.Single(lines, line => line.EndsWith($"... and 490 more {remainder}", StringComparison.Ordinal));
+            }
         }
 
         /// <summary>Существующие файлы плана тоже обходятся — по ним и видно, что уже на диске.</summary>

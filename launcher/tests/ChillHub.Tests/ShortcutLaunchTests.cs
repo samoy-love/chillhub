@@ -27,6 +27,7 @@ namespace ChillHub.Tests {
         /// <summary>Ярлык ведёт в лаунчер и несёт в аргументах игру, путь к ней и название.</summary>
         [Fact]
         public void ЯрлыкВедётВЛаунчерСАргументамиИгры() {
+            Assert.True(GameLocalStateShortcutTests.ShellAvailable, "Для проверки ярлыка нужна рабочая WScript.Shell");
             using var desktop = new TempDir();
             using var games = new TempDir();
             var exe = games.WriteFile("gid/game.exe", "MZ");
@@ -37,10 +38,7 @@ namespace ChillHub.Tests {
             }
 
             var link = Path.Combine(desktop.Root, GameLocalState.ShortcutFileName("Игра"));
-            if (!GameLocalStateShortcutTests.ShellAvailable || !File.Exists(link)) {
-                // Оболочка ярлыков не создаёт (политика, урезанная система, агент сборки).
-                return;
-            }
+            Assert.True(File.Exists(link), "Ярлык не создан");
 
             var (target, arguments, icon) = ReadLink(link);
             Assert.Equal(launcher, target, ignoreCase: true);
@@ -58,6 +56,7 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void БезПутиКЛаунчеруЯрлыкВедётПрямоВИгру() {
+            Assert.True(GameLocalStateShortcutTests.ShellAvailable, "Для проверки ярлыка нужна рабочая WScript.Shell");
             using var desktop = new TempDir();
             using var games = new TempDir();
             var exe = games.WriteFile("gid/game.exe", "MZ");
@@ -67,9 +66,7 @@ namespace ChillHub.Tests {
             }
 
             var link = Path.Combine(desktop.Root, GameLocalState.ShortcutFileName("Игра"));
-            if (!GameLocalStateShortcutTests.ShellAvailable || !File.Exists(link)) {
-                return;
-            }
+            Assert.True(File.Exists(link), "Ярлык не создан");
 
             var (target, arguments, _) = ReadLink(link);
             Assert.Equal(exe, target, ignoreCase: true);
