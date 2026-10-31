@@ -398,10 +398,12 @@ namespace ChillHub.Core.Home {
         /// <param name="desktopDirectory">Каталог, играющий роль рабочего стола.</param>
         /// <param name="shellProgId">ProgID оболочки; несуществующий имитирует её отсутствие.</param>
         /// <param name="launcherPath">Путь к exe лаунчера, на который ссылается ярлык.</param>
+        /// <param name="createShortcut">Создание объекта ярлыка; null — настоящая оболочка Windows.</param>
         /// <returns>Объект, возвращающий настоящее окружение.</returns>
         internal static IDisposable OverrideShortcutEnvironmentForTests(
-            string desktopDirectory, string? shellProgId = null, string? launcherPath = null)
-            => new ShortcutEnvironmentOverride(desktopDirectory, shellProgId ?? ShellProgId, launcherPath);
+            string desktopDirectory, string? shellProgId = null, string? launcherPath = null,
+            Func<string, object>? createShortcut = null)
+            => new ShortcutEnvironmentOverride(desktopDirectory, shellProgId ?? ShellProgId, launcherPath, createShortcut);
 
         /// <summary>
         /// Полный путь к exe игры внутри её папки. Пустая строка — путь к exe не задан
@@ -506,10 +508,19 @@ namespace ChillHub.Core.Home {
                 var name = string.IsNullOrWhiteSpace(title) ? Path.GetFileNameWithoutExtension(exePath) : title;
                 var linkPath = Path.Combine(desktop, ShortcutFileName(name));
 
-                var shellType = Type.GetTypeFromProgID(env?.ShellProgId ?? ShellProgId);
-                if (shellType == null) {
-                    Logging.Logger.Warn("TryCreateDesktopShortcut: WScript.Shell недоступен, ярлык не создан");
-                    return;
+                dynamic shortcut;
+                if (env?.CreateShortcut != null) {
+                    shortcut = env.CreateShortcut(linkPath);
+                }
+                else {
+                    var shellType = Type.GetTypeFromProgID(env?.ShellProgId ?? ShellProgId);
+                    if (shellType == null) {
+                        Logging.Logger.Warn("TryCreateDesktopShortcut: WScript.Shell недоступен, ярлык не создан");
+                        return;
+                    }
+
+                    dynamic shell = Activator.CreateInstance(shellType)!;
+                    shortcut = shell.CreateShortcut(linkPath);
                 }
 
                 var launcher = env?.LauncherPath ?? LauncherPath();
@@ -518,8 +529,6 @@ namespace ChillHub.Core.Home {
                     : Shell.ShortcutTarget.BuildArguments(gameId, name, exePath);
                 var target = string.IsNullOrWhiteSpace(arguments) ? exePath : launcher;
 
-                dynamic shell = Activator.CreateInstance(shellType)!;
-                dynamic shortcut = shell.CreateShortcut(linkPath);
                 shortcut.TargetPath = target;
                 shortcut.Arguments = arguments;
                 shortcut.WorkingDirectory = Path.GetDirectoryName(target);
@@ -687,15 +696,18 @@ namespace ChillHub.Core.Home {
         /// <param name="DesktopDirectory">Каталог рабочего стола.</param>
         /// <param name="ShellProgId">ProgID оболочки Windows.</param>
         /// <param name="LauncherPath">Путь к exe лаунчера; null — определять самим.</param>
-        private sealed record ShortcutEnvironment(string DesktopDirectory, string ShellProgId, string? LauncherPath);
+        /// <param name="CreateShortcut">Создание объекта ярлыка; null — настоящая оболочка.</param>
+        private sealed record ShortcutEnvironment(
+            string DesktopDirectory, string ShellProgId, string? LauncherPath, Func<string, object>? CreateShortcut);
 
         /// <summary>Возвращает настоящее окружение ярлыка после <see cref="OverrideShortcutEnvironmentForTests"/>.</summary>
         private sealed class ShortcutEnvironmentOverride : IDisposable {
             private readonly ShortcutEnvironment? previous;
 
-            internal ShortcutEnvironmentOverride(string desktopDirectory, string shellProgId, string? launcherPath) {
+            internal ShortcutEnvironmentOverride(
+                string desktopDirectory, string shellProgId, string? launcherPath, Func<string, object>? createShortcut) {
                 this.previous = ScopedShortcutEnv.Value;
-                ScopedShortcutEnv.Value = new ShortcutEnvironment(desktopDirectory, shellProgId, launcherPath);
+                ScopedShortcutEnv.Value = new ShortcutEnvironment(desktopDirectory, shellProgId, launcherPath, createShortcut);
             }
 
             public void Dispose() => ScopedShortcutEnv.Value = this.previous;

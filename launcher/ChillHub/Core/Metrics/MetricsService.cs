@@ -58,6 +58,24 @@ namespace ChillHub.Core.Metrics {
         // бессмысленно — событие уже устарело, а сокет держать незачем.
         private static readonly TimeSpan SendTimeout = TimeSpan.FromSeconds(5);
 
+        private static readonly AsyncLocal<SendEnvironment?> ScopedSend = new();
+
+        /// <summary>Подменяет транспорт и очередь отправки, чтобы тест дождался всей работы без таймеров.</summary>
+        internal static IDisposable OverrideSendingForTests(HttpClient client, Action<Func<Task>> schedule)
+            => new SendingOverride(client, schedule);
+
+        private sealed record SendEnvironment(HttpClient Client, Action<Func<Task>> Schedule);
+
+        private sealed class SendingOverride : IDisposable {
+            private readonly SendEnvironment? previous = ScopedSend.Value;
+
+            internal SendingOverride(HttpClient client, Action<Func<Task>> schedule) {
+                ScopedSend.Value = new SendEnvironment(client, schedule);
+            }
+
+            public void Dispose() => ScopedSend.Value = this.previous;
+        }
+
         // Идентификатор установки живёт в %APPDATA%, а НЕ в каталоге установки.
         // Файл в каталоге установки попал бы в пакет сборки и в манифест
         // обновления — ровно так лаунчер и получил вечный цикл самообновления
@@ -252,11 +270,12 @@ namespace ChillHub.Core.Metrics {
                 return;
             }
 
-            _ = Task.Run(async () => {
+            var environment = ScopedSend.Value;
+            Func<Task> send = async () => {
                 try {
                     using var cts = new CancellationTokenSource(SendTimeout);
                     using var content = new StringContent(json, Encoding.UTF8, "application/json");
-                    using var resp = await HttpClientProvider.Shared
+                    using var resp = await (environment?.Client ?? HttpClientProvider.Shared)
                         .PostAsync(url, content, cts.Token).ConfigureAwait(false);
 
                     // Ответ не разбираем: единственное, что клиент мог бы с ним
@@ -265,7 +284,14 @@ namespace ChillHub.Core.Metrics {
                 catch {
                     // Метрика не стоит ни одной строки в логе пользователя.
                 }
-            });
+            };
+
+            if (environment == null) {
+                _ = Task.Run(send);
+            }
+            else {
+                environment.Schedule(send);
+            }
         }
 
         private static string AppVersion() {
