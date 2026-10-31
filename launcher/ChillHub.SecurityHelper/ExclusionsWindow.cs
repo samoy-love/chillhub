@@ -39,7 +39,7 @@ namespace ChillHub.SecurityHelper {
             this.removing = removing;
             this.nextRemoving = removing;
             this.journal = SecurityJournal.Read(SecurityJournal.DefaultPath);
-            var requested = paths.ToArray();
+            var requested = paths.Concat(this.journal.OfferedSteamPaths.Where(System.IO.Directory.Exists)).ToArray();
             HelperAppearance.Apply(this, "настройка защиты");
             this.Width = 720; this.Height = Math.Min(740, SystemParameters.WorkArea.Height - 48);
             this.MinWidth = 560; this.MinHeight = Math.Min(480, this.Height);
@@ -95,7 +95,7 @@ namespace ChillHub.SecurityHelper {
                     row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                     var pathLabel = HelperAppearance.Text(path, "Brush.Text", 13);
                     pathLabel.FontFamily = new FontFamily("Consolas");
-                    var check = new CheckBox { ToolTip = path, Tag = path, IsChecked = removing || requested.Any(p => string.Equals(p.TrimEnd('\\'), path, StringComparison.OrdinalIgnoreCase)), VerticalAlignment = VerticalAlignment.Center };
+                    var check = new CheckBox { ToolTip = path, Tag = path, IsChecked = true, VerticalAlignment = VerticalAlignment.Center };
                     AutomationProperties.SetName(check, path);
                     this.folders.Add(check); row.Children.Add(check);
                     Grid.SetColumn(pathLabel, 1); pathLabel.VerticalAlignment = VerticalAlignment.Center;
@@ -145,6 +145,11 @@ namespace ChillHub.SecurityHelper {
                 this.RefreshActions();
             };
             this.Closing += (_, e) => { if (this.busy) { e.Cancel = true; this.ShowFeedback(SecuritySetupText.BusyTitle, SecuritySetupText.BusyClose); } };
+            this.ContentRendered += (_, _) => {
+                if (this.removing) { return; }
+                try { this.journal = SecurityJournal.Update(SecurityJournal.DefaultPath, journal => journal.IntroductionShown = true); }
+                catch (Exception ex) { this.ShowFeedback(SecuritySetupText.RememberFailed, ex.Message); }
+            };
         }
 
         private bool IsDefender => this.product.SelectedItem is AntivirusGuide { Id: "defender" };

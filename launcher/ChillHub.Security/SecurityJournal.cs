@@ -4,6 +4,10 @@ namespace ChillHub.Security {
     public sealed record ManualExclusion(string ProductId, string Path);
 
     public sealed class SecurityJournal {
+        // This is a remembered offer, not a claim that the antivirus was configured.
+        // Kept outside the install directory so updates never reset the player's choice.
+        public bool IntroductionShown { get; set; }
+
         public List<string> AddedPaths { get; set; } = new();
         public List<string> OfferedSteamPaths { get; set; } = new();
         public List<ManualExclusion> ManualPaths { get; set; } = new();

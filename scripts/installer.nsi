@@ -213,7 +213,7 @@ SetDatablockOptimize on
 !insertmacro MUI_PAGE_DIRECTORY
 Page Custom SelectGamesDir_Create SelectGamesDir_Leave
 !insertmacro MUI_PAGE_INSTFILES
-Page Custom SecurityPage_Create SecurityPage_Leave
+Page Custom SecurityPage_Create
 ; Показ финальной страницы — момент, когда галочку WebView2 можно спрятать
 ; (см. FinishPageShow): страница уже создана, но ещё не показана.
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishPageShow
@@ -1156,29 +1156,15 @@ FunctionEnd
 ; по кнопке «Готово».
 Function SecurityPage_Create
   IfSilent security_page_skip
-  nsDialogs::Create 1018
-  Pop $0
-  ${NSD_CreateLabel} 0 0 100% 55u "Если антивирус мешает загрузке, можно настроить исключения для лаунчера, его обновлений и выбранной папки игр.$\r$\n$\r$\nЭто необязательный шаг. Исключения распространяются и на будущие файлы и моды."
-  Pop $0
-  ${NSD_CreateButton} 0 65u 100% 20u "Настроить исключения антивируса"
-  Pop $0
-  ${NSD_OnClick} $0 SecurityPage_Open
-  nsDialogs::Show
-  Return
-security_page_skip:
-  Abort
-FunctionEnd
-
-Function SecurityPage_Open
-  Pop $0
   IfFileExists "$INSTDIR\ChillHub.SecurityHelper.exe" 0 security_helper_missing
-  ExecWait '"$INSTDIR\ChillHub.SecurityHelper.exe" --games "$GAMES_DIR" --updates "$TEMP\ChillHub\SelfUpdate"'
-  Return
+  ; One branded window, with the same remembered offer as the launcher's first start.
+  ; Closing it skips setup; --offer prevents duplicates after install and future updates.
+  ExecWait '"$INSTDIR\ChillHub.SecurityHelper.exe" --offer --games "$GAMES_DIR" --updates "$TEMP\ChillHub\SelfUpdate"'
+  Goto security_page_skip
 security_helper_missing:
   MessageBox MB_OK|MB_ICONEXCLAMATION "Помощник не найден. Настройте исключения вручную или переустановите Chill Hub."
-FunctionEnd
-
-Function SecurityPage_Leave
+security_page_skip:
+  Abort
 FunctionEnd
 
 Function FinishPageShow

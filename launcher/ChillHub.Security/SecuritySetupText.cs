@@ -26,14 +26,15 @@ namespace ChillHub.Security {
         public const string CancelledTitle = "Настройка отменена";
         public const string IncompleteTitle = "Настройка не завершена";
         public const string Interrupted = "Часть изменений могла примениться. Проверьте список исключений в безопасности Windows или повторите попытку.";
+        public const string RememberFailed = "Не удалось запомнить показ окна. Оно может открыться снова при следующем запуске.";
 
         public const string Title = "Настройка защиты";
-        public const string Intro = "Если антивирус мешает загрузке, добавьте папки Chill Hub в исключения.";
+        public const string Intro = "Настройте исключения один раз для лаунчера, его обновлений и игр. Все известные папки уже выбраны. Этот шаг можно пропустить.";
         public const string DefenderHint = "Помощник добавит выбранные папки в Microsoft Defender. Windows запросит разрешение администратора.";
         public const string ManualHint = "Откройте инструкцию и добавьте папки ниже в настройках антивируса. Затем вернитесь в лаунчер и повторите загрузку.";
         public const string Pending = "Подтвердите запрос Windows, затем список папок. Дождитесь результата в этом окне.";
         public const string Cancelled = "Разрешение отменено. Настройки не изменены. Можно попробовать снова или закрыть окно.";
-        public const string Retry = "Закройте это окно и повторите загрузку в лаунчере.";
+        public const string Retry = "Закройте окно и вернитесь в лаунчер. При ошибке скачивания повторите загрузку.";
 
         public static SecuritySetupResult Summarize(IReadOnlyCollection<ExclusionResult> results, int expected, bool removing) {
             var allReported = expected > 0 && results.Count == expected

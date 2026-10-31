@@ -150,6 +150,10 @@ namespace ChillHub {
                 return;
             }
 
+            // One offer shared with the installer; later starts and updates remember dismissal.
+            // Explicit actions in error messages and settings can always reopen the helper.
+            await Core.SecuritySetup.OpenAsync(offerOnce: true);
+
             // Шаг 2. Основное окно
             var mw = new MainWindow();
             mw.SourceInitialized += (_, __) => ApplyWindowChrome(mw);

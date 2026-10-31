@@ -31,11 +31,13 @@ namespace ChillHub.Core {
             catch (Exception ex) { Logging.Logger.Warn("SecuritySetup.UpdateLock: " + ex.Message); return null; }
         }
 
-        internal static async Task OpenAsync(string? extra = null) {
+        internal static async Task OpenAsync(string? extra = null, bool offerOnce = false) {
             try {
+                if (offerOnce && SecurityJournal.Read(SecurityJournal.DefaultPath).IntroductionShown) { return; }
                 var exe = Path.Combine(AppContext.BaseDirectory, "ChillHub.SecurityHelper.exe");
                 if (!File.Exists(exe)) { throw new FileNotFoundException("Помощник отсутствует. Переустановите Chill Hub или настройте исключения вручную."); }
                 var start = new ProcessStartInfo(exe) { UseShellExecute = false };
+                if (offerOnce) { start.ArgumentList.Add("--offer"); }
                 start.ArgumentList.Add("--games"); start.ArgumentList.Add(ConfigService.Current.GamesPath);
                 start.ArgumentList.Add("--updates"); start.ArgumentList.Add(SelfUpdate.SelfUpdatePaths.Default.TempRoot);
                 if (!string.IsNullOrWhiteSpace(extra)) { start.ArgumentList.Add("--extra"); start.ArgumentList.Add(extra); }

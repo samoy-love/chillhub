@@ -38,18 +38,9 @@ namespace ChillHub.SecurityHelper {
         private static void RunWindow(Application application, string[] args) {
             using var instance = SecurityUpdateGuard.TryAcquire();
             if (instance == null) { MessageBox.Show("Настройка защиты уже открыта или лаунчер применяет обновление. Дождитесь завершения.", "Chill Hub"); return; }
-            var paths = new List<string> { AppContext.BaseDirectory };
-            bool remove = false;
-            for (int i = 0; i < args.Length; i++) {
-                if (args[i] == "--remove") { remove = true; continue; }
-                if ((args[i] == "--games" || args[i] == "--updates" || args[i] == "--extra") && i + 1 < args.Length) { paths.Add(args[++i]); }
-                else { throw new ArgumentException("Неизвестный параметр помощника."); }
-            }
-            if (paths.Count == 1) {
-                // Standalone invocation: no guessed game library, only the known self-update location.
-                paths.Add(Path.Combine(Path.GetTempPath(), "ChillHub", "SelfUpdate"));
-            }
-            application.Run(new ExclusionsWindow(paths, remove));
+            var request = SecuritySetupRequest.Parse(args, AppContext.BaseDirectory, Path.Combine(Path.GetTempPath(), "ChillHub", "SelfUpdate"));
+            if (request.OfferOnce && SecurityJournal.Read(SecurityJournal.DefaultPath).IntroductionShown) { return; }
+            application.Run(new ExclusionsWindow(request.Paths, request.Remove));
         }
     }
 }
