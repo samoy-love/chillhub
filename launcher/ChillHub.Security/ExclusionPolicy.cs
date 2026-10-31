@@ -65,6 +65,15 @@ namespace ChillHub.Security {
             if (input.Length is < 1 or > 32) { throw new ArgumentException("Выберите от одной до 32 папок."); }
             return input.Select(Normalize).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
+
+        // Called only by the ordinary UI process after the player presses Add.
+        // MpCmdRun cannot verify a path that does not exist yet. Never create it elevated.
+        public static void PrepareFolders(IEnumerable<string> paths) {
+            foreach (var path in Validate(paths)) {
+                Directory.CreateDirectory(path);
+                Normalize(path);
+            }
+        }
     }
 
     public enum ExclusionStatus { Existing, Applied, Removed, Manual, Cancelled, Blocked, Unknown, Failed }
@@ -76,6 +85,7 @@ namespace ChillHub.Security {
         void Add(string path);
         void Remove(string path);
         bool? Check(string path);
+        bool? CheckAfterAdd(string path) => this.Check(path);
     }
 
     public static class ExclusionOperation {
@@ -84,6 +94,7 @@ namespace ChillHub.Security {
             var results = new List<ExclusionResult>();
             foreach (var path in normalized) {
                 bool added = false;
+                bool attemptedAdd = false;
                 try {
                     // Revalidate at the privileged boundary immediately before touching settings.
                     ExclusionPolicy.Normalize(path);
@@ -99,14 +110,20 @@ namespace ChillHub.Security {
                         results.Add(new(path, ExclusionStatus.Existing, "Исключение уже действует."));
                         continue;
                     }
-                    if (!exists) { provider.Add(path); added = true; }
+                    if (!exists) { attemptedAdd = true; provider.Add(path); added = true; }
                     var registered = provider.ReadPaths().Any(p => string.Equals(Path.TrimEndingDirectorySeparator(p), path, StringComparison.OrdinalIgnoreCase));
                     // Keep ownership even if effective verification is unavailable, so removal remains possible.
-                    var effective = provider.Check(path);
+                    var effective = provider.CheckAfterAdd(path);
                     results.Add(new(path, effective == true ? ExclusionStatus.Applied : effective == false ? ExclusionStatus.Blocked : ExclusionStatus.Unknown,
                         effective == true ? "Применено и проверено." : effective == false ? "Исключение не действует. Возможно, изменение запрещено политикой." : "Не удалось проверить применение. Проверьте список в безопасности Windows.", added && registered));
                 }
                 catch (Exception ex) {
+                    // A provider can persist a change and fail while returning its result.
+                    // Retain that exact new entry so the player can still remove it.
+                    if (attemptedAdd && !added) {
+                        try { added = provider.ReadPaths().Any(p => string.Equals(Path.TrimEndingDirectorySeparator(p), path, StringComparison.OrdinalIgnoreCase)); }
+                        catch (Exception) { /* No evidence of ownership; do not claim an unknown entry. */ }
+                    }
                     results.Add(new(path, ex is UnauthorizedAccessException ? ExclusionStatus.Blocked : ExclusionStatus.Failed,
                         "Не удалось изменить исключение: " + ex.Message, added));
                 }

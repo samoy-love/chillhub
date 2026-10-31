@@ -46,6 +46,19 @@ namespace ChillHub.Tests {
         public void RejectsBroadOrSpecialPaths(string path) => Assert.Throws<ArgumentException>(() => ExclusionPolicy.Normalize(path));
 
         [Fact]
+        public void FailureAfterSavingAnExclusionStillAllowsRemovingIt() {
+            using var dir = new TempDir();
+            var provider = new FakeProvider { ThrowAfterAdd = true };
+            var result = Assert.Single(ExclusionOperation.Run(provider, new[] { dir.Root }, false));
+            Assert.Equal(ExclusionStatus.Failed, result.Status);
+            Assert.True(result.Added);
+            var journal = new SecurityJournal();
+            journal.Record(new[] { result });
+            Assert.Equal(dir.Root, Assert.Single(journal.AddedPaths));
+            Assert.Equal(ExclusionStatus.Removed, Assert.Single(ExclusionOperation.Run(provider, journal.AddedPaths, true)).Status);
+        }
+
+        [Fact]
         public void PreservesExistingExclusionsAndDoesNotClaimThem() {
             using var dir = new TempDir();
             var provider = new FakeProvider { Covered = true };
@@ -163,6 +176,7 @@ namespace ChillHub.Tests {
             internal bool? AfterAdd = true;
             internal string? Refuse;
             internal bool IgnoreRemove;
+            internal bool ThrowAfterAdd;
             internal int Adds;
             public IReadOnlyList<string> ReadPaths() => this.Paths.ToArray();
             public void Add(string path) {
@@ -170,6 +184,7 @@ namespace ChillHub.Tests {
                 this.Adds++;
                 this.Paths.Add(path);
                 this.Covered = this.AfterAdd;
+                if (this.ThrowAfterAdd) { throw new IOException("saved but response failed"); }
             }
             public void Remove(string path) { if (!this.IgnoreRemove) { this.Paths.Remove(path); } }
             public bool? Check(string path) => this.Covered;

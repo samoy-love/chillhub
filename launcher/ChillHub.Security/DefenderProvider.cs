@@ -17,12 +17,17 @@ namespace ChillHub.Security {
         public void Add(string path) => Change("Add", path);
         public void Remove(string path) => Change("Remove", path);
 
+        public bool? CheckAfterAdd(string path) => ExclusionVerification.WaitForApplied(() => this.Check(path), Thread.Sleep);
+
         private static void Change(string method, string path) {
             using var preferences = new ManagementClass(@"root\Microsoft\Windows\Defender:MSFT_MpPreference");
             using var args = preferences.GetMethodParameters(method);
             args["ExclusionPath"] = new[] { ExclusionPolicy.Normalize(path) };
             using var result = preferences.InvokeMethod(method, args, null);
-            if (result == null || Convert.ToUInt32(result["ReturnValue"]) != 0) {
+            // Some Defender versions return no output parameters after a successful
+            // change. The caller still verifies both the saved and effective setting.
+            var code = result?.Properties.Cast<PropertyData>().FirstOrDefault(p => p.Name == "ReturnValue")?.Value;
+            if (code != null && Convert.ToUInt32(code) != 0) {
                 throw new InvalidOperationException("Defender отклонил изменение. Проверьте права и политику защиты.");
             }
         }

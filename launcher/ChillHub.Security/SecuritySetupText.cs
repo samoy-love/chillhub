@@ -27,6 +27,7 @@ namespace ChillHub.Security {
         public const string IncompleteTitle = "Настройка не завершена";
         public const string Interrupted = "Часть изменений могла примениться. Проверьте список исключений в безопасности Windows или повторите попытку.";
         public const string RememberFailed = "Не удалось запомнить показ окна. Оно может открыться снова при следующем запуске.";
+        public const string PrepareFailed = "Не удалось подготовить папки для проверки. Исключения не менялись. Проверьте доступ к папкам или снимите с них галочки.";
 
         public const string Title = "Настройка защиты";
         public const string Intro = "Настройте исключения один раз для лаунчера, его обновлений и игр. Все известные папки уже выбраны. Этот шаг можно пропустить.";

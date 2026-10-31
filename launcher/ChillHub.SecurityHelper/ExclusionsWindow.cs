@@ -237,7 +237,10 @@ namespace ChillHub.SecurityHelper {
             this.ShowFeedback(SecuritySetupText.Waiting, SecuritySetupText.Pending);
             this.feedbackTitle.BringIntoView();
             this.status.Clear(); this.details.Visibility = Visibility.Collapsed;
+            bool started = false;
             try {
+                if (!deleting) { ExclusionPolicy.PrepareFolders(selected); }
+                started = true;
                 var results = await PrivilegedOperation.RunAsync(selected, deleting, result => {
                     try { this.journal = SecurityJournal.Update(SecurityJournal.DefaultPath, journal => journal.Record(new[] { result })); }
                     finally { this.status.Text += result.Path + "\n" + result.Detail + "\n\n"; }
@@ -247,7 +250,7 @@ namespace ChillHub.SecurityHelper {
             catch (Win32Exception ex) when (ex.NativeErrorCode == 1223) { this.retry = true; this.ShowFeedback(SecuritySetupText.CancelledTitle, SecuritySetupText.Cancelled); this.feedbackTitle.BringIntoView(); }
             catch (Exception ex) {
                 this.retry = true;
-                this.ShowFeedback(SecuritySetupText.IncompleteTitle, SecuritySetupText.Interrupted);
+                this.ShowFeedback(SecuritySetupText.IncompleteTitle, started ? SecuritySetupText.Interrupted : SecuritySetupText.PrepareFailed);
                 this.status.Text += ex.Message; this.details.Visibility = Visibility.Visible; this.details.IsExpanded = true;
                 this.feedbackTitle.BringIntoView();
             }
