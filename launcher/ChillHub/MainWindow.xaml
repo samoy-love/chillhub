@@ -35,7 +35,7 @@
                                             Background="{TemplateBinding Background}"
                                             BorderBrush="{TemplateBinding BorderBrush}"
                                             BorderThickness="{TemplateBinding BorderThickness}">
-                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
@@ -136,9 +136,7 @@
                          «Настройки» упиралась в границу и обрезалась до «Настрой». -->
                     <Button Style="{StaticResource Style.SettingsButton}" Width="32" Height="32"
                             Click="SettingsBtn_Click" ToolTip="Настройки"
-                            ToolTipService.Placement="Bottom" ToolTipService.HorizontalOffset="-40">
-                        <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE713;" FontSize="16"/>
-                    </Button>
+                            ToolTipService.Placement="Bottom" ToolTipService.HorizontalOffset="-40" Content="" ui:ButtonIcon.Data="{DynamicResource Icon.Settings}" AutomationProperties.Name="Настройки"/>
                 </StackPanel>
             </Grid>
         </Border>
@@ -291,7 +289,7 @@
                   <TextBlock x:Name="ChangelogSubtitle" Margin="0,4,0,0" FontSize="13" TextWrapping="Wrap"
                              Foreground="{DynamicResource Brush.TextSecondary}"/>
                 </StackPanel>
-                <Button Content="✕" Width="28" Height="28"
+                <Button Content="" ui:ButtonIcon.Data="{DynamicResource Icon.Close}" AutomationProperties.Name="Закрыть" Width="28" Height="28"
                         HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0" Padding="0"
                         Style="{DynamicResource Style.Button.GhostNeutral}"
                         ToolTip="Закрыть" Click="ChangelogClose_Click"/>

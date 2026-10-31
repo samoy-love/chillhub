@@ -47,7 +47,7 @@ namespace ChillHub.Tests {
             Assert.Null(VisualTreeHelper.GetClip(banner.Child));
         });
 
-        private static Page LoadPage() {
+        internal static Page LoadPage() {
             XNamespace w = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
             XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
             var root = Path.Combine(ChangelogTests.FindRepoRoot(), "launcher", "ChillHub");
