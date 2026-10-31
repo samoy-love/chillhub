@@ -2009,8 +2009,8 @@ namespace ChillHub.Pages {
             try {
                 var run = this.SelectedRunState();
                 var look = ActionButtonState.Appearance(mode, run);
-                this.ActionBtn.Content = ActionButtonContent(
-                    ActionButtonState.Glyph(mode, run), look.Content);
+                this.ActionBtn.Content = look.Content;
+                Core.UI.ButtonIcon.ApplyGlyph(this.ActionBtn, ActionButtonState.Glyph(mode, run));
                 System.Windows.Automation.AutomationProperties.SetName(this.ActionBtn, look.Content);
                 this.ActionBtn.IsEnabled = look.IsEnabled;
                 this.ApplyActionButtonStyle(look.StyleKey);
@@ -2020,38 +2020,6 @@ namespace ChillHub.Pages {
                 // Кнопка действия — центральный элемент экрана: не даём сбою оформления уронить страницу
                 Core.Logging.Logger.Error(ex, $"SetActionMode({mode})");
             }
-        }
-
-        /// <summary>
-        /// Содержимое кнопки действия: значок и надпись в строку. Без значка возвращает
-        /// саму надпись — лишняя обёртка сдвинула бы текст с центра кнопки.
-        /// </summary>
-        /// <param name="glyph">Символ Segoe MDL2 или пустая строка.</param>
-        /// <param name="text">Надпись на кнопке.</param>
-        /// <returns>Строка или готовая разметка для свойства Content.</returns>
-        private static object ActionButtonContent(string glyph, string text) {
-            if (string.IsNullOrEmpty(glyph)) {
-                return text;
-            }
-
-            var row = new StackPanel {
-                Orientation = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            row.Children.Add(new TextBlock {
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                Text = glyph,
-                FontSize = 16,
-                Width = 20,
-                Margin = new Thickness(0, 0, 12, 0),
-                VerticalAlignment = VerticalAlignment.Center,
-            });
-            row.Children.Add(new TextBlock {
-                Text = text,
-                VerticalAlignment = VerticalAlignment.Center,
-            });
-            return row;
         }
 
         /// <summary>
@@ -2097,8 +2065,8 @@ namespace ChillHub.Pages {
 
                 this.launchBar = view;
                 this.ActionBtn.Visibility = view.ActionVisible ? Visibility.Visible : Visibility.Collapsed;
-                this.ApplyLaunchButton(this.LaunchBtn1, this.LaunchBtn1Icon, this.LaunchBtn1Title, this.LaunchBtn1Note, view, 0);
-                this.ApplyLaunchButton(this.LaunchBtn2, this.LaunchBtn2Icon, this.LaunchBtn2Title, this.LaunchBtn2Note, view, 1);
+                this.ApplyLaunchButton(this.LaunchBtn1, this.LaunchBtn1Title, this.LaunchBtn1Note, view, 0);
+                this.ApplyLaunchButton(this.LaunchBtn2, this.LaunchBtn2Title, this.LaunchBtn2Note, view, 1);
                 this.LaunchMenuBtn.Visibility = view.MenuVisible ? Visibility.Visible : Visibility.Collapsed;
                 this.LaunchMenuBtn.ToolTip = view.MenuVisible ? view.MenuTooltip : null;
 
@@ -2118,13 +2086,12 @@ namespace ChillHub.Pages {
         /// Выставляет одну кнопку запуска по счёту или прячет её, если варианта нет.
         /// </summary>
         /// <param name="button">Сама кнопка.</param>
-        /// <param name="icon">Значок текущего действия.</param>
         /// <param name="title">Крупная строка.</param>
         /// <param name="note">Мелкая строка.</param>
         /// <param name="view">Посчитанная строка действий.</param>
         /// <param name="index">Место кнопки в строке.</param>
         private void ApplyLaunchButton(
-            Button button, TextBlock icon, TextBlock title, TextBlock note, Core.Mods.LaunchBarView view, int index) {
+            Button button, TextBlock title, TextBlock note, Core.Mods.LaunchBarView view, int index) {
             if (index >= view.Buttons.Count) {
                 button.Visibility = Visibility.Collapsed;
                 button.Tag = null;
@@ -2132,7 +2099,7 @@ namespace ChillHub.Pages {
             }
 
             var model = view.Buttons[index];
-            icon.Text = model.Glyph;
+            Core.UI.ButtonIcon.ApplyGlyph(button, model.Glyph);
             title.Text = model.Title;
             note.Text = model.Subtitle;
             button.ToolTip = model.Tooltip;
