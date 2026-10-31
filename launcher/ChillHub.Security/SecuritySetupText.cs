@@ -2,40 +2,52 @@ namespace ChillHub.Security {
     public sealed record SecuritySetupResult(bool Complete, string Title, string Message);
 
     public static class SecuritySetupText {
-        public const string Detecting = "Определяем антивирус…";
         public const string RemoveTitle = "Удаление исключений";
-        public const string RemoveIntro = "Перед удалением лаунчера можно убрать исключения, которые добавил помощник.";
-        public const string FolderHint = "Снимите галочки с папок, которые не хотите менять.";
-        public const string CopyFoldersHint = "Скопируйте нужные пути в настройки антивируса.";
-        public const string CopyTitle = "Путь скопирован";
-        public const string CopyHint = "Вставьте его в настройках антивируса.";
-        public const string CopyFailed = "Не удалось скопировать путь";
-        public const string RemoveWarning = "Удаление исключений не отменяет другие правила антивируса.";
-        public const string DetectionFailed = "Антивирус не определён — выберите его в списке.";
-        public const string BusyTitle = "Настройка выполняется";
-        public const string BusyClose = "Дождитесь результата, затем закройте окно.";
-        public const string RemoveHint = "Будут удалены только выбранные записи Microsoft Defender, добавленные помощником.";
+        public const string RemoveIntro = "Верните проверку файлов антивирусом.";
+        public const string CopyFoldersHint = "Выберите папку и скопируйте её в антивирус.";
+        public const string CopyTitle = "Скопировано";
+        public const string CopyHint = "Вставьте в поле «Исключения» вашего антивируса.";
+        public const string CopyFailed = "Не удалось скопировать";
+        public const string RemoveWarning = "Удалятся только исключения, добавленные Chill Hub.";
+        public const string DetectionFailed = "Выберите ваш антивирус";
         public const string NothingToRemove = "Удалять нечего";
-        public const string NothingToRemoveHint = "Нет записей, добавленных помощником. Можно закрыть окно.";
-        public const string GuideOpened = "Инструкция открыта в браузере";
-        public const string GuideOpenedHint = "Добавьте нужные папки в настройках антивируса. Помощник не проверяет ручную настройку. ";
+        public const string GuideOpened = "Инструкция открыта";
+        public const string GuideOpenedHint = "Добавьте папки по инструкции. Ручную настройку помощник не проверяет.";
         public const string GuideFailed = "Не удалось открыть инструкцию";
-        public const string SelectFolders = "Выберите папки";
-        public const string SelectOwned = "Удалить можно только записи, добавленные помощником.";
-        public const string Waiting = "Ожидаем подтверждение";
+        public const string Waiting = "Подтвердите в Windows";
         public const string CancelledTitle = "Настройка отменена";
         public const string IncompleteTitle = "Настройка не завершена";
-        public const string Interrupted = "Часть изменений могла примениться. Проверьте список исключений в безопасности Windows или повторите попытку.";
-        public const string RememberFailed = "Не удалось запомнить показ окна. Оно может открыться снова при следующем запуске.";
-        public const string PrepareFailed = "Не удалось подготовить папки для проверки. Исключения не менялись. Проверьте доступ к папкам или снимите с них галочки.";
+        public const string Interrupted = "Настройка прервалась. Часть папок могла добавиться — можно повторить.";
+        public const string RememberFailed = "Не удалось запомнить выбор. Окно может появиться снова.";
+        public const string PrepareFailed = "Некоторые папки недоступны. Исключения не менялись — попробуйте ручную настройку.";
 
-        public const string Title = "Настройка защиты";
-        public const string Intro = "Настройте исключения один раз для лаунчера, его обновлений и игр. Все известные папки уже выбраны. Этот шаг можно пропустить.";
-        public const string DefenderHint = "Помощник добавит выбранные папки в Microsoft Defender. Windows запросит разрешение администратора.";
-        public const string ManualHint = "Откройте инструкцию и добавьте папки ниже в настройках антивируса. Затем вернитесь в лаунчер и повторите загрузку.";
-        public const string Pending = "Подтвердите запрос Windows, затем список папок. Дождитесь результата в этом окне.";
-        public const string Cancelled = "Разрешение отменено. Настройки не изменены. Можно попробовать снова или закрыть окно.";
-        public const string Retry = "Закройте окно и вернитесь в лаунчер. При ошибке скачивания повторите загрузку.";
+        public const string Title = "Настройка антивируса";
+        public const string Intro = "Добавьте файлы Chill Hub в исключения.";
+        public const string ManualHint = "Добавьте папки по инструкции. Антивирус перестанет их проверять.";
+        public const string Pending = "Нажмите «Да», затем подтвердите настройку.";
+        public const string Cancelled = "Настройки не изменены. Можно повторить.";
+        public const string Retry = "Вернитесь в лаунчер. При ошибке повторите загрузку.";
+
+        public const string Warning = "Антивирус перестанет проверять эти папки, включая новые игры и моды.";
+        public const string FilesOnlyHint = "McAfee позволяет добавлять только отдельные файлы. Откройте инструкцию.";
+        public const string UnknownHint = "В антивирусе откройте «Исключения» и добавьте папки. Он перестанет их проверять.";
+        public const string TryAgain = "Попробуйте ещё раз.";
+        public const string OpenFailed = "Не удалось открыть настройку антивируса. Перезапустите Chill Hub.";
+
+        public static string FolderName(string path, string? install, string? updates, IEnumerable<string> games) {
+            static bool Same(string path, string? other) => !string.IsNullOrWhiteSpace(other)
+                && string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)), Path.TrimEndingDirectorySeparator(Path.GetFullPath(other)), StringComparison.OrdinalIgnoreCase);
+            if (Same(path, install)) { return "Лаунчер"; }
+            if (Same(path, updates)) { return "Обновления"; }
+            return games.Any(game => Same(path, game)) ? "Игры" : "Другие файлы";
+        }
+
+        public static string ResultHint(ExclusionStatus status) => status switch {
+            ExclusionStatus.Blocked => "антивирус не применил настройку",
+            ExclusionStatus.Unknown => "не удалось проверить",
+            ExclusionStatus.Manual => "нужна ручная настройка",
+            _ => "не удалось настроить",
+        };
 
         public static SecuritySetupResult Summarize(IReadOnlyCollection<ExclusionResult> results, int expected, bool removing) {
             var allReported = expected > 0 && results.Count == expected
@@ -47,10 +59,10 @@ namespace ChillHub.Security {
                 && results.All(r => removing ? r.Status == ExclusionStatus.Removed : r.Status is ExclusionStatus.Applied or ExclusionStatus.Existing);
             if (complete) {
                 return removing
-                    ? new(true, "Исключения удалены", "Записи, добавленные помощником, удалены. Другие исключения не изменены. Можно закрыть окно.")
-                    : new(true, "Исключения настроены", "Microsoft Defender подтвердил настройку для всех выбранных папок. " + Retry);
+                    ? new(true, "Исключения удалены", "Файлы снова проверяются, если нет других исключений.")
+                    : new(true, "Всё настроено", Retry);
             }
-            return new(false, "Настройка не завершена", "Не все изменения удалось подтвердить. Проверьте результат для каждой папки ниже. Можно повторить попытку или настроить антивирус вручную.");
+            return new(false, "Настройка не завершена", "Не все папки удалось настроить. Повторите попытку или настройте вручную.");
         }
     }
 }

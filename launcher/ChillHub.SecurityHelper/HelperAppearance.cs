@@ -29,23 +29,25 @@ namespace ChillHub.SecurityHelper {
             return label;
         }
 
-        internal static bool Confirm(string[] paths, bool removing) {
-            var window = new Window { Width = 660, MaxHeight = Math.Min(760, SystemParameters.WorkArea.Height - 48), SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize };
+        internal static bool Confirm(string[] paths, bool removing) => ConfirmationWindow(paths.Length, removing).ShowDialog() == true;
+
+        internal static Window ConfirmationWindow(int count, bool removing) {
+            var window = new Window { Width = 480, MaxHeight = Math.Min(500, SystemParameters.WorkArea.Height - 48), SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize };
             Apply(window, "подтверждение настройки защиты");
             var content = new StackPanel { Margin = new Thickness(24) };
             window.Content = new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-            content.Children.Add(Text(removing ? "Удалить исключения Defender?" : "Добавить исключения Defender?", "Brush.Title", 22));
-            var description = Text(removing ? "Файлы снова будут проверяться, если их не покрывают другие исключения." : Security.ExclusionPolicy.Warning);
+            content.Children.Add(Text(removing ? "Вернуть проверку файлов?" : "Разрешить файлы Chill Hub?", "Brush.Title", 22));
+            var description = Text(removing ? Security.SecuritySetupText.RemoveWarning : Security.SecuritySetupText.Warning);
             description.Margin = new Thickness(0, 12, 0, 18);
             content.Children.Add(description);
-            content.Children.Add(Card(Text(string.Join("\n\n", paths), "Brush.Text")));
+            content.Children.Add(Card(Text($"Папок: {count}", "Brush.Text")));
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
             var cancel = new Button { Content = "Отмена", MinWidth = 110, MinHeight = 38, IsCancel = true, IsDefault = true, Padding = new Thickness(18, 10, 18, 10), Margin = new Thickness(0, 0, 10, 0) };
-            var confirm = new Button { Content = removing ? "Удалить исключения" : "Добавить исключения", MinWidth = 180, MinHeight = 38, Padding = new Thickness(18, 10, 18, 10) };
+            var confirm = new Button { Content = removing ? "Удалить" : "Разрешить", MinWidth = 140, MinHeight = 38, Padding = new Thickness(18, 10, 18, 10) };
             confirm.SetResourceReference(FrameworkElement.StyleProperty, "Style.Button.Primary");
             confirm.Click += (_, _) => window.DialogResult = true;
             buttons.Children.Add(cancel); buttons.Children.Add(confirm); content.Children.Add(buttons);
-            return window.ShowDialog() == true;
+            return window;
         }
     }
 }
