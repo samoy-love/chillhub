@@ -17,6 +17,7 @@
     <ProjectReference Include="../ChillHub.Security/ChillHub.Security.csproj" />
     <Page Include="../ChillHub/Themes/Theme.Dark.xaml" Link="Themes/Theme.Dark.xaml" />
     <Resource Include="../ChillHub/Assets/app.ico" Link="Assets/app.ico" />
+    <Compile Include="../ChillHub/Core/UI/ButtonIcon.cs" Link="Shared/ButtonIcon.cs" />
     <Compile Include="../ChillHub/Core/UI/UiAnimations.cs" Link="Shared/UiAnimations.cs" />
     <Compile Include="../ChillHub/Core/UI/Placeholder.cs" Link="Shared/Placeholder.cs" />
     <Compile Include="../ChillHub/Core/UI/CaretInsetConverter.cs" Link="Shared/CaretInsetConverter.cs" />
