@@ -81,7 +81,7 @@ namespace ChillHub.Core.Home {
             var gamesUrl = GamesUrl(baseApi);
             var newsUrl = LauncherNewsUrl(baseApi);
 
-            var gamesRequest = http.GetFromJsonAsync<GamesResponse>(gamesUrl);
+            var gamesRequest = MissingGamesCleanup.LoadCatalogAsync(http, gamesUrl);
             var newsRequest = http.GetFromJsonAsync<NewsIndex>(newsUrl);
 
             GamesResponse? games = null;
