@@ -14,6 +14,12 @@ namespace ChillHub {
         private Controls.MissingGamesDialog? missingGamesDialog;
         private bool missingGamesWindowClosed;
 
+        private void AttachMissingGamesCheck(Pages.HomePage home) {
+            // Страница продолжает обновлять каталог и вне визуального дерева.
+            // Подписка живёт столько же, сколько само окно, а не только открытая главная.
+            home.CatalogReceived += games => _ = this.CheckMissingGamesAsync(games, home.IsGameBusyForCleanup);
+        }
+
         internal async Task CheckMissingGamesAsync(
             System.Collections.Generic.IReadOnlyList<Core.GameInfo> games,
             Func<string, bool> busy) {

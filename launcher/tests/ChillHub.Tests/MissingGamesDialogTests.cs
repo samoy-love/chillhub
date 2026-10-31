@@ -52,6 +52,7 @@ namespace ChillHub.Tests {
             Assert.All(rows, row => Assert.False(row.CanSelect));
             dialog.Close();
             Assert.False(closed);
+            Assert.False(dialog.Dismissed.IsCompleted);
             await dialog.DeleteSelectedAsync();
             Assert.Single(calls);
             first.SetException(new IOException("locked"));
@@ -61,10 +62,12 @@ namespace ChillHub.Tests {
             Assert.Equal(string.Empty, rows[1].Result);
             Assert.Equal(MissingGamesText.Deleted, rows[2].Result);
             Assert.False(dialog.IsBusy);
+            Assert.False(dialog.Dismissed.IsCompleted);
             await dialog.DeleteSelectedAsync();
             Assert.Equal(2, calls.Count);
             dialog.Close();
             Assert.True(closed);
+            Assert.True(dialog.Dismissed.IsCompletedSuccessfully);
         });
 
         [Theory]

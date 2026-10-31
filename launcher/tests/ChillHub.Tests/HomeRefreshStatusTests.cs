@@ -129,6 +129,36 @@ namespace ChillHub.Tests {
             Assert.Equal(expected, text.Text);
         });
 
+        [Fact]
+        public void DetachedPagePublishesFreshAndEmptyCatalogsForCleanup() => UiThread.Run(async () => {
+            using var temp = new TempDir();
+            using var config = new ConfigDirsScope();
+            ConfigService.Current.GamesPath = temp.Root;
+            using var handler = new CatalogHandler();
+            using var http = new HttpClient(handler);
+            var page = CreatePage();
+            using var queue = (IDisposable)Field("downloadQueue").GetValue(page)!;
+            Field("http").SetValue(page, http);
+            Field("galleryClient").SetValue(page, new Core.Game.GalleryClient(http));
+            Field("games").SetValue(page, new List<GameInfo> { new() { GameId = "demo", Title = "Demo" } });
+            Field("allowFileChecks").SetValue(page, true);
+            var check = new Core.Home.MissingGamesCheck();
+            await check.ScanAsync(temp.Root, Array.Empty<GameInfo>());
+            var responses = 0;
+            page.CatalogReceived += games => {
+                responses++;
+                _ = check.ScanAsync(temp.Root, games);
+            };
+            Assert.Null(Window.GetWindow(page));
+
+            await page.RefreshCatalogQuietlyAsync();
+            Assert.True(check.IsAvailable("new"));
+            handler.CatalogJson = "{\"items\":[]}";
+            await page.RefreshCatalogQuietlyAsync();
+            Assert.False(check.IsAvailable("new"));
+            Assert.Equal(2, responses);
+        });
+
         private static HomePage CreatePage() {
             var resources = new ResourceDictionary();
             resources.MergedDictionaries.Add((ResourceDictionary)Application.LoadComponent(
@@ -150,9 +180,11 @@ namespace ChillHub.Tests {
         }
 
         private sealed class CatalogHandler : HttpMessageHandler {
+            internal string CatalogJson { get; set; } = "{\"items\":[{\"gameId\":\"demo\",\"title\":\"Demo\"},{\"gameId\":\"new\",\"title\":\"New\"}]}";
+
             protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) {
                 var json = request.RequestUri!.AbsolutePath == "/api/games"
-                    ? "{\"items\":[{\"gameId\":\"demo\",\"title\":\"Demo\"},{\"gameId\":\"new\",\"title\":\"New\"}]}"
+                    ? this.CatalogJson
                     : "{\"items\":[]}";
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) });
             }

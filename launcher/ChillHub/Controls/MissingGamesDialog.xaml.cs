@@ -12,6 +12,7 @@ namespace ChillHub.Controls {
     public partial class MissingGamesDialog : UserControl {
         private readonly MissingGameRow[] rows;
         private readonly Func<MissingGameFolder, Task<string>> delete;
+        private readonly TaskCompletionSource dismissed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private bool finished;
 
         internal MissingGamesDialog(MissingGamesSnapshot snapshot, Func<MissingGameFolder, Task<string>> delete) {
@@ -37,9 +38,12 @@ namespace ChillHub.Controls {
 
         internal bool IsBusy { get; private set; }
 
+        internal Task Dismissed => this.dismissed.Task;
+
         internal void Close() {
-            if (!this.IsBusy) {
+            if (!this.IsBusy && !this.dismissed.Task.IsCompleted) {
                 this.Closed?.Invoke();
+                this.dismissed.TrySetResult();
             }
         }
 

@@ -39,12 +39,12 @@ namespace ChillHub.Pages {
         internal bool CanShowMissingGames => this.IsLoaded
             && this.FeedbackOverlay.Visibility != Visibility.Visible && !this.isDeleting;
 
-        private void OfferMissingGames(IReadOnlyList<GameInfo> catalogGames) {
-            if (Window.GetWindow(this) is MainWindow window) {
-                _ = window.CheckMissingGamesAsync(catalogGames,
-                    gid => this.IsQueued(gid) || Core.Game.RunningGames.StateOf(gid) != Core.Game.GameRunState.None);
-            }
-        }
+        internal event Action<IReadOnlyList<GameInfo>>? CatalogReceived;
+
+        internal bool IsGameBusyForCleanup(string gid)
+            => this.IsQueued(gid) || Core.Game.RunningGames.StateOf(gid) != Core.Game.GameRunState.None;
+
+        private void OfferMissingGames(IReadOnlyList<GameInfo> catalogGames) => this.CatalogReceived?.Invoke(catalogGames);
 
         private string BaseApi => ChillHub.Core.ConfigService.Current.ApiBaseUrl;
 

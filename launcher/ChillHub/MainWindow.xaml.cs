@@ -185,6 +185,7 @@ namespace ChillHub {
 
                 if (this.homePage == null) {
                     this.homePage = new Pages.HomePage();
+                    this.AttachMissingGamesCheck(this.homePage);
                     this.AttachDownloadsIndicator(this.homePage.DownloadQueue);
 
                 }
@@ -393,6 +394,11 @@ namespace ChillHub {
         /// Что именно делать, решает <see cref="Core.UI.TrayPlayDecision"/>.
         /// </summary>
         private void PlayFromTray() {
+            if (this.missingGamesDialog != null) {
+                this.ShowAndActivate();
+                return;
+            }
+
             var home = this.CurrentHome;
             if (home == null) {
                 this.RestoreFromTray();
@@ -487,6 +493,12 @@ namespace ChillHub {
                 }
 
                 await home.GamesLoaded;
+
+                // Ярлык приходит извне и не подчиняется IsEnabled основного содержимого.
+                // Окно запуска и установка должны дождаться решения в текущей модалке.
+                if (this.missingGamesDialog is { } cleanup) {
+                    await cleanup.Dismissed;
+                }
 
                 var action = Core.Shell.ShortcutOpen.Decide(request, home.Games);
                 if (action == Core.Shell.ShortcutOpenAction.SelectGame && home.SelectGameById(request.GameId)) {
