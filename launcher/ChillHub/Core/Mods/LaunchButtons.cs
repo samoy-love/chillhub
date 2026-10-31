@@ -57,11 +57,13 @@ namespace ChillHub.Core.Mods {
     /// <param name="ActionVisible">Показывать ли обычную кнопку действия («Играть», «Обновить»…).</param>
     /// <param name="MenuVisible">Показывать ли стрелку с остальными вариантами.</param>
     /// <param name="MenuTooltip">Подсказка стрелки.</param>
+    /// <param name="AvailabilityText">Подпись о доступных копиях над кнопками.</param>
     internal sealed record LaunchBarView(
         IReadOnlyList<LaunchButtonView> Buttons,
         bool ActionVisible,
         bool MenuVisible,
-        string MenuTooltip);
+        string MenuTooltip,
+        string AvailabilityText = "");
 
     /// <summary>
     /// Строка действий витрины для игры с модами: два способа играть — кнопками,
@@ -136,6 +138,7 @@ namespace ChillHub.Core.Mods {
         /// сервера — разные папки и разные процессы; пока состояние спрашивалось на игру
         /// целиком, запуск одной подписывал «запускается…» обе кнопки сразу.
         /// </param>
+        /// <param name="installMode">Основное действие предлагает установить игру.</param>
         /// <returns>Что показать в строке действий.</returns>
         internal static LaunchBarView Compute(
             ModsInfo? mods,
@@ -143,7 +146,8 @@ namespace ChillHub.Core.Mods {
             bool steamAllowed,
             IReadOnlyList<LaunchOption>? options,
             LaunchTarget? remembered,
-            Func<LaunchTarget, Game.GameRunState>? runOf = null) {
+            Func<LaunchTarget, Game.GameRunState>? runOf = null,
+            bool installMode = false) {
             Game.GameRunState State(LaunchTarget t) => runOf?.Invoke(t) ?? Game.GameRunState.None;
 
             var modded = (playMode || steamAllowed) && mods != null && !string.IsNullOrWhiteSpace(mods.SteamAppId);
@@ -204,7 +208,16 @@ namespace ChillHub.Core.Mods {
                 })
                 .ToList();
 
-            return new LaunchBarView(buttons, actionVisible, rest.Count > 0, tooltip);
+            // Установка уже предложена основной кнопкой. Меню с тем же действием
+            // и недоступными копиями в этот момент только мешает.
+            var menuVisible = rest.Count > 0 && !(installMode && actionVisible);
+            var playable = options.Where(o => o.Available && o.Action == LaunchAction.Play).ToList();
+            var bothCopies = playMode
+                && playable.Any(o => o.Target is LaunchTarget.SteamModded or LaunchTarget.SteamVanilla)
+                && playable.Any(o => o.Target is LaunchTarget.LocalModded or LaunchTarget.LocalVanilla);
+            return new LaunchBarView(
+                buttons, actionVisible, menuVisible, menuVisible ? tooltip : string.Empty,
+                bothCopies ? "Доступны Steam и пиратка" : string.Empty);
         }
 
 

@@ -122,6 +122,9 @@ namespace ChillHub.Tests {
         public void TwoLineLaunchButtonsFitAndStayInsideTheBanner(double width) => UiThread.Run(() => {
             var page = HeroLayoutTests.LoadPage();
             var banner = (Border)page.FindName("HeroBanner");
+            var availability = (TextBlock)page.FindName("LaunchAvailabilityText");
+            availability.Text = "Доступны Steam и пиратка";
+            availability.Visibility = Visibility.Visible;
             ((Button)page.FindName("ActionBtn")).Visibility = Visibility.Collapsed;
             ((Button)page.FindName("LaunchMenuBtn")).Visibility = Visibility.Visible;
             foreach (var text in new[] { "Играть с модами", "Установить моды", "Обновить моды", "Восстановить моды", "Установить игру", "Обновить игру", "Запускается…", "Игра запущена" }) {
@@ -136,6 +139,8 @@ namespace ChillHub.Tests {
                 page.Measure(new Size(width, 720));
                 page.Arrange(new Rect(0, 0, width, 720));
                 page.UpdateLayout();
+                var hintBounds = availability.TransformToAncestor(banner).TransformBounds(new Rect(availability.RenderSize));
+                Assert.True(hintBounds.Top >= 0 && hintBounds.Right <= banner.ActualWidth + 1);
                 foreach (var index in new[] { 1, 2 }) {
                     var button = (Button)page.FindName($"LaunchBtn{index}");
                     var pair = Part<StackPanel>(button, "ButtonContent");

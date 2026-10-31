@@ -1086,7 +1086,20 @@
               <TextBlock x:Name="HeroMetaText" Text="" FontFamily="Consolas" FontSize="12" Margin="0,4,0,0"
                          Foreground="{DynamicResource Brush.TextSecondary}"
                          TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
-              <WrapPanel x:Name="HeroActions" Margin="0,12,-8,-8">
+              <TextBlock x:Name="LaunchAvailabilityText" Visibility="Collapsed"
+                         FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Brush.TextSecondary}"/>
+              <WrapPanel x:Name="HeroActions">
+                <WrapPanel.Style>
+                  <Style TargetType="WrapPanel">
+                    <Setter Property="Margin" Value="0,12,-8,-8"/>
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding Visibility, ElementName=LaunchAvailabilityText}" Value="Visible">
+                        <Setter Property="Margin" Value="0,6,-8,-8"/>
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </WrapPanel.Style>
                 <!-- ЕДИНСТВЕННАЯ кнопка действия в приложении. Раньше их было две — здесь и
                      внизу окна — одинакового вида и с одинаковым текстом. У игры с модами,
                      готовой к запуску, её место занимают кнопки запуска ниже: «Играть» там
