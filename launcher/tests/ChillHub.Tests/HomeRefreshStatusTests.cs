@@ -17,11 +17,11 @@ namespace ChillHub.Tests {
 
     public class HomeRefreshStatusTests {
         [Theory]
-        [InlineData("Готово", false, 0)]
-        [InlineData("Удаление файлов…", true, 0)]
-        [InlineData("Скачивание…", false, 42)]
-        [InlineData("Не удалось скачать файлы", false, 0)]
-        public void CatalogVerificationDoesNotTouchOperationPanel(string status, bool indeterminate, double progress) => UiThread.Run(async () => {
+        [InlineData("Готово", false, 0, Visibility.Collapsed)]
+        [InlineData("Удаление файлов…", true, 0, Visibility.Visible)]
+        [InlineData("Скачивание…", false, 42, Visibility.Visible)]
+        [InlineData("Не удалось скачать файлы", false, 0, Visibility.Visible)]
+        public void CatalogVerificationDoesNotTouchOperationPanel(string status, bool indeterminate, double progress, Visibility expectedVisibility) => UiThread.Run(async () => {
             using var temp = new TempDir();
             using var config = new ConfigDirsScope();
             ConfigService.Current.GamesPath = temp.Root;
@@ -39,6 +39,9 @@ namespace ChillHub.Tests {
             text.Text = status;
             bar.IsIndeterminate = indeterminate;
             bar.Value = progress;
+            // BusyGate показывает панель с задержкой. Замеряем уже показанную операцию,
+            // иначе её штатное появление на быстром раннере принимается за скачок проверки.
+            await UiThread.WaitUntil(() => panel.Visibility == expectedVisibility, "исходное состояние панели");
             page.Measure(new Size(980, 640));
             page.Arrange(new Rect(0, 0, 980, 640));
             page.UpdateLayout();
@@ -117,6 +120,7 @@ namespace ChillHub.Tests {
         [InlineData("Удаление файлов Demo…", "")]
         [InlineData("Не удалось скачать файлы", "Не удалось скачать файлы")]
         public void CompletedDeletionClearsOnlyItsOwnStatus(string current, string expected) => UiThread.Run(() => {
+            using var config = new ConfigDirsScope();
             var page = CreatePage();
             using var queue = (IDisposable)Field("downloadQueue").GetValue(page)!;
             var text = (TextBlock)page.FindName("StatusText");
@@ -127,9 +131,8 @@ namespace ChillHub.Tests {
 
         private static HomePage CreatePage() {
             var resources = new ResourceDictionary();
-            resources.MergedDictionaries.Add(new ResourceDictionary {
-                Source = new Uri("/ChillHub;component/Themes/Theme.Dark.xaml", UriKind.Relative),
-            });
+            resources.MergedDictionaries.Add((ResourceDictionary)Application.LoadComponent(
+                new Uri("/ChillHub;component/Themes/Theme.Dark.xaml", UriKind.Relative)));
             resources["HeightShareConv"] = new HeightShareConverter();
             resources["AspectHeightConv"] = new AspectHeightConverter();
             resources["NewsColumnsConv"] = new NewsColumnsConverter();
