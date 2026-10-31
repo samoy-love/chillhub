@@ -17,6 +17,41 @@ namespace ChillHub.Tests {
 
     public class HomeRefreshStatusTests {
         [Theory]
+        [InlineData("GameNewsList", "GameNewsPanel")]
+        [InlineData("LauncherNewsList", "LauncherNewsPanel")]
+        public void ModalDisablingPagePreservesNewsBackground(string listName, string panelName) => UiThread.Run(async () => {
+            using var config = new ConfigDirsScope();
+            var page = CreatePage();
+            using var queue = (IDisposable)Field("downloadQueue").GetValue(page)!;
+            var list = (ListBox)page.FindName(listName);
+            ((FrameworkElement)page.FindName(panelName)).Visibility = Visibility.Visible;
+            list.Visibility = Visibility.Visible;
+            page.Measure(new Size(980, 640));
+            page.Arrange(new Rect(0, 0, 980, 640));
+            page.UpdateLayout();
+            await UiThread.Settle();
+            var before = BackgroundPixel();
+            Assert.Equal(255, before[3]);
+            page.IsEnabled = false;
+            page.UpdateLayout();
+            await UiThread.Settle();
+            Assert.False(list.IsEnabled);
+            Assert.Equal(before, BackgroundPixel());
+            page.IsEnabled = true;
+            page.UpdateLayout();
+            Assert.Equal(before, BackgroundPixel());
+
+            byte[] BackgroundPixel() {
+                var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                    (int)list.ActualWidth, (int)list.ActualHeight, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+                bitmap.Render(list);
+                var pixel = new byte[4];
+                bitmap.CopyPixels(new Int32Rect(8, bitmap.PixelHeight - 8, 1, 1), pixel, 4, 0);
+                return pixel;
+            }
+        });
+
+        [Theory]
         [InlineData("Готово", false, 0, Visibility.Collapsed)]
         [InlineData("Удаление файлов…", true, 0, Visibility.Visible)]
         [InlineData("Скачивание…", false, 42, Visibility.Visible)]
