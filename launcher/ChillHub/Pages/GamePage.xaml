@@ -29,7 +29,7 @@
     </Style>
 
     <!-- Основная кнопка действия (Установить/Обновить/Отмена) -->
-    <Style x:Key="Style.Button.GamePrimary" TargetType="Button">
+    <Style x:Key="Style.Button.GamePrimary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
       <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
       <Setter Property="Background" Value="{DynamicResource Brush.AccentFill}"/>
       <!-- Тёмная подпись на заливке — как у кнопки действия на витрине: на угле белая
@@ -39,13 +39,14 @@
       <Setter Property="BorderBrush" Value="Transparent"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="FontSize" Value="15"/>
+      <Setter Property="Padding" Value="14,8"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
             <Border x:Name="bd" CornerRadius="{DynamicResource Radius.M}" Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">

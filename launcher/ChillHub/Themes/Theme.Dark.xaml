@@ -499,13 +499,65 @@
     <Setter Property="Background" Value="{DynamicResource Brush.Background}"/>
   </Style>
 
+  <!-- Общая сетка значков: одинаковые линии, без метрик и базовой линии шрифта. -->
+  <!-- Залитый треугольник уравновешивает подпись: тонкий контур оставлял слева визуальную пустоту. -->
+  <Geometry x:Key="Icon.Play">M6,4 L20,12 6,20 Z</Geometry>
+  <Geometry x:Key="Icon.Download">M12,3 L12,15 M7,10 L12,15 17,10 M4,16 L4,21 20,21 20,16</Geometry>
+  <Geometry x:Key="Icon.Refresh">M20,10 A8,8 0 1 0 20,15 M20,4 L20,10 14,10</Geometry>
+  <Geometry x:Key="Icon.Close">M6,6 L18,18 M18,6 L6,18</Geometry>
+  <Geometry x:Key="Icon.Search">M10,3 A7,7 0 1 1 10,17 A7,7 0 1 1 10,3 M15,15 L21,21</Geometry>
+  <Geometry x:Key="Icon.Check">M4,12 L9,17 20,6</Geometry>
+  <Geometry x:Key="Icon.Clock">M12,3 A9,9 0 1 1 12,21 A9,9 0 1 1 12,3 M12,7 L12,12 15,14</Geometry>
+  <Geometry x:Key="Icon.Back">M20,12 L4,12 M10,6 L4,12 10,18</Geometry>
+  <Geometry x:Key="Icon.Info">M12,3 A9,9 0 1 1 12,21 A9,9 0 1 1 12,3 M12,11 L12,17 M12,7 L12,7.1</Geometry>
+  <Geometry x:Key="Icon.ChevronDown">M6,9 L12,15 18,9</Geometry>
+  <Geometry x:Key="Icon.ChevronUp">M6,15 L12,9 18,15</Geometry>
+  <Geometry x:Key="Icon.Settings">M9,3 L15,3 16,6 19,6 22,11 20,13 20,16 15,21 12,20 9,21 4,18 4,15 2,13 4,7 7,7 Z M12,8 A4,4 0 1 1 12,16 A4,4 0 1 1 12,8</Geometry>
+
+  <!-- Центрируется вся пара. Пустая подпись и отсутствие значка убирают зазор;
+       Content остаётся доступным экранному диктору. -->
+  <DataTemplate x:Key="Template.Button.Content">
+    <StackPanel x:Name="ButtonContent" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+      <Viewbox x:Name="ButtonIcon" Width="18" Height="18" Margin="0,0,8,0" VerticalAlignment="Center" IsHitTestVisible="False">
+        <Canvas Width="24" Height="24">
+          <Path x:Name="ButtonIconPath" Data="{Binding Path=(ui:ButtonIcon.Data), RelativeSource={RelativeSource AncestorType=Button}}"
+                Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+        </Canvas>
+      </Viewbox>
+      <ContentPresenter x:Name="ButtonLabel" Content="{Binding}" RecognizesAccessKey="True"
+                        VerticalAlignment="Center"/>
+    </StackPanel>
+    <DataTemplate.Triggers>
+      <DataTrigger Binding="{Binding Path=(ui:ButtonIcon.IsFilled), RelativeSource={RelativeSource AncestorType=Button}}" Value="True">
+        <Setter TargetName="ButtonIconPath" Property="Fill" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+        <Setter TargetName="ButtonIconPath" Property="StrokeThickness" Value="1"/>
+      </DataTrigger>
+      <DataTrigger Binding="{Binding Path=(ui:ButtonIcon.Data), RelativeSource={RelativeSource AncestorType=Button}}" Value="{x:Null}">
+        <Setter TargetName="ButtonIcon" Property="Visibility" Value="Collapsed"/>
+      </DataTrigger>
+      <DataTrigger Binding="{Binding}" Value="{x:Null}">
+        <Setter TargetName="ButtonIcon" Property="Margin" Value="0"/>
+        <Setter TargetName="ButtonLabel" Property="Visibility" Value="Collapsed"/>
+      </DataTrigger>
+      <DataTrigger Binding="{Binding}" Value="">
+        <Setter TargetName="ButtonIcon" Property="Margin" Value="0"/>
+        <Setter TargetName="ButtonLabel" Property="Visibility" Value="Collapsed"/>
+      </DataTrigger>
+    </DataTemplate.Triggers>
+  </DataTemplate>
+
   <!-- Button modern -->
   <Style TargetType="Button">
+    <Setter Property="HorizontalContentAlignment" Value="Center"/>
+    <Setter Property="VerticalContentAlignment" Value="Center"/>
+    <Setter Property="UseLayoutRounding" Value="True"/>
+    <Setter Property="ContentTemplate" Value="{StaticResource Template.Button.Content}"/>
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
     <Setter Property="Background" Value="{StaticResource Brush.Surface}"/>
     <Setter Property="BorderBrush" Value="{StaticResource Brush.Border}"/>
     <Setter Property="BorderThickness" Value="1"/>
-    <Setter Property="Padding" Value="10,6"/>
+    <Setter Property="Padding" Value="12,6"/>
     <Setter Property="Margin" Value="0,0,8,0"/>
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="SnapsToDevicePixels" Value="True"/>
@@ -518,7 +570,7 @@
         <ControlTemplate TargetType="Button">
           <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}" Background="{TemplateBinding Background}"
                   BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
-            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
@@ -550,14 +602,14 @@
     <Setter Property="Padding" Value="12,6"/>
     <Setter Property="FontWeight" Value="SemiBold"/>
     <Setter Property="FontSize" Value="13"/>
-    <Setter Property="Height" Value="36"/>
-    <Setter Property="MinWidth" Value="200"/>
+    <Setter Property="MinHeight" Value="36"/>
+    <Setter Property="MinWidth" Value="96"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Button">
           <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}" Background="{TemplateBinding Background}"
                   BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
-            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" Margin="{TemplateBinding Padding}"/>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
@@ -626,7 +678,7 @@
                  ничего вовсе: подпись прижималась к рамке, а кнопка казалась тесной ровно
                  настолько, насколько длинной была надпись. Заметнее всего это было на
                  «Перейти к игре» и «К библиотеке» — там подпись длинная и со значком. -->
-            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
                               Margin="{TemplateBinding Padding}"/>
           </Border>
           <ControlTemplate.Triggers>
@@ -669,7 +721,7 @@
         <ControlTemplate TargetType="Button">
           <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}" Background="{TemplateBinding Background}"
                   BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
-            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
@@ -700,7 +752,7 @@
       <Setter.Value>
         <ControlTemplate TargetType="Button">
           <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}" Background="{TemplateBinding Background}">
-            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
@@ -723,7 +775,7 @@
       <Setter.Value>
         <ControlTemplate TargetType="Button">
           <Border x:Name="bd" CornerRadius="{StaticResource Radius.M}" Background="{TemplateBinding Background}">
-            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
@@ -747,29 +799,12 @@
        было три разных — на странице игры без стрелки слева, в новости другой ширины
        слева, в настройках со стрелкой и СПРАВА, — и возврат каждый раз искали заново. -->
   <Style x:Key="Style.Button.Back" TargetType="Button" BasedOn="{StaticResource Style.Button.GhostNeutral}">
-    <!-- Высота и поля больше, чем у прочих призрачных кнопок: подпись стала длиннее
-         («К библиотеке», «К новостям»), и при прежних 32 со значком и текстом впритык
-         кнопка выглядела переполненной — буквы упирались в рамку. -->
-    <Setter Property="Height" Value="34"/>
-    <Setter Property="MinWidth" Value="96"/>
-    <Setter Property="Padding" Value="14,0"/>
+    <Setter Property="Height" Value="32"/>
+    <Setter Property="MinWidth" Value="84"/>
     <Setter Property="FontSize" Value="13"/>
     <Setter Property="HorizontalAlignment" Value="Left"/>
-    <Setter Property="VerticalContentAlignment" Value="Center"/>
-    <!-- Содержимое — через шаблон, а не готовый StackPanel в Setter Content: элемент
-         в сеттере один на весь стиль, его получает первая кнопка, а на остальных
-         страницах (игра, новость) кнопка оставалась пустой рамкой. -->
     <Setter Property="Content" Value="Назад"/>
-    <Setter Property="ContentTemplate">
-      <Setter.Value>
-        <DataTemplate>
-          <StackPanel Orientation="Horizontal">
-            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE72B;" FontSize="12" Margin="0,0,8,0" VerticalAlignment="Center"/>
-            <TextBlock Text="{Binding}" VerticalAlignment="Center"/>
-          </StackPanel>
-        </DataTemplate>
-      </Setter.Value>
-    </Setter>
+    <Setter Property="ui:ButtonIcon.Data" Value="{StaticResource Icon.Back}"/>
   </Style>
 
   <!-- Заголовок вложенного экрана -->
@@ -1354,7 +1389,7 @@
        вес с кнопками запуска, между которыми она и стояла, — получался третий способ
        играть, который никуда не запускает. Ни фона, ни рамки; отзыв на наведение —
        цветом, как у любой ссылки. -->
-  <Style x:Key="Style.Button.HeroInfo" TargetType="Button">
+  <Style x:Key="Style.Button.HeroInfo" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
     <Setter Property="FocusVisualStyle" Value="{StaticResource Style.FocusVisual}"/>
     <Setter Property="Padding" Value="0"/>
     <Setter Property="FontSize" Value="12"/>
@@ -1367,7 +1402,7 @@
       <Setter.Value>
         <ControlTemplate TargetType="Button">
           <Border x:Name="bd" Background="Transparent" Padding="{TemplateBinding Padding}">
-            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
