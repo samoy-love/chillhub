@@ -5,6 +5,12 @@
 
 namespace ChillHub.Tests {
     using System;
+    using System.Collections.Generic;
+    using System.Net;
+    using System.Net.Http;
+    using System.Text.Json;
+    using System.Threading;
+    using System.Threading.Tasks;
 
     using ChillHub.Core;
     using ChillHub.Core.Home;
@@ -152,10 +158,18 @@ namespace ChillHub.Tests {
             Assert.Equal(MetricsService.InstallId, MetricsService.ReportedInstallId);
         }
 
-        /// <summary>Выключенная отправка не ходит в сеть и не бросает исключений.</summary>
-        [Fact]
-        public void ВыключеннаяОтправкаНичегоНеДелает() {
-            using var scope = new MetricsScope(env: "0", sendUsageMetrics: true);
+        /// <summary>Запрет останавливает все события; без запрета те же вызовы доходят до транспорта.</summary>
+        [Theory]
+        [InlineData("0", false)]
+        [InlineData("1", true)]
+        public async Task ОтправкаСоблюдаетПеременнуюОкружения(string env, bool shouldSend) {
+            using var config = new ConfigDirsScope();
+            ConfigService.Current.ApiBaseUrl = "https://metrics.example.test/api";
+            using var scope = new MetricsScope(env, sendUsageMetrics: true);
+            using var handler = new MetricsHandler();
+            using var client = new HttpClient(handler);
+            var pending = new List<Func<Task>>();
+            using var sending = MetricsService.OverrideSendingForTests(client, pending.Add);
 
             MetricsService.LauncherStart();
             MetricsService.GameLaunch("game", "1.0.0");
@@ -164,6 +178,42 @@ namespace ChillHub.Tests {
             MetricsService.GameUpdate("game", "1.0.0", "ok", 100, 200);
             MetricsService.IntegrityCheck("game", "1.0.0", ok: true, filesTotal: 10, hashMismatches: 0);
             MetricsService.Error("sync_hash_mismatch", "game");
+
+            // Очередь собирается синхронно. Даже ошибочно разрешённые отправки
+            // выполнятся до проверки, а не после завершения теста.
+            foreach (var send in pending) {
+                await send();
+            }
+
+            if (shouldSend) {
+                Assert.Equal(7, pending.Count);
+                Assert.Equal(new[] {
+                    "launcher_start", "game_launch", "game_session", "game_install",
+                    "game_update", "integrity_check", "error",
+                }, handler.Events);
+                Assert.All(handler.Methods, method => Assert.Equal(HttpMethod.Post, method));
+                Assert.All(handler.Urls, url => Assert.Equal("https://metrics.example.test/api/metrics/report", url));
+            }
+            else {
+                Assert.Empty(handler.Events);
+                Assert.Empty(pending);
+            }
+        }
+
+        private sealed class MetricsHandler : HttpMessageHandler {
+            internal List<string> Events { get; } = new();
+
+            internal List<HttpMethod> Methods { get; } = new();
+
+            internal List<string> Urls { get; } = new();
+
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+                this.Methods.Add(request.Method);
+                this.Urls.Add(request.RequestUri!.AbsoluteUri);
+                using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+                this.Events.Add(body.RootElement.GetProperty("event").GetString()!);
+                return new HttpResponseMessage(HttpStatusCode.NoContent);
+            }
         }
 
         /// <summary>Задвоенные разделители в показываемом пути схлопываются.</summary>

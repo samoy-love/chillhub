@@ -7,6 +7,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { JSDOM } = require('jsdom');
+const { execFileSync } = require('node:child_process');
 
 const V = require('../../server/admin_ui/views.js');
 const News = require('../../server/admin_ui/news.js');
@@ -488,7 +490,15 @@ test('дырка в данных считается нулём, а не лома
 test('ломаная называет свой цвет и не исполняет его как разметку', () => {
   const html = V.sparkLine([1, 2], { width: 10, height: 10, color: 'var(--ember)' });
   assert.match(html, /stroke="var\(--ember\)"/);
-  assert.ok(!/</.test(V.sparkLine([1, 2], { width: 10, height: 10, color: '"><script>' }).split('points=')[1] || ''));
+  for (const color of ['"><script>alert(1)</script><polyline stroke="', '" onload="alert(1)']) {
+    const svg = JSDOM.fragment('<svg>' + V.sparkLine([1, 2], { width: 10, height: 10, color }) + '</svg>')
+      .firstElementChild;
+    assert.strictEqual(svg.children.length, 1, 'цвет добавил элементы в SVG');
+    const line = svg.firstElementChild;
+    assert.strictEqual(line.localName, 'polyline');
+    assert.strictEqual(line.getAttribute('stroke'), color, 'цвет перестал быть значением атрибута');
+    assert.deepStrictEqual(line.getAttributeNames().sort(), ['fill', 'points', 'stroke', 'stroke-width']);
+  }
 });
 
 /* ---------- Разница модпаков ---------- */
@@ -587,6 +597,26 @@ test('время показывается местное, а уезжает в U
   assert.match(local, /^2026-09-05T\d{2}:\d{2}$/);
   assert.strictEqual(V.isoTime(local), '2026-09-05T18:00:00.000Z');
 });
+
+for (const [zone, local, utc] of [
+  ['UTC', '2026-01-15T10:30', '2026-01-15T10:30:00.000Z'],
+  ['Europe/Moscow', '2026-01-15T00:30', '2026-01-14T21:30:00.000Z'],
+  ['America/New_York', '2026-01-15T23:30', '2026-01-16T04:30:00.000Z'],
+  ['America/New_York', '2026-07-15T23:30', '2026-07-16T03:30:00.000Z'],
+]) {
+  test('время работ сохраняет дату и учитывает зону: ' + zone + ', ' + local, () => {
+    // Проверяем оба направления независимо: одинаковая ошибка в них
+    // может взаимно сократиться при проверке только обратного преобразования.
+    const modulePath = JSON.stringify(require.resolve('../../server/admin_ui/views.js'));
+    const script = 'const V = require(' + modulePath + '); process.stdout.write(JSON.stringify([' +
+      'V.isoTime(' + JSON.stringify(local) + '), V.localTime(' + JSON.stringify(utc) + ')]));';
+    const actual = JSON.parse(execFileSync(process.execPath, ['-e', script], {
+      env: { ...process.env, TZ: zone },
+      encoding: 'utf8',
+    }));
+    assert.deepStrictEqual(actual, [utc, local]);
+  });
+}
 
 test('пустое и битое время не превращается в дату', () => {
   assert.strictEqual(V.localTime(''), '');

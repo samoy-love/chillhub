@@ -5,7 +5,9 @@
 
 namespace ChillHub.Tests {
     using System;
+    using System.Collections.Generic;
     using System.Diagnostics;
+    using System.Dynamic;
     using System.IO;
 
     using ChillHub.Core.Home;
@@ -27,28 +29,25 @@ namespace ChillHub.Tests {
         /// <summary>Ярлык ведёт в лаунчер и несёт в аргументах игру, путь к ней и название.</summary>
         [Fact]
         public void ЯрлыкВедётВЛаунчерСАргументамиИгры() {
+            var recorder = new ShortcutRecorder();
             using var desktop = new TempDir();
             using var games = new TempDir();
             var exe = games.WriteFile("gid/game.exe", "MZ");
             var launcher = games.WriteFile("launcher/ChillHub.exe", "MZ");
 
-            using (GameLocalState.OverrideShortcutEnvironmentForTests(desktop.Root, null, launcher)) {
+            using (GameLocalState.OverrideShortcutEnvironmentForTests(desktop.Root, null, launcher, recorder.Create)) {
                 GameLocalState.TryCreateDesktopShortcut("Игра", "gid", exe);
             }
 
             var link = Path.Combine(desktop.Root, GameLocalState.ShortcutFileName("Игра"));
-            if (!GameLocalStateShortcutTests.ShellAvailable || !File.Exists(link)) {
-                // Оболочка ярлыков не создаёт (политика, урезанная система, агент сборки).
-                return;
-            }
-
-            var (target, arguments, icon) = ReadLink(link);
-            Assert.Equal(launcher, target, ignoreCase: true);
-            Assert.Equal("gid", ShortcutTarget.Parse(SplitArgs(arguments))!.GameId);
-            Assert.Equal(exe, ShortcutTarget.Parse(SplitArgs(arguments))!.ExePath, ignoreCase: true);
+            var saved = Assert.Single(recorder.Saved);
+            Assert.Equal(link, saved.Path);
+            Assert.Equal(launcher, saved.Target, ignoreCase: true);
+            Assert.Equal("gid", ShortcutTarget.Parse(SplitArgs(saved.Arguments))!.GameId);
+            Assert.Equal(exe, ShortcutTarget.Parse(SplitArgs(saved.Arguments))!.ExePath, ignoreCase: true);
 
             // Значок — от игры: ярлык обязан выглядеть игрой, а не ещё одной копией лаунчера.
-            Assert.StartsWith(exe, icon, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(exe + ",0", saved.Icon, ignoreCase: true);
         }
 
         /// <summary>
@@ -58,22 +57,20 @@ namespace ChillHub.Tests {
         /// </summary>
         [Fact]
         public void БезПутиКЛаунчеруЯрлыкВедётПрямоВИгру() {
+            var recorder = new ShortcutRecorder();
             using var desktop = new TempDir();
             using var games = new TempDir();
             var exe = games.WriteFile("gid/game.exe", "MZ");
 
-            using (GameLocalState.OverrideShortcutEnvironmentForTests(desktop.Root, null, string.Empty)) {
+            using (GameLocalState.OverrideShortcutEnvironmentForTests(desktop.Root, null, string.Empty, recorder.Create)) {
                 GameLocalState.TryCreateDesktopShortcut("Игра", "gid", exe);
             }
 
             var link = Path.Combine(desktop.Root, GameLocalState.ShortcutFileName("Игра"));
-            if (!GameLocalStateShortcutTests.ShellAvailable || !File.Exists(link)) {
-                return;
-            }
-
-            var (target, arguments, _) = ReadLink(link);
-            Assert.Equal(exe, target, ignoreCase: true);
-            Assert.Equal(string.Empty, arguments);
+            var saved = Assert.Single(recorder.Saved);
+            Assert.Equal(link, saved.Path);
+            Assert.Equal(exe, saved.Target, ignoreCase: true);
+            Assert.Equal(string.Empty, saved.Arguments);
         }
 
         /// <summary>
@@ -181,16 +178,6 @@ namespace ChillHub.Tests {
             Assert.False(started);
         }
 
-        /// <summary>Читает цель, аргументы и значок ярлыка через ту же оболочку, что их писала.</summary>
-        /// <param name="linkPath">Путь к файлу ярлыка.</param>
-        /// <returns>Цель, аргументы и значок.</returns>
-        private static (string Target, string Arguments, string Icon) ReadLink(string linkPath) {
-            var shellType = Type.GetTypeFromProgID("WScript.Shell")!;
-            dynamic shell = Activator.CreateInstance(shellType)!;
-            dynamic link = shell.CreateShortcut(linkPath);
-            return ((string)link.TargetPath, (string)link.Arguments, (string)link.IconLocation);
-        }
-
         /// <summary>Разбивает строку аргументов так же, как это делает Windows.</summary>
         /// <param name="commandLine">Строка аргументов ярлыка.</param>
         /// <returns>Аргументы по одному.</returns>
@@ -218,6 +205,21 @@ namespace ChillHub.Tests {
             }
 
             return parts.ToArray();
+        }
+
+        /// <summary>
+        /// Запоминает параметры только в момент Save: создание объекта без сохранения
+        /// не считается созданным ярлыком. Не зависит от политики WScript.Shell на агенте.
+        /// </summary>
+        private sealed class ShortcutRecorder {
+            internal List<(string Path, string Target, string Arguments, string Icon)> Saved { get; } = new();
+
+            internal object Create(string path) {
+                dynamic shortcut = new ExpandoObject();
+                shortcut.Save = (Action)(() => this.Saved.Add((
+                    path, (string)shortcut.TargetPath, (string)shortcut.Arguments, (string)shortcut.IconLocation)));
+                return shortcut;
+            }
         }
     }
 }
