@@ -44,6 +44,13 @@ namespace ChillHub.Core.Changelog {
     public static class ChangelogData {
         private static readonly IReadOnlyList<ChangelogRelease> All = new[] {
             new ChangelogRelease {
+                Version = "1.7.16",
+                Date = "2026-11-01",
+                Changes = new[] {
+                    "Установка больше не показывает лишнее меню, а доступные копии Steam и пиратки видны сразу.",
+                },
+            },
+            new ChangelogRelease {
                 Version = "1.7.15",
                 Date = "2026-10-31",
                 Changes = new[] {

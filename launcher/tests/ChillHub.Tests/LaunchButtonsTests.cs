@@ -415,6 +415,43 @@ namespace ChillHub.Tests {
             Assert.True(view.ActionVisible);
         }
 
+        [Theory]
+        [InlineData((int)LaunchAction.Play)]
+        [InlineData((int)LaunchAction.InstallMods)]
+        [InlineData((int)LaunchAction.Unavailable)]
+        public void ПриУстановкеМенюСкрытоПриЛюбомСостоянииSteam(int action) {
+            var steamAction = (LaunchAction)action;
+            var options = new List<LaunchOption> {
+                Option(LaunchTarget.SteamModded, steamAction),
+                Option(LaunchTarget.SteamVanilla, steamAction),
+                Option(LaunchTarget.LocalModded, LaunchAction.InstallGame),
+                Option(LaunchTarget.LocalVanilla, LaunchAction.InstallGame),
+            };
+            var view = LaunchButtons.Compute(Pack(), false, true, options, null, installMode: true);
+            Assert.True(view.ActionVisible);
+            Assert.False(view.MenuVisible);
+            Assert.Empty(view.MenuTooltip);
+            Assert.Empty(view.AvailabilityText);
+            Assert.Equal(steamAction == LaunchAction.Unavailable ? 0 : 1, view.Buttons.Count);
+        }
+
+        [Fact]
+        public void ПодписьПоявляетсяТолькоКогдаОбеКопииМожноЗапустить() {
+            Assert.Equal("Доступны Steam и пиратка", LaunchButtons.Compute(Pack(), true, false, All(), null).AvailabilityText);
+            foreach (var target in new[] { LaunchTarget.SteamVanilla, LaunchTarget.LocalVanilla }) {
+                var other = target == LaunchTarget.SteamVanilla ? LaunchTarget.LocalModded : LaunchTarget.SteamModded;
+                foreach (var action in new[] { LaunchAction.InstallGame, LaunchAction.InstallMods, LaunchAction.Update, LaunchAction.Unavailable }) {
+                    var options = new[] { Option(target, LaunchAction.Play), Option(other, action) };
+                    Assert.Empty(LaunchButtons.Compute(Pack(), true, false, options, null).AvailabilityText);
+                }
+            }
+
+            var vanilla = new[] { Option(LaunchTarget.SteamVanilla, LaunchAction.Play), Option(LaunchTarget.LocalVanilla, LaunchAction.Play) };
+            Assert.Equal("Доступны Steam и пиратка", LaunchButtons.Compute(Pack(), true, false, vanilla, null).AvailabilityText);
+            Assert.Empty(LaunchButtons.Compute(Pack(), false, false, All(), null).AvailabilityText);
+            Assert.Empty(LaunchButtons.Compute(null, true, false, All(), null).AvailabilityText);
+        }
+
         private static List<LaunchOption> All() => new() {
             Option(LaunchTarget.SteamModded, LaunchAction.Play),
             Option(LaunchTarget.SteamVanilla, LaunchAction.Play),
