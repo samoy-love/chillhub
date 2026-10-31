@@ -16,8 +16,7 @@ namespace ChillHub {
 
         internal async Task CheckMissingGamesAsync(
             System.Collections.Generic.IReadOnlyList<Core.GameInfo> games,
-            Func<string, bool> busy,
-            Func<string, bool> available) {
+            Func<string, bool> busy) {
             try {
                 var snapshot = await this.missingGamesCheck.ScanAsync(Core.ConfigService.Current.GamesPath, games);
                 if (snapshot == null || snapshot.Folders.Count == 0 || this.missingGamesWindowClosed || this.Dispatcher.HasShutdownStarted) {
@@ -40,10 +39,9 @@ namespace ChillHub {
                         var dialog = new Controls.MissingGamesDialog(snapshot, folder => {
                             // Состояние UI снимаем до ухода в фон; путь перепроверяется перед каждой папкой.
                             var isBusy = busy(folder.Name);
-                            var isAvailable = available(folder.Name);
                             return Task.Run(() => MissingGamesCleanup.DeleteFolder(
                                 snapshot, folder, () => Core.ConfigService.Current.GamesPath,
-                                _ => isBusy, _ => isAvailable));
+                                _ => isBusy, this.missingGamesCheck.IsAvailable));
                         });
                         this.missingGamesDialog = dialog;
                         dialog.Closed += () => {

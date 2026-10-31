@@ -16,8 +16,14 @@ namespace ChillHub.Core.Home {
     /// <summary>Один успешный обход за жизнь главного окна; ошибки разрешают повтор.</summary>
     internal sealed class MissingGamesCheck {
         private int state;
+        private HashSet<string> available = new(StringComparer.OrdinalIgnoreCase);
+
+        internal bool IsAvailable(string gameId) => Volatile.Read(ref this.available).Contains(gameId);
 
         internal async Task<MissingGamesSnapshot?> ScanAsync(string root, IReadOnlyList<GameInfo> games) {
+            // Обновляем защиту даже после обхода: пока диалог отложен, каталог мог измениться.
+            MissingGamesCleanup.ValidateGames(games);
+            Volatile.Write(ref this.available, new HashSet<string>(games.Select(g => g.GameId), StringComparer.OrdinalIgnoreCase));
             if (Interlocked.CompareExchange(ref this.state, 1, 0) != 0) {
                 return null;
             }
@@ -126,7 +132,7 @@ namespace ChillHub.Core.Home {
             }
         }
 
-        private static void ValidateGames(IReadOnlyList<GameInfo> games) {
+        internal static void ValidateGames(IReadOnlyList<GameInfo> games) {
             if (games == null || games.Any(g => g == null || string.IsNullOrWhiteSpace(g.GameId)
                 || g.GameId is "." or ".." || g.GameId.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0)) {
                 throw new JsonException("Catalog contains an invalid game id.");

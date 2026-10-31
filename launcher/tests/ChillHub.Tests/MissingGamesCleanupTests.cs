@@ -83,6 +83,19 @@ namespace ChillHub.Tests {
         }
 
         [Fact]
+        public async Task AvailabilityTracksLatestCatalogEvenWithoutAnotherScan() {
+            using var temp = new TempDir();
+            var check = new MissingGamesCheck();
+            var catalog = new[] { new GameInfo { GameId = "demo" } };
+            await check.ScanAsync(temp.Root, catalog);
+            Assert.True(check.IsAvailable("DEMO"));
+            Assert.Null(await check.ScanAsync(temp.Root, Array.Empty<GameInfo>()));
+            Assert.False(check.IsAvailable("demo"));
+            Assert.Null(await check.ScanAsync(temp.Root, catalog));
+            Assert.True(check.IsAvailable("demo"));
+        }
+
+        [Fact]
         public void DeletesSelectedFolderAndShortcutsButKeepsOtherFolders() {
             using var temp = new TempDir();
             var a = Directory.CreateDirectory(Path.Combine(temp.Root, "a")).FullName;
@@ -146,6 +159,59 @@ namespace ChillHub.Tests {
             Assert.True(File.Exists(blocked));
             Assert.False(File.Exists(Path.Combine(game, "free.bin")));
             Assert.False(shortcutsRemoved);
+        }
+
+        [Fact]
+        public void RealProcessInsideFolderPreventsDeletion() {
+            using var temp = new TempDir();
+            var game = Directory.CreateDirectory(Path.Combine(temp.Root, "game")).FullName;
+            var executable = Path.Combine(game, "ping.exe");
+            File.Copy(Path.Combine(Environment.SystemDirectory, "ping.exe"), executable);
+            var snapshot = MissingGamesCleanup.Scan(temp.Root, Array.Empty<GameInfo>());
+            using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
+                FileName = executable,
+                Arguments = "-t 127.0.0.1",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            })!;
+            try {
+                Assert.False(process.HasExited);
+                Assert.Equal(MissingGamesText.Busy, MissingGamesCleanup.DeleteFolder(snapshot, snapshot.Folders[0],
+                    () => temp.Root, _ => false, _ => false));
+                Assert.True(File.Exists(executable));
+            }
+            finally {
+                if (!process.HasExited) {
+                    process.Kill();
+                }
+
+                process.WaitForExit();
+            }
+        }
+
+        [Fact]
+        public void RootReplacedByJunctionAfterScanCannotDeleteExternalFiles() {
+            using var temp = new TempDir();
+            using var outside = new TempDir();
+            var root = Directory.CreateDirectory(Path.Combine(temp.Root, "games")).FullName;
+            var game = Directory.CreateDirectory(Path.Combine(root, "game")).FullName;
+            var external = Directory.CreateDirectory(Path.Combine(outside.Root, "game")).FullName;
+            var save = Path.Combine(external, "save.txt");
+            File.WriteAllText(save, "keep");
+            var snapshot = MissingGamesCleanup.Scan(root, Array.Empty<GameInfo>());
+            Directory.Delete(game);
+            Directory.Delete(root);
+            CreateJunction(root, outside.Root);
+            try {
+                Assert.Equal(MissingGamesText.Failed, MissingGamesCleanup.DeleteFolder(snapshot, snapshot.Folders[0],
+                    () => root, _ => false, _ => false, _ => false));
+                Assert.Equal("keep", File.ReadAllText(save));
+            }
+            finally {
+                Directory.Delete(root);
+            }
         }
 
         [Fact]

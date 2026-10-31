@@ -42,8 +42,7 @@ namespace ChillHub.Pages {
         private void OfferMissingGames(IReadOnlyList<GameInfo> catalogGames) {
             if (Window.GetWindow(this) is MainWindow window) {
                 _ = window.CheckMissingGamesAsync(catalogGames,
-                    gid => this.IsQueued(gid) || Core.Game.RunningGames.StateOf(gid) != Core.Game.GameRunState.None,
-                    gid => this.games.Any(g => string.Equals(g.GameId, gid, StringComparison.OrdinalIgnoreCase)));
+                    gid => this.IsQueued(gid) || Core.Game.RunningGames.StateOf(gid) != Core.Game.GameRunState.None);
             }
         }
 
@@ -1649,7 +1648,9 @@ namespace ChillHub.Pages {
         }
 
         // Обновление списка игр по кнопке в заголовке секции
-        private async void RefreshGames_Click(object sender, RoutedEventArgs e) {
+        private async void RefreshGames_Click(object sender, RoutedEventArgs e) => await this.RefreshGamesAsync();
+
+        internal async Task RefreshGamesAsync() {
             // Сохраним текущее выделение, чтобы не потерять контекст страницы игры
             var prevSelectedId = this.GetSelectedGameId();
 
@@ -3781,6 +3782,10 @@ namespace ChillHub.Pages {
                     this.UpdateActionButtonState();
                 }
 
+                // Завершение операции убирает только свой статус. Проверка каталога
+                // больше не сбрасывает общую панель и не должна знать о чужой работе.
+                this.CompleteFileDeletionStatus($"Удаление файлов {title}…");
+
                 // Перепроверим статусы игр (легко и асинхронно)
                 await this.VerifyAllGamesStatusesAsync();
 
@@ -3792,6 +3797,11 @@ namespace ChillHub.Pages {
             }
         }
 
+        internal void CompleteFileDeletionStatus(string operationStatus) {
+            if (this.StatusText.Text == operationStatus) {
+                this.StatusText.Text = string.Empty;
+            }
+        }
 
     }
 }
